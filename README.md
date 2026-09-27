@@ -112,7 +112,7 @@ come only from the environment.
 | Group | Settings (defaults) |
 |---|---|
 | `server` | `port` (8480), `dataDir` (`data`, relative to the config file), `logLevel` (`info`), `publicUrl` |
-| `camera` | `id` (`cam1`), `name` (`Den`), `host` (required), `protocol` (`https`), `tlsName`, `user` (`proxy`), `onvifPort` (8000), `rtspPort` (554), `statusPollS` (30) |
+| `camera` | `id` (`cam1`), `name` (`Den`), `host` (required), `protocol` (`https`), `tlsName`, `webUiUrl` (the camera's own web page, linked from the admin UI; default `https://<host>/`, `none` for no link), `user` (`proxy`), `onvifPort` (8000), `rtspPort` (554), `statusPollS` (30) |
 | `events` | `onvif.subscribeMin` (10), `onvif.pullTimeoutS` (30), `poll.enabled` (true), `poll.intervalS` (2), `poll.afterOnvifDownS` (60), `maxOpenMin` (10) |
 | `retention` | `stillsDays` (7), `previewsDays` (14), `clipsDays` (7), `eventsDays` (30), `streamLogDays` (7), `intervalMin` (60) |
 | `storage` | `maxPercent` (85) or `maxBytes`, `minFreeBytes` (2 GB), `keepHours` |
@@ -209,6 +209,9 @@ the proxy's own upload-only FTP(S) server (`ftp.enabled`, password
 (`AUTH TLS`, `PROT P`), passive mode, folders and `STOR`, and nothing else:
 no downloads, listings or deletes. Paths stay inside its folder, at most 4
 sessions, 500 MB a file, and 5 failed logins a minute close the connection.
+Commands run one at a time per session; `SIZE` always answers 550 (there is
+nothing to download), and absolute and relative upload paths both land in the
+upload folder. While storage is paused, `STOR` answers 452.
 
 - **Index:** a finished upload named `<Name>_00_YYYYMMDDHHMMSS.mp4` (the
   camera's local time) becomes UTC with the camera's time zone and DST rule

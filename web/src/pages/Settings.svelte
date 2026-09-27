@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { refreshTick } from '../lib/state';
   import { onMount } from 'svelte';
   import { api, ApiError } from '../lib/api';
 
@@ -10,6 +11,9 @@
   const groups = $derived(Object.keys(view).reduce<Record<string, string[]>>((g, p) => ((g[p.split('.')[0]] ??= []).push(p), g), {}));
   const load = async () => (view = await api<Record<string, Setting>>('GET', '/control/config'));
   onMount(() => void load());
+  $effect(() => {
+    if ($refreshTick) void load();
+  });
 
   // A draft's text as the setting's type (numbers and booleans stay typed).
   const parse = (path: string, text: string): unknown => {

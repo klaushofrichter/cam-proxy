@@ -62,3 +62,33 @@ test('serves the favicon as SVG', async ({ request }) => {
   expect(r.headers()['content-type']).toMatch(/image\/svg\+xml/);
   expect(await r.text()).toContain('<svg');
 });
+
+test('the camera model links to the camera’s own web page', async ({ page }) => {
+  await signIn(page);
+  const link = page.getByTestId('camera-model');
+  await expect(link).toHaveText('RLC-1224A', { timeout: 15000 });
+  // e2e's camera is 127.0.0.1:<port>: https://<host without port>/.
+  await expect(link).toHaveAttribute('href', 'https://127.0.0.1/');
+  await expect(link).toHaveAttribute('target', '_blank');
+});
+
+test('the top bar Refresh reloads the open page and says when', async ({ page }) => {
+  await signIn(page);
+  await page.getByTestId('nav-maintenance').click();
+  await expect(page.getByTestId('updated')).toBeVisible();
+  const reloads: string[] = [];
+  page.on('request', (r) => {
+    const u = new URL(r.url());
+    if (u.pathname === '/control/status' || u.pathname === '/control/log') reloads.push(u.pathname);
+  });
+  await page.getByTestId('refresh').click();
+  await expect.poll(() => reloads.includes('/control/log') && reloads.includes('/control/status')).toBe(true);
+  await expect(page.getByTestId('updated')).toContainText(/just now|\d+ s ago/);
+});
+
+test('the title links to the repository', async ({ page }) => {
+  await signIn(page);
+  const brand = page.getByTestId('brand');
+  await expect(brand).toHaveAttribute('href', 'https://github.com/klaushofrichter/cam-proxy');
+  await expect(brand).toHaveAttribute('target', '_blank');
+});

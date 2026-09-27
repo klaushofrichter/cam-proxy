@@ -19,7 +19,7 @@
         <dl>
           <dt>State</dt><dd class={$status.camera.online ? 'ok' : 'bad'}>{$status.camera.online ? 'online' : 'offline'}</dd>
           <dt>Since</dt><dd>{ago($status.camera.since)}</dd>
-          <dt>Model</dt><dd>{$status.camera.model ?? '—'}</dd>
+          <dt>Model</dt><dd>{#if $status.camera.model && $status.camera.webUiUrl}<a href={$status.camera.webUiUrl} target="_blank" rel="noopener noreferrer" title="The camera's own web page">{$status.camera.model}</a>{:else}{$status.camera.model ?? '—'}{/if}</dd>
           <dt>Firmware</dt><dd>{$status.camera.firmware ?? '—'}</dd>
           <dt>Clock offset</dt><dd>{$status.camera.clockOffsetMs === undefined ? '—' : `${($status.camera.clockOffsetMs / 1000).toFixed(1)} s`}</dd>
           {#if $status.camera.error}<dt>Last error</dt><dd class="bad">{$status.camera.error}</dd>{/if}

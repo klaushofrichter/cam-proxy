@@ -24,6 +24,7 @@ export const SETTINGS: Node = {
     host: { type: 'string', pattern: '^[^\\s/]*$', doc: 'address or name, optional :port (required)' },
     protocol: { type: 'string', enum: ['https', 'http'], doc: 'camera HTTP API protocol' },
     tlsName: { type: 'string', pattern: '^[^\\s]+$', optional: true, doc: 'verify the camera certificate against this name' },
+    webUiUrl: { type: 'string', pattern: '^(https?://[^\\s]+|none)$', optional: true, doc: "the camera's own web page, linked from the admin UI; default https://<host>/, none for no link" },
     user: { type: 'string', pattern: '^[^\\s:]{1,31}$', doc: "the proxy's own camera user" },
     onvifPort: port('camera ONVIF port'),
     rtspPort: port('camera RTSP port'),

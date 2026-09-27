@@ -174,11 +174,23 @@ describe('deploy/cluster/config.json', () => {
     const file = join(__dirname, '..', 'deploy', 'cluster', 'config.json');
     const c = loadConfig({ ...SECRETS, CAMPROXY_FTP_PASSWORD: 'f'.repeat(24), CAMPROXY_CONFIG: file }, { cwd: dir }).config;
     expect(c.server.dataDir).toBe('/data');
-    expect(c.camera).toMatchObject({ id: 'cam2', host: 'cam2.cam-sim.svc.cluster.local:443', protocol: 'https', tlsName: 'cam2.skylar.technology', user: 'proxy' });
+    expect(c.camera).toMatchObject({ id: 'cam2', host: 'cam2.cam-sim.svc.cluster.local:443', protocol: 'https', tlsName: 'cam2.skylar.technology', user: 'proxy', webUiUrl: 'https://cam2.skylar.technology/' });
     expect(c.ftp).toMatchObject({ enabled: true, publicHost: 'cam-proxy.cam-proxy.svc.cluster.local', tls: true });
     expect(c.stills.enabled).toBe(true);
     // local-path volumes have no quota (statfs sees the node's disk): the cap
     // is maxBytes, 85 % of the 20Gi PVC.
     expect(c.storage.maxBytes).toBe(Math.floor(20 * 2 ** 30 * 0.85));
+  });
+});
+
+// The camera's own web page, linked from the admin UI (camera model).
+describe('camera.webUiUrl', () => {
+  it('accepts an http(s) URL or none, and nothing else', () => {
+    write('config.json', { camera: { host: '10.0.0.5', webUiUrl: 'https://cam1.skylar.technology/' } });
+    expect(load().config.camera.webUiUrl).toBe('https://cam1.skylar.technology/');
+    write('config.json', { camera: { host: '10.0.0.5', webUiUrl: 'none' } });
+    expect(load().config.camera.webUiUrl).toBe('none');
+    write('config.json', { camera: { host: '10.0.0.5', webUiUrl: 'javascript:alert(1)' } });
+    expect(err(() => load())).toMatch(/camera.webUiUrl/);
   });
 });

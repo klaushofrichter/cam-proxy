@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
-  import { feed, status } from '../lib/state';
+  import { feed, refreshTick, status } from '../lib/state';
 
   interface Ev { id: number; kind: string; source: string; start: number; end: number | null; endReason: string | null }
   let events = $state<Ev[]>([]);
@@ -17,7 +17,7 @@
   };
   onMount(() => void load());
   $effect(() => {
-    if ($feed.length) void load();
+    if ($feed.length || $refreshTick) void load();
   });
 </script>
 
