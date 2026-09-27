@@ -1,4 +1,4 @@
-import { randomBytes, timingSafeEqual, createHash } from 'crypto';
+import { randomBytes, timingSafeEqual } from 'crypto';
 import { lookup as dnsLookup } from 'dns/promises';
 import { EventEmitter } from 'events';
 import { createWriteStream, mkdirSync, unlinkSync } from 'fs';
@@ -43,8 +43,15 @@ const IPV4 = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 const plainIp = (a: string | undefined) => (a ?? '').replace(/^::ffff:/, '');
 const OPEN = new Set(['USER', 'PASS', 'AUTH', 'QUIT', 'SYST', 'FEAT', 'NOOP', 'PBSZ', 'PROT', 'OPTS']);
 const KNOWN = new Set([...OPEN, 'PWD', 'XPWD', 'CWD', 'CDUP', 'MKD', 'XMKD', 'TYPE', 'MODE', 'STRU', 'PASV', 'EPSV', 'STOR', 'SIZE']);
-const digest = (s: string) => createHash('sha256').update(s).digest();
-const same = (a: string, b: string) => timingSafeEqual(digest(a), digest(b));
+// Constant time over the longer of the two (no hash: a password isn't stored).
+function same(a: string, b: string): boolean {
+  const x = Buffer.from(a), y = Buffer.from(b);
+  const n = Math.max(x.length, y.length, 1);
+  const px = Buffer.alloc(n), py = Buffer.alloc(n);
+  x.copy(px);
+  y.copy(py);
+  return timingSafeEqual(px, py) && x.length === y.length;
+}
 
 interface Session {
   stream: net.Socket; // the control connection (a TLSSocket after AUTH TLS)
@@ -57,6 +64,7 @@ interface Session {
   ip: string;
   busy: boolean; // a transfer runs: the control connection is quiet on purpose
   timer?: NodeJS.Timeout;
+  end?: () => void; // leaves the session list and cleans up
   pasv?: { server: net.Server; conn: Promise<net.Socket> };
 }
 
@@ -172,6 +180,7 @@ export class FtpServer extends EventEmitter {
       if (s.pasv) (s.pasv.server.close(), this.passiveListeners.delete(s.pasv.server));
       this.sessionsOpen.delete(s);
     };
+    s.end = close;
     s.stream.on('close', () => socket.destroy());
 
     let buf = '';
@@ -212,6 +221,7 @@ export class FtpServer extends EventEmitter {
     s.timer = setTimeout(() => {
       this.log(`timeout ${s.ip}`);
       if (!s.stream.destroyed) s.stream.end('421 Timeout\r\n');
+      s.end?.(); // its slot is free at once, not when the peer closes
       setTimeout(() => s.stream.destroy(), 500).unref();
     }, ms);
     s.timer.unref();
