@@ -16,6 +16,10 @@ import { EventIntake } from './events/intake';
 import { EventTracker } from './events/tracker';
 import { logger, setLogLevel } from './log';
 import { Storage } from './storage';
+import { Go2rtc } from './stills/go2rtc';
+import { FrameGrabber, type Frame } from './stills/grabber';
+import { MinuteStore, minuteOf } from './stills/store';
+import type { StillsSide } from './api/client-api';
 import { StreamLog } from './stream/log';
 import { sseHandler } from './stream/sse';
 import { refuseTokenInUrl, requireAccess } from './api/auth';
@@ -46,6 +50,7 @@ export interface Proxy {
   readonly status: StatusPoller;
   readonly intake: EventIntake;
   sse: ReturnType<typeof sseHandler>;
+  readonly stills: StillsSide | undefined;
   storage: Storage;
   start(opts?: { port?: number; host?: string }): Promise<{ port: number }>;
   restart(): Promise<void>;
@@ -86,7 +91,10 @@ export function createProxy(initial: Loaded): Proxy {
   let status: StatusPoller;
   let intake: EventIntake;
   let lastResubscribes = 0;
+  let stills: StillsSide | undefined;
   const metrics = createMetrics({
+    stills: () => stills,
+    storage,
     config: () => running,
     catalog,
     log,
@@ -112,6 +120,38 @@ export function createProxy(initial: Loaded): Proxy {
     intake.on('state', (st) => {
       for (; lastResubscribes < st.resubscribes; lastResubscribes++) metrics.onResubscribe();
     });
+    // Stills: go2rtc holds the camera connection, one ffmpeg makes stills and
+    // tiles, the store writes a pack and a sprite per minute.
+    stills = undefined;
+    if (running.stills.enabled) {
+      const s = running.stills;
+      const go2rtc = new Go2rtc({ binary: running.go2rtc.binary, rtspPort: running.go2rtc.rtspPort, apiPort: running.go2rtc.apiPort, cam: c.id,
+        source: { host: splitHost(c.host).hostname, port: c.rtspPort, user: c.user, password: loaded.secrets.cameraPassword } });
+      const grabber = new FrameGrabber({ input: go2rtc.streamUrl(s.stream), intervalS: s.intervalS, size: s.size, tileSize: running.previews.tileSize, quality: s.quality, tileQuality: running.previews.quality });
+      const store = new MinuteStore({ dataDir: running.server.dataDir, cam: c.id, intervalS: s.intervalS, still: { size: s.size, quality: s.quality }, tile: { size: running.previews.tileSize, grid: running.previews.grid, quality: running.previews.quality } });
+      store.on('written', (w: { kind: 'stills' | 'previews'; bytes: number; files: number }) => storage.noteWritten(w.kind, w.bytes, w.files));
+      grabber.on('frame', (f: Frame) => {
+        if (storage.paused()) return metrics.onStillMissing(); // the disk is full: no writing
+        store.add(f);
+        metrics.onStill(f.ts);
+        const minute = minuteOf(f.ts);
+        const base = `/api/cameras/${encodeURIComponent(c.id)}`;
+        sse.live(c.id, 'still', { ts: f.ts, url: `${base}/stills/${f.ts}.jpg`, sprite: `${base}/previews/${minute}.jpg`, tile: Math.floor((f.ts - minute) / (s.intervalS * 1000)) });
+      });
+      stills = { go2rtc, grabber, store };
+    }
+  };
+  const startStills = () => {
+    const s = stills;
+    if (!s) return;
+    void s.go2rtc.start().then(() => s.grabber.start(), (err: Error) => logger.error({ err: err.message }, 'go2rtc_start_failed'));
+  };
+  const stopStills = async () => {
+    const s = stills;
+    if (!s) return;
+    await s.grabber.stop();
+    await s.go2rtc.stop();
+    await s.store.flush();
   };
   buildCameraSide();
 
@@ -134,7 +174,7 @@ export function createProxy(initial: Loaded): Proxy {
     res.type(metrics.registry.contentType).send(await metrics.registry.metrics());
   });
   app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions }));
-  app.use('/api', refuseTokenInUrl, requireAccess('client', access), clientApi({ config: () => running, catalog, status: () => status, sse }));
+  app.use('/api', refuseTokenInUrl, requireAccess('client', access), clientApi({ config: () => running, catalog, status: () => status, sse, stills: () => stills }));
   app.use(
     '/control',
     refuseTokenInUrl,
@@ -186,6 +226,7 @@ export function createProxy(initial: Loaded): Proxy {
   const restartCameraSide = async () => {
     await intake.stop();
     status.stop();
+    await stopStills();
     await client.logout();
     for (const p of leafPaths()) {
       if (p === 'server.port' || p === 'server.dataDir') continue;
@@ -194,6 +235,7 @@ export function createProxy(initial: Loaded): Proxy {
     buildCameraSide();
     status.start();
     intake.start();
+    startStills();
     logger.info('cam_proxy_restarted');
   };
 
@@ -215,6 +257,9 @@ export function createProxy(initial: Loaded): Proxy {
     },
     sse,
     storage,
+    get stills() {
+      return stills;
+    },
     async start(opts = {}) {
       server = http.createServer(app);
       const s = server;
@@ -224,6 +269,7 @@ export function createProxy(initial: Loaded): Proxy {
       });
       status.start();
       intake.start();
+      startStills();
       storage.start();
       logger.info({ port, camera: running.camera.id, version: VERSION }, 'cam_proxy_started');
       return { port };
@@ -250,6 +296,7 @@ export function createProxy(initial: Loaded): Proxy {
       }
       await intake.stop();
       status.stop();
+      await stopStills();
       await client.logout();
       catalog.close();
     },

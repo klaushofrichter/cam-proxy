@@ -35,7 +35,7 @@ describe('client API', () => {
 
   it('lists the camera with its state', async () => {
     const r = await request(p.proxy.app).get('/api/cameras').set(auth());
-    expect(r.body).toEqual([{ id: 'cam1', name: 'Den', online: true, lastEventTs: 3000, stream: null }]);
+    expect(r.body).toEqual([{ id: 'cam1', name: 'Den', online: true, lastEventTs: 3000, stream: process.env.CAMPROXY_TEST_GO2RTC ? expect.objectContaining({ up: expect.any(Boolean) }) : null }]);
   });
 
   it('lists events, newest first, with filters', async () => {

@@ -1,4 +1,5 @@
 import { mkdtempSync, writeFileSync } from 'fs';
+import net from 'net';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { loadConfig } from '../../src/config/load';
@@ -9,9 +10,22 @@ export const CLIENT_TOKEN = 'client-token-'.padEnd(40, 'x');
 export const ADMIN_TOKEN = 'admin-token-'.padEnd(40, 'y');
 
 // A proxy on a fresh data folder (or `dir`), pointed at a cam-sim.
+export const freePort = () =>
+  new Promise<number>((r) => {
+    const s = net.createServer().listen(0, '127.0.0.1', () => {
+      const p = (s.address() as net.AddressInfo).port;
+      s.close(() => r(p));
+    });
+  });
+
+// Stills run when go2rtc is installed (scripts/install-go2rtc.sh), on free
+// ports so proxies in parallel test files don't collide.
 export async function startProxy(sim: Awaited<ReturnType<typeof startSim>>, opts: { dir?: string; settings?: object } = {}) {
   const dir = opts.dir ?? mkdtempSync(join(tmpdir(), 'camproxy-proxy-'));
+  const go2rtc = process.env.CAMPROXY_TEST_GO2RTC;
   writeFileSync(join(dir, 'config.json'), JSON.stringify({
+    stills: { enabled: !!go2rtc },
+    go2rtc: { binary: go2rtc ?? 'go2rtc', rtspPort: await freePort(), apiPort: await freePort() },
     camera: { host: sim.camera.host, protocol: 'http', user: 'proxy', onvifPort: sim.ports.onvif, rtspPort: sim.ports.rtsp || 554, statusPollS: 5 },
     events: { onvif: { subscribeMin: 1, pullTimeoutS: 1 }, poll: { enabled: true, intervalS: 1, afterOnvifDownS: 1 } },
     server: { logLevel: 'silent' },
