@@ -77,6 +77,7 @@ export function createProxy(initial: Loaded): Proxy {
   const retention = new Retention({ catalog, log, config: () => running });
   const sessions = createSessionSigner();
 
+  let client: ReolinkClient;
   let status: StatusPoller;
   let intake: EventIntake;
   let lastResubscribes = 0;
@@ -96,7 +97,7 @@ export function createProxy(initial: Loaded): Proxy {
   // again by restart() with the current settings.
   const buildCameraSide = () => {
     const c = running.camera;
-    const client = new ReolinkClient({ id: c.id, host: c.host, protocol: c.protocol, tlsServername: c.tlsName, user: c.user, password: loaded.secrets.cameraPassword });
+    client = new ReolinkClient({ id: c.id, host: c.host, protocol: c.protocol, tlsServername: c.tlsName, user: c.user, password: loaded.secrets.cameraPassword });
     status = new StatusPoller(client, c.statusPollS);
     status.on('change', (s) => log.append(c.id, 'camera-status', { online: s.online, reason: s.error ?? null, clockOffsetMs: s.clockOffsetMs ?? null }));
     status.on('check', metrics.onCameraCheck);
@@ -154,6 +155,8 @@ export function createProxy(initial: Loaded): Proxy {
   else {
     // A missing asset is a 404, not the app page (stale chunks after an upgrade).
     app.use('/assets', express.static(join(webDir, 'assets'), { immutable: true, maxAge: '1y', index: false, fallthrough: false }));
+    // Top-level files of the build (favicon.svg).
+    app.get('/favicon.svg', (_req, res) => void res.sendFile(join(webDir, 'favicon.svg'), { maxAge: '1d' }));
     app.get(/^\/(?!api\/|control\/|health$|metrics$).*/, (_req, res) => {
       res.setHeader('Cache-Control', 'no-store');
       // The UI has restart and retention buttons: never inside another page's frame.
@@ -206,6 +209,7 @@ export function createProxy(initial: Loaded): Proxy {
     async restart() {
       await intake.stop();
       status.stop();
+      await client.logout();
       for (const p of leafPaths()) {
         if (p === 'server.port' || p === 'server.dataDir') continue;
         setPath(running as unknown as Record<string, unknown>, p, structuredClone(getPath(loaded.config, p)));
@@ -225,6 +229,7 @@ export function createProxy(initial: Loaded): Proxy {
       }
       await intake.stop();
       status.stop();
+      await client.logout();
       catalog.close();
     },
   };

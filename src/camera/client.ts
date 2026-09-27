@@ -308,6 +308,14 @@ export class ReolinkClient {
     throw new CameraError('camera_auth_failed', 'token rejected after re-login');
   }
 
+  // Ends the camera session (the camera allows only a few), best effort.
+  async logout(): Promise<void> {
+    const t = this.token;
+    if (!t) return;
+    this.token = null;
+    await this.post('Logout', {}, t.value).catch(() => undefined);
+  }
+
   async timeInfo(): Promise<TimeInfo> {
     if (this.time && this.now() - this.time.at < 3600_000) return this.time.value;
     const value = timeInfoFromGetTime(await this.command<unknown>('GetTime'));

@@ -190,6 +190,19 @@ describe('ReolinkClient', () => {
 
 });
 
+describe('ReolinkClient logout', () => {
+  it('logs out, so the next command logs in again, and ignores a logout without a session', async () => {
+    const client = new ReolinkClient(cam);
+    await client.logout(); // no session yet: nothing to do
+    expect(state.logins).toBe(0);
+    await client.command('GetDevInfo');
+    expect(state.logins).toBe(1);
+    await client.logout();
+    await client.command('GetDevInfo');
+    expect(state.logins).toBe(2);
+  });
+});
+
 describe('Semaphore', () => {
   it('never runs more than max tasks at once', async () => {
     const gate = new Semaphore(2);

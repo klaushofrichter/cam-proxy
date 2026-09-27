@@ -33,7 +33,8 @@ function registered(app: any): string[] {
     }
   };
   walk(app.router.stack, '');
-  return [...new Set(out)].sort();
+  // Only the API; the admin UI's files (favicon, page fallback) aren't in openapi.yaml.
+  return [...new Set(out)].filter((r) => / \/(api|control)\/| \/(health|metrics)$/.test(r)).sort();
 }
 
 let cleanup: () => Promise<void>;

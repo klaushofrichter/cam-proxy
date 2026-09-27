@@ -55,3 +55,10 @@ test('the token is kept nowhere in the browser', async ({ page }) => {
   await page.getByTestId('logout').click();
   await expect(page.getByTestId('token-input')).toBeVisible();
 });
+
+test('serves the favicon as SVG', async ({ request }) => {
+  const r = await request.get('/favicon.svg');
+  expect(r.status()).toBe(200);
+  expect(r.headers()['content-type']).toMatch(/image\/svg\+xml/);
+  expect(await r.text()).toContain('<svg');
+});
