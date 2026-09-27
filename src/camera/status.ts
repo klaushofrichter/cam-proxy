@@ -72,17 +72,21 @@ export class StatusPoller extends EventEmitter {
     return this.running;
   }
 
+  // Emits 'check' ({ok, ms, error?}) after every check, for metrics.
   private async check(): Promise<CameraState> {
+    const t0 = this.now();
     try {
       const status = await this.client.status();
       const time = await this.client.command<GetTime>('GetTime');
       this.failures = 0;
       this.set({ online: true, model: status.model, firmware: status.firmware, clockOffsetMs: clockOffset(time, this.now()), error: undefined });
+      this.emit('check', { ok: true, ms: this.now() - t0 });
     } catch (err) {
       this.failures++;
       const error = err instanceof CameraError ? err.code : 'camera_error';
       if (this.failures >= 2 || !this.current.online) this.set({ ...this.current, online: false, error });
       else this.current = { ...this.current, error };
+      this.emit('check', { ok: false, ms: this.now() - t0, error });
     }
     return this.state();
   }

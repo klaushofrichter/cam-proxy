@@ -54,3 +54,86 @@ paths:
         '200': { description: text/event-stream }
         '400': { description: unknown type }
         '503': { description: '{ error: too_many_clients }' }
+  /metrics:
+    get:
+      summary: Prometheus metrics (no auth; counts only)
+      security: []
+      responses:
+        '200': { description: text/plain; version=0.0.4 }
+  /control/login:
+    post:
+      summary: Admin UI sign-in with the admin token; sets the session cookie
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [token], properties: { token: { type: string } } }
+      responses:
+        '204': { description: signed in (camproxy_session cookie, HttpOnly, SameSite=Strict, 12 h) }
+        '401': { description: wrong token }
+        '429': { description: too many attempts (20 per 15 minutes) }
+  /control/logout:
+    post:
+      summary: Clears the session cookie
+      security: []
+      responses:
+        '204': { description: signed out }
+  /control/session:
+    get:
+      summary: Whether the request carries a valid session cookie
+      security: []
+      responses:
+        '200': { description: '{ loggedIn: boolean }' }
+  /control/status:
+    get:
+      summary: Camera, event intake, SSE clients, retention (admin)
+      description: >
+        Admin token or admin session. Writes with the session cookie need
+        `X-CamProxy-UI: 1`. A client token answers 403 `{"error":"admin_only"}`.
+      responses:
+        '200': { description: '{ version, camera, intake, sse, retention }' }
+        '401': { description: not signed in }
+        '403': { description: admin_only, or csrf }
+  /control/stats:
+    get:
+      summary: Disk, events, stream log, storage budget (spec §13)
+      responses:
+        '200': { description: '{ disk, events, stream, sse, storage }' }
+  /control/config:
+    get:
+      summary: Every setting with value, source, restart flag and pending next value
+      responses:
+        '200': { description: '{ "<path>": { value, source, restart, pending, next? } }' }
+    put:
+      summary: Sets overrides (stored in overrides.json); live settings apply at once
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, description: 'a partial config.json, e.g. {"sse":{"pingS":10}}' }
+      responses:
+        '200': { description: the new view (as GET) }
+        '400': { description: '{ error: invalid, detail: "<path>: <why>" }' }
+  /control/config/{path}:
+    delete:
+      summary: Removes one override (back to the file or default value)
+      parameters:
+        - { name: path, in: path, required: true, schema: { type: string }, description: 'e.g. sse.pingS' }
+      responses:
+        '200': { description: the new view }
+        '400': { description: unknown setting }
+  /control/actions/{name}:
+    post:
+      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), restart
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: camera-test and retention-run results }
+        '202': { description: started (onvif-resubscribe, restart) }
+        '404': { description: unknown action }
+  /control/log:
+    get:
+      summary: Recent log lines (info and above), redacted
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, maximum: 500 } }
+      responses:
+        '200': { description: '[{ level, time, msg, … }]' }

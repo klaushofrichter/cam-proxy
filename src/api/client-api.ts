@@ -11,7 +11,7 @@ const intParam = (v: unknown): number | undefined | null => (v === undefined ? u
 export const eventJson = (e: EventRow) => ({ id: e.id, kind: e.kind, source: e.source, start: e.start_ts, end: e.end_ts, endReason: e.end_reason });
 
 // The client API (spec §10); auth is applied by the caller.
-export function clientApi(d: { config: () => Config; catalog: Catalog; status: StatusPoller; sse: ReturnType<typeof sseHandler> }): express.Router {
+export function clientApi(d: { config: () => Config; catalog: Catalog; status: () => StatusPoller; sse: ReturnType<typeof sseHandler> }): express.Router {
   const r = express.Router();
   const cam = () => d.config().camera;
   const known = (req: Request, res: Response) => {
@@ -21,7 +21,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: S
 
   r.get('/cameras', (_req, res) => {
     const last = listEvents(d.catalog, { cam: cam().id, limit: 1 })[0];
-    res.json([{ id: cam().id, name: cam().name, online: d.status.state().online, lastEventTs: last?.start_ts ?? null, stream: null }]);
+    res.json([{ id: cam().id, name: cam().name, online: d.status().state().online, lastEventTs: last?.start_ts ?? null, stream: null }]);
   });
 
   r.get('/cameras/:cam/events', (req, res) => {
