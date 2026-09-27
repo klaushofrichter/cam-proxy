@@ -1,5 +1,5 @@
 import { execFile } from 'child_process';
-import { copyFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from 'fs';
+import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readSync, renameSync, unlinkSync } from 'fs';
 import { dirname, join } from 'path';
 import { promisify } from 'util';
 import type { DstRule, TimeInfo } from '../camera/time';
@@ -119,6 +119,11 @@ export class ClipIndexer {
     const { catalog } = this.d;
 
     if (parsed.ext === 'jpg') {
+      if (!isJpeg(u.tmpFile)) {
+        this.failed++;
+        logger.warn({ name: u.name, bytes: u.bytes }, 'snapshot_not_a_jpeg');
+        return null;
+      }
       move(u.tmpFile, `${stem}.jpg`);
       this.d.stored?.(u.bytes);
       const clip = clipByPath(catalog, `${stem}.mp4`);
@@ -175,6 +180,17 @@ async function probeVideo(file: string): Promise<{ durationS: number; codec: str
     return { durationS, codec: video.codec_name ?? 'unknown' };
   } catch {
     return null;
+  }
+}
+
+// A JPEG starts with FF D8 FF.
+function isJpeg(file: string): boolean {
+  const fd = openSync(file, 'r');
+  try {
+    const b = Buffer.alloc(3);
+    return readSync(fd, b, 0, 3, 0) === 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff;
+  } finally {
+    closeSync(fd);
   }
 }
 

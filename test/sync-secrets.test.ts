@@ -70,6 +70,15 @@ describe('sync-secrets.sh', () => {
     expect(log('kubectl')).not.toContain('GITHUB_KUBE_SETUP_PAT'); // the PAT is not a cluster secret
   });
 
+  // Issue #5 (Plan 4 review): a typo or a hand-set key isn't rotated silently.
+  it('refuses to rotate a key it doesn’t generate', () => {
+    const { run } = setup();
+    const r = run('--rotate', 'CAMPROXY_CAMERA_PASSWORD');
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/can rotate only CAMPROXY_TOKENS, CAMPROXY_ADMIN_TOKEN, CAMPROXY_FTP_PASSWORD/);
+    expect(run('--rotate', 'CAMPROXY_TOKEN').status).toBe(2);
+  });
+
   it('refuses a .env that others can read', () => {
     const r = setup('', 0o644).run('--dry-run');
     expect(r.status).toBe(1);
