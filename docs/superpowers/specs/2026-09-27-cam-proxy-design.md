@@ -189,12 +189,63 @@ defaults.
 - **Times:** stills are keyed by the proxy's clock (UTC, aligned to whole
   seconds), not by the camera's clock. The camera clock's offset is recorded
   in `camera-status`.
-- **Retention:** days per kind (`retention.stillsDays`, `previewsDays`,
-  `clipsDays`, `eventsDays`, `streamLogDays`, 7 each). Day folders past their
-  retention are deleted, along with the matching rows. It runs every
-  `retention.intervalMin` (60) and on demand.
+- **Retention and disk space:** see §8a.
 - **Resilience:** if go2rtc or ffmpeg exits, it restarts with backoff.
   `camera-status` reports `stream: down` after 10 s without a frame.
+
+## 8a. Storage management
+
+The disk fills up eventually: stills alone take about 3–5 GB a day, and
+main-stream clips about 1.5 GB. Two limits apply, and whichever is reached
+first wins.
+
+**1. Age, per kind.** Each kind has its own retention, set separately:
+
+| Kind | Setting | Default |
+|---|---|---|
+| stills | `retention.stillsDays` | 7 |
+| previews (thumbnail sprites) | `retention.previewsDays` | 14 (they are tiny and keep the timeline usable after the stills are gone) |
+| clips | `retention.clipsDays` | 7 |
+| events | `retention.eventsDays` | 30 (rows only) |
+| stream log | `retention.streamLogDays` | 7 |
+
+**2. Size budget.**
+
+- `storage.maxPercent` (85) of the disk the data is on, or
+  `storage.maxBytes`, overall.
+- Optional per-kind caps: `stills.maxGB`, `previews.maxGB`, `clips.maxGB`.
+
+When a limit is exceeded, the oldest data goes first, an hour at a time (not
+a whole day), in this order:
+
+1. stills;
+2. clips;
+3. previews.
+
+A per-kind minimum stops any one kind from being wiped out:
+`storage.keepHours` (stills 24, clips 24, previews 72). Rows that point at
+deleted files (events keep theirs; clips rows go) are cleaned up with them.
+
+**3. Hard floor.** If free space still falls below `storage.minFreeBytes`
+(2 GB), for example because another program fills the disk:
+
+- the proxy stops writing: the frame grabber pauses and the FTP intake refuses
+  uploads;
+- `camera-status` and the metrics say `storage: full`;
+- writing resumes on its own once there is room again.
+
+The catalog and the stream log keep working.
+
+**Running it:**
+
+- The storage job runs every `retention.intervalMin` (60), and at once when a
+  write pushes usage over the budget.
+- Each run records what it deleted, per kind (`camproxy_retention_deleted_total`,
+  and the admin UI's log).
+- **Visible in advance:** the stats (§13) show usage per kind, growth per day
+  (averaged over 3 days), the projected days until the budget is reached, and
+  what the next run would delete.
+- The admin UI can run it now, or preview a run without deleting anything.
 
 ## 9. Clips (FTP intake)
 
@@ -256,7 +307,7 @@ This follows the cam-sim pattern but is its own app.
   - `PUT /control/config`: sets overrides (§14), validated like the file.
     `DELETE /control/config/<path>` removes one, back to the file's value.
   - `POST /control/actions/<name>`:
-    - `retention-run`;
+    - `retention-run`, with `{"dryRun": true}` to preview what it would delete;
     - `onvif-resubscribe`;
     - `camera-test`;
     - `camera-ftp-setup` (writes the camera's whole `Ftp` object from `ftp`);
@@ -382,7 +433,8 @@ or put in a ConfigMap without leaking anything.
 | `stills` | `enabled` (true), `stream` (`sub`), `intervalS` (1), `size` (`896x512`), `quality` (5, ffmpeg `q:v`; lower is better) |
 | `previews` | `tileSize` (`160x90`), `grid` (`10x6`, must hold one minute of stills), `quality` (7) |
 | `events` | `onvif.subscribeMin` (10), `onvif.pullTimeoutS` (30), `poll.enabled` (true), `poll.intervalS` (2), `poll.afterOnvifDownS` (60), `maxOpenMin` (10) |
-| `retention` | `stillsDays`, `previewsDays`, `clipsDays`, `eventsDays`, `streamLogDays` (7 each), `intervalMin` (60) |
+| `retention` | `stillsDays` (7), `previewsDays` (14), `clipsDays` (7), `eventsDays` (30), `streamLogDays` (7), `intervalMin` (60) (§8a) |
+| `storage` | `maxPercent` (85) or `maxBytes`, `minFreeBytes` (2 GB), `keepHours` (`{stills: 24, clips: 24, previews: 72}`); per-kind caps `stills.maxGB`, `previews.maxGB`, `clips.maxGB` (none) |
 | `sse` | `maxClients` (50), `queuePerClient` (1000), `pingS` (15) |
 | `ftp` | `enabled` (false), `port` (2121), `passive` (`30000-30009`), `user` (`camera`), `tls` (true), `stream` (`main`) |
 
