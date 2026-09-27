@@ -1,0 +1,165 @@
+import { spawn, type ChildProcess } from 'child_process';
+import { EventEmitter } from 'events';
+import { Transform, type Readable } from 'stream';
+import { logger } from '../log';
+
+export interface Frame {
+  ts: number; // proxy clock, rounded down to the interval (ms)
+  still: Buffer; // JPEG at stills.size
+  tile: Buffer; // JPEG at previews.tileSize
+}
+
+const MAX_JPEG = 4 * 1024 * 1024;
+
+// Splits a stream of concatenated JPEGs (ffmpeg image2pipe) into one JPEG per
+// chunk, from SOI (FF D8) to EOI (FF D9). Inside JPEG data FF is always
+// followed by 00 or a marker, so FF D9 only ends an image.
+export function splitJpegs(): Transform {
+  let buf: Buffer = Buffer.alloc(0);
+  return new Transform({
+    readableObjectMode: true,
+    transform(chunk: Buffer, _enc, cb) {
+      buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;
+      for (;;) {
+        const start = buf.indexOf(Buffer.from([0xff, 0xd8]));
+        if (start < 0) {
+          buf = buf.subarray(buf.length - 1); // keep a possible FF
+          break;
+        }
+        const end = buf.indexOf(Buffer.from([0xff, 0xd9]), start + 2);
+        if (end < 0) {
+          buf = buf.subarray(start);
+          if (buf.length > MAX_JPEG) buf = Buffer.alloc(0); // not a JPEG stream: drop
+          break;
+        }
+        this.push(Buffer.from(buf.subarray(start, end + 2)));
+        buf = buf.subarray(end + 2);
+      }
+      cb();
+    },
+  });
+}
+
+export interface GrabberOptions {
+  input: string; // go2rtc's local restream
+  intervalS: number;
+  size: string; // WxH
+  tileSize: string;
+  quality: number; // ffmpeg q:v
+  tileQuality: number;
+  staleMs?: number; // no frame this long → down (default 10 s)
+  ffmpeg?: string;
+  now?: () => number;
+}
+
+// One ffmpeg decodes the sub stream and writes stills (stdout) and tiles
+// (fd 3) from the same frames. Restarted with backoff when it exits.
+export class FrameGrabber extends EventEmitter {
+  private proc: ChildProcess | undefined;
+  private running = false;
+  private isUp = false;
+  private last: number | null = null;
+  private lastStamp = -1;
+  private backoff = 1000;
+  private restartTimer: NodeJS.Timeout | undefined;
+  private staleTimer: NodeJS.Timeout | undefined;
+
+  constructor(private readonly o: GrabberOptions) {
+    super();
+  }
+
+  private now(): number {
+    return (this.o.now ?? Date.now)();
+  }
+
+  up(): boolean {
+    return this.isUp;
+  }
+
+  lastFrameTs(): number | null {
+    return this.last;
+  }
+
+  pid(): number | undefined {
+    return this.proc?.pid;
+  }
+
+  start(): void {
+    if (this.running) return;
+    this.running = true;
+    this.spawn();
+    this.staleTimer = setInterval(() => {
+      if (this.isUp && (this.last === null || this.now() - this.last > (this.o.staleMs ?? 10_000))) this.setUp(false);
+    }, 500);
+  }
+
+  private setUp(v: boolean): void {
+    if (v === this.isUp) return;
+    this.isUp = v;
+    this.emit('state', { up: v, lastFrameTs: this.last });
+  }
+
+  private spawn(): void {
+    const [w, h] = this.o.size.split('x');
+    const [tw, th] = this.o.tileSize.split('x');
+    const filter = `[0:v]fps=1/${this.o.intervalS},split=2[a][b];[a]scale=${w}:${h}[s];[b]scale=${tw}:${th}[t]`;
+    const args = [
+      '-hide_banner', '-loglevel', 'error', '-nostdin',
+      '-rtsp_transport', 'tcp', '-i', this.o.input,
+      '-filter_complex', filter,
+      '-map', '[s]', '-f', 'image2pipe', '-c:v', 'mjpeg', '-q:v', String(this.o.quality), 'pipe:1',
+      '-map', '[t]', '-f', 'image2pipe', '-c:v', 'mjpeg', '-q:v', String(this.o.tileQuality), 'pipe:3',
+    ];
+    const p = spawn(this.o.ffmpeg ?? 'ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
+    this.proc = p;
+    const stills: Buffer[] = [];
+    const tiles: Buffer[] = [];
+    const pair = () => {
+      while (stills.length && tiles.length) {
+        const still = stills.shift()!;
+        const tile = tiles.shift()!;
+        const step = this.o.intervalS * 1000;
+        const ts = Math.floor(this.now() / step) * step;
+        if (ts <= this.lastStamp) continue; // a burst after a stall: keep the first per slot
+        this.lastStamp = ts;
+        this.last = ts;
+        this.backoff = 1000;
+        this.setUp(true);
+        this.emit('frame', { ts, still, tile } satisfies Frame);
+      }
+    };
+    p.stdout!.pipe(splitJpegs()).on('data', (j: Buffer) => (stills.push(j), pair()));
+    (p.stdio[3] as Readable).pipe(splitJpegs()).on('data', (j: Buffer) => (tiles.push(j), pair()));
+    p.stderr!.on('data', (d: Buffer) => logger.debug({ ffmpeg: String(d).trim() }, 'frame_grabber'));
+    p.on('error', (err) => logger.error({ err: err.message }, 'frame_grabber_spawn_failed'));
+    p.on('exit', (code) => {
+      if (this.proc === p) this.proc = undefined;
+      if (!this.running) return;
+      this.setUp(false);
+      logger.warn({ code }, 'frame_grabber_exited');
+      this.restartTimer = setTimeout(() => this.running && this.spawn(), this.backoff);
+      this.backoff = Math.min(this.backoff * 2, 30_000);
+    });
+  }
+
+  async stop(): Promise<void> {
+    this.running = false;
+    clearTimeout(this.restartTimer);
+    clearInterval(this.staleTimer);
+    const p = this.proc;
+    if (p && p.exitCode === null && p.signalCode === null) await stopProcess(p);
+    this.proc = undefined;
+    this.setUp(false);
+  }
+}
+
+// SIGTERM, then SIGKILL after 3 s; resolves only once the process is gone
+// (ffmpeg can ignore SIGTERM while it waits on the network).
+export function stopProcess(p: ChildProcess): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (p.exitCode !== null || p.signalCode !== null) return resolve();
+    p.once('exit', () => resolve());
+    p.kill('SIGTERM');
+    setTimeout(() => p.kill('SIGKILL'), 3000).unref();
+  });
+}

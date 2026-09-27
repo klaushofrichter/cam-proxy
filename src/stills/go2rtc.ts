@@ -5,6 +5,7 @@ import http from 'http';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { logger } from '../log';
+import { stopProcess } from './grabber';
 
 export interface Go2rtcOptions {
   binary?: string;
@@ -136,13 +137,7 @@ export class Go2rtc extends EventEmitter {
     this.running = false;
     clearTimeout(this.restartTimer);
     const p = this.proc;
-    if (p && p.exitCode === null && p.signalCode === null) {
-      await new Promise<void>((r) => {
-        p.once('exit', () => r());
-        p.kill('SIGTERM');
-        setTimeout(() => (p.kill('SIGKILL'), r()), 3000).unref();
-      });
-    }
+    if (p) await stopProcess(p);
     this.proc = undefined;
     this.setReady(false);
     if (this.cwd) rmSync(this.cwd, { recursive: true, force: true });
