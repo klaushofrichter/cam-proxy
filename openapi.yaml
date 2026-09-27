@@ -1,0 +1,206 @@
+openapi: 3.1.0
+info:
+  title: cam-proxy
+  version: 0.0.0
+  description: >
+    The gateway next to a Reolink camera. Timestamps are unix milliseconds.
+    Every route except /health needs `Authorization: Bearer <token>`; a token in
+    the URL answers 400 `{"error":"token_in_url"}`.
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer }
+security:
+  - bearer: []
+paths:
+  /health:
+    get:
+      summary: The process is up (no camera check, no auth)
+      security: []
+      responses:
+        '200': { description: '{ ok: true, version } (the release version, dev locally)' }
+  /api/cameras:
+    get:
+      summary: The camera and its state
+      responses:
+        '200': { description: '[{ id, name, online, lastEventTs, stream: { up, lastFrameTs } | null }] (stream is null when stills are off)' }
+        '401': { description: missing or wrong token }
+  /api/cameras/{cam}/stills:
+    get:
+      summary: Timestamps that have a still, in a range of at most one day
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: from, in: query, required: true, schema: { type: integer } }
+        - { name: to, in: query, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: '[ts, …] (unix ms), oldest first' }
+        '400': { description: missing range, or more than a day }
+        '404': { description: unknown camera, or stills are off }
+  /api/cameras/{cam}/stills/{file}:
+    get:
+      summary: One still, as <ts>.jpg
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: file, in: path, required: true, schema: { type: string }, description: '<unix ms>.jpg' }
+      responses:
+        '200': { description: 'image/jpeg; immutable once its minute is complete' }
+        '400': { description: not <unix ms>.jpg }
+        '404': { description: no still at that time }
+  /api/cameras/{cam}/previews:
+    get:
+      summary: Preview sprite sheets (one per minute) in a range of at most one day
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: from, in: query, required: true, schema: { type: integer } }
+        - { name: to, in: query, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: '[{ minute, cols, rows, tileW, tileH, intervalS, present: [bool], url }]' }
+        '400': { description: missing range, or more than a day }
+  /api/cameras/{cam}/previews/{file}:
+    get:
+      summary: One minute's sprite sheet, as <minute>.jpg
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: file, in: path, required: true, schema: { type: string }, description: '<minute unix ms>.jpg' }
+      responses:
+        '200': { description: 'image/jpeg: a cols × rows grid of tiles, missing tiles dark' }
+        '404': { description: no sprite for that minute }
+  /api/cameras/{cam}/clips:
+    get:
+      summary: Clips that overlap a time range (at most 31 days), oldest first
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: from, in: query, required: true, schema: { type: integer }, description: unix ms }
+        - { name: to, in: query, required: true, schema: { type: integer }, description: unix ms }
+      responses:
+        '200': { description: '[{id, start, end, stream, size, events: [event ids], url, snapshotUrl (null without a snapshot)}]' }
+        '400': { description: 'from/to missing, reversed, or more than 31 days apart' }
+        '404': { description: unknown camera }
+  /api/cameras/{cam}/clips/{file}:
+    get:
+      summary: A clip as <id>.mp4 (HTTP Range), or its snapshot as <id>.jpg
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: file, in: path, required: true, schema: { type: string }, description: '<id>.mp4 or <id>.jpg' }
+        - { name: Range, in: header, schema: { type: string }, description: 'e.g. bytes=0-1023, bytes=1024-' }
+      responses:
+        '200': { description: 'video/mp4 or image/jpeg; Accept-Ranges: bytes; cached as immutable' }
+        '206': { description: the requested range, with Content-Range }
+        '400': { description: not <id>.mp4 or <id>.jpg }
+        '404': { description: 'unknown clip, or no snapshot' }
+        '416': { description: 'range not satisfiable (Content-Range: bytes */size)' }
+  /api/cameras/{cam}/events:
+    get:
+      summary: Events, newest first
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: from, in: query, schema: { type: integer }, description: start at or after (ms) }
+        - { name: to, in: query, schema: { type: integer }, description: start at or before (ms) }
+        - { name: kind, in: query, schema: { type: string }, description: 'motion, person, vehicle, pet, …' }
+        - { name: limit, in: query, schema: { type: integer, maximum: 1000 } }
+      responses:
+        '200': { description: '[{ id, kind, source, start, end, endReason }]' }
+        '400': { description: invalid parameter }
+        '404': { description: unknown camera }
+  /api/stream:
+    get:
+      summary: Server-Sent Events, resumable
+      description: >
+        Replays everything after `Last-Event-ID` (or `?since`), then continues
+        live. A resume point older than the retention answers `event: reset`
+        with `{oldestId}` first. Types: camera-event, camera-status, clip,
+        annotation, still (stills only when named in `types`; they are live
+        only, without an id, and not replayed).
+      parameters:
+        - { name: cam, in: query, schema: { type: string } }
+        - { name: types, in: query, schema: { type: string }, description: comma list }
+        - { name: kinds, in: query, schema: { type: string }, description: comma list, matches data.kind }
+        - { name: since, in: query, schema: { type: integer } }
+      responses:
+        '200': { description: text/event-stream }
+        '400': { description: unknown type }
+        '503': { description: '{ error: too_many_clients }' }
+  /metrics:
+    get:
+      summary: Prometheus metrics (no auth; counts only)
+      security: []
+      responses:
+        '200': { description: text/plain; version=0.0.4 }
+  /control/login:
+    post:
+      summary: Admin UI sign-in with the admin token; sets the session cookie
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [token], properties: { token: { type: string } } }
+      responses:
+        '204': { description: signed in (camproxy_session cookie, HttpOnly, SameSite=Strict, 12 h) }
+        '401': { description: wrong token }
+        '429': { description: too many attempts (20 per 15 minutes) }
+  /control/logout:
+    post:
+      summary: Clears the session cookie
+      security: []
+      responses:
+        '204': { description: signed out }
+  /control/session:
+    get:
+      summary: Whether the request carries a valid session cookie
+      security: []
+      responses:
+        '200': { description: '{ loggedIn: boolean }' }
+  /control/status:
+    get:
+      summary: Camera, event intake, SSE clients, retention (admin)
+      description: >
+        Admin token or admin session. Writes with the session cookie need
+        `X-CamProxy-UI: 1`. A client token answers 403 `{"error":"admin_only"}`.
+      responses:
+        '200': { description: '{ version, camera, intake, sse, retention }' }
+        '401': { description: not signed in }
+        '403': { description: admin_only, or csrf }
+  /control/stats:
+    get:
+      summary: Disk, events, stream log, storage budget (spec §13)
+      responses:
+        '200': { description: '{ disk, events, stream, sse, storage }' }
+  /control/config:
+    get:
+      summary: Every setting with value, source, restart flag and pending next value
+      responses:
+        '200': { description: '{ "<path>": { value, source, restart, pending, next? } }' }
+    put:
+      summary: Sets overrides (stored in overrides.json); live settings apply at once
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, description: 'a partial config.json, e.g. {"sse":{"pingS":10}}' }
+      responses:
+        '200': { description: the new view (as GET) }
+        '400': { description: '{ error: invalid, detail: "<path>: <why>" }' }
+  /control/config/{path}:
+    delete:
+      summary: Removes one override (back to the file or default value)
+      parameters:
+        - { name: path, in: path, required: true, schema: { type: string }, description: 'e.g. sse.pingS' }
+      responses:
+        '200': { description: the new view }
+        '400': { description: unknown setting }
+  /control/actions/{name}:
+    post:
+      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 'camera-test and retention-run results; camera-ftp-setup/-off: {ftp} (the camera''s settings, no password); camera-ftp-test: {ok, rspCode}' }
+        '202': { description: started (onvif-resubscribe, restart) }
+        '404': { description: unknown action }
+        '409': { description: 'camera-ftp-setup/-test: ftp.publicHost or the FTP password is not set' }
+        '502': { description: the camera refused or failed the call }
+  /control/log:
+    get:
+      summary: Recent log lines (info and above), redacted
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, maximum: 500 } }
+      responses:
+        '200': { description: '[{ level, time, msg, … }]' }

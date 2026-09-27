@@ -1,0 +1,105 @@
+/* Midnight Steel. Dark is the default; light applies when chosen, or when the
+   system prefers light and nothing was chosen. Every colour in the app comes
+   from these tokens, scrollbars included. */
+:root {
+  color-scheme: dark;
+  --bg: #0B1220;
+  --chrome: #0F1829;
+  --surface: #121C31;
+  --surface-2: #16213A;
+  --border: #1C2940;
+  --text: #E6EDF7;
+  --muted: #9FB0CC;
+  --accent: #22D3EE;
+  --accent-2: #6366F1;
+  --accent-ink: #06202A;
+  --danger: #EF4444;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239FB0CC' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --scroll-track: #0F1829;
+  --scroll-thumb: #2A3A5C;
+  --scroll-thumb-hover: #3B5082;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  --grad: linear-gradient(135deg, var(--accent), var(--accent-2));
+  --scrim: rgba(3, 8, 18, 0.55);
+  --on-grad: #FFFFFF;
+  --radius: 10px;
+  --font: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #F5F8FC;
+  --chrome: #FFFFFF;
+  --surface: #FFFFFF;
+  --surface-2: #EEF3FA;
+  --border: #D8E1EE;
+  --text: #0F1B2D;
+  --muted: #55657F;
+  --accent: #0891B2;
+  --accent-2: #4F46E5;
+  --accent-ink: #FFFFFF;
+  --danger: #DC2626;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23475569' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --scroll-track: #EEF3FA;
+  --scroll-thumb: #B9C6D9;
+  --scroll-thumb-hover: #93A4BE;
+  --shadow: 0 10px 30px rgba(15, 27, 45, 0.12);
+  --scrim: rgba(15, 27, 45, 0.35);
+  --on-grad: #FFFFFF;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    color-scheme: light;
+    --bg: #F5F8FC;
+    --chrome: #FFFFFF;
+    --surface: #FFFFFF;
+    --surface-2: #EEF3FA;
+    --border: #D8E1EE;
+    --text: #0F1B2D;
+    --muted: #55657F;
+    --accent: #0891B2;
+    --accent-2: #4F46E5;
+    --accent-ink: #FFFFFF;
+    --danger: #DC2626;
+    --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23475569' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    --scroll-track: #EEF3FA;
+    --scroll-thumb: #B9C6D9;
+    --scroll-thumb-hover: #93A4BE;
+    --shadow: 0 10px 30px rgba(15, 27, 45, 0.12);
+    --scrim: rgba(15, 27, 45, 0.35);
+    --on-grad: #FFFFFF;
+  }
+}
+
+html {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll-thumb) var(--scroll-track);
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--scroll-track); }
+::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 6px; border: 2px solid var(--scroll-track); }
+::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); }
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+a { color: var(--accent); }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0s !important;
+    animation-duration: 0s !important;
+  }
+}

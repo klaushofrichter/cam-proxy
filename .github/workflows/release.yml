@@ -1,0 +1,211 @@
+name: Release
+
+on:
+  push:
+    branches: [production]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+# One release at a time: two promotions close together would compute the
+# same version, and the second would overwrite the first's image tags.
+concurrency:
+  group: release-production
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - name: Refuse to release anything but production
+        if: github.ref != 'refs/heads/production'
+        run: |
+          echo "::error::releases run from production only (got ${GITHUB_REF})"
+          exit 1
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Generate the version
+        id: ver
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          DATE=$(TZ=America/Chicago date +%Y.%m.%d)
+          # Own assignment so a gh failure fails the step instead of reading as
+          # "no releases today" and reusing a shipped version.
+          RELEASES=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName -q '.[].tagName')
+          TODAY=$(printf '%s\n' "$RELEASES" | grep -c "^v${DATE}\." || true)
+          VERSION="${DATE}.$((TODAY + 1))"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$VERSION"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build timestamp
+        id: built
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v7
+        id: push
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            APP_VERSION=${{ steps.ver.outputs.version }}
+            BUILD_DATE=${{ steps.built.outputs.at }}
+          tags: |
+            ghcr.io/klaushofrichter/cam-proxy:v${{ steps.ver.outputs.version }}
+            ghcr.io/klaushofrichter/cam-proxy:latest
+
+
+  # The cluster: pin the new image by digest in kube-setup's manifest, push,
+  # apply it, and wait until the Deployment runs it and serves the version.
+  deploy:
+    needs: build
+    runs-on: [self-hosted, k3s]
+    permissions:
+      contents: read
+    # What the deploy observed, for the release notes' "Verified at release".
+    outputs:
+      generation: ${{ steps.rollout.outputs.generation }}
+      served: ${{ steps.smoke.outputs.served }}
+      api_unauthenticated: ${{ steps.smoke.outputs.api_unauthenticated }}
+    steps:
+      - name: Install kubectl and configure in-cluster access
+        run: |
+          set -euo pipefail
+          if ! command -v kubectl >/dev/null 2>&1; then
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+            chmod +x kubectl
+            sudo mv kubectl /usr/local/bin/kubectl
+          fi
+          SA_DIR=/var/run/secrets/kubernetes.io/serviceaccount
+          kubectl config set-cluster in-cluster --server=https://kubernetes.default.svc --certificate-authority="${SA_DIR}/ca.crt"
+          kubectl config set-credentials deploy-sa --token="$(cat "${SA_DIR}/token")"
+          kubectl config set-context in-cluster --cluster=in-cluster --user=deploy-sa --namespace=cam-proxy
+          kubectl config use-context in-cluster
+
+      - name: Update kube-setup manifest and deploy
+        env:
+          KUBE_SETUP_DEPLOY_TOKEN: ${{ secrets.KUBE_SETUP_DEPLOY_TOKEN }}
+          IMAGE: ghcr.io/klaushofrichter/cam-proxy@${{ needs.build.outputs.digest }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/kube-setup-deploy
+          # The clone's .git/config holds the token: gone on any exit, not only success.
+          trap 'rm -rf /tmp/kube-setup-deploy' EXIT
+          git clone "https://x-access-token:${KUBE_SETUP_DEPLOY_TOKEN}@github.com/klaushofrichter/kube-setup.git" /tmp/kube-setup-deploy
+          cd /tmp/kube-setup-deploy
+          M=manifests/cam-proxy/cam-proxy-deployment.yaml
+          sed -i "s|image: ghcr.io/klaushofrichter/cam-proxy[@:].*|image: ${IMAGE}|" "$M"
+          # A silent no-op sed would commit an unchanged manifest and let git
+          # drift from the cluster while reporting success.
+          grep -q "image: ${IMAGE}$" "$M" || { echo "::error::manifest image line did not update"; exit 1; }
+          git config user.name "cam-proxy-deploy-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add "$M"
+          if git diff --cached --quiet; then
+            echo "Manifest already at ${IMAGE}; nothing to commit."
+          else
+            git commit -m "Deploy cam-proxy v${VERSION}"
+            git push   # push before apply, always
+          fi
+          kubectl apply -f "$M"
+
+      # The runner may get/watch/patch deployments/cam-proxy by name only, so
+      # `kubectl rollout status` (which lists) is not allowed: poll instead.
+      - name: Wait for the rollout
+        id: rollout
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+            read -r gen observed updated available <<<"$(kubectl get deployment cam-proxy -n cam-proxy \
+              -o jsonpath='{.metadata.generation} {.status.observedGeneration} {.status.updatedReplicas} {.status.availableReplicas}')"
+            echo "generation=${gen} observed=${observed} updated=${updated:-0} available=${available:-0}"
+            if [ "$gen" = "$observed" ] && [ "${updated:-0}" = 1 ] && [ "${available:-0}" = 1 ]; then
+              echo "generation=${gen}" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::cam-proxy did not roll out in 5 minutes"; exit 1
+
+      # The new pod, not an old one still answering: the served version must match.
+      - name: Smoke-test cam-proxy
+        id: smoke
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          URL=http://cam-proxy.cam-proxy.svc.cluster.local:8480
+          for _ in $(seq 1 24); do
+            # Whitespace-tolerant (cluster requirements §1).
+            served=$(curl -sf --max-time 5 "$URL/health" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1 || true)
+            echo "served version: ${served:-none}"
+            [ "$served" = "$VERSION" ] && break
+            sleep 5
+          done
+          [ "$served" = "$VERSION" ] || { echo "::error::cam-proxy serves ${served:-nothing}, expected ${VERSION}"; exit 1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$URL/api/cameras")
+          [ "$code" = 401 ] || { echo "::error::/api without a token answered ${code}, expected 401"; exit 1; }
+          { echo "served=${served}"; echo "api_unauthenticated=${code}"; } >> "$GITHUB_OUTPUT"
+          echo "cam-proxy v${VERSION} serving; the API requires a token"
+
+  publish:
+    needs: [build, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Tag the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.build.outputs.version }}
+          DIGEST: ${{ needs.build.outputs.digest }}
+          GENERATION: ${{ needs.deploy.outputs.generation }}
+          SERVED: ${{ needs.deploy.outputs.served }}
+          API_CODE: ${{ needs.deploy.outputs.api_unauthenticated }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "$TAG already released - skipping."; exit 0
+          fi
+          : > /tmp/notes.md
+          awk '/^## \[?Unreleased\]?/ { grab = 1; next } grab && /^## / { exit } grab { print }' CHANGELOG.md \
+            | sed '/^[[:space:]]*$/d' > /tmp/curated.md
+          if [ -s /tmp/curated.md ]; then cat /tmp/curated.md >> /tmp/notes.md; printf '\n' >> /tmp/notes.md; fi
+          PREV=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || true)
+          printf '### Changes\n\n' >> /tmp/notes.md
+          if [ -n "$PREV" ] && git rev-parse "$PREV" >/dev/null 2>&1; then
+            git log --no-merges --pretty='- %s' "${PREV}..HEAD" >> /tmp/notes.md
+            printf '\n**Full diff:** https://github.com/%s/compare/%s...%s\n' "$GITHUB_REPOSITORY" "$PREV" "$TAG" >> /tmp/notes.md
+          else
+            git log --no-merges --pretty='- %s' -30 >> /tmp/notes.md
+          fi
+          printf '\nImage: `ghcr.io/klaushofrichter/cam-proxy:%s` (`@%s`; linux/amd64, linux/arm64)\n' "$TAG" "$DIGEST" >> /tmp/notes.md
+          # Only what the deploy job checked; the release exists only if it passed.
+          {
+            printf '\n### Verified at release\n\n'
+            printf -- '- deployment `cam-proxy` (namespace `cam-proxy`) rolled out: generation %s, 1 updated and available replica\n' "$GENERATION"
+            printf -- '- `/health` served version `%s` inside the cluster\n' "$SERVED"
+            printf -- '- `/api/cameras` without a token answered %s\n' "$API_CODE"
+          } >> /tmp/notes.md
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$TAG" --notes-file /tmp/notes.md
+          echo "Released $TAG"
