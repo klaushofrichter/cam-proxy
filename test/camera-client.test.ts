@@ -286,7 +286,7 @@ describe('ReolinkClient recordings', () => {
   it('reads camera time into offsets and caches it', async () => {
     const client = new ReolinkClient(cam);
     const t = await client.timeInfo();
-    expect(t).toEqual({ stdOffsetMinutes: -360, dstOffsetMinutes: 60 });
+    expect(t).toMatchObject({ stdOffsetMinutes: -360, dstOffsetMinutes: 60, dstRule: { startMon: 3, startWeek: 2, endMon: 11, endWeek: 1 } });
     await client.timeInfo();
     // one GetTime only: cached
   });
