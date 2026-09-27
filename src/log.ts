@@ -17,3 +17,6 @@ export function withoutQuery(url: string): string {
   const i = url.indexOf('?');
   return i < 0 ? url : url.slice(0, i);
 }
+
+// The process-wide logger; the proxy sets its level from the config.
+export const logger = createLogger(process.env.CAMPROXY_LOG_LEVEL ?? 'info');
