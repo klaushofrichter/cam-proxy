@@ -14,8 +14,10 @@ Order as always: **commit, push, then apply.**
 - Namespace `cam-proxy` (the workload) and `cam-proxy-runner`: a repo-scoped
   runner for klaushofrichter/cam-proxy, as `cam-sim-runner`.
   - Labels `[self-hosted, k3s]`.
-  - Registration PAT in Secret `runner-pat` (key `token`). Klaus creates it
-    by hand.
+  - Registration PAT in Secret `runner-pat` (key `token`). The value is
+    `CAMPROXY_GITHUB_PAT` in cam-proxy's `.env`. Klaus agreed to it; the
+    cam-proxy session can create the Secret without printing it, once the
+    namespace exists, if you prefer that to doing it yourself.
   - The runner needs about 512Mi: the deploy job runs kubectl, git and curl
     only, with no Playwright.
 - ServiceAccount `deploy-sa` in `cam-proxy-runner`. Role `cam-proxy-deployer`
@@ -32,7 +34,8 @@ Order as always: **commit, push, then apply.**
 - **Secret `cam-proxy-secrets`:** created by `scripts/sync-secrets.sh
   --env-file .env.cluster --only kube`, keys `CAMPROXY_TOKENS`,
   `CAMPROXY_ADMIN_TOKEN`, `CAMPROXY_CAMERA_PASSWORD`, `CAMPROXY_FTP_PASSWORD`.
-  Please don't create it from the kube-setup side.
+  The cam-proxy session runs it once the namespace exists. Please don't
+  create it from the kube-setup side.
 - **PVC `cam-proxy-data`:** 20Gi, `local-path`, **reclaim policy Retain**. It
   holds clips, stills and the catalog, which are not regenerable.
   local-path doesn't enforce the size (the volume is a host folder, and
@@ -91,8 +94,11 @@ As cam2's `cam2-ui-route.yaml`:
   (plain HTTP inside the cluster);
 - the ipAllowList middleware `192.168.1.0/24`.
 
-The DNS name already exists. **Network exposure approval:** <to be filled
-with Klaus's approval, quoted, date>.
+The DNS name already exists. **Network exposure approval:** Klaus,
+2026-09-27, in the cam-proxy session, answering "OK to publish
+`https://cam-proxy.skylar.technology` on the LAN only (allow-list
+192.168.1.0/24, Let's Encrypt), no FTP ports on the LAN?": "Ok for all three
+questions".
 
 ## 4. Not now
 
@@ -105,10 +111,9 @@ with Klaus's approval, quoted, date>.
 
 ## 5. Also
 
-- On cam2, a camera user `proxy` (admin level). That is cam-sim's
-  `CAMSIM_USERS` in cam-sim's `.env`, synced by cam-sim's script and then
-  cam2 restarted. It's a cam-sim/cam-proxy task; nothing to do on the
-  kube-setup side beyond the restart.
+- On cam2, a camera user `proxy` (admin level): **done** 2026-09-27. It was
+  added to `CAMSIM_USERS`, `cam-sim-secrets` synced, and cam2 restarted
+  (rollout restart); login as `proxy` verified.
 - A Services note for cam-proxy in the vault.
 - Please report back when it is pushed and applied (runner registered, PVC
   bound, certificate ready), so the first release can run.
