@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Tests: cam-sim v2026.09.27.2.
+- Tests: cam-sim v2026.09.27.3.
 - Deploy: the cluster's `ftp.stream` is `sub` (clips for cams play in every
   browser).
 
