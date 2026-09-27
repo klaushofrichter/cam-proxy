@@ -3,6 +3,7 @@ import type { Catalog } from './catalog/db';
 import { deleteEventsBefore } from './catalog/events';
 import type { Config } from './config/defaults';
 import type { StreamLog } from './stream/log';
+import { logger } from './log';
 
 const DAY = 86_400_000;
 export interface RetentionRun { dryRun: boolean; deleted: { events: number; streamLog: number }; at: number }
@@ -45,12 +46,20 @@ export class Retention extends EventEmitter {
     return run;
   }
 
-  start(): void {
+  // Runs every retention.intervalMin. A failed run is logged and retried at
+  // the next interval; it never takes the process down.
+  start(t: { firstMs?: number; everyMs?: number } = {}): void {
     const tick = () => {
-      this.run({});
-      this.timer = setTimeout(tick, this.d.config().retention.intervalMin * 60_000);
+      try {
+        this.run({});
+      } catch (err) {
+        const msg = (err as Error).message;
+        logger.error({ err: msg }, 'retention_failed');
+        this.emit('failed', msg);
+      }
+      this.timer = setTimeout(tick, t.everyMs ?? this.d.config().retention.intervalMin * 60_000);
     };
-    this.timer = setTimeout(tick, 5_000);
+    this.timer = setTimeout(tick, t.firstMs ?? 5_000);
   }
 
   stop(): void {

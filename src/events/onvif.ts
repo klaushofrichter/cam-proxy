@@ -47,6 +47,8 @@ export class OnvifSubscription {
   }
 
   async subscribe(): Promise<void> {
+    // A subscription we still hold is ended first (the camera allows few).
+    if (this.manager) await this.unsubscribe().catch(() => undefined);
     this.manager = undefined;
     const xml = await this.call(EVENT_SERVICE, `${TEV}/EventPortType/CreatePullPointSubscriptionRequest`,
       `<tev:CreatePullPointSubscription><tev:InitialTerminationTime>PT${this.opts.subscribeMin}M</tev:InitialTerminationTime></tev:CreatePullPointSubscription>`, false);

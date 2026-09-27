@@ -147,6 +147,19 @@ describe('EventIntake against cam-sim', () => {
     await until(() => intake!.state().source === 'onvif', 15000);
   }, 40000);
 
+  it('a deliberate re-subscribe ends the old subscription and never reports ONVIF as down', async () => {
+    await setup();
+    const states: string[] = [];
+    intake!.on('state', (st: IntakeState) => states.push(st.onvif));
+    for (let i = 0; i < 20; i++) {
+      const before = intake!.state().resubscribes;
+      intake!.resubscribe();
+      await until(() => intake!.state().resubscribes > before && intake!.state().onvif === 'subscribed');
+    }
+    expect(intake!.state().onvif).toBe('subscribed');
+    expect(states).not.toContain('down');
+  }, 60000);
+
   it('stops cleanly: no more events after stop()', async () => {
     const { sim } = await setup();
     await intake!.stop();

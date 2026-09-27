@@ -51,7 +51,46 @@ describe('proxy end to end with cam-sim', () => {
     await s.until(() => s.events.filter((e) => (e.data as { kind?: string }).kind === 'pet').length === 2);
     expect(Math.min(...s.ids())).toBe(seen + 1);
     expect(s.ids()).toEqual([...s.ids()].sort((a, b) => a - b));
-    expect(s.events.filter((e) => e.event === 'camera-event' && (e.data as { kind: string }).kind === 'vehicle')).toHaveLength(0);
+    // Nothing from before `seen` again: the vehicle event only appears as its end
+    // (it was still open when the proxy stopped, and ends at the restart).
+    for (const e of s.events.filter((x) => x.event === 'camera-event' && (x.data as { kind: string }).kind === 'vehicle')) expect((e.data as { phase: string }).phase).toBe('end');
+  });
+});
+
+describe('proxy restart with an open event', () => {
+  it('ends events left open with an end message (reason restart), so stream clients see them close', async () => {
+    const sim = await startSim();
+    cleanup.push(() => sim.close());
+    let p = await startProxy(sim);
+    await until(() => p.proxy.intake.state().onvif === 'subscribed');
+    sim.sim.engine.events.trigger('pet', 60);
+    await until(() => p.proxy.log.since(0, { types: ['camera-event'], kinds: ['pet'] }, 10).length === 1);
+    const started = p.proxy.log.since(0, { types: ['camera-event'], kinds: ['pet'] }, 10)[0];
+    await p.proxy.stop();
+    p = await startProxy(sim, { dir: p.dir });
+    cleanup.push(() => p.proxy.stop());
+    const pet = p.proxy.log.since(0, { types: ['camera-event'], kinds: ['pet'] }, 10);
+    expect(pet.map((m) => m.data.phase)).toEqual(['start', 'end']);
+    expect(pet[1].data).toMatchObject({ eventId: started.data.eventId, phase: 'end', reason: 'restart' });
+  });
+});
+
+describe('proxy restart', () => {
+  it('runs one restart at a time: a second call joins the first, and stop() waits for it', async () => {
+    const sim = await startSim();
+    cleanup.push(() => sim.close());
+    const p = await startProxy(sim);
+    await until(() => p.proxy.intake.state().onvif === 'subscribed');
+    const a = p.proxy.restart();
+    const b = p.proxy.restart();
+    expect(b).toBe(a);
+    await a;
+    const current = p.proxy.intake;
+    await until(() => current.state().onvif === 'subscribed');
+    const r = p.proxy.restart();
+    await p.proxy.stop();
+    await r;
+    expect(p.proxy.intake.state().source).toBe('none');
   });
 });
 

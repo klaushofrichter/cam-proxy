@@ -47,7 +47,9 @@ export function deleteEventsBefore(c: Catalog, ts: number): number {
   return Number(c.db.prepare('DELETE FROM events WHERE start_ts < ?').run(ts).changes);
 }
 
-// Events a previous run left open are closed at `at` (e.g. the last known time).
-export function closeAllOpen(c: Catalog, cam: string, at: number, reason: 'restart' | 'timeout' | 'state'): number {
-  return Number(c.db.prepare('UPDATE events SET end_ts = MAX(start_ts, ?), end_reason = ? WHERE cam = ? AND end_ts IS NULL').run(at, reason, cam).changes);
+// Events a previous run left open are closed at `at` (e.g. the last known
+// time); returns the closed events.
+export function closeAllOpen(c: Catalog, cam: string, at: number, reason: 'restart' | 'timeout' | 'state'): EventRow[] {
+  const rows = c.db.prepare('UPDATE events SET end_ts = MAX(start_ts, ?), end_reason = ? WHERE cam = ? AND end_ts IS NULL RETURNING *').all(at, reason, cam) as DbRow[];
+  return rows.map(fromDb);
 }

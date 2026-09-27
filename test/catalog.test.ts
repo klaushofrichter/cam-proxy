@@ -62,7 +62,7 @@ describe('catalog', () => {
   it('closes events left open by a previous run', () => {
     ev('person', 1000);
     ev('pet', 2000);
-    expect(closeAllOpen(c, 'cam1', 5000, 'restart')).toBe(2);
+    expect(closeAllOpen(c, 'cam1', 5000, 'restart')).toHaveLength(2);
     expect(openEvents(c, 'cam1')).toHaveLength(0);
     expect(listEvents(c, { cam: 'cam1' })[0]).toMatchObject({ end_ts: 5000, end_reason: 'restart' });
   });

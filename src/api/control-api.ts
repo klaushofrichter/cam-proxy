@@ -6,7 +6,7 @@ import type { Config } from '../config/defaults';
 import { applyOverrides, ConfigError, needsRestart, removeOverride, type Loaded } from '../config/load';
 import { leafPaths } from '../config/schema';
 import type { IntakeState } from '../events/intake';
-import { logBuffer } from '../log';
+import { logBuffer, logger } from '../log';
 import type { Retention } from '../retention';
 import type { StreamLog } from '../stream/log';
 import { tokenMatches } from './auth';
@@ -122,7 +122,7 @@ export function controlApi(d: ControlDeps): express.Router {
       case 'retention-run':
         return void res.json(d.retention.run({ dryRun: req.body?.dryRun === true }));
       case 'restart':
-        void d.restart();
+        d.restart().catch((err: Error) => logger.error({ err: err.message }, 'restart_failed'));
         return void res.status(202).end();
       default:
         return void res.status(404).json({ error: 'not_found' });

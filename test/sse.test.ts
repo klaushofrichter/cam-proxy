@@ -112,6 +112,36 @@ describe('SSE', () => {
     expect(c.ids()).toEqual([4, 5]);
   });
 
+  it('says reset when the resume point is newer than anything stored (catalog was reset)', async () => {
+    await serve();
+    for (let i = 1; i <= 3; i++) ev(i);
+    const c = connect('/stream', { 'Last-Event-ID': '5000' });
+    await c.until(() => c.events.length === 4);
+    expect(c.events[0]).toEqual({ event: 'reset', data: { oldestId: 1 } });
+    expect(c.ids()).toEqual([1, 2, 3]);
+    ev(4);
+    await c.until(() => c.ids().length === 4);
+  });
+
+  it('says reset when everything after the resume point was deleted', async () => {
+    await serve();
+    for (let i = 1; i <= 3; i++) ev(i);
+    catalog.db.prepare('DELETE FROM stream_log').run();
+    const c = connect('/stream', { 'Last-Event-ID': '1' });
+    await c.until(() => c.events.length === 1);
+    expect(c.events[0]).toEqual({ event: 'reset', data: { oldestId: null } });
+  });
+
+  it('replays a large backlog to a client that reads normally, without dropping it', async () => {
+    await serve({ queuePerClient: 20 });
+    const big = 'x'.repeat(2000);
+    for (let i = 1; i <= 3000; i++) log.append('cam1', 'camera-event', { eventId: i, kind: 'motion', pad: big });
+    const c = connect('/stream?since=0');
+    await c.until(() => c.ids().length === 3000, 20000);
+    expect(c.ended()).toBe(false);
+    expect(c.ids()[2999]).toBe(3000);
+  }, 30000);
+
   it('filters by type and kind, and sends stills only when asked', async () => {
     await serve();
     const all = connect('/stream');

@@ -90,9 +90,28 @@ export function field(xml: string, name: string, from = 0, to = xml.length): str
   return undefined;
 }
 
+// One attribute's value from a start tag's attribute text, by a linear scan
+// (a backtracking regex over hostile attribute text can take minutes).
 export function attr(attrs: string, name: string): string | undefined {
-  for (const m of attrs.matchAll(/([A-Za-z0-9_.:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
-    if (m[1].slice(m[1].lastIndexOf(':') + 1) === name) return decode(m[2] ?? m[3] ?? '');
+  let i = 0;
+  const n = attrs.length;
+  const isName = (c: string) => /[A-Za-z0-9_.:-]/.test(c);
+  while (i < n) {
+    while (i < n && !isName(attrs[i])) i++;
+    const start = i;
+    while (i < n && isName(attrs[i])) i++;
+    const key = attrs.slice(start, i);
+    while (i < n && (attrs[i] === ' ' || attrs[i] === '\t' || attrs[i] === '\n' || attrs[i] === '\r')) i++;
+    if (attrs[i] !== '=') continue;
+    i++;
+    while (i < n && (attrs[i] === ' ' || attrs[i] === '\t' || attrs[i] === '\n' || attrs[i] === '\r')) i++;
+    const q = attrs[i];
+    if (q !== '"' && q !== "'") continue;
+    const end = attrs.indexOf(q, i + 1);
+    if (end < 0) return undefined;
+    const value = attrs.slice(i + 1, end);
+    i = end + 1;
+    if (key.slice(key.lastIndexOf(':') + 1) === name) return decode(value);
   }
   return undefined;
 }

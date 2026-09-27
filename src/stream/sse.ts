@@ -46,7 +46,9 @@ export function sseHandler(log: StreamLog, opts: SseOptions): RequestHandler & {
     let blockedTimer: NodeJS.Timeout | undefined;
     let lastSent = 0;
     let replaying = true;
-    const pending: StreamMessage[] = [];
+    let cursor = 0; // replay position
+    let replayEnd = 0; // the last id that existed when the client connected
+    const pending: StreamMessage[] = []; // live messages that arrive during replay
 
     const drop = () => {
       stats.dropped++;
@@ -64,19 +66,40 @@ export function sseHandler(log: StreamLog, opts: SseOptions): RequestHandler & {
           });
         }
       }
+      // Replay continues only as the client reads (never a whole backlog at once).
+      if (replaying && !waitingDrain && queue.length === 0 && !res.destroyed) replayMore();
     };
-    const send = (m: StreamMessage) => {
+    const push = (m: StreamMessage) => {
       if (m.id <= lastSent) return;
       lastSent = m.id;
       stats.messages[m.type] = (stats.messages[m.type] ?? 0) + 1;
       queue.push(frame(m));
+    };
+    // Live: the queue is bounded; a client that can't keep up is dropped and
+    // resumes from its Last-Event-ID.
+    const send = (m: StreamMessage) => {
+      push(m);
       if (queue.length > o.queuePerClient) return drop();
       pump();
     };
+    const replayMore = () => {
+      const page = log.since(cursor, filter, PAGE).filter((m) => m.id <= replayEnd);
+      for (const m of page) push(m);
+      stats.replayed += page.length;
+      if (page.length) cursor = page[page.length - 1].id;
+      if (page.length < PAGE || cursor >= replayEnd) {
+        replaying = false;
+        lastSent = Math.max(lastSent, replayEnd);
+        for (const m of pending.splice(0)) push(m);
+      }
+      if (queue.length) pump();
+    };
     const onMessage = (m: StreamMessage) => {
       if (!matches(m, filter)) return;
-      if (replaying) pending.push(m);
-      else send(m);
+      if (!replaying) return send(m);
+      pending.push(m);
+      // A client that stays in replay while live traffic piles up resumes later.
+      if (pending.length > o.queuePerClient * 10) drop();
     };
     log.on('message', onMessage);
     const ping = setInterval(() => {
@@ -93,27 +116,22 @@ export function sseHandler(log: StreamLog, opts: SseOptions): RequestHandler & {
 
     res.write('retry: 3000\n\n');
     const since = resumeFrom(req);
-    if (since !== undefined) {
-      let cursor = since;
-      const oldest = log.oldestId();
-      if (oldest !== null && oldest > since + 1) {
-        queue.push(`event: reset\ndata: ${JSON.stringify({ oldestId: oldest })}\n\n`);
-        cursor = oldest - 1;
-      }
-      const end = log.lastId();
-      for (;;) {
-        const page = log.since(cursor, filter, PAGE).filter((m) => m.id <= end);
-        for (const m of page) send(m);
-        stats.replayed += page.length;
-        if (page.length < PAGE || res.destroyed) break;
-        cursor = page[page.length - 1].id;
-      }
-      lastSent = Math.max(lastSent, end);
-    } else {
-      lastSent = log.lastId();
+    replayEnd = log.lastId();
+    if (since === undefined) {
+      lastSent = replayEnd; // live only
+      replaying = false;
+      return;
     }
-    replaying = false;
-    for (const m of pending.splice(0)) send(m);
+    const oldest = log.oldestId();
+    const reset = (oldestId: number | null, from: number) => {
+      queue.push(`event: reset\ndata: ${JSON.stringify({ oldestId })}\n\n`);
+      cursor = from;
+    };
+    if (since > replayEnd) reset(oldest, (oldest ?? replayEnd + 1) - 1); // the ids started over (catalog reset)
+    else if (oldest === null && since < replayEnd) reset(null, replayEnd); // everything after it was deleted
+    else if (oldest !== null && oldest > since + 1) reset(oldest, oldest - 1); // past retention
+    else cursor = since;
+    lastSent = cursor;
     pump();
   }) as unknown as RequestHandler & { clients(): number; closeAll(): void; stats(): SseStats; setOptions(o: Partial<SseOptions>): void };
 

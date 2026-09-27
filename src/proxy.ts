@@ -71,7 +71,10 @@ export function createProxy(initial: Loaded): Proxy {
   const log = new StreamLog(catalog);
   // Events a previous run left open end at the last thing it logged.
   const last = catalog.db.prepare('SELECT MAX(ts) AS ts FROM stream_log').get() as { ts: number | null };
-  closeAllOpen(catalog, running.camera.id, last.ts ?? Date.now(), 'restart');
+  // Stream clients saw them start, so they get the end too.
+  for (const e of closeAllOpen(catalog, running.camera.id, last.ts ?? Date.now(), 'restart')) {
+    log.append(e.cam, 'camera-event', { eventId: e.id, kind: e.kind, phase: 'end', ts: e.end_ts, source: e.source, reason: 'restart' });
+  }
 
   const sse = sseHandler(log, running.sse);
   const retention = new Retention({ catalog, log, config: () => running });
@@ -174,7 +177,24 @@ export function createProxy(initial: Loaded): Proxy {
     res.status(500).json({ error: 'internal' });
   });
 
+  // Applies pending restart settings to the camera side (camera, events).
+  // Server port and data folder need a new process.
+  const restartCameraSide = async () => {
+    await intake.stop();
+    status.stop();
+    await client.logout();
+    for (const p of leafPaths()) {
+      if (p === 'server.port' || p === 'server.dataDir') continue;
+      setPath(running as unknown as Record<string, unknown>, p, structuredClone(getPath(loaded.config, p)));
+    }
+    buildCameraSide();
+    status.start();
+    intake.start();
+    logger.info('cam_proxy_restarted');
+  };
+
   let server: http.Server | undefined;
+  let restarting: Promise<void> | undefined;
   const proxy: Proxy = {
     get loaded() {
       return loaded;
@@ -204,22 +224,19 @@ export function createProxy(initial: Loaded): Proxy {
       logger.info({ port, camera: running.camera.id, version: VERSION }, 'cam_proxy_started');
       return { port };
     },
-    // Applies pending restart settings to the camera side (camera, events).
-    // Server port and data folder need a new process.
-    async restart() {
-      await intake.stop();
-      status.stop();
-      await client.logout();
-      for (const p of leafPaths()) {
-        if (p === 'server.port' || p === 'server.dataDir') continue;
-        setPath(running as unknown as Record<string, unknown>, p, structuredClone(getPath(loaded.config, p)));
-      }
-      buildCameraSide();
-      status.start();
-      intake.start();
-      logger.info('cam_proxy_restarted');
+    // One at a time: a second call while one runs joins it.
+    restart() {
+      restarting ??= (async () => {
+        try {
+          await restartCameraSide();
+        } finally {
+          restarting = undefined;
+        }
+      })();
+      return restarting;
     },
     async stop() {
+      await restarting;
       sse.closeAll();
       retention.stop();
       const s = server;

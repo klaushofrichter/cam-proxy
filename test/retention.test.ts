@@ -26,4 +26,18 @@ describe('retention (phase 1: rows)', () => {
     expect(r.totals()).toEqual({ events: 1, streamLog: 1 });
     c.close();
   });
+
+  it('a failing scheduled run is logged and retried later, never crashing the process', async () => {
+    const c = openCatalog(join(mkdtempSync(join(tmpdir(), 'camproxy-ret-')), 'catalog.sqlite'));
+    const log = new StreamLog(c);
+    const config = structuredClone(DEFAULTS);
+    const r = new Retention({ catalog: c, log, config: () => config });
+    const failures: string[] = [];
+    r.on('failed', (msg: string) => failures.push(msg));
+    c.close(); // every run now throws
+    r.start({ firstMs: 0, everyMs: 20 });
+    await new Promise((res) => setTimeout(res, 120));
+    r.stop();
+    expect(failures.length).toBeGreaterThanOrEqual(2);
+  });
 });

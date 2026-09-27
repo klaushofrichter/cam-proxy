@@ -33,6 +33,7 @@ export class EventIntake extends EventEmitter {
   private polling = false; // ticking, not just waiting to start
   private sweepTimer: NodeJS.Timeout | undefined;
   private everSubscribed = false;
+  private deliberate = false; // resubscribe() asked for a new subscription
   private downSince = Date.now();
   private readonly topics = new Map<string, boolean>(); // per ONVIF topic
   private readonly sub: OnvifSubscription;
@@ -77,6 +78,7 @@ export class EventIntake extends EventEmitter {
 
   // Drops the current subscription; the loop subscribes again.
   resubscribe(): void {
+    this.deliberate = true;
     this.pullAbort?.abort();
   }
 
@@ -130,6 +132,11 @@ export class EventIntake extends EventEmitter {
         }
       } catch (err) {
         if (!this.running) break;
+        if (this.deliberate) {
+          // Asked for: subscribe again at once (subscribe() ends the old one).
+          this.deliberate = false;
+          continue;
+        }
         const why = err instanceof OnvifAuthError ? 'onvif_auth_failed' : (err as Error).message;
         if (this.st.onvif === 'subscribed') this.downSince = Date.now();
         this.set({ onvif: 'down', lastError: why, source: this.polling ? 'poll' : 'none' });
