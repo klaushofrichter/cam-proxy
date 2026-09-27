@@ -37,6 +37,12 @@ camera), both production. A Mac runs it for development on `localhost:8480`.
 
 ## Quick start (Mac, against cam-sim)
 
+**Requirements:**
+- **Node 26 or later** (`engines` in `package.json`). The catalog uses the
+  built-in `node:sqlite`, so older versions don't run it. On the Mac that is
+  Homebrew's `node`; the container image has its own.
+- **ffmpeg** on the `PATH` (`brew install ffmpeg`).
+
 ```sh
 npm ci
 scripts/install-go2rtc.sh          # go2rtc 1.9.14 into tools/ (checksums pinned)
@@ -60,6 +66,29 @@ Point the proxy at it with a `config.json` in this folder:
 Add `CAMPROXY_CAMERA_PASSWORD=<password>` to `.env`, then run `npm run dev`.
 The admin UI is at <http://localhost:8480>; sign in with
 `CAMPROXY_ADMIN_TOKEN`.
+
+### The macOS firewall and node
+
+A camera that uploads clips connects **to** the Mac: the FTP port (2121) and
+the passive ports (30000-30009). With the macOS firewall on, those connections
+are dropped silently unless the node binary is allowed to accept incoming
+connections. The camera's FTP test then answers `-454`, and the server logs
+no connection at all. cam-sim in the same process, and the tests, don't need
+this: they connect over localhost.
+
+The firewall allows a binary by its **real path**, which includes the Node
+version. After every `brew upgrade node`, allow the new binary again:
+
+```sh
+readlink -f "$(which node)"   # e.g. /opt/homebrew/Cellar/node/26.8.1/bin/node
+sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add "$(readlink -f "$(which node)")" \
+  --unblockapp "$(readlink -f "$(which node)")"
+/usr/libexec/ApplicationFirewall/socketfilterfw --listapps   # check: "Allow incoming connections"
+```
+
+Or use System Settings → Network → Firewall → Options → **+**, and remove
+the entries of old versions there. Only that node binary is allowed; the
+firewall stays on. The Pi and the cluster don't have this step (Docker).
 
 ## Configuration
 
@@ -199,7 +228,8 @@ sessions, 500 MB a file, and 5 failed logins a minute close the connection.
   snapshot. The admin UI's Clips page plays them.
 - **Firewall:** the camera connects to the proxy, on `ftp.port` and the
   `ftp.passive` ports. On a Mac with the firewall on, node must be allowed
-  to accept incoming connections (again after a Homebrew node upgrade).
+  to accept incoming connections, again after each Homebrew node upgrade
+  (see [The macOS firewall and node](#the-macos-firewall-and-node)).
 
 ## Storage management
 
