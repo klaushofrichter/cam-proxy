@@ -115,7 +115,7 @@ export function sseHandler(log: StreamLog, opts: SseOptions): RequestHandler & {
     replaying = false;
     for (const m of pending.splice(0)) send(m);
     pump();
-  }) as RequestHandler & { clients(): number; closeAll(): void; stats(): SseStats; setOptions(o: Partial<SseOptions>): void };
+  }) as unknown as RequestHandler & { clients(): number; closeAll(): void; stats(): SseStats; setOptions(o: Partial<SseOptions>): void };
 
   handler.clients = () => open.size;
   handler.closeAll = () => {
