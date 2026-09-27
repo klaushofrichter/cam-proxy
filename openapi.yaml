@@ -1,0 +1,56 @@
+openapi: 3.1.0
+info:
+  title: cam-proxy
+  version: 0.0.0
+  description: >
+    The gateway next to a Reolink camera. Timestamps are unix milliseconds.
+    Every route except /health needs `Authorization: Bearer <token>`; a token in
+    the URL answers 400 `{"error":"token_in_url"}`.
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer }
+security:
+  - bearer: []
+paths:
+  /health:
+    get:
+      summary: The process is up (no camera check, no auth)
+      security: []
+      responses:
+        '200': { description: '{ ok: true }' }
+  /api/cameras:
+    get:
+      summary: The camera and its state
+      responses:
+        '200': { description: '[{ id, name, online, lastEventTs, stream }]' }
+        '401': { description: missing or wrong token }
+  /api/cameras/{cam}/events:
+    get:
+      summary: Events, newest first
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: from, in: query, schema: { type: integer }, description: start at or after (ms) }
+        - { name: to, in: query, schema: { type: integer }, description: start at or before (ms) }
+        - { name: kind, in: query, schema: { type: string }, description: 'motion, person, vehicle, pet, …' }
+        - { name: limit, in: query, schema: { type: integer, maximum: 1000 } }
+      responses:
+        '200': { description: '[{ id, kind, source, start, end, endReason }]' }
+        '400': { description: invalid parameter }
+        '404': { description: unknown camera }
+  /api/stream:
+    get:
+      summary: Server-Sent Events, resumable
+      description: >
+        Replays everything after `Last-Event-ID` (or `?since`), then continues
+        live. A resume point older than the retention answers `event: reset`
+        with `{oldestId}` first. Types: camera-event, camera-status, clip,
+        annotation, still (stills only when named in `types`).
+      parameters:
+        - { name: cam, in: query, schema: { type: string } }
+        - { name: types, in: query, schema: { type: string }, description: comma list }
+        - { name: kinds, in: query, schema: { type: string }, description: comma list, matches data.kind }
+        - { name: since, in: query, schema: { type: integer } }
+      responses:
+        '200': { description: text/event-stream }
+        '400': { description: unknown type }
+        '503': { description: '{ error: too_many_clients }' }
