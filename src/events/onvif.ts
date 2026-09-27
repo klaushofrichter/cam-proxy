@@ -65,9 +65,9 @@ export class OnvifSubscription {
     this.setTermination(xml);
   }
 
-  async pull(): Promise<OnvifMessage[]> {
+  async pull(signal?: AbortSignal): Promise<OnvifMessage[]> {
     const xml = await this.call(this.managerPath(), `${TEV}/PullPointSubscription/PullMessagesRequest`,
-      `<tev:PullMessages><tev:Timeout>PT${this.opts.pullTimeoutS}S</tev:Timeout><tev:MessageLimit>100</tev:MessageLimit></tev:PullMessages>`, true, (this.opts.pullTimeoutS + 10) * 1000);
+      `<tev:PullMessages><tev:Timeout>PT${this.opts.pullTimeoutS}S</tev:Timeout><tev:MessageLimit>100</tev:MessageLimit></tev:PullMessages>`, true, (this.opts.pullTimeoutS + 10) * 1000, signal);
     return notifications(xml)
       .filter((n) => n.topic && (n.op === 'Initialized' || n.op === 'Changed' || n.op === 'Deleted'))
       .map((n) => ({ topic: n.topic, op: n.op as OnvifMessage['op'], utc: Date.parse(n.utc) || this.now(), state: n.value === 'true' }));
@@ -102,13 +102,13 @@ export class OnvifSubscription {
   }
 
   // One SOAP request. `onManager`: failures mean the subscription is gone.
-  private call(path: string, action: string, body: string, onManager: boolean, timeoutMs = 10_000): Promise<string> {
+  private call(path: string, action: string, body: string, onManager: boolean, timeoutMs = 10_000, signal?: AbortSignal): Promise<string> {
     const to = `http://${this.t.host}:${this.t.port}${path}`;
     const payload = envelope({ action, to, user: this.t.user, password: this.t.password, body });
     const gone = (why: string) => (onManager ? new OnvifGoneError(why) : new OnvifError(why));
     return new Promise((resolve, reject) => {
       const req = http.request(
-        { host: this.t.host, port: this.t.port, path, method: 'POST', timeout: timeoutMs, headers: { 'Content-Type': `application/soap+xml; charset=utf-8; action="${action}"`, 'Content-Length': Buffer.byteLength(payload) } },
+        { host: this.t.host, port: this.t.port, path, method: 'POST', timeout: timeoutMs, signal, headers: { 'Content-Type': `application/soap+xml; charset=utf-8; action="${action}"`, 'Content-Length': Buffer.byteLength(payload) } },
         (res) => {
           const chunks: Buffer[] = [];
           let size = 0;
