@@ -93,8 +93,10 @@ export class FtpServer extends EventEmitter {
     if (server) await new Promise<void>((r) => server.close(() => r()));
   }
 
+  // Also emitted as 'command' (for diagnostics); the password is never in it.
   private log(line: string): void {
     this.o.log?.(line);
+    this.emit('command', line);
   }
 
   private session(socket: net.Socket): void {
@@ -102,6 +104,7 @@ export class FtpServer extends EventEmitter {
       socket.end('421 Too many connections\r\n');
       return;
     }
+    this.log(`connect ${socket.remoteAddress ?? '?'}`);
     const s: Session = { stream: socket, secure: false, prot: 'C', authed: false, cwd: '/', closed: false };
     this.sessionsOpen.add(s);
     const ip = socket.remoteAddress ?? '';
@@ -171,6 +174,8 @@ export class FtpServer extends EventEmitter {
         reply('234 AUTH TLS OK');
         {
           const t = new tls.TLSSocket(s.stream, { isServer: true, secureContext: this.secureContext });
+          t.once('secure', () => this.log(`tls ${t.getProtocol() ?? '?'} ${t.getCipher()?.name ?? '?'}`));
+          t.on('error', (err) => this.log(`tls error: ${err.message}`));
           s.secure = true;
           attach(t);
         }

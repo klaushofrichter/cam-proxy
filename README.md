@@ -27,6 +27,7 @@ camera), both production. A Mac runs it for development on `localhost:8480`.
 - [Configuration](#configuration)
 - [Client API](#client-api)
 - [Stills and previews](#stills-and-previews)
+- [Clips (FTP)](#clips-ftp)
 - [Storage management](#storage-management)
 - [Event stream (SSE)](#event-stream-sse)
 - [Control API and admin UI](#control-api-and-admin-ui)
@@ -89,7 +90,7 @@ come only from the environment.
 | `go2rtc` | `binary` (`go2rtc`), `rtspPort` (18554), `apiPort` (11984); both listen on 127.0.0.1 only |
 | `stills` | `enabled` (true), `stream` (`sub`), `intervalS` (1), `size` (`896x512`), `quality` (5), `maxGB` |
 | `previews` | `tileSize` (`160x90`), `grid` (`10x6`), `quality` (7), `maxGB` |
-| `ftp` | phase 3 |
+| `ftp` | `enabled` (false), `port` (2121), `passive` (`30000-30009`), `publicHost` (the address the camera connects to), `user` (`camera`), `tls` (true), `certFile`/`keyFile` (else a self-signed certificate), `stream` (`main`), `maxGB` |
 
 | Secret (environment, or `<NAME>_FILE`) | |
 |---|---|
@@ -165,6 +166,35 @@ CSS (`background-position`). The admin UI's **Timeline** page does this. The
 SSE type `still` announces each new still live, only to clients that ask with
 `types=still`, without an id and without replay.
 
+## Clips (FTP)
+
+The camera uploads each recording it makes on motion or an AI detection to
+the proxy's own upload-only FTP(S) server (`ftp.enabled`, password
+`CAMPROXY_FTP_PASSWORD`). The server accepts logins, explicit TLS
+(`AUTH TLS`, `PROT P`), passive mode, folders and `STOR`, and nothing else:
+no downloads, listings or deletes. Paths stay inside its folder, at most 4
+sessions, 500 MB a file, and 5 failed logins a minute close the connection.
+
+- **Index:** a finished upload named `<Name>_00_YYYYMMDDHHMMSS.mp4` (the
+  camera's local time) becomes UTC with the camera's time zone and DST rule
+  (`GetTime`), is checked with ffprobe (anything that isn't a video is
+  dropped), and is stored as `data/clips/<cam>/YYYY/MM/DD/HHMM-<start>.mp4`.
+  The camera's `.jpg` with the same name becomes the clip's snapshot. A
+  `clip` stream message follows, with the events the clip covers.
+- **Camera setup:** `POST /control/actions/camera-ftp-setup` writes the
+  camera's whole FTP object (the proxy at `ftp.publicHost`, uploads on
+  motion and people/vehicle/pet detections, all hours).
+  `camera-ftp-test` asks the camera to connect (`{ok, rspCode}`), and
+  `camera-ftp-off` sets `enable` to 0 with the rest kept. The Maintenance
+  page has the three buttons.
+- **API:** `GET /api/cameras/{cam}/clips?from&to` (at most 31 days) lists
+  `{id, start, end, stream, size, events, url, snapshotUrl}`;
+  `/clips/{id}.mp4` serves the file with HTTP Range, `/clips/{id}.jpg` the
+  snapshot. The admin UI's Clips page plays them.
+- **Firewall:** the camera connects to the proxy, on `ftp.port` and the
+  `ftp.passive` ports. On a Mac with the firewall on, node must be allowed
+  to accept incoming connections (again after a Homebrew node upgrade).
+
 ## Storage management
 
 Two limits apply, and whichever is reached first wins:
@@ -177,12 +207,15 @@ Two limits apply, and whichever is reached first wins:
   deleted for the budget.
 
 **Hard floor:** below `storage.minFreeBytes` (2 GB) free, stills stop being
-written, counted as `camproxy_stills_missing_total`. Writing resumes on its
+written, counted as `camproxy_stills_missing_total`, and uploaded clips are
+dropped. Writing resumes on its
 own when space is back.
 
 The storage run is hourly (`retention.intervalMin`). `POST
 /control/actions/retention-run` runs it now, and `{"dryRun":true}` previews
-what it would delete. `/control/stats` shows usage per kind, growth per day,
+what it would delete. Clips are deleted with their catalog rows; partial
+uploads in `data/ftp/.incoming` are never counted, and go after a day.
+`/control/stats` shows usage per kind, growth per day,
 days until full and whether writing is paused.
 
 ## Event stream (SSE)
@@ -200,7 +233,9 @@ never loses anything within the retention (default 7 days).
   - `camera-event`: `{cam, eventId, kind, phase: start|end, ts, source}`;
   - `camera-status`: `{cam, online, reason, clockOffsetMs}`, plus
     `stream: up|down` when the stills stream changes;
-  - `clip`, `annotation`: later phases;
+  - `clip`: `{cam, clipId, start, end, stream, size, codec, events, url,
+    snapshotUrl}` when an uploaded clip is indexed;
+  - `annotation`: a later phase;
   - `still`: only when named in `types`, because it fires every second.
 - **Filters:** `types` and `kinds` (e.g. `kinds=person,vehicle`) are comma
   lists.
@@ -284,6 +319,11 @@ npm run schema      # regenerate config.schema.json after changing a setting
   and deletes its temporary data. It signs in as the
   camera user `proxy` (password `CAMPROXY_CAMERA_PASSWORD` in `.env`), with the
   camera address from `~/Development/reolink/.env`.
+- **Real camera, clips:** `npx tsx scripts/verify-camera.ts --ftp [seconds]`
+  changes the camera: it points the camera's FTP at this Mac's LAN address,
+  runs the camera's FTP test, waits for a real motion clip and reports it,
+  then turns the camera's FTP off. `npx tsx scripts/camera-ftp-off.ts` turns
+  it off on its own (after an interrupted run).
 - **CI:** tests, e2e, type checks, `npm audit`, CodeQL, and a check that no
   media file is committed. `production` requires the tests and CodeQL.
 
