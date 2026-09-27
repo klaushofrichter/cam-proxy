@@ -6,6 +6,7 @@
     "host": "cam2.cam-sim.svc.cluster.local:443",
     "protocol": "https",
     "tlsName": "cam2.skylar.technology",
+    "webUiUrl": "https://cam2.skylar.technology/",
     "user": "proxy",
     "onvifPort": 8000,
     "rtspPort": 554,

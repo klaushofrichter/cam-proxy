@@ -1,5 +1,6 @@
 <script lang="ts">
   import { api } from '../lib/api';
+  import { refreshTick } from '../lib/state';
 
   interface Minute { minute: number; cols: number; rows: number; tileW: number; tileH: number; intervalS: number; present: boolean[]; url: string }
   interface Ev { id: number; kind: string; start: number; end: number | null }
@@ -67,6 +68,17 @@
     open = null;
     still = null;
     void load();
+  });
+  // The top bar's Refresh, and today's new minutes every 60 s (the still
+  // being looked at stays open).
+  $effect(() => {
+    if ($refreshTick) void load();
+  });
+  $effect(() => {
+    const t = setInterval(() => {
+      if (day === today()) void load();
+    }, 60_000);
+    return () => clearInterval(t);
   });
 </script>
 
