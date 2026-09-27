@@ -238,7 +238,8 @@ This follows the cam-sim pattern but is its own app.
   with the cookie need `X-CamProxy-UI: 1`. Sign-in is rate-limited.
 - **Routes:**
   - `GET /control/status`: camera, ONVIF subscription, go2rtc, frame grabber,
-    FTP, disk per kind, SSE clients, retention.
+    FTP and retention states;
+  - `GET /control/stats`: the numbers (§13).
   - `GET/PUT /control/settings`: the runtime-safe settings, kept in
     `/data/settings.json`:
     - retention days;
@@ -286,12 +287,57 @@ This follows the cam-sim pattern but is its own app.
 - CodeQL and `npm audit` gate every PR, as in cam-sim, with accepted findings
   listed in `.github/codeql-accepted.tsv`.
 
-## 13. Health and metrics
+## 13. Health, statistics and metrics
 
-- `/health`: the process is up; no camera check.
-- `/metrics`: Prometheus text. It carries requirements §15's metric set, with
-  the prefix `camproxy_`, added as each feature lands. It holds counts only,
-  never event content.
+- **`/health`:** the process is up, with no camera check and no auth.
+- **`GET /control/stats`** (admin token or UI session): the numbers below as
+  JSON, grouped by area. The admin UI's Status page shows them, and scripts
+  can read them. Example:
+  `{"disk":{"stills":{"bytes":..,"files":..},"previews":{..},"clips":{..},"catalog":{..},"free":..,"size":..},"stills":{"stored":..,"oldest":..,"newest":..,"perMinute":..},...}`
+- **`GET /metrics`:** the same numbers in Prometheus text format, unauthenticated,
+  for the cluster's Prometheus. It never includes event content or image data.
+
+| Metric (`camproxy_` prefix) | Type | Labels | Also in `/control/stats` |
+|---|---|---|---|
+| `disk_bytes`, `disk_files` | gauge | `kind` = stills, previews, clips, catalog | `disk.<kind>` |
+| `disk_free_bytes`, `disk_size_bytes` | gauge | | `disk.free`, `disk.size` |
+| `stills_stored` | gauge | `cam` | the number of stills within retention |
+| `stills_total` | counter | `cam` | stills written since start |
+| `stills_missing_total` | counter | `cam` | seconds with no frame |
+| `last_still_timestamp_seconds` | gauge | `cam` | alert when stale |
+| `previews_stored` | gauge | `cam` | sprite sheets (one per minute) |
+| `frame_grabber_up`, `go2rtc_up` | gauge | `cam` | |
+| `events_total` | counter | `cam`, `source` (onvif, poll), `kind` | |
+| `events_stored` | gauge | `cam`, `kind` | |
+| `onvif_subscribed` | gauge | `cam` | |
+| `onvif_resubscribes_total` | counter | `cam`, `reason` | |
+| `clips_total`, `clips_stored` | counter, gauge | `cam`, `stream` | |
+| `last_clip_timestamp_seconds` | gauge | `cam` | |
+| `camera_up` | gauge | `cam` | |
+| `camera_request_seconds` | histogram | `cam`, `cmd` | |
+| `camera_errors_total` | counter | `cam`, `code` | |
+| `sse_clients` | gauge | | |
+| `sse_messages_total` | counter | `type` | |
+| `sse_replayed_total`, `sse_dropped_clients_total` | counter | | |
+| `stream_log_rows` | gauge | | |
+| `retention_deleted_total` | counter | `kind` | |
+| `retention_last_run_timestamp_seconds` | gauge | | |
+| `build_info` | gauge | `version`, `target` (pi, cluster, dev) | |
+
+- **Cheap on a Pi:** the proxy never walks the data folders per request. File
+  counts and bytes are kept up to date as files are written and deleted, with
+  a full re-count at start and after each retention run. Disk free and size
+  come from `statfs`.
+- **Per phase:** each metric arrives with its feature. Phase 1 has disk
+  (catalog), events, ONVIF, camera, SSE, stream log, retention and build.
+  Stills, previews, the frame grabber and go2rtc come in phase 2, clips in
+  phase 3.
+- **Alerts** (Grafana, next to the cams alerts, in phase 5):
+  - disk above 85 %;
+  - no still for 2 minutes;
+  - camera down for 5 minutes;
+  - ONVIF not subscribed for 5 minutes;
+  - no clip for a day that had events.
 
 ## 14. Configuration
 
