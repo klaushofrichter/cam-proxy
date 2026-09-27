@@ -175,7 +175,8 @@ describe('deploy/cluster/config.json', () => {
     const c = loadConfig({ ...SECRETS, CAMPROXY_FTP_PASSWORD: 'f'.repeat(24), CAMPROXY_CONFIG: file }, { cwd: dir }).config;
     expect(c.server.dataDir).toBe('/data');
     expect(c.camera).toMatchObject({ id: 'cam2', host: 'cam2.cam-sim.svc.cluster.local:443', protocol: 'https', tlsName: 'cam2.skylar.technology', user: 'proxy', webUiUrl: 'https://cam2.skylar.technology/' });
-    expect(c.ftp).toMatchObject({ enabled: true, publicHost: 'cam-proxy.cam-proxy.svc.cluster.local', tls: true });
+    // cams plays these clips: the sub stream (H.264) plays in every browser.
+    expect(c.ftp).toMatchObject({ enabled: true, publicHost: 'cam-proxy.cam-proxy.svc.cluster.local', tls: true, stream: 'sub' });
     expect(c.stills.enabled).toBe(true);
     // local-path volumes have no quota (statfs sees the node's disk): the cap
     // is maxBytes, 85 % of the 20Gi PVC.
