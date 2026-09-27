@@ -13,6 +13,8 @@ COPY web ./web
 RUN npm run build
 
 FROM node:26-alpine
+# Links the ghcr package to the repository.
+LABEL org.opencontainers.image.source=https://github.com/klaushofrichter/cam-proxy
 ARG TARGETARCH
 # go2rtc publishes no checksums: these are the SHA-256s pinned in
 # scripts/install-go2rtc.sh (keep both in step).

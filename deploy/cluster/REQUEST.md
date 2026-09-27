@@ -34,15 +34,21 @@ Order as always: **commit, push, then apply.**
   `CAMPROXY_ADMIN_TOKEN`, `CAMPROXY_CAMERA_PASSWORD`, `CAMPROXY_FTP_PASSWORD`.
   Please don't create it from the kube-setup side.
 - **PVC `cam-proxy-data`:** 20Gi, `local-path`, **reclaim policy Retain**. It
-  holds clips, stills and the catalog, which are not regenerable. The storage
-  manager keeps usage below 85 % of the volume.
+  holds clips, stills and the catalog, which are not regenerable.
+  local-path doesn't enforce the size (the volume is a host folder, and
+  statfs sees the node's disk), so the app caps itself:
+  `storage.maxBytes` in the ConfigMap is 17 GiB (85 % of 20Gi). Its hard
+  floor (`minFreeBytes`, 2 GiB) is measured on the node's disk.
 - **Deployment `cam-proxy`:**
   - replicas 1, `strategy: Recreate` (one RWO volume, one camera session);
   - image on **one line**, digest-pinned; the deploy job seds
     `image: ghcr.io/klaushofrichter/cam-proxy[@:].*`. For the first apply,
     use `ghcr.io/klaushofrichter/cam-proxy:main` or the first release's
     digest;
-  - `imagePullPolicy: IfNotPresent`, no pull secret (public ghcr package);
+  - `imagePullPolicy: IfNotPresent`, no pull secret. The ghcr package is
+    public: Klaus sets that after the first push, and an anonymous
+    `docker pull ghcr.io/klaushofrichter/cam-proxy:main` confirms it before
+    this request is applied;
   - env `CAMPROXY_CONFIG=/config/config.json`, `envFrom: secretRef:
     cam-proxy-secrets`;
   - volumes: ConfigMap on `/config` (read-only), PVC on `/data`, emptyDir
@@ -67,8 +73,10 @@ Order as always: **commit, push, then apply.**
   - into cam-proxy: from Traefik (`kube-system`) to 8480; from namespace
     `cam-proxy-runner` to 8480 (the release smoke test); from namespace
     `cam-sim` (cam2) to 2121 and 30000-30009 (FTP uploads);
-  - out of cam-proxy: to cam2 (namespace `cam-sim`) on 443, 8000 and 554,
-    and to DNS.
+  - out of cam-proxy: to pods `app=cam2` in namespace `cam-sim` on the
+    **pod ports** 8443, 8000 and 8554 (Service ports 443, 8000 and 554:
+    NetworkPolicy matches after the ClusterIP DNAT), and to DNS (UDP/TCP 53
+    in `kube-system`).
 
   If `cam-sim` has an egress policy, cam2 must be allowed to reach
   cam-proxy 2121 and 30000-30009.

@@ -12,5 +12,6 @@
     "statusPollS": 30
   },
   "stills": { "enabled": true, "stream": "sub" },
+  "storage": { "maxBytes": 18253611008 },
   "ftp": { "enabled": true, "port": 2121, "passive": "30000-30009", "publicHost": "cam-proxy.cam-proxy.svc.cluster.local", "tls": true }
 }

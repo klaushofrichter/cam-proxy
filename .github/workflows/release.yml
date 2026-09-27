@@ -9,6 +9,12 @@ permissions:
   contents: write
   packages: write
 
+# One release at a time: two promotions close together would compute the
+# same version, and the second would overwrite the first's image tags.
+concurrency:
+  group: release-production
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -74,6 +80,11 @@ jobs:
     runs-on: [self-hosted, k3s]
     permissions:
       contents: read
+    # What the deploy observed, for the release notes' "Verified at release".
+    outputs:
+      generation: ${{ steps.rollout.outputs.generation }}
+      served: ${{ steps.smoke.outputs.served }}
+      api_unauthenticated: ${{ steps.smoke.outputs.api_unauthenticated }}
     steps:
       - name: Install kubectl and configure in-cluster access
         run: |
@@ -97,6 +108,8 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf /tmp/kube-setup-deploy
+          # The clone's .git/config holds the token: gone on any exit, not only success.
+          trap 'rm -rf /tmp/kube-setup-deploy' EXIT
           git clone "https://x-access-token:${KUBE_SETUP_DEPLOY_TOKEN}@github.com/klaushofrichter/kube-setup.git" /tmp/kube-setup-deploy
           cd /tmp/kube-setup-deploy
           M=manifests/cam-proxy/cam-proxy-deployment.yaml
@@ -114,31 +127,35 @@ jobs:
             git push   # push before apply, always
           fi
           kubectl apply -f "$M"
-          rm -rf /tmp/kube-setup-deploy
 
       # The runner may get/watch/patch deployments/cam-proxy by name only, so
       # `kubectl rollout status` (which lists) is not allowed: poll instead.
       - name: Wait for the rollout
+        id: rollout
         run: |
           set -euo pipefail
           for _ in $(seq 1 60); do
             read -r gen observed updated available <<<"$(kubectl get deployment cam-proxy -n cam-proxy \
               -o jsonpath='{.metadata.generation} {.status.observedGeneration} {.status.updatedReplicas} {.status.availableReplicas}')"
             echo "generation=${gen} observed=${observed} updated=${updated:-0} available=${available:-0}"
-            if [ "$gen" = "$observed" ] && [ "${updated:-0}" = 1 ] && [ "${available:-0}" = 1 ]; then exit 0; fi
+            if [ "$gen" = "$observed" ] && [ "${updated:-0}" = 1 ] && [ "${available:-0}" = 1 ]; then
+              echo "generation=${gen}" >> "$GITHUB_OUTPUT"; exit 0
+            fi
             sleep 5
           done
           echo "::error::cam-proxy did not roll out in 5 minutes"; exit 1
 
       # The new pod, not an old one still answering: the served version must match.
       - name: Smoke-test cam-proxy
+        id: smoke
         env:
           VERSION: ${{ needs.build.outputs.version }}
         run: |
           set -euo pipefail
           URL=http://cam-proxy.cam-proxy.svc.cluster.local:8480
           for _ in $(seq 1 24); do
-            served=$(curl -sf --max-time 5 "$URL/health" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p' || true)
+            # Whitespace-tolerant (cluster requirements §1).
+            served=$(curl -sf --max-time 5 "$URL/health" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1 || true)
             echo "served version: ${served:-none}"
             [ "$served" = "$VERSION" ] && break
             sleep 5
@@ -146,6 +163,7 @@ jobs:
           [ "$served" = "$VERSION" ] || { echo "::error::cam-proxy serves ${served:-nothing}, expected ${VERSION}"; exit 1; }
           code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$URL/api/cameras")
           [ "$code" = 401 ] || { echo "::error::/api without a token answered ${code}, expected 401"; exit 1; }
+          { echo "served=${served}"; echo "api_unauthenticated=${code}"; } >> "$GITHUB_OUTPUT"
           echo "cam-proxy v${VERSION} serving; the API requires a token"
 
   publish:
@@ -160,6 +178,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.build.outputs.version }}
           DIGEST: ${{ needs.build.outputs.digest }}
+          GENERATION: ${{ needs.deploy.outputs.generation }}
+          SERVED: ${{ needs.deploy.outputs.served }}
+          API_CODE: ${{ needs.deploy.outputs.api_unauthenticated }}
         run: |
           set -euo pipefail
           TAG="v${VERSION}"
@@ -174,10 +195,17 @@ jobs:
           printf '### Changes\n\n' >> /tmp/notes.md
           if [ -n "$PREV" ] && git rev-parse "$PREV" >/dev/null 2>&1; then
             git log --no-merges --pretty='- %s' "${PREV}..HEAD" >> /tmp/notes.md
+            printf '\n**Full diff:** https://github.com/%s/compare/%s...%s\n' "$GITHUB_REPOSITORY" "$PREV" "$TAG" >> /tmp/notes.md
           else
             git log --no-merges --pretty='- %s' -30 >> /tmp/notes.md
           fi
-          # shellcheck disable=SC2016 # markdown backticks, not command substitution
           printf '\nImage: `ghcr.io/klaushofrichter/cam-proxy:%s` (`@%s`; linux/amd64, linux/arm64)\n' "$TAG" "$DIGEST" >> /tmp/notes.md
+          # Only what the deploy job checked; the release exists only if it passed.
+          {
+            printf '\n### Verified at release\n\n'
+            printf -- '- deployment `cam-proxy` (namespace `cam-proxy`) rolled out: generation %s, 1 updated and available replica\n' "$GENERATION"
+            printf -- '- `/health` served version `%s` inside the cluster\n' "$SERVED"
+            printf -- '- `/api/cameras` without a token answered %s\n' "$API_CODE"
+          } >> /tmp/notes.md
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$TAG" --notes-file /tmp/notes.md
           echo "Released $TAG"

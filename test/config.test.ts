@@ -177,5 +177,8 @@ describe('deploy/cluster/config.json', () => {
     expect(c.camera).toMatchObject({ id: 'cam2', host: 'cam2.cam-sim.svc.cluster.local:443', protocol: 'https', tlsName: 'cam2.skylar.technology', user: 'proxy' });
     expect(c.ftp).toMatchObject({ enabled: true, publicHost: 'cam-proxy.cam-proxy.svc.cluster.local', tls: true });
     expect(c.stills.enabled).toBe(true);
+    // local-path volumes have no quota (statfs sees the node's disk): the cap
+    // is maxBytes, 85 % of the 20Gi PVC.
+    expect(c.storage.maxBytes).toBe(Math.floor(20 * 2 ** 30 * 0.85));
   });
 });

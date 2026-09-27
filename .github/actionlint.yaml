@@ -1,3 +1,8 @@
 self-hosted-runner:
   # The in-cluster runner (kube-setup manifests/cam-proxy-runner).
   labels: [k3s]
+paths:
+  .github/workflows/release.yml:
+    ignore:
+      # The release notes' printf formats hold markdown backticks, not command substitution.
+      - 'SC2016'

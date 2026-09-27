@@ -297,15 +297,19 @@ CMD ["node", "dist/src/cli.js"]
    - `sync-secrets.sh --only github` sets `KUBE_SETUP_DEPLOY_TOKEN` (needs
      Klaus's PAT in `.env`: ask for it if it is missing);
    - `--only kube` creates `cam-proxy-secrets` once the namespace exists.
-3. **Wait for kube-setup** to report the manifests pushed and applied: the
+3. **The ghcr package is public:** after the first `main` build, Klaus sets
+   the package to Public (package settings). Check with an anonymous pull
+   (`docker logout ghcr.io && docker pull ghcr.io/klaushofrichter/cam-proxy:main`)
+   before kube-setup applies anything.
+4. **Wait for kube-setup** to report the manifests pushed and applied: the
    runner registered, the PVC bound, the route and certificate ready.
-4. **Open the PR `main` → `production`.** Merge only when all checks pass.
+5. **Open the PR `main` → `production`.** Merge only when all checks pass.
    The release runs.
-5. **Verify through the cluster** (from the Mac on the LAN):
+6. **Verify through the cluster** (from the Mac on the LAN):
    - `https://cam-proxy.skylar.technology/health` shows the version;
    - status shows the camera online and ONVIF subscribed;
    - stills arrive (the Timeline);
    - `camera-ftp-setup` → cam2 uploads a clip on a simulated event
      (cam-sim's control API) → the Clips page plays it → `camera-ftp-off`.
-6. **Record the results** in the CHANGELOG and README: the deployed URL, and
+7. **Record the results** in the CHANGELOG and README: the deployed URL, and
    what was verified.
