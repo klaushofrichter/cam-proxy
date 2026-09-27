@@ -89,3 +89,25 @@ export async function createSimCamera(opts: SimCameraOptions): Promise<{ app: Ca
   };
   return { app: sim.cameraApp, state, sim };
 }
+
+// A fully listening cam-sim (camera HTTP, ONVIF, RTSP) for the proxy's
+// integration tests. Users: `admin` and `proxy` (the proxy's own user).
+export async function startSim(opts: { rebootMs?: number } = {}) {
+  const password = 'proxy-pw';
+  const sim = await createCamSim({
+    users: [
+      { name: 'admin', level: 'admin', password: 'admin-pw' },
+      { name: 'proxy', level: 'admin', password },
+    ],
+    seedClips: 'demo',
+    reboot: { ms: opts.rebootMs ?? 200, dropsConnection: true },
+  });
+  const ports = await sim.listen({ http: 0, https: 0, control: 0, rtsp: 0, onvif: 0 }, '127.0.0.1');
+  return {
+    sim,
+    ports,
+    password,
+    camera: { host: `127.0.0.1:${ports.http}`, protocol: 'http' as const, user: 'proxy', onvifPort: ports.onvif, rtspPort: ports.rtsp },
+    close: () => sim.close(),
+  };
+}
