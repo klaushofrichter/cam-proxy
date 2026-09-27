@@ -362,6 +362,10 @@ This follows the cam-sim pattern but is its own app.
 |---|---|---|---|
 | `disk_bytes`, `disk_files` | gauge | `kind` = stills, previews, clips, catalog | `disk.<kind>` |
 | `disk_free_bytes`, `disk_size_bytes` | gauge | | `disk.free`, `disk.size` |
+| `storage_budget_bytes` | gauge | | `storage.budget` |
+| `storage_growth_bytes_per_day` | gauge | `kind` | `storage.growth.<kind>` |
+| `storage_days_until_full` | gauge | | `storage.daysUntilFull` (projected, §8a) |
+| `storage_writing_paused` | gauge | | 1 below the hard floor (§8a) |
 | `stills_stored` | gauge | `cam` | the number of stills within retention |
 | `stills_total` | counter | `cam` | stills written since start |
 | `stills_missing_total` | counter | `cam` | seconds with no frame |
