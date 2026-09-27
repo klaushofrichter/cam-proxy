@@ -1,5 +1,9 @@
 # kube-setup request: cam-proxy next to cam2
 
+**Status:** applied by kube-setup. cam-proxy is released and running in the
+cluster (v2026.09.27.1, v2026.09.27.2); cams uses it for `cam2` (a `proxy`
+entry in `cams-cameras`).
+
 cam-proxy (github.com/klaushofrichter/cam-proxy) is the camera gateway: it
 keeps one connection to a camera, stores a still per second, records events,
 receives the camera's clips by FTP(S) and serves it all over HTTP/SSE. In the
@@ -106,8 +110,9 @@ questions".
   LoadBalancer for 2121 and 30000-30009, as cam2's gateway service
   (`loadBalancerSourceRanges 192.168.1.0/24`). It gets a separate approval
   later (cam-proxy issue #4).
-- **cams using cam-proxy:** a later request. It will add a `proxy` entry to
-  `cams-cameras`.
+- **cams using cam-proxy:** done. It added a `proxy` entry to
+  `cams-cameras` for `cam2`, and cam2 uploads its clips as the sub stream
+  (`ftp.stream: "sub"` in [`config.json`](config.json)).
 
 ## 5. Also
 

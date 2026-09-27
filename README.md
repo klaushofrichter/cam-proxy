@@ -6,20 +6,29 @@ resumable Server-Sent Events stream. Apps such as
 [cams](https://github.com/klaushofrichter/cams) no longer depend on the
 camera's quirks (one search at a time, few logins, broken downloads, no push).
 
-**Status:** phases 1 and 2 are built:
+**Status:** built and released (v2026.09.27.2):
 - camera status and ONVIF events, with a polling fallback;
 - the event catalog and the resumable SSE stream;
-- a still every second and preview sprite sheets through go2rtc;
+- stills and preview sprites through go2rtc;
+- clips by FTP(S);
 - storage management;
-- the client API, control API and admin UI (with a timeline).
+- the client and control APIs and the admin UI.
 
-Clips, the cams integration and deployment follow; see
-the [design spec](docs/superpowers/specs/2026-09-27-cam-proxy-design.md) and
+It runs in the k3s cluster next to `cam2`, and
+[cams](https://github.com/klaushofrichter/cams) uses it (the SSE relay,
+Timeline, and clips and thumbnails from the proxy first). The Raspberry Pi
+target is not deployed yet; see the
+[design spec](docs/superpowers/specs/2026-09-27-cam-proxy-design.md) and
 the [requirements](docs/requirements.md).
 
-Targets: a Raspberry Pi 4 next to the real camera, and the k3s cluster next to
-`cam2` (a [cam-sim](https://github.com/klaushofrichter/cam-sim) simulated
-camera), both production. A Mac runs it for development on `localhost:8480`.
+Targets:
+- **Production:** the k3s cluster next to `cam2` (a
+  [cam-sim](https://github.com/klaushofrichter/cam-sim) simulated camera),
+  <https://cam-proxy.skylar.technology> (LAN only).
+- **Planned:** a Raspberry Pi 4 next to the real camera (`compose.yaml`, not
+  deployed yet).
+
+A Mac runs it for development on `localhost:8480`.
 
 ## Contents
 
@@ -34,6 +43,8 @@ camera), both production. A Mac runs it for development on `localhost:8480`.
 - [Metrics](#metrics)
 - [Deployment](#deployment)
 - [Development](#development)
+- [cams integration](#cams-integration)
+- [Operating the cluster](#operating-the-cluster)
 
 ## Quick start (Mac, against cam-sim)
 
@@ -104,20 +115,21 @@ come only from the environment.
 - **Changed in the admin UI** (or `PUT /control/config`): the change is stored
   as an override in `<dataDir>/overrides.json`. The effective value is
   default, then file, then override.
-- **Live or restart:** most settings apply at once. Camera, go2rtc, stills
-  and ONVIF subscription settings apply after a restart; the `restart` action
+- **Live or restart:** most settings apply at once. Camera, go2rtc, stills,
+  previews, the ONVIF subscription settings and most FTP settings (all but
+  `ftp.stream` and `ftp.maxGB`) apply after a restart; the `restart` action
   applies them without restarting the process. `server.port` and
   `server.dataDir` need a new process.
 
 | Group | Settings (defaults) |
 |---|---|
-| `server` | `port` (8480), `dataDir` (`data`, relative to the config file), `logLevel` (`info`), `publicUrl` |
+| `server` | `port` (8480), `dataDir` (`data`, relative to the config file), `logLevel` (`info`), `publicUrl` (reserved, not used yet) |
 | `camera` | `id` (`cam1`), `name` (`Den`), `host` (required), `protocol` (`https`), `tlsName`, `webUiUrl` (the camera's own web page, linked from the admin UI; default `https://<host>/`, `none` for no link), `user` (`proxy`), `onvifPort` (8000), `rtspPort` (554), `statusPollS` (30) |
 | `events` | `onvif.subscribeMin` (10), `onvif.pullTimeoutS` (30), `poll.enabled` (true), `poll.intervalS` (2), `poll.afterOnvifDownS` (60), `maxOpenMin` (10) |
 | `retention` | `stillsDays` (7), `previewsDays` (14), `clipsDays` (7), `eventsDays` (30), `streamLogDays` (7), `intervalMin` (60) |
-| `storage` | `maxPercent` (85) or `maxBytes`, `minFreeBytes` (2 GB), `keepHours` |
+| `storage` | `maxPercent` (85) or `maxBytes`, `minFreeBytes` (2 GB), `keepHours` (per kind: `stills` 24, `clips` 24, `previews` 72) |
 | `sse` | `maxClients` (50), `queuePerClient` (1000), `pingS` (15) |
-| `go2rtc` | `binary` (`go2rtc`), `rtspPort` (18554), `apiPort` (11984); both listen on 127.0.0.1 only |
+| `go2rtc` | `binary` (`go2rtc`), `rtspPort` (18554), `apiPort` (11984); both listen on 127.0.0.1 only; `url` (reserved, not used yet: for a go2rtc that runs as its own container) |
 | `stills` | `enabled` (true), `stream` (`sub`), `intervalS` (1), `size` (`896x512`), `quality` (5), `maxGB` |
 | `previews` | `tileSize` (`160x90`), `grid` (`10x6`), `quality` (7), `maxGB` |
 | `ftp` | `enabled` (false), `port` (2121), `passive` (`30000-30009`), `publicHost` (the address the camera connects to), `user` (`camera`), `tls` (true), `certFile`/`keyFile` (else a self-signed certificate), `stream` (`main`), `maxGB` |
@@ -131,8 +143,10 @@ come only from the environment.
 
 `scripts/sync-secrets.sh` generates the tokens and the FTP password into
 `.env` (mode 600), `--rotate <KEY>` replaces one, and it prints names only.
-It refuses a file others can read and values with an inline comment. For the
-cluster, a separate file holds cam2's values and the kube settings
+It refuses a file others can read and values with an inline comment.
+`--only local|github|kube|all` limits which targets it writes to, and
+`--dry-run` shows what it would do without writing or applying anything. For
+the cluster, a separate file holds cam2's values and the kube settings
 (`.env.example` lists them): `--env-file .env.cluster --only all` sets the
 repo secret `KUBE_SETUP_DEPLOY_TOKEN` and applies the Secret
 `cam-proxy-secrets` (values on stdin or in a private temporary file, never in
@@ -147,20 +161,22 @@ UI session.
 - A token in the URL (`?token=`, `?access_token=`) answers 400
   `{"error":"token_in_url"}`.
 
-Any one client may send 1200 requests a minute, plus 6000 still and sprite
-images (a day on a timeline is up to 1440 sprites); more answer 429
+Any one client may send 1200 requests a minute, plus 6000 image requests
+(stills, sprites and clip files — `clips/<id>.mp4` and `clips/<id>.jpg` — a
+day on a timeline is up to 1440 sprites); more answer 429
 `{"error":"rate_limited"}`. Timestamps are unix milliseconds. The full schema is in
 [openapi.yaml](openapi.yaml).
 
 ```sh
 api() { curl -s -H "Authorization: Bearer $CAMPROXY_TOKEN" "http://localhost:8480/api$1"; }
 api /cameras
-# [{"id":"cam1","name":"Den","online":true,"lastEventTs":1790000000000,"stream":null}]
+# [{"id":"cam1","name":"Den","online":true,"lastEventTs":1790000000000,"stream":{"up":true,"lastFrameTs":1790000000000}}]
 api '/cameras/cam1/events?kind=person&limit=10'
 # [{"id":12,"kind":"person","source":"onvif","start":1790000000000,"end":1790000004000,"endReason":"state"}]
 ```
 
-- `GET /api/cameras`: the camera and whether it answers.
+- `GET /api/cameras`: the camera and whether it answers; `stream` is `null`
+  only when stills are off.
 - `GET /api/cameras/{cam}/events?from&to&kind&limit`: events, newest first,
   at most 1000.
   - `source` is `onvif`, or `poll` for the fallback.
@@ -269,13 +285,16 @@ never loses anything within the retention (default 7 days).
   first message is `event: reset` with `{"oldestId":N}`. Reload through the
   REST API, then continue.
 - **Types:**
-  - `camera-event`: `{cam, eventId, kind, phase: start|end, ts, source}`;
+  - `camera-event`: `{cam, eventId, kind, phase: start|end, ts, source}`; an
+    `end` may carry `reason: timeout|restart` (state changes carry none);
   - `camera-status`: `{cam, online, reason, clockOffsetMs}`, plus
     `stream: up|down` when the stills stream changes;
   - `clip`: `{cam, clipId, start, end, stream, size, codec, events, url,
     snapshotUrl}` when an uploaded clip is indexed;
-  - `annotation`: a later phase;
-  - `still`: only when named in `types`, because it fires every second.
+  - `annotation`: reserved, not sent yet;
+  - `still`: `{cam, ts, url, sprite, tile}` (the still's URL, its minute's
+    sprite sheet, and the tile index within it); only when named in `types`,
+    because it fires every second.
 - **Filters:** `types` and `kinds` (e.g. `kinds=person,vehicle`) are comma
   lists.
 - **Keep-alive and backpressure:**
@@ -301,23 +320,33 @@ arrive.
 
 | Route | |
 |---|---|
-| `GET /control/status` | camera, event intake (ONVIF state, source, re-subscriptions), SSE clients, last retention |
-| `GET /control/stats` | disk (catalog, free, size), events stored per kind, stream log rows, storage budget |
+| `GET /control/status` | `{version, camera (incl. webUiUrl), intake, sse, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures}}` |
+| `GET /control/stats` | `{disk: {catalog, stills, previews, clips}` (each `{bytes, files, oldest, newest, growthPerDay}`), `events, stream, sse, storage}` |
 | `GET /control/config` | every setting: `{value, source, restart, pending, next?}`; secrets never appear |
 | `PUT /control/config` | overrides, e.g. `{"sse":{"pingS":10}}`; a bad value answers 400 naming it, and nothing is written |
 | `DELETE /control/config/{path}` | removes one override |
-| `POST /control/actions/{name}` | `onvif-resubscribe`, `camera-test`, `retention-run` (`{"dryRun":true}` previews), `camera-ftp-setup`, `camera-ftp-test`, `camera-ftp-off`, `restart` |
-| `GET /control/log?limit` | recent log lines (info and above), redacted |
+| `POST /control/actions/{name}` | `onvif-resubscribe`, `restart` (202, started); `camera-test`, `retention-run` (`{"dryRun":true}` previews); `camera-ftp-setup`, `camera-ftp-test` (409 `not_configured` without `ftp.publicHost` or the FTP password), `camera-ftp-off`; any camera call that fails answers 502 `camera_error` |
+| `GET /control/log?limit` | recent log lines (info and above), redacted; default limit 100, buffer holds the last 500 |
 | `POST /control/login` / `logout`, `GET /control/session` | the admin UI's session cookie (`camproxy_session`, HttpOnly, SameSite=Strict, 12 h; 20 sign-ins per 15 min) |
 
 The **admin UI** at `/` signs in with the admin token once; the token is
 exchanged for the cookie and not stored in the browser.
 
-- **Status:** camera, events, storage and stream.
+- **Status:** the camera (and its model, linked to the camera's own web
+  page), events, stills, clips/FTP and storage.
 - **Events:** the live stream and the last 100 events.
+- **Timeline:** a day of preview sprites, one still per minute, with events
+  marked.
+- **Clips:** a day's clips with their snapshots, playable, updating as new
+  clips arrive.
 - **Settings:** every setting with its source; changes become overrides, and
   can be reset.
-- **Maintenance:** the actions and the log.
+- **Maintenance:** the actions, including the camera FTP buttons; the log
+  updates every 10 s.
+- **Top bar:** the title links to the GitHub repo; badges for the camera
+  online state and event intake; the camera's model (linked to
+  `camera.webUiUrl`) · firmware · version; "updated … ago"; Refresh, the
+  theme toggle and Sign out.
 
 ## Metrics
 
@@ -352,15 +381,18 @@ and checks it as the cluster runs it.
 - **Branches:** a merge to `main` publishes `:main` and `:sha-<sha>`. A merge
   to `production` releases `v<YYYY.MM.DD.N>` and `:latest`, and deploys to
   the cluster (see below).
-- **Cluster** (next to cam2, `https://cam-proxy.skylar.technology`, LAN
-  only):
+- **Cluster** (next to `cam2`, `https://cam-proxy.skylar.technology`, LAN
+  only; first released as v2026.09.27.1):
   - The manifests live in kube-setup ([request](deploy/cluster/REQUEST.md)).
-  - The ConfigMap is [`deploy/cluster/config.json`](deploy/cluster/config.json).
+  - The ConfigMap is [`deploy/cluster/config.json`](deploy/cluster/config.json);
+    its camera is `cam2`, and clips come from the sub stream
+    (`ftp.stream: "sub"`).
   - The release job pins the image digest in kube-setup, pushes, applies,
     waits for the rollout, and checks that `/health` serves the new version.
   - Secrets: `scripts/sync-secrets.sh --env-file .env.cluster --only all`.
-- **Raspberry Pi:** [`compose.yaml`](compose.yaml): host networking, `/data`
-  on the SSD, and `docker compose pull && docker compose up -d` to update.
+- **Raspberry Pi (not deployed yet):** [`compose.yaml`](compose.yaml): host
+  networking, `/data` on the SSD, and `docker compose pull && docker compose
+  up -d` to update.
 
 ## Development
 
@@ -384,7 +416,28 @@ npm run schema      # regenerate config.schema.json after changing a setting
   runs the camera's FTP test, waits for a real motion clip and reports it,
   then turns the camera's FTP off. `npx tsx scripts/camera-ftp-off.ts` turns
   it off on its own (after an interrupted run).
-- **CI:** tests, e2e, type checks, `npm audit`, CodeQL, and a check that no
-  media file is committed. `production` requires the tests and CodeQL.
+- **CI:** tests, e2e, type checks, `npm audit`, CodeQL, a check that no
+  media file is committed, and a container smoke test
+  (`scripts/container-smoke.sh`, building the image and checking it as the
+  cluster runs it). `production` requires the tests and CodeQL.
+
+## cams integration
+
+[cams](https://github.com/klaushofrichter/cams) proxies a camera through a
+`proxy` entry in its `cams-cameras` setting, with a cam-proxy client token.
+It relays `/api/stream` to browsers, and its Timeline page and scrub preview
+use the proxy's previews and stills. Clips and event thumbnails come from
+the proxy first (the camera only when the proxy has none), and Live falls
+back to the proxy's stills when live video isn't playing. See the
+[cams README](https://github.com/klaushofrichter/cams#readme) for the
+`proxy` setting and the rest of its camera configuration.
+
+## Operating the cluster
+
+- `GET /health` returns `{ok, version}` (no auth): use it to check the
+  running version.
+- **Rollback:** re-pin the previous image digest in kube-setup's
+  `manifests/cam-proxy/cam-proxy-deployment.yaml`, then commit, push and
+  apply.
 
 MIT licence.

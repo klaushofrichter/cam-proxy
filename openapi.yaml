@@ -17,7 +17,7 @@ paths:
       summary: The process is up (no camera check, no auth)
       security: []
       responses:
-        '200': { description: '{ ok: true, version } (the release version, dev locally)' }
+        '200': { description: '{ ok: true, version } (the real running version: the release version, dev locally)' }
   /api/cameras:
     get:
       summary: The camera and its state
@@ -55,6 +55,7 @@ paths:
       responses:
         '200': { description: '[{ minute, cols, rows, tileW, tileH, intervalS, present: [bool], url }]' }
         '400': { description: missing range, or more than a day }
+        '404': { description: unknown camera, or stills are off }
   /api/cameras/{cam}/previews/{file}:
     get:
       summary: One minute's sprite sheet, as <minute>.jpg
@@ -63,7 +64,8 @@ paths:
         - { name: file, in: path, required: true, schema: { type: string }, description: '<minute unix ms>.jpg' }
       responses:
         '200': { description: 'image/jpeg: a cols × rows grid of tiles, missing tiles dark' }
-        '404': { description: no sprite for that minute }
+        '400': { description: 'not <minute unix ms>.jpg' }
+        '404': { description: 'no sprite for that minute, unknown camera, stills off, or a timestamp that is not a minute boundary' }
   /api/cameras/{cam}/clips:
     get:
       summary: Clips that overlap a time range (at most 31 days), oldest first
@@ -107,8 +109,14 @@ paths:
       description: >
         Replays everything after `Last-Event-ID` (or `?since`), then continues
         live. A resume point older than the retention answers `event: reset`
-        with `{oldestId}` first. Types: camera-event, camera-status, clip,
-        annotation, still (stills only when named in `types`; they are live
+        with `{oldestId}` first. Types: camera-event
+        `{cam, eventId, kind, phase: start|end, ts, source}` (an `end` may
+        carry `reason: timeout|restart`); camera-status
+        `{cam, online, reason, clockOffsetMs}` (plus `stream: up|down` when
+        the stills stream changes); clip
+        `{cam, clipId, start, end, stream, size, codec, events, url,
+        snapshotUrl}`; annotation (reserved, not sent yet); still
+        `{cam, ts, url, sprite, tile}` (only when named in `types`; live
         only, without an id, and not replayed).
       parameters:
         - { name: cam, in: query, schema: { type: string } }
@@ -117,7 +125,7 @@ paths:
         - { name: since, in: query, schema: { type: integer } }
       responses:
         '200': { description: text/event-stream }
-        '400': { description: unknown type }
+        '400': { description: '{ error: invalid, detail: "unknown type: X" }' }
         '503': { description: '{ error: too_many_clients }' }
   /metrics:
     get:
@@ -156,14 +164,14 @@ paths:
         Admin token or admin session. Writes with the session cookie need
         `X-CamProxy-UI: 1`. A client token answers 403 `{"error":"admin_only"}`.
       responses:
-        '200': { description: '{ version, camera, intake, sse, retention }' }
+        '200': { description: '{ version, camera (incl. webUiUrl), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures} }' }
         '401': { description: not signed in }
         '403': { description: admin_only, or csrf }
   /control/stats:
     get:
       summary: Disk, events, stream log, storage budget (spec §13)
       responses:
-        '200': { description: '{ disk, events, stream, sse, storage }' }
+        '200': { description: '{ disk: {catalog, stills, previews, clips} (each {bytes, files, oldest, newest, growthPerDay}), events: {stored}, stream: {rows, lastId}, sse: {clients}, storage: {budget, used, daysUntilFull, paused} }' }
   /control/config:
     get:
       summary: Every setting with value, source, restart flag and pending next value
@@ -201,6 +209,6 @@ paths:
     get:
       summary: Recent log lines (info and above), redacted
       parameters:
-        - { name: limit, in: query, schema: { type: integer, maximum: 500 } }
+        - { name: limit, in: query, schema: { type: integer, default: 100, maximum: 500 }, description: 'default 100; the buffer itself holds only the last 500 lines' }
       responses:
         '200': { description: '[{ level, time, msg, … }]' }
