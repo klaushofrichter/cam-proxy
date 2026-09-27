@@ -24,6 +24,26 @@
     `background-image:url('${m.url}');background-size:${m.cols * m.tileW * scale}px ${m.rows * m.tileH * scale}px;` +
     `background-position:-${(i % m.cols) * m.tileW * scale}px -${Math.floor(i / m.cols) * m.tileH * scale}px;width:${m.tileW * scale}px;height:${m.tileH * scale}px`;
 
+  // Thumbnails load their sprite only once they scroll into view (a full day
+  // is up to 1440 sprites).
+  function lazyStyle(node: HTMLElement, style: string) {
+    let current = style;
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) {
+        node.setAttribute('style', current);
+        io.disconnect();
+      }
+    }, { rootMargin: '200px' });
+    node.setAttribute('style', current.replace(/background-image:[^;]*;/, ''));
+    io.observe(node);
+    return {
+      update(next: string) {
+        current = next;
+      },
+      destroy: () => io.disconnect(),
+    };
+  }
+
   async function load() {
     message = '';
     try {
@@ -86,7 +106,7 @@
       <div class="strip">
         {#each list as m (m.minute)}
           {@const e = eventIn(m)}
-          <button class="thumb {e ? `ev-${e.kind}` : ''}" style={tileStyle(m, firstTile(m), 0.5)} title={`${new Date(m.minute).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${e ? ` · ${e.kind}` : ''}`} onclick={() => ((open = m), (still = null))} data-testid="minute"></button>
+          <button class="thumb {e ? `ev-${e.kind}` : ''}" use:lazyStyle={tileStyle(m, firstTile(m), 0.5)} title={`${new Date(m.minute).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${e ? ` · ${e.kind}` : ''}`} onclick={() => ((open = m), (still = null))} data-testid="minute"></button>
         {/each}
       </div>
     </div>

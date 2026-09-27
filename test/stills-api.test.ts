@@ -84,6 +84,27 @@ describe.skipIf(!binary)('stills and previews API', () => {
     stills.close();
   }, 30000);
 
+  it('serves a day of sprites (1440) without hitting the general rate limit', async () => {
+    const agent = request.agent(p.proxy.app);
+    let limited = 0;
+    for (let i = 0; i < 1300; i++) if ((await agent.get(`/api/cameras/cam1/previews/${M}.jpg`).set(auth())).status === 429) limited++;
+    expect(limited).toBe(0);
+    expect((await agent.get('/api/cameras').set(auth())).status).toBe(200); // the API itself is not starved
+  }, 60000);
+
+  it('reports the stream going down and up as camera-status messages', async () => {
+    await until(() => p.proxy.stills!.grabber.up(), 30000);
+    const from = p.proxy.log.lastId();
+    sim.sim.engine.faults.set({ name: 'rtsp.reset' });
+    const statuses = () => p.proxy.log.since(from, { types: ['camera-status'] }, 50).map((m) => m.data.stream);
+    try {
+      await until(() => statuses().includes('down'), 30000);
+    } finally {
+      sim.sim.engine.faults.clear('rtsp.reset');
+    }
+    await until(() => statuses().includes('up'), 60000);
+  }, 120000);
+
   it('adds stills and previews to stats and metrics', async () => {
     const stats = (await request(p.proxy.app).get('/control/stats').set(auth('admin-token-'.padEnd(40, 'y')))).body;
     expect(stats.disk.stills.files).toBeGreaterThanOrEqual(1);

@@ -138,17 +138,34 @@ export function createProxy(initial: Loaded): Proxy {
         const base = `/api/cameras/${encodeURIComponent(c.id)}`;
         sse.live(c.id, 'still', { ts: f.ts, url: `${base}/stills/${f.ts}.jpg`, sprite: `${base}/previews/${minute}.jpg`, tile: Math.floor((f.ts - minute) / (s.intervalS * 1000)) });
       });
+      // Stream up and down reach stream clients as camera-status (spec §8).
+      grabber.on('state', (st: { up: boolean }) => {
+        const cs = status.state();
+        log.append(c.id, 'camera-status', { online: cs.online, stream: st.up ? 'up' : 'down', reason: st.up ? null : 'no_frames', clockOffsetMs: cs.clockOffsetMs ?? null });
+      });
       stills = { go2rtc, grabber, store };
     }
   };
+  // go2rtc takes a moment to start; the grabber starts only if its side is
+  // still the current one (a restart or stop may come in between).
+  let stillsStarting: Promise<void> | undefined;
   const startStills = () => {
     const s = stills;
     if (!s) return;
-    void s.go2rtc.start().then(() => s.grabber.start(), (err: Error) => logger.error({ err: err.message }, 'go2rtc_start_failed'));
+    stillsStarting = s.go2rtc.start().then(
+      () => {
+        if (stills === s && !stopping) s.grabber.start();
+      },
+      (err: Error) => logger.error({ err: err.message }, 'go2rtc_start_failed'),
+    );
   };
+  let stopping = false;
   const stopStills = async () => {
     const s = stills;
     if (!s) return;
+    stopping = true;
+    await stillsStarting;
+    stopping = false;
     await s.grabber.stop();
     await s.go2rtc.stop();
     await s.store.flush();
@@ -166,8 +183,13 @@ export function createProxy(initial: Loaded): Proxy {
   const access = { tokens: () => loaded.secrets.tokens, adminToken: () => loaded.secrets.adminToken, sessionValid: (v: string | undefined) => sessions.verify(v) };
   const app = express();
   app.disable('x-powered-by');
-  // Far above real use (the UI, cams, a scraper); stops a flood. SSE is one long request.
-  app.use(rateLimit({ windowMs: 60_000, limit: 1200, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } }));
+  // Far above real use (the UI, cams, a scraper); stops a flood. SSE is one
+  // long request. Still and sprite images have their own, higher limit: a
+  // day on the timeline is up to 1440 sprites.
+  const IMAGE = /^\/api\/cameras\/[^/]+\/(stills|previews)\/\d{1,15}\.jpg$/;
+  const isImage = (req: Request) => req.method === 'GET' && IMAGE.test(req.path);
+  app.use(rateLimit({ windowMs: 60_000, limit: 1200, skip: isImage, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } }));
+  app.use(rateLimit({ windowMs: 60_000, limit: 6000, skip: (req) => !isImage(req), standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } }));
   app.use(express.json({ limit: '64kb' }));
   app.get('/health', (_req, res) => void res.json({ ok: true }));
   app.get('/metrics', async (_req, res) => {

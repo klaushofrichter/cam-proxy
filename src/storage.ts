@@ -106,6 +106,7 @@ export class Storage extends EventEmitter {
   }
 
   // The store reports what it wrote (bytes may be a difference after a merge).
+  // Only an estimate for usage and growth between runs; run() recounts.
   noteWritten(kind: FileKind, bytes: number, files: number): void {
     const now = this.now();
     this.writes.push({ at: now, kind, bytes: Math.max(0, bytes) });
@@ -155,6 +156,9 @@ export class Storage extends EventEmitter {
   }
 
   run(opts: { dryRun?: boolean }): StorageRun {
+    // Work from the disk as it is: files written since the last count (known
+    // only by size through noteWritten) get their real paths.
+    this.recount();
     const now = this.now();
     const cfg = this.d.config();
     const dry = !!opts.dryRun;

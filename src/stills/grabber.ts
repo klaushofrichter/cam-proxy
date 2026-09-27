@@ -40,6 +40,17 @@ export function splitJpegs(): Transform {
   });
 }
 
+// A frame's slot: the next slot after `last` while frames keep coming at the
+// expected pace (arrival jitter doesn't cost a slot), but never more than a
+// quarter interval ahead of the clock; after a stall or at start, the clock's
+// slot. null: the frame falls in a slot already taken (a burst).
+export function nextStamp(last: number, now: number, step: number): number | null {
+  const clock = Math.floor(now / step) * step;
+  const next = last + step;
+  const ts = last >= 0 && next <= now + step / 4 && now - next < 1.5 * step ? next : clock;
+  return ts > last ? ts : null;
+}
+
 export interface GrabberOptions {
   input: string; // go2rtc's local restream
   intervalS: number;
@@ -61,6 +72,8 @@ export class FrameGrabber extends EventEmitter {
   private last: number | null = null;
   private lastStamp = -1;
   private backoff = 1000;
+  private startedAt = 0;
+  private spawnedAt = 0;
   private restartTimer: NodeJS.Timeout | undefined;
   private staleTimer: NodeJS.Timeout | undefined;
 
@@ -88,8 +101,19 @@ export class FrameGrabber extends EventEmitter {
     if (this.running) return;
     this.running = true;
     this.spawn();
+    // No frame for staleMs: down, and ffmpeg is restarted (it can block for
+    // good on a stream that stalls without closing; the exit path restarts it).
+    this.startedAt = this.now();
     this.staleTimer = setInterval(() => {
-      if (this.isUp && (this.last === null || this.now() - this.last > (this.o.staleMs ?? 10_000))) this.setUp(false);
+      const since = this.last ?? this.startedAt;
+      if (this.now() - since <= (this.o.staleMs ?? 10_000)) return;
+      this.setUp(false);
+      const p = this.proc;
+      // A fresh ffmpeg gets time to connect and reach a keyframe first.
+      if (p && p.exitCode === null && this.now() - this.spawnedAt > 2 * (this.o.staleMs ?? 10_000) + 5000) {
+        logger.warn('frame_grabber_stalled_restarting');
+        p.kill('SIGKILL');
+      }
     }, 500);
   }
 
@@ -105,7 +129,8 @@ export class FrameGrabber extends EventEmitter {
     const filter = `[0:v]fps=1/${this.o.intervalS},split=2[a][b];[a]scale=${w}:${h}[s];[b]scale=${tw}:${th}[t]`;
     const args = [
       '-hide_banner', '-loglevel', 'error', '-nostdin',
-      '-rtsp_transport', 'tcp', '-i', this.o.input,
+      // A read that hangs for 10 s fails (ffmpeg then exits and is restarted).
+      '-rtsp_transport', 'tcp', '-timeout', '10000000', '-i', this.o.input,
       '-filter_complex', filter,
       // flush_packets: each frame leaves at once (buffered pipes deliver pairs).
       '-map', '[s]', '-f', 'image2pipe', '-flush_packets', '1', '-c:v', 'mjpeg', '-q:v', String(this.o.quality), 'pipe:1',
@@ -113,20 +138,15 @@ export class FrameGrabber extends EventEmitter {
     ];
     const p = spawn(this.o.ffmpeg ?? 'ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
     this.proc = p;
+    this.spawnedAt = this.now();
     const stills: Buffer[] = [];
     const tiles: Buffer[] = [];
     const pair = () => {
       while (stills.length && tiles.length) {
         const still = stills.shift()!;
         const tile = tiles.shift()!;
-        // The next slot after the last one while frames keep coming at the
-        // expected pace (arrival jitter doesn't cost a slot); after a stall or
-        // at start, the clock's slot.
-        const step = this.o.intervalS * 1000;
-        const clock = Math.floor(this.now() / step) * step;
-        const next = this.lastStamp + step;
-        const ts = this.lastStamp >= 0 && Math.abs(clock - next) <= step ? next : clock;
-        if (ts <= this.lastStamp) continue; // a burst after a stall: keep the first per slot
+        const ts = nextStamp(this.lastStamp, this.now(), this.o.intervalS * 1000);
+        if (ts === null) continue; // a burst frame in a slot already taken
         this.lastStamp = ts;
         this.last = ts;
         this.backoff = 1000;

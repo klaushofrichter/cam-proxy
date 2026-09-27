@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import net from 'net';
 import { startSim } from './helpers/sim';
+import { freePort } from './helpers/proxy';
 import { Go2rtc } from '../src/stills/go2rtc';
 
 const run = promisify(execFile);
@@ -12,14 +12,6 @@ afterEach(async () => {
   for (const f of cleanup.splice(0).reverse()) await f();
 });
 
-async function freePort(): Promise<number> {
-  return new Promise((r) => {
-    const s = net.createServer().listen(0, '127.0.0.1', () => {
-      const p = (s.address() as net.AddressInfo).port;
-      s.close(() => r(p));
-    });
-  });
-}
 
 async function setup() {
   const sim = await startSim();

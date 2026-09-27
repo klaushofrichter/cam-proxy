@@ -1,23 +1,16 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import net from 'net';
 import sharp from 'sharp';
 import { Readable } from 'stream';
 import { startSim } from './helpers/sim';
+import { freePort } from './helpers/proxy';
 import { Go2rtc } from '../src/stills/go2rtc';
-import { FrameGrabber, splitJpegs, type Frame } from '../src/stills/grabber';
+import { FrameGrabber, splitJpegs, nextStamp, type Frame } from '../src/stills/grabber';
 
 const binary = process.env.CAMPROXY_TEST_GO2RTC;
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
   for (const f of cleanup.splice(0).reverse()) await f();
 });
-const freePort = () =>
-  new Promise<number>((r) => {
-    const s = net.createServer().listen(0, '127.0.0.1', () => {
-      const p = (s.address() as net.AddressInfo).port;
-      s.close(() => r(p));
-    });
-  });
 const until = async (cond: () => boolean, ms: number) => {
   const t0 = Date.now();
   while (!cond()) {
@@ -25,6 +18,29 @@ const until = async (cond: () => boolean, ms: number) => {
     await new Promise((r) => setTimeout(r, 50));
   }
 };
+
+describe('nextStamp', () => {
+  const S = 1000;
+  it('continues the sequence at the expected pace, despite arrival jitter', () => {
+    expect(nextStamp(10_000, 11_300, S)).toBe(11_000);
+    expect(nextStamp(11_000, 12_900, S)).toBe(12_000); // late, still its own slot
+    expect(nextStamp(12_000, 13_050, S)).toBe(13_000);
+  });
+  it('drops a burst frame in the same slot instead of stamping it into the future', () => {
+    expect(nextStamp(11_000, 11_100, S)).toBeNull();
+    expect(nextStamp(11_000, 11_700, S)).toBeNull();
+    // the stamp never runs ahead of the clock by more than a quarter interval
+    for (const now of [11_000, 11_300, 11_760, 12_000, 12_400]) {
+      const ts = nextStamp(11_000, now, S);
+      if (ts !== null) expect(ts).toBeLessThanOrEqual(now + S / 4);
+    }
+  });
+  it('resyncs to the clock after a stall, and starts on the clock', () => {
+    expect(nextStamp(11_000, 20_500, S)).toBe(20_000);
+    expect(nextStamp(-1, 20_500, S)).toBe(20_000);
+    expect(nextStamp(-1, 20_500, 10 * S)).toBe(20_000);
+  });
+});
 
 describe('splitJpegs', () => {
   it('gives whole JPEGs however the bytes are chunked, even inside a marker', async () => {
@@ -43,18 +59,18 @@ describe('splitJpegs', () => {
 });
 
 describe.skipIf(!binary)('FrameGrabber against go2rtc and cam-sim', () => {
-  async function setup() {
+  async function setup(staleMs = 3000) {
     const sim = await startSim();
     cleanup.push(() => sim.close());
     const g = new Go2rtc({ binary, rtspPort: await freePort(), apiPort: await freePort(), cam: 'cam1', source: { host: '127.0.0.1', port: sim.ports.rtsp, user: 'proxy', password: sim.password } });
     cleanup.push(() => g.stop());
     await g.start();
-    const grabber = new FrameGrabber({ input: g.streamUrl('sub'), intervalS: 1, size: '896x512', tileSize: '160x90', quality: 5, tileQuality: 7, staleMs: 3000 });
+    const grabber = new FrameGrabber({ input: g.streamUrl('sub'), intervalS: 1, size: '896x512', tileSize: '160x90', quality: 5, tileQuality: 7, staleMs });
     cleanup.push(() => grabber.stop());
     const frames: Frame[] = [];
     grabber.on('frame', (f: Frame) => frames.push(f));
     grabber.start();
-    return { sim, grabber, frames };
+    return { sim, grabber, frames, g };
   }
 
   it('delivers a still and a tile about once a second, stamped on whole seconds', async () => {
@@ -86,6 +102,21 @@ describe.skipIf(!binary)('FrameGrabber against go2rtc and cam-sim', () => {
     sim.sim.engine.faults.clear('rtsp.reset');
     const n = frames.length;
     await until(() => grabber.up() && frames.length > n + 1, 40000);
+  }, 90000);
+
+  it('restarts ffmpeg when the stream stalls silently (no reset), and recovers', async () => {
+    const { g, grabber, frames } = await setup(2000);
+    await until(() => frames.length >= 2, 20000);
+    const first = grabber.pid()!;
+    process.kill(g.pid()!, 'SIGSTOP'); // go2rtc freezes: the socket stays open, no data
+    try {
+      await until(() => !grabber.up(), 10000);
+      await until(() => grabber.pid() !== undefined && grabber.pid() !== first, 15000);
+    } finally {
+      process.kill(g.pid()!, 'SIGCONT');
+    }
+    const n = frames.length;
+    await until(() => frames.length > n + 1, 40000);
   }, 90000);
 
   it('stop() ends ffmpeg', async () => {

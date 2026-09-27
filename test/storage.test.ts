@@ -7,7 +7,8 @@ import { insertEvent, listEvents } from '../src/catalog/events';
 import { StreamLog } from '../src/stream/log';
 import { Storage } from '../src/storage';
 import { DEFAULTS, type Config } from '../src/config/defaults';
-import { minutePath } from '../src/stills/store';
+import { minutePath, MinuteStore } from '../src/stills/store';
+import sharp from 'sharp';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -107,6 +108,27 @@ describe('storage: budget', () => {
     x.storage.recount();
     x.config.stills.maxGB = 1;
     expect(x.storage.run({ dryRun: true }).deleted.stills ?? 0).toBe(0); // under 1 GB
+  });
+});
+
+describe('storage: files written after start', () => {
+  it('deletes minutes the store wrote while running, not only those counted at start', async () => {
+    const x = setup((c) => {
+      c.retention.stillsDays = 1;
+      c.retention.previewsDays = 1;
+    });
+    x.storage.recount();
+    const store = new MinuteStore({ dataDir: x.dir, cam: 'cam1', intervalS: 1, still: { size: '16x9', quality: 5 }, tile: { size: '16x9', grid: '10x6', quality: 7 } });
+    store.on('written', (w: { kind: 'stills' | 'previews'; bytes: number; files: number }) => x.storage.noteWritten(w.kind, w.bytes, w.files));
+    const jpeg = await sharp({ create: { width: 16, height: 9, channels: 3, background: '#333' } }).jpeg().toBuffer();
+    const old = NOW - 3 * DAY; // written now (the proxy was running), aged out by the next run
+    store.add({ ts: old, still: jpeg, tile: jpeg });
+    await store.flush();
+    const pack = `${minutePath(x.dir, 'stills', 'cam1', old)}.pack`;
+    expect(existsSync(pack)).toBe(true);
+    x.storage.run({});
+    expect(existsSync(pack)).toBe(false);
+    expect(existsSync(`${minutePath(x.dir, 'previews', 'cam1', old)}.jpg`)).toBe(false);
   });
 });
 

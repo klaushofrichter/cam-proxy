@@ -111,7 +111,8 @@ UI session.
 - A token in the URL (`?token=`, `?access_token=`) answers 400
   `{"error":"token_in_url"}`.
 
-Any one client may send 1200 requests a minute; more answer 429
+Any one client may send 1200 requests a minute, plus 6000 still and sprite
+images (a day on a timeline is up to 1440 sprites); more answer 429
 `{"error":"rate_limited"}`. Timestamps are unix milliseconds. The full schema is in
 [openapi.yaml](openapi.yaml).
 
@@ -147,7 +148,9 @@ minute of stills, and `data/previews/<cam>/YYYY/MM/DD/HHMM.jpg` plus
 
 Both record the settings they were made with, so changing the interval or
 size keeps older minutes readable. A minute interrupted by a restart is merged
-when the proxy comes back. On the real camera a still is about 24 KB, about
+when the proxy comes back.
+- **Recovery:** if no still arrives for 10 s, the stream is reported down.
+  ffmpeg is restarted, which also covers a stream that stalls silently. On the real camera a still is about 24 KB, about
 2 GB a day.
 
 | Route | |
@@ -195,7 +198,8 @@ never loses anything within the retention (default 7 days).
   REST API, then continue.
 - **Types:**
   - `camera-event`: `{cam, eventId, kind, phase: start|end, ts, source}`;
-  - `camera-status`: `{cam, online, reason, clockOffsetMs}`;
+  - `camera-status`: `{cam, online, reason, clockOffsetMs}`, plus
+    `stream: up|down` when the stills stream changes;
   - `clip`, `annotation`: later phases;
   - `still`: only when named in `types`, because it fires every second.
 - **Filters:** `types` and `kinds` (e.g. `kinds=person,vehicle`) are comma
