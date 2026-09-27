@@ -208,8 +208,9 @@ npm run schema      # regenerate config.schema.json after changing a setting
 
 - **Real camera:** `npx tsx scripts/verify-camera.ts [seconds]` runs the
   proxy against the real camera. It is read-only: it signs in, checks status,
-  subscribes to ONVIF, then unsubscribes and logs out. It uses
-  `~/Development/reolink/.env`.
+  subscribes to ONVIF, then unsubscribes and logs out. It signs in as the
+  camera user `proxy` (password `CAMPROXY_CAMERA_PASSWORD` in `.env`), with the
+  camera address from `~/Development/reolink/.env`.
 - **CI:** tests, e2e, type checks, `npm audit`, CodeQL, and a check that no
   media file is committed. `production` requires the tests and CodeQL.
 

@@ -5,9 +5,10 @@
 //
 //   npx tsx scripts/verify-camera.ts [seconds]      (default 90)
 //
-// Camera address and password from ~/Development/reolink/.env (REOLINK_IP,
-// REOLINK_PASSWORD); user CAMERA_USER (default admin); TLS name
-// CAMERA_TLS_NAME (default cam1.skylar.technology). Prints no secrets.
+// Camera address from ~/Development/reolink/.env (REOLINK_IP). User
+// CAMERA_USER (default proxy, the proxy's own camera user, whose password is
+// CAMPROXY_CAMERA_PASSWORD in this repo's .env; for admin, REOLINK_PASSWORD).
+// TLS name CAMERA_TLS_NAME (default cam1.skylar.technology). Prints no secrets.
 import { randomBytes } from 'crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { homedir, tmpdir } from 'os';
@@ -28,12 +29,14 @@ function env(file: string): Record<string, string> {
 async function main() {
   const seconds = Number(process.argv[2] ?? 90);
   const e = env(join(homedir(), 'Development/reolink/.env'));
+  const user = process.env.CAMERA_USER ?? 'proxy';
+  const password = user === 'proxy' ? env(join(__dirname, '..', '.env')).CAMPROXY_CAMERA_PASSWORD : e.REOLINK_PASSWORD;
   const dir = mkdtempSync(join(tmpdir(), 'camproxy-verify-'));
   writeFileSync(join(dir, 'config.json'), JSON.stringify({
-    camera: { host: e.REOLINK_IP, protocol: 'https', tlsName: process.env.CAMERA_TLS_NAME ?? 'cam1.skylar.technology', user: process.env.CAMERA_USER ?? 'admin', statusPollS: 15 },
+    camera: { host: e.REOLINK_IP, protocol: 'https', tlsName: process.env.CAMERA_TLS_NAME ?? 'cam1.skylar.technology', user, statusPollS: 15 },
     server: { logLevel: 'warn' },
   }));
-  const loaded = loadConfig({ CAMPROXY_TOKENS: randomBytes(24).toString('hex'), CAMPROXY_ADMIN_TOKEN: randomBytes(24).toString('hex'), CAMPROXY_CAMERA_PASSWORD: e.REOLINK_PASSWORD }, { cwd: dir });
+  const loaded = loadConfig({ CAMPROXY_TOKENS: randomBytes(24).toString('hex'), CAMPROXY_ADMIN_TOKEN: randomBytes(24).toString('hex'), CAMPROXY_CAMERA_PASSWORD: password }, { cwd: dir });
   const proxy = createProxy(loaded);
   const seen: StreamMessage[] = [];
   proxy.log.on('message', (m: StreamMessage) => {
