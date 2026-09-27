@@ -3,6 +3,7 @@ import request from 'supertest';
 import { startSim } from './helpers/sim';
 import { startProxy, auth, until, freePort, ADMIN_TOKEN } from './helpers/proxy';
 import { listClips } from '../src/catalog/clips';
+import { ftpObject } from '../src/clips/camera-ftp';
 
 let sim: Awaited<ReturnType<typeof startSim>>;
 let p: Awaited<ReturnType<typeof startProxy>>;
@@ -82,5 +83,13 @@ describe('camera FTP setup', () => {
     expect(r.status).toBe(200);
     expect(r.body).toEqual({ ok: false, rspCode: -454 });
     await action('camera-ftp-off');
+  });
+});
+
+// Issue #5: the rule "never server: ''" lives next to the object it protects.
+describe('ftpObject', () => {
+  it('refuses an empty server', () => {
+    expect(() => ftpObject({}, { server: '', port: 2121, user: 'camera', password: 'x'.repeat(24), tls: true, stream: 'main' })).toThrow(/server/);
+    expect(ftpObject({}, { server: '10.0.0.2', port: 2121, user: 'camera', password: 'x'.repeat(24), tls: true, stream: 'main' }).server).toBe('10.0.0.2');
   });
 });

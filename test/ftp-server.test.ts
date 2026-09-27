@@ -14,7 +14,7 @@ afterEach(async () => {
   for (const f of cleanup.splice(0).reverse()) await f();
 });
 
-async function setup(opts: { tls?: boolean; maxSessions?: number; host?: string; publicHost?: string; timeouts?: FtpServerOptions['timeouts']; now?: () => number; lookup?: FtpServerOptions['lookup'] } = {}) {
+async function setup(opts: { tls?: boolean; maxSessions?: number; host?: string; publicHost?: string; timeouts?: FtpServerOptions['timeouts']; now?: () => number; lookup?: FtpServerOptions['lookup']; log?: FtpServerOptions['log']; accept?: FtpServerOptions['accept'] } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'camproxy-ftp-'));
   const port = await freePort();
   const p0 = await freePort();
@@ -23,7 +23,7 @@ async function setup(opts: { tls?: boolean; maxSessions?: number; host?: string;
     const pems = await generate([{ name: 'commonName', value: 'cam-proxy' }], { keyType: 'ec' });
     tls = { cert: pems.cert, key: pems.private };
   }
-  const server = new FtpServer({ port, host: opts.host ?? '127.0.0.1', passive: [p0, p0 + 20], publicHost: 'publicHost' in opts ? opts.publicHost : '127.0.0.1', user: 'camera', password: 'ftp-pw', tls, root, maxSessions: opts.maxSessions, timeouts: opts.timeouts, now: opts.now, lookup: opts.lookup });
+  const server = new FtpServer({ port, host: opts.host ?? '127.0.0.1', passive: [p0, p0 + 20], publicHost: 'publicHost' in opts ? opts.publicHost : '127.0.0.1', user: 'camera', password: 'ftp-pw', tls, root, maxSessions: opts.maxSessions, timeouts: opts.timeouts, now: opts.now, lookup: opts.lookup, log: opts.log, accept: opts.accept });
   const uploads: Upload[] = [];
   const failures: string[] = [];
   server.on('upload', (u: Upload) => uploads.push(u));
@@ -232,6 +232,110 @@ describe('FTP server hardening', () => {
     await raw.send('PASS ftp-pw');
     expect(await raw.send('PASV')).toMatch(/\(127,0,0,1,\d+,\d+\)/);
     raw.close();
+  });
+});
+
+// Issue #5 (deferred minors from the Plan 3 review).
+describe('FTP server: deferred minors (#5)', () => {
+  // Raw lines on a socket, reading replies as they come.
+  function lines(sock: net.Socket) {
+    let buf = '';
+    const waiters: ((l: string) => void)[] = [];
+    const got: string[] = [];
+    sock.setEncoding('utf8');
+    sock.on('data', (d: string) => {
+      buf += d;
+      let i;
+      while ((i = buf.indexOf('\r\n')) >= 0) {
+        const l = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        const w = waiters.shift();
+        if (w) w(l);
+        else got.push(l);
+      }
+    });
+    return () => (got.length ? Promise.resolve(got.shift()!) : new Promise<string>((r) => waiters.push(r)));
+  }
+
+  it('ignores commands sent in the same packet as AUTH TLS (no STARTTLS injection)', async () => {
+    const { port } = await setup({ tls: true });
+    const sock = net.connect(port, '127.0.0.1');
+    const next = lines(sock);
+    expect(await next()).toMatch(/^220/);
+    sock.write('AUTH TLS\r\nUSER camera\r\n');
+    expect(await next()).toMatch(/^234/);
+    sock.removeAllListeners('data');
+    const tls = await import('tls');
+    const t = tls.connect({ socket: sock, rejectUnauthorized: false });
+    await new Promise((r) => t.once('secureConnect', r));
+    const tnext = lines(t);
+    t.write('PASS ftp-pw\r\n');
+    // The injected USER was never taken (no 331 for it arrives over TLS),
+    // and the password alone doesn't log in.
+    let reply = await tnext();
+    if (/^331/.test(reply)) reply = await tnext();
+    expect(reply).not.toMatch(/^230/);
+    t.destroy();
+  });
+
+  it('runs a session’s commands one at a time: pipelined PASVs leave one listener', async () => {
+    const { port } = await setup();
+    const sock = net.connect(port, '127.0.0.1');
+    const next = lines(sock);
+    await next();
+    sock.write('USER camera\r\nPASS ftp-pw\r\n');
+    await next();
+    expect(await next()).toMatch(/^230/);
+    sock.write('PASV\r\nPASV\r\nPASV\r\n');
+    const ports: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      const m = /\((?:\d+,){4}(\d+),(\d+)\)/.exec(await next())!;
+      ports.push(Number(m[1]) * 256 + Number(m[2]));
+    }
+    const open = async (p: number) =>
+      new Promise<boolean>((r) => {
+        const c = net.connect(p, '127.0.0.1', () => (c.destroy(), r(true)));
+        c.on('error', () => r(false));
+      });
+    expect(await open(ports[0])).toBe(false);
+    expect(await open(ports[1])).toBe(false);
+    sock.destroy();
+  });
+
+  it('logs neither near-miss password lines nor long arguments', async () => {
+    const log: string[] = [];
+    const { port } = await setup({ log: (l) => log.push(l) });
+    const sock = net.connect(port, '127.0.0.1');
+    const next = lines(sock);
+    await next();
+    sock.write(' PASS hunter2-secret\r\n');
+    await next();
+    sock.write('PASS\thunter2-secret\r\n');
+    await next();
+    sock.write(`XYZ ${'a'.repeat(2000)}\r\n`);
+    await next();
+    sock.destroy();
+    const all = log.join('\n');
+    expect(all).not.toContain('hunter2');
+    expect(Math.max(...log.map((l) => l.length))).toBeLessThanOrEqual(300);
+  });
+
+  it('refuses PROT P without a certificate', async () => {
+    const { port } = await setup();
+    const raw = await rawSession(port);
+    expect(await raw.send('PROT P')).toMatch(/^536/);
+    raw.close();
+  });
+
+  it('refuses STOR while the storage says no, before any data is sent', async () => {
+    let ok = true;
+    const { client, uploads } = await setup({ accept: () => ok });
+    const c = await client();
+    ok = false;
+    await expect(c.uploadFrom(Readable.from([Buffer.from('x')]), 'a.mp4')).rejects.toThrow(/452/);
+    ok = true;
+    await c.uploadFrom(Readable.from([Buffer.from('x')]), 'b.mp4');
+    await until(() => uploads.length === 1);
   });
 });
 

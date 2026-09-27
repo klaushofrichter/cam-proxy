@@ -27,6 +27,8 @@ async function read(client: ReolinkClient): Promise<FtpObject> {
 
 // The whole object with the proxy as the target, the rest as the camera has it.
 export function ftpObject(current: FtpObject, t: FtpTarget): FtpObject {
+  // The firmware refuses server "" (-4): never send it.
+  if (!t.server) throw new Error('ftp server (ftp.publicHost) is not set');
   const table = { ...(current.schedule?.table ?? {}) };
   for (const k of UPLOAD_ON) table[k] = ALL_HOURS;
   return {

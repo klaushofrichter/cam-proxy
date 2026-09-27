@@ -209,6 +209,9 @@ the proxy's own upload-only FTP(S) server (`ftp.enabled`, password
 (`AUTH TLS`, `PROT P`), passive mode, folders and `STOR`, and nothing else:
 no downloads, listings or deletes. Paths stay inside its folder, at most 4
 sessions, 500 MB a file, and 5 failed logins a minute close the connection.
+Commands run one at a time per session; `SIZE` always answers 550 (there is
+nothing to download), and absolute and relative upload paths both land in the
+upload folder. While storage is paused, `STOR` answers 452.
 
 - **Index:** a finished upload named `<Name>_00_YYYYMMDDHHMMSS.mp4` (the
   camera's local time) becomes UTC with the camera's time zone and DST rule
