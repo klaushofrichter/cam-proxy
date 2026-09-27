@@ -414,6 +414,21 @@
           "minimum": 1,
           "maximum": 100000,
           "description": "size cap for clips"
+        },
+        "publicHost": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9.:-]{1,253}$",
+          "description": "the address the camera connects to (PASV replies and the camera FTP setup)"
+        },
+        "certFile": {
+          "type": "string",
+          "pattern": "^.+$",
+          "description": "FTPS certificate (PEM); a self-signed one otherwise"
+        },
+        "keyFile": {
+          "type": "string",
+          "pattern": "^.+$",
+          "description": "FTPS key (PEM)"
         }
       }
     }
