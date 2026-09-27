@@ -1,0 +1,421 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "cam-proxy config.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "HTTP port for the API, control API and admin UI"
+        },
+        "dataDir": {
+          "type": "string",
+          "pattern": "^.+$",
+          "description": "data folder; relative to the config file"
+        },
+        "logLevel": {
+          "type": "string",
+          "enum": [
+            "fatal",
+            "error",
+            "warn",
+            "info",
+            "debug",
+            "trace",
+            "silent"
+          ],
+          "description": "pino log level"
+        },
+        "publicUrl": {
+          "type": "string",
+          "pattern": "^https?://[^\\s]+$",
+          "description": "base URL for absolute links"
+        }
+      }
+    },
+    "camera": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,31}$",
+          "description": "camera id used in paths and the API"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^.{1,64}$",
+          "description": "display name"
+        },
+        "host": {
+          "type": "string",
+          "pattern": "^[^\\s/]*$",
+          "description": "address or name, optional :port (required)"
+        },
+        "protocol": {
+          "type": "string",
+          "enum": [
+            "https",
+            "http"
+          ],
+          "description": "camera HTTP API protocol"
+        },
+        "tlsName": {
+          "type": "string",
+          "pattern": "^[^\\s]+$",
+          "description": "verify the camera certificate against this name"
+        },
+        "user": {
+          "type": "string",
+          "pattern": "^[^\\s:]{1,31}$",
+          "description": "the proxy's own camera user"
+        },
+        "onvifPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "camera ONVIF port"
+        },
+        "rtspPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "camera RTSP port"
+        },
+        "statusPollS": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 3600,
+          "description": "seconds between status checks"
+        }
+      }
+    },
+    "go2rtc": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "binary": {
+          "type": "string",
+          "pattern": "^.+$",
+          "description": "go2rtc binary started by the proxy"
+        },
+        "url": {
+          "type": "string",
+          "pattern": "^https?://[^\\s]+$",
+          "description": "go2rtc API when it runs as its own container"
+        },
+        "rtspPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "go2rtc local RTSP port"
+        },
+        "apiPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "go2rtc local API port"
+        }
+      }
+    },
+    "stills": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "store stills"
+        },
+        "stream": {
+          "type": "string",
+          "enum": [
+            "sub",
+            "main"
+          ],
+          "description": "camera stream the stills come from"
+        },
+        "intervalS": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60,
+          "enum": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            10,
+            12,
+            15,
+            20,
+            30,
+            60
+          ],
+          "description": "seconds between stills (divides a minute)"
+        },
+        "size": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{1,4}x[1-9][0-9]{1,4}$",
+          "description": "still size, WxH"
+        },
+        "quality": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 31,
+          "description": "ffmpeg JPEG quality (q:v); lower is better"
+        },
+        "maxGB": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000,
+          "description": "size cap for stills"
+        }
+      }
+    },
+    "previews": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tileSize": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{1,4}x[1-9][0-9]{1,4}$",
+          "description": "preview tile size, WxH"
+        },
+        "grid": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]?x[1-9][0-9]?$",
+          "description": "sprite grid, CxR; holds one minute of tiles"
+        },
+        "quality": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 31,
+          "description": "ffmpeg JPEG quality for tiles"
+        },
+        "maxGB": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000,
+          "description": "size cap for previews"
+        }
+      }
+    },
+    "events": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "onvif": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "subscribeMin": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60,
+              "description": "ONVIF subscription lifetime, minutes"
+            },
+            "pullTimeoutS": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60,
+              "description": "ONVIF PullMessages timeout, seconds"
+            }
+          }
+        },
+        "poll": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "poll GetMdState/GetAiState while ONVIF is down"
+            },
+            "intervalS": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60,
+              "description": "polling interval, seconds"
+            },
+            "afterOnvifDownS": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 3600,
+              "description": "start polling after ONVIF is down this long"
+            }
+          }
+        },
+        "maxOpenMin": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1440,
+          "description": "close an event still open after this many minutes"
+        }
+      }
+    },
+    "retention": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "stillsDays": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 365,
+          "description": "days of stills"
+        },
+        "previewsDays": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 365,
+          "description": "days of preview sprites"
+        },
+        "clipsDays": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 365,
+          "description": "days of clips"
+        },
+        "eventsDays": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3650,
+          "description": "days of events"
+        },
+        "streamLogDays": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 365,
+          "description": "days of the SSE stream log"
+        },
+        "intervalMin": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1440,
+          "description": "minutes between storage runs"
+        }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxPercent": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 99,
+          "description": "size budget, percent of the disk"
+        },
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "size budget, bytes (instead of maxPercent)"
+        },
+        "minFreeBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "stop writing below this much free space"
+        },
+        "keepHours": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "stills": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 8760,
+              "description": "hours of stills never deleted for the budget"
+            },
+            "clips": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 8760,
+              "description": "hours of clips never deleted for the budget"
+            },
+            "previews": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 8760,
+              "description": "hours of previews never deleted for the budget"
+            }
+          }
+        }
+      }
+    },
+    "sse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxClients": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "most SSE clients at once"
+        },
+        "queuePerClient": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 100000,
+          "description": "messages queued per SSE client before it is dropped"
+        },
+        "pingS": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300,
+          "description": "seconds between keep-alive pings"
+        }
+      }
+    },
+    "ftp": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "accept clip uploads from the camera"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "FTP control port"
+        },
+        "passive": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,4}-[1-9][0-9]{0,4}$",
+          "description": "passive port range, A-B"
+        },
+        "user": {
+          "type": "string",
+          "pattern": "^[^\\s:]{1,31}$",
+          "description": "FTP user the camera logs in as"
+        },
+        "tls": {
+          "type": "boolean",
+          "description": "require FTPS"
+        },
+        "stream": {
+          "type": "string",
+          "enum": [
+            "main",
+            "sub"
+          ],
+          "description": "the stream the camera uploads"
+        },
+        "maxGB": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000,
+          "description": "size cap for clips"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "server": {
+    "port": 8480,
+    "dataDir": "data",
+    "logLevel": "info"
+  },
+  "camera": {
+    "id": "cam1",
+    "name": "Den",
+    "host": "192.0.2.10",
+    "protocol": "https",
+    "user": "proxy",
+    "onvifPort": 8000,
+    "rtspPort": 554,
+    "statusPollS": 30
+  },
+  "go2rtc": {
+    "binary": "go2rtc",
+    "rtspPort": 18554,
+    "apiPort": 11984
+  },
+  "stills": {
+    "enabled": true,
+    "stream": "sub",
+    "intervalS": 1,
+    "size": "896x512",
+    "quality": 5
+  },
+  "previews": {
+    "tileSize": "160x90",
+    "grid": "10x6",
+    "quality": 7
+  },
+  "events": {
+    "onvif": {
+      "subscribeMin": 10,
+      "pullTimeoutS": 30
+    },
+    "poll": {
+      "enabled": true,
+      "intervalS": 2,
+      "afterOnvifDownS": 60
+    },
+    "maxOpenMin": 10
+  },
+  "retention": {
+    "stillsDays": 7,
+    "previewsDays": 14,
+    "clipsDays": 7,
+    "eventsDays": 30,
+    "streamLogDays": 7,
+    "intervalMin": 60
+  },
+  "storage": {
+    "maxPercent": 85,
+    "minFreeBytes": 2147483648,
+    "keepHours": {
+      "stills": 24,
+      "clips": 24,
+      "previews": 72
+    }
+  },
+  "sse": {
+    "maxClients": 50,
+    "queuePerClient": 1000,
+    "pingS": 15
+  },
+  "ftp": {
+    "enabled": false,
+    "port": 2121,
+    "passive": "30000-30009",
+    "user": "camera",
+    "tls": true,
+    "stream": "main"
+  }
+}
