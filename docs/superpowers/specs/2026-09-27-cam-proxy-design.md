@@ -39,7 +39,7 @@ table, so more cameras later need no migration.
 - **Docker on the Pi** (decided 2026-09-27): compose with
   `restart: unless-stopped`, host networking (FTP passive ports, later WebRTC),
   and `/data` on the SSD.
-- **Local development address:** `http://localhost:4321`. Plain HTTP is fine
+- **Local development address:** `http://localhost:8480`. Plain HTTP is fine
   on localhost only.
 
 ## 3. Architecture
@@ -52,7 +52,7 @@ table, so more cameras later need no migration.
    ├──FTP(S) upload─────▶│ clip intake ──┼──▶ catalog (SQLite) ──▶ stream_log ──▶ SSE        │
    │                     │ camera client ┘        │                                          │
    └──HTTP API◀──────────│ (status polling, FTP setup, fallback event polling)               │
-                         │ HTTP server :4321 — /api (clients), /control (admin), /, /metrics │
+                         │ HTTP server :8480 — /api (clients), /control (admin), /, /metrics │
                          └───────────────────────────────────────────────────────────────────┘
 ```
 
@@ -376,7 +376,7 @@ or put in a ConfigMap without leaking anything.
 
 | Group | Settings |
 |---|---|
-| `server` | `port` (4321), `dataDir` (`/data` in the image, `./data` locally), `logLevel` (`info`), `publicUrl` (for absolute links, optional) |
+| `server` | `port` (8480), `dataDir` (`/data` in the image, `./data` locally), `logLevel` (`info`), `publicUrl` (for absolute links, optional) |
 | `camera` | `id` (`cam1`), `name` (`Den`), `host` (required), `protocol` (`https`), `tlsName`, `user` (`proxy`), `onvifPort` (8000), `rtspPort` (554), `statusPollS` (30) |
 | `go2rtc` | `binary` (`go2rtc`) or `url` (when it runs as its own container), `rtspPort` (18554), `apiPort` (11984) |
 | `stills` | `enabled` (true), `stream` (`sub`), `intervalS` (1), `size` (`896x512`), `quality` (5, ffmpeg `q:v`; lower is better) |
