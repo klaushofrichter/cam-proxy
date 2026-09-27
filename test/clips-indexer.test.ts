@@ -107,6 +107,15 @@ describe('ClipIndexer', () => {
     expect(indexer.failures()).toBe(1);
   });
 
+  // Measured: the camera's FTP test (TestFtp) uploads <Name>_00_<time>.txt.
+  it('removes the camera’s FTP test file quietly, without counting a failure', async () => {
+    const { indexer, upload } = setup();
+    const u = upload('Den_00_20260927144657.txt', Buffer.from('test'));
+    expect(await indexer.add(u)).toBeNull();
+    expect(existsSync(u.tmpFile)).toBe(false);
+    expect(indexer.failures()).toBe(0);
+  });
+
   it('drops a file with an unknown name', async () => {
     const { indexer, upload } = setup();
     const u = upload('whatever.mp4', readFileSync(clipFile));

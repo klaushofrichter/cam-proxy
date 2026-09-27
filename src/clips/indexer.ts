@@ -100,6 +100,12 @@ export class ClipIndexer {
   }
 
   private async index(u: Upload): Promise<ClipRow | null> {
+    // The camera's FTP test (TestFtp) uploads <Name>_00_<time>.txt: not a clip,
+    // not a failure (removed in add()'s finally).
+    if (/_00_\d{14}\.txt$/.test(u.name)) {
+      logger.debug({ name: u.name }, 'ftp_test_file');
+      return null;
+    }
     const parsed = parseClipName(u.name);
     if (!parsed) {
       this.failed++;
