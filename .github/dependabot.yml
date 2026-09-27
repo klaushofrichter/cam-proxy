@@ -1,0 +1,72 @@
+version: 2
+
+# Version updates. Note these are only half the story: the security half
+# (Dependabot alerts + security updates) is a repo setting, not config, and
+# both must stay switched on under Settings > Code security.
+#
+# PRs land on main, which is unprotected, and reach production through the
+# normal main -> production promotion. Nothing here deploys on its own.
+updates:
+  # Application dependencies.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Chicago
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    commit-message:
+      prefix: deps
+      prefix-development: deps-dev
+    groups:
+      # One PR per group rather than per package: this repo's checks take
+      # minutes each, and a dozen single-package PRs would run them a dozen
+      # times for changes that are reviewed together anyway.
+      production-dependencies:
+        dependency-type: production
+        update-types:
+          - minor
+          - patch
+      development-dependencies:
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+    # Majors stay ungrouped and arrive one at a time - those are the ones that
+    # need reading, not batch-merging.
+
+  # Workflow actions. This is what would have surfaced the actions/checkout and
+  # docker/build-push-action majors that had to be chased down by hand after a
+  # Node 20 runtime deprecation warning.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Chicago
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # The runtime base image (node:<major>-alpine in both Dockerfile stages).
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Chicago
+    labels:
+      - dependencies
+    commit-message:
+      prefix: docker

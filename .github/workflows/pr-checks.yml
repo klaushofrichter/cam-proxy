@@ -1,0 +1,80 @@
+name: PR checks
+
+on:
+  pull_request:
+    branches: [main, production]
+
+# Least privilege for the PR checks; the codeql job asks for more itself.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - run: npm ci
+      - run: sudo rm -f /etc/apt/sources.list.d/google-chrome.list
+      # cam-sim, the simulated camera the tests run against, builds its
+      # test-pattern media with ffmpeg; its RTSP needs MediaMTX.
+      - name: Ensure ffmpeg
+        run: command -v ffmpeg || (sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg)
+      - name: Install MediaMTX (cam-sim RTSP)
+        run: |
+          p=$(scripts/install-mediamtx.sh "$RUNNER_TEMP/mediamtx")
+          echo "CAMSIM_MEDIAMTX=$p" >> "$GITHUB_ENV"
+      - run: npm test
+      - run: npm run build
+      - run: npm run lint:types
+      # Blocking for what ships; dev-only findings are reported only.
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm audit --audit-level=high || echo "::warning::dev-only dependencies have audit findings (see above)"
+      # No camera footage or other media is committed.
+      - name: No media files in the repository
+        run: |
+          if git ls-files | grep -Ei '\.(mp4|flv|jpe?g|png|h26[45]|aac|mov|mkv|pack)$'; then
+            echo "::error::media files are not allowed in this repository"; exit 1
+          fi
+
+  codeql:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript
+      - uses: github/codeql-action/analyze@v4
+        with:
+          output: sarif-results
+          upload: never
+      - name: Fail if CodeQL found any results
+        run: |
+          set -euo pipefail
+          accepted=.github/codeql-accepted.tsv
+          blocking=0
+          for f in sarif-results/*.sarif; do
+            while IFS=$'\t' read -r rule uri line message; do
+              [ -n "$rule" ] || continue
+              if grep -v '^#' "$accepted" | awk -F'\t' -v r="$rule" -v p="$uri" '$1==r && $2==p {found=1} END {exit !found}'; then
+                echo "::notice::CodeQL $rule at $uri:$line — accepted exception, see $accepted"
+              else
+                echo "::error::CodeQL $rule — $message"
+                echo "    at $uri:$line"
+                blocking=$((blocking + 1))
+              fi
+            done < <(jq -r '.runs[].results[]
+              | select((.suppressions // []) | length == 0)
+              | [.ruleId,
+                 .locations[0].physicalLocation.artifactLocation.uri,
+                 (.locations[0].physicalLocation.region.startLine | tostring),
+                 .message.text] | @tsv' "$f")
+          done
+          echo "CodeQL blocking findings: $blocking"
+          [ "$blocking" -eq 0 ] || { echo "::error::CodeQL found $blocking unaccepted finding(s)"; exit 1; }

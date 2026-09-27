@@ -1,0 +1,3 @@
+# Accepted CodeQL findings. The gate in pr-checks.yml ignores exactly
+# these, and nothing else. Changing this file takes a pull request.
+# Format: ruleId<TAB>path<TAB>reason
