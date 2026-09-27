@@ -22,10 +22,10 @@ jobs:
       # test-pattern media with ffmpeg; its RTSP needs MediaMTX.
       - name: Ensure ffmpeg
         run: command -v ffmpeg || (sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg)
-      - name: Install MediaMTX (cam-sim RTSP)
+      - name: Install MediaMTX (cam-sim RTSP) and go2rtc
         run: |
-          p=$(scripts/install-mediamtx.sh "$RUNNER_TEMP/mediamtx")
-          echo "CAMSIM_MEDIAMTX=$p" >> "$GITHUB_ENV"
+          echo "CAMSIM_MEDIAMTX=$(scripts/install-mediamtx.sh "$RUNNER_TEMP/mediamtx")" >> "$GITHUB_ENV"
+          echo "CAMPROXY_TEST_GO2RTC=$(scripts/install-go2rtc.sh "$RUNNER_TEMP/go2rtc")" >> "$GITHUB_ENV"
       - run: npm test
       - run: npm run build
       - run: npm run lint:types
@@ -50,6 +50,10 @@ jobs:
       - run: sudo rm -f /etc/apt/sources.list.d/google-chrome.list
       - name: Ensure ffmpeg (cam-sim fixtures)
         run: command -v ffmpeg || (sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg)
+      - name: Install MediaMTX (cam-sim RTSP) and go2rtc
+        run: |
+          echo "CAMSIM_MEDIAMTX=$(scripts/install-mediamtx.sh "$RUNNER_TEMP/mediamtx")" >> "$GITHUB_ENV"
+          echo "CAMPROXY_TEST_GO2RTC=$(scripts/install-go2rtc.sh "$RUNNER_TEMP/go2rtc")" >> "$GITHUB_ENV"
       - run: npm run build
       - run: npm run check
       - run: google-chrome --version
