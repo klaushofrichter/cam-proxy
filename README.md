@@ -1,16 +1,218 @@
 # cam-proxy
 
-A gateway next to a Reolink camera (RLC-1224A). It is the camera's only
-client, stores what matters (stills every second, events, clips), and offers
-a clean API with a live, resumable SSE event stream, so apps such as
-[cams](https://github.com/klaushofrichter/cams) don't depend on the camera's
-quirks.
+A gateway next to a Reolink camera (RLC-1224A). It becomes the camera's only
+client, keeps what matters, and serves it through a clean API with a live,
+resumable Server-Sent Events stream. Apps such as
+[cams](https://github.com/klaushofrichter/cams) no longer depend on the
+camera's quirks (one search at a time, few logins, broken downloads, no push).
 
-**Status:** requirements only; see [docs/requirements.md](docs/requirements.md).
-Development uses [cam-sim](https://github.com/klaushofrichter/cam-sim), a
-simulated camera, and the real camera for verification.
+**Status:** phase 1 (core) is built:
+- camera status and ONVIF events, with a polling fallback;
+- the event catalog;
+- the resumable SSE stream;
+- the client API and control API;
+- the admin UI.
+
+Stills and previews, clips, the cams integration and deployment follow; see
+the [design spec](docs/superpowers/specs/2026-09-27-cam-proxy-design.md) and
+the [requirements](docs/requirements.md).
 
 Targets: a Raspberry Pi 4 next to the real camera, and the k3s cluster next to
-`cam2` (cam-sim), both production. A Mac runs it for development.
+`cam2` (a [cam-sim](https://github.com/klaushofrichter/cam-sim) simulated
+camera), both production. A Mac runs it for development on `localhost:8480`.
+
+## Contents
+
+- [Quick start (Mac, against cam-sim)](#quick-start-mac-against-cam-sim)
+- [Configuration](#configuration)
+- [Client API](#client-api)
+- [Event stream (SSE)](#event-stream-sse)
+- [Control API and admin UI](#control-api-and-admin-ui)
+- [Metrics](#metrics)
+- [Development](#development)
+
+## Quick start (Mac, against cam-sim)
+
+```sh
+npm ci
+npm run build                      # server and admin UI
+scripts/sync-secrets.sh            # generates CAMPROXY_TOKENS and CAMPROXY_ADMIN_TOKEN into .env
+```
+
+Start a cam-sim with a `proxy` user (in its own checkout):
+
+```sh
+CAMSIM_USERS='proxy:admin:<password>' CAMSIM_CONTROL_TOKEN='<token>' CAMSIM_WEB_UI=true npm run dev
+```
+
+Point the proxy at it with a `config.json` in this folder:
+
+```json
+{ "camera": { "host": "127.0.0.1:8080", "protocol": "http", "onvifPort": 8000, "rtspPort": 8554 } }
+```
+
+Add `CAMPROXY_CAMERA_PASSWORD=<password>` to `.env`, then run `npm run dev`.
+The admin UI is at <http://localhost:8480>; sign in with
+`CAMPROXY_ADMIN_TOKEN`.
+
+## Configuration
+
+**One file, `config.json`, holds every setting that isn't a secret.** Secrets
+come only from the environment.
+
+- **Where:** `./config.json`, or the path in `CAMPROXY_CONFIG`.
+  `config.example.json` shows every setting with its default, and
+  `config.schema.json` lets editors check the file.
+- **Defaults:** the file needs only what differs, usually the camera.
+- **Validation:** an unknown key or a bad value stops the start, naming the
+  setting (e.g. `stills.intervall: unknown setting`).
+- **Changed in the admin UI** (or `PUT /control/config`): the change is stored
+  as an override in `<dataDir>/overrides.json`. The effective value is
+  default, then file, then override.
+- **Live or restart:** most settings apply at once. Camera, go2rtc, stills
+  and ONVIF subscription settings apply after a restart; the `restart` action
+  applies them without restarting the process. `server.port` and
+  `server.dataDir` need a new process.
+
+| Group | Settings (defaults) |
+|---|---|
+| `server` | `port` (8480), `dataDir` (`data`, relative to the config file), `logLevel` (`info`), `publicUrl` |
+| `camera` | `id` (`cam1`), `name` (`Den`), `host` (required), `protocol` (`https`), `tlsName`, `user` (`proxy`), `onvifPort` (8000), `rtspPort` (554), `statusPollS` (30) |
+| `events` | `onvif.subscribeMin` (10), `onvif.pullTimeoutS` (30), `poll.enabled` (true), `poll.intervalS` (2), `poll.afterOnvifDownS` (60), `maxOpenMin` (10) |
+| `retention` | `stillsDays` (7), `previewsDays` (14), `clipsDays` (7), `eventsDays` (30), `streamLogDays` (7), `intervalMin` (60) |
+| `storage` | `maxPercent` (85) or `maxBytes`, `minFreeBytes` (2 GB), `keepHours` |
+| `sse` | `maxClients` (50), `queuePerClient` (1000), `pingS` (15) |
+| `go2rtc`, `stills`, `previews`, `ftp` | used from phase 2 on; see the spec |
+
+| Secret (environment, or `<NAME>_FILE`) | |
+|---|---|
+| `CAMPROXY_TOKENS` | client tokens, comma-separated, at least 32 characters each (a second token allows rotation without downtime) |
+| `CAMPROXY_ADMIN_TOKEN` | the control API and admin UI; different from every client token |
+| `CAMPROXY_CAMERA_PASSWORD` | the password of the proxy's camera user (`camera.user`) |
+| `CAMPROXY_FTP_PASSWORD` | the camera's FTP login to the proxy; required when `ftp.enabled` |
+
+`scripts/sync-secrets.sh` generates the tokens into `.env` (mode 600),
+`--rotate <KEY>` replaces one, and it prints names only. Syncing to GitHub and
+the cluster comes with deployment.
+
+## Client API
+
+Base URL `http://<host>:8480/api`. Every request needs
+`Authorization: Bearer <token>`: a client token, the admin token, or an admin
+UI session.
+- A missing or wrong token answers 401 `{"error":"unauthorized"}`.
+- A token in the URL (`?token=`, `?access_token=`) answers 400
+  `{"error":"token_in_url"}`.
+
+Any one client may send 1200 requests a minute; more answer 429
+`{"error":"rate_limited"}`. Timestamps are unix milliseconds. The full schema is in
+[openapi.yaml](openapi.yaml).
+
+```sh
+api() { curl -s -H "Authorization: Bearer $CAMPROXY_TOKEN" "http://localhost:8480/api$1"; }
+api /cameras
+# [{"id":"cam1","name":"Den","online":true,"lastEventTs":1790000000000,"stream":null}]
+api '/cameras/cam1/events?kind=person&limit=10'
+# [{"id":12,"kind":"person","source":"onvif","start":1790000000000,"end":1790000004000,"endReason":"state"}]
+```
+
+- `GET /api/cameras`: the camera and whether it answers.
+- `GET /api/cameras/{cam}/events?from&to&kind&limit`: events, newest first,
+  at most 1000.
+  - `source` is `onvif`, or `poll` for the fallback.
+  - `endReason` is `state` (the camera said so), `timeout` (still open after
+    `events.maxOpenMin`) or `restart` (the proxy stopped while it was open).
+- `GET /health`: the process is up (no auth).
+
+## Event stream (SSE)
+
+`GET /api/stream?cam&types&kinds&since`: a Server-Sent Events stream that
+never loses anything within the retention (default 7 days).
+
+- **Resume:** every message carries an `id`. On reconnect, browsers send
+  `Last-Event-ID` themselves, and other clients use `?since=<id>`. The proxy
+  replays everything newer, then continues live, also after a restart.
+- **Too far behind:** if the resume point is older than the retention, the
+  first message is `event: reset` with `{"oldestId":N}`. Reload through the
+  REST API, then continue.
+- **Types:**
+  - `camera-event`: `{cam, eventId, kind, phase: start|end, ts, source}`;
+  - `camera-status`: `{cam, online, reason, clockOffsetMs}`;
+  - `clip`, `annotation`: later phases;
+  - `still`: only when named in `types`, because it fires every second.
+- **Filters:** `types` and `kinds` (e.g. `kinds=person,vehicle`) are comma
+  lists.
+- **Keep-alive and backpressure:**
+  - a `: ping` every 15 s, and `retry: 3000`;
+  - a client that can't keep up is disconnected, and resumes from its last id;
+  - at most `sse.maxClients` clients (503 beyond).
+
+```sh
+curl -N -H "Authorization: Bearer $CAMPROXY_TOKEN" 'http://localhost:8480/api/stream?types=camera-event'
+# id: 41
+# event: camera-event
+# data: {"cam":"cam1","eventId":12,"kind":"person","phase":"start","ts":1790000000000,"source":"onvif"}
+```
+
+A camera person detection also sets motion, as on the real camera, so both
+arrive.
+
+## Control API and admin UI
+
+`/control` needs the admin token, or an admin UI session.
+- A client token answers 403 `{"error":"admin_only"}`.
+- Writes with the session cookie need `X-CamProxy-UI: 1`.
+
+| Route | |
+|---|---|
+| `GET /control/status` | camera, event intake (ONVIF state, source, re-subscriptions), SSE clients, last retention |
+| `GET /control/stats` | disk (catalog, free, size), events stored per kind, stream log rows, storage budget |
+| `GET /control/config` | every setting: `{value, source, restart, pending, next?}`; secrets never appear |
+| `PUT /control/config` | overrides, e.g. `{"sse":{"pingS":10}}`; a bad value answers 400 naming it, and nothing is written |
+| `DELETE /control/config/{path}` | removes one override |
+| `POST /control/actions/{name}` | `onvif-resubscribe`, `camera-test`, `retention-run` (`{"dryRun":true}` previews), `restart` |
+| `GET /control/log?limit` | recent log lines (info and above), redacted |
+| `POST /control/login` / `logout`, `GET /control/session` | the admin UI's session cookie (`camproxy_session`, HttpOnly, SameSite=Strict, 12 h; 20 sign-ins per 15 min) |
+
+The **admin UI** at `/` signs in with the admin token once; the token is
+exchanged for the cookie and not stored in the browser.
+
+- **Status:** camera, events, storage and stream.
+- **Events:** the live stream and the last 100 events.
+- **Settings:** every setting with its source; changes become overrides, and
+  can be reset.
+- **Maintenance:** the actions and the log.
+
+## Metrics
+
+`GET /metrics` gives Prometheus text, without auth and counts only:
+- `camproxy_disk_bytes{kind}`, `camproxy_disk_free_bytes`,
+  `camproxy_disk_size_bytes`;
+- `camproxy_events_total`, `camproxy_events_stored`;
+- `camproxy_onvif_subscribed`, `camproxy_onvif_resubscribes_total`;
+- `camproxy_camera_up`, `camproxy_camera_request_seconds`,
+  `camproxy_camera_errors_total`;
+- `camproxy_sse_clients`, `camproxy_sse_messages_total`,
+  `camproxy_stream_log_rows`;
+- `camproxy_retention_deleted_total`,
+  `camproxy_retention_last_run_timestamp_seconds`;
+- `camproxy_build_info`.
+
+## Development
+
+```sh
+npm test            # vitest, against cam-sim in process (needs ffmpeg)
+npm run test:e2e    # Playwright (Chrome) against a proxy and a cam-sim
+npm run lint:types && npm run check
+npm run schema      # regenerate config.schema.json after changing a setting
+```
+
+- **Real camera:** `npx tsx scripts/verify-camera.ts [seconds]` runs the
+  proxy against the real camera. It is read-only: it signs in, checks status,
+  subscribes to ONVIF, then unsubscribes and logs out. It signs in as the
+  camera user `proxy` (password `CAMPROXY_CAMERA_PASSWORD` in `.env`), with the
+  camera address from `~/Development/reolink/.env`.
+- **CI:** tests, e2e, type checks, `npm audit`, CodeQL, and a check that no
+  media file is committed. `production` requires the tests and CodeQL.
 
 MIT licence.

@@ -517,7 +517,7 @@ Same style as cam-sim:
 
 Each phase ends with something usable, released.
 
-1. **Core:**
+1. **Core** (built 2026-09-27, Plan 1; verified read-only against the real camera):
    - config and the camera client;
    - the status poller;
    - ONVIF events with the polling fallback;
