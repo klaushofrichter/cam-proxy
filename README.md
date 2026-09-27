@@ -40,7 +40,7 @@ camera), both production. A Mac runs it for development on `localhost:8480`.
 npm ci
 scripts/install-go2rtc.sh          # go2rtc 1.9.14 into tools/ (checksums pinned)
 npm run build                      # server and admin UI
-scripts/sync-secrets.sh            # generates CAMPROXY_TOKENS and CAMPROXY_ADMIN_TOKEN into .env
+scripts/sync-secrets.sh            # generates the tokens and the FTP password into .env
 ```
 
 Start a cam-sim with a `proxy` user (in its own checkout):
@@ -99,9 +99,14 @@ come only from the environment.
 | `CAMPROXY_CAMERA_PASSWORD` | the password of the proxy's camera user (`camera.user`) |
 | `CAMPROXY_FTP_PASSWORD` | the camera's FTP login to the proxy; required when `ftp.enabled` |
 
-`scripts/sync-secrets.sh` generates the tokens into `.env` (mode 600),
-`--rotate <KEY>` replaces one, and it prints names only. Syncing to GitHub and
-the cluster comes with deployment.
+`scripts/sync-secrets.sh` generates the tokens and the FTP password into
+`.env` (mode 600), `--rotate <KEY>` replaces one, and it prints names only.
+It refuses a file others can read and values with an inline comment. For the
+cluster, a separate file holds cam2's values and the kube settings
+(`.env.example` lists them): `--env-file .env.cluster --only all` sets the
+repo secret `KUBE_SETUP_DEPLOY_TOKEN` and applies the Secret
+`cam-proxy-secrets` (values on stdin or in a private temporary file, never in
+arguments).
 
 ## Client API
 
