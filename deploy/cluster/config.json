@@ -1,0 +1,16 @@
+{
+  "server": { "port": 8480, "dataDir": "/data", "logLevel": "info", "publicUrl": "https://cam-proxy.skylar.technology" },
+  "camera": {
+    "id": "cam2",
+    "name": "cam2",
+    "host": "cam2.cam-sim.svc.cluster.local:443",
+    "protocol": "https",
+    "tlsName": "cam2.skylar.technology",
+    "user": "proxy",
+    "onvifPort": 8000,
+    "rtspPort": 554,
+    "statusPollS": 30
+  },
+  "stills": { "enabled": true, "stream": "sub" },
+  "ftp": { "enabled": true, "port": 2121, "passive": "30000-30009", "publicHost": "cam-proxy.cam-proxy.svc.cluster.local", "tls": true }
+}

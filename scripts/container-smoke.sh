@@ -27,18 +27,19 @@ docker run --rm --entrypoint go2rtc "$IMAGE" -version >/dev/null || fail "go2rtc
 docker run --rm --entrypoint ffmpeg "$IMAGE" -version >/dev/null || fail "ffmpeg does not run"
 [ "$(docker run --rm --entrypoint id "$IMAGE" -u)" = 1000 ] || fail "not running as uid 1000"
 
-# A camera that isn't there: the proxy must start and serve anyway.
+# A camera that isn't there: the proxy must start and serve anyway, with a
+# read-only root filesystem and /tmp as tmpfs, as in the cluster.
 cat > "$TMP/config.json" <<'JSON'
 { "server": { "dataDir": "/data", "logLevel": "warn" },
   "camera": { "host": "127.0.0.1:9", "protocol": "http", "statusPollS": 30 },
-  "stills": { "enabled": false } }
+  "stills": { "enabled": true } }
 JSON
 chmod 644 "$TMP/config.json"
 CLIENT=$(openssl rand -hex 32)
 ADMIN=$(openssl rand -hex 32)
 docker volume create "$VOL" >/dev/null
 CAMPROXY_TOKENS=$CLIENT CAMPROXY_ADMIN_TOKEN=$ADMIN CAMPROXY_CAMERA_PASSWORD=none \
-  docker run -d --name "$NAME" -p "127.0.0.1:$PORT:8480" \
+  docker run -d --name "$NAME" -p "127.0.0.1:$PORT:8480" --read-only --tmpfs /tmp:size=16m \
   -e CAMPROXY_TOKENS -e CAMPROXY_ADMIN_TOKEN -e CAMPROXY_CAMERA_PASSWORD \
   -e CAMPROXY_CONFIG=/config/config.json -v "$TMP/config.json:/config/config.json:ro" \
   -v "$VOL:/data" "$IMAGE" >/dev/null
@@ -55,4 +56,6 @@ done
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $CLIENT" "http://127.0.0.1:$PORT/api/cameras")" = 200 ] || fail "/api with the token is not 200"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/")" = 200 ] || fail "the admin UI is not served"
 docker exec "$NAME" test -s /data/catalog.sqlite || fail "no catalog in /data"
+for _ in $(seq 1 20); do docker exec "$NAME" pgrep -x go2rtc >/dev/null && break; sleep 0.5; done
+docker exec "$NAME" pgrep -x go2rtc >/dev/null || fail "go2rtc is not running"
 echo "container smoke: ok"

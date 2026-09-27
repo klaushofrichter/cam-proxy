@@ -32,6 +32,7 @@ camera), both production. A Mac runs it for development on `localhost:8480`.
 - [Event stream (SSE)](#event-stream-sse)
 - [Control API and admin UI](#control-api-and-admin-ui)
 - [Metrics](#metrics)
+- [Deployment](#deployment)
 - [Development](#development)
 
 ## Quick start (Mac, against cam-sim)
@@ -306,6 +307,27 @@ exchanged for the cookie and not stored in the browser.
 - `camproxy_retention_deleted_total`,
   `camproxy_retention_last_run_timestamp_seconds`;
 - `camproxy_build_info`.
+
+## Deployment
+
+One image, `ghcr.io/klaushofrichter/cam-proxy`, for linux/amd64 and
+linux/arm64. It holds Node 26, go2rtc and ffmpeg, and runs as uid 1000. It
+needs a `config.json` (`CAMPROXY_CONFIG`) whose `server.dataDir` is the `/data`
+volume, plus the `CAMPROXY_*` secrets. `scripts/container-smoke.sh` builds it
+and checks it as the cluster runs it.
+
+- **Branches:** a merge to `main` publishes `:main` and `:sha-<sha>`. A merge
+  to `production` releases `v<YYYY.MM.DD.N>` and `:latest`, and deploys to
+  the cluster (see below).
+- **Cluster** (next to cam2, `https://cam-proxy.skylar.technology`, LAN
+  only):
+  - The manifests live in kube-setup ([request](deploy/cluster/REQUEST.md)).
+  - The ConfigMap is [`deploy/cluster/config.json`](deploy/cluster/config.json).
+  - The release job pins the image digest in kube-setup, pushes, applies,
+    waits for the rollout, and checks that `/health` serves the new version.
+  - Secrets: `scripts/sync-secrets.sh --env-file .env.cluster --only all`.
+- **Raspberry Pi:** [`compose.yaml`](compose.yaml): host networking, `/data`
+  on the SSD, and `docker compose pull && docker compose up -d` to update.
 
 ## Development
 
