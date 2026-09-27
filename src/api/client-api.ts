@@ -1,4 +1,6 @@
 import express, { type Request, type Response } from 'express';
+import { resolve } from 'path';
+import { clipById, listClips, overlappingEvents, type ClipRow } from '../catalog/clips';
 import type { Catalog } from '../catalog/db';
 import { listEvents, type EventRow } from '../catalog/events';
 import type { Config } from '../config/defaults';
@@ -81,6 +83,42 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     if (minute === null || minute % 60_000 !== 0) return minute === null ? bad(res, 'a sprite is <minute unix ms>.jpg') : void res.status(404).json({ error: 'not_found' });
     const st = store(req, res);
     if (st) sendJpeg(res, await st.readSprite(minute), !st.isCurrent(minute));
+  });
+
+  // Clips (spec §9, §10): lists over at most 31 days; files with HTTP Range.
+  const clipBase = () => `/api/cameras/${encodeURIComponent(cam().id)}/clips`;
+  const clipJson = (c: ClipRow) => ({
+    id: c.id,
+    start: c.start_ts,
+    end: c.end_ts,
+    stream: c.stream,
+    size: c.size,
+    events: overlappingEvents(d.catalog, c.cam, c.start_ts, c.end_ts ?? c.start_ts),
+    url: `${clipBase()}/${c.id}.mp4`,
+    snapshotUrl: c.snapshot ? `${clipBase()}/${c.id}.jpg` : null,
+  });
+  r.get('/cameras/:cam/clips', (req, res) => {
+    if (!known(req, res)) return;
+    const from = intParam(req.query.from), to = intParam(req.query.to);
+    if (from === undefined || to === undefined || from === null || to === null || to < from) return bad(res, 'from and to (unix ms) are required');
+    if (to - from > 31 * DAY) return bad(res, 'at most 31 days per request');
+    res.json(listClips(d.catalog, cam().id, from, to).map(clipJson));
+  });
+  r.get('/cameras/:cam/clips/:file', (req, res) => {
+    const m = /^(\d{1,15})\.(mp4|jpg)$/.exec(req.params.file);
+    if (!m) return bad(res, 'a clip is <id>.mp4, its snapshot <id>.jpg');
+    if (!known(req, res)) return;
+    const clip = clipById(d.catalog, Number(m[1]));
+    const file = clip?.cam === cam().id ? (m[2] === 'mp4' ? clip.path : clip.snapshot) : null;
+    if (!file) return void res.status(404).json({ error: 'not_found' });
+    res.setHeader('Cache-Control', 'private, max-age=604800, immutable');
+    res.sendFile(resolve(file), { cacheControl: false, acceptRanges: true, dotfiles: 'allow', headers: { 'Content-Type': m[2] === 'mp4' ? 'video/mp4' : 'image/jpeg' } }, (err) => {
+      if (!err || res.headersSent) return;
+      const status = (err as { status?: number }).status;
+      // 416 carries its Content-Range (bytes */size) already.
+      if (status === 416) return void res.status(416).end();
+      res.status(status === 404 ? 404 : 500).json({ error: status === 404 ? 'not_found' : 'internal' });
+    });
   });
 
   r.get('/stream', d.sse);

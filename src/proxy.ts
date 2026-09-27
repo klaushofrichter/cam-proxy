@@ -208,7 +208,8 @@ export function createProxy(initial: Loaded): Proxy {
   // Far above real use (the UI, cams, a scraper); stops a flood. SSE is one
   // long request. Still and sprite images have their own, higher limit: a
   // day on the timeline is up to 1440 sprites.
-  const IMAGE = /^\/api\/cameras\/[^/]+\/(stills|previews)\/\d{1,15}\.jpg$/;
+  // Clip files too: a seeking video player sends many range requests.
+  const IMAGE = /^\/api\/cameras\/[^/]+\/((stills|previews)\/\d{1,15}\.jpg|clips\/\d{1,15}\.(mp4|jpg))$/;
   const isImage = (req: Request) => req.method === 'GET' && IMAGE.test(req.path);
   app.use(rateLimit({ windowMs: 60_000, limit: 1200, skip: isImage, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } }));
   app.use(rateLimit({ windowMs: 60_000, limit: 6000, skip: (req) => !isImage(req), standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } }));
