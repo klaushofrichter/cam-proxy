@@ -291,6 +291,21 @@ describe('ReolinkClient recordings', () => {
     // one GetTime only: cached
   });
 
+  // Final review: an expired cache and a camera that doesn't answer must not
+  // lose a clip that was fully received; the last known zone is used.
+  it('falls back to the last known time zone when GetTime fails', async () => {
+    let now = Date.now();
+    const client = new ReolinkClient(cam, { now: () => now });
+    const t = await client.timeInfo();
+    now += 2 * 3600_000;
+    state.offline = true;
+    try {
+      expect(await client.timeInfo()).toEqual(t);
+    } finally {
+      state.offline = false;
+    }
+  });
+
   // Firmware: Download with a bad token answers 401 text/html (empty).
 });
 

@@ -319,7 +319,14 @@ export class ReolinkClient {
 
   async timeInfo(): Promise<TimeInfo> {
     if (this.time && this.now() - this.time.at < 3600_000) return this.time.value;
-    const value = timeInfoFromGetTime(await this.command<unknown>('GetTime'));
+    let value: TimeInfo;
+    try {
+      value = timeInfoFromGetTime(await this.command<unknown>('GetTime'));
+    } catch (err) {
+      // The zone rarely changes: an older answer beats losing a clip.
+      if (this.time) return this.time.value;
+      throw err;
+    }
     this.time = { value, at: this.now() };
     return value;
   }

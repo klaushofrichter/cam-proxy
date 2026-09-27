@@ -1,4 +1,5 @@
 import { randomBytes, timingSafeEqual, createHash } from 'crypto';
+import { lookup as dnsLookup } from 'dns/promises';
 import { EventEmitter } from 'events';
 import { createWriteStream, mkdirSync, unlinkSync } from 'fs';
 import net from 'net';
@@ -27,11 +28,19 @@ export interface FtpServerOptions {
   tls?: { cert: string; key: string }; // then TLS is required (AUTH TLS, PROT P)
   root: string; // uploads land in <root>/.incoming
   maxBytes?: number;
-  maxSessions?: number;
+  maxSessions?: number; // logged-in sessions
+  maxPreLoginPerIp?: number; // connections not logged in yet, per address
+  timeouts?: { preLoginMs?: number; idleMs?: number; dataMs?: number };
   log?: (line: string) => void; // command names and paths, never the password
+  now?: () => number;
+  lookup?: (host: string) => Promise<string>; // publicHost name → IPv4
 }
 
 const MAX_LINE = 4096;
+const FAILURE_WINDOW = 60_000;
+const MAX_FAILURES = 5;
+const IPV4 = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+const plainIp = (a: string | undefined) => (a ?? '').replace(/^::ffff:/, '');
 const OPEN = new Set(['USER', 'PASS', 'AUTH', 'QUIT', 'SYST', 'FEAT', 'NOOP', 'PBSZ', 'PROT', 'OPTS']);
 const KNOWN = new Set([...OPEN, 'PWD', 'XPWD', 'CWD', 'CDUP', 'MKD', 'XMKD', 'TYPE', 'MODE', 'STRU', 'PASV', 'EPSV', 'STOR', 'SIZE']);
 const digest = (s: string) => createHash('sha256').update(s).digest();
@@ -45,6 +54,9 @@ interface Session {
   authed: boolean;
   cwd: string;
   closed: boolean;
+  ip: string;
+  busy: boolean; // a transfer runs: the control connection is quiet on purpose
+  timer?: NodeJS.Timeout;
   pasv?: { server: net.Server; conn: Promise<net.Socket> };
 }
 
@@ -55,6 +67,11 @@ export class FtpServer extends EventEmitter {
   private readonly incoming: string;
   private secureContext: tls.SecureContext | undefined;
   private nextPassive: number;
+  // Everything open, so stop() can end it all: control and data sockets
+  // (refused ones too) and passive listeners.
+  private readonly sockets = new Set<net.Socket>();
+  private readonly passiveListeners = new Set<net.Server>();
+  private pasvAddress: string | undefined;
 
   constructor(private readonly o: FtpServerOptions) {
     super();
@@ -71,8 +88,35 @@ export class FtpServer extends EventEmitter {
     return this.sessionsOpen.size;
   }
 
-  start(): Promise<number> {
+  private now(): number {
+    return (this.o.now ?? Date.now)();
+  }
+
+  private track<T extends net.Socket>(sock: T): T {
+    this.sockets.add(sock);
+    sock.once('close', () => this.sockets.delete(sock));
+    return sock;
+  }
+
+  // The IPv4 address PASV announces: publicHost (a name is resolved once), or
+  // else the control connection's own address.
+  private async resolvePublicHost(): Promise<void> {
+    const h = this.o.publicHost;
+    this.pasvAddress = undefined;
+    if (!h) return;
+    if (IPV4.test(h)) return void (this.pasvAddress = h);
+    try {
+      const a = await (this.o.lookup ?? (async (x: string) => (await dnsLookup(x, { family: 4 })).address))(h);
+      if (IPV4.test(a)) this.pasvAddress = a;
+    } catch {
+      // below
+    }
+    if (!this.pasvAddress) this.log(`publicHost ${h} has no IPv4 address; PASV announces the connection's own address`);
+  }
+
+  async start(): Promise<number> {
     mkdirSync(this.incoming, { recursive: true });
+    await this.resolvePublicHost();
     const server = net.createServer((socket) => this.session(socket));
     this.server = server;
     return new Promise((resolve, reject) => {
@@ -84,10 +128,13 @@ export class FtpServer extends EventEmitter {
   async stop(): Promise<void> {
     for (const s of this.sessionsOpen) {
       s.closed = true;
-      s.pasv?.server.close();
-      s.stream.destroy();
+      clearTimeout(s.timer);
     }
     this.sessionsOpen.clear();
+    for (const l of this.passiveListeners) l.close();
+    this.passiveListeners.clear();
+    for (const sock of this.sockets) sock.destroy();
+    this.sockets.clear();
     const server = this.server;
     this.server = undefined;
     if (server) await new Promise<void>((r) => server.close(() => r()));
@@ -100,26 +147,36 @@ export class FtpServer extends EventEmitter {
   }
 
   private session(socket: net.Socket): void {
-    if (this.sessionsOpen.size >= (this.o.maxSessions ?? 4)) {
+    this.track(socket);
+    socket.on('error', () => undefined);
+    const ip = plainIp(socket.remoteAddress);
+    // Connections that haven't logged in are limited per address and time
+    // out quickly, so nobody on the LAN can hold the camera's slots.
+    const preLogin = [...this.sessionsOpen].filter((x) => !x.authed && x.ip === ip).length;
+    if (preLogin >= (this.o.maxPreLoginPerIp ?? 2) || this.sessionsOpen.size >= (this.o.maxSessions ?? 4) + 8) {
+      this.log(`refused ${ip}`);
       socket.end('421 Too many connections\r\n');
+      setTimeout(() => socket.destroy(), 1000).unref();
       return;
     }
-    this.log(`connect ${socket.remoteAddress ?? '?'}`);
-    const s: Session = { stream: socket, secure: false, prot: 'C', authed: false, cwd: '/', closed: false };
+    this.log(`connect ${ip}`);
+    const s: Session = { stream: socket, secure: false, prot: 'C', authed: false, cwd: '/', closed: false, ip, busy: false };
     this.sessionsOpen.add(s);
-    const ip = socket.remoteAddress ?? '';
     const reply = (line: string) => {
       if (!s.closed && !s.stream.destroyed) s.stream.write(`${line}\r\n`);
     };
     const close = () => {
       if (s.closed) return;
       s.closed = true;
-      s.pasv?.server.close();
+      clearTimeout(s.timer);
+      if (s.pasv) (s.pasv.server.close(), this.passiveListeners.delete(s.pasv.server));
       this.sessionsOpen.delete(s);
     };
+    s.stream.on('close', () => socket.destroy());
 
     let buf = '';
     const onData = (chunk: Buffer) => {
+      this.arm(s);
       buf += chunk.toString('utf8');
       if (buf.length > MAX_LINE && buf.indexOf('\r\n') < 0) {
         s.stream.destroy();
@@ -129,7 +186,7 @@ export class FtpServer extends EventEmitter {
       while ((i = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, i).replace(/\r$/, '');
         buf = buf.slice(i + 1);
-        void this.command(s, line, reply, ip, attach);
+        void this.command(s, line, reply, attach);
       }
     };
     const attach = (stream: net.Socket) => {
@@ -140,9 +197,24 @@ export class FtpServer extends EventEmitter {
       stream.on('close', close);
     };
     socket.on('data', onData);
-    socket.on('error', () => undefined);
     socket.on('close', close);
+    this.arm(s);
     reply('220 cam-proxy FTP ready');
+  }
+
+  // The control connection's timeout: short until login (the TLS handshake
+  // included), longer when idle after it, none while a transfer runs.
+  private arm(s: Session): void {
+    clearTimeout(s.timer);
+    if (s.closed || s.busy) return;
+    const t = this.o.timeouts ?? {};
+    const ms = s.authed ? (t.idleMs ?? 120_000) : (t.preLoginMs ?? 10_000);
+    s.timer = setTimeout(() => {
+      this.log(`timeout ${s.ip}`);
+      if (!s.stream.destroyed) s.stream.end('421 Timeout\r\n');
+      setTimeout(() => s.stream.destroy(), 500).unref();
+    }, ms);
+    s.timer.unref();
   }
 
   private resolve(s: Session, arg: string, allowClamp: boolean): string | null {
@@ -151,15 +223,19 @@ export class FtpServer extends EventEmitter {
     return posix.resolve(s.cwd, arg);
   }
 
-  private failed(ip: string): boolean {
-    const now = Date.now();
-    const list = (this.failures.get(ip) ?? []).filter((t) => now - t < 60_000);
-    list.push(now);
-    this.failures.set(ip, list);
-    return list.length > 5;
+  // Failed logins per address in the last minute (the map is pruned as it goes).
+  private recentFailures(ip: string): number[] {
+    const now = this.now();
+    for (const [k, v] of this.failures) {
+      const kept = v.filter((t) => now - t < FAILURE_WINDOW);
+      if (kept.length) this.failures.set(k, kept);
+      else this.failures.delete(k);
+    }
+    return this.failures.get(ip) ?? [];
   }
 
-  private async command(s: Session, line: string, reply: (l: string) => void, ip: string, attach: (st: net.Socket) => void): Promise<void> {
+  private async command(s: Session, line: string, reply: (l: string) => void, attach: (st: net.Socket) => void): Promise<void> {
+    const ip = s.ip;
     const sp = line.indexOf(' ');
     const cmd = (sp < 0 ? line : line.slice(0, sp)).toUpperCase();
     const arg = sp < 0 ? '' : line.slice(sp + 1);
@@ -192,14 +268,23 @@ export class FtpServer extends EventEmitter {
         return reply('331 Password required');
       case 'PASS':
         if (needTls && !s.secure) return reply('530 TLS required (AUTH TLS)');
-        if (s.user !== undefined && same(s.user, this.o.user) && same(arg, this.o.password)) {
-          s.authed = true;
-          return reply('230 Logged in');
-        }
-        if (this.failed(ip)) {
-          reply('421 Too many failed logins');
+        // An address with 5 failures in the last minute is refused before the
+        // password is even compared.
+        if (this.recentFailures(ip).length >= MAX_FAILURES) {
+          reply('421 Too many failed logins, try later');
           return void s.stream.end();
         }
+        if (s.user !== undefined && same(s.user, this.o.user) && same(arg, this.o.password)) {
+          if ([...this.sessionsOpen].filter((x) => x.authed).length >= (this.o.maxSessions ?? 4)) {
+            reply('421 Too many sessions');
+            return void s.stream.end();
+          }
+          this.failures.delete(ip);
+          s.authed = true;
+          this.arm(s);
+          return reply('230 Logged in');
+        }
+        this.failures.set(ip, [...this.recentFailures(ip), this.now()]);
         return reply('530 Login incorrect');
       case 'SYST':
         return reply('215 UNIX Type: L8');
@@ -246,7 +331,7 @@ export class FtpServer extends EventEmitter {
   }
 
   private async passive(s: Session, cmd: string, reply: (l: string) => void): Promise<void> {
-    s.pasv?.server.close();
+    if (s.pasv) (s.pasv.server.close(), this.passiveListeners.delete(s.pasv.server));
     const [lo, hi] = this.o.passive;
     let server: net.Server | undefined;
     let port = 0;
@@ -262,21 +347,32 @@ export class FtpServer extends EventEmitter {
     }
     if (!server) return reply('425 No passive port free');
     const srv = server;
+    this.passiveListeners.add(srv);
+    const done = () => (srv.close(), this.passiveListeners.delete(srv));
     const conn = new Promise<net.Socket>((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error('no data connection')), 15_000);
-      srv.once('connection', (sock: net.Socket) => {
+      const t = setTimeout(() => (done(), reject(new Error('no data connection'))), 15_000);
+      t.unref();
+      srv.on('connection', (sock: net.Socket) => {
+        this.track(sock);
+        sock.on('error', () => undefined);
+        // Only the host of the control connection may send the data (no port
+        // stealing by another machine racing to the passive port).
+        if (plainIp(sock.remoteAddress) !== s.ip) {
+          this.log(`data connection from ${plainIp(sock.remoteAddress)} refused (session ${s.ip})`);
+          return void sock.destroy();
+        }
         clearTimeout(t);
-        srv.close();
-        if (s.prot === 'P' && this.secureContext) resolve(new tls.TLSSocket(sock, { isServer: true, secureContext: this.secureContext }));
+        done();
+        if (s.prot === 'P' && this.secureContext) resolve(this.track(new tls.TLSSocket(sock, { isServer: true, secureContext: this.secureContext })));
         else resolve(sock);
       });
     });
     conn.catch(() => undefined);
     s.pasv = { server: srv, conn };
     if (cmd === 'EPSV') return reply(`229 Entering Extended Passive Mode (|||${port}|)`);
-    const host = (this.o.publicHost ?? (s.stream.localAddress ?? '127.0.0.1').replace(/^::ffff:/, '')).replace(/[^0-9.]/g, '');
-    const parts = (/^\d+\.\d+\.\d+\.\d+$/.test(host) ? host : '127.0.0.1').split('.');
-    reply(`227 Entering Passive Mode (${parts.join(',')},${port >> 8},${port & 255})`);
+    const host = this.pasvAddress ?? plainIp(s.stream.localAddress);
+    if (!IPV4.test(host)) return reply('425 No IPv4 address for PASV, use EPSV');
+    reply(`227 Entering Passive Mode (${host.split('.').join(',')},${port >> 8},${port & 255})`);
   }
 
   private async store(s: Session, arg: string, reply: (l: string) => void): Promise<void> {
@@ -287,12 +383,18 @@ export class FtpServer extends EventEmitter {
     const pasv = s.pasv;
     s.pasv = undefined;
     reply('150 Ok to send data');
+    s.busy = true;
+    this.arm(s);
     let data: net.Socket;
     try {
       data = await pasv.conn;
     } catch {
+      s.busy = false;
+      this.arm(s);
       return reply('425 No data connection');
     }
+    // A data connection that goes quiet fails the transfer.
+    data.setTimeout(this.o.timeouts?.dataMs ?? 30_000, () => data.destroy());
     const tmpFile = join(this.incoming, randomBytes(8).toString('hex'));
     const out = createWriteStream(tmpFile);
     const max = this.o.maxBytes ?? 500 * 1024 * 1024;
@@ -302,6 +404,9 @@ export class FtpServer extends EventEmitter {
     const fail = (code: string) => {
       if (failed) return;
       failed = true;
+      s.busy = false;
+      this.arm(s);
+      data.destroy();
       out.destroy();
       try {
         unlinkSync(tmpFile);
@@ -320,6 +425,11 @@ export class FtpServer extends EventEmitter {
     });
     data.on('end', () => (ended = true));
     data.on('error', () => undefined);
+    // Disk full, permissions, a failing card: the transfer fails, the process stays.
+    out.on('error', (err) => {
+      this.log(`write error: ${(err as NodeJS.ErrnoException).code ?? err.message}`);
+      fail('451 Local error writing the file');
+    });
     data.pipe(out);
     data.on('close', () => {
       if (failed) return;
@@ -328,7 +438,10 @@ export class FtpServer extends EventEmitter {
         // A cut-off upload closes the control connection too: only a session
         // still open after the data ends counts as complete.
         setTimeout(() => {
+          if (failed) return;
           if (s.closed) return fail('426 Session closed during transfer');
+          s.busy = false;
+          this.arm(s);
           reply('226 Transfer complete');
           this.emit('upload', { path, name: posix.basename(path), dir: posix.dirname(path), bytes, tmpFile } satisfies Upload);
         }, 50);
