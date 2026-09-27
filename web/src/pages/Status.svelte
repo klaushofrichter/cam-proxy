@@ -45,11 +45,24 @@
           <dt>Preview minutes</dt><dd>{Math.round($stats.disk.previews.files / 2)}</dd>
         </dl>
       </div>
+      <div class="card" data-testid="card-ftp">
+        <h3>Clips (FTP)</h3>
+        <dl>
+          <dt>Server</dt><dd class={$status.ftp.listening ? 'ok' : $status.ftp.enabled ? 'bad' : ''} data-testid="ftp-state">{$status.ftp.enabled ? ($status.ftp.listening ? `listening on ${$status.ftp.port}${$status.ftp.tls ? ' (FTPS)' : ''}` : 'not listening') : 'off'}</dd>
+          {#if $status.ftp.enabled && !$status.ftp.passwordSet}<dt>Password</dt><dd class="bad">CAMPROXY_FTP_PASSWORD not set</dd>{/if}
+          <dt>Camera connects to</dt><dd>{$status.ftp.publicHost ?? '— (ftp.publicHost)'}</dd>
+          <dt>Last upload</dt><dd>{ago($status.ftp.lastUpload)}</dd>
+          <dt>Last clip</dt><dd>{ago($status.ftp.lastClip)}</dd>
+          <dt>Clips stored</dt><dd>{$status.ftp.clips}</dd>
+          <dt>Failures</dt><dd class={$status.ftp.failures ? 'bad' : ''}>{$status.ftp.failures}</dd>
+        </dl>
+      </div>
       <div class="card" data-testid="card-storage">
         <h3>Storage</h3>
         <dl>
           <dt>Stills</dt><dd>{gb($stats.disk.stills.bytes)}</dd>
           <dt>Previews</dt><dd>{mb($stats.disk.previews.bytes)}</dd>
+          <dt>Clips</dt><dd>{gb($stats.disk.clips.bytes)}</dd>
           <dt>Catalog</dt><dd>{mb($stats.disk.catalog.bytes)}</dd>
           <dt>Used / budget</dt><dd>{gb($stats.storage.used)} / {gb($stats.storage.budget)}</dd>
           <dt>Disk free</dt><dd>{gb($stats.disk.free)} of {gb($stats.disk.size)}</dd>

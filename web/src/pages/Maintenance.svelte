@@ -30,6 +30,11 @@
       <button onclick={() => void run('Retention', 'retention-run', {})} data-testid="action-retention">Run retention now</button>
       <button onclick={() => void run('Restart', 'restart')} data-testid="action-restart">Restart camera side</button>
     </div>
+    <div class="buttons">
+      <button onclick={() => void run('Camera FTP setup', 'camera-ftp-setup')} data-testid="action-ftp-setup">Point the camera's FTP here</button>
+      <button onclick={() => void run('Camera FTP test', 'camera-ftp-test')} data-testid="action-ftp-test">Test the camera's FTP</button>
+      <button onclick={() => void run('Camera FTP off', 'camera-ftp-off')} data-testid="action-ftp-off">Turn the camera's FTP off</button>
+    </div>
     {#if result}<p class="msg mono" data-testid="action-result">{result}</p>{/if}
   </div>
   <div class="card">

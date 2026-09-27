@@ -64,6 +64,30 @@ paths:
       responses:
         '200': { description: 'image/jpeg: a cols × rows grid of tiles, missing tiles dark' }
         '404': { description: no sprite for that minute }
+  /api/cameras/{cam}/clips:
+    get:
+      summary: Clips that overlap a time range (at most 31 days), oldest first
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: from, in: query, required: true, schema: { type: integer }, description: unix ms }
+        - { name: to, in: query, required: true, schema: { type: integer }, description: unix ms }
+      responses:
+        '200': { description: '[{id, start, end, stream, size, events: [event ids], url, snapshotUrl (null without a snapshot)}]' }
+        '400': { description: 'from/to missing, reversed, or more than 31 days apart' }
+        '404': { description: unknown camera }
+  /api/cameras/{cam}/clips/{file}:
+    get:
+      summary: A clip as <id>.mp4 (HTTP Range), or its snapshot as <id>.jpg
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: file, in: path, required: true, schema: { type: string }, description: '<id>.mp4 or <id>.jpg' }
+        - { name: Range, in: header, schema: { type: string }, description: 'e.g. bytes=0-1023, bytes=1024-' }
+      responses:
+        '200': { description: 'video/mp4 or image/jpeg; Accept-Ranges: bytes; cached as immutable' }
+        '206': { description: the requested range, with Content-Range }
+        '400': { description: not <id>.mp4 or <id>.jpg }
+        '404': { description: 'unknown clip, or no snapshot' }
+        '416': { description: 'range not satisfiable (Content-Range: bytes */size)' }
   /api/cameras/{cam}/events:
     get:
       summary: Events, newest first
@@ -164,13 +188,15 @@ paths:
         '400': { description: unknown setting }
   /control/actions/{name}:
     post:
-      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), restart
+      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart
       parameters:
         - { name: name, in: path, required: true, schema: { type: string } }
       responses:
-        '200': { description: camera-test and retention-run results }
+        '200': { description: 'camera-test and retention-run results; camera-ftp-setup/-off: {ftp} (the camera''s settings, no password); camera-ftp-test: {ok, rspCode}' }
         '202': { description: started (onvif-resubscribe, restart) }
         '404': { description: unknown action }
+        '409': { description: 'camera-ftp-setup/-test: ftp.publicHost or the FTP password is not set' }
+        '502': { description: the camera refused or failed the call }
   /control/log:
     get:
       summary: Recent log lines (info and above), redacted

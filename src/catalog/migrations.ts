@@ -48,4 +48,9 @@ export const MIGRATIONS: string[] = [
   );
   CREATE INDEX stream_log_ts ON stream_log (ts);
   `,
+  // 2: a clip's snapshot (the camera uploads a JPEG with each clip).
+  `
+  ALTER TABLE clips ADD COLUMN snapshot TEXT;
+  CREATE INDEX clips_path ON clips (path);
+  `,
 ];

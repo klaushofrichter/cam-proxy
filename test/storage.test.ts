@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, writeFileSync, existsSync, readdirSync, mkdirSync } from 'fs';
+import { mkdtempSync, writeFileSync, existsSync, readdirSync, mkdirSync, utimesSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { openCatalog } from '../src/catalog/db';
 import { insertEvent, listEvents } from '../src/catalog/events';
+import { clipById, insertClip } from '../src/catalog/clips';
 import { StreamLog } from '../src/stream/log';
 import { Storage } from '../src/storage';
 import { DEFAULTS, type Config } from '../src/config/defaults';
@@ -168,5 +169,59 @@ describe('storage: floor and accounting', () => {
     await new Promise((r) => setTimeout(r, 120));
     storage.stop();
     expect(failures.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('storage: clips', () => {
+  // A clip as the indexer stores it: the file, its snapshot and its row.
+  const putClip = (x: ReturnType<typeof setup>, ts: number, bytes = 1000) => {
+    const d = new Date(ts);
+    const p2 = (n: number) => String(n).padStart(2, '0');
+    const folder = join(x.dir, 'clips', 'cam1', String(d.getUTCFullYear()), p2(d.getUTCMonth() + 1), p2(d.getUTCDate()));
+    mkdirSync(folder, { recursive: true });
+    const path = join(folder, `${p2(d.getUTCHours())}${p2(d.getUTCMinutes())}-${ts}.mp4`);
+    writeFileSync(path, Buffer.alloc(bytes));
+    writeFileSync(path.replace(/\.mp4$/, '.jpg'), Buffer.alloc(10));
+    return insertClip(x.catalog, { cam: 'cam1', start_ts: ts, end_ts: ts + 20_000, path, stream: 'main', size: bytes, received_at: ts, snapshot: path.replace(/\.mp4$/, '.jpg') });
+  };
+
+  it('ages clips out by clipsDays, with their rows', () => {
+    const x = setup((c) => (c.retention.clipsDays = 2));
+    const old = putClip(x, NOW - 3 * DAY);
+    const kept = putClip(x, NOW - HOUR);
+    const r = x.storage.run({});
+    expect(r.deleted.clips).toBe(2); // the clip and its snapshot
+    expect(existsSync(old.path)).toBe(false);
+    expect(clipById(x.catalog, old.id)).toBeUndefined();
+    expect(clipById(x.catalog, kept.id)).toBeDefined();
+    expect(existsSync(kept.path)).toBe(true);
+  });
+
+  it('over budget: stills first, then clips, then previews', () => {
+    const x = setup((c) => (c.storage.keepHours = { stills: 0, clips: 0, previews: 0 }));
+    x.put('stills', NOW - 5 * HOUR, 1000);
+    const clip = putClip(x, NOW - 6 * HOUR, 1000);
+    x.put('previews', NOW - 7 * HOUR, 1000);
+    x.storage.recount();
+    delete x.config.storage.maxPercent;
+    // Room for the previews (1000 + 2) and nothing else.
+    x.config.storage.maxBytes = x.catalog.sizeBytes() + 1002;
+    x.storage.run({});
+    expect(x.storage.usage().stills.bytes).toBe(0);
+    expect(x.storage.usage().clips.bytes).toBe(0);
+    expect(clipById(x.catalog, clip.id)).toBeUndefined();
+    expect(x.storage.usage().previews.bytes).toBe(1002);
+  });
+
+  it('never counts uploads in progress; removes temp files older than a day', () => {
+    const x = setup();
+    const incoming = join(x.dir, 'ftp', '.incoming');
+    mkdirSync(incoming, { recursive: true });
+    writeFileSync(join(incoming, 'fresh'), Buffer.alloc(5000));
+    writeFileSync(join(incoming, 'stale'), Buffer.alloc(5000));
+    utimesSync(join(incoming, 'stale'), (NOW - 2 * DAY) / 1000, (NOW - 2 * DAY) / 1000);
+    x.storage.run({});
+    expect(x.storage.usage().clips.bytes).toBe(0);
+    expect(readdirSync(incoming)).toEqual(['fresh']);
   });
 });

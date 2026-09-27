@@ -12,6 +12,9 @@ import { StatusPoller } from './camera/status';
 import type { Config } from './config/defaults';
 import { needsRestart, type Loaded } from './config/load';
 import { leafPaths } from './config/schema';
+import { cameraFtpOff, setupCameraFtp, testCameraFtp } from './clips/camera-ftp';
+import { ClipIndexer } from './clips/indexer';
+import { createClipsSide, type ClipsSide } from './clips/side';
 import { EventIntake } from './events/intake';
 import { EventTracker } from './events/tracker';
 import { logger, setLogLevel } from './log';
@@ -51,6 +54,7 @@ export interface Proxy {
   readonly intake: EventIntake;
   sse: ReturnType<typeof sseHandler>;
   readonly stills: StillsSide | undefined;
+  readonly clips: ClipsSide | undefined;
   storage: Storage;
   start(opts?: { port?: number; host?: string }): Promise<{ port: number }>;
   restart(): Promise<void>;
@@ -92,6 +96,7 @@ export function createProxy(initial: Loaded): Proxy {
   let intake: EventIntake;
   let lastResubscribes = 0;
   let stills: StillsSide | undefined;
+  let clips: ReturnType<typeof createClipsSide> | undefined;
   const metrics = createMetrics({
     stills: () => stills,
     storage,
@@ -145,6 +150,23 @@ export function createProxy(initial: Loaded): Proxy {
       });
       stills = { go2rtc, grabber, store };
     }
+    // Clips: the camera uploads each recording by FTP(S) (needs the FTP password).
+    clips = undefined;
+    if (running.ftp.enabled) {
+      if (!loaded.secrets.ftpPassword) logger.error('ftp_enabled_without_password');
+      else {
+        const cam = c.id;
+        const indexer = new ClipIndexer({ catalog, log, config: () => running, timeInfo: () => client.timeInfo(), dataDir: running.server.dataDir, cam, stored: (bytes) => storage.noteWritten('clips', bytes, 1) });
+        clips = createClipsSide({ config: running, password: loaded.secrets.ftpPassword, indexer, accept: () => !storage.paused() });
+      }
+    }
+  };
+  const startClips = async () => {
+    try {
+      await clips?.start();
+    } catch (err) {
+      logger.error({ err: (err as Error).message }, 'ftp_start_failed');
+    }
   };
   // go2rtc takes a moment to start; the grabber starts only if its side is
   // still the current one (a restart or stop may come in between).
@@ -186,7 +208,8 @@ export function createProxy(initial: Loaded): Proxy {
   // Far above real use (the UI, cams, a scraper); stops a flood. SSE is one
   // long request. Still and sprite images have their own, higher limit: a
   // day on the timeline is up to 1440 sprites.
-  const IMAGE = /^\/api\/cameras\/[^/]+\/(stills|previews)\/\d{1,15}\.jpg$/;
+  // Clip files too: a seeking video player sends many range requests.
+  const IMAGE = /^\/api\/cameras\/[^/]+\/((stills|previews)\/\d{1,15}\.jpg|clips\/\d{1,15}\.(mp4|jpg))$/;
   const isImage = (req: Request) => req.method === 'GET' && IMAGE.test(req.path);
   app.use(rateLimit({ windowMs: 60_000, limit: 1200, skip: isImage, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } }));
   app.use(rateLimit({ windowMs: 60_000, limit: 6000, skip: (req) => !isImage(req), standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } }));
@@ -212,6 +235,24 @@ export function createProxy(initial: Loaded): Proxy {
       intake: () => intake.state(),
       resubscribe: () => intake.resubscribe(),
       restart: () => proxy.restart(),
+      ftp: () => ({
+        enabled: running.ftp.enabled,
+        listening: clips?.side.listening() ?? false,
+        port: running.ftp.port,
+        tls: running.ftp.tls,
+        publicHost: running.ftp.publicHost ?? null,
+        passwordSet: !!loaded.secrets.ftpPassword,
+        lastUpload: clips?.side.lastUpload() ?? null,
+        lastClip: clips?.side.indexer.lastIndexed() ?? null,
+        clips: (catalog.db.prepare('SELECT COUNT(*) AS n FROM clips').get() as { n: number }).n,
+        failures: (clips?.side.uploadFailures() ?? 0) + (clips?.side.indexer.failures() ?? 0),
+      }),
+      cameraFtp: {
+        target: () => ({ server: running.ftp.publicHost ?? '', port: running.ftp.port, user: running.ftp.user, password: loaded.secrets.ftpPassword ?? '', tls: running.ftp.tls, stream: running.ftp.stream }),
+        setup: (t) => setupCameraFtp(client, t),
+        test: (t) => testCameraFtp(client, t),
+        off: () => cameraFtpOff(client),
+      },
       storage,
       sseClients: () => sse.clients(),
       stream: () => ({ enabled: !!stills, up: stills?.grabber.up() ?? false, go2rtcUp: stills?.go2rtc.up() ?? false, lastFrameTs: stills?.grabber.lastFrameTs() ?? null }),
@@ -250,6 +291,7 @@ export function createProxy(initial: Loaded): Proxy {
     await intake.stop();
     status.stop();
     await stopStills();
+    await clips?.stop();
     await client.logout();
     for (const p of leafPaths()) {
       if (p === 'server.port' || p === 'server.dataDir') continue;
@@ -259,6 +301,7 @@ export function createProxy(initial: Loaded): Proxy {
     status.start();
     intake.start();
     startStills();
+    await startClips();
     logger.info('cam_proxy_restarted');
   };
 
@@ -283,6 +326,9 @@ export function createProxy(initial: Loaded): Proxy {
     get stills() {
       return stills;
     },
+    get clips() {
+      return clips?.side;
+    },
     async start(opts = {}) {
       server = http.createServer(app);
       const s = server;
@@ -293,6 +339,7 @@ export function createProxy(initial: Loaded): Proxy {
       status.start();
       intake.start();
       startStills();
+      await startClips();
       storage.start();
       logger.info({ port, camera: running.camera.id, version: VERSION }, 'cam_proxy_started');
       return { port };
@@ -320,6 +367,7 @@ export function createProxy(initial: Loaded): Proxy {
       await intake.stop();
       status.stop();
       await stopStills();
+      await clips?.stop();
       await client.logout();
       catalog.close();
     },

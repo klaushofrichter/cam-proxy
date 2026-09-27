@@ -24,7 +24,7 @@ export interface Config {
     keepHours: { stills: number; clips: number; previews: number };
   };
   sse: { maxClients: number; queuePerClient: number; pingS: number };
-  ftp: { enabled: boolean; port: number; passive: string; user: string; tls: boolean; stream: 'main' | 'sub'; maxGB?: number };
+  ftp: { enabled: boolean; port: number; passive: string; user: string; tls: boolean; stream: 'main' | 'sub'; maxGB?: number; publicHost?: string; certFile?: string; keyFile?: string };
 }
 
 export const DEFAULTS: Config = {

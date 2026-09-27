@@ -28,7 +28,7 @@ export async function freePort(): Promise<number> {
 
 // Stills run when go2rtc is installed (scripts/install-go2rtc.sh), on free
 // ports so proxies in parallel test files don't collide.
-export async function startProxy(sim: Awaited<ReturnType<typeof startSim>>, opts: { dir?: string; settings?: object } = {}) {
+export async function startProxy(sim: Awaited<ReturnType<typeof startSim>>, opts: { dir?: string; settings?: object; env?: Record<string, string> } = {}) {
   const dir = opts.dir ?? mkdtempSync(join(tmpdir(), 'camproxy-proxy-'));
   const go2rtc = process.env.CAMPROXY_TEST_GO2RTC;
   writeFileSync(join(dir, 'config.json'), JSON.stringify({
@@ -39,7 +39,7 @@ export async function startProxy(sim: Awaited<ReturnType<typeof startSim>>, opts
     server: { logLevel: 'silent' },
     ...(opts.settings ?? {}),
   }));
-  const loaded = loadConfig({ CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: sim.password }, { cwd: dir });
+  const loaded = loadConfig({ CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: sim.password, ...opts.env }, { cwd: dir });
   const proxy: Proxy = createProxy(loaded);
   const { port } = await proxy.start({ port: 0, host: '127.0.0.1' });
   return { proxy, dir, port, base: `http://127.0.0.1:${port}` };

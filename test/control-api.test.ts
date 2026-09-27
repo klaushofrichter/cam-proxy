@@ -71,6 +71,7 @@ describe('control API: status, stats, config', () => {
     expect(r.body.sse).toEqual({ clients: 0 });
     expect(r.body.retention).toHaveProperty('lastRun');
     expect(r.body.version).toBeTruthy();
+    expect(r.body.ftp).toEqual({ enabled: false, listening: false, port: 2121, tls: true, publicHost: null, passwordSet: false, lastUpload: null, lastClip: null, clips: 0, failures: 0 });
   });
 
   it('reports disk, events, the stream log and the storage budget', async () => {

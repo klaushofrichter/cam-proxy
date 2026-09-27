@@ -27,6 +27,7 @@ export class CameraError extends Error {
     readonly code: CameraErrorCode,
     message: string,
     readonly requestSent = false,
+    readonly rspCode?: number, // the camera's error code, when it answered
   ) {
     super(message);
     this.name = 'CameraError';
@@ -176,7 +177,7 @@ export class ReolinkClient {
         this.clearTokenIfCurrent(token);
         continue;
       }
-      throw new CameraError('camera_error', `${cmd} failed (rspCode ${reply.error?.rspCode ?? 'unknown'})`);
+      throw new CameraError('camera_error', `${cmd} failed (rspCode ${reply.error?.rspCode ?? 'unknown'})`, false, reply.error?.rspCode);
     }
     throw new CameraError('camera_auth_failed', `${cmd}: session rejected after re-login`);
   }
@@ -318,7 +319,14 @@ export class ReolinkClient {
 
   async timeInfo(): Promise<TimeInfo> {
     if (this.time && this.now() - this.time.at < 3600_000) return this.time.value;
-    const value = timeInfoFromGetTime(await this.command<unknown>('GetTime'));
+    let value: TimeInfo;
+    try {
+      value = timeInfoFromGetTime(await this.command<unknown>('GetTime'));
+    } catch (err) {
+      // The zone rarely changes: an older answer beats losing a clip.
+      if (this.time) return this.time.value;
+      throw err;
+    }
     this.time = { value, at: this.now() };
     return value;
   }
