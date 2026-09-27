@@ -232,7 +232,7 @@ arrive.
 | `GET /control/config` | every setting: `{value, source, restart, pending, next?}`; secrets never appear |
 | `PUT /control/config` | overrides, e.g. `{"sse":{"pingS":10}}`; a bad value answers 400 naming it, and nothing is written |
 | `DELETE /control/config/{path}` | removes one override |
-| `POST /control/actions/{name}` | `onvif-resubscribe`, `camera-test`, `retention-run` (`{"dryRun":true}` previews), `restart` |
+| `POST /control/actions/{name}` | `onvif-resubscribe`, `camera-test`, `retention-run` (`{"dryRun":true}` previews), `camera-ftp-setup`, `camera-ftp-test`, `camera-ftp-off`, `restart` |
 | `GET /control/log?limit` | recent log lines (info and above), redacted |
 | `POST /control/login` / `logout`, `GET /control/session` | the admin UI's session cookie (`camproxy_session`, HttpOnly, SameSite=Strict, 12 h; 20 sign-ins per 15 min) |
 

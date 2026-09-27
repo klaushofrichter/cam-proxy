@@ -12,6 +12,9 @@ import { StatusPoller } from './camera/status';
 import type { Config } from './config/defaults';
 import { needsRestart, type Loaded } from './config/load';
 import { leafPaths } from './config/schema';
+import { cameraFtpOff, setupCameraFtp, testCameraFtp } from './clips/camera-ftp';
+import { ClipIndexer } from './clips/indexer';
+import { createClipsSide, type ClipsSide } from './clips/side';
 import { EventIntake } from './events/intake';
 import { EventTracker } from './events/tracker';
 import { logger, setLogLevel } from './log';
@@ -51,6 +54,7 @@ export interface Proxy {
   readonly intake: EventIntake;
   sse: ReturnType<typeof sseHandler>;
   readonly stills: StillsSide | undefined;
+  readonly clips: ClipsSide | undefined;
   storage: Storage;
   start(opts?: { port?: number; host?: string }): Promise<{ port: number }>;
   restart(): Promise<void>;
@@ -92,6 +96,7 @@ export function createProxy(initial: Loaded): Proxy {
   let intake: EventIntake;
   let lastResubscribes = 0;
   let stills: StillsSide | undefined;
+  let clips: ReturnType<typeof createClipsSide> | undefined;
   const metrics = createMetrics({
     stills: () => stills,
     storage,
@@ -144,6 +149,23 @@ export function createProxy(initial: Loaded): Proxy {
         log.append(c.id, 'camera-status', { online: cs.online, stream: st.up ? 'up' : 'down', reason: st.up ? null : 'no_frames', clockOffsetMs: cs.clockOffsetMs ?? null });
       });
       stills = { go2rtc, grabber, store };
+    }
+    // Clips: the camera uploads each recording by FTP(S) (needs the FTP password).
+    clips = undefined;
+    if (running.ftp.enabled) {
+      if (!loaded.secrets.ftpPassword) logger.error('ftp_enabled_without_password');
+      else {
+        const cam = c.id;
+        const indexer = new ClipIndexer({ catalog, log, config: () => running, timeInfo: () => client.timeInfo(), dataDir: running.server.dataDir, cam });
+        clips = createClipsSide({ config: running, password: loaded.secrets.ftpPassword, indexer, accept: () => !storage.paused() });
+      }
+    }
+  };
+  const startClips = async () => {
+    try {
+      await clips?.start();
+    } catch (err) {
+      logger.error({ err: (err as Error).message }, 'ftp_start_failed');
     }
   };
   // go2rtc takes a moment to start; the grabber starts only if its side is
@@ -212,6 +234,12 @@ export function createProxy(initial: Loaded): Proxy {
       intake: () => intake.state(),
       resubscribe: () => intake.resubscribe(),
       restart: () => proxy.restart(),
+      cameraFtp: {
+        target: () => ({ server: running.ftp.publicHost ?? '', port: running.ftp.port, user: running.ftp.user, password: loaded.secrets.ftpPassword ?? '', tls: running.ftp.tls, stream: running.ftp.stream }),
+        setup: (t) => setupCameraFtp(client, t),
+        test: (t) => testCameraFtp(client, t),
+        off: () => cameraFtpOff(client),
+      },
       storage,
       sseClients: () => sse.clients(),
       stream: () => ({ enabled: !!stills, up: stills?.grabber.up() ?? false, go2rtcUp: stills?.go2rtc.up() ?? false, lastFrameTs: stills?.grabber.lastFrameTs() ?? null }),
@@ -250,6 +278,7 @@ export function createProxy(initial: Loaded): Proxy {
     await intake.stop();
     status.stop();
     await stopStills();
+    await clips?.stop();
     await client.logout();
     for (const p of leafPaths()) {
       if (p === 'server.port' || p === 'server.dataDir') continue;
@@ -259,6 +288,7 @@ export function createProxy(initial: Loaded): Proxy {
     status.start();
     intake.start();
     startStills();
+    await startClips();
     logger.info('cam_proxy_restarted');
   };
 
@@ -283,6 +313,9 @@ export function createProxy(initial: Loaded): Proxy {
     get stills() {
       return stills;
     },
+    get clips() {
+      return clips?.side;
+    },
     async start(opts = {}) {
       server = http.createServer(app);
       const s = server;
@@ -293,6 +326,7 @@ export function createProxy(initial: Loaded): Proxy {
       status.start();
       intake.start();
       startStills();
+      await startClips();
       storage.start();
       logger.info({ port, camera: running.camera.id, version: VERSION }, 'cam_proxy_started');
       return { port };
@@ -320,6 +354,7 @@ export function createProxy(initial: Loaded): Proxy {
       await intake.stop();
       status.stop();
       await stopStills();
+      await clips?.stop();
       await client.logout();
       catalog.close();
     },

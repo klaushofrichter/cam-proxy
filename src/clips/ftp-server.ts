@@ -63,6 +63,10 @@ export class FtpServer extends EventEmitter {
     if (o.tls) this.secureContext = tls.createSecureContext({ cert: o.tls.cert, key: o.tls.key });
   }
 
+  listening(): boolean {
+    return this.server?.listening ?? false;
+  }
+
   sessions(): number {
     return this.sessionsOpen.size;
   }

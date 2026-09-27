@@ -164,13 +164,15 @@ paths:
         '400': { description: unknown setting }
   /control/actions/{name}:
     post:
-      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), restart
+      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart
       parameters:
         - { name: name, in: path, required: true, schema: { type: string } }
       responses:
-        '200': { description: camera-test and retention-run results }
+        '200': { description: 'camera-test and retention-run results; camera-ftp-setup/-off: {ftp} (the camera''s settings, no password); camera-ftp-test: {ok, rspCode}' }
         '202': { description: started (onvif-resubscribe, restart) }
         '404': { description: unknown action }
+        '409': { description: 'camera-ftp-setup/-test: ftp.publicHost or the FTP password is not set' }
+        '502': { description: the camera refused or failed the call }
   /control/log:
     get:
       summary: Recent log lines (info and above), redacted

@@ -5,6 +5,7 @@ import type { CameraState } from '../camera/status';
 import type { Config } from '../config/defaults';
 import { applyOverrides, ConfigError, needsRestart, removeOverride, type Loaded } from '../config/load';
 import { leafPaths } from '../config/schema';
+import type { FtpTarget } from '../clips/camera-ftp';
 import type { IntakeState } from '../events/intake';
 import { logBuffer, logger } from '../log';
 import type { Storage } from '../storage';
@@ -24,6 +25,12 @@ export interface ControlDeps {
   intake: () => IntakeState;
   resubscribe: () => void;
   restart: () => Promise<void>;
+  cameraFtp: {
+    target: () => FtpTarget;
+    setup: (t: FtpTarget) => Promise<unknown>;
+    test: (t: FtpTarget) => Promise<{ ok: boolean; rspCode: number }>;
+    off: () => Promise<unknown>;
+  };
   storage: Storage;
   sseClients: () => number;
   stream: () => { enabled: boolean; up: boolean; go2rtcUp: boolean; lastFrameTs: number | null };
@@ -45,6 +52,16 @@ export function configView(loaded: Loaded, running: Config) {
       return [p, { value, source: loaded.sources[p], restart, pending, ...(pending ? { next } : {}) }];
     }),
   );
+}
+
+// A camera call from an action: its answer, or 502 with the camera's error.
+async function cameraCall(res: Response, f: () => Promise<unknown>): Promise<void> {
+  try {
+    res.json(await f());
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, 'camera_action_failed');
+    res.status(502).json({ error: 'camera_error', detail: (err as Error).message });
+  }
 }
 
 export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnType<typeof createSessionSigner> }): express.Router {
@@ -122,6 +139,15 @@ export function controlApi(d: ControlDeps): express.Router {
         return void res.json(await d.checkCamera());
       case 'retention-run':
         return void res.json(d.storage.run({ dryRun: req.body?.dryRun === true }));
+      case 'camera-ftp-setup':
+      case 'camera-ftp-test': {
+        const t = d.cameraFtp.target();
+        if (!t.server) return void res.status(409).json({ error: 'not_configured', detail: 'ftp.publicHost is not set' });
+        if (!t.password) return void res.status(409).json({ error: 'not_configured', detail: 'CAMPROXY_FTP_PASSWORD is not set' });
+        return void (await cameraCall(res, async () => (req.params.name === 'camera-ftp-setup' ? { ftp: await d.cameraFtp.setup(t) } : d.cameraFtp.test(t))));
+      }
+      case 'camera-ftp-off':
+        return void (await cameraCall(res, async () => ({ ftp: await d.cameraFtp.off() })));
       case 'restart':
         d.restart().catch((err: Error) => logger.error({ err: err.message }, 'restart_failed'));
         return void res.status(202).end();

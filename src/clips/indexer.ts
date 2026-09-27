@@ -81,6 +81,11 @@ export class ClipIndexer {
     return this.last;
   }
 
+  // An upload that isn't kept (the disk is full).
+  discard(u: Upload): void {
+    remove(u.tmpFile);
+  }
+
   async add(u: Upload): Promise<ClipRow | null> {
     try {
       return await this.index(u);
