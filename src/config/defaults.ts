@@ -4,7 +4,7 @@
 export interface Config {
   server: { port: number; dataDir: string; logLevel: string; publicUrl?: string };
   camera: {
-    id: string; name: string; host: string; protocol: 'https' | 'http'; tlsName?: string;
+    id: string; name: string; host: string; protocol: 'https' | 'http'; tlsName?: string; webUiUrl?: string;
     user: string; onvifPort: number; rtspPort: number; statusPollS: number;
   };
   go2rtc: { binary?: string; url?: string; rtspPort: number; apiPort: number };

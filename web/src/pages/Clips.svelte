@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api } from '../lib/api';
-  import { feed } from '../lib/state';
+  import { feed, refreshTick } from '../lib/state';
 
   interface Clip { id: number; start: number; end: number | null; stream: string; size: number; events: number[]; url: string; snapshotUrl: string | null }
   interface Ev { id: number; kind: string }
@@ -44,6 +44,7 @@
   }
   $effect(() => {
     void day;
+    void $refreshTick;
     void load();
   });
   // A new clip announced on the stream shows up when today is open.

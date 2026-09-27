@@ -3,7 +3,7 @@ import { api } from './api';
 
 export interface Status {
   version: string;
-  camera: { online: boolean; since: number; model?: string; firmware?: string; clockOffsetMs?: number; error?: string };
+  camera: { online: boolean; since: number; model?: string; firmware?: string; clockOffsetMs?: number; error?: string; webUiUrl?: string | null };
   intake: { onvif: string; since: number; source: string; lastError?: string; resubscribes: number };
   sse: { clients: number };
   stream: { enabled: boolean; up: boolean; go2rtcUp: boolean; lastFrameTs: number | null };
@@ -27,11 +27,22 @@ export const stats = writable<Stats | null>(null);
 // cookie. EventSource resumes with Last-Event-ID by itself after a drop.
 export const feed = writable<FeedItem[]>([]);
 
+// When the status last arrived, for the top bar's "updated … ago".
+export const updatedAt = writable<number | null>(null);
+// The top bar's Refresh: pages reload their own data when this changes.
+export const refreshTick = writable(0);
+
+export function refreshNow(): void {
+  void refresh();
+  refreshTick.update((n) => n + 1);
+}
+
 export async function refresh(): Promise<void> {
   try {
     const [s, st] = await Promise.all([api<Status>('GET', '/control/status'), api<Stats>('GET', '/control/stats')]);
     status.set(s);
     stats.set(st);
+    updatedAt.set(Date.now());
   } catch {
     // a 401 flips loggedIn; anything else keeps the last values
   }

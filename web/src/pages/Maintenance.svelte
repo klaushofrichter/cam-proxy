@@ -1,12 +1,20 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api, ApiError } from '../lib/api';
-  import { refresh } from '../lib/state';
+  import { refresh, refreshTick } from '../lib/state';
 
   let result = $state('');
   let log = $state<Array<Record<string, unknown>>>([]);
   const loadLog = async () => (log = (await api<Array<Record<string, unknown>>>('GET', '/control/log?limit=200')).reverse());
   onMount(() => void loadLog());
+  // The log follows along by itself (every 10 s), and with the top bar's Refresh.
+  $effect(() => {
+    if ($refreshTick) void loadLog();
+  });
+  $effect(() => {
+    const t = setInterval(() => void loadLog(), 10_000);
+    return () => clearInterval(t);
+  });
 
   async function run(label: string, name: string, body?: unknown) {
     try {
@@ -38,7 +46,7 @@
     {#if result}<p class="msg mono" data-testid="action-result">{result}</p>{/if}
   </div>
   <div class="card">
-    <div class="loghead"><h3>Log</h3><button onclick={() => void loadLog()}>Refresh</button></div>
+    <div class="loghead"><h3>Log</h3><span class="small">updates every 10 s</span></div>
     <div class="log">
       <table>
         <tbody>

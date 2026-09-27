@@ -70,6 +70,15 @@ function setPath(o: Record<string, unknown>, p: string, v: unknown): void {
   else x[keys[keys.length - 1]] = v;
 }
 
+// The camera's own web page for the admin UI: camera.webUiUrl, none for no
+// link, or https://<host without its port>/.
+export function cameraWebUi(c: Config['camera']): string | null {
+  if (c.webUiUrl === 'none') return null;
+  if (c.webUiUrl) return c.webUiUrl;
+  const { hostname } = splitHost(c.host);
+  return hostname ? `https://${hostname}/` : null;
+}
+
 export function createProxy(initial: Loaded): Proxy {
   let loaded = initial;
   // The configuration the components run with: live settings are copied in
@@ -230,7 +239,7 @@ export function createProxy(initial: Loaded): Proxy {
       running: () => running,
       catalog,
       log,
-      camera: () => status.state(),
+      camera: () => ({ ...status.state(), webUiUrl: cameraWebUi(running.camera) }),
       checkCamera: () => status.checkNow(),
       intake: () => intake.state(),
       resubscribe: () => intake.resubscribe(),

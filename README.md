@@ -112,7 +112,7 @@ come only from the environment.
 | Group | Settings (defaults) |
 |---|---|
 | `server` | `port` (8480), `dataDir` (`data`, relative to the config file), `logLevel` (`info`), `publicUrl` |
-| `camera` | `id` (`cam1`), `name` (`Den`), `host` (required), `protocol` (`https`), `tlsName`, `user` (`proxy`), `onvifPort` (8000), `rtspPort` (554), `statusPollS` (30) |
+| `camera` | `id` (`cam1`), `name` (`Den`), `host` (required), `protocol` (`https`), `tlsName`, `webUiUrl` (the camera's own web page, linked from the admin UI; default `https://<host>/`, `none` for no link), `user` (`proxy`), `onvifPort` (8000), `rtspPort` (554), `statusPollS` (30) |
 | `events` | `onvif.subscribeMin` (10), `onvif.pullTimeoutS` (30), `poll.enabled` (true), `poll.intervalS` (2), `poll.afterOnvifDownS` (60), `maxOpenMin` (10) |
 | `retention` | `stillsDays` (7), `previewsDays` (14), `clipsDays` (7), `eventsDays` (30), `streamLogDays` (7), `intervalMin` (60) |
 | `storage` | `maxPercent` (85) or `maxBytes`, `minFreeBytes` (2 GB), `keepHours` |

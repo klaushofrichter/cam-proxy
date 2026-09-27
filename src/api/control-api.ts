@@ -33,7 +33,7 @@ export interface ControlDeps {
   running: () => Config; // what the components run with
   catalog: Catalog;
   log: StreamLog;
-  camera: () => CameraState;
+  camera: () => CameraState & { webUiUrl: string | null };
   checkCamera: () => Promise<CameraState>;
   intake: () => IntakeState;
   resubscribe: () => void;

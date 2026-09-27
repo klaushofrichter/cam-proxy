@@ -71,6 +71,11 @@
           "pattern": "^[^\\s]+$",
           "description": "verify the camera certificate against this name"
         },
+        "webUiUrl": {
+          "type": "string",
+          "pattern": "^(https?://[^\\s]+|none)$",
+          "description": "the camera's own web page, linked from the admin UI; default https://<host>/, none for no link"
+        },
         "user": {
           "type": "string",
           "pattern": "^[^\\s:]{1,31}$",
