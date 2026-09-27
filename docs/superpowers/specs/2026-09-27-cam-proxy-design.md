@@ -32,8 +32,9 @@ table, so more cameras later need no migration.
 | k3s cluster | production | cam2 (cam-sim) | the same image; manifests in kube-setup; `cam-proxy.skylar.technology` |
 | Mac (Apple Silicon) | development only | cam-sim locally, or the real camera for checks | native (`npm run dev`), go2rtc and ffmpeg as local binaries; the compose file can be tried too |
 
-- **One image** (linux/arm64 and linux/amd64), configured by environment
-  variables only, with all data under one `/data` volume. What runs next to the
+- **One image** (linux/arm64 and linux/amd64), configured by one
+  `config.json` plus secrets in environment variables (§14), with all data
+  under one `/data` volume. What runs next to the
   real camera is exactly what CI built and tested.
 - **Docker on the Pi** (decided 2026-09-27): compose with
   `restart: unless-stopped`, host networking (FTP passive ports, later WebRTC),
@@ -62,7 +63,7 @@ supervises as child processes (on the Pi, go2rtc runs as its own container).
 conventions as cam-sim):
 
 ```
-src/config.ts            environment → config, validated at start
+src/config/              config.json + overrides + secrets → validated config (§14)
 src/camera/              the Reolink HTTP client (moved from cams server/reolink/), status poller
 src/events/              ONVIF PullPoint client, polling fallback, event model
 src/catalog/             SQLite schema, migrations, queries
@@ -87,9 +88,10 @@ web/                     admin UI (Svelte 5 + Vite), built into dist/web
   (sub first; main later for clips and live). The frame grabber reads go2rtc's
   local restream, never the camera. go2rtc listens on 127.0.0.1 only, on
   ports that don't clash with cam-sim on the same Mac (RTSP 18554, API 11984).
-- **Camera settings:** `camera.host`, `protocol`, `tlsServername`, `user`,
-  `password`, `onvifPort` (8000), `rtspPort` (554). cam-sim on the Mac uses
-  8554 for RTSP; the port is configurable for that reason.
+- **Camera settings:** the `camera` group of `config.json` (§14): host,
+  protocol, TLS name, user, ONVIF and RTSP ports. The password is a secret
+  in the environment. cam-sim on the Mac uses 8554 for RTSP, which is why the
+  port is configurable.
 
 ## 5. Events
 
@@ -162,26 +164,35 @@ As requirements §11, decided:
 
 As requirements §5:
 
-- **Source:** one ffmpeg reads go2rtc's sub-stream restream and writes two
-  outputs from the same decode:
-  - a 896×512 JPEG every second (q about 5);
-  - a 160×90 tile every second.
+All numbers here are `config.json` settings (§14); the values given are the
+defaults.
+
+- **Source:** one ffmpeg reads go2rtc's restream of `stills.stream` (sub)
+  and writes two outputs from the same decode:
+  - a still every `stills.intervalS` (1 s) at `stills.size` (896×512), JPEG
+    quality `stills.quality`;
+  - a preview tile at the same moments, at `previews.tileSize` (160×90).
 - **Packs:** `/data/stills/<cam>/YYYY/MM/DD/HHMM.pack`: the minute's JPEGs
-  concatenated, followed by a 60-entry offset table and a magic footer. A
-  missing second has length 0. Reading one still is one read of the table and
+  concatenated, followed by an offset table with one slot per interval (60 at
+  1 s), a header and a magic footer. A missing slot has length 0.
+  - **Self-describing:** the header records the interval, size and quality
+    the pack was made with. Changing the settings later leaves older packs
+    readable; the API reports each minute's own interval. Reading one still is one read of the table and
   one read of the image. The pack being written stays open until the minute
   ends; reads of the current minute come from memory.
-- **Sprites:** `/data/previews/<cam>/YYYY/MM/DD/HHMM.jpg`: 10×6 tiles of
-  160×90, one per minute. ffmpeg streams the tiles to the proxy
+- **Sprites:** `/data/previews/<cam>/YYYY/MM/DD/HHMM.jpg`: one sheet per
+  minute, a grid of `previews.grid` (10×6 at 1 s) tiles, with the grid and
+  tile size recorded in a small `HHMM.json` next to it. ffmpeg streams the tiles to the proxy
   (`image2pipe`). The proxy composes each minute's sheet with `sharp`, whose
   prebuilt binaries cover linux-arm64, Alpine included, so there's no build
   on the Pi. A missing second leaves its tile dark.
 - **Times:** stills are keyed by the proxy's clock (UTC, aligned to whole
   seconds), not by the camera's clock. The camera clock's offset is recorded
   in `camera-status`.
-- **Retention:** delete day folders older than `CAMPROXY_RETENTION_DAYS`
-  (default 7), and the matching `stream_log`, `events` and `clips` rows. It
-  runs hourly and on demand.
+- **Retention:** days per kind (`retention.stillsDays`, `previewsDays`,
+  `clipsDays`, `eventsDays`, `streamLogDays`, 7 each). Day folders past their
+  retention are deleted, along with the matching rows. It runs every
+  `retention.intervalMin` (60) and on demand.
 - **Resilience:** if go2rtc or ffmpeg exits, it restarts with backoff.
   `camera-status` reports `stream: down` after 10 s without a frame.
 
@@ -190,10 +201,9 @@ As requirements §5:
 - **Server:** an FTPS server inside the process (a maintained Node FTP server
   library; choosing it is a plan task, and it must pass `npm audit` with no
   high finding in production dependencies).
-  - Upload only, one user from the config, passive ports 30000–30009, on the
-    LAN.
-  - Plain FTP is allowed only when `CAMPROXY_FTP_TLS=false` (for cam-sim
-    tests).
+  - Upload only, with one user (`ftp.user`, password in the environment),
+    passive ports `ftp.passive` (30000–30009), on the LAN.
+  - Plain FTP is allowed only when `ftp.tls` is `false` (for cam-sim tests).
 - **Files:** they land in `/data/clips/<cam>/YYYY/MM/DD/`. The camera's names
   (`<Name>_00_YYYYMMDDHHMMSS.mp4` and `.jpg`) give the start time.
   - Each finished upload is indexed into `clips` and linked to overlapping
@@ -208,8 +218,8 @@ As requirements §5:
 
 ## 10. Client API (`/api`)
 
-Bearer token (`CAMPROXY_TOKENS`, a comma list, so a token can be rotated
-without downtime) on everything except `/health` and `/metrics`.
+Bearer token (`CAMPROXY_TOKENS`, a comma list in the environment, so a token
+can be rotated without downtime) on everything except `/health` and `/metrics`.
 
 ```
 GET /api/cameras                                   → [{id, name, online, lastEventTs, stream}]
@@ -240,18 +250,17 @@ This follows the cam-sim pattern but is its own app.
   - `GET /control/status`: camera, ONVIF subscription, go2rtc, frame grabber,
     FTP and retention states;
   - `GET /control/stats`: the numbers (§13).
-  - `GET/PUT /control/settings`: the runtime-safe settings, kept in
-    `/data/settings.json`:
-    - retention days;
-    - still rate on/off;
-    - polling fallback on/off;
-    - FTP intake on/off;
-    - camera FTP setup.
+  - `GET /control/config`: the effective configuration, with each setting's
+    value, its source (`default`, `file` or `override`) and whether a change
+    needs a restart. Secrets never appear.
+  - `PUT /control/config`: sets overrides (§14), validated like the file.
+    `DELETE /control/config/<path>` removes one, back to the file's value.
   - `POST /control/actions/<name>`:
     - `retention-run`;
     - `onvif-resubscribe`;
     - `camera-test`;
-    - `camera-ftp-setup`;
+    - `camera-ftp-setup` (writes the camera's whole `Ftp` object from `ftp`);
+  - `restart`, which applies settings that need a restart;
     - `camera-ftp-test`;
     - `catalog-backup`, which downloads a consistent copy.
   - `GET /control/log`: recent proxy log lines, redacted.
@@ -273,8 +282,9 @@ This follows the cam-sim pattern but is its own app.
   - at least 32 random bytes;
   - compared in constant time;
   - never logged, never accepted in URLs (`?token=` answers 400).
-- Camera credentials and tokens come from the environment (`_FILE` variants
-  for Secrets); never from the UI.
+- Secrets (tokens, camera and FTP passwords) live only in the environment
+  (`_FILE` variants for Secrets). They are never in `config.json`, never in
+  overrides, never shown or settable in the UI.
 - **The FTP intake and the camera** reach the proxy on the LAN only:
   - on the Pi, the host's LAN interface;
   - in the cluster, a LAN-only ServiceLB address, like cam2's gateway ports.
@@ -341,21 +351,58 @@ This follows the cam-sim pattern but is its own app.
 
 ## 14. Configuration
 
-| Variable | Default | |
-|---|---|---|
-| `CAMPROXY_CAMERA_ID`, `_NAME` | `cam1`, `Den` | id used in paths and the API |
-| `CAMPROXY_CAMERA_HOST` | required | address or name, optional `:port` |
-| `CAMPROXY_CAMERA_PROTOCOL`, `_TLS_NAME` | `https`, none | as in cams' camera list |
-| `CAMPROXY_CAMERA_USER`, `_PASSWORD` / `_FILE` | required | the proxy's own camera user |
-| `CAMPROXY_CAMERA_ONVIF_PORT`, `_RTSP_PORT` | `8000`, `554` | |
-| `CAMPROXY_TOKENS` / `_FILE` | required | client tokens, comma list |
-| `CAMPROXY_ADMIN_TOKEN` / `_FILE` | required | control API and UI |
-| `CAMPROXY_PORT` | `4321` | HTTP |
-| `CAMPROXY_DATA_DIR` | `/data` in the image, `./data` locally | |
-| `CAMPROXY_RETENTION_DAYS` | `7` | |
-| `CAMPROXY_FTP_PORT`, `_PASV`, `_USER`, `_PASSWORD`, `_TLS` | `2121`, `30000-30009`, `camera`, required when on, `true` | |
-| `CAMPROXY_GO2RTC` | `go2rtc` on `PATH` | a binary locally; `external:<url>` when it runs as its own container |
-| `CAMPROXY_LOG_LEVEL` | `info` | pino; never logs secrets or URLs with query strings |
+**One central file, `config.json`, holds every setting that isn't a secret.**
+Secrets stay in environment variables, so the file can be committed, copied,
+or put in a ConfigMap without leaking anything.
+
+- **Where it is:** `./config.json` locally, `/data/config.json` on the Pi, a
+  ConfigMap mounted as a file in the cluster. `CAMPROXY_CONFIG` points
+  elsewhere.
+- **Validated at start** against `config.schema.json` (JSON Schema, shipped
+  in the repo, so editors can check and complete the file). An unknown key or
+  a bad value stops the start with a message naming the key.
+- **Defaults** are in code. The file only needs what differs, typically the
+  camera. `config.example.json` shows every setting with its default.
+- **Overrides:** the admin UI and `PUT /control/config` store changes in
+  `/data/overrides.json`, on top of the file. They survive restarts and
+  redeploys; the cluster's ConfigMap is read-only anyway.
+  - The effective value is default, then file, then override.
+  - The UI shows each setting's source and can remove an override.
+- **Live or restart:** some settings apply at once (retention, polling
+  fallback, SSE limits, log level). Others need a restart (camera, stills
+  size and interval, ports), and the UI says so and offers `restart`.
+
+**Settings** (defaults in brackets):
+
+| Group | Settings |
+|---|---|
+| `server` | `port` (4321), `dataDir` (`/data` in the image, `./data` locally), `logLevel` (`info`), `publicUrl` (for absolute links, optional) |
+| `camera` | `id` (`cam1`), `name` (`Den`), `host` (required), `protocol` (`https`), `tlsName`, `user` (`proxy`), `onvifPort` (8000), `rtspPort` (554), `statusPollS` (30) |
+| `go2rtc` | `binary` (`go2rtc`) or `url` (when it runs as its own container), `rtspPort` (18554), `apiPort` (11984) |
+| `stills` | `enabled` (true), `stream` (`sub`), `intervalS` (1), `size` (`896x512`), `quality` (5, ffmpeg `q:v`; lower is better) |
+| `previews` | `tileSize` (`160x90`), `grid` (`10x6`, must hold one minute of stills), `quality` (7) |
+| `events` | `onvif.subscribeMin` (10), `onvif.pullTimeoutS` (30), `poll.enabled` (true), `poll.intervalS` (2), `poll.afterOnvifDownS` (60), `maxOpenMin` (10) |
+| `retention` | `stillsDays`, `previewsDays`, `clipsDays`, `eventsDays`, `streamLogDays` (7 each), `intervalMin` (60) |
+| `sse` | `maxClients` (50), `queuePerClient` (1000), `pingS` (15) |
+| `ftp` | `enabled` (false), `port` (2121), `passive` (`30000-30009`), `user` (`camera`), `tls` (true), `stream` (`main`) |
+
+**Example** (local development against cam-sim):
+
+```json
+{
+  "camera": { "host": "127.0.0.1:8080", "protocol": "http", "rtspPort": 8554, "onvifPort": 8000, "user": "proxy" },
+  "server": { "dataDir": "./data" }
+}
+```
+
+**Secrets** (environment only):
+
+| Variable | |
+|---|---|
+| `CAMPROXY_TOKENS` / `_FILE` | client tokens, comma list |
+| `CAMPROXY_ADMIN_TOKEN` / `_FILE` | control API and admin UI |
+| `CAMPROXY_CAMERA_PASSWORD` / `_FILE` | the proxy's camera user |
+| `CAMPROXY_FTP_PASSWORD` / `_FILE` | the camera's FTP login to the proxy; required when `ftp.enabled` |
 
 `scripts/sync-secrets.sh`, as in cam-sim, generates tokens into `.env` and
 syncs them to GitHub and the cluster.
