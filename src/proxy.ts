@@ -15,7 +15,7 @@ import { leafPaths } from './config/schema';
 import { EventIntake } from './events/intake';
 import { EventTracker } from './events/tracker';
 import { logger, setLogLevel } from './log';
-import { Retention } from './retention';
+import { Storage } from './storage';
 import { StreamLog } from './stream/log';
 import { sseHandler } from './stream/sse';
 import { refuseTokenInUrl, requireAccess } from './api/auth';
@@ -46,7 +46,7 @@ export interface Proxy {
   readonly status: StatusPoller;
   readonly intake: EventIntake;
   sse: ReturnType<typeof sseHandler>;
-  retention: Retention;
+  storage: Storage;
   start(opts?: { port?: number; host?: string }): Promise<{ port: number }>;
   restart(): Promise<void>;
   stop(): Promise<void>;
@@ -78,7 +78,8 @@ export function createProxy(initial: Loaded): Proxy {
   }
 
   const sse = sseHandler(log, running.sse);
-  const retention = new Retention({ catalog, log, config: () => running });
+  const storage = new Storage({ catalog, log, config: () => running });
+  storage.recount();
   const sessions = createSessionSigner();
 
   let client: ReolinkClient;
@@ -95,7 +96,7 @@ export function createProxy(initial: Loaded): Proxy {
     version: VERSION,
     target: TARGET,
   });
-  retention.on('run', metrics.onRetention);
+  storage.on('run', metrics.onRetention);
 
   // The camera side: client, status poller, event tracker and intake. Built
   // again by restart() with the current settings.
@@ -149,7 +150,7 @@ export function createProxy(initial: Loaded): Proxy {
       intake: () => intake.state(),
       resubscribe: () => intake.resubscribe(),
       restart: () => proxy.restart(),
-      retention,
+      storage,
       sseClients: () => sse.clients(),
       sessions,
       version: VERSION,
@@ -213,7 +214,7 @@ export function createProxy(initial: Loaded): Proxy {
       return intake;
     },
     sse,
-    retention,
+    storage,
     async start(opts = {}) {
       server = http.createServer(app);
       const s = server;
@@ -223,7 +224,7 @@ export function createProxy(initial: Loaded): Proxy {
       });
       status.start();
       intake.start();
-      retention.start();
+      storage.start();
       logger.info({ port, camera: running.camera.id, version: VERSION }, 'cam_proxy_started');
       return { port };
     },
@@ -241,7 +242,7 @@ export function createProxy(initial: Loaded): Proxy {
     async stop() {
       await restarting;
       sse.closeAll();
-      retention.stop();
+      storage.stop();
       const s = server;
       if (s) {
         s.closeAllConnections();

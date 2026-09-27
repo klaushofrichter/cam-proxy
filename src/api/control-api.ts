@@ -7,10 +7,10 @@ import { applyOverrides, ConfigError, needsRestart, removeOverride, type Loaded 
 import { leafPaths } from '../config/schema';
 import type { IntakeState } from '../events/intake';
 import { logBuffer, logger } from '../log';
-import type { Retention } from '../retention';
+import type { Storage } from '../storage';
 import type { StreamLog } from '../stream/log';
 import { tokenMatches } from './auth';
-import { diskStats, eventsStored } from './metrics';
+import { eventsStored } from './metrics';
 import { readCookie, SESSION_COOKIE, SESSION_MS, type createSessionSigner } from './session';
 
 export interface ControlDeps {
@@ -24,7 +24,7 @@ export interface ControlDeps {
   intake: () => IntakeState;
   resubscribe: () => void;
   restart: () => Promise<void>;
-  retention: Retention;
+  storage: Storage;
   sseClients: () => number;
   sessions: ReturnType<typeof createSessionSigner>;
   version: string;
@@ -77,20 +77,19 @@ export function controlApi(d: ControlDeps): express.Router {
       camera: d.camera(),
       intake: d.intake(),
       sse: { clients: d.sseClients() },
-      retention: { lastRun: d.retention.lastRun(), totals: d.retention.totals() },
+      retention: { lastRun: d.storage.lastRun(), totals: d.storage.totals() },
+      storage: { paused: d.storage.paused() },
     });
   });
 
   r.get('/stats', (_req, res) => {
-    const cfg = d.running();
-    const disk = diskStats(cfg.server.dataDir);
-    const budget = cfg.storage.maxBytes ?? Math.floor((disk.size * (cfg.storage.maxPercent ?? 85)) / 100);
+    const u = d.storage.usage();
     res.json({
-      disk: { catalog: { bytes: d.catalog.sizeBytes(), files: 1 }, free: disk.free, size: disk.size },
+      disk: { catalog: u.catalog, stills: u.stills, previews: u.previews, clips: u.clips, free: u.free, size: u.size },
       events: { stored: eventsStored(d.catalog) },
       stream: { rows: d.log.count(), lastId: d.log.lastId() },
       sse: { clients: d.sseClients() },
-      storage: { budget, used: d.catalog.sizeBytes() },
+      storage: { budget: u.budget, used: u.used, daysUntilFull: u.daysUntilFull, paused: d.storage.paused() },
     });
   });
 
@@ -120,7 +119,7 @@ export function controlApi(d: ControlDeps): express.Router {
       case 'camera-test':
         return void res.json(await d.checkCamera());
       case 'retention-run':
-        return void res.json(d.retention.run({ dryRun: req.body?.dryRun === true }));
+        return void res.json(d.storage.run({ dryRun: req.body?.dryRun === true }));
       case 'restart':
         d.restart().catch((err: Error) => logger.error({ err: err.message }, 'restart_failed'));
         return void res.status(202).end();
