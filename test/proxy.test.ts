@@ -94,6 +94,21 @@ describe('proxy restart', () => {
   });
 });
 
+describe.skipIf(!process.env.CAMPROXY_TEST_GO2RTC)('proxy restart while stills start', () => {
+  it('a restart during go2rtc start-up never leaves the old frame grabber running', async () => {
+    const sim = await startSim();
+    cleanup.push(() => sim.close());
+    const p = await startProxy(sim);
+    cleanup.push(() => p.proxy.stop());
+    const old = p.proxy.stills!;
+    await p.proxy.restart(); // go2rtc of the first side is still starting
+    await until(() => p.proxy.stills!.grabber.up(), 30000);
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(old.grabber.pid()).toBeUndefined();
+    expect(old.go2rtc.pid()).toBeUndefined();
+  }, 60000);
+});
+
 describe('cli', () => {
   it('exits 2 with a clear message on a bad configuration', () => {
     const r = spawnSync(join(__dirname, '..', 'node_modules', '.bin', 'tsx'), [join(__dirname, '..', 'src', 'cli.ts')], {

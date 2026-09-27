@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Phase 2 (stills, previews, storage):
+  - go2rtc as the single camera connection (installer with pinned checksums);
+  - a frame grabber writing a still every second and preview tiles;
+  - minute packs and sprite sheets that describe their own settings;
+  - storage management (age per kind, size budget, hard floor);
+  - stills and previews API, live `still` SSE messages, stats and metrics;
+  - the admin UI's Timeline page;
+  - verified on the real camera (60 stills a minute, one camera connection).
+
 - Phase 1 (core):
   - `config.json` with overrides and a generated JSON Schema; secrets from
     the environment;

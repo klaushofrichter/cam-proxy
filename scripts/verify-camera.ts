@@ -10,7 +10,8 @@
 // CAMPROXY_CAMERA_PASSWORD in this repo's .env; for admin, REOLINK_PASSWORD).
 // TLS name CAMERA_TLS_NAME (default cam1.skylar.technology). Prints no secrets.
 import { randomBytes } from 'crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
+import sharp from 'sharp';
 import { homedir, tmpdir } from 'os';
 import { join } from 'path';
 import { loadConfig } from '../src/config/load';
@@ -35,6 +36,9 @@ async function main() {
   writeFileSync(join(dir, 'config.json'), JSON.stringify({
     camera: { host: e.REOLINK_IP, protocol: 'https', tlsName: process.env.CAMERA_TLS_NAME ?? 'cam1.skylar.technology', user, statusPollS: 15 },
     server: { logLevel: 'warn' },
+    // Stills through go2rtc (tools/go2rtc from scripts/install-go2rtc.sh).
+    stills: { enabled: existsSync(join(__dirname, '..', 'tools', 'go2rtc')) },
+    go2rtc: { binary: join(__dirname, '..', 'tools', 'go2rtc'), rtspPort: 28554, apiPort: 21984 },
   }));
   const loaded = loadConfig({ CAMPROXY_TOKENS: randomBytes(24).toString('hex'), CAMPROXY_ADMIN_TOKEN: randomBytes(24).toString('hex'), CAMPROXY_CAMERA_PASSWORD: password }, { cwd: dir });
   const proxy = createProxy(loaded);
@@ -51,7 +55,20 @@ async function main() {
   console.log('camera:', JSON.stringify({ online: cam.online, model: cam.model, firmware: cam.firmware, clockOffsetMs: cam.clockOffsetMs, error: cam.error }));
   console.log('events:', JSON.stringify({ onvif: intake.onvif, source: intake.source, resubscribes: intake.resubscribes, lastError: intake.lastError }));
   console.log(`stream messages: ${seen.length} (${seen.filter((m) => m.type === 'camera-event').length} camera events)`);
+  const st = proxy.stills;
+  if (st) {
+    const producers = (await st.go2rtc.streams().catch(() => ({}) as Record<string, { producers: unknown[] }>)).cam1_sub?.producers.length;
+    const to = Date.now();
+    const list = st.store.listStills(to - seconds * 1000, to);
+    const perMinute = new Map<number, number>();
+    for (const t of list) perMinute.set(Math.floor(t / 60_000), (perMinute.get(Math.floor(t / 60_000)) ?? 0) + 1);
+    const sample = list.length ? await st.store.readStill(list[list.length - 1]) : undefined;
+    const meta = sample ? await sharp(sample).metadata() : undefined;
+    console.log('stills:', JSON.stringify({ total: list.length, perMinute: [...perMinute.values()], still: meta ? `${meta.width}x${meta.height} ${sample!.length} bytes` : null, go2rtcCameraConnections: producers }));
+  }
   await proxy.stop();
+  const packs = (d: string) => (existsSync(d) ? readdirSync(d, { recursive: true }).filter((f) => String(f).endsWith('.pack') || String(f).endsWith('.jpg')).length : 0);
+  console.log('written:', JSON.stringify({ packs: packs(join(dir, 'data', 'stills')), sprites: packs(join(dir, 'data', 'previews')) }), '(deleted with the temporary folder)');
   rmSync(dir, { recursive: true, force: true });
   process.exit(cam.online && intake.onvif === 'subscribed' ? 0 : 1);
 }

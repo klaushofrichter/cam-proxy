@@ -529,7 +529,7 @@ Each phase ends with something usable, released.
 
    Runs natively on the Mac against cam-sim. Verified once against the real
    camera.
-2. **Stills and previews:** go2rtc supervision, the frame grabber, packs,
+2. **Stills and previews** (built 2026-09-27, Plan 2; verified on the real camera): go2rtc supervision, the frame grabber, packs,
    sprites, retention, their APIs, and the admin UI timeline.
 3. **Clips:** the FTP(S) intake, camera FTP setup, and the clips API.
 4. **cams:** the SSE relay replaces polling, the history timeline, and clips

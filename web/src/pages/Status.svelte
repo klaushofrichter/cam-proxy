@@ -35,13 +35,27 @@
           {#each Object.entries($stats.events.stored) as [kind, n] (kind)}<dt>{kind} events</dt><dd>{n}</dd>{/each}
         </dl>
       </div>
+      <div class="card" data-testid="card-stream">
+        <h3>Stills</h3>
+        <dl>
+          <dt>Stream</dt><dd class={$status.stream.up ? 'ok' : 'bad'} data-testid="stream-state">{$status.stream.enabled ? ($status.stream.up ? 'up' : 'down') : 'off'}</dd>
+          <dt>go2rtc</dt><dd class={$status.stream.go2rtcUp ? 'ok' : 'bad'}>{$status.stream.go2rtcUp ? 'running' : 'stopped'}</dd>
+          <dt>Last still</dt><dd>{ago($status.stream.lastFrameTs)}</dd>
+          <dt>Still minutes</dt><dd>{$stats.disk.stills.files}</dd>
+          <dt>Preview minutes</dt><dd>{Math.round($stats.disk.previews.files / 2)}</dd>
+        </dl>
+      </div>
       <div class="card" data-testid="card-storage">
         <h3>Storage</h3>
         <dl>
+          <dt>Stills</dt><dd>{gb($stats.disk.stills.bytes)}</dd>
+          <dt>Previews</dt><dd>{mb($stats.disk.previews.bytes)}</dd>
           <dt>Catalog</dt><dd>{mb($stats.disk.catalog.bytes)}</dd>
+          <dt>Used / budget</dt><dd>{gb($stats.storage.used)} / {gb($stats.storage.budget)}</dd>
           <dt>Disk free</dt><dd>{gb($stats.disk.free)} of {gb($stats.disk.size)}</dd>
-          <dt>Budget</dt><dd>{gb($stats.storage.budget)}</dd>
-          <dt>Last retention</dt><dd>{ago($status.retention.lastRun)}</dd>
+          <dt>Days until full</dt><dd>{$stats.storage.daysUntilFull === null ? '—' : Math.round($stats.storage.daysUntilFull)}</dd>
+          <dt>Writing</dt><dd class={$stats.storage.paused ? 'bad' : 'ok'}>{$stats.storage.paused ? 'paused (disk full)' : 'on'}</dd>
+          <dt>Last cleanup</dt><dd>{ago($status.retention.lastRun)}</dd>
         </dl>
       </div>
       <div class="card">

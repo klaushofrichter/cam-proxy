@@ -1,6 +1,6 @@
 import { writable } from 'svelte/store';
 
-export const PAGES = ['status', 'events', 'settings', 'maintenance'] as const;
+export const PAGES = ['status', 'events', 'timeline', 'settings', 'maintenance'] as const;
 export type Page = (typeof PAGES)[number];
 
 const fromHash = (): Page => {

@@ -26,9 +26,13 @@ const frame = (m: StreamMessage) => `id: ${m.id}\nevent: ${m.type}\ndata: ${JSON
 // GET handler for the SSE stream: replay from Last-Event-ID / ?since, then
 // live. Each client has a bounded queue; one that can't keep up is dropped and
 // resumes from its Last-Event-ID without losing anything.
-export function sseHandler(log: StreamLog, opts: SseOptions): RequestHandler & { clients(): number; closeAll(): void; stats(): SseStats; setOptions(o: Partial<SseOptions>): void } {
+export type SseHandler = RequestHandler & { clients(): number; closeAll(): void; stats(): SseStats; setOptions(o: Partial<SseOptions>): void; live(cam: string, type: StreamType, data: Record<string, unknown>): void };
+
+export function sseHandler(log: StreamLog, opts: SseOptions): SseHandler {
   const o = { ...opts };
   const open = new Set<Response>();
+  // Live-only messages (stills: every second, not in the stream log, no id).
+  const liveSenders = new Set<(cam: string, type: StreamType, data: Record<string, unknown>) => void>();
   const stats: SseStats = { messages: {}, replayed: 0, dropped: 0 };
 
   const handler = ((req: Request, res: Response) => {
@@ -102,6 +106,14 @@ export function sseHandler(log: StreamLog, opts: SseOptions): RequestHandler & {
       if (pending.length > o.queuePerClient * 10) drop();
     };
     log.on('message', onMessage);
+    const onLive = (cam: string, type: StreamType, data: Record<string, unknown>) => {
+      if (replaying || !filter.types.includes(type) || (filter.cam && filter.cam !== cam)) return;
+      stats.messages[type] = (stats.messages[type] ?? 0) + 1;
+      queue.push(`event: ${type}\ndata: ${JSON.stringify({ cam, ...data })}\n\n`);
+      if (queue.length > o.queuePerClient) return drop();
+      pump();
+    };
+    liveSenders.add(onLive);
     const ping = setInterval(() => {
       queue.push(': ping\n\n');
       pump();
@@ -109,6 +121,7 @@ export function sseHandler(log: StreamLog, opts: SseOptions): RequestHandler & {
 
     res.on('close', () => {
       log.off('message', onMessage);
+      liveSenders.delete(onLive);
       clearInterval(ping);
       clearTimeout(blockedTimer);
       open.delete(res);
@@ -133,7 +146,7 @@ export function sseHandler(log: StreamLog, opts: SseOptions): RequestHandler & {
     else cursor = since;
     lastSent = cursor;
     pump();
-  }) as unknown as RequestHandler & { clients(): number; closeAll(): void; stats(): SseStats; setOptions(o: Partial<SseOptions>): void };
+  }) as unknown as SseHandler;
 
   handler.clients = () => open.size;
   handler.closeAll = () => {
@@ -141,5 +154,8 @@ export function sseHandler(log: StreamLog, opts: SseOptions): RequestHandler & {
   };
   handler.stats = () => ({ ...stats, messages: { ...stats.messages } });
   handler.setOptions = (next) => Object.assign(o, next);
+  handler.live = (cam, type, data) => {
+    for (const send of liveSenders) send(cam, type, data);
+  };
   return handler;
 }

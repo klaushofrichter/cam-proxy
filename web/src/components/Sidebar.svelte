@@ -5,6 +5,7 @@
   const items: Array<{ id: Page; label: string; icon: IconName }> = [
     { id: 'status', label: 'Status', icon: 'about' },
     { id: 'events', label: 'Events', icon: 'events' },
+    { id: 'timeline', label: 'Timeline', icon: 'history' },
     { id: 'settings', label: 'Settings', icon: 'settings' },
     { id: 'maintenance', label: 'Maintenance', icon: 'bolt' },
   ];

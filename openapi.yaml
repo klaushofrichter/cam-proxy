@@ -22,8 +22,48 @@ paths:
     get:
       summary: The camera and its state
       responses:
-        '200': { description: '[{ id, name, online, lastEventTs, stream }]' }
+        '200': { description: '[{ id, name, online, lastEventTs, stream: { up, lastFrameTs } | null }] (stream is null when stills are off)' }
         '401': { description: missing or wrong token }
+  /api/cameras/{cam}/stills:
+    get:
+      summary: Timestamps that have a still, in a range of at most one day
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: from, in: query, required: true, schema: { type: integer } }
+        - { name: to, in: query, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: '[ts, …] (unix ms), oldest first' }
+        '400': { description: missing range, or more than a day }
+        '404': { description: unknown camera, or stills are off }
+  /api/cameras/{cam}/stills/{file}:
+    get:
+      summary: One still, as <ts>.jpg
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: file, in: path, required: true, schema: { type: string }, description: '<unix ms>.jpg' }
+      responses:
+        '200': { description: 'image/jpeg; immutable once its minute is complete' }
+        '400': { description: not <unix ms>.jpg }
+        '404': { description: no still at that time }
+  /api/cameras/{cam}/previews:
+    get:
+      summary: Preview sprite sheets (one per minute) in a range of at most one day
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: from, in: query, required: true, schema: { type: integer } }
+        - { name: to, in: query, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: '[{ minute, cols, rows, tileW, tileH, intervalS, present: [bool], url }]' }
+        '400': { description: missing range, or more than a day }
+  /api/cameras/{cam}/previews/{file}:
+    get:
+      summary: One minute's sprite sheet, as <minute>.jpg
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: file, in: path, required: true, schema: { type: string }, description: '<minute unix ms>.jpg' }
+      responses:
+        '200': { description: 'image/jpeg: a cols × rows grid of tiles, missing tiles dark' }
+        '404': { description: no sprite for that minute }
   /api/cameras/{cam}/events:
     get:
       summary: Events, newest first
@@ -44,7 +84,8 @@ paths:
         Replays everything after `Last-Event-ID` (or `?since`), then continues
         live. A resume point older than the retention answers `event: reset`
         with `{oldestId}` first. Types: camera-event, camera-status, clip,
-        annotation, still (stills only when named in `types`).
+        annotation, still (stills only when named in `types`; they are live
+        only, without an id, and not replayed).
       parameters:
         - { name: cam, in: query, schema: { type: string } }
         - { name: types, in: query, schema: { type: string }, description: comma list }
