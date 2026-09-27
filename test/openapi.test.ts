@@ -22,6 +22,8 @@ function registered(app: any): string[] {
   const out: string[] = [];
   const walk = (stack: any[], prefix: string) => {
     for (const layer of stack) {
+      // The admin UI's page fallback is a RegExp route, not part of the API.
+      if (layer.route && typeof layer.route.path !== 'string') continue;
       if (layer.route) {
         for (const m of Object.keys(layer.route.methods)) out.push(`${m.toUpperCase()} ${prefix}${layer.route.path.replace(/:(\w+)/g, '{$1}')}`);
       } else if (layer.handle?.stack) {
