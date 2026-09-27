@@ -53,4 +53,11 @@ describe('client API', () => {
     expect(r.status).toBe(404);
     expect(r.body).toEqual({ error: 'not_found' });
   });
+
+  it('limits any one client to 1200 requests a minute', async () => {
+    const agent = request.agent(p.proxy.app);
+    let last = 0;
+    for (let i = 0; i < 1201 && last !== 429; i++) last = (await agent.get('/health')).status;
+    expect(last).toBe(429);
+  }, 60000);
 });

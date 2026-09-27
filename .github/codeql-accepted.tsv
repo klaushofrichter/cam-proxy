@@ -1,3 +1,4 @@
 # Accepted CodeQL findings. The gate in pr-checks.yml ignores exactly
 # these, and nothing else. Changing this file takes a pull request.
 # Format: ruleId<TAB>path<TAB>reason
+js/insufficient-password-hash	src/events/soap.ts	ONVIF WS-UsernameToken PasswordDigest is defined by the standard as base64(sha1(nonce + created + password)); the camera requires it this way. The proxy computes it to sign in to the camera, and never stores passwords hashed with it.

@@ -104,7 +104,8 @@ UI session.
 - A token in the URL (`?token=`, `?access_token=`) answers 400
   `{"error":"token_in_url"}`.
 
-Timestamps are unix milliseconds. The full schema is in
+Any one client may send 1200 requests a minute; more answer 429
+`{"error":"rate_limited"}`. Timestamps are unix milliseconds. The full schema is in
 [openapi.yaml](openapi.yaml).
 
 ```sh

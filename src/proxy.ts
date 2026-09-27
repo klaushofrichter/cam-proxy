@@ -1,4 +1,5 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
+import { rateLimit } from 'express-rate-limit';
 import { existsSync } from 'fs';
 import http from 'http';
 import type { AddressInfo } from 'net';
@@ -124,6 +125,8 @@ export function createProxy(initial: Loaded): Proxy {
   const access = { tokens: () => loaded.secrets.tokens, adminToken: () => loaded.secrets.adminToken, sessionValid: (v: string | undefined) => sessions.verify(v) };
   const app = express();
   app.disable('x-powered-by');
+  // Far above real use (the UI, cams, a scraper); stops a flood. SSE is one long request.
+  app.use(rateLimit({ windowMs: 60_000, limit: 1200, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } }));
   app.use(express.json({ limit: '64kb' }));
   app.get('/health', (_req, res) => void res.json({ ok: true }));
   app.get('/metrics', async (_req, res) => {
