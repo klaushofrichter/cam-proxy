@@ -156,7 +156,7 @@ export function createProxy(initial: Loaded): Proxy {
       if (!loaded.secrets.ftpPassword) logger.error('ftp_enabled_without_password');
       else {
         const cam = c.id;
-        const indexer = new ClipIndexer({ catalog, log, config: () => running, timeInfo: () => client.timeInfo(), dataDir: running.server.dataDir, cam });
+        const indexer = new ClipIndexer({ catalog, log, config: () => running, timeInfo: () => client.timeInfo(), dataDir: running.server.dataDir, cam, stored: (bytes) => storage.noteWritten('clips', bytes, 1) });
         clips = createClipsSide({ config: running, password: loaded.secrets.ftpPassword, indexer, accept: () => !storage.paused() });
       }
     }
@@ -235,6 +235,18 @@ export function createProxy(initial: Loaded): Proxy {
       intake: () => intake.state(),
       resubscribe: () => intake.resubscribe(),
       restart: () => proxy.restart(),
+      ftp: () => ({
+        enabled: running.ftp.enabled,
+        listening: clips?.side.listening() ?? false,
+        port: running.ftp.port,
+        tls: running.ftp.tls,
+        publicHost: running.ftp.publicHost ?? null,
+        passwordSet: !!loaded.secrets.ftpPassword,
+        lastUpload: clips?.side.lastUpload() ?? null,
+        lastClip: clips?.side.indexer.lastIndexed() ?? null,
+        clips: (catalog.db.prepare('SELECT COUNT(*) AS n FROM clips').get() as { n: number }).n,
+        failures: (clips?.side.uploadFailures() ?? 0) + (clips?.side.indexer.failures() ?? 0),
+      }),
       cameraFtp: {
         target: () => ({ server: running.ftp.publicHost ?? '', port: running.ftp.port, user: running.ftp.user, password: loaded.secrets.ftpPassword ?? '', tls: running.ftp.tls, stream: running.ftp.stream }),
         setup: (t) => setupCameraFtp(client, t),

@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import { existsSync, readdirSync, rmdirSync, statSync, statfsSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import type { Catalog } from './catalog/db';
+import { deleteClip } from './catalog/clips';
 import { deleteEventsBefore } from './catalog/events';
 import type { Config } from './config/defaults';
 import { logger } from './log';
@@ -169,7 +170,12 @@ export class Storage extends EventEmitter {
     const drop = (kind: FileKind, u: Unit) => {
       deleted[kind] = (deleted[kind] ?? 0) + u.files.length;
       freed += unitBytes(u);
-      if (!dry) for (const f of u.files) if (f.path) removeFile(f.path);
+      if (dry) return;
+      for (const f of u.files) {
+        if (!f.path) continue;
+        removeFile(f.path);
+        if (kind === 'clips') deleteClip(this.d.catalog, f.path); // the row (or the snapshot link)
+      }
     };
 
     // 1. Age, per kind (whole UTC days).
@@ -222,6 +228,7 @@ export class Storage extends EventEmitter {
     }
 
     if (!dry) {
+      removeStaleUploads(join(cfg.server.dataDir, 'ftp', '.incoming'), now - DAY);
       this.units.stills = sim.stills;
       this.units.previews = sim.previews;
       this.units.clips = sim.clips;
@@ -276,6 +283,19 @@ function safeDir(dir: string): string[] {
     return readdirSync(dir);
   } catch {
     return [];
+  }
+}
+
+// Uploads cut off without the FTP server noticing (a crash) stay in
+// .incoming; they go after a day. Uploads in progress are never counted.
+function removeStaleUploads(dir: string, before: number): void {
+  for (const name of safeDir(dir)) {
+    try {
+      const path = join(dir, name);
+      if (statSync(path).mtimeMs < before) unlinkSync(path);
+    } catch {
+      // gone
+    }
   }
 }
 

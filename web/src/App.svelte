@@ -9,6 +9,7 @@
   import Status from './pages/Status.svelte';
   import Events from './pages/Events.svelte';
   import Timeline from './pages/Timeline.svelte';
+  import Clips from './pages/Clips.svelte';
   import Settings from './pages/Settings.svelte';
   import Maintenance from './pages/Maintenance.svelte';
 
@@ -31,6 +32,7 @@
         {#if $page === 'status'}<Status />
         {:else if $page === 'events'}<Events />
         {:else if $page === 'timeline'}<Timeline />
+        {:else if $page === 'clips'}<Clips />
         {:else if $page === 'settings'}<Settings />
         {:else}<Maintenance />{/if}
       </main>

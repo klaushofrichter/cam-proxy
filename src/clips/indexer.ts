@@ -64,6 +64,7 @@ export interface ClipIndexerDeps {
   timeInfo: () => Promise<TimeInfo>;
   dataDir: string;
   cam: string;
+  stored?: (bytes: number) => void; // a file was added to clips/ (for storage accounting)
 }
 
 // Turns a finished upload into a stored, indexed clip (or its snapshot).
@@ -113,6 +114,7 @@ export class ClipIndexer {
 
     if (parsed.ext === 'jpg') {
       move(u.tmpFile, `${stem}.jpg`);
+      this.d.stored?.(u.bytes);
       const clip = clipByPath(catalog, `${stem}.mp4`);
       if (clip) setSnapshot(catalog, clip.id, `${stem}.jpg`);
       return null;
@@ -126,6 +128,7 @@ export class ClipIndexer {
     }
     const path = `${stem}.mp4`;
     move(u.tmpFile, path);
+    this.d.stored?.(u.bytes);
     deleteClip(catalog, path); // a repeated upload replaces the row
     const end = start + Math.round(probe.durationS * 1000);
     const row = insertClip(catalog, {

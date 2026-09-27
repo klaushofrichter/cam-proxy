@@ -6,6 +6,7 @@
     { id: 'status', label: 'Status', icon: 'about' },
     { id: 'events', label: 'Events', icon: 'events' },
     { id: 'timeline', label: 'Timeline', icon: 'history' },
+    { id: 'clips', label: 'Clips', icon: 'play' },
     { id: 'settings', label: 'Settings', icon: 'settings' },
     { id: 'maintenance', label: 'Maintenance', icon: 'bolt' },
   ];

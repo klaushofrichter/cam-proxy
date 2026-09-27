@@ -14,6 +14,19 @@ import { tokenMatches } from './auth';
 import { eventsStored } from './metrics';
 import { readCookie, SESSION_COOKIE, SESSION_MS, type createSessionSigner } from './session';
 
+export interface FtpStatus {
+  enabled: boolean;
+  listening: boolean;
+  port: number;
+  tls: boolean;
+  publicHost: string | null;
+  passwordSet: boolean;
+  lastUpload: number | null;
+  lastClip: number | null;
+  clips: number;
+  failures: number;
+}
+
 export interface ControlDeps {
   loaded: () => Loaded;
   setLoaded: (l: Loaded) => void; // applies live settings
@@ -25,6 +38,7 @@ export interface ControlDeps {
   intake: () => IntakeState;
   resubscribe: () => void;
   restart: () => Promise<void>;
+  ftp: () => FtpStatus;
   cameraFtp: {
     target: () => FtpTarget;
     setup: (t: FtpTarget) => Promise<unknown>;
@@ -98,6 +112,7 @@ export function controlApi(d: ControlDeps): express.Router {
       stream: d.stream(),
       retention: { lastRun: d.storage.lastRun(), totals: d.storage.totals() },
       storage: { paused: d.storage.paused() },
+      ftp: d.ftp(),
     });
   });
 

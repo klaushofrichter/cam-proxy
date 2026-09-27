@@ -57,6 +57,12 @@ describe('camera FTP setup', () => {
     expect(clip.stream).toBe('sub');
     expect(clip.end_ts! - clip.start_ts).toBeGreaterThan(0);
     await until(() => !!listClips(p.proxy.catalog, 'cam1', t0 - 60_000, Date.now() + 60_000)[0].snapshot, 10_000);
+    const st = (await request(p.proxy.app).get('/control/status').set(admin())).body.ftp;
+    expect(st).toMatchObject({ enabled: true, listening: true, port: ftpPort, tls: true, clips: 1, failures: 0 });
+    expect(st.lastUpload).toBeGreaterThanOrEqual(t0);
+    expect(st.lastClip).toBeGreaterThanOrEqual(t0);
+    // Storage knows about the clip before its next count.
+    expect(p.proxy.storage.usage().clips.bytes).toBeGreaterThan(0);
   }, 40_000);
 
   it('turns the camera’s FTP off with the rest kept; no more uploads', async () => {

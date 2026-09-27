@@ -5,7 +5,7 @@ import { join } from 'path';
 import { createCamSim } from 'cam-sim';
 import { loadConfig } from '../src/config/load';
 import { createProxy } from '../src/proxy';
-import { ADMIN_TOKEN, CLIENT_TOKEN, PROXY_PORT, SIM, SIM_CONTROL_TOKEN } from './env';
+import { ADMIN_TOKEN, CLIENT_TOKEN, FTP, FTP_PASSWORD, PROXY_PORT, SIM, SIM_CONTROL_TOKEN } from './env';
 
 // go2rtc and MediaMTX from tools/ (scripts/install-*.sh) unless CI set them.
 const tool = (name: string) => (existsSync(join(__dirname, '..', 'tools', name)) ? join(__dirname, '..', 'tools', name) : undefined);
@@ -19,6 +19,8 @@ async function main() {
     seedClips: 'demo',
   });
   const ports = await sim.listen(SIM, '127.0.0.1');
+  // Recordings end a second after the event, so clips upload quickly.
+  sim.engine.settings.running.Rec.postRec = '1 Seconds';
   const dir = mkdtempSync(join(tmpdir(), 'camproxy-e2e-'));
   writeFileSync(join(dir, 'config.json'), JSON.stringify({
     camera: { host: `127.0.0.1:${ports.http}`, protocol: 'http', user: 'proxy', onvifPort: ports.onvif, rtspPort: ports.rtsp || 554, statusPollS: 5 },
@@ -26,8 +28,9 @@ async function main() {
     server: { logLevel: 'warn' },
     stills: { enabled: !!GO2RTC },
     go2rtc: { binary: GO2RTC ?? 'go2rtc', rtspPort: 18585, apiPort: 18586 },
+    ftp: { enabled: true, port: FTP.port, passive: FTP.passive, publicHost: '127.0.0.1', stream: 'sub' },
   }));
-  const loaded = loadConfig({ CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: 'e2e-proxy-pw' }, { cwd: dir });
+  const loaded = loadConfig({ CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: 'e2e-proxy-pw', CAMPROXY_FTP_PASSWORD: FTP_PASSWORD }, { cwd: dir });
   const proxy = createProxy(loaded);
   await proxy.start({ port: PROXY_PORT, host: '127.0.0.1' });
   const stop = async () => {
