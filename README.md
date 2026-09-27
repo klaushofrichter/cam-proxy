@@ -6,14 +6,14 @@ resumable Server-Sent Events stream. Apps such as
 [cams](https://github.com/klaushofrichter/cams) no longer depend on the
 camera's quirks (one search at a time, few logins, broken downloads, no push).
 
-**Status:** phase 1 (core) is built:
+**Status:** phases 1 and 2 are built:
 - camera status and ONVIF events, with a polling fallback;
-- the event catalog;
-- the resumable SSE stream;
-- the client API and control API;
-- the admin UI.
+- the event catalog and the resumable SSE stream;
+- a still every second and preview sprite sheets through go2rtc;
+- storage management;
+- the client API, control API and admin UI (with a timeline).
 
-Stills and previews, clips, the cams integration and deployment follow; see
+Clips, the cams integration and deployment follow; see
 the [design spec](docs/superpowers/specs/2026-09-27-cam-proxy-design.md) and
 the [requirements](docs/requirements.md).
 
@@ -26,6 +26,8 @@ camera), both production. A Mac runs it for development on `localhost:8480`.
 - [Quick start (Mac, against cam-sim)](#quick-start-mac-against-cam-sim)
 - [Configuration](#configuration)
 - [Client API](#client-api)
+- [Stills and previews](#stills-and-previews)
+- [Storage management](#storage-management)
 - [Event stream (SSE)](#event-stream-sse)
 - [Control API and admin UI](#control-api-and-admin-ui)
 - [Metrics](#metrics)
@@ -35,6 +37,7 @@ camera), both production. A Mac runs it for development on `localhost:8480`.
 
 ```sh
 npm ci
+scripts/install-go2rtc.sh          # go2rtc 1.9.14 into tools/ (checksums pinned)
 npm run build                      # server and admin UI
 scripts/sync-secrets.sh            # generates CAMPROXY_TOKENS and CAMPROXY_ADMIN_TOKEN into .env
 ```
@@ -48,7 +51,8 @@ CAMSIM_USERS='proxy:admin:<password>' CAMSIM_CONTROL_TOKEN='<token>' CAMSIM_WEB_
 Point the proxy at it with a `config.json` in this folder:
 
 ```json
-{ "camera": { "host": "127.0.0.1:8080", "protocol": "http", "onvifPort": 8000, "rtspPort": 8554 } }
+{ "camera": { "host": "127.0.0.1:8080", "protocol": "http", "onvifPort": 8000, "rtspPort": 8554 },
+  "go2rtc": { "binary": "tools/go2rtc" } }
 ```
 
 Add `CAMPROXY_CAMERA_PASSWORD=<password>` to `.env`, then run `npm run dev`.
@@ -82,7 +86,10 @@ come only from the environment.
 | `retention` | `stillsDays` (7), `previewsDays` (14), `clipsDays` (7), `eventsDays` (30), `streamLogDays` (7), `intervalMin` (60) |
 | `storage` | `maxPercent` (85) or `maxBytes`, `minFreeBytes` (2 GB), `keepHours` |
 | `sse` | `maxClients` (50), `queuePerClient` (1000), `pingS` (15) |
-| `go2rtc`, `stills`, `previews`, `ftp` | used from phase 2 on; see the spec |
+| `go2rtc` | `binary` (`go2rtc`), `rtspPort` (18554), `apiPort` (11984); both listen on 127.0.0.1 only |
+| `stills` | `enabled` (true), `stream` (`sub`), `intervalS` (1), `size` (`896x512`), `quality` (5), `maxGB` |
+| `previews` | `tileSize` (`160x90`), `grid` (`10x6`), `quality` (7), `maxGB` |
+| `ftp` | phase 3 |
 
 | Secret (environment, or `<NAME>_FILE`) | |
 |---|---|
@@ -123,6 +130,57 @@ api '/cameras/cam1/events?kind=person&limit=10'
   - `endReason` is `state` (the camera said so), `timeout` (still open after
     `events.maxOpenMin`) or `restart` (the proxy stopped while it was open).
 - `GET /health`: the process is up (no auth).
+
+## Stills and previews
+
+go2rtc holds the one RTSP connection to the camera's sub stream (H.264
+896×512, 10 fps) and restreams it on 127.0.0.1. One ffmpeg reads the restream
+and writes, from the same decode, a still every `stills.intervalS` and a
+preview tile. ffmpeg and go2rtc are restarted with backoff if they exit.
+
+**On disk** (UTC days): `data/stills/<cam>/YYYY/MM/DD/HHMM.pack` holds one
+minute of stills, and `data/previews/<cam>/YYYY/MM/DD/HHMM.jpg` plus
+`HHMM.json` hold the minute's sprite sheet and its sidecar.
+- **Packs:** the JPEGs back to back, then a JSON footer (interval, size,
+  quality, one `[offset, length]` per slot), its length and the magic `CPK1`.
+- **Sprites:** a `grid` of tiles, with missing seconds dark.
+
+Both record the settings they were made with, so changing the interval or
+size keeps older minutes readable. A minute interrupted by a restart is merged
+when the proxy comes back. On the real camera a still is about 24 KB, about
+2 GB a day.
+
+| Route | |
+|---|---|
+| `GET /api/cameras/{cam}/stills?from&to` | timestamps with a still (at most a day) |
+| `GET /api/cameras/{cam}/stills/{ts}.jpg` | one still; `immutable` caching once its minute is complete |
+| `GET /api/cameras/{cam}/previews?from&to` | `[{minute, cols, rows, tileW, tileH, intervalS, present, url}]` |
+| `GET /api/cameras/{cam}/previews/{minute}.jpg` | one minute's sprite sheet |
+
+A browser scrubbing a day loads one sprite per minute and shows a tile with
+CSS (`background-position`). The admin UI's **Timeline** page does this. The
+SSE type `still` announces each new still live, only to clients that ask with
+`types=still`, without an id and without replay.
+
+## Storage management
+
+Two limits apply, and whichever is reached first wins:
+- **Age per kind:** `retention.stillsDays` (7), `previewsDays` (14),
+  `clipsDays`, `eventsDays` (30), `streamLogDays`, in whole UTC days.
+- **Size budget:** `storage.maxPercent` (85 % of the disk) or
+  `storage.maxBytes`, catalog included, and optional per-kind caps
+  (`stills.maxGB`, …). Over budget, the oldest hour goes first: stills, then
+  clips, then previews. The newest `storage.keepHours` of a kind are never
+  deleted for the budget.
+
+**Hard floor:** below `storage.minFreeBytes` (2 GB) free, stills stop being
+written, counted as `camproxy_stills_missing_total`. Writing resumes on its
+own when space is back.
+
+The storage run is hourly (`retention.intervalMin`). `POST
+/control/actions/retention-run` runs it now, and `{"dryRun":true}` previews
+what it would delete. `/control/stats` shows usage per kind, growth per day,
+days until full and whether writing is paused.
 
 ## Event stream (SSE)
 
@@ -194,6 +252,13 @@ exchanged for the cookie and not stored in the browser.
   `camproxy_camera_errors_total`;
 - `camproxy_sse_clients`, `camproxy_sse_messages_total`,
   `camproxy_stream_log_rows`;
+- `camproxy_stills_total`, `camproxy_stills_missing_total`,
+  `camproxy_last_still_timestamp_seconds`, `camproxy_stills_minutes_stored`,
+  `camproxy_previews_stored`;
+- `camproxy_frame_grabber_up`, `camproxy_go2rtc_up`;
+- `camproxy_disk_files{kind}`, `camproxy_storage_budget_bytes`,
+  `camproxy_storage_growth_bytes_per_day{kind}`,
+  `camproxy_storage_days_until_full`, `camproxy_storage_writing_paused`;
 - `camproxy_retention_deleted_total`,
   `camproxy_retention_last_run_timestamp_seconds`;
 - `camproxy_build_info`.
@@ -201,6 +266,7 @@ exchanged for the cookie and not stored in the browser.
 ## Development
 
 ```sh
+scripts/install-go2rtc.sh && scripts/install-mediamtx.sh   # tools/ for the tests
 npm test            # vitest, against cam-sim in process (needs ffmpeg)
 npm run test:e2e    # Playwright (Chrome) against a proxy and a cam-sim
 npm run lint:types && npm run check
@@ -209,7 +275,9 @@ npm run schema      # regenerate config.schema.json after changing a setting
 
 - **Real camera:** `npx tsx scripts/verify-camera.ts [seconds]` runs the
   proxy against the real camera. It is read-only: it signs in, checks status,
-  subscribes to ONVIF, then unsubscribes and logs out. It signs in as the
+  subscribes to ONVIF, and runs the stills pipeline (reporting stills per
+  minute, size and go2rtc's single connection). Then it unsubscribes, logs out
+  and deletes its temporary data. It signs in as the
   camera user `proxy` (password `CAMPROXY_CAMERA_PASSWORD` in `.env`), with the
   camera address from `~/Development/reolink/.env`.
 - **CI:** tests, e2e, type checks, `npm audit`, CodeQL, and a check that no
