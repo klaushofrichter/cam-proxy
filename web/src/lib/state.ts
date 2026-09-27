@@ -6,14 +6,17 @@ export interface Status {
   camera: { online: boolean; since: number; model?: string; firmware?: string; clockOffsetMs?: number; error?: string };
   intake: { onvif: string; since: number; source: string; lastError?: string; resubscribes: number };
   sse: { clients: number };
+  stream: { enabled: boolean; up: boolean; go2rtcUp: boolean; lastFrameTs: number | null };
   retention: { lastRun: number | null; totals: Record<string, number> };
+  storage: { paused: boolean };
 }
+export interface Usage { bytes: number; files: number; oldest: number | null; newest: number | null; growthPerDay: number }
 export interface Stats {
-  disk: { catalog: { bytes: number; files: number }; free: number; size: number };
+  disk: { catalog: Usage; stills: Usage; previews: Usage; clips: Usage; free: number; size: number };
   events: { stored: Record<string, number> };
   stream: { rows: number; lastId: number };
   sse: { clients: number };
-  storage: { budget: number; used: number };
+  storage: { budget: number; used: number; daysUntilFull: number | null; paused: boolean };
 }
 export interface FeedItem { id: number; type: string; data: Record<string, unknown>; at: number }
 

@@ -107,8 +107,9 @@ export class FrameGrabber extends EventEmitter {
       '-hide_banner', '-loglevel', 'error', '-nostdin',
       '-rtsp_transport', 'tcp', '-i', this.o.input,
       '-filter_complex', filter,
-      '-map', '[s]', '-f', 'image2pipe', '-c:v', 'mjpeg', '-q:v', String(this.o.quality), 'pipe:1',
-      '-map', '[t]', '-f', 'image2pipe', '-c:v', 'mjpeg', '-q:v', String(this.o.tileQuality), 'pipe:3',
+      // flush_packets: each frame leaves at once (buffered pipes deliver pairs).
+      '-map', '[s]', '-f', 'image2pipe', '-flush_packets', '1', '-c:v', 'mjpeg', '-q:v', String(this.o.quality), 'pipe:1',
+      '-map', '[t]', '-f', 'image2pipe', '-flush_packets', '1', '-c:v', 'mjpeg', '-q:v', String(this.o.tileQuality), 'pipe:3',
     ];
     const p = spawn(this.o.ffmpeg ?? 'ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
     this.proc = p;
@@ -118,8 +119,13 @@ export class FrameGrabber extends EventEmitter {
       while (stills.length && tiles.length) {
         const still = stills.shift()!;
         const tile = tiles.shift()!;
+        // The next slot after the last one while frames keep coming at the
+        // expected pace (arrival jitter doesn't cost a slot); after a stall or
+        // at start, the clock's slot.
         const step = this.o.intervalS * 1000;
-        const ts = Math.floor(this.now() / step) * step;
+        const clock = Math.floor(this.now() / step) * step;
+        const next = this.lastStamp + step;
+        const ts = this.lastStamp >= 0 && Math.abs(clock - next) <= step ? next : clock;
         if (ts <= this.lastStamp) continue; // a burst after a stall: keep the first per slot
         this.lastStamp = ts;
         this.last = ts;

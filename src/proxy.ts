@@ -192,6 +192,7 @@ export function createProxy(initial: Loaded): Proxy {
       restart: () => proxy.restart(),
       storage,
       sseClients: () => sse.clients(),
+      stream: () => ({ enabled: !!stills, up: stills?.grabber.up() ?? false, go2rtcUp: stills?.go2rtc.up() ?? false, lastFrameTs: stills?.grabber.lastFrameTs() ?? null }),
       sessions,
       version: VERSION,
     }),

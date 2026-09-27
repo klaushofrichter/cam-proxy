@@ -26,6 +26,7 @@ export interface ControlDeps {
   restart: () => Promise<void>;
   storage: Storage;
   sseClients: () => number;
+  stream: () => { enabled: boolean; up: boolean; go2rtcUp: boolean; lastFrameTs: number | null };
   sessions: ReturnType<typeof createSessionSigner>;
   version: string;
 }
@@ -77,6 +78,7 @@ export function controlApi(d: ControlDeps): express.Router {
       camera: d.camera(),
       intake: d.intake(),
       sse: { clients: d.sseClients() },
+      stream: d.stream(),
       retention: { lastRun: d.storage.lastRun(), totals: d.storage.totals() },
       storage: { paused: d.storage.paused() },
     });

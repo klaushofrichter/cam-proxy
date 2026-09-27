@@ -8,6 +8,7 @@
   import Sidebar from './components/Sidebar.svelte';
   import Status from './pages/Status.svelte';
   import Events from './pages/Events.svelte';
+  import Timeline from './pages/Timeline.svelte';
   import Settings from './pages/Settings.svelte';
   import Maintenance from './pages/Maintenance.svelte';
 
@@ -29,6 +30,7 @@
       <main>
         {#if $page === 'status'}<Status />
         {:else if $page === 'events'}<Events />
+        {:else if $page === 'timeline'}<Timeline />
         {:else if $page === 'settings'}<Settings />
         {:else}<Maintenance />{/if}
       </main>
