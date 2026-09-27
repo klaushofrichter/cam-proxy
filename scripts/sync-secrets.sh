@@ -36,11 +36,16 @@ while [ $# -gt 0 ]; do
   shift
 done
 case "$ONLY" in local|github|kube|all) ;; *) echo "sync-secrets: --only must be local, github, kube or all" >&2; exit 2 ;; esac
+for r in "${ROTATE[@]+"${ROTATE[@]}"}"; do
+  case "$r" in CAMPROXY_TOKENS|CAMPROXY_ADMIN_TOKEN|CAMPROXY_FTP_PASSWORD) ;;
+    *) echo "sync-secrets: can rotate only CAMPROXY_TOKENS, CAMPROXY_ADMIN_TOKEN, CAMPROXY_FTP_PASSWORD (not $r)" >&2; exit 2 ;;
+  esac
+done
 
 die() { echo "sync-secrets: $*" >&2; exit 1; }
 
 [ -f "$ENV_FILE" ] || { [ "$DRY" = 1 ] && die "$ENV_FILE not found"; touch "$ENV_FILE"; chmod 600 "$ENV_FILE"; }
-perms=$(stat -f '%Lp' "$ENV_FILE" 2>/dev/null || stat -c '%a' "$ENV_FILE")
+perms=$(stat -c '%a' "$ENV_FILE" 2>/dev/null || stat -f '%Lp' "$ENV_FILE")
 case "$perms" in *00) ;; *) die "$ENV_FILE is readable by others (mode $perms); run: chmod 600 $ENV_FILE" ;; esac
 
 # Values never go on a command line (ps shows argv): awk reads them from ENVIRON.

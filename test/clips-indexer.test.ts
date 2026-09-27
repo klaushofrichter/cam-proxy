@@ -116,6 +116,15 @@ describe('ClipIndexer', () => {
     expect(indexer.failures()).toBe(0);
   });
 
+  // Issue #5: a snapshot must be a JPEG.
+  it('drops a .jpg that isn’t a JPEG', async () => {
+    const { indexer, upload } = setup();
+    const u = upload('Den_00_20260927140301.jpg', Buffer.from('<html>not an image</html>'));
+    expect(await indexer.add(u)).toBeNull();
+    expect(existsSync(u.tmpFile)).toBe(false);
+    expect(indexer.failures()).toBe(1);
+  });
+
   it('drops a file with an unknown name', async () => {
     const { indexer, upload } = setup();
     const u = upload('whatever.mp4', readFileSync(clipFile));

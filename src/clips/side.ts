@@ -59,6 +59,9 @@ export function createClipsSide(d: { config: Config; password: string; indexer: 
       tls: await ftpTls(f),
       root: join(d.config.server.dataDir, 'ftp'),
       log: (line) => logger.debug({ ftp: line }, 'ftp_command'),
+      // Refuse at STOR while storage is paused (spec §8a); a file that got
+      // in before the pause is still dropped below.
+      accept: d.accept,
     });
     server.on('upload', (u: Upload) => {
       last = Date.now();

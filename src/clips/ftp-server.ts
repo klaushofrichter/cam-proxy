@@ -32,6 +32,7 @@ export interface FtpServerOptions {
   maxPreLoginPerIp?: number; // connections not logged in yet, per address
   timeouts?: { preLoginMs?: number; idleMs?: number; dataMs?: number };
   log?: (line: string) => void; // command names and paths, never the password
+  accept?: () => boolean; // false: uploads are refused at STOR (the disk is full)
   now?: () => number;
   lookup?: (host: string) => Promise<string>; // publicHost name → IPv4
 }
@@ -63,6 +64,7 @@ interface Session {
   closed: boolean;
   ip: string;
   busy: boolean; // a transfer runs: the control connection is quiet on purpose
+  chain: Promise<void>; // the session's commands, one at a time
   timer?: NodeJS.Timeout;
   end?: () => void; // leaves the session list and cleans up
   pasv?: { server: net.Server; conn: Promise<net.Socket> };
@@ -168,7 +170,7 @@ export class FtpServer extends EventEmitter {
       return;
     }
     this.log(`connect ${ip}`);
-    const s: Session = { stream: socket, secure: false, prot: 'C', authed: false, cwd: '/', closed: false, ip, busy: false };
+    const s: Session = { stream: socket, secure: false, prot: 'C', authed: false, cwd: '/', closed: false, ip, busy: false, chain: Promise.resolve() };
     this.sessionsOpen.add(s);
     const reply = (line: string) => {
       if (!s.closed && !s.stream.destroyed) s.stream.write(`${line}\r\n`);
@@ -195,7 +197,13 @@ export class FtpServer extends EventEmitter {
       while ((i = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, i).replace(/\r$/, '');
         buf = buf.slice(i + 1);
-        void this.command(s, line, reply, attach);
+        // One at a time, in order (a pipelined PASV waits for the one before).
+        s.chain = s.chain.then(() => this.command(s, line, reply, attach)).catch(() => undefined);
+        // Nothing sent in the clear after AUTH may count as sent over TLS.
+        if (/^\s*AUTH\b/i.test(line)) {
+          buf = '';
+          break;
+        }
       }
     };
     const attach = (stream: net.Socket) => {
@@ -249,7 +257,11 @@ export class FtpServer extends EventEmitter {
     const sp = line.indexOf(' ');
     const cmd = (sp < 0 ? line : line.slice(0, sp)).toUpperCase();
     const arg = sp < 0 ? '' : line.slice(sp + 1);
-    this.log(cmd === 'PASS' ? 'PASS ***' : `${cmd}${arg ? ` ${arg}` : ''}`);
+    // The log gets a known command with its argument (cut short), PASS
+    // masked, and for anything else only a short, sanitized name.
+    const name = line.trimStart().split(/\s/)[0].toUpperCase();
+    if (name.startsWith('PASS') || !KNOWN.has(cmd)) this.log(name.startsWith('PASS') ? 'PASS ***' : `${name.replace(/[^A-Z]/g, '').slice(0, 8) || '?'} (unknown)`);
+    else this.log(`${cmd}${arg ? ` ${arg.slice(0, 256)}` : ''}`);
     const needTls = !!this.o.tls;
     if (!KNOWN.has(cmd)) return reply('502 Command not implemented');
     if (!s.authed && !OPEN.has(cmd)) return reply('530 Please log in');
@@ -269,6 +281,7 @@ export class FtpServer extends EventEmitter {
       case 'PBSZ':
         return reply('200 PBSZ=0');
       case 'PROT':
+        if (arg.toUpperCase() === 'P' && !this.secureContext) return reply('536 No TLS configured');
         if (arg.toUpperCase() === 'P') return (s.prot = 'P'), reply('200 Protection level P');
         if (needTls) return reply('536 PROT P required');
         return (s.prot = 'C'), reply('200 Protection level C');
@@ -392,6 +405,7 @@ export class FtpServer extends EventEmitter {
     if (this.o.tls && s.prot !== 'P') return reply('521 PROT P required');
     const pasv = s.pasv;
     s.pasv = undefined;
+    if (this.o.accept && !this.o.accept()) return reply('452 Insufficient storage');
     reply('150 Ok to send data');
     s.busy = true;
     this.arm(s);

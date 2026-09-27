@@ -20,7 +20,10 @@
   const secs = (c: Clip) => (c.end === null ? '…' : `${Math.round((c.end - c.start) / 1000)} s`);
   const mb = (b: number) => `${(b / 1e6).toFixed(1)} MB`;
 
+  // Only the newest request may fill the page (a quick day switch).
+  let seq = 0;
   async function load() {
+    const mine = ++seq;
     message = '';
     try {
       const cams = await api<Array<{ id: string }>>('GET', '/api/cameras');
@@ -28,12 +31,15 @@
       const cam = encodeURIComponent(cams[0].id);
       const from = new Date(`${day}T00:00:00`).getTime();
       const to = from + 86_400_000 - 1;
-      const [list, evs] = await Promise.all([api<Clip[]>('GET', `/api/cameras/${cam}/clips?from=${from}&to=${to}`), api<Ev[]>('GET', `/api/cameras/${cam}/events?from=${from - 3_600_000}&to=${to}`)]);
-      clips = list.reverse(); // newest first
+      // Events from 6 h before the day: a clip just after midnight can cover an
+      // event that started the evening before.
+      const [list, evs] = await Promise.all([api<Clip[]>('GET', `/api/cameras/${cam}/clips?from=${from}&to=${to}`), api<Ev[]>('GET', `/api/cameras/${cam}/events?from=${from - 6 * 3_600_000}&to=${to}`)]);
+      if (mine !== seq) return;
+      clips = [...list].reverse(); // newest first
       kinds = Object.fromEntries(evs.map((e) => [e.id, e.kind]));
       if (!clips.length) message = 'No clips for this day.';
     } catch {
-      message = 'Could not load this day.';
+      if (mine === seq) message = 'Could not load this day.';
     }
   }
   $effect(() => {
