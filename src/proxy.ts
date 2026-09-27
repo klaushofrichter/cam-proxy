@@ -1,4 +1,5 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
+import { existsSync } from 'fs';
 import http from 'http';
 import type { AddressInfo } from 'net';
 import { join } from 'path';
@@ -23,6 +24,16 @@ import { createMetrics } from './api/metrics';
 import { createSessionSigner } from './api/session';
 
 export const VERSION = process.env.CAMPROXY_VERSION ?? 'dev';
+
+// The built admin UI: dist/web next to the compiled server (dist/src → dist/web),
+// or, running from source, the repository's dist/web. The source web/ folder
+// (with vite.config.mts) is never served.
+function findWebDir(): string | undefined {
+  for (const dir of [process.env.CAMPROXY_WEB_DIR, join(__dirname, '..', 'web'), join(__dirname, '..', 'dist', 'web')]) {
+    if (dir && existsSync(join(dir, 'index.html')) && !existsSync(join(dir, 'vite.config.mts'))) return dir;
+  }
+  return undefined;
+}
 export const TARGET = process.env.CAMPROXY_TARGET ?? 'dev';
 
 export interface Proxy {
@@ -137,8 +148,24 @@ export function createProxy(initial: Loaded): Proxy {
       version: VERSION,
     }),
   );
+  // The admin UI. The files are public; every API call needs a session.
+  const webDir = findWebDir();
+  if (!webDir) logger.warn('admin_ui_not_built');
+  else {
+    // A missing asset is a 404, not the app page (stale chunks after an upgrade).
+    app.use('/assets', express.static(join(webDir, 'assets'), { immutable: true, maxAge: '1y', index: false, fallthrough: false }));
+    app.get(/^\/(?!api\/|control\/|health$|metrics$).*/, (_req, res) => {
+      res.setHeader('Cache-Control', 'no-store');
+      // The UI has restart and retention buttons: never inside another page's frame.
+      res.setHeader('X-Frame-Options', 'DENY');
+      res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
+      res.sendFile(join(webDir, 'index.html'));
+    });
+  }
   app.use((_req, res) => void res.status(404).json({ error: 'not_found' }));
   app.use((err: Error & { status?: number; type?: string }, _req: Request, res: Response, _next: NextFunction) => {
+    if (err.status === 404) return void res.status(404).json({ error: 'not_found' });
+    if (err.type === 'entity.parse.failed') return void res.status(400).json({ error: 'invalid', detail: 'body is not JSON' });
     if (err.status && err.status < 500) return void res.status(err.status).json({ error: err.type === 'entity.too.large' ? 'too_large' : 'bad_request' });
     logger.error({ err: err.message }, 'request_failed');
     res.status(500).json({ error: 'internal' });

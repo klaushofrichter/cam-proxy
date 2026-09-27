@@ -39,6 +39,25 @@ jobs:
             echo "::error::media files are not allowed in this repository"; exit 1
           fi
 
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - run: npm ci
+      - run: sudo rm -f /etc/apt/sources.list.d/google-chrome.list
+      - name: Ensure ffmpeg (cam-sim fixtures)
+        run: command -v ffmpeg || (sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg)
+      - run: npm run build
+      - run: npm run check
+      - run: google-chrome --version
+      # The admin UI against a proxy and a cam-sim (e2e/start.ts). No artifact uploads.
+      - run: npm run test:e2e
+        env:
+          CI: 'true'
+
   codeql:
     runs-on: ubuntu-latest
     permissions:
