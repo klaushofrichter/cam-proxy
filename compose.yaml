@@ -1,0 +1,22 @@
+# cam-proxy on the Raspberry Pi, next to the real camera (spec §2).
+#   mkdir -p data && sudo chown 1000:1000 data     # the container runs as uid 1000
+#   cp config.example.json data/config.json         # then edit: camera.host, ftp.publicHost, …
+#                                                   # and set "server": { "dataDir": "." }
+#   scripts/sync-secrets.sh                         # .env with the CAMPROXY_* secrets
+#   docker compose up -d                            # update: docker compose pull && docker compose up -d
+# Host networking: the camera connects to the FTP server (2121 and the passive
+# ports), and go2rtc stays on 127.0.0.1.
+services:
+  cam-proxy:
+    image: ghcr.io/klaushofrichter/cam-proxy:latest
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      CAMPROXY_CONFIG: /data/config.json
+      CAMPROXY_TARGET: pi
+      CAMPROXY_TOKENS: ${CAMPROXY_TOKENS:?set in .env}
+      CAMPROXY_ADMIN_TOKEN: ${CAMPROXY_ADMIN_TOKEN:?set in .env}
+      CAMPROXY_CAMERA_PASSWORD: ${CAMPROXY_CAMERA_PASSWORD:?set in .env}
+      CAMPROXY_FTP_PASSWORD: ${CAMPROXY_FTP_PASSWORD:-}
+    volumes:
+      - ${CAMPROXY_DATA:-./data}:/data

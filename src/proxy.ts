@@ -214,7 +214,7 @@ export function createProxy(initial: Loaded): Proxy {
   app.use(rateLimit({ windowMs: 60_000, limit: 1200, skip: isImage, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } }));
   app.use(rateLimit({ windowMs: 60_000, limit: 6000, skip: (req) => !isImage(req), standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } }));
   app.use(express.json({ limit: '64kb' }));
-  app.get('/health', (_req, res) => void res.json({ ok: true }));
+  app.get('/health', (_req, res) => void res.json({ ok: true, version: VERSION }));
   app.get('/metrics', async (_req, res) => {
     res.type(metrics.registry.contentType).send(await metrics.registry.metrics());
   });

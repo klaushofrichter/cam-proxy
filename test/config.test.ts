@@ -166,3 +166,19 @@ describe('shipped files', () => {
     expect(l.config.camera.host).toBe(example.camera.host);
   });
 });
+
+// The cluster's config.json (the ConfigMap kube-setup mounts): it must load
+// as is, with the data folder on the volume and FTP on for cam2.
+describe('deploy/cluster/config.json', () => {
+  it('loads, with /data, cam2 as the camera and FTP on', () => {
+    const file = join(__dirname, '..', 'deploy', 'cluster', 'config.json');
+    const c = loadConfig({ ...SECRETS, CAMPROXY_FTP_PASSWORD: 'f'.repeat(24), CAMPROXY_CONFIG: file }, { cwd: dir }).config;
+    expect(c.server.dataDir).toBe('/data');
+    expect(c.camera).toMatchObject({ id: 'cam2', host: 'cam2.cam-sim.svc.cluster.local:443', protocol: 'https', tlsName: 'cam2.skylar.technology', user: 'proxy' });
+    expect(c.ftp).toMatchObject({ enabled: true, publicHost: 'cam-proxy.cam-proxy.svc.cluster.local', tls: true });
+    expect(c.stills.enabled).toBe(true);
+    // local-path volumes have no quota (statfs sees the node's disk): the cap
+    // is maxBytes, 85 % of the 20Gi PVC.
+    expect(c.storage.maxBytes).toBe(Math.floor(20 * 2 ** 30 * 0.85));
+  });
+});

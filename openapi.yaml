@@ -17,7 +17,7 @@ paths:
       summary: The process is up (no camera check, no auth)
       security: []
       responses:
-        '200': { description: '{ ok: true }' }
+        '200': { description: '{ ok: true, version } (the release version, dev locally)' }
   /api/cameras:
     get:
       summary: The camera and its state

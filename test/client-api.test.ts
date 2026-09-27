@@ -21,7 +21,7 @@ afterAll(async () => {
 
 describe('client API', () => {
   it('answers /health without a token', async () => {
-    expect((await request(p.proxy.app).get('/health')).body).toEqual({ ok: true });
+    expect((await request(p.proxy.app).get('/health')).body).toEqual({ ok: true, version: 'dev' });
   });
 
   it('needs a valid bearer token, and refuses one in the URL', async () => {

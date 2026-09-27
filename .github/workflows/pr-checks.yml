@@ -62,6 +62,14 @@ jobs:
         env:
           CI: 'true'
 
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Builds the image and checks it as the cluster runs it (uid 1000,
+      # mounted config, fresh /data, go2rtc and ffmpeg present).
+      - run: scripts/container-smoke.sh
+
   codeql:
     runs-on: ubuntu-latest
     permissions:

@@ -32,6 +32,7 @@ camera), both production. A Mac runs it for development on `localhost:8480`.
 - [Event stream (SSE)](#event-stream-sse)
 - [Control API and admin UI](#control-api-and-admin-ui)
 - [Metrics](#metrics)
+- [Deployment](#deployment)
 - [Development](#development)
 
 ## Quick start (Mac, against cam-sim)
@@ -40,7 +41,7 @@ camera), both production. A Mac runs it for development on `localhost:8480`.
 npm ci
 scripts/install-go2rtc.sh          # go2rtc 1.9.14 into tools/ (checksums pinned)
 npm run build                      # server and admin UI
-scripts/sync-secrets.sh            # generates CAMPROXY_TOKENS and CAMPROXY_ADMIN_TOKEN into .env
+scripts/sync-secrets.sh            # generates the tokens and the FTP password into .env
 ```
 
 Start a cam-sim with a `proxy` user (in its own checkout):
@@ -99,9 +100,14 @@ come only from the environment.
 | `CAMPROXY_CAMERA_PASSWORD` | the password of the proxy's camera user (`camera.user`) |
 | `CAMPROXY_FTP_PASSWORD` | the camera's FTP login to the proxy; required when `ftp.enabled` |
 
-`scripts/sync-secrets.sh` generates the tokens into `.env` (mode 600),
-`--rotate <KEY>` replaces one, and it prints names only. Syncing to GitHub and
-the cluster comes with deployment.
+`scripts/sync-secrets.sh` generates the tokens and the FTP password into
+`.env` (mode 600), `--rotate <KEY>` replaces one, and it prints names only.
+It refuses a file others can read and values with an inline comment. For the
+cluster, a separate file holds cam2's values and the kube settings
+(`.env.example` lists them): `--env-file .env.cluster --only all` sets the
+repo secret `KUBE_SETUP_DEPLOY_TOKEN` and applies the Secret
+`cam-proxy-secrets` (values on stdin or in a private temporary file, never in
+arguments).
 
 ## Client API
 
@@ -301,6 +307,27 @@ exchanged for the cookie and not stored in the browser.
 - `camproxy_retention_deleted_total`,
   `camproxy_retention_last_run_timestamp_seconds`;
 - `camproxy_build_info`.
+
+## Deployment
+
+One image, `ghcr.io/klaushofrichter/cam-proxy`, for linux/amd64 and
+linux/arm64. It holds Node 26, go2rtc and ffmpeg, and runs as uid 1000. It
+needs a `config.json` (`CAMPROXY_CONFIG`) whose `server.dataDir` is the `/data`
+volume, plus the `CAMPROXY_*` secrets. `scripts/container-smoke.sh` builds it
+and checks it as the cluster runs it.
+
+- **Branches:** a merge to `main` publishes `:main` and `:sha-<sha>`. A merge
+  to `production` releases `v<YYYY.MM.DD.N>` and `:latest`, and deploys to
+  the cluster (see below).
+- **Cluster** (next to cam2, `https://cam-proxy.skylar.technology`, LAN
+  only):
+  - The manifests live in kube-setup ([request](deploy/cluster/REQUEST.md)).
+  - The ConfigMap is [`deploy/cluster/config.json`](deploy/cluster/config.json).
+  - The release job pins the image digest in kube-setup, pushes, applies,
+    waits for the rollout, and checks that `/health` serves the new version.
+  - Secrets: `scripts/sync-secrets.sh --env-file .env.cluster --only all`.
+- **Raspberry Pi:** [`compose.yaml`](compose.yaml): host networking, `/data`
+  on the SSD, and `docker compose pull && docker compose up -d` to update.
 
 ## Development
 
