@@ -22,7 +22,7 @@ paths:
     get:
       summary: The camera and its state
       responses:
-        '200': { description: '[{ id, name, online, lastEventTs, stream: { up, lastFrameTs } | null }] (stream is null when stills are off)' }
+        '200': { description: '[{ id, name, online, lastEventTs, stream: { up, lastFrameTs } | null, publicUrl }] (stream is null when stills are off; publicUrl is server.publicUrl or null)' }
         '401': { description: missing or wrong token }
   /api/cameras/{cam}/extent:
     get:
