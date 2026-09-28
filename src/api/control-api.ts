@@ -86,7 +86,11 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
   const attempts = rateLimit({ windowMs: 15 * 60_000, limit: 20, standardHeaders: false, legacyHeaders: false, message: { error: 'too_many_attempts' } });
   // A one-time link from cams (POST /control/login-links): a UI session, then
   // the UI. A used or expired code lands on the token login instead.
-  r.get('/login-link', attempts, (req, res) => {
+  // Its own limit (a 192-bit code can't be guessed; this only bounds work),
+  // so link attempts never lock out the token login, and a limited browser
+  // lands on that login instead of a bare JSON error (review, 2026-09-28).
+  const linkAttempts = rateLimit({ windowMs: 15 * 60_000, limit: 200, standardHeaders: false, legacyHeaders: false, handler: (_req, res) => void res.redirect(302, '/?link=expired') });
+  r.get('/login-link', linkAttempts, (req, res) => {
     if (!d.links.consume(typeof req.query.code === 'string' ? req.query.code : undefined)) return void res.redirect(302, '/?link=expired');
     res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${d.sessions.issue()}; Max-Age=${SESSION_MS / 1000}; ${flags(req)}`);
     res.redirect(302, '/');
