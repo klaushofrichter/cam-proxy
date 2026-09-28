@@ -68,4 +68,14 @@ describe('login links over HTTP', () => {
     expect(again.headers.location).toBe('/?link=expired');
     expect(again.headers['set-cookie']).toBeUndefined();
   });
+
+  it('has its own attempt limit, and a limited browser lands on the token login (review)', async () => {
+    for (let i = 0; i < 25; i++) {
+      const r = await request(p.proxy.app).get('/control/login-link?code=wrong');
+      expect(r.status).toBe(302);
+      expect(r.headers.location).toBe('/?link=expired');
+    }
+    // The token login's own 20 attempts are untouched by those.
+    expect((await request(p.proxy.app).post('/control/login').send({ token: 'x' })).status).toBe(401);
+  });
 });
