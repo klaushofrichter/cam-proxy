@@ -92,4 +92,19 @@ describe('MinuteStore', () => {
     expect(await fresh.readStill(M)).toBeUndefined();
     expect(fresh.listStills(M, M + 59_999)).toEqual([]);
   });
+
+  it('finds its oldest minute of stills and of previews (the History strip’s left edge)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'camproxy-store-'));
+    const s = store(dir);
+    expect(s.oldest('stills')).toBeNull();
+    const day2 = M + 86_400_000;
+    s.add(frame(day2, 0));
+    s.add(frame(M, 3)); // older, and a different day folder
+    s.add(frame(M + 60_000, 0));
+    s.add(frame(day2 + 60_000, 0));
+    await s.flush();
+    expect(s.oldest('stills')).toBe(M);
+    expect(s.oldest('previews')).toBe(M);
+  });
 });
+

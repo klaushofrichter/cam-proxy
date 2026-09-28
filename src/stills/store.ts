@@ -218,6 +218,30 @@ export class MinuteStore extends EventEmitter {
     }
   }
 
+  // The oldest minute kept on disk (or the one being collected), or null:
+  // the first entry of the sorted YYYY/MM/DD/HHMM folders. Cheap: a few
+  // directory reads, not a scan.
+  oldest(kind: 'stills' | 'previews'): number | null {
+    const ext = kind === 'stills' ? '.pack' : '.json';
+    const base = join(this.o.dataDir, kind, this.o.cam);
+    const sorted = (dir: string, re: RegExp) => {
+      try {
+        return readdirSync(dir).filter((n) => re.test(n)).sort();
+      } catch {
+        return [];
+      }
+    };
+    for (const y of sorted(base, /^\d{4}$/)) {
+      for (const mo of sorted(join(base, y), /^\d{2}$/)) {
+        for (const d of sorted(join(base, y, mo), /^\d{2}$/)) {
+          const file = sorted(join(base, y, mo, d), new RegExp(`^\\d{4}\\${ext}$`))[0];
+          if (file) return Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(file.slice(0, 2)), Number(file.slice(2, 4)));
+        }
+      }
+    }
+    return this.current?.minute ?? null;
+  }
+
   // Timestamps with a still, oldest first. The caller bounds the range.
   listStills(from: number, to: number): number[] {
     const out: number[] = [];

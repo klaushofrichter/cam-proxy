@@ -27,6 +27,12 @@ export function listClips(c: Catalog, cam: string, from: number, to: number): Cl
     .all(cam, to, from) as unknown as ClipRow[];
 }
 
+// The start of the oldest clip kept for a camera, or null.
+export function oldestClip(c: Catalog, cam: string): number | null {
+  const r = c.db.prepare('SELECT MIN(start_ts) AS t FROM clips WHERE cam = ?').get(cam) as { t: number | null } | undefined;
+  return r?.t ?? null;
+}
+
 export function clipById(c: Catalog, id: number): ClipRow | undefined {
   return c.db.prepare('SELECT * FROM clips WHERE id = ?').get(id) as unknown as ClipRow | undefined;
 }

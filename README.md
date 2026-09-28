@@ -207,6 +207,7 @@ when the proxy comes back.
 
 | Route | |
 |---|---|
+| `GET /api/cameras/{cam}/extent` | how far back content goes: `{clips, stills, previews}`, the oldest of each (unix ms, or null) |
 | `GET /api/cameras/{cam}/stills?from&to` | timestamps with a still (at most a day) |
 | `GET /api/cameras/{cam}/stills/{ts}.jpg` | one still; `immutable` caching once its minute is complete |
 | `GET /api/cameras/{cam}/previews?from&to` | `[{minute, cols, rows, tileW, tileH, intervalS, present, url}]` |
