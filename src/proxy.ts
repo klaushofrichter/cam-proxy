@@ -30,6 +30,7 @@ import { clientApi } from './api/client-api';
 import { controlApi, sessionRoutes } from './api/control-api';
 import { createMetrics } from './api/metrics';
 import { createSessionSigner } from './api/session';
+import { createLoginLinks } from './api/login-links';
 
 export const VERSION = process.env.CAMPROXY_VERSION ?? 'dev';
 
@@ -99,6 +100,7 @@ export function createProxy(initial: Loaded): Proxy {
   const storage = new Storage({ catalog, log, config: () => running });
   storage.recount();
   const sessions = createSessionSigner();
+  const links = createLoginLinks();
 
   let client: ReolinkClient;
   let status: StatusPoller;
@@ -227,7 +229,7 @@ export function createProxy(initial: Loaded): Proxy {
   app.get('/metrics', async (_req, res) => {
     res.type(metrics.registry.contentType).send(await metrics.registry.metrics());
   });
-  app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions }));
+  app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links }));
   app.use('/api', refuseTokenInUrl, requireAccess('client', access), clientApi({ config: () => running, catalog, status: () => status, sse, stills: () => stills }));
   app.use(
     '/control',
@@ -266,6 +268,7 @@ export function createProxy(initial: Loaded): Proxy {
       sseClients: () => sse.clients(),
       stream: () => ({ enabled: !!stills, up: stills?.grabber.up() ?? false, go2rtcUp: stills?.go2rtc.up() ?? false, lastFrameTs: stills?.grabber.lastFrameTs() ?? null }),
       sessions,
+      links,
       version: VERSION,
     }),
   );

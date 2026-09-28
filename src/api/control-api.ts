@@ -13,6 +13,7 @@ import type { StreamLog } from '../stream/log';
 import { tokenMatches } from './auth';
 import { eventsStored } from './metrics';
 import { readCookie, SESSION_COOKIE, SESSION_MS, type createSessionSigner } from './session';
+import type { createLoginLinks } from './login-links';
 
 export interface FtpStatus {
   enabled: boolean;
@@ -49,6 +50,7 @@ export interface ControlDeps {
   sseClients: () => number;
   stream: () => { enabled: boolean; up: boolean; go2rtcUp: boolean; lastFrameTs: number | null };
   sessions: ReturnType<typeof createSessionSigner>;
+  links: ReturnType<typeof createLoginLinks>;
   version: string;
 }
 
@@ -78,10 +80,18 @@ async function cameraCall(res: Response, f: () => Promise<unknown>): Promise<voi
   }
 }
 
-export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnType<typeof createSessionSigner> }): express.Router {
+export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnType<typeof createSessionSigner>; links: ReturnType<typeof createLoginLinks> }): express.Router {
   const r = express.Router();
   const flags = (req: express.Request) => `HttpOnly; SameSite=Strict; Path=/${req.secure ? '; Secure' : ''}`;
-  r.post('/login', rateLimit({ windowMs: 15 * 60_000, limit: 20, standardHeaders: false, legacyHeaders: false, message: { error: 'too_many_attempts' } }), (req, res) => {
+  const attempts = rateLimit({ windowMs: 15 * 60_000, limit: 20, standardHeaders: false, legacyHeaders: false, message: { error: 'too_many_attempts' } });
+  // A one-time link from cams (POST /control/login-links): a UI session, then
+  // the UI. A used or expired code lands on the token login instead.
+  r.get('/login-link', attempts, (req, res) => {
+    if (!d.links.consume(typeof req.query.code === 'string' ? req.query.code : undefined)) return void res.redirect(302, '/?link=expired');
+    res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${d.sessions.issue()}; Max-Age=${SESSION_MS / 1000}; ${flags(req)}`);
+    res.redirect(302, '/');
+  });
+  r.post('/login', attempts, (req, res) => {
     const token = req.body?.token;
     if (typeof token !== 'string' || !tokenMatches(token, [d.adminToken()])) return void res.status(401).json({ error: 'unauthorized' });
     res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${d.sessions.issue()}; Max-Age=${SESSION_MS / 1000}; ${flags(req)}`);
@@ -102,6 +112,9 @@ export function controlApi(d: ControlDeps): express.Router {
     if (err instanceof ConfigError) return void res.status(400).json({ error: 'invalid', detail: err.message });
     throw err;
   };
+
+  // A one-time sign-in link for a signed-in cams user (admin token only).
+  r.post('/login-links', (_req, res) => void res.status(201).json(d.links.issue()));
 
   r.get('/status', (_req, res) => {
     res.json({
