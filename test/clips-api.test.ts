@@ -109,4 +109,13 @@ describe('clips API', () => {
       for (const r of batch) expect(r.status, JSON.stringify(r.body)).toBe(206);
     }
   }, 60_000);
+
+  it('says how far back it has content: the oldest clip, still and preview', async () => {
+    const r = await request(p.proxy.app).get('/api/cameras/cam1/extent').set(auth());
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ clips: expect.any(Number), stills: null, previews: null });
+    expect(r.body.clips).toBeLessThanOrEqual(T);
+    expect((await request(p.proxy.app).get('/api/cameras/nope/extent').set(auth())).status).toBe(404);
+  });
 });
+

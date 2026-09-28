@@ -24,6 +24,14 @@ paths:
       responses:
         '200': { description: '[{ id, name, online, lastEventTs, stream: { up, lastFrameTs } | null }] (stream is null when stills are off)' }
         '401': { description: missing or wrong token }
+  /api/cameras/{cam}/extent:
+    get:
+      summary: How far back the proxy has content (for a timeline's left edge)
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: '{ clips, stills, previews }: the oldest clip start, still minute and preview minute kept (unix ms), each null when none' }
+        '404': { description: unknown camera }
   /api/cameras/{cam}/stills:
     get:
       summary: Timestamps that have a still, in a range of at most one day

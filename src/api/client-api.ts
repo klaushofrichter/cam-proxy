@@ -1,6 +1,6 @@
 import express, { type Request, type Response } from 'express';
 import { resolve } from 'path';
-import { clipById, listClips, overlappingEvents, type ClipRow } from '../catalog/clips';
+import { clipById, listClips, oldestClip, overlappingEvents, type ClipRow } from '../catalog/clips';
 import type { Catalog } from '../catalog/db';
 import { listEvents, type EventRow } from '../catalog/events';
 import type { Config } from '../config/defaults';
@@ -61,6 +61,14 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     res.type('image/jpeg').setHeader('Cache-Control', final ? 'private, max-age=604800, immutable' : 'no-store');
     res.send(jpeg);
   };
+
+  // How far back this proxy has content (the History strip's left edge):
+  // the oldest clip, still minute and preview minute, each null when none.
+  r.get('/cameras/:cam/extent', (req, res) => {
+    if (!known(req, res)) return;
+    const s = d.stills()?.store;
+    res.json({ clips: oldestClip(d.catalog, cam().id), stills: s?.oldest('stills') ?? null, previews: s?.oldest('previews') ?? null });
+  });
 
   r.get('/cameras/:cam/stills', (req, res) => {
     const st = store(req, res);
