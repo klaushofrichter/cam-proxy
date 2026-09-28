@@ -35,7 +35,16 @@ describe('client API', () => {
 
   it('lists the camera with its state', async () => {
     const r = await request(p.proxy.app).get('/api/cameras').set(auth());
-    expect(r.body).toEqual([{ id: 'cam1', name: 'Den', online: true, lastEventTs: 3000, stream: process.env.CAMPROXY_TEST_GO2RTC ? expect.objectContaining({ up: expect.any(Boolean) }) : null }]);
+    expect(r.body).toEqual([{ id: 'cam1', name: 'Den', online: true, lastEventTs: 3000, stream: process.env.CAMPROXY_TEST_GO2RTC ? expect.objectContaining({ up: expect.any(Boolean) }) : null, publicUrl: null }]);
+  });
+
+  it('names its own web address when server.publicUrl is set (cams links to it)', async () => {
+    const q = await startProxy(sim, { settings: { server: { logLevel: 'silent', publicUrl: 'https://proxy.example' } } });
+    try {
+      expect((await request(q.proxy.app).get('/api/cameras').set(auth())).body[0].publicUrl).toBe('https://proxy.example');
+    } finally {
+      await q.proxy.stop();
+    }
   });
 
   it('lists events, newest first, with filters', async () => {

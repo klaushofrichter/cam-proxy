@@ -31,7 +31,8 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     const last = listEvents(d.catalog, { cam: cam().id, limit: 1 })[0];
     const s = d.stills();
     const stream = s ? { up: s.grabber.up(), lastFrameTs: s.grabber.lastFrameTs() } : null;
-    res.json([{ id: cam().id, name: cam().name, online: d.status().state().online, lastEventTs: last?.start_ts ?? null, stream }]);
+    // publicUrl: where people reach this proxy's web UI (cams links to it).
+    res.json([{ id: cam().id, name: cam().name, online: d.status().state().online, lastEventTs: last?.start_ts ?? null, stream, publicUrl: d.config().server.publicUrl ?? null }]);
   });
 
   r.get('/cameras/:cam/events', (req, res) => {

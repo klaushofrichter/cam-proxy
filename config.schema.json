@@ -35,7 +35,7 @@
         "publicUrl": {
           "type": "string",
           "pattern": "^https?://[^\\s]+$",
-          "description": "base URL for absolute links"
+          "description": "where people reach this proxy (its admin UI); reported in /api/cameras so clients can link to it"
         }
       }
     },
