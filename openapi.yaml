@@ -153,6 +153,22 @@ paths:
         '204': { description: signed in (camproxy_session cookie, HttpOnly, SameSite=Strict, 12 h) }
         '401': { description: wrong token }
         '429': { description: too many attempts (20 per 15 minutes) }
+  /control/login-links:
+    post:
+      summary: A one-time sign-in link for the admin UI (cams mints it for a signed-in user; admin token only)
+      responses:
+        '201': { description: '{ code, expiresInS: 60 }: redeem once at /control/login-link?code= within the time' }
+        '401': { description: no token }
+        '403': { description: not the admin token }
+  /control/login-link:
+    get:
+      summary: Redeems a one-time code for a UI session, then redirects to the UI
+      security: []
+      parameters:
+        - { name: code, in: query, required: true, schema: { type: string } }
+      responses:
+        '302': { description: 'to / with the session cookie; to /?link=expired when the code is used, unknown or expired' }
+        '429': { description: too many attempts (20 per 15 minutes) }
   /control/logout:
     post:
       summary: Clears the session cookie
