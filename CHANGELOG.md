@@ -4,7 +4,7 @@
 
 - `/api/cameras` reports `publicUrl` (the `server.publicUrl` setting, no longer reserved), so cams can link to the proxy's web UI.
 - `GET /api/cameras/{cam}/extent`: the oldest clip, still and preview kept, so a client (cams' History strip) knows how far back it can go.
-- Tests: cam-sim v2026.09.27.3.
+- Tests: cam-sim v2026.09.28.1.
 - Deploy: the cluster's `ftp.stream` is `sub` (clips for cams play in every
   browser).
 
