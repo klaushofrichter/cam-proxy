@@ -167,8 +167,7 @@ paths:
       parameters:
         - { name: code, in: query, required: true, schema: { type: string } }
       responses:
-        '302': { description: 'to / with the session cookie; to /?link=expired when the code is used, unknown or expired' }
-        '429': { description: too many attempts (20 per 15 minutes) }
+        '302': { description: 'to / with the session cookie; to /?link=expired when the code is used, unknown or expired, or after 200 attempts in 15 minutes' }
   /control/logout:
     post:
       summary: Clears the session cookie
