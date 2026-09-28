@@ -1,7 +1,8 @@
 <script lang="ts">
   import { login } from '../lib/api';
   let token = $state('');
-  let error = $state('');
+  // A one-time link from cams that was used or too old (Klaus, 2026-09-28).
+  let error = $state(new URLSearchParams(location.search).get('link') === 'expired' ? 'That sign-in link has expired. Open cam-proxy from cams again, or sign in with the token.' : '');
   let busy = $state(false);
 
   async function submit(e: SubmitEvent) {
