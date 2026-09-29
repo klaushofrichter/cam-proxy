@@ -31,6 +31,9 @@ import { controlApi, sessionRoutes } from './api/control-api';
 import { createMetrics } from './api/metrics';
 import { createSessionSigner } from './api/session';
 import { createLoginLinks } from './api/login-links';
+import { composeApi, hasAudio } from './api/compose-api';
+import { createComposer, ffmpegRunner } from './compose/jobs';
+import { clockText, defaultFont } from './compose/ffmpeg';
 
 export const VERSION = process.env.CAMPROXY_VERSION ?? 'dev';
 
@@ -101,6 +104,15 @@ export function createProxy(initial: Loaded): Proxy {
   storage.recount();
   const sessions = createSessionSigner();
   const links = createLoginLinks();
+  // Composed clips (spec 2026-09-28): one encoding at a time; abandoned and
+  // old jobs are swept every 5 s.
+  const font = running.composition?.font ?? defaultFont();
+  const composer = createComposer({
+    dir: join(running.server.dataDir, 'compositions'),
+    runner: ffmpegRunner({ font: font ?? '', clock: clockText, readStill: (ts) => stills?.store.readStill(ts) ?? Promise.resolve(undefined), hasAudio }),
+  });
+  const sweeper = setInterval(() => composer.sweep(), 5000);
+  sweeper.unref();
 
   let client: ReolinkClient;
   let status: StatusPoller;
@@ -230,6 +242,7 @@ export function createProxy(initial: Loaded): Proxy {
     res.type(metrics.registry.contentType).send(await metrics.registry.metrics());
   });
   app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links }));
+  app.use('/api', refuseTokenInUrl, requireAccess('client', access), composeApi({ config: () => running, catalog, composer, stillsIn: (f, t) => stills?.store.listStills(f, t) ?? [], paused: () => storage.paused(), font }));
   app.use('/api', refuseTokenInUrl, requireAccess('client', access), clientApi({ config: () => running, catalog, status: () => status, sse, stills: () => stills }));
   app.use(
     '/control',
@@ -369,6 +382,8 @@ export function createProxy(initial: Loaded): Proxy {
     },
     async stop() {
       await restarting;
+      clearInterval(sweeper);
+      await composer.stop();
       sse.closeAll();
       storage.stop();
       const s = server;
