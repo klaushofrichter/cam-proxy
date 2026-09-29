@@ -60,6 +60,9 @@ run:
 - Docker Engine and the Compose plugin, from Docker's Debian repository;
 - `<user>` in the `docker` group;
 - container logs capped at 10 MB × 3;
+- the memory cgroup (`cgroup_enable=memory` in `/boot/firmware/cmdline.txt`):
+  Raspberry Pi kernels ship without it, so without it `docker stats` shows no
+  memory and memory limits don't work;
 - `/srv/cam-proxy` and `/srv/cam-proxy/data`, owned by `<user>`;
 - then a reboot.
 
@@ -187,10 +190,13 @@ This keeps the history: stills, previews, clips and the catalog.
 | Load | `docker stats --no-stream`, `vcgencmd measure_temp`, `vcgencmd get_throttled` (0x0 = fine) |
 
 - **Restarts:** the container restarts by itself (`restart: unless-stopped`)
-  and comes back after a reboot, because Docker starts at boot.
+  and comes back after a reboot, because Docker starts at boot. Tested on
+  2026-09-29: after `reboot`, the proxy was healthy within 5 s of the Pi coming
+  back, with the camera up and ONVIF subscribed, and cams reconnected on its own.
+  Nothing else needs to autostart.
 - **Updates:** nothing updates the Pi on its own. A release to `production`
   updates only the cluster, so pull on the Pi after a release.
-- **Memory in `docker stats`:** it shows `0B`, because the Raspberry Pi kernel
-  doesn't turn on the memory cgroup. To see memory, or to use Compose memory
-  limits, add `cgroup_enable=memory` to `/boot/firmware/cmdline.txt` (on its
-  one line) and reboot.
+- **Memory:** with the memory cgroup on (see step 2), `docker stats` shows
+  the proxy at about 350–390 MiB of the 3.7 GiB. On a Pi prepared before the
+  script did this, `docker stats` shows `0B`: add `cgroup_enable=memory` to the
+  single line of `/boot/firmware/cmdline.txt` and reboot.
