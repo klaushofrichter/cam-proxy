@@ -233,6 +233,64 @@ describe('FTP server hardening', () => {
     expect(await raw.send('PASV')).toMatch(/\(127,0,0,1,\d+,\d+\)/);
     raw.close();
   });
+
+  // Issue #5: a publicHost name whose address changes (a DHCP lease, a new
+  // Mac network) is looked up again, at most once a minute.
+  it('looks the publicHost name up again after a minute', async () => {
+    let now = 1_000_000;
+    let address = '10.1.2.3';
+    let lookups = 0;
+    const { port } = await setup({ publicHost: 'cam-proxy.lan', now: () => now, lookup: async () => { lookups++; return address; } });
+    const pasv = async () => {
+      const raw = await rawSession(port);
+      await raw.send('USER camera');
+      await raw.send('PASS ftp-pw');
+      const r = await raw.send('PASV');
+      raw.close();
+      return r;
+    };
+    expect(await pasv()).toMatch(/\(10,1,2,3,\d+,\d+\)/);
+    address = '10.9.9.9';
+    now += 30_000;
+    expect(await pasv()).toMatch(/\(10,1,2,3,\d+,\d+\)/); // cached
+    now += 31_000;
+    expect(await pasv()).toMatch(/\(10,9,9,9,\d+,\d+\)/);
+    expect(lookups).toBe(2);
+  });
+
+  // Review: a failed re-lookup keeps the last good address, and sessions
+  // arriving together share one lookup.
+  it('keeps the last good address when a later lookup fails, and shares one lookup', async () => {
+    let now = 1_000_000;
+    let fail = false;
+    let lookups = 0;
+    const { port } = await setup({
+      publicHost: 'cam-proxy.lan',
+      now: () => now,
+      lookup: async () => {
+        lookups++;
+        await new Promise((r) => setTimeout(r, 30));
+        if (fail) throw new Error('EAI_AGAIN');
+        return '10.1.2.3';
+      },
+    });
+    const pasv = async () => {
+      const raw = await rawSession(port);
+      await raw.send('USER camera');
+      await raw.send('PASS ftp-pw');
+      const r = await raw.send('PASV');
+      raw.close();
+      return r;
+    };
+    expect(await pasv()).toMatch(/\(10,1,2,3,\d+,\d+\)/);
+    fail = true;
+    now += 61_000;
+    const before = lookups;
+    const [a, b] = await Promise.all([pasv(), pasv()]);
+    expect(a).toMatch(/\(10,1,2,3,\d+,\d+\)/);
+    expect(b).toMatch(/\(10,1,2,3,\d+,\d+\)/);
+    expect(lookups - before).toBe(1);
+  });
 });
 
 // Issue #5 (deferred minors from the Plan 3 review).

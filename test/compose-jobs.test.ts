@@ -3,10 +3,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdtempSync, readdirSync, writeFileSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { createComposer, type Runner } from '../src/compose/jobs';
+import { ComposeError, createComposer, type Runner } from '../src/compose/jobs';
 import { planComposition } from '../src/compose/plan';
 
-const plan = planComposition({ clip: { id: 1, start: 0, end: 10_000, path: '/c.mp4' }, preS: 0, postS: 0, clips: [], hasStill: () => false });
+const plan = planComposition({ clip: { id: 1, start: 0, end: 10_000, path: '/c.mp4' }, preS: 0, postS: 0, clips: [], stillAt: () => null });
 if (!plan.ok) throw new Error('plan');
 const req = { cam: 'cam1', plan, size: 'sd' as const, badge: true };
 
@@ -80,7 +80,7 @@ describe('composer jobs', () => {
     await tick();
     m.jobs[0].fail(new Error('ffmpeg exited 1'));
     await tick();
-    expect(c.get('cam1', a.id)).toMatchObject({ state: 'failed', error: 'ffmpeg exited 1' });
+    expect(c.get('cam1', a.id)).toMatchObject({ state: 'failed', error: 'the encoder failed' }); // ffmpeg's text is logged, not shown
   });
 
   it('stops a job nobody polls for 30 s (a closed tab), and drops results after 15 min', async () => {
@@ -98,9 +98,9 @@ describe('composer jobs', () => {
     m.jobs[1].finish();
     await tick();
     advance(14 * 60_000); c.sweep();
-    expect(c.get('cam1', b.id)).toMatchObject({ state: 'done' });
+    expect(c.file('cam1', b.id)).toBeDefined(); // file() doesn't count as a poll
     advance(2 * 60_000); c.sweep();
-    expect(c.get('cam1', b.id)).toBeUndefined();
+    expect(c.file('cam1', b.id)).toBeUndefined();
   });
 
   it('removes leftover job folders at start', () => {
@@ -128,5 +128,44 @@ describe('composer jobs', () => {
     expect(m.jobs[0].signal.aborted).toBe(true);
     expect(c.get('cam1', a.id)).toMatchObject({ state: 'failed', error: 'took longer than 5 minutes' });
     expect(c.get('cam1', b.id)).toMatchObject({ state: 'running' });
+  });
+
+  // Issue #30 items.
+  it('says the encoder failed instead of the text from ffmpeg (which can hold a path), and keeps its own reasons', async () => {
+    const { c, m } = make();
+    const a = c.start(req) as { id: string };
+    await tick();
+    m.jobs[0].fail(new Error('ffmpeg exited 1: /data/clips/cam1/secret.mp4: Invalid data'));
+    await tick();
+    expect(c.get('cam1', a.id)).toMatchObject({ state: 'failed', error: 'the encoder failed' });
+    const b = c.start(req) as { id: string };
+    await tick();
+    m.jobs[1].fail(new ComposeError('storage is paused'));
+    await tick();
+    expect(c.get('cam1', b.id)).toMatchObject({ state: 'failed', error: 'storage is paused' });
+  });
+
+  it('keeps a finished result while it is being polled', async () => {
+    const { c, m, advance } = make();
+    const a = c.start(req) as { id: string };
+    await tick();
+    m.jobs[0].finish();
+    await tick();
+    advance(14 * 60_000);
+    c.get('cam1', a.id);
+    advance(14 * 60_000);
+    c.sweep();
+    expect(c.get('cam1', a.id)).toMatchObject({ state: 'done' });
+  });
+
+  it('stop() waits for a running encode to end', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jobs-'));
+    let ended = false;
+    const runner: Runner = ({ signal }) => new Promise((_resolve, reject) => signal.addEventListener('abort', () => setTimeout(() => { ended = true; reject(new Error('aborted')); }, 50)));
+    const c = createComposer({ dir, runner });
+    c.start(req);
+    await tick();
+    await c.stop();
+    expect(ended).toBe(true);
   });
 });

@@ -82,6 +82,8 @@ export class FtpServer extends EventEmitter {
   private readonly sockets = new Set<net.Socket>();
   private readonly passiveListeners = new Set<net.Server>();
   private pasvAddress: string | undefined;
+  private pasvResolvedAt = 0;
+  private resolving: Promise<void> | undefined;
 
   constructor(private readonly o: FtpServerOptions) {
     super();
@@ -110,18 +112,26 @@ export class FtpServer extends EventEmitter {
 
   // The IPv4 address PASV announces: publicHost (a name is resolved once), or
   // else the control connection's own address.
-  private async resolvePublicHost(): Promise<void> {
+  // A failed re-lookup keeps the last good address; sessions arriving
+  // together share one lookup.
+  private resolvePublicHost(): Promise<void> {
+    this.pasvResolvedAt = this.now();
+    return (this.resolving ??= this.lookupPublicHost().finally(() => (this.resolving = undefined)));
+  }
+
+  private async lookupPublicHost(): Promise<void> {
     const h = this.o.publicHost;
-    this.pasvAddress = undefined;
-    if (!h) return;
+    if (!h) return void (this.pasvAddress = undefined);
     if (IPV4.test(h)) return void (this.pasvAddress = h);
+    let a: string | undefined;
     try {
-      const a = await (this.o.lookup ?? (async (x: string) => (await dnsLookup(x, { family: 4 })).address))(h);
-      if (IPV4.test(a)) this.pasvAddress = a;
+      a = await (this.o.lookup ?? (async (x: string) => (await dnsLookup(x, { family: 4 })).address))(h);
     } catch {
       // below
     }
-    if (!this.pasvAddress) this.log(`publicHost ${h} has no IPv4 address; PASV announces the connection's own address`);
+    if (a && IPV4.test(a)) this.pasvAddress = a;
+    else if (this.pasvAddress) this.log(`publicHost ${h} could not be looked up again; PASV keeps ${this.pasvAddress}`);
+    else this.log(`publicHost ${h} has no IPv4 address; PASV announces the connection's own address`);
   }
 
   async start(): Promise<number> {
@@ -393,6 +403,8 @@ export class FtpServer extends EventEmitter {
     conn.catch(() => undefined);
     s.pasv = { server: srv, conn };
     if (cmd === 'EPSV') return reply(`229 Entering Extended Passive Mode (|||${port}|)`);
+    // A publicHost name is looked up again after a minute (a changed lease).
+    if (this.o.publicHost && !IPV4.test(this.o.publicHost) && this.now() - this.pasvResolvedAt > 60_000) await this.resolvePublicHost();
     const host = this.pasvAddress ?? plainIp(s.stream.localAddress);
     if (!IPV4.test(host)) return reply('425 No IPv4 address for PASV, use EPSV');
     reply(`227 Entering Passive Mode (${host.split('.').join(',')},${port >> 8},${port & 255})`);
