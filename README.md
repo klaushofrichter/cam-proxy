@@ -1,12 +1,24 @@
 # cam-proxy
 
+[![Release](https://img.shields.io/github/v/release/klaushofrichter/cam-proxy?label=release&color=blue)](https://github.com/klaushofrichter/cam-proxy/releases)
+[![PR checks](https://github.com/klaushofrichter/cam-proxy/actions/workflows/pr-checks.yml/badge.svg)](https://github.com/klaushofrichter/cam-proxy/actions/workflows/pr-checks.yml)
+[![Build and publish image](https://github.com/klaushofrichter/cam-proxy/actions/workflows/build-push.yml/badge.svg?branch=main)](https://github.com/klaushofrichter/cam-proxy/actions/workflows/build-push.yml)
+[![Release and deploy](https://github.com/klaushofrichter/cam-proxy/actions/workflows/release.yml/badge.svg?branch=production)](https://github.com/klaushofrichter/cam-proxy/actions/workflows/release.yml)
+[![Dependabot](https://img.shields.io/badge/dependabot-enabled-025E8C?logo=dependabot&logoColor=white)](https://github.com/klaushofrichter/cam-proxy/security/dependabot)
+
+<!-- The release badge is the newest tag, which the release job cuts after the
+     cluster rollout. Dependabot is a static badge (it has no status endpoint);
+     alerts and security updates are on in the repository settings, version
+     updates come from .github/dependabot.yml. No version numbers in the text
+     below: they go stale; the badge and the releases page carry them. -->
+
 A gateway next to a Reolink camera (RLC-1224A). It becomes the camera's only
 client, keeps what matters, and serves it through a clean API with a live,
 resumable Server-Sent Events stream. Apps such as
 [cams](https://github.com/klaushofrichter/cams) no longer depend on the
 camera's quirks (one search at a time, few logins, broken downloads, no push).
 
-**Status:** built and released (v2026.09.27.2):
+**Status:** built and released (see the release badge above):
 - camera status and ONVIF events, with a polling fallback;
 - the event catalog and the resumable SSE stream;
 - stills and preview sprites through go2rtc;
@@ -398,7 +410,7 @@ and checks it as the cluster runs it.
   to `production` releases `v<YYYY.MM.DD.N>` and `:latest`, and deploys to
   the cluster (see below).
 - **Cluster** (next to `cam2`, `https://cam-proxy.skylar.technology`, LAN
-  only; first released as v2026.09.27.1):
+  only):
   - The manifests live in kube-setup ([request](deploy/cluster/REQUEST.md)).
   - The ConfigMap is [`deploy/cluster/config.json`](deploy/cluster/config.json);
     its camera is `cam2`, and clips come from the sub stream
