@@ -6,6 +6,9 @@
 # - installs Docker Engine and the Compose plugin from Docker's Debian repository;
 # - lets that user use Docker without sudo;
 # - limits container logs (the SSD is the only disk);
+# - turns on the memory cgroup (cgroup_enable=memory in cmdline.txt): Raspberry
+#   Pi kernels ship without it, so docker stats shows no memory and memory
+#   limits don't work;
 # - creates /srv/cam-proxy, owned by that user (uid 1000 on Raspberry Pi OS,
 #   the same uid the container runs as);
 # - reboots at the end (new kernel, and the docker group needs a new login).
@@ -40,6 +43,14 @@ JSON
 systemctl enable docker containerd
 systemctl restart docker
 usermod -aG docker "$USER_NAME"
+
+echo "== memory cgroup"
+CMDLINE=/boot/firmware/cmdline.txt
+if ! grep -qw 'cgroup_enable=memory' "$CMDLINE"; then
+  cp "$CMDLINE" "$CMDLINE.bak-$(date +%Y%m%d-%H%M%S)"
+  sed -i '1 s/$/ cgroup_enable=memory/' "$CMDLINE"   # the file must stay one line
+fi
+[ "$(grep -c '' "$CMDLINE")" -eq 1 ] || { echo "$CMDLINE is not one line: fix it before rebooting"; exit 1; }
 
 echo "== cam-proxy folder"
 install -d -o "$USER_NAME" -g "$USER_NAME" -m 0750 /srv/cam-proxy
