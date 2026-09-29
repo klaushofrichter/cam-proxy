@@ -83,6 +83,7 @@ export class FtpServer extends EventEmitter {
   private readonly passiveListeners = new Set<net.Server>();
   private pasvAddress: string | undefined;
   private pasvResolvedAt = 0;
+  private resolving: Promise<void> | undefined;
 
   constructor(private readonly o: FtpServerOptions) {
     super();
@@ -111,19 +112,26 @@ export class FtpServer extends EventEmitter {
 
   // The IPv4 address PASV announces: publicHost (a name is resolved once), or
   // else the control connection's own address.
-  private async resolvePublicHost(): Promise<void> {
-    const h = this.o.publicHost;
+  // A failed re-lookup keeps the last good address; sessions arriving
+  // together share one lookup.
+  private resolvePublicHost(): Promise<void> {
     this.pasvResolvedAt = this.now();
-    this.pasvAddress = undefined;
-    if (!h) return;
+    return (this.resolving ??= this.lookupPublicHost().finally(() => (this.resolving = undefined)));
+  }
+
+  private async lookupPublicHost(): Promise<void> {
+    const h = this.o.publicHost;
+    if (!h) return void (this.pasvAddress = undefined);
     if (IPV4.test(h)) return void (this.pasvAddress = h);
+    let a: string | undefined;
     try {
-      const a = await (this.o.lookup ?? (async (x: string) => (await dnsLookup(x, { family: 4 })).address))(h);
-      if (IPV4.test(a)) this.pasvAddress = a;
+      a = await (this.o.lookup ?? (async (x: string) => (await dnsLookup(x, { family: 4 })).address))(h);
     } catch {
       // below
     }
-    if (!this.pasvAddress) this.log(`publicHost ${h} has no IPv4 address; PASV announces the connection's own address`);
+    if (a && IPV4.test(a)) this.pasvAddress = a;
+    else if (this.pasvAddress) this.log(`publicHost ${h} could not be looked up again; PASV keeps ${this.pasvAddress}`);
+    else this.log(`publicHost ${h} has no IPv4 address; PASV announces the connection's own address`);
   }
 
   async start(): Promise<number> {

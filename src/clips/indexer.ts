@@ -3,7 +3,7 @@ import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readSync, ren
 import { dirname, join } from 'path';
 import { promisify } from 'util';
 import type { DstRule, TimeInfo } from '../camera/time';
-import { clipByPath, deleteClip, insertClip, overlappingEvents, setSnapshot, type ClipRow, listClips } from '../catalog/clips';
+import { clipByPath, deleteClip, insertClip, overlappingEvents, setSnapshot, type ClipRow } from '../catalog/clips';
 import type { Catalog } from '../catalog/db';
 import type { Config } from '../config/defaults';
 import { logger } from '../log';
@@ -132,15 +132,11 @@ export class ClipIndexer {
       logger.warn({ name: u.name }, 'clip_name_unknown');
       return null;
     }
-    // In the repeated autumn hour both passes have the same local name: a
-    // clip already there from more than 30 minutes ago was the first pass, so
-    // this one is the second (issue #5). A quick repeat replaces it.
+    // In the repeated autumn hour a local name has two readings an hour
+    // apart (issue #5). A clip is uploaded right after it ends, so the later
+    // reading that isn't in the future is the right one (5 min for clock drift).
     const candidates = localToUtcCandidates(parsed.local, await this.d.timeInfo());
-    let start = candidates[0];
-    if (candidates.length > 1) {
-      const prior = listClips(this.d.catalog, this.d.cam, start, start).find((c) => c.start_ts === start);
-      if (prior && this.now() - prior.received_at > 30 * 60_000) start = candidates[1];
-    }
+    const start = candidates.findLast((c) => c <= this.now() + 5 * 60_000) ?? candidates[0];
     const t = new Date(start);
     const folder = join(this.d.dataDir, 'clips', this.d.cam, String(t.getUTCFullYear()), pad(t.getUTCMonth() + 1), pad(t.getUTCDate()));
     const stem = join(folder, `${pad(t.getUTCHours())}${pad(t.getUTCMinutes())}-${start}`);

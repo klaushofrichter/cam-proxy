@@ -1,5 +1,5 @@
 {
-  "server": { "port": 8480, "dataDir": "/data", "logLevel": "info", "publicUrl": "https://cam-proxy.skylar.technology" },
+  "server": { "port": 8480, "dataDir": "/data", "logLevel": "info", "publicUrl": "https://cam-proxy.skylar.technology", "trustProxy": 1 },
   "camera": {
     "id": "cam2",
     "name": "cam2",

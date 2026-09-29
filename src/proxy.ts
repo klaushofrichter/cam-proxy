@@ -10,7 +10,7 @@ import { ReolinkClient } from './camera/client';
 import { splitHost } from './camera/http';
 import { StatusPoller } from './camera/status';
 import type { Config } from './config/defaults';
-import { needsRestart, type Loaded } from './config/load';
+import { needsProcessRestart, needsRestart, type Loaded } from './config/load';
 import { leafPaths } from './config/schema';
 import { cameraFtpOff, setupCameraFtp, testCameraFtp } from './clips/camera-ftp';
 import { ClipIndexer } from './clips/indexer';
@@ -313,7 +313,7 @@ export function createProxy(initial: Loaded): Proxy {
   });
 
   // Applies pending restart settings to the camera side (camera, events).
-  // Server port and data folder need a new process.
+  // Settings read at process start (port, data folder, trust proxy, font) need a new process.
   const restartCameraSide = async () => {
     await intake.stop();
     status.stop();
@@ -321,7 +321,7 @@ export function createProxy(initial: Loaded): Proxy {
     await clips?.stop();
     await client.logout();
     for (const p of leafPaths()) {
-      if (p === 'server.port' || p === 'server.dataDir') continue;
+      if (needsProcessRestart(p)) continue;
       setPath(running as unknown as Record<string, unknown>, p, structuredClone(getPath(loaded.config, p)));
     }
     buildCameraSide();

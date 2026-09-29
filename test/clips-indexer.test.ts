@@ -167,6 +167,15 @@ describe('ClipIndexer', () => {
     expect(clipById(catalog, first!.id)).toBeDefined();
   });
 
+  // Review: a second-pass clip whose name no first-pass clip shares is still
+  // read as standard time (the DST reading would be an hour old already).
+  it('reads a second-pass clip as standard time without a first-pass twin', async () => {
+    const { indexer, upload } = setup();
+    indexer.setClock(() => Date.UTC(2026, 10, 1, 7, 46, 0)); // 01:46 CST, the second pass
+    const row = await indexer.add(upload('Den_00_20261101014500.mp4', readFileSync(clipFile)));
+    expect(row!.start_ts).toBe(Date.UTC(2026, 10, 1, 7, 45, 0));
+  });
+
   it('still replaces a quickly repeated upload of the same clip', async () => {
     const { indexer, upload, catalog } = setup();
     const a = await indexer.add(upload('Den_00_20260927140301.mp4', readFileSync(clipFile)));
