@@ -7,7 +7,7 @@ ran on a Mac. Addresses are placeholders:
 
 | Placeholder | Meaning |
 |---|---|
-| `<pi>` | the Pi's LAN address (reserved in the router) |
+| `<pi>` | the Pi's LAN address |
 | `<camera>` | the camera's LAN address |
 | `<user>` | the Pi's login user (uid 1000, the same uid the container runs as) |
 
@@ -26,8 +26,10 @@ ran on a Mac. Addresses are placeholders:
     `vid:pid` from `lsusb`.
 - **Wired Ethernet**, on the camera's LAN. Wi-Fi works as a fallback, but the
   camera streams to the proxy all the time and uploads every clip.
-- **An address reservation** for the Ethernet port's MAC in the router. The
-  camera's FTP uploads and cams both use this address.
+- **A stable address.** The camera's FTP uploads and cams both use it. A DHCP
+  reservation for the Ethernet port's MAC works, or a router that gives the same
+  MAC the same address after a restart (the home router does; the Pi has no
+  reservation).
 
 The desktop can stay on. The proxy uses about 5% of the CPU, and 3.2 GiB of
 memory stay free.
