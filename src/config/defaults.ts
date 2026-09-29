@@ -2,7 +2,7 @@
 // config.json only needs what differs; secrets come from the environment.
 
 export interface Config {
-  server: { port: number; dataDir: string; logLevel: string; publicUrl?: string };
+  server: { port: number; dataDir: string; logLevel: string; publicUrl?: string; trustProxy?: number };
   camera: {
     id: string; name: string; host: string; protocol: 'https' | 'http'; tlsName?: string; webUiUrl?: string;
     user: string; onvifPort: number; rtspPort: number; statusPollS: number;

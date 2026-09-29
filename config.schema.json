@@ -32,6 +32,12 @@
           ],
           "description": "pino log level"
         },
+        "trustProxy": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5,
+          "description": "reverse proxies in front (the cluster ingress: 1); rate limits then count clients by X-Forwarded-For"
+        },
         "publicUrl": {
           "type": "string",
           "pattern": "^https?://[^\\s]+$",

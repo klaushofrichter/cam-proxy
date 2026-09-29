@@ -150,4 +150,28 @@ describe('ClipIndexer', () => {
       expect(clipById(catalog, row!.id)!.snapshot).toBe(row!.path.replace(/\.mp4$/, '.jpg'));
     }
   });
+
+  // Issue #5: in the repeated autumn hour the camera's local name is the
+  // same for both passes; the later upload is the second pass (standard time).
+  it('keeps both clips of the repeated autumn hour', async () => {
+    const { indexer, upload, catalog } = setup();
+    let now = Date.UTC(2026, 10, 1, 6, 31, 0); // 01:31 CDT, the first pass
+    indexer.setClock(() => now);
+    const first = await indexer.add(upload('Den_00_20261101013000.mp4', readFileSync(clipFile)));
+    now += 3_600_000; // an hour later: 01:31 CST, the second pass
+    const second = await indexer.add(upload('Den_00_20261101013000.mp4', readFileSync(clipFile)));
+    expect(first!.start_ts).toBe(Date.UTC(2026, 10, 1, 6, 30, 0));
+    expect(second!.start_ts).toBe(Date.UTC(2026, 10, 1, 7, 30, 0));
+    expect(second!.path).not.toBe(first!.path);
+    expect(existsSync(first!.path) && existsSync(second!.path)).toBe(true);
+    expect(clipById(catalog, first!.id)).toBeDefined();
+  });
+
+  it('still replaces a quickly repeated upload of the same clip', async () => {
+    const { indexer, upload, catalog } = setup();
+    const a = await indexer.add(upload('Den_00_20260927140301.mp4', readFileSync(clipFile)));
+    const b = await indexer.add(upload('Den_00_20260927140301.mp4', readFileSync(clipFile)));
+    expect(b!.path).toBe(a!.path);
+    expect(listClips(catalog, 'cam1', a!.start_ts - 1000, a!.start_ts + 1000)).toHaveLength(1); // replaced, not added
+  });
 });

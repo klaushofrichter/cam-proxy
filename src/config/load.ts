@@ -18,7 +18,7 @@ export interface Loaded {
 }
 
 // Settings that only take effect after a restart (spec §14).
-const RESTART = ['server.port', 'server.dataDir', 'camera.', 'go2rtc.', 'events.onvif.', 'stills.enabled', 'stills.stream', 'stills.intervalS', 'stills.size', 'stills.quality', 'previews.tileSize', 'previews.grid', 'previews.quality', 'ftp.enabled', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.user', 'ftp.publicHost', 'ftp.certFile', 'ftp.keyFile'];
+const RESTART = ['server.port', 'server.dataDir', 'camera.', 'go2rtc.', 'events.onvif.', 'stills.enabled', 'stills.stream', 'stills.intervalS', 'stills.size', 'stills.quality', 'previews.tileSize', 'previews.grid', 'previews.quality', 'ftp.enabled', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.user', 'ftp.publicHost', 'ftp.certFile', 'ftp.keyFile', 'composition.font', 'server.trustProxy'];
 export function needsRestart(path: string): boolean {
   return RESTART.some((r) => (r.endsWith('.') ? path.startsWith(r) : path === r));
 }

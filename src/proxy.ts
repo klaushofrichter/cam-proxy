@@ -109,7 +109,7 @@ export function createProxy(initial: Loaded): Proxy {
   const font = running.composition?.font ?? defaultFont();
   const composer = createComposer({
     dir: join(running.server.dataDir, 'compositions'),
-    runner: ffmpegRunner({ font: font ?? '', clock: clockText, readStill: (ts) => stills?.store.readStill(ts) ?? Promise.resolve(undefined), hasAudio }),
+    runner: ffmpegRunner({ font: font ?? '', clock: clockText, readStill: (ts) => stills?.store.readStill(ts) ?? Promise.resolve(undefined), hasAudio, paused: () => storage.paused(), stillsIntervalS: () => running.stills.intervalS }),
   });
   const sweeper = setInterval(() => composer.sweep(), 5000);
   sweeper.unref();
@@ -234,6 +234,8 @@ export function createProxy(initial: Loaded): Proxy {
   // Clip files too: a seeking video player sends many range requests.
   const IMAGE = /^\/api\/cameras\/[^/]+\/((stills|previews)\/\d{1,15}\.jpg|clips\/\d{1,15}\.(mp4|jpg))$/;
   const isImage = (req: Request) => req.method === 'GET' && IMAGE.test(req.path);
+  // Behind an ingress (issue #29): client addresses from X-Forwarded-For.
+  if (running.server.trustProxy) app.set('trust proxy', running.server.trustProxy);
   app.use(rateLimit({ windowMs: 60_000, limit: 1200, skip: isImage, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } }));
   app.use(rateLimit({ windowMs: 60_000, limit: 6000, skip: (req) => !isImage(req), standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } }));
   app.use(express.json({ limit: '64kb' }));

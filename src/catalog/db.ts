@@ -14,8 +14,18 @@ export interface Catalog {
 }
 
 export function openCatalog(file: string): Catalog {
-  mkdirSync(dirname(file), { recursive: true });
-  const db = new DatabaseSync(file);
+  let db: DatabaseSync;
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    db = new DatabaseSync(file);
+  } catch (err) {
+    // A volume mounted as root said only EACCES (issue #5): name the folder.
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS' || /readonly|unable to open/i.test((err as Error).message)) {
+      throw new Error(`the data folder ${dirname(file)} isn't writable by this process (uid ${process.getuid?.() ?? '?'}): chown it to that user, or set server.dataDir to a writable folder`);
+    }
+    throw err;
+  }
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA synchronous = NORMAL;');
   db.exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)');
   const version = () => (db.prepare('SELECT MAX(version) AS v FROM schema_version').get() as { v: number | null }).v ?? 0;

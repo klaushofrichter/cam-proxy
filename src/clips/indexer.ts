@@ -3,7 +3,7 @@ import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readSync, ren
 import { dirname, join } from 'path';
 import { promisify } from 'util';
 import type { DstRule, TimeInfo } from '../camera/time';
-import { clipByPath, deleteClip, insertClip, overlappingEvents, setSnapshot, type ClipRow } from '../catalog/clips';
+import { clipByPath, deleteClip, insertClip, overlappingEvents, setSnapshot, type ClipRow, listClips } from '../catalog/clips';
 import type { Catalog } from '../catalog/db';
 import type { Config } from '../config/defaults';
 import { logger } from '../log';
@@ -46,6 +46,20 @@ function dstBounds(year: number, r: DstRule, std: number, dst: number): [number,
 // Camera-local YYYYMMDDHHMMSS → UTC ms. In the repeated fall hour the DST
 // reading wins (the first pass); a time in the skipped spring hour reads as
 // standard time.
+// Both readings of a camera-local time: [DST, standard] in the repeated
+// autumn hour, else the one reading.
+export function localToUtcCandidates(local: string, t: TimeInfo): number[] {
+  const [y, mo, d, h, mi, s] = partsOf(local);
+  const wall = Date.UTC(y, mo - 1, d, h, mi, s);
+  const asStd = wall - t.stdOffsetMinutes * 60_000;
+  if (!t.dstRule || !t.dstOffsetMinutes) return [asStd];
+  const asDst = asStd - t.dstOffsetMinutes * 60_000;
+  const [start, end] = dstBounds(y, t.dstRule, t.stdOffsetMinutes, t.dstOffsetMinutes);
+  const inDst = (u: number) => (start < end ? u >= start && u < end : u >= start || u < end);
+  if (inDst(asDst) && !inDst(asStd)) return [asDst, asStd];
+  return [localToUtc(local, t)];
+}
+
 export function localToUtc(local: string, t: TimeInfo): number {
   const [y, mo, d, h, mi, s] = partsOf(local);
   const wall = Date.UTC(y, mo - 1, d, h, mi, s);
@@ -72,7 +86,13 @@ export class ClipIndexer {
   private failed = 0;
   private last: number | null = null;
 
+  private now: () => number = Date.now;
+
   constructor(private readonly d: ClipIndexerDeps) {}
+
+  setClock(now: () => number): void {
+    this.now = now;
+  }
 
   failures(): number {
     return this.failed;
@@ -112,7 +132,15 @@ export class ClipIndexer {
       logger.warn({ name: u.name }, 'clip_name_unknown');
       return null;
     }
-    const start = localToUtc(parsed.local, await this.d.timeInfo());
+    // In the repeated autumn hour both passes have the same local name: a
+    // clip already there from more than 30 minutes ago was the first pass, so
+    // this one is the second (issue #5). A quick repeat replaces it.
+    const candidates = localToUtcCandidates(parsed.local, await this.d.timeInfo());
+    let start = candidates[0];
+    if (candidates.length > 1) {
+      const prior = listClips(this.d.catalog, this.d.cam, start, start).find((c) => c.start_ts === start);
+      if (prior && this.now() - prior.received_at > 30 * 60_000) start = candidates[1];
+    }
     const t = new Date(start);
     const folder = join(this.d.dataDir, 'clips', this.d.cam, String(t.getUTCFullYear()), pad(t.getUTCMonth() + 1), pad(t.getUTCDate()));
     const stem = join(folder, `${pad(t.getUTCHours())}${pad(t.getUTCMinutes())}-${start}`);
@@ -149,7 +177,7 @@ export class ClipIndexer {
       path,
       stream: this.d.config().ftp.stream,
       size: u.bytes,
-      received_at: Date.now(),
+      received_at: this.now(),
       snapshot: existsSync(`${stem}.jpg`) ? `${stem}.jpg` : null,
     });
     const events = overlappingEvents(catalog, this.d.cam, start, end);

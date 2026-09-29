@@ -82,6 +82,7 @@ export class FtpServer extends EventEmitter {
   private readonly sockets = new Set<net.Socket>();
   private readonly passiveListeners = new Set<net.Server>();
   private pasvAddress: string | undefined;
+  private pasvResolvedAt = 0;
 
   constructor(private readonly o: FtpServerOptions) {
     super();
@@ -112,6 +113,7 @@ export class FtpServer extends EventEmitter {
   // else the control connection's own address.
   private async resolvePublicHost(): Promise<void> {
     const h = this.o.publicHost;
+    this.pasvResolvedAt = this.now();
     this.pasvAddress = undefined;
     if (!h) return;
     if (IPV4.test(h)) return void (this.pasvAddress = h);
@@ -393,6 +395,8 @@ export class FtpServer extends EventEmitter {
     conn.catch(() => undefined);
     s.pasv = { server: srv, conn };
     if (cmd === 'EPSV') return reply(`229 Entering Extended Passive Mode (|||${port}|)`);
+    // A publicHost name is looked up again after a minute (a changed lease).
+    if (this.o.publicHost && !IPV4.test(this.o.publicHost) && this.now() - this.pasvResolvedAt > 60_000) await this.resolvePublicHost();
     const host = this.pasvAddress ?? plainIp(s.stream.localAddress);
     if (!IPV4.test(host)) return reply('425 No IPv4 address for PASV, use EPSV');
     reply(`227 Entering Passive Mode (${host.split('.').join(',')},${port >> 8},${port & 255})`);

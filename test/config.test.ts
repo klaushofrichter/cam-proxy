@@ -110,6 +110,8 @@ describe('overrides', () => {
   it('tells which settings need a restart', () => {
     expect(needsRestart('camera.host')).toBe(true);
     expect(needsRestart('stills.intervalS')).toBe(true);
+    expect(needsRestart('composition.font')).toBe(true); // resolved once at start (issue #30)
+    expect(needsRestart('server.trustProxy')).toBe(true);
     expect(needsRestart('server.port')).toBe(true);
     expect(needsRestart('sse.pingS')).toBe(false);
     expect(needsRestart('retention.stillsDays')).toBe(false);

@@ -7,7 +7,9 @@ export type Segment =
   | { kind: 'clip'; clipId: number; path: string; inS: number; outS: number }
   | { kind: 'still'; ts: number }
   | { kind: 'card'; ts: number };
-export interface PlanInput { clip: ClipSpan; preS: number; postS: number; clips: ClipSpan[]; hasStill: (ts: number) => boolean }
+// stillAt: the still that shows at second t (the latest within the stills
+// interval, so stills every 2 s don't flicker to cards), or null.
+export interface PlanInput { clip: ClipSpan; preS: number; postS: number; clips: ClipSpan[]; stillAt: (t: number) => number | null }
 export type Plan = { ok: true; start: number; end: number; durationS: number; segments: Segment[] } | { ok: false; error: string };
 
 export const MAX_S = 60;
@@ -41,7 +43,8 @@ export function planComposition(p: PlanInput): Plan {
       if (last?.kind === 'clip' && last.clipId === c.id && last.outS === inS) last.outS = outS;
       else segments.push({ kind: 'clip', clipId: c.id, path: c.path, inS, outS });
     } else {
-      segments.push({ kind: p.hasStill(t) ? 'still' : 'card', ts: t });
+      const still = p.stillAt(t);
+      segments.push(still === null ? { kind: 'card', ts: t } : { kind: 'still', ts: still });
     }
   }
   return { ok: true, start, end, durationS, segments };

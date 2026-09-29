@@ -17,6 +17,7 @@ export interface ComposeInput {
   badge: boolean;
   font: string;
   clock: (ts: number) => string;
+  stillsIntervalS?: number; // the badge names the rate (1 FPS, 1/2 FPS)
 }
 export interface Piece { args: string[]; out: string; durationS: number }
 
@@ -25,9 +26,10 @@ export function defaultFont(exists: (p: string) => boolean = existsSync): string
   return FONTS.find((p) => exists(p)) ?? null;
 }
 
-// drawtext's text='…': backslash, quote and colon are special.
+// drawtext's text='…': backslash and colon are escaped; an apostrophe can't
+// be inside the quotes at all, so it becomes a typographic one.
 export function escapeText(s: string): string {
-  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/:/g, '\\:');
+  return s.replace(/\\/g, '\\\\').replace(/'/g, '’').replace(/:/g, '\\:');
 }
 
 type Pic = Extract<Segment, { kind: 'still' | 'card' }>;
@@ -69,8 +71,10 @@ const MONO = 'aformat=sample_fmts=fltp:channel_layouts=mono';
 export function pieceArgs(i: ComposeInput): Piece[] {
   const [w, h] = SIZES[i.size];
   const font = `fontfile='${escapeText(i.font)}'`;
-  const fit = `scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=10,format=yuv420p`;
-  const badge = i.badge ? `,drawtext=${font}:text='STILLS 1 FPS':x=12:y=12:fontsize=${Math.round(h / 24)}:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=6` : '';
+  // fps first: frames the output drops aren't scaled (CPU on a Pi).
+  const fit = `fps=10,scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p`;
+  const n = i.stillsIntervalS ?? 1;
+  const badge = i.badge ? `,drawtext=${font}:text='STILLS ${n === 1 ? '1' : `1/${n}`} FPS':x=12:y=12:fontsize=${Math.round(h / 24)}:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=6` : '';
   const text = (t: string, y: string, size: number, j: number) =>
     `,drawtext=${font}:text='${escapeText(t)}':x=(w-tw)/2:y=${y}:fontsize=${size}:fontcolor=white:enable='between(t,${j},${j + 1})'`;
   const silence = (d: number) => ['-f', 'lavfi', '-t', String(d), '-i', 'anullsrc=r=16000:cl=mono'];
@@ -84,7 +88,8 @@ export function pieceArgs(i: ComposeInput): Piece[] {
       d = g.outS - g.inS;
       inputs = ['-ss', String(g.inS), '-to', String(g.outS), '-i', g.path, ...(g.audio ? [] : silence(d))];
       const audio = g.audio ? `[0:a]aresample=16000,${MONO},apad,atrim=0:${d},asetpts=PTS-STARTPTS[a]` : `[1:a]${MONO}[a]`;
-      graph = `[0:v]${fit},trim=duration=${d},setpts=PTS-STARTPTS[v];${audio}`;
+      // tpad: a clip file whose video ends early still fills its part.
+      graph = `[0:v]${fit},tpad=stop_mode=clone:stop_duration=${d},trim=duration=${d},setpts=PTS-STARTPTS[v];${audio}`;
     } else {
       d = g.seconds.length;
       // -reinit_filter 0: a card background and a still differ in size; a
@@ -95,7 +100,8 @@ export function pieceArgs(i: ComposeInput): Piece[] {
         .join('');
       graph = `[0:v]${fit},trim=duration=${d},setpts=PTS-STARTPTS${cards}${badge}[v];[1:a]${MONO}[a]`;
     }
-    return { out, durationS: d, args: [...HEAD, ...inputs, '-filter_complex', graph, '-map', '[v]', '-map', '[a]', ...ENCODE, '-progress', 'pipe:1', '-nostats', out] };
+    // -fs: the spec's 200 MB budget, enforced while encoding.
+    return { out, durationS: d, args: [...HEAD, ...inputs, '-filter_complex', graph, '-map', '[v]', '-map', '[a]', ...ENCODE, '-fs', '200M', '-progress', 'pipe:1', '-nostats', out] };
   });
 }
 
