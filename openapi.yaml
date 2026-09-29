@@ -80,7 +80,7 @@ paths:
       requestBody:
         content:
           application/json:
-            schema: { type: object, required: [clipId, preS, postS, size, badge], properties: { clipId: { type: integer }, preS: { type: integer, minimum: -600, maximum: 60 }, postS: { type: integer, minimum: -600, maximum: 60 }, size: { type: string, enum: [sd, 360p, 720p, 1080p] }, badge: { type: boolean } } }
+            schema: { type: object, required: [clipId, preS, postS, size, badge], properties: { clipId: { type: integer }, preS: { type: integer, minimum: -600, maximum: 60 }, postS: { type: integer, minimum: -600, maximum: 60 }, size: { type: string, enum: [sd, 360p, 720p, 1080p] }, badge: { type: boolean }, timeZone: { type: string, description: 'IANA zone for the cards'' time, e.g. America/Chicago; default the process zone' } } }
       responses:
         '201': { description: '{ id, state, progress, durationS }' }
         '400': { description: invalid input or limits }

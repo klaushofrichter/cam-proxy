@@ -5,7 +5,7 @@ import { clipById, listClips } from '../catalog/clips';
 import type { Catalog } from '../catalog/db';
 import type { Config } from '../config/defaults';
 import { planComposition } from '../compose/plan';
-import { SIZES, type ComposeSize } from '../compose/ffmpeg';
+import { SIZES, validTimeZone, type ComposeSize } from '../compose/ffmpeg';
 import type { createComposer } from '../compose/jobs';
 
 const run = promisify(execFile);
@@ -26,9 +26,13 @@ export function composeApi(d: {
 
   r.post('/cameras/:cam/compositions', (req, res) => {
     if (!known(req, res)) return;
-    const b = (req.body ?? {}) as { clipId?: unknown; preS?: unknown; postS?: unknown; size?: unknown; badge?: unknown };
+    const b = (req.body ?? {}) as { clipId?: unknown; preS?: unknown; postS?: unknown; size?: unknown; badge?: unknown; timeZone?: unknown };
     if (!Number.isSafeInteger(b.clipId) || typeof b.preS !== 'number' || typeof b.postS !== 'number' || typeof b.badge !== 'boolean' || typeof b.size !== 'string' || !(b.size in SIZES)) {
       return void res.status(400).json({ error: 'invalid', detail: 'clipId, preS, postS (seconds), size (sd, 360p, 720p, 1080p) and badge (true/false) are required' });
+    }
+    // The viewer's zone for the cards' time (the pod runs in UTC).
+    if (b.timeZone !== undefined && !(typeof b.timeZone === 'string' && validTimeZone(b.timeZone))) {
+      return void res.status(400).json({ error: 'invalid', detail: 'timeZone must be an IANA zone such as America/Chicago' });
     }
     const row = clipById(d.catalog, b.clipId as number);
     if (!row || row.cam !== cam() || row.end_ts === null) return void res.status(404).json({ error: 'not_found' });
@@ -43,7 +47,7 @@ export function composeApi(d: {
     });
     if (!plan.ok) return void res.status(400).json({ error: 'invalid', detail: plan.error });
     if (!d.font && (b.badge || plan.segments.some((s) => s.kind === 'card'))) return void res.status(503).json({ error: 'no_font' });
-    const job = d.composer.start({ cam: cam(), plan, size: b.size as ComposeSize, badge: b.badge });
+    const job = d.composer.start({ cam: cam(), plan, size: b.size as ComposeSize, badge: b.badge, ...(typeof b.timeZone === 'string' ? { timeZone: b.timeZone } : {}) });
     if (job === 'busy') return void res.status(429).json({ error: 'busy' });
     res.status(201).json(job);
   });
@@ -72,7 +76,7 @@ export function composeApi(d: {
 // Whether a clip file has an audio track (the camera may send none).
 export async function hasAudio(path: string): Promise<boolean> {
   try {
-    const { stdout } = await run('ffprobe', ['-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=index', '-of', 'csv=p=0', path]);
+    const { stdout } = await run('ffprobe', ['-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=index', '-of', 'csv=p=0', path], { timeout: 10_000 });
     return stdout.trim().length > 0;
   } catch {
     return false;

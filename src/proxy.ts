@@ -33,7 +33,7 @@ import { createSessionSigner } from './api/session';
 import { createLoginLinks } from './api/login-links';
 import { composeApi, hasAudio } from './api/compose-api';
 import { createComposer, ffmpegRunner } from './compose/jobs';
-import { defaultFont } from './compose/ffmpeg';
+import { clockText, defaultFont } from './compose/ffmpeg';
 
 export const VERSION = process.env.CAMPROXY_VERSION ?? 'dev';
 
@@ -107,10 +107,9 @@ export function createProxy(initial: Loaded): Proxy {
   // Composed clips (spec 2026-09-28): one encoding at a time; abandoned and
   // old jobs are swept every 5 s.
   const font = running.composition?.font ?? defaultFont();
-  const clock = (ts: number) => new Date(ts).toLocaleTimeString('en-GB', { hour12: false });
   const composer = createComposer({
     dir: join(running.server.dataDir, 'compositions'),
-    runner: ffmpegRunner({ font: font ?? '', clock, readStill: (ts) => stills?.store.readStill(ts) ?? Promise.resolve(undefined), hasAudio }),
+    runner: ffmpegRunner({ font: font ?? '', clock: clockText, readStill: (ts) => stills?.store.readStill(ts) ?? Promise.resolve(undefined), hasAudio }),
   });
   const sweeper = setInterval(() => composer.sweep(), 5000);
   sweeper.unref();

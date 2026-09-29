@@ -1,9 +1,9 @@
 import { spawn } from 'child_process';
 import { randomBytes } from 'crypto';
-import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs';
+import { linkSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { buildComposeArgs, parseProgress, type ComposeSize } from './ffmpeg';
-import type { Plan } from './plan';
+import { cardImageArgs, groupRuns, joinArgs, joinList, parseProgress, pieceArgs, runFrames, type ComposeSize } from './ffmpeg';
+import type { Plan, Segment } from './plan';
 
 // Composition jobs (spec 2026-09-28): one encoding at a time, up to 3
 // waiting. A job nobody polls for 30 s (a closed tab) stops; a result lives
@@ -11,20 +11,22 @@ import type { Plan } from './plan';
 
 export type JobState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
 export interface JobView { id: string; state: JobState; progress: number; durationS: number; error?: string }
-export interface ComposeRequest { cam: string; plan: Extract<Plan, { ok: true }>; size: ComposeSize; badge: boolean }
+export interface ComposeRequest { cam: string; plan: Extract<Plan, { ok: true }>; size: ComposeSize; badge: boolean; timeZone?: string }
 export interface Runner {
   (job: { dir: string; out: string; req: ComposeRequest; onProgress: (p: number) => void; signal: AbortSignal }): Promise<void>;
 }
 
 const MAX_BYTES = 200 * 1024 * 1024; // the spec's disk budget per job
 
-interface Job extends JobView { cam: string; req: ComposeRequest; dir: string; out: string; seen: number; doneAt?: number; ctl: AbortController }
+interface Job extends JobView { cam: string; req: ComposeRequest; dir: string; out: string; seen: number; startedAt?: number; doneAt?: number; ctl: AbortController }
 
-export function createComposer(o: { dir: string; runner: Runner; now?: () => number; doneTtlMs?: number; idleMs?: number; maxQueued?: number }) {
+export function createComposer(o: { dir: string; runner: Runner; now?: () => number; doneTtlMs?: number; idleMs?: number; maxQueued?: number; maxRunMs?: number }) {
   const now = o.now ?? Date.now;
   const doneTtl = o.doneTtlMs ?? 15 * 60_000;
   const idle = o.idleMs ?? 30_000;
   const maxQueued = o.maxQueued ?? 3;
+  // An open modal keeps polling: a hung encode would hold the encoder for ever.
+  const maxRun = o.maxRunMs ?? 5 * 60_000;
   mkdirSync(o.dir, { recursive: true });
   for (const f of readdirSync(o.dir)) rmSync(join(o.dir, f), { recursive: true, force: true });
   const jobs = new Map<string, Job>();
@@ -42,6 +44,7 @@ export function createComposer(o: { dir: string; runner: Runner; now?: () => num
     if (!j) return;
     running = j;
     j.state = 'running';
+    j.startedAt = now();
     o.runner({ dir: j.dir, out: j.out, req: j.req, signal: j.ctl.signal, onProgress: (p) => { if (j.state === 'running') j.progress = Math.max(j.progress, Math.min(1, p)); } })
       .then(() => {
         if (j.state !== 'running') return;
@@ -93,6 +96,13 @@ export function createComposer(o: { dir: string; runner: Runner; now?: () => num
     sweep(): void {
       const t = now();
       for (const j of [...jobs.values()]) {
+        if (j.state === 'running' && j.startedAt !== undefined && t - j.startedAt > maxRun) {
+          j.state = 'failed';
+          j.error = `took longer than ${Math.round(maxRun / 60_000)} minutes`;
+          j.doneAt = t;
+          j.ctl.abort();
+          continue;
+        }
         const live = j.state === 'queued' || j.state === 'running';
         if ((live && t - j.seen > idle) || (!live && j.doneAt !== undefined && t - j.doneAt > doneTtl)) {
           j.state = 'cancelled';
@@ -111,18 +121,47 @@ export function createComposer(o: { dir: string; runner: Runner; now?: () => num
   };
 }
 
-// The real runner: stills written as JPEGs in the job folder, then one ffmpeg.
-export function ffmpegRunner(o: { font: string; clock: (ts: number) => string; readStill: (ts: number) => Promise<Buffer | undefined>; hasAudio: (path: string) => Promise<boolean> }): Runner {
+// One ffmpeg process: SIGTERM on cancel, SIGKILL 2 s later if it lingers.
+function ffmpeg(args: string[], signal: AbortSignal, onStdout: (text: string) => void): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) return reject(new Error('cancelled'));
+    const p = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let err = '';
+    p.stdout.on('data', (b: Buffer) => onStdout(b.toString()));
+    p.stderr.on('data', (b: Buffer) => { err = (err + b.toString()).slice(-2000); });
+    const kill = () => {
+      p.kill('SIGTERM');
+      setTimeout(() => p.kill('SIGKILL'), 2000).unref();
+    };
+    signal.addEventListener('abort', kill, { once: true });
+    p.on('error', reject);
+    p.on('close', (code) => {
+      signal.removeEventListener('abort', kill);
+      if (signal.aborted) reject(new Error('cancelled'));
+      else if (code === 0) resolve();
+      else reject(new Error(`ffmpeg exited ${code}: ${err.trim().split('\n').pop() ?? ''}`));
+    });
+  });
+}
+
+// The real runner (final review C1): stills written once and hard-linked
+// into numbered runs, then one small encode per piece, one after another,
+// then a join without encoding again. Checks for a cancel between steps.
+export function ffmpegRunner(o: { font: string; clock: (ts: number, timeZone?: string) => string; readStill: (ts: number) => Promise<Buffer | undefined>; hasAudio: (path: string) => Promise<boolean> }): Runner {
   return async ({ dir, out, req, onProgress, signal }) => {
-    const segments = [];
+    const check = () => {
+      if (signal.aborted) throw new Error('cancelled');
+    };
+    const segments: (Segment & { audio?: boolean })[] = [];
     for (const s of req.plan.segments) {
+      check();
       if (s.kind === 'still') {
         const jpeg = await o.readStill(s.ts);
         if (jpeg) {
-          writeFileSync(join(dir, `${s.ts}.jpg`), jpeg);
+          writeFileSync(join(dir, `still-${s.ts}.jpg`), jpeg);
           segments.push(s);
         } else {
-          segments.push({ kind: 'card' as const, ts: s.ts }); // gone since planning
+          segments.push({ kind: 'card', ts: s.ts }); // gone since planning
         }
       } else if (s.kind === 'clip') {
         segments.push({ ...s, audio: await o.hasAudio(s.path) });
@@ -130,29 +169,31 @@ export function ffmpegRunner(o: { font: string; clock: (ts: number) => string; r
         segments.push(s);
       }
     }
-    const args = buildComposeArgs({ segments, stillFile: (ts) => join(dir, `${ts}.jpg`), size: req.size, badge: req.badge, font: o.font, clock: o.clock, out });
-    await new Promise<void>((resolve, reject) => {
-      const p = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
-      let err = '';
-      p.stdout.on('data', (b: Buffer) => {
-        const v = parseProgress(b.toString(), req.plan.durationS);
-        if (v !== null) onProgress(v);
+    const card = join(dir, 'card.jpg');
+    if (segments.some((s) => s.kind === 'card')) await ffmpeg(cardImageArgs(req.size, card), signal, () => {});
+    let k = 0;
+    for (const g of groupRuns(segments)) {
+      if (g.kind !== 'run') continue;
+      for (const f of runFrames(g.seconds, k)) linkSync(f.kind === 'still' ? join(dir, `still-${f.ts}.jpg`) : card, join(dir, f.file));
+      k++;
+    }
+    const pieces = pieceArgs({ segments, runFile: (n) => join(dir, `run-${n}-%04d.jpg`), pieceFile: (n) => join(dir, `piece-${n}.mp4`), size: req.size, badge: req.badge, font: o.font, clock: (ts) => o.clock(ts, req.timeZone) });
+    const total = pieces.reduce((a, p) => a + p.durationS, 0);
+    let done = 0;
+    for (const p of pieces) {
+      check();
+      await ffmpeg(p.args, signal, (text) => {
+        const v = parseProgress(text, p.durationS);
+        if (v !== null) onProgress(Math.min(0.99, (done + v * p.durationS) / total));
       });
-      p.stderr.on('data', (b: Buffer) => { err = (err + b.toString()).slice(-2000); });
-      const kill = () => {
-        p.kill('SIGTERM');
-        setTimeout(() => p.kill('SIGKILL'), 2000).unref();
-      };
-      signal.addEventListener('abort', kill, { once: true });
-      p.on('error', reject);
-      p.on('close', (code) => {
-        signal.removeEventListener('abort', kill);
-        if (signal.aborted) reject(new Error('cancelled'));
-        else if (code === 0) resolve();
-        else reject(new Error(`ffmpeg exited ${code}: ${err.trim().split('\n').pop() ?? ''}`));
-      });
-    });
+      done += p.durationS;
+    }
+    check();
+    const list = join(dir, 'pieces.txt');
+    writeFileSync(list, joinList(pieces.map((p) => p.out)));
+    await ffmpeg(joinArgs(list, out), signal, () => {});
     // The spec's per-job disk budget (a 60 s 1080p result is far below it).
     if (statSync(out).size > MAX_BYTES) throw new Error('the result is larger than 200 MB');
+    onProgress(1);
   };
 }

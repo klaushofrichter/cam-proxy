@@ -39,13 +39,14 @@ describe('compositions API', () => {
   it('refuses bad input and unknown clips', async () => {
     expect((await post({ clipId, preS: 99, postS: 0, size: 'sd', badge: true })).status).toBe(400);
     expect((await post({ clipId, preS: 0, postS: 0, size: '4k', badge: true })).status).toBe(400);
+    expect((await post({ clipId, preS: 0, postS: 0, size: 'sd', badge: true, timeZone: 'Mars/Olympus' })).status).toBe(400);
     expect((await post({ clipId: 999_999, preS: 0, postS: 0, size: 'sd', badge: true })).status).toBe(404);
     expect((await request(p.proxy.app).post('/api/cameras/nope/compositions').set(auth()).send({ clipId, preS: 0, postS: 0, size: 'sd', badge: true })).status).toBe(404);
     expect((await request(p.proxy.app).post(`/api/cameras/${cam()}/compositions`).send({})).status).toBe(401);
   });
 
   it.skipIf(!defaultFont())('composes a clip with cards and a silent clip after it, and serves the result', async () => {
-    const r = await post({ clipId, preS: 2, postS: 20, size: '360p', badge: true }); // 2 cards, 6 s clip, 14 cards, 4 s silent clip, 2 cards → 28 s
+    const r = await post({ clipId, preS: 2, postS: 20, size: '360p', badge: true, timeZone: 'America/Chicago' }); // 2 cards, 6 s clip, 14 cards, 4 s silent clip, 2 cards → 28 s
     expect(r.status).toBe(201);
     expect(r.body).toMatchObject({ state: expect.stringMatching(/queued|running/), durationS: 28 });
     const id = r.body.id as string;

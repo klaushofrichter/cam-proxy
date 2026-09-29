@@ -68,4 +68,20 @@ describe('planComposition', () => {
     if (!p.ok) throw new Error(p.error);
     expect(p.segments.slice(0, 2).map((x) => x.kind)).toEqual(['card', 'card']);
   });
+
+  // Final review I1: real clips end on a fractional second (20.48 s).
+  it('does not add a card or a still for the partial last second of a clip', () => {
+    const real: ClipSpan = { id: 5, start: s(0), end: s(0) + 20_480, path: '/c/5.mp4' };
+    const p = planComposition({ clip: real, preS: 0, postS: 0, clips: [real], hasStill: all });
+    expect(p).toEqual({ ok: true, start: s(0), end: s(20), durationS: 20, segments: [{ kind: 'clip', clipId: 5, path: '/c/5.mp4', inS: 0, outS: 20 }] });
+  });
+
+  it('keeps a clip ending past the half second to its real end, and a 60 s result at 60 s', () => {
+    const real: ClipSpan = { id: 6, start: s(0), end: s(0) + 20_600, path: '/c/6.mp4' };
+    const p = planComposition({ clip: real, preS: 0, postS: 0, clips: [real], hasStill: all });
+    expect(p).toMatchObject({ ok: true, durationS: 21, segments: [{ kind: 'clip', inS: 0, outS: 20.6 }] });
+    const q = planComposition({ clip: real, preS: 0, postS: 39, clips: [real], hasStill: all });
+    expect(q).toMatchObject({ ok: true, durationS: 60 });
+    if (q.ok) expect(q.segments.filter((x) => x.kind !== 'clip')).toHaveLength(39);
+  });
 });
