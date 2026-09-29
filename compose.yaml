@@ -1,10 +1,7 @@
-# cam-proxy on the Raspberry Pi, next to the real camera (spec §2). Not
-# deployed yet; the cluster (next to cam2) is the current production target.
-#   mkdir -p data && sudo chown 1000:1000 data     # the container runs as uid 1000
-#   cp config.example.json data/config.json         # then edit: camera.host, ftp.publicHost, …
-#                                                   # and set "server": { "dataDir": "." }
-#   scripts/sync-secrets.sh                         # .env with the CAMPROXY_* secrets
-#   docker compose up -d                            # update: docker compose pull && docker compose up -d
+# cam-proxy on the Raspberry Pi, next to the real camera (spec §2).
+# Setup: docs/raspberry-pi.md. Next to this file: .env (the CAMPROXY_* secrets,
+# mode 600) and data/config.json ("server": { "dataDir": "/data" }); data/ is
+# owned by uid 1000, the container's user. Update: docker compose pull && docker compose up -d
 # Host networking: the camera connects to the FTP server (2121 and the passive
 # ports), and go2rtc stays on 127.0.0.1.
 services:

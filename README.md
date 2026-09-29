@@ -28,17 +28,18 @@ camera's quirks (one search at a time, few logins, broken downloads, no push).
 
 It runs in the k3s cluster next to `cam2`, and
 [cams](https://github.com/klaushofrichter/cams) uses it (the SSE relay,
-Timeline, and clips and thumbnails from the proxy first). The Raspberry Pi
-target is not deployed yet; see the
-[design spec](docs/superpowers/specs/2026-09-27-cam-proxy-design.md) and
-the [requirements](docs/requirements.md).
+Timeline, and clips and thumbnails from the proxy first). It also runs on a
+Raspberry Pi 4 next to the real camera ([docs/raspberry-pi.md](docs/raspberry-pi.md)).
+See the [design spec](docs/superpowers/specs/2026-09-27-cam-proxy-design.md)
+and the [requirements](docs/requirements.md).
 
 Targets:
 - **Production:** the k3s cluster next to `cam2` (a
   [cam-sim](https://github.com/klaushofrichter/cam-sim) simulated camera),
   <https://cam-proxy.skylar.technology> (LAN only).
-- **Planned:** a Raspberry Pi 4 next to the real camera (`compose.yaml`, not
-  deployed yet).
+- **Production:** a Raspberry Pi 4 next to the real camera (cam1, "Den"),
+  since 2026-09-29, with Docker and [`compose.yaml`](compose.yaml). Setup and
+  operation: [docs/raspberry-pi.md](docs/raspberry-pi.md).
 
 A Mac runs it for development on `localhost:8480`.
 
@@ -418,9 +419,11 @@ and checks it as the cluster runs it.
   - The release job pins the image digest in kube-setup, pushes, applies,
     waits for the rollout, and checks that `/health` serves the new version.
   - Secrets: `scripts/sync-secrets.sh --env-file .env.cluster --only all`.
-- **Raspberry Pi (not deployed yet):** [`compose.yaml`](compose.yaml): host
-  networking, `/data` on the SSD, and `docker compose pull && docker compose
-  up -d` to update.
+- **Raspberry Pi** (next to the real camera): [`compose.yaml`](compose.yaml)
+  with host networking and `/data` on the SSD, prepared by
+  [`scripts/prepare-pi.sh`](scripts/prepare-pi.sh). A release doesn't update
+  it: run `docker compose pull && docker compose up -d` on the Pi. See
+  [docs/raspberry-pi.md](docs/raspberry-pi.md).
 
 ## Development
 
