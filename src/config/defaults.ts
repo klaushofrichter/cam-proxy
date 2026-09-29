@@ -24,6 +24,8 @@ export interface Config {
     keepHours: { stills: number; clips: number; previews: number };
   };
   sse: { maxClients: number; queuePerClient: number; pingS: number };
+  // Composed clips (spec 2026-09-28): the font for the badge and card text.
+  composition: { font?: string };
   ftp: { enabled: boolean; port: number; passive: string; user: string; tls: boolean; stream: 'main' | 'sub'; maxGB?: number; publicHost?: string; certFile?: string; keyFile?: string };
 }
 
@@ -41,6 +43,7 @@ export const DEFAULTS: Config = {
   retention: { stillsDays: 7, previewsDays: 14, clipsDays: 7, eventsDays: 30, streamLogDays: 7, intervalMin: 60 },
   storage: { maxPercent: 85, minFreeBytes: 2 * 1024 ** 3, keepHours: { stills: 24, clips: 24, previews: 72 } },
   sse: { maxClients: 50, queuePerClient: 1000, pingS: 15 },
+  composition: {},
   ftp: { enabled: false, port: 2121, passive: '30000-30009', user: 'camera', tls: true, stream: 'main' },
 };
 
