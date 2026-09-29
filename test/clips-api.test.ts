@@ -58,6 +58,8 @@ describe('clips API', () => {
     const get = (q: string) => request(p.proxy.app).get(`/api/cameras/cam1/clips${q}`).set(auth());
     expect((await get('')).status).toBe(400);
     expect((await get(`?from=${T}&to=${T - 1}`)).status).toBe(400);
+    expect((await get(`?from=${T}&to=${T - 1}`)).body).toEqual({ error: 'invalid', detail: 'to is before from' }); // not "required"
+    expect((await get('')).body.detail).toBe('from and to (unix ms) are required');
     expect((await get(`?from=${T}&to=${T + 32 * 86_400_000}`)).status).toBe(400);
     expect((await get(`?from=${T}&to=${T + 31 * 86_400_000}`)).status).toBe(200);
     expect((await request(p.proxy.app).get(`/api/cameras/cam9/clips?from=${T}&to=${T}`).set(auth())).status).toBe(404);

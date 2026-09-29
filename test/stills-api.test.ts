@@ -48,6 +48,12 @@ describe.skipIf(!binary)('stills and previews API', () => {
     expect(Buffer.compare(one.body as Buffer, known[1])).toBe(0);
   });
 
+  it('says a reversed range is reversed (a from later than to)', async () => {
+    const r = await request(p.proxy.app).get('/api/cameras/cam1/stills?from=2000&to=1000').set(auth());
+    expect(r.status).toBe(400);
+    expect(r.body).toEqual({ error: 'invalid', detail: 'to is before from' });
+  });
+
   it('answers 404 for a missing still and 400 for a bad one, never outside the data folder', async () => {
     expect((await request(p.proxy.app).get(`/api/cameras/cam1/stills/${M + 5000}.jpg`).set(auth())).status).toBe(404);
     expect((await request(p.proxy.app).get('/api/cameras/cam1/stills/abc.jpg').set(auth())).status).toBe(400);
