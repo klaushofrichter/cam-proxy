@@ -80,6 +80,9 @@ export const SETTINGS: Node = {
       previews: int(0, 8760, 'hours of previews never deleted for the budget'),
     },
   },
+  composition: {
+    font: { type: 'string', pattern: '^.+$', optional: true, doc: 'font file for the badge and card text of composed clips; default: the first of DejaVu Sans (Alpine, Debian) or Arial (macOS) that exists' },
+  },
   sse: {
     maxClients: int(1, 1000, 'most SSE clients at once'),
     queuePerClient: int(10, 100000, 'messages queued per SSE client before it is dropped'),

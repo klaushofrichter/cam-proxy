@@ -74,6 +74,32 @@ paths:
         '200': { description: 'image/jpeg: a cols × rows grid of tiles, missing tiles dark' }
         '400': { description: 'not <minute unix ms>.jpg' }
         '404': { description: 'no sprite for that minute, unknown camera, stills off, or a timestamp that is not a minute boundary' }
+  /api/cameras/{cam}/compositions:
+    post:
+      summary: Compose a clip with a pre-/post-roll (other clips, stills or "No recording" cards fill each second); H.264 10 fps, at most 60 s
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [clipId, preS, postS, size, badge], properties: { clipId: { type: integer }, preS: { type: integer, minimum: -600, maximum: 60 }, postS: { type: integer, minimum: -600, maximum: 60 }, size: { type: string, enum: [sd, 360p, 720p, 1080p] }, badge: { type: boolean } } }
+      responses:
+        '201': { description: '{ id, state, progress, durationS }' }
+        '400': { description: invalid input or limits }
+        '404': { description: unknown camera or clip }
+        '429': { description: 'busy: one encoding runs and 3 wait' }
+        '503': { description: storage_paused, or no_font (no font for the badge or cards) }
+  /api/cameras/{cam}/compositions/{file}:
+    get:
+      summary: '{id}: the job (state, progress, durationS, error); {id}.mp4: the result once done (409 before)'
+      responses:
+        '200': { description: the job, or the MP4 }
+        '404': { description: unknown job (or another camera's) }
+        '409': { description: not_ready }
+  /api/cameras/{cam}/compositions/{id}:
+    delete:
+      summary: Cancel a job and delete its result
+      responses:
+        '204': { description: cancelled and deleted }
+        '404': { description: unknown job }
   /api/cameras/{cam}/clips:
     get:
       summary: Clips that overlap a time range (at most 31 days), oldest first

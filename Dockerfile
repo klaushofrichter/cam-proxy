@@ -19,7 +19,7 @@ ARG TARGETARCH
 # go2rtc publishes no checksums: these are the SHA-256s pinned in
 # scripts/install-go2rtc.sh (keep both in step).
 ARG GO2RTC_VERSION=v1.9.14
-RUN apk add --no-cache ffmpeg \
+RUN apk add --no-cache ffmpeg font-dejavu \
  && case "${TARGETARCH:-amd64}" in \
       amd64) a=amd64; sum=32d616af226bd731678ffde328b94cfb94e30339bfefc469cfb76323144615a6 ;; \
       arm64) a=arm64; sum=359fabade8a7a51e81a55fe6df6b0ef81764a5e1d63179577534eaaa71904b50 ;; \

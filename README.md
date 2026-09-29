@@ -246,6 +246,16 @@ upload folder. While storage is paused, `STOR` answers 452.
   `{id, start, end, stream, size, events, url, snapshotUrl}`;
   `/clips/{id}.mp4` serves the file with HTTP Range, `/clips/{id}.jpg` the
   snapshot. The admin UI's Clips page plays them.
+- **Composed clips:** `POST /api/cameras/{cam}/compositions`
+  `{clipId, preS, postS, size, badge}` composes a clip with a pre-/post-roll
+  (−600…60 s each, at most 60 s in all). Each second comes from the clip,
+  another clip, that second's still, or a "No recording" card; still and card
+  seconds can carry a "STILLS 1 FPS" badge. H.264 10 fps, sizes `sd`, `360p`,
+  `720p`, `1080p`. One encoding runs at a time (3 may wait); poll
+  `GET …/compositions/{id}` for progress, fetch `…/{id}.mp4`, and
+  `DELETE …/{id}` cancels. A job nobody polls for 30 s stops, and results
+  are removed after 15 minutes. The font comes from `composition.font`, else
+  DejaVu Sans (the container) or Arial (macOS).
 - **Firewall:** the camera connects to the proxy, on `ftp.port` and the
   `ftp.passive` ports. On a Mac with the firewall on, node must be allowed
   to accept incoming connections, again after each Homebrew node upgrade

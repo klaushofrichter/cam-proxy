@@ -354,6 +354,17 @@
         }
       }
     },
+    "composition": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "font": {
+          "type": "string",
+          "pattern": "^.+$",
+          "description": "font file for the badge and card text of composed clips; default: the first of DejaVu Sans (Alpine, Debian) or Arial (macOS) that exists"
+        }
+      }
+    },
     "sse": {
       "type": "object",
       "additionalProperties": false,
