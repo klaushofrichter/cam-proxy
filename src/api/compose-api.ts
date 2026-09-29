@@ -39,11 +39,25 @@ export function composeApi(d: {
     if (d.paused()) return void res.status(503).json({ error: 'storage_paused' });
     const span = (c: { id: number; start_ts: number; end_ts: number | null; path: string }) => ({ id: c.id, start: c.start_ts, end: c.end_ts ?? c.start_ts, path: c.path });
     const from = row.start_ts - 600_000, to = row.end_ts + 60_000;
-    const stills = new Set(d.stillsIn(from, to));
+    // The still that shows at second t: the latest one within the stills
+    // interval (stills every 2 s hold for 2 s instead of flickering to cards).
+    const stills = d.stillsIn(from, to).sort((x, y) => x - y);
+    const holdMs = d.config().stills.intervalS * 1000;
+    const stillAt = (t: number): number | null => {
+      let lo = 0;
+      let hi = stills.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (stills[mid] <= t) lo = mid + 1;
+        else hi = mid;
+      }
+      const s = stills[lo - 1];
+      return s !== undefined && t - s < holdMs ? s : null;
+    };
     const plan = planComposition({
       clip: span(row), preS: b.preS, postS: b.postS,
       clips: listClips(d.catalog, cam(), from, to).map(span),
-      hasStill: (t) => stills.has(Math.floor(t / 1000) * 1000),
+      stillAt,
     });
     if (!plan.ok) return void res.status(400).json({ error: 'invalid', detail: plan.error });
     if (!d.font && (b.badge || plan.segments.some((s) => s.kind === 'card'))) return void res.status(503).json({ error: 'no_font' });

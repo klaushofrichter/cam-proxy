@@ -16,6 +16,7 @@ export const SETTINGS: Node = {
     port: port('HTTP port for the API, control API and admin UI'),
     dataDir: { type: 'string', pattern: '^.+$', doc: 'data folder; relative to the config file' },
     logLevel: { type: 'string', enum: ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'], doc: 'pino log level' },
+    trustProxy: int(0, 5, 'reverse proxies in front (the cluster ingress: 1); rate limits then count clients by X-Forwarded-For', true),
     publicUrl: { type: 'string', pattern: '^https?://[^\\s]+$', optional: true, doc: 'where people reach this proxy (its admin UI); reported in /api/cameras so clients can link to it' },
   },
   camera: {

@@ -79,3 +79,32 @@ describe('login links over HTTP', () => {
     expect((await request(p.proxy.app).post('/control/login').send({ token: 'x' })).status).toBe(401);
   });
 });
+
+// Issue #29: behind the cluster's ingress every client has the ingress's
+// address, so rate limits count everyone together unless the proxy trusts
+// X-Forwarded-For (server.trustProxy: the number of proxies in front).
+describe('server.trustProxy', () => {
+  let sim: Awaited<ReturnType<typeof startSim>>;
+  beforeAll(async () => {
+    sim = await startSim();
+  });
+  afterAll(async () => {
+    await sim.close();
+  });
+  const attempts = async (settings: object) => {
+    const p = await startProxy(sim, { settings });
+    try {
+      const codes: number[] = [];
+      for (let i = 0; i < 21; i++) codes.push((await request(p.proxy.app).post('/control/login').set('X-Forwarded-For', `10.0.0.${i + 1}`).send({ token: 'wrong' })).status);
+      return codes;
+    } finally {
+      await p.proxy.stop();
+    }
+  };
+  it('counts clients by X-Forwarded-For when trusted', async () => {
+    expect((await attempts({ server: { logLevel: 'silent', trustProxy: 1 } })).includes(429)).toBe(false);
+  });
+  it('counts everyone together when not (the default)', async () => {
+    expect((await attempts({})).at(-1)).toBe(429);
+  });
+});

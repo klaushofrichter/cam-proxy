@@ -92,7 +92,7 @@ describe('compose ffmpeg helpers', () => {
     await run('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=10', '-f', 'lavfi', '-i', 'sine=f=440:r=16000', '-t', '4', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', clip]);
     await run('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x180', '-frames:v', '1', still]);
     const T = 1_790_000_000_000;
-    const plan = planComposition({ clip: { id: 1, start: T, end: T + 4000, path: clip }, preS: 1, postS: 2, clips: [], hasStill: (t) => t !== T + 4000 });
+    const plan = planComposition({ clip: { id: 1, start: T, end: T + 4000, path: clip }, preS: 1, postS: 2, clips: [], stillAt: (t) => (t !== T + 4000 ? t : null) });
     if (!plan.ok) throw new Error(plan.error);
     const out = join(dir, 'out.mp4');
     const progress: number[] = [];
@@ -109,5 +109,42 @@ describe('compose ffmpeg helpers', () => {
     expect(probe.streams.some((x) => x.codec_name === 'aac')).toBe(true);
     expect(progress.at(-1)).toBe(1);
     expect(progress.every((p, i) => i === 0 || p >= progress[i - 1])).toBe(true); // never goes back
+  }, 60_000);
+
+  // Issue #30 items.
+  it('keeps text safe: an apostrophe becomes a typographic one', () => {
+    expect(escapeText("it's 12:00")).toBe('it’s 12\\:00');
+  });
+
+  it('drops frames before scaling, pins a clip part to its length, and caps each piece at 200 MB', () => {
+    const [clip, stills] = pieceArgs({ ...base, segments: [{ kind: 'clip', clipId: 1, path: '/c/1.mp4', inS: 2, outS: 7, audio: true }, { kind: 'still', ts: 1 }] });
+    const graph = clip.args[clip.args.indexOf('-filter_complex') + 1];
+    expect(graph.startsWith('[0:v]fps=10,scale=')).toBe(true);
+    expect(graph).toContain('tpad=stop_mode=clone:stop_duration=5,trim=duration=5');
+    for (const p of [clip, stills]) expect(p.args.slice(-6, -4)).toEqual(['-fs', '200M']);
+  });
+
+  it('names the stills rate in the badge when stills are not every second', () => {
+    const [p] = pieceArgs({ ...base, stillsIntervalS: 2, segments: [{ kind: 'still', ts: 1 }] });
+    expect(p.args.join(' ')).toContain("text='STILLS 1/2 FPS'");
+  });
+
+  it.skipIf(!font)('really draws the badge (the corner differs with it off)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'compose-badge-'));
+    const still = join(dir, 's.jpg');
+    await run('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=gray:s=896x512', '-frames:v', '1', still]);
+    const corner = async (badge: boolean) => {
+      const out = join(dir, `b-${badge}.mp4`);
+      await ffmpegRunner({ font: font!, clock: () => '12:00:00', readStill: async () => readFileSync(still), hasAudio: async () => true })({
+        dir: mkdtempSync(join(dir, 'j-')), out, req: { cam: 'cam1', plan: { ok: true, start: 0, end: 1000, durationS: 1, segments: [{ kind: 'still', ts: 0 }] }, size: 'sd', badge }, onProgress: () => {}, signal: new AbortController().signal,
+      });
+      const { stdout } = await run('ffmpeg', ['-v', 'error', '-i', out, '-frames:v', '1', '-vf', 'crop=160:40:0:0,format=gray', '-f', 'rawvideo', '-'], { encoding: 'buffer', maxBuffer: 1 << 20 } as never);
+      return stdout as unknown as Buffer;
+    };
+    const on = await corner(true);
+    const off = await corner(false);
+    let diff = 0;
+    for (let i = 0; i < on.length; i++) diff += Math.abs(on[i] - off[i]);
+    expect(diff / on.length).toBeGreaterThan(5);
   }, 60_000);
 });

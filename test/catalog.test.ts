@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync } from 'fs';
+import { chmodSync, mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { openCatalog, type Catalog } from '../src/catalog/db';
@@ -65,5 +65,17 @@ describe('catalog', () => {
     expect(closeAllOpen(c, 'cam1', 5000, 'restart')).toHaveLength(2);
     expect(openEvents(c, 'cam1')).toHaveLength(0);
     expect(listEvents(c, { cam: 'cam1' })[0]).toMatchObject({ end_ts: 5000, end_reason: 'restart' });
+  });
+
+  // Issue #5: a data folder owned by root (a volume mounted as root) said
+  // only EACCES; say which folder, and what to do.
+  it('explains a data folder it cannot write', () => {
+    const ro = mkdtempSync(join(tmpdir(), 'camproxy-ro-'));
+    chmodSync(ro, 0o555);
+    try {
+      expect(() => openCatalog(join(ro, 'data', 'catalog.sqlite'))).toThrow(/data folder .* isn't writable .*chown/);
+    } finally {
+      chmodSync(ro, 0o755);
+    }
   });
 });

@@ -147,6 +147,18 @@ describe('control API: actions and log', () => {
     await until(() => p.proxy.intake.state().onvif === 'subscribed');
   });
 
+  // Review: settings read once at process start stay pending after the
+  // in-process restart, so the UI keeps saying a new process is needed.
+  it('keeps process-start settings pending after the in-process restart', async () => {
+    await request(p.proxy.app).put('/control/config').set(admin()).send({ server: { trustProxy: 2 } });
+    expect((await request(p.proxy.app).post('/control/actions/restart').set(admin())).status).toBe(202);
+    await until(() => p.proxy.intake.state().onvif === 'subscribed');
+    await p.proxy.restart();
+    const r = await request(p.proxy.app).get('/control/config').set(admin());
+    expect(r.body['server.trustProxy']).toMatchObject({ pending: true, next: 2 });
+    await request(p.proxy.app).delete('/control/config/server.trustProxy').set(admin());
+  });
+
   it('answers 404 for an unknown action', async () => {
     expect((await request(p.proxy.app).post('/control/actions/nope').set(admin())).status).toBe(404);
   });
