@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.09.30.3
+
 - Timeline: a minute opens inside its hour card, right under that hour's thumbnails, instead of at the top of the page (no scrolling). ◀ ▶ (and the arrow keys) step to the previous or next minute of the same hour. The minute names its events (kind, start–end) and frames their seconds in the event's colour, person first.
 
 ## v2026.09.30.2
