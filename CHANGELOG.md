@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Pi: `compose.yaml` passes `CAMPROXY_GOOGLE_VISION_KEY` to the container; the Pi guide says how to add the key.
+
 ## v2026.09.30.4
 
 - External analytics (optional, off by default): the still of a person, vehicle or pet event goes to Google Vision, and the objects found are kept with the event and shown as a "✦ Vision" tag (Events), a mark on analysed minutes (Timeline) and a picture with boxes. Key `CAMPROXY_GOOGLE_VISION_KEY`; a monthly limit and an optional daily cap bound the calls. See README, Analytics.
