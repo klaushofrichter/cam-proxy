@@ -5,10 +5,10 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { openCatalog, type Catalog } from '../src/catalog/db';
 import { deleteEventsBefore, insertEvent } from '../src/catalog/events';
-import { analysisFor } from '../src/catalog/analyses';
+import { analysisFor, listUnmapped, saveAnalysis } from '../src/catalog/analyses';
 import { StreamLog } from '../src/stream/log';
 import { DEFAULTS, type Config } from '../src/config/defaults';
-import { AnalyticsService } from '../src/analytics/service';
+import { AnalyticsService, type AnalyticsDeps } from '../src/analytics/service';
 import { localDay } from '../src/analytics/local-day';
 import { AnalyticsError, type AnalyticsProvider } from '../src/analytics/providers';
 import { timeInfoFromGetTime } from '../src/camera/time';
@@ -40,8 +40,8 @@ const provider: AnalyticsProvider = {
   },
 };
 
-function service(over: { key?: string } = {}) {
-  return new AnalyticsService({
+function deps(over: { key?: string } = {}): AnalyticsDeps {
+  return {
     catalog: c, log, cam: 'cam1', dataDir: dir,
     config: () => config,
     secrets: () => ({ googleVisionKey: over.key ?? 'k-123456789012', googleVisionUrl: 'http://mock' }),
@@ -51,8 +51,9 @@ function service(over: { key?: string } = {}) {
     now: () => now,
     sleep: async (ms) => void (now += ms),
     provider: () => provider,
-  });
+  };
 }
+const service = (over: { key?: string } = {}) => new AnalyticsService(deps(over));
 const event = (kind: string, start_ts = T0) => insertEvent(c, { cam: 'cam1', source: 'onvif', kind, start_ts, raw: null });
 const still = (ts: number, byte: number) => stills.set(ts, Buffer.from([byte, 0xd8]));
 
@@ -377,5 +378,61 @@ describe('AnalyticsService', () => {
     await s.idle();
     expect(now - (T0 + 1300)).toBeLessThan(2000);
     expect(analysisFor(c, e.id)).toMatchObject({ status: 'ok', still_ts: T0 + 1000 });
+  });
+
+  it('stores the summary with the analysis and counts unmapped objects', async () => {
+    still(T0 + 1000, 7);
+    const mixed: AnalyticsProvider = {
+      id: 'google-vision', name: 'Google Vision',
+      async analyze() {
+        return { objects: [
+          { mid: '/m/03ldnb', name: 'Ceiling fan', score: 0.9, box: { x0: 0.1, y0: 0.3, x1: 0.3, y1: 0.5 } },
+          { mid: '/m/01g317', name: 'Person', score: 0.74, box: { x0: 0.16, y0: 0.62, x1: 0.23, y1: 0.99 } },
+          { mid: '/m/01g317', name: 'Person', score: 0.65, box: { x0: 0.16, y0: 0.62, x1: 0.23, y1: 0.99 } },
+        ], raw: {} };
+      },
+    };
+    const s2 = new AnalyticsService({ ...deps(), provider: () => mixed });
+    const e = event('person');
+    s2.onEvent(e);
+    await s2.idle();
+    const a = analysisFor(c, e.id)!;
+    expect(JSON.parse(a.summary!)).toEqual([{ category: 'person', subtype: 'person', score: 0.74, box: { x0: 0.16, y0: 0.62, x1: 0.23, y1: 0.99 } }]);
+    expect(listUnmapped(c)).toEqual([expect.objectContaining({ mid: '/m/03ldnb', name: 'Ceiling fan', count: 1 })]);
+  });
+
+  it('the message carries the event kind, start, a null end while open, the still time and the summary', async () => {
+    still(T0 + 1000, 7);
+    const s = service();
+    const e = event('person');
+    s.onEvent(e);
+    await s.idle();
+    const m = log.since(0, { types: ['analysis'] }, 10)[0].data;
+    expect(m).toMatchObject({ eventId: e.id, kind: 'person', start: T0, end: null, status: 'ok', stillTs: T0 + 1000, summary: [expect.objectContaining({ category: 'person' })] });
+    expect(Array.isArray(m.objects)).toBe(true);
+  });
+
+  it('a skipped analysis gets an empty summary and counts nothing as unmapped', async () => {
+    config.analytics.googleVision.monthlyLimit = 0;
+    still(T0 + 1000, 7);
+    const s = service();
+    const e = event('person');
+    s.onEvent(e);
+    await s.idle();
+    expect(analysisFor(c, e.id)).toMatchObject({ status: 'skipped', summary: '[]' });
+    expect(log.since(0, { types: ['analysis'] }, 10)[0].data.summary).toEqual([]);
+    expect(listUnmapped(c)).toEqual([]);
+  });
+
+  it('backfills summaries of older analyses by name, and the backfill counts nothing as unmapped', () => {
+    const e = event('person');
+    saveAnalysis(c, { event_id: e.id, provider: 'google-vision', status: 'ok', reason: null, still_ts: T0 + 1000, image: null, requested_at: T0, took_ms: 300,
+      objects: JSON.stringify([{ name: 'Ceiling fan', score: 0.9, box: { x0: 0, y0: 0, x1: 0.1, y1: 0.1 } }, { name: 'Person', score: 0.7, box: { x0: 0.2, y0: 0.2, x1: 0.4, y1: 0.9 } }]),
+      raw: '{}', summary: null });
+    const s = service();
+    expect(s.backfillSummaries()).toBe(1);
+    expect(JSON.parse(analysisFor(c, e.id)!.summary!)).toEqual([expect.objectContaining({ category: 'person', subtype: 'person', score: 0.7 })]);
+    expect(listUnmapped(c)).toEqual([]);
+    expect(s.backfillSummaries()).toBe(0);
   });
 });

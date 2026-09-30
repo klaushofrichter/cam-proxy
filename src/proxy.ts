@@ -395,6 +395,11 @@ export function createProxy(initial: Loaded): Proxy {
       startStills();
       await startClips();
       storage.start();
+      try {
+        analytics.backfillSummaries();
+      } catch (err) {
+        logger.warn({ err: (err as Error).message }, 'analytics_backfill_failed');
+      }
       analytics.catchUp();
       logger.info({ port, camera: running.camera.id, version: VERSION }, 'cam_proxy_started');
       return { port };
