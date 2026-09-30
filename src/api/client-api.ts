@@ -1,7 +1,7 @@
 import express, { type Request, type Response } from 'express';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
-import { analysesFor, analysisFor, type AnalysisRow } from '../catalog/analyses';
+import { analysesFor, analysesInRange, analysisFor, type AnalysisRow } from '../catalog/analyses';
 import { clipById, listClips, oldestClip, overlappingEvents, type ClipRow } from '../catalog/clips';
 import type { Catalog } from '../catalog/db';
 import { listEvents, type EventRow } from '../catalog/events';
@@ -22,7 +22,7 @@ export const eventJson = (e: EventRow) => ({ id: e.id, kind: e.kind, source: e.s
 
 const parse = (s: string | null) => (s === null ? null : JSON.parse(s));
 export const analysisSummary = (a: AnalysisRow | undefined) =>
-  a ? { provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, objects: parse(a.objects) ?? [] } : null;
+  a ? { provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, objects: parse(a.objects) ?? [], summary: parse(a.summary ?? null) ?? [] } : null;
 
 // The client API (spec §10); auth is applied by the caller.
 export function clientApi(d: { config: () => Config; catalog: Catalog; status: () => StatusPoller; sse: SseHandler; stills: () => StillsSide | undefined }): express.Router {
@@ -47,6 +47,15 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     res.send(jpeg);
   };
 
+  // The from/to of a list over at most a day; answers 400 itself otherwise.
+  const range = (req: Request, res: Response): [number, number] | undefined => {
+    const from = intParam(req.query.from), to = intParam(req.query.to);
+    if (from === undefined || to === undefined || from === null || to === null) return bad(res, 'from and to (unix ms) are required'), undefined;
+    if (to < from) return bad(res, 'to is before from'), undefined;
+    if (to - from > DAY) return bad(res, 'at most one day per request'), undefined;
+    return [from, to];
+  };
+
   r.get('/cameras/:cam/events', (req, res) => {
     if (!known(req, res)) return;
     const from = intParam(req.query.from), to = intParam(req.query.to), limit = intParam(req.query.limit);
@@ -62,6 +71,17 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     if (!a) return void res.status(404).json({ error: 'not_found' });
     res.json({ eventId: a.event_id, provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, requestedAt: a.requested_at, tookMs: a.took_ms, objects: parse(a.objects) ?? [], raw: parse(a.raw) });
   });
+  // A day of analyses in the stream message's shape (spec
+  // 2026-09-30-analytics-in-cams-design), for cams when it loads a day.
+  r.get('/cameras/:cam/analyses', (req, res) => {
+    if (!known(req, res)) return;
+    const rg = range(req, res);
+    if (!rg) return;
+    res.json(analysesInRange(d.catalog, cam().id, rg[0], rg[1]).map((a) => ({
+      eventId: a.event_id, kind: a.kind, start: a.start_ts, end: a.end_ts, provider: a.provider, status: a.status, reason: a.reason,
+      stillTs: a.still_ts, summary: parse(a.summary ?? null) ?? [],
+    })));
+  });
   r.get('/cameras/:cam/events/:id/analysis.jpg', (req, res) => {
     if (!known(req, res)) return;
     const a = analysisFor(d.catalog, Number(req.params.id));
@@ -75,13 +95,6 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
   });
 
   // Stills and previews (spec §8, §10): lists over at most a day.
-  const range = (req: Request, res: Response): [number, number] | undefined => {
-    const from = intParam(req.query.from), to = intParam(req.query.to);
-    if (from === undefined || to === undefined || from === null || to === null) return bad(res, 'from and to (unix ms) are required'), undefined;
-    if (to < from) return bad(res, 'to is before from'), undefined;
-    if (to - from > DAY) return bad(res, 'at most one day per request'), undefined;
-    return [from, to];
-  };
   const store = (req: Request, res: Response) => {
     if (!known(req, res)) return undefined;
     const s = d.stills();

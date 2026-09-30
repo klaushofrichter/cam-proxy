@@ -49,6 +49,7 @@ export interface ControlDeps {
   };
   storage: Storage;
   analytics: () => ProviderState[];
+  unmapped: { list(limit?: number): { mid: string; name: string; count: number; lastSeen: number }[]; clear(): number };
   sseClients: () => number;
   stream: () => { enabled: boolean; up: boolean; go2rtcUp: boolean; lastFrameTs: number | null };
   sessions: ReturnType<typeof createSessionSigner>;
@@ -133,10 +134,13 @@ export function controlApi(d: ControlDeps): express.Router {
       storage: { paused: d.storage.paused() },
       ftp: d.ftp(),
       analytics: d.analytics(),
+      analyticsUnmapped: d.unmapped.list(20),
     });
   });
 
   r.get('/analytics', (_req, res) => void res.json(d.analytics()));
+  r.get('/analytics/unmapped', (_req, res) => void res.json(d.unmapped.list()));
+  r.delete('/analytics/unmapped', (_req, res) => void res.json({ cleared: d.unmapped.clear() }));
 
   r.get('/stats', (_req, res) => {
     const u = d.storage.usage();

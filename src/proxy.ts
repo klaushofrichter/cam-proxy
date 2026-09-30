@@ -5,6 +5,7 @@ import http from 'http';
 import type { AddressInfo } from 'net';
 import { join } from 'path';
 import { openCatalog, type Catalog } from './catalog/db';
+import { clearUnmapped, listUnmapped } from './catalog/analyses';
 import { closeAllOpen } from './catalog/events';
 import { ReolinkClient } from './camera/client';
 import { splitHost } from './camera/http';
@@ -306,6 +307,7 @@ export function createProxy(initial: Loaded): Proxy {
       },
       storage,
       analytics: () => analytics.state(),
+      unmapped: { list: (limit) => listUnmapped(catalog, limit), clear: () => clearUnmapped(catalog) },
       sseClients: () => sse.clients(),
       stream: () => ({ enabled: !!stills, up: stills?.grabber.up() ?? false, go2rtcUp: stills?.go2rtc.up() ?? false, lastFrameTs: stills?.grabber.lastFrameTs() ?? null }),
       sessions,

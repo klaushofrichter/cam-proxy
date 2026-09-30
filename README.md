@@ -196,6 +196,9 @@ api '/cameras/cam1/events?kind=person&limit=10'
   - `source` is `onvif`, or `poll` for the fallback.
   - `endReason` is `state` (the camera said so), `timeout` (still open after
     `events.maxOpenMin`) or `restart` (the proxy stopped while it was open).
+- `GET /api/cameras/{cam}/analyses?from&to`: the analyses of events that
+  start in the range (at most one day), oldest first, in the `analysis`
+  stream message's shape without `objects`.
 - `GET /health`: the process is up (no auth).
 
 ## Stills and previews
@@ -309,6 +312,13 @@ boxes. Motion-only events are never analysed.
 - **Cost (as measured 2026-09-30):** Google's first 1,000 units a month are
   free per feature; object localization is one unit per image, then $2.25 per
   1,000 (Google's price list, checked 2026-09-30). The Settings card shows the estimate for the monthly limit.
+- **Summary:** each analysis keeps persons, vehicles and pets only, mapped
+  by Open Images class id ([docs/analytics-classes.md](docs/analytics-classes.md)).
+  Boxes that overlap by more than 90% are merged, the highest score first.
+  It appears on the events list (`analysis.summary`), in the `analysis`
+  stream message and in `GET /api/cameras/{cam}/analyses`. Objects that
+  don't map are counted: the Status page lists the top 20, and
+  `GET`/`DELETE /control/analytics/unmapped` list and clear them.
 - **Stored:** the result per event in SQLite, a copy of the analysed JPEG in
   `data/analytics/<cam>/<eventId>.jpg` (stills are kept 7 days, events 30),
   and the usage per day for 400 days. An analysis goes with its event.

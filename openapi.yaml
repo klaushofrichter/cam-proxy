@@ -134,7 +134,7 @@ paths:
         - { name: kind, in: query, schema: { type: string }, description: 'motion, person, vehicle, pet, …' }
         - { name: limit, in: query, schema: { type: integer, maximum: 1000 } }
       responses:
-        '200': { description: '[{ id, kind, source, start, end, endReason, analysis: null | {provider, status, reason, stillTs, objects: [{name, score, box: {x0, y0, x1, y1}}]} }]' }
+        '200': { description: '[{ id, kind, source, start, end, endReason, analysis: null | {provider, status, reason, stillTs, objects: [{name, score, box: {x0, y0, x1, y1}}], summary: [{category, subtype, score, box}]} }]' }
         '400': { description: invalid parameter }
         '404': { description: unknown camera }
   /api/cameras/{cam}/events/{id}/analysis:
@@ -155,6 +155,18 @@ paths:
       responses:
         '200': { description: 'image/jpeg; cached as immutable' }
         '404': { description: 'unknown camera, no analysis, or no image' }
+  /api/cameras/{cam}/analyses:
+    get:
+      summary: A day of analyses, oldest first, in the stream message's shape
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: from, in: query, required: true, schema: { type: integer }, description: event start at or after (ms) }
+        - { name: to, in: query, required: true, schema: { type: integer }, description: event start at or before (ms); at most one day after from }
+      responses:
+        '200': { description: 'the analyses of events starting in [from, to], oldest first: [{ eventId, kind, start, end, provider, status, reason, stillTs, summary: [{category, subtype, score, box}] }]' }
+        '400': { description: 'from or to missing, to before from, or more than one day' }
+        '401': { description: not signed in }
+        '404': { description: unknown camera }
   /api/stream:
     get:
       summary: Server-Sent Events, resumable
@@ -167,7 +179,9 @@ paths:
         `{cam, online, reason, clockOffsetMs}` (plus `stream: up|down` when
         the stills stream changes); clip
         `{cam, clipId, start, end, stream, size, codec, events, url,
-        snapshotUrl}`; analysis (an event's analysis was stored; data as the events list's `analysis` plus `eventId`); annotation (reserved, not sent yet); still
+        snapshotUrl}`; analysis (an event's analysis was stored)
+        `{eventId, kind, start, end, provider, status, reason, stillTs,
+        summary, objects}`; annotation (reserved, not sent yet); still
         `{cam, ts, url, sprite, tile}` (only when named in `types`; live
         only, without an id, and not replayed).
       parameters:
@@ -231,7 +245,7 @@ paths:
         Admin token or admin session. Writes with the session cookie need
         `X-CamProxy-UI: 1`. A client token answers 403 `{"error":"admin_only"}`.
       responses:
-        '200': { description: '{ version, camera (incl. webUiUrl), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures}, analytics: [provider state] }' }
+        '200': { description: '{ version, camera (incl. webUiUrl), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures}, analytics: [provider state], analyticsUnmapped: top 20 unmapped objects [{mid, name, count, lastSeen}] }' }
         '401': { description: not signed in }
         '403': { description: admin_only, or csrf }
   /control/analytics:
@@ -241,6 +255,19 @@ paths:
         '200': { description: '[{ id, name, enabled, keyMasked (never the key), month: {calls, limit}, today: {calls, cap}, paused: null | {reason, until}, lastCall, lastError }]' }
         '401': { description: not signed in }
         '403': { description: admin_only }
+  /control/analytics/unmapped:
+    get:
+      summary: Objects seen but not mapped to person, vehicle or pet (admin)
+      responses:
+        '200': { description: '[{ mid, name, count, lastSeen }], most frequent first' }
+        '401': { description: not signed in }
+        '403': { description: admin_only }
+    delete:
+      summary: Clear the unmapped list (admin)
+      responses:
+        '200': { description: '{ cleared }' }
+        '401': { description: not signed in }
+        '403': { description: admin_only, or csrf }
   /control/stats:
     get:
       summary: Disk, events, stream log, storage budget (spec §13)
