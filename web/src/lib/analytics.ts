@@ -39,3 +39,13 @@ export function tagText(a: UiAnalysis | null): string | null {
   const top = [...a.objects].sort((x, y) => y.score - x.score).slice(0, 3);
   return `✦ Vision: ${top.map((o) => `${o.name} ${o.score.toFixed(2)}`).join(', ')}`;
 }
+
+// A limit typed into a number field: a whole number from 0 to max, else null
+// (empty, not a number, negative, fractional or too big).
+export function parseLimit(text: string | number | null | undefined, max: number): number | null {
+  if (text === null || text === undefined) return null;
+  const t = typeof text === 'number' ? String(text) : text.trim();
+  if (!/^\d+$/.test(t)) return null;
+  const v = Number(t);
+  return v <= max ? v : null;
+}

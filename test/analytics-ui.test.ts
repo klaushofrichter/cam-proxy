@@ -1,6 +1,6 @@
 // test/analytics-ui.test.ts
 import { describe, expect, it } from 'vitest';
-import { costEstimate, tagText, usageLine } from '../web/src/lib/analytics';
+import { costEstimate, parseLimit, tagText, usageLine } from '../web/src/lib/analytics';
 
 describe('analytics UI text', () => {
   it('estimates the monthly cost from the limit (1,000 free, then $1.50 per 1,000)', () => {
@@ -23,5 +23,14 @@ describe('analytics UI text', () => {
     expect(tagText({ status: 'ok', reason: null, objects: [] })).toBe('✦ Vision: nothing found');
     expect(tagText({ status: 'skipped', reason: 'limit', objects: [] })).toBe('✦ not analysed (limit)');
     expect(tagText({ status: 'failed', reason: 'bad_key', objects: [] })).toBe('✦ not analysed (bad_key)');
+  });
+
+  it('parses a limit: a whole number from 0 to max, else null', () => {
+    expect(parseLimit('0', 100000)).toBe(0);
+    expect(parseLimit('1500', 100000)).toBe(1500);
+    expect(parseLimit(' 30 ', 10000)).toBe(30);
+    expect(parseLimit(100000, 100000)).toBe(100000);
+    for (const bad of ['', '  ', null, undefined, 'abc', '-1', '1.5', '100001', NaN, Infinity]) expect(parseLimit(bad as never, 100000)).toBeNull();
+    expect(parseLimit('10001', 10000)).toBeNull();
   });
 });

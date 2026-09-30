@@ -1,7 +1,7 @@
 <script lang="ts">
   import { api, ApiError } from '../lib/api';
   import { status } from '../lib/state';
-  import { costEstimate, type UiProviderState } from '../lib/analytics';
+  import { costEstimate, parseLimit, type UiProviderState } from '../lib/analytics';
 
   // The Analytics card (spec 2026-09-30-analytics-design): event kinds, and per
   // provider its switch, masked key, limits, estimate and the shared-key note.
@@ -9,16 +9,22 @@
   let message = $state('');
   const val = <T,>(p: string) => view[p]?.value as T;
   const provider = $derived(($status?.analytics?.[0] ?? null) as UiProviderState | null);
-  let monthly = $state('');
-  let daily = $state('');
-  $effect(() => {
-    monthly = String(val<number>('analytics.googleVision.monthlyLimit') ?? 0);
-    daily = String(val<number>('analytics.googleVision.dailyCap') ?? 0);
-  });
+  // A draft stays undefined until the user types, so a reload of the settings
+  // (Refresh, another save) never overwrites what is being typed; the field
+  // shows the saved value meanwhile.
+  const savedMonthly = $derived(String(val<number>('analytics.googleVision.monthlyLimit') ?? 0));
+  const savedDaily = $derived(String(val<number>('analytics.googleVision.dailyCap') ?? 0));
+  let monthlyDraft = $state<string | undefined>(undefined);
+  let dailyDraft = $state<string | undefined>(undefined);
+  const monthly = $derived(monthlyDraft ?? savedMonthly);
+  const daily = $derived(dailyDraft ?? savedDaily);
+  const monthlyValue = $derived(parseLimit(monthly, 100000));
+  const dailyValue = $derived(parseLimit(daily, 10000));
 
-  async function put(body: object, what: string) {
+  async function put(body: object, what: string, clear?: () => void) {
     try {
       onsaved(await api('PUT', '/control/config', { analytics: body }));
+      if (clear) clear();
       message = `${what} saved`;
     } catch (e) {
       message = e instanceof ApiError ? e.message : 'not saved';
@@ -49,11 +55,13 @@
     <p class="small" data-testid="analytics-key">
       Key: {#if provider?.keyMasked}<span class="mono">{provider.keyMasked}</span>{:else}not set: add <span class="mono">CAMPROXY_GOOGLE_VISION_KEY</span> to the environment and restart{/if}
     </p>
-    <label>Calls per month <input type="number" min="0" max="100000" bind:value={monthly} data-testid="analytics-monthly" />
-      <button onclick={() => void put({ googleVision: { monthlyLimit: Number(monthly) } }, 'Monthly limit')}>Save</button></label>
-    <label>At most per day (0 = no cap) <input type="number" min="0" max="10000" bind:value={daily} data-testid="analytics-daily" />
-      <button onclick={() => void put({ googleVision: { dailyCap: Number(daily) } }, 'Daily cap')}>Save</button></label>
-    <p class="small" data-testid="analytics-estimate">{costEstimate(Number(monthly) || 0)}</p>
+    <label>Calls per month <input type="number" min="0" max="100000" step="1" value={monthly} oninput={(e) => (monthlyDraft = e.currentTarget.value)} data-testid="analytics-monthly" />
+      <button disabled={monthlyValue === null} data-testid="analytics-monthly-save" onclick={() => monthlyValue !== null && void put({ googleVision: { monthlyLimit: monthlyValue } }, 'Monthly limit', () => (monthlyDraft = undefined))}>Save</button></label>
+    {#if monthlyValue === null}<p class="hint small" data-testid="analytics-monthly-hint">a whole number from 0 to 100,000</p>{/if}
+    <label>At most per day (0 = no cap) <input type="number" min="0" max="10000" step="1" value={daily} oninput={(e) => (dailyDraft = e.currentTarget.value)} data-testid="analytics-daily" />
+      <button disabled={dailyValue === null} data-testid="analytics-daily-save" onclick={() => dailyValue !== null && void put({ googleVision: { dailyCap: dailyValue } }, 'Daily cap', () => (dailyDraft = undefined))}>Save</button></label>
+    {#if dailyValue === null}<p class="hint small" data-testid="analytics-daily-hint">a whole number from 0 to 10,000</p>{/if}
+    <p class="small" data-testid="analytics-estimate">{costEstimate(monthlyValue ?? 0)}</p>
     <p class="muted small">The limit counts this proxy's calls only. Proxies that share a key share Google's budget: keep their limits' total within it.</p>
   </div>
   {#if message}<p class="msg" data-testid="analytics-message">{message}</p>{/if}
@@ -73,5 +81,7 @@
   .mono { font-family: var(--mono); }
   .muted { color: var(--muted); margin: 0; }
   .small { font-size: 13px; }
+  .hint { margin: 0; color: var(--danger); }
+  button:disabled { opacity: 0.5; cursor: default; }
   .msg { margin: 6px 0 0; color: var(--accent); }
 </style>
