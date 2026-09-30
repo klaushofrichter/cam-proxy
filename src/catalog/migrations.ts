@@ -53,4 +53,28 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE clips ADD COLUMN snapshot TEXT;
   CREATE INDEX clips_path ON clips (path);
   `,
+  // 3: external analytics (spec 2026-09-30-analytics-design): one result per
+  // event and provider, deleted with its event; calls per provider per day.
+  `
+  CREATE TABLE analyses (
+    id INTEGER PRIMARY KEY,
+    event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    status TEXT NOT NULL,
+    reason TEXT,
+    still_ts INTEGER,
+    image TEXT,
+    requested_at INTEGER NOT NULL,
+    took_ms INTEGER,
+    objects TEXT,
+    raw TEXT,
+    UNIQUE (event_id, provider)
+  );
+  CREATE TABLE analytics_usage (
+    provider TEXT NOT NULL,
+    day TEXT NOT NULL,
+    calls INTEGER NOT NULL,
+    PRIMARY KEY (provider, day)
+  );
+  `,
 ];
