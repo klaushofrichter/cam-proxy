@@ -92,3 +92,25 @@ test('the title links to the repository', async ({ page }) => {
   await expect(brand).toHaveAttribute('href', 'https://github.com/klaushofrichter/cam-proxy');
   await expect(brand).toHaveAttribute('target', '_blank');
 });
+
+test('typing in the analytics limits survives a refresh and a save of the other field', async ({ page }) => {
+  await signIn(page);
+  await page.getByTestId('nav-settings').click();
+  const monthly = page.getByTestId('analytics-monthly');
+  const daily = page.getByTestId('analytics-daily');
+  await expect(monthly).toBeVisible();
+  await monthly.fill('1234');
+  await page.getByTestId('refresh').click();
+  await page.waitForTimeout(800);
+  await expect(monthly).toHaveValue('1234');
+  await daily.fill('7');
+  await page.getByTestId('analytics-daily-save').click();
+  await expect(page.getByTestId('analytics-message')).toContainText('Daily cap saved');
+  await expect(monthly).toHaveValue('1234');
+  await monthly.fill('');
+  await expect(page.getByTestId('analytics-monthly-save')).toBeDisabled();
+  await expect(page.getByTestId('analytics-monthly-hint')).toContainText('whole number from 0 to 100,000');
+  await daily.fill('0');
+  await page.getByTestId('analytics-daily-save').click();
+  await expect(page.getByTestId('analytics-message')).toContainText('Daily cap saved');
+});

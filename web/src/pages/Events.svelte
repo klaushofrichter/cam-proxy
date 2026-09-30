@@ -2,14 +2,19 @@
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
   import { feed, refreshTick, status } from '../lib/state';
+  import AnalysisModal from '../components/AnalysisModal.svelte';
+  import { tagText, type UiAnalysis } from '../lib/analytics';
 
-  interface Ev { id: number; kind: string; source: string; start: number; end: number | null; endReason: string | null }
+  interface Ev { id: number; kind: string; source: string; start: number; end: number | null; endReason: string | null; analysis: UiAnalysis | null }
   let events = $state<Ev[]>([]);
+  let camId = $state('');
+  let shown = $state<Ev | null>(null);
   const time = (ts: number | null) => (ts ? new Date(ts).toLocaleTimeString() : '…');
   const load = async () => {
     try {
       const cams = await api<Array<{ id: string }>>('GET', '/api/cameras');
       if (!cams[0]) return;
+      camId = cams[0].id;
       events = await api<Ev[]>('GET', `/api/cameras/${encodeURIComponent(cams[0].id)}/events?limit=100`);
     } catch {
       // keep the last list
@@ -47,16 +52,17 @@
   <div class="card">
     <h3>Last 100 events</h3>
     <table>
-      <thead><tr><th>kind</th><th>start</th><th>end</th><th>source</th></tr></thead>
+      <thead><tr><th>kind</th><th>start</th><th>end</th><th>source</th><th>analysis</th></tr></thead>
       <tbody data-testid="events">
         {#each events as e (e.id)}
-          <tr><td>{e.kind}</td><td>{time(e.start)}</td><td>{time(e.end)}{e.endReason && e.endReason !== 'state' ? ` (${e.endReason})` : ''}</td><td>{e.source}</td></tr>
+          <tr><td>{e.kind}</td><td>{time(e.start)}</td><td>{time(e.end)}{e.endReason && e.endReason !== 'state' ? ` (${e.endReason})` : ''}</td><td>{e.source}</td><td>{#if tagText(e.analysis)}<button class="tag" class:grey={e.analysis?.status !== 'ok'} data-testid="analysis-tag" onclick={() => (shown = e)}>{tagText(e.analysis)}</button>{/if}</td></tr>
         {:else}
-          <tr><td colspan="4" class="muted">No events stored.</td></tr>
+          <tr><td colspan="5" class="muted">No events stored.</td></tr>
         {/each}
       </tbody>
     </table>
   </div>
+  {#if shown}<AnalysisModal {camId} event={shown} onclose={() => (shown = null)} />{/if}
 </section>
 
 <style>
@@ -71,4 +77,6 @@
   .mono { font-family: var(--mono); }
   .muted { color: var(--muted); margin: 0; }
   .small { font-size: 13px; }
+  .tag { border: 1px solid #a855f7; color: #a855f7; background: none; border-radius: 999px; padding: 0 8px; font-size: 12px; cursor: pointer; }
+  .tag.grey { border-color: var(--border); color: var(--muted); }
 </style>

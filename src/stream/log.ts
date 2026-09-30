@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 import type { Catalog } from '../catalog/db';
 
-export const STREAM_TYPES = ['camera-event', 'camera-status', 'clip', 'annotation', 'still'] as const;
+export const STREAM_TYPES = ['camera-event', 'camera-status', 'clip', 'annotation', 'still', 'analysis'] as const;
 export type StreamType = (typeof STREAM_TYPES)[number];
 
 export interface StreamMessage {

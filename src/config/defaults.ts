@@ -27,6 +27,12 @@ export interface Config {
   // Composed clips (spec 2026-09-28): the font for the badge and card text.
   composition: { font?: string };
   ftp: { enabled: boolean; port: number; passive: string; user: string; tls: boolean; stream: 'main' | 'sub'; maxGB?: number; publicHost?: string; certFile?: string; keyFile?: string };
+  // External analytics (spec 2026-09-30-analytics-design): which event kinds,
+  // and per provider its switch and call limits. 0 = no calls.
+  analytics: {
+    kinds: { person: boolean; vehicle: boolean; pet: boolean };
+    googleVision: { enabled: boolean; monthlyLimit: number; dailyCap: number };
+  };
 }
 
 export const DEFAULTS: Config = {
@@ -45,6 +51,10 @@ export const DEFAULTS: Config = {
   sse: { maxClients: 50, queuePerClient: 1000, pingS: 15 },
   composition: {},
   ftp: { enabled: false, port: 2121, passive: '30000-30009', user: 'camera', tls: true, stream: 'main' },
+  analytics: {
+    kinds: { person: true, vehicle: false, pet: false },
+    googleVision: { enabled: false, monthlyLimit: 0, dailyCap: 0 },
+  },
 };
 
 export interface Secrets {
@@ -52,4 +62,6 @@ export interface Secrets {
   adminToken: string;
   cameraPassword: string;
   ftpPassword?: string;
+  googleVisionKey?: string;
+  googleVisionUrl: string; // not a secret; read with them (default Google's)
 }

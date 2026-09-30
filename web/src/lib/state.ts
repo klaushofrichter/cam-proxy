@@ -1,5 +1,6 @@
 import { writable } from 'svelte/store';
 import { api } from './api';
+import type { UiProviderState } from './analytics';
 
 export interface Status {
   version: string;
@@ -9,6 +10,7 @@ export interface Status {
   stream: { enabled: boolean; up: boolean; go2rtcUp: boolean; lastFrameTs: number | null };
   retention: { lastRun: number | null; totals: Record<string, number> };
   storage: { paused: boolean };
+  analytics?: UiProviderState[];
   ftp: { enabled: boolean; listening: boolean; port: number; tls: boolean; publicHost: string | null; passwordSet: boolean; lastUpload: number | null; lastClip: number | null; clips: number; failures: number };
 }
 export interface Usage { bytes: number; files: number; oldest: number | null; newest: number | null; growthPerDay: number }
@@ -56,7 +58,7 @@ export function connect(): void {
   void refresh();
   timer = setInterval(() => void refresh(), 5000);
   source = new EventSource('/api/stream', { withCredentials: true });
-  for (const type of ['camera-event', 'camera-status', 'clip', 'annotation']) {
+  for (const type of ['camera-event', 'camera-status', 'clip', 'annotation', 'analysis']) {
     source.addEventListener(type, (ev) => {
       const e = ev as MessageEvent;
       feed.update((list) => [{ id: Number(e.lastEventId), type, data: JSON.parse(e.data), at: Date.now() }, ...list].slice(0, 300));

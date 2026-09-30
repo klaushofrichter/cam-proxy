@@ -3,6 +3,7 @@ import { existsSync, readdirSync, rmdirSync, statSync, statfsSync, unlinkSync } 
 import { join } from 'path';
 import type { Catalog } from './catalog/db';
 import { deleteClip } from './catalog/clips';
+import { analysisImages, pruneUsage } from './catalog/analyses';
 import { deleteEventsBefore } from './catalog/events';
 import type { Config } from './config/defaults';
 import { logger } from './log';
@@ -196,6 +197,14 @@ export class Storage extends EventEmitter {
       deleted.streamLog = (db.prepare('SELECT COUNT(*) AS n FROM stream_log WHERE ts < ?').get(logBefore) as { n: number }).n;
     } else {
       deleted.events = deleteEventsBefore(this.d.catalog, eventsBefore);
+      // Analysis images whose analysis is gone (deleted with its event).
+      const keep = analysisImages(this.d.catalog);
+      const dir = join(cfg.server.dataDir, 'analytics', cfg.camera.id);
+      for (const f of existsSync(dir) ? readdirSync(dir) : []) {
+        const path = join(dir, f);
+        if (!keep.has(path)) try { unlinkSync(path); } catch { /* gone */ }
+      }
+      pruneUsage(this.d.catalog, new Date(now - 400 * DAY).toISOString().slice(0, 10));
       deleted.streamLog = this.d.log.deleteBefore(logBefore);
     }
 

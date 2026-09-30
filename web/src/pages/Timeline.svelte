@@ -1,10 +1,11 @@
 <script lang="ts">
   import { api } from '../lib/api';
-  import { eventsInMinute, secondKinds, stepMinute } from '../lib/timeline';
+  import { analysedSeconds, analysedStills, eventsInMinute, minuteMarks, secondKinds, stepMinute } from '../lib/timeline';
+  import AnalysisModal from '../components/AnalysisModal.svelte';
   import { refreshTick } from '../lib/state';
 
   interface Minute { minute: number; cols: number; rows: number; tileW: number; tileH: number; intervalS: number; present: boolean[]; url: string }
-  interface Ev { id: number; kind: string; start: number; end: number | null }
+  interface Ev { id: number; kind: string; start: number; end: number | null; analysis?: { status: string; stillTs?: number } | null }
 
   const pad = (n: number) => String(n).padStart(2, '0');
   const today = () => {
@@ -18,6 +19,7 @@
   let still = $state<number | null>(null);
   let camId = $state('');
   let message = $state('');
+  let shown = $state<Ev | null>(null);
 
   const hours = $derived(minutes.reduce<Record<number, Minute[]>>((h, m) => ((h[new Date(m.minute).getHours()] ??= []).push(m), h), {}));
   const eventIn = (m: Minute) => events.find((e) => e.start < m.minute + 60_000 && (e.end ?? Date.now()) >= m.minute);
@@ -124,13 +126,15 @@
       <div class="strip">
         {#each list as m (m.minute)}
           {@const e = eventIn(m)}
-          <button class="thumb {e ? `ev-${e.kind}` : ''}" class:active={open?.minute === m.minute} use:lazyStyle={tileStyle(m, firstTile(m), 0.5)} title={`${new Date(m.minute).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${e ? ` · ${e.kind}` : ''}`} onclick={() => openMinute(m)} data-testid="minute"></button>
+          {@const marks = minuteMarks(m, events, Date.now())}
+          <button class="thumb {e ? `ev-${e.kind}` : ''}" class:active={open?.minute === m.minute} class:analysed={marks.analysed} use:lazyStyle={tileStyle(m, firstTile(m), 0.5)} title={`${new Date(m.minute).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${e ? ` · ${e.kind}` : ''}`} onclick={() => openMinute(m)} data-testid="minute">{#if marks.count > 1}<span class="count" data-testid="minute-count">×{marks.count}</span>{/if}</button>
         {/each}
       </div>
       {#if open && hourOf(open) === Number(hour)}
         {@const m = open}
         {@const evs = eventsInMinute(m, events, Date.now())}
         {@const kinds = secondKinds(m, events, Date.now())}
+        {@const seen = analysedSeconds(m, analysedStills(evs))}
         <div class="detail" data-testid="minute-detail">
           <div class="head">
             <h3>{new Date(m.minute).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</h3>
@@ -141,12 +145,12 @@
           </div>
           {#if evs.length}
             <p class="small" data-testid="minute-events">
-              {#each evs as e (e.id)}<span class="evtag ev-{e.kind}">{e.kind} {fmt(e.start)}–{e.end === null ? 'now' : fmt(e.end)}</span>{/each}
+              {#each evs as e (e.id)}<span class="evtag ev-{e.kind}">{e.kind} {fmt(e.start)}–{e.end === null ? 'now' : fmt(e.end)}{#if e.analysis} <button class="link" data-testid="minute-analysis-link" onclick={() => (shown = e)}>✦ Vision</button>{/if}</span>{/each}
             </p>
           {/if}
           <div class="tiles">
             {#each m.present as ok, i (i)}
-              <button class="tile {kinds[i] ? `ev-${kinds[i]}` : ''}" class:missing={!ok} disabled={!ok} style={tileStyle(m, i, 0.6)} title={new Date(m.minute + i * m.intervalS * 1000).toLocaleTimeString()} onclick={() => (still = m.minute + i * m.intervalS * 1000)} data-testid="tile"></button>
+              <button class="tile {kinds[i] ? `ev-${kinds[i]}` : ''}" class:missing={!ok} class:analysed={seen[i] !== null} disabled={!ok} style={tileStyle(m, i, 0.6)} title={new Date(m.minute + i * m.intervalS * 1000).toLocaleTimeString()} onclick={() => { const id = seen[i]; if (id !== null) shown = evs.find((x) => x.id === id) ?? null; else still = m.minute + i * m.intervalS * 1000; }} data-testid="tile">{#if seen[i] !== null}<span class="spark">✦</span>{/if}</button>
             {/each}
           </div>
           {#if still !== null}
@@ -159,6 +163,7 @@
       {/if}
     </div>
   {/each}
+  {#if shown}<AnalysisModal {camId} event={shown} onclose={() => (shown = null)} />{/if}
 </section>
 
 <style>
@@ -175,7 +180,13 @@
   button { padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); cursor: pointer; color: var(--text); }
   .thumb, .tile { padding: 0; border-radius: 3px; border: 2px solid transparent; background-repeat: no-repeat; background-color: #111; }
   .thumb:hover, .tile:hover:not(:disabled) { border-color: var(--accent); }
+  .thumb, .tile { position: relative; }
   .thumb.active { outline: 3px solid var(--accent); outline-offset: 1px; }
+  .thumb.analysed { box-shadow: 0 0 0 2px #a855f7; }
+  .tile.analysed { outline: 2px solid #a855f7; outline-offset: 1px; }
+  .count { position: absolute; right: 2px; bottom: 2px; background: rgb(0 0 0 / 0.7); color: #fff; font-size: 10px; line-height: 1.3; padding: 0 3px; border-radius: 3px; }
+  .spark { position: absolute; top: 1px; left: 3px; color: #a855f7; font-size: 11px; line-height: 1; }
+  .link { color: #a855f7; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
   .tile.missing { opacity: 0.25; cursor: default; }
   .ev-motion { border-color: #f59e0b; } .ev-person { border-color: #ef4444; } .ev-vehicle { border-color: #3b82f6; } .ev-pet { border-color: #22c55e; }
   input { padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; }

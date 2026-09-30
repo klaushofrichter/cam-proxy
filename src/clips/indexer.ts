@@ -37,7 +37,7 @@ function nthWeekday(year: number, mon: number, week: number, weekday: number): n
 }
 
 // The UTC instants DST starts and ends in a year.
-function dstBounds(year: number, r: DstRule, std: number, dst: number): [number, number] {
+export function dstBounds(year: number, r: DstRule, std: number, dst: number): [number, number] {
   const start = Date.UTC(year, r.startMon - 1, nthWeekday(year, r.startMon, r.startWeek, r.startWeekday), r.startHour, r.startMin) - std * 60_000;
   const end = Date.UTC(year, r.endMon - 1, nthWeekday(year, r.endMon, r.endWeek, r.endWeekday), r.endHour, r.endMin) - (std + dst) * 60_000;
   return [start, end];

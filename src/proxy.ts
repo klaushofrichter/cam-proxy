@@ -23,7 +23,9 @@ import { Go2rtc } from './stills/go2rtc';
 import { FrameGrabber, type Frame } from './stills/grabber';
 import { MinuteStore, minuteOf } from './stills/store';
 import type { StillsSide } from './api/client-api';
-import { StreamLog } from './stream/log';
+import { StreamLog, type StreamMessage } from './stream/log';
+import { AnalyticsService } from './analytics/service';
+import { refreshingTimeInfo } from './analytics/time-info';
 import { sseHandler } from './stream/sse';
 import { refuseTokenInUrl, requireAccess } from './api/auth';
 import { clientApi } from './api/client-api';
@@ -59,6 +61,7 @@ export interface Proxy {
   sse: ReturnType<typeof sseHandler>;
   readonly stills: StillsSide | undefined;
   readonly clips: ClipsSide | undefined;
+  readonly analytics: AnalyticsService;
   storage: Storage;
   start(opts?: { port?: number; host?: string }): Promise<{ port: number }>;
   restart(): Promise<void>;
@@ -114,7 +117,7 @@ export function createProxy(initial: Loaded): Proxy {
   const sweeper = setInterval(() => composer.sweep(), 5000);
   sweeper.unref();
 
-  let client: ReolinkClient;
+  let client!: ReolinkClient;
   let status: StatusPoller;
   let intake: EventIntake;
   let lastResubscribes = 0;
@@ -223,12 +226,28 @@ export function createProxy(initial: Loaded): Proxy {
   };
   buildCameraSide();
 
+  // External analytics: event stills to the provider, within its limits.
+  const timeInfo = refreshingTimeInfo(() => client.timeInfo());
+  const analytics = new AnalyticsService({
+    catalog, log, cam: running.camera.id, dataDir: running.server.dataDir,
+    config: () => running,
+    secrets: () => ({ googleVisionKey: loaded.secrets.googleVisionKey, googleVisionUrl: loaded.secrets.googleVisionUrl }),
+    readStill: (ts) => stills?.store.readStill(ts) ?? Promise.resolve(undefined),
+    listStills: (from, to) => stills?.store.listStills(from, to) ?? [],
+    timeInfo,
+  });
+  // Every camera-event start goes to the service (it filters by kind).
+  log.on('message', (m: StreamMessage) => {
+    if (m.type === 'camera-event' && m.data.phase === 'start') analytics.onEvent({ id: Number(m.data.eventId), kind: String(m.data.kind), start_ts: Number(m.data.ts) });
+  });
+
   // New settings from the control API: live ones take effect now.
   const setLoaded = (next: Loaded) => {
     loaded = next;
     for (const p of leafPaths()) if (!needsRestart(p)) setPath(running as unknown as Record<string, unknown>, p, structuredClone(getPath(next.config, p)));
     sse.setOptions(running.sse);
     setLogLevel(running.server.logLevel);
+    analytics.settingsChanged();
   };
 
   const access = { tokens: () => loaded.secrets.tokens, adminToken: () => loaded.secrets.adminToken, sessionValid: (v: string | undefined) => sessions.verify(v) };
@@ -238,7 +257,7 @@ export function createProxy(initial: Loaded): Proxy {
   // long request. Still and sprite images have their own, higher limit: a
   // day on the timeline is up to 1440 sprites.
   // Clip files too: a seeking video player sends many range requests.
-  const IMAGE = /^\/api\/cameras\/[^/]+\/((stills|previews)\/\d{1,15}\.jpg|clips\/\d{1,15}\.(mp4|jpg))$/;
+  const IMAGE = /^\/api\/cameras\/[^/]+\/((stills|previews)\/\d{1,15}\.jpg|clips\/\d{1,15}\.(mp4|jpg)|events\/\d{1,15}\/analysis\.jpg)$/;
   const isImage = (req: Request) => req.method === 'GET' && IMAGE.test(req.path);
   // Behind an ingress (issue #29): client addresses from X-Forwarded-For.
   if (running.server.trustProxy) app.set('trust proxy', running.server.trustProxy);
@@ -286,6 +305,7 @@ export function createProxy(initial: Loaded): Proxy {
         off: () => cameraFtpOff(client),
       },
       storage,
+      analytics: () => analytics.state(),
       sseClients: () => sse.clients(),
       stream: () => ({ enabled: !!stills, up: stills?.grabber.up() ?? false, go2rtcUp: stills?.go2rtc.up() ?? false, lastFrameTs: stills?.grabber.lastFrameTs() ?? null }),
       sessions,
@@ -362,6 +382,7 @@ export function createProxy(initial: Loaded): Proxy {
     get clips() {
       return clips?.side;
     },
+    analytics,
     async start(opts = {}) {
       server = http.createServer(app);
       const s = server;
@@ -374,6 +395,7 @@ export function createProxy(initial: Loaded): Proxy {
       startStills();
       await startClips();
       storage.start();
+      analytics.catchUp();
       logger.info({ port, camera: running.camera.id, version: VERSION }, 'cam_proxy_started');
       return { port };
     },
@@ -394,6 +416,7 @@ export function createProxy(initial: Loaded): Proxy {
       await composer.stop();
       sse.closeAll();
       storage.stop();
+      analytics.stop();
       const s = server;
       if (s) {
         s.closeAllConnections();
