@@ -18,7 +18,7 @@ export function googleVision(o: { key: string; baseUrl: string }): AnalyticsProv
           body: JSON.stringify({ requests: [{ image: { content: jpeg.toString('base64') }, features: [{ type: 'OBJECT_LOCALIZATION', maxResults: 20 }] }] }),
           signal,
         });
-      } catch (err) {
+      } catch {
         if (signal.aborted) throw new AnalyticsError('timeout', true);
         throw new AnalyticsError('network', true);
       }
@@ -30,6 +30,7 @@ export function googleVision(o: { key: string; baseUrl: string }): AnalyticsProv
       try {
         body = await res.json();
       } catch {
+        if (signal.aborted) throw new AnalyticsError('timeout', true);
         throw new AnalyticsError('bad_response', false);
       }
       const first = (body as { responses?: unknown[] })?.responses?.[0] as { error?: unknown; localizedObjectAnnotations?: Annotation[] } | undefined;
@@ -42,7 +43,7 @@ export function googleVision(o: { key: string; baseUrl: string }): AnalyticsProv
         return {
           name: String(a.name ?? 'object'),
           score: typeof a.score === 'number' ? a.score : 0,
-          box: { x0: Math.min(1, ...xs), y0: Math.min(1, ...ys), x1: Math.max(0, ...xs), y1: Math.max(0, ...ys) },
+          box: xs.length === 0 ? { x0: 0, y0: 0, x1: 0, y1: 0 } : { x0: Math.min(1, ...xs), y0: Math.min(1, ...ys), x1: Math.max(0, ...xs), y1: Math.max(0, ...ys) },
         };
       });
       return { objects, raw: { localizedObjectAnnotations: anns } };

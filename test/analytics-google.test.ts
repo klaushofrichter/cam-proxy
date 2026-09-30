@@ -23,6 +23,9 @@ describe('Google Vision provider', () => {
     await call();
     expect(mock.lastKeyHeader).toBe('k-123456789012');
     expect(mock.lastUrl).toBe('/v1/images:annotate');
+    expect(mock.lastUrl).not.toContain('k-123456789012');
+    const req = mock.lastBody as { requests?: Array<{ features?: unknown }> } | undefined;
+    expect(req?.requests?.[0]?.features).toEqual([{ type: 'OBJECT_LOCALIZATION', maxResults: 20 }]);
   });
 
   it('maps objects to name, score and box (fractions), missing coordinates as 0', async () => {
@@ -37,8 +40,15 @@ describe('Google Vision provider', () => {
     expect((await call()).objects).toEqual([]);
   });
 
+  it('treats missing vertices as a zero-area box', async () => {
+    mock.script = [{ objects: [{ name: 'Empty', score: 0.5, vertices: [] }] }];
+    const r = await call();
+    expect(r.objects).toEqual([{ name: 'Empty', score: 0.5, box: { x0: 0, y0: 0, x1: 0, y1: 0 } }]);
+  });
+
   it.each([
     [{ status: 403 }, 'bad_key', false, 'bad_key'],
+    [{ status: 401 }, 'bad_key', false, 'bad_key'],
     [{ status: 400 }, 'bad_key', false, 'bad_key'],
     [{ status: 429 }, 'quota', false, 'quota'],
     [{ status: 503 }, 'http_5xx', true, null],
@@ -65,6 +75,11 @@ describe('Google Vision provider', () => {
 
   it('turns an abort into a retryable timeout', async () => {
     mock.script = [{ delayMs: 500 }];
+    await expect(googleVision({ key: 'k-123456789012', baseUrl: mock.url }).analyze(jpeg, AbortSignal.timeout(50))).rejects.toMatchObject({ reason: 'timeout', retry: true });
+  });
+
+  it('turns an abort during body parsing into a retryable timeout', async () => {
+    mock.script = [{ delayMs: 100, body: { responses: [{}] } }];
     await expect(googleVision({ key: 'k-123456789012', baseUrl: mock.url }).analyze(jpeg, AbortSignal.timeout(50))).rejects.toMatchObject({ reason: 'timeout', retry: true });
   });
 

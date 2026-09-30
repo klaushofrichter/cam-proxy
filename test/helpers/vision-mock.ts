@@ -14,6 +14,7 @@ export interface VisionMock {
   calls: number;
   lastKeyHeader: string | undefined;
   lastUrl: string | undefined;
+  lastBody: unknown;
   script: MockAnswer[];
   close(): Promise<void>;
 }
@@ -28,6 +29,7 @@ export async function startVisionMock(o: { key?: string } = {}): Promise<VisionM
     calls: 0,
     lastKeyHeader: undefined,
     lastUrl: undefined,
+    lastBody: undefined,
     script: [],
     close: () => new Promise((r) => server.close(() => r())),
   };
@@ -38,6 +40,11 @@ export async function startVisionMock(o: { key?: string } = {}): Promise<VisionM
       mock.calls++;
       mock.lastUrl = req.url;
       mock.lastKeyHeader = req.headers['x-goog-api-key'] as string | undefined;
+      try {
+        mock.lastBody = JSON.parse(body);
+      } catch {
+        mock.lastBody = undefined;
+      }
       const answer = mock.script.length > 1 ? mock.script.shift()! : (mock.script[0] ?? {});
       if (answer.delayMs) await new Promise((r) => setTimeout(r, answer.delayMs));
       if (req.method !== 'POST' || req.url !== '/v1/images:annotate') return void res.writeHead(404).end();
