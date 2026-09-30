@@ -49,7 +49,7 @@
       {#if $status.analyticsUnmapped?.length}
         <div class="card" data-testid="card-analytics-unmapped">
           <h3>Analytics · objects seen, not mapped</h3>
-          <p class="muted small">Candidates for the class table (docs/analytics-classes.md).</p>
+          <p class="muted small">Candidates for the class table (<a href="https://github.com/klaushofrichter/cam-proxy/blob/main/docs/analytics-classes.md" target="_blank" rel="noopener">docs/analytics-classes.md</a>).</p>
           <dl>
             {#each $status.analyticsUnmapped as u (u.mid || u.name)}<dt>{u.name}{u.mid ? ` · ${u.mid}` : ''}</dt><dd>{u.count}</dd>{/each}
           </dl>

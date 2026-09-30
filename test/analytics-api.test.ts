@@ -35,9 +35,9 @@ describe('analytics API', () => {
     saveAnalysis(c, { event_id: e.id, provider: 'google-vision', status: 'ok', reason: null, still_ts: e.start_ts + 1000, image, requested_at: Date.now(), took_ms: 250,
       objects: JSON.stringify([{ name: 'Person', score: 0.8, box: { x0: 0.1, y0: 0.1, x1: 0.5, y1: 0.9 } }]), raw: '{"a":1}', summary: null });
     const list = await request(p.proxy.app).get(`/api/cameras/cam1/events?from=0&to=${Date.now()}&limit=10`).set(auth());
-    expect(list.body.find((x: { id: number }) => x.id === e.id).analysis).toEqual({ provider: 'google-vision', status: 'ok', reason: null, stillTs: e.start_ts + 1000, objects: [{ name: 'Person', score: 0.8, box: { x0: 0.1, y0: 0.1, x1: 0.5, y1: 0.9 } }], summary: [] });
+    expect(list.body.find((x: { id: number }) => x.id === e.id).analysis).toEqual({ provider: 'google-vision', status: 'ok', reason: null, stillTs: e.start_ts + 1000, objects: [{ name: 'Person', score: 0.8, box: { x0: 0.1, y0: 0.1, x1: 0.5, y1: 0.9 } }], summary: [expect.objectContaining({ category: 'person', score: 0.8 })] });
     const full = await request(p.proxy.app).get(`/api/cameras/cam1/events/${e.id}/analysis`).set(auth());
-    expect(full.body).toMatchObject({ eventId: e.id, stillTs: e.start_ts + 1000, tookMs: 250, raw: { a: 1 }, summary: [] });
+    expect(full.body).toMatchObject({ eventId: e.id, stillTs: e.start_ts + 1000, tookMs: 250, raw: { a: 1 }, summary: [expect.objectContaining({ category: 'person' })] });
     const jpg = await request(p.proxy.app).get(`/api/cameras/cam1/events/${e.id}/analysis.jpg`).set(auth());
     expect(jpg.status).toBe(200);
     expect(jpg.headers['content-type']).toBe('image/jpeg');
@@ -115,6 +115,24 @@ describe('analytics summary API', () => {
     }
     expect((await request(p.proxy.app).get('/api/cameras/cam1/analyses?from=0&to=1')).status).toBe(401);
     expect((await request(p.proxy.app).get('/api/cameras/other/analyses?from=0&to=1').set(auth())).status).toBe(404);
+  });
+
+  it('an ok row without a stored summary is summarised from its objects on read (events, full record, /analyses), never served as nothing', async () => {
+    const c = p.proxy.catalog;
+    const t = at + 400_000;
+    const e = insertEvent(c, { cam: 'cam1', source: 'onvif', kind: 'person', start_ts: t, raw: null });
+    saveAnalysis(c, { event_id: e.id, provider: 'google-vision', status: 'ok', reason: null, still_ts: t + 1000, image: null, requested_at: t, took_ms: 300,
+      objects: JSON.stringify([{ name: 'Person', score: 0.8, box: { x0: 0.1, y0: 0.1, x1: 0.5, y1: 0.9 } }]), raw: '{}', summary: null });
+    const f = insertEvent(c, { cam: 'cam1', source: 'onvif', kind: 'person', start_ts: t + 10_000, raw: null });
+    saveAnalysis(c, { event_id: f.id, provider: 'google-vision', status: 'ok', reason: null, still_ts: t + 11_000, image: null, requested_at: t, took_ms: 300, objects: '{}', raw: '{}', summary: null });
+    const want = [expect.objectContaining({ category: 'person', subtype: 'person', score: 0.8 })];
+    const list = await request(p.proxy.app).get(`/api/cameras/cam1/events?from=${t - 1}&to=${t + 20_000}&limit=10`).set(auth());
+    expect(list.body.find((x: { id: number }) => x.id === e.id).analysis.summary).toEqual(want);
+    expect(list.body.find((x: { id: number }) => x.id === f.id).analysis.summary).toEqual([]);
+    const full = await request(p.proxy.app).get(`/api/cameras/cam1/events/${e.id}/analysis`).set(auth());
+    expect(full.body.summary).toEqual(want);
+    const day = await request(p.proxy.app).get(`/api/cameras/cam1/analyses?from=${t - 1}&to=${t + 20_000}`).set(auth());
+    expect(day.body.map((x: { summary: unknown }) => x.summary)).toEqual([want, []]);
   });
 
   it('events carry the summary', async () => {

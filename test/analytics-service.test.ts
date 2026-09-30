@@ -435,4 +435,28 @@ describe('AnalyticsService', () => {
     expect(listUnmapped(c)).toEqual([]);
     expect(s.backfillSummaries()).toBe(0);
   });
+
+  it('backfill: a row whose stored objects are not an array gets [] and does not block later rows', () => {
+    const mk = (objects: string) => {
+      const e = event('person');
+      saveAnalysis(c, { event_id: e.id, provider: 'google-vision', status: 'ok', reason: null, still_ts: T0 + 1000, image: null, requested_at: T0, took_ms: 300, objects, raw: '{}', summary: null });
+      return e.id;
+    };
+    const a = mk('null'), b = mk('{}'), good = mk(JSON.stringify([{ name: 'Person', score: 0.7, box: { x0: 0.2, y0: 0.2, x1: 0.4, y1: 0.9 } }]));
+    expect(service().backfillSummaries()).toBe(3);
+    expect(analysisFor(c, a)!.summary).toBe('[]');
+    expect(analysisFor(c, b)!.summary).toBe('[]');
+    expect(JSON.parse(analysisFor(c, good)!.summary!)).toHaveLength(1);
+  });
+
+  it('store: a failing unmapped count cannot swallow the stream message', async () => {
+    c.db.exec('DROP TABLE analytics_unmapped');
+    still(T0 + 1000, 7);
+    const s2 = new AnalyticsService({ ...deps(), provider: () => ({ id: 'google-vision', name: 'Google Vision', async analyze() { return { objects: [{ mid: '/m/03ldnb', name: 'Ceiling fan', score: 0.9, box: { x0: 0, y0: 0, x1: 0.1, y1: 0.1 } }], raw: {} }; } }) });
+    const e = event('person');
+    s2.onEvent(e);
+    await s2.idle();
+    expect(analysisFor(c, e.id)).toMatchObject({ status: 'ok' });
+    expect(log.since(0, { types: ['analysis'] }, 10)).toHaveLength(1);
+  });
 });

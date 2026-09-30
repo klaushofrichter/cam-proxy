@@ -144,7 +144,7 @@ paths:
         - { name: cam, in: path, required: true, schema: { type: string } }
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
-        '200': { description: '{ eventId, provider, status, reason, stillTs, requestedAt, tookMs, objects, raw }' }
+        '200': { description: '{ eventId, provider, status, reason, stillTs, requestedAt, tookMs, objects, summary: [{category, subtype, score, box}], raw }' }
         '404': { description: 'unknown camera, or no analysis for the event' }
   /api/cameras/{cam}/events/{id}/analysis.jpg:
     get:
@@ -157,13 +157,13 @@ paths:
         '404': { description: 'unknown camera, no analysis, or no image' }
   /api/cameras/{cam}/analyses:
     get:
-      summary: A day of analyses, oldest first, in the stream message's shape
+      summary: A day of analyses, oldest first (at most 1000), in the stream message's shape
       parameters:
         - { name: cam, in: path, required: true, schema: { type: string } }
         - { name: from, in: query, required: true, schema: { type: integer }, description: event start at or after (ms) }
         - { name: to, in: query, required: true, schema: { type: integer }, description: event start at or before (ms); at most one day after from }
       responses:
-        '200': { description: 'the analyses of events starting in [from, to], oldest first: [{ eventId, kind, start, end, provider, status, reason, stillTs, summary: [{category, subtype, score, box}] }]' }
+        '200': { description: 'the analyses of events starting in [from, to], oldest first, at most 1000: [{ eventId, kind, start, end, provider, status, reason, stillTs, summary: [{category, subtype, score, box}] }]' }
         '400': { description: 'from or to missing, to before from, or more than one day' }
         '401': { description: not signed in }
         '404': { description: unknown camera }
@@ -181,7 +181,9 @@ paths:
         `{cam, clipId, start, end, stream, size, codec, events, url,
         snapshotUrl}`; analysis (an event's analysis was stored)
         `{eventId, kind, start, end, provider, status, reason, stillTs,
-        summary, objects}`; annotation (reserved, not sent yet); still
+        summary, objects}` (`analysis` messages stored before this version
+        lack kind, start, end, stillTs and summary: a missing `summary` means
+        unknown, not "nothing found"); annotation (reserved, not sent yet); still
         `{cam, ts, url, sprite, tile}` (only when named in `types`; live
         only, without an id, and not replayed).
       parameters:

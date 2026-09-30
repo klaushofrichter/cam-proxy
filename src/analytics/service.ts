@@ -176,12 +176,19 @@ export class AnalyticsService {
       if (r.image) try { unlinkSync(r.image); } catch { /* already gone */ }
       return;
     }
-    if (sum.unmapped.length) countUnmapped(this.d.catalog, sum.unmapped, this.now());
     const ev = eventById(this.d.catalog, job.id);
     this.d.log.append(this.d.cam, 'analysis', {
       eventId: job.id, kind: ev?.kind ?? job.kind, start: ev?.start_ts ?? job.start_ts, end: ev?.end_ts ?? null,
       provider: 'google-vision', status: r.status, reason: r.reason, stillTs: r.stillTs, summary: sum.summary, objects: r.objects ?? [],
     });
+    // Counted last and guarded: a failing count must not swallow the message.
+    if (sum.unmapped.length) {
+      try {
+        countUnmapped(this.d.catalog, sum.unmapped, this.now());
+      } catch (err) {
+        logger.warn({ err: (err as Error).message, eventId: job.id }, 'analytics_unmapped_count_failed');
+      }
+    }
   }
 
   // Analyses stored before summaries existed (or whose summary failed) get
@@ -192,7 +199,8 @@ export class AnalyticsService {
     for (const a of withoutSummary(this.d.catalog)) {
       let objects: Found[] = [];
       try {
-        objects = a.objects ? (JSON.parse(a.objects) as Found[]) : [];
+        const parsed: unknown = a.objects ? JSON.parse(a.objects) : [];
+        objects = Array.isArray(parsed) ? (parsed as Found[]) : [];
       } catch {
         objects = [];
       }

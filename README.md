@@ -197,8 +197,8 @@ api '/cameras/cam1/events?kind=person&limit=10'
   - `endReason` is `state` (the camera said so), `timeout` (still open after
     `events.maxOpenMin`) or `restart` (the proxy stopped while it was open).
 - `GET /api/cameras/{cam}/analyses?from&to`: the analyses of events that
-  start in the range (at most one day), oldest first, in the `analysis`
-  stream message's shape without `objects`.
+  start in the range (at most one day), oldest first, at most 1000, in the
+  `analysis` stream message's shape without `objects`.
 - `GET /health`: the process is up (no auth).
 
 ## Stills and previews
@@ -314,7 +314,7 @@ boxes. Motion-only events are never analysed.
   1,000 (Google's price list, checked 2026-09-30). The Settings card shows the estimate for the monthly limit.
 - **Summary:** each analysis keeps persons, vehicles and pets only, mapped
   by Open Images class id ([docs/analytics-classes.md](docs/analytics-classes.md)).
-  Boxes that overlap by more than 90% are merged, the highest score first.
+  Boxes of the same category that overlap by more than 90% are merged, the highest score first.
   It appears on the events list (`analysis.summary`), in the `analysis`
   stream message and in `GET /api/cameras/{cam}/analyses`. Objects that
   don't map are counted: the Status page lists the top 20, and
@@ -376,6 +376,11 @@ never loses anything within the retention (default 7 days).
     `stream: up|down` when the stills stream changes;
   - `clip`: `{cam, clipId, start, end, stream, size, codec, events, url,
     snapshotUrl}` when an uploaded clip is indexed;
+  - `analysis`: `{eventId, kind, start, end, provider, status, reason,
+    stillTs, summary, objects}` when an event's analysis is stored. Messages
+    from before this version lack `kind`, `start`, `end`, `stillTs` and
+    `summary` (the stream keeps 7 days): treat a missing `summary` as
+    unknown, not as "nothing found";
   - `annotation`: reserved, not sent yet;
   - `still`: `{cam, ts, url, sprite, tile}` (the still's URL, its minute's
     sprite sheet, and the tile index within it); only when named in `types`,

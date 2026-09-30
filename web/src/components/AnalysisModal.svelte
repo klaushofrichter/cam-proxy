@@ -65,7 +65,7 @@
         {/if}
         <table data-testid="analysis-objects">
           <thead><tr><th>object</th><th>score</th></tr></thead>
-          <tbody>{#each boxes as o, i (i)}<tr><td>{o.label}</td><td>{o.score.toFixed(2)}</td></tr>{:else}<tr><td colspan="2" class="muted">Nothing found.</td></tr>{/each}</tbody>
+          <tbody>{#each boxes as o, i (i)}<tr><td>{o.label}</td><td>{o.score.toFixed(2)}</td></tr>{:else}<tr><td colspan="2" class="muted">{showAll || !a?.summary ? 'Nothing found.' : 'Nothing relevant.'}</td></tr>{/each}</tbody>
         </table>
       {:else}
         <p data-testid="analysis-reason">Not analysed: {a.reason ?? a.status}.</p>

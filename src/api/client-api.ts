@@ -2,6 +2,8 @@ import express, { type Request, type Response } from 'express';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { analysesFor, analysesInRange, analysisFor, type AnalysisRow } from '../catalog/analyses';
+import { summarize } from '../analytics/classes';
+import type { Found } from '../analytics/providers';
 import { clipById, listClips, oldestClip, overlappingEvents, type ClipRow } from '../catalog/clips';
 import type { Catalog } from '../catalog/db';
 import { listEvents, type EventRow } from '../catalog/events';
@@ -21,8 +23,20 @@ const intParam = (v: unknown): number | undefined | null => (v === undefined ? u
 export const eventJson = (e: EventRow) => ({ id: e.id, kind: e.kind, source: e.source, start: e.start_ts, end: e.end_ts, endReason: e.end_reason });
 
 const parse = (s: string | null) => (s === null ? null : JSON.parse(s));
+// The summary to serve: the stored one; an ok row not yet backfilled is
+// summarised from its objects (never served as "nothing found"); else [].
+export const summaryOf = (a: Pick<AnalysisRow, 'status' | 'objects' | 'summary'>): unknown[] => {
+  try {
+    if (a.summary !== null && a.summary !== undefined) return parse(a.summary) ?? [];
+    if (a.status !== 'ok' || a.objects === null) return [];
+    const objects: unknown = JSON.parse(a.objects);
+    return Array.isArray(objects) ? summarize(objects as Found[]).summary : [];
+  } catch {
+    return [];
+  }
+};
 export const analysisSummary = (a: AnalysisRow | undefined) =>
-  a ? { provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, objects: parse(a.objects) ?? [], summary: parse(a.summary ?? null) ?? [] } : null;
+  a ? { provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, objects: parse(a.objects) ?? [], summary: summaryOf(a) } : null;
 
 // The client API (spec §10); auth is applied by the caller.
 export function clientApi(d: { config: () => Config; catalog: Catalog; status: () => StatusPoller; sse: SseHandler; stills: () => StillsSide | undefined }): express.Router {
@@ -69,7 +83,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     if (!known(req, res)) return;
     const a = analysisFor(d.catalog, Number(req.params.id));
     if (!a) return void res.status(404).json({ error: 'not_found' });
-    res.json({ eventId: a.event_id, provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, requestedAt: a.requested_at, tookMs: a.took_ms, objects: parse(a.objects) ?? [], summary: parse(a.summary ?? null) ?? [], raw: parse(a.raw) });
+    res.json({ eventId: a.event_id, provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, requestedAt: a.requested_at, tookMs: a.took_ms, objects: parse(a.objects) ?? [], summary: summaryOf(a), raw: parse(a.raw) });
   });
   // A day of analyses in the stream message's shape (spec
   // 2026-09-30-analytics-in-cams-design), for cams when it loads a day.
@@ -79,7 +93,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     if (!rg) return;
     res.json(analysesInRange(d.catalog, cam().id, rg[0], rg[1]).map((a) => ({
       eventId: a.event_id, kind: a.kind, start: a.start_ts, end: a.end_ts, provider: a.provider, status: a.status, reason: a.reason,
-      stillTs: a.still_ts, summary: parse(a.summary ?? null) ?? [],
+      stillTs: a.still_ts, summary: summaryOf(a),
     })));
   });
   r.get('/cameras/:cam/events/:id/analysis.jpg', (req, res) => {
