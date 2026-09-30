@@ -50,6 +50,7 @@ A Mac runs it for development on `localhost:8480`.
 - [Client API](#client-api)
 - [Stills and previews](#stills-and-previews)
 - [Clips (FTP)](#clips-ftp)
+- [Analytics (optional)](#analytics-optional)
 - [Storage management](#storage-management)
 - [Event stream (SSE)](#event-stream-sse)
 - [Control API and admin UI](#control-api-and-admin-ui)
@@ -284,6 +285,45 @@ upload folder. While storage is paused, `STOR` answers 452.
   `ftp.passive` ports. On a Mac with the firewall on, node must be allowed
   to accept incoming connections, again after each Homebrew node upgrade
   (see [The macOS firewall and node](#the-macos-firewall-and-node)).
+
+## Analytics (optional)
+
+Off by default. When on, the proxy sends the still of a person, vehicle or pet
+event to Google Vision (object localization) and keeps the objects it finds, a
+second opinion on the camera's label. The admin UI shows it as a "✦ Vision"
+tag on the Events page, a mark on the Timeline's minutes, and a picture with
+boxes. Motion-only events are never analysed.
+
+- **Settings** (Settings page, or `PUT /control/config`):
+  `analytics.kinds.person` (default on), `.vehicle` and `.pet` (off);
+  `analytics.googleVision.enabled` (off), `.monthlyLimit` (0 = no calls,
+  max 100000) and `.dailyCap` (0 = no daily cap, max 10000).
+- **Key and URL:** `CAMPROXY_GOOGLE_VISION_KEY` in the environment (a secret,
+  never in config.json or the UI; the UI shows it masked) and optionally
+  `CAMPROXY_GOOGLE_VISION_URL` (default `https://vision.googleapis.com`; the
+  e2e tests point it at a mock). Without a key the switch stays disabled.
+- **Limits:** a call is made only while both the monthly limit and the daily
+  cap allow it (calendar month and day in camera time). The count is this
+  proxy's own: proxies that share a key share Google's budget, so keep their
+  limits' total within it.
+- **Cost (as measured 2026-09-30):** Google's first 1,000 units a month are
+  free per feature; object localization is one unit per image, then $1.50 per
+  1,000. The Settings card shows the estimate for the monthly limit.
+- **Stored:** the result per event in SQLite, a copy of the analysed JPEG in
+  `data/analytics/<cam>/<eventId>.jpg` (stills are kept 7 days, events 30),
+  and the usage per day for 400 days. An analysis goes with its event.
+- **API:** the events list carries `analysis`; `GET
+  /api/cameras/{cam}/events/{id}/analysis` (and `analysis.jpg`), an `analysis`
+  stream message, and `GET /control/analytics` for state and usage. See
+  [openapi.yaml](openapi.yaml).
+- **Live check, by hand only:** `CAMPROXY_GOOGLE_VISION_KEY=... npx tsx
+  scripts/analytics-live.ts a.jpg b.jpg` sends up to `LIMIT` (default 5)
+  images to the real service and prints the time and objects. Never run it in
+  CI.
+- **Where the key is:** cam2's proxy in the cluster has no key (Klaus,
+  2026-09-30), so analytics stays off there. The Pi gets the key in
+  `/srv/cam-proxy/.env`; restart it with `docker compose up -d`, then turn it
+  on in Settings with a small monthly limit.
 
 ## Storage management
 

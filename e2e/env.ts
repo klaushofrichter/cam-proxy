@@ -6,3 +6,5 @@ export const FTP_PASSWORD = 'e2e-ftp-password-not-a-secret';
 export const ADMIN_TOKEN = 'e2e-admin-token-not-a-secret-000000000000';
 export const CLIENT_TOKEN = 'e2e-client-token-not-a-secret-00000000000';
 export const SIM_CONTROL_TOKEN = 'e2e-sim-control-token-not-a-secret';
+export const VISION_MOCK_PORT = 18600;
+export const VISION_KEY = 'e2e-vision-key-not-a-secret';

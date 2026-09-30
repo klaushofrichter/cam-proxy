@@ -22,7 +22,7 @@ export interface VisionMock {
 
 const PERSON = { name: 'Person', score: 0.9, vertices: [{ x: 0.1, y: 0.2 }, { x: 0.4, y: 0.2 }, { x: 0.4, y: 0.9 }, { x: 0.1, y: 0.9 }] };
 
-export async function startVisionMock(o: { key?: string } = {}): Promise<VisionMock> {
+export async function startVisionMock(o: { key?: string; port?: number } = {}): Promise<VisionMock> {
   const key = o.key ?? 'mock-vision-key-000000';
   let server: Server;
   const mock: VisionMock = {
@@ -39,6 +39,11 @@ export async function startVisionMock(o: { key?: string } = {}): Promise<VisionM
       }),
   };
   server = createServer((req, res) => {
+    // The e2e tests read the call count here (not counted as a call).
+    if (req.method === 'GET' && req.url === '/calls') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return void res.end(JSON.stringify({ calls: mock.calls }));
+    }
     let body = '';
     req.on('data', (d) => (body += d));
     req.on('end', async () => {
@@ -69,7 +74,7 @@ export async function startVisionMock(o: { key?: string } = {}): Promise<VisionM
       }
     });
   });
-  await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+  await new Promise<void>((r) => server.listen(o.port ?? 0, '127.0.0.1', () => r()));
   mock.url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   return mock;
 }
