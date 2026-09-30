@@ -2,13 +2,14 @@
   import { refreshTick } from '../lib/state';
   import { onMount } from 'svelte';
   import { api, ApiError } from '../lib/api';
+  import AnalyticsSettings from '../components/AnalyticsSettings.svelte';
 
   interface Setting { value: unknown; source: 'default' | 'file' | 'override'; restart: boolean; pending: boolean; next?: unknown }
   let view = $state<Record<string, Setting>>({});
   let drafts = $state<Record<string, string>>({});
   let message = $state('');
 
-  const groups = $derived(Object.keys(view).reduce<Record<string, string[]>>((g, p) => ((g[p.split('.')[0]] ??= []).push(p), g), {}));
+  const groups = $derived(Object.keys(view).filter((p) => !p.startsWith('analytics.')).reduce<Record<string, string[]>>((g, p) => ((g[p.split('.')[0]] ??= []).push(p), g), {}));
   const load = async () => (view = await api<Record<string, Setting>>('GET', '/control/config'));
   onMount(() => void load());
   $effect(() => {
@@ -52,6 +53,7 @@
   </div>
   <p class="muted small">From config.json, with changes made here kept as overrides in the data folder. Secrets are never shown or set here.</p>
   {#if message}<p class="msg" data-testid="settings-message">{message}</p>{/if}
+  <AnalyticsSettings {view} onsaved={(v) => (view = v as Record<string, Setting>)} />
   {#each Object.entries(groups) as [group, paths] (group)}
     <div class="card">
       <h3>{group}</h3>
