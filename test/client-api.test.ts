@@ -50,7 +50,7 @@ describe('client API', () => {
   it('lists events, newest first, with filters', async () => {
     const all = await request(p.proxy.app).get('/api/cameras/cam1/events').set(auth());
     expect(all.body.map((e: { kind: string }) => e.kind)).toEqual(['vehicle', 'person']);
-    expect(all.body[1]).toEqual({ id: 1, kind: 'person', source: 'onvif', start: 1000, end: 2000, endReason: 'state' });
+    expect(all.body[1]).toEqual({ id: 1, kind: 'person', source: 'onvif', start: 1000, end: 2000, endReason: 'state', analysis: null });
     const person = await request(p.proxy.app).get('/api/cameras/cam1/events?kind=person&from=500&to=1500&limit=5').set(auth());
     expect(person.body).toHaveLength(1);
     expect((await request(p.proxy.app).get('/api/cameras/cam1/events?from=abc').set(auth())).status).toBe(400);

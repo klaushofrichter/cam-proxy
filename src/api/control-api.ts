@@ -8,6 +8,7 @@ import { leafPaths } from '../config/schema';
 import type { FtpTarget } from '../clips/camera-ftp';
 import type { IntakeState } from '../events/intake';
 import { logBuffer, logger } from '../log';
+import type { ProviderState } from '../analytics/service';
 import type { Storage } from '../storage';
 import type { StreamLog } from '../stream/log';
 import { tokenMatches } from './auth';
@@ -47,6 +48,7 @@ export interface ControlDeps {
     off: () => Promise<unknown>;
   };
   storage: Storage;
+  analytics: () => ProviderState[];
   sseClients: () => number;
   stream: () => { enabled: boolean; up: boolean; go2rtcUp: boolean; lastFrameTs: number | null };
   sessions: ReturnType<typeof createSessionSigner>;
@@ -130,8 +132,11 @@ export function controlApi(d: ControlDeps): express.Router {
       retention: { lastRun: d.storage.lastRun(), totals: d.storage.totals() },
       storage: { paused: d.storage.paused() },
       ftp: d.ftp(),
+      analytics: d.analytics(),
     });
   });
+
+  r.get('/analytics', (_req, res) => void res.json(d.analytics()));
 
   r.get('/stats', (_req, res) => {
     const u = d.storage.usage();

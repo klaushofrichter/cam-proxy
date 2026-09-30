@@ -134,9 +134,27 @@ paths:
         - { name: kind, in: query, schema: { type: string }, description: 'motion, person, vehicle, pet, …' }
         - { name: limit, in: query, schema: { type: integer, maximum: 1000 } }
       responses:
-        '200': { description: '[{ id, kind, source, start, end, endReason }]' }
+        '200': { description: '[{ id, kind, source, start, end, endReason, analysis: null | {provider, status, reason, objects: [{name, score, box: {x0, y0, x1, y1}}]} }]' }
         '400': { description: invalid parameter }
         '404': { description: unknown camera }
+  /api/cameras/{cam}/events/{id}/analysis:
+    get:
+      summary: The external analysis of an event, with the provider's raw answer
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: '{ eventId, provider, status, reason, stillTs, requestedAt, tookMs, objects, raw }' }
+        '404': { description: 'unknown camera, or no analysis for the event' }
+  /api/cameras/{cam}/events/{id}/analysis.jpg:
+    get:
+      summary: The still that was analysed
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: 'image/jpeg; cached as immutable' }
+        '404': { description: 'unknown camera, no analysis, or no image' }
   /api/stream:
     get:
       summary: Server-Sent Events, resumable
@@ -149,7 +167,7 @@ paths:
         `{cam, online, reason, clockOffsetMs}` (plus `stream: up|down` when
         the stills stream changes); clip
         `{cam, clipId, start, end, stream, size, codec, events, url,
-        snapshotUrl}`; annotation (reserved, not sent yet); still
+        snapshotUrl}`; analysis (an event's analysis was stored; data as the events list's `analysis` plus `eventId`); annotation (reserved, not sent yet); still
         `{cam, ts, url, sprite, tile}` (only when named in `types`; live
         only, without an id, and not replayed).
       parameters:
@@ -213,9 +231,16 @@ paths:
         Admin token or admin session. Writes with the session cookie need
         `X-CamProxy-UI: 1`. A client token answers 403 `{"error":"admin_only"}`.
       responses:
-        '200': { description: '{ version, camera (incl. webUiUrl), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures} }' }
+        '200': { description: '{ version, camera (incl. webUiUrl), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures}, analytics: [provider state] }' }
         '401': { description: not signed in }
         '403': { description: admin_only, or csrf }
+  /control/analytics:
+    get:
+      summary: External analytics providers - state, usage and limits (admin)
+      responses:
+        '200': { description: '[{ id, name, enabled, keyMasked (never the key), month: {calls, limit}, today: {calls, cap}, paused: null | {reason, until}, lastCall, lastError }]' }
+        '401': { description: not signed in }
+        '403': { description: admin_only }
   /control/stats:
     get:
       summary: Disk, events, stream log, storage budget (spec §13)
