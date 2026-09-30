@@ -1,7 +1,6 @@
 # External analytics for camera events (design)
 
-Status: design agreed with Klaus in chat (2026-09-30), section by section.
-This is the spec for review.
+Status: approved by Klaus (2026-09-30).
 
 ## Goal
 
@@ -89,8 +88,9 @@ the rest:
   than 12 characters is shown as `set`.
 - **Local `.env`:** it currently names the key `GOOGLE_VISION_KEY`; rename it
   to `CAMPROXY_GOOGLE_VISION_KEY`.
-- **Cluster:** cam2's cam-proxy gets the key only if Klaus wants analytics
-  there. The Secret is changed through kube-setup.
+- **Cluster:** cam2's cam-proxy (connected to cam-sim) gets **no key**
+  (Klaus, 2026-09-30), so analytics stays off there and can't use up the
+  budget. The Secret stays as it is.
 - **Pi:** the key goes into `/srv/cam-proxy/.env`.
 
 ## Behaviour
