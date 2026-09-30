@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { ADMIN_TOKEN } from './env';
+import { ADMIN_TOKEN, SIM, SIM_CONTROL_TOKEN } from './env';
 
 async function signIn(page: Page) {
   await page.goto('/');
@@ -28,25 +28,44 @@ test('the timeline shows today’s minutes, and a click shows a still', async ({
   await expect.poll(() => img.evaluate((el) => (el as HTMLImageElement).naturalWidth), { timeout: 10000 }).toBe(896);
 });
 
-// Klaus, 2026-09-30: a minute clicked in the hour grid opens at the top,
-// in view, and looks different from the hour cards; the minute is marked.
-test('a minute clicked low in the page opens at the top, set apart from the hour cards', async ({ page }) => {
-  await page.setViewportSize({ width: 900, height: 360 }); // short, so the grid is below the fold
+// Klaus, 2026-09-30: the minute opens inside its hour card, right under that
+// hour's thumbnails (no scrolling), set apart by its background; ◀ ▶ step
+// within the hour; an event's seconds are framed and the event is named.
+test('the minute opens under its hour, steps within the hour, and shows its event', async ({ page, request }) => {
   await signIn(page);
   await expect(page.getByTestId('stream-state')).toHaveText('up', { timeout: 30000 });
-  await page.waitForTimeout(3000);
+  const r = await request.post(`http://127.0.0.1:${SIM.control}/sim/api/events`, { headers: { Authorization: `Bearer ${SIM_CONTROL_TOKEN}` }, data: { type: 'person', durationS: 3 } });
+  expect(r.status()).toBe(201);
+  await page.waitForTimeout(5000); // the event ends and its stills are written
   await page.getByTestId('nav-timeline').click();
-  const minute = page.getByTestId('minute').last();
-  await expect(minute).toBeVisible({ timeout: 10000 });
-  await minute.scrollIntoViewIfNeeded();
-  await page.mouse.wheel(0, 2000); // as far down as the page goes
-  await minute.click();
-  const detail = page.getByTestId('minute-detail');
-  await expect(detail).toBeInViewport();
-  // Right under the top bar.
-  const barBottom = await page.locator('header').first().evaluate((el) => el.getBoundingClientRect().bottom);
-  await expect.poll(() => detail.evaluate((el) => Math.round(el.getBoundingClientRect().top)), { timeout: 5000 }).toBeLessThan(barBottom + 30);
+  const evMinute = page.locator('[data-testid="minute"].ev-person').last();
+  await expect(evMinute).toBeVisible({ timeout: 15000 });
+  const scrollBefore = await page.evaluate(() => document.scrollingElement!.scrollTop);
+  await evMinute.click();
+
+  const hourCard = page.getByTestId('hour-card').filter({ has: page.locator('[data-testid="minute"].active') });
+  const detail = hourCard.getByTestId('minute-detail');
+  await expect(detail).toBeVisible();
+  expect(await page.evaluate(() => document.scrollingElement!.scrollTop)).toBe(scrollBefore); // nothing scrolled
   const bg = (loc: import('@playwright/test').Locator) => loc.evaluate((el) => getComputedStyle(el).backgroundColor);
-  expect(await bg(detail)).not.toBe(await bg(page.getByTestId('hour-card').first()));
-  await expect(page.locator('[data-testid="minute"].active')).toHaveCount(1);
+  expect(await bg(detail)).not.toBe(await bg(hourCard));
+
+  await expect(detail.getByTestId('minute-events')).toContainText('person');
+  expect(await detail.locator('[data-testid="tile"].ev-person').count()).toBeGreaterThan(0);
+
+  // ◀ ▶ within this hour only: disabled at its ends. Read in one go: a new
+  // minute can arrive at any moment and enable ▶.
+  const minutes = hourCard.getByTestId('minute');
+  const state = () => hourCard.evaluate((card) => {
+    const list = [...card.querySelectorAll('[data-testid="minute"]')];
+    const idx = list.findIndex((e) => e.classList.contains('active'));
+    const btn = (id: string) => (card.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement).disabled;
+    return { idx, prevOk: btn('minute-prev') === (idx === 0), nextOk: btn('minute-next') === (idx === list.length - 1) };
+  });
+  await expect.poll(async () => { const s = await state(); return s.prevOk && s.nextOk; }).toBe(true);
+  const { idx } = await state();
+  if (idx > 0) {
+    await detail.getByTestId('minute-prev').click();
+    await expect(minutes.nth(idx - 1)).toHaveClass(/active/);
+  }
 });
