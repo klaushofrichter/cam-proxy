@@ -8,6 +8,7 @@ export type MockAnswer = {
   status?: number;
   body?: unknown;
   delayMs?: number;
+  bodyDelayMs?: number;
 };
 export interface VisionMock {
   url: string;
@@ -31,7 +32,11 @@ export async function startVisionMock(o: { key?: string } = {}): Promise<VisionM
     lastUrl: undefined,
     lastBody: undefined,
     script: [],
-    close: () => new Promise((r) => server.close(() => r())),
+    close: () =>
+      new Promise<void>((r) => {
+        server.closeAllConnections();
+        server.close(() => r());
+      }),
   };
   server = createServer((req, res) => {
     let body = '';
@@ -54,10 +59,14 @@ export async function startVisionMock(o: { key?: string } = {}): Promise<VisionM
       }
       const status = answer.status ?? 200;
       res.writeHead(status, { 'content-type': 'application/json' });
-      if (answer.body !== undefined) return void res.end(JSON.stringify(answer.body));
-      if (status !== 200) return void res.end(JSON.stringify({ error: { code: status, status: 'ERROR', message: 'mock error' } }));
-      const objects = answer.objects ?? [PERSON];
-      res.end(JSON.stringify({ responses: [{ localizedObjectAnnotations: objects.map((x) => ({ name: x.name, score: x.score, boundingPoly: { normalizedVertices: x.vertices } })) }] }));
+      const responseBody = answer.body !== undefined ? JSON.stringify(answer.body) : (status !== 200 ? JSON.stringify({ error: { code: status, status: 'ERROR', message: 'mock error' } }) : JSON.stringify({ responses: [{ localizedObjectAnnotations: (answer.objects ?? [PERSON]).map((x) => ({ name: x.name, score: x.score, boundingPoly: { normalizedVertices: x.vertices } })) }] }));
+      if (answer.bodyDelayMs) {
+        res.write('{');
+        await new Promise((r) => setTimeout(r, answer.bodyDelayMs));
+        res.end(responseBody.slice(1));
+      } else {
+        res.end(responseBody);
+      }
     });
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));

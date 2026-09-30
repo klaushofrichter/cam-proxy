@@ -79,8 +79,8 @@ describe('Google Vision provider', () => {
   });
 
   it('turns an abort during body parsing into a retryable timeout', async () => {
-    mock.script = [{ delayMs: 100, body: { responses: [{}] } }];
-    await expect(googleVision({ key: 'k-123456789012', baseUrl: mock.url }).analyze(jpeg, AbortSignal.timeout(50))).rejects.toMatchObject({ reason: 'timeout', retry: true });
+    mock.script = [{ bodyDelayMs: 500, body: { responses: [{}] } }];
+    await expect(googleVision({ key: 'k-123456789012', baseUrl: mock.url }).analyze(jpeg, AbortSignal.timeout(100))).rejects.toMatchObject({ reason: 'timeout', retry: true });
   });
 
   it('turns a refused connection into a retryable network error', async () => {
