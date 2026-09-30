@@ -111,12 +111,17 @@ Everything else can stay at its default.
   proxy, use the same tokens, and cams keeps working without new tokens.
 - `CAMPROXY_CAMERA_PASSWORD`: the camera's `proxy` user.
 - `CAMPROXY_FTP_PASSWORD`: what the camera logs in with.
+- `CAMPROXY_GOOGLE_VISION_KEY` (optional): the Google Vision key for
+  analytics (README, Analytics). Without it analytics stays off. After adding
+  it, recreate the container (`docker compose up -d --force-recreate`), then
+  switch analytics on with a small monthly limit on the Settings page. cam1's
+  Pi has it since 2026-09-30.
 
 Copy them without printing them. For example, pipe just those lines of a local
 `.env` over SSH:
 
 ```sh
-grep -E '^CAMPROXY_(TOKENS|ADMIN_TOKEN|CAMERA_PASSWORD|FTP_PASSWORD)=' .env \
+grep -E '^CAMPROXY_(TOKENS|ADMIN_TOKEN|CAMERA_PASSWORD|FTP_PASSWORD|GOOGLE_VISION_KEY)=' .env \
   | ssh <user>@<pi> 'umask 077; cat > /srv/cam-proxy/.env'
 ```
 
