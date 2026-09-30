@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.09.30.2
+
 - Timeline: a minute clicked in the hour grid opens at the top of the page; the open minute has a tinted background, set apart from the hour cards, and is marked in the grid.
 
 ## v2026.09.30.1
