@@ -11,6 +11,7 @@ import { startVisionMock, type VisionMock } from './helpers/vision-mock';
 let sim: Awaited<ReturnType<typeof startSim>>;
 let p: Awaited<ReturnType<typeof startProxy>>;
 let mock: VisionMock;
+let keptImage = '';
 beforeAll(async () => {
   sim = await startSim();
   mock = await startVisionMock({ key: 'k-123456789012' });
@@ -29,6 +30,7 @@ describe('analytics API', () => {
     const dir = join(p.dir, 'data', 'analytics', 'cam1');
     mkdirSync(dir, { recursive: true });
     const image = join(dir, `${e.id}.jpg`);
+    keptImage = image;
     writeFileSync(image, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
     saveAnalysis(c, { event_id: e.id, provider: 'google-vision', status: 'ok', reason: null, still_ts: e.start_ts + 1000, image, requested_at: Date.now(), took_ms: 250,
       objects: JSON.stringify([{ name: 'Person', score: 0.8, box: { x0: 0.1, y0: 0.1, x1: 0.5, y1: 0.9 } }]), raw: '{"a":1}' });
@@ -75,5 +77,6 @@ describe('analytics API', () => {
     writeFileSync(orphan, Buffer.from([1]));
     await request(p.proxy.app).post('/control/actions/retention-run').set(auth(ADMIN_TOKEN)).send({});
     expect(existsSync(orphan)).toBe(false);
+    expect(existsSync(keptImage)).toBe(true);
   });
 });

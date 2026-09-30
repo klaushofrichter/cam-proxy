@@ -25,7 +25,7 @@ import { MinuteStore, minuteOf } from './stills/store';
 import type { StillsSide } from './api/client-api';
 import { StreamLog, type StreamMessage } from './stream/log';
 import { AnalyticsService } from './analytics/service';
-import type { TimeInfo } from './camera/time';
+import { refreshingTimeInfo } from './analytics/time-info';
 import { sseHandler } from './stream/sse';
 import { refuseTokenInUrl, requireAccess } from './api/auth';
 import { clientApi } from './api/client-api';
@@ -227,15 +227,14 @@ export function createProxy(initial: Loaded): Proxy {
   buildCameraSide();
 
   // External analytics: event stills to the provider, within its limits.
-  let timeInfo: TimeInfo | undefined;
-  void client.timeInfo().then((t) => (timeInfo = t), () => undefined);
+  const timeInfo = refreshingTimeInfo(() => client.timeInfo());
   const analytics = new AnalyticsService({
     catalog, log, cam: running.camera.id, dataDir: running.server.dataDir,
     config: () => running,
     secrets: () => ({ googleVisionKey: loaded.secrets.googleVisionKey, googleVisionUrl: loaded.secrets.googleVisionUrl }),
     readStill: (ts) => stills?.store.readStill(ts) ?? Promise.resolve(undefined),
     listStills: (from, to) => stills?.store.listStills(from, to) ?? [],
-    timeInfo: () => timeInfo,
+    timeInfo,
   });
   // Every camera-event start goes to the service (it filters by kind).
   log.on('message', (m: StreamMessage) => {
