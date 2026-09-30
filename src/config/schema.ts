@@ -101,6 +101,18 @@ export const SETTINGS: Node = {
     certFile: { type: 'string', pattern: '^.+$', optional: true, doc: 'FTPS certificate (PEM); a self-signed one otherwise' },
     keyFile: { type: 'string', pattern: '^.+$', optional: true, doc: 'FTPS key (PEM)' },
   },
+  analytics: {
+    kinds: {
+      person: { type: 'boolean', doc: 'analyse person events' },
+      vehicle: { type: 'boolean', doc: 'analyse vehicle events' },
+      pet: { type: 'boolean', doc: 'analyse pet events' },
+    },
+    googleVision: {
+      enabled: { type: 'boolean', doc: 'send event stills to Google Vision (needs CAMPROXY_GOOGLE_VISION_KEY)' },
+      monthlyLimit: int(0, 100000, 'Google Vision calls per calendar month (camera time); 0 = none'),
+      dailyCap: int(0, 10000, 'Google Vision calls per day at most; 0 = no daily cap'),
+    },
+  },
 };
 
 const isLeaf = (n: Node | Leaf): n is Leaf => typeof (n as Leaf).type === 'string' && typeof (n as Leaf).doc === 'string';

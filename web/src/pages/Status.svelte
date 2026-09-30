@@ -1,5 +1,6 @@
 <script lang="ts">
   import { status, stats } from '../lib/state';
+  import { usageLine } from '../lib/analytics';
 
   const gb = (b: number) => `${(b / 1024 ** 3).toFixed(1)} GB`;
   const mb = (b: number) => `${(b / 1024 ** 2).toFixed(1)} MB`;
@@ -35,6 +36,16 @@
           {#each Object.entries($stats.events.stored) as [kind, n] (kind)}<dt>{kind} events</dt><dd>{n}</dd>{/each}
         </dl>
       </div>
+      {#each $status.analytics ?? [] as a (a.id)}
+        <div class="card" data-testid={`card-analytics-${a.id}`}>
+          <h3>Analytics · {a.name}</h3>
+          <dl>
+            <dt>Usage</dt><dd data-testid="analytics-usage">{usageLine(a)}</dd>
+            {#if a.paused}<dt>Paused</dt><dd class="bad">{a.paused.reason === 'bad_key' ? 'invalid key: check CAMPROXY_GOOGLE_VISION_KEY' : `quota: until ${new Date(a.paused.until ?? 0).toLocaleTimeString()}`}</dd>{/if}
+            {#if a.lastError}<dt>Last error</dt><dd class="bad">{a.lastError}</dd>{/if}
+          </dl>
+        </div>
+      {/each}
       <div class="card" data-testid="card-stream">
         <h3>Stills</h3>
         <dl>

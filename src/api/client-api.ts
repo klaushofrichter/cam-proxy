@@ -1,5 +1,7 @@
 import express, { type Request, type Response } from 'express';
+import { readFileSync } from 'fs';
 import { resolve } from 'path';
+import { analysesFor, analysisFor, type AnalysisRow } from '../catalog/analyses';
 import { clipById, listClips, oldestClip, overlappingEvents, type ClipRow } from '../catalog/clips';
 import type { Catalog } from '../catalog/db';
 import { listEvents, type EventRow } from '../catalog/events';
@@ -18,6 +20,10 @@ const intParam = (v: unknown): number | undefined | null => (v === undefined ? u
 
 export const eventJson = (e: EventRow) => ({ id: e.id, kind: e.kind, source: e.source, start: e.start_ts, end: e.end_ts, endReason: e.end_reason });
 
+const parse = (s: string | null) => (s === null ? null : JSON.parse(s));
+export const analysisSummary = (a: AnalysisRow | undefined) =>
+  a ? { provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, objects: parse(a.objects) ?? [] } : null;
+
 // The client API (spec §10); auth is applied by the caller.
 export function clientApi(d: { config: () => Config; catalog: Catalog; status: () => StatusPoller; sse: SseHandler; stills: () => StillsSide | undefined }): express.Router {
   const r = express.Router();
@@ -35,12 +41,37 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     res.json([{ id: cam().id, name: cam().name, online: d.status().state().online, lastEventTs: last?.start_ts ?? null, stream, publicUrl: d.config().server.publicUrl ?? null }]);
   });
 
+  const sendJpeg = (res: Response, jpeg: Buffer | undefined, final: boolean) => {
+    if (!jpeg) return void res.status(404).json({ error: 'not_found' });
+    res.type('image/jpeg').setHeader('Cache-Control', final ? 'private, max-age=604800, immutable' : 'no-store');
+    res.send(jpeg);
+  };
+
   r.get('/cameras/:cam/events', (req, res) => {
     if (!known(req, res)) return;
     const from = intParam(req.query.from), to = intParam(req.query.to), limit = intParam(req.query.limit);
     if (from === null || to === null || limit === null) return bad(res, 'from, to and limit are whole numbers (unix ms)');
     const kind = typeof req.query.kind === 'string' ? req.query.kind : undefined;
-    res.json(listEvents(d.catalog, { cam: cam().id, from, to, kind, limit }).map(eventJson));
+    const rows = listEvents(d.catalog, { cam: cam().id, from, to, kind, limit });
+    const an = analysesFor(d.catalog, rows.map((e) => e.id));
+    res.json(rows.map((e) => ({ ...eventJson(e), analysis: analysisSummary(an.get(e.id)) })));
+  });
+  r.get('/cameras/:cam/events/:id/analysis', (req, res) => {
+    if (!known(req, res)) return;
+    const a = analysisFor(d.catalog, Number(req.params.id));
+    if (!a) return void res.status(404).json({ error: 'not_found' });
+    res.json({ eventId: a.event_id, provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, requestedAt: a.requested_at, tookMs: a.took_ms, objects: parse(a.objects) ?? [], raw: parse(a.raw) });
+  });
+  r.get('/cameras/:cam/events/:id/analysis.jpg', (req, res) => {
+    if (!known(req, res)) return;
+    const a = analysisFor(d.catalog, Number(req.params.id));
+    let jpeg: Buffer | undefined;
+    try {
+      jpeg = a?.image ? readFileSync(a.image) : undefined;
+    } catch {
+      jpeg = undefined;
+    }
+    sendJpeg(res, jpeg, true);
   });
 
   // Stills and previews (spec §8, §10): lists over at most a day.
@@ -58,12 +89,6 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     return s.store;
   };
   const jpegTs = (file: string) => (/^\d{1,15}\.jpg$/.test(file) ? Number(file.slice(0, -4)) : null);
-  const sendJpeg = (res: Response, jpeg: Buffer | undefined, final: boolean) => {
-    if (!jpeg) return void res.status(404).json({ error: 'not_found' });
-    res.type('image/jpeg').setHeader('Cache-Control', final ? 'private, max-age=604800, immutable' : 'no-store');
-    res.send(jpeg);
-  };
-
   // How far back this proxy has content (the History strip's left edge):
   // the oldest clip, still minute and preview minute, each null when none.
   r.get('/cameras/:cam/extent', (req, res) => {

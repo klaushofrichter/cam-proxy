@@ -73,5 +73,17 @@
     "user": "camera",
     "tls": true,
     "stream": "main"
+  },
+  "analytics": {
+    "kinds": {
+      "person": true,
+      "vehicle": false,
+      "pet": false
+    },
+    "googleVision": {
+      "enabled": false,
+      "monthlyLimit": 0,
+      "dailyCap": 0
+    }
   }
 }
