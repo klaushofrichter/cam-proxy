@@ -453,6 +453,52 @@
           "description": "FTPS key (PEM)"
         }
       }
+    },
+    "analytics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kinds": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "person": {
+              "type": "boolean",
+              "description": "analyse person events"
+            },
+            "vehicle": {
+              "type": "boolean",
+              "description": "analyse vehicle events"
+            },
+            "pet": {
+              "type": "boolean",
+              "description": "analyse pet events"
+            }
+          }
+        },
+        "googleVision": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "send event stills to Google Vision (needs CAMPROXY_GOOGLE_VISION_KEY)"
+            },
+            "monthlyLimit": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000,
+              "description": "Google Vision calls per calendar month (camera time); 0 = none"
+            },
+            "dailyCap": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000,
+              "description": "Google Vision calls per day at most; 0 = no daily cap"
+            }
+          }
+        }
+      }
     }
   }
 }

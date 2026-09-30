@@ -34,5 +34,8 @@ export function loadSecrets(env: NodeJS.ProcessEnv, ftpEnabled: boolean): Secret
   if (!cameraPassword) throw new SettingError('CAMPROXY_CAMERA_PASSWORD: required');
   const ftpPassword = read(env, 'CAMPROXY_FTP_PASSWORD');
   if (ftpEnabled && !ftpPassword) throw new SettingError('CAMPROXY_FTP_PASSWORD: required when ftp.enabled');
-  return { tokens, adminToken, cameraPassword, ...(ftpPassword ? { ftpPassword } : {}) };
+  const googleVisionKey = read(env, 'CAMPROXY_GOOGLE_VISION_KEY');
+  const googleVisionUrl = env.CAMPROXY_GOOGLE_VISION_URL || 'https://vision.googleapis.com';
+  if (!/^https?:\/\/[^\s]+$/.test(googleVisionUrl)) throw new SettingError('CAMPROXY_GOOGLE_VISION_URL: must be an http(s) URL');
+  return { tokens, adminToken, cameraPassword, ...(ftpPassword ? { ftpPassword } : {}), ...(googleVisionKey ? { googleVisionKey } : {}), googleVisionUrl: googleVisionUrl.replace(/\/+$/, '') };
 }
