@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { analysedSeconds, eventsInMinute, minuteMarks, secondKinds, stepMinute } from '../web/src/lib/timeline';
+import { analysedSeconds, analysedStills, eventsInMinute, minuteMarks, secondKinds, stepMinute } from '../web/src/lib/timeline';
 
 // The Timeline's minute view (Klaus, 2026-09-30): it opens under its hour,
 // steps ◀ ▶ within that hour only, and marks the seconds of its events.
@@ -65,6 +65,16 @@ describe('analytics marks on the Timeline', () => {
     ];
     expect(minuteMarks(m, evs, M + 60_000)).toEqual({ count: 3, analysed: true });
     expect(minuteMarks(m, evs.slice(1), M + 60_000)).toEqual({ count: 2, analysed: false });
+  });
+  it('marks tiles only for ok analyses, not skipped or failed ones', () => {
+    const evs = [
+      { id: 1, kind: 'person', start: M, end: null, analysis: { status: 'ok', stillTs: M + 2000 } },
+      { id: 2, kind: 'person', start: M, end: null, analysis: { status: 'skipped', stillTs: M + 3000 } },
+      { id: 3, kind: 'person', start: M, end: null, analysis: { status: 'failed', stillTs: M + 4000 } },
+      { id: 4, kind: 'person', start: M, end: null, analysis: { status: 'ok' } },
+      { id: 5, kind: 'motion', start: M, end: null, analysis: null },
+    ];
+    expect(analysedStills(evs)).toEqual([{ eventId: 1, stillTs: M + 2000 }]);
   });
   it('marks the tiles whose still was analysed', () => {
     const t = analysedSeconds(m, [{ eventId: 1, stillTs: M + 2000 }, { eventId: 9, stillTs: M + 90_000 }]);

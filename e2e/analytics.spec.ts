@@ -28,7 +28,10 @@ test('with the limit at 0, a person event reaches no analytics call', async ({ p
   await expect(page.getByTestId('analytics-message')).toContainText('saved');
   const before = await calls(page);
   expect((await person(page)).status()).toBe(201);
-  await page.waitForTimeout(6000);
+  // The event reached the service and was skipped for the limit (the path ran)...
+  await page.getByTestId('nav-events').click();
+  await expect(page.getByTestId('analysis-tag').first()).toContainText('✦ not analysed (limit)', { timeout: 20000 });
+  // ...and no call went out.
   expect(await calls(page)).toBe(before);
 });
 
@@ -37,6 +40,7 @@ test('a person event is analysed: Status counts it, Events tags it, the Timeline
   await page.getByTestId('nav-settings').click();
   await page.getByTestId('analytics-monthly').fill('10');
   await page.getByTestId('analytics-monthly-save').click();
+  await expect(page.getByTestId('analytics-message')).toContainText('saved'); // the limit is in force before the event comes
   await expect(page.getByTestId('analytics-estimate')).toContainText('Up to 10 calls a month: free');
   const before = await calls(page);
   expect((await person(page)).status()).toBe(201);

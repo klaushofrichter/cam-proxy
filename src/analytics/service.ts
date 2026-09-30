@@ -154,11 +154,12 @@ export class AnalyticsService {
     const deadline = want + STILL_WAIT_MS;
     for (;;) {
       const near = this.d.listStills(want - STILL_NEAR_MS, want + STILL_NEAR_MS);
+      const nearest = () => near.reduce((a, b) => (Math.abs(b - want) < Math.abs(a - want) ? b : a));
       if (near.includes(want)) return want;
-      if (this.now() >= deadline) {
-        if (!near.length) return null;
-        return near.reduce((a, b) => (Math.abs(b - want) < Math.abs(a - want) ? b : a));
-      }
+      // Stills sit on slot boundaries, events carry milliseconds: once a still
+      // at or after `want` exists, none that appears later can be closer.
+      if (near.some((t) => t >= want)) return nearest();
+      if (this.now() >= deadline) return near.length ? nearest() : null;
       await this.sleep(Math.min(1000, deadline - this.now()));
     }
   }
@@ -202,6 +203,7 @@ export class AnalyticsService {
   private async run(job: Job): Promise<void> {
     if (!this.active()) return;
     const stillTs = await this.pickStill(job.start_ts);
+    if (!this.active()) return; // switched off while waiting: nothing stored
     if (stillTs === null) return this.skip(job, 'no_still');
     if (this.paused && this.paused.until !== null && this.paused.until <= this.now()) this.paused = null;
     if (this.paused) return this.skip(job, 'paused', stillTs);
@@ -211,6 +213,7 @@ export class AnalyticsService {
     const provider = (this.d.provider ?? ((id, k, url) => googleVision({ key: k, baseUrl: url })))('google-vision', key, this.d.secrets().googleVisionUrl);
 
     for (let attempt = 0; ; attempt++) {
+      if (!this.active()) return; // switched off during the retry wait: no call
       const g = this.settings().googleVision;
       const day = localDay(this.now(), this.d.timeInfo());
       if (this.monthUsage(day) >= g.monthlyLimit || (g.dailyCap > 0 && usageBetween(this.d.catalog, 'google-vision', day, day) >= g.dailyCap)) {

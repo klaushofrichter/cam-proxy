@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api } from '../lib/api';
-  import { analysedSeconds, eventsInMinute, minuteMarks, secondKinds, stepMinute } from '../lib/timeline';
+  import { analysedSeconds, analysedStills, eventsInMinute, minuteMarks, secondKinds, stepMinute } from '../lib/timeline';
   import AnalysisModal from '../components/AnalysisModal.svelte';
   import { refreshTick } from '../lib/state';
 
@@ -134,7 +134,7 @@
         {@const m = open}
         {@const evs = eventsInMinute(m, events, Date.now())}
         {@const kinds = secondKinds(m, events, Date.now())}
-        {@const seen = analysedSeconds(m, evs.filter((x) => x.analysis?.stillTs).map((x) => ({ eventId: x.id, stillTs: x.analysis!.stillTs! })))}
+        {@const seen = analysedSeconds(m, analysedStills(evs))}
         <div class="detail" data-testid="minute-detail">
           <div class="head">
             <h3>{new Date(m.minute).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</h3>

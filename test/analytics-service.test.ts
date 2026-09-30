@@ -314,4 +314,68 @@ describe('AnalyticsService', () => {
     await s.idle();
     expect(analysisFor(c, e.id)).toMatchObject({ status: 'ok', still_ts: T0 + 1000 });
   });
+
+  // Final review, finding 3: switched off mid-job must not bill another call.
+  it('makes no second attempt when switched off during the retry sleep', async () => {
+    still(T0 + 1000, 7);
+    answers = [new AnalyticsError('network', true)];
+    const s = new AnalyticsService({
+      catalog: c, log, cam: 'cam1', dataDir: dir,
+      config: () => config,
+      secrets: () => ({ googleVisionKey: 'k-123456789012', googleVisionUrl: 'http://mock' }),
+      readStill: async (ts) => stills.get(ts),
+      listStills: (from, to) => [...stills.keys()].filter((t) => t >= from && t <= to).sort((a, b) => a - b),
+      timeInfo: () => chicago,
+      now: () => now,
+      sleep: async (ms) => { now += ms; config.analytics.googleVision.enabled = false; },
+      provider: () => provider,
+    });
+    const e = event('person');
+    s.onEvent(e);
+    await s.idle();
+    expect(calls).toHaveLength(1);
+    expect(analysisFor(c, e.id)).toBeUndefined();
+  });
+
+  it('makes no call when switched off while waiting for the still', async () => {
+    now = T0 + 1000;
+    const s = new AnalyticsService({
+      catalog: c, log, cam: 'cam1', dataDir: dir,
+      config: () => config,
+      secrets: () => ({ googleVisionKey: 'k-123456789012', googleVisionUrl: 'http://mock' }),
+      readStill: async (ts) => stills.get(ts),
+      listStills: (from, to) => [...stills.keys()].filter((t) => t >= from && t <= to).sort((a, b) => a - b),
+      timeInfo: () => chicago,
+      now: () => now,
+      sleep: async (ms) => { now += ms; config.analytics.googleVision.enabled = false; still(T0 + 1000, 5); },
+      provider: () => provider,
+    });
+    const e = event('person');
+    s.onEvent(e);
+    await s.idle();
+    expect(calls).toEqual([]);
+    expect(analysisFor(c, e.id)).toBeUndefined();
+  });
+
+  // Final review, finding 4: stills sit on slot boundaries, events carry ms.
+  it('does not wait the full deadline when an event at +300 ms has stills at whole seconds', async () => {
+    now = T0 + 1300;
+    still(T0 + 1000, 4);
+    const s = new AnalyticsService({
+      catalog: c, log, cam: 'cam1', dataDir: dir,
+      config: () => config,
+      secrets: () => ({ googleVisionKey: 'k-123456789012', googleVisionUrl: 'http://mock' }),
+      readStill: async (ts) => stills.get(ts),
+      listStills: (from, to) => [...stills.keys()].filter((t) => t >= from && t <= to).sort((a, b) => a - b),
+      timeInfo: () => chicago,
+      now: () => now,
+      sleep: async (ms) => { now += ms; if (now >= T0 + 2000) still(T0 + 2000, 6); },
+      provider: () => provider,
+    });
+    const e = event('person', T0 + 300);
+    s.onEvent(e);
+    await s.idle();
+    expect(now - (T0 + 1300)).toBeLessThan(2000);
+    expect(analysisFor(c, e.id)).toMatchObject({ status: 'ok', still_ts: T0 + 1000 });
+  });
 });

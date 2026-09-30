@@ -3,10 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { costEstimate, parseLimit, tagText, usageLine } from '../web/src/lib/analytics';
 
 describe('analytics UI text', () => {
-  it('estimates the monthly cost from the limit (1,000 free, then $1.50 per 1,000)', () => {
+  it('estimates the monthly cost from the limit (1,000 free, then $2.25 per 1,000)', () => {
     expect(costEstimate(0)).toBe('No calls.');
     expect(costEstimate(900)).toBe('Up to 900 calls a month: free (Google\'s first 1,000 a month are free).');
-    expect(costEstimate(3000)).toBe('Up to 3,000 calls a month: at most $3.00 (the first 1,000 free, then $1.50 per 1,000).');
+    expect(costEstimate(3000)).toBe('Up to 3,000 calls a month: at most $4.50 (the first 1,000 free, then $2.25 per 1,000; Google\'s price list, checked 2026-09-30).');
   });
 
   it('describes usage, a pause and an error', () => {

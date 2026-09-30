@@ -19,8 +19,8 @@ const n = (x: number) => x.toLocaleString('en-US');
 export function costEstimate(monthlyLimit: number): string {
   if (monthlyLimit <= 0) return 'No calls.';
   if (monthlyLimit <= 1000) return `Up to ${n(monthlyLimit)} calls a month: free (Google's first 1,000 a month are free).`;
-  const dollars = ((monthlyLimit - 1000) / 1000) * 1.5;
-  return `Up to ${n(monthlyLimit)} calls a month: at most $${dollars.toFixed(2)} (the first 1,000 free, then $1.50 per 1,000).`;
+  const dollars = ((monthlyLimit - 1000) / 1000) * 2.25;
+  return `Up to ${n(monthlyLimit)} calls a month: at most $${dollars.toFixed(2)} (the first 1,000 free, then $2.25 per 1,000; Google's price list, checked 2026-09-30).`;
 }
 
 export function usageLine(s: UiProviderState): string {

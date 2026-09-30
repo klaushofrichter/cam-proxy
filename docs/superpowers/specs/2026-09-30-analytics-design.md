@@ -28,7 +28,8 @@ a fallback from one to the next.
   more than 5 s per image, and a false person in the empty room.
 - **Google's free tier:** 1,000 units per calendar month for each feature.
   Object localization is one feature: one image costs 1 unit. Beyond the free
-  tier: $1.50 per 1,000.
+  tier: $2.25 per 1,000 (Google's price list, checked 2026-09-30; $1.50 is
+  the Label Detection price).
 - **An API key can't read usage.** Google's own request counts need Cloud
   Monitoring and a service account (see Later).
 - **Camera events:** the camera sends a motion event along with every
@@ -245,7 +246,7 @@ green and amber stay reserved for the event kinds.
     the environment and restart";
   - the monthly limit and the daily cap;
   - the estimate, for example "1,000 a month: free (Google's first 1,000 a
-    month are free, then $1.50 per 1,000)";
+    month are free, then $2.25 per 1,000)";
   - the note: "The limit counts this proxy's calls only. Proxies that share a
     key share Google's budget: keep their limits' total within it."
 - The switch is disabled while there is no key.

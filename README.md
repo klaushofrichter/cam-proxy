@@ -307,8 +307,8 @@ boxes. Motion-only events are never analysed.
   proxy's own: proxies that share a key share Google's budget, so keep their
   limits' total within it.
 - **Cost (as measured 2026-09-30):** Google's first 1,000 units a month are
-  free per feature; object localization is one unit per image, then $1.50 per
-  1,000. The Settings card shows the estimate for the monthly limit.
+  free per feature; object localization is one unit per image, then $2.25 per
+  1,000 (Google's price list, checked 2026-09-30). The Settings card shows the estimate for the monthly limit.
 - **Stored:** the result per event in SQLite, a copy of the analysed JPEG in
   `data/analytics/<cam>/<eventId>.jpg` (stills are kept 7 days, events 30),
   and the usage per day for 400 days. An analysis goes with its event.

@@ -60,3 +60,9 @@ export function analysedSeconds(m: { minute: number; intervalS: number; present:
     return hit ? hit.eventId : null;
   });
 }
+
+// The stills of ok analyses only: a skipped or failed one has a still_ts too
+// (the skip keeps it) but nothing was seen, so its tile isn't marked.
+export function analysedStills(events: { id: number; analysis?: { status: string; stillTs?: number } | null }[]): { eventId: number; stillTs: number }[] {
+  return events.flatMap((e) => (e.analysis?.status === 'ok' && e.analysis.stillTs ? [{ eventId: e.id, stillTs: e.analysis.stillTs }] : []));
+}
