@@ -41,6 +41,18 @@ export function clipByPath(c: Catalog, path: string): ClipRow | undefined {
   return c.db.prepare('SELECT * FROM clips WHERE path = ?').get(path) as unknown as ClipRow | undefined;
 }
 
+// The clip a picture taken at `ts` belongs to: the one that started last,
+// at most `windowMs` before it.
+export function clipForSnapshot(c: Catalog, cam: string, ts: number, windowMs: number): ClipRow | undefined {
+  return c.db
+    .prepare('SELECT * FROM clips WHERE cam = ? AND start_ts <= ? AND start_ts >= ? ORDER BY start_ts DESC, id DESC LIMIT 1')
+    .get(cam, ts, ts - windowMs) as unknown as ClipRow | undefined;
+}
+
+export function clipsWithoutSnapshot(c: Catalog, cam: string): ClipRow[] {
+  return c.db.prepare('SELECT * FROM clips WHERE cam = ? AND snapshot IS NULL ORDER BY start_ts').all(cam) as unknown as ClipRow[];
+}
+
 export function setSnapshot(c: Catalog, id: number, snapshot: string | null): void {
   c.db.prepare('UPDATE clips SET snapshot = ? WHERE id = ?').run(snapshot, id);
 }

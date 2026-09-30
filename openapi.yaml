@@ -41,7 +41,7 @@ paths:
         - { name: to, in: query, required: true, schema: { type: integer } }
       responses:
         '200': { description: '[ts, …] (unix ms), oldest first' }
-        '400': { description: missing range, or more than a day }
+        '400': { description: 'missing range, to before from, or more than a day' }
         '404': { description: unknown camera, or stills are off }
   /api/cameras/{cam}/stills/{file}:
     get:
@@ -62,7 +62,7 @@ paths:
         - { name: to, in: query, required: true, schema: { type: integer } }
       responses:
         '200': { description: '[{ minute, cols, rows, tileW, tileH, intervalS, present: [bool], url }]' }
-        '400': { description: missing range, or more than a day }
+        '400': { description: 'missing range, to before from, or more than a day' }
         '404': { description: unknown camera, or stills are off }
   /api/cameras/{cam}/previews/{file}:
     get:

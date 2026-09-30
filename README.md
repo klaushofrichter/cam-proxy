@@ -1,12 +1,24 @@
 # cam-proxy
 
+[![Release](https://img.shields.io/github/v/release/klaushofrichter/cam-proxy?label=release&color=blue)](https://github.com/klaushofrichter/cam-proxy/releases)
+[![PR checks](https://github.com/klaushofrichter/cam-proxy/actions/workflows/pr-checks.yml/badge.svg)](https://github.com/klaushofrichter/cam-proxy/actions/workflows/pr-checks.yml)
+[![Build and publish image](https://github.com/klaushofrichter/cam-proxy/actions/workflows/build-push.yml/badge.svg?branch=main)](https://github.com/klaushofrichter/cam-proxy/actions/workflows/build-push.yml)
+[![Release and deploy](https://github.com/klaushofrichter/cam-proxy/actions/workflows/release.yml/badge.svg?branch=production)](https://github.com/klaushofrichter/cam-proxy/actions/workflows/release.yml)
+[![Dependabot](https://img.shields.io/badge/dependabot-enabled-025E8C?logo=dependabot&logoColor=white)](https://github.com/klaushofrichter/cam-proxy/security/dependabot)
+
+<!-- The release badge is the newest tag, which the release job cuts after the
+     cluster rollout. Dependabot is a static badge (it has no status endpoint);
+     alerts and security updates are on in the repository settings, version
+     updates come from .github/dependabot.yml. No version numbers in the text
+     below: they go stale; the badge and the releases page carry them. -->
+
 A gateway next to a Reolink camera (RLC-1224A). It becomes the camera's only
 client, keeps what matters, and serves it through a clean API with a live,
 resumable Server-Sent Events stream. Apps such as
 [cams](https://github.com/klaushofrichter/cams) no longer depend on the
 camera's quirks (one search at a time, few logins, broken downloads, no push).
 
-**Status:** built and released (v2026.09.27.2):
+**Status:** built and released (see the release badge above):
 - camera status and ONVIF events, with a polling fallback;
 - the event catalog and the resumable SSE stream;
 - stills and preview sprites through go2rtc;
@@ -16,17 +28,18 @@ camera's quirks (one search at a time, few logins, broken downloads, no push).
 
 It runs in the k3s cluster next to `cam2`, and
 [cams](https://github.com/klaushofrichter/cams) uses it (the SSE relay,
-Timeline, and clips and thumbnails from the proxy first). The Raspberry Pi
-target is not deployed yet; see the
-[design spec](docs/superpowers/specs/2026-09-27-cam-proxy-design.md) and
-the [requirements](docs/requirements.md).
+Timeline, and clips and thumbnails from the proxy first). It also runs on a
+Raspberry Pi 4 next to the real camera ([docs/raspberry-pi.md](docs/raspberry-pi.md)).
+See the [design spec](docs/superpowers/specs/2026-09-27-cam-proxy-design.md)
+and the [requirements](docs/requirements.md).
 
 Targets:
 - **Production:** the k3s cluster next to `cam2` (a
   [cam-sim](https://github.com/klaushofrichter/cam-sim) simulated camera),
   <https://cam-proxy.skylar.technology> (LAN only).
-- **Planned:** a Raspberry Pi 4 next to the real camera (`compose.yaml`, not
-  deployed yet).
+- **Production:** a Raspberry Pi 4 next to the real camera (cam1, "Den"),
+  since 2026-09-29, with Docker and [`compose.yaml`](compose.yaml). Setup and
+  operation: [docs/raspberry-pi.md](docs/raspberry-pi.md).
 
 A Mac runs it for development on `localhost:8480`.
 
@@ -234,8 +247,15 @@ upload folder. While storage is paused, `STOR` answers 452.
   camera's local time) becomes UTC with the camera's time zone and DST rule
   (`GetTime`), is checked with ffprobe (anything that isn't a video is
   dropped), and is stored as `data/clips/<cam>/YYYY/MM/DD/HHMM-<start>.mp4`.
-  The camera's `.jpg` with the same name becomes the clip's snapshot. A
-  `clip` stream message follows, with the events the clip covers.
+  The camera's `.jpg` becomes the clip's snapshot. The camera names it after
+  the event, 3–5 s after the clip's own name (the clip starts with the
+  pre-record; measured on cam1 2026-09-30), so a picture goes to the clip
+  that started last at most 10 s before it, whichever arrives first; on
+  startup, clips without one are paired from the stored pictures. A `clip`
+  stream message follows, with the events the clip covers. One clip often
+  covers several events: the camera extends a recording while events keep
+  coming, and ends it `postRec` (its "Post-Motion Record", 15 s on cam1)
+  after the last one.
 - **Camera setup:** `POST /control/actions/camera-ftp-setup` writes the
   camera's whole FTP object (the proxy at `ftp.publicHost`, uploads on
   motion and people/vehicle/pet detections, all hours).
@@ -353,7 +373,8 @@ exchanged for the cookie and not stored in the browser.
 - **Events:** the live stream and the last 100 events.
 - **Timeline:** a day of preview sprites, one still per minute, with events
   marked.
-- **Clips:** a day's clips with their snapshots, playable, updating as new
+- **Clips:** a day's clips with their snapshots and the kinds of the events
+  they cover, each once with a count ("motion ×3"), playable, updating as new
   clips arrive.
 - **Settings:** every setting with its source; changes become overrides, and
   can be reset.
@@ -398,7 +419,7 @@ and checks it as the cluster runs it.
   to `production` releases `v<YYYY.MM.DD.N>` and `:latest`, and deploys to
   the cluster (see below).
 - **Cluster** (next to `cam2`, `https://cam-proxy.skylar.technology`, LAN
-  only; first released as v2026.09.27.1):
+  only):
   - The manifests live in kube-setup ([request](deploy/cluster/REQUEST.md)).
   - The ConfigMap is [`deploy/cluster/config.json`](deploy/cluster/config.json);
     its camera is `cam2`, and clips come from the sub stream
@@ -406,9 +427,11 @@ and checks it as the cluster runs it.
   - The release job pins the image digest in kube-setup, pushes, applies,
     waits for the rollout, and checks that `/health` serves the new version.
   - Secrets: `scripts/sync-secrets.sh --env-file .env.cluster --only all`.
-- **Raspberry Pi (not deployed yet):** [`compose.yaml`](compose.yaml): host
-  networking, `/data` on the SSD, and `docker compose pull && docker compose
-  up -d` to update.
+- **Raspberry Pi** (next to the real camera): [`compose.yaml`](compose.yaml)
+  with host networking and `/data` on the SSD, prepared by
+  [`scripts/prepare-pi.sh`](scripts/prepare-pi.sh). A release doesn't update
+  it: run `docker compose pull && docker compose up -d` on the Pi. See
+  [docs/raspberry-pi.md](docs/raspberry-pi.md).
 
 ## Development
 

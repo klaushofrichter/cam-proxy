@@ -46,7 +46,8 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
   // Stills and previews (spec §8, §10): lists over at most a day.
   const range = (req: Request, res: Response): [number, number] | undefined => {
     const from = intParam(req.query.from), to = intParam(req.query.to);
-    if (from === undefined || to === undefined || from === null || to === null || to < from) return bad(res, 'from and to (unix ms) are required'), undefined;
+    if (from === undefined || to === undefined || from === null || to === null) return bad(res, 'from and to (unix ms) are required'), undefined;
+    if (to < from) return bad(res, 'to is before from'), undefined;
     if (to - from > DAY) return bad(res, 'at most one day per request'), undefined;
     return [from, to];
   };
@@ -109,7 +110,8 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
   r.get('/cameras/:cam/clips', (req, res) => {
     if (!known(req, res)) return;
     const from = intParam(req.query.from), to = intParam(req.query.to);
-    if (from === undefined || to === undefined || from === null || to === null || to < from) return bad(res, 'from and to (unix ms) are required');
+    if (from === undefined || to === undefined || from === null || to === null) return bad(res, 'from and to (unix ms) are required');
+    if (to < from) return bad(res, 'to is before from');
     if (to - from > 31 * DAY) return bad(res, 'at most 31 days per request');
     res.json(listClips(d.catalog, cam().id, from, to).map(clipJson));
   });
