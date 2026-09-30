@@ -4,7 +4,7 @@ import type { AddressInfo } from 'net';
 // A stand-in for Google Vision's images:annotate (spec: tests never call
 // Google). Answers from `script` in order (the last one repeats); counts calls.
 export type MockAnswer = {
-  objects?: { name: string; score: number; vertices: { x?: number; y?: number }[] }[];
+  objects?: { mid?: string; name: string; score: number; vertices: { x?: number; y?: number }[] }[];
   status?: number;
   body?: unknown;
   delayMs?: number;
@@ -20,7 +20,7 @@ export interface VisionMock {
   close(): Promise<void>;
 }
 
-const PERSON = { name: 'Person', score: 0.9, vertices: [{ x: 0.1, y: 0.2 }, { x: 0.4, y: 0.2 }, { x: 0.4, y: 0.9 }, { x: 0.1, y: 0.9 }] };
+const PERSON = { mid: '/m/01g317', name: 'Person', score: 0.9, vertices: [{ x: 0.1, y: 0.2 }, { x: 0.4, y: 0.2 }, { x: 0.4, y: 0.9 }, { x: 0.1, y: 0.9 }] };
 
 export async function startVisionMock(o: { key?: string; port?: number } = {}): Promise<VisionMock> {
   const key = o.key ?? 'mock-vision-key-000000';
@@ -64,7 +64,7 @@ export async function startVisionMock(o: { key?: string; port?: number } = {}): 
       }
       const status = answer.status ?? 200;
       res.writeHead(status, { 'content-type': 'application/json' });
-      const responseBody = answer.body !== undefined ? JSON.stringify(answer.body) : (status !== 200 ? JSON.stringify({ error: { code: status, status: 'ERROR', message: 'mock error' } }) : JSON.stringify({ responses: [{ localizedObjectAnnotations: (answer.objects ?? [PERSON]).map((x) => ({ name: x.name, score: x.score, boundingPoly: { normalizedVertices: x.vertices } })) }] }));
+      const responseBody = answer.body !== undefined ? JSON.stringify(answer.body) : (status !== 200 ? JSON.stringify({ error: { code: status, status: 'ERROR', message: 'mock error' } }) : JSON.stringify({ responses: [{ localizedObjectAnnotations: (answer.objects ?? [PERSON]).map((x) => ({ ...(x.mid ? { mid: x.mid } : {}), name: x.name, score: x.score, boundingPoly: { normalizedVertices: x.vertices } })) }] }));
       if (answer.bodyDelayMs) {
         res.write('{');
         await new Promise((r) => setTimeout(r, answer.bodyDelayMs));
