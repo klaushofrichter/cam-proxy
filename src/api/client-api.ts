@@ -22,7 +22,7 @@ export const eventJson = (e: EventRow) => ({ id: e.id, kind: e.kind, source: e.s
 
 const parse = (s: string | null) => (s === null ? null : JSON.parse(s));
 export const analysisSummary = (a: AnalysisRow | undefined) =>
-  a ? { provider: a.provider, status: a.status, reason: a.reason, objects: parse(a.objects) ?? [] } : null;
+  a ? { provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, objects: parse(a.objects) ?? [] } : null;
 
 // The client API (spec §10); auth is applied by the caller.
 export function clientApi(d: { config: () => Config; catalog: Catalog; status: () => StatusPoller; sse: SseHandler; stills: () => StillsSide | undefined }): express.Router {

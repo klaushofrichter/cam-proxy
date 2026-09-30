@@ -134,7 +134,7 @@ paths:
         - { name: kind, in: query, schema: { type: string }, description: 'motion, person, vehicle, pet, …' }
         - { name: limit, in: query, schema: { type: integer, maximum: 1000 } }
       responses:
-        '200': { description: '[{ id, kind, source, start, end, endReason, analysis: null | {provider, status, reason, objects: [{name, score, box: {x0, y0, x1, y1}}]} }]' }
+        '200': { description: '[{ id, kind, source, start, end, endReason, analysis: null | {provider, status, reason, stillTs, objects: [{name, score, box: {x0, y0, x1, y1}}]} }]' }
         '400': { description: invalid parameter }
         '404': { description: unknown camera }
   /api/cameras/{cam}/events/{id}/analysis:

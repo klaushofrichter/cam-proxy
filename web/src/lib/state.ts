@@ -58,7 +58,7 @@ export function connect(): void {
   void refresh();
   timer = setInterval(() => void refresh(), 5000);
   source = new EventSource('/api/stream', { withCredentials: true });
-  for (const type of ['camera-event', 'camera-status', 'clip', 'annotation']) {
+  for (const type of ['camera-event', 'camera-status', 'clip', 'annotation', 'analysis']) {
     source.addEventListener(type, (ev) => {
       const e = ev as MessageEvent;
       feed.update((list) => [{ id: Number(e.lastEventId), type, data: JSON.parse(e.data), at: Date.now() }, ...list].slice(0, 300));

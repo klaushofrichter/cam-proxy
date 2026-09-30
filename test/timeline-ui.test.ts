@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { eventsInMinute, secondKinds, stepMinute } from '../web/src/lib/timeline';
+import { analysedSeconds, eventsInMinute, minuteMarks, secondKinds, stepMinute } from '../web/src/lib/timeline';
 
 // The Timeline's minute view (Klaus, 2026-09-30): it opens under its hour,
 // steps ◀ ▶ within that hour only, and marks the seconds of its events.
@@ -52,5 +52,23 @@ describe('events of a minute', () => {
     const k = secondKinds({ minute: M, intervalS: 2, present: Array(30).fill(true) }, events, M + 120_000);
     expect(k).toHaveLength(30);
     expect(k[5]).toBe('person'); // tile 10-12 s
+  });
+});
+
+describe('analytics marks on the Timeline', () => {
+  const m = { minute: M, intervalS: 1, present: Array(60).fill(true) as boolean[] };
+  it('counts a minute\'s events and whether one was analysed', () => {
+    const evs = [
+      { id: 1, kind: 'person', start: M + 1000, end: M + 5000, analysis: { status: 'ok' } },
+      { id: 2, kind: 'motion', start: M + 1000, end: M + 5000, analysis: null },
+      { id: 3, kind: 'person', start: M + 40_000, end: M + 42_000, analysis: { status: 'skipped' } },
+    ];
+    expect(minuteMarks(m, evs, M + 60_000)).toEqual({ count: 3, analysed: true });
+    expect(minuteMarks(m, evs.slice(1), M + 60_000)).toEqual({ count: 2, analysed: false });
+  });
+  it('marks the tiles whose still was analysed', () => {
+    const t = analysedSeconds(m, [{ eventId: 1, stillTs: M + 2000 }, { eventId: 9, stillTs: M + 90_000 }]);
+    expect(t[2]).toBe(1);
+    expect(t.filter((x) => x !== null)).toHaveLength(1);
   });
 });
