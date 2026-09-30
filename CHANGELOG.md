@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.09.30.1
+
 - Fix: a real camera's clip pictures were never attached. The camera names the `.jpg` after the event, 3–5 s after the clip (pre-record), and cam-proxy paired them by identical name. A picture now goes to the clip that started last at most 10 s before it, in either arrival order; on startup, stored clips without a picture are paired from the stored pictures. A stored picture is logged (`snapshot_stored`).
 - Clips page: each event kind once, with a count ("motion ×3"), AI kinds first.
 - The stills, previews and clips lists answer `to is before from` for a reversed range, instead of saying the range is missing.
