@@ -53,6 +53,7 @@ type Job = { id: number; kind: string; start_ts: number };
 export class AnalyticsService {
   private readonly queue: Job[] = [];
   private running: Promise<void> | null = null;
+  private draining = false;
   private stopped = false;
   private paused: { reason: string; until: number | null } | null = null;
   private lastCall: ProviderState['lastCall'] = null;
@@ -83,7 +84,10 @@ export class AnalyticsService {
   onEvent(e: Job): void {
     if (this.stopped || !this.active() || !this.wanted(e.kind)) return;
     this.queue.push({ id: e.id, kind: e.kind, start_ts: e.start_ts });
-    this.running ??= this.drain().finally(() => (this.running = null));
+    if (!this.draining) {
+      this.draining = true;
+      this.running = this.drain();
+    }
   }
 
   // After a restart: the last 10 minutes of events that were never analysed.
@@ -99,7 +103,7 @@ export class AnalyticsService {
   }
 
   async idle(): Promise<void> {
-    while (this.running) await this.running;
+    while (this.draining || this.queue.length) await this.running;
   }
 
   stop(): void {
@@ -128,13 +132,19 @@ export class AnalyticsService {
     }));
   }
 
+  // `draining` is cleared in the same synchronous step that finds the queue
+  // empty, so a job queued at any later moment starts a new drain.
   private async drain(): Promise<void> {
-    for (let job = this.queue.shift(); job && !this.stopped; job = this.queue.shift()) {
-      try {
-        await this.run(job);
-      } catch (err) {
-        logger.warn({ err: (err as Error).message, eventId: job.id }, 'analytics_job_failed');
+    try {
+      for (let job = this.queue.shift(); job && !this.stopped; job = this.queue.shift()) {
+        try {
+          await this.run(job);
+        } catch (err) {
+          logger.warn({ err: (err as Error).message, eventId: job.id }, 'analytics_job_failed');
+        }
       }
+    } finally {
+      this.draining = false;
     }
   }
 
@@ -145,7 +155,7 @@ export class AnalyticsService {
     for (;;) {
       const near = this.d.listStills(want - STILL_NEAR_MS, want + STILL_NEAR_MS);
       if (near.includes(want)) return want;
-      if (this.now() >= deadline || this.now() >= want + STILL_NEAR_MS) {
+      if (this.now() >= deadline) {
         if (!near.length) return null;
         return near.reduce((a, b) => (Math.abs(b - want) < Math.abs(a - want) ? b : a));
       }
@@ -167,6 +177,26 @@ export class AnalyticsService {
 
   private skip(job: Job, reason: string, stillTs: number | null = null): void {
     this.store(job, { status: 'skipped', reason, stillTs, image: null, tookMs: null, objects: null, raw: null });
+  }
+
+  // After a paid, successful call nothing local may trigger another call: a
+  // failed image copy stores the result without it, a failed store is logged.
+  private storeOk(job: Job, jpeg: Buffer, stillTs: number, tookMs: number, res: { objects: unknown; raw: unknown }): void {
+    let image: string | null = null;
+    try {
+      const dir = join(this.d.dataDir, 'analytics', this.d.cam);
+      mkdirSync(dir, { recursive: true });
+      image = join(dir, `${job.id}.jpg`);
+      writeFileSync(image, jpeg);
+    } catch (err) {
+      image = null;
+      logger.warn({ err: (err as Error).message, eventId: job.id }, 'analytics_image_copy_failed');
+    }
+    try {
+      this.store(job, { status: 'ok', reason: null, stillTs, image, tookMs, objects: res.objects, raw: res.raw });
+    } catch (err) {
+      logger.warn({ err: (err as Error).message, eventId: job.id }, 'analytics_store_failed');
+    }
   }
 
   private async run(job: Job): Promise<void> {
@@ -192,11 +222,7 @@ export class AnalyticsService {
         const res = await provider.analyze(jpeg, AbortSignal.timeout(TIMEOUT_MS));
         const tookMs = this.now() - t0;
         this.lastCall = { at: t0, tookMs, status: 'ok' };
-        const dir = join(this.d.dataDir, 'analytics', this.d.cam);
-        mkdirSync(dir, { recursive: true });
-        const image = join(dir, `${job.id}.jpg`);
-        writeFileSync(image, jpeg);
-        return this.store(job, { status: 'ok', reason: null, stillTs, image, tookMs, objects: res.objects, raw: res.raw });
+        return this.storeOk(job, jpeg, stillTs, tookMs, res);
       } catch (err) {
         const e = err instanceof AnalyticsError ? err : new AnalyticsError('network', true);
         this.lastCall = { at: t0, tookMs: this.now() - t0, status: e.reason };

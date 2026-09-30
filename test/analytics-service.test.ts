@@ -1,6 +1,6 @@
 // test/analytics-service.test.ts
 import { beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { openCatalog, type Catalog } from '../src/catalog/db';
@@ -254,5 +254,64 @@ describe('AnalyticsService', () => {
     await s.idle();
     expect(analysisFor(c, recent.id)?.status).toBe('ok');
     expect(analysisFor(c, old.id)).toBeUndefined();
+  });
+  // Fix round 1, issue 1: a job queued right as the drain ends is never stranded.
+  it.each([1, 2, 3, 4, 5, 6, 7, 8])('drains an event queued %i microtasks after the last result', async (depth) => {
+    still(T0 + 1000, 1);
+    still(T0 + 11_000, 2);
+    const s = service();
+    const [a, b] = [event('person'), event('person', T0 + 10_000)];
+    let fired = false;
+    log.on('message', () => {
+      if (fired) return;
+      fired = true;
+      let n = 0;
+      const tick = () => (++n < depth ? void Promise.resolve().then(tick) : s.onEvent(b));
+      Promise.resolve().then(tick);
+    });
+    s.onEvent(a);
+    await s.idle();
+    await new Promise((r) => setTimeout(r, 0)); // the late onEvent has happened by now
+    await s.idle();
+    expect(analysisFor(c, a.id)?.status).toBe('ok');
+    expect(analysisFor(c, b.id)?.status).toBe('ok');
+    expect(calls).toEqual([1, 2]);
+  });
+
+  // Fix round 1, issue 2: a local write error does not cause a second paid call.
+  it('keeps the result, without an image, when the image copy cannot be written (one call only)', async () => {
+    still(T0 + 1000, 7);
+    writeFileSync(join(dir, 'analytics'), 'a file, so mkdir fails');
+    const s = service();
+    const e = event('person');
+    s.onEvent(e);
+    await s.idle();
+    expect(calls).toHaveLength(1);
+    expect(analysisFor(c, e.id)).toMatchObject({ status: 'ok', image: null });
+    expect(s.state()[0].lastCall?.status).toBe('ok');
+    expect(s.state()[0].month.calls).toBe(1);
+  });
+
+  // Fix round 1, issue 3: waits the full 5 s for the exact still.
+  it('waits up to 5 s for the still at start + 1 s', async () => {
+    now = T0 + 1000;
+    const s = new AnalyticsService({
+      catalog: c, log, cam: 'cam1', dataDir: dir,
+      config: () => config,
+      secrets: () => ({ googleVisionKey: 'k-123456789012', googleVisionUrl: 'http://mock' }),
+      readStill: async (ts) => stills.get(ts),
+      listStills: (from, to) => [...stills.keys()].filter((t) => t >= from && t <= to).sort((a, b) => a - b),
+      timeInfo: () => chicago,
+      now: () => now,
+      sleep: async (ms) => {
+        now += ms;
+        if (now > T0 + 4000) still(T0 + 1000, 5);
+      },
+      provider: () => provider,
+    });
+    const e = event('person');
+    s.onEvent(e);
+    await s.idle();
+    expect(analysisFor(c, e.id)).toMatchObject({ status: 'ok', still_ts: T0 + 1000 });
   });
 });
