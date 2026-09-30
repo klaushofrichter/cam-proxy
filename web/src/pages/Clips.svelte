@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { clipChips } from '../lib/chips';
   import { api } from '../lib/api';
   import { feed, refreshTick } from '../lib/state';
 
@@ -78,7 +79,7 @@
         <button class="clip" class:active={playing?.id === c.id} onclick={() => (playing = c)} data-testid="clip">
           {#if c.snapshotUrl}<img src={c.snapshotUrl} alt="" loading="lazy" />{:else}<div class="noimg">no snapshot</div>{/if}
           <span class="meta"><b>{time(c.start)}</b> {secs(c)} · {mb(c.size)}</span>
-          <span class="chips">{#each c.events as id (id)}<span class="chip">{kinds[id] ?? 'event'}</span>{/each}</span>
+          <span class="chips">{#each clipChips(c.events, kinds) as chip (chip)}<span class="chip">{chip}</span>{/each}</span>
         </button>
       {/each}
     </div>

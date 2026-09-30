@@ -1,9 +1,9 @@
 import { execFile } from 'child_process';
-import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readSync, renameSync, unlinkSync } from 'fs';
+import { closeSync, copyFileSync, mkdirSync, openSync, readdirSync, readSync, renameSync, unlinkSync } from 'fs';
 import { dirname, join } from 'path';
 import { promisify } from 'util';
 import type { DstRule, TimeInfo } from '../camera/time';
-import { clipByPath, deleteClip, insertClip, overlappingEvents, setSnapshot, type ClipRow } from '../catalog/clips';
+import { clipForSnapshot, clipsWithoutSnapshot, deleteClip, insertClip, overlappingEvents, setSnapshot, type ClipRow } from '../catalog/clips';
 import type { Catalog } from '../catalog/db';
 import type { Config } from '../config/defaults';
 import { logger } from '../log';
@@ -81,6 +81,12 @@ export interface ClipIndexerDeps {
   stored?: (bytes: number) => void; // a file was added to clips/ (for storage accounting)
 }
 
+// The camera names a clip's picture after the event that started it, 3-5 s
+// after the clip's own start (its pre-record; measured on cam1 2026-09-28 to
+// 30), never with the same time. A picture belongs to the clip that started
+// last at most this long before it.
+export const SNAPSHOT_WINDOW_MS = 10_000;
+
 // Turns a finished upload into a stored, indexed clip (or its snapshot).
 export class ClipIndexer {
   private failed = 0;
@@ -100,6 +106,45 @@ export class ClipIndexer {
 
   lastIndexed(): number | null {
     return this.last;
+  }
+
+  // Clips stored without their picture (before the pairing above, or the
+  // picture came late): link them now. Returns how many were linked.
+  relinkSnapshots(): number {
+    let n = 0;
+    for (const clip of clipsWithoutSnapshot(this.d.catalog, this.d.cam)) {
+      const pic = this.pictureFor(clip.start_ts);
+      if (pic) {
+        setSnapshot(this.d.catalog, clip.id, pic);
+        n++;
+      }
+    }
+    if (n) logger.info({ cam: this.d.cam, linked: n }, 'snapshots_relinked');
+    return n;
+  }
+
+  // The earliest stored picture taken in a clip's first SNAPSHOT_WINDOW_MS.
+  private pictureFor(start: number): string | null {
+    let best: { ts: number; path: string } | null = null;
+    for (const folder of new Set([this.folder(start), this.folder(start + SNAPSHOT_WINDOW_MS)])) {
+      let names: string[];
+      try {
+        names = readdirSync(folder);
+      } catch {
+        continue;
+      }
+      for (const name of names) {
+        const m = /^\d{4}-(\d{1,15})\.jpg$/.exec(name);
+        const ts = m ? Number(m[1]) : NaN;
+        if (ts >= start && ts <= start + SNAPSHOT_WINDOW_MS && (!best || ts < best.ts)) best = { ts, path: join(folder, name) };
+      }
+    }
+    return best?.path ?? null;
+  }
+
+  private folder(ts: number): string {
+    const t = new Date(ts);
+    return join(this.d.dataDir, 'clips', this.d.cam, String(t.getUTCFullYear()), pad(t.getUTCMonth() + 1), pad(t.getUTCDate()));
   }
 
   // An upload that isn't kept (the disk is full).
@@ -138,7 +183,7 @@ export class ClipIndexer {
     const candidates = localToUtcCandidates(parsed.local, await this.d.timeInfo());
     const start = candidates.findLast((c) => c <= this.now() + 5 * 60_000) ?? candidates[0];
     const t = new Date(start);
-    const folder = join(this.d.dataDir, 'clips', this.d.cam, String(t.getUTCFullYear()), pad(t.getUTCMonth() + 1), pad(t.getUTCDate()));
+    const folder = this.folder(start);
     const stem = join(folder, `${pad(t.getUTCHours())}${pad(t.getUTCMinutes())}-${start}`);
     const { catalog } = this.d;
 
@@ -150,8 +195,10 @@ export class ClipIndexer {
       }
       move(u.tmpFile, `${stem}.jpg`);
       this.d.stored?.(u.bytes);
-      const clip = clipByPath(catalog, `${stem}.mp4`);
-      if (clip) setSnapshot(catalog, clip.id, `${stem}.jpg`);
+      const clip = clipForSnapshot(catalog, this.d.cam, start, SNAPSHOT_WINDOW_MS);
+      if (clip && !clip.snapshot) setSnapshot(catalog, clip.id, `${stem}.jpg`);
+      // Logged so it shows whether the camera still sends pictures (2026-09-30).
+      logger.info({ ts: start, bytes: u.bytes, clipId: clip?.id ?? null }, 'snapshot_stored');
       return null;
     }
 
@@ -174,7 +221,7 @@ export class ClipIndexer {
       stream: this.d.config().ftp.stream,
       size: u.bytes,
       received_at: this.now(),
-      snapshot: existsSync(`${stem}.jpg`) ? `${stem}.jpg` : null,
+      snapshot: this.pictureFor(start),
     });
     const events = overlappingEvents(catalog, this.d.cam, start, end);
     this.d.log.append(this.d.cam, 'clip', {
