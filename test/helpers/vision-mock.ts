@@ -44,6 +44,16 @@ export async function startVisionMock(o: { key?: string; port?: number } = {}): 
       res.writeHead(200, { 'content-type': 'application/json' });
       return void res.end(JSON.stringify({ calls: mock.calls }));
     }
+    // The e2e tests set the answers here (an empty list restores the default person); not counted as a call.
+    if (req.method === 'POST' && req.url === '/script') {
+      let b = '';
+      req.on('data', (d) => (b += d));
+      req.on('end', () => {
+        mock.script = JSON.parse(b) as MockAnswer[];
+        res.writeHead(204).end();
+      });
+      return;
+    }
     let body = '';
     req.on('data', (d) => (body += d));
     req.on('end', async () => {

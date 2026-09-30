@@ -69,7 +69,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     if (!known(req, res)) return;
     const a = analysisFor(d.catalog, Number(req.params.id));
     if (!a) return void res.status(404).json({ error: 'not_found' });
-    res.json({ eventId: a.event_id, provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, requestedAt: a.requested_at, tookMs: a.took_ms, objects: parse(a.objects) ?? [], raw: parse(a.raw) });
+    res.json({ eventId: a.event_id, provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, requestedAt: a.requested_at, tookMs: a.took_ms, objects: parse(a.objects) ?? [], summary: parse(a.summary ?? null) ?? [], raw: parse(a.raw) });
   });
   // A day of analyses in the stream message's shape (spec
   // 2026-09-30-analytics-in-cams-design), for cams when it loads a day.

@@ -82,3 +82,16 @@ describe('analytics marks on the Timeline', () => {
     expect(t.filter((x) => x !== null)).toHaveLength(1);
   });
 });
+
+describe('analysed means a relevant finding', () => {
+  const m = { minute: M, intervalS: 1, present: Array(60).fill(true) as boolean[] };
+  it('counts only ok analyses with a non-empty summary', () => {
+    const evs = [
+      { id: 1, kind: 'person', start: M + 1000, end: M + 5000, analysis: { status: 'ok', stillTs: M + 2000, summary: [{}] } },
+      { id: 2, kind: 'person', start: M + 10_000, end: M + 12_000, analysis: { status: 'ok', stillTs: M + 11_000, summary: [] } },
+    ];
+    expect(minuteMarks(m, evs, M + 60_000).analysed).toBe(true);
+    expect(minuteMarks(m, evs.slice(1), M + 60_000).analysed).toBe(false);
+    expect(analysedStills(evs)).toEqual([{ eventId: 1, stillTs: M + 2000 }]);
+  });
+});

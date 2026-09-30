@@ -37,7 +37,7 @@ describe('analytics API', () => {
     const list = await request(p.proxy.app).get(`/api/cameras/cam1/events?from=0&to=${Date.now()}&limit=10`).set(auth());
     expect(list.body.find((x: { id: number }) => x.id === e.id).analysis).toEqual({ provider: 'google-vision', status: 'ok', reason: null, stillTs: e.start_ts + 1000, objects: [{ name: 'Person', score: 0.8, box: { x0: 0.1, y0: 0.1, x1: 0.5, y1: 0.9 } }], summary: [] });
     const full = await request(p.proxy.app).get(`/api/cameras/cam1/events/${e.id}/analysis`).set(auth());
-    expect(full.body).toMatchObject({ eventId: e.id, stillTs: e.start_ts + 1000, tookMs: 250, raw: { a: 1 } });
+    expect(full.body).toMatchObject({ eventId: e.id, stillTs: e.start_ts + 1000, tookMs: 250, raw: { a: 1 }, summary: [] });
     const jpg = await request(p.proxy.app).get(`/api/cameras/cam1/events/${e.id}/analysis.jpg`).set(auth());
     expect(jpg.status).toBe(200);
     expect(jpg.headers['content-type']).toBe('image/jpeg');

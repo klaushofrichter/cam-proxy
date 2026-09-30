@@ -6,8 +6,11 @@ export interface TimelineEvent {
   kind: string;
   start: number;
   end: number | null; // null: still open
-  analysis?: { status: string; stillTs?: number } | null;
+  analysis?: { status: string; stillTs?: number; summary?: unknown[] } | null;
 }
+
+// An analysis that found something relevant; an undefined summary counts (an older proxy).
+const relevant = (a: TimelineEvent['analysis']) => a?.status === 'ok' && (a.summary === undefined || a.summary.length > 0);
 
 // The neighbouring minute of the same hour that has previews, or null at the
 // hour's first or last one (no crossing into another hour).
@@ -46,10 +49,10 @@ export function secondKinds(m: { minute: number; intervalS: number; present: boo
 }
 
 // The hour grid's marks for a minute (spec 2026-09-30-analytics-design): how
-// many events it has (×2, ×3), and whether one of them was analysed (ok).
+// many events it has (×2, ×3), and whether one of them was analysed with a relevant finding.
 export function minuteMarks(m: { minute: number }, events: TimelineEvent[], now: number): { count: number; analysed: boolean } {
   const list = eventsInMinute(m, events, now);
-  return { count: list.length, analysed: list.some((e) => e.analysis?.status === 'ok') };
+  return { count: list.length, analysed: list.some((e) => relevant(e.analysis)) };
 }
 
 // Per tile of the minute, the id of the event whose analysed still it is.
@@ -61,8 +64,9 @@ export function analysedSeconds(m: { minute: number; intervalS: number; present:
   });
 }
 
-// The stills of ok analyses only: a skipped or failed one has a still_ts too
-// (the skip keeps it) but nothing was seen, so its tile isn't marked.
-export function analysedStills(events: { id: number; analysis?: { status: string; stillTs?: number } | null }[]): { eventId: number; stillTs: number }[] {
-  return events.flatMap((e) => (e.analysis?.status === 'ok' && e.analysis.stillTs ? [{ eventId: e.id, stillTs: e.analysis.stillTs }] : []));
+// The stills of ok analyses with a relevant finding: a skipped or failed one
+// has a still_ts too (the skip keeps it) but nothing was seen, so its tile
+// isn't marked.
+export function analysedStills(events: { id: number; analysis?: TimelineEvent['analysis'] }[]): { eventId: number; stillTs: number }[] {
+  return events.flatMap((e) => (relevant(e.analysis) && e.analysis?.stillTs ? [{ eventId: e.id, stillTs: e.analysis.stillTs }] : []));
 }
