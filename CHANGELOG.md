@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Timeline: a minute clicked in the hour grid opens at the top of the page; the open minute has a tinted background, set apart from the hour cards, and is marked in the grid.
+
 ## v2026.09.30.1
 
 - Fix: a real camera's clip pictures were never attached. The camera names the `.jpg` after the event, 3–5 s after the clip (pre-record), and cam-proxy paired them by identical name. A picture now goes to the clip that started last at most 10 s before it, in either arrival order; on startup, stored clips without a picture are paired from the stored pictures. A stored picture is logged (`snapshot_stored`).
