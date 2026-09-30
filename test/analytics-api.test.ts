@@ -33,7 +33,7 @@ describe('analytics API', () => {
     keptImage = image;
     writeFileSync(image, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
     saveAnalysis(c, { event_id: e.id, provider: 'google-vision', status: 'ok', reason: null, still_ts: e.start_ts + 1000, image, requested_at: Date.now(), took_ms: 250,
-      objects: JSON.stringify([{ name: 'Person', score: 0.8, box: { x0: 0.1, y0: 0.1, x1: 0.5, y1: 0.9 } }]), raw: '{"a":1}' });
+      objects: JSON.stringify([{ name: 'Person', score: 0.8, box: { x0: 0.1, y0: 0.1, x1: 0.5, y1: 0.9 } }]), raw: '{"a":1}', summary: null });
     const list = await request(p.proxy.app).get(`/api/cameras/cam1/events?from=0&to=${Date.now()}&limit=10`).set(auth());
     expect(list.body.find((x: { id: number }) => x.id === e.id).analysis).toEqual({ provider: 'google-vision', status: 'ok', reason: null, stillTs: e.start_ts + 1000, objects: [{ name: 'Person', score: 0.8, box: { x0: 0.1, y0: 0.1, x1: 0.5, y1: 0.9 } }] });
     const full = await request(p.proxy.app).get(`/api/cameras/cam1/events/${e.id}/analysis`).set(auth());

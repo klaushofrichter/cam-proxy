@@ -77,4 +77,16 @@ export const MIGRATIONS: string[] = [
     PRIMARY KEY (provider, day)
   );
   `,
+  // 4: the analytics summary (spec 2026-09-30-analytics-in-cams-design): the
+  // persons, vehicles and pets of an analysis; objects that didn't map.
+  `
+  ALTER TABLE analyses ADD COLUMN summary TEXT;
+  CREATE TABLE analytics_unmapped (
+    key TEXT PRIMARY KEY,
+    mid TEXT NOT NULL,
+    name TEXT NOT NULL,
+    count INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL
+  );
+  `,
 ];
