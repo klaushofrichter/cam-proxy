@@ -6,7 +6,7 @@ import { join } from 'path';
 import { promisify } from 'util';
 import { openCatalog } from '../src/catalog/db';
 import { insertEvent, closeEvent } from '../src/catalog/events';
-import { clipById, listClips } from '../src/catalog/clips';
+import { clipById, listClips, setSnapshot } from '../src/catalog/clips';
 import { ClipIndexer, localToUtc, parseClipName } from '../src/clips/indexer';
 import { timeInfoFromGetTime } from '../src/camera/time';
 import { DEFAULTS } from '../src/config/defaults';
@@ -149,6 +149,72 @@ describe('ClipIndexer', () => {
       const row = await indexer.add(upload('Den_00_20260927140301.mp4', readFileSync(clipFile)));
       expect(clipById(catalog, row!.id)!.snapshot).toBe(row!.path.replace(/\.mp4$/, '.jpg'));
     }
+  });
+
+  // Measured on cam1 (2026-09-28 to 30): the camera names the picture after
+  // the event, 3-5 s after the clip's start (its pre-record), never the same.
+  describe('a snapshot named a few seconds after its clip', () => {
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 0xff, 0xd9]);
+
+    it('attaches when it arrives after the clip', async () => {
+      const { indexer, upload, catalog } = setup();
+      const row = await indexer.add(upload('Den_00_20260927140301.mp4', readFileSync(clipFile)));
+      await indexer.add(upload('Den_00_20260927140305.jpg', jpeg));
+      const snap = clipById(catalog, row!.id)!.snapshot!;
+      expect(snap).toMatch(/-\d+\.jpg$/);
+      expect(readFileSync(snap)).toEqual(jpeg);
+    });
+
+    it('attaches when it arrives before the clip', async () => {
+      const { indexer, upload, catalog } = setup();
+      await indexer.add(upload('Den_00_20260927140305.jpg', jpeg));
+      const row = await indexer.add(upload('Den_00_20260927140301.mp4', readFileSync(clipFile)));
+      expect(readFileSync(clipById(catalog, row!.id)!.snapshot!)).toEqual(jpeg);
+    });
+
+    it('attaches across a minute boundary', async () => {
+      const { indexer, upload, catalog } = setup();
+      await indexer.add(upload('Den_00_20260927140504.jpg', jpeg));
+      const row = await indexer.add(upload('Den_00_20260927140458.mp4', readFileSync(clipFile)));
+      expect(clipById(catalog, row!.id)!.snapshot).not.toBeNull();
+    });
+
+    it('leaves a clip alone when the picture is more than 10 s after its start', async () => {
+      const { indexer, upload, catalog } = setup();
+      const row = await indexer.add(upload('Den_00_20260927140301.mp4', readFileSync(clipFile)));
+      await indexer.add(upload('Den_00_20260927140312.jpg', jpeg));
+      expect(clipById(catalog, row!.id)!.snapshot).toBeNull();
+    });
+
+    it('goes to the clip that started last before it (overlapping clips)', async () => {
+      const { indexer, upload, catalog } = setup();
+      const a = await indexer.add(upload('Den_00_20260927140301.mp4', readFileSync(clipFile)));
+      const b = await indexer.add(upload('Den_00_20260927140306.mp4', readFileSync(clipFile)));
+      await indexer.add(upload('Den_00_20260927140309.jpg', jpeg));
+      expect(clipById(catalog, a!.id)!.snapshot).toBeNull();
+      expect(clipById(catalog, b!.id)!.snapshot).not.toBeNull();
+    });
+
+    it('takes the earliest of several pictures, and keeps one it already has', async () => {
+      const { indexer, upload, catalog } = setup();
+      const first = Buffer.concat([jpeg, Buffer.from([1])]);
+      await indexer.add(upload('Den_00_20260927140306.jpg', jpeg));
+      await indexer.add(upload('Den_00_20260927140304.jpg', first));
+      const row = await indexer.add(upload('Den_00_20260927140301.mp4', readFileSync(clipFile)));
+      expect(readFileSync(clipById(catalog, row!.id)!.snapshot!)).toEqual(first);
+      await indexer.add(upload('Den_00_20260927140303.jpg', jpeg)); // a later upload doesn't replace it
+      expect(readFileSync(clipById(catalog, row!.id)!.snapshot!)).toEqual(first);
+    });
+
+    it('links the pictures of clips stored before this fix', async () => {
+      const { indexer, upload, catalog } = setup();
+      const row = await indexer.add(upload('Den_00_20260927140301.mp4', readFileSync(clipFile)));
+      await indexer.add(upload('Den_00_20260927140304.jpg', jpeg));
+      setSnapshot(catalog, row!.id, null); // as the old pairing left it
+      expect(indexer.relinkSnapshots()).toBe(1);
+      expect(clipById(catalog, row!.id)!.snapshot).not.toBeNull();
+      expect(indexer.relinkSnapshots()).toBe(0);
+    });
   });
 
   // Issue #5: in the repeated autumn hour the camera's local name is the

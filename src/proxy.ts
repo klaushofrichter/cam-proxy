@@ -180,6 +180,12 @@ export function createProxy(initial: Loaded): Proxy {
       else {
         const cam = c.id;
         const indexer = new ClipIndexer({ catalog, log, config: () => running, timeInfo: () => client.timeInfo(), dataDir: running.server.dataDir, cam, stored: (bytes) => storage.noteWritten('clips', bytes, 1) });
+        // Pictures stored before they were paired by time (2026-09-30).
+        try {
+          indexer.relinkSnapshots();
+        } catch (err) {
+          logger.warn({ err: (err as Error).message }, 'snapshots_relink_failed');
+        }
         clips = createClipsSide({ config: running, password: loaded.secrets.ftpPassword, indexer, accept: () => !storage.paused() });
       }
     }

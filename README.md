@@ -247,8 +247,15 @@ upload folder. While storage is paused, `STOR` answers 452.
   camera's local time) becomes UTC with the camera's time zone and DST rule
   (`GetTime`), is checked with ffprobe (anything that isn't a video is
   dropped), and is stored as `data/clips/<cam>/YYYY/MM/DD/HHMM-<start>.mp4`.
-  The camera's `.jpg` with the same name becomes the clip's snapshot. A
-  `clip` stream message follows, with the events the clip covers.
+  The camera's `.jpg` becomes the clip's snapshot. The camera names it after
+  the event, 3–5 s after the clip's own name (the clip starts with the
+  pre-record; measured on cam1 2026-09-30), so a picture goes to the clip
+  that started last at most 10 s before it, whichever arrives first; on
+  startup, clips without one are paired from the stored pictures. A `clip`
+  stream message follows, with the events the clip covers. One clip often
+  covers several events: the camera extends a recording while events keep
+  coming, and ends it `postRec` (its "Post-Motion Record", 15 s on cam1)
+  after the last one.
 - **Camera setup:** `POST /control/actions/camera-ftp-setup` writes the
   camera's whole FTP object (the proxy at `ftp.publicHost`, uploads on
   motion and people/vehicle/pet detections, all hours).
@@ -366,7 +373,8 @@ exchanged for the cookie and not stored in the browser.
 - **Events:** the live stream and the last 100 events.
 - **Timeline:** a day of preview sprites, one still per minute, with events
   marked.
-- **Clips:** a day's clips with their snapshots, playable, updating as new
+- **Clips:** a day's clips with their snapshots and the kinds of the events
+  they cover, each once with a count ("motion ×3"), playable, updating as new
   clips arrive.
 - **Settings:** every setting with its source; changes become overrides, and
   can be reset.
