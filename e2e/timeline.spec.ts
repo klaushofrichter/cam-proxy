@@ -22,7 +22,8 @@ test('the timeline shows today’s minutes, and a click shows a still', async ({
   await expect(minute).toBeVisible({ timeout: 10000 });
   await minute.click();
   await expect(page.getByTestId('minute-detail')).toBeVisible();
-  await page.locator('[data-testid="tile"]:not([disabled])').first().click();
+  // Not an analysed tile: that opens the analysis modal (analytics.spec leaves one).
+  await page.locator('[data-testid="tile"]:not([disabled]):not(.analysed)').first().click();
   const img = page.getByTestId('still');
   await expect(img).toBeVisible();
   await expect.poll(() => img.evaluate((el) => (el as HTMLImageElement).naturalWidth), { timeout: 10000 }).toBe(896);
