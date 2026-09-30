@@ -28,6 +28,11 @@ export function closeEvent(c: Catalog, id: number, end_ts: number, reason: 'stat
   return fromDb(r);
 }
 
+export function eventById(c: Catalog, id: number): EventRow | undefined {
+  const r = c.db.prepare('SELECT * FROM events WHERE id = ?').get(id) as DbRow | undefined;
+  return r ? fromDb(r) : undefined;
+}
+
 export function openEvents(c: Catalog, cam: string): EventRow[] {
   return (c.db.prepare('SELECT * FROM events WHERE cam = ? AND end_ts IS NULL ORDER BY start_ts, id').all(cam) as DbRow[]).map(fromDb);
 }

@@ -11,6 +11,7 @@ export interface Status {
   retention: { lastRun: number | null; totals: Record<string, number> };
   storage: { paused: boolean };
   analytics?: UiProviderState[];
+  analyticsUnmapped?: { mid: string; name: string; count: number; lastSeen: number }[];
   ftp: { enabled: boolean; listening: boolean; port: number; tls: boolean; publicHost: string | null; passwordSet: boolean; lastUpload: number | null; lastClip: number | null; clips: number; failures: number };
 }
 export interface Usage { bytes: number; files: number; oldest: number | null; newest: number | null; growthPerDay: number }

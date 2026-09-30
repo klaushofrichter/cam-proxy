@@ -14,6 +14,7 @@ export interface AnalysisRow {
   took_ms: number | null;
   objects: string | null; // JSON [{name, score, box}]
   raw: string | null; // JSON
+  summary: string | null; // JSON SummaryEntry[]
 }
 
 // Stores (or replaces) the result for an event and provider. Null when the
@@ -23,13 +24,14 @@ export function saveAnalysis(c: Catalog, r: Omit<AnalysisRow, 'id'>): AnalysisRo
   if (!exists) return null;
   return c.db
     .prepare(
-      `INSERT INTO analyses (event_id, provider, status, reason, still_ts, image, requested_at, took_ms, objects, raw)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO analyses (event_id, provider, status, reason, still_ts, image, requested_at, took_ms, objects, raw, summary)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (event_id, provider) DO UPDATE SET status = excluded.status, reason = excluded.reason, still_ts = excluded.still_ts,
-         image = excluded.image, requested_at = excluded.requested_at, took_ms = excluded.took_ms, objects = excluded.objects, raw = excluded.raw
+         image = excluded.image, requested_at = excluded.requested_at, took_ms = excluded.took_ms, objects = excluded.objects, raw = excluded.raw,
+         summary = excluded.summary
        RETURNING *`,
     )
-    .get(r.event_id, r.provider, r.status, r.reason, r.still_ts, r.image, r.requested_at, r.took_ms, r.objects, r.raw) as unknown as AnalysisRow;
+    .get(r.event_id, r.provider, r.status, r.reason, r.still_ts, r.image, r.requested_at, r.took_ms, r.objects, r.raw, r.summary) as unknown as AnalysisRow;
 }
 
 export function analysisFor(c: Catalog, eventId: number): AnalysisRow | undefined {
@@ -74,4 +76,51 @@ export function unanalysed(c: Catalog, cam: string, kinds: string[], since: numb
 
 export function analysisImages(c: Catalog): Set<string> {
   return new Set((c.db.prepare('SELECT image FROM analyses WHERE image IS NOT NULL').all() as { image: string }[]).map((r) => r.image));
+}
+
+export interface AnalysisInRange extends AnalysisRow { kind: string; start_ts: number; end_ts: number | null }
+
+// The latest analysis of each event of a camera that starts in [from, to],
+// oldest event first (spec: GET /api/cameras/{cam}/analyses).
+export function analysesInRange(c: Catalog, cam: string, from: number, to: number, limit = 1000): AnalysisInRange[] {
+  return c.db
+    .prepare(
+      `SELECT a.*, e.kind AS kind, e.start_ts AS start_ts, e.end_ts AS end_ts FROM analyses a JOIN events e ON e.id = a.event_id
+       WHERE e.cam = ? AND e.start_ts >= ? AND e.start_ts <= ?
+         AND a.id = (SELECT a2.id FROM analyses a2 WHERE a2.event_id = a.event_id ORDER BY a2.requested_at DESC, a2.id DESC LIMIT 1)
+       ORDER BY e.start_ts, e.id LIMIT ?`,
+    )
+    .all(cam, from, to, Math.min(Math.max(1, limit), 1000)) as unknown as AnalysisInRange[];
+}
+
+export function withoutSummary(c: Catalog): AnalysisRow[] {
+  return c.db.prepare("SELECT * FROM analyses WHERE status = 'ok' AND summary IS NULL ORDER BY id").all() as unknown as AnalysisRow[];
+}
+
+export function setSummary(c: Catalog, id: number, summary: string): void {
+  c.db.prepare('UPDATE analyses SET summary = ? WHERE id = ?').run(summary, id);
+}
+
+// Objects the category map doesn't know, counted per mid (per name when there is none).
+export function countUnmapped(c: Catalog, items: { mid: string; name: string }[], ts: number): void {
+  const st = c.db.prepare(
+    `INSERT INTO analytics_unmapped (key, mid, name, count, last_seen) VALUES (?, ?, ?, 1, ?)
+     ON CONFLICT (key) DO UPDATE SET count = count + 1, last_seen = excluded.last_seen, name = excluded.name`,
+  );
+  for (const i of items) st.run(i.mid || `name:${i.name.toLowerCase()}`, i.mid, i.name, ts);
+}
+
+export function listUnmapped(c: Catalog, limit = 1000): { mid: string; name: string; count: number; lastSeen: number }[] {
+  return (
+    c.db.prepare('SELECT mid, name, count, last_seen FROM analytics_unmapped ORDER BY count DESC, last_seen DESC, name LIMIT ?').all(limit) as {
+      mid: string;
+      name: string;
+      count: number;
+      last_seen: number;
+    }[]
+  ).map((r) => ({ mid: r.mid, name: r.name, count: r.count, lastSeen: r.last_seen }));
+}
+
+export function clearUnmapped(c: Catalog): number {
+  return Number(c.db.prepare('DELETE FROM analytics_unmapped').run().changes);
 }

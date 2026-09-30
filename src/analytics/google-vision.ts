@@ -1,7 +1,7 @@
 import { AnalyticsError, type AnalyticsProvider, type Found } from './providers';
 
 type Vertex = { x?: number; y?: number };
-type Annotation = { name?: unknown; score?: unknown; boundingPoly?: { normalizedVertices?: Vertex[] } };
+type Annotation = { mid?: unknown; name?: unknown; score?: unknown; boundingPoly?: { normalizedVertices?: Vertex[] } };
 
 // Google Cloud Vision, object localization only (1 unit per image). The key
 // goes in X-Goog-Api-Key, never in the URL (it would reach logs).
@@ -41,6 +41,7 @@ export function googleVision(o: { key: string; baseUrl: string }): AnalyticsProv
         const xs = v.map((p) => p.x ?? 0);
         const ys = v.map((p) => p.y ?? 0);
         return {
+          ...(typeof a.mid === 'string' && a.mid ? { mid: a.mid } : {}),
           name: String(a.name ?? 'object'),
           score: typeof a.score === 'number' ? a.score : 0,
           box: xs.length === 0 ? { x0: 0, y0: 0, x1: 0, y1: 0 } : { x0: Math.min(1, ...xs), y0: Math.min(1, ...ys), x1: Math.max(0, ...xs), y1: Math.max(0, ...ys) },
