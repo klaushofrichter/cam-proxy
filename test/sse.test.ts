@@ -23,7 +23,7 @@ async function serve(opts: Partial<{ maxClients: number; queuePerClient: number;
   handler = sseHandler(log, { maxClients: 50, queuePerClient: 1000, pingS: 15, ...opts });
   const app = express();
   app.get('/stream', handler);
-  server = app.listen(0);
+  server = app.listen(0, '127.0.0.1');
   await new Promise((r) => server.once('listening', r));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 }
