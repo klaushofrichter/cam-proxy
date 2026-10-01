@@ -421,7 +421,7 @@ arrive.
 | `DELETE /control/config/{path}` | removes one override |
 | `POST /control/actions/{name}` | `onvif-resubscribe`, `restart` (202, started); `camera-test`, `retention-run` (`{"dryRun":true}` previews); `camera-ftp-setup`, `camera-ftp-test` (409 `not_configured` without `ftp.publicHost` or the FTP password), `camera-ftp-off`; any camera call that fails answers 502 `camera_error` |
 | `GET /control/log?limit` | recent log lines (info and above), redacted; default limit 100, buffer holds the last 500 |
-| `POST /control/login` / `logout`, `GET /control/session` | the admin UI's session cookie (`camproxy_session`, HttpOnly, SameSite=Strict, 12 h; 20 sign-ins per 15 min) |
+| `POST /control/login` / `logout`, `GET /control/session` | the admin UI's session cookie (`camproxy_session`, HttpOnly, SameSite=Strict, 12 h; 40 sign-ins per 15 min) |
 | `POST /control/login-links`, `GET /control/login-link?code=` | a one-time sign-in link (admin token; the code works once, for 60 s, and is kept only in memory): cams opens the UI with it for a signed-in user |
 
 The **admin UI** at `/` signs in with the admin token once; the token is

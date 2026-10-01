@@ -87,6 +87,9 @@ async function cameraCall(res: Response, f: () => Promise<unknown>): Promise<voi
   }
 }
 
+// Sign-ins with the token form per client and 15 minutes (Klaus, 2026-10-01: 40).
+export const LOGIN_ATTEMPTS = 40;
+
 export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnType<typeof createSessionSigner>; links: ReturnType<typeof createLoginLinks>; audit: AuditLog }): express.Router {
   const r = express.Router();
   const flags = (req: express.Request) => `HttpOnly; SameSite=Strict; Path=/${req.secure ? '; Secure' : ''}`;
@@ -114,7 +117,7 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
   // A logout without a valid session changes nothing: one record per IP per 10 min.
   const anonLogouts = new RefusalThrottle();
   const attempts = rateLimit({
-    windowMs: LIMIT_MS, limit: 20, standardHeaders: false, legacyHeaders: false,
+    windowMs: LIMIT_MS, limit: LOGIN_ATTEMPTS, standardHeaders: false, legacyHeaders: false,
     handler: (req, res) => {
       recLimited(req, 'token-form');
       res.status(429).json({ error: 'too_many_attempts' });

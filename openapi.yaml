@@ -212,7 +212,7 @@ paths:
       responses:
         '204': { description: signed in (camproxy_session cookie, HttpOnly, SameSite=Strict, 12 h) }
         '401': { description: wrong token }
-        '429': { description: too many attempts (20 per 15 minutes) }
+        '429': { description: too many attempts (40 per 15 minutes) }
   /control/login-links:
     post:
       summary: A one-time sign-in link for the admin UI (cams mints it for a signed-in user; admin token only)

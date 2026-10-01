@@ -5,6 +5,7 @@ import { join } from 'path';
 import { ADMIN_TOKEN, CLIENT_TOKEN, auth, startProxy } from './helpers/proxy';
 import { startSim } from './helpers/sim';
 import { RefusalThrottle } from '../src/audit/throttle';
+import { LOGIN_ATTEMPTS } from '../src/api/control-api';
 
 let sim: Awaited<ReturnType<typeof startSim>>;
 let p: Awaited<ReturnType<typeof startProxy>>;
@@ -88,11 +89,14 @@ describe('audit records', () => {
     const q = await startProxy(sim, {});
     const logins = () => q.proxy.audit.list({ actions: ['login'], limit: 500 }).records;
     try {
-      for (let i = 0; i < 30; i++) await request(q.base).post('/control/login').send({ token: 'wrong' });
+      // Klaus (2026-10-01): 40 sign-ins per 15 min; the 41st is refused.
+      for (let i = 0; i < LOGIN_ATTEMPTS; i++) expect((await request(q.base).post('/control/login').send({ token: 'wrong' })).status).toBe(401);
+      for (let i = 0; i < 10; i++) await request(q.base).post('/control/login').send({ token: 'wrong' });
       const r = await request(q.base).post('/control/login').send({ token: 'wrong' });
       expect(r.status).toBe(429);
       expect(r.body).toEqual({ error: 'too_many_attempts' });
-      expect(logins().length).toBeLessThanOrEqual(21);
+      expect(LOGIN_ATTEMPTS).toBe(40);
+      expect(logins().length).toBeLessThanOrEqual(LOGIN_ATTEMPTS + 1);
       const limited = logins().filter((x) => (x.cam_proxy as { auth?: { reason?: string } }).auth?.reason === 'rate-limited');
       expect(limited).toHaveLength(1);
       expect(limited[0]).toMatchObject({ event: { outcome: 'failure' }, message: 'Sign-in refused: too many attempts', cam_proxy: { auth: { method: 'token-form', reason: 'rate-limited' } } });
