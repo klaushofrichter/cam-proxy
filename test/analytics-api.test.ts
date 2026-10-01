@@ -3,7 +3,7 @@ import request from 'supertest';
 import { writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { closeEvent, insertEvent } from '../src/catalog/events';
-import { countUnmapped, saveAnalysis } from '../src/catalog/analyses';
+import { analysisFor, countUnmapped, saveAnalysis } from '../src/catalog/analyses';
 import { startSim } from './helpers/sim';
 import { ADMIN_TOKEN, CLIENT_TOKEN, auth, startProxy, until } from './helpers/proxy';
 import { startVisionMock, type VisionMock } from './helpers/vision-mock';
@@ -179,5 +179,48 @@ describe('analytics summary API', () => {
     expect((await request(p.base).delete('/control/analytics/unmapped').set(auth(CLIENT_TOKEN))).status).toBe(403);
     expect((await request(p.base).delete('/control/analytics/unmapped').set(auth(ADMIN_TOKEN))).body).toEqual({ cleared: 1 });
     expect((await request(p.base).get('/control/analytics/unmapped').set(auth(ADMIN_TOKEN))).body).toEqual([]);
+  });
+});
+
+// Issue #52: the proxy's wiring of the service.
+describe('analytics in the proxy', () => {
+  const vision = () => ({ CAMPROXY_GOOGLE_VISION_KEY: 'k-123456789012', CAMPROXY_GOOGLE_VISION_URL: mock.url });
+  const on = { analytics: { googleVision: { enabled: true, monthlyLimit: 10 } }, server: { logLevel: 'silent' } };
+
+  it('a saved analytics setting lifts a bad_key pause; another setting does not', async () => {
+    const svc = p.proxy.analytics as unknown as { paused: unknown };
+    svc.paused = { reason: 'bad_key', until: null };
+    await request(p.base).put('/control/config').set(auth(ADMIN_TOKEN)).send({ sse: { pingS: 16 } });
+    expect(p.proxy.analytics.state()[0].paused).toMatchObject({ reason: 'bad_key' });
+    await request(p.base).put('/control/config').set(auth(ADMIN_TOKEN)).send({ analytics: { googleVision: { dailyCap: 5 } } });
+    expect(p.proxy.analytics.state()[0].paused).toBeNull();
+  });
+
+  it('start() catches up on events of the last 10 minutes that were never analysed', async () => {
+    let q = await startProxy(sim, { settings: on, env: vision() });
+    const e = insertEvent(q.proxy.catalog, { cam: 'cam1', source: 'onvif', kind: 'person', start_ts: Date.now() - 60_000, raw: null });
+    await q.proxy.stop();
+    q = await startProxy(sim, { dir: q.dir, settings: on, env: vision() });
+    try {
+      await until(() => analysisFor(q.proxy.catalog, e.id) !== undefined);
+      expect(analysisFor(q.proxy.catalog, e.id)).toMatchObject({ status: 'skipped', reason: 'no_still' }); // no stills here: skipped, no call
+    } finally {
+      await q.proxy.stop();
+    }
+  });
+
+  it('files analyses under the camera id in force after a restart', async () => {
+    const q = await startProxy(sim, { settings: on, env: vision() });
+    try {
+      await request(q.base).put('/control/config').set(auth(ADMIN_TOKEN)).send({ camera: { id: 'cam9' } });
+      await request(q.base).post('/control/actions/restart').set(auth(ADMIN_TOKEN));
+      await until(async () => (await request(q.base).get('/api/cameras').set(auth())).body[0]?.id === 'cam9');
+      const e = insertEvent(q.proxy.catalog, { cam: 'cam9', source: 'onvif', kind: 'person', start_ts: Date.now() - 60_000, raw: null });
+      q.proxy.log.append('cam9', 'camera-event', { eventId: e.id, kind: 'person', phase: 'start', ts: e.start_ts });
+      await until(() => q.proxy.log.since(0, { types: ['analysis'] }, 10).length > 0);
+      expect(q.proxy.log.since(0, { types: ['analysis'] }, 10)[0]).toMatchObject({ cam: 'cam9', data: { eventId: e.id } });
+    } finally {
+      await q.proxy.stop();
+    }
   });
 });

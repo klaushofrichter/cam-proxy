@@ -230,7 +230,11 @@ export function createProxy(initial: Loaded): Proxy {
   // External analytics: event stills to the provider, within its limits.
   const timeInfo = refreshingTimeInfo(() => client.timeInfo());
   const analytics = new AnalyticsService({
-    catalog, log, cam: running.camera.id, dataDir: running.server.dataDir,
+    catalog, log, dataDir: running.server.dataDir,
+    // Read on use: restart() can change camera.id.
+    get cam() {
+      return running.camera.id;
+    },
     config: () => running,
     secrets: () => ({ googleVisionKey: loaded.secrets.googleVisionKey, googleVisionUrl: loaded.secrets.googleVisionUrl }),
     readStill: (ts) => stills?.store.readStill(ts) ?? Promise.resolve(undefined),
@@ -244,11 +248,13 @@ export function createProxy(initial: Loaded): Proxy {
 
   // New settings from the control API: live ones take effect now.
   const setLoaded = (next: Loaded) => {
+    const analyticsBefore = JSON.stringify(loaded.config.analytics);
     loaded = next;
     for (const p of leafPaths()) if (!needsRestart(p)) setPath(running as unknown as Record<string, unknown>, p, structuredClone(getPath(next.config, p)));
     sse.setOptions(running.sse);
     setLogLevel(running.server.logLevel);
-    analytics.settingsChanged();
+    // Only a change to the analytics settings lifts a bad_key pause.
+    if (JSON.stringify(next.config.analytics) !== analyticsBefore) analytics.settingsChanged();
   };
 
   const access = { tokens: () => loaded.secrets.tokens, adminToken: () => loaded.secrets.adminToken, sessionValid: (v: string | undefined) => sessions.verify(v) };
@@ -423,7 +429,8 @@ export function createProxy(initial: Loaded): Proxy {
       await composer.stop();
       sse.closeAll();
       storage.stop();
-      analytics.stop();
+      // Before the catalog closes: a call in flight is stored, not lost.
+      await analytics.stop();
       const s = server;
       if (s) {
         s.closeAllConnections();

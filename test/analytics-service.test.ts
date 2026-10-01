@@ -76,6 +76,17 @@ describe('local day', () => {
     expect(localDay(Date.parse('2026-12-01T05:59:00Z'), chicago)).toBe('2026-11-30'); // 23:59 CST
     expect(localDay(Date.parse('2026-12-01T06:00:00Z'), chicago)).toBe('2026-12-01');
   });
+
+  // Issue #52: a DST period across New Year (southern hemisphere).
+  it('is the camera-local date when DST spans New Year (Sydney)', () => {
+    const sydney = timeInfoFromGetTime({
+      Dst: { enable: 1, offset: 1, startMon: 10, startWeek: 1, startWeekday: 0, startHour: 2, startMin: 0, startSec: 0, endMon: 4, endWeek: 1, endWeekday: 0, endHour: 3, endMin: 0, endSec: 0 },
+      Time: { year: 2026, mon: 1, day: 15, hour: 9, min: 0, sec: 0, hourFmt: 1, isDst: 1, timeFmt: 'MM/DD/YYYY', timeZone: -36000 },
+    });
+    expect(localDay(Date.parse('2026-01-15T13:30:00Z'), sydney)).toBe('2026-01-16'); // 00:30 AEDT (+11)
+    expect(localDay(Date.parse('2026-12-31T13:30:00Z'), sydney)).toBe('2027-01-01'); // 00:30 AEDT
+    expect(localDay(Date.parse('2026-07-15T13:30:00Z'), sydney)).toBe('2026-07-15'); // 23:30 AEST (+10)
+  });
 });
 
 describe('AnalyticsService', () => {
@@ -216,6 +227,17 @@ describe('AnalyticsService', () => {
     s.onEvent(q);
     await s.idle();
     expect(s.state()[0].paused).toMatchObject({ reason: 'quota', until: now + 3_600_000 });
+
+    // Issue #52: the quota pause ends after the hour, and calls go out again.
+    now += 3_600_000;
+    expect(s.state()[0].paused).toBeNull();
+    answers = ['ok'];
+    const r = event('person', now - 3000);
+    still(now - 2000, 9);
+    s.onEvent(r);
+    await s.idle();
+    expect(analysisFor(c, r.id)).toMatchObject({ status: 'ok' });
+    expect(calls.at(-1)).toBe(9);
   });
 
   // Review focus 1.
@@ -240,9 +262,27 @@ describe('AnalyticsService', () => {
     s.onEvent(e);
     deleteEventsBefore(c, T0 + 1); // retention runs while it is queued
     await s.idle();
+    expect(calls).toHaveLength(0); // issue #52: no call for an event that is gone
+    expect(s.state()[0].month.calls).toBe(0);
     expect(analysisFor(c, e.id)).toBeUndefined();
-    expect(existsSync(join(dir, 'analytics', 'cam1', `${e.id}.jpg`))).toBe(false); // its image copy is removed too
     expect(log.since(0, { types: ['analysis'] }, 10)).toEqual([]); // and nothing is announced
+  });
+
+  it('removes the image copy when the event goes during the call', async () => {
+    still(T0 + 1000, 7);
+    let written = false; // a stream message
+    const s = new AnalyticsService({ ...deps(), provider: () => ({ id: 'google-vision', name: 'Google Vision', async analyze() {
+      deleteEventsBefore(c, T0 + 1); // retention runs during the call
+      return { objects: [], raw: {} };
+    } }) });
+    log.on('message', () => (written = true));
+    const e = event('person');
+    s.onEvent(e);
+    await s.idle();
+    expect(analysisFor(c, e.id)).toBeUndefined();
+    expect(existsSync(join(dir, 'analytics', 'cam1', `${e.id}.jpg`))).toBe(false); // written, then removed
+    expect(written).toBe(false);
+    expect(s.state()[0].month.calls).toBe(1); // the call was made and counts
   });
 
   it('queues the last 10 minutes of unanalysed events again after a restart', async () => {
@@ -335,7 +375,51 @@ describe('AnalyticsService', () => {
     s.onEvent(e);
     await s.idle();
     expect(calls).toHaveLength(1);
-    expect(analysisFor(c, e.id)).toBeUndefined();
+    // Issue #52: the counted attempt is stored, so Status and the event agree.
+    expect(analysisFor(c, e.id)).toMatchObject({ status: 'failed', reason: 'network' });
+  });
+
+  // Issue #52: stop() wakes a retry wait; no second call, the attempt is kept.
+  it('stop() during the retry wait makes no second call and ends the job', async () => {
+    still(T0 + 1000, 7);
+    answers = [new AnalyticsError('network', true)];
+    let wake: () => void = () => {};
+    const s = new AnalyticsService({ ...deps(), sleep: (ms) => new Promise<void>((r) => { wake = () => { now += ms; r(); }; }) });
+    const e = event('person');
+    s.onEvent(e);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(calls).toHaveLength(1); // now in the 30 s wait
+    await s.stop(); // returns without the 30 s passing
+    expect(calls).toHaveLength(1);
+    expect(analysisFor(c, e.id)).toMatchObject({ status: 'failed', reason: 'network' });
+    wake();
+  });
+
+  it('stores the result of a call that was in flight when stop() came', async () => {
+    still(T0 + 1000, 7);
+    let answer: () => void = () => {};
+    const s = new AnalyticsService({ ...deps(), provider: () => ({ id: 'google-vision', name: 'Google Vision', analyze: () => new Promise((r) => { answer = () => r({ objects: [], raw: {} }); }) }) });
+    const e = event('person');
+    s.onEvent(e);
+    await new Promise((r) => setTimeout(r, 10));
+    let stopped = false;
+    const done = s.stop().then(() => (stopped = true));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(stopped).toBe(false); // waits for the call
+    answer();
+    await done;
+    expect(analysisFor(c, e.id)).toMatchObject({ status: 'ok' });
+  });
+
+  it('removes the image copy when the result cannot be stored', async () => {
+    still(T0 + 1000, 7);
+    const s = service();
+    const e = event('person');
+    c.db.exec('DROP TABLE analyses'); // the store fails
+    s.onEvent(e);
+    await s.idle();
+    expect(calls).toHaveLength(1);
+    expect(existsSync(join(dir, 'analytics', 'cam1', `${e.id}.jpg`))).toBe(false);
   });
 
   it('makes no call when switched off while waiting for the still', async () => {

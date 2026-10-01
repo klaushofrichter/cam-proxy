@@ -24,6 +24,13 @@ describe('analyses', () => {
     saveAnalysis(c, row(e.id));
     expect(analysisFor(c, e.id)).toMatchObject({ status: 'ok', reason: null });
     expect(analysesFor(c, [e.id, 999]).size).toBe(1);
+    // Issue #52: one row per event and provider; another provider adds its own.
+    const count = () => (c.db.prepare('SELECT COUNT(*) AS n FROM analyses WHERE event_id = ?').get(e.id) as { n: number }).n;
+    expect(count()).toBe(1);
+    saveAnalysis(c, row(e.id, { provider: 'other', requested_at: 3000 }));
+    expect(count()).toBe(2);
+    expect(analysisFor(c, e.id)).toMatchObject({ provider: 'other' });
+    expect(analysesFor(c, [e.id]).get(e.id)).toMatchObject({ provider: 'other' });
   });
 
   it('drop a result whose event is gone, instead of failing', () => {
@@ -50,6 +57,11 @@ describe('analyses', () => {
     saveAnalysis(c, row(a.id));
     expect(unanalysed(c, 'cam1', ['person'], 5_000).map((e) => e.id)).toEqual([b.id]);
     expect(unanalysed(c, 'cam1', [], 5_000)).toEqual([]);
+    // Boundaries: an event exactly at `since` counts; another camera's doesn't.
+    expect(unanalysed(c, 'cam1', ['person'], 20_000).map((e) => e.id)).toEqual([b.id]);
+    expect(unanalysed(c, 'cam1', ['person'], 20_001)).toEqual([]);
+    insertEvent(c, { cam: 'cam2', source: 'onvif', kind: 'person', start_ts: 30_000, raw: null });
+    expect(unanalysed(c, 'cam1', ['person'], 5_000).map((e) => e.id)).toEqual([b.id]);
   });
 });
 
@@ -63,6 +75,17 @@ describe('usage', () => {
     expect(usageBetween(c, 'google-vision', '2026-10-01', '2026-10-31')).toBe(1);
     expect(usageBetween(c, 'other', '2026-01-01', '2026-12-31')).toBe(0);
     expect(pruneUsage(c, '2026-10-01')).toBe(1);
+  });
+
+  it('includes both end days of a range; prune keeps the day it is given', () => {
+    const c = fresh();
+    for (const d of ['2026-08-31', '2026-09-01', '2026-09-30', '2026-10-01']) addUsage(c, 'google-vision', d);
+    expect(usageBetween(c, 'google-vision', '2026-09-01', '2026-09-30')).toBe(2);
+    expect(usageBetween(c, 'google-vision', '2026-09-30', '2026-09-30')).toBe(1);
+    expect(usageBetween(c, 'google-vision', '2026-10-02', '2026-10-01')).toBe(0);
+    expect(pruneUsage(c, '2026-09-01')).toBe(1);
+    expect(usageBetween(c, 'google-vision', '2026-01-01', '2026-12-31')).toBe(3);
+    expect(pruneUsage(c, '2026-09-01')).toBe(0);
   });
 });
 
