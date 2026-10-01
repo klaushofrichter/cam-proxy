@@ -17,11 +17,11 @@ const ev = (kind: string, start_ts: number, cam = 'cam1') => insertEvent(c, { ca
 
 describe('catalog', () => {
   it('creates the schema once; opening again keeps data and version', () => {
-    expect(c.schemaVersion()).toBe(3);
+    expect(c.schemaVersion()).toBe(4);
     ev('person', 1000);
     c.close();
     c = openCatalog(join(dir, 'catalog.sqlite'));
-    expect(c.schemaVersion()).toBe(3);
+    expect(c.schemaVersion()).toBe(4);
     expect(listEvents(c, { cam: 'cam1' })).toHaveLength(1);
   });
 

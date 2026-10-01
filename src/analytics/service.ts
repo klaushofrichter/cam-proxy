@@ -1,14 +1,16 @@
 import { mkdirSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { Catalog } from '../catalog/db';
-import { addUsage, saveAnalysis, unanalysed, usageBetween } from '../catalog/analyses';
+import { addUsage, countUnmapped, saveAnalysis, setSummary, unanalysed, usageBetween, withoutSummary } from '../catalog/analyses';
+import { eventById } from '../catalog/events';
 import type { Config } from '../config/defaults';
 import type { TimeInfo } from '../camera/time';
 import { logger } from '../log';
 import type { StreamLog } from '../stream/log';
+import { summarize } from './classes';
 import { googleVision } from './google-vision';
 import { localDay } from './local-day';
-import { AnalyticsError, maskKey, PROVIDERS, type AnalyticsProvider, type ProviderId } from './providers';
+import { AnalyticsError, maskKey, PROVIDERS, type AnalyticsProvider, type Found, type ProviderId } from './providers';
 
 const STILL_AFTER_MS = 1000; // the still 1 s after the start: the detection
 const STILL_NEAR_MS = 2000; // else the nearest within ±2 s
@@ -165,15 +167,48 @@ export class AnalyticsService {
   }
 
   private store(job: Job, r: { status: 'ok' | 'skipped' | 'failed'; reason: string | null; stillTs: number | null; image: string | null; tookMs: number | null; objects: unknown; raw: unknown }): void {
+    const sum = r.status === 'ok' && Array.isArray(r.objects) ? summarize(r.objects as Found[]) : { summary: [], unmapped: [] };
     const row = saveAnalysis(this.d.catalog, {
       event_id: job.id, provider: 'google-vision', status: r.status, reason: r.reason, still_ts: r.stillTs, image: r.image,
-      requested_at: this.now(), took_ms: r.tookMs, objects: r.objects === null ? null : JSON.stringify(r.objects), raw: r.raw === null ? null : JSON.stringify(r.raw),
+      requested_at: this.now(), took_ms: r.tookMs, objects: r.objects === null ? null : JSON.stringify(r.objects), raw: r.raw === null ? null : JSON.stringify(r.raw), summary: JSON.stringify(sum.summary),
     });
     if (!row) {
       if (r.image) try { unlinkSync(r.image); } catch { /* already gone */ }
       return;
     }
-    this.d.log.append(this.d.cam, 'analysis', { eventId: job.id, provider: 'google-vision', status: r.status, reason: r.reason, objects: r.objects ?? [] });
+    const ev = eventById(this.d.catalog, job.id);
+    this.d.log.append(this.d.cam, 'analysis', {
+      eventId: job.id, kind: ev?.kind ?? job.kind, start: ev?.start_ts ?? job.start_ts, end: ev?.end_ts ?? null,
+      provider: 'google-vision', status: r.status, reason: r.reason, stillTs: r.stillTs, summary: sum.summary, objects: r.objects ?? [],
+    });
+    // Counted last and guarded: a failing count must not swallow the message.
+    if (sum.unmapped.length) {
+      try {
+        countUnmapped(this.d.catalog, sum.unmapped, this.now());
+      } catch (err) {
+        logger.warn({ err: (err as Error).message, eventId: job.id }, 'analytics_unmapped_count_failed');
+      }
+    }
+  }
+
+  // Analyses stored before summaries existed (or whose summary failed) get
+  // one, from their stored objects. Nothing is counted as unmapped: only new
+  // analyses count, so a restart can't inflate the list.
+  backfillSummaries(): number {
+    let n = 0;
+    for (const a of withoutSummary(this.d.catalog)) {
+      let objects: Found[] = [];
+      try {
+        const parsed: unknown = a.objects ? JSON.parse(a.objects) : [];
+        objects = Array.isArray(parsed) ? (parsed as Found[]) : [];
+      } catch {
+        objects = [];
+      }
+      setSummary(this.d.catalog, a.id, JSON.stringify(summarize(objects).summary));
+      n++;
+    }
+    if (n) logger.info({ cam: this.d.cam, summarised: n }, 'analytics_summaries_backfilled');
+    return n;
   }
 
   private skip(job: Job, reason: string, stillTs: number | null = null): void {

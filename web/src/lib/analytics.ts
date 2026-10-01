@@ -12,7 +12,10 @@ export interface UiProviderState {
   lastError: string | null;
 }
 export interface UiObject { name: string; score: number; box?: { x0: number; y0: number; x1: number; y1: number } }
-export interface UiAnalysis { provider?: string; status: string; reason: string | null; objects: UiObject[] }
+export interface UiSummaryEntry { category: 'person' | 'vehicle' | 'pet'; subtype: string; score: number; box: { x0: number; y0: number; x1: number; y1: number } }
+export interface UiAnalysis { provider?: string; status: string; reason: string | null; objects: UiObject[]; summary?: UiSummaryEntry[] }
+
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 const n = (x: number) => x.toLocaleString('en-US');
 
@@ -35,6 +38,10 @@ export function usageLine(s: UiProviderState): string {
 export function tagText(a: UiAnalysis | null): string | null {
   if (!a) return null;
   if (a.status !== 'ok') return `✦ not analysed (${a.reason ?? a.status})`;
+  if (a.summary) {
+    if (!a.summary.length) return '✦ Vision: nothing relevant';
+    return `✦ Vision: ${a.summary.slice(0, 3).map((e) => `${cap(e.subtype)} ${e.score.toFixed(2)}`).join(', ')}`;
+  }
   if (!a.objects.length) return '✦ Vision: nothing found';
   const top = [...a.objects].sort((x, y) => y.score - x.score).slice(0, 3);
   return `✦ Vision: ${top.map((o) => `${o.name} ${o.score.toFixed(2)}`).join(', ')}`;

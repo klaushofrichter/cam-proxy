@@ -46,6 +46,15 @@
           </dl>
         </div>
       {/each}
+      {#if $status.analyticsUnmapped?.length}
+        <div class="card" data-testid="card-analytics-unmapped">
+          <h3>Analytics · objects seen, not mapped</h3>
+          <p class="muted small">Candidates for the class table (<a href="https://github.com/klaushofrichter/cam-proxy/blob/main/docs/analytics-classes.md" target="_blank" rel="noopener">docs/analytics-classes.md</a>).</p>
+          <dl>
+            {#each $status.analyticsUnmapped as u (u.mid || u.name)}<dt>{u.name}{u.mid ? ` · ${u.mid}` : ''}</dt><dd>{u.count}</dd>{/each}
+          </dl>
+        </div>
+      {/if}
       <div class="card" data-testid="card-stream">
         <h3>Stills</h3>
         <dl>
@@ -107,4 +116,5 @@
   dt { color: var(--muted); } dd { margin: 0; font-family: var(--mono); text-align: right; }
   .ok { color: #22c55e; } .bad { color: var(--danger); }
   .muted { color: var(--muted); }
+  .small { font-size: 13px; margin: 0 0 8px; }
 </style>

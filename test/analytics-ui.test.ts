@@ -16,13 +16,15 @@ describe('analytics UI text', () => {
     expect(usageLine({ ...base, enabled: false })).toBe('not enabled');
   });
 
-  it('writes the Events tag: top three names by score, nothing found, or why not', () => {
-    const o = (name: string, score: number) => ({ name, score });
+  it('writes the Events tag from the summary: subtype and score, best first; "nothing relevant"; or why not', () => {
+    const s = (subtype: string, score: number, category: 'person' | 'vehicle' | 'pet' = 'person') => ({ category, subtype, score, box: { x0: 0, y0: 0, x1: 1, y1: 1 } });
     expect(tagText(null)).toBeNull();
-    expect(tagText({ status: 'ok', reason: null, objects: [o('Car', 0.81), o('Person', 0.9), o('Dog', 0.5), o('Bag', 0.4)] })).toBe('✦ Vision: Person 0.90, Car 0.81, Dog 0.50');
-    expect(tagText({ status: 'ok', reason: null, objects: [] })).toBe('✦ Vision: nothing found');
+    expect(tagText({ status: 'ok', reason: null, objects: [], summary: [s('person', 0.84), s('dog', 0.7, 'pet')] })).toBe('✦ Vision: Person 0.84, Dog 0.70');
+    expect(tagText({ status: 'ok', reason: null, objects: [{ name: 'Ceiling fan', score: 0.9 }], summary: [] })).toBe('✦ Vision: nothing relevant');
     expect(tagText({ status: 'skipped', reason: 'limit', objects: [] })).toBe('✦ not analysed (limit)');
     expect(tagText({ status: 'failed', reason: 'bad_key', objects: [] })).toBe('✦ not analysed (bad_key)');
+    // an older record without a summary falls back to the objects
+    expect(tagText({ status: 'ok', reason: null, objects: [{ name: 'Person', score: 0.9 }] })).toBe('✦ Vision: Person 0.90');
   });
 
   it('parses a limit: a whole number from 0 to max, else null', () => {

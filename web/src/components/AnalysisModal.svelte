@@ -1,19 +1,24 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
-  import type { UiObject } from '../lib/analytics';
+  import type { UiObject, UiSummaryEntry } from '../lib/analytics';
 
   // The analysis of one event (spec 2026-09-30-analytics-design): the image
   // with its boxes, the objects, the camera's event, and the raw answer.
   let { camId, event, onclose }: { camId: string; event: { id: number; kind: string; start: number; end: number | null }; onclose: () => void } = $props();
-  interface Full { provider: string; status: string; reason: string | null; stillTs: number | null; requestedAt: number; tookMs: number | null; objects: UiObject[]; raw: unknown }
+  interface Full { provider: string; status: string; reason: string | null; stillTs: number | null; requestedAt: number; tookMs: number | null; objects: UiObject[]; summary?: UiSummaryEntry[]; raw: unknown }
   let a = $state<Full | null>(null);
   let failed = $state(false);
+  let showAll = $state(false);
+  // The summary's entries by default; every object when asked (or when an older record has no summary).
+  const boxes = $derived(
+    a ? (showAll || !a.summary ? a.objects.map((o) => ({ label: o.name, score: o.score, box: o.box })) : a.summary.map((e) => ({ label: e.subtype.charAt(0).toUpperCase() + e.subtype.slice(1), score: e.score, box: e.box }))) : [],
+  );
   let dialog: HTMLDivElement;
   const base = $derived(`/api/cameras/${encodeURIComponent(camId)}/events/${event.id}`);
   const fmt = (ts: number | null) => (ts === null ? 'now' : new Date(ts).toLocaleTimeString());
   // An object without coordinates arrives as a zero-area box: not drawn.
-  const drawn = (o: UiObject) => (o.box && o.box.x1 > o.box.x0 && o.box.y1 > o.box.y0 ? o.box : null);
+  const drawn = (o: { box?: { x0: number; y0: number; x1: number; y1: number } }) => (o.box && o.box.x1 > o.box.x0 && o.box.y1 > o.box.y0 ? o.box : null);
   onMount(() => {
     dialog.focus();
     api<Full>('GET', `${base}/analysis`).then((r) => (a = r), () => (failed = true));
@@ -22,7 +27,7 @@
     if (e.key === 'Escape') onclose();
     if (e.key === 'Tab') {
       // Keep focus inside the modal.
-      const f = [...dialog.querySelectorAll<HTMLElement>('button, summary, [tabindex="0"]')];
+      const f = [...dialog.querySelectorAll<HTMLElement>('button, summary, input, [tabindex="0"]')];
       if (!f.length) return;
       const i = f.indexOf(document.activeElement as HTMLElement);
       const next = e.shiftKey ? (i <= 0 ? f.length - 1 : i - 1) : (i + 1) % f.length;
@@ -45,19 +50,22 @@
         <div class="figure">
           <img src={`${base}/analysis.jpg`} alt="The analysed still" data-testid="analysis-image" />
           <svg viewBox="0 0 1 1" preserveAspectRatio="none" data-testid="analysis-boxes">
-            {#each a.objects as o, i (i)}
+            {#each boxes as o, i (i)}
               {@const b = drawn(o)}
               {#if b}<rect x={b.x0} y={b.y0} width={b.x1 - b.x0} height={b.y1 - b.y0} vector-effect="non-scaling-stroke" />{/if}
             {/each}
           </svg>
-          {#each a.objects as o, i (i)}
+          {#each boxes as o, i (i)}
             {@const b = drawn(o)}
-            {#if b}<span class="label" style={`left:${b.x0 * 100}%;top:${b.y0 * 100}%`}>{o.name} {o.score.toFixed(2)}</span>{/if}
+            {#if b}<span class="label" style={`left:${b.x0 * 100}%;top:${b.y0 * 100}%`}>{o.label} {o.score.toFixed(2)}</span>{/if}
           {/each}
         </div>
+        {#if a.summary}
+          <label class="small"><input type="checkbox" bind:checked={showAll} data-testid="analysis-show-all" /> Show all objects</label>
+        {/if}
         <table data-testid="analysis-objects">
           <thead><tr><th>object</th><th>score</th></tr></thead>
-          <tbody>{#each a.objects as o, i (i)}<tr><td>{o.name}</td><td>{o.score.toFixed(2)}</td></tr>{:else}<tr><td colspan="2" class="muted">Nothing found.</td></tr>{/each}</tbody>
+          <tbody>{#each boxes as o, i (i)}<tr><td>{o.label}</td><td>{o.score.toFixed(2)}</td></tr>{:else}<tr><td colspan="2" class="muted">{showAll || !a?.summary ? 'Nothing found.' : 'Nothing relevant.'}</td></tr>{/each}</tbody>
         </table>
       {:else}
         <p data-testid="analysis-reason">Not analysed: {a.reason ?? a.status}.</p>

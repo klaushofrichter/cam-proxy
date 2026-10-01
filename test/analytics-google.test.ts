@@ -35,6 +35,13 @@ describe('Google Vision provider', () => {
     expect(r.raw).toEqual({ localizedObjectAnnotations: expect.any(Array) });
   });
 
+  it('passes Google\'s mid through, and leaves it out when there is none', async () => {
+    mock.script = [{ objects: [{ mid: '/m/0k4j', name: 'Car', score: 0.8, vertices: [{ x: 0.1, y: 0.1 }, { x: 0.5, y: 0.5 }] }, { name: 'Dog', score: 0.7, vertices: [{ x: 0.1, y: 0.1 }, { x: 0.5, y: 0.5 }] }] }];
+    const r = await call();
+    expect(r.objects[0]?.mid).toBe('/m/0k4j');
+    expect(r.objects[1]).not.toHaveProperty('mid');
+  });
+
   it('answers no objects as an empty list', async () => {
     mock.script = [{ body: { responses: [{}] } }];
     expect((await call()).objects).toEqual([]);
