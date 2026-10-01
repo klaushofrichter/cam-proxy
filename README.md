@@ -296,6 +296,8 @@ event to Google Vision (object localization) and keeps the objects it finds, a
 second opinion on the camera's label. The admin UI shows it as a "✦ Vision"
 tag on the Events page, a mark on the Timeline's minutes, and a picture with
 boxes. Motion-only events are never analysed.
+How it works end to end (the flow, the summary, unmapped objects, the API,
+privacy and cost): [docs/analytics.md](docs/analytics.md).
 
 - **Settings** (Settings page, or `PUT /control/config`):
   `analytics.kinds.person` (default on), `.vehicle` and `.pet` (off);
