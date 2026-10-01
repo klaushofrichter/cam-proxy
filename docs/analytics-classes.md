@@ -1,5 +1,8 @@
 # Analytics classes
 
+The classes Google Vision's objects are mapped to for the summary. How the
+summary is built and used: [analytics.md](analytics.md).
+
 ## Where the classes come from
 
 Google does not publish the list of objects that object localization can
