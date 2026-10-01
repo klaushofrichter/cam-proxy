@@ -86,6 +86,7 @@
           <dt>Previews</dt><dd>{mb($stats.disk.previews.bytes)}</dd>
           <dt>Clips</dt><dd>{gb($stats.disk.clips.bytes)}</dd>
           <dt>Catalog</dt><dd>{mb($stats.disk.catalog.bytes)}</dd>
+          <dt>Audit log</dt><dd>{mb($stats.disk.audit.bytes)}</dd>
           <dt>Used / budget</dt><dd>{gb($stats.storage.used)} / {gb($stats.storage.budget)}</dd>
           <dt>Disk free</dt><dd>{gb($stats.disk.free)} of {gb($stats.disk.size)}</dd>
           <dt>Days until full</dt><dd>{$stats.storage.daysUntilFull === null ? '—' : Math.round($stats.storage.daysUntilFull)}</dd>

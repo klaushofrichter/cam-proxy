@@ -24,35 +24,63 @@ export function refuseTokenInUrl(req: Request, res: Response, next: NextFunction
   next();
 }
 
-export type Access = 'admin' | 'client' | null;
-export interface AccessDeps { tokens: () => string[]; adminToken: () => string; sessionValid: (v: string | undefined) => boolean }
+export type Access = 'admin' | 'client' | 'audit' | null;
+export type TokenKind = 'none' | 'invalid' | 'client' | 'admin' | 'audit' | 'session';
+export interface AccessInfo { access: Access; viaCookie: boolean; tokenKind: TokenKind }
+export interface AccessDeps {
+  tokens: () => string[];
+  adminToken: () => string;
+  // CAMPROXY_AUDIT_TOKEN: reads GET /control/audit, nothing else.
+  auditToken: () => string | undefined;
+  sessionValid: (v: string | undefined) => boolean;
+  // Every 401/403 answered here, with why (the audit log records them).
+  onRefused?: (req: Request, info: { status: 401 | 403; reason: string; tokenKind: TokenKind }) => void;
+}
+
+// The client's address, without the IPv4-mapped prefix (::ffff:10.0.0.1).
+export function clientIp(req: Request): string {
+  return (req.ip ?? '').replace(/^::ffff:/, '');
+}
 
 // Who is asking: the admin token or an admin UI session is 'admin', a client
-// token is 'client'. `viaCookie` marks a session (writes then need the CSRF
-// header).
-export function accessOf(req: Request, d: AccessDeps): { access: Access; viaCookie: boolean } {
+// token is 'client', the audit token 'audit'. `viaCookie` marks a session
+// (writes then need the CSRF header). `tokenKind` says which credential
+// matched, for the audit log only; answers never tell it.
+export function accessOf(req: Request, d: AccessDeps): AccessInfo {
   const t = bearerOf(req);
-  if (t) {
-    if (tokenMatches(t, [d.adminToken()])) return { access: 'admin', viaCookie: false };
-    if (tokenMatches(t, d.tokens())) return { access: 'client', viaCookie: false };
-    return { access: null, viaCookie: false };
+  if (t !== undefined) {
+    if (tokenMatches(t, [d.adminToken()])) return { access: 'admin', viaCookie: false, tokenKind: 'admin' };
+    if (tokenMatches(t, d.tokens())) return { access: 'client', viaCookie: false, tokenKind: 'client' };
+    const a = d.auditToken();
+    if (a && tokenMatches(t, [a])) return { access: 'audit', viaCookie: false, tokenKind: 'audit' };
+    return { access: null, viaCookie: false, tokenKind: 'invalid' };
   }
-  if (d.sessionValid(readCookie(req.get('cookie'), SESSION_COOKIE))) return { access: 'admin', viaCookie: true };
-  return { access: null, viaCookie: false };
+  if (d.sessionValid(readCookie(req.get('cookie'), SESSION_COOKIE))) return { access: 'admin', viaCookie: true, tokenKind: 'session' };
+  return { access: null, viaCookie: false, tokenKind: 'none' };
 }
 
 const WRITE = new Set(['POST', 'PUT', 'DELETE', 'PATCH']);
 
-// `need`: 'client' lets clients and admins in; 'admin' only admins.
-export function requireAccess(need: 'client' | 'admin', d: AccessDeps): RequestHandler {
+// `need`: 'client' lets clients and admins in; 'admin' only admins;
+// 'audit-read' admins and the audit token, for GET only. The audit token is
+// no client credential: elsewhere it answers like an unknown token (401) or
+// 403 admin_only, so an answer never tells which kind of token matched.
+// Sets res.locals.access to the AccessInfo.
+export function requireAccess(need: 'client' | 'admin' | 'audit-read', d: AccessDeps): RequestHandler {
   return (req, res, next) => {
-    const { access, viaCookie } = accessOf(req, d);
-    if (!access) {
+    const a = accessOf(req, d);
+    res.locals.access = a;
+    const refuse = (status: 401 | 403, reason: string, error: string) => {
+      d.onRefused?.(req, { status, reason, tokenKind: a.tokenKind });
+      res.status(status).json({ error });
+    };
+    if (!a.access || (need === 'client' && a.access === 'audit')) {
       logger.warn({ path: withoutQuery(req.originalUrl) }, 'unauthorized');
-      return void res.status(401).json({ error: 'unauthorized' });
+      return refuse(401, a.tokenKind === 'none' ? 'no-token' : 'wrong-token', 'unauthorized');
     }
-    if (need === 'admin' && access !== 'admin') return void res.status(403).json({ error: 'admin_only' });
-    if (viaCookie && WRITE.has(req.method) && req.get('x-camproxy-ui') !== '1') return void res.status(403).json({ error: 'csrf' });
+    if (need === 'admin' && a.access !== 'admin') return refuse(403, 'admin-only', 'admin_only');
+    if (need === 'audit-read' && ((a.access !== 'admin' && a.access !== 'audit') || req.method !== 'GET')) return refuse(403, 'admin-only', 'admin_only');
+    if (a.viaCookie && WRITE.has(req.method) && req.get('x-camproxy-ui') !== '1') return refuse(403, 'csrf', 'csrf');
     next();
   };
 }

@@ -69,3 +69,8 @@ export function overlappingEvents(c: Catalog, cam: string, from: number, to: num
     (r) => r.id,
   );
 }
+
+// Clips received in [from, to) (the daily audit record).
+export function countClips(c: Catalog, cam: string, from: number, to: number): number {
+  return Number((c.db.prepare('SELECT COUNT(*) AS n FROM clips WHERE cam = ? AND received_at >= ? AND received_at < ?').get(cam, from, to) as { n: number }).n);
+}

@@ -116,6 +116,9 @@ questions".
 
 ## 5. Also
 
+- The cluster Secret may get an optional `CAMPROXY_AUDIT_TOKEN` later, for
+  a poller that reads the audit log (docs/audit-log.md). No action is needed
+  now.
 - On cam2, a camera user `proxy` (admin level): **done** 2026-09-27. It was
   added to `CAMSIM_USERS`, `cam-sim-secrets` synced, and cam2 restarted
   (rollout restart); login as `proxy` verified.

@@ -2,9 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { ADMIN_TOKEN, CLIENT_TOKEN, SIM, SIM_CONTROL_TOKEN, VISION_MOCK_PORT } from './env';
 
 async function signIn(page: Page) {
-  await page.goto('/');
-  await page.getByTestId('token-input').fill(ADMIN_TOKEN);
-  await page.getByTestId('login-submit').click();
+  await page.goto('/'); // signed in by the storageState from auth.setup.ts
   await expect(page.getByTestId('shell')).toBeVisible();
 }
 const calls = async (page: Page) => (await (await page.request.get(`http://127.0.0.1:${VISION_MOCK_PORT}/calls`)).json()).calls as number;
@@ -88,9 +86,10 @@ test('a person event is analysed: Status counts it, Events tags it, the Timeline
   const labels = modal.getByTestId('analysis-label');
   const rows = modal.getByTestId('analysis-object');
   await expect(rects).toHaveCount(1);
-  await expect(labels).toHaveText(['Person 90%']); // the overlay reads percent; the table keeps 0.90
+  await expect(labels).toHaveText(['Person 90%']); // the overlay and the table read percent
   await expect(rows).toHaveCount(1);
-  await expect(rows.first()).toContainText('0.90');
+  await expect(rows.first()).toContainText('90%');
+  await expect(modal.locator('thead th')).toHaveText(['Objects', 'Score']);
   // The summary's row selects, too: its box stays, and clicking again keeps it.
   await rows.first().click();
   await expect(rows.first()).toHaveAttribute('aria-pressed', 'true');

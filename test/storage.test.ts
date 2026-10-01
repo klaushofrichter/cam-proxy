@@ -9,6 +9,7 @@ import { StreamLog } from '../src/stream/log';
 import { Storage } from '../src/storage';
 import { DEFAULTS, type Config } from '../src/config/defaults';
 import { minutePath, MinuteStore } from '../src/stills/store';
+import { AuditLog } from '../src/audit/audit-log';
 import sharp from 'sharp';
 
 const HOUR = 3_600_000;
@@ -223,5 +224,23 @@ describe('storage: clips', () => {
     x.storage.run({});
     expect(x.storage.usage().clips.bytes).toBe(0);
     expect(readdirSync(incoming)).toEqual(['fresh']);
+  });
+});
+
+describe('storage: audit', () => {
+  it('counts the audit folder in usage and the budget, and sweeps its old days by auditDays', () => {
+    const { dir, catalog, log, config, fs } = setup();
+    const auditDir = join(dir, 'audit');
+    const audit = new AuditLog({ dir: auditDir, version: 't', camera: () => 'cam1', now: () => NOW });
+    mkdirSync(auditDir, { recursive: true });
+    for (const t of [NOW - 200 * DAY, NOW - 100 * DAY, NOW]) writeFileSync(join(auditDir, `${new Date(t).toISOString().slice(0, 10)}.jsonl`), 'x'.repeat(100) + '\n');
+    config.retention.auditDays = 90;
+    const s = new Storage({ catalog, log, config: () => config, now: () => NOW, statfs: () => fs, audit });
+    s.recount();
+    expect(s.usage().audit).toMatchObject({ files: 3, bytes: 303 });
+    expect(s.usage().used).toBeGreaterThanOrEqual(303);
+    const run = s.run({ dryRun: false });
+    expect(run.deleted.audit).toBe(2);
+    expect(s.usage().audit.files).toBe(1);
   });
 });

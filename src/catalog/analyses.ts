@@ -133,3 +133,11 @@ export function listUnmapped(c: Catalog, limit = 1000): { mid: string; name: str
 export function clearUnmapped(c: Catalog): number {
   return Number(c.db.prepare('DELETE FROM analytics_unmapped').run().changes);
 }
+
+// Analyses per status of the events that started in [from, to) (the daily audit record).
+export function countAnalysesByStatus(c: Catalog, cam: string, from: number, to: number): Record<string, number> {
+  const rows = c.db
+    .prepare('SELECT a.status AS status, COUNT(*) AS n FROM analyses a JOIN events e ON e.id = a.event_id WHERE e.cam = ? AND e.start_ts >= ? AND e.start_ts < ? GROUP BY a.status')
+    .all(cam, from, to) as { status: string; n: number }[];
+  return Object.fromEntries(rows.map((r) => [r.status, Number(r.n)]));
+}

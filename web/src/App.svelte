@@ -10,6 +10,7 @@
   import Events from './pages/Events.svelte';
   import Timeline from './pages/Timeline.svelte';
   import Clips from './pages/Clips.svelte';
+  import Audit from './pages/Audit.svelte';
   import Settings from './pages/Settings.svelte';
   import Maintenance from './pages/Maintenance.svelte';
 
@@ -33,6 +34,7 @@
         {:else if $page === 'events'}<Events />
         {:else if $page === 'timeline'}<Timeline />
         {:else if $page === 'clips'}<Clips />
+        {:else if $page === 'audit'}<Audit />
         {:else if $page === 'settings'}<Settings />
         {:else}<Maintenance />{/if}
       </main>

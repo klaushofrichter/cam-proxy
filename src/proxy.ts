@@ -5,8 +5,9 @@ import http from 'http';
 import type { AddressInfo } from 'net';
 import { join } from 'path';
 import { openCatalog, type Catalog } from './catalog/db';
-import { clearUnmapped, listUnmapped } from './catalog/analyses';
-import { closeAllOpen } from './catalog/events';
+import { clearUnmapped, countAnalysesByStatus, listUnmapped, usageBetween } from './catalog/analyses';
+import { countClips } from './catalog/clips';
+import { closeAllOpen, countEventsByKind } from './catalog/events';
 import { ReolinkClient } from './camera/client';
 import { splitHost } from './camera/http';
 import { StatusPoller } from './camera/status';
@@ -18,8 +19,11 @@ import { ClipIndexer } from './clips/indexer';
 import { createClipsSide, type ClipsSide } from './clips/side';
 import { EventIntake } from './events/intake';
 import { EventTracker } from './events/tracker';
-import { logger, setLogLevel } from './log';
+import { logger, setLogLevel, withoutQuery } from './log';
 import { Storage } from './storage';
+import { AuditLog } from './audit/audit-log';
+import { IpCap, RefusalThrottle } from './audit/throttle';
+import { DailyAudit } from './audit/daily';
 import { Go2rtc } from './stills/go2rtc';
 import { FrameGrabber, type Frame } from './stills/grabber';
 import { MinuteStore, minuteOf } from './stills/store';
@@ -28,9 +32,9 @@ import { StreamLog, type StreamMessage } from './stream/log';
 import { AnalyticsService } from './analytics/service';
 import { refreshingTimeInfo } from './analytics/time-info';
 import { sseHandler } from './stream/sse';
-import { refuseTokenInUrl, requireAccess } from './api/auth';
+import { clientIp, refuseTokenInUrl, requireAccess, type AccessDeps } from './api/auth';
 import { clientApi } from './api/client-api';
-import { controlApi, sessionRoutes } from './api/control-api';
+import { auditApi, controlApi, sessionRoutes } from './api/control-api';
 import { createMetrics } from './api/metrics';
 import { createSessionSigner } from './api/session';
 import { createLoginLinks } from './api/login-links';
@@ -64,9 +68,10 @@ export interface Proxy {
   readonly clips: ClipsSide | undefined;
   readonly analytics: AnalyticsService;
   storage: Storage;
+  readonly audit: AuditLog;
   start(opts?: { port?: number; host?: string }): Promise<{ port: number }>;
   restart(): Promise<void>;
-  stop(): Promise<void>;
+  stop(opts?: { reason?: string }): Promise<void>;
 }
 
 const getPath = (o: unknown, p: string) => p.split('.').reduce<unknown>((x, k) => (x && typeof x === 'object' ? (x as Record<string, unknown>)[k] : undefined), o);
@@ -104,7 +109,9 @@ export function createProxy(initial: Loaded): Proxy {
   }
 
   const sse = sseHandler(log, running.sse);
-  const storage = new Storage({ catalog, log, config: () => running });
+  // The audit log (spec 2026-10-01-audit-log-design): daily JSON-lines files.
+  const audit = new AuditLog({ dir: join(running.server.dataDir, 'audit'), version: VERSION, camera: () => running.camera.id });
+  const storage = new Storage({ catalog, log, config: () => running, audit });
   storage.recount();
   const sessions = createSessionSigner();
   const links = createLoginLinks();
@@ -246,6 +253,34 @@ export function createProxy(initial: Loaded): Proxy {
     if (m.type === 'camera-event' && m.data.phase === 'start') analytics.onEvent({ id: Number(m.data.eventId), kind: String(m.data.kind), start_ts: Number(m.data.ts) });
   });
 
+  // The daily audit records at 00:05 camera time: storage now, activity of the previous camera day.
+  const daily = new DailyAudit({
+    audit,
+    timeInfo,
+    storage: () => {
+      const u = storage.usage();
+      const clipRows = Number((catalog.db.prepare('SELECT COUNT(*) AS n FROM clips').get() as { n: number }).n);
+      const gb = (b: number) => `${(b / 1e9).toFixed(1)} GB`;
+      return {
+        message: `Storage: ${gb(u.used)} used of ${gb(u.budget)} budget, ${u.stills.files.toLocaleString('en-US')} stills, ${clipRows.toLocaleString('en-US')} clips, ${u.daysUntilFull === null ? 'not filling' : `${Math.round(u.daysUntilFull)} days until full`}`,
+        details: { size: u.size, free: u.free, budget: u.budget, used: u.used, daysUntilFull: u.daysUntilFull, kinds: { stills: u.stills, previews: u.previews, clips: u.clips, catalog: u.catalog, audit: u.audit }, clipRows },
+      };
+    },
+    activity: (day, from, to) => {
+      const cam = running.camera.id;
+      const events = countEventsByKind(catalog, cam, from, to);
+      const total = Object.values(events).reduce((a, b) => a + b, 0);
+      const clipCount = countClips(catalog, cam, from, to);
+      // Usage days are camera days (localDay); month to date as of the reported day.
+      const vision = { day: usageBetween(catalog, 'google-vision', day, day), monthToDate: usageBetween(catalog, 'google-vision', `${day.slice(0, 7)}-01`, day), monthlyLimit: running.analytics.googleVision.monthlyLimit };
+      const analyses = countAnalysesByStatus(catalog, cam, from, to);
+      return {
+        message: `Activity ${day}: ${total} events (${Object.entries(events).map(([k, n]) => `${k} ${n}`).join(', ') || 'none'}), ${clipCount} clips, Vision ${vision.monthToDate} of ${vision.monthlyLimit} this month`,
+        details: { events: { total, byKind: events }, clips: clipCount, analytics: { vision, analyses }, stream: { clients: sse.clients() } },
+      };
+    },
+  });
+
   // New settings from the control API: live ones take effect now.
   const setLoaded = (next: Loaded) => {
     const analyticsBefore = JSON.stringify(loaded.config.analytics);
@@ -257,7 +292,30 @@ export function createProxy(initial: Loaded): Proxy {
     if (JSON.stringify(next.config.analytics) !== analyticsBefore) analytics.settingsChanged();
   };
 
-  const access = { tokens: () => loaded.secrets.tokens, adminToken: () => loaded.secrets.adminToken, sessionValid: (v: string | undefined) => sessions.verify(v) };
+  // An `auth-refused` record per source IP and path per 10 minutes; the
+  // refusals in between are counted into the next record.
+  // The key is the path with numbers and ids replaced (numbered stills and
+  // previews are one key), and at most 60 records per IP per 10 minutes.
+  const refusals = new RefusalThrottle();
+  const refusalsPerIp = new IpCap(60);
+  const access: AccessDeps = {
+    tokens: () => loaded.secrets.tokens,
+    adminToken: () => loaded.secrets.adminToken,
+    auditToken: () => loaded.secrets.auditToken,
+    sessionValid: (v: string | undefined) => sessions.verify(v),
+    onRefused: (req, info) => {
+      const ip = clientIp(req);
+      // At most 256 characters in the record, the message and the throttle key.
+      const full = withoutQuery(req.originalUrl);
+      const path = full.length > 256 ? `${full.slice(0, 256)}…` : full;
+      const t = refusals.take(ip, path.replace(/\d{6,}|[0-9a-f]{16,}/gi, ':n'));
+      if (!t.record) return;
+      const c = refusalsPerIp.take(ip);
+      if (!c.record) return;
+      t.suppressed += c.suppressed;
+      audit.write({ action: 'auth-refused', category: ['authentication'], type: ['denied'], outcome: 'failure', ip, userAgent: req.get('user-agent'), message: `Refused ${req.method} ${path} (${info.reason})`, ecs: { http: { request: { method: req.method } }, url: { path } }, details: { auth: { tokenKind: info.tokenKind, reason: info.reason, ...(t.suppressed ? { suppressed: t.suppressed } : {}) } } });
+    },
+  };
   const app = express();
   app.disable('x-powered-by');
   // Far above real use (the UI, cams, a scraper); stops a flood. SSE is one
@@ -275,9 +333,13 @@ export function createProxy(initial: Loaded): Proxy {
   app.get('/metrics', async (_req, res) => {
     res.type(metrics.registry.contentType).send(await metrics.registry.metrics());
   });
-  app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links }));
+  app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit }));
   app.use('/api', refuseTokenInUrl, requireAccess('client', access), composeApi({ config: () => running, catalog, composer, stillsIn: (f, t) => stills?.store.listStills(f, t) ?? [], paused: () => storage.paused(), font }));
   app.use('/api', refuseTokenInUrl, requireAccess('client', access), clientApi({ config: () => running, catalog, status: () => status, sse, stills: () => stills }));
+  // The audit log: admins and the audit token, GET only. The access check is
+  // on the route inside the router; other /control paths pass on untouched
+  // to the admin-only routes below.
+  app.use('/control', refuseTokenInUrl, auditApi({ audit, guard: requireAccess('audit-read', access) }));
   app.use(
     '/control',
     refuseTokenInUrl,
@@ -312,6 +374,7 @@ export function createProxy(initial: Loaded): Proxy {
         off: () => cameraFtpOff(client),
       },
       storage,
+      audit,
       analytics: () => analytics.state(),
       unmapped: { list: (limit) => listUnmapped(catalog, limit), clear: () => clearUnmapped(catalog) },
       sseClients: () => sse.clients(),
@@ -368,6 +431,7 @@ export function createProxy(initial: Loaded): Proxy {
 
   let server: http.Server | undefined;
   let restarting: Promise<void> | undefined;
+  let stopPromise: Promise<void> | undefined;
   const proxy: Proxy = {
     get loaded() {
       return loaded;
@@ -384,6 +448,7 @@ export function createProxy(initial: Loaded): Proxy {
     },
     sse,
     storage,
+    audit,
     get stills() {
       return stills;
     },
@@ -409,6 +474,12 @@ export function createProxy(initial: Loaded): Proxy {
         logger.warn({ err: (err as Error).message }, 'analytics_backfill_failed');
       }
       analytics.catchUp();
+      // The newest start or stop: a start means the last run did not stop cleanly.
+      const prev = audit.find((r) => r.event.action === 'proxy-start' || r.event.action === 'proxy-stop', 400);
+      const uncleanStop = prev?.event.action === 'proxy-start';
+      const previousStop = prev && !uncleanStop ? prev['@timestamp'] : null;
+      audit.write({ action: 'proxy-start', category: ['process'], type: ['start'], outcome: 'success', user: 'system', message: `cam-proxy ${VERSION} started`, details: { config: { camera: running.camera.id, stills: running.stills.enabled, ftp: running.ftp.enabled, analytics: running.analytics.googleVision.enabled }, previousStop, uncleanStop } });
+      daily.start();
       logger.info({ port, camera: running.camera.id, version: VERSION }, 'cam_proxy_started');
       return { port };
     },
@@ -423,7 +494,16 @@ export function createProxy(initial: Loaded): Proxy {
       })();
       return restarting;
     },
-    async stop() {
+    // Idempotent: a second call (two signals) joins the first and writes nothing.
+    stop(opts: { reason?: string } = {}) {
+      stopPromise ??= doStop(opts);
+      return stopPromise;
+    },
+  };
+  async function doStop(opts: { reason?: string }): Promise<void> {
+      daily.stop();
+      // First, while everything is still open.
+      audit.write({ action: 'proxy-stop', category: ['process'], type: ['end'], outcome: 'success', user: 'system', message: `cam-proxy stopping${opts.reason ? ` (${opts.reason})` : ''}`, details: { reason: opts.reason ?? 'stop' } });
       await restarting;
       clearInterval(sweeper);
       sse.closeAll();
@@ -443,7 +523,6 @@ export function createProxy(initial: Loaded): Proxy {
       await clips?.stop();
       await client.logout();
       catalog.close();
-    },
-  };
+  }
   return proxy;
 }

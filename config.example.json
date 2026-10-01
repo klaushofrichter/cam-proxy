@@ -48,6 +48,7 @@
     "previewsDays": 14,
     "clipsDays": 7,
     "eventsDays": 30,
+    "auditDays": 90,
     "streamLogDays": 7,
     "intervalMin": 60
   },

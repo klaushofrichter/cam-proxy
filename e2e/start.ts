@@ -36,14 +36,14 @@ async function main() {
   const loaded = loadConfig({ CAMPROXY_GOOGLE_VISION_KEY: VISION_KEY, CAMPROXY_GOOGLE_VISION_URL: vision.url, CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: 'e2e-proxy-pw', CAMPROXY_FTP_PASSWORD: FTP_PASSWORD }, { cwd: dir });
   const proxy = createProxy(loaded);
   await proxy.start({ port: PROXY_PORT, host: '127.0.0.1' });
-  const stop = async () => {
-    await proxy.stop();
+  const stop = async (sig: string) => {
+    await proxy.stop({ reason: sig });
     await sim.close();
     await vision.close();
     process.exit(0);
   };
-  process.once('SIGINT', () => void stop());
-  process.once('SIGTERM', () => void stop());
+  process.once('SIGINT', () => void stop('SIGINT'));
+  process.once('SIGTERM', () => void stop('SIGTERM'));
 }
 
 void main();

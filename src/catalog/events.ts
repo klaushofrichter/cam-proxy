@@ -58,3 +58,9 @@ export function closeAllOpen(c: Catalog, cam: string, at: number, reason: 'resta
   const rows = c.db.prepare('UPDATE events SET end_ts = MAX(start_ts, ?), end_reason = ? WHERE cam = ? AND end_ts IS NULL RETURNING *').all(at, reason, cam) as DbRow[];
   return rows.map(fromDb);
 }
+
+// Events per kind that started in [from, to) (the daily audit record).
+export function countEventsByKind(c: Catalog, cam: string, from: number, to: number): Record<string, number> {
+  const rows = c.db.prepare('SELECT kind, COUNT(*) AS n FROM events WHERE cam = ? AND start_ts >= ? AND start_ts < ? GROUP BY kind').all(cam, from, to) as { kind: string; n: number }[];
+  return Object.fromEntries(rows.map((r) => [r.kind, Number(r.n)]));
+}

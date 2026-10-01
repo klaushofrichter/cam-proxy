@@ -68,6 +68,7 @@ export const SETTINGS: Node = {
     previewsDays: int(1, 365, 'days of preview sprites'),
     clipsDays: int(1, 365, 'days of clips'),
     eventsDays: int(1, 3650, 'days of events'),
+    auditDays: int(1, 3650, 'days of the audit log'),
     streamLogDays: int(1, 365, 'days of the SSE stream log'),
     intervalMin: int(1, 1440, 'minutes between storage runs'),
   },

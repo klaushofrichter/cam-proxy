@@ -19,5 +19,7 @@ services:
       CAMPROXY_CAMERA_PASSWORD: ${CAMPROXY_CAMERA_PASSWORD:?set in .env}
       CAMPROXY_FTP_PASSWORD: ${CAMPROXY_FTP_PASSWORD:-}
       CAMPROXY_GOOGLE_VISION_KEY: ${CAMPROXY_GOOGLE_VISION_KEY:-}
+      # Optional: read-only access to GET /control/audit (docs/audit-log.md).
+      CAMPROXY_AUDIT_TOKEN: ${CAMPROXY_AUDIT_TOKEN:-}
     volumes:
       - ${CAMPROXY_DATA:-./data}:/data
