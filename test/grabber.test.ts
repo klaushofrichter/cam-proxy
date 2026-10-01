@@ -35,6 +35,35 @@ describe('nextStamp', () => {
       if (ts !== null) expect(ts).toBeLessThanOrEqual(now + S / 4);
     }
   });
+  it('keeps consecutive slots when the stream delivers a second late, then catches up (#61)', () => {
+    // Measured on cam-sim's RTSP (4 s keyframe grid): ffmpeg's 1 fps output
+    // arrives at +0, +1.0, +2.0, then +2.2 s (a second of frames comes in a
+    // burst), then +4.0. Every output frame is its own stream second.
+    const replay = (arrivals: number[]) => {
+      let last = -1;
+      const stamps: number[] = [];
+      for (const now of arrivals) {
+        const ts = nextStamp(last, now, S);
+        if (ts === null) continue;
+        expect(ts).toBeLessThanOrEqual(now + S / 4); // never into the future
+        stamps.push((last = ts));
+      }
+      return stamps;
+    };
+    // Arrivals from a failing run (ms since a whole second): start-up pair,
+    // then the 1 s / 1 s / 0.2 s / 1.8 s cycle.
+    const failing = [38_409, 38_606, 40_402, 41_405, 42_400, 42_605, 44_499, 45_496, 46_500, 46_701, 48_495, 49_497, 50_498, 50_707, 52_499, 53_501];
+    expect(replay(failing).length).toBe(failing.length - 1); // only the start-up pair shares a slot
+    // Any phase against the clock, with up to 0.3 s of extra delay under load.
+    for (let phase = 0; phase < 1000; phase += 50) {
+      for (const load of [0, 300]) {
+        const arrivals = Array.from({ length: 24 }, (_, k) => 100_000 + phase + k * 1000 + ((k + 1) % 4 ? 800 : 0) + (k % 3) * (load / 2));
+        const stamps = replay(arrivals);
+        const gaps = stamps.slice(3).map((x, i) => x - stamps[i + 2]);
+        expect(gaps.every((g) => g === S), `phase ${phase} load ${load}: ${gaps}`).toBe(true);
+      }
+    }
+  });
   it('resyncs to the clock after a stall, and starts on the clock', () => {
     expect(nextStamp(11_000, 20_500, S)).toBe(20_000);
     expect(nextStamp(-1, 20_500, S)).toBe(20_000);

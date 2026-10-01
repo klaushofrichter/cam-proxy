@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Stills: a camera stream that holds back a second of frames and then delivers them at once (cam-sim does every 4 s) no longer leaves a missing still every few seconds; frames up to 2.5 s late keep their own second.
 - Events: an event that starts right after the proxy subscribes to the camera's events again (after a camera restart, a network blip or the restart action) is no longer taken for the initial state and lost. Each event kind now starts at its own camera message time when several arrive in one pull.
 - Analytics: set or override the Google Vision key on the Settings page (or `PUT /control/secrets/google-vision-key`). It is used from the next call on and lifts an invalid-key pause. It is kept in memory only, never saved, logged or returned: a restart of the proxy restores the configured key, or none. The card says "Manual key active (AIza…wXyZ)" while it is in use, the provider state reports `keySource` (`env`, `manual`, `none`), and each set is an audit record, `secret-override`, with the masked key.
 
