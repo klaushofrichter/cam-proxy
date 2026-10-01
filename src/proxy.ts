@@ -21,9 +21,9 @@ import { EventIntake } from './events/intake';
 import { EventTracker } from './events/tracker';
 import { logger, setLogLevel, withoutQuery } from './log';
 import { Storage } from './storage';
-import { AuditLog } from './audit/audit-log';
+import { AuditLog, cut } from './audit/audit-log';
 import { IpCap, RefusalThrottle } from './audit/throttle';
-import { DailyAudit } from './audit/daily';
+import { DailyAudit, storageMessage } from './audit/daily';
 import { Go2rtc } from './stills/go2rtc';
 import { FrameGrabber, type Frame } from './stills/grabber';
 import { MinuteStore, minuteOf } from './stills/store';
@@ -260,9 +260,8 @@ export function createProxy(initial: Loaded): Proxy {
     storage: () => {
       const u = storage.usage();
       const clipRows = Number((catalog.db.prepare('SELECT COUNT(*) AS n FROM clips').get() as { n: number }).n);
-      const gb = (b: number) => `${(b / 1e9).toFixed(1)} GB`;
       return {
-        message: `Storage: ${gb(u.used)} used of ${gb(u.budget)} budget, ${u.stills.files.toLocaleString('en-US')} stills, ${clipRows.toLocaleString('en-US')} clips, ${u.daysUntilFull === null ? 'not filling' : `${Math.round(u.daysUntilFull)} days until full`}`,
+        message: storageMessage({ used: u.used, budget: u.budget, stills: u.stills.files, clipRows, daysUntilFull: u.daysUntilFull }),
         details: { size: u.size, free: u.free, budget: u.budget, used: u.used, daysUntilFull: u.daysUntilFull, kinds: { stills: u.stills, previews: u.previews, clips: u.clips, catalog: u.catalog, audit: u.audit }, clipRows },
       };
     },
@@ -307,7 +306,7 @@ export function createProxy(initial: Loaded): Proxy {
       const ip = clientIp(req);
       // At most 256 characters in the record, the message and the throttle key.
       const full = withoutQuery(req.originalUrl);
-      const path = full.length > 256 ? `${full.slice(0, 256)}…` : full;
+      const path = full.length > 256 ? `${cut(full, 256)}…` : full;
       const t = refusals.take(ip, path.replace(/\d{6,}|[0-9a-f]{16,}/gi, ':n'));
       if (!t.record) return;
       const c = refusalsPerIp.take(ip);
@@ -331,18 +330,19 @@ export function createProxy(initial: Loaded): Proxy {
   app.use(express.json({ limit: '64kb' }));
   app.get('/health', (_req, res) => void res.json({ ok: true, version: VERSION }));
   app.get('/metrics', async (_req, res) => {
-    res.type(metrics.registry.contentType).send(await metrics.registry.metrics());
+    res.type(metrics.registry.contentType).send(await metrics.render());
   });
   app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit }));
-  app.use('/api', refuseTokenInUrl, requireAccess('client', access), composeApi({ config: () => running, catalog, composer, stillsIn: (f, t) => stills?.store.listStills(f, t) ?? [], paused: () => storage.paused(), font }));
-  app.use('/api', refuseTokenInUrl, requireAccess('client', access), clientApi({ config: () => running, catalog, status: () => status, sse, stills: () => stills }));
-  // The audit log: admins and the audit token, GET only. The access check is
+  // Tokens never travel in URLs: checked once per request, before any access check.
+  app.use(['/api', '/control'], refuseTokenInUrl);
+  app.use('/api', requireAccess('client', access), composeApi({ config: () => running, catalog, composer, stillsIn: (f, t) => stills?.store.listStills(f, t) ?? [], paused: () => storage.paused(), font }));
+  app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, status: () => status, sse, stills: () => stills }));
+  // The audit log: admins and the audit token, GET (and HEAD) only. The access check is
   // on the route inside the router; other /control paths pass on untouched
   // to the admin-only routes below.
-  app.use('/control', refuseTokenInUrl, auditApi({ audit, guard: requireAccess('audit-read', access) }));
+  app.use('/control', auditApi({ audit, guard: requireAccess('audit-read', access) }));
   app.use(
     '/control',
-    refuseTokenInUrl,
     requireAccess('admin', access),
     controlApi({
       loaded: () => loaded,

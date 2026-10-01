@@ -39,6 +39,17 @@ describe('audit API', () => {
     expect((await request(p.base).get('/control/audit').set(auth('unknown-token-'.padEnd(40, 'q')))).status).toBe(401);
   });
 
+  // #78: Express answers HEAD with the GET route; the guard let only GET through.
+  it('answers HEAD like GET for admins and the audit token, still refusing the client token', async () => {
+    for (const t of [ADMIN_TOKEN, AUDIT_TOKEN]) {
+      const r = await request(p.base).head('/control/audit').set(auth(t));
+      expect(r.status).toBe(200);
+      expect(r.headers['content-type']).toMatch(/application\/x-ndjson/);
+    }
+    expect((await request(p.base).head('/control/audit').set(auth(CLIENT_TOKEN))).status).toBe(403);
+    expect((await request(p.base).head('/control/audit')).status).toBe(401);
+  });
+
   // Review 2026-10-01: the access check sits on the handler's own route, so
   // every path Express routes to it (case, trailing slash, encoding) is guarded.
   it('guards every spelling of the path that reaches the handler', async () => {

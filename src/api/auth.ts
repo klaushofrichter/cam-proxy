@@ -62,7 +62,7 @@ export function accessOf(req: Request, d: AccessDeps): AccessInfo {
 const WRITE = new Set(['POST', 'PUT', 'DELETE', 'PATCH']);
 
 // `need`: 'client' lets clients and admins in; 'admin' only admins;
-// 'audit-read' admins and the audit token, for GET only. The audit token is
+// 'audit-read' admins and the audit token, for GET (and HEAD) only. The audit token is
 // no client credential: elsewhere it answers like an unknown token (401) or
 // 403 admin_only, so an answer never tells which kind of token matched.
 // Sets res.locals.access to the AccessInfo.
@@ -79,7 +79,8 @@ export function requireAccess(need: 'client' | 'admin' | 'audit-read', d: Access
       return refuse(401, a.tokenKind === 'none' ? 'no-token' : 'wrong-token', 'unauthorized');
     }
     if (need === 'admin' && a.access !== 'admin') return refuse(403, 'admin-only', 'admin_only');
-    if (need === 'audit-read' && ((a.access !== 'admin' && a.access !== 'audit') || req.method !== 'GET')) return refuse(403, 'admin-only', 'admin_only');
+    // HEAD too: Express answers it with the GET route, without the body.
+    if (need === 'audit-read' && ((a.access !== 'admin' && a.access !== 'audit') || (req.method !== 'GET' && req.method !== 'HEAD'))) return refuse(403, 'admin-only', 'admin_only');
     if (a.viaCookie && WRITE.has(req.method) && req.get('x-camproxy-ui') !== '1') return refuse(403, 'csrf', 'csrf');
     next();
   };

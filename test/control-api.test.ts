@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import request from 'supertest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
@@ -182,5 +182,26 @@ describe('metrics', () => {
       expect(r.text).toContain(name);
     }
     expect(r.text).not.toContain(CLIENT_TOKEN);
+  });
+
+  // #78: usage() scans the data folders; one scrape measures once, not once per gauge.
+  it('measures storage once per scrape', async () => {
+    const spy = vi.spyOn(p.proxy.storage, 'usage');
+    try {
+      expect((await request(p.base).get('/metrics')).status).toBe(200);
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe('token in the URL', () => {
+  it('is refused on the control and audit routes too, before the access check', async () => {
+    for (const path of ['/control/status?token=x', '/control/audit?access_token=x', '/control/actions/restart?token=x']) {
+      const r = await (path.includes('restart') ? request(p.base).post(path) : request(p.base).get(path)).set(auth(ADMIN_TOKEN));
+      expect([r.status, r.body], path).toEqual([400, { error: 'token_in_url' }]);
+    }
+    expect((await request(p.base).get('/control/status?token=x')).status).toBe(400); // no credential at all
   });
 });

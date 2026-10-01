@@ -1,5 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
-import { PROXY_PORT } from './e2e/env';
+import { PROXY_PORT, STATE_FILE } from './e2e/env';
 
 export default defineConfig({
   testDir: 'e2e',
@@ -9,7 +9,7 @@ export default defineConfig({
   use: { baseURL: `http://127.0.0.1:${PROXY_PORT}`, ...devices['Desktop Chrome'], channel: 'chrome' },
   projects: [
     { name: 'setup', testMatch: /auth\.setup\.ts/ },
-    { name: 'e2e', dependencies: ['setup'], testIgnore: /auth\.setup\.ts/, use: { storageState: 'e2e/.auth/state.json' } },
+    { name: 'e2e', dependencies: ['setup'], testIgnore: /auth\.setup\.ts/, use: { storageState: STATE_FILE } },
   ],
   webServer: {
     command: 'npx tsx e2e/start.ts',

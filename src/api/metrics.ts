@@ -27,42 +27,45 @@ export function eventsStored(c: Catalog): Record<string, number> {
 export function createMetrics(s: MetricsSources) {
   const registry = new Registry();
   const cam = () => s.config().camera.id;
+  // usage() scans the data folders: one scrape (render) measures once for all gauges.
+  let scrape: ReturnType<Storage['usage']> | undefined;
+  const usage = () => scrape ?? s.storage.usage();
   const g = (name: string, help: string, labelNames: string[], collect: (this: Gauge) => void) =>
     new Gauge({ name: `camproxy_${name}`, help, labelNames, registers: [registry], collect });
 
   const kinds = ['catalog', 'stills', 'previews', 'clips', 'audit'] as const;
   g('disk_bytes', 'Bytes on disk by kind', ['kind'], function () {
-    const u = s.storage.usage();
+    const u = usage();
     for (const k of kinds) this.set({ kind: k }, u[k].bytes);
   });
   g('disk_files', 'Files on disk by kind', ['kind'], function () {
-    const u = s.storage.usage();
+    const u = usage();
     for (const k of kinds) this.set({ kind: k }, u[k].files);
   });
   g('disk_free_bytes', 'Free bytes on the data disk', [], function () {
-    this.set(s.storage.usage().free);
+    this.set(usage().free);
   });
   g('disk_size_bytes', 'Size of the data disk', [], function () {
-    this.set(s.storage.usage().size);
+    this.set(usage().size);
   });
   g('storage_budget_bytes', 'Size budget for the data', [], function () {
-    this.set(s.storage.usage().budget);
+    this.set(usage().budget);
   });
   g('storage_growth_bytes_per_day', 'Bytes written per day (3-day average)', ['kind'], function () {
-    const u = s.storage.usage();
+    const u = usage();
     for (const k of ['stills', 'previews', 'clips'] as const) this.set({ kind: k }, u[k].growthPerDay);
   });
   g('storage_days_until_full', 'Projected days until the budget is reached (-1: not growing)', [], function () {
-    this.set(s.storage.usage().daysUntilFull ?? -1);
+    this.set(usage().daysUntilFull ?? -1);
   });
   g('storage_writing_paused', '1 while free space is below the floor', [], function () {
     this.set(s.storage.paused() ? 1 : 0);
   });
   g('stills_minutes_stored', 'Minute packs of stills on disk', ['cam'], function () {
-    this.set({ cam: cam() }, s.storage.usage().stills.files);
+    this.set({ cam: cam() }, usage().stills.files);
   });
   g('previews_stored', 'Preview sprite sheets on disk', ['cam'], function () {
-    this.set({ cam: cam() }, Math.round(s.storage.usage().previews.files / 2));
+    this.set({ cam: cam() }, Math.round(usage().previews.files / 2));
   });
   g('frame_grabber_up', '1 while stills arrive', ['cam'], function () {
     this.set({ cam: cam() }, s.stills()?.grabber.up() ? 1 : 0);
@@ -111,6 +114,15 @@ export function createMetrics(s: MetricsSources) {
 
   return {
     registry,
+    // The Prometheus text, with one storage measurement for the whole scrape.
+    render: async (): Promise<string> => {
+      scrape = s.storage.usage();
+      try {
+        return await registry.metrics();
+      } finally {
+        scrape = undefined;
+      }
+    },
     onResubscribe: () => resubscribes.inc({ cam: cam() }),
     onStill: (ts: number) => (stillsTotal.inc({ cam: cam() }), lastStill.set({ cam: cam() }, ts / 1000)),
     onStillMissing: () => stillsMissing.inc({ cam: cam() }),
