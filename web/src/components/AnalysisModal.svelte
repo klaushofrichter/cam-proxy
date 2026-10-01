@@ -44,46 +44,50 @@
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div class="backdrop" onclick={(e) => e.target === e.currentTarget && onclose()}>
   <div class="modal" role="dialog" aria-modal="true" aria-label="Analysis" tabindex="-1" bind:this={dialog} onkeydown={onkey} data-testid="analysis-modal">
-    <div class="head">
+    <div class="head" data-testid="analysis-head">
       <h3>✦ Analysis · {event.kind} {fmt(event.start)}–{fmt(event.end)}</h3>
       <button onclick={onclose} aria-label="Close" data-testid="analysis-close">✕</button>
     </div>
-    {#if failed}<p class="muted">Could not load the analysis.</p>{:else if !a}<p class="muted" data-testid="analysis-loading">Loading…</p>{/if}
-    {#if a}
-      {#if a.status === 'ok'}
-        <div class="figure">
-          <img src={`${base}/analysis.jpg`} alt="The analysed still" data-testid="analysis-image" />
-          <svg viewBox="0 0 1 1" preserveAspectRatio="none" data-testid="analysis-boxes">
+    <!-- The body scrolls inside the frame, so the scrollbar can't paint over its corners. -->
+    <div class="body" data-testid="analysis-body">
+      {#if failed}<p class="muted">Could not load the analysis.</p>{:else if !a}<p class="muted" data-testid="analysis-loading">Loading…</p>{/if}
+      {#if a}
+        {#if a.status === 'ok'}
+          <div class="figure">
+            <img src={`${base}/analysis.jpg`} alt="The analysed still" data-testid="analysis-image" />
+            <svg viewBox="0 0 1 1" preserveAspectRatio="none" data-testid="analysis-boxes">
+              {#each boxes as o, i (i)}
+                {@const b = drawn(o)}
+                {#if b}<rect x={b.x0} y={b.y0} width={b.x1 - b.x0} height={b.y1 - b.y0} vector-effect="non-scaling-stroke" />{/if}
+              {/each}
+            </svg>
             {#each boxes as o, i (i)}
               {@const b = drawn(o)}
-              {#if b}<rect x={b.x0} y={b.y0} width={b.x1 - b.x0} height={b.y1 - b.y0} vector-effect="non-scaling-stroke" />{/if}
+              {#if b}<span class="label" style={`left:${b.x0 * 100}%;top:${b.y0 * 100}%`}>{o.label} {o.score.toFixed(2)}</span>{/if}
             {/each}
-          </svg>
-          {#each boxes as o, i (i)}
-            {@const b = drawn(o)}
-            {#if b}<span class="label" style={`left:${b.x0 * 100}%;top:${b.y0 * 100}%`}>{o.label} {o.score.toFixed(2)}</span>{/if}
-          {/each}
-        </div>
-        {#if a.summary}
-          <label class="small"><input type="checkbox" bind:checked={showAll} data-testid="analysis-show-all" /> Show all objects</label>
+          </div>
+          {#if a.summary}
+            <label class="small"><input type="checkbox" bind:checked={showAll} data-testid="analysis-show-all" /> Show all objects</label>
+          {/if}
+          <table data-testid="analysis-objects">
+            <thead><tr><th>object</th><th>score</th></tr></thead>
+            <tbody>{#each boxes as o, i (i)}<tr><td>{o.label}</td><td>{o.score.toFixed(2)}</td></tr>{:else}<tr><td colspan="2" class="muted">{showAll || !a?.summary ? 'Nothing found.' : 'Nothing relevant.'}</td></tr>{/each}</tbody>
+          </table>
+        {:else}
+          <p data-testid="analysis-reason">Not analysed: {a.reason ?? a.status}.</p>
         {/if}
-        <table data-testid="analysis-objects">
-          <thead><tr><th>object</th><th>score</th></tr></thead>
-          <tbody>{#each boxes as o, i (i)}<tr><td>{o.label}</td><td>{o.score.toFixed(2)}</td></tr>{:else}<tr><td colspan="2" class="muted">{showAll || !a?.summary ? 'Nothing found.' : 'Nothing relevant.'}</td></tr>{/each}</tbody>
-        </table>
-      {:else}
-        <p data-testid="analysis-reason">Not analysed: {a.reason ?? a.status}.</p>
+        <p class="muted small" data-testid="analysis-meta">{a.provider} · {a.status} · {new Date(a.requestedAt).toLocaleString()}{a.tookMs !== null ? ` · ${(a.tookMs / 1000).toFixed(1)} s` : ''}{a.stillTs !== null ? ` · still ${new Date(a.stillTs).toLocaleTimeString()}` : ''}</p>
+        {#if a.raw !== null}<details><summary>Raw answer</summary><pre>{JSON.stringify(a.raw, null, 2)}</pre></details>{/if}
       {/if}
-      <p class="muted small" data-testid="analysis-meta">{a.provider} · {a.status} · {new Date(a.requestedAt).toLocaleString()}{a.tookMs !== null ? ` · ${(a.tookMs / 1000).toFixed(1)} s` : ''}{a.stillTs !== null ? ` · still ${new Date(a.stillTs).toLocaleTimeString()}` : ''}</p>
-      {#if a.raw !== null}<details><summary>Raw answer</summary><pre>{JSON.stringify(a.raw, null, 2)}</pre></details>{/if}
-    {/if}
+    </div>
   </div>
 </div>
 
 <style>
   .backdrop { position: fixed; inset: 0; background: rgb(0 0 0 / 0.5); display: grid; place-items: center; z-index: 50; padding: 16px; }
-  .modal { background: var(--surface); border: 1px solid #a855f7; border-radius: var(--radius); padding: 16px; width: min(960px, 100%); max-height: 90vh; overflow: auto; display: grid; gap: 10px; }
-  .head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .modal { background: var(--surface); border: 1px solid #a855f7; border-radius: var(--radius); width: min(960px, 100%); max-height: 90vh; overflow: hidden; display: flex; flex-direction: column; }
+  .head { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 16px 16px 10px; flex: none; }
+  .body { overflow: auto; min-height: 0; padding: 0 16px 16px; display: grid; gap: 10px; }
   h3 { margin: 0; font-size: 16px; }
   .figure { position: relative; line-height: 0; }
   .figure img { width: 100%; border-radius: 6px; background: #111; }

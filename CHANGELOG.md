@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Analysis modal: the purple frame keeps its rounded corners when the content is long ("Show all objects"); the body scrolls inside the frame and the title stays in place.
+
 ## v2026.10.01.1
 
 - Pi: `compose.yaml` gives the container 20 s to stop, time to end an encode and store a Vision call in flight.

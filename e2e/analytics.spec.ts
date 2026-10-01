@@ -84,6 +84,14 @@ test('a person event is analysed: Status counts it, Events tags it, the Timeline
   await modal.getByTestId('analysis-show-all').check();
   await expect(modal.getByTestId('analysis-boxes').locator('rect')).toHaveCount(2);
   await expect.poll(() => modal.getByTestId('analysis-image').evaluate((i) => (i as HTMLImageElement).naturalWidth)).toBe(896);
+  // The frame (border, rounded corners) doesn't scroll; the body inside it does,
+  // so the scrollbar can't paint over the corners.
+  await page.setViewportSize({ width: 1280, height: 600 });
+  const body = modal.getByTestId('analysis-body');
+  await expect.poll(() => body.evaluate((b) => b.scrollHeight > b.clientHeight)).toBe(true);
+  expect(await modal.evaluate((m) => getComputedStyle(m).overflow)).toBe('hidden');
+  expect(await modal.evaluate((m) => m.scrollHeight <= m.clientHeight)).toBe(true);
+  expect(await modal.evaluate((m) => (m.firstElementChild as HTMLElement).dataset.testid === 'analysis-head')).toBe(true);
   await page.keyboard.press('Escape');
   await expect(modal).toHaveCount(0);
   await expect(tag).toBeFocused(); // focus returns to the opener (issue #52)
