@@ -16,7 +16,7 @@ export interface Config {
     maxOpenMin: number;
   };
   retention: {
-    stillsDays: number; previewsDays: number; clipsDays: number; eventsDays: number;
+    stillsDays: number; previewsDays: number; clipsDays: number; eventsDays: number; auditDays: number;
     streamLogDays: number; intervalMin: number;
   };
   storage: {
@@ -46,7 +46,7 @@ export const DEFAULTS: Config = {
     poll: { enabled: true, intervalS: 2, afterOnvifDownS: 60 },
     maxOpenMin: 10,
   },
-  retention: { stillsDays: 7, previewsDays: 14, clipsDays: 7, eventsDays: 30, streamLogDays: 7, intervalMin: 60 },
+  retention: { stillsDays: 7, previewsDays: 14, clipsDays: 7, eventsDays: 30, auditDays: 90, streamLogDays: 7, intervalMin: 60 },
   storage: { maxPercent: 85, minFreeBytes: 2 * 1024 ** 3, keepHours: { stills: 24, clips: 24, previews: 72 } },
   sse: { maxClients: 50, queuePerClient: 1000, pingS: 15 },
   composition: {},
@@ -62,6 +62,7 @@ export interface Secrets {
   adminToken: string;
   cameraPassword: string;
   ftpPassword?: string;
+  auditToken?: string; // CAMPROXY_AUDIT_TOKEN: reads GET /control/audit only
   googleVisionKey?: string;
   googleVisionUrl: string; // not a secret; read with them (default Google's)
 }

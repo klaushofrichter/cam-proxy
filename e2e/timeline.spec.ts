@@ -2,9 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { ADMIN_TOKEN, SIM, SIM_CONTROL_TOKEN } from './env';
 
 async function signIn(page: Page) {
-  await page.goto('/');
-  await page.getByTestId('token-input').fill(ADMIN_TOKEN);
-  await page.getByTestId('login-submit').click();
+  await page.goto('/'); // signed in by the storageState from auth.setup.ts
   await expect(page.getByTestId('shell')).toBeVisible();
 }
 

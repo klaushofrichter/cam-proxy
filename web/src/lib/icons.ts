@@ -31,6 +31,7 @@ export const ICONS = {
   playback: 'M4 5h16v14H4zM10 9v6l5-3z',
   sim: 'M9 3h6M10 3v5l-5 9a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3',
   download: 'M12 4v11m0 0-4-4m4 4 4-4M5 20h14',
+  audit: 'M7 3h8l4 4v14H7zM14 3v5h5M10 14l2 2 3-4',
   bolt: 'M13 2 4 14h7l-1 8 9-12h-7z',
 } as const;
 

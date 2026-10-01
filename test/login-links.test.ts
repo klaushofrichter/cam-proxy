@@ -3,6 +3,7 @@ import request from 'supertest';
 import { startSim } from './helpers/sim';
 import { startProxy, auth, CLIENT_TOKEN, ADMIN_TOKEN } from './helpers/proxy';
 import { createLoginLinks } from '../src/api/login-links';
+import { LOGIN_ATTEMPTS } from '../src/api/control-api';
 
 // One-time sign-in links (Klaus, 2026-09-28): cams, holding the admin token,
 // mints a code server to server; the browser redeems it for a UI session.
@@ -75,7 +76,7 @@ describe('login links over HTTP', () => {
       expect(r.status).toBe(302);
       expect(r.headers.location).toBe('/?link=expired');
     }
-    // The token login's own 20 attempts are untouched by those.
+    // The token login's own attempts are untouched by those.
     expect((await request(p.base).post('/control/login').send({ token: 'x' })).status).toBe(401);
   });
 });
@@ -95,7 +96,7 @@ describe('server.trustProxy', () => {
     const p = await startProxy(sim, { settings });
     try {
       const codes: number[] = [];
-      for (let i = 0; i < 21; i++) codes.push((await request(p.base).post('/control/login').set('X-Forwarded-For', `10.0.0.${i + 1}`).send({ token: 'wrong' })).status);
+      for (let i = 0; i <= LOGIN_ATTEMPTS; i++) codes.push((await request(p.base).post('/control/login').set('X-Forwarded-For', `10.0.0.${i + 1}`).send({ token: 'wrong' })).status);
       return codes;
     } finally {
       await p.proxy.stop();

@@ -18,7 +18,7 @@ async function main(): Promise<void> {
   await proxy.start();
   const shutdown = (sig: string) => {
     logger.info({ sig }, 'cam_proxy_stopping');
-    void proxy.stop().then(() => process.exit(0));
+    void proxy.stop({ reason: sig }).then(() => process.exit(0));
   };
   process.once('SIGINT', () => shutdown('SIGINT'));
   process.once('SIGTERM', () => shutdown('SIGTERM'));

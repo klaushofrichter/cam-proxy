@@ -101,4 +101,24 @@ describe('sync-secrets.sh', () => {
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/CAMPROXY_CAMERA_PASSWORD/);
   });
+
+  it('passes the optional audit token to the cluster when set, and needs nothing when not', () => {
+    const without = setup();
+    const a = without.run('--only', 'kube');
+    expect(a.status).toBe(0);
+    expect(without.log('kubectl')).not.toContain('CAMPROXY_AUDIT_TOKEN');
+
+    const AUDIT = 'audit-tok-SECRET-4';
+    const withIt = setup(`CAMPROXY_AUDIT_TOKEN=${AUDIT}`);
+    const dry = withIt.run('--dry-run', '--only', 'kube');
+    expect(dry.stdout).toMatch(/CAMPROXY_FTP_PASSWORD, CAMPROXY_AUDIT_TOKEN/);
+    noValues(dry.stdout + dry.stderr);
+    const r = withIt.run('--only', 'kube');
+    expect(r.status).toBe(0);
+    noValues(r.stdout + r.stderr);
+    expect(r.stdout + r.stderr).not.toContain(AUDIT);
+    const argv = withIt.log('kubectl').split('\n').filter((l) => l.startsWith('ARGV'));
+    for (const l of argv) expect(l).not.toContain(AUDIT);
+    expect(withIt.log('kubectl')).toContain(`CAMPROXY_AUDIT_TOKEN=${AUDIT}`); // in the env-file, piped to apply
+  });
 });

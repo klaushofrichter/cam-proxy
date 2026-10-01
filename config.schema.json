@@ -298,6 +298,12 @@
           "maximum": 3650,
           "description": "days of events"
         },
+        "auditDays": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3650,
+          "description": "days of the audit log"
+        },
         "streamLogDays": {
           "type": "integer",
           "minimum": 1,

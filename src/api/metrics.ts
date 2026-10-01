@@ -30,7 +30,7 @@ export function createMetrics(s: MetricsSources) {
   const g = (name: string, help: string, labelNames: string[], collect: (this: Gauge) => void) =>
     new Gauge({ name: `camproxy_${name}`, help, labelNames, registers: [registry], collect });
 
-  const kinds = ['catalog', 'stills', 'previews', 'clips'] as const;
+  const kinds = ['catalog', 'stills', 'previews', 'clips', 'audit'] as const;
   g('disk_bytes', 'Bytes on disk by kind', ['kind'], function () {
     const u = s.storage.usage();
     for (const k of kinds) this.set({ kind: k }, u[k].bytes);
@@ -102,7 +102,7 @@ export function createMetrics(s: MetricsSources) {
   lastStill.set({ cam: cam() }, 0);
   const retentionLast = new Gauge({ name: 'camproxy_retention_last_run_timestamp_seconds', help: 'Last retention run', registers: [registry] });
   resubscribes.inc({ cam: cam() }, 0);
-  for (const kind of ['events', 'streamLog']) retentionDeleted.inc({ kind }, 0);
+  for (const kind of ['events', 'streamLog', 'audit']) retentionDeleted.inc({ kind }, 0);
 
   s.log.on('message', (m: StreamMessage) => {
     sseMessages.inc({ type: m.type });

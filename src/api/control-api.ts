@@ -11,7 +11,9 @@ import { logBuffer, logger } from '../log';
 import type { ProviderState } from '../analytics/service';
 import type { Storage } from '../storage';
 import type { StreamLog } from '../stream/log';
-import { tokenMatches } from './auth';
+import { AuditQueryError, type AuditLog, type Outcome } from '../audit/audit-log';
+import { clientIp, tokenMatches } from './auth';
+import { RefusalThrottle } from '../audit/throttle';
 import { eventsStored } from './metrics';
 import { readCookie, SESSION_COOKIE, SESSION_MS, type createSessionSigner } from './session';
 import type { createLoginLinks } from './login-links';
@@ -48,6 +50,7 @@ export interface ControlDeps {
     off: () => Promise<unknown>;
   };
   storage: Storage;
+  audit: AuditLog;
   analytics: () => ProviderState[];
   unmapped: { list(limit?: number): { mid: string; name: string; count: number; lastSeen: number }[]; clear(): number };
   sseClients: () => number;
@@ -79,33 +82,88 @@ async function cameraCall(res: Response, f: () => Promise<unknown>): Promise<voi
     res.json(await f());
   } catch (err) {
     logger.warn({ err: (err as Error).message }, 'camera_action_failed');
+    res.locals.errorCode = 'camera_error';
     res.status(502).json({ error: 'camera_error', detail: (err as Error).message });
   }
 }
 
-export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnType<typeof createSessionSigner>; links: ReturnType<typeof createLoginLinks> }): express.Router {
+// Sign-ins with the token form per client and 15 minutes (Klaus, 2026-10-01: 40).
+export const LOGIN_ATTEMPTS = 40;
+
+export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnType<typeof createSessionSigner>; links: ReturnType<typeof createLoginLinks>; audit: AuditLog }): express.Router {
   const r = express.Router();
   const flags = (req: express.Request) => `HttpOnly; SameSite=Strict; Path=/${req.secure ? '; Secure' : ''}`;
-  const attempts = rateLimit({ windowMs: 15 * 60_000, limit: 20, standardHeaders: false, legacyHeaders: false, message: { error: 'too_many_attempts' } });
+  // A `login` audit record; never the token or the code, only how and why.
+  const MESSAGES = {
+    'token-form': { ok: 'Admin signed in with the admin token', refused: 'Sign-in with the admin token refused' },
+    'login-link': { ok: 'Admin signed in with a one-time link', refused: 'One-time link refused (used or expired)' },
+  } as const;
+  const rec = (req: express.Request, outcome: Outcome, method: 'token-form' | 'login-link', reason?: string, suppressed = 0) =>
+    d.audit.write({
+      action: 'login', category: ['authentication'], type: ['start'], outcome,
+      ...(outcome === 'success' ? { user: 'admin' } : {}),
+      ip: clientIp(req), userAgent: req.get('user-agent'),
+      message: reason === 'rate-limited' ? 'Sign-in refused: too many attempts' : MESSAGES[method][outcome === 'success' ? 'ok' : 'refused'],
+      details: { auth: { method, ...(reason ? { reason } : {}), ...(suppressed ? { suppressed } : {}) } },
+    });
+  // express-rate-limit calls the handler for every request over the limit:
+  // one `rate-limited` record per IP per limiter window, the rest counted.
+  const LIMIT_MS = 15 * 60_000;
+  const limited = new RefusalThrottle(LIMIT_MS);
+  const recLimited = (req: express.Request, method: 'token-form' | 'login-link') => {
+    const t = limited.take(clientIp(req), method === 'token-form' ? 'login-rate-limited' : 'login-link-rate-limited');
+    if (t.record) rec(req, 'failure', method, 'rate-limited', t.suppressed);
+  };
+  // A logout without a valid session changes nothing: one record per IP per 10 min.
+  const anonLogouts = new RefusalThrottle();
+  const attempts = rateLimit({
+    windowMs: LIMIT_MS, limit: LOGIN_ATTEMPTS, standardHeaders: false, legacyHeaders: false,
+    handler: (req, res) => {
+      recLimited(req, 'token-form');
+      res.status(429).json({ error: 'too_many_attempts' });
+    },
+  });
   // A one-time link from cams (POST /control/login-links): a UI session, then
   // the UI. A used or expired code lands on the token login instead.
   // Its own limit (a 192-bit code can't be guessed; this only bounds work),
   // so link attempts never lock out the token login, and a limited browser
   // lands on that login instead of a bare JSON error (review, 2026-09-28).
-  const linkAttempts = rateLimit({ windowMs: 15 * 60_000, limit: 200, standardHeaders: false, legacyHeaders: false, handler: (_req, res) => void res.redirect(302, '/?link=expired') });
+  const linkAttempts = rateLimit({
+    windowMs: LIMIT_MS, limit: 200, standardHeaders: false, legacyHeaders: false,
+    handler: (req, res) => {
+      recLimited(req, 'login-link');
+      res.redirect(302, '/?link=expired');
+    },
+  });
   r.get('/login-link', linkAttempts, (req, res) => {
-    if (!d.links.consume(typeof req.query.code === 'string' ? req.query.code : undefined)) return void res.redirect(302, '/?link=expired');
+    if (!d.links.consume(typeof req.query.code === 'string' ? req.query.code : undefined)) {
+      rec(req, 'failure', 'login-link', 'link-used-or-expired');
+      return void res.redirect(302, '/?link=expired');
+    }
+    rec(req, 'success', 'login-link');
     res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${d.sessions.issue()}; Max-Age=${SESSION_MS / 1000}; ${flags(req)}`);
     res.redirect(302, '/');
   });
   r.post('/login', attempts, (req, res) => {
     const token = req.body?.token;
-    if (typeof token !== 'string' || !tokenMatches(token, [d.adminToken()])) return void res.status(401).json({ error: 'unauthorized' });
+    if (typeof token !== 'string' || !tokenMatches(token, [d.adminToken()])) {
+      rec(req, 'failure', 'token-form', 'wrong-token');
+      return void res.status(401).json({ error: 'unauthorized' });
+    }
+    rec(req, 'success', 'token-form');
     res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${d.sessions.issue()}; Max-Age=${SESSION_MS / 1000}; ${flags(req)}`);
     res.status(204).end();
   });
   r.get('/session', (req, res) => void res.json({ loggedIn: d.sessions.verify(readCookie(req.get('cookie'), SESSION_COOKIE)) }));
   r.post('/logout', (req, res) => {
+    const valid = d.sessions.verify(readCookie(req.get('cookie'), SESSION_COOKIE));
+    const ip = clientIp(req);
+    const base = { action: 'logout', category: ['authentication'], type: ['end'], outcome: 'success' as const, ip, userAgent: req.get('user-agent') };
+    if (valid) d.audit.write({ ...base, user: 'admin', message: 'Admin signed out' });
+    else {
+      const t = anonLogouts.take(ip, 'logout-without-session');
+      if (t.record) d.audit.write({ ...base, message: 'Sign-out without a session', details: { auth: { reason: 'no-session', ...(t.suppressed ? { suppressed: t.suppressed } : {}) } } });
+    }
     res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Max-Age=0; ${flags(req)}`);
     res.status(204).end();
   });
@@ -121,7 +179,11 @@ export function controlApi(d: ControlDeps): express.Router {
   };
 
   // A one-time sign-in link for a signed-in cams user (admin token only).
-  r.post('/login-links', (_req, res) => void res.status(201).json(d.links.issue()));
+  r.post('/login-links', (req, res) => {
+    const link = d.links.issue();
+    d.audit.write({ action: 'login-link-issued', category: ['authentication'], type: ['creation'], outcome: 'success', user: 'admin', ip: clientIp(req), userAgent: req.get('user-agent'), message: 'One-time sign-in link issued' });
+    res.status(201).json(link);
+  });
 
   r.get('/status', (_req, res) => {
     res.json({
@@ -145,7 +207,7 @@ export function controlApi(d: ControlDeps): express.Router {
   r.get('/stats', (_req, res) => {
     const u = d.storage.usage();
     res.json({
-      disk: { catalog: u.catalog, stills: u.stills, previews: u.previews, clips: u.clips, free: u.free, size: u.size },
+      disk: { catalog: u.catalog, audit: u.audit, stills: u.stills, previews: u.previews, clips: u.clips, free: u.free, size: u.size },
       events: { stored: eventsStored(d.catalog) },
       stream: { rows: d.log.count(), lastId: d.log.lastId() },
       sse: { clients: d.sseClients() },
@@ -154,25 +216,54 @@ export function controlApi(d: ControlDeps): express.Router {
   });
 
   r.get('/config', (_req, res) => void res.json(configView(d.loaded(), d.running())));
+  // A `config-change` record: the changed leaf settings, old → new. Secret
+  // values are redacted by AuditLog by the setting's name. A refused change
+  // (400) writes nothing.
+  const recordChanges = (req: express.Request, before: Config) => {
+    const after = d.loaded().config;
+    const changes = leafPaths().map((p) => ({ key: p, from: get(before, p), to: get(after, p) })).filter((c) => JSON.stringify(c.from) !== JSON.stringify(c.to));
+    if (changes.length) d.audit.write({ action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', user: 'admin', ip: clientIp(req), userAgent: req.get('user-agent'), message: `Settings changed: ${changes.map((c) => c.key).join(', ')}`, details: { changes } });
+  };
   r.put('/config', (req, res) => {
+    const before = d.loaded().config;
     try {
       d.setLoaded(applyOverrides(d.loaded(), req.body ?? {}));
     } catch (err) {
       return invalid(res, err);
     }
+    recordChanges(req, before);
     res.json(configView(d.loaded(), d.running()));
   });
   r.delete('/config/:path', (req, res) => {
+    const before = d.loaded().config;
     try {
       d.setLoaded(removeOverride(d.loaded(), req.params.path));
     } catch (err) {
       return invalid(res, err);
     }
+    recordChanges(req, before);
     res.json(configView(d.loaded(), d.running()));
   });
 
   r.post('/actions/:name', async (req, res) => {
-    switch (req.params.name) {
+    const name = req.params.name;
+    // A `control-action` record with the result, once the answer is sent or
+    // the client went away ('close' fires in both cases; 'finish' only in the
+    // first). Not for restart (recorded as proxy-restart) or a retention
+    // preview (dryRun changes nothing).
+    if (name !== 'restart' && !(name === 'retention-run' && req.body?.dryRun === true)) {
+      res.on('close', () => {
+        const done = res.writableFinished;
+        const ok = done && res.statusCode < 400;
+        const result = !done ? 'aborted' : ok ? 'ok' : String((res.locals.errorCode as string | undefined) ?? res.statusCode);
+        d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: !done ? 'unknown' : ok ? 'success' : 'failure', user: 'admin', ip: clientIp(req), userAgent: req.get('user-agent'), message: `Control action ${name}: ${result}`, details: { action: name, result, requestedBy: res.locals.access?.viaCookie ? 'session' : 'token' } });
+      });
+    }
+    const fail = (status: number, error: string, detail?: string) => {
+      res.locals.errorCode = error;
+      res.status(status).json({ error, ...(detail ? { detail } : {}) });
+    };
+    switch (name) {
       case 'onvif-resubscribe':
         d.resubscribe();
         return void res.status(202).end();
@@ -183,17 +274,18 @@ export function controlApi(d: ControlDeps): express.Router {
       case 'camera-ftp-setup':
       case 'camera-ftp-test': {
         const t = d.cameraFtp.target();
-        if (!t.server) return void res.status(409).json({ error: 'not_configured', detail: 'ftp.publicHost is not set' });
-        if (!t.password) return void res.status(409).json({ error: 'not_configured', detail: 'CAMPROXY_FTP_PASSWORD is not set' });
-        return void (await cameraCall(res, async () => (req.params.name === 'camera-ftp-setup' ? { ftp: await d.cameraFtp.setup(t) } : d.cameraFtp.test(t))));
+        if (!t.server) return fail(409, 'not_configured', 'ftp.publicHost is not set');
+        if (!t.password) return fail(409, 'not_configured', 'CAMPROXY_FTP_PASSWORD is not set');
+        return void (await cameraCall(res, async () => (name === 'camera-ftp-setup' ? { ftp: await d.cameraFtp.setup(t) } : d.cameraFtp.test(t))));
       }
       case 'camera-ftp-off':
         return void (await cameraCall(res, async () => ({ ftp: await d.cameraFtp.off() })));
       case 'restart':
+        d.audit.write({ action: 'proxy-restart', category: ['process'], type: ['change'], outcome: 'success', user: 'admin', ip: clientIp(req), userAgent: req.get('user-agent'), message: 'Restart requested through the control API', details: { requestedBy: res.locals.access?.viaCookie ? 'session' : 'token' } });
         d.restart().catch((err: Error) => logger.error({ err: err.message }, 'restart_failed'));
         return void res.status(202).end();
       default:
-        return void res.status(404).json({ error: 'not_found' });
+        return fail(404, 'not_found');
     }
   });
 
@@ -202,5 +294,38 @@ export function controlApi(d: ControlDeps): express.Router {
     res.json(logBuffer.recent(Number.isInteger(limit) && limit > 0 ? limit : 100));
   });
 
+  return r;
+}
+
+// GET /control/audit (spec 2026-10-01-audit-log-design): ECS JSON lines,
+// newest first with ?before, oldest first with ?after. Mounted on /control
+// before the admin-only routes. `guard` (requireAccess('audit-read')) sits on
+// the handler's own route, so every path Express routes here (any case, a
+// trailing slash) is checked; other /control paths and methods pass on
+// untouched to the admin-only routes.
+export function auditApi(d: { audit: AuditLog; guard: express.RequestHandler }): express.Router {
+  const r = express.Router();
+  r.get('/audit', d.guard, (req, res) => {
+    const q = req.query;
+    const num = (v: unknown) => (v === undefined ? undefined : /^\d{1,15}$/.test(String(v)) ? Number(v) : NaN);
+    const outcome = q.outcome === undefined ? undefined : String(q.outcome);
+    if (outcome !== undefined && !['success', 'failure', 'unknown'].includes(outcome)) return void res.status(400).json({ error: 'invalid', detail: 'outcome is success, failure or unknown' });
+    const from = num(q.from), to = num(q.to), limit = num(q.limit);
+    if ([from, to, limit].some((v) => Number.isNaN(v))) return void res.status(400).json({ error: 'invalid', detail: 'from, to and limit are numbers' });
+    try {
+      const out = d.audit.list({
+        limit, from, to, outcome: outcome as Outcome | undefined,
+        before: q.before === undefined ? undefined : String(q.before),
+        after: q.after === undefined ? undefined : String(q.after),
+        actions: q.action === undefined ? undefined : String(q.action).split(',').map((s) => s.trim()).filter(Boolean),
+      });
+      res.set({ 'Content-Type': 'application/x-ndjson; charset=utf-8', 'X-Has-More': String(out.hasMore), 'Cache-Control': 'no-store' });
+      if (out.next) res.set('X-Next-Cursor', out.next);
+      res.send(out.records.map((x) => JSON.stringify(x)).join('\n') + (out.records.length ? '\n' : ''));
+    } catch (err) {
+      if (err instanceof AuditQueryError) return void res.status(400).json({ error: 'invalid', detail: err.message });
+      throw err;
+    }
+  });
   return r;
 }

@@ -34,6 +34,11 @@ export function loadSecrets(env: NodeJS.ProcessEnv, ftpEnabled: boolean): Secret
   if (!cameraPassword) throw new SettingError('CAMPROXY_CAMERA_PASSWORD: required');
   const ftpPassword = read(env, 'CAMPROXY_FTP_PASSWORD');
   if (ftpEnabled && !ftpPassword) throw new SettingError('CAMPROXY_FTP_PASSWORD: required when ftp.enabled');
+  const auditToken = read(env, 'CAMPROXY_AUDIT_TOKEN');
+  if (auditToken !== undefined) {
+    if (auditToken.length < MIN_TOKEN || /\s/.test(auditToken)) throw new SettingError(`CAMPROXY_AUDIT_TOKEN: at least ${MIN_TOKEN} characters, no spaces`);
+    if (auditToken === adminToken || tokens.includes(auditToken)) throw new SettingError('CAMPROXY_AUDIT_TOKEN: must differ from the admin and client tokens');
+  }
   const googleVisionKey = read(env, 'CAMPROXY_GOOGLE_VISION_KEY');
   const googleVisionUrl = env.CAMPROXY_GOOGLE_VISION_URL || 'https://vision.googleapis.com';
   if (!/^https?:\/\/[^\s]+$/.test(googleVisionUrl)) throw new SettingError('CAMPROXY_GOOGLE_VISION_URL: must be an http(s) URL');
@@ -41,5 +46,5 @@ export function loadSecrets(env: NodeJS.ProcessEnv, ftpEnabled: boolean): Secret
   if (/^http:/.test(googleVisionUrl) && !/^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/.test(googleVisionUrl)) {
     throw new SettingError('CAMPROXY_GOOGLE_VISION_URL: http:// only for localhost; use https://');
   }
-  return { tokens, adminToken, cameraPassword, ...(ftpPassword ? { ftpPassword } : {}), ...(googleVisionKey ? { googleVisionKey } : {}), googleVisionUrl: googleVisionUrl.replace(/\/+$/, '') };
+  return { tokens, adminToken, cameraPassword, ...(ftpPassword ? { ftpPassword } : {}), ...(auditToken ? { auditToken } : {}), ...(googleVisionKey ? { googleVisionKey } : {}), googleVisionUrl: googleVisionUrl.replace(/\/+$/, '') };
 }

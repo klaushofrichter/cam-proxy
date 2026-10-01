@@ -197,3 +197,26 @@ describe('camera.webUiUrl', () => {
     expect(err(() => load())).toMatch(/camera.webUiUrl/);
   });
 });
+
+describe('audit settings', () => {
+  beforeEach(() => write('config.json', { camera: { host: '192.0.2.10' } }));
+  it('retention.auditDays defaults to 90 and is bounded 1-3650', () => {
+    const l = load();
+    expect(l.config.retention.auditDays).toBe(90);
+    expect(() => applyOverrides(l, { retention: { auditDays: 0 } })).toThrow();
+    expect(() => applyOverrides(l, { retention: { auditDays: 3651 } })).toThrow();
+    expect(applyOverrides(l, { retention: { auditDays: 30 } }).config.retention.auditDays).toBe(30);
+  });
+
+  it('reads an optional audit token (or its _FILE), and refuses a short or reused one', () => {
+    expect(load().secrets.auditToken).toBeUndefined();
+    const audit = 'audit-token-'.padEnd(40, 'z');
+    expect(load({ CAMPROXY_AUDIT_TOKEN: audit }).secrets.auditToken).toBe(audit);
+    const f = join(dir, 'audit.txt');
+    writeFileSync(f, audit + '\n');
+    expect(load({ CAMPROXY_AUDIT_TOKEN_FILE: f }).secrets.auditToken).toBe(audit);
+    expect(() => load({ CAMPROXY_AUDIT_TOKEN: 'short' })).toThrow(/CAMPROXY_AUDIT_TOKEN/);
+    expect(() => load({ CAMPROXY_AUDIT_TOKEN: ADMIN })).toThrow(/CAMPROXY_AUDIT_TOKEN/);
+    expect(() => load({ CAMPROXY_AUDIT_TOKEN: T1 })).toThrow(/CAMPROXY_AUDIT_TOKEN/);
+  });
+});
