@@ -36,14 +36,16 @@ export function googleVision(o: { key: string; baseUrl: string }): AnalyticsProv
       const first = (body as { responses?: unknown[] })?.responses?.[0] as { error?: unknown; localizedObjectAnnotations?: Annotation[] } | undefined;
       if (!first || typeof first !== 'object' || first.error) throw new AnalyticsError('bad_response', false);
       const anns = Array.isArray(first.localizedObjectAnnotations) ? first.localizedObjectAnnotations : [];
-      const objects: Found[] = anns.map((a) => {
+      // A detection needs a name and a numeric score (else it isn't one).
+      const valid = anns.filter((a) => typeof a.name === 'string' && a.name !== '' && typeof a.score === 'number' && Number.isFinite(a.score));
+      const objects: Found[] = valid.map((a) => {
         const v = a.boundingPoly?.normalizedVertices ?? [];
         const xs = v.map((p) => p.x ?? 0);
         const ys = v.map((p) => p.y ?? 0);
         return {
           ...(typeof a.mid === 'string' && a.mid ? { mid: a.mid } : {}),
-          name: String(a.name ?? 'object'),
-          score: typeof a.score === 'number' ? a.score : 0,
+          name: a.name as string,
+          score: a.score as number,
           box: xs.length === 0 ? { x0: 0, y0: 0, x1: 0, y1: 0 } : { x0: Math.min(1, ...xs), y0: Math.min(1, ...ys), x1: Math.max(0, ...xs), y1: Math.max(0, ...ys) },
         };
       });

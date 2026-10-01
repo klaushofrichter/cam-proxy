@@ -10,7 +10,7 @@ afterEach(() => server?.close());
 
 async function setup(password = 'p') {
   const sim = await createSimCamera({ user: 'u', password: 'p' });
-  server = sim.app.listen(0);
+  server = sim.app.listen(0, '127.0.0.1');
   await new Promise((r) => server!.once('listening', r));
   const host = `127.0.0.1:${(server.address() as AddressInfo).port}`;
   const client = new ReolinkClient({ id: 'cam1', host, protocol: 'http', user: 'u', password });

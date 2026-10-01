@@ -26,7 +26,7 @@ afterAll(async () => {
   await sim.close();
 });
 
-const action = (name: string) => request(p.proxy.app).post(`/control/actions/${name}`).set(admin());
+const action = (name: string) => request(p.base).post(`/control/actions/${name}`).set(admin());
 
 describe('camera FTP setup', () => {
   it('writes the whole Ftp object pointing at the proxy, and reads it back', async () => {
@@ -58,7 +58,7 @@ describe('camera FTP setup', () => {
     expect(clip.stream).toBe('sub');
     expect(clip.end_ts! - clip.start_ts).toBeGreaterThan(0);
     await until(() => !!listClips(p.proxy.catalog, 'cam1', t0 - 60_000, Date.now() + 60_000)[0].snapshot, 10_000);
-    const st = (await request(p.proxy.app).get('/control/status').set(admin())).body.ftp;
+    const st = (await request(p.base).get('/control/status').set(admin())).body.ftp;
     expect(st).toMatchObject({ enabled: true, listening: true, port: ftpPort, tls: true, clips: 1, failures: 0 });
     expect(st.lastUpload).toBeGreaterThanOrEqual(t0);
     expect(st.lastClip).toBeGreaterThanOrEqual(t0);

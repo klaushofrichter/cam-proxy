@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Pi: `compose.yaml` gives the container 20 s to stop, time to end an encode and store a Vision call in flight.
+- Analytics: no call for an event that retention removed meanwhile; a call in flight when the proxy stops is stored (a restart doesn't pay for it again); an attempt that isn't retried (switched off, stopping) is stored as failed; only a change to an analytics setting lifts an invalid-key pause; day counting handles DST across New Year; while the camera is down its time is asked once a minute, not on every read.
+- Analytics: `CAMPROXY_GOOGLE_VISION_URL` accepts `http://` only for localhost (the key travels in a header). An answer's entry without a name or a numeric score is no longer shown as an object. A stored analysis that isn't valid JSON no longer fails the events list.
+- Analytics UI: Status shows one "Analytics: not enabled" card while nothing is enabled, and the pause reason reads "invalid key (check …; switch analytics off and on, or restart, to try again)"; the settings card puts a refused checkbox back, clears its old message before a save, and shows the estimate for the saved limit while the typed one is invalid; the analysis modal shows "Loading…" and the status, closes with Esc wherever the focus is, and gives the focus back; the analysed ring stays visible on the open minute; a space before "✦ Vision".
+- Composed clips: a part that reaches the 200 MB cap fails the job with that reason instead of being cut short silently; a cancelled job's folder is removed once its encoder has ended.
+- A catalog file this process can't write (another owner) is reported at start, like an unwritable data folder, instead of failing at the first write.
+
 ## v2026.09.30.5
 
 - Analytics summary: each analysis keeps persons, vehicles and pets only (by Open Images class id, duplicates merged), sent with the `analysis` stream message and served per day at `/api/cameras/{cam}/analyses` for cams; objects that don't map are counted (Status, `/control/analytics/unmapped`).

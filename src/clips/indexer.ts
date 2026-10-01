@@ -43,9 +43,6 @@ export function dstBounds(year: number, r: DstRule, std: number, dst: number): [
   return [start, end];
 }
 
-// Camera-local YYYYMMDDHHMMSS → UTC ms. In the repeated fall hour the DST
-// reading wins (the first pass); a time in the skipped spring hour reads as
-// standard time.
 // Both readings of a camera-local time: [DST, standard] in the repeated
 // autumn hour, else the one reading.
 export function localToUtcCandidates(local: string, t: TimeInfo): number[] {
@@ -60,6 +57,9 @@ export function localToUtcCandidates(local: string, t: TimeInfo): number[] {
   return [localToUtc(local, t)];
 }
 
+// Camera-local YYYYMMDDHHMMSS → UTC ms. In the repeated fall hour the DST
+// reading wins (the first pass); a time in the skipped spring hour reads as
+// standard time.
 export function localToUtc(local: string, t: TimeInfo): number {
   const [y, mo, d, h, mi, s] = partsOf(local);
   const wall = Date.UTC(y, mo - 1, d, h, mi, s);

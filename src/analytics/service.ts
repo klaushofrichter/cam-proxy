@@ -1,7 +1,7 @@
 import { mkdirSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { Catalog } from '../catalog/db';
-import { addUsage, countUnmapped, saveAnalysis, setSummary, unanalysed, usageBetween, withoutSummary } from '../catalog/analyses';
+import { addUsage, analysisFor, countUnmapped, saveAnalysis, setSummary, unanalysed, usageBetween, withoutSummary } from '../catalog/analyses';
 import { eventById } from '../catalog/events';
 import type { Config } from '../config/defaults';
 import type { TimeInfo } from '../camera/time';
@@ -57,6 +57,7 @@ export class AnalyticsService {
   private running: Promise<void> | null = null;
   private draining = false;
   private stopped = false;
+  private readonly sleepers = new Set<() => void>(); // stop() wakes them
   private paused: { reason: string; until: number | null } | null = null;
   private lastCall: ProviderState['lastCall'] = null;
   private lastError: string | null = null;
@@ -74,9 +75,9 @@ export class AnalyticsService {
   private key(): string | undefined {
     return this.d.secrets().googleVisionKey || undefined;
   }
-  // On, with a key: otherwise events aren't queued and nothing is stored.
+  // On, with a key, not stopped: otherwise events aren't queued and no call is made.
   private active(): boolean {
-    return this.settings().googleVision.enabled && !!this.key();
+    return !this.stopped && this.settings().googleVision.enabled && !!this.key();
   }
   private wanted(kind: string): boolean {
     const k = this.settings().kinds;
@@ -99,7 +100,7 @@ export class AnalyticsService {
     for (const e of unanalysed(this.d.catalog, this.d.cam, kinds, this.now() - CATCH_UP_MS)) this.onEvent(e);
   }
 
-  // A saved analytics setting (or a new key) lifts a bad_key pause.
+  // A changed analytics setting (or a new key, which needs a new process) lifts a bad_key pause.
   settingsChanged(): void {
     if (this.paused?.reason === 'bad_key') this.paused = null;
   }
@@ -108,9 +109,31 @@ export class AnalyticsService {
     while (this.draining || this.queue.length) await this.running;
   }
 
-  stop(): void {
+  // No new calls; a wait ends at once. Resolves when the current job is
+  // done: a call in flight is stored (so a restart's catch-up doesn't pay
+  // for it again); its timeout bounds the wait.
+  async stop(): Promise<void> {
     this.stopped = true;
     this.queue.length = 0;
+    for (const w of [...this.sleepers]) w();
+    await this.running;
+  }
+
+  private wait(ms: number): Promise<void> {
+    if (this.stopped) return Promise.resolve();
+    return new Promise<void>((r) => {
+      const done = () => {
+        this.sleepers.delete(done);
+        r();
+      };
+      this.sleepers.add(done);
+      void this.sleep(ms).then(done);
+    });
+  }
+
+  // The current pause; a quota pause ends after its hour.
+  private pause(): { reason: string; until: number | null } | null {
+    return this.paused && this.paused.until !== null && this.paused.until <= this.now() ? null : this.paused;
   }
 
   private monthUsage(day: string): number {
@@ -120,7 +143,6 @@ export class AnalyticsService {
   state(): ProviderState[] {
     const g = this.settings().googleVision;
     const day = localDay(this.now(), this.d.timeInfo());
-    if (this.paused && this.paused.until !== null && this.paused.until <= this.now()) this.paused = null; // a quota pause ends
     return PROVIDERS.map((p) => ({
       id: p.id,
       name: p.name,
@@ -128,7 +150,7 @@ export class AnalyticsService {
       keyMasked: maskKey(this.key()),
       month: { calls: this.monthUsage(day), limit: g.monthlyLimit },
       today: { calls: usageBetween(this.d.catalog, p.id, day, day), cap: g.dailyCap },
-      paused: this.paused,
+      paused: this.pause(),
       lastCall: this.lastCall,
       lastError: this.lastError,
     }));
@@ -155,6 +177,7 @@ export class AnalyticsService {
     const want = start + STILL_AFTER_MS;
     const deadline = want + STILL_WAIT_MS;
     for (;;) {
+      if (this.stopped) return null; // stop() woke the wait: no spinning to the deadline
       const near = this.d.listStills(want - STILL_NEAR_MS, want + STILL_NEAR_MS);
       const nearest = () => near.reduce((a, b) => (Math.abs(b - want) < Math.abs(a - want) ? b : a));
       if (near.includes(want)) return want;
@@ -162,7 +185,7 @@ export class AnalyticsService {
       // at or after `want` exists, none that appears later can be closer.
       if (near.some((t) => t >= want)) return nearest();
       if (this.now() >= deadline) return near.length ? nearest() : null;
-      await this.sleep(Math.min(1000, deadline - this.now()));
+      await this.wait(Math.min(1000, deadline - this.now()));
     }
   }
 
@@ -217,7 +240,15 @@ export class AnalyticsService {
 
   // After a paid, successful call nothing local may trigger another call: a
   // failed image copy stores the result without it, a failed store is logged.
+  // No partial or unreferenced image copy is left behind.
   private storeOk(job: Job, jpeg: Buffer, stillTs: number, tookMs: number, res: { objects: unknown; raw: unknown }): void {
+    const remove = (f: string) => {
+      try {
+        unlinkSync(f);
+      } catch {
+        /* never written */
+      }
+    };
     let image: string | null = null;
     try {
       const dir = join(this.d.dataDir, 'analytics', this.d.cam);
@@ -225,12 +256,21 @@ export class AnalyticsService {
       image = join(dir, `${job.id}.jpg`);
       writeFileSync(image, jpeg);
     } catch (err) {
+      if (image) remove(image);
       image = null;
       logger.warn({ err: (err as Error).message, eventId: job.id }, 'analytics_image_copy_failed');
     }
     try {
       this.store(job, { status: 'ok', reason: null, stillTs, image, tookMs, objects: res.objects, raw: res.raw });
     } catch (err) {
+      // Only when no row names the image (a later step may fail after the row was written).
+      let named = false;
+      try {
+        named = analysisFor(this.d.catalog, job.id)?.image === image;
+      } catch {
+        /* the catalog can't say: no row to keep it for */
+      }
+      if (image && !named) remove(image);
       logger.warn({ err: (err as Error).message, eventId: job.id }, 'analytics_store_failed');
     }
   }
@@ -240,39 +280,50 @@ export class AnalyticsService {
     const stillTs = await this.pickStill(job.start_ts);
     if (!this.active()) return; // switched off while waiting: nothing stored
     if (stillTs === null) return this.skip(job, 'no_still');
-    if (this.paused && this.paused.until !== null && this.paused.until <= this.now()) this.paused = null;
+    this.paused = this.pause();
     if (this.paused) return this.skip(job, 'paused', stillTs);
     const jpeg = await this.d.readStill(stillTs);
     if (!jpeg) return this.skip(job, 'no_still');
     const key = this.key()!;
     const provider = (this.d.provider ?? ((id, k, url) => googleVision({ key: k, baseUrl: url })))('google-vision', key, this.d.secrets().googleVisionUrl);
 
+    let failed: AnalyticsError | undefined; // the previous attempt's error
+    let t0 = 0;
     for (let attempt = 0; ; attempt++) {
-      if (!this.active()) return; // switched off during the retry wait: no call
+      // Switched off or stopped during the retry wait: no call; the counted
+      // attempt is stored, so the event and the usage agree.
+      if (!this.active()) {
+        if (failed) this.store(job, { status: 'failed', reason: failed.reason, stillTs, image: null, tookMs: null, objects: null, raw: null });
+        return;
+      }
+      // Retention may have removed the event meanwhile: no call for it.
+      if (!eventById(this.d.catalog, job.id)) return;
       const g = this.settings().googleVision;
       const day = localDay(this.now(), this.d.timeInfo());
       if (this.monthUsage(day) >= g.monthlyLimit || (g.dailyCap > 0 && usageBetween(this.d.catalog, 'google-vision', day, day) >= g.dailyCap)) {
         return this.skip(job, 'limit', stillTs);
       }
       addUsage(this.d.catalog, 'google-vision', day);
-      const t0 = this.now();
+      t0 = this.now();
+      let res: { objects: unknown; raw: unknown };
       try {
-        const res = await provider.analyze(jpeg, AbortSignal.timeout(TIMEOUT_MS));
-        const tookMs = this.now() - t0;
-        this.lastCall = { at: t0, tookMs, status: 'ok' };
-        return this.storeOk(job, jpeg, stillTs, tookMs, res);
+        res = await provider.analyze(jpeg, AbortSignal.timeout(TIMEOUT_MS));
       } catch (err) {
         const e = err instanceof AnalyticsError ? err : new AnalyticsError('network', true);
+        failed = e;
         this.lastCall = { at: t0, tookMs: this.now() - t0, status: e.reason };
         this.lastError = e.reason;
         if (e.pause === 'bad_key') this.paused = { reason: 'bad_key', until: null };
         if (e.pause === 'quota') this.paused = { reason: 'quota', until: this.now() + QUOTA_PAUSE_MS };
         if (e.retry && attempt === 0) {
-          await this.sleep(RETRY_AFTER_MS);
+          await this.wait(RETRY_AFTER_MS);
           continue;
         }
         return this.store(job, { status: 'failed', reason: e.reason, stillTs, image: null, tookMs: this.now() - t0, objects: null, raw: null });
       }
+      const tookMs = this.now() - t0;
+      this.lastCall = { at: t0, tookMs, status: 'ok' };
+      return this.storeOk(job, jpeg, stillTs, tookMs, res);
     }
   }
 }

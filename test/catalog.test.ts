@@ -78,4 +78,19 @@ describe('catalog', () => {
       chmodSync(ro, 0o755);
     }
   });
+
+  // Issue #34: a catalog file owned by another uid opens read-only; say so
+  // at open, not at the first write.
+  it('explains a catalog file it cannot write', () => {
+    const file = join(dir, 'catalog.sqlite');
+    c.close();
+    chmodSync(file, 0o444);
+    try {
+      expect(() => openCatalog(file)).toThrow(`the catalog file ${file} isn't writable by this process`);
+      expect(() => openCatalog(file)).toThrow(/chown/);
+    } finally {
+      chmodSync(file, 0o644);
+      c = openCatalog(file);
+    }
+  });
 });

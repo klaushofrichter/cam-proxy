@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtempSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { DEFAULTS } from '../src/config/defaults';
 import { checkPartial, SettingError } from '../src/config/schema';
 import { loadSecrets } from '../src/config/secrets';
@@ -42,9 +45,31 @@ describe('the Vision key and URL', () => {
     expect(() => loadSecrets({ ...env, CAMPROXY_GOOGLE_VISION_URL: 'ftp://x' }, false)).toThrow('CAMPROXY_GOOGLE_VISION_URL: must be an http(s) URL');
   });
 
+  // Issue #52: the key header would cross the network in clear text.
+  it('accept http:// only for this machine (a test mock), https:// anywhere', () => {
+    for (const url of ['http://vision.example.com', 'http://10.0.0.5:8080', 'http://127.0.0.1.example.com']) {
+      expect(() => loadSecrets({ ...env, CAMPROXY_GOOGLE_VISION_URL: url }, false)).toThrow('CAMPROXY_GOOGLE_VISION_URL: http:// only for localhost; use https://');
+    }
+    for (const url of ['http://127.0.0.1:18600', 'http://localhost:9', 'http://[::1]:9', 'https://vision.example.com']) {
+      expect(loadSecrets({ ...env, CAMPROXY_GOOGLE_VISION_URL: url }, false).googleVisionUrl).toBe(url);
+    }
+  });
+
+  it('drop trailing slashes from the URL', () => {
+    expect(loadSecrets({ ...env, CAMPROXY_GOOGLE_VISION_URL: 'https://vision.example.com//' }, false).googleVisionUrl).toBe('https://vision.example.com');
+  });
+
+  it('read the key from CAMPROXY_GOOGLE_VISION_KEY_FILE, which wins', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'camproxy-key-')), 'key');
+    writeFileSync(file, 'k-from-file-0000\n');
+    expect(loadSecrets({ ...env, CAMPROXY_GOOGLE_VISION_KEY: 'k-from-env-0000', CAMPROXY_GOOGLE_VISION_KEY_FILE: file }, false).googleVisionKey).toBe('k-from-file-0000');
+  });
+
   it('are masked: first and last four characters', () => {
     expect(maskKey('AIzaSyExample1234x7Qk')).toBe('AIza…x7Qk');
     expect(maskKey('short')).toBe('set');
+    expect(maskKey('12345678901')).toBe('set'); // 11: too short to show 8 of
+    expect(maskKey('123456789012')).toBe('1234…9012');
     expect(maskKey(undefined)).toBeNull();
   });
 

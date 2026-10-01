@@ -93,8 +93,12 @@ test('the title links to the repository', async ({ page }) => {
   await expect(brand).toHaveAttribute('target', '_blank');
 });
 
+const dailyCap = async (page: Page) =>
+  ((await (await page.request.get('/control/config', { headers: { Authorization: `Bearer ${ADMIN_TOKEN}` } })).json()) as Record<string, { value: unknown }>)['analytics.googleVision.dailyCap'].value as number;
+
 test('typing in the analytics limits survives a refresh and a save of the other field', async ({ page }) => {
   await signIn(page);
+  const original = await dailyCap(page); // restored at the end (issue #52: not assumed to be 0)
   await page.getByTestId('nav-settings').click();
   const monthly = page.getByTestId('analytics-monthly');
   const daily = page.getByTestId('analytics-daily');
@@ -110,7 +114,7 @@ test('typing in the analytics limits survives a refresh and a save of the other 
   await monthly.fill('');
   await expect(page.getByTestId('analytics-monthly-save')).toBeDisabled();
   await expect(page.getByTestId('analytics-monthly-hint')).toContainText('whole number from 0 to 100,000');
-  await daily.fill('0');
+  await daily.fill(String(original));
   await page.getByTestId('analytics-daily-save').click();
-  await expect(page.getByTestId('analytics-message')).toContainText('Daily cap saved');
+  await expect.poll(() => dailyCap(page)).toBe(original);
 });

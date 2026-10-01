@@ -107,12 +107,21 @@ export function countUnmapped(c: Catalog, items: { mid: string; name: string }[]
     `INSERT INTO analytics_unmapped (key, mid, name, count, last_seen) VALUES (?, ?, ?, 1, ?)
      ON CONFLICT (key) DO UPDATE SET count = count + 1, last_seen = excluded.last_seen, name = excluded.name`,
   );
-  for (const i of items) st.run(i.mid || `name:${i.name.toLowerCase()}`, i.mid, i.name, ts);
+  // One answer's objects count together, in one write.
+  c.db.exec('BEGIN');
+  try {
+    for (const i of items) st.run(i.mid || `name:${i.name.toLowerCase()}`, i.mid, i.name, ts);
+    c.db.exec('COMMIT');
+  } catch (err) {
+    c.db.exec('ROLLBACK');
+    throw err;
+  }
 }
 
+// At most 1000 (a negative LIMIT would mean none in SQLite).
 export function listUnmapped(c: Catalog, limit = 1000): { mid: string; name: string; count: number; lastSeen: number }[] {
   return (
-    c.db.prepare('SELECT mid, name, count, last_seen FROM analytics_unmapped ORDER BY count DESC, last_seen DESC, name LIMIT ?').all(limit) as {
+    c.db.prepare('SELECT mid, name, count, last_seen FROM analytics_unmapped ORDER BY count DESC, last_seen DESC, name LIMIT ?').all(Math.min(Math.max(1, Math.floor(limit)), 1000)) as {
       mid: string;
       name: string;
       count: number;
