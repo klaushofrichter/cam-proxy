@@ -34,7 +34,7 @@ export function estimateFor(typed: string, saved: number): string {
 
 export function pausedText(p: UiProviderState['paused']): string | null {
   if (!p) return null;
-  if (p.reason === 'bad_key') return 'invalid key (check CAMPROXY_GOOGLE_VISION_KEY)';
+  if (p.reason === 'bad_key') return 'invalid key (check CAMPROXY_GOOGLE_VISION_KEY; switch analytics off and on, or restart, to try again)';
   if (p.reason === 'quota') return `quota, until ${new Date(p.until ?? 0).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
   return p.reason;
 }

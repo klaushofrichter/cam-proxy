@@ -37,8 +37,9 @@ Measured on cam1 (2026-09-30):
    the JPEG and `OBJECT_LOCALIZATION`, `maxResults: 20`. It times out after
    10 s.
    - A network error, a timeout or a 5xx is retried once after 30 s.
-   - A 400, 401 or 403 pauses analytics until an analytics setting or the
-     key changes (`bad_key`).
+   - A 400, 401 or 403 pauses analytics (`bad_key`) until an analytics
+     setting changes (for example, switch analytics off and on in Settings)
+     or the proxy restarts, as it does after a new key.
    - A 429 pauses it for an hour (`quota`).
    - Events that arrive while paused are *skipped* (`paused`).
    - No call is made for an event that retention removed meanwhile. A call

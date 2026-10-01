@@ -395,6 +395,40 @@ describe('AnalyticsService', () => {
     wake();
   });
 
+  // Review: after stop() the still wait must end at once, not spin until its deadline.
+  it('stop() during the still wait returns at once and makes no call', async () => {
+    now = T0 + 1000; // no still yet: the service waits for one
+    let sleeps = 0;
+    const s = new AnalyticsService({ ...deps(), sleep: () => (sleeps++, new Promise<void>(() => {})) }); // a wait that never ends by itself; the clock stands still
+    const e = event('person');
+    s.onEvent(e);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(sleeps).toBe(1);
+    const t0 = Date.now();
+    await Promise.race([s.stop(), new Promise((_, j) => setTimeout(() => j(new Error('stop() did not return')), 1000))]);
+    expect(Date.now() - t0).toBeLessThan(500);
+    expect(sleeps).toBe(1);
+    expect(calls).toHaveLength(0);
+    expect(analysisFor(c, e.id)).toBeUndefined();
+  });
+
+  // Review: a store that throws after the row was written keeps the image the row names.
+  it('keeps the image copy when the row was written but a later step of the store failed', async () => {
+    still(T0 + 1000, 7);
+    const s = service();
+    const e = event('person');
+    const append = log.append.bind(log);
+    log.append = ((...a: Parameters<typeof append>) => {
+      if (a[1] === 'analysis') throw new Error('stream log full');
+      return append(...a);
+    }) as typeof log.append;
+    s.onEvent(e);
+    await s.idle();
+    const row = analysisFor(c, e.id);
+    expect(row?.image).toBeTruthy();
+    expect(existsSync(row!.image!)).toBe(true);
+  });
+
   it('stores the result of a call that was in flight when stop() came', async () => {
     still(T0 + 1000, 7);
     let answer: () => void = () => {};

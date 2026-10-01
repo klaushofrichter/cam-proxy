@@ -86,7 +86,8 @@ describe('catalog', () => {
     c.close();
     chmodSync(file, 0o444);
     try {
-      expect(() => openCatalog(file)).toThrow(/data folder .* isn't writable .*chown/);
+      expect(() => openCatalog(file)).toThrow(`the catalog file ${file} isn't writable by this process`);
+      expect(() => openCatalog(file)).toThrow(/chown/);
     } finally {
       chmodSync(file, 0o644);
       c = openCatalog(file);

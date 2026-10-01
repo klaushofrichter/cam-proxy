@@ -32,7 +32,7 @@ describe('analytics UI text', () => {
 
   // Issue #52: no "Paused: invalid key: check …" (two colons).
   it('says why the provider is paused, with one colon at most', () => {
-    expect(pausedText({ reason: 'bad_key', until: null })).toBe('invalid key (check CAMPROXY_GOOGLE_VISION_KEY)');
+    expect(pausedText({ reason: 'bad_key', until: null })).toBe('invalid key (check CAMPROXY_GOOGLE_VISION_KEY; switch analytics off and on, or restart, to try again)');
     expect(pausedText({ reason: 'quota', until: Date.parse('2026-09-30T19:02:00Z') })).toMatch(/^quota, until \d{1,2}:02(\s?[AP]M)?$/);
     expect(pausedText(null)).toBeNull();
   });

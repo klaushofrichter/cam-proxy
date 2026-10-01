@@ -1,7 +1,7 @@
 import { mkdirSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { Catalog } from '../catalog/db';
-import { addUsage, countUnmapped, saveAnalysis, setSummary, unanalysed, usageBetween, withoutSummary } from '../catalog/analyses';
+import { addUsage, analysisFor, countUnmapped, saveAnalysis, setSummary, unanalysed, usageBetween, withoutSummary } from '../catalog/analyses';
 import { eventById } from '../catalog/events';
 import type { Config } from '../config/defaults';
 import type { TimeInfo } from '../camera/time';
@@ -177,6 +177,7 @@ export class AnalyticsService {
     const want = start + STILL_AFTER_MS;
     const deadline = want + STILL_WAIT_MS;
     for (;;) {
+      if (this.stopped) return null; // stop() woke the wait: no spinning to the deadline
       const near = this.d.listStills(want - STILL_NEAR_MS, want + STILL_NEAR_MS);
       const nearest = () => near.reduce((a, b) => (Math.abs(b - want) < Math.abs(a - want) ? b : a));
       if (near.includes(want)) return want;
@@ -262,7 +263,14 @@ export class AnalyticsService {
     try {
       this.store(job, { status: 'ok', reason: null, stillTs, image, tookMs, objects: res.objects, raw: res.raw });
     } catch (err) {
-      if (image) remove(image);
+      // Only when no row names the image (a later step may fail after the row was written).
+      let named = false;
+      try {
+        named = analysisFor(this.d.catalog, job.id)?.image === image;
+      } catch {
+        /* the catalog can't say: no row to keep it for */
+      }
+      if (image && !named) remove(image);
       logger.warn({ err: (err as Error).message, eventId: job.id }, 'analytics_store_failed');
     }
   }

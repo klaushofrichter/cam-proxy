@@ -93,7 +93,7 @@ export async function startVisionMock(o: { key?: string; port?: number } = {}): 
       if (answer.bodyDelayMs) {
         res.write('{');
         await new Promise<void>((r) => {
-          const t = setTimeout(r, answer.bodyDelayMs);
+          const t = setTimeout(() => (timers.delete(t), r()), answer.bodyDelayMs);
           timers.add(t);
           res.once('close', () => (clearTimeout(t), timers.delete(t), r()));
         });

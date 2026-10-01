@@ -426,11 +426,12 @@ export function createProxy(initial: Loaded): Proxy {
     async stop() {
       await restarting;
       clearInterval(sweeper);
-      await composer.stop();
       sse.closeAll();
       storage.stop();
-      // Before the catalog closes: a call in flight is stored, not lost.
-      await analytics.stop();
+      // Side by side, within a container's stop grace (compose.yaml: 20 s):
+      // a running encode ends (up to 3 s), and a Vision call in flight is
+      // stored before the catalog closes (up to its 10 s timeout).
+      await Promise.all([composer.stop(), analytics.stop()]);
       const s = server;
       if (s) {
         s.closeAllConnections();
