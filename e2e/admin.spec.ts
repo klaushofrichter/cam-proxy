@@ -1,12 +1,15 @@
 import { test, expect, type Page } from '@playwright/test';
 import { ADMIN_TOKEN, SIM, SIM_CONTROL_TOKEN } from './env';
 
+// The two tests that exercise the sign-in form run without the saved session.
+const NO_SESSION = { cookies: [], origins: [] };
 async function signIn(page: Page) {
-  await page.goto('/');
-  await page.getByTestId('token-input').fill(ADMIN_TOKEN);
-  await page.getByTestId('login-submit').click();
+  await page.goto('/'); // signed in by the storageState from auth.setup.ts
   await expect(page.getByTestId('shell')).toBeVisible();
 }
+
+test.describe('sign-in form', () => {
+test.use({ storageState: NO_SESSION });
 
 test('a wrong token is refused; the admin token signs in', async ({ page }) => {
   await page.goto('/');
@@ -16,6 +19,7 @@ test('a wrong token is refused; the admin token signs in', async ({ page }) => {
   await page.getByTestId('token-input').fill(ADMIN_TOKEN);
   await page.getByTestId('login-submit').click();
   await expect(page.getByTestId('shell')).toBeVisible();
+});
 });
 
 test('status shows the camera online and ONVIF subscribed', async ({ page }) => {
@@ -46,14 +50,21 @@ test('a setting changed in the UI becomes an override, and can be reset', async 
   await expect(page.getByTestId('source-sse.pingS')).toHaveText('default');
 });
 
+test.describe('token storage', () => {
+test.use({ storageState: NO_SESSION });
+
 test('the token is kept nowhere in the browser', async ({ page }) => {
-  await signIn(page);
+  await page.goto('/');
+  await page.getByTestId('token-input').fill(ADMIN_TOKEN);
+  await page.getByTestId('login-submit').click();
+  await expect(page.getByTestId('shell')).toBeVisible();
   await page.reload();
   await expect(page.getByTestId('shell')).toBeVisible();
   const stored = await page.evaluate(() => JSON.stringify({ ...localStorage }) + JSON.stringify({ ...sessionStorage }) + location.href);
   expect(stored).not.toContain(ADMIN_TOKEN);
   await page.getByTestId('logout').click();
   await expect(page.getByTestId('token-input')).toBeVisible();
+});
 });
 
 test('serves the favicon as SVG', async ({ request }) => {

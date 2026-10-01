@@ -7,6 +7,10 @@ export default defineConfig({
   workers: 1,
   reporter: 'list',
   use: { baseURL: `http://127.0.0.1:${PROXY_PORT}`, ...devices['Desktop Chrome'], channel: 'chrome' },
+  projects: [
+    { name: 'setup', testMatch: /auth\.setup\.ts/ },
+    { name: 'e2e', dependencies: ['setup'], testIgnore: /auth\.setup\.ts/, use: { storageState: 'e2e/.auth/state.json' } },
+  ],
   webServer: {
     command: 'npx tsx e2e/start.ts',
     port: PROXY_PORT,

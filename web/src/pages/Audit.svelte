@@ -16,20 +16,33 @@
   let open = $state<string | null>(null);
   let message = $state('');
 
+  // `seq` drops a late answer for an old filter or page; `loading` stops a
+  // double click on Older/Newer from pushing the same cursor twice.
+  let seq = 0;
+  let loading = $state(false);
   async function load() {
+    const my = ++seq;
+    loading = true;
     message = '';
     try {
       const r = await apiLines<Rec>(`/control/audit?${auditQuery({ limit: PAGE, before, action, outcome })}`);
+      if (my !== seq) return;
       records = r.records;
       hasMore = r.hasMore;
       next = r.next;
     } catch {
+      if (my !== seq) return;
+      records = [];
+      hasMore = false;
+      next = null;
       message = 'Could not load the audit log.';
+    } finally {
+      if (my === seq) loading = false;
     }
   }
   function newest() { stack = []; before = undefined; open = null; void load(); }
-  function older() { if (!hasMore || !next) return; stack = [...stack, before]; before = next; open = null; void load(); }
-  function newer() { if (!stack.length) return; before = stack.at(-1); stack = stack.slice(0, -1); open = null; void load(); }
+  function older() { if (loading || !hasMore || !next) return; stack = [...stack, before]; before = next; open = null; void load(); }
+  function newer() { if (loading || !stack.length) return; before = stack.at(-1); stack = stack.slice(0, -1); open = null; void load(); }
   onMount(() => void load());
   $effect(() => { if ($refreshTick) untrack(() => void load()); });
   const time = (iso: string) => new Date(iso).toLocaleString();
@@ -38,17 +51,17 @@
 <section>
   <div class="head">
     <h2>Audit</h2>
-    <select bind:value={action} onchange={newest} data-testid="audit-filter-action" aria-label="Action">
+    <select bind:value={action} onchange={(e) => { action = e.currentTarget.value; newest(); }} data-testid="audit-filter-action" aria-label="Action">
       <option value="">All actions</option>
       {#each ACTIONS as a (a)}<option value={a}>{a}</option>{/each}
     </select>
-    <select bind:value={outcome} onchange={newest} data-testid="audit-filter-outcome" aria-label="Outcome">
+    <select bind:value={outcome} onchange={(e) => { outcome = e.currentTarget.value; newest(); }} data-testid="audit-filter-outcome" aria-label="Outcome">
       <option value="">Any outcome</option><option value="success">success</option><option value="failure">failure</option><option value="unknown">unknown</option>
     </select>
     <span class="spacer"></span>
-    <button onclick={newest} disabled={!stack.length} data-testid="audit-newest">Newest</button>
-    <button onclick={newer} disabled={!stack.length} data-testid="audit-newer">◀ Newer</button>
-    <button onclick={older} disabled={!hasMore} data-testid="audit-older">Older ▶</button>
+    <button onclick={newest} disabled={loading || !stack.length} data-testid="audit-newest">Newest</button>
+    <button onclick={newer} disabled={loading || !stack.length} data-testid="audit-newer">◀ Newer</button>
+    <button onclick={older} disabled={loading || !hasMore} data-testid="audit-older">Older ▶</button>
   </div>
   <p class="muted small">Who did what on this proxy, newest first, 50 per page. Kept for retention.auditDays days (Settings).</p>
   {#if message}<p class="muted">{message}</p>{/if}

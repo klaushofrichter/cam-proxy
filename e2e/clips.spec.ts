@@ -2,9 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { ADMIN_TOKEN, SIM, SIM_CONTROL_TOKEN } from './env';
 
 async function signIn(page: Page) {
-  await page.goto('/');
-  await page.getByTestId('token-input').fill(ADMIN_TOKEN);
-  await page.getByTestId('login-submit').click();
+  await page.goto('/'); // signed in by the storageState from auth.setup.ts
   await expect(page.getByTestId('shell')).toBeVisible();
 }
 
@@ -20,9 +18,10 @@ test('the camera uploads a clip after setup; it plays on the Clips page', async 
   await page.getByTestId('nav-clips').click();
   const r = await request.post(`http://127.0.0.1:${SIM.control}/sim/api/events`, { headers: { Authorization: `Bearer ${SIM_CONTROL_TOKEN}` }, data: { type: 'person', durationS: 1 } });
   expect(r.status()).toBe(201);
-  const clip = page.getByTestId('clip').first();
+  // Not just the first clip: one left from an earlier spec may be listed first
+  // (specs run faster now that they share one sign-in).
+  const clip = page.getByTestId('clip').filter({ hasText: 'person' }).first();
   await expect(clip).toBeVisible({ timeout: 30000 });
-  await expect(clip).toContainText('person');
   await clip.click();
   const video = page.getByTestId('clip-player');
   await expect(video).toBeVisible();
