@@ -98,9 +98,20 @@ test('a slow answer for an old filter does not overwrite the newer one', async (
 });
 
 test('a restart through the control API is recorded', async ({ page, request }) => {
+  const t0 = Date.now();
   await request.post(`http://127.0.0.1:${PROXY_PORT}/control/actions/restart`, { headers: auth });
   await openAudit(page);
   await page.getByTestId('audit-filter-action').selectOption('proxy-restart');
   await expect(page.getByTestId('audit-row').first()).toHaveAttribute('data-action', 'proxy-restart');
   await expect.poll(async () => (await request.get('/health')).status(), { timeout: 30000 }).toBe(200);
+  // The restart answers 202 and runs on (the camera side stops, then starts
+  // again), and /health stays up throughout. Wait until the new ONVIF
+  // subscription is there, or the next spec's camera event can fall into the
+  // gap and be lost (clips.spec).
+  await expect
+    .poll(async () => {
+      const { intake } = (await (await request.get(`http://127.0.0.1:${PROXY_PORT}/control/status`, { headers: auth })).json()) as { intake: { onvif: string; since: number } };
+      return intake.onvif === 'subscribed' && intake.since > t0;
+    }, { timeout: 30000, message: 'the intake subscribed to the camera again after the restart' })
+    .toBe(true);
 });

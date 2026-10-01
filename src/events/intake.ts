@@ -116,18 +116,35 @@ export class EventIntake extends EventEmitter {
           if (this.sub.needsRenew()) await this.sub.renew();
           this.pullAbort = new AbortController();
           const msgs = await this.sub.pull(this.pullAbort.signal);
-          const before = this.kindStates();
-          for (const m of msgs) this.topics.set(m.topic, m.state);
-          const after = this.kindStates();
-          const initialized = msgs.length > 0 && msgs.every((m) => m.op === 'Initialized');
-          if (first || initialized) {
-            this.d.tracker.initialize(after);
+          const inits = msgs.filter((m) => m.op === 'Initialized');
+          const changes = msgs.filter((m) => m.op !== 'Initialized');
+          // The camera answers a new subscription with Initialized messages (the
+          // state now), and a Changed one may come in the same pull: a person
+          // starting right after a (re)subscribe. The Initialized ones are the
+          // state only; the Changed/Deleted ones are normal transitions.
+          // A first pull without any Initialized message has no baseline to
+          // judge a Changed one against, so it is taken as the initial state
+          // (the safe reading; pull() already drops other ops).
+          if (first || inits.length) {
+            if (first && !inits.length) {
+              for (const m of msgs) this.topics.set(m.topic, m.state);
+            } else {
+              for (const m of inits) this.topics.set(m.topic, m.state);
+            }
+            this.d.tracker.initialize(this.kindStates());
+            if (first && !inits.length) changes.length = 0;
             first = false;
-            continue;
           }
-          const ts = msgs.length ? Math.max(...msgs.map((m) => m.utc)) : Date.now();
+          // Changed/Deleted: transitions, by kind in the order the topics were
+          // first seen (a motion event opens before a person event that starts
+          // with it, as the Timeline expects), each at its own message time.
+          const before = this.kindStates();
+          for (const m of changes) this.topics.set(m.topic, m.state);
+          const after = this.kindStates();
           for (const [kind, state] of Object.entries(after)) {
-            if (before[kind] !== state) this.d.tracker.apply('onvif', kind, state, ts, { topics: msgs.filter((m) => topicKind(m.topic) === kind).map((m) => m.topic) });
+            if (before[kind] === state) continue;
+            const mine = changes.filter((m) => topicKind(m.topic) === kind);
+            this.d.tracker.apply('onvif', kind, state, Math.max(...mine.map((m) => m.utc)), { topics: mine.map((m) => m.topic) });
           }
         }
       } catch (err) {
