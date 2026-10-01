@@ -88,9 +88,10 @@ test('a person event is analysed: Status counts it, Events tags it, the Timeline
   const labels = modal.getByTestId('analysis-label');
   const rows = modal.getByTestId('analysis-object');
   await expect(rects).toHaveCount(1);
-  await expect(labels).toHaveText(['Person 90%']); // the overlay reads percent; the table keeps 0.90
+  await expect(labels).toHaveText(['Person 90%']); // the overlay and the table read percent
   await expect(rows).toHaveCount(1);
-  await expect(rows.first()).toContainText('0.90');
+  await expect(rows.first()).toContainText('90%');
+  await expect(modal.locator('thead th')).toHaveText(['Objects', 'Score']);
   // The summary's row selects, too: its box stays, and clicking again keeps it.
   await rows.first().click();
   await expect(rows.first()).toHaveAttribute('aria-pressed', 'true');

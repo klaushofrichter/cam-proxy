@@ -73,8 +73,14 @@ export function parseLimit(text: string | number | null | undefined, max: number
 // The label next to a box in the analysis picture: "Clothing 20%" (the name
 // with its first letter capitalised, the rounded percent). The percent is the
 // table's score (toFixed(2)) in other units, so both agree on a .xx5.
+// A score as a percent, from its 2-decimal value, so the overlay and the
+// table always agree (0.99 → "99%").
+export function scorePct(score: number): string {
+  return `${Math.round(Number(score.toFixed(2)) * 100)}%`;
+}
+
 export function boxLabel(name: string, score: number): string {
-  return `${cap(name)} ${Math.round(Number(score.toFixed(2)) * 100)}%`;
+  return `${cap(name)} ${scorePct(score)}`;
 }
 
 // Where a box's label goes (inline CSS, in % of the picture): above the box's
