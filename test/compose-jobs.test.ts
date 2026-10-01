@@ -74,6 +74,42 @@ describe('composer jobs', () => {
     expect(c.get('cam1', b.id)).toMatchObject({ state: 'running' });
   });
 
+  // Issue #34: ffmpeg takes up to 2 s to end after a cancel; its folder stays
+  // until then (a removed folder made it fail with ENOENT), then goes.
+  it('keeps the folder of a cancelled job until its encoder has ended, then deletes it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jobs-'));
+    const ends: (() => void)[] = [];
+    const dirs: string[] = [];
+    const runner: Runner = ({ dir: d, signal }) =>
+      new Promise<void>((_resolve, reject) => {
+        dirs.push(d);
+        signal.addEventListener('abort', () => ends.push(() => reject(new Error('ENOENT: no such file or directory'))));
+      });
+    let t = 0;
+    const c = createComposer({ dir, runner, now: () => t });
+    stops.push(async () => { for (const e of ends) e(); await c.stop(); });
+    const a = c.start(req) as { id: string };
+    const b = c.start(req) as { id: string };
+    await tick();
+    expect(c.cancel('cam1', a.id)).toBe(true);
+    await tick();
+    expect(c.get('cam1', a.id)).toBeUndefined();
+    expect(existsSync(dirs[0])).toBe(true); // the encoder still runs
+    expect(c.get('cam1', b.id)).toMatchObject({ state: 'queued' }); // one encoder at a time
+    ends.shift()!();
+    await tick();
+    expect(existsSync(dirs[0])).toBe(false);
+    expect(c.get('cam1', b.id)).toMatchObject({ state: 'running' });
+    // The same for a job nobody polls.
+    t += 31_000;
+    c.sweep();
+    await tick();
+    expect(existsSync(dirs[1])).toBe(true);
+    ends.shift()!();
+    await tick();
+    expect(existsSync(dirs[1])).toBe(false);
+  });
+
   it('a failed run reports failed with the reason', async () => {
     const { c, m } = make();
     const a = c.start(req) as { id: string };

@@ -5,7 +5,7 @@ import { mkdtempSync, existsSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { cardImageArgs, clockText, defaultFont, escapeText, joinArgs, joinList, parseProgress, pieceArgs, runFrames, validTimeZone } from '../src/compose/ffmpeg';
-import { ffmpegRunner } from '../src/compose/jobs';
+import { ComposeError, ffmpegRunner } from '../src/compose/jobs';
 import { planComposition } from '../src/compose/plan';
 
 const run = promisify(execFile);
@@ -121,13 +121,27 @@ describe('compose ffmpeg helpers', () => {
     const graph = clip.args[clip.args.indexOf('-filter_complex') + 1];
     expect(graph.startsWith('[0:v]fps=10,scale=')).toBe(true);
     expect(graph).toContain('tpad=stop_mode=clone:stop_duration=5,trim=duration=5');
-    for (const p of [clip, stills]) expect(p.args.slice(-6, -4)).toEqual(['-fs', '200M']);
+    for (const p of [clip, stills]) expect(p.args.slice(-6, -4)).toEqual(['-fs', '200000000']);
   });
 
   it('names the stills rate in the badge when stills are not every second', () => {
     const [p] = pieceArgs({ ...base, stillsIntervalS: 2, segments: [{ kind: 'still', ts: 1 }] });
     expect(p.args.join(' ')).toContain("text='STILLS 1/2 FPS'");
   });
+
+  // Issue #34: -fs cuts a piece silently; a piece that reaches the cap fails the job.
+  it.skipIf(!font)('fails with a reason when a piece reaches the size cap (-fs would cut it silently)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'compose-cap-'));
+    const still = join(dir, 's.jpg');
+    await run('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x180', '-frames:v', '1', still]);
+    const job = (pieceMaxBytes?: number) =>
+      ffmpegRunner({ font: font!, clock: () => '12:00:00', readStill: async () => readFileSync(still), hasAudio: async () => true, pieceMaxBytes })({
+        dir: mkdtempSync(join(dir, 'j-')), out: join(dir, `out-${pieceMaxBytes}.mp4`), req: { cam: 'cam1', plan: { ok: true, start: 0, end: 2000, durationS: 2, segments: [{ kind: 'still', ts: 0 }, { kind: 'still', ts: 1000 }] }, size: 'sd', badge: false }, onProgress: () => {}, signal: new AbortController().signal,
+      });
+    await expect(job(2000)).rejects.toThrow(ComposeError);
+    await expect(job(2000)).rejects.toThrow(/^a part of the clip reached the size limit/);
+    await expect(job()).resolves.toBeUndefined();
+  }, 60_000);
 
   it.skipIf(!font)('really draws the badge (the corner differs with it off)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'compose-badge-'));

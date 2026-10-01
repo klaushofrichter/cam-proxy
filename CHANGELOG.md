@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Composed clips: a part that reaches the 200 MB cap fails the job with that reason instead of being cut short silently; a cancelled job's folder is removed once its encoder has ended.
+- A catalog file this process can't write (another owner) is reported at start, like an unwritable data folder, instead of failing at the first write.
+
 ## v2026.09.30.5
 
 - Analytics summary: each analysis keeps persons, vehicles and pets only (by Open Images class id, duplicates merged), sent with the `analysis` stream message and served per day at `/api/cameras/{cam}/analyses` for cams; objects that don't map are counted (Status, `/control/analytics/unmapped`).

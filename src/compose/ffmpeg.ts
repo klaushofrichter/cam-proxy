@@ -18,7 +18,12 @@ export interface ComposeInput {
   font: string;
   clock: (ts: number) => string;
   stillsIntervalS?: number; // the badge names the rate (1 FPS, 1/2 FPS)
+  maxBytes?: number; // per piece (-fs); PIECE_MAX_BYTES unless set
 }
+
+// The spec's 200 MB budget, per piece, enforced while encoding (-fs). -fs
+// cuts silently, so the runner fails a piece that reaches it.
+export const PIECE_MAX_BYTES = 200e6;
 export interface Piece { args: string[]; out: string; durationS: number }
 
 const FONTS = ['/usr/share/fonts/dejavu/DejaVuSans.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', '/System/Library/Fonts/Supplemental/Arial.ttf'];
@@ -100,8 +105,7 @@ export function pieceArgs(i: ComposeInput): Piece[] {
         .join('');
       graph = `[0:v]${fit},trim=duration=${d},setpts=PTS-STARTPTS${cards}${badge}[v];[1:a]${MONO}[a]`;
     }
-    // -fs: the spec's 200 MB budget, enforced while encoding.
-    return { out, durationS: d, args: [...HEAD, ...inputs, '-filter_complex', graph, '-map', '[v]', '-map', '[a]', ...ENCODE, '-fs', '200M', '-progress', 'pipe:1', '-nostats', out] };
+    return { out, durationS: d, args: [...HEAD, ...inputs, '-filter_complex', graph, '-map', '[v]', '-map', '[a]', ...ENCODE, '-fs', String(i.maxBytes ?? PIECE_MAX_BYTES), '-progress', 'pipe:1', '-nostats', out] };
   });
 }
 

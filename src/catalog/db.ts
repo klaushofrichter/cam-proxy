@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync, statSync } from 'fs';
+import { accessSync, constants, existsSync, mkdirSync, statSync } from 'fs';
 import { dirname } from 'path';
 import { MIGRATIONS } from './migrations';
 
@@ -17,6 +17,9 @@ export function openCatalog(file: string): Catalog {
   let db: DatabaseSync;
   try {
     mkdirSync(dirname(file), { recursive: true });
+    // SQLite opens a file it can't write read-only and fails only at the
+    // first write (issue #34): check up front.
+    if (existsSync(file)) accessSync(file, constants.W_OK);
     db = new DatabaseSync(file);
   } catch (err) {
     // A volume mounted as root said only EACCES (issue #5): name the folder.
