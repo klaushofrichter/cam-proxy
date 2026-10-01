@@ -210,10 +210,13 @@ export function controlApi(d: ControlDeps): express.Router {
 
 // GET /control/audit (spec 2026-10-01-audit-log-design): ECS JSON lines,
 // newest first with ?before, oldest first with ?after. Mounted on /control
-// with its own access (admin or the audit token) before the admin-only routes.
-export function auditApi(d: { audit: AuditLog }): express.Router {
+// before the admin-only routes. `guard` (requireAccess('audit-read')) sits on
+// the handler's own route, so every path Express routes here (any case, a
+// trailing slash) is checked; other /control paths and methods pass on
+// untouched to the admin-only routes.
+export function auditApi(d: { audit: AuditLog; guard: express.RequestHandler }): express.Router {
   const r = express.Router();
-  r.get('/audit', (req, res) => {
+  r.get('/audit', d.guard, (req, res) => {
     const q = req.query;
     const num = (v: unknown) => (v === undefined ? undefined : /^\d{1,15}$/.test(String(v)) ? Number(v) : NaN);
     const outcome = q.outcome === undefined ? undefined : String(q.outcome);

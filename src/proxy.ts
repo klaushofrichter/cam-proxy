@@ -282,10 +282,10 @@ export function createProxy(initial: Loaded): Proxy {
   app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links }));
   app.use('/api', refuseTokenInUrl, requireAccess('client', access), composeApi({ config: () => running, catalog, composer, stillsIn: (f, t) => stills?.store.listStills(f, t) ?? [], paused: () => storage.paused(), font }));
   app.use('/api', refuseTokenInUrl, requireAccess('client', access), clientApi({ config: () => running, catalog, status: () => status, sse, stills: () => stills }));
-  // The audit log: admins and the audit token, GET only. Other /control paths
-  // pass on untouched to the admin-only routes below.
-  const auditAccess = requireAccess('audit-read', access);
-  app.use('/control', refuseTokenInUrl, (req, res, next) => (req.path === '/audit' ? auditAccess(req, res, next) : next()), auditApi({ audit }));
+  // The audit log: admins and the audit token, GET only. The access check is
+  // on the route inside the router; other /control paths pass on untouched
+  // to the admin-only routes below.
+  app.use('/control', refuseTokenInUrl, auditApi({ audit, guard: requireAccess('audit-read', access) }));
   app.use(
     '/control',
     refuseTokenInUrl,
