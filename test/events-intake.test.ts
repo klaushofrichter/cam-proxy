@@ -127,6 +127,27 @@ describe('EventIntake first pull', () => {
     await runWith([[msg('Initialized', true, 1_000)]]);
     expect(listEvents(catalog, { cam: 'cam1' })).toHaveLength(0);
   });
+
+  // The real camera splits its Initialized messages over two pulls
+  // (cam-sim/reference/rlc-1224a/onvif/PullMessages1.xml and 2.xml).
+  it('the real camera\'s two-pull start: a Changed in the second pull is an event', async () => {
+    const MOTION = 'tns1:RuleEngine/CellMotionDetector/Motion';
+    await runWith([
+      [msg('Initialized', false, 1_000)],
+      [{ topic: MOTION, op: 'Initialized', utc: 1_000, state: false }, msg('Changed', true, 3_000)],
+    ]);
+    expect(listEvents(catalog, { cam: 'cam1' }).map((e) => [e.kind, e.start_ts])).toEqual([['person', 3_000]]);
+  });
+
+  it('each kind starts at its own message time when several arrive in one pull', async () => {
+    const MOTION = 'tns1:RuleEngine/CellMotionDetector/Motion';
+    await runWith([
+      [msg('Initialized', false, 1_000), { topic: MOTION, op: 'Initialized', utc: 1_000, state: false }],
+      [{ topic: MOTION, op: 'Changed', utc: 1_500, state: true }, msg('Changed', true, 2_000)],
+    ]);
+    const got = Object.fromEntries(listEvents(catalog, { cam: 'cam1' }).map((e) => [e.kind, e.start_ts]));
+    expect(got).toEqual({ motion: 1_500, person: 2_000 });
+  });
 });
 
 describe('EventIntake against cam-sim', () => {

@@ -112,6 +112,6 @@ test('a restart through the control API is recorded', async ({ page, request }) 
     .poll(async () => {
       const { intake } = (await (await request.get(`http://127.0.0.1:${PROXY_PORT}/control/status`, { headers: auth })).json()) as { intake: { onvif: string; since: number } };
       return intake.onvif === 'subscribed' && intake.since > t0;
-    }, { timeout: 30000 })
+    }, { timeout: 30000, message: 'the intake subscribed to the camera again after the restart' })
     .toBe(true);
 });
