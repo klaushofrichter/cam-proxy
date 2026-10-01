@@ -145,7 +145,7 @@ export function controlApi(d: ControlDeps): express.Router {
   r.get('/stats', (_req, res) => {
     const u = d.storage.usage();
     res.json({
-      disk: { catalog: u.catalog, stills: u.stills, previews: u.previews, clips: u.clips, free: u.free, size: u.size },
+      disk: { catalog: u.catalog, audit: u.audit, stills: u.stills, previews: u.previews, clips: u.clips, free: u.free, size: u.size },
       events: { stored: eventsStored(d.catalog) },
       stream: { rows: d.log.count(), lastId: d.log.lastId() },
       sse: { clients: d.sseClients() },

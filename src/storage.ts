@@ -5,6 +5,7 @@ import type { Catalog } from './catalog/db';
 import { deleteClip } from './catalog/clips';
 import { analysisImages, pruneUsage } from './catalog/analyses';
 import { deleteEventsBefore } from './catalog/events';
+import type { AuditLog } from './audit/audit-log';
 import type { Config } from './config/defaults';
 import { logger } from './log';
 import type { StreamLog } from './stream/log';
@@ -43,6 +44,7 @@ export class Storage extends EventEmitter {
     private readonly d: {
       catalog: Catalog;
       log: StreamLog;
+      audit?: AuditLog;
       config: () => Config;
       now?: () => number;
       statfs?: (dir: string) => { free: number; size: number };
@@ -121,9 +123,9 @@ export class Storage extends EventEmitter {
     else list.push({ ts, files: [{ path: '', bytes }, ...Array.from({ length: Math.max(0, files - 1) }, () => ({ path: '', bytes: 0 }))] });
   }
 
-  usage(): Record<FileKind | 'catalog', KindUsage> & { free: number; size: number; budget: number; used: number; daysUntilFull: number | null } {
+  usage(): Record<FileKind | 'catalog' | 'audit', KindUsage> & { free: number; size: number; budget: number; used: number; daysUntilFull: number | null } {
     const now = this.now();
-    const out = {} as Record<FileKind | 'catalog', KindUsage>;
+    const out = {} as Record<FileKind | 'catalog' | 'audit', KindUsage>;
     let used = 0;
     let growth = 0;
     for (const kind of KINDS) {
@@ -137,6 +139,9 @@ export class Storage extends EventEmitter {
     const cat = this.d.catalog.sizeBytes();
     out.catalog = { bytes: cat, files: 1, oldest: null, newest: now, growthPerDay: 0 };
     used += cat;
+    out.audit = this.d.audit?.usage() ?? { bytes: 0, files: 0, oldest: null, newest: null, growthPerDay: 0 };
+    used += out.audit.bytes;
+    growth += out.audit.growthPerDay;
     const disk = this.disk();
     const budget = this.budget();
     return { ...out, free: disk.free, size: disk.size, budget, used, daysUntilFull: growth > 0 ? Math.max(0, (budget - used) / growth) : null };
@@ -208,6 +213,9 @@ export class Storage extends EventEmitter {
       deleted.streamLog = this.d.log.deleteBefore(logBefore);
     }
 
+    // The audit log keeps whole UTC days; only retention removes them, never the budget.
+    if (this.d.audit) deleted.audit = this.d.audit.deleteBefore(new Date(dayStart(now - cfg.retention.auditDays * DAY)).toISOString().slice(0, 10), dry);
+
     // 2. Per-kind caps, then the budget: the oldest hour of the next kind in
     // order, never touching the newest keepHours of a kind.
     const bytesOf = (kind: FileKind) => sim[kind].reduce((n, u) => n + unitBytes(u), 0);
@@ -226,7 +234,7 @@ export class Storage extends EventEmitter {
       while (bytesOf(kind) > cap * 2 ** 30 && dropOldestHour(kind)) if (!reason.includes('cap')) reason.push('cap');
     }
     const budget = this.budget();
-    const catalog = this.d.catalog.sizeBytes();
+    const catalog = this.d.catalog.sizeBytes() + (this.d.audit?.usage().bytes ?? 0); // audit bytes count, are never dropped
     const used = () => KINDS.reduce((n, k) => n + bytesOf(k), 0) + catalog;
     while (used() > budget) {
       if (!BUDGET_ORDER.some((k) => dropOldestHour(k))) {
