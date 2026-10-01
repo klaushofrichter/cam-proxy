@@ -7,6 +7,7 @@
     { id: 'events', label: 'Events', icon: 'events' },
     { id: 'timeline', label: 'Timeline', icon: 'history' },
     { id: 'clips', label: 'Clips', icon: 'play' },
+    { id: 'audit', label: 'Audit', icon: 'audit' },
     { id: 'settings', label: 'Settings', icon: 'settings' },
     { id: 'maintenance', label: 'Maintenance', icon: 'bolt' },
   ];

@@ -27,6 +27,27 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
   return data as T;
 }
 
+// NDJSON answers (the audit log): one record per line, the paging cursor and
+// "more" flag in headers. Same 401 handling and ApiError as api().
+export async function apiLines<T>(path: string): Promise<{ records: T[]; next: string | null; hasMore: boolean }> {
+  const res = await fetch(path, { credentials: 'same-origin' });
+  if (res.status === 401) {
+    loggedIn.set(false);
+    throw new ApiError(401, null);
+  }
+  const text = await res.text();
+  if (!res.ok) {
+    let body: unknown = null;
+    try { body = JSON.parse(text); } catch { /* not JSON */ }
+    throw new ApiError(res.status, body);
+  }
+  return {
+    records: text.split('\n').filter(Boolean).map((l) => JSON.parse(l) as T),
+    next: res.headers.get('X-Next-Cursor'),
+    hasMore: res.headers.get('X-Has-More') === 'true',
+  };
+}
+
 export async function checkSession(): Promise<void> {
   const r = await fetch('/control/session', { credentials: 'same-origin' }).then((x) => x.json()).catch(() => ({ loggedIn: false }));
   loggedIn.set(!!r.loggedIn);
