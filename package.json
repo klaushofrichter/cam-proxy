@@ -35,7 +35,7 @@
     "@types/node": "^26.6.3",
     "@types/supertest": "^7.2.1",
     "basic-ftp": "^6.2.1",
-    "cam-sim": "https://github.com/klaushofrichter/cam-sim/releases/download/v2026.09.28.1/cam-sim-v2026.09.28.1.tgz",
+    "cam-sim": "https://github.com/klaushofrichter/cam-sim/releases/download/v2026.10.01.1/cam-sim-v2026.10.01.1.tgz",
     "supertest": "^7.3.0",
     "svelte": "^5.57.1",
     "tsx": "^4.23.15",
