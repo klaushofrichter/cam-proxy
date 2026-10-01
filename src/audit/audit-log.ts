@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'fs';
+import { appendFileSync, closeSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync } from 'fs';
 import { hostname } from 'os';
 import { join } from 'path';
 import { logger } from '../log';
@@ -55,6 +55,7 @@ export class AuditLog {
   private readonly host: string;
   private readonly max: number;
   private throttledDay: string | null = null;
+  private readonly clean = new Set<string>(); // files whose last byte was checked this process
 
   constructor(private readonly d: { dir: string; version: string; camera: () => string; now?: () => number; host?: string; maxFileBytes?: number }) {
     this.now = d.now ?? Date.now;
@@ -70,7 +71,9 @@ export class AuditLog {
       if (i.action === 'auth-refused' && this.size(file) >= this.max) {
         if (this.throttledDay !== day) {
           this.throttledDay = day;
-          this.append(file, this.record(ts, { action: 'audit-throttled', category: ['host'], type: ['info'], outcome: 'unknown', message: 'The audit file reached its size limit; further refused-token records today are dropped' }));
+          const t = this.record(ts, { action: 'audit-throttled', category: ['host'], type: ['info'], outcome: 'unknown', message: 'The audit file reached its size limit; further refused-token records today are dropped' });
+          this.append(file, t);
+          logger.info({ audit: true, ecs: t }, 'audit');
         }
         return null;
       }
@@ -122,7 +125,10 @@ export class AuditLog {
   }
 
   find(pred: (r: AuditRecord) => boolean, days = 2): AuditRecord | undefined {
-    for (const day of this.days().slice(-days).reverse()) {
+    const all = this.days();
+    if (!all.length) return undefined;
+    const cutoff = new Date(Date.parse(`${all.at(-1)}T00:00:00Z`) - (Math.max(1, Math.floor(days) || 1) - 1) * 86_400_000).toISOString().slice(0, 10);
+    for (const day of all.filter((d) => d >= cutoff).reverse()) {
       for (const l of this.lines(day).reverse()) {
         const r = parse(l);
         if (r && pred(r)) return r;
@@ -132,9 +138,17 @@ export class AuditLog {
   }
 
   deleteBefore(day: string, dryRun = false): number {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+      logger.error({ day }, 'audit_delete_bad_day');
+      return 0;
+    }
     const old = this.days().filter((d) => d < day);
-    if (!dryRun) for (const d of old) rmSync(join(this.d.dir, `${d}.jsonl`), { force: true });
-    return old.length;
+    if (dryRun) return old.length;
+    let n = 0;
+    for (const d of old) {
+      try { rmSync(join(this.d.dir, `${d}.jsonl`), { force: true }); n++; } catch (err) { logger.error({ err: (err as Error).message, day: d }, 'audit_delete_failed'); }
+    }
+    return n;
   }
 
   usage(): { bytes: number; files: number; oldest: number | null; newest: number | null; growthPerDay: number } {
@@ -152,13 +166,13 @@ export class AuditLog {
 
   private record(ts: number, i: AuditInput): AuditRecord {
     const r: Record<string, unknown> = {
+      ...(i.ecs ? (redact(i.ecs) as Record<string, unknown>) : {}),
       '@timestamp': new Date(ts).toISOString(),
       ecs: { version: '8.11.0' },
       event: { kind: 'event', category: i.category, type: i.type, action: i.action, outcome: i.outcome, dataset: AUDIT_DATASET },
       service: { name: 'cam-proxy', version: this.d.version },
       host: { name: this.host },
       labels: { camera: this.d.camera() },
-      ...(i.ecs ? (redact(i.ecs) as Record<string, unknown>) : {}),
     };
     if (i.user) r.user = { name: i.user };
     if (i.ip) r.source = { ip: i.ip };
@@ -171,7 +185,25 @@ export class AuditLog {
 
   private append(file: string, r: AuditRecord): void {
     mkdirSync(this.d.dir, { recursive: true });
-    appendFileSync(file, JSON.stringify(r) + '\n');
+    let prefix = '';
+    if (!this.clean.has(file)) {
+      prefix = this.endsPartial(file) ? '\n' : '';
+    }
+    appendFileSync(file, prefix + JSON.stringify(r) + '\n');
+    this.clean.add(file);
+  }
+
+  // True when the file exists, is not empty and does not end in a newline (a crash mid-append).
+  private endsPartial(file: string): boolean {
+    let fd: number | undefined;
+    try {
+      const size = statSync(file).size;
+      if (!size) return false;
+      fd = openSync(file, 'r');
+      const b = Buffer.alloc(1);
+      readSync(fd, b, 0, 1, size - 1);
+      return b[0] !== 0x0a;
+    } catch { return false; } finally { if (fd !== undefined) closeSync(fd); }
   }
 
   private size(file: string): number {

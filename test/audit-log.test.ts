@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
+import { appendFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { AuditLog, AuditQueryError, redact } from '../src/audit/audit-log';
@@ -67,6 +67,34 @@ describe('AuditLog.write', () => {
     expect(redact({ changes: [{ key: 'camera.password', from: 'a', to: 'b' }, { key: 'retention.auditDays', from: 90, to: 30 }] })).toEqual({
       changes: [{ key: 'camera.password', from: '[redacted]', to: '[redacted]' }, { key: 'retention.auditDays', from: 90, to: 30 }],
     });
+  });
+
+  it('does not glue a record onto a partial last line left by a crash', () => {
+    const now = { t: T };
+    const { dir, log } = make(now);
+    log.write({ ...base, action: 'a', message: 'first' });
+    appendFileSync(join(dir, '2026-10-01.jsonl'), '{"broken');
+    const again = new AuditLog({ dir, version: 'v', camera: () => 'cam1', now: () => now.t, host: 'h' });
+    again.write({ ...base, action: 'a', message: 'after' });
+    expect(again.list({}).records.map((r) => [r.message, r.cam_proxy!.cursor])).toEqual([['after', '2026-10-01:3'], ['first', '2026-10-01:1']]);
+  });
+
+  it('lets the caller add ECS fields but not override the core ones', () => {
+    const now = { t: T };
+    const { log } = make(now);
+    const r = log.write({ ...base, action: 'real', message: 'm', ecs: { event: { action: 'x' }, service: { name: 'evil' }, url: { path: '/a' } } })!;
+    expect(r.event.action).toBe('real');
+    expect(r.service).toEqual({ name: 'cam-proxy', version: '2026.10.01.1' });
+    expect(r.url).toEqual({ path: '/a' });
+  });
+
+  it('copies the audit-throttled record to the logger too', () => {
+    const info = vi.spyOn(logger, 'info');
+    const now = { t: T };
+    const { log } = make(now, { maxFileBytes: 10 });
+    log.write({ ...base, action: 'login', message: 'fill' });
+    log.write({ ...base, action: 'auth-refused', outcome: 'failure', message: 'r' });
+    expect(info).toHaveBeenCalledWith(expect.objectContaining({ audit: true, ecs: expect.objectContaining({ event: expect.objectContaining({ action: 'audit-throttled' }) }) }), 'audit');
   });
 
   // Review focus 3.
@@ -161,5 +189,22 @@ describe('AuditLog files', () => {
     expect(readdirSync(dir)).toHaveLength(3);
     expect(log.deleteBefore('2026-09-03')).toBe(2);
     expect(readdirSync(dir)).toEqual(['2026-09-03.jsonl']);
+  });
+
+  it('refuses a malformed day in deleteBefore', () => {
+    const now = { t: Date.UTC(2026, 8, 1, 1) };
+    const { dir, log } = make(now);
+    log.write({ ...base, action: 'a', message: 'm' });
+    expect(log.deleteBefore('z')).toBe(0);
+    expect(readdirSync(dir)).toHaveLength(1);
+  });
+
+  it('find limits by calendar days, not file count', () => {
+    const now = { t: Date.UTC(2026, 8, 1, 1) };
+    const { log } = make(now);
+    for (const d of [1, 10]) { now.t = Date.UTC(2026, 8, d, 1); log.write({ ...base, action: 'a', message: `s${d}` }); }
+    expect(log.find((r) => r.message === 's1', 2)).toBeUndefined();
+    expect(log.find((r) => r.message === 's1', 10)?.message).toBe('s1');
+    expect(log.find((r) => r.message === 's10', 0)?.message).toBe('s10');
   });
 });
