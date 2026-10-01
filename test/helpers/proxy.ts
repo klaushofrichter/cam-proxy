@@ -28,6 +28,10 @@ export async function freePort(): Promise<number> {
 
 // Stills run when go2rtc is installed (scripts/install-go2rtc.sh), on free
 // ports so proxies in parallel test files don't collide.
+// Tests send requests to `base` (the proxy's own 127.0.0.1 listener), not
+// `request(proxy.app)`: supertest then opens a throwaway listener on `::`,
+// and any process that binds 127.0.0.1 on that port later (a listen(0) and
+// close, then a bind) takes the requests over (issue #44).
 export async function startProxy(sim: Awaited<ReturnType<typeof startSim>>, opts: { dir?: string; settings?: object; env?: Record<string, string> } = {}) {
   const dir = opts.dir ?? mkdtempSync(join(tmpdir(), 'camproxy-proxy-'));
   const go2rtc = process.env.CAMPROXY_TEST_GO2RTC;

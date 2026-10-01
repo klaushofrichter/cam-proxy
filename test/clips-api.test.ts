@@ -44,29 +44,29 @@ afterAll(async () => {
 
 describe('clips API', () => {
   it('lists the clips in a range with their events and URLs', async () => {
-    const r = await request(p.proxy.app).get(`/api/cameras/cam1/clips?from=${T - 60_000}&to=${T + 60_000}`).set(auth());
+    const r = await request(p.base).get(`/api/cameras/cam1/clips?from=${T - 60_000}&to=${T + 60_000}`).set(auth());
     expect(r.status).toBe(200);
     expect(r.body).toEqual([
       { id: withSnap.id, start: T, end: T + 30_000, stream: 'main', size: body.length, events: [eventId], url: `/api/cameras/cam1/clips/${withSnap.id}.mp4`, snapshotUrl: `/api/cameras/cam1/clips/${withSnap.id}.jpg` },
     ]);
-    const both = await request(p.proxy.app).get(`/api/cameras/cam1/clips?from=${T}&to=${T + 2 * 3_600_000}`).set(auth());
+    const both = await request(p.base).get(`/api/cameras/cam1/clips?from=${T}&to=${T + 2 * 3_600_000}`).set(auth());
     expect(both.body.map((c: { id: number }) => c.id)).toEqual([withSnap.id, noSnap.id]);
     expect(both.body[1].snapshotUrl).toBeNull();
   });
 
   it('checks the range: required, ordered, at most 31 days', async () => {
-    const get = (q: string) => request(p.proxy.app).get(`/api/cameras/cam1/clips${q}`).set(auth());
+    const get = (q: string) => request(p.base).get(`/api/cameras/cam1/clips${q}`).set(auth());
     expect((await get('')).status).toBe(400);
     expect((await get(`?from=${T}&to=${T - 1}`)).status).toBe(400);
     expect((await get(`?from=${T}&to=${T - 1}`)).body).toEqual({ error: 'invalid', detail: 'to is before from' }); // not "required"
     expect((await get('')).body.detail).toBe('from and to (unix ms) are required');
     expect((await get(`?from=${T}&to=${T + 32 * 86_400_000}`)).status).toBe(400);
     expect((await get(`?from=${T}&to=${T + 31 * 86_400_000}`)).status).toBe(200);
-    expect((await request(p.proxy.app).get(`/api/cameras/cam9/clips?from=${T}&to=${T}`).set(auth())).status).toBe(404);
+    expect((await request(p.base).get(`/api/cameras/cam9/clips?from=${T}&to=${T}`).set(auth())).status).toBe(404);
   });
 
   it('serves a whole clip with range support and long caching', async () => {
-    const r = await binary(request(p.proxy.app).get(`/api/cameras/cam1/clips/${withSnap.id}.mp4`).set(auth()));
+    const r = await binary(request(p.base).get(`/api/cameras/cam1/clips/${withSnap.id}.mp4`).set(auth()));
     expect(r.status).toBe(200);
     expect(r.headers['content-type']).toBe('video/mp4');
     expect(r.headers['accept-ranges']).toBe('bytes');
@@ -77,29 +77,29 @@ describe('clips API', () => {
 
   it('answers partial, open-ended and unsatisfiable ranges', async () => {
     const url = `/api/cameras/cam1/clips/${withSnap.id}.mp4`;
-    const part = await binary(request(p.proxy.app).get(url).set(auth()).set('Range', 'bytes=100-199'));
+    const part = await binary(request(p.base).get(url).set(auth()).set('Range', 'bytes=100-199'));
     expect(part.status).toBe(206);
     expect(part.headers['content-range']).toBe(`bytes 100-199/${body.length}`);
     expect(part.headers['content-length']).toBe('100');
     expect(Buffer.compare(part.body, body.subarray(100, 200))).toBe(0);
-    const open = await binary(request(p.proxy.app).get(url).set(auth()).set('Range', 'bytes=9000-'));
+    const open = await binary(request(p.base).get(url).set(auth()).set('Range', 'bytes=9000-'));
     expect(open.status).toBe(206);
     expect(open.headers['content-range']).toBe(`bytes 9000-9999/${body.length}`);
     expect(Buffer.compare(open.body, body.subarray(9000))).toBe(0);
-    const bad = await request(p.proxy.app).get(url).set(auth()).set('Range', 'bytes=20000-30000');
+    const bad = await request(p.base).get(url).set(auth()).set('Range', 'bytes=20000-30000');
     expect(bad.status).toBe(416);
     expect(bad.headers['content-range']).toBe(`bytes */${body.length}`);
   });
 
   it('serves the snapshot, and 404 for unknown clips or a missing snapshot', async () => {
-    const snap = await binary(request(p.proxy.app).get(`/api/cameras/cam1/clips/${withSnap.id}.jpg`).set(auth()));
+    const snap = await binary(request(p.base).get(`/api/cameras/cam1/clips/${withSnap.id}.jpg`).set(auth()));
     expect(snap.status).toBe(200);
     expect(snap.headers['content-type']).toBe('image/jpeg');
     expect(Buffer.compare(snap.body, jpeg)).toBe(0);
-    expect((await request(p.proxy.app).get(`/api/cameras/cam1/clips/${noSnap.id}.jpg`).set(auth())).status).toBe(404);
-    expect((await request(p.proxy.app).get('/api/cameras/cam1/clips/999999.mp4').set(auth())).status).toBe(404);
-    expect((await request(p.proxy.app).get('/api/cameras/cam1/clips/abc.mp4').set(auth())).status).toBe(400);
-    expect((await request(p.proxy.app).get(`/api/cameras/cam9/clips/${withSnap.id}.mp4`).set(auth())).status).toBe(404);
+    expect((await request(p.base).get(`/api/cameras/cam1/clips/${noSnap.id}.jpg`).set(auth())).status).toBe(404);
+    expect((await request(p.base).get('/api/cameras/cam1/clips/999999.mp4').set(auth())).status).toBe(404);
+    expect((await request(p.base).get('/api/cameras/cam1/clips/abc.mp4').set(auth())).status).toBe(400);
+    expect((await request(p.base).get(`/api/cameras/cam9/clips/${withSnap.id}.mp4`).set(auth())).status).toBe(404);
   });
 
   it('allows the many range requests of a seeking player (the image limit, not the general one)', async () => {
@@ -113,11 +113,11 @@ describe('clips API', () => {
   }, 60_000);
 
   it('says how far back it has content: the oldest clip, still and preview', async () => {
-    const r = await request(p.proxy.app).get('/api/cameras/cam1/extent').set(auth());
+    const r = await request(p.base).get('/api/cameras/cam1/extent').set(auth());
     expect(r.status).toBe(200);
     expect(r.body).toEqual({ clips: expect.any(Number), stills: null, previews: null });
     expect(r.body.clips).toBeLessThanOrEqual(T);
-    expect((await request(p.proxy.app).get('/api/cameras/nope/extent').set(auth())).status).toBe(404);
+    expect((await request(p.base).get('/api/cameras/nope/extent').set(auth())).status).toBe(404);
   });
 });
 

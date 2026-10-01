@@ -26,7 +26,7 @@ describe('proxy end to end with cam-sim', () => {
     sim.sim.engine.events.trigger('person', 1);
     await s.until(() => s.events.some((e) => (e.data as { phase: string }).phase === 'end'));
     expect(s.events.map((e) => `${(e.data as { kind: string }).kind}:${(e.data as { phase: string }).phase}`)).toEqual(['person:start', 'person:end']);
-    const list = await request(p.proxy.app).get('/api/cameras/cam1/events').set(auth());
+    const list = await request(p.base).get('/api/cameras/cam1/events').set(auth());
     expect(list.body[0]).toMatchObject({ kind: 'person', source: 'onvif' });
   });
 
