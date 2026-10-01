@@ -54,10 +54,20 @@ describe('camera FTP setup', () => {
     sim.sim.engine.events.trigger('motion', 1);
     await until(() => listClips(p.proxy.catalog, 'cam1', t0 - 60_000, Date.now() + 60_000).length > 0, 30_000);
     const [clip] = listClips(p.proxy.catalog, 'cam1', t0 - 60_000, Date.now() + 60_000);
-    expect(Math.abs(clip.start_ts - t0)).toBeLessThan(5000);
+    // Clips follow the camera's 4 s keyframe grid: the detection lands on the
+    // grid step it falls in and the clip starts one step (the pre-record)
+    // before that, so it starts 4 to 8 s before the event.
+    expect(t0 - clip.start_ts).toBeGreaterThanOrEqual(4000 - 100);
+    expect(t0 - clip.start_ts).toBeLessThanOrEqual(8000);
     expect(clip.stream).toBe('sub');
     expect(clip.end_ts! - clip.start_ts).toBeGreaterThan(0);
     await until(() => !!listClips(p.proxy.catalog, 'cam1', t0 - 60_000, Date.now() + 60_000)[0].snapshot, 10_000);
+    // The picture is named at the detection, after the clip's start, and is
+    // still the one linked to the clip.
+    const snapshot = listClips(p.proxy.catalog, 'cam1', t0 - 60_000, Date.now() + 60_000)[0].snapshot!;
+    const pictureTs = Number(/-(\d+)\.jpg$/.exec(snapshot)?.[1]);
+    expect(pictureTs).toBeGreaterThan(clip.start_ts);
+    expect(pictureTs).toBeLessThanOrEqual(t0 + 100);
     const st = (await request(p.base).get('/control/status').set(admin())).body.ftp;
     expect(st).toMatchObject({ enabled: true, listening: true, port: ftpPort, tls: true, clips: 1, failures: 0 });
     expect(st.lastUpload).toBeGreaterThanOrEqual(t0);
