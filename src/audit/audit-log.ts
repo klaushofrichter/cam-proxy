@@ -1,0 +1,202 @@
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'fs';
+import { hostname } from 'os';
+import { join } from 'path';
+import { logger } from '../log';
+
+// The audit log (spec 2026-10-01-audit-log-design): ECS 8.x JSON lines, one
+// append-only file per UTC day under <dataDir>/audit. Writes never throw into
+// the caller; reads page by cursor ("<day>:<line>", 1-based) in either
+// direction across the day files.
+export const AUDIT_DATASET = 'cam-proxy.audit';
+export type Outcome = 'success' | 'failure' | 'unknown';
+export interface AuditInput {
+  action: string;
+  category: string[];
+  type: string[];
+  outcome: Outcome;
+  message: string;
+  user?: string;
+  ip?: string;
+  userAgent?: string;
+  error?: string;
+  details?: Record<string, unknown>;
+  ecs?: Record<string, unknown>;
+}
+export type AuditRecord = Record<string, unknown> & {
+  '@timestamp': string;
+  event: { kind: 'event'; category: string[]; type: string[]; action: string; outcome: Outcome; dataset: string };
+  message: string;
+  cam_proxy?: Record<string, unknown>;
+};
+export interface AuditQuery { limit?: number; before?: string; after?: string; from?: number; to?: number; actions?: string[]; outcome?: Outcome }
+export class AuditQueryError extends Error {}
+
+const DAY_FILE = /^(\d{4}-\d{2}-\d{2})\.jsonl$/;
+const CURSOR = /^(\d{4}-\d{2}-\d{2}):(\d{1,9})$/;
+const SECRET = /token|key|password|secret/i;
+// Field names that look secret but only describe: a config change's `key`, the kind of token refused.
+const SAFE = new Set(['key', 'tokenKind']);
+
+// Values of secret-looking keys become "[redacted]", at any depth. A config
+// change ({key, from, to}) is redacted by the name in `key`.
+export function redact(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(redact);
+  if (!v || typeof v !== 'object') return v;
+  const o = v as Record<string, unknown>;
+  const byName = typeof o.key === 'string' && SECRET.test(o.key) && ('from' in o || 'to' in o);
+  return Object.fromEntries(Object.entries(o).map(([k, x]) => {
+    if (byName && (k === 'from' || k === 'to')) return [k, '[redacted]'];
+    return [k, SECRET.test(k) && !SAFE.has(k) ? '[redacted]' : redact(x)];
+  }));
+}
+
+export class AuditLog {
+  private readonly now: () => number;
+  private readonly host: string;
+  private readonly max: number;
+  private throttledDay: string | null = null;
+
+  constructor(private readonly d: { dir: string; version: string; camera: () => string; now?: () => number; host?: string; maxFileBytes?: number }) {
+    this.now = d.now ?? Date.now;
+    this.host = d.host ?? hostname();
+    this.max = d.maxFileBytes ?? 50 * 1024 * 1024;
+  }
+
+  write(i: AuditInput): AuditRecord | null {
+    const ts = this.now();
+    const day = new Date(ts).toISOString().slice(0, 10);
+    const file = join(this.d.dir, `${day}.jsonl`);
+    try {
+      if (i.action === 'auth-refused' && this.size(file) >= this.max) {
+        if (this.throttledDay !== day) {
+          this.throttledDay = day;
+          this.append(file, this.record(ts, { action: 'audit-throttled', category: ['host'], type: ['info'], outcome: 'unknown', message: 'The audit file reached its size limit; further refused-token records today are dropped' }));
+        }
+        return null;
+      }
+      const r = this.record(ts, i);
+      this.append(file, r);
+      logger.info({ audit: true, ecs: r }, 'audit');
+      return r;
+    } catch (err) {
+      logger.error({ err: (err as Error).message, action: i.action }, 'audit_write_failed');
+      return null;
+    }
+  }
+
+  list(q: AuditQuery): { records: AuditRecord[]; next: string | null; hasMore: boolean } {
+    const limit = q.limit ?? 100;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new AuditQueryError('limit is 1 to 500');
+    if (q.before !== undefined && q.after !== undefined) throw new AuditQueryError('before and after together');
+    if (q.from !== undefined && q.to !== undefined && q.to < q.from) throw new AuditQueryError('to is before from');
+    const cur = (s: string | undefined) => {
+      if (s === undefined || s === '') return null;
+      const m = CURSOR.exec(s);
+      if (!m) throw new AuditQueryError('bad cursor');
+      return { day: m[1], line: Number(m[2]) };
+    };
+    const up = q.after !== undefined;
+    const c = cur(up ? q.after : q.before);
+    const days = this.days();
+    const out: AuditRecord[] = [];
+    const ok = (r: AuditRecord) => {
+      const t = Date.parse(r['@timestamp']);
+      return (!q.actions || q.actions.includes(r.event?.action)) && (!q.outcome || r.event?.outcome === q.outcome) && (q.from === undefined || t >= q.from) && (q.to === undefined || t <= q.to);
+    };
+    outer: for (const day of up ? days : [...days].reverse()) {
+      if (c && (up ? day < c.day : day > c.day)) continue;
+      const lines = this.lines(day);
+      const order = lines.map((_, k) => k + 1);
+      for (const n of up ? order : order.reverse()) {
+        if (c && day === c.day && (up ? n <= c.line : n >= c.line)) continue;
+        const r = parse(lines[n - 1]);
+        if (!r || !ok(r)) continue;
+        out.push({ ...r, cam_proxy: { ...(r.cam_proxy ?? {}), cursor: `${day}:${n}` } });
+        if (out.length > limit) break outer;
+      }
+    }
+    const hasMore = out.length > limit;
+    const records = out.slice(0, limit);
+    const last = records.at(-1)?.cam_proxy?.cursor as string | undefined;
+    return { records, next: last ?? (up ? (q.after || null) : null), hasMore };
+  }
+
+  find(pred: (r: AuditRecord) => boolean, days = 2): AuditRecord | undefined {
+    for (const day of this.days().slice(-days).reverse()) {
+      for (const l of this.lines(day).reverse()) {
+        const r = parse(l);
+        if (r && pred(r)) return r;
+      }
+    }
+    return undefined;
+  }
+
+  deleteBefore(day: string, dryRun = false): number {
+    const old = this.days().filter((d) => d < day);
+    if (!dryRun) for (const d of old) rmSync(join(this.d.dir, `${d}.jsonl`), { force: true });
+    return old.length;
+  }
+
+  usage(): { bytes: number; files: number; oldest: number | null; newest: number | null; growthPerDay: number } {
+    const days = this.days();
+    const sizes = days.map((d) => this.size(join(this.d.dir, `${d}.jsonl`)));
+    const bytes = sizes.reduce((a, b) => a + b, 0);
+    const recent = sizes.slice(-8, -1); // whole days only
+    return {
+      bytes, files: days.length,
+      oldest: days.length ? Date.parse(`${days[0]}T00:00:00Z`) : null,
+      newest: days.length ? Date.parse(`${days.at(-1)}T00:00:00Z`) : null,
+      growthPerDay: recent.length ? recent.reduce((a, b) => a + b, 0) / recent.length : 0,
+    };
+  }
+
+  private record(ts: number, i: AuditInput): AuditRecord {
+    const r: Record<string, unknown> = {
+      '@timestamp': new Date(ts).toISOString(),
+      ecs: { version: '8.11.0' },
+      event: { kind: 'event', category: i.category, type: i.type, action: i.action, outcome: i.outcome, dataset: AUDIT_DATASET },
+      service: { name: 'cam-proxy', version: this.d.version },
+      host: { name: this.host },
+      labels: { camera: this.d.camera() },
+      ...(i.ecs ? (redact(i.ecs) as Record<string, unknown>) : {}),
+    };
+    if (i.user) r.user = { name: i.user };
+    if (i.ip) r.source = { ip: i.ip };
+    if (i.userAgent) r.user_agent = { original: i.userAgent.slice(0, 512) };
+    if (i.error) r.error = { message: i.error };
+    r.message = i.message;
+    if (i.details) r.cam_proxy = redact(i.details);
+    return r as AuditRecord;
+  }
+
+  private append(file: string, r: AuditRecord): void {
+    mkdirSync(this.d.dir, { recursive: true });
+    appendFileSync(file, JSON.stringify(r) + '\n');
+  }
+
+  private size(file: string): number {
+    try { return statSync(file).size; } catch { return 0; }
+  }
+
+  private days(): string[] {
+    let names: string[] = [];
+    try { names = readdirSync(this.d.dir); } catch { return []; }
+    return names.map((n) => DAY_FILE.exec(n)?.[1]).filter((d): d is string => !!d).sort();
+  }
+
+  private lines(day: string): string[] {
+    try {
+      const text = readFileSync(join(this.d.dir, `${day}.jsonl`), 'utf8');
+      return text.endsWith('\n') ? text.slice(0, -1).split('\n') : text ? text.split('\n') : [];
+    } catch { return []; }
+  }
+}
+
+function parse(line: string | undefined): AuditRecord | null {
+  if (!line) return null;
+  try {
+    const r = JSON.parse(line) as AuditRecord;
+    return r && typeof r === 'object' && r.event ? r : null;
+  } catch { return null; }
+}
+
