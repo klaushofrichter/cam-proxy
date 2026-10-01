@@ -20,6 +20,7 @@ import { EventIntake } from './events/intake';
 import { EventTracker } from './events/tracker';
 import { logger, setLogLevel } from './log';
 import { Storage } from './storage';
+import { AuditLog } from './audit/audit-log';
 import { Go2rtc } from './stills/go2rtc';
 import { FrameGrabber, type Frame } from './stills/grabber';
 import { MinuteStore, minuteOf } from './stills/store';
@@ -30,7 +31,7 @@ import { refreshingTimeInfo } from './analytics/time-info';
 import { sseHandler } from './stream/sse';
 import { refuseTokenInUrl, requireAccess } from './api/auth';
 import { clientApi } from './api/client-api';
-import { controlApi, sessionRoutes } from './api/control-api';
+import { auditApi, controlApi, sessionRoutes } from './api/control-api';
 import { createMetrics } from './api/metrics';
 import { createSessionSigner } from './api/session';
 import { createLoginLinks } from './api/login-links';
@@ -64,9 +65,10 @@ export interface Proxy {
   readonly clips: ClipsSide | undefined;
   readonly analytics: AnalyticsService;
   storage: Storage;
+  readonly audit: AuditLog;
   start(opts?: { port?: number; host?: string }): Promise<{ port: number }>;
   restart(): Promise<void>;
-  stop(): Promise<void>;
+  stop(opts?: { reason?: string }): Promise<void>;
 }
 
 const getPath = (o: unknown, p: string) => p.split('.').reduce<unknown>((x, k) => (x && typeof x === 'object' ? (x as Record<string, unknown>)[k] : undefined), o);
@@ -104,7 +106,9 @@ export function createProxy(initial: Loaded): Proxy {
   }
 
   const sse = sseHandler(log, running.sse);
-  const storage = new Storage({ catalog, log, config: () => running });
+  // The audit log (spec 2026-10-01-audit-log-design): daily JSON-lines files.
+  const audit = new AuditLog({ dir: join(running.server.dataDir, 'audit'), version: VERSION, camera: () => running.camera.id });
+  const storage = new Storage({ catalog, log, config: () => running, audit });
   storage.recount();
   const sessions = createSessionSigner();
   const links = createLoginLinks();
@@ -257,7 +261,7 @@ export function createProxy(initial: Loaded): Proxy {
     if (JSON.stringify(next.config.analytics) !== analyticsBefore) analytics.settingsChanged();
   };
 
-  const access = { tokens: () => loaded.secrets.tokens, adminToken: () => loaded.secrets.adminToken, sessionValid: (v: string | undefined) => sessions.verify(v) };
+  const access = { tokens: () => loaded.secrets.tokens, adminToken: () => loaded.secrets.adminToken, auditToken: () => loaded.secrets.auditToken, sessionValid: (v: string | undefined) => sessions.verify(v) };
   const app = express();
   app.disable('x-powered-by');
   // Far above real use (the UI, cams, a scraper); stops a flood. SSE is one
@@ -278,6 +282,10 @@ export function createProxy(initial: Loaded): Proxy {
   app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links }));
   app.use('/api', refuseTokenInUrl, requireAccess('client', access), composeApi({ config: () => running, catalog, composer, stillsIn: (f, t) => stills?.store.listStills(f, t) ?? [], paused: () => storage.paused(), font }));
   app.use('/api', refuseTokenInUrl, requireAccess('client', access), clientApi({ config: () => running, catalog, status: () => status, sse, stills: () => stills }));
+  // The audit log: admins and the audit token, GET only. Other /control paths
+  // pass on untouched to the admin-only routes below.
+  const auditAccess = requireAccess('audit-read', access);
+  app.use('/control', refuseTokenInUrl, (req, res, next) => (req.path === '/audit' ? auditAccess(req, res, next) : next()), auditApi({ audit }));
   app.use(
     '/control',
     refuseTokenInUrl,
@@ -312,6 +320,7 @@ export function createProxy(initial: Loaded): Proxy {
         off: () => cameraFtpOff(client),
       },
       storage,
+      audit,
       analytics: () => analytics.state(),
       unmapped: { list: (limit) => listUnmapped(catalog, limit), clear: () => clearUnmapped(catalog) },
       sseClients: () => sse.clients(),
@@ -384,6 +393,7 @@ export function createProxy(initial: Loaded): Proxy {
     },
     sse,
     storage,
+    audit,
     get stills() {
       return stills;
     },
@@ -409,6 +419,8 @@ export function createProxy(initial: Loaded): Proxy {
         logger.warn({ err: (err as Error).message }, 'analytics_backfill_failed');
       }
       analytics.catchUp();
+      const prevStop = audit.find((r) => r.event.action === 'proxy-stop', 400);
+      audit.write({ action: 'proxy-start', category: ['process'], type: ['start'], outcome: 'success', user: 'system', message: `cam-proxy ${VERSION} started`, details: { config: { camera: running.camera.id, stills: running.stills.enabled, ftp: running.ftp.enabled, analytics: running.analytics.googleVision.enabled }, previousStop: prevStop?.['@timestamp'] ?? null } });
       logger.info({ port, camera: running.camera.id, version: VERSION }, 'cam_proxy_started');
       return { port };
     },
@@ -423,7 +435,9 @@ export function createProxy(initial: Loaded): Proxy {
       })();
       return restarting;
     },
-    async stop() {
+    async stop(opts: { reason?: string } = {}) {
+      // First, while everything is still open.
+      audit.write({ action: 'proxy-stop', category: ['process'], type: ['end'], outcome: 'success', user: 'system', message: `cam-proxy stopping${opts.reason ? ` (${opts.reason})` : ''}`, details: { reason: opts.reason ?? 'stop' } });
       await restarting;
       clearInterval(sweeper);
       sse.closeAll();

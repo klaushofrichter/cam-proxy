@@ -315,3 +315,19 @@ paths:
         - { name: limit, in: query, schema: { type: integer, default: 100, maximum: 500 }, description: 'default 100; the buffer itself holds only the last 500 lines' }
       responses:
         '200': { description: '[{ level, time, msg, … }]' }
+  /control/audit:
+    get:
+      summary: The audit log as ECS JSON lines (admin token, admin session, or CAMPROXY_AUDIT_TOKEN)
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: before, in: query, description: "cursor: older records, newest first", schema: { type: string } }
+        - { name: after, in: query, description: "cursor: newer records, oldest first (empty: from the oldest)", schema: { type: string } }
+        - { name: from, in: query, description: unix ms, schema: { type: integer } }
+        - { name: to, in: query, description: unix ms, schema: { type: integer } }
+        - { name: action, in: query, description: "event.action values, comma-separated", schema: { type: string } }
+        - { name: outcome, in: query, schema: { type: string, enum: [success, failure, unknown] } }
+      responses:
+        '200': { description: "application/x-ndjson, one ECS record per line, each with cam_proxy.cursor; headers X-Next-Cursor and X-Has-More" }
+        '400': { description: bad cursor, range, limit or outcome }
+        '401': { description: no or unknown token }
+        '403': { description: a client token, or the audit token on anything but GET /control/audit }

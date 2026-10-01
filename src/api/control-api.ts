@@ -11,7 +11,8 @@ import { logBuffer, logger } from '../log';
 import type { ProviderState } from '../analytics/service';
 import type { Storage } from '../storage';
 import type { StreamLog } from '../stream/log';
-import { tokenMatches } from './auth';
+import { AuditQueryError, type AuditLog, type Outcome } from '../audit/audit-log';
+import { clientIp, tokenMatches } from './auth';
 import { eventsStored } from './metrics';
 import { readCookie, SESSION_COOKIE, SESSION_MS, type createSessionSigner } from './session';
 import type { createLoginLinks } from './login-links';
@@ -48,6 +49,7 @@ export interface ControlDeps {
     off: () => Promise<unknown>;
   };
   storage: Storage;
+  audit: AuditLog;
   analytics: () => ProviderState[];
   unmapped: { list(limit?: number): { mid: string; name: string; count: number; lastSeen: number }[]; clear(): number };
   sseClients: () => number;
@@ -190,6 +192,7 @@ export function controlApi(d: ControlDeps): express.Router {
       case 'camera-ftp-off':
         return void (await cameraCall(res, async () => ({ ftp: await d.cameraFtp.off() })));
       case 'restart':
+        d.audit.write({ action: 'proxy-restart', category: ['process'], type: ['change'], outcome: 'success', user: 'admin', ip: clientIp(req), userAgent: req.get('user-agent'), message: 'Restart requested through the control API', details: { requestedBy: res.locals.access?.viaCookie ? 'session' : 'token' } });
         d.restart().catch((err: Error) => logger.error({ err: err.message }, 'restart_failed'));
         return void res.status(202).end();
       default:
@@ -202,5 +205,35 @@ export function controlApi(d: ControlDeps): express.Router {
     res.json(logBuffer.recent(Number.isInteger(limit) && limit > 0 ? limit : 100));
   });
 
+  return r;
+}
+
+// GET /control/audit (spec 2026-10-01-audit-log-design): ECS JSON lines,
+// newest first with ?before, oldest first with ?after. Mounted on /control
+// with its own access (admin or the audit token) before the admin-only routes.
+export function auditApi(d: { audit: AuditLog }): express.Router {
+  const r = express.Router();
+  r.get('/audit', (req, res) => {
+    const q = req.query;
+    const num = (v: unknown) => (v === undefined ? undefined : /^\d{1,15}$/.test(String(v)) ? Number(v) : NaN);
+    const outcome = q.outcome === undefined ? undefined : String(q.outcome);
+    if (outcome !== undefined && !['success', 'failure', 'unknown'].includes(outcome)) return void res.status(400).json({ error: 'invalid', detail: 'outcome is success, failure or unknown' });
+    const from = num(q.from), to = num(q.to), limit = num(q.limit);
+    if ([from, to, limit].some((v) => Number.isNaN(v))) return void res.status(400).json({ error: 'invalid', detail: 'from, to and limit are numbers' });
+    try {
+      const out = d.audit.list({
+        limit, from, to, outcome: outcome as Outcome | undefined,
+        before: q.before === undefined ? undefined : String(q.before),
+        after: q.after === undefined ? undefined : String(q.after),
+        actions: q.action === undefined ? undefined : String(q.action).split(',').map((s) => s.trim()).filter(Boolean),
+      });
+      res.set({ 'Content-Type': 'application/x-ndjson; charset=utf-8', 'X-Has-More': String(out.hasMore), 'Cache-Control': 'no-store' });
+      if (out.next) res.set('X-Next-Cursor', out.next);
+      res.send(out.records.map((x) => JSON.stringify(x)).join('\n') + (out.records.length ? '\n' : ''));
+    } catch (err) {
+      if (err instanceof AuditQueryError) return void res.status(400).json({ error: 'invalid', detail: err.message });
+      throw err;
+    }
+  });
   return r;
 }
