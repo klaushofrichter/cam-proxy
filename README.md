@@ -310,6 +310,16 @@ privacy and cost): [docs/analytics.md](docs/analytics.md).
   `CAMPROXY_GOOGLE_VISION_URL` (default `https://vision.googleapis.com`;
   `http://` only to localhost, since the key travels in a header; the e2e
   tests point it at a mock). Without a key the switch stays disabled.
+- **Key set on the Settings page:** the Analytics card has a "Google Vision
+  key" field (or `PUT /control/secrets/google-vision-key`). It replaces the
+  key in use at once, whether it came from the environment or was set there
+  before, and lifts an invalid-key pause. It is kept in memory only: never
+  written to disk, the config or the logs, and never returned. **It is not
+  saved: a restart of the proxy process restores the configured key (or
+  none).** The "Restart camera side" action keeps it. While it is in use the
+  card says "Manual key active (AIza…wXyZ)", and `GET /control/analytics`
+  reports `keySource: manual` (else `env` or `none`). Each set is an audit
+  record, `secret-override`, with the first and last four characters only.
 - **Limits:** a call is made only while both the monthly limit and the daily
   cap allow it (calendar month and day in camera time). The count is this
   proxy's own: proxies that share a key share Google's budget, so keep their
@@ -337,7 +347,8 @@ privacy and cost): [docs/analytics.md](docs/analytics.md).
   images to the real service and prints the time and objects. Never run it in
   CI.
 - **Where the key is:** cam2's proxy in the cluster has no key (Klaus,
-  2026-09-30), so analytics stays off there. The Pi gets the key in
+  2026-09-30), so analytics stays off there; an admin can give it one with
+  the Settings field until its next restart. The Pi gets the key in
   `/srv/cam-proxy/.env`; restart it with `docker compose up -d`, then turn it
   on in Settings with a small monthly limit.
 
@@ -419,10 +430,11 @@ arrive.
 
 | Route | |
 |---|---|
-| `GET /control/status` | `{version, camera (incl. webUiUrl), intake, sse, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures}}` |
+| `GET /control/status` | `{version, camera (incl. webUiUrl), intake, sse, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures}, analytics: [{…, keyMasked, keySource}], analyticsUnmapped}` |
 | `GET /control/stats` | `{disk: {catalog, audit, stills, previews, clips}` (each `{bytes, files, oldest, newest, growthPerDay}`), `events, stream, sse, storage}` |
 | `GET /control/config` | every setting: `{value, source, restart, pending, next?}`; secrets never appear |
 | `PUT /control/config` | overrides, e.g. `{"sse":{"pingS":10}}`; a bad value answers 400 naming it, and nothing is written |
+| `PUT /control/secrets/google-vision-key` | `{"key":"..."}` (20 to 200 printable ASCII characters, no spaces; else 400 `invalid`): sets the Google Vision key in memory only, at once, until the process restarts; answers `{keySource: "manual", keyMasked, replaced}`, never the key; audited as `secret-override` |
 | `DELETE /control/config/{path}` | removes one override |
 | `POST /control/actions/{name}` | `onvif-resubscribe`, `restart` (202, started); `camera-test`, `retention-run` (`{"dryRun":true}` previews); `camera-ftp-setup`, `camera-ftp-test` (409 `not_configured` without `ftp.publicHost` or the FTP password), `camera-ftp-off`; any camera call that fails answers 502 `camera_error` |
 | `GET /control/audit` | the audit log as JSON lines: `limit`, `before`/`after` (cursors), `from`, `to`, `action`, `outcome`; admin token, admin session or `CAMPROXY_AUDIT_TOKEN`; no HEAD. See [docs/audit-log.md](docs/audit-log.md) |

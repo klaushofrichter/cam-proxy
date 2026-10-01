@@ -8,7 +8,8 @@ import { leafPaths } from '../config/schema';
 import type { FtpTarget } from '../clips/camera-ftp';
 import type { IntakeState } from '../events/intake';
 import { logBuffer, logger } from '../log';
-import type { ProviderState } from '../analytics/service';
+import type { KeySource, ProviderState } from '../analytics/service';
+import { maskKey } from '../analytics/providers';
 import type { Storage } from '../storage';
 import type { StreamLog } from '../stream/log';
 import { AuditQueryError, type AuditLog, type Outcome } from '../audit/audit-log';
@@ -52,6 +53,7 @@ export interface ControlDeps {
   storage: Storage;
   audit: AuditLog;
   analytics: () => ProviderState[];
+  setVisionKey: (key: string) => KeySource; // in memory only; answers what it replaced
   unmapped: { list(limit?: number): { mid: string; name: string; count: number; lastSeen: number }[]; clear(): number };
   sseClients: () => number;
   stream: () => { enabled: boolean; up: boolean; go2rtcUp: boolean; lastFrameTs: number | null };
@@ -203,6 +205,22 @@ export function controlApi(d: ControlDeps): express.Router {
   r.get('/analytics', (_req, res) => void res.json(d.analytics()));
   r.get('/analytics/unmapped', (_req, res) => void res.json(d.unmapped.list()));
   r.delete('/analytics/unmapped', (_req, res) => void res.json({ cleared: d.unmapped.clear() }));
+
+  // The Google Vision key set at runtime (issue #70): in memory only, never
+  // written, logged or returned; the audit record has the masked key. A
+  // refused key (400) writes nothing and is never echoed.
+  r.put('/secrets/google-vision-key', (req, res) => {
+    const key: unknown = req.body?.key;
+    if (typeof key !== 'string' || !/^[\x21-\x7e]{20,200}$/.test(key)) return void res.status(400).json({ error: 'invalid', detail: 'key: 20 to 200 printable ASCII characters, no spaces' });
+    const replaced = d.setVisionKey(key);
+    const masked = maskKey(key)!;
+    d.audit.write({
+      action: 'secret-override', category: ['configuration'], type: ['change'], outcome: 'success', user: 'admin', ip: clientIp(req), userAgent: req.get('user-agent'),
+      message: `Google Vision key set manually (${masked}), ${replaced === 'none' ? 'where no key was set' : `replacing the ${replaced} key`}`,
+      details: { secret: 'CAMPROXY_GOOGLE_VISION_KEY', masked, replaced },
+    });
+    res.json({ keySource: 'manual', keyMasked: masked, replaced });
+  });
 
   r.get('/stats', (_req, res) => {
     const u = d.storage.usage();

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { ADMIN_TOKEN, CLIENT_TOKEN, SIM, SIM_CONTROL_TOKEN, VISION_MOCK_PORT } from './env';
+import { ADMIN_TOKEN, CLIENT_TOKEN, SIM, SIM_CONTROL_TOKEN, VISION_KEY, VISION_MOCK_PORT } from './env';
 
 async function signIn(page: Page) {
   await page.goto('/'); // signed in by the storageState from auth.setup.ts
@@ -204,6 +204,36 @@ test('an answer with nothing relevant: the tag and the modal say so; show all li
   await page.locator('body').evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.keyboard.press('Escape');
   await expect(modal).toHaveCount(0);
+});
+
+// Issue #70: a key set on the Settings page is in use at once, with a notice
+// that it is not saved. The same key as the environment's, so the specs after
+// this one see no difference.
+test('a Google Vision key set on the Settings page shows the manual-key notice and is audited', async ({ page }) => {
+  await signIn(page);
+  await page.getByTestId('nav-settings').click();
+  await expect(page.getByTestId('analytics-key-notice')).toHaveCount(0);
+  const input = page.getByTestId('analytics-key-input');
+  await expect(input).toHaveAttribute('type', 'password');
+  await input.fill('too short');
+  await expect(page.getByTestId('analytics-key-hint')).toBeVisible();
+  await expect(page.getByTestId('analytics-key-set')).toBeDisabled();
+  await input.fill(VISION_KEY);
+  await page.getByTestId('analytics-key-set').click();
+  await expect(page.getByTestId('analytics-key-message')).toHaveText('Google Vision key set');
+  await expect(input).toHaveValue('');
+  await expect(page.getByTestId('analytics-key-notice')).toHaveText('Manual key active (e2e-…cret). Not saved: a restart restores the configured key.');
+  await expect(page.getByTestId('analytics-key')).toContainText('e2e-…cret');
+  // The page never holds the key itself.
+  expect(await page.content()).not.toContain(VISION_KEY);
+
+  await page.getByTestId('nav-audit').click();
+  await page.getByTestId('audit-filter-action').selectOption('secret-override');
+  const row = page.getByTestId('audit-row').first();
+  await expect(row).toHaveAttribute('data-action', 'secret-override');
+  await row.click();
+  await expect(page.getByTestId('audit-row-json')).toContainText('"masked": "e2e-…cret"');
+  await expect(page.getByTestId('audit-row-json')).not.toContainText(VISION_KEY);
 });
 
 test.afterAll(async ({ request }) => {

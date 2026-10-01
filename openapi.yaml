@@ -254,7 +254,7 @@ paths:
     get:
       summary: External analytics providers - state, usage and limits (admin)
       responses:
-        '200': { description: '[{ id, name, enabled, keyMasked (never the key), month: {calls, limit}, today: {calls, cap}, paused: null | {reason, until}, lastCall, lastError }]' }
+        '200': { description: '[{ id, name, enabled, keyMasked (first4…last4, never the key), keySource (env, manual or none), month: {calls, limit}, today: {calls, cap}, paused: null | {reason, until}, lastCall, lastError }]' }
         '401': { description: not signed in }
         '403': { description: admin_only }
   /control/analytics/unmapped:
@@ -268,6 +268,31 @@ paths:
       summary: Clear the unmapped list (admin)
       responses:
         '200': { description: '{ cleared }' }
+        '401': { description: not signed in }
+        '403': { description: admin_only, or csrf }
+  /control/secrets/google-vision-key:
+    put:
+      summary: Sets or overrides the Google Vision key at runtime, in memory only (admin)
+      description: >
+        Replaces the key in use at once (from CAMPROXY_GOOGLE_VISION_KEY or an
+        earlier manual key) and lifts an invalid-key pause. The key is never
+        written to disk, the config or the logs, and never returned; a restart
+        of the process restores the configured key, or none. Recorded in the
+        audit log as `secret-override` with the masked key. Admin token or
+        admin session (with `X-CamProxy-UI: 1`); the client and audit tokens
+        answer 403.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key]
+              properties:
+                key: { type: string, minLength: 20, maxLength: 200, pattern: '^[\x21-\x7e]+$', description: 'printable ASCII, no spaces' }
+      responses:
+        '200': { description: '{ keySource: manual, keyMasked: "AIza…wXyZ", replaced: env | manual | none }' }
+        '400': { description: '{ error: invalid, detail } (never echoes the key)' }
         '401': { description: not signed in }
         '403': { description: admin_only, or csrf }
   /control/stats:

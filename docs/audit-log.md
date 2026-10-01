@@ -17,6 +17,7 @@ storage and activity snapshot. Design: [the spec](superpowers/specs/2026-10-01-a
 | `auth-refused` | authentication / denied | a request the auth layer answered with 401 or 403 | `auth.tokenKind` (`none`, `invalid`, `client`, `admin`, `audit`, `session`), `auth.reason` (`no-token`, `wrong-token`, `admin-only`, `csrf`), `auth.suppressed`; ECS `http.request.method` and `url.path` |
 | `control-action` | configuration / change | `POST /control/actions/:name` except `restart` and a retention dry run | `action`, `result` (`ok`, the error code or status, or `aborted`), `requestedBy` |
 | `config-change` | configuration / change | `PUT /control/config`, reset of an override | `changes`: `[{key, from, to}]`, secrets redacted. A refused change (400) writes nothing |
+| `secret-override` | configuration / change | `PUT /control/secrets/google-vision-key` (the Settings page's key field) | `secret` (`CAMPROXY_GOOGLE_VISION_KEY`), `masked` (first and last four characters, `AIza…wXyZ`), `replaced` (`env`, `manual` or `none`). Never the key. A refused key (400) writes nothing |
 | `storage-daily` | host / info | once per camera day, 00:05 camera time | `day`, `size`, `free`, `budget`, `used`, `daysUntilFull`, `kinds`, `clipRows` |
 | `activity-daily` | host / info | once per camera day, 00:05 camera time | `day`, `forDay`, `events`, `clips`, `analytics`, `stream` |
 | `audit-throttled` | host / info | a day's file reached 50 MB | none |
@@ -160,7 +161,11 @@ with its own details):
 - **Never written:** tokens, link codes, cookies, passwords, the Vision key.
   Any value under a name containing `token`, `key`, `password` or `secret`
   is replaced with `"[redacted]"`, and a config change is redacted by the
-  setting's name. (`key` and `tokenKind` themselves are kept: they describe.)
+  setting's name. (`key` and `tokenKind` themselves are kept: they describe;
+  so is `secret` when its value is a known secret's name, `CAMPROXY_GOOGLE_VISION_KEY`.) A Vision
+  key set on the Settings page appears as its first and last four characters
+  only (Google keys start with `AIza`, so that shows four characters of the
+  secret part).
 
 ## Files and retention
 

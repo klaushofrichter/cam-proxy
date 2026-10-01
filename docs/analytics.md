@@ -38,8 +38,8 @@ Measured on cam1 (2026-09-30):
    10 s.
    - A network error, a timeout or a 5xx is retried once after 30 s.
    - A 400, 401 or 403 pauses analytics (`bad_key`) until an analytics
-     setting changes (for example, switch analytics off and on in Settings)
-     or the proxy restarts, as it does after a new key.
+     setting changes (for example, switch analytics off and on in Settings),
+     a new key is set in Settings, or the proxy restarts.
    - A 429 pauses it for an hour (`quota`).
    - Events that arrive while paused are *skipped* (`paused`).
    - No call is made for an event that retention removed meanwhile. A call
@@ -137,12 +137,19 @@ full contract is in [openapi.yaml](../openapi.yaml).
 - **Key:** the key lives in the environment (`CAMPROXY_GOOGLE_VISION_KEY`,
   in `/srv/cam-proxy/.env` on the Pi). It is never in config.json, the UI
   (masked), logs or the API.
+- **Key from the Settings page:** an admin can set or override the key at
+  runtime (`PUT /control/secrets/google-vision-key`). It is used from the next
+  call on and lifts an invalid-key pause, lives in memory only, and a restart
+  of the process restores the environment's key (or none). The provider state
+  reports `keySource` (`env`, `manual` or `none`) and the masked key; each set
+  is audited as `secret-override` with the first and last four characters.
 - **Cost:** Google's first 1,000 images a month are free, then $2.25 per 1,000
   (checked 2026-09-30).
 - **Limits:** the monthly limit and the daily cap are cam-proxy's own count.
   Proxies that share a key share Google's budget.
 - **Where it runs:** cam1's proxy on the Pi has the key. cam2's proxy in the
-  cluster has none, so analytics is off there.
+  cluster has none, so analytics is off there. The Settings field can give
+  it one until its next restart.
 
 ## Testing
 

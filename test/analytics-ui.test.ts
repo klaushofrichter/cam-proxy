@@ -1,6 +1,6 @@
 // test/analytics-ui.test.ts
 import { describe, expect, it } from 'vitest';
-import { boxLabel, costEstimate, scorePct, labelStyle, estimateFor, parseLimit, pausedText, tagText, toggleSelection, usageLine } from '../web/src/lib/analytics';
+import { boxLabel, costEstimate, keyNotice, validKey, scorePct, labelStyle, estimateFor, parseLimit, pausedText, tagText, toggleSelection, usageLine } from '../web/src/lib/analytics';
 
 describe('analytics UI text', () => {
   it('estimates the monthly cost from the limit (1,000 free, then $2.25 per 1,000)', () => {
@@ -32,9 +32,27 @@ describe('analytics UI text', () => {
 
   // Issue #52: no "Paused: invalid key: check …" (two colons).
   it('says why the provider is paused, with one colon at most', () => {
-    expect(pausedText({ reason: 'bad_key', until: null })).toBe('invalid key (check CAMPROXY_GOOGLE_VISION_KEY; switch analytics off and on, or restart, to try again)');
+    expect(pausedText({ reason: 'bad_key', until: null })).toBe('invalid key (check CAMPROXY_GOOGLE_VISION_KEY or set a new key in Settings; switch analytics off and on, or restart, to try again)');
     expect(pausedText({ reason: 'quota', until: Date.parse('2026-09-30T19:02:00Z') })).toMatch(/^quota, until \d{1,2}:02(\s?[AP]M)?$/);
     expect(pausedText(null)).toBeNull();
+  });
+
+  // Issue #70: the manual key's notice, and the field's check.
+  it('says when a manual key is active, with the masked key', () => {
+    expect(keyNotice({ keySource: 'manual', keyMasked: 'AIza…wXyZ' })).toBe('Manual key active (AIza…wXyZ). Not saved: a restart restores the configured key.');
+    expect(keyNotice({ keySource: 'env', keyMasked: 'AIza…aBcD' })).toBeNull();
+    expect(keyNotice({ keySource: 'none', keyMasked: null })).toBeNull();
+    expect(keyNotice(null)).toBeNull();
+  });
+  it('accepts a key of 20 to 200 characters without whitespace', () => {
+    expect(validKey('A'.repeat(20))).toBe(true);
+    expect(validKey('A'.repeat(200))).toBe(true);
+    expect(validKey('A'.repeat(19))).toBe(false);
+    expect(validKey('A'.repeat(201))).toBe(false);
+    expect(validKey('AIzaSy with space 00000')).toBe(false);
+    expect(validKey('')).toBe(false);
+    expect(validKey('AIzaSyCtrl\u0001000000000000')).toBe(false);
+    expect(validKey('AIzaSyNonAscii\u00e9000000000')).toBe(false);
   });
 
   // Issue #52: the estimate previews a valid draft; an invalid one shows the saved limit's.

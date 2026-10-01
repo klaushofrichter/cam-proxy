@@ -36,6 +36,8 @@ const CURSOR = /^(\d{4}-\d{2}-\d{2}):(\d{1,9})$/;
 const SECRET = /token|key|password|secret/i;
 // Field names that look secret but only describe: a config change's `key`, the kind of token refused.
 const SAFE = new Set(['key', 'tokenKind']);
+// `secret` may name the secret a record is about (secret-override): these names only.
+const SECRET_NAMES = new Set(['CAMPROXY_GOOGLE_VISION_KEY']);
 
 // Values of secret-looking keys become "[redacted]", at any depth. A config
 // change ({key, from, to}) is redacted by the name in `key`.
@@ -46,6 +48,7 @@ export function redact(v: unknown): unknown {
   const byName = typeof o.key === 'string' && SECRET.test(o.key) && ('from' in o || 'to' in o);
   return Object.fromEntries(Object.entries(o).map(([k, x]) => {
     if (byName && (k === 'from' || k === 'to')) return [k, '[redacted]'];
+    if (k === 'secret' && typeof x === 'string' && SECRET_NAMES.has(x)) return [k, x];
     return [k, SECRET.test(k) && !SAFE.has(k) ? '[redacted]' : redact(x)];
   }));
 }
