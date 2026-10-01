@@ -376,6 +376,7 @@ export function createProxy(initial: Loaded): Proxy {
       storage,
       audit,
       analytics: () => analytics.state(),
+      setVisionKey: (key) => analytics.setManualKey(key),
       unmapped: { list: (limit) => listUnmapped(catalog, limit), clear: () => clearUnmapped(catalog) },
       sseClients: () => sse.clients(),
       stream: () => ({ enabled: !!stills, up: stills?.grabber.up() ?? false, go2rtcUp: stills?.go2rtc.up() ?? false, lastFrameTs: stills?.grabber.lastFrameTs() ?? null }),

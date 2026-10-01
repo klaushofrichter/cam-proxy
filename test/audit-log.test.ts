@@ -63,6 +63,14 @@ describe('AuditLog.write', () => {
     expect(redact({ auth: { tokenKind: 'client', reason: 'admin-only' } })).toEqual({ auth: { tokenKind: 'client', reason: 'admin-only' } });
   });
 
+  // Issue #70: `secret` names an environment variable; any other value is redacted.
+  it('keeps a secret field that names a CAMPROXY_ variable, redacts any other', () => {
+    expect(redact({ secret: 'CAMPROXY_GOOGLE_VISION_KEY', masked: 'AIza…wXyZ', replaced: 'env' })).toEqual({ secret: 'CAMPROXY_GOOGLE_VISION_KEY', masked: 'AIza…wXyZ', replaced: 'env' });
+    expect(redact({ secret: 'AIzaSyManualKey0000000wXyZ' })).toEqual({ secret: '[redacted]' });
+    expect(redact({ secret: 'CAMPROXY_X with more' })).toEqual({ secret: '[redacted]' });
+    expect(redact({ secret: { name: 'CAMPROXY_X' } })).toEqual({ secret: '[redacted]' });
+  });
+
   it('redacts a config change by its key name', () => {
     expect(redact({ changes: [{ key: 'camera.password', from: 'a', to: 'b' }, { key: 'retention.auditDays', from: 90, to: 30 }] })).toEqual({
       changes: [{ key: 'camera.password', from: '[redacted]', to: '[redacted]' }, { key: 'retention.auditDays', from: 90, to: 30 }],

@@ -41,6 +41,7 @@ export interface ProviderState {
   name: string;
   enabled: boolean;
   keyMasked: string | null;
+  keySource: KeySource;
   month: { calls: number; limit: number };
   today: { calls: number; cap: number };
   paused: { reason: string; until: number | null } | null;
@@ -49,6 +50,8 @@ export interface ProviderState {
 }
 
 type Job = { id: number; kind: string; start_ts: number };
+// Where the key in use comes from: the environment (or its _FILE), set at runtime, or none.
+export type KeySource = 'env' | 'manual' | 'none';
 
 // Sends event stills to the enabled provider, one at a time, within the
 // limits, and stores what comes back (spec 2026-09-30-analytics-design).
@@ -61,6 +64,8 @@ export class AnalyticsService {
   private paused: { reason: string; until: number | null } | null = null;
   private lastCall: ProviderState['lastCall'] = null;
   private lastError: string | null = null;
+  // A key set at runtime (issue #70): in memory only, gone with the process.
+  private manualKey: string | undefined;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
 
@@ -73,7 +78,20 @@ export class AnalyticsService {
     return this.d.config().analytics;
   }
   private key(): string | undefined {
-    return this.d.secrets().googleVisionKey || undefined;
+    return this.manualKey ?? (this.d.secrets().googleVisionKey || undefined);
+  }
+  private keySource(): KeySource {
+    return this.manualKey !== undefined ? 'manual' : this.d.secrets().googleVisionKey ? 'env' : 'none';
+  }
+
+  // Replaces the key in use at once (the next call reads it); answers what it
+  // replaced. A new key is a reason to try again: it lifts a bad_key pause.
+  // The caller checks the key's form.
+  setManualKey(key: string): KeySource {
+    const replaced = this.keySource();
+    this.manualKey = key;
+    if (this.paused?.reason === 'bad_key') this.paused = null;
+    return replaced;
   }
   // On, with a key, not stopped: otherwise events aren't queued and no call is made.
   private active(): boolean {
@@ -100,7 +118,7 @@ export class AnalyticsService {
     for (const e of unanalysed(this.d.catalog, this.d.cam, kinds, this.now() - CATCH_UP_MS)) this.onEvent(e);
   }
 
-  // A changed analytics setting (or a new key, which needs a new process) lifts a bad_key pause.
+  // A changed analytics setting lifts a bad_key pause (so does a new key: setManualKey).
   settingsChanged(): void {
     if (this.paused?.reason === 'bad_key') this.paused = null;
   }
@@ -148,6 +166,7 @@ export class AnalyticsService {
       name: p.name,
       enabled: g.enabled,
       keyMasked: maskKey(this.key()),
+      keySource: this.keySource(),
       month: { calls: this.monthUsage(day), limit: g.monthlyLimit },
       today: { calls: usageBetween(this.d.catalog, p.id, day, day), cap: g.dailyCap },
       paused: this.pause(),

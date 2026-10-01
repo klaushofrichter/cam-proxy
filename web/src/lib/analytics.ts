@@ -5,6 +5,7 @@ export interface UiProviderState {
   name: string;
   enabled: boolean;
   keyMasked: string | null;
+  keySource?: 'env' | 'manual' | 'none';
   month: { calls: number; limit: number };
   today: { calls: number; cap: number };
   paused: { reason: string; until: number | null } | null;
@@ -34,9 +35,20 @@ export function estimateFor(typed: string, saved: number): string {
 
 export function pausedText(p: UiProviderState['paused']): string | null {
   if (!p) return null;
-  if (p.reason === 'bad_key') return 'invalid key (check CAMPROXY_GOOGLE_VISION_KEY; switch analytics off and on, or restart, to try again)';
+  if (p.reason === 'bad_key') return 'invalid key (check CAMPROXY_GOOGLE_VISION_KEY or set a new key in Settings; switch analytics off and on, or restart, to try again)';
   if (p.reason === 'quota') return `quota, until ${new Date(p.until ?? 0).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
   return p.reason;
+}
+
+// Issue #70: the notice while a key set on the Settings page is in use.
+export function keyNotice(s: Pick<UiProviderState, 'keySource' | 'keyMasked'> | null): string | null {
+  if (s?.keySource !== 'manual') return null;
+  return `Manual key active (${s.keyMasked}). Not saved: a restart restores the configured key.`;
+}
+
+// What PUT /control/secrets/google-vision-key accepts: 20 to 200 characters, no whitespace.
+export function validKey(text: string): boolean {
+  return /^\S{20,200}$/.test(text);
 }
 
 export function usageLine(s: UiProviderState): string {

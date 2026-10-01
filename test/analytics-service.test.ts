@@ -589,3 +589,65 @@ describe('AnalyticsService', () => {
     expect(log.since(0, { types: ['analysis'] }, 10)).toHaveLength(1);
   });
 });
+
+// Issue #70: a key set at runtime (Settings page), kept in memory only.
+describe('a manual key', () => {
+  const ENV_KEY = 'AIzaSyEnvKey000000000aBcD';
+  const MANUAL = 'AIzaSyManualKey0000000wXyZ';
+  const keyed = (envKey: string) => {
+    const used: string[] = [];
+    const s = new AnalyticsService({ ...deps({ key: envKey }), provider: (_id, key) => (used.push(key), provider) });
+    return { s, used };
+  };
+
+  it('replaces the env key at once: the next call uses it, the state reports manual and the masked key', async () => {
+    still(T0 + 1000, 7);
+    still(T0 + 61_000, 7);
+    const { s, used } = keyed(ENV_KEY);
+    expect(s.state()[0]).toMatchObject({ keySource: 'env', keyMasked: 'AIza…aBcD' });
+    s.onEvent(event('person'));
+    await s.idle();
+    expect(s.setManualKey(MANUAL)).toBe('env');
+    expect(s.state()[0]).toMatchObject({ keySource: 'manual', keyMasked: 'AIza…wXyZ' });
+    s.onEvent(event('person', T0 + 60_000));
+    await s.idle();
+    expect(used).toEqual([ENV_KEY, MANUAL]);
+    expect(JSON.stringify(s.state())).not.toContain(MANUAL);
+  });
+
+  it('replaces an earlier manual key, and gives a proxy without a key one', async () => {
+    still(T0 + 1000, 7);
+    const { s, used } = keyed('');
+    expect(s.state()[0]).toMatchObject({ keySource: 'none', keyMasked: null });
+    expect(s.setManualKey(MANUAL)).toBe('none');
+    expect(s.setManualKey(ENV_KEY)).toBe('manual');
+    expect(s.state()[0]).toMatchObject({ keySource: 'manual', keyMasked: 'AIza…aBcD' });
+    s.onEvent(event('person'));
+    await s.idle();
+    expect(used).toEqual([ENV_KEY]);
+  });
+
+  it('lifts a bad_key pause, not a quota pause', async () => {
+    still(T0 + 1000, 7);
+    still(T0 + 61_000, 7);
+    answers = [new AnalyticsError('bad_key', false, 'bad_key'), 'ok'];
+    const { s, used } = keyed(ENV_KEY);
+    s.onEvent(event('person'));
+    await s.idle();
+    expect(s.state()[0].paused).toMatchObject({ reason: 'bad_key' });
+    s.setManualKey(MANUAL);
+    expect(s.state()[0].paused).toBeNull();
+    const b = event('person', T0 + 60_000);
+    s.onEvent(b);
+    await s.idle();
+    expect(analysisFor(c, b.id)).toMatchObject({ status: 'ok' });
+    expect(used).toEqual([ENV_KEY, MANUAL]);
+
+    answers = [new AnalyticsError('quota', false, 'quota')];
+    still(T0 + 121_000, 7);
+    s.onEvent(event('person', T0 + 120_000));
+    await s.idle();
+    s.setManualKey(ENV_KEY);
+    expect(s.state()[0].paused).toMatchObject({ reason: 'quota' });
+  });
+});
