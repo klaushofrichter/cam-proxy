@@ -13,6 +13,7 @@ import type { Storage } from '../storage';
 import type { StreamLog } from '../stream/log';
 import { AuditQueryError, type AuditLog, type Outcome } from '../audit/audit-log';
 import { clientIp, tokenMatches } from './auth';
+import { RefusalThrottle } from '../audit/throttle';
 import { eventsStored } from './metrics';
 import { readCookie, SESSION_COOKIE, SESSION_MS, type createSessionSigner } from './session';
 import type { createLoginLinks } from './login-links';
@@ -94,18 +95,28 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
     'token-form': { ok: 'Admin signed in with the admin token', refused: 'Sign-in with the admin token refused' },
     'login-link': { ok: 'Admin signed in with a one-time link', refused: 'One-time link refused (used or expired)' },
   } as const;
-  const rec = (req: express.Request, outcome: Outcome, method: 'token-form' | 'login-link', reason?: string) =>
+  const rec = (req: express.Request, outcome: Outcome, method: 'token-form' | 'login-link', reason?: string, suppressed = 0) =>
     d.audit.write({
       action: 'login', category: ['authentication'], type: ['start'], outcome,
       ...(outcome === 'success' ? { user: 'admin' } : {}),
       ip: clientIp(req), userAgent: req.get('user-agent'),
       message: reason === 'rate-limited' ? 'Sign-in refused: too many attempts' : MESSAGES[method][outcome === 'success' ? 'ok' : 'refused'],
-      details: { auth: { method, ...(reason ? { reason } : {}) } },
+      details: { auth: { method, ...(reason ? { reason } : {}), ...(suppressed ? { suppressed } : {}) } },
     });
+  // express-rate-limit calls the handler for every request over the limit:
+  // one `rate-limited` record per IP per limiter window, the rest counted.
+  const LIMIT_MS = 15 * 60_000;
+  const limited = new RefusalThrottle(LIMIT_MS);
+  const recLimited = (req: express.Request, method: 'token-form' | 'login-link') => {
+    const t = limited.take(clientIp(req), method === 'token-form' ? 'login-rate-limited' : 'login-link-rate-limited');
+    if (t.record) rec(req, 'failure', method, 'rate-limited', t.suppressed);
+  };
+  // A logout without a valid session changes nothing: one record per IP per 10 min.
+  const anonLogouts = new RefusalThrottle();
   const attempts = rateLimit({
-    windowMs: 15 * 60_000, limit: 20, standardHeaders: false, legacyHeaders: false,
+    windowMs: LIMIT_MS, limit: 20, standardHeaders: false, legacyHeaders: false,
     handler: (req, res) => {
-      rec(req, 'failure', 'token-form', 'rate-limited');
+      recLimited(req, 'token-form');
       res.status(429).json({ error: 'too_many_attempts' });
     },
   });
@@ -115,9 +126,9 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
   // so link attempts never lock out the token login, and a limited browser
   // lands on that login instead of a bare JSON error (review, 2026-09-28).
   const linkAttempts = rateLimit({
-    windowMs: 15 * 60_000, limit: 200, standardHeaders: false, legacyHeaders: false,
+    windowMs: LIMIT_MS, limit: 200, standardHeaders: false, legacyHeaders: false,
     handler: (req, res) => {
-      rec(req, 'failure', 'login-link', 'rate-limited');
+      recLimited(req, 'login-link');
       res.redirect(302, '/?link=expired');
     },
   });
@@ -143,7 +154,13 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
   r.get('/session', (req, res) => void res.json({ loggedIn: d.sessions.verify(readCookie(req.get('cookie'), SESSION_COOKIE)) }));
   r.post('/logout', (req, res) => {
     const valid = d.sessions.verify(readCookie(req.get('cookie'), SESSION_COOKIE));
-    d.audit.write({ action: 'logout', category: ['authentication'], type: ['end'], outcome: 'success', ...(valid ? { user: 'admin' } : {}), ip: clientIp(req), userAgent: req.get('user-agent'), message: 'Admin signed out' });
+    const ip = clientIp(req);
+    const base = { action: 'logout', category: ['authentication'], type: ['end'], outcome: 'success' as const, ip, userAgent: req.get('user-agent') };
+    if (valid) d.audit.write({ ...base, user: 'admin', message: 'Admin signed out' });
+    else {
+      const t = anonLogouts.take(ip, 'logout-without-session');
+      if (t.record) d.audit.write({ ...base, message: 'Sign-out without a session', details: { auth: { reason: 'no-session', ...(t.suppressed ? { suppressed: t.suppressed } : {}) } } });
+    }
     res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Max-Age=0; ${flags(req)}`);
     res.status(204).end();
   });
@@ -227,14 +244,16 @@ export function controlApi(d: ControlDeps): express.Router {
 
   r.post('/actions/:name', async (req, res) => {
     const name = req.params.name;
-    // A `control-action` record with the result, once the answer is sent.
-    // Not for restart (recorded as proxy-restart) or a retention preview
-    // (dryRun changes nothing).
+    // A `control-action` record with the result, once the answer is sent or
+    // the client went away ('close' fires in both cases; 'finish' only in the
+    // first). Not for restart (recorded as proxy-restart) or a retention
+    // preview (dryRun changes nothing).
     if (name !== 'restart' && !(name === 'retention-run' && req.body?.dryRun === true)) {
-      res.on('finish', () => {
-        const ok = res.statusCode < 400;
-        const result = ok ? 'ok' : String((res.locals.errorCode as string | undefined) ?? res.statusCode);
-        d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: ok ? 'success' : 'failure', user: 'admin', ip: clientIp(req), userAgent: req.get('user-agent'), message: `Control action ${name}: ${result}`, details: { action: name, result, requestedBy: res.locals.access?.viaCookie ? 'session' : 'token' } });
+      res.on('close', () => {
+        const done = res.writableFinished;
+        const ok = done && res.statusCode < 400;
+        const result = !done ? 'aborted' : ok ? 'ok' : String((res.locals.errorCode as string | undefined) ?? res.statusCode);
+        d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: !done ? 'unknown' : ok ? 'success' : 'failure', user: 'admin', ip: clientIp(req), userAgent: req.get('user-agent'), message: `Control action ${name}: ${result}`, details: { action: name, result, requestedBy: res.locals.access?.viaCookie ? 'session' : 'token' } });
       });
     }
     const fail = (status: number, error: string, detail?: string) => {

@@ -272,7 +272,9 @@ export function createProxy(initial: Loaded): Proxy {
     sessionValid: (v: string | undefined) => sessions.verify(v),
     onRefused: (req, info) => {
       const ip = clientIp(req);
-      const path = withoutQuery(req.originalUrl);
+      // At most 256 characters in the record, the message and the throttle key.
+      const full = withoutQuery(req.originalUrl);
+      const path = full.length > 256 ? `${full.slice(0, 256)}…` : full;
       const t = refusals.take(ip, path);
       if (!t.record) return;
       audit.write({ action: 'auth-refused', category: ['authentication'], type: ['denied'], outcome: 'failure', ip, userAgent: req.get('user-agent'), message: `Refused ${req.method} ${path} (${info.reason})`, ecs: { http: { request: { method: req.method } }, url: { path } }, details: { auth: { tokenKind: info.tokenKind, reason: info.reason, ...(t.suppressed ? { suppressed: t.suppressed } : {}) } } });

@@ -26,6 +26,14 @@ describe('RefusalThrottle', () => {
     now.t = 600_001;
     expect(t.take('1.1.1.1', '/api/x')).toEqual({ record: true, suppressed: 2 });
   });
+
+  it('keeps at most `cap` keys, evicting the oldest when none have expired', () => {
+    const t = new RefusalThrottle(600_000, () => 0, 10_000);
+    for (let i = 0; i < 20_000; i++) t.take('1.1.1.1', `/api/${i}`);
+    expect(t.size).toBeLessThanOrEqual(10_000);
+    expect(t.take('1.1.1.1', '/api/19999').record).toBe(false); // the newest are kept
+    expect(t.take('1.1.1.1', '/api/0').record).toBe(true); // the oldest were evicted
+  });
 });
 
 describe('audit records', () => {
@@ -76,17 +84,51 @@ describe('audit records', () => {
     expect(last('config-change')).toMatchObject({ cam_proxy: { changes: [{ key: 'retention.auditDays', from: 30, to: 90 }] } });
   });
 
-  it('records a rate-limited sign-in (own proxy: 20 attempts per 15 min)', async () => {
+  it('records a rate-limited sign-in once per window, for the token and the link (own proxy)', async () => {
     const q = await startProxy(sim, {});
+    const logins = () => q.proxy.audit.list({ actions: ['login'], limit: 500 }).records;
     try {
-      for (let i = 0; i < 20; i++) await request(q.base).post('/control/login').send({ token: 'wrong' });
+      for (let i = 0; i < 30; i++) await request(q.base).post('/control/login').send({ token: 'wrong' });
       const r = await request(q.base).post('/control/login').send({ token: 'wrong' });
       expect(r.status).toBe(429);
       expect(r.body).toEqual({ error: 'too_many_attempts' });
-      expect(q.proxy.audit.list({ actions: ['login'], limit: 1 }).records[0]).toMatchObject({ event: { outcome: 'failure' }, message: 'Sign-in refused: too many attempts', cam_proxy: { auth: { method: 'token-form', reason: 'rate-limited' } } });
+      expect(logins().length).toBeLessThanOrEqual(21);
+      const limited = logins().filter((x) => (x.cam_proxy as { auth?: { reason?: string } }).auth?.reason === 'rate-limited');
+      expect(limited).toHaveLength(1);
+      expect(limited[0]).toMatchObject({ event: { outcome: 'failure' }, message: 'Sign-in refused: too many attempts', cam_proxy: { auth: { method: 'token-form', reason: 'rate-limited' } } });
+      // The link limiter (200 per 15 min): one record, the redirect unchanged.
+      const before = logins().length;
+      let last429: request.Response | undefined;
+      for (let i = 0; i < 210; i++) last429 = await request(q.base).get('/control/login-link?code=nope');
+      expect(last429!.status).toBe(302);
+      expect(last429!.headers.location).toBe('/?link=expired');
+      const linkLimited = logins().filter((x) => (x.cam_proxy as { auth?: { method?: string; reason?: string } }).auth?.method === 'login-link' && (x.cam_proxy as { auth?: { reason?: string } }).auth?.reason === 'rate-limited');
+      expect(linkLimited).toHaveLength(1);
+      expect(logins().length - before).toBeLessThanOrEqual(201);
     } finally {
       await q.proxy.stop();
     }
+  }, 30_000);
+
+  it('records anonymous logouts throttled, session logouts always', async () => {
+    const outs = () => p.proxy.audit.list({ actions: ['logout'], limit: 500 }).records;
+    const n = outs().length;
+    for (let i = 0; i < 10; i++) await request(p.base).post('/control/logout');
+    expect(outs().length).toBe(n + 1);
+    expect(outs()[0]).toMatchObject({ event: { type: ['end'] } });
+    expect(outs()[0].user).toBeUndefined();
+    const cookie = (await request(p.base).post('/control/login').send({ token: ADMIN_TOKEN })).headers['set-cookie'][0].split(';')[0];
+    await request(p.base).post('/control/logout').set('Cookie', cookie).set(ui);
+    expect(outs().length).toBe(n + 2);
+    expect(outs()[0]).toMatchObject({ user: { name: 'admin' } });
+  });
+
+  it('cuts a long path to 256 characters in a refused-token record', async () => {
+    await request(p.base).get(`/api/${'a'.repeat(8192)}`);
+    const r = last('auth-refused') as unknown as { url: { path: string }; message: string };
+    expect(r.url.path.length).toBeLessThanOrEqual(257);
+    expect(r.url.path.endsWith('…')).toBe(true);
+    expect(r.message.length).toBeLessThan(400);
   });
 
   // Review focus 4.
