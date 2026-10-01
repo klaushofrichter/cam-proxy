@@ -220,7 +220,7 @@ test('a Google Vision key set on the Settings page shows the manual-key notice a
   await expect(page.getByTestId('analytics-key-set')).toBeDisabled();
   await input.fill(VISION_KEY);
   await page.getByTestId('analytics-key-set').click();
-  await expect(page.getByTestId('analytics-message')).toHaveText('Google Vision key set');
+  await expect(page.getByTestId('analytics-key-message')).toHaveText('Google Vision key set');
   await expect(input).toHaveValue('');
   await expect(page.getByTestId('analytics-key-notice')).toHaveText('Manual key active (e2e-…cret). Not saved: a restart restores the configured key.');
   await expect(page.getByTestId('analytics-key')).toContainText('e2e-…cret');

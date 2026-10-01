@@ -51,6 +51,8 @@ describe('analytics UI text', () => {
     expect(validKey('A'.repeat(201))).toBe(false);
     expect(validKey('AIzaSy with space 00000')).toBe(false);
     expect(validKey('')).toBe(false);
+    expect(validKey('AIzaSyCtrl\u0001000000000000')).toBe(false);
+    expect(validKey('AIzaSyNonAscii\u00e9000000000')).toBe(false);
   });
 
   // Issue #52: the estimate previews a valid draft; an invalid one shows the saved limit's.

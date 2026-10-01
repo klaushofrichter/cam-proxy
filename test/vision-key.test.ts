@@ -43,7 +43,7 @@ const auditRecords = (dir: string) => readdirSync(auditDir(dir)).sort().map((f) 
 
 describe('PUT /control/secrets/google-vision-key', () => {
   it('refuses a missing, short, long or spaced key with 400 invalid, and changes nothing', async () => {
-    for (const body of [{}, { key: 42 }, { key: 'A'.repeat(19) }, { key: 'A'.repeat(201) }, { key: 'AIzaSy with space 00000' }, { key: 'AIzaSyTab\t000000000000' }, { key: `${MANUAL}\n` }]) {
+    for (const body of [{}, { key: 42 }, { key: 'A'.repeat(19) }, { key: 'A'.repeat(201) }, { key: 'AIzaSy with space 00000' }, { key: 'AIzaSyTab\t000000000000' }, { key: `${MANUAL}\n` }, { key: `AIzaSyCtrl\u0001000000000000` }, { key: `AIzaSyNonAscii\u00e9000000000` }, { key: `AIzaSyDel\u007f0000000000000` }]) {
       const r = await request(p.base).put(PATH).set(admin()).send(body);
       expect(r.status, JSON.stringify(body)).toBe(400);
       expect(r.body.error).toBe('invalid');
@@ -105,13 +105,19 @@ describe('PUT /control/secrets/google-vision-key', () => {
     // No refused attempt (400) is recorded.
     expect(recs.every((r) => r.event.outcome === 'success')).toBe(true);
 
-    const answers = await Promise.all(['/control/log?limit=500', '/control/config', '/control/status', '/control/analytics', '/control/stats'].map((u) => request(p.base).get(u).set(admin())));
+    const answers = await Promise.all(['/control/log?limit=500', '/control/config', '/control/status', '/control/analytics', '/control/stats', '/metrics'].map((u) => request(p.base).get(u).set(admin())));
     const audit = await request(p.base).get('/control/audit?limit=500').set(admin());
     for (const r of [...answers, audit]) {
       expect(r.status).toBe(200);
       for (const k of [MANUAL, SECOND]) expect(r.text).not.toContain(k);
     }
     for (const k of [MANUAL, SECOND, 'A'.repeat(20), 'B'.repeat(200)]) expect(allText(p.dir)).not.toContain(k);
+  });
+
+  it('the camera-side restart (proxy.restart()) keeps the manual key', async () => {
+    await request(p.base).put(PATH).set(admin()).send({ key: MANUAL });
+    await p.proxy.restart();
+    expect(p.proxy.analytics.state()[0]).toMatchObject({ keySource: 'manual', keyMasked: 'AIza…wXyZ' });
   });
 
   it('a restart drops the manual key: back to the env key, and to none without one', async () => {

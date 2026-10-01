@@ -289,7 +289,7 @@ paths:
               type: object
               required: [key]
               properties:
-                key: { type: string, minLength: 20, maxLength: 200, pattern: '^\S+$', description: 'no whitespace' }
+                key: { type: string, minLength: 20, maxLength: 200, pattern: '^[\x21-\x7e]+$', description: 'printable ASCII, no spaces' }
       responses:
         '200': { description: '{ keySource: manual, keyMasked: "AIza…wXyZ", replaced: env | manual | none }' }
         '400': { description: '{ error: invalid, detail } (never echoes the key)' }

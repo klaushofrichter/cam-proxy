@@ -211,7 +211,7 @@ export function controlApi(d: ControlDeps): express.Router {
   // refused key (400) writes nothing and is never echoed.
   r.put('/secrets/google-vision-key', (req, res) => {
     const key: unknown = req.body?.key;
-    if (typeof key !== 'string' || !/^\S{20,200}$/.test(key)) return void res.status(400).json({ error: 'invalid', detail: 'key: 20 to 200 characters, no whitespace' });
+    if (typeof key !== 'string' || !/^[\x21-\x7e]{20,200}$/.test(key)) return void res.status(400).json({ error: 'invalid', detail: 'key: 20 to 200 printable ASCII characters, no spaces' });
     const replaced = d.setVisionKey(key);
     const masked = maskKey(key)!;
     d.audit.write({

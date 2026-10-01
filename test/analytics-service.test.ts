@@ -627,6 +627,25 @@ describe('a manual key', () => {
     expect(used).toEqual([ENV_KEY]);
   });
 
+  // Review of #70: a call with the old key that fails after the new key is set must not pause the new one.
+  it('a bad_key answer to a call made with the previous key does not pause the new key', async () => {
+    still(T0 + 1000, 7);
+    let release!: (e: AnalyticsError) => void;
+    let started!: () => void;
+    const inFlight = new Promise<void>((r) => (started = r));
+    const gated: AnalyticsProvider = {
+      id: 'google-vision', name: 'Google Vision',
+      analyze: () => new Promise((_ok, fail) => { release = fail; started(); }),
+    };
+    const s = new AnalyticsService({ ...deps({ key: ENV_KEY }), provider: () => gated });
+    s.onEvent(event('person'));
+    await inFlight;
+    s.setManualKey(MANUAL);
+    release(new AnalyticsError('bad_key', false, 'bad_key'));
+    await s.idle();
+    expect(s.state()[0]).toMatchObject({ keySource: 'manual', paused: null, lastError: null });
+  });
+
   it('lifts a bad_key pause, not a quota pause', async () => {
     still(T0 + 1000, 7);
     still(T0 + 61_000, 7);
@@ -635,8 +654,9 @@ describe('a manual key', () => {
     s.onEvent(event('person'));
     await s.idle();
     expect(s.state()[0].paused).toMatchObject({ reason: 'bad_key' });
+    expect(s.state()[0].lastError).toBe('bad_key');
     s.setManualKey(MANUAL);
-    expect(s.state()[0].paused).toBeNull();
+    expect(s.state()[0]).toMatchObject({ paused: null, lastError: null });
     const b = event('person', T0 + 60_000);
     s.onEvent(b);
     await s.idle();

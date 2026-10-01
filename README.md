@@ -434,7 +434,7 @@ arrive.
 | `GET /control/stats` | `{disk: {catalog, audit, stills, previews, clips}` (each `{bytes, files, oldest, newest, growthPerDay}`), `events, stream, sse, storage}` |
 | `GET /control/config` | every setting: `{value, source, restart, pending, next?}`; secrets never appear |
 | `PUT /control/config` | overrides, e.g. `{"sse":{"pingS":10}}`; a bad value answers 400 naming it, and nothing is written |
-| `PUT /control/secrets/google-vision-key` | `{"key":"..."}` (20 to 200 characters, no whitespace; else 400 `invalid`): sets the Google Vision key in memory only, at once, until the process restarts; answers `{keySource: "manual", keyMasked, replaced}`, never the key; audited as `secret-override` |
+| `PUT /control/secrets/google-vision-key` | `{"key":"..."}` (20 to 200 printable ASCII characters, no spaces; else 400 `invalid`): sets the Google Vision key in memory only, at once, until the process restarts; answers `{keySource: "manual", keyMasked, replaced}`, never the key; audited as `secret-override` |
 | `DELETE /control/config/{path}` | removes one override |
 | `POST /control/actions/{name}` | `onvif-resubscribe`, `restart` (202, started); `camera-test`, `retention-run` (`{"dryRun":true}` previews); `camera-ftp-setup`, `camera-ftp-test` (409 `not_configured` without `ftp.publicHost` or the FTP password), `camera-ftp-off`; any camera call that fails answers 502 `camera_error` |
 | `GET /control/audit` | the audit log as JSON lines: `limit`, `before`/`after` (cursors), `from`, `to`, `action`, `outcome`; admin token, admin session or `CAMPROXY_AUDIT_TOKEN`; no HEAD. See [docs/audit-log.md](docs/audit-log.md) |

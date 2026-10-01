@@ -90,7 +90,10 @@ export class AnalyticsService {
   setManualKey(key: string): KeySource {
     const replaced = this.keySource();
     this.manualKey = key;
-    if (this.paused?.reason === 'bad_key') this.paused = null;
+    if (this.paused?.reason === 'bad_key') {
+      this.paused = null;
+      if (this.lastError === 'bad_key') this.lastError = null;
+    }
     return replaced;
   }
   // On, with a key, not stopped: otherwise events aren't queued and no call is made.
@@ -331,8 +334,11 @@ export class AnalyticsService {
         const e = err instanceof AnalyticsError ? err : new AnalyticsError('network', true);
         failed = e;
         this.lastCall = { at: t0, tookMs: this.now() - t0, status: e.reason };
-        this.lastError = e.reason;
-        if (e.pause === 'bad_key') this.paused = { reason: 'bad_key', until: null };
+        // A bad_key answer to a call made with a key replaced meanwhile
+        // (setManualKey) says nothing about the new key: no pause, no error.
+        const staleKey = e.pause === 'bad_key' && this.key() !== key;
+        if (!staleKey) this.lastError = e.reason;
+        if (e.pause === 'bad_key' && !staleKey) this.paused = { reason: 'bad_key', until: null };
         if (e.pause === 'quota') this.paused = { reason: 'quota', until: this.now() + QUOTA_PAUSE_MS };
         if (e.retry && attempt === 0) {
           await this.wait(RETRY_AFTER_MS);

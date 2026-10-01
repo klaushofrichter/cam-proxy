@@ -64,10 +64,11 @@ describe('AuditLog.write', () => {
   });
 
   // Issue #70: `secret` names an environment variable; any other value is redacted.
-  it('keeps a secret field that names a CAMPROXY_ variable, redacts any other', () => {
+  it('keeps a secret field that names a known secret variable, redacts any other', () => {
     expect(redact({ secret: 'CAMPROXY_GOOGLE_VISION_KEY', masked: 'AIza…wXyZ', replaced: 'env' })).toEqual({ secret: 'CAMPROXY_GOOGLE_VISION_KEY', masked: 'AIza…wXyZ', replaced: 'env' });
     expect(redact({ secret: 'AIzaSyManualKey0000000wXyZ' })).toEqual({ secret: '[redacted]' });
     expect(redact({ secret: 'CAMPROXY_X with more' })).toEqual({ secret: '[redacted]' });
+    expect(redact({ secret: 'CAMPROXY_ADMIN_TOKEN_VALUE' })).toEqual({ secret: '[redacted]' }); // only known names
     expect(redact({ secret: { name: 'CAMPROXY_X' } })).toEqual({ secret: '[redacted]' });
   });
 

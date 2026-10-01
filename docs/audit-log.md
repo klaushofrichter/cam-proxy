@@ -162,7 +162,7 @@ with its own details):
   Any value under a name containing `token`, `key`, `password` or `secret`
   is replaced with `"[redacted]"`, and a config change is redacted by the
   setting's name. (`key` and `tokenKind` themselves are kept: they describe;
-  so is `secret` when its value is a `CAMPROXY_…` variable name.) A Vision
+  so is `secret` when its value is a known secret's name, `CAMPROXY_GOOGLE_VISION_KEY`.) A Vision
   key set on the Settings page appears as its first and last four characters
   only (Google keys start with `AIza`, so that shows four characters of the
   secret part).

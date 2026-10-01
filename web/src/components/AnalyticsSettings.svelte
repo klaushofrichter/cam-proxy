@@ -42,18 +42,19 @@
   // Issue #70: a key set here is kept in memory only (never shown again, never
   // saved); the field is cleared once it is accepted.
   let keyDraft = $state('');
+  let keyMessage = $state(''); // next to the field, not the card's shared line
   const keyOk = $derived(validKey(keyDraft));
   const notice = $derived(keyNotice(provider));
   async function setKey() {
     if (!keyOk) return;
-    message = '';
+    keyMessage = '';
     try {
       await api('PUT', '/control/secrets/google-vision-key', { key: keyDraft });
       keyDraft = '';
-      message = 'Google Vision key set';
+      keyMessage = 'Google Vision key set';
       await refresh();
     } catch (e) {
-      message = e instanceof ApiError ? e.message : 'not set';
+      keyMessage = e instanceof ApiError ? e.message : 'not set';
     }
   }
   const kinds = ['person', 'vehicle', 'pet'] as const;
@@ -86,8 +87,9 @@
     <form class="row" onsubmit={(e) => { e.preventDefault(); void setKey(); }}>
       <label>Google Vision key <input type="password" autocomplete="off" spellcheck="false" bind:value={keyDraft} placeholder="AIza…" data-testid="analytics-key-input" /></label>
       <button type="submit" disabled={!keyOk} data-testid="analytics-key-set" aria-label="Set the Google Vision key">Set</button>
+      {#if keyMessage}<span class="msg small" role="status" data-testid="analytics-key-message">{keyMessage}</span>{/if}
     </form>
-    {#if keyDraft && !keyOk}<p class="hint small" data-testid="analytics-key-hint">20 to 200 characters, no spaces</p>{/if}
+    {#if keyDraft && !keyOk}<p class="hint small" data-testid="analytics-key-hint">20 to 200 characters: letters, digits and symbols, no spaces</p>{/if}
     <p class="muted small">A key set here replaces the configured one at once. It is kept in memory only, not saved: a restart restores the configured key (or none).</p>
     <div class="row"><label>Calls per month <input type="number" min="0" max="100000" step="1" value={monthly} oninput={(e) => (monthlyDraft = e.currentTarget.value)} data-testid="analytics-monthly" /></label>
       <button disabled={monthlyValue === null} data-testid="analytics-monthly-save" aria-label="Save calls per month" onclick={() => monthlyValue !== null && void put({ googleVision: { monthlyLimit: monthlyValue } }, 'Monthly limit', () => (monthlyDraft = undefined))}>Save</button></div>
@@ -121,4 +123,5 @@
   .hint { margin: 0; color: var(--danger); }
   button:disabled { opacity: 0.5; cursor: default; }
   .msg { margin: 6px 0 0; color: var(--accent); }
+  .row .msg { margin: 0; }
 </style>

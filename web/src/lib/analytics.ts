@@ -46,9 +46,9 @@ export function keyNotice(s: Pick<UiProviderState, 'keySource' | 'keyMasked'> | 
   return `Manual key active (${s.keyMasked}). Not saved: a restart restores the configured key.`;
 }
 
-// What PUT /control/secrets/google-vision-key accepts: 20 to 200 characters, no whitespace.
+// What PUT /control/secrets/google-vision-key accepts: 20 to 200 printable ASCII characters, no spaces.
 export function validKey(text: string): boolean {
-  return /^\S{20,200}$/.test(text);
+  return /^[\x21-\x7e]{20,200}$/.test(text);
 }
 
 export function usageLine(s: UiProviderState): string {
