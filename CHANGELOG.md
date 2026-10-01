@@ -4,6 +4,7 @@
 
 - Analysis modal: the purple frame keeps its rounded corners when the content is long ("Show all objects"); the body scrolls inside the frame and the title stays in place.
 - Analysis modal: the labels next to the boxes read "Person 84%" (name with a capital first letter, the rounded percent); the table keeps the score (0.84).
+- Analysis modal: a click on an object row (summary or all objects) draws only that object's box; a second click shows all boxes again. The selected row is highlighted, rows work with Enter and Space, an object without a box says "no box", and switching "Show all objects" clears the selection.
 
 ## v2026.10.01.1
 

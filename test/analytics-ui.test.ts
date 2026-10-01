@@ -1,6 +1,6 @@
 // test/analytics-ui.test.ts
 import { describe, expect, it } from 'vitest';
-import { boxLabel, costEstimate, estimateFor, parseLimit, pausedText, tagText, usageLine } from '../web/src/lib/analytics';
+import { boxLabel, costEstimate, estimateFor, parseLimit, pausedText, tagText, toggleSelection, usageLine } from '../web/src/lib/analytics';
 
 describe('analytics UI text', () => {
   it('estimates the monthly cost from the limit (1,000 free, then $2.25 per 1,000)', () => {
@@ -70,4 +70,10 @@ describe('analytics UI text', () => {
     expect(boxLabel('belt', 1)).toBe('Belt 100%');
   });
 
+  // Clicking an object row shows only its box; clicking it again shows all.
+  it('toggles the selected object row', () => {
+    expect(toggleSelection(null, 2)).toBe(2);
+    expect(toggleSelection(2, 2)).toBeNull();
+    expect(toggleSelection(2, 0)).toBe(0);
+  });
 });

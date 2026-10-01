@@ -77,3 +77,7 @@ export function boxLabel(name: string, score: number): string {
   return `${cap(name)} ${Math.round(score * 100 + 1e-9)}%`;
 }
 
+// The selected object row: clicking it again clears the selection (all boxes).
+export function toggleSelection(current: number | null, clicked: number): number | null {
+  return current === clicked ? null : clicked;
+}

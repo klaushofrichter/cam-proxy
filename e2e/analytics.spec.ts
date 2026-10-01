@@ -26,6 +26,8 @@ async function personEventsClosed(page: Page) {
 }
 const FAN = { mid: '/m/03ldnb', name: 'Ceiling fan', score: 0.8, vertices: [{ x: 0.6, y: 0.1 }, { x: 0.9, y: 0.1 }, { x: 0.9, y: 0.4 }, { x: 0.6, y: 0.4 }] };
 const PERSON = { mid: '/m/01g317', name: 'Person', score: 0.9, vertices: [{ x: 0.1, y: 0.2 }, { x: 0.4, y: 0.2 }, { x: 0.4, y: 0.9 }, { x: 0.1, y: 0.9 }] };
+// No coordinates: stored as a zero-area box, listed but not drawn.
+const LAMP = { mid: '/m/0dtln', name: 'lamp', score: 0.55, vertices: [] };
 const reset = { analytics: { kinds: { person: true, vehicle: false, pet: false }, googleVision: { enabled: false, monthlyLimit: 0, dailyCap: 0 } } };
 
 test.describe.configure({ mode: 'serial' });
@@ -82,12 +84,40 @@ test('a person event is analysed: Status counts it, Events tags it, the Timeline
   await expect(modal).toBeVisible();
   const rects = modal.getByTestId('analysis-boxes').locator('rect');
   const labels = modal.getByTestId('analysis-label');
+  const rows = modal.getByTestId('analysis-object');
   await expect(rects).toHaveCount(1);
   await expect(labels).toHaveText(['Person 90%']); // the overlay reads percent; the table keeps 0.90
-  await expect(modal.getByTestId('analysis-objects')).toContainText('0.90');
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toContainText('0.90');
+  // The summary's row selects, too: its box stays, and clicking again keeps it.
+  await rows.first().click();
+  await expect(rows.first()).toHaveAttribute('aria-pressed', 'true');
+  await expect(rects).toHaveCount(1);
   await modal.getByTestId('analysis-show-all').check();
+  // Switching to all objects clears the selection.
+  await expect(rows).toHaveCount(2);
+  await expect(modal.locator('[data-testid="analysis-object"][aria-pressed="true"]')).toHaveCount(0);
   await expect(rects).toHaveCount(2);
   await expect(labels).toHaveText(['Person 90%', 'Ceiling fan 80%']);
+  // A row draws only its box; clicking it again draws all; another row switches.
+  await rows.nth(1).click();
+  await expect(rows.nth(1)).toHaveAttribute('aria-pressed', 'true');
+  await expect(rows.nth(0)).toHaveAttribute('aria-pressed', 'false');
+  await expect(rects).toHaveCount(1);
+  await expect(labels).toHaveText(['Ceiling fan 80%']);
+  await rows.nth(1).click();
+  await expect(rows.nth(1)).toHaveAttribute('aria-pressed', 'false');
+  await expect(rects).toHaveCount(2);
+  await rows.nth(1).click();
+  await rows.nth(0).click();
+  await expect(labels).toHaveText(['Person 90%']);
+  // Enter on a focused row selects it (keyboard).
+  await rows.nth(1).focus();
+  await page.keyboard.press('Enter');
+  await expect(rows.nth(1)).toHaveAttribute('aria-pressed', 'true');
+  await expect(labels).toHaveText(['Ceiling fan 80%']);
+  await page.keyboard.press('Enter');
+  await expect(rects).toHaveCount(2);
   await expect.poll(() => modal.getByTestId('analysis-image').evaluate((i) => (i as HTMLImageElement).naturalWidth)).toBe(896);
   // The frame (border, rounded corners) doesn't scroll; the body inside it does,
   // so the scrollbar can't paint over the corners.
@@ -113,7 +143,7 @@ test('a person event is analysed: Status counts it, Events tags it, the Timeline
 // Issue #56: an answer with no person, vehicle or pet.
 test('an answer with nothing relevant: the tag and the modal say so; show all lists the object', async ({ page }) => {
   await signIn(page);
-  expect((await setScript(page, [{ objects: [FAN] }])).ok()).toBe(true);
+  expect((await setScript(page, [{ objects: [FAN, LAMP] }])).ok()).toBe(true);
   await personEventsClosed(page);
   const before = await calls(page);
   expect((await person(page)).status()).toBe(201);
@@ -128,6 +158,14 @@ test('an answer with nothing relevant: the tag and the modal say so; show all li
   await modal.getByTestId('analysis-show-all').check();
   await expect(modal.getByTestId('analysis-boxes').locator('rect')).toHaveCount(1);
   await expect(modal).not.toContainText('Nothing relevant.');
+  // An object without a box can be selected: nothing is drawn, the row says so.
+  const lamp = modal.getByTestId('analysis-object').filter({ hasText: 'lamp' });
+  await expect(lamp).toContainText('no box');
+  await lamp.click();
+  await expect(lamp).toHaveAttribute('aria-pressed', 'true');
+  await expect(modal.getByTestId('analysis-boxes').locator('rect')).toHaveCount(0);
+  await lamp.click();
+  await expect(modal.getByTestId('analysis-boxes').locator('rect')).toHaveCount(1);
   // Esc closes it with the focus elsewhere (the page behind), too.
   await page.locator('body').evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.keyboard.press('Escape');
