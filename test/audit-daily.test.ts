@@ -89,11 +89,66 @@ describe('DailyAudit', () => {
     expect(to - from).toBe(25 * 3_600_000);
   });
 
+  it('on the spring-forward day the day has 23 hours of activity', () => {
+    const now = { t: Date.parse('2026-03-09T05:06:00Z') }; // 00:06 CDT on Mar 9
+    const { asked, mk } = setup(now);
+    mk().check();
+    const [[day, from, to]] = asked;
+    expect(day).toBe('2026-03-08');
+    expect(to - from).toBe(23 * 3_600_000);
+  });
+
+  // The real start path: refreshingTimeInfo answers undefined on its first call.
+  function lazyStart(at: string, ready: (calls: number, now: number) => boolean) {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse(at));
+    const dir = mkdtempSync(join(tmpdir(), 'audit-daily-'));
+    dirs.push(dir);
+    const audit = new AuditLog({ dir, version: 't', camera: () => 'cam1', now: () => Date.now() });
+    const asked: [string, number, number][] = [];
+    let calls = 0;
+    const d = new DailyAudit({
+      audit, now: () => Date.now(), timeInfo: () => (ready(++calls, Date.now()) ? CHICAGO : undefined),
+      storage: () => ({ message: 'Storage', details: {} }),
+      activity: (day, from, to) => { asked.push([day, from, to]); return { message: `Activity ${day}`, details: {} }; },
+    });
+    d.start();
+    const tick = (iso: string) => { while (Date.now() < Date.parse(iso)) vi.advanceTimersByTime(60_000); };
+    return { audit, asked, d, tick };
+  }
+
+  it('a start in the camera evening waits for the time info: no early UTC-day record', () => {
+    const { audit, asked, d, tick } = lazyStart('2026-10-02T00:30:00Z', (calls) => calls > 1); // 19:30 CDT Oct 1
+    tick('2026-10-02T05:04:00Z');
+    expect(of(audit, 'storage-daily').filter((r) => r.cam_proxy!.day === '2026-10-02')).toHaveLength(0);
+    tick('2026-10-02T05:06:00Z');
+    d.stop();
+    const s = of(audit, 'storage-daily').filter((r) => r.cam_proxy!.day === '2026-10-02');
+    expect(s).toHaveLength(1);
+    expect(s[0].cam_proxy!.dayBasis).toBeUndefined();
+    expect(of(audit, 'activity-daily').find((r) => r.cam_proxy!.day === '2026-10-02')).toMatchObject({ cam_proxy: { forDay: '2026-10-01' } });
+    expect(asked).toContainEqual(['2026-10-01', Date.parse('2026-10-01T05:00:00Z'), Date.parse('2026-10-02T05:00:00Z')]);
+    expect(asked.every(([, from]) => from % 3_600_000 === 0 && new Date(from).getUTCHours() === 5)).toBe(true); // camera days only
+  });
+
+  it('time info missing past an hour gives UTC-day records marked as such; the camera-day records follow', () => {
+    const { audit, d, tick } = lazyStart('2026-10-02T00:30:00Z', (_c, now) => now >= Date.parse('2026-10-02T02:00:00Z'));
+    tick('2026-10-02T01:29:00Z');
+    expect(of(audit, 'storage-daily')).toHaveLength(0); // within the grace period
+    tick('2026-10-02T01:32:00Z');
+    expect(of(audit, 'storage-daily').map((r) => r.cam_proxy)).toEqual([expect.objectContaining({ day: '2026-10-02', dayBasis: 'utc' })]);
+    tick('2026-10-02T05:06:00Z');
+    d.stop();
+    const camera = of(audit, 'storage-daily').filter((r) => r.cam_proxy!.day === '2026-10-02' && r.cam_proxy!.dayBasis === undefined);
+    expect(camera).toHaveLength(1);
+    expect(of(audit, 'activity-daily').filter((r) => r.cam_proxy!.day === '2026-10-02' && r.cam_proxy!.dayBasis === undefined)).toHaveLength(1);
+  });
+
   it('without time info it uses UTC days', () => {
     const now = { t: Date.parse('2026-10-02T00:06:00Z') };
     const { audit, mk } = setup(now, null);
     mk().check();
-    expect(of(audit, 'storage-daily')[0].cam_proxy!.day).toBe('2026-10-02');
+    expect(of(audit, 'storage-daily')[0].cam_proxy).toMatchObject({ day: '2026-10-02', dayBasis: 'utc' });
   });
 
   it('a failing check does not escape the timer; it retries on the next tick, and stop() ends it', () => {
