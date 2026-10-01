@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Analysis window: the table's columns read "Objects" and "Score", and the score shows as a percent ("99%"), the same as the labels on the picture.
+
 ## v2026.10.01.2
 
 - Analysis modal: the purple frame keeps its rounded corners when the content is long ("Show all objects"); the body scrolls inside the frame and the title stays in place.

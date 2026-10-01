@@ -1,6 +1,6 @@
 // test/analytics-ui.test.ts
 import { describe, expect, it } from 'vitest';
-import { boxLabel, costEstimate, labelStyle, estimateFor, parseLimit, pausedText, tagText, toggleSelection, usageLine } from '../web/src/lib/analytics';
+import { boxLabel, costEstimate, scorePct, labelStyle, estimateFor, parseLimit, pausedText, tagText, toggleSelection, usageLine } from '../web/src/lib/analytics';
 
 describe('analytics UI text', () => {
   it('estimates the monthly cost from the limit (1,000 free, then $2.25 per 1,000)', () => {
@@ -55,6 +55,9 @@ describe('analytics UI text', () => {
 
   // The overlay's label next to a box: "Clothing 20%" (the table keeps 0.89).
   it('labels a box with the name, first letter capitalised, and the rounded percent', () => {
+    expect(scorePct(0.99)).toBe('99%');
+    expect(scorePct(0.705)).toBe('70%'); // from the 2-decimal score (0.705 is stored just below .705)
+    expect(scorePct(1)).toBe('100%');
     expect(boxLabel('clothing', 0.2)).toBe('Clothing 20%');
     expect(boxLabel('person', 0.84)).toBe('Person 84%');
     expect(boxLabel('Ceiling fan', 0.86)).toBe('Ceiling fan 86%');

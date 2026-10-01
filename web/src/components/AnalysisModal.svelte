@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
-  import { boxLabel, labelStyle, toggleSelection, type UiObject, type UiSummaryEntry } from '../lib/analytics';
+  import { boxLabel, labelStyle, scorePct, toggleSelection, type UiObject, type UiSummaryEntry } from '../lib/analytics';
 
   // The analysis of one event (spec 2026-09-30-analytics-design): the image
   // with its boxes, the objects, the camera's event, and the raw answer.
@@ -78,9 +78,9 @@
             <label class="small"><input type="checkbox" bind:checked={showAll} onchange={() => (selected = null)} data-testid="analysis-show-all" /> Show all objects</label>
           {/if}
           <table data-testid="analysis-objects">
-            <thead><tr><th>object</th><th>score</th></tr></thead>
+            <thead><tr><th>Objects</th><th>Score</th></tr></thead>
             <tbody>{#each boxes as o, i (i)}
-              <tr role="button" tabindex="0" aria-pressed={selected === i} class:sel={selected === i} onclick={() => (selected = toggleSelection(selected, i))} onkeydown={(e) => onrowkey(e, i)} data-testid="analysis-object"><td>{o.label}{#if !drawn(o)} <span class="muted nobox">no box</span>{/if}</td><td>{o.score.toFixed(2)}</td></tr>
+              <tr role="button" tabindex="0" aria-pressed={selected === i} class:sel={selected === i} onclick={() => (selected = toggleSelection(selected, i))} onkeydown={(e) => onrowkey(e, i)} data-testid="analysis-object"><td>{o.label}{#if !drawn(o)} <span class="muted nobox">no box</span>{/if}</td><td>{scorePct(o.score)}</td></tr>
             {:else}<tr><td colspan="2" class="muted">{showAll || !a?.summary ? 'Nothing found.' : 'Nothing relevant.'}</td></tr>{/each}</tbody>
           </table>
         {:else}
