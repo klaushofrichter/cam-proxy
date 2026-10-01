@@ -26,6 +26,19 @@ export function costEstimate(monthlyLimit: number): string {
   return `Up to ${n(monthlyLimit)} calls a month: at most $${dollars.toFixed(2)} (the first 1,000 free, then $2.25 per 1,000; Google's price list, checked 2026-09-30).`;
 }
 
+// The estimate next to the monthly field: for what is typed when it is a
+// valid limit (a preview before saving), else for the saved limit.
+export function estimateFor(typed: string, saved: number): string {
+  return costEstimate(parseLimit(typed, 100000) ?? saved);
+}
+
+export function pausedText(p: UiProviderState['paused']): string | null {
+  if (!p) return null;
+  if (p.reason === 'bad_key') return 'invalid key (check CAMPROXY_GOOGLE_VISION_KEY; switch analytics off and on, or restart, to try again)';
+  if (p.reason === 'quota') return `quota, until ${new Date(p.until ?? 0).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+  return p.reason;
+}
+
 export function usageLine(s: UiProviderState): string {
   if (!s.enabled) return 'not enabled';
   const today = s.today.cap > 0 ? `${n(s.today.calls)} of ${n(s.today.cap)} today` : `${n(s.today.calls)} today`;

@@ -230,7 +230,11 @@ export function createProxy(initial: Loaded): Proxy {
   // External analytics: event stills to the provider, within its limits.
   const timeInfo = refreshingTimeInfo(() => client.timeInfo());
   const analytics = new AnalyticsService({
-    catalog, log, cam: running.camera.id, dataDir: running.server.dataDir,
+    catalog, log, dataDir: running.server.dataDir,
+    // Read on use: restart() can change camera.id.
+    get cam() {
+      return running.camera.id;
+    },
     config: () => running,
     secrets: () => ({ googleVisionKey: loaded.secrets.googleVisionKey, googleVisionUrl: loaded.secrets.googleVisionUrl }),
     readStill: (ts) => stills?.store.readStill(ts) ?? Promise.resolve(undefined),
@@ -244,11 +248,13 @@ export function createProxy(initial: Loaded): Proxy {
 
   // New settings from the control API: live ones take effect now.
   const setLoaded = (next: Loaded) => {
+    const analyticsBefore = JSON.stringify(loaded.config.analytics);
     loaded = next;
     for (const p of leafPaths()) if (!needsRestart(p)) setPath(running as unknown as Record<string, unknown>, p, structuredClone(getPath(next.config, p)));
     sse.setOptions(running.sse);
     setLogLevel(running.server.logLevel);
-    analytics.settingsChanged();
+    // Only a change to the analytics settings lifts a bad_key pause.
+    if (JSON.stringify(next.config.analytics) !== analyticsBefore) analytics.settingsChanged();
   };
 
   const access = { tokens: () => loaded.secrets.tokens, adminToken: () => loaded.secrets.adminToken, sessionValid: (v: string | undefined) => sessions.verify(v) };
@@ -420,10 +426,12 @@ export function createProxy(initial: Loaded): Proxy {
     async stop() {
       await restarting;
       clearInterval(sweeper);
-      await composer.stop();
       sse.closeAll();
       storage.stop();
-      analytics.stop();
+      // Side by side, within a container's stop grace (compose.yaml: 20 s):
+      // a running encode ends (up to 3 s), and a Vision call in flight is
+      // stored before the catalog closes (up to its 10 s timeout).
+      await Promise.all([composer.stop(), analytics.stop()]);
       const s = server;
       if (s) {
         s.closeAllConnections();

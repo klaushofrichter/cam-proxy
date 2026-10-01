@@ -24,6 +24,13 @@ describe('analyses', () => {
     saveAnalysis(c, row(e.id));
     expect(analysisFor(c, e.id)).toMatchObject({ status: 'ok', reason: null });
     expect(analysesFor(c, [e.id, 999]).size).toBe(1);
+    // Issue #52: one row per event and provider; another provider adds its own.
+    const count = () => (c.db.prepare('SELECT COUNT(*) AS n FROM analyses WHERE event_id = ?').get(e.id) as { n: number }).n;
+    expect(count()).toBe(1);
+    saveAnalysis(c, row(e.id, { provider: 'other', requested_at: 3000 }));
+    expect(count()).toBe(2);
+    expect(analysisFor(c, e.id)).toMatchObject({ provider: 'other' });
+    expect(analysesFor(c, [e.id]).get(e.id)).toMatchObject({ provider: 'other' });
   });
 
   it('drop a result whose event is gone, instead of failing', () => {
@@ -50,6 +57,11 @@ describe('analyses', () => {
     saveAnalysis(c, row(a.id));
     expect(unanalysed(c, 'cam1', ['person'], 5_000).map((e) => e.id)).toEqual([b.id]);
     expect(unanalysed(c, 'cam1', [], 5_000)).toEqual([]);
+    // Boundaries: an event exactly at `since` counts; another camera's doesn't.
+    expect(unanalysed(c, 'cam1', ['person'], 20_000).map((e) => e.id)).toEqual([b.id]);
+    expect(unanalysed(c, 'cam1', ['person'], 20_001)).toEqual([]);
+    insertEvent(c, { cam: 'cam2', source: 'onvif', kind: 'person', start_ts: 30_000, raw: null });
+    expect(unanalysed(c, 'cam1', ['person'], 5_000).map((e) => e.id)).toEqual([b.id]);
   });
 });
 
@@ -63,6 +75,17 @@ describe('usage', () => {
     expect(usageBetween(c, 'google-vision', '2026-10-01', '2026-10-31')).toBe(1);
     expect(usageBetween(c, 'other', '2026-01-01', '2026-12-31')).toBe(0);
     expect(pruneUsage(c, '2026-10-01')).toBe(1);
+  });
+
+  it('includes both end days of a range; prune keeps the day it is given', () => {
+    const c = fresh();
+    for (const d of ['2026-08-31', '2026-09-01', '2026-09-30', '2026-10-01']) addUsage(c, 'google-vision', d);
+    expect(usageBetween(c, 'google-vision', '2026-09-01', '2026-09-30')).toBe(2);
+    expect(usageBetween(c, 'google-vision', '2026-09-30', '2026-09-30')).toBe(1);
+    expect(usageBetween(c, 'google-vision', '2026-10-02', '2026-10-01')).toBe(0);
+    expect(pruneUsage(c, '2026-09-01')).toBe(1);
+    expect(usageBetween(c, 'google-vision', '2026-01-01', '2026-12-31')).toBe(3);
+    expect(pruneUsage(c, '2026-09-01')).toBe(0);
   });
 });
 
@@ -98,6 +121,44 @@ describe('summary storage', () => {
     expect(r.map((x) => [x.event_id, x.kind, x.start_ts, x.end_ts])).toEqual([[a.id, 'person', 10_000, 15_000], [b.id, 'pet', 20_000, null]]);
     expect(analysesInRange(c, 'cam1', 15_000, 50_000).map((x) => x.event_id)).toEqual([b.id]);
     expect(analysesInRange(c, 'other', 0, 50_000)).toEqual([]);
+  });
+
+  // Issue #56: one row per event (its latest analysis), and at most 1000.
+  it('lists the latest analysis of an event once, whichever provider', () => {
+    const c = fresh();
+    const a = insertEvent(c, { cam: 'cam1', source: 'onvif', kind: 'person', start_ts: 10_000, raw: null });
+    saveAnalysis(c, row(a.id, { provider: 'one', requested_at: 3000 }));
+    saveAnalysis(c, row(a.id, { provider: 'two', requested_at: 5000 }));
+    saveAnalysis(c, row(a.id, { provider: 'three', requested_at: 4000 }));
+    expect(analysesInRange(c, 'cam1', 0, 50_000).map((x) => x.provider)).toEqual(['two']);
+  });
+
+  it('lists at most 1000 per range, and at least one', () => {
+    const c = fresh();
+    c.db.exec('BEGIN');
+    for (let i = 0; i < 1005; i++) saveAnalysis(c, row(insertEvent(c, { cam: 'cam1', source: 'onvif', kind: 'person', start_ts: i, raw: null }).id));
+    c.db.exec('COMMIT');
+    const all = analysesInRange(c, 'cam1', 0, 10_000);
+    expect(all).toHaveLength(1000);
+    expect(all[999].start_ts).toBe(999); // oldest first
+    expect(analysesInRange(c, 'cam1', 0, 10_000, 5000)).toHaveLength(1000);
+    expect(analysesInRange(c, 'cam1', 0, 10_000, 0)).toHaveLength(1);
+  });
+
+  it('clamps the unmapped list limit to 1..1000 (SQLite reads a negative limit as none)', () => {
+    const c = fresh();
+    countUnmapped(c, [{ mid: '/m/a', name: 'A' }, { mid: '/m/b', name: 'B' }, { mid: '/m/c', name: 'C' }], 1000);
+    expect(listUnmapped(c, -1)).toHaveLength(1);
+    expect(listUnmapped(c, 0)).toHaveLength(1);
+    expect(listUnmapped(c, 2.5)).toHaveLength(2);
+  });
+
+  it('counts the unmapped objects of one answer all or none', () => {
+    const c = fresh();
+    expect(() => countUnmapped(c, [{ mid: '/m/a', name: 'A' }, { mid: '/m/b', name: null as never }], 1000)).toThrow();
+    expect(listUnmapped(c)).toEqual([]);
+    countUnmapped(c, [{ mid: '/m/a', name: 'A' }], 2000); // usable afterwards (no open transaction)
+    expect(listUnmapped(c)).toHaveLength(1);
   });
 
   it('counts unmapped objects by mid (name when there is none), lists and clears them', () => {

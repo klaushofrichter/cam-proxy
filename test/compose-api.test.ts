@@ -33,7 +33,7 @@ afterAll(async () => {
 });
 
 const cam = () => p.proxy.running.camera.id;
-const post = (body: object) => request(p.proxy.app).post(`/api/cameras/${cam()}/compositions`).set(auth()).send(body);
+const post = (body: object) => request(p.base).post(`/api/cameras/${cam()}/compositions`).set(auth()).send(body);
 
 describe('compositions API', () => {
   it('refuses bad input and unknown clips', async () => {
@@ -41,8 +41,8 @@ describe('compositions API', () => {
     expect((await post({ clipId, preS: 0, postS: 0, size: '4k', badge: true })).status).toBe(400);
     expect((await post({ clipId, preS: 0, postS: 0, size: 'sd', badge: true, timeZone: 'Mars/Olympus' })).status).toBe(400);
     expect((await post({ clipId: 999_999, preS: 0, postS: 0, size: 'sd', badge: true })).status).toBe(404);
-    expect((await request(p.proxy.app).post('/api/cameras/nope/compositions').set(auth()).send({ clipId, preS: 0, postS: 0, size: 'sd', badge: true })).status).toBe(404);
-    expect((await request(p.proxy.app).post(`/api/cameras/${cam()}/compositions`).send({})).status).toBe(401);
+    expect((await request(p.base).post('/api/cameras/nope/compositions').set(auth()).send({ clipId, preS: 0, postS: 0, size: 'sd', badge: true })).status).toBe(404);
+    expect((await request(p.base).post(`/api/cameras/${cam()}/compositions`).send({})).status).toBe(401);
   });
 
   it.skipIf(!defaultFont())('composes a clip with cards and a silent clip after it, and serves the result', async () => {
@@ -50,21 +50,21 @@ describe('compositions API', () => {
     expect(r.status).toBe(201);
     expect(r.body).toMatchObject({ state: expect.stringMatching(/queued|running/), durationS: 28 });
     const id = r.body.id as string;
-    await until(async () => (await request(p.proxy.app).get(`/api/cameras/${cam()}/compositions/${id}`).set(auth())).body.state === 'done', 60_000);
-    const mp4 = await request(p.proxy.app).get(`/api/cameras/${cam()}/compositions/${id}.mp4`).set(auth()).buffer(true).parse((res, cb) => { const b: Buffer[] = []; res.on('data', (c: Buffer) => b.push(c)); res.on('end', () => cb(null, Buffer.concat(b))); });
+    await until(async () => (await request(p.base).get(`/api/cameras/${cam()}/compositions/${id}`).set(auth())).body.state === 'done', 60_000);
+    const mp4 = await request(p.base).get(`/api/cameras/${cam()}/compositions/${id}.mp4`).set(auth()).buffer(true).parse((res, cb) => { const b: Buffer[] = []; res.on('data', (c: Buffer) => b.push(c)); res.on('end', () => cb(null, Buffer.concat(b))); });
     expect(mp4.status).toBe(200);
     expect(mp4.headers['content-type']).toBe('video/mp4');
     expect((mp4.body as Buffer).subarray(4, 8).toString()).toBe('ftyp');
-    expect((await request(p.proxy.app).delete(`/api/cameras/${cam()}/compositions/${id}`).set(auth())).status).toBe(204);
-    expect((await request(p.proxy.app).get(`/api/cameras/${cam()}/compositions/${id}`).set(auth())).status).toBe(404);
+    expect((await request(p.base).delete(`/api/cameras/${cam()}/compositions/${id}`).set(auth())).status).toBe(204);
+    expect((await request(p.base).get(`/api/cameras/${cam()}/compositions/${id}`).set(auth())).status).toBe(404);
   }, 90_000);
 
   it.skipIf(!defaultFont())('answers 409 for a result that is not ready, and hides jobs from other cameras', async () => {
     const r = await post({ clipId: silentId, preS: 0, postS: 30, size: 'sd', badge: false });
     const id = r.body.id as string;
-    const early = await request(p.proxy.app).get(`/api/cameras/${cam()}/compositions/${id}.mp4`).set(auth());
+    const early = await request(p.base).get(`/api/cameras/${cam()}/compositions/${id}.mp4`).set(auth());
     expect([409, 200]).toContain(early.status); // 200 only if the encode already finished
-    expect((await request(p.proxy.app).get(`/api/cameras/other/compositions/${id}`).set(auth())).status).toBe(404);
-    await request(p.proxy.app).delete(`/api/cameras/${cam()}/compositions/${id}`).set(auth());
+    expect((await request(p.base).get(`/api/cameras/other/compositions/${id}`).set(auth())).status).toBe(404);
+    await request(p.base).delete(`/api/cameras/${cam()}/compositions/${id}`).set(auth());
   }, 30_000);
 });

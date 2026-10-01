@@ -20,7 +20,9 @@ const fail = async (key?: string) => {
 
 describe('Google Vision provider', () => {
   it('sends the key in a header, never the URL, and asks for objects only', async () => {
+    const before = mock.calls;
     await call();
+    expect(mock.calls).toBe(before + 1); // one request per analysis
     expect(mock.lastKeyHeader).toBe('k-123456789012');
     expect(mock.lastUrl).toBe('/v1/images:annotate');
     expect(mock.lastUrl).not.toContain('k-123456789012');
@@ -47,6 +49,25 @@ describe('Google Vision provider', () => {
     expect((await call()).objects).toEqual([]);
   });
 
+  // Issue #52: a score that isn't a number or a missing name isn't a detection.
+  it('drops annotations without a numeric score or a name', async () => {
+    mock.script = [{ body: { responses: [{ localizedObjectAnnotations: [
+      { name: 'Person', score: '0.9', boundingPoly: { normalizedVertices: [{ x: 0.1, y: 0.1 }] } },
+      { score: 0.8, boundingPoly: { normalizedVertices: [{ x: 0.1, y: 0.1 }] } },
+      { name: '', score: 0.8, boundingPoly: { normalizedVertices: [{ x: 0.1, y: 0.1 }] } },
+      { name: 'Dog', score: 0.7, boundingPoly: { normalizedVertices: [{ x: 0.1, y: 0.1 }, { x: 0.3, y: 0.3 }] } },
+    ] }] } }];
+    const r = await call();
+    expect(r.objects).toEqual([{ name: 'Dog', score: 0.7, box: { x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.3 } }]);
+    expect((r.raw as { localizedObjectAnnotations: unknown[] }).localizedObjectAnnotations).toHaveLength(4); // the raw answer stays whole
+  });
+
+  it('the test mock refuses a script that is not JSON, and keeps serving', async () => {
+    const r = await fetch(`${mock.url}/script`, { method: 'POST', body: '{not json' });
+    expect(r.status).toBe(400);
+    expect((await call()).objects).toHaveLength(1);
+  });
+
   it('treats missing vertices as a zero-area box', async () => {
     mock.script = [{ objects: [{ name: 'Empty', score: 0.5, vertices: [] }] }];
     const r = await call();
@@ -58,6 +79,8 @@ describe('Google Vision provider', () => {
     [{ status: 401 }, 'bad_key', false, 'bad_key'],
     [{ status: 400 }, 'bad_key', false, 'bad_key'],
     [{ status: 429 }, 'quota', false, 'quota'],
+    [{ status: 500 }, 'http_5xx', true, null],
+    [{ status: 502 }, 'http_5xx', true, null],
     [{ status: 503 }, 'http_5xx', true, null],
     [{ status: 418 }, 'http_418', false, null],
   ])('maps %j to %s', async (answer, reason, retry, pause) => {

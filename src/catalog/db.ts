@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync, statSync } from 'fs';
+import { accessSync, constants, existsSync, mkdirSync, statSync } from 'fs';
 import { dirname } from 'path';
 import { MIGRATIONS } from './migrations';
 
@@ -17,8 +17,18 @@ export function openCatalog(file: string): Catalog {
   let db: DatabaseSync;
   try {
     mkdirSync(dirname(file), { recursive: true });
+    // SQLite opens a file it can't write read-only and fails only at the
+    // first write (issue #34): check up front.
+    if (existsSync(file)) {
+      try {
+        accessSync(file, constants.W_OK);
+      } catch {
+        throw new Error(`the catalog file ${file} isn't writable by this process (uid ${process.getuid?.() ?? '?'}): chown it (and its folder) to that user`);
+      }
+    }
     db = new DatabaseSync(file);
   } catch (err) {
+    if ((err as Error).message.startsWith('the catalog file ')) throw err;
     // A volume mounted as root said only EACCES (issue #5): name the folder.
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS' || /readonly|unable to open/i.test((err as Error).message)) {

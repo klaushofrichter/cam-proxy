@@ -1,6 +1,6 @@
 // test/analytics-ui.test.ts
 import { describe, expect, it } from 'vitest';
-import { costEstimate, parseLimit, tagText, usageLine } from '../web/src/lib/analytics';
+import { costEstimate, estimateFor, parseLimit, pausedText, tagText, usageLine } from '../web/src/lib/analytics';
 
 describe('analytics UI text', () => {
   it('estimates the monthly cost from the limit (1,000 free, then $2.25 per 1,000)', () => {
@@ -16,15 +16,32 @@ describe('analytics UI text', () => {
     expect(usageLine({ ...base, enabled: false })).toBe('not enabled');
   });
 
-  it('writes the Events tag from the summary: subtype and score, best first; "nothing relevant"; or why not', () => {
+  it('writes the Events tag from the summary: subtype and score in the order given (the server sorts); "nothing relevant"; or why not', () => {
     const s = (subtype: string, score: number, category: 'person' | 'vehicle' | 'pet' = 'person') => ({ category, subtype, score, box: { x0: 0, y0: 0, x1: 1, y1: 1 } });
     expect(tagText(null)).toBeNull();
     expect(tagText({ status: 'ok', reason: null, objects: [], summary: [s('person', 0.84), s('dog', 0.7, 'pet')] })).toBe('✦ Vision: Person 0.84, Dog 0.70');
     expect(tagText({ status: 'ok', reason: null, objects: [{ name: 'Ceiling fan', score: 0.9 }], summary: [] })).toBe('✦ Vision: nothing relevant');
+    // Issue #56: the server's order is kept, and the tag stops at 3 entries.
+    expect(tagText({ status: 'ok', reason: null, objects: [], summary: [s('dog', 0.6, 'pet'), s('person', 0.9)] })).toBe('✦ Vision: Dog 0.60, Person 0.90');
+    expect(tagText({ status: 'ok', reason: null, objects: [], summary: [s('person', 0.9), s('man', 0.8), s('car', 0.7, 'vehicle'), s('dog', 0.6, 'pet')] })).toBe('✦ Vision: Person 0.90, Man 0.80, Car 0.70');
     expect(tagText({ status: 'skipped', reason: 'limit', objects: [] })).toBe('✦ not analysed (limit)');
     expect(tagText({ status: 'failed', reason: 'bad_key', objects: [] })).toBe('✦ not analysed (bad_key)');
     // an older record without a summary falls back to the objects
     expect(tagText({ status: 'ok', reason: null, objects: [{ name: 'Person', score: 0.9 }] })).toBe('✦ Vision: Person 0.90');
+  });
+
+  // Issue #52: no "Paused: invalid key: check …" (two colons).
+  it('says why the provider is paused, with one colon at most', () => {
+    expect(pausedText({ reason: 'bad_key', until: null })).toBe('invalid key (check CAMPROXY_GOOGLE_VISION_KEY; switch analytics off and on, or restart, to try again)');
+    expect(pausedText({ reason: 'quota', until: Date.parse('2026-09-30T19:02:00Z') })).toMatch(/^quota, until \d{1,2}:02(\s?[AP]M)?$/);
+    expect(pausedText(null)).toBeNull();
+  });
+
+  // Issue #52: the estimate previews a valid draft; an invalid one shows the saved limit's.
+  it('estimates for the typed limit when it is valid, else for the saved one', () => {
+    expect(estimateFor('3000', 500)).toBe(costEstimate(3000));
+    expect(estimateFor('abc', 500)).toBe(costEstimate(500));
+    expect(estimateFor('', 0)).toBe('No calls.');
   });
 
   it('parses a limit: a whole number from 0 to max, else null', () => {

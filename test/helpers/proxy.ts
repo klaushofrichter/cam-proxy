@@ -14,20 +14,28 @@ export const ADMIN_TOKEN = 'admin-token-'.padEnd(40, 'y');
 // macOS, 32768+ on Linux): a port from listen(0) could be handed to another
 // test's server before go2rtc binds it, and go2rtc on 127.0.0.1 would then
 // shadow that server (macOS allows both binds).
+// Free on 127.0.0.1 and on the wildcard: the proxy's FTP server listens on
+// 0.0.0.0 (no host setting), and a 127.0.0.1 probe alone succeeds on macOS
+// while it holds the port, so go2rtc could take that port over (issue #44).
 export async function freePort(): Promise<number> {
-  for (;;) {
-    const port = 20000 + Math.floor(Math.random() * 12000);
-    const ok = await new Promise<boolean>((r) => {
+  const free = (port: number, host?: string) =>
+    new Promise<boolean>((r) => {
       const s = net.createServer();
       s.once('error', () => r(false));
-      s.listen(port, '127.0.0.1', () => s.close(() => r(true)));
+      s.listen(port, host, () => s.close(() => r(true)));
     });
-    if (ok) return port;
+  for (;;) {
+    const port = 20000 + Math.floor(Math.random() * 12000);
+    if ((await free(port, '127.0.0.1')) && (await free(port))) return port;
   }
 }
 
 // Stills run when go2rtc is installed (scripts/install-go2rtc.sh), on free
 // ports so proxies in parallel test files don't collide.
+// Tests send requests to `base` (the proxy's own 127.0.0.1 listener), not
+// `request(proxy.app)`: supertest then opens a throwaway listener on `::`,
+// and any process that binds 127.0.0.1 on that port later (a listen(0) and
+// close, then a bind) takes the requests over (issue #44).
 export async function startProxy(sim: Awaited<ReturnType<typeof startSim>>, opts: { dir?: string; settings?: object; env?: Record<string, string> } = {}) {
   const dir = opts.dir ?? mkdtempSync(join(tmpdir(), 'camproxy-proxy-'));
   const go2rtc = process.env.CAMPROXY_TEST_GO2RTC;

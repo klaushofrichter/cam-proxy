@@ -11,7 +11,8 @@ export function localDay(ts: number, t: TimeInfo | undefined): string {
     if (t.dstRule && t.dstOffsetMinutes) {
       const year = new Date(ts + offset * 60_000).getUTCFullYear();
       const [start, end] = dstBounds(year, t.dstRule, t.stdOffsetMinutes, t.dstOffsetMinutes);
-      if (ts >= start && ts < end) offset += t.dstOffsetMinutes;
+      // start > end: DST spans New Year (southern hemisphere).
+      if (start < end ? ts >= start && ts < end : ts >= start || ts < end) offset += t.dstOffsetMinutes;
     }
   }
   return new Date(ts + offset * 60_000).toISOString().slice(0, 10);

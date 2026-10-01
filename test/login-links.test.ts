@@ -47,23 +47,23 @@ describe('login links over HTTP', () => {
   });
 
   it('only the admin token mints a link', async () => {
-    expect((await request(p.proxy.app).post('/control/login-links')).status).toBe(401);
-    expect((await request(p.proxy.app).post('/control/login-links').set(auth(CLIENT_TOKEN))).status).toBe(403);
-    const r = await request(p.proxy.app).post('/control/login-links').set(auth(ADMIN_TOKEN));
+    expect((await request(p.base).post('/control/login-links')).status).toBe(401);
+    expect((await request(p.base).post('/control/login-links').set(auth(CLIENT_TOKEN))).status).toBe(403);
+    const r = await request(p.base).post('/control/login-links').set(auth(ADMIN_TOKEN));
     expect(r.status).toBe(201);
     expect(r.body).toEqual({ code: expect.stringMatching(/^[A-Za-z0-9_-]{32,}$/), expiresInS: 60 });
   });
 
   it('redeems a code once for a UI session, then sends the browser to the UI', async () => {
-    const { code } = (await request(p.proxy.app).post('/control/login-links').set(auth(ADMIN_TOKEN))).body;
-    const r = await request(p.proxy.app).get(`/control/login-link?code=${code}`);
+    const { code } = (await request(p.base).post('/control/login-links').set(auth(ADMIN_TOKEN))).body;
+    const r = await request(p.base).get(`/control/login-link?code=${code}`);
     expect(r.status).toBe(302);
     expect(r.headers.location).toBe('/');
     const cookie = String(r.headers['set-cookie']);
     expect(cookie).toMatch(/^camproxy_session=v1\..*HttpOnly.*SameSite=Strict/);
     const session = cookie.split(';')[0];
-    expect((await request(p.proxy.app).get('/control/session').set('Cookie', session)).body).toEqual({ loggedIn: true });
-    const again = await request(p.proxy.app).get(`/control/login-link?code=${code}`);
+    expect((await request(p.base).get('/control/session').set('Cookie', session)).body).toEqual({ loggedIn: true });
+    const again = await request(p.base).get(`/control/login-link?code=${code}`);
     expect(again.status).toBe(302);
     expect(again.headers.location).toBe('/?link=expired');
     expect(again.headers['set-cookie']).toBeUndefined();
@@ -71,12 +71,12 @@ describe('login links over HTTP', () => {
 
   it('has its own attempt limit, and a limited browser lands on the token login (review)', async () => {
     for (let i = 0; i < 25; i++) {
-      const r = await request(p.proxy.app).get('/control/login-link?code=wrong');
+      const r = await request(p.base).get('/control/login-link?code=wrong');
       expect(r.status).toBe(302);
       expect(r.headers.location).toBe('/?link=expired');
     }
     // The token login's own 20 attempts are untouched by those.
-    expect((await request(p.proxy.app).post('/control/login').send({ token: 'x' })).status).toBe(401);
+    expect((await request(p.base).post('/control/login').send({ token: 'x' })).status).toBe(401);
   });
 });
 
@@ -95,7 +95,7 @@ describe('server.trustProxy', () => {
     const p = await startProxy(sim, { settings });
     try {
       const codes: number[] = [];
-      for (let i = 0; i < 21; i++) codes.push((await request(p.proxy.app).post('/control/login').set('X-Forwarded-For', `10.0.0.${i + 1}`).send({ token: 'wrong' })).status);
+      for (let i = 0; i < 21; i++) codes.push((await request(p.base).post('/control/login').set('X-Forwarded-For', `10.0.0.${i + 1}`).send({ token: 'wrong' })).status);
       return codes;
     } finally {
       await p.proxy.stop();

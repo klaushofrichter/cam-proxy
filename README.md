@@ -296,6 +296,8 @@ event to Google Vision (object localization) and keeps the objects it finds, a
 second opinion on the camera's label. The admin UI shows it as a "✦ Vision"
 tag on the Events page, a mark on the Timeline's minutes, and a picture with
 boxes. Motion-only events are never analysed.
+How it works end to end (the flow, the summary, unmapped objects, the API,
+privacy and cost): [docs/analytics.md](docs/analytics.md).
 
 - **Settings** (Settings page, or `PUT /control/config`):
   `analytics.kinds.person` (default on), `.vehicle` and `.pet` (off);
@@ -303,15 +305,17 @@ boxes. Motion-only events are never analysed.
   max 100000) and `.dailyCap` (0 = no daily cap, max 10000).
 - **Key and URL:** `CAMPROXY_GOOGLE_VISION_KEY` in the environment (a secret,
   never in config.json or the UI; the UI shows it masked) and optionally
-  `CAMPROXY_GOOGLE_VISION_URL` (default `https://vision.googleapis.com`; the
-  e2e tests point it at a mock). Without a key the switch stays disabled.
+  `CAMPROXY_GOOGLE_VISION_URL` (default `https://vision.googleapis.com`;
+  `http://` only to localhost, since the key travels in a header; the e2e
+  tests point it at a mock). Without a key the switch stays disabled.
 - **Limits:** a call is made only while both the monthly limit and the daily
   cap allow it (calendar month and day in camera time). The count is this
   proxy's own: proxies that share a key share Google's budget, so keep their
   limits' total within it.
 - **Cost (as measured 2026-09-30):** Google's first 1,000 units a month are
   free per feature; object localization is one unit per image, then $2.25 per
-  1,000 (Google's price list, checked 2026-09-30). The Settings card shows the estimate for the monthly limit.
+  1,000 (Google's price list, checked 2026-09-30). The Settings card shows
+  the estimate for the monthly limit.
 - **Summary:** each analysis keeps persons, vehicles and pets only, mapped
   by Open Images class id ([docs/analytics-classes.md](docs/analytics-classes.md)).
   Boxes of the same category that overlap by more than 90% are merged, the highest score first.

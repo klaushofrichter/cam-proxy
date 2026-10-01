@@ -201,6 +201,10 @@ This keeps the history: stills, previews, clips and the catalog.
   2026-09-29: after `reboot`, the proxy was healthy within 5 s of the Pi coming
   back, with the camera up and ONVIF subscribed, and cams reconnected on its own.
   Nothing else needs to autostart.
+- **Stopping:** `compose.yaml` gives the container 20 s to stop
+  (`stop_grace_period`), not Docker's default 10 s. That is time to end a
+  running encode and to store a Vision call that is still in flight (up to
+  its 10 s timeout).
 - **Updates:** nothing updates the Pi on its own. A release to `production`
   updates only the cluster, so pull on the Pi after a release.
 - **Memory:** with the memory cgroup on (see step 2), `docker stats` shows

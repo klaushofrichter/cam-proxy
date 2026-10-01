@@ -3,7 +3,7 @@ import { randomBytes } from 'crypto';
 import { linkSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { logger } from '../log';
-import { cardImageArgs, groupRuns, joinArgs, joinList, parseProgress, pieceArgs, runFrames, type ComposeSize } from './ffmpeg';
+import { cardImageArgs, groupRuns, joinArgs, joinList, parseProgress, PIECE_MAX_BYTES, pieceArgs, runFrames, type ComposeSize } from './ffmpeg';
 import type { Plan, Segment } from './plan';
 
 // Composition jobs (spec 2026-09-28): one encoding at a time, up to 3
@@ -40,9 +40,11 @@ export function createComposer(o: { dir: string; runner: Runner; now?: () => num
   let stopped = false;
 
   const view = (j: Job): JobView => ({ id: j.id, state: j.state, progress: j.progress, durationS: j.durationS, ...(j.error ? { error: j.error } : {}) });
+  // A running job's folder goes when its encoder has ended (ffmpeg takes up
+  // to 2 s after the abort and still writes there).
   const drop = (j: Job) => {
     jobs.delete(j.id);
-    rmSync(j.dir, { recursive: true, force: true });
+    if (j !== running) rmSync(j.dir, { recursive: true, force: true });
   };
   const next = () => {
     if (running || stopped) return;
@@ -67,6 +69,7 @@ export function createComposer(o: { dir: string; runner: Runner; now?: () => num
       })
       .finally(() => {
         running = undefined;
+        if (!jobs.has(j.id)) rmSync(j.dir, { recursive: true, force: true });
         next();
       });
   };
@@ -155,7 +158,8 @@ function ffmpeg(args: string[], signal: AbortSignal, onStdout: (text: string) =>
 // The real runner (final review C1): stills written once and hard-linked
 // into numbered runs, then one small encode per piece, one after another,
 // then a join without encoding again. Checks for a cancel between steps.
-export function ffmpegRunner(o: { font: string; clock: (ts: number, timeZone?: string) => string; readStill: (ts: number) => Promise<Buffer | undefined>; hasAudio: (path: string) => Promise<boolean>; paused?: () => boolean; stillsIntervalS?: () => number }): Runner {
+export function ffmpegRunner(o: { font: string; clock: (ts: number, timeZone?: string) => string; readStill: (ts: number) => Promise<Buffer | undefined>; hasAudio: (path: string) => Promise<boolean>; paused?: () => boolean; stillsIntervalS?: () => number; pieceMaxBytes?: number }): Runner {
+  const pieceMax = o.pieceMaxBytes ?? PIECE_MAX_BYTES;
   return async ({ dir, out, req, onProgress, signal }) => {
     const check = () => {
       if (signal.aborted) throw new ComposeError('cancelled');
@@ -187,7 +191,7 @@ export function ffmpegRunner(o: { font: string; clock: (ts: number, timeZone?: s
       for (const f of runFrames(g.seconds, k)) linkSync(f.kind === 'still' ? join(dir, `still-${f.ts}.jpg`) : card, join(dir, f.file));
       k++;
     }
-    const pieces = pieceArgs({ segments, runFile: (n) => join(dir, `run-${n}-%04d.jpg`), pieceFile: (n) => join(dir, `piece-${n}.mp4`), size: req.size, badge: req.badge, font: o.font, clock: (ts) => o.clock(ts, req.timeZone), stillsIntervalS: o.stillsIntervalS?.() ?? 1 });
+    const pieces = pieceArgs({ segments, runFile: (n) => join(dir, `run-${n}-%04d.jpg`), pieceFile: (n) => join(dir, `piece-${n}.mp4`), size: req.size, badge: req.badge, font: o.font, clock: (ts) => o.clock(ts, req.timeZone), stillsIntervalS: o.stillsIntervalS?.() ?? 1, maxBytes: pieceMax });
     const total = pieces.reduce((a, p) => a + p.durationS, 0);
     let done = 0;
     for (const p of pieces) {
@@ -196,6 +200,8 @@ export function ffmpegRunner(o: { font: string; clock: (ts: number, timeZone?: s
         const v = parseProgress(text, p.durationS);
         if (v !== null) onProgress(Math.min(0.99, (done + v * p.durationS) / total));
       });
+      // -fs stopped writing at the cap: the piece is cut short.
+      if (statSync(p.out).size >= pieceMax) throw new ComposeError(`a part of the clip reached the size limit (${Math.round(pieceMax / 1e6)} MB)`);
       done += p.durationS;
     }
     check();

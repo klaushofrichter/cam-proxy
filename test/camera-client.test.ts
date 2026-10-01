@@ -24,7 +24,7 @@ function withDeadline<T>(p: Promise<T>, ms = 3000): Promise<T> {
 beforeEach(async () => {
   const simCam = await createSimCamera({ user: 'u', password: 'p' });
   state = simCam.state;
-  server = simCam.app.listen(0);
+  server = simCam.app.listen(0, '127.0.0.1');
   await new Promise((r) => server.once('listening', r));
   cam = { id: 'cam1', host: `127.0.0.1:${(server.address() as AddressInfo).port}`, protocol: 'http', user: 'u', password: 'p' };
 });
@@ -132,7 +132,7 @@ describe('ReolinkClient', () => {
       next();
     });
     outer.use(simCam.app);
-    server = outer.listen(0);
+    server = outer.listen(0, '127.0.0.1');
     await new Promise((r) => server.once('listening', r));
     cam = { ...cam, host: `127.0.0.1:${(server.address() as AddressInfo).port}` };
 

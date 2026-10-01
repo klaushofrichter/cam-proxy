@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { analysedSeconds, analysedStills, eventsInMinute, minuteMarks, secondKinds, stepMinute } from '../web/src/lib/timeline';
+import { analysedSeconds, analysedStills, eventsInMinute, marksByMinute, minuteMarks, secondKinds, stepMinute } from '../web/src/lib/timeline';
 
 // The Timeline's minute view (Klaus, 2026-09-30): it opens under its hour,
 // steps ◀ ▶ within that hour only, and marks the seconds of its events.
@@ -93,5 +93,23 @@ describe('analysed means a relevant finding', () => {
     expect(minuteMarks(m, evs, M + 60_000).analysed).toBe(true);
     expect(minuteMarks(m, evs.slice(1), M + 60_000).analysed).toBe(false);
     expect(analysedStills(evs)).toEqual([{ eventId: 1, stillTs: M + 2000 }]);
+  });
+});
+
+// Issue #52: the hour grid's marks once per render, not one scan of all events per minute.
+describe('marks for every minute at once', () => {
+  it('equal minuteMarks for each minute, open events running to now', () => {
+    const minutes = Array.from({ length: 180 }, (_, i) => M + i * 60_000);
+    const evs = [
+      { id: 1, kind: 'person', start: M + 1000, end: M + 5000, analysis: { status: 'ok', summary: [{}] } },
+      { id: 2, kind: 'motion', start: M + 59_999, end: M + 60_000, analysis: null },
+      { id: 3, kind: 'person', start: M + 30 * 60_000, end: M + 95 * 60_000 + 1, analysis: { status: 'skipped' } },
+      { id: 4, kind: 'pet', start: M - 3 * 60_000, end: M + 1, analysis: { status: 'ok' } },
+      { id: 5, kind: 'vehicle', start: M + 170 * 60_000 + 5, end: null, analysis: null },
+      { id: 6, kind: 'person', start: M - 10 * 86_400_000, end: M - 9 * 86_400_000, analysis: null }, // outside
+    ];
+    const now = M + 175 * 60_000 + 30_000;
+    const all = marksByMinute(minutes, evs, now);
+    for (const t of minutes) expect(all.get(t) ?? { count: 0, analysed: false }, String((t - M) / 60_000)).toEqual(minuteMarks({ minute: t }, evs, now));
   });
 });

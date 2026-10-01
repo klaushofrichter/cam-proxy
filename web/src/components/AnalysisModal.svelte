@@ -20,11 +20,13 @@
   // An object without coordinates arrives as a zero-area box: not drawn.
   const drawn = (o: { box?: { x0: number; y0: number; x1: number; y1: number } }) => (o.box && o.box.x1 > o.box.x0 && o.box.y1 > o.box.y0 ? o.box : null);
   onMount(() => {
+    // Focus goes back to what opened the modal when it closes.
+    const opener = document.activeElement as HTMLElement | null;
     dialog.focus();
     api<Full>('GET', `${base}/analysis`).then((r) => (a = r), () => (failed = true));
+    return () => opener?.focus?.();
   });
   function onkey(e: KeyboardEvent) {
-    if (e.key === 'Escape') onclose();
     if (e.key === 'Tab') {
       // Keep focus inside the modal.
       const f = [...dialog.querySelectorAll<HTMLElement>('button, summary, input, [tabindex="0"]')];
@@ -37,6 +39,8 @@
   }
 </script>
 
+<!-- Esc closes it wherever the focus is. -->
+<svelte:window onkeydown={(e) => e.key === 'Escape' && onclose()} />
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div class="backdrop" onclick={(e) => e.target === e.currentTarget && onclose()}>
   <div class="modal" role="dialog" aria-modal="true" aria-label="Analysis" tabindex="-1" bind:this={dialog} onkeydown={onkey} data-testid="analysis-modal">
@@ -44,7 +48,7 @@
       <h3>✦ Analysis · {event.kind} {fmt(event.start)}–{fmt(event.end)}</h3>
       <button onclick={onclose} aria-label="Close" data-testid="analysis-close">✕</button>
     </div>
-    {#if failed}<p class="muted">Could not load the analysis.</p>{/if}
+    {#if failed}<p class="muted">Could not load the analysis.</p>{:else if !a}<p class="muted" data-testid="analysis-loading">Loading…</p>{/if}
     {#if a}
       {#if a.status === 'ok'}
         <div class="figure">
@@ -70,7 +74,7 @@
       {:else}
         <p data-testid="analysis-reason">Not analysed: {a.reason ?? a.status}.</p>
       {/if}
-      <p class="muted small">{a.provider} · {new Date(a.requestedAt).toLocaleString()}{a.tookMs !== null ? ` · ${(a.tookMs / 1000).toFixed(1)} s` : ''}{a.stillTs !== null ? ` · still ${new Date(a.stillTs).toLocaleTimeString()}` : ''}</p>
+      <p class="muted small" data-testid="analysis-meta">{a.provider} · {a.status} · {new Date(a.requestedAt).toLocaleString()}{a.tookMs !== null ? ` · ${(a.tookMs / 1000).toFixed(1)} s` : ''}{a.stillTs !== null ? ` · still ${new Date(a.stillTs).toLocaleTimeString()}` : ''}</p>
       {#if a.raw !== null}<details><summary>Raw answer</summary><pre>{JSON.stringify(a.raw, null, 2)}</pre></details>{/if}
     {/if}
   </div>

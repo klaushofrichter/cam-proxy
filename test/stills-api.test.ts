@@ -30,14 +30,14 @@ describe.skipIf(!binary)('stills and previews API', () => {
   it('reports the stream in /api/cameras once frames arrive', async () => {
     // Wait on the grabber itself: polling the API this fast would hit the rate limit.
     await until(() => p.proxy.stills!.grabber.up(), 30000);
-    const cam = (await request(p.proxy.app).get('/api/cameras').set(auth())).body[0];
+    const cam = (await request(p.base).get('/api/cameras').set(auth())).body[0];
     expect(cam.stream.lastFrameTs).toBeGreaterThan(Date.now() - 10_000);
   }, 40000);
 
   it('lists stills in a range and serves one', async () => {
-    const list = await request(p.proxy.app).get(`/api/cameras/cam1/stills?from=${M}&to=${M + 59_999}`).set(auth());
+    const list = await request(p.base).get(`/api/cameras/cam1/stills?from=${M}&to=${M + 59_999}`).set(auth());
     expect(list.body).toEqual([M, M + 1000, M + 2000]);
-    const one = await request(p.proxy.app).get(`/api/cameras/cam1/stills/${M + 1000}.jpg`).set(auth()).buffer(true).parse((res, cb) => {
+    const one = await request(p.base).get(`/api/cameras/cam1/stills/${M + 1000}.jpg`).set(auth()).buffer(true).parse((res, cb) => {
       const b: Buffer[] = [];
       res.on('data', (d: Buffer) => b.push(d));
       res.on('end', () => cb(null, Buffer.concat(b)));
@@ -49,33 +49,33 @@ describe.skipIf(!binary)('stills and previews API', () => {
   });
 
   it('says a reversed range is reversed (a from later than to)', async () => {
-    const r = await request(p.proxy.app).get('/api/cameras/cam1/stills?from=2000&to=1000').set(auth());
+    const r = await request(p.base).get('/api/cameras/cam1/stills?from=2000&to=1000').set(auth());
     expect(r.status).toBe(400);
     expect(r.body).toEqual({ error: 'invalid', detail: 'to is before from' });
   });
 
   it('answers 404 for a missing still and 400 for a bad one, never outside the data folder', async () => {
-    expect((await request(p.proxy.app).get(`/api/cameras/cam1/stills/${M + 5000}.jpg`).set(auth())).status).toBe(404);
-    expect((await request(p.proxy.app).get('/api/cameras/cam1/stills/abc.jpg').set(auth())).status).toBe(400);
-    expect((await request(p.proxy.app).get('/api/cameras/cam1/stills/..%2F..%2Fcatalog.sqlite').set(auth())).status).toBe(400);
-    expect((await request(p.proxy.app).get(`/api/cameras/cam1/stills/${M + 1500}.jpg`).set(auth())).status).toBe(404);
-    expect((await request(p.proxy.app).get(`/api/cameras/nope/stills/${M}.jpg`).set(auth())).status).toBe(404);
+    expect((await request(p.base).get(`/api/cameras/cam1/stills/${M + 5000}.jpg`).set(auth())).status).toBe(404);
+    expect((await request(p.base).get('/api/cameras/cam1/stills/abc.jpg').set(auth())).status).toBe(400);
+    expect((await request(p.base).get('/api/cameras/cam1/stills/..%2F..%2Fcatalog.sqlite').set(auth())).status).toBe(400);
+    expect((await request(p.base).get(`/api/cameras/cam1/stills/${M + 1500}.jpg`).set(auth())).status).toBe(404);
+    expect((await request(p.base).get(`/api/cameras/nope/stills/${M}.jpg`).set(auth())).status).toBe(404);
   });
 
   it('limits a list to one day, and needs from and to', async () => {
-    expect((await request(p.proxy.app).get(`/api/cameras/cam1/stills?from=0&to=${2 * 86_400_000}`).set(auth())).status).toBe(400);
-    expect((await request(p.proxy.app).get('/api/cameras/cam1/stills').set(auth())).status).toBe(400);
-    expect((await request(p.proxy.app).get(`/api/cameras/cam1/previews?from=0&to=${2 * 86_400_000}`).set(auth())).status).toBe(400);
+    expect((await request(p.base).get(`/api/cameras/cam1/stills?from=0&to=${2 * 86_400_000}`).set(auth())).status).toBe(400);
+    expect((await request(p.base).get('/api/cameras/cam1/stills').set(auth())).status).toBe(400);
+    expect((await request(p.base).get(`/api/cameras/cam1/previews?from=0&to=${2 * 86_400_000}`).set(auth())).status).toBe(400);
   });
 
   it('lists preview minutes with sprite URLs, and serves a sprite', async () => {
-    const r = await request(p.proxy.app).get(`/api/cameras/cam1/previews?from=${M}&to=${M + 59_999}`).set(auth());
+    const r = await request(p.base).get(`/api/cameras/cam1/previews?from=${M}&to=${M + 59_999}`).set(auth());
     expect(r.body).toEqual([{ minute: M, cols: 10, rows: 6, tileW: 160, tileH: 90, intervalS: 1, present: expect.any(Array), url: `/api/cameras/cam1/previews/${M}.jpg` }]);
     expect(r.body[0].present.slice(0, 4)).toEqual([true, true, true, false]);
-    const sprite = await request(p.proxy.app).get(`/api/cameras/cam1/previews/${M}.jpg`).set(auth());
+    const sprite = await request(p.base).get(`/api/cameras/cam1/previews/${M}.jpg`).set(auth());
     expect(sprite.status).toBe(200);
     expect(sprite.headers['content-type']).toBe('image/jpeg');
-    expect((await request(p.proxy.app).get(`/api/cameras/cam1/previews/${M + 30_000}.jpg`).set(auth())).status).toBe(404);
+    expect((await request(p.base).get(`/api/cameras/cam1/previews/${M + 30_000}.jpg`).set(auth())).status).toBe(404);
   });
 
   it('sends live still messages only to clients that ask for them, without ids', async () => {
@@ -91,7 +91,7 @@ describe.skipIf(!binary)('stills and previews API', () => {
   }, 30000);
 
   it('serves a day of sprites (1440) without hitting the general rate limit', async () => {
-    const agent = request.agent(p.proxy.app);
+    const agent = request.agent(p.base);
     let limited = 0;
     for (let i = 0; i < 1300; i++) if ((await agent.get(`/api/cameras/cam1/previews/${M}.jpg`).set(auth())).status === 429) limited++;
     expect(limited).toBe(0);
@@ -112,11 +112,11 @@ describe.skipIf(!binary)('stills and previews API', () => {
   }, 120000);
 
   it('adds stills and previews to stats and metrics', async () => {
-    const stats = (await request(p.proxy.app).get('/control/stats').set(auth('admin-token-'.padEnd(40, 'y')))).body;
+    const stats = (await request(p.base).get('/control/stats').set(auth('admin-token-'.padEnd(40, 'y')))).body;
     expect(stats.disk.stills.files).toBeGreaterThanOrEqual(1);
     expect(stats.disk.previews.files).toBeGreaterThanOrEqual(2);
     expect(stats.storage).toMatchObject({ budget: expect.any(Number), paused: false });
-    const m = (await request(p.proxy.app).get('/metrics')).text;
+    const m = (await request(p.base).get('/metrics')).text;
     for (const name of ['camproxy_stills_total', 'camproxy_stills_missing_total', 'camproxy_last_still_timestamp_seconds', 'camproxy_frame_grabber_up', 'camproxy_go2rtc_up', 'camproxy_disk_bytes{kind="stills"}', 'camproxy_disk_files{kind="previews"}', 'camproxy_storage_budget_bytes', 'camproxy_storage_writing_paused', 'camproxy_storage_days_until_full']) {
       expect(m).toContain(name);
     }
