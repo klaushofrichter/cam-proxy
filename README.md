@@ -352,6 +352,8 @@ Two limits apply, and whichever is reached first wins:
   clips, then previews. The newest `storage.keepHours` of a kind are never
   deleted for the budget.
 
+The audit folder counts toward the budget and is never deleted to make room; only `retention.auditDays` removes it.
+
 **Hard floor:** below `storage.minFreeBytes` (2 GB) free, stills stop being
 written, counted as `camproxy_stills_missing_total`, and uploaded clips are
 dropped. Writing resumes on its

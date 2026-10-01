@@ -208,3 +208,18 @@ describe('AuditLog files', () => {
     expect(log.find((r) => r.message === 's10', 0)?.message).toBe('s10');
   });
 });
+
+describe('AuditLog.list day skipping', () => {
+  it('does not read the day files that from/to exclude', () => {
+    const now = { t: Date.UTC(2026, 8, 29, 12) };
+    const { log } = make(now);
+    for (const d of [29, 30, 31]) {
+      now.t = d === 31 ? Date.UTC(2026, 9, 1, 12) : Date.UTC(2026, 8, d, 12);
+      log.write({ ...base, action: 'login', message: `day ${d}` });
+    }
+    const spy = vi.spyOn(log as unknown as { lines: (d: string) => string[] }, 'lines');
+    const r = log.list({ from: Date.UTC(2026, 8, 30), to: Date.UTC(2026, 8, 30, 23, 59, 59, 999) });
+    expect(r.records.map((x) => x.message)).toEqual(['day 30']);
+    expect(spy.mock.calls.map((c) => c[0])).toEqual(['2026-09-30']);
+  });
+});

@@ -108,6 +108,9 @@ export class AuditLog {
     };
     outer: for (const day of up ? days : [...days].reverse()) {
       if (c && (up ? day < c.day : day > c.day)) continue;
+      // Skip a day whose UTC range [00:00Z, next 00:00Z) is outside [from, to].
+      const start = Date.parse(`${day}T00:00:00Z`);
+      if ((q.to !== undefined && start > q.to) || (q.from !== undefined && start + 86_400_000 <= q.from)) continue;
       const lines = this.lines(day);
       const order = lines.map((_, k) => k + 1);
       for (const n of up ? order : order.reverse()) {

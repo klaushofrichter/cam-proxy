@@ -8,11 +8,11 @@ storage and activity snapshot. Design: [the spec](superpowers/specs/2026-10-01-a
 
 | `event.action` | category / type | When | `cam_proxy` details |
 |---|---|---|---|
-| `proxy-start` | process / start | every start, once it is listening | `config` (camera id, stills, ftp, analytics on or off), `previousStop` (time of the last `proxy-stop`, or null) |
+| `proxy-start` | process / start | every start, once it is listening | `config` (camera id, stills, ftp, analytics on or off), `previousStop` (time of the newest record when it is a `proxy-stop`, else null), `uncleanStop` (`true` when the newest start or stop record is a start: the last run ended without a `proxy-stop`, as after a crash or power loss) |
 | `proxy-stop` | process / end | a clean shutdown | `reason` (the signal, or `stop`) |
 | `proxy-restart` | process / change | `POST /control/actions/restart` | `requestedBy` (`session` or `token`) |
 | `login` | authentication / start | `POST /control/login` and `GET /control/login-link`, success or failure | `auth.method` (`token-form` or `login-link`); on failure `auth.reason` (`wrong-token`, `link-used-or-expired`, `rate-limited`); `auth.suppressed` |
-| `logout` | authentication / end | `POST /control/logout` | with a session: `user.name` `admin`. Without one: `auth.reason: no-session` |
+| `logout` | authentication / end | `POST /control/logout` | with a session: `user.name` `admin`. Without one: `auth.reason: no-session`; `auth.suppressed` |
 | `login-link-issued` | authentication / creation | `POST /control/login-links` (cams mints a link) | |
 | `auth-refused` | authentication / denied | a request the auth layer answered with 401 or 403 | `auth.tokenKind` (`none`, `invalid`, `client`, `admin`, `audit`, `session`), `auth.reason` (`no-token`, `wrong-token`, `admin-only`, `csrf`), `auth.suppressed`; ECS `http.request.method` and `url.path` |
 | `control-action` | configuration / change | `POST /control/actions/:name` except `restart` and a retention dry run | `action`, `result` (`ok`, the error code or status, or `aborted`), `requestedBy` |
@@ -24,10 +24,18 @@ storage and activity snapshot. Design: [the spec](superpowers/specs/2026-10-01-a
 Notes on what the code does today:
 
 - **Refused tokens are throttled:** one `auth-refused` record per source IP
-  and path per 10 minutes. The next record carries `cam_proxy.auth.suppressed`,
-  the number of refusals in between that were not recorded. The
-  path in the record, the message and the throttle key are cut to 256
-  characters (with `…`), and never include the query string.
+  and path per 10 minutes. The throttle key is the path with each run of 6 or
+  more digits and each run of 16 or more hex characters replaced by `:n`, so
+  numbered stills and previews (`/api/cameras/cam1/stills/<ts>.jpg`) are one
+  key; the record keeps the real path. On top of that, at most 60 refused-token
+  records per source IP per 10 minutes, whatever the paths. The next record
+  carries `cam_proxy.auth.suppressed`, the number of refusals in between that
+  were not recorded. The path in the record, the message and the throttle key
+  are cut to 256 characters (with `…`), and never include the query string.
+- **A start after a crash:** `proxy-start` looks at the newest `proxy-start`
+  or `proxy-stop` in the last 400 days. If that is a start, it writes
+  `previousStop: null` and `uncleanStop: true`. Shutdown signals are handled
+  once: a second signal during the stop writes no second `proxy-stop`.
 - **Rate-limited sign-ins:** at most one `login` record with `reason:
   rate-limited` per IP per 15 minutes (the limiter's window), the rest counted
   in `suppressed`. The limit is 40 sign-ins per 15 minutes per client for the
@@ -76,7 +84,7 @@ Process:
  "service":{"name":"cam-proxy","version":"2026.10.01.1"},"host":{"name":"cam-proxy"},"labels":{"camera":"cam1"},
  "user":{"name":"system"},
  "message":"cam-proxy 2026.10.01.1 started",
- "cam_proxy":{"config":{"camera":"cam1","stills":true,"ftp":true,"analytics":false},"previousStop":"2026-10-01T04:57:40.870Z"}}
+ "cam_proxy":{"config":{"camera":"cam1","stills":true,"ftp":true,"analytics":false},"previousStop":"2026-10-01T04:57:40.870Z","uncleanStop":false}}
 ```
 
 Configuration (the values of a setting whose name contains `token`, `key`,
@@ -100,8 +108,8 @@ with its own details):
  "service":{"name":"cam-proxy","version":"2026.10.01.1"},"host":{"name":"cam-proxy"},"labels":{"camera":"cam1"},
  "user":{"name":"system"},
  "message":"Storage: 82.4 GB used of 150.0 GB budget, 41,230 stills, 1,312 clips, 214 days until full",
- "cam_proxy":{"day":"2026-10-02","size":229000000000,"free":98000000000,"budget":161061273600,"used":82400000000,"daysUntilFull":214,
-  "kinds":{"stills":{"bytes":30000000000,"files":41230,"oldest":1759276800000,"newest":1759363200000,"growthPerDay":4200000000},"previews":{},"clips":{},"catalog":{},"audit":{}},"clipRows":1312}}
+ "cam_proxy":{"day":"2026-10-02","size":229000000000,"free":98000000000,"budget":150000000000,"used":82400000000,"daysUntilFull":214,
+  "kinds":{"stills":{"bytes":30000000000,"files":41230,"oldest":1759276800000,"newest":1759363200000,"growthPerDay":4200000000},"previews":{"bytes":9000000000,"files":3100,"oldest":1759276800000,"newest":1759363200000,"growthPerDay":600000000},"clips":{"bytes":42000000000,"files":1312,"oldest":1759276800000,"newest":1759363200000,"growthPerDay":2900000000},"catalog":{"bytes":380000000,"files":1,"oldest":1759276800000,"newest":1759363200000,"growthPerDay":12000000},"audit":{"bytes":2100000,"files":7,"oldest":1759276800000,"newest":1759363200000,"growthPerDay":300000}},"clipRows":1312}}
 ```
 
 ```json
@@ -203,7 +211,7 @@ A poller keeps the cursor of its last read and asks for what is newer:
 
 ```sh
 curl -si -H "Authorization: Bearer $CAMPROXY_AUDIT_TOKEN" \
-  "http://192.168.1.220:8480/control/audit?after=$CURSOR&limit=500"
+  "http://<pi>:8480/control/audit?after=$CURSOR&limit=500"
 ```
 
 Take the records from the body and store the `X-Next-Cursor` header for the
@@ -225,6 +233,9 @@ pod logs reach Grafana Cloud Loki, so cam2's records are there:
 ```logql
 {namespace="cam-proxy"} | json | audit="true"
 ```
+
+The stdout copies need `server.logLevel` at `info` or lower; the audit
+files are written regardless of it.
 
 The record itself is the `ecs` field of the log line; `| json` flattens it
 into labels such as `ecs_event_action`.

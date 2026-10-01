@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { ADMIN_TOKEN, CLIENT_TOKEN, auth, startProxy } from './helpers/proxy';
 import { startSim } from './helpers/sim';
-import { RefusalThrottle } from '../src/audit/throttle';
+import { IpCap, RefusalThrottle } from '../src/audit/throttle';
 import { LOGIN_ATTEMPTS } from '../src/api/control-api';
 
 let sim: Awaited<ReturnType<typeof startSim>>;
@@ -26,6 +26,17 @@ describe('RefusalThrottle', () => {
     expect(t.take('2.2.2.2', '/api/x').record).toBe(true);
     now.t = 600_001;
     expect(t.take('1.1.1.1', '/api/x')).toEqual({ record: true, suppressed: 2 });
+  });
+
+  it('caps records per ip per window, counting the overflow into suppressed', () => {
+    const now = { t: 0 };
+    const c = new IpCap(60, 600_000, () => now.t);
+    for (let i = 0; i < 60; i++) expect(c.take('1.1.1.1')).toEqual({ record: true, suppressed: 0 });
+    expect(c.take('1.1.1.1').record).toBe(false);
+    expect(c.take('1.1.1.1').record).toBe(false);
+    expect(c.take('2.2.2.2').record).toBe(true);
+    now.t = 600_001;
+    expect(c.take('1.1.1.1')).toEqual({ record: true, suppressed: 2 });
   });
 
   it('keeps at most `cap` keys, evicting the oldest when none have expired', () => {
@@ -148,6 +159,28 @@ describe('audit records', () => {
     for (const secret of [ADMIN_TOKEN, CLIENT_TOKEN, code, 'x'.repeat(40)]) {
       expect(text).not.toContain(secret);
       expect(logLines).not.toContain(secret);
+    }
+  });
+});
+
+describe('refused-token flood', () => {
+  it('writes one record for numbered paths, caps per ip, and gives another ip its own', async () => {
+    const sim2 = await startSim();
+    const q = await startProxy(sim2, { settings: { server: { logLevel: 'silent', trustProxy: 1 } } });
+    try {
+      const recs = () => q.proxy.audit.list({ actions: ['auth-refused'], limit: 500 }).records as unknown as { source: { ip: string }; cam_proxy: { auth: { suppressed?: number } } }[];
+      const get = (path: string, ip: string) => request(q.base).get(path).set('X-Forwarded-For', ip);
+      for (let i = 0; i < 500; i++) await get(`/api/cameras/cam1/stills/${1790000000000 + i * 5000}.jpg`, '203.0.113.1');
+      expect(recs().filter((r) => r.source.ip === '203.0.113.1')).toHaveLength(1);
+      for (let i = 0; i < 200; i++) await get(`/api/zz${i}x`, '203.0.113.2');
+      const n2 = recs().filter((r) => r.source.ip === '203.0.113.2').length;
+      expect(n2).toBeGreaterThan(0);
+      expect(n2).toBeLessThanOrEqual(60);
+      await get('/api/other', '203.0.113.3');
+      expect(recs().filter((r) => r.source.ip === '203.0.113.3')).toHaveLength(1);
+    } finally {
+      await q.proxy.stop();
+      await sim2.close();
     }
   });
 });

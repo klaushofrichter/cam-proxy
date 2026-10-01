@@ -93,3 +93,38 @@ describe('audit API', () => {
     expect(q.proxy.audit.list({ actions: ['proxy-stop'] }).records[0]).toMatchObject({ cam_proxy: { reason: 'SIGTERM' }, event: { type: ['end'] } });
   });
 });
+
+describe('proxy-start after a stop or a crash', () => {
+  it('flags an unclean stop when no proxy-stop is between two starts, and not after a clean one', async () => {
+    const sim2 = await startSim();
+    const a = await startProxy(sim2, {});
+    const dir = a.dir;
+    const starts = (pp: typeof a) => pp.proxy.audit.list({ actions: ['proxy-start'], limit: 10 }).records.map((r) => (r as unknown as { cam_proxy: { previousStop: string | null; uncleanStop: boolean } }).cam_proxy);
+    expect(starts(a)[0]).toMatchObject({ previousStop: null, uncleanStop: false }); // the first start ever
+    await a.proxy.stop(); // clean: start, stop
+    const b = await startProxy(sim2, { dir });
+    const [second] = starts(b);
+    expect(second.uncleanStop).toBe(false);
+    expect(typeof second.previousStop).toBe('string');
+    // b never stops: a crash. The next start sees a start as the newest record.
+    const c = await startProxy(sim2, { dir });
+    expect(starts(c)[0]).toMatchObject({ previousStop: null, uncleanStop: true });
+    await c.proxy.stop();
+    await b.proxy.stop();
+    await sim2.close();
+  });
+});
+
+describe('stop', () => {
+  it('is idempotent: a second call returns the same promise and writes no second proxy-stop', async () => {
+    const sim2 = await startSim();
+    const a = await startProxy(sim2, {});
+    const first = a.proxy.stop({ reason: 'SIGTERM' });
+    const second = a.proxy.stop({ reason: 'SIGINT' });
+    expect(second).toBe(first);
+    await Promise.all([first, second]);
+    const stops = a.proxy.audit.list({ actions: ['proxy-stop'], limit: 10 }).records;
+    expect(stops).toHaveLength(1);
+    await sim2.close();
+  });
+});

@@ -22,7 +22,7 @@ import { EventTracker } from './events/tracker';
 import { logger, setLogLevel, withoutQuery } from './log';
 import { Storage } from './storage';
 import { AuditLog } from './audit/audit-log';
-import { RefusalThrottle } from './audit/throttle';
+import { IpCap, RefusalThrottle } from './audit/throttle';
 import { DailyAudit } from './audit/daily';
 import { Go2rtc } from './stills/go2rtc';
 import { FrameGrabber, type Frame } from './stills/grabber';
@@ -294,7 +294,10 @@ export function createProxy(initial: Loaded): Proxy {
 
   // An `auth-refused` record per source IP and path per 10 minutes; the
   // refusals in between are counted into the next record.
+  // The key is the path with numbers and ids replaced (numbered stills and
+  // previews are one key), and at most 60 records per IP per 10 minutes.
   const refusals = new RefusalThrottle();
+  const refusalsPerIp = new IpCap(60);
   const access: AccessDeps = {
     tokens: () => loaded.secrets.tokens,
     adminToken: () => loaded.secrets.adminToken,
@@ -305,8 +308,11 @@ export function createProxy(initial: Loaded): Proxy {
       // At most 256 characters in the record, the message and the throttle key.
       const full = withoutQuery(req.originalUrl);
       const path = full.length > 256 ? `${full.slice(0, 256)}…` : full;
-      const t = refusals.take(ip, path);
+      const t = refusals.take(ip, path.replace(/\d{6,}|[0-9a-f]{16,}/gi, ':n'));
       if (!t.record) return;
+      const c = refusalsPerIp.take(ip);
+      if (!c.record) return;
+      t.suppressed += c.suppressed;
       audit.write({ action: 'auth-refused', category: ['authentication'], type: ['denied'], outcome: 'failure', ip, userAgent: req.get('user-agent'), message: `Refused ${req.method} ${path} (${info.reason})`, ecs: { http: { request: { method: req.method } }, url: { path } }, details: { auth: { tokenKind: info.tokenKind, reason: info.reason, ...(t.suppressed ? { suppressed: t.suppressed } : {}) } } });
     },
   };
@@ -425,6 +431,7 @@ export function createProxy(initial: Loaded): Proxy {
 
   let server: http.Server | undefined;
   let restarting: Promise<void> | undefined;
+  let stopPromise: Promise<void> | undefined;
   const proxy: Proxy = {
     get loaded() {
       return loaded;
@@ -467,8 +474,11 @@ export function createProxy(initial: Loaded): Proxy {
         logger.warn({ err: (err as Error).message }, 'analytics_backfill_failed');
       }
       analytics.catchUp();
-      const prevStop = audit.find((r) => r.event.action === 'proxy-stop', 400);
-      audit.write({ action: 'proxy-start', category: ['process'], type: ['start'], outcome: 'success', user: 'system', message: `cam-proxy ${VERSION} started`, details: { config: { camera: running.camera.id, stills: running.stills.enabled, ftp: running.ftp.enabled, analytics: running.analytics.googleVision.enabled }, previousStop: prevStop?.['@timestamp'] ?? null } });
+      // The newest start or stop: a start means the last run did not stop cleanly.
+      const prev = audit.find((r) => r.event.action === 'proxy-start' || r.event.action === 'proxy-stop', 400);
+      const uncleanStop = prev?.event.action === 'proxy-start';
+      const previousStop = prev && !uncleanStop ? prev['@timestamp'] : null;
+      audit.write({ action: 'proxy-start', category: ['process'], type: ['start'], outcome: 'success', user: 'system', message: `cam-proxy ${VERSION} started`, details: { config: { camera: running.camera.id, stills: running.stills.enabled, ftp: running.ftp.enabled, analytics: running.analytics.googleVision.enabled }, previousStop, uncleanStop } });
       daily.start();
       logger.info({ port, camera: running.camera.id, version: VERSION }, 'cam_proxy_started');
       return { port };
@@ -484,7 +494,13 @@ export function createProxy(initial: Loaded): Proxy {
       })();
       return restarting;
     },
-    async stop(opts: { reason?: string } = {}) {
+    // Idempotent: a second call (two signals) joins the first and writes nothing.
+    stop(opts: { reason?: string } = {}) {
+      stopPromise ??= doStop(opts);
+      return stopPromise;
+    },
+  };
+  async function doStop(opts: { reason?: string }): Promise<void> {
       daily.stop();
       // First, while everything is still open.
       audit.write({ action: 'proxy-stop', category: ['process'], type: ['end'], outcome: 'success', user: 'system', message: `cam-proxy stopping${opts.reason ? ` (${opts.reason})` : ''}`, details: { reason: opts.reason ?? 'stop' } });
@@ -507,7 +523,6 @@ export function createProxy(initial: Loaded): Proxy {
       await clips?.stop();
       await client.logout();
       catalog.close();
-    },
-  };
+  }
   return proxy;
 }
