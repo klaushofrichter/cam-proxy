@@ -55,6 +55,28 @@ export function minuteMarks(m: { minute: number }, events: TimelineEvent[], now:
   return { count: list.length, analysed: list.some((e) => relevant(e.analysis)) };
 }
 
+// minuteMarks for many minutes in one pass over the events (the hour grid
+// renders every minute of the day). Minutes without an event are absent.
+export function marksByMinute(minutes: number[], events: TimelineEvent[], now: number): Map<number, { count: number; analysed: boolean }> {
+  const out = new Map<number, { count: number; analysed: boolean }>();
+  if (!minutes.length) return out;
+  const want = new Set(minutes);
+  const lo = Math.min(...minutes);
+  const hi = Math.max(...minutes);
+  const floor = (t: number) => Math.floor(t / 60_000) * 60_000;
+  for (const e of events) {
+    // The minutes t with e.start < t + 60 s and end >= t, inside the loaded range.
+    for (let t = Math.max(lo, floor(e.start)); t <= Math.min(hi, floor(e.end ?? now)); t += 60_000) {
+      if (!want.has(t)) continue;
+      const m = out.get(t) ?? { count: 0, analysed: false };
+      m.count++;
+      m.analysed ||= relevant(e.analysis);
+      out.set(t, m);
+    }
+  }
+  return out;
+}
+
 // Per tile of the minute, the id of the event whose analysed still it is.
 export function analysedSeconds(m: { minute: number; intervalS: number; present: boolean[] }, stills: { eventId: number; stillTs: number }[]): (number | null)[] {
   return m.present.map((_, i) => {

@@ -1,6 +1,6 @@
 // test/analytics-ui.test.ts
 import { describe, expect, it } from 'vitest';
-import { costEstimate, parseLimit, tagText, usageLine } from '../web/src/lib/analytics';
+import { costEstimate, estimateFor, parseLimit, pausedText, tagText, usageLine } from '../web/src/lib/analytics';
 
 describe('analytics UI text', () => {
   it('estimates the monthly cost from the limit (1,000 free, then $2.25 per 1,000)', () => {
@@ -28,6 +28,20 @@ describe('analytics UI text', () => {
     expect(tagText({ status: 'failed', reason: 'bad_key', objects: [] })).toBe('✦ not analysed (bad_key)');
     // an older record without a summary falls back to the objects
     expect(tagText({ status: 'ok', reason: null, objects: [{ name: 'Person', score: 0.9 }] })).toBe('✦ Vision: Person 0.90');
+  });
+
+  // Issue #52: no "Paused: invalid key: check …" (two colons).
+  it('says why the provider is paused, with one colon at most', () => {
+    expect(pausedText({ reason: 'bad_key', until: null })).toBe('invalid key (check CAMPROXY_GOOGLE_VISION_KEY)');
+    expect(pausedText({ reason: 'quota', until: Date.parse('2026-09-30T19:02:00Z') })).toMatch(/^quota, until \d{1,2}:02(\s?[AP]M)?$/);
+    expect(pausedText(null)).toBeNull();
+  });
+
+  // Issue #52: the estimate previews a valid draft; an invalid one shows the saved limit's.
+  it('estimates for the typed limit when it is valid, else for the saved one', () => {
+    expect(estimateFor('3000', 500)).toBe(costEstimate(3000));
+    expect(estimateFor('abc', 500)).toBe(costEstimate(500));
+    expect(estimateFor('', 0)).toBe('No calls.');
   });
 
   it('parses a limit: a whole number from 0 to max, else null', () => {

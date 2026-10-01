@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api } from '../lib/api';
-  import { analysedSeconds, analysedStills, eventsInMinute, minuteMarks, secondKinds, stepMinute } from '../lib/timeline';
+  import { analysedSeconds, analysedStills, eventsInMinute, marksByMinute, secondKinds, stepMinute } from '../lib/timeline';
   import AnalysisModal from '../components/AnalysisModal.svelte';
   import { refreshTick } from '../lib/state';
 
@@ -21,6 +21,8 @@
   let message = $state('');
   let shown = $state<Ev | null>(null);
 
+  // The grid's ×n counts and analysis rings, in one pass over the events.
+  const gridMarks = $derived(marksByMinute(minutes.map((m) => m.minute), events, Date.now()));
   const hours = $derived(minutes.reduce<Record<number, Minute[]>>((h, m) => ((h[new Date(m.minute).getHours()] ??= []).push(m), h), {}));
   const eventIn = (m: Minute) => events.find((e) => e.start < m.minute + 60_000 && (e.end ?? Date.now()) >= m.minute);
   const firstTile = (m: Minute) => Math.max(0, m.present.indexOf(true));
@@ -126,7 +128,7 @@
       <div class="strip">
         {#each list as m (m.minute)}
           {@const e = eventIn(m)}
-          {@const marks = minuteMarks(m, events, Date.now())}
+          {@const marks = gridMarks.get(m.minute) ?? { count: 0, analysed: false }}
           <button class="thumb {e ? `ev-${e.kind}` : ''}" class:active={open?.minute === m.minute} class:analysed={marks.analysed} use:lazyStyle={tileStyle(m, firstTile(m), 0.5)} title={`${new Date(m.minute).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${e ? ` · ${e.kind}` : ''}`} onclick={() => openMinute(m)} data-testid="minute">{#if marks.count > 1}<span class="count" data-testid="minute-count">×{marks.count}</span>{/if}</button>
         {/each}
       </div>
@@ -145,7 +147,7 @@
           </div>
           {#if evs.length}
             <p class="small" data-testid="minute-events">
-              {#each evs as e (e.id)}<span class="evtag ev-{e.kind}">{e.kind} {fmt(e.start)}–{e.end === null ? 'now' : fmt(e.end)}{#if e.analysis} <button class="link" data-testid="minute-analysis-link" onclick={() => (shown = e)}>✦ Vision</button>{/if}</span>{/each}
+              {#each evs as e (e.id)}<span class="evtag ev-{e.kind}">{e.kind} {fmt(e.start)}–{e.end === null ? 'now' : fmt(e.end)}{#if e.analysis}{' '}<button class="link" data-testid="minute-analysis-link" onclick={() => (shown = e)}>✦ Vision</button>{/if}</span>{/each}
             </p>
           {/if}
           <div class="tiles">
@@ -183,6 +185,8 @@
   .thumb, .tile { position: relative; }
   .thumb.active { outline: 3px solid var(--accent); outline-offset: 1px; }
   .thumb.analysed { box-shadow: 0 0 0 2px #a855f7; }
+  /* The open minute's outline ends 4 px out: the ring goes past it. */
+  .thumb.analysed.active { box-shadow: 0 0 0 6px #a855f7; }
   .tile.analysed { outline: 2px solid #a855f7; outline-offset: 1px; }
   .count { position: absolute; right: 2px; bottom: 2px; background: rgb(0 0 0 / 0.7); color: #fff; font-size: 10px; line-height: 1.3; padding: 0 3px; border-radius: 3px; }
   .spark { position: absolute; top: 1px; left: 3px; color: #a855f7; font-size: 11px; line-height: 1; }

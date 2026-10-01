@@ -39,6 +39,10 @@ test.beforeAll(async ({ request }) => {
 test('with the limit at 0, a person event reaches no analytics call', async ({ page }) => {
   await signIn(page);
   await expect(page.getByTestId('stream-state')).toHaveText('up', { timeout: 30000 });
+  // Nothing enabled: Status shows one "Analytics: not enabled" card (issue #52).
+  await page.getByTestId('nav-status').click();
+  await expect(page.getByTestId('card-analytics')).toContainText('not enabled');
+  await expect(page.getByTestId('card-analytics-google-vision')).toHaveCount(0);
   await page.getByTestId('nav-settings').click();
   await expect(page.getByTestId('analytics-key')).toContainText('e2e-…cret');
   await page.getByTestId('analytics-enabled').check();
@@ -82,11 +86,12 @@ test('a person event is analysed: Status counts it, Events tags it, the Timeline
   await expect.poll(() => modal.getByTestId('analysis-image').evaluate((i) => (i as HTMLImageElement).naturalWidth)).toBe(896);
   await page.keyboard.press('Escape');
   await expect(modal).toHaveCount(0);
+  await expect(tag).toBeFocused(); // focus returns to the opener (issue #52)
 
   await page.getByTestId('nav-timeline').click();
   const analysed = page.locator('[data-testid="minute"].analysed').last();
   await expect(analysed).toBeVisible({ timeout: 15000 });
-  await expect(page.locator('[data-testid="minute-count"]').first()).toContainText('×'); // person + its motion event
+  await expect(analysed.getByTestId('minute-count')).toContainText('×'); // person + its motion event, on the analysed minute
   await analysed.click();
   await page.getByTestId('minute-analysis-link').first().click();
   await expect(page.getByTestId('analysis-modal')).toBeVisible();
@@ -110,6 +115,10 @@ test('an answer with nothing relevant: the tag and the modal say so; show all li
   await modal.getByTestId('analysis-show-all').check();
   await expect(modal.getByTestId('analysis-boxes').locator('rect')).toHaveCount(1);
   await expect(modal).not.toContainText('Nothing relevant.');
+  // Esc closes it with the focus elsewhere (the page behind), too.
+  await page.locator('body').evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press('Escape');
+  await expect(modal).toHaveCount(0);
 });
 
 test.afterAll(async ({ request }) => {
