@@ -5,8 +5,9 @@ import http from 'http';
 import type { AddressInfo } from 'net';
 import { join } from 'path';
 import { openCatalog, type Catalog } from './catalog/db';
-import { clearUnmapped, listUnmapped } from './catalog/analyses';
-import { closeAllOpen } from './catalog/events';
+import { clearUnmapped, countAnalysesByStatus, listUnmapped, usageBetween } from './catalog/analyses';
+import { countClips } from './catalog/clips';
+import { closeAllOpen, countEventsByKind } from './catalog/events';
 import { ReolinkClient } from './camera/client';
 import { splitHost } from './camera/http';
 import { StatusPoller } from './camera/status';
@@ -22,6 +23,7 @@ import { logger, setLogLevel, withoutQuery } from './log';
 import { Storage } from './storage';
 import { AuditLog } from './audit/audit-log';
 import { RefusalThrottle } from './audit/throttle';
+import { DailyAudit } from './audit/daily';
 import { Go2rtc } from './stills/go2rtc';
 import { FrameGrabber, type Frame } from './stills/grabber';
 import { MinuteStore, minuteOf } from './stills/store';
@@ -251,6 +253,34 @@ export function createProxy(initial: Loaded): Proxy {
     if (m.type === 'camera-event' && m.data.phase === 'start') analytics.onEvent({ id: Number(m.data.eventId), kind: String(m.data.kind), start_ts: Number(m.data.ts) });
   });
 
+  // The daily audit records at 00:05 camera time: storage now, activity of the previous camera day.
+  const daily = new DailyAudit({
+    audit,
+    timeInfo,
+    storage: () => {
+      const u = storage.usage();
+      const clipRows = Number((catalog.db.prepare('SELECT COUNT(*) AS n FROM clips').get() as { n: number }).n);
+      const gb = (b: number) => `${(b / 1e9).toFixed(1)} GB`;
+      return {
+        message: `Storage: ${gb(u.used)} used of ${gb(u.budget)} budget, ${u.stills.files.toLocaleString('en-US')} stills, ${clipRows.toLocaleString('en-US')} clips, ${u.daysUntilFull === null ? 'not filling' : `${Math.round(u.daysUntilFull)} days until full`}`,
+        details: { size: u.size, free: u.free, budget: u.budget, used: u.used, daysUntilFull: u.daysUntilFull, kinds: { stills: u.stills, previews: u.previews, clips: u.clips, catalog: u.catalog, audit: u.audit }, clipRows },
+      };
+    },
+    activity: (day, from, to) => {
+      const cam = running.camera.id;
+      const events = countEventsByKind(catalog, cam, from, to);
+      const total = Object.values(events).reduce((a, b) => a + b, 0);
+      const clipCount = countClips(catalog, cam, from, to);
+      // Usage days are camera days (localDay); month to date as of the reported day.
+      const vision = { day: usageBetween(catalog, 'google-vision', day, day), monthToDate: usageBetween(catalog, 'google-vision', `${day.slice(0, 7)}-01`, day), monthlyLimit: running.analytics.googleVision.monthlyLimit };
+      const analyses = countAnalysesByStatus(catalog, cam, from, to);
+      return {
+        message: `Activity ${day}: ${total} events (${Object.entries(events).map(([k, n]) => `${k} ${n}`).join(', ') || 'none'}), ${clipCount} clips, Vision ${vision.monthToDate} of ${vision.monthlyLimit} this month`,
+        details: { events: { total, byKind: events }, clips: clipCount, analytics: { vision, analyses }, stream: { clients: sse.clients() } },
+      };
+    },
+  });
+
   // New settings from the control API: live ones take effect now.
   const setLoaded = (next: Loaded) => {
     const analyticsBefore = JSON.stringify(loaded.config.analytics);
@@ -439,6 +469,7 @@ export function createProxy(initial: Loaded): Proxy {
       analytics.catchUp();
       const prevStop = audit.find((r) => r.event.action === 'proxy-stop', 400);
       audit.write({ action: 'proxy-start', category: ['process'], type: ['start'], outcome: 'success', user: 'system', message: `cam-proxy ${VERSION} started`, details: { config: { camera: running.camera.id, stills: running.stills.enabled, ftp: running.ftp.enabled, analytics: running.analytics.googleVision.enabled }, previousStop: prevStop?.['@timestamp'] ?? null } });
+      daily.start();
       logger.info({ port, camera: running.camera.id, version: VERSION }, 'cam_proxy_started');
       return { port };
     },
@@ -454,6 +485,7 @@ export function createProxy(initial: Loaded): Proxy {
       return restarting;
     },
     async stop(opts: { reason?: string } = {}) {
+      daily.stop();
       // First, while everything is still open.
       audit.write({ action: 'proxy-stop', category: ['process'], type: ['end'], outcome: 'success', user: 'system', message: `cam-proxy stopping${opts.reason ? ` (${opts.reason})` : ''}`, details: { reason: opts.reason ?? 'stop' } });
       await restarting;
