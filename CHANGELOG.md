@@ -2,12 +2,14 @@
 
 ## Unreleased
 
+- Events: an event that starts right after the proxy subscribes to the camera's events again (after a camera restart, a network blip or the restart action) is no longer taken for the initial state and lost. Each event kind now starts at its own camera message time when several arrive in one pull.
+- Analytics: set or override the Google Vision key on the Settings page (or `PUT /control/secrets/google-vision-key`). It is used from the next call on and lifts an invalid-key pause. It is kept in memory only, never saved, logged or returned: a restart of the proxy restores the configured key, or none. The card says "Manual key active (AIza…wXyZ)" while it is in use, the provider state reports `keySource` (`env`, `manual`, `none`), and each set is an audit record, `secret-override`, with the masked key.
+
 ## v2026.10.01.3
 
 - Analysis window: the table's columns read "Objects" and "Score", and the score shows as a percent ("99%"), the same as the labels on the picture.
 - Audit log: who did what on the proxy, as ECS JSON lines in one file per UTC day under `<dataDir>/audit`, kept `retention.auditDays` (default 90). It records start and stop, restarts, sign-ins (with failures), sign-outs, login links, refused tokens (throttled), control actions, settings changes, and a daily storage and activity snapshot at 00:05 camera time. Read it on the new Audit page or at `GET /control/audit` (newest first or from a cursor, for a poller). Optional read-only `CAMPROXY_AUDIT_TOKEN`. The start record says when the last run ended without a stop (`uncleanStop`). See docs/audit-log.md.
 - Admin sign-in: 40 sign-ins per 15 minutes per client (was 20).
-- Analytics: set or override the Google Vision key on the Settings page (or `PUT /control/secrets/google-vision-key`). It is used from the next call on and lifts an invalid-key pause. It is kept in memory only, never saved, logged or returned: a restart of the proxy restores the configured key, or none. The card says "Manual key active (AIza…wXyZ)" while it is in use, the provider state reports `keySource` (`env`, `manual`, `none`), and each set is an audit record, `secret-override`, with the masked key.
 
 ## v2026.10.01.2
 
