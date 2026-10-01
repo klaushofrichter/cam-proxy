@@ -28,6 +28,8 @@ const FAN = { mid: '/m/03ldnb', name: 'Ceiling fan', score: 0.8, vertices: [{ x:
 const PERSON = { mid: '/m/01g317', name: 'Person', score: 0.9, vertices: [{ x: 0.1, y: 0.2 }, { x: 0.4, y: 0.2 }, { x: 0.4, y: 0.9 }, { x: 0.1, y: 0.9 }] };
 // No coordinates: stored as a zero-area box, listed but not drawn.
 const LAMP = { mid: '/m/0dtln', name: 'lamp', score: 0.55, vertices: [] };
+// A box at the top right corner: its label goes inside the box, anchored right.
+const WINDOW = { mid: '/m/0d4v4', name: 'Window', score: 0.7, vertices: [{ x: 0.8, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 0.3 }, { x: 0.8, y: 0.3 }] };
 const reset = { analytics: { kinds: { person: true, vehicle: false, pet: false }, googleVision: { enabled: false, monthlyLimit: 0, dailyCap: 0 } } };
 
 test.describe.configure({ mode: 'serial' });
@@ -105,6 +107,11 @@ test('a person event is analysed: Status counts it, Events tags it, the Timeline
   await expect(rows.nth(0)).toHaveAttribute('aria-pressed', 'false');
   await expect(rects).toHaveCount(1);
   await expect(labels).toHaveText(['Ceiling fan 80%']);
+  // The selected row shows its purple bar, and keeps its tint while hovered.
+  const purple = 'rgb(168, 85, 247)';
+  await expect.poll(() => rows.nth(1).locator('td').first().evaluate((td) => getComputedStyle(td).borderLeftColor)).toBe(purple);
+  await rows.nth(1).hover();
+  expect(await rows.nth(1).evaluate((r) => getComputedStyle(r).backgroundColor)).toBe('rgba(168, 85, 247, 0.18)');
   await rows.nth(1).click();
   await expect(rows.nth(1)).toHaveAttribute('aria-pressed', 'false');
   await expect(rects).toHaveCount(2);
@@ -123,10 +130,30 @@ test('a person event is analysed: Status counts it, Events tags it, the Timeline
   // so the scrollbar can't paint over the corners.
   await page.setViewportSize({ width: 1280, height: 600 });
   const body = modal.getByTestId('analysis-body');
+  await modal.locator('details summary').click(); // the raw answer makes the content long
   await expect.poll(() => body.evaluate((b) => b.scrollHeight > b.clientHeight)).toBe(true);
   expect(await modal.evaluate((m) => getComputedStyle(m).overflow)).toBe('hidden');
   expect(await modal.evaluate((m) => m.scrollHeight <= m.clientHeight)).toBe(true);
   expect(await modal.evaluate((m) => (m.firstElementChild as HTMLElement).dataset.testid === 'analysis-head')).toBe(true);
+  // The picture stays at the top while the list scrolls (capped at 45vh), so a
+  // lower row and its box are visible together.
+  const figure = modal.getByTestId('analysis-figure');
+  expect(await figure.evaluate((f) => getComputedStyle(f).position)).toBe('sticky');
+  expect(await modal.getByTestId('analysis-image').evaluate((i) => i.getBoundingClientRect().height)).toBeLessThanOrEqual(600 * 0.45 + 1);
+  const rectOf = (l: typeof body) => l.evaluate((e) => { const r = e.getBoundingClientRect(); return { top: r.top, bottom: r.bottom }; });
+  // Scrolled to the end, the picture is still pinned to the top of the body.
+  await body.evaluate((b) => (b.scrollTop = b.scrollHeight));
+  expect(await body.evaluate((b) => b.scrollTop)).toBeGreaterThan(0);
+  await expect.poll(async () => { const [bo, fi] = [await rectOf(body), await rectOf(figure)]; return Math.abs(fi.top - bo.top) < 1 && fi.bottom <= bo.bottom; }).toBe(true);
+  // A lower row selected (without scrolling): its box shows, and row and picture are both in view.
+  await rows.nth(1).evaluate((r) => r.scrollIntoView({ block: 'end' }));
+  await rows.nth(1).evaluate((r) => (r as HTMLElement).click());
+  await expect(rects).toHaveCount(1);
+  const [bo, fi, ro] = [await rectOf(body), await rectOf(figure), await rectOf(rows.nth(1))];
+  expect(fi.top).toBeGreaterThanOrEqual(bo.top - 1);
+  expect(ro.top).toBeGreaterThanOrEqual(fi.bottom - 1);
+  expect(ro.bottom).toBeLessThanOrEqual(bo.bottom + 1);
+  await rows.nth(1).evaluate((r) => (r as HTMLElement).click());
   await page.keyboard.press('Escape');
   await expect(modal).toHaveCount(0);
   await expect(tag).toBeFocused(); // focus returns to the opener (issue #52)
@@ -143,7 +170,7 @@ test('a person event is analysed: Status counts it, Events tags it, the Timeline
 // Issue #56: an answer with no person, vehicle or pet.
 test('an answer with nothing relevant: the tag and the modal say so; show all lists the object', async ({ page }) => {
   await signIn(page);
-  expect((await setScript(page, [{ objects: [FAN, LAMP] }])).ok()).toBe(true);
+  expect((await setScript(page, [{ objects: [FAN, LAMP, WINDOW] }])).ok()).toBe(true);
   await personEventsClosed(page);
   const before = await calls(page);
   expect((await person(page)).status()).toBe(201);
@@ -156,16 +183,24 @@ test('an answer with nothing relevant: the tag and the modal say so; show all li
   await expect(modal).toContainText('Nothing relevant.');
   await expect(modal.getByTestId('analysis-boxes').locator('rect')).toHaveCount(0);
   await modal.getByTestId('analysis-show-all').check();
-  await expect(modal.getByTestId('analysis-boxes').locator('rect')).toHaveCount(1);
+  await expect(modal.getByTestId('analysis-boxes').locator('rect')).toHaveCount(2);
   await expect(modal).not.toContainText('Nothing relevant.');
+  // The top-right box's label stays inside the picture, and nothing widens the body.
+  await expect.poll(() => modal.getByTestId('analysis-image').evaluate((i) => (i as HTMLImageElement).naturalWidth)).toBe(896);
+  const win = modal.getByTestId('analysis-label').filter({ hasText: 'Window 70%' });
+  const [lr, fr] = await Promise.all([win, modal.getByTestId('analysis-figure')].map((l) => l.evaluate((e) => { const r = e.getBoundingClientRect(); return { top: r.top, right: r.right }; })));
+  expect(lr.top).toBeGreaterThanOrEqual(fr.top - 0.5);
+  expect(lr.right).toBeLessThanOrEqual(fr.right + 0.5);
+  expect(await modal.getByTestId('analysis-body').evaluate((b) => b.scrollWidth <= b.clientWidth)).toBe(true);
   // An object without a box can be selected: nothing is drawn, the row says so.
   const lamp = modal.getByTestId('analysis-object').filter({ hasText: 'lamp' });
   await expect(lamp).toContainText('no box');
+  expect(await lamp.locator('.nobox').evaluate((n) => getComputedStyle(n).marginLeft)).toBe('6px'); // not "lampno box"
   await lamp.click();
   await expect(lamp).toHaveAttribute('aria-pressed', 'true');
   await expect(modal.getByTestId('analysis-boxes').locator('rect')).toHaveCount(0);
   await lamp.click();
-  await expect(modal.getByTestId('analysis-boxes').locator('rect')).toHaveCount(1);
+  await expect(modal.getByTestId('analysis-boxes').locator('rect')).toHaveCount(2);
   // Esc closes it with the focus elsewhere (the page behind), too.
   await page.locator('body').evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.keyboard.press('Escape');

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
-  import { boxLabel, toggleSelection, type UiObject, type UiSummaryEntry } from '../lib/analytics';
+  import { boxLabel, labelStyle, toggleSelection, type UiObject, type UiSummaryEntry } from '../lib/analytics';
 
   // The analysis of one event (spec 2026-09-30-analytics-design): the image
   // with its boxes, the objects, the camera's event, and the raw answer.
@@ -61,7 +61,7 @@
       {#if failed}<p class="muted">Could not load the analysis.</p>{:else if !a}<p class="muted" data-testid="analysis-loading">Loading…</p>{/if}
       {#if a}
         {#if a.status === 'ok'}
-          <div class="figure">
+          <div class="figure" data-testid="analysis-figure">
             <img src={`${base}/analysis.jpg`} alt="The analysed still" data-testid="analysis-image" />
             <svg viewBox="0 0 1 1" preserveAspectRatio="none" data-testid="analysis-boxes">
               {#each shown as o, i (i)}
@@ -71,7 +71,7 @@
             </svg>
             {#each shown as o, i (i)}
               {@const b = drawn(o)}
-              {#if b}<span class="label" style={`left:${b.x0 * 100}%;top:${b.y0 * 100}%`} data-testid="analysis-label">{boxLabel(o.label, o.score)}</span>{/if}
+              {#if b}<span class="label" style={labelStyle(b)} data-testid="analysis-label">{boxLabel(o.label, o.score)}</span>{/if}
             {/each}
           </div>
           {#if a.summary}
@@ -99,20 +99,23 @@
   .head { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 16px 16px 10px; flex: none; }
   .body { overflow: auto; min-height: 0; padding: 0 16px 16px; display: grid; gap: 10px; }
   h3 { margin: 0; font-size: 16px; }
-  .figure { position: relative; line-height: 0; }
-  .figure img { width: 100%; border-radius: 6px; background: #111; }
+  /* The picture stays in view while the list scrolls; capped so the list keeps room.
+     The figure is as big as the image, so the boxes (svg, inset 0) stay aligned. */
+  .figure { position: sticky; top: 0; z-index: 1; background: var(--surface); line-height: 0; width: fit-content; max-width: 100%; overflow-x: clip; }
+  .figure img { display: block; width: auto; max-width: 100%; max-height: 45vh; border-radius: 6px; background: #111; }
   .figure svg { position: absolute; inset: 0; width: 100%; height: 100%; }
   rect { fill: none; stroke: #a855f7; stroke-width: 3; }
-  .label { position: absolute; transform: translateY(-100%); background: #a855f7; color: #fff; font-size: 12px; line-height: 1.4; padding: 0 4px; border-radius: 3px; white-space: nowrap; }
+  .label { position: absolute; background: #a855f7; color: #fff; font-size: 12px; line-height: 1.4; padding: 0 4px; border-radius: 3px; white-space: nowrap; }
   table { border-collapse: collapse; font-size: 13px; }
   td, th { padding: 3px 10px 3px 0; text-align: left; }
   tbody tr[role='button'] { cursor: pointer; }
   tbody tr[role='button'] td:first-child { padding-left: 6px; border-left: 3px solid transparent; }
   tbody tr[role='button']:hover { background: rgb(168 85 247 / 0.08); }
   tbody tr[role='button']:focus-visible { outline: 2px solid #a855f7; outline-offset: -2px; }
-  tr.sel { background: rgb(168 85 247 / 0.18); }
-  tr.sel td:first-child { border-left-color: #a855f7; }
-  .nobox { font-size: 12px; font-style: italic; }
+  /* After the hover rule and with the same prefix, so a hovered selected row keeps its look. */
+  tbody tr[role='button'].sel { background: rgb(168 85 247 / 0.18); }
+  tbody tr[role='button'].sel td:first-child { border-left-color: #a855f7; }
+  span.nobox { margin-left: 6px; font-size: 12px; font-style: italic; }
   pre { font-size: 12px; overflow: auto; max-height: 300px; }
   .muted { color: var(--muted); margin: 0; }
   .small { font-size: 13px; }

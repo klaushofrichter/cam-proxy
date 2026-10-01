@@ -71,10 +71,20 @@ export function parseLimit(text: string | number | null | undefined, max: number
 }
 
 // The label next to a box in the analysis picture: "Clothing 20%" (the name
-// with its first letter capitalised, the rounded percent). The small epsilon
-// rounds a .5 up where the float lands just below it (0.845 * 100).
+// with its first letter capitalised, the rounded percent). The percent is the
+// table's score (toFixed(2)) in other units, so both agree on a .xx5.
 export function boxLabel(name: string, score: number): string {
-  return `${cap(name)} ${Math.round(score * 100 + 1e-9)}%`;
+  return `${cap(name)} ${Math.round(Number(score.toFixed(2)) * 100)}%`;
+}
+
+// Where a box's label goes (inline CSS, in % of the picture): above the box's
+// left corner; inside the box when it touches the top (above it would be cut
+// off); anchored to the box's right edge when it starts in the right quarter
+// (else the label runs past the picture).
+const pct = (v: number) => `${Number((v * 100).toFixed(3))}%`;
+export function labelStyle(b: { x0: number; y0: number; x1: number; y1: number }): string {
+  const x = b.x0 > 0.75 ? `right:${pct(1 - b.x1)}` : `left:${pct(b.x0)}`;
+  return b.y0 < 0.08 ? `${x};top:${pct(b.y0)}` : `${x};top:${pct(b.y0)};transform:translateY(-100%)`;
 }
 
 // The selected object row: clicking it again clears the selection (all boxes).
