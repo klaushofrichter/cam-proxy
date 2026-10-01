@@ -80,9 +80,14 @@ test('a person event is analysed: Status counts it, Events tags it, the Timeline
   await tag.click();
   const modal = page.getByTestId('analysis-modal');
   await expect(modal).toBeVisible();
-  await expect(modal.getByTestId('analysis-boxes').locator('rect')).toHaveCount(1);
+  const rects = modal.getByTestId('analysis-boxes').locator('rect');
+  const labels = modal.getByTestId('analysis-label');
+  await expect(rects).toHaveCount(1);
+  await expect(labels).toHaveText(['Person 90%']); // the overlay reads percent; the table keeps 0.90
+  await expect(modal.getByTestId('analysis-objects')).toContainText('0.90');
   await modal.getByTestId('analysis-show-all').check();
-  await expect(modal.getByTestId('analysis-boxes').locator('rect')).toHaveCount(2);
+  await expect(rects).toHaveCount(2);
+  await expect(labels).toHaveText(['Person 90%', 'Ceiling fan 80%']);
   await expect.poll(() => modal.getByTestId('analysis-image').evaluate((i) => (i as HTMLImageElement).naturalWidth)).toBe(896);
   // The frame (border, rounded corners) doesn't scroll; the body inside it does,
   // so the scrollbar can't paint over the corners.

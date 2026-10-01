@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Analysis modal: the purple frame keeps its rounded corners when the content is long ("Show all objects"); the body scrolls inside the frame and the title stays in place.
+- Analysis modal: the labels next to the boxes read "Person 84%" (name with a capital first letter, the rounded percent); the table keeps the score (0.84).
 
 ## v2026.10.01.1
 

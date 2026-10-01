@@ -1,6 +1,6 @@
 // test/analytics-ui.test.ts
 import { describe, expect, it } from 'vitest';
-import { costEstimate, estimateFor, parseLimit, pausedText, tagText, usageLine } from '../web/src/lib/analytics';
+import { boxLabel, costEstimate, estimateFor, parseLimit, pausedText, tagText, usageLine } from '../web/src/lib/analytics';
 
 describe('analytics UI text', () => {
   it('estimates the monthly cost from the limit (1,000 free, then $2.25 per 1,000)', () => {
@@ -52,4 +52,22 @@ describe('analytics UI text', () => {
     for (const bad of ['', '  ', null, undefined, 'abc', '-1', '1.5', '100001', NaN, Infinity]) expect(parseLimit(bad as never, 100000)).toBeNull();
     expect(parseLimit('10001', 10000)).toBeNull();
   });
+
+  // The overlay's label next to a box: "Clothing 20%" (the table keeps 0.89).
+  it('labels a box with the name, first letter capitalised, and the rounded percent', () => {
+    expect(boxLabel('clothing', 0.2)).toBe('Clothing 20%');
+    expect(boxLabel('person', 0.84)).toBe('Person 84%');
+    expect(boxLabel('Ceiling fan', 0.86)).toBe('Ceiling fan 86%');
+    // only the first letter changes; Google's name is kept otherwise
+    expect(boxLabel('ceiling Fan', 0.5)).toBe('Ceiling Fan 50%');
+    expect(boxLabel('TV', 0.7)).toBe('TV 70%');
+    // .5 rounds up, also where the float lands just below it (0.845 * 100 = 84.49999…)
+    expect(boxLabel('top', 0.125)).toBe('Top 13%');
+    expect(boxLabel('top', 0.845)).toBe('Top 85%');
+    expect(boxLabel('top', 0.835)).toBe('Top 84%');
+    expect(boxLabel('top', 0.124)).toBe('Top 12%');
+    expect(boxLabel('belt', 0)).toBe('Belt 0%');
+    expect(boxLabel('belt', 1)).toBe('Belt 100%');
+  });
+
 });

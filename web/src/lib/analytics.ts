@@ -69,3 +69,11 @@ export function parseLimit(text: string | number | null | undefined, max: number
   const v = Number(t);
   return v <= max ? v : null;
 }
+
+// The label next to a box in the analysis picture: "Clothing 20%" (the name
+// with its first letter capitalised, the rounded percent). The small epsilon
+// rounds a .5 up where the float lands just below it (0.845 * 100).
+export function boxLabel(name: string, score: number): string {
+  return `${cap(name)} ${Math.round(score * 100 + 1e-9)}%`;
+}
+

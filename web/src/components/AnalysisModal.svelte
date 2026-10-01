@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
-  import type { UiObject, UiSummaryEntry } from '../lib/analytics';
+  import { boxLabel, type UiObject, type UiSummaryEntry } from '../lib/analytics';
 
   // The analysis of one event (spec 2026-09-30-analytics-design): the image
   // with its boxes, the objects, the camera's event, and the raw answer.
@@ -63,7 +63,7 @@
             </svg>
             {#each boxes as o, i (i)}
               {@const b = drawn(o)}
-              {#if b}<span class="label" style={`left:${b.x0 * 100}%;top:${b.y0 * 100}%`}>{o.label} {o.score.toFixed(2)}</span>{/if}
+              {#if b}<span class="label" style={`left:${b.x0 * 100}%;top:${b.y0 * 100}%`} data-testid="analysis-label">{boxLabel(o.label, o.score)}</span>{/if}
             {/each}
           </div>
           {#if a.summary}
