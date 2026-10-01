@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Analysis window: the table's columns read "Objects" and "Score", and the score shows as a percent ("99%"), the same as the labels on the picture.
+- Audit log: who did what on the proxy, as ECS JSON lines in one file per UTC day under `<dataDir>/audit`, kept `retention.auditDays` (default 90). It records start and stop, restarts, sign-ins (with failures), sign-outs, login links, refused tokens (throttled), control actions, settings changes, and a daily storage and activity snapshot at 00:05 camera time. Read it on the new Audit page or at `GET /control/audit` (newest first or from a cursor, for a poller). Optional read-only `CAMPROXY_AUDIT_TOKEN`. See docs/audit-log.md.
+- Admin sign-in: 40 sign-ins per 15 minutes per client (was 20).
 
 ## v2026.10.01.2
 

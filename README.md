@@ -54,6 +54,7 @@ A Mac runs it for development on `localhost:8480`.
 - [Storage management](#storage-management)
 - [Event stream (SSE)](#event-stream-sse)
 - [Control API and admin UI](#control-api-and-admin-ui)
+- [Audit log](#audit-log)
 - [Metrics](#metrics)
 - [Deployment](#deployment)
 - [Development](#development)
@@ -140,7 +141,7 @@ come only from the environment.
 | `server` | `port` (8480), `dataDir` (`data`, relative to the config file), `logLevel` (`info`), `publicUrl` (where people reach this proxy; reported in `/api/cameras` as `publicUrl`, so cams can link to it), `trustProxy` (0: none; behind the cluster ingress 1, so rate limits count clients by X-Forwarded-For) |
 | `camera` | `id` (`cam1`), `name` (`Den`), `host` (required), `protocol` (`https`), `tlsName`, `webUiUrl` (the camera's own web page, linked from the admin UI; default `https://<host>/`, `none` for no link), `user` (`proxy`), `onvifPort` (8000), `rtspPort` (554), `statusPollS` (30) |
 | `events` | `onvif.subscribeMin` (10), `onvif.pullTimeoutS` (30), `poll.enabled` (true), `poll.intervalS` (2), `poll.afterOnvifDownS` (60), `maxOpenMin` (10) |
-| `retention` | `stillsDays` (7), `previewsDays` (14), `clipsDays` (7), `eventsDays` (30), `streamLogDays` (7), `intervalMin` (60) |
+| `retention` | `stillsDays` (7), `previewsDays` (14), `clipsDays` (7), `eventsDays` (30), `auditDays` (90), `streamLogDays` (7), `intervalMin` (60) |
 | `storage` | `maxPercent` (85) or `maxBytes`, `minFreeBytes` (2 GB), `keepHours` (per kind: `stills` 24, `clips` 24, `previews` 72) |
 | `sse` | `maxClients` (50), `queuePerClient` (1000), `pingS` (15) |
 | `go2rtc` | `binary` (`go2rtc`), `rtspPort` (18554), `apiPort` (11984); both listen on 127.0.0.1 only; `url` (reserved, not used yet: for a go2rtc that runs as its own container) |
@@ -154,6 +155,7 @@ come only from the environment.
 | `CAMPROXY_ADMIN_TOKEN` | the control API and admin UI; different from every client token |
 | `CAMPROXY_CAMERA_PASSWORD` | the password of the proxy's camera user (`camera.user`) |
 | `CAMPROXY_FTP_PASSWORD` | the camera's FTP login to the proxy; required when `ftp.enabled` |
+| `CAMPROXY_AUDIT_TOKEN` | optional: a read-only token for `GET /control/audit`; 32+ characters, different from the other tokens |
 
 `scripts/sync-secrets.sh` generates the tokens and the FTP password into
 `.env` (mode 600), `--rotate <KEY>` replaces one, and it prints names only.
@@ -408,18 +410,20 @@ arrive.
 
 ## Control API and admin UI
 
-`/control` needs the admin token, or an admin UI session.
+`/control` needs the admin token, or an admin UI session (except
+`GET /control/audit`, which also takes the audit token).
 - A client token answers 403 `{"error":"admin_only"}`.
 - Writes with the session cookie need `X-CamProxy-UI: 1`.
 
 | Route | |
 |---|---|
 | `GET /control/status` | `{version, camera (incl. webUiUrl), intake, sse, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures}}` |
-| `GET /control/stats` | `{disk: {catalog, stills, previews, clips}` (each `{bytes, files, oldest, newest, growthPerDay}`), `events, stream, sse, storage}` |
+| `GET /control/stats` | `{disk: {catalog, audit, stills, previews, clips}` (each `{bytes, files, oldest, newest, growthPerDay}`), `events, stream, sse, storage}` |
 | `GET /control/config` | every setting: `{value, source, restart, pending, next?}`; secrets never appear |
 | `PUT /control/config` | overrides, e.g. `{"sse":{"pingS":10}}`; a bad value answers 400 naming it, and nothing is written |
 | `DELETE /control/config/{path}` | removes one override |
 | `POST /control/actions/{name}` | `onvif-resubscribe`, `restart` (202, started); `camera-test`, `retention-run` (`{"dryRun":true}` previews); `camera-ftp-setup`, `camera-ftp-test` (409 `not_configured` without `ftp.publicHost` or the FTP password), `camera-ftp-off`; any camera call that fails answers 502 `camera_error` |
+| `GET /control/audit` | the audit log as JSON lines: `limit`, `before`/`after` (cursors), `from`, `to`, `action`, `outcome`; admin token, admin session or `CAMPROXY_AUDIT_TOKEN`; no HEAD. See [docs/audit-log.md](docs/audit-log.md) |
 | `GET /control/log?limit` | recent log lines (info and above), redacted; default limit 100, buffer holds the last 500 |
 | `POST /control/login` / `logout`, `GET /control/session` | the admin UI's session cookie (`camproxy_session`, HttpOnly, SameSite=Strict, 12 h; 40 sign-ins per 15 min) |
 | `POST /control/login-links`, `GET /control/login-link?code=` | a one-time sign-in link (admin token; the code works once, for 60 s, and is kept only in memory): cams opens the UI with it for a signed-in user |
@@ -435,6 +439,8 @@ exchanged for the cookie and not stored in the browser.
 - **Clips:** a day's clips with their snapshots and the kinds of the events
   they cover, each once with a count ("motion ×3"), playable, updating as new
   clips arrive.
+- **Audit:** who did what, newest first, 50 per page, filtered by action
+  and outcome; click a row for its JSON.
 - **Settings:** every setting with its source; changes become overrides, and
   can be reset.
 - **Maintenance:** the actions, including the camera FTP buttons; the log
@@ -443,6 +449,20 @@ exchanged for the cookie and not stored in the browser.
   online state and event intake; the camera's model (linked to
   `camera.webUiUrl`) · firmware · version; "updated … ago"; Refresh, the
   theme toggle and Sign out.
+
+## Audit log
+
+The proxy records who did what, as ECS JSON lines, one file per UTC day in
+`<dataDir>/audit`, kept `retention.auditDays` (90) days:
+- start and stop, restarts, sign-ins (with failures), sign-outs, login links;
+- refused tokens, throttled to one record per IP and path per 10 minutes;
+- control actions and settings changes (secret values redacted);
+- a storage snapshot and an activity summary at 00:05 camera time.
+
+Read it on the admin UI's **Audit** page, or at `GET /control/audit` with the
+admin token or the optional read-only `CAMPROXY_AUDIT_TOKEN`. In the cluster
+the records also reach Grafana Cloud Loki through the pod logs. The format,
+the API, polling and Grafana are in [docs/audit-log.md](docs/audit-log.md).
 
 ## Metrics
 
@@ -497,7 +517,7 @@ and checks it as the cluster runs it.
 ```sh
 scripts/install-go2rtc.sh && scripts/install-mediamtx.sh   # tools/ for the tests
 npm test            # vitest, against cam-sim in process (needs ffmpeg)
-npm run test:e2e    # Playwright (Chrome) against a proxy and a cam-sim
+npm run test:e2e    # Playwright (Chrome) against a proxy and a cam-sim; one sign-in (e2e/auth.setup.ts) serves all specs
 npm run lint:types && npm run check
 npm run schema      # regenerate config.schema.json after changing a setting
 ```

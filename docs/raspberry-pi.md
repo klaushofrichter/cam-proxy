@@ -116,12 +116,15 @@ Everything else can stay at its default.
   it, recreate the container (`docker compose up -d --force-recreate`), then
   switch analytics on with a small monthly limit on the Settings page. cam1's
   Pi has it since 2026-09-30.
+- `CAMPROXY_AUDIT_TOKEN` (optional): a read-only token for `GET
+  /control/audit` (docs/audit-log.md). Leave it unset until a poller exists;
+  the admin token reads the audit log too.
 
 Copy them without printing them. For example, pipe just those lines of a local
 `.env` over SSH:
 
 ```sh
-grep -E '^CAMPROXY_(TOKENS|ADMIN_TOKEN|CAMERA_PASSWORD|FTP_PASSWORD|GOOGLE_VISION_KEY)=' .env \
+grep -E '^CAMPROXY_(TOKENS|ADMIN_TOKEN|CAMERA_PASSWORD|FTP_PASSWORD|GOOGLE_VISION_KEY|AUDIT_TOKEN)=' .env \
   | ssh <user>@<pi> 'umask 077; cat > /srv/cam-proxy/.env'
 ```
 
