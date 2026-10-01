@@ -21,6 +21,11 @@ describe('mapObject', () => {
     expect(mapObject({ name: 'person' })).toEqual({ category: 'person', subtype: 'person' });
     expect(mapObject({ name: 'CAR' })).toEqual({ category: 'vehicle', subtype: 'car' });
   });
+  // Issue #56: a mid the table doesn't know maps to nothing, even with a known name.
+  it('does not fall back to the name when an unknown mid comes with it', () => {
+    expect(mapObject({ mid: '/m/0xxxxx', name: 'Person' })).toBeNull();
+    expect(mapObject({ mid: '/m/0xxxxx', name: 'dog' })).toBeNull();
+  });
   it('maps nothing outside the table', () => {
     for (const o of [{ mid: '/m/03ldnb', name: 'Ceiling fan' }, { mid: '/m/0199g', name: 'Bicycle' }, { mid: '/m/015p6', name: 'Bird' }, { mid: '/m/0dzct', name: 'Human face' }, { name: 'Baby' }, { name: 'SUV' }]) {
       expect(mapObject(o)).toBeNull();
@@ -44,6 +49,18 @@ describe('summarize', () => {
       { mid: '/m/01g317', name: 'Person', score: 0.8, box: box(0.1, 0.1, 0.51, 0.9) },
     ]);
     expect(summary).toEqual([{ category: 'person', subtype: 'person', score: 0.8, box: box(0.1, 0.1, 0.51, 0.9) }]);
+  });
+  // Issue #56: the merge needs more than 90% (a strict >). Whole numbers keep
+  // the IoU at exactly 0.9 (it is scale-free).
+  it('keeps two boxes apart at exactly 90% overlap', () => {
+    const a = box(0, 0, 10, 1);
+    const b = box(0, 0, 9, 1);
+    expect(iou(a, b)).toBe(0.9);
+    const { summary } = summarize([
+      { mid: '/m/01g317', name: 'Person', score: 0.8, box: a },
+      { mid: '/m/01g317', name: 'Person', score: 0.7, box: b },
+    ]);
+    expect(summary.map((s) => s.score)).toEqual([0.8, 0.7]);
   });
   it('keeps two persons apart when their boxes overlap less', () => {
     const { summary } = summarize([

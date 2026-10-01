@@ -92,6 +92,26 @@ test('a person event is analysed: Status counts it, Events tags it, the Timeline
   await expect(page.getByTestId('analysis-modal')).toBeVisible();
 });
 
+// Issue #56: an answer with no person, vehicle or pet.
+test('an answer with nothing relevant: the tag and the modal say so; show all lists the object', async ({ page }) => {
+  await signIn(page);
+  expect((await setScript(page, [{ objects: [FAN] }])).ok()).toBe(true);
+  await personEventsClosed(page);
+  const before = await calls(page);
+  expect((await person(page)).status()).toBe(201);
+  await expect.poll(() => calls(page), { timeout: 20000 }).toBe(before + 1);
+  await page.getByTestId('nav-events').click();
+  const tag = page.getByTestId('analysis-tag').first();
+  await expect(tag).toContainText('✦ Vision: nothing relevant', { timeout: 15000 });
+  await tag.click();
+  const modal = page.getByTestId('analysis-modal');
+  await expect(modal).toContainText('Nothing relevant.');
+  await expect(modal.getByTestId('analysis-boxes').locator('rect')).toHaveCount(0);
+  await modal.getByTestId('analysis-show-all').check();
+  await expect(modal.getByTestId('analysis-boxes').locator('rect')).toHaveCount(1);
+  await expect(modal).not.toContainText('Nothing relevant.');
+});
+
 test.afterAll(async ({ request }) => {
   await request.post(`http://127.0.0.1:${VISION_MOCK_PORT}/script`, { data: [] });
   // Leave analytics off for the other specs.

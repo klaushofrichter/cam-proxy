@@ -135,6 +135,35 @@ describe('analytics summary API', () => {
     expect(day.body.map((x: { summary: unknown }) => x.summary)).toEqual([want, []]);
   });
 
+  // Issues #56, #52: corrupt stored JSON in one row must not fail the list (500).
+  it('serves a row whose stored objects or raw answer are not JSON, with them empty', async () => {
+    const c = p.proxy.catalog;
+    const t = at + 600_000;
+    const e = insertEvent(c, { cam: 'cam1', source: 'onvif', kind: 'person', start_ts: t, raw: null });
+    saveAnalysis(c, { event_id: e.id, provider: 'google-vision', status: 'ok', reason: null, still_ts: t + 1000, image: null, requested_at: t, took_ms: 300, objects: '{bad', raw: '{bad', summary: '{bad' });
+    const list = await request(p.base).get(`/api/cameras/cam1/events?from=${t - 1}&to=${t + 1}&limit=10`).set(auth());
+    expect(list.status).toBe(200);
+    expect(list.body[0].analysis).toMatchObject({ status: 'ok', objects: [], summary: [] });
+    const full = await request(p.base).get(`/api/cameras/cam1/events/${e.id}/analysis`).set(auth());
+    expect(full.status).toBe(200);
+    expect(full.body).toMatchObject({ objects: [], summary: [], raw: null });
+  });
+
+  it('serves at most 1000 analyses for a range', async () => {
+    const c = p.proxy.catalog;
+    const t = at + 700_000;
+    c.db.exec('BEGIN');
+    for (let i = 0; i < 1001; i++) {
+      const e = insertEvent(c, { cam: 'cam1', source: 'onvif', kind: 'person', start_ts: t + i, raw: null });
+      saveAnalysis(c, { event_id: e.id, provider: 'google-vision', status: 'skipped', reason: 'limit', still_ts: null, image: null, requested_at: t, took_ms: null, objects: null, raw: null, summary: '[]' });
+    }
+    c.db.exec('COMMIT');
+    const r = await request(p.base).get(`/api/cameras/cam1/analyses?from=${t}&to=${t + 2000}`).set(auth());
+    expect(r.status).toBe(200);
+    expect(r.body).toHaveLength(1000);
+    expect(r.body[999].start).toBe(t + 999);
+  });
+
   it('events carry the summary', async () => {
     const list = await request(p.base).get(`/api/cameras/cam1/events?from=${at - 1}&to=${at + 120_000}&limit=10`).set(auth());
     const withSummary = list.body.find((x: { analysis: { status: string } | null }) => x.analysis?.status === 'ok');
@@ -147,6 +176,7 @@ describe('analytics summary API', () => {
     expect(l.body).toEqual([expect.objectContaining({ mid: '/m/03ldnb', name: 'Ceiling fan', count: 1 })]);
     expect((await request(p.base).get('/control/status').set(auth(ADMIN_TOKEN))).body.analyticsUnmapped[0]).toMatchObject({ name: 'Ceiling fan' });
     expect((await request(p.base).get('/control/analytics/unmapped').set(auth(CLIENT_TOKEN))).status).toBe(403);
+    expect((await request(p.base).delete('/control/analytics/unmapped').set(auth(CLIENT_TOKEN))).status).toBe(403);
     expect((await request(p.base).delete('/control/analytics/unmapped').set(auth(ADMIN_TOKEN))).body).toEqual({ cleared: 1 });
     expect((await request(p.base).get('/control/analytics/unmapped').set(auth(ADMIN_TOKEN))).body).toEqual([]);
   });

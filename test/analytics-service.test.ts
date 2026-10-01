@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { openCatalog, type Catalog } from '../src/catalog/db';
-import { deleteEventsBefore, insertEvent } from '../src/catalog/events';
+import { closeEvent, deleteEventsBefore, insertEvent } from '../src/catalog/events';
 import { analysisFor, listUnmapped, saveAnalysis } from '../src/catalog/analyses';
 import { StreamLog } from '../src/stream/log';
 import { DEFAULTS, type Config } from '../src/config/defaults';
@@ -410,6 +410,17 @@ describe('AnalyticsService', () => {
     const m = log.since(0, { types: ['analysis'] }, 10)[0].data;
     expect(m).toMatchObject({ eventId: e.id, kind: 'person', start: T0, end: null, status: 'ok', stillTs: T0 + 1000, summary: [expect.objectContaining({ category: 'person' })] });
     expect(Array.isArray(m.objects)).toBe(true);
+  });
+
+  // Issue #56: an event that ended before its result came has its end in the message.
+  it('the message carries the end of an event that has already closed', async () => {
+    still(T0 + 1000, 7);
+    const s = service();
+    const e = event('person');
+    closeEvent(c, e.id, T0 + 2500, 'state');
+    s.onEvent(e);
+    await s.idle();
+    expect(log.since(0, { types: ['analysis'] }, 10)[0].data).toMatchObject({ eventId: e.id, start: T0, end: T0 + 2500, status: 'ok' });
   });
 
   it('a skipped analysis gets an empty summary and counts nothing as unmapped', async () => {

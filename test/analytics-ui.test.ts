@@ -16,11 +16,14 @@ describe('analytics UI text', () => {
     expect(usageLine({ ...base, enabled: false })).toBe('not enabled');
   });
 
-  it('writes the Events tag from the summary: subtype and score, best first; "nothing relevant"; or why not', () => {
+  it('writes the Events tag from the summary: subtype and score in the order given (the server sorts); "nothing relevant"; or why not', () => {
     const s = (subtype: string, score: number, category: 'person' | 'vehicle' | 'pet' = 'person') => ({ category, subtype, score, box: { x0: 0, y0: 0, x1: 1, y1: 1 } });
     expect(tagText(null)).toBeNull();
     expect(tagText({ status: 'ok', reason: null, objects: [], summary: [s('person', 0.84), s('dog', 0.7, 'pet')] })).toBe('✦ Vision: Person 0.84, Dog 0.70');
     expect(tagText({ status: 'ok', reason: null, objects: [{ name: 'Ceiling fan', score: 0.9 }], summary: [] })).toBe('✦ Vision: nothing relevant');
+    // Issue #56: the server's order is kept, and the tag stops at 3 entries.
+    expect(tagText({ status: 'ok', reason: null, objects: [], summary: [s('dog', 0.6, 'pet'), s('person', 0.9)] })).toBe('✦ Vision: Dog 0.60, Person 0.90');
+    expect(tagText({ status: 'ok', reason: null, objects: [], summary: [s('person', 0.9), s('man', 0.8), s('car', 0.7, 'vehicle'), s('dog', 0.6, 'pet')] })).toBe('✦ Vision: Person 0.90, Man 0.80, Car 0.70');
     expect(tagText({ status: 'skipped', reason: 'limit', objects: [] })).toBe('✦ not analysed (limit)');
     expect(tagText({ status: 'failed', reason: 'bad_key', objects: [] })).toBe('✦ not analysed (bad_key)');
     // an older record without a summary falls back to the objects
