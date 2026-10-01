@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
-  import type { UiObject, UiSummaryEntry } from '../lib/analytics';
+  import { boxLabel, labelStyle, toggleSelection, type UiObject, type UiSummaryEntry } from '../lib/analytics';
 
   // The analysis of one event (spec 2026-09-30-analytics-design): the image
   // with its boxes, the objects, the camera's event, and the raw answer.
@@ -14,6 +14,14 @@
   const boxes = $derived(
     a ? (showAll || !a.summary ? a.objects.map((o) => ({ label: o.name, score: o.score, box: o.box })) : a.summary.map((e) => ({ label: e.subtype.charAt(0).toUpperCase() + e.subtype.slice(1), score: e.score, box: e.box }))) : [],
   );
+  // The object row clicked: only its box is drawn; null draws them all.
+  let selected = $state<number | null>(null);
+  const shown = $derived(selected === null ? boxes : boxes.slice(selected, selected + 1));
+  function onrowkey(e: KeyboardEvent, i: number) {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    selected = toggleSelection(selected, i);
+  }
   let dialog: HTMLDivElement;
   const base = $derived(`/api/cameras/${encodeURIComponent(camId)}/events/${event.id}`);
   const fmt = (ts: number | null) => (ts === null ? 'now' : new Date(ts).toLocaleTimeString());
@@ -44,54 +52,70 @@
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div class="backdrop" onclick={(e) => e.target === e.currentTarget && onclose()}>
   <div class="modal" role="dialog" aria-modal="true" aria-label="Analysis" tabindex="-1" bind:this={dialog} onkeydown={onkey} data-testid="analysis-modal">
-    <div class="head">
+    <div class="head" data-testid="analysis-head">
       <h3>✦ Analysis · {event.kind} {fmt(event.start)}–{fmt(event.end)}</h3>
       <button onclick={onclose} aria-label="Close" data-testid="analysis-close">✕</button>
     </div>
-    {#if failed}<p class="muted">Could not load the analysis.</p>{:else if !a}<p class="muted" data-testid="analysis-loading">Loading…</p>{/if}
-    {#if a}
-      {#if a.status === 'ok'}
-        <div class="figure">
-          <img src={`${base}/analysis.jpg`} alt="The analysed still" data-testid="analysis-image" />
-          <svg viewBox="0 0 1 1" preserveAspectRatio="none" data-testid="analysis-boxes">
-            {#each boxes as o, i (i)}
+    <!-- The body scrolls inside the frame, so the scrollbar can't paint over its corners. -->
+    <div class="body" data-testid="analysis-body">
+      {#if failed}<p class="muted">Could not load the analysis.</p>{:else if !a}<p class="muted" data-testid="analysis-loading">Loading…</p>{/if}
+      {#if a}
+        {#if a.status === 'ok'}
+          <div class="figure" data-testid="analysis-figure">
+            <img src={`${base}/analysis.jpg`} alt="The analysed still" data-testid="analysis-image" />
+            <svg viewBox="0 0 1 1" preserveAspectRatio="none" data-testid="analysis-boxes">
+              {#each shown as o, i (i)}
+                {@const b = drawn(o)}
+                {#if b}<rect x={b.x0} y={b.y0} width={b.x1 - b.x0} height={b.y1 - b.y0} vector-effect="non-scaling-stroke" />{/if}
+              {/each}
+            </svg>
+            {#each shown as o, i (i)}
               {@const b = drawn(o)}
-              {#if b}<rect x={b.x0} y={b.y0} width={b.x1 - b.x0} height={b.y1 - b.y0} vector-effect="non-scaling-stroke" />{/if}
+              {#if b}<span class="label" style={labelStyle(b)} data-testid="analysis-label">{boxLabel(o.label, o.score)}</span>{/if}
             {/each}
-          </svg>
-          {#each boxes as o, i (i)}
-            {@const b = drawn(o)}
-            {#if b}<span class="label" style={`left:${b.x0 * 100}%;top:${b.y0 * 100}%`}>{o.label} {o.score.toFixed(2)}</span>{/if}
-          {/each}
-        </div>
-        {#if a.summary}
-          <label class="small"><input type="checkbox" bind:checked={showAll} data-testid="analysis-show-all" /> Show all objects</label>
+          </div>
+          {#if a.summary}
+            <label class="small"><input type="checkbox" bind:checked={showAll} onchange={() => (selected = null)} data-testid="analysis-show-all" /> Show all objects</label>
+          {/if}
+          <table data-testid="analysis-objects">
+            <thead><tr><th>object</th><th>score</th></tr></thead>
+            <tbody>{#each boxes as o, i (i)}
+              <tr role="button" tabindex="0" aria-pressed={selected === i} class:sel={selected === i} onclick={() => (selected = toggleSelection(selected, i))} onkeydown={(e) => onrowkey(e, i)} data-testid="analysis-object"><td>{o.label}{#if !drawn(o)} <span class="muted nobox">no box</span>{/if}</td><td>{o.score.toFixed(2)}</td></tr>
+            {:else}<tr><td colspan="2" class="muted">{showAll || !a?.summary ? 'Nothing found.' : 'Nothing relevant.'}</td></tr>{/each}</tbody>
+          </table>
+        {:else}
+          <p data-testid="analysis-reason">Not analysed: {a.reason ?? a.status}.</p>
         {/if}
-        <table data-testid="analysis-objects">
-          <thead><tr><th>object</th><th>score</th></tr></thead>
-          <tbody>{#each boxes as o, i (i)}<tr><td>{o.label}</td><td>{o.score.toFixed(2)}</td></tr>{:else}<tr><td colspan="2" class="muted">{showAll || !a?.summary ? 'Nothing found.' : 'Nothing relevant.'}</td></tr>{/each}</tbody>
-        </table>
-      {:else}
-        <p data-testid="analysis-reason">Not analysed: {a.reason ?? a.status}.</p>
+        <p class="muted small" data-testid="analysis-meta">{a.provider} · {a.status} · {new Date(a.requestedAt).toLocaleString()}{a.tookMs !== null ? ` · ${(a.tookMs / 1000).toFixed(1)} s` : ''}{a.stillTs !== null ? ` · still ${new Date(a.stillTs).toLocaleTimeString()}` : ''}</p>
+        {#if a.raw !== null}<details><summary>Raw answer</summary><pre>{JSON.stringify(a.raw, null, 2)}</pre></details>{/if}
       {/if}
-      <p class="muted small" data-testid="analysis-meta">{a.provider} · {a.status} · {new Date(a.requestedAt).toLocaleString()}{a.tookMs !== null ? ` · ${(a.tookMs / 1000).toFixed(1)} s` : ''}{a.stillTs !== null ? ` · still ${new Date(a.stillTs).toLocaleTimeString()}` : ''}</p>
-      {#if a.raw !== null}<details><summary>Raw answer</summary><pre>{JSON.stringify(a.raw, null, 2)}</pre></details>{/if}
-    {/if}
+    </div>
   </div>
 </div>
 
 <style>
   .backdrop { position: fixed; inset: 0; background: rgb(0 0 0 / 0.5); display: grid; place-items: center; z-index: 50; padding: 16px; }
-  .modal { background: var(--surface); border: 1px solid #a855f7; border-radius: var(--radius); padding: 16px; width: min(960px, 100%); max-height: 90vh; overflow: auto; display: grid; gap: 10px; }
-  .head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .modal { background: var(--surface); border: 1px solid #a855f7; border-radius: var(--radius); width: min(960px, 100%); max-height: 90vh; overflow: hidden; display: flex; flex-direction: column; }
+  .head { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 16px 16px 10px; flex: none; }
+  .body { overflow: auto; min-height: 0; padding: 0 16px 16px; display: grid; gap: 10px; }
   h3 { margin: 0; font-size: 16px; }
-  .figure { position: relative; line-height: 0; }
-  .figure img { width: 100%; border-radius: 6px; background: #111; }
+  /* The picture stays in view while the list scrolls; capped so the list keeps room.
+     The figure is as big as the image, so the boxes (svg, inset 0) stay aligned. */
+  .figure { position: sticky; top: 0; z-index: 1; background: var(--surface); line-height: 0; width: fit-content; max-width: 100%; overflow-x: clip; }
+  .figure img { display: block; width: auto; max-width: 100%; max-height: 45vh; border-radius: 6px; background: #111; }
   .figure svg { position: absolute; inset: 0; width: 100%; height: 100%; }
   rect { fill: none; stroke: #a855f7; stroke-width: 3; }
-  .label { position: absolute; transform: translateY(-100%); background: #a855f7; color: #fff; font-size: 12px; line-height: 1.4; padding: 0 4px; border-radius: 3px; white-space: nowrap; }
+  .label { position: absolute; background: #a855f7; color: #fff; font-size: 12px; line-height: 1.4; padding: 0 4px; border-radius: 3px; white-space: nowrap; }
   table { border-collapse: collapse; font-size: 13px; }
   td, th { padding: 3px 10px 3px 0; text-align: left; }
+  tbody tr[role='button'] { cursor: pointer; }
+  tbody tr[role='button'] td:first-child { padding-left: 6px; border-left: 3px solid transparent; }
+  tbody tr[role='button']:hover { background: rgb(168 85 247 / 0.08); }
+  tbody tr[role='button']:focus-visible { outline: 2px solid #a855f7; outline-offset: -2px; }
+  /* After the hover rule and with the same prefix, so a hovered selected row keeps its look. */
+  tbody tr[role='button'].sel { background: rgb(168 85 247 / 0.18); }
+  tbody tr[role='button'].sel td:first-child { border-left-color: #a855f7; }
+  span.nobox { margin-left: 6px; font-size: 12px; font-style: italic; }
   pre { font-size: 12px; overflow: auto; max-height: 300px; }
   .muted { color: var(--muted); margin: 0; }
   .small { font-size: 13px; }

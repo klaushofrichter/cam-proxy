@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Analysis modal: the purple frame keeps its rounded corners when the content is long ("Show all objects"); the body scrolls inside the frame and the title stays in place.
+- Analysis modal: the labels next to the boxes read "Person 84%" (name with a capital first letter, the rounded percent); the table keeps the score (0.84).
+- Analysis modal: a click on an object row (summary or all objects) draws only that object's box; a second click shows all boxes again. The selected row is highlighted, rows work with Enter and Space, an object without a box says "no box", and switching "Show all objects" clears the selection. The picture stays in view at the top while the list scrolls (at most 45% of the window height); a label at the top or right edge of the picture stays inside it.
+
+## v2026.10.01.1
+
 - Pi: `compose.yaml` gives the container 20 s to stop, time to end an encode and store a Vision call in flight.
 - Analytics: no call for an event that retention removed meanwhile; a call in flight when the proxy stops is stored (a restart doesn't pay for it again); an attempt that isn't retried (switched off, stopping) is stored as failed; only a change to an analytics setting lifts an invalid-key pause; day counting handles DST across New Year; while the camera is down its time is asked once a minute, not on every read.
 - Analytics: `CAMPROXY_GOOGLE_VISION_URL` accepts `http://` only for localhost (the key travels in a header). An answer's entry without a name or a numeric score is no longer shown as an object. A stored analysis that isn't valid JSON no longer fails the events list.

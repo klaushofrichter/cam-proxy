@@ -1,6 +1,6 @@
 // test/analytics-ui.test.ts
 import { describe, expect, it } from 'vitest';
-import { costEstimate, estimateFor, parseLimit, pausedText, tagText, usageLine } from '../web/src/lib/analytics';
+import { boxLabel, costEstimate, labelStyle, estimateFor, parseLimit, pausedText, tagText, toggleSelection, usageLine } from '../web/src/lib/analytics';
 
 describe('analytics UI text', () => {
   it('estimates the monthly cost from the limit (1,000 free, then $2.25 per 1,000)', () => {
@@ -51,5 +51,46 @@ describe('analytics UI text', () => {
     expect(parseLimit(100000, 100000)).toBe(100000);
     for (const bad of ['', '  ', null, undefined, 'abc', '-1', '1.5', '100001', NaN, Infinity]) expect(parseLimit(bad as never, 100000)).toBeNull();
     expect(parseLimit('10001', 10000)).toBeNull();
+  });
+
+  // The overlay's label next to a box: "Clothing 20%" (the table keeps 0.89).
+  it('labels a box with the name, first letter capitalised, and the rounded percent', () => {
+    expect(boxLabel('clothing', 0.2)).toBe('Clothing 20%');
+    expect(boxLabel('person', 0.84)).toBe('Person 84%');
+    expect(boxLabel('Ceiling fan', 0.86)).toBe('Ceiling fan 86%');
+    // only the first letter changes; Google's name is kept otherwise
+    expect(boxLabel('ceiling Fan', 0.5)).toBe('Ceiling Fan 50%');
+    expect(boxLabel('TV', 0.7)).toBe('TV 70%');
+    // The percent agrees with the table's score (toFixed(2)), also on a .xx5:
+    // 0.705 is "0.70" in the table, so "70%" (not 71%).
+    expect(boxLabel('clothing', 0.705)).toBe('Clothing 70%');
+    expect(boxLabel('top', 0.845)).toBe('Top 84%');
+    expect(boxLabel('top', 0.125)).toBe('Top 13%');
+    expect(boxLabel('top', 0.124)).toBe('Top 12%');
+    expect(boxLabel('top', 0.8456)).toBe('Top 85%');
+    for (let k = 0; k <= 1000; k++) {
+      const score = k / 1000;
+      expect(boxLabel('x', score)).toBe(`X ${Number(score.toFixed(2).replace('.', ''))}%`);
+    }
+    expect(boxLabel('belt', 0)).toBe('Belt 0%');
+    expect(boxLabel('belt', 1)).toBe('Belt 100%');
+  });
+
+  // Where the label goes: above the box's left corner; inside the box when the
+  // box touches the top (else it is cut off); anchored right near the right edge.
+  it('places a box label so it stays inside the picture', () => {
+    expect(labelStyle({ x0: 0.1, y0: 0.2, x1: 0.4, y1: 0.9 })).toBe('left:10%;top:20%;transform:translateY(-100%)');
+    expect(labelStyle({ x0: 0.1, y0: 0, x1: 0.4, y1: 0.5 })).toBe('left:10%;top:0%');
+    expect(labelStyle({ x0: 0.1, y0: 0.079, x1: 0.4, y1: 0.5 })).toBe('left:10%;top:7.9%');
+    expect(labelStyle({ x0: 0.8, y0: 0.2, x1: 0.95, y1: 0.5 })).toBe('right:5%;top:20%;transform:translateY(-100%)');
+    expect(labelStyle({ x0: 0.8, y0: 0, x1: 1, y1: 0.5 })).toBe('right:0%;top:0%');
+    expect(labelStyle({ x0: 0.75, y0: 0.08, x1: 1, y1: 0.5 })).toBe('left:75%;top:8%;transform:translateY(-100%)');
+  });
+
+  // Clicking an object row shows only its box; clicking it again shows all.
+  it('toggles the selected object row', () => {
+    expect(toggleSelection(null, 2)).toBe(2);
+    expect(toggleSelection(2, 2)).toBeNull();
+    expect(toggleSelection(2, 0)).toBe(0);
   });
 });
