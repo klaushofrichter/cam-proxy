@@ -18,9 +18,10 @@ import { ClipIndexer } from './clips/indexer';
 import { createClipsSide, type ClipsSide } from './clips/side';
 import { EventIntake } from './events/intake';
 import { EventTracker } from './events/tracker';
-import { logger, setLogLevel } from './log';
+import { logger, setLogLevel, withoutQuery } from './log';
 import { Storage } from './storage';
 import { AuditLog } from './audit/audit-log';
+import { RefusalThrottle } from './audit/throttle';
 import { Go2rtc } from './stills/go2rtc';
 import { FrameGrabber, type Frame } from './stills/grabber';
 import { MinuteStore, minuteOf } from './stills/store';
@@ -29,7 +30,7 @@ import { StreamLog, type StreamMessage } from './stream/log';
 import { AnalyticsService } from './analytics/service';
 import { refreshingTimeInfo } from './analytics/time-info';
 import { sseHandler } from './stream/sse';
-import { refuseTokenInUrl, requireAccess } from './api/auth';
+import { clientIp, refuseTokenInUrl, requireAccess, type AccessDeps } from './api/auth';
 import { clientApi } from './api/client-api';
 import { auditApi, controlApi, sessionRoutes } from './api/control-api';
 import { createMetrics } from './api/metrics';
@@ -261,7 +262,22 @@ export function createProxy(initial: Loaded): Proxy {
     if (JSON.stringify(next.config.analytics) !== analyticsBefore) analytics.settingsChanged();
   };
 
-  const access = { tokens: () => loaded.secrets.tokens, adminToken: () => loaded.secrets.adminToken, auditToken: () => loaded.secrets.auditToken, sessionValid: (v: string | undefined) => sessions.verify(v) };
+  // An `auth-refused` record per source IP and path per 10 minutes; the
+  // refusals in between are counted into the next record.
+  const refusals = new RefusalThrottle();
+  const access: AccessDeps = {
+    tokens: () => loaded.secrets.tokens,
+    adminToken: () => loaded.secrets.adminToken,
+    auditToken: () => loaded.secrets.auditToken,
+    sessionValid: (v: string | undefined) => sessions.verify(v),
+    onRefused: (req, info) => {
+      const ip = clientIp(req);
+      const path = withoutQuery(req.originalUrl);
+      const t = refusals.take(ip, path);
+      if (!t.record) return;
+      audit.write({ action: 'auth-refused', category: ['authentication'], type: ['denied'], outcome: 'failure', ip, userAgent: req.get('user-agent'), message: `Refused ${req.method} ${path} (${info.reason})`, ecs: { http: { request: { method: req.method } }, url: { path } }, details: { auth: { tokenKind: info.tokenKind, reason: info.reason, ...(t.suppressed ? { suppressed: t.suppressed } : {}) } } });
+    },
+  };
   const app = express();
   app.disable('x-powered-by');
   // Far above real use (the UI, cams, a scraper); stops a flood. SSE is one
@@ -279,7 +295,7 @@ export function createProxy(initial: Loaded): Proxy {
   app.get('/metrics', async (_req, res) => {
     res.type(metrics.registry.contentType).send(await metrics.registry.metrics());
   });
-  app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links }));
+  app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit }));
   app.use('/api', refuseTokenInUrl, requireAccess('client', access), composeApi({ config: () => running, catalog, composer, stillsIn: (f, t) => stills?.store.listStills(f, t) ?? [], paused: () => storage.paused(), font }));
   app.use('/api', refuseTokenInUrl, requireAccess('client', access), clientApi({ config: () => running, catalog, status: () => status, sse, stills: () => stills }));
   // The audit log: admins and the audit token, GET only. The access check is
