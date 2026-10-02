@@ -447,7 +447,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         },
         test: (t) => testCameraFtp(client, t),
         off: async () => {
-          const ftp = await cameraFtpOff(client);
+          const ftp = await cameraFtpOff(client, ftpTarget());
           ftpWatch.note(ftp);
           return ftp;
         },
