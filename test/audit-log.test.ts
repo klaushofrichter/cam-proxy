@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { appendFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { AuditLog, AuditQueryError, cut, redact } from '../src/audit/audit-log';
+import { AuditLog, AuditQueryError, cut, maskPath, redact } from '../src/audit/audit-log';
 import { logger } from '../src/log';
 
 const dirs: string[] = [];
@@ -61,6 +61,28 @@ describe('AuditLog.write', () => {
     for (const s of ['"aaa"', '"bbb"', '"k"', '"p"']) expect(text).not.toContain(s);
     expect(redact({ token: 'x', list: [{ secretThing: 'y' }], n: 2 })).toEqual({ token: '[redacted]', list: [{ secretThing: '[redacted]' }], n: 2 });
     expect(redact({ auth: { tokenKind: 'client', reason: 'admin-only' } })).toEqual({ auth: { tokenKind: 'client', reason: 'admin-only' } });
+  });
+
+  // #78: the match is by explicit names, not any key containing "key".
+  it('redacts by secret names only: keyframe and keyFile are not secrets', () => {
+    expect(redact({ keyframe: 4, keyFile: '/x/k.pem', ftp: { keyFile: 'a' } })).toEqual({ keyframe: 4, keyFile: '/x/k.pem', ftp: { keyFile: 'a' } });
+    expect(redact({ apiKey: 'a', googleVisionKey: 'b', api_key: 'c', adminToken: 'd', authToken: 'e', Password: 'f', clientSecret: 'g', authorization: 'h', cookie: 'i' }))
+      .toEqual({ apiKey: '[redacted]', googleVisionKey: '[redacted]', api_key: '[redacted]', adminToken: '[redacted]', authToken: '[redacted]', Password: '[redacted]', clientSecret: '[redacted]', authorization: '[redacted]', cookie: '[redacted]' });
+    expect(redact({ privatekey: 'a', accesskey: 'b', passphrase: 'c', pwd: 'd', credentials: 'e', credential: 'f', keyframe: 1, keyFile: 'g' }))
+      .toEqual({ privatekey: '[redacted]', accesskey: '[redacted]', passphrase: '[redacted]', pwd: '[redacted]', credentials: '[redacted]', credential: '[redacted]', keyframe: 1, keyFile: 'g' });
+    expect(redact({ changes: [{ key: 'ftp.keyFile', from: 'a', to: 'b' }, { key: 'server.adminToken', from: 'a', to: 'b' }] }))
+      .toEqual({ changes: [{ key: 'ftp.keyFile', from: 'a', to: 'b' }, { key: 'server.adminToken', from: '[redacted]', to: '[redacted]' }] });
+  });
+
+  // #78: a token that lands in a URL path is masked in the record.
+  it('maskPath masks token-like path segments, keeps ids and file names', () => {
+    const tok = 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6';
+    expect(maskPath(`/api/${tok}/x`)).toBe('/api/:token/x');
+    expect(maskPath('/api/cameras/cam1/recordings/Rec20261001_120000_000_M.mp4')).toBe('/api/cameras/cam1/recordings/Rec20261001_120000_000_M.mp4');
+    // by length, not charset: dots, +, =, %, ~ and an extension do not hide it
+    for (const seg of [`${tok}.jpg`, `${tok}+=`, `${tok.slice(0, 16)}.${tok.slice(16)}`, `${tok.slice(0, 20)}%2F${tok.slice(20)}`, `${tok}~x`]) expect(maskPath(`/api/${seg}/x`)).toBe('/api/:token/x');
+    expect(maskPath(`/api/${tok}.jpg`)).toBe('/api/:token');
+    expect(maskPath('/api/cameras/cam1/stills/1790000000000.jpg')).toBe('/api/cameras/cam1/stills/1790000000000.jpg');
   });
 
   // Issue #70: `secret` names an environment variable; any other value is redacted.
@@ -132,6 +154,19 @@ describe('AuditLog.write', () => {
     expect(recs.filter((r) => r.event.action === 'audit-throttled')).toHaveLength(1);
     expect(recs.at(-1).message).toBe('still here');
     expect(recs.filter((r) => r.event.action === 'auth-refused').length).toBeLessThan(40);
+  });
+});
+
+describe('failed logins past the size limit (#78)', () => {
+  it('drops failed login records like auth-refused; a successful login still writes', () => {
+    const now = { t: T };
+    const { dir, log } = make(now, { maxFileBytes: 2000 });
+    for (let i = 0; i < 40; i++) log.write({ ...base, action: 'login', outcome: 'failure', message: `bad ${i}` });
+    log.write({ ...base, action: 'login', outcome: 'success', message: 'ok login' });
+    const recs = readFileSync(join(dir, '2026-10-01.jsonl'), 'utf8').trimEnd().split('\n').map((l) => JSON.parse(l));
+    expect(recs.filter((r) => r.event.action === 'audit-throttled')).toHaveLength(1);
+    expect(recs.at(-1).message).toBe('ok login');
+    expect(recs.filter((r) => r.message.startsWith('bad')).length).toBeLessThan(40);
   });
 });
 

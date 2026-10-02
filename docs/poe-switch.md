@@ -125,7 +125,11 @@ lost the failure state. It only ever turns PoE on, so it doesn't ask first.
 **A stopping proxy** (SIGTERM, a container stop, `restart-proxy`) during the
 off time turns the PoE on at once. The retries end after 6 s, and every call
 to the switch is cut short to fit what is left of the 8 s wait, with time
-kept for the final logout. That stays within compose's 20 s
+kept for the final logout. A call already in flight keeps its own 5 s
+timeout, so the worst case is a call started just before the stop (up to
+5 s) plus the shortened calls after it: about 7.7 s in all, still inside
+the wait. The logout is retried once during normal operation, not while the
+stop budget is spent. That stays within compose's 20 s
 `stop_grace_period`. If PoE may still be off, or the logout went unanswered
 (the switch's web UI may then refuse logins until the switch ends that
 session), it logs an error and writes a `camera-powercycle` failure record
@@ -190,3 +194,14 @@ that answers nothing (hang); slow answers. `POST /mock/poe` is a test hook
 that sets a port's PoE, as the switch's web UI would. The e2e harness starts it on
 port 18601 and wires PoE on the camera's port to cam-sim's power-off and
 power-on, so the simulated camera really goes away.
+
+**Session hygiene.** A logout the switch did not answer is retried once,
+on the same session (the cookie is kept). If that fails too, the proxy logs
+`poe_switch_logout_failed_session_may_be_open`, and a later login refused or
+dropped as busy says it may be the proxy's own session. A login the switch
+refused never replaces the session cookie. Measured on the real switch (#90
+item 4): a session nobody logs out of locks the switch for 150 to 181 s of idle
+time (about 3 minutes after the last call), then it frees itself and the old
+cookie is dropped. A login that carries the open session's cookie succeeds and
+keeps the same cookie. So the busy message adds that a possibly-own session
+frees itself about 3 minutes after the last call.
