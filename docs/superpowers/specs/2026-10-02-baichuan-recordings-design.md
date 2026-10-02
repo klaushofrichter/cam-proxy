@@ -63,6 +63,7 @@ including proprietary API to the camera. I prefer node over Python."
 
 ## Phase 0: measurements on the real camera
 
+Done on 2026-10-02 (cam-sim PR #63; the answers are in this spec's Design).
 Half a day, before any code. A measurement script in the reolink workspace,
 using the scratch reolink_aio setup plus raw socket captures, run against the
 real camera (cam1). Klaus allowed real-camera work; settings are not changed.
@@ -83,16 +84,15 @@ real camera (cam1). Klaus allowed real-camera work; settings are not changed.
 **Output.**
 - Scrubbed traces go into cam-sim `reference/rlc-1224a/baichuan/` (no
   credentials, keys or nonces; see the cam-sim spec for the format).
-- The results settle the open points at the end of this spec. Where this spec
-  says "default (phase 0)", the default holds until phase 0 says otherwise;
-  the spec is updated with the result before the plan is written.
+- The results are folded into the Design below. Traces hold lengths only, no
+  media bytes. No point stays open.
 
 ## Design
 
 ### 1. Protocol summary
 
-Only what the client needs: log in, get file info, download, stop. All
-integers are little-endian.
+Only what the client needs: log in, download, stop. All integers are
+little-endian. Measured on the RLC-1224A (firmware v3.2.0.6011) in phase 0.
 
 **Header** ([aio base_protocol.py L321-L375](https://github.com/starkillerOG/reolink_aio/blob/5d37cb3df2a49bb8eeafa93fa02513df88ad527a/reolink_aio/baichuan/base_protocol.py#L321-L375)):
 
@@ -104,17 +104,20 @@ integers are little-endian.
 | 12 | 1 | channel byte `ch_id`: 250 = host. Also the XOR offset. |
 | 13 | 3 | message counter. Bytes 12–15 together are the message id that replies echo. |
 | 16 | 2 | request: `00 00` (modern) or the encryption offer `12 dc` (nonce request). Reply: status as u16 (`c8 00` = 200), or `XX dd` (chosen encryption) on the nonce reply. |
-| 18 | 2 | message class: `14 64` or `00 00` = 24-byte header; `14 66` = modern, 20 bytes; `14 65` = legacy, 20 bytes. |
+| 18 | 2 | message class. Client: `14 65` (nonce request, 20-byte header) and `14 64` (everything else, 24 bytes). Camera: `14 66` (nonce reply only, 20 bytes) and `00 00` with a 24-byte header for every other reply and push. The parser takes the header size from the class: `14 66` and `14 65` are 20 bytes, `14 64` and `00 00` are 24. |
 | 20 | 4 | 24-byte header only: payload offset, the length of the extension XML (0 = none). |
 
 The body is `[extension XML: payload offset bytes][body XML or binary]`. The
 body is binary when the extension says `<binaryData>1</binaryData>`. VOD
 requests go to ch_id 250 with no extension; the channel is in the body XML.
 
-**Statuses.** 200, 201 and 300 are OK; 400 is a bad request (on cmd 8: a
-refusal); 401 is bad credentials at login
+**Statuses.** 200, 201 and 300 are OK; 400 is a bad request (on cmd 8: not
+found or refused); 401 is bad credentials at login (the body is
+`<LoginErrInfo><remainTimes>10</remainTimes></LoginErrInfo>`, and the
+connection stays open); 405 is an unknown cmd (the session stays usable)
 ([aio base_protocol.py L381-L392](https://github.com/starkillerOG/reolink_aio/blob/5d37cb3df2a49bb8eeafa93fa02513df88ad527a/reolink_aio/baichuan/base_protocol.py#L381-L392)).
-Unlike aio, the client never retries a 400.
+Unlike aio, the client never retries a 400. A request before login, or bad
+magic, makes the camera close the connection without a reply.
 
 **Login** (cmd 1; [aio baichuan.py L665-L692](https://github.com/starkillerOG/reolink_aio/blob/5d37cb3df2a49bb8eeafa93fa02513df88ad527a/reolink_aio/baichuan/baichuan.py#L665-L692), [L1707-L1757](https://github.com/starkillerOG/reolink_aio/blob/5d37cb3df2a49bb8eeafa93fa02513df88ad527a/reolink_aio/baichuan/baichuan.py#L1707-L1757)):
 1. Nonce request: cmd 1, 20-byte header, class `14 65`, bytes 16–17 `12 dc`,
@@ -125,13 +128,15 @@ Unlike aio, the client never retries a 400.
    `LOGIN_XML` ([aio xmls.py L3-L15](https://github.com/starkillerOG/reolink_aio/blob/5d37cb3df2a49bb8eeafa93fa02513df88ad527a/reolink_aio/baichuan/xmls.py#L3-L15))
    with `userName = md5_31(user + nonce)` and `password = md5_31(password + nonce)`,
    XOR-encoded, not AES.
-4. Login reply: 200 with `<DeviceInfo>…`, or 401.
+4. Login reply: 200 with `<DeviceInfo>…` (about 5 KB), or 401. The
+   `proxy` user logs in (200); it is admin level on this camera, by Klaus's
+   decision.
 
 `md5_31(s)` is the uppercase hex MD5 of `s`, truncated to 31 characters
 ([aio util.py L112-L118](https://github.com/starkillerOG/reolink_aio/blob/5d37cb3df2a49bb8eeafa93fa02513df88ad527a/reolink_aio/baichuan/util.py#L112-L118)).
 
 **Ciphers** (constants from [aio util.py L17-L22](https://github.com/starkillerOG/reolink_aio/blob/5d37cb3df2a49bb8eeafa93fa02513df88ad527a/reolink_aio/baichuan/util.py#L17-L22)):
-- XOR ("BC"), for the login only: `out[i] = in[i] ^ XML_KEY[(off + i) % 8] ^ off`,
+- XOR ("BC"), for the nonce reply, the login and the login reply: `out[i] = in[i] ^ XML_KEY[(off + i) % 8] ^ off`,
   with `XML_KEY = 1F 2D 3C 4B 5A 69 78 FF` and `off = ch_id`. It is symmetric.
 - After login, AES-128-CFB with 128-bit segments (Node's `aes-128-cfb`). The
   key is the first 16 characters of `md5_31(nonce + "-" + password)`, as ASCII
@@ -147,6 +152,28 @@ Unlike aio, the client never retries a 400.
 **Session.** It lasts as long as the TCP connection. There is no token; the
 nonce and key are per connection. Logout is cmd 2 and sends the plain user
 name and password inside AES ([aio xmls.py L17-L25](https://github.com/starkillerOG/reolink_aio/blob/5d37cb3df2a49bb8eeafa93fa02513df88ad527a/reolink_aio/baichuan/xmls.py#L17-L25)).
+The client does not use it: a plain close frees the session at once, so there
+is no logout (measured: the session leaves HTTP `GetOnline` within 0.3 s, and
+32 closes in a row left nothing behind). A logout answers 200, then the camera
+closes the connection.
+
+**Camera limits (measured).**
+- **Session limit: 12 TCP connections on port 9000**, counting connections
+  that never logged in. The 13th is accepted, then reset at its first message
+  with no reply; it works again as soon as one closes. HTTP is unaffected.
+  Baichuan sessions show in HTTP `GetOnline`. The proxy keeps one connection
+  per camera, so it stays far from the limit; other Baichuan clients (the
+  Reolink app, other tools) share the 12.
+- **Idle timeout: about 32 s after the client's last message**; 12.5 s for a
+  connection that never sends. Any request resets it (cmd 93 `LinkType`
+  answers 200, an unknown cmd answers 405, both count).
+
+**Pushes.** After login the camera sends unsolicited messages (message id 0,
+channel 0, status 200): cmds 78, 79, 464, 547, 291, 677, 600 and 669. They
+arrive 0.04–0.5 s after login, sometimes in a second batch about 32 s later,
+and **can arrive between a request and its reply**. The session layer skips
+every message whose message id doesn't belong to a pending request; it never
+interprets pushes.
 
 **VOD messages** (templates: [pr xmls.py L281-L352](https://github.com/1eft0ver/reolink_aio/blob/9a1bb5238b43ecc9d8fbe05c7e5679a7ad8a06f2/reolink_aio/baichuan/xmls.py#L281-L352)).
 All are AES, ch_id 250, no extension, body
@@ -154,26 +181,40 @@ All are AES, ch_id 250, no extension, body
 
 | cmd | Purpose | `FileInfo` children sent | Reply |
 |---|---|---|---|
-| 13 | file info | `Id`, `channelId`, `name` | `sizeL`, `sizeH`, `handle`, `fileType`, `containsAudio` |
-| 8 | download | `Id`, `channelId`, `name` | streamed chunks (below) |
-| 9 | stop | `channelId`, `handle` (cmd 13's handle; "0" after a search) | 200, no body |
-| 14/15/16 | search open / page / close | see [pr baichuan.py L4261-L4327](https://github.com/1eft0ver/reolink_aio/blob/9a1bb5238b43ecc9d8fbe05c7e5679a7ad8a06f2/reolink_aio/baichuan/baichuan.py#L4261-L4327) | only if phase 0 shows they are needed |
+| 8 | download | `Id`, `channelId` (no `name`) | streamed chunks (below) |
+| 9 | stop | `channelId`, `handle` = `0` | 200, no body |
+
+**Not used (measured).**
+- **14/15/16 (search)**: not needed. cmd 8 with `<Id>` alone gives
+  byte-identical files to the search path.
+- **13 (file info)**: not used. Its `handle` is always 0, and with `<name>` it
+  reports the main file's size for a sub `<Id>` (6,716,462 for a 467,534 B sub
+  file). Size comes from the file name, as the list already does.
 
 - **`Id`** is the absolute path the camera's HTTP `Search` returns as `name`,
   e.g. `/mnt/sda/Mp4Record/2026-10-01/RecS0A_DST20261001_211129_211207_0_5514C080000000_108CE9.mp4`.
-- **`name`** is `{channel+1:02d}{start as YYYYMMDDhhmmss}` in camera-local
-  time, e.g. `0120261001211129` ([pr L4237-L4241](https://github.com/1eft0ver/reolink_aio/blob/9a1bb5238b43ecc9d8fbe05c7e5679a7ad8a06f2/reolink_aio/baichuan/baichuan.py#L4237-L4241)).
-- **Size**: `sizeL + sizeH × 2^32`. The file name's last hex field is the same
-  size (`0x108CE9` = 1,084,649 B in the trace).
+  It is exactly the HTTP Search `name`.
+- **`name`** (the PR's `{channel+1:02d}{start}`) is optional and not sent.
+- **Size** is the file name's last hex field (`0x108CE9` = 1,084,649 B in the
+  trace). It equals HTTP Search `size` and the bytes received, on all 8 files
+  checked.
 
 **The download stream** (trace; [pr L4399-L4417](https://github.com/1eft0ver/reolink_aio/blob/9a1bb5238b43ecc9d8fbe05c7e5679a7ad8a06f2/reolink_aio/baichuan/baichuan.py#L4399-L4417)):
 1. The first cmd-8 reply has extension `<binaryData>1</binaryData>` and a
-   32-byte payload that is **not** file data. Skip it.
+   32-byte payload that is **not** file data (an info record: `"1002"`, the
+   size, width, height, fps, start and end, a main/sub flag). Skip it.
 2. Every later cmd-8 frame has extension `<binaryData>1</binaryData><encryptLen>1024</encryptLen>`
    and a chunk of the file (39,400 B and 12,872 B in the trace).
-3. There is no terminator. The transfer ends when the bytes received reach the
-   size. The client then sends cmd 9.
-4. A refusal is a cmd-8 reply with status 400 and no chunks.
+3. There is no terminator, even 3 s after the last byte. The transfer ends
+   when the bytes received reach the size. The client then sends cmd 9
+   (answers 200, no body).
+4. A refusal or a missing file is a cmd-8 reply with status 400, no body and
+   no chunks.
+5. **Every frame of the download carries cmd 8's message id**, the first
+   32-byte one included. The client accepts a frame only if cmd and message id
+   match the running download.
+6. Throughput (LAN): main 10.8–10.9 MB/s (6.7 MB in 0.6 s), sub 0.05–0.08 s
+   per file; the first chunk comes 9–39 ms after cmd 8.
 
 ### 2. The recordings API
 
@@ -254,7 +295,12 @@ Delivers the file as `video/mp4`, with `Range` support.
   (`Content-Length` = the size), without a transfer.
 - `Cache-Control: private, max-age=604800, immutable`, as for clips.
 
-**One download at a time per camera.** A per-camera queue with two
+**One download at a time per camera.** The camera would allow more: on the
+same connection a new cmd 8 silently replaces the running one (the old one
+stops with no message), and on two connections both run in parallel. So the
+rule is ours, for two reasons: a second cmd 8 on the one connection would
+kill the first transfer, and a second connection would use more of the
+camera's 12 sessions and share its bandwidth. A per-camera queue with two
 priorities: requests from the client API are `high`; `low` is for background
 work (#74's gap-fill, later) and is not used yet. A `high` request goes ahead
 of every queued `low` one. A request whose client disconnects while queued
@@ -321,6 +367,8 @@ Fresh TypeScript; only `node:net` and `node:crypto`.
   class, payload offset (20- and 24-byte forms).
 - A streaming parser: messages split across reads and several in one read.
   Bad magic: the connection is closed with a protocol error (no resync).
+- It reads the header size from the class (see the header table). The session
+  layer, not the parser, drops pushes and stale messages by message id.
 
 **`cipher.ts`**
 - The login XOR (fixed key, offset = channel byte).
@@ -334,32 +382,38 @@ Fresh TypeScript; only `node:net` and `node:crypto`.
 **`session.ts`**
 - One TCP connection per camera, opened on demand.
 - The handshake: nonce, then login. Replies are matched by cmd and message id.
-- After about 60 s idle it closes the socket. Default (phase 0): a plain close,
-  no cmd 2, because logout resends the password.
+- **Idle: it closes the socket after 20 s without a request**, and reconnects
+  on demand (nonce and login take well under a second). It sends no keep-alive
+  (no cmd 93): the camera drops an idle session after about 32 s, and a long
+  download keeps it alive by itself. Always a plain close, never cmd 2.
 - The same camera user and password as the HTTP client (`camera.user`,
-  `CAMPROXY_CAMERA_PASSWORD`). Default (phase 0): the non-admin `proxy` user
-  can log in over Baichuan. If it can't, that is a decision for Klaus, not for
-  the plan.
+  `CAMPROXY_CAMERA_PASSWORD`). The `proxy` user logs in over Baichuan; it is
+  admin level on this camera by Klaus's decision (2026-10-02), and there will
+  be no non-admin user.
 - At most one login attempt per 15 s per camera (aio's guard), so a bug can't
   lock the account. Within the 15 s, a failed login fails fast with `auth`.
+- A reset at the first message (the 12-session limit) is a `refused` error,
+  not `offline`.
 - A lost connection fails every pending request. The next request reconnects
   and logs in again (a new nonce and key).
 
 **`vod.ts`**
-- `fileInfo(path, name)`: cmd 13; returns size and handle.
-- `download(path, name, size, writable)`: cmd 8. Skips the first reply's 32
-  extra bytes, writes chunks, ends when the received bytes reach the size.
+- `download(path, size, writable)`: cmd 8 with `<Id>` = the camera path;
+  `size` is the name's last hex field. Skips the first reply's 32 extra bytes,
+  accepts only frames with cmd 8 and its message id, writes chunks, ends when
+  the received bytes reach the size.
   Honours backpressure: when `writable.write()` returns false, the socket is
   paused until `drain`, so TCP slows the camera down.
-- `stop(handle)`: cmd 9, then about 300 ms of drain (late chunks are dropped),
-  or a close.
-- 14/15/16 only if phase 0 shows they're needed.
-- The flow: 13 → 8 → 9. The size from cmd 13 wins; a mismatch with the name's
-  size is logged at warn level.
+- `stop()`: cmd 9 (`handle` 0). About 400 KB of chunks still arrive afterwards
+  with the old message id; they are dropped by message id, so no drain is
+  needed, and the next cmd 8 on the same connection works. Closing the socket
+  mid-transfer is fine too.
+- The flow: 8, then 9 once the bytes reach the size. No cmd 13, no search.
 
 **Errors.** `BaichuanError` with a code: `offline` (connect refused or timed
-out), `auth` (401), `refused` (400 on cmd 8), `not_found` (the camera reports
-the file missing), `timeout`, `protocol` (bad magic, an unknown class, a
+out), `auth` (401 at login), `refused` (a reset at the first message, or a
+400 on cmd 8), `not_found` (a 400 on cmd 8 for a file whose name the list
+had), `timeout`, `protocol` (bad magic, an unknown class, a
 reply that doesn't parse). Timeouts: connect 5 s, login 10 s, first chunk 15 s
 after cmd 8, a stall of 20 s between chunks. A broken download can't resume
 (cmd 8 has no offset); the `.part` is deleted and the next request starts over.
@@ -400,9 +454,9 @@ carries reolink_aio's MIT notice. Nothing is ported from Neolink (AGPL).
   a retry or a later Range request finds the file there.
 - **Disk paused** (below `storage.minFreeBytes`): the fetch streams to the
   client without being kept.
-- **Abort and next download**: default (phase 0) cmd 9 plus drain leaves the
-  session usable; if phase 0 shows otherwise, the client closes the socket
-  after an abort instead.
+- **Abort and next download**: cmd 9 leaves the session usable, with stale
+  chunks dropped by message id (measured). HTTP `cmd=Download` stays refused
+  before and after, unchanged.
 
 ## Testing
 
@@ -410,8 +464,10 @@ carries reolink_aio's MIT notice. Nothing is ported from Neolink (AGPL).
 - The frame parser: split messages, merged messages, both header sizes, bad
   magic.
 - The ciphers, pinned to known bytes (the aio oracle fixtures).
-- The message builders against the trace's XML (cmds 8, 9, and 13 once phase 0
-  has captured it).
+- The message builders against the trace's XML (cmds 8 and 9).
+- Pushes (message id 0) between a request and its reply are skipped; stale
+  chunks with an old message id after cmd 9 are dropped.
+- The idle close at 20 s (fake timers).
 - The download loop: end at the size, the 32-byte first payload, backpressure
   (a slow writable pauses the socket), the first-chunk and stall timeouts.
 - The cache: LRU order across a restart, the cap, the budget (recordings go
@@ -426,7 +482,8 @@ carries reolink_aio's MIT notice. Nothing is ported from Neolink (AGPL).
 **Integration** (`npm test`, cam-sim in process, the release with its
 Baichuan server): login, list, sub and main downloads, and every cam-sim fault
 (refused download, a drop mid-transfer, a slow transfer, a rejected login, the
-session limit), plus HTTP Download refused while Baichuan works.
+session limit, the 32 s idle drop, pushes between request and reply, stale
+chunks after an abort), plus HTTP Download refused while Baichuan works.
 
 **e2e across the stack** (in cams' spec): cam-sim refuses HTTP Download,
 cam-proxy fetches over Baichuan, cams plays the clip.
@@ -443,26 +500,11 @@ Pi's proxy, with `/control/status` showing "Recordings: ok".
   It builds on this (the `low` priority).
 - Restoring stills (#73) and the download-status work in cams (#76), beyond the
   Status line here.
-- Baichuan search (14/15/16), live video, events or settings over Baichuan.
+- Baichuan search (14/15/16) and file info (13), live video, events or settings over Baichuan.
 - Resuming a broken transfer.
 - Multi-channel cameras (channel 0 only).
 
-## Open points (phase 0 decides)
-
-| Point | Default until measured |
-|---|---|
-| Are 14/15/16 needed before 13/8, or is the name enough? | Not needed: 13 → 8 → 9. If needed, `vod.ts` adds a one-second search window around the start, as the PR does. |
-| Does cmd 13 work without a search, and which handle does cmd 9 want then? | Yes; cmd 9 takes cmd 13's handle. |
-| Can the non-admin `proxy` user log in over Baichuan? | Yes. If not: Klaus decides. |
-| Plain close or logout (cmd 2)? | Plain close. If closes leave stale sessions that count against a limit, send cmd 2 before closing. |
-| The session limit | One connection per camera from the proxy; never more. |
-| The camera's idle timeout | Longer than 60 s. If shorter, the idle close moves below it. |
-| A second download while one runs | Refused by the camera; the proxy never tries (one at a time). |
-| Abort midway, then the next download | Works after cmd 9 and a drain; otherwise close and reconnect. |
-| Do chunks echo cmd 8's message id? | Matched by cmd and id; if not echoed, by cmd only (safe with one download at a time). |
-| The wire shape of a nonexistent name and a wrong password | 400 on cmd 8 or 13 (`not_found` when 13 says so); 401 at login. |
-
-**Known risk (not phase 0).** cams still runs its own month Search against the
+**Known risk.** cams still runs its own month Search against the
 camera. A proxy Search that overlaps it can come back empty without an error.
 The 30 s list cache bounds the effect; if it shows up, cams' month list moves
 to the proxy too, in a later step.
