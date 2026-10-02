@@ -75,7 +75,7 @@ describe('CameraReboot', () => {
     const { r, deps } = make({ now: () => t.now, check: async () => ({ ok: true, serial: 'S1' }) });
     expect((await r.request(who)).status).toBe(202);
     t.now += 119_000;
-    expect(await r.request(who)).toEqual({ status: 429, retryAfterS: 1 });
+    expect(await r.request(who)).toEqual({ status: 429, retryAfterS: 1, inFlight: false });
     t.now += 1_000;
     expect((await r.request(who)).status).toBe(202);
     r.stop();

@@ -12,6 +12,7 @@ import { ReolinkClient } from './camera/client';
 import { splitHost } from './camera/http';
 import { StatusPoller } from './camera/status';
 import { CameraReboot } from './camera/reboot';
+import { PoeSwitch } from './camera/poe-switch';
 import { restartProcess } from './process-restart';
 import type { Config } from './config/defaults';
 import { needsProcessRestart, needsRestart, type Loaded } from './config/load';
@@ -259,6 +260,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     },
     audit,
   });
+  // The camera's PoE switch (#85): settings read on every use (they apply at once).
+  const poeSwitch = new PoeSwitch({ config: () => running.camera.poeSwitch, password: () => loaded.secrets.poeSwitchPassword });
 
   // External analytics: event stills to the provider, within its limits.
   const timeInfo = refreshingTimeInfo(() => client.timeInfo());
@@ -379,12 +382,17 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       running: () => running,
       catalog,
       log,
-      camera: () => ({ ...status.state(), webUiUrl: cameraWebUi(running.camera), reboot: reboot.state() }),
+      camera: () => ({ ...status.state(), webUiUrl: cameraWebUi(running.camera), reboot: reboot.state(), poeSwitch: poeSwitch.status() }),
       checkCamera: () => status.checkNow(),
       intake: () => intake.state(),
       resubscribe: () => intake.resubscribe(),
       restart: () => proxy.restart(),
       cameraReboot: (who) => reboot.request(who),
+      poeSwitch: { notConfigured: () => poeSwitch.notConfigured(), read: () => poeSwitch.read() },
+      cameraPowerCycle: (who) => {
+        const c = running.camera.poeSwitch;
+        return reboot.powerCycle(who, { switch: { model: c.model, host: c.host ?? '', port: c.port ?? 0 }, offSeconds: c.offSeconds }, (onOff) => poeSwitch.cycle(onOff));
+      },
       restartProcess: () => {
         processRestart ??= restartProcess({
           stop: () => proxy.stop({ reason: 'restart-requested' }),
@@ -544,6 +552,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       daily.stop();
       // First, while everything is still open.
       audit.write({ action: 'proxy-stop', category: ['process'], type: ['end'], outcome: 'success', user: 'system', message: `cam-proxy stopping${opts.reason ? ` (${opts.reason})` : ''}`, details: { reason: opts.reason ?? 'stop' } });
+      // A power-cycle in its off time turns the camera's PoE on now, not never.
+      await poeSwitch.stop();
       await restarting;
       reboot.stop();
       clearInterval(sweeper);
