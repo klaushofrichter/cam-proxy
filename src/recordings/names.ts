@@ -34,7 +34,9 @@ export function parseSdName(nameOrPath: string): SdName | null {
   const date = `${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}`;
   const d = new Date(`${date}T00:00:00Z`);
   if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== date || !HMS.test(start) || !HMS.test(end)) return null;
-  return { id, stream: s === 'M' ? 'main' : 'sub', dst: Boolean(dst), date, start, end, size: parseInt(size, 16), kinds: decodeKinds(flags) };
+  const bytes = parseInt(size, 16);
+  if (!Number.isSafeInteger(bytes)) return null;
+  return { id, stream: s === 'M' ? 'main' : 'sub', dst: Boolean(dst), date, start, end, size: bytes, kinds: decodeKinds(flags) };
 }
 
 // A recording still being written is listed with end 000000; only one that
@@ -44,6 +46,8 @@ export const stillRecording = (n: SdName): boolean => n.end === '000000' && n.st
 const wall = (date: string, hms: string) =>
   Date.UTC(Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, Number(date.slice(8, 10)), Number(hms.slice(0, 2)), Number(hms.slice(2, 4)), Number(hms.slice(4, 6)));
 
+// Callers must check stillRecording(n) first: the end time of a clip still
+// being written (end 000000) is meaningless.
 // The name's DST flag decides the offset, so the night the clocks change is right.
 export function recordingTimes(n: SdName, t: TimeInfo): { start: number; end: number } {
   const off = (t.stdOffsetMinutes + (n.dst ? t.dstOffsetMinutes : 0)) * 60_000;

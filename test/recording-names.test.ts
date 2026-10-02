@@ -19,6 +19,14 @@ describe('SD names', () => {
     expect(parseSdName('RecS0A_20261002_040758_040819_55148080000000_7224E.mp4')).toMatchObject({ dst: false, size: 467_534, kinds: ['motion'] });
   });
 
+  it('a real main name from cam-sim\'s reference: motion only, size 0x667C2E', () => {
+    expect(parseSdName('RecM0A_DST20261002_040758_040819_0_7B288280000000_667C2E.mp4')).toMatchObject({ stream: 'main', size: 0x667c2e, kinds: ['motion'] });
+  });
+
+  it('a size field beyond a safe integer is not a name', () => {
+    expect(parseSdName('RecS0A_DST20261001_211129_211207_0_5514C080000000_FFFFFFFFFFFFFFFF.mp4')).toBeNull();
+  });
+
   it('decodes the trigger flags (bit 55 − position)', () => {
     expect(decodeKinds('5514C080000000')).toEqual(['person', 'motion']);
     expect(decodeKinds('55148080000000')).toEqual(['motion']);
@@ -39,6 +47,10 @@ describe('SD names', () => {
     expect(validId(SUB.replace('.mp4', '.MP4'))).toBe(false);
     expect(validId(SUB.replace('_108CE9', `_${'A'.repeat(128 - SUB.length + 6)}`))).toBe(true); // exactly 128
     expect(validId(SUB.replace('_108CE9', `_${'A'.repeat(129 - SUB.length + 6)}`))).toBe(false); // 129
+  });
+
+  it('validId rejects a NUL byte, a backslash, a look-alike letter and a trailing newline', () => {
+    for (const bad of [SUB.replace('.mp4', '\0.mp4'), SUB.replace('_0_', '\\0_'), SUB.replace('Rec', 'R\u0415c'), `${SUB}\n`]) expect(validId(bad), JSON.stringify(bad)).toBe(false);
   });
 
   it('a recording still being written ends 000000, unless it starts in the last minutes before midnight', () => {
