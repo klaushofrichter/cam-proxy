@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, writeFileSync } from 'fs';
-import { open } from 'fs/promises';
+import { open, type FileHandle } from 'fs/promises';
 import { dirname, join } from 'path';
 import sharp from 'sharp';
 import { logger } from '../log';
@@ -16,7 +16,7 @@ const MAGIC = Buffer.from('CPK1');
 const MINUTE = 60_000;
 const FOOTER_CACHE = 5000;
 
-interface PackFooter { v: 1; minute: number; intervalS: number; size: string; quality: number; slots: [number, number][] }
+export interface PackFooter { v: 1; minute: number; intervalS: number; size: string; quality: number; slots: [number, number][] }
 export interface PreviewMinute { minute: number; cols: number; rows: number; tileW: number; tileH: number; intervalS: number; present: boolean[] }
 interface Sidecar extends PreviewMinute { v: 1 }
 
@@ -42,6 +42,30 @@ function writeAtomic(file: string, data: Buffer | string): void {
   const tmp = `${file}.tmp-${process.pid}`;
   writeFileSync(tmp, data);
   renameSync(tmp, file);
+}
+
+// A pack's footer, read async and without the store's cache (the inventory
+// walks thousands of packs): the same checks as MinuteStore's own read, plus
+// a positive interval. null for a missing, short or corrupt pack.
+export async function readPackFooter(file: string): Promise<PackFooter | null> {
+  let fh: FileHandle | undefined;
+  try {
+    fh = await open(file, 'r');
+    const { size } = await fh.stat();
+    if (size < 8) return null;
+    const tail = Buffer.alloc(8);
+    await fh.read(tail, 0, 8, size - 8);
+    const len = tail.readUInt32LE(0);
+    if (!tail.subarray(4).equals(MAGIC) || len <= 0 || len >= 1_000_000 || len > size - 8) return null;
+    const json = Buffer.alloc(len);
+    await fh.read(json, 0, len, size - 8 - len);
+    const f = JSON.parse(json.toString('utf8')) as PackFooter;
+    return f.v === 1 && Array.isArray(f.slots) && typeof f.intervalS === 'number' && f.intervalS > 0 ? f : null;
+  } catch {
+    return null;
+  } finally {
+    await fh?.close();
+  }
 }
 
 interface Current { minute: number; stills: (Buffer | undefined)[]; tiles: (Buffer | undefined)[] }
