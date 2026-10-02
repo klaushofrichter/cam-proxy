@@ -552,4 +552,40 @@ describe('RecordingFetcher', () => {
     expect(calls).toBe(1);
     expect(fetch.kept).toBe(true);
   });
+
+  it('abortIfAlone: a running background fetch nobody else waits for is aborted (no outcome, no .part); a joined one runs on', async () => {
+    const x = setup({ chunk: 1000, delayMs: 2 });
+    const a = x.add(1);
+    const ac = new AbortController();
+    const { fetch } = x.fetcher.get(a, { priority: 'low', signal: ac.signal });
+    expect(fetch.abortIfAlone()).toBe(false); // queued: leaving the queue is join()'s job
+    await vi.waitFor(() => expect(x.dl.calls).toEqual([a.path]));
+    expect(fetch.abortIfAlone()).toBe(false); // still waited for
+    ac.abort();
+    expect(fetch.abortIfAlone()).toBe(true);
+    await expect(fetch.done).rejects.toMatchObject({ name: 'AbortError' });
+    expect(x.outcomes).toEqual([]);
+    expect(readdirSync(x.dir)).toEqual([]);
+    // Its own client attached: still alone. Another's client: not.
+    const b = x.add(2);
+    const ab = new AbortController();
+    const fb = x.fetcher.get(b, { priority: 'low', signal: ab.signal }).fetch;
+    const own = collector();
+    expect(fb.attach(own.w, () => undefined)).toBe(true);
+    await vi.waitFor(() => expect(x.dl.calls).toHaveLength(2));
+    ab.abort();
+    expect(fb.abortIfAlone(collector().w)).toBe(false);
+    expect(fb.abortIfAlone(own.w)).toBe(true);
+    await expect(fb.done).rejects.toMatchObject({ name: 'AbortError' });
+    // A viewer joined: the fetch runs on and is kept.
+    const c = x.add(3);
+    const ac3 = new AbortController();
+    const fc = x.fetcher.get(c, { priority: 'low', signal: ac3.signal }).fetch;
+    x.fetcher.get(c, { priority: 'high' });
+    await vi.waitFor(() => expect(x.dl.calls).toHaveLength(3));
+    ac3.abort();
+    expect(fc.abortIfAlone()).toBe(false);
+    await fc.done;
+    expect(fc.kept).toBe(true);
+  });
 });

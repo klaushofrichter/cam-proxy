@@ -221,6 +221,19 @@ export class Fetch {
     this.tee?.destroy(abortError('the proxy is stopping'));
   }
 
+  // A background caller (the clips repair) left: a running fetch that nobody
+  // waits for any more (no waiter left, no client but the caller's own `own`)
+  // is aborted like abort(). A fetch a viewer joined runs on. Call it after
+  // the caller's signal aborted (join()'s listener has counted it out).
+  // Answers whether it aborted.
+  abortIfAlone(own?: Writable): boolean {
+    if (this.state !== 'running' || this.waiters > 0) return false;
+    const c = this.live;
+    if (c && c.res !== own && !c.res.destroyed && !c.res.writableEnded) return false;
+    this.tee?.destroy(abortError('cancelled'));
+    return true;
+  }
+
   begin(tee: Tee): void {
     this.state = 'running';
     this.tee = tee;
