@@ -278,14 +278,21 @@ describe('BaichuanSession: #99 (Task 4)', () => {
   });
 
   it('close() during login then ensure(): the old attempt does not close the new one', async () => {
-    const { cam, s } = await setup();
+    // The login reply waits, so the close lands mid-login (not after it, as
+    // it can on localhost when the close follows the accept).
+    const { cam, s } = await setup({ loginDelayMs: 150 });
     const old = s.ensure();
-    await vi.waitFor(() => expect(cam.connections).toBe(1), { interval: 1 });
+    await vi.waitFor(() => expect(cam.loginAttempts).toBe(1), { interval: 1 });
+    expect(s.connected()).toBe(false);
     s.close();
     const next = s.ensure();
-    expect(await code(old)).toBe('offline');
-    await next;
-    expect(s.connected()).toBe(true);
+    try {
+      expect(await code(old)).toBe('offline');
+      await next;
+      expect(s.connected()).toBe(true);
+    } finally {
+      await next.catch(() => undefined);
+    }
   });
 
   it('a rejected login logs and reports the attempts the camera has left (remainTimes)', async () => {

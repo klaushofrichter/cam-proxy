@@ -26,6 +26,7 @@ export interface FakeOptions {
   resetAtFirstMessage?: boolean; // the 13th session: reset, no reply
   silentCmds?: number[]; // never answered
   noLoginReply?: boolean;
+  loginDelayMs?: number; // before the login reply (a close can land mid-login)
   badMagicOn?: number; // answer this cmd with bad magic
   replyDelayMs?: number; // before the reply to cmd 9
   infoRecord?: Buffer; // instead of INFO_RECORD in cmd 8's first reply
@@ -73,6 +74,7 @@ export async function fakeCamera(o: FakeOptions = {}): Promise<FakeCamera> {
       if (cmd === 1) {
         cam.loginAttempts++;
         if (o.noLoginReply) return;
+        if (o.loginDelayMs) await sleep(o.loginDelayMs);
         const xml = bcXor(f.body, ch).toString('utf8');
         const user = /<userName>([^<]*)</.exec(xml)?.[1];
         const pass = /<password>([^<]*)</.exec(xml)?.[1];
