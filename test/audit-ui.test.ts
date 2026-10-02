@@ -17,5 +17,6 @@ describe('audit page helpers', () => {
     expect(ACTIONS).toContain('camera-powercycle');
     expect(ACTIONS).toContain('camera-poe-on');
     expect(ACTIONS).toContain('camera-check'); // #93
+    expect(ACTIONS).toContain('inventory'); // #72
   });
 });

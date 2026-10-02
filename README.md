@@ -602,6 +602,11 @@ exchanged for the cookie and not stored in the browser.
   restart it shows "Restarting…", waits for `/health` to answer with a new
   start time or version, and reloads (sign in again: sessions end with the
   process). After 2 minutes without the proxy it says so.
+  The Inventory box's "Check stills" checks the stills of the retention
+  window in the background: the missing seconds, the 10 longest gaps and
+  whether a proxy stop or crash, a camera reboot or a power cycle explains
+  them, the seconds a local clip could restore, and unreadable packs or sprites without their pack. It shows
+  the progress (with Cancel) and the newest result.
 - **Top bar:** the title links to the GitHub repo; badges for the camera
   online state and event intake; the camera's model (linked to
   `camera.webUiUrl`) · firmware · version; "updated … ago"; Refresh, the
