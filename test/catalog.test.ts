@@ -55,6 +55,10 @@ describe('catalog', () => {
     expect(lastClipReceived(c, 'cam1')).toBe(9500);
   });
 
+  it('refuses a clip origin other than ftp or camera', () => {
+    expect(() => c.db.prepare("INSERT INTO clips (cam, start_ts, path, stream, size, received_at, origin) VALUES ('cam1', 1, 'x.mp4', 'sub', 1, 1, 'sd')").run()).toThrow(/CHECK/);
+  });
+
   // The Pi's real catalog is at version 5: built here from migrations 1-5 as released, then opened.
   it('migrates a real version 5 catalog (migrations 1-5) with rows, arrivals and the trigger intact', () => {
     c.close();

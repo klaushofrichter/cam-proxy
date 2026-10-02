@@ -109,7 +109,7 @@ export const MIGRATIONS: string[] = [
   // inventory repair). Only FTP clips count as arrivals: a repaired clip must
   // not hide an FTP stall (#93).
   `
-  ALTER TABLE clips ADD COLUMN origin TEXT NOT NULL DEFAULT 'ftp';
+  ALTER TABLE clips ADD COLUMN origin TEXT NOT NULL DEFAULT 'ftp' CHECK (origin IN ('ftp','camera'));
   DROP TRIGGER clips_last_received;
   CREATE TRIGGER clips_last_received AFTER INSERT ON clips WHEN NEW.origin = 'ftp' BEGIN
     INSERT INTO clip_arrivals (cam, last_received) VALUES (NEW.cam, NEW.received_at)
