@@ -177,3 +177,33 @@ describe('a camera reboot', () => {
     expect(r.proxy.recordings.session.connected()).toBe(false);
   }, 30_000);
 });
+
+describe('reset() after a camera.id change (#99, Task 11)', () => {
+  it('prepares the new camera folder: created, its leftover .part files deleted', async () => {
+    const { createRecordingsSide } = await import('../src/recordings/side');
+    const dataDir = mkdtempSync(join(tmpdir(), 'camproxy-reset-'));
+    let cam = 'cam1';
+    const side = createRecordingsSide({
+      dataDir,
+      cam: () => cam,
+      target: () => ({ host: '127.0.0.1', port: 1, user: 'u', password: 'p' }),
+      capBytes: () => 2 ** 20,
+      search: async () => ({}),
+      timeInfo: async () => ({ stdOffsetMinutes: 0, dstOffsetMinutes: 0 }),
+      paused: () => false,
+      noteWritten: () => undefined,
+    });
+    const next = join(dataDir, 'recordings', 'cam9');
+    mkdirSync(next, { recursive: true });
+    writeFileSync(join(next, LEFTOVER), Buffer.alloc(10));
+    writeFileSync(join(next, CACHED), Buffer.alloc(10));
+    cam = 'cam9';
+    side.reset();
+    expect(readdirSync(next)).toEqual([CACHED]);
+    // A reset for the same camera leaves a .part alone (a download may be writing it).
+    writeFileSync(join(next, LEFTOVER), Buffer.alloc(10));
+    side.reset();
+    expect(readdirSync(next).sort()).toEqual([CACHED, LEFTOVER].sort());
+    await side.stop();
+  });
+});
