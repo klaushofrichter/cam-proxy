@@ -3,7 +3,7 @@ import net from 'net';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { loadConfig } from '../../src/config/load';
-import { createProxy, type Proxy } from '../../src/proxy';
+import { createProxy, type Proxy, type ProxyOptions } from '../../src/proxy';
 import { startSim } from './sim';
 
 export const CLIENT_TOKEN = 'client-token-'.padEnd(40, 'x');
@@ -36,7 +36,7 @@ export async function freePort(): Promise<number> {
 // `request(proxy.app)`: supertest then opens a throwaway listener on `::`,
 // and any process that binds 127.0.0.1 on that port later (a listen(0) and
 // close, then a bind) takes the requests over (issue #44).
-export async function startProxy(sim: Awaited<ReturnType<typeof startSim>>, opts: { dir?: string; settings?: object; env?: Record<string, string> } = {}) {
+export async function startProxy(sim: Awaited<ReturnType<typeof startSim>>, opts: { dir?: string; settings?: object; env?: Record<string, string>; proxy?: ProxyOptions } = {}) {
   const dir = opts.dir ?? mkdtempSync(join(tmpdir(), 'camproxy-proxy-'));
   const go2rtc = process.env.CAMPROXY_TEST_GO2RTC;
   writeFileSync(join(dir, 'config.json'), JSON.stringify({
@@ -48,7 +48,7 @@ export async function startProxy(sim: Awaited<ReturnType<typeof startSim>>, opts
     ...(opts.settings ?? {}),
   }));
   const loaded = loadConfig({ CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: sim.password, ...opts.env }, { cwd: dir });
-  const proxy: Proxy = createProxy(loaded);
+  const proxy: Proxy = createProxy(loaded, opts.proxy);
   const { port } = await proxy.start({ port: 0, host: '127.0.0.1' });
   return { proxy, dir, port, base: `http://127.0.0.1:${port}` };
 }

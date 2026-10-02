@@ -17,7 +17,7 @@ paths:
       summary: The process is up (no camera check, no auth)
       security: []
       responses:
-        '200': { description: '{ ok: true, version } (the real running version: the release version, dev locally)' }
+        '200': { description: '{ ok: true, version, startedAt } (the real running version: the release version, dev locally; startedAt: when this process started serving, unix ms)' }
   /api/cameras:
     get:
       summary: The camera and its state
@@ -324,15 +324,20 @@ paths:
         '400': { description: unknown setting }
   /control/actions/{name}:
     post:
-      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart
+      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart (the camera side), camera-reboot, restart-proxy (the process)
+      description: |
+        camera-reboot reboots the camera (about a minute offline; every camera token becomes invalid).
+        restart-proxy answers 202, then stops gracefully (as on SIGTERM) and exits 0; a supervisor
+        (compose, the cluster) starts it again. Both are admin only (sessions need X-CamProxy-UI) and audited.
       parameters:
         - { name: name, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: 'camera-test and retention-run results; camera-ftp-setup/-off: {ftp} (the camera''s settings, no password); camera-ftp-test: {ok, rspCode}' }
-        '202': { description: started (onvif-resubscribe, restart) }
+        '202': { description: 'started (onvif-resubscribe, restart, restart-proxy); camera-reboot: { confirmed } (false: the camera dropped the connection after receiving the request)' }
         '404': { description: unknown action }
         '409': { description: 'camera-ftp-setup/-test: ftp.publicHost or the FTP password is not set' }
-        '502': { description: the camera refused or failed the call }
+        '429': { description: 'camera-reboot: too_soon, within 120 s of the last reboot (Retry-After)' }
+        '502': { description: 'the camera refused or failed the call; camera-reboot: the request never reached the camera' }
   /control/log:
     get:
       summary: Recent log lines (info and above), redacted

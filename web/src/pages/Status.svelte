@@ -1,6 +1,8 @@
 <script lang="ts">
   import { status, stats } from '../lib/state';
   import { pausedText, usageLine } from '../lib/analytics';
+  import { daysUntilFullText } from '../lib/format';
+  import { cameraStateText } from '../lib/maintenance';
 
   const gb = (b: number) => `${(b / 1024 ** 3).toFixed(1)} GB`;
   const mb = (b: number) => `${(b / 1024 ** 2).toFixed(1)} MB`;
@@ -18,7 +20,7 @@
       <div class="card" data-testid="card-camera">
         <h3>Camera</h3>
         <dl>
-          <dt>State</dt><dd class={$status.camera.online ? 'ok' : 'bad'}>{$status.camera.online ? 'online' : 'offline'}</dd>
+          <dt>State</dt><dd class={$status.camera.reboot?.phase === 'rebooting' ? 'warn' : $status.camera.online ? 'ok' : 'bad'} data-testid="camera-state">{cameraStateText($status.camera)}</dd>
           <dt>Since</dt><dd>{ago($status.camera.since)}</dd>
           <dt>Model</dt><dd>{#if $status.camera.model && $status.camera.webUiUrl}<a href={$status.camera.webUiUrl} target="_blank" rel="noopener noreferrer" title="The camera's own web page">{$status.camera.model}</a>{:else}{$status.camera.model ?? '—'}{/if}</dd>
           <dt>Firmware</dt><dd>{$status.camera.firmware ?? '—'}</dd>
@@ -89,7 +91,7 @@
           <dt>Audit log</dt><dd>{mb($stats.disk.audit.bytes)}</dd>
           <dt>Used / budget</dt><dd>{gb($stats.storage.used)} / {gb($stats.storage.budget)}</dd>
           <dt>Disk free</dt><dd>{gb($stats.disk.free)} of {gb($stats.disk.size)}</dd>
-          <dt>Days until full</dt><dd>{$stats.storage.daysUntilFull === null ? '—' : Math.round($stats.storage.daysUntilFull)}</dd>
+          <dt>Days until full</dt><dd data-testid="days-until-full">{daysUntilFullText($stats.storage.daysUntilFull)}</dd>
           <dt>Writing</dt><dd class={$stats.storage.paused ? 'bad' : 'ok'}>{$stats.storage.paused ? 'paused (disk full)' : 'on'}</dd>
           <dt>Last cleanup</dt><dd>{ago($status.retention.lastRun)}</dd>
         </dl>
@@ -117,7 +119,7 @@
   .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
   dl { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; margin: 0; font-size: 14px; }
   dt { color: var(--muted); } dd { margin: 0; font-family: var(--mono); text-align: right; }
-  .ok { color: #22c55e; } .bad { color: var(--danger); }
+  .ok { color: #22c55e; } .bad { color: var(--danger); } .warn { color: #f59e0b; }
   .muted { color: var(--muted); }
   .small { font-size: 13px; margin: 0 0 8px; }
 </style>

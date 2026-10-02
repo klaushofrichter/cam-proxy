@@ -37,6 +37,7 @@ export class CameraError extends Error {
 export interface CameraStatus {
   model: string;
   firmware: string;
+  serial?: string; // changes on every reboot (cams docs/reolink-api.md)
 }
 
 interface ReolinkReply {
@@ -218,8 +219,8 @@ export class ReolinkClient {
   }
 
   async status(): Promise<CameraStatus> {
-    const value = await this.command<{ DevInfo?: { model?: string; firmVer?: string } }>('GetDevInfo');
-    return { model: value.DevInfo?.model ?? 'unknown', firmware: value.DevInfo?.firmVer ?? 'unknown' };
+    const value = await this.command<{ DevInfo?: { model?: string; firmVer?: string; serial?: string } }>('GetDevInfo');
+    return { model: value.DevInfo?.model ?? 'unknown', firmware: value.DevInfo?.firmVer ?? 'unknown', ...(value.DevInfo?.serial ? { serial: value.DevInfo.serial } : {}) };
   }
 
   // Real firmware limits concurrent sessions and never gets a Logout when we
@@ -307,6 +308,12 @@ export class ReolinkClient {
       throw new CameraError('camera_auth_failed', 'token rejected after re-login');
     }
     throw new CameraError('camera_auth_failed', 'token rejected after re-login');
+  }
+
+  // Drops the cached token without a Logout: after a camera reboot every
+  // token is invalid, so the next command logs in again.
+  forgetToken(): void {
+    this.token = null;
   }
 
   // Ends the camera session (the camera allows only a few), best effort.

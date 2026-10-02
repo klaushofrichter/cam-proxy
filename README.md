@@ -430,14 +430,17 @@ arrive.
 
 | Route | |
 |---|---|
-| `GET /control/status` | `{version, camera (incl. webUiUrl), intake, sse, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures}, analytics: [{…, keyMasked, keySource}], analyticsUnmapped}` |
+| `GET /control/status` | `{version, camera (incl. webUiUrl, serial, and reboot: {requestedAt, confirmed, phase: rebooting\|back\|not-back, endedAt, downSec} or null), intake, sse, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures}, analytics: [{…, keyMasked, keySource}], analyticsUnmapped}` |
 | `GET /control/stats` | `{disk: {catalog, audit, stills, previews, clips}` (each `{bytes, files, oldest, newest, growthPerDay}`), `events, stream, sse, storage}` |
 | `GET /control/config` | every setting: `{value, source, restart, pending, next?}`; secrets never appear |
 | `PUT /control/config` | overrides, e.g. `{"sse":{"pingS":10}}`; a bad value answers 400 naming it, and nothing is written |
 | `PUT /control/secrets/google-vision-key` | `{"key":"..."}` (20 to 200 printable ASCII characters, no spaces; else 400 `invalid`): sets the Google Vision key in memory only, at once, until the process restarts; answers `{keySource: "manual", keyMasked, replaced}`, never the key; audited as `secret-override` |
 | `DELETE /control/config/{path}` | removes one override |
-| `POST /control/actions/{name}` | `onvif-resubscribe`, `restart` (202, started); `camera-test`, `retention-run` (`{"dryRun":true}` previews); `camera-ftp-setup`, `camera-ftp-test` (409 `not_configured` without `ftp.publicHost` or the FTP password), `camera-ftp-off`; any camera call that fails answers 502 `camera_error` |
+| `POST /control/actions/{name}` | `onvif-resubscribe`, `restart` (202, started: reconnects to the camera and applies restart settings; the process runs on); `camera-test`, `retention-run` (`{"dryRun":true}` previews); `camera-ftp-setup`, `camera-ftp-test` (409 `not_configured` without `ftp.publicHost` or the FTP password), `camera-ftp-off`; any camera call that fails answers 502 `camera_error` |
+| `POST /control/actions/camera-reboot` | reboots the camera (offline about a minute; every camera token becomes invalid). 202 `{confirmed}`: `false` when the camera dropped the connection after receiving the request; 429 `too_soon` (with `Retry-After`) within 120 s of the last reboot; 502 when the request never reached the camera. The proxy rides it out: it drops its camera token, ONVIF re-subscribes on its own, and `/control/status` shows `camera.reboot` until the camera answers again or 5 minutes pass. Audited as `camera-reboot` |
+| `POST /control/actions/restart-proxy` | restarts the proxy process: 202, then the normal graceful stop (the same as SIGTERM; `proxy-stop` reason `restart-requested`) and exit 0, also after 15 s if the stop hangs. Compose (`restart: unless-stopped`) or the cluster starts it again; run directly (`npm start`), the process just ends. Admin sessions end with the process. Audited as `proxy-restart` |
 | `GET /control/audit` | the audit log as JSON lines: `limit`, `before`/`after` (cursors), `from`, `to`, `action`, `outcome`; admin token, admin session or `CAMPROXY_AUDIT_TOKEN`; HEAD answers like GET without the body. See [docs/audit-log.md](docs/audit-log.md) |
+| `GET /health` | `{ok, version, startedAt}` (no auth): `startedAt` (ms) tells a new process apart |
 | `GET /control/log?limit` | recent log lines (info and above), redacted; default limit 100, buffer holds the last 500 |
 | `POST /control/login` / `logout`, `GET /control/session` | the admin UI's session cookie (`camproxy_session`, HttpOnly, SameSite=Strict, 12 h; 40 sign-ins per 15 min) |
 | `POST /control/login-links`, `GET /control/login-link?code=` | a one-time sign-in link (admin token; the code works once, for 60 s, and is kept only in memory): cams opens the UI with it for a signed-in user |
@@ -458,7 +461,12 @@ exchanged for the cookie and not stored in the browser.
 - **Settings:** every setting with its source; changes become overrides, and
   can be reset.
 - **Maintenance:** the actions, including the camera FTP buttons; the log
-  updates every 10 s.
+  updates every 10 s. "Reboot camera" and "Restart proxy" ask first, in a
+  dialog on the page (Cancel or Esc sends nothing). After a reboot the page
+  shows "Rebooting…" and the camera's state until it answers again; after a
+  restart it shows "Restarting…", waits for `/health` to answer with a new
+  start time or version, and reloads (sign in again: sessions end with the
+  process). After 2 minutes without the proxy it says so.
 - **Top bar:** the title links to the GitHub repo; badges for the camera
   online state and event intake; the camera's model (linked to
   `camera.webUiUrl`) · firmware · version; "updated … ago"; Refresh, the
@@ -468,7 +476,7 @@ exchanged for the cookie and not stored in the browser.
 
 The proxy records who did what, as ECS JSON lines, one file per UTC day in
 `<dataDir>/audit`, kept `retention.auditDays` (90) days:
-- start and stop, restarts, sign-ins (with failures), sign-outs, login links;
+- start and stop, restarts, camera reboots, sign-ins (with failures), sign-outs, login links;
 - refused tokens, throttled to one record per IP and path per 10 minutes;
 - control actions and settings changes (secret values redacted);
 - a storage snapshot and an activity summary at 00:05 camera time.

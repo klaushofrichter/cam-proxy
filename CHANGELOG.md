@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Maintenance page: "Reboot camera" reboots the camera (`POST /control/actions/camera-reboot`, admin only). It asks first; afterwards the page shows "Rebooting…" and the camera's state, and the Status page shows "rebooting (requested HH:MM)" until the camera answers again or 5 minutes pass. Another reboot within 120 s is refused (429). The proxy drops its camera token and rides it out: ONVIF re-subscribes on its own. Audited as `camera-reboot`, with a second record when the camera is back (`downSec`) or not back after 5 minutes.
+- Maintenance page: "Restart proxy" restarts the proxy process (`POST /control/actions/restart-proxy`, admin only): the normal graceful stop, then exit 0, and compose or the cluster starts it again (run directly, the process just ends). The page shows "Restarting…" and reloads when the new process answers; after 2 minutes without it, it says so. Sign in again afterwards. Both buttons share one confirmation dialog on the page.
+- Audit log: `proxy-restart` now means only the process restart. The camera-side restart (`POST /control/actions/restart`, "Restart camera side") is recorded as a `control-action` with `action: restart`. `proxy-stop` has the reason `restart-requested` after a process restart.
+- `/health` also answers `startedAt`, the time the process started serving.
+- Audit log: the daily storage record says "N minutes of stills" (it counts minute files, not single stills).
+- Status page: "Days until full" says "more than a year" past 365 days, as the daily storage record does.
+- A token in the URL (`?token=`, `?access_token=`) is now refused on the sign-in routes (`/control/login`, `/control/login-link`, `/control/logout`, `/control/session`) too.
 - Audit log: the daily storage record says "more than a year until full" instead of a day count past 365 days (`daysUntilFull` keeps the number).
 - Audit log: a `config-change` record marks each setting that waits for a restart (`restart: "restart"`, or `"process"` for a new process).
 - Audit log: `HEAD /control/audit` answers like GET (it was 403 even for admins).

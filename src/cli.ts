@@ -14,7 +14,9 @@ async function main(): Promise<void> {
     }
     throw err;
   }
-  const proxy = createProxy(loaded);
+  // A restart-proxy action stops the proxy and exits 0; compose or the
+  // cluster starts it again (#71).
+  const proxy = createProxy(loaded, { exit: (code) => process.exit(code) });
   await proxy.start();
   const shutdown = (sig: string) => {
     logger.info({ sig }, 'cam_proxy_stopping');

@@ -20,12 +20,14 @@ const AFTER_MS = 5 * 60_000;
 const FALLBACK_MS = 60 * 60_000;
 
 // The storage-daily message. Past a year the projection says only that: at a
-// slow growth the day count runs into the hundred thousands (#78).
-export function storageMessage(u: { used: number; budget: number; stills: number; clipRows: number; daysUntilFull: number | null }): string {
+// slow growth the day count runs into the hundred thousands (#78). Stills are
+// stored as one pack per minute, so the count is of minutes, not of stills
+// (counting stills would mean reading every pack).
+export function storageMessage(u: { used: number; budget: number; stillMinutes: number; clipRows: number; daysUntilFull: number | null }): string {
   const gb = (b: number) => `${(b / 1e9).toFixed(1)} GB`;
   const days = u.daysUntilFull === null ? null : Math.round(u.daysUntilFull);
   const full = days === null ? 'not filling' : days > 365 ? 'more than a year until full' : `${days} days until full`;
-  return `Storage: ${gb(u.used)} used of ${gb(u.budget)} budget, ${u.stills.toLocaleString('en-US')} stills, ${u.clipRows.toLocaleString('en-US')} clips, ${full}`;
+  return `Storage: ${gb(u.used)} used of ${gb(u.budget)} budget, ${u.stillMinutes.toLocaleString('en-US')} minutes of stills, ${u.clipRows.toLocaleString('en-US')} clips, ${full}`;
 }
 
 export function addDays(day: string, n: number): string {

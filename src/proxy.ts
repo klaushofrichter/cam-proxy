@@ -11,6 +11,8 @@ import { closeAllOpen, countEventsByKind } from './catalog/events';
 import { ReolinkClient } from './camera/client';
 import { splitHost } from './camera/http';
 import { StatusPoller } from './camera/status';
+import { CameraReboot } from './camera/reboot';
+import { restartProcess } from './process-restart';
 import type { Config } from './config/defaults';
 import { needsProcessRestart, needsRestart, type Loaded } from './config/load';
 import { leafPaths } from './config/schema';
@@ -74,6 +76,17 @@ export interface Proxy {
   stop(opts?: { reason?: string }): Promise<void>;
 }
 
+export interface ProxyOptions {
+  // Ends the process after a restart-proxy action (#71); src/cli.ts passes
+  // process.exit. Without it the proxy only stops, so tests and the e2e
+  // harness never end their own process.
+  exit?: (code: number) => void;
+  // The admin session key; random per process unless given (the e2e harness
+  // keeps its sessions over a simulated restart).
+  sessionSecret?: Buffer;
+  restartTimeoutMs?: number; // how long a restart waits for stop() (15 s)
+}
+
 const getPath = (o: unknown, p: string) => p.split('.').reduce<unknown>((x, k) => (x && typeof x === 'object' ? (x as Record<string, unknown>)[k] : undefined), o);
 function setPath(o: Record<string, unknown>, p: string, v: unknown): void {
   const keys = p.split('.');
@@ -92,7 +105,7 @@ export function cameraWebUi(c: Config['camera']): string | null {
   return hostname ? `https://${hostname}/` : null;
 }
 
-export function createProxy(initial: Loaded): Proxy {
+export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   let loaded = initial;
   // The configuration the components run with: live settings are copied in
   // at once, restart settings on restart().
@@ -113,7 +126,7 @@ export function createProxy(initial: Loaded): Proxy {
   const audit = new AuditLog({ dir: join(running.server.dataDir, 'audit'), version: VERSION, camera: () => running.camera.id });
   const storage = new Storage({ catalog, log, config: () => running, audit });
   storage.recount();
-  const sessions = createSessionSigner();
+  const sessions = createSessionSigner(opts.sessionSecret);
   const links = createLoginLinks();
   // Composed clips (spec 2026-09-28): one encoding at a time; abandoned and
   // old jobs are swept every 5 s.
@@ -234,6 +247,19 @@ export function createProxy(initial: Loaded): Proxy {
   };
   buildCameraSide();
 
+  // A camera reboot from the control API (#83): the client and the status
+  // poller are read on use, since restart() builds them anew.
+  const reboot = new CameraReboot({
+    send: () => client.command('Reboot'),
+    forgetToken: () => client.forgetToken(),
+    serial: () => status.state().serial,
+    check: async () => {
+      const s = await status.checkNow();
+      return { ok: s.error === undefined, serial: s.serial };
+    },
+    audit,
+  });
+
   // External analytics: event stills to the provider, within its limits.
   const timeInfo = refreshingTimeInfo(() => client.timeInfo());
   const analytics = new AnalyticsService({
@@ -261,7 +287,7 @@ export function createProxy(initial: Loaded): Proxy {
       const u = storage.usage();
       const clipRows = Number((catalog.db.prepare('SELECT COUNT(*) AS n FROM clips').get() as { n: number }).n);
       return {
-        message: storageMessage({ used: u.used, budget: u.budget, stills: u.stills.files, clipRows, daysUntilFull: u.daysUntilFull }),
+        message: storageMessage({ used: u.used, budget: u.budget, stillMinutes: u.stills.files, clipRows, daysUntilFull: u.daysUntilFull }),
         details: { size: u.size, free: u.free, budget: u.budget, used: u.used, daysUntilFull: u.daysUntilFull, kinds: { stills: u.stills, previews: u.previews, clips: u.clips, catalog: u.catalog, audit: u.audit }, clipRows },
       };
     },
@@ -317,6 +343,7 @@ export function createProxy(initial: Loaded): Proxy {
   };
   const app = express();
   app.disable('x-powered-by');
+  let startedAt: number | null = null;
   // Far above real use (the UI, cams, a scraper); stops a flood. SSE is one
   // long request. Still and sprite images have their own, higher limit: a
   // day on the timeline is up to 1440 sprites.
@@ -328,13 +355,15 @@ export function createProxy(initial: Loaded): Proxy {
   app.use(rateLimit({ windowMs: 60_000, limit: 1200, skip: isImage, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } }));
   app.use(rateLimit({ windowMs: 60_000, limit: 6000, skip: (req) => !isImage(req), standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } }));
   app.use(express.json({ limit: '64kb' }));
-  app.get('/health', (_req, res) => void res.json({ ok: true, version: VERSION }));
+  // startedAt tells a new process apart (the Maintenance page's restart waits for it).
+  app.get('/health', (_req, res) => void res.json({ ok: true, version: VERSION, startedAt }));
   app.get('/metrics', async (_req, res) => {
     res.type(metrics.registry.contentType).send(await metrics.render());
   });
-  app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit }));
-  // Tokens never travel in URLs: checked once per request, before any access check.
+  // Tokens never travel in URLs: checked once per request, before any access
+  // check and before the session routes (the login link carries ?code=).
   app.use(['/api', '/control'], refuseTokenInUrl);
+  app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit }));
   app.use('/api', requireAccess('client', access), composeApi({ config: () => running, catalog, composer, stillsIn: (f, t) => stills?.store.listStills(f, t) ?? [], paused: () => storage.paused(), font }));
   app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, status: () => status, sse, stills: () => stills }));
   // The audit log: admins and the audit token, GET (and HEAD) only. The access check is
@@ -350,11 +379,19 @@ export function createProxy(initial: Loaded): Proxy {
       running: () => running,
       catalog,
       log,
-      camera: () => ({ ...status.state(), webUiUrl: cameraWebUi(running.camera) }),
+      camera: () => ({ ...status.state(), webUiUrl: cameraWebUi(running.camera), reboot: reboot.state() }),
       checkCamera: () => status.checkNow(),
       intake: () => intake.state(),
       resubscribe: () => intake.resubscribe(),
       restart: () => proxy.restart(),
+      cameraReboot: (who) => reboot.request(who),
+      restartProcess: () => {
+        processRestart ??= restartProcess({
+          stop: () => proxy.stop({ reason: 'restart-requested' }),
+          exit: opts.exit ?? ((code) => logger.warn({ code }, 'cam_proxy_exit_not_wired')),
+          timeoutMs: opts.restartTimeoutMs,
+        });
+      },
       ftp: () => ({
         enabled: running.ftp.enabled,
         listening: clips?.side.listening() ?? false,
@@ -431,6 +468,7 @@ export function createProxy(initial: Loaded): Proxy {
   };
 
   let server: http.Server | undefined;
+  let processRestart: Promise<unknown> | undefined;
   let restarting: Promise<void> | undefined;
   let stopPromise: Promise<void> | undefined;
   const proxy: Proxy = {
@@ -481,6 +519,7 @@ export function createProxy(initial: Loaded): Proxy {
       const previousStop = prev && !uncleanStop ? prev['@timestamp'] : null;
       audit.write({ action: 'proxy-start', category: ['process'], type: ['start'], outcome: 'success', user: 'system', message: `cam-proxy ${VERSION} started`, details: { config: { camera: running.camera.id, stills: running.stills.enabled, ftp: running.ftp.enabled, analytics: running.analytics.googleVision.enabled }, previousStop, uncleanStop } });
       daily.start();
+      startedAt = Date.now();
       logger.info({ port, camera: running.camera.id, version: VERSION }, 'cam_proxy_started');
       return { port };
     },
@@ -506,6 +545,7 @@ export function createProxy(initial: Loaded): Proxy {
       // First, while everything is still open.
       audit.write({ action: 'proxy-stop', category: ['process'], type: ['end'], outcome: 'success', user: 'system', message: `cam-proxy stopping${opts.reason ? ` (${opts.reason})` : ''}`, details: { reason: opts.reason ?? 'stop' } });
       await restarting;
+      reboot.stop();
       clearInterval(sweeper);
       sse.closeAll();
       storage.stop();

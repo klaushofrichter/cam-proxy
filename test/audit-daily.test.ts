@@ -33,10 +33,10 @@ function setup(now: { t: number }, zone: TimeInfo | null = CHICAGO, over: { stor
 const of = (a: AuditLog, action: string) => a.list({ actions: [action], limit: 500 }).records;
 
 describe('storageMessage', () => {
-  const u = { used: 82.4e9, budget: 150e9, stills: 41_230, clipRows: 1312 };
+  const u = { used: 82.4e9, budget: 150e9, stillMinutes: 41_230, clipRows: 1312 };
   it('says how many days until full, or that it is not filling', () => {
-    expect(storageMessage({ ...u, daysUntilFull: 214.4 })).toBe('Storage: 82.4 GB used of 150.0 GB budget, 41,230 stills, 1,312 clips, 214 days until full');
-    expect(storageMessage({ ...u, daysUntilFull: null })).toBe('Storage: 82.4 GB used of 150.0 GB budget, 41,230 stills, 1,312 clips, not filling');
+    expect(storageMessage({ ...u, daysUntilFull: 214.4 })).toBe('Storage: 82.4 GB used of 150.0 GB budget, 41,230 minutes of stills, 1,312 clips, 214 days until full');
+    expect(storageMessage({ ...u, daysUntilFull: null })).toBe('Storage: 82.4 GB used of 150.0 GB budget, 41,230 minutes of stills, 1,312 clips, not filling');
   });
   // #78: the Pi's first record read "893477 days until full".
   it('says "more than a year" past 365 days', () => {

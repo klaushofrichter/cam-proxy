@@ -47,7 +47,9 @@ export function splitJpegs(): Transform {
 // How late a frame may be: the stamp's phase against the clock (up to a step)
 // plus the stream's delivery jitter. RTSP can hold a second of frames and then
 // deliver them in a burst (cam-sim does every 4 s), so the jitter allowance is
-// at least 1.5 s; a tighter bound resyncs and leaves a gap (#61).
+// at least 1.5 s; a tighter bound resyncs and leaves a gap (#61). The price of
+// the wider allowance: stamps can trail the clock by up to about 2.4 s (at 1 s
+// stills), and such a lag persists until a burst catches the stream up.
 const lateAllowance = (step: number) => step + Math.max(step / 2, 1500);
 export function nextStamp(last: number, now: number, step: number): number | null {
   const clock = Math.floor(now / step) * step;
