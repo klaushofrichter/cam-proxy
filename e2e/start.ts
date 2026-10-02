@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { createCamSim } from 'cam-sim';
 import { loadConfig } from '../src/config/load';
-import { createProxy } from '../src/proxy';
+import { createProxy, type Proxy } from '../src/proxy';
 import { startVisionMock } from '../test/helpers/vision-mock';
 import { ADMIN_TOKEN, CLIENT_TOKEN, FTP, FTP_PASSWORD, PROXY_PORT, SIM, SIM_CONTROL_TOKEN, VISION_KEY, VISION_MOCK_PORT } from './env';
 
@@ -18,6 +18,9 @@ async function main() {
     users: [{ name: 'proxy', level: 'admin', password: 'e2e-proxy-pw' }],
     controlToken: SIM_CONTROL_TOKEN,
     seedClips: 'demo',
+    // A camera reboot (maintenance.spec): a few seconds offline, and the
+    // connection drops before the answer, as the real camera may do.
+    reboot: { ms: 3000, dropsConnection: true },
   });
   const ports = await sim.listen(SIM, '127.0.0.1');
   // Recordings end a second after the event, so clips upload quickly.
@@ -33,9 +36,18 @@ async function main() {
   }));
   // A stand-in for Google Vision; GET /calls tells the tests how often it was asked.
   const vision = await startVisionMock({ key: VISION_KEY, port: VISION_MOCK_PORT });
-  const loaded = loadConfig({ CAMPROXY_GOOGLE_VISION_KEY: VISION_KEY, CAMPROXY_GOOGLE_VISION_URL: vision.url, CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: 'e2e-proxy-pw', CAMPROXY_FTP_PASSWORD: FTP_PASSWORD }, { cwd: dir });
-  const proxy = createProxy(loaded);
-  await proxy.start({ port: PROXY_PORT, host: '127.0.0.1' });
+  const env = { CAMPROXY_GOOGLE_VISION_KEY: VISION_KEY, CAMPROXY_GOOGLE_VISION_URL: vision.url, CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: 'e2e-proxy-pw', CAMPROXY_FTP_PASSWORD: FTP_PASSWORD };
+  // The restart-proxy action (#71) ends with exit(0), and a supervisor starts
+  // the process again. Here the exit is stubbed: a new proxy starts in this
+  // process on the same port and data folder, so the server stays up. A fixed
+  // session key keeps the shared e2e session valid across it.
+  const sessionSecret = Buffer.alloc(32, 7);
+  let proxy: Proxy;
+  const boot = async () => {
+    proxy = createProxy(loadConfig(env, { cwd: dir }), { sessionSecret, exit: () => void boot().catch((err: Error) => process.stderr.write(`e2e: restart failed: ${err.message}\n`)) });
+    await proxy.start({ port: PROXY_PORT, host: '127.0.0.1' });
+  };
+  await boot();
   const stop = async (sig: string) => {
     await proxy.stop({ reason: sig });
     await sim.close();

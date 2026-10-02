@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import ConfirmDialog from '../components/ConfirmDialog.svelte';
   import { api, ApiError } from '../lib/api';
-  import { refresh, refreshTick } from '../lib/state';
+  import { isNewStart, RESTART_GIVE_UP_MS, type Health } from '../lib/maintenance';
+  import { refresh, refreshTick, status } from '../lib/state';
 
   let result = $state('');
   let log = $state<Array<Record<string, unknown>>>([]);
@@ -26,6 +28,81 @@
     void refresh();
     void loadLog();
   }
+
+  // The camera reboot (#83) and the proxy restart (#71) ask first, in one
+  // shared dialog; Cancel or Esc sends nothing.
+  const DIALOGS = {
+    'camera-reboot': {
+      title: 'Reboot the camera',
+      message: 'Reboot the camera? It is offline for about a minute: no live video, stills, events or uploads meanwhile. Note: on 2026-10-01 recording downloads stopped working right after an API reboot.',
+      confirmLabel: 'Reboot camera',
+    },
+    'restart-proxy': {
+      title: 'Restart the proxy',
+      message: 'Restart the proxy? Live streams and uploads in progress are interrupted; the proxy is back in about 20 s. You sign in again afterwards.',
+      confirmLabel: 'Restart proxy',
+    },
+  } as const;
+  let asking = $state<keyof typeof DIALOGS | null>(null);
+
+  // The camera reboot: "Rebooting…" and the camera's state while the proxy
+  // waits for it, then how long it was away.
+  let rebootAsked = $state(false);
+  const reboot = $derived($status?.camera.reboot ?? null);
+  async function rebootCamera() {
+    asking = null;
+    try {
+      const r = await api<{ confirmed: boolean }>('POST', '/control/actions/camera-reboot');
+      rebootAsked = true;
+      result = `Camera reboot: ${r.confirmed ? 'the camera confirmed it' : 'the camera went down before answering'}`;
+    } catch (e) {
+      result = `Camera reboot: ${e instanceof ApiError ? e.message : 'failed'}`;
+    }
+    void refresh();
+    void loadLog();
+  }
+  // Faster status updates while the camera reboots.
+  $effect(() => {
+    if (reboot?.phase !== 'rebooting') return;
+    const t = setInterval(() => void refresh(), 2000);
+    return () => clearInterval(t);
+  });
+
+  // The proxy restart: "Restarting…", then /health until a new process
+  // answers (another start time or version), then a reload.
+  let restarting = $state<'waiting' | 'gone' | null>(null);
+  let restartTimer: ReturnType<typeof setInterval> | undefined;
+  const health = async (): Promise<Health | null> => {
+    try {
+      const r = await fetch('/health', { cache: 'no-store' });
+      return r.ok ? ((await r.json()) as Health) : null;
+    } catch {
+      return null;
+    }
+  };
+  async function restartProxy() {
+    asking = null;
+    const before = await health();
+    try {
+      await api('POST', '/control/actions/restart-proxy');
+    } catch (e) {
+      result = `Restart proxy: ${e instanceof ApiError ? e.message : 'failed'}`;
+      return;
+    }
+    restarting = 'waiting';
+    const t0 = Date.now();
+    restartTimer = setInterval(async () => {
+      const h = await health();
+      if (h && isNewStart(before, h)) {
+        clearInterval(restartTimer);
+        location.reload();
+      } else if (Date.now() - t0 > RESTART_GIVE_UP_MS) {
+        clearInterval(restartTimer);
+        restarting = 'gone';
+      }
+    }, 1000);
+  }
+  onMount(() => () => clearInterval(restartTimer));
 </script>
 
 <section>
@@ -37,6 +114,8 @@
       <button onclick={() => void run('Retention preview', 'retention-run', { dryRun: true })} data-testid="action-retention-dry">Preview retention</button>
       <button onclick={() => void run('Retention', 'retention-run', {})} data-testid="action-retention">Run retention now</button>
       <button onclick={() => void run('Restart', 'restart')} data-testid="action-restart">Restart camera side</button>
+      <button class="danger" onclick={() => (asking = 'camera-reboot')} disabled={reboot?.phase === 'rebooting'} data-testid="action-camera-reboot">Reboot camera</button>
+      <button class="danger" onclick={() => (asking = 'restart-proxy')} disabled={restarting === 'waiting'} data-testid="action-restart-proxy">Restart proxy</button>
     </div>
     <div class="buttons">
       <button onclick={() => void run('Camera FTP setup', 'camera-ftp-setup')} data-testid="action-ftp-setup">Point the camera's FTP here</button>
@@ -44,6 +123,18 @@
       <button onclick={() => void run('Camera FTP off', 'camera-ftp-off')} data-testid="action-ftp-off">Turn the camera's FTP off</button>
     </div>
     {#if result}<p class="msg mono" data-testid="action-result">{result}</p>{/if}
+    {#if reboot?.phase === 'rebooting'}
+      <p class="busy" data-testid="reboot-state">Rebooting… the camera is {$status?.camera.online ? 'still answering' : 'offline'}{$status?.camera.error ? ` (${$status.camera.error})` : ''}.</p>
+    {:else if rebootAsked && reboot?.phase === 'back'}
+      <p class="msg" data-testid="reboot-state">The camera is back after {reboot.downSec} s.</p>
+    {:else if rebootAsked && reboot?.phase === 'not-back'}
+      <p class="bad" data-testid="reboot-state">The camera did not answer within 5 minutes of the reboot.</p>
+    {/if}
+    {#if restarting === 'waiting'}
+      <p class="busy" data-testid="restart-state">Restarting… the page reloads when the proxy is back.</p>
+    {:else if restarting === 'gone'}
+      <p class="bad" data-testid="restart-state">The proxy did not come back. Is it running under a supervisor (compose, the cluster)?</p>
+    {/if}
   </div>
   <div class="card">
     <div class="loghead"><h3>Log</h3><span class="small">updates every 10 s</span></div>
@@ -59,6 +150,11 @@
   </div>
 </section>
 
+{#if asking}
+  {@const dlg = DIALOGS[asking]}
+  <ConfirmDialog title={dlg.title} message={dlg.message} confirmLabel={dlg.confirmLabel} oncancel={() => (asking = null)} onconfirm={() => void (asking === 'camera-reboot' ? rebootCamera() : restartProxy())} />
+{/if}
+
 <style>
   section { display: grid; gap: 12px; }
   h2 { margin: 0; font-size: 20px; }
@@ -67,6 +163,10 @@
   .buttons { display: flex; flex-wrap: wrap; gap: 8px; }
   button { padding: 7px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); cursor: pointer; color: var(--text); }
   button:hover { border-color: var(--accent); }
+  button.danger { border-color: var(--danger); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .busy { margin: 0; color: var(--accent); font-weight: 600; }
+  .bad { margin: 0; color: var(--danger); }
   .loghead { display: flex; justify-content: space-between; align-items: center; }
   .log { max-height: 420px; overflow: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
