@@ -7,7 +7,7 @@ import { PoeSwitchError, type PoeOnResult, type PoeSwitchStatus, type PortReadin
 import type { Config } from '../config/defaults';
 import { applyOverrides, ConfigError, needsProcessRestart, needsRestart, removeOverride, type Loaded } from '../config/load';
 import { leafAt, leafPaths } from '../config/schema';
-import type { FtpTarget } from '../clips/camera-ftp';
+import { FtpNotConfiguredError, type FtpTarget } from '../clips/camera-ftp';
 import type { CameraFtpView, ClipsStall } from '../clips/ftp-health';
 import type { IntakeState } from '../events/intake';
 import { logBuffer, logger } from '../log';
@@ -96,6 +96,11 @@ async function cameraCall(res: Response, f: () => Promise<unknown>): Promise<voi
   try {
     res.json(await f());
   } catch (err) {
+    if (err instanceof FtpNotConfiguredError) {
+      res.locals.errorCode = 'not_configured';
+      res.status(409).json({ error: 'not_configured', detail: err.message });
+      return;
+    }
     logger.warn({ err: (err as Error).message }, 'camera_action_failed');
     res.locals.errorCode = 'camera_error';
     res.status(502).json({ error: 'camera_error', detail: (err as Error).message });
@@ -327,8 +332,6 @@ export function controlApi(d: ControlDeps): express.Router {
         return void (await cameraCall(res, async () => (name === 'camera-ftp-setup' ? { ftp: await d.cameraFtp.setup(t) } : d.cameraFtp.test(t))));
       }
       case 'camera-ftp-off':
-        // The Set writes the proxy's own user and password (the camera's answer is masked).
-        if (!d.cameraFtp.target().password) return fail(409, 'not_configured', 'CAMPROXY_FTP_PASSWORD is not set');
         return void (await cameraCall(res, async () => ({ ftp: await d.cameraFtp.off() })));
       // The camera side: reconnect and apply restart settings; the process runs on.
       case 'restart':

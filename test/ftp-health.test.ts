@@ -36,6 +36,11 @@ describe('classifyFtp', () => {
     expect(classifyFtp(camFtp({ userName: 'ca**ra' }), { ...TARGET, user: 'proxyuser' })).toMatchObject({ state: 'elsewhere', mismatch: ['user'] });
     expect(classifyFtp(camFtp({ userName: 'ca**ra' }), { ...TARGET, user: 'cabbra' })).toMatchObject({ state: 'on' }); // same first and last two: indistinguishable
   });
+  it('more stars: ca***ra matches a 7-character expected user, not a 6-character one; other first/last characters never match', () => {
+    expect(classifyFtp(camFtp({ userName: 'ca***ra' }), { ...TARGET, user: 'cameora' })).toMatchObject({ state: 'on', mismatch: [] });
+    expect(classifyFtp(camFtp({ userName: 'ca***ra' }), TARGET)).toMatchObject({ state: 'elsewhere', mismatch: ['user'] });
+    expect(classifyFtp(camFtp({ userName: 'ca**ra' }), { ...TARGET, user: 'camexxx' })).toMatchObject({ state: 'elsewhere' });
+  });
   it('a short expected user (under 5 characters) is compared literally, even against a masked answer', () => {
     expect(classifyFtp(camFtp({ userName: 'cam' }), { ...TARGET, user: 'cam' })).toMatchObject({ state: 'on' });
     expect(classifyFtp(camFtp({ userName: 'ca**am' }), { ...TARGET, user: 'cam' })).toMatchObject({ state: 'elsewhere', mismatch: ['user'] });

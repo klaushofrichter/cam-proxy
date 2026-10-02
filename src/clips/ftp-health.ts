@@ -39,11 +39,20 @@ export const RECORDING_KINDS = ['motion', 'person', 'vehicle', 'pet'] as const;
 export const STALL_GRACE_MS = 10 * 60_000;
 export const CHECK_MS = 5 * 60_000;
 
-// The camera masks the FTP user in its answer (measured 2026-10-02: `camera`
-// comes back as `ca**ra`: first two characters, `**`, last two). How it masks
-// names under 5 characters is not measured, so those are compared literally.
-export const maskFtpUser = (u: string): string => (u.length >= 5 ? `${u.slice(0, 2)}**${u.slice(-2)}` : u);
-const sameUser = (seen: string, expected: string): boolean => (seen.includes('*') ? seen === maskFtpUser(expected) : seen === expected);
+// The camera masks the FTP user in its answer. Measured 2026-10-02: only the
+// 6-character `camera` -> `ca**ra` (first two characters, stars, last two).
+// The match is best effort: any number of stars, the expected user needs 5+
+// characters, and with more than two stars the length must agree (a fixed `**`
+// leaves it unchecked). A different user with the same first and last two
+// characters passes.
+export function sameFtpUser(seen: string, expected: string): boolean {
+  if (!seen.includes('*')) return seen === expected;
+  const m = /^([^*]{2})(\*+)([^*]{2})$/u.exec(seen);
+  const e = Array.from(expected);
+  if (!m || e.length < 5) return false;
+  if (m[2].length > 2 && Array.from(seen).length !== e.length) return false;
+  return m[1] === e.slice(0, 2).join('') && m[3] === e.slice(-2).join('');
+}
 
 // What camera-ftp-setup would write for this proxy, compared with the
 // camera's settings (see FtpState). The server is compared trimmed and in
@@ -58,7 +67,7 @@ export function classifyFtp(ftp: Record<string, unknown>, t: Target, ctx: { clip
   const mismatch = [
     ...(t.server && norm(server) !== norm(t.server) ? ['server'] : []),
     ...(port !== t.port ? ['port'] : []),
-    ...(!sameUser(user, t.user) ? ['user'] : []),
+    ...(!sameFtpUser(user, t.user) ? ['user'] : []),
   ];
   const state: FtpState = !server && !ctx.clipsBefore ? 'not_set_up'
     : !enable ? 'off'

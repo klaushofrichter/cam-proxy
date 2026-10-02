@@ -82,13 +82,22 @@ export async function testCameraFtp(client: ReolinkClient, t: FtpTarget): Promis
   }
 }
 
-// GetFtpV20 masks the user (`ca**ra`) and may mask the password, so the
-// whole-object Set takes both from the proxy's settings, never from the
-// camera's answer.
-export async function cameraFtpOff(client: ReolinkClient, t: Pick<FtpTarget, 'user' | 'password'>): Promise<FtpObject> {
-  if (!t.password) throw new Error('the ftp password (CAMPROXY_FTP_PASSWORD) is not set');
+// Raised when an action would have to write credentials the camera only shows masked.
+export class FtpNotConfiguredError extends Error {}
+
+// GetFtpV20 masks the user (`ca**ra`) and may mask the password. With a
+// configured FTP password the whole-object Set takes user and password from
+// the proxy's settings (this also repairs credentials clobbered earlier).
+// Without one, the camera's own are kept when neither is masked: turning the
+// upload off is a safety action and needs no password. Otherwise it refuses.
+export async function cameraFtpOff(client: ReolinkClient, t?: Pick<FtpTarget, 'user' | 'password'>): Promise<FtpObject> {
   const current = await read(client);
   if (!current.server) return redact(current); // never configured: already off
-  await client.command('SetFtpV20', { Ftp: { ...current, userName: t.user, password: t.password, enable: 0 } });
+  let creds: Partial<FtpObject> = {};
+  if (t?.password) creds = { userName: t.user, password: t.password };
+  else if (`${current.userName ?? ''}${current.password ?? ''}`.includes('*')) {
+    throw new FtpNotConfiguredError('CAMPROXY_FTP_PASSWORD is not set, and the camera shows its FTP credentials masked: turning FTP off would write them masked');
+  }
+  await client.command('SetFtpV20', { Ftp: { ...current, ...creds, enable: 0 } });
   return redact(await read(client));
 }
