@@ -67,6 +67,9 @@ export class DailyAudit {
   private timer: NodeJS.Timeout | undefined;
   private done: string | null = null; // "<basis>:<day>"
   private startedAt: number | undefined;
+  // A failed write is retried with a backoff (1, 2, 4 ... 60 min), not every tick.
+  private failures = 0;
+  private retryAt = 0;
   constructor(private readonly d: { audit: AuditLog; now?: () => number; timeInfo: () => TimeInfo | undefined; storage: () => StorageDaily; activity: (day: string, from: number, to: number) => ActivityDaily; everyMs?: number }) {}
 
   // Asks for the time info once to start its fetch (refreshingTimeInfo is
@@ -95,6 +98,7 @@ export class DailyAudit {
     const ti = this.d.timeInfo();
     // Started, no time info yet: wait for it a while rather than use a UTC day.
     if (!ti && this.startedAt !== undefined && now - this.startedAt < FALLBACK_MS) return;
+    if (now < this.retryAt) return;
     const day = localDay(now, ti);
     const basis = ti ? 'camera' : 'utc';
     if (`${basis}:${day}` === this.done) return;
@@ -118,6 +122,12 @@ export class DailyAudit {
       const a = this.d.activity(prev, dayStartMs(prev, ti), start);
       ok = !!this.d.audit.write({ action: 'activity-daily', category: ['host'], type: ['info'], outcome: 'success', user: 'system', message: a.message, details: { day, forDay: prev, ...mark, ...a.details } }) && ok;
     }
-    if (ok) this.done = `${basis}:${day}`;
+    if (ok) {
+      this.done = `${basis}:${day}`;
+      this.failures = 0;
+    } else {
+      this.retryAt = now + Math.min(60, 2 ** this.failures) * 60_000;
+      this.failures++;
+    }
   }
 }

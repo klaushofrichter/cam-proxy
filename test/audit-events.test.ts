@@ -150,11 +150,20 @@ describe('audit records', () => {
   });
 
   it('cuts a long path to 256 characters in a refused-token record', async () => {
-    await request(p.base).get(`/api/${'a'.repeat(8192)}`);
+    await request(p.base).get(`/api/${'ab/'.repeat(2700)}`);
     const r = last('auth-refused') as unknown as { url: { path: string }; message: string };
     expect(r.url.path.length).toBeLessThanOrEqual(257);
     expect(r.url.path.endsWith('…')).toBe(true);
     expect(r.message.length).toBeLessThan(400);
+  });
+
+  // #78: a token in the path (it is refused anyway) is masked in the record.
+  it('masks a token-like path segment in a refused record', async () => {
+    const tok = 'Zq9XyW8vU7tS6rQ5pO4nM3lK2jI1hG0f';
+    await request(p.base).get(`/api/cameras/${tok}/status`);
+    const r = last('auth-refused') as unknown as { url: { path: string }; message: string };
+    expect(r.url.path).toBe('/api/cameras/:token/status');
+    expect(r.message).not.toContain(tok);
   });
 
   // Review focus 4.

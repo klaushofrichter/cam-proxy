@@ -94,6 +94,25 @@ describe('DailyAudit', () => {
     expect(of(audit, 'storage-daily').map((r) => r.cam_proxy!.day)).toEqual(['2026-10-03', '2026-10-02']);
   });
 
+  // #78: a write that keeps failing is not retried every tick.
+  it('backs off after a failed write: 1, 2, 4 ... minutes, then goes on once it works', () => {
+    const now = { t: Date.parse('2026-10-02T05:06:00Z') };
+    const { audit, mk } = setup(now);
+    const real = audit.write.bind(audit);
+    let failing = true;
+    const calls: number[] = [];
+    audit.write = (i) => { if (i.action === 'storage-daily') calls.push(now.t); return failing ? null : real(i); };
+    const d = mk();
+    for (let m = 0; m < 20; m++) { d.check(); now.t += 60_000; }
+    // Attempts after 0, 1, 3, 7, 15 minutes (storage-daily; activity-daily goes with it).
+    expect(calls.map((t) => (t - Date.parse('2026-10-02T05:06:00Z')) / 60_000)).toEqual([0, 1, 3, 7, 15]);
+    failing = false;
+    now.t += 60 * 60_000;
+    d.check();
+    expect(calls.length).toBeGreaterThan(5);
+    expect(of(audit, 'storage-daily')).toHaveLength(1);
+  });
+
   it('on the DST change day the day has 25 hours of activity', () => {
     const now = { t: Date.parse('2026-11-02T06:06:00Z') }; // 00:06 CST on Nov 2
     const { asked, mk } = setup(now);
