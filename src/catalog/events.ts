@@ -64,3 +64,10 @@ export function countEventsByKind(c: Catalog, cam: string, from: number, to: num
   const rows = c.db.prepare('SELECT kind, COUNT(*) AS n FROM events WHERE cam = ? AND start_ts >= ? AND start_ts < ? GROUP BY kind').all(cam, from, to) as { kind: string; n: number }[];
   return Object.fromEntries(rows.map((r) => [r.kind, Number(r.n)]));
 }
+
+// Events of the given kinds that started in [from, to).
+export function countEventsOfKinds(c: Catalog, cam: string, kinds: readonly string[], from: number, to: number): number {
+  if (!kinds.length) return 0;
+  const r = c.db.prepare(`SELECT COUNT(*) AS n FROM events WHERE cam = ? AND start_ts >= ? AND start_ts < ? AND kind IN (${kinds.map(() => '?').join(', ')})`).get(cam, from, to, ...kinds) as { n: number };
+  return Number(r.n);
+}

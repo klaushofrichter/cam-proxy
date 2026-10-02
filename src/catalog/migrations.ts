@@ -89,4 +89,19 @@ export const MIGRATIONS: string[] = [
     last_seen INTEGER NOT NULL
   );
   `,
+  // 5: when the newest clip of each camera arrived (#93): kept when
+  // retention deletes the clip, so "no clip for N hours" and "clips were
+  // received before" outlive the clips themselves. Filled by a trigger on
+  // every new clip, and here from the clips kept.
+  `
+  CREATE TABLE clip_arrivals (
+    cam TEXT PRIMARY KEY,
+    last_received INTEGER NOT NULL
+  );
+  INSERT INTO clip_arrivals (cam, last_received) SELECT cam, MAX(received_at) FROM clips GROUP BY cam;
+  CREATE TRIGGER clips_last_received AFTER INSERT ON clips BEGIN
+    INSERT INTO clip_arrivals (cam, last_received) VALUES (NEW.cam, NEW.received_at)
+      ON CONFLICT (cam) DO UPDATE SET last_received = MAX(last_received, excluded.last_received);
+  END;
+  `,
 ];

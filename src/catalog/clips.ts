@@ -74,3 +74,10 @@ export function overlappingEvents(c: Catalog, cam: string, from: number, to: num
 export function countClips(c: Catalog, cam: string, from: number, to: number): number {
   return Number((c.db.prepare('SELECT COUNT(*) AS n FROM clips WHERE cam = ? AND received_at >= ? AND received_at < ?').get(cam, from, to) as { n: number }).n);
 }
+
+// When the newest clip of a camera arrived (received_at), or null; kept
+// after retention deletes the clip (clip_arrivals, #93).
+export function lastClipReceived(c: Catalog, cam: string): number | null {
+  const r = c.db.prepare('SELECT last_received AS t FROM clip_arrivals WHERE cam = ?').get(cam) as { t: number | null } | undefined;
+  return r?.t ?? null;
+}

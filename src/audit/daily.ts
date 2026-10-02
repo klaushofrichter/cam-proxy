@@ -2,6 +2,7 @@ import type { TimeInfo } from '../camera/time';
 import { localDay } from '../analytics/local-day';
 import { logger } from '../log';
 import type { AuditLog } from './audit-log';
+import { RECORDING_KINDS } from '../clips/ftp-health';
 
 // The daily audit records (spec 2026-10-01-audit-log-design): at 00:05
 // camera time, storage-daily then activity-daily (for the previous camera
@@ -28,6 +29,22 @@ export function storageMessage(u: { used: number; budget: number; stillMinutes: 
   const days = u.daysUntilFull === null ? null : Math.round(u.daysUntilFull);
   const full = days === null ? 'not filling' : days > 365 ? 'more than a year until full' : `${days} days until full`;
   return `Storage: ${gb(u.used)} used of ${gb(u.budget)} budget, ${u.stillMinutes.toLocaleString('en-US')} minutes of stills, ${u.clipRows.toLocaleString('en-US')} clips, ${full}`;
+}
+
+// The activity-daily record of a camera day. `clipsReceived` (#93) next to
+// the events: a day with recording events but no clips stands out (`noClips`
+// and the message), as 2026-09-30 would have. `clips` is the same count,
+// kept for readers of older records.
+export function activityDaily(day: string, a: { events: Record<string, number>; clips: number; vision: { day: number; monthToDate: number; monthlyLimit: number }; analyses: Record<string, number>; sseClients: number }): ActivityDaily {
+  const total = Object.values(a.events).reduce((x, y) => x + y, 0);
+  const recordingEvents = RECORDING_KINDS.reduce((n, k) => n + (a.events[k] ?? 0), 0);
+  const noClips = recordingEvents > 0 && a.clips === 0;
+  const kinds = Object.entries(a.events).map(([k, n]) => `${k} ${n}`).join(', ') || 'none';
+  const clips = noClips ? `NO clips received for ${recordingEvents} recording events (is the camera's FTP upload on?)` : `${a.clips} clips received`;
+  return {
+    message: `Activity ${day}: ${total} events (${kinds}), ${clips}, Vision ${a.vision.monthToDate} of ${a.vision.monthlyLimit} this month`,
+    details: { events: { total, byKind: a.events }, recordingEvents, clips: a.clips, clipsReceived: a.clips, ...(noClips ? { noClips: true } : {}), analytics: { vision: a.vision, analyses: a.analyses }, stream: { clients: a.sseClients } },
+  };
 }
 
 export function addDays(day: string, n: number): string {

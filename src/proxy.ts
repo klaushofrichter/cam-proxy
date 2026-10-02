@@ -6,7 +6,7 @@ import type { AddressInfo } from 'net';
 import { join } from 'path';
 import { openCatalog, type Catalog } from './catalog/db';
 import { clearUnmapped, countAnalysesByStatus, listUnmapped, usageBetween } from './catalog/analyses';
-import { countClips } from './catalog/clips';
+import { countClips, lastClipReceived } from './catalog/clips';
 import { closeAllOpen, countEventsByKind } from './catalog/events';
 import { ReolinkClient } from './camera/client';
 import { splitHost } from './camera/http';
@@ -17,7 +17,8 @@ import { restartProcess } from './process-restart';
 import type { Config } from './config/defaults';
 import { needsProcessRestart, needsRestart, type Loaded } from './config/load';
 import { leafPaths } from './config/schema';
-import { cameraFtpOff, setupCameraFtp, testCameraFtp } from './clips/camera-ftp';
+import { cameraFtpOff, readCameraFtp, setupCameraFtp, testCameraFtp, type FtpTarget } from './clips/camera-ftp';
+import { CameraFtpWatch, clipsStalled } from './clips/ftp-health';
 import { ClipIndexer } from './clips/indexer';
 import { createClipsSide, type ClipsSide } from './clips/side';
 import { EventIntake } from './events/intake';
@@ -26,7 +27,7 @@ import { logger, setLogLevel, withoutQuery } from './log';
 import { Storage } from './storage';
 import { AuditLog, cut } from './audit/audit-log';
 import { IpCap, RefusalThrottle } from './audit/throttle';
-import { DailyAudit, storageMessage } from './audit/daily';
+import { activityDaily, DailyAudit, storageMessage } from './audit/daily';
 import { Go2rtc } from './stills/go2rtc';
 import { FrameGrabber, type Frame } from './stills/grabber';
 import { MinuteStore, minuteOf } from './stills/store';
@@ -86,6 +87,7 @@ export interface ProxyOptions {
   // keeps its sessions over a simulated restart).
   sessionSecret?: Buffer;
   restartTimeoutMs?: number; // how long a restart waits for stop() (15 s)
+  cameraFtpCheckMs?: number; // how often the camera's FTP settings are read (#93; 5 min)
 }
 
 const getPath = (o: unknown, p: string) => p.split('.').reduce<unknown>((x, k) => (x && typeof x === 'object' ? (x as Record<string, unknown>)[k] : undefined), o);
@@ -152,6 +154,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     catalog,
     log,
     cameraUp: () => status.state().online,
+    cameraFtpEnabled: () => (running.ftp.enabled ? ftpWatch.view().enable : null),
+    clipsHealth: () => clipsHealth(),
     onvifSubscribed: () => intake.state().onvif === 'subscribed',
     sseClients: () => sse.clients(),
     version: VERSION,
@@ -167,6 +171,10 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     status = new StatusPoller(client, c.statusPollS);
     status.on('change', (s) => log.append(c.id, 'camera-status', { online: s.online, reason: s.error ?? null, clockOffsetMs: s.clockOffsetMs ?? null }));
     status.on('check', metrics.onCameraCheck);
+    // The camera's FTP settings as soon as it answers (#93), then every few minutes.
+    status.on('change', (s) => {
+      if (s.online) void ftpWatch.checkNow();
+    });
     const tracker = new EventTracker(catalog, log, c.id, running.events);
     intake = new EventIntake({ client, tracker, cfg: running.events, onvif: { host: splitHost(c.host).hostname, port: c.onvifPort, user: c.user, password: loaded.secrets.cameraPassword } });
     lastResubscribes = 0;
@@ -246,6 +254,24 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     await s.go2rtc.stop();
     await s.store.flush();
   };
+  // What camera-ftp-setup writes for this proxy (never logged: it has the password).
+  const ftpTarget = (): FtpTarget => ({ server: running.ftp.publicHost ?? '', port: running.ftp.port, user: running.ftp.user, password: loaded.secrets.ftpPassword ?? '', tls: running.ftp.tls, stream: running.ftp.stream });
+  // The camera's FTP upload (#93): read every few minutes while the proxy
+  // takes clips and the camera answers; changes go to the audit log.
+  const ftpWatch = new CameraFtpWatch({
+    read: () => readCameraFtp(client),
+    target: ftpTarget,
+    audit,
+    active: () => running.ftp.enabled && status.state().online,
+    clipsBefore: () => lastClipReceived(catalog, running.camera.id) !== null,
+    everyMs: opts.cameraFtpCheckMs,
+  });
+  // No stall warning for a camera never set up, nor before the first read when no clip ever came.
+  const ftpNotSetUp = () => {
+    const st = ftpWatch.view().state;
+    return st === 'not_set_up' || (st === 'unknown' && lastClipReceived(catalog, running.camera.id) === null);
+  };
+  const clipsHealth = () => (running.ftp.enabled ? clipsStalled(catalog, running.camera.id, Date.now(), running.ftp.stalledHours, { notSetUp: ftpNotSetUp() }) : null);
   buildCameraSide();
 
   // A camera reboot from the control API (#83): the client and the status
@@ -301,16 +327,9 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     },
     activity: (day, from, to) => {
       const cam = running.camera.id;
-      const events = countEventsByKind(catalog, cam, from, to);
-      const total = Object.values(events).reduce((a, b) => a + b, 0);
-      const clipCount = countClips(catalog, cam, from, to);
       // Usage days are camera days (localDay); month to date as of the reported day.
       const vision = { day: usageBetween(catalog, 'google-vision', day, day), monthToDate: usageBetween(catalog, 'google-vision', `${day.slice(0, 7)}-01`, day), monthlyLimit: running.analytics.googleVision.monthlyLimit };
-      const analyses = countAnalysesByStatus(catalog, cam, from, to);
-      return {
-        message: `Activity ${day}: ${total} events (${Object.entries(events).map(([k, n]) => `${k} ${n}`).join(', ') || 'none'}), ${clipCount} clips, Vision ${vision.monthToDate} of ${vision.monthlyLimit} this month`,
-        details: { events: { total, byKind: events }, clips: clipCount, analytics: { vision, analyses }, stream: { clients: sse.clients() } },
-      };
+      return activityDaily(day, { events: countEventsByKind(catalog, cam, from, to), clips: countClips(catalog, cam, from, to), vision, analyses: countAnalysesByStatus(catalog, cam, from, to), sseClients: sse.clients() });
     },
   });
 
@@ -415,12 +434,23 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         lastClip: clips?.side.indexer.lastIndexed() ?? null,
         clips: (catalog.db.prepare('SELECT COUNT(*) AS n FROM clips').get() as { n: number }).n,
         failures: (clips?.side.uploadFailures() ?? 0) + (clips?.side.indexer.failures() ?? 0),
+        camera: running.ftp.enabled ? ftpWatch.view() : null,
+        stalled: clipsHealth(),
       }),
+      // The camera's answer goes to the FTP check at once (#93).
       cameraFtp: {
-        target: () => ({ server: running.ftp.publicHost ?? '', port: running.ftp.port, user: running.ftp.user, password: loaded.secrets.ftpPassword ?? '', tls: running.ftp.tls, stream: running.ftp.stream }),
-        setup: (t) => setupCameraFtp(client, t),
+        target: ftpTarget,
+        setup: async (t) => {
+          const ftp = await setupCameraFtp(client, t);
+          ftpWatch.note(ftp);
+          return ftp;
+        },
         test: (t) => testCameraFtp(client, t),
-        off: () => cameraFtpOff(client),
+        off: async () => {
+          const ftp = await cameraFtpOff(client);
+          ftpWatch.note(ftp);
+          return ftp;
+        },
       },
       storage,
       audit,
@@ -518,6 +548,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       intake.start();
       startStills();
       await startClips();
+      ftpWatch.start();
       storage.start();
       try {
         analytics.backfillSummaries();
@@ -554,6 +585,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   };
   async function doStop(opts: { reason?: string }): Promise<void> {
       daily.stop();
+      ftpWatch.stop();
       // First, while everything is still open.
       audit.write({ action: 'proxy-stop', category: ['process'], type: ['end'], outcome: 'success', user: 'system', message: `cam-proxy stopping${opts.reason ? ` (${opts.reason})` : ''}`, details: { reason: opts.reason ?? 'stop' } });
       // A power-cycle in its off time turns the camera's PoE on now, not

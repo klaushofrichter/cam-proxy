@@ -3,6 +3,10 @@
   import { pausedText, usageLine } from '../lib/analytics';
   import { daysUntilFullText } from '../lib/format';
   import { cameraStateText, poeLine } from '../lib/maintenance';
+  import { cameraFtpClass, cameraFtpText, clipTime, ftpAlerts } from '../lib/ftp';
+  import { api, ApiError } from '../lib/api';
+  import { refresh } from '../lib/state';
+  import Icon from '../components/Icon.svelte';
 
   const gb = (b: number) => `${(b / 1024 ** 3).toFixed(1)} GB`;
   const mb = (b: number) => `${(b / 1024 ** 2).toFixed(1)} MB`;
@@ -11,6 +15,23 @@
     const s = Math.round((Date.now() - ts) / 1000);
     return s < 60 ? `${s} s ago` : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`;
   };
+
+  // #93: the camera's FTP upload off, elsewhere, or no clips while events happen.
+  const alerts = $derived($status ? ftpAlerts({ enabled: $status.ftp.enabled, publicHost: $status.ftp.publicHost, camera: $status.ftp.camera ?? null, stalled: $status.ftp.stalled ?? null }) : []);
+  let fixing = $state(false);
+  let fixResult = $state('');
+  async function pointFtpHere() {
+    if (fixing) return;
+    fixing = true;
+    fixResult = '';
+    try {
+      await api('POST', '/control/actions/camera-ftp-setup');
+    } catch (e) {
+      fixResult = `Camera FTP setup: ${e instanceof ApiError ? e.message : 'failed'}`;
+    }
+    fixing = false;
+    void refresh();
+  }
 </script>
 
 <section>
@@ -76,11 +97,22 @@
           <dt>Server</dt><dd class={$status.ftp.listening ? 'ok' : $status.ftp.enabled ? 'bad' : ''} data-testid="ftp-state">{$status.ftp.enabled ? ($status.ftp.listening ? `listening on ${$status.ftp.port}${$status.ftp.tls ? ' (FTPS)' : ''}` : 'not listening') : 'off'}</dd>
           {#if $status.ftp.enabled && !$status.ftp.passwordSet}<dt>Password</dt><dd class="bad">CAMPROXY_FTP_PASSWORD not set</dd>{/if}
           <dt>Camera connects to</dt><dd>{$status.ftp.publicHost ?? '— (ftp.publicHost)'}</dd>
+          {#if $status.ftp.camera}
+            <dt>Camera upload</dt><dd class={cameraFtpClass($status.ftp.camera.state)} data-testid="camera-ftp-state">{cameraFtpText($status.ftp.camera)}</dd>
+            <dt>Checked</dt><dd title={$status.ftp.camera.error ? `last read failed: ${$status.ftp.camera.error}` : undefined}>{ago($status.ftp.camera.checkedAt)}</dd>
+          {/if}
           <dt>Last upload</dt><dd>{ago($status.ftp.lastUpload)}</dd>
-          <dt>Last clip</dt><dd>{ago($status.ftp.lastClip)}</dd>
+          <dt>Last clip</dt><dd class={$status.ftp.stalled?.stalled ? 'bad' : ''} title={$status.ftp.lastClip ? clipTime($status.ftp.lastClip) : undefined}>{ago($status.ftp.lastClip)}</dd>
           <dt>Clips stored</dt><dd>{$status.ftp.clips}</dd>
           <dt>Failures</dt><dd class={$status.ftp.failures ? 'bad' : ''}>{$status.ftp.failures}</dd>
         </dl>
+        {#if alerts.length}
+          <div class="alerts">
+            {#each alerts as a (a.kind)}<p class="alert {a.level}" data-testid="ftp-alert" data-kind={a.kind} role={a.level === 'info' ? 'note' : 'alert'}><Icon name={a.level === 'info' ? 'about' : 'alert'} size={16} /><span>{a.text}</span></p>{/each}
+            <button onclick={() => void pointFtpHere()} disabled={fixing} data-testid="ftp-alert-fix">Point the camera's FTP here</button>
+            {#if fixResult}<p class="bad small" data-testid="ftp-fix-result">{fixResult}</p>{/if}
+          </div>
+        {/if}
       </div>
       <div class="card" data-testid="card-storage">
         <h3>Storage</h3>
@@ -120,7 +152,13 @@
   .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
   dl { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; margin: 0; font-size: 14px; }
   dt { color: var(--muted); } dd { margin: 0; font-family: var(--mono); text-align: right; }
-  .ok { color: #22c55e; } .bad { color: var(--danger); } .warn { color: #f59e0b; }
+  .ok { color: #22c55e; } .bad { color: var(--danger); } .warn { color: #f59e0b; } .info { color: var(--muted); }
   .muted { color: var(--muted); }
   .small { font-size: 13px; margin: 0 0 8px; }
+  .alerts { display: grid; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); justify-items: start; }
+  .alert { display: flex; gap: 8px; align-items: flex-start; margin: 0; font-size: 14px; }
+  .alert :global(svg) { flex: none; margin-top: 2px; }
+  button { padding: 7px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); cursor: pointer; color: var(--text); }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: 0.5; cursor: default; }
 </style>

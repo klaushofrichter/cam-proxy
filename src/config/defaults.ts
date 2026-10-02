@@ -28,7 +28,7 @@ export interface Config {
   sse: { maxClients: number; queuePerClient: number; pingS: number };
   // Composed clips (spec 2026-09-28): the font for the badge and card text.
   composition: { font?: string };
-  ftp: { enabled: boolean; port: number; passive: string; user: string; tls: boolean; stream: 'main' | 'sub'; maxGB?: number; publicHost?: string; certFile?: string; keyFile?: string };
+  ftp: { enabled: boolean; port: number; passive: string; user: string; tls: boolean; stream: 'main' | 'sub'; stalledHours: number; maxGB?: number; publicHost?: string; certFile?: string; keyFile?: string };
   // External analytics (spec 2026-09-30-analytics-design): which event kinds,
   // and per provider its switch and call limits. 0 = no calls.
   analytics: {
@@ -52,7 +52,7 @@ export const DEFAULTS: Config = {
   storage: { maxPercent: 85, minFreeBytes: 2 * 1024 ** 3, keepHours: { stills: 24, clips: 24, previews: 72 } },
   sse: { maxClients: 50, queuePerClient: 1000, pingS: 15 },
   composition: {},
-  ftp: { enabled: false, port: 2121, passive: '30000-30009', user: 'camera', tls: true, stream: 'main' },
+  ftp: { enabled: false, port: 2121, passive: '30000-30009', user: 'camera', tls: true, stream: 'main', stalledHours: 6 },
   analytics: {
     kinds: { person: true, vehicle: false, pet: false },
     googleVision: { enabled: false, monthlyLimit: 0, dailyCap: 0 },
