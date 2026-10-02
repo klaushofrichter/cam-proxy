@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { daysUntilFullText } from '../web/src/lib/format';
 import { alertsLevel, cameraFtpClass, cameraFtpText, ftpAlerts, type FtpHealth } from '../web/src/lib/ftp';
+import { cacheFillText, recordingsClass, recordingsLastText } from '../web/src/lib/recordings';
 
 describe('Status page: days until full (#78)', () => {
   it('rounds, says "more than a year" past 365 days, and — when not filling', () => {
@@ -64,5 +65,27 @@ describe('Status page: the camera FTP warnings (#93)', () => {
     expect(cameraFtpClass('not_set_up')).toBe('muted');
     expect(cameraFtpClass('unknown')).toBe('');
     expect(cameraFtpText(null)).toBe('—');
+  });
+});
+
+describe('Status page: recordings (SD card)', () => {
+  const NOW = Date.UTC(2026, 9, 2, 12, 0);
+  const MB = 1024 ** 2;
+  it('the last download: result and when; size and time when it worked; — before the first', () => {
+    expect(recordingsLastText(null, NOW)).toBe('—');
+    expect(recordingsLastText({ at: NOW - 120_000, result: 'ok', stream: 'sub', bytes: 1_084_649, ms: 310 }, NOW)).toBe('ok, 2 min ago (sub, 1.0 MB in 0.3 s)');
+    expect(recordingsLastText({ at: NOW - 3 * 3600_000, result: 'refused', stream: 'main', bytes: 0, ms: 40 }, NOW)).toBe('refused, 3 h ago');
+    expect(recordingsLastText({ at: NOW - 5_000, result: 'auth', stream: 'main', bytes: 0, ms: 1 }, NOW)).toBe('auth, 5 s ago');
+  });
+  it('green for ok, red for real failures, plain before the first and for a recording the camera no longer has', () => {
+    expect(recordingsClass(null)).toBe('');
+    expect(recordingsClass({ at: NOW, result: 'ok', stream: 'sub', bytes: 1, ms: 1 })).toBe('ok');
+    expect(recordingsClass({ at: NOW, result: 'timeout', stream: 'sub', bytes: 1, ms: 1 })).toBe('bad');
+    expect(recordingsClass({ at: NOW, result: 'offline', stream: 'sub', bytes: 1, ms: 1 })).toBe('bad');
+    expect(recordingsClass({ at: NOW, result: 'not_found', stream: 'sub', bytes: 0, ms: 1 })).toBe('');
+  });
+  it('the cache fill, in MB', () => {
+    expect(cacheFillText({ bytes: 312 * MB + 1000, files: 9, capBytes: 2048 * MB })).toBe('312 MB of 2048 MB');
+    expect(cacheFillText({ bytes: 0, files: 0, capBytes: 64 * MB })).toBe('0 MB of 64 MB');
   });
 });
