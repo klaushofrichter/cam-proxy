@@ -1,7 +1,7 @@
 // test/baichuan-frame.test.ts
 import { describe, it, expect } from 'vitest';
 import { BaichuanError } from '../src/camera/baichuan/errors';
-import { encodeFrame, FrameParser, headerSize, HOST, msgIdOf } from '../src/camera/baichuan/frame';
+import { encodeFrame, FrameParser, headerSize, HOST, MAX_BODY, msgIdOf } from '../src/camera/baichuan/frame';
 
 const hex = (s: string) => Buffer.from(s.replace(/\s/g, ''), 'hex');
 
@@ -88,5 +88,43 @@ describe('FrameParser', () => {
     const big = Buffer.from(a);
     big.writeUInt32LE(5 * 1024 * 1024, 8);
     expect(() => new FrameParser().push(big)).toThrow(/too long/);
+  });
+
+  // #99 (Task 2): the magic is checked as soon as its bytes are there, not only at 20.
+  it('bad magic in a short read is a protocol error at once', () => {
+    for (const n of [1, 4, 19]) {
+      const bad = Buffer.from(a.subarray(0, n));
+      bad[0] = 0xa0;
+      expect(() => new FrameParser().push(bad)).toThrow(/bad magic/);
+    }
+    const p = new FrameParser();
+    expect(p.push(a.subarray(0, 2))).toEqual([]); // a good prefix waits
+    const tail = Buffer.from(a.subarray(2, 10));
+    tail[0] = 0x00; // byte 2 of the magic is wrong
+    expect(() => p.push(tail)).toThrow(/bad magic/);
+  });
+
+  it('a body of exactly MAX_BODY is accepted; one byte more is not', () => {
+    const head = (len: number) => {
+      const h = encodeFrame({ cmd: 8, msgId: msgIdOf(HOST, 3), code: 200, cls: '0000' }, Buffer.alloc(0), Buffer.alloc(0));
+      h.writeUInt32LE(len, 8);
+      return h;
+    };
+    const [f] = new FrameParser().push(Buffer.concat([head(MAX_BODY), Buffer.alloc(MAX_BODY)]));
+    expect(f.header.length).toBe(MAX_BODY);
+    expect(() => new FrameParser().push(head(MAX_BODY + 1))).toThrow(/too long/);
+  });
+
+  it('a payload offset past the body is a protocol error; one equal to it is an empty payload', () => {
+    const past = Buffer.from(a);
+    past.writeUInt32LE(a.length - 24 + 1, 20);
+    expect(() => new FrameParser().push(past)).toThrow(/offset past the end/);
+    const at = Buffer.from(a);
+    at.writeUInt32LE(a.length - 24, 20);
+    expect(new FrameParser().push(at)[0].header.payloadOffset).toBe(a.length - 24);
+  });
+
+  it('a 20-byte header carries no extension', () => {
+    expect(() => encodeFrame({ cmd: 1, msgId: msgIdOf(HOST, 1), code: 0, cls: '1465' }, Buffer.from('x'), Buffer.alloc(0))).toThrow(/no extension/);
   });
 });

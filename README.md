@@ -182,7 +182,8 @@ UI session.
 
 Any one client may send 1200 requests a minute, plus 6000 image requests
 (stills, sprites and clip files — `clips/<id>.mp4` and `clips/<id>.jpg` — a
-day on a timeline is up to 1440 sprites); more answer 429
+day on a timeline is up to 1440 sprites; a recording file once it is cached,
+while one not yet cached counts as a normal request); more answer 429
 `{"error":"rate_limited"}`. Timestamps are unix milliseconds. The full schema is in
 [openapi.yaml](openapi.yaml).
 
@@ -204,9 +205,10 @@ api '/cameras/cam1/events?kind=person&limit=10'
 - `GET /api/cameras/{cam}/analyses?from&to`: the analyses of events that
   start in the range (at most one day), oldest first, at most 1000, in the
   `analysis` stream message's shape without `objects`.
-- `GET /api/cameras/{cam}/recordings?from&to&stream`: the recordings on the
-  camera's SD card that overlap the range (unix ms, at most 48 hours;
-  `stream` `sub` or `main`, required), by start:
+- `GET /api/cameras/{cam}/recordings?from&to&stream` or `?date&stream`: the
+  recordings on the camera's SD card that overlap the range (unix ms, at most
+  48 hours) or of one camera-local day (`date=YYYY-MM-DD`; not with
+  `from`/`to`); `stream` `sub` or `main`, required. By start:
   `[{id, start, end, stream, size, kinds, clipId}]`. See
   [Recordings (SD card)](#recordings-sd-card).
 - `GET /api/cameras/{cam}/recordings/days?month=YYYY-MM`: `{month, days}`,
@@ -337,6 +339,17 @@ as MP4, also the ones FTP never delivered.
   (unix ms, `to` not before `from`, at most 48 hours) answers `[{id, start,
   end, stream, size, kinds, clipId}]`, from the camera's HTTP `Search` (one
   per camera-local day the range touches, one at a time, each kept 30 s).
+  `?date=YYYY-MM-DD&stream=` instead lists one camera-local day, in the same
+  shape (`date` and `from`/`to` together are a 400).
+  A camera Search finds the recordings that start on its day, so a recording
+  that starts before midnight and runs into the next day is only in the day
+  before's Search: both forms also read the day before (the day before the
+  range's first day), and keep its midnight-crossing recordings. Once that
+  day has been over for 5 minutes and none of its recordings is still being
+  written, that tail is final and kept 15 minutes, so a day view in that time
+  costs one Search per stream after the first. An SD-card format or overwrite,
+  or a camera reboot the proxy didn't start, can leave it stale for up to 15
+  minutes.
   `kinds` comes from the file name's trigger flags; `clipId` is the proxy's
   FTP copy of the same recording (same stream, start within 5 s), or null.
   Recordings still being written are left out.
@@ -377,11 +390,15 @@ as MP4, also the ones FTP never delivered.
   needs room, least recently used first. A file being read is never deleted.
   Below `storage.minFreeBytes` files are streamed without being kept.
 - **Errors:** 400 `invalid` (a bad id, `to` before `from`, more than 48
-  hours, a bad `month` or `stream`); 404 `unknown_recording`; 503
+  hours, a bad `date`, `month` or `stream`, `date` with `from`/`to`); 404 `unknown_recording`; 503
   `camera_offline` (the status poller says offline, or no connection to the
   camera could be made); 502 `recordings_unavailable` with `reason` `refused`,
   `auth`, `timeout`, `protocol`, `offline` (the connection was lost during the
-  transfer) or `search_failed` (the list's Search). After the first byte the
+  transfer) or `search_failed` (the list's Search); 503
+  `recordings_unavailable` with `reason` `busy` and `Retry-After: 5` when more
+  camera Searches wait than the proxy queues (one runs, 8 wait; requests for
+  the same day share one Search; a waiting Search whose requests have all
+  gone is dropped). After the first byte the
   headers are gone, so a failure cuts the connection and the client sees a
   short body.
 - **Status:** the Status page's "Recordings (SD card)" card shows the last

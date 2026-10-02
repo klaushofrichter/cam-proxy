@@ -22,6 +22,7 @@ import { CameraFtpWatch, clipsStalled } from './clips/ftp-health';
 import { ClipIndexer } from './clips/indexer';
 import { createClipsSide, type ClipsSide } from './clips/side';
 import { createRecordingsSide, type RecordingsSide } from './recordings/side';
+import { validId } from './recordings/names';
 import { EventIntake } from './events/intake';
 import { EventTracker } from './events/tracker';
 import { logger, setLogLevel, withoutQuery } from './log';
@@ -404,9 +405,17 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // Far above real use (the UI, cams, a scraper); stops a flood. SSE is one
   // long request. Still and sprite images have their own, higher limit: a
   // day on the timeline is up to 1440 sprites.
-  // Clip and recording files too: a seeking video player sends many range requests.
-  const IMAGE = /^\/api\/cameras\/[^/]+\/((stills|previews)\/\d{1,15}\.jpg|clips\/\d{1,15}\.(mp4|jpg)|recordings\/Rec[0-9A-Za-z_]+\.mp4|events\/\d{1,15}\/analysis\.jpg)$/;
-  const isImage = (req: Request) => req.method === 'GET' && IMAGE.test(req.path);
+  // Clip and recording files too: a seeking video player sends many range
+  // requests. A recording only once it is cached (#99): one not cached costs
+  // a camera Search and a download, so it counts in the normal bucket.
+  const IMAGE = /^\/api\/cameras\/[^/]+\/((stills|previews)\/\d{1,15}\.jpg|clips\/\d{1,15}\.(mp4|jpg)|events\/\d{1,15}\/analysis\.jpg)$/;
+  const RECORDING = /^\/api\/cameras\/[^/]+\/recordings\/(Rec[0-9A-Za-z_]+\.mp4)$/;
+  const isImage = (req: Request) => {
+    if (req.method !== 'GET') return false;
+    if (IMAGE.test(req.path)) return true;
+    const id = RECORDING.exec(req.path)?.[1];
+    return id !== undefined && validId(id) && recordings.cache.has(id);
+  };
   // Behind an ingress (issue #29): client addresses from X-Forwarded-For.
   if (running.server.trustProxy) app.set('trust proxy', running.server.trustProxy);
   app.use(rateLimit({ windowMs: 60_000, limit: 1200, skip: isImage, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } }));

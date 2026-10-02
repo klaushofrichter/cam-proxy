@@ -43,9 +43,11 @@ export class FrameParser {
   push(chunk: Buffer): Frame[] {
     this.buf = this.buf.length ? Buffer.concat([this.buf, chunk]) : chunk;
     const out: Frame[] = [];
-    for (;;) {
+    while (this.buf.length) {
+      // The magic's bytes are checked as soon as they arrive (#99).
+      const m = Math.min(4, this.buf.length);
+      if (!this.buf.subarray(0, m).equals(MAGIC.subarray(0, m))) throw new BaichuanError('protocol', 'bad magic');
       if (this.buf.length < 20) break;
-      if (!this.buf.subarray(0, 4).equals(MAGIC)) throw new BaichuanError('protocol', 'bad magic');
       const cls = this.buf.subarray(18, 20).toString('hex');
       const size = SIZES[cls];
       if (!size) throw new BaichuanError('protocol', `unknown message class ${cls}`);

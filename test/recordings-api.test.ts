@@ -73,6 +73,82 @@ describe('GET /recordings (the list)', () => {
   });
 });
 
+// #99: one camera-local day, with the recording that runs into it from the day before.
+describe('GET /recordings?date=', () => {
+  it('lists one camera-local day in the same shape as from/to', async () => {
+    const rec = recs[0];
+    const r = await request(p.base).get(`/api/cameras/cam1/recordings?date=${rec.date}&stream=sub`).set(auth());
+    expect(r.status).toBe(200);
+    const item = r.body.find((x: { id: string }) => x.id === basename(rec.files.sub.name));
+    expect(Object.keys(item).sort()).toEqual(['clipId', 'end', 'id', 'kinds', 'size', 'start', 'stream']);
+    const starts = r.body.map((x: { start: number }) => x.start);
+    expect(starts).toEqual([...starts].sort((a, b) => a - b));
+  });
+
+  it('includes a recording that starts the day before and runs past midnight; so does a from/to window just after midnight', async () => {
+    const cross = sim.sim.engine.sd.add({ date: '2026-01-14', start: '235000', end: '000500', mainEnd: '000500', triggers: ['person'], dst: false });
+    const id = basename(cross.files.sub.name);
+    const day = await request(p.base).get('/api/cameras/cam1/recordings?date=2026-01-15&stream=sub').set(auth());
+    expect(day.status).toBe(200);
+    const item = day.body.find((x: { id: string }) => x.id === id);
+    expect(item).toBeDefined();
+    expect(item.end - item.start).toBe(15 * 60_000);
+    const before = await request(p.base).get('/api/cameras/cam1/recordings?date=2026-01-14&stream=sub').set(auth());
+    expect(before.body.map((x: { id: string }) => x.id)).toContain(id);
+    const win = await request(p.base).get(`/api/cameras/cam1/recordings?from=${item.end - 60_000}&to=${item.end + HOUR}&stream=sub`).set(auth());
+    expect(win.body.map((x: { id: string }) => x.id)).toContain(id);
+  });
+
+  it('checks the query: YYYY-MM-DD, a real date, not with from/to, stream required', async () => {
+    const T = Date.now();
+    const get = (q: string) => request(p.base).get(`/api/cameras/cam1/recordings${q}`).set(auth());
+    for (const q of ['?date=1999-12-31&stream=sub', '?date=2100-01-01&stream=sub', '?date=0000-01-01&stream=sub', '?date=2026-1-05&stream=sub', '?date=2026-02-30&stream=sub', '?date=20261005&stream=sub', '?date=2026-10-05', `?date=2026-10-05&from=${T}&to=${T + 1}&stream=sub`, `?date=2026-10-05&from=${T}&stream=sub`, `?date=2026-10-05&to=${T}&stream=sub`]) {
+      const r = await get(q);
+      expect(r.status, q).toBe(400);
+      expect(r.body.error).toBe('invalid');
+    }
+    for (const d of ['2000-01-01', '2099-12-31']) expect((await get(`?date=${d}&stream=sub`)).status, d).toBe(200);
+  });
+});
+
+// #99 item 2: the Search queue is bounded, and a file not cached is in the normal rate-limit bucket.
+describe('recordings: limits', () => {
+  it('more Searches than the queue holds: 503 recordings_unavailable, reason busy, Retry-After', async () => {
+    sim.sim.engine.faults.set({ name: 'search.delayMs', ms: 200 });
+    try {
+      const days = Array.from({ length: 14 }, (_, i) => `2025-03-${String(i + 1).padStart(2, '0')}`);
+      const rs = await Promise.all(days.map((d) => request(p.base).get(`/api/cameras/cam1/recordings?date=${d}&stream=sub`).set(auth())));
+      const busy = rs.filter((r) => r.status === 503);
+      expect(busy.length).toBeGreaterThan(0);
+      for (const r of busy) {
+        expect(r.body).toMatchObject({ error: 'recordings_unavailable', reason: 'busy' });
+        expect(r.headers['retry-after']).toBe('5');
+      }
+      expect(rs.every((r) => r.status === 200 || r.status === 503)).toBe(true);
+    } finally {
+      sim.sim.engine.faults.clear('search.delayMs');
+    }
+  });
+
+  it('a recording file counts in the normal rate-limit bucket unless it is cached', async () => {
+    const policy = (r: request.Response) => String(r.headers['ratelimit-policy']);
+    const unknown = 'RecS0A_DST20200101_000000_000010_0_5514C080000000_3E8.mp4';
+    const miss = await request(p.base).head(url(unknown)).set(auth());
+    expect(policy(miss)).toMatch(/q=1200\b/);
+    const missGet = await request(p.base).get(url(unknown)).set(auth());
+    expect(policy(missGet)).toMatch(/q=1200\b/);
+    const cached = 'RecS0A_DST20200101_000100_000110_0_5514C080000000_3E8.mp4';
+    writeFileSync(join(p.dir, 'data', 'recordings', 'cam1', cached), Buffer.alloc(1000));
+    try {
+      const hit = await request(p.base).get(url(cached)).set(auth());
+      expect(hit.status).toBe(200);
+      expect(policy(hit)).toMatch(/q=6000\b/);
+    } finally {
+      unlinkSync(join(p.dir, 'data', 'recordings', 'cam1', cached));
+    }
+  });
+});
+
 describe('GET /recordings/days', () => {
   it('the days of a camera-local month with recordings; a bad month is 400 (and /days is not taken for an id)', async () => {
     const month = recs[0].date.slice(0, 7);
