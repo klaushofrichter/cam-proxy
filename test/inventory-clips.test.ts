@@ -9,7 +9,7 @@ import { clipsCheck, SETTLE_MS, type ClipsInventoryDeps, type ClipsSettings } fr
 import type { CameraListDeps } from '../src/inventory/camera-list';
 import { SearchError, type RecordingEntry } from '../src/recordings/list';
 import type { Kind } from '../src/recordings/names';
-import type { CheckContext } from '../src/inventory/runner';
+import { MAX_ITEMS, type CheckContext } from '../src/inventory/runner';
 import { ReolinkClient } from '../src/camera/client';
 import { RecordingList } from '../src/recordings/list';
 import { createCamSim, type SeedClip } from 'cam-sim';
@@ -71,7 +71,7 @@ function camera(o: { months: Record<string, number[]>; recs: Record<string, Reco
   };
   return { deps, searched };
 }
-const settings = (o: Partial<ClipsSettings> = {}): ClipsSettings => ({ cam: 'cam1', clipsDays: 2, stream: 'sub', ftpEnabled: true, ...o });
+const settings = (o: Partial<ClipsSettings> = {}): ClipsSettings => ({ cam: 'cam1', clipsDays: 2, stream: 'sub', ftpEnabled: true, eventMaxOpenMin: 10, ...o });
 const deps = (cam: CameraListDeps, o: Partial<ClipsInventoryDeps> = {}): ClipsInventoryDeps => ({ dataDir: dir, catalog, settings: () => settings(), camera: cam, ...o });
 const ctx = (o: Partial<CheckContext> = {}): CheckContext => ({ signal: new AbortController().signal, progress: () => undefined, now: NOW, options: {}, ...o });
 
@@ -190,6 +190,65 @@ describe('clips inventory, against the camera (part 2)', () => {
     expect(r.items.filter((x) => (x as { type: string }).type === 'gone-from-camera')).toEqual([{ type: 'gone-from-camera', clipId: c2.id, start: c2.start_ts }]);
     expect(r.window.notes).toEqual(["1 local clips not on the camera were not judged: the SD card's oldest day is unknown"]);
   });
+});
+
+type Item = { type: string; [k: string]: unknown };
+const ofType = (items: unknown[], type: string) => (items as Item[]).filter((x) => x.type === type);
+
+describe('clips inventory: the edges (review of task 4)', () => {
+  it('a stale open event covers its start plus the event cap only', async () => {
+    event('person', T('2026-09-30T01:00:00'), null); // never closed (the proxy was down)
+    const c = clip(T('2026-09-30T05:00:00'));
+    const r = await clipsCheck(deps(camera({ months: {}, recs: {} }).deps))(ctx());
+    expect(ofType(r.items, 'clip-without-event')).toEqual([{ type: 'clip-without-event', clipId: c.id, start: c.start_ts }]);
+    const early = clip(T('2026-09-30T01:05:00')); // inside the cap: covered
+    const r2 = await clipsCheck(deps(camera({ months: {}, recs: {} }).deps))(ctx());
+    expect(ofType(r2.items, 'clip-without-event').map((x) => x.clipId)).not.toContain(early.id);
+  });
+
+  it('an event that began before the window still covers the first clip; a clip before the window still covers the first event', async () => {
+    event('motion', T('2026-09-29T23:50:00'), T('2026-09-30T00:20:00'));
+    const c = clip(T('2026-09-30T00:10:00'));
+    insertClip(catalog, { cam: 'cam1', start_ts: T('2026-10-01T09:59:00'), end_ts: T('2026-10-01T10:30:00'), path: clipPath(T('2026-10-01T09:59:00')), stream: 'sub', size: 1, received_at: 0, snapshot: null });
+    const e = event('person', T('2026-10-01T10:10:00'), T('2026-10-01T10:10:20'));
+    const r = await clipsCheck(deps(camera({ months: {}, recs: {} }).deps))(ctx());
+    expect(ofType(r.items, 'clip-without-event').map((x) => x.clipId)).not.toContain(c.id);
+    expect(ofType(r.items, 'event-without-clip').map((x) => x.eventId)).not.toContain(e.id);
+  });
+
+  it('2,400 clips against 30k events: no step blocks the event loop long', async () => {
+    const days = 30;
+    const start = NOW - days * 86_400_000;
+    const db = catalog.db;
+    db.exec('BEGIN');
+    const ev = db.prepare("INSERT INTO events (cam, source, kind, start_ts, end_ts, raw) VALUES ('cam1', 'onvif', ?, ?, ?, NULL)");
+    for (let i = 0; i < 30_000; i++) {
+      const t = start + Math.floor((i / 30_000) * days * 86_400_000);
+      ev.run(['motion', 'person', 'visitor'][i % 3], t, t + 20_000);
+    }
+    const cl = db.prepare("INSERT INTO clips (cam, start_ts, end_ts, path, stream, size, received_at, snapshot) VALUES ('cam1', ?, ?, ?, 'sub', 1, ?, NULL)");
+    for (let i = 0; i < 2_400; i++) {
+      const t = start + Math.floor((i / 2_400) * days * 86_400_000) + 5_000;
+      cl.run(t, t + 30_000, join(dir, 'x', `${t}.mp4`), t);
+    }
+    db.exec('COMMIT');
+    let last = performance.now();
+    let worst = 0;
+    const timer = setInterval(() => {
+      const t = performance.now();
+      worst = Math.max(worst, t - last);
+      last = t;
+    }, 1);
+    try {
+      const r = await clipsCheck(deps(camera({ months: {}, recs: {} }).deps, { settings: () => settings({ clipsDays: days }) }))(ctx());
+      worst = Math.max(worst, performance.now() - last);
+      expect(r.counts.clips).toBe(2400);
+      expect(r.counts.events).toBeGreaterThan(19_990); // the last few are still settling
+    } finally {
+      clearInterval(timer);
+    }
+    expect(worst).toBeLessThan(250);
+  }, 30_000);
 });
 
 // The real cam-sim: seeded SD recordings (camera time UTC, its clock at NOW),

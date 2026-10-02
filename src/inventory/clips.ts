@@ -28,7 +28,8 @@ const FTP_OFF_NOTE = 'FTP is off in the proxy: no clips arrive, so every event i
 const UNJUDGED_NOTE = (n: number) => `${n} local clips not on the camera were not judged: the SD card's oldest day is unknown`;
 const OTHER_STREAM_NOTE = (n: number, stream: string) => `${n} local clips of another stream than ${stream} (ftp.stream) were left out of the camera compare`;
 
-export interface ClipsSettings { cam: string; clipsDays: number; stream: Stream; ftpEnabled: boolean }
+// eventMaxOpenMin: events.maxOpenMin, how long an open event can last.
+export interface ClipsSettings { cam: string; clipsDays: number; stream: Stream; ftpEnabled: boolean; eventMaxOpenMin: number }
 export interface ClipsInventoryDeps {
   dataDir: string;
   catalog: Catalog;
@@ -55,6 +56,27 @@ const dayFolder = (root: string, ts: number) => {
   return join(root, String(d.getUTCFullYear()), pad(d.getUTCMonth() + 1), pad(d.getUTCDate()));
 };
 export const mb = (bytes: number) => `${(bytes / 2 ** 20).toFixed(1)} MB`;
+
+interface EventSpan { id: number; kind: string; start_ts: number; end_ts: number | null }
+// Whether any span overlaps [start, end]: the spans sorted by start, with the
+// running maximum of their ends; the last span starting at or before `end`
+// tells (binary search). Linear to build, logarithmic per question.
+function coverage(spans: { start: number; end: number }[]): (start: number, end: number) => boolean {
+  const sorted = [...spans].sort((a, b) => a.start - b.start);
+  const starts = sorted.map((x) => x.start);
+  const maxEnd: number[] = [];
+  for (const [i, x] of sorted.entries()) maxEnd.push(Math.max(x.end, i ? maxEnd[i - 1] : -Infinity));
+  return (start, end) => {
+    let lo = 0;
+    let hi = starts.length; // the first span starting after `end`
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (starts[mid] <= end) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo > 0 && maxEnd[lo - 1] >= start;
+  };
+}
 
 async function names(dir: string): Promise<string[]> {
   try {
@@ -132,23 +154,37 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     }
 
     // Events and clips that should overlap: recording-kind events that ended
-    // SETTLE_MS ago or earlier; any event for a clip.
-    const kinds = RECORDING_KINDS.map(() => '?').join(', ');
+    // SETTLE_MS ago or earlier, each with a clip; each clip with an event of
+    // any kind. Sorted sweeps in JS (#74 review): a NOT EXISTS per row over
+    // 30 days of events blocked the event loop for seconds. An event still
+    // open covers its start plus events.maxOpenMin only (the tracker closes
+    // it then; one older is stale, from a proxy that was down).
     if (!cancelled) {
       const settled = now - SETTLE_MS;
-      counts.events = Number((db.prepare(`SELECT COUNT(*) AS n FROM events WHERE cam = ? AND kind IN (${kinds}) AND start_ts >= ? AND end_ts IS NOT NULL AND end_ts <= ?`).get(s.cam, ...RECORDING_KINDS, from, settled) as { n: number }).n);
-      const lonely = db
-        .prepare(`SELECT e.id, e.kind, e.start_ts FROM events e WHERE e.cam = ? AND e.kind IN (${kinds}) AND e.start_ts >= ? AND e.end_ts IS NOT NULL AND e.end_ts <= ?
-          AND NOT EXISTS (SELECT 1 FROM clips c WHERE c.cam = e.cam AND c.start_ts <= e.end_ts AND COALESCE(c.end_ts, c.start_ts) >= e.start_ts) ORDER BY e.start_ts, e.id`)
-        .all(s.cam, ...RECORDING_KINDS, from, settled) as { id: number; kind: string; start_ts: number }[];
-      counts.eventsWithoutClip = lonely.length;
-      for (const e of lonely) add({ type: 'event-without-clip', eventId: e.id, kind: e.kind, start: e.start_ts });
-      const bare = db
-        .prepare(`SELECT c.id, c.start_ts FROM clips c WHERE c.cam = ? AND c.start_ts >= ? AND c.start_ts < ?
-          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.cam = c.cam AND e.start_ts <= COALESCE(c.end_ts, c.start_ts) AND (e.end_ts IS NULL OR e.end_ts >= c.start_ts)) ORDER BY c.start_ts, c.id`)
-        .all(s.cam, from, to) as { id: number; start_ts: number }[];
-      counts.clipsWithoutEvent = bare.length;
-      for (const c of bare) add({ type: 'clip-without-event', clipId: c.id, start: c.start_ts });
+      const openCap = s.eventMaxOpenMin * 60_000;
+      const recordingKind = new Set<string>(RECORDING_KINDS);
+      // The window's events, and earlier ones that run into it.
+      const evs = [
+        ...(db.prepare('SELECT id, kind, start_ts, end_ts FROM events WHERE cam = ? AND start_ts < ? AND (end_ts IS NULL OR end_ts >= ?) ORDER BY start_ts, id').all(s.cam, from, from - openCap) as unknown as EventSpan[]),
+        ...(db.prepare('SELECT id, kind, start_ts, end_ts FROM events WHERE cam = ? AND start_ts >= ? AND start_ts < ? ORDER BY start_ts, id').all(s.cam, from, to) as unknown as EventSpan[]),
+      ];
+      await yieldToLoop();
+      const evCover = coverage(evs.map((e) => ({ start: e.start_ts, end: e.end_ts ?? e.start_ts + openCap })));
+      // The window's clips, and earlier ones that run into it.
+      const before = db.prepare('SELECT start_ts, end_ts FROM clips WHERE cam = ? AND start_ts < ? AND COALESCE(end_ts, start_ts) >= ? ORDER BY start_ts').all(s.cam, from, from) as unknown as { start_ts: number; end_ts: number | null }[];
+      const clipCover = coverage([...before, ...rows].map((c) => ({ start: c.start_ts, end: c.end_ts ?? c.start_ts })));
+      for (const e of evs) {
+        if (!recordingKind.has(e.kind) || e.start_ts < from || e.end_ts === null || e.end_ts > settled) continue;
+        counts.events++;
+        if (clipCover(e.start_ts, e.end_ts)) continue;
+        counts.eventsWithoutClip++;
+        add({ type: 'event-without-clip', eventId: e.id, kind: e.kind, start: e.start_ts });
+      }
+      for (const c of rows) {
+        if (evCover(c.start_ts, c.end_ts ?? c.start_ts)) continue;
+        counts.clipsWithoutEvent++;
+        add({ type: 'clip-without-event', clipId: c.id, start: c.start_ts });
+      }
     }
 
     let message =
