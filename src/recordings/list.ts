@@ -34,6 +34,8 @@ export class RecordingList {
   private readonly dayRuns = new Map<string, Promise<RecordingEntry[]>>();
   private readonly months = new Map<string, { at: number; days: number[] }>();
   private readonly monthRuns = new Map<string, Promise<number[]>>();
+  // clear() bumps it: a Search in flight then is neither cached nor joined (#99).
+  private epoch = 0;
 
   constructor(
     private readonly d: {
@@ -73,13 +75,18 @@ export class RecordingList {
     });
   }
 
+  // fresh: a new Search, never the cache nor one already running (it may
+  // have started before what the caller needs to know about).
   day(date: string, stream: Stream, fresh = false): Promise<RecordingEntry[]> {
     const key = `${date}|${stream}`;
-    const hit = this.days.get(key);
-    if (!fresh && hit && this.now() - hit.at < DAY_TTL) return Promise.resolve(hit.entries);
-    const running = this.dayRuns.get(key);
-    if (running) return running;
-    const work = (async () => {
+    if (!fresh) {
+      const hit = this.days.get(key);
+      if (hit && this.now() - hit.at < DAY_TTL) return Promise.resolve(hit.entries);
+      const running = this.dayRuns.get(key);
+      if (running) return running;
+    }
+    const epoch = this.epoch;
+    const work: Promise<RecordingEntry[]> = (async () => {
       const [year, mon, day] = date.split('-').map(Number);
       const v = (await this.search({
         Search: { channel: 0, onlyStatus: 0, streamType: stream, StartTime: { year, mon, day, hour: 0, min: 0, sec: 0 }, EndTime: { year, mon, day, hour: 23, min: 59, sec: 59 } },
@@ -93,9 +100,11 @@ export class RecordingList {
         out.push({ id: n.id, path: f.name, ...recordingTimes(n, t), stream, size: n.size, kinds: n.kinds });
       }
       out.sort((a, b) => a.start - b.start);
-      this.days.set(key, { at: this.now(), entries: out });
+      if (epoch === this.epoch) this.days.set(key, { at: this.now(), entries: out });
       return out;
-    })().finally(() => this.dayRuns.delete(key));
+    })().finally(() => {
+      if (this.dayRuns.get(key) === work) this.dayRuns.delete(key);
+    });
     this.dayRuns.set(key, work);
     return work;
   }
@@ -127,7 +136,8 @@ export class RecordingList {
     if (hit && this.now() - hit.at < MONTH_TTL) return Promise.resolve(hit.days);
     const running = this.monthRuns.get(month);
     if (running) return running;
-    const work = (async () => {
+    const epoch = this.epoch;
+    const work: Promise<number[]> = (async () => {
       const [year, mon] = month.split('-').map(Number);
       const last = new Date(Date.UTC(year, mon, 0)).getUTCDate();
       const v = (await this.search({
@@ -141,15 +151,21 @@ export class RecordingList {
         });
       }
       const out = [...days].sort((a, b) => a - b);
-      this.months.set(month, { at: this.now(), days: out });
+      if (epoch === this.epoch) this.months.set(month, { at: this.now(), days: out });
       return out;
-    })().finally(() => this.monthRuns.delete(month));
+    })().finally(() => {
+      if (this.monthRuns.get(month) === work) this.monthRuns.delete(month);
+    });
     this.monthRuns.set(month, work);
     return work;
   }
 
+  // The camera restarted (or changed): nothing cached or in flight is used again.
   clear(): void {
+    this.epoch++;
     this.days.clear();
     this.months.clear();
+    this.dayRuns.clear();
+    this.monthRuns.clear();
   }
 }

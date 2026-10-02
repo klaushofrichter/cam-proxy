@@ -7,7 +7,7 @@ import { CameraError } from '../src/camera/client';
 import type { TimeInfo } from '../src/camera/time';
 import { openCatalog } from '../src/catalog/db';
 import { clipNear, insertClip } from '../src/catalog/clips';
-import { RecordingList, SearchError } from '../src/recordings/list';
+import { RecordingList, SearchError, type RecordingEntry } from '../src/recordings/list';
 
 const CHI: TimeInfo = { stdOffsetMinutes: -360, dstOffsetMinutes: 60, dstRule: { startMon: 3, startWeek: 2, startWeekday: 0, startHour: 2, startMin: 0, endMon: 11, endWeek: 1, endWeekday: 0, endHour: 2, endMin: 0 } };
 const file = (date: string, start: string, end: string, s: 'S' | 'M' = 'S', flags = '5514C080000000', size = '3E8') =>
@@ -25,6 +25,7 @@ function fake(files: Record<string, string[]>, o: { fail?: unknown[]; time?: () 
     search: async (param) => {
       const p = param as Param;
       calls.push(p);
+      const snapshot = files[`${dateOf(p)}|${p.Search.streamType}`] ?? []; // what the card has when the Search starts
       running++;
       maxRunning = Math.max(maxRunning, running);
       await new Promise((r) => setTimeout(r, 5));
@@ -32,7 +33,7 @@ function fake(files: Record<string, string[]>, o: { fail?: unknown[]; time?: () 
       const f = o.fail?.shift();
       if (f) throw f;
       if (p.Search.onlyStatus === 1) return { SearchResult: { Status: o.status ?? [] } };
-      return { SearchResult: { File: (files[`${dateOf(p)}|${p.Search.streamType}`] ?? []).map((name) => ({ name, size: 1000 })) } };
+      return { SearchResult: { File: snapshot.map((name) => ({ name, size: 1000 })) } };
     },
     timeInfo: o.time ?? (async () => CHI),
     now: () => clock.t,
@@ -122,6 +123,42 @@ describe('RecordingList.find and stillListed', () => {
     const [e] = await x.list.day('2026-10-01', 'sub');
     files['2026-10-01|sub'] = [];
     expect(await x.list.stillListed(e)).toBe(false);
+    expect(x.calls).toHaveLength(2);
+  });
+});
+
+describe('RecordingList: in-flight Searches (#99, Task 9)', () => {
+  it('stillListed never answers from a Search that started before it', async () => {
+    const files = { '2026-10-01|sub': [file('2026-10-01', '211129', '211207')] };
+    const x = fake(files);
+    const running = x.list.day('2026-10-01', 'sub');
+    files['2026-10-01|sub'] = []; // gone from the card while that Search runs
+    const e = { id: 'RecS0A_DST20261001_211129_211207_0_5514C080000000_3E8.mp4' } as RecordingEntry;
+    const still = x.list.stillListed(e);
+    expect(await running).toHaveLength(1);
+    expect(await still).toBe(false);
+    expect(x.calls).toHaveLength(2);
+  });
+
+  it('clear() during a Search: its result is not cached, and a new request does not join it', async () => {
+    const files = { '2026-10-01|sub': [file('2026-10-01', '211129', '211207')] };
+    const x = fake(files);
+    const before = x.list.day('2026-10-01', 'sub');
+    x.list.clear();
+    files['2026-10-01|sub'] = [];
+    const after = x.list.day('2026-10-01', 'sub');
+    expect(await before).toHaveLength(1);
+    expect(await after).toHaveLength(0);
+    expect(await x.list.day('2026-10-01', 'sub')).toHaveLength(0);
+    expect(x.calls).toHaveLength(2);
+  });
+
+  it('clear() during a month Search: not cached either', async () => {
+    const x = fake({}, { status: [{ year: 2026, mon: 10, table: '1' }] });
+    const before = x.list.monthDays('2026-10');
+    x.list.clear();
+    await before;
+    await x.list.monthDays('2026-10');
     expect(x.calls).toHaveLength(2);
   });
 });
