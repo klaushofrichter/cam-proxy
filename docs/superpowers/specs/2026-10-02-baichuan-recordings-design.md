@@ -388,7 +388,9 @@ Fresh TypeScript; only `node:net` and `node:crypto`.
 - **Idle: it closes the socket after 20 s without a request**, and reconnects
   on demand (nonce and login take well under a second). It sends no keep-alive
   (no cmd 93): the camera drops an idle session after about 32 s, and a long
-  download keeps it alive by itself. Always a plain close, never cmd 2.
+  download keeps it alive by itself (measured 2026-10-02: a 9 MB main file
+  read at about 115 KB/s arrived complete after 77.6 s, with no message from
+  the client). Always a plain close, never cmd 2.
 - The same camera user and password as the HTTP client (`camera.user`,
   `CAMPROXY_CAMERA_PASSWORD`). The `proxy` user logs in over Baichuan; it is
   admin level on this camera by Klaus's decision (2026-10-02), and there will
