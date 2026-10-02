@@ -1,6 +1,7 @@
 <script lang="ts">
   import { status, stats } from '../lib/state';
   import { pausedText, usageLine } from '../lib/analytics';
+  import { daysUntilFullText } from '../lib/format';
 
   const gb = (b: number) => `${(b / 1024 ** 3).toFixed(1)} GB`;
   const mb = (b: number) => `${(b / 1024 ** 2).toFixed(1)} MB`;
@@ -89,7 +90,7 @@
           <dt>Audit log</dt><dd>{mb($stats.disk.audit.bytes)}</dd>
           <dt>Used / budget</dt><dd>{gb($stats.storage.used)} / {gb($stats.storage.budget)}</dd>
           <dt>Disk free</dt><dd>{gb($stats.disk.free)} of {gb($stats.disk.size)}</dd>
-          <dt>Days until full</dt><dd>{$stats.storage.daysUntilFull === null ? '—' : Math.round($stats.storage.daysUntilFull)}</dd>
+          <dt>Days until full</dt><dd data-testid="days-until-full">{daysUntilFullText($stats.storage.daysUntilFull)}</dd>
           <dt>Writing</dt><dd class={$stats.storage.paused ? 'bad' : 'ok'}>{$stats.storage.paused ? 'paused (disk full)' : 'on'}</dd>
           <dt>Last cleanup</dt><dd>{ago($status.retention.lastRun)}</dd>
         </dl>

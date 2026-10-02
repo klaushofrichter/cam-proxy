@@ -204,4 +204,12 @@ describe('token in the URL', () => {
     }
     expect((await request(p.base).get('/control/status?token=x')).status).toBe(400); // no credential at all
   });
+
+  it('is refused on the session routes too (#78); the login link uses ?code=', async () => {
+    for (const [method, path] of [['get', '/control/session?token=x'], ['get', '/control/login-link?code=c&token=x'], ['post', '/control/login?token=x'], ['post', '/control/logout?access_token=x']] as const) {
+      const r = await request(p.base)[method](path).send({ token: ADMIN_TOKEN });
+      expect([r.status, r.body], path).toEqual([400, { error: 'token_in_url' }]);
+    }
+    expect((await request(p.base).get('/control/session')).status).toBe(200);
+  });
 });

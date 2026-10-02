@@ -261,7 +261,7 @@ export function createProxy(initial: Loaded): Proxy {
       const u = storage.usage();
       const clipRows = Number((catalog.db.prepare('SELECT COUNT(*) AS n FROM clips').get() as { n: number }).n);
       return {
-        message: storageMessage({ used: u.used, budget: u.budget, stills: u.stills.files, clipRows, daysUntilFull: u.daysUntilFull }),
+        message: storageMessage({ used: u.used, budget: u.budget, stillMinutes: u.stills.files, clipRows, daysUntilFull: u.daysUntilFull }),
         details: { size: u.size, free: u.free, budget: u.budget, used: u.used, daysUntilFull: u.daysUntilFull, kinds: { stills: u.stills, previews: u.previews, clips: u.clips, catalog: u.catalog, audit: u.audit }, clipRows },
       };
     },
@@ -332,9 +332,10 @@ export function createProxy(initial: Loaded): Proxy {
   app.get('/metrics', async (_req, res) => {
     res.type(metrics.registry.contentType).send(await metrics.render());
   });
-  app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit }));
-  // Tokens never travel in URLs: checked once per request, before any access check.
+  // Tokens never travel in URLs: checked once per request, before any access
+  // check and before the session routes (the login link carries ?code=).
   app.use(['/api', '/control'], refuseTokenInUrl);
+  app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit }));
   app.use('/api', requireAccess('client', access), composeApi({ config: () => running, catalog, composer, stillsIn: (f, t) => stills?.store.listStills(f, t) ?? [], paused: () => storage.paused(), font }));
   app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, status: () => status, sse, stills: () => stills }));
   // The audit log: admins and the audit token, GET (and HEAD) only. The access check is

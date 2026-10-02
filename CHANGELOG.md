@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Audit log: the daily storage record says "N minutes of stills" (it counts minute files, not single stills).
+- Status page: "Days until full" says "more than a year" past 365 days, as the daily storage record does.
+- A token in the URL (`?token=`, `?access_token=`) is now refused on the sign-in routes (`/control/login`, `/control/login-link`, `/control/logout`, `/control/session`) too.
 - Audit log: the daily storage record says "more than a year until full" instead of a day count past 365 days (`daysUntilFull` keeps the number).
 - Audit log: a `config-change` record marks each setting that waits for a restart (`restart: "restart"`, or `"process"` for a new process).
 - Audit log: `HEAD /control/audit` answers like GET (it was 403 even for admins).

@@ -108,7 +108,7 @@ with its own details):
  "event":{"kind":"event","category":["host"],"type":["info"],"action":"storage-daily","outcome":"success","dataset":"cam-proxy.audit"},
  "service":{"name":"cam-proxy","version":"2026.10.01.1"},"host":{"name":"cam-proxy"},"labels":{"camera":"cam1"},
  "user":{"name":"system"},
- "message":"Storage: 82.4 GB used of 150.0 GB budget, 10,080 stills, 1,312 clips, 214 days until full",
+ "message":"Storage: 82.4 GB used of 150.0 GB budget, 10,080 minutes of stills, 1,312 clips, 214 days until full",
  "cam_proxy":{"day":"2026-10-02","size":229000000000,"free":98000000000,"budget":150000000000,"used":82382100000,"daysUntilFull":214.46,
   "kinds":{"stills":{"bytes":31000000000,"files":10080,"oldest":1790294400000,"newest":1790917440000,"growthPerDay":180000000},"previews":{"bytes":9000000000,"files":40320,"oldest":1789689600000,"newest":1790917440000,"growthPerDay":25000000},"clips":{"bytes":42000000000,"files":1312,"oldest":1790294400000,"newest":1790916060000,"growthPerDay":110000000},"catalog":{"bytes":380000000,"files":1,"oldest":null,"newest":1790917500000,"growthPerDay":0},"audit":{"bytes":2100000,"files":7,"oldest":1790380800000,"newest":1790899200000,"growthPerDay":300000}},"clipRows":1312}}
 ```
@@ -127,7 +127,8 @@ with its own details):
 camera time is 05:05 UTC. `used` is the sum of the kinds' bytes, and
 `daysUntilFull` is the budget left divided by the kinds' summed
 `growthPerDay`.) Past 365 days the message says `more than a year until full`
-instead of the number; `daysUntilFull` keeps the number.
+instead of the number; `daysUntilFull` keeps the number. Stills are counted in
+minutes (one pack file per minute; `kinds.stills.files`), not single stills.
 
 ### Daily records in detail
 
