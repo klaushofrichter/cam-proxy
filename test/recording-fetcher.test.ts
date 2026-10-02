@@ -355,6 +355,25 @@ describe('RecordingFetcher', () => {
     expect(x.cache.has(e.id)).toBe(false);
   });
 
+  it('a failure mid-stream: the .part is gone before the client sees the connection cut', async () => {
+    const x = setup({ delayMs: 2 });
+    const e = x.add(1, 100_000);
+    const failing = async (path: string, _size: number, out: Writable) => {
+      out.write(x.files.get(path)!.subarray(0, 20_000));
+      await sleep(20);
+      throw new BaichuanError('offline', 'dropped');
+    };
+    const fetcher = new RecordingFetcher({ cache: x.cache, download: failing, stillListed: async () => true, paused: () => false, noteWritten: () => undefined, onDone: () => undefined });
+    const { fetch } = fetcher.get(e, { priority: 'high' });
+    const c = collector();
+    let partAtClose: boolean | null = null;
+    c.w.on('close', () => (partAtClose = existsSync(x.cache.partPath(e.id))));
+    fetch.attach(c.w, () => undefined);
+    await expect(fetch.done).rejects.toMatchObject({ code: 'offline' });
+    await sleep(20);
+    expect(partAtClose).toBe(false);
+  });
+
   it('a cache write error: the client still gets the whole file, nothing kept', async () => {
     const x = setup({ delayMs: 1 });
     const e = x.add(1);

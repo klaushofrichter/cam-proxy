@@ -381,12 +381,12 @@ export class RecordingFetcher {
       f.finish();
     } catch (err) {
       bytes = tee.written;
-      tee.abortClient();
       tee.destroy();
       if (file) {
         await closed(file); // closed before the unlink, or a late open leaves a .part
         cache.discard(entry.id);
       }
+      tee.abortClient(); // last: a client that sees the cut must find no .part
       this.byId.delete(entry.id);
       // An abort, or any failure while stopping (a connect or login given
       // up, a closed session): no outcome, nothing for the status or metrics.
