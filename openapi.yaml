@@ -343,6 +343,20 @@ paths:
       summary: Disk, events, stream log, storage budget (spec §13)
       responses:
         '200': { description: '{ disk: {catalog, stills, previews, clips, recordings} (each {bytes, files, oldest, newest, growthPerDay}), events: {stored}, stream: {rows, lastId}, sse: {clients}, storage: {budget, used, daysUntilFull, paused} }' }
+  /control/inventory:
+    get:
+      summary: The running inventory and the last 10 runs per kind, newest first (spec 2026-10-02-inventory-design)
+      responses:
+        '200': { description: '{ running: { runId, kind, startedAt, outcome: running, progress: { phase, done, total, note? } } | null, runs: { stills: [{ runId, kind, startedAt, tookMs, outcome: ok|cancelled|failed, counts, message }] } }' }
+  /control/inventory/runs/{id}:
+    get:
+      summary: One inventory report, or the running view while it runs
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^[a-z]{1,16}-\d{1,15}-[0-9a-f]{6}$' } }
+      responses:
+        '200': { description: '{ runId, kind, camera, startedAt, tookMs, outcome, error?, cancelledBy? (request|stop), requestedBy, window: { from, to, reason (retention|budget|store-younger|empty), retentionFrom, protectedFrom }, counts, top (the 10 longest gaps), items (up to 500 file problems), itemsTruncated, message }' }
+        '400': { description: not a run id }
+        '404': { description: unknown run }
   /control/config:
     get:
       summary: Every setting with value, source, restart flag and pending next value
@@ -367,7 +381,7 @@ paths:
         '400': { description: unknown setting }
   /control/actions/{name}:
     post:
-      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart (the camera side), camera-reboot, camera-powercycle, camera-poe-on, poe-switch-read, restart-proxy (the process)
+      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart (the camera side), camera-reboot, camera-powercycle, camera-poe-on, poe-switch-read, restart-proxy (the process), inventory ({kind}), inventory-cancel
       description: |
         camera-reboot reboots the camera (about a minute offline; every camera token becomes invalid).
         camera-powercycle cuts the camera's PoE on its switch (camera.poeSwitch, CAMPROXY_POE_SWITCH_PASSWORD)
@@ -377,13 +391,16 @@ paths:
         power check, no cooldown). poe-switch-read reads the camera's port on the switch (never polled).
         restart-proxy answers 202, then stops gracefully (as on SIGTERM) and exits 0; a supervisor
         (compose, the cluster) starts it again. Both are admin only (sessions need X-CamProxy-UI) and audited.
+        inventory starts an inventory ({"kind":"stills"}) in the background; poll GET /control/inventory/runs/{id}.
+        One at a time. It writes an inventory audit record when it ends, no control-action.
       parameters:
         - { name: name, in: path, required: true, schema: { type: string } }
       responses:
-        '200': { description: 'camera-test and retention-run results; camera-ftp-setup/-off: {ftp} (the camera''s settings, no password); camera-ftp-test: {ok, rspCode}; poe-switch-read: {at, port, index, poe, watts, link, sn, firmware}; camera-poe-on: the same plus wasOn' }
-        '202': { description: 'started (onvif-resubscribe, restart, restart-proxy); camera-reboot: { confirmed } (false: the camera dropped the connection after receiving the request); camera-powercycle: { offAt, onAt, watts } once PoE is back on' }
+        '200': { description: 'camera-test and retention-run results; camera-ftp-setup/-off: {ftp} (the camera''s settings, no password); camera-ftp-test: {ok, rspCode}; poe-switch-read: {at, port, index, poe, watts, link, sn, firmware}; camera-poe-on: the same plus wasOn; inventory-cancel: { cancelled, runId }' }
+        '202': { description: 'started (onvif-resubscribe, restart, restart-proxy); camera-reboot: { confirmed } (false: the camera dropped the connection after receiving the request); camera-powercycle: { offAt, onAt, watts } once PoE is back on; inventory: { runId }' }
+        '400': { description: 'inventory: invalid (an unknown or missing kind)' }
         '404': { description: unknown action }
-        '409': { description: 'not_configured (camera-ftp-setup/-test: ftp.publicHost or the FTP password is not set; camera-powercycle, poe-switch-read: no switch or no CAMPROXY_POE_SWITCH_PASSWORD); camera-powercycle, poe-switch-read: switch_busy (someone is logged in to the switch''s web UI), no_power (the port has PoE off or draws 0 W; nothing switched)' }
+        '409': { description: 'not_configured (camera-ftp-setup/-test: ftp.publicHost or the FTP password is not set; camera-powercycle, poe-switch-read: no switch or no CAMPROXY_POE_SWITCH_PASSWORD); camera-powercycle, poe-switch-read: switch_busy (someone is logged in to the switch''s web UI), no_power (the port has PoE off or draws 0 W; nothing switched); inventory: inventory_busy { runId } (one runs already)' }
         '429': { description: 'camera-reboot, camera-powercycle: too_soon, within 120 s of the last reboot or power-cycle, or while one is being sent (Retry-After)' }
         '502': { description: 'the camera refused or failed the call; camera-reboot: the request never reached the camera (camera_offline, camera_auth_failed, camera_error); camera-powercycle, camera-poe-on, poe-switch-read: switch_auth, switch_unreachable, switch_error (camera-powercycle, camera-poe-on: poeOff, turnedOn when PoE may have been cut)' }
   /control/log:

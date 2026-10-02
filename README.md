@@ -565,6 +565,10 @@ arrive.
 | `POST /control/actions/camera-poe-on` | recovery: turns the camera's port on if its PoE is off (no power check, no cooldown; the switch lock applies). 200 the reading plus `wasOn`; 409 and 502 as `camera-powercycle`. Audited as `camera-poe-on` |
 | `POST /control/actions/poe-switch-read` | reads the camera's port on the switch now (log in, read, log out; never polled): `{at, port, index, poe, watts, link, sn, firmware}`; 409 and 502 as `camera-powercycle`. Audited as `control-action` |
 | `POST /control/actions/restart-proxy` | restarts the proxy process: 202, then the normal graceful stop (the same as SIGTERM; `proxy-stop` reason `restart-requested`) and exit 0, also after 15 s if the stop hangs. Compose (`restart: unless-stopped`) or the cluster starts it again; run directly (`npm start`), the process just ends. Admin sessions end with the process. Audited as `proxy-restart` |
+| `POST /control/actions/inventory` | `{"kind":"stills"}`: starts an inventory in the background ([the spec](docs/superpowers/specs/2026-10-02-inventory-design.md)); 202 `{runId}`; 400 `invalid` for an unknown kind; 409 `inventory_busy` `{runId}` while one runs (one at a time). Poll `GET /control/inventory/runs/{id}`. Audited as `inventory` when it ends |
+| `POST /control/actions/inventory-cancel` | cancels the running inventory: `{cancelled, runId}`; the run keeps its partial counts. Audited as `control-action` |
+| `GET /control/inventory` | `{running: {runId, kind, startedAt, outcome: "running", progress: {phase, done, total, note}} or null, runs: {stills: [the last 10 runs, newest first: {runId, kind, startedAt, tookMs, outcome, counts, message}]}}` |
+| `GET /control/inventory/runs/{id}` | one report: `{runId, kind, camera, startedAt, tookMs, outcome: ok\|cancelled\|failed, error, cancelledBy, requestedBy, window: {from, to, reason, retentionFrom, protectedFrom}, counts, top, items, itemsTruncated, message}`; 400 for a malformed id, 404 for an unknown one. Kept in `<dataDir>/inventory/<kind>/` (the last 10) |
 | `GET /control/audit` | the audit log as JSON lines: `limit`, `before`/`after` (cursors), `from`, `to`, `action`, `outcome`; admin token, admin session or `CAMPROXY_AUDIT_TOKEN`; HEAD answers like GET without the body. See [docs/audit-log.md](docs/audit-log.md) |
 | `GET /health` | `{ok, version, startedAt}` (no auth): `startedAt` (ms) tells a new process apart |
 | `GET /control/log?limit` | recent log lines (info and above), redacted; default limit 100, buffer holds the last 500 |
@@ -610,6 +614,7 @@ The proxy records who did what, as ECS JSON lines, one file per UTC day in
 - start and stop, restarts, camera reboots, sign-ins (with failures), sign-outs, login links;
 - refused tokens, throttled to one record per IP and path per 10 minutes;
 - control actions and settings changes (secret values redacted);
+- inventory runs, with their counts;
 - changes of the camera's FTP upload (on, off, pointing elsewhere);
 - a storage snapshot and an activity summary at 00:05 camera time.
 
