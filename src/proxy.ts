@@ -296,9 +296,16 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
 
   // A camera reboot from the control API (#83): the client and the status
   // poller are read on use, since restart() builds them anew.
+  // forgetToken runs once a reboot went out, and at a power-cycle's PoE-off
+  // (also one whose answer was lost): the Baichuan session dies with the
+  // camera, so the recordings side is reset too (a request would otherwise
+  // wait for a timeout on the dead socket).
   const reboot = new CameraReboot({
     send: () => client.command('Reboot'),
-    forgetToken: () => client.forgetToken(),
+    forgetToken: () => {
+      client.forgetToken();
+      recordings.reset();
+    },
     serial: () => status.state().serial,
     check: async () => {
       const s = await status.checkNow();

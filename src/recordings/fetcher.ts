@@ -388,7 +388,9 @@ export class RecordingFetcher {
         cache.discard(entry.id);
       }
       this.byId.delete(entry.id);
-      if (isAbort(err)) return f.finish(err);
+      // An abort, or any failure while stopping (a connect or login given
+      // up, a closed session): no outcome, nothing for the status or metrics.
+      if (isAbort(err) || this.stopped) return f.finish(err);
       let e = err instanceof BaichuanError ? err : new BaichuanError('protocol', 'the download failed');
       // A 400 for a file the list had: gone from the card (not found), or refused?
       if (e.code === 'refused' && e.status === 400 && !(await this.d.stillListed(entry).catch(() => true))) {

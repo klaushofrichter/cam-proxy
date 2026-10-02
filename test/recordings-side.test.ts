@@ -1,13 +1,13 @@
 // test/recordings-side.test.ts
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import request from 'supertest';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, truncateSync, unlinkSync, utimesSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, join } from 'path';
 import { Writable } from 'stream';
 import { logBuffer } from '../src/log';
 import { startSim } from './helpers/sim';
-import { ADMIN_TOKEN, auth, startProxy, until } from './helpers/proxy';
+import { ADMIN_TOKEN, auth, freePort, startProxy, until } from './helpers/proxy';
 
 let sim: Awaited<ReturnType<typeof startSim>>;
 let p: Awaited<ReturnType<typeof startProxy>>;
@@ -37,14 +37,33 @@ describe('the recordings side', () => {
     expect(st.body.recordings).toEqual({ last: null, cache: { bytes: 1000, files: 1, capBytes: 2048 * 2 ** 20 } });
   });
 
-  it('pins in the cache are the paths storage sees (recordingsBusy)', () => {
-    const path = p.proxy.recordings.cache.path(CACHED);
-    expect(path).toBe(join(p.proxy.running.server.dataDir, 'recordings', 'cam1', CACHED));
-    const unpin = p.proxy.recordings.cache.pin(path);
-    // Storage enumerates join(dataDir, 'recordings', cam, name): the same string.
-    expect(p.proxy.recordings.cache.files().map((f) => f.path)).toContain(path);
-    expect(p.proxy.recordings.cache.busy(path)).toBe(true);
-    unpin();
+  it('storage over the cache cap keeps a pinned recording (recordingsBusy) and deletes an unpinned one', async () => {
+    const cache = p.proxy.recordings.cache;
+    const A = 'RecS0A_DST20201002_100000_100100_0_5514C080000000_3E8.mp4';
+    const B = 'RecS0A_DST20201002_110000_110100_0_5514C080000000_3E8.mp4';
+    // Sparse files: 40 MB each, over the 64 MB cap together. A is the least
+    // recently used, so it would go first if it were not pinned.
+    for (const [id, t] of [[A, 1000], [B, 2000]] as const) {
+      const f = join(recDir, id);
+      writeFileSync(f, '');
+      truncateSync(f, 40 * 2 ** 20);
+      utimesSync(f, new Date(t), new Date(t));
+    }
+    const r = await request(p.base).put('/control/config').set(auth(ADMIN_TOKEN)).send({ recordings: { cacheMB: 64 } });
+    expect(r.status).toBe(200);
+    p.proxy.storage.recount();
+    const unpin = cache.pin(cache.path(A));
+    try {
+      p.proxy.storage.run({});
+    } finally {
+      unpin();
+    }
+    expect(cache.has(A)).toBe(true);
+    expect(cache.has(B)).toBe(false);
+    expect(cache.has(CACHED)).toBe(true); // under the cap once B went
+    unlinkSync(join(recDir, A));
+    p.proxy.storage.recount();
+    expect((await request(p.base).delete('/control/config/recordings.cacheMB').set(auth(ADMIN_TOKEN))).status).toBe(200);
   });
 
   it('downloads a recording from cam-sim over Baichuan into the cache, and records the result', async () => {
@@ -71,16 +90,22 @@ describe('the recordings side', () => {
   it('a change of camera.baichuanPort closes the session; the next use connects to the new port', async () => {
     expect(p.proxy.recordings.session.connected()).toBe(true);
     const port = p.proxy.running.camera.baichuanPort;
-    const r = await request(p.base).put('/control/config').set(auth(ADMIN_TOKEN)).send({ camera: { baichuanPort: port === 1 ? 2 : 1 } });
-    expect(r.status).toBeLessThan(300);
+    const unused = await freePort();
+    const r = await request(p.base).put('/control/config').set(auth(ADMIN_TOKEN)).send({ camera: { baichuanPort: unused } });
+    expect(r.status).toBe(200);
     expect(p.proxy.recordings.session.connected()).toBe(false);
     await until(() => sim.sim.engine.counters.baichuanSessions === 0);
-    // Back to the camera's port: the next download connects again.
-    const back = await request(p.base).put('/control/config').set(auth(ADMIN_TOKEN)).send({ camera: { baichuanPort: port } });
-    expect(back.status).toBeLessThan(300);
+    // Nothing listens on the new port: the next download fails offline.
     const rec = sim.sim.engine.sd.all().filter((r) => r.end !== null)[1]!;
     const entry = await p.proxy.recordings.list.find(basename(rec.files.sub.name));
+    await expect(p.proxy.recordings.fetcher.get(entry!, { priority: 'high' }).fetch.done).rejects.toMatchObject({ code: 'offline' });
+    expect(p.proxy.recordings.status().last).toMatchObject({ result: 'offline', stream: 'sub' });
+    expect(sim.sim.engine.counters.baichuanSessions).toBe(0);
+    // Back to the camera's port: the same download works.
+    const back = await request(p.base).put('/control/config').set(auth(ADMIN_TOKEN)).send({ camera: { baichuanPort: port } });
+    expect(back.status).toBe(200);
     await p.proxy.recordings.fetcher.get(entry!, { priority: 'high' }).fetch.done;
+    expect(p.proxy.recordings.cache.has(entry!.id)).toBe(true);
     expect(p.proxy.recordings.session.connected()).toBe(true);
   });
 
@@ -122,5 +147,33 @@ describe('stopping during a download', () => {
     await until(() => sim2.sim.engine.counters.baichuanSessions === 0);
     const dir = join(q.proxy.running.server.dataDir, 'recordings', 'cam1');
     expect(readdirSync(dir).filter((n) => n.endsWith('.part'))).toEqual([]);
+  }, 30_000);
+});
+
+describe('a camera reboot', () => {
+  let sim3: Awaited<ReturnType<typeof startSim>>;
+  let r: Awaited<ReturnType<typeof startProxy>>;
+  beforeAll(async () => {
+    sim3 = await startSim();
+    r = await startProxy(sim3);
+    await until(() => r.proxy.status.state().online, 15_000);
+  }, 30_000);
+  afterAll(async () => {
+    await r.proxy.stop();
+    await sim3.close();
+  });
+
+  it('resets the recordings side when the reboot goes out: the session is closed at once', async () => {
+    const rec = sim3.sim.engine.sd.all().find((x) => x.end !== null)!;
+    const entry = await r.proxy.recordings.list.find(basename(rec.files.sub.name));
+    await r.proxy.recordings.fetcher.get(entry!, { priority: 'high' }).fetch.done;
+    expect(r.proxy.recordings.session.connected()).toBe(true);
+    // cam-sim drops its sockets on a reboot; the real camera may leave them
+    // half-open, so the proxy must reset on its own.
+    const reset = vi.spyOn(r.proxy.recordings, 'reset');
+    const res = await request(r.base).post('/control/actions/camera-reboot').set(auth(ADMIN_TOKEN));
+    expect(res.status).toBe(202);
+    expect(reset).toHaveBeenCalledTimes(1);
+    expect(r.proxy.recordings.session.connected()).toBe(false);
   }, 30_000);
 });

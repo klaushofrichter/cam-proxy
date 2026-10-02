@@ -272,6 +272,18 @@ describe('RecordingFetcher', () => {
     expect(c.w.destroyed).toBe(true);
   });
 
+  it('while stopping, a running fetch that fails with any error (offline during connect) reports no outcome', async () => {
+    const x = setup({ gated: true, fail: new BaichuanError('offline', 'session closed') });
+    const a = x.add(1);
+    const { fetch } = x.fetcher.get(a, { priority: 'high' });
+    await vi.waitFor(() => expect(x.dl.calls).toHaveLength(1));
+    const stopped = x.fetcher.stop();
+    x.dl.release(a.path); // the connect gives up: offline
+    await stopped;
+    await expect(fetch.done).rejects.toMatchObject({ code: 'offline' });
+    expect(x.outcomes).toEqual([]);
+  });
+
   // Binding rules from earlier reviews (ledger "→ Task 10").
   it('never evicts for nothing: a file that cannot fit beside the pinned ones is streamed, the cache untouched', async () => {
     const x = setup({ cap: 120_000 });

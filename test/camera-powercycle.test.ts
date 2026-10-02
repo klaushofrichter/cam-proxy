@@ -259,6 +259,7 @@ describe('POST /control/actions/camera-powercycle', () => {
     try {
       await configure(p.base);
       await until(() => p.proxy.intake.state().onvif === 'subscribed' && p.proxy.status.state().online);
+      const reset = vi.spyOn(p.proxy.recordings, 'reset');
       // The switch, read when asked (never polled).
       const read = await request(p.base).post('/control/actions/poe-switch-read').set(admin());
       expect(read.status).toBe(200);
@@ -271,6 +272,8 @@ describe('POST /control/actions/camera-powercycle', () => {
       expect(during.status).toBe(429);
       expect(during.body.detail).toMatch(/in progress/);
       expect(during.body.detail).not.toMatch(/less than 2 minutes ago/);
+      // The PoE-off went out: the recordings side was reset (its session would be dead).
+      expect(reset).toHaveBeenCalled();
       const r = await pending;
       expect(r.status).toBe(202);
       expect(r.body).toEqual({ offAt: expect.any(Number), onAt: expect.any(Number), watts: 6.8 });
