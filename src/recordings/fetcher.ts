@@ -14,6 +14,7 @@ import { finished } from 'stream/promises';
 import { BaichuanError, type BaichuanErrorCode } from '../camera/baichuan/errors';
 import type { RecordingCache } from './cache';
 import type { RecordingEntry } from './list';
+import { logger } from '../log';
 import { validId, type Stream } from './names';
 
 export type Priority = 'high' | 'low';
@@ -28,6 +29,9 @@ export interface FetcherDeps {
   noteWritten: (bytes: number) => void; // called after the rename to the final name
   onDone: (o: FetchOutcome) => void;
   now?: () => number;
+  // While caching: how long a client may stop reading before it is dropped
+  // (the cache keeps filling). Well below the download's 20 s stall.
+  clientStallMs?: number;
 }
 
 export const abortError = (why = 'aborted'): Error => Object.assign(new Error(why), { name: 'AbortError' });
@@ -59,12 +63,19 @@ const closed = (w: WriteStream) =>
 // TCP slows the camera down. A client that leaves is dropped and the cache
 // keeps filling; a cache file that fails is dropped and the client keeps
 // receiving. With neither left (disk paused, or the file failed, and the
-// client gone), the download is aborted.
+// client gone), the download is aborted. While caching, a client that stops
+// reading for clientStallMs is dropped (destroyed) so the cache copy survives
+// a paused <video>; without a cache file, the client paces the download.
 class Tee extends Writable {
   private client: { res: Writable; onStart: () => void; started: boolean } | null = null;
+  private readonly timers = new Set<NodeJS.Timeout>();
   fileFailed = false;
+  written = 0; // bytes passed on (to the file and/or the client)
 
-  constructor(private file: WriteStream | null) {
+  constructor(
+    private file: WriteStream | null,
+    private readonly clientStallMs: number,
+  ) {
     super({ highWaterMark: 1024 * 1024 });
     file?.on('error', () => {
       this.fileFailed = true;
@@ -72,13 +83,35 @@ class Tee extends Writable {
     });
   }
 
-  attach(res: Writable, onStart: () => void): void {
-    if (this.client || res.destroyed || res.writableEnded) return;
+  // Refused once a byte has gone through: a late client would get a body
+  // without its start, ended as if whole.
+  attach(res: Writable, onStart: () => void): boolean {
+    if (this.client || this.written > 0 || res.destroyed || res.writableEnded) return false;
     const c = { res, onStart, started: false };
     this.client = c;
     res.on('error', noop); // the response's own owner reports it; never an uncaught error here
     res.once('close', () => {
       if (this.client === c) this.client = null;
+    });
+    return true;
+  }
+
+  // The client's drain, raced against clientStallMs: on expiry the client is
+  // destroyed and dropped; the file's own backpressure still paces the camera.
+  private clientDrained(c: { res: Writable }): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const t = setTimeout(() => {
+        this.timers.delete(t);
+        if (this.client === c) this.client = null;
+        c.res.destroy();
+        resolve();
+      }, this.clientStallMs);
+      this.timers.add(t);
+      void drained(c.res).then(() => {
+        clearTimeout(t);
+        this.timers.delete(t);
+        resolve();
+      });
     });
   }
 
@@ -105,11 +138,12 @@ class Tee extends Writable {
     const c = this.live();
     const file = this.file;
     if (!file && !c) return cb(abortError('no reader left'));
+    this.written += chunk.length;
     const waits: Promise<void>[] = [];
     if (file && !file.write(chunk)) waits.push(drained(file));
     if (c) {
       this.start(c);
-      if (!c.res.write(chunk)) waits.push(drained(c.res));
+      if (!c.res.write(chunk)) waits.push(file ? this.clientDrained(c) : drained(c.res));
     }
     if (!waits.length) return cb();
     void Promise.all(waits).then(() => cb());
@@ -132,6 +166,12 @@ class Tee extends Writable {
     };
     file.once('error', done);
     file.end(() => done());
+  }
+
+  override _destroy(err: Error | null, cb: (err?: Error | null) => void): void {
+    for (const t of this.timers) clearTimeout(t);
+    this.timers.clear();
+    cb(err);
   }
 }
 
@@ -164,10 +204,14 @@ export class Fetch {
   }
 
   // The first client: it gets the file through the tee while it arrives.
-  attach(res: Writable, onStart: () => void): void {
-    if (this.live || this.state === 'done') return;
+  // False when refused (another client has it, a byte already went through,
+  // or the fetch is over): wait for `done`, then serve from the cache (or
+  // fetch again when `kept` is false).
+  attach(res: Writable, onStart: () => void): boolean {
+    if (this.live || this.state === 'done') return false;
+    if (this.tee && !this.tee.attach(res, onStart)) return false;
     this.live = { res, onStart };
-    this.tee?.attach(res, onStart);
+    return true;
   }
 
   begin(tee: Tee): void {
@@ -258,6 +302,15 @@ export class RecordingFetcher {
     });
   }
 
+  // A throwing listener must not turn a finished fetch into a second outcome.
+  private report(o: FetchOutcome): void {
+    try {
+      this.d.onDone(o);
+    } catch (err) {
+      logger.warn({ err: (err as Error).message, id: o.id }, 'recording_ondone_failed');
+    }
+  }
+
   // Whether the file can go into the cache: not paused, not over the cap, and
   // room beside the pinned files. makeRoom can free less than asked (pinned
   // files), so the room is checked again after it: never evict for nothing.
@@ -290,7 +343,7 @@ export class RecordingFetcher {
     } catch {
       file = null; // no cache for this one; the client still gets it
     }
-    const tee = new Tee(file);
+    const tee = new Tee(file, this.d.clientStallMs ?? 5_000);
     tee.on('error', noop); // reaches the download through its own listener
     f.begin(tee);
     let bytes = 0;
@@ -312,9 +365,10 @@ export class RecordingFetcher {
         }
       }
       this.byId.delete(entry.id);
-      this.d.onDone({ id: entry.id, at: this.now(), result: 'ok', stream: entry.stream, bytes, ms: this.now() - t0 });
+      this.report({ id: entry.id, at: this.now(), result: 'ok', stream: entry.stream, bytes, ms: this.now() - t0 });
       f.finish();
     } catch (err) {
+      bytes = tee.written;
       tee.abortClient();
       tee.destroy();
       if (file) {
@@ -328,7 +382,7 @@ export class RecordingFetcher {
       if (e.code === 'refused' && e.status === 400 && !(await this.d.stillListed(entry).catch(() => true))) {
         e = new BaichuanError('not_found', 'the camera no longer has the recording', 400);
       }
-      this.d.onDone({ id: entry.id, at: this.now(), result: e.code, stream: entry.stream, bytes, ms: this.now() - t0 });
+      this.report({ id: entry.id, at: this.now(), result: e.code, stream: entry.stream, bytes, ms: this.now() - t0 });
       f.finish(e);
     } finally {
       unpin();

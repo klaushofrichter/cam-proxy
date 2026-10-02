@@ -46,7 +46,7 @@ function downloader(files: Map<string, Buffer>, o: DlOptions) {
   return { download, calls, release: (path: string) => gates.get(path)?.(), fullWrites: () => fullWrites };
 }
 
-function setup(o: DlOptions & { cap?: number; paused?: boolean; listed?: boolean } = {}) {
+function setup(o: DlOptions & { cap?: number; paused?: boolean; listed?: boolean; clientStallMs?: number } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'camproxy-fetch-'));
   const cache = new RecordingCache({ dir: () => dir, capBytes: () => o.cap ?? 10_000_000 });
   cache.init();
@@ -60,7 +60,7 @@ function setup(o: DlOptions & { cap?: number; paused?: boolean; listed?: boolean
   const outcomes: FetchOutcome[] = [];
   const written: number[] = [];
   const state = { paused: o.paused ?? false, listed: o.listed ?? true };
-  const fetcher = new RecordingFetcher({ cache, download: dl.download, stillListed: async () => state.listed, paused: () => state.paused, noteWritten: (b) => written.push(b), onDone: (x) => outcomes.push(x) });
+  const fetcher = new RecordingFetcher({ cache, download: dl.download, stillListed: async () => state.listed, paused: () => state.paused, noteWritten: (b) => written.push(b), onDone: (x) => outcomes.push(x), clientStallMs: o.clientStallMs });
   return { dir, cache, files, add, dl, outcomes, written, fetcher };
 }
 function collector(highWaterMark = 1 << 20, delayMs = 0) {
@@ -373,5 +373,85 @@ describe('RecordingFetcher', () => {
     const bad = { ...entry(1, 10), id: '../escape.mp4' };
     expect(() => x.fetcher.get(bad, { priority: 'high' })).toThrow(/invalid recording id/);
     expect(x.dl.calls).toEqual([]);
+  });
+
+  // Review fixes (Task 10, round 1).
+  it('a late attach after the first byte is refused: the joiner waits for the cache copy', async () => {
+    const x = setup({ delayMs: 3 });
+    const e = x.add(1, 100_000);
+    const low = x.fetcher.get(e, { priority: 'low' }).fetch;
+    await sleep(15);
+    const joined = x.fetcher.get(e, { priority: 'high' });
+    expect(joined.created).toBe(false);
+    const c = collector();
+    let started = false;
+    expect(joined.fetch.attach(c.w, () => (started = true))).toBe(false);
+    await low.done;
+    expect(started).toBe(false);
+    expect(c.bytes().length).toBe(0);
+    expect(c.w.writableEnded).toBe(false);
+    expect(low.kept).toBe(true);
+    expect(readFileSync(x.cache.path(e.id))).toEqual(x.files.get(e.path));
+  });
+
+  const stuck = () => {
+    let got = 0;
+    const w = new Writable({ highWaterMark: 1024, write(c: Buffer, _e, _cb) { got += c.length; } }); // never drains
+    return { w, got: () => got };
+  };
+
+  it('caching: a client that stops reading is dropped after the client timeout, the cache copy completes', async () => {
+    const x = setup({ delayMs: 1, clientStallMs: 50 });
+    const e = x.add(1, 100_000);
+    const { fetch } = x.fetcher.get(e, { priority: 'high' });
+    const c = stuck();
+    expect(fetch.attach(c.w, () => undefined)).toBe(true);
+    await fetch.done;
+    expect(c.w.destroyed).toBe(true);
+    expect(c.w.writableEnded).toBe(false);
+    expect(c.got()).toBeLessThan(100_000);
+    expect(readFileSync(x.cache.path(e.id))).toEqual(x.files.get(e.path));
+    expect(x.outcomes).toMatchObject([{ result: 'ok', bytes: e.size }]);
+  });
+
+  it('not caching: a client that stops reading still holds the download (no client timeout)', async () => {
+    const x = setup({ paused: true, delayMs: 1, clientStallMs: 20 });
+    const e = x.add(1, 100_000);
+    const { fetch } = x.fetcher.get(e, { priority: 'high' });
+    const c = stuck();
+    fetch.attach(c.w, () => undefined);
+    await sleep(150);
+    expect(c.w.destroyed).toBe(false);
+    expect(fetch.state).toBe('running');
+    c.w.destroy();
+    await expect(fetch.done).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('a failure reports the bytes that went through', async () => {
+    const x = setup();
+    const e = x.add(1, 100_000);
+    x.files.set(e.path, x.files.get(e.path)!.subarray(0, 30_000));
+    const outcomes: FetchOutcome[] = [];
+    const short = async (path: string, size: number, out: Writable) => {
+      await x.dl.download(path, size, out);
+      throw new BaichuanError('timeout', 'the download stalled');
+    };
+    const fetcher = new RecordingFetcher({ cache: x.cache, download: short, stillListed: async () => true, paused: () => false, noteWritten: () => undefined, onDone: (o) => outcomes.push(o) });
+    await expect(fetcher.get(e, { priority: 'high' }).fetch.done).rejects.toMatchObject({ code: 'timeout' });
+    expect(outcomes).toMatchObject([{ result: 'timeout', bytes: 30_000 }]);
+  });
+
+  it('a throwing onDone: one outcome, done still resolves', async () => {
+    const x = setup();
+    const e = x.add(1);
+    let calls = 0;
+    const fetcher = new RecordingFetcher({ cache: x.cache, download: x.dl.download, stillListed: async () => true, paused: () => false, noteWritten: () => undefined, onDone: () => {
+      calls++;
+      throw new Error('boom');
+    } });
+    const { fetch } = fetcher.get(e, { priority: 'high' });
+    await fetch.done;
+    expect(calls).toBe(1);
+    expect(fetch.kept).toBe(true);
   });
 });
