@@ -78,7 +78,8 @@
     "passive": "30000-30009",
     "user": "camera",
     "tls": true,
-    "stream": "main"
+    "stream": "main",
+    "stalledHours": 6
   },
   "analytics": {
     "kinds": {

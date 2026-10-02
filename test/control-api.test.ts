@@ -73,7 +73,7 @@ describe('control API: status, stats, config', () => {
     expect(r.body.version).toBeTruthy();
     // The camera's own web page: https://<host without port>/ unless set.
     expect(r.body.camera.webUiUrl).toBe('https://127.0.0.1/');
-    expect(r.body.ftp).toEqual({ enabled: false, listening: false, port: 2121, tls: true, publicHost: null, passwordSet: false, lastUpload: null, lastClip: null, clips: 0, failures: 0 });
+    expect(r.body.ftp).toEqual({ enabled: false, listening: false, port: 2121, tls: true, publicHost: null, passwordSet: false, lastUpload: null, lastClip: null, clips: 0, failures: 0, camera: null, stalled: null });
   });
 
   it('reports disk, events, the stream log and the storage budget', async () => {

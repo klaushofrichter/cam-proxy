@@ -19,6 +19,8 @@ const ALL_HOURS = '1'.repeat(7 * 24);
 // Uploads follow motion and the AI detections; timed recordings stay off.
 const UPLOAD_ON = ['MD', 'AI_PEOPLE', 'AI_VEHICLE', 'AI_DOG_CAT'];
 
+export type { FtpObject };
+
 async function read(client: ReolinkClient): Promise<FtpObject> {
   const v = await client.command<{ Ftp?: FtpObject }>('GetFtpV20', { channel: 0 });
   if (!v?.Ftp || typeof v.Ftp !== 'object') throw new CameraError('camera_error', 'GetFtpV20 returned no Ftp object');
@@ -54,6 +56,11 @@ export function redact(ftp: FtpObject): FtpObject {
     .filter(([, v]) => v.includes('1'))
     .map(([k]) => k);
   return { ...rest, uploadOn: on };
+}
+
+// The camera's FTP settings now, without the password (the #93 check).
+export async function readCameraFtp(client: ReolinkClient): Promise<FtpObject> {
+  return redact(await read(client));
 }
 
 export async function setupCameraFtp(client: ReolinkClient, t: FtpTarget): Promise<FtpObject> {
