@@ -243,4 +243,27 @@ describe('storage: audit', () => {
     expect(run.deleted.audit).toBe(2);
     expect(s.usage().audit.files).toBe(1);
   });
+
+  // #78: the budget never deletes audit days, even when it can't be met; a dry run deletes nothing.
+  it('never deletes audit days for the budget; a dry run reports the sweep and deletes nothing', () => {
+    const x = setup((c) => (c.storage.keepHours = { stills: 0, clips: 0, previews: 0 }));
+    const auditDir = join(x.dir, 'audit');
+    const audit = new AuditLog({ dir: auditDir, version: 't', camera: () => 'cam1', now: () => NOW });
+    mkdirSync(auditDir, { recursive: true });
+    const days = [NOW - 200 * DAY, NOW - 2 * DAY, NOW - DAY, NOW].map((t) => `${new Date(t).toISOString().slice(0, 10)}.jsonl`);
+    for (const d of days) writeFileSync(join(auditDir, d), 'x'.repeat(5000) + '\n');
+    x.config.retention.auditDays = 90;
+    const s = new Storage({ catalog: x.catalog, log: x.log, config: () => x.config, now: () => NOW, statfs: () => x.fs, audit });
+    for (let h = 0; h < 3; h++) x.put('stills', NOW - h * HOUR, 1000);
+    s.recount();
+    delete x.config.storage.maxPercent;
+    x.config.storage.maxBytes = x.catalog.sizeBytes() + 1000; // far below the audit folder alone
+    const dry = s.run({ dryRun: true });
+    expect(dry.deleted.audit).toBe(1);
+    expect(readdirSync(auditDir).sort()).toEqual([...days].sort());
+    const real = s.run({});
+    expect(real.deleted.audit).toBe(1); // the day past auditDays, nothing for the budget
+    expect(readdirSync(auditDir).sort()).toEqual(days.slice(1).sort());
+    expect(real.deleted.stills).toBe(2); // the budget took what it may (the current minute stays)
+  });
 });

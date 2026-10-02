@@ -16,9 +16,9 @@ storage and activity snapshot. Design: [the spec](superpowers/specs/2026-10-01-a
 | `login-link-issued` | authentication / creation | `POST /control/login-links` (cams mints a link) | |
 | `auth-refused` | authentication / denied | a request the auth layer answered with 401 or 403 | `auth.tokenKind` (`none`, `invalid`, `client`, `admin`, `audit`, `session`), `auth.reason` (`no-token`, `wrong-token`, `admin-only`, `csrf`), `auth.suppressed`; ECS `http.request.method` and `url.path` |
 | `control-action` | configuration / change | `POST /control/actions/:name` except `restart` and a retention dry run | `action`, `result` (`ok`, the error code or status, or `aborted`), `requestedBy` |
-| `config-change` | configuration / change | `PUT /control/config`, reset of an override | `changes`: `[{key, from, to}]`, secrets redacted. A refused change (400) writes nothing |
+| `config-change` | configuration / change | `PUT /control/config`, reset of an override | `changes`: `[{key, from, to, restart?}]`, secrets redacted; `restart` is `restart` for a setting that waits for a restart, `process` for one that waits for a new process, and missing for a live one. A refused change (400) writes nothing |
 | `secret-override` | configuration / change | `PUT /control/secrets/google-vision-key` (the Settings page's key field) | `secret` (`CAMPROXY_GOOGLE_VISION_KEY`), `masked` (first and last four characters, `AIza…wXyZ`), `replaced` (`env`, `manual` or `none`). Never the key. A refused key (400) writes nothing |
-| `storage-daily` | host / info | once per camera day, 00:05 camera time | `day`, `size`, `free`, `budget`, `used`, `daysUntilFull`, `kinds`, `clipRows` |
+| `storage-daily` | host / info | once per camera day, 00:05 camera time | `day`, `size`, `free`, `budget`, `used`, `daysUntilFull` (null when not growing), `kinds` (each `{bytes, files, oldest, newest, growthPerDay}`; the audit folder's growth is its last 7 whole UTC days per calendar day), `clipRows` |
 | `activity-daily` | host / info | once per camera day, 00:05 camera time | `day`, `forDay`, `events`, `clips`, `analytics`, `stream` |
 | `audit-throttled` | host / info | a day's file reached 50 MB | none |
 
@@ -104,17 +104,17 @@ Daily records (the storage record; the activity record has the same shape
 with its own details):
 
 ```json
-{"@timestamp":"2026-10-02T00:05:00.020Z","ecs":{"version":"8.11.0"},
+{"@timestamp":"2026-10-02T05:05:00.020Z","ecs":{"version":"8.11.0"},
  "event":{"kind":"event","category":["host"],"type":["info"],"action":"storage-daily","outcome":"success","dataset":"cam-proxy.audit"},
  "service":{"name":"cam-proxy","version":"2026.10.01.1"},"host":{"name":"cam-proxy"},"labels":{"camera":"cam1"},
  "user":{"name":"system"},
- "message":"Storage: 82.4 GB used of 150.0 GB budget, 41,230 stills, 1,312 clips, 214 days until full",
- "cam_proxy":{"day":"2026-10-02","size":229000000000,"free":98000000000,"budget":150000000000,"used":82400000000,"daysUntilFull":214,
-  "kinds":{"stills":{"bytes":30000000000,"files":41230,"oldest":1759276800000,"newest":1759363200000,"growthPerDay":4200000000},"previews":{"bytes":9000000000,"files":3100,"oldest":1759276800000,"newest":1759363200000,"growthPerDay":600000000},"clips":{"bytes":42000000000,"files":1312,"oldest":1759276800000,"newest":1759363200000,"growthPerDay":2900000000},"catalog":{"bytes":380000000,"files":1,"oldest":1759276800000,"newest":1759363200000,"growthPerDay":12000000},"audit":{"bytes":2100000,"files":7,"oldest":1759276800000,"newest":1759363200000,"growthPerDay":300000}},"clipRows":1312}}
+ "message":"Storage: 82.4 GB used of 150.0 GB budget, 10,080 stills, 1,312 clips, 214 days until full",
+ "cam_proxy":{"day":"2026-10-02","size":229000000000,"free":98000000000,"budget":150000000000,"used":82382100000,"daysUntilFull":214.46,
+  "kinds":{"stills":{"bytes":31000000000,"files":10080,"oldest":1790294400000,"newest":1790917440000,"growthPerDay":180000000},"previews":{"bytes":9000000000,"files":40320,"oldest":1789689600000,"newest":1790917440000,"growthPerDay":25000000},"clips":{"bytes":42000000000,"files":1312,"oldest":1790294400000,"newest":1790916060000,"growthPerDay":110000000},"catalog":{"bytes":380000000,"files":1,"oldest":null,"newest":1790917500000,"growthPerDay":0},"audit":{"bytes":2100000,"files":7,"oldest":1790380800000,"newest":1790899200000,"growthPerDay":300000}},"clipRows":1312}}
 ```
 
 ```json
-{"@timestamp":"2026-10-02T00:05:00.031Z","ecs":{"version":"8.11.0"},
+{"@timestamp":"2026-10-02T05:05:00.031Z","ecs":{"version":"8.11.0"},
  "event":{"kind":"event","category":["host"],"type":["info"],"action":"activity-daily","outcome":"success","dataset":"cam-proxy.audit"},
  "service":{"name":"cam-proxy","version":"2026.10.01.1"},"host":{"name":"cam-proxy"},"labels":{"camera":"cam1"},
  "user":{"name":"system"},
@@ -123,7 +123,11 @@ with its own details):
   "analytics":{"vision":{"day":9,"monthToDate":84,"monthlyLimit":500},"analyses":{"ok":9}},"stream":{"clients":1}}}
 ```
 
-(The numbers above are illustrative.)
+(The numbers above are illustrative; the camera is in Chicago, so 00:05
+camera time is 05:05 UTC. `used` is the sum of the kinds' bytes, and
+`daysUntilFull` is the budget left divided by the kinds' summed
+`growthPerDay`.) Past 365 days the message says `more than a year until full`
+instead of the number; `daysUntilFull` keeps the number.
 
 ### Daily records in detail
 
@@ -190,7 +194,8 @@ per line.
 - **Access:** the admin token (bearer), an admin UI session, or
   `CAMPROXY_AUDIT_TOKEN`. The audit token reads this route only: on any
   other route it answers 403 `admin_only` (or 401 on the client API), so an
-  answer never tells which kind of token matched. The client token gets 403 `admin_only`. HEAD is not supported.
+  answer never tells which kind of token matched. The client token gets 403 `admin_only`. HEAD answers like GET, without
+  the body.
   A token in the URL is refused.
 - **Parameters:**
 

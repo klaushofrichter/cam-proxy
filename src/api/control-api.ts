@@ -3,7 +3,7 @@ import { rateLimit } from 'express-rate-limit';
 import type { Catalog } from '../catalog/db';
 import type { CameraState } from '../camera/status';
 import type { Config } from '../config/defaults';
-import { applyOverrides, ConfigError, needsRestart, removeOverride, type Loaded } from '../config/load';
+import { applyOverrides, ConfigError, needsProcessRestart, needsRestart, removeOverride, type Loaded } from '../config/load';
 import { leafPaths } from '../config/schema';
 import type { FtpTarget } from '../clips/camera-ftp';
 import type { IntakeState } from '../events/intake';
@@ -239,7 +239,10 @@ export function controlApi(d: ControlDeps): express.Router {
   // (400) writes nothing.
   const recordChanges = (req: express.Request, before: Config) => {
     const after = d.loaded().config;
-    const changes = leafPaths().map((p) => ({ key: p, from: get(before, p), to: get(after, p) })).filter((c) => JSON.stringify(c.from) !== JSON.stringify(c.to));
+    // `restart`: the change waits for a restart ('restart'), or for a new process ('process').
+    const changes = leafPaths()
+      .map((p) => ({ key: p, from: get(before, p), to: get(after, p), ...(needsProcessRestart(p) ? { restart: 'process' } : needsRestart(p) ? { restart: 'restart' } : {}) }))
+      .filter((c) => JSON.stringify(c.from) !== JSON.stringify(c.to));
     if (changes.length) d.audit.write({ action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', user: 'admin', ip: clientIp(req), userAgent: req.get('user-agent'), message: `Settings changed: ${changes.map((c) => c.key).join(', ')}`, details: { changes } });
   };
   r.put('/config', (req, res) => {
