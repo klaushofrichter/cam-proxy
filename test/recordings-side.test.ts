@@ -6,6 +6,7 @@ import { tmpdir } from 'os';
 import { basename, join } from 'path';
 import { Writable } from 'stream';
 import { logBuffer } from '../src/log';
+import { createRecordingsSide } from '../src/recordings/side';
 import { startSim } from './helpers/sim';
 import { ADMIN_TOKEN, auth, freePort, startProxy, until } from './helpers/proxy';
 
@@ -180,7 +181,6 @@ describe('a camera reboot', () => {
 
 describe('reset() after a camera.id change (#99, Task 11)', () => {
   it('prepares the new camera folder: created, its leftover .part files deleted', async () => {
-    const { createRecordingsSide } = await import('../src/recordings/side');
     const dataDir = mkdtempSync(join(tmpdir(), 'camproxy-reset-'));
     let cam = 'cam1';
     const side = createRecordingsSide({
