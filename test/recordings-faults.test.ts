@@ -1,7 +1,12 @@
 // test/recordings-faults.test.ts
 // Every cam-sim Baichuan fault through the proxy (spec "Integration").
-// Each test takes recordings no earlier test fetched.
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+// Each test has its own sim, proxy and cache (beforeEach), so the order does
+// not matter and no state (session, 15 s login guard, counters) leaks.
+// Also covered elsewhere: 503 camera_offline, 404 unknown_recording and the
+// HTTP Download refused case (downloads.refuse, Baichuan works) are in
+// recordings-api.test.ts; the offline and unknown-id cases are repeated here
+// as one line each.
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import http from 'http';
 import net from 'net';
 import request from 'supertest';
@@ -16,7 +21,6 @@ type SimFile = { name: string; size: number };
 let files: SimFile[];
 let next = 0;
 const fresh = () => files[next++];
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const faults = () => sim.sim.engine.faults;
 const counters = () => sim.sim.engine.counters;
 const cacheDir = () => join(p.dir, 'data', 'recordings', 'cam1');
@@ -46,23 +50,40 @@ function grab(path: string, o: { abortAfterBytes?: number } = {}): Promise<{ sta
 const fileUrl = (f: SimFile) => `/api/cameras/cam1/recordings/${basename(f.name)}`;
 const lastResult = async () => (await request(p.base).get('/control/status').set(auth(ADMIN_TOKEN))).body.recordings.last?.result;
 
-beforeAll(async () => {
+beforeEach(async () => {
+  next = 0;
   sim = await startSim();
   p = await startProxy(sim);
   await until(() => p.proxy.status.state().online, 15_000);
   // Main files first: the largest, for the faults that need a transfer in flight.
   const recs = sim.sim.engine.sd.all().filter((r) => r.end !== null) as { files: { sub: SimFile; main: SimFile } }[];
   files = [...recs.map((r) => r.files.main), ...recs.map((r) => r.files.sub)];
-  expect(files.length).toBeGreaterThanOrEqual(10); // 7 fresh ones, plus the last two
+  expect(files.length).toBeGreaterThanOrEqual(10);
 }, 30_000);
-afterAll(async () => {
+afterEach(async () => {
   await p.proxy.stop();
   await sim.close();
 });
 
+// The side effects of a failed or cut download: nothing of it in the cache,
+// nothing pinned.
+const noTrace = (f: SimFile) => {
+  const id = basename(f.name);
+  expect(existsSync(cacheDir()) ? readdirSync(cacheDir()).filter((n) => n.startsWith(id)) : []).toEqual([]);
+  expect(p.proxy.recordings.cache.has(id)).toBe(false);
+  expect(p.proxy.recordings.cache.busy(p.proxy.recordings.cache.partPath(id))).toBe(false);
+};
+const refusedCount = async () => Number(/result="refused"} (\d+)/.exec((await request(p.base).get('/metrics')).text)?.[1] ?? 0);
+const okWhole = async (f: SimFile) => {
+  const r = await grab(fileUrl(f));
+  expect([r.status, r.complete, r.body.length]).toEqual([200, true, f.size]);
+  return r;
+};
+
 describe('Baichuan faults through the proxy', () => {
   it('baichuan.refuse: 502 refused (the camera still lists it); the status and the counter say so', async () => {
-    const f = files[files.length - 1]; // not fetched here; a later test may still use it
+    const f = fresh();
+    const before = await refusedCount();
     faults().set({ name: 'baichuan.refuse' });
     try {
       const r = await request(p.base).get(fileUrl(f)).set(auth());
@@ -70,29 +91,31 @@ describe('Baichuan faults through the proxy', () => {
       expect(r.body).toMatchObject({ error: 'recordings_unavailable', reason: 'refused' });
       expect(r.body.detail).not.toContain('/mnt/');
       expect(await lastResult()).toBe('refused');
-      expect((await request(p.base).get('/metrics')).text).toContain('result="refused"} 1');
+      expect(await refusedCount()).toBe(before + 1);
+      noTrace(f);
     } finally {
       faults().clear('baichuan.refuse');
     }
+    await okWhole(f);
   });
 
-  it('baichuan.dropMidway: the body ends short, nothing stays in the cache; the next request works', async () => {
+  it('baichuan.dropMidway: 200 then the body ends short, nothing stays in the cache; the next request works', async () => {
     const f = fresh();
     faults().set({ name: 'baichuan.dropMidway' });
     const r = await grab(fileUrl(f)).finally(() => faults().clear('baichuan.dropMidway'));
+    expect(r.status).toBe(200);
     expect(r.complete).toBe(false);
     expect(r.body.length).toBeLessThan(f.size);
-    expect(readdirSync(cacheDir()).filter((n) => n.startsWith(basename(f.name)))).toEqual([]);
-    const ok = await grab(fileUrl(f));
-    expect([ok.status, ok.complete, ok.body.length]).toEqual([200, true, f.size]);
+    expect(counters().droppedBaichuanDownloads).toBeGreaterThanOrEqual(1);
+    noTrace(f);
+    await okWhole(f);
   });
 
   it('baichuan.delayMs: a slow transfer completes', async () => {
     const f = files[files.length - 2]; // a sub file
     faults().set({ name: 'baichuan.delayMs', ms: 10 });
     try {
-      const r = await grab(fileUrl(f));
-      expect([r.status, r.complete, r.body.length]).toEqual([200, true, f.size]);
+      await okWhole(f);
     } finally {
       faults().clear('baichuan.delayMs');
     }
@@ -100,37 +123,37 @@ describe('Baichuan faults through the proxy', () => {
 
   it('pushes right after login do not disturb a download', async () => {
     p.proxy.recordings.session.close();
-    const f = fresh();
-    const r = await grab(fileUrl(f));
-    expect([r.status, r.complete, r.body.length]).toEqual([200, true, f.size]);
+    const r = await okWhole(fresh());
     expect(r.body.subarray(4, 8).toString()).toBe('ftyp');
   });
 
   it('an abort mid-transfer (disk paused, client gone) sends cmd 9; stale chunks are dropped and the next download on the same session is whole', async () => {
     const big = fresh();
     const after = fresh();
+    await okWhole(fresh()); // a session is open, with a known login count
+    const logins = counters().baichuanLogins;
     p.proxy.running.storage.minFreeBytes = Number.MAX_SAFE_INTEGER;
     p.proxy.storage.check();
     faults().set({ name: 'baichuan.delayMs', ms: 20 });
     try {
       const cut = await grab(fileUrl(big), { abortAfterBytes: 1 });
       expect(cut.complete).toBe(false);
-      await sleep(300); // the abort reaches the camera, chunks still in flight arrive
+      // The fetch ends once the abort is sent; chunks still in flight arrive after.
+      await until(() => !p.proxy.recordings.cache.busy(p.proxy.recordings.cache.partPath(basename(big.name))));
     } finally {
       faults().clear('baichuan.delayMs');
       p.proxy.running.storage.minFreeBytes = 0;
       p.proxy.storage.check();
     }
-    const logins = counters().baichuanLogins;
-    const r = await grab(fileUrl(after));
-    expect([r.status, r.complete, r.body.length]).toEqual([200, true, after.size]);
+    noTrace(big);
+    await okWhole(after);
     expect(counters().baichuanLogins).toBe(logins); // the same session
-    expect(existsSync(join(cacheDir(), basename(big.name)))).toBe(false);
+    noTrace(big);
   });
 
   it('a session the camera closed while idle (its 32 s drop) is replaced at the next request', async () => {
-    await grab(fileUrl(files[files.length - 2])); // cached: no session needed, but make sure one is open
-    if (!p.proxy.recordings.session.connected()) await p.proxy.recordings.session.ensure();
+    await okWhole(fresh());
+    expect(p.proxy.recordings.session.connected()).toBe(true);
     const logins = counters().baichuanLogins;
     faults().set({ name: 'offline' }); // drops the Baichuan connections
     try {
@@ -138,48 +161,77 @@ describe('Baichuan faults through the proxy', () => {
     } finally {
       faults().clear('offline');
     }
-    const f = fresh();
-    const r = await grab(fileUrl(f));
-    expect([r.status, r.complete, r.body.length]).toEqual([200, true, f.size]);
+    await okWhole(fresh());
     expect(counters().baichuanLogins).toBe(logins + 1);
   });
 
   it('baichuan.sessionLimit: a connection over the limit is reset at its first message: 502 refused; it works once one closes', async () => {
-    p.proxy.recordings.session.close();
-    await until(() => counters().baichuanSessions === 0);
     faults().set({ name: 'baichuan.sessionLimit', max: 1 });
     const hold = net.connect({ host: '127.0.0.1', port: sim.camera.baichuanPort });
     await new Promise((r) => hold.once('connect', r));
+    // The sim counts logged-in sessions only, so the held connection can't be polled:
+    // two loop turns let the sim accept it, and the HTTP round trip below adds many more.
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
     const f = fresh();
     try {
-      await sleep(50);
       const r = await request(p.base).get(fileUrl(f)).set(auth());
       expect(r.status).toBe(502);
       expect(r.body.reason).toBe('refused');
+      noTrace(f);
     } finally {
       hold.destroy();
       faults().clear('baichuan.sessionLimit');
     }
-    await sleep(100);
-    const ok = await grab(fileUrl(f));
-    expect([ok.status, ok.complete]).toEqual([200, true]);
+    // The sim notices the closed connection a moment later: poll the outcome.
+    await until(async () => (await request(p.base).get(fileUrl(f)).set(auth())).status === 200);
+    await okWhole(f);
   });
 
-  // Last: after a rejected login the session waits 15 s before the next attempt.
   it('baichuan.loginFail: 502 auth; within 15 s the next request fails fast without another login', async () => {
-    p.proxy.recordings.session.close();
     faults().set({ name: 'baichuan.loginFail', count: 1 }); // only the first login is rejected
     const f = fresh();
     try {
       const a = await request(p.base).get(fileUrl(f)).set(auth());
       expect([a.status, a.body.reason]).toEqual([502, 'auth']);
+      noTrace(f);
+      const logins = counters().baichuanLogins;
       const t0 = Date.now();
       const b = await request(p.base).get(fileUrl(f)).set(auth());
       expect([b.status, b.body.reason]).toEqual([502, 'auth']); // the camera would accept it now: the guard answered
       expect(Date.now() - t0).toBeLessThan(2000);
+      expect(counters().baichuanLogins).toBe(logins);
       expect(await lastResult()).toBe('auth');
+      noTrace(f);
     } finally {
       faults().clear('baichuan.loginFail');
+    }
+  });
+
+  it('camera offline: 503 camera_offline, nothing cached; it works when the camera is back', async () => {
+    const f = fresh();
+    faults().set({ name: 'offline' });
+    try {
+      const r = await request(p.base).get(fileUrl(f)).set(auth());
+      expect([r.status, r.body]).toEqual([503, { error: 'camera_offline' }]);
+      noTrace(f);
+    } finally {
+      faults().clear('offline');
+    }
+    await okWhole(f);
+  });
+
+  it('an id the camera does not list: 404 unknown_recording', async () => {
+    const r = await request(p.base).get('/api/cameras/cam1/recordings/RecS00_20200101_000000_000100_0_ABCDEF_1000.mp4').set(auth());
+    expect([r.status, r.body]).toEqual([404, { error: 'unknown_recording' }]);
+  });
+
+  it('downloads.refuse (the HTTP Download is refused): Baichuan still delivers', async () => {
+    faults().set({ name: 'downloads.refuse' });
+    try {
+      await okWhole(fresh());
+    } finally {
+      faults().clear('downloads.refuse');
     }
   });
 });

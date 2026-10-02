@@ -367,10 +367,10 @@ describe('RecordingFetcher', () => {
     const { fetch } = fetcher.get(e, { priority: 'high' });
     const c = collector();
     let partAtClose: boolean | null = null;
-    c.w.on('close', () => (partAtClose = existsSync(x.cache.partPath(e.id))));
+    const closedAt = new Promise<void>((r) => c.w.on('close', () => { partAtClose = existsSync(x.cache.partPath(e.id)); r(); }));
     fetch.attach(c.w, () => undefined);
     await expect(fetch.done).rejects.toMatchObject({ code: 'offline' });
-    await sleep(20);
+    await closedAt;
     expect(partAtClose).toBe(false);
   });
 
