@@ -102,11 +102,12 @@ describe('GET /recordings?date=', () => {
   it('checks the query: YYYY-MM-DD, a real date, not with from/to, stream required', async () => {
     const T = Date.now();
     const get = (q: string) => request(p.base).get(`/api/cameras/cam1/recordings${q}`).set(auth());
-    for (const q of ['?date=2026-1-05&stream=sub', '?date=2026-02-30&stream=sub', '?date=20261005&stream=sub', '?date=2026-10-05', `?date=2026-10-05&from=${T}&to=${T + 1}&stream=sub`, `?date=2026-10-05&from=${T}&stream=sub`, `?date=2026-10-05&to=${T}&stream=sub`]) {
+    for (const q of ['?date=1999-12-31&stream=sub', '?date=2100-01-01&stream=sub', '?date=0000-01-01&stream=sub', '?date=2026-1-05&stream=sub', '?date=2026-02-30&stream=sub', '?date=20261005&stream=sub', '?date=2026-10-05', `?date=2026-10-05&from=${T}&to=${T + 1}&stream=sub`, `?date=2026-10-05&from=${T}&stream=sub`, `?date=2026-10-05&to=${T}&stream=sub`]) {
       const r = await get(q);
       expect(r.status, q).toBe(400);
       expect(r.body.error).toBe('invalid');
     }
+    for (const d of ['2000-01-01', '2099-12-31']) expect((await get(`?date=${d}&stream=sub`)).status, d).toBe(200);
   });
 });
 

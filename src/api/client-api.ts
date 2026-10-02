@@ -24,8 +24,9 @@ export interface StillsSide { go2rtc: Go2rtc; grabber: FrameGrabber; store: Minu
 const DAY = 86_400_000;
 
 const bad = (res: Response, detail: string) => void res.status(400).json({ error: 'invalid', detail });
-// A calendar date, YYYY-MM-DD (2026-02-30 is not one).
-const validDate = (v: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(`${v}T00:00:00Z`)) && new Date(`${v}T00:00:00Z`).toISOString().slice(0, 10) === v;
+// A calendar date, YYYY-MM-DD (2026-02-30 is not one), in the years 2000 to
+// 2099 (the camera's clock range; nothing else reaches a Search).
+const validDate = (v: string): boolean => /^20\d{2}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(`${v}T00:00:00Z`)) && new Date(`${v}T00:00:00Z`).toISOString().slice(0, 10) === v;
 const intParam = (v: unknown): number | undefined | null => (v === undefined ? undefined : typeof v === 'string' && /^\d{1,15}$/.test(v) ? Number(v) : null);
 
 export const eventJson = (e: EventRow) => ({ id: e.id, kind: e.kind, source: e.source, start: e.start_ts, end: e.end_ts, endReason: e.end_reason });

@@ -131,7 +131,7 @@ paths:
         - { name: cam, in: path, required: true, schema: { type: string } }
         - { name: from, in: query, schema: { type: integer }, description: 'unix ms; with to, unless date is given' }
         - { name: to, in: query, schema: { type: integer }, description: 'unix ms; with from, unless date is given' }
-        - { name: date, in: query, schema: { type: string }, description: 'YYYY-MM-DD, a camera-local day: its recordings and the one from the day before that runs past midnight into it. Not with from/to' }
+        - { name: date, in: query, schema: { type: string }, description: 'YYYY-MM-DD (years 2000 to 2099), a camera-local day: its recordings and the one from the day before that runs past midnight into it. Not with from/to' }
         - { name: stream, in: query, required: true, schema: { type: string, enum: [sub, main] } }
       responses:
         '200': { description: '[{id (the camera file name), start, end (unix ms), stream, size (bytes), kinds (person, vehicle, pet, motion), clipId (the FTP copy: same stream, start within 5 s; or null)}], the same shape for from/to and date; from/to lists the recordings that overlap the range; recordings still being written are left out' }
