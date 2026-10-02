@@ -5,7 +5,7 @@ import { join } from 'path';
 import { AuditLog, type AuditRecord } from '../src/audit/audit-log';
 import { openCatalog, type Catalog } from '../src/catalog/db';
 import { insertEvent } from '../src/catalog/events';
-import { insertClip } from '../src/catalog/clips';
+import { deleteClip, insertClip, lastClipReceived } from '../src/catalog/clips';
 import { CameraFtpWatch, classifyFtp, clipsStalled, STALL_GRACE_MS } from '../src/clips/ftp-health';
 import { activityDaily } from '../src/audit/daily';
 
@@ -35,12 +35,26 @@ describe('classifyFtp', () => {
     expect(classifyFtp(camFtp({ enable: 0 }), TARGET)).toMatchObject({ state: 'off', enable: false, mismatch: [] });
   });
   it('another server, port or user: elsewhere, naming the fields', () => {
-    expect(classifyFtp(camFtp({ server: 'nas.local' }), TARGET)).toMatchObject({ state: 'elsewhere', mismatch: ['server'] });
     expect(classifyFtp(camFtp({ port: 21, userName: 'other' }), TARGET)).toMatchObject({ state: 'elsewhere', mismatch: ['port', 'user'] });
   });
-  it('off wins over elsewhere; an empty server (never set up) is off', () => {
+  it('off wins over elsewhere', () => {
     expect(classifyFtp(camFtp({ enable: 0, server: 'nas.local' }), TARGET)).toMatchObject({ state: 'off', mismatch: ['server'] });
-    expect(classifyFtp(camFtp({ enable: 0, server: '', port: 21, userName: '' }), TARGET)).toMatchObject({ state: 'off' });
+  });
+  // Review of #94: a fresh or reset camera (cam2's sim starts so) is not an alarm.
+  it('no server and never a clip: not_set_up; no server but clips before: off', () => {
+    const fresh = camFtp({ enable: 0, server: '', port: 21, userName: '' });
+    expect(classifyFtp(fresh, TARGET, { clipsBefore: false })).toMatchObject({ state: 'not_set_up', enable: false });
+    expect(classifyFtp({ ...fresh, server: '  ' }, TARGET, { clipsBefore: false })).toMatchObject({ state: 'not_set_up' });
+    expect(classifyFtp(fresh, TARGET, { clipsBefore: true })).toMatchObject({ state: 'off' });
+    // A server set and enable 0: off (was on, now off), clips or not.
+    expect(classifyFtp(camFtp({ enable: 0 }), TARGET, { clipsBefore: false })).toMatchObject({ state: 'off' });
+  });
+  it('the server is compared trimmed and in lower case', () => {
+    expect(classifyFtp(camFtp({ server: ' Cam-Proxy.LOCAL ' }), { ...TARGET, server: 'cam-proxy.local' })).toMatchObject({ state: 'on', mismatch: [] });
+  });
+  it('only the server differs (port and user match): server_differs, a warning, not elsewhere', () => {
+    expect(classifyFtp(camFtp({ server: 'nas.local' }), TARGET)).toMatchObject({ state: 'server_differs', mismatch: ['server'] });
+    expect(classifyFtp(camFtp({ server: 'nas.local', port: 21 }), TARGET)).toMatchObject({ state: 'elsewhere', mismatch: ['server', 'port'] });
   });
   it('without ftp.publicHost the server is not compared', () => {
     expect(classifyFtp(camFtp({ server: 'anything' }), { ...TARGET, server: '' })).toMatchObject({ state: 'on', mismatch: [] });
@@ -51,7 +65,7 @@ describe('classifyFtp', () => {
 });
 
 describe('CameraFtpWatch', () => {
-  function make(over: { active?: () => boolean; dir?: string } = {}) {
+  function make(over: { active?: () => boolean; dir?: string; clipsBefore?: () => boolean } = {}) {
     const now = { t: Date.UTC(2026, 9, 1, 21, 0, 0) };
     const dir = over.dir ?? tmp('ftp-audit-');
     const audit = new AuditLog({ dir, version: 'test', camera: () => 'cam1', now: () => now.t, host: 'h' });
@@ -66,6 +80,7 @@ describe('CameraFtpWatch', () => {
       target: () => TARGET,
       audit,
       active: over.active ?? (() => true),
+      clipsBefore: over.clipsBefore,
       now: () => now.t,
     });
     return { now, dir, audit, watch, set: (a: Record<string, unknown> | Error) => (answer = a), reads: () => reads };
@@ -98,10 +113,35 @@ describe('CameraFtpWatch', () => {
   it('points elsewhere: a record naming the fields', async () => {
     const { watch, set, dir } = make();
     await watch.checkNow();
-    set(camFtp({ server: 'nas.local' }));
+    set(camFtp({ server: 'nas.local', port: 21 }));
     expect((await watch.checkNow()).state).toBe('elsewhere');
-    expect(checks(dir)[0]).toMatchObject({ event: { outcome: 'failure' }, cam_proxy: { from: { state: 'on' }, to: { state: 'elsewhere', server: 'nas.local' }, mismatch: ['server'] } });
+    expect(checks(dir)[0]).toMatchObject({ event: { outcome: 'failure' }, cam_proxy: { from: { state: 'on' }, to: { state: 'elsewhere', server: 'nas.local' }, mismatch: ['server', 'port'] } });
     expect(checks(dir)[0].message).toMatch(/nas\.local/);
+  });
+
+  it('only another server: a server_differs record that is no failure', async () => {
+    const { watch, set, dir } = make();
+    await watch.checkNow();
+    set(camFtp({ server: 'nas.local' }));
+    expect((await watch.checkNow()).state).toBe('server_differs');
+    expect(checks(dir)[0]).toMatchObject({ event: { outcome: 'success' }, cam_proxy: { to: { state: 'server_differs' }, mismatch: ['server'] } });
+  });
+
+  it('never set up (no server, no clip ever): no record at all; set up later: still none (on is the baseline)', async () => {
+    const { watch, set, dir } = make();
+    set(camFtp({ enable: 0, server: '', userName: '' }));
+    expect((await watch.checkNow()).state).toBe('not_set_up');
+    expect(checks(dir)).toHaveLength(0);
+    set(camFtp());
+    expect((await watch.checkNow()).state).toBe('on');
+    expect(checks(dir)).toHaveLength(0);
+  });
+
+  it('no server but clips were received before: off, recorded', async () => {
+    const { watch, set, dir } = make({ clipsBefore: () => true });
+    set(camFtp({ enable: 0, server: '' }));
+    expect((await watch.checkNow()).state).toBe('off');
+    expect(checks(dir)[0]).toMatchObject({ event: { outcome: 'failure' }, cam_proxy: { to: { state: 'off' } } });
   });
 
   it('off at the first read: recorded (the baseline is on); not again after a restart', async () => {
@@ -202,9 +242,21 @@ describe('clipsStalled', () => {
     ev('vehicle', NOW - 1 * H);
     expect(clipsStalled(c, 'cam1', NOW, 6)).toMatchObject({ stalled: true, events: 1 });
   });
-  it('never a clip, but events: stalled, lastClip null', () => {
+  it('never a clip, but events: stalled, lastClip null; not while FTP is not set up on the camera', () => {
     ev('pet', NOW - 1 * H);
     expect(clipsStalled(c, 'cam1', NOW, 6)).toEqual({ stalled: true, hours: 6, lastClip: null, events: 1 });
+    expect(clipsStalled(c, 'cam1', NOW, 6, { notSetUp: true })).toMatchObject({ stalled: false });
+  });
+  // Review of #94: retention (clips 24 h by default) must not forget the last clip.
+  it('the last clip survives its deletion by retention', () => {
+    clip(NOW - 37 * H);
+    deleteClip(c, `cam1/${NOW - 37 * H}.mp4`);
+    ev('person', NOW - 1 * H);
+    expect(lastClipReceived(c, 'cam1')).toBe(NOW - 37 * H);
+    expect(clipsStalled(c, 'cam1', NOW, 6)).toMatchObject({ stalled: true, lastClip: NOW - 37 * H });
+    clip(NOW - 40 * H); // an older clip arriving late never moves it back
+    expect(lastClipReceived(c, 'cam1')).toBe(NOW - 37 * H);
+    expect(lastClipReceived(c, 'cam2')).toBeNull();
   });
 });
 

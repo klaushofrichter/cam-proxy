@@ -44,46 +44,53 @@ const cameraChecks = async () => {
 const action = (name: string) => request(p.base).post(`/control/actions/${name}`).set(admin());
 
 describe('the camera FTP check (#93)', () => {
-  it('the sim starts with FTP off: state off, metric 0, a camera-check record', async () => {
-    await until(async () => (await ftpStatus()).camera?.state === 'off', 10_000);
-    expect((await ftpStatus()).camera).toMatchObject({ state: 'off', enable: false });
+  // Review of #94: a fresh camera (cam2's sim starts so) is no alarm.
+  it('the sim starts with FTP never set up: not_set_up, metric 0, no record, no stall despite events', async () => {
+    insertEvent(p.proxy.catalog, { cam: 'cam1', source: 'onvif', kind: 'person', start_ts: Date.now() - 2 * 3600_000, raw: null });
+    await until(async () => (await ftpStatus()).camera?.state === 'not_set_up', 10_000);
+    expect((await ftpStatus()).camera).toMatchObject({ state: 'not_set_up', enable: false });
+    expect((await ftpStatus()).stalled).toMatchObject({ stalled: false });
     expect(await metric('camproxy_camera_ftp_enabled')).toBe('0');
-    const recs = await cameraChecks();
-    expect(recs).toHaveLength(1);
-    expect(recs[0]).toMatchObject({ event: { outcome: 'failure' }, cam_proxy: { to: { state: 'off' } } });
+    expect(await metric('camproxy_clips_stalled')).toBe('0');
+    expect(await cameraChecks()).toHaveLength(0);
   });
 
-  it('"Point the camera\'s FTP here" turns it on at once: state on, metric 1, an off → on record', async () => {
+  it('"Point the camera\'s FTP here" turns it on at once: state on, metric 1, still no record (on is the baseline)', async () => {
     expect((await action('camera-ftp-setup')).status).toBe(200);
     expect((await ftpStatus()).camera).toMatchObject({ state: 'on', enable: true, server: '127.0.0.1', mismatch: [] });
     expect(await metric('camproxy_camera_ftp_enabled')).toBe('1');
-    expect((await cameraChecks()).at(-1)).toMatchObject({ event: { outcome: 'success' }, cam_proxy: { from: { state: 'off' }, to: { state: 'on' } } });
+    expect(await cameraChecks()).toHaveLength(0);
   });
 
-  it('points elsewhere (changed on the camera): state elsewhere', async () => {
+  it('only another server: server_differs; another server and port: elsewhere', async () => {
     const ftp = sim.sim.engine.settings.running.Ftp;
     sim.sim.engine.settings.running.Ftp = { ...ftp, server: '192.0.2.7' };
+    await until(async () => (await ftpStatus()).camera?.state === 'server_differs', 10_000);
+    expect((await ftpStatus()).camera).toMatchObject({ server: '192.0.2.7', mismatch: ['server'] });
+    sim.sim.engine.settings.running.Ftp = { ...ftp, server: '192.0.2.7', port: 21 };
     await until(async () => (await ftpStatus()).camera?.state === 'elsewhere', 10_000);
-    expect((await ftpStatus()).camera).toMatchObject({ state: 'elsewhere', server: '192.0.2.7', mismatch: ['server'] });
+    expect((await ftpStatus()).camera).toMatchObject({ state: 'elsewhere', mismatch: ['server', 'port'] });
     expect(await metric('camproxy_camera_ftp_enabled')).toBe('1'); // on, just elsewhere
+    expect((await cameraChecks()).at(-1)).toMatchObject({ event: { outcome: 'failure' }, cam_proxy: { to: { state: 'elsewhere' } } });
     expect((await cameraChecks()).at(-1)?.message).toContain('192.0.2.7');
     await action('camera-ftp-setup');
     expect((await ftpStatus()).camera?.state).toBe('on');
   });
 
-  it('off on the camera (as on 2026-10-01): noticed by the next check', async () => {
+  it('off on the camera with its server kept (as on 2026-10-01): off, red, a failure record', async () => {
     const ftp = sim.sim.engine.settings.running.Ftp;
     sim.sim.engine.settings.running.Ftp = { ...ftp, enable: 0 };
     await until(async () => (await ftpStatus()).camera?.state === 'off', 10_000);
     expect(await metric('camproxy_camera_ftp_enabled')).toBe('0');
+    expect((await cameraChecks()).at(-1)).toMatchObject({ event: { outcome: 'failure' }, cam_proxy: { from: { state: 'on' }, to: { state: 'off' } } });
     await action('camera-ftp-setup');
+    expect((await cameraChecks()).at(-1)).toMatchObject({ event: { outcome: 'success' }, cam_proxy: { from: { state: 'off' }, to: { state: 'on' } } });
   });
 });
 
 describe('clips stalled (#93)', () => {
   it('recording events and no clip for ftp.stalledHours: stalled; a shorter window without events: not', async () => {
-    const H = 3600_000;
-    insertEvent(p.proxy.catalog, { cam: 'cam1', source: 'onvif', kind: 'person', start_ts: Date.now() - 2 * H, raw: null });
+    // The person event of the first test, now that FTP is set up.
     expect((await ftpStatus()).stalled).toMatchObject({ stalled: true, hours: 6, lastClip: null, events: 1 });
     expect(await metric('camproxy_clips_stalled')).toBe('1');
     expect(await metric('camproxy_clips_last_received_timestamp_seconds')).toBe('0');

@@ -6,7 +6,7 @@ import type { AddressInfo } from 'net';
 import { join } from 'path';
 import { openCatalog, type Catalog } from './catalog/db';
 import { clearUnmapped, countAnalysesByStatus, listUnmapped, usageBetween } from './catalog/analyses';
-import { countClips } from './catalog/clips';
+import { countClips, lastClipReceived } from './catalog/clips';
 import { closeAllOpen, countEventsByKind } from './catalog/events';
 import { ReolinkClient } from './camera/client';
 import { splitHost } from './camera/http';
@@ -263,9 +263,15 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     target: ftpTarget,
     audit,
     active: () => running.ftp.enabled && status.state().online,
+    clipsBefore: () => lastClipReceived(catalog, running.camera.id) !== null,
     everyMs: opts.cameraFtpCheckMs,
   });
-  const clipsHealth = () => (running.ftp.enabled ? clipsStalled(catalog, running.camera.id, Date.now(), running.ftp.stalledHours) : null);
+  // No stall warning for a camera never set up, nor before the first read when no clip ever came.
+  const ftpNotSetUp = () => {
+    const st = ftpWatch.view().state;
+    return st === 'not_set_up' || (st === 'unknown' && lastClipReceived(catalog, running.camera.id) === null);
+  };
+  const clipsHealth = () => (running.ftp.enabled ? clipsStalled(catalog, running.camera.id, Date.now(), running.ftp.stalledHours, { notSetUp: ftpNotSetUp() }) : null);
   buildCameraSide();
 
   // A camera reboot from the control API (#83): the client and the status

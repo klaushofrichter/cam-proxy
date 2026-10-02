@@ -3,6 +3,7 @@ import { chmodSync, mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { openCatalog, type Catalog } from '../src/catalog/db';
+import { insertClip, lastClipReceived } from '../src/catalog/clips';
 import { insertEvent, closeEvent, openEvents, listEvents, deleteEventsBefore, closeAllOpen } from '../src/catalog/events';
 
 let dir: string;
@@ -17,12 +18,24 @@ const ev = (kind: string, start_ts: number, cam = 'cam1') => insertEvent(c, { ca
 
 describe('catalog', () => {
   it('creates the schema once; opening again keeps data and version', () => {
-    expect(c.schemaVersion()).toBe(4);
+    expect(c.schemaVersion()).toBe(5);
     ev('person', 1000);
     c.close();
     c = openCatalog(join(dir, 'catalog.sqlite'));
-    expect(c.schemaVersion()).toBe(4);
+    expect(c.schemaVersion()).toBe(5);
     expect(listEvents(c, { cam: 'cam1' })).toHaveLength(1);
+  });
+
+  // #93 review: the last clip received survives retention; version 5 fills it from the clips kept.
+  it('migrates to version 5 with the last clip received per camera, from the clips kept', () => {
+    insertClip(c, { cam: 'cam1', start_ts: 1, end_ts: 2, path: 'a.mp4', stream: 'main', size: 1, received_at: 5000, snapshot: null });
+    insertClip(c, { cam: 'cam1', start_ts: 1, end_ts: 2, path: 'b.mp4', stream: 'main', size: 1, received_at: 7000, snapshot: null });
+    // As a version 4 catalog with these clips.
+    c.db.exec('DROP TRIGGER clips_last_received; DROP TABLE clip_arrivals; DELETE FROM schema_version WHERE version = 5');
+    c.close();
+    c = openCatalog(join(dir, 'catalog.sqlite'));
+    expect(c.schemaVersion()).toBe(5);
+    expect(lastClipReceived(c, 'cam1')).toBe(7000);
   });
 
   it('uses WAL and counts the WAL file in its size', () => {

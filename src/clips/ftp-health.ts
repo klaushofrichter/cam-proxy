@@ -12,7 +12,12 @@ import type { FtpTarget } from './camera-ftp';
 // the Status page, audits its changes (`camera-check`), and warns when clips
 // stop arriving while the camera records events.
 
-export type FtpState = 'on' | 'off' | 'elsewhere';
+// on: to this proxy. off: switched off with a server set, or with none
+// after clips arrived before (red). elsewhere: another port or user, or
+// server and more (red). server_differs: only the server name differs
+// (amber: may be another name for this proxy). not_set_up: no server and
+// never a clip (a fresh or reset camera; grey, no alarm).
+export type FtpState = 'on' | 'off' | 'elsewhere' | 'server_differs' | 'not_set_up';
 export interface FtpReading { state: FtpState; enable: boolean; server: string; port: number; user: string; mismatch: string[] }
 export interface CameraFtpView {
   state: FtpState | 'unknown'; // unknown: not read yet
@@ -35,20 +40,26 @@ export const STALL_GRACE_MS = 10 * 60_000;
 export const CHECK_MS = 5 * 60_000;
 
 // What camera-ftp-setup would write for this proxy, compared with the
-// camera's settings: off when not enabled (an empty server is never set
-// up), elsewhere when the server, port or user differ. Without
-// ftp.publicHost the server isn't compared.
-export function classifyFtp(ftp: Record<string, unknown>, t: Target): FtpReading {
-  const server = typeof ftp.server === 'string' ? ftp.server : '';
+// camera's settings (see FtpState). The server is compared trimmed and in
+// lower case (no DNS); without ftp.publicHost it isn't compared.
+// `clipsBefore`: a clip was ever received (clip_arrivals).
+export function classifyFtp(ftp: Record<string, unknown>, t: Target, ctx: { clipsBefore: boolean } = { clipsBefore: false }): FtpReading {
+  const server = typeof ftp.server === 'string' ? ftp.server.trim() : '';
   const port = Number(ftp.port ?? 0);
   const user = typeof ftp.userName === 'string' ? ftp.userName : '';
   const enable = Number(ftp.enable) === 1 && server !== '';
+  const norm = (h: string) => h.trim().toLowerCase();
   const mismatch = [
-    ...(t.server && server !== t.server ? ['server'] : []),
+    ...(t.server && norm(server) !== norm(t.server) ? ['server'] : []),
     ...(port !== t.port ? ['port'] : []),
     ...(user !== t.user ? ['user'] : []),
   ];
-  return { state: !enable ? 'off' : mismatch.length ? 'elsewhere' : 'on', enable, server, port, user, mismatch };
+  const state: FtpState = !server && !ctx.clipsBefore ? 'not_set_up'
+    : !enable ? 'off'
+    : !mismatch.length ? 'on'
+    : mismatch.length === 1 && mismatch[0] === 'server' ? 'server_differs'
+    : 'elsewhere';
+  return { state, enable, server, port, user, mismatch };
 }
 
 const where = (r: { server: string | null; port: number | null; user: string | null }) => `${r.server || '(none)'}:${r.port ?? '?'}, user ${r.user || '(none)'}`;
@@ -67,6 +78,7 @@ export class CameraFtpWatch {
       target: () => Target;
       audit: AuditLog;
       active: () => boolean; // FTP on in the proxy and the camera online
+      clipsBefore?: () => boolean; // a clip was ever received
       now?: () => number;
       everyMs?: number;
     },
@@ -105,7 +117,7 @@ export class CameraFtpWatch {
   // The camera's answer to an action (setup, off): no need to wait for the next read.
   note(ftp: Record<string, unknown>): void {
     this.seq++;
-    this.apply(classifyFtp(ftp, this.d.target()));
+    this.apply(classifyFtp(ftp, this.d.target(), { clipsBefore: this.d.clipsBefore?.() ?? false }));
   }
 
   private async check(): Promise<CameraFtpView> {
@@ -113,7 +125,7 @@ export class CameraFtpWatch {
     const seq = this.seq;
     try {
       const ftp = await this.d.read();
-      if (seq === this.seq) this.apply(classifyFtp(ftp, this.d.target()));
+      if (seq === this.seq) this.apply(classifyFtp(ftp, this.d.target(), { clipsBefore: this.d.clipsBefore?.() ?? false }));
     } catch (err) {
       if (seq === this.seq) this.current = { ...this.current, error: err instanceof CameraError ? err.code : (err as Error).message };
     }
@@ -125,6 +137,8 @@ export class CameraFtpWatch {
     this.current = { state: r.state, checkedAt: this.now(), enable: r.enable, server: r.server, port: r.port, user: r.user, mismatch: r.mismatch, error: null };
     // The audit log knows the state from the last record (a restart doesn't
     // repeat it); with none, the baseline is on.
+    // Never set up is no change to record (and no alarm).
+    if (r.state === 'not_set_up') return;
     if (this.recorded === undefined) this.recorded = this.lastRecorded();
     if (r.state === (this.recorded?.state ?? 'on')) return;
     const summary = (v: CameraFtpView) => ({ state: v.state, enable: v.enable, server: v.server, port: v.port, user: v.user });
@@ -134,8 +148,9 @@ export class CameraFtpWatch {
     const message =
       r.state === 'off' ? `Camera FTP upload is off (was ${from.state}); its settings: ${where(to)}`
       : r.state === 'elsewhere' ? `Camera FTP upload points elsewhere: ${where(to)}, not this proxy (${where(t)}); was ${from.state}`
+      : r.state === 'server_differs' ? `Camera FTP server is ${to.server}, this proxy is ${t.server}; was ${from.state}`
       : `Camera FTP upload is on, to this proxy (${where(to)}); was ${from.state}`;
-    const ok = this.d.audit.write({ action: 'camera-check', category: ['host'], type: ['change'], outcome: r.state === 'on' ? 'success' : 'failure', user: 'system', message, details: { check: 'ftp', from, to, ...(r.mismatch.length ? { mismatch: r.mismatch } : {}) } });
+    const ok = this.d.audit.write({ action: 'camera-check', category: ['host'], type: ['change'], outcome: r.state === 'off' || r.state === 'elsewhere' ? 'failure' : 'success', user: 'system', message, details: { check: 'ftp', from, to, ...(r.mismatch.length ? { mismatch: r.mismatch } : {}) } });
     if (ok) this.recorded = to;
     logger.warn({ from: from.state, to: r.state }, 'camera_ftp_changed');
   }
@@ -151,11 +166,12 @@ export interface ClipsStall { stalled: boolean; hours: number; lastClip: number 
 
 // No clip received for `hours` while the camera recorded events in that
 // time (the kinds it uploads, older than STALL_GRACE_MS): FTP isn't working
-// even if it is on. A quiet day is no warning.
-export function clipsStalled(c: Catalog, cam: string, now: number, hours: number): ClipsStall {
+// even if it is on. A quiet day is no warning, and neither is a camera
+// whose FTP was never set up (`notSetUp`).
+export function clipsStalled(c: Catalog, cam: string, now: number, hours: number, opts: { notSetUp?: boolean } = {}): ClipsStall {
   const from = now - hours * 3600_000;
   const lastClip = lastClipReceived(c, cam);
-  if (lastClip !== null && lastClip >= from) return { stalled: false, hours, lastClip, events: 0 };
+  if ((lastClip !== null && lastClip >= from) || opts.notSetUp) return { stalled: false, hours, lastClip, events: 0 };
   const events = countEventsOfKinds(c, cam, RECORDING_KINDS, from, now - STALL_GRACE_MS);
   return { stalled: events > 0, hours, lastClip, events };
 }
