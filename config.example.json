@@ -12,6 +12,7 @@
     "user": "proxy",
     "onvifPort": 8000,
     "rtspPort": 554,
+    "baichuanPort": 9000,
     "statusPollS": 30,
     "poeSwitch": {
       "model": "none",
@@ -80,6 +81,9 @@
     "tls": true,
     "stream": "main",
     "stalledHours": 6
+  },
+  "recordings": {
+    "cacheMB": 2048
   },
   "analytics": {
     "kinds": {

@@ -2,3 +2,4 @@
 # these, and nothing else. Changing this file takes a pull request.
 # Format: ruleId<TAB>path<TAB>reason
 js/insufficient-password-hash	src/events/soap.ts	ONVIF WS-UsernameToken PasswordDigest is defined by the standard as base64(sha1(nonce + created + password)); the camera requires it this way. The proxy computes it to sign in to the camera, and never stores passwords hashed with it.
+js/insufficient-password-hash	src/camera/baichuan/cipher.ts	Baichuan, the camera's own protocol, derives its AES session key from md5(nonce-password) and the login from md5 hashes of user and password; the camera requires it (reolink_aio, measured on the RLC-1224A). The proxy computes it only to sign in to the camera and never stores passwords hashed with it.

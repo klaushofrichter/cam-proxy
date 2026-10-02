@@ -42,7 +42,7 @@ export async function startProxy(sim: Awaited<ReturnType<typeof startSim>>, opts
   writeFileSync(join(dir, 'config.json'), JSON.stringify({
     stills: { enabled: !!go2rtc },
     go2rtc: { binary: go2rtc ?? 'go2rtc', rtspPort: await freePort(), apiPort: await freePort() },
-    camera: { host: sim.camera.host, protocol: 'http', user: 'proxy', onvifPort: sim.ports.onvif, rtspPort: sim.ports.rtsp || 554, statusPollS: 5 },
+    camera: { host: sim.camera.host, protocol: 'http', user: 'proxy', onvifPort: sim.ports.onvif, rtspPort: sim.ports.rtsp || 554, baichuanPort: sim.camera.baichuanPort, statusPollS: 5 },
     events: { onvif: { subscribeMin: 1, pullTimeoutS: 1 }, poll: { enabled: true, intervalS: 1, afterOnvifDownS: 1 } },
     server: { logLevel: 'silent' },
     ...(opts.settings ?? {}),

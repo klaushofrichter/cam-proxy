@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { existsSync, readdirSync, rmdirSync, statSync, statfsSync, unlinkSync } from 'fs';
+import { existsSync, lstatSync, readdirSync, rmdirSync, statSync, statfsSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import type { Catalog } from './catalog/db';
 import { deleteClip } from './catalog/clips';
@@ -14,9 +14,12 @@ const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const GROWTH_WINDOW = 3 * DAY;
 
-export type FileKind = 'stills' | 'previews' | 'clips';
-const KINDS: FileKind[] = ['stills', 'previews', 'clips'];
-const BUDGET_ORDER: FileKind[] = ['stills', 'clips', 'previews']; // what goes first when over budget
+export type FileKind = 'stills' | 'previews' | 'clips' | 'recordings';
+type MinuteKind = Exclude<FileKind, 'recordings'>;
+const MINUTE_KINDS: MinuteKind[] = ['stills', 'previews', 'clips'];
+const KINDS: FileKind[] = [...MINUTE_KINDS, 'recordings'];
+// After the recordings cache (always first, least recently used), what goes first when over budget.
+const BUDGET_ORDER: MinuteKind[] = ['stills', 'clips', 'previews'];
 
 export interface KindUsage { bytes: number; files: number; oldest: number | null; newest: number | null; growthPerDay: number }
 export interface StorageRun { dryRun: boolean; at: number; deleted: Record<string, number>; freedBytes: number; reason: string[] }
@@ -32,7 +35,7 @@ const dayStart = (ts: number) => Math.floor(ts / DAY) * DAY;
 // and a hard floor that pauses writing. Also deletes old event and stream
 // log rows.
 export class Storage extends EventEmitter {
-  private readonly units: Record<FileKind, Unit[]> = { stills: [], previews: [], clips: [] }; // oldest first
+  private readonly units: Record<FileKind, Unit[]> = { stills: [], previews: [], clips: [], recordings: [] }; // oldest first
   private readonly writes: { at: number; kind: FileKind; bytes: number }[] = [];
   private isPaused = false;
   private last: number | null = null;
@@ -48,6 +51,7 @@ export class Storage extends EventEmitter {
       config: () => Config;
       now?: () => number;
       statfs?: (dir: string) => { free: number; size: number };
+      recordingsBusy?: (path: string) => boolean; // a recording being read: never deleted
     },
   ) {
     super();
@@ -72,7 +76,7 @@ export class Storage extends EventEmitter {
   // Walks <dataDir>/<kind>/<cam>/YYYY/MM/DD once (start, and when asked).
   recount(): void {
     const root = this.d.config().server.dataDir;
-    for (const kind of KINDS) {
+    for (const kind of MINUTE_KINDS) {
       const byMinute = new Map<string, Unit>();
       const base = join(root, kind);
       if (!existsSync(base)) {
@@ -107,6 +111,28 @@ export class Storage extends EventEmitter {
       }
       this.units[kind] = [...byMinute.values()].sort((a, b) => a.ts - b.ts);
     }
+    this.recountRecordings();
+  }
+
+  // The recordings cache: one unit per regular file, its time the last use
+  // (mtime). Paths are join(dir, id), the strings the cache pins by. Also run
+  // by usage(): the cache evicts on its own (makeRoom), and it is one small folder.
+  private recountRecordings(): void {
+    const recs: Unit[] = [];
+    const recDir = join(this.d.config().server.dataDir, 'recordings');
+    for (const cam of safeDir(recDir)) {
+      for (const name of safeDir(join(recDir, cam))) {
+        if (name.endsWith('.part')) continue; // being written
+        const path = join(recDir, cam, name);
+        try {
+          const s = lstatSync(path);
+          if (s.isFile()) recs.push({ ts: s.mtimeMs, files: [{ path, bytes: s.size }] });
+        } catch {
+          // gone
+        }
+      }
+    }
+    this.units.recordings = recs.sort((a, b) => a.ts - b.ts);
   }
 
   // The store reports what it wrote (bytes may be a difference after a merge).
@@ -125,6 +151,7 @@ export class Storage extends EventEmitter {
 
   usage(): Record<FileKind | 'catalog' | 'audit', KindUsage> & { free: number; size: number; budget: number; used: number; daysUntilFull: number | null } {
     const now = this.now();
+    this.recountRecordings();
     const out = {} as Record<FileKind | 'catalog' | 'audit', KindUsage>;
     let used = 0;
     let growth = 0;
@@ -134,7 +161,8 @@ export class Storage extends EventEmitter {
       const g = this.writes.filter((w) => w.kind === kind).reduce((n, w) => n + w.bytes, 0) / (GROWTH_WINDOW / DAY);
       out[kind] = { bytes, files: list.reduce((n, u) => n + u.files.length, 0), oldest: list[0]?.ts ?? null, newest: list[list.length - 1]?.ts ?? null, growthPerDay: Math.round(g) };
       used += bytes;
-      growth += g;
+      // The recordings cache is capped and evicts itself: its writes never fill the disk.
+      if (kind !== 'recordings') growth += g;
     }
     const cat = this.d.catalog.sizeBytes();
     out.catalog = { bytes: cat, files: 1, oldest: null, newest: now, growthPerDay: 0 };
@@ -172,21 +200,29 @@ export class Storage extends EventEmitter {
     const deleted: Record<string, number> = {};
     const reason: string[] = [];
     let freed = 0;
-    const sim: Record<FileKind, Unit[]> = { stills: [...this.units.stills], previews: [...this.units.previews], clips: [...this.units.clips] };
+    const sim: Record<FileKind, Unit[]> = { stills: [...this.units.stills], previews: [...this.units.previews], clips: [...this.units.clips], recordings: [...this.units.recordings] };
     const drop = (kind: FileKind, u: Unit) => {
       deleted[kind] = (deleted[kind] ?? 0) + u.files.length;
       freed += unitBytes(u);
       if (dry) return;
       for (const f of u.files) {
         if (!f.path) continue;
+        if (kind === 'recordings') {
+          try {
+            unlinkSync(f.path);
+          } catch {
+            // gone
+          }
+          continue;
+        }
         removeFile(f.path);
         if (kind === 'clips') deleteClip(this.d.catalog, f.path); // the row (or the snapshot link)
       }
     };
 
     // 1. Age, per kind (whole UTC days).
-    const days: Record<FileKind, number> = { stills: cfg.retention.stillsDays, previews: cfg.retention.previewsDays, clips: cfg.retention.clipsDays };
-    for (const kind of KINDS) {
+    const days: Record<MinuteKind, number> = { stills: cfg.retention.stillsDays, previews: cfg.retention.previewsDays, clips: cfg.retention.clipsDays };
+    for (const kind of MINUTE_KINDS) {
       const cutoff = dayStart(now - days[kind] * DAY);
       while (sim[kind].length && sim[kind][0].ts < cutoff) {
         drop(kind, sim[kind].shift()!);
@@ -219,7 +255,7 @@ export class Storage extends EventEmitter {
     // 2. Per-kind caps, then the budget: the oldest hour of the next kind in
     // order, never touching the newest keepHours of a kind.
     const bytesOf = (kind: FileKind) => sim[kind].reduce((n, u) => n + unitBytes(u), 0);
-    const dropOldestHour = (kind: FileKind): boolean => {
+    const dropOldestHour = (kind: MinuteKind): boolean => {
       const keepFrom = now - cfg.storage.keepHours[kind] * HOUR;
       const first = sim[kind][0];
       if (!first || first.ts >= keepFrom) return false;
@@ -227,17 +263,27 @@ export class Storage extends EventEmitter {
       while (sim[kind].length && sim[kind][0].ts < hour + HOUR && sim[kind][0].ts < keepFrom) drop(kind, sim[kind].shift()!);
       return true;
     };
-    const caps: Partial<Record<FileKind, number | undefined>> = { stills: cfg.stills.maxGB, previews: cfg.previews.maxGB, clips: cfg.ftp.maxGB };
-    for (const kind of KINDS) {
+    const caps: Partial<Record<MinuteKind, number | undefined>> = { stills: cfg.stills.maxGB, previews: cfg.previews.maxGB, clips: cfg.ftp.maxGB };
+    for (const kind of MINUTE_KINDS) {
       const cap = caps[kind];
       if (cap === undefined) continue;
       while (bytesOf(kind) > cap * 2 ** 30 && dropOldestHour(kind)) if (!reason.includes('cap')) reason.push('cap');
     }
+    // The recordings cache: its own cap, then first in line for the budget,
+    // least recently used first, never a file in use.
+    const dropRecording = (): boolean => {
+      const i = sim.recordings.findIndex((u) => !u.files.some((f) => f.path && this.d.recordingsBusy?.(f.path)));
+      if (i < 0) return false;
+      drop('recordings', sim.recordings.splice(i, 1)[0]);
+      return true;
+    };
+    const recCap = cfg.recordings.cacheMB * 2 ** 20;
+    while (bytesOf('recordings') > recCap && dropRecording()) if (!reason.includes('cap')) reason.push('cap');
     const budget = this.budget();
     const catalog = this.d.catalog.sizeBytes() + (this.d.audit?.usage().bytes ?? 0); // audit bytes count, are never dropped
     const used = () => KINDS.reduce((n, k) => n + bytesOf(k), 0) + catalog;
     while (used() > budget) {
-      if (!BUDGET_ORDER.some((k) => dropOldestHour(k))) {
+      if (!(dropRecording() || BUDGET_ORDER.some((k) => dropOldestHour(k)))) {
         if (!reason.includes('budget_unreachable')) reason.push('budget_unreachable');
         break;
       }
@@ -249,6 +295,7 @@ export class Storage extends EventEmitter {
       this.units.stills = sim.stills;
       this.units.previews = sim.previews;
       this.units.clips = sim.clips;
+      this.units.recordings = sim.recordings;
       this.last = now;
       for (const [k, n] of Object.entries(deleted)) this.total[k] = (this.total[k] ?? 0) + n;
       this.check();

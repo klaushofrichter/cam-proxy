@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, writeFileSync, existsSync, readdirSync, mkdirSync, utimesSync } from 'fs';
+import { mkdtempSync, writeFileSync, existsSync, readdirSync, mkdirSync, unlinkSync, utimesSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { openCatalog } from '../src/catalog/db';
@@ -265,5 +265,110 @@ describe('storage: audit', () => {
     expect(real.deleted.audit).toBe(1); // the day past auditDays, nothing for the budget
     expect(readdirSync(auditDir).sort()).toEqual(days.slice(1).sort());
     expect(real.deleted.stills).toBe(2); // the budget took what it may (the current minute stays)
+  });
+});
+
+describe('storage: the recordings cache', () => {
+  const putRec = (dir: string, id: string, bytes: number, usedAt: number) => {
+    const p = join(dir, 'recordings', 'cam1', id);
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, Buffer.alloc(bytes));
+    utimesSync(p, new Date(usedAt), new Date(usedAt));
+    return p;
+  };
+  const budget = (x: ReturnType<typeof setup>, files: number) => {
+    delete x.config.storage.maxPercent;
+    x.config.storage.maxBytes = x.catalog.sizeBytes() + files;
+  };
+
+  it('counts cached recordings (not .part files), least recently used as the oldest', () => {
+    const x = setup();
+    putRec(x.dir, 'RecS0A_A.mp4', 1000, NOW - DAY);
+    putRec(x.dir, 'RecS0A_B.mp4', 500, NOW - HOUR);
+    writeFileSync(join(x.dir, 'recordings', 'cam1', 'RecS0A_C.mp4.part'), Buffer.alloc(700));
+    x.storage.recount();
+    expect(x.storage.usage().recordings).toMatchObject({ bytes: 1500, files: 2, oldest: NOW - DAY, newest: NOW - HOUR });
+  });
+
+  it('never ages recordings out', () => {
+    const x = setup();
+    const old = putRec(x.dir, 'RecS0A_A.mp4', 1000, NOW - 300 * DAY);
+    x.storage.recount();
+    x.storage.run({});
+    expect(existsSync(old)).toBe(true);
+  });
+
+  it('applies recordings.cacheMB at a storage run, least recently used first', () => {
+    const x = setup((c) => (c.recordings.cacheMB = 1));
+    const a = putRec(x.dir, 'RecS0A_A.mp4', 600_000, NOW - DAY);
+    const b = putRec(x.dir, 'RecS0A_B.mp4', 600_000, NOW - HOUR);
+    x.storage.recount();
+    const r = x.storage.run({});
+    expect([existsSync(a), existsSync(b)]).toEqual([false, true]);
+    expect(r.deleted.recordings).toBe(1);
+    expect(r.reason).toContain('cap');
+  });
+
+  it('over budget: recordings go first, least recently used, before any still; no keepHours', () => {
+    const x = setup((c) => (c.storage.keepHours = { stills: 0, clips: 0, previews: 0 }));
+    const still = x.put('stills', NOW - 5 * HOUR, 1000);
+    const old = putRec(x.dir, 'RecS0A_A.mp4', 1000, NOW - 2 * DAY);
+    const recent = putRec(x.dir, 'RecS0A_B.mp4', 1000, NOW - 60_000);
+    x.storage.recount();
+    budget(x, 2000);
+    const r = x.storage.run({});
+    expect([existsSync(old), existsSync(recent), existsSync(still)]).toEqual([false, true, true]);
+    expect(r.deleted.recordings).toBe(1);
+    expect(r.deleted.stills ?? 0).toBe(0);
+  });
+
+  // Review Focus 3.
+  it('skips a file in use and takes the next least recently used', () => {
+    const x = setup();
+    const busyOne = putRec(x.dir, 'RecS0A_A.mp4', 1000, NOW - 2 * DAY);
+    const next = putRec(x.dir, 'RecS0A_B.mp4', 1000, NOW - DAY);
+    const storage = new Storage({ catalog: x.catalog, log: x.log, config: () => x.config, now: () => NOW, statfs: () => x.fs, recordingsBusy: (p) => p === busyOne });
+    storage.recount();
+    budget(x, 1000);
+    storage.run({});
+    expect([existsSync(busyOne), existsSync(next)]).toEqual([true, false]);
+  });
+
+  it('a dry run reports and deletes nothing; noteWritten counts until the next recount', () => {
+    const x = setup((c) => (c.recordings.cacheMB = 1));
+    const a = putRec(x.dir, 'RecS0A_A.mp4', 600_000, NOW - DAY);
+    putRec(x.dir, 'RecS0A_B.mp4', 600_000, NOW - HOUR);
+    x.storage.recount();
+    expect(x.storage.run({ dryRun: true }).deleted.recordings).toBe(1);
+    expect(existsSync(a)).toBe(true);
+    putRec(x.dir, 'RecS0A_C.mp4', 300, NOW); // the fetcher's file, after its rename
+    x.storage.noteWritten('recordings', 300, 1);
+    expect(x.storage.usage().recordings.bytes).toBe(1_200_300);
+  });
+
+  // Final review 3.
+  it('recordings writes have a growthPerDay but never count toward daysUntilFull (a capped cache)', () => {
+    const x = setup();
+    x.put('stills', NOW - HOUR, 1000);
+    x.storage.recount();
+    x.storage.noteWritten('stills', 3 * 1000, 1);
+    const before = x.storage.usage().daysUntilFull;
+    putRec(x.dir, 'RecS0A_A.mp4', 3 * 1_000_000, NOW);
+    x.storage.noteWritten('recordings', 3 * 1_000_000, 1);
+    const u = x.storage.usage();
+    expect(u.recordings.growthPerDay).toBe(1_000_000);
+    expect(u.stills.growthPerDay).toBe(1000);
+    expect(u.daysUntilFull).toBeCloseTo(before! - 3_000_000 / 1000, 3); // the used bytes count, the growth doesn't
+  });
+
+  // Final review 4.
+  it('usage() recounts the recordings folder: files the cache evicted are gone from the bytes at once', () => {
+    const x = setup();
+    const a = putRec(x.dir, 'RecS0A_A.mp4', 1000, NOW - DAY);
+    putRec(x.dir, 'RecS0A_B.mp4', 500, NOW - HOUR);
+    x.storage.recount();
+    expect(x.storage.usage().recordings.bytes).toBe(1500);
+    unlinkSync(a); // the cache's makeRoom
+    expect(x.storage.usage().recordings).toMatchObject({ bytes: 500, files: 1 });
   });
 });

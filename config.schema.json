@@ -99,6 +99,12 @@
           "maximum": 65535,
           "description": "camera RTSP port"
         },
+        "baichuanPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "camera Baichuan port (recordings over TCP); the host is camera.host's"
+        },
         "statusPollS": {
           "type": "integer",
           "minimum": 5,
@@ -435,6 +441,18 @@
           "minimum": 1,
           "maximum": 300,
           "description": "seconds between keep-alive pings"
+        }
+      }
+    },
+    "recordings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cacheMB": {
+          "type": "integer",
+          "minimum": 64,
+          "maximum": 1048576,
+          "description": "size cap of the recordings cache, MB; least recently used files go first"
         }
       }
     },
