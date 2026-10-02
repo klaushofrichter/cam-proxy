@@ -34,7 +34,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force \
  && node -e "require('sharp')"
 COPY --from=build /app/dist ./dist
-COPY openapi.yaml CHANGELOG.md config.schema.json ./
+COPY openapi.yaml CHANGELOG.md config.schema.json THIRD_PARTY_NOTICES ./
 RUN mkdir -p /data && chown 1000:1000 /data
 ENV NODE_ENV=production CAMPROXY_TARGET=cluster
 # Late, so a new version doesn't rebuild the layers above.
