@@ -338,14 +338,10 @@ export class RecordingFetcher {
     return pinned + size <= cap;
   }
 
-  // canKeep, then room made. makeRoom can free less than asked (pinned
-  // files), so the room is checked again after it: never evict for nothing.
+  // canKeep (so nothing is evicted for a file that can't fit), then room
+  // made; makeRoom answers whether it fits (pinned files and .part bytes count).
   private roomFor(size: number): boolean {
-    const { cache } = this.d;
-    if (!this.canKeep(size)) return false;
-    const cap = cache.capBytes();
-    if (cache.usage().bytes + size > cap) cache.makeRoom(size);
-    return cache.usage().bytes + size <= cap;
+    return this.canKeep(size) && this.d.cache.makeRoom(size);
   }
 
   private async run(f: Fetch): Promise<void> {

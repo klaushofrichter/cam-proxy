@@ -27,6 +27,10 @@ export interface DownloadOptions {
 const INFO_RECORD_BYTES = 32; // measured on the RLC-1224A
 
 const abortError = (why: string) => Object.assign(new Error(why), { name: 'AbortError' });
+const noop = () => undefined;
+// Writables that already carry our one lasting error listener (#99: a writable
+// reused for several downloads must not collect one per download).
+const guarded = new WeakSet<Writable>();
 
 // Writes the file at `path` (size from its name) to `out`. Resolves with the
 // bytes written, once `out` has taken the last of them; never ends `out`. A
@@ -63,18 +67,20 @@ export async function download(session: BaichuanSession, path: string, size: num
       session.resume();
       stall();
     };
-    // Both stay attached after the download settles: an error on `out` must
-    // never become an uncaught exception because we took our listener away.
+    // Removed when the download settles; one lasting no-op error listener
+    // per writable stays, so a late error on `out` never becomes uncaught.
     const onOutError = () => fail(abortError('the output failed'));
-    const onOutClose = () => {
-      fail(abortError('the output closed'));
-      out.off('close', onOutClose);
-      out.off('error', onOutError);
-    };
+    const onOutClose = () => fail(abortError('the output closed'));
     const settle = (err?: Error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (!guarded.has(out)) {
+        guarded.add(out);
+        out.on('error', noop);
+      }
+      out.off('error', onOutError);
+      out.off('close', onOutClose);
       if (err) reject(err);
       else resolve(received);
     };
@@ -115,7 +121,9 @@ export async function download(session: BaichuanSession, path: string, size: num
             if (size === 0) {
               stop();
               settle();
+              return;
             }
+            arm(o.firstChunkMs ?? 15_000, 'no data after the info record'); // the first chunk's wait starts again (#99)
             return;
           }
           let data: Buffer;

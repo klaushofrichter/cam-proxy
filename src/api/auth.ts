@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from 'crypto';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
-import { logger, withoutQuery } from '../log';
+import { logger, maskPath, withoutQuery } from '../log';
 import { readCookie, SESSION_COOKIE } from './session';
 
 const digest = (s: string) => createHash('sha256').update(s).digest();
@@ -75,7 +75,7 @@ export function requireAccess(need: 'client' | 'admin' | 'audit-read', d: Access
       res.status(status).json({ error });
     };
     if (!a.access || (need === 'client' && a.access === 'audit')) {
-      logger.warn({ path: withoutQuery(req.originalUrl) }, 'unauthorized');
+      logger.warn({ path: maskPath(withoutQuery(req.originalUrl)) }, 'unauthorized');
       return refuse(401, a.tokenKind === 'none' ? 'no-token' : 'wrong-token', 'unauthorized');
     }
     if (need === 'admin' && a.access !== 'admin') return refuse(403, 'admin-only', 'admin_only');

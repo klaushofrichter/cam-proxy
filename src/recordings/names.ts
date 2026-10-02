@@ -4,7 +4,7 @@
 // stream, name version, DST flag, camera-local date, start, end, an optional
 // animal-type field, trigger flags (hex), size in bytes (hex).
 import type { TimeInfo } from '../camera/time';
-import { dstBounds } from '../clips/indexer';
+import { localDay } from '../analytics/local-day';
 
 export type Stream = 'main' | 'sub';
 export type Kind = 'person' | 'vehicle' | 'pet' | 'motion';
@@ -56,15 +56,8 @@ export function recordingTimes(n: SdName, t: TimeInfo): { start: number; end: nu
   return { start, end };
 }
 
-export function offsetAt(ts: number, t: TimeInfo): number {
-  if (!t.dstRule || !t.dstOffsetMinutes) return t.stdOffsetMinutes;
-  const year = new Date(ts + t.stdOffsetMinutes * 60_000).getUTCFullYear();
-  const [start, end] = dstBounds(year, t.dstRule, t.stdOffsetMinutes, t.dstOffsetMinutes);
-  const inDst = start < end ? ts >= start && ts < end : ts >= start || ts < end;
-  return t.stdOffsetMinutes + (inDst ? t.dstOffsetMinutes : 0);
-}
-
-export const localDate = (ts: number, t: TimeInfo): string => new Date(ts + offsetAt(ts, t) * 60_000).toISOString().slice(0, 10);
+// The camera-local date of a moment (one helper with the analytics limits).
+export const localDate = (ts: number, t: TimeInfo): string => localDay(ts, t);
 
 export function localDays(from: number, to: number, t: TimeInfo): string[] {
   const last = localDate(to, t);

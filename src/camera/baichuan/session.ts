@@ -45,6 +45,9 @@ export class BaichuanSession {
   private abortConnect: (() => void) | null = null;
   private lastRejected = Number.NEGATIVE_INFINITY;
   private readonly log: Logger;
+  // The key of the connection each message came on: chunk(m) never uses a
+  // later connection's key (#99).
+  private readonly keys = new WeakMap<Message, Buffer>();
 
   constructor(
     private readonly target: () => BaichuanTarget,
@@ -62,9 +65,16 @@ export class BaichuanSession {
   }
 
   // Connects and logs in unless a session is open; callers share one attempt.
+  // close() forgets the attempt in flight, so an ensure() right after it
+  // (same tick) starts a new one instead of returning the rejecting one (#99).
   ensure(): Promise<void> {
     if (this.connected()) return Promise.resolve();
-    this.connecting ??= this.start().finally(() => (this.connecting = null));
+    if (!this.connecting) {
+      const p: Promise<void> = this.start().finally(() => {
+        if (this.connecting === p) this.connecting = null;
+      });
+      this.connecting = p;
+    }
     return this.connecting;
   }
 
@@ -101,7 +111,8 @@ export class BaichuanSession {
         }),
       ]);
     } catch (e) {
-      this.close();
+      // Closed already (close() ran): never close a newer attempt's socket.
+      if (gen === this.generation) this.close();
       throw e;
     } finally {
       clearTimeout(timer);
@@ -141,7 +152,11 @@ export class BaichuanSession {
     const reply = await this.exchange(1, '1464', 0, body);
     if (reply.status === 401) {
       this.lastRejected = this.now();
-      throw new BaichuanError('auth', 'the camera rejected the login', 401);
+      // Measured: <LoginErrInfo><remainTimes>10</remainTimes>; the camera locks the account at 0.
+      const left = /<remainTimes>(\d+)<\/remainTimes>/.exec(bcXor(reply.payload, HOST).toString('utf8'))?.[1];
+      const remainTimes = left === undefined ? undefined : Number(left);
+      this.log.warn({ remainTimes }, 'baichuan_login_rejected');
+      throw new BaichuanError('auth', `the camera rejected the login${remainTimes === undefined ? '' : ` (${remainTimes} attempts left)`}`, 401);
     }
     if (!OK_STATUS.has(reply.status)) throw new BaichuanError('protocol', `login answered ${reply.status}`, reply.status);
     this.key = aesKey(nonce, t.password);
@@ -220,13 +235,15 @@ export class BaichuanSession {
   }
 
   chunk(m: Message, encryptLen?: number): Buffer {
-    if (!this.key) throw new BaichuanError('offline', 'no session');
-    return decryptChunk(this.key, m.payload, encryptLen);
+    const key = this.keys.get(m) ?? this.key;
+    if (!key) throw new BaichuanError('offline', 'no session');
+    return decryptChunk(key, m.payload, encryptLen);
   }
 
   // A plain close: the camera frees the session at once (measured).
   close(): void {
     this.generation++;
+    this.connecting = null;
     this.abortConnect?.();
     const s = this.socket;
     if (!s) return;
@@ -289,8 +306,10 @@ export class BaichuanSession {
       const sub = this.subs.get(msgId);
       if (!sub || sub.cmd !== cmd) continue; // a push (message id 0), or a stale chunk of a stopped download
       const ext = payloadOffset ? decodeText(this.key, f.body.subarray(0, payloadOffset), msgId & 0xff) : '';
+      const msg: Message = { cmd, msgId, status: code, ext, payload: f.body.subarray(payloadOffset) };
+      if (this.key) this.keys.set(msg, this.key);
       try {
-        sub.onMessage({ cmd, msgId, status: code, ext, payload: f.body.subarray(payloadOffset) });
+        sub.onMessage(msg);
       } catch {
         // A handler bug must not escape the socket's data event; the other
         // frames in this read still go out.

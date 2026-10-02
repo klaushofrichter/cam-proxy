@@ -1,12 +1,16 @@
 // src/recordings/cache.ts
 // The recordings cache (spec "The cache"): <dataDir>/recordings/<cam>/<id>,
 // written as <id>.part and renamed when complete. Last use is the file's
-// mtime, touched on every read, so the LRU order survives a restart. A pinned
-// file (being read) is never deleted; a .part is never counted or evicted.
+// mtime, touched on a read (at most once a minute: a seeking player sends many
+// Range requests), so the LRU order survives a restart. A pinned file (being
+// read) is never deleted; a .part counts toward the cap when room is made
+// (it uses the disk) but is never listed or evicted.
 // Callers validate ids with validId (names.ts); path() also refuses anything
 // that could leave the folder.
 import { lstatSync, mkdirSync, readdirSync, renameSync, unlinkSync, utimesSync } from 'fs';
 import { join, resolve, sep } from 'path';
+
+const TOUCH_EVERY_MS = 60_000;
 
 export interface CachedFile { id: string; path: string; bytes: number; used: number }
 
@@ -84,9 +88,16 @@ export class RecordingCache {
   }
 
   open(id: string): (() => void) | null {
-    if (!this.has(id)) return null;
+    let used: number;
+    try {
+      const s = lstatSync(this.path(id));
+      if (!s.isFile()) return null;
+      used = s.mtimeMs;
+    } catch {
+      return null;
+    }
     const unpin = this.pin(this.path(id));
-    this.touch(id);
+    if (this.now() - used >= TOUCH_EVERY_MS) this.touch(id);
     return unpin;
   }
 
@@ -120,23 +131,38 @@ export class RecordingCache {
     return { bytes: f.reduce((n, x) => n + x.bytes, 0), files: f.length };
   }
 
-  makeRoom(incoming: number): number {
+  private partBytes(): number {
+    const dir = this.d.dir();
+    let n = 0;
+    for (const name of safeDir(dir)) {
+      if (!name.endsWith('.part')) continue;
+      try {
+        const s = lstatSync(join(dir, name));
+        if (s.isFile()) n += s.size;
+      } catch {
+        // gone
+      }
+    }
+    return n;
+  }
+
+  // Evicts least-recently-used files (never a pinned one) until `incoming`
+  // fits beside the rest and any .part files; answers whether it fits.
+  makeRoom(incoming: number): boolean {
     const files = this.files();
     const cap = this.d.capBytes();
-    let total = files.reduce((n, f) => n + f.bytes, 0);
-    let freed = 0;
+    let total = files.reduce((n, f) => n + f.bytes, 0) + this.partBytes();
     for (const f of files) {
       if (total + incoming <= cap) break;
       if (this.busy(f.path)) continue;
       try {
         unlinkSync(f.path);
         total -= f.bytes;
-        freed += f.bytes;
       } catch {
         // gone
       }
     }
-    return freed;
+    return total + incoming <= cap;
   }
 
   commit(id: string): void {

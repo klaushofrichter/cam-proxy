@@ -24,6 +24,9 @@ export interface StillsSide { go2rtc: Go2rtc; grabber: FrameGrabber; store: Minu
 const DAY = 86_400_000;
 
 const bad = (res: Response, detail: string) => void res.status(400).json({ error: 'invalid', detail });
+// A calendar date, YYYY-MM-DD (2026-02-30 is not one), in the years 2000 to
+// 2099 (the camera's clock range; nothing else reaches a Search).
+const validDate = (v: string): boolean => /^20\d{2}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(`${v}T00:00:00Z`)) && new Date(`${v}T00:00:00Z`).toISOString().slice(0, 10) === v;
 const intParam = (v: unknown): number | undefined | null => (v === undefined ? undefined : typeof v === 'string' && /^\d{1,15}$/.test(v) ? Number(v) : null);
 
 export const eventJson = (e: EventRow) => ({ id: e.id, kind: e.kind, source: e.source, start: e.start_ts, end: e.end_ts, endReason: e.end_reason });
@@ -218,6 +221,11 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     if (res.headersSent || isAbort(err)) return void res.destroy();
     if (err instanceof SearchError) {
       if (err.code === 'camera_offline') return offline(res);
+      if (err.code === 'busy') {
+        // The Search queue is full (#99): nothing is wrong with the camera.
+        res.setHeader('Retry-After', '5');
+        return void res.status(503).json({ error: 'recordings_unavailable', reason: 'busy', detail: err.message });
+      }
       return void res.status(502).json({ error: 'recordings_unavailable', reason: 'search_failed', detail: err.message });
     }
     if (err instanceof BaichuanError) {
@@ -264,20 +272,41 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     return true;
   };
   const gone = (res: Response) => res.destroyed || res.writableEnded;
+  // Aborted when the response closes (the client left, or it was answered).
+  const leftSignal = (res: Response): AbortSignal => {
+    const ac = new AbortController();
+    res.once('close', () => ac.abort());
+    return ac.signal;
+  };
 
+  // Either a window (from/to, unix ms, at most 48 h) or one camera-local day
+  // (date=YYYY-MM-DD); both include a recording that starts the day before
+  // and runs past midnight into it (#99).
   r.get('/cameras/:cam/recordings', async (req, res) => {
     if (!known(req, res)) return;
     // Checked before the list: it has no guard of its own (from=0 would mean
     // a Search per day since 1970).
-    const from = intParam(req.query.from), to = intParam(req.query.to);
-    if (from === undefined || to === undefined || from === null || to === null) return bad(res, 'from and to (unix ms) are required');
-    if (to < from) return bad(res, 'to is before from');
-    if (to - from > 2 * DAY) return bad(res, 'at most 48 hours per request');
+    const date = req.query.date;
+    let day: string | undefined;
+    let from: number | undefined, to: number | undefined;
+    if (date !== undefined) {
+      if (req.query.from !== undefined || req.query.to !== undefined) return bad(res, 'date or from/to, not both');
+      if (typeof date !== 'string' || !validDate(date)) return bad(res, 'date is YYYY-MM-DD');
+      day = date;
+    } else {
+      const f = intParam(req.query.from), t = intParam(req.query.to);
+      if (f === undefined || t === undefined || f === null || t === null) return bad(res, 'from and to (unix ms), or date, are required');
+      if (t < f) return bad(res, 'to is before from');
+      if (t - f > 2 * DAY) return bad(res, 'at most 48 hours per request');
+      from = f;
+      to = t;
+    }
     const stream = req.query.stream;
     if (stream !== 'sub' && stream !== 'main') return bad(res, 'stream is sub or main');
     if (!online()) return offline(res);
+    const signal = leftSignal(res); // a Search still queued when the client leaves is dropped
     try {
-      const list = await d.recordings().list.range(from, to, stream);
+      const list = day !== undefined ? await d.recordings().list.date(day, stream, signal) : await d.recordings().list.range(from!, to!, stream, signal);
       res.json(list.map((e) => ({ id: e.id, start: e.start, end: e.end, stream: e.stream, size: e.size, kinds: e.kinds, clipId: clipNear(d.catalog, cam().id, e.stream, e.start, 5000)?.id ?? null })));
     } catch (err) {
       recordingError(res, err);
@@ -290,7 +319,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return bad(res, 'month is YYYY-MM');
     if (!online()) return offline(res);
     try {
-      res.json({ month, days: await d.recordings().list.monthDays(month) });
+      res.json({ month, days: await d.recordings().list.monthDays(month, leftSignal(res)) });
     } catch (err) {
       recordingError(res, err);
     }
@@ -306,7 +335,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     if (!online()) return offline(res);
     let entry: RecordingEntry | undefined;
     try {
-      entry = await side.list.find(id); // the camera path comes from Search, never from the request
+      entry = await side.list.find(id, leftSignal(res)); // the camera path comes from Search, never from the request
     } catch (err) {
       return recordingError(res, err);
     }

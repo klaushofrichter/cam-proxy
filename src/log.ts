@@ -19,6 +19,14 @@ export function withoutQuery(url: string): string {
   return i < 0 ? url : url.slice(0, i);
 }
 
+// A URL path with token-like segments masked: any segment of 32 or more
+// characters (by length, not charset: dots, +, =, %, ~ and an extension do not
+// hide a token) is written as `:token`, in case a token was put in the URL.
+// Ids and file names are shorter (Rec20261001_120000_000_M.mp4 is 29).
+export function maskPath(path: string): string {
+  return path.replace(/\/[^/]{32,}(?=\/|$)/g, '/:token');
+}
+
 // Recent log lines (info and above) for the control API, whatever the
 // console level. Lines are already redacted by pino when they get here.
 export class LogBuffer {

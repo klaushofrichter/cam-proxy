@@ -182,7 +182,8 @@ UI session.
 
 Any one client may send 1200 requests a minute, plus 6000 image requests
 (stills, sprites and clip files — `clips/<id>.mp4` and `clips/<id>.jpg` — a
-day on a timeline is up to 1440 sprites); more answer 429
+day on a timeline is up to 1440 sprites; a recording file once it is cached,
+while one not yet cached counts as a normal request); more answer 429
 `{"error":"rate_limited"}`. Timestamps are unix milliseconds. The full schema is in
 [openapi.yaml](openapi.yaml).
 
@@ -204,9 +205,10 @@ api '/cameras/cam1/events?kind=person&limit=10'
 - `GET /api/cameras/{cam}/analyses?from&to`: the analyses of events that
   start in the range (at most one day), oldest first, at most 1000, in the
   `analysis` stream message's shape without `objects`.
-- `GET /api/cameras/{cam}/recordings?from&to&stream`: the recordings on the
-  camera's SD card that overlap the range (unix ms, at most 48 hours;
-  `stream` `sub` or `main`, required), by start:
+- `GET /api/cameras/{cam}/recordings?from&to&stream` or `?date&stream`: the
+  recordings on the camera's SD card that overlap the range (unix ms, at most
+  48 hours) or of one camera-local day (`date=YYYY-MM-DD`; not with
+  `from`/`to`); `stream` `sub` or `main`, required. By start:
   `[{id, start, end, stream, size, kinds, clipId}]`. See
   [Recordings (SD card)](#recordings-sd-card).
 - `GET /api/cameras/{cam}/recordings/days?month=YYYY-MM`: `{month, days}`,
@@ -337,6 +339,17 @@ as MP4, also the ones FTP never delivered.
   (unix ms, `to` not before `from`, at most 48 hours) answers `[{id, start,
   end, stream, size, kinds, clipId}]`, from the camera's HTTP `Search` (one
   per camera-local day the range touches, one at a time, each kept 30 s).
+  `?date=YYYY-MM-DD&stream=` instead lists one camera-local day, in the same
+  shape (`date` and `from`/`to` together are a 400).
+  A camera Search finds the recordings that start on its day, so a recording
+  that starts before midnight and runs into the next day is only in the day
+  before's Search: both forms also read the day before (the day before the
+  range's first day), and keep its midnight-crossing recordings. Once that
+  day has been over for 5 minutes and none of its recordings is still being
+  written, that tail is final and kept 15 minutes, so a day view in that time
+  costs one Search per stream after the first. An SD-card format or overwrite,
+  or a camera reboot the proxy didn't start, can leave it stale for up to 15
+  minutes.
   `kinds` comes from the file name's trigger flags; `clipId` is the proxy's
   FTP copy of the same recording (same stream, start within 5 s), or null.
   Recordings still being written are left out.
@@ -377,11 +390,15 @@ as MP4, also the ones FTP never delivered.
   needs room, least recently used first. A file being read is never deleted.
   Below `storage.minFreeBytes` files are streamed without being kept.
 - **Errors:** 400 `invalid` (a bad id, `to` before `from`, more than 48
-  hours, a bad `month` or `stream`); 404 `unknown_recording`; 503
+  hours, a bad `date`, `month` or `stream`, `date` with `from`/`to`); 404 `unknown_recording`; 503
   `camera_offline` (the status poller says offline, or no connection to the
   camera could be made); 502 `recordings_unavailable` with `reason` `refused`,
   `auth`, `timeout`, `protocol`, `offline` (the connection was lost during the
-  transfer) or `search_failed` (the list's Search). After the first byte the
+  transfer) or `search_failed` (the list's Search); 503
+  `recordings_unavailable` with `reason` `busy` and `Retry-After: 5` when more
+  camera Searches wait than the proxy queues (one runs, 8 wait; requests for
+  the same day share one Search; a waiting Search whose requests have all
+  gone is dropped). After the first byte the
   headers are gone, so a failure cuts the connection and the client sees a
   short body.
 - **Status:** the Status page's "Recordings (SD card)" card shows the last
@@ -548,6 +565,10 @@ arrive.
 | `POST /control/actions/camera-poe-on` | recovery: turns the camera's port on if its PoE is off (no power check, no cooldown; the switch lock applies). 200 the reading plus `wasOn`; 409 and 502 as `camera-powercycle`. Audited as `camera-poe-on` |
 | `POST /control/actions/poe-switch-read` | reads the camera's port on the switch now (log in, read, log out; never polled): `{at, port, index, poe, watts, link, sn, firmware}`; 409 and 502 as `camera-powercycle`. Audited as `control-action` |
 | `POST /control/actions/restart-proxy` | restarts the proxy process: 202, then the normal graceful stop (the same as SIGTERM; `proxy-stop` reason `restart-requested`) and exit 0, also after 15 s if the stop hangs. Compose (`restart: unless-stopped`) or the cluster starts it again; run directly (`npm start`), the process just ends. Admin sessions end with the process. Audited as `proxy-restart` |
+| `POST /control/actions/inventory` | `{"kind":"stills"}`: starts an inventory in the background ([the spec](docs/superpowers/specs/2026-10-02-inventory-design.md)); 202 `{runId}`; 400 `invalid` for an unknown kind; 409 `inventory_busy` `{runId}` while one runs (one at a time); 503 `stopping` once the proxy is stopping. Poll `GET /control/inventory/runs/{id}`. Audited as `inventory` when it ends |
+| `POST /control/actions/inventory-cancel` | cancels the running inventory: `{cancelled, runId}`; the run keeps its partial counts. Audited as `control-action` |
+| `GET /control/inventory` | `{running: {runId, kind, startedAt, outcome: "running", progress: {phase, done, total, note}} or null, runs: {stills: [the last 10 runs, newest first: {runId, kind, startedAt, tookMs, outcome, counts, message}]}}` |
+| `GET /control/inventory/runs/{id}` | one report: `{runId, kind, camera, startedAt, tookMs, outcome: ok\|cancelled\|failed, error, cancelledBy, requestedBy, window: {from, to, reason, retentionFrom, protectedFrom, notes}, counts, top, items, itemsTruncated, message}` (`notes`: caveats on the counts, such as the clock note when seconds are restorable; stills `counts` include `previewsPruned`, packs without a sprite whose previews were pruned earlier, and `prunedDuringRun`, packs deleted by retention while the run read them, counted as missing); 400 for a malformed id, 404 for an unknown one. Kept in `<dataDir>/inventory/<kind>/` (the last 10) |
 | `GET /control/audit` | the audit log as JSON lines: `limit`, `before`/`after` (cursors), `from`, `to`, `action`, `outcome`; admin token, admin session or `CAMPROXY_AUDIT_TOKEN`; HEAD answers like GET without the body. See [docs/audit-log.md](docs/audit-log.md) |
 | `GET /health` | `{ok, version, startedAt}` (no auth): `startedAt` (ms) tells a new process apart |
 | `GET /control/log?limit` | recent log lines (info and above), redacted; default limit 100, buffer holds the last 500 |
@@ -581,6 +602,12 @@ exchanged for the cookie and not stored in the browser.
   restart it shows "Restarting…", waits for `/health` to answer with a new
   start time or version, and reloads (sign in again: sessions end with the
   process). After 2 minutes without the proxy it says so.
+  The Inventory box's "Check stills" checks the stills of the retention
+  window in the background: the missing seconds, the 10 longest gaps and
+  whether a proxy stop or crash, a camera reboot or a power cycle explains
+  them, the seconds a local clip could restore, and unreadable packs or
+  sprites without their pack. It shows the progress (with Cancel) and the
+  newest result.
 - **Top bar:** the title links to the GitHub repo; badges for the camera
   online state and event intake; the camera's model (linked to
   `camera.webUiUrl`) · firmware · version; "updated … ago"; Refresh, the
@@ -593,6 +620,7 @@ The proxy records who did what, as ECS JSON lines, one file per UTC day in
 - start and stop, restarts, camera reboots, sign-ins (with failures), sign-outs, login links;
 - refused tokens, throttled to one record per IP and path per 10 minutes;
 - control actions and settings changes (secret values redacted);
+- inventory runs, with their counts;
 - changes of the camera's FTP upload (on, off, pointing elsewhere);
 - a storage snapshot and an activity summary at 00:05 camera time.
 

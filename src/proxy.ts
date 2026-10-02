@@ -22,15 +22,18 @@ import { CameraFtpWatch, clipsStalled } from './clips/ftp-health';
 import { ClipIndexer } from './clips/indexer';
 import { createClipsSide, type ClipsSide } from './clips/side';
 import { createRecordingsSide, type RecordingsSide } from './recordings/side';
+import { validId } from './recordings/names';
 import { EventIntake } from './events/intake';
 import { EventTracker } from './events/tracker';
 import { logger, setLogLevel, withoutQuery } from './log';
 import { Storage } from './storage';
-import { AuditLog, cut } from './audit/audit-log';
+import { AuditLog, cut, maskPath } from './audit/audit-log';
 import { IpCap, RefusalThrottle } from './audit/throttle';
 import { activityDaily, DailyAudit, storageMessage } from './audit/daily';
 import { Go2rtc } from './stills/go2rtc';
 import { FrameGrabber, type Frame } from './stills/grabber';
+import { InventoryRunner } from './inventory/runner';
+import { stillsCheck } from './inventory/stills';
 import { MinuteStore, minuteOf } from './stills/store';
 import type { StillsSide } from './api/client-api';
 import { StreamLog, type StreamMessage } from './stream/log';
@@ -75,6 +78,7 @@ export interface Proxy {
   readonly analytics: AnalyticsService;
   storage: Storage;
   readonly audit: AuditLog;
+  readonly inventory: InventoryRunner;
   start(opts?: { port?: number; host?: string }): Promise<{ port: number }>;
   restart(): Promise<void>;
   stop(opts?: { reason?: string }): Promise<void>;
@@ -135,6 +139,25 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   storage.recount();
   const sessions = createSessionSigner(opts.sessionSecret);
   const links = createLoginLinks();
+  // Inventories (spec 2026-10-02-inventory-design): one run at a time, the
+  // results in <dataDir>/inventory, an `inventory` audit record per run.
+  // The settings are read when a run starts.
+  const inventory = new InventoryRunner({
+    dir: join(running.server.dataDir, 'inventory'),
+    audit,
+    camera: () => running.camera.id,
+    checks: {
+      stills: {
+        label: 'Stills',
+        run: stillsCheck({
+          dataDir: running.server.dataDir,
+          audit,
+          catalog,
+          settings: () => ({ cam: running.camera.id, intervalS: running.stills.intervalS, stillsDays: running.retention.stillsDays, previewsDays: running.retention.previewsDays, keepHours: running.storage.keepHours.stills }),
+        }),
+      },
+    },
+  });
   // Composed clips (spec 2026-09-28): one encoding at a time; abandoned and
   // old jobs are swept every 5 s.
   const font = running.composition?.font ?? defaultFont();
@@ -388,7 +411,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     onRefused: (req, info) => {
       const ip = clientIp(req);
       // At most 256 characters in the record, the message and the throttle key.
-      const full = withoutQuery(req.originalUrl);
+      const full = maskPath(withoutQuery(req.originalUrl));
       const path = full.length > 256 ? `${cut(full, 256)}…` : full;
       const t = refusals.take(ip, path.replace(/\d{6,}|[0-9a-f]{16,}/gi, ':n'));
       if (!t.record) return;
@@ -404,9 +427,17 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // Far above real use (the UI, cams, a scraper); stops a flood. SSE is one
   // long request. Still and sprite images have their own, higher limit: a
   // day on the timeline is up to 1440 sprites.
-  // Clip and recording files too: a seeking video player sends many range requests.
-  const IMAGE = /^\/api\/cameras\/[^/]+\/((stills|previews)\/\d{1,15}\.jpg|clips\/\d{1,15}\.(mp4|jpg)|recordings\/Rec[0-9A-Za-z_]+\.mp4|events\/\d{1,15}\/analysis\.jpg)$/;
-  const isImage = (req: Request) => req.method === 'GET' && IMAGE.test(req.path);
+  // Clip and recording files too: a seeking video player sends many range
+  // requests. A recording only once it is cached (#99): one not cached costs
+  // a camera Search and a download, so it counts in the normal bucket.
+  const IMAGE = /^\/api\/cameras\/[^/]+\/((stills|previews)\/\d{1,15}\.jpg|clips\/\d{1,15}\.(mp4|jpg)|events\/\d{1,15}\/analysis\.jpg)$/;
+  const RECORDING = /^\/api\/cameras\/[^/]+\/recordings\/(Rec[0-9A-Za-z_]+\.mp4)$/;
+  const isImage = (req: Request) => {
+    if (req.method !== 'GET') return false;
+    if (IMAGE.test(req.path)) return true;
+    const id = RECORDING.exec(req.path)?.[1];
+    return id !== undefined && validId(id) && recordings.cache.has(id);
+  };
   // Behind an ingress (issue #29): client addresses from X-Forwarded-For.
   if (running.server.trustProxy) app.set('trust proxy', running.server.trustProxy);
   app.use(rateLimit({ windowMs: 60_000, limit: 1200, skip: isImage, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } }));
@@ -489,6 +520,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       unmapped: { list: (limit) => listUnmapped(catalog, limit), clear: () => clearUnmapped(catalog) },
       sseClients: () => sse.clients(),
       recordings: () => recordings.status(),
+      inventory,
       stream: () => ({ enabled: !!stills, up: stills?.grabber.up() ?? false, go2rtcUp: stills?.go2rtc.up() ?? false, lastFrameTs: stills?.grabber.lastFrameTs() ?? null }),
       sessions,
       links,
@@ -562,6 +594,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     sse,
     storage,
     audit,
+    inventory,
     get stills() {
       return stills;
     },
@@ -641,7 +674,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       // a running encode ends (up to 3 s), and a Vision call in flight is
       // stored before the catalog closes (up to its 10 s timeout).
       // A recording download is aborted (cmd 9) and the Baichuan session closed (up to 2 s).
-      await Promise.all([composer.stop(), analytics.stop(), recordings.stop()]);
+      // A running inventory is cancelled ('stop'), saved and audited before the catalog closes.
+      await Promise.all([composer.stop(), analytics.stop(), recordings.stop(), inventory.stop()]);
       const s = server;
       if (s) {
         s.closeAllConnections();

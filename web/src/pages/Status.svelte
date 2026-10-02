@@ -1,7 +1,7 @@
 <script lang="ts">
   import { status, stats } from '../lib/state';
   import { pausedText, usageLine } from '../lib/analytics';
-  import { daysUntilFullText } from '../lib/format';
+  import { agoText, daysUntilFullText, mbText } from '../lib/format';
   import { cameraStateText, poeLine } from '../lib/maintenance';
   import { cacheFillText, recordingsClass, recordingsLastText } from '../lib/recordings';
   import { cameraFtpClass, cameraFtpText, clipTime, ftpAlerts } from '../lib/ftp';
@@ -10,12 +10,8 @@
   import Icon from '../components/Icon.svelte';
 
   const gb = (b: number) => `${(b / 1024 ** 3).toFixed(1)} GB`;
-  const mb = (b: number) => `${(b / 1024 ** 2).toFixed(1)} MB`;
-  const ago = (ts?: number | null) => {
-    if (!ts) return '—';
-    const s = Math.round((Date.now() - ts) / 1000);
-    return s < 60 ? `${s} s ago` : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`;
-  };
+  const mb = mbText;
+  const ago = (ts?: number | null) => agoText(ts);
 
   // #93: the camera's FTP upload off, elsewhere, or no clips while events happen.
   const alerts = $derived($status ? ftpAlerts({ enabled: $status.ftp.enabled, publicHost: $status.ftp.publicHost, camera: $status.ftp.camera ?? null, stalled: $status.ftp.stalled ?? null }) : []);

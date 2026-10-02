@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import ConfirmDialog from '../components/ConfirmDialog.svelte';
+  import InventoryCard from '../components/InventoryCard.svelte';
   import { api, ApiError } from '../lib/api';
   import { poeAlert, poeOnText, powerCycleFailText, powerCycleMessage, restartWatch, RESTART_GIVE_UP_MS, type Health } from '../lib/maintenance';
   import { refresh, refreshTick, status } from '../lib/state';
@@ -45,7 +46,7 @@
     },
     'restart-proxy': {
       title: 'Restart the proxy',
-      message: 'Restart the proxy? Live streams and uploads in progress are interrupted; the proxy is back in about 20 s. You sign in again afterwards.',
+      message: 'Restart the proxy? Live streams and uploads in progress are interrupted; the proxy is back in a few seconds. You sign in again afterwards.',
       confirmLabel: 'Restart proxy',
     },
   });
@@ -200,6 +201,7 @@
       <p class="bad" data-testid="restart-state">The proxy did not come back. Is it running under a supervisor (compose, the cluster)?</p>
     {/if}
   </div>
+  <InventoryCard />
   <div class="card">
     <div class="loghead"><h3>Log</h3><span class="small">updates every 10 s</span></div>
     <div class="log">
