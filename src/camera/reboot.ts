@@ -35,7 +35,7 @@ export type RebootAnswer =
 export type PowerCycleAnswer =
   | ({ status: 202 } & CycleResult)
   | TooSoon
-  | { status: 409 | 502; error: PoeSwitchErrorCode; detail: string };
+  | { status: 409 | 502; error: PoeSwitchErrorCode; detail: string; poeOff?: true; turnedOn?: boolean };
 // What the audit records name: never the password.
 export interface PowerCycleInfo { switch: { model: string; host: string; port: number }; offSeconds: number }
 export interface RebootRequester { requestedBy: 'session' | 'token'; ip: string; userAgent?: string }
@@ -130,15 +130,16 @@ export class CameraReboot {
     const base = { action: 'camera-powercycle', category: ['host'], type: ['change'], user: 'admin', ip: who.ip, userAgent: who.userAgent };
     const where = `${info.switch.host} port ${info.switch.port}`;
     const details = { switch: { ...info.switch }, offSeconds: info.offSeconds, requestedBy: who.requestedBy, phase: 'requested' };
+    // The cut, on this class's clock (the cooldown and downSec count from it).
+    const cut = () => {
+      const at = this.now();
+      offAt = at;
+      this.lastSent = at;
+      this.d.forgetToken(); // the camera loses every token
+      this.current = { kind: 'powercycle', requestedAt, confirmed: true, phase: 'power-cycling', offAt: at, endedAt: null, downSec: null };
+    };
     try {
-      // The cut, on this class's clock (the cooldown and downSec count from it).
-      const r = await run(() => {
-        const at = this.now();
-        offAt = at;
-        this.lastSent = at;
-        this.d.forgetToken(); // the camera loses every token
-        this.current = { kind: 'powercycle', requestedAt, confirmed: true, phase: 'power-cycling', offAt: at, endedAt: null, downSec: null };
-      });
+      const r = await run(cut);
       this.current = { ...this.current!, phase: 'rebooting' };
       this.d.audit.write({
         ...base, outcome: 'success',
@@ -149,19 +150,27 @@ export class CameraReboot {
       this.watch(serialBefore);
       return { status: 202, ...r };
     } catch (err) {
-      const e = err instanceof PoeSwitchError ? err : new PoeSwitchError('switch_error', (err as Error).message);
-      const poeOff = offAt !== null;
+      const e = err instanceof PoeSwitchError ? err : new PoeSwitchError('switch_error', (err as Error).message, offAt !== null, null);
+      // The switch says whether the PoE-off request went out (also when its
+      // answer was lost and onOff never ran): then the port may have been cut.
+      const poeOff = e.poeOff;
+      const turnedOn = e.turnedOn === true;
       this.d.audit.write({
         ...base, outcome: 'failure', error: e.code,
-        message: poeOff ? `Camera power-cycle through the PoE switch (${where}) failed after the cut: ${e.message}` : `Camera power-cycle through the PoE switch (${where}) refused: ${e.message}`,
-        details: { ...details, poeOff },
+        message: poeOff
+          ? `Camera power-cycle through the PoE switch (${where}) failed: PoE may have been cut; turned back on: ${turnedOn ? 'yes' : 'no'} (${e.message})`
+          : `Camera power-cycle through the PoE switch (${where}) refused: ${e.message}`,
+        details: { ...details, poeOff, ...(poeOff ? { turnedOn } : {}) },
       });
-      logger.warn({ code: e.code, poeOff }, 'camera_powercycle_failed');
+      (poeOff && !turnedOn ? logger.error : logger.warn).call(logger, { code: e.code, poeOff, turnedOn }, 'camera_powercycle_failed');
       if (poeOff) {
-        // The camera may stay dark: the cooldown holds and the watch tells when (or whether) it is back.
+        if (offAt === null) cut();
+        // The camera may have gone dark: the cooldown holds and the watch tells when (or whether) it is back.
         this.current = { ...this.current!, phase: 'rebooting' };
         this.watch(serialBefore);
-      } else this.current = previous;
+        return { status: 502, error: e.code, detail: e.message, poeOff: true, turnedOn };
+      }
+      this.current = previous;
       return { status: e.code === 'switch_busy' || e.code === 'no_power' ? 409 : 502, error: e.code, detail: e.message };
     } finally {
       this.sending = false;

@@ -3,7 +3,7 @@ import { rateLimit } from 'express-rate-limit';
 import type { Catalog } from '../catalog/db';
 import type { CameraState } from '../camera/status';
 import type { PowerCycleAnswer, RebootAnswer, RebootRequester, RebootState, TooSoon } from '../camera/reboot';
-import { PoeSwitchError, type PoeSwitchStatus, type PortReading } from '../camera/poe-switch';
+import { PoeSwitchError, type PoeOnResult, type PoeSwitchStatus, type PortReading } from '../camera/poe-switch';
 import type { Config } from '../config/defaults';
 import { applyOverrides, ConfigError, needsProcessRestart, needsRestart, removeOverride, type Loaded } from '../config/load';
 import { leafAt, leafPaths } from '../config/schema';
@@ -47,7 +47,7 @@ export interface ControlDeps {
   restart: () => Promise<void>; // the camera side
   cameraReboot: (who: RebootRequester) => Promise<RebootAnswer>;
   // The camera's PoE switch (#85): why it can't be used (or null), a read, a power-cycle.
-  poeSwitch: { notConfigured: () => string | null; read: () => Promise<PortReading> };
+  poeSwitch: { notConfigured: () => string | null; read: () => Promise<PortReading>; poeOn: () => Promise<PoeOnResult>; info: () => { model: string; host: string; port: number } };
   cameraPowerCycle: (who: RebootRequester) => Promise<PowerCycleAnswer>;
   restartProcess: () => void; // stop, then exit 0 (the supervisor starts it again)
   ftp: () => FtpStatus;
@@ -283,7 +283,7 @@ export function controlApi(d: ControlDeps): express.Router {
     // records, camera-reboot and proxy-restart) or a retention preview
     // (dryRun changes nothing). The power-cycle has its own records too
     // (camera-powercycle); a read of the switch is a control-action.
-    if (name !== 'camera-reboot' && name !== 'camera-powercycle' && name !== 'restart-proxy' && !(name === 'retention-run' && req.body?.dryRun === true)) {
+    if (name !== 'camera-reboot' && name !== 'camera-powercycle' && name !== 'camera-poe-on' && name !== 'restart-proxy' && !(name === 'retention-run' && req.body?.dryRun === true)) {
       res.on('close', () => {
         const done = res.writableFinished;
         const ok = done && res.statusCode < 400;
@@ -291,9 +291,9 @@ export function controlApi(d: ControlDeps): express.Router {
         d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: !done ? 'unknown' : ok ? 'success' : 'failure', user: 'admin', ip: clientIp(req), userAgent: req.get('user-agent'), message: `Control action ${name}: ${result}`, details: { action: name, result, requestedBy } });
       });
     }
-    const fail = (status: number, error: string, detail?: string) => {
+    const fail = (status: number, error: string, detail?: string, extra: object = {}) => {
       res.locals.errorCode = error;
-      res.status(status).json({ error, ...(detail ? { detail } : {}) });
+      res.status(status).json({ error, ...(detail ? { detail } : {}), ...extra });
     };
     // The reboot and the power-cycle share a cooldown (#83, #85).
     const tooSoon = (a: TooSoon) => {
@@ -304,7 +304,7 @@ export function controlApi(d: ControlDeps): express.Router {
     };
     const switchFail = (err: unknown) => {
       if (!(err instanceof PoeSwitchError)) throw err;
-      fail(err.code === 'switch_busy' || err.code === 'no_power' ? 409 : 502, err.code, err.message);
+      fail(err.code === 'switch_busy' || err.code === 'no_power' ? 409 : 502, err.code, err.message, err.poeOff ? { poeOff: true, turnedOn: err.turnedOn === true } : {});
     };
     switch (name) {
       case 'onvif-resubscribe':
@@ -344,7 +344,24 @@ export function controlApi(d: ControlDeps): express.Router {
         const a = await d.cameraPowerCycle({ requestedBy, ip: clientIp(req), userAgent: req.get('user-agent') });
         if (a.status === 202) return void res.status(202).json({ offAt: a.offAt, onAt: a.onAt, watts: a.watts });
         if (a.status === 429) return tooSoon(a);
-        return fail(a.status, a.error, a.detail);
+        return fail(a.status, a.error, a.detail, a.poeOff ? { poeOff: true, turnedOn: a.turnedOn } : {});
+      }
+      // Recovery (#85): PoE on for the camera's port if it is off; no power
+      // check and no cooldown. The same switch session lock as the rest.
+      case 'camera-poe-on': {
+        const why = d.poeSwitch.notConfigured();
+        if (why) return fail(409, 'not_configured', why);
+        const sw = d.poeSwitch.info();
+        const where = `${sw.host} port ${sw.port}`;
+        const base = { action: 'camera-poe-on', category: ['host'], type: ['change'], user: 'admin', ip: clientIp(req), userAgent: req.get('user-agent') };
+        try {
+          const r = await d.poeSwitch.poeOn();
+          d.audit.write({ ...base, outcome: 'success', message: r.wasOn ? `Camera PoE on (${where}): it was on already` : `Camera PoE turned on (${where})`, details: { switch: sw, wasOn: r.wasOn, requestedBy } });
+          return void res.json(r);
+        } catch (err) {
+          if (err instanceof PoeSwitchError) d.audit.write({ ...base, outcome: 'failure', error: err.code, message: `Camera PoE on (${where}) failed: ${err.message}`, details: { switch: sw, requestedBy, ...(err.poeOff ? { poeStillOff: true } : {}) } });
+          return switchFail(err);
+        }
       }
       // The camera's port on the switch now (log in, read, log out); never polled.
       case 'poe-switch-read': {

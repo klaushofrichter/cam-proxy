@@ -32,8 +32,17 @@ export interface PoeSwitchMock {
   browserLogin(): void;
   browserLogout(): void;
   activeSession(): boolean;
-  // Make the next 103 call(s) answer this instead of {config: ok}.
+  // The next 103 call(s) answer {config: fail} without applying anything.
   failSet: number;
+  // The next PoE-off: applied, then the answer is lost: the connection
+  // drops, never comes (hang), or comes without config: ok.
+  offFault: 'drop' | 'hang' | 'noconfig' | null;
+  // Every POST hangs with no answer (the real switch, seen from curl, while busy).
+  hang: boolean;
+  // Delay the answer to a callcmd (ms).
+  delay: Record<number, number>;
+  // Our session ends on the switch (as after a switch-side timeout).
+  expireSession(): void;
   close(): Promise<void>;
 }
 
@@ -53,6 +62,10 @@ export async function startPoeSwitchMock(o: PoeSwitchMockOptions): Promise<PoeSw
     pw,
     opcodes: [],
     failSet: 0,
+    offFault: null,
+    hang: false,
+    delay: {},
+    expireSession: () => void (session = null),
     browserLogin: () => void (session = 'browser'),
     browserLogout: () => void (session = null),
     activeSession: () => session !== null,
@@ -67,6 +80,17 @@ export async function startPoeSwitchMock(o: PoeSwitchMockOptions): Promise<PoeSw
     res.end(JSON.stringify({ errcode: 0, data: { callcmd: cmd, calldata } }));
   };
   const handle = (req: IncomingMessage, res: ServerResponse, body: string) => {
+    // A test hook, not the switch's protocol (e2e): {index, on} sets PoE as
+    // if someone used the switch's web UI.
+    if (req.url === '/mock/poe') {
+      const { index, on } = JSON.parse(body || '{}') as { index: number; on: boolean };
+      if (poec[index] !== (on ? 1 : 0)) {
+        poec[index] = on ? 1 : 0;
+        o.onPoe?.(index, on);
+      }
+      res.writeHead(204);
+      return void res.end();
+    }
     const cmd = Number((req.url ?? '/').slice(1));
     const cookie = req.headers.cookie ?? '';
     const ours = session !== null && session !== 'browser' && cookie.split(/;\s*/).some((c) => c.split('=')[0] === session);
@@ -80,6 +104,10 @@ export async function startPoeSwitchMock(o: PoeSwitchMockOptions): Promise<PoeSw
     if (session !== null && !ours) {
       mock.calls.push({ cmd, session: false, dropped: true });
       return void req.socket.destroy();
+    }
+    if (mock.hang) {
+      mock.calls.push({ cmd, session: ours, dropped: true });
+      return; // no answer, the socket stays open until the client gives up
     }
     mock.calls.push({ cmd, session: ours });
     if (parsed.data?.callcmd !== cmd) {
@@ -115,6 +143,13 @@ export async function startPoeSwitchMock(o: PoeSwitchMockOptions): Promise<PoeSw
         poec[index] = on ? 1 : 0;
         o.onPoe?.(index, on);
       }
+      const fault = on ? null : mock.offFault;
+      if (fault) {
+        mock.offFault = null;
+        if (fault === 'drop') return void req.socket.destroy();
+        if (fault === 'hang') return;
+        return answer(res, cmd, { config: 'fail' });
+      }
       return answer(res, cmd, { config: 'ok' });
     }
     if (cmd === 126) {
@@ -126,7 +161,11 @@ export async function startPoeSwitchMock(o: PoeSwitchMockOptions): Promise<PoeSw
   server = createServer((req, res) => {
     let body = '';
     req.on('data', (d) => (body += d));
-    req.on('end', () => handle(req, res, body));
+    req.on('end', () => {
+      const ms = mock.delay[Number((req.url ?? '/').slice(1))];
+      if (ms) setTimeout(() => handle(req, res, body), ms);
+      else handle(req, res, body);
+    });
   });
   await new Promise<void>((r) => server.listen(o.port ?? 0, '127.0.0.1', () => r()));
   const port = (server.address() as AddressInfo).port;

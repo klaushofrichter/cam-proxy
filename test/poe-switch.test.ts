@@ -24,6 +24,24 @@ const sw = (m: PoeSwitchMock, over: { password?: string; port?: number; ports?: 
   });
   return { s, slept };
 };
+// A fake clock: sleep advances it at once (the retry window is about 60 s).
+const clocked = (m: PoeSwitchMock, over: { offSeconds?: number; timeoutMs?: number; realOffSleep?: boolean } = {}) => {
+  const clock = { t: 1_000_000 };
+  const slept: number[] = [];
+  const s = new PoeSwitch({
+    config: () => ({ model: 'sscpoe-web', host: m.host, port: 8, ports: 8, offSeconds: over.offSeconds ?? 10 }),
+    password: () => PASSWORD,
+    now: () => clock.t,
+    // realOffSleep: the off time waits for real (stop() cuts it short).
+    sleep: async (ms) => {
+      slept.push(ms);
+      if (over.realOffSleep && ms === (over.offSeconds ?? 10) * 1000) return new Promise<void>(() => {});
+      clock.t += ms;
+    },
+    timeoutMs: over.timeoutMs ?? 1000,
+  });
+  return { s, slept, clock };
+};
 const codeOf = async (p: Promise<unknown>) => {
   try {
     await p;
@@ -134,30 +152,137 @@ describe('PoeSwitch against the mock', () => {
     expect(await codeOf(s.read())).toBe('switch_unreachable');
   });
 
-  it('logs out when PoE off fails, and retries PoE on before giving up (poeOff: true)', async () => {
+  it('the off answer lost (dropped, hung, or without config: ok): turns PoE on again and reports poeOff, turnedOn', async () => {
+    for (const fault of ['drop', 'hang', 'noconfig'] as const) {
+      const m = await mock();
+      m.offFault = fault;
+      const { s } = clocked(m, { timeoutMs: 300 });
+      const offs: number[] = [];
+      const e = await s.cycle((at) => offs.push(at)).catch((x: unknown) => x as PoeSwitchError);
+      expect(e, fault).toBeInstanceOf(PoeSwitchError);
+      expect(e, fault).toMatchObject({ code: 'switch_error', poeOff: true, turnedOn: true });
+      expect((e as Error).message, fault).toMatch(/PoE may have been cut on port 8; it is on again/);
+      expect(m.opcodes.at(-1), fault).toBe(0x202);
+      expect(m.opcodes[0], fault).toBe(0x2);
+      expect(m.poec[0], fault).toBe(1);
+      expect(m.activeSession(), fault).toBe(false);
+      expect(s.status().poeMaybeOff, fault).toBe(false);
+    }
+  });
+
+  it('onOff throwing after the cut still turns PoE on again', async () => {
+    const m = await mock();
+    const { s } = clocked(m);
+    const e = await s.cycle(() => { throw new Error('boom'); }).catch((x: unknown) => x as PoeSwitchError);
+    expect(e).toMatchObject({ code: 'switch_error', poeOff: true, turnedOn: true });
+    expect(m.opcodes).toEqual([0x2, 0x202]);
+    expect(m.poec[0]).toBe(1);
+  });
+
+  it('a refused off (config: fail, nothing applied) still sends PoE on: the off was sent', async () => {
     const m = await mock();
     m.failSet = 1;
-    expect(await codeOf(sw(m).s.cycle(() => {}))).toBe('switch_error');
+    const e = await clocked(m).s.cycle(() => {}).catch((x: unknown) => x as PoeSwitchError);
+    expect(e).toMatchObject({ code: 'switch_error', poeOff: true, turnedOn: true });
+    expect(m.opcodes).toEqual([0x2, 0x202]);
     expect(m.calls.at(-1)?.cmd).toBe(126);
-    expect(m.poec[0]).toBe(1);
+  });
 
-    const m2 = await mock();
-    let off = 0;
-    const s = sw(m2).s;
-    // PoE off works, then PoE on fails twice: the third try turns it on.
-    const p = s.cycle(() => void (off++, (m2.failSet = 2)));
-    const r = await p;
-    expect(off).toBe(1);
+  it('PoE on fails twice: retried with backoff on the same session, then it works', async () => {
+    const m = await mock();
+    const { s, slept } = clocked(m);
+    const r = await s.cycle(() => void (m.failSet = 2));
     expect(r.watts).toBe(6.8);
-    expect(m2.opcodes).toEqual([0x2, 0x202, 0x202, 0x202]);
-    expect(m2.poec[0]).toBe(1);
+    expect(m.opcodes.filter((o) => o === 0x202).length).toBeGreaterThanOrEqual(3);
+    expect(m.poec[0]).toBe(1);
+    expect(slept.filter((x) => x !== 10000).length).toBeGreaterThanOrEqual(2);
+  });
 
-    const m3 = await mock();
-    const s3 = sw(m3).s;
-    const e = await s3.cycle(() => void (m3.failSet = 10)).catch((x: unknown) => x as PoeSwitchError);
-    expect(e).toMatchObject({ code: 'switch_error', poeOff: true });
-    expect((e as Error).message).toMatch(/PoE may still be off on port 8/);
-    expect(m3.calls.at(-1)?.cmd).toBe(126);
+  it('the session is lost during the off time: logs in again and turns PoE on', async () => {
+    const m = await mock();
+    const { s } = clocked(m);
+    const r = await s.cycle(() => m.expireSession());
+    expect(r.watts).toBe(6.8);
+    expect(m.poec[0]).toBe(1);
+    expect(m.calls.filter((c) => c.cmd === 123)).toHaveLength(2);
+    expect(m.calls.at(-1)?.cmd).toBe(126);
+    expect(m.activeSession()).toBe(false);
+  });
+
+  it('PoE on keeps failing: retries for about 60 s with backoff, then reports PoE may still be off', async () => {
+    const m = await mock();
+    const { s, clock } = clocked(m);
+    const t0 = clock.t;
+    const e = await s.cycle(() => void (m.failSet = 1000)).catch((x: unknown) => x as PoeSwitchError);
+    expect(e).toMatchObject({ code: 'switch_error', poeOff: true, turnedOn: false });
+    expect((e as Error).message).toMatch(/PoE may still be OFF on port 8/);
+    const onTries = m.opcodes.filter((o) => o === 0x202).length;
+    expect(onTries).toBeGreaterThan(3);
+    expect(onTries).toBeLessThan(40);
+    const waited = clock.t - t0 - 10000; // minus the off time
+    expect(waited).toBeGreaterThanOrEqual(55_000);
+    expect(waited).toBeLessThanOrEqual(75_000);
+    expect(s.status().poeMaybeOff).toBe(true);
+    expect(m.calls.at(-1)?.cmd).toBe(126);
+  });
+
+  it('poeOn: turns the port on when it is off, without the power check; nothing to do when it is on', async () => {
+    const m = await mock();
+    const { s } = clocked(m);
+    m.poec[0] = 0;
+    expect(await s.poeOn()).toMatchObject({ port: 8, index: 0, wasOn: false, poe: true });
+    expect(m.opcodes).toEqual([0x202]);
+    expect(m.poec[0]).toBe(1);
+    expect(await s.poeOn()).toMatchObject({ wasOn: true, poe: true });
+    expect(m.opcodes).toEqual([0x202]);
+    expect(m.activeSession()).toBe(false);
+  });
+
+  it('poeOn clears the "PoE may be off" state', async () => {
+    const m = await mock();
+    const { s } = clocked(m);
+    await s.cycle(() => void (m.failSet = 1000)).catch(() => {});
+    expect(s.status().poeMaybeOff).toBe(true);
+    m.failSet = 0;
+    expect(await s.poeOn()).toMatchObject({ wasOn: false, poe: true });
+    expect(s.status().poeMaybeOff).toBe(false);
+  });
+
+  it('a login that times out is switch_busy (busy or unreachable); a refused connection stays unreachable', async () => {
+    const m = await mock();
+    m.hang = true;
+    const s = new PoeSwitch({ config: () => ({ model: 'sscpoe-web', host: m.host, port: 8, ports: 8, offSeconds: 5 }), password: () => PASSWORD, timeoutMs: 300 });
+    const e = await s.read().catch((x: unknown) => x as PoeSwitchError);
+    expect(e).toMatchObject({ code: 'switch_busy' });
+    expect((e as Error).message).toMatch(/busy or unreachable: is someone logged in to the switch's web UI\?/);
+    expect(m.opcodes).toEqual([]);
+  });
+
+  it('a stop during the login or the 101 read never cuts the port', async () => {
+    for (const cmd of [123, 101]) {
+      const m = await mock();
+      m.delay[cmd] = 200;
+      const { s } = clocked(m);
+      const cycling = s.cycle(() => {}).catch((x: unknown) => x as PoeSwitchError);
+      await new Promise((r) => setTimeout(r, 50));
+      await s.stop();
+      expect(await cycling, String(cmd)).toMatchObject({ code: 'switch_error', poeOff: false });
+      expect(m.opcodes, String(cmd)).toEqual([]);
+      expect(m.poec[0]).toBe(1);
+    }
+  });
+
+  it('stop() is bounded: a switch that won\'t turn PoE on is given a short try, then stop reports it left off', async () => {
+    const m = await mock();
+    const { s } = clocked(m, { offSeconds: 60, realOffSleep: true });
+    const cycling = s.cycle(() => void (m.failSet = 1000)).catch((x: unknown) => x as PoeSwitchError);
+    await new Promise((r) => setTimeout(r, 100));
+    const t0 = Date.now();
+    const r = await s.stop();
+    expect(Date.now() - t0).toBeLessThan(9000);
+    expect(r).toEqual({ poeLeftOff: true });
+    expect(await cycling).toMatchObject({ poeOff: true, turnedOn: false });
+    expect(m.calls.at(-1)?.cmd).toBe(126);
   });
 
   it('one switch session at a time: a read during a cycle is refused (switch_busy) without touching the switch', async () => {
@@ -181,7 +306,7 @@ describe('PoeSwitch against the mock', () => {
     await new Promise((r) => setTimeout(r, 100));
     expect(off).toBe(true);
     expect(m.poec[0]).toBe(0);
-    await s.stop();
+    expect(await s.stop()).toEqual({ poeLeftOff: false });
     expect(m.poec[0]).toBe(1);
     expect(m.opcodes).toEqual([0x2, 0x202]);
     expect(m.calls.at(-1)?.cmd).toBe(126);
@@ -200,7 +325,7 @@ describe('PoeSwitch against the mock', () => {
     expect(nc({ port: 9 })).toMatch(/camera.poeSwitch.port is above camera.poeSwitch.ports/);
     expect(nc({}, null)).toMatch(/CAMPROXY_POE_SWITCH_PASSWORD is not set/);
     const st = new PoeSwitch({ config: () => base, password: () => PASSWORD }).status();
-    expect(st).toEqual({ model: 'sscpoe-web', host: '192.0.2.7', port: 8, ports: 8, offSeconds: 10, passwordSet: true, configured: true, busy: false, last: null });
+    expect(st).toEqual({ model: 'sscpoe-web', host: '192.0.2.7', port: 8, ports: 8, offSeconds: 10, passwordSet: true, configured: true, busy: false, poeMaybeOff: false, last: null });
     expect(JSON.stringify(st)).not.toContain(PASSWORD);
   });
 });

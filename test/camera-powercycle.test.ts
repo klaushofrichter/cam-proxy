@@ -129,16 +129,34 @@ describe('CameraReboot.powerCycle', () => {
     r.stop();
   });
 
-  it('PoE may still be off (the switch did not turn it on): 502, a failure record, and the cooldown and the watch run', async () => {
+  it('PoE may still be off (the switch did not turn it on): 502 with poeOff, turnedOn false; audited with the truth; cooldown and watch run', async () => {
     const { r, records } = make();
     const a = await r.powerCycle(who, INFO, async (onOff) => {
       onOff(Date.now());
-      throw new PoeSwitchError('switch_error', 'PoE may still be off on port 8', true);
+      throw new PoeSwitchError('switch_error', 'PoE may still be OFF on port 8', true, false);
     });
-    expect(a).toEqual({ status: 502, error: 'switch_error', detail: 'PoE may still be off on port 8' });
+    expect(a).toEqual({ status: 502, error: 'switch_error', detail: 'PoE may still be OFF on port 8', poeOff: true, turnedOn: false });
     expect(r.state()).toMatchObject({ kind: 'powercycle', phase: 'rebooting' });
-    expect(records()[0]).toMatchObject({ event: { outcome: 'failure' }, cam_proxy: { poeOff: true } });
+    expect(records()[0]).toMatchObject({ event: { outcome: 'failure' }, cam_proxy: { poeOff: true, turnedOn: false } });
+    expect(records()[0].message).toMatch(/PoE may have been cut; turned back on: no/);
     expect((await r.request(who)).status).toBe(429);
+    r.stop();
+  });
+
+  it('the off answer was lost (onOff never ran): poeOff from the error decides, not a refusal', async () => {
+    const { r, deps, records } = make();
+    const a = await r.powerCycle(who, INFO, async () => {
+      throw new PoeSwitchError('switch_error', 'PoE may have been cut on port 8; it is on again (no answer)', true, true);
+    });
+    expect(a).toMatchObject({ status: 502, error: 'switch_error', poeOff: true, turnedOn: true });
+    expect(deps.forgetToken).toHaveBeenCalledTimes(1);
+    expect(r.state()).toMatchObject({ kind: 'powercycle', phase: 'rebooting', offAt: expect.any(Number) });
+    const rec = records()[0];
+    expect(rec).toMatchObject({ event: { outcome: 'failure' }, error: { message: 'switch_error' }, cam_proxy: { poeOff: true, turnedOn: true } });
+    expect(rec.message).toMatch(/PoE may have been cut; turned back on: yes/);
+    expect(rec.message).not.toMatch(/refused/);
+    // The cooldown runs: a retry is 429, not a no_power refusal.
+    expect((await r.powerCycle(who, INFO, run())).status).toBe(429);
     r.stop();
   });
 });
@@ -301,4 +319,78 @@ describe('POST /control/actions/camera-powercycle', () => {
     expect(sw.activeSession()).toBe(false);
     await pending;
   }, 20000);
+
+  it('the off answer is lost on the switch: 502 poeOff, turnedOn; PoE is on again; audited as a failure; the cooldown runs', async () => {
+    const p = await startProxy(sim, { env: { CAMPROXY_POE_SWITCH_PASSWORD: PASSWORD } });
+    try {
+      await configure(p.base);
+      await until(() => p.proxy.status.state().online);
+      const before = sw.opcodes.length;
+      sw.offFault = 'drop';
+      const r = await post(p.base);
+      expect(r.status).toBe(502);
+      expect(r.body).toMatchObject({ error: 'switch_error', poeOff: true, turnedOn: true });
+      expect(sw.opcodes.slice(before)).toEqual([0x2, 0x202]);
+      expect(sw.poec[0]).toBe(1);
+      const st = (await request(p.base).get('/control/status').set(admin())).body;
+      expect(st.camera.poeSwitch.poeMaybeOff).toBe(false);
+      expect(st.camera.reboot).toMatchObject({ kind: 'powercycle' });
+      expect(p.proxy.audit.list({ actions: ['camera-powercycle'] }).records[0]).toMatchObject({ event: { outcome: 'failure' }, cam_proxy: { poeOff: true, turnedOn: true } });
+      expect((await post(p.base)).status).toBe(429);
+    } finally {
+      await p.proxy.stop();
+    }
+  }, 30000);
+
+  it('POST camera-poe-on: admin only; turns the port on when it is off (no power check), audited as camera-poe-on', async () => {
+    const p = await startProxy(sim, { env: { CAMPROXY_POE_SWITCH_PASSWORD: PASSWORD, CAMPROXY_AUDIT_TOKEN: AUDIT_TOKEN } });
+    const on = (t = ADMIN_TOKEN) => request(p.base).post('/control/actions/camera-poe-on').set(auth(t));
+    try {
+      expect((await on()).body).toEqual({ error: 'not_configured', detail: 'camera.poeSwitch.model is none' });
+      await configure(p.base);
+      expect((await on(CLIENT_TOKEN)).status).toBe(403);
+      expect((await on(AUDIT_TOKEN)).status).toBe(403);
+      const before = sw.opcodes.length;
+      sw.poec[0] = 0; // off, as after a failed power-cycle (cam-sim keeps running: only the switch state matters here)
+      const r = await on();
+      expect(r.status).toBe(200);
+      expect(r.body).toMatchObject({ port: 8, index: 0, wasOn: false, poe: true });
+      expect(sw.opcodes.slice(before)).toEqual([0x202]);
+      expect((await on()).body).toMatchObject({ wasOn: true, poe: true });
+      expect(sw.opcodes.slice(before)).toEqual([0x202]);
+      sw.browserLogin();
+      const busy = await on();
+      sw.browserLogout();
+      expect([busy.status, busy.body.error]).toEqual([409, 'switch_busy']);
+      const recs = p.proxy.audit.list({ actions: ['camera-poe-on'] }).records.reverse();
+      expect(recs.map((x) => x.event.outcome)).toEqual(['success', 'success', 'failure']);
+      expect(recs[0]).toMatchObject({ event: { category: ['host'], type: ['change'] }, user: { name: 'admin' }, cam_proxy: { switch: { model: 'sscpoe-web', host: sw.host, port: 8 }, wasOn: false, requestedBy: 'token' } });
+      expect(recs[1].cam_proxy).toMatchObject({ wasOn: true });
+      expect(p.proxy.audit.list({ actions: ['control-action'] }).records).toHaveLength(0);
+      expect(JSON.stringify(recs)).not.toContain(PASSWORD);
+    } finally {
+      sw.browserLogout();
+      await p.proxy.stop();
+    }
+  });
+
+  it('a proxy stop that cannot turn the PoE on again says so loudly: an audit failure record', async () => {
+    const p = await startProxy(sim, { env: { CAMPROXY_POE_SWITCH_PASSWORD: PASSWORD } });
+    try {
+      await configure(p.base, { offSeconds: 60 });
+      void post(p.base).catch(() => {});
+      await until(() => sw.poec[0] === 0, 5000);
+      sw.failSet = 1000;
+      const t0 = Date.now();
+      await p.proxy.stop({ reason: 'test' });
+      expect(Date.now() - t0).toBeLessThan(12000);
+      const recs = p.proxy.audit.list({ actions: ['camera-powercycle'] }).records;
+      const left = recs.find((x) => /left OFF/.test(String(x.message)));
+      expect(left).toMatchObject({ event: { outcome: 'failure' }, cam_proxy: { phase: 'stop', poeLeftOff: true } });
+    } finally {
+      sw.failSet = 0;
+      sw.poec[0] = 1;
+      await sim.sim.engine.powerOn(300).catch(() => {});
+    }
+  }, 30000);
 });
