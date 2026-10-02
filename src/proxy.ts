@@ -147,12 +147,15 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     audit,
     camera: () => running.camera.id,
     checks: {
-      stills: stillsCheck({
-        dataDir: running.server.dataDir,
-        audit,
-        catalog,
-        settings: () => ({ cam: running.camera.id, intervalS: running.stills.intervalS, stillsDays: running.retention.stillsDays, previewsDays: running.retention.previewsDays, keepHours: running.storage.keepHours.stills }),
-      }),
+      stills: {
+        label: 'Stills',
+        run: stillsCheck({
+          dataDir: running.server.dataDir,
+          audit,
+          catalog,
+          settings: () => ({ cam: running.camera.id, intervalS: running.stills.intervalS, stillsDays: running.retention.stillsDays, previewsDays: running.retention.previewsDays, keepHours: running.storage.keepHours.stills }),
+        }),
+      },
     },
   });
   // Composed clips (spec 2026-09-28): one encoding at a time; abandoned and

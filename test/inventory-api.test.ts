@@ -59,7 +59,7 @@ describe('inventory API', () => {
     const real = inv.checks.stills;
     const blocking: Check = (ctx) =>
       new Promise((resolve) => ctx.signal.addEventListener('abort', () => resolve({ window: { from: null, to: 0, reason: 'empty' }, counts: { missingSeconds: 3 }, top: [], items: [], message: 'partial' })));
-    inv.checks.stills = blocking;
+    inv.checks.stills = { label: 'Stills', run: blocking };
     try {
       const a = await request(p.base).post('/control/actions/inventory').set(admin()).send({ kind: 'stills' });
       expect(a.status).toBe(202);

@@ -7,14 +7,13 @@ import { logger } from '../log';
 // The inventories (spec 2026-10-02-inventory-design): one run at a time per
 // proxy, cancellable, with progress. Each finished run (also a cancelled or
 // failed one) is a JSON file <dir>/<kind>/<runId>.json, the last 10 per kind,
-// and one `inventory` audit record. The runner knows no kind: a kind is a
-// check in its table.
+// and one `inventory` audit record. The runner knows no kind: a kind is an
+// entry in its check table (its label and its check).
 
 export const KEEP_RUNS = 10;
 export const MAX_TOP = 10;
 export const MAX_ITEMS = 500;
 export const RUN_ID = /^([a-z]{1,16})-(\d{1,15})-([0-9a-f]{6})$/;
-const LABEL: Record<string, string> = { stills: 'Stills' };
 
 export interface Progress { phase: string; done: number; total: number; note?: string }
 export interface InventoryWindow { from: number | null; to: number; reason: string; [k: string]: unknown }
@@ -22,6 +21,8 @@ export interface CheckResult { window: InventoryWindow; counts: Record<string, n
 export interface CheckContext { signal: AbortSignal; progress: (p: Progress) => void; now: number }
 // A check returns its partial result when the signal aborts (it checks between pages).
 export type Check = (ctx: CheckContext) => Promise<CheckResult>;
+// A kind in the check table: `label` names it in messages ("Stills inventory: …").
+export interface InventoryKind { label: string; run: Check }
 export type RunOutcome = 'ok' | 'cancelled' | 'failed';
 export interface Requester { requestedBy: 'session' | 'token'; ip?: string; userAgent?: string }
 export interface InventoryReport {
@@ -59,12 +60,12 @@ export class InventoryStoppingError extends Error {
 interface Current { view: RunningView; ac: AbortController; cancelledBy?: 'request' | 'stop'; settled: boolean; done: Promise<InventoryReport> }
 
 export class InventoryRunner {
-  readonly checks: Partial<Record<string, Check>>;
+  readonly checks: Partial<Record<string, InventoryKind>>;
   private cur: Current | null = null;
   private stopping = false;
   private readonly now: () => number;
 
-  constructor(private readonly d: { dir: string; audit: Pick<AuditLog, 'write'>; camera: () => string; checks: Partial<Record<string, Check>>; now?: () => number; keep?: number }) {
+  constructor(private readonly d: { dir: string; audit: Pick<AuditLog, 'write'>; camera: () => string; checks: Partial<Record<string, InventoryKind>>; now?: () => number; keep?: number }) {
     this.checks = { ...d.checks };
     this.now = d.now ?? Date.now;
   }
@@ -137,14 +138,14 @@ export class InventoryRunner {
     return this.read(m[1], runId);
   }
 
-  private async run(cur: Current, check: Check, who: Requester): Promise<InventoryReport> {
+  private async run(cur: Current, check: InventoryKind, who: Requester): Promise<InventoryReport> {
     const { runId, kind, startedAt } = cur.view;
     try {
       let res: CheckResult | null = null;
       let error: string | undefined;
       let failed = false;
       try {
-        res = await check({ signal: cur.ac.signal, now: startedAt, progress: (p) => void (cur.view.progress = p) });
+        res = await check.run({ signal: cur.ac.signal, now: startedAt, progress: (p) => void (cur.view.progress = p) });
       } catch (err) {
         failed = true;
         error = err instanceof Error ? err.message : String(err);
@@ -162,7 +163,7 @@ export class InventoryRunner {
         top: (res?.top ?? []).slice(0, MAX_TOP),
         items: items.slice(0, MAX_ITEMS),
         itemsTruncated: items.length > MAX_ITEMS,
-        message: message(kind, outcome, res, error),
+        message: message(check.label, outcome, res, error),
       };
       try {
         await this.save(report);
@@ -217,8 +218,8 @@ export class InventoryRunner {
   }
 }
 
-function message(kind: string, outcome: RunOutcome, res: CheckResult | null, error: string | undefined): string {
-  const label = `${LABEL[kind] ?? kind} inventory`;
+function message(kindLabel: string, outcome: RunOutcome, res: CheckResult | null, error: string | undefined): string {
+  const label = `${kindLabel} inventory`;
   if (outcome === 'failed') return `${label} failed: ${error}`;
   if (outcome === 'cancelled') return `${label} cancelled${res ? ` (partial): ${res.message}` : ''}`;
   return `${label}: ${res!.message}`;
