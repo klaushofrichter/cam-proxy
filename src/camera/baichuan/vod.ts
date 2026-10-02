@@ -35,6 +35,8 @@ export async function download(session: BaichuanSession, path: string, size: num
   if (!SAFE_PATH.test(path)) throw new BaichuanError('protocol', 'unexpected recording path');
   if (!Number.isSafeInteger(size) || size < 0) throw new BaichuanError('protocol', 'unexpected recording size');
   await session.ensure();
+  // The output went away while the session connected: no cmd 8 for nobody.
+  if (out.destroyed || out.writableEnded) throw abortError('the output closed');
   return new Promise<number>((resolve, reject) => {
     let received = 0;
     let first = true;

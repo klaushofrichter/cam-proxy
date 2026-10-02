@@ -21,6 +21,7 @@ import { RefusalThrottle } from '../audit/throttle';
 import { eventsStored } from './metrics';
 import { readCookie, SESSION_COOKIE, SESSION_MS, type createSessionSigner } from './session';
 import type { createLoginLinks } from './login-links';
+import type { RecordingsStatus } from '../recordings/side';
 
 export interface FtpStatus {
   enabled: boolean;
@@ -69,6 +70,7 @@ export interface ControlDeps {
   unmapped: { list(limit?: number): { mid: string; name: string; count: number; lastSeen: number }[]; clear(): number };
   sseClients: () => number;
   stream: () => { enabled: boolean; up: boolean; go2rtcUp: boolean; lastFrameTs: number | null };
+  recordings: () => RecordingsStatus; // SD recordings over Baichuan: the last download, the cache
   sessions: ReturnType<typeof createSessionSigner>;
   links: ReturnType<typeof createLoginLinks>;
   version: string;
@@ -210,6 +212,7 @@ export function controlApi(d: ControlDeps): express.Router {
       retention: { lastRun: d.storage.lastRun(), totals: d.storage.totals() },
       storage: { paused: d.storage.paused() },
       ftp: d.ftp(),
+      recordings: d.recordings(),
       analytics: d.analytics(),
       analyticsUnmapped: d.unmapped.list(20),
     });

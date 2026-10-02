@@ -214,6 +214,11 @@ export class Fetch {
     return true;
   }
 
+  // The proxy is stopping: the tee fails, so the download stops (cmd 9).
+  abort(): void {
+    this.tee?.destroy(abortError('the proxy is stopping'));
+  }
+
   begin(tee: Tee): void {
     this.state = 'running';
     this.tee = tee;
@@ -232,6 +237,7 @@ export class RecordingFetcher {
   private readonly byId = new Map<string, Fetch>();
   private readonly queue: Fetch[] = [];
   private active: Fetch | null = null;
+  private activeRun: Promise<void> = Promise.resolve();
   private stopped = false;
 
   constructor(private readonly d: FetcherDeps) {}
@@ -269,12 +275,16 @@ export class RecordingFetcher {
     return this.queue.map((f) => f.entry.id);
   }
 
-  stop(): void {
+  // Queued fetches fail as offline; a running one is aborted (its download
+  // sends cmd 9). Resolves when the running one has ended.
+  stop(): Promise<void> {
     this.stopped = true;
     for (const f of this.queue.splice(0)) {
       this.byId.delete(f.entry.id);
       f.finish(new BaichuanError('offline', 'the proxy is stopping'));
     }
+    this.active?.abort();
+    return this.activeRun;
   }
 
   private sort(): void {
@@ -296,10 +306,12 @@ export class RecordingFetcher {
     const f = this.queue.shift();
     if (!f) return;
     this.active = f;
-    void this.run(f).finally(() => {
-      this.active = null;
-      this.pump();
-    });
+    this.activeRun = this.run(f)
+      .finally(() => {
+        this.active = null;
+        this.pump();
+      })
+      .catch(noop);
   }
 
   // A throwing listener must not turn a finished fetch into a second outcome.

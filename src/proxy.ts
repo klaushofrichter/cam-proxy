@@ -21,6 +21,7 @@ import { cameraFtpOff, readCameraFtp, setupCameraFtp, testCameraFtp, type FtpTar
 import { CameraFtpWatch, clipsStalled } from './clips/ftp-health';
 import { ClipIndexer } from './clips/indexer';
 import { createClipsSide, type ClipsSide } from './clips/side';
+import { createRecordingsSide, type RecordingsSide } from './recordings/side';
 import { EventIntake } from './events/intake';
 import { EventTracker } from './events/tracker';
 import { logger, setLogLevel, withoutQuery } from './log';
@@ -70,6 +71,7 @@ export interface Proxy {
   sse: ReturnType<typeof sseHandler>;
   readonly stills: StillsSide | undefined;
   readonly clips: ClipsSide | undefined;
+  readonly recordings: RecordingsSide;
   readonly analytics: AnalyticsService;
   storage: Storage;
   readonly audit: AuditLog;
@@ -127,7 +129,9 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   const sse = sseHandler(log, running.sse);
   // The audit log (spec 2026-10-01-audit-log-design): daily JSON-lines files.
   const audit = new AuditLog({ dir: join(running.server.dataDir, 'audit'), version: VERSION, camera: () => running.camera.id });
-  const storage = new Storage({ catalog, log, config: () => running, audit });
+  // A recording being read is never deleted (set once the recordings side exists).
+  let recordingBusy: (path: string) => boolean = () => false;
+  const storage = new Storage({ catalog, log, config: () => running, audit, recordingsBusy: (p) => recordingBusy(p) });
   storage.recount();
   const sessions = createSessionSigner(opts.sessionSecret);
   const links = createLoginLinks();
@@ -273,6 +277,22 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   };
   const clipsHealth = () => (running.ftp.enabled ? clipsStalled(catalog, running.camera.id, Date.now(), running.ftp.stalledHours, { notSetUp: ftpNotSetUp() }) : null);
   buildCameraSide();
+  // Recordings on the camera's SD card (spec 2026-10-02-baichuan-recordings-design):
+  // listed by HTTP Search, fetched over Baichuan (host from camera.host,
+  // camera.baichuanPort read at every connection, the HTTP client's user and
+  // password) into the cache.
+  const recordings = createRecordingsSide({
+    dataDir: running.server.dataDir,
+    cam: () => running.camera.id,
+    target: () => ({ host: splitHost(running.camera.host).hostname.replace(/^\[(.*)\]$/, '$1'), port: running.camera.baichuanPort, user: running.camera.user, password: loaded.secrets.cameraPassword }),
+    capBytes: () => running.recordings.cacheMB * 2 ** 20,
+    search: (param) => client.command('Search', param),
+    timeInfo: () => client.timeInfo(),
+    paused: () => storage.paused(),
+    noteWritten: (bytes) => storage.noteWritten('recordings', bytes, 1),
+    onDownload: (o) => metrics.onRecordingDownload({ stream: o.stream, result: o.result }),
+  });
+  recordingBusy = (p) => recordings.cache.busy(p);
 
   // A camera reboot from the control API (#83): the client and the status
   // poller are read on use, since restart() builds them anew.
@@ -336,12 +356,15 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // New settings from the control API: live ones take effect now.
   const setLoaded = (next: Loaded) => {
     const analyticsBefore = JSON.stringify(loaded.config.analytics);
+    const baichuanPortBefore = running.camera.baichuanPort;
     loaded = next;
     for (const p of leafPaths()) if (!needsRestart(p)) setPath(running as unknown as Record<string, unknown>, p, structuredClone(getPath(next.config, p)));
     sse.setOptions(running.sse);
     setLogLevel(running.server.logLevel);
     // Only a change to the analytics settings lifts a bad_key pause.
     if (JSON.stringify(next.config.analytics) !== analyticsBefore) analytics.settingsChanged();
+    // A new Baichuan port: the next use connects to it.
+    if (running.camera.baichuanPort !== baichuanPortBefore) recordings.session.close();
   };
 
   // An `auth-refused` record per source IP and path per 10 minutes; the
@@ -374,8 +397,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // Far above real use (the UI, cams, a scraper); stops a flood. SSE is one
   // long request. Still and sprite images have their own, higher limit: a
   // day on the timeline is up to 1440 sprites.
-  // Clip files too: a seeking video player sends many range requests.
-  const IMAGE = /^\/api\/cameras\/[^/]+\/((stills|previews)\/\d{1,15}\.jpg|clips\/\d{1,15}\.(mp4|jpg)|events\/\d{1,15}\/analysis\.jpg)$/;
+  // Clip and recording files too: a seeking video player sends many range requests.
+  const IMAGE = /^\/api\/cameras\/[^/]+\/((stills|previews)\/\d{1,15}\.jpg|clips\/\d{1,15}\.(mp4|jpg)|recordings\/Rec[0-9A-Za-z_]+\.mp4|events\/\d{1,15}\/analysis\.jpg)$/;
   const isImage = (req: Request) => req.method === 'GET' && IMAGE.test(req.path);
   // Behind an ingress (issue #29): client addresses from X-Forwarded-For.
   if (running.server.trustProxy) app.set('trust proxy', running.server.trustProxy);
@@ -458,6 +481,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       setVisionKey: (key) => analytics.setManualKey(key),
       unmapped: { list: (limit) => listUnmapped(catalog, limit), clear: () => clearUnmapped(catalog) },
       sseClients: () => sse.clients(),
+      recordings: () => recordings.status(),
       stream: () => ({ enabled: !!stills, up: stills?.grabber.up() ?? false, go2rtcUp: stills?.go2rtc.up() ?? false, lastFrameTs: stills?.grabber.lastFrameTs() ?? null }),
       sessions,
       links,
@@ -497,6 +521,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     await stopStills();
     await clips?.stop();
     await client.logout();
+    recordings.reset();
     for (const p of leafPaths()) {
       if (needsProcessRestart(p)) continue;
       setPath(running as unknown as Record<string, unknown>, p, structuredClone(getPath(loaded.config, p)));
@@ -536,6 +561,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     get clips() {
       return clips?.side;
     },
+    recordings,
     analytics,
     async start(opts = {}) {
       server = http.createServer(app);
@@ -607,7 +633,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       // Side by side, within a container's stop grace (compose.yaml: 20 s):
       // a running encode ends (up to 3 s), and a Vision call in flight is
       // stored before the catalog closes (up to its 10 s timeout).
-      await Promise.all([composer.stop(), analytics.stop()]);
+      // A recording download is aborted (cmd 9) and the Baichuan session closed (up to 2 s).
+      await Promise.all([composer.stop(), analytics.stop(), recordings.stop()]);
       const s = server;
       if (s) {
         s.closeAllConnections();

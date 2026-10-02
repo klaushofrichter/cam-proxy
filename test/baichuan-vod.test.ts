@@ -193,6 +193,15 @@ describe('download', () => {
     expect(cam.logins).toBe(1); // the same session
   });
 
+  it('an output destroyed while the session connects sends no cmd 8', async () => {
+    const { cam, s } = await setup();
+    const out = sink();
+    const p = run(s, out.w);
+    out.w.destroy();
+    expect(((await p.catch((x: Error) => x)) as Error).name).toBe('AbortError');
+    expect(cam.requests.filter((r) => r.cmd === 8)).toHaveLength(0);
+  });
+
   it('refuses a path that is not a plain recording path', async () => {
     const { s } = await setup();
     expect(((await download(s, '/mnt/sda/x;rm.mp4', 10, sink().w).catch((x) => x)) as BaichuanError).code).toBe('protocol');

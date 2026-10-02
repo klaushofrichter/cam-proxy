@@ -1,6 +1,6 @@
 // test/recording-fetcher.test.ts
 import { describe, it, expect, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { PassThrough, Writable } from 'stream';
@@ -255,6 +255,21 @@ describe('RecordingFetcher', () => {
     x.fetcher.stop();
     await expect(fb.done).rejects.toMatchObject({ code: 'offline' });
     x.dl.release(a.path);
+  });
+
+  it('stop aborts the running fetch (no outcome, no .part) and resolves when it has ended', async () => {
+    const x = setup({ chunk: 1_000, delayMs: 5 });
+    const a = x.add(1, 200_000);
+    const { fetch } = x.fetcher.get(a, { priority: 'high' });
+    const c = collector();
+    fetch.attach(c.w, () => undefined);
+    await vi.waitFor(() => expect(c.bytes().length).toBeGreaterThan(0));
+    await x.fetcher.stop();
+    expect(fetch.state).toBe('done');
+    await expect(fetch.done).rejects.toMatchObject({ name: 'AbortError' });
+    expect(x.outcomes).toEqual([]);
+    expect(readdirSync(x.dir)).toEqual([]);
+    expect(c.w.destroyed).toBe(true);
   });
 
   // Binding rules from earlier reviews (ledger "→ Task 10").
