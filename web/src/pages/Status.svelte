@@ -3,6 +3,7 @@
   import { pausedText, usageLine } from '../lib/analytics';
   import { daysUntilFullText } from '../lib/format';
   import { cameraStateText, poeLine } from '../lib/maintenance';
+  import { cacheFillText, recordingsClass, recordingsLastText } from '../lib/recordings';
   import { cameraFtpClass, cameraFtpText, clipTime, ftpAlerts } from '../lib/ftp';
   import { api, ApiError } from '../lib/api';
   import { refresh } from '../lib/state';
@@ -114,6 +115,16 @@
           </div>
         {/if}
       </div>
+      {#if $status.recordings}
+        <div class="card" data-testid="card-recordings">
+          <h3>Recordings (SD card)</h3>
+          <dl>
+            <dt>Last download</dt><dd class={recordingsClass($status.recordings.last)} data-testid="recordings-last" title={$status.recordings.last ? `${$status.recordings.last.result}, ${clipTime($status.recordings.last.at)}` : undefined}>{recordingsLastText($status.recordings.last)}</dd>
+            <dt>Cache</dt><dd data-testid="recordings-cache">{cacheFillText($status.recordings.cache)}</dd>
+            <dt>Files cached</dt><dd>{$status.recordings.cache.files}</dd>
+          </dl>
+        </div>
+      {/if}
       <div class="card" data-testid="card-storage">
         <h3>Storage</h3>
         <dl>

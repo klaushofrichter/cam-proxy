@@ -5,7 +5,7 @@ export interface Config {
   server: { port: number; dataDir: string; logLevel: string; publicUrl?: string; trustProxy?: number };
   camera: {
     id: string; name: string; host: string; protocol: 'https' | 'http'; tlsName?: string; webUiUrl?: string;
-    user: string; onvifPort: number; rtspPort: number; statusPollS: number;
+    user: string; onvifPort: number; rtspPort: number; baichuanPort: number; statusPollS: number;
     // The camera's PoE switch (issue #85); `none` for no switch.
     poeSwitch: { model: 'none' | 'sscpoe-web'; host?: string; port?: number; ports: number; offSeconds: number };
   };
@@ -29,6 +29,7 @@ export interface Config {
   // Composed clips (spec 2026-09-28): the font for the badge and card text.
   composition: { font?: string };
   ftp: { enabled: boolean; port: number; passive: string; user: string; tls: boolean; stream: 'main' | 'sub'; stalledHours: number; maxGB?: number; publicHost?: string; certFile?: string; keyFile?: string };
+  recordings: { cacheMB: number };
   // External analytics (spec 2026-09-30-analytics-design): which event kinds,
   // and per provider its switch and call limits. 0 = no calls.
   analytics: {
@@ -39,7 +40,7 @@ export interface Config {
 
 export const DEFAULTS: Config = {
   server: { port: 8480, dataDir: 'data', logLevel: 'info' },
-  camera: { id: 'cam1', name: 'Den', host: '', protocol: 'https', user: 'proxy', onvifPort: 8000, rtspPort: 554, statusPollS: 30, poeSwitch: { model: 'none', ports: 8, offSeconds: 10 } },
+  camera: { id: 'cam1', name: 'Den', host: '', protocol: 'https', user: 'proxy', onvifPort: 8000, rtspPort: 554, baichuanPort: 9000, statusPollS: 30, poeSwitch: { model: 'none', ports: 8, offSeconds: 10 } },
   go2rtc: { binary: 'go2rtc', rtspPort: 18554, apiPort: 11984 },
   stills: { enabled: true, stream: 'sub', intervalS: 1, size: '896x512', quality: 5 },
   previews: { tileSize: '160x90', grid: '10x6', quality: 7 },
@@ -53,6 +54,7 @@ export const DEFAULTS: Config = {
   sse: { maxClients: 50, queuePerClient: 1000, pingS: 15 },
   composition: {},
   ftp: { enabled: false, port: 2121, passive: '30000-30009', user: 'camera', tls: true, stream: 'main', stalledHours: 6 },
+  recordings: { cacheMB: 2048 },
   analytics: {
     kinds: { person: true, vehicle: false, pet: false },
     googleVision: { enabled: false, monthlyLimit: 0, dailyCap: 0 },

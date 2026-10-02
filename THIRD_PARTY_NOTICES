@@ -1,0 +1,29 @@
+cam-proxy includes code ported from third-party projects.
+
+reolink_aio (https://github.com/starkillerOG/reolink_aio), commit
+5d37cb3df2a49bb8eeafa93fa02513df88ad527a, and its pull request #186
+(https://github.com/starkillerOG/reolink_aio/pull/186, commit
+9a1bb5238b43ecc9d8fbe05c7e5679a7ad8a06f2): the Baichuan framing, ciphers,
+login and VOD download in src/camera/baichuan/.
+
+MIT License
+
+Copyright (c) 2023 starkillerOG
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

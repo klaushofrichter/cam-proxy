@@ -2,6 +2,7 @@ import { writable } from 'svelte/store';
 import { api } from './api';
 import type { UiProviderState } from './analytics';
 import type { CameraReboot, PoeSwitchStatus } from './maintenance';
+import type { RecordingsStatus } from './recordings';
 import type { CameraFtp, ClipsStall } from './ftp';
 
 export interface Status {
@@ -15,10 +16,11 @@ export interface Status {
   analytics?: UiProviderState[];
   analyticsUnmapped?: { mid: string; name: string; count: number; lastSeen: number }[];
   ftp: { enabled: boolean; listening: boolean; port: number; tls: boolean; publicHost: string | null; passwordSet: boolean; lastUpload: number | null; lastClip: number | null; clips: number; failures: number; camera?: CameraFtp | null; stalled?: ClipsStall | null };
+  recordings?: RecordingsStatus;
 }
 export interface Usage { bytes: number; files: number; oldest: number | null; newest: number | null; growthPerDay: number }
 export interface Stats {
-  disk: { catalog: Usage; audit: Usage; stills: Usage; previews: Usage; clips: Usage; free: number; size: number };
+  disk: { catalog: Usage; audit: Usage; stills: Usage; previews: Usage; clips: Usage; recordings?: Usage; free: number; size: number };
   events: { stored: Record<string, number> };
   stream: { rows: number; lastId: number };
   sse: { clients: number };

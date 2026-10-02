@@ -21,6 +21,7 @@ import { RefusalThrottle } from '../audit/throttle';
 import { eventsStored } from './metrics';
 import { readCookie, SESSION_COOKIE, SESSION_MS, type createSessionSigner } from './session';
 import type { createLoginLinks } from './login-links';
+import type { RecordingsStatus } from '../recordings/side';
 
 export interface FtpStatus {
   enabled: boolean;
@@ -69,6 +70,7 @@ export interface ControlDeps {
   unmapped: { list(limit?: number): { mid: string; name: string; count: number; lastSeen: number }[]; clear(): number };
   sseClients: () => number;
   stream: () => { enabled: boolean; up: boolean; go2rtcUp: boolean; lastFrameTs: number | null };
+  recordings: () => RecordingsStatus; // SD recordings over Baichuan: the last download, the cache
   sessions: ReturnType<typeof createSessionSigner>;
   links: ReturnType<typeof createLoginLinks>;
   version: string;
@@ -215,6 +217,7 @@ export function controlApi(d: ControlDeps): express.Router {
       retention: { lastRun: d.storage.lastRun(), totals: d.storage.totals() },
       storage: { paused: d.storage.paused() },
       ftp: d.ftp(),
+      recordings: d.recordings(),
       analytics: d.analytics(),
       analyticsUnmapped: d.unmapped.list(20),
     });
@@ -243,7 +246,7 @@ export function controlApi(d: ControlDeps): express.Router {
   r.get('/stats', (_req, res) => {
     const u = d.storage.usage();
     res.json({
-      disk: { catalog: u.catalog, audit: u.audit, stills: u.stills, previews: u.previews, clips: u.clips, free: u.free, size: u.size },
+      disk: { catalog: u.catalog, audit: u.audit, stills: u.stills, previews: u.previews, clips: u.clips, recordings: u.recordings, free: u.free, size: u.size },
       events: { stored: eventsStored(d.catalog) },
       stream: { rows: d.log.count(), lastId: d.log.lastId() },
       sse: { clients: d.sseClients() },

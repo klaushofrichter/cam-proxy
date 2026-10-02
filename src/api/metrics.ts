@@ -36,7 +36,7 @@ export function createMetrics(s: MetricsSources) {
   const g = (name: string, help: string, labelNames: string[], collect: (this: Gauge) => void) =>
     new Gauge({ name: `camproxy_${name}`, help, labelNames, registers: [registry], collect });
 
-  const kinds = ['catalog', 'stills', 'previews', 'clips', 'audit'] as const;
+  const kinds = ['catalog', 'stills', 'previews', 'clips', 'recordings', 'audit'] as const;
   g('disk_bytes', 'Bytes on disk by kind', ['kind'], function () {
     const u = usage();
     for (const k of kinds) this.set({ kind: k }, u[k].bytes);
@@ -56,7 +56,7 @@ export function createMetrics(s: MetricsSources) {
   });
   g('storage_growth_bytes_per_day', 'Bytes written per day (3-day average)', ['kind'], function () {
     const u = usage();
-    for (const k of ['stills', 'previews', 'clips'] as const) this.set({ kind: k }, u[k].growthPerDay);
+    for (const k of ['stills', 'previews', 'clips', 'recordings'] as const) this.set({ kind: k }, u[k].growthPerDay);
   });
   g('storage_days_until_full', 'Projected days until the budget is reached (-1: not growing)', [], function () {
     this.set(usage().daysUntilFull ?? -1);
@@ -116,6 +116,7 @@ export function createMetrics(s: MetricsSources) {
   const cameraSeconds = new Histogram({ name: 'camproxy_camera_request_seconds', help: 'Camera status check duration', labelNames: ['cam', 'cmd'], buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10], registers: [registry] });
   const retentionDeleted = new Counter({ name: 'camproxy_retention_deleted_total', help: 'Rows and files removed by retention', labelNames: ['kind'], registers: [registry] });
   const stillsTotal = new Counter({ name: 'camproxy_stills_total', help: 'Stills written', labelNames: ['cam'], registers: [registry] });
+  const recordingDownloads = new Counter({ name: 'camproxy_recording_downloads_total', help: 'Recording downloads over Baichuan, by result', labelNames: ['cam', 'stream', 'result'], registers: [registry] });
   const stillsMissing = new Counter({ name: 'camproxy_stills_missing_total', help: 'Stills not written (disk full)', labelNames: ['cam'], registers: [registry] });
   const lastStill = new Gauge({ name: 'camproxy_last_still_timestamp_seconds', help: 'Time of the last still', labelNames: ['cam'], registers: [registry] });
   stillsTotal.inc({ cam: cam() }, 0);
@@ -144,6 +145,7 @@ export function createMetrics(s: MetricsSources) {
     onResubscribe: () => resubscribes.inc({ cam: cam() }),
     onStill: (ts: number) => (stillsTotal.inc({ cam: cam() }), lastStill.set({ cam: cam() }, ts / 1000)),
     onStillMissing: () => stillsMissing.inc({ cam: cam() }),
+    onRecordingDownload: (o: { stream: string; result: string }) => recordingDownloads.inc({ cam: cam(), stream: o.stream, result: o.result }),
     onCameraCheck: (c: { ok: boolean; ms: number; error?: string }) => {
       cameraSeconds.observe({ cam: cam(), cmd: 'status' }, c.ms / 1000);
       if (!c.ok) cameraErrors.inc({ cam: cam(), code: c.error ?? 'unknown' });

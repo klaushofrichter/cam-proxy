@@ -4,6 +4,8 @@
 cluster (v2026.09.27.1, v2026.09.27.2); cams uses it for `cam2` (a `proxy`
 entry in `cams-cameras`).
 
+2026-10-02: cam-proxy reaches `cam2.cam-sim.svc.cluster.local:9000` (TCP, Baichuan) for recordings. cam-sim asked kube-setup for the cluster-internal Service port 9000 on cam2 (no ingress, LoadBalancer or NodePort) and cam-proxy's egress to it; both are applied (kube-setup 478c0f8 and f9d1e8d). The Pi reaches the real camera's port 9000 on the LAN.
+
 cam-proxy (github.com/klaushofrichter/cam-proxy) is the camera gateway: it
 keeps one connection to a camera, stores a still per second, records events,
 receives the camera's clips by FTP(S) and serves it all over HTTP/SSE. In the
@@ -82,8 +84,9 @@ Order as always: **commit, push, then apply.**
     `cam-sim` (cam2) to 2121 and 30000-30009 (FTP uploads);
   - out of cam-proxy: to pods `app=cam2` in namespace `cam-sim` on the
     **pod ports** 8443, 8000 and 8554 (Service ports 443, 8000 and 554:
-    NetworkPolicy matches after the ClusterIP DNAT), and to DNS (UDP/TCP 53
-    in `kube-system`).
+    NetworkPolicy matches after the ClusterIP DNAT), and 9000 (Baichuan,
+    recordings over TCP; applied by kube-setup on 2026-10-02, kube-setup
+    f9d1e8d), and to DNS (UDP/TCP 53 in `kube-system`).
 
   If `cam-sim` has an egress policy, cam2 must be allowed to reach
   cam-proxy 2121 and 30000-30009.

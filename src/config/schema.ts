@@ -29,6 +29,7 @@ export const SETTINGS: Node = {
     user: { type: 'string', pattern: '^[^\\s:]{1,31}$', doc: "the proxy's own camera user" },
     onvifPort: port('camera ONVIF port'),
     rtspPort: port('camera RTSP port'),
+    baichuanPort: port("camera Baichuan port (recordings over TCP); the host is camera.host's"),
     statusPollS: int(5, 3600, 'seconds between status checks'),
     // The PoE switch the camera hangs on (issue #85): power-cycle the camera
     // through it. Applies at once; the password is CAMPROXY_POE_SWITCH_PASSWORD.
@@ -98,6 +99,9 @@ export const SETTINGS: Node = {
     maxClients: int(1, 1000, 'most SSE clients at once'),
     queuePerClient: int(10, 100000, 'messages queued per SSE client before it is dropped'),
     pingS: int(1, 300, 'seconds between keep-alive pings'),
+  },
+  recordings: {
+    cacheMB: int(64, 1_048_576, 'size cap of the recordings cache, MB; least recently used files go first'),
   },
   ftp: {
     enabled: { type: 'boolean', doc: 'accept clip uploads from the camera' },

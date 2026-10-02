@@ -41,6 +41,14 @@ export function clipByPath(c: Catalog, path: string): ClipRow | undefined {
   return c.db.prepare('SELECT * FROM clips WHERE path = ?').get(path) as unknown as ClipRow | undefined;
 }
 
+// The FTP copy of an SD recording: same camera and stream, the closest start
+// within `slackMs` (cams' 5 s), or undefined.
+export function clipNear(c: Catalog, cam: string, stream: string, ts: number, slackMs: number): ClipRow | undefined {
+  return c.db
+    .prepare('SELECT * FROM clips WHERE cam = ? AND stream = ? AND start_ts BETWEEN ? AND ? ORDER BY ABS(start_ts - ?), id LIMIT 1')
+    .get(cam, stream, ts - slackMs, ts + slackMs, ts) as unknown as ClipRow | undefined;
+}
+
 // The clip a picture taken at `ts` belongs to: the one that started last,
 // at most `windowMs` before it.
 export function clipForSnapshot(c: Catalog, cam: string, ts: number, windowMs: number): ClipRow | undefined {
