@@ -3,11 +3,16 @@
 // made"): one Search per camera-local day, one at a time per camera (an
 // overlapping Search fails with -54 or comes back empty), each (day, stream)
 // kept 30 s; the month's days kept 5 minutes.
+// A Search finds the recordings that start on its day (measured), so one that
+// starts before midnight and runs into the next day is only in the day
+// before's Search: a day's list and a window's list also read the day before
+// (#99). Once that day is over and none of its recordings is still being
+// written, its midnight tail is final and kept an hour.
 import { CameraError } from '../camera/client';
 import { Semaphore } from '../camera/semaphore';
 import type { TimeInfo } from '../camera/time';
 import { SAFE_PATH } from '../camera/baichuan/vod';
-import { localDays, parseSdName, recordingTimes, stillRecording, type Kind, type Stream } from './names';
+import { localDate, localDays, parseSdName, recordingTimes, stillRecording, type Kind, type Stream } from './names';
 
 export interface RecordingEntry { id: string; path: string; start: number; end: number; stream: Stream; size: number; kinds: Kind[] }
 
@@ -23,6 +28,20 @@ export class SearchError extends Error {
 
 const DAY_TTL = 30_000;
 const MONTH_TTL = 300_000;
+const TAIL_TTL = 3_600_000;
+
+// The recording runs past its day's midnight (end before start in its name;
+// end 000000 too, which recordingTimes puts at midnight).
+const crossesMidnight = (e: RecordingEntry): boolean => {
+  const n = parseSdName(e.id);
+  return n !== null && n.end < n.start;
+};
+
+export const dayBefore = (date: string): string => {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+};
 
 // Messages from CameraError never carry URLs or tokens.
 const toSearchError = (err: unknown, fallback: string): SearchError =>
@@ -34,6 +53,7 @@ export class RecordingList {
   private readonly dayRuns = new Map<string, Promise<RecordingEntry[]>>();
   private readonly months = new Map<string, { at: number; days: number[] }>();
   private readonly monthRuns = new Map<string, Promise<number[]>>();
+  private readonly tails = new Map<string, { at: number; entries: RecordingEntry[] }>();
   // clear() bumps it: a Search in flight then is neither cached nor joined (#99).
   private epoch = 0;
 
@@ -93,14 +113,21 @@ export class RecordingList {
       })) as { SearchResult?: { File?: { name?: unknown }[] } } | undefined;
       const t = await this.time();
       const out: RecordingEntry[] = [];
+      let open = false; // a recording of this day is still being written (end 000000)
       for (const f of v?.SearchResult?.File ?? []) {
         if (typeof f?.name !== 'string' || !SAFE_PATH.test(f.name)) continue;
         const n = parseSdName(f.name);
-        if (!n || n.date !== date || n.stream !== stream || stillRecording(n)) continue;
+        if (!n || n.date !== date || n.stream !== stream) continue;
+        if (n.end === '000000') open = true;
+        if (stillRecording(n)) continue;
         out.push({ id: n.id, path: f.name, ...recordingTimes(n, t), stream, size: n.size, kinds: n.kinds });
       }
       out.sort((a, b) => a.start - b.start);
-      if (epoch === this.epoch) this.days.set(key, { at: this.now(), entries: out });
+      if (epoch === this.epoch) {
+        const at = this.now();
+        this.days.set(key, { at, entries: out });
+        if (!open && localDate(at, t) > date) this.tails.set(key, { at, entries: out.filter(crossesMidnight) });
+      }
       return out;
     })().finally(() => {
       if (this.dayRuns.get(key) === work) this.dayRuns.delete(key);
@@ -109,14 +136,33 @@ export class RecordingList {
     return work;
   }
 
+  // The recordings of `date` that run past its midnight: kept an hour once
+  // the day is final, else from the day's own (30 s) list.
+  private async tail(date: string, stream: Stream): Promise<RecordingEntry[]> {
+    const hit = this.tails.get(`${date}|${stream}`);
+    if (hit && this.now() - hit.at < TAIL_TTL) return hit.entries;
+    return (await this.day(date, stream)).filter(crossesMidnight);
+  }
+
   // Recordings that overlap [from, to], by start; every day of the range or none.
   async range(from: number, to: number, stream: Stream): Promise<RecordingEntry[]> {
     const t = await this.time();
     const byId = new Map<string, RecordingEntry>();
-    for (const date of localDays(from, to, t)) {
-      for (const e of await this.day(date, stream)) if (e.start <= to && e.end >= from) byId.set(e.id, e);
-    }
+    const days = localDays(from, to, t);
+    const keep = (e: RecordingEntry) => {
+      if (e.start <= to && e.end >= from) byId.set(e.id, e);
+    };
+    for (const date of days) for (const e of await this.day(date, stream)) keep(e);
+    for (const e of await this.tail(dayBefore(days[0]), stream)) keep(e);
     return [...byId.values()].sort((a, b) => a.start - b.start);
+  }
+
+  // One camera-local day (YYYY-MM-DD): its recordings, and the one from the
+  // day before that runs past midnight into it.
+  async date(date: string, stream: Stream): Promise<RecordingEntry[]> {
+    const own = await this.day(date, stream);
+    const before = await this.tail(dayBefore(date), stream);
+    return [...before, ...own].sort((a, b) => a.start - b.start);
   }
 
   async find(id: string): Promise<RecordingEntry | undefined> {
@@ -167,5 +213,6 @@ export class RecordingList {
     this.months.clear();
     this.dayRuns.clear();
     this.monthRuns.clear();
+    this.tails.clear();
   }
 }

@@ -204,9 +204,10 @@ api '/cameras/cam1/events?kind=person&limit=10'
 - `GET /api/cameras/{cam}/analyses?from&to`: the analyses of events that
   start in the range (at most one day), oldest first, at most 1000, in the
   `analysis` stream message's shape without `objects`.
-- `GET /api/cameras/{cam}/recordings?from&to&stream`: the recordings on the
-  camera's SD card that overlap the range (unix ms, at most 48 hours;
-  `stream` `sub` or `main`, required), by start:
+- `GET /api/cameras/{cam}/recordings?from&to&stream` or `?date&stream`: the
+  recordings on the camera's SD card that overlap the range (unix ms, at most
+  48 hours) or of one camera-local day (`date=YYYY-MM-DD`; not with
+  `from`/`to`); `stream` `sub` or `main`, required. By start:
   `[{id, start, end, stream, size, kinds, clipId}]`. See
   [Recordings (SD card)](#recordings-sd-card).
 - `GET /api/cameras/{cam}/recordings/days?month=YYYY-MM`: `{month, days}`,
@@ -337,6 +338,15 @@ as MP4, also the ones FTP never delivered.
   (unix ms, `to` not before `from`, at most 48 hours) answers `[{id, start,
   end, stream, size, kinds, clipId}]`, from the camera's HTTP `Search` (one
   per camera-local day the range touches, one at a time, each kept 30 s).
+  `?date=YYYY-MM-DD&stream=` instead lists one camera-local day, in the same
+  shape (`date` and `from`/`to` together are a 400).
+  A camera Search finds the recordings that start on its day, so a recording
+  that starts before midnight and runs into the next day is only in the day
+  before's Search: both forms also read the day before (the day before the
+  range's first day), and keep its midnight-crossing recordings. Once that
+  day is over and none of its recordings is still being written, that tail
+  is final and kept an hour, so a day view costs one Search per stream after
+  the first.
   `kinds` comes from the file name's trigger flags; `clipId` is the proxy's
   FTP copy of the same recording (same stream, start within 5 s), or null.
   Recordings still being written are left out.
@@ -377,7 +387,7 @@ as MP4, also the ones FTP never delivered.
   needs room, least recently used first. A file being read is never deleted.
   Below `storage.minFreeBytes` files are streamed without being kept.
 - **Errors:** 400 `invalid` (a bad id, `to` before `from`, more than 48
-  hours, a bad `month` or `stream`); 404 `unknown_recording`; 503
+  hours, a bad `date`, `month` or `stream`, `date` with `from`/`to`); 404 `unknown_recording`; 503
   `camera_offline` (the status poller says offline, or no connection to the
   camera could be made); 502 `recordings_unavailable` with `reason` `refused`,
   `auth`, `timeout`, `protocol`, `offline` (the connection was lost during the

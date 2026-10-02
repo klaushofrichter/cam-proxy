@@ -73,6 +73,43 @@ describe('GET /recordings (the list)', () => {
   });
 });
 
+// #99: one camera-local day, with the recording that runs into it from the day before.
+describe('GET /recordings?date=', () => {
+  it('lists one camera-local day in the same shape as from/to', async () => {
+    const rec = recs[0];
+    const r = await request(p.base).get(`/api/cameras/cam1/recordings?date=${rec.date}&stream=sub`).set(auth());
+    expect(r.status).toBe(200);
+    const item = r.body.find((x: { id: string }) => x.id === basename(rec.files.sub.name));
+    expect(Object.keys(item).sort()).toEqual(['clipId', 'end', 'id', 'kinds', 'size', 'start', 'stream']);
+    const starts = r.body.map((x: { start: number }) => x.start);
+    expect(starts).toEqual([...starts].sort((a, b) => a - b));
+  });
+
+  it('includes a recording that starts the day before and runs past midnight; so does a from/to window just after midnight', async () => {
+    const cross = sim.sim.engine.sd.add({ date: '2026-01-14', start: '235000', end: '000500', mainEnd: '000500', triggers: ['person'], dst: false });
+    const id = basename(cross.files.sub.name);
+    const day = await request(p.base).get('/api/cameras/cam1/recordings?date=2026-01-15&stream=sub').set(auth());
+    expect(day.status).toBe(200);
+    const item = day.body.find((x: { id: string }) => x.id === id);
+    expect(item).toBeDefined();
+    expect(item.end - item.start).toBe(15 * 60_000);
+    const before = await request(p.base).get('/api/cameras/cam1/recordings?date=2026-01-14&stream=sub').set(auth());
+    expect(before.body.map((x: { id: string }) => x.id)).toContain(id);
+    const win = await request(p.base).get(`/api/cameras/cam1/recordings?from=${item.end - 60_000}&to=${item.end + HOUR}&stream=sub`).set(auth());
+    expect(win.body.map((x: { id: string }) => x.id)).toContain(id);
+  });
+
+  it('checks the query: YYYY-MM-DD, a real date, not with from/to, stream required', async () => {
+    const T = Date.now();
+    const get = (q: string) => request(p.base).get(`/api/cameras/cam1/recordings${q}`).set(auth());
+    for (const q of ['?date=2026-1-05&stream=sub', '?date=2026-02-30&stream=sub', '?date=20261005&stream=sub', '?date=2026-10-05', `?date=2026-10-05&from=${T}&to=${T + 1}&stream=sub`, `?date=2026-10-05&from=${T}&stream=sub`, `?date=2026-10-05&to=${T}&stream=sub`]) {
+      const r = await get(q);
+      expect(r.status, q).toBe(400);
+      expect(r.body.error).toBe('invalid');
+    }
+  });
+});
+
 describe('GET /recordings/days', () => {
   it('the days of a camera-local month with recordings; a bad month is 400 (and /days is not taken for an id)', async () => {
     const month = recs[0].date.slice(0, 7);

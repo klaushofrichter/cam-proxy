@@ -126,15 +126,16 @@ paths:
         '416': { description: 'range not satisfiable (Content-Range: bytes */size)' }
   /api/cameras/{cam}/recordings:
     get:
-      summary: The camera's SD-card recordings that overlap a time range (at most 48 hours), by start
+      summary: "The camera's SD-card recordings of a time range (from/to, at most 48 hours) or of one camera-local day (date), by start. Either includes a recording that starts on the day before and runs past midnight into it"
       parameters:
         - { name: cam, in: path, required: true, schema: { type: string } }
-        - { name: from, in: query, required: true, schema: { type: integer }, description: unix ms }
-        - { name: to, in: query, required: true, schema: { type: integer }, description: unix ms }
+        - { name: from, in: query, schema: { type: integer }, description: 'unix ms; with to, unless date is given' }
+        - { name: to, in: query, schema: { type: integer }, description: 'unix ms; with from, unless date is given' }
+        - { name: date, in: query, schema: { type: string }, description: 'YYYY-MM-DD, a camera-local day: its recordings and the one from the day before that runs past midnight into it. Not with from/to' }
         - { name: stream, in: query, required: true, schema: { type: string, enum: [sub, main] } }
       responses:
-        '200': { description: '[{id (the camera file name), start, end (unix ms), stream, size (bytes), kinds (person, vehicle, pet, motion), clipId (the FTP copy: same stream, start within 5 s; or null)}]; recordings still being written are left out' }
-        '400': { description: '{error: invalid, detail}: from/to missing or reversed, more than 48 hours apart, or stream not sub/main' }
+        '200': { description: '[{id (the camera file name), start, end (unix ms), stream, size (bytes), kinds (person, vehicle, pet, motion), clipId (the FTP copy: same stream, start within 5 s; or null)}], the same shape for from/to and date; from/to lists the recordings that overlap the range; recordings still being written are left out' }
+        '400': { description: '{error: invalid, detail}: neither from/to nor date, date together with from or to, date not a YYYY-MM-DD date, from/to reversed or more than 48 hours apart, or stream not sub/main' }
         '404': { description: unknown camera }
         '502': { description: '{error: recordings_unavailable, reason: search_failed, detail}' }
         '503': { description: '{error: camera_offline}' }

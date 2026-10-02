@@ -50,7 +50,8 @@ describe('RecordingList.range', () => {
     });
     // 2026-10-01 20:00 CDT to 2026-10-02 12:00 CDT.
     const r = await x.list.range(Date.UTC(2026, 9, 2, 1, 0), Date.UTC(2026, 9, 2, 17, 0), 'sub');
-    expect(x.calls.map((c) => [dateOf(c), c.Search.streamType, c.Search.onlyStatus])).toEqual([['2026-10-01', 'sub', 0], ['2026-10-02', 'sub', 0]]);
+    // And the day before the first, for a recording running past its midnight (#99).
+    expect(x.calls.map((c) => [dateOf(c), c.Search.streamType, c.Search.onlyStatus])).toEqual([['2026-10-01', 'sub', 0], ['2026-10-02', 'sub', 0], ['2026-09-30', 'sub', 0]]);
     expect(x.calls[0].Search.EndTime).toMatchObject({ day: 1, hour: 23, min: 59, sec: 59 });
     expect(r.map((e) => e.id)).toEqual(['RecS0A_DST20261001_211129_211207_0_5514C080000000_3E8.mp4', 'RecS0A_DST20261002_010000_010020_0_5514C080000000_3E8.mp4']);
     expect(r[0]).toEqual({ id: r[0].id, path: file('2026-10-01', '211129', '211207'), start: Date.UTC(2026, 9, 2, 2, 11, 29), end: Date.UTC(2026, 9, 2, 2, 12, 7), stream: 'sub', size: 1000, kinds: ['person', 'motion'] });
@@ -124,6 +125,62 @@ describe('RecordingList.find and stillListed', () => {
     files['2026-10-01|sub'] = [];
     expect(await x.list.stillListed(e)).toBe(false);
     expect(x.calls).toHaveLength(2);
+  });
+});
+
+// #99 item 1: a recording that starts on D-1 and runs past midnight into D.
+describe('RecordingList: recordings across midnight (#99)', () => {
+  const CROSS = 'RecS0A_DST20261001_235000_000700_0_5514C080000000_3E8.mp4';
+  const files = () => ({
+    '2026-10-01|sub': [file('2026-10-01', '120000', '120030'), file('2026-10-01', '235000', '000700')],
+    '2026-10-02|sub': [file('2026-10-02', '010000', '010020')],
+  });
+
+  it('range: a window starting just after midnight finds the recording from the day before', async () => {
+    const x = fake(files());
+    // 2026-10-02 00:05 CDT to 01:30 CDT.
+    const r = await x.list.range(Date.UTC(2026, 9, 2, 5, 5), Date.UTC(2026, 9, 2, 6, 30), 'sub');
+    expect(r.map((e) => e.id)).toEqual([CROSS, 'RecS0A_DST20261002_010000_010020_0_5514C080000000_3E8.mp4']);
+    expect(r[0].end).toBe(Date.UTC(2026, 9, 2, 5, 7));
+  });
+
+  it('date: the camera-local day, with the recording that runs into it, and nothing else from the day before', async () => {
+    const x = fake(files());
+    const r = await x.list.date('2026-10-02', 'sub');
+    expect(r.map((e) => e.id)).toEqual([CROSS, 'RecS0A_DST20261002_010000_010020_0_5514C080000000_3E8.mp4']);
+    expect(x.calls.map((c) => dateOf(c)).sort()).toEqual(['2026-10-01', '2026-10-02']);
+  });
+
+  it('date: a recording of the day itself that runs into the next day is listed', async () => {
+    const x = fake(files());
+    expect((await x.list.date('2026-10-01', 'sub')).map((e) => e.id)).toEqual(['RecS0A_DST20261001_120000_120030_0_5514C080000000_3E8.mp4', CROSS]);
+  });
+
+  it("keeps a finished day's midnight tail for an hour: later views of D search D only", async () => {
+    const x = fake(files());
+    await x.list.date('2026-10-02', 'sub');
+    x.clock.t += 60_000; // past the 30 s day cache
+    expect((await x.list.date('2026-10-02', 'sub')).map((e) => e.id)).toContain(CROSS);
+    expect(x.calls.map((c) => dateOf(c))).toEqual(['2026-10-02', '2026-10-01', '2026-10-02']);
+    x.clock.t += 3_600_000;
+    await x.list.date('2026-10-02', 'sub');
+    expect(x.calls).toHaveLength(5);
+  });
+
+  it('never keeps the tail of a day that is not over, or with a recording still being written', async () => {
+    // Still being written: listed with end 000000.
+    const open = { '2026-10-01|sub': [file('2026-10-01', '235000', '000000')], '2026-10-02|sub': [] };
+    const x = fake(open);
+    expect(await x.list.date('2026-10-02', 'sub')).toEqual([]); // not listed until it is finished
+    x.clock.t += 60_000;
+    await x.list.date('2026-10-02', 'sub');
+    expect(x.calls).toHaveLength(4);
+    // The day before is today (2026-10-02 13:00 CDT on the fake clock): not over.
+    const y = fake({});
+    await y.list.date('2026-10-03', 'sub');
+    y.clock.t += 60_000;
+    await y.list.date('2026-10-03', 'sub');
+    expect(y.calls).toHaveLength(4);
   });
 });
 
