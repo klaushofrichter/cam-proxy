@@ -29,6 +29,7 @@ export interface FakeOptions {
   badMagicOn?: number; // answer this cmd with bad magic
   replyDelayMs?: number; // before the reply to cmd 9
   infoRecord?: Buffer; // instead of INFO_RECORD in cmd 8's first reply
+  infoDelayMs?: number; // before cmd 8's first reply (the info record)
   nonces?: string[]; // per connection (the first, the second, ...), else NONCE
 }
 
@@ -103,6 +104,7 @@ export async function fakeCamera(o: FakeOptions = {}): Promise<FakeCamera> {
       if (!file) return void send(8, msgId, 400, Buffer.alloc(0), Buffer.alloc(0));
       cam.downloads++;
       transfer = msgId;
+      if (o.infoDelayMs) await sleep(o.infoDelayMs);
       send(8, msgId, 200, aesEncrypt(key, Buffer.from(EXT_INFO)), o.infoRecord ?? INFO_RECORD);
       if (o.firstChunkDelayMs) await sleep(o.firstChunkDelayMs);
       const size = o.chunkSize ?? 39_400;
