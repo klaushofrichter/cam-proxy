@@ -204,6 +204,13 @@ This keeps the history: stills, previews, clips and the catalog.
   2026-09-29: after `reboot`, the proxy was healthy within 5 s of the Pi coming
   back, with the camera up and ONVIF subscribed, and cams reconnected on its own.
   Nothing else needs to autostart.
+- **Restart from the UI or the API:** the Maintenance page's "Restart proxy"
+  (`POST /control/actions/restart-proxy`) stops the proxy gracefully, as
+  `docker compose stop` would, and exits with code 0; `restart:
+  unless-stopped` starts the container again. If the stop hangs for 15 s the
+  proxy exits anyway. Admin sessions end with the process, so the page asks
+  you to sign in again. "Reboot camera" reboots the camera instead; the
+  container keeps running.
 - **Stopping:** `compose.yaml` gives the container 20 s to stop
   (`stop_grace_period`), not Docker's default 10 s. That is time to end a
   running encode and to store a Vision call that is still in flight (up to
