@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, writeFileSync, existsSync, readdirSync, mkdirSync, utimesSync } from 'fs';
+import { mkdtempSync, writeFileSync, existsSync, readdirSync, mkdirSync, unlinkSync, utimesSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { openCatalog } from '../src/catalog/db';
@@ -341,7 +341,34 @@ describe('storage: the recordings cache', () => {
     x.storage.recount();
     expect(x.storage.run({ dryRun: true }).deleted.recordings).toBe(1);
     expect(existsSync(a)).toBe(true);
+    putRec(x.dir, 'RecS0A_C.mp4', 300, NOW); // the fetcher's file, after its rename
     x.storage.noteWritten('recordings', 300, 1);
     expect(x.storage.usage().recordings.bytes).toBe(1_200_300);
+  });
+
+  // Final review 3.
+  it('recordings writes have a growthPerDay but never count toward daysUntilFull (a capped cache)', () => {
+    const x = setup();
+    x.put('stills', NOW - HOUR, 1000);
+    x.storage.recount();
+    x.storage.noteWritten('stills', 3 * 1000, 1);
+    const before = x.storage.usage().daysUntilFull;
+    putRec(x.dir, 'RecS0A_A.mp4', 3 * 1_000_000, NOW);
+    x.storage.noteWritten('recordings', 3 * 1_000_000, 1);
+    const u = x.storage.usage();
+    expect(u.recordings.growthPerDay).toBe(1_000_000);
+    expect(u.stills.growthPerDay).toBe(1000);
+    expect(u.daysUntilFull).toBeCloseTo(before! - 3_000_000 / 1000, 3); // the used bytes count, the growth doesn't
+  });
+
+  // Final review 4.
+  it('usage() recounts the recordings folder: files the cache evicted are gone from the bytes at once', () => {
+    const x = setup();
+    const a = putRec(x.dir, 'RecS0A_A.mp4', 1000, NOW - DAY);
+    putRec(x.dir, 'RecS0A_B.mp4', 500, NOW - HOUR);
+    x.storage.recount();
+    expect(x.storage.usage().recordings.bytes).toBe(1500);
+    unlinkSync(a); // the cache's makeRoom
+    expect(x.storage.usage().recordings).toMatchObject({ bytes: 500, files: 1 });
   });
 });

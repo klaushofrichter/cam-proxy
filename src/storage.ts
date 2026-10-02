@@ -111,10 +111,15 @@ export class Storage extends EventEmitter {
       }
       this.units[kind] = [...byMinute.values()].sort((a, b) => a.ts - b.ts);
     }
-    // The recordings cache: one unit per regular file, its time the last use
-    // (mtime). Paths are join(dir, id), the strings the cache pins by.
+    this.recountRecordings();
+  }
+
+  // The recordings cache: one unit per regular file, its time the last use
+  // (mtime). Paths are join(dir, id), the strings the cache pins by. Also run
+  // by usage(): the cache evicts on its own (makeRoom), and it is one small folder.
+  private recountRecordings(): void {
     const recs: Unit[] = [];
-    const recDir = join(root, 'recordings');
+    const recDir = join(this.d.config().server.dataDir, 'recordings');
     for (const cam of safeDir(recDir)) {
       for (const name of safeDir(join(recDir, cam))) {
         if (name.endsWith('.part')) continue; // being written
@@ -146,6 +151,7 @@ export class Storage extends EventEmitter {
 
   usage(): Record<FileKind | 'catalog' | 'audit', KindUsage> & { free: number; size: number; budget: number; used: number; daysUntilFull: number | null } {
     const now = this.now();
+    this.recountRecordings();
     const out = {} as Record<FileKind | 'catalog' | 'audit', KindUsage>;
     let used = 0;
     let growth = 0;
@@ -155,7 +161,8 @@ export class Storage extends EventEmitter {
       const g = this.writes.filter((w) => w.kind === kind).reduce((n, w) => n + w.bytes, 0) / (GROWTH_WINDOW / DAY);
       out[kind] = { bytes, files: list.reduce((n, u) => n + u.files.length, 0), oldest: list[0]?.ts ?? null, newest: list[list.length - 1]?.ts ?? null, growthPerDay: Math.round(g) };
       used += bytes;
-      growth += g;
+      // The recordings cache is capped and evicts itself: its writes never fill the disk.
+      if (kind !== 'recordings') growth += g;
     }
     const cat = this.d.catalog.sizeBytes();
     out.catalog = { bytes: cat, files: 1, oldest: null, newest: now, growthPerDay: 0 };
