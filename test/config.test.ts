@@ -220,3 +220,38 @@ describe('audit settings', () => {
     expect(() => load({ CAMPROXY_AUDIT_TOKEN: T1 })).toThrow(/CAMPROXY_AUDIT_TOKEN/);
   });
 });
+
+// The camera's PoE switch (issue #85): settings, live; the password is a secret.
+describe('camera.poeSwitch', () => {
+  beforeEach(() => write('config.json', { camera: { host: '192.0.2.10' } }));
+  it('defaults to no switch, 8 ports and 10 s off', () => {
+    expect(load().config.camera.poeSwitch).toEqual({ model: 'none', ports: 8, offSeconds: 10 });
+  });
+
+  it('takes a model, a host (optional :port), the camera port 1-48, the port count and offSeconds 5-60', () => {
+    const l = applyOverrides(load(), { camera: { poeSwitch: { model: 'sscpoe-web', host: '192.168.1.217', port: 8, ports: 8, offSeconds: 15 } } });
+    expect(l.config.camera.poeSwitch).toEqual({ model: 'sscpoe-web', host: '192.168.1.217', port: 8, ports: 8, offSeconds: 15 });
+    expect(applyOverrides(load(), { camera: { poeSwitch: { host: 'switch.lan:8080' } } }).config.camera.poeSwitch.host).toBe('switch.lan:8080');
+    for (const [k, v] of [['model', 'gps208'], ['host', 'http://x'], ['host', 'a b'], ['port', 0], ['port', 49], ['ports', 0], ['ports', 49], ['offSeconds', 4], ['offSeconds', 61]] as const) {
+      expect(() => applyOverrides(load(), { camera: { poeSwitch: { [k]: v } } }), `${k}=${v}`).toThrow(new RegExp(`camera.poeSwitch.${k}`));
+    }
+  });
+
+  it('applies at once: no restart for the switch settings (read on every use)', () => {
+    for (const k of ['model', 'host', 'port', 'ports', 'offSeconds']) expect(needsRestart(`camera.poeSwitch.${k}`), k).toBe(false);
+    expect(needsRestart('camera.host')).toBe(true);
+  });
+
+  it('reads an optional CAMPROXY_POE_SWITCH_PASSWORD (or its _FILE)', () => {
+    expect(load().secrets.poeSwitchPassword).toBeUndefined();
+    expect(load({ CAMPROXY_POE_SWITCH_PASSWORD: 'sw-pw' }).secrets.poeSwitchPassword).toBe('sw-pw');
+    const f = join(dir, 'switch.txt');
+    writeFileSync(f, 'sw-file-pw\n');
+    expect(load({ CAMPROXY_POE_SWITCH_PASSWORD: 'sw-pw', CAMPROXY_POE_SWITCH_PASSWORD_FILE: f }).secrets.poeSwitchPassword).toBe('sw-file-pw');
+    expect(err(() => load({ CAMPROXY_POE_SWITCH_PASSWORD_FILE: join(dir, 'missing') }))).toBe('CAMPROXY_POE_SWITCH_PASSWORD_FILE: cannot read the file');
+  });
+
+  it('refuses the password as a setting like any unknown key', () => {
+    expect(() => applyOverrides(load(), { camera: { poeSwitch: { password: 'x' } } })).toThrow(/camera.poeSwitch.password: unknown setting/);
+  });
+});

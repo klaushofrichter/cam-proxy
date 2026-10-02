@@ -21,5 +21,7 @@ services:
       CAMPROXY_GOOGLE_VISION_KEY: ${CAMPROXY_GOOGLE_VISION_KEY:-}
       # Optional: read-only access to GET /control/audit (docs/audit-log.md).
       CAMPROXY_AUDIT_TOKEN: ${CAMPROXY_AUDIT_TOKEN:-}
+      # Optional: the camera's PoE switch login, for the power-cycle (docs/poe-switch.md).
+      CAMPROXY_POE_SWITCH_PASSWORD: ${CAMPROXY_POE_SWITCH_PASSWORD:-}
     volumes:
       - ${CAMPROXY_DATA:-./data}:/data
