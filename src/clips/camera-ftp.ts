@@ -82,9 +82,13 @@ export async function testCameraFtp(client: ReolinkClient, t: FtpTarget): Promis
   }
 }
 
-export async function cameraFtpOff(client: ReolinkClient): Promise<FtpObject> {
+// GetFtpV20 masks the user (`ca**ra`) and may mask the password, so the
+// whole-object Set takes both from the proxy's settings, never from the
+// camera's answer.
+export async function cameraFtpOff(client: ReolinkClient, t: Pick<FtpTarget, 'user' | 'password'>): Promise<FtpObject> {
+  if (!t.password) throw new Error('the ftp password (CAMPROXY_FTP_PASSWORD) is not set');
   const current = await read(client);
   if (!current.server) return redact(current); // never configured: already off
-  await client.command('SetFtpV20', { Ftp: { ...current, enable: 0 } });
+  await client.command('SetFtpV20', { Ftp: { ...current, userName: t.user, password: t.password, enable: 0 } });
   return redact(await read(client));
 }

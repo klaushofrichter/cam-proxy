@@ -327,6 +327,8 @@ export function controlApi(d: ControlDeps): express.Router {
         return void (await cameraCall(res, async () => (name === 'camera-ftp-setup' ? { ftp: await d.cameraFtp.setup(t) } : d.cameraFtp.test(t))));
       }
       case 'camera-ftp-off':
+        // The Set writes the proxy's own user and password (the camera's answer is masked).
+        if (!d.cameraFtp.target().password) return fail(409, 'not_configured', 'CAMPROXY_FTP_PASSWORD is not set');
         return void (await cameraCall(res, async () => ({ ftp: await d.cameraFtp.off() })));
       // The camera side: reconnect and apply restart settings; the process runs on.
       case 'restart':

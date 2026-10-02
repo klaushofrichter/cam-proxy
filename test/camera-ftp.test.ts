@@ -3,7 +3,7 @@ import request from 'supertest';
 import { startSim } from './helpers/sim';
 import { startProxy, auth, until, freePort, ADMIN_TOKEN } from './helpers/proxy';
 import { listClips } from '../src/catalog/clips';
-import { ftpObject } from '../src/clips/camera-ftp';
+import { cameraFtpOff, ftpObject } from '../src/clips/camera-ftp';
 
 let sim: Awaited<ReturnType<typeof startSim>>;
 let p: Awaited<ReturnType<typeof startProxy>>;
@@ -101,5 +101,23 @@ describe('ftpObject', () => {
   it('refuses an empty server', () => {
     expect(() => ftpObject({}, { server: '', port: 2121, user: 'camera', password: 'x'.repeat(24), tls: true, stream: 'main' })).toThrow(/server/);
     expect(ftpObject({}, { server: '10.0.0.2', port: 2121, user: 'camera', password: 'x'.repeat(24), tls: true, stream: 'main' }).server).toBe('10.0.0.2');
+  });
+});
+
+// GetFtpV20 masks the user (and maybe the password): a Set built from its
+// answer must never write those back (cam-sim answers the same since its #67).
+describe('cameraFtpOff with a masked answer', () => {
+  it('writes the proxy’s own user and password, enable 0, the rest kept; nothing masked', async () => {
+    const sent: any[] = [];
+    const masked = { enable: 1, server: '192.168.1.220', port: 2121, userName: 'ca**ra', password: 'ft**********zz', onlyFtps: 1, autoDir: 1, schedule: { channel: 0, table: { MD: '1' } } };
+    const client = { command: async (cmd: string, param: any) => { if (cmd === 'SetFtpV20') sent.push(param); return cmd === 'GetFtpV20' ? { Ftp: masked } : {}; } } as any;
+    await cameraFtpOff(client, { user: 'camera', password: 'real-ftp-password' });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].Ftp).toEqual({ ...masked, enable: 0, userName: 'camera', password: 'real-ftp-password' });
+    expect(JSON.stringify(sent)).not.toContain('*');
+  });
+  it('refuses without a configured password rather than writing a masked one', async () => {
+    const client = { command: async () => { throw new Error('must not be called'); } } as any;
+    await expect(cameraFtpOff(client, { user: 'camera', password: '' })).rejects.toThrow(/password/);
   });
 });
