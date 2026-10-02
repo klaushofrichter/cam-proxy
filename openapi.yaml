@@ -247,7 +247,7 @@ paths:
         Admin token or admin session. Writes with the session cookie need
         `X-CamProxy-UI: 1`. A client token answers 403 `{"error":"admin_only"}`.
       responses:
-        '200': { description: '{ version, camera (incl. webUiUrl, reboot {kind, requestedAt, confirmed, phase, offAt, endedAt, downSec} or null, poeSwitch {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state (on, off, elsewhere, unknown), checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, analytics: [provider state], analyticsUnmapped: top 20 unmapped objects [{mid, name, count, lastSeen}] }' }
+        '200': { description: '{ version, camera (incl. webUiUrl, reboot {kind, requestedAt, confirmed, phase, offAt, endedAt, downSec} or null, poeSwitch {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state (on, off, elsewhere, server_differs, not_set_up, unknown), checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, analytics: [provider state], analyticsUnmapped: top 20 unmapped objects [{mid, name, count, lastSeen}] }' }
         '401': { description: not signed in }
         '403': { description: admin_only, or csrf }
   /control/analytics:

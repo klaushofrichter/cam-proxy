@@ -147,7 +147,7 @@ come only from the environment.
 | `go2rtc` | `binary` (`go2rtc`), `rtspPort` (18554), `apiPort` (11984); both listen on 127.0.0.1 only; `url` (reserved, not used yet: for a go2rtc that runs as its own container) |
 | `stills` | `enabled` (true), `stream` (`sub`), `intervalS` (1), `size` (`896x512`), `quality` (5), `maxGB` |
 | `previews` | `tileSize` (`160x90`), `grid` (`10x6`), `quality` (7), `maxGB` |
-| `ftp` | `enabled` (false), `port` (2121), `passive` (`30000-30009`), `publicHost` (the address the camera connects to), `user` (`camera`), `tls` (true), `certFile`/`keyFile` (else a self-signed certificate), `stream` (`main`), `stalledHours` (6, 1–72: the Status page warns when no clip arrived for this long while the camera recorded events; live), `maxGB` |
+| `ftp` | `enabled` (false), `port` (2121), `passive` (`30000-30009`), `publicHost` (the address the camera connects to), `user` (`camera`), `tls` (true), `certFile`/`keyFile` (else a self-signed certificate), `stream` (`main`), `stalledHours` (6, 1–72: the Status page warns when no clip arrived for this long while the camera recorded events; applies at once, no restart), `maxGB` |
 
 | Secret (environment, or `<NAME>_FILE`) | |
 |---|---|
@@ -273,12 +273,21 @@ upload folder. While storage is paused, `STOR` answers 452.
   never the password) when the camera comes online and every 5 minutes
   after, and after each setup or off. The Status page's FTP card shows
   "Camera upload" and turns red, with an alert and a "Point the camera's FTP
-  here" button, when the upload is off, when it points somewhere else (its
-  server, port or user differ from what `camera-ftp-setup` writes), or when
-  no clip arrived for `ftp.stalledHours` (6) while the camera recorded
-  motion, person, vehicle or pet events (events of the last 10 minutes don't
-  count yet; a quiet day is no warning). Each change of the camera's FTP
-  state is an audit record (`camera-check`), and `/metrics` has
+  here" button, when the upload is off (`enable` 0 with a server set, or no
+  server after clips arrived before), when it points somewhere else (its
+  port or user, or its server and more, differ from what
+  `camera-ftp-setup` writes), or when no clip arrived for
+  `ftp.stalledHours` (6) while the camera recorded motion, person, vehicle
+  or pet events (events of the last 10 minutes don't count yet; a quiet day
+  is no warning). Only another server name (port and user match: perhaps
+  another name for this proxy; compared trimmed and in lower case, no DNS)
+  is amber. A camera that has no FTP server set and never sent a clip (a
+  fresh or reset camera) is grey, "FTP upload isn't set up on the camera",
+  with the same button: no alarm, no audit record, no stall warning. The
+  time of the last clip is kept when retention deletes the clip. An
+  intentional `camera-ftp-off` stays red while `ftp.enabled` is true in
+  the proxy; set `ftp.enabled: false` to silence it. Each change of the
+  camera's FTP state is an audit record (`camera-check`), and `/metrics` has
   `camproxy_camera_ftp_enabled`, `camproxy_clips_stalled` and
   `camproxy_clips_last_received_timestamp_seconds`. On 2026-10-01 the
   upload had been off for 37 hours unnoticed.
