@@ -354,7 +354,7 @@ paths:
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, pattern: '^[a-z]{1,16}-\d{1,15}-[0-9a-f]{6}$' } }
       responses:
-        '200': { description: '{ runId, kind, camera, startedAt, tookMs, outcome, error?, cancelledBy? (request|stop), requestedBy, window: { from, to, reason (retention|budget|store-younger|empty), retentionFrom, protectedFrom }, counts, top (the 10 longest gaps), items (up to 500 file problems), itemsTruncated, message }' }
+        '200': { description: '{ runId, kind, camera, startedAt, tookMs, outcome, error?, cancelledBy? (request|stop), requestedBy, window: { from, to, reason (retention|budget|store-younger|empty), retentionFrom, protectedFrom, notes (caveats on the counts) }, counts (stills: also previewsPruned, and prunedDuringRun: packs deleted by retention during the run, counted as missing), top (the 10 longest gaps), items (up to 500 file problems), itemsTruncated, message }' }
         '400': { description: not a run id }
         '404': { description: unknown run }
   /control/config:

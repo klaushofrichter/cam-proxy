@@ -41,8 +41,9 @@ Checked against the code on `main`; each changes the text below.
    `store-younger`, or `empty`.
 5. **A crash leaves no `proxy-stop`.** The next `proxy-start` has
    `uncleanStop: true`. So a gap is explained by the `proxy-start` that falls
-   inside it (clean or not), up to 120 s after that start, the time go2rtc and
-   the grabber need. Gaps are not explained by `proxy-stop` alone.
+   inside it, up to 120 s after that start, the time go2rtc and the grabber
+   need: a clean start from its `previousStop` on, a crash from the gap's
+   start (ruling, below). Gaps are not explained by `proxy-stop` alone.
 6. **Clip times and still times come from different clocks.** Clip times are
    the camera's local file-name time converted to UTC; still times are the
    proxy's clock. "Restorable seconds" compares them as they are (the camera's
@@ -50,8 +51,9 @@ Checked against the code on `main`; each changes the text below.
 7. **Every `POST /control/actions/:name` writes a `control-action` record**
    unless the route excludes it (`src/api/control-api.ts`). `inventory` is
    excluded, because the run writes its own `inventory` record when it ends;
-   `inventory-cancel` stays a `control-action`. A refused start (400, 409)
-   writes nothing, like a refused camera reboot.
+   `inventory-cancel` stays a `control-action`. A refused start (400, 409,
+   503 `stopping` once the proxy is stopping) writes nothing, like a refused
+   camera reboot.
 8. **"Admin only" is the routes, not the records.** The `inventory` and
    `inventory-repair` records are read like every other record: admin token,
    admin session, or `CAMPROXY_AUDIT_TOKEN` on `GET /control/audit`.
@@ -142,7 +144,8 @@ The draft's section 7, accepted as written.
     (PR 4).
 - **A check** is `(ctx: {signal, progress, now}) => Promise<{window, counts,
   top, items, message}>`. The runner knows nothing about stills; a new kind
-  is a new check in the runner's table.
+  is a new `{label, run}` entry in the runner's check table (`label` names it
+  in messages: "Stills inventory: …").
 - **One run at a time.** One lock per proxy covers every inventory and
   repair. A second start answers 409 `inventory_busy` with the running
   `runId`.
@@ -194,7 +197,8 @@ All under `/control`, so admin token or admin session (with
     (`kinds.stills.oldest` more than an hour before the oldest pack: deleted
     for space, by the budget or `stills.maxGB`), else `store-younger`.
 - The report also gives `protectedFrom` = now − `storage.keepHours.stills`,
-  the part the budget never deletes (#72).
+  the part the budget never deletes (#72), and `notes`: caveats on the counts
+  (the clock note when seconds are restorable).
 
 **Walk.** UTC day by day, oldest first: one `readdir` of the day's stills
 folder and one of its previews folder, then each pack's footer read async
@@ -204,14 +208,27 @@ Per minute:
 - with an unreadable pack: all slots missing at the current `intervalS`, and
   an `unreadable-pack` item;
 - without a pack: all slots missing at the current `intervalS`;
+- a pack listed by the `readdir` but gone when its footer is read (retention
+  deleted it during the run): all slots missing, counted in
+  `prunedDuringRun`, not a file problem;
 - a pack without both `HHMM.json` and `HHMM.jpg`: a `pack-without-sprite`
-  item; a sprite file without a pack: `sprite-without-pack`.
+  item, unless its previews were pruned earlier (before the later of the
+  previews' retention cutoff and the oldest preview): then only counted in
+  `previewsPruned`; a sprite file without a pack: `sprite-without-pack`.
 
 **Gaps.** Runs of missing slots, across minute and day borders. Each gap gets:
-- `explained`: `stop` or `crash` when a `proxy-start` record falls inside it
-  (`uncleanStop: true` is `crash`), with `explainedSeconds` from the gap's
-  start to that start + 120 s (capped at the gap's end); several starts in one
-  gap: the last one counts; else `null`;
+- `explained`, from what overlaps it (several causes count their union once,
+  the largest share names the gap, a proxy start on a tie; else `null`):
+  - `stop` or `crash`: a `proxy-start` record inside it (`uncleanStop: true`
+    is `crash`; several starts: the last one counts). A clean start explains
+    from its `previousStop` (or the gap's start, if later) to the start +
+    120 s; a crash, with no stop time, from the gap's start. A stall that a
+    restart fixed stays unexplained up to the stop;
+  - `reboot` or `powercycle`: a camera reboot or power-cycle from the proxy
+    that reached the camera, from the request (a power-cycle: the PoE cut,
+    `offAt`) to its end record (`back`, `not-back`, or the proxy stopping)
+    + 120 s; without an end record, 5 min (`REBOOT_WAIT_MS`) + 120 s;
+  - `explainedSeconds`: the covered part, capped at the gap;
 - the 10 longest are kept (`top`), longest first, then oldest first.
 
 **Restorable seconds.** Missing seconds inside a local clip (`clips` rows with
@@ -221,16 +238,17 @@ tells whether #73 is worth building.
 **Counts.** `stillsDays`, `minutes`, `packs`, `expectedSeconds`,
 `presentSeconds`, `missingSeconds`, `missingPct` (2 decimals), `gaps`,
 `explainedSeconds`, `unexplainedSeconds`, `restorableSeconds`,
-`unreadablePacks`, `packsWithoutSprite`, `spritesWithoutPack`.
+`unreadablePacks`, `packsWithoutSprite`, `spritesWithoutPack`,
+`previewsPruned`, `prunedDuringRun`.
 
-**Message.** "Stills inventory: 220 s of 600 s missing (36.67%) since
-2026-09-27T00:10:00.000Z, 4 gaps (longest 90 s), 150 s explained by proxy
-stops, 20 s restorable from clips, 3 file problems"; for an empty store
-"Stills inventory: no stills stored".
+**Message.** "Stills inventory: 3 min 40 s of 10 min missing (36.67%) since
+2026-09-27T00:10:00.000Z, 4 gaps (longest 1 min 30 s), 2 min 30 s explained
+by proxy stops or camera reboots, 20 s restorable from clips (camera clock),
+3 file problems"; for an empty store "Stills inventory: no stills stored".
 
 **Not counted as explained:** disk-full pauses (`storage_full_writing_paused`
-is a log line, not an audit record), camera reboots and power-cycles, and a
-camera-side `restart`. They show as unexplained gaps.
+is a log line, not an audit record) and a camera-side `restart`. They show as
+unexplained gaps.
 
 ### 4. Clips (#74, PR 2)
 
@@ -378,9 +396,24 @@ camera-side `restart`. They show as unexplained gaps.
 ## Out of scope
 
 - Scheduled inventories or repairs (button only).
-- Explaining gaps by camera reboots, power-cycles or disk-full pauses.
+- Explaining gaps by disk-full pauses (no audit record for a pause yet).
 - Restoring stills from SD recordings in one step.
 - Multi-camera runs (one camera per proxy).
+
+## Rulings during the build
+
+- Camera reboots and power-cycles (audit `camera-reboot`,
+  `camera-powercycle`) also explain still gaps: an outage runs from the
+  request (or `offAt`) to the end record + 120 s, else 5 min; overlapping
+  causes count once, the largest share names the gap.
+- Storage pauses don't explain gaps yet: a pause writes no audit record (a
+  follow-up issue for a `storage-paused`/`resumed` record).
+- `budget` as the reason for a shortened window is judged from the
+  `storage-daily` records.
+- Restorable seconds are counted without aligning the camera's and the
+  proxy's clocks (a few seconds' skew), and the report says so.
+- A clean restart explains a gap only from its `previousStop` (a stall fixed
+  by a restart stays unexplained); a crash keeps the gap's start.
 
 ## References
 
