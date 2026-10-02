@@ -24,7 +24,7 @@ export interface PoeSwitchMockOptions {
 export interface PoeSwitchMock {
   url: string;
   host: string; // 127.0.0.1:<port>, for camera.poeSwitch.host
-  calls: Array<{ cmd: number; session: boolean; dropped?: boolean }>;
+  calls: Array<{ cmd: number; session: boolean; dropped?: boolean; expired?: boolean }>;
   poec: number[];
   pw: number[];
   opcodes: number[];
@@ -41,8 +41,11 @@ export interface PoeSwitchMock {
   hang: boolean;
   // Delay the answer to a callcmd (ms).
   delay: Record<number, number>;
-  // Our session ends on the switch (as after a switch-side timeout).
+  // Our session ends on the switch (as after a switch-side timeout): a
+  // request with its cookie is answered errcode 1 (recorded as expired).
   expireSession(): void;
+  // Every POST hangs for this long, then the switch answers again.
+  hangFor(ms: number): void;
   close(): Promise<void>;
 }
 
@@ -53,6 +56,7 @@ export async function startPoeSwitchMock(o: PoeSwitchMockOptions): Promise<PoeSw
   const poec = Array.from({ length: n }, (_, i) => (i < ports ? 1 : 0));
   const pw = Array.from({ length: n }, (_, i) => powered[i] ?? 0);
   let session: string | null = null;
+  const expired = new Set<string>();
   let server: Server;
   const mock: PoeSwitchMock = {
     url: '',
@@ -65,7 +69,14 @@ export async function startPoeSwitchMock(o: PoeSwitchMockOptions): Promise<PoeSw
     offFault: null,
     hang: false,
     delay: {},
-    expireSession: () => void (session = null),
+    expireSession: () => {
+      if (session && session !== 'browser') expired.add(session);
+      session = null;
+    },
+    hangFor: (ms) => {
+      mock.hang = true;
+      setTimeout(() => (mock.hang = false), ms).unref();
+    },
     browserLogin: () => void (session = 'browser'),
     browserLogout: () => void (session = null),
     activeSession: () => session !== null,
@@ -122,7 +133,8 @@ export async function startPoeSwitchMock(o: PoeSwitchMockOptions): Promise<PoeSw
       return answer(res, cmd, { login: 'success' }, { headers: { 'Set-Cookie': `${session}=; Path=/` } });
     }
     if (!ours) {
-      // Not logged in: the real switch answers its login page's state; an error here.
+      // Not logged in (or an expired session): an error answer.
+      if (cookie.split(/;\s*/).some((c) => expired.has(c.split('=')[0]))) mock.calls[mock.calls.length - 1].expired = true;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return void res.end(JSON.stringify({ errcode: 1, data: { callcmd: cmd } }));
     }

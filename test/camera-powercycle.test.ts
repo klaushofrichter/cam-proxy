@@ -386,9 +386,30 @@ describe('POST /control/actions/camera-powercycle', () => {
       expect(Date.now() - t0).toBeLessThan(12000);
       const recs = p.proxy.audit.list({ actions: ['camera-powercycle'] }).records;
       const left = recs.find((x) => /left OFF/.test(String(x.message)));
-      expect(left).toMatchObject({ event: { outcome: 'failure' }, cam_proxy: { phase: 'stop', poeLeftOff: true } });
+      expect(left).toMatchObject({ event: { outcome: 'failure' }, cam_proxy: { phase: 'stop', poeLeftOff: true, sessionMaybeOpen: false } });
     } finally {
       sw.failSet = 0;
+      sw.poec[0] = 1;
+      await sim.sim.engine.powerOn(300).catch(() => {});
+    }
+  }, 30000);
+
+  it('a proxy stop while the switch stops answering: bounded, and the audit says PoE may be off and the switch session may be open', async () => {
+    const p = await startProxy(sim, { env: { CAMPROXY_POE_SWITCH_PASSWORD: PASSWORD } });
+    try {
+      await configure(p.base, { offSeconds: 60 });
+      void post(p.base).catch(() => {});
+      await until(() => sw.poec[0] === 0, 5000);
+      sw.hang = true;
+      const t0 = Date.now();
+      await p.proxy.stop({ reason: 'test' });
+      expect(Date.now() - t0).toBeLessThan(10000);
+      const rec = p.proxy.audit.list({ actions: ['camera-powercycle'] }).records.find((x) => (x.cam_proxy as { phase?: string } | undefined)?.phase === 'stop');
+      expect(rec).toMatchObject({ event: { outcome: 'failure' }, cam_proxy: { poeLeftOff: true, sessionMaybeOpen: true } });
+      expect(rec?.message).toMatch(/web session on the switch may still be open/);
+    } finally {
+      sw.hang = false;
+      sw.expireSession();
       sw.poec[0] = 1;
       await sim.sim.engine.powerOn(300).catch(() => {});
     }

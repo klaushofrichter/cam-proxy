@@ -558,10 +558,14 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       audit.write({ action: 'proxy-stop', category: ['process'], type: ['end'], outcome: 'success', user: 'system', message: `cam-proxy stopping${opts.reason ? ` (${opts.reason})` : ''}`, details: { reason: opts.reason ?? 'stop' } });
       // A power-cycle in its off time turns the camera's PoE on now, not
       // never; bounded, and loud when it could not.
-      const { poeLeftOff } = await poeSwitch.stop();
-      if (poeLeftOff) {
+      const { poeLeftOff, sessionMaybeOpen } = await poeSwitch.stop();
+      if (poeLeftOff || sessionMaybeOpen) {
         const sw = poeSwitchInfo();
-        audit.write({ action: 'camera-powercycle', category: ['host'], type: ['end'], outcome: 'failure', user: 'system', message: `cam-proxy stopping: the camera's PoE may be left OFF on ${sw.host} port ${sw.port}; turn it on in the switch's web UI, or with "Turn camera PoE on" once the proxy is back`, details: { phase: 'stop', poeLeftOff: true, switch: sw } });
+        const parts = [
+          ...(poeLeftOff ? [`the camera's PoE may be left OFF on ${sw.host} port ${sw.port}; turn it on in the switch's web UI, or with "Turn camera PoE on" once the proxy is back`] : []),
+          ...(sessionMaybeOpen ? ["the proxy's web session on the switch may still be open: the switch's web UI may refuse logins until the switch ends it"] : []),
+        ];
+        audit.write({ action: 'camera-powercycle', category: ['host'], type: ['end'], outcome: 'failure', user: 'system', message: `cam-proxy stopping: ${parts.join('; ')}`, details: { phase: 'stop', poeLeftOff, sessionMaybeOpen, switch: sw } });
       }
       await restarting;
       reboot.stop();

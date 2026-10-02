@@ -74,6 +74,9 @@ export function poeOpcode(index: number, on: boolean): number {
   return ((on ? 1 : 0) << 9) | (index << 4) | 2;
 }
 
+// The switch answered, but said no (no config: ok): it may have done nothing.
+export class PoeSwitchRefusal extends PoeSwitchError {}
+
 const CMD = { login: 123, detail: 101, setPoe: 103, logout: 126 } as const;
 const UNREACHABLE = new Set(['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'EHOSTDOWN', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT']);
 const ON_RETRY_MS = 60_000; // how long a failed PoE-on is retried (backoff 1, 2, 4, 8, 10, 10… s)
@@ -84,7 +87,8 @@ const TIMEOUT = 'CAMPROXY_SWITCH_TIMEOUT';
 // One web session: the cookie from the login answer goes with every call.
 class Session {
   private cookie = '';
-  constructor(private readonly host: string, private readonly timeoutMs: number) {}
+  // The per-call timeout is asked on every call: a stopping proxy shortens it.
+  constructor(private readonly host: string, private readonly timeout: () => number) {}
 
   call(cmd: number, calldata?: Record<string, unknown>): Promise<{ errcode?: number; data?: { calldata?: Record<string, unknown> } & Record<string, unknown> }> {
     const body = JSON.stringify({ data: { callcmd: cmd, ...(calldata ? { calldata } : {}) } });
@@ -99,7 +103,7 @@ class Session {
           Referer: `http://${this.host}/`,
           ...(this.cookie ? { Cookie: this.cookie } : {}),
         },
-        timeout: this.timeoutMs,
+        timeout: this.timeout(),
       }, (res) => {
         let text = '';
         res.setEncoding('utf8');
@@ -128,7 +132,7 @@ class Session {
         // was logged in), or a switch that's away.
         if (code === TIMEOUT) {
           if (cmd === CMD.login) return reject(new PoeSwitchError('switch_busy', "the switch did not answer the login: busy or unreachable: is someone logged in to the switch's web UI?"));
-          return reject(new PoeSwitchError('switch_error', `the switch did not answer callcmd ${cmd} within ${this.timeoutMs / 1000} s`));
+          return reject(new PoeSwitchError('switch_error', `the switch did not answer callcmd ${cmd} in time`));
         }
         if (UNREACHABLE.has(code)) return reject(new PoeSwitchError('switch_unreachable', `the switch at ${this.host} does not answer (${code})`));
         // Closed with no answer: what the switch does while another session is active.
@@ -148,14 +152,18 @@ class Session {
     throw new PoeSwitchError('switch_auth', 'the switch refused the password (CAMPROXY_POE_SWITCH_PASSWORD)');
   }
 
-  // A new session after a lost one: log out (if it still exists), log in.
+  // A new session after a lost one. The cookie goes only after the switch
+  // answered the logout: the switch has one session, and an old one left
+  // open (logout not answered) blocks every login without its cookie, also
+  // the switch's own web UI. Then the login carries the old cookie, and a
+  // login that answers with a new cookie replaces it.
   async relogin(password: string): Promise<void> {
     try {
       await this.logout();
+      this.cookie = '';
     } catch {
-      // the old session may be gone already
+      // not answered: keep the cookie, the session may still be open
     }
-    this.cookie = '';
     await this.login(password);
   }
 
@@ -168,7 +176,7 @@ class Session {
 
   async setPoe(index: number, on: boolean): Promise<void> {
     const r = await this.call(CMD.setPoe, { opcode: poeOpcode(index, on) });
-    if (r.data?.calldata?.config !== 'ok') throw new PoeSwitchError('switch_error', `the switch did not confirm PoE ${on ? 'on' : 'off'} (callcmd 103)`);
+    if (r.data?.calldata?.config !== 'ok') throw new PoeSwitchRefusal('switch_error', `the switch did not confirm PoE ${on ? 'on' : 'off'} (callcmd 103)`);
   }
 
   async logout(): Promise<void> {
@@ -193,6 +201,8 @@ export class PoeSwitch {
   private inflight: Promise<unknown> | null = null;
   private wake: (() => void) | null = null; // ends a wait early (stop)
   private stopDeadline: number | null = null; // on shutdown: no PoE-on retry after this
+  private stopEnd: number | null = null; // on shutdown (wall clock): stop() waits until here at most
+  private sessionMaybeOpen = false; // the last logout was not answered
   private cutting = false; // between the PoE-off request and PoE on again
   private poeMaybeOff = false;
   private last: PortReading | null = null;
@@ -229,9 +239,10 @@ export class PoeSwitch {
   // window, then logs out. The wait is bounded (compose's stop grace is
   // 20 s); refuses new sessions afterwards. poeLeftOff: the camera's PoE may
   // be off now (the caller logs and audits it).
-  async stop(): Promise<{ poeLeftOff: boolean }> {
+  async stop(): Promise<{ poeLeftOff: boolean; sessionMaybeOpen: boolean }> {
     this.stopped = true;
     this.stopDeadline = this.now() + (this.d.stopRecoveryMs ?? STOP_RECOVERY_MS);
+    this.stopEnd = Date.now() + (this.d.stopWaitMs ?? STOP_WAIT_MS);
     this.wake?.();
     let finished = true;
     const inflight = this.inflight;
@@ -244,8 +255,21 @@ export class PoeSwitch {
       clearTimeout(timer);
     }
     const poeLeftOff = this.poeMaybeOff || (!finished && this.cutting);
+    const sessionMaybeOpen = this.sessionMaybeOpen || !finished;
     if (poeLeftOff) logger.error({ port: this.d.config().port }, 'poe_switch_poe_may_be_left_off_at_stop');
-    return { poeLeftOff };
+    if (sessionMaybeOpen) logger.error('poe_switch_session_may_be_left_open_at_stop');
+    return { poeLeftOff, sessionMaybeOpen };
+  }
+
+  // A call's timeout. While stopping, bounded by what is left of the stop's
+  // wait: retries leave 1.5 s for the final logout, which gets the rest.
+  private callTimeout(final: boolean): number {
+    const t = this.d.timeoutMs ?? 5000;
+    if (this.stopEnd === null) return t;
+    return Math.max(250, Math.min(t, this.stopEnd - Date.now() - (final ? 300 : 1500)));
+  }
+  private stopBudgetGone(): boolean {
+    return this.stopEnd !== null && Date.now() > this.stopEnd - 1500;
   }
 
   // A wait that stop() ends early. While stopping, the off time is skipped
@@ -285,6 +309,20 @@ export class PoeSwitch {
         await this.pause(c.offSeconds * 1000, true);
       } catch (err) {
         failure = err as Error;
+        // The switch answered the off with a no: if the port still has PoE
+        // and power, nothing was cut (no recovery, no cooldown, no watch).
+        if (offAt === null && failure instanceof PoeSwitchRefusal) {
+          let still: PortReading | null = null;
+          try {
+            still = this.reading(await s.detail(), c);
+          } catch {
+            // can't tell: treat it as cut
+          }
+          if (still?.poe && still.watts > 0) {
+            this.cutting = false;
+            throw new PoeSwitchError('switch_error', `the switch refused PoE off on port ${r.port}; the port still has power: nothing was cut (${failure.message})`);
+          }
+        }
         logger.error({ port: r.port, err: failure.message }, 'poe_switch_cut_failed_turning_on');
       }
       const on = await this.turnOn(s, c, r.index);
@@ -329,19 +367,31 @@ export class PoeSwitch {
     let wait = 1000;
     let last = '';
     for (let attempt = 1; ; attempt++) {
+      // First with the session we have (it may still be valid); after a
+      // failure, a new session (relogin keeps the old cookie until the switch
+      // answered its logout), the port read, and PoE on.
       try {
-        if (attempt > 1) {
-          await s.relogin(this.d.password()!);
-          if (this.reading(await s.detail(), c).poe) return { ok: true, last };
-        }
         await s.setPoe(index, true);
         return { ok: true, last };
       } catch (err) {
         last = (err as Error).message;
         logger.warn({ port: c.port, attempt, err: last }, 'poe_switch_port_on_failed');
       }
+      if (attempt > 1 && !this.stopBudgetGone()) {
+        try {
+          await s.relogin(this.d.password()!);
+          if (this.stopBudgetGone()) return { ok: false, last };
+          if (this.reading(await s.detail(), c).poe) return { ok: true, last };
+          if (this.stopBudgetGone()) return { ok: false, last };
+          await s.setPoe(index, true);
+          return { ok: true, last };
+        } catch (err) {
+          last = (err as Error).message;
+          logger.warn({ port: c.port, attempt, err: last }, 'poe_switch_port_on_after_login_failed');
+        }
+      }
       const deadline = Math.min(until, this.stopDeadline ?? Number.POSITIVE_INFINITY);
-      if (this.now() + wait > deadline) return { ok: false, last };
+      if (this.now() + wait > deadline || this.stopBudgetGone()) return { ok: false, last };
       await this.pause(wait);
       wait = Math.min(wait * 2, 10_000);
     }
@@ -381,7 +431,8 @@ export class PoeSwitch {
 
   private async open<T>(f: (s: Session, c: PoeSwitchConfig) => Promise<T>): Promise<T> {
     const c = { ...this.d.config() };
-    const s = new Session(c.host!, this.d.timeoutMs ?? 5000);
+    let final = false;
+    const s = new Session(c.host!, () => this.callTimeout(final));
     let loggedIn = false;
     try {
       await s.login(this.d.password()!);
@@ -389,10 +440,14 @@ export class PoeSwitch {
       return await f(s, c);
     } finally {
       if (loggedIn) {
+        final = true;
         try {
           await s.logout();
+          this.sessionMaybeOpen = false;
         } catch (err) {
-          logger.warn({ err: (err as Error).message }, 'poe_switch_logout_failed');
+          // The switch keeps one session: its web UI may refuse logins until the switch ends it.
+          this.sessionMaybeOpen = true;
+          logger.error({ err: (err as Error).message }, 'poe_switch_logout_failed_session_may_be_open');
         }
       }
     }
