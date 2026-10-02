@@ -119,9 +119,9 @@ export class BaichuanSession {
         s.destroy();
         reject(err);
       };
-      const timer = setTimeout(() => fail(new BaichuanError('offline', 'connect timed out')), this.opts.connectMs ?? 5_000);
-      const onError = (e: NodeJS.ErrnoException) => fail(new BaichuanError('offline', `connect failed (${e.code ?? 'error'})`));
-      this.abortConnect = () => fail(new BaichuanError('offline', 'session closed'));
+      const timer = setTimeout(() => fail(new BaichuanError('offline', 'connect timed out', undefined, 'connect')), this.opts.connectMs ?? 5_000);
+      const onError = (e: NodeJS.ErrnoException) => fail(new BaichuanError('offline', `connect failed (${e.code ?? 'error'})`, undefined, 'connect'));
+      this.abortConnect = () => fail(new BaichuanError('offline', 'session closed', undefined, 'connect'));
       s.once('error', onError);
       s.once('connect', () => {
         clearTimeout(timer);

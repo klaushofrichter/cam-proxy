@@ -8,6 +8,9 @@ export class BaichuanError extends Error {
     readonly code: BaichuanErrorCode,
     message: string,
     readonly status?: number, // the camera's status, when it answered
+    // 'connect': no connection to the camera was made (the camera is
+    // unreachable), as against a connection lost after it was up.
+    readonly phase?: 'connect',
   ) {
     super(message);
     this.name = 'BaichuanError';

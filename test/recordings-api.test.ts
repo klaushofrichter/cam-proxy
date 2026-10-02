@@ -5,7 +5,7 @@ import { existsSync } from 'fs';
 import { get as httpGet, type ClientRequest } from 'http';
 import { basename, join } from 'path';
 import { startSim } from './helpers/sim';
-import { auth, CLIENT_TOKEN, startProxy, until } from './helpers/proxy';
+import { auth, CLIENT_TOKEN, freePort, startProxy, until } from './helpers/proxy';
 import { insertClip } from '../src/catalog/clips';
 
 let sim: Awaited<ReturnType<typeof startSim>>;
@@ -245,5 +245,67 @@ describe('GET /recordings/:id when the cache cannot keep the file', () => {
     expect(r.status).toBe(200);
     expect((r.body as Buffer).length).toBe(f.size);
     expect(downloads()).toBe(before + 2);
+  }, 30_000);
+});
+
+// Review fixes: a stable ETag, an early 416, a drop isn't "offline".
+describe('GET /recordings/:id: validators, ranges past the end, a dropped transfer', () => {
+  beforeAll(async () => {
+    await until(() => p.proxy.status.state().online, 15_000);
+  });
+
+  it('a stable ETag from id and size (no Last-Modified): If-None-Match is 304, If-Range with a Range is 206', async () => {
+    const f = recs[2].files.main;
+    const id = basename(f.name);
+    const live = await binary(request(p.base).get(url(id)).set(auth())); // streamed while it arrives
+    expect(live.status).toBe(200);
+    const etag = live.headers.etag as string;
+    expect(etag).toMatch(/^"[^"]+"$/);
+    await until(() => existsSync(join(p.dir, 'data', 'recordings', 'cam1', id)), 2000);
+    const a = await binary(request(p.base).get(url(id)).set(auth()));
+    await new Promise((r) => setTimeout(r, 1100)); // a new mtime from the read (LRU touch)
+    const b = await binary(request(p.base).get(url(id)).set(auth()));
+    expect([a.headers.etag, b.headers.etag]).toEqual([etag, etag]);
+    expect(b.headers['last-modified']).toBeUndefined();
+    const fresh = await request(p.base).get(url(id)).set(auth()).set('If-None-Match', etag);
+    expect(fresh.status).toBe(304);
+    const part = await binary(request(p.base).get(url(id)).set(auth()).set('If-Range', etag).set('Range', 'bytes=0-9'));
+    expect(part.status).toBe(206);
+    expect(part.body).toEqual((a.body as Buffer).subarray(0, 10));
+    const stale = await binary(request(p.base).get(url(id)).set(auth()).set('If-Range', '"other"').set('Range', 'bytes=0-9'));
+    expect([stale.status, (stale.body as Buffer).length]).toEqual([200, f.size]);
+  });
+
+  it('a Range wholly past the end of a file not cached is 416 at once, without a download', async () => {
+    const f = recs[3].files.main;
+    const before = downloads();
+    const r = await request(p.base).get(url(basename(f.name))).set(auth()).set('Range', `bytes=${f.size}-`);
+    expect(r.status).toBe(416);
+    expect(r.headers['content-range']).toBe(`bytes */${f.size}`);
+    expect(downloads()).toBe(before);
+  });
+
+  it('a transfer dropped midway is 502 offline (not camera_offline); a Baichuan port that refuses is 503', async () => {
+    const f = recs[4].files.sub; // not cached (streamed only, above)
+    sim.sim.engine.faults.set({ name: 'baichuan.dropMidway' });
+    try {
+      const r = await request(p.base).get(url(basename(f.name))).set(auth()).set('Range', 'bytes=0-9');
+      expect([r.status, r.body.error, r.body.reason]).toEqual([502, 'recordings_unavailable', 'offline']);
+      expect(p.proxy.recordings.status().last?.result).toBe('offline');
+    } finally {
+      sim.sim.engine.faults.clear('baichuan.dropMidway');
+    }
+    const cam = p.proxy.running.camera;
+    const port = cam.baichuanPort;
+    cam.baichuanPort = await freePort(); // nothing listens: the connect fails
+    p.proxy.recordings.session.close();
+    try {
+      const r = await request(p.base).get(url(basename(recs[4].files.main.name))).set(auth());
+      expect([r.status, r.body]).toEqual([503, { error: 'camera_offline' }]);
+    } finally {
+      cam.baichuanPort = port;
+    }
+    const ok = await binary(request(p.base).get(url(basename(f.name))).set(auth()));
+    expect([ok.status, (ok.body as Buffer).length]).toEqual([200, f.size]);
   }, 30_000);
 });

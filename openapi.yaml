@@ -158,13 +158,14 @@ paths:
         - { name: id, in: path, required: true, schema: { type: string }, description: 'the file name from the list, e.g. RecS0A_DST20261001_211129_211207_0_5514C080000000_108CE9.mp4' }
         - { name: Range, in: header, schema: { type: string }, description: 'e.g. bytes=0-1023' }
       responses:
-        '200': { description: 'video/mp4; Content-Length, Accept-Ranges: bytes; cached as immutable. A Range request for a file the cache cannot keep (disk paused, larger than recordings.cacheMB) gets the whole file. A failure after the headers ends the body short' }
+        '200': { description: 'video/mp4; Content-Length, Accept-Ranges: bytes; cached as immutable; ETag from the id and size (stable; If-None-Match, If-Range), no Last-Modified. Several ranges in one Range header, and a Range request for a file the cache cannot keep (disk paused, larger than recordings.cacheMB), get the whole file. A failure after the headers ends the body short' }
         '206': { description: the requested range, with Content-Range }
+        '304': { description: If-None-Match matched the ETag }
         '400': { description: '{error: invalid, detail}: not a recording id' }
         '404': { description: '{error: unknown_recording} (or not_found: unknown camera)' }
-        '416': { description: 'range not satisfiable (Content-Range: bytes */size)' }
-        '502': { description: '{error: recordings_unavailable, reason (refused, auth, timeout, protocol, search_failed), detail}' }
-        '503': { description: '{error: camera_offline}' }
+        '416': { description: 'range not satisfiable (Content-Range: bytes */size); answered without a download when the file is not cached' }
+        '502': { description: '{error: recordings_unavailable, reason (refused, auth, timeout, protocol, offline: the connection was lost during the transfer, search_failed), detail}' }
+        '503': { description: '{error: camera_offline}: the status poller says offline, or no connection to the camera could be made' }
   /api/cameras/{cam}/events:
     get:
       summary: Events, newest first

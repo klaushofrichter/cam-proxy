@@ -1,5 +1,5 @@
 import express, { type Request, type Response } from 'express';
-import { readFileSync } from 'fs';
+import { readFileSync, statSync } from 'fs';
 import { resolve } from 'path';
 import { analysesFor, analysesInRange, analysisFor, type AnalysisRow } from '../catalog/analyses';
 import { summarize } from '../analytics/classes';
@@ -208,6 +208,11 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
   const IMMUTABLE = 'private, max-age=604800, immutable';
   const online = () => d.status().state().online;
   const offline = (res: Response) => void res.status(503).json({ error: 'camera_offline' });
+  // 503 is for a camera that is offline: the status poller says so, or no
+  // connection could be made. A connection lost mid-transfer is a 502 with
+  // reason `offline` (the download's result on the Status line).
+  const cameraOffline = (err: unknown): boolean =>
+    (err instanceof SearchError && err.code === 'camera_offline') || (err instanceof BaichuanError && err.code === 'offline' && (err.phase === 'connect' || !online()));
   // `detail` is for people: never a path, a password or a key.
   const recordingError = (res: Response, err: unknown): void => {
     if (res.headersSent || isAbort(err)) return void res.destroy();
@@ -216,14 +221,18 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
       return void res.status(502).json({ error: 'recordings_unavailable', reason: 'search_failed', detail: err.message });
     }
     if (err instanceof BaichuanError) {
-      if (err.code === 'offline') return offline(res);
+      if (cameraOffline(err)) return offline(res);
       if (err.code === 'not_found') return void res.status(404).json({ error: 'unknown_recording' });
       return void res.status(502).json({ error: 'recordings_unavailable', reason: err.code, detail: err.message });
     }
     logger.error({ err: (err as Error).message }, 'recording_request_failed');
     res.status(500).json({ error: 'internal' });
   };
-  const fileHeaders = (res: Response, size: number) => {
+  // The file never changes: its ETag is its id and size, the same when it is
+  // streamed and from the cache (not the mtime, which every read touches).
+  const etagOf = (id: string, size: number) => `"${id}-${size.toString(16)}"`;
+  const fileHeaders = (res: Response, id: string, size: number) => {
+    res.setHeader('ETag', etagOf(id, size));
     res.setHeader('Content-Type', 'video/mp4');
     res.setHeader('Content-Length', String(size));
     res.setHeader('Accept-Ranges', 'bytes');
@@ -234,8 +243,18 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     const unpin = side.cache.open(id);
     if (!unpin) return false;
     res.on('close', unpin);
+    const path = resolve(side.cache.path(id));
+    let size: number;
+    try {
+      size = statSync(path).size;
+    } catch {
+      unpin();
+      return false; // gone between open and stat (budget run)
+    }
     res.setHeader('Cache-Control', IMMUTABLE);
-    res.sendFile(resolve(side.cache.path(id)), { cacheControl: false, acceptRanges: true, dotfiles: 'allow', headers: { 'Content-Type': 'video/mp4' } }, (err) => {
+    // send answers If-None-Match (304) and If-Range from this header.
+    res.setHeader('ETag', etagOf(id, size));
+    res.sendFile(path, { cacheControl: false, etag: false, lastModified: false, acceptRanges: true, dotfiles: 'allow', headers: { 'Content-Type': 'video/mp4' } }, (err) => {
       unpin();
       if (!err || res.headersSent) return;
       const status = (err as { status?: number }).status;
@@ -295,9 +314,16 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     if (!entry) return void res.status(404).json({ error: 'unknown_recording' });
     if (serveCached(res, side, id)) return;
     const size = entry.size;
+    // A Range wholly past the end: 416 now (the size is in the name), no
+    // download. Only when the Range applies (no If-Range, or ours).
+    const ifRange = req.headers['if-range'];
+    if (req.headers.range && (!ifRange || ifRange === etagOf(id, size)) && req.range(size) === -1) {
+      res.setHeader('Content-Range', `bytes */${size}`);
+      return void res.status(416).end();
+    }
     // HEAD answers from the list: never a camera download.
     if (req.method === 'HEAD') {
-      fileHeaders(res, size);
+      fileHeaders(res, id, size);
       return void res.status(200).end();
     }
     const ac = new AbortController();
@@ -315,12 +341,12 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
       if (gone(res)) return;
       const { fetch, created } = side.fetcher.get(entry, { priority: 'high', signal: ac.signal });
       const streamIt = !req.headers.range || side.paused() || size > side.cache.capBytes() || attempt > 0;
-      const live = streamIt && fetch.attach(res, () => (res.status(200), fileHeaders(res, size)));
+      const live = streamIt && fetch.attach(res, () => (res.status(200), fileHeaders(res, id, size)));
       try {
         await fetch.done;
       } catch (err) {
         if (res.headersSent || gone(res)) return void res.destroy(); // a short body: the client sees the failure
-        const final = err instanceof BaichuanError && (err.code === 'not_found' || err.code === 'offline');
+        const final = (err instanceof BaichuanError && err.code === 'not_found') || cameraOffline(err);
         if (attempt === 0 && (isAbort(err) || (!created && !final))) continue; // not this client's failure: try again
         return recordingError(res, err);
       }
