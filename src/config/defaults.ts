@@ -6,6 +6,8 @@ export interface Config {
   camera: {
     id: string; name: string; host: string; protocol: 'https' | 'http'; tlsName?: string; webUiUrl?: string;
     user: string; onvifPort: number; rtspPort: number; statusPollS: number;
+    // The camera's PoE switch (issue #85); `none` for no switch.
+    poeSwitch: { model: 'none' | 'sscpoe-web'; host?: string; port?: number; ports: number; offSeconds: number };
   };
   go2rtc: { binary?: string; url?: string; rtspPort: number; apiPort: number };
   stills: { enabled: boolean; stream: 'sub' | 'main'; intervalS: number; size: string; quality: number; maxGB?: number };
@@ -37,7 +39,7 @@ export interface Config {
 
 export const DEFAULTS: Config = {
   server: { port: 8480, dataDir: 'data', logLevel: 'info' },
-  camera: { id: 'cam1', name: 'Den', host: '', protocol: 'https', user: 'proxy', onvifPort: 8000, rtspPort: 554, statusPollS: 30 },
+  camera: { id: 'cam1', name: 'Den', host: '', protocol: 'https', user: 'proxy', onvifPort: 8000, rtspPort: 554, statusPollS: 30, poeSwitch: { model: 'none', ports: 8, offSeconds: 10 } },
   go2rtc: { binary: 'go2rtc', rtspPort: 18554, apiPort: 11984 },
   stills: { enabled: true, stream: 'sub', intervalS: 1, size: '896x512', quality: 5 },
   previews: { tileSize: '160x90', grid: '10x6', quality: 7 },
@@ -64,5 +66,6 @@ export interface Secrets {
   ftpPassword?: string;
   auditToken?: string; // CAMPROXY_AUDIT_TOKEN: reads GET /control/audit only
   googleVisionKey?: string;
+  poeSwitchPassword?: string; // CAMPROXY_POE_SWITCH_PASSWORD: the PoE switch's web login
   googleVisionUrl: string; // not a secret; read with them (default Google's)
 }

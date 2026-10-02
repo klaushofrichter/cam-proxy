@@ -14,7 +14,9 @@
 #   (GitHub refuses names starting with GITHUB_), for the release's deploy.
 # kube: Secret $KUBE_SECRET (cam-proxy-secrets) in $KUBE_NAMESPACE (cam-proxy),
 #   context $KUBE_CONTEXT, with the four CAMPROXY_* values, plus the optional
-#   CAMPROXY_AUDIT_TOKEN (read-only access to GET /control/audit) when set.
+#   CAMPROXY_AUDIT_TOKEN (read-only access to GET /control/audit) and
+#   CAMPROXY_POE_SWITCH_PASSWORD (the camera's PoE switch, docs/poe-switch.md)
+#   when set.
 #
 # The cluster's camera is cam2, so its values live in their own file:
 #   scripts/sync-secrets.sh --env-file .env.cluster --only all
@@ -73,7 +75,7 @@ rotating() { local r; for r in "${ROTATE[@]+"${ROTATE[@]}"}"; do [ "$r" = "$1" ]
 say() { if [ "$DRY" = 1 ]; then echo "would $*"; else echo "$*"; fi; }
 
 # Check every value first, so a bad line stops the run before anything changes.
-for key in CAMPROXY_TOKENS CAMPROXY_ADMIN_TOKEN CAMPROXY_CAMERA_PASSWORD CAMPROXY_FTP_PASSWORD CAMPROXY_AUDIT_TOKEN GITHUB_KUBE_SETUP_PAT KUBE_CONTEXT KUBE_NAMESPACE KUBE_SECRET GITHUB_REPO; do
+for key in CAMPROXY_TOKENS CAMPROXY_ADMIN_TOKEN CAMPROXY_CAMERA_PASSWORD CAMPROXY_FTP_PASSWORD CAMPROXY_AUDIT_TOKEN CAMPROXY_POE_SWITCH_PASSWORD GITHUB_KUBE_SETUP_PAT KUBE_CONTEXT KUBE_NAMESPACE KUBE_SECRET GITHUB_REPO; do
   get "$key" >/dev/null
 done
 
@@ -106,6 +108,7 @@ if [ "$ONLY" = kube ] || [ "$ONLY" = all ]; then
   has CAMPROXY_CAMERA_PASSWORD || die "set CAMPROXY_CAMERA_PASSWORD in $ENV_FILE first"
   KEYS=(CAMPROXY_TOKENS CAMPROXY_ADMIN_TOKEN CAMPROXY_CAMERA_PASSWORD CAMPROXY_FTP_PASSWORD)
   has CAMPROXY_AUDIT_TOKEN && KEYS+=(CAMPROXY_AUDIT_TOKEN)
+  has CAMPROXY_POE_SWITCH_PASSWORD && KEYS+=(CAMPROXY_POE_SWITCH_PASSWORD)
   names=$(printf '%s, ' "${KEYS[@]}"); names=${names%, }
   say "apply kubernetes secret $SECRET in $NS (context $CONTEXT): $names"
   if [ "$DRY" = 0 ]; then

@@ -88,8 +88,11 @@ describe('control API: status, stats, config', () => {
 
   it('shows every setting with its value, source and restart flag, and never a secret', async () => {
     const r = await request(p.base).get('/control/config').set(admin());
-    expect(r.body['camera.host']).toEqual({ value: sim.camera.host, source: 'file', restart: true, pending: false });
-    expect(r.body['retention.stillsDays']).toEqual({ value: 7, source: 'default', restart: false, pending: false });
+    expect(r.body['camera.host']).toEqual({ value: sim.camera.host, source: 'file', restart: true, pending: false, type: 'string' });
+    expect(r.body['retention.stillsDays']).toEqual({ value: 7, source: 'default', restart: false, pending: false, type: 'integer' });
+    // The type, so the Settings page can save a number for an optional setting with no value yet (#85).
+    expect(r.body['camera.poeSwitch.port']).toEqual({ source: 'default', restart: false, pending: false, type: 'integer' });
+    expect(r.body['stills.enabled']).toMatchObject({ type: 'boolean' });
     const text = JSON.stringify(r.body);
     for (const s of [CLIENT_TOKEN, ADMIN_TOKEN, sim.password]) expect(text).not.toContain(s);
   });

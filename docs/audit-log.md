@@ -1,6 +1,6 @@
 # Audit log
 
-Who did what on the proxy: starts and stops, restarts, camera reboots, sign-ins (including
+Who did what on the proxy: starts and stops, restarts, camera reboots and power-cycles, sign-ins (including
 failures), refused tokens, control actions, settings changes, and a daily
 storage and activity snapshot. Design: [the spec](superpowers/specs/2026-10-01-audit-log-design.md).
 
@@ -11,12 +11,14 @@ storage and activity snapshot. Design: [the spec](superpowers/specs/2026-10-01-a
 | `proxy-start` | process / start | every start, once it is listening | `config` (camera id, stills, ftp, analytics on or off), `previousStop` (time of the newest record when it is a `proxy-stop`, else null), `uncleanStop` (`true` when the newest start or stop record is a start: the last run ended without a `proxy-stop`, as after a crash or power loss) |
 | `proxy-stop` | process / end | a clean shutdown | `reason` (the signal, `restart-requested` after `restart-proxy`, or `stop`) |
 | `proxy-restart` | process / change | `POST /control/actions/restart-proxy` (the process restart), before the `proxy-stop` | `requestedBy` (`session` or `token`) |
-| `camera-reboot` | host / change, then host / end | `POST /control/actions/camera-reboot`; a second record when the camera answers again, or after 5 minutes without it | the request (user `admin`): `phase: requested`, `confirmed`, `requestedBy`; outcome `success` (confirmed), `unknown` (the camera dropped the connection after receiving it) or `failure` (it never reached the camera; `error.message` has the code). The end (user `system`): `phase: back` with `downSec` (request to the first answer), outcome `success`; or `phase: not-back` with `waitedSec`, outcome `failure`. A refused request (429, within 120 s of the last reboot) writes nothing |
+| `camera-reboot` | host / change, then host / end | `POST /control/actions/camera-reboot`; a second record when the camera answers again, or after 5 minutes without it | the request (user `admin`): `phase: requested`, `confirmed`, `requestedBy`; outcome `success` (confirmed), `unknown` (the camera dropped the connection after receiving it) or `failure` (it never reached the camera; `error.message` has the code). The end (user `system`): `phase: back` with `downSec` (request to the first answer), outcome `success`; or `phase: not-back` with `waitedSec`, outcome `failure`. A refused request (429, within 120 s of the last reboot or power-cycle) writes nothing |
+| `camera-powercycle` | host / change, then host / end | `POST /control/actions/camera-powercycle` (the camera's PoE switch, [poe-switch.md](poe-switch.md)); a second record when the camera answers again, or after 5 minutes without it | the request (user `admin`): `switch` (`{model, host, port}`), `offSeconds`, `requestedBy`, `phase: requested`; on success `watts` (the draw before the cut), `offAt`, `onAt`, outcome `success`. A failure: `error.message` has the code (`switch_busy`, `no_power`, `switch_auth`, `switch_unreachable`, `switch_error`); `poeOff` says whether the PoE-off request was sent, and then `turnedOn` whether PoE is on again; the message says "PoE may have been cut; turned back on: yes/no", and the end record follows. A proxy stop that may leave PoE off, or the switch session open (its logout unanswered), writes a failure with `phase: stop`, `poeLeftOff`, `sessionMaybeOpen`. The end (user `system`): `phase: back` with `downSec` (the cut to the first answer), or `phase: not-back` with `waitedSec`. Never the password. A request refused before reaching the switch (409 `not_configured`, 429) writes nothing |
+| `camera-poe-on` | host / change | `POST /control/actions/camera-poe-on` ("Turn camera PoE on", recovery) | `switch` (`{model, host, port}`), `wasOn`, `requestedBy`; a failure has the code (and `poeStillOff`). 409 `not_configured` writes nothing |
 | `login` | authentication / start | `POST /control/login` and `GET /control/login-link`, success or failure | `auth.method` (`token-form` or `login-link`); on failure `auth.reason` (`wrong-token`, `link-used-or-expired`, `rate-limited`); `auth.suppressed` |
 | `logout` | authentication / end | `POST /control/logout` | with a session: `user.name` `admin`. Without one: `auth.reason: no-session`; `auth.suppressed` |
 | `login-link-issued` | authentication / creation | `POST /control/login-links` (cams mints a link) | |
 | `auth-refused` | authentication / denied | a request the auth layer answered with 401 or 403 | `auth.tokenKind` (`none`, `invalid`, `client`, `admin`, `audit`, `session`), `auth.reason` (`no-token`, `wrong-token`, `admin-only`, `csrf`), `auth.suppressed`; ECS `http.request.method` and `url.path` |
-| `control-action` | configuration / change | `POST /control/actions/:name` except `camera-reboot`, `restart-proxy` and a retention dry run; the camera-side `restart` is one (`action: restart`) | `action`, `result` (`ok`, the error code or status, or `aborted`), `requestedBy` |
+| `control-action` | configuration / change | `POST /control/actions/:name` except `camera-reboot`, `camera-powercycle`, `camera-poe-on`, `restart-proxy` and a retention dry run (`poe-switch-read` is one); the camera-side `restart` is one (`action: restart`) | `action`, `result` (`ok`, the error code or status, or `aborted`), `requestedBy` |
 | `config-change` | configuration / change | `PUT /control/config`, reset of an override | `changes`: `[{key, from, to, restart?}]`, secrets redacted; `restart` is `restart` for a setting that waits for a restart, `process` for one that waits for a new process, and missing for a live one. A refused change (400) writes nothing |
 | `secret-override` | configuration / change | `PUT /control/secrets/google-vision-key` (the Settings page's key field) | `secret` (`CAMPROXY_GOOGLE_VISION_KEY`), `masked` (first and last four characters, `AIza…wXyZ`), `replaced` (`env`, `manual` or `none`). Never the key. A refused key (400) writes nothing |
 | `storage-daily` | host / info | once per camera day, 00:05 camera time | `day`, `size`, `free`, `budget`, `used`, `daysUntilFull` (null when not growing), `kinds` (each `{bytes, files, oldest, newest, growthPerDay}`; the audit folder's growth is its last 7 whole UTC days per calendar day), `clipRows` |
@@ -53,9 +55,14 @@ Notes on what the code does today:
   supervisor started it again, `proxy-start`. The camera-side `restart`
   (reconnect, apply restart settings) is a `control-action` with
   `action: restart`; before #71 it was recorded as `proxy-restart`.
-- **Camera reboots:** `camera-reboot` from the proxy (cams reboots the camera
-  directly, without a record here). "Back" means a status check answered
-  after one failed, or the camera answered with a new serial number.
+- **Camera reboots and power-cycles:** `camera-reboot` and `camera-powercycle`
+  from the proxy (cams reboots the camera directly, without a record here).
+  "Back" means a status check answered after one failed, or the camera
+  answered with a new serial number.
+- **The reboot cooldown and the "rebooting" watch are in memory.** A proxy
+  restart resets both: the 120 s cooldown starts over (a reboot or
+  power-cycle is accepted at once), and a reboot or power-cycle in progress
+  gets no end record (no `back`, no `not-back`).
 - Successful bearer-token API calls are not recorded (cams makes thousands a
   day).
 

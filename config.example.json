@@ -12,7 +12,12 @@
     "user": "proxy",
     "onvifPort": 8000,
     "rtspPort": 554,
-    "statusPollS": 30
+    "statusPollS": 30,
+    "poeSwitch": {
+      "model": "none",
+      "ports": 8,
+      "offSeconds": 10
+    }
   },
   "go2rtc": {
     "binary": "go2rtc",

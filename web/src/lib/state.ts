@@ -1,11 +1,11 @@
 import { writable } from 'svelte/store';
 import { api } from './api';
 import type { UiProviderState } from './analytics';
-import type { CameraReboot } from './maintenance';
+import type { CameraReboot, PoeSwitchStatus } from './maintenance';
 
 export interface Status {
   version: string;
-  camera: { online: boolean; since: number; model?: string; firmware?: string; clockOffsetMs?: number; error?: string; webUiUrl?: string | null; reboot?: CameraReboot | null };
+  camera: { online: boolean; since: number; model?: string; firmware?: string; clockOffsetMs?: number; error?: string; webUiUrl?: string | null; reboot?: CameraReboot | null; poeSwitch?: PoeSwitchStatus };
   intake: { onvif: string; since: number; source: string; lastError?: string; resubscribes: number };
   sse: { clients: number };
   stream: { enabled: boolean; up: boolean; go2rtcUp: boolean; lastFrameTs: number | null };

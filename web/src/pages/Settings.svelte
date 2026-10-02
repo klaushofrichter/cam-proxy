@@ -1,10 +1,13 @@
 <script lang="ts">
-  import { refreshTick } from '../lib/state';
+  import { refresh, refreshTick } from '../lib/state';
   import { onMount } from 'svelte';
   import { api, ApiError } from '../lib/api';
   import AnalyticsSettings from '../components/AnalyticsSettings.svelte';
+  import PoeSwitchCard from '../components/PoeSwitchCard.svelte';
 
-  interface Setting { value: unknown; source: 'default' | 'file' | 'override'; restart: boolean; pending: boolean; next?: unknown }
+  import { parseSetting, type SettingType } from '../lib/settings';
+
+  interface Setting { value: unknown; source: 'default' | 'file' | 'override'; restart: boolean; pending: boolean; next?: unknown; type?: SettingType }
   let view = $state<Record<string, Setting>>({});
   let drafts = $state<Record<string, string>>({});
   let message = $state('');
@@ -16,13 +19,9 @@
     if ($refreshTick) void load();
   });
 
-  // A draft's text as the setting's type (numbers and booleans stay typed).
-  const parse = (path: string, text: string): unknown => {
-    const cur = view[path].value;
-    if (typeof cur === 'number') return Number(text);
-    if (typeof cur === 'boolean') return text === 'true';
-    return text;
-  };
+  // A draft's text as the setting's type (numbers and booleans stay typed,
+  // also for an optional setting without a value).
+  const parse = (path: string, text: string): unknown => parseSetting(view[path].type, view[path].value, text);
   const nest = (path: string, v: unknown) => path.split('.').reduceRight<unknown>((acc, k) => ({ [k]: acc }), v);
 
   async function save(path: string) {
@@ -30,12 +29,14 @@
       view = await api('PUT', '/control/config', nest(path, parse(path, drafts[path])));
       delete drafts[path];
       message = `${path} saved${view[path].restart ? ' (applies after a restart)' : ''}`;
+      void refresh();
     } catch (e) {
       message = e instanceof ApiError ? e.message : 'not saved';
     }
   }
   async function reset(path: string) {
     view = await api('DELETE', `/control/config/${encodeURIComponent(path)}`);
+    void refresh();
     message = `${path} is back to its ${view[path].source} value`;
   }
   async function restart() {
@@ -54,6 +55,7 @@
   <p class="muted small">From config.json, with changes made here kept as overrides in the data folder. Secrets are never shown or set here.</p>
   {#if message}<p class="msg" data-testid="settings-message">{message}</p>{/if}
   <AnalyticsSettings {view} onsaved={(v) => (view = v as Record<string, Setting>)} />
+  <PoeSwitchCard />
   {#each Object.entries(groups) as [group, paths] (group)}
     <div class="card">
       <h3>{group}</h3>
