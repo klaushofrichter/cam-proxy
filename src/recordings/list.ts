@@ -6,8 +6,8 @@
 // A Search finds the recordings that start on its day (measured), so one that
 // starts before midnight and runs into the next day is only in the day
 // before's Search: a day's list and a window's list also read the day before
-// (#99). Once that day is over and none of its recordings is still being
-// written, its midnight tail is final and kept an hour.
+// (#99). Once that day is over (by 5 minutes) and none of its recordings is
+// still being written, its midnight tail is final and kept 15 minutes.
 import { CameraError } from '../camera/client';
 import { Semaphore } from '../camera/semaphore';
 import type { TimeInfo } from '../camera/time';
@@ -28,7 +28,10 @@ export class SearchError extends Error {
 
 const DAY_TTL = 30_000;
 const MONTH_TTL = 300_000;
-const TAIL_TTL = 3_600_000;
+const TAIL_TTL = 15 * 60_000; // an SD format, an overwrite or a reboot elsewhere makes it stale
+// A day is final only this long after its midnight: a clip named a moment
+// before midnight (pre-record, clock skew) can be listed a little later.
+const FINAL_AFTER_MS = 5 * 60_000;
 // Searches waiting behind the running one (#99): past this, a new Search is
 // refused at once (busy) instead of queueing without bound. Same-day
 // requests share one Search and don't count. A cold 48-hour window is 4
@@ -121,20 +124,22 @@ export class RecordingList {
       })) as { SearchResult?: { File?: { name?: unknown }[] } } | undefined;
       const t = await this.time();
       const out: RecordingEntry[] = [];
-      let open = false; // a recording of this day is still being written (end 000000)
+      let open = false; // a recording of this day is still being written
       for (const f of v?.SearchResult?.File ?? []) {
         if (typeof f?.name !== 'string' || !SAFE_PATH.test(f.name)) continue;
         const n = parseSdName(f.name);
         if (!n || n.date !== date || n.stream !== stream) continue;
-        if (n.end === '000000') open = true;
-        if (stillRecording(n)) continue;
+        if (stillRecording(n)) {
+          open = true;
+          continue;
+        }
         out.push({ id: n.id, path: f.name, ...recordingTimes(n, t), stream, size: n.size, kinds: n.kinds });
       }
       out.sort((a, b) => a.start - b.start);
       if (epoch === this.epoch) {
         const at = this.now();
         this.days.set(key, { at, entries: out });
-        if (!open && localDate(at, t) > date) this.tails.set(key, { at, entries: out.filter(crossesMidnight) });
+        if (!open && localDate(at - FINAL_AFTER_MS, t) > date) this.tails.set(key, { at, entries: out.filter(crossesMidnight) });
       }
       return out;
     })().finally(() => {
@@ -144,7 +149,7 @@ export class RecordingList {
     return work;
   }
 
-  // The recordings of `date` that run past its midnight: kept an hour once
+  // The recordings of `date` that run past its midnight: kept 15 minutes once
   // the day is final, else from the day's own (30 s) list.
   private async tail(date: string, stream: Stream): Promise<RecordingEntry[]> {
     const hit = this.tails.get(`${date}|${stream}`);

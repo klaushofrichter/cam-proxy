@@ -156,15 +156,43 @@ describe('RecordingList: recordings across midnight (#99)', () => {
     expect((await x.list.date('2026-10-01', 'sub')).map((e) => e.id)).toEqual(['RecS0A_DST20261001_120000_120030_0_5514C080000000_3E8.mp4', CROSS]);
   });
 
-  it("keeps a finished day's midnight tail for an hour: later views of D search D only", async () => {
+  it("keeps a finished day's midnight tail for 15 minutes: later views of D search D only", async () => {
     const x = fake(files());
     await x.list.date('2026-10-02', 'sub');
     x.clock.t += 60_000; // past the 30 s day cache
     expect((await x.list.date('2026-10-02', 'sub')).map((e) => e.id)).toContain(CROSS);
     expect(x.calls.map((c) => dateOf(c))).toEqual(['2026-10-02', '2026-10-01', '2026-10-02']);
-    x.clock.t += 3_600_000;
+    x.clock.t += 13 * 60_000; // 14 min after the tail was kept
     await x.list.date('2026-10-02', 'sub');
-    expect(x.calls).toHaveLength(5);
+    expect(x.calls).toHaveLength(4);
+    x.clock.t += 60_000; // 15 min
+    await x.list.date('2026-10-02', 'sub');
+    expect(x.calls).toHaveLength(6);
+  });
+
+  it('a Search just after midnight does not take the day before as final (a late clip can still appear)', async () => {
+    const f: Record<string, string[]> = { '2026-10-01|sub': [], '2026-10-02|sub': [] };
+    const x = fake(f);
+    x.clock.t = Date.UTC(2026, 9, 2, 5, 0, 1); // 2026-10-02 00:00:01 CDT
+    expect(await x.list.date('2026-10-02', 'sub')).toEqual([]);
+    f['2026-10-01|sub'] = [file('2026-10-01', '235958', '000130')]; // pre-record and clock skew: named a moment later
+    x.clock.t += 60_000;
+    expect((await x.list.date('2026-10-02', 'sub')).map((e) => e.id)).toEqual(['RecS0A_DST20261001_235958_000130_0_5514C080000000_3E8.mp4']);
+    // Five minutes after midnight the day before is final.
+    x.clock.t = Date.UTC(2026, 9, 2, 5, 5, 0);
+    await x.list.date('2026-10-02', 'sub');
+    const n = x.calls.length;
+    x.clock.t += 60_000;
+    await x.list.date('2026-10-02', 'sub');
+    expect(x.calls.length).toBe(n + 1); // D only
+  });
+
+  it('a finished recording that ends at 000000 does not keep the day open', async () => {
+    const x = fake({ '2026-10-01|sub': [file('2026-10-01', '235700', '000000')], '2026-10-02|sub': [] });
+    expect((await x.list.date('2026-10-02', 'sub')).map((e) => e.id)).toEqual(['RecS0A_DST20261001_235700_000000_0_5514C080000000_3E8.mp4']);
+    x.clock.t += 60_000;
+    await x.list.date('2026-10-02', 'sub');
+    expect(x.calls).toHaveLength(3); // the tail was kept: D only
   });
 
   it('never keeps the tail of a day that is not over, or with a recording still being written', async () => {

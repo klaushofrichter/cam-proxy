@@ -345,9 +345,11 @@ as MP4, also the ones FTP never delivered.
   that starts before midnight and runs into the next day is only in the day
   before's Search: both forms also read the day before (the day before the
   range's first day), and keep its midnight-crossing recordings. Once that
-  day is over and none of its recordings is still being written, that tail
-  is final and kept an hour, so a day view costs one Search per stream after
-  the first.
+  day has been over for 5 minutes and none of its recordings is still being
+  written, that tail is final and kept 15 minutes, so a day view in that time
+  costs one Search per stream after the first. An SD-card format or overwrite,
+  or a camera reboot the proxy didn't start, can leave it stale for up to 15
+  minutes.
   `kinds` comes from the file name's trigger flags; `clipId` is the proxy's
   FTP copy of the same recording (same stream, start within 5 s), or null.
   Recordings still being written are left out.
