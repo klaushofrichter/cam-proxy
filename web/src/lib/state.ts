@@ -2,6 +2,7 @@ import { writable } from 'svelte/store';
 import { api } from './api';
 import type { UiProviderState } from './analytics';
 import type { CameraReboot, PoeSwitchStatus } from './maintenance';
+import type { CameraFtp, ClipsStall } from './ftp';
 
 export interface Status {
   version: string;
@@ -13,7 +14,7 @@ export interface Status {
   storage: { paused: boolean };
   analytics?: UiProviderState[];
   analyticsUnmapped?: { mid: string; name: string; count: number; lastSeen: number }[];
-  ftp: { enabled: boolean; listening: boolean; port: number; tls: boolean; publicHost: string | null; passwordSet: boolean; lastUpload: number | null; lastClip: number | null; clips: number; failures: number };
+  ftp: { enabled: boolean; listening: boolean; port: number; tls: boolean; publicHost: string | null; passwordSet: boolean; lastUpload: number | null; lastClip: number | null; clips: number; failures: number; camera?: CameraFtp | null; stalled?: ClipsStall | null };
 }
 export interface Usage { bytes: number; files: number; oldest: number | null; newest: number | null; growthPerDay: number }
 export interface Stats {

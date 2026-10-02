@@ -8,6 +8,7 @@ import type { Config } from '../config/defaults';
 import { applyOverrides, ConfigError, needsProcessRestart, needsRestart, removeOverride, type Loaded } from '../config/load';
 import { leafAt, leafPaths } from '../config/schema';
 import type { FtpTarget } from '../clips/camera-ftp';
+import type { CameraFtpView, ClipsStall } from '../clips/ftp-health';
 import type { IntakeState } from '../events/intake';
 import { logBuffer, logger } from '../log';
 import type { KeySource, ProviderState } from '../analytics/service';
@@ -32,6 +33,10 @@ export interface FtpStatus {
   lastClip: number | null;
   clips: number;
   failures: number;
+  // #93: the camera's FTP upload as last read, and whether clips stopped
+  // arriving; null while FTP is off in the proxy.
+  camera: CameraFtpView | null;
+  stalled: ClipsStall | null;
 }
 
 export interface ControlDeps {

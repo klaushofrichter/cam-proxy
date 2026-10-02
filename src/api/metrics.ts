@@ -12,6 +12,9 @@ export interface MetricsSources {
   catalog: Catalog;
   log: StreamLog;
   cameraUp: () => boolean;
+  // The camera's FTP upload as last read (null: not read, or FTP off in the proxy), and clip arrival (#93).
+  cameraFtpEnabled: () => boolean | null;
+  clipsHealth: () => { lastClip: number | null; stalled: boolean } | null;
   onvifSubscribed: () => boolean;
   sseClients: () => number;
   version: string;
@@ -82,6 +85,21 @@ export function createMetrics(s: MetricsSources) {
   });
   g('camera_up', '1 while the camera answers', ['cam'], function () {
     this.set({ cam: cam() }, s.cameraUp() ? 1 : 0);
+  });
+  g('camera_ftp_enabled', "1 while the camera's FTP upload is on (no sample before the first read)", ['cam'], function () {
+    this.reset();
+    const on = s.cameraFtpEnabled();
+    if (on !== null) this.set({ cam: cam() }, on ? 1 : 0);
+  });
+  g('clips_last_received_timestamp_seconds', 'When the newest clip arrived (0: none)', ['cam'], function () {
+    this.reset();
+    const h = s.clipsHealth();
+    if (h) this.set({ cam: cam() }, (h.lastClip ?? 0) / 1000);
+  });
+  g('clips_stalled', '1 while no clip arrived for ftp.stalledHours although the camera recorded events', ['cam'], function () {
+    this.reset();
+    const h = s.clipsHealth();
+    if (h) this.set({ cam: cam() }, h.stalled ? 1 : 0);
   });
   g('sse_clients', 'Connected SSE clients', [], function () {
     this.set(s.sseClients());

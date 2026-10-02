@@ -106,6 +106,7 @@ export const SETTINGS: Node = {
     user: { type: 'string', pattern: '^[^\\s:]{1,31}$', doc: 'FTP user the camera logs in as' },
     tls: { type: 'boolean', doc: 'require FTPS' },
     stream: { type: 'string', enum: ['main', 'sub'], doc: 'the stream the camera uploads' },
+    stalledHours: int(1, 72, 'warn on the Status page when no clip arrived for this many hours while the camera recorded events'),
     maxGB: int(1, 100000, 'size cap for clips', true),
     publicHost: { type: 'string', pattern: '^[A-Za-z0-9.:-]{1,253}$', optional: true, doc: 'the address the camera connects to (PASV replies and the camera FTP setup)' },
     certFile: { type: 'string', pattern: '^.+$', optional: true, doc: 'FTPS certificate (PEM); a self-signed one otherwise' },

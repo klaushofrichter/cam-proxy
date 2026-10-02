@@ -474,6 +474,12 @@
           ],
           "description": "the stream the camera uploads"
         },
+        "stalledHours": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 72,
+          "description": "warn on the Status page when no clip arrived for this many hours while the camera recorded events"
+        },
         "maxGB": {
           "type": "integer",
           "minimum": 1,
