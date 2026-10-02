@@ -221,6 +221,16 @@ not a midnight clip) is left out until it ends, as in cams.
 - **Cache**: each (camera day, stream) result is kept about 30 s. Concurrent
   requests for the same key share one Search.
 
+#### `GET /api/cameras/:cam/recordings/days?month=YYYY-MM`
+
+The days of a camera-local month that have recordings, from the camera's
+month Search (`Search` with `onlyStatus: 1`, main stream), as
+`{ "month": "2026-10", "days": [1, 2] }`. cams uses it for its calendar
+instead of searching the camera itself, so every camera Search for a proxied
+camera goes through this proxy's single searcher (overlapping Searches fail
+with an empty answer and no error). Cached 5 minutes; the same one-at-a-time
+search queue as the list. Errors: `400` for a bad month, `503 camera_offline`.
+
 #### `GET /api/cameras/:cam/recordings/:id` (and `HEAD`)
 
 Delivers the file as `video/mp4`, with `Range` support.
