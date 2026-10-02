@@ -119,7 +119,7 @@
         <div class="card" data-testid="card-recordings">
           <h3>Recordings (SD card)</h3>
           <dl>
-            <dt>Last download</dt><dd class={recordingsClass($status.recordings.last)} data-testid="recordings-last" title={$status.recordings.last ? new Date($status.recordings.last.at).toLocaleString() : undefined}>{recordingsLastText($status.recordings.last)}</dd>
+            <dt>Last download</dt><dd class={recordingsClass($status.recordings.last)} data-testid="recordings-last" title={$status.recordings.last ? `${$status.recordings.last.result}, ${clipTime($status.recordings.last.at)}` : undefined}>{recordingsLastText($status.recordings.last)}</dd>
             <dt>Cache</dt><dd data-testid="recordings-cache">{cacheFillText($status.recordings.cache)}</dd>
             <dt>Files cached</dt><dd>{$status.recordings.cache.files}</dd>
           </dl>
