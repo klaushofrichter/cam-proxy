@@ -94,11 +94,15 @@ describe('inventory API', () => {
     }
   });
 
-  // Last: it stops the runner for good, as a stopping proxy does.
   it('answers 503 stopping once the proxy is stopping', async () => {
-    await p.proxy.inventory.stop();
-    const r = await request(p.base).post('/control/actions/inventory').set(admin()).send({ kind: 'stills' });
-    expect(r.status).toBe(503);
-    expect(r.body).toMatchObject({ error: 'stopping' });
+    const own = await startProxy(sim);
+    try {
+      await own.proxy.inventory.stop();
+      const r = await request(own.base).post('/control/actions/inventory').set(admin()).send({ kind: 'stills' });
+      expect(r.status).toBe(503);
+      expect(r.body).toMatchObject({ error: 'stopping' });
+    } finally {
+      await own.proxy.stop();
+    }
   });
 });

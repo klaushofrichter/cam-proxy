@@ -132,8 +132,15 @@ describe('stills inventory', () => {
       { type: 'unreadable-pack', minute: at(5) },
       { type: 'sprite-without-pack', minute: at(7) },
     ]);
-    expect(r.message).toBe('220 s of 600 s missing (36.67%) since 2026-09-27T00:10:00.000Z, 4 gaps (longest 90 s), 150 s explained by proxy stops or camera reboots, 20 s restorable from clips (camera clock), 3 file problems');
-    expect(r.window.notes).toEqual([expect.stringMatching(/camera's clock.*not aligned/)]);
+    expect(r.message).toBe('3 min 40 s of 10 min missing (36.67%) since 2026-09-27T00:10:00.000Z, 4 gaps (longest 1 min 30 s), 2 min 30 s explained by proxy stops or camera reboots, 20 s restorable from clips (camera clock), 3 file problems');
+    expect(r.window.notes).toEqual([expect.stringMatching(/^Restorable .*camera's clock.*not aligned/)]);
+  });
+
+  it('has no clock note when no clip covers a gap (nothing restorable)', async () => {
+    const empty = openCatalog(join(dir, 'empty.sqlite'));
+    const r = await stillsCheck(deps({ catalog: empty }))(ctx());
+    expect(r.counts.restorableSeconds).toBe(0);
+    expect(r.window.notes).toEqual([]);
   });
 
   it('lists the longest gaps first, explained by a clean or an unclean proxy start', async () => {

@@ -4,7 +4,7 @@ import { duration, gapRows, progressText, stillsLines, stillsNotes, type StillsR
 const fmt = (ms: number) => new Date(ms).toISOString().slice(11, 19);
 const T = Date.UTC(2026, 8, 27, 0, 10);
 const report: StillsReport = {
-  runId: 'stills-1-abcdef', kind: 'stills', startedAt: T, tookMs: 812, outcome: 'ok', message: 'Stills inventory: 220 s of 600 s missing',
+  runId: 'stills-1-abcdef', kind: 'stills', startedAt: T, tookMs: 812, outcome: 'ok', message: 'Stills inventory: 3 min 40 s of 10 min missing (36.67%)',
   window: { from: T, to: T + 600_000, reason: 'store-younger' },
   counts: { missingSeconds: 220, expectedSeconds: 600, missingPct: 36.67, gaps: 4, explainedSeconds: 150, unexplainedSeconds: 70, restorableSeconds: 20, unreadablePacks: 1, packsWithoutSprite: 1, spritesWithoutPack: 1 },
   top: [
@@ -52,8 +52,8 @@ describe('Inventory box helpers', () => {
 
   it('keeps the pruned-previews count and the clock note as quiet notes', () => {
     expect(stillsNotes(report)).toEqual([]);
-    const noted = { ...report, counts: { ...report.counts, previewsPruned: 3 }, window: { ...report.window!, notes: ['clock note'] } };
-    expect(stillsNotes(noted)).toEqual(['3 sprites without pack were previews already pruned by their own retention; not counted as problems', 'clock note']);
+    const noted = { ...report, counts: { ...report.counts, previewsPruned: 3 }, window: { ...report.window!, notes: ['Clock note'] } };
+    expect(stillsNotes(noted)).toEqual(['3 packs without sprite were previews already pruned by their own retention; not counted as problems', 'Clock note']);
     expect(stillsNotes({ ...report, outcome: 'failed' })).toEqual([]);
   });
 

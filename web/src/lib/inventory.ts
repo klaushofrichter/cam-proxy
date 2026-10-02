@@ -65,5 +65,5 @@ export function gapRows(r: StillsReport, fmt: (ms: number) => string = local): {
 export function stillsNotes(r: StillsReport): string[] {
   if (r.outcome === 'failed' || !r.window || r.window.from === null) return [];
   const pruned = r.counts.previewsPruned ?? 0;
-  return [...(pruned ? [`${pruned} sprites without pack were previews already pruned by their own retention; not counted as problems`] : []), ...(r.window.notes ?? [])];
+  return [...(pruned ? [`${pruned} packs without sprite were previews already pruned by their own retention; not counted as problems`] : []), ...(r.window.notes ?? [])];
 }

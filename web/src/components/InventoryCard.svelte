@@ -10,6 +10,7 @@
   let report = $state<StillsReport | null>(null);
   let message = $state('');
   let starting = $state(false);
+  let cancelling = $state(false);
   const busy = $derived(!!inv?.running);
 
   async function load() {
@@ -36,15 +37,18 @@
       message = `Inventory: ${e instanceof ApiError ? e.message : 'failed'}`;
     }
     starting = false;
+    cancelling = false;
     await reload();
   }
   async function cancel() {
+    cancelling = true;
     try {
       await api('POST', '/control/actions/inventory-cancel');
     } catch (e) {
       message = `Cancel: ${e instanceof ApiError ? e.message : 'failed'}`;
     }
     await reload();
+    if (!inv?.running) cancelling = false;
   }
 </script>
 
@@ -53,10 +57,10 @@
   <p class="small">Checks the local stills against what the store should hold for the retention window; it never contacts the camera. One run at a time.</p>
   <div class="buttons">
     <button onclick={() => void start()} disabled={starting || busy} data-testid="inventory-stills">Check stills</button>
-    {#if busy}<button onclick={() => void cancel()} data-testid="inventory-cancel">Cancel</button>{/if}
+    {#if busy}<button onclick={() => void cancel()} disabled={cancelling} data-testid="inventory-cancel">{cancelling ? 'Cancelling…' : 'Cancel'}</button>{/if}
   </div>
-  {#if inv?.running}<p class="busy" data-testid="inventory-progress">{progressText(inv.running)}</p>{/if}
-  {#if message}<p class="bad" data-testid="inventory-message">{message}</p>{/if}
+  {#if inv?.running}<p class="busy" role="status" data-testid="inventory-progress">{progressText(inv.running)}</p>{/if}
+  {#if message}<p class="bad" role="alert" data-testid="inventory-message">{message}</p>{/if}
   {#if report}
     <div class="result" data-testid="inventory-result">
       <p class="line">{report.message}</p>

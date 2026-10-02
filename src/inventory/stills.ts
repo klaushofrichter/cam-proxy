@@ -30,7 +30,16 @@ export const STARTUP_MS = 120_000;
 // A camera reboot or power-cycle without an end record: the proxy's own watch
 // gives up after this long (REBOOT_WAIT_MS) and writes `not-back`.
 export const OUTAGE_MS = REBOOT_WAIT_MS;
-const CLOCK_NOTE = "restorable seconds compare the clips' times (the camera's clock) with the stills' (the proxy's clock), not aligned: a few seconds' skew";
+const CLOCK_NOTE = "Restorable seconds compare the clips' times (the camera's clock) with the stills' (the proxy's clock), not aligned: a few seconds' skew";
+
+// 59 s, 1 min, 10 min 5 s, 1 h 30 min (the same words as the admin UI's list).
+export function duration(seconds: number): string {
+  const s = Math.round(seconds);
+  if (s < 60) return `${s} s`;
+  if (s < 3600) return `${Math.floor(s / 60)} min${s % 60 ? ` ${s % 60} s` : ''}`;
+  const m = Math.floor((s % 3600) / 60);
+  return `${Math.floor(s / 3600)} h${m ? ` ${m} min` : ''}`;
+}
 
 export interface StillsSettings { cam: string; intervalS: number; stillsDays: number; previewsDays: number; keepHours: number }
 export interface StillsInventoryDeps {
@@ -314,9 +323,9 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
     counts.missingPct = counts.expectedSeconds ? Math.round((counts.missingSeconds / counts.expectedSeconds) * 10_000) / 100 : 0;
     const problems = counts.unreadablePacks + counts.packsWithoutSprite + counts.spritesWithoutPack;
     const message =
-      `${counts.missingSeconds} s of ${counts.expectedSeconds} s missing (${counts.missingPct}%) since ${new Date(from).toISOString()}, ` +
-      `${counts.gaps} gaps${top[0] ? ` (longest ${top[0].seconds} s)` : ''}, ${counts.explainedSeconds} s explained by proxy stops or camera reboots, ` +
-      `${counts.restorableSeconds} s restorable from clips (camera clock), ${problems} file problems`;
-    return { window: { from, to, reason, retentionFrom, protectedFrom, notes: [CLOCK_NOTE] }, counts, top, items, message };
+      `${duration(counts.missingSeconds)} of ${duration(counts.expectedSeconds)} missing (${counts.missingPct}%) since ${new Date(from).toISOString()}, ` +
+      `${counts.gaps} gaps${top[0] ? ` (longest ${duration(top[0].seconds)})` : ''}, ${duration(counts.explainedSeconds)} explained by proxy stops or camera reboots, ` +
+      `${duration(counts.restorableSeconds)} restorable from clips (camera clock), ${problems} file problems`;
+    return { window: { from, to, reason, retentionFrom, protectedFrom, notes: counts.restorableSeconds > 0 ? [CLOCK_NOTE] : [] }, counts, top, items, message };
   };
 }
