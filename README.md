@@ -350,9 +350,11 @@ as MP4, also the ones FTP never delivered.
     stops reading (a paused `<video>`) is dropped after 5 s while the cache
     keeps filling; its next `Range` comes from the cache.
   - **Range** is served from the cache (a `Range` request waits for the
-    download, then reads the file). A `Range` on a file that can't be cached
-    (the disk is paused, or the file is larger than `recordings.cacheMB`)
-    gets the whole file with 200; several ranges in one header also get the
+    download, then reads the file), except `Range: bytes=0-` on a file not
+    yet cached (how a `<video>` opens): it streams while it arrives, as 200
+    with the whole file. A `Range` on a file that can't be cached (the disk
+    is paused, the file is larger than `recordings.cacheMB`, or there is no
+    room beside the files being read) gets the whole file with 200; several ranges in one header also get the
     whole file with 200; a range wholly past the end answers 416 without a
     download. The `ETag` is the id and size (stable); `If-None-Match` answers
     304 and `If-Range` is honoured.

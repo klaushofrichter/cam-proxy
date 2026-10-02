@@ -289,6 +289,9 @@ Delivers the file as `video/mp4`, with `Range` support.
   files (`sendFile`, `Accept-Ranges`; an unsatisfiable `Range` answers 416
   with `Content-Range: bytes */size`). A `Range` request for a file not yet
   cached waits for the fetch to finish, then is served from the cache.
+  Exception: `Range: bytes=0-` (how every `<video>` opens) on a file not yet
+  cached is treated like a plain GET, streamed while it arrives as a `200`
+  with the whole file (RFC 9110 lets a server ignore `Range`).
 - **A second request for an id being fetched** waits for that fetch; there is
   never a second transfer of the same file.
 - **`HEAD`**: from the cache when cached; otherwise the headers from the list

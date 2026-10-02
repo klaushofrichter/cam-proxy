@@ -330,17 +330,19 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     res.on('close', () => ac.abort());
     // A plain GET streams the file through the fetch's tee while it arrives
     // (when it is the fetch's first client and no byte has gone through yet).
-    // Range is served only from the (complete) cached file: a Range request
-    // waits for the fetch, then reads the cache. When the file can't be kept
-    // (disk paused, larger than the cap) a Range request gets the whole file
-    // streamed as a 200 (allowed for Range). Any other request waits for
+    // So does `Range: bytes=0-` (every <video> opens with it): the whole file
+    // as a 200, which RFC 9110 allows for a Range. Other ranges are served
+    // only from the (complete) cached file: such a request waits for the
+    // fetch, then reads the cache. When the file can't be kept (disk paused,
+    // over the cap, no room beside the pinned files) a Range request gets the
+    // whole file streamed as a 200 too. Any other request waits for
     // `done` and reads the cache. A fetch this request joined that failed or
     // wasn't kept (another client's abort, a full disk) is tried once more
     // for this client before an error is final.
     for (let attempt = 0; attempt < 2; attempt++) {
       if (gone(res)) return;
       const { fetch, created } = side.fetcher.get(entry, { priority: 'high', signal: ac.signal });
-      const streamIt = !req.headers.range || side.paused() || size > side.cache.capBytes() || attempt > 0;
+      const streamIt = !req.headers.range || req.headers.range === 'bytes=0-' || !side.fetcher.canKeep(size) || attempt > 0;
       const live = streamIt && fetch.attach(res, () => (res.status(200), fileHeaders(res, id, size)));
       try {
         await fetch.done;

@@ -1,7 +1,7 @@
 // test/recordings-api.test.ts
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
-import { existsSync } from 'fs';
+import { existsSync, unlinkSync, writeFileSync } from 'fs';
 import { get as httpGet, type ClientRequest } from 'http';
 import { basename, join } from 'path';
 import { startSim } from './helpers/sim';
@@ -307,5 +307,75 @@ describe('GET /recordings/:id: validators, ranges past the end, a dropped transf
     }
     const ok = await binary(request(p.base).get(url(basename(f.name))).set(auth()));
     expect([ok.status, (ok.body as Buffer).length]).toEqual([200, f.size]);
+  }, 30_000);
+});
+
+// Final review: a browser's `Range: bytes=0-` streams; a Range on a file that
+// can't be kept costs one download.
+describe('GET /recordings/:id: bytes=0- and files that cannot be kept', () => {
+  const cacheDir = () => join(p.dir, 'data', 'recordings', 'cam1');
+  beforeAll(async () => {
+    await until(() => p.proxy.status.state().online, 15_000);
+  });
+  afterAll(() => {
+    sim.sim.engine.faults.clear('baichuan.delayMs');
+  });
+
+  it('an uncached bytes=0- is 200 with the whole file, its first byte before the download ends; cached, it is 206', async () => {
+    const f = recs[1].files.main;
+    const id = basename(f.name);
+    const before = downloads();
+    const fetches = (p.proxy.recordings.fetcher as unknown as { byId: Map<string, unknown> }).byId;
+    sim.sim.engine.faults.set({ name: 'baichuan.delayMs', ms: 20 });
+    const got = await new Promise<{ status: number; body: Buffer; runningAtFirst: boolean; cachedAtFirst: boolean }>((resolve, reject) => {
+      const req = httpGet(`${p.base}${url(id)}`, { headers: { Authorization: `Bearer ${CLIENT_TOKEN}`, Range: 'bytes=0-' } }, (res) => {
+        const parts: Buffer[] = [];
+        let runningAtFirst = false;
+        let cachedAtFirst = true;
+        res.on('data', (c: Buffer) => {
+          if (!parts.length) {
+            runningAtFirst = fetches.has(id);
+            cachedAtFirst = existsSync(join(cacheDir(), id));
+          }
+          parts.push(c);
+        });
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(parts), runningAtFirst, cachedAtFirst }));
+        res.on('error', reject);
+      });
+      req.on('error', reject);
+    });
+    sim.sim.engine.faults.clear('baichuan.delayMs');
+    expect(got.status).toBe(200);
+    expect([got.runningAtFirst, got.cachedAtFirst]).toEqual([true, false]);
+    expect(got.body.length).toBe(f.size);
+    expect(downloads()).toBe(before + 1);
+    await until(() => existsSync(join(cacheDir(), id)), 2000);
+    const whole = await binary(request(p.base).get(url(id)).set(auth()));
+    expect(got.body).toEqual(whole.body);
+    const cached = await binary(request(p.base).get(url(id)).set(auth()).set('Range', 'bytes=0-'));
+    expect(cached.status).toBe(206);
+    expect(cached.body).toEqual(whole.body);
+    expect(downloads()).toBe(before + 1);
+  }, 30_000);
+
+  it('a Range on a file with no room beside the pinned files is the whole file as 200, one download', async () => {
+    const f = recs[3].files.sub;
+    const id = basename(f.name);
+    const cache = p.proxy.recordings.cache as unknown as { capBytes: () => number; pin: (path: string) => () => void };
+    const pinned = join(cacheDir(), 'pinned-final-review.mp4');
+    writeFileSync(pinned, Buffer.alloc(200));
+    const unpin = cache.pin(pinned);
+    cache.capBytes = () => f.size + 100; // the file fits the cap, not beside the pinned one
+    try {
+      const before = downloads();
+      const r = await binary(request(p.base).get(url(id)).set(auth()).set('Range', 'bytes=10-19'));
+      expect(r.status).toBe(200);
+      expect((r.body as Buffer).length).toBe(f.size);
+      expect(downloads()).toBe(before + 1);
+    } finally {
+      unpin();
+      delete (cache as { capBytes?: unknown }).capBytes;
+      unlinkSync(pinned);
+    }
   }, 30_000);
 });

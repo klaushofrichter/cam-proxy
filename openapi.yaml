@@ -158,7 +158,7 @@ paths:
         - { name: id, in: path, required: true, schema: { type: string }, description: 'the file name from the list, e.g. RecS0A_DST20261001_211129_211207_0_5514C080000000_108CE9.mp4' }
         - { name: Range, in: header, schema: { type: string }, description: 'e.g. bytes=0-1023' }
       responses:
-        '200': { description: 'video/mp4; Content-Length, Accept-Ranges: bytes; cached as immutable; ETag from the id and size (stable; If-None-Match, If-Range), no Last-Modified. Several ranges in one Range header, and a Range request for a file the cache cannot keep (disk paused, larger than recordings.cacheMB), get the whole file. A failure after the headers ends the body short' }
+        '200': { description: 'video/mp4; Content-Length, Accept-Ranges: bytes; cached as immutable; ETag from the id and size (stable; If-None-Match, If-Range), no Last-Modified. Several ranges in one Range header, and a Range request for a file the cache cannot keep (disk paused, larger than recordings.cacheMB, no room beside the files being read), get the whole file. Range: bytes=0- on a file not yet cached gets the whole file as 200, streamed while it arrives. A failure after the headers ends the body short' }
         '206': { description: the requested range, with Content-Range }
         '304': { description: If-None-Match matched the ETag }
         '400': { description: '{error: invalid, detail}: not a recording id' }
