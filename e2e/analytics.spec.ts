@@ -125,6 +125,38 @@ test('a person event is analysed: Status counts it, Events tags it, the Timeline
   await page.keyboard.press('Enter');
   await expect(rects).toHaveCount(2);
   await expect.poll(() => modal.getByTestId('analysis-image').evaluate((i) => (i as HTMLImageElement).naturalWidth)).toBe(896);
+  // The image switch: Boxes (default) / Plain still, by keyboard too.
+  const vBoxes = modal.getByTestId('analysis-view-boxes');
+  const vStill = modal.getByTestId('analysis-view-still');
+  await expect(vBoxes).toBeChecked();
+  await expect(modal.getByTestId('analysis-still')).toHaveCount(0);
+  await vBoxes.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(vStill).toBeChecked();
+  await expect(modal.getByTestId('analysis-image')).toHaveCount(0);
+  await expect(modal.getByTestId('analysis-boxes')).toHaveCount(0);
+  const plain = modal.getByTestId('analysis-still');
+  await expect.poll(() => plain.evaluate((i) => (i as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+  expect(await plain.getAttribute('src')).toMatch(/\/stills\/\d+\.jpg$/);
+  await page.keyboard.press('ArrowLeft');
+  await expect(vBoxes).toBeChecked();
+  await expect(rects).toHaveCount(2);
+  // Retention removed the still: a message instead of the image.
+  await page.route('**/stills/*.jpg', (r) => r.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"not_found"}' }));
+  await vStill.check();
+  await expect(modal.getByTestId('analysis-still-gone')).toContainText('no longer available');
+  await expect(modal.getByTestId('analysis-figure')).toHaveCount(0);
+  await page.unroute('**/stills/*.jpg');
+  await vBoxes.check();
+  await expect(rects).toHaveCount(2);
+  if (process.env.SHOT_DIR) {
+    await modal.screenshot({ path: `${process.env.SHOT_DIR}/analysis-boxes.png` });
+    await page.route('**/stills/*.jpg', (r) => r.fallback());
+    await vStill.check();
+    await expect.poll(() => plain.evaluate((i) => (i as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+    await modal.screenshot({ path: `${process.env.SHOT_DIR}/analysis-plain-still.png` });
+    await vBoxes.check();
+  }
   // The frame (border, rounded corners) doesn't scroll; the body inside it does,
   // so the scrollbar can't paint over the corners.
   await page.setViewportSize({ width: 1280, height: 600 });

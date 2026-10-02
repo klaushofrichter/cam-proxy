@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
-  import { boxLabel, labelStyle, scorePct, toggleSelection, type UiObject, type UiSummaryEntry } from '../lib/analytics';
+  import { boxLabel, labelStyle, stillUrl, scorePct, toggleSelection, type UiObject, type UiSummaryEntry } from '../lib/analytics';
 
   // The analysis of one event (spec 2026-09-30-analytics-design): the image
   // with its boxes, the objects, the camera's event, and the raw answer.
@@ -10,6 +10,10 @@
   let a = $state<Full | null>(null);
   let failed = $state(false);
   let showAll = $state(false);
+  // What the image area shows: the analysis image with its boxes, or the plain
+  // still of that second (retention may have removed it: then a message).
+  let view = $state<'boxes' | 'still'>('boxes');
+  let stillGone = $state(false);
   // The summary's entries by default; every object when asked (or when an older record has no summary).
   const boxes = $derived(
     a ? (showAll || !a.summary ? a.objects.map((o) => ({ label: o.name, score: o.score, box: o.box })) : a.summary.map((e) => ({ label: e.subtype.charAt(0).toUpperCase() + e.subtype.slice(1), score: e.score, box: e.box }))) : [],
@@ -37,7 +41,8 @@
   function onkey(e: KeyboardEvent) {
     if (e.key === 'Tab') {
       // Keep focus inside the modal.
-      const f = [...dialog.querySelectorAll<HTMLElement>('button, summary, input, [tabindex="0"]')];
+      // One stop per radio group: the checked one.
+      const f = [...dialog.querySelectorAll<HTMLElement>('button, summary, input:not([type="radio"]), input[type="radio"]:checked, [tabindex="0"]')].filter((el) => !(el as HTMLInputElement).disabled);
       if (!f.length) return;
       const i = f.indexOf(document.activeElement as HTMLElement);
       const next = e.shiftKey ? (i <= 0 ? f.length - 1 : i - 1) : (i + 1) % f.length;
@@ -61,19 +66,36 @@
       {#if failed}<p class="muted">Could not load the analysis.</p>{:else if !a}<p class="muted" data-testid="analysis-loading">Loading…</p>{/if}
       {#if a}
         {#if a.status === 'ok'}
-          <div class="figure" data-testid="analysis-figure">
-            <img src={`${base}/analysis.jpg`} alt="The analysed still" data-testid="analysis-image" />
-            <svg viewBox="0 0 1 1" preserveAspectRatio="none" data-testid="analysis-boxes">
+          {#if a.stillTs !== null}
+            <fieldset class="view" data-testid="analysis-view">
+              <legend class="sr">Image</legend>
+              <label class="small"><input type="radio" name="analysis-view" value="boxes" bind:group={view} data-testid="analysis-view-boxes" /> Boxes</label>
+              <label class="small"><input type="radio" name="analysis-view" value="still" bind:group={view} onchange={() => (stillGone = false)} data-testid="analysis-view-still" /> Plain still</label>
+            </fieldset>
+          {/if}
+          {#if view === 'still' && a.stillTs !== null}
+            {#if stillGone}
+              <p class="muted gone" role="status" data-testid="analysis-still-gone">The plain still is no longer available: stills are removed after their retention time.</p>
+            {:else}
+              <div class="figure" data-testid="analysis-figure">
+                <img src={stillUrl(camId, a.stillTs)} alt={`The still at ${new Date(a.stillTs).toLocaleTimeString()}, without boxes`} onerror={() => (stillGone = true)} data-testid="analysis-still" />
+              </div>
+            {/if}
+          {:else}
+            <div class="figure" data-testid="analysis-figure">
+              <img src={`${base}/analysis.jpg`} alt="The analysed still" data-testid="analysis-image" />
+              <svg viewBox="0 0 1 1" preserveAspectRatio="none" data-testid="analysis-boxes">
+                {#each shown as o, i (i)}
+                  {@const b = drawn(o)}
+                  {#if b}<rect x={b.x0} y={b.y0} width={b.x1 - b.x0} height={b.y1 - b.y0} vector-effect="non-scaling-stroke" />{/if}
+                {/each}
+              </svg>
               {#each shown as o, i (i)}
                 {@const b = drawn(o)}
-                {#if b}<rect x={b.x0} y={b.y0} width={b.x1 - b.x0} height={b.y1 - b.y0} vector-effect="non-scaling-stroke" />{/if}
+                {#if b}<span class="label" style={labelStyle(b)} data-testid="analysis-label">{boxLabel(o.label, o.score)}</span>{/if}
               {/each}
-            </svg>
-            {#each shown as o, i (i)}
-              {@const b = drawn(o)}
-              {#if b}<span class="label" style={labelStyle(b)} data-testid="analysis-label">{boxLabel(o.label, o.score)}</span>{/if}
-            {/each}
-          </div>
+            </div>
+          {/if}
           {#if a.summary}
             <label class="small"><input type="checkbox" bind:checked={showAll} onchange={() => (selected = null)} data-testid="analysis-show-all" /> Show all objects</label>
           {/if}
@@ -104,6 +126,9 @@
   .figure { position: sticky; top: 0; z-index: 1; background: var(--surface); line-height: 0; width: fit-content; max-width: 100%; overflow-x: clip; }
   .figure img { display: block; width: auto; max-width: 100%; max-height: 45vh; border-radius: 6px; background: #111; }
   .figure svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .view { border: 0; padding: 0; margin: 0; display: flex; gap: 14px; align-items: center; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .gone { padding: 24px 0; }
   rect { fill: none; stroke: #a855f7; stroke-width: 3; }
   .label { position: absolute; background: #a855f7; color: #fff; font-size: 12px; line-height: 1.4; padding: 0 4px; border-radius: 3px; white-space: nowrap; }
   table { border-collapse: collapse; font-size: 13px; }
