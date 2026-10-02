@@ -3,7 +3,7 @@
   import { pausedText, usageLine } from '../lib/analytics';
   import { daysUntilFullText } from '../lib/format';
   import { cameraStateText, poeLine } from '../lib/maintenance';
-  import { cameraFtpText, clipTime, ftpAlerts } from '../lib/ftp';
+  import { cameraFtpClass, cameraFtpText, clipTime, ftpAlerts } from '../lib/ftp';
   import { api, ApiError } from '../lib/api';
   import { refresh } from '../lib/state';
   import Icon from '../components/Icon.svelte';
@@ -18,7 +18,6 @@
 
   // #93: the camera's FTP upload off, elsewhere, or no clips while events happen.
   const alerts = $derived($status ? ftpAlerts({ enabled: $status.ftp.enabled, publicHost: $status.ftp.publicHost, camera: $status.ftp.camera ?? null, stalled: $status.ftp.stalled ?? null }) : []);
-  const camFtpClass = (s?: string) => (s === 'on' ? 'ok' : s === 'off' || s === 'elsewhere' ? 'bad' : '');
   let fixing = $state(false);
   let fixResult = $state('');
   async function pointFtpHere() {
@@ -99,7 +98,7 @@
           {#if $status.ftp.enabled && !$status.ftp.passwordSet}<dt>Password</dt><dd class="bad">CAMPROXY_FTP_PASSWORD not set</dd>{/if}
           <dt>Camera connects to</dt><dd>{$status.ftp.publicHost ?? '— (ftp.publicHost)'}</dd>
           {#if $status.ftp.camera}
-            <dt>Camera upload</dt><dd class={camFtpClass($status.ftp.camera.state)} data-testid="camera-ftp-state">{cameraFtpText($status.ftp.camera)}</dd>
+            <dt>Camera upload</dt><dd class={cameraFtpClass($status.ftp.camera.state)} data-testid="camera-ftp-state">{cameraFtpText($status.ftp.camera)}</dd>
             <dt>Checked</dt><dd title={$status.ftp.camera.error ? `last read failed: ${$status.ftp.camera.error}` : undefined}>{ago($status.ftp.camera.checkedAt)}</dd>
           {/if}
           <dt>Last upload</dt><dd>{ago($status.ftp.lastUpload)}</dd>
@@ -109,7 +108,7 @@
         </dl>
         {#if alerts.length}
           <div class="alerts">
-            {#each alerts as a (a.kind)}<p class="bad alert" data-testid="ftp-alert" data-kind={a.kind} role="alert"><Icon name="alert" size={16} /><span>{a.text}</span></p>{/each}
+            {#each alerts as a (a.kind)}<p class="alert {a.level}" data-testid="ftp-alert" data-kind={a.kind} role={a.level === 'info' ? 'note' : 'alert'}><Icon name={a.level === 'info' ? 'about' : 'alert'} size={16} /><span>{a.text}</span></p>{/each}
             <button onclick={() => void pointFtpHere()} disabled={fixing} data-testid="ftp-alert-fix">Point the camera's FTP here</button>
             {#if fixResult}<p class="bad small" data-testid="ftp-fix-result">{fixResult}</p>{/if}
           </div>
@@ -153,7 +152,7 @@
   .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
   dl { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; margin: 0; font-size: 14px; }
   dt { color: var(--muted); } dd { margin: 0; font-family: var(--mono); text-align: right; }
-  .ok { color: #22c55e; } .bad { color: var(--danger); } .warn { color: #f59e0b; }
+  .ok { color: #22c55e; } .bad { color: var(--danger); } .warn { color: #f59e0b; } .info { color: var(--muted); }
   .muted { color: var(--muted); }
   .small { font-size: 13px; margin: 0 0 8px; }
   .alerts { display: grid; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); justify-items: start; }
