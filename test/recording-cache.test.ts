@@ -1,6 +1,6 @@
 // test/recording-cache.test.ts
 import { describe, it, expect } from 'vitest';
-import { existsSync, mkdtempSync, statSync, utimesSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { RecordingCache } from '../src/recordings/cache';
@@ -94,6 +94,21 @@ describe('RecordingCache', () => {
 
   it('refuses an id that could leave the folder', () => {
     const { cache } = setup();
-    for (const id of ['../x.mp4', 'a/b.mp4', '', '..', '.', 'a\0b.mp4']) expect(() => cache.path(id)).toThrow();
+    for (const id of ['../x.mp4', 'a/b.mp4', '', '..', '.', 'a\0b.mp4', 'a.mp4.part']) expect(() => cache.path(id)).toThrow();
+  });
+
+  it('a symlink is not cached: not listed, not opened, never touched or evicted', () => {
+    const { dir, cache, clock } = setup(100);
+    const target = join(mkdtempSync(join(tmpdir(), 'camproxy-out-')), 'secret');
+    writeFileSync(target, Buffer.alloc(5000, 1));
+    utimesSync(target, new Date(NOW - 9000_000), new Date(NOW - 9000_000));
+    symlinkSync(target, join(dir, 'l.mp4'));
+    clock.t = NOW;
+    expect(cache.files()).toEqual([]);
+    expect(cache.has('l.mp4')).toBe(false);
+    expect(cache.open('l.mp4')).toBeNull();
+    expect(cache.makeRoom(50)).toBe(0);
+    expect(existsSync(target)).toBe(true);
+    expect(Math.round(statSync(target).mtimeMs)).toBe(NOW - 9000_000);
   });
 });

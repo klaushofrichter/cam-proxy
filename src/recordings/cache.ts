@@ -5,7 +5,7 @@
 // file (being read) is never deleted; a .part is never counted or evicted.
 // Callers validate ids with validId (names.ts); path() also refuses anything
 // that could leave the folder.
-import { mkdirSync, readdirSync, renameSync, statSync, unlinkSync, utimesSync } from 'fs';
+import { lstatSync, mkdirSync, readdirSync, renameSync, unlinkSync, utimesSync } from 'fs';
 import { join } from 'path';
 
 export interface CachedFile { id: string; path: string; bytes: number; used: number }
@@ -28,7 +28,7 @@ export class RecordingCache {
   }
 
   path(id: string): string {
-    if (!id || id.startsWith('.') || /[/\\\0]/.test(id)) throw new Error('invalid recording id');
+    if (!id || id.startsWith('.') || id.endsWith('.part') || /[/\\\0]/.test(id)) throw new Error('invalid recording id');
     return join(this.d.dir(), id);
   }
 
@@ -55,7 +55,7 @@ export class RecordingCache {
 
   has(id: string): boolean {
     try {
-      return statSync(this.path(id)).isFile();
+      return lstatSync(this.path(id)).isFile();
     } catch {
       return false;
     }
@@ -100,7 +100,7 @@ export class RecordingCache {
       if (id.endsWith('.part')) continue;
       const path = join(dir, id);
       try {
-        const s = statSync(path);
+        const s = lstatSync(path);
         if (s.isFile()) out.push({ id, path, bytes: s.size, used: s.mtimeMs });
       } catch {
         // gone
