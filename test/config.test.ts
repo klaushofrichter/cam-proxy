@@ -255,3 +255,21 @@ describe('camera.poeSwitch', () => {
     expect(() => applyOverrides(load(), { camera: { poeSwitch: { password: 'x' } } })).toThrow(/camera.poeSwitch.password: unknown setting/);
   });
 });
+
+describe('recordings settings', () => {
+  beforeEach(() => write('config.json', { camera: { host: '192.0.2.10' } }));
+  it('recordings.cacheMB defaults to 2048 (64 to 1,048,576); camera.baichuanPort to 9000 (1 to 65535)', () => {
+    const l = load();
+    expect(l.config.recordings.cacheMB).toBe(2048);
+    expect(l.config.camera.baichuanPort).toBe(9000);
+    for (const v of [63, 1_048_577]) expect(() => applyOverrides(l, { recordings: { cacheMB: v } })).toThrow(/recordings.cacheMB/);
+    for (const v of [0, 65536]) expect(() => applyOverrides(l, { camera: { baichuanPort: v } })).toThrow(/camera.baichuanPort/);
+    expect(applyOverrides(l, { recordings: { cacheMB: 64 }, camera: { baichuanPort: 9001 } }).config.camera.baichuanPort).toBe(9001);
+  });
+
+  it('both apply without a restart (the port at the next connection, the cap at the next fetch or storage run)', () => {
+    expect(needsRestart('recordings.cacheMB')).toBe(false);
+    expect(needsRestart('camera.baichuanPort')).toBe(false);
+    expect(needsRestart('camera.host')).toBe(true);
+  });
+});

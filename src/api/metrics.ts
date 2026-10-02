@@ -36,7 +36,7 @@ export function createMetrics(s: MetricsSources) {
   const g = (name: string, help: string, labelNames: string[], collect: (this: Gauge) => void) =>
     new Gauge({ name: `camproxy_${name}`, help, labelNames, registers: [registry], collect });
 
-  const kinds = ['catalog', 'stills', 'previews', 'clips', 'audit'] as const;
+  const kinds = ['catalog', 'stills', 'previews', 'clips', 'recordings', 'audit'] as const;
   g('disk_bytes', 'Bytes on disk by kind', ['kind'], function () {
     const u = usage();
     for (const k of kinds) this.set({ kind: k }, u[k].bytes);
@@ -56,7 +56,7 @@ export function createMetrics(s: MetricsSources) {
   });
   g('storage_growth_bytes_per_day', 'Bytes written per day (3-day average)', ['kind'], function () {
     const u = usage();
-    for (const k of ['stills', 'previews', 'clips'] as const) this.set({ kind: k }, u[k].growthPerDay);
+    for (const k of ['stills', 'previews', 'clips', 'recordings'] as const) this.set({ kind: k }, u[k].growthPerDay);
   });
   g('storage_days_until_full', 'Projected days until the budget is reached (-1: not growing)', [], function () {
     this.set(usage().daysUntilFull ?? -1);

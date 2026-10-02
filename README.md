@@ -139,7 +139,7 @@ come only from the environment.
 | Group | Settings (defaults) |
 |---|---|
 | `server` | `port` (8480), `dataDir` (`data`, relative to the config file), `logLevel` (`info`), `publicUrl` (where people reach this proxy; reported in `/api/cameras` as `publicUrl`, so cams can link to it), `trustProxy` (0: none; behind the cluster ingress 1, so rate limits count clients by X-Forwarded-For) |
-| `camera` | `id` (`cam1`), `name` (`Den`), `host` (required), `protocol` (`https`), `tlsName`, `webUiUrl` (the camera's own web page, linked from the admin UI; default `https://<host>/`, `none` for no link), `user` (`proxy`), `onvifPort` (8000), `rtspPort` (554), `statusPollS` (30); `poeSwitch`: the camera's PoE switch for a power-cycle, `model` (`none`; `sscpoe-web` for the STEAMEMO GPS-208 and kin), `host` (its address, optional `:port`), `port` (the switch port the camera is on, 1–48), `ports` (8: the switch's PoE port count), `offSeconds` (10, 5–60). The `poeSwitch` settings apply at once; see [docs/poe-switch.md](docs/poe-switch.md) |
+| `camera` | `id` (`cam1`), `name` (`Den`), `host` (required), `protocol` (`https`), `tlsName`, `webUiUrl` (the camera's own web page, linked from the admin UI; default `https://<host>/`, `none` for no link), `user` (`proxy`), `onvifPort` (8000), `rtspPort` (554), `baichuanPort` (9000, recordings over TCP; applies at the next connection), `statusPollS` (30); `poeSwitch`: the camera's PoE switch for a power-cycle, `model` (`none`; `sscpoe-web` for the STEAMEMO GPS-208 and kin), `host` (its address, optional `:port`), `port` (the switch port the camera is on, 1–48), `ports` (8: the switch's PoE port count), `offSeconds` (10, 5–60). The `poeSwitch` settings apply at once; see [docs/poe-switch.md](docs/poe-switch.md) |
 | `events` | `onvif.subscribeMin` (10), `onvif.pullTimeoutS` (30), `poll.enabled` (true), `poll.intervalS` (2), `poll.afterOnvifDownS` (60), `maxOpenMin` (10) |
 | `retention` | `stillsDays` (7), `previewsDays` (14), `clipsDays` (7), `eventsDays` (30), `auditDays` (90), `streamLogDays` (7), `intervalMin` (60) |
 | `storage` | `maxPercent` (85) or `maxBytes`, `minFreeBytes` (2 GB), `keepHours` (per kind: `stills` 24, `clips` 24, `previews` 72) |
@@ -148,6 +148,7 @@ come only from the environment.
 | `stills` | `enabled` (true), `stream` (`sub`), `intervalS` (1), `size` (`896x512`), `quality` (5), `maxGB` |
 | `previews` | `tileSize` (`160x90`), `grid` (`10x6`), `quality` (7), `maxGB` |
 | `ftp` | `enabled` (false), `port` (2121), `passive` (`30000-30009`), `publicHost` (the address the camera connects to), `user` (`camera`), `tls` (true), `certFile`/`keyFile` (else a self-signed certificate), `stream` (`main`), `stalledHours` (6, 1–72: the Status page warns when no clip arrived for this long while the camera recorded events; applies at once, no restart), `maxGB` |
+| `recordings` | `cacheMB` (2048, 64–1,048,576): size cap of the recordings cache; least recently used files go first, and they are the first to go when the storage budget is exceeded. Applies at the next fetch or storage run |
 
 | Secret (environment, or `<NAME>_FILE`) | |
 |---|---|

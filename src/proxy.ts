@@ -322,7 +322,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       const clipRows = Number((catalog.db.prepare('SELECT COUNT(*) AS n FROM clips').get() as { n: number }).n);
       return {
         message: storageMessage({ used: u.used, budget: u.budget, stillMinutes: u.stills.files, clipRows, daysUntilFull: u.daysUntilFull }),
-        details: { size: u.size, free: u.free, budget: u.budget, used: u.used, daysUntilFull: u.daysUntilFull, kinds: { stills: u.stills, previews: u.previews, clips: u.clips, catalog: u.catalog, audit: u.audit }, clipRows },
+        details: { size: u.size, free: u.free, budget: u.budget, used: u.used, daysUntilFull: u.daysUntilFull, kinds: { stills: u.stills, previews: u.previews, clips: u.clips, recordings: u.recordings, catalog: u.catalog, audit: u.audit }, clipRows },
       };
     },
     activity: (day, from, to) => {
