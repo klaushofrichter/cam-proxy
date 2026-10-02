@@ -1,10 +1,10 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { execFile } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, join } from 'path';
 import { promisify } from 'util';
-import type { Writable } from 'stream';
+import { Writable } from 'stream';
 import { createCamSim, type SeedClip } from 'cam-sim';
 import { BaichuanError } from '../src/camera/baichuan/errors';
 import { ReolinkClient } from '../src/camera/client';
@@ -25,10 +25,12 @@ const run = promisify(execFile);
 const NOW = Date.UTC(2026, 9, 2, 12, 0);
 const pad = (n: number) => String(n).padStart(2, '0');
 let video: Buffer;
+let videoFile: string;
 beforeAll(async () => {
   const file = join(mkdtempSync(join(tmpdir(), 'camproxy-repairsrc-')), 'rec.mp4');
   await run('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=10', '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', file]);
   video = readFileSync(file);
+  videoFile = file;
 }, 30_000);
 
 // The SD recording i of 2026-10-01 (10:<i>:00 UTC), as the list and the report know it.
@@ -46,7 +48,7 @@ const report = (items: ClipItem[], o: Partial<InventoryReport> = {}): InventoryR
 
 // A real fetcher, cache and indexer; the camera is a fake list and download.
 // A gated download waits for its gate, or ends as an abort when the tee goes.
-function setup(o: { settings?: Partial<ClipsRepairSettings>; fail?: (path: string) => Error | undefined; gated?: string[]; listed?: boolean; paused?: boolean; clipsBytes?: number; limits?: ClipsRepairDeps['limits']; cap?: number } = {}) {
+function setup(o: { settings?: Partial<ClipsRepairSettings>; fail?: (path: string) => Error | undefined; gated?: string[]; listed?: boolean; paused?: boolean; clipsBytes?: number; limits?: ClipsRepairDeps['limits']; cap?: number; tempDir?: string; openTemp?: ClipsRepairDeps['openTemp'] } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'camproxy-repair-'));
   const catalog = openCatalog(join(dir, 'catalog.sqlite'));
   const cache = new RecordingCache({ dir: () => join(dir, 'recordings', 'cam1'), capBytes: () => o.cap ?? 50 * 2 ** 20 });
@@ -78,7 +80,7 @@ function setup(o: { settings?: Partial<ClipsRepairSettings>; fail?: (path: strin
   const config = structuredClone(DEFAULTS);
   config.server.dataDir = dir;
   const indexer = new ClipIndexer({ catalog, log: new StreamLog(catalog), config: () => config, timeInfo: async () => ({ stdOffsetMinutes: 0, dstOffsetMinutes: 0 }), dataDir: dir, cam: 'cam1' });
-  const tempDir = join(dir, 'inventory', 'tmp');
+  const tempDir = o.tempDir ?? join(dir, 'inventory', 'tmp');
   const deps: ClipsRepairDeps = {
     catalog,
     settings: () => ({ cam: 'cam1', stream: 'sub', clipsDays: 7, ...o.settings }),
@@ -91,6 +93,7 @@ function setup(o: { settings?: Partial<ClipsRepairSettings>; fail?: (path: strin
     clipsBytes: () => o.clipsBytes ?? 0,
     sleep: async (ms) => void sleeps.push(ms),
     limits: o.limits,
+    ...(o.openTemp ? { openTemp: o.openTemp } : {}),
   };
   const onCamera = (...es: RecordingEntry[]) => es.forEach((e) => known.set(e.id, e));
   return { dir, catalog, cache, fetcher, deps, calls, gates, sleeps, onCamera, tempDir };
@@ -303,6 +306,102 @@ describe('clips repair', () => {
     expect(s.cache.has(b.id)).toBe(true);
   });
 
+  it('temp mode yields to a viewer: a viewer who comes while the repair\'s fetch is queued gets it, one download, the clip skipped as viewer', async () => {
+    const [a, other] = [recording(1), recording(9)];
+    const s = setup({ cap: Math.floor(video.length / 2), gated: [other.path] });
+    s.onCamera(a, other);
+    s.fetcher.get(other, { priority: 'high' }); // a viewer's download runs: the repair's fetch queues
+    const done = clipsRepair(s.deps).run(ctx(report([missing(a)])));
+    await until(() => s.fetcher.queued().includes(a.id));
+    const { fetch } = s.fetcher.get(a, { priority: 'high' });
+    const got: Buffer[] = [];
+    const viewer = new Writable({ write: (c: Buffer, _e, cb) => (got.push(c), cb()) });
+    expect(fetch.attach(viewer, () => undefined)).toBe(true);
+    s.gates.get(other.path)!();
+    const r = await done;
+    expect(s.calls).toEqual([other.path, a.path]); // never downloaded twice
+    expect(Buffer.concat(got).equals(video)).toBe(true);
+    expect(r.items).toEqual([{ id: a.id, start: a.start, result: 'skipped', reason: 'viewer' }]);
+    expect(r.counts).toMatchObject({ done: 0, failed: 0, skipped: 1 });
+    expect(readdirSync(s.tempDir)).toEqual([]);
+  });
+
+  it('an unusable temp folder: a clear failure in temp mode; the cache mode is unaffected', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'camproxy-badtmp-'));
+    const notADir = join(base, 'file');
+    writeFileSync(notADir, 'x');
+    const a = recording(1);
+    const s = setup({ cap: Math.floor(video.length / 2), tempDir: notADir });
+    s.onCamera(a);
+    const r = await clipsRepair(s.deps).run(ctx(report([missing(a)])));
+    expect(r.counts).toMatchObject({ done: 0, failed: 1, skipped: 0 });
+    expect((r.top[0] as { error: string }).error).toMatch(/^the temp file could not be made: .*ENOTDIR/);
+    expect(s.calls).toEqual([]); // nothing fetched for nothing
+    const t = setup({ tempDir: notADir });
+    t.onCamera(a);
+    const q = await clipsRepair(t.deps).run(ctx(report([missing(a)])));
+    expect(q.counts).toMatchObject({ done: 1, failed: 0 });
+  });
+
+  it('a temp file that can\'t be removed afterwards: the done clip stays done; a real error stays the error', async () => {
+    const root = process.getuid?.() === 0; // root removes files anyway: the counts still hold
+    const [a, b] = [recording(1), recording(2)];
+    const s = setup({ cap: Math.floor(video.length / 2) });
+    s.onCamera(a, b);
+    const real = s.deps.indexer();
+    let fail = false;
+    s.deps.indexer = () => ({
+      addRecording: async (file, r) => {
+        chmodSync(s.tempDir, 0o500); // the temp file can't be unlinked now
+        if (fail) throw new NotAVideoError();
+        return real.addRecording(file, r);
+      },
+    });
+    try {
+      const r = await clipsRepair(s.deps).run(ctx(report([missing(a)])));
+      expect(r.counts).toMatchObject({ done: 1, failed: 0 });
+      if (!root) expect(readdirSync(s.tempDir)).toEqual([`${a.id}.part`]); // left for the next run's sweep
+      chmodSync(s.tempDir, 0o700);
+      fail = true;
+      const q = await clipsRepair(s.deps).run(ctx(report([missing(b)])));
+      expect(q.counts).toMatchObject({ done: 0, failed: 1 });
+      expect(q.top).toEqual([{ id: b.id, start: b.start, error: 'the recording is not a video' }]);
+      chmodSync(s.tempDir, 0o700);
+      expect(readdirSync(s.tempDir)).toEqual(root ? [] : [`${b.id}.part`]); // the first run's leftover was swept
+    } finally {
+      chmodSync(s.tempDir, 0o700);
+    }
+  });
+
+  it('a temp file that fails mid-download (a full disk): the disk error is the failure, no second download', async () => {
+    const a = recording(1);
+    const s = setup({
+      cap: Math.floor(video.length / 2),
+      openTemp: () => new Writable({ write: (_c, _e, cb) => cb(Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' })) }),
+    });
+    s.onCamera(a);
+    const r = await clipsRepair(s.deps).run(ctx(report([missing(a)])));
+    expect(r.counts).toMatchObject({ done: 0, failed: 1 });
+    expect(r.top).toEqual([{ id: a.id, start: a.start, error: 'the temp file failed: ENOSPC: no space left on device, write' }]);
+    expect(s.calls).toEqual([a.path]);
+  });
+
+  it('leaves no listener on the run\'s signal after the clips', async () => {
+    const s = setup();
+    const es = [1, 2, 3].map((i) => recording(i));
+    s.onCamera(...es);
+    await s.fetcher.get(es[1], { priority: 'high' }).fetch.done; // one from the cache
+    const ac = new AbortController();
+    let live = 0;
+    const add = ac.signal.addEventListener.bind(ac.signal);
+    const remove = ac.signal.removeEventListener.bind(ac.signal);
+    ac.signal.addEventListener = ((t: string, l: EventListener, o?: AddEventListenerOptions) => (t === 'abort' && live++, add(t, l, o))) as typeof add;
+    ac.signal.removeEventListener = ((t: string, l: EventListener, o?: EventListenerOptions) => (t === 'abort' && live--, remove(t, l, o))) as typeof remove;
+    const r = await clipsRepair(s.deps).run(ctx(report(es.map(missing)), { signal: ac.signal }));
+    expect(r.counts.done).toBe(3);
+    expect(live).toBe(0);
+  });
+
   it('is ready only for a camera compare with something missing locally', () => {
     const { ready } = clipsRepair(setup().deps);
     expect(ready(report([missing(recording(1))]))).toBeNull();
@@ -316,11 +415,16 @@ describe('clips repair', () => {
 describe('clips repair against cam-sim', () => {
   let catalog: Catalog | undefined;
   it('repairs two missing clips: byte for byte the camera\'s recordings, origin camera', async () => {
-    const seed: SeedClip[] = [
-      { daysAgo: 1, start: '080000', end: '080030', triggers: ['motion'] },
-      { daysAgo: 1, start: '090000', end: '090030', triggers: ['person'] },
-    ];
+    const seed: SeedClip[] = [{ daysAgo: 1, start: '080000', end: '080030', triggers: ['motion'] }];
     const sim = await createCamSim({ users: [{ name: 'proxy', level: 'admin', password: 'proxy-pw' }], seedClips: seed, tz: 'UTC', clock: { now: () => new Date(NOW) } });
+    // The second recording is made from another video (another size, other
+    // bytes), so a swap between the two would show.
+    const first = sim.engine.sd.all()[0];
+    sim.engine.setMedia({
+      snapshot: async () => Buffer.alloc(0), liveFlv: () => ({ header: Buffer.alloc(0), tags: [] }), durationMs: () => 2000,
+      clipPath: () => videoFile, clipSize: () => video.length,
+    }, 'other');
+    sim.engine.sd.add({ date: first.date, start: '090000', end: '090030', triggers: ['person'], dst: false });
     const ports = await sim.listen({ http: 0, https: 0, control: 0, rtsp: 0, onvif: 0, baichuan: 0 }, '127.0.0.1');
     const dir = mkdtempSync(join(tmpdir(), 'camproxy-repairsim-'));
     const client = new ReolinkClient({ id: 'cam1', host: `127.0.0.1:${ports.http}`, protocol: 'http', user: 'proxy', password: 'proxy-pw' });
@@ -355,6 +459,9 @@ describe('clips repair against cam-sim', () => {
         [Date.UTC(2026, 9, 1, 8), 'camera', 'sub'],
         [Date.UTC(2026, 9, 1, 9), 'camera', 'sub'],
       ]);
+      const sources = sim.engine.sd.all().map((x) => sim.engine.mediaFor(x).clipPath('sub'));
+      expect(new Set(sources).size).toBe(2);
+      expect(rows[0].size).not.toBe(rows[1].size);
       for (const row of rows) {
         const rec = sim.engine.sd.all().find((x) => Date.parse(`${x.date}T${x.start.replace(/(\d\d)(\d\d)(\d\d)/, '$1:$2:$3')}Z`) === row.start_ts)!;
         const media = sim.engine.mediaFor(rec);

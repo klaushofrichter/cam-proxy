@@ -1,12 +1,14 @@
-import { createWriteStream, mkdirSync, readdirSync, rmSync, statSync, type WriteStream } from 'fs';
+import { createWriteStream, mkdirSync, openSync, readdirSync, rmSync, statSync } from 'fs';
 import { join } from 'path';
+import type { Writable } from 'stream';
 import { finished } from 'stream/promises';
 import { BaichuanError } from '../camera/baichuan/errors';
 import { clipNear } from '../catalog/clips';
 import type { Catalog } from '../catalog/db';
 import { ClipExistsError, type ClipIndexer } from '../clips/indexer';
 import type { RecordingCache } from '../recordings/cache';
-import { abortError, isAbort, type Fetch, type RecordingFetcher } from '../recordings/fetcher';
+import { abortError, isAbort, type Fetch, type RecordingFetcher, type Waiter } from '../recordings/fetcher';
+import { logger } from '../log';
 import { SearchError, type RecordingEntry, type RecordingList } from '../recordings/list';
 import type { Stream } from '../recordings/names';
 import { mb, type ClipItem } from './clips';
@@ -23,7 +25,8 @@ import type { InventoryReport, RepairEntry, RepairResult } from './runner';
 // recordings cache, pinned only while it is copied into clips/ and indexed
 // with origin 'camera' (ClipIndexer.addRecording). A file the cache can't keep
 // (disk paused, over the cache cap, no room beside the pinned files) is
-// streamed to a temp file instead. Caps per run: 50 clips (skipped ones
+// streamed to a temp file instead, unless a viewer streams it: then the
+// viewer has it and the clip is skipped (`viewer`). Caps per run: 50 clips (skipped ones
 // count), 200 MB, ftp.maxGB; 1 s between downloads; it stops after 3 failures
 // in a row, and at once on a refused download or an offline camera. A cancel
 // ends it between clips and aborts its own running download (one a viewer
@@ -45,7 +48,8 @@ const STOP_TEXT: Record<RepairStop, string> = {
   refused: 'the camera refused a download',
   camera_offline: 'the camera is offline',
 };
-export type SkipReason = 'outside-retention' | 'already-local' | 'gone-from-camera' | 'other-stream';
+// `viewer`: in temp mode a viewer took the fetch's one client slot (viewers first).
+export type SkipReason = 'outside-retention' | 'already-local' | 'gone-from-camera' | 'other-stream' | 'viewer';
 // `streamed`: the cache couldn't keep the file; it went through a temp file.
 export interface RepairItem { id: string; start: number; result: 'ok' | 'skipped' | 'failed'; reason?: SkipReason; error?: string; clipId?: number; bytes?: number; streamed?: true }
 
@@ -64,6 +68,7 @@ export interface ClipsRepairDeps {
   clipsBytes: () => number; // the clips' bytes on disk now (storage usage)
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   limits?: { clips?: number; bytes?: number }; // tests
+  openTemp?: (path: string) => Writable; // tests; opens synchronously (throws when it can't)
 }
 
 type Candidate = Extract<ClipItem, { type: 'missing-locally' }>;
@@ -85,11 +90,11 @@ const sleepFor = (ms: number, signal: AbortSignal) =>
 // is aborted too, unless someone else (a viewer) still waits for it, and
 // given up to ABORT_WAIT_MS to end (its cmd 9 sent, its .part gone).
 const ABORT_WAIT_MS = 2_000;
-const settled = (fetch: Fetch, signal: AbortSignal, own?: WriteStream) =>
+const settled = (fetch: Fetch, signal: AbortSignal, mine: { waiter: Waiter; res?: Writable }) =>
   new Promise<void>((resolve, reject) => {
     const onAbort = () => {
       const fail = () => reject(abortError('cancelled'));
-      if (!fetch.abortIfAlone(own)) return fail();
+      if (!fetch.abortIfAlone(mine)) return fail();
       const t = setTimeout(fail, ABORT_WAIT_MS);
       fetch.done.catch(() => undefined).finally(() => (clearTimeout(t), fail()));
     };
@@ -98,12 +103,26 @@ const settled = (fetch: Fetch, signal: AbortSignal, own?: WriteStream) =>
     fetch.done.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
   });
 
-const closed = (w: WriteStream) =>
+const closed = (w: Writable) =>
   new Promise<void>((resolve) => {
     if (w.closed) return resolve();
     w.once('close', () => resolve());
     w.destroy();
   });
+
+// The temp file, opened at once (so a bad folder fails before any fetch).
+const openTempFile = (path: string): Writable => createWriteStream(path, { fd: openSync(path, 'w') });
+
+const why = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+// Cleanup never turns a done clip into a failure, nor hides the real error.
+const quietly = (what: string, f: () => void) => {
+  try {
+    f();
+  } catch (err) {
+    logger.warn({ err: why(err) }, what);
+  }
+};
 
 // A recording file to copy from, and what to do once copied (unpin, or remove).
 interface Source { file: string; release: () => void; streamed: boolean }
@@ -152,50 +171,65 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
 
     // One try at a file: the cache's copy (pinned), or a fetch at low
     // priority into the cache or, when the cache can't keep it (or on the
-    // second try), streamed to a temp file. Null: neither (the fetch was
-    // another's that was aborted, or the file went before it was pinned).
-    const obtain = async (entry: RecordingEntry, attempt: number): Promise<Source | null> => {
+    // second try), streamed to a temp file. 'viewer': in temp mode a viewer
+    // took the client slot (it has the file). Null: nothing usable (the fetch
+    // was another's that was aborted, or the file went before it was pinned).
+    const obtain = async (entry: RecordingEntry, attempt: number, signal: AbortSignal): Promise<Source | 'viewer' | null> => {
       const cached = d.cache.open(entry.id);
       if (cached) return { file: d.cache.path(entry.id), release: cached, streamed: false };
-      if (downloads++ > 0) await sleep(REPAIR_GAP_MS, ctx.signal);
-      if (ctx.signal.aborted) throw abortError('cancelled');
-      const { fetch, created } = d.fetcher.get(entry, { priority: 'low', signal: ctx.signal });
-      let tmp: { path: string; w: WriteStream } | null = null;
-      const drop = async () => {
-        if (!tmp) return;
-        await closed(tmp.w);
-        rmSync(tmp.path, { force: true });
-        tmp = null;
-      };
+      if (downloads++ > 0) await sleep(REPAIR_GAP_MS, signal);
+      if (signal.aborted) throw abortError('cancelled');
+      let tmp: { path: string; w: Writable; err?: Error } | null = null;
       if (attempt > 0 || !d.fetcher.canKeep(entry.size)) {
-        // entry.id is an SD name (fetcher.get checked it): no path separators.
+        // entry.id is an SD name (the list's): no path separators.
         const path = join(tempDir, `${entry.id}.part`);
-        const w = createWriteStream(path);
-        w.on('error', () => undefined); // seen as an incomplete file below
-        tmp = { path, w };
-        if (!fetch.attach(w, () => undefined)) await drop(); // another client has it: wait for the cache
+        let w: Writable;
+        try {
+          w = (d.openTemp ?? openTempFile)(path);
+        } catch (err) {
+          throw new Error(`the temp file could not be made: ${why(err)}`);
+        }
+        const t: { path: string; w: Writable; err?: Error } = { path, w };
+        w.on('error', (err) => void (t.err ??= err));
+        tmp = t;
       }
+      const diskError = () => (tmp?.err ? new Error(`the temp file failed: ${tmp.err.message}`) : null);
+      let keep = false;
       try {
-        await settled(fetch, ctx.signal, tmp?.w);
-      } catch (err) {
-        await drop();
-        if (isAbort(err) && !ctx.signal.aborted && !created) return null; // another's fetch was aborted: try again
-        throw err;
-      }
-      if (fetch.kept) {
-        const unpin = d.cache.open(entry.id);
-        if (unpin) {
-          await drop();
-          return { file: d.cache.path(entry.id), release: unpin, streamed: false };
+        const { fetch, created, waiter } = d.fetcher.get(entry, { priority: 'low', signal });
+        // Viewers first: the temp writer takes the client slot only when the
+        // fetch starts and no viewer has attached meanwhile.
+        if (tmp) fetch.attachWhenRunning(tmp.w, () => undefined);
+        try {
+          await settled(fetch, signal, { waiter, res: tmp?.w });
+        } catch (err) {
+          const disk = diskError();
+          if (disk) throw disk; // the temp file failed (a full disk): not "no reader left"
+          if (isAbort(err) && !signal.aborted && !created) return null; // another's fetch was aborted: try again
+          throw err;
+        }
+        const disk = diskError();
+        if (disk) throw disk;
+        if (fetch.kept) {
+          const unpin = d.cache.open(entry.id);
+          if (unpin) return { file: d.cache.path(entry.id), release: unpin, streamed: false };
+        }
+        if (!tmp) return null;
+        if (!fetch.holds(tmp.w)) return fetch.kept ? null : 'viewer';
+        const t = tmp;
+        const whole = await finished(t.w).then(() => statSync(t.path).size === entry.size, () => false);
+        const late = diskError();
+        if (late) throw late;
+        if (!whole) return null;
+        keep = true;
+        return { file: t.path, release: () => rmSync(t.path, { force: true }), streamed: true };
+      } finally {
+        if (tmp && !keep) {
+          const t = tmp;
+          await closed(t.w);
+          quietly('repair_temp_cleanup_failed', () => rmSync(t.path, { force: true }));
         }
       }
-      if (tmp) {
-        const t: { path: string; w: WriteStream } = tmp;
-        const whole = await finished(t.w).then(() => statSync(t.path).size === entry.size, () => false);
-        if (whole) return { file: t.path, release: () => rmSync(t.path, { force: true }), streamed: true };
-      }
-      await drop();
-      return null;
     };
 
     for (const [i, c] of list.entries()) {
@@ -226,14 +260,23 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
         stopped = 'max-gb';
         break;
       }
+      // This clip's own signal, linked to the run's and unlinked after the
+      // clip: the fetcher's and the waits' listeners never pile up on the run's.
+      const clip = new AbortController();
+      const link = () => clip.abort();
+      ctx.signal.addEventListener('abort', link, { once: true });
       try {
         // The camera path comes from a Search (the 30 s day cache), never from the report.
-        const entry = await d.list.find(c.id, ctx.signal);
+        const entry = await d.list.find(c.id, clip.signal);
         if (!entry) {
           skip(c, 'gone-from-camera');
           continue;
         }
-        const src = (await obtain(entry, 0)) ?? (await obtain(entry, 1));
+        const src = (await obtain(entry, 0, clip.signal)) ?? (await obtain(entry, 1, clip.signal));
+        if (src === 'viewer') {
+          skip(c, 'viewer');
+          continue;
+        }
         if (!src) throw new Error('the recording could not be kept or streamed');
         try {
           const row = await d.indexer().addRecording(src.file, { start: entry.start, stream: s.stream });
@@ -242,7 +285,7 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
           inARow = 0;
           items.push({ id: c.id, start: c.start, result: 'ok', clipId: row.id, bytes: row.size, ...(src.streamed ? { streamed: true as const } : {}) });
         } finally {
-          src.release(); // the pin is held only for the copy
+          quietly('repair_release_failed', src.release); // the pin is held only for the copy
         }
       } catch (err) {
         if (isAbort(err) && ctx.signal.aborted) break;
@@ -254,11 +297,13 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
           skip(c, 'gone-from-camera');
           continue;
         }
-        fail(c, err instanceof Error ? err.message : String(err));
+        fail(c, why(err));
         const offline = (err instanceof SearchError && err.code === 'camera_offline') || (err instanceof BaichuanError && err.code === 'offline');
         if (offline) stopped = 'camera_offline';
         else if (err instanceof BaichuanError && err.code === 'refused') stopped = 'refused';
         if (stopped) break;
+      } finally {
+        ctx.signal.removeEventListener('abort', link);
       }
     }
     if (!stopped && !ctx.signal.aborted && all.length > list.length) stopped = 'clip-cap';
