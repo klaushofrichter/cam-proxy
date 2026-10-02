@@ -31,6 +31,20 @@ describe('classifyFtp', () => {
   it('on and pointing at this proxy: on, no mismatch', () => {
     expect(classifyFtp(camFtp(), TARGET)).toEqual({ state: 'on', enable: true, server: '192.168.1.50', port: 2121, user: 'camera', mismatch: [] });
   });
+  it('the camera masks the user (ca**ra, measured 2026-10-02): compared with the same mask of the expected user', () => {
+    expect(classifyFtp(camFtp({ userName: 'ca**ra' }), TARGET)).toMatchObject({ state: 'on', user: 'ca**ra', mismatch: [] });
+    expect(classifyFtp(camFtp({ userName: 'ca**ra' }), { ...TARGET, user: 'proxyuser' })).toMatchObject({ state: 'elsewhere', mismatch: ['user'] });
+    expect(classifyFtp(camFtp({ userName: 'ca**ra' }), { ...TARGET, user: 'cabbra' })).toMatchObject({ state: 'on' }); // same first and last two: indistinguishable
+  });
+  it('more stars: ca***ra matches a 7-character expected user, not a 6-character one; other first/last characters never match', () => {
+    expect(classifyFtp(camFtp({ userName: 'ca***ra' }), { ...TARGET, user: 'cameora' })).toMatchObject({ state: 'on', mismatch: [] });
+    expect(classifyFtp(camFtp({ userName: 'ca***ra' }), TARGET)).toMatchObject({ state: 'elsewhere', mismatch: ['user'] });
+    expect(classifyFtp(camFtp({ userName: 'ca**ra' }), { ...TARGET, user: 'camexxx' })).toMatchObject({ state: 'elsewhere' });
+  });
+  it('a short expected user (under 5 characters) is compared literally, even against a masked answer', () => {
+    expect(classifyFtp(camFtp({ userName: 'cam' }), { ...TARGET, user: 'cam' })).toMatchObject({ state: 'on' });
+    expect(classifyFtp(camFtp({ userName: 'ca**am' }), { ...TARGET, user: 'cam' })).toMatchObject({ state: 'elsewhere', mismatch: ['user'] });
+  });
   it('enable 0: off, even with the server still pointing here (2026-10-01)', () => {
     expect(classifyFtp(camFtp({ enable: 0 }), TARGET)).toMatchObject({ state: 'off', enable: false, mismatch: [] });
   });

@@ -3,7 +3,7 @@ import request from 'supertest';
 import { startSim } from './helpers/sim';
 import { startProxy, auth, until, freePort, ADMIN_TOKEN } from './helpers/proxy';
 import { listClips } from '../src/catalog/clips';
-import { ftpObject } from '../src/clips/camera-ftp';
+import { cameraFtpOff, FtpNotConfiguredError, ftpObject } from '../src/clips/camera-ftp';
 
 let sim: Awaited<ReturnType<typeof startSim>>;
 let p: Awaited<ReturnType<typeof startProxy>>;
@@ -102,4 +102,61 @@ describe('ftpObject', () => {
     expect(() => ftpObject({}, { server: '', port: 2121, user: 'camera', password: 'x'.repeat(24), tls: true, stream: 'main' })).toThrow(/server/);
     expect(ftpObject({}, { server: '10.0.0.2', port: 2121, user: 'camera', password: 'x'.repeat(24), tls: true, stream: 'main' }).server).toBe('10.0.0.2');
   });
+});
+
+// GetFtpV20 masks the user (and maybe the password): a Set built from its
+// answer must never write those back (cam-sim answers the same since its #67).
+describe('cameraFtpOff with a masked answer', () => {
+  const stub = (ftp: Record<string, unknown>) => {
+    const sent: any[] = [];
+    const client = { command: async (cmd: string, param: any) => { if (cmd === 'SetFtpV20') sent.push(param); return cmd === 'GetFtpV20' ? { Ftp: ftp } : {}; } } as any;
+    return { sent, client };
+  };
+  const masked = { enable: 1, server: '192.168.1.220', port: 2121, userName: 'ca**ra', password: 'ft**********zz', onlyFtps: 1, autoDir: 1, schedule: { channel: 0, table: { MD: '1' } } };
+  const clear = { ...masked, userName: 'camera', password: 'camera-own-password' };
+
+  it('with a configured password: writes the proxy’s user and password, enable 0, the rest kept; nothing masked', async () => {
+    const { sent, client } = stub(masked);
+    await cameraFtpOff(client, { user: 'camera', password: 'real-ftp-password' });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].Ftp).toEqual({ ...masked, enable: 0, userName: 'camera', password: 'real-ftp-password' });
+    expect(JSON.stringify(sent)).not.toContain('*');
+  });
+  it('without a password and unmasked credentials: keeps the camera’s own, enable 0 (a safety action)', async () => {
+    const { sent, client } = stub(clear);
+    await cameraFtpOff(client);
+    expect(sent[0].Ftp).toEqual({ ...clear, enable: 0 });
+  });
+  it('without a password and a masked user or password: refuses (FtpNotConfiguredError), sends nothing', async () => {
+    for (const ftp of [masked, { ...clear, userName: 'ca**ra' }, { ...clear, password: 'ca**********ra' }]) {
+      const { sent, client } = stub(ftp);
+      await expect(cameraFtpOff(client, { user: 'camera', password: '' })).rejects.toBeInstanceOf(FtpNotConfiguredError);
+      await expect(cameraFtpOff(client)).rejects.toThrow(/masked/);
+      expect(sent).toHaveLength(0);
+    }
+  });
+});
+
+// The control API: 409 not_configured when off would write masked credentials.
+describe('camera-ftp-off without a configured FTP password', () => {
+  it('409 not_configured when the camera answers a masked user; nothing is written; unmasked works', async () => {
+    const s = await startSim();
+    const q = await startProxy(s, {}); // ftp.enabled false: no password needed
+    try {
+      const ftp = s.sim.engine.settings.running.Ftp;
+      Object.assign(ftp, { enable: 1, server: '127.0.0.1', userName: 'ca**ra' }); // as the real camera answers
+      const off = () => request(q.base).post('/control/actions/camera-ftp-off').set(admin());
+      const r = await off();
+      expect(r.status).toBe(409);
+      expect(r.body.error).toBe('not_configured');
+      expect(r.body.detail).toMatch(/masked/);
+      expect(ftp.enable).toBe(1);
+      ftp.userName = 'camera'; // the sim doesn't mask yet in this release
+      expect((await off()).status).toBe(200);
+      expect(ftp.enable).toBe(0);
+    } finally {
+      await q.proxy.stop();
+      await s.close();
+    }
+  }, 30_000);
 });
