@@ -119,12 +119,17 @@ Everything else can stay at its default.
 - `CAMPROXY_AUDIT_TOKEN` (optional): a read-only token for `GET
   /control/audit` (docs/audit-log.md). Leave it unset until a poller exists;
   the admin token reads the audit log too.
+- `CAMPROXY_POE_SWITCH_PASSWORD` (optional): the PoE switch's web password,
+  for "Power-cycle camera" ([poe-switch.md](poe-switch.md)). Set it together
+  with `camera.poeSwitch` in `config.json` (cam1: `sscpoe-web`,
+  `192.168.1.217`, port 8), then recreate the container. Without it the
+  power-cycle answers 409 `not_configured`.
 
 Copy them without printing them. For example, pipe just those lines of a local
 `.env` over SSH:
 
 ```sh
-grep -E '^CAMPROXY_(TOKENS|ADMIN_TOKEN|CAMERA_PASSWORD|FTP_PASSWORD|GOOGLE_VISION_KEY|AUDIT_TOKEN)=' .env \
+grep -E '^CAMPROXY_(TOKENS|ADMIN_TOKEN|CAMERA_PASSWORD|FTP_PASSWORD|GOOGLE_VISION_KEY|AUDIT_TOKEN|POE_SWITCH_PASSWORD)=' .env \
   | ssh <user>@<pi> 'umask 077; cat > /srv/cam-proxy/.env'
 ```
 

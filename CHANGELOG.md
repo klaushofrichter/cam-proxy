@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Maintenance page: "Power-cycle camera" cuts the camera's PoE power on its switch for 10 s and turns it on again (`POST /control/actions/camera-powercycle`, admin only), when a switch is configured: `camera.poeSwitch` (`model` `sscpoe-web` for the STEAMEMO GPS-208 and kin, `host`, `port`, `ports`, `offSeconds`; they apply at once) and the optional secret `CAMPROXY_POE_SWITCH_PASSWORD`. It refuses a port with PoE off or no power draw (409 `no_power`), says when someone is logged in to the switch's web UI (409 `switch_busy`) or the password is wrong (502 `switch_auth`), and always logs out of the switch. The camera's state shows "power-cycling", then "rebooting" until it answers again; the 120 s cooldown is shared with "Reboot camera". Audited as `camera-powercycle` (never the password). The Status page and a new PoE switch card on the Settings page show the switch and its last reading ("Read the switch now", `POST /control/actions/poe-switch-read`); the proxy never polls the switch. See docs/poe-switch.md.
+- Settings page: an optional number without a value yet (like `camera.poeSwitch.port`) is saved as a number; `GET /control/config` answers each setting's `type`.
+- Maintenance page: "Restart proxy" can't be confirmed twice, and a failed first `/health` read no longer reloads the page on the old process.
+- A refused camera reboot says "in progress" while one is being sent, instead of "rebooted less than 2 minutes ago".
+
 ## v2026.10.01.4
 
 - Maintenance page: "Reboot camera" reboots the camera (`POST /control/actions/camera-reboot`, admin only). It asks first; afterwards the page shows "Rebooting…" and the camera's state, and the Status page shows "rebooting (requested HH:MM)" until the camera answers again or 5 minutes pass. Another reboot within 120 s is refused (429). The proxy drops its camera token and rides it out: ONVIF re-subscribes on its own. Audited as `camera-reboot`, with a second record when the camera is back (`downSec`) or not back after 5 minutes.
