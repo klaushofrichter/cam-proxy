@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'fs/promises';
-import { join } from 'path';
+import { join, resolve, sep } from 'path';
 import type { AuditLog } from '../audit/audit-log';
 import { logger } from '../log';
 
@@ -211,7 +211,12 @@ export class InventoryRunner {
 
   private async read(kind: string, id: string): Promise<InventoryReport | undefined> {
     try {
-      return JSON.parse(await readFile(join(this.d.dir, kind, `${id}.json`), 'utf8')) as InventoryReport;
+      // Resolved and kept inside the inventory folder (the id is checked
+      // against RUN_ID already; this is also what CodeQL looks for).
+      const root = resolve(this.d.dir);
+      const path = resolve(root, kind, `${id}.json`);
+      if (!path.startsWith(root + sep)) return undefined;
+      return JSON.parse(await readFile(path, 'utf8')) as InventoryReport;
     } catch {
       return undefined;
     }
