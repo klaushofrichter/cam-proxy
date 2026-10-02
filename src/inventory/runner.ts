@@ -50,11 +50,18 @@ export class InventoryBusyError extends Error {
   }
 }
 
+export class InventoryStoppingError extends Error {
+  constructor() {
+    super('the proxy is stopping: no inventory is started');
+  }
+}
+
 interface Current { view: RunningView; ac: AbortController; cancelledBy?: 'request' | 'stop'; settled: boolean; done: Promise<InventoryReport> }
 
 export class InventoryRunner {
   readonly checks: Partial<Record<string, Check>>;
   private cur: Current | null = null;
+  private stopping = false;
   private readonly now: () => number;
 
   constructor(private readonly d: { dir: string; audit: Pick<AuditLog, 'write'>; camera: () => string; checks: Partial<Record<string, Check>>; now?: () => number; keep?: number }) {
@@ -70,8 +77,10 @@ export class InventoryRunner {
     return this.cur ? { ...this.cur.view, progress: { ...this.cur.view.progress } } : null;
   }
 
-  // Starts a run in the background; throws InventoryBusyError while one runs.
+  // Starts a run in the background; throws InventoryBusyError while one runs,
+  // InventoryStoppingError once stop() was called.
   start(kind: string, who: Requester): { runId: string; done: Promise<InventoryReport> } {
+    if (this.stopping) throw new InventoryStoppingError();
     if (this.cur) throw new InventoryBusyError(this.cur.view.runId);
     const check = Object.hasOwn(this.checks, kind) ? this.checks[kind] : undefined;
     if (!check) throw new Error(`no inventory of kind ${kind}`);
@@ -101,6 +110,7 @@ export class InventoryRunner {
 
   // The proxy stops: cancel, and wait until the run is saved and audited.
   async stop(): Promise<void> {
+    this.stopping = true;
     const c = this.cur;
     if (!c) return;
     this.cancel('stop');

@@ -22,7 +22,7 @@ import { eventsStored } from './metrics';
 import { readCookie, SESSION_COOKIE, SESSION_MS, type createSessionSigner } from './session';
 import type { createLoginLinks } from './login-links';
 import type { RecordingsStatus } from '../recordings/side';
-import { InventoryBusyError, RUN_ID, type InventoryRunner } from '../inventory/runner';
+import { InventoryBusyError, InventoryStoppingError, RUN_ID, type InventoryRunner } from '../inventory/runner';
 
 export interface FtpStatus {
   enabled: boolean;
@@ -416,6 +416,7 @@ export function controlApi(d: ControlDeps): express.Router {
           const { runId } = d.inventory.start(kind, { requestedBy, ip: clientIp(req), userAgent: req.get('user-agent') });
           return void res.status(202).json({ runId });
         } catch (err) {
+          if (err instanceof InventoryStoppingError) return fail(503, 'stopping', err.message);
           if (!(err instanceof InventoryBusyError)) throw err;
           return fail(409, 'inventory_busy', err.message, { runId: err.runId });
         }

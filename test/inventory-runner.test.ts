@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { AuditLog } from '../src/audit/audit-log';
-import { InventoryBusyError, InventoryRunner, MAX_ITEMS, RUN_ID, type Check, type CheckResult } from '../src/inventory/runner';
+import { InventoryBusyError, InventoryRunner, InventoryStoppingError, MAX_ITEMS, RUN_ID, type Check, type CheckResult } from '../src/inventory/runner';
 
 const T0 = Date.UTC(2026, 9, 2, 12, 0);
 const result = (n: number, items = 0): CheckResult => ({
@@ -133,6 +133,13 @@ describe('InventoryRunner', () => {
     expect(records(audit)[0].cam_proxy).toMatchObject({ outcome: 'cancelled', cancelledBy: 'stop' });
     expect(runner.running()).toBeNull();
     await runner.stop(); // nothing runs: returns at once
+  });
+
+  it('refuses to start once stop() was called', async () => {
+    const { runner } = setup({ stills: async () => result(1) });
+    await runner.stop();
+    expect(() => runner.start('stills', who)).toThrow(InventoryStoppingError);
+    expect(runner.running()).toBeNull();
   });
 
   it('knows only the kinds it has a check for', () => {
