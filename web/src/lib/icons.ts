@@ -33,6 +33,7 @@ export const ICONS = {
   download: 'M12 4v11m0 0-4-4m4 4 4-4M5 20h14',
   audit: 'M7 3h8l4 4v14H7zM14 3v5h5M10 14l2 2 3-4',
   bolt: 'M13 2 4 14h7l-1 8 9-12h-7z',
+  alert: 'M12 3 2 20h20L12 3zm0 6v5m0 3h.01',
 } as const;
 
 export type IconName = keyof typeof ICONS;

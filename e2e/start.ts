@@ -57,7 +57,8 @@ async function main() {
   const sessionSecret = Buffer.alloc(32, 7);
   let proxy: Proxy;
   const boot = async () => {
-    proxy = createProxy(loadConfig(env, { cwd: dir }), { sessionSecret, exit: () => void boot().catch((err: Error) => process.stderr.write(`e2e: restart failed: ${err.message}\n`)) });
+    // The camera's FTP settings every 2 s, not every 5 min (ftp-health.spec, #93).
+    proxy = createProxy(loadConfig(env, { cwd: dir }), { sessionSecret, cameraFtpCheckMs: 2000, exit: () => void boot().catch((err: Error) => process.stderr.write(`e2e: restart failed: ${err.message}\n`)) });
     await proxy.start({ port: PROXY_PORT, host: '127.0.0.1' });
   };
   await boot();
