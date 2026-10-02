@@ -2,7 +2,7 @@
   import { status, stats } from '../lib/state';
   import { pausedText, usageLine } from '../lib/analytics';
   import { daysUntilFullText } from '../lib/format';
-  import { cameraStateText } from '../lib/maintenance';
+  import { cameraStateText, poeLine } from '../lib/maintenance';
 
   const gb = (b: number) => `${(b / 1024 ** 3).toFixed(1)} GB`;
   const mb = (b: number) => `${(b / 1024 ** 2).toFixed(1)} MB`;
@@ -20,11 +20,12 @@
       <div class="card" data-testid="card-camera">
         <h3>Camera</h3>
         <dl>
-          <dt>State</dt><dd class={$status.camera.reboot?.phase === 'rebooting' ? 'warn' : $status.camera.online ? 'ok' : 'bad'} data-testid="camera-state">{cameraStateText($status.camera)}</dd>
+          <dt>State</dt><dd class={$status.camera.reboot?.phase === 'rebooting' || $status.camera.reboot?.phase === 'power-cycling' ? 'warn' : $status.camera.online ? 'ok' : 'bad'} data-testid="camera-state">{cameraStateText($status.camera)}</dd>
           <dt>Since</dt><dd>{ago($status.camera.since)}</dd>
           <dt>Model</dt><dd>{#if $status.camera.model && $status.camera.webUiUrl}<a href={$status.camera.webUiUrl} target="_blank" rel="noopener noreferrer" title="The camera's own web page">{$status.camera.model}</a>{:else}{$status.camera.model ?? '—'}{/if}</dd>
           <dt>Firmware</dt><dd>{$status.camera.firmware ?? '—'}</dd>
           <dt>Clock offset</dt><dd>{$status.camera.clockOffsetMs === undefined ? '—' : `${($status.camera.clockOffsetMs / 1000).toFixed(1)} s`}</dd>
+          {#if $status.camera.poeSwitch && $status.camera.poeSwitch.model !== 'none'}<dt>PoE switch</dt><dd data-testid="camera-poe">{poeLine($status.camera.poeSwitch)}</dd>{/if}
           {#if $status.camera.error}<dt>Last error</dt><dd class="bad">{$status.camera.error}</dd>{/if}
         </dl>
       </div>

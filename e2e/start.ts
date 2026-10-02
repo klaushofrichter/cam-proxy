@@ -6,7 +6,8 @@ import { createCamSim } from 'cam-sim';
 import { loadConfig } from '../src/config/load';
 import { createProxy, type Proxy } from '../src/proxy';
 import { startVisionMock } from '../test/helpers/vision-mock';
-import { ADMIN_TOKEN, CLIENT_TOKEN, FTP, FTP_PASSWORD, PROXY_PORT, SIM, SIM_CONTROL_TOKEN, VISION_KEY, VISION_MOCK_PORT } from './env';
+import { startPoeSwitchMock } from '../test/helpers/poe-switch-mock';
+import { ADMIN_TOKEN, CLIENT_TOKEN, FTP, FTP_PASSWORD, POE_SWITCH_PASSWORD, POE_SWITCH_PORT, PROXY_PORT, SIM, SIM_CONTROL_TOKEN, VISION_KEY, VISION_MOCK_PORT } from './env';
 
 // go2rtc and MediaMTX from tools/ (scripts/install-*.sh) unless CI set them.
 const tool = (name: string) => (existsSync(join(__dirname, '..', 'tools', name)) ? join(__dirname, '..', 'tools', name) : undefined);
@@ -36,7 +37,19 @@ async function main() {
   }));
   // A stand-in for Google Vision; GET /calls tells the tests how often it was asked.
   const vision = await startVisionMock({ key: VISION_KEY, port: VISION_MOCK_PORT });
-  const env = { CAMPROXY_GOOGLE_VISION_KEY: VISION_KEY, CAMPROXY_GOOGLE_VISION_URL: vision.url, CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: 'e2e-proxy-pw', CAMPROXY_FTP_PASSWORD: FTP_PASSWORD };
+  // A stand-in for the camera's PoE switch (#85; the real one is never used):
+  // port 8 (index 0) powers cam-sim, so a power-cycle really takes it away.
+  // No switch is configured at start; maintenance.spec sets camera.poeSwitch.
+  const poeSwitch = await startPoeSwitchMock({
+    password: POE_SWITCH_PASSWORD,
+    port: POE_SWITCH_PORT,
+    onPoe: (index, on) => {
+      if (index !== 0) return;
+      if (on) void sim.engine.powerOn(3000);
+      else sim.engine.powerOff();
+    },
+  });
+  const env = { CAMPROXY_POE_SWITCH_PASSWORD: POE_SWITCH_PASSWORD, CAMPROXY_GOOGLE_VISION_KEY: VISION_KEY, CAMPROXY_GOOGLE_VISION_URL: vision.url, CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: 'e2e-proxy-pw', CAMPROXY_FTP_PASSWORD: FTP_PASSWORD };
   // The restart-proxy action (#71) ends with exit(0), and a supervisor starts
   // the process again. Here the exit is stubbed: a new proxy starts in this
   // process on the same port and data folder, so the server stays up. A fixed
@@ -52,6 +65,7 @@ async function main() {
     await proxy.stop({ reason: sig });
     await sim.close();
     await vision.close();
+    await poeSwitch.close();
     process.exit(0);
   };
   process.once('SIGINT', () => void stop('SIGINT'));

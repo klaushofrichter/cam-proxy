@@ -139,7 +139,7 @@ come only from the environment.
 | Group | Settings (defaults) |
 |---|---|
 | `server` | `port` (8480), `dataDir` (`data`, relative to the config file), `logLevel` (`info`), `publicUrl` (where people reach this proxy; reported in `/api/cameras` as `publicUrl`, so cams can link to it), `trustProxy` (0: none; behind the cluster ingress 1, so rate limits count clients by X-Forwarded-For) |
-| `camera` | `id` (`cam1`), `name` (`Den`), `host` (required), `protocol` (`https`), `tlsName`, `webUiUrl` (the camera's own web page, linked from the admin UI; default `https://<host>/`, `none` for no link), `user` (`proxy`), `onvifPort` (8000), `rtspPort` (554), `statusPollS` (30) |
+| `camera` | `id` (`cam1`), `name` (`Den`), `host` (required), `protocol` (`https`), `tlsName`, `webUiUrl` (the camera's own web page, linked from the admin UI; default `https://<host>/`, `none` for no link), `user` (`proxy`), `onvifPort` (8000), `rtspPort` (554), `statusPollS` (30); `poeSwitch`: the camera's PoE switch for a power-cycle, `model` (`none`; `sscpoe-web` for the STEAMEMO GPS-208 and kin), `host` (its address, optional `:port`), `port` (the switch port the camera is on, 1–48), `ports` (8: the switch's PoE port count), `offSeconds` (10, 5–60). The `poeSwitch` settings apply at once; see [docs/poe-switch.md](docs/poe-switch.md) |
 | `events` | `onvif.subscribeMin` (10), `onvif.pullTimeoutS` (30), `poll.enabled` (true), `poll.intervalS` (2), `poll.afterOnvifDownS` (60), `maxOpenMin` (10) |
 | `retention` | `stillsDays` (7), `previewsDays` (14), `clipsDays` (7), `eventsDays` (30), `auditDays` (90), `streamLogDays` (7), `intervalMin` (60) |
 | `storage` | `maxPercent` (85) or `maxBytes`, `minFreeBytes` (2 GB), `keepHours` (per kind: `stills` 24, `clips` 24, `previews` 72) |
@@ -156,6 +156,7 @@ come only from the environment.
 | `CAMPROXY_CAMERA_PASSWORD` | the password of the proxy's camera user (`camera.user`) |
 | `CAMPROXY_FTP_PASSWORD` | the camera's FTP login to the proxy; required when `ftp.enabled` |
 | `CAMPROXY_AUDIT_TOKEN` | optional: a read-only token for `GET /control/audit`; 32+ characters, different from the other tokens |
+| `CAMPROXY_POE_SWITCH_PASSWORD` | optional: the PoE switch's web password, for the camera power-cycle (`camera.poeSwitch`); never logged, returned or audited |
 
 `scripts/sync-secrets.sh` generates the tokens and the FTP password into
 `.env` (mode 600), `--rotate <KEY>` replaces one, and it prints names only.
@@ -430,14 +431,17 @@ arrive.
 
 | Route | |
 |---|---|
-| `GET /control/status` | `{version, camera (incl. webUiUrl, serial, and reboot: {requestedAt, confirmed, phase: rebooting\|back\|not-back, endedAt, downSec} or null), intake, sse, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures}, analytics: [{…, keyMasked, keySource}], analyticsUnmapped}` |
+| `GET /control/status` | `{version, camera (incl. webUiUrl, serial, reboot: {kind: reboot\|powercycle, requestedAt, confirmed, phase: power-cycling\|rebooting\|back\|not-back, offAt, endedAt, downSec} or null, and poeSwitch: {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures}, analytics: [{…, keyMasked, keySource}], analyticsUnmapped}` |
 | `GET /control/stats` | `{disk: {catalog, audit, stills, previews, clips}` (each `{bytes, files, oldest, newest, growthPerDay}`), `events, stream, sse, storage}` |
-| `GET /control/config` | every setting: `{value, source, restart, pending, next?}`; secrets never appear |
+| `GET /control/config` | every setting: `{value, source, restart, pending, next?, type}` (`type`: `integer`, `boolean` or `string`); secrets never appear |
 | `PUT /control/config` | overrides, e.g. `{"sse":{"pingS":10}}`; a bad value answers 400 naming it, and nothing is written |
 | `PUT /control/secrets/google-vision-key` | `{"key":"..."}` (20 to 200 printable ASCII characters, no spaces; else 400 `invalid`): sets the Google Vision key in memory only, at once, until the process restarts; answers `{keySource: "manual", keyMasked, replaced}`, never the key; audited as `secret-override` |
 | `DELETE /control/config/{path}` | removes one override |
 | `POST /control/actions/{name}` | `onvif-resubscribe`, `restart` (202, started: reconnects to the camera and applies restart settings; the process runs on); `camera-test`, `retention-run` (`{"dryRun":true}` previews); `camera-ftp-setup`, `camera-ftp-test` (409 `not_configured` without `ftp.publicHost` or the FTP password), `camera-ftp-off`; any camera call that fails answers 502 `camera_error` |
-| `POST /control/actions/camera-reboot` | reboots the camera (offline about a minute; every camera token becomes invalid). 202 `{confirmed}`: `false` when the camera dropped the connection after receiving the request; 429 `too_soon` (with `Retry-After`) within 120 s of the last reboot; 502 when the request never reached the camera. The proxy rides it out: it drops its camera token, ONVIF re-subscribes on its own, and `/control/status` shows `camera.reboot` until the camera answers again or 5 minutes pass. Audited as `camera-reboot` |
+| `POST /control/actions/camera-reboot` | reboots the camera (offline about a minute; every camera token becomes invalid). 202 `{confirmed}`: `false` when the camera dropped the connection after receiving the request; 429 `too_soon` (with `Retry-After`) within 120 s of the last reboot or power-cycle, or while one is being sent; 502 with the camera error code (`camera_offline`, `camera_auth_failed` or `camera_error`) when the request never reached the camera. The proxy rides it out: it drops its camera token, ONVIF re-subscribes on its own, and `/control/status` shows `camera.reboot` until the camera answers again or 5 minutes pass. Audited as `camera-reboot` |
+| `POST /control/actions/camera-powercycle` | power-cycles the camera through its PoE switch (`camera.poeSwitch`): logs in to the switch, checks that the camera's port has PoE on and draws power, cuts it for `offSeconds`, turns it on again and logs out (always). Once the PoE-off request is sent, any failure turns PoE on again (retried for about 60 s) and answers 502 `switch_error` with `poeOff: true` and `turnedOn`. 202 `{offAt, onAt, watts}` once PoE is back on; 409 `not_configured` (no switch, or no `CAMPROXY_POE_SWITCH_PASSWORD`), `switch_busy` (someone is logged in to the switch's web UI) or `no_power` (the port has PoE off or draws 0 W: nothing is switched); 502 `switch_auth` (a wrong password), `switch_unreachable` or `switch_error`; 429 as `camera-reboot` (the 120 s cooldown is shared). `/control/status` shows `camera.reboot` with `kind: powercycle`, `power-cycling` while PoE is off, then `rebooting` until the camera answers. Audited as `camera-powercycle`. See [docs/poe-switch.md](docs/poe-switch.md) |
+| `POST /control/actions/camera-poe-on` | recovery: turns the camera's port on if its PoE is off (no power check, no cooldown; the switch lock applies). 200 the reading plus `wasOn`; 409 and 502 as `camera-powercycle`. Audited as `camera-poe-on` |
+| `POST /control/actions/poe-switch-read` | reads the camera's port on the switch now (log in, read, log out; never polled): `{at, port, index, poe, watts, link, sn, firmware}`; 409 and 502 as `camera-powercycle`. Audited as `control-action` |
 | `POST /control/actions/restart-proxy` | restarts the proxy process: 202, then the normal graceful stop (the same as SIGTERM; `proxy-stop` reason `restart-requested`) and exit 0, also after 15 s if the stop hangs. Compose (`restart: unless-stopped`) or the cluster starts it again; run directly (`npm start`), the process just ends. Admin sessions end with the process. Audited as `proxy-restart` |
 | `GET /control/audit` | the audit log as JSON lines: `limit`, `before`/`after` (cursors), `from`, `to`, `action`, `outcome`; admin token, admin session or `CAMPROXY_AUDIT_TOKEN`; HEAD answers like GET without the body. See [docs/audit-log.md](docs/audit-log.md) |
 | `GET /health` | `{ok, version, startedAt}` (no auth): `startedAt` (ms) tells a new process apart |
@@ -459,11 +463,16 @@ exchanged for the cookie and not stored in the browser.
 - **Audit:** who did what, newest first, 50 per page, filtered by action
   and outcome; click a row for its JSON.
 - **Settings:** every setting with its source; changes become overrides, and
-  can be reset.
+  can be reset. A PoE switch card shows the configured switch and its last
+  reading, with "Read the switch now".
 - **Maintenance:** the actions, including the camera FTP buttons; the log
-  updates every 10 s. "Reboot camera" and "Restart proxy" ask first, in a
-  dialog on the page (Cancel or Esc sends nothing). After a reboot the page
-  shows "Rebooting…" and the camera's state until it answers again; after a
+  updates every 10 s. "Reboot camera", "Power-cycle camera" (only with a PoE
+  switch configured) and "Restart proxy" ask first, in a dialog on the page
+  (Cancel or Esc sends nothing). "Turn camera PoE on" (with a switch) turns
+  the camera's PoE on if it is off, and a red line warns while it may be off.
+  After a reboot the page shows "Rebooting…"
+  and the camera's state until it answers again (a power-cycle shows
+  "Power-cycling…" while the PoE is off first); after a
   restart it shows "Restarting…", waits for `/health` to answer with a new
   start time or version, and reloads (sign in again: sessions end with the
   process). After 2 minutes without the proxy it says so.

@@ -40,11 +40,12 @@ export function loadSecrets(env: NodeJS.ProcessEnv, ftpEnabled: boolean): Secret
     if (auditToken === adminToken || tokens.includes(auditToken)) throw new SettingError('CAMPROXY_AUDIT_TOKEN: must differ from the admin and client tokens');
   }
   const googleVisionKey = read(env, 'CAMPROXY_GOOGLE_VISION_KEY');
+  const poeSwitchPassword = read(env, 'CAMPROXY_POE_SWITCH_PASSWORD');
   const googleVisionUrl = env.CAMPROXY_GOOGLE_VISION_URL || 'https://vision.googleapis.com';
   if (!/^https?:\/\/[^\s]+$/.test(googleVisionUrl)) throw new SettingError('CAMPROXY_GOOGLE_VISION_URL: must be an http(s) URL');
   // The key travels in a header: http:// only to this machine (the test mock).
   if (/^http:/.test(googleVisionUrl) && !/^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/.test(googleVisionUrl)) {
     throw new SettingError('CAMPROXY_GOOGLE_VISION_URL: http:// only for localhost; use https://');
   }
-  return { tokens, adminToken, cameraPassword, ...(ftpPassword ? { ftpPassword } : {}), ...(auditToken ? { auditToken } : {}), ...(googleVisionKey ? { googleVisionKey } : {}), googleVisionUrl: googleVisionUrl.replace(/\/+$/, '') };
+  return { tokens, adminToken, cameraPassword, ...(ftpPassword ? { ftpPassword } : {}), ...(auditToken ? { auditToken } : {}), ...(googleVisionKey ? { googleVisionKey } : {}), ...(poeSwitchPassword ? { poeSwitchPassword } : {}), googleVisionUrl: googleVisionUrl.replace(/\/+$/, '') };
 }

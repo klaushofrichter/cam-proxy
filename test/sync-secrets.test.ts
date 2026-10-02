@@ -121,4 +121,21 @@ describe('sync-secrets.sh', () => {
     for (const l of argv) expect(l).not.toContain(AUDIT);
     expect(withIt.log('kubectl')).toContain(`CAMPROXY_AUDIT_TOKEN=${AUDIT}`); // in the env-file, piped to apply
   });
+
+  it('passes the optional PoE switch password to the cluster when set (#85), never printing it', () => {
+    const without = setup();
+    expect(without.run('--only', 'kube').status).toBe(0);
+    expect(without.log('kubectl')).not.toContain('CAMPROXY_POE_SWITCH_PASSWORD');
+
+    const PW = 'switch-pw-SECRET-5';
+    const withIt = setup(`CAMPROXY_POE_SWITCH_PASSWORD=${PW}`);
+    const dry = withIt.run('--dry-run', '--only', 'kube');
+    expect(dry.stdout).toMatch(/CAMPROXY_FTP_PASSWORD, CAMPROXY_POE_SWITCH_PASSWORD/);
+    expect(dry.stdout + dry.stderr).not.toContain(PW);
+    const r = withIt.run('--only', 'kube');
+    expect(r.status).toBe(0);
+    expect(r.stdout + r.stderr).not.toContain(PW);
+    for (const l of withIt.log('kubectl').split('\n').filter((x) => x.startsWith('ARGV'))) expect(l).not.toContain(PW);
+    expect(withIt.log('kubectl')).toContain(`CAMPROXY_POE_SWITCH_PASSWORD=${PW}`);
+  });
 });

@@ -247,7 +247,7 @@ paths:
         Admin token or admin session. Writes with the session cookie need
         `X-CamProxy-UI: 1`. A client token answers 403 `{"error":"admin_only"}`.
       responses:
-        '200': { description: '{ version, camera (incl. webUiUrl), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures}, analytics: [provider state], analyticsUnmapped: top 20 unmapped objects [{mid, name, count, lastSeen}] }' }
+        '200': { description: '{ version, camera (incl. webUiUrl, reboot {kind, requestedAt, confirmed, phase, offAt, endedAt, downSec} or null, poeSwitch {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures}, analytics: [provider state], analyticsUnmapped: top 20 unmapped objects [{mid, name, count, lastSeen}] }' }
         '401': { description: not signed in }
         '403': { description: admin_only, or csrf }
   /control/analytics:
@@ -304,7 +304,7 @@ paths:
     get:
       summary: Every setting with value, source, restart flag and pending next value
       responses:
-        '200': { description: '{ "<path>": { value, source, restart, pending, next? } }' }
+        '200': { description: '{ "<path>": { value, source, restart, pending, next?, type (integer, boolean or string) } }' }
     put:
       summary: Sets overrides (stored in overrides.json); live settings apply at once
       requestBody:
@@ -324,20 +324,25 @@ paths:
         '400': { description: unknown setting }
   /control/actions/{name}:
     post:
-      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart (the camera side), camera-reboot, restart-proxy (the process)
+      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart (the camera side), camera-reboot, camera-powercycle, camera-poe-on, poe-switch-read, restart-proxy (the process)
       description: |
         camera-reboot reboots the camera (about a minute offline; every camera token becomes invalid).
+        camera-powercycle cuts the camera's PoE on its switch (camera.poeSwitch, CAMPROXY_POE_SWITCH_PASSWORD)
+        for offSeconds and turns it on again; it answers once PoE is back on. It shares the 120 s cooldown
+        with camera-reboot. Once its PoE-off request is sent, any failure turns PoE on again and answers 502
+        with poeOff: true and turnedOn. camera-poe-on turns the camera's port on if it is off (recovery; no
+        power check, no cooldown). poe-switch-read reads the camera's port on the switch (never polled).
         restart-proxy answers 202, then stops gracefully (as on SIGTERM) and exits 0; a supervisor
         (compose, the cluster) starts it again. Both are admin only (sessions need X-CamProxy-UI) and audited.
       parameters:
         - { name: name, in: path, required: true, schema: { type: string } }
       responses:
-        '200': { description: 'camera-test and retention-run results; camera-ftp-setup/-off: {ftp} (the camera''s settings, no password); camera-ftp-test: {ok, rspCode}' }
-        '202': { description: 'started (onvif-resubscribe, restart, restart-proxy); camera-reboot: { confirmed } (false: the camera dropped the connection after receiving the request)' }
+        '200': { description: 'camera-test and retention-run results; camera-ftp-setup/-off: {ftp} (the camera''s settings, no password); camera-ftp-test: {ok, rspCode}; poe-switch-read: {at, port, index, poe, watts, link, sn, firmware}; camera-poe-on: the same plus wasOn' }
+        '202': { description: 'started (onvif-resubscribe, restart, restart-proxy); camera-reboot: { confirmed } (false: the camera dropped the connection after receiving the request); camera-powercycle: { offAt, onAt, watts } once PoE is back on' }
         '404': { description: unknown action }
-        '409': { description: 'camera-ftp-setup/-test: ftp.publicHost or the FTP password is not set' }
-        '429': { description: 'camera-reboot: too_soon, within 120 s of the last reboot (Retry-After)' }
-        '502': { description: 'the camera refused or failed the call; camera-reboot: the request never reached the camera' }
+        '409': { description: 'not_configured (camera-ftp-setup/-test: ftp.publicHost or the FTP password is not set; camera-powercycle, poe-switch-read: no switch or no CAMPROXY_POE_SWITCH_PASSWORD); camera-powercycle, poe-switch-read: switch_busy (someone is logged in to the switch''s web UI), no_power (the port has PoE off or draws 0 W; nothing switched)' }
+        '429': { description: 'camera-reboot, camera-powercycle: too_soon, within 120 s of the last reboot or power-cycle, or while one is being sent (Retry-After)' }
+        '502': { description: 'the camera refused or failed the call; camera-reboot: the request never reached the camera (camera_offline, camera_auth_failed, camera_error); camera-powercycle, camera-poe-on, poe-switch-read: switch_auth, switch_unreachable, switch_error (camera-powercycle, camera-poe-on: poeOff, turnedOn when PoE may have been cut)' }
   /control/log:
     get:
       summary: Recent log lines (info and above), redacted

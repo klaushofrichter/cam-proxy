@@ -25,7 +25,10 @@ const PROCESS = ['server.port', 'server.dataDir', 'server.trustProxy', 'composit
 export function needsProcessRestart(path: string): boolean {
   return PROCESS.includes(path);
 }
+// Live although under a restart prefix: the PoE switch is read on every use.
+const LIVE = ['camera.poeSwitch.'];
 export function needsRestart(path: string): boolean {
+  if (LIVE.some((l) => path.startsWith(l))) return false;
   return RESTART.some((r) => (r.endsWith('.') ? path.startsWith(r) : path === r));
 }
 

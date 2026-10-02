@@ -14,5 +14,7 @@ describe('audit page helpers', () => {
     expect(outcomeClass({ event: { outcome: 'success' } })).toBe('ok');
     expect(outcomeClass({})).toBe('unknown');
     expect(ACTIONS).toContain('storage-daily');
+    expect(ACTIONS).toContain('camera-powercycle');
+    expect(ACTIONS).toContain('camera-poe-on');
   });
 });

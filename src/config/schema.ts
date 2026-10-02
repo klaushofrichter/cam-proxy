@@ -30,6 +30,15 @@ export const SETTINGS: Node = {
     onvifPort: port('camera ONVIF port'),
     rtspPort: port('camera RTSP port'),
     statusPollS: int(5, 3600, 'seconds between status checks'),
+    // The PoE switch the camera hangs on (issue #85): power-cycle the camera
+    // through it. Applies at once; the password is CAMPROXY_POE_SWITCH_PASSWORD.
+    poeSwitch: {
+      model: { type: 'string', enum: ['none', 'sscpoe-web'], doc: "the camera's PoE switch: none, or sscpoe-web (the STEAMEMO/SSCPOE local web protocol: GPS-208 and kin)" },
+      host: { type: 'string', pattern: '^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$', optional: true, doc: "the switch's address or name, optional :port (http)" },
+      port: int(1, 48, 'the switch port the camera is on, as numbered on the switch', true),
+      ports: int(1, 48, "the switch's PoE port count (maps the port to its internal index)"),
+      offSeconds: int(5, 60, 'seconds the PoE stays off in a power-cycle'),
+    },
   },
   go2rtc: {
     binary: { type: 'string', pattern: '^.+$', optional: true, doc: 'go2rtc binary started by the proxy' },
@@ -162,6 +171,13 @@ export function leafPaths(node: Node = SETTINGS, prefix = ''): string[] {
     const path = prefix ? `${prefix}.${k}` : k;
     return isLeaf(v) ? [path] : leafPaths(v, path);
   });
+}
+
+// The description of one setting, e.g. leafAt('sse.pingS').
+export function leafAt(path: string): Leaf | undefined {
+  let n: Node | Leaf | undefined = SETTINGS;
+  for (const k of path.split('.')) n = n && !isLeaf(n) && Object.hasOwn(n, k) ? n[k] : undefined;
+  return n && isLeaf(n) ? n : undefined;
 }
 
 // The JSON Schema written to config.schema.json (see scripts/gen-schema.ts).

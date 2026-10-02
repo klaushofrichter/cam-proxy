@@ -104,6 +104,43 @@
           "minimum": 5,
           "maximum": 3600,
           "description": "seconds between status checks"
+        },
+        "poeSwitch": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "model": {
+              "type": "string",
+              "enum": [
+                "none",
+                "sscpoe-web"
+              ],
+              "description": "the camera's PoE switch: none, or sscpoe-web (the STEAMEMO/SSCPOE local web protocol: GPS-208 and kin)"
+            },
+            "host": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$",
+              "description": "the switch's address or name, optional :port (http)"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 48,
+              "description": "the switch port the camera is on, as numbered on the switch"
+            },
+            "ports": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 48,
+              "description": "the switch's PoE port count (maps the port to its internal index)"
+            },
+            "offSeconds": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 60,
+              "description": "seconds the PoE stays off in a power-cycle"
+            }
+          }
         }
       }
     },

@@ -8,5 +8,8 @@ export const CLIENT_TOKEN = 'e2e-client-token-not-a-secret-00000000000';
 export const SIM_CONTROL_TOKEN = 'e2e-sim-control-token-not-a-secret';
 export const VISION_MOCK_PORT = 18600;
 export const VISION_KEY = 'e2e-vision-key-not-a-secret';
+// The PoE switch mock (#85): its web protocol on this port; PoE on port 8 is cam-sim's power.
+export const POE_SWITCH_PORT = 18601;
+export const POE_SWITCH_PASSWORD = 'e2e-switch-password-not-a-secret';
 // The shared admin session (auth.setup.ts writes it; playwright.config.ts reads it).
 export const STATE_FILE = 'e2e/.auth/state.json';
