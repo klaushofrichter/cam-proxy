@@ -103,6 +103,8 @@ export class InventoryRunner {
   private readonly now: () => number;
   // The summaries per folder, read from disk once and again after each save (#106).
   private readonly summaries = new Map<string, RunSummary[]>();
+  // Bumped by each save: a list() that read the disk before a save doesn't cache.
+  private readonly generation = new Map<string, number>();
 
   constructor(private readonly d: { dir: string; audit: Pick<AuditLog, 'write'>; camera: () => string; checks: Partial<Record<string, InventoryKind>>; now?: () => number; keep?: number }) {
     this.checks = { ...d.checks };
@@ -131,7 +133,7 @@ export class InventoryRunner {
   start(kind: string, who: Requester, options: StartOptions = {}): { runId: string; done: Promise<InventoryReport> } {
     const check = this.entry(kind);
     if (!check) throw new Error(`no inventory of kind ${kind}`);
-    const opts: StartOptions = options.camera === true ? { camera: true } : {};
+    const opts: StartOptions = options.camera === true && check.camera ? { camera: true } : {};
     return this.launch(kind, kind, 'check', who, {
       title: `${check.label} inventory`,
       work: (ctx) => check.run({ ...ctx, options: opts }),
@@ -217,14 +219,15 @@ export class InventoryRunner {
 
   private async summariesOf(folder: string): Promise<RunSummary[]> {
     const hit = this.summaries.get(folder);
-    if (hit) return hit;
+    if (hit) return hit.map((r) => ({ ...r }));
+    const gen = this.generation.get(folder) ?? 0;
     const out: RunSummary[] = [];
     for (const id of await this.ids(folder)) {
       const r = await this.read(folder, id);
       if (r) out.push({ runId: r.runId, kind: r.kind, startedAt: r.startedAt, tookMs: r.tookMs, outcome: r.outcome, counts: r.counts, message: r.message });
     }
-    this.summaries.set(folder, out);
-    return out;
+    if ((this.generation.get(folder) ?? 0) === gen) this.summaries.set(folder, out);
+    return out.map((r) => ({ ...r }));
   }
 
   // A report, the running view, or undefined (also for anything that isn't a run id).
@@ -296,6 +299,7 @@ export class InventoryRunner {
       await rename(`${file}.tmp`, file);
       for (const id of (await this.ids(folder)).slice(this.d.keep ?? KEEP_RUNS)) await rm(join(dir, `${id}.json`), { force: true });
     } finally {
+      this.generation.set(folder, (this.generation.get(folder) ?? 0) + 1);
       this.summaries.delete(folder); // read again on the next list()
     }
   }

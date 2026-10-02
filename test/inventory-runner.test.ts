@@ -277,7 +277,7 @@ describe('InventoryRunner: options and repairs', () => {
   });
 
   it('a cancelled repair keeps its partial counts and says who cancelled', async () => {
-    const { runner, audit } = setup({ clips: clipsKind((ctx) => new Promise((r) => ctx.signal.addEventListener('abort', () => r({ ...repaired(1), stopped: 'cancelled' })))) });
+    const { runner, audit } = setup({ clips: clipsKind((ctx) => new Promise((r) => ctx.signal.addEventListener('abort', () => r({ ...repaired(1), stopped: 'paused' })))) });
     const check = await runner.start('clips', who, { camera: true }).done;
     const rep = await runner.repair('clips', who, check.runId);
     expect(runner.cancel()).toBe(rep.runId);
@@ -296,5 +296,85 @@ describe('InventoryRunner: options and repairs', () => {
     expect((await runner.list()).stills).toHaveLength(1);
     const b = await runner.start('stills', who).done;
     expect((await runner.list()).stills.map((x) => x.runId)).toEqual([b.runId, a.runId, 'stills-1-abcdef']);
+  });
+});
+
+describe('InventoryRunner: cache, restart, stop (review fixes)', () => {
+  const repaired = (n: number): RepairResult => ({ counts: { requested: n, done: n, failed: 0, skipped: 0, bytes: n }, top: [], items: [], message: `${n} fetched`, stopped: null });
+  const clips = (repair: Repair): InventoryKind => ({
+    label: 'Clips', camera: true,
+    run: async () => result(1),
+    repair: { run: repair, ready: () => null },
+  });
+
+  it('a save that lands while list() reads does not leave a stale list cached', async () => {
+    const { runner } = setup({ stills: stillsKind(async () => result(1)) });
+    const a = await runner.start('stills', who).done;
+    (runner as unknown as { summaries: Map<string, unknown> }).summaries.clear();
+    const priv = runner as unknown as { read: (f: string, id: string) => Promise<unknown> };
+    const real = priv.read.bind(runner);
+    let gate: () => void = () => undefined;
+    const held = new Promise<void>((r) => (gate = r));
+    let first = true;
+    priv.read = async (f, id) => {
+      if (first) {
+        first = false;
+        await held;
+      }
+      return real(f, id);
+    };
+    const inflight = runner.list();
+    await new Promise((r) => setTimeout(r, 20));
+    const b = await runner.start('stills', who).done;
+    gate();
+    await inflight;
+    expect((await runner.list()).stills.map((x) => x.runId)).toEqual([b.runId, a.runId]);
+  });
+
+  it('list() and listRepairs() return copies', async () => {
+    const { runner } = setup({ clips: clips(async () => repaired(1)) });
+    const c = await runner.start('clips', who).done;
+    const rep = await runner.repair('clips', who, c.runId);
+    await rep.done;
+    (await runner.list()).clips.pop();
+    (await runner.listRepairs()).clips.pop();
+    expect((await runner.list()).clips).toHaveLength(1);
+    expect((await runner.listRepairs()).clips).toHaveLength(1);
+  });
+
+  it('drops the camera option for a kind without a compare', async () => {
+    const { runner } = setup({ stills: stillsKind(async () => result(1)) });
+    const r = await runner.start('stills', who, { camera: true }).done;
+    expect(r).not.toHaveProperty('options');
+  });
+
+  it('a fresh runner on the same folder lists and reads the earlier runs', async () => {
+    const { runner, dir, audit } = setup({ clips: clips(async () => repaired(1)) });
+    const c = await runner.start('clips', who).done;
+    const rep = await (await runner.repair('clips', who, c.runId)).done;
+    const again = new InventoryRunner({ dir: join(dir, 'inventory'), audit, camera: () => 'cam1', checks: { clips: clips(async () => repaired(1)) } });
+    expect((await again.list()).clips.map((x) => x.runId)).toEqual([c.runId]);
+    expect((await again.listRepairs()).clips.map((x) => x.runId)).toEqual([rep.runId]);
+    expect(await again.get(rep.runId)).toEqual(rep);
+  });
+
+  it('a repair that throws a non-Error releases the lock and audits a failure', async () => {
+    const { runner, audit } = setup({ clips: clips(async () => { throw 'boom'; }) });
+    const c = await runner.start('clips', who).done;
+    const r = await (await runner.repair('clips', who, c.runId)).done;
+    expect(r).toMatchObject({ outcome: 'failed', error: 'boom', message: 'Clips repair failed: boom' });
+    expect(runner.running()).toBeNull();
+    expect(audit.list({ actions: ['inventory-repair'] }).records[0]).toMatchObject({ event: { outcome: 'failure' }, error: { message: 'boom' } });
+    expect(() => runner.start('clips', who)).not.toThrow();
+  });
+
+  it('stop() during a repair cancels it, and a later repair is refused as stopping', async () => {
+    const { runner, audit } = setup({ clips: clips((ctx) => new Promise((r) => ctx.signal.addEventListener('abort', () => r({ ...repaired(1), stopped: 'paused' })))) });
+    const c = await runner.start('clips', who).done;
+    const rep = await runner.repair('clips', who, c.runId);
+    await runner.stop();
+    expect(await rep.done).toMatchObject({ outcome: 'cancelled', cancelledBy: 'stop', stopped: 'paused' });
+    expect(audit.list({ actions: ['inventory-repair'] }).records[0]).toMatchObject({ cam_proxy: { cancelledBy: 'stop' } });
+    await expect(runner.repair('clips', who, c.runId)).rejects.toBeInstanceOf(InventoryStoppingError);
   });
 });
