@@ -34,9 +34,13 @@ POST http://<switch>/<callcmd>
   use `port - 1`. "Read the switch now" (below) shows the index the proxy
   uses, before the first power-cycle.
 - **One web session at a time:** while someone is logged in to the switch's
-  web UI, the switch drops every other client's POST without an answer. So
-  the proxy never polls the switch, logs out after every use, and a
-  power-cycle fails with `switch_busy` until the browser logs out.
+  web UI, the switch drops every other client's POST without an answer
+  (measured: "Remote end closed connection without response"; an earlier
+  unauthenticated POST from curl timed out instead). So the proxy never polls
+  the switch, logs out after every use, and a login that is closed or not
+  answered within 5 s is `switch_busy` ("busy or unreachable: is someone
+  logged in to the switch's web UI?") until the browser logs out. A refused
+  connection or no route to the switch is `switch_unreachable`.
 - **The other protocols** (UDP multicast for older firmware, and a cloud API)
   are not used.
 
@@ -76,23 +80,47 @@ needs the `X-CamProxy-UI` header):
    missing, `port` is above `ports`, or the password is not set. 429
    `too_soon` within 120 s of the last camera reboot or power-cycle (they
    share the cooldown), or while one is in progress.
-2. Logs in to the switch (123). A dropped login is 409 `switch_busy`; a
-   refused password is 502 `switch_auth`; no answer is 502
-   `switch_unreachable`.
+2. Logs in to the switch (123). A dropped or unanswered login is 409
+   `switch_busy`; a refused password is 502 `switch_auth`; a refused
+   connection is 502 `switch_unreachable`.
 3. Reads the ports (101) and refuses with 409 `no_power` unless the camera's
    port has PoE on **and** draws power. That is the safety check: it never
    cuts a port that isn't powering something.
 4. PoE off (103). The camera's state becomes "power-cycling" and the proxy
-   drops its camera token (the camera loses every session).
+   drops its camera token (the camera loses every session). A stop of the
+   proxy before this point never cuts the port.
 5. Waits `offSeconds`.
-6. PoE on (103), up to three tries. If the switch does not confirm it, the
-   answer is 502 `switch_error` with "PoE may still be off on port N": check
-   the switch's web UI.
+6. PoE on (103). A failed attempt is retried with backoff (1, 2, 4, 8, then
+   every 10 s) for about 60 s; each retry logs out and in again (the session
+   may be gone) and checks whether the port is on already.
 7. Logs out (126), on every path.
 
-If the proxy stops during the off time (SIGTERM, a container stop, or
-`restart-proxy`), it turns the PoE on at once and logs out before it exits,
-so the camera is never left without power by a stopping proxy.
+**Once the PoE-off request is sent, every failure turns PoE on again.** The
+switch may have applied the off and lost its answer (the connection dropped,
+no answer, or an answer without `config: "ok"`), or something failed during
+the off time. The proxy then runs step 6 at once and answers 502
+`switch_error` with `poeOff: true` and `turnedOn`:
+
+| `turnedOn` | Meaning | Then |
+|---|---|---|
+| `true` | PoE may have been cut, and it is on again | the camera may reboot; the state is "rebooting", the cooldown runs |
+| `false` | the camera's PoE may be **OFF** | Maintenance warns: "The camera's PoE may be OFF: use 'Turn camera PoE on', or the switch's web UI (port N)." `camera.poeSwitch.poeMaybeOff` is `true` |
+
+**Recovery:** `POST /control/actions/camera-poe-on` (admin only) logs in,
+reads the port and, if its PoE is off, turns it on (with the same retries),
+then logs out. It skips the power check (an unpowered port is the point) and
+the cooldown, and uses the same switch lock (409 `switch_busy` during a
+power-cycle). Answer: the reading plus `wasOn`. Audited as `camera-poe-on`.
+The Maintenance page's "Turn camera PoE on" button sends it. The button shows
+whenever a switch is configured, so it also works after a proxy restart has
+lost the failure state. It only ever turns PoE on, so it doesn't ask first.
+
+**A stopping proxy** (SIGTERM, a container stop, `restart-proxy`) during the
+off time turns the PoE on at once. The retries end after 6 s and the wait
+after 8 s, within compose's 20 s `stop_grace_period`. If PoE may still be off
+then, it logs an error and writes a `camera-powercycle` failure record
+(`phase: stop`, `poeLeftOff: true`). After the restart, use "Turn camera PoE
+on" or the switch's web UI.
 
 The answer, 202 `{offAt, onAt, watts}`, comes once PoE is back on, so the
 request takes `offSeconds` and a little more. Then the camera's state is
@@ -100,7 +128,7 @@ request takes `offSeconds` and a little more. Then the camera's state is
 (#83): ONVIF re-subscribes on its own, and stills and FTP carry on.
 `/control/status` has `camera.reboot` (`kind: powercycle`, `phase`,
 `offAt`, `downSec`) and `camera.poeSwitch` (the settings, `passwordSet`,
-`configured`, `busy`, and the `last` reading).
+`configured`, `busy`, `poeMaybeOff`, and the `last` reading).
 
 Measured on the real switch (2026-10-01): with PoE off for 10 s, the camera
 answered its API again 46 s after the cut.
@@ -118,7 +146,9 @@ its own.
   power on <host> port <n> for 10 s? The camera is offline for about a
   minute. Only works while nobody is logged in to the switch's web UI." Then
   "Power-cycling…" while the PoE is off, "Rebooting…" until the camera
-  answers, and how long it was away.
+  answers, and how long it was away. "Turn camera PoE on" next to it
+  (recovery, no dialog). While the camera's PoE may be off, a red line says
+  so; a failed power-cycle's result line says whether PoE is on again.
 - **Status:** the camera's state shows "power-cycling", then "rebooting"; the
   PoE switch line shows the switch, the port and the last reading.
 - **Settings:** the `camera.poeSwitch` settings in the camera group, and a PoE
@@ -131,7 +161,11 @@ port}`, `offSeconds`, `requestedBy` and, on success, `watts`, `offAt` and
 `onAt`. Then a second record (host / end, user `system`) when the camera
 answers again (`downSec`, from the cut), or a failure after 5 minutes. A
 refusal from the switch (busy, no power, a wrong password) is a failure record
-with the code. Details in [audit-log.md](audit-log.md). The cooldown and the
+with the code. A failure after the PoE-off request says so: "PoE may have been
+cut; turned back on: yes/no" (`poeOff: true`, `turnedOn`). A stopping proxy
+that may leave PoE off writes `phase: stop`, `poeLeftOff: true`.
+`camera-poe-on` (host / change) records the recovery, with `switch`, `wasOn`
+and `requestedBy`, or a failure. Details in [audit-log.md](audit-log.md). The cooldown and the
 "rebooting" watch are in memory: a proxy restart resets them.
 
 ## Tests
@@ -139,6 +173,10 @@ with the code. Details in [audit-log.md](audit-log.md). The cooldown and the
 The tests never contact the real switch. `test/helpers/poe-switch-mock.ts`
 speaks the switch's web protocol: the login cookie, 101, 103 with the opcode,
 126, a wrong password, and the busy session (a POST without the session while
-another one is active is dropped with no answer). The e2e harness starts it on
+another one is active is dropped with no answer). Fault modes cover the cases
+that matter: the PoE-off applied with its answer dropped, never sent, or
+without `config: "ok"`; refused PoE-on calls; an expired session; a switch
+that answers nothing (hang); slow answers. `POST /mock/poe` is a test hook
+that sets a port's PoE, as the switch's web UI would. The e2e harness starts it on
 port 18601 and wires PoE on the camera's port to cam-sim's power-off and
 power-on, so the simulated camera really goes away.
