@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { existsSync, mkdtempSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, relative } from 'path';
 import { RecordingCache } from '../src/recordings/cache';
 
 const NOW = Date.UTC(2026, 9, 2, 12, 0);
@@ -22,6 +22,17 @@ function setup(cap = 3000) {
 }
 
 describe('RecordingCache', () => {
+  it('a pin made through path() is seen by busy() in any path form, and path() stays inside the folder', () => {
+    const { dir, cache, put } = setup();
+    put('a.mp4', 10, NOW);
+    const unpin = cache.pin(cache.path('a.mp4'));
+    expect(cache.busy(join(dir, 'a.mp4'))).toBe(true); // storage's join() form
+    expect(cache.busy(relative(process.cwd(), join(dir, 'a.mp4')))).toBe(true); // a relative data dir
+    unpin();
+    expect(cache.busy(join(dir, 'a.mp4'))).toBe(false);
+    for (const bad of ['..', '../x.mp4', 'x/../../y.mp4']) expect(() => cache.path(bad)).toThrow();
+  });
+
   it('init deletes leftover .part files and keeps complete ones', () => {
     const { dir, make, put } = setup();
     put('a.mp4', 10, NOW);

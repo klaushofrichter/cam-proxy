@@ -6,7 +6,7 @@
 // Callers validate ids with validId (names.ts); path() also refuses anything
 // that could leave the folder.
 import { lstatSync, mkdirSync, readdirSync, renameSync, unlinkSync, utimesSync } from 'fs';
-import { join } from 'path';
+import { join, resolve, sep } from 'path';
 
 export interface CachedFile { id: string; path: string; bytes: number; used: number }
 
@@ -29,7 +29,11 @@ export class RecordingCache {
 
   path(id: string): string {
     if (!id || id.startsWith('.') || id.endsWith('.part') || /[/\\\0]/.test(id)) throw new Error('invalid recording id');
-    return join(this.d.dir(), id);
+    // Resolved and kept inside the cache folder (also what CodeQL checks for).
+    const root = resolve(this.d.dir());
+    const path = resolve(root, id);
+    if (!path.startsWith(root + sep)) throw new Error('invalid recording id');
+    return path;
   }
 
   partPath(id: string): string {
@@ -61,7 +65,9 @@ export class RecordingCache {
     }
   }
 
-  pin(path: string): () => void {
+  // Pins are keyed by the resolved path, so callers may pass join() or resolve() forms.
+  pin(p: string): () => void {
+    const path = resolve(p);
     this.pins.set(path, (this.pins.get(path) ?? 0) + 1);
     let done = false;
     return () => {
@@ -74,7 +80,7 @@ export class RecordingCache {
   }
 
   busy(path: string): boolean {
-    return this.pins.has(path);
+    return this.pins.has(resolve(path));
   }
 
   open(id: string): (() => void) | null {
