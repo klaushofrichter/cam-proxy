@@ -22,12 +22,14 @@ storage and activity snapshot. Design: [the spec](superpowers/specs/2026-10-01-a
 | `control-action` | configuration / change | `POST /control/actions/:name` except `camera-reboot`, `camera-powercycle`, `camera-poe-on`, `restart-proxy` and a retention dry run (`poe-switch-read` is one); the camera-side `restart` is one (`action: restart`) | `action`, `result` (`ok`, the error code or status, or `aborted`), `requestedBy` |
 | `config-change` | configuration / change | `PUT /control/config`, reset of an override | `changes`: `[{key, from, to, restart?}]`, secrets redacted; `restart` is `restart` for a setting that waits for a restart, `process` for one that waits for a new process, and missing for a live one. A refused change (400) writes nothing |
 | `secret-override` | configuration / change | `PUT /control/secrets/google-vision-key` (the Settings page's key field) | `secret` (`CAMPROXY_GOOGLE_VISION_KEY`), `masked` (first and last four characters, `AIza…wXyZ`), `replaced` (`env`, `manual` or `none`). Never the key. A refused key (400) writes nothing |
-| `storage-daily` | host / info | once per camera day, 00:05 camera time | `day`, `size`, `free`, `budget`, `used`, `daysUntilFull` (null when not growing), `kinds` (each `{bytes, files, oldest, newest, growthPerDay}`; the audit folder's growth is its last 7 whole UTC days per calendar day), `clipRows` |
+| `storage-daily` | host / info | once per camera day, 00:05 camera time | `day`, `size`, `free`, `budget`, `used`, `daysUntilFull` (null when not growing), `kinds` (`stills`, `previews`, `clips`, `recordings`, `catalog`, `audit`, each `{bytes, files, oldest, newest, growthPerDay}`; for `recordings` oldest and newest are the least and most recently used; the audit folder's growth is its last 7 whole UTC days per calendar day), `clipRows` |
 | `activity-daily` | host / info | once per camera day, 00:05 camera time | `day`, `forDay`, `events`, `recordingEvents` (motion, person, vehicle, pet), `clipsReceived` (and `clips`, the same count), `noClips: true` when there were recording events but no clip (the message says so), `analytics`, `stream` |
 | `audit-throttled` | host / info | a day's file reached 50 MB | none |
 
 Notes on what the code does today:
 
+- **Recordings write no audit record:** listing or downloading a camera
+  recording is not audited; the cache only shows in `storage-daily`.
 - **Refused tokens are throttled:** one `auth-refused` record per source IP
   and path per 10 minutes. The throttle key is the path with each run of 6 or
   more digits and each run of 16 or more hex characters replaced by `:n`, so
@@ -124,7 +126,7 @@ with its own details):
  "user":{"name":"system"},
  "message":"Storage: 82.4 GB used of 150.0 GB budget, 10,080 minutes of stills, 1,312 clips, 214 days until full",
  "cam_proxy":{"day":"2026-10-02","size":229000000000,"free":98000000000,"budget":150000000000,"used":82382100000,"daysUntilFull":214.46,
-  "kinds":{"stills":{"bytes":31000000000,"files":10080,"oldest":1790294400000,"newest":1790917440000,"growthPerDay":180000000},"previews":{"bytes":9000000000,"files":40320,"oldest":1789689600000,"newest":1790917440000,"growthPerDay":25000000},"clips":{"bytes":42000000000,"files":1312,"oldest":1790294400000,"newest":1790916060000,"growthPerDay":110000000},"catalog":{"bytes":380000000,"files":1,"oldest":null,"newest":1790917500000,"growthPerDay":0},"audit":{"bytes":2100000,"files":7,"oldest":1790380800000,"newest":1790899200000,"growthPerDay":300000}},"clipRows":1312}}
+  "kinds":{"stills":{"bytes":31000000000,"files":10080,"oldest":1790294400000,"newest":1790917440000,"growthPerDay":180000000},"previews":{"bytes":9000000000,"files":40320,"oldest":1789689600000,"newest":1790917440000,"growthPerDay":25000000},"clips":{"bytes":42000000000,"files":1312,"oldest":1790294400000,"newest":1790916060000,"growthPerDay":110000000},"recordings":{"bytes":312000000,"files":9,"oldest":1790900000000,"newest":1790917000000,"growthPerDay":0},"catalog":{"bytes":380000000,"files":1,"oldest":null,"newest":1790917500000,"growthPerDay":0},"audit":{"bytes":2100000,"files":7,"oldest":1790380800000,"newest":1790899200000,"growthPerDay":300000}},"clipRows":1312}}
 ```
 
 ```json

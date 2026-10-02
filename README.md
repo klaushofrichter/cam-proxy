@@ -50,6 +50,7 @@ A Mac runs it for development on `localhost:8480`.
 - [Client API](#client-api)
 - [Stills and previews](#stills-and-previews)
 - [Clips (FTP)](#clips-ftp)
+- [Recordings (SD card)](#recordings-sd-card)
 - [Analytics (optional)](#analytics-optional)
 - [Storage management](#storage-management)
 - [Event stream (SSE)](#event-stream-sse)
@@ -203,6 +204,15 @@ api '/cameras/cam1/events?kind=person&limit=10'
 - `GET /api/cameras/{cam}/analyses?from&to`: the analyses of events that
   start in the range (at most one day), oldest first, at most 1000, in the
   `analysis` stream message's shape without `objects`.
+- `GET /api/cameras/{cam}/recordings?from&to&stream`: the recordings on the
+  camera's SD card that overlap the range (unix ms, at most 48 hours;
+  `stream` `sub` or `main`, required), by start:
+  `[{id, start, end, stream, size, kinds, clipId}]`. See
+  [Recordings (SD card)](#recordings-sd-card).
+- `GET /api/cameras/{cam}/recordings/days?month=YYYY-MM`: `{month, days}`,
+  the camera-local days of that month with recordings.
+- `GET|HEAD /api/cameras/{cam}/recordings/{id}`: one recording as MP4, with
+  `Range`; `HEAD` never downloads from the camera.
 - `GET /health`: the process is up (no auth).
 
 ## Stills and previews
@@ -315,6 +325,73 @@ upload folder. While storage is paused, `STOR` answers 452.
   to accept incoming connections, again after each Homebrew node upgrade
   (see [The macOS firewall and node](#the-macos-firewall-and-node)).
 
+## Recordings (SD card)
+
+The camera keeps about 7 days of recordings on its SD card, in both streams
+(main at 12 MP, sub at 896×512). cam-proxy lists them and serves any of them
+as MP4, also the ones FTP never delivered.
+
+- **List:** `GET /api/cameras/:cam/recordings?from=&to=&stream=sub|main`
+  (unix ms, `to` not before `from`, at most 48 hours) answers `[{id, start,
+  end, stream, size, kinds, clipId}]`, from the camera's HTTP `Search` (one
+  per camera-local day the range touches, one at a time, each kept 30 s).
+  `kinds` comes from the file name's trigger flags; `clipId` is the proxy's
+  FTP copy of the same recording (same stream, start within 5 s), or null.
+  Recordings still being written are left out.
+- **Days:** `GET /api/cameras/:cam/recordings/days?month=YYYY-MM` answers
+  `{month, days}` (kept 5 minutes). cams uses it for its calendar, so every
+  camera Search goes through this proxy.
+- **File:** `GET /api/cameras/:cam/recordings/:id`. The first request fetches
+  the file over Reolink's Baichuan protocol (TCP `camera.baichuanPort`, 9000)
+  and streams it while it arrives: a 15 MB main file takes about 2 s on the
+  LAN. Later requests come from the cache (`<dataDir>/recordings/<cam>/`).
+  - **One download at a time per camera.** Parallel requests for one id share
+    one download, and a late joiner is served from the cache. A viewer who
+    stops reading (a paused `<video>`) is dropped after 5 s while the cache
+    keeps filling; its next `Range` comes from the cache.
+  - **Range** is served from the cache (a `Range` request waits for the
+    download, then reads the file). A `Range` on a file that can't be cached
+    (the disk is paused, or the file is larger than `recordings.cacheMB`)
+    gets the whole file with 200; several ranges in one header also get the
+    whole file with 200; a range wholly past the end answers 416 without a
+    download. The `ETag` is the id and size (stable); `If-None-Match` answers
+    304 and `If-Range` is honoured.
+  - **HEAD never downloads:** it answers from the list (or the cache).
+  - **A cached file is served while the camera is offline.**
+- **Why Baichuan:** the RLC-1224A refuses every HTTP `cmd=Download` since
+  2026-10-01, while Baichuan downloads of the same files work (findings in
+  the spec, `docs/superpowers/specs/2026-10-02-baichuan-recordings-design.md`).
+  The client is ours (`src/camera/baichuan/`), ported from reolink_aio and its
+  PR #186 (MIT, see `THIRD_PARTY_NOTICES`). It logs in as `camera.user` (the
+  `proxy` user is admin level) with `CAMPROXY_CAMERA_PASSWORD`, keeps one
+  connection and closes it after 20 s without a request; the camera allows 12
+  Baichuan connections in all. After a rejected login it waits 15 s before it
+  tries again, so a wrong password can't lock the account. A camera reboot or
+  power-cycle resets the session, as does a change of `camera.baichuanPort`.
+- **Cache:** `recordings.cacheMB` (2048). The cache counts in the storage
+  budget as the kind `recordings`, and it is the first to go when the budget
+  needs room, least recently used first. A file being read is never deleted.
+  Below `storage.minFreeBytes` files are streamed without being kept.
+- **Errors:** 400 `invalid` (a bad id, `to` before `from`, more than 48
+  hours, a bad `month` or `stream`); 404 `unknown_recording`; 503
+  `camera_offline` (the status poller says offline, or no connection to the
+  camera could be made); 502 `recordings_unavailable` with `reason` `refused`,
+  `auth`, `timeout`, `protocol`, `offline` (the connection was lost during the
+  transfer) or `search_failed` (the list's Search). After the first byte the
+  headers are gone, so a failure cuts the connection and the client sees a
+  short body.
+- **Status:** the Status page's "Recordings (SD card)" card shows the last
+  download's result and the cache fill: amber for `timeout` and `offline`, red
+  for `auth`, `refused` and `protocol`, grey for `not_found` (the camera
+  overwrote the file) and before the first download. `/control/status` has
+  `recordings`; the metric is
+  `camproxy_recording_downloads_total{cam,stream,result}`, and the disk gauges
+  have `kind="recordings"`. Reading or downloading a recording writes no audit
+  record.
+- **Network:** the Pi reaches the real camera's port 9000 on the LAN. In the
+  cluster, cam2 (cam-sim) offers a Service port 9000 and cam-proxy's egress
+  allows it (kube-setup, see `deploy/cluster/REQUEST.md`).
+
 ## Analytics (optional)
 
 Off by default. When on, the proxy sends the still of a person, vehicle or pet
@@ -384,7 +461,8 @@ Two limits apply, and whichever is reached first wins:
 - **Size budget:** `storage.maxPercent` (85 % of the disk) or
   `storage.maxBytes`, catalog included, and optional per-kind caps
   (`stills.maxGB`, …). Over budget, the oldest hour goes first: stills, then
-  clips, then previews. The newest `storage.keepHours` of a kind are never
+  clips, then previews; the recordings cache goes before all of them, least
+  recently used first. The newest `storage.keepHours` of a kind are never
   deleted for the budget.
 
 The audit folder counts toward the budget and is never deleted to make room; only `retention.auditDays` removes it.
@@ -476,7 +554,7 @@ The **admin UI** at `/` signs in with the admin token once; the token is
 exchanged for the cookie and not stored in the browser.
 
 - **Status:** the camera (and its model, linked to the camera's own web
-  page), events, stills, clips/FTP and storage.
+  page), events, stills, clips/FTP, recordings (SD card) and storage.
 - **Events:** the live stream and the last 100 events.
 - **Timeline:** a day of preview sprites, one still per minute, with events
   marked.

@@ -4,6 +4,8 @@
 cluster (v2026.09.27.1, v2026.09.27.2); cams uses it for `cam2` (a `proxy`
 entry in `cams-cameras`).
 
+2026-10-02: cam-proxy reaches `cam2.cam-sim.svc.cluster.local:9000` (TCP, Baichuan) for recordings. cam-sim asked kube-setup for the cluster-internal Service port 9000 on cam2 (no ingress, LoadBalancer or NodePort) and cam-proxy's egress to it; both are applied (kube-setup 478c0f8 and f9d1e8d). The Pi reaches the real camera's port 9000 on the LAN.
+
 cam-proxy (github.com/klaushofrichter/cam-proxy) is the camera gateway: it
 keeps one connection to a camera, stores a still per second, records events,
 receives the camera's clips by FTP(S) and serves it all over HTTP/SSE. In the
