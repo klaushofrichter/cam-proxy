@@ -97,7 +97,7 @@ describe('readPackFooter', () => {
     expect(await readPackFooter(`${minutePath(dir, 'stills', 'cam1', at(5))}.pack`)).toBeNull();
     writeFileSync(join(dir, 'short.pack'), 'CPK');
     expect(await readPackFooter(join(dir, 'short.pack'))).toBeNull();
-    expect(await readPackFooter(join(dir, 'nope.pack'))).toBeNull();
+    expect(await readPackFooter(join(dir, 'nope.pack'))).toBeUndefined(); // gone: not a file problem
   });
 
   it('accepts only an interval that divides the minute', async () => {
@@ -126,7 +126,7 @@ describe('stills inventory', () => {
     expect(r.counts).toEqual({
       stillsDays: 7, minutes: 10, packs: 8, expectedSeconds: 600, presentSeconds: 380, missingSeconds: 220, missingPct: 36.67,
       gaps: 4, explainedSeconds: 150, unexplainedSeconds: 70, restorableSeconds: 20,
-      unreadablePacks: 1, packsWithoutSprite: 1, spritesWithoutPack: 1, previewsPruned: 0,
+      unreadablePacks: 1, packsWithoutSprite: 1, spritesWithoutPack: 1, previewsPruned: 0, prunedDuringRun: 0,
     });
     expect(r.items).toEqual([
       { type: 'pack-without-sprite', minute: at(4) },
@@ -324,6 +324,17 @@ describe('stills inventory: previews pruned before stills, cancel, audit reads',
     const r = await stillsCheck(deps({ dataDir: d2, settings: () => settings({ stillsDays: 7, previewsDays: 3 }) }))(ctx({ now: NOW2 }));
     expect(r.counts).toMatchObject({ packs: 4, packsWithoutSprite: 1, previewsPruned: 2 });
     expect(r.items).toEqual([{ type: 'pack-without-sprite', minute: E }]);
+  });
+
+  it('a pack pruned between the folder read and the footer read is missing, not a file problem', async () => {
+    const d6 = mkdtempSync(join(tmpdir(), 'camproxy-inv-pruned-'));
+    const day = Date.UTC(2026, 8, 26);
+    for (let m = day; m < day + 3 * MIN; m += MIN) rawPack(`${minutePath(d6, 'stills', 'cam1', m)}.pack`, fullFooter(m), 600);
+    // The first progress report comes after the folders are read, before any footer is.
+    const progress = (p: Progress) => void (p.done === 0 && rmSync(`${minutePath(d6, 'stills', 'cam1', day + MIN)}.pack`));
+    const r = await stillsCheck(deps({ dataDir: d6 }))(ctx({ now: NOW2, progress }));
+    expect(r.counts).toMatchObject({ packs: 2, unreadablePacks: 0, prunedDuringRun: 1 });
+    expect(r.items).toEqual([]);
   });
 
   it('a cancel lands within a day, not only between days', async () => {

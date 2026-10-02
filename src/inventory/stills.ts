@@ -180,7 +180,7 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
     const counts = {
       stillsDays: s.stillsDays, minutes: 0, packs: 0, expectedSeconds: 0, presentSeconds: 0, missingSeconds: 0, missingPct: 0,
       gaps: 0, explainedSeconds: 0, unexplainedSeconds: 0, restorableSeconds: 0,
-      unreadablePacks: 0, packsWithoutSprite: 0, spritesWithoutPack: 0, previewsPruned: 0,
+      unreadablePacks: 0, packsWithoutSprite: 0, spritesWithoutPack: 0, previewsPruned: 0, prunedDuringRun: 0,
     };
 
     // The day folders of the retention window: one readdir each, kept for the walk.
@@ -288,9 +288,12 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
           break;
         }
         const chunk = minutes.slice(c, c + CHUNK_MINUTES);
-        const footers = await mapPool(chunk, FOOTER_READS, (m) => {
+        // undefined: no pack; 'pruned': listed, but deleted (retention) before its footer was read.
+        const footers = await mapPool(chunk, FOOTER_READS, async (m) => {
           const name = `${hhmm(m)}.pack`;
-          return day.packs.has(name) ? readPackFooter(join(stillsDir, ...parts, name)) : Promise.resolve(undefined);
+          if (!day.packs.has(name)) return undefined;
+          const f = await readPackFooter(join(stillsDir, ...parts, name));
+          return f === undefined ? ('pruned' as const) : f;
         });
         for (const [x, m] of chunk.entries()) {
           counts.minutes++;
@@ -300,7 +303,8 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
           let slots: [number, number][] | null = null;
           let step = s.intervalS; // a minute without a readable pack: the current interval
           const f = footers[x];
-          if (f !== undefined) {
+          if (f === 'pruned') counts.prunedDuringRun++; // its seconds count as missing; not a file problem
+          else if (f !== undefined) {
             counts.packs++;
             if (f) [slots, step] = [f.slots, f.intervalS];
             else problem('unreadable-pack', m);

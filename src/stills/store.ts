@@ -48,10 +48,11 @@ function writeAtomic(file: string, data: Buffer | string): void {
 // walks thousands of packs): the same checks as MinuteStore's own read, plus
 // an interval that divides the minute (a corrupt but parseable footer can't
 // make a caller loop for ages). One read of the pack's tail when the footer
-// fits in it (a 1 s minute's footer is about 1 KB). null for a missing, short
-// or corrupt pack.
+// fits in it (a 1 s minute's footer is about 1 KB). null for a short or
+// corrupt pack (or any other read error), undefined for a missing one (pruned
+// since the caller listed its folder: not a file problem).
 const TAIL_READ = 4096;
-export async function readPackFooter(file: string): Promise<PackFooter | null> {
+export async function readPackFooter(file: string): Promise<PackFooter | null | undefined> {
   let fh: FileHandle | undefined;
   try {
     fh = await open(file, 'r');
@@ -70,8 +71,8 @@ export async function readPackFooter(file: string): Promise<PackFooter | null> {
     }
     const f = JSON.parse(json.toString('utf8')) as PackFooter;
     return f.v === 1 && Array.isArray(f.slots) && Number.isInteger(f.intervalS) && f.intervalS > 0 && 60 % f.intervalS === 0 ? f : null;
-  } catch {
-    return null;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? undefined : null;
   } finally {
     await fh?.close();
   }
