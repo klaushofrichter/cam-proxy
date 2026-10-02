@@ -37,6 +37,10 @@ export interface PoeSwitchMock {
   // The next PoE-off: applied, then the answer is lost: the connection
   // drops, never comes (hang), or comes without config: ok.
   offFault: 'drop' | 'hang' | 'noconfig' | null;
+  // The next logout(s) are dropped with no answer; the session stays open.
+  dropLogout: number;
+  // A refused login (wrong password) still sets a cookie, as an unknown switch might.
+  failCookie: boolean;
   // Every POST hangs with no answer (the real switch, seen from curl, while busy).
   hang: boolean;
   // Delay the answer to a callcmd (ms).
@@ -66,6 +70,8 @@ export async function startPoeSwitchMock(o: PoeSwitchMockOptions): Promise<PoeSw
     pw,
     opcodes: [],
     failSet: 0,
+    dropLogout: 0,
+    failCookie: false,
     offFault: null,
     hang: false,
     delay: {},
@@ -127,7 +133,7 @@ export async function startPoeSwitchMock(o: PoeSwitchMockOptions): Promise<PoeSw
     }
     const cd = parsed.data.calldata ?? {};
     if (cmd === 123) {
-      if (cd.password !== o.password) return answer(res, cmd, { login: 'fail' });
+      if (cd.password !== o.password) return answer(res, cmd, { login: 'fail' }, mock.failCookie ? { headers: { 'Set-Cookie': 'junk=; Path=/' } } : {});
       // sscpoe: the session id is the cookie's name.
       session = randomBytes(6).toString('hex');
       return answer(res, cmd, { login: 'success' }, { headers: { 'Set-Cookie': `${session}=; Path=/` } });
@@ -165,6 +171,10 @@ export async function startPoeSwitchMock(o: PoeSwitchMockOptions): Promise<PoeSw
       return answer(res, cmd, { config: 'ok' });
     }
     if (cmd === 126) {
+      if (mock.dropLogout > 0) {
+        mock.dropLogout--;
+        return void req.socket.destroy();
+      }
       session = null;
       return answer(res, cmd, { logout: 'success' });
     }

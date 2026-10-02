@@ -1,7 +1,7 @@
 // Issue #85: the PoE switch's local web protocol (STEAMEMO/SSCPOE GPS-208
 // and kin), against the mock in test/helpers; the real switch is never used.
 import { afterEach, describe, expect, it } from 'vitest';
-import { PoeSwitch, PoeSwitchError, poeOpcode, portIndex, reverseOrder } from '../src/camera/poe-switch';
+import { PoeSwitch, PoeSwitchError, Session, poeOpcode, portIndex, reverseOrder } from '../src/camera/poe-switch';
 import { startPoeSwitchMock, type PoeSwitchMock } from './helpers/poe-switch-mock';
 
 const PASSWORD = 'mock-switch-pw-4711';
@@ -51,6 +51,51 @@ const codeOf = async (p: Promise<unknown>) => {
   }
   throw new Error('expected a PoeSwitchError');
 };
+
+describe('session hygiene (#90)', () => {
+  it('a lost logout is retried once on the same session', async () => {
+    const m = await mock();
+    const { s } = sw(m);
+    m.dropLogout = 1;
+    expect((await s.read()).watts).toBe(6.8);
+    expect(m.calls.filter((c) => c.cmd === 126)).toHaveLength(2);
+    expect(m.activeSession()).toBe(false);
+    expect((await s.stop()).sessionMaybeOpen).toBe(false);
+  });
+
+  it('two lost logouts: the session may be open, and the next busy login says it may be the proxy\'s own', async () => {
+    const m = await mock();
+    const { s } = sw(m);
+    m.dropLogout = 2;
+    await s.read();
+    expect(m.calls.filter((c) => c.cmd === 126)).toHaveLength(2);
+    expect(m.activeSession()).toBe(true);
+    const e = await s.read().catch((x: unknown) => x as PoeSwitchError);
+    expect((e as PoeSwitchError).code).toBe('switch_busy');
+    expect((e as PoeSwitchError).message).toMatch(/possibly the proxy's own session/);
+    expect((await s.stop()).sessionMaybeOpen).toBe(true);
+  });
+
+  it('a busy login with no lost logout keeps the plain message', async () => {
+    const m = await mock();
+    m.browserLogin();
+    const { s } = sw(m);
+    const e = await s.read().catch((x: unknown) => x as PoeSwitchError);
+    expect((e as PoeSwitchError).message).not.toMatch(/proxy's own/);
+  });
+
+  it('a refused login does not replace the cookie of the session', async () => {
+    const m = await mock({});
+    m.failCookie = true;
+    const s = new Session(m.host, () => 1000);
+    await s.login(PASSWORD);
+    expect(await codeOf(s.login('wrong-password'))).toBe('switch_auth');
+    await s.detail();
+    expect(m.calls.at(-1)).toMatchObject({ cmd: 101, session: true });
+    await s.logout();
+    expect(m.activeSession()).toBe(false);
+  });
+});
 
 describe('port mapping and opcodes', () => {
   it("follows sscpoe's reverse_order: GPS2xx and kin count the ports backwards", () => {
