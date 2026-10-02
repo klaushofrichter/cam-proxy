@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Admin UI, analysis modal: a Boxes / Plain still switch over the image (default Boxes). Plain still shows the still of the analysed second without the boxes; if retention has removed it, the modal says so instead of showing a broken image. The switch is a keyboard-operable radio pair and is hidden for an analysis with no still.
+- Analytics: a key set during the retry wait (30 s after a failed call) is the one the retry call uses (issue #52).
 - PoE switch (#90): a logout the switch did not answer is retried once on the same session; if it stays lost, a later busy login says it may be the proxy's own session and that it frees itself about 3 minutes after the last call (measured on the real switch: 150 to 181 s idle). A login the switch refused no longer replaces the session cookie. `docs/poe-switch.md` explains the stop's worst case (7.7 s) and the session handling.
 - Audit log (#78): secret redaction matches explicit names (`keyframe` and `ftp.keyFile` are no longer redacted); segments of 32 or more characters in a refused path are masked (`:token`) in `auth-refused` records and the `unauthorized` log line; secret names also cover `passphrase`, `pwd`, `credential(s)` and any name ending in `key`; failed sign-ins stop at the 50 MB guard like refused tokens; a daily record that can't be written is retried with a backoff instead of every minute; a second `restart-proxy` request before the stop writes no second `proxy-restart` record. Docs: the `storage-daily` example adds up, `<pi>` is explained.
 

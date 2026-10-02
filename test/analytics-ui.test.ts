@@ -1,8 +1,13 @@
 // test/analytics-ui.test.ts
 import { describe, expect, it } from 'vitest';
-import { boxLabel, costEstimate, keyNotice, validKey, scorePct, labelStyle, estimateFor, parseLimit, pausedText, tagText, toggleSelection, usageLine } from '../web/src/lib/analytics';
+import { boxLabel, costEstimate, keyNotice, validKey, scorePct, labelStyle, estimateFor, parseLimit, pausedText, tagText, stillUrl, toggleSelection, usageLine } from '../web/src/lib/analytics';
 
 describe('analytics UI text', () => {
+  it('links the plain still of a second like the Timeline does', () => {
+    expect(stillUrl('cam1', 1759400000000)).toBe('/api/cameras/cam1/stills/1759400000000.jpg');
+    expect(stillUrl('cam 1/x', 5)).toBe('/api/cameras/cam%201%2Fx/stills/5.jpg');
+  });
+
   it('estimates the monthly cost from the limit (1,000 free, then $2.25 per 1,000)', () => {
     expect(costEstimate(0)).toBe('No calls.');
     expect(costEstimate(900)).toBe('Up to 900 calls a month: free (Google\'s first 1,000 a month are free).');
