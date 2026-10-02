@@ -262,3 +262,60 @@ describe('BaichuanSession: idle from the last request (review fix)', () => {
     expect(Date.now() - ended).toBeLessThan(400);
   });
 });
+
+describe('BaichuanSession: #99 (Task 4)', () => {
+  it('close() then ensure() in the same tick starts a new attempt, not the old rejecting one', async () => {
+    const { cam, s } = await setup();
+    const old = s.ensure();
+    s.close();
+    const next = s.ensure();
+    expect(next).not.toBe(old);
+    expect(await code(old)).toBe('offline');
+    await next;
+    expect(s.connected()).toBe(true);
+    expect((await s.call(9, XML)).status).toBe(200);
+    expect(cam.logins).toBe(1);
+  });
+
+  it('close() during login then ensure(): the old attempt does not close the new one', async () => {
+    const { cam, s } = await setup();
+    const old = s.ensure();
+    await vi.waitFor(() => expect(cam.connections).toBe(1), { interval: 1 });
+    s.close();
+    const next = s.ensure();
+    expect(await code(old)).toBe('offline');
+    await next;
+    expect(s.connected()).toBe(true);
+  });
+
+  it('a rejected login logs and reports the attempts the camera has left (remainTimes)', async () => {
+    const warn = vi.fn();
+    const log = { warn, debug: () => undefined, info: () => undefined, error: () => undefined } as unknown as SessionOptions['log'];
+    const { s } = await setup({}, { log }, 'wrong');
+    const err = (await s.ensure().catch((e) => e)) as BaichuanError;
+    expect(err.code).toBe('auth');
+    expect(err.message).toMatch(/10 attempts left/);
+    expect(warn).toHaveBeenCalledWith({ remainTimes: 10 }, 'baichuan_login_rejected');
+  });
+
+  it('chunk(m) decrypts with the key of the connection the message came on, also after a close', async () => {
+    const file = Buffer.alloc(3000);
+    for (let i = 0; i < file.length; i++) file[i] = i & 0xff;
+    const { s } = await setup({ files: { 'a.mp4': file }, chunkSize: 3000, nonces: ['NONCEONE0000000000', 'NONCETWO0000000000'] });
+    await s.ensure();
+    const m = await new Promise<Parameters<Parameters<typeof s.open>[2]['onMessage']>[0]>((resolve, reject) => {
+      let n = 0;
+      const sub = s.open(8, DOWNLOAD, {
+        onMessage: (x) => {
+          if (++n < 2) return; // the info record
+          sub.close();
+          resolve(x);
+        },
+        onError: reject,
+      });
+    });
+    s.close();
+    await s.ensure(); // a new connection (and, on a camera, a new key)
+    expect(s.chunk(m, 1024)).toEqual(file);
+  });
+});

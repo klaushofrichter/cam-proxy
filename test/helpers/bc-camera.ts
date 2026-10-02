@@ -29,6 +29,7 @@ export interface FakeOptions {
   badMagicOn?: number; // answer this cmd with bad magic
   replyDelayMs?: number; // before the reply to cmd 9
   infoRecord?: Buffer; // instead of INFO_RECORD in cmd 8's first reply
+  nonces?: string[]; // per connection (the first, the second, ...), else NONCE
 }
 
 export interface FakeCamera {
@@ -51,6 +52,7 @@ export async function fakeCamera(o: FakeOptions = {}): Promise<FakeCamera> {
     socket.on('close', () => sockets.delete(socket));
     socket.on('error', () => undefined);
     const parser = new FrameParser();
+    const nonce = o.nonces?.[cam.connections - 1] ?? NONCE;
     let key: Buffer | null = null;
     let transfer = 0; // message id of the running download
     const send = (cmd: number, msgId: number, status: number, ext: Buffer, payload: Buffer) =>
@@ -64,7 +66,7 @@ export async function fakeCamera(o: FakeOptions = {}): Promise<FakeCamera> {
       const ch = msgId & 0xff;
       if (o.badMagicOn === cmd) return void socket.write(Buffer.alloc(24, 0x55));
       if (cmd === 1 && cls === '1465') {
-        const xml = `${XML}<body>\n<Encryption version="1.1">\n<type>md5</type>\n<nonce>${NONCE}</nonce>\n</Encryption>\n</body>\n`;
+        const xml = `${XML}<body>\n<Encryption version="1.1">\n<type>md5</type>\n<nonce>${nonce}</nonce>\n</Encryption>\n</body>\n`;
         return void socket.write(encodeFrame({ cmd: 1, msgId, code: 0xdd12, cls: '1466' }, Buffer.alloc(0), bcXor(Buffer.from(xml), ch)));
       }
       if (cmd === 1) {
@@ -73,11 +75,11 @@ export async function fakeCamera(o: FakeOptions = {}): Promise<FakeCamera> {
         const xml = bcXor(f.body, ch).toString('utf8');
         const user = /<userName>([^<]*)</.exec(xml)?.[1];
         const pass = /<password>([^<]*)</.exec(xml)?.[1];
-        if (user !== md5_31(CAM_USER + NONCE) || pass !== md5_31(CAM_PASSWORD + NONCE)) {
+        if (user !== md5_31(CAM_USER + nonce) || pass !== md5_31(CAM_PASSWORD + nonce)) {
           return void send(1, msgId, 401, Buffer.alloc(0), bcXor(Buffer.from(`${XML}<body>\n<LoginErrInfo version="1.1">\n<remainTimes>10</remainTimes>\n</LoginErrInfo>\n</body>\n`), ch));
         }
         cam.logins++;
-        key = aesKey(NONCE, CAM_PASSWORD);
+        key = aesKey(nonce, CAM_PASSWORD);
         send(1, msgId, 200, Buffer.alloc(0), bcXor(Buffer.from(`${XML}<body>\n<DeviceInfo version="1.1">\n<type>ipc</type>\n</DeviceInfo>\n</body>\n`), ch));
         if (o.pushBetween) push();
         return;
