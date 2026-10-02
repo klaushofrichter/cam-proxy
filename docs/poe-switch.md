@@ -91,14 +91,21 @@ needs the `X-CamProxy-UI` header):
    proxy before this point never cuts the port.
 5. Waits `offSeconds`.
 6. PoE on (103). A failed attempt is retried with backoff (1, 2, 4, 8, then
-   every 10 s) for about 60 s; each retry logs out and in again (the session
-   may be gone) and checks whether the port is on already.
+   every 10 s) for about 60 s. Each retry first tries PoE on with the session
+   it has (it may still be valid). If that fails, it logs out, logs in again,
+   checks whether the port is on already, and then turns PoE on. The session
+   cookie is dropped only after the switch answered the logout, or replaced
+   by a login that set a new one. The switch has one session: a session left
+   open without its cookie would block every login, the switch's own web UI
+   too.
 7. Logs out (126), on every path.
 
 **Once the PoE-off request is sent, every failure turns PoE on again.** The
 switch may have applied the off and lost its answer (the connection dropped,
-no answer, or an answer without `config: "ok"`), or something failed during
-the off time. The proxy then runs step 6 at once and answers 502
+or no answer came), or something failed during the off time. An answer
+without `config: "ok"` is checked: the proxy reads the port once, and if it
+still has PoE on and draws power, the off was refused and nothing was cut (502
+`switch_error`, no cooldown, no watch). Otherwise it is treated as cut. The proxy then runs step 6 at once and answers 502
 `switch_error` with `poeOff: true` and `turnedOn`:
 
 | `turnedOn` | Meaning | Then |
@@ -116,10 +123,13 @@ whenever a switch is configured, so it also works after a proxy restart has
 lost the failure state. It only ever turns PoE on, so it doesn't ask first.
 
 **A stopping proxy** (SIGTERM, a container stop, `restart-proxy`) during the
-off time turns the PoE on at once. The retries end after 6 s and the wait
-after 8 s, within compose's 20 s `stop_grace_period`. If PoE may still be off
-then, it logs an error and writes a `camera-powercycle` failure record
-(`phase: stop`, `poeLeftOff: true`). After the restart, use "Turn camera PoE
+off time turns the PoE on at once. The retries end after 6 s, and every call
+to the switch is cut short to fit what is left of the 8 s wait, with time
+kept for the final logout. That stays within compose's 20 s
+`stop_grace_period`. If PoE may still be off, or the logout went unanswered
+(the switch's web UI may then refuse logins until the switch ends that
+session), it logs an error and writes a `camera-powercycle` failure record
+(`phase: stop`, `poeLeftOff`, `sessionMaybeOpen`). After the restart, use "Turn camera PoE
 on" or the switch's web UI.
 
 The answer, 202 `{offAt, onAt, watts}`, comes once PoE is back on, so the
