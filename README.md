@@ -132,7 +132,7 @@ come only from the environment.
   default, then file, then override.
 - **Live or restart:** most settings apply at once. Camera, go2rtc, stills,
   previews, the ONVIF subscription settings and most FTP settings (all but
-  `ftp.stream` and `ftp.maxGB`) apply after a restart; the `restart` action
+  `ftp.stream`, `ftp.stalledHours` and `ftp.maxGB`) apply after a restart; the `restart` action
   applies them without restarting the process. `server.port` and
   `server.dataDir` need a new process.
 
@@ -147,7 +147,7 @@ come only from the environment.
 | `go2rtc` | `binary` (`go2rtc`), `rtspPort` (18554), `apiPort` (11984); both listen on 127.0.0.1 only; `url` (reserved, not used yet: for a go2rtc that runs as its own container) |
 | `stills` | `enabled` (true), `stream` (`sub`), `intervalS` (1), `size` (`896x512`), `quality` (5), `maxGB` |
 | `previews` | `tileSize` (`160x90`), `grid` (`10x6`), `quality` (7), `maxGB` |
-| `ftp` | `enabled` (false), `port` (2121), `passive` (`30000-30009`), `publicHost` (the address the camera connects to), `user` (`camera`), `tls` (true), `certFile`/`keyFile` (else a self-signed certificate), `stream` (`main`), `maxGB` |
+| `ftp` | `enabled` (false), `port` (2121), `passive` (`30000-30009`), `publicHost` (the address the camera connects to), `user` (`camera`), `tls` (true), `certFile`/`keyFile` (else a self-signed certificate), `stream` (`main`), `stalledHours` (6, 1–72: the Status page warns when no clip arrived for this long while the camera recorded events; live), `maxGB` |
 
 | Secret (environment, or `<NAME>_FILE`) | |
 |---|---|
@@ -269,6 +269,19 @@ upload folder. While storage is paused, `STOR` answers 452.
   `camera-ftp-test` asks the camera to connect (`{ok, rspCode}`), and
   `camera-ftp-off` sets `enable` to 0 with the rest kept. The Maintenance
   page has the three buttons.
+- **Health (#93):** the proxy reads the camera's FTP settings (`GetFtpV20`,
+  never the password) when the camera comes online and every 5 minutes
+  after, and after each setup or off. The Status page's FTP card shows
+  "Camera upload" and turns red, with an alert and a "Point the camera's FTP
+  here" button, when the upload is off, when it points somewhere else (its
+  server, port or user differ from what `camera-ftp-setup` writes), or when
+  no clip arrived for `ftp.stalledHours` (6) while the camera recorded
+  motion, person, vehicle or pet events (events of the last 10 minutes don't
+  count yet; a quiet day is no warning). Each change of the camera's FTP
+  state is an audit record (`camera-check`), and `/metrics` has
+  `camproxy_camera_ftp_enabled`, `camproxy_clips_stalled` and
+  `camproxy_clips_last_received_timestamp_seconds`. On 2026-10-01 the
+  upload had been off for 37 hours unnoticed.
 - **API:** `GET /api/cameras/{cam}/clips?from&to` (at most 31 days) lists
   `{id, start, end, stream, size, events, url, snapshotUrl}`;
   `/clips/{id}.mp4` serves the file with HTTP Range, `/clips/{id}.jpg` the
@@ -431,7 +444,7 @@ arrive.
 
 | Route | |
 |---|---|
-| `GET /control/status` | `{version, camera (incl. webUiUrl, serial, reboot: {kind: reboot\|powercycle, requestedAt, confirmed, phase: power-cycling\|rebooting\|back\|not-back, offAt, endedAt, downSec} or null, and poeSwitch: {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures}, analytics: [{…, keyMasked, keySource}], analyticsUnmapped}` |
+| `GET /control/status` | `{version, camera (incl. webUiUrl, serial, reboot: {kind: reboot\|powercycle, requestedAt, confirmed, phase: power-cycling\|rebooting\|back\|not-back, offAt, endedAt, downSec} or null, and poeSwitch: {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state: on\|off\|elsewhere\|unknown, checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, analytics: [{…, keyMasked, keySource}], analyticsUnmapped}` |
 | `GET /control/stats` | `{disk: {catalog, audit, stills, previews, clips}` (each `{bytes, files, oldest, newest, growthPerDay}`), `events, stream, sse, storage}` |
 | `GET /control/config` | every setting: `{value, source, restart, pending, next?, type}` (`type`: `integer`, `boolean` or `string`); secrets never appear |
 | `PUT /control/config` | overrides, e.g. `{"sse":{"pingS":10}}`; a bad value answers 400 naming it, and nothing is written |
@@ -488,6 +501,7 @@ The proxy records who did what, as ECS JSON lines, one file per UTC day in
 - start and stop, restarts, camera reboots, sign-ins (with failures), sign-outs, login links;
 - refused tokens, throttled to one record per IP and path per 10 minutes;
 - control actions and settings changes (secret values redacted);
+- changes of the camera's FTP upload (on, off, pointing elsewhere);
 - a storage snapshot and an activity summary at 00:05 camera time.
 
 Read it on the admin UI's **Audit** page, or at `GET /control/audit` with the
@@ -510,6 +524,9 @@ the API, polling and Grafana are in [docs/audit-log.md](docs/audit-log.md).
   `camproxy_last_still_timestamp_seconds`, `camproxy_stills_minutes_stored`,
   `camproxy_previews_stored`;
 - `camproxy_frame_grabber_up`, `camproxy_go2rtc_up`;
+- `camproxy_camera_ftp_enabled` (1/0, no sample before the first read),
+  `camproxy_clips_stalled`, `camproxy_clips_last_received_timestamp_seconds`
+  (while `ftp.enabled`);
 - `camproxy_disk_files{kind}`, `camproxy_storage_budget_bytes`,
   `camproxy_storage_growth_bytes_per_day{kind}`,
   `camproxy_storage_days_until_full`, `camproxy_storage_writing_paused`;
