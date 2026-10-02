@@ -149,3 +149,116 @@ describe('BaichuanSession: idle', () => {
     expect(s.connected()).toBe(false);
   });
 });
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const DOWNLOAD = '<?xml version="1.0" encoding="UTF-8" ?>\n<body>\n<FileInfo><Id>a.mp4</Id></FileInfo>\n</body>\n';
+
+describe('BaichuanSession: close and failures (review fixes)', () => {
+  it('close() during connect rejects ensure() offline, destroys the socket; a later call reconnects', async () => {
+    const { cam, s } = await setup();
+    const p = s.ensure();
+    s.close();
+    expect(await code(p)).toBe('offline');
+    expect(s.connected()).toBe(false);
+    await sleep(50);
+    expect(cam.open()).toBe(0);
+    await s.ensure();
+    expect(s.connected()).toBe(true);
+    expect((await s.call(9, XML)).status).toBe(200);
+  });
+
+  it('close() during login rejects ensure() offline', async () => {
+    const { cam, s } = await setup({ noLoginReply: true });
+    const p = s.ensure();
+    await vi.waitFor(() => expect(cam.loginAttempts).toBe(1));
+    s.close();
+    expect(await code(p)).toBe('offline');
+    expect(s.connected()).toBe(false);
+    await vi.waitFor(() => expect(cam.open()).toBe(0));
+  });
+
+  it('two callers with a failing login both reject auth (one attempt)', async () => {
+    const { cam, s } = await setup({}, {}, 'wrong');
+    const [a, b] = await Promise.all([code(s.ensure()), code(s.ensure())]);
+    expect([a, b]).toEqual(['auth', 'auth']);
+    expect(cam.loginAttempts).toBe(1);
+  });
+
+  it('a throwing handler gets onError (protocol), other replies still arrive, the session stays usable', async () => {
+    const { s } = await setup();
+    await s.ensure();
+    const failed = new Promise<BaichuanError>((resolve) => {
+      s.open(9, XML, {
+        onMessage: () => {
+          throw new Error('handler bug');
+        },
+        onError: resolve,
+      });
+    });
+    const other = s.call(9, XML); // its reply may come in the same read
+    const err = await failed;
+    expect(err).toBeInstanceOf(BaichuanError);
+    expect(err.code).toBe('protocol');
+    expect((await other).status).toBe(200);
+    expect(s.connected()).toBe(true);
+    expect((await s.call(9, XML)).status).toBe(200);
+  });
+
+  it('a drop mid-stream reaches onError (offline)', async () => {
+    const { cam, s } = await setup({ files: { 'a.mp4': Buffer.alloc(20_000, 1) }, chunkSize: 1000, delayMs: 30 });
+    await s.ensure();
+    let messages = 0;
+    const err = await new Promise<BaichuanError>((resolve) => {
+      s.open(8, DOWNLOAD, {
+        onMessage: () => {
+          if (++messages === 2) cam.dropAll();
+        },
+        onError: resolve,
+      });
+    });
+    expect(err.code).toBe('offline');
+    expect(s.connected()).toBe(false);
+  });
+
+  it('a late reply after a call timeout is ignored', async () => {
+    const { cam, s } = await setup({ replyDelayMs: 200 });
+    await s.ensure();
+    expect(await code(s.call(9, XML, 50))).toBe('timeout');
+    await sleep(300); // the late reply arrives
+    expect(s.connected()).toBe(true);
+    expect((await s.call(9, XML)).status).toBe(200);
+    expect(cam.requests.length).toBe(2);
+  });
+});
+
+describe('BaichuanSession: idle from the last request (review fix)', () => {
+  it('a slow reply does not push the idle close past idleMs after the request', async () => {
+    const { s } = await setup({ replyDelayMs: 450 }, { idleMs: 500 });
+    await s.ensure();
+    const sent = Date.now();
+    await s.call(9, XML);
+    await vi.waitFor(() => expect(s.connected()).toBe(false), { timeout: 3000, interval: 5 });
+    expect(Date.now() - sent).toBeLessThan(800); // from the reply it would be about 950
+  });
+
+  it('a stream longer than idleMs keeps the session; it closes within idleMs after the stream ends', async () => {
+    const { s } = await setup({ files: { 'a.mp4': Buffer.alloc(10_000, 1) }, chunkSize: 1000, delayMs: 60 }, { idleMs: 200 });
+    await s.ensure();
+    let ended = 0;
+    await new Promise<void>((resolve, reject) => {
+      let n = 0;
+      const sub = s.open(8, DOWNLOAD, {
+        onMessage: () => {
+          if (++n < 11) return; // the info record and ten chunks
+          sub.close();
+          ended = Date.now();
+          resolve();
+        },
+        onError: reject,
+      });
+    });
+    expect(s.connected()).toBe(true); // not closed at once: the caller may still send cmd 9
+    await vi.waitFor(() => expect(s.connected()).toBe(false), { timeout: 3000, interval: 5 });
+    expect(Date.now() - ended).toBeLessThan(400);
+  });
+});

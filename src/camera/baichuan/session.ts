@@ -40,6 +40,9 @@ export class BaichuanSession {
   private readonly subs = new Map<number, Handlers & { cmd: number }>();
   private connecting: Promise<void> | null = null;
   private idleTimer: NodeJS.Timeout | undefined;
+  private idleDue = false; // idleMs passed since the last request while a call or stream was open
+  private generation = 0; // close() bumps it: a connect or login in flight gives up
+  private abortConnect: (() => void) | null = null;
   private lastRejected = Number.NEGATIVE_INFINITY;
   private readonly log: Logger;
 
@@ -69,7 +72,12 @@ export class BaichuanSession {
     // aio's guard: a bug must not lock the account.
     if (this.now() - this.lastRejected < (this.opts.loginGuardMs ?? 15_000)) throw new BaichuanError('auth', 'login recently rejected; waiting before the next attempt');
     const t = this.target();
+    const gen = this.generation;
     const socket = await this.connect(t);
+    if (gen !== this.generation) {
+      socket.destroy();
+      throw new BaichuanError('offline', 'session closed');
+    }
     this.socket = socket;
     this.parser = new FrameParser();
     this.key = null;
@@ -98,23 +106,26 @@ export class BaichuanSession {
     } finally {
       clearTimeout(timer);
     }
-    this.armIdle();
+    if (gen !== this.generation || this.socket !== socket) throw new BaichuanError('offline', 'session closed');
+    this.armIdle(); // the login was the last request
   }
 
   private connect(t: BaichuanTarget): Promise<net.Socket> {
     return new Promise((resolve, reject) => {
       const s = net.connect({ host: t.host, port: t.port });
-      const timer = setTimeout(() => {
-        s.destroy();
-        reject(new BaichuanError('offline', 'connect timed out'));
-      }, this.opts.connectMs ?? 5_000);
-      const onError = (e: NodeJS.ErrnoException) => {
+      const fail = (err: BaichuanError) => {
         clearTimeout(timer);
-        reject(new BaichuanError('offline', `connect failed (${e.code ?? 'error'})`));
+        this.abortConnect = null;
+        s.destroy();
+        reject(err);
       };
+      const timer = setTimeout(() => fail(new BaichuanError('offline', 'connect timed out')), this.opts.connectMs ?? 5_000);
+      const onError = (e: NodeJS.ErrnoException) => fail(new BaichuanError('offline', `connect failed (${e.code ?? 'error'})`));
+      this.abortConnect = () => fail(new BaichuanError('offline', 'session closed'));
       s.once('error', onError);
       s.once('connect', () => {
         clearTimeout(timer);
+        this.abortConnect = null;
         s.off('error', onError);
         s.setNoDelay(true);
         resolve(s);
@@ -162,12 +173,12 @@ export class BaichuanSession {
     if (!this.socket || !this.key) throw new BaichuanError('offline', 'no session');
     const msgId = this.nextId();
     this.subs.set(msgId, { cmd, ...h });
-    clearTimeout(this.idleTimer);
+    this.armIdle(); // idle counts from the last request sent
     this.socket.write(encodeFrame({ cmd, msgId, code: 0, cls: '1464' }, Buffer.alloc(0), aesEncrypt(this.key, Buffer.from(xml, 'utf8'))));
     return {
       msgId,
       close: () => {
-        if (this.subs.delete(msgId) && this.subs.size === 0 && this.socket) this.armIdle();
+        if (this.subs.delete(msgId)) this.released();
       },
     };
   }
@@ -219,16 +230,37 @@ export class BaichuanSession {
 
   // A plain close: the camera frees the session at once (measured).
   close(): void {
+    this.generation++;
+    this.abortConnect?.();
     const s = this.socket;
     if (!s) return;
     this.lost(s, new BaichuanError('offline', 'session closed'));
     s.destroy();
   }
 
+  // Armed at every request sent, so the close always comes before the
+  // camera's own drop (about 32 s after the client's last message). Never
+  // closes while a call or stream is open: then the close waits for the last
+  // one to end, plus a fresh idleMs (the caller may still send cmd 9).
   private armIdle(): void {
+    this.idleDue = false;
+    this.startIdleTimer();
+  }
+
+  private startIdleTimer(): void {
     clearTimeout(this.idleTimer);
-    this.idleTimer = setTimeout(() => this.close(), this.opts.idleMs ?? 20_000);
+    this.idleTimer = setTimeout(() => {
+      if (this.subs.size === 0) this.close();
+      else this.idleDue = true;
+    }, this.opts.idleMs ?? 20_000);
     this.idleTimer.unref?.();
+  }
+
+  // A call or stream ended.
+  private released(): void {
+    if (this.subs.size > 0 || !this.socket || !this.idleDue) return;
+    this.idleDue = false;
+    this.startIdleTimer();
   }
 
   private lost(socket: net.Socket, err: BaichuanError): void {
@@ -236,6 +268,7 @@ export class BaichuanSession {
     this.socket = null;
     this.key = null;
     clearTimeout(this.idleTimer);
+    this.idleDue = false;
     const subs = [...this.subs.values()];
     this.subs.clear();
     for (const s of subs) s.onError(err);
@@ -260,7 +293,21 @@ export class BaichuanSession {
       const sub = this.subs.get(msgId);
       if (!sub || sub.cmd !== cmd) continue; // a push (message id 0), or a stale chunk of a stopped download
       const ext = payloadOffset ? decodeText(this.key, f.body.subarray(0, payloadOffset), msgId & 0xff) : '';
-      sub.onMessage({ cmd, msgId, status: code, ext, payload: f.body.subarray(payloadOffset) });
+      try {
+        sub.onMessage({ cmd, msgId, status: code, ext, payload: f.body.subarray(payloadOffset) });
+      } catch {
+        // A handler bug must not escape the socket's data event; the other
+        // frames in this read still go out.
+        this.log.warn({ cmd, msgId }, 'baichuan_handler_error');
+        if (this.subs.get(msgId) !== sub) continue; // it already ended (closed or failed)
+        this.subs.delete(msgId);
+        this.released();
+        try {
+          sub.onError(new BaichuanError('protocol', `the handler for cmd ${cmd} failed`));
+        } catch {
+          // nothing more to tell
+        }
+      }
     }
   }
 }

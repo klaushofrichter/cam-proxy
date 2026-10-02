@@ -27,6 +27,7 @@ export interface FakeOptions {
   silentCmds?: number[]; // never answered
   noLoginReply?: boolean;
   badMagicOn?: number; // answer this cmd with bad magic
+  replyDelayMs?: number; // before the reply to cmd 9
 }
 
 export interface FakeCamera {
@@ -86,6 +87,7 @@ export async function fakeCamera(o: FakeOptions = {}): Promise<FakeCamera> {
       if (o.silentCmds?.includes(cmd)) return;
       if (o.pushBetween) push();
       if (cmd === 9) {
+        if (o.replyDelayMs) await sleep(o.replyDelayMs);
         const old = transfer;
         transfer = 0;
         send(9, msgId, 200, Buffer.alloc(0), Buffer.alloc(0));
