@@ -43,8 +43,9 @@ function rawPack(file: string, footer: unknown, stills = 0) {
   writeFileSync(file, Buffer.concat([Buffer.alloc(stills, 1), json, len, Buffer.from('CPK1')]));
 }
 const fullFooter = (minute: number) => ({ v: 1, minute, intervalS: 1, size: '64x36', quality: 5, slots: range(0, 60).map((i) => [i * 10, 10]) });
-const start = (a: AuditLog, unclean: boolean) =>
-  a.write({ action: 'proxy-start', category: ['process'], type: ['start'], outcome: 'success', user: 'system', message: 'started', details: { previousStop: unclean ? null : '2026-09-27T00:13:01.000Z', uncleanStop: unclean } });
+// A proxy start; a clean one's previous stop is at `stop` (default 00:13:00, the start of the fixture's minute 3).
+const start = (a: AuditLog, unclean: boolean, stop = at(3)) =>
+  a.write({ action: 'proxy-start', category: ['process'], type: ['start'], outcome: 'success', user: 'system', message: 'started', details: { previousStop: unclean ? null : new Date(stop).toISOString(), uncleanStop: unclean } });
 
 // The fixture, minute by minute from M (00:10 UTC):
 //  0 full · 1 missing 10–19 · 2 full · 3 nothing (a clean proxy start at +20 s) ·
@@ -163,6 +164,32 @@ describe('stills inventory', () => {
     expect(r.window).toMatchObject({ from: Date.UTC(2026, 8, 27), to: at(10), reason: 'retention', retentionFrom: Date.UTC(2026, 8, 27) });
     expect(r.counts).toMatchObject({ stillsDays: 0, minutes: 20, expectedSeconds: 1200, missingSeconds: 820, gaps: 5, explainedSeconds: 180 });
     expect(r.top[0]).toEqual({ from: Date.UTC(2026, 8, 27), to: M, seconds: 600, explained: 'crash', explainedSeconds: 180 });
+  });
+
+  // Ruling (final review): a clean restart explains a gap only from its previous stop.
+  it('a clean restart explains a gap only from the previous stop; the stall before it stays unexplained', async () => {
+    const d4 = mkdtempSync(join(tmpdir(), 'camproxy-inv-stall-'));
+    const D = Date.UTC(2026, 8, 26);
+    for (const m of [...range(0, 10), ...range(370, 380)]) rawPack(`${minutePath(d4, 'stills', 'cam1', D + m * MIN)}.pack`, fullFooter(D + m * MIN), 600);
+    let clock = 0;
+    const a4 = new AuditLog({ dir: join(d4, 'audit'), version: 't', camera: () => 'cam1', now: () => clock });
+    clock = D + 365 * MIN; // the grabber stalled at 00:10; the proxy stopped at 06:05 and started at 06:15
+    start(a4, false, D + 355 * MIN);
+    const r = await stillsCheck(deps({ dataDir: d4, audit: a4 }))(ctx({ now: D + 381 * MIN + 5000 }));
+    expect(r.top).toEqual([{ from: D + 10 * MIN, to: D + 370 * MIN, seconds: 6 * 3600, explained: 'stop', explainedSeconds: 10 * 60 + 120 }]);
+    expect(r.counts).toMatchObject({ missingSeconds: 6 * 3600, explainedSeconds: 720, unexplainedSeconds: 6 * 3600 - 720 });
+  });
+
+  it('a crash start (no stop time) still explains its gap from the gap start', async () => {
+    const d5 = mkdtempSync(join(tmpdir(), 'camproxy-inv-crash-'));
+    const D = Date.UTC(2026, 8, 26);
+    for (const m of [...range(0, 10), ...range(370, 380)]) rawPack(`${minutePath(d5, 'stills', 'cam1', D + m * MIN)}.pack`, fullFooter(D + m * MIN), 600);
+    let clock = 0;
+    const a5 = new AuditLog({ dir: join(d5, 'audit'), version: 't', camera: () => 'cam1', now: () => clock });
+    clock = D + 365 * MIN;
+    start(a5, true);
+    const r = await stillsCheck(deps({ dataDir: d5, audit: a5 }))(ctx({ now: D + 381 * MIN + 5000 }));
+    expect(r.top[0]).toMatchObject({ explained: 'crash', explainedSeconds: 357 * 60 });
   });
 
   it('budget: a daily storage record saw older stills than are kept', async () => {

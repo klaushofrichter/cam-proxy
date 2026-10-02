@@ -11,8 +11,9 @@ import { MAX_ITEMS, MAX_TOP, type Check, type CheckResult } from './runner';
 // store should hold for the retention window, and what it holds. Local only.
 // The folders are read day by day with async reads, so the server stays
 // responsive; the signal is checked between days.
-// A gap is explained by what overlaps it: a proxy start inside it (from the
-// gap's start to STARTUP_MS after the start), and a camera reboot or
+// A gap is explained by what overlaps it: a proxy start inside it (a clean
+// one from its previous stop, a crash from the gap's start, to STARTUP_MS
+// after the start: a stall that a restart fixed stays unexplained), and a camera reboot or
 // power-cycle (from the request, or the PoE cut, to the camera's answer plus
 // STARTUP_MS; without an end record, OUTAGE_MS after the start). Storage
 // pauses write no audit record, so they can't explain a gap yet.
@@ -224,10 +225,16 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
       reason = olderSeen ? 'budget' : 'store-younger';
     }
 
-    // Proxy starts in the window: the last one inside a gap explains it.
+    // Proxy starts in the window: the last one inside a gap explains it, a
+    // clean one from its previous stop on (ruling: a stall before the stop is
+    // not the restart's), a crash (no stop time) from the gap's start.
     const starts = audit
       .filter((r) => r.event.action === 'proxy-start')
-      .map((r) => ({ t: Date.parse(r['@timestamp']), crash: (r.cam_proxy as { uncleanStop?: unknown } | undefined)?.uncleanStop === true }))
+      .map((r) => {
+        const det = (r.cam_proxy ?? {}) as { uncleanStop?: unknown; previousStop?: unknown };
+        const stop = typeof det.previousStop === 'string' ? Date.parse(det.previousStop) : NaN;
+        return { t: Date.parse(r['@timestamp']), crash: det.uncleanStop === true, stop: Number.isFinite(stop) ? stop : null };
+      })
       .filter((x) => x.t >= from && x.t <= to);
     const outages = cameraOutages(audit);
     const top: Gap[] = [];
@@ -235,7 +242,11 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
       // Each cause's share of [gFrom, gTo); the union counts once, the largest share names the gap (a proxy start on a tie).
       const parts: { a: number; b: number; cause: GapCause }[] = [];
       const st = starts.filter((x) => x.t >= gFrom && x.t < gTo).at(-1);
-      if (st) parts.push({ a: gFrom, b: Math.min(gTo, st.t + STARTUP_MS), cause: st.crash ? 'crash' : 'stop' });
+      if (st) {
+        const a = st.crash || st.stop === null ? gFrom : Math.max(gFrom, st.stop);
+        const b = Math.min(gTo, st.t + STARTUP_MS);
+        if (b > a) parts.push({ a, b, cause: st.crash ? 'crash' : 'stop' });
+      }
       for (const o of outages) if (o.a < gTo && o.b > gFrom) parts.push({ a: Math.max(gFrom, o.a), b: Math.min(gTo, o.b), cause: o.cause });
       let explained: GapCause | null = null;
       let best = 0;
