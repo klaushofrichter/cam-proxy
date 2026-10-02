@@ -50,7 +50,7 @@ export class InventoryBusyError extends Error {
   }
 }
 
-interface Current { view: RunningView; ac: AbortController; cancelledBy?: 'request' | 'stop'; done: Promise<InventoryReport> }
+interface Current { view: RunningView; ac: AbortController; cancelledBy?: 'request' | 'stop'; settled: boolean; done: Promise<InventoryReport> }
 
 export class InventoryRunner {
   readonly checks: Partial<Record<string, Check>>;
@@ -73,13 +73,14 @@ export class InventoryRunner {
   // Starts a run in the background; throws InventoryBusyError while one runs.
   start(kind: string, who: Requester): { runId: string; done: Promise<InventoryReport> } {
     if (this.cur) throw new InventoryBusyError(this.cur.view.runId);
-    const check = this.checks[kind];
+    const check = Object.hasOwn(this.checks, kind) ? this.checks[kind] : undefined;
     if (!check) throw new Error(`no inventory of kind ${kind}`);
     const startedAt = this.now();
     const runId = `${kind}-${startedAt}-${randomBytes(3).toString('hex')}`;
     const cur: Current = {
       view: { runId, kind, startedAt, outcome: 'running', progress: { phase: 'starting', done: 0, total: 0 } },
       ac: new AbortController(),
+      settled: false,
       done: Promise.resolve(undefined as never),
     };
     this.cur = cur;
@@ -90,8 +91,11 @@ export class InventoryRunner {
   // The running run's id, or null. The run ends soon after, with its partial counts.
   cancel(by: 'request' | 'stop' = 'request'): string | null {
     if (!this.cur) return null;
-    this.cur.cancelledBy ??= by;
-    this.cur.ac.abort();
+    // A check that already finished stays ok: the run is only being saved.
+    if (!this.cur.settled) {
+      this.cur.cancelledBy ??= by;
+      this.cur.ac.abort();
+    }
     return this.cur.view.runId;
   }
 
@@ -125,42 +129,48 @@ export class InventoryRunner {
 
   private async run(cur: Current, check: Check, who: Requester): Promise<InventoryReport> {
     const { runId, kind, startedAt } = cur.view;
-    let res: CheckResult | null = null;
-    let error: string | undefined;
     try {
-      res = await check({ signal: cur.ac.signal, now: startedAt, progress: (p) => void (cur.view.progress = p) });
-    } catch (err) {
-      error = (err as Error).message;
+      let res: CheckResult | null = null;
+      let error: string | undefined;
+      let failed = false;
+      try {
+        res = await check({ signal: cur.ac.signal, now: startedAt, progress: (p) => void (cur.view.progress = p) });
+      } catch (err) {
+        failed = true;
+        error = err instanceof Error ? err.message : String(err);
+      }
+      cur.settled = true;
+      const outcome: RunOutcome = cur.ac.signal.aborted ? 'cancelled' : failed ? 'failed' : 'ok';
+      const items = res?.items ?? [];
+      const report: InventoryReport = {
+        runId, kind, camera: this.d.camera(), startedAt, tookMs: this.now() - startedAt, outcome,
+        ...(outcome === 'failed' ? { error } : {}),
+        ...(outcome === 'cancelled' ? { cancelledBy: cur.cancelledBy ?? 'request' } : {}),
+        requestedBy: who.requestedBy,
+        window: res?.window ?? null,
+        counts: res?.counts ?? {},
+        top: (res?.top ?? []).slice(0, MAX_TOP),
+        items: items.slice(0, MAX_ITEMS),
+        itemsTruncated: items.length > MAX_ITEMS,
+        message: message(kind, outcome, res, error),
+      };
+      try {
+        await this.save(report);
+      } catch (err) {
+        logger.error({ err: (err as Error).message, runId }, 'inventory_save_failed');
+      }
+      this.d.audit.write({
+        action: 'inventory', category: ['host'], type: ['info'],
+        outcome: outcome === 'ok' ? 'success' : outcome === 'failed' ? 'failure' : 'unknown',
+        user: 'admin', ip: who.ip, userAgent: who.userAgent, message: report.message,
+        ...(report.error !== undefined ? { error: report.error } : {}),
+        details: { runId, kind, outcome, requestedBy: who.requestedBy, ...(report.cancelledBy ? { cancelledBy: report.cancelledBy } : {}), window: report.window, counts: report.counts, top: report.top, tookMs: report.tookMs },
+      });
+      logger.info({ runId, kind, outcome, tookMs: report.tookMs }, 'inventory_done');
+      return report;
+    } finally {
+      this.cur = null;
     }
-    const outcome: RunOutcome = cur.ac.signal.aborted ? 'cancelled' : error !== undefined ? 'failed' : 'ok';
-    const items = res?.items ?? [];
-    const report: InventoryReport = {
-      runId, kind, camera: this.d.camera(), startedAt, tookMs: this.now() - startedAt, outcome,
-      ...(outcome === 'failed' ? { error } : {}),
-      ...(outcome === 'cancelled' ? { cancelledBy: cur.cancelledBy ?? 'request' } : {}),
-      requestedBy: who.requestedBy,
-      window: res?.window ?? null,
-      counts: res?.counts ?? {},
-      top: (res?.top ?? []).slice(0, MAX_TOP),
-      items: items.slice(0, MAX_ITEMS),
-      itemsTruncated: items.length > MAX_ITEMS,
-      message: message(kind, outcome, res, error),
-    };
-    try {
-      await this.save(report);
-    } catch (err) {
-      logger.error({ err: (err as Error).message, runId }, 'inventory_save_failed');
-    }
-    this.d.audit.write({
-      action: 'inventory', category: ['host'], type: ['info'],
-      outcome: outcome === 'ok' ? 'success' : outcome === 'failed' ? 'failure' : 'unknown',
-      user: 'admin', ip: who.ip, userAgent: who.userAgent, message: report.message,
-      ...(report.error ? { error: report.error } : {}),
-      details: { runId, kind, outcome, requestedBy: who.requestedBy, ...(report.cancelledBy ? { cancelledBy: report.cancelledBy } : {}), window: report.window, counts: report.counts, top: report.top, tookMs: report.tookMs },
-    });
-    logger.info({ runId, kind, outcome, tookMs: report.tookMs }, 'inventory_done');
-    this.cur = null;
-    return report;
   }
 
   private async save(r: InventoryReport): Promise<void> {

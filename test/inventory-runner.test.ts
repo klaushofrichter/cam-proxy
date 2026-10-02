@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, readdirSync, readFileSync } from 'fs';
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { AuditLog } from '../src/audit/audit-log';
@@ -139,5 +139,39 @@ describe('InventoryRunner', () => {
     const { runner } = setup({ stills: async () => result(0) });
     expect(runner.kinds()).toEqual(['stills']);
     expect(() => runner.start('clips', who)).toThrow('no inventory of kind clips');
+  });
+
+  it.each([['null', null, 'null'], ['an object', {}, '[object Object]'], ['a string', 'x', 'x']])('a check that throws %s ends failed and frees the lock', async (_n, thrown, text) => {
+    const { runner, audit } = setup({ stills: async () => { throw thrown; } });
+    const r = await runner.start('stills', who).done;
+    expect(r).toMatchObject({ outcome: 'failed', error: text, message: `Stills inventory failed: ${text}` });
+    expect(records(audit)[0]).toMatchObject({ event: { outcome: 'failure' } });
+    expect(runner.running()).toBeNull();
+    expect(() => runner.start('stills', who)).not.toThrow();
+  });
+
+  it('a save failure still frees the lock and writes the audit record', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'camproxy-inv-'));
+    writeFileSync(join(dir, 'blocker'), 'x'); // a file where the directory should be
+    const audit = new AuditLog({ dir: join(dir, 'audit'), version: 't', camera: () => 'cam1', now: () => T0 });
+    const runner = new InventoryRunner({ dir: join(dir, 'blocker', 'inventory'), audit, camera: () => 'cam1', checks: { stills: async () => result(3) } });
+    const r = await runner.start('stills', who).done;
+    expect(r.outcome).toBe('ok');
+    expect(records(audit)).toHaveLength(1);
+    expect(runner.running()).toBeNull();
+  });
+
+  it('inherited names are not kinds', () => {
+    const { runner } = setup({ stills: async () => result(0) });
+    expect(() => runner.start('constructor', who)).toThrow('no inventory of kind constructor');
+  });
+
+  it('a check that finished before the cancel is ok, not cancelled', async () => {
+    const { runner } = setup({ stills: async () => result(4) });
+    const { done } = runner.start('stills', who);
+    await Promise.resolve();
+    await Promise.resolve();
+    runner.cancel();
+    expect((await done).outcome).toBe('ok');
   });
 });
