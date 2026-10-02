@@ -25,7 +25,7 @@ export const SETTLE_MS = 5 * 60_000;
 // The event kinds the camera records for (a clip is expected for each).
 export const RECORDING_KINDS = ['motion', 'person', 'vehicle', 'pet'] as const;
 const FTP_OFF_NOTE = 'FTP is off in the proxy: no clips arrive, so every event is without a clip';
-const UNJUDGED_NOTE = (n: number) => `${n} local clips not on the camera were not judged: the SD card's oldest day is unknown`;
+const UNJUDGED_NOTE = (n: number) => `${n} local clips not on the camera were not judged: the SD card's oldest day is unknown, or the clip is at the window start or next to a day the camera did not list`;
 const OTHER_STREAM_NOTE = (n: number, stream: string) => `${n} local clips of another stream than ${stream} (ftp.stream) only keep their recordings from counting as missing`;
 
 // eventMaxOpenMin: events.maxOpenMin, how long an open event can last.
@@ -220,6 +220,11 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     const near = [...edge, ...rows].map((r) => ({ id: r.id, start: r.start_ts, end: r.end_ts ?? r.start_ts, stream: r.stream }));
     const judgedRec = (r: RecordingEntry) => r.start >= from && r.end <= cameraTo;
     const judgedClip = (c: { start: number; end: number }) => c.start >= from && c.end <= cameraTo && listed.has(localDate(c.start, t));
+    // A clip whose recording may have started outside what was listed (before
+    // the window, or on an unknown or unlisted neighbour day) can't be called
+    // gone: it is not judged (#74 review).
+    const clearOfEdges = (c: { start: number }) =>
+      c.start >= from + START_SLACK_MS && listed.has(localDate(c.start - START_SLACK_MS, t)) && listed.has(localDate(c.start + START_SLACK_MS, t));
     const pairing = pairByStart(pool, near.filter((c) => c.stream === s.stream));
     // After an ftp.stream change the clips of the old stream still hold their
     // recordings: the recordings left over pair with them (same ±5 s) and are
@@ -245,7 +250,8 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     let unjudged = 0;
     for (const c of pairing.clipsAlone.filter(judgedClip)) {
       const day = localDate(c.start, t);
-      if (bound !== null && (day > bound || (day === bound && c.start >= firstOnBound))) gone.push(c);
+      if (!clearOfEdges(c)) unjudged++;
+      else if (bound !== null && (day > bound || (day === bound && c.start >= firstOnBound))) gone.push(c);
       else if (sdFrom !== null) olderThanSd++;
       else unjudged++;
     }

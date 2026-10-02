@@ -188,11 +188,12 @@ describe('clips inventory, against the camera (part 2)', () => {
     expect(r.window).toMatchObject({ camera: { oldestSdDay: null, unknownDays: [] } });
     expect(r.counts).toMatchObject({ goneFromCamera: 1, olderThanSd: 0, missingLocally: 1 });
     expect(r.items.filter((x) => (x as { type: string }).type === 'gone-from-camera')).toEqual([{ type: 'gone-from-camera', clipId: c2.id, start: c2.start_ts }]);
-    expect(r.window.notes).toEqual(["1 local clips not on the camera were not judged: the SD card's oldest day is unknown"]);
+    expect(r.window.notes).toEqual(["1 local clips not on the camera were not judged: the SD card's oldest day is unknown, or the clip is at the window start or next to a day the camera did not list"]);
   });
 });
 
 type Item = { type: string; [k: string]: unknown };
+const NOT_JUDGED = "1 local clips not on the camera were not judged: the SD card's oldest day is unknown, or the clip is at the window start or next to a day the camera did not list";
 const ofType = (items: unknown[], type: string) => (items as Item[]).filter((x) => x.type === type);
 
 describe('clips inventory: the edges (review of task 4)', () => {
@@ -215,7 +216,7 @@ describe('clips inventory: the edges (review of task 4)', () => {
     };
     const r = await clipsCheck(deps(cam.deps))(ctx({ options: { camera: true } }));
     expect(r.counts).toMatchObject({ olderThanSd: 0, goneFromCamera: 1 });
-    expect(r.window.notes).toEqual(["1 local clips not on the camera were not judged: the SD card's oldest day is unknown"]);
+    expect(r.window.notes).toEqual(["1 local clips not on the camera were not judged: the SD card's oldest day is unknown, or the clip is at the window start or next to a day the camera did not list"]);
   });
 
   it('the missing recordings come oldest first, so the item cut keeps the ones the SD overwrites next', async () => {
@@ -256,6 +257,25 @@ describe('clips inventory: the edges (review of task 4)', () => {
     const cam2 = camera({ months: { '2026-10': [2] }, recs: { '2026-10-02': [rec(cameraTo - 31_000)] } });
     const r2 = await clipsCheck(deps(cam2.deps))(ctx({ options: { camera: true } }));
     expect(r2.counts).toMatchObject({ missingLocally: 0, goneFromCamera: 0, recordings: 1, paired: 1 });
+  });
+
+  it('a clip next to an unknown day is not judged: its recording may start on that day', async () => {
+    clip(T('2026-10-01T23:59:58')); // its recording starts 2026-10-02 00:00:01, a day whose Search failed
+    const alone = clip(T('2026-10-01T12:00:00')); // well inside a listed day: gone
+    const cam = camera({ months: { '2026-09': [], '2026-10': [1, 2] }, recs: { '2026-10-01': [rec(T('2026-10-01T08:00:00'))] }, failing: ['2026-10-02'] });
+    const r = await clipsCheck(deps(cam.deps))(ctx({ options: { camera: true } }));
+    expect(r.counts).toMatchObject({ goneFromCamera: 1, olderThanSd: 0, unknownDays: 1 });
+    expect(ofType(r.items, 'gone-from-camera').map((x) => x.clipId)).toEqual([alone.id]);
+    expect(r.window.notes).toEqual([NOT_JUDGED]);
+  });
+
+  it('a clip at the window start is not judged: its recording may start before the window', async () => {
+    clip(T('2026-09-30T00:00:02')); // its recording starts 2026-09-29 23:59:59, a day outside the listing
+    const cam = camera({ months: { '2026-09': [29, 30], '2026-10': [] }, recs: { '2026-09-30': [rec(T('2026-09-30T08:00:00'))] } });
+    const r = await clipsCheck(deps(cam.deps))(ctx({ options: { camera: true } }));
+    expect(r.window).toMatchObject({ camera: { oldestSdDay: '2026-09-29' } });
+    expect(r.counts).toMatchObject({ goneFromCamera: 0, olderThanSd: 0 });
+    expect(r.window.notes).toEqual([NOT_JUDGED]);
   });
 
   it('a stale open event covers its start plus the event cap only', async () => {
