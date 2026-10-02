@@ -4,10 +4,16 @@ import { resolve } from 'path';
 import { analysesFor, analysesInRange, analysisFor, type AnalysisRow } from '../catalog/analyses';
 import { summarize } from '../analytics/classes';
 import type { Found } from '../analytics/providers';
-import { clipById, listClips, oldestClip, overlappingEvents, type ClipRow } from '../catalog/clips';
+import { clipById, clipNear, listClips, oldestClip, overlappingEvents, type ClipRow } from '../catalog/clips';
 import type { Catalog } from '../catalog/db';
 import { listEvents, type EventRow } from '../catalog/events';
 import type { Config } from '../config/defaults';
+import { BaichuanError } from '../camera/baichuan/errors';
+import { logger } from '../log';
+import { isAbort } from '../recordings/fetcher';
+import { SearchError, type RecordingEntry } from '../recordings/list';
+import { validId } from '../recordings/names';
+import type { RecordingsSide } from '../recordings/side';
 import type { StatusPoller } from '../camera/status';
 import type { SseHandler } from '../stream/sse';
 import type { FrameGrabber } from '../stills/grabber';
@@ -51,7 +57,7 @@ export const analysisSummary = (a: AnalysisRow | undefined) =>
   a ? { provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, objects: parseList(a.objects), summary: summaryOf(a) } : null;
 
 // The client API (spec §10); auth is applied by the caller.
-export function clientApi(d: { config: () => Config; catalog: Catalog; status: () => StatusPoller; sse: SseHandler; stills: () => StillsSide | undefined }): express.Router {
+export function clientApi(d: { config: () => Config; catalog: Catalog; status: () => StatusPoller; sse: SseHandler; stills: () => StillsSide | undefined; recordings: () => RecordingsSide }): express.Router {
   const r = express.Router();
   const cam = () => d.config().camera;
   const known = (req: Request, res: Response) => {
@@ -194,6 +200,135 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
       if (status === 416) return void res.status(416).end();
       res.status(status === 404 ? 404 : 500).json({ error: status === 404 ? 'not_found' : 'internal' });
     });
+  });
+
+  // Recordings on the camera's SD card (spec 2026-10-02-baichuan-recordings-design):
+  // listed by HTTP Search, fetched over Baichuan into the cache. /days is
+  // registered before /:id.
+  const IMMUTABLE = 'private, max-age=604800, immutable';
+  const online = () => d.status().state().online;
+  const offline = (res: Response) => void res.status(503).json({ error: 'camera_offline' });
+  // `detail` is for people: never a path, a password or a key.
+  const recordingError = (res: Response, err: unknown): void => {
+    if (res.headersSent || isAbort(err)) return void res.destroy();
+    if (err instanceof SearchError) {
+      if (err.code === 'camera_offline') return offline(res);
+      return void res.status(502).json({ error: 'recordings_unavailable', reason: 'search_failed', detail: err.message });
+    }
+    if (err instanceof BaichuanError) {
+      if (err.code === 'offline') return offline(res);
+      if (err.code === 'not_found') return void res.status(404).json({ error: 'unknown_recording' });
+      return void res.status(502).json({ error: 'recordings_unavailable', reason: err.code, detail: err.message });
+    }
+    logger.error({ err: (err as Error).message }, 'recording_request_failed');
+    res.status(500).json({ error: 'internal' });
+  };
+  const fileHeaders = (res: Response, size: number) => {
+    res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader('Content-Length', String(size));
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cache-Control', IMMUTABLE);
+  };
+  // From the cache, like clip files (Range, 416); pinned while it is read.
+  const serveCached = (res: Response, side: RecordingsSide, id: string): boolean => {
+    const unpin = side.cache.open(id);
+    if (!unpin) return false;
+    res.on('close', unpin);
+    res.setHeader('Cache-Control', IMMUTABLE);
+    res.sendFile(resolve(side.cache.path(id)), { cacheControl: false, acceptRanges: true, dotfiles: 'allow', headers: { 'Content-Type': 'video/mp4' } }, (err) => {
+      unpin();
+      if (!err || res.headersSent) return;
+      const status = (err as { status?: number }).status;
+      if (status === 416) return void res.status(416).end(); // carries Content-Range: bytes */size
+      res.status(status === 404 ? 404 : 500).json({ error: status === 404 ? 'unknown_recording' : 'internal' });
+    });
+    return true;
+  };
+  const gone = (res: Response) => res.destroyed || res.writableEnded;
+
+  r.get('/cameras/:cam/recordings', async (req, res) => {
+    if (!known(req, res)) return;
+    // Checked before the list: it has no guard of its own (from=0 would mean
+    // a Search per day since 1970).
+    const from = intParam(req.query.from), to = intParam(req.query.to);
+    if (from === undefined || to === undefined || from === null || to === null) return bad(res, 'from and to (unix ms) are required');
+    if (to < from) return bad(res, 'to is before from');
+    if (to - from > 2 * DAY) return bad(res, 'at most 48 hours per request');
+    const stream = req.query.stream;
+    if (stream !== 'sub' && stream !== 'main') return bad(res, 'stream is sub or main');
+    if (!online()) return offline(res);
+    try {
+      const list = await d.recordings().list.range(from, to, stream);
+      res.json(list.map((e) => ({ id: e.id, start: e.start, end: e.end, stream: e.stream, size: e.size, kinds: e.kinds, clipId: clipNear(d.catalog, cam().id, e.stream, e.start, 5000)?.id ?? null })));
+    } catch (err) {
+      recordingError(res, err);
+    }
+  });
+
+  r.get('/cameras/:cam/recordings/days', async (req, res) => {
+    if (!known(req, res)) return;
+    const month = typeof req.query.month === 'string' ? req.query.month : '';
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return bad(res, 'month is YYYY-MM');
+    if (!online()) return offline(res);
+    try {
+      res.json({ month, days: await d.recordings().list.monthDays(month) });
+    } catch (err) {
+      recordingError(res, err);
+    }
+  });
+
+  // GET and HEAD (Express answers HEAD with this route).
+  r.get('/cameras/:cam/recordings/:id', async (req, res) => {
+    if (!known(req, res)) return;
+    const id = req.params.id;
+    if (!validId(id)) return bad(res, 'not a recording id'); // before the cache or the camera
+    const side = d.recordings();
+    if (serveCached(res, side, id)) return; // the cache needs no camera
+    if (!online()) return offline(res);
+    let entry: RecordingEntry | undefined;
+    try {
+      entry = await side.list.find(id); // the camera path comes from Search, never from the request
+    } catch (err) {
+      return recordingError(res, err);
+    }
+    if (gone(res)) return;
+    if (!entry) return void res.status(404).json({ error: 'unknown_recording' });
+    if (serveCached(res, side, id)) return;
+    const size = entry.size;
+    // HEAD answers from the list: never a camera download.
+    if (req.method === 'HEAD') {
+      fileHeaders(res, size);
+      return void res.status(200).end();
+    }
+    const ac = new AbortController();
+    res.on('close', () => ac.abort());
+    // A plain GET streams the file through the fetch's tee while it arrives
+    // (when it is the fetch's first client and no byte has gone through yet).
+    // Range is served only from the (complete) cached file: a Range request
+    // waits for the fetch, then reads the cache. When the file can't be kept
+    // (disk paused, larger than the cap) a Range request gets the whole file
+    // streamed as a 200 (allowed for Range). Any other request waits for
+    // `done` and reads the cache. A fetch this request joined that failed or
+    // wasn't kept (another client's abort, a full disk) is tried once more
+    // for this client before an error is final.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (gone(res)) return;
+      const { fetch, created } = side.fetcher.get(entry, { priority: 'high', signal: ac.signal });
+      const streamIt = !req.headers.range || side.paused() || size > side.cache.capBytes() || attempt > 0;
+      const live = streamIt && fetch.attach(res, () => (res.status(200), fileHeaders(res, size)));
+      try {
+        await fetch.done;
+      } catch (err) {
+        if (res.headersSent || gone(res)) return void res.destroy(); // a short body: the client sees the failure
+        const final = err instanceof BaichuanError && (err.code === 'not_found' || err.code === 'offline');
+        if (attempt === 0 && (isAbort(err) || (!created && !final))) continue; // not this client's failure: try again
+        return recordingError(res, err);
+      }
+      if (live || res.headersSent || gone(res)) return; // the tee sent the whole file and ended the response
+      if (serveCached(res, side, id)) return;
+    }
+    if (gone(res)) return;
+    recordingError(res, new BaichuanError('protocol', 'the recording could not be kept or streamed'));
   });
 
   r.get('/stream', d.sse);

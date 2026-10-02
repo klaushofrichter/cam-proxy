@@ -124,6 +124,47 @@ paths:
         '400': { description: not <id>.mp4 or <id>.jpg }
         '404': { description: 'unknown clip, or no snapshot' }
         '416': { description: 'range not satisfiable (Content-Range: bytes */size)' }
+  /api/cameras/{cam}/recordings:
+    get:
+      summary: The camera's SD-card recordings that overlap a time range (at most 48 hours), by start
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: from, in: query, required: true, schema: { type: integer }, description: unix ms }
+        - { name: to, in: query, required: true, schema: { type: integer }, description: unix ms }
+        - { name: stream, in: query, required: true, schema: { type: string, enum: [sub, main] } }
+      responses:
+        '200': { description: '[{id (the camera file name), start, end (unix ms), stream, size (bytes), kinds (person, vehicle, pet, motion), clipId (the FTP copy: same stream, start within 5 s; or null)}]; recordings still being written are left out' }
+        '400': { description: '{error: invalid, detail}: from/to missing or reversed, more than 48 hours apart, or stream not sub/main' }
+        '404': { description: unknown camera }
+        '502': { description: '{error: recordings_unavailable, reason: search_failed, detail}' }
+        '503': { description: '{error: camera_offline}' }
+  /api/cameras/{cam}/recordings/days:
+    get:
+      summary: The days of a camera-local month that have recordings (the camera's month Search, kept 5 minutes)
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: month, in: query, required: true, schema: { type: string }, description: YYYY-MM }
+      responses:
+        '200': { description: '{ month, days: [day of month] }' }
+        '400': { description: not YYYY-MM }
+        '404': { description: unknown camera }
+        '502': { description: '{error: recordings_unavailable, reason: search_failed, detail}' }
+        '503': { description: '{error: camera_offline}' }
+  /api/cameras/{cam}/recordings/{id}:
+    get:
+      summary: A recording as MP4 (HTTP Range; HEAD too). Fetched from the camera over Baichuan on the first request and streamed while it arrives; later and Range requests come from the cache
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string }, description: 'the file name from the list, e.g. RecS0A_DST20261001_211129_211207_0_5514C080000000_108CE9.mp4' }
+        - { name: Range, in: header, schema: { type: string }, description: 'e.g. bytes=0-1023' }
+      responses:
+        '200': { description: 'video/mp4; Content-Length, Accept-Ranges: bytes; cached as immutable. A Range request for a file the cache cannot keep (disk paused, larger than recordings.cacheMB) gets the whole file. A failure after the headers ends the body short' }
+        '206': { description: the requested range, with Content-Range }
+        '400': { description: '{error: invalid, detail}: not a recording id' }
+        '404': { description: '{error: unknown_recording} (or not_found: unknown camera)' }
+        '416': { description: 'range not satisfiable (Content-Range: bytes */size)' }
+        '502': { description: '{error: recordings_unavailable, reason (refused, auth, timeout, protocol, search_failed), detail}' }
+        '503': { description: '{error: camera_offline}' }
   /api/cameras/{cam}/events:
     get:
       summary: Events, newest first
@@ -247,7 +288,7 @@ paths:
         Admin token or admin session. Writes with the session cookie need
         `X-CamProxy-UI: 1`. A client token answers 403 `{"error":"admin_only"}`.
       responses:
-        '200': { description: '{ version, camera (incl. webUiUrl, reboot {kind, requestedAt, confirmed, phase, offAt, endedAt, downSec} or null, poeSwitch {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state (on, off, elsewhere, server_differs, not_set_up, unknown), checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, analytics: [provider state], analyticsUnmapped: top 20 unmapped objects [{mid, name, count, lastSeen}] }' }
+        '200': { description: '{ version, camera (incl. webUiUrl, reboot {kind, requestedAt, confirmed, phase, offAt, endedAt, downSec} or null, poeSwitch {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state (on, off, elsewhere, server_differs, not_set_up, unknown), checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result (ok, offline, refused, auth, timeout, protocol, not_found), stream, bytes, ms} or null, cache: {bytes, files, capBytes}}, analytics: [provider state], analyticsUnmapped: top 20 unmapped objects [{mid, name, count, lastSeen}] }' }
         '401': { description: not signed in }
         '403': { description: admin_only, or csrf }
   /control/analytics:
@@ -299,7 +340,7 @@ paths:
     get:
       summary: Disk, events, stream log, storage budget (spec §13)
       responses:
-        '200': { description: '{ disk: {catalog, stills, previews, clips} (each {bytes, files, oldest, newest, growthPerDay}), events: {stored}, stream: {rows, lastId}, sse: {clients}, storage: {budget, used, daysUntilFull, paused} }' }
+        '200': { description: '{ disk: {catalog, stills, previews, clips, recordings} (each {bytes, files, oldest, newest, growthPerDay}), events: {stored}, stream: {rows, lastId}, sse: {clients}, storage: {budget, used, daysUntilFull, paused} }' }
   /control/config:
     get:
       summary: Every setting with value, source, restart flag and pending next value
