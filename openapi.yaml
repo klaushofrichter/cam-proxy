@@ -17,7 +17,7 @@ paths:
       summary: The process is up (no camera check, no auth)
       security: []
       responses:
-        '200': { description: '{ ok: true, version } (the real running version: the release version, dev locally)' }
+        '200': { description: '{ ok: true, version, startedAt } (the real running version: the release version, dev locally; startedAt: when this process started serving, unix ms)' }
   /api/cameras:
     get:
       summary: The camera and its state
@@ -254,7 +254,7 @@ paths:
     get:
       summary: External analytics providers - state, usage and limits (admin)
       responses:
-        '200': { description: '[{ id, name, enabled, keyMasked (never the key), month: {calls, limit}, today: {calls, cap}, paused: null | {reason, until}, lastCall, lastError }]' }
+        '200': { description: '[{ id, name, enabled, keyMasked (first4…last4, never the key), keySource (env, manual or none), month: {calls, limit}, today: {calls, cap}, paused: null | {reason, until}, lastCall, lastError }]' }
         '401': { description: not signed in }
         '403': { description: admin_only }
   /control/analytics/unmapped:
@@ -268,6 +268,31 @@ paths:
       summary: Clear the unmapped list (admin)
       responses:
         '200': { description: '{ cleared }' }
+        '401': { description: not signed in }
+        '403': { description: admin_only, or csrf }
+  /control/secrets/google-vision-key:
+    put:
+      summary: Sets or overrides the Google Vision key at runtime, in memory only (admin)
+      description: >
+        Replaces the key in use at once (from CAMPROXY_GOOGLE_VISION_KEY or an
+        earlier manual key) and lifts an invalid-key pause. The key is never
+        written to disk, the config or the logs, and never returned; a restart
+        of the process restores the configured key, or none. Recorded in the
+        audit log as `secret-override` with the masked key. Admin token or
+        admin session (with `X-CamProxy-UI: 1`); the client and audit tokens
+        answer 403.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key]
+              properties:
+                key: { type: string, minLength: 20, maxLength: 200, pattern: '^[\x21-\x7e]+$', description: 'printable ASCII, no spaces' }
+      responses:
+        '200': { description: '{ keySource: manual, keyMasked: "AIza…wXyZ", replaced: env | manual | none }' }
+        '400': { description: '{ error: invalid, detail } (never echoes the key)' }
         '401': { description: not signed in }
         '403': { description: admin_only, or csrf }
   /control/stats:
@@ -299,15 +324,20 @@ paths:
         '400': { description: unknown setting }
   /control/actions/{name}:
     post:
-      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart
+      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart (the camera side), camera-reboot, restart-proxy (the process)
+      description: |
+        camera-reboot reboots the camera (about a minute offline; every camera token becomes invalid).
+        restart-proxy answers 202, then stops gracefully (as on SIGTERM) and exits 0; a supervisor
+        (compose, the cluster) starts it again. Both are admin only (sessions need X-CamProxy-UI) and audited.
       parameters:
         - { name: name, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: 'camera-test and retention-run results; camera-ftp-setup/-off: {ftp} (the camera''s settings, no password); camera-ftp-test: {ok, rspCode}' }
-        '202': { description: started (onvif-resubscribe, restart) }
+        '202': { description: 'started (onvif-resubscribe, restart, restart-proxy); camera-reboot: { confirmed } (false: the camera dropped the connection after receiving the request)' }
         '404': { description: unknown action }
         '409': { description: 'camera-ftp-setup/-test: ftp.publicHost or the FTP password is not set' }
-        '502': { description: the camera refused or failed the call }
+        '429': { description: 'camera-reboot: too_soon, within 120 s of the last reboot (Retry-After)' }
+        '502': { description: 'the camera refused or failed the call; camera-reboot: the request never reached the camera' }
   /control/log:
     get:
       summary: Recent log lines (info and above), redacted

@@ -76,6 +76,80 @@ describe('EventTracker', () => {
   });
 });
 
+describe('EventIntake first pull', () => {
+  const PERSON = 'tns1:RuleEngine/MyRuleDetector/PeopleDetect';
+  const msg = (op: 'Initialized' | 'Changed' | 'Deleted', state: boolean, utc: number) => ({ topic: PERSON, op, utc, state });
+  let intake: EventIntake | undefined;
+  afterEach(async () => {
+    await intake?.stop();
+    intake = undefined;
+  });
+
+  // An intake whose subscription answers with the given pulls, then waits.
+  async function runWith(pulls: Array<ReturnType<typeof msg>[]>) {
+    const tracker = new EventTracker(catalog, log, 'cam1', { maxOpenMin: 10 });
+    intake = new EventIntake({
+      client: {} as ReolinkClient, tracker,
+      cfg: { onvif: { subscribeMin: 1, pullTimeoutS: 1 }, poll: { enabled: false, intervalS: 1, afterOnvifDownS: 1 }, maxOpenMin: 10 },
+      onvif: { host: '127.0.0.1', port: 1, user: 'u', password: 'p' },
+    });
+    const queue = [...pulls];
+    let served = 0;
+    const sub = (intake as unknown as { sub: Record<string, unknown> }).sub;
+    sub.subscribe = async () => undefined;
+    sub.needsRenew = () => false;
+    sub.unsubscribe = async () => undefined;
+    sub.pull = async (signal: AbortSignal) => {
+      const next = queue.shift();
+      if (next) {
+        served++;
+        return next;
+      }
+      await new Promise<void>((r) => signal.addEventListener('abort', () => r(), { once: true }));
+      return [];
+    };
+    intake.start();
+    await until(() => served === pulls.length);
+    await new Promise((r) => setTimeout(r, 50));
+  }
+
+  it('a person starting in the first pull is an event at the Changed message time', async () => {
+    await runWith([[msg('Initialized', false, 1_000), msg('Changed', true, 2_000)]]);
+    expect(listEvents(catalog, { cam: 'cam1' }).map((e) => [e.kind, e.start_ts])).toEqual([['person', 2_000]]);
+  });
+
+  it('a first pull of only Initialized messages creates no event', async () => {
+    await runWith([[msg('Initialized', false, 1_000)]]);
+    expect(listEvents(catalog, { cam: 'cam1' })).toHaveLength(0);
+  });
+
+  it('Initialized person=true alone is state only, no new event', async () => {
+    await runWith([[msg('Initialized', true, 1_000)]]);
+    expect(listEvents(catalog, { cam: 'cam1' })).toHaveLength(0);
+  });
+
+  // The real camera splits its Initialized messages over two pulls
+  // (cam-sim/reference/rlc-1224a/onvif/PullMessages1.xml and 2.xml).
+  it('the real camera\'s two-pull start: a Changed in the second pull is an event', async () => {
+    const MOTION = 'tns1:RuleEngine/CellMotionDetector/Motion';
+    await runWith([
+      [msg('Initialized', false, 1_000)],
+      [{ topic: MOTION, op: 'Initialized', utc: 1_000, state: false }, msg('Changed', true, 3_000)],
+    ]);
+    expect(listEvents(catalog, { cam: 'cam1' }).map((e) => [e.kind, e.start_ts])).toEqual([['person', 3_000]]);
+  });
+
+  it('each kind starts at its own message time when several arrive in one pull', async () => {
+    const MOTION = 'tns1:RuleEngine/CellMotionDetector/Motion';
+    await runWith([
+      [msg('Initialized', false, 1_000), { topic: MOTION, op: 'Initialized', utc: 1_000, state: false }],
+      [{ topic: MOTION, op: 'Changed', utc: 1_500, state: true }, msg('Changed', true, 2_000)],
+    ]);
+    const got = Object.fromEntries(listEvents(catalog, { cam: 'cam1' }).map((e) => [e.kind, e.start_ts]));
+    expect(got).toEqual({ motion: 1_500, person: 2_000 });
+  });
+});
+
 describe('EventIntake against cam-sim', () => {
   let close: (() => Promise<void>) | undefined;
   let intake: EventIntake | undefined;

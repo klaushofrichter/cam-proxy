@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { appendFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { AuditLog, AuditQueryError, redact } from '../src/audit/audit-log';
+import { AuditLog, AuditQueryError, cut, redact } from '../src/audit/audit-log';
 import { logger } from '../src/log';
 
 const dirs: string[] = [];
@@ -63,6 +63,15 @@ describe('AuditLog.write', () => {
     expect(redact({ auth: { tokenKind: 'client', reason: 'admin-only' } })).toEqual({ auth: { tokenKind: 'client', reason: 'admin-only' } });
   });
 
+  // Issue #70: `secret` names an environment variable; any other value is redacted.
+  it('keeps a secret field that names a known secret variable, redacts any other', () => {
+    expect(redact({ secret: 'CAMPROXY_GOOGLE_VISION_KEY', masked: 'AIza…wXyZ', replaced: 'env' })).toEqual({ secret: 'CAMPROXY_GOOGLE_VISION_KEY', masked: 'AIza…wXyZ', replaced: 'env' });
+    expect(redact({ secret: 'AIzaSyManualKey0000000wXyZ' })).toEqual({ secret: '[redacted]' });
+    expect(redact({ secret: 'CAMPROXY_X with more' })).toEqual({ secret: '[redacted]' });
+    expect(redact({ secret: 'CAMPROXY_ADMIN_TOKEN_VALUE' })).toEqual({ secret: '[redacted]' }); // only known names
+    expect(redact({ secret: { name: 'CAMPROXY_X' } })).toEqual({ secret: '[redacted]' });
+  });
+
   it('redacts a config change by its key name', () => {
     expect(redact({ changes: [{ key: 'camera.password', from: 'a', to: 'b' }, { key: 'retention.auditDays', from: 90, to: 30 }] })).toEqual({
       changes: [{ key: 'camera.password', from: '[redacted]', to: '[redacted]' }, { key: 'retention.auditDays', from: 90, to: 30 }],
@@ -77,6 +86,22 @@ describe('AuditLog.write', () => {
     const again = new AuditLog({ dir, version: 'v', camera: () => 'cam1', now: () => now.t, host: 'h' });
     again.write({ ...base, action: 'a', message: 'after' });
     expect(again.list({}).records.map((r) => [r.message, r.cam_proxy!.cursor])).toEqual([['after', '2026-10-01:3'], ['first', '2026-10-01:1']]);
+  });
+
+  it('cuts a long user agent to 512 characters, never inside a surrogate pair', () => {
+    const now = { t: T };
+    const { log } = make(now);
+    expect(log.write({ ...base, action: 'login', message: 'm', userAgent: 'a'.repeat(600) })!.user_agent).toEqual({ original: 'a'.repeat(512) });
+    const ua = (log.write({ ...base, action: 'login', message: 'm', userAgent: 'a'.repeat(511) + '😀😀' })!.user_agent as { original: string }).original;
+    expect(ua).toBe('a'.repeat(511));
+    expect(ua).not.toMatch(/[\uD800-\uDBFF]$/);
+  });
+
+  it('cut() keeps whole characters', () => {
+    expect(cut('abc', 5)).toBe('abc');
+    expect(cut('abcdef', 3)).toBe('abc');
+    expect(cut('ab😀', 3)).toBe('ab');
+    expect(cut('ab😀', 4)).toBe('ab😀');
   });
 
   it('lets the caller add ECS fields but not override the core ones', () => {
@@ -168,6 +193,17 @@ describe('AuditLog.list', () => {
     expect(() => log.list({ limit: 501 })).toThrow(AuditQueryError);
   });
 
+  it('says hasMore only when a record is left past the limit, at the exact boundary too', () => {
+    const log = seed(); // 9 records
+    expect(log.list({ limit: 9 })).toMatchObject({ hasMore: false });
+    expect(log.list({ limit: 8 })).toMatchObject({ hasMore: true });
+    expect(log.list({ limit: 9, after: '' })).toMatchObject({ hasMore: false });
+    expect(log.list({ limit: 8, after: '' })).toMatchObject({ hasMore: true });
+    const first = log.list({ limit: 4 });
+    expect(log.list({ limit: 5, before: first.next! })).toMatchObject({ hasMore: false });
+    expect(log.list({ limit: 4, before: first.next! })).toMatchObject({ hasMore: true });
+  });
+
   it('skips a corrupt line but keeps the line numbers', () => {
     const now = { t: T };
     const { dir, log } = make(now);
@@ -189,6 +225,27 @@ describe('AuditLog files', () => {
     expect(readdirSync(dir)).toHaveLength(3);
     expect(log.deleteBefore('2026-09-03')).toBe(2);
     expect(readdirSync(dir)).toEqual(['2026-09-03.jsonl']);
+  });
+
+  // #78: growth per calendar day of the last 7 whole days; today's file is
+  // left out by its date, not by its position (a quiet today has no file).
+  it('measures growth per calendar day, leaving out only today', () => {
+    const now = { t: Date.UTC(2026, 8, 10, 12) };
+    const { dir, log } = make(now);
+    // Whole days 09-07 and 09-09 (09-08 had no records), nothing yet today.
+    writeFileSync(join(dir, '2026-09-07.jsonl'), 'x'.repeat(299) + '\n');
+    writeFileSync(join(dir, '2026-09-09.jsonl'), 'x'.repeat(299) + '\n');
+    expect(log.usage().growthPerDay).toBe(200); // 600 bytes over 3 calendar days
+    writeFileSync(join(dir, '2026-09-10.jsonl'), 'x'.repeat(9999) + '\n');
+    expect(log.usage().growthPerDay).toBe(200); // today's partial day doesn't count
+    // At most the last 7 whole days.
+    writeFileSync(join(dir, '2026-09-01.jsonl'), 'x'.repeat(699) + '\n');
+    expect(log.usage().growthPerDay).toBe(600 / 7);
+    // Only today: no whole day yet.
+    rmSync(join(dir, '2026-09-01.jsonl'));
+    rmSync(join(dir, '2026-09-07.jsonl'));
+    rmSync(join(dir, '2026-09-09.jsonl'));
+    expect(log.usage().growthPerDay).toBe(0);
   });
 
   it('refuses a malformed day in deleteBefore', () => {

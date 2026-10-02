@@ -36,6 +36,8 @@ const CURSOR = /^(\d{4}-\d{2}-\d{2}):(\d{1,9})$/;
 const SECRET = /token|key|password|secret/i;
 // Field names that look secret but only describe: a config change's `key`, the kind of token refused.
 const SAFE = new Set(['key', 'tokenKind']);
+// `secret` may name the secret a record is about (secret-override): these names only.
+const SECRET_NAMES = new Set(['CAMPROXY_GOOGLE_VISION_KEY']);
 
 // Values of secret-looking keys become "[redacted]", at any depth. A config
 // change ({key, from, to}) is redacted by the name in `key`.
@@ -46,8 +48,17 @@ export function redact(v: unknown): unknown {
   const byName = typeof o.key === 'string' && SECRET.test(o.key) && ('from' in o || 'to' in o);
   return Object.fromEntries(Object.entries(o).map(([k, x]) => {
     if (byName && (k === 'from' || k === 'to')) return [k, '[redacted]'];
+    if (k === 'secret' && typeof x === 'string' && SECRET_NAMES.has(x)) return [k, x];
     return [k, SECRET.test(k) && !SAFE.has(k) ? '[redacted]' : redact(x)];
   }));
+}
+
+// The first `max` UTF-16 units of `s`, one fewer when the cut would split a
+// surrogate pair (an emoji): records stay valid UTF-8.
+export function cut(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const c = s.charCodeAt(max - 1);
+  return s.slice(0, c >= 0xd800 && c <= 0xdbff ? max - 1 : max);
 }
 
 export class AuditLog {
@@ -158,12 +169,17 @@ export class AuditLog {
     const days = this.days();
     const sizes = days.map((d) => this.size(join(this.d.dir, `${d}.jsonl`)));
     const bytes = sizes.reduce((a, b) => a + b, 0);
-    const recent = sizes.slice(-8, -1); // whole days only
+    // Growth: bytes per calendar day over the last 7 whole UTC days (today is
+    // partial), counting days without a file as 0, from the first file on.
+    const today = Date.parse(`${new Date(this.now()).toISOString().slice(0, 10)}T00:00:00Z`);
+    const from = Math.max(today - 7 * 86_400_000, days.length ? Date.parse(`${days[0]}T00:00:00Z`) : today);
+    const whole = (today - from) / 86_400_000;
+    const recent = days.reduce((n, d, i) => { const t = Date.parse(`${d}T00:00:00Z`); return t >= from && t < today ? n + sizes[i] : n; }, 0);
     return {
       bytes, files: days.length,
       oldest: days.length ? Date.parse(`${days[0]}T00:00:00Z`) : null,
       newest: days.length ? Date.parse(`${days.at(-1)}T00:00:00Z`) : null,
-      growthPerDay: recent.length ? recent.reduce((a, b) => a + b, 0) / recent.length : 0,
+      growthPerDay: whole > 0 ? recent / whole : 0,
     };
   }
 
@@ -179,7 +195,7 @@ export class AuditLog {
     };
     if (i.user) r.user = { name: i.user };
     if (i.ip) r.source = { ip: i.ip };
-    if (i.userAgent) r.user_agent = { original: i.userAgent.slice(0, 512) };
+    if (i.userAgent) r.user_agent = { original: cut(i.userAgent, 512) };
     if (i.error) r.error = { message: i.error };
     r.message = i.message;
     if (i.details) r.cam_proxy = redact(i.details);

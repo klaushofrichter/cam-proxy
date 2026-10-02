@@ -1,7 +1,7 @@
 <script lang="ts">
   import { api, ApiError } from '../lib/api';
-  import { status } from '../lib/state';
-  import { estimateFor, parseLimit, type UiProviderState } from '../lib/analytics';
+  import { refresh, status } from '../lib/state';
+  import { estimateFor, keyNotice, parseLimit, validKey, type UiProviderState } from '../lib/analytics';
 
   // The Analytics card (spec 2026-09-30-analytics-design): event kinds, and per
   // provider its switch, masked key, limits, estimate and the shared-key note.
@@ -39,6 +39,24 @@
     const box = e.currentTarget as HTMLInputElement;
     void put(body(box.checked), what, undefined, box);
   };
+  // Issue #70: a key set here is kept in memory only (never shown again, never
+  // saved); the field is cleared once it is accepted.
+  let keyDraft = $state('');
+  let keyMessage = $state(''); // next to the field, not the card's shared line
+  const keyOk = $derived(validKey(keyDraft));
+  const notice = $derived(keyNotice(provider));
+  async function setKey() {
+    if (!keyOk) return;
+    keyMessage = '';
+    try {
+      await api('PUT', '/control/secrets/google-vision-key', { key: keyDraft });
+      keyDraft = '';
+      keyMessage = 'Google Vision key set';
+      await refresh();
+    } catch (e) {
+      keyMessage = e instanceof ApiError ? e.message : 'not set';
+    }
+  }
   const kinds = ['person', 'vehicle', 'pet'] as const;
   const noKinds = $derived(kinds.every((k) => !val<boolean>(`analytics.kinds.${k}`)));
 </script>
@@ -63,8 +81,16 @@
       enabled
     </label>
     <p class="small" id="analytics-key-text" data-testid="analytics-key">
-      Key: {#if provider?.keyMasked}<span class="mono">{provider.keyMasked}</span>{:else}not set: add <span class="mono">CAMPROXY_GOOGLE_VISION_KEY</span> to the environment and restart{/if}
+      Key: {#if provider?.keyMasked}<span class="mono">{provider.keyMasked}</span>{:else}not set: add <span class="mono">CAMPROXY_GOOGLE_VISION_KEY</span> to the environment and restart, or set one below{/if}
     </p>
+    {#if notice}<p class="notice small" data-testid="analytics-key-notice">{notice}</p>{/if}
+    <form class="row" onsubmit={(e) => { e.preventDefault(); void setKey(); }}>
+      <label>Google Vision key <input type="password" autocomplete="off" spellcheck="false" bind:value={keyDraft} placeholder="AIza…" data-testid="analytics-key-input" /></label>
+      <button type="submit" disabled={!keyOk} data-testid="analytics-key-set" aria-label="Set the Google Vision key">Set</button>
+      {#if keyMessage}<span class="msg small" role="status" data-testid="analytics-key-message">{keyMessage}</span>{/if}
+    </form>
+    {#if keyDraft && !keyOk}<p class="hint small" data-testid="analytics-key-hint">20 to 200 characters: letters, digits and symbols, no spaces</p>{/if}
+    <p class="muted small">A key set here replaces the configured one at once. It is kept in memory only, not saved: a restart restores the configured key (or none).</p>
     <div class="row"><label>Calls per month <input type="number" min="0" max="100000" step="1" value={monthly} oninput={(e) => (monthlyDraft = e.currentTarget.value)} data-testid="analytics-monthly" /></label>
       <button disabled={monthlyValue === null} data-testid="analytics-monthly-save" aria-label="Save calls per month" onclick={() => monthlyValue !== null && void put({ googleVision: { monthlyLimit: monthlyValue } }, 'Monthly limit', () => (monthlyDraft = undefined))}>Save</button></div>
     {#if monthlyValue === null}<p class="hint small" data-testid="analytics-monthly-hint">a whole number from 0 to 100,000</p>{/if}
@@ -86,6 +112,8 @@
   legend { font-size: 13px; color: var(--muted); padding: 0; margin-bottom: 4px; }
   .provider { display: grid; gap: 6px; padding-top: 6px; border-top: 1px solid var(--border); }
   .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  input[type='password'] { margin-left: 4px; width: 260px; max-width: 100%; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; }
+  .notice { margin: 0; padding: 6px 8px; border-radius: 6px; border: 1px solid #a855f7; background: var(--surface-2); }
   input[type='number'] { width: 90px; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; }
   button { padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); cursor: pointer; color: var(--text); }
   button:hover { border-color: var(--accent); }
@@ -95,4 +123,5 @@
   .hint { margin: 0; color: var(--danger); }
   button:disabled { opacity: 0.5; cursor: default; }
   .msg { margin: 6px 0 0; color: var(--accent); }
+  .row .msg { margin: 0; }
 </style>

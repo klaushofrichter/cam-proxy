@@ -39,6 +39,17 @@ describe('audit API', () => {
     expect((await request(p.base).get('/control/audit').set(auth('unknown-token-'.padEnd(40, 'q')))).status).toBe(401);
   });
 
+  // #78: Express answers HEAD with the GET route; the guard let only GET through.
+  it('answers HEAD like GET for admins and the audit token, still refusing the client token', async () => {
+    for (const t of [ADMIN_TOKEN, AUDIT_TOKEN]) {
+      const r = await request(p.base).head('/control/audit').set(auth(t));
+      expect(r.status).toBe(200);
+      expect(r.headers['content-type']).toMatch(/application\/x-ndjson/);
+    }
+    expect((await request(p.base).head('/control/audit').set(auth(CLIENT_TOKEN))).status).toBe(403);
+    expect((await request(p.base).head('/control/audit')).status).toBe(401);
+  });
+
   // Review 2026-10-01: the access check sits on the handler's own route, so
   // every path Express routes to it (case, trailing slash, encoding) is guarded.
   it('guards every spelling of the path that reaches the handler', async () => {
@@ -72,16 +83,19 @@ describe('audit API', () => {
     }
   });
 
-  it('records a restart requested through the control API, by session or token', async () => {
+  it('records the camera-side restart as a control-action (restart), by session or token', async () => {
+    const restarts = () => p.proxy.audit.list({ actions: ['control-action'] }).records.filter((x) => (x.cam_proxy as { action?: string }).action === 'restart');
     const r = await request(p.base).post('/control/actions/restart').set(auth(ADMIN_TOKEN));
     expect(r.status).toBe(202);
-    await until(() => p.proxy.audit.list({ actions: ['proxy-restart'] }).records.length === 1);
-    expect(p.proxy.audit.list({ actions: ['proxy-restart'] }).records[0]).toMatchObject({ event: { category: ['process'], type: ['change'] }, user: { name: 'admin' }, cam_proxy: { requestedBy: 'token' } });
+    await until(() => restarts().length === 1);
+    expect(restarts()[0]).toMatchObject({ event: { category: ['configuration'], type: ['change'], outcome: 'success' }, user: { name: 'admin' }, cam_proxy: { action: 'restart', result: 'ok', requestedBy: 'token' } });
     const login = await request(p.base).post('/control/login').send({ token: ADMIN_TOKEN });
     const cookie = String(login.headers['set-cookie']).split(';')[0];
     expect((await request(p.base).post('/control/actions/restart').set('Cookie', cookie).set('x-camproxy-ui', '1')).status).toBe(202);
-    await until(() => p.proxy.audit.list({ actions: ['proxy-restart'] }).records.length === 2);
-    expect(p.proxy.audit.list({ actions: ['proxy-restart'] }).records[0]).toMatchObject({ user: { name: 'admin' }, cam_proxy: { requestedBy: 'session' } });
+    await until(() => restarts().length === 2);
+    expect(restarts()[0]).toMatchObject({ user: { name: 'admin' }, cam_proxy: { requestedBy: 'session' } });
+    // proxy-restart now means only the process restart (#71)
+    expect(p.proxy.audit.list({ actions: ['proxy-restart'] }).records).toHaveLength(0);
     // the shared proxy still answers after the restart
     expect((await request(p.base).get('/control/audit?limit=1').set(auth(AUDIT_TOKEN))).status).toBe(200);
   });

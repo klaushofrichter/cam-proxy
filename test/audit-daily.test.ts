@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { AuditLog } from '../src/audit/audit-log';
-import { DailyAudit, addDays, dayStartMs } from '../src/audit/daily';
+import { DailyAudit, addDays, dayStartMs, storageMessage } from '../src/audit/daily';
 import { localDay } from '../src/analytics/local-day';
 import type { TimeInfo } from '../src/camera/time';
 
@@ -31,6 +31,20 @@ function setup(now: { t: number }, zone: TimeInfo | null = CHICAGO, over: { stor
   return { audit, asked, mk };
 }
 const of = (a: AuditLog, action: string) => a.list({ actions: [action], limit: 500 }).records;
+
+describe('storageMessage', () => {
+  const u = { used: 82.4e9, budget: 150e9, stillMinutes: 41_230, clipRows: 1312 };
+  it('says how many days until full, or that it is not filling', () => {
+    expect(storageMessage({ ...u, daysUntilFull: 214.4 })).toBe('Storage: 82.4 GB used of 150.0 GB budget, 41,230 minutes of stills, 1,312 clips, 214 days until full');
+    expect(storageMessage({ ...u, daysUntilFull: null })).toBe('Storage: 82.4 GB used of 150.0 GB budget, 41,230 minutes of stills, 1,312 clips, not filling');
+  });
+  // #78: the Pi's first record read "893477 days until full".
+  it('says "more than a year" past 365 days', () => {
+    expect(storageMessage({ ...u, daysUntilFull: 365 })).toMatch(/, 365 days until full$/);
+    expect(storageMessage({ ...u, daysUntilFull: 365.6 })).toMatch(/, more than a year until full$/);
+    expect(storageMessage({ ...u, daysUntilFull: 893_477 })).toMatch(/, more than a year until full$/);
+  });
+});
 
 describe('CHICAGO test zone', () => {
   it('is CDT on 2026-10-01 and CST on 2026-12-01', () => {

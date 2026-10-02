@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Maintenance page: "Reboot camera" reboots the camera (`POST /control/actions/camera-reboot`, admin only). It asks first; afterwards the page shows "Rebooting…" and the camera's state, and the Status page shows "rebooting (requested HH:MM)" until the camera answers again or 5 minutes pass. Another reboot within 120 s is refused (429). The proxy drops its camera token and rides it out: ONVIF re-subscribes on its own. Audited as `camera-reboot`, with a second record when the camera is back (`downSec`) or not back after 5 minutes.
+- Maintenance page: "Restart proxy" restarts the proxy process (`POST /control/actions/restart-proxy`, admin only): the normal graceful stop, then exit 0, and compose or the cluster starts it again (run directly, the process just ends). The page shows "Restarting…" and reloads when the new process answers; after 2 minutes without it, it says so. Sign in again afterwards. Both buttons share one confirmation dialog on the page.
+- Audit log: `proxy-restart` now means only the process restart. The camera-side restart (`POST /control/actions/restart`, "Restart camera side") is recorded as a `control-action` with `action: restart`. `proxy-stop` has the reason `restart-requested` after a process restart.
+- `/health` also answers `startedAt`, the time the process started serving.
+- Audit log: the daily storage record says "N minutes of stills" (it counts minute files, not single stills).
+- Status page: "Days until full" says "more than a year" past 365 days, as the daily storage record does.
+- A token in the URL (`?token=`, `?access_token=`) is now refused on the sign-in routes (`/control/login`, `/control/login-link`, `/control/logout`, `/control/session`) too.
+- Audit log: the daily storage record says "more than a year until full" instead of a day count past 365 days (`daysUntilFull` keeps the number).
+- Audit log: a `config-change` record marks each setting that waits for a restart (`restart: "restart"`, or `"process"` for a new process).
+- Audit log: `HEAD /control/audit` answers like GET (it was 403 even for admins).
+- Audit log: the audit folder's growth per day counts calendar days over the last 7 whole days (days without records count as 0, today is left out by its date), so the storage projection no longer overstates it.
+- Audit log: a user agent or refused path cut at its length limit no longer ends in half an emoji.
+- Stills: a camera stream that holds back a second of frames and then delivers them at once (cam-sim does every 4 s) no longer leaves a missing still every few seconds; frames up to 2.5 s late keep their own second.
+- Events: an event that starts right after the proxy subscribes to the camera's events again (after a camera restart, a network blip or the restart action) is no longer taken for the initial state and lost. Each event kind now starts at its own camera message time when several arrive in one pull.
+- Analytics: set or override the Google Vision key on the Settings page (or `PUT /control/secrets/google-vision-key`). It is used from the next call on and lifts an invalid-key pause. It is kept in memory only, never saved, logged or returned: a restart of the proxy restores the configured key, or none. The card says "Manual key active (AIza…wXyZ)" while it is in use, the provider state reports `keySource` (`env`, `manual`, `none`), and each set is an audit record, `secret-override`, with the masked key.
+
+## v2026.10.01.3
+
 - Analysis window: the table's columns read "Objects" and "Score", and the score shows as a percent ("99%"), the same as the labels on the picture.
 - Audit log: who did what on the proxy, as ECS JSON lines in one file per UTC day under `<dataDir>/audit`, kept `retention.auditDays` (default 90). It records start and stop, restarts, sign-ins (with failures), sign-outs, login links, refused tokens (throttled), control actions, settings changes, and a daily storage and activity snapshot at 00:05 camera time. Read it on the new Audit page or at `GET /control/audit` (newest first or from a cursor, for a poller). Optional read-only `CAMPROXY_AUDIT_TOKEN`. The start record says when the last run ended without a stop (`uncleanStop`). See docs/audit-log.md.
 - Admin sign-in: 40 sign-ins per 15 minutes per client (was 20).

@@ -21,7 +21,7 @@ afterAll(async () => {
 
 describe('client API', () => {
   it('answers /health without a token', async () => {
-    expect((await request(p.base).get('/health')).body).toEqual({ ok: true, version: 'dev' });
+    expect((await request(p.base).get('/health')).body).toEqual({ ok: true, version: 'dev', startedAt: expect.any(Number) });
   });
 
   it('needs a valid bearer token, and refuses one in the URL', async () => {

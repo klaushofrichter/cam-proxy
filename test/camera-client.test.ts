@@ -33,7 +33,7 @@ afterEach(() => new Promise<void>((r) => server.close(() => r())));
 describe('ReolinkClient', () => {
   it('logs in once and reuses the token', async () => {
     const client = new ReolinkClient(cam);
-    expect(await client.status()).toEqual({ model: 'RLC-1224A', firmware: 'v3.2.0.6011_2607012059' });
+    expect(await client.status()).toEqual({ model: 'RLC-1224A', firmware: 'v3.2.0.6011_2607012059', serial: expect.any(String) });
     await client.status();
     await client.status();
     expect(state.logins).toBe(1);

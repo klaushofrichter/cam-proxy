@@ -51,7 +51,11 @@ for _ in $(seq 1 60); do
   [ "$(docker inspect -f '{{.State.Running}}' "$NAME")" = true ] || fail "the container exited"
   sleep 0.5
 done
-[ "$health" = '{"ok":true,"version":"smoke"}' ] || fail "health: ${health:-no answer}"
+# /health also carries startedAt (a restart's "back" check); compare the fixed fields only.
+case "$health" in
+  '{"ok":true,"version":"smoke",'*'"startedAt":'[0-9]*'}') ;;
+  *) fail "health: ${health:-no answer}" ;;
+esac
 [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/cameras")" = 401 ] || fail "/api without a token is not 401"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $CLIENT" "http://127.0.0.1:$PORT/api/cameras")" = 200 ] || fail "/api with the token is not 200"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/")" = 200 ] || fail "the admin UI is not served"

@@ -94,6 +94,17 @@ describe('audit records', () => {
     expect(last('config-change')).toMatchObject({ cam_proxy: { changes: [{ key: 'retention.auditDays', from: 90, to: 30 }] } });
     await request(p.base).delete('/control/config/retention.auditDays').set(auth(ADMIN_TOKEN));
     expect(last('config-change')).toMatchObject({ cam_proxy: { changes: [{ key: 'retention.auditDays', from: 30, to: 90 }] } });
+    const changesOf = () => (last('config-change').cam_proxy as { changes: { key: string }[] }).changes;
+    expect(changesOf()[0]).not.toHaveProperty('restart'); // live
+    // #78: a change that waits for a restart says so ('restart', or 'process' for a new process).
+    await request(p.base).put('/control/config').set(auth(ADMIN_TOKEN)).send({ camera: { statusPollS: 9 }, server: { trustProxy: 1 } });
+    try {
+      const changes = changesOf();
+      expect(changes.find((c) => c.key === 'camera.statusPollS')).toMatchObject({ to: 9, restart: 'restart' });
+      expect(changes.find((c) => c.key === 'server.trustProxy')).toMatchObject({ to: 1, restart: 'process' });
+    } finally {
+      for (const k of ['camera.statusPollS', 'server.trustProxy']) await request(p.base).delete(`/control/config/${k}`).set(auth(ADMIN_TOKEN));
+    }
   });
 
   it('records a rate-limited sign-in once per window, for the token and the link (own proxy)', async () => {
