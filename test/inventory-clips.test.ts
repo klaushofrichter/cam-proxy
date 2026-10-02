@@ -144,7 +144,7 @@ describe('clips inventory, against the camera (part 2)', () => {
     expect(progress).toEqual(['clips 0/3', 'clips 1/3', 'clips 2/3', 'clips 3/3', 'camera 1/3', 'camera 2/3', 'camera 3/3']);
     expect(r.counts).toMatchObject({ cameraDays: 3, unknownDays: 1, recordings: 4, timerOnly: 1, paired: 3, missingLocally: 1, missingLocallyBytes: 0x200000, goneFromCamera: 1, olderThanSd: 0, otherStream: 1 });
     expect(r.window).toMatchObject({ camera: { stream: 'sub', to: NOW - SETTLE_MS, oldestSdDay: '2026-09-28', unknownDays: ['2026-09-30'] } });
-    expect(r.window.notes).toEqual(['1 local clips of another stream than sub (ftp.stream) were left out of the camera compare']);
+    expect(r.window.notes).toEqual(['1 local clips of another stream than sub (ftp.stream) only keep their recordings from counting as missing']);
     // The repair's candidates first, then the clips gone from the camera, then the local findings.
     expect(r.items.slice(0, 2)).toEqual([
       { type: 'missing-locally', id: f.recs['2026-10-01'][2].id, date: '2026-10-01', start: T('2026-10-01T11:00:00'), end: T('2026-10-01T11:00:30'), size: 0x200000, stream: 'sub', kinds: ['vehicle'] },
@@ -196,6 +196,68 @@ type Item = { type: string; [k: string]: unknown };
 const ofType = (items: unknown[], type: string) => (items as Item[]).filter((x) => x.type === type);
 
 describe('clips inventory: the edges (review of task 4)', () => {
+  it('the oldest SD day keeps only its later hours: a clip before its first recording is older than the SD', async () => {
+    clip(T('2026-10-01T05:00:00')); // overwritten on the card
+    const late = clip(T('2026-10-01T16:00:00')); // after the first recording that day: gone
+    const cam = camera({ months: { '2026-09': [], '2026-10': [1] }, recs: { '2026-10-01': [rec(T('2026-10-01T15:00:00'))] } });
+    const r = await clipsCheck(deps(cam.deps))(ctx({ options: { camera: true } }));
+    expect(r.counts).toMatchObject({ olderThanSd: 1, goneFromCamera: 1, missingLocally: 1 });
+    expect(ofType(r.items, 'gone-from-camera')).toEqual([{ type: 'gone-from-camera', clipId: late.id, start: late.start_ts }]);
+  });
+
+  it('the same on the fallback day when the oldest SD day is unknown: the early clip is not judged', async () => {
+    clip(T('2026-10-01T05:00:00'));
+    clip(T('2026-10-01T16:00:00'));
+    const cam = camera({ months: { '2026-10': [1] }, recs: { '2026-10-01': [rec(T('2026-10-01T15:00:00'))] } });
+    cam.deps.list.monthDays = async (m) => {
+      if (m === '2026-09') throw new SearchError('search_failed', 'rspCode -17');
+      return [1];
+    };
+    const r = await clipsCheck(deps(cam.deps))(ctx({ options: { camera: true } }));
+    expect(r.counts).toMatchObject({ olderThanSd: 0, goneFromCamera: 1 });
+    expect(r.window.notes).toEqual(["1 local clips not on the camera were not judged: the SD card's oldest day is unknown"]);
+  });
+
+  it('the missing recordings come oldest first, so the item cut keeps the ones the SD overwrites next', async () => {
+    const recs = Array.from({ length: 700 }, (_, i) => rec(T('2026-10-01T00:00:00') + i * 60_000));
+    const cam = camera({ months: { '2026-10': [1] }, recs: { '2026-10-01': recs } });
+    const r = await clipsCheck(deps(cam.deps))(ctx({ options: { camera: true } }));
+    expect(r.counts.missingLocally).toBe(700);
+    expect(r.counts.missingLocallyBytes).toBe(700 * 0x100000);
+    expect((r.items.slice(0, MAX_ITEMS) as Item[]).map((x) => x.start)).toEqual(recs.slice(0, MAX_ITEMS).map((x) => x.start));
+  });
+
+  it('a recording whose clip came on another stream (ftp.stream changed) is not missing', async () => {
+    clip(T('2026-10-01T08:00:01'), { stream: 'main' });
+    const cam = camera({ months: { '2026-10': [1] }, recs: { '2026-10-01': [rec(T('2026-10-01T08:00:00')), rec(T('2026-10-01T09:00:00'))] } });
+    const r = await clipsCheck(deps(cam.deps))(ctx({ options: { camera: true } }));
+    expect(r.counts).toMatchObject({ otherStream: 1, pairedOtherStream: 1, paired: 0, missingLocally: 1, goneFromCamera: 0 });
+    expect(ofType(r.items, 'missing-locally').map((x) => x.start)).toEqual([T('2026-10-01T09:00:00')]);
+  });
+
+  it('pairs across the edges: the settle bound, an unknown day and the window start', async () => {
+    const cameraTo = NOW - SETTLE_MS;
+    clip(cameraTo - 29_000); // its recording ended before cameraTo, the clip a second after it
+    clip(T('2026-10-02T00:00:01')); // on an unknown day; its recording started on the day before
+    clip(T('2026-09-29T23:59:58')); // before the window; its recording started in it
+    const cam = camera({
+      months: { '2026-09': [30], '2026-10': [1, 2] },
+      recs: { '2026-09-30': [rec(T('2026-09-30T00:00:01'))], '2026-10-01': [rec(T('2026-10-01T23:59:58'))], '2026-10-02': [rec(cameraTo - 31_000)] },
+      failing: [],
+    });
+    cam.deps.list.day = async (date) => {
+      if (date === '2026-10-02') throw new SearchError('search_failed', 'rspCode -17');
+      return { '2026-09-30': [rec(T('2026-09-30T00:00:01'))], '2026-10-01': [rec(T('2026-10-01T23:59:58'))] }[date] ?? [];
+    };
+    const r = await clipsCheck(deps(cam.deps))(ctx({ options: { camera: true } }));
+    expect(r.counts).toMatchObject({ missingLocally: 0, goneFromCamera: 0, unknownDays: 1 });
+
+    // And the settle bound on a listed day: the recording and its clip pair though the clip ends after cameraTo.
+    const cam2 = camera({ months: { '2026-10': [2] }, recs: { '2026-10-02': [rec(cameraTo - 31_000)] } });
+    const r2 = await clipsCheck(deps(cam2.deps))(ctx({ options: { camera: true } }));
+    expect(r2.counts).toMatchObject({ missingLocally: 0, goneFromCamera: 0, recordings: 1, paired: 1 });
+  });
+
   it('a stale open event covers its start plus the event cap only', async () => {
     event('person', T('2026-09-30T01:00:00'), null); // never closed (the proxy was down)
     const c = clip(T('2026-09-30T05:00:00'));
@@ -275,8 +337,8 @@ describe('clips inventory against cam-sim', () => {
       expect(r.counts).toMatchObject({ clips: 3, fromCamera: 1, cameraDays: 3, unknownDays: 0, recordings: 4, timerOnly: 0, paired: 2, missingLocally: 2, goneFromCamera: 1, olderThanSd: 0, otherStream: 0 });
       const missing = r.items.filter((x) => (x as { type: string }).type === 'missing-locally') as { id: string; date: string; start: number; size: number; stream: string; kinds: string[] }[];
       expect(missing.map((x) => [x.date, x.start, x.stream, x.kinds])).toEqual([
-        ['2026-10-01', T('2026-10-01T09:00:00'), 'sub', ['motion']],
         ['2026-09-30', T('2026-09-30T07:00:00'), 'sub', ['motion']],
+        ['2026-10-01', T('2026-10-01T09:00:00'), 'sub', ['motion']],
       ]);
       for (const x of missing) expect(x.id).toMatch(/^RecS0A_\d{8}_\d{6}_\d{6}_/);
       expect(r.counts.missingLocallyBytes).toBe(missing.reduce((n, x) => n + x.size, 0));

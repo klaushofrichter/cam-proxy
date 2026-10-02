@@ -5,7 +5,7 @@ import type { Catalog } from '../catalog/db';
 import { localDate, type Kind, type Stream } from '../recordings/names';
 import type { RecordingEntry } from '../recordings/list';
 import { listCamera, type CameraListDeps } from './camera-list';
-import { pairByStart } from './match';
+import { pairByStart, START_SLACK_MS } from './match';
 import { MAX_ITEMS, MAX_TOP, type Check, type CheckResult } from './runner';
 
 // The clips inventory (#74, spec 2026-10-02-inventory-design §4). Part 1,
@@ -14,7 +14,7 @@ import { MAX_ITEMS, MAX_TOP, type Check, type CheckResult } from './runner';
 // with `camera: true`: the SD recordings of the window on `ftp.stream`
 // (camera-list.ts) paired with the local clips of that stream (match.ts).
 // Recordings on the camera but not here are the repair's candidates (the
-// first items, newest first). A day whose Search failed is `unknown`: its
+// first items, oldest first). A day whose Search failed is `unknown`: its
 // recordings never count as missing, its clips never as gone.
 
 const HOUR = 3_600_000;
@@ -26,7 +26,7 @@ export const SETTLE_MS = 5 * 60_000;
 export const RECORDING_KINDS = ['motion', 'person', 'vehicle', 'pet'] as const;
 const FTP_OFF_NOTE = 'FTP is off in the proxy: no clips arrive, so every event is without a clip';
 const UNJUDGED_NOTE = (n: number) => `${n} local clips not on the camera were not judged: the SD card's oldest day is unknown`;
-const OTHER_STREAM_NOTE = (n: number, stream: string) => `${n} local clips of another stream than ${stream} (ftp.stream) were left out of the camera compare`;
+const OTHER_STREAM_NOTE = (n: number, stream: string) => `${n} local clips of another stream than ${stream} (ftp.stream) only keep their recordings from counting as missing`;
 
 // eventMaxOpenMin: events.maxOpenMin, how long an open event can last.
 export interface ClipsSettings { cam: string; clipsDays: number; stream: Stream; ftpEnabled: boolean; eventMaxOpenMin: number }
@@ -208,27 +208,58 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     const t = listing.time;
     const listed = new Set(listing.days.filter((x) => x.state === 'listed').map((x) => x.date));
     const unknown = listing.days.filter((x) => x.state === 'unknown').map((x) => x.date);
-    const recs: RecordingEntry[] = listing.days.flatMap((x) => x.recordings).filter((r) => r.start >= from && r.end <= cameraTo);
-    const mine = rows.filter((r) => r.stream === s.stream && (r.end_ts ?? r.start_ts) <= cameraTo && listed.has(localDate(r.start_ts, t)));
+    const dayOf = new Map(listing.days.flatMap((x) => x.recordings.map((r) => [r.id, x.date] as const)));
+    // Everything pairs (#74 review): the recordings of every listed day and the
+    // clips around the window (also on unknown days, also those ending after
+    // cameraTo, also those up to START_SLACK_MS before `from`), so a pair that
+    // straddles a bound is still a pair. Only what is left over is judged,
+    // with the strict bounds: inside the window, ended by cameraTo, on a
+    // listed day.
+    const pool = listing.days.flatMap((x) => x.recordings);
+    const edge = db.prepare('SELECT id, start_ts, end_ts, stream FROM clips WHERE cam = ? AND start_ts >= ? AND start_ts < ?').all(s.cam, from - START_SLACK_MS, from) as unknown as Pick<Row, 'id' | 'start_ts' | 'end_ts' | 'stream'>[];
+    const near = [...edge, ...rows].map((r) => ({ id: r.id, start: r.start_ts, end: r.end_ts ?? r.start_ts, stream: r.stream }));
+    const judgedRec = (r: RecordingEntry) => r.start >= from && r.end <= cameraTo;
+    const judgedClip = (c: { start: number; end: number }) => c.start >= from && c.end <= cameraTo && listed.has(localDate(c.start, t));
+    const pairing = pairByStart(pool, near.filter((c) => c.stream === s.stream));
+    // After an ftp.stream change the clips of the old stream still hold their
+    // recordings: the recordings left over pair with them (same ±5 s) and are
+    // never missing, so the repair never fetches a duplicate.
+    const other = pairByStart(pairing.recsAlone, near.filter((c) => c.stream !== s.stream).map((c) => ({ ...c, stream: s.stream })));
+    const recs = pool.filter(judgedRec);
+    // Oldest first (#74 review): the item cut keeps the recordings the SD card
+    // overwrites next, the ones the repair takes first.
+    const missing = other.recsAlone.filter((r) => judgedRec(r) && r.kinds.length > 0).sort((a, b) => a.start - b.start);
     const otherStream = rows.filter((r) => r.stream !== s.stream).length;
-    const pairing = pairByStart(recs, mine.map((r) => ({ id: r.id, start: r.start_ts, stream: r.stream })));
-    const missing = pairing.recsAlone.filter((r) => r.kinds.length > 0).sort((a, b) => b.start - a.start);
-    // A clip alone on a day the SD card still covers is gone from the camera;
-    // one before the card's oldest day is older than the SD. When the oldest
-    // day is unknown (an earlier month's overview failed), the oldest listed
-    // day with recordings is a safe bound for "gone"; the clips before it are
-    // not judged (a note says how many).
+    // A clip left over on a day the SD card covers is gone from the camera;
+    // one before the card's oldest day is older than the SD. The card
+    // overwrites from its oldest end, so its oldest day keeps only its later
+    // hours: there, a clip before the day's first recording is older too.
+    // When the oldest day is unknown (an earlier month's overview failed), the
+    // oldest listed day with recordings bounds "gone" the same way; the clips
+    // before that are not judged (a note says how many).
     const sdFrom = listing.oldestSdDay;
-    const goneFrom = sdFrom ?? listing.days.find((x) => x.state === 'listed' && x.recordings.length > 0)?.date ?? null;
-    const gone = pairing.clipsAlone.filter((c) => goneFrom !== null && localDate(c.start, t) >= goneFrom);
-    const olderThanSd = sdFrom === null ? 0 : pairing.clipsAlone.length - gone.length;
-    const unjudged = pairing.clipsAlone.length - gone.length - olderThanSd;
+    const bound = sdFrom ?? listing.days.find((x) => x.state === 'listed' && x.recordings.length > 0)?.date ?? null;
+    const firstOnBound = Math.min(...pool.filter((r) => dayOf.get(r.id) === bound).map((r) => r.start));
+    const gone: typeof near = [];
+    let olderThanSd = 0;
+    let unjudged = 0;
+    for (const c of pairing.clipsAlone.filter(judgedClip)) {
+      const day = localDate(c.start, t);
+      if (bound !== null && (day > bound || (day === bound && c.start >= firstOnBound))) gone.push(c);
+      else if (sdFrom !== null) olderThanSd++;
+      else unjudged++;
+    }
+    // Not judged either way (no logic, on purpose): a row whose file is gone
+    // still pairs, so its recording is not offered again (conservative); a
+    // clip that the storage budget or ftp.maxGB deleted shows up as missing,
+    // and the next prune may delete the repaired copy again.
     const camera = {
       cameraDays: listing.days.length,
       unknownDays: unknown.length,
       recordings: recs.filter((r) => r.kinds.length > 0).length,
       timerOnly: recs.filter((r) => r.kinds.length === 0).length,
-      paired: pairing.pairs.filter((p) => p.rec.kinds.length > 0).length,
+      paired: pairing.pairs.filter((p) => judgedRec(p.rec) && p.rec.kinds.length > 0).length,
+      pairedOtherStream: other.pairs.filter((p) => judgedRec(p.rec) && p.rec.kinds.length > 0).length,
       missingLocally: missing.length,
       missingLocallyBytes: missing.reduce((n, r) => n + r.size, 0),
       goneFromCamera: gone.length,
@@ -236,13 +267,12 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
       otherStream,
     };
     Object.assign(counts, camera);
-    const dayOf = new Map(listing.days.flatMap((x) => x.recordings.map((r) => [r.id, x.date] as const)));
     const items: ClipItem[] = [
       ...missing.map((r): ClipItem => ({ type: 'missing-locally', id: r.id, date: dayOf.get(r.id)!, start: r.start, end: r.end, size: r.size, stream: r.stream, kinds: r.kinds })),
       ...gone.map((c): ClipItem => ({ type: 'gone-from-camera', clipId: c.id, start: c.start })),
       ...local,
     ];
-    const perDay = new Map<string, CameraDayRow>(listing.days.map((x) => [x.date, { date: x.date, state: x.state, recordings: x.recordings.filter((r) => r.kinds.length > 0).length, missingLocally: 0, goneFromCamera: 0 }]));
+    const perDay = new Map<string, CameraDayRow>(listing.days.map((x) => [x.date, { date: x.date, state: x.state, recordings: x.recordings.filter((r) => judgedRec(r) && r.kinds.length > 0).length, missingLocally: 0, goneFromCamera: 0 }]));
     for (const r of missing) perDay.get(dayOf.get(r.id)!)!.missingLocally++;
     for (const c of gone) {
       const row = perDay.get(localDate(c.start, t));
