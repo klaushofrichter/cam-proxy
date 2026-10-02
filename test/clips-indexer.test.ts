@@ -250,3 +250,49 @@ describe('ClipIndexer', () => {
     expect(listClips(catalog, 'cam1', a!.start_ts - 1000, a!.start_ts + 1000)).toHaveLength(1); // replaced, not added
   });
 });
+
+// #74: a recording fetched from the SD card by an inventory repair.
+describe('ClipIndexer.addRecording', () => {
+  const START = Date.UTC(2026, 8, 27, 19, 3, 1);
+
+  it('copies the recording into clips/, marks it from the camera, links the FTP picture, and tells no stream client', async () => {
+    const { dir, catalog, log, indexer } = setup();
+    let stored = 0;
+    const counted = new ClipIndexer({ catalog, log, config: () => DEFAULTS, timeInfo: async () => chicago(1), dataDir: dir, cam: 'cam1', stored: (b) => (stored += b) });
+    // The camera's picture of that event came by FTP without its clip.
+    const pic = join(dir, 'clips', 'cam1', '2026', '09', '27', `1903-${START + 4000}.jpg`);
+    mkdirSync(join(dir, 'clips', 'cam1', '2026', '09', '27'), { recursive: true });
+    writeFileSync(pic, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+    const row = await counted.addRecording(clipFile, { start: START, stream: 'sub' });
+    expect(row).toMatchObject({ cam: 'cam1', start_ts: START, stream: 'sub', origin: 'camera', snapshot: pic, path: join(dir, 'clips', 'cam1', '2026', '09', '27', `1903-${START}.mp4`) });
+    expect(row.end_ts! - START).toBeGreaterThanOrEqual(2900);
+    expect(readFileSync(row.path).equals(readFileSync(clipFile))).toBe(true);
+    expect(existsSync(clipFile)).toBe(true); // the cached recording stays
+    expect(existsSync(`${row.path}.part`)).toBe(false);
+    expect(stored).toBe(row.size);
+    expect(log.since(0, { types: ['clip'] }, 100)).toEqual([]);
+    expect(counted.lastIndexed()).toBeNull();
+    expect(indexer.failures()).toBe(0);
+  });
+
+  it('refuses a second clip with the same start, and a file that is no video', async () => {
+    const { dir, catalog, indexer } = setup();
+    await indexer.addRecording(clipFile, { start: START, stream: 'sub' });
+    await expect(indexer.addRecording(clipFile, { start: START, stream: 'sub' })).rejects.toThrow('a clip with that start exists');
+    const junk = join(dir, 'junk.mp4');
+    writeFileSync(junk, 'not a video');
+    await expect(indexer.addRecording(junk, { start: START + 60_000, stream: 'sub' })).rejects.toThrow('the recording is not a video');
+    expect(listClips(catalog, 'cam1', START - 1000, START + 120_000)).toHaveLength(1);
+    expect(existsSync(join(dir, 'clips', 'cam1', '2026', '09', '27', `1904-${START + 60_000}.mp4`))).toBe(false);
+  });
+
+  it('does not overwrite a file that has no row, and rejects a start that is no timestamp', async () => {
+    const { dir, indexer } = setup();
+    const f = join(dir, 'clips', 'cam1', '2026', '09', '27', `1903-${START}.mp4`);
+    mkdirSync(join(dir, 'clips', 'cam1', '2026', '09', '27'), { recursive: true });
+    writeFileSync(f, 'old');
+    await expect(indexer.addRecording(clipFile, { start: START, stream: 'sub' })).rejects.toThrow('a clip with that start exists');
+    expect(readFileSync(f, 'utf8')).toBe('old');
+    await expect(indexer.addRecording(clipFile, { start: NaN, stream: 'sub' })).rejects.toThrow('start is not a timestamp');
+  });
+});

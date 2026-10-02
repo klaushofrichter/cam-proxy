@@ -1,12 +1,14 @@
 import { execFile } from 'child_process';
-import { closeSync, copyFileSync, mkdirSync, openSync, readdirSync, readSync, renameSync, unlinkSync } from 'fs';
-import { dirname, join } from 'path';
+import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readSync, renameSync, unlinkSync } from 'fs';
+import { copyFile, rename, stat, unlink } from 'fs/promises';
+import { dirname, join, resolve, sep } from 'path';
 import { promisify } from 'util';
 import type { DstRule, TimeInfo } from '../camera/time';
-import { clipForSnapshot, clipsWithoutSnapshot, deleteClip, insertClip, overlappingEvents, setSnapshot, type ClipRow } from '../catalog/clips';
+import { clipByPath, clipForSnapshot, clipsWithoutSnapshot, deleteClip, insertClip, overlappingEvents, setSnapshot, type ClipRow } from '../catalog/clips';
 import type { Catalog } from '../catalog/db';
 import type { Config } from '../config/defaults';
 import { logger } from '../log';
+import type { Stream } from '../recordings/names';
 import type { StreamLog } from '../stream/log';
 import type { Upload } from './ftp-server';
 
@@ -162,6 +164,53 @@ export class ClipIndexer {
     } finally {
       remove(u.tmpFile); // moved already when it was kept
     }
+  }
+
+  // A recording fetched from the camera's SD card by an inventory repair
+  // (#74): `file` stays where it is (the recordings cache; the caller keeps it
+  // pinned), a copy goes into clips/ under the FTP layout, and the row has
+  // origin 'camera'. No stream-log entry (so no SSE), no FTP arrival or failure
+  // count. Throws when the file is no video or a clip with that start exists.
+  async addRecording(file: string, r: { start: number; stream: Stream }): Promise<ClipRow> {
+    if (!Number.isSafeInteger(r.start) || r.start < 0 || Number.isNaN(new Date(r.start).getTime())) throw new Error('start is not a timestamp');
+    const t = new Date(r.start);
+    const root = resolve(this.d.dataDir, 'clips');
+    const path = resolve(this.folder(r.start), `${pad(t.getUTCHours())}${pad(t.getUTCMinutes())}-${r.start}.mp4`);
+    if (!path.startsWith(root + sep)) throw new Error('the clip path is outside the clips folder');
+    const probe = await probeVideo(file);
+    if (!probe) throw new Error('the recording is not a video');
+    if (clipByPath(this.d.catalog, path) || existsSync(path)) throw new Error('a clip with that start exists');
+    mkdirSync(dirname(path), { recursive: true });
+    const part = `${path}.part`;
+    let size: number;
+    try {
+      await copyFile(file, part);
+      size = (await stat(part)).size;
+      await rename(part, path);
+    } catch (err) {
+      await unlink(part).catch(() => undefined);
+      throw err;
+    }
+    let row: ClipRow;
+    try {
+      row = insertClip(this.d.catalog, {
+        cam: this.d.cam,
+        start_ts: r.start,
+        end_ts: r.start + Math.round(probe.durationS * 1000),
+        path,
+        stream: r.stream,
+        size,
+        received_at: this.now(),
+        snapshot: this.pictureFor(r.start), // the camera's FTP picture may have come without its clip
+        origin: 'camera',
+      });
+    } catch (err) {
+      await unlink(path).catch(() => undefined); // never a file without a row
+      throw err;
+    }
+    this.d.stored?.(size);
+    logger.info({ clipId: row.id, start: r.start, durationS: probe.durationS, bytes: size }, 'clip_repaired');
+    return row;
   }
 
   private async index(u: Upload): Promise<ClipRow | null> {
