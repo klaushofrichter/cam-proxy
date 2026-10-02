@@ -117,6 +117,53 @@ describe('download', () => {
     expect(((await run(s, stuck, { stallMs: 100 }).catch((x) => x)) as BaichuanError).code).toBe('timeout');
   });
 
+  it('a slow writer destroyed mid-transfer fails at once with AbortError, and cmd 9 is sent once', async () => {
+    const { cam, s } = await setup({ chunkSize: 16_384 });
+    const out = sink(5);
+    let n = 0;
+    const orig = out.w.write.bind(out.w);
+    out.w.write = ((c: Buffer, ...rest: never[]) => {
+      if (++n === 4) setTimeout(() => out.w.destroy(), 10);
+      return orig(c, ...rest);
+    }) as typeof out.w.write;
+    const t0 = Date.now();
+    const e = (await run(s, out.w, { stallMs: 2000 }).catch((x: Error) => x)) as Error;
+    expect(e.name).toBe('AbortError');
+    expect(Date.now() - t0).toBeLessThan(1000);
+    await vi.waitFor(() => expect(cam.requests.filter((r) => r.cmd === 9)).toHaveLength(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(cam.requests.filter((r) => r.cmd === 9)).toHaveLength(1);
+  });
+
+  it('a failed last write rejects with AbortError and no uncaught error, with no error listener on the writer', async () => {
+    const { s } = await setup();
+    const uncaught: unknown[] = [];
+    const h = (e: unknown) => uncaught.push(e);
+    process.on('uncaughtException', h);
+    try {
+      let n = 0;
+      const failing = new Writable({
+        write(c: Buffer, _e, cb) {
+          n += c.length;
+          cb(n >= FILE.length ? new Error('disk full') : null);
+        },
+      });
+      const e = (await run(s, failing).catch((x: Error) => x)) as Error;
+      expect(e.name).toBe('AbortError');
+      await new Promise((r) => setTimeout(r, 20));
+      expect(uncaught).toEqual([]);
+    } finally {
+      process.off('uncaughtException', h);
+    }
+  });
+
+  it('a first reply that is not the 32-byte info record is a protocol error', async () => {
+    const { s } = await setup({ infoRecord: Buffer.alloc(40) });
+    const out = sink();
+    expect(((await run(s, out.w).catch((x) => x)) as BaichuanError).code).toBe('protocol');
+    expect(out.bytes().length).toBe(0);
+  });
+
   it('more bytes than the size is a protocol error', async () => {
     const { s } = await setup();
     expect(((await run(s, sink().w, {}, 1000).catch((x) => x)) as BaichuanError).code).toBe('protocol');

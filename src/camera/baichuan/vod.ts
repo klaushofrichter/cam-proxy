@@ -24,6 +24,8 @@ export interface DownloadOptions {
   stopMs?: number; // cmd 9's reply, 5 s
 }
 
+const INFO_RECORD_BYTES = 32; // measured on the RLC-1224A
+
 const abortError = (why: string) => Object.assign(new Error(why), { name: 'AbortError' });
 
 // Writes the file at `path` (size from its name) to `out`. Resolves with the
@@ -53,12 +55,18 @@ export async function download(session: BaichuanSession, path: string, size: num
       session.resume();
       stall();
     };
+    // Both stay attached after the download settles: an error on `out` must
+    // never become an uncaught exception because we took our listener away.
     const onOutError = () => fail(abortError('the output failed'));
+    const onOutClose = () => {
+      fail(abortError('the output closed'));
+      out.off('close', onOutClose);
+      out.off('error', onOutError);
+    };
     const settle = (err?: Error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      out.off('error', onOutError);
       if (err) reject(err);
       else resolve(received);
     };
@@ -81,6 +89,7 @@ export async function download(session: BaichuanSession, path: string, size: num
     };
 
     out.on('error', onOutError);
+    out.on('close', onOutClose);
     out.on('drain', onDrain);
     try {
       sub = session.open(8, downloadXml(path), {
@@ -90,6 +99,7 @@ export async function download(session: BaichuanSession, path: string, size: num
           if (!OK_STATUS.has(m.status)) return fail(new BaichuanError(m.status === 400 ? 'refused' : 'protocol', `the download answered ${m.status}`, m.status));
           if (first) {
             first = false; // the 32-byte info record, not file data
+            if (m.payload.length !== INFO_RECORD_BYTES) return fail(new BaichuanError('protocol', `the download's first reply is not the info record (${m.payload.length} bytes)`));
             if (size === 0) {
               stop();
               settle();

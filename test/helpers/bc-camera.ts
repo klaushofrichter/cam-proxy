@@ -28,6 +28,7 @@ export interface FakeOptions {
   noLoginReply?: boolean;
   badMagicOn?: number; // answer this cmd with bad magic
   replyDelayMs?: number; // before the reply to cmd 9
+  infoRecord?: Buffer; // instead of INFO_RECORD in cmd 8's first reply
 }
 
 export interface FakeCamera {
@@ -100,7 +101,7 @@ export async function fakeCamera(o: FakeOptions = {}): Promise<FakeCamera> {
       if (!file) return void send(8, msgId, 400, Buffer.alloc(0), Buffer.alloc(0));
       cam.downloads++;
       transfer = msgId;
-      send(8, msgId, 200, aesEncrypt(key, Buffer.from(EXT_INFO)), INFO_RECORD);
+      send(8, msgId, 200, aesEncrypt(key, Buffer.from(EXT_INFO)), o.infoRecord ?? INFO_RECORD);
       if (o.firstChunkDelayMs) await sleep(o.firstChunkDelayMs);
       const size = o.chunkSize ?? 39_400;
       for (let off = 0, n = 0; off < file.length; off += size, n++) {
