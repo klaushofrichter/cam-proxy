@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import ConfirmDialog from '../components/ConfirmDialog.svelte';
   import { api, ApiError } from '../lib/api';
-  import { isNewStart, RESTART_GIVE_UP_MS, type Health } from '../lib/maintenance';
+  import { powerCycleMessage, restartWatch, RESTART_GIVE_UP_MS, type Health } from '../lib/maintenance';
   import { refresh, refreshTick, status } from '../lib/state';
 
   let result = $state('');
@@ -29,28 +29,40 @@
     void loadLog();
   }
 
-  // The camera reboot (#83) and the proxy restart (#71) ask first, in one
-  // shared dialog; Cancel or Esc sends nothing.
-  const DIALOGS = {
+  // The camera reboot (#83), the power-cycle (#85) and the proxy restart
+  // (#71) ask first, in one shared dialog; Cancel or Esc sends nothing.
+  const poe = $derived($status?.camera.poeSwitch ?? null);
+  const DIALOGS = $derived({
     'camera-reboot': {
       title: 'Reboot the camera',
       message: 'Reboot the camera? It is offline for about a minute: no live video, stills, events or uploads meanwhile. Note: on 2026-10-01 recording downloads stopped working right after an API reboot.',
       confirmLabel: 'Reboot camera',
+    },
+    'camera-powercycle': {
+      title: 'Power-cycle the camera',
+      message: poe ? powerCycleMessage(poe) : '',
+      confirmLabel: 'Power-cycle camera',
     },
     'restart-proxy': {
       title: 'Restart the proxy',
       message: 'Restart the proxy? Live streams and uploads in progress are interrupted; the proxy is back in about 20 s. You sign in again afterwards.',
       confirmLabel: 'Restart proxy',
     },
-  } as const;
-  let asking = $state<keyof typeof DIALOGS | null>(null);
+  });
+  let asking = $state<'camera-reboot' | 'camera-powercycle' | 'restart-proxy' | null>(null);
 
   // The camera reboot: "Rebooting…" and the camera's state while the proxy
   // waits for it, then how long it was away.
   let rebootAsked = $state(false);
   const reboot = $derived($status?.camera.reboot ?? null);
+  // A reboot or power-cycle on its way: set before the first await, so a
+  // second confirm can't send another (#78 review).
+  let sending = $state(false);
+  const cameraBusy = $derived(sending || reboot?.phase === 'rebooting' || reboot?.phase === 'power-cycling');
   async function rebootCamera() {
     asking = null;
+    if (sending) return;
+    sending = true;
     try {
       const r = await api<{ confirmed: boolean }>('POST', '/control/actions/camera-reboot');
       rebootAsked = true;
@@ -58,12 +70,35 @@
     } catch (e) {
       result = `Camera reboot: ${e instanceof ApiError ? e.message : 'failed'}`;
     }
+    sending = false;
     void refresh();
     void loadLog();
   }
-  // Faster status updates while the camera reboots.
+
+  // The power-cycle (#85): the answer comes once the PoE is back on (after
+  // offSeconds); meanwhile "Power-cycling…", then the reboot's states.
+  let cycling = $state(false);
+  async function powerCycleCamera() {
+    asking = null;
+    if (sending) return;
+    sending = true;
+    cycling = true;
+    void refresh();
+    try {
+      const r = await api<{ offAt: number; onAt: number; watts: number }>('POST', '/control/actions/camera-powercycle');
+      rebootAsked = true;
+      result = `Camera power-cycle: PoE back on after ${Math.round((r.onAt - r.offAt) / 1000)} s (the camera drew ${r.watts} W)`;
+    } catch (e) {
+      result = `Camera power-cycle: ${e instanceof ApiError ? e.message : 'failed'}`;
+    }
+    cycling = false;
+    sending = false;
+    void refresh();
+    void loadLog();
+  }
+  // Faster status updates while the camera reboots or is power-cycled.
   $effect(() => {
-    if (reboot?.phase !== 'rebooting') return;
+    if (reboot?.phase !== 'rebooting' && reboot?.phase !== 'power-cycling' && !cycling) return;
     const t = setInterval(() => void refresh(), 2000);
     return () => clearInterval(t);
   });
@@ -82,18 +117,23 @@
   };
   async function restartProxy() {
     asking = null;
-    const before = await health();
+    // Busy before the first await: the dialog can't be confirmed twice (#78 review).
+    if (restarting === 'waiting') return;
+    restarting = 'waiting';
+    // The start time to compare with: one more try if the first read fails.
+    const before = (await health()) ?? (await health());
     try {
       await api('POST', '/control/actions/restart-proxy');
     } catch (e) {
+      restarting = null;
       result = `Restart proxy: ${e instanceof ApiError ? e.message : 'failed'}`;
       return;
     }
-    restarting = 'waiting';
+    const isNew = restartWatch(before);
     const t0 = Date.now();
     restartTimer = setInterval(async () => {
       const h = await health();
-      if (h && isNewStart(before, h)) {
+      if (isNew(h)) {
         clearInterval(restartTimer);
         location.reload();
       } else if (Date.now() - t0 > RESTART_GIVE_UP_MS) {
@@ -114,7 +154,8 @@
       <button onclick={() => void run('Retention preview', 'retention-run', { dryRun: true })} data-testid="action-retention-dry">Preview retention</button>
       <button onclick={() => void run('Retention', 'retention-run', {})} data-testid="action-retention">Run retention now</button>
       <button onclick={() => void run('Restart', 'restart')} data-testid="action-restart">Restart camera side</button>
-      <button class="danger" onclick={() => (asking = 'camera-reboot')} disabled={reboot?.phase === 'rebooting'} data-testid="action-camera-reboot">Reboot camera</button>
+      <button class="danger" onclick={() => (asking = 'camera-reboot')} disabled={cameraBusy} data-testid="action-camera-reboot">Reboot camera</button>
+      {#if poe?.configured}<button class="danger" onclick={() => (asking = 'camera-powercycle')} disabled={cameraBusy} data-testid="action-camera-powercycle">Power-cycle camera</button>{/if}
       <button class="danger" onclick={() => (asking = 'restart-proxy')} disabled={restarting === 'waiting'} data-testid="action-restart-proxy">Restart proxy</button>
     </div>
     <div class="buttons">
@@ -123,12 +164,14 @@
       <button onclick={() => void run('Camera FTP off', 'camera-ftp-off')} data-testid="action-ftp-off">Turn the camera's FTP off</button>
     </div>
     {#if result}<p class="msg mono" data-testid="action-result">{result}</p>{/if}
-    {#if reboot?.phase === 'rebooting'}
+    {#if cycling || reboot?.phase === 'power-cycling'}
+      <p class="busy" data-testid="reboot-state">Power-cycling… the camera's PoE is off on {poe?.host} port {poe?.port}; it comes back on after {poe?.offSeconds} s.</p>
+    {:else if reboot?.phase === 'rebooting'}
       <p class="busy" data-testid="reboot-state">Rebooting… the camera is {$status?.camera.online ? 'still answering' : 'offline'}{$status?.camera.error ? ` (${$status.camera.error})` : ''}.</p>
     {:else if rebootAsked && reboot?.phase === 'back'}
       <p class="msg" data-testid="reboot-state">The camera is back after {reboot.downSec} s.</p>
     {:else if rebootAsked && reboot?.phase === 'not-back'}
-      <p class="bad" data-testid="reboot-state">The camera did not answer within 5 minutes of the reboot.</p>
+      <p class="bad" data-testid="reboot-state">The camera did not answer within 5 minutes of the {reboot.kind === 'powercycle' ? 'power-cycle' : 'reboot'}.</p>
     {/if}
     {#if restarting === 'waiting'}
       <p class="busy" data-testid="restart-state">Restarting… the page reloads when the proxy is back.</p>
@@ -152,7 +195,7 @@
 
 {#if asking}
   {@const dlg = DIALOGS[asking]}
-  <ConfirmDialog title={dlg.title} message={dlg.message} confirmLabel={dlg.confirmLabel} oncancel={() => (asking = null)} onconfirm={() => void (asking === 'camera-reboot' ? rebootCamera() : restartProxy())} />
+  <ConfirmDialog title={dlg.title} message={dlg.message} confirmLabel={dlg.confirmLabel} oncancel={() => (asking = null)} onconfirm={() => void (asking === 'camera-reboot' ? rebootCamera() : asking === 'camera-powercycle' ? powerCycleCamera() : restartProxy())} />
 {/if}
 
 <style>
