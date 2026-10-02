@@ -272,6 +272,12 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     return true;
   };
   const gone = (res: Response) => res.destroyed || res.writableEnded;
+  // Aborted when the response closes (the client left, or it was answered).
+  const leftSignal = (res: Response): AbortSignal => {
+    const ac = new AbortController();
+    res.once('close', () => ac.abort());
+    return ac.signal;
+  };
 
   // Either a window (from/to, unix ms, at most 48 h) or one camera-local day
   // (date=YYYY-MM-DD); both include a recording that starts the day before
@@ -298,8 +304,9 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     const stream = req.query.stream;
     if (stream !== 'sub' && stream !== 'main') return bad(res, 'stream is sub or main');
     if (!online()) return offline(res);
+    const signal = leftSignal(res); // a Search still queued when the client leaves is dropped
     try {
-      const list = day !== undefined ? await d.recordings().list.date(day, stream) : await d.recordings().list.range(from!, to!, stream);
+      const list = day !== undefined ? await d.recordings().list.date(day, stream, signal) : await d.recordings().list.range(from!, to!, stream, signal);
       res.json(list.map((e) => ({ id: e.id, start: e.start, end: e.end, stream: e.stream, size: e.size, kinds: e.kinds, clipId: clipNear(d.catalog, cam().id, e.stream, e.start, 5000)?.id ?? null })));
     } catch (err) {
       recordingError(res, err);
@@ -312,7 +319,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return bad(res, 'month is YYYY-MM');
     if (!online()) return offline(res);
     try {
-      res.json({ month, days: await d.recordings().list.monthDays(month) });
+      res.json({ month, days: await d.recordings().list.monthDays(month, leftSignal(res)) });
     } catch (err) {
       recordingError(res, err);
     }
@@ -328,7 +335,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     if (!online()) return offline(res);
     let entry: RecordingEntry | undefined;
     try {
-      entry = await side.list.find(id); // the camera path comes from Search, never from the request
+      entry = await side.list.find(id, leftSignal(res)); // the camera path comes from Search, never from the request
     } catch (err) {
       return recordingError(res, err);
     }

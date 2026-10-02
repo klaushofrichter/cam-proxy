@@ -397,7 +397,8 @@ as MP4, also the ones FTP never delivered.
   transfer) or `search_failed` (the list's Search); 503
   `recordings_unavailable` with `reason` `busy` and `Retry-After: 5` when more
   camera Searches wait than the proxy queues (one runs, 8 wait; requests for
-  the same day share one Search). After the first byte the
+  the same day share one Search; a waiting Search whose requests have all
+  gone is dropped). After the first byte the
   headers are gone, so a failure cuts the connection and the client sees a
   short body.
 - **Status:** the Status page's "Recordings (SD card)" card shows the last

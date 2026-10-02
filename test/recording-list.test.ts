@@ -226,6 +226,62 @@ describe('RecordingList: the Search queue is bounded', () => {
   });
 });
 
+describe('RecordingList: abandoned Searches leave the queue (#99 review)', () => {
+  const days = (n: number, base: number) => Array.from({ length: n }, (_, i) => `2026-08-${String(i + base).padStart(2, '0')}`);
+
+  it('a queued Search whose every caller aborted is dropped: never sent, its slot free at once', async () => {
+    const x = fake({});
+    const first = x.list.day('2026-07-01', 'sub'); // running
+    const ac = new AbortController();
+    const gone = days(8, 1).map((d) => x.list.day(d, 'sub', false, ac.signal).then(() => 'ok', (e: Error) => e.name));
+    ac.abort();
+    expect(await Promise.all(gone)).toEqual(Array(8).fill('AbortError'));
+    // The queue has room for 8 again while the first still runs.
+    const fresh = days(8, 11).map((d) => x.list.day(d, 'sub').then(() => 'ok', (e: SearchError) => e.code));
+    await first;
+    expect(await Promise.all(fresh)).toEqual(Array(8).fill('ok'));
+    expect(x.calls.map((c) => dateOf(c))).toEqual(['2026-07-01', ...days(8, 11)]);
+  });
+
+  it('kept while one caller still waits, or a caller without a signal joined', async () => {
+    const x = fake({});
+    void x.list.day('2026-07-01', 'sub');
+    const a = new AbortController(), b = new AbortController();
+    const one = x.list.day('2026-08-01', 'sub', false, a.signal);
+    const two = x.list.day('2026-08-01', 'sub', false, b.signal);
+    a.abort();
+    expect(await two).toEqual([]);
+    expect(await one).toEqual([]);
+    const c = new AbortController();
+    const three = x.list.day('2026-08-02', 'sub', false, c.signal);
+    const plain = x.list.day('2026-08-02', 'sub');
+    c.abort();
+    expect(await plain).toEqual([]);
+    expect(await three).toEqual([]);
+    expect(x.calls.map((c) => dateOf(c))).toEqual(['2026-07-01', '2026-08-01', '2026-08-02']);
+  });
+
+  it('a caller refused as busy that then aborts frees no slot it never had', async () => {
+    const x = fake({});
+    const full = days(9, 1).map((d) => x.list.day(d, 'sub'));
+    const ac = new AbortController();
+    expect(await x.list.day('2026-07-09', 'sub', false, ac.signal).catch((e: SearchError) => e.code)).toBe('busy');
+    ac.abort();
+    expect(await x.list.day('2026-07-10', 'sub').catch((e: SearchError) => e.code)).toBe('busy');
+    await Promise.all(full);
+  });
+
+  it('a running Search is never dropped', async () => {
+    const x = fake({});
+    const ac = new AbortController();
+    const running = x.list.day('2026-07-01', 'sub', false, ac.signal);
+    await new Promise((r) => setTimeout(r, 1));
+    ac.abort();
+    expect(await running).toEqual([]);
+    expect(x.calls).toHaveLength(1);
+  });
+});
+
 describe('RecordingList: in-flight Searches (#99, Task 9)', () => {
   it('stillListed never answers from a Search that started before it', async () => {
     const files = { '2026-10-01|sub': [file('2026-10-01', '211129', '211207')] };
