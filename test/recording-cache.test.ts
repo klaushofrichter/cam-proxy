@@ -79,9 +79,9 @@ describe('RecordingCache', () => {
     const a = put('a.mp4', 1000, NOW - 3000_000);
     const b = put('b.mp4', 1000, NOW - 2000_000);
     const c = put('c.mp4', 1000, NOW - 1000_000);
-    expect(cache.makeRoom(1500)).toBe(2000);
+    expect(cache.makeRoom(1500)).toBe(true);
     expect([existsSync(a), existsSync(b), existsSync(c)]).toEqual([false, false, true]);
-    expect(cache.makeRoom(500)).toBe(0);
+    expect(cache.makeRoom(500)).toBe(true);
   });
 
   // Review Focus 3.
@@ -118,8 +118,38 @@ describe('RecordingCache', () => {
     expect(cache.files()).toEqual([]);
     expect(cache.has('l.mp4')).toBe(false);
     expect(cache.open('l.mp4')).toBeNull();
-    expect(cache.makeRoom(50)).toBe(0);
+    expect(cache.makeRoom(50)).toBe(true);
     expect(existsSync(target)).toBe(true);
     expect(Math.round(statSync(target).mtimeMs)).toBe(NOW - 9000_000);
+  });
+
+  // #99 (Task 7).
+  it('makeRoom counts .part bytes (they use the disk) but never deletes a .part', () => {
+    const { cache, put } = setup(3000);
+    const a = put('a.mp4', 1000, NOW - 3000_000);
+    const b = put('b.mp4', 1000, NOW - 2000_000);
+    writeFileSync(cache.partPath('c.mp4'), Buffer.alloc(1000));
+    expect(cache.makeRoom(1000)).toBe(true);
+    expect([existsSync(a), existsSync(b), existsSync(cache.partPath('c.mp4'))]).toEqual([false, true, true]);
+  });
+
+  it('makeRoom answers whether the file fits, not what it freed', () => {
+    const { cache, put } = setup(3000);
+    put('a.mp4', 1000, NOW - 3000_000);
+    const unpin = cache.open('a.mp4')!;
+    expect(cache.makeRoom(2000)).toBe(true); // nothing freed, but it fits
+    expect(cache.makeRoom(2500)).toBe(false); // a is pinned: it can't fit
+    unpin();
+    expect(cache.makeRoom(2500)).toBe(true);
+  });
+
+  it('a read touches the file only when its last use is 60 s old or more', () => {
+    const { cache, put, dir, clock } = setup();
+    put('a.mp4', 10, NOW - 30_000);
+    cache.open('a.mp4')!();
+    expect(Math.round(statSync(join(dir, 'a.mp4')).mtimeMs)).toBe(NOW - 30_000);
+    clock.t = NOW + 30_000;
+    cache.open('a.mp4')!();
+    expect(Math.round(statSync(join(dir, 'a.mp4')).mtimeMs)).toBe(NOW + 30_000);
   });
 });

@@ -254,3 +254,25 @@ describe('no secrets in the logs', () => {
     }
   });
 });
+
+describe('download: #99 (Task 5)', () => {
+  it('the first-chunk wait starts again after the info record', async () => {
+    const { s } = await setup({ infoDelayMs: 250, firstChunkDelayMs: 250 });
+    const out = sink();
+    expect(await run(s, out.w, { firstChunkMs: 400, stallMs: 2000 })).toBe(FILE.length);
+    expect(out.bytes()).toEqual(FILE);
+  });
+
+  it('one writable for several downloads keeps at most one error listener and no close listener of ours', async () => {
+    const { s } = await setup();
+    const out = new PassThrough();
+    out.resume();
+    const errors0 = out.listenerCount('error');
+    const closes0 = out.listenerCount('close');
+    for (let i = 0; i < 3; i++) await run(s, out);
+    expect(out.listenerCount('error')).toBeLessThanOrEqual(errors0 + 1);
+    expect(out.listenerCount('close')).toBe(closes0);
+    expect(out.listenerCount('drain')).toBe(0);
+    expect(() => out.emit('error', new Error('late'))).not.toThrow(); // never uncaught
+  });
+});

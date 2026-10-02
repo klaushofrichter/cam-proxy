@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { daysUntilFullText } from '../web/src/lib/format';
+import { agoText, daysUntilFullText, MB, mbText } from '../web/src/lib/format';
 import { alertsLevel, cameraFtpClass, cameraFtpText, ftpAlerts, type FtpHealth } from '../web/src/lib/ftp';
 import { cacheFillText, recordingsClass, recordingsLastText } from '../web/src/lib/recordings';
 
@@ -10,6 +10,23 @@ describe('Status page: days until full (#78)', () => {
     expect(daysUntilFullText(365)).toBe('365');
     expect(daysUntilFullText(365.6)).toBe('more than a year');
     expect(daysUntilFullText(893_477)).toBe('more than a year');
+  });
+});
+
+// #99 (Task 14): one ago/MB helper for the Status page and the Recordings card.
+describe('format: ago and MB', () => {
+  const NOW = Date.UTC(2026, 9, 2, 12, 0);
+  it('ago: seconds, minutes, hours; — for no time', () => {
+    expect(agoText(NOW - 5_000, NOW)).toBe('5 s ago');
+    expect(agoText(NOW - 120_000, NOW)).toBe('2 min ago');
+    expect(agoText(NOW - 3 * 3600_000, NOW)).toBe('3 h ago');
+    expect(agoText(NOW + 5_000, NOW)).toBe('0 s ago');
+    expect(agoText(null, NOW)).toBe('—');
+    expect(agoText(undefined, NOW)).toBe('—');
+  });
+  it('MB with one decimal', () => {
+    expect(MB).toBe(1024 ** 2);
+    expect(mbText(1_084_649)).toBe('1.0 MB');
   });
 });
 

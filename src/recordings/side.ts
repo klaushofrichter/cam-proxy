@@ -47,8 +47,10 @@ export interface RecordingsDeps {
 
 export function createRecordingsSide(d: RecordingsDeps): RecordingsSide {
   const session = new BaichuanSession(d.target, d.session);
-  const cache = new RecordingCache({ dir: () => join(d.dataDir, 'recordings', d.cam()), capBytes: d.capBytes });
+  const dirOf = () => join(d.dataDir, 'recordings', d.cam());
+  const cache = new RecordingCache({ dir: dirOf, capBytes: d.capBytes });
   cache.init(); // leftover .part files from the last run go
+  let readyDir = dirOf();
   const list = new RecordingList({ search: d.search, timeInfo: d.timeInfo });
   let last: RecordingsStatus['last'] = null;
   const fetcher = new RecordingFetcher({
@@ -73,6 +75,12 @@ export function createRecordingsSide(d: RecordingsDeps): RecordingsSide {
     reset: () => {
       session.close();
       list.clear();
+      // A new camera.id is a new folder: made ready like the first at start
+      // (#99). The same folder is left alone: a download may be writing a .part.
+      if (dirOf() !== readyDir) {
+        cache.init();
+        readyDir = dirOf();
+      }
     },
     // Queued fetches fail, a running download is aborted: with a session its
     // abort sends cmd 9 before the close. A connect or login in flight is

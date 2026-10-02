@@ -7,7 +7,7 @@ import { CameraError } from '../src/camera/client';
 import type { TimeInfo } from '../src/camera/time';
 import { openCatalog } from '../src/catalog/db';
 import { clipNear, insertClip } from '../src/catalog/clips';
-import { RecordingList, SearchError } from '../src/recordings/list';
+import { RecordingList, SearchError, type RecordingEntry } from '../src/recordings/list';
 
 const CHI: TimeInfo = { stdOffsetMinutes: -360, dstOffsetMinutes: 60, dstRule: { startMon: 3, startWeek: 2, startWeekday: 0, startHour: 2, startMin: 0, endMon: 11, endWeek: 1, endWeekday: 0, endHour: 2, endMin: 0 } };
 const file = (date: string, start: string, end: string, s: 'S' | 'M' = 'S', flags = '5514C080000000', size = '3E8') =>
@@ -25,6 +25,7 @@ function fake(files: Record<string, string[]>, o: { fail?: unknown[]; time?: () 
     search: async (param) => {
       const p = param as Param;
       calls.push(p);
+      const snapshot = files[`${dateOf(p)}|${p.Search.streamType}`] ?? []; // what the card has when the Search starts
       running++;
       maxRunning = Math.max(maxRunning, running);
       await new Promise((r) => setTimeout(r, 5));
@@ -32,7 +33,7 @@ function fake(files: Record<string, string[]>, o: { fail?: unknown[]; time?: () 
       const f = o.fail?.shift();
       if (f) throw f;
       if (p.Search.onlyStatus === 1) return { SearchResult: { Status: o.status ?? [] } };
-      return { SearchResult: { File: (files[`${dateOf(p)}|${p.Search.streamType}`] ?? []).map((name) => ({ name, size: 1000 })) } };
+      return { SearchResult: { File: snapshot.map((name) => ({ name, size: 1000 })) } };
     },
     timeInfo: o.time ?? (async () => CHI),
     now: () => clock.t,
@@ -49,7 +50,8 @@ describe('RecordingList.range', () => {
     });
     // 2026-10-01 20:00 CDT to 2026-10-02 12:00 CDT.
     const r = await x.list.range(Date.UTC(2026, 9, 2, 1, 0), Date.UTC(2026, 9, 2, 17, 0), 'sub');
-    expect(x.calls.map((c) => [dateOf(c), c.Search.streamType, c.Search.onlyStatus])).toEqual([['2026-10-01', 'sub', 0], ['2026-10-02', 'sub', 0]]);
+    // And the day before the first, for a recording running past its midnight (#99).
+    expect(x.calls.map((c) => [dateOf(c), c.Search.streamType, c.Search.onlyStatus])).toEqual([['2026-10-01', 'sub', 0], ['2026-10-02', 'sub', 0], ['2026-09-30', 'sub', 0]]);
     expect(x.calls[0].Search.EndTime).toMatchObject({ day: 1, hour: 23, min: 59, sec: 59 });
     expect(r.map((e) => e.id)).toEqual(['RecS0A_DST20261001_211129_211207_0_5514C080000000_3E8.mp4', 'RecS0A_DST20261002_010000_010020_0_5514C080000000_3E8.mp4']);
     expect(r[0]).toEqual({ id: r[0].id, path: file('2026-10-01', '211129', '211207'), start: Date.UTC(2026, 9, 2, 2, 11, 29), end: Date.UTC(2026, 9, 2, 2, 12, 7), stream: 'sub', size: 1000, kinds: ['person', 'motion'] });
@@ -122,6 +124,196 @@ describe('RecordingList.find and stillListed', () => {
     const [e] = await x.list.day('2026-10-01', 'sub');
     files['2026-10-01|sub'] = [];
     expect(await x.list.stillListed(e)).toBe(false);
+    expect(x.calls).toHaveLength(2);
+  });
+});
+
+// #99 item 1: a recording that starts on D-1 and runs past midnight into D.
+describe('RecordingList: recordings across midnight (#99)', () => {
+  const CROSS = 'RecS0A_DST20261001_235000_000700_0_5514C080000000_3E8.mp4';
+  const files = () => ({
+    '2026-10-01|sub': [file('2026-10-01', '120000', '120030'), file('2026-10-01', '235000', '000700')],
+    '2026-10-02|sub': [file('2026-10-02', '010000', '010020')],
+  });
+
+  it('range: a window starting just after midnight finds the recording from the day before', async () => {
+    const x = fake(files());
+    // 2026-10-02 00:05 CDT to 01:30 CDT.
+    const r = await x.list.range(Date.UTC(2026, 9, 2, 5, 5), Date.UTC(2026, 9, 2, 6, 30), 'sub');
+    expect(r.map((e) => e.id)).toEqual([CROSS, 'RecS0A_DST20261002_010000_010020_0_5514C080000000_3E8.mp4']);
+    expect(r[0].end).toBe(Date.UTC(2026, 9, 2, 5, 7));
+  });
+
+  it('date: the camera-local day, with the recording that runs into it, and nothing else from the day before', async () => {
+    const x = fake(files());
+    const r = await x.list.date('2026-10-02', 'sub');
+    expect(r.map((e) => e.id)).toEqual([CROSS, 'RecS0A_DST20261002_010000_010020_0_5514C080000000_3E8.mp4']);
+    expect(x.calls.map((c) => dateOf(c)).sort()).toEqual(['2026-10-01', '2026-10-02']);
+  });
+
+  it('date: a recording of the day itself that runs into the next day is listed', async () => {
+    const x = fake(files());
+    expect((await x.list.date('2026-10-01', 'sub')).map((e) => e.id)).toEqual(['RecS0A_DST20261001_120000_120030_0_5514C080000000_3E8.mp4', CROSS]);
+  });
+
+  it("keeps a finished day's midnight tail for 15 minutes: later views of D search D only", async () => {
+    const x = fake(files());
+    await x.list.date('2026-10-02', 'sub');
+    x.clock.t += 60_000; // past the 30 s day cache
+    expect((await x.list.date('2026-10-02', 'sub')).map((e) => e.id)).toContain(CROSS);
+    expect(x.calls.map((c) => dateOf(c))).toEqual(['2026-10-02', '2026-10-01', '2026-10-02']);
+    x.clock.t += 13 * 60_000; // 14 min after the tail was kept
+    await x.list.date('2026-10-02', 'sub');
+    expect(x.calls).toHaveLength(4);
+    x.clock.t += 60_000; // 15 min
+    await x.list.date('2026-10-02', 'sub');
+    expect(x.calls).toHaveLength(6);
+  });
+
+  it('a Search just after midnight does not take the day before as final (a late clip can still appear)', async () => {
+    const f: Record<string, string[]> = { '2026-10-01|sub': [], '2026-10-02|sub': [] };
+    const x = fake(f);
+    x.clock.t = Date.UTC(2026, 9, 2, 5, 0, 1); // 2026-10-02 00:00:01 CDT
+    expect(await x.list.date('2026-10-02', 'sub')).toEqual([]);
+    f['2026-10-01|sub'] = [file('2026-10-01', '235958', '000130')]; // pre-record and clock skew: named a moment later
+    x.clock.t += 60_000;
+    expect((await x.list.date('2026-10-02', 'sub')).map((e) => e.id)).toEqual(['RecS0A_DST20261001_235958_000130_0_5514C080000000_3E8.mp4']);
+    // Five minutes after midnight the day before is final.
+    x.clock.t = Date.UTC(2026, 9, 2, 5, 5, 0);
+    await x.list.date('2026-10-02', 'sub');
+    const n = x.calls.length;
+    x.clock.t += 60_000;
+    await x.list.date('2026-10-02', 'sub');
+    expect(x.calls.length).toBe(n + 1); // D only
+  });
+
+  it('a finished recording that ends at 000000 does not keep the day open', async () => {
+    const x = fake({ '2026-10-01|sub': [file('2026-10-01', '235700', '000000')], '2026-10-02|sub': [] });
+    expect((await x.list.date('2026-10-02', 'sub')).map((e) => e.id)).toEqual(['RecS0A_DST20261001_235700_000000_0_5514C080000000_3E8.mp4']);
+    x.clock.t += 60_000;
+    await x.list.date('2026-10-02', 'sub');
+    expect(x.calls).toHaveLength(3); // the tail was kept: D only
+  });
+
+  it('never keeps the tail of a day that is not over, or with a recording still being written', async () => {
+    // Still being written: listed with end 000000.
+    const open = { '2026-10-01|sub': [file('2026-10-01', '235000', '000000')], '2026-10-02|sub': [] };
+    const x = fake(open);
+    expect(await x.list.date('2026-10-02', 'sub')).toEqual([]); // not listed until it is finished
+    x.clock.t += 60_000;
+    await x.list.date('2026-10-02', 'sub');
+    expect(x.calls).toHaveLength(4);
+    // The day before is today (2026-10-02 13:00 CDT on the fake clock): not over.
+    const y = fake({});
+    await y.list.date('2026-10-03', 'sub');
+    y.clock.t += 60_000;
+    await y.list.date('2026-10-03', 'sub');
+    expect(y.calls).toHaveLength(4);
+  });
+});
+
+// #99 item 2: a bounded Search queue.
+describe('RecordingList: the Search queue is bounded', () => {
+  it('one running and 8 waiting; the next distinct Search is busy at once; joins do not count', async () => {
+    const x = fake({});
+    const days = Array.from({ length: 10 }, (_, i) => `2026-09-${String(i + 10).padStart(2, '0')}`);
+    const runs = days.map((d) => x.list.day(d, 'sub').then(() => 'ok', (e: SearchError) => e.code));
+    const joined = x.list.day(days[3], 'sub').then(() => 'ok', (e: SearchError) => e.code);
+    expect(await Promise.all(runs)).toEqual([...Array(9).fill('ok'), 'busy']);
+    expect(await joined).toBe('ok');
+    expect(x.calls).toHaveLength(9);
+    expect(await x.list.day('2026-09-30', 'sub')).toEqual([]); // the queue drained: no longer busy
+  });
+});
+
+describe('RecordingList: abandoned Searches leave the queue (#99 review)', () => {
+  const days = (n: number, base: number) => Array.from({ length: n }, (_, i) => `2026-08-${String(i + base).padStart(2, '0')}`);
+
+  it('a queued Search whose every caller aborted is dropped: never sent, its slot free at once', async () => {
+    const x = fake({});
+    const first = x.list.day('2026-07-01', 'sub'); // running
+    const ac = new AbortController();
+    const gone = days(8, 1).map((d) => x.list.day(d, 'sub', false, ac.signal).then(() => 'ok', (e: Error) => e.name));
+    ac.abort();
+    expect(await Promise.all(gone)).toEqual(Array(8).fill('AbortError'));
+    // The queue has room for 8 again while the first still runs.
+    const fresh = days(8, 11).map((d) => x.list.day(d, 'sub').then(() => 'ok', (e: SearchError) => e.code));
+    await first;
+    expect(await Promise.all(fresh)).toEqual(Array(8).fill('ok'));
+    expect(x.calls.map((c) => dateOf(c))).toEqual(['2026-07-01', ...days(8, 11)]);
+  });
+
+  it('kept while one caller still waits, or a caller without a signal joined', async () => {
+    const x = fake({});
+    void x.list.day('2026-07-01', 'sub');
+    const a = new AbortController(), b = new AbortController();
+    const one = x.list.day('2026-08-01', 'sub', false, a.signal);
+    const two = x.list.day('2026-08-01', 'sub', false, b.signal);
+    a.abort();
+    expect(await two).toEqual([]);
+    expect(await one).toEqual([]);
+    const c = new AbortController();
+    const three = x.list.day('2026-08-02', 'sub', false, c.signal);
+    const plain = x.list.day('2026-08-02', 'sub');
+    c.abort();
+    expect(await plain).toEqual([]);
+    expect(await three).toEqual([]);
+    expect(x.calls.map((c) => dateOf(c))).toEqual(['2026-07-01', '2026-08-01', '2026-08-02']);
+  });
+
+  it('a caller refused as busy that then aborts frees no slot it never had', async () => {
+    const x = fake({});
+    const full = days(9, 1).map((d) => x.list.day(d, 'sub'));
+    const ac = new AbortController();
+    expect(await x.list.day('2026-07-09', 'sub', false, ac.signal).catch((e: SearchError) => e.code)).toBe('busy');
+    ac.abort();
+    expect(await x.list.day('2026-07-10', 'sub').catch((e: SearchError) => e.code)).toBe('busy');
+    await Promise.all(full);
+  });
+
+  it('a running Search is never dropped', async () => {
+    const x = fake({});
+    const ac = new AbortController();
+    const running = x.list.day('2026-07-01', 'sub', false, ac.signal);
+    await new Promise((r) => setTimeout(r, 1));
+    ac.abort();
+    expect(await running).toEqual([]);
+    expect(x.calls).toHaveLength(1);
+  });
+});
+
+describe('RecordingList: in-flight Searches (#99, Task 9)', () => {
+  it('stillListed never answers from a Search that started before it', async () => {
+    const files = { '2026-10-01|sub': [file('2026-10-01', '211129', '211207')] };
+    const x = fake(files);
+    const running = x.list.day('2026-10-01', 'sub');
+    files['2026-10-01|sub'] = []; // gone from the card while that Search runs
+    const e = { id: 'RecS0A_DST20261001_211129_211207_0_5514C080000000_3E8.mp4' } as RecordingEntry;
+    const still = x.list.stillListed(e);
+    expect(await running).toHaveLength(1);
+    expect(await still).toBe(false);
+    expect(x.calls).toHaveLength(2);
+  });
+
+  it('clear() during a Search: its result is not cached, and a new request does not join it', async () => {
+    const files = { '2026-10-01|sub': [file('2026-10-01', '211129', '211207')] };
+    const x = fake(files);
+    const before = x.list.day('2026-10-01', 'sub');
+    x.list.clear();
+    files['2026-10-01|sub'] = [];
+    const after = x.list.day('2026-10-01', 'sub');
+    expect(await before).toHaveLength(1);
+    expect(await after).toHaveLength(0);
+    expect(await x.list.day('2026-10-01', 'sub')).toHaveLength(0);
+    expect(x.calls).toHaveLength(2);
+  });
+
+  it('clear() during a month Search: not cached either', async () => {
+    const x = fake({}, { status: [{ year: 2026, mon: 10, table: '1' }] });
+    const before = x.list.monthDays('2026-10');
+    x.list.clear();
+    await before;
+    await x.list.monthDays('2026-10');
     expect(x.calls).toHaveLength(2);
   });
 });
