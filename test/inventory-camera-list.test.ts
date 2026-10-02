@@ -84,4 +84,35 @@ describe('listCamera', () => {
     const l = await listCamera(f.deps, { from: at('2026-09-28', '0000'), to: at('2026-09-30', '2300'), stream: 'sub', signal: ac.signal });
     expect(l.days.map((x) => x.date)).toEqual(['2026-09-28', '2026-09-29']);
   });
+
+  it('does not name the oldest SD day when an earlier month\'s overview failed', async () => {
+    const f = fake({ months: { '2026-09': new SearchError('search_failed', 'x'), '2026-10': [2] } });
+    const l = await listCamera(f.deps, { from: at('2026-09-30', '0000'), to: at('2026-10-02', '2300'), stream: 'sub', signal: signal() });
+    expect(l.oldestSdDay).toBeNull();
+    // A failed later month does not matter.
+    const g = fake({ months: { '2026-09': [30], '2026-10': new SearchError('search_failed', 'x') } });
+    const m = await listCamera(g.deps, { from: at('2026-09-30', '0000'), to: at('2026-10-02', '2300'), stream: 'sub', signal: signal() });
+    expect(m.oldestSdDay).toBe('2026-09-30');
+  });
+
+  it('a cancel during the busy wait returns at once', async () => {
+    const ac = new AbortController();
+    const f = fake({ months: { '2026-09': [29] }, fail: { '2026-09-29': [new SearchError('busy', 'full')] } });
+    f.deps.sleep = (ms, sig) => new Promise<void>((resolve) => {
+      expect(ms).toBe(1000);
+      sig?.addEventListener('abort', () => resolve(), { once: true });
+      setTimeout(() => ac.abort(), 5);
+    });
+    const t0 = Date.now();
+    const l = await listCamera(f.deps, { from: at('2026-09-29', '0000'), to: at('2026-09-29', '2300'), stream: 'sub', signal: ac.signal });
+    expect(Date.now() - t0).toBeLessThan(500);
+    expect(l.days).toEqual([]);
+    expect(f.searched).toEqual(['2026-09-29']);
+  });
+
+  it('a time error that is not a network error is a failed Search, not an offline camera', async () => {
+    const f = fake();
+    f.deps.timeInfo = async () => { throw new Error('bad time answer'); };
+    await expect(listCamera(f.deps, { from: at('2026-09-29'), to: at('2026-09-30'), stream: 'sub', signal: signal() })).rejects.toMatchObject({ code: 'search_failed', message: 'bad time answer' });
+  });
 });

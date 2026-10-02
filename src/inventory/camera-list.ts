@@ -5,6 +5,7 @@
 // its 30 s day cache). A day whose Search fails is `unknown`: its recordings
 // are never counted as missing. An offline camera ends the listing
 // (SearchError camera_offline); a full Search queue (busy) is tried again.
+import { CameraError } from '../camera/client';
 import { SearchError, type RecordingEntry, type RecordingList } from '../recordings/list';
 import { localDays, type Stream } from '../recordings/names';
 import type { TimeInfo } from '../camera/time';
@@ -18,7 +19,7 @@ export interface CameraListing {
 export interface CameraListDeps {
   list: Pick<RecordingList, 'monthDays' | 'day'>;
   timeInfo: () => Promise<TimeInfo>;
-  sleep?: (ms: number) => Promise<void>;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
 // A Search refused because the queue is full is tried this often in all, 1 s apart.
@@ -26,6 +27,10 @@ export const BUSY_TRIES = 3;
 
 const isAbort = (e: unknown) => e instanceof Error && e.name === 'AbortError';
 const offline = (e: unknown) => e instanceof SearchError && e.code === 'camera_offline';
+// A camera that does not answer: CameraError camera_offline, or a socket-level error.
+const isNetworkError = (e: unknown) =>
+  (e instanceof CameraError && e.code === 'camera_offline') ||
+  (e instanceof Error && (/^E(CONN|HOST|NET|TIMEDOUT|PIPE)/.test((e as { code?: string }).code ?? '') || /ECONN|EHOST|ENET|ETIMEDOUT|EPIPE|timed out|fetch failed/i.test(e.message)));
 const pad = (n: number) => String(n).padStart(2, '0');
 
 export async function listCamera(
@@ -36,9 +41,11 @@ export async function listCamera(
   try {
     time = await d.timeInfo();
   } catch (err) {
-    throw err instanceof SearchError ? err : new SearchError('camera_offline', 'the camera time is unknown');
+    if (err instanceof SearchError) throw err;
+    if (isNetworkError(err)) throw new SearchError('camera_offline', 'the camera time is unknown');
+    throw new SearchError('search_failed', err instanceof Error ? err.message : String(err));
   }
-  const sleep = d.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const sleep = d.sleep ?? abortableSleep;
   const dates = localDays(o.from, o.to, time);
   // The month overview: null when its Search failed (then every day is searched).
   const months = new Map<string, Set<number> | null>();
@@ -51,9 +58,11 @@ export async function listCamera(
       months.set(month, null);
     }
   }
+  // Null (unknown) when a month before the first one with recordings has no overview.
   let oldestSdDay: string | null = null;
   for (const month of [...months.keys()].sort()) {
     const set = months.get(month);
+    if (set === null) break;
     if (!set?.size) continue;
     oldestSdDay = `${month}-${pad(Math.min(...set))}`;
     break;
@@ -74,7 +83,7 @@ export async function listCamera(
   return { days, oldestSdDay, time };
 }
 
-async function searchDay(d: CameraListDeps, date: string, stream: Stream, signal: AbortSignal, sleep: (ms: number) => Promise<void>): Promise<CameraDay | null> {
+async function searchDay(d: CameraListDeps, date: string, stream: Stream, signal: AbortSignal, sleep: (ms: number, signal?: AbortSignal) => Promise<void>): Promise<CameraDay | null> {
   for (let attempt = 1; ; attempt++) {
     try {
       return { date, state: 'listed', recordings: await d.list.day(date, stream, false, signal) };
@@ -82,10 +91,24 @@ async function searchDay(d: CameraListDeps, date: string, stream: Stream, signal
       if (isAbort(err) || signal.aborted) return null;
       if (offline(err)) throw err;
       if (err instanceof SearchError && err.code === 'busy' && attempt < BUSY_TRIES) {
-        await sleep(1000);
+        await sleep(1000, signal);
+        if (signal.aborted) return null;
         continue;
       }
       return { date, state: 'unknown', recordings: [], error: err instanceof Error ? err.message : String(err) };
     }
   }
+}
+
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal?.aborted) return resolve();
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener('abort', done, { once: true });
+  });
 }

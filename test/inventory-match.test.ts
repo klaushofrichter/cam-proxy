@@ -38,4 +38,13 @@ describe('pairByStart', () => {
     const p = pairByStart([rec('a', 10_000), rec('b', 12_000)], [clip(1, 11_900), clip(2, 8_000)]);
     expect(p.pairs.map((x) => [x.rec.id, x.clip.id])).toEqual([['a', 2], ['b', 1]]);
   });
+
+  it('is greedy closest-first, not a maximum matching (pinned)', () => {
+    // A maximum matching would pair a-2 (5.0 s) and b-1 (4.5 s); closest first takes a-1 (1.0 s) and strands b.
+    const p = pairByStart([rec('a', 10_000), rec('b', 15_500)], [clip(1, 11_000), clip(2, 5_000)]);
+    // a-1 (1.0 s) first; b-1 is 4.5 s but 1 is taken, b-2 is 10.5 s: out of reach.
+    expect(p.pairs.map((x) => [x.rec.id, x.clip.id])).toEqual([['a', 1]]);
+    expect(p.recsAlone.map((x) => x.id)).toEqual(['b']);
+    expect(p.clipsAlone.map((x) => x.id)).toEqual([2]);
+  });
 });

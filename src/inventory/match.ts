@@ -4,6 +4,10 @@
 // Each clip pairs with one recording at most and the reverse: the closest
 // starts pair first; on a tie the earlier recording, then the lower clip id.
 
+// Greedy closest-first is not a maximum matching: it can leave a recording and
+// a clip alone that a different choice would have paired. That needs two
+// same-stream clips (or recordings) less than 10 s apart, which is rare, and
+// the closest pair is the likeliest to be the same recording. Pinned by a test.
 export const START_SLACK_MS = 5_000;
 
 export interface Pairable { start: number; stream: string }
