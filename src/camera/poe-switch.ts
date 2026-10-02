@@ -85,7 +85,7 @@ const STOP_WAIT_MS = 8_000; // on shutdown: the longest wait for the switch (com
 const TIMEOUT = 'CAMPROXY_SWITCH_TIMEOUT';
 
 // One web session: the cookie from the login answer goes with every call.
-class Session {
+export class Session {
   private cookie = '';
   // The per-call timeout is asked on every call: a stopping proxy shortens it.
   constructor(private readonly host: string, private readonly timeout: () => number) {}
@@ -111,16 +111,20 @@ class Session {
         res.on('error', () => reject(new PoeSwitchError('switch_error', `the switch broke off its answer to callcmd ${cmd}`)));
         res.on('end', () => {
           if (res.statusCode !== 200) return reject(new PoeSwitchError('switch_error', `the switch answered HTTP ${res.statusCode} to callcmd ${cmd}`));
-          if (cmd === CMD.login) {
+          let answer: Awaited<ReturnType<Session['call']>>;
+          try {
+            answer = JSON.parse(text);
+          } catch {
+            return reject(new PoeSwitchError('switch_error', `the switch's answer to callcmd ${cmd} is not JSON`));
+          }
+          // Only a login the switch accepted replaces the cookie: a refused one
+          // must not drop the cookie of a session that may still be open.
+          if (cmd === CMD.login && answer?.data?.calldata?.login === 'success') {
             const set = res.headers['set-cookie'] ?? [];
             const jar = set.map((c) => c.split(';')[0].trim()).filter(Boolean);
             if (jar.length) this.cookie = jar.join('; ');
           }
-          try {
-            resolve(JSON.parse(text));
-          } catch {
-            reject(new PoeSwitchError('switch_error', `the switch's answer to callcmd ${cmd} is not JSON`));
-          }
+          resolve(answer);
         });
       });
       req.on('timeout', () => req.destroy(Object.assign(new Error('timeout'), { code: TIMEOUT })));
@@ -435,19 +439,39 @@ export class PoeSwitch {
     const s = new Session(c.host!, () => this.callTimeout(final));
     let loggedIn = false;
     try {
-      await s.login(this.d.password()!);
+      try {
+        await s.login(this.d.password()!);
+      } catch (err) {
+        // A lost logout of ours looks like someone else's session: say so.
+        if (err instanceof PoeSwitchError && err.code === 'switch_busy' && this.sessionMaybeOpen) {
+          throw new PoeSwitchError('switch_busy', `${err.message} (possibly the proxy's own session: its last logout was not answered; it frees itself about 3 minutes after the last call)`);
+        }
+        throw err;
+      }
       loggedIn = true;
       return await f(s, c);
     } finally {
       if (loggedIn) {
         final = true;
-        try {
-          await s.logout();
-          this.sessionMaybeOpen = false;
-        } catch (err) {
-          // The switch keeps one session: its web UI may refuse logins until the switch ends it.
-          this.sessionMaybeOpen = true;
-          logger.error({ err: (err as Error).message }, 'poe_switch_logout_failed_session_may_be_open');
+        // The logout is tried twice when time allows (never while the stop
+        // budget is spent): a lost answer may be a blip, and the switch's one
+        // session blocks every login, also its web UI, until it ends.
+        for (let attempt = 1; ; attempt++) {
+          try {
+            await s.logout();
+            this.sessionMaybeOpen = false;
+            break;
+          } catch (err) {
+            if (attempt === 1 && !this.stopBudgetGone()) {
+              logger.warn({ err: (err as Error).message }, 'poe_switch_logout_failed_retrying');
+              await this.sleep(500);
+              if (!this.stopBudgetGone()) continue;
+            }
+            // The switch keeps one session: its web UI may refuse logins until the switch ends it.
+            this.sessionMaybeOpen = true;
+            logger.error({ err: (err as Error).message }, 'poe_switch_logout_failed_session_may_be_open');
+            break;
+          }
         }
       }
     }

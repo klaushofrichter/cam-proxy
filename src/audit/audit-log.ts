@@ -1,7 +1,8 @@
 import { appendFileSync, closeSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync } from 'fs';
 import { hostname } from 'os';
 import { join } from 'path';
-import { logger } from '../log';
+import { logger, maskPath } from '../log';
+export { maskPath };
 
 // The audit log (spec 2026-10-01-audit-log-design): ECS 8.x JSON lines, one
 // append-only file per UTC day under <dataDir>/audit. Writes never throw into
@@ -33,9 +34,15 @@ export class AuditQueryError extends Error {}
 
 const DAY_FILE = /^(\d{4}-\d{2}-\d{2})\.jsonl$/;
 const CURSOR = /^(\d{4}-\d{2}-\d{2}):(\d{1,9})$/;
-const SECRET = /token|key|password|secret/i;
+// Secret field names, by explicit name (#78): token, password, secret, authorization
+// and cookie anywhere in the name, an api key, and names ending in `Key`/`_key`
+// (apiKey, googleVisionKey). Not keyframe or ftp.keyFile.
+const SECRET_WORDS = /token|password|passwd|passphrase|pwd|credential|secret|authorization|cookie/i;
+const SECRET_KEY = /key$/i; // apiKey, privatekey, ACCESS_KEY; not keyframe or keyFile
+const isSecret = (n: string) => SECRET_WORDS.test(n) || SECRET_KEY.test(n);
 // Field names that look secret but only describe: a config change's `key`, the kind of token refused.
 const SAFE = new Set(['key', 'tokenKind']);
+
 // `secret` may name the secret a record is about (secret-override): these names only.
 const SECRET_NAMES = new Set(['CAMPROXY_GOOGLE_VISION_KEY']);
 
@@ -45,11 +52,12 @@ export function redact(v: unknown): unknown {
   if (Array.isArray(v)) return v.map(redact);
   if (!v || typeof v !== 'object') return v;
   const o = v as Record<string, unknown>;
-  const byName = typeof o.key === 'string' && SECRET.test(o.key) && ('from' in o || 'to' in o);
+  const last = typeof o.key === 'string' ? o.key.slice(o.key.lastIndexOf('.') + 1) : '';
+  const byName = typeof o.key === 'string' && (last === 'key' || isSecret(last)) && ('from' in o || 'to' in o);
   return Object.fromEntries(Object.entries(o).map(([k, x]) => {
     if (byName && (k === 'from' || k === 'to')) return [k, '[redacted]'];
     if (k === 'secret' && typeof x === 'string' && SECRET_NAMES.has(x)) return [k, x];
-    return [k, SECRET.test(k) && !SAFE.has(k) ? '[redacted]' : redact(x)];
+    return [k, isSecret(k) && !SAFE.has(k) ? '[redacted]' : redact(x)];
   }));
 }
 
@@ -79,10 +87,11 @@ export class AuditLog {
     const day = new Date(ts).toISOString().slice(0, 10);
     const file = join(this.d.dir, `${day}.jsonl`);
     try {
-      if (i.action === 'auth-refused' && this.size(file) >= this.max) {
+      // Refused tokens and failed sign-ins are what a flood writes: those stop at the size limit.
+      if ((i.action === 'auth-refused' || (i.action === 'login' && i.outcome === 'failure')) && this.size(file) >= this.max) {
         if (this.throttledDay !== day) {
           this.throttledDay = day;
-          const t = this.record(ts, { action: 'audit-throttled', category: ['host'], type: ['info'], outcome: 'unknown', message: 'The audit file reached its size limit; further refused-token records today are dropped' });
+          const t = this.record(ts, { action: 'audit-throttled', category: ['host'], type: ['info'], outcome: 'unknown', message: 'The audit file reached its size limit; further refused-token and failed sign-in records today are dropped' });
           this.append(file, t);
           logger.info({ audit: true, ecs: t }, 'audit');
         }
