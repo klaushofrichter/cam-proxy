@@ -6,6 +6,7 @@ export interface CameraState {
   since: number; // when `online` last changed (ms)
   model?: string;
   firmware?: string;
+  serial?: string; // the camera's serial number; a new one means it rebooted
   clockOffsetMs?: number; // camera clock minus proxy clock
   error?: string; // why the last check failed (never contains credentials)
 }
@@ -79,7 +80,7 @@ export class StatusPoller extends EventEmitter {
       const status = await this.client.status();
       const time = await this.client.command<GetTime>('GetTime');
       this.failures = 0;
-      this.set({ online: true, model: status.model, firmware: status.firmware, clockOffsetMs: clockOffset(time, this.now()), error: undefined });
+      this.set({ online: true, model: status.model, firmware: status.firmware, serial: status.serial, clockOffsetMs: clockOffset(time, this.now()), error: undefined });
       this.emit('check', { ok: true, ms: this.now() - t0 });
     } catch (err) {
       this.failures++;

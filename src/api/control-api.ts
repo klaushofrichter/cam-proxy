@@ -2,6 +2,7 @@ import express, { type Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import type { Catalog } from '../catalog/db';
 import type { CameraState } from '../camera/status';
+import type { RebootAnswer, RebootRequester, RebootState } from '../camera/reboot';
 import type { Config } from '../config/defaults';
 import { applyOverrides, ConfigError, needsProcessRestart, needsRestart, removeOverride, type Loaded } from '../config/load';
 import { leafPaths } from '../config/schema';
@@ -38,11 +39,13 @@ export interface ControlDeps {
   running: () => Config; // what the components run with
   catalog: Catalog;
   log: StreamLog;
-  camera: () => CameraState & { webUiUrl: string | null };
+  camera: () => CameraState & { webUiUrl: string | null; reboot: RebootState | null };
   checkCamera: () => Promise<CameraState>;
   intake: () => IntakeState;
   resubscribe: () => void;
-  restart: () => Promise<void>;
+  restart: () => Promise<void>; // the camera side
+  cameraReboot: (who: RebootRequester) => Promise<RebootAnswer>;
+  restartProcess: () => void; // stop, then exit 0 (the supervisor starts it again)
   ftp: () => FtpStatus;
   cameraFtp: {
     target: () => FtpTarget;
@@ -268,16 +271,18 @@ export function controlApi(d: ControlDeps): express.Router {
 
   r.post('/actions/:name', async (req, res) => {
     const name = req.params.name;
+    const requestedBy = res.locals.access?.viaCookie ? 'session' : 'token';
     // A `control-action` record with the result, once the answer is sent or
     // the client went away ('close' fires in both cases; 'finish' only in the
-    // first). Not for restart (recorded as proxy-restart) or a retention
-    // preview (dryRun changes nothing).
-    if (name !== 'restart' && !(name === 'retention-run' && req.body?.dryRun === true)) {
+    // first). Not for the camera reboot and the process restart (their own
+    // records, camera-reboot and proxy-restart) or a retention preview
+    // (dryRun changes nothing).
+    if (name !== 'camera-reboot' && name !== 'restart-proxy' && !(name === 'retention-run' && req.body?.dryRun === true)) {
       res.on('close', () => {
         const done = res.writableFinished;
         const ok = done && res.statusCode < 400;
         const result = !done ? 'aborted' : ok ? 'ok' : String((res.locals.errorCode as string | undefined) ?? res.statusCode);
-        d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: !done ? 'unknown' : ok ? 'success' : 'failure', user: 'admin', ip: clientIp(req), userAgent: req.get('user-agent'), message: `Control action ${name}: ${result}`, details: { action: name, result, requestedBy: res.locals.access?.viaCookie ? 'session' : 'token' } });
+        d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: !done ? 'unknown' : ok ? 'success' : 'failure', user: 'admin', ip: clientIp(req), userAgent: req.get('user-agent'), message: `Control action ${name}: ${result}`, details: { action: name, result, requestedBy } });
       });
     }
     const fail = (status: number, error: string, detail?: string) => {
@@ -301,9 +306,25 @@ export function controlApi(d: ControlDeps): express.Router {
       }
       case 'camera-ftp-off':
         return void (await cameraCall(res, async () => ({ ftp: await d.cameraFtp.off() })));
+      // The camera side: reconnect and apply restart settings; the process runs on.
       case 'restart':
-        d.audit.write({ action: 'proxy-restart', category: ['process'], type: ['change'], outcome: 'success', user: 'admin', ip: clientIp(req), userAgent: req.get('user-agent'), message: 'Restart requested through the control API', details: { requestedBy: res.locals.access?.viaCookie ? 'session' : 'token' } });
         d.restart().catch((err: Error) => logger.error({ err: err.message }, 'restart_failed'));
+        return void res.status(202).end();
+      // Reboot the camera (#83): 202 {confirmed}, 429 within the cooldown,
+      // 502 when the request never reached the camera.
+      case 'camera-reboot': {
+        const a = await d.cameraReboot({ requestedBy, ip: clientIp(req), userAgent: req.get('user-agent') });
+        if (a.status === 202) return void res.status(202).json({ confirmed: a.confirmed });
+        if (a.status === 429) {
+          res.setHeader('Retry-After', String(a.retryAfterS));
+          return fail(429, 'too_soon', `the camera was rebooted less than 2 minutes ago; try again in ${a.retryAfterS} s`);
+        }
+        return fail(502, a.error, a.detail);
+      }
+      // Restart the process (#71): answer first, then the normal stop and exit 0.
+      case 'restart-proxy':
+        d.audit.write({ action: 'proxy-restart', category: ['process'], type: ['change'], outcome: 'success', user: 'admin', ip: clientIp(req), userAgent: req.get('user-agent'), message: 'Proxy process restart requested through the control API', details: { requestedBy } });
+        res.once('close', () => setImmediate(() => d.restartProcess()));
         return void res.status(202).end();
       default:
         return fail(404, 'not_found');
