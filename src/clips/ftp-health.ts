@@ -39,6 +39,12 @@ export const RECORDING_KINDS = ['motion', 'person', 'vehicle', 'pet'] as const;
 export const STALL_GRACE_MS = 10 * 60_000;
 export const CHECK_MS = 5 * 60_000;
 
+// The camera masks the FTP user in its answer (measured 2026-10-02: `camera`
+// comes back as `ca**ra`: first two characters, `**`, last two). How it masks
+// names under 5 characters is not measured, so those are compared literally.
+export const maskFtpUser = (u: string): string => (u.length >= 5 ? `${u.slice(0, 2)}**${u.slice(-2)}` : u);
+const sameUser = (seen: string, expected: string): boolean => (seen.includes('*') ? seen === maskFtpUser(expected) : seen === expected);
+
 // What camera-ftp-setup would write for this proxy, compared with the
 // camera's settings (see FtpState). The server is compared trimmed and in
 // lower case (no DNS); without ftp.publicHost it isn't compared.
@@ -52,7 +58,7 @@ export function classifyFtp(ftp: Record<string, unknown>, t: Target, ctx: { clip
   const mismatch = [
     ...(t.server && norm(server) !== norm(t.server) ? ['server'] : []),
     ...(port !== t.port ? ['port'] : []),
-    ...(user !== t.user ? ['user'] : []),
+    ...(!sameUser(user, t.user) ? ['user'] : []),
   ];
   const state: FtpState = !server && !ctx.clipsBefore ? 'not_set_up'
     : !enable ? 'off'
