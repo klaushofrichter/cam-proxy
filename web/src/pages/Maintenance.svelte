@@ -45,7 +45,7 @@
     },
     'restart-proxy': {
       title: 'Restart the proxy',
-      message: 'Restart the proxy? Live streams and uploads in progress are interrupted; the proxy is back in about 20 s. You sign in again afterwards.',
+      message: 'Restart the proxy? Live streams and uploads in progress are interrupted; the proxy is back in a few seconds. You sign in again afterwards.',
       confirmLabel: 'Restart proxy',
     },
   });

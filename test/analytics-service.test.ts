@@ -615,6 +615,18 @@ describe('a manual key', () => {
     expect(JSON.stringify(s.state())).not.toContain(MANUAL);
   });
 
+  // Issue #52: the retry after its wait reads the key again.
+  it('a key set during the retry wait is the one the retry call uses', async () => {
+    still(T0 + 1000, 7);
+    answers = [new AnalyticsError('network', true)];
+    const used: string[] = [];
+    let s!: AnalyticsService;
+    s = new AnalyticsService({ ...deps({ key: ENV_KEY }), sleep: async (ms) => { now += ms; s.setManualKey(MANUAL); }, provider: (_id, key) => (used.push(key), provider) });
+    s.onEvent(event('person'));
+    await s.idle();
+    expect(used).toEqual([ENV_KEY, MANUAL]);
+  });
+
   it('replaces an earlier manual key, and gives a proxy without a key one', async () => {
     still(T0 + 1000, 7);
     const { s, used } = keyed('');

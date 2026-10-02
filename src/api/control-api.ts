@@ -195,6 +195,7 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
 // The control API (spec §11); admin access is checked by the caller.
 export function controlApi(d: ControlDeps): express.Router {
   const r = express.Router();
+  let restartRequested = false; // a restart-proxy request was recorded (the stop follows)
   const invalid = (res: Response, err: unknown) => {
     if (err instanceof ConfigError) return void res.status(400).json({ error: 'invalid', detail: err.message });
     throw err;
@@ -388,7 +389,9 @@ export function controlApi(d: ControlDeps): express.Router {
       }
       // Restart the process (#71): answer first, then the normal stop and exit 0.
       case 'restart-proxy':
-        d.audit.write({ action: 'proxy-restart', category: ['process'], type: ['change'], outcome: 'success', user: 'admin', ip: clientIp(req), userAgent: req.get('user-agent'), message: 'Proxy process restart requested through the control API', details: { requestedBy } });
+        // One record per restart: a second request before the stop is the same restart.
+        if (!restartRequested) d.audit.write({ action: 'proxy-restart', category: ['process'], type: ['change'], outcome: 'success', user: 'admin', ip: clientIp(req), userAgent: req.get('user-agent'), message: 'Proxy process restart requested through the control API', details: { requestedBy } });
+        restartRequested = true;
         res.once('close', () => setImmediate(() => d.restartProcess()));
         return void res.status(202).end();
       default:

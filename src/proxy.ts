@@ -27,7 +27,7 @@ import { EventIntake } from './events/intake';
 import { EventTracker } from './events/tracker';
 import { logger, setLogLevel, withoutQuery } from './log';
 import { Storage } from './storage';
-import { AuditLog, cut } from './audit/audit-log';
+import { AuditLog, cut, maskPath } from './audit/audit-log';
 import { IpCap, RefusalThrottle } from './audit/throttle';
 import { activityDaily, DailyAudit, storageMessage } from './audit/daily';
 import { Go2rtc } from './stills/go2rtc';
@@ -389,7 +389,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     onRefused: (req, info) => {
       const ip = clientIp(req);
       // At most 256 characters in the record, the message and the throttle key.
-      const full = withoutQuery(req.originalUrl);
+      const full = maskPath(withoutQuery(req.originalUrl));
       const path = full.length > 256 ? `${cut(full, 256)}…` : full;
       const t = refusals.take(ip, path.replace(/\d{6,}|[0-9a-f]{16,}/gi, ':n'));
       if (!t.record) return;

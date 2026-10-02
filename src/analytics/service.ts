@@ -306,8 +306,7 @@ export class AnalyticsService {
     if (this.paused) return this.skip(job, 'paused', stillTs);
     const jpeg = await this.d.readStill(stillTs);
     if (!jpeg) return this.skip(job, 'no_still');
-    const key = this.key()!;
-    const provider = (this.d.provider ?? ((id, k, url) => googleVision({ key: k, baseUrl: url })))('google-vision', key, this.d.secrets().googleVisionUrl);
+    const make = this.d.provider ?? ((id, k, url) => googleVision({ key: k, baseUrl: url }));
 
     let failed: AnalyticsError | undefined; // the previous attempt's error
     let t0 = 0;
@@ -320,6 +319,9 @@ export class AnalyticsService {
       }
       // Retention may have removed the event meanwhile: no call for it.
       if (!eventById(this.d.catalog, job.id)) return;
+      // The key as it is now: a key set during the retry wait is the one used.
+      const key = this.key()!;
+      const provider = make('google-vision', key, this.d.secrets().googleVisionUrl);
       const g = this.settings().googleVision;
       const day = localDay(this.now(), this.d.timeInfo());
       if (this.monthUsage(day) >= g.monthlyLimit || (g.dailyCap > 0 && usageBetween(this.d.catalog, 'google-vision', day, day) >= g.dailyCap)) {

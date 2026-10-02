@@ -105,6 +105,9 @@ export function labelStyle(b: { x0: number; y0: number; x1: number; y1: number }
   return b.y0 < 0.08 ? `${x};top:${pct(b.y0)}` : `${x};top:${pct(b.y0)};transform:translateY(-100%)`;
 }
 
+// The plain still of a second (the same URL the Timeline shows).
+export const stillUrl = (camId: string, ts: number): string => `/api/cameras/${encodeURIComponent(camId)}/stills/${ts}.jpg`;
+
 // The selected object row: clicking it again clears the selection (all boxes).
 export function toggleSelection(current: number | null, clicked: number): number | null {
   return current === clicked ? null : clicked;

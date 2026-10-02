@@ -1,3 +1,4 @@
+import http from 'http';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { restartProcess } from '../src/process-restart';
@@ -70,6 +71,27 @@ describe('POST /control/actions/restart-proxy', () => {
     // The server is closed: the process would now end.
     await expect(request(p.base).get('/health')).rejects.toThrow();
     await p.proxy.stop(); // joins the stop that ran
+  });
+
+  // #86 item 4: a second request before the stop closes the server is no second record.
+  it('a second request before the stop writes no second proxy-restart record', async () => {
+    const exit = vi.fn();
+    const p = await startProxy(sim, { proxy: { exit } });
+    // Several open connections, so the requests land before the stop closes the server.
+    const agent = new http.Agent({ keepAlive: true, maxSockets: 6 });
+    const send = (path: string, method: string) => new Promise<number>((resolve) => {
+      const u = new URL(path, p.base);
+      const req = http.request({ agent, hostname: u.hostname, port: u.port, path: u.pathname, method, headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, Connection: 'keep-alive' } }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode ?? 0)); });
+      req.on('error', () => resolve(0));
+      req.end();
+    });
+    await Promise.all(Array.from({ length: 6 }, () => send('/health', 'GET')));
+    const codes = await Promise.all(Array.from({ length: 6 }, () => send('/control/actions/restart-proxy', 'POST')));
+    expect(codes.filter((c) => c === 202).length).toBeGreaterThan(1);
+    agent.destroy();
+    await until(() => exit.mock.calls.length > 0);
+    expect(p.proxy.audit.list({ actions: ['proxy-restart'] }).records).toHaveLength(1);
+    await p.proxy.stop();
   });
 
   it('by session with the CSRF header', async () => {
