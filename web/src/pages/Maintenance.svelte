@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import ConfirmDialog from '../components/ConfirmDialog.svelte';
   import { api, ApiError } from '../lib/api';
-  import { powerCycleMessage, restartWatch, RESTART_GIVE_UP_MS, type Health } from '../lib/maintenance';
+  import { poeAlert, poeOnText, powerCycleFailText, powerCycleMessage, restartWatch, RESTART_GIVE_UP_MS, type Health } from '../lib/maintenance';
   import { refresh, refreshTick, status } from '../lib/state';
 
   let result = $state('');
@@ -89,13 +89,29 @@
       rebootAsked = true;
       result = `Camera power-cycle: PoE back on after ${Math.round((r.onAt - r.offAt) / 1000)} s (the camera drew ${r.watts} W)`;
     } catch (e) {
-      result = `Camera power-cycle: ${e instanceof ApiError ? e.message : 'failed'}`;
+      result = e instanceof ApiError && e.body && typeof e.body === 'object' ? powerCycleFailText(e.body as { error: string }, poe?.port ?? null) : 'Camera power-cycle: failed';
     }
     cycling = false;
     sending = false;
     void refresh();
     void loadLog();
   }
+  // Recovery (#85 review): turn the camera's PoE on if it is off. Shown
+  // whenever a switch is configured; it only ever turns PoE on, so no dialog.
+  async function poeOn() {
+    if (sending) return;
+    sending = true;
+    try {
+      result = poeOnText(await api<{ port: number; wasOn: boolean; watts: number }>('POST', '/control/actions/camera-poe-on'));
+    } catch (e) {
+      result = `Camera PoE on: ${e instanceof ApiError ? e.message : 'failed'}`;
+    }
+    sending = false;
+    void refresh();
+    void loadLog();
+  }
+  const alert = $derived(poeAlert(poe));
+
   // Faster status updates while the camera reboots or is power-cycled.
   $effect(() => {
     if (reboot?.phase !== 'rebooting' && reboot?.phase !== 'power-cycling' && !cycling) return;
@@ -122,6 +138,7 @@
     restarting = 'waiting';
     // The start time to compare with: one more try if the first read fails.
     const before = (await health()) ?? (await health());
+    const postedAt = Date.now();
     try {
       await api('POST', '/control/actions/restart-proxy');
     } catch (e) {
@@ -129,7 +146,7 @@
       result = `Restart proxy: ${e instanceof ApiError ? e.message : 'failed'}`;
       return;
     }
-    const isNew = restartWatch(before);
+    const isNew = restartWatch(before, postedAt);
     const t0 = Date.now();
     restartTimer = setInterval(async () => {
       const h = await health();
@@ -155,7 +172,10 @@
       <button onclick={() => void run('Retention', 'retention-run', {})} data-testid="action-retention">Run retention now</button>
       <button onclick={() => void run('Restart', 'restart')} data-testid="action-restart">Restart camera side</button>
       <button class="danger" onclick={() => (asking = 'camera-reboot')} disabled={cameraBusy} data-testid="action-camera-reboot">Reboot camera</button>
-      {#if poe?.configured}<button class="danger" onclick={() => (asking = 'camera-powercycle')} disabled={cameraBusy} data-testid="action-camera-powercycle">Power-cycle camera</button>{/if}
+      {#if poe?.configured}
+        <button class="danger" onclick={() => (asking = 'camera-powercycle')} disabled={cameraBusy} data-testid="action-camera-powercycle">Power-cycle camera</button>
+        <button onclick={() => void poeOn()} disabled={sending || cycling} data-testid="action-camera-poe-on" title="Turns the camera's PoE on if it is off (no power check)">Turn camera PoE on</button>
+      {/if}
       <button class="danger" onclick={() => (asking = 'restart-proxy')} disabled={restarting === 'waiting'} data-testid="action-restart-proxy">Restart proxy</button>
     </div>
     <div class="buttons">
@@ -163,6 +183,7 @@
       <button onclick={() => void run('Camera FTP test', 'camera-ftp-test')} data-testid="action-ftp-test">Test the camera's FTP</button>
       <button onclick={() => void run('Camera FTP off', 'camera-ftp-off')} data-testid="action-ftp-off">Turn the camera's FTP off</button>
     </div>
+    {#if alert}<p class="bad" data-testid="poe-alert">{alert}</p>{/if}
     {#if result}<p class="msg mono" data-testid="action-result">{result}</p>{/if}
     {#if cycling || reboot?.phase === 'power-cycling'}
       <p class="busy" data-testid="reboot-state">Power-cycling… the camera's PoE is off on {poe?.host} port {poe?.port}; it comes back on after {poe?.offSeconds} s.</p>

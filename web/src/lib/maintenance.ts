@@ -12,13 +12,16 @@ export function isNewStart(before: Health | null, now: Health): boolean {
 }
 
 // Each /health read after a restart request: true once a new process
-// answers. The reference is `before`, or without it (the read before the
-// request failed) the first answer after it, which may still be the old
-// process: never a reload on the old one (#78 review).
-export function restartWatch(before: Health | null): (now: Health | null) => boolean {
+// answers. The reference is `before`. Without it (the read before the
+// request failed), an answer whose start time is after the request
+// (`postedAt`) is the new process; otherwise the first answer is the
+// reference, which may still be the old process: never a reload on the old
+// one (#78 review).
+export function restartWatch(before: Health | null, postedAt?: number): (now: Health | null) => boolean {
   let ref = before;
   return (now) => {
     if (!now) return false;
+    if (!before && postedAt !== undefined && typeof now.startedAt === 'number' && now.startedAt > postedAt) return true;
     if (!ref) {
       ref = now;
       return false;
@@ -44,7 +47,28 @@ export function cameraStateText(c: { online: boolean; reboot?: CameraReboot | nu
 
 // The camera's PoE switch (#85), as /control/status reports it.
 export interface PortReading { at: number; port: number; index: number; poe: boolean; watts: number; link: boolean | null; sn: string | null; firmware: string | null }
-export interface PoeSwitchStatus { model: string; host: string | null; port: number | null; ports: number; offSeconds: number; passwordSet: boolean; configured: boolean; busy: boolean; last: PortReading | null }
+export interface PoeSwitchStatus { model: string; host: string | null; port: number | null; ports: number; offSeconds: number; passwordSet: boolean; configured: boolean; busy: boolean; poeMaybeOff?: boolean; last: PortReading | null }
+
+const offWarning = (port: number | null) => `The camera's PoE may be OFF: use 'Turn camera PoE on', or the switch's web UI (port ${port ?? '?'}).`;
+
+// The Maintenance page's warning while the camera's PoE may be off (a
+// power-cycle that could not turn it on again, or a reading that says off).
+export function poeAlert(s: PoeSwitchStatus | null): string | null {
+  return s?.poeMaybeOff ? offWarning(s.port) : null;
+}
+
+// A failed power-cycle's line, from the 409/502 body.
+export function powerCycleFailText(body: { error: string; detail?: string; poeOff?: boolean; turnedOn?: boolean }, port: number | null): string {
+  const detail = body.detail ?? body.error;
+  if (body.poeOff && body.turnedOn) return `Camera power-cycle failed after the PoE-off request: PoE may have been cut, and it is on again (${detail})`;
+  if (body.poeOff) return `Camera power-cycle failed: the camera's PoE may be OFF: use 'Turn camera PoE on', or the switch's web UI (port ${port ?? '?'}). (${detail})`;
+  return `Camera power-cycle: ${detail}`;
+}
+
+// "Turn camera PoE on"'s answer.
+export function poeOnText(r: { port: number; wasOn: boolean; watts: number }): string {
+  return r.wasOn ? `Camera PoE: port ${r.port} was on already (${r.watts} W)` : `Camera PoE: turned on on port ${r.port}; the camera boots in about a minute`;
+}
 
 export function powerCycleMessage(s: { host: string | null; port: number | null; offSeconds: number }): string {
   return `Cut the camera's PoE power on ${s.host} port ${s.port} for ${s.offSeconds} s? The camera is offline for about a minute. Only works while nobody is logged in to the switch's web UI.`;
