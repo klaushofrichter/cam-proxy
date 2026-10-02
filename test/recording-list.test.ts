@@ -184,6 +184,20 @@ describe('RecordingList: recordings across midnight (#99)', () => {
   });
 });
 
+// #99 item 2: a bounded Search queue.
+describe('RecordingList: the Search queue is bounded', () => {
+  it('one running and 8 waiting; the next distinct Search is busy at once; joins do not count', async () => {
+    const x = fake({});
+    const days = Array.from({ length: 10 }, (_, i) => `2026-09-${String(i + 10).padStart(2, '0')}`);
+    const runs = days.map((d) => x.list.day(d, 'sub').then(() => 'ok', (e: SearchError) => e.code));
+    const joined = x.list.day(days[3], 'sub').then(() => 'ok', (e: SearchError) => e.code);
+    expect(await Promise.all(runs)).toEqual([...Array(9).fill('ok'), 'busy']);
+    expect(await joined).toBe('ok');
+    expect(x.calls).toHaveLength(9);
+    expect(await x.list.day('2026-09-30', 'sub')).toEqual([]); // the queue drained: no longer busy
+  });
+});
+
 describe('RecordingList: in-flight Searches (#99, Task 9)', () => {
   it('stillListed never answers from a Search that started before it', async () => {
     const files = { '2026-10-01|sub': [file('2026-10-01', '211129', '211207')] };

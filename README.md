@@ -182,7 +182,8 @@ UI session.
 
 Any one client may send 1200 requests a minute, plus 6000 image requests
 (stills, sprites and clip files — `clips/<id>.mp4` and `clips/<id>.jpg` — a
-day on a timeline is up to 1440 sprites); more answer 429
+day on a timeline is up to 1440 sprites; a recording file once it is cached,
+while one not yet cached counts as a normal request); more answer 429
 `{"error":"rate_limited"}`. Timestamps are unix milliseconds. The full schema is in
 [openapi.yaml](openapi.yaml).
 
@@ -391,7 +392,10 @@ as MP4, also the ones FTP never delivered.
   `camera_offline` (the status poller says offline, or no connection to the
   camera could be made); 502 `recordings_unavailable` with `reason` `refused`,
   `auth`, `timeout`, `protocol`, `offline` (the connection was lost during the
-  transfer) or `search_failed` (the list's Search). After the first byte the
+  transfer) or `search_failed` (the list's Search); 503
+  `recordings_unavailable` with `reason` `busy` and `Retry-After: 5` when more
+  camera Searches wait than the proxy queues (one runs, 8 wait; requests for
+  the same day share one Search). After the first byte the
   headers are gone, so a failure cuts the connection and the client sees a
   short body.
 - **Status:** the Status page's "Recordings (SD card)" card shows the last

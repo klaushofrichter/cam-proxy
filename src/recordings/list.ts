@@ -18,7 +18,7 @@ export interface RecordingEntry { id: string; path: string; start: number; end: 
 
 export class SearchError extends Error {
   constructor(
-    readonly code: 'camera_offline' | 'search_failed',
+    readonly code: 'camera_offline' | 'search_failed' | 'busy',
     message: string,
   ) {
     super(message);
@@ -29,6 +29,11 @@ export class SearchError extends Error {
 const DAY_TTL = 30_000;
 const MONTH_TTL = 300_000;
 const TAIL_TTL = 3_600_000;
+// Searches waiting behind the running one (#99): past this, a new Search is
+// refused at once (busy) instead of queueing without bound. Same-day
+// requests share one Search and don't count. A cold 48-hour window is 4
+// Searches, one after the other.
+export const MAX_WAITING_SEARCHES = 8;
 
 // The recording runs past its day's midnight (end before start in its name;
 // end 000000 too, which recordingTimes puts at midnight).
@@ -56,6 +61,7 @@ export class RecordingList {
   private readonly tails = new Map<string, { at: number; entries: RecordingEntry[] }>();
   // clear() bumps it: a Search in flight then is neither cached nor joined (#99).
   private epoch = 0;
+  private pending = 0; // Searches running or waiting for the gate
 
   constructor(
     private readonly d: {
@@ -80,6 +86,8 @@ export class RecordingList {
 
   // One Search, never two at once; -54 (busy) retried once after 1 s.
   private search(param: object): Promise<unknown> {
+    if (this.pending > MAX_WAITING_SEARCHES) return Promise.reject(new SearchError('busy', 'too many recording Searches waiting; try again shortly'));
+    this.pending++;
     return this.gate.run(async () => {
       for (let attempt = 0; ; attempt++) {
         try {
@@ -92,7 +100,7 @@ export class RecordingList {
           throw toSearchError(err, 'Search failed');
         }
       }
-    });
+    }).finally(() => this.pending--);
   }
 
   // fresh: a new Search, never the cache nor one already running (it may

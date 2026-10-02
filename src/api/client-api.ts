@@ -220,6 +220,11 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     if (res.headersSent || isAbort(err)) return void res.destroy();
     if (err instanceof SearchError) {
       if (err.code === 'camera_offline') return offline(res);
+      if (err.code === 'busy') {
+        // The Search queue is full (#99): nothing is wrong with the camera.
+        res.setHeader('Retry-After', '5');
+        return void res.status(503).json({ error: 'recordings_unavailable', reason: 'busy', detail: err.message });
+      }
       return void res.status(502).json({ error: 'recordings_unavailable', reason: 'search_failed', detail: err.message });
     }
     if (err instanceof BaichuanError) {

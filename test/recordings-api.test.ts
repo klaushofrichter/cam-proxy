@@ -110,6 +110,44 @@ describe('GET /recordings?date=', () => {
   });
 });
 
+// #99 item 2: the Search queue is bounded, and a file not cached is in the normal rate-limit bucket.
+describe('recordings: limits', () => {
+  it('more Searches than the queue holds: 503 recordings_unavailable, reason busy, Retry-After', async () => {
+    sim.sim.engine.faults.set({ name: 'search.delayMs', ms: 200 });
+    try {
+      const days = Array.from({ length: 14 }, (_, i) => `2025-03-${String(i + 1).padStart(2, '0')}`);
+      const rs = await Promise.all(days.map((d) => request(p.base).get(`/api/cameras/cam1/recordings?date=${d}&stream=sub`).set(auth())));
+      const busy = rs.filter((r) => r.status === 503);
+      expect(busy.length).toBeGreaterThan(0);
+      for (const r of busy) {
+        expect(r.body).toMatchObject({ error: 'recordings_unavailable', reason: 'busy' });
+        expect(r.headers['retry-after']).toBe('5');
+      }
+      expect(rs.every((r) => r.status === 200 || r.status === 503)).toBe(true);
+    } finally {
+      sim.sim.engine.faults.clear('search.delayMs');
+    }
+  });
+
+  it('a recording file counts in the normal rate-limit bucket unless it is cached', async () => {
+    const policy = (r: request.Response) => String(r.headers['ratelimit-policy']);
+    const unknown = 'RecS0A_DST20200101_000000_000010_0_5514C080000000_3E8.mp4';
+    const miss = await request(p.base).head(url(unknown)).set(auth());
+    expect(policy(miss)).toMatch(/q=1200\b/);
+    const missGet = await request(p.base).get(url(unknown)).set(auth());
+    expect(policy(missGet)).toMatch(/q=1200\b/);
+    const cached = 'RecS0A_DST20200101_000100_000110_0_5514C080000000_3E8.mp4';
+    writeFileSync(join(p.dir, 'data', 'recordings', 'cam1', cached), Buffer.alloc(1000));
+    try {
+      const hit = await request(p.base).get(url(cached)).set(auth());
+      expect(hit.status).toBe(200);
+      expect(policy(hit)).toMatch(/q=6000\b/);
+    } finally {
+      unlinkSync(join(p.dir, 'data', 'recordings', 'cam1', cached));
+    }
+  });
+});
+
 describe('GET /recordings/days', () => {
   it('the days of a camera-local month with recordings; a bad month is 400 (and /days is not taken for an id)', async () => {
     const month = recs[0].date.slice(0, 7);
