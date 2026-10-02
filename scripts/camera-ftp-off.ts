@@ -1,5 +1,8 @@
 // Turns the camera's FTP upload off (enable 0, the rest kept) and prints the
 // result. For cleanup after scripts/verify-camera.ts --ftp was interrupted.
+// It passes no FTP credentials, so the camera's own are kept; it refuses when
+// the camera shows its FTP user or password masked (it would write them back
+// masked): turn it off through the proxy's Maintenance page instead.
 //
 //   npx tsx scripts/camera-ftp-off.ts
 import { readFileSync } from 'fs';
