@@ -96,7 +96,7 @@
               {/each}
             </div>
           {/if}
-          {#if a.summary}
+          {#if a.summary && !(view === 'still' && a.stillTs !== null)}
             <label class="small"><input type="checkbox" bind:checked={showAll} onchange={() => (selected = null)} data-testid="analysis-show-all" /> Show all objects</label>
           {/if}
           <table data-testid="analysis-objects">

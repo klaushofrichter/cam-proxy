@@ -136,10 +136,12 @@ test('a person event is analysed: Status counts it, Events tags it, the Timeline
   await expect(modal.getByTestId('analysis-image')).toHaveCount(0);
   await expect(modal.getByTestId('analysis-boxes')).toHaveCount(0);
   const plain = modal.getByTestId('analysis-still');
+  await expect(modal.getByTestId('analysis-show-all')).toHaveCount(0); // it only affects the boxes
   await expect.poll(() => plain.evaluate((i) => (i as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
   expect(await plain.getAttribute('src')).toMatch(/\/stills\/\d+\.jpg$/);
   await page.keyboard.press('ArrowLeft');
   await expect(vBoxes).toBeChecked();
+  await expect(modal.getByTestId('analysis-show-all')).toBeVisible();
   await expect(rects).toHaveCount(2);
   // Retention removed the still: a message instead of the image.
   await page.route('**/stills/*.jpg', (r) => r.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"not_found"}' }));
