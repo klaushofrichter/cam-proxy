@@ -565,6 +565,10 @@ arrive.
 | `POST /control/actions/camera-poe-on` | recovery: turns the camera's port on if its PoE is off (no power check, no cooldown; the switch lock applies). 200 the reading plus `wasOn`; 409 and 502 as `camera-powercycle`. Audited as `camera-poe-on` |
 | `POST /control/actions/poe-switch-read` | reads the camera's port on the switch now (log in, read, log out; never polled): `{at, port, index, poe, watts, link, sn, firmware}`; 409 and 502 as `camera-powercycle`. Audited as `control-action` |
 | `POST /control/actions/restart-proxy` | restarts the proxy process: 202, then the normal graceful stop (the same as SIGTERM; `proxy-stop` reason `restart-requested`) and exit 0, also after 15 s if the stop hangs. Compose (`restart: unless-stopped`) or the cluster starts it again; run directly (`npm start`), the process just ends. Admin sessions end with the process. Audited as `proxy-restart` |
+| `POST /control/actions/inventory` | `{"kind":"stills"}`: starts an inventory in the background ([the spec](docs/superpowers/specs/2026-10-02-inventory-design.md)); 202 `{runId}`; 400 `invalid` for an unknown kind; 409 `inventory_busy` `{runId}` while one runs (one at a time); 503 `stopping` once the proxy is stopping. Poll `GET /control/inventory/runs/{id}`. Audited as `inventory` when it ends |
+| `POST /control/actions/inventory-cancel` | cancels the running inventory: `{cancelled, runId}`; the run keeps its partial counts. Audited as `control-action` |
+| `GET /control/inventory` | `{running: {runId, kind, startedAt, outcome: "running", progress: {phase, done, total, note}} or null, runs: {stills: [the last 10 runs, newest first: {runId, kind, startedAt, tookMs, outcome, counts, message}]}}` |
+| `GET /control/inventory/runs/{id}` | one report: `{runId, kind, camera, startedAt, tookMs, outcome: ok\|cancelled\|failed, error, cancelledBy, requestedBy, window: {from, to, reason, retentionFrom, protectedFrom, notes}, counts, top, items, itemsTruncated, message}` (`notes`: caveats on the counts, such as the clock note when seconds are restorable; stills `counts` include `previewsPruned`, packs without a sprite whose previews were pruned earlier, and `prunedDuringRun`, packs deleted by retention while the run read them, counted as missing); 400 for a malformed id, 404 for an unknown one. Kept in `<dataDir>/inventory/<kind>/` (the last 10) |
 | `GET /control/audit` | the audit log as JSON lines: `limit`, `before`/`after` (cursors), `from`, `to`, `action`, `outcome`; admin token, admin session or `CAMPROXY_AUDIT_TOKEN`; HEAD answers like GET without the body. See [docs/audit-log.md](docs/audit-log.md) |
 | `GET /health` | `{ok, version, startedAt}` (no auth): `startedAt` (ms) tells a new process apart |
 | `GET /control/log?limit` | recent log lines (info and above), redacted; default limit 100, buffer holds the last 500 |
@@ -598,6 +602,12 @@ exchanged for the cookie and not stored in the browser.
   restart it shows "Restarting…", waits for `/health` to answer with a new
   start time or version, and reloads (sign in again: sessions end with the
   process). After 2 minutes without the proxy it says so.
+  The Inventory box's "Check stills" checks the stills of the retention
+  window in the background: the missing seconds, the 10 longest gaps and
+  whether a proxy stop or crash, a camera reboot or a power cycle explains
+  them, the seconds a local clip could restore, and unreadable packs or
+  sprites without their pack. It shows the progress (with Cancel) and the
+  newest result.
 - **Top bar:** the title links to the GitHub repo; badges for the camera
   online state and event intake; the camera's model (linked to
   `camera.webUiUrl`) · firmware · version; "updated … ago"; Refresh, the
@@ -610,6 +620,7 @@ The proxy records who did what, as ECS JSON lines, one file per UTC day in
 - start and stop, restarts, camera reboots, sign-ins (with failures), sign-outs, login links;
 - refused tokens, throttled to one record per IP and path per 10 minutes;
 - control actions and settings changes (secret values redacted);
+- inventory runs, with their counts;
 - changes of the camera's FTP upload (on, off, pointing elsewhere);
 - a storage snapshot and an activity summary at 00:05 camera time.
 

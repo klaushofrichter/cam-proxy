@@ -22,6 +22,7 @@ import { eventsStored } from './metrics';
 import { readCookie, SESSION_COOKIE, SESSION_MS, type createSessionSigner } from './session';
 import type { createLoginLinks } from './login-links';
 import type { RecordingsStatus } from '../recordings/side';
+import { InventoryBusyError, InventoryStoppingError, RUN_ID, type InventoryRunner } from '../inventory/runner';
 
 export interface FtpStatus {
   enabled: boolean;
@@ -70,6 +71,7 @@ export interface ControlDeps {
   unmapped: { list(limit?: number): { mid: string; name: string; count: number; lastSeen: number }[]; clear(): number };
   sseClients: () => number;
   stream: () => { enabled: boolean; up: boolean; go2rtcUp: boolean; lastFrameTs: number | null };
+  inventory: InventoryRunner; // spec 2026-10-02-inventory-design: one run at a time
   recordings: () => RecordingsStatus; // SD recordings over Baichuan: the last download, the cache
   sessions: ReturnType<typeof createSessionSigner>;
   links: ReturnType<typeof createLoginLinks>;
@@ -255,6 +257,15 @@ export function controlApi(d: ControlDeps): express.Router {
     });
   });
 
+  // Inventories (spec 2026-10-02-inventory-design): the running one and the last runs; one report.
+  r.get('/inventory', async (_req, res) => void res.json({ running: d.inventory.running(), runs: await d.inventory.list() }));
+  r.get('/inventory/runs/:id', async (req, res) => {
+    if (!RUN_ID.test(req.params.id)) return void res.status(400).json({ error: 'invalid', detail: 'not a run id' });
+    const run = await d.inventory.get(req.params.id);
+    if (!run) return void res.status(404).json({ error: 'not_found' });
+    res.json(run);
+  });
+
   r.get('/config', (_req, res) => void res.json(configView(d.loaded(), d.running())));
   // A `config-change` record: the changed leaf settings, old → new. Secret
   // values are redacted by AuditLog by the setting's name. A refused change
@@ -294,10 +305,11 @@ export function controlApi(d: ControlDeps): express.Router {
     // A `control-action` record with the result, once the answer is sent or
     // the client went away ('close' fires in both cases; 'finish' only in the
     // first). Not for the camera reboot and the process restart (their own
-    // records, camera-reboot and proxy-restart) or a retention preview
+    // records, camera-reboot and proxy-restart; an inventory writes `inventory`
+    // when it ends) or a retention preview
     // (dryRun changes nothing). The power-cycle has its own records too
     // (camera-powercycle); a read of the switch is a control-action.
-    if (name !== 'camera-reboot' && name !== 'camera-powercycle' && name !== 'camera-poe-on' && name !== 'restart-proxy' && !(name === 'retention-run' && req.body?.dryRun === true)) {
+    if (name !== 'camera-reboot' && name !== 'camera-powercycle' && name !== 'camera-poe-on' && name !== 'restart-proxy' && name !== 'inventory' && !(name === 'retention-run' && req.body?.dryRun === true)) {
       res.on('close', () => {
         const done = res.writableFinished;
         const ok = done && res.statusCode < 400;
@@ -394,6 +406,26 @@ export function controlApi(d: ControlDeps): express.Router {
         restartRequested = true;
         res.once('close', () => setImmediate(() => d.restartProcess()));
         return void res.status(202).end();
+      // Inventories (spec 2026-10-02-inventory-design): 202 {runId}; the run
+      // goes on in the background and writes its own `inventory` record.
+      case 'inventory': {
+        const kind: unknown = req.body?.kind;
+        const kinds = d.inventory.kinds();
+        if (typeof kind !== 'string' || !kinds.includes(kind)) return fail(400, 'invalid', `kind is one of: ${kinds.join(', ')}`);
+        try {
+          const { runId } = d.inventory.start(kind, { requestedBy, ip: clientIp(req), userAgent: req.get('user-agent') });
+          return void res.status(202).json({ runId });
+        } catch (err) {
+          if (err instanceof InventoryStoppingError) return fail(503, 'stopping', err.message);
+          if (!(err instanceof InventoryBusyError)) throw err;
+          return fail(409, 'inventory_busy', err.message, { runId: err.runId });
+        }
+      }
+      // A control-action record; the run ends with its partial counts.
+      case 'inventory-cancel': {
+        const runId = d.inventory.cancel('request');
+        return void res.json({ cancelled: runId !== null, runId });
+      }
       default:
         return fail(404, 'not_found');
     }

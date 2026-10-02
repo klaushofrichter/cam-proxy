@@ -32,6 +32,8 @@ import { IpCap, RefusalThrottle } from './audit/throttle';
 import { activityDaily, DailyAudit, storageMessage } from './audit/daily';
 import { Go2rtc } from './stills/go2rtc';
 import { FrameGrabber, type Frame } from './stills/grabber';
+import { InventoryRunner } from './inventory/runner';
+import { stillsCheck } from './inventory/stills';
 import { MinuteStore, minuteOf } from './stills/store';
 import type { StillsSide } from './api/client-api';
 import { StreamLog, type StreamMessage } from './stream/log';
@@ -76,6 +78,7 @@ export interface Proxy {
   readonly analytics: AnalyticsService;
   storage: Storage;
   readonly audit: AuditLog;
+  readonly inventory: InventoryRunner;
   start(opts?: { port?: number; host?: string }): Promise<{ port: number }>;
   restart(): Promise<void>;
   stop(opts?: { reason?: string }): Promise<void>;
@@ -136,6 +139,25 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   storage.recount();
   const sessions = createSessionSigner(opts.sessionSecret);
   const links = createLoginLinks();
+  // Inventories (spec 2026-10-02-inventory-design): one run at a time, the
+  // results in <dataDir>/inventory, an `inventory` audit record per run.
+  // The settings are read when a run starts.
+  const inventory = new InventoryRunner({
+    dir: join(running.server.dataDir, 'inventory'),
+    audit,
+    camera: () => running.camera.id,
+    checks: {
+      stills: {
+        label: 'Stills',
+        run: stillsCheck({
+          dataDir: running.server.dataDir,
+          audit,
+          catalog,
+          settings: () => ({ cam: running.camera.id, intervalS: running.stills.intervalS, stillsDays: running.retention.stillsDays, previewsDays: running.retention.previewsDays, keepHours: running.storage.keepHours.stills }),
+        }),
+      },
+    },
+  });
   // Composed clips (spec 2026-09-28): one encoding at a time; abandoned and
   // old jobs are swept every 5 s.
   const font = running.composition?.font ?? defaultFont();
@@ -498,6 +520,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       unmapped: { list: (limit) => listUnmapped(catalog, limit), clear: () => clearUnmapped(catalog) },
       sseClients: () => sse.clients(),
       recordings: () => recordings.status(),
+      inventory,
       stream: () => ({ enabled: !!stills, up: stills?.grabber.up() ?? false, go2rtcUp: stills?.go2rtc.up() ?? false, lastFrameTs: stills?.grabber.lastFrameTs() ?? null }),
       sessions,
       links,
@@ -571,6 +594,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     sse,
     storage,
     audit,
+    inventory,
     get stills() {
       return stills;
     },
@@ -650,7 +674,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       // a running encode ends (up to 3 s), and a Vision call in flight is
       // stored before the catalog closes (up to its 10 s timeout).
       // A recording download is aborted (cmd 9) and the Baichuan session closed (up to 2 s).
-      await Promise.all([composer.stop(), analytics.stop(), recordings.stop()]);
+      // A running inventory is cancelled ('stop'), saved and audited before the catalog closes.
+      await Promise.all([composer.stop(), analytics.stop(), recordings.stop(), inventory.stop()]);
       const s = server;
       if (s) {
         s.closeAllConnections();
