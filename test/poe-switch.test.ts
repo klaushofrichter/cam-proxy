@@ -73,6 +73,7 @@ describe('session hygiene (#90)', () => {
     const e = await s.read().catch((x: unknown) => x as PoeSwitchError);
     expect((e as PoeSwitchError).code).toBe('switch_busy');
     expect((e as PoeSwitchError).message).toMatch(/possibly the proxy's own session/);
+    expect((e as PoeSwitchError).message).toMatch(/frees itself about 3 minutes after the last call/);
     expect((await s.stop()).sessionMaybeOpen).toBe(true);
   });
 

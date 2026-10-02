@@ -93,8 +93,23 @@ export class DailyAudit {
     this.timer = undefined;
   }
 
+  // An exception backs off like a failed write, then goes on to the caller.
   check(): void {
     const now = (this.d.now ?? Date.now)();
+    try {
+      this.run(now);
+    } catch (err) {
+      this.backoff(now);
+      throw err;
+    }
+  }
+
+  private backoff(now: number): void {
+    this.retryAt = now + Math.min(60, 2 ** this.failures) * 60_000;
+    this.failures++;
+  }
+
+  private run(now: number): void {
     const ti = this.d.timeInfo();
     // Started, no time info yet: wait for it a while rather than use a UTC day.
     if (!ti && this.startedAt !== undefined && now - this.startedAt < FALLBACK_MS) return;
@@ -126,8 +141,7 @@ export class DailyAudit {
       this.done = `${basis}:${day}`;
       this.failures = 0;
     } else {
-      this.retryAt = now + Math.min(60, 2 ** this.failures) * 60_000;
-      this.failures++;
+      this.backoff(now);
     }
   }
 }

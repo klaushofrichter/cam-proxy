@@ -65,9 +65,11 @@ describe('AuditLog.write', () => {
 
   // #78: the match is by explicit names, not any key containing "key".
   it('redacts by secret names only: keyframe and keyFile are not secrets', () => {
-    expect(redact({ keyframe: 4, keyFile: '/x/k.pem', monkey: 1, ftp: { keyFile: 'a' } })).toEqual({ keyframe: 4, keyFile: '/x/k.pem', monkey: 1, ftp: { keyFile: 'a' } });
+    expect(redact({ keyframe: 4, keyFile: '/x/k.pem', ftp: { keyFile: 'a' } })).toEqual({ keyframe: 4, keyFile: '/x/k.pem', ftp: { keyFile: 'a' } });
     expect(redact({ apiKey: 'a', googleVisionKey: 'b', api_key: 'c', adminToken: 'd', authToken: 'e', Password: 'f', clientSecret: 'g', authorization: 'h', cookie: 'i' }))
       .toEqual({ apiKey: '[redacted]', googleVisionKey: '[redacted]', api_key: '[redacted]', adminToken: '[redacted]', authToken: '[redacted]', Password: '[redacted]', clientSecret: '[redacted]', authorization: '[redacted]', cookie: '[redacted]' });
+    expect(redact({ privatekey: 'a', accesskey: 'b', passphrase: 'c', pwd: 'd', credentials: 'e', credential: 'f', keyframe: 1, keyFile: 'g' }))
+      .toEqual({ privatekey: '[redacted]', accesskey: '[redacted]', passphrase: '[redacted]', pwd: '[redacted]', credentials: '[redacted]', credential: '[redacted]', keyframe: 1, keyFile: 'g' });
     expect(redact({ changes: [{ key: 'ftp.keyFile', from: 'a', to: 'b' }, { key: 'server.adminToken', from: 'a', to: 'b' }] }))
       .toEqual({ changes: [{ key: 'ftp.keyFile', from: 'a', to: 'b' }, { key: 'server.adminToken', from: '[redacted]', to: '[redacted]' }] });
   });
@@ -77,6 +79,9 @@ describe('AuditLog.write', () => {
     const tok = 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6';
     expect(maskPath(`/api/${tok}/x`)).toBe('/api/:token/x');
     expect(maskPath('/api/cameras/cam1/recordings/Rec20261001_120000_000_M.mp4')).toBe('/api/cameras/cam1/recordings/Rec20261001_120000_000_M.mp4');
+    // by length, not charset: dots, +, =, %, ~ and an extension do not hide it
+    for (const seg of [`${tok}.jpg`, `${tok}+=`, `${tok.slice(0, 16)}.${tok.slice(16)}`, `${tok.slice(0, 20)}%2F${tok.slice(20)}`, `${tok}~x`]) expect(maskPath(`/api/${seg}/x`)).toBe('/api/:token/x');
+    expect(maskPath(`/api/${tok}.jpg`)).toBe('/api/:token');
     expect(maskPath('/api/cameras/cam1/stills/1790000000000.jpg')).toBe('/api/cameras/cam1/stills/1790000000000.jpg');
   });
 

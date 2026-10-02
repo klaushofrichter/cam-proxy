@@ -105,8 +105,9 @@ Process:
 ```
 
 Configuration (the values of a field named like a secret are written as
-`"[redacted]"`: a name with `token`, `password`, `secret`, `authorization`
-or `cookie` in it, or ending in `Key` or `_key` such as `apiKey`; not
+`"[redacted]"`: a name with `token`, `password`, `passwd`, `passphrase`, `pwd`, `credential`,
+`secret`, `authorization` or `cookie` in it, or ending in `key` (any case, such as
+`apiKey` or `privatekey`); not
 `keyframe` or `ftp.keyFile`):
 
 ```json
@@ -204,11 +205,13 @@ minutes (one pack file per minute; `kinds.stills.files`), not single stills.
 - **50 MB guard:** when a day's file reaches 50 MB, further `auth-refused`
   records and failed `login` records for that day are dropped, and one
   `audit-throttled` record says so. Every other action is always written.
-- **Token-like path segments are masked:** a path segment of 32 or more
-  characters (letters, digits, `_`, `-`, no dot) is written as `:token` in the
-  path and message of an `auth-refused` record, in case a token was put in the URL.
+- **Token-like path segments are masked:** any path segment of 32 or
+  more characters (by length, whatever the characters: dots, `+`, `=`, `%`, `~`
+  and a file extension don't hide it) is written as `:token` in the path and
+  message of an `auth-refused` record and in the `unauthorized` log line, in
+  case a token was put in the URL.
 - **A daily record that can't be written is retried with a backoff** (1, 2, 4
-  ... up to 60 minutes), not every minute.
+  ... up to 60 minutes), not every minute; so is a failure that throws.
 - **Restart requests:** a second `restart-proxy` request before the stop
   writes no second `proxy-restart` record.
 

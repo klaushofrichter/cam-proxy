@@ -1,7 +1,8 @@
 import { appendFileSync, closeSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync } from 'fs';
 import { hostname } from 'os';
 import { join } from 'path';
-import { logger } from '../log';
+import { logger, maskPath } from '../log';
+export { maskPath };
 
 // The audit log (spec 2026-10-01-audit-log-design): ECS 8.x JSON lines, one
 // append-only file per UTC day under <dataDir>/audit. Writes never throw into
@@ -36,8 +37,8 @@ const CURSOR = /^(\d{4}-\d{2}-\d{2}):(\d{1,9})$/;
 // Secret field names, by explicit name (#78): token, password, secret, authorization
 // and cookie anywhere in the name, an api key, and names ending in `Key`/`_key`
 // (apiKey, googleVisionKey). Not keyframe or ftp.keyFile.
-const SECRET_WORDS = /token|password|passwd|secret|authorization|cookie|api[_-]?key/i;
-const SECRET_KEY = /[a-z0-9]Key$|[_-]key$|_KEY$/;
+const SECRET_WORDS = /token|password|passwd|passphrase|pwd|credential|secret|authorization|cookie/i;
+const SECRET_KEY = /key$/i; // apiKey, privatekey, ACCESS_KEY; not keyframe or keyFile
 const isSecret = (n: string) => SECRET_WORDS.test(n) || SECRET_KEY.test(n);
 // Field names that look secret but only describe: a config change's `key`, the kind of token refused.
 const SAFE = new Set(['key', 'tokenKind']);
@@ -66,13 +67,6 @@ export function cut(s: string, max: number): string {
   if (s.length <= max) return s;
   const c = s.charCodeAt(max - 1);
   return s.slice(0, c >= 0xd800 && c <= 0xdbff ? max - 1 : max);
-}
-
-// A URL path with token-like segments (32+ characters of [A-Za-z0-9_-], no dot)
-// masked: a token put in the path must not reach the record. Ids and file names
-// (Rec….mp4, 1790….jpg) have a dot or are short.
-export function maskPath(path: string): string {
-  return path.replace(/\/[A-Za-z0-9_-]{32,}(?=\/|$)/g, '/:token');
 }
 
 export class AuditLog {

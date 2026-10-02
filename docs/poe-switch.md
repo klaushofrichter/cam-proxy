@@ -199,5 +199,9 @@ power-on, so the simulated camera really goes away.
 on the same session (the cookie is kept). If that fails too, the proxy logs
 `poe_switch_logout_failed_session_may_be_open`, and a later login refused or
 dropped as busy says it may be the proxy's own session. A login the switch
-refused never replaces the session cookie. Whether the switch ends a left-open
-session by itself is not measured (#90 item 4).
+refused never replaces the session cookie. Measured on the real switch (#90
+item 4): a session nobody logs out of locks the switch for 150 to 181 s of idle
+time (about 3 minutes after the last call), then it frees itself and the old
+cookie is dropped. A login that carries the open session's cookie succeeds and
+keeps the same cookie. So the busy message adds that a possibly-own session
+frees itself about 3 minutes after the last call.

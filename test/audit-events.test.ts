@@ -166,6 +166,15 @@ describe('audit records', () => {
     expect(r.message).not.toContain(tok);
   });
 
+  it('masks a token-like path segment in the unauthorized log line too', async () => {
+    const tok = 'Yq9XyW8vU7tS6rQ5pO4nM3lK2jI1hG0e';
+    await request(p.base).get(`/api/cameras/${tok}/status`);
+    const lines = JSON.stringify((await request(p.base).get('/control/log?limit=500').set(auth(ADMIN_TOKEN))).body);
+    expect(lines).toContain('unauthorized');
+    expect(lines).toContain(':token');
+    expect(lines).not.toContain(tok);
+  });
+
   // Review focus 4.
   it('never writes tokens or codes to the audit files or the log buffer', async () => {
     const { code } = (await request(p.base).post('/control/login-links').set(auth(ADMIN_TOKEN))).body;

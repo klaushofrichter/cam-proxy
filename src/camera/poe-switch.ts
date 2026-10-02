@@ -444,7 +444,7 @@ export class PoeSwitch {
       } catch (err) {
         // A lost logout of ours looks like someone else's session: say so.
         if (err instanceof PoeSwitchError && err.code === 'switch_busy' && this.sessionMaybeOpen) {
-          throw new PoeSwitchError('switch_busy', `${err.message} (possibly the proxy's own session: its last logout was not answered)`);
+          throw new PoeSwitchError('switch_busy', `${err.message} (possibly the proxy's own session: its last logout was not answered; it frees itself about 3 minutes after the last call)`);
         }
         throw err;
       }

@@ -113,6 +113,18 @@ describe('DailyAudit', () => {
     expect(of(audit, 'storage-daily')).toHaveLength(1);
   });
 
+  it('backs off after an exception from storage() too', () => {
+    const now = { t: Date.parse('2026-10-02T05:06:00Z') };
+    let calls = 0;
+    const { mk } = setup(now, CHICAGO, { storage: () => { calls++; throw new Error('db busy'); } });
+    const d = mk();
+    for (let m = 0; m < 3; m++) {
+      try { d.check(); } catch { /* start() logs it */ }
+      now.t += 60_000;
+    }
+    expect(calls).toBe(2); // minutes 0 and 1; the next try is at minute 3
+  });
+
   it('on the DST change day the day has 25 hours of activity', () => {
     const now = { t: Date.parse('2026-11-02T06:06:00Z') }; // 00:06 CST on Nov 2
     const { asked, mk } = setup(now);
@@ -184,7 +196,7 @@ describe('DailyAudit', () => {
     expect(of(audit, 'storage-daily')[0].cam_proxy).toMatchObject({ day: '2026-10-02', dayBasis: 'utc' });
   });
 
-  it('a failing check does not escape the timer; it retries on the next tick, and stop() ends it', () => {
+  it('a failing check does not escape the timer; it retries after its backoff, and stop() ends it', () => {
     vi.useFakeTimers();
     const now = { t: Date.parse('2026-10-02T05:06:00Z') };
     let fail = true;
@@ -194,6 +206,7 @@ describe('DailyAudit', () => {
     vi.advanceTimersByTime(1000); // the first check: throws, is caught
     expect(of(audit, 'storage-daily')).toHaveLength(0);
     fail = false;
+    now.t += 60_000; // past the 1 minute backoff the failure set
     vi.advanceTimersByTime(1000);
     expect(of(audit, 'storage-daily')).toHaveLength(1);
     expect(of(audit, 'activity-daily')).toHaveLength(1);
