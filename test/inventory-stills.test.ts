@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import sharp from 'sharp';
 import { AuditLog } from '../src/audit/audit-log';
 import { openCatalog, type Catalog } from '../src/catalog/db';
@@ -31,9 +31,18 @@ async function writeMinute(s: MinuteStore, k: number, slots: number[], intervalS
   for (const i of slots) s.add({ ts: at(k) + i * intervalS * 1000, still: stills[i], tile: tiles[i] });
   await s.flush();
 }
-const settings = (o: Partial<StillsSettings> = {}): StillsSettings => ({ cam: 'cam1', intervalS: 1, stillsDays: 7, keepHours: 24, ...o });
+const settings = (o: Partial<StillsSettings> = {}): StillsSettings => ({ cam: 'cam1', intervalS: 1, stillsDays: 7, previewsDays: 14, keepHours: 24, ...o });
 const deps = (o: Partial<StillsInventoryDeps> = {}): StillsInventoryDeps => ({ dataDir: dir, settings: () => settings(), audit, catalog, ...o });
 const ctx = (o: Partial<CheckContext> = {}): CheckContext => ({ signal: new AbortController().signal, progress: () => undefined, now: NOW, ...o });
+// A pack written by hand: `footer` is the JSON footer (any shape), `stills` bytes before it.
+function rawPack(file: string, footer: unknown, stills = 0) {
+  const json = Buffer.from(JSON.stringify(footer));
+  const len = Buffer.alloc(4);
+  len.writeUInt32LE(json.length, 0);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, Buffer.concat([Buffer.alloc(stills, 1), json, len, Buffer.from('CPK1')]));
+}
+const fullFooter = (minute: number) => ({ v: 1, minute, intervalS: 1, size: '64x36', quality: 5, slots: range(0, 60).map((i) => [i * 10, 10]) });
 const start = (a: AuditLog, unclean: boolean) =>
   a.write({ action: 'proxy-start', category: ['process'], type: ['start'], outcome: 'success', user: 'system', message: 'started', details: { previousStop: unclean ? null : '2026-09-27T00:13:01.000Z', uncleanStop: unclean } });
 
@@ -89,6 +98,24 @@ describe('readPackFooter', () => {
     expect(await readPackFooter(join(dir, 'short.pack'))).toBeNull();
     expect(await readPackFooter(join(dir, 'nope.pack'))).toBeNull();
   });
+
+  it('accepts only an interval that divides the minute', async () => {
+    for (const intervalS of [0.001, 7, 0, -1, 120, '1']) {
+      rawPack(join(dir, 'bad-interval.pack'), { ...fullFooter(at(0)), intervalS }, 600);
+      expect(await readPackFooter(join(dir, 'bad-interval.pack'))).toBeNull();
+    }
+    for (const intervalS of [1, 2, 5, 60]) {
+      rawPack(join(dir, 'good-interval.pack'), { ...fullFooter(at(0)), intervalS }, 600);
+      expect(await readPackFooter(join(dir, 'good-interval.pack'))).toMatchObject({ intervalS });
+    }
+  });
+
+  it('reads a footer larger than the first tail read, and a pack smaller than it', async () => {
+    rawPack(join(dir, 'big-footer.pack'), { ...fullFooter(at(0)), pad: 'x'.repeat(6000) }, 20_000);
+    expect(await readPackFooter(join(dir, 'big-footer.pack'))).toMatchObject({ minute: at(0), intervalS: 1 });
+    rawPack(join(dir, 'tiny.pack'), fullFooter(at(0)), 0);
+    expect((await readPackFooter(join(dir, 'tiny.pack')))!.slots).toHaveLength(60);
+  });
 });
 
 describe('stills inventory', () => {
@@ -98,7 +125,7 @@ describe('stills inventory', () => {
     expect(r.counts).toEqual({
       stillsDays: 7, minutes: 10, packs: 8, expectedSeconds: 600, presentSeconds: 380, missingSeconds: 220, missingPct: 36.67,
       gaps: 4, explainedSeconds: 150, unexplainedSeconds: 70, restorableSeconds: 20,
-      unreadablePacks: 1, packsWithoutSprite: 1, spritesWithoutPack: 1,
+      unreadablePacks: 1, packsWithoutSprite: 1, spritesWithoutPack: 1, previewsPruned: 0,
     });
     expect(r.items).toEqual([
       { type: 'pack-without-sprite', minute: at(4) },
@@ -242,5 +269,45 @@ describe('stills inventory: camera reboots and power-cycles', () => {
       { from: at(1, 10), to: at(1, 20), seconds: 10, explained: null, explainedSeconds: 0 },
     ]);
     expect(r.counts).toMatchObject({ explainedSeconds: 135, unexplainedSeconds: 85 });
+  });
+});
+
+describe('stills inventory: previews pruned before stills, cancel, audit reads', () => {
+  const NOW2 = Date.UTC(2026, 8, 27, 0, 0, 30);
+  const A = Date.UTC(2026, 8, 22, 10, 0); // before dayStart(now − 3 d): previews gone by retention
+  const B = Date.UTC(2026, 8, 25, 10, 0); // after it, but before the oldest preview (a cap pruned it)
+  const C = Date.UTC(2026, 8, 26, 10, 0); // the oldest preview
+  const E = Date.UTC(2026, 8, 26, 10, 5); // a newer minute that lost its sprite: a file problem
+
+  it('flags packs without a sprite only where previews are kept; earlier ones count as previewsPruned', async () => {
+    const d2 = mkdtempSync(join(tmpdir(), 'camproxy-inv-prev-'));
+    const s = new MinuteStore({ dataDir: d2, cam: 'cam1', intervalS: 1, still: { size: '64x36', quality: 5 }, tile: { size: '16x9', grid: '10x6', quality: 7 } });
+    for (const m of [A, B, C, E]) {
+      for (const i of ALL) s.add({ ts: m + i * 1000, still: stills[i], tile: tiles[i] });
+      await s.flush();
+    }
+    for (const m of [A, B, E]) for (const ext of ['json', 'jpg']) rmSync(`${minutePath(d2, 'previews', 'cam1', m)}.${ext}`);
+    const r = await stillsCheck(deps({ dataDir: d2, settings: () => settings({ stillsDays: 7, previewsDays: 3 }) }))(ctx({ now: NOW2 }));
+    expect(r.counts).toMatchObject({ packs: 4, packsWithoutSprite: 1, previewsPruned: 2 });
+    expect(r.items).toEqual([{ type: 'pack-without-sprite', minute: E }]);
+  });
+
+  it('a cancel lands within a day, not only between days', async () => {
+    const d3 = mkdtempSync(join(tmpdir(), 'camproxy-inv-cancel-'));
+    const day = Date.UTC(2026, 8, 26);
+    for (let m = day; m < day + 600 * MIN; m += MIN) rawPack(`${minutePath(d3, 'stills', 'cam1', m)}.pack`, fullFooter(m), 600);
+    let reads = 0;
+    const signal = { get aborted() { return reads++ >= 1; } } as AbortSignal; // cancelled right after the walk begins
+    const r = await stillsCheck(deps({ dataDir: d3 }))(ctx({ now: NOW2, signal }));
+    expect(r.counts.minutes).toBeGreaterThan(0);
+    expect(r.counts.minutes).toBeLessThan(600);
+  });
+
+  it('reads the audit log once for all the actions it needs', async () => {
+    const calls: unknown[] = [];
+    const counting = { list: (q: Parameters<AuditLog['list']>[0]) => (calls.push(q), audit.list(q)) };
+    await stillsCheck(deps({ audit: counting, dataDir: dir, settings: () => settings({ stillsDays: 0 }) }))(ctx());
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ actions: expect.arrayContaining(['storage-daily', 'proxy-start', 'camera-reboot', 'camera-powercycle']) });
   });
 });

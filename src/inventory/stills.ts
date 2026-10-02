@@ -20,6 +20,11 @@ import { MAX_ITEMS, MAX_TOP, type Check, type CheckResult } from './runner';
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
+// The signal is checked every this many minutes; up to FOOTER_READS footers are read at a time.
+const CHUNK_MINUTES = 120;
+const FOOTER_READS = 6;
+// The audit actions the check reads, in one pass.
+const AUDIT_ACTIONS = ['storage-daily', 'proxy-start', 'camera-reboot', 'camera-powercycle'];
 // Stills resume within this time after a proxy start (go2rtc, then the grabber).
 export const STARTUP_MS = 120_000;
 // A camera reboot or power-cycle without an end record: the proxy's own watch
@@ -27,7 +32,7 @@ export const STARTUP_MS = 120_000;
 export const OUTAGE_MS = REBOOT_WAIT_MS;
 const CLOCK_NOTE = "restorable seconds compare the clips' times (the camera's clock) with the stills' (the proxy's clock), not aligned: a few seconds' skew";
 
-export interface StillsSettings { cam: string; intervalS: number; stillsDays: number; keepHours: number }
+export interface StillsSettings { cam: string; intervalS: number; stillsDays: number; previewsDays: number; keepHours: number }
 export interface StillsInventoryDeps {
   dataDir: string;
   settings: () => StillsSettings; // read when a run starts
@@ -70,6 +75,26 @@ function records(audit: Pick<AuditLog, 'list'>, actions: string[], from: number,
   }
 }
 
+// fn over items, at most `limit` at a time; the results in the items' order.
+async function mapPool<T, R>(items: T[], limit: number, fn: (x: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
+// The minute an HHMM file name stands for in a day, or null.
+const minuteOfName = (dayStartTs: number, n: string, ext: RegExp): number | null => {
+  const m = /^(\d{2})(\d{2})\.(\w+)$/.exec(n);
+  return m && ext.test(m[3]) ? dayStartTs + Number(m[1]) * HOUR + Number(m[2]) * MINUTE : null;
+};
+
 // The clips overlapping [from, to), merged, by start (clip times: the camera's clock).
 function clipSpans(c: Catalog, cam: string, from: number, to: number): { s: number; e: number }[] {
   const rows = c.db
@@ -88,7 +113,7 @@ function clipSpans(c: Catalog, cam: string, from: number, to: number): { s: numb
 // [from, to): a start record that reached the camera (a reboot: not a failure;
 // a power-cycle: a success, or a failure that may have cut the PoE) up to its
 // end record (back, not-back, or the proxy stopping).
-function cameraOutages(audit: Pick<AuditLog, 'list'>, from: number, now: number): { a: number; b: number; cause: GapCause }[] {
+function cameraOutages(recs: AuditRecord[]): { a: number; b: number; cause: GapCause }[] {
   const out: { a: number; b: number; cause: GapCause }[] = [];
   const open = new Map<string, { a: number; cause: GapCause }>();
   const close = (action: string, at: number) => {
@@ -97,8 +122,9 @@ function cameraOutages(audit: Pick<AuditLog, 'list'>, from: number, now: number)
     open.delete(action);
     out.push({ a: o.a, b: Math.min(at, o.a + OUTAGE_MS), cause: o.cause });
   };
-  for (const r of records(audit, ['camera-reboot', 'camera-powercycle'], from - OUTAGE_MS, now)) {
+  for (const r of recs) {
     const action = r.event.action;
+    if (action !== 'camera-reboot' && action !== 'camera-powercycle') continue;
     const t = Date.parse(r['@timestamp']);
     const det = (r.cam_proxy ?? {}) as { phase?: unknown; offAt?: unknown; poeOff?: unknown };
     if (det.phase === 'requested') {
@@ -144,7 +170,7 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
     const counts = {
       stillsDays: s.stillsDays, minutes: 0, packs: 0, expectedSeconds: 0, presentSeconds: 0, missingSeconds: 0, missingPct: 0,
       gaps: 0, explainedSeconds: 0, unexplainedSeconds: 0, restorableSeconds: 0,
-      unreadablePacks: 0, packsWithoutSprite: 0, spritesWithoutPack: 0,
+      unreadablePacks: 0, packsWithoutSprite: 0, spritesWithoutPack: 0, previewsPruned: 0,
     };
 
     // The day folders of the retention window: one readdir each, kept for the walk.
@@ -155,15 +181,25 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
     }
 
     // The oldest pack before `to` decides where the window starts.
-    let oldest: number | null = null;
-    for (const day of days) {
-      const first = [...day.packs].filter((n) => /^\d{4}\.pack$/.test(n)).sort()[0];
-      if (!first) continue;
-      const m = day.start + Number(first.slice(0, 2)) * HOUR + Number(first.slice(2, 4)) * MINUTE;
-      if (m < to) oldest = m;
-      break;
-    }
+    const oldestIn = (pick: (day: (typeof days)[number]) => Set<string>, ext: RegExp): number | null => {
+      for (const day of days) {
+        const ms = [...pick(day)].map((n) => minuteOfName(day.start, n, ext)).filter((m): m is number => m !== null);
+        if (ms.length) {
+          const m = Math.min(...ms);
+          return m < to ? m : null;
+        }
+      }
+      return null;
+    };
+    const oldest = oldestIn((x) => x.packs, /^pack$/);
+    // Previews may be pruned before stills (their own retention, cap or keepHours):
+    // a pack without a sprite before the later of their retention cutoff and the
+    // oldest preview is counted as pruned, not flagged.
+    const oldestPreview = oldestIn((x) => x.previews, /^(json|jpg)$/);
+    const previewsFrom = Math.max(dayStart(now - s.previewsDays * DAY), oldestPreview ?? to);
     if (oldest === null) return { window: { from: null, to, reason: 'empty', retentionFrom, protectedFrom, notes: [] }, counts, top: [], items: [], message: 'no stills stored' };
+    // One pass over the audit log for every action the check needs.
+    const audit = records(d.audit, AUDIT_ACTIONS, retentionFrom - OUTAGE_MS, now);
     let from: number;
     let reason: WindowReason;
     if (oldest - retentionFrom < HOUR) {
@@ -172,7 +208,7 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
     } else {
       from = oldest;
       const o = oldest;
-      const olderSeen = records(d.audit, ['storage-daily'], retentionFrom, now).some((r) => {
+      const olderSeen = audit.filter((r) => r.event.action === 'storage-daily' && Date.parse(r['@timestamp']) >= retentionFrom).some((r) => {
         const v = (r.cam_proxy as { kinds?: { stills?: { oldest?: unknown } } } | undefined)?.kinds?.stills?.oldest;
         return typeof v === 'number' && v < o - HOUR;
       });
@@ -180,11 +216,11 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
     }
 
     // Proxy starts in the window: the last one inside a gap explains it.
-    const starts = records(d.audit, ['proxy-start'], from, to).map((r) => ({
-      t: Date.parse(r['@timestamp']),
-      crash: (r.cam_proxy as { uncleanStop?: unknown } | undefined)?.uncleanStop === true,
-    }));
-    const outages = cameraOutages(d.audit, from, now);
+    const starts = audit
+      .filter((r) => r.event.action === 'proxy-start')
+      .map((r) => ({ t: Date.parse(r['@timestamp']), crash: (r.cam_proxy as { uncleanStop?: unknown } | undefined)?.uncleanStop === true }))
+      .filter((x) => x.t >= from && x.t <= to);
+    const outages = cameraOutages(audit);
     const top: Gap[] = [];
     const gaps = new Gaps((gFrom, gTo) => {
       // Each cause's share of [gFrom, gTo); the union counts once, the largest share names the gap (a proxy start on a tie).
@@ -219,38 +255,55 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
 
     const walk = days.filter((x) => x.start + DAY > from);
     ctx.progress({ phase: 'stills', done: 0, total: walk.length });
+    let cancelled = false;
     for (const [i, day] of walk.entries()) {
-      if (ctx.signal.aborted) break;
       const parts = dayParts(day.start);
       const spans = clipSpans(d.catalog, s.cam, day.start, day.start + DAY);
       let k = 0;
-      for (let m = Math.max(from, day.start); m < Math.min(to, day.start + DAY); m += MINUTE) {
-        counts.minutes++;
-        const name = hhmm(m);
-        const json = day.previews.has(`${name}.json`);
-        const jpg = day.previews.has(`${name}.jpg`);
-        let slots: [number, number][] | null = null;
-        let step = s.intervalS; // a minute without a readable pack: the current interval
-        if (day.packs.has(`${name}.pack`)) {
-          counts.packs++;
-          const f = await readPackFooter(join(stillsDir, ...parts, `${name}.pack`));
-          if (f) [slots, step] = [f.slots, f.intervalS];
-          else problem('unreadable-pack', m);
-          if (!json || !jpg) problem('pack-without-sprite', m);
-        } else if (json || jpg) problem('sprite-without-pack', m);
-        for (let j = 0; j < Math.round(60 / step); j++) {
-          const ts = m + j * step * 1000;
-          counts.expectedSeconds += step;
-          if (slots?.[j]?.[1]) {
-            gaps.close();
-            continue;
+      const minutes: number[] = [];
+      for (let m = Math.max(from, day.start); m < Math.min(to, day.start + DAY); m += MINUTE) minutes.push(m);
+      for (let c = 0; c < minutes.length; c += CHUNK_MINUTES) {
+        if (ctx.signal.aborted) {
+          cancelled = true;
+          break;
+        }
+        const chunk = minutes.slice(c, c + CHUNK_MINUTES);
+        const footers = await mapPool(chunk, FOOTER_READS, (m) => {
+          const name = `${hhmm(m)}.pack`;
+          return day.packs.has(name) ? readPackFooter(join(stillsDir, ...parts, name)) : Promise.resolve(undefined);
+        });
+        for (const [x, m] of chunk.entries()) {
+          counts.minutes++;
+          const name = hhmm(m);
+          const json = day.previews.has(`${name}.json`);
+          const jpg = day.previews.has(`${name}.jpg`);
+          let slots: [number, number][] | null = null;
+          let step = s.intervalS; // a minute without a readable pack: the current interval
+          const f = footers[x];
+          if (f !== undefined) {
+            counts.packs++;
+            if (f) [slots, step] = [f.slots, f.intervalS];
+            else problem('unreadable-pack', m);
+            if (!json || !jpg) {
+              if (m >= previewsFrom) problem('pack-without-sprite', m);
+              else counts.previewsPruned++;
+            }
+          } else if (json || jpg) problem('sprite-without-pack', m);
+          for (let j = 0; j < Math.round(60 / step); j++) {
+            const ts = m + j * step * 1000;
+            counts.expectedSeconds += step;
+            if (slots?.[j]?.[1]) {
+              gaps.close();
+              continue;
+            }
+            counts.missingSeconds += step;
+            gaps.missing(ts, step * 1000);
+            while (k < spans.length && spans[k].e <= ts) k++;
+            if (k < spans.length && spans[k].s <= ts) counts.restorableSeconds += step;
           }
-          counts.missingSeconds += step;
-          gaps.missing(ts, step * 1000);
-          while (k < spans.length && spans[k].e <= ts) k++;
-          if (k < spans.length && spans[k].s <= ts) counts.restorableSeconds += step;
         }
       }
+      if (cancelled) break;
       ctx.progress({ phase: 'stills', done: i + 1, total: walk.length, note: parts.join('-') });
       await yieldToLoop();
     }
