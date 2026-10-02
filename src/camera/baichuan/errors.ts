@@ -10,9 +10,14 @@ export class BaichuanError extends Error {
     readonly status?: number, // the camera's status, when it answered
     // 'connect': no connection to the camera was made (the camera is
     // unreachable), as against a connection lost after it was up.
-    readonly phase?: 'connect',
+    // 'writer': a stall while the output didn't take the bytes (a slow or
+    // paused client): not the camera's fault.
+    readonly phase?: 'connect' | 'writer',
   ) {
     super(message);
     this.name = 'BaichuanError';
   }
 }
+
+// A stall caused by the output, not the camera: treated like an abort.
+export const isWriterStall = (e: unknown): boolean => e instanceof BaichuanError && e.code === 'timeout' && e.phase === 'writer';

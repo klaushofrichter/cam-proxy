@@ -487,6 +487,58 @@ describe('RecordingFetcher', () => {
     expect(outcomes).toMatchObject([{ result: 'timeout', bytes: 30_000 }]);
   });
 
+  // Final review 5.
+  it('a client whose response closed while queued does not block the next client', async () => {
+    const x = setup({ gated: true });
+    const [a, b] = [x.add(1), x.add(2)];
+    const first = x.fetcher.get(a, { priority: 'high' }).fetch;
+    await vi.waitFor(() => expect(x.dl.calls).toHaveLength(1));
+    const { fetch } = x.fetcher.get(b, { priority: 'high' });
+    expect(fetch.state).toBe('queued');
+    const gone = collector();
+    expect(fetch.attach(gone.w, () => undefined)).toBe(true);
+    gone.w.destroy();
+    const next = collector();
+    expect(fetch.attach(next.w, () => undefined)).toBe(true);
+    x.dl.release(a.path);
+    await first.done;
+    await vi.waitFor(() => expect(x.dl.calls).toHaveLength(2));
+    x.dl.release(b.path);
+    await fetch.done;
+    expect(next.bytes()).toEqual(x.files.get(b.path));
+  });
+
+  // Final review 6.
+  it('canKeep: false when paused, over the cap, or no room beside the pinned files; true otherwise', () => {
+    const x = setup({ cap: 120_000 });
+    expect(x.fetcher.canKeep(100_000)).toBe(true);
+    expect(x.fetcher.canKeep(120_001)).toBe(false);
+    const pinned = join(x.dir, 'pinned.mp4');
+    writeFileSync(pinned, Buffer.alloc(100_000));
+    const unpin = x.cache.pin(pinned);
+    expect(x.fetcher.canKeep(30_000)).toBe(false);
+    expect(x.fetcher.canKeep(20_000)).toBe(true);
+    unpin();
+    expect(x.fetcher.canKeep(30_000)).toBe(true); // the unpinned file can be evicted
+    expect(existsSync(pinned)).toBe(true); // canKeep evicts nothing
+    const p = setup({ paused: true });
+    expect(p.fetcher.canKeep(1)).toBe(false);
+  });
+
+  // Final review 7.
+  it('a stall caused by the writer is an abort: no outcome, done rejects', async () => {
+    const x = setup();
+    const e = x.add(1);
+    const outcomes: FetchOutcome[] = [];
+    const stalled = async () => {
+      throw new BaichuanError('timeout', 'the writer stalled', undefined, 'writer');
+    };
+    const fetcher = new RecordingFetcher({ cache: x.cache, download: stalled, stillListed: async () => true, paused: () => false, noteWritten: () => undefined, onDone: (o) => outcomes.push(o) });
+    await expect(fetcher.get(e, { priority: 'high' }).fetch.done).rejects.toMatchObject({ code: 'timeout', phase: 'writer' });
+    expect(outcomes).toEqual([]);
+    expect(existsSync(x.cache.partPath(e.id))).toBe(false);
+  });
+
   it('a throwing onDone: one outcome, done still resolves', async () => {
     const x = setup();
     const e = x.add(1);

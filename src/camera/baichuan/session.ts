@@ -219,10 +219,6 @@ export class BaichuanSession {
     this.socket?.resume();
   }
 
-  text(m: Message): string {
-    return decodeText(this.key, m.payload, m.msgId & 0xff);
-  }
-
   chunk(m: Message, encryptLen?: number): Buffer {
     if (!this.key) throw new BaichuanError('offline', 'no session');
     return decryptChunk(this.key, m.payload, encryptLen);

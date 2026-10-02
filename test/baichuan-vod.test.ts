@@ -117,6 +117,37 @@ describe('download', () => {
     expect(((await run(s, stuck, { stallMs: 100 }).catch((x) => x)) as BaichuanError).code).toBe('timeout');
   });
 
+  // Final review 7 and 8.
+  it('a writer stall is tagged phase writer and keeps the session; a camera stall has no phase and closes it', async () => {
+    const { s } = await setup({ chunkSize: 16_384 });
+    const stuck = new Writable({ highWaterMark: 16 * 1024, write: () => undefined });
+    const w = (await run(s, stuck, { stallMs: 100 }).catch((x) => x)) as BaichuanError;
+    expect([w.code, w.phase]).toEqual(['timeout', 'writer']);
+    expect(s.connected()).toBe(true);
+    let n = 0;
+    const last = new Writable({
+      write(c: Buffer, _e, cb) {
+        if ((n += c.length) < FILE.length) cb();
+      },
+    });
+    const l = (await run(s, last, { stallMs: 100 }).catch((x) => x)) as BaichuanError;
+    expect([l.code, l.phase]).toEqual(['timeout', 'writer']);
+    expect(s.connected()).toBe(true);
+    const cam2 = await setup({ stallAfterChunks: 2 });
+    const c = (await run(cam2.s, sink().w, { stallMs: 100 }).catch((x) => x)) as BaichuanError;
+    expect([c.code, c.phase]).toEqual(['timeout', undefined]);
+    expect(cam2.s.connected()).toBe(false);
+  });
+
+  it('a protocol error closes the session (the next download reconnects); a 400 keeps it', async () => {
+    const { s } = await setup({ infoRecord: Buffer.alloc(40) });
+    expect(((await run(s, sink().w).catch((x) => x)) as BaichuanError).code).toBe('protocol');
+    expect(s.connected()).toBe(false);
+    const r = await setup({ files: {} });
+    expect(((await run(r.s, sink().w).catch((x) => x)) as BaichuanError).code).toBe('refused');
+    expect(r.s.connected()).toBe(true);
+  });
+
   it('a slow writer destroyed mid-transfer fails at once with AbortError, and cmd 9 is sent once', async () => {
     const { cam, s } = await setup({ chunkSize: 16_384 });
     const out = sink(5);

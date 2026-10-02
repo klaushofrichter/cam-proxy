@@ -11,7 +11,7 @@ import { createWriteStream, mkdirSync, type WriteStream } from 'fs';
 import { dirname } from 'path';
 import { Writable } from 'stream';
 import { finished } from 'stream/promises';
-import { BaichuanError, type BaichuanErrorCode } from '../camera/baichuan/errors';
+import { BaichuanError, isWriterStall, type BaichuanErrorCode } from '../camera/baichuan/errors';
 import type { RecordingCache } from './cache';
 import type { RecordingEntry } from './list';
 import { logger } from '../log';
@@ -208,7 +208,9 @@ export class Fetch {
   // or the fetch is over): wait for `done`, then serve from the cache (or
   // fetch again when `kept` is false).
   attach(res: Writable, onStart: () => void): boolean {
-    if (this.live || this.state === 'done') return false;
+    if (this.state === 'done') return false;
+    // A response that closed while queued (or before its first byte) holds nothing.
+    if (this.live && !this.live.res.destroyed && !this.live.res.writableEnded) return false;
     if (this.tee && !this.tee.attach(res, onStart)) return false;
     this.live = { res, onStart };
     return true;
@@ -271,6 +273,7 @@ export class RecordingFetcher {
     return { fetch: f, created: true };
   }
 
+  /** for tests */
   queued(): string[] {
     return this.queue.map((f) => f.entry.id);
   }
@@ -323,19 +326,25 @@ export class RecordingFetcher {
     }
   }
 
-  // Whether the file can go into the cache: not paused, not over the cap, and
-  // room beside the pinned files. makeRoom can free less than asked (pinned
-  // files), so the room is checked again after it: never evict for nothing.
-  private roomFor(size: number): boolean {
+  // Whether the file could go into the cache: not paused, not over the cap,
+  // and room beside the pinned files. Evicts nothing. The route asks before a
+  // Range request waits for a fetch whose file couldn't be kept.
+  canKeep(size: number): boolean {
     const { cache } = this.d;
     if (this.d.paused()) return false;
     const cap = cache.capBytes();
     if (size > cap) return false;
-    const files = cache.files();
-    const pinned = files.filter((x) => cache.busy(x.path)).reduce((n, x) => n + x.bytes, 0);
-    if (pinned + size > cap) return false;
-    const total = files.reduce((n, x) => n + x.bytes, 0);
-    if (total + size > cap) cache.makeRoom(size);
+    const pinned = cache.files().filter((x) => cache.busy(x.path)).reduce((n, x) => n + x.bytes, 0);
+    return pinned + size <= cap;
+  }
+
+  // canKeep, then room made. makeRoom can free less than asked (pinned
+  // files), so the room is checked again after it: never evict for nothing.
+  private roomFor(size: number): boolean {
+    const { cache } = this.d;
+    if (!this.canKeep(size)) return false;
+    const cap = cache.capBytes();
+    if (cache.usage().bytes + size > cap) cache.makeRoom(size);
     return cache.usage().bytes + size <= cap;
   }
 
@@ -388,9 +397,10 @@ export class RecordingFetcher {
       }
       tee.abortClient(); // last: a client that sees the cut must find no .part
       this.byId.delete(entry.id);
-      // An abort, or any failure while stopping (a connect or login given
+      // An abort, a stall caused by the writer (a slow or paused client, not
+      // the camera), or any failure while stopping (a connect or login given
       // up, a closed session): no outcome, nothing for the status or metrics.
-      if (isAbort(err) || this.stopped) return f.finish(err);
+      if (isAbort(err) || isWriterStall(err) || this.stopped) return f.finish(err);
       let e = err instanceof BaichuanError ? err : new BaichuanError('protocol', 'the download failed');
       // A 400 for a file the list had: gone from the card (not found), or refused?
       if (e.code === 'refused' && e.status === 400 && !(await this.d.stillListed(entry).catch(() => true))) {

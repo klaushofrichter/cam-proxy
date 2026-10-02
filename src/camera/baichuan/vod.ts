@@ -43,12 +43,18 @@ export async function download(session: BaichuanSession, path: string, size: num
     let stopped = false; // the transfer is over (cmd 9 sent)
     let settled = false; // the promise is settled
     let paused = false;
+    let lastWrite = false; // the last bytes are with the writer
     let timer: NodeJS.Timeout | undefined;
     let sub: Subscription | undefined;
 
+    // While the socket is paused for the writer, or the writer holds the last
+    // bytes, a stall is the writer's (a slow or paused client), not the camera's.
     const arm = (ms: number, why: string) => {
       clearTimeout(timer);
-      timer = setTimeout(() => fail(new BaichuanError('timeout', why)), ms);
+      timer = setTimeout(() => {
+        const writer = paused || lastWrite;
+        fail(new BaichuanError('timeout', writer ? 'the writer stalled' : why, undefined, writer ? 'writer' : undefined));
+      }, ms);
     };
     const stall = () => arm(o.stallMs ?? 20_000, 'the download stalled');
     const onDrain = () => {
@@ -85,9 +91,13 @@ export async function download(session: BaichuanSession, path: string, size: num
       }
       if (session.connected()) void session.call(9, stopXml(), o.stopMs ?? 5_000).catch(() => undefined);
     };
+    // After a camera-side timeout or a protocol error the connection may be
+    // dead or out of step: closed, so the next download reconnects.
     const fail = (err: Error) => {
       stop();
+      const reconnect = !settled && err instanceof BaichuanError && (err.code === 'protocol' || err.code === 'timeout') && err.phase !== 'writer';
       settle(err);
+      if (reconnect) session.close();
     };
 
     out.on('error', onOutError);
@@ -119,6 +129,7 @@ export async function download(session: BaichuanSession, path: string, size: num
           if (out.destroyed || out.writableEnded) return fail(abortError('the output closed'));
           received += data.length;
           if (received === size) {
+            lastWrite = true;
             stop();
             stall(); // until the writer takes the last bytes
             try {
