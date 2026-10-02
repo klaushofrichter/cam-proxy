@@ -108,7 +108,7 @@ paths:
         - { name: from, in: query, required: true, schema: { type: integer }, description: unix ms }
         - { name: to, in: query, required: true, schema: { type: integer }, description: unix ms }
       responses:
-        '200': { description: '[{id, start, end, stream, size, events: [event ids], url, snapshotUrl (null without a snapshot)}]' }
+        '200': { description: '[{id, start, end, stream, size, origin (ftp: uploaded by the camera; camera: fetched from its SD card by an inventory repair), events: [event ids], url, snapshotUrl (null without a snapshot)}]' }
         '400': { description: 'from/to missing, reversed, or more than 31 days apart' }
         '404': { description: unknown camera }
   /api/cameras/{cam}/clips/{file}:

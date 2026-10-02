@@ -47,7 +47,7 @@ describe('clips API', () => {
     const r = await request(p.base).get(`/api/cameras/cam1/clips?from=${T - 60_000}&to=${T + 60_000}`).set(auth());
     expect(r.status).toBe(200);
     expect(r.body).toEqual([
-      { id: withSnap.id, start: T, end: T + 30_000, stream: 'main', size: body.length, events: [eventId], url: `/api/cameras/cam1/clips/${withSnap.id}.mp4`, snapshotUrl: `/api/cameras/cam1/clips/${withSnap.id}.jpg` },
+      { id: withSnap.id, start: T, end: T + 30_000, stream: 'main', size: body.length, origin: 'ftp', events: [eventId], url: `/api/cameras/cam1/clips/${withSnap.id}.mp4`, snapshotUrl: `/api/cameras/cam1/clips/${withSnap.id}.jpg` },
     ]);
     const both = await request(p.base).get(`/api/cameras/cam1/clips?from=${T}&to=${T + 2 * 3_600_000}`).set(auth());
     expect(both.body.map((c: { id: number }) => c.id)).toEqual([withSnap.id, noSnap.id]);

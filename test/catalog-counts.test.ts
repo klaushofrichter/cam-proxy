@@ -39,6 +39,9 @@ describe('catalog counts', () => {
     expect(countEventsByKind(c, 'cam1', 0, 5000)).toEqual({ person: 2, motion: 1 });
     expect(countEventsByKind(c, 'cam1', 1000, 1000)).toEqual({});
     expect(countClips(c, 'cam1', 0, 5000)).toBe(1);
+    // A clip fetched from the SD card by a repair is not one received (#74).
+    insertClip(c, { cam: 'cam1', start_ts: 1900, end_ts: 2000, path: 'cam1/r.mp4', stream: 'sub', size: 1, received_at: 2000, snapshot: null, origin: 'camera' });
+    expect(countClips(c, 'cam1', 0, 5000)).toBe(1);
     expect(countAnalysesByStatus(c, 'cam1', 0, 5000)).toEqual({ ok: 1, skipped: 1 });
   });
 });
