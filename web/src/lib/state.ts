@@ -4,6 +4,7 @@ import type { UiProviderState } from './analytics';
 import type { CameraReboot, PoeSwitchStatus } from './maintenance';
 import type { RecordingsStatus } from './recordings';
 import type { CameraFtp, ClipsStall } from './ftp';
+import type { UiHealth } from './health';
 
 export interface Status {
   version: string;
@@ -17,6 +18,7 @@ export interface Status {
   analyticsUnmapped?: { mid: string; name: string; count: number; lastSeen: number }[];
   ftp: { enabled: boolean; listening: boolean; port: number; tls: boolean; publicHost: string | null; passwordSet: boolean; lastUpload: number | null; lastClip: number | null; clips: number; failures: number; camera?: CameraFtp | null; stalled?: ClipsStall | null };
   recordings?: RecordingsStatus;
+  health?: UiHealth; // the health summary (spec 2026-10-03-health-summary-design)
 }
 export interface Usage { bytes: number; files: number; oldest: number | null; newest: number | null; growthPerDay: number }
 export interface Stats {

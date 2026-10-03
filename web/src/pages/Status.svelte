@@ -8,10 +8,17 @@
   import { api, ApiError } from '../lib/api';
   import { refresh } from '../lib/state';
   import Icon from '../components/Icon.svelte';
+  import { diskText, healthHeadline, itemOf, loadText, memoryText, piCardTitle, problemOf, uptimeText } from '../lib/health';
 
   const gb = (b: number) => `${(b / 1024 ** 3).toFixed(1)} GB`;
   const mb = mbText;
   const ago = (ts?: number | null) => agoText(ts);
+
+  // The health summary decides the red marks it shares with the cards below
+  // (spec 2026-10-03-health-summary-design A3).
+  const health = $derived($status?.health);
+  const bad = (id: string) => problemOf(health, id);
+  const hostItem = (id: string) => itemOf(health, id);
 
   // #93: the camera's FTP upload off, elsewhere, or no clips while events happen.
   const alerts = $derived($status ? ftpAlerts({ enabled: $status.ftp.enabled, publicHost: $status.ftp.publicHost, camera: $status.ftp.camera ?? null, stalled: $status.ftp.stalled ?? null }) : []);
@@ -35,10 +42,25 @@
   <h2>Status</h2>
   {#if $status && $stats}
     <div class="grid">
+      {#if health}
+        <div class="card health" data-testid="card-health">
+          <div class="health-head">
+            <h3>Health</h3>
+            <span class="headline {health.ok ? 'ok' : 'bad'}" data-testid="health-headline">{#if !health.ok}<Icon name="alert" size={16} />{/if}{healthHeadline(health)}</span>
+          </div>
+          <dl class="health-items">
+            {#each health.items as it (it.id)}
+              <div class="hitem" class:problem={it.problem} data-testid="health-item-{it.id}" data-problem={it.problem}>
+                <dt>{it.label}</dt><dd class={it.problem ? 'bad' : ''}>{it.text}</dd>
+              </div>
+            {/each}
+          </dl>
+        </div>
+      {/if}
       <div class="card" data-testid="card-camera">
         <h3>Camera</h3>
         <dl>
-          <dt>State</dt><dd class={$status.camera.reboot?.phase === 'rebooting' || $status.camera.reboot?.phase === 'power-cycling' ? 'warn' : $status.camera.online ? 'ok' : 'bad'} data-testid="camera-state">{cameraStateText($status.camera)}</dd>
+          <dt>State</dt><dd class={$status.camera.reboot?.phase === 'rebooting' || $status.camera.reboot?.phase === 'power-cycling' ? 'warn' : (health ? bad('camera') : !$status.camera.online) ? 'bad' : 'ok'} data-testid="camera-state">{cameraStateText($status.camera)}</dd>
           <dt>Since</dt><dd>{ago($status.camera.since)}</dd>
           <dt>Model</dt><dd>{#if $status.camera.model && $status.camera.webUiUrl}<a href={$status.camera.webUiUrl} target="_blank" rel="noopener noreferrer" title="The camera's own web page">{$status.camera.model}</a>{:else}{$status.camera.model ?? '—'}{/if}</dd>
           <dt>Firmware</dt><dd>{$status.camera.firmware ?? '—'}</dd>
@@ -50,7 +72,7 @@
       <div class="card" data-testid="card-intake">
         <h3>Events</h3>
         <dl>
-          <dt>ONVIF</dt><dd class={$status.intake.onvif === 'subscribed' ? 'ok' : 'bad'} data-testid="onvif-state">{$status.intake.onvif}</dd>
+          <dt>ONVIF</dt><dd class={(health ? bad('events') : $status.intake.onvif !== 'subscribed') ? 'bad' : 'ok'} data-testid="onvif-state">{$status.intake.onvif}</dd>
           <dt>Source</dt><dd>{$status.intake.source}</dd>
           <dt>Re-subscriptions</dt><dd>{$status.intake.resubscribes}</dd>
           {#if $status.intake.lastError}<dt>Last error</dt><dd class="bad">{$status.intake.lastError}</dd>{/if}
@@ -81,7 +103,7 @@
       <div class="card" data-testid="card-stream">
         <h3>Stills</h3>
         <dl>
-          <dt>Stream</dt><dd class={$status.stream.up ? 'ok' : 'bad'} data-testid="stream-state">{$status.stream.enabled ? ($status.stream.up ? 'up' : 'down') : 'off'}</dd>
+          <dt>Stream</dt><dd class={(health ? bad('stream') : !$status.stream.up) ? 'bad' : $status.stream.up ? 'ok' : ''} data-testid="stream-state">{$status.stream.enabled ? ($status.stream.up ? 'up' : 'down') : 'off'}</dd>
           <dt>go2rtc</dt><dd class={$status.stream.go2rtcUp ? 'ok' : 'bad'}>{$status.stream.go2rtcUp ? 'running' : 'stopped'}</dd>
           <dt>Last still</dt><dd>{ago($status.stream.lastFrameTs)}</dd>
           <dt>Still minutes</dt><dd>{$stats.disk.stills.files}</dd>
@@ -131,11 +153,26 @@
           <dt>Audit log</dt><dd>{mb($stats.disk.audit.bytes)}</dd>
           <dt>Used / budget</dt><dd>{gb($stats.storage.used)} / {gb($stats.storage.budget)}</dd>
           <dt>Disk free</dt><dd>{gb($stats.disk.free)} of {gb($stats.disk.size)}</dd>
+          {#if health?.disk}<dt>Disk used</dt><dd class={bad('disk') ? 'bad' : ''} data-testid="storage-disk" title={`a problem from ${health.thresholds.diskPercent} % (health.diskPercent)`}>{health.disk.usedPercent.toFixed(1)} %</dd>{/if}
           <dt>Days until full</dt><dd data-testid="days-until-full">{daysUntilFullText($stats.storage.daysUntilFull)}</dd>
-          <dt>Writing</dt><dd class={$stats.storage.paused ? 'bad' : 'ok'}>{$stats.storage.paused ? 'paused (disk full)' : 'on'}</dd>
+          <dt>Writing</dt><dd class={(health ? bad('storage') : $stats.storage.paused) ? 'bad' : 'ok'} data-testid="storage-writing">{$stats.storage.paused ? 'paused (disk full)' : 'on'}</dd>
           <dt>Last cleanup</dt><dd>{ago($status.retention.lastRun)}</dd>
         </dl>
       </div>
+      {#if health?.host}
+        <div class="card" data-testid="card-pi">
+          <h3>{piCardTitle(health.platform)}</h3>
+          <dl>
+            {#if health.platform.model}<dt>Model</dt><dd class="wrap" data-testid="pi-model">{health.platform.model}</dd>{/if}
+            {#if hostItem('cpuTemp')}<dt>CPU temperature</dt><dd class={bad('cpuTemp') ? 'bad' : ''} data-testid="pi-temp" title={`a problem from ${health.thresholds.tempC} °C (health.tempC)`}>{hostItem('cpuTemp')?.text}</dd>{/if}
+            {#if hostItem('underVoltage')}<dt>Under-voltage</dt><dd class={bad('underVoltage') ? 'bad' : ''} data-testid="pi-voltage">{hostItem('underVoltage')?.text}</dd>{/if}
+            {#if health.host.memory}<dt>Memory</dt><dd>{memoryText(health.host.memory)}</dd>{/if}
+            {#if health.host.uptimeS !== null}<dt>Uptime</dt><dd>{uptimeText(health.host.uptimeS)}</dd>{/if}
+            {#if health.host.load}<dt>Load</dt><dd>{loadText(health.host.load)}</dd>{/if}
+            {#if health.disk}<dt>Disk</dt><dd class={bad('disk') ? 'bad' : ''} data-testid="pi-disk">{diskText(health.disk)}</dd>{/if}
+          </dl>
+        </div>
+      {/if}
       <div class="card">
         <h3>Stream</h3>
         <dl>
@@ -161,6 +198,15 @@
   dt { color: var(--muted); } dd { margin: 0; font-family: var(--mono); text-align: right; }
   .ok { color: #22c55e; } .bad { color: var(--danger); } .warn { color: #f59e0b; } .info { color: var(--muted); }
   .muted { color: var(--muted); }
+  .health { grid-column: 1 / -1; }
+  .health-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+  .health-head h3 { margin: 0; }
+  .headline { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 14px; }
+  .headline :global(svg) { flex: none; }
+  .health-items { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 4px 24px; }
+  .hitem { display: grid; grid-template-columns: 1fr auto; gap: 12px; padding: 2px 0; }
+  .hitem.problem dt { color: var(--danger); }
+  .wrap { white-space: normal; overflow-wrap: anywhere; }
   .small { font-size: 13px; margin: 0 0 8px; }
   .alerts { display: grid; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); justify-items: start; }
   .alert { display: flex; gap: 8px; align-items: flex-start; margin: 0; font-size: 14px; }
