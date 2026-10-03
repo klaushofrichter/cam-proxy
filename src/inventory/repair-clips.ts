@@ -11,6 +11,7 @@ import { abortError, isAbort, type Fetch, type RecordingFetcher, type Waiter } f
 import { logger } from '../log';
 import { SearchError, type RecordingEntry, type RecordingList } from '../recordings/list';
 import type { Stream } from '../recordings/names';
+import { BUSY_TRIES } from './camera-list';
 import { mb, type ClipItem } from './clips';
 import { START_SLACK_MS } from './match';
 import type { InventoryReport, RepairEntry, RepairResult } from './runner';
@@ -27,7 +28,12 @@ import type { InventoryReport, RepairEntry, RepairResult } from './runner';
 // (disk paused, over the cache cap, no room beside the pinned files) is
 // streamed to a temp file instead, unless a viewer streams it: then the
 // viewer has it and the clip is skipped (`viewer`). Caps per run: 50 clips (skipped ones
-// count), 200 MB, ftp.maxGB; 1 s between downloads; it stops after 3 failures
+// count); 200 MB: a recording larger than that alone is skipped (`too-big`),
+// one that would pass it after others is skipped (`byte-cap`) and the scan
+// goes on for smaller ones; ftp.maxGB stops the run. A busy Search in the
+// still-listed check is tried 3 times 1 s apart, then the clip is skipped
+// (`busy`, not a failure: a viewer browsing never stops the repair). 1 s
+// between downloads; it stops after 3 failures
 // in a row, and at once on a refused download or an offline camera. A cancel
 // ends it between clips and aborts its own running download (one a viewer
 // joined runs on). The report's age (< 1 h) is checked by the runner.
@@ -49,7 +55,9 @@ const STOP_TEXT: Record<RepairStop, string> = {
   camera_offline: 'the camera is offline',
 };
 // `viewer`: in temp mode a viewer took the fetch's one client slot (viewers first).
-export type SkipReason = 'outside-retention' | 'already-local' | 'gone-from-camera' | 'other-stream' | 'viewer' | 'invalid';
+// `too-big`: larger than one run's byte cap; `byte-cap`: would pass it after
+// the clips fetched before; `busy`: the camera's Search stayed busy.
+export type SkipReason = 'outside-retention' | 'already-local' | 'gone-from-camera' | 'other-stream' | 'viewer' | 'invalid' | 'too-big' | 'byte-cap' | 'busy';
 // `streamed`: the cache couldn't keep the file; it went through a temp file.
 export interface RepairItem { id: string; start: number; result: 'ok' | 'skipped' | 'failed'; reason?: SkipReason; error?: string; clipId?: number; bytes?: number; streamed?: true }
 
@@ -149,6 +157,7 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
     let stopped: RepairStop | null = null;
     let inARow = 0;
     let downloads = 0;
+    let overCap = false;
     const tempDir = d.tempDir();
     try {
       mkdirSync(tempDir, { recursive: true });
@@ -234,6 +243,21 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
       }
     };
 
+    // The still-listed check; a busy Search (a viewer browsing) is tried
+    // BUSY_TRIES times 1 s apart like the compare's, then 'busy'.
+    const findListed = async (id: string, signal: AbortSignal): Promise<RecordingEntry | undefined | 'busy'> => {
+      for (let attempt = 1; ; attempt++) {
+        try {
+          return await d.list.find(id, signal);
+        } catch (err) {
+          if (!(err instanceof SearchError && err.code === 'busy') || signal.aborted) throw err;
+          if (attempt >= BUSY_TRIES) return 'busy';
+          await sleep(1000, signal);
+          if (signal.aborted) throw abortError('cancelled');
+        }
+      }
+    };
+
     for (const [i, c] of list.entries()) {
       if (ctx.signal.aborted || stopped) break;
       ctx.progress({ phase: 'repair', done: i, total: list.length, note: c.id });
@@ -254,9 +278,14 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
         skip(c, 'already-local');
         continue;
       }
+      if (c.size > maxBytes) {
+        skip(c, 'too-big'); // it would block every run (oldest first)
+        continue;
+      }
       if (counts.bytes + c.size > maxBytes) {
-        stopped = 'byte-cap';
-        break;
+        skip(c, 'byte-cap'); // a smaller one later may still fit
+        overCap = true;
+        continue;
       }
       if (s.maxGB !== undefined && d.clipsBytes() + c.size > s.maxGB * 2 ** 30) {
         stopped = 'max-gb';
@@ -269,7 +298,11 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
       ctx.signal.addEventListener('abort', link, { once: true });
       try {
         // The camera path comes from a Search (the 30 s day cache), never from the report.
-        const entry = await d.list.find(c.id, clip.signal);
+        const entry = await findListed(c.id, clip.signal);
+        if (entry === 'busy') {
+          skip(c, 'busy');
+          continue;
+        }
         if (!entry) {
           skip(c, 'gone-from-camera');
           continue;
@@ -308,6 +341,7 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
         ctx.signal.removeEventListener('abort', link);
       }
     }
+    if (!stopped && !ctx.signal.aborted && overCap) stopped = 'byte-cap';
     if (!stopped && !ctx.signal.aborted && all.length > list.length) stopped = 'clip-cap';
     ctx.progress({ phase: 'repair', done: items.length, total: list.length });
     const message = `${counts.done} of ${counts.requested} fetched (${mb(counts.bytes)}), ${counts.failed} failed, ${counts.skipped} skipped${stopped ? `; stopped: ${STOP_TEXT[stopped]}` : ''}`;

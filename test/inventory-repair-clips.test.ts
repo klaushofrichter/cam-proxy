@@ -246,6 +246,63 @@ describe('clips repair', () => {
     expect([d.stopped, d.counts.done, paused.calls.length]).toEqual(['paused', 0, 0]);
   });
 
+  it('a recording larger than one run\'s byte cap is skipped as too-big and the run goes on (#74 final review)', async () => {
+    const s = setup({ limits: { bytes: 3 * video.length } });
+    const big = recording(1, { size: 4 * video.length });
+    const es = [2, 3].map((i) => recording(i));
+    s.onCamera(big, ...es);
+    const r = await clipsRepair(s.deps).run(ctx(report([big, ...es].map(missing))));
+    expect(r.items.map((x) => x.reason ?? x.result)).toEqual(['too-big', 'ok', 'ok']);
+    expect(s.calls).toEqual(es.map((e) => e.path)); // the big one is never fetched
+    expect(r.counts).toMatchObject({ done: 2, skipped: 1 });
+    expect(r.stopped).toBeNull();
+  });
+
+  it('a candidate that would pass the byte cap after others is skipped; smaller ones after it are still fetched', async () => {
+    const s = setup({ limits: { bytes: 300 } });
+    const sizes = [100, 150, 80, 40, 30];
+    const es = sizes.map((size, i) => recording(i + 1, { size }));
+    s.onCamera(...es);
+    // The fake camera writes the same bytes for each: the clip's size is the listed one here.
+    s.deps.indexer = () => ({ addRecording: async (_f: string, o: { start: number }) => ({ id: 1, size: es.find((e) => e.start === o.start)!.size }) as never });
+    const r = await clipsRepair(s.deps).run(ctx(report(es.map(missing))));
+    // 100 + 150 = 250; 80 would make 330: skipped; 40 makes 290; 30 would make 320: skipped.
+    expect(r.items.map((x) => x.reason ?? x.result)).toEqual(['ok', 'ok', 'byte-cap', 'ok', 'byte-cap']);
+    expect(r.counts).toMatchObject({ done: 3, skipped: 2, bytes: 290 });
+    expect(r.stopped).toBe('byte-cap');
+  });
+
+  it('a busy Search in the still-listed check is tried 3 times 1 s apart, then skipped as busy (not a failure)', async () => {
+    const s = setup();
+    const es = [1, 2, 3, 4].map((i) => recording(i));
+    s.onCamera(...es);
+    const busy = new Set([es[0].id, es[1].id, es[2].id]);
+    const tries = new Map<string, number>();
+    const find = s.deps.list.find;
+    s.deps.list = {
+      find: async (id, signal) => {
+        tries.set(id, (tries.get(id) ?? 0) + 1);
+        if (busy.has(id)) throw new SearchError('busy', 'too many recording Searches waiting; try again shortly');
+        return find(id, signal);
+      },
+    };
+    const r = await clipsRepair(s.deps).run(ctx(report(es.map(missing))));
+    // Three busy ones in a row never stop the run.
+    expect(r.items.map((x) => x.reason ?? x.result)).toEqual(['busy', 'busy', 'busy', 'ok']);
+    expect([...tries.values()]).toEqual([3, 3, 3, 1]);
+    expect(s.sleeps).toEqual([1000, 1000, 1000, 1000, 1000, 1000]);
+    expect(r.counts).toMatchObject({ done: 1, failed: 0, skipped: 3 });
+    expect(r.stopped).toBeNull();
+    // Abortable: a cancel during the wait ends the run without a failure.
+    const t = setup();
+    t.onCamera(es[0]);
+    const ac = new AbortController();
+    t.deps.list = { find: async () => { throw new SearchError('busy', 'busy'); } };
+    t.deps.sleep = async () => ac.abort();
+    const q = await clipsRepair(t.deps).run(ctx(report([missing(es[0])]), { signal: ac.signal }));
+    expect([q.items, q.counts.failed]).toEqual([[], 0]);
+  });
+
   it('uses a recording a viewer already cached without fetching it again', async () => {
     const s = setup();
     const a = recording(1);
