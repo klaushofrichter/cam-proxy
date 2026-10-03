@@ -97,7 +97,7 @@ describe('clips inventory API', () => {
 
   it('refuses a repair from a bad, unknown, local-only or other-kind run', async () => {
     const post = (body: object) => request(p.base).post('/control/actions/inventory-repair').set(admin()).send(body);
-    expect((await post({ kind: 'stills', runId: 'stills-1-abcdef' })).body).toEqual({ error: 'invalid', detail: 'kind is one of: clips' });
+    expect((await post({ kind: 'stills', runId: 'stills-1-abcdef' })).body).toEqual({ error: 'invalid', detail: 'kind is one of: clips, events' });
     expect((await post({ kind: 'clips', runId: '../x' })).body).toEqual({ error: 'invalid', detail: 'runId is the id of a check run' });
     const unknown = await post({ kind: 'clips', runId: 'clips-1-abcdef' });
     expect([unknown.status, unknown.body.error]).toEqual([404, 'not_found']);

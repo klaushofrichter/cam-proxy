@@ -32,7 +32,8 @@ export interface CheckContext { signal: AbortSignal; progress: (p: Progress) => 
 export type Check = (ctx: CheckContext) => Promise<CheckResult>;
 // A repair's result: `stopped` names why it ended before its list was done (null: it was).
 export interface RepairResult { counts: Record<string, number>; top: unknown[]; items: unknown[]; message: string; stopped: string | null }
-export interface RepairContext { signal: AbortSignal; progress: (p: Progress) => void; now: number; source: InventoryReport }
+// `runId`: the repair's own run id (the events repair marks its rows with it).
+export interface RepairContext { signal: AbortSignal; progress: (p: Progress) => void; now: number; runId: string; source: InventoryReport }
 export type Repair = (ctx: RepairContext) => Promise<RepairResult>;
 // `ready` answers why a (finished, recent) check report can't be repaired from, or null.
 export interface RepairEntry { run: Repair; ready: (source: InventoryReport) => string | null }
@@ -92,7 +93,7 @@ interface Current { view: RunningView; ac: AbortController; cancelledBy?: 'reque
 // What one run does, whichever op: its work and how its report and record look.
 interface Job {
   title: string; // "Stills inventory", "Clips repair"
-  work: (ctx: { signal: AbortSignal; progress: (p: Progress) => void; now: number }) => Promise<CheckResult | (RepairResult & { window: InventoryWindow | null })>;
+  work: (ctx: { signal: AbortSignal; progress: (p: Progress) => void; now: number; runId: string }) => Promise<CheckResult | (RepairResult & { window: InventoryWindow | null })>;
   extra: Partial<InventoryReport>;
 }
 
@@ -245,7 +246,7 @@ export class InventoryRunner {
       let error: string | undefined;
       let failed = false;
       try {
-        res = await job.work({ signal: cur.ac.signal, now: startedAt, progress: (p) => void (cur.view.progress = p) });
+        res = await job.work({ signal: cur.ac.signal, now: startedAt, runId, progress: (p) => void (cur.view.progress = p) });
       } catch (err) {
         failed = true;
         error = err instanceof Error ? err.message : String(err);

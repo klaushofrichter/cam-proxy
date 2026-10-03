@@ -287,6 +287,13 @@ describe('activity-daily (#93): clipsReceived next to the events', () => {
     expect(a.details).toMatchObject({ clipsReceived: 0, recordingEvents: 12, noClips: true });
     expect(a.message).toContain('NO clips received for 12 recording events');
   });
+  it('counts events recovered from the SD card apart (#75)', () => {
+    const a = activityDaily('2026-09-30', { events: { person: 3 }, recovered: 2, clips: 3, vision, analyses: {}, sseClients: 0 });
+    expect(a.details).toMatchObject({ events: { total: 3, byKind: { person: 3 }, recovered: 2 }, recordingEvents: 3 });
+    expect(a.message).toBe('Activity 2026-09-30: 3 events (person 3), 2 recovered from the SD card, 3 clips received, Vision 3 of 100 this month');
+    expect(activityDaily('2026-09-30', { events: {}, clips: 0, vision, analyses: {}, sseClients: 0 }).details).toMatchObject({ events: { recovered: 0 } });
+  });
+
   it('a quiet day: no events, no clips, no flag', () => {
     const a = activityDaily('2026-09-30', { events: {}, clips: 0, vision, analyses: {}, sseClients: 0 });
     expect(a.message).toBe('Activity 2026-09-30: 0 events (none), 0 clips received, Vision 3 of 100 this month');

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { analysedSeconds, analysedStills, eventsInMinute, marksByMinute, minuteMarks, secondKinds, stepMinute } from '../web/src/lib/timeline';
+import { analysedSeconds, analysedStills, eventLabel, eventsInMinute, primaryEvent, secondRecovered, isRecovered, marksByMinute, minuteMarks, RECOVERED_NOTE, secondKinds, stepMinute } from '../web/src/lib/timeline';
 
 // The Timeline's minute view (Klaus, 2026-09-30): it opens under its hour,
 // steps ◀ ▶ within that hour only, and marks the seconds of its events.
@@ -111,5 +111,33 @@ describe('marks for every minute at once', () => {
     const now = M + 175 * 60_000 + 30_000;
     const all = marksByMinute(minutes, evs, now);
     for (const t of minutes) expect(all.get(t) ?? { count: 0, analysed: false }, String((t - M) / 60_000)).toEqual(minuteMarks({ minute: t }, evs, now));
+  });
+});
+
+describe('recovered events (#75)', () => {
+  it('are told apart by their source and labelled so', () => {
+    expect(isRecovered({ source: 'recovered' })).toBe(true);
+    expect(isRecovered({ source: 'onvif' })).toBe(false);
+    expect(isRecovered({})).toBe(false); // an older proxy sends no source to the Timeline type
+    expect(eventLabel({ kind: 'person', source: 'recovered' })).toBe('person (recovered)');
+    expect(eventLabel({ kind: 'person', source: 'poll' })).toBe('person');
+    expect(RECOVERED_NOTE).toMatch(/SD recordings/);
+  });
+
+  it('the thumbnail prefers a live event; a minute is recovered only when all its events are', () => {
+    const live = { id: 1, kind: 'motion', source: 'onvif', start: 5_000, end: 9_000 };
+    const rec = { id: 2, kind: 'person', source: 'recovered', start: 1_000, end: 20_000 };
+    expect(primaryEvent([rec, live])).toBe(live);
+    expect(primaryEvent([rec])).toBe(rec);
+    expect(primaryEvent([])).toBeUndefined();
+  });
+
+  it('marks the seconds covered only by recovered events', () => {
+    const m = { minute: 0, intervalS: 10, present: [true, true, true] };
+    const rec = { id: 2, kind: 'person', source: 'recovered', start: 0, end: 25_000 };
+    const live = { id: 1, kind: 'motion', source: 'onvif', start: 10_000, end: 15_000 };
+    expect(secondRecovered(m, [rec], 60_000)).toEqual([true, true, true]);
+    expect(secondRecovered(m, [rec, live], 60_000)).toEqual([true, false, true]);
+    expect(secondRecovered({ ...m, present: [true, true, true] }, [], 60_000)).toEqual([false, false, false]);
   });
 });

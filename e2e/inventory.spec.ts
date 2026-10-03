@@ -44,3 +44,27 @@ test('Compare clips with the camera: the result and the repair offer show', asyn
   await expect(page.getByTestId('confirm-dialog')).toHaveCount(0);
   await expect(page.getByTestId('inventory-repair-result')).toHaveCount(0);
 });
+
+// The events check (#75): cam-sim's demo recordings of yesterday have no
+// events here, so the box offers to add them. The offer is not confirmed:
+// added events would change the Events page and the Timeline for the specs
+// after this one (the API test covers the repair).
+test('Check events: the result and the offer to add missing events show', async ({ page }) => {
+  await page.goto('/#/maintenance');
+  await expect(page.getByTestId('inventory-events')).toBeEnabled();
+  const [resp] = await Promise.all([
+    page.waitForResponse((r) => r.url().endsWith('/control/actions/inventory') && r.request().method() === 'POST'),
+    page.getByTestId('inventory-events').click(),
+  ]);
+  expect(resp.status()).toBe(202);
+  await expect(page.getByTestId('inventory-events-result')).toContainText('Events inventory', { timeout: 30_000 });
+  await expect(page.getByTestId('inventory-events-result')).toContainText('Camera (sub):');
+  await expect(page.getByTestId('inventory-recover')).toHaveText(/^Add \d+ missing events$/);
+  // The offer asks first, with the count; Cancel sends nothing.
+  await page.getByTestId('inventory-recover').click();
+  await expect(page.getByTestId('confirm-message')).toContainText(/Add \d+ missing events \([a-z]+ \d+(, [a-z]+ \d+)*\) from the camera's SD recordings/);
+  await expect(page.getByTestId('confirm-message')).toContainText('recovered');
+  await page.getByTestId('confirm-cancel').click();
+  await expect(page.getByTestId('confirm-dialog')).toHaveCount(0);
+  await expect(page.getByTestId('inventory-recover-result')).toHaveCount(0);
+});

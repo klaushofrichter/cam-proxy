@@ -216,13 +216,15 @@ describe('InventoryRunner: options and repairs', () => {
 
   it('runs a repair from a recent check report: saved apart, audited as inventory-repair', async () => {
     let seen: string | undefined;
-    const { runner, audit, dir } = setup({ clips: clipsKind(async (ctx) => ((seen = ctx.source.runId), repaired(2))) });
+    let own: string | undefined;
+    const { runner, audit, dir } = setup({ clips: clipsKind(async (ctx) => ((seen = ctx.source.runId), (own = ctx.runId), repaired(2))) });
     const check = await runner.start('clips', who, { camera: true }).done;
     const { runId, done } = await runner.repair('clips', who, check.runId);
     expect(runId).toMatch(/^clipsrepair-\d+-[0-9a-f]{6}$/);
     expect(runner.running()).toMatchObject({ runId, kind: 'clips', op: 'repair' });
     const r = await done;
     expect(seen).toBe(check.runId);
+    expect(own).toBe(runId); // the repair knows its own run id (#75 marks its rows with it)
     expect(r).toMatchObject({ runId, kind: 'clips', op: 'repair', outcome: 'ok', source: check.runId, stopped: null, window: check.window, counts: { done: 2, bytes: 20 }, message: 'Clips repair: 2 fetched' });
     expect(readdirSync(join(dir, 'inventory', 'clipsrepair'))).toEqual([`${runId}.json`]);
     expect(await runner.get(runId)).toEqual(r);

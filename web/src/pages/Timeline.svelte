@@ -1,11 +1,11 @@
 <script lang="ts">
   import { api } from '../lib/api';
-  import { analysedSeconds, analysedStills, eventsInMinute, marksByMinute, secondKinds, stepMinute } from '../lib/timeline';
+  import { analysedSeconds, analysedStills, eventLabel, eventsInMinute, isRecovered, marksByMinute, primaryEvent, RECOVERED_NOTE, secondKinds, secondRecovered, stepMinute } from '../lib/timeline';
   import AnalysisModal from '../components/AnalysisModal.svelte';
   import { refreshTick } from '../lib/state';
 
   interface Minute { minute: number; cols: number; rows: number; tileW: number; tileH: number; intervalS: number; present: boolean[]; url: string }
-  interface Ev { id: number; kind: string; start: number; end: number | null; analysis?: { status: string; stillTs?: number } | null }
+  interface Ev { id: number; kind: string; source?: string; start: number; end: number | null; analysis?: { status: string; stillTs?: number } | null }
 
   const pad = (n: number) => String(n).padStart(2, '0');
   const today = () => {
@@ -24,7 +24,7 @@
   // The grid's ×n counts and analysis rings, in one pass over the events.
   const gridMarks = $derived(marksByMinute(minutes.map((m) => m.minute), events, Date.now()));
   const hours = $derived(minutes.reduce<Record<number, Minute[]>>((h, m) => ((h[new Date(m.minute).getHours()] ??= []).push(m), h), {}));
-  const eventIn = (m: Minute) => events.find((e) => e.start < m.minute + 60_000 && (e.end ?? Date.now()) >= m.minute);
+  const eventIn = (m: Minute) => primaryEvent(events.filter((e) => e.start < m.minute + 60_000 && (e.end ?? Date.now()) >= m.minute));
   const firstTile = (m: Minute) => Math.max(0, m.present.indexOf(true));
   const tileStyle = (m: Minute, i: number, scale: number) =>
     `background-image:url('${m.url}');background-size:${m.cols * m.tileW * scale}px ${m.rows * m.tileH * scale}px;` +
@@ -129,13 +129,14 @@
         {#each list as m (m.minute)}
           {@const e = eventIn(m)}
           {@const marks = gridMarks.get(m.minute) ?? { count: 0, analysed: false }}
-          <button class="thumb {e ? `ev-${e.kind}` : ''}" class:active={open?.minute === m.minute} class:analysed={marks.analysed} use:lazyStyle={tileStyle(m, firstTile(m), 0.5)} title={`${new Date(m.minute).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${e ? ` · ${e.kind}` : ''}`} onclick={() => openMinute(m)} data-testid="minute">{#if marks.count > 1}<span class="count" data-testid="minute-count">×{marks.count}</span>{/if}</button>
+          <button class="thumb {e ? `ev-${e.kind}` : ''}" class:active={open?.minute === m.minute} class:analysed={marks.analysed} class:recovered={!!e && isRecovered(e)} use:lazyStyle={tileStyle(m, firstTile(m), 0.5)} title={`${new Date(m.minute).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${e ? ` · ${eventLabel(e)}` : ''}`} onclick={() => openMinute(m)} data-testid="minute">{#if marks.count > 1}<span class="count" data-testid="minute-count">×{marks.count}</span>{/if}</button>
         {/each}
       </div>
       {#if open && hourOf(open) === Number(hour)}
         {@const m = open}
         {@const evs = eventsInMinute(m, events, Date.now())}
         {@const kinds = secondKinds(m, events, Date.now())}
+        {@const recs = secondRecovered(m, events, Date.now())}
         {@const seen = analysedSeconds(m, analysedStills(evs))}
         <div class="detail" data-testid="minute-detail">
           <div class="head">
@@ -147,12 +148,12 @@
           </div>
           {#if evs.length}
             <p class="small" data-testid="minute-events">
-              {#each evs as e (e.id)}<span class="evtag ev-{e.kind}">{e.kind} {fmt(e.start)}–{e.end === null ? 'now' : fmt(e.end)}{#if e.analysis}{' '}<button class="link" data-testid="minute-analysis-link" onclick={() => (shown = e)}>✦ Vision</button>{/if}</span>{/each}
+              {#each evs as e (e.id)}<span class="evtag ev-{e.kind}" class:recovered={isRecovered(e)} title={isRecovered(e) ? RECOVERED_NOTE : undefined} data-testid="minute-event">{eventLabel(e)} {fmt(e.start)}–{e.end === null ? 'now' : fmt(e.end)}{#if e.analysis}{' '}<button class="link" data-testid="minute-analysis-link" onclick={() => (shown = e)}>✦ Vision</button>{/if}</span>{/each}
             </p>
           {/if}
           <div class="tiles">
             {#each m.present as ok, i (i)}
-              <button class="tile {kinds[i] ? `ev-${kinds[i]}` : ''}" class:missing={!ok} class:analysed={seen[i] !== null} disabled={!ok} style={tileStyle(m, i, 0.6)} title={new Date(m.minute + i * m.intervalS * 1000).toLocaleTimeString()} onclick={() => { const id = seen[i]; if (id !== null) shown = evs.find((x) => x.id === id) ?? null; else still = m.minute + i * m.intervalS * 1000; }} data-testid="tile">{#if seen[i] !== null}<span class="spark">✦</span>{/if}</button>
+              <button class="tile {kinds[i] ? `ev-${kinds[i]}` : ''}" class:missing={!ok} class:recovered={recs[i]} class:analysed={seen[i] !== null} disabled={!ok} style={tileStyle(m, i, 0.6)} title={`${new Date(m.minute + i * m.intervalS * 1000).toLocaleTimeString()}${recs[i] ? ' · recovered' : ''}`} onclick={() => { const id = seen[i]; if (id !== null) shown = evs.find((x) => x.id === id) ?? null; else still = m.minute + i * m.intervalS * 1000; }} data-testid="tile">{#if seen[i] !== null}<span class="spark">✦</span>{/if}</button>
             {/each}
           </div>
           {#if still !== null}
@@ -178,6 +179,9 @@
   .detail { display: grid; gap: 8px; margin-top: 6px; padding: 10px 12px; border-radius: var(--radius); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); }
   .spacer { flex: 1; }
   .evtag { display: inline-block; margin-right: 10px; padding-left: 6px; border-left: 4px solid; }
+  /* Recovered from the SD recordings (#75): a dashed edge. */
+  .evtag.recovered { border-left-style: dashed; font-style: italic; }
+  .thumb.recovered, .tile.recovered { border-style: dashed; }
   .strip, .tiles { display: flex; flex-wrap: wrap; gap: 3px; }
   button { padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); cursor: pointer; color: var(--text); }
   .thumb, .tile { padding: 0; border-radius: 3px; border: 2px solid transparent; background-repeat: no-repeat; background-color: #111; }

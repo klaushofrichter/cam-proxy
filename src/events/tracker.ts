@@ -1,5 +1,5 @@
 import type { Catalog } from '../catalog/db';
-import { closeEvent, insertEvent, openEvents } from '../catalog/events';
+import { closeEvent, insertEvent, openEvents, type EventSource } from '../catalog/events';
 import type { StreamLog } from '../stream/log';
 
 type Source = 'onvif' | 'poll';
@@ -58,7 +58,7 @@ export class EventTracker {
     }
   }
 
-  private close(id: number, kind: string, ts: number, reason: 'state' | 'timeout', source: Source): void {
+  private close(id: number, kind: string, ts: number, reason: 'state' | 'timeout', source: EventSource): void {
     closeEvent(this.c, id, ts, reason);
     this.log.append(this.cam, 'camera-event', { eventId: id, kind, phase: 'end', ts, source, ...(reason === 'timeout' ? { reason } : {}) });
   }

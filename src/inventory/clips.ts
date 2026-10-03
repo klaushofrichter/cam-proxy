@@ -6,7 +6,7 @@ import type { Catalog } from '../catalog/db';
 import { localDate, type Kind, type Stream } from '../recordings/names';
 import type { RecordingEntry } from '../recordings/list';
 import { listCamera, type CameraListDeps } from './camera-list';
-import { pairByStart, START_SLACK_MS } from './match';
+import { coverage, pairByStart, START_SLACK_MS } from './match';
 import { MAX_ITEMS, MAX_TOP, type Check, type CheckResult } from './runner';
 import { records } from './stills';
 
@@ -64,26 +64,6 @@ const dayFolder = (root: string, ts: number) => {
 export const mb = (bytes: number) => `${(bytes / 2 ** 20).toFixed(1)} MB`;
 
 interface EventSpan { id: number; kind: string; start_ts: number; end_ts: number | null }
-// Whether any span overlaps [start, end]: the spans sorted by start, with the
-// running maximum of their ends; the last span starting at or before `end`
-// tells (binary search). Linear to build, logarithmic per question.
-function coverage(spans: { start: number; end: number }[]): (start: number, end: number) => boolean {
-  const sorted = [...spans].sort((a, b) => a.start - b.start);
-  const starts = sorted.map((x) => x.start);
-  const maxEnd: number[] = [];
-  for (const [i, x] of sorted.entries()) maxEnd.push(Math.max(x.end, i ? maxEnd[i - 1] : -Infinity));
-  return (start, end) => {
-    let lo = 0;
-    let hi = starts.length; // the first span starting after `end`
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (starts[mid] <= end) lo = mid + 1;
-      else hi = mid;
-    }
-    return lo > 0 && maxEnd[lo - 1] >= start;
-  };
-}
-
 async function names(dir: string): Promise<string[]> {
   try {
     return await readdir(dir);

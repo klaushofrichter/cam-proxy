@@ -196,12 +196,17 @@ api '/cameras/cam1/events?kind=person&limit=10'
 ```
 
 - `GET /api/cameras`: the camera and whether it answers; `stream` is `null`
-  only when stills are off.
+  only when stills are off; `lastEventTs` is the newest live (non-recovered)
+  event's start.
 - `GET /api/cameras/{cam}/events?from&to&kind&limit`: events, newest first,
   at most 1000.
-  - `source` is `onvif`, or `poll` for the fallback.
+  - `source` is `onvif`, `poll` for the fallback, or `recovered`: added
+    afterwards from the camera's SD recordings by the events repair (#75),
+    never sent over SSE, never analysed; its start and end are the
+    recording's, pre- and post-record included.
   - `endReason` is `state` (the camera said so), `timeout` (still open after
-    `events.maxOpenMin`) or `restart` (the proxy stopped while it was open).
+    `events.maxOpenMin`), `restart` (the proxy stopped while it was open) or
+    `recovered`.
 - `GET /api/cameras/{cam}/analyses?from&to`: the analyses of events that
   start in the range (at most one day), oldest first, at most 1000, in the
   `analysis` stream message's shape without `objects`.
@@ -272,7 +277,8 @@ upload folder. While storage is paused, `STOR` answers 452.
   pre-record; measured on cam1 2026-09-30), so a picture goes to the clip
   that started last at most 10 s before it, whichever arrives first; on
   startup, clips without one are paired from the stored pictures. A `clip`
-  stream message follows, with the events the clip covers. One clip often
+  stream message follows, with the live events the clip covers (never a
+  recovered one: SSE carries none). One clip often
   covers several events: the camera extends a recording while events keep
   coming, and ends it `postRec` (its "Post-Motion Record", 15 s on cam1)
   after the last one.
@@ -565,11 +571,12 @@ arrive.
 | `POST /control/actions/camera-poe-on` | recovery: turns the camera's port on if its PoE is off (no power check, no cooldown; the switch lock applies). 200 the reading plus `wasOn`; 409 and 502 as `camera-powercycle`. Audited as `camera-poe-on` |
 | `POST /control/actions/poe-switch-read` | reads the camera's port on the switch now (log in, read, log out; never polled): `{at, port, index, poe, watts, link, sn, firmware}`; 409 and 502 as `camera-powercycle`. Audited as `control-action` |
 | `POST /control/actions/restart-proxy` | restarts the proxy process: 202, then the normal graceful stop (the same as SIGTERM; `proxy-stop` reason `restart-requested`) and exit 0, also after 15 s if the stop hangs. Compose (`restart: unless-stopped`) or the cluster starts it again; run directly (`npm start`), the process just ends. Admin sessions end with the process. Audited as `proxy-restart` |
-| `POST /control/actions/inventory` | `{"kind":"stills"}`, `{"kind":"clips"}` or `{"kind":"clips","camera":true}` (compare with the camera's SD card on `ftp.stream`): starts an inventory in the background ([the spec](docs/superpowers/specs/2026-10-02-inventory-design.md)); 202 `{runId}`; 400 `invalid` for an unknown kind or a `camera` it can't use; 409 `inventory_busy` `{runId}` while an inventory or repair runs (one at a time); 503 `stopping` once the proxy is stopping. Poll `GET /control/inventory/runs/{id}`. Audited as `inventory` when it ends |
+| `POST /control/actions/inventory` | `{"kind":"stills"}`, `{"kind":"clips"}`, `{"kind":"clips","camera":true}` (compare with the camera's SD card on `ftp.stream`) or `{"kind":"events"}` (the events against the SD card's recordings on `ftp.stream`, always with the camera): starts an inventory in the background ([the spec](docs/superpowers/specs/2026-10-02-inventory-design.md)); 202 `{runId}`; 400 `invalid` for an unknown kind or a `camera` it can't use; 409 `inventory_busy` `{runId}` while an inventory or repair runs (one at a time); 503 `stopping` once the proxy is stopping. Poll `GET /control/inventory/runs/{id}`. Audited as `inventory` when it ends |
 | `POST /control/actions/inventory-repair` | `{"kind":"clips","runId":"clips-…"}`: fetches the recordings that clips run (with the camera, finished, less than an hour old) found missing locally, over Baichuan at low priority (a viewer's download goes first), on `ftp.stream`, the oldest first; at most 50 clips or 200 MB per run (a recording larger than 200 MB is skipped as `too-big`; one that would pass the 200 MB after others is skipped and smaller ones still come), 1 s apart, never past `ftp.maxGB` or while storage is paused; it stops after 3 failures in a row, and at once when the camera refuses a download or is offline (a busy camera Search is tried 3 times, then that clip is skipped as `busy`). A recording the cache can't keep goes through a temp file in `<dataDir>/inventory/tmp`, emptied at startup. The clips are stored like FTP ones with `origin: "camera"`, without an SSE message. 202 `{runId}` (`clipsrepair-…`); 400 `invalid`; 404 `not_found` (no such run); 409 `report_stale`, `not_repairable` or `inventory_busy`; 503 `stopping`. Audited as `inventory-repair` when it ends |
+| `POST /control/actions/inventory-repair` (events) | `{"kind":"events","runId":"events-…"}`: adds the events that events run (finished, less than an hour old) found missing. It compares with the camera again and adds only spans that ended by the check's `window.camera.to`: one event per kind per missing span, `source` and `endReason` `recovered`, start and end of the span's recordings, `raw` `{runId, check, recordings, stream, bounds}`; the oldest first, at most 1000 per run (`stopped: "event-cap"`), in one transaction; a span whose kind has an event by then is skipped. Existing events are never changed. 202 `{runId}` (`eventsrepair-…`); 409 `not_repairable` (`no events are missing`), otherwise as for clips. Audited as `inventory-repair` |
 | `POST /control/actions/inventory-cancel` | cancels the running inventory: `{cancelled, runId}`; the run keeps its partial counts. Audited as `control-action` |
-| `GET /control/inventory` | `{running: {runId, kind, op: "check" or "repair", startedAt, outcome: "running", progress: {phase, done, total, note}} or null, runs: {stills: [the last 10 runs, newest first: {runId, kind, startedAt, tookMs, outcome, counts, message}], clips: […]}, repairs: {clips: […]}}` |
-| `GET /control/inventory/runs/{id}` | one report: `{runId, kind, op: check\|repair, camera, startedAt, tookMs, outcome: ok\|cancelled\|failed, error, cancelledBy, requestedBy, options, window: {from, to, reason, retentionFrom, protectedFrom, notes}, counts, top, items, itemsTruncated, message}` (`notes`: caveats on the counts, such as the clock note when seconds are restorable; stills `counts` include `previewsPruned`, packs without a sprite whose previews were pruned earlier, and `prunedDuringRun`, packs deleted by retention while the run read them, counted as missing; `options: {camera: true}` for a clips compare, whose `counts` add `pairedOtherStream`, recordings here as clips of the other stream, and `prunedHere`, recordings older than the oldest local clip while the storage budget prunes clips, both never offered). A repair's report has `source` (the clips run it worked from), `stopped` (`clip-cap`, `byte-cap`, `max-gb`, `paused`, `failures`, `refused`, `camera_offline` or null) and one item per recording tried: `{id, start, result: ok\|skipped\|failed, reason, error, clipId, bytes, streamed}` (`reason` of a skip: `outside-retention`, `already-local`, `gone-from-camera`, `other-stream`, `viewer`, `invalid`, `too-big`, `byte-cap`, `busy`; `streamed: true` when it went through `<dataDir>/inventory/tmp`); 400 for a malformed id, 404 for an unknown one. Kept in `<dataDir>/inventory/<kind>/` and repairs in `<dataDir>/inventory/<kind>repair/` (the last 10 each) |
+| `GET /control/inventory` | `{running: {runId, kind, op: "check" or "repair", startedAt, outcome: "running", progress: {phase, done, total, note}} or null, runs: {stills: [the last 10 runs, newest first: {runId, kind, startedAt, tookMs, outcome, counts, message}], clips: […], events: […]}, repairs: {clips: […], events: […]}}` |
+| `GET /control/inventory/runs/{id}` | one report: `{runId, kind, op: check\|repair, camera, startedAt, tookMs, outcome: ok\|cancelled\|failed, error, cancelledBy, requestedBy, options, window: {from, to, reason: retention\|budget\|store-younger\|empty\|sd-card, retentionFrom, protectedFrom, notes}, counts, top, items, itemsTruncated, message}` (`notes`: caveats on the counts, such as the clock note when seconds are restorable; stills `counts` include `previewsPruned`, packs without a sprite whose previews were pruned earlier, and `prunedDuringRun`, packs deleted by retention while the run read them, counted as missing; `options: {camera: true}` for a clips compare, whose `counts` add `pairedOtherStream`, recordings here as clips of the other stream, and `prunedHere`, recordings older than the oldest local clip while the storage budget prunes clips, both never offered). The window `reason` `sd-card` is an events check's: the SD card's reach, shorter than `retention.eventsDays`; a clips compare and an events check add `camera: {stream, to, oldestSdDay, unknownDays}` to the window, an events check also `eventsDays`. An events check's items: `missing-event` `{kind, start, end, date, recordings}` oldest first, then `event-without-recording` `{eventId, kind, start, end, source}`. A repair's report has `source` (the clips or events check run it worked from), `stopped` (`clip-cap`, `byte-cap`, `max-gb`, `paused`, `failures`, `refused`, `camera_offline`, `event-cap` (an events repair: more than 1000 missing) or null); an events repair has one item per event added, `{eventId, kind, start, end, result: ok}`; a clips repair one per recording tried: `{id, start, result: ok\|skipped\|failed, reason, error, clipId, bytes, streamed}` (`reason` of a skip: `outside-retention`, `already-local`, `gone-from-camera`, `other-stream`, `viewer`, `invalid`, `too-big`, `byte-cap`, `busy`; `streamed: true` when it went through `<dataDir>/inventory/tmp`); 400 for a malformed id, 404 for an unknown one. Kept in `<dataDir>/inventory/<kind>/` and repairs in `<dataDir>/inventory/<kind>repair/` (the last 10 each) |
 | `GET /control/audit` | the audit log as JSON lines: `limit`, `before`/`after` (cursors), `from`, `to`, `action`, `outcome`; admin token, admin session or `CAMPROXY_AUDIT_TOKEN`; HEAD answers like GET without the body. See [docs/audit-log.md](docs/audit-log.md) |
 | `GET /health` | `{ok, version, startedAt}` (no auth): `startedAt` (ms) tells a new process apart |
 | `GET /control/log?limit` | recent log lines (info and above), redacted; default limit 100, buffer holds the last 500 |
@@ -616,6 +623,21 @@ exchanged for the cookie and not stored in the browser.
   old with recordings missing here, "Fetch N lost clips" fetches them from
   the SD card (at most 50 or 200 MB per run) after a confirmation; the Clips
   page marks them "from camera".
+  "Check events" compares the stored events with the SD card's recordings
+  (the camera's own record of what it saw) in the SD card's reach, at most
+  `retention.eventsDays`: per trigger kind, a recording (overlapping ones
+  merged) needs an event of its kind from 10 s before its start to 5 s after
+  its end. Under a check less than an hour old with events missing, "Add N
+  missing events" adds them after a confirmation (at most 1000 per run), as
+  events with `source: "recovered"`, marked on the Events page and the
+  Timeline. They send no SSE message, never reach Vision (never analysed),
+  and don't count in the FTP stall check or the daily event counts. A
+  repair's events can be removed by its run id: `DELETE FROM events WHERE
+  source = 'recovered' AND json_extract(raw, '$.runId') = '<eventsrepair-…>'`
+  in the catalog. Events deleted while the SD card still holds their
+  recordings come back as recovered with the next repair: after
+  `retention.eventsDays` was shortened and raised again, or after a reset
+  catalog. They stand for real recordings, not phantoms.
 - **Top bar:** the title links to the GitHub repo; badges for the camera
   online state and event intake; the camera's model (linked to
   `camera.webUiUrl`) · firmware · version; "updated … ago"; Refresh, the
@@ -642,7 +664,8 @@ the API, polling and Grafana are in [docs/audit-log.md](docs/audit-log.md).
 `GET /metrics` gives Prometheus text, without auth and counts only:
 - `camproxy_disk_bytes{kind}`, `camproxy_disk_free_bytes`,
   `camproxy_disk_size_bytes`;
-- `camproxy_events_total`, `camproxy_events_stored`;
+- `camproxy_events_total`, `camproxy_events_stored` (live events per kind;
+  recovered ones are left out, as in the status's `events.stored`);
 - `camproxy_onvif_subscribed`, `camproxy_onvif_resubscribes_total`;
 - `camproxy_camera_up`, `camproxy_camera_request_seconds`,
   `camproxy_camera_errors_total`;

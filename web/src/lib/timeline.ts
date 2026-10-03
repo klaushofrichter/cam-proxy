@@ -4,6 +4,7 @@
 export interface TimelineEvent {
   id: number;
   kind: string;
+  source?: string; // 'recovered': added from the SD recordings (#75)
   start: number;
   end: number | null; // null: still open
   analysis?: { status: string; stillTs?: number; summary?: unknown[] } | null;
@@ -91,4 +92,27 @@ export function analysedSeconds(m: { minute: number; intervalS: number; present:
 // isn't marked.
 export function analysedStills(events: { id: number; analysis?: TimelineEvent['analysis'] }[]): { eventId: number; stillTs: number }[] {
   return events.flatMap((e) => (relevant(e.analysis) && e.analysis?.stillTs ? [{ eventId: e.id, stillTs: e.analysis.stillTs }] : []));
+}
+
+// Events recovered from the camera's SD recordings by an inventory repair
+// (#75): marked on the Timeline and the Events page.
+export const RECOVERED_NOTE = "Recovered from the camera's SD recordings by an inventory repair: start and end are the recording's";
+export const isRecovered = (e: { source?: string }): boolean => e.source === 'recovered';
+export const eventLabel = (e: { kind: string; source?: string }): string => (isRecovered(e) ? `${e.kind} (recovered)` : e.kind);
+
+// The event a minute's thumbnail shows: a live one if there is one, so a
+// recovered mark means every event of the minute is recovered.
+export function primaryEvent<T extends { source?: string }>(list: T[]): T | undefined {
+  return list.find((e) => !isRecovered(e)) ?? list[0];
+}
+
+// Per second: true when events cover it and all of them are recovered.
+export function secondRecovered(m: { minute: number; intervalS: number; present: boolean[] }, events: TimelineEvent[], now: number): boolean[] {
+  const list = eventsInMinute(m, events, now);
+  return m.present.map((_, i) => {
+    const from = m.minute + i * m.intervalS * 1000;
+    const to = from + m.intervalS * 1000 - 1;
+    const cover = list.filter((e) => e.start <= to && (e.end ?? now) >= from);
+    return cover.length > 0 && cover.every(isRecovered);
+  });
 }

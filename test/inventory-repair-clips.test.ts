@@ -100,7 +100,7 @@ function setup(o: { settings?: Partial<ClipsRepairSettings>; fail?: (path: strin
 }
 // An item's skip reason, or its result.
 const outcome = (x: unknown) => (x as RepairItem).reason ?? (x as RepairItem).result;
-const ctx = (source: InventoryReport, o: Partial<RepairContext> = {}): RepairContext => ({ signal: new AbortController().signal, progress: () => undefined, now: NOW, source, ...o });
+const ctx = (source: InventoryReport, o: Partial<RepairContext> = {}): RepairContext => ({ signal: new AbortController().signal, progress: () => undefined, now: NOW, runId: 'clipsrepair-1-abcdef', source, ...o });
 const until = async (ok: () => boolean, ms = 5000) => {
   const t = Date.now();
   while (!ok()) {
