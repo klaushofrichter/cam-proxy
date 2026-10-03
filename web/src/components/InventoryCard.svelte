@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api, ApiError } from '../lib/api';
-  import { clipsLines, gapRows, mb, progressText, repairLines, repairOffer, repairRows, stillsLines, stillsNotes, type ClipsReport, type InventoryState, type RepairReport, type StillsReport } from '../lib/inventory';
+  import { clipsLines, eventsLines, eventsOffer, eventsRepairLines, gapRows, mb, progressText, repairLines, repairOffer, repairRows, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type InventoryState, type RepairReport, type StillsReport } from '../lib/inventory';
 
   // The inventories (spec 2026-10-02-inventory-design): start one, follow its
   // progress (polled every second while it runs), cancel it, and show the
@@ -9,18 +9,23 @@
   // time per proxy. The repair is offered under a compare with the camera
   // (its dry run) less than an hour old.
   // The repair is confirmed by the Maintenance page's shared dialog (onrepair
-  // hands it the dry-run numbers); fetchLost() runs after the confirm.
-  let { onrepair }: { onrepair: (offer: { count: number; bytes: number }) => void } = $props();
+  // hands it the dry-run numbers); fetchLost() runs after the confirm. The
+  // events check (#75) is the dry run of "Add N missing events": onrecover
+  // asks, addMissing() runs after the confirm.
+  let { onrepair, onrecover }: { onrepair: (offer: { count: number; bytes: number }) => void; onrecover: (offer: { count: number }) => void } = $props();
   let inv = $state<InventoryState | null>(null);
   let stills = $state<StillsReport | null>(null);
   let clips = $state<ClipsReport | null>(null);
   let repair = $state<RepairReport | null>(null);
+  let events = $state<EventsReport | null>(null);
+  let recover = $state<RepairReport | null>(null);
   let message = $state('');
   let starting = $state(false);
   let cancelling = $state(false);
   let now = $state(Date.now());
   const busy = $derived(!!inv?.running);
   const offer = $derived(repairOffer(clips, now, repair));
+  const recoverOffer = $derived(eventsOffer(events, now, recover));
 
   const fetchReport = <T,>(runId: string) => api<T>('GET', `/control/inventory/runs/${encodeURIComponent(runId)}`);
   async function load() {
@@ -33,6 +38,10 @@
     if (cl && cl.runId !== clips?.runId) clips = await fetchReport<ClipsReport>(cl.runId);
     const rp = s.repairs?.clips?.[0];
     if (rp && rp.runId !== repair?.runId) repair = await fetchReport<RepairReport>(rp.runId);
+    const ev = s.runs.events?.[0];
+    if (ev && ev.runId !== events?.runId) events = await fetchReport<EventsReport>(ev.runId);
+    const rc = s.repairs?.events?.[0];
+    if (rc && rc.runId !== recover?.runId) recover = await fetchReport<RepairReport>(rc.runId);
   }
   const reload = () => load().catch(() => (message = 'Could not load the inventory.'));
   onMount(() => {
@@ -65,6 +74,7 @@
   }
   const start = (kind: string, camera = false) => post('/control/actions/inventory', camera ? { kind, camera } : { kind }, 'Inventory');
   export const fetchLost = () => clips && post('/control/actions/inventory-repair', { kind: 'clips', runId: clips.runId }, 'Repair');
+  export const addMissing = () => events && post('/control/actions/inventory-repair', { kind: 'events', runId: events.runId }, 'Repair');
   async function cancel() {
     cancelling = true;
     try {
@@ -79,11 +89,12 @@
 
 <div class="card" data-testid="inventory">
   <h3>Inventory</h3>
-  <p class="small">Checks the local stills and clips against what the store should hold for the retention window. "Compare clips with the camera" also reads the camera's SD card list, and a repair fetches lost clips from it. One run at a time.</p>
+  <p class="small">Checks the local stills and clips against what the store should hold for the retention window. "Compare clips with the camera" also reads the camera's SD card list, and a repair fetches lost clips from it. "Check events" compares the events with the SD card's recordings, and a repair adds the missing ones. One run at a time.</p>
   <div class="buttons">
     <button onclick={() => void start('stills')} disabled={starting || busy} data-testid="inventory-stills">Check stills</button>
     <button onclick={() => void start('clips')} disabled={starting || busy} data-testid="inventory-clips">Check clips</button>
     <button onclick={() => void start('clips', true)} disabled={starting || busy} data-testid="inventory-clips-camera">Compare clips with the camera</button>
+    <button onclick={() => void start('events')} disabled={starting || busy} data-testid="inventory-events">Check events</button>
     {#if busy}<button onclick={() => void cancel()} disabled={cancelling} data-testid="inventory-cancel">{cancelling ? 'Cancelling…' : 'Cancel'}</button>{/if}
   </div>
   {#if inv?.running}<p class="busy" role="status" data-testid="inventory-progress">{progressText(inv.running)}</p>{/if}
@@ -149,6 +160,42 @@
           </tbody>
         </table>
       {/if}
+    </div>
+  {/if}
+  {#if events}
+    <div class="result" data-testid="inventory-events-result">
+      <p class="line">{events.message}</p>
+      <p class="small">{new Date(events.startedAt).toLocaleString()}, took {(events.tookMs / 1000).toFixed(1)} s</p>
+      <ul>
+        {#each eventsLines(events) as l, i (i)}<li>{l}</li>{/each}
+      </ul>
+      {#each events.window?.notes ?? [] as n, i (i)}<p class="small">{n}</p>{/each}
+      {#if events.top.length}
+        <table data-testid="inventory-events-days">
+          <thead><tr><th>camera day</th><th>spans</th><th>without event</th></tr></thead>
+          <tbody>
+            {#each events.top as d (d.date)}<tr><td class="mono">{d.date}</td><td>{d.state === 'unknown' ? 'unknown' : d.spans}</td><td>{d.missing}</td></tr>{/each}
+          </tbody>
+        </table>
+      {/if}
+      {#if !recoverOffer && events.outcome === 'ok' && events.counts.missingEvents}
+        <p class="small" role="status" data-testid="inventory-recover-stale">Check again first: adding events needs a check less than an hour old, and one that no repair has used yet.</p>
+      {/if}
+      {#if recoverOffer}
+        <div class="buttons">
+          <button onclick={() => onrecover(recoverOffer)} disabled={starting || busy} data-testid="inventory-recover">Add {recoverOffer.count} missing events</button>
+        </div>
+        <p class="small">Adds one event per kind and missing recording span, marked "recovered"; no SSE message, no analysis. At most 1000 per run; existing events are not changed.</p>
+      {/if}
+    </div>
+  {/if}
+  {#if recover}
+    <div class="result" data-testid="inventory-recover-result">
+      <p class="line">{recover.message}</p>
+      <p class="small">{new Date(recover.startedAt).toLocaleString()}, took {(recover.tookMs / 1000).toFixed(1)} s</p>
+      <ul>
+        {#each eventsRepairLines(recover) as l, i (i)}<li role={/^Stopped/.test(l) ? 'status' : undefined}>{l}</li>{/each}
+      </ul>
     </div>
   {/if}
 </div>

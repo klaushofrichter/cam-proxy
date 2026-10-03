@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clipsLines, duration, gapRows, mb, progressText, repairLines, repairOffer, repairRows, stillsLines, stillsNotes, type ClipsReport, type RepairReport, type StillsReport } from '../web/src/lib/inventory';
+import { clipsLines, duration, eventsLines, eventsOffer, eventsRepairLines, gapRows, kindsText, mb, progressText, RECOVER_MAX, repairLines, repairOffer, repairRows, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type RepairReport, type StillsReport } from '../web/src/lib/inventory';
 
 const fmt = (ms: number) => new Date(ms).toISOString().slice(11, 19);
 const T = Date.UTC(2026, 8, 27, 0, 10);
@@ -155,5 +155,60 @@ describe('Inventory box helpers, clips', () => {
   it('mentions recordings paired with the other stream', () => {
     const l = clipsLines({ ...clipsReport, counts: { ...clipsReport.counts, pairedOtherStream: 4 } }, fmt);
     expect(l).toContain('4 recordings are here as clips of the other stream (not counted as missing)');
+  });
+});
+
+describe('Inventory box helpers, events (#75)', () => {
+  const eventsReport: EventsReport = {
+    runId: 'events-1-abcdef', kind: 'events', startedAt: T, tookMs: 2100, outcome: 'ok', message: 'Events inventory: 12 of 80 recording spans without an event',
+    window: { from: T, to: T + 600_000, reason: 'sd-card', eventsDays: 30, notes: [], camera: { stream: 'sub', to: T + 300_000, oldestSdDay: '2026-09-25', unknownDays: ['2026-09-26'] } },
+    counts: { eventsDays: 30, recordings: 70, timerOnly: 3, spans: 80, matched: 68, missingEvents: 12, missingPerson: 3, missingVehicle: 0, missingPet: 0, missingMotion: 9, events: 75, eventsWithoutRecording: 2 },
+    top: [{ date: '2026-09-27', state: 'listed', spans: 40, missing: 12 }],
+    items: [],
+    itemsTruncated: false,
+  };
+
+  it('describes the progress of a check and of a repair that compares again first', () => {
+    expect(progressText({ runId: 'x', kind: 'events', op: 'check', startedAt: 0, outcome: 'running', progress: { phase: 'camera', done: 3, total: 31, note: '2026-09-04' } })).toBe('Comparing events with the camera… day 3 of 31 (2026-09-04)');
+    expect(progressText({ runId: 'x', kind: 'events', op: 'repair', startedAt: 0, outcome: 'running', progress: { phase: 'camera', done: 3, total: 31, note: '2026-09-04' } })).toBe('Comparing events with the camera… day 3 of 31 (2026-09-04)');
+    expect(progressText({ runId: 'x', kind: 'events', op: 'repair', startedAt: 0, outcome: 'running', progress: { phase: 'repair', done: 0, total: 12 } })).toBe('Repairing events… 0 of 12');
+  });
+
+  it('sums up an events report', () => {
+    expect(kindsText(eventsReport.counts, 'missing')).toBe('person 3, motion 9');
+    expect(kindsText({}, 'missing')).toBe('none');
+    expect(eventsLines(eventsReport, fmt)).toEqual([
+      "Window: 00:10:00 to 00:20:00 (the SD card's reach; events are kept 30 days)",
+      'Camera (sub): 70 recordings with a trigger in 80 spans by kind, 3 timer-only (ignored)',
+      'Missing: 12 spans without an event (person 3, motion 9); 68 have one',
+      'Events without a recording: 2 of 75 (report only)',
+      'Not listed (the Search failed, nothing judged): 2026-09-26',
+    ]);
+    expect(eventsLines({ ...eventsReport, window: { ...eventsReport.window!, from: null, reason: 'empty' } }, fmt)).toEqual(['No recordings on the SD card (sub) in the last 30 days']);
+    expect(eventsLines({ ...eventsReport, outcome: 'failed', error: 'camera_offline: x' }, fmt)).toEqual(['Failed: camera_offline: x']);
+    expect(eventsLines({ ...eventsReport, outcome: 'cancelled' }, fmt)[0]).toBe('Cancelled: the counts are partial');
+  });
+
+  it('offers to add the missing events only under a recent, finished, unused check; at most 1000', () => {
+    expect(RECOVER_MAX).toBe(1000);
+    expect(eventsOffer(eventsReport, T + 60_000)).toEqual({ count: 12 });
+    expect(eventsOffer({ ...eventsReport, counts: { ...eventsReport.counts, missingEvents: 4000 } }, T)).toEqual({ count: 1000 });
+    expect(eventsOffer(eventsReport, T + 3_600_000)).toBeNull(); // an hour old
+    expect(eventsOffer({ ...eventsReport, outcome: 'cancelled' }, T)).toBeNull();
+    expect(eventsOffer({ ...eventsReport, counts: { ...eventsReport.counts, missingEvents: 0 } }, T)).toBeNull();
+    expect(eventsOffer(null, T)).toBeNull();
+    expect(eventsOffer(eventsReport, T, { source: 'events-1-abcdef' })).toBeNull(); // already used
+  });
+
+  it('words an events repair result', () => {
+    const rep: RepairReport = { runId: 'eventsrepair-2-abcdef', kind: 'events', startedAt: T, tookMs: 900, outcome: 'ok', message: '', source: 'events-1-abcdef', stopped: null, top: [], counts: { checked: 12, candidates: 12, requested: 12, done: 11, skipped: 1, failed: 0, donePerson: 3, doneMotion: 8 } };
+    expect(eventsRepairLines(rep)).toEqual(['Added: 11 of 12 (person 3, motion 8); had an event by then: 1']);
+    expect(eventsRepairLines({ ...rep, stopped: 'event-cap', counts: { ...rep.counts, candidates: 1500, checked: 1400 } })).toEqual([
+      'Added: 11 of 12 (person 3, motion 8); had an event by then: 1',
+      'Missing when added: 1500 (the check found 1400)',
+      'Stopped: the 1000-event cap; check again for the rest',
+    ]);
+    expect(eventsRepairLines({ ...rep, outcome: 'cancelled' })).toEqual(['Cancelled: nothing was added']);
+    expect(eventsRepairLines({ ...rep, outcome: 'failed', error: 'camera_offline: x' })).toEqual(['Failed: camera_offline: x']);
   });
 });

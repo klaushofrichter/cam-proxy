@@ -4,6 +4,7 @@
   import { feed, refreshTick, status } from '../lib/state';
   import AnalysisModal from '../components/AnalysisModal.svelte';
   import { tagText, type UiAnalysis } from '../lib/analytics';
+  import { isRecovered, RECOVERED_NOTE } from '../lib/timeline';
 
   interface Ev { id: number; kind: string; source: string; start: number; end: number | null; endReason: string | null; analysis: UiAnalysis | null }
   let events = $state<Ev[]>([]);
@@ -55,7 +56,7 @@
       <thead><tr><th>kind</th><th>start</th><th>end</th><th>source</th><th>analysis</th></tr></thead>
       <tbody data-testid="events">
         {#each events as e (e.id)}
-          <tr><td>{e.kind}</td><td>{time(e.start)}</td><td>{time(e.end)}{e.endReason && e.endReason !== 'state' ? ` (${e.endReason})` : ''}</td><td>{e.source}</td><td>{#if tagText(e.analysis)}<button class="tag" class:grey={e.analysis?.status !== 'ok'} data-testid="analysis-tag" onclick={() => (shown = e)}>{tagText(e.analysis)}</button>{/if}</td></tr>
+          <tr class:recovered={isRecovered(e)} title={isRecovered(e) ? RECOVERED_NOTE : undefined}><td>{e.kind}</td><td>{time(e.start)}</td><td>{time(e.end)}{e.endReason && e.endReason !== 'state' && e.endReason !== 'recovered' ? ` (${e.endReason})` : ''}</td><td>{#if isRecovered(e)}<span class="chip" data-testid="event-recovered">recovered</span>{:else}{e.source}{/if}</td><td>{#if tagText(e.analysis)}<button class="tag" class:grey={e.analysis?.status !== 'ok'} data-testid="analysis-tag" onclick={() => (shown = e)}>{tagText(e.analysis)}</button>{/if}</td></tr>
         {:else}
           <tr><td colspan="5" class="muted">No events stored.</td></tr>
         {/each}
@@ -79,4 +80,7 @@
   .small { font-size: 13px; }
   .tag { border: 1px solid #a855f7; color: #a855f7; background: none; border-radius: 999px; padding: 0 8px; font-size: 12px; cursor: pointer; }
   .tag.grey { border-color: var(--border); color: var(--muted); }
+  /* Recovered from the SD recordings (#75): not seen live. */
+  tr.recovered td { font-style: italic; color: var(--muted); }
+  .chip { border: 1px dashed var(--border); border-radius: 999px; padding: 0 8px; font-size: 12px; font-style: normal; }
 </style>

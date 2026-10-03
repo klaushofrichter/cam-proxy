@@ -4,6 +4,7 @@
 export interface TimelineEvent {
   id: number;
   kind: string;
+  source?: string; // 'recovered': added from the SD recordings (#75)
   start: number;
   end: number | null; // null: still open
   analysis?: { status: string; stillTs?: number; summary?: unknown[] } | null;
@@ -92,3 +93,9 @@ export function analysedSeconds(m: { minute: number; intervalS: number; present:
 export function analysedStills(events: { id: number; analysis?: TimelineEvent['analysis'] }[]): { eventId: number; stillTs: number }[] {
   return events.flatMap((e) => (relevant(e.analysis) && e.analysis?.stillTs ? [{ eventId: e.id, stillTs: e.analysis.stillTs }] : []));
 }
+
+// Events recovered from the camera's SD recordings by an inventory repair
+// (#75): marked on the Timeline and the Events page.
+export const RECOVERED_NOTE = "Recovered from the camera's SD recordings by an inventory repair: start and end are the recording's";
+export const isRecovered = (e: { source?: string }): boolean => e.source === 'recovered';
+export const eventLabel = (e: { kind: string; source?: string }): string => (isRecovered(e) ? `${e.kind} (recovered)` : e.kind);
