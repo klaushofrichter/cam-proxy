@@ -95,6 +95,21 @@ describe('listCamera', () => {
     expect(m.oldestSdDay).toBe('2026-09-30');
   });
 
+  // #111: a window starting on the 1st saw only its own month: a card that
+  // also holds the previous month got the 1st as its oldest day.
+  it('reads the month before the window too, for the SD card\'s oldest day only', async () => {
+    const f = fake({ months: { '2026-09': [25, 30], '2026-10': [1, 2] }, recs: { '2026-10-01': [entry('2026-10-01', '0930')] } });
+    const l = await listCamera(f.deps, { from: at('2026-10-01', '0000'), to: at('2026-10-02', '2300'), stream: 'sub', signal: signal() });
+    expect(l.oldestSdDay).toBe('2026-09-25');
+    expect(l.days.map((x) => x.date)).toEqual(['2026-10-01', '2026-10-02']); // no day of that month searched
+    expect(f.searched).toEqual(['2026-10-01', '2026-10-02']);
+    // Its overview failed: the card may reach further back, so the oldest day is unknown.
+    const g = fake({ months: { '2026-09': new SearchError('search_failed', 'x'), '2026-10': [1, 2] } });
+    const m = await listCamera(g.deps, { from: at('2026-10-01', '0000'), to: at('2026-10-02', '2300'), stream: 'sub', signal: signal() });
+    expect(m.oldestSdDay).toBeNull();
+    expect(m.days.map((x) => x.state)).toEqual(['listed', 'listed']);
+  });
+
   it('a cancel during the busy wait returns at once', async () => {
     const ac = new AbortController();
     const f = fake({ months: { '2026-09': [29] }, fail: { '2026-09-29': [new SearchError('busy', 'full')] } });

@@ -183,7 +183,7 @@ describe('clips inventory, against the camera (part 2)', () => {
     const cam = camera({ months: { '2026-10': [1] }, recs: { '2026-10-01': [rec(T('2026-10-01T08:00:00'))] } });
     cam.deps.list.monthDays = async (m) => {
       if (m === '2026-09') throw new SearchError('search_failed', 'rspCode -17');
-      return [1];
+      return m === '2026-10' ? [1] : [];
     };
     const r = await clipsCheck(deps(cam.deps))(ctx({ options: { camera: true } }));
     expect(cam.searched).toEqual(['2026-09-30', '2026-10-01']);
@@ -214,7 +214,7 @@ describe('clips inventory: the edges (review of task 4)', () => {
     const cam = camera({ months: { '2026-10': [1] }, recs: { '2026-10-01': [rec(T('2026-10-01T15:00:00'))] } });
     cam.deps.list.monthDays = async (m) => {
       if (m === '2026-09') throw new SearchError('search_failed', 'rspCode -17');
-      return [1];
+      return m === '2026-10' ? [1] : [];
     };
     const r = await clipsCheck(deps(cam.deps))(ctx({ options: { camera: true } }));
     expect(r.counts).toMatchObject({ olderThanSd: 0, goneFromCamera: 1 });
