@@ -50,6 +50,8 @@ export interface EventsComparison {
 }
 
 const UNJUDGED_NOTE = (n: number) => `${n} recording spans or events next to a day the camera did not list were not judged`;
+const CANCELLED_NOTE = (n: number) => `${n} recording spans or events were not judged: the run was cancelled before their days were listed`;
+const EDGE_NOTE = (n: number) => `${n} recording spans at the start of the events retention were not judged: an event that covered them may already be deleted`;
 const REACH_NOTE = (eventsDays: number) => `The window is the SD card's reach, shorter than the ${eventsDays}-day events retention: older recordings are overwritten`;
 const BOUNDS_NOTE = 'A recovered event spans its recordings, pre- and post-record included, so it starts a few seconds before what the camera saw';
 
@@ -92,9 +94,18 @@ export async function compareEvents(d: EventsInventoryDeps, ctx: Pick<CheckConte
   // Judged: inside [from, settled], and both tolerance edges on listed days
   // (a recording on a day the camera did not list could change the answer).
   const clear = (lo: number, hi: number) => listed.has(localDate(lo, t)) && listed.has(localDate(hi, t));
+  // An event that started before retentionFrom is deleted already, and it
+  // may have covered a span up to its tolerance plus events.maxOpenMin
+  // later: such a span at the start of the retention is not judged.
+  const edge = retentionFrom + SPAN_BEFORE_MS + openCap;
   let unjudged = 0;
+  let atEdge = 0;
   const spans = spansByKind(triggered).filter((x) => {
     if (from === null || x.start < from || x.end > settled) return false;
+    if (x.start < edge) {
+      atEdge++;
+      return false;
+    }
     if (clear(x.start - SPAN_BEFORE_MS, x.end + SPAN_AFTER_MS)) return true;
     unjudged++;
     return false;
@@ -142,7 +153,9 @@ export async function compareEvents(d: EventsInventoryDeps, ctx: Pick<CheckConte
     if (recCover(e.start_ts - SPAN_AFTER_MS, e.end_ts + SPAN_BEFORE_MS)) continue;
     withoutRecording.push({ type: 'event-without-recording', eventId: e.id, kind: e.kind, start: e.start_ts, end: e.end_ts, source: e.source });
   }
-  if (unjudged) notes.push(UNJUDGED_NOTE(unjudged));
+  // A cancelled listing leaves the later days unlisted: say so, not "unlisted".
+  if (unjudged) notes.push(ctx.signal.aborted ? CANCELLED_NOTE(unjudged) : UNJUDGED_NOTE(unjudged));
+  if (atEdge) notes.push(EDGE_NOTE(atEdge));
 
   const judged = (r: RecordingEntry) => from !== null && r.start >= from && r.end <= settled;
   const counts: Record<string, number> = {

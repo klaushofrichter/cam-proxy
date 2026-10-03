@@ -56,6 +56,7 @@ function camera(o: { months: Record<string, number[]>; recs: Record<string, Reco
 const settings = (o: Partial<EventsSettings> = {}): EventsSettings => ({ cam: 'cam1', eventsDays: 30, stream: 'sub', eventMaxOpenMin: 10, ...o });
 const deps = (cam: CameraListDeps, o: Partial<EventsSettings> = {}): EventsInventoryDeps => ({ catalog, settings: () => settings(o), camera: cam });
 const ctx = (o: Partial<CheckContext> = {}): CheckContext => ({ signal: new AbortController().signal, progress: () => undefined, now: NOW, options: {}, ...o });
+const EDGE_NOTE = (n: number) => `${n} recording spans at the start of the events retention were not judged: an event that covered them may already be deleted`;
 const MONTHS = { '2026-09': [30], '2026-10': [1, 2] };
 
 // The SD card reaches back to 2026-09-30 08:00 (its oldest recording).
@@ -147,8 +148,24 @@ describe('events inventory', () => {
     const res = await eventsCheck(deps(cam.deps, { eventsDays: 1 }))(ctx());
     expect(res.window).toMatchObject({ from: NOW - 86_400_000, reason: 'retention', retentionFrom: NOW - 86_400_000, eventsDays: 1 });
     expect(cam.searched).toEqual(['2026-10-01', '2026-10-02']);
-    expect(res.counts).toMatchObject({ spans: 1, missingEvents: 1, missingPet: 1, events: 2, eventsWithoutRecording: 2 });
+    // The pet recording starts at the window's start: an event that covered
+    // it may already be gone, so it is not judged (the next test).
+    expect(res.counts).toMatchObject({ spans: 0, missingEvents: 0, missingPet: 0, events: 2, eventsWithoutRecording: 2 });
+    expect(res.window.notes).toContain(EDGE_NOTE(1));
     expect(res.message).toMatch(/ since 2026-10-01 \(the 1-day retention\), /);
+  });
+
+  it('spans at the start of the events retention are not judged: an event that covered them may be deleted already', async () => {
+    const from = NOW - 86_400_000; // 2026-10-01T12:00, the retention bound
+    const old = rec(from - 10_000); // before the window: not judged either way
+    const edge = rec(from + 300_000, ['person']); // an event from before `from`, open up to 10 min, could have covered it
+    const late = rec(from + SPAN_BEFORE_MS + 600_000, ['person']); // no event before `from` reaches it: judged
+    const cam = camera({ months: { '2026-10': [1] }, recs: { '2026-10-01': [old, edge, late] } });
+    const res = await eventsCheck(deps(cam.deps, { eventsDays: 1 }))(ctx());
+    expect(res.window).toMatchObject({ from, reason: 'retention' });
+    expect(res.counts).toMatchObject({ spans: 1, missingEvents: 1, missingPerson: 1 });
+    expect(res.items).toEqual([expect.objectContaining({ type: 'missing-event', kind: 'person', start: late.start })]);
+    expect(res.window.notes).toContain(EDGE_NOTE(1));
   });
 
   it('an empty SD card: nothing judged', async () => {
@@ -174,6 +191,10 @@ describe('events inventory', () => {
     expect(res.cancelled).toBe(true);
     expect(cam.searched).toEqual(['2026-09-30']);
     expect(res.counts.cameraDays).toBeLessThan(31);
+    // Not "next to a day the camera did not list": the run was cancelled.
+    // The four events of 2026-10-01 (its Search never ran) were not judged.
+    expect(res.window.notes).toContain('4 recording spans or events were not judged: the run was cancelled before their days were listed');
+    expect((res.window.notes as string[]).join(' ')).not.toMatch(/did not list/);
   });
 
   it('the repair\'s bound leaves out spans that ended after the check', async () => {
