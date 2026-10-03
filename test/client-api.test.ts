@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import { startSim } from './helpers/sim';
 import { startProxy, auth, until, CLIENT_TOKEN } from './helpers/proxy';
-import { insertEvent, closeEvent } from '../src/catalog/events';
+import { addRecoveredEvents, insertEvent, closeEvent } from '../src/catalog/events';
 
 let sim: Awaited<ReturnType<typeof startSim>>;
 let p: Awaited<ReturnType<typeof startProxy>>;
@@ -36,6 +36,18 @@ describe('client API', () => {
   it('lists the camera with its state', async () => {
     const r = await request(p.base).get('/api/cameras').set(auth());
     expect(r.body).toEqual([{ id: 'cam1', name: 'Den', online: true, lastEventTs: 3000, stream: process.env.CAMPROXY_TEST_GO2RTC ? expect.objectContaining({ up: expect.any(Boolean) }) : null, publicUrl: null }]);
+  });
+
+  // #75: a recovered event (from the SD card) is no fresh activity.
+  it('lastEventTs ignores recovered events', async () => {
+    const c = p.proxy.catalog;
+    const { added } = addRecoveredEvents(c, 'cam1', [{ kind: 'pet', start_ts: 5000, end_ts: 6000, raw: null }], { beforeMs: 10_000, afterMs: 5_000, openMs: 600_000 });
+    try {
+      expect(added).toHaveLength(1);
+      expect((await request(p.base).get('/api/cameras').set(auth())).body[0].lastEventTs).toBe(3000);
+    } finally {
+      c.db.prepare('DELETE FROM events WHERE id = ?').run(added[0].id);
+    }
   });
 
   it('names its own web address when server.publicUrl is set (cams links to it)', async () => {

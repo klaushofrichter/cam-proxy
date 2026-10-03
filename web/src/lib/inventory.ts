@@ -34,7 +34,8 @@ export function duration(seconds: number): string {
 
 export function progressText(r: RunningView): string {
   const p = r.progress;
-  if (r.op === 'repair') return p.total ? `Repairing ${r.kind}… ${p.done} of ${p.total}` : `Repairing ${r.kind}…`;
+  // The events repair compares with the camera again first (phase 'camera').
+  if (r.op === 'repair' && p.phase !== 'camera') return p.total ? `Repairing ${r.kind}… ${p.done} of ${p.total}` : `Repairing ${r.kind}…`;
   const what = p.phase === 'camera' ? `Comparing ${r.kind} with the camera` : `Checking ${r.kind}`;
   return p.total ? `${what}… day ${p.done} of ${p.total}${p.note ? ` (${p.note})` : ''}` : `${what}…`;
 }
@@ -175,4 +176,64 @@ export function repairLines(r: RepairReport): string[] {
 
 export function repairRows(r: RepairReport, fmt: (ms: number) => string = local): { at: string; error: string }[] {
   return r.top.map((f) => ({ at: fmt(f.start), error: f.error }));
+}
+
+// The events inventory (#75) and its repair.
+export const RECOVER_MAX = 1000; // the server's cap per run (src/inventory/repair-events.ts)
+export interface EventsDayRow { date: string; state: 'listed' | 'unknown'; spans: number; missing: number }
+export interface EventsReport extends RunSummary {
+  window: { from: number | null; to: number; reason: string; notes?: string[]; eventsDays?: number; camera?: { stream: string; to: number; oldestSdDay: string | null; unknownDays: string[] } } | null;
+  top: EventsDayRow[];
+  items: { type: string; kind?: string; start?: number }[];
+  itemsTruncated: boolean;
+  error?: string;
+}
+const KINDS = ['person', 'vehicle', 'pet', 'motion'];
+// "person 3, motion 9" from counts named <prefix><Kind>, or "none".
+export function kindsText(counts: Record<string, number>, prefix: string): string {
+  return KINDS.map((k) => [k, counts[`${prefix}${k[0].toUpperCase()}${k.slice(1)}`] ?? 0] as const).filter(([, n]) => n).map(([k, n]) => `${k} ${n}`).join(', ') || 'none';
+}
+const EVENT_WINDOWS: Record<string, string> = { 'sd-card': "the SD card's reach", retention: 'the events retention' };
+
+export function eventsLines(r: EventsReport, fmt: (ms: number) => string = local): string[] {
+  if (r.outcome === 'failed') return [`Failed: ${r.error ?? 'unknown error'}`];
+  if (!r.window) return [];
+  const c = r.counts;
+  const cam = r.window.camera;
+  if (r.window.from === null) return [`No recordings on the SD card${cam ? ` (${cam.stream})` : ''} in the last ${c.eventsDays} days`];
+  return [
+    ...(r.outcome === 'cancelled' ? ['Cancelled: the counts are partial'] : []),
+    `Window: ${fmt(r.window.from)} to ${fmt(r.window.to)} (${EVENT_WINDOWS[r.window.reason] ?? r.window.reason}; events are kept ${c.eventsDays} days)`,
+    `Camera${cam ? ` (${cam.stream})` : ''}: ${c.recordings} recordings with a trigger in ${c.spans} spans by kind, ${c.timerOnly} timer-only (ignored)`,
+    `Missing: ${c.missingEvents} spans without an event (${kindsText(c, 'missing')}); ${c.matched} have one`,
+    `Events without a recording: ${c.eventsWithoutRecording} of ${c.events} (report only)`,
+    ...(cam?.unknownDays.length ? [`Not listed (the Search failed, nothing judged): ${cam.unknownDays.join(', ')}`] : []),
+  ];
+}
+
+// The repair the newest events report allows: a finished check less than an
+// hour old with events missing, that no repair has used yet. `count` is
+// what one run adds at most.
+export function eventsOffer(r: EventsReport | null, now: number, repair: { source?: string } | null = null): { count: number } | null {
+  if (!r || repair?.source === r.runId || r.outcome !== 'ok' || now - r.startedAt >= REPAIR_MAX_AGE_MS || !r.counts.missingEvents) return null;
+  return { count: Math.min(r.counts.missingEvents, RECOVER_MAX) };
+}
+
+export function eventsRepairLines(r: RepairReport): string[] {
+  if (r.outcome === 'failed') return [`Failed: ${r.error ?? 'unknown error'}`];
+  if (r.outcome === 'cancelled') return ['Cancelled: nothing was added'];
+  const c = r.counts;
+  return [
+    `Added: ${c.done ?? 0} of ${c.requested ?? 0} (${kindsText(c, 'done')}); had an event by then: ${c.skipped ?? 0}`,
+    ...(c.candidates !== c.checked ? [`Missing when added: ${c.candidates ?? 0} (the check found ${c.checked ?? 0})`] : []),
+    ...(r.stopped === 'event-cap' ? [`Stopped: the ${RECOVER_MAX}-event cap; check again for the rest`] : []),
+  ];
+}
+
+// "12 missing events (person 3, motion 9)" for the confirm; under the cap the
+// run adds `count` of the check's total.
+export function recoverText(count: number, counts: Record<string, number>): string {
+  const total = counts.missingEvents ?? count;
+  const kinds = kindsText(counts, 'missing');
+  return count < total ? `${count} of ${total} missing events (${kinds}; the first ${count} are added)` : `${count} missing events (${kinds})`;
 }

@@ -296,24 +296,39 @@ unexplained gaps.
 
 ### 5. Events (#75, PR 3)
 
-- **Window:** the SD card's reach (the oldest SD day to now, about 7 days),
-  not the 30-day events retention; the report says so (decision 12).
+- **Window:** the SD card's reach, not the 30-day events retention: from the
+  oldest SD recording (on `ftp.stream`) that ends inside the retention, but
+  never before `now − retention.eventsDays` (exactly), to now; spans and
+  events are judged up to `window.camera.to` (ended 5 min ago or earlier).
+  `reason` `sd-card` when the card reaches less far than the retention,
+  `retention` otherwise, `empty` without recordings; the report says so
+  (decision 12).
 - **Source:** the same camera list as the clips compare (`camera-list.ts`).
 - **Matching:** per kind decoded from the name, overlapping recordings are
-  merged; a merged span needs an event of the same kind overlapping
-  [start − 10 s, end + 5 s]. A recording with both motion and person needs
-  one event of each. Timer-only recordings are ignored and counted.
+  merged; a merged span needs an event of the same kind (any source; an open
+  one counts up to `events.maxOpenMin`) overlapping [start − 10 s,
+  end + 5 s]. A recording with both motion and person needs one event of
+  each. Timer-only recordings are ignored and counted. A span that starts
+  within 10 s + `events.maxOpenMin` of the retention start is not judged (an
+  event that covered it may be deleted already; a note gives the count).
 - **Reported:** recordings without an event, per kind; recording-kind events
-  without a recording (report only); the number matched.
+  without a recording (report only: a triggered recording of any kind
+  overlapping [start − 5 s, end + 10 s], the tolerance mirrored); the number
+  matched.
 - **Repair** (`inventory-repair` `{kind: 'events', runId}`): a dry run is the
-  check itself; the button reads "Add N missing events". Each missing span
-  becomes one event: `source: 'recovered'`, start and end from the
-  recording(s), `end_reason: 'recovered'`, `raw: {recordings: [ids], runId}`.
-  At most 1000 per run, in one transaction. Existing rows are never changed
-  or deleted; recovered rows can be removed by `runId` if needed.
-- **Kept out of** SSE and the stream log (decision 3), analytics
-  (`unanalysed()` skips `recovered`), `clipsStalled()` and the
-  `activity-daily` counts (or counted apart as `recovered`).
+  check itself; the button reads "Add N missing events". The repair compares
+  again (the report keeps 500 items, a run adds up to 1000), capped at the
+  check's `window.camera.to`, so it never adds what the check could not have
+  shown. Each missing span becomes one event: `source: 'recovered'`, start
+  and end from the recording(s), `end_reason: 'recovered'`, `raw: {runId,
+  check, recordings: [ids], stream, bounds}`. At most 1000 per run, in one
+  transaction; a span whose kind got an event meanwhile is skipped. Existing
+  rows are never changed or deleted; recovered rows can be removed by
+  `runId` with a documented SQL statement (no API route).
+- **Kept out of** SSE and the stream log (decision 3; a `clip` message's
+  events too), analytics (`unanalysed()` skips `recovered`),
+  `clipsStalled()`, `camproxy_events_stored` and the `activity-daily` counts
+  (counted apart as `recovered`).
 - **Code:** `EventRow.source` and `end_reason` gain `recovered`; the Events
   page and the Timeline mark them.
 
@@ -461,6 +476,37 @@ PR 2 (clips, #74):
   repair would fetch them and the next prune delete them again.
 - Repaired clips count toward storage usage, not toward its growth (the
   "days until full" forecast).
+
+PR 3 (events, #75):
+
+- The window starts at the oldest SD recording, not the oldest SD day; the
+  retention bound is `now − retention.eventsDays` exactly.
+- Spans within 10 s + `events.maxOpenMin` of the retention start are skipped
+  in every mode (an event that covered them may be deleted already); a note
+  gives the count.
+- The repair compares again, capped at the check's `window.camera.to`; the
+  report keeps 500 items, a run adds up to 1000 (`stopped: event-cap` and
+  "N more missing, run again" past it).
+- "Event without a recording" counts a triggered recording of any kind
+  overlapping the event, with the tolerance mirrored ([start − 5 s,
+  end + 10 s]): the camera and ONVIF tag kinds differently. Cost: an event
+  whose kind the camera didn't record still counts as covered.
+- Recovered events are served by `GET /api/cameras/:cam/events` (marked
+  `source: "recovered"`; cams#139), never over SSE.
+- The events kind takes no `camera` option (400): it always compares.
+- `lastEventTs` (the client API) excludes recovered events: a
+  reconstruction is no fresh activity.
+- The clips check keeps counting recovered events in `eventsWithoutClip`: a
+  recovered event stems from a real recording, so no local clip for it is a
+  real finding.
+- The guard against duplicates compares only with the rows before the run
+  (`id <=` the largest id at the start of the transaction): two close spans
+  of one kind each get their own event. It reads those rows once and answers
+  each span in memory (a probe per span took seconds on 30k events).
+- A shortened-then-raised `retention.eventsDays`, or a reset catalog, makes
+  the repair re-create the deleted events as recovered: they stand for real
+  recordings, not phantoms.
+- Recovered rows are removed by SQL by `runId` (README), no API route.
 
 ## References
 

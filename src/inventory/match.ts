@@ -42,3 +42,55 @@ export function pairByStart<R extends Pairable, L extends Pairable & { id: numbe
     clipsAlone: sortedClips.filter((_, c) => !clipUsed.has(c)),
   };
 }
+
+// Whether any span overlaps [start, end] (both ends inclusive): the spans
+// sorted by start, with the running maximum of their ends; the last span
+// starting at or before `end` tells (binary search). Linear to build,
+// logarithmic per question. Shared by the clips and the events checks.
+export function coverage(spans: { start: number; end: number }[]): (start: number, end: number) => boolean {
+  const sorted = [...spans].sort((a, b) => a.start - b.start);
+  const starts = sorted.map((x) => x.start);
+  const maxEnd: number[] = [];
+  for (const [i, x] of sorted.entries()) maxEnd.push(Math.max(x.end, i ? maxEnd[i - 1] : -Infinity));
+  return (start, end) => {
+    let lo = 0;
+    let hi = starts.length; // the first span starting after `end`
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (starts[mid] <= end) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo > 0 && maxEnd[lo - 1] >= start;
+  };
+}
+
+// The events rule (spec §5, decision 9): per trigger kind, recordings whose
+// times overlap (or touch) are one span; a recording with several kinds is
+// in a span of each kind. Timer-only recordings (no kind) are in none.
+// Oldest first; on a tie by kind name.
+export interface KindSpan<R> { kind: string; start: number; end: number; recs: R[] }
+export function spansByKind<R extends { start: number; end: number; kinds: readonly string[] }>(recs: R[]): KindSpan<R>[] {
+  const byKind = new Map<string, R[]>();
+  for (const r of recs) {
+    for (const k of new Set(r.kinds)) {
+      const list = byKind.get(k) ?? [];
+      list.push(r);
+      byKind.set(k, list);
+    }
+  }
+  const out: KindSpan<R>[] = [];
+  for (const [kind, list] of byKind) {
+    list.sort((a, b) => a.start - b.start || a.end - b.end);
+    let cur: KindSpan<R> | null = null;
+    for (const r of list) {
+      if (cur && r.start <= cur.end) {
+        cur.end = Math.max(cur.end, r.end);
+        cur.recs.push(r);
+      } else {
+        cur = { kind, start: r.start, end: r.end, recs: [r] };
+        out.push(cur);
+      }
+    }
+  }
+  return out.sort((a, b) => a.start - b.start || a.kind.localeCompare(b.kind));
+}

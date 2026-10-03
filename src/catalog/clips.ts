@@ -76,8 +76,11 @@ export function deleteClip(c: Catalog, path: string): number {
 }
 
 // Ids of the events of a camera that overlap [from, to] (open events count).
-export function overlappingEvents(c: Catalog, cam: string, from: number, to: number): number[] {
-  return (c.db.prepare('SELECT id FROM events WHERE cam = ? AND start_ts <= ? AND (end_ts IS NULL OR end_ts >= ?) ORDER BY start_ts, id').all(cam, to, from) as { id: number }[]).map(
+// `live`: recovered events (#75) left out, for the SSE clip message (SSE
+// never carries a recovered event).
+export function overlappingEvents(c: Catalog, cam: string, from: number, to: number, o: { live?: boolean } = {}): number[] {
+  const live = o.live ? " AND source != 'recovered'" : '';
+  return (c.db.prepare(`SELECT id FROM events WHERE cam = ? AND start_ts <= ? AND (end_ts IS NULL OR end_ts >= ?)${live} ORDER BY start_ts, id`).all(cam, to, from) as { id: number }[]).map(
     (r) => r.id,
   );
 }

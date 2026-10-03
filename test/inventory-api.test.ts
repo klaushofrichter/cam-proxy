@@ -54,7 +54,7 @@ describe('inventory API', () => {
     for (const body of [{ kind: 'nope' }, {}]) {
       const r = await request(p.base).post('/control/actions/inventory').set(admin()).send(body);
       expect(r.status).toBe(400);
-      expect(r.body).toEqual({ error: 'invalid', detail: 'kind is one of: stills, clips' });
+      expect(r.body).toEqual({ error: 'invalid', detail: 'kind is one of: stills, clips, events' });
     }
   });
 

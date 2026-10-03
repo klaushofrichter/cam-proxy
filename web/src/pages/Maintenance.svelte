@@ -49,16 +49,23 @@
       message: `Fetch ${offer.count} lost clips (${(offer.bytes / 2 ** 20).toFixed(1)} MB) from the camera's SD card over Baichuan? They are fetched one at a time, after any viewer's download, and added to the Clips page marked "from camera". At most 50 clips or 200 MB per run.`,
       confirmLabel: 'Fetch clips',
     },
+    'inventory-recover': {
+      title: 'Add missing events',
+      message: `Add ${recoverText} from the camera's SD recordings? Each one gets the kind, start and end of its recordings (pre- and post-record included) and is marked "recovered" on the Events page and the Timeline; cams sees it marked too. No SSE message is sent and it is never analysed. At most 1000 per run; existing events are not changed.`,
+      confirmLabel: 'Add events',
+    },
     'restart-proxy': {
       title: 'Restart the proxy',
       message: 'Restart the proxy? Live streams and uploads in progress are interrupted; the proxy is back in a few seconds. You sign in again afterwards.',
       confirmLabel: 'Restart proxy',
     },
   });
-  let asking = $state<'camera-reboot' | 'camera-powercycle' | 'restart-proxy' | 'inventory-repair' | null>(null);
+  let asking = $state<'camera-reboot' | 'camera-powercycle' | 'restart-proxy' | 'inventory-repair' | 'inventory-recover' | null>(null);
   // The Inventory box's repair (#74): its dry-run numbers go into the message.
-  let inventory = $state<{ fetchLost: () => void } | undefined>();
+  let inventory = $state<{ fetchLost: () => void; addMissing: () => void } | undefined>();
   let offer = $state({ count: 0, bytes: 0 });
+  // The events repair (#75): the check's count goes into the message.
+  let recoverText = $state('');
 
   // The camera reboot: "Rebooting…" and the camera's state while the proxy
   // waits for it, then how long it was away.
@@ -68,6 +75,10 @@
   // second confirm can't send another (#78 review).
   let sending = $state(false);
   const cameraBusy = $derived(sending || reboot?.phase === 'rebooting' || reboot?.phase === 'power-cycling');
+  function addMissing() {
+    asking = null;
+    inventory?.addMissing();
+  }
   function fetchLost() {
     asking = null;
     inventory?.fetchLost();
@@ -213,7 +224,7 @@
       <p class="bad" data-testid="restart-state">The proxy did not come back. Is it running under a supervisor (compose, the cluster)?</p>
     {/if}
   </div>
-  <InventoryCard bind:this={inventory} onrepair={(o) => { offer = o; asking = 'inventory-repair'; }} />
+  <InventoryCard bind:this={inventory} onrepair={(o) => { offer = o; asking = 'inventory-repair'; }} onrecover={(o) => { recoverText = o.text; asking = 'inventory-recover'; }} />
   <div class="card">
     <div class="loghead"><h3>Log</h3><span class="small">updates every 10 s</span></div>
     <div class="log">
@@ -230,7 +241,7 @@
 
 {#if asking}
   {@const dlg = DIALOGS[asking]}
-  <ConfirmDialog title={dlg.title} message={dlg.message} confirmLabel={dlg.confirmLabel} oncancel={() => (asking = null)} onconfirm={() => void (asking === 'inventory-repair' ? fetchLost() : asking === 'camera-reboot' ? rebootCamera() : asking === 'camera-powercycle' ? powerCycleCamera() : restartProxy())} />
+  <ConfirmDialog title={dlg.title} message={dlg.message} confirmLabel={dlg.confirmLabel} oncancel={() => (asking = null)} onconfirm={() => void (asking === 'inventory-repair' ? fetchLost() : asking === 'inventory-recover' ? addMissing() : asking === 'camera-reboot' ? rebootCamera() : asking === 'camera-powercycle' ? powerCycleCamera() : restartProxy())} />
 {/if}
 
 <style>

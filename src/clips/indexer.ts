@@ -316,7 +316,7 @@ export class ClipIndexer {
       received_at: this.now(),
       snapshot: this.pictureFor(start),
     });
-    const events = overlappingEvents(catalog, this.d.cam, start, end);
+    const events = overlappingEvents(catalog, this.d.cam, start, end, { live: true });
     this.d.log.append(this.d.cam, 'clip', {
       clipId: row.id,
       start,

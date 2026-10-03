@@ -4,9 +4,9 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { openCatalog, type Catalog } from '../src/catalog/db';
-import { closeEvent, deleteEventsBefore, insertEvent } from '../src/catalog/events';
+import { addRecoveredEvents, closeEvent, deleteEventsBefore, insertEvent } from '../src/catalog/events';
 import { analysisFor, listUnmapped, saveAnalysis } from '../src/catalog/analyses';
-import { StreamLog } from '../src/stream/log';
+import { StreamLog, type StreamMessage } from '../src/stream/log';
 import { DEFAULTS, type Config } from '../src/config/defaults';
 import { AnalyticsService, type AnalyticsDeps } from '../src/analytics/service';
 import { localDay } from '../src/analytics/local-day';
@@ -681,5 +681,29 @@ describe('a manual key', () => {
     await s.idle();
     s.setManualKey(ENV_KEY);
     expect(s.state()[0].paused).toMatchObject({ reason: 'quota' });
+  });
+});
+
+// #75: a recovered event (from the SD card) is never sent to Vision (a paid call).
+describe('recovered events and analytics', () => {
+  it('neither catchUp() nor the live stream-log listener queues a recovered event', async () => {
+    still(T0 + 1000, 7);
+    const s = new AnalyticsService({
+      ...deps(),
+      provider: () => ({ id: 'google-vision', name: 'Google Vision', analyze: async () => expect.fail('Vision was called for a recovered event') }),
+    });
+    // The proxy's wiring (src/proxy.ts): every camera-event start goes to the service.
+    const heard: StreamMessage[] = [];
+    log.on('message', (m: StreamMessage) => {
+      heard.push(m);
+      if (m.type === 'camera-event' && m.data.phase === 'start') s.onEvent({ id: Number(m.data.eventId), kind: String(m.data.kind), start_ts: Number(m.data.ts) });
+    });
+    const { added } = addRecoveredEvents(c, 'cam1', [{ kind: 'person', start_ts: T0, end_ts: T0 + 30_000, raw: null }], { beforeMs: 10_000, afterMs: 5_000, openMs: 600_000 });
+    expect(added).toHaveLength(1);
+    s.catchUp();
+    await s.idle();
+    expect(heard).toEqual([]); // the repair writes nothing to the stream log
+    expect(analysisFor(c, added[0].id)).toBeUndefined();
+    expect(s.state()[0].month.calls).toBe(0);
   });
 });

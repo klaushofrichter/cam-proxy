@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
-import { closeEvent, insertEvent } from '../src/catalog/events';
+import { addRecoveredEvents, closeEvent, insertEvent } from '../src/catalog/events';
 import { analysisFor, countUnmapped, saveAnalysis } from '../src/catalog/analyses';
 import { startSim } from './helpers/sim';
 import { ADMIN_TOKEN, CLIENT_TOKEN, auth, startProxy, until } from './helpers/proxy';
@@ -204,6 +204,28 @@ describe('analytics in the proxy', () => {
     try {
       await until(() => analysisFor(q.proxy.catalog, e.id) !== undefined);
       expect(analysisFor(q.proxy.catalog, e.id)).toMatchObject({ status: 'skipped', reason: 'no_still' }); // no stills here: skipped, no call
+    } finally {
+      await q.proxy.stop();
+    }
+  });
+
+  // #75: a recovered event is never analysed (a paid call): the restart's
+  // catch-up skips it, and the repair writes nothing the live listener hears.
+  it('never analyses a recovered event, after a restart or live', async () => {
+    let q = await startProxy(sim, { settings: on, env: vision() });
+    const start = Date.now() - 120_000;
+    const { added } = addRecoveredEvents(q.proxy.catalog, 'cam1', [{ kind: 'person', start_ts: start, end_ts: start + 30_000, raw: null }], { beforeMs: 10_000, afterMs: 5_000, openMs: 600_000 });
+    expect(q.proxy.log.since(0, { types: ['camera-event'] }, 10).filter((m) => m.data.eventId === added[0].id)).toEqual([]);
+    const live = insertEvent(q.proxy.catalog, { cam: 'cam1', source: 'onvif', kind: 'person', start_ts: start + 60_000, raw: null });
+    await q.proxy.stop();
+    const calls = mock.calls;
+    q = await startProxy(sim, { dir: q.dir, settings: on, env: vision() });
+    try {
+      // Catch-up goes oldest first: the later live event analysed means the recovered one was passed over.
+      await until(() => analysisFor(q.proxy.catalog, live.id) !== undefined);
+      await q.proxy.analytics.idle();
+      expect(analysisFor(q.proxy.catalog, added[0].id)).toBeUndefined();
+      expect(mock.calls).toBe(calls); // no stills here: the live one is skipped without a call
     } finally {
       await q.proxy.stop();
     }

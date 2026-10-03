@@ -6,7 +6,7 @@ import { summarize } from '../analytics/classes';
 import type { Found } from '../analytics/providers';
 import { clipById, clipNear, listClips, oldestClip, overlappingEvents, type ClipRow } from '../catalog/clips';
 import type { Catalog } from '../catalog/db';
-import { listEvents, type EventRow } from '../catalog/events';
+import { lastLiveEventTs, listEvents, type EventRow } from '../catalog/events';
 import type { Config } from '../config/defaults';
 import { BaichuanError } from '../camera/baichuan/errors';
 import { logger } from '../log';
@@ -69,11 +69,10 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
   };
 
   r.get('/cameras', (_req, res) => {
-    const last = listEvents(d.catalog, { cam: cam().id, limit: 1 })[0];
     const s = d.stills();
     const stream = s ? { up: s.grabber.up(), lastFrameTs: s.grabber.lastFrameTs() } : null;
     // publicUrl: where people reach this proxy's web UI (cams links to it).
-    res.json([{ id: cam().id, name: cam().name, online: d.status().state().online, lastEventTs: last?.start_ts ?? null, stream, publicUrl: d.config().server.publicUrl ?? null }]);
+    res.json([{ id: cam().id, name: cam().name, online: d.status().state().online, lastEventTs: lastLiveEventTs(d.catalog, cam().id), stream, publicUrl: d.config().server.publicUrl ?? null }]);
   });
 
   const sendJpeg = (res: Response, jpeg: Buffer | undefined, final: boolean) => {
