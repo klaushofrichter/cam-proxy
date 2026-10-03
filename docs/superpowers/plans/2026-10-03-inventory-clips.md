@@ -23,7 +23,7 @@
 - Recording kinds: `motion`, `person`, `vehicle`, `pet`. Timer-only recordings (no trigger) are ignored and counted (`timerOnly`).
 - Compare: stream = `ftp.stream` at run time (default `main`; cluster and tests `sub`); one Search per camera-local day that the month overview lists, through `RecordingList` (its gate and caches); a busy Search tried 3 times, 1 s apart; a failed day is `unknown`: never "missing locally", its clips never "gone from the camera"; an offline camera fails the run with `camera_offline: …`.
 - Pairing: same stream, starts at most `START_SLACK_MS = 5000` apart, one to one, closest first.
-- Repair: `ftp.stream`; `RecordingFetcher.get(entry, {priority: 'low'})` (a viewer's `high` fetch, queued or running, goes first; no pre-emption); the camera path from `RecordingList.find` (never from the report); before each clip: storage not paused, inside the clips retention, same stream, no local clip within 5 s, still listed; caps `REPAIR_MAX_CLIPS = 50`, `REPAIR_MAX_BYTES = 200 · 2^20`, `ftp.maxGB`; `REPAIR_GAP_MS = 1000` between downloads; stops after `REPAIR_MAX_FAILURES = 3` failures in a row, at once on `refused` or an offline camera; candidates newest first (the compare's order).
+- Repair: `ftp.stream`; `RecordingFetcher.get(entry, {priority: 'low'})` (a viewer's `high` fetch, queued or running, goes first; no pre-emption); the camera path from `RecordingList.find` (never from the report); before each clip: storage not paused, inside the clips retention, same stream, no local clip within 5 s, still listed; caps `REPAIR_MAX_CLIPS = 50`, `REPAIR_MAX_BYTES = 200 · 2^20`, `ftp.maxGB`; `REPAIR_GAP_MS = 1000` between downloads; stops after `REPAIR_MAX_FAILURES = 3` failures in a row, at once on `refused` or an offline camera; candidates oldest first (the SD card overwrites them first; ruling (a) during the build, the plan said newest first).
 - Repaired clips: copied from the pinned cache file into `clips/<cam>/YYYY/MM/DD/HHMM-<start>.mp4`, row `origin: 'camera'`, the FTP picture linked when there is one; no stream-log message, no SSE (decision 3); not an FTP arrival (`clip_arrivals`) and not in the daily `clipsReceived` count; counted in the storage budget.
 - Catalog schema version 6 (`ALTER TABLE clips ADD COLUMN origin TEXT NOT NULL DEFAULT 'ftp'`); never edit migrations 1-5.
 - CHANGELOG entries go under `## Unreleased`; never write a version number.
@@ -1039,7 +1039,7 @@ git commit -m "feat(inventory): pairing by start and the camera's recordings of 
   - `export interface ClipsInventoryDeps { dataDir: string; catalog: Catalog; settings: () => ClipsSettings; camera: CameraListDeps }`
   - `export type ClipItem` = `{type: 'missing-locally'; id; start; end; size; stream; kinds}` | `{type: 'gone-from-camera'; clipId; start}` | `{type: 'row-without-file'; clipId; start; file}` | `{type: 'file-without-row'; file}` | `{type: 'event-without-clip'; eventId; kind; start}` | `{type: 'clip-without-event'; clipId; start}` (`file` relative to the data folder)
   - `export interface CameraDayRow { date: string; state: 'listed' | 'unknown'; recordings: number; missingLocally: number; goneFromCamera: number }`
-  - `export function clipsCheck(d: ClipsInventoryDeps): Check` — counts (always) `clipsDays, clips, fromCamera, rowsWithoutFile, filesWithoutRow, events, eventsWithoutClip, clipsWithoutEvent`; with `camera: true` also `cameraDays, unknownDays, recordings, timerOnly, paired, missingLocally, missingLocallyBytes, goneFromCamera, olderThanSd, otherStream`; `window = {from, to, reason: 'retention', notes, camera?: {stream, to, oldestSdDay, unknownDays}}`; items: `missing-locally` (newest first) first, then `gone-from-camera`, then the local findings; `top`: `CameraDayRow`s with problems, most missing first.
+  - `export function clipsCheck(d: ClipsInventoryDeps): Check` — counts (always) `clipsDays, clips, fromCamera, rowsWithoutFile, filesWithoutRow, events, eventsWithoutClip, clipsWithoutEvent`; with `camera: true` also `cameraDays, unknownDays, recordings, timerOnly, paired, missingLocally, missingLocallyBytes, goneFromCamera, olderThanSd, otherStream`; `window = {from, to, reason: 'retention', notes, camera?: {stream, to, oldestSdDay, unknownDays}}`; items: `missing-locally` (oldest first, ruling (a)) first, then `gone-from-camera`, then the local findings; `top`: `CameraDayRow`s with problems, most missing first.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1248,7 +1248,7 @@ import { MAX_ITEMS, MAX_TOP, type Check, type CheckResult } from './runner';
 // with `camera: true`: the SD recordings of the window on `ftp.stream`
 // (camera-list.ts) paired with the local clips of that stream (match.ts).
 // Recordings on the camera but not here are the repair's candidates (the
-// first items, newest first). A day whose Search failed is `unknown`: its
+// first items, oldest first). A day whose Search failed is `unknown`: its
 // recordings never count as missing, its clips never as gone.
 
 const HOUR = 3_600_000;
