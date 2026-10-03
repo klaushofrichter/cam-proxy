@@ -1,14 +1,22 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
+  import CameraMeta from './CameraMeta.svelte';
+  import UpdatedAgo from './UpdatedAgo.svelte';
   import { page } from '../lib/router';
   import { logout } from '../lib/api';
   import { NAV_ITEMS, drawerOpen, sidebarCollapsed } from '../lib/nav';
 
   // `drawer` renders the same menu inside the phone drawer, always expanded,
-  // with the theme toggle and Sign out added (the top bar hides them on phones).
+  // with what the top bar hides on phones added: the camera line, the status
+  // age, the theme toggle and Sign out.
   let { drawer = false }: { drawer?: boolean } = $props();
   const collapsed = $derived($sidebarCollapsed && !drawer);
+
+  function signOut() {
+    drawerOpen.set(false);
+    void logout();
+  }
 </script>
 
 <nav class="sidebar" class:collapsed class:drawer data-testid={drawer ? 'drawer' : 'sidebar'} aria-label="Main">
@@ -30,9 +38,13 @@
   {/each}
   <div class="grow"></div>
   {#if drawer}
+    <div class="drawer-info">
+      <div class="meta" data-testid="drawer-meta"><CameraMeta testid="drawer-camera-model" /></div>
+      <UpdatedAgo testid="drawer-updated" />
+    </div>
     <div class="drawer-actions">
       <ThemeToggle />
-      <button class="item" data-testid="drawer-logout" onclick={() => void logout()}><Icon name="logout" size={18} /><span class="label">Sign out</span></button>
+      <button class="item" data-testid="drawer-logout" onclick={signOut}><Icon name="logout" size={18} /><span class="label">Sign out</span></button>
     </div>
   {:else}
     <button
@@ -75,6 +87,9 @@
   .grow { flex: 1; }
   .chev { display: inline-grid; transition: transform 0.22s ease; }
   .chev.flipped { transform: rotate(180deg); }
+  .drawer-info { display: grid; gap: 2px; padding: 8px 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+  .drawer-info .meta { font-family: var(--mono); }
+  .drawer-info .meta:empty { display: none; }
   .drawer-actions { display: flex; align-items: center; gap: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
   .drawer-actions .item { flex: 1; }
 </style>

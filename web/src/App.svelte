@@ -42,6 +42,12 @@
     };
   });
 
+  // Signed out (Sign out in the drawer, an expired session): no drawer, so
+  // the sign-in page scrolls and the next sign-in starts with it closed.
+  $effect(() => {
+    if (!$loggedIn) drawerOpen.set(false);
+  });
+
   // Focus moves into the drawer when it opens and back to the hamburger when
   // it closes; the page behind it doesn't scroll.
   $effect(() => {

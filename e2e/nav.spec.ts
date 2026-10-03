@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { ADMIN_TOKEN } from './env';
 
 // Page navigation like cams: a collapsible sidebar on desktop, a hamburger
 // drawer on phones (767 px and narrower).
@@ -53,12 +54,15 @@ test.describe('phone', () => {
     const burger = page.getByTestId('hamburger');
     await expect(burger).toBeVisible();
     await expect(burger).toHaveAttribute('aria-expanded', 'false');
-    await expect(burger).toHaveAttribute('aria-controls', 'nav-drawer');
+    // No aria-controls: the drawer exists only while open (as in cams).
+    await expect(burger).not.toHaveAttribute('aria-controls', /./);
     const bar = (await page.getByTestId('topbar').boundingBox())!;
     expect(bar.height).toBeLessThan(60); // one row, no wrapping
     expect((await burger.boundingBox())!.x).toBeLessThan(20);
-    // Theme and Sign out move into the drawer.
+    // Theme, Sign out, the status age and the camera line move into the drawer.
     await expect(page.getByTestId('logout')).toBeHidden();
+    await expect(page.getByTestId('updated')).toBeHidden();
+    await expect(page.getByTestId('camera-model')).toBeHidden();
     // The pills keep their full text for screen readers and tests.
     await expect(page.getByTestId('camera-online')).toHaveText('camera online', { timeout: 15000 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -114,5 +118,49 @@ test.describe('phone', () => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await expect(page.getByTestId('drawer')).toHaveCount(0);
     await expect(page.getByTestId('sidebar')).toBeVisible();
+  });
+
+  test('the drawer footer shows the status age and the camera line', async ({ page }) => {
+    await open(page);
+    await expect(page.getByTestId('camera-online')).toHaveText('camera online', { timeout: 15000 });
+    await page.getByTestId('hamburger').click();
+    const drawer = page.getByTestId('drawer');
+    await expect(drawer.getByTestId('drawer-updated')).toContainText(/updated (just now|\d+ s ago)/);
+    const model = drawer.getByTestId('drawer-camera-model');
+    await expect(model).toBeVisible();
+    await expect(model).toHaveText(/\S/);
+    await expect(drawer.getByTestId('drawer-meta')).toContainText('·');
+  });
+
+  test('Back and Forward close the drawer', async ({ page }) => {
+    await open(page);
+    await page.getByTestId('hamburger').click();
+    await page.getByTestId('drawer').getByTestId('nav-events').click();
+    await expect(page).toHaveURL(/#\/events$/);
+    await page.getByTestId('hamburger').click();
+    await expect(page.getByTestId('drawer')).toBeVisible();
+    await page.goBack();
+    await expect(page.getByTestId('drawer')).toHaveCount(0);
+    await expect(page.getByTestId('hamburger')).toHaveAttribute('aria-expanded', 'false');
+    await page.getByTestId('hamburger').click();
+    await expect(page.getByTestId('drawer')).toBeVisible();
+    await page.goForward();
+    await expect(page).toHaveURL(/#\/events$/);
+    await expect(page.getByTestId('drawer')).toHaveCount(0);
+  });
+
+  test('Sign out from the drawer closes it: the sign-in page scrolls, and the next sign-in starts closed', async ({ page }) => {
+    await open(page);
+    await page.getByTestId('hamburger').click();
+    await page.getByTestId('drawer').getByTestId('drawer-logout').click();
+    await expect(page.getByTestId('token-input')).toBeVisible();
+    await expect(page.getByTestId('drawer')).toHaveCount(0);
+    expect(await page.evaluate(() => document.body.style.overflow)).toBe('');
+    await page.getByTestId('token-input').fill(ADMIN_TOKEN);
+    await page.getByTestId('login-submit').click();
+    await expect(page.getByTestId('shell')).toBeVisible();
+    await expect(page.getByTestId('drawer')).toHaveCount(0);
+    await expect(page.getByTestId('hamburger')).toHaveAttribute('aria-expanded', 'false');
+    expect(await page.evaluate(() => document.body.style.overflow)).toBe('');
   });
 });
