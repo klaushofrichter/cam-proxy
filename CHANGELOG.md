@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- CI: the required PR check runs `npm audit --audit-level=high` over all dependencies, dev included, so a high finding in a dev dependency blocks the PR (it only warned before). There are no open findings, so no allowlist.
+- Docs: the README has a Related repos section (cams, cam-sim, cam-proxy-pi-display) and names the e-paper display as the reader of `GET /api/local/health`; the settings table adds `composition` and `analytics`; `/health` answers `{ok, version, startedAt}`; `production` requires `e2e` too.
+
+## v2026.10.03.3
+
 - Admin UI navigation works like cams: on desktop the sidebar shows icons and labels and "Collapse" shrinks it to icons (remembered per browser); on phones (767 px and narrower) the icon rail is gone and a hamburger at the top left opens the menu as a drawer over the page; its footer has what the phone top bar leaves out (the camera's model, linked to its web page, firmware and version, and "updated N s ago"), the theme toggle and Sign out. The drawer closes on navigation, Back or Forward, a tap outside, the close button, Escape or Sign out, and gives focus back to the hamburger. The phone top bar stays on one row: the camera and events pills show a dot and the state only.
 
 ## v2026.10.03.2

@@ -24,6 +24,10 @@ camera's quirks (one search at a time, few logins, broken downloads, no push).
 - stills and preview sprites through go2rtc;
 - clips by FTP(S);
 - storage management;
+- recordings from the camera's SD card, over Baichuan;
+- inventory checks and repairs (stills, clips, events);
+- optional Google Vision analytics;
+- the health summary (Status page, `GET /api/local/health`);
 - the client and control APIs and the admin UI.
 
 It runs in the k3s cluster next to `cam2`, and
@@ -42,6 +46,19 @@ Targets:
   operation: [docs/raspberry-pi.md](docs/raspberry-pi.md).
 
 A Mac runs it for development on `localhost:8480`.
+
+## Related repos
+
+- [cams](https://github.com/klaushofrichter/cams): the camera viewer. It reads
+  this proxy's client API (`/api`, with a client token) for events, stills,
+  clips and SD recordings; see [cams integration](#cams-integration).
+- [cam-sim](https://github.com/klaushofrichter/cam-sim): the camera simulator.
+  It is the camera in this repo's tests (a release tarball in `package.json`)
+  and `cam2`, the camera of the cluster instance.
+- [cam-proxy-pi-display](https://github.com/klaushofrichter/cam-proxy-pi-display):
+  the e-paper status display on the Pi. It reads only
+  [`GET /api/local/health`](#control-api-and-admin-ui), which answers loopback
+  callers without a key; this proxy doesn't depend on it.
 
 ## Contents
 
@@ -152,6 +169,8 @@ come only from the environment.
 | `health` | `diskPercent` (90, 50–99): the data volume's used percent from which the health summary (the Status page's Health card, `GET /api/local/health`) flags a problem; `tempC` (75, 40–95): the CPU temperature (°C, on a Raspberry Pi) from which it does. Both apply at once |
 | `host` | `stats` (`auto`): read the host figures (CPU temperature, under-voltage, memory, uptime, load) for the Pi card and the health summary; `auto` on a Raspberry Pi only (detected from `/proc/cpuinfo`), `on`, or `off`. Off a Pi, memory and load in a container would describe the node, not the proxy. Applies at once |
 | `recordings` | `cacheMB` (2048, 64–1,048,576): size cap of the recordings cache; least recently used files go first, and they are the first to go when the storage budget is exceeded. Applies at the next fetch or storage run |
+| `composition` | `font`: the font file for the text of composed clips; default the first of DejaVu Sans (the container) or Arial (macOS) that exists |
+| `analytics` | `kinds.person` (true), `kinds.vehicle` and `kinds.pet` (false), `googleVision.enabled` (false), `.monthlyLimit` (0), `.dailyCap` (0); see [Analytics](#analytics-optional) |
 
 | Secret (environment, or `<NAME>_FILE`) | |
 |---|---|
@@ -593,18 +612,22 @@ arrive.
 The **admin UI** at `/` signs in with the admin token once; the token is
 exchanged for the cookie and not stored in the browser.
 Its navigation works like cams: a sidebar with labels that "Collapse" shrinks
-to icons (remembered per browser), and on phones (767 px and narrower) a
-hamburger at the top left that opens the menu, with the theme toggle and Sign
-out, as a drawer over the page.
+to icons (remembered per browser). On phones (767 px and narrower) a hamburger
+at the top left opens the menu as a drawer over the page; its footer has what
+the phone top bar leaves out (the camera's model, firmware and version, and
+"updated … ago"), the theme toggle and Sign out.
 
 - **Status:** a Health card first (one line per item of the health summary,
   red when it is a problem, and "All OK" or "N problems"), then the camera
-  (and its model, linked to the camera's own web page), events, stills,
-  clips/FTP, recordings (SD card) and storage (with the data volume's "Disk
-  used"). On a Raspberry Pi a Pi card shows the model, CPU temperature,
+  (and its model, linked to the camera's own web page), events, analytics,
+  stills, clips/FTP, recordings (SD card), storage (with the data volume's
+  "Disk used") and the stream. On a Raspberry Pi a Pi card shows the model, CPU temperature,
   under-voltage, memory, uptime, load and disk. The cards mark the same items
   red as the Health card: one summary decides, with the thresholds
-  `health.diskPercent` and `health.tempC`.
+  `health.diskPercent` and `health.tempC`. The same summary is
+  `GET /api/local/health`, which the Pi's e-paper display
+  ([cam-proxy-pi-display](https://github.com/klaushofrichter/cam-proxy-pi-display))
+  draws.
 - **Events:** the live stream and the last 100 events.
 - **Timeline:** a day of preview sprites, one still per minute, with events
   marked.
@@ -737,7 +760,10 @@ and checks it as the cluster runs it.
   with host networking and `/data` on the SSD, prepared by
   [`scripts/prepare-pi.sh`](scripts/prepare-pi.sh). A release doesn't update
   it: run `docker compose pull && docker compose up -d` on the Pi. See
-  [docs/raspberry-pi.md](docs/raspberry-pi.md).
+  [docs/raspberry-pi.md](docs/raspberry-pi.md). The Pi also runs
+  [cam-proxy-pi-display](https://github.com/klaushofrichter/cam-proxy-pi-display),
+  a systemd service that reads `GET /api/local/health` over loopback (host
+  networking makes it reachable) and needs no token.
 
 ## Development
 
@@ -764,7 +790,8 @@ npm run schema      # regenerate config.schema.json after changing a setting
 - **CI:** tests, e2e, type checks, `npm audit`, CodeQL, a check that no
   media file is committed, and a container smoke test
   (`scripts/container-smoke.sh`, building the image and checking it as the
-  cluster runs it). `production` requires the tests and CodeQL.
+  cluster runs it). `production` requires `test`, `e2e` and `codeql` (strict,
+  with an owner override).
 
 ## cams integration
 
@@ -779,8 +806,8 @@ back to the proxy's stills when live video isn't playing. See the
 
 ## Operating the cluster
 
-- `GET /health` returns `{ok, version}` (no auth): use it to check the
-  running version.
+- `GET /health` returns `{ok, version, startedAt}` (no auth): use it to
+  check the running version.
 - **Rollback:** re-pin the previous image digest in kube-setup's
   `manifests/cam-proxy/cam-proxy-deployment.yaml`, then commit, push and
   apply.
