@@ -118,7 +118,7 @@ describe('clips inventory, local (part 1)', () => {
       { type: 'clip-without-event', clipId: f.c6.id, start: f.c6.start_ts },
     ]);
     expect(r.top).toEqual([]);
-    expect(r.message).toBe('5 clips in the last 2 days (since 2026-09-30): 1 rows without file, 1 files without row, 1 snapshots without a clip, 1 of 3 events without clip, 3 clips without event');
+    expect(r.message).toBe('5 clips in the last 2 days (since 2026-09-30 UTC): 1 rows without file, 1 files without row, 1 snapshots without a clip, 1 of 3 events without clip, 3 clips without event');
   });
 
   it('notes that FTP is off', async () => {
@@ -158,7 +158,7 @@ describe('clips inventory, against the camera (part 2)', () => {
       { date: '2026-09-30', state: 'unknown', recordings: 0, missingLocally: 0, goneFromCamera: 0 },
     ]);
     expect(r.message).toBe(
-      '5 clips in the last 2 days (since 2026-09-30): 1 rows without file, 1 files without row, 1 snapshots without a clip, 1 of 3 events without clip, 3 clips without event; ' +
+      '5 clips in the last 2 days (since 2026-09-30 UTC): 1 rows without file, 1 files without row, 1 snapshots without a clip, 1 of 3 events without clip, 3 clips without event; ' +
         'camera (sub): 4 recordings, 1 missing locally (2.0 MB), 1 local clips gone from the camera, 1 days unknown',
     );
   });
@@ -199,6 +199,17 @@ const NOT_JUDGED = "1 local clips not on the camera were not judged: the SD card
 const ofType = (items: unknown[], type: string) => (items as Item[]).filter((x) => x.type === type);
 
 describe('clips inventory: the edges (review of task 4)', () => {
+  // #117 review: a recording that starts at 23:55 or later and is listed with
+  // end 000000 may still be being written; it is judged from 01:00 on.
+  it('a late-night recording that may still be written is not judged until 01:00 the next day', async () => {
+    const late = { ...rec(T('2026-10-01T23:56:00')), end: T('2026-10-02T00:00:00') };
+    const cam = camera({ months: { '2026-10': [1] }, recs: { '2026-10-01': [late] } });
+    const early = await clipsCheck(deps(cam.deps))(ctx({ now: T('2026-10-02T00:20:00'), options: { camera: true } }));
+    expect(early.counts).toMatchObject({ missingLocally: 0 });
+    const later = await clipsCheck(deps(cam.deps))(ctx({ now: T('2026-10-02T01:06:00'), options: { camera: true } }));
+    expect(later.counts).toMatchObject({ missingLocally: 1 });
+  });
+
   it('the oldest SD day keeps only its later hours: a clip before its first recording is older than the SD', async () => {
     clip(T('2026-10-01T05:00:00')); // overwritten on the card
     const late = clip(T('2026-10-01T16:00:00')); // after the first recording that day: gone

@@ -10,7 +10,7 @@ import type { RecordingCache } from '../recordings/cache';
 import { abortError, isAbort, type Fetch, type RecordingFetcher, type Waiter } from '../recordings/fetcher';
 import { logger } from '../log';
 import { SearchError, type RecordingEntry, type RecordingList } from '../recordings/list';
-import type { Stream } from '../recordings/names';
+import { settlesAt, type Stream } from '../recordings/names';
 import { BUSY_TRIES } from './camera-list';
 import { mb, type ClipItem } from './clips';
 import { START_SLACK_MS } from './match';
@@ -57,7 +57,8 @@ const STOP_TEXT: Record<RepairStop, string> = {
 // `viewer`: in temp mode a viewer took the fetch's one client slot (viewers first).
 // `too-big`: larger than one run's byte cap; `byte-cap`: would pass it after
 // the clips fetched before; `busy`: the camera's Search stayed busy.
-export type SkipReason = 'outside-retention' | 'already-local' | 'gone-from-camera' | 'other-stream' | 'viewer' | 'invalid' | 'too-big' | 'byte-cap' | 'busy';
+// `still-recording`: a late-night recording that may still be written (names.ts settlesAt).
+export type SkipReason = 'outside-retention' | 'already-local' | 'gone-from-camera' | 'other-stream' | 'viewer' | 'invalid' | 'too-big' | 'byte-cap' | 'busy' | 'still-recording';
 // `streamed`: the cache couldn't keep the file; it went through a temp file.
 export interface RepairItem { id: string; start: number; result: 'ok' | 'skipped' | 'failed'; reason?: SkipReason; error?: string; clipId?: number; bytes?: number; streamed?: true }
 
@@ -305,6 +306,10 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
         }
         if (!entry) {
           skip(c, 'gone-from-camera');
+          continue;
+        }
+        if (settlesAt(entry) > ctx.now) {
+          skip(c, 'still-recording'); // fetched now, it could be cut short
           continue;
         }
         const src = (await obtain(entry, 0, clip.signal)) ?? (await obtain(entry, 1, clip.signal));

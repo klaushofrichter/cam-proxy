@@ -242,6 +242,7 @@ describe('storage: audit', () => {
     expect(recs.map((r) => [r.event.action, r.event.outcome])).toEqual([['storage-paused', 'failure'], ['storage-resumed', 'success']]);
     expect(recs[0].cam_proxy).toMatchObject({ free: config.storage.minFreeBytes - 1, minFreeBytes: config.storage.minFreeBytes });
     expect(recs[0].event.category).toEqual(['host']);
+    expect(recs.map((r) => (r as { user?: { name?: string } }).user?.name)).toEqual(['system', 'system']);
   });
 
   it('counts the audit folder in usage and the budget, and sweeps its old days by auditDays', () => {

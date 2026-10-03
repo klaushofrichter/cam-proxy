@@ -85,6 +85,11 @@ export function problemRows(r: StillsReport, fmt: (ms: number) => string = local
   return r.items.slice(0, MAX_PROBLEM_ROWS).map((x) => ({ at: fmt(x.minute), what: PROBLEMS[x.type] ?? x.type }));
 }
 
+// The box's load error: shown when a load fails, cleared by the next one that
+// works (an idle poll's failure must not stay up); other messages stay.
+export const LOAD_ERROR = 'Could not load the inventory.';
+export const loadMessage = (current: string, ok: boolean): string => (!ok ? LOAD_ERROR : current === LOAD_ERROR ? '' : current);
+
 // The clips inventory (#74) and its repair.
 export const REPAIR_MAX_CLIPS = 50; // the server's caps per run (src/inventory/repair-clips.ts)
 export const REPAIR_MAX_BYTES = 200 * 2 ** 20;
@@ -164,6 +169,7 @@ const SKIPS: Record<string, string> = {
   'too-big': "larger than one run's 200 MB",
   'byte-cap': "would pass this run's 200 MB",
   busy: "the camera's Search stayed busy",
+  'still-recording': 'may still be recording (late night)',
 };
 const STOPS: Record<string, string> = {
   'clip-cap': 'the 50-clip cap',

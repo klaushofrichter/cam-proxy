@@ -3,7 +3,7 @@ import { basename, dirname, join } from 'path';
 import { setImmediate as yieldToLoop } from 'timers/promises';
 import type { AuditLog } from '../audit/audit-log';
 import type { Catalog } from '../catalog/db';
-import { localDate, type Kind, type Stream } from '../recordings/names';
+import { localDate, settlesAt, type Kind, type Stream } from '../recordings/names';
 import type { RecordingEntry } from '../recordings/list';
 import { listCamera, type CameraListDeps } from './camera-list';
 import { coverage, pairByStart, START_SLACK_MS } from './match';
@@ -182,7 +182,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     }
 
     let message =
-      `${counts.clips} clips in the last ${s.clipsDays} days (since ${new Date(from).toISOString().slice(0, 10)}): ${counts.rowsWithoutFile} rows without file, ${counts.filesWithoutRow} files without row, ${counts.snapshotsWithoutClip} snapshots without a clip, ` +
+      `${counts.clips} clips in the last ${s.clipsDays} days (since ${new Date(from).toISOString().slice(0, 10)} UTC): ${counts.rowsWithoutFile} rows without file, ${counts.filesWithoutRow} files without row, ${counts.snapshotsWithoutClip} snapshots without a clip, ` +
       `${counts.eventsWithoutClip} of ${counts.events} events without clip, ${counts.clipsWithoutEvent} clips without event`;
     const window: CheckResult['window'] = { from, to, reason: 'retention', notes };
     if (!ctx.options?.camera || cancelled || ctx.signal.aborted) return { window, counts, top: [], items: local, message };
@@ -212,7 +212,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     const pool = listing.days.flatMap((x) => x.recordings);
     const edge = db.prepare('SELECT id, start_ts, end_ts, stream FROM clips WHERE cam = ? AND start_ts >= ? AND start_ts < ?').all(s.cam, from - START_SLACK_MS, from) as unknown as Pick<Row, 'id' | 'start_ts' | 'end_ts' | 'stream'>[];
     const near = [...edge, ...rows].map((r) => ({ id: r.id, start: r.start_ts, end: r.end_ts ?? r.start_ts, stream: r.stream }));
-    const judgedRec = (r: RecordingEntry) => r.start >= from && r.end <= cameraTo;
+    const judgedRec = (r: RecordingEntry) => r.start >= from && settlesAt(r) <= cameraTo;
     const judgedClip = (c: { start: number; end: number }) => c.start >= from && c.end <= cameraTo && listed.has(localDate(c.start, t));
     // A clip whose recording may have started outside what was listed (before
     // the window, or on an unknown or unlisted neighbour day) can't be called

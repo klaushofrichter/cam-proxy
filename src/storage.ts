@@ -193,7 +193,7 @@ export class Storage extends EventEmitter {
       logger.warn({ paused: p }, p ? 'storage_full_writing_paused' : 'storage_writing_resumed');
       const mb = (b: number) => `${Math.round(b / 2 ** 20)} MB`;
       this.d.audit?.write({
-        action: p ? 'storage-paused' : 'storage-resumed', category: ['host'], type: ['change'], outcome: p ? 'failure' : 'success',
+        action: p ? 'storage-paused' : 'storage-resumed', category: ['host'], type: ['change'], outcome: p ? 'failure' : 'success', user: 'system',
         message: p
           ? `Storage paused: ${mb(free)} free, below storage.minFreeBytes (${mb(minFreeBytes)}); stills, clips and recordings are not written`
           : `Storage resumed: ${mb(free)} free, storage.minFreeBytes is ${mb(minFreeBytes)}`,

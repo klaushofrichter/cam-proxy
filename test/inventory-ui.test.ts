@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clipsLines, duration, problemRows, eventsLines, eventsOffer, eventsRepairLines, gapRows, recoverText, kindsText, mb, progressText, RECOVER_MAX, repairLines, repairOffer, repairRows, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type RepairReport, type StillsReport } from '../web/src/lib/inventory';
+import { clipsLines, duration, LOAD_ERROR, loadMessage, problemRows, eventsLines, eventsOffer, eventsRepairLines, gapRows, recoverText, kindsText, mb, progressText, RECOVER_MAX, repairLines, repairOffer, repairRows, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type RepairReport, type StillsReport } from '../web/src/lib/inventory';
 
 const fmt = (ms: number) => new Date(ms).toISOString().slice(11, 19);
 const T = Date.UTC(2026, 8, 27, 0, 10);
@@ -97,6 +97,15 @@ const clipsReport: ClipsReport = {
   items: [...Array.from({ length: 60 }, () => ({ type: 'missing-locally', size: 2 ** 20 })), { type: 'gone-from-camera' }],
   itemsTruncated: false,
 };
+
+describe('Inventory box: the load error (#117 review)', () => {
+  it('a load error shows, and a later successful load clears it; other messages stay', () => {
+    expect(loadMessage('', false)).toBe(LOAD_ERROR);
+    expect(loadMessage(LOAD_ERROR, true)).toBe('');
+    expect(loadMessage('Inventory: an inventory is running', true)).toBe('Inventory: an inventory is running');
+    expect(loadMessage('', true)).toBe('');
+  });
+});
 
 describe('Inventory box helpers, clips', () => {
   it('describes the progress of a compare and of a repair', () => {

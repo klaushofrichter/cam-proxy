@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api, ApiError } from '../lib/api';
-  import { clipsLines, eventsLines, eventsOffer, eventsRepairLines, gapRows, mb, problemRows, progressText, recoverText, repairLines, repairOffer, repairRows, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type InventoryState, type RepairReport, type StillsReport } from '../lib/inventory';
+  import { clipsLines, LOAD_ERROR, loadMessage, eventsLines, eventsOffer, eventsRepairLines, gapRows, mb, problemRows, progressText, recoverText, repairLines, repairOffer, repairRows, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type InventoryState, type RepairReport, type StillsReport } from '../lib/inventory';
 
   // The inventories (spec 2026-10-02-inventory-design): start one, follow its
   // progress (polled every second while it runs), cancel it, and show the
@@ -44,7 +44,7 @@
     const rc = s.repairs?.events?.[0];
     if (rc && rc.runId !== recover?.runId) recover = await fetchReport<RepairReport>(rc.runId);
   }
-  const reload = () => load().catch(() => (message = 'Could not load the inventory.'));
+  const reload = () => load().then(() => (message = loadMessage(message, true)), () => (message = LOAD_ERROR));
   onMount(() => {
     void reload();
     // The offer's one hour runs out while the page stays open.

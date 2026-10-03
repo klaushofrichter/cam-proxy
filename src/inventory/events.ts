@@ -1,7 +1,7 @@
 import { setImmediate as yieldToLoop } from 'timers/promises';
 import type { TimeInfo } from '../camera/time';
 import type { Catalog } from '../catalog/db';
-import { localDate, type Kind, type Stream } from '../recordings/names';
+import { localDate, settlesAt, type Kind, type Stream } from '../recordings/names';
 import type { RecordingEntry } from '../recordings/list';
 import { listCamera, type CameraListDeps } from './camera-list';
 import { RECORDING_KINDS, SETTLE_MS } from './clips';
@@ -106,7 +106,8 @@ export async function compareEvents(d: EventsInventoryDeps, ctx: Pick<CheckConte
   let unjudged = 0;
   let atEdge = 0;
   const spans = spansByKind(triggered).filter((x) => {
-    if (from === null || x.start < from || x.end > settled) return false;
+    // A late-night recording that may still be written keeps its span unjudged (#117 review).
+    if (from === null || x.start < from || x.end > settled || x.recs.some((r) => settlesAt(r) > settled)) return false;
     if (x.start < edge) {
       atEdge++;
       return false;
@@ -162,7 +163,7 @@ export async function compareEvents(d: EventsInventoryDeps, ctx: Pick<CheckConte
   if (unjudged) notes.push(ctx.signal.aborted ? CANCELLED_NOTE(unjudged) : UNJUDGED_NOTE(unjudged));
   if (atEdge) notes.push(EDGE_NOTE(atEdge));
 
-  const judged = (r: RecordingEntry) => from !== null && r.start >= from && r.end <= settled;
+  const judged = (r: RecordingEntry) => from !== null && r.start >= from && settlesAt(r) <= settled;
   const counts: Record<string, number> = {
     eventsDays: s.eventsDays,
     cameraDays: listing.days.length,
