@@ -64,6 +64,12 @@ describe('addRecoveredEvents', () => {
     expect(addRecoveredEvents(c, 'cam1', [rec('person', 100_000, 130_000, 'eventsrepair-2-abcdef')], TOL)).toEqual({ added: [], matched: 1 });
   });
 
+  it('the guard ignores the rows this call just added: two close spans of one kind get one event each', () => {
+    const { added, matched } = addRecoveredEvents(c, 'cam1', [rec('motion', 100_000, 130_000), rec('motion', 140_000, 170_000)], TOL);
+    expect(matched).toBe(0);
+    expect(added.map((e) => e.start_ts)).toEqual([100_000, 140_000]);
+  });
+
   it('is one transaction: a failure adds none', () => {
     const bad: RecoveredEvent = { kind: 'motion', start_ts: 200_000, end_ts: 230_000, raw: { n: 1n } }; // JSON.stringify throws on a BigInt
     expect(() => addRecoveredEvents(c, 'cam1', [rec('person', 100_000, 130_000), bad], TOL)).toThrow();

@@ -99,16 +99,20 @@ export interface RecoveredEvent { kind: string; start_ts: number; end_ts: number
 // Adds recovered events (#75) in one transaction. Each one only when no event
 // of its kind (any source; an open one counts up to `openMs` long) overlaps
 // [start − beforeMs, end + afterMs] by now: one the live intake or an earlier
-// repair stored meanwhile wins (`matched`). Existing rows are never changed.
+// repair stored meanwhile wins (`matched`). The rows this call adds are not
+// checked against: two close spans of one kind each get their own event.
+// Existing rows are never changed.
 export function addRecoveredEvents(c: Catalog, cam: string, list: RecoveredEvent[], o: { beforeMs: number; afterMs: number; openMs: number }): { added: EventRow[]; matched: number } {
-  const exists = c.db.prepare('SELECT 1 AS x FROM events WHERE cam = ? AND kind = ? AND start_ts <= ? AND COALESCE(end_ts, start_ts + ?) >= ? LIMIT 1');
+  const exists = c.db.prepare('SELECT 1 AS x FROM events WHERE id <= ? AND cam = ? AND kind = ? AND start_ts <= ? AND COALESCE(end_ts, start_ts + ?) >= ? LIMIT 1');
   const insert = c.db.prepare("INSERT INTO events (cam, source, kind, start_ts, end_ts, end_reason, raw) VALUES (?, 'recovered', ?, ?, ?, 'recovered', ?) RETURNING *");
   const added: EventRow[] = [];
   let matched = 0;
   c.db.exec('BEGIN');
   try {
+    // The rows before this call: the guard compares with those only.
+    const last = (c.db.prepare('SELECT COALESCE(MAX(id), 0) AS n FROM events').get() as { n: number }).n;
     for (const e of list) {
-      if (exists.get(cam, e.kind, e.end_ts + o.afterMs, o.openMs, e.start_ts - o.beforeMs)) {
+      if (exists.get(last, cam, e.kind, e.end_ts + o.afterMs, o.openMs, e.start_ts - o.beforeMs)) {
         matched++;
         continue;
       }

@@ -93,12 +93,24 @@ describe('events repair', () => {
     expect(listEvents(catalog, { cam: 'cam1', kind: 'person' }).map((e) => e.start_ts)).toEqual([RECS[0].start]);
   });
 
+  it('two same-kind spans close together each get their own event: the guard ignores rows this repair just added', async () => {
+    const first = rec(T('2026-10-01T08:00:00'));
+    const second = rec(T('2026-10-01T08:00:40')); // 10 s after the first ends: within the tolerance, not merged
+    recs = [first, second];
+    const source = await check();
+    expect(source.counts).toMatchObject({ spans: 2, missingEvents: 2 });
+    const res = await eventsRepair(deps()).run(ctx(source));
+    expect(res.counts).toMatchObject({ requested: 2, done: 2, skipped: 0 });
+    expect(listEvents(catalog, { cam: 'cam1' }).map((e) => e.start_ts).sort()).toEqual([first.start, second.start]);
+    expect((await check()).counts).toMatchObject({ spans: 2, missingEvents: 0 });
+  });
+
   it('adds at most the cap per run, the oldest first, and says it stopped there', async () => {
     expect(RECOVER_MAX).toBe(1000);
     const source = await check();
     const res = await eventsRepair(deps(), { events: 2 }).run(ctx(source));
     expect(res).toMatchObject({ stopped: 'event-cap', counts: { candidates: 5, requested: 2, done: 2 } });
-    expect(res.message).toMatch(/; stopped: the 2-event cap$/);
+    expect(res.message).toMatch(/; stopped: the 2-event cap; 3 more missing, run again$/);
     expect(listEvents(catalog, { cam: 'cam1' }).map((e) => e.start_ts)).toEqual([RECS[0].start, RECS[0].start]);
   });
 

@@ -49,7 +49,7 @@ export function eventsRepair(d: EventsRepairDeps, limits: { events?: number } = 
     const items = added.map((e) => ({ eventId: e.id, kind: e.kind, start: e.start_ts, end: e.end_ts, result: 'ok' as const }));
     const message =
       `${added.length} of ${list.length} missing events added (${byKindText(counts, 'done')}), ${matched} had an event by then` +
-      `${stopped ? `; stopped: the ${max}-event cap` : ''}`;
+      `${stopped ? `; stopped: the ${max}-event cap; ${cmp.missing.length - list.length} more missing, run again` : ''}`;
     return { counts, top: [], items, message, stopped };
   };
 
