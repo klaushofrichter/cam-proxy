@@ -15,8 +15,9 @@ import { MAX_ITEMS, MAX_TOP, type Check, type CheckResult } from './runner';
 // one from its previous stop, a crash from the gap's start, to STARTUP_MS
 // after the start: a stall that a restart fixed stays unexplained), and a camera reboot or
 // power-cycle (from the request, or the PoE cut, to the camera's answer plus
-// STARTUP_MS; without an end record, OUTAGE_MS after the start). Storage
-// pauses write no audit record, so they can't explain a gap yet.
+// STARTUP_MS; without an end record, OUTAGE_MS after the start), and a
+// storage pause (disk full: `storage-paused` to `storage-resumed`, or to the
+// next proxy start, whose process checks the disk again; #106).
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -25,12 +26,13 @@ const DAY = 24 * HOUR;
 const CHUNK_MINUTES = 120;
 const FOOTER_READS = 6;
 // The audit actions the check reads, in one pass.
-const AUDIT_ACTIONS = ['storage-daily', 'proxy-start', 'camera-reboot', 'camera-powercycle'];
+const AUDIT_ACTIONS = ['storage-daily', 'proxy-start', 'camera-reboot', 'camera-powercycle', 'storage-paused', 'storage-resumed'];
 // Stills resume within this time after a proxy start (go2rtc, then the grabber).
 export const STARTUP_MS = 120_000;
 // A camera reboot or power-cycle without an end record: the proxy's own watch
 // gives up after this long (REBOOT_WAIT_MS) and writes `not-back`.
 export const OUTAGE_MS = REBOOT_WAIT_MS;
+const OFF_NOTE = 'Stills are off: the window ends after the newest pack';
 const CLOCK_NOTE = "Restorable seconds compare the clips' times (the camera's clock) with the stills' (the proxy's clock), not aligned: a few seconds' skew";
 
 // 59 s, 1 min, 10 min 5 s, 1 h 30 min (the same words as the admin UI's list).
@@ -42,14 +44,15 @@ export function duration(seconds: number): string {
   return `${Math.floor(s / 3600)} h${m ? ` ${m} min` : ''}`;
 }
 
-export interface StillsSettings { cam: string; intervalS: number; stillsDays: number; previewsDays: number; keepHours: number }
+// enabled: stills.enabled (false: the window ends after the newest pack, #106).
+export interface StillsSettings { cam: string; intervalS: number; stillsDays: number; previewsDays: number; keepHours: number; enabled?: boolean }
 export interface StillsInventoryDeps {
   dataDir: string;
   settings: () => StillsSettings; // read when a run starts
   audit: Pick<AuditLog, 'list'>;
   catalog: Catalog;
 }
-export type GapCause = 'stop' | 'crash' | 'reboot' | 'powercycle';
+export type GapCause = 'stop' | 'crash' | 'reboot' | 'powercycle' | 'paused';
 export interface Gap { from: number; to: number; seconds: number; explained: GapCause | null; explainedSeconds: number }
 export interface FileProblem { type: 'unreadable-pack' | 'pack-without-sprite' | 'sprite-without-pack'; minute: number }
 export type WindowReason = 'retention' | 'budget' | 'store-younger' | 'empty';
@@ -73,16 +76,23 @@ async function names(dir: string): Promise<Set<string>> {
   }
 }
 
-// Every audit record of `actions` in [from, to], oldest first.
-export function records(audit: Pick<AuditLog, 'list'>, actions: string[], from: number, to: number): AuditRecord[] {
+// Every audit record of `actions` in [from, to], oldest first. AuditLog.list
+// reads a day file whole and synchronously (a busy day can reach 50 MB), so
+// this asks for one UTC day at a time and yields to the event loop between
+// days (#106): the stall is one day's read, not eight.
+export async function records(audit: Pick<AuditLog, 'list'>, actions: string[], from: number, to: number): Promise<AuditRecord[]> {
   const out: AuditRecord[] = [];
-  let after = '';
-  for (;;) {
-    const page = audit.list({ actions, from, to, after, limit: 500 });
-    out.push(...page.records);
-    if (!page.hasMore || !page.next) return out;
-    after = page.next;
+  for (let day = dayStart(from); day <= to; day += DAY) {
+    let after = '';
+    for (;;) {
+      const page = audit.list({ actions, from: Math.max(from, day), to: Math.min(to, day + DAY - 1), after, limit: 500 });
+      out.push(...page.records);
+      if (!page.hasMore || !page.next) break;
+      after = page.next;
+    }
+    await yieldToLoop();
   }
+  return out;
 }
 
 // fn over items, at most `limit` at a time; the results in the items' order.
@@ -149,6 +159,25 @@ function cameraOutages(recs: AuditRecord[]): { a: number; b: number; cause: GapC
   return out.map((o) => ({ ...o, b: o.b + STARTUP_MS }));
 }
 
+// The storage pauses (disk full): from a `storage-paused` record to the next
+// `storage-resumed` or `proxy-start` (a new process starts unpaused and
+// writes a new record if the disk is still full); one still open lasts to `end`.
+function storagePauses(recs: AuditRecord[], end: number): { a: number; b: number; cause: GapCause }[] {
+  const out: { a: number; b: number; cause: GapCause }[] = [];
+  let open: number | null = null;
+  for (const r of recs) {
+    const action = r.event.action;
+    const t = Date.parse(r['@timestamp']);
+    if (action === 'storage-paused') open ??= t;
+    else if ((action === 'storage-resumed' || action === 'proxy-start') && open !== null) {
+      out.push({ a: open, b: t, cause: 'paused' });
+      open = null;
+    }
+  }
+  if (open !== null) out.push({ a: open, b: end, cause: 'paused' });
+  return out;
+}
+
 // Runs of missing slots, across minute and day borders.
 class Gaps {
   private open: { from: number; to: number } | null = null;
@@ -173,7 +202,7 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
     const now = ctx.now;
     const retentionFrom = dayStart(now - s.stillsDays * DAY);
     // Exclusive: the current minute is in memory, and the one before is written only when the next frame comes.
-    const to = minuteOf(now) - MINUTE;
+    let to = minuteOf(now) - MINUTE;
     const protectedFrom = now - s.keepHours * HOUR;
     const stillsDir = join(d.dataDir, 'stills', s.cam);
     const previewsDir = join(d.dataDir, 'previews', s.cam);
@@ -201,6 +230,17 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
       }
       return null;
     };
+    // Stills turned off (#106): nothing is written after the newest pack, so
+    // the window ends there instead of counting the rest as one long gap.
+    const off = s.enabled === false;
+    if (off) {
+      let newest: number | null = null;
+      for (const day of days) for (const n of day.packs) {
+        const m = minuteOfName(day.start, n, /^pack$/);
+        if (m !== null && m < to && (newest === null || m > newest)) newest = m;
+      }
+      if (newest !== null) to = newest + MINUTE;
+    }
     const oldest = oldestIn((x) => x.packs, /^pack$/);
     // Previews may be pruned before stills (their own retention, cap or keepHours):
     // a pack without a sprite before the later of their retention cutoff and the
@@ -209,7 +249,7 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
     const previewsFrom = Math.max(dayStart(now - s.previewsDays * DAY), oldestPreview ?? to);
     if (oldest === null) return { window: { from: null, to, reason: 'empty', retentionFrom, protectedFrom, notes: [] }, counts, top: [], items: [], message: 'no stills stored' };
     // One pass over the audit log for every action the check needs.
-    const audit = records(d.audit, AUDIT_ACTIONS, retentionFrom - OUTAGE_MS, now);
+    const audit = await records(d.audit, AUDIT_ACTIONS, retentionFrom - OUTAGE_MS, now);
     let from: number;
     let reason: WindowReason;
     if (oldest - retentionFrom < HOUR) {
@@ -236,7 +276,7 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
         return { t: Date.parse(r['@timestamp']), crash: det.uncleanStop === true, stop: Number.isFinite(stop) ? stop : null };
       })
       .filter((x) => x.t >= from && x.t <= to);
-    const outages = cameraOutages(audit);
+    const outages = [...cameraOutages(audit), ...storagePauses(audit, now)];
     const top: Gap[] = [];
     const gaps = new Gaps((gFrom, gTo) => {
       // Each cause's share of [gFrom, gTo); the union counts once, the largest share names the gap (a proxy start on a tie).
@@ -339,8 +379,8 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
     const problems = counts.unreadablePacks + counts.packsWithoutSprite + counts.spritesWithoutPack;
     const message =
       `${duration(counts.missingSeconds)} of ${duration(counts.expectedSeconds)} missing (${counts.missingPct}%) since ${new Date(from).toISOString().slice(0, 16).replace('T', ' ')} UTC, ` +
-      `${counts.gaps} gaps${top[0] ? ` (longest ${duration(top[0].seconds)})` : ''}, ${duration(counts.explainedSeconds)} explained by proxy stops or camera reboots, ` +
+      `${counts.gaps} gaps${top[0] ? ` (longest ${duration(top[0].seconds)})` : ''}, ${duration(counts.explainedSeconds)} explained by proxy stops, camera reboots or storage pauses, ` +
       `${duration(counts.restorableSeconds)} restorable from clips (camera clock), ${problems} file problems`;
-    return { window: { from, to, reason, retentionFrom, protectedFrom, notes: counts.restorableSeconds > 0 ? [CLOCK_NOTE] : [] }, counts, top, items, message };
+    return { window: { from, to, reason, retentionFrom, protectedFrom, notes: [...(off ? [OFF_NOTE] : []), ...(counts.restorableSeconds > 0 ? [CLOCK_NOTE] : [])] }, counts, top, items, message };
   };
 }

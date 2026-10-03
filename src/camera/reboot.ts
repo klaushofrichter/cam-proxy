@@ -155,16 +155,19 @@ export class CameraReboot {
       // answer was lost and onOff never ran): then the port may have been cut.
       const poeOff = e.poeOff;
       const turnedOn = e.turnedOn === true;
+      // The port may have been cut: from now on (if the cut wasn't seen), and
+      // the record says when (#106: the stills inventory counts from the cut).
+      if (poeOff && offAt === null) cut();
+      const cutAt = offAt as number | null;
       this.d.audit.write({
         ...base, outcome: 'failure', error: e.code,
         message: poeOff
           ? `Camera power-cycle through the PoE switch (${where}) failed: PoE may have been cut; turned back on: ${turnedOn ? 'yes' : 'no'} (${e.message})`
           : `Camera power-cycle through the PoE switch (${where}) refused: ${e.message}`,
-        details: { ...details, poeOff, ...(poeOff ? { turnedOn } : {}) },
+        details: { ...details, poeOff, ...(poeOff ? { turnedOn, offAt: cutAt } : {}) },
       });
       (poeOff && !turnedOn ? logger.error : logger.warn).call(logger, { code: e.code, poeOff, turnedOn }, 'camera_powercycle_failed');
       if (poeOff) {
-        if (offAt === null) cut();
         // The camera may have gone dark: the cooldown holds and the watch tells when (or whether) it is back.
         this.current = { ...this.current!, phase: 'rebooting' };
         this.watch(serialBefore);

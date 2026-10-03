@@ -7,7 +7,7 @@ import { AuditLog } from '../src/audit/audit-log';
 import { openCatalog, type Catalog } from '../src/catalog/db';
 import { insertClip } from '../src/catalog/clips';
 import { MinuteStore, minutePath, readPackFooter } from '../src/stills/store';
-import { stillsCheck, STARTUP_MS, OUTAGE_MS, type StillsInventoryDeps, type StillsSettings } from '../src/inventory/stills';
+import { records, stillsCheck, STARTUP_MS, OUTAGE_MS, type StillsInventoryDeps, type StillsSettings } from '../src/inventory/stills';
 import type { CheckContext, Progress } from '../src/inventory/runner';
 
 const MIN = 60_000;
@@ -133,8 +133,20 @@ describe('stills inventory', () => {
       { type: 'unreadable-pack', minute: at(5) },
       { type: 'sprite-without-pack', minute: at(7) },
     ]);
-    expect(r.message).toBe('3 min 40 s of 10 min missing (36.67%) since 2026-09-27 00:10 UTC, 4 gaps (longest 1 min 30 s), 2 min 30 s explained by proxy stops or camera reboots, 20 s restorable from clips (camera clock), 3 file problems');
+    expect(r.message).toBe('3 min 40 s of 10 min missing (36.67%) since 2026-09-27 00:10 UTC, 4 gaps (longest 1 min 30 s), 2 min 30 s explained by proxy stops, camera reboots or storage pauses, 20 s restorable from clips (camera clock), 3 file problems');
     expect(r.window.notes).toEqual([expect.stringMatching(/^Restorable .*camera's clock.*not aligned/)]);
+  });
+
+  // #106: with stills off, the time after the last pack is no gap.
+  it('stills turned off: the window ends after the newest pack, with a note', async () => {
+    const later = M + 60 * MIN; // 50 minutes after the fixture's last pack (minute 10)
+    const on = await stillsCheck(deps())(ctx({ now: later }));
+    expect(on.window.to).toBe(later - MIN);
+    expect(on.counts.minutes).toBe(59); // on: the 48 minutes after the last pack are one gap
+    const off = await stillsCheck(deps({ settings: () => settings({ enabled: false }) }))(ctx({ now: later }));
+    expect(off.window).toMatchObject({ from: M, to: at(11) });
+    expect(off.counts).toMatchObject({ minutes: 11, gaps: 4 });
+    expect(off.window.notes).toContain('Stills are off: the window ends after the newest pack');
   });
 
   it('has no clock note when no clip covers a gap (nothing restorable)', async () => {
@@ -282,6 +294,39 @@ describe('stills inventory: camera reboots and power-cycles', () => {
     ]);
   });
 
+  // #106: storage pauses write audit records now, so they explain gaps.
+  it('a storage pause explains the gap it overlaps, up to its resume (an open one, to the window end)', async () => {
+    const a = log('audit-paused', (a, set) => {
+      set(at(5, 0));
+      a.write({ action: 'storage-paused', category: ['host'], type: ['change'], outcome: 'failure', message: 'paused', details: { free: 1, minFreeBytes: 2 } });
+      set(at(5, 30));
+      a.write({ action: 'storage-resumed', category: ['host'], type: ['change'], outcome: 'success', message: 'resumed', details: { free: 3, minFreeBytes: 2 } });
+      set(at(8, 0));
+      a.write({ action: 'storage-paused', category: ['host'], type: ['change'], outcome: 'failure', message: 'paused', details: { free: 1, minFreeBytes: 2 } });
+    });
+    const r = await stillsCheck(deps({ audit: a }))(ctx());
+    expect(r.top).toEqual([
+      { from: at(7), to: at(8, 30), seconds: 90, explained: 'paused', explainedSeconds: 30 },
+      { from: at(3), to: at(4), seconds: 60, explained: null, explainedSeconds: 0 },
+      { from: at(5), to: at(6), seconds: 60, explained: 'paused', explainedSeconds: 30 },
+      { from: at(1, 10), to: at(1, 20), seconds: 10, explained: null, explainedSeconds: 0 },
+    ]);
+    expect(r.message).toContain('1 min explained by proxy stops, camera reboots or storage pauses');
+  });
+
+  it('a pause open at a proxy start ends there (the new process checks the disk again)', async () => {
+    const a = log('audit-paused-2', (a, set) => {
+      set(at(5, 0));
+      a.write({ action: 'storage-paused', category: ['host'], type: ['change'], outcome: 'failure', message: 'paused', details: { free: 1, minFreeBytes: 2 } });
+      set(at(5, 10));
+      start(a, true); // a crash start inside the gap [5:00, 6:00)
+    });
+    const r = await stillsCheck(deps({ audit: a }))(ctx());
+    expect(r.top).toContainEqual({ from: at(5), to: at(6), seconds: 60, explained: 'crash', explainedSeconds: 60 });
+    // Not still paused at 7:00: the pause ended with its process.
+    expect(r.top).toContainEqual({ from: at(7), to: at(8, 30), seconds: 90, explained: null, explainedSeconds: 0 });
+  });
+
   it('a failed power-cycle that cut the PoE explains the gap; overlapping causes count once', async () => {
     const a = log('audit-reboot-3', (a, set) => {
       set(at(3, 0));
@@ -348,11 +393,28 @@ describe('stills inventory: previews pruned before stills, cancel, audit reads',
     expect(r.counts.minutes).toBeLessThan(600);
   });
 
-  it('reads the audit log once for all the actions it needs', async () => {
-    const calls: unknown[] = [];
+  it('reads the audit log in one pass for all the actions it needs, one UTC day at a time', async () => {
+    const calls: { actions?: string[]; from?: number; to?: number }[] = [];
     const counting = { list: (q: Parameters<AuditLog['list']>[0]) => (calls.push(q), audit.list(q)) };
     await stillsCheck(deps({ audit: counting, dataDir: dir, settings: () => settings({ stillsDays: 0 }) }))(ctx());
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ actions: expect.arrayContaining(['storage-daily', 'proxy-start', 'camera-reboot', 'camera-powercycle']) });
+    // stillsDays 0: from 5 min before today's start (OUTAGE_MS) to now, two UTC days.
+    expect(calls).toHaveLength(2);
+    for (const c of calls) {
+      expect(c.actions).toEqual(expect.arrayContaining(['storage-daily', 'proxy-start', 'camera-reboot', 'camera-powercycle', 'storage-paused', 'storage-resumed']));
+      expect(Math.floor(c.from! / DAY)).toBe(Math.floor(c.to! / DAY));
+    }
+  });
+
+  // #106: a busy audit day (up to 50 MB) is read and parsed in one go; the
+  // check yields to the event loop between days, not after all of them.
+  it('yields to the event loop between the audit days it reads', async () => {
+    const order: string[] = [];
+    const tracing = { list: (q: Parameters<AuditLog['list']>[0]) => (order.push('list'), audit.list(q)) };
+    const pending = records(tracing, ['proxy-start'], NOW - 3 * DAY, NOW);
+    setImmediate(() => order.push('tick'));
+    await pending;
+    expect(order.filter((x) => x === 'list')).toHaveLength(4);
+    expect(order.indexOf('tick')).toBeGreaterThan(0);
+    expect(order.indexOf('tick')).toBeLessThan(order.lastIndexOf('list'));
   });
 });

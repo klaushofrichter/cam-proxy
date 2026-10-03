@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clipsLines, duration, eventsLines, eventsOffer, eventsRepairLines, gapRows, recoverText, kindsText, mb, progressText, RECOVER_MAX, repairLines, repairOffer, repairRows, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type RepairReport, type StillsReport } from '../web/src/lib/inventory';
+import { clipsLines, duration, LOAD_ERROR, loadMessage, problemRows, eventsLines, eventsOffer, eventsRepairLines, gapRows, recoverText, kindsText, mb, progressText, RECOVER_MAX, repairLines, repairOffer, repairRows, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type RepairReport, type StillsReport } from '../web/src/lib/inventory';
 
 const fmt = (ms: number) => new Date(ms).toISOString().slice(11, 19);
 const T = Date.UTC(2026, 8, 27, 0, 10);
@@ -34,7 +34,7 @@ describe('Inventory box helpers', () => {
     expect(stillsLines(report, fmt)).toEqual([
       'Window: 00:10:00 to 00:20:00 (shorter: the store is younger than the retention)',
       'Missing: 3 min 40 s of 10 min (36.67%) in 4 gaps',
-      'Explained (proxy stop or crash, camera reboot or power cycle): 2 min 30 s; unexplained: 1 min 10 s',
+      'Explained (proxy stop or crash, camera reboot or power cycle, storage pause): 2 min 30 s; unexplained: 1 min 10 s',
       'Restorable from local clips: 20 s',
       'Files: 1 unreadable packs, 1 packs without sprite, 1 sprites without pack',
     ]);
@@ -44,9 +44,9 @@ describe('Inventory box helpers', () => {
   });
 
   it('names every gap cause in words', () => {
-    const g = (explained: 'stop' | 'crash' | 'reboot' | 'powercycle') => ({ from: T, to: T + 60_000, seconds: 60, explained, explainedSeconds: 60 });
-    expect(gapRows({ ...report, top: [g('stop'), g('crash'), g('reboot'), g('powercycle')] }, fmt).map((x) => x.why)).toEqual([
-      'proxy stopped (1 min)', 'proxy crashed (1 min)', 'camera reboot (1 min)', 'power cycle (1 min)',
+    const g = (explained: 'stop' | 'crash' | 'reboot' | 'powercycle' | 'paused') => ({ from: T, to: T + 60_000, seconds: 60, explained, explainedSeconds: 60 });
+    expect(gapRows({ ...report, top: [g('stop'), g('crash'), g('reboot'), g('powercycle'), g('paused')] }, fmt).map((x) => x.why)).toEqual([
+      'proxy stopped (1 min)', 'proxy crashed (1 min)', 'camera reboot (1 min)', 'power cycle (1 min)', 'storage paused (disk full) (1 min)',
     ]);
   });
 
@@ -55,6 +55,28 @@ describe('Inventory box helpers', () => {
     const noted = { ...report, counts: { ...report.counts, previewsPruned: 3 }, window: { ...report.window!, notes: ['Clock note'] } };
     expect(stillsNotes(noted)).toEqual(['3 packs without sprite were previews already pruned by their own retention; not counted as problems', 'Clock note']);
     expect(stillsNotes({ ...report, outcome: 'failed' })).toEqual([]);
+  });
+
+  it('notes the packs the retention deleted during the run (#106)', () => {
+    const noted = { ...report, counts: { ...report.counts, prunedDuringRun: 2 } };
+    expect(stillsNotes(noted)).toEqual(['2 packs were deleted by the retention while the check read them; their minutes count as missing']);
+  });
+
+  it('lists the first file problems with their minute (#106)', () => {
+    const items = [
+      { type: 'unreadable-pack', minute: T },
+      { type: 'pack-without-sprite', minute: T + 60_000 },
+      { type: 'sprite-without-pack', minute: T + 120_000 },
+      ...Array.from({ length: 12 }, (_, i) => ({ type: 'sprite-without-pack', minute: T + (3 + i) * 60_000 })),
+    ];
+    const rows = problemRows({ ...report, items }, fmt);
+    expect(rows).toHaveLength(10);
+    expect(rows.slice(0, 3)).toEqual([
+      { at: '00:10:00', what: 'unreadable pack' },
+      { at: '00:11:00', what: 'pack without sprite' },
+      { at: '00:12:00', what: 'sprite without pack' },
+    ]);
+    expect(problemRows(report, fmt)).toEqual([]);
   });
 
   it('lists the top gaps with their cause', () => {
@@ -76,6 +98,15 @@ const clipsReport: ClipsReport = {
   itemsTruncated: false,
 };
 
+describe('Inventory box: the load error (#117 review)', () => {
+  it('a load error shows, and a later successful load clears it; other messages stay', () => {
+    expect(loadMessage('', false)).toBe(LOAD_ERROR);
+    expect(loadMessage(LOAD_ERROR, true)).toBe('');
+    expect(loadMessage('Inventory: an inventory is running', true)).toBe('Inventory: an inventory is running');
+    expect(loadMessage('', true)).toBe('');
+  });
+});
+
 describe('Inventory box helpers, clips', () => {
   it('describes the progress of a compare and of a repair', () => {
     expect(progressText({ runId: 'x', kind: 'clips', op: 'check', startedAt: 0, outcome: 'running', progress: { phase: 'camera', done: 2, total: 8, note: '2026-09-27' } })).toBe('Comparing clips with the camera… day 2 of 8 (2026-09-27)');
@@ -93,6 +124,8 @@ describe('Inventory box helpers, clips', () => {
       "Gone from the camera: 1 local clips; 5 older than the SD card's oldest day (2026-09-25)",
       'Not listed (the Search failed, nothing counted as missing): 2026-09-26',
     ]);
+    // FTP pictures no clip links are named for what they are (#111).
+    expect(clipsLines({ ...clipsReport, counts: { ...clipsReport.counts, snapshotsWithoutClip: 29 } }, fmt)[1]).toBe('Clips: 40 (2 from the camera); 1 without their file, 0 files without a clip, 29 snapshots without a clip');
     const local = { ...clipsReport, options: undefined, window: { from: T, to: T + 600_000, reason: 'retention' } };
     expect(clipsLines(local, fmt)).toHaveLength(3);
     expect(clipsLines({ ...clipsReport, outcome: 'failed', error: 'camera_offline: the camera does not answer' }, fmt)).toEqual(['Failed: camera_offline: the camera does not answer']);

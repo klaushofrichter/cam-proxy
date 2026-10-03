@@ -13,7 +13,7 @@ import type { TimeInfo } from '../camera/time';
 export interface CameraDay { date: string; state: 'listed' | 'unknown'; recordings: RecordingEntry[]; error?: string }
 export interface CameraListing {
   days: CameraDay[]; // camera-local dates of the window, oldest first (fewer when cancelled)
-  oldestSdDay: string | null; // the oldest day with recordings in the window's months
+  oldestSdDay: string | null; // the oldest day with recordings in the window's months and the month before
   time: TimeInfo;
 }
 export interface CameraListDeps {
@@ -32,6 +32,12 @@ const isNetworkError = (e: unknown) =>
   (e instanceof CameraError && e.code === 'camera_offline') ||
   (e instanceof Error && (/^E(CONN|HOST|NET|TIMEDOUT|PIPE)/.test((e as { code?: string }).code ?? '') || /ECONN|EHOST|ENET|ETIMEDOUT|EPIPE|timed out|fetch failed/i.test(e.message)));
 const pad = (n: number) => String(n).padStart(2, '0');
+// '2026-10-01' -> '2026-09'; '2026-01-15' -> '2025-12'.
+const monthBefore = (date: string): string => {
+  const y = Number(date.slice(0, 4));
+  const m = Number(date.slice(5, 7));
+  return m === 1 ? `${y - 1}-12` : `${y}-${pad(m - 1)}`;
+};
 
 export async function listCamera(
   d: CameraListDeps,
@@ -48,8 +54,11 @@ export async function listCamera(
   const sleep = d.sleep ?? abortableSleep;
   const dates = localDays(o.from, o.to, time);
   // The month overview: null when its Search failed (then every day is searched).
+  // The month before the window is read too, for oldestSdDay only (#111): a
+  // window starting on the 1st would otherwise take the 1st as the card's
+  // oldest day while the card still holds the previous month.
   const months = new Map<string, Set<number> | null>();
-  for (const month of new Set(dates.map((x) => x.slice(0, 7)))) {
+  for (const month of new Set([monthBefore(dates[0]), ...dates.map((x) => x.slice(0, 7))])) {
     if (o.signal.aborted) break;
     try {
       months.set(month, new Set(await d.list.monthDays(month, o.signal)));

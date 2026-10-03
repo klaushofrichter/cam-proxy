@@ -3,7 +3,8 @@
 // result and when; the cache fill).
 import { agoText, MB, mbText } from './format';
 
-export interface RecordingsLast { at: number; result: string; stream: 'main' | 'sub'; bytes: number; ms: number }
+// priority low: an inventory repair's download, not a viewer's (#111).
+export interface RecordingsLast { at: number; result: string; stream: 'main' | 'sub'; bytes: number; ms: number; priority?: 'high' | 'low' }
 export interface RecordingsStatus { last: RecordingsLast | null; cache: { bytes: number; files: number; capBytes: number } }
 
 const WORDS: Record<string, string> = { offline: 'offline', auth: 'login rejected', refused: 'refused', not_found: 'not found', timeout: 'timed out', protocol: 'protocol error' };
@@ -12,7 +13,9 @@ export const resultWord = (r: string): string => WORDS[r] ?? r;
 export function recordingsLastText(last: RecordingsLast | null, now = Date.now()): string {
   if (!last) return '—';
   const head = `${resultWord(last.result)}, ${agoText(last.at, now)}`;
-  return last.result === 'ok' ? `${head} (${last.stream}, ${mbText(last.bytes)} in ${(last.ms / 1000).toFixed(1)} s)` : head;
+  const repair = last.priority === 'low';
+  if (last.result === 'ok') return `${head} (${last.stream}, ${mbText(last.bytes)} in ${(last.ms / 1000).toFixed(1)} s${repair ? '; inventory repair' : ''})`;
+  return repair ? `${head} (inventory repair)` : head;
 }
 
 // Grey before the first download (nothing is broken) and for a recording the

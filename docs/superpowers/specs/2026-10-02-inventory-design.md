@@ -246,9 +246,9 @@ tells whether #73 is worth building.
 by proxy stops or camera reboots, 20 s restorable from clips (camera clock),
 3 file problems"; for an empty store "Stills inventory: no stills stored".
 
-**Not counted as explained:** disk-full pauses (`storage_full_writing_paused`
-is a log line, not an audit record) and a camera-side `restart`. They show as
-unexplained gaps.
+**Not counted as explained:** a camera-side `restart`. It shows as an
+unexplained gap. (Disk-full pauses are explained since #106: see the
+rulings.)
 
 ### 4. Clips (#74, PR 2)
 
@@ -414,7 +414,6 @@ unexplained gaps.
 ## Out of scope
 
 - Scheduled inventories or repairs (button only).
-- Explaining gaps by disk-full pauses (no audit record for a pause yet).
 - Restoring stills from SD recordings in one step.
 - Multi-camera runs (one camera per proxy).
 
@@ -507,6 +506,19 @@ PR 3 (events, #75):
   the repair re-create the deleted events as recovered: they stand for real
   recordings, not phantoms.
 - Recovered rows are removed by SQL by `runId` (README), no API route.
+
+Deferred review findings (#106, #111, #114):
+
+- Storage pauses write `storage-paused` / `storage-resumed` audit records;
+  a pause explains still gaps (`paused`) from its record to the resume or the
+  next proxy start (a new process starts unpaused and records again).
+- With `stills.enabled` off, the stills window ends after the newest pack.
+- The audit log is read one UTC day at a time, yielding between days.
+- FTP pictures no clip row links are `snapshotsWithoutClip`, not files
+  without a row.
+- `oldestSdDay` also reads the month before the window (for that day only);
+  if that overview fails, the oldest day is unknown.
+- The events message gives the window start as the camera-local date.
 
 ## References
 

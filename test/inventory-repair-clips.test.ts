@@ -110,6 +110,20 @@ const until = async (ok: () => boolean, ms = 5000) => {
 };
 
 describe('clips repair', () => {
+  // #117 review: never fetch a late-night recording that may still be written (truncated).
+  it('skips a late-night recording listed with end 000000 until 01:00 the next day', async () => {
+    const s = setup();
+    const id = `RecS0A_20261001_235600_000000_0_55148000000000_${video.length.toString(16).toUpperCase()}.mp4`;
+    const start = Date.UTC(2026, 9, 1, 23, 56);
+    const late: RecordingEntry = { id, path: `/mnt/sda/Mp4Record/2026-10-01/${id}`, start, end: Date.UTC(2026, 9, 2), stream: 'sub', size: video.length, kinds: ['motion'] };
+    s.onCamera(late);
+    const early = await clipsRepair(s.deps).run(ctx(report([missing(late)], { startedAt: Date.UTC(2026, 9, 2, 0, 20) }), { now: Date.UTC(2026, 9, 2, 0, 30) }));
+    expect(early.items.map(outcome)).toEqual(['still-recording']);
+    expect(s.calls).toEqual([]);
+    const later = await clipsRepair(s.deps).run(ctx(report([missing(late)], { startedAt: Date.UTC(2026, 9, 2, 1, 5) }), { now: Date.UTC(2026, 9, 2, 1, 6) }));
+    expect(later.items.map(outcome)).toEqual(['ok']);
+  });
+
   it('fetches the missing recordings at low priority after a viewer\'s fetch, 1 s apart, and indexes them from the camera', async () => {
     expect([REPAIR_MAX_CLIPS, REPAIR_MAX_BYTES, REPAIR_GAP_MS, REPAIR_MAX_FAILURES]).toEqual([50, 200 * 2 ** 20, 1000, 3]);
     const s = setup({ gated: [recording(9).path] });

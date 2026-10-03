@@ -56,6 +56,17 @@ export function recordingTimes(n: SdName, t: TimeInfo): { start: number; end: nu
   return { start, end };
 }
 
+// A recording that starts in the last minutes before midnight is listed with
+// end 000000 both when it ended at midnight and while it is still being
+// written (stillRecording can't tell). The inventories judge such a
+// recording only from LATE_NIGHT_MS after midnight (#117 review): a repair
+// would otherwise fetch it truncated, and its FTP clip land beside it later.
+export const LATE_NIGHT_MS = 3_600_000;
+export function settlesAt(r: { id: string; end: number }): number {
+  const n = parseSdName(r.id);
+  return n && n.end === '000000' && n.start >= '235500' ? r.end + LATE_NIGHT_MS : r.end;
+}
+
 // The camera-local date of a moment (one helper with the analytics limits).
 export const localDate = (ts: number, t: TimeInfo): string => localDay(ts, t);
 
