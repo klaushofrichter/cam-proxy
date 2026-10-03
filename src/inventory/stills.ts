@@ -15,8 +15,9 @@ import { MAX_ITEMS, MAX_TOP, type Check, type CheckResult } from './runner';
 // one from its previous stop, a crash from the gap's start, to STARTUP_MS
 // after the start: a stall that a restart fixed stays unexplained), and a camera reboot or
 // power-cycle (from the request, or the PoE cut, to the camera's answer plus
-// STARTUP_MS; without an end record, OUTAGE_MS after the start). Storage
-// pauses write no audit record, so they can't explain a gap yet.
+// STARTUP_MS; without an end record, OUTAGE_MS after the start), and a
+// storage pause (disk full: `storage-paused` to `storage-resumed`, or to the
+// next proxy start, whose process checks the disk again; #106).
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -25,7 +26,7 @@ const DAY = 24 * HOUR;
 const CHUNK_MINUTES = 120;
 const FOOTER_READS = 6;
 // The audit actions the check reads, in one pass.
-const AUDIT_ACTIONS = ['storage-daily', 'proxy-start', 'camera-reboot', 'camera-powercycle'];
+const AUDIT_ACTIONS = ['storage-daily', 'proxy-start', 'camera-reboot', 'camera-powercycle', 'storage-paused', 'storage-resumed'];
 // Stills resume within this time after a proxy start (go2rtc, then the grabber).
 export const STARTUP_MS = 120_000;
 // A camera reboot or power-cycle without an end record: the proxy's own watch
@@ -49,7 +50,7 @@ export interface StillsInventoryDeps {
   audit: Pick<AuditLog, 'list'>;
   catalog: Catalog;
 }
-export type GapCause = 'stop' | 'crash' | 'reboot' | 'powercycle';
+export type GapCause = 'stop' | 'crash' | 'reboot' | 'powercycle' | 'paused';
 export interface Gap { from: number; to: number; seconds: number; explained: GapCause | null; explainedSeconds: number }
 export interface FileProblem { type: 'unreadable-pack' | 'pack-without-sprite' | 'sprite-without-pack'; minute: number }
 export type WindowReason = 'retention' | 'budget' | 'store-younger' | 'empty';
@@ -149,6 +150,25 @@ function cameraOutages(recs: AuditRecord[]): { a: number; b: number; cause: GapC
   return out.map((o) => ({ ...o, b: o.b + STARTUP_MS }));
 }
 
+// The storage pauses (disk full): from a `storage-paused` record to the next
+// `storage-resumed` or `proxy-start` (a new process starts unpaused and
+// writes a new record if the disk is still full); one still open lasts to `end`.
+function storagePauses(recs: AuditRecord[], end: number): { a: number; b: number; cause: GapCause }[] {
+  const out: { a: number; b: number; cause: GapCause }[] = [];
+  let open: number | null = null;
+  for (const r of recs) {
+    const action = r.event.action;
+    const t = Date.parse(r['@timestamp']);
+    if (action === 'storage-paused') open ??= t;
+    else if ((action === 'storage-resumed' || action === 'proxy-start') && open !== null) {
+      out.push({ a: open, b: t, cause: 'paused' });
+      open = null;
+    }
+  }
+  if (open !== null) out.push({ a: open, b: end, cause: 'paused' });
+  return out;
+}
+
 // Runs of missing slots, across minute and day borders.
 class Gaps {
   private open: { from: number; to: number } | null = null;
@@ -236,7 +256,7 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
         return { t: Date.parse(r['@timestamp']), crash: det.uncleanStop === true, stop: Number.isFinite(stop) ? stop : null };
       })
       .filter((x) => x.t >= from && x.t <= to);
-    const outages = cameraOutages(audit);
+    const outages = [...cameraOutages(audit), ...storagePauses(audit, now)];
     const top: Gap[] = [];
     const gaps = new Gaps((gFrom, gTo) => {
       // Each cause's share of [gFrom, gTo); the union counts once, the largest share names the gap (a proxy start on a tie).
@@ -339,7 +359,7 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
     const problems = counts.unreadablePacks + counts.packsWithoutSprite + counts.spritesWithoutPack;
     const message =
       `${duration(counts.missingSeconds)} of ${duration(counts.expectedSeconds)} missing (${counts.missingPct}%) since ${new Date(from).toISOString().slice(0, 16).replace('T', ' ')} UTC, ` +
-      `${counts.gaps} gaps${top[0] ? ` (longest ${duration(top[0].seconds)})` : ''}, ${duration(counts.explainedSeconds)} explained by proxy stops or camera reboots, ` +
+      `${counts.gaps} gaps${top[0] ? ` (longest ${duration(top[0].seconds)})` : ''}, ${duration(counts.explainedSeconds)} explained by proxy stops, camera reboots or storage pauses, ` +
       `${duration(counts.restorableSeconds)} restorable from clips (camera clock), ${problems} file problems`;
     return { window: { from, to, reason, retentionFrom, protectedFrom, notes: counts.restorableSeconds > 0 ? [CLOCK_NOTE] : [] }, counts, top, items, message };
   };

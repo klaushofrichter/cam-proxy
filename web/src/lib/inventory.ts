@@ -4,7 +4,7 @@ export interface Progress { phase: string; done: number; total: number; note?: s
 export interface RunningView { runId: string; kind: string; op?: 'check' | 'repair'; startedAt: number; outcome: 'running'; progress: Progress }
 export interface RunSummary { runId: string; kind: string; startedAt: number; tookMs: number; outcome: 'ok' | 'cancelled' | 'failed'; counts: Record<string, number>; message: string }
 export interface InventoryState { running: RunningView | null; runs: Record<string, RunSummary[]>; repairs?: Record<string, RunSummary[]> }
-export type GapCause = 'stop' | 'crash' | 'reboot' | 'powercycle';
+export type GapCause = 'stop' | 'crash' | 'reboot' | 'powercycle' | 'paused';
 export interface Gap { from: number; to: number; seconds: number; explained: GapCause | null; explainedSeconds: number }
 export interface StillsReport extends RunSummary {
   window: { from: number | null; to: number; reason: string; notes?: string[] } | null;
@@ -20,7 +20,7 @@ const REASONS: Record<string, string> = {
   'store-younger': 'shorter: the store is younger than the retention',
   empty: 'no stills stored',
 };
-const CAUSES: Record<GapCause, string> = { stop: 'proxy stopped', crash: 'proxy crashed', reboot: 'camera reboot', powercycle: 'power cycle' };
+const CAUSES: Record<GapCause, string> = { stop: 'proxy stopped', crash: 'proxy crashed', reboot: 'camera reboot', powercycle: 'power cycle', paused: 'storage paused (disk full)' };
 const local = (ms: number) => new Date(ms).toLocaleString();
 
 // 0 s, 59 s, 1 min, 10 min 5 s, 1 h, 1 h 30 min (no seconds once it is hours).
@@ -48,7 +48,7 @@ export function stillsLines(r: StillsReport, fmt: (ms: number) => string = local
     ...(r.outcome === 'cancelled' ? ['Cancelled: the counts are partial'] : []),
     `Window: ${fmt(r.window.from)} to ${fmt(r.window.to)} (${REASONS[r.window.reason] ?? r.window.reason})`,
     `Missing: ${duration(c.missingSeconds)} of ${duration(c.expectedSeconds)} (${c.missingPct}%) in ${c.gaps} gaps`,
-    `Explained (proxy stop or crash, camera reboot or power cycle): ${duration(c.explainedSeconds)}; unexplained: ${duration(c.unexplainedSeconds)}`,
+    `Explained (proxy stop or crash, camera reboot or power cycle, storage pause): ${duration(c.explainedSeconds)}; unexplained: ${duration(c.unexplainedSeconds)}`,
     `Restorable from local clips: ${duration(c.restorableSeconds)}`,
     `Files: ${c.unreadablePacks} unreadable packs, ${c.packsWithoutSprite} packs without sprite, ${c.spritesWithoutPack} sprites without pack`,
   ];

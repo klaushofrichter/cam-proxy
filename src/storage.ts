@@ -182,11 +182,23 @@ export class Storage extends EventEmitter {
   }
 
   // The hard floor: below storage.minFreeBytes, writers must not write.
+  // A change writes a `storage-paused` or `storage-resumed` audit record: the
+  // stills inventory explains gaps by them (#106).
   check(): boolean {
-    const p = this.disk().free < this.d.config().storage.minFreeBytes;
+    const free = this.disk().free;
+    const minFreeBytes = this.d.config().storage.minFreeBytes;
+    const p = free < minFreeBytes;
     if (p !== this.isPaused) {
       this.isPaused = p;
       logger.warn({ paused: p }, p ? 'storage_full_writing_paused' : 'storage_writing_resumed');
+      const mb = (b: number) => `${Math.round(b / 2 ** 20)} MB`;
+      this.d.audit?.write({
+        action: p ? 'storage-paused' : 'storage-resumed', category: ['host'], type: ['change'], outcome: p ? 'failure' : 'success',
+        message: p
+          ? `Storage paused: ${mb(free)} free, below storage.minFreeBytes (${mb(minFreeBytes)}); stills, clips and recordings are not written`
+          : `Storage resumed: ${mb(free)} free, storage.minFreeBytes is ${mb(minFreeBytes)}`,
+        details: { free, minFreeBytes },
+      });
       this.emit('paused', p);
     }
     return p;

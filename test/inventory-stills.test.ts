@@ -133,7 +133,7 @@ describe('stills inventory', () => {
       { type: 'unreadable-pack', minute: at(5) },
       { type: 'sprite-without-pack', minute: at(7) },
     ]);
-    expect(r.message).toBe('3 min 40 s of 10 min missing (36.67%) since 2026-09-27 00:10 UTC, 4 gaps (longest 1 min 30 s), 2 min 30 s explained by proxy stops or camera reboots, 20 s restorable from clips (camera clock), 3 file problems');
+    expect(r.message).toBe('3 min 40 s of 10 min missing (36.67%) since 2026-09-27 00:10 UTC, 4 gaps (longest 1 min 30 s), 2 min 30 s explained by proxy stops, camera reboots or storage pauses, 20 s restorable from clips (camera clock), 3 file problems');
     expect(r.window.notes).toEqual([expect.stringMatching(/^Restorable .*camera's clock.*not aligned/)]);
   });
 
@@ -280,6 +280,39 @@ describe('stills inventory: camera reboots and power-cycles', () => {
       { from: at(5), to: at(6), seconds: 60, explained: 'reboot', explainedSeconds: 60 },
       { from: at(1, 10), to: at(1, 20), seconds: 10, explained: 'reboot', explainedSeconds: 10 },
     ]);
+  });
+
+  // #106: storage pauses write audit records now, so they explain gaps.
+  it('a storage pause explains the gap it overlaps, up to its resume (an open one, to the window end)', async () => {
+    const a = log('audit-paused', (a, set) => {
+      set(at(5, 0));
+      a.write({ action: 'storage-paused', category: ['host'], type: ['change'], outcome: 'failure', message: 'paused', details: { free: 1, minFreeBytes: 2 } });
+      set(at(5, 30));
+      a.write({ action: 'storage-resumed', category: ['host'], type: ['change'], outcome: 'success', message: 'resumed', details: { free: 3, minFreeBytes: 2 } });
+      set(at(8, 0));
+      a.write({ action: 'storage-paused', category: ['host'], type: ['change'], outcome: 'failure', message: 'paused', details: { free: 1, minFreeBytes: 2 } });
+    });
+    const r = await stillsCheck(deps({ audit: a }))(ctx());
+    expect(r.top).toEqual([
+      { from: at(7), to: at(8, 30), seconds: 90, explained: 'paused', explainedSeconds: 30 },
+      { from: at(3), to: at(4), seconds: 60, explained: null, explainedSeconds: 0 },
+      { from: at(5), to: at(6), seconds: 60, explained: 'paused', explainedSeconds: 30 },
+      { from: at(1, 10), to: at(1, 20), seconds: 10, explained: null, explainedSeconds: 0 },
+    ]);
+    expect(r.message).toContain('1 min explained by proxy stops, camera reboots or storage pauses');
+  });
+
+  it('a pause open at a proxy start ends there (the new process checks the disk again)', async () => {
+    const a = log('audit-paused-2', (a, set) => {
+      set(at(5, 0));
+      a.write({ action: 'storage-paused', category: ['host'], type: ['change'], outcome: 'failure', message: 'paused', details: { free: 1, minFreeBytes: 2 } });
+      set(at(5, 10));
+      start(a, true); // a crash start inside the gap [5:00, 6:00)
+    });
+    const r = await stillsCheck(deps({ audit: a }))(ctx());
+    expect(r.top).toContainEqual({ from: at(5), to: at(6), seconds: 60, explained: 'crash', explainedSeconds: 60 });
+    // Not still paused at 7:00: the pause ended with its process.
+    expect(r.top).toContainEqual({ from: at(7), to: at(8, 30), seconds: 90, explained: null, explainedSeconds: 0 });
   });
 
   it('a failed power-cycle that cut the PoE explains the gap; overlapping causes count once', async () => {

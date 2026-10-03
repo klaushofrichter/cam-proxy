@@ -34,7 +34,7 @@ describe('Inventory box helpers', () => {
     expect(stillsLines(report, fmt)).toEqual([
       'Window: 00:10:00 to 00:20:00 (shorter: the store is younger than the retention)',
       'Missing: 3 min 40 s of 10 min (36.67%) in 4 gaps',
-      'Explained (proxy stop or crash, camera reboot or power cycle): 2 min 30 s; unexplained: 1 min 10 s',
+      'Explained (proxy stop or crash, camera reboot or power cycle, storage pause): 2 min 30 s; unexplained: 1 min 10 s',
       'Restorable from local clips: 20 s',
       'Files: 1 unreadable packs, 1 packs without sprite, 1 sprites without pack',
     ]);
@@ -44,9 +44,9 @@ describe('Inventory box helpers', () => {
   });
 
   it('names every gap cause in words', () => {
-    const g = (explained: 'stop' | 'crash' | 'reboot' | 'powercycle') => ({ from: T, to: T + 60_000, seconds: 60, explained, explainedSeconds: 60 });
-    expect(gapRows({ ...report, top: [g('stop'), g('crash'), g('reboot'), g('powercycle')] }, fmt).map((x) => x.why)).toEqual([
-      'proxy stopped (1 min)', 'proxy crashed (1 min)', 'camera reboot (1 min)', 'power cycle (1 min)',
+    const g = (explained: 'stop' | 'crash' | 'reboot' | 'powercycle' | 'paused') => ({ from: T, to: T + 60_000, seconds: 60, explained, explainedSeconds: 60 });
+    expect(gapRows({ ...report, top: [g('stop'), g('crash'), g('reboot'), g('powercycle'), g('paused')] }, fmt).map((x) => x.why)).toEqual([
+      'proxy stopped (1 min)', 'proxy crashed (1 min)', 'camera reboot (1 min)', 'power cycle (1 min)', 'storage paused (disk full) (1 min)',
     ]);
   });
 
