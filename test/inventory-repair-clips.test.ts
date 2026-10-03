@@ -18,7 +18,7 @@ import { RecordingList, SearchError, type RecordingEntry } from '../src/recordin
 import { createRecordingsSide } from '../src/recordings/side';
 import { StreamLog } from '../src/stream/log';
 import { clipsCheck, mb, type ClipItem } from '../src/inventory/clips';
-import { clipsRepair, REPAIR_GAP_MS, REPAIR_MAX_BYTES, REPAIR_MAX_CLIPS, REPAIR_MAX_FAILURES, type ClipsRepairDeps, type ClipsRepairSettings } from '../src/inventory/repair-clips';
+import { clipsRepair, REPAIR_GAP_MS, REPAIR_MAX_BYTES, REPAIR_MAX_CLIPS, REPAIR_MAX_FAILURES, type ClipsRepairDeps, type ClipsRepairSettings, type RepairItem } from '../src/inventory/repair-clips';
 import type { InventoryReport, RepairContext } from '../src/inventory/runner';
 
 const run = promisify(execFile);
@@ -98,6 +98,8 @@ function setup(o: { settings?: Partial<ClipsRepairSettings>; fail?: (path: strin
   const onCamera = (...es: RecordingEntry[]) => es.forEach((e) => known.set(e.id, e));
   return { dir, catalog, cache, fetcher, deps, calls, gates, sleeps, onCamera, tempDir };
 }
+// An item's skip reason, or its result.
+const outcome = (x: unknown) => (x as RepairItem).reason ?? (x as RepairItem).result;
 const ctx = (source: InventoryReport, o: Partial<RepairContext> = {}): RepairContext => ({ signal: new AbortController().signal, progress: () => undefined, now: NOW, source, ...o });
 const until = async (ok: () => boolean, ms = 5000) => {
   const t = Date.now();
@@ -252,7 +254,7 @@ describe('clips repair', () => {
     const es = [2, 3].map((i) => recording(i));
     s.onCamera(big, ...es);
     const r = await clipsRepair(s.deps).run(ctx(report([big, ...es].map(missing))));
-    expect(r.items.map((x) => x.reason ?? x.result)).toEqual(['too-big', 'ok', 'ok']);
+    expect(r.items.map(outcome)).toEqual(['too-big', 'ok', 'ok']);
     expect(s.calls).toEqual(es.map((e) => e.path)); // the big one is never fetched
     expect(r.counts).toMatchObject({ done: 2, skipped: 1 });
     expect(r.stopped).toBeNull();
@@ -267,7 +269,7 @@ describe('clips repair', () => {
     s.deps.indexer = () => ({ addRecording: async (_f: string, o: { start: number }) => ({ id: 1, size: es.find((e) => e.start === o.start)!.size }) as never });
     const r = await clipsRepair(s.deps).run(ctx(report(es.map(missing))));
     // 100 + 150 = 250; 80 would make 330: skipped; 40 makes 290; 30 would make 320: skipped.
-    expect(r.items.map((x) => x.reason ?? x.result)).toEqual(['ok', 'ok', 'byte-cap', 'ok', 'byte-cap']);
+    expect(r.items.map(outcome)).toEqual(['ok', 'ok', 'byte-cap', 'ok', 'byte-cap']);
     expect(r.counts).toMatchObject({ done: 3, skipped: 2, bytes: 290 });
     expect(r.stopped).toBe('byte-cap');
   });
@@ -288,7 +290,7 @@ describe('clips repair', () => {
     };
     const r = await clipsRepair(s.deps).run(ctx(report(es.map(missing))));
     // Three busy ones in a row never stop the run.
-    expect(r.items.map((x) => x.reason ?? x.result)).toEqual(['busy', 'busy', 'busy', 'ok']);
+    expect(r.items.map(outcome)).toEqual(['busy', 'busy', 'busy', 'ok']);
     expect([...tries.values()]).toEqual([3, 3, 3, 1]);
     expect(s.sleeps).toEqual([1000, 1000, 1000, 1000, 1000, 1000]);
     expect(r.counts).toMatchObject({ done: 1, failed: 0, skipped: 3 });

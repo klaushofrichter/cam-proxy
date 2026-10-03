@@ -364,7 +364,6 @@ describe('storage: the recordings cache', () => {
   // #74 final review: repaired clips are old recordings fetched back, not growth.
   it('a write marked not growth (the clips repair) counts as usage but not in growthPerDay', () => {
     const x = setup();
-    x.put('clips', NOW - HOUR, 1000);
     x.storage.recount();
     x.storage.noteWritten('clips', 3 * 1000, 1);
     const before = x.storage.usage();
