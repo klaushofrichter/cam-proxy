@@ -188,7 +188,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     }
 
     let message =
-      `${counts.clips} clips since ${new Date(from).toISOString()}: ${counts.rowsWithoutFile} rows without file, ${counts.filesWithoutRow} files without row, ` +
+      `${counts.clips} clips in the last ${s.clipsDays} days (since ${new Date(from).toISOString().slice(0, 10)}): ${counts.rowsWithoutFile} rows without file, ${counts.filesWithoutRow} files without row, ` +
       `${counts.eventsWithoutClip} of ${counts.events} events without clip, ${counts.clipsWithoutEvent} clips without event`;
     const window: CheckResult['window'] = { from, to, reason: 'retention', notes };
     if (!ctx.options?.camera || cancelled || ctx.signal.aborted) return { window, counts, top: [], items: local, message };

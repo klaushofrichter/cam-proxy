@@ -117,8 +117,8 @@ export function clipsLines(r: ClipsReport, fmt: (ms: number) => string = local):
 // The repair the newest clips report allows: a finished compare with the
 // camera, less than an hour old, with recordings missing here. `count` and
 // `bytes` are what one run fetches at most (the first 50 candidates).
-export function repairOffer(r: ClipsReport | null, now: number): { count: number; bytes: number } | null {
-  if (!r || r.outcome !== 'ok' || !r.options?.camera || now - r.startedAt >= REPAIR_MAX_AGE_MS || !r.counts.missingLocally) return null;
+export function repairOffer(r: ClipsReport | null, now: number, repair: { source?: string } | null = null): { count: number; bytes: number } | null {
+  if (!r || repair?.source === r.runId || r.outcome !== 'ok' || !r.options?.camera || now - r.startedAt >= REPAIR_MAX_AGE_MS || !r.counts.missingLocally) return null;
   const first = r.items.filter((x) => x.type === 'missing-locally').slice(0, REPAIR_MAX_CLIPS);
   return { count: Math.min(r.counts.missingLocally, REPAIR_MAX_CLIPS), bytes: first.reduce((n, x) => n + (x.size ?? 0), 0) };
 }
@@ -134,7 +134,7 @@ const SKIPS: Record<string, string> = {
 const STOPS: Record<string, string> = {
   'clip-cap': 'the 50-clip cap',
   'byte-cap': 'the 200 MB cap',
-  'max-gb': 'the storage limit (ftp.maxGB)',
+  'max-gb': 'ftp.maxGB would be exceeded',
   paused: 'storage is paused (disk full)',
   failures: '3 failures in a row',
   refused: 'the camera refused a download',

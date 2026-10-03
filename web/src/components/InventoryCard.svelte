@@ -11,7 +11,7 @@
   // The repair is confirmed by the Maintenance page's shared dialog (onrepair
   // hands it the dry-run numbers); fetchLost() runs after the confirm.
   let { onrepair }: { onrepair: (offer: { count: number; bytes: number }) => void } = $props();
-  let inv = $state<InventoryState | null>(null)
+  let inv = $state<InventoryState | null>(null);
   let stills = $state<StillsReport | null>(null);
   let clips = $state<ClipsReport | null>(null);
   let repair = $state<RepairReport | null>(null);
@@ -20,7 +20,7 @@
   let cancelling = $state(false);
   let now = $state(Date.now());
   const busy = $derived(!!inv?.running);
-  const offer = $derived(repairOffer(clips, now));
+  const offer = $derived(repairOffer(clips, now, repair));
 
   const fetchReport = <T,>(runId: string) => api<T>('GET', `/control/inventory/runs/${encodeURIComponent(runId)}`);
   async function load() {
@@ -48,7 +48,10 @@
   });
 
   async function post(path: string, body: object, label: string) {
-    if (starting || busy) return;
+    if (starting || busy) {
+      message = `${label}: another inventory is running`;
+      return;
+    }
     starting = true;
     message = '';
     try {
@@ -120,7 +123,7 @@
         </table>
       {/if}
       {#if !offer && clips.outcome === 'ok' && clips.options?.camera && clips.counts.missingLocally}
-        <p class="small" data-testid="inventory-repair-stale">Compare again first: a repair needs a compare less than an hour old.</p>
+        <p class="small" role="status" data-testid="inventory-repair-stale">Compare again first: a repair needs a compare less than an hour old, and one that no repair has used yet.</p>
       {/if}
       {#if offer}
         <div class="buttons">
@@ -135,7 +138,7 @@
       <p class="line">{repair.message}</p>
       <p class="small">{new Date(repair.startedAt).toLocaleString()}, took {(repair.tookMs / 1000).toFixed(1)} s</p>
       <ul>
-        {#each repairLines(repair) as l, i (i)}<li>{l}</li>{/each}
+        {#each repairLines(repair) as l, i (i)}<li role={/^(Stopped|Skipped)/.test(l) ? 'status' : undefined}>{l}</li>{/each}
       </ul>
       {#if repair.top.length}
         <table>

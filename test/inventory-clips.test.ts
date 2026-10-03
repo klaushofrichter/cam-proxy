@@ -116,7 +116,7 @@ describe('clips inventory, local (part 1)', () => {
       { type: 'clip-without-event', clipId: f.c6.id, start: f.c6.start_ts },
     ]);
     expect(r.top).toEqual([]);
-    expect(r.message).toBe('5 clips since 2026-09-30T00:00:00.000Z: 1 rows without file, 2 files without row, 1 of 3 events without clip, 3 clips without event');
+    expect(r.message).toBe('5 clips in the last 2 days (since 2026-09-30): 1 rows without file, 2 files without row, 1 of 3 events without clip, 3 clips without event');
   });
 
   it('notes that FTP is off', async () => {
@@ -156,7 +156,7 @@ describe('clips inventory, against the camera (part 2)', () => {
       { date: '2026-09-30', state: 'unknown', recordings: 0, missingLocally: 0, goneFromCamera: 0 },
     ]);
     expect(r.message).toBe(
-      '5 clips since 2026-09-30T00:00:00.000Z: 1 rows without file, 2 files without row, 1 of 3 events without clip, 3 clips without event; ' +
+      '5 clips in the last 2 days (since 2026-09-30): 1 rows without file, 2 files without row, 1 of 3 events without clip, 3 clips without event; ' +
         'camera (sub): 4 recordings, 1 missing locally (2.0 MB), 1 local clips gone from the camera, 1 days unknown',
     );
   });

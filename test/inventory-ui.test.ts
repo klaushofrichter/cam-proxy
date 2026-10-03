@@ -105,6 +105,8 @@ describe('Inventory box helpers, clips', () => {
     expect(repairOffer({ ...clipsReport, outcome: 'cancelled' }, T)).toBeNull();
     expect(repairOffer({ ...clipsReport, counts: { ...clipsReport.counts, missingLocally: 0 } }, T)).toBeNull();
     expect(repairOffer(null, T)).toBeNull();
+    expect(repairOffer(clipsReport, T, { source: 'clips-1-abcdef' })).toBeNull(); // already repaired from this compare
+    expect(repairOffer(clipsReport, T, { source: 'clips-0-other' })).not.toBeNull();
   });
 
   it('lists the failures of a repair', () => {
@@ -119,6 +121,7 @@ describe('Inventory box helpers, clips', () => {
       items: [{ id: 'a', start: T, result: 'skipped', reason: 'viewer' }, { id: 'b', start: T, result: 'skipped', reason: 'viewer' }, { id: 'c', start: T, result: 'skipped', reason: 'already-local' }, { id: 'd', start: T, result: 'ok' }],
     };
     expect(repairLines(rep)).toEqual(['Fetched: 5 of 9 (5.0 MB); failed: 1; skipped: 3', 'Skipped, a viewer was downloading it: 2', 'Skipped, already here: 1', 'Stopped: the 200 MB cap']);
+    expect(repairLines({ ...rep, stopped: 'max-gb' }).at(-1)).toBe('Stopped: ftp.maxGB would be exceeded');
     expect(repairLines({ ...rep, outcome: 'failed', error: 'camera_offline: x' })).toEqual(['Failed: camera_offline: x']);
   });
 
