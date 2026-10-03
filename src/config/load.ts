@@ -45,8 +45,18 @@ function merge(base: Obj, over: Obj): Obj {
   return out;
 }
 
-function get(obj: unknown, path: string): unknown {
+// The value at a dotted settings path ('ftp.port'), or undefined.
+export function getPath(obj: unknown, path: string): unknown {
   return path.split('.').reduce<unknown>((o, k) => (isObj(o) ? o[k] : undefined), obj);
+}
+
+// Sets (or, for undefined, deletes) the value at a dotted settings path.
+export function setPath(o: Record<string, unknown>, path: string, v: unknown): void {
+  const keys = path.split('.');
+  let x = o;
+  for (const k of keys.slice(0, -1)) x = (x[k] ??= {}) as Record<string, unknown>;
+  if (v === undefined) delete x[keys[keys.length - 1]];
+  else x[keys[keys.length - 1]] = v;
 }
 
 function readJson(file: string): unknown {
@@ -88,12 +98,12 @@ function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSetti
   // A copy: the result is changed below (dataDir), DEFAULTS never is.
   let merged = merge(structuredClone(DEFAULTS) as unknown as Obj, structuredClone(fileSettings));
   // storage.maxBytes replaces the default maxPercent budget.
-  if (get(fileSettings, 'storage.maxBytes') !== undefined || get(overrides, 'storage.maxBytes') !== undefined) {
+  if (getPath(fileSettings, 'storage.maxBytes') !== undefined || getPath(overrides, 'storage.maxBytes') !== undefined) {
     merged = merge(merged, { storage: { ...(merged.storage as Obj), maxPercent: undefined } });
     delete (merged.storage as Obj).maxPercent;
   }
   // go2rtc.url replaces the default binary.
-  if (get(fileSettings, 'go2rtc.url') !== undefined || get(overrides, 'go2rtc.url') !== undefined) {
+  if (getPath(fileSettings, 'go2rtc.url') !== undefined || getPath(overrides, 'go2rtc.url') !== undefined) {
     delete (merged.go2rtc as Obj).binary;
   }
   const config = merge(merged, structuredClone(overrides)) as unknown as Config;
@@ -102,7 +112,7 @@ function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSetti
   crossCheck(config);
   const sources: Record<string, Source> = {};
   for (const p of leafPaths()) {
-    sources[p] = get(overrides, p) !== undefined ? 'override' : get(fileSettings, p) !== undefined ? 'file' : 'default';
+    sources[p] = getPath(overrides, p) !== undefined ? 'override' : getPath(fileSettings, p) !== undefined ? 'file' : 'default';
   }
   const secrets = asConfigError(() => loadSecrets(env, config.ftp.enabled));
   return { config, secrets, sources, files: { config: configFile, overrides: join(dataDir, 'overrides.json') }, env, fileSettings, overrides };
@@ -117,11 +127,11 @@ export function loadConfig(env: NodeJS.ProcessEnv, opts: { cwd?: string } = {}):
   asConfigError(() => checkPartial(fileSettings));
   const baseDir = file ? dirname(file) : cwd;
   // Overrides live in the data folder, which the file (not an override) sets.
-  const fileDataDir = (get(fileSettings, 'server.dataDir') as string | undefined) ?? DEFAULTS.server.dataDir;
+  const fileDataDir = (getPath(fileSettings, 'server.dataDir') as string | undefined) ?? DEFAULTS.server.dataDir;
   const overridesFile = join(isAbsolute(fileDataDir) ? fileDataDir : resolve(baseDir, fileDataDir), 'overrides.json');
   const overrides = existsSync(overridesFile) ? readJson(overridesFile) : {};
   asConfigError(() => checkPartial(overrides));
-  if (get(overrides, 'server.dataDir') !== undefined) throw new ConfigError('server.dataDir: can only be set in config.json');
+  if (getPath(overrides, 'server.dataDir') !== undefined) throw new ConfigError('server.dataDir: can only be set in config.json');
   return build(env, file, fileSettings as Obj, overrides as Obj, baseDir);
 }
 
@@ -136,7 +146,7 @@ function writeOverrides(file: string, overrides: Obj): void {
 // is invalid.
 export function applyOverrides(loaded: Loaded, patch: object): Loaded {
   asConfigError(() => checkPartial(patch));
-  if (get(patch, 'server.dataDir') !== undefined) throw new ConfigError('server.dataDir: can only be set in config.json');
+  if (getPath(patch, 'server.dataDir') !== undefined) throw new ConfigError('server.dataDir: can only be set in config.json');
   const overrides = merge(loaded.overrides as Obj, patch as Obj);
   const baseDir = loaded.files.config ? dirname(loaded.files.config) : process.cwd();
   const next = build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides, baseDir);

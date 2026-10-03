@@ -18,3 +18,14 @@ export function agoText(ts: number | null | undefined, now = Date.now()): string
 }
 
 export const mbText = (bytes: number): string => `${(bytes / MB).toFixed(1)} MB`;
+
+export const pad2 = (n: number): string => String(n).padStart(2, '0');
+// The browser's local date, YYYY-MM-DD (today by default), and time, HH:MM.
+export const localDate = (ts = Date.now()): string => {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+};
+export const localHhmm = (ts: number): string => {
+  const d = new Date(ts);
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+};

@@ -1,5 +1,7 @@
 // The Maintenance page's Inventory box (spec 2026-10-02-inventory-design).
 
+import { mbText } from './format';
+
 export interface Progress { phase: string; done: number; total: number; note?: string }
 export interface RunningView { runId: string; kind: string; op?: 'check' | 'repair'; startedAt: number; outcome: 'running'; progress: Progress }
 export interface RunSummary { runId: string; kind: string; startedAt: number; tookMs: number; outcome: 'ok' | 'cancelled' | 'failed'; counts: Record<string, number>; message: string }
@@ -22,6 +24,8 @@ const REASONS: Record<string, string> = {
 };
 const CAUSES: Record<GapCause, string> = { stop: 'proxy stopped', crash: 'proxy crashed', reboot: 'camera reboot', powercycle: 'power cycle', paused: 'storage paused (disk full)' };
 const local = (ms: number) => new Date(ms).toLocaleString();
+// When a run started and how long it took (the card's line under each result).
+export const ranText = (r: { startedAt: number; tookMs: number }): string => `${local(r.startedAt)}, took ${(r.tookMs / 1000).toFixed(1)} s`;
 
 // 0 s, 59 s, 1 min, 10 min 5 s, 1 h, 1 h 30 min (no seconds once it is hours).
 export function duration(seconds: number): string {
@@ -112,7 +116,6 @@ export interface RepairReport extends RunSummary {
   error?: string;
 }
 
-export const mb = (bytes: number) => `${(bytes / 2 ** 20).toFixed(1)} MB`;
 
 export function clipsLines(r: ClipsReport, fmt: (ms: number) => string = local): string[] {
   if (r.outcome === 'failed') return [`Failed: ${r.error ?? 'unknown error'}`];
@@ -126,7 +129,7 @@ export function clipsLines(r: ClipsReport, fmt: (ms: number) => string = local):
     `Events: ${c.eventsWithoutClip} of ${c.events} recording events without a clip; ${c.clipsWithoutEvent} clips without an event`,
     ...(cam
       ? [
-          `Camera (${cam.stream}): ${c.recordings} recordings, ${c.paired} here, ${c.missingLocally} missing here (${mb(c.missingLocallyBytes)}), ${c.timerOnly} timer-only (ignored)`,
+          `Camera (${cam.stream}): ${c.recordings} recordings, ${c.paired} here, ${c.missingLocally} missing here (${mbText(c.missingLocallyBytes)}), ${c.timerOnly} timer-only (ignored)`,
           ...(c.pairedOtherStream ? [`${c.pairedOtherStream} recordings are here as clips of the other stream (not counted as missing)`] : []),
           ...(c.prunedHere ? [`${c.prunedHere} recordings are older than the oldest clip here, deleted for space (not offered: they would be deleted again)`] : []),
           `Gone from the camera: ${c.goneFromCamera} local clips; ${c.olderThanSd} older than the SD card's oldest day (${cam.oldestSdDay ?? 'none'})`,
@@ -209,7 +212,7 @@ export function repairLines(r: RepairReport): string[] {
   for (const i of r.items ?? []) if (i.result === 'skipped') skips.set(i.reason ?? 'other', (skips.get(i.reason ?? 'other') ?? 0) + 1);
   return [
     ...(r.outcome === 'cancelled' ? ['Cancelled: the clips fetched so far stay'] : []),
-    `Fetched: ${c.done ?? 0} of ${c.requested ?? 0} (${mb(c.bytes ?? 0)}); failed: ${c.failed ?? 0}; skipped: ${c.skipped ?? 0}`,
+    `Fetched: ${c.done ?? 0} of ${c.requested ?? 0} (${mbText(c.bytes ?? 0)}); failed: ${c.failed ?? 0}; skipped: ${c.skipped ?? 0}`,
     ...[...skips].map(([k, n]) => `Skipped, ${SKIPS[k] ?? k}: ${n}`),
     ...(r.stopped ? [`Stopped: ${STOPS[r.stopped] ?? r.stopped}`] : []),
   ];

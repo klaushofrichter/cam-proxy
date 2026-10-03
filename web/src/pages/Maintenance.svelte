@@ -3,6 +3,8 @@
   import ConfirmDialog from '../components/ConfirmDialog.svelte';
   import InventoryCard from '../components/InventoryCard.svelte';
   import { api, ApiError } from '../lib/api';
+  import { MB, mbText } from '../lib/format';
+  import { REPAIR_MAX_BYTES, REPAIR_MAX_CLIPS } from '../lib/inventory';
   import { poeAlert, poeOnText, powerCycleFailText, powerCycleMessage, restartWatch, RESTART_GIVE_UP_MS, type Health } from '../lib/maintenance';
   import { refresh, refreshTick, status } from '../lib/state';
 
@@ -15,7 +17,7 @@
     if ($refreshTick) void loadLog();
   });
   $effect(() => {
-    const t = setInterval(() => void loadLog(), 10_000);
+    const t = setInterval(() => document.visibilityState !== 'hidden' && void loadLog(), 10_000);
     return () => clearInterval(t);
   });
 
@@ -46,7 +48,7 @@
     },
     'inventory-repair': {
       title: 'Retrieve missing clips',
-      message: `Retrieve ${offer.count} clips (${(offer.bytes / 2 ** 20).toFixed(1)} MB) from the camera? They are fetched from its SD card over Baichuan one at a time, after any viewer's download, and added to the Clips page marked "from camera". At most 50 clips or 200 MB per run.`,
+      message: `Retrieve ${offer.count} clips (${mbText(offer.bytes)}) from the camera? They are fetched from its SD card over Baichuan one at a time, after any viewer's download, and added to the Clips page marked "from camera". At most ${REPAIR_MAX_CLIPS} clips or ${REPAIR_MAX_BYTES / MB} MB per run.`,
       confirmLabel: 'Retrieve clips',
     },
     'inventory-recover': {
@@ -84,20 +86,28 @@
     asking = null;
     inventory?.fetchLost();
   }
-  async function rebootCamera() {
-    asking = null;
+  // One camera action at a time: `send` returns the result line, `failed`
+  // the line for an error; then the status and the log are read again.
+  async function cameraAction(send: () => Promise<string>, failed: (e: unknown) => string) {
     if (sending) return;
     sending = true;
     try {
-      const r = await api<{ confirmed: boolean }>('POST', '/control/actions/camera-reboot');
-      rebootAsked = true;
-      result = `Camera reboot: ${r.confirmed ? 'the camera confirmed it' : 'the camera went down before answering'}`;
+      result = await send();
     } catch (e) {
-      result = `Camera reboot: ${e instanceof ApiError ? e.message : 'failed'}`;
+      result = failed(e);
     }
     sending = false;
     void refresh();
     void loadLog();
+  }
+  const failedText = (label: string) => (e: unknown) => `${label}: ${e instanceof ApiError ? e.message : 'failed'}`;
+  async function rebootCamera() {
+    asking = null;
+    await cameraAction(async () => {
+      const r = await api<{ confirmed: boolean }>('POST', '/control/actions/camera-reboot');
+      rebootAsked = true;
+      return `Camera reboot: ${r.confirmed ? 'the camera confirmed it' : 'the camera went down before answering'}`;
+    }, failedText('Camera reboot'));
   }
 
   // The power-cycle (#85): the answer comes once the PoE is back on (after
@@ -105,35 +115,22 @@
   let cycling = $state(false);
   async function powerCycleCamera() {
     asking = null;
-    if (sending) return;
-    sending = true;
-    cycling = true;
-    void refresh();
-    try {
-      const r = await api<{ offAt: number; onAt: number; watts: number }>('POST', '/control/actions/camera-powercycle');
-      rebootAsked = true;
-      result = `Camera power-cycle: PoE back on after ${Math.round((r.onAt - r.offAt) / 1000)} s (the camera drew ${r.watts} W)`;
-    } catch (e) {
-      result = e instanceof ApiError && e.body && typeof e.body === 'object' ? powerCycleFailText(e.body as { error: string }, poe?.port ?? null) : 'Camera power-cycle: failed';
-    }
-    cycling = false;
-    sending = false;
-    void refresh();
-    void loadLog();
+    await cameraAction(async () => {
+      cycling = true;
+      void refresh();
+      try {
+        const r = await api<{ offAt: number; onAt: number; watts: number }>('POST', '/control/actions/camera-powercycle');
+        rebootAsked = true;
+        return `Camera power-cycle: PoE back on after ${Math.round((r.onAt - r.offAt) / 1000)} s (the camera drew ${r.watts} W)`;
+      } finally {
+        cycling = false;
+      }
+    }, (e) => (e instanceof ApiError && e.body && typeof e.body === 'object' ? powerCycleFailText(e.body as { error: string }, poe?.port ?? null) : 'Camera power-cycle: failed'));
   }
   // Recovery (#85 review): turn the camera's PoE on if it is off. Shown
   // whenever a switch is configured; it only ever turns PoE on, so no dialog.
   async function poeOn() {
-    if (sending) return;
-    sending = true;
-    try {
-      result = poeOnText(await api<{ port: number; wasOn: boolean; watts: number }>('POST', '/control/actions/camera-poe-on'));
-    } catch (e) {
-      result = `Camera PoE on: ${e instanceof ApiError ? e.message : 'failed'}`;
-    }
-    sending = false;
-    void refresh();
-    void loadLog();
+    await cameraAction(async () => poeOnText(await api<{ port: number; wasOn: boolean; watts: number }>('POST', '/control/actions/camera-poe-on')), failedText('Camera PoE on'));
   }
   const alert = $derived(poeAlert(poe));
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { mkdtempSync, writeFileSync, readdirSync } from 'fs';
+import { mkdtempSync, writeFileSync, readdirSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import sharp from 'sharp';
@@ -55,6 +55,28 @@ describe('MinuteStore', () => {
     for (const i of [0, 29, 30, 59]) expect(Buffer.compare((await c.readStill(M + i * 1000))!, stillOf[i])).toBe(0);
     const [p] = c.listPreviews(M, M + 59_999);
     expect(p.present.every(Boolean)).toBe(true);
+  });
+
+  it('lists a rewritten or deleted minute as it is now, not as first read', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'camproxy-store-'));
+    const s = store(dir);
+    for (let i = 0; i < 10; i++) s.add(frame(M, i));
+    await s.flush();
+    expect(s.listPreviews(M, M + 59_999)[0].present.filter(Boolean)).toHaveLength(10);
+    expect(s.listStills(M, M + 59_999)).toHaveLength(10);
+    for (let i = 10; i < 20; i++) s.add(frame(M, i)); // the same minute again (a restart): merged
+    await s.flush();
+    expect(s.listPreviews(M, M + 59_999)[0].present.filter(Boolean)).toHaveLength(20);
+    expect(s.listStills(M, M + 59_999)).toHaveLength(20);
+    // Another writer (a test, a repair) replaces the sidecar, then retention deletes it.
+    const sidecar = join(dir, 'previews/cam1/2026/09/27/1403.json');
+    const meta = JSON.parse(readFileSync(sidecar, 'utf8'));
+    writeFileSync(sidecar, JSON.stringify({ ...meta, present: meta.present.map(() => false), padding: 'x' }));
+    expect(s.listPreviews(M, M + 59_999)[0].present.some(Boolean)).toBe(false);
+    rmSync(sidecar);
+    rmSync(join(dir, 'stills/cam1/2026/09/27/1403.pack'));
+    expect(s.listPreviews(M, M + 59_999)).toEqual([]);
+    expect(s.listStills(M, M + 59_999)).toEqual([]);
   });
 
   it('makes a sprite sheet with the grid, tile size and present flags', async () => {

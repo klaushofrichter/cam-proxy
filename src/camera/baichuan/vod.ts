@@ -7,6 +7,7 @@
 // Every frame of the download carries cmd 8's message id, so chunks still in
 // flight after cmd 9 (about 13 of them) are dropped by the session.
 import type { Writable } from 'stream';
+import { abortError } from '../../async';
 import { BaichuanError } from './errors';
 import { OK_STATUS, type BaichuanSession, type Subscription } from './session';
 
@@ -26,7 +27,6 @@ export interface DownloadOptions {
 
 const INFO_RECORD_BYTES = 32; // measured on the RLC-1224A
 
-const abortError = (why: string) => Object.assign(new Error(why), { name: 'AbortError' });
 const noop = () => undefined;
 // Writables that already carry our one lasting error listener (#99: a writable
 // reused for several downloads must not collect one per download).

@@ -8,7 +8,7 @@ export interface OnvifMessage {
   state: boolean; // IsMotion / State
 }
 
-export class OnvifError extends Error {}
+class OnvifError extends Error {}
 // The subscription no longer exists (camera rebooted, powered off, expired,
 // unsubscribed): subscribe again.
 export class OnvifGoneError extends OnvifError {}

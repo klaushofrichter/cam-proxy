@@ -1,8 +1,8 @@
 import type { Request, RequestHandler, Response } from 'express';
 import { STREAM_TYPES, matches, type Filter, type StreamLog, type StreamMessage, type StreamType } from './log';
 
-export interface SseOptions { maxClients: number; queuePerClient: number; pingS: number }
-export interface SseStats { messages: Record<string, number>; replayed: number; dropped: number }
+interface SseOptions { maxClients: number; queuePerClient: number; pingS: number }
+interface SseStats { messages: Record<string, number>; replayed: number; dropped: number }
 
 const PAGE = 500;
 const BLOCKED_MS = 5000; // a client whose socket stays full this long is dropped
@@ -21,7 +21,13 @@ function resumeFrom(req: Request): number | undefined {
   return raw !== undefined && /^\d{1,15}$/.test(raw) ? Number(raw) : undefined;
 }
 
-const frame = (m: StreamMessage) => `id: ${m.id}\nevent: ${m.type}\ndata: ${JSON.stringify({ cam: m.cam, ...m.data })}\n\n`;
+// A message's frame, built once for all the clients it goes to.
+const frames = new WeakMap<StreamMessage, string>();
+const frame = (m: StreamMessage) => {
+  let f = frames.get(m);
+  if (f === undefined) frames.set(m, (f = `id: ${m.id}\nevent: ${m.type}\ndata: ${JSON.stringify({ cam: m.cam, ...m.data })}\n\n`));
+  return f;
+};
 
 // GET handler for the SSE stream: replay from Last-Event-ID / ?since, then
 // live. Each client has a bounded queue; one that can't keep up is dropped and
@@ -32,7 +38,7 @@ export function sseHandler(log: StreamLog, opts: SseOptions): SseHandler {
   const o = { ...opts };
   const open = new Set<Response>();
   // Live-only messages (stills: every second, not in the stream log, no id).
-  const liveSenders = new Set<(cam: string, type: StreamType, data: Record<string, unknown>) => void>();
+  const liveSenders = new Set<(cam: string, type: StreamType, text: string) => void>();
   const stats: SseStats = { messages: {}, replayed: 0, dropped: 0 };
 
   const handler = ((req: Request, res: Response) => {
@@ -106,10 +112,10 @@ export function sseHandler(log: StreamLog, opts: SseOptions): SseHandler {
       if (pending.length > o.queuePerClient * 10) drop();
     };
     log.on('message', onMessage);
-    const onLive = (cam: string, type: StreamType, data: Record<string, unknown>) => {
+    const onLive = (cam: string, type: StreamType, text: string) => {
       if (replaying || !filter.types.includes(type) || (filter.cam && filter.cam !== cam)) return;
       stats.messages[type] = (stats.messages[type] ?? 0) + 1;
-      queue.push(`event: ${type}\ndata: ${JSON.stringify({ cam, ...data })}\n\n`);
+      queue.push(text);
       if (queue.length > o.queuePerClient) return drop();
       pump();
     };
@@ -155,7 +161,9 @@ export function sseHandler(log: StreamLog, opts: SseOptions): SseHandler {
   handler.stats = () => ({ ...stats, messages: { ...stats.messages } });
   handler.setOptions = (next) => Object.assign(o, next);
   handler.live = (cam, type, data) => {
-    for (const send of liveSenders) send(cam, type, data);
+    if (!liveSenders.size) return;
+    const text = `event: ${type}\ndata: ${JSON.stringify({ cam, ...data })}\n\n`; // once for all clients
+    for (const send of liveSenders) send(cam, type, text);
   };
   return handler;
 }

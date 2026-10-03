@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { localDate, pad2 } from '../lib/format';
   import { api } from '../lib/api';
   import { analysedSeconds, analysedStills, eventLabel, eventsInMinute, isRecovered, marksByMinute, primaryEvent, RECOVERED_NOTE, secondKinds, secondRecovered, stepMinute } from '../lib/timeline';
   import AnalysisModal from '../components/AnalysisModal.svelte';
@@ -7,12 +8,7 @@
   interface Minute { minute: number; cols: number; rows: number; tileW: number; tileH: number; intervalS: number; present: boolean[]; url: string }
   interface Ev { id: number; kind: string; source?: string; start: number; end: number | null; analysis?: { status: string; stillTs?: number } | null }
 
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const today = () => {
-    const d = new Date();
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  };
-  let day = $state(today());
+  let day = $state(localDate());
   let minutes = $state<Minute[]>([]);
   let events = $state<Ev[]>([]);
   let open = $state<Minute | null>(null);
@@ -105,7 +101,7 @@
   });
   $effect(() => {
     const t = setInterval(() => {
-      if (day === today()) void load();
+      if (day === localDate()) void load();
     }, 60_000);
     return () => clearInterval(t);
   });
@@ -116,7 +112,7 @@
 <section>
   <div class="head">
     <h2>Timeline</h2>
-    <input type="date" bind:value={day} max={today()} data-testid="timeline-day" />
+    <input type="date" bind:value={day} max={localDate()} data-testid="timeline-day" />
     <button onclick={() => void load()}>Refresh</button>
   </div>
   <p class="muted small">One thumbnail per minute; a colored edge marks an event. Click a minute for its seconds, then a second for the full still.</p>
@@ -124,7 +120,7 @@
 
   {#each Object.entries(hours) as [hour, list] (hour)}
     <div class="card" data-testid="hour-card">
-      <h3>{pad(Number(hour))}:00</h3>
+      <h3>{pad2(Number(hour))}:00</h3>
       <div class="strip">
         {#each list as m (m.minute)}
           {@const e = eventIn(m)}

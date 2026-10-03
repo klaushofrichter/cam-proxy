@@ -11,6 +11,7 @@ import { createWriteStream, mkdirSync, type WriteStream } from 'fs';
 import { dirname } from 'path';
 import { Writable } from 'stream';
 import { finished } from 'stream/promises';
+import { abortError, isAbort } from '../async';
 import { BaichuanError, isWriterStall, type BaichuanErrorCode } from '../camera/baichuan/errors';
 import type { RecordingCache } from './cache';
 import type { RecordingEntry } from './list';
@@ -18,11 +19,11 @@ import { logger } from '../log';
 import { validId, type Stream } from './names';
 
 export type Priority = 'high' | 'low';
-export type FetchResult = 'ok' | BaichuanErrorCode;
+type FetchResult = 'ok' | BaichuanErrorCode;
 // priority: what the download ran as; `low` is a background (inventory
 // repair) download, told apart on the Status page and in the metrics (#111).
 export interface FetchOutcome { id: string; at: number; result: FetchResult; stream: Stream; bytes: number; ms: number; priority: Priority }
-export interface FetcherDeps {
+interface FetcherDeps {
   cache: RecordingCache;
   // Never ends `out` (vod.ts); the fetcher does, through the tee.
   download: (path: string, size: number, out: Writable) => Promise<number>;
@@ -39,8 +40,6 @@ export interface FetcherDeps {
 // One caller's join of a fetch; `left` once its signal aborted.
 export interface Waiter { readonly left: boolean }
 
-export const abortError = (why = 'aborted'): Error => Object.assign(new Error(why), { name: 'AbortError' });
-export const isAbort = (e: unknown): boolean => e instanceof Error && e.name === 'AbortError';
 
 const noop = () => undefined;
 
@@ -374,12 +373,7 @@ export class RecordingFetcher {
   // and room beside the pinned files. Evicts nothing. The route asks before a
   // Range request waits for a fetch whose file couldn't be kept.
   canKeep(size: number): boolean {
-    const { cache } = this.d;
-    if (this.d.paused()) return false;
-    const cap = cache.capBytes();
-    if (size > cap) return false;
-    const pinned = cache.files().filter((x) => cache.busy(x.path)).reduce((n, x) => n + x.bytes, 0);
-    return pinned + size <= cap;
+    return !this.d.paused() && this.d.cache.fits(size);
   }
 
   // canKeep (so nothing is evicted for a file that can't fit), then room

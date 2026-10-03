@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Code cleanup across the repo (shared helpers for sleeps, time units, atomic writes, path settings, busy Search retries; one copy each of the camera-side start/stop and the API's range and file-send handling; unused exports dropped). No change in behaviour or API answers.
+- Lighter on the Pi: `GET /api/cameras/:cam/clips` reads the events for the whole list in one query (was one per clip) and `/recordings` its clip links in one (was one per recording); a day of previews reads each sidecar once until it changes; the minute's pack and sprite are written without blocking the event loop; SSE frames are built once for all clients; the admin UI sends one status+stats refresh at a time (a burst of stream events was one each) and none from a hidden tab.
+
+## v2026.10.03.4
+
 - CI: the required PR check runs `npm audit --audit-level=high` over all dependencies, dev included, so a high finding in a dev dependency blocks the PR (it only warned before). There are no open findings, so no allowlist.
 - Docs: the README has a Related repos section (cams, cam-sim, cam-proxy-pi-display) and names the e-paper display as the reader of `GET /api/local/health`; the settings table adds `composition` and `analytics`; `/health` answers `{ok, version, startedAt}`; `production` requires `e2e` too.
 

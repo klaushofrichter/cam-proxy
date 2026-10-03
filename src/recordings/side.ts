@@ -8,6 +8,7 @@ import type { Writable } from 'stream';
 import { BaichuanSession, type BaichuanTarget, type SessionOptions } from '../camera/baichuan/session';
 import { download, type DownloadOptions } from '../camera/baichuan/vod';
 import type { TimeInfo } from '../camera/time';
+import { within } from '../async';
 import { logger } from '../log';
 import { RecordingCache } from './cache';
 import { RecordingFetcher, type FetchOutcome, type Priority } from './fetcher';
@@ -30,7 +31,7 @@ export interface RecordingsSide {
   stop(): Promise<void>;
 }
 
-export interface RecordingsDeps {
+interface RecordingsDeps {
   dataDir: string;
   cam: () => string;
   target: () => BaichuanTarget;
@@ -88,9 +89,7 @@ export function createRecordingsSide(d: RecordingsDeps): RecordingsSide {
     stop: async () => {
       const ended = fetcher.stop();
       if (!session.connected()) session.close();
-      let timer: NodeJS.Timeout | undefined;
-      await Promise.race([ended, new Promise<void>((r) => (timer = setTimeout(r, d.stopWaitMs ?? 2_000)))]);
-      clearTimeout(timer);
+      await within(ended, d.stopWaitMs ?? 2_000);
       session.close();
     },
   };

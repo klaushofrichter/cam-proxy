@@ -13,7 +13,7 @@ export interface CameraConfig {
   user: string;
   password: string;
 }
-import { CameraTarget, openRequest, readBody, requestWasWritten, ResponseTooLargeError, splitHost } from './http';
+import { bareHost, CameraTarget, openRequest, readBody, requestWasWritten, ResponseTooLargeError, splitHost } from './http';
 import { Semaphore } from './semaphore';
 
 export type CameraErrorCode = 'camera_offline' | 'camera_auth_failed' | 'camera_error';
@@ -34,7 +34,7 @@ export class CameraError extends Error {
   }
 }
 
-export interface CameraStatus {
+interface CameraStatus {
   model: string;
   firmware: string;
   serial?: string; // changes on every reboot (cams docs/reolink-api.md)
@@ -162,16 +162,20 @@ export class ReolinkClient {
     return this.loginInFlight;
   }
 
+  // getToken for a request: a failed login never sent the request, whatever
+  // happened to the Login (requestSent is cleared).
+  private async tokenForRequest(): Promise<string> {
+    try {
+      return await this.getToken();
+    } catch (err) {
+      if (err instanceof CameraError && err.requestSent) throw new CameraError(err.code, err.message);
+      throw err;
+    }
+  }
+
   async command<T>(cmd: string, param: object = {}): Promise<T> {
     for (let attempt = 0; attempt < 2; attempt++) {
-      let token: string;
-      try {
-        token = await this.getToken();
-      } catch (err) {
-        // A failed login never sent `cmd`, whatever happened to the Login.
-        if (err instanceof CameraError && err.requestSent) throw new CameraError(err.code, err.message);
-        throw err;
-      }
+      const token = await this.tokenForRequest();
       const reply = await this.post(cmd, param, token);
       if (reply.code === 0) return reply.value as T;
       if (attempt === 0 && AUTH_RSP_CODES.has(reply.error?.rspCode ?? 0)) {
@@ -194,7 +198,7 @@ export class ReolinkClient {
     // expired one shows as "not available" here, and expiry is alerted on
     // separately (Grafana, cam1-cert-push).
     const { hostname, port } = splitHost(this.cam.host);
-    const host = hostname.replace(/^\[(.*)\]$/, '$1');
+    const host = bareHost(hostname);
     return new Promise((resolve) => {
       let done = false;
       const finish = (v: { subject: string; issuer: string; validTo: string } | null) => {
@@ -252,7 +256,7 @@ export class ReolinkClient {
     try {
       const parsed: unknown = JSON.parse(body.toString('utf8'));
       const rspCode = Array.isArray(parsed) ? (parsed[0] as ReolinkReply | undefined)?.error?.rspCode : undefined;
-      return rspCode === -6;
+      return AUTH_RSP_CODES.has(rspCode ?? 0);
     } catch {
       return false;
     }
@@ -293,14 +297,7 @@ export class ReolinkClient {
 
   async snapshot(): Promise<Buffer> {
     for (let attempt = 0; attempt < 2; attempt++) {
-      let token: string;
-      try {
-        token = await this.getToken();
-      } catch (err) {
-        // A failed login never sent `cmd`, whatever happened to the Login.
-        if (err instanceof CameraError && err.requestSent) throw new CameraError(err.code, err.message);
-        throw err;
-      }
+      const token = await this.tokenForRequest();
       const outcome = await this.snapshotAttempt(token);
       if (outcome.ok) return outcome.body;
       this.clearTokenIfCurrent(token);

@@ -79,7 +79,7 @@ export function analysisImages(c: Catalog): Set<string> {
   return new Set((c.db.prepare('SELECT image FROM analyses WHERE image IS NOT NULL').all() as { image: string }[]).map((r) => r.image));
 }
 
-export interface AnalysisInRange extends AnalysisRow { kind: string; start_ts: number; end_ts: number | null }
+interface AnalysisInRange extends AnalysisRow { kind: string; start_ts: number; end_ts: number | null }
 
 // The latest analysis of each event of a camera that starts in [from, to],
 // oldest event first (spec: GET /api/cameras/{cam}/analyses).

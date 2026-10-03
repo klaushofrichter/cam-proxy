@@ -7,6 +7,7 @@ import { listCamera, type CameraListDeps } from './camera-list';
 import { RECORDING_KINDS, SETTLE_MS } from './clips';
 import { coverage, spansByKind } from './match';
 import { MAX_TOP, type Check, type CheckContext, type CheckResult, type InventoryWindow } from './runner';
+import { DAY } from '../time-units';
 
 // The events inventory (#75, spec 2026-10-02-inventory-design §5): the SD
 // recordings are the camera's own list of what it saw. Per trigger kind,
@@ -18,7 +19,6 @@ import { MAX_TOP, type Check, type CheckContext, type CheckResult, type Inventor
 // card's reach, at most the events retention (decision 12); the report says
 // which. Always against the camera: there is no local-only part.
 
-const DAY = 86_400_000;
 // The tolerance around a span (decision 7): an event may start up to 10 s
 // before the recording (the camera's pre-record) and up to 5 s after its end.
 export const SPAN_BEFORE_MS = 10_000;
@@ -36,11 +36,11 @@ export interface EventsInventoryDeps {
 }
 // A missing span: `date` is the camera-local day of its first recording;
 // `recordings` are the SD ids merged into it.
-export interface MissingSpan { type: 'missing-event'; kind: Kind; start: number; end: number; date: string; recordings: string[] }
-export type EventItem = MissingSpan | { type: 'event-without-recording'; eventId: number; kind: string; start: number; end: number; source: string };
+interface MissingSpan { type: 'missing-event'; kind: Kind; start: number; end: number; date: string; recordings: string[] }
+type EventItem = MissingSpan | { type: 'event-without-recording'; eventId: number; kind: string; start: number; end: number; source: string };
 // The camera days with problems, the most missing first (the report's `top`).
 export interface EventsDayRow { date: string; state: 'listed' | 'unknown'; spans: number; missing: number }
-export interface EventsComparison {
+interface EventsComparison {
   window: InventoryWindow;
   counts: Record<string, number>;
   top: EventsDayRow[];

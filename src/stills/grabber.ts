@@ -58,7 +58,7 @@ export function nextStamp(last: number, now: number, step: number): number | nul
   return ts > last ? ts : null;
 }
 
-export interface GrabberOptions {
+interface GrabberOptions {
   input: string; // go2rtc's local restream
   intervalS: number;
   size: string; // WxH

@@ -8,11 +8,13 @@
 // before's Search: a day's list and a window's list also read the day before
 // (#99). Once that day is over (by 5 minutes) and none of its recordings is
 // still being written, its midnight tail is final and kept 15 minutes.
+import { abortError, sleep } from '../async';
 import { CameraError } from '../camera/client';
 import { Semaphore } from '../camera/semaphore';
 import type { TimeInfo } from '../camera/time';
 import { SAFE_PATH } from '../camera/baichuan/vod';
 import { localDate, localDays, parseSdName, recordingTimes, stillRecording, type Kind, type Stream } from './names';
+import { addDays } from '../time-units';
 
 export interface RecordingEntry { id: string; path: string; start: number; end: number; stream: Stream; size: number; kinds: Kind[] }
 
@@ -36,7 +38,7 @@ const FINAL_AFTER_MS = 5 * 60_000;
 // refused at once (busy) instead of queueing without bound. Same-day
 // requests share one Search and don't count. A cold 48-hour window is 4
 // Searches, one after the other.
-export const MAX_WAITING_SEARCHES = 8;
+const MAX_WAITING_SEARCHES = 8;
 
 // The recording runs past its day's midnight (end before start in its name;
 // end 000000 too, which recordingTimes puts at midnight).
@@ -45,18 +47,11 @@ const crossesMidnight = (e: RecordingEntry): boolean => {
   return n !== null && n.end < n.start;
 };
 
-export const dayBefore = (date: string): string => {
-  const d = new Date(`${date}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() - 1);
-  return d.toISOString().slice(0, 10);
-};
-
 // A Search waiting for the gate; dropped (never sent) when every caller left.
 interface Ticket { queued: boolean; started: boolean; dropped: boolean; reject?: (e: Error) => void }
 // A Search's result, shared by its callers; `fixed` once a caller without a signal joined.
 interface Run<T> { promise: Promise<T>; ticket: Ticket; waiters: number; fixed: boolean }
 
-const abortError = (why: string): Error => Object.assign(new Error(why), { name: 'AbortError' });
 
 // Messages from CameraError never carry URLs or tokens.
 const toSearchError = (err: unknown, fallback: string): SearchError =>
@@ -81,6 +76,12 @@ export class RecordingList {
       sleep?: (ms: number) => Promise<void>;
     },
   ) {}
+
+  // Expired entries are never served: drop them, so the maps don't grow with every day browsed.
+  private prune(m: Map<string, { at: number }>, ttl: number): void {
+    const now = this.now();
+    for (const [k, v] of m) if (now - v.at >= ttl) m.delete(k);
+  }
 
   private now(): number {
     return (this.d.now ?? Date.now)();
@@ -107,7 +108,7 @@ export class RecordingList {
           return await this.d.search(param);
         } catch (err) {
           if (attempt === 0 && err instanceof CameraError && err.rspCode === -54) {
-            await (this.d.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms))))(1000);
+            await (this.d.sleep ?? sleep)(1000);
             continue;
           }
           throw toSearchError(err, 'Search failed');
@@ -190,7 +191,11 @@ export class RecordingList {
       if (epoch === this.epoch) {
         const at = this.now();
         this.days.set(key, { at, entries: out });
-        if (!open && localDate(at - FINAL_AFTER_MS, t) > date) this.tails.set(key, { at, entries: out.filter(crossesMidnight) });
+        this.prune(this.days, DAY_TTL);
+        if (!open && localDate(at - FINAL_AFTER_MS, t) > date) {
+          this.tails.set(key, { at, entries: out.filter(crossesMidnight) });
+          this.prune(this.tails, TAIL_TTL);
+        }
       }
       return out;
     });
@@ -214,7 +219,7 @@ export class RecordingList {
       if (e.start <= to && e.end >= from) byId.set(e.id, e);
     };
     for (const date of days) for (const e of await this.day(date, stream, false, signal)) keep(e);
-    for (const e of await this.tail(dayBefore(days[0]), stream, signal)) keep(e);
+    for (const e of await this.tail(addDays(days[0], -1), stream, signal)) keep(e);
     return [...byId.values()].sort((a, b) => a.start - b.start);
   }
 
@@ -222,7 +227,7 @@ export class RecordingList {
   // day before that runs past midnight into it.
   async date(date: string, stream: Stream, signal?: AbortSignal): Promise<RecordingEntry[]> {
     const own = await this.day(date, stream, false, signal);
-    const before = await this.tail(dayBefore(date), stream, signal);
+    const before = await this.tail(addDays(date, -1), stream, signal);
     return [...before, ...own].sort((a, b) => a.start - b.start);
   }
 
@@ -259,7 +264,10 @@ export class RecordingList {
         });
       }
       const out = [...days].sort((a, b) => a - b);
-      if (epoch === this.epoch) this.months.set(month, { at: this.now(), days: out });
+      if (epoch === this.epoch) {
+        this.months.set(month, { at: this.now(), days: out });
+        this.prune(this.months, MONTH_TTL);
+      }
       return out;
     });
     return this.join(this.monthRuns, month, run, signal);

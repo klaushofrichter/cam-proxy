@@ -19,14 +19,14 @@ let generated: Promise<{ cert: string; key: string }> | undefined;
 
 // The FTPS certificate: ftp.certFile/keyFile, or one made for this process
 // (the camera doesn't verify it).
-export async function ftpTls(cfg: Config['ftp']): Promise<{ cert: string; key: string } | undefined> {
+async function ftpTls(cfg: Config['ftp']): Promise<{ cert: string; key: string } | undefined> {
   if (!cfg.tls) return undefined;
   if (cfg.certFile && cfg.keyFile) return { cert: readFileSync(cfg.certFile, 'utf8'), key: readFileSync(cfg.keyFile, 'utf8') };
   generated ??= generate([{ name: 'commonName', value: 'cam-proxy' }], { keyType: 'ec' }).then((p) => ({ cert: p.cert, key: p.private }));
   return generated;
 }
 
-export function parsePassive(range: string): [number, number] {
+function parsePassive(range: string): [number, number] {
   const m = /^(\d+)-(\d+)$/.exec(range.trim());
   const lo = Number(m?.[1]);
   const hi = Number(m?.[2]);

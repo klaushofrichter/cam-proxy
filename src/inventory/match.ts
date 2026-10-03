@@ -10,8 +10,8 @@
 // the closest pair is the likeliest to be the same recording. Pinned by a test.
 export const START_SLACK_MS = 5_000;
 
-export interface Pairable { start: number; stream: string }
-export interface Pairing<R, L> { pairs: { rec: R; clip: L }[]; recsAlone: R[]; clipsAlone: L[] }
+interface Pairable { start: number; stream: string }
+interface Pairing<R, L> { pairs: { rec: R; clip: L }[]; recsAlone: R[]; clipsAlone: L[] }
 
 export function pairByStart<R extends Pairable, L extends Pairable & { id: number }>(recs: R[], clips: L[], slackMs = START_SLACK_MS): Pairing<R, L> {
   const sortedClips = [...clips].sort((a, b) => a.start - b.start || a.id - b.id);
@@ -68,7 +68,7 @@ export function coverage(spans: { start: number; end: number }[]): (start: numbe
 // times overlap (or touch) are one span; a recording with several kinds is
 // in a span of each kind. Timer-only recordings (no kind) are in none.
 // Oldest first; on a tie by kind name.
-export interface KindSpan<R> { kind: string; start: number; end: number; recs: R[] }
+interface KindSpan<R> { kind: string; start: number; end: number; recs: R[] }
 export function spansByKind<R extends { start: number; end: number; kinds: readonly string[] }>(recs: R[]): KindSpan<R>[] {
   const byKind = new Map<string, R[]>();
   for (const r of recs) {

@@ -17,8 +17,8 @@ import type { FtpTarget } from './camera-ftp';
 // server and more (red). server_differs: only the server name differs
 // (amber: may be another name for this proxy). not_set_up: no server and
 // never a clip (a fresh or reset camera; grey, no alarm).
-export type FtpState = 'on' | 'off' | 'elsewhere' | 'server_differs' | 'not_set_up';
-export interface FtpReading { state: FtpState; enable: boolean; server: string; port: number; user: string; mismatch: string[] }
+type FtpState = 'on' | 'off' | 'elsewhere' | 'server_differs' | 'not_set_up';
+interface FtpReading { state: FtpState; enable: boolean; server: string; port: number; user: string; mismatch: string[] }
 export interface CameraFtpView {
   state: FtpState | 'unknown'; // unknown: not read yet
   checkedAt: number | null; // the last successful read
@@ -37,7 +37,7 @@ export const RECORDING_KINDS = ['motion', 'person', 'vehicle', 'pet'] as const;
 // Events this recent don't count yet: the clip follows after the
 // post-record time and the upload.
 export const STALL_GRACE_MS = 10 * 60_000;
-export const CHECK_MS = 5 * 60_000;
+const CHECK_MS = 5 * 60_000;
 
 // The camera masks the FTP user in its answer. Measured 2026-10-02: only the
 // 6-character `camera` -> `ca**ra` (first two characters, stars, last two).
@@ -45,7 +45,7 @@ export const CHECK_MS = 5 * 60_000;
 // characters, and with more than two stars the length must agree (a fixed `**`
 // leaves it unchecked). A different user with the same first and last two
 // characters passes.
-export function sameFtpUser(seen: string, expected: string): boolean {
+function sameFtpUser(seen: string, expected: string): boolean {
   if (!seen.includes('*')) return seen === expected;
   const m = /^([^*]{2})(\*+)([^*]{2})$/u.exec(seen);
   const e = Array.from(expected);

@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import { randomBytes } from 'crypto';
 import { linkSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { within } from '../async';
 import { logger } from '../log';
 import { cardImageArgs, groupRuns, joinArgs, joinList, parseProgress, PIECE_MAX_BYTES, pieceArgs, runFrames, type ComposeSize } from './ffmpeg';
 import type { Plan, Segment } from './plan';
@@ -10,9 +11,9 @@ import type { Plan, Segment } from './plan';
 // waiting. A job nobody polls for 30 s (a closed tab) stops; a result lives
 // 15 minutes. Each job has its own folder under `dir`.
 
-export type JobState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
-export interface JobView { id: string; state: JobState; progress: number; durationS: number; error?: string }
-export interface ComposeRequest { cam: string; plan: Extract<Plan, { ok: true }>; size: ComposeSize; badge: boolean; timeZone?: string }
+type JobState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
+interface JobView { id: string; state: JobState; progress: number; durationS: number; error?: string }
+interface ComposeRequest { cam: string; plan: Extract<Plan, { ok: true }>; size: ComposeSize; badge: boolean; timeZone?: string }
 export interface Runner {
   (job: { dir: string; out: string; req: ComposeRequest; onProgress: (p: number) => void; signal: AbortSignal }): Promise<void>;
 }
@@ -126,7 +127,7 @@ export function createComposer(o: { dir: string; runner: Runner; now?: () => num
       stopped = true;
       for (const j of [...jobs.values()]) j.ctl.abort();
       // Let a running ffmpeg end (it's killed within 2 s) before its folder goes.
-      if (runningDone) await Promise.race([runningDone.catch(() => {}), new Promise((r) => setTimeout(r, 3000).unref())]);
+      if (runningDone) await within(runningDone.catch(() => {}), 3000);
       for (const j of [...jobs.values()]) drop(j);
     },
   };

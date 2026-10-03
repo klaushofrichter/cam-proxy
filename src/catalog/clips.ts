@@ -53,6 +53,24 @@ export function clipNear(c: Catalog, cam: string, stream: string, ts: number, sl
     .get(cam, stream, ts - slackMs, ts + slackMs, ts) as unknown as ClipRow | undefined;
 }
 
+// clipNear for many starts at once (one query, not one per start): for each
+// [stream, ts], the same clip clipNear would answer, or undefined.
+export function clipsNear(c: Catalog, cam: string, wanted: { stream: string; ts: number }[], slackMs: number): (ClipRow | undefined)[] {
+  if (!wanted.length) return [];
+  const lo = Math.min(...wanted.map((w) => w.ts)) - slackMs;
+  const hi = Math.max(...wanted.map((w) => w.ts)) + slackMs;
+  const rows = c.db.prepare('SELECT * FROM clips WHERE cam = ? AND start_ts BETWEEN ? AND ? ORDER BY start_ts, id').all(cam, lo, hi) as unknown as ClipRow[];
+  return wanted.map(({ stream, ts }) => {
+    let best: ClipRow | undefined;
+    for (const r of rows) {
+      if (r.stream !== stream || r.start_ts < ts - slackMs || r.start_ts > ts + slackMs) continue;
+      const d = Math.abs(r.start_ts - ts), bd = best && Math.abs(best.start_ts - ts);
+      if (!best || d < bd! || (d === bd && r.id < best.id)) best = r;
+    }
+    return best;
+  });
+}
+
 // The clip a picture taken at `ts` belongs to: the one that started last,
 // at most `windowMs` before it.
 export function clipForSnapshot(c: Catalog, cam: string, ts: number, windowMs: number): ClipRow | undefined {
@@ -85,9 +103,28 @@ export function overlappingEvents(c: Catalog, cam: string, from: number, to: num
   );
 }
 
+// overlappingEvents for many spans at once (one query, not one per span):
+// for each [from, to], the same ids in the same order.
+export function overlappingEventsOf(c: Catalog, cam: string, spans: { from: number; to: number }[]): number[][] {
+  if (!spans.length) return [];
+  const lo = Math.min(...spans.map((s) => s.from));
+  const hi = Math.max(...spans.map((s) => s.to));
+  const rows = c.db.prepare('SELECT id, start_ts, end_ts FROM events WHERE cam = ? AND start_ts <= ? AND (end_ts IS NULL OR end_ts >= ?) ORDER BY start_ts, id').all(cam, hi, lo) as {
+    id: number;
+    start_ts: number;
+    end_ts: number | null;
+  }[];
+  return spans.map(({ from, to }) => rows.filter((r) => r.start_ts <= to && (r.end_ts === null || r.end_ts >= from)).map((r) => r.id));
+}
+
 // Clips received by FTP in [from, to) (the daily audit record); repaired ones are not received.
 export function countClips(c: Catalog, cam: string, from: number, to: number): number {
   return Number((c.db.prepare("SELECT COUNT(*) AS n FROM clips WHERE cam = ? AND origin = 'ftp' AND received_at >= ? AND received_at < ?").get(cam, from, to) as { n: number }).n);
+}
+
+// All clip rows, every camera (the FTP status, the daily storage record).
+export function countAllClips(c: Catalog): number {
+  return Number((c.db.prepare('SELECT COUNT(*) AS n FROM clips').get() as { n: number }).n);
 }
 
 // When the newest clip of a camera arrived (received_at), or null; kept

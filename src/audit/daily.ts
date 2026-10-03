@@ -3,6 +3,7 @@ import { localDay } from '../analytics/local-day';
 import { logger } from '../log';
 import type { AuditLog } from './audit-log';
 import { RECORDING_KINDS } from '../clips/ftp-health';
+import { addDays } from '../time-units';
 
 // The daily audit records (spec 2026-10-01-audit-log-design): at 00:05
 // camera time, storage-daily then activity-daily (for the previous camera
@@ -15,8 +16,8 @@ import { RECORDING_KINDS } from '../clips/ftp-health';
 // FALLBACK_MS since start (the time info arrives asynchronously); such
 // records carry dayBasis 'utc' and don't count as done once the time info
 // is known, so they never suppress the camera-day records.
-export type StorageDaily = { message: string; details: Record<string, unknown> };
-export type ActivityDaily = StorageDaily;
+type StorageDaily = { message: string; details: Record<string, unknown> };
+type ActivityDaily = StorageDaily;
 const AFTER_MS = 5 * 60_000;
 const FALLBACK_MS = 60 * 60_000;
 
@@ -47,10 +48,6 @@ export function activityDaily(day: string, a: { events: Record<string, number>; 
     message: `Activity ${day}: ${total} events (${kinds})${recovered ? `, ${recovered} recovered from the SD card` : ''}, ${clips}, Vision ${a.vision.monthToDate} of ${a.vision.monthlyLimit} this month`,
     details: { events: { total, byKind: a.events, recovered }, recordingEvents, clips: a.clips, clipsReceived: a.clips, ...(noClips ? { noClips: true } : {}), analytics: { vision: a.vision, analyses: a.analyses }, stream: { clients: a.sseClients } },
   };
-}
-
-export function addDays(day: string, n: number): string {
-  return new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 }
 
 // The first ms of a camera day: UTC midnight shifted by the offset in effect

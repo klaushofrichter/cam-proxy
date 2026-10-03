@@ -15,7 +15,7 @@ export function maskKey(key: string | undefined): string | null {
 
 export interface Box { x0: number; y0: number; x1: number; y1: number } // fractions 0–1
 export interface Found { mid?: string; name: string; score: number; box: Box }
-export interface ProviderResult { objects: Found[]; raw: unknown }
+interface ProviderResult { objects: Found[]; raw: unknown }
 export interface AnalyticsProvider {
   id: ProviderId;
   name: string;

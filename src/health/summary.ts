@@ -3,6 +3,7 @@ import type { CameraState } from '../camera/status';
 import type { CameraFtpView, ClipsStall } from '../clips/ftp-health';
 import type { IntakeState } from '../events/intake';
 import type { DataVolume, HostReading, HostStats } from './host';
+import type { RebootState } from '../camera/reboot';
 
 // The health summary (spec 2026-10-03-health-summary-design A2): the one
 // place with the problem rules. The Status page's Health and Pi cards, its red
@@ -14,11 +15,11 @@ import type { DataVolume, HostReading, HostStats } from './host';
 // No secrets: no tokens, passwords, FTP settings, the PoE switch's host or
 // the camera serial.
 
-export type ItemId = 'camera' | 'stream' | 'events' | 'ftp' | 'storage' | 'disk' | 'cpuTemp' | 'underVoltage' | 'inventory' | 'version';
+type ItemId = 'camera' | 'stream' | 'events' | 'ftp' | 'storage' | 'disk' | 'cpuTemp' | 'underVoltage' | 'inventory' | 'version';
 export interface HealthItem { id: ItemId; label: string; value: boolean | number | string | null; text: string; problem: boolean }
-export interface Thresholds { diskPercent: number; tempC: number; ftpStalledHours: number }
+interface Thresholds { diskPercent: number; tempC: number; ftpStalledHours: number }
 export interface LastInventory { kind: string; op: 'check' | 'repair'; outcome: 'ok' | 'cancelled' | 'failed'; startedAt: number; message: string }
-type RebootPhase = 'power-cycling' | 'rebooting' | 'back' | 'not-back';
+type RebootPhase = RebootState['phase'];
 
 export interface HealthInput {
   now: number;

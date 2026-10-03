@@ -6,8 +6,8 @@
 // for every encrypted part. Never log a key, a nonce or what goes in here.
 import { createCipheriv, createDecipheriv, createHash } from 'node:crypto';
 
-export const XML_KEY: readonly number[] = [0x1f, 0x2d, 0x3c, 0x4b, 0x5a, 0x69, 0x78, 0xff];
-export const AES_IV = Buffer.from('0123456789abcdef', 'ascii');
+const XML_KEY: readonly number[] = [0x1f, 0x2d, 0x3c, 0x4b, 0x5a, 0x69, 0x78, 0xff];
+const AES_IV = Buffer.from('0123456789abcdef', 'ascii');
 
 export function bcXor(buf: Buffer, offset: number): Buffer {
   const off = offset & 0xff;

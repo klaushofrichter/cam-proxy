@@ -7,14 +7,16 @@ import { clipNear } from '../catalog/clips';
 import type { Catalog } from '../catalog/db';
 import { ClipExistsError, type ClipIndexer } from '../clips/indexer';
 import type { RecordingCache } from '../recordings/cache';
-import { abortError, isAbort, type Fetch, type RecordingFetcher, type Waiter } from '../recordings/fetcher';
-import { logger } from '../log';
+import { abortError, isAbort, sleep as defaultSleep } from '../async';
+import type { Fetch, RecordingFetcher, Waiter } from '../recordings/fetcher';
+import { errorMessage, logger } from '../log';
 import { SearchError, type RecordingEntry, type RecordingList } from '../recordings/list';
 import { settlesAt, type Stream } from '../recordings/names';
-import { BUSY_TRIES } from './camera-list';
+import { withBusyRetry } from './camera-list';
 import { mb, type ClipItem } from './clips';
 import { START_SLACK_MS } from './match';
 import type { InventoryReport, RepairEntry, RepairResult } from './runner';
+import { DAY, dayStart } from '../time-units';
 
 // The clips repair (#74 part 3, spec 2026-10-02-inventory-design §4): fetch
 // the recordings a recent camera compare found missing locally, over Baichuan
@@ -42,9 +44,8 @@ export const REPAIR_MAX_CLIPS = 50;
 export const REPAIR_MAX_BYTES = 200 * 2 ** 20;
 export const REPAIR_GAP_MS = 1000;
 export const REPAIR_MAX_FAILURES = 3;
-const DAY = 86_400_000;
 
-export type RepairStop = 'clip-cap' | 'byte-cap' | 'max-gb' | 'paused' | 'failures' | 'refused' | 'camera_offline';
+type RepairStop = 'clip-cap' | 'byte-cap' | 'max-gb' | 'paused' | 'failures' | 'refused' | 'camera_offline';
 const STOP_TEXT: Record<RepairStop, string> = {
   'clip-cap': `the ${REPAIR_MAX_CLIPS}-clip cap`,
   'byte-cap': `the ${REPAIR_MAX_BYTES / 2 ** 20} MB cap`,
@@ -58,7 +59,7 @@ const STOP_TEXT: Record<RepairStop, string> = {
 // `too-big`: larger than one run's byte cap; `byte-cap`: would pass it after
 // the clips fetched before; `busy`: the camera's Search stayed busy.
 // `still-recording`: a late-night recording that may still be written (names.ts settlesAt).
-export type SkipReason = 'outside-retention' | 'already-local' | 'gone-from-camera' | 'other-stream' | 'viewer' | 'invalid' | 'too-big' | 'byte-cap' | 'busy' | 'still-recording';
+type SkipReason = 'outside-retention' | 'already-local' | 'gone-from-camera' | 'other-stream' | 'viewer' | 'invalid' | 'too-big' | 'byte-cap' | 'busy' | 'still-recording';
 // `streamed`: the cache couldn't keep the file; it went through a temp file.
 export interface RepairItem { id: string; start: number; result: 'ok' | 'skipped' | 'failed'; reason?: SkipReason; error?: string; clipId?: number; bytes?: number; streamed?: true }
 
@@ -82,18 +83,6 @@ export interface ClipsRepairDeps {
 
 type Candidate = Extract<ClipItem, { type: 'missing-locally' }>;
 const missingItems = (r: InventoryReport) => (r.items as ClipItem[]).filter((x): x is Candidate => x.type === 'missing-locally');
-
-const sleepFor = (ms: number, signal: AbortSignal) =>
-  new Promise<void>((resolve) => {
-    if (signal.aborted) return resolve();
-    const t = setTimeout(done, ms);
-    function done() {
-      clearTimeout(t);
-      signal.removeEventListener('abort', done);
-      resolve();
-    }
-    signal.addEventListener('abort', done, { once: true });
-  });
 
 // The fetch's end, or an AbortError when the signal aborts: then the fetch
 // is aborted too, unless someone else (a viewer) still waits for it, and
@@ -122,14 +111,13 @@ const closed = (w: Writable) =>
 // The temp file, opened at once (so a bad folder fails before any fetch).
 const openTempFile = (path: string): Writable => createWriteStream(path, { fd: openSync(path, 'w') });
 
-const why = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 // Cleanup never turns a done clip into a failure, nor hides the real error.
 const quietly = (what: string, f: () => void) => {
   try {
     f();
   } catch (err) {
-    logger.warn({ err: why(err) }, what);
+    logger.warn({ err: errorMessage(err) }, what);
   }
 };
 
@@ -147,8 +135,8 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
     const s = d.settings();
     const maxClips = d.limits?.clips ?? REPAIR_MAX_CLIPS;
     const maxBytes = d.limits?.bytes ?? REPAIR_MAX_BYTES;
-    const sleep = d.sleep ?? sleepFor;
-    const retentionFrom = Math.floor((ctx.now - s.clipsDays * DAY) / DAY) * DAY;
+    const sleep = d.sleep ?? defaultSleep;
+    const retentionFrom = dayStart(ctx.now - s.clipsDays * DAY);
     // Oldest first, whatever order the report lists them in (ruling (a)).
     const all = missingItems(ctx.source).sort((a, b) => a.start - b.start);
     const list = all.slice(0, maxClips);
@@ -199,7 +187,7 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
         try {
           w = (d.openTemp ?? openTempFile)(path);
         } catch (err) {
-          throw new Error(`the temp file could not be made: ${why(err)}`);
+          throw new Error(`the temp file could not be made: ${errorMessage(err)}`);
         }
         const t: { path: string; w: Writable; err?: Error } = { path, w };
         w.on('error', (err) => void (t.err ??= err));
@@ -247,15 +235,11 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
     // The still-listed check; a busy Search (a viewer browsing) is tried
     // BUSY_TRIES times 1 s apart like the compare's, then 'busy'.
     const findListed = async (id: string, signal: AbortSignal): Promise<RecordingEntry | undefined | 'busy'> => {
-      for (let attempt = 1; ; attempt++) {
-        try {
-          return await d.list.find(id, signal);
-        } catch (err) {
-          if (!(err instanceof SearchError && err.code === 'busy') || signal.aborted) throw err;
-          if (attempt >= BUSY_TRIES) return 'busy';
-          await sleep(1000, signal);
-          if (signal.aborted) throw abortError('cancelled');
-        }
+      try {
+        return await withBusyRetry(() => d.list.find(id, signal), signal, sleep);
+      } catch (err) {
+        if (err instanceof SearchError && err.code === 'busy' && !signal.aborted) return 'busy';
+        throw err;
       }
     };
 
@@ -337,7 +321,7 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
           skip(c, 'gone-from-camera');
           continue;
         }
-        fail(c, why(err));
+        fail(c, errorMessage(err));
         const offline = (err instanceof SearchError && err.code === 'camera_offline') || (err instanceof BaichuanError && err.code === 'offline');
         if (offline) stopped = 'camera_offline';
         else if (err instanceof BaichuanError && err.code === 'refused') stopped = 'refused';

@@ -19,7 +19,7 @@ interface GetTime {
 // Camera clock minus ours. The camera gives local wall time, its zone
 // (seconds west of UTC) and whether it observes DST; we don't know whether
 // DST is in effect right now, so take the reading closest to our clock.
-export function clockOffset(t: GetTime, now: number): number | undefined {
+function clockOffset(t: GetTime, now: number): number | undefined {
   const x = t.Time;
   if (!x) return undefined;
   const wall = Date.UTC(x.year, x.mon - 1, x.day, x.hour, x.min, x.sec);

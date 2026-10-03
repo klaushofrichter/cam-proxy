@@ -1,10 +1,11 @@
-import { randomBytes, timingSafeEqual } from 'crypto';
+import { randomBytes } from 'crypto';
 import { lookup as dnsLookup } from 'dns/promises';
 import { EventEmitter } from 'events';
 import { createWriteStream, mkdirSync, unlinkSync } from 'fs';
 import net from 'net';
 import { join, posix } from 'path';
 import tls from 'tls';
+import { tokenMatches } from '../api/auth';
 
 // A small upload-only FTP(S) server for the camera's clip uploads. It speaks
 // what an uploader needs (login, explicit TLS, passive mode, folders, STOR)
@@ -44,15 +45,8 @@ const IPV4 = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 const plainIp = (a: string | undefined) => (a ?? '').replace(/^::ffff:/, '');
 const OPEN = new Set(['USER', 'PASS', 'AUTH', 'QUIT', 'SYST', 'FEAT', 'NOOP', 'PBSZ', 'PROT', 'OPTS']);
 const KNOWN = new Set([...OPEN, 'PWD', 'XPWD', 'CWD', 'CDUP', 'MKD', 'XMKD', 'TYPE', 'MODE', 'STRU', 'PASV', 'EPSV', 'STOR', 'SIZE']);
-// Constant time over the longer of the two (no hash: a password isn't stored).
-function same(a: string, b: string): boolean {
-  const x = Buffer.from(a), y = Buffer.from(b);
-  const n = Math.max(x.length, y.length, 1);
-  const px = Buffer.alloc(n), py = Buffer.alloc(n);
-  x.copy(px);
-  y.copy(py);
-  return timingSafeEqual(px, py) && x.length === y.length;
-}
+// Constant time, as the API's tokens.
+const same = (given: string, expected: string): boolean => tokenMatches(given, [expected]);
 
 interface Session {
   stream: net.Socket; // the control connection (a TLSSocket after AUTH TLS)
