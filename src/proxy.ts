@@ -1,6 +1,6 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
-import { existsSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import http from 'http';
 import type { AddressInfo } from 'net';
 import { join } from 'path';
@@ -34,6 +34,8 @@ import { Go2rtc } from './stills/go2rtc';
 import { FrameGrabber, type Frame } from './stills/grabber';
 import { InventoryRunner } from './inventory/runner';
 import { stillsCheck } from './inventory/stills';
+import { clipsCheck } from './inventory/clips';
+import { clipsRepair } from './inventory/repair-clips';
 import { MinuteStore, minuteOf } from './stills/store';
 import type { StillsSide } from './api/client-api';
 import { StreamLog, type StreamMessage } from './stream/log';
@@ -139,25 +141,6 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   storage.recount();
   const sessions = createSessionSigner(opts.sessionSecret);
   const links = createLoginLinks();
-  // Inventories (spec 2026-10-02-inventory-design): one run at a time, the
-  // results in <dataDir>/inventory, an `inventory` audit record per run.
-  // The settings are read when a run starts.
-  const inventory = new InventoryRunner({
-    dir: join(running.server.dataDir, 'inventory'),
-    audit,
-    camera: () => running.camera.id,
-    checks: {
-      stills: {
-        label: 'Stills',
-        run: stillsCheck({
-          dataDir: running.server.dataDir,
-          audit,
-          catalog,
-          settings: () => ({ cam: running.camera.id, intervalS: running.stills.intervalS, stillsDays: running.retention.stillsDays, previewsDays: running.retention.previewsDays, keepHours: running.storage.keepHours.stills }),
-        }),
-      },
-    },
-  });
   // Composed clips (spec 2026-09-28): one encoding at a time; abandoned and
   // old jobs are swept every 5 s.
   const font = running.composition?.font ?? defaultFont();
@@ -316,6 +299,60 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     onDownload: (o) => metrics.onRecordingDownload({ stream: o.stream, result: o.result }),
   });
   recordingBusy = (p) => recordings.cache.busy(p);
+
+  // Inventories (spec 2026-10-02-inventory-design): one run at a time, the
+  // results in <dataDir>/inventory, an `inventory` audit record per run (an
+  // `inventory-repair` record per repair). The settings are read when a run
+  // starts. The clips compare lists the SD card through the recordings side;
+  // its repair fetches there at low priority and indexes through its own
+  // ClipIndexer (FTP may be off). Recordings the cache can't keep go through
+  // <dataDir>/inventory/tmp (the data disk: /tmp is tmpfs on the Pi), emptied
+  // here since a crash can leave .part files.
+  const inventoryDir = join(running.server.dataDir, 'inventory');
+  const repairTmp = join(inventoryDir, 'tmp');
+  try {
+    mkdirSync(repairTmp, { recursive: true });
+    for (const f of readdirSync(repairTmp)) rmSync(join(repairTmp, f), { force: true });
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, 'inventory_tmp_cleanup_failed');
+  }
+  const inventory = new InventoryRunner({
+    dir: inventoryDir,
+    audit,
+    camera: () => running.camera.id,
+    checks: {
+      stills: {
+        label: 'Stills',
+        run: stillsCheck({
+          dataDir: running.server.dataDir,
+          audit,
+          catalog,
+          settings: () => ({ cam: running.camera.id, intervalS: running.stills.intervalS, stillsDays: running.retention.stillsDays, previewsDays: running.retention.previewsDays, keepHours: running.storage.keepHours.stills }),
+        }),
+      },
+      clips: {
+        label: 'Clips',
+        camera: true,
+        run: clipsCheck({
+          dataDir: running.server.dataDir,
+          catalog,
+          settings: () => ({ cam: running.camera.id, clipsDays: running.retention.clipsDays, stream: running.ftp.stream, ftpEnabled: running.ftp.enabled, eventMaxOpenMin: running.events.maxOpenMin }),
+          camera: { list: recordings.list, timeInfo: () => client.timeInfo() },
+        }),
+        repair: clipsRepair({
+          catalog,
+          settings: () => ({ cam: running.camera.id, stream: running.ftp.stream, clipsDays: running.retention.clipsDays, maxGB: running.ftp.maxGB }),
+          list: recordings.list,
+          fetcher: recordings.fetcher,
+          cache: recordings.cache,
+          indexer: () => new ClipIndexer({ catalog, log, config: () => running, timeInfo: () => client.timeInfo(), dataDir: running.server.dataDir, cam: running.camera.id, stored: (bytes) => storage.noteWritten('clips', bytes, 1) }),
+          tempDir: () => repairTmp,
+          paused: () => storage.paused(),
+          clipsBytes: () => storage.usage().clips.bytes,
+        }),
+      },
+    },
+  });
 
   // A camera reboot from the control API (#83): the client and the status
   // poller are read on use, since restart() builds them anew.
