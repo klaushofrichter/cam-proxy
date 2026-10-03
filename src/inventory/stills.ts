@@ -33,7 +33,7 @@ export const STARTUP_MS = 120_000;
 // gives up after this long (REBOOT_WAIT_MS) and writes `not-back`.
 export const OUTAGE_MS = REBOOT_WAIT_MS;
 const OFF_NOTE = 'Stills are off: the window ends after the newest pack';
-const CLOCK_NOTE = "Restorable seconds compare the clips' times (the camera's clock) with the stills' (the proxy's clock), not aligned: a few seconds' skew";
+const CLOCK_NOTE = "Seconds covered by local clips compare the clips' times (the camera's clock) with the stills' (the proxy's clock), not aligned: a few seconds' skew";
 
 // 59 s, 1 min, 10 min 5 s, 1 h 30 min (the same words as the admin UI's list).
 export function duration(seconds: number): string {
@@ -380,7 +380,7 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
     const message =
       `${duration(counts.missingSeconds)} of ${duration(counts.expectedSeconds)} missing (${counts.missingPct}%) since ${new Date(from).toISOString().slice(0, 16).replace('T', ' ')} UTC, ` +
       `${counts.gaps} gaps${top[0] ? ` (longest ${duration(top[0].seconds)})` : ''}, ${duration(counts.explainedSeconds)} explained by proxy stops, camera reboots or storage pauses, ` +
-      `${duration(counts.restorableSeconds)} restorable from clips (camera clock), ${problems} file problems`;
+      `${duration(counts.restorableSeconds)} covered by local clips (camera clock, not restored), ${problems} file problems`;
     return { window: { from, to, reason, retentionFrom, protectedFrom, notes: [...(off ? [OFF_NOTE] : []), ...(counts.restorableSeconds > 0 ? [CLOCK_NOTE] : [])] }, counts, top, items, message };
   };
 }

@@ -45,9 +45,9 @@
       confirmLabel: 'Power-cycle camera',
     },
     'inventory-repair': {
-      title: 'Fetch lost clips',
-      message: `Fetch ${offer.count} lost clips (${(offer.bytes / 2 ** 20).toFixed(1)} MB) from the camera's SD card over Baichuan? They are fetched one at a time, after any viewer's download, and added to the Clips page marked "from camera". At most 50 clips or 200 MB per run.`,
-      confirmLabel: 'Fetch clips',
+      title: 'Retrieve missing clips',
+      message: `Retrieve ${offer.count} clips (${(offer.bytes / 2 ** 20).toFixed(1)} MB) from the camera? They are fetched from its SD card over Baichuan one at a time, after any viewer's download, and added to the Clips page marked "from camera". At most 50 clips or 200 MB per run.`,
+      confirmLabel: 'Retrieve clips',
     },
     'inventory-recover': {
       title: 'Add missing events',
@@ -62,6 +62,7 @@
   });
   let asking = $state<'camera-reboot' | 'camera-powercycle' | 'restart-proxy' | 'inventory-repair' | 'inventory-recover' | null>(null);
   // The Inventory box's repair (#74): its dry-run numbers go into the message.
+  // A search that ends asks by itself (auto), but never over another open dialog.
   let inventory = $state<{ fetchLost: () => void; addMissing: () => void } | undefined>();
   let offer = $state({ count: 0, bytes: 0 });
   // The events repair (#75): the check's count goes into the message.
@@ -224,7 +225,7 @@
       <p class="bad" data-testid="restart-state">The proxy did not come back. Is it running under a supervisor (compose, the cluster)?</p>
     {/if}
   </div>
-  <InventoryCard bind:this={inventory} onrepair={(o) => { offer = o; asking = 'inventory-repair'; }} onrecover={(o) => { recoverText = o.text; asking = 'inventory-recover'; }} />
+  <InventoryCard bind:this={inventory} onrepair={(o, auto) => { if (auto && asking) return; offer = o; asking = 'inventory-repair'; }} onrecover={(o, auto) => { if (auto && asking) return; recoverText = o.text; asking = 'inventory-recover'; }} />
   <div class="card">
     <div class="loghead"><h3>Log</h3><span class="small">updates every 10 s</span></div>
     <div class="log">

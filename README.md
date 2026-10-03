@@ -615,23 +615,29 @@ exchanged for the cookie and not stored in the browser.
   The Inventory box's "Check stills" checks the stills of the retention
   window in the background: the missing seconds, the 10 longest gaps and
   whether a proxy stop or crash, a camera reboot or a power cycle, or a
-  storage pause (disk full) explains them, the seconds a local clip could
-  restore, and unreadable packs or sprites without their pack (the first 10
+  storage pause (disk full) explains them, the missing seconds a local clip
+  covers (not restored yet, #73), and unreadable packs or sprites without their pack (the first 10
   with their minute). It shows the progress (with Cancel) and the newest
   result, also of a run started in another tab (it polls every 10 s).
+  "Check stills" and "Check clips" only read; the two "Search for and …"
+  buttons change data, each after a confirmation.
   "Check clips" checks the clips of the retention window (rows without
   their file, files without a row, snapshots no clip links, recording
-  events without a clip, clips without an event); "Compare clips with the camera" also pairs them with the
-  SD card's recordings on `ftp.stream`. Under a compare less than an hour
-  old with recordings missing here, "Fetch N lost clips" fetches them from
-  the SD card (at most 50 or 200 MB per run) after a confirmation; the Clips
-  page marks them "from camera".
-  "Check events" compares the stored events with the SD card's recordings
+  events without a clip, clips without an event); "Search for and retrieve
+  missing clips" also pairs them with the SD card's recordings on
+  `ftp.stream`, and when that compare ends with recordings missing here it
+  asks "Retrieve N clips (x MB) from the camera?". Confirmed, it fetches them
+  from the SD card (at most 50 or 200 MB per run); the Clips page marks them
+  "from camera". Cancelled, the button "Retrieve N missing clips" stays under
+  the result for an hour. With nothing missing it says "Nothing to
+  retrieve".
+  "Search for and add missing events" compares the stored events with the SD card's recordings
   (the camera's own record of what it saw) in the SD card's reach, at most
   `retention.eventsDays`: per trigger kind, a recording (overlapping ones
   merged) needs an event of its kind from 10 s before its start to 5 s after
-  its end. Under a check less than an hour old with events missing, "Add N
-  missing events" adds them after a confirmation (at most 1000 per run), as
+  its end. When the check ends with events missing it asks to add them
+  (Cancel leaves the button "Add N missing events" for an hour; with nothing
+  missing it says "Nothing to add."); confirmed, it adds them (at most 1000 per run), as
   events with `source: "recovered"`, marked on the Events page and the
   Timeline. They send no SSE message, never reach Vision (never analysed),
   and don't count in the FTP stall check or the daily event counts. A

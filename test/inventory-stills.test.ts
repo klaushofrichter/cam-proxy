@@ -133,8 +133,8 @@ describe('stills inventory', () => {
       { type: 'unreadable-pack', minute: at(5) },
       { type: 'sprite-without-pack', minute: at(7) },
     ]);
-    expect(r.message).toBe('3 min 40 s of 10 min missing (36.67%) since 2026-09-27 00:10 UTC, 4 gaps (longest 1 min 30 s), 2 min 30 s explained by proxy stops, camera reboots or storage pauses, 20 s restorable from clips (camera clock), 3 file problems');
-    expect(r.window.notes).toEqual([expect.stringMatching(/^Restorable .*camera's clock.*not aligned/)]);
+    expect(r.message).toBe('3 min 40 s of 10 min missing (36.67%) since 2026-09-27 00:10 UTC, 4 gaps (longest 1 min 30 s), 2 min 30 s explained by proxy stops, camera reboots or storage pauses, 20 s covered by local clips (camera clock, not restored), 3 file problems');
+    expect(r.window.notes).toEqual([expect.stringMatching(/^Seconds covered by local clips .*camera's clock.*not aligned/)]);
   });
 
   // #106: with stills off, the time after the last pack is no gap.
