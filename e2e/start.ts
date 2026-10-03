@@ -13,6 +13,10 @@ import { ADMIN_TOKEN, CLIENT_TOKEN, FTP, FTP_PASSWORD, POE_SWITCH_PASSWORD, POE_
 const tool = (name: string) => (existsSync(join(__dirname, '..', 'tools', name)) ? join(__dirname, '..', 'tools', name) : undefined);
 process.env.CAMSIM_MEDIAMTX ??= tool('mediamtx');
 const GO2RTC = process.env.CAMPROXY_TEST_GO2RTC ?? tool('go2rtc');
+// The host figures (health.spec): a Raspberry Pi 4's /proc and /sys from the
+// test fixtures, so the Pi card shows on any machine; E2E_HOST_ROOT picks
+// another tree (test/fixtures/host/linux: no Pi).
+const HOST_ROOT = process.env.E2E_HOST_ROOT ?? join(__dirname, '..', 'test', 'fixtures', 'host', 'pi');
 
 async function main() {
   const sim = await createCamSim({
@@ -58,7 +62,7 @@ async function main() {
   let proxy: Proxy;
   const boot = async () => {
     // The camera's FTP settings every 2 s, not every 5 min (ftp-health.spec, #93).
-    proxy = createProxy(loadConfig(env, { cwd: dir }), { sessionSecret, cameraFtpCheckMs: 2000, exit: () => void boot().catch((err: Error) => process.stderr.write(`e2e: restart failed: ${err.message}\n`)) });
+    proxy = createProxy(loadConfig(env, { cwd: dir }), { sessionSecret, cameraFtpCheckMs: 2000, host: { root: HOST_ROOT }, exit: () => void boot().catch((err: Error) => process.stderr.write(`e2e: restart failed: ${err.message}\n`)) });
     await proxy.start({ port: PROXY_PORT, host: '127.0.0.1' });
   };
   await boot();
