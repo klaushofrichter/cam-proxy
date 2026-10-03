@@ -521,6 +521,39 @@
         }
       }
     },
+    "health": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "diskPercent": {
+          "type": "integer",
+          "minimum": 50,
+          "maximum": 99,
+          "description": "the data volume's used space, percent, from which the health summary flags a problem"
+        },
+        "tempC": {
+          "type": "integer",
+          "minimum": 40,
+          "maximum": 95,
+          "description": "the CPU temperature, °C, from which the health summary flags a problem (on a Raspberry Pi)"
+        }
+      }
+    },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "stats": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ],
+          "description": "read the host figures (CPU temperature, under-voltage, memory, uptime, load): auto on a Raspberry Pi only, on, or off"
+        }
+      }
+    },
     "analytics": {
       "type": "object",
       "additionalProperties": false,

@@ -85,6 +85,13 @@
   "recordings": {
     "cacheMB": 2048
   },
+  "health": {
+    "diskPercent": 90,
+    "tempC": 75
+  },
+  "host": {
+    "stats": "auto"
+  },
   "analytics": {
     "kinds": {
       "person": true,

@@ -273,3 +273,23 @@ describe('recordings settings', () => {
     expect(needsRestart('camera.host')).toBe(true);
   });
 });
+
+// The health summary (spec 2026-10-03-health-summary-design): thresholds and host figures.
+describe('health and host settings', () => {
+  beforeEach(() => write('config.json', { camera: { host: '192.0.2.10' } }));
+  it('health.diskPercent defaults to 90 (50-99), health.tempC to 75 (40-95), host.stats to auto', () => {
+    const l = load();
+    expect(l.config.health).toEqual({ diskPercent: 90, tempC: 75 });
+    expect(l.config.host).toEqual({ stats: 'auto' });
+    for (const v of [49, 100, 90.5]) expect(() => applyOverrides(l, { health: { diskPercent: v } })).toThrow(/health.diskPercent/);
+    for (const v of [39, 96]) expect(() => applyOverrides(l, { health: { tempC: v } })).toThrow(/health.tempC/);
+    expect(() => applyOverrides(l, { host: { stats: 'maybe' } })).toThrow(/host.stats/);
+    const next = applyOverrides(l, { health: { diskPercent: 50, tempC: 95 }, host: { stats: 'off' } });
+    expect(next.config.health).toEqual({ diskPercent: 50, tempC: 95 });
+    expect(next.config.host.stats).toBe('off');
+  });
+
+  it('all three apply at once', () => {
+    for (const p of ['health.diskPercent', 'health.tempC', 'host.stats']) expect(needsRestart(p)).toBe(false);
+  });
+});
