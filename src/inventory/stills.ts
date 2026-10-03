@@ -74,16 +74,23 @@ async function names(dir: string): Promise<Set<string>> {
   }
 }
 
-// Every audit record of `actions` in [from, to], oldest first.
-export function records(audit: Pick<AuditLog, 'list'>, actions: string[], from: number, to: number): AuditRecord[] {
+// Every audit record of `actions` in [from, to], oldest first. AuditLog.list
+// reads a day file whole and synchronously (a busy day can reach 50 MB), so
+// this asks for one UTC day at a time and yields to the event loop between
+// days (#106): the stall is one day's read, not eight.
+export async function records(audit: Pick<AuditLog, 'list'>, actions: string[], from: number, to: number): Promise<AuditRecord[]> {
   const out: AuditRecord[] = [];
-  let after = '';
-  for (;;) {
-    const page = audit.list({ actions, from, to, after, limit: 500 });
-    out.push(...page.records);
-    if (!page.hasMore || !page.next) return out;
-    after = page.next;
+  for (let day = dayStart(from); day <= to; day += DAY) {
+    let after = '';
+    for (;;) {
+      const page = audit.list({ actions, from: Math.max(from, day), to: Math.min(to, day + DAY - 1), after, limit: 500 });
+      out.push(...page.records);
+      if (!page.hasMore || !page.next) break;
+      after = page.next;
+    }
+    await yieldToLoop();
   }
+  return out;
 }
 
 // fn over items, at most `limit` at a time; the results in the items' order.
@@ -229,7 +236,7 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
     const previewsFrom = Math.max(dayStart(now - s.previewsDays * DAY), oldestPreview ?? to);
     if (oldest === null) return { window: { from: null, to, reason: 'empty', retentionFrom, protectedFrom, notes: [] }, counts, top: [], items: [], message: 'no stills stored' };
     // One pass over the audit log for every action the check needs.
-    const audit = records(d.audit, AUDIT_ACTIONS, retentionFrom - OUTAGE_MS, now);
+    const audit = await records(d.audit, AUDIT_ACTIONS, retentionFrom - OUTAGE_MS, now);
     let from: number;
     let reason: WindowReason;
     if (oldest - retentionFrom < HOUR) {

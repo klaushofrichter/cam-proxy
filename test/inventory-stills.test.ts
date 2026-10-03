@@ -7,7 +7,7 @@ import { AuditLog } from '../src/audit/audit-log';
 import { openCatalog, type Catalog } from '../src/catalog/db';
 import { insertClip } from '../src/catalog/clips';
 import { MinuteStore, minutePath, readPackFooter } from '../src/stills/store';
-import { stillsCheck, STARTUP_MS, OUTAGE_MS, type StillsInventoryDeps, type StillsSettings } from '../src/inventory/stills';
+import { records, stillsCheck, STARTUP_MS, OUTAGE_MS, type StillsInventoryDeps, type StillsSettings } from '../src/inventory/stills';
 import type { CheckContext, Progress } from '../src/inventory/runner';
 
 const MIN = 60_000;
@@ -381,11 +381,28 @@ describe('stills inventory: previews pruned before stills, cancel, audit reads',
     expect(r.counts.minutes).toBeLessThan(600);
   });
 
-  it('reads the audit log once for all the actions it needs', async () => {
-    const calls: unknown[] = [];
+  it('reads the audit log in one pass for all the actions it needs, one UTC day at a time', async () => {
+    const calls: { actions?: string[]; from?: number; to?: number }[] = [];
     const counting = { list: (q: Parameters<AuditLog['list']>[0]) => (calls.push(q), audit.list(q)) };
     await stillsCheck(deps({ audit: counting, dataDir: dir, settings: () => settings({ stillsDays: 0 }) }))(ctx());
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ actions: expect.arrayContaining(['storage-daily', 'proxy-start', 'camera-reboot', 'camera-powercycle']) });
+    // stillsDays 0: from 5 min before today's start (OUTAGE_MS) to now, two UTC days.
+    expect(calls).toHaveLength(2);
+    for (const c of calls) {
+      expect(c.actions).toEqual(expect.arrayContaining(['storage-daily', 'proxy-start', 'camera-reboot', 'camera-powercycle', 'storage-paused', 'storage-resumed']));
+      expect(Math.floor(c.from! / DAY)).toBe(Math.floor(c.to! / DAY));
+    }
+  });
+
+  // #106: a busy audit day (up to 50 MB) is read and parsed in one go; the
+  // check yields to the event loop between days, not after all of them.
+  it('yields to the event loop between the audit days it reads', async () => {
+    const order: string[] = [];
+    const tracing = { list: (q: Parameters<AuditLog['list']>[0]) => (order.push('list'), audit.list(q)) };
+    const pending = records(tracing, ['proxy-start'], NOW - 3 * DAY, NOW);
+    setImmediate(() => order.push('tick'));
+    await pending;
+    expect(order.filter((x) => x === 'list')).toHaveLength(4);
+    expect(order.indexOf('tick')).toBeGreaterThan(0);
+    expect(order.indexOf('tick')).toBeLessThan(order.lastIndexOf('list'));
   });
 });

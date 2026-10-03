@@ -236,7 +236,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     const oldestHere = (db.prepare('SELECT MIN(start_ts) AS t FROM clips WHERE cam = ?').get(s.cam) as { t: number | null } | undefined)?.t ?? null;
     const pruning =
       d.audit !== undefined && oldestHere !== null && oldestHere - from >= HOUR &&
-      records(d.audit, ['storage-daily'], from, now).some((r) => {
+      (await records(d.audit, ['storage-daily'], from, now)).some((r) => {
         const v = (r.cam_proxy as { kinds?: { clips?: { oldest?: unknown } } } | undefined)?.kinds?.clips?.oldest;
         return typeof v === 'number' && v < oldestHere - HOUR;
       });
