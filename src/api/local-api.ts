@@ -20,8 +20,10 @@ export function isLoopback(address: string | undefined): boolean {
 
 export function localApi(d: { health: () => Promise<HealthSummary> }): express.Router {
   const r = express.Router();
-  r.get('/local/health', async (req, res, next) => {
-    if (!isLoopback(req.socket.remoteAddress)) return next();
+  // In front of the route, so no method (not even Express's automatic
+  // OPTIONS with its Allow header) answers a non-loopback caller here.
+  r.use((req, _res, next) => (isLoopback(req.socket.remoteAddress) ? next() : next('router')));
+  r.get('/local/health', async (_req, res) => {
     const h = await d.health();
     res.set('Cache-Control', 'no-store').json(h);
   });

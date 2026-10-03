@@ -56,7 +56,7 @@ One function builds a summary from the existing status and the host figures. Eac
 | camera | offline |
 | live stream | down (while enabled) |
 | events intake | not subscribed |
-| camera FTP upload | camera's FTP off, or the FTP stall check says stalled (6 h) |
+| camera FTP upload | camera's FTP off, pointing elsewhere, or never set up (while the proxy takes clips; Klaus, 2026-10-03), or the FTP stall check says stalled (6 h) |
 | storage | paused (low free space) |
 | disk (data volume, every platform) | ≥ 90 % used |
 | CPU temperature (Pi only) | ≥ 75 °C |
@@ -77,7 +77,7 @@ Thresholds become settings (`health.diskPercent` default 90, `health.tempC` defa
 
 `GET /api/local/health` returns the summary as JSON (items, values, problem flags, thresholds, the proxy version, `generatedAt`).
 
-- **No key, loopback only**: answered only when the socket's remote address is `127.0.0.1` or `::1`. With `network_mode: host`, the display service on the Pi connects from loopback. Everything else gets 404 (not 401, so the route isn't advertised).
+- **No key, loopback only**: answered only when the socket's remote address is `127.0.0.1` or `::1`. With `network_mode: host`, the display service on the Pi connects from loopback. Everything else goes on as if the route did not exist, so it gets exactly what an unknown `/api` route gets (401 without a token, 404 with a client token, also for OPTIONS): the route isn't advertised.
 - The check uses the TCP socket's address only, never `X-Forwarded-For` or `trust proxy`. Tests cover a LAN address, a spoofed forwarding header, and IPv4-mapped IPv6 (`::ffff:127.0.0.1`).
 - The response carries no secrets: no tokens, no passwords, no FTP settings. Camera model and firmware are included; they are visible on the camera's own LAN UI anyway.
 - Read-only, GET only, no CSRF surface; documented in the API docs as "local only".

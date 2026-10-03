@@ -73,6 +73,12 @@ describe('the loopback guard', () => {
     remote = undefined;
     expect((await request(base).post('/api/local/health')).body).toEqual({ error: 'unknown' });
   });
+  it('OPTIONS from a LAN address goes on as an unknown route too (no Allow header)', async () => {
+    remote = '192.168.1.50';
+    const r = await request(base).options('/api/local/health');
+    expect(r.body).toEqual({ error: 'unknown' });
+    expect(r.headers.allow).toBeUndefined();
+  });
 });
 
 describe('GET /api/local/health on the proxy', () => {
@@ -197,6 +203,12 @@ describe('the fall-through on the proxy', () => {
         expect((await same('/api/local/health')).status).toBe(401);
         expect(await same('/api/local/health', auth(CLIENT_TOKEN))).toEqual({ status: 404, body: { error: 'not_found' } });
         expect(await same('/api/local/health', { 'X-Forwarded-For': '127.0.0.1' })).toEqual(await same('/api/local/nothing'));
+        const opt = async (path: string) => {
+          const r = await request(base).options(path);
+          return { status: r.status, body: r.body, allow: r.headers.allow };
+        };
+        expect(await opt('/api/local/health')).toEqual(await opt('/api/local/nothing'));
+        expect((await opt('/api/local/health')).allow).toBeUndefined();
       } finally {
         await new Promise<void>((r) => server.close(() => r()));
       }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { diskText, healthHeadline, itemOf, loadText, memoryText, piCardTitle, problemOf, uptimeText, type UiHealth } from '../web/src/lib/health';
+import { cameraUploadClass, lastClipClass, diskText, healthHeadline, itemOf, loadText, memoryText, piCardTitle, problemOf, uptimeText, type UiHealth } from '../web/src/lib/health';
 
 // Spec 2026-10-03-health-summary-design A3: the Status page's Health and Pi cards.
 const GB = 1024 ** 3;
@@ -47,5 +47,27 @@ describe('the Pi card', () => {
     expect(loadText(null)).toBe('—');
     expect(diskText({ sizeBytes: 228.6 * GB, freeBytes: 191 * GB, usedBytes: 26 * GB, usedPercent: 11.4 })).toBe('11.4 % used, 191.0 GB free');
     expect(diskText(null)).toBe('—');
+  });
+});
+
+// Review of #123: the Clips card's red comes from the summary's ftp item.
+describe('the Clips card from the summary', () => {
+  const withFtp = (problem: boolean): UiHealth => ({ ...health(problem ? ['ftp'] : []), items: [{ id: 'ftp', label: 'Camera FTP upload', value: 'x', text: '', problem }] });
+  it('Camera upload: red exactly when the ftp item is a problem; otherwise its own green, amber or grey', () => {
+    expect(cameraUploadClass(withFtp(true), 'not_set_up')).toBe('bad');
+    expect(cameraUploadClass(withFtp(true), 'on')).toBe('bad'); // stalled while on
+    expect(cameraUploadClass(withFtp(false), 'on')).toBe('ok');
+    expect(cameraUploadClass(withFtp(false), 'server_differs')).toBe('warn');
+    expect(cameraUploadClass(withFtp(false), 'off')).toBe('');
+  });
+  it('without a summary (an older proxy): the old rule', () => {
+    expect(cameraUploadClass(undefined, 'off')).toBe('bad');
+    expect(cameraUploadClass(undefined, 'not_set_up')).toBe('muted');
+  });
+  it('Last clip: red when the ftp item is a problem; without a summary when stalled', () => {
+    expect(lastClipClass(withFtp(true), false)).toBe('bad');
+    expect(lastClipClass(withFtp(false), true)).toBe('');
+    expect(lastClipClass(undefined, true)).toBe('bad');
+    expect(lastClipClass(undefined, false)).toBe('');
   });
 });

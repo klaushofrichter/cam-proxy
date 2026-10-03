@@ -233,7 +233,10 @@ This keeps the history: stills, previews, clips and the catalog.
   container runs with `network_mode: host` (and shares the host's `/proc`
   figures for memory and load); `host.stats` (`auto`, `on`, `off`) switches
   them. `GET /api/local/health` serves the same summary to a process on the Pi
-  (the e-paper display), without a key, from `127.0.0.1` only.
+  (the e-paper display), without a key, from `127.0.0.1` only. That trust
+  assumes nothing on the Pi (or in a pod) forwards outside traffic from
+  `127.0.0.1`: no local reverse proxy, tunnel or sidecar in front of the
+  proxy, or it would hand its callers the local API.
 - **Memory:** with the memory cgroup on (see step 2), `docker stats` shows
   the proxy at about 350–390 MiB of the 3.7 GiB. On a Pi prepared before the
   script did this, `docker stats` shows `0B`: add `cgroup_enable=memory` to the

@@ -1,3 +1,5 @@
+import { cameraFtpClass, type CameraFtp } from './ftp';
+
 // The Status page's Health and Pi cards (spec 2026-10-03-health-summary-design
 // A3). The proxy's summary (`health` in /control/status, the same as
 // GET /api/local/health) decides every problem; the page only draws it, so
@@ -58,4 +60,19 @@ export function loadText(l: UiLoad | null): string {
 
 export function diskText(d: UiDisk | null): string {
   return d ? `${d.usedPercent.toFixed(1)} % used, ${(d.freeBytes / GB).toFixed(1)} GB free` : '—';
+}
+
+// The Clips card's "Camera upload" line: red exactly when the summary's ftp
+// item is a problem; otherwise its own green (on), amber (another server
+// name) or grey. Without a summary (an older proxy), the card's own rule.
+export function cameraUploadClass(h: UiHealth | null | undefined, state: CameraFtp['state'] | undefined): string {
+  if (!h) return cameraFtpClass(state);
+  if (problemOf(h, 'ftp')) return 'bad';
+  const c = cameraFtpClass(state);
+  return c === 'bad' ? '' : c;
+}
+
+// The Clips card's "Last clip" line: red with the summary's ftp item.
+export function lastClipClass(h: UiHealth | null | undefined, stalled: boolean): string {
+  return (h ? problemOf(h, 'ftp') : stalled) ? 'bad' : '';
 }

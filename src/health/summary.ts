@@ -84,7 +84,8 @@ export function buildHealth(i: HealthInput): HealthSummary {
   else {
     const st = i.ftp.camera?.state ?? 'unknown';
     const text = stalled ? `no clip for ${i.ftp.stalled!.hours} h` : FTP_TEXT[st];
-    add('ftp', 'Camera FTP upload', st, text, stalled || st === 'off' || st === 'elsewhere');
+    // Never set up counts too while the proxy takes clips (Klaus, 2026-10-03).
+    add('ftp', 'Camera FTP upload', st, text, stalled || st === 'off' || st === 'elsewhere' || st === 'not_set_up');
   }
 
   add('storage', 'Storage', i.storage.paused ? 'paused' : 'writing', i.storage.paused ? 'paused (low space)' : 'writing', i.storage.paused);

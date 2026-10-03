@@ -305,8 +305,10 @@ upload folder. While storage is paused, `STOR` answers 452.
   is no warning). Only another server name (port and user match: perhaps
   another name for this proxy; compared trimmed and in lower case, no DNS)
   is amber. A camera that has no FTP server set and never sent a clip (a
-  fresh or reset camera) is grey, "FTP upload isn't set up on the camera",
-  with the same button: no alarm, no audit record, no stall warning. The
+  fresh or reset camera) shows the amber warning "FTP upload isn't set up
+  on the camera", with the same button, and is a problem in the health
+  summary (the Health card's FTP line and the card's "Camera upload" line
+  are red), but writes no audit record and no stall warning. The
   time of the last clip is kept when retention deletes the clip. An
   intentional `camera-ftp-off` stays red while `ftp.enabled` is true in
   the proxy; set `ftp.enabled: false` to silence it. Each change of the

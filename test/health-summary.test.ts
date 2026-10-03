@@ -100,13 +100,13 @@ describe('the health summary', () => {
 
   describe('camera FTP upload', () => {
     const withCam = (state: string, over: object = {}) => buildHealth(input({ ftp: { ...input().ftp, camera: { ...input().ftp.camera!, state: state as never }, ...over } }));
-    it('off and elsewhere are problems', () => {
+    it('off, elsewhere and never set up (Klaus, 2026-10-03) are problems', () => {
       expect(item(withCam('off'), 'ftp')).toMatchObject({ value: 'off', text: 'off on the camera', problem: true });
+      expect(item(withCam('not_set_up'), 'ftp')).toMatchObject({ value: 'not_set_up', text: 'not set up', problem: true });
       expect(item(withCam('elsewhere'), 'ftp')).toMatchObject({ value: 'elsewhere', text: 'points elsewhere', problem: true });
     });
-    it('another server name, never set up and not read yet are not', () => {
+    it('another server name and not read yet are not', () => {
       expect(item(withCam('server_differs'), 'ftp')).toMatchObject({ text: 'other server name', problem: false });
-      expect(item(withCam('not_set_up'), 'ftp')).toMatchObject({ text: 'not set up', problem: false });
       expect(item(withCam('unknown'), 'ftp')).toMatchObject({ text: 'not read yet', problem: false });
     });
     it('stalled is a problem whatever the camera says', () => {

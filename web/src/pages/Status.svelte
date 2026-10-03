@@ -4,11 +4,11 @@
   import { agoText, daysUntilFullText, mbText } from '../lib/format';
   import { cameraStateText, poeLine } from '../lib/maintenance';
   import { cacheFillText, recordingsClass, recordingsLastText } from '../lib/recordings';
-  import { cameraFtpClass, cameraFtpText, clipTime, ftpAlerts } from '../lib/ftp';
+  import { cameraFtpText, clipTime, ftpAlerts } from '../lib/ftp';
   import { api, ApiError } from '../lib/api';
   import { refresh } from '../lib/state';
   import Icon from '../components/Icon.svelte';
-  import { diskText, healthHeadline, itemOf, loadText, memoryText, piCardTitle, problemOf, uptimeText } from '../lib/health';
+  import { cameraUploadClass, lastClipClass, diskText, healthHeadline, itemOf, loadText, memoryText, piCardTitle, problemOf, uptimeText } from '../lib/health';
 
   const gb = (b: number) => `${(b / 1024 ** 3).toFixed(1)} GB`;
   const mb = mbText;
@@ -117,11 +117,11 @@
           {#if $status.ftp.enabled && !$status.ftp.passwordSet}<dt>Password</dt><dd class="bad">CAMPROXY_FTP_PASSWORD not set</dd>{/if}
           <dt>Camera connects to</dt><dd>{$status.ftp.publicHost ?? '— (ftp.publicHost)'}</dd>
           {#if $status.ftp.camera}
-            <dt>Camera upload</dt><dd class={cameraFtpClass($status.ftp.camera.state)} data-testid="camera-ftp-state">{cameraFtpText($status.ftp.camera)}</dd>
+            <dt>Camera upload</dt><dd class={cameraUploadClass(health, $status.ftp.camera.state)} data-testid="camera-ftp-state">{cameraFtpText($status.ftp.camera)}</dd>
             <dt>Checked</dt><dd title={$status.ftp.camera.error ? `last read failed: ${$status.ftp.camera.error}` : undefined}>{ago($status.ftp.camera.checkedAt)}</dd>
           {/if}
           <dt>Last upload</dt><dd>{ago($status.ftp.lastUpload)}</dd>
-          <dt>Last clip</dt><dd class={$status.ftp.stalled?.stalled ? 'bad' : ''} title={$status.ftp.lastClip ? clipTime($status.ftp.lastClip) : undefined}>{ago($status.ftp.lastClip)}</dd>
+          <dt>Last clip</dt><dd class={lastClipClass(health, $status.ftp.stalled?.stalled === true)} data-testid="ftp-last-clip" title={$status.ftp.lastClip ? clipTime($status.ftp.lastClip) : undefined}>{ago($status.ftp.lastClip)}</dd>
           <dt>Clips stored</dt><dd>{$status.ftp.clips}</dd>
           <dt>Failures</dt><dd class={$status.ftp.failures ? 'bad' : ''}>{$status.ftp.failures}</dd>
         </dl>

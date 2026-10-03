@@ -77,7 +77,7 @@ export interface HostReading { platform: Platform & { hostStats: boolean }; disk
 
 `buildHealth(input: HealthInput): HealthSummary` (types as "The API schema" below). `HealthInput` carries: `now`, `version`, `startedAt`, `thresholds`, `camera` (id, name, host, `CameraState`, reboot phase or null, poeSwitch `{model, port}` or null), `stream`, `intake` (`IntakeState`), `ftp` (enabled, listening, camera FTP view or null, `ClipsStall` or null, lastClip, clips, failures), `storage` (paused, lastRun), `recordingsCache`, `sseClients`, `lastInventory` (`{kind, op, outcome, startedAt, message}` or null), `reading` (`HostReading`).
 
-- [ ] Failing tests, one per rule: camera offline; stream down only while enabled (`off` is no problem); events not subscribed (`down, polling` text); FTP `off`/`elsewhere` problems, `server_differs`/`not_set_up`/`unknown` not, disabled → `disabled` no problem, stalled → problem with text `no clip for 6 h`; storage paused; disk at 89.9 no, at 90.0 yes, with `diskPercent` 80 at 85 yes; cpuTemp 74.9 no, 75.0 yes; under-voltage true; inventory `failed` yes, `cancelled` no, null `none yet`; version never; items order and presence (no disk item for `disk: null`; no cpuTemp/underVoltage when `host` is null or their figure null); `ok`/`problemCount`; the camera `address` drops the port; `poeSwitch` without host.
+- [ ] Failing tests, one per rule: camera offline; stream down only while enabled (`off` is no problem); events not subscribed (`down, polling` text); FTP `off`/`elsewhere`/`not_set_up` problems (Klaus, 2026-10-03: never set up counts while the proxy takes clips), `server_differs`/`unknown` not, disabled → `disabled` no problem, stalled → problem with text `no clip for 6 h`; storage paused; disk at 89.9 no, at 90.0 yes, with `diskPercent` 80 at 85 yes; cpuTemp 74.9 no, 75.0 yes; under-voltage true; inventory `failed` yes, `cancelled` no, null `none yet`; version never; items order and presence (no disk item for `disk: null`; no cpuTemp/underVoltage when `host` is null or their figure null); `ok`/`problemCount`; the camera `address` drops the port; `poeSwitch` without host.
 - [ ] Implement; tests pass. Commit `feat(health): the health summary with thresholds`.
 
 ## Task 4: the local API and /control/status
@@ -129,7 +129,7 @@ This is also written to the session scratchpad as `health-api-schema.md` for par
   `::ffff:127.0.0.1`. `X-Forwarded-For` and `server.trustProxy` are never
   looked at.
 - Any other address gets exactly what an unknown `/api` route gets (the
-  request goes on as if the route did not exist): 401 `{"error":"unauthorized"}`
+  request goes on as if the route did not exist, for every method including OPTIONS): 401 `{"error":"unauthorized"}`
   without a token, 404 `{"error":"not_found"}` with a valid client token. So
   from the LAN it is indistinguishable from a route that does not exist.
 - `Content-Type: application/json`, `Cache-Control: no-store`. Always 200 when
@@ -181,7 +181,7 @@ This is also written to the session scratchpad as `health-api-schema.md` for par
 | `camera` | Camera | always | boolean: online | not online |
 | `stream` | Live stream | always | `"up"`, `"down"`, `"off"` (stills disabled) | `"down"` |
 | `events` | Events intake | always | `"subscribed"`, `"connecting"`, `"down"` (ONVIF) | not `"subscribed"` |
-| `ftp` | Camera FTP upload | always | `"disabled"` (FTP off in the proxy), or the camera's FTP state: `"on"`, `"off"`, `"elsewhere"`, `"server_differs"`, `"not_set_up"`, `"unknown"` (not read yet) | `"off"` or `"elsewhere"`, or the stall check says stalled (`ftp.stalled`) |
+| `ftp` | Camera FTP upload | always | `"disabled"` (FTP off in the proxy), or the camera's FTP state: `"on"`, `"off"`, `"elsewhere"`, `"server_differs"`, `"not_set_up"`, `"unknown"` (not read yet) | `"off"`, `"elsewhere"` or `"not_set_up"`, or the stall check says stalled (`ftp.stalled`) |
 | `storage` | Storage | always | `"writing"` or `"paused"` (free space below `storage.minFreeBytes`) | `"paused"` |
 | `disk` | Disk | when `disk` is not null | number: `disk.usedPercent` | `usedPercent >= thresholds.diskPercent` |
 | `cpuTemp` | CPU temperature | when `host.cpuTempC` is not null | number: °C | `value >= thresholds.tempC` |
