@@ -7,7 +7,8 @@ import { PassThrough, Writable } from 'stream';
 import { randomBytes } from 'crypto';
 import { BaichuanError } from '../src/camera/baichuan/errors';
 import { RecordingCache } from '../src/recordings/cache';
-import { abortError, RecordingFetcher, type FetchOutcome } from '../src/recordings/fetcher';
+import { abortError } from '../src/async';
+import { RecordingFetcher, type FetchOutcome } from '../src/recordings/fetcher';
 import type { RecordingEntry } from '../src/recordings/list';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

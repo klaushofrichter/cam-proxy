@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { AuditLog } from '../src/audit/audit-log';
-import { DailyAudit, addDays, dayStartMs, storageMessage } from '../src/audit/daily';
+import { DailyAudit, dayStartMs, storageMessage } from '../src/audit/daily';
+import { addDays } from '../src/time-units';
 import { localDay } from '../src/analytics/local-day';
 import type { TimeInfo } from '../src/camera/time';
 

@@ -11,6 +11,7 @@ import { logger } from '../log';
 import type { Stream } from '../recordings/names';
 import type { StreamLog } from '../stream/log';
 import type { Upload } from './ftp-server';
+import { utcDayParts, utcHhmm } from '../time-units';
 
 const run = promisify(execFile);
 
@@ -33,7 +34,6 @@ export class ClipExistsError extends Error {
     this.name = 'ClipExistsError';
   }
 }
-const pad = (n: number) => String(n).padStart(2, '0');
 
 // The camera names uploads <Name>_00_YYYYMMDDHHMMSS.(mp4|jpg), in its local time.
 export function parseClipName(name: string): { local: string; ext: 'mp4' | 'jpg' } | null {
@@ -165,8 +165,7 @@ export class ClipIndexer {
   }
 
   private folder(ts: number): string {
-    const t = new Date(ts);
-    return join(this.d.dataDir, 'clips', this.d.cam, String(t.getUTCFullYear()), pad(t.getUTCMonth() + 1), pad(t.getUTCDate()));
+    return join(this.d.dataDir, 'clips', this.d.cam, ...utcDayParts(ts));
   }
 
   // An upload that isn't kept (the disk is full).
@@ -200,9 +199,8 @@ export class ClipIndexer {
   // adopted instead of skipped forever.
   async addRecording(file: string, r: { start: number; stream: Stream }): Promise<ClipRow> {
     if (!Number.isSafeInteger(r.start) || r.start < 0 || Number.isNaN(new Date(r.start).getTime())) throw new InvalidStartError();
-    const t = new Date(r.start);
     const root = resolve(this.d.dataDir, 'clips');
-    const path = resolve(this.folder(r.start), `${pad(t.getUTCHours())}${pad(t.getUTCMinutes())}-${r.start}.mp4`);
+    const path = resolve(this.folder(r.start), `${utcHhmm(r.start)}-${r.start}.mp4`);
     if (!path.startsWith(root + sep)) throw new Error('the clip path is outside the clips folder');
     const probe = await probeVideo(file);
     if (!probe) throw new NotAVideoError();
@@ -275,9 +273,8 @@ export class ClipIndexer {
     // reading that isn't in the future is the right one (5 min for clock drift).
     const candidates = localToUtcCandidates(parsed.local, await this.d.timeInfo());
     const start = candidates.findLast((c) => c <= this.now() + 5 * 60_000) ?? candidates[0];
-    const t = new Date(start);
     const folder = this.folder(start);
-    const stem = join(folder, `${pad(t.getUTCHours())}${pad(t.getUTCMinutes())}-${start}`);
+    const stem = join(folder, `${utcHhmm(start)}-${start}`);
     const { catalog } = this.d;
 
     if (parsed.ext === 'jpg') {

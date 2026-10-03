@@ -11,6 +11,7 @@ import { createWriteStream, mkdirSync, type WriteStream } from 'fs';
 import { dirname } from 'path';
 import { Writable } from 'stream';
 import { finished } from 'stream/promises';
+import { abortError, isAbort } from '../async';
 import { BaichuanError, isWriterStall, type BaichuanErrorCode } from '../camera/baichuan/errors';
 import type { RecordingCache } from './cache';
 import type { RecordingEntry } from './list';
@@ -39,8 +40,6 @@ export interface FetcherDeps {
 // One caller's join of a fetch; `left` once its signal aborted.
 export interface Waiter { readonly left: boolean }
 
-export const abortError = (why = 'aborted'): Error => Object.assign(new Error(why), { name: 'AbortError' });
-export const isAbort = (e: unknown): boolean => e instanceof Error && e.name === 'AbortError';
 
 const noop = () => undefined;
 

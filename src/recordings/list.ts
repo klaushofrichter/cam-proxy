@@ -8,11 +8,13 @@
 // before's Search: a day's list and a window's list also read the day before
 // (#99). Once that day is over (by 5 minutes) and none of its recordings is
 // still being written, its midnight tail is final and kept 15 minutes.
+import { abortError, sleep } from '../async';
 import { CameraError } from '../camera/client';
 import { Semaphore } from '../camera/semaphore';
 import type { TimeInfo } from '../camera/time';
 import { SAFE_PATH } from '../camera/baichuan/vod';
 import { localDate, localDays, parseSdName, recordingTimes, stillRecording, type Kind, type Stream } from './names';
+import { addDays } from '../time-units';
 
 export interface RecordingEntry { id: string; path: string; start: number; end: number; stream: Stream; size: number; kinds: Kind[] }
 
@@ -45,18 +47,11 @@ const crossesMidnight = (e: RecordingEntry): boolean => {
   return n !== null && n.end < n.start;
 };
 
-export const dayBefore = (date: string): string => {
-  const d = new Date(`${date}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() - 1);
-  return d.toISOString().slice(0, 10);
-};
-
 // A Search waiting for the gate; dropped (never sent) when every caller left.
 interface Ticket { queued: boolean; started: boolean; dropped: boolean; reject?: (e: Error) => void }
 // A Search's result, shared by its callers; `fixed` once a caller without a signal joined.
 interface Run<T> { promise: Promise<T>; ticket: Ticket; waiters: number; fixed: boolean }
 
-const abortError = (why: string): Error => Object.assign(new Error(why), { name: 'AbortError' });
 
 // Messages from CameraError never carry URLs or tokens.
 const toSearchError = (err: unknown, fallback: string): SearchError =>
@@ -107,7 +102,7 @@ export class RecordingList {
           return await this.d.search(param);
         } catch (err) {
           if (attempt === 0 && err instanceof CameraError && err.rspCode === -54) {
-            await (this.d.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms))))(1000);
+            await (this.d.sleep ?? sleep)(1000);
             continue;
           }
           throw toSearchError(err, 'Search failed');
@@ -214,7 +209,7 @@ export class RecordingList {
       if (e.start <= to && e.end >= from) byId.set(e.id, e);
     };
     for (const date of days) for (const e of await this.day(date, stream, false, signal)) keep(e);
-    for (const e of await this.tail(dayBefore(days[0]), stream, signal)) keep(e);
+    for (const e of await this.tail(addDays(days[0], -1), stream, signal)) keep(e);
     return [...byId.values()].sort((a, b) => a.start - b.start);
   }
 
@@ -222,7 +217,7 @@ export class RecordingList {
   // day before that runs past midnight into it.
   async date(date: string, stream: Stream, signal?: AbortSignal): Promise<RecordingEntry[]> {
     const own = await this.day(date, stream, false, signal);
-    const before = await this.tail(dayBefore(date), stream, signal);
+    const before = await this.tail(addDays(date, -1), stream, signal);
     return [...before, ...own].sort((a, b) => a.start - b.start);
   }
 

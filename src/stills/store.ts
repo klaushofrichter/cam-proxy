@@ -5,6 +5,7 @@ import { dirname, join } from 'path';
 import sharp from 'sharp';
 import { logger } from '../log';
 import type { Frame } from './grabber';
+import { MINUTE, utcDayParts, utcHhmm } from '../time-units';
 
 // One minute of stills is one pack: the JPEGs back to back, a JSON footer
 // (interval, size, quality and one [offset, length] per slot; length 0 means
@@ -13,7 +14,6 @@ import type { Frame } from './grabber';
 // settings they were made with, so older minutes stay readable after a change.
 
 const MAGIC = Buffer.from('CPK1');
-const MINUTE = 60_000;
 const FOOTER_CACHE = 5000;
 
 export interface PackFooter { v: 1; minute: number; intervalS: number; size: string; quality: number; slots: [number, number][] }
@@ -28,13 +28,11 @@ export interface StoreOptions {
   tile: { size: string; grid: string; quality: number };
 }
 
-const pad = (n: number) => String(n).padStart(2, '0');
 export const minuteOf = (ts: number) => Math.floor(ts / MINUTE) * MINUTE;
 
 // Where a minute's files live: <dataDir>/<kind>/<cam>/YYYY/MM/DD/HHMM (UTC).
 export function minutePath(dataDir: string, kind: 'stills' | 'previews', cam: string, minute: number): string {
-  const d = new Date(minute);
-  return join(dataDir, kind, cam, String(d.getUTCFullYear()), pad(d.getUTCMonth() + 1), pad(d.getUTCDate()), `${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}`);
+  return join(dataDir, kind, cam, ...utcDayParts(minute), utcHhmm(minute));
 }
 
 function writeAtomic(file: string, data: Buffer | string): void {

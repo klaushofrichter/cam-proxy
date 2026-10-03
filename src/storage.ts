@@ -9,9 +9,8 @@ import type { AuditLog } from './audit/audit-log';
 import type { Config } from './config/defaults';
 import { logger } from './log';
 import type { StreamLog } from './stream/log';
+import { DAY, dayStart, HOUR } from './time-units';
 
-const HOUR = 3_600_000;
-const DAY = 24 * HOUR;
 const GROWTH_WINDOW = 3 * DAY;
 
 export type FileKind = 'stills' | 'previews' | 'clips' | 'recordings';
@@ -28,7 +27,6 @@ export interface StorageRun { dryRun: boolean; at: number; deleted: Record<strin
 interface Unit { ts: number; files: { path: string; bytes: number }[] }
 
 const unitBytes = (u: Unit) => u.files.reduce((n, f) => n + f.bytes, 0);
-const dayStart = (ts: number) => Math.floor(ts / DAY) * DAY;
 
 // Keeps the data folder within its limits (spec §8a): age per kind, a size
 // budget (oldest hour first: stills, clips, previews; never below keepHours),

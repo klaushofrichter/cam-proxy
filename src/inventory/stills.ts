@@ -6,6 +6,7 @@ import type { Catalog } from '../catalog/db';
 import { REBOOT_WAIT_MS } from '../camera/reboot';
 import { minuteOf, readPackFooter } from '../stills/store';
 import { MAX_ITEMS, MAX_TOP, type Check, type CheckResult } from './runner';
+import { DAY, dayStart, HOUR, MINUTE, utcDayParts, utcHhmm } from '../time-units';
 
 // The stills inventory (#72, spec 2026-10-02-inventory-design §3): what the
 // store should hold for the retention window, and what it holds. Local only.
@@ -19,9 +20,6 @@ import { MAX_ITEMS, MAX_TOP, type Check, type CheckResult } from './runner';
 // storage pause (disk full: `storage-paused` to `storage-resumed`, or to the
 // next proxy start, whose process checks the disk again; #106).
 
-const MINUTE = 60_000;
-const HOUR = 60 * MINUTE;
-const DAY = 24 * HOUR;
 // The signal is checked every this many minutes; up to FOOTER_READS footers are read at a time.
 const CHUNK_MINUTES = 120;
 const FOOTER_READS = 6;
@@ -57,16 +55,6 @@ export interface Gap { from: number; to: number; seconds: number; explained: Gap
 export interface FileProblem { type: 'unreadable-pack' | 'pack-without-sprite' | 'sprite-without-pack'; minute: number }
 export type WindowReason = 'retention' | 'budget' | 'store-younger' | 'empty';
 
-const pad = (n: number) => String(n).padStart(2, '0');
-const dayStart = (ts: number) => Math.floor(ts / DAY) * DAY;
-const dayParts = (ts: number): string[] => {
-  const d = new Date(ts);
-  return [String(d.getUTCFullYear()), pad(d.getUTCMonth() + 1), pad(d.getUTCDate())];
-};
-const hhmm = (ts: number) => {
-  const d = new Date(ts);
-  return `${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}`;
-};
 
 async function names(dir: string): Promise<Set<string>> {
   try {
@@ -215,7 +203,7 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
     // The day folders of the retention window: one readdir each, kept for the walk.
     const days: { start: number; packs: Set<string>; previews: Set<string> }[] = [];
     for (let t = retentionFrom; t < to; t += DAY) {
-      const p = dayParts(t);
+      const p = utcDayParts(t);
       days.push({ start: t, packs: await names(join(stillsDir, ...p)), previews: await names(join(previewsDir, ...p)) });
     }
 
@@ -317,7 +305,7 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
     ctx.progress({ phase: 'stills', done: 0, total: walk.length });
     let cancelled = false;
     for (const [i, day] of walk.entries()) {
-      const parts = dayParts(day.start);
+      const parts = utcDayParts(day.start);
       const spans = clipSpans(d.catalog, s.cam, day.start, day.start + DAY);
       let k = 0;
       const minutes: number[] = [];
@@ -330,14 +318,14 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
         const chunk = minutes.slice(c, c + CHUNK_MINUTES);
         // undefined: no pack; 'pruned': listed, but deleted (retention) before its footer was read.
         const footers = await mapPool(chunk, FOOTER_READS, async (m) => {
-          const name = `${hhmm(m)}.pack`;
+          const name = `${utcHhmm(m)}.pack`;
           if (!day.packs.has(name)) return undefined;
           const f = await readPackFooter(join(stillsDir, ...parts, name));
           return f === undefined ? ('pruned' as const) : f;
         });
         for (const [x, m] of chunk.entries()) {
           counts.minutes++;
-          const name = hhmm(m);
+          const name = utcHhmm(m);
           const json = day.previews.has(`${name}.json`);
           const jpg = day.previews.has(`${name}.jpg`);
           let slots: [number, number][] | null = null;

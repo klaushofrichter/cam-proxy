@@ -21,6 +21,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import sharp from 'sharp';
 import { homedir, networkInterfaces, tmpdir } from 'os';
 import { join } from 'path';
+import { sleep } from '../src/async';
 import { loadConfig } from '../src/config/load';
 import { createProxy } from '../src/proxy';
 import type { StreamMessage } from '../src/stream/log';
@@ -89,9 +90,9 @@ async function main() {
     console.log('ftp commands during the test:', JSON.stringify(commands));
     console.log(`waiting up to ${seconds} s for a motion clip from the camera (FTP at ${publicHost}:2121)…`);
     const t0 = Date.now();
-    while (Date.now() - t0 < seconds * 1000 && !seen.some((m) => m.type === 'clip')) await new Promise((r) => setTimeout(r, 1000));
+    while (Date.now() - t0 < seconds * 1000 && !seen.some((m) => m.type === 'clip')) await sleep(1000);
     // The snapshot follows the clip.
-    await new Promise((r) => setTimeout(r, 10_000));
+    await sleep(10_000);
     await off();
     const clip = seen.find((m) => m.type === 'clip');
     console.log('clip:', clip ? JSON.stringify({ ...clip.data, durationS: ((clip.data.end as number) - (clip.data.start as number)) / 1000 }) : 'none');
@@ -100,7 +101,7 @@ async function main() {
     console.log('ftp commands:', JSON.stringify(commands.slice(0, 40)), commands.length > 40 ? `(+${commands.length - 40})` : '');
   } else {
     console.log(`running against the camera for ${seconds} s (read-only)…`);
-    await new Promise((r) => setTimeout(r, seconds * 1000));
+    await sleep(seconds * 1000);
   }
   const cam = proxy.status.state();
   const intake = proxy.intake.state();

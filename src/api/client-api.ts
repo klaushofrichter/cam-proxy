@@ -10,7 +10,7 @@ import { lastLiveEventTs, listEvents, type EventRow } from '../catalog/events';
 import type { Config } from '../config/defaults';
 import { BaichuanError } from '../camera/baichuan/errors';
 import { logger } from '../log';
-import { isAbort } from '../recordings/fetcher';
+import { isAbort } from '../async';
 import { SearchError, type RecordingEntry } from '../recordings/list';
 import { validId } from '../recordings/names';
 import type { RecordingsSide } from '../recordings/side';
@@ -19,9 +19,9 @@ import type { SseHandler } from '../stream/sse';
 import type { FrameGrabber } from '../stills/grabber';
 import type { Go2rtc } from '../stills/go2rtc';
 import type { MinuteStore } from '../stills/store';
+import { DAY } from '../time-units';
 
 export interface StillsSide { go2rtc: Go2rtc; grabber: FrameGrabber; store: MinuteStore }
-const DAY = 86_400_000;
 
 const bad = (res: Response, detail: string) => void res.status(400).json({ error: 'invalid', detail });
 // A calendar date, YYYY-MM-DD (2026-02-30 is not one), in the years 2000 to

@@ -9,6 +9,7 @@ import { listCamera, type CameraListDeps } from './camera-list';
 import { coverage, pairByStart, START_SLACK_MS } from './match';
 import { MAX_ITEMS, MAX_TOP, type Check, type CheckResult } from './runner';
 import { records } from './stills';
+import { DAY, dayStart, HOUR, utcDayParts } from '../time-units';
 
 // The clips inventory (#74, spec 2026-10-02-inventory-design §4). Part 1,
 // local: the clip rows and files of the clips retention window, and the
@@ -19,8 +20,6 @@ import { records } from './stills';
 // first items, oldest first). A day whose Search failed is `unknown`: its
 // recordings never count as missing, its clips never as gone.
 
-const HOUR = 3_600_000;
-const DAY = 24 * HOUR;
 // What may still be on its way is not judged: an event or recording that
 // ended less than this long ago (the FTP upload follows the recording's end).
 export const SETTLE_MS = 5 * 60_000;
@@ -57,12 +56,6 @@ export interface CameraDayRow { date: string; state: 'listed' | 'unknown'; recor
 
 interface Row { id: number; start_ts: number; end_ts: number | null; path: string; snapshot: string | null; stream: string; origin: string }
 
-const pad = (n: number) => String(n).padStart(2, '0');
-const dayStart = (ts: number) => Math.floor(ts / DAY) * DAY;
-const dayFolder = (root: string, ts: number) => {
-  const d = new Date(ts);
-  return join(root, String(d.getUTCFullYear()), pad(d.getUTCMonth() + 1), pad(d.getUTCDate()));
-};
 export const mb = (bytes: number) => `${(bytes / 2 ** 20).toFixed(1)} MB`;
 
 interface EventSpan { id: number; kind: string; start_ts: number; end_ts: number | null }
@@ -115,7 +108,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
         cancelled = true;
         break;
       }
-      const folder = dayFolder(root, day);
+      const folder = join(root, ...utcDayParts(day));
       const files = new Set(await names(folder));
       const dayRows = rowsOf.all(s.cam, day, Math.min(day + DAY, to)) as unknown as Row[];
       const known = new Set<string>();

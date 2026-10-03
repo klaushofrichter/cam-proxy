@@ -2,6 +2,7 @@ import { appendFileSync, closeSync, mkdirSync, openSync, readdirSync, readFileSy
 import { hostname } from 'os';
 import { join } from 'path';
 import { logger, maskPath } from '../log';
+import { addDays, DAY, dayStart } from '../time-units';
 export { maskPath };
 
 // The audit log (spec 2026-10-01-audit-log-design): ECS 8.x JSON lines, one
@@ -134,7 +135,7 @@ export class AuditLog {
       if (c && (up ? day < c.day : day > c.day)) continue;
       // Skip a day whose UTC range [00:00Z, next 00:00Z) is outside [from, to].
       const start = Date.parse(`${day}T00:00:00Z`);
-      if ((q.to !== undefined && start > q.to) || (q.from !== undefined && start + 86_400_000 <= q.from)) continue;
+      if ((q.to !== undefined && start > q.to) || (q.from !== undefined && start + DAY <= q.from)) continue;
       const lines = this.lines(day);
       const order = lines.map((_, k) => k + 1);
       for (const n of up ? order : order.reverse()) {
@@ -156,7 +157,7 @@ export class AuditLog {
   find(pred: (r: AuditRecord) => boolean, days = 2): AuditRecord | undefined {
     const all = this.days();
     if (!all.length) return undefined;
-    const cutoff = new Date(Date.parse(`${all.at(-1)}T00:00:00Z`) - (Math.max(1, Math.floor(days) || 1) - 1) * 86_400_000).toISOString().slice(0, 10);
+    const cutoff = addDays(all.at(-1)!, -(Math.max(1, Math.floor(days) || 1) - 1));
     for (const day of all.filter((d) => d >= cutoff).reverse()) {
       for (const l of this.lines(day).reverse()) {
         const r = parse(l);
@@ -186,9 +187,9 @@ export class AuditLog {
     const bytes = sizes.reduce((a, b) => a + b, 0);
     // Growth: bytes per calendar day over the last 7 whole UTC days (today is
     // partial), counting days without a file as 0, from the first file on.
-    const today = Date.parse(`${new Date(this.now()).toISOString().slice(0, 10)}T00:00:00Z`);
-    const from = Math.max(today - 7 * 86_400_000, days.length ? Date.parse(`${days[0]}T00:00:00Z`) : today);
-    const whole = (today - from) / 86_400_000;
+    const today = dayStart(this.now());
+    const from = Math.max(today - 7 * DAY, days.length ? Date.parse(`${days[0]}T00:00:00Z`) : today);
+    const whole = (today - from) / DAY;
     const recent = days.reduce((n, d, i) => { const t = Date.parse(`${d}T00:00:00Z`); return t >= from && t < today ? n + sizes[i] : n; }, 0);
     return {
       bytes, files: days.length,

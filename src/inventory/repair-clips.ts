@@ -7,7 +7,8 @@ import { clipNear } from '../catalog/clips';
 import type { Catalog } from '../catalog/db';
 import { ClipExistsError, type ClipIndexer } from '../clips/indexer';
 import type { RecordingCache } from '../recordings/cache';
-import { abortError, isAbort, type Fetch, type RecordingFetcher, type Waiter } from '../recordings/fetcher';
+import { abortError, isAbort, sleep as defaultSleep } from '../async';
+import type { Fetch, RecordingFetcher, Waiter } from '../recordings/fetcher';
 import { logger } from '../log';
 import { SearchError, type RecordingEntry, type RecordingList } from '../recordings/list';
 import { settlesAt, type Stream } from '../recordings/names';
@@ -15,6 +16,7 @@ import { BUSY_TRIES } from './camera-list';
 import { mb, type ClipItem } from './clips';
 import { START_SLACK_MS } from './match';
 import type { InventoryReport, RepairEntry, RepairResult } from './runner';
+import { DAY, dayStart } from '../time-units';
 
 // The clips repair (#74 part 3, spec 2026-10-02-inventory-design §4): fetch
 // the recordings a recent camera compare found missing locally, over Baichuan
@@ -42,7 +44,6 @@ export const REPAIR_MAX_CLIPS = 50;
 export const REPAIR_MAX_BYTES = 200 * 2 ** 20;
 export const REPAIR_GAP_MS = 1000;
 export const REPAIR_MAX_FAILURES = 3;
-const DAY = 86_400_000;
 
 export type RepairStop = 'clip-cap' | 'byte-cap' | 'max-gb' | 'paused' | 'failures' | 'refused' | 'camera_offline';
 const STOP_TEXT: Record<RepairStop, string> = {
@@ -82,18 +83,6 @@ export interface ClipsRepairDeps {
 
 type Candidate = Extract<ClipItem, { type: 'missing-locally' }>;
 const missingItems = (r: InventoryReport) => (r.items as ClipItem[]).filter((x): x is Candidate => x.type === 'missing-locally');
-
-const sleepFor = (ms: number, signal: AbortSignal) =>
-  new Promise<void>((resolve) => {
-    if (signal.aborted) return resolve();
-    const t = setTimeout(done, ms);
-    function done() {
-      clearTimeout(t);
-      signal.removeEventListener('abort', done);
-      resolve();
-    }
-    signal.addEventListener('abort', done, { once: true });
-  });
 
 // The fetch's end, or an AbortError when the signal aborts: then the fetch
 // is aborted too, unless someone else (a viewer) still waits for it, and
@@ -147,8 +136,8 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
     const s = d.settings();
     const maxClips = d.limits?.clips ?? REPAIR_MAX_CLIPS;
     const maxBytes = d.limits?.bytes ?? REPAIR_MAX_BYTES;
-    const sleep = d.sleep ?? sleepFor;
-    const retentionFrom = Math.floor((ctx.now - s.clipsDays * DAY) / DAY) * DAY;
+    const sleep = d.sleep ?? defaultSleep;
+    const retentionFrom = dayStart(ctx.now - s.clipsDays * DAY);
     // Oldest first, whatever order the report lists them in (ruling (a)).
     const all = missingItems(ctx.source).sort((a, b) => a.start - b.start);
     const list = all.slice(0, maxClips);

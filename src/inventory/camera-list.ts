@@ -5,10 +5,12 @@
 // its 30 s day cache). A day whose Search fails is `unknown`: its recordings
 // are never counted as missing. An offline camera ends the listing
 // (SearchError camera_offline); a full Search queue (busy) is tried again.
+import { isAbort, sleep as defaultSleep } from '../async';
 import { CameraError } from '../camera/client';
 import { SearchError, type RecordingEntry, type RecordingList } from '../recordings/list';
 import { localDays, type Stream } from '../recordings/names';
 import type { TimeInfo } from '../camera/time';
+import { pad2 } from '../time-units';
 
 export interface CameraDay { date: string; state: 'listed' | 'unknown'; recordings: RecordingEntry[]; error?: string }
 export interface CameraListing {
@@ -25,18 +27,16 @@ export interface CameraListDeps {
 // A Search refused because the queue is full is tried this often in all, 1 s apart.
 export const BUSY_TRIES = 3;
 
-const isAbort = (e: unknown) => e instanceof Error && e.name === 'AbortError';
 const offline = (e: unknown) => e instanceof SearchError && e.code === 'camera_offline';
 // A camera that does not answer: CameraError camera_offline, or a socket-level error.
 const isNetworkError = (e: unknown) =>
   (e instanceof CameraError && e.code === 'camera_offline') ||
   (e instanceof Error && (/^E(CONN|HOST|NET|TIMEDOUT|PIPE)/.test((e as { code?: string }).code ?? '') || /ECONN|EHOST|ENET|ETIMEDOUT|EPIPE|timed out|fetch failed/i.test(e.message)));
-const pad = (n: number) => String(n).padStart(2, '0');
 // '2026-10-01' -> '2026-09'; '2026-01-15' -> '2025-12'.
 const monthBefore = (date: string): string => {
   const y = Number(date.slice(0, 4));
   const m = Number(date.slice(5, 7));
-  return m === 1 ? `${y - 1}-12` : `${y}-${pad(m - 1)}`;
+  return m === 1 ? `${y - 1}-12` : `${y}-${pad2(m - 1)}`;
 };
 
 export async function listCamera(
@@ -51,7 +51,7 @@ export async function listCamera(
     if (isNetworkError(err)) throw new SearchError('camera_offline', 'the camera time is unknown');
     throw new SearchError('search_failed', err instanceof Error ? err.message : String(err));
   }
-  const sleep = d.sleep ?? abortableSleep;
+  const sleep = d.sleep ?? defaultSleep;
   const dates = localDays(o.from, o.to, time);
   // The month overview: null when its Search failed (then every day is searched).
   // The month before the window is read too, for oldestSdDay only (#111): a
@@ -73,7 +73,7 @@ export async function listCamera(
     const set = months.get(month);
     if (set === null) break;
     if (!set?.size) continue;
-    oldestSdDay = `${month}-${pad(Math.min(...set))}`;
+    oldestSdDay = `${month}-${pad2(Math.min(...set))}`;
     break;
   }
   const days: CameraDay[] = [];
@@ -107,17 +107,4 @@ async function searchDay(d: CameraListDeps, date: string, stream: Stream, signal
       return { date, state: 'unknown', recordings: [], error: err instanceof Error ? err.message : String(err) };
     }
   }
-}
-
-function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise<void>((resolve) => {
-    if (signal?.aborted) return resolve();
-    const done = () => {
-      clearTimeout(timer);
-      signal?.removeEventListener('abort', done);
-      resolve();
-    };
-    const timer = setTimeout(done, ms);
-    signal?.addEventListener('abort', done, { once: true });
-  });
 }

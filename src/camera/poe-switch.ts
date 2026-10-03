@@ -1,4 +1,5 @@
 import http from 'http';
+import { sleep, TIMED_OUT, within } from '../async';
 import { logger } from '../log';
 
 // The camera's PoE switch (issue #85): power-cycle the camera by cutting its
@@ -215,7 +216,7 @@ export class PoeSwitch {
 
   constructor(private readonly d: PoeSwitchDeps) {
     this.now = d.now ?? Date.now;
-    this.sleep = d.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    this.sleep = d.sleep ?? sleep;
   }
 
   // Why the switch can't be used, naming the setting; null when it can.
@@ -251,12 +252,7 @@ export class PoeSwitch {
     let finished = true;
     const inflight = this.inflight;
     if (inflight) {
-      let timer: NodeJS.Timeout | undefined;
-      finished = await Promise.race([
-        inflight.then(() => true, () => true),
-        new Promise<boolean>((r) => (timer = setTimeout(() => r(false), this.d.stopWaitMs ?? STOP_WAIT_MS))),
-      ]);
-      clearTimeout(timer);
+      finished = (await within(inflight.then(() => true, () => true), this.d.stopWaitMs ?? STOP_WAIT_MS)) !== TIMED_OUT;
     }
     const poeLeftOff = this.poeMaybeOff || (!finished && this.cutting);
     const sessionMaybeOpen = this.sessionMaybeOpen || !finished;

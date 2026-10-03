@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import { randomBytes } from 'crypto';
 import { linkSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { within } from '../async';
 import { logger } from '../log';
 import { cardImageArgs, groupRuns, joinArgs, joinList, parseProgress, PIECE_MAX_BYTES, pieceArgs, runFrames, type ComposeSize } from './ffmpeg';
 import type { Plan, Segment } from './plan';
@@ -126,7 +127,7 @@ export function createComposer(o: { dir: string; runner: Runner; now?: () => num
       stopped = true;
       for (const j of [...jobs.values()]) j.ctl.abort();
       // Let a running ffmpeg end (it's killed within 2 s) before its folder goes.
-      if (runningDone) await Promise.race([runningDone.catch(() => {}), new Promise((r) => setTimeout(r, 3000).unref())]);
+      if (runningDone) await within(runningDone.catch(() => {}), 3000);
       for (const j of [...jobs.values()]) drop(j);
     },
   };

@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { sleep } from '../async';
 import type { ReolinkClient } from '../camera/client';
 import type { Config } from '../config/defaults';
 import { logger } from '../log';
@@ -13,12 +14,6 @@ export interface IntakeState {
   lastError?: string;
   resubscribes: number;
 }
-
-const sleep = (ms: number, signal: AbortSignal) =>
-  new Promise<void>((r) => {
-    const t = setTimeout(r, ms);
-    signal.addEventListener('abort', () => (clearTimeout(t), r()), { once: true });
-  });
 
 // Keeps an ONVIF PullPoint subscription alive and feeds the tracker. While
 // ONVIF is down longer than events.poll.afterOnvifDownS, it polls
