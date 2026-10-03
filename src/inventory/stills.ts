@@ -52,8 +52,8 @@ export interface StillsInventoryDeps {
 }
 export type GapCause = 'stop' | 'crash' | 'reboot' | 'powercycle' | 'paused';
 export interface Gap { from: number; to: number; seconds: number; explained: GapCause | null; explainedSeconds: number }
-export interface FileProblem { type: 'unreadable-pack' | 'pack-without-sprite' | 'sprite-without-pack'; minute: number }
-export type WindowReason = 'retention' | 'budget' | 'store-younger' | 'empty';
+interface FileProblem { type: 'unreadable-pack' | 'pack-without-sprite' | 'sprite-without-pack'; minute: number }
+type WindowReason = 'retention' | 'budget' | 'store-younger' | 'empty';
 
 const names = async (dir: string) => new Set(await listDir(dir));
 

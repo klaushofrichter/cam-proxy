@@ -6,7 +6,7 @@ import { coverage } from '../inventory/match';
 // end_reason 'recovered'. Never sent over SSE or the stream log, never
 // analysed, and left out of the FTP stall check and the daily event counts.
 export type EventSource = 'onvif' | 'poll' | 'recovered';
-export type EndReason = 'state' | 'timeout' | 'restart' | 'recovered';
+type EndReason = 'state' | 'timeout' | 'restart' | 'recovered';
 export interface EventRow {
   id: number;
   cam: string;

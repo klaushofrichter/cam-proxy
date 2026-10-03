@@ -17,11 +17,11 @@ import { writeFileAtomic } from '../fs-util';
 const MAGIC = Buffer.from('CPK1');
 const FOOTER_CACHE = 5000;
 
-export interface PackFooter { v: 1; minute: number; intervalS: number; size: string; quality: number; slots: [number, number][] }
-export interface PreviewMinute { minute: number; cols: number; rows: number; tileW: number; tileH: number; intervalS: number; present: boolean[] }
+interface PackFooter { v: 1; minute: number; intervalS: number; size: string; quality: number; slots: [number, number][] }
+interface PreviewMinute { minute: number; cols: number; rows: number; tileW: number; tileH: number; intervalS: number; present: boolean[] }
 interface Sidecar extends PreviewMinute { v: 1 }
 
-export interface StoreOptions {
+interface StoreOptions {
   dataDir: string;
   cam: string;
   intervalS: number;

@@ -38,7 +38,7 @@ const FINAL_AFTER_MS = 5 * 60_000;
 // refused at once (busy) instead of queueing without bound. Same-day
 // requests share one Search and don't count. A cold 48-hour window is 4
 // Searches, one after the other.
-export const MAX_WAITING_SEARCHES = 8;
+const MAX_WAITING_SEARCHES = 8;
 
 // The recording runs past its day's midnight (end before start in its name;
 // end 000000 too, which recordingTimes puts at midnight).

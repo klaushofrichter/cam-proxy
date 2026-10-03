@@ -12,7 +12,7 @@ import { join, resolve, sep } from 'path';
 
 const TOUCH_EVERY_MS = 60_000;
 
-export interface CachedFile { id: string; path: string; bytes: number; used: number }
+interface CachedFile { id: string; path: string; bytes: number; used: number }
 
 function safeDir(dir: string): string[] {
   try {

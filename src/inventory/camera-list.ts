@@ -13,8 +13,8 @@ import type { TimeInfo } from '../camera/time';
 import { pad2 } from '../time-units';
 import { errorMessage } from '../log';
 
-export interface CameraDay { date: string; state: 'listed' | 'unknown'; recordings: RecordingEntry[]; error?: string }
-export interface CameraListing {
+interface CameraDay { date: string; state: 'listed' | 'unknown'; recordings: RecordingEntry[]; error?: string }
+interface CameraListing {
   days: CameraDay[]; // camera-local dates of the window, oldest first (fewer when cancelled)
   oldestSdDay: string | null; // the oldest day with recordings in the window's months and the month before
   time: TimeInfo;

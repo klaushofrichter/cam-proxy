@@ -15,9 +15,9 @@ import type { RebootState } from '../camera/reboot';
 // No secrets: no tokens, passwords, FTP settings, the PoE switch's host or
 // the camera serial.
 
-export type ItemId = 'camera' | 'stream' | 'events' | 'ftp' | 'storage' | 'disk' | 'cpuTemp' | 'underVoltage' | 'inventory' | 'version';
+type ItemId = 'camera' | 'stream' | 'events' | 'ftp' | 'storage' | 'disk' | 'cpuTemp' | 'underVoltage' | 'inventory' | 'version';
 export interface HealthItem { id: ItemId; label: string; value: boolean | number | string | null; text: string; problem: boolean }
-export interface Thresholds { diskPercent: number; tempC: number; ftpStalledHours: number }
+interface Thresholds { diskPercent: number; tempC: number; ftpStalledHours: number }
 export interface LastInventory { kind: string; op: 'check' | 'repair'; outcome: 'ok' | 'cancelled' | 'failed'; startedAt: number; message: string }
 type RebootPhase = RebootState['phase'];
 

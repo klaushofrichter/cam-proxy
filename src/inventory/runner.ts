@@ -13,21 +13,21 @@ import { writeFileAtomic } from '../fs-util';
 // A repair shares the lock; its runs are kept apart in <dir>/<kind>repair/
 // (run ids `<kind>repair-…`) and audited as `inventory-repair`.
 
-export const KEEP_RUNS = 10;
+const KEEP_RUNS = 10;
 export const MAX_TOP = 10;
 export const MAX_ITEMS = 500;
 export const RUN_ID = /^([a-z]{1,16})-(\d{1,15})-([0-9a-f]{6})$/;
 // A repair works from a check report younger than this (spec decision 10).
 export const REPAIR_MAX_AGE_MS = 3_600_000;
 // The folder (and run-id prefix) of a kind's repairs.
-export const repairFolder = (kind: string): string => `${kind}repair`;
+const repairFolder = (kind: string): string => `${kind}repair`;
 
-export type Op = 'check' | 'repair';
+type Op = 'check' | 'repair';
 export interface Progress { phase: string; done: number; total: number; note?: string }
 export interface InventoryWindow { from: number | null; to: number; reason: string; [k: string]: unknown }
 export interface CheckResult { window: InventoryWindow; counts: Record<string, number>; top: unknown[]; items: unknown[]; message: string }
 // What a start may ask for besides the kind (PR 2: `camera`, the camera compare).
-export interface StartOptions { camera?: boolean }
+interface StartOptions { camera?: boolean }
 export interface CheckContext { signal: AbortSignal; progress: (p: Progress) => void; now: number; options?: StartOptions }
 // A check returns its partial result when the signal aborts (it checks between pages).
 export type Check = (ctx: CheckContext) => Promise<CheckResult>;
@@ -41,8 +41,8 @@ export interface RepairEntry { run: Repair; ready: (source: InventoryReport) => 
 // A kind in the check table: `label` names it in messages ("Stills inventory: …");
 // `camera` says it takes the `camera` option.
 export interface InventoryKind { label: string; run: Check; camera?: boolean; repair?: RepairEntry }
-export type RunOutcome = 'ok' | 'cancelled' | 'failed';
-export interface Requester { requestedBy: 'session' | 'token'; ip?: string; userAgent?: string }
+type RunOutcome = 'ok' | 'cancelled' | 'failed';
+interface Requester { requestedBy: 'session' | 'token'; ip?: string; userAgent?: string }
 export interface InventoryReport {
   runId: string;
   kind: string;

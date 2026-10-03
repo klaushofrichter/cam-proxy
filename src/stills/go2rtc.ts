@@ -8,7 +8,7 @@ import { sleep } from '../async';
 import { logger } from '../log';
 import { stopProcess } from './grabber';
 
-export interface Go2rtcOptions {
+interface Go2rtcOptions {
   binary?: string;
   rtspPort: number;
   apiPort: number;
@@ -16,7 +16,7 @@ export interface Go2rtcOptions {
   source: { host: string; port: number; user: string; password: string };
 }
 
-export interface StreamInfo { producers: unknown[]; consumers: unknown[] }
+interface StreamInfo { producers: unknown[]; consumers: unknown[] }
 
 const PASS_ENV = 'CAMPROXY_GO2RTC_PASS';
 

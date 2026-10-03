@@ -5,7 +5,7 @@ import type { StreamLog, StreamMessage } from '../stream/log';
 import type { Storage } from '../storage';
 import type { StillsSide } from './client-api';
 
-export interface MetricsSources {
+interface MetricsSources {
   stills: () => StillsSide | undefined;
   storage: Storage;
   config: () => Config;

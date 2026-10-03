@@ -109,7 +109,7 @@ export interface ProxyOptions {
 
 // The camera's own web page for the admin UI: camera.webUiUrl, none for no
 // link, or https://<host without its port>/.
-export function cameraWebUi(c: Config['camera']): string | null {
+function cameraWebUi(c: Config['camera']): string | null {
   if (c.webUiUrl === 'none') return null;
   if (c.webUiUrl) return c.webUiUrl;
   const { hostname } = splitHost(c.host);

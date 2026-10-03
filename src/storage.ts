@@ -14,15 +14,15 @@ import { realStatfs } from './health/host';
 
 const GROWTH_WINDOW = 3 * DAY;
 
-export type FileKind = 'stills' | 'previews' | 'clips' | 'recordings';
+type FileKind = 'stills' | 'previews' | 'clips' | 'recordings';
 type MinuteKind = Exclude<FileKind, 'recordings'>;
 const MINUTE_KINDS: MinuteKind[] = ['stills', 'previews', 'clips'];
 const KINDS: FileKind[] = [...MINUTE_KINDS, 'recordings'];
 // After the recordings cache (always first, least recently used), what goes first when over budget.
 const BUDGET_ORDER: MinuteKind[] = ['stills', 'clips', 'previews'];
 
-export interface KindUsage { bytes: number; files: number; oldest: number | null; newest: number | null; growthPerDay: number }
-export interface StorageRun { dryRun: boolean; at: number; deleted: Record<string, number>; freedBytes: number; reason: string[] }
+interface KindUsage { bytes: number; files: number; oldest: number | null; newest: number | null; growthPerDay: number }
+interface StorageRun { dryRun: boolean; at: number; deleted: Record<string, number>; freedBytes: number; reason: string[] }
 
 // One stored minute of a kind: its files (a pack; a sprite and its sidecar).
 interface Unit { ts: number; files: { path: string; bytes: number }[] }

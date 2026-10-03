@@ -12,11 +12,11 @@ import { PoeSwitchError, type CycleResult, type PoeSwitchErrorCode } from './poe
 // the proxy, after a "power-cycling" phase while the PoE is off: one state,
 // one cooldown and one watch for both.
 
-export const REBOOT_COOLDOWN_MS = 120_000; // the same as cams
+const REBOOT_COOLDOWN_MS = 120_000; // the same as cams
 export const REBOOT_WAIT_MS = 5 * 60_000; // "rebooting" until back, or this long
 const POLL_MS = 2000;
 
-export type RebootKind = 'reboot' | 'powercycle';
+type RebootKind = 'reboot' | 'powercycle';
 export interface RebootState {
   kind: RebootKind;
   requestedAt: number;
@@ -37,7 +37,7 @@ export type PowerCycleAnswer =
   | TooSoon
   | { status: 409 | 502; error: PoeSwitchErrorCode; detail: string; poeOff?: true; turnedOn?: boolean };
 // What the audit records name: never the password.
-export interface PowerCycleInfo { switch: { model: string; host: string; port: number }; offSeconds: number }
+interface PowerCycleInfo { switch: { model: string; host: string; port: number }; offSeconds: number }
 export interface RebootRequester { requestedBy: 'session' | 'token'; ip: string; userAgent?: string }
 
 export interface RebootDeps {

@@ -31,7 +31,7 @@ const IMMUTABLE = 'private, max-age=604800, immutable';
 const validDate = (v: string): boolean => /^20\d{2}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(`${v}T00:00:00Z`)) && new Date(`${v}T00:00:00Z`).toISOString().slice(0, 10) === v;
 const intParam = (v: unknown): number | undefined | null => (v === undefined ? undefined : typeof v === 'string' && /^\d{1,15}$/.test(v) ? Number(v) : null);
 
-export const eventJson = (e: EventRow) => ({ id: e.id, kind: e.kind, source: e.source, start: e.start_ts, end: e.end_ts, endReason: e.end_reason });
+const eventJson = (e: EventRow) => ({ id: e.id, kind: e.kind, source: e.source, start: e.start_ts, end: e.end_ts, endReason: e.end_reason });
 
 // Stored JSON; null when missing or corrupt (one bad row must not fail a list).
 const parse = (s: string | null): unknown => {
@@ -48,7 +48,7 @@ const parseList = (s: string | null): unknown[] => {
 };
 // The summary to serve: the stored one; an ok row not yet backfilled is
 // summarised from its objects (never served as "nothing found"); else [].
-export const summaryOf = (a: Pick<AnalysisRow, 'status' | 'objects' | 'summary'>): unknown[] => {
+const summaryOf = (a: Pick<AnalysisRow, 'status' | 'objects' | 'summary'>): unknown[] => {
   try {
     if (a.summary !== null && a.summary !== undefined) return parseList(a.summary);
     if (a.status !== 'ok' || a.objects === null) return [];
@@ -58,7 +58,7 @@ export const summaryOf = (a: Pick<AnalysisRow, 'status' | 'objects' | 'summary'>
     return [];
   }
 };
-export const analysisSummary = (a: AnalysisRow | undefined) =>
+const analysisSummary = (a: AnalysisRow | undefined) =>
   a ? { provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, objects: parseList(a.objects), summary: summaryOf(a) } : null;
 
 // The client API (spec §10); auth is applied by the caller.

@@ -12,10 +12,10 @@ const WSU = 'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-
 const DIGEST = 'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordDigest';
 const B64 = 'http://docs.oasis-open.org/wss/2004/01/oasis-200401-soap-message-security-1.0#Base64Binary';
 
-export const esc = (s: string) => s.replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' })[c]!);
+const esc = (s: string) => s.replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' })[c]!);
 
 // PasswordDigest = base64(sha1(nonce + created + password)).
-export function securityHeader(user: string, password: string, now = new Date()): string {
+function securityHeader(user: string, password: string, now = new Date()): string {
   const nonce = randomBytes(16);
   const created = now.toISOString().replace(/\.\d+Z$/, 'Z');
   const digest = createHash('sha1').update(Buffer.concat([nonce, Buffer.from(created), Buffer.from(password)])).digest('base64');
@@ -70,7 +70,7 @@ export function* elements(xml: string, from = 0, to = xml.length): Generator<Ele
 }
 
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
-export function decode(text: string): string {
+function decode(text: string): string {
   return text.replace(/&(#x[0-9a-fA-F]{1,6}|#[0-9]{1,7}|amp|lt|gt|quot|apos);/g, (_m, e: string) => {
     if (e[0] !== '#') return ENTITIES[e];
     const code = e[1] === 'x' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
@@ -78,7 +78,7 @@ export function decode(text: string): string {
   });
 }
 
-export function textOf(xml: string, el: Element): string {
+function textOf(xml: string, el: Element): string {
   if (el.selfClosing) return '';
   const end = xml.indexOf('<', el.textStart);
   return decode(xml.slice(el.textStart, end < 0 ? xml.length : end)).trim();
@@ -126,7 +126,7 @@ export function faultSubcode(xml: string): string | undefined {
   return undefined;
 }
 
-export interface Notification { topic: string; op: string; utc: string; name: string; value: string }
+interface Notification { topic: string; op: string; utc: string; name: string; value: string }
 
 // The NotificationMessages of a PullMessages reply.
 export function notifications(xml: string): Notification[] {

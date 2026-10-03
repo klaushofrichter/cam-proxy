@@ -1,7 +1,7 @@
 // The description of every setting: one place that drives validation and the
 // generated config.schema.json, so the two can't drift apart.
 
-export type Leaf =
+type Leaf =
   | { type: 'integer'; min: number; max: number; optional?: boolean; oneOf?: number[]; doc: string }
   | { type: 'boolean'; doc: string }
   | { type: 'string'; enum?: string[]; pattern?: string; optional?: boolean; doc: string };
@@ -11,7 +11,7 @@ const port = (doc: string): Leaf => ({ type: 'integer', min: 1, max: 65535, doc 
 const int = (min: number, max: number, doc: string, optional = false): Leaf => ({ type: 'integer', min, max, doc, optional });
 const size = (doc: string): Leaf => ({ type: 'string', pattern: '^[1-9][0-9]{1,4}x[1-9][0-9]{1,4}$', doc });
 
-export const SETTINGS: Node = {
+const SETTINGS: Node = {
   server: {
     port: port('HTTP port for the API, control API and admin UI'),
     dataDir: { type: 'string', pattern: '^.+$', doc: 'data folder; relative to the config file' },

@@ -34,7 +34,7 @@ export class CameraError extends Error {
   }
 }
 
-export interface CameraStatus {
+interface CameraStatus {
   model: string;
   firmware: string;
   serial?: string; // changes on every reboot (cams docs/reolink-api.md)

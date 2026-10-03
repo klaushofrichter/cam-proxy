@@ -13,7 +13,7 @@ export function tokenMatches(given: string, tokens: string[]): boolean {
   return ok;
 }
 
-export function bearerOf(req: Request): string | undefined {
+function bearerOf(req: Request): string | undefined {
   const m = /^Bearer ([^\s]{1,512})$/.exec(req.get('authorization') ?? '');
   return m?.[1];
 }
@@ -24,9 +24,9 @@ export function refuseTokenInUrl(req: Request, res: Response, next: NextFunction
   next();
 }
 
-export type Access = 'admin' | 'client' | 'audit' | null;
-export type TokenKind = 'none' | 'invalid' | 'client' | 'admin' | 'audit' | 'session';
-export interface AccessInfo { access: Access; viaCookie: boolean; tokenKind: TokenKind }
+type Access = 'admin' | 'client' | 'audit' | null;
+type TokenKind = 'none' | 'invalid' | 'client' | 'admin' | 'audit' | 'session';
+interface AccessInfo { access: Access; viaCookie: boolean; tokenKind: TokenKind }
 export interface AccessDeps {
   tokens: () => string[];
   adminToken: () => string;
@@ -46,7 +46,7 @@ export function clientIp(req: Request): string {
 // token is 'client', the audit token 'audit'. `viaCookie` marks a session
 // (writes then need the CSRF header). `tokenKind` says which credential
 // matched, for the audit log only; answers never tell it.
-export function accessOf(req: Request, d: AccessDeps): AccessInfo {
+function accessOf(req: Request, d: AccessDeps): AccessInfo {
   const t = bearerOf(req);
   if (t !== undefined) {
     if (tokenMatches(t, [d.adminToken()])) return { access: 'admin', viaCookie: false, tokenKind: 'admin' };

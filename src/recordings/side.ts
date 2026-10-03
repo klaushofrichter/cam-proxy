@@ -31,7 +31,7 @@ export interface RecordingsSide {
   stop(): Promise<void>;
 }
 
-export interface RecordingsDeps {
+interface RecordingsDeps {
   dataDir: string;
   cam: () => string;
   target: () => BaichuanTarget;

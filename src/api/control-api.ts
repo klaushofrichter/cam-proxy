@@ -25,7 +25,7 @@ import type { RecordingsStatus } from '../recordings/side';
 import type { HealthSummary } from '../health/summary';
 import { InventoryBusyError, InventoryStoppingError, RepairRefusedError, RUN_ID, type InventoryRunner } from '../inventory/runner';
 
-export interface FtpStatus {
+interface FtpStatus {
   enabled: boolean;
   listening: boolean;
   port: number;
@@ -42,7 +42,7 @@ export interface FtpStatus {
   stalled: ClipsStall | null;
 }
 
-export interface ControlDeps {
+interface ControlDeps {
   loaded: () => Loaded;
   setLoaded: (l: Loaded) => void; // applies live settings
   running: () => Config; // what the components run with
@@ -83,7 +83,7 @@ export interface ControlDeps {
 // The effective configuration for the UI: value (what runs), source, restart
 // flag, the next value for restart settings changed but not yet applied, and
 // the type (integer, boolean or string), for settings without a value.
-export function configView(loaded: Loaded, running: Config) {
+function configView(loaded: Loaded, running: Config) {
   return Object.fromEntries(
     leafPaths().map((p) => {
       const restart = needsRestart(p);

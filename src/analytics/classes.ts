@@ -4,7 +4,7 @@ import type { Box, Found } from './providers';
 // 2026-09-30-analytics-in-cams-design, "The classes"). Vision's object classes
 // match the Open Images boxable classes by id (docs/analytics-classes.md), so
 // objects map by `mid`; the name is a fallback when an answer has no mid.
-export type Category = 'person' | 'vehicle' | 'pet';
+type Category = 'person' | 'vehicle' | 'pet';
 export interface SummaryEntry { category: Category; subtype: string; score: number; box: Box }
 
 const TABLE: { mid: string; name: string; category: Category }[] = [

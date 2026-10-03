@@ -7,14 +7,14 @@ export interface CameraTarget {
   tlsServername?: string;
 }
 
-export interface OpenOptions {
+interface OpenOptions {
   method?: 'GET' | 'POST';
   body?: string;
   signal?: AbortSignal;
   timeoutMs: number;
 }
 
-export class TimeoutError extends Error {
+class TimeoutError extends Error {
   constructor() {
     super('camera did not respond in time');
     this.name = 'TimeoutError';

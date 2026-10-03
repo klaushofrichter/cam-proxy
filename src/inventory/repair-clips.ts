@@ -45,7 +45,7 @@ export const REPAIR_MAX_BYTES = 200 * 2 ** 20;
 export const REPAIR_GAP_MS = 1000;
 export const REPAIR_MAX_FAILURES = 3;
 
-export type RepairStop = 'clip-cap' | 'byte-cap' | 'max-gb' | 'paused' | 'failures' | 'refused' | 'camera_offline';
+type RepairStop = 'clip-cap' | 'byte-cap' | 'max-gb' | 'paused' | 'failures' | 'refused' | 'camera_offline';
 const STOP_TEXT: Record<RepairStop, string> = {
   'clip-cap': `the ${REPAIR_MAX_CLIPS}-clip cap`,
   'byte-cap': `the ${REPAIR_MAX_BYTES / 2 ** 20} MB cap`,
@@ -59,7 +59,7 @@ const STOP_TEXT: Record<RepairStop, string> = {
 // `too-big`: larger than one run's byte cap; `byte-cap`: would pass it after
 // the clips fetched before; `busy`: the camera's Search stayed busy.
 // `still-recording`: a late-night recording that may still be written (names.ts settlesAt).
-export type SkipReason = 'outside-retention' | 'already-local' | 'gone-from-camera' | 'other-stream' | 'viewer' | 'invalid' | 'too-big' | 'byte-cap' | 'busy' | 'still-recording';
+type SkipReason = 'outside-retention' | 'already-local' | 'gone-from-camera' | 'other-stream' | 'viewer' | 'invalid' | 'too-big' | 'byte-cap' | 'busy' | 'still-recording';
 // `streamed`: the cache couldn't keep the file; it went through a temp file.
 export interface RepairItem { id: string; start: number; result: 'ok' | 'skipped' | 'failed'; reason?: SkipReason; error?: string; clipId?: number; bytes?: number; streamed?: true }
 

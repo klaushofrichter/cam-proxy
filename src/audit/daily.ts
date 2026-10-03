@@ -16,8 +16,8 @@ import { addDays } from '../time-units';
 // FALLBACK_MS since start (the time info arrives asynchronously); such
 // records carry dayBasis 'utc' and don't count as done once the time info
 // is known, so they never suppress the camera-day records.
-export type StorageDaily = { message: string; details: Record<string, unknown> };
-export type ActivityDaily = StorageDaily;
+type StorageDaily = { message: string; details: Record<string, unknown> };
+type ActivityDaily = StorageDaily;
 const AFTER_MS = 5 * 60_000;
 const FALLBACK_MS = 60 * 60_000;
 

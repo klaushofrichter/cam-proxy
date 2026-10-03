@@ -12,8 +12,8 @@ import { join } from 'path';
 // node, so they are read only while host.stats is on (auto: on a Pi).
 
 // Where /proc and /sys are: '/' in production, a fixture tree in tests.
-export interface HostPaths { root: string }
-export interface Platform { pi: boolean; model: string | null }
+interface HostPaths { root: string }
+interface Platform { pi: boolean; model: string | null }
 export interface HostStats {
   cpuTempC: number | null; // hwmon cpu_thermal temp1_input, one decimal
   underVoltage: boolean | null; // hwmon rpi_volt in0_lcrit_alarm
@@ -23,10 +23,10 @@ export interface HostStats {
 }
 export interface DataVolume { sizeBytes: number; freeBytes: number; usedBytes: number; usedPercent: number }
 export type StatFs = (dir: string) => { bsize: number; blocks: number; bfree: number; bavail: number };
-export type HostStatsSetting = 'auto' | 'on' | 'off';
+type HostStatsSetting = 'auto' | 'on' | 'off';
 export interface HostReading { platform: Platform & { hostStats: boolean }; disk: DataVolume | null; host: HostStats | null }
 
-export const HOST_EVERY_MS = 60_000;
+const HOST_EVERY_MS = 60_000;
 
 const oneDecimal = (n: number) => Math.round(n * 10) / 10;
 

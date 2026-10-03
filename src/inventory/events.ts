@@ -36,11 +36,11 @@ export interface EventsInventoryDeps {
 }
 // A missing span: `date` is the camera-local day of its first recording;
 // `recordings` are the SD ids merged into it.
-export interface MissingSpan { type: 'missing-event'; kind: Kind; start: number; end: number; date: string; recordings: string[] }
-export type EventItem = MissingSpan | { type: 'event-without-recording'; eventId: number; kind: string; start: number; end: number; source: string };
+interface MissingSpan { type: 'missing-event'; kind: Kind; start: number; end: number; date: string; recordings: string[] }
+type EventItem = MissingSpan | { type: 'event-without-recording'; eventId: number; kind: string; start: number; end: number; source: string };
 // The camera days with problems, the most missing first (the report's `top`).
 export interface EventsDayRow { date: string; state: 'listed' | 'unknown'; spans: number; missing: number }
-export interface EventsComparison {
+interface EventsComparison {
   window: InventoryWindow;
   counts: Record<string, number>;
   top: EventsDayRow[];

@@ -1,8 +1,8 @@
 import type { Request, RequestHandler, Response } from 'express';
 import { STREAM_TYPES, matches, type Filter, type StreamLog, type StreamMessage, type StreamType } from './log';
 
-export interface SseOptions { maxClients: number; queuePerClient: number; pingS: number }
-export interface SseStats { messages: Record<string, number>; replayed: number; dropped: number }
+interface SseOptions { maxClients: number; queuePerClient: number; pingS: number }
+interface SseStats { messages: Record<string, number>; replayed: number; dropped: number }
 
 const PAGE = 500;
 const BLOCKED_MS = 5000; // a client whose socket stays full this long is dropped

@@ -51,7 +51,7 @@ function partsOf(local: string): number[] {
 
 // Both readings of a camera-local time: [DST, standard] in the repeated
 // autumn hour, else the one reading.
-export function localToUtcCandidates(local: string, t: TimeInfo): number[] {
+function localToUtcCandidates(local: string, t: TimeInfo): number[] {
   const [y, mo, d, h, mi, s] = partsOf(local);
   const wall = Date.UTC(y, mo - 1, d, h, mi, s);
   const asStd = wall - t.stdOffsetMinutes * 60_000;
@@ -75,7 +75,7 @@ export function localToUtc(local: string, t: TimeInfo): number {
   return inDst(asDst, start, end) ? asDst : asStd;
 }
 
-export interface ClipIndexerDeps {
+interface ClipIndexerDeps {
   catalog: Catalog;
   log: StreamLog;
   config: () => Config;
@@ -89,7 +89,7 @@ export interface ClipIndexerDeps {
 // after the clip's own start (its pre-record; measured on cam1 2026-09-28 to
 // 30), never with the same time. A picture belongs to the clip that started
 // last at most this long before it.
-export const SNAPSHOT_WINDOW_MS = 10_000;
+const SNAPSHOT_WINDOW_MS = 10_000;
 
 // Turns a finished upload into a stored, indexed clip (or its snapshot).
 export class ClipIndexer {

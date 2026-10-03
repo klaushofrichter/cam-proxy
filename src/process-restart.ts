@@ -3,7 +3,7 @@ import { logger } from './log';
 
 // How long a restart waits for the graceful stop before it exits anyway, so
 // a stuck camera logout can't block a restart (issue #71).
-export const RESTART_STOP_TIMEOUT_MS = 15_000;
+const RESTART_STOP_TIMEOUT_MS = 15_000;
 
 // Restarts the process (issue #71): the normal stop, then exit 0, and the
 // supervisor (compose `restart: unless-stopped`, the cluster Deployment)

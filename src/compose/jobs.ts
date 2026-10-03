@@ -11,9 +11,9 @@ import type { Plan, Segment } from './plan';
 // waiting. A job nobody polls for 30 s (a closed tab) stops; a result lives
 // 15 minutes. Each job has its own folder under `dir`.
 
-export type JobState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
-export interface JobView { id: string; state: JobState; progress: number; durationS: number; error?: string }
-export interface ComposeRequest { cam: string; plan: Extract<Plan, { ok: true }>; size: ComposeSize; badge: boolean; timeZone?: string }
+type JobState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
+interface JobView { id: string; state: JobState; progress: number; durationS: number; error?: string }
+interface ComposeRequest { cam: string; plan: Extract<Plan, { ok: true }>; size: ComposeSize; badge: boolean; timeZone?: string }
 export interface Runner {
   (job: { dir: string; out: string; req: ComposeRequest; onProgress: (p: number) => void; signal: AbortSignal }): Promise<void>;
 }

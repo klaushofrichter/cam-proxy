@@ -10,9 +10,9 @@ export { maskPath };
 // append-only file per UTC day under <dataDir>/audit. Writes never throw into
 // the caller; reads page by cursor ("<day>:<line>", 1-based) in either
 // direction across the day files.
-export const AUDIT_DATASET = 'cam-proxy.audit';
+const AUDIT_DATASET = 'cam-proxy.audit';
 export type Outcome = 'success' | 'failure' | 'unknown';
-export interface AuditInput {
+interface AuditInput {
   action: string;
   category: string[];
   type: string[];
@@ -31,7 +31,7 @@ export type AuditRecord = Record<string, unknown> & {
   message: string;
   cam_proxy?: Record<string, unknown>;
 };
-export interface AuditQuery { limit?: number; before?: string; after?: string; from?: number; to?: number; actions?: string[]; outcome?: Outcome }
+interface AuditQuery { limit?: number; before?: string; after?: string; from?: number; to?: number; actions?: string[]; outcome?: Outcome }
 export class AuditQueryError extends Error {}
 
 const DAY_FILE = /^(\d{4}-\d{2}-\d{2})\.jsonl$/;
