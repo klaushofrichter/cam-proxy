@@ -1,4 +1,5 @@
 import type { Catalog } from './db';
+import { coverage } from '../inventory/match';
 
 // 'recovered': added by the events inventory's repair from the camera's SD
 // recordings (#75, spec 2026-10-02-inventory-design §5), closed at once with
@@ -101,18 +102,37 @@ export interface RecoveredEvent { kind: string; start_ts: number; end_ts: number
 // [start − beforeMs, end + afterMs] by now: one the live intake or an earlier
 // repair stored meanwhile wins (`matched`). The rows this call adds are not
 // checked against: two close spans of one kind each get their own event.
-// Existing rows are never changed.
+// Existing rows are never changed. The guard reads the rows near the list
+// once and answers each span in memory (a probe per span with no lower bound
+// on start_ts took seconds on 30k events, in one synchronous transaction).
 export function addRecoveredEvents(c: Catalog, cam: string, list: RecoveredEvent[], o: { beforeMs: number; afterMs: number; openMs: number }): { added: EventRow[]; matched: number } {
-  const exists = c.db.prepare('SELECT 1 AS x FROM events WHERE id <= ? AND cam = ? AND kind = ? AND start_ts <= ? AND COALESCE(end_ts, start_ts + ?) >= ? LIMIT 1');
   const insert = c.db.prepare("INSERT INTO events (cam, source, kind, start_ts, end_ts, end_reason, raw) VALUES (?, 'recovered', ?, ?, ?, 'recovered', ?) RETURNING *");
   const added: EventRow[] = [];
   let matched = 0;
+  if (!list.length) return { added, matched };
+  let minStart = Infinity;
+  let maxEnd = -Infinity;
+  for (const e of list) {
+    minStart = Math.min(minStart, e.start_ts);
+    maxEnd = Math.max(maxEnd, e.end_ts);
+  }
   c.db.exec('BEGIN');
   try {
     // The rows before this call: the guard compares with those only.
     const last = (c.db.prepare('SELECT COALESCE(MAX(id), 0) AS n FROM events').get() as { n: number }).n;
+    const rows = c.db
+      .prepare('SELECT kind, start_ts, COALESCE(end_ts, start_ts + ?) AS end FROM events WHERE id <= ? AND cam = ? AND start_ts <= ? AND COALESCE(end_ts, start_ts + ?) >= ?')
+      .all(o.openMs, last, cam, maxEnd + o.afterMs, o.openMs, minStart - o.beforeMs) as { kind: string; start_ts: number; end: number }[];
+    const byKind = new Map<string, { start: number; end: number }[]>();
+    for (const r of rows) {
+      const spans = byKind.get(r.kind) ?? [];
+      spans.push({ start: Number(r.start_ts), end: Number(r.end) });
+      byKind.set(r.kind, spans);
+    }
+    const covered = new Map<string, (start: number, end: number) => boolean>();
+    for (const [kind, spans] of byKind) covered.set(kind, coverage(spans));
     for (const e of list) {
-      if (exists.get(last, cam, e.kind, e.end_ts + o.afterMs, o.openMs, e.start_ts - o.beforeMs)) {
+      if (covered.get(e.kind)?.(e.start_ts - o.beforeMs, e.end_ts + o.afterMs)) {
         matched++;
         continue;
       }

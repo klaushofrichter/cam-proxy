@@ -112,3 +112,39 @@ describe('recovered events are kept apart', () => {
     expect(closeAllOpen(c, 'cam1', 999_999, 'restart')).toEqual([]);
   });
 });
+
+describe('addRecoveredEvents at scale', () => {
+  // The old guard probed once per span with no lower bound on start_ts:
+  // 911 ms for this test (M-series Mac; 1,535 ms in the review), all of it one
+  // synchronous transaction. The guard now reads the rows near the spans once:
+  // 24 ms, the inserts included.
+  it('1,000 spans against 30k events: fast, and the same answers as a per-span probe', () => {
+    const DAY = 86_400_000;
+    const days = 30;
+    const start = Date.UTC(2026, 8, 1);
+    c.db.exec('BEGIN');
+    const ev = c.db.prepare("INSERT INTO events (cam, source, kind, start_ts, end_ts, raw) VALUES (?, 'onvif', ?, ?, ?, NULL)");
+    for (let i = 0; i < 30_000; i++) {
+      const t = start + Math.floor((i / 30_000) * days * DAY);
+      // Every 97th one open, every 50th of another camera.
+      ev.run(i % 50 === 0 ? 'cam2' : 'cam1', ['motion', 'person', 'Visitor'][i % 3], t, i % 97 === 0 ? null : t + 20_000);
+    }
+    c.db.exec('COMMIT');
+    const spans: RecoveredEvent[] = [];
+    for (let i = 0; i < 1_000; i++) {
+      const t = start + 7_919 * i + Math.floor((i / 1_000) * days * DAY);
+      spans.push(rec(['motion', 'person', 'vehicle', 'Visitor'][i % 4], t, t + 15_000 + (i % 7) * 10_000));
+    }
+    // The old guard, one probe per span (rows before the call only).
+    const probe = c.db.prepare('SELECT 1 AS x FROM events WHERE cam = ? AND kind = ? AND start_ts <= ? AND COALESCE(end_ts, start_ts + ?) >= ? LIMIT 1');
+    const expected = spans.filter((e) => !probe.get('cam1', e.kind, e.end_ts + TOL.afterMs, TOL.openMs, e.start_ts - TOL.beforeMs)).map((e) => `${e.kind}@${e.start_ts}`);
+    const t0 = performance.now();
+    const { added, matched } = addRecoveredEvents(c, 'cam1', spans, TOL);
+    const ms = performance.now() - t0;
+    expect(added.map((e) => `${e.kind}@${e.start_ts}`)).toEqual(expected);
+    expect(matched).toBe(spans.length - expected.length);
+    expect(matched).toBeGreaterThan(100);
+    expect(added.length).toBeGreaterThan(100);
+    expect(ms).toBeLessThan(250);
+  }, 30_000);
+});
