@@ -4,7 +4,7 @@ import { randomBytes } from 'crypto';
 // admin token and mints a code server to server; the browser redeems it once
 // for a UI session, so a signed-in cams user needn't paste the token. Codes
 // live in memory (a restart drops them), expire quickly, and are never logged.
-export const LINK_MS = 60_000;
+const LINK_MS = 60_000;
 const MAX_CODES = 100;
 
 export function createLoginLinks(ttlMs = LINK_MS) {

@@ -7,14 +7,14 @@ export interface CameraTarget {
   tlsServername?: string;
 }
 
-export interface OpenOptions {
+interface OpenOptions {
   method?: 'GET' | 'POST';
   body?: string;
   signal?: AbortSignal;
   timeoutMs: number;
 }
 
-export class TimeoutError extends Error {
+class TimeoutError extends Error {
   constructor() {
     super('camera did not respond in time');
     this.name = 'TimeoutError';
@@ -39,6 +39,9 @@ const WRITTEN = Symbol('requestWritten');
 export function requestWasWritten(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { [WRITTEN]?: boolean })[WRITTEN] === true;
 }
+
+// A host for a socket: an IPv6 address without its URL brackets.
+export const bareHost = (hostname: string): string => hostname.replace(/^\[(.*)\]$/, '$1');
 
 export function splitHost(host: string): { hostname: string; port?: number } {
   const i = host.lastIndexOf(':');

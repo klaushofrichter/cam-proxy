@@ -9,7 +9,7 @@ import type { Segment } from './plan';
 export type ComposeSize = 'sd' | '360p' | '720p' | '1080p';
 export const SIZES: Record<ComposeSize, [number, number]> = { sd: [896, 512], '360p': [640, 360], '720p': [1280, 720], '1080p': [1920, 1080] };
 
-export interface ComposeInput {
+interface ComposeInput {
   segments: (Segment & { audio?: boolean })[];
   runFile: (k: number) => string;   // the numbered image pattern of the k-th run (runFrames), e.g. run-0-%04d.jpg
   pieceFile: (k: number) => string; // the k-th piece's MP4
@@ -24,7 +24,7 @@ export interface ComposeInput {
 // The spec's 200 MB budget, per piece, enforced while encoding (-fs). -fs
 // cuts silently, so the runner fails a piece that reaches it.
 export const PIECE_MAX_BYTES = 200e6;
-export interface Piece { args: string[]; out: string; durationS: number }
+interface Piece { args: string[]; out: string; durationS: number }
 
 const FONTS = ['/usr/share/fonts/dejavu/DejaVuSans.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', '/System/Library/Fonts/Supplemental/Arial.ttf'];
 export function defaultFont(exists: (p: string) => boolean = existsSync): string | null {

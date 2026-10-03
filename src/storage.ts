@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { existsSync, lstatSync, readdirSync, rmdirSync, statSync, statfsSync, unlinkSync } from 'fs';
+import { existsSync, lstatSync, readdirSync, rmdirSync, statSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import type { Catalog } from './catalog/db';
 import { deleteClip } from './catalog/clips';
@@ -9,26 +9,25 @@ import type { AuditLog } from './audit/audit-log';
 import type { Config } from './config/defaults';
 import { logger } from './log';
 import type { StreamLog } from './stream/log';
+import { DAY, dayStart, HOUR } from './time-units';
+import { realStatfs } from './health/host';
 
-const HOUR = 3_600_000;
-const DAY = 24 * HOUR;
 const GROWTH_WINDOW = 3 * DAY;
 
-export type FileKind = 'stills' | 'previews' | 'clips' | 'recordings';
+type FileKind = 'stills' | 'previews' | 'clips' | 'recordings';
 type MinuteKind = Exclude<FileKind, 'recordings'>;
 const MINUTE_KINDS: MinuteKind[] = ['stills', 'previews', 'clips'];
 const KINDS: FileKind[] = [...MINUTE_KINDS, 'recordings'];
 // After the recordings cache (always first, least recently used), what goes first when over budget.
 const BUDGET_ORDER: MinuteKind[] = ['stills', 'clips', 'previews'];
 
-export interface KindUsage { bytes: number; files: number; oldest: number | null; newest: number | null; growthPerDay: number }
-export interface StorageRun { dryRun: boolean; at: number; deleted: Record<string, number>; freedBytes: number; reason: string[] }
+interface KindUsage { bytes: number; files: number; oldest: number | null; newest: number | null; growthPerDay: number }
+interface StorageRun { dryRun: boolean; at: number; deleted: Record<string, number>; freedBytes: number; reason: string[] }
 
 // One stored minute of a kind: its files (a pack; a sprite and its sidecar).
 interface Unit { ts: number; files: { path: string; bytes: number }[] }
 
 const unitBytes = (u: Unit) => u.files.reduce((n, f) => n + f.bytes, 0);
-const dayStart = (ts: number) => Math.floor(ts / DAY) * DAY;
 
 // Keeps the data folder within its limits (spec §8a): age per kind, a size
 // budget (oldest hour first: stills, clips, previews; never below keepHours),
@@ -64,7 +63,7 @@ export class Storage extends EventEmitter {
   private disk(): { free: number; size: number } {
     const dir = this.d.config().server.dataDir;
     if (this.d.statfs) return this.d.statfs(dir);
-    const s = statfsSync(existsSync(dir) ? dir : join(dir, '..'));
+    const s = realStatfs(dir);
     return { free: s.bavail * s.bsize, size: s.blocks * s.bsize };
   }
 

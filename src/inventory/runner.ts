@@ -1,8 +1,9 @@
 import { randomBytes } from 'crypto';
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'fs/promises';
+import { readdir, readFile, rm } from 'fs/promises';
 import { join, resolve, sep } from 'path';
 import type { AuditLog } from '../audit/audit-log';
-import { logger } from '../log';
+import { errorMessage, logger } from '../log';
+import { writeFileAtomic } from '../fs-util';
 
 // The inventories (spec 2026-10-02-inventory-design): one run at a time per
 // proxy, cancellable, with progress. Each finished run (also a cancelled or
@@ -12,21 +13,21 @@ import { logger } from '../log';
 // A repair shares the lock; its runs are kept apart in <dir>/<kind>repair/
 // (run ids `<kind>repair-…`) and audited as `inventory-repair`.
 
-export const KEEP_RUNS = 10;
+const KEEP_RUNS = 10;
 export const MAX_TOP = 10;
 export const MAX_ITEMS = 500;
 export const RUN_ID = /^([a-z]{1,16})-(\d{1,15})-([0-9a-f]{6})$/;
 // A repair works from a check report younger than this (spec decision 10).
 export const REPAIR_MAX_AGE_MS = 3_600_000;
 // The folder (and run-id prefix) of a kind's repairs.
-export const repairFolder = (kind: string): string => `${kind}repair`;
+const repairFolder = (kind: string): string => `${kind}repair`;
 
-export type Op = 'check' | 'repair';
+type Op = 'check' | 'repair';
 export interface Progress { phase: string; done: number; total: number; note?: string }
 export interface InventoryWindow { from: number | null; to: number; reason: string; [k: string]: unknown }
 export interface CheckResult { window: InventoryWindow; counts: Record<string, number>; top: unknown[]; items: unknown[]; message: string }
 // What a start may ask for besides the kind (PR 2: `camera`, the camera compare).
-export interface StartOptions { camera?: boolean }
+interface StartOptions { camera?: boolean }
 export interface CheckContext { signal: AbortSignal; progress: (p: Progress) => void; now: number; options?: StartOptions }
 // A check returns its partial result when the signal aborts (it checks between pages).
 export type Check = (ctx: CheckContext) => Promise<CheckResult>;
@@ -40,8 +41,8 @@ export interface RepairEntry { run: Repair; ready: (source: InventoryReport) => 
 // A kind in the check table: `label` names it in messages ("Stills inventory: …");
 // `camera` says it takes the `camera` option.
 export interface InventoryKind { label: string; run: Check; camera?: boolean; repair?: RepairEntry }
-export type RunOutcome = 'ok' | 'cancelled' | 'failed';
-export interface Requester { requestedBy: 'session' | 'token'; ip?: string; userAgent?: string }
+type RunOutcome = 'ok' | 'cancelled' | 'failed';
+interface Requester { requestedBy: 'session' | 'token'; ip?: string; userAgent?: string }
 export interface InventoryReport {
   runId: string;
   kind: string;
@@ -249,7 +250,7 @@ export class InventoryRunner {
         res = await job.work({ signal: cur.ac.signal, now: startedAt, runId, progress: (p) => void (cur.view.progress = p) });
       } catch (err) {
         failed = true;
-        error = err instanceof Error ? err.message : String(err);
+        error = errorMessage(err);
       }
       cur.settled = true;
       const outcome: RunOutcome = cur.ac.signal.aborted ? 'cancelled' : failed ? 'failed' : 'ok';
@@ -294,10 +295,7 @@ export class InventoryRunner {
   private async save(folder: string, r: InventoryReport): Promise<void> {
     try {
       const dir = join(this.d.dir, folder);
-      await mkdir(dir, { recursive: true });
-      const file = join(dir, `${r.runId}.json`);
-      await writeFile(`${file}.tmp`, JSON.stringify(r));
-      await rename(`${file}.tmp`, file);
+      await writeFileAtomic(join(dir, `${r.runId}.json`), JSON.stringify(r));
       for (const id of (await this.ids(folder)).slice(this.d.keep ?? KEEP_RUNS)) await rm(join(dir, `${id}.json`), { force: true });
     } finally {
       this.generation.set(folder, (this.generation.get(folder) ?? 0) + 1);

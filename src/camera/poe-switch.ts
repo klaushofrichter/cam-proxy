@@ -1,4 +1,5 @@
 import http from 'http';
+import { sleep, TIMED_OUT, within } from '../async';
 import { logger } from '../log';
 
 // The camera's PoE switch (issue #85): power-cycle the camera by cutting its
@@ -16,8 +17,8 @@ import { logger } from '../log';
 // The password is sent in the login body only: never logged, returned, put
 // in an error message or an audit record.
 
-export type PoeSwitchModel = 'none' | 'sscpoe-web';
-export interface PoeSwitchConfig { model: PoeSwitchModel; host?: string; port?: number; ports: number; offSeconds: number }
+type PoeSwitchModel = 'none' | 'sscpoe-web';
+interface PoeSwitchConfig { model: PoeSwitchModel; host?: string; port?: number; ports: number; offSeconds: number }
 export type PoeSwitchErrorCode = 'switch_busy' | 'switch_auth' | 'switch_unreachable' | 'switch_error' | 'no_power';
 
 // poeOff: the PoE-off request was sent, so the port may have been cut;
@@ -75,7 +76,7 @@ export function poeOpcode(index: number, on: boolean): number {
 }
 
 // The switch answered, but said no (no config: ok): it may have done nothing.
-export class PoeSwitchRefusal extends PoeSwitchError {}
+class PoeSwitchRefusal extends PoeSwitchError {}
 
 const CMD = { login: 123, detail: 101, setPoe: 103, logout: 126 } as const;
 const UNREACHABLE = new Set(['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'EHOSTDOWN', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT']);
@@ -188,7 +189,7 @@ export class Session {
   }
 }
 
-export interface PoeSwitchDeps {
+interface PoeSwitchDeps {
   config: () => PoeSwitchConfig;
   password: () => string | undefined;
   sleep?: (ms: number) => Promise<void>;
@@ -215,7 +216,7 @@ export class PoeSwitch {
 
   constructor(private readonly d: PoeSwitchDeps) {
     this.now = d.now ?? Date.now;
-    this.sleep = d.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    this.sleep = d.sleep ?? sleep;
   }
 
   // Why the switch can't be used, naming the setting; null when it can.
@@ -251,12 +252,7 @@ export class PoeSwitch {
     let finished = true;
     const inflight = this.inflight;
     if (inflight) {
-      let timer: NodeJS.Timeout | undefined;
-      finished = await Promise.race([
-        inflight.then(() => true, () => true),
-        new Promise<boolean>((r) => (timer = setTimeout(() => r(false), this.d.stopWaitMs ?? STOP_WAIT_MS))),
-      ]);
-      clearTimeout(timer);
+      finished = (await within(inflight.then(() => true, () => true), this.d.stopWaitMs ?? STOP_WAIT_MS)) !== TIMED_OUT;
     }
     const poeLeftOff = this.poeMaybeOff || (!finished && this.cutting);
     const sessionMaybeOpen = this.sessionMaybeOpen || !finished;

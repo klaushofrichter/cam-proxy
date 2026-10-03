@@ -5,7 +5,7 @@ import type { CameraState } from '../camera/status';
 import type { PowerCycleAnswer, RebootAnswer, RebootRequester, RebootState, TooSoon } from '../camera/reboot';
 import { PoeSwitchError, type PoeOnResult, type PoeSwitchStatus, type PortReading } from '../camera/poe-switch';
 import type { Config } from '../config/defaults';
-import { applyOverrides, ConfigError, needsProcessRestart, needsRestart, removeOverride, type Loaded } from '../config/load';
+import { applyOverrides, ConfigError, getPath, needsProcessRestart, needsRestart, removeOverride, type Loaded } from '../config/load';
 import { leafAt, leafPaths } from '../config/schema';
 import { FtpNotConfiguredError, type FtpTarget } from '../clips/camera-ftp';
 import type { CameraFtpView, ClipsStall } from '../clips/ftp-health';
@@ -25,7 +25,7 @@ import type { RecordingsStatus } from '../recordings/side';
 import type { HealthSummary } from '../health/summary';
 import { InventoryBusyError, InventoryStoppingError, RepairRefusedError, RUN_ID, type InventoryRunner } from '../inventory/runner';
 
-export interface FtpStatus {
+interface FtpStatus {
   enabled: boolean;
   listening: boolean;
   port: number;
@@ -42,7 +42,7 @@ export interface FtpStatus {
   stalled: ClipsStall | null;
 }
 
-export interface ControlDeps {
+interface ControlDeps {
   loaded: () => Loaded;
   setLoaded: (l: Loaded) => void; // applies live settings
   running: () => Config; // what the components run with
@@ -80,17 +80,15 @@ export interface ControlDeps {
   version: string;
 }
 
-const get = (o: unknown, path: string) => path.split('.').reduce<unknown>((x, k) => (x && typeof x === 'object' ? (x as Record<string, unknown>)[k] : undefined), o);
-
 // The effective configuration for the UI: value (what runs), source, restart
 // flag, the next value for restart settings changed but not yet applied, and
 // the type (integer, boolean or string), for settings without a value.
-export function configView(loaded: Loaded, running: Config) {
+function configView(loaded: Loaded, running: Config) {
   return Object.fromEntries(
     leafPaths().map((p) => {
       const restart = needsRestart(p);
-      const value = get(running, p);
-      const next = get(loaded.config, p);
+      const value = getPath(running, p);
+      const next = getPath(loaded.config, p);
       const pending = restart && JSON.stringify(value) !== JSON.stringify(next);
       return [p, { value, source: loaded.sources[p], restart, pending, ...(pending ? { next } : {}), type: leafAt(p)?.type }];
     }),
@@ -113,12 +111,16 @@ async function cameraCall(res: Response, f: () => Promise<unknown>): Promise<voi
   }
 }
 
+// Who sent a request, for its audit record.
+const who = (req: express.Request) => ({ ip: clientIp(req), userAgent: req.get('user-agent') });
+
 // Sign-ins with the token form per client and 15 minutes (Klaus, 2026-10-01: 40).
 export const LOGIN_ATTEMPTS = 40;
 
 export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnType<typeof createSessionSigner>; links: ReturnType<typeof createLoginLinks>; audit: AuditLog }): express.Router {
   const r = express.Router();
   const flags = (req: express.Request) => `HttpOnly; SameSite=Strict; Path=/${req.secure ? '; Secure' : ''}`;
+  const startSession = (req: express.Request, res: Response) => res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${d.sessions.issue()}; Max-Age=${SESSION_MS / 1000}; ${flags(req)}`);
   // A `login` audit record; never the token or the code, only how and why.
   const MESSAGES = {
     'token-form': { ok: 'Admin signed in with the admin token', refused: 'Sign-in with the admin token refused' },
@@ -128,7 +130,7 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
     d.audit.write({
       action: 'login', category: ['authentication'], type: ['start'], outcome,
       ...(outcome === 'success' ? { user: 'admin' } : {}),
-      ip: clientIp(req), userAgent: req.get('user-agent'),
+      ...who(req),
       message: reason === 'rate-limited' ? 'Sign-in refused: too many attempts' : MESSAGES[method][outcome === 'success' ? 'ok' : 'refused'],
       details: { auth: { method, ...(reason ? { reason } : {}), ...(suppressed ? { suppressed } : {}) } },
     });
@@ -167,7 +169,7 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
       return void res.redirect(302, '/?link=expired');
     }
     rec(req, 'success', 'login-link');
-    res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${d.sessions.issue()}; Max-Age=${SESSION_MS / 1000}; ${flags(req)}`);
+    startSession(req, res);
     res.redirect(302, '/');
   });
   r.post('/login', attempts, (req, res) => {
@@ -177,17 +179,16 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
       return void res.status(401).json({ error: 'unauthorized' });
     }
     rec(req, 'success', 'token-form');
-    res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${d.sessions.issue()}; Max-Age=${SESSION_MS / 1000}; ${flags(req)}`);
+    startSession(req, res);
     res.status(204).end();
   });
   r.get('/session', (req, res) => void res.json({ loggedIn: d.sessions.verify(readCookie(req.get('cookie'), SESSION_COOKIE)) }));
   r.post('/logout', (req, res) => {
     const valid = d.sessions.verify(readCookie(req.get('cookie'), SESSION_COOKIE));
-    const ip = clientIp(req);
-    const base = { action: 'logout', category: ['authentication'], type: ['end'], outcome: 'success' as const, ip, userAgent: req.get('user-agent') };
+    const base = { action: 'logout', category: ['authentication'], type: ['end'], outcome: 'success' as const, ...who(req) };
     if (valid) d.audit.write({ ...base, user: 'admin', message: 'Admin signed out' });
     else {
-      const t = anonLogouts.take(ip, 'logout-without-session');
+      const t = anonLogouts.take(base.ip, 'logout-without-session');
       if (t.record) d.audit.write({ ...base, message: 'Sign-out without a session', details: { auth: { reason: 'no-session', ...(t.suppressed ? { suppressed: t.suppressed } : {}) } } });
     }
     res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Max-Age=0; ${flags(req)}`);
@@ -195,6 +196,10 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
   });
   return r;
 }
+
+// Actions that write their own audit records (no generic control-action);
+// a new action that audits itself goes here too.
+const OWN_AUDIT = new Set(['camera-reboot', 'camera-powercycle', 'camera-poe-on', 'restart-proxy', 'inventory', 'inventory-repair']);
 
 // The control API (spec §11); admin access is checked by the caller.
 export function controlApi(d: ControlDeps): express.Router {
@@ -208,7 +213,7 @@ export function controlApi(d: ControlDeps): express.Router {
   // A one-time sign-in link for a signed-in cams user (admin token only).
   r.post('/login-links', (req, res) => {
     const link = d.links.issue();
-    d.audit.write({ action: 'login-link-issued', category: ['authentication'], type: ['creation'], outcome: 'success', user: 'admin', ip: clientIp(req), userAgent: req.get('user-agent'), message: 'One-time sign-in link issued' });
+    d.audit.write({ action: 'login-link-issued', category: ['authentication'], type: ['creation'], outcome: 'success', user: 'admin', ...who(req), message: 'One-time sign-in link issued' });
     res.status(201).json(link);
   });
 
@@ -243,7 +248,7 @@ export function controlApi(d: ControlDeps): express.Router {
     const replaced = d.setVisionKey(key);
     const masked = maskKey(key)!;
     d.audit.write({
-      action: 'secret-override', category: ['configuration'], type: ['change'], outcome: 'success', user: 'admin', ip: clientIp(req), userAgent: req.get('user-agent'),
+      action: 'secret-override', category: ['configuration'], type: ['change'], outcome: 'success', user: 'admin', ...who(req),
       message: `Google Vision key set manually (${masked}), ${replaced === 'none' ? 'where no key was set' : `replacing the ${replaced} key`}`,
       details: { secret: 'CAMPROXY_GOOGLE_VISION_KEY', masked, replaced },
     });
@@ -278,9 +283,9 @@ export function controlApi(d: ControlDeps): express.Router {
     const after = d.loaded().config;
     // `restart`: the change waits for a restart ('restart'), or for a new process ('process').
     const changes = leafPaths()
-      .map((p) => ({ key: p, from: get(before, p), to: get(after, p), ...(needsProcessRestart(p) ? { restart: 'process' } : needsRestart(p) ? { restart: 'restart' } : {}) }))
+      .map((p) => ({ key: p, from: getPath(before, p), to: getPath(after, p), ...(needsProcessRestart(p) ? { restart: 'process' } : needsRestart(p) ? { restart: 'restart' } : {}) }))
       .filter((c) => JSON.stringify(c.from) !== JSON.stringify(c.to));
-    if (changes.length) d.audit.write({ action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', user: 'admin', ip: clientIp(req), userAgent: req.get('user-agent'), message: `Settings changed: ${changes.map((c) => c.key).join(', ')}`, details: { changes } });
+    if (changes.length) d.audit.write({ action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', user: 'admin', ...who(req), message: `Settings changed: ${changes.map((c) => c.key).join(', ')}`, details: { changes } });
   };
   r.put('/config', (req, res) => {
     const before = d.loaded().config;
@@ -306,6 +311,7 @@ export function controlApi(d: ControlDeps): express.Router {
   r.post('/actions/:name', async (req, res) => {
     const name = req.params.name;
     const requestedBy = res.locals.access?.viaCookie ? 'session' : 'token';
+    const requester = { requestedBy, ...who(req) } as const;
     // A `control-action` record with the result, once the answer is sent or
     // the client went away ('close' fires in both cases; 'finish' only in the
     // first). Not for the camera reboot and the process restart (their own
@@ -313,12 +319,12 @@ export function controlApi(d: ControlDeps): express.Router {
     // when it ends, a repair `inventory-repair`) or a retention preview
     // (dryRun changes nothing). The power-cycle has its own records too
     // (camera-powercycle); a read of the switch is a control-action.
-    if (name !== 'camera-reboot' && name !== 'camera-powercycle' && name !== 'camera-poe-on' && name !== 'restart-proxy' && name !== 'inventory' && name !== 'inventory-repair' && !(name === 'retention-run' && req.body?.dryRun === true)) {
+    if (!OWN_AUDIT.has(name) && !(name === 'retention-run' && req.body?.dryRun === true)) {
       res.on('close', () => {
         const done = res.writableFinished;
         const ok = done && res.statusCode < 400;
         const result = !done ? 'aborted' : ok ? 'ok' : String((res.locals.errorCode as string | undefined) ?? res.statusCode);
-        d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: !done ? 'unknown' : ok ? 'success' : 'failure', user: 'admin', ip: clientIp(req), userAgent: req.get('user-agent'), message: `Control action ${name}: ${result}`, details: { action: name, result, requestedBy } });
+        d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: !done ? 'unknown' : ok ? 'success' : 'failure', user: 'admin', ...who(req), message: `Control action ${name}: ${result}`, details: { action: name, result, requestedBy } });
       });
     }
     const fail = (status: number, error: string, detail?: string, extra: object = {}) => {
@@ -331,6 +337,18 @@ export function controlApi(d: ControlDeps): express.Router {
       fail(429, 'too_soon', a.inFlight
         ? `a camera reboot or power-cycle is in progress; try again in ${a.retryAfterS} s`
         : `the camera was rebooted or power-cycled less than 2 minutes ago; try again in ${a.retryAfterS} s`);
+    };
+    // The power-cycle, PoE-on and switch read need a configured switch: 409 otherwise.
+    const noSwitch = (): boolean => {
+      const why = d.poeSwitch.notConfigured();
+      if (why) fail(409, 'not_configured', why);
+      return !!why;
+    };
+    // A refused inventory start: true when answered (stopping, busy).
+    const inventoryRefused = (err: unknown): boolean => {
+      if (err instanceof InventoryStoppingError) return fail(503, 'stopping', err.message), true;
+      if (err instanceof InventoryBusyError) return fail(409, 'inventory_busy', err.message, { runId: err.runId }), true;
+      return false;
     };
     const switchFail = (err: unknown) => {
       if (!(err instanceof PoeSwitchError)) throw err;
@@ -360,7 +378,7 @@ export function controlApi(d: ControlDeps): express.Router {
       // Reboot the camera (#83): 202 {confirmed}, 429 within the cooldown,
       // 502 when the request never reached the camera.
       case 'camera-reboot': {
-        const a = await d.cameraReboot({ requestedBy, ip: clientIp(req), userAgent: req.get('user-agent') });
+        const a = await d.cameraReboot(requester);
         if (a.status === 202) return void res.status(202).json({ confirmed: a.confirmed });
         if (a.status === 429) return tooSoon(a);
         return fail(502, a.error, a.detail);
@@ -369,9 +387,8 @@ export function controlApi(d: ControlDeps): express.Router {
       // watts} once PoE is back on; 409 not_configured, switch_busy, no_power;
       // 502 switch_auth, switch_unreachable, switch_error; 429 as the reboot.
       case 'camera-powercycle': {
-        const why = d.poeSwitch.notConfigured();
-        if (why) return fail(409, 'not_configured', why);
-        const a = await d.cameraPowerCycle({ requestedBy, ip: clientIp(req), userAgent: req.get('user-agent') });
+        if (noSwitch()) return;
+        const a = await d.cameraPowerCycle(requester);
         if (a.status === 202) return void res.status(202).json({ offAt: a.offAt, onAt: a.onAt, watts: a.watts });
         if (a.status === 429) return tooSoon(a);
         return fail(a.status, a.error, a.detail, a.poeOff ? { poeOff: true, turnedOn: a.turnedOn } : {});
@@ -379,11 +396,10 @@ export function controlApi(d: ControlDeps): express.Router {
       // Recovery (#85): PoE on for the camera's port if it is off; no power
       // check and no cooldown. The same switch session lock as the rest.
       case 'camera-poe-on': {
-        const why = d.poeSwitch.notConfigured();
-        if (why) return fail(409, 'not_configured', why);
+        if (noSwitch()) return;
         const sw = d.poeSwitch.info();
         const where = `${sw.host} port ${sw.port}`;
-        const base = { action: 'camera-poe-on', category: ['host'], type: ['change'], user: 'admin', ip: clientIp(req), userAgent: req.get('user-agent') };
+        const base = { action: 'camera-poe-on', category: ['host'], type: ['change'], user: 'admin', ...who(req) };
         try {
           const r = await d.poeSwitch.poeOn();
           d.audit.write({ ...base, outcome: 'success', message: r.wasOn ? `Camera PoE on (${where}): it was on already` : `Camera PoE turned on (${where})`, details: { switch: sw, wasOn: r.wasOn, requestedBy } });
@@ -395,8 +411,7 @@ export function controlApi(d: ControlDeps): express.Router {
       }
       // The camera's port on the switch now (log in, read, log out); never polled.
       case 'poe-switch-read': {
-        const why = d.poeSwitch.notConfigured();
-        if (why) return fail(409, 'not_configured', why);
+        if (noSwitch()) return;
         try {
           return void res.json(await d.poeSwitch.read());
         } catch (err) {
@@ -406,7 +421,7 @@ export function controlApi(d: ControlDeps): express.Router {
       // Restart the process (#71): answer first, then the normal stop and exit 0.
       case 'restart-proxy':
         // One record per restart: a second request before the stop is the same restart.
-        if (!restartRequested) d.audit.write({ action: 'proxy-restart', category: ['process'], type: ['change'], outcome: 'success', user: 'admin', ip: clientIp(req), userAgent: req.get('user-agent'), message: 'Proxy process restart requested through the control API', details: { requestedBy } });
+        if (!restartRequested) d.audit.write({ action: 'proxy-restart', category: ['process'], type: ['change'], outcome: 'success', user: 'admin', ...who(req), message: 'Proxy process restart requested through the control API', details: { requestedBy } });
         restartRequested = true;
         res.once('close', () => setImmediate(() => d.restartProcess()));
         return void res.status(202).end();
@@ -420,12 +435,11 @@ export function controlApi(d: ControlDeps): express.Router {
         if (camera !== undefined && typeof camera !== 'boolean') return fail(400, 'invalid', 'camera is true or false');
         if (camera && !d.inventory.checks[kind]?.camera) return fail(400, 'invalid', `the ${kind} inventory has no camera compare`);
         try {
-          const { runId } = d.inventory.start(kind, { requestedBy, ip: clientIp(req), userAgent: req.get('user-agent') }, { camera: camera === true });
+          const { runId } = d.inventory.start(kind, requester, { camera: camera === true });
           return void res.status(202).json({ runId });
         } catch (err) {
-          if (err instanceof InventoryStoppingError) return fail(503, 'stopping', err.message);
-          if (!(err instanceof InventoryBusyError)) throw err;
-          return fail(409, 'inventory_busy', err.message, { runId: err.runId });
+          if (!inventoryRefused(err)) throw err;
+          return;
         }
       }
       // A repair from a check report (#74): 202 {runId}; it writes its own
@@ -437,11 +451,10 @@ export function controlApi(d: ControlDeps): express.Router {
         if (typeof kind !== 'string' || !kinds.includes(kind)) return fail(400, 'invalid', `kind is one of: ${kinds.join(', ')}`);
         if (typeof source !== 'string' || !RUN_ID.test(source)) return fail(400, 'invalid', 'runId is the id of a check run');
         try {
-          const { runId } = await d.inventory.repair(kind, { requestedBy, ip: clientIp(req), userAgent: req.get('user-agent') }, source);
+          const { runId } = await d.inventory.repair(kind, requester, source);
           return void res.status(202).json({ runId });
         } catch (err) {
-          if (err instanceof InventoryStoppingError) return fail(503, 'stopping', err.message);
-          if (err instanceof InventoryBusyError) return fail(409, 'inventory_busy', err.message, { runId: err.runId });
+          if (inventoryRefused(err)) return;
           if (!(err instanceof RepairRefusedError)) throw err;
           return err.code === 'not_found' ? fail(404, 'not_found', err.message) : fail(409, err.code, err.message);
         }

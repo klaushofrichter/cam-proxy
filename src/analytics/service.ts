@@ -1,5 +1,6 @@
 import { mkdirSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { sleep } from '../async';
 import type { Catalog } from '../catalog/db';
 import { addUsage, analysisFor, countUnmapped, saveAnalysis, setSummary, unanalysed, usageBetween, withoutSummary } from '../catalog/analyses';
 import { eventById } from '../catalog/events';
@@ -71,7 +72,7 @@ export class AnalyticsService {
 
   constructor(private readonly d: AnalyticsDeps) {
     this.now = d.now ?? Date.now;
-    this.sleep = d.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    this.sleep = d.sleep ?? sleep;
   }
 
   private settings() {

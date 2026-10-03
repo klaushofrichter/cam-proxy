@@ -4,10 +4,11 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import http from 'http';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { sleep } from '../async';
 import { logger } from '../log';
 import { stopProcess } from './grabber';
 
-export interface Go2rtcOptions {
+interface Go2rtcOptions {
   binary?: string;
   rtspPort: number;
   apiPort: number;
@@ -15,7 +16,7 @@ export interface Go2rtcOptions {
   source: { host: string; port: number; user: string; password: string };
 }
 
-export interface StreamInfo { producers: unknown[]; consumers: unknown[] }
+interface StreamInfo { producers: unknown[]; consumers: unknown[] }
 
 const PASS_ENV = 'CAMPROXY_GO2RTC_PASS';
 
@@ -99,7 +100,7 @@ export class Go2rtc extends EventEmitter {
         this.setReady(true);
         return;
       }
-      await new Promise((r) => setTimeout(r, 100));
+      await sleep(100);
     }
     if (this.running && this.proc === p) logger.warn('go2rtc_not_ready');
   }

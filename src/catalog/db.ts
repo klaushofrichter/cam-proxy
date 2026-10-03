@@ -1,8 +1,9 @@
 import { DatabaseSync } from 'node:sqlite';
-import { accessSync, constants, existsSync, mkdirSync, statSync } from 'fs';
+import { accessSync, constants, existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { MIGRATIONS } from './migrations';
 import { logger } from '../log';
+import { fileSize } from '../fs-util';
 
 // The catalog: SQLite in WAL mode (node:sqlite, no native module). Images
 // never go in here.
@@ -54,18 +55,11 @@ export function openCatalog(file: string): Catalog {
       throw err;
     }
   }
-  const size = (f: string) => {
-    try {
-      return statSync(f).size;
-    } catch {
-      return 0;
-    }
-  };
   return {
     db,
     file,
     close: () => db.close(),
     schemaVersion: version,
-    sizeBytes: () => size(file) + size(`${file}-wal`) + size(`${file}-shm`),
+    sizeBytes: () => fileSize(file) + fileSize(`${file}-wal`) + fileSize(`${file}-shm`),
   };
 }

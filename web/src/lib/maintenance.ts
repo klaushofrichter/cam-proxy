@@ -1,5 +1,7 @@
 // The Maintenance page's restart, reboot and power-cycle helpers (#71, #83, #85).
 
+import { localHhmm } from './format';
+
 // After this long without a new proxy, the page says it did not come back.
 export const RESTART_GIVE_UP_MS = 120_000;
 
@@ -32,16 +34,11 @@ export function restartWatch(before: Health | null, postedAt?: number): (now: He
 
 export interface CameraReboot { kind?: 'reboot' | 'powercycle'; phase: 'power-cycling' | 'rebooting' | 'back' | 'not-back'; requestedAt: number; offAt?: number | null; downSec?: number | null }
 
-const hhmm = (ms: number) => {
-  const t = new Date(ms);
-  return `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
-};
-
 // The camera's state line: "power-cycling" while its PoE is off (#85), then
 // "rebooting (requested HH:MM)" until it answers, instead of a plain "offline".
 export function cameraStateText(c: { online: boolean; reboot?: CameraReboot | null }): string {
-  if (c.reboot?.phase === 'power-cycling') return `power-cycling (requested ${hhmm(c.reboot.requestedAt)})`;
-  if (c.reboot?.phase === 'rebooting') return `rebooting (requested ${hhmm(c.reboot.requestedAt)})`;
+  if (c.reboot?.phase === 'power-cycling') return `power-cycling (requested ${localHhmm(c.reboot.requestedAt)})`;
+  if (c.reboot?.phase === 'rebooting') return `rebooting (requested ${localHhmm(c.reboot.requestedAt)})`;
   return c.online ? 'online' : 'offline';
 }
 
@@ -90,5 +87,5 @@ export function poeLine(s: PoeSwitchStatus): string {
   const where = `${s.host ?? '—'} port ${s.port ?? '—'}`;
   if (!s.configured) return `${where} · not configured: ${notConfigured(s) ?? 'unknown'}`;
   if (!s.last) return `${where} · not read yet`;
-  return `${where} · PoE ${s.last.poe ? 'on' : 'off'}, ${s.last.watts} W (read ${hhmm(s.last.at)})`;
+  return `${where} · PoE ${s.last.poe ? 'on' : 'off'}, ${s.last.watts} W (read ${localHhmm(s.last.at)})`;
 }

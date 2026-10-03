@@ -5,17 +5,17 @@
 // animal-type field, trigger flags (hex), size in bytes (hex).
 import type { TimeInfo } from '../camera/time';
 import { localDay } from '../analytics/local-day';
+import { addDays, DAY } from '../time-units';
 
 export type Stream = 'main' | 'sub';
 export type Kind = 'person' | 'vehicle' | 'pet' | 'motion';
-export interface SdName { id: string; stream: Stream; dst: boolean; date: string; start: string; end: string; size: number; kinds: Kind[] }
+interface SdName { id: string; stream: Stream; dst: boolean; date: string; start: string; end: string; size: number; kinds: Kind[] }
 
-export const SD_ID = /^Rec[MS][0-9A-Za-z]{2}_(DST)?\d{8}_\d{6}_\d{6}_[0-9A-Za-z_]+\.mp4$/;
+const SD_ID = /^Rec[MS][0-9A-Za-z]{2}_(DST)?\d{8}_\d{6}_\d{6}_[0-9A-Za-z_]+\.mp4$/;
 const NAME = /^Rec([MS])[0-9A-Za-z]{2}_(DST)?(\d{8})_(\d{6})_(\d{6})_(?:\d+_)?([0-9A-Fa-f]+)_([0-9A-Fa-f]+)\.mp4$/;
 const HMS = /^([01]\d|2[0-3])[0-5]\d[0-5]\d$/;
 // Name versions 9 and 10 (14 hex digits): bit 55 − position (reolink_aio's layout, as in cams).
 const POSITIONS: [Kind, number][] = [['person', 17], ['vehicle', 19], ['pet', 20], ['motion', 24]];
-const DAY = 86_400_000;
 
 export const validId = (id: string): boolean => id.length <= 128 && SD_ID.test(id);
 
@@ -61,7 +61,7 @@ export function recordingTimes(n: SdName, t: TimeInfo): { start: number; end: nu
 // written (stillRecording can't tell). The inventories judge such a
 // recording only from LATE_NIGHT_MS after midnight (#117 review): a repair
 // would otherwise fetch it truncated, and its FTP clip land beside it later.
-export const LATE_NIGHT_MS = 3_600_000;
+const LATE_NIGHT_MS = 3_600_000;
 export function settlesAt(r: { id: string; end: number }): number {
   const n = parseSdName(r.id);
   return n && n.end === '000000' && n.start >= '235500' ? r.end + LATE_NIGHT_MS : r.end;
@@ -73,10 +73,6 @@ export const localDate = (ts: number, t: TimeInfo): string => localDay(ts, t);
 export function localDays(from: number, to: number, t: TimeInfo): string[] {
   const last = localDate(to, t);
   const out = [localDate(from, t)];
-  while (out[out.length - 1] < last) {
-    const d = new Date(`${out[out.length - 1]}T00:00:00Z`);
-    d.setUTCDate(d.getUTCDate() + 1);
-    out.push(d.toISOString().slice(0, 10));
-  }
+  while (out[out.length - 1] < last) out.push(addDays(out[out.length - 1], 1));
   return out;
 }

@@ -46,7 +46,23 @@ export function refreshNow(): void {
   refreshTick.update((n) => n + 1);
 }
 
-export async function refresh(): Promise<void> {
+// One status+stats fetch at a time: a refresh asked for while one runs (a
+// burst of stream events) is one more fetch after it, shared by all who asked.
+let inflight: Promise<void> | null = null;
+let again: Promise<void> | null = null;
+export function refresh(): Promise<void> {
+  if (inflight) {
+    again ??= inflight.then(() => {
+      again = null;
+      return refresh();
+    });
+    return again;
+  }
+  inflight = load().finally(() => (inflight = null));
+  return inflight;
+}
+
+async function load(): Promise<void> {
   try {
     const [s, st] = await Promise.all([api<Status>('GET', '/control/status'), api<Stats>('GET', '/control/stats')]);
     status.set(s);
@@ -63,7 +79,9 @@ let timer: ReturnType<typeof setInterval> | null = null;
 export function connect(): void {
   if (source) return;
   void refresh();
-  timer = setInterval(() => void refresh(), 5000);
+  // A hidden tab skips the timer and catches up when it is shown again.
+  timer = setInterval(() => document.visibilityState !== 'hidden' && void refresh(), 5000);
+  document.addEventListener('visibilitychange', onVisible);
   source = new EventSource('/api/stream', { withCredentials: true });
   for (const type of ['camera-event', 'camera-status', 'clip', 'annotation', 'analysis']) {
     source.addEventListener(type, (ev) => {
@@ -74,7 +92,12 @@ export function connect(): void {
   }
 }
 
+function onVisible(): void {
+  if (document.visibilityState === 'visible') void refresh();
+}
+
 export function disconnect(): void {
+  document.removeEventListener('visibilitychange', onVisible);
   source?.close();
   source = null;
   if (timer) clearInterval(timer);

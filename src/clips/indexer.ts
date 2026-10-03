@@ -3,7 +3,7 @@ import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, 
 import { copyFile, link, stat, unlink } from 'fs/promises';
 import { dirname, join, resolve, sep } from 'path';
 import { promisify } from 'util';
-import type { DstRule, TimeInfo } from '../camera/time';
+import { dstBounds, inDst, type TimeInfo } from '../camera/time';
 import { clipByPath, clipForSnapshot, clipsWithoutSnapshot, deleteClip, insertClip, overlappingEvents, setSnapshot, type ClipRow } from '../catalog/clips';
 import type { Catalog } from '../catalog/db';
 import type { Config } from '../config/defaults';
@@ -11,6 +11,7 @@ import { logger } from '../log';
 import type { Stream } from '../recordings/names';
 import type { StreamLog } from '../stream/log';
 import type { Upload } from './ftp-server';
+import { utcDayParts, utcHhmm } from '../time-units';
 
 const run = promisify(execFile);
 
@@ -33,7 +34,6 @@ export class ClipExistsError extends Error {
     this.name = 'ClipExistsError';
   }
 }
-const pad = (n: number) => String(n).padStart(2, '0');
 
 // The camera names uploads <Name>_00_YYYYMMDDHHMMSS.(mp4|jpg), in its local time.
 export function parseClipName(name: string): { local: string; ext: 'mp4' | 'jpg' } | null {
@@ -49,34 +49,17 @@ function partsOf(local: string): number[] {
   return [local.slice(0, 4), local.slice(4, 6), local.slice(6, 8), local.slice(8, 10), local.slice(10, 12), local.slice(12, 14)].map(Number);
 }
 
-// The day of the nth weekday of a month (week 5, or past the month's end: the last).
-function nthWeekday(year: number, mon: number, week: number, weekday: number): number {
-  const first = new Date(Date.UTC(year, mon - 1, 1)).getUTCDay();
-  let day = 1 + ((weekday - first + 7) % 7) + (Math.max(1, week) - 1) * 7;
-  const days = new Date(Date.UTC(year, mon, 0)).getUTCDate();
-  while (day > days) day -= 7;
-  return day;
-}
-
-// The UTC instants DST starts and ends in a year.
-export function dstBounds(year: number, r: DstRule, std: number, dst: number): [number, number] {
-  const start = Date.UTC(year, r.startMon - 1, nthWeekday(year, r.startMon, r.startWeek, r.startWeekday), r.startHour, r.startMin) - std * 60_000;
-  const end = Date.UTC(year, r.endMon - 1, nthWeekday(year, r.endMon, r.endWeek, r.endWeekday), r.endHour, r.endMin) - (std + dst) * 60_000;
-  return [start, end];
-}
-
 // Both readings of a camera-local time: [DST, standard] in the repeated
 // autumn hour, else the one reading.
-export function localToUtcCandidates(local: string, t: TimeInfo): number[] {
+function localToUtcCandidates(local: string, t: TimeInfo): number[] {
   const [y, mo, d, h, mi, s] = partsOf(local);
   const wall = Date.UTC(y, mo - 1, d, h, mi, s);
   const asStd = wall - t.stdOffsetMinutes * 60_000;
   if (!t.dstRule || !t.dstOffsetMinutes) return [asStd];
   const asDst = asStd - t.dstOffsetMinutes * 60_000;
   const [start, end] = dstBounds(y, t.dstRule, t.stdOffsetMinutes, t.dstOffsetMinutes);
-  const inDst = (u: number) => (start < end ? u >= start && u < end : u >= start || u < end);
-  if (inDst(asDst) && !inDst(asStd)) return [asDst, asStd];
-  return [localToUtc(local, t)];
+  if (inDst(asDst, start, end) && !inDst(asStd, start, end)) return [asDst, asStd];
+  return [inDst(asDst, start, end) ? asDst : asStd]; // localToUtc's answer
 }
 
 // Camera-local YYYYMMDDHHMMSS → UTC ms. In the repeated fall hour the DST
@@ -89,11 +72,10 @@ export function localToUtc(local: string, t: TimeInfo): number {
   if (!t.dstRule || !t.dstOffsetMinutes) return asStd;
   const asDst = asStd - t.dstOffsetMinutes * 60_000;
   const [start, end] = dstBounds(y, t.dstRule, t.stdOffsetMinutes, t.dstOffsetMinutes);
-  const inDst = (u: number) => (start < end ? u >= start && u < end : u >= start || u < end);
-  return inDst(asDst) ? asDst : asStd;
+  return inDst(asDst, start, end) ? asDst : asStd;
 }
 
-export interface ClipIndexerDeps {
+interface ClipIndexerDeps {
   catalog: Catalog;
   log: StreamLog;
   config: () => Config;
@@ -107,7 +89,7 @@ export interface ClipIndexerDeps {
 // after the clip's own start (its pre-record; measured on cam1 2026-09-28 to
 // 30), never with the same time. A picture belongs to the clip that started
 // last at most this long before it.
-export const SNAPSHOT_WINDOW_MS = 10_000;
+const SNAPSHOT_WINDOW_MS = 10_000;
 
 // Turns a finished upload into a stored, indexed clip (or its snapshot).
 export class ClipIndexer {
@@ -134,8 +116,9 @@ export class ClipIndexer {
   // picture came late): link them now. Returns how many were linked.
   relinkSnapshots(): number {
     let n = 0;
+    const listings = new Map<string, string[] | null>(); // each day folder read once
     for (const clip of clipsWithoutSnapshot(this.d.catalog, this.d.cam)) {
-      const pic = this.pictureFor(clip.start_ts);
+      const pic = this.pictureFor(clip.start_ts, listings);
       if (pic) {
         setSnapshot(this.d.catalog, clip.id, pic);
         n++;
@@ -146,15 +129,19 @@ export class ClipIndexer {
   }
 
   // The earliest stored picture taken in a clip's first SNAPSHOT_WINDOW_MS.
-  private pictureFor(start: number): string | null {
+  private pictureFor(start: number, listings?: Map<string, string[] | null>): string | null {
     let best: { ts: number; path: string } | null = null;
     for (const folder of new Set([this.folder(start), this.folder(start + SNAPSHOT_WINDOW_MS)])) {
-      let names: string[];
-      try {
-        names = readdirSync(folder);
-      } catch {
-        continue;
+      let names = listings?.get(folder);
+      if (names === undefined) {
+        try {
+          names = readdirSync(folder);
+        } catch {
+          names = null;
+        }
+        listings?.set(folder, names);
       }
+      if (!names) continue;
       for (const name of names) {
         const m = /^\d{4}-(\d{1,15})\.jpg$/.exec(name);
         const ts = m ? Number(m[1]) : NaN;
@@ -165,8 +152,7 @@ export class ClipIndexer {
   }
 
   private folder(ts: number): string {
-    const t = new Date(ts);
-    return join(this.d.dataDir, 'clips', this.d.cam, String(t.getUTCFullYear()), pad(t.getUTCMonth() + 1), pad(t.getUTCDate()));
+    return join(this.d.dataDir, 'clips', this.d.cam, ...utcDayParts(ts));
   }
 
   // An upload that isn't kept (the disk is full).
@@ -200,9 +186,8 @@ export class ClipIndexer {
   // adopted instead of skipped forever.
   async addRecording(file: string, r: { start: number; stream: Stream }): Promise<ClipRow> {
     if (!Number.isSafeInteger(r.start) || r.start < 0 || Number.isNaN(new Date(r.start).getTime())) throw new InvalidStartError();
-    const t = new Date(r.start);
     const root = resolve(this.d.dataDir, 'clips');
-    const path = resolve(this.folder(r.start), `${pad(t.getUTCHours())}${pad(t.getUTCMinutes())}-${r.start}.mp4`);
+    const path = resolve(this.folder(r.start), `${utcHhmm(r.start)}-${r.start}.mp4`);
     if (!path.startsWith(root + sep)) throw new Error('the clip path is outside the clips folder');
     const probe = await probeVideo(file);
     if (!probe) throw new NotAVideoError();
@@ -275,9 +260,8 @@ export class ClipIndexer {
     // reading that isn't in the future is the right one (5 min for clock drift).
     const candidates = localToUtcCandidates(parsed.local, await this.d.timeInfo());
     const start = candidates.findLast((c) => c <= this.now() + 5 * 60_000) ?? candidates[0];
-    const t = new Date(start);
     const folder = this.folder(start);
-    const stem = join(folder, `${pad(t.getUTCHours())}${pad(t.getUTCMinutes())}-${start}`);
+    const stem = join(folder, `${utcHhmm(start)}-${start}`);
     const { catalog } = this.d;
 
     if (parsed.ext === 'jpg') {

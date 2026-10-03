@@ -29,7 +29,7 @@ export function maskPath(path: string): string {
 
 // Recent log lines (info and above) for the control API, whatever the
 // console level. Lines are already redacted by pino when they get here.
-export class LogBuffer {
+class LogBuffer {
   private readonly lines: Record<string, unknown>[] = [];
   constructor(private readonly max = 500) {}
   push(line: Record<string, unknown>): void {
@@ -76,3 +76,6 @@ export function setLogLevel(level: string): void {
   logger.level = consoleLevel < INFO ? level : 'info';
 }
 setLogLevel(process.env.CAMPROXY_LOG_LEVEL ?? 'info');
+
+// An error's message for a log line or a report; anything thrown.
+export const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));

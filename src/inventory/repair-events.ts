@@ -17,7 +17,7 @@ import type { InventoryReport, RepairEntry, RepairResult } from './runner';
 export const RECOVER_MAX = 1000;
 const BOUNDS = "the recordings' start and end, pre- and post-record included";
 
-export type EventsRepairDeps = EventsInventoryDeps;
+type EventsRepairDeps = EventsInventoryDeps;
 
 const cameraTo = (r: InventoryReport): number | undefined => {
   const c = (r.window as { camera?: { to?: unknown } } | null)?.camera;

@@ -20,6 +20,26 @@ export interface DstRule {
   endMin: number;
 }
 
+// The day of the nth weekday of a month (week 5, or past the month's end: the last).
+function nthWeekday(year: number, mon: number, week: number, weekday: number): number {
+  const first = new Date(Date.UTC(year, mon - 1, 1)).getUTCDay();
+  let day = 1 + ((weekday - first + 7) % 7) + (Math.max(1, week) - 1) * 7;
+  const days = new Date(Date.UTC(year, mon, 0)).getUTCDate();
+  while (day > days) day -= 7;
+  return day;
+}
+
+// The UTC instants DST starts and ends in a year (std and dst in minutes).
+export function dstBounds(year: number, r: DstRule, std: number, dst: number): [number, number] {
+  const start = Date.UTC(year, r.startMon - 1, nthWeekday(year, r.startMon, r.startWeek, r.startWeekday), r.startHour, r.startMin) - std * 60_000;
+  const end = Date.UTC(year, r.endMon - 1, nthWeekday(year, r.endMon, r.endWeek, r.endWeekday), r.endHour, r.endMin) - (std + dst) * 60_000;
+  return [start, end];
+}
+
+// Whether a UTC instant is in DST, given the year's bounds; start > end:
+// DST spans New Year (southern hemisphere).
+export const inDst = (u: number, start: number, end: number): boolean => (start < end ? u >= start && u < end : u >= start || u < end);
+
 export function timeInfoFromGetTime(value: unknown): TimeInfo {
   const v = (value ?? {}) as { Time?: { timeZone?: number }; Dst?: Partial<Record<keyof DstRule | 'enable' | 'offset', number>> };
   const west = Number(v.Time?.timeZone ?? 0);

@@ -2,15 +2,17 @@ import { appendFileSync, closeSync, mkdirSync, openSync, readdirSync, readFileSy
 import { hostname } from 'os';
 import { join } from 'path';
 import { logger, maskPath } from '../log';
+import { addDays, DAY, dayStart } from '../time-units';
+import { fileSize } from '../fs-util';
 export { maskPath };
 
 // The audit log (spec 2026-10-01-audit-log-design): ECS 8.x JSON lines, one
 // append-only file per UTC day under <dataDir>/audit. Writes never throw into
 // the caller; reads page by cursor ("<day>:<line>", 1-based) in either
 // direction across the day files.
-export const AUDIT_DATASET = 'cam-proxy.audit';
+const AUDIT_DATASET = 'cam-proxy.audit';
 export type Outcome = 'success' | 'failure' | 'unknown';
-export interface AuditInput {
+interface AuditInput {
   action: string;
   category: string[];
   type: string[];
@@ -29,7 +31,7 @@ export type AuditRecord = Record<string, unknown> & {
   message: string;
   cam_proxy?: Record<string, unknown>;
 };
-export interface AuditQuery { limit?: number; before?: string; after?: string; from?: number; to?: number; actions?: string[]; outcome?: Outcome }
+interface AuditQuery { limit?: number; before?: string; after?: string; from?: number; to?: number; actions?: string[]; outcome?: Outcome }
 export class AuditQueryError extends Error {}
 
 const DAY_FILE = /^(\d{4}-\d{2}-\d{2})\.jsonl$/;
@@ -88,7 +90,7 @@ export class AuditLog {
     const file = join(this.d.dir, `${day}.jsonl`);
     try {
       // Refused tokens and failed sign-ins are what a flood writes: those stop at the size limit.
-      if ((i.action === 'auth-refused' || (i.action === 'login' && i.outcome === 'failure')) && this.size(file) >= this.max) {
+      if ((i.action === 'auth-refused' || (i.action === 'login' && i.outcome === 'failure')) && fileSize(file) >= this.max) {
         if (this.throttledDay !== day) {
           this.throttledDay = day;
           const t = this.record(ts, { action: 'audit-throttled', category: ['host'], type: ['info'], outcome: 'unknown', message: 'The audit file reached its size limit; further refused-token and failed sign-in records today are dropped' });
@@ -134,7 +136,7 @@ export class AuditLog {
       if (c && (up ? day < c.day : day > c.day)) continue;
       // Skip a day whose UTC range [00:00Z, next 00:00Z) is outside [from, to].
       const start = Date.parse(`${day}T00:00:00Z`);
-      if ((q.to !== undefined && start > q.to) || (q.from !== undefined && start + 86_400_000 <= q.from)) continue;
+      if ((q.to !== undefined && start > q.to) || (q.from !== undefined && start + DAY <= q.from)) continue;
       const lines = this.lines(day);
       const order = lines.map((_, k) => k + 1);
       for (const n of up ? order : order.reverse()) {
@@ -156,7 +158,7 @@ export class AuditLog {
   find(pred: (r: AuditRecord) => boolean, days = 2): AuditRecord | undefined {
     const all = this.days();
     if (!all.length) return undefined;
-    const cutoff = new Date(Date.parse(`${all.at(-1)}T00:00:00Z`) - (Math.max(1, Math.floor(days) || 1) - 1) * 86_400_000).toISOString().slice(0, 10);
+    const cutoff = addDays(all.at(-1)!, -(Math.max(1, Math.floor(days) || 1) - 1));
     for (const day of all.filter((d) => d >= cutoff).reverse()) {
       for (const l of this.lines(day).reverse()) {
         const r = parse(l);
@@ -182,13 +184,13 @@ export class AuditLog {
 
   usage(): { bytes: number; files: number; oldest: number | null; newest: number | null; growthPerDay: number } {
     const days = this.days();
-    const sizes = days.map((d) => this.size(join(this.d.dir, `${d}.jsonl`)));
+    const sizes = days.map((d) => fileSize(join(this.d.dir, `${d}.jsonl`)));
     const bytes = sizes.reduce((a, b) => a + b, 0);
     // Growth: bytes per calendar day over the last 7 whole UTC days (today is
     // partial), counting days without a file as 0, from the first file on.
-    const today = Date.parse(`${new Date(this.now()).toISOString().slice(0, 10)}T00:00:00Z`);
-    const from = Math.max(today - 7 * 86_400_000, days.length ? Date.parse(`${days[0]}T00:00:00Z`) : today);
-    const whole = (today - from) / 86_400_000;
+    const today = dayStart(this.now());
+    const from = Math.max(today - 7 * DAY, days.length ? Date.parse(`${days[0]}T00:00:00Z`) : today);
+    const whole = (today - from) / DAY;
     const recent = days.reduce((n, d, i) => { const t = Date.parse(`${d}T00:00:00Z`); return t >= from && t < today ? n + sizes[i] : n; }, 0);
     return {
       bytes, files: days.length,
@@ -240,9 +242,6 @@ export class AuditLog {
     } catch { return false; } finally { if (fd !== undefined) closeSync(fd); }
   }
 
-  private size(file: string): number {
-    try { return statSync(file).size; } catch { return 0; }
-  }
 
   private days(): string[] {
     let names: string[] = [];

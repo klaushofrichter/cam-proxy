@@ -9,12 +9,12 @@ export type Segment =
   | { kind: 'card'; ts: number };
 // stillAt: the still that shows at second t (the latest within the stills
 // interval, so stills every 2 s don't flicker to cards), or null.
-export interface PlanInput { clip: ClipSpan; preS: number; postS: number; clips: ClipSpan[]; stillAt: (t: number) => number | null }
+interface PlanInput { clip: ClipSpan; preS: number; postS: number; clips: ClipSpan[]; stillAt: (t: number) => number | null }
 export type Plan = { ok: true; start: number; end: number; durationS: number; segments: Segment[] } | { ok: false; error: string };
 
-export const MAX_S = 60;
-export const MIN_ROLL = -600;
-export const MAX_ROLL = 60;
+const MAX_S = 60;
+const MIN_ROLL = -600;
+const MAX_ROLL = 60;
 
 const roll = (v: number) => Number.isInteger(v) && v >= MIN_ROLL && v <= MAX_ROLL;
 

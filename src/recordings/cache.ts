@@ -12,7 +12,7 @@ import { join, resolve, sep } from 'path';
 
 const TOUCH_EVERY_MS = 60_000;
 
-export interface CachedFile { id: string; path: string; bytes: number; used: number }
+interface CachedFile { id: string; path: string; bytes: number; used: number }
 
 function safeDir(dir: string): string[] {
   try {
@@ -144,6 +144,15 @@ export class RecordingCache {
       }
     }
     return n;
+  }
+
+  // Whether a file of `size` could be kept: within the cap, and room beside
+  // the pinned files. Evicts nothing (makeRoom does).
+  fits(size: number): boolean {
+    const cap = this.capBytes();
+    if (size > cap) return false;
+    const pinned = this.files().filter((x) => this.busy(x.path)).reduce((n, x) => n + x.bytes, 0);
+    return pinned + size <= cap;
   }
 
   // Evicts least-recently-used files (never a pinned one) until `incoming`

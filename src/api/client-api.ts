@@ -4,13 +4,13 @@ import { resolve } from 'path';
 import { analysesFor, analysesInRange, analysisFor, type AnalysisRow } from '../catalog/analyses';
 import { summarize } from '../analytics/classes';
 import type { Found } from '../analytics/providers';
-import { clipById, clipNear, listClips, oldestClip, overlappingEvents, type ClipRow } from '../catalog/clips';
+import { clipById, clipsNear, listClips, oldestClip, overlappingEventsOf, type ClipRow } from '../catalog/clips';
 import type { Catalog } from '../catalog/db';
 import { lastLiveEventTs, listEvents, type EventRow } from '../catalog/events';
 import type { Config } from '../config/defaults';
 import { BaichuanError } from '../camera/baichuan/errors';
 import { logger } from '../log';
-import { isAbort } from '../recordings/fetcher';
+import { isAbort } from '../async';
 import { SearchError, type RecordingEntry } from '../recordings/list';
 import { validId } from '../recordings/names';
 import type { RecordingsSide } from '../recordings/side';
@@ -19,17 +19,19 @@ import type { SseHandler } from '../stream/sse';
 import type { FrameGrabber } from '../stills/grabber';
 import type { Go2rtc } from '../stills/go2rtc';
 import type { MinuteStore } from '../stills/store';
+import { DAY } from '../time-units';
 
 export interface StillsSide { go2rtc: Go2rtc; grabber: FrameGrabber; store: MinuteStore }
-const DAY = 86_400_000;
 
 const bad = (res: Response, detail: string) => void res.status(400).json({ error: 'invalid', detail });
+// Files that never change (final stills and sprites, clips, recordings).
+const IMMUTABLE = 'private, max-age=604800, immutable';
 // A calendar date, YYYY-MM-DD (2026-02-30 is not one), in the years 2000 to
 // 2099 (the camera's clock range; nothing else reaches a Search).
 const validDate = (v: string): boolean => /^20\d{2}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(`${v}T00:00:00Z`)) && new Date(`${v}T00:00:00Z`).toISOString().slice(0, 10) === v;
 const intParam = (v: unknown): number | undefined | null => (v === undefined ? undefined : typeof v === 'string' && /^\d{1,15}$/.test(v) ? Number(v) : null);
 
-export const eventJson = (e: EventRow) => ({ id: e.id, kind: e.kind, source: e.source, start: e.start_ts, end: e.end_ts, endReason: e.end_reason });
+const eventJson = (e: EventRow) => ({ id: e.id, kind: e.kind, source: e.source, start: e.start_ts, end: e.end_ts, endReason: e.end_reason });
 
 // Stored JSON; null when missing or corrupt (one bad row must not fail a list).
 const parse = (s: string | null): unknown => {
@@ -46,7 +48,7 @@ const parseList = (s: string | null): unknown[] => {
 };
 // The summary to serve: the stored one; an ok row not yet backfilled is
 // summarised from its objects (never served as "nothing found"); else [].
-export const summaryOf = (a: Pick<AnalysisRow, 'status' | 'objects' | 'summary'>): unknown[] => {
+const summaryOf = (a: Pick<AnalysisRow, 'status' | 'objects' | 'summary'>): unknown[] => {
   try {
     if (a.summary !== null && a.summary !== undefined) return parseList(a.summary);
     if (a.status !== 'ok' || a.objects === null) return [];
@@ -56,7 +58,7 @@ export const summaryOf = (a: Pick<AnalysisRow, 'status' | 'objects' | 'summary'>
     return [];
   }
 };
-export const analysisSummary = (a: AnalysisRow | undefined) =>
+const analysisSummary = (a: AnalysisRow | undefined) =>
   a ? { provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, objects: parseList(a.objects), summary: summaryOf(a) } : null;
 
 // The client API (spec §10); auth is applied by the caller.
@@ -77,18 +79,28 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
 
   const sendJpeg = (res: Response, jpeg: Buffer | undefined, final: boolean) => {
     if (!jpeg) return void res.status(404).json({ error: 'not_found' });
-    res.type('image/jpeg').setHeader('Cache-Control', final ? 'private, max-age=604800, immutable' : 'no-store');
+    res.type('image/jpeg').setHeader('Cache-Control', final ? IMMUTABLE : 'no-store');
     res.send(jpeg);
   };
 
-  // The from/to of a list over at most a day; answers 400 itself otherwise.
-  const range = (req: Request, res: Response): [number, number] | undefined => {
+  // The from/to of a list over at most `maxMs` (a day by default); answers 400 itself otherwise.
+  const range = (req: Request, res: Response, maxMs = DAY, tooLong = 'at most one day per request', missing = 'from and to (unix ms) are required'): [number, number] | undefined => {
     const from = intParam(req.query.from), to = intParam(req.query.to);
-    if (from === undefined || to === undefined || from === null || to === null) return bad(res, 'from and to (unix ms) are required'), undefined;
+    if (from === undefined || to === undefined || from === null || to === null) return bad(res, missing), undefined;
     if (to < from) return bad(res, 'to is before from'), undefined;
-    if (to - from > DAY) return bad(res, 'at most one day per request'), undefined;
+    if (to - from > maxMs) return bad(res, tooLong), undefined;
     return [from, to];
   };
+  // sendFile with Range; a failure before any byte is 416 (it carries its
+  // Content-Range, bytes */size), 404 `notFound`, or 500.
+  const sendFileOr = (res: Response, path: string, opts: object, notFound: string, after: () => void = () => undefined) =>
+    res.sendFile(path, { cacheControl: false, acceptRanges: true, dotfiles: 'allow', ...opts }, (err) => {
+      after();
+      if (!err || res.headersSent) return;
+      const status = (err as { status?: number }).status;
+      if (status === 416) return void res.status(416).end();
+      res.status(status === 404 ? 404 : 500).json({ error: status === 404 ? notFound : 'internal' });
+    });
 
   r.get('/cameras/:cam/events', (req, res) => {
     if (!known(req, res)) return;
@@ -169,24 +181,24 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
 
   // Clips (spec §9, §10): lists over at most 31 days; files with HTTP Range.
   const clipBase = () => `/api/cameras/${encodeURIComponent(cam().id)}/clips`;
-  const clipJson = (c: ClipRow) => ({
+  const clipJson = (c: ClipRow, events: number[]) => ({
     id: c.id,
     start: c.start_ts,
     end: c.end_ts,
     stream: c.stream,
     size: c.size,
     origin: c.origin,
-    events: overlappingEvents(d.catalog, c.cam, c.start_ts, c.end_ts ?? c.start_ts),
+    events,
     url: `${clipBase()}/${c.id}.mp4`,
     snapshotUrl: c.snapshot ? `${clipBase()}/${c.id}.jpg` : null,
   });
   r.get('/cameras/:cam/clips', (req, res) => {
     if (!known(req, res)) return;
-    const from = intParam(req.query.from), to = intParam(req.query.to);
-    if (from === undefined || to === undefined || from === null || to === null) return bad(res, 'from and to (unix ms) are required');
-    if (to < from) return bad(res, 'to is before from');
-    if (to - from > 31 * DAY) return bad(res, 'at most 31 days per request');
-    res.json(listClips(d.catalog, cam().id, from, to).map(clipJson));
+    const rg = range(req, res, 31 * DAY, 'at most 31 days per request');
+    if (!rg) return;
+    const clips = listClips(d.catalog, cam().id, rg[0], rg[1]);
+    const events = overlappingEventsOf(d.catalog, cam().id, clips.map((c) => ({ from: c.start_ts, to: c.end_ts ?? c.start_ts })));
+    res.json(clips.map((c, i) => clipJson(c, events[i])));
   });
   r.get('/cameras/:cam/clips/:file', (req, res) => {
     const m = /^(\d{1,15})\.(mp4|jpg)$/.exec(req.params.file);
@@ -195,20 +207,13 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     const clip = clipById(d.catalog, Number(m[1]));
     const file = clip?.cam === cam().id ? (m[2] === 'mp4' ? clip.path : clip.snapshot) : null;
     if (!file) return void res.status(404).json({ error: 'not_found' });
-    res.setHeader('Cache-Control', 'private, max-age=604800, immutable');
-    res.sendFile(resolve(file), { cacheControl: false, acceptRanges: true, dotfiles: 'allow', headers: { 'Content-Type': m[2] === 'mp4' ? 'video/mp4' : 'image/jpeg' } }, (err) => {
-      if (!err || res.headersSent) return;
-      const status = (err as { status?: number }).status;
-      // 416 carries its Content-Range (bytes */size) already.
-      if (status === 416) return void res.status(416).end();
-      res.status(status === 404 ? 404 : 500).json({ error: status === 404 ? 'not_found' : 'internal' });
-    });
+    res.setHeader('Cache-Control', IMMUTABLE);
+    sendFileOr(res, resolve(file), { headers: { 'Content-Type': m[2] === 'mp4' ? 'video/mp4' : 'image/jpeg' } }, 'not_found');
   });
 
   // Recordings on the camera's SD card (spec 2026-10-02-baichuan-recordings-design):
   // listed by HTTP Search, fetched over Baichuan into the cache. /days is
   // registered before /:id.
-  const IMMUTABLE = 'private, max-age=604800, immutable';
   const online = () => d.status().state().online;
   const offline = (res: Response) => void res.status(503).json({ error: 'camera_offline' });
   // 503 is for a camera that is offline: the status poller says so, or no
@@ -262,13 +267,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     res.setHeader('Cache-Control', IMMUTABLE);
     // send answers If-None-Match (304) and If-Range from this header.
     res.setHeader('ETag', etagOf(id, size));
-    res.sendFile(path, { cacheControl: false, etag: false, lastModified: false, acceptRanges: true, dotfiles: 'allow', headers: { 'Content-Type': 'video/mp4' } }, (err) => {
-      unpin();
-      if (!err || res.headersSent) return;
-      const status = (err as { status?: number }).status;
-      if (status === 416) return void res.status(416).end(); // carries Content-Range: bytes */size
-      res.status(status === 404 ? 404 : 500).json({ error: status === 404 ? 'unknown_recording' : 'internal' });
-    });
+    sendFileOr(res, path, { etag: false, lastModified: false, headers: { 'Content-Type': 'video/mp4' } }, 'unknown_recording', unpin);
     return true;
   };
   const gone = (res: Response) => res.destroyed || res.writableEnded;
@@ -294,12 +293,9 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
       if (typeof date !== 'string' || !validDate(date)) return bad(res, 'date is YYYY-MM-DD');
       day = date;
     } else {
-      const f = intParam(req.query.from), t = intParam(req.query.to);
-      if (f === undefined || t === undefined || f === null || t === null) return bad(res, 'from and to (unix ms), or date, are required');
-      if (t < f) return bad(res, 'to is before from');
-      if (t - f > 2 * DAY) return bad(res, 'at most 48 hours per request');
-      from = f;
-      to = t;
+      const rg = range(req, res, 2 * DAY, 'at most 48 hours per request', 'from and to (unix ms), or date, are required');
+      if (!rg) return;
+      [from, to] = rg;
     }
     const stream = req.query.stream;
     if (stream !== 'sub' && stream !== 'main') return bad(res, 'stream is sub or main');
@@ -307,7 +303,8 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     const signal = leftSignal(res); // a Search still queued when the client leaves is dropped
     try {
       const list = day !== undefined ? await d.recordings().list.date(day, stream, signal) : await d.recordings().list.range(from!, to!, stream, signal);
-      res.json(list.map((e) => ({ id: e.id, start: e.start, end: e.end, stream: e.stream, size: e.size, kinds: e.kinds, clipId: clipNear(d.catalog, cam().id, e.stream, e.start, 5000)?.id ?? null })));
+      const near = clipsNear(d.catalog, cam().id, list.map((e) => ({ stream: e.stream, ts: e.start })), 5000);
+      res.json(list.map((e, i) => ({ id: e.id, start: e.start, end: e.end, stream: e.stream, size: e.size, kinds: e.kinds, clipId: near[i]?.id ?? null })));
     } catch (err) {
       recordingError(res, err);
     }
