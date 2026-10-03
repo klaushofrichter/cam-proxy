@@ -18,6 +18,22 @@ paths:
       security: []
       responses:
         '200': { description: '{ ok: true, version, startedAt } (the real running version: the release version, dev locally; startedAt: when this process started serving, unix ms)' }
+  /api/local/health:
+    get:
+      summary: The health summary, local only (loopback callers, no key)
+      description: >
+        For the e-paper display on the Pi (spec 2026-10-03-health-summary-design).
+        Answered only when the TCP socket's remote address is 127.0.0.1, ::1 or
+        ::ffff:127.0.0.1; X-Forwarded-For and server.trustProxy are never used.
+        Any other caller gets what an unknown /api route gets (401 without a
+        token, 404 with one). The schema is in
+        docs/superpowers/plans/2026-10-03-health-summary.md ("The API schema").
+        No secrets. Cache-Control: no-store.
+      security: []
+      responses:
+        '200': { description: '{ schema: 1, generatedAt, version, startedAt, ok, problemCount, thresholds: {diskPercent, tempC, ftpStalledHours}, platform: {pi, model, hostStats}, items: [{id (camera, stream, events, ftp, storage, disk, cpuTemp, underVoltage, inventory, version), label, value, text, problem}], camera: {id, name, address, online, since, model, firmware, clockOffsetMs, error, reboot, poeSwitch: {model, port} or null}, stream: {enabled, up, lastFrameAt}, events: {onvif, source, since, resubscribes}, ftp: {enabled, listening, cameraUpload, checkedAt, lastClipAt, clipsStored, failures, stalled, eventsWithoutClip}, proxy: {sseClients, storagePaused, lastRetentionRun, recordingsCache: {bytes, files, capBytes}, lastInventory: {kind, op, outcome, startedAt, message} or null}, disk: {sizeBytes, freeBytes, usedBytes, usedPercent} or null, host: {cpuTempC, underVoltage, memory: {totalBytes, availableBytes, usedPercent}, uptimeS, load: {m1, m5, m15}} or null }' }
+        '401': { description: not a loopback caller and no token (as an unknown route) }
+        '404': { description: not a loopback caller, with a token (as an unknown route) }
   /api/cameras:
     get:
       summary: The camera and its state
@@ -290,7 +306,7 @@ paths:
         Admin token or admin session. Writes with the session cookie need
         `X-CamProxy-UI: 1`. A client token answers 403 `{"error":"admin_only"}`.
       responses:
-        '200': { description: '{ version, camera (incl. webUiUrl, reboot {kind, requestedAt, confirmed, phase, offAt, endedAt, downSec} or null, poeSwitch {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state (on, off, elsewhere, server_differs, not_set_up, unknown), checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result (ok, offline, refused, auth, timeout, protocol, not_found), stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null, cache: {bytes, files, capBytes}}, analytics: [provider state], analyticsUnmapped: top 20 unmapped objects [{mid, name, count, lastSeen}] }' }
+        '200': { description: '{ version, camera (incl. webUiUrl, reboot {kind, requestedAt, confirmed, phase, offAt, endedAt, downSec} or null, poeSwitch {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state (on, off, elsewhere, server_differs, not_set_up, unknown), checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result (ok, offline, refused, auth, timeout, protocol, not_found), stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null, cache: {bytes, files, capBytes}}, analytics: [provider state], analyticsUnmapped: top 20 unmapped objects [{mid, name, count, lastSeen}], health: the health summary, as GET /api/local/health }' }
         '401': { description: not signed in }
         '403': { description: admin_only, or csrf }
   /control/analytics:

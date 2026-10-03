@@ -53,6 +53,9 @@ import { createLoginLinks } from './api/login-links';
 import { composeApi, hasAudio } from './api/compose-api';
 import { createComposer, ffmpegRunner } from './compose/jobs';
 import { clockText, defaultFont } from './compose/ffmpeg';
+import { HostMonitor, type StatFs } from './health/host';
+import { buildHealth, type HealthSummary, type LastInventory } from './health/summary';
+import { localApi } from './api/local-api';
 
 export const VERSION = process.env.CAMPROXY_VERSION ?? 'dev';
 
@@ -98,6 +101,10 @@ export interface ProxyOptions {
   sessionSecret?: Buffer;
   restartTimeoutMs?: number; // how long a restart waits for stop() (15 s)
   cameraFtpCheckMs?: number; // how often the camera's FTP settings are read (#93; 5 min)
+  // The host figures (spec 2026-10-03-health-summary-design): where /proc and
+  // /sys are ('/'; tests and e2e point at a fixture tree), the data volume's
+  // statfs, and how often they are read (1 min).
+  host?: { root?: string; statfs?: StatFs; everyMs?: number };
 }
 
 const getPath = (o: unknown, p: string) => p.split('.').reduce<unknown>((x, k) => (x && typeof x === 'object' ? (x as Record<string, unknown>)[k] : undefined), o);
@@ -473,6 +480,61 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       audit.write({ action: 'auth-refused', category: ['authentication'], type: ['denied'], outcome: 'failure', ip, userAgent: req.get('user-agent'), message: `Refused ${req.method} ${path} (${info.reason})`, ecs: { http: { request: { method: req.method } }, url: { path } }, details: { auth: { tokenKind: info.tokenKind, reason: info.reason, ...(t.suppressed ? { suppressed: t.suppressed } : {}) } } });
     },
   };
+  const ftpStatus = () => ({
+    enabled: running.ftp.enabled,
+    listening: clips?.side.listening() ?? false,
+    port: running.ftp.port,
+    tls: running.ftp.tls,
+    publicHost: running.ftp.publicHost ?? null,
+    passwordSet: !!loaded.secrets.ftpPassword,
+    lastUpload: clips?.side.lastUpload() ?? null,
+    lastClip: clips?.side.indexer.lastIndexed() ?? null,
+    clips: (catalog.db.prepare('SELECT COUNT(*) AS n FROM clips').get() as { n: number }).n,
+    failures: (clips?.side.uploadFailures() ?? 0) + (clips?.side.indexer.failures() ?? 0),
+    camera: running.ftp.enabled ? ftpWatch.view() : null,
+    stalled: clipsHealth(),
+  });
+  const streamStatus = () => ({ enabled: !!stills, up: stills?.grabber.up() ?? false, go2rtcUp: stills?.go2rtc.up() ?? false, lastFrameTs: stills?.grabber.lastFrameTs() ?? null });
+
+  // The health summary (spec 2026-10-03-health-summary-design): the host
+  // figures once a minute, the rest as it is now; thresholds read on use.
+  const hostMonitor = new HostMonitor({
+    paths: { root: opts.host?.root ?? '/' },
+    dataDir: () => running.server.dataDir,
+    setting: () => running.host.stats,
+    statfs: opts.host?.statfs,
+    everyMs: opts.host?.everyMs,
+  });
+  // The newest finished inventory, a check or a repair of any kind.
+  const lastInventory = async (): Promise<LastInventory | null> => {
+    let last: LastInventory | null = null;
+    for (const [op, runs] of [['check', await inventory.list()], ['repair', await inventory.listRepairs()]] as const) {
+      for (const r of Object.values(runs).flat()) {
+        if (!last || r.startedAt > last.startedAt) last = { kind: r.kind, op, outcome: r.outcome, startedAt: r.startedAt, message: r.message };
+      }
+    }
+    return last;
+  };
+  const healthNow = async (): Promise<HealthSummary> => {
+    const ftp = ftpStatus();
+    const ps = running.camera.poeSwitch;
+    return buildHealth({
+      now: Date.now(),
+      version: VERSION,
+      startedAt,
+      thresholds: { diskPercent: running.health.diskPercent, tempC: running.health.tempC, ftpStalledHours: running.ftp.stalledHours },
+      camera: { id: running.camera.id, name: running.camera.name, host: running.camera.host, state: status.state(), reboot: reboot.state()?.phase ?? null, poeSwitch: ps.model === 'none' ? null : { model: ps.model, port: ps.port ?? null } },
+      stream: streamStatus(),
+      intake: intake.state(),
+      ftp: { enabled: ftp.enabled, listening: ftp.listening, camera: ftp.camera, stalled: ftp.stalled, lastClip: ftp.lastClip, clips: ftp.clips, failures: ftp.failures },
+      storage: { paused: storage.paused(), lastRun: storage.lastRun() },
+      recordingsCache: recordings.status().cache,
+      sseClients: sse.clients(),
+      lastInventory: await lastInventory(),
+      reading: hostMonitor.reading(),
+    });
+  };
+
   const app = express();
   app.disable('x-powered-by');
   let startedAt: number | null = null;
@@ -503,6 +565,9 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // Tokens never travel in URLs: checked once per request, before any access
   // check and before the session routes (the login link carries ?code=).
   app.use(['/api', '/control'], refuseTokenInUrl);
+  // The health summary for the display on the Pi: loopback callers only, no
+  // key; anyone else goes on to the access check as for an unknown route.
+  app.use('/api', localApi({ health: healthNow }));
   app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit }));
   app.use('/api', requireAccess('client', access), composeApi({ config: () => running, catalog, composer, stillsIn: (f, t) => stills?.store.listStills(f, t) ?? [], paused: () => storage.paused(), font }));
   app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, status: () => status, sse, stills: () => stills, recordings: () => recordings }));
@@ -536,20 +601,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
           timeoutMs: opts.restartTimeoutMs,
         });
       },
-      ftp: () => ({
-        enabled: running.ftp.enabled,
-        listening: clips?.side.listening() ?? false,
-        port: running.ftp.port,
-        tls: running.ftp.tls,
-        publicHost: running.ftp.publicHost ?? null,
-        passwordSet: !!loaded.secrets.ftpPassword,
-        lastUpload: clips?.side.lastUpload() ?? null,
-        lastClip: clips?.side.indexer.lastIndexed() ?? null,
-        clips: (catalog.db.prepare('SELECT COUNT(*) AS n FROM clips').get() as { n: number }).n,
-        failures: (clips?.side.uploadFailures() ?? 0) + (clips?.side.indexer.failures() ?? 0),
-        camera: running.ftp.enabled ? ftpWatch.view() : null,
-        stalled: clipsHealth(),
-      }),
+      ftp: ftpStatus,
+      health: healthNow,
       // The camera's answer goes to the FTP check at once (#93).
       cameraFtp: {
         target: ftpTarget,
@@ -573,7 +626,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       sseClients: () => sse.clients(),
       recordings: () => recordings.status(),
       inventory,
-      stream: () => ({ enabled: !!stills, up: stills?.grabber.up() ?? false, go2rtcUp: stills?.go2rtc.up() ?? false, lastFrameTs: stills?.grabber.lastFrameTs() ?? null }),
+      stream: streamStatus,
       sessions,
       links,
       version: VERSION,
@@ -667,6 +720,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       startStills();
       await startClips();
       ftpWatch.start();
+      hostMonitor.start();
       storage.start();
       try {
         analytics.backfillSummaries();
@@ -704,6 +758,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   async function doStop(opts: { reason?: string }): Promise<void> {
       daily.stop();
       ftpWatch.stop();
+      hostMonitor.stop();
       // First, while everything is still open.
       audit.write({ action: 'proxy-stop', category: ['process'], type: ['end'], outcome: 'success', user: 'system', message: `cam-proxy stopping${opts.reason ? ` (${opts.reason})` : ''}`, details: { reason: opts.reason ?? 'stop' } });
       // A power-cycle in its off time turns the camera's PoE on now, not
