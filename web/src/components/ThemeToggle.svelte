@@ -1,12 +1,11 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
-  import { currentTheme, toggleTheme } from '../lib/theme';
-  let theme = $state(currentTheme());
+  import { theme, toggleTheme } from '../lib/theme';
 </script>
 
-<button class="icon-btn" data-testid="theme-toggle" onclick={() => (theme = toggleTheme())}
-  aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} title={theme === 'dark' ? 'Light theme' : 'Dark theme'}>
-  <Icon name={theme === 'dark' ? 'sun' : 'moon'} />
+<button class="icon-btn" data-testid="theme-toggle" onclick={() => toggleTheme()}
+  aria-label={$theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} title={$theme === 'dark' ? 'Light theme' : 'Dark theme'}>
+  <Icon name={$theme === 'dark' ? 'sun' : 'moon'} />
 </button>
 
 <style>
