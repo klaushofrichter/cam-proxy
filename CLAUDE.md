@@ -1,6 +1,6 @@
 # cam-proxy
 
-Camera gateway for one Reolink camera: an upload-only FTPS server for the camera's clips, a stills pipeline (go2rtc + ffmpeg, minute packs and sprites), ONVIF events as SSE, and a client API for cams, plus a control API and admin UI (Svelte). Runs in the cluster next to `cam2` (https://cam-proxy.skylar.technology, LAN only); a Pi next to the real camera is planned. Spec: `docs/superpowers/specs/2026-09-27-cam-proxy-design.md`. Plans: `docs/superpowers/plans/`. Requirements: `docs/requirements.md`.
+Camera gateway for one Reolink camera: an upload-only FTPS server for the camera's clips, a stills pipeline (go2rtc + ffmpeg, minute packs and sprites), ONVIF events as SSE, and a client API for cams, plus a control API and admin UI (Svelte). Runs in the cluster next to `cam2` (https://cam-proxy.skylar.technology, LAN only) and on the Pi next to the real camera (`docs/raspberry-pi.md`), where cam-proxy-pi-display reads `GET /api/local/health`. Spec: `docs/superpowers/specs/2026-09-27-cam-proxy-design.md`. Plans: `docs/superpowers/plans/`. Requirements: `docs/requirements.md`.
 
 ## Commands
 
@@ -13,7 +13,7 @@ Camera gateway for one Reolink camera: an upload-only FTPS server for the camera
 
 ## Branches and releases
 
-- Work on a feature branch, PR to `main` (required checks `test`, `codeql`). `main` publishes `:main` and `:sha-<sha>` and is never deployed.
+- Work on a feature branch, PR to `main` (checks `test`, `e2e`, `codeql`, `container`). `production` requires `test`, `e2e` and `codeql` (strict, enforce_admins off). `main` publishes `:main` and `:sha-<sha>` and is never deployed.
 - To release: PR `main` -> `production`, then merge. The release job pins the image digest in kube-setup, applies it, waits for the rollout and checks that `/health` serves the new version. The version is `vYYYY.MM.DD.N`, generated at release; never store one in the sources.
 - The cluster config is `deploy/cluster/config.json` (camera `cam2`, `ftp.stream: "sub"`). Put user-visible changes under `## Unreleased` in CHANGELOG.md.
 
