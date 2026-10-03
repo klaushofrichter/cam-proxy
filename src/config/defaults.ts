@@ -30,6 +30,9 @@ export interface Config {
   composition: { font?: string };
   ftp: { enabled: boolean; port: number; passive: string; user: string; tls: boolean; stream: 'main' | 'sub'; stalledHours: number; maxGB?: number; publicHost?: string; certFile?: string; keyFile?: string };
   recordings: { cacheMB: number };
+  // The health summary's thresholds and the host figures (spec 2026-10-03-health-summary-design).
+  health: { diskPercent: number; tempC: number };
+  host: { stats: 'auto' | 'on' | 'off' };
   // External analytics (spec 2026-09-30-analytics-design): which event kinds,
   // and per provider its switch and call limits. 0 = no calls.
   analytics: {
@@ -55,6 +58,8 @@ export const DEFAULTS: Config = {
   composition: {},
   ftp: { enabled: false, port: 2121, passive: '30000-30009', user: 'camera', tls: true, stream: 'main', stalledHours: 6 },
   recordings: { cacheMB: 2048 },
+  health: { diskPercent: 90, tempC: 75 },
+  host: { stats: 'auto' },
   analytics: {
     kinds: { person: true, vehicle: false, pet: false },
     googleVision: { enabled: false, monthlyLimit: 0, dailyCap: 0 },

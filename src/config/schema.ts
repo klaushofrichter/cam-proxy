@@ -116,6 +116,15 @@ export const SETTINGS: Node = {
     certFile: { type: 'string', pattern: '^.+$', optional: true, doc: 'FTPS certificate (PEM); a self-signed one otherwise' },
     keyFile: { type: 'string', pattern: '^.+$', optional: true, doc: 'FTPS key (PEM)' },
   },
+  // The health summary (spec 2026-10-03-health-summary-design): the Status
+  // page's Health card and GET /api/local/health flag a problem at these.
+  health: {
+    diskPercent: int(50, 99, "the data volume's used space, percent, from which the health summary flags a problem"),
+    tempC: int(40, 95, 'the CPU temperature, °C, from which the health summary flags a problem (on a Raspberry Pi)'),
+  },
+  host: {
+    stats: { type: 'string', enum: ['auto', 'on', 'off'], doc: 'read the host figures (CPU temperature, under-voltage, memory, uptime, load): auto on a Raspberry Pi only, on, or off' },
+  },
   analytics: {
     kinds: {
       person: { type: 'boolean', doc: 'analyse person events' },
