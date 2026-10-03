@@ -29,9 +29,11 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npm run lint:types
-      # Blocking for what ships; dev-only findings are reported only.
-      - run: npm audit --omit=dev --audit-level=high
-      - run: npm audit --audit-level=high || echo "::warning::dev-only dependencies have audit findings (see above)"
+      # Blocking at high for all dependencies, dev included (repository baseline).
+      # No allowlist: there are no open high findings. If one cannot be fixed
+      # by an update or an override, allowlist it by advisory id here, with a
+      # comment and a step that fails once the advisory is gone or fixed.
+      - run: npm audit --audit-level=high
       # No camera footage or other media is committed.
       - name: No media files in the repository
         run: |
