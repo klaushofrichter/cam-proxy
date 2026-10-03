@@ -7,7 +7,7 @@ import { join } from 'path';
 import { openCatalog, type Catalog } from './catalog/db';
 import { clearUnmapped, countAnalysesByStatus, listUnmapped, usageBetween } from './catalog/analyses';
 import { countClips, lastClipReceived } from './catalog/clips';
-import { closeAllOpen, countEventsByKind } from './catalog/events';
+import { closeAllOpen, countEventsByKind, countRecoveredEvents } from './catalog/events';
 import { ReolinkClient } from './camera/client';
 import { splitHost } from './camera/http';
 import { StatusPoller } from './camera/status';
@@ -417,7 +417,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       const cam = running.camera.id;
       // Usage days are camera days (localDay); month to date as of the reported day.
       const vision = { day: usageBetween(catalog, 'google-vision', day, day), monthToDate: usageBetween(catalog, 'google-vision', `${day.slice(0, 7)}-01`, day), monthlyLimit: running.analytics.googleVision.monthlyLimit };
-      return activityDaily(day, { events: countEventsByKind(catalog, cam, from, to), clips: countClips(catalog, cam, from, to), vision, analyses: countAnalysesByStatus(catalog, cam, from, to), sseClients: sse.clients() });
+      return activityDaily(day, { events: countEventsByKind(catalog, cam, from, to), recovered: countRecoveredEvents(catalog, cam, from, to), clips: countClips(catalog, cam, from, to), vision, analyses: countAnalysesByStatus(catalog, cam, from, to), sseClients: sse.clients() });
     },
   });
 

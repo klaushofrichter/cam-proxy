@@ -62,12 +62,13 @@ export function pruneUsage(c: Catalog, beforeDay: string): number {
 }
 
 // Events of the given kinds since a time that have no analysis (any provider).
+// Recovered events (#75) are never analysed: a Vision call costs money.
 export function unanalysed(c: Catalog, cam: string, kinds: string[], since: number): { id: number; kind: string; start_ts: number }[] {
   if (!kinds.length) return [];
   return c.db
     .prepare(
       `SELECT e.id, e.kind, e.start_ts FROM events e
-       WHERE e.cam = ? AND e.start_ts >= ? AND e.kind IN (${kinds.map(() => '?').join(',')})
+       WHERE e.cam = ? AND e.start_ts >= ? AND e.source != 'recovered' AND e.kind IN (${kinds.map(() => '?').join(',')})
          AND NOT EXISTS (SELECT 1 FROM analyses a WHERE a.event_id = e.id)
        ORDER BY e.start_ts, e.id`,
     )
