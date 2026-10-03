@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api, ApiError } from '../lib/api';
-  import { clipsLines, eventsLines, eventsOffer, eventsRepairLines, gapRows, mb, progressText, repairLines, repairOffer, repairRows, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type InventoryState, type RepairReport, type StillsReport } from '../lib/inventory';
+  import { clipsLines, eventsLines, eventsOffer, eventsRepairLines, gapRows, mb, progressText, recoverText, repairLines, repairOffer, repairRows, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type InventoryState, type RepairReport, type StillsReport } from '../lib/inventory';
 
   // The inventories (spec 2026-10-02-inventory-design): start one, follow its
   // progress (polled every second while it runs), cancel it, and show the
@@ -12,7 +12,7 @@
   // hands it the dry-run numbers); fetchLost() runs after the confirm. The
   // events check (#75) is the dry run of "Add N missing events": onrecover
   // asks, addMissing() runs after the confirm.
-  let { onrepair, onrecover }: { onrepair: (offer: { count: number; bytes: number }) => void; onrecover: (offer: { count: number }) => void } = $props();
+  let { onrepair, onrecover }: { onrepair: (offer: { count: number; bytes: number }) => void; onrecover: (offer: { count: number; text: string }) => void } = $props();
   let inv = $state<InventoryState | null>(null);
   let stills = $state<StillsReport | null>(null);
   let clips = $state<ClipsReport | null>(null);
@@ -183,7 +183,7 @@
       {/if}
       {#if recoverOffer}
         <div class="buttons">
-          <button onclick={() => onrecover(recoverOffer)} disabled={starting || busy} data-testid="inventory-recover">Add {recoverOffer.count} missing events</button>
+          <button onclick={() => onrecover({ ...recoverOffer, text: recoverText(recoverOffer.count, events?.counts ?? {}) })} disabled={starting || busy} data-testid="inventory-recover">Add {recoverOffer.count} missing events</button>
         </div>
         <p class="small">Adds one event per kind and missing recording span, marked "recovered"; no SSE message, no analysis. At most 1000 per run; existing events are not changed.</p>
       {/if}

@@ -62,7 +62,8 @@ test('Check events: the result and the offer to add missing events show', async 
   await expect(page.getByTestId('inventory-recover')).toHaveText(/^Add \d+ missing events$/);
   // The offer asks first, with the count; Cancel sends nothing.
   await page.getByTestId('inventory-recover').click();
-  await expect(page.getByTestId('confirm-message')).toContainText(/Add \d+ missing events from the camera's SD recordings/);
+  await expect(page.getByTestId('confirm-message')).toContainText(/Add \d+ missing events \([a-z]+ \d+(, [a-z]+ \d+)*\) from the camera's SD recordings/);
+  await expect(page.getByTestId('confirm-message')).toContainText('recovered');
   await page.getByTestId('confirm-cancel').click();
   await expect(page.getByTestId('confirm-dialog')).toHaveCount(0);
   await expect(page.getByTestId('inventory-recover-result')).toHaveCount(0);

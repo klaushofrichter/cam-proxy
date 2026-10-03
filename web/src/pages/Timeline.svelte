@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api } from '../lib/api';
-  import { analysedSeconds, analysedStills, eventLabel, eventsInMinute, isRecovered, marksByMinute, RECOVERED_NOTE, secondKinds, stepMinute } from '../lib/timeline';
+  import { analysedSeconds, analysedStills, eventLabel, eventsInMinute, isRecovered, marksByMinute, primaryEvent, RECOVERED_NOTE, secondKinds, secondRecovered, stepMinute } from '../lib/timeline';
   import AnalysisModal from '../components/AnalysisModal.svelte';
   import { refreshTick } from '../lib/state';
 
@@ -24,7 +24,7 @@
   // The grid's ×n counts and analysis rings, in one pass over the events.
   const gridMarks = $derived(marksByMinute(minutes.map((m) => m.minute), events, Date.now()));
   const hours = $derived(minutes.reduce<Record<number, Minute[]>>((h, m) => ((h[new Date(m.minute).getHours()] ??= []).push(m), h), {}));
-  const eventIn = (m: Minute) => events.find((e) => e.start < m.minute + 60_000 && (e.end ?? Date.now()) >= m.minute);
+  const eventIn = (m: Minute) => primaryEvent(events.filter((e) => e.start < m.minute + 60_000 && (e.end ?? Date.now()) >= m.minute));
   const firstTile = (m: Minute) => Math.max(0, m.present.indexOf(true));
   const tileStyle = (m: Minute, i: number, scale: number) =>
     `background-image:url('${m.url}');background-size:${m.cols * m.tileW * scale}px ${m.rows * m.tileH * scale}px;` +
@@ -136,6 +136,7 @@
         {@const m = open}
         {@const evs = eventsInMinute(m, events, Date.now())}
         {@const kinds = secondKinds(m, events, Date.now())}
+        {@const recs = secondRecovered(m, events, Date.now())}
         {@const seen = analysedSeconds(m, analysedStills(evs))}
         <div class="detail" data-testid="minute-detail">
           <div class="head">
@@ -152,7 +153,7 @@
           {/if}
           <div class="tiles">
             {#each m.present as ok, i (i)}
-              <button class="tile {kinds[i] ? `ev-${kinds[i]}` : ''}" class:missing={!ok} class:analysed={seen[i] !== null} disabled={!ok} style={tileStyle(m, i, 0.6)} title={new Date(m.minute + i * m.intervalS * 1000).toLocaleTimeString()} onclick={() => { const id = seen[i]; if (id !== null) shown = evs.find((x) => x.id === id) ?? null; else still = m.minute + i * m.intervalS * 1000; }} data-testid="tile">{#if seen[i] !== null}<span class="spark">✦</span>{/if}</button>
+              <button class="tile {kinds[i] ? `ev-${kinds[i]}` : ''}" class:missing={!ok} class:recovered={recs[i]} class:analysed={seen[i] !== null} disabled={!ok} style={tileStyle(m, i, 0.6)} title={`${new Date(m.minute + i * m.intervalS * 1000).toLocaleTimeString()}${recs[i] ? ' · recovered' : ''}`} onclick={() => { const id = seen[i]; if (id !== null) shown = evs.find((x) => x.id === id) ?? null; else still = m.minute + i * m.intervalS * 1000; }} data-testid="tile">{#if seen[i] !== null}<span class="spark">✦</span>{/if}</button>
             {/each}
           </div>
           {#if still !== null}
@@ -180,7 +181,7 @@
   .evtag { display: inline-block; margin-right: 10px; padding-left: 6px; border-left: 4px solid; }
   /* Recovered from the SD recordings (#75): a dashed edge. */
   .evtag.recovered { border-left-style: dashed; font-style: italic; }
-  .thumb.recovered { border-style: dashed; }
+  .thumb.recovered, .tile.recovered { border-style: dashed; }
   .strip, .tiles { display: flex; flex-wrap: wrap; gap: 3px; }
   button { padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); cursor: pointer; color: var(--text); }
   .thumb, .tile { padding: 0; border-radius: 3px; border: 2px solid transparent; background-repeat: no-repeat; background-color: #111; }

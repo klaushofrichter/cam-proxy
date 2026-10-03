@@ -51,7 +51,7 @@
     },
     'inventory-recover': {
       title: 'Add missing events',
-      message: `Add ${recoverCount} missing events from the camera's SD recordings? Each one gets the kind, start and end of its recordings (pre- and post-record included) and is marked "recovered" on the Events page and the Timeline; cams sees it marked too. No SSE message is sent and it is never analysed. At most 1000 per run; existing events are not changed.`,
+      message: `Add ${recoverText} from the camera's SD recordings? Each one gets the kind, start and end of its recordings (pre- and post-record included) and is marked "recovered" on the Events page and the Timeline; cams sees it marked too. No SSE message is sent and it is never analysed. At most 1000 per run; existing events are not changed.`,
       confirmLabel: 'Add events',
     },
     'restart-proxy': {
@@ -65,7 +65,7 @@
   let inventory = $state<{ fetchLost: () => void; addMissing: () => void } | undefined>();
   let offer = $state({ count: 0, bytes: 0 });
   // The events repair (#75): the check's count goes into the message.
-  let recoverCount = $state(0);
+  let recoverText = $state('');
 
   // The camera reboot: "Rebooting…" and the camera's state while the proxy
   // waits for it, then how long it was away.
@@ -224,7 +224,7 @@
       <p class="bad" data-testid="restart-state">The proxy did not come back. Is it running under a supervisor (compose, the cluster)?</p>
     {/if}
   </div>
-  <InventoryCard bind:this={inventory} onrepair={(o) => { offer = o; asking = 'inventory-repair'; }} onrecover={(o) => { recoverCount = o.count; asking = 'inventory-recover'; }} />
+  <InventoryCard bind:this={inventory} onrepair={(o) => { offer = o; asking = 'inventory-repair'; }} onrecover={(o) => { recoverText = o.text; asking = 'inventory-recover'; }} />
   <div class="card">
     <div class="loghead"><h3>Log</h3><span class="small">updates every 10 s</span></div>
     <div class="log">

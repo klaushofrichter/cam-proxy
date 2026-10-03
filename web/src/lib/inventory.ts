@@ -229,3 +229,11 @@ export function eventsRepairLines(r: RepairReport): string[] {
     ...(r.stopped === 'event-cap' ? [`Stopped: the ${RECOVER_MAX}-event cap; check again for the rest`] : []),
   ];
 }
+
+// "12 missing events (person 3, motion 9)" for the confirm; under the cap the
+// run adds `count` of the check's total.
+export function recoverText(count: number, counts: Record<string, number>): string {
+  const total = counts.missingEvents ?? count;
+  const kinds = kindsText(counts, 'missing');
+  return count < total ? `${count} of ${total} missing events (${kinds}; the first ${count} are added)` : `${count} missing events (${kinds})`;
+}

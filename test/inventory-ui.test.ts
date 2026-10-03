@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clipsLines, duration, eventsLines, eventsOffer, eventsRepairLines, gapRows, kindsText, mb, progressText, RECOVER_MAX, repairLines, repairOffer, repairRows, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type RepairReport, type StillsReport } from '../web/src/lib/inventory';
+import { clipsLines, duration, eventsLines, eventsOffer, eventsRepairLines, gapRows, recoverText, kindsText, mb, progressText, RECOVER_MAX, repairLines, repairOffer, repairRows, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type RepairReport, type StillsReport } from '../web/src/lib/inventory';
 
 const fmt = (ms: number) => new Date(ms).toISOString().slice(11, 19);
 const T = Date.UTC(2026, 8, 27, 0, 10);
@@ -210,5 +210,10 @@ describe('Inventory box helpers, events (#75)', () => {
     ]);
     expect(eventsRepairLines({ ...rep, outcome: 'cancelled' })).toEqual(['Cancelled: nothing was added']);
     expect(eventsRepairLines({ ...rep, outcome: 'failed', error: 'camera_offline: x' })).toEqual(['Failed: camera_offline: x']);
+  });
+
+  it('words the confirm with the per-kind numbers, and says when the cap cuts the run', () => {
+    expect(recoverText(12, eventsReport.counts)).toBe('12 missing events (person 3, motion 9)');
+    expect(recoverText(1000, { ...eventsReport.counts, missingEvents: 4000, missingMotion: 4000 })).toBe('1000 of 4000 missing events (person 3, motion 4000; the first 1000 are added)');
   });
 });
