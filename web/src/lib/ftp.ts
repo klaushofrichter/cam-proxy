@@ -1,6 +1,8 @@
 // The Status page's camera FTP warnings (#93): the camera's FTP upload off,
 // pointing somewhere else, or no clips while the camera records events.
 
+import { localDate, localHhmm } from './format';
+
 export interface CameraFtp {
   state: 'on' | 'off' | 'elsewhere' | 'server_differs' | 'not_set_up' | 'unknown';
   checkedAt: number | null;
@@ -18,9 +20,7 @@ export interface FtpAlert { kind: 'off' | 'elsewhere' | 'server_differs' | 'not_
 
 // Local date and time, minutes: 2026-09-30 08:17.
 export function clipTime(ts: number): string {
-  const d = new Date(ts);
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  return `${localDate(ts)} ${localHhmm(ts)}`;
 }
 
 // The warnings on the FTP card, above "Point the camera's FTP here": red

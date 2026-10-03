@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { localDate } from '../lib/format';
   import { clipChips } from '../lib/chips';
   import { api } from '../lib/api';
   import { feed, refreshTick } from '../lib/state';
@@ -6,12 +7,7 @@
   interface Clip { id: number; start: number; end: number | null; stream: string; size: number; origin?: string; events: number[]; url: string; snapshotUrl: string | null }
   interface Ev { id: number; kind: string }
 
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const today = () => {
-    const d = new Date();
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  };
-  let day = $state(today());
+  let day = $state(localDate());
   let clips = $state<Clip[]>([]);
   let kinds = $state<Record<number, string>>({});
   let playing = $state<Clip | null>(null);
@@ -54,7 +50,7 @@
     const last = $feed.find((f) => f.type === 'clip');
     if (last && last.id !== seen) {
       seen = last.id;
-      if (day === today()) void load();
+      if (day === localDate()) void load();
     }
   });
 </script>
@@ -63,7 +59,7 @@
   <h2>Clips</h2>
   <div class="card">
     <div class="head">
-      <input type="date" bind:value={day} max={today()} data-testid="clips-day" />
+      <input type="date" bind:value={day} max={localDate()} data-testid="clips-day" />
       <span class="muted small">Recordings the camera uploads by FTP (and lost ones an inventory repair fetched from its SD card: "from camera"), with the events they cover.</span>
     </div>
     {#if playing}

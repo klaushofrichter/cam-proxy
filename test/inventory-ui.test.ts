@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { addNothing, autoStep, clipsLines, duration, LOAD_ERROR, loadMessage, problemRows, eventsLines, eventsOffer, eventsRepairLines, gapRows, recoverText, kindsText, mb, progressText, RECOVER_MAX, repairLines, repairOffer, repairRows, retrieveNothing, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type RepairReport, type StillsReport } from '../web/src/lib/inventory';
+import { addNothing, autoStep, clipsLines, duration, LOAD_ERROR, loadMessage, problemRows, eventsLines, eventsOffer, eventsRepairLines, gapRows, recoverText, kindsText, progressText, RECOVER_MAX, repairLines, repairOffer, repairRows, retrieveNothing, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type RepairReport, type StillsReport } from '../web/src/lib/inventory';
+import { mbText } from '../web/src/lib/format';
 
 const fmt = (ms: number) => new Date(ms).toISOString().slice(11, 19);
 const T = Date.UTC(2026, 8, 27, 0, 10);
@@ -115,7 +116,7 @@ describe('Inventory box helpers, clips', () => {
   });
 
   it('sums up a clips report, with the camera part only after a compare', () => {
-    expect(mb(3 * 2 ** 20)).toBe('3.0 MB');
+    expect(mbText(3 * 2 ** 20)).toBe('3.0 MB');
     expect(clipsLines(clipsReport, fmt)).toEqual([
       'Window: 00:10:00 to 00:20:00 (the clips retention, 7 days)',
       'Clips: 40 (2 from the camera); 1 without their file, 0 files without a clip',

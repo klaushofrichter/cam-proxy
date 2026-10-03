@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api, ApiError } from '../lib/api';
-  import { addNothing, autoStep, clipsLines, LOAD_ERROR, loadMessage, eventsLines, eventsOffer, eventsRepairLines, gapRows, mb, problemRows, progressText, recoverText, repairLines, repairOffer, repairRows, retrieveNothing, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type InventoryState, type RepairReport, type StillsReport } from '../lib/inventory';
+  import { mbText } from '../lib/format';
+  import { addNothing, autoStep, clipsLines, LOAD_ERROR, loadMessage, eventsLines, eventsOffer, eventsRepairLines, gapRows, problemRows, progressText, ranText, recoverText, repairLines, repairOffer, repairRows, retrieveNothing, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type InventoryState, type RepairReport, type StillsReport } from '../lib/inventory';
 
   // The inventories (spec 2026-10-02-inventory-design): start one, follow its
   // progress (polled every second while it runs), cancel it, and show the
@@ -129,7 +130,7 @@
   {#if stills}
     <div class="result" data-testid="inventory-result" data-run={stills.runId}>
       <p class="line">{stills.message}</p>
-      <p class="small">{new Date(stills.startedAt).toLocaleString()}, took {(stills.tookMs / 1000).toFixed(1)} s</p>
+      <p class="small">{ranText(stills)}</p>
       <ul>
         {#each stillsLines(stills) as l, i (i)}<li>{l}</li>{/each}
       </ul>
@@ -156,7 +157,7 @@
   {#if clips}
     <div class="result" data-testid="inventory-clips-result" data-run={clips.runId}>
       <p class="line">{clips.message}</p>
-      <p class="small">{new Date(clips.startedAt).toLocaleString()}, took {(clips.tookMs / 1000).toFixed(1)} s</p>
+      <p class="small">{ranText(clips)}</p>
       <ul>
         {#each clipsLines(clips) as l, i (i)}<li>{l}</li>{/each}
       </ul>
@@ -175,7 +176,7 @@
       {/if}
       {#if offer}
         <div class="buttons">
-          <button onclick={() => onrepair(offer)} disabled={starting || busy || !offer.count} data-testid="inventory-repair">Retrieve {offer.count} missing clips ({mb(offer.bytes)})</button>
+          <button onclick={() => onrepair(offer)} disabled={starting || busy || !offer.count} data-testid="inventory-repair">Retrieve {offer.count} missing clips ({mbText(offer.bytes)})</button>
         </div>
         <p class="small">Fetches them from the camera's SD card over Baichuan, one at a time, after any viewer's download; at most 50 clips or 200 MB per run.</p>
         {#if offer.tooBig}<p class="small" data-testid="inventory-repair-too-big">{offer.tooBig} recordings are larger than one run's 200 MB and are skipped.</p>{/if}
@@ -185,7 +186,7 @@
   {#if repair}
     <div class="result" data-testid="inventory-repair-result" data-run={repair.runId}>
       <p class="line">{repair.message}</p>
-      <p class="small">{new Date(repair.startedAt).toLocaleString()}, took {(repair.tookMs / 1000).toFixed(1)} s</p>
+      <p class="small">{ranText(repair)}</p>
       <ul>
         {#each repairLines(repair) as l, i (i)}<li role={/^(Stopped|Skipped)/.test(l) ? 'status' : undefined}>{l}</li>{/each}
       </ul>
@@ -202,7 +203,7 @@
   {#if events}
     <div class="result" data-testid="inventory-events-result" data-run={events.runId}>
       <p class="line">{events.message}</p>
-      <p class="small">{new Date(events.startedAt).toLocaleString()}, took {(events.tookMs / 1000).toFixed(1)} s</p>
+      <p class="small">{ranText(events)}</p>
       <ul>
         {#each eventsLines(events) as l, i (i)}<li>{l}</li>{/each}
       </ul>
@@ -230,7 +231,7 @@
   {#if recover}
     <div class="result" data-testid="inventory-recover-result" data-run={recover.runId}>
       <p class="line">{recover.message}</p>
-      <p class="small">{new Date(recover.startedAt).toLocaleString()}, took {(recover.tookMs / 1000).toFixed(1)} s</p>
+      <p class="small">{ranText(recover)}</p>
       <ul>
         {#each eventsRepairLines(recover) as l, i (i)}<li role={/^Stopped/.test(l) ? 'status' : undefined}>{l}</li>{/each}
       </ul>
