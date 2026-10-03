@@ -178,7 +178,7 @@ All under `/control`, so admin token or admin session (with
 |---|---|
 | `POST /control/actions/inventory` | `{kind, camera?}`: 202 `{runId}`; 400 `invalid` for an unknown kind; 409 `inventory_busy` `{runId}` while any inventory or repair runs. PR 1 knows `stills` only. `camera: true` (PR 2) adds the camera compare |
 | `POST /control/actions/inventory-cancel` | 200 `{cancelled, runId}` (`false`, `null` when nothing runs); a `control-action` record |
-| `GET /control/inventory` | `{running: {runId, kind, startedAt, outcome: 'running', progress} \| null, runs: {<kind>: [summary, newest first]}}`; a summary is `{runId, kind, startedAt, tookMs, outcome, counts, message}` |
+| `GET /control/inventory` | `{running: {runId, kind, op, startedAt, outcome: 'running', progress} \| null, runs: {<kind>: [summary, newest first]}, repairs: {<kind>: [summary, newest first]}}`; `op` is `check` or `repair` (PR 2); a summary is `{runId, kind, startedAt, tookMs, outcome, counts, message}` |
 | `GET /control/inventory/runs/:id` | the report, or the running view while it runs; 400 `invalid` for an id that isn't a run id, 404 `not_found` |
 | `POST /control/actions/inventory-repair` | PR 2 and PR 3 (below) |
 
@@ -285,9 +285,12 @@ unexplained gaps.
   'ftp'`. The Clips page shows "from camera".
 - Before each clip it checks again that the recording is still on the SD, is
   still missing locally, and storage is not paused.
+- The oldest candidates first (the SD card overwrites them first).
 - Caps: 50 clips or 200 MB per run, 1 s between downloads; it stops after 3
   failures in a row, and at once on `refused` or `camera_offline`. Only
-  recordings inside the clips retention, and never past `ftp.maxGB`.
+  recordings inside the clips retention, and never past `ftp.maxGB`. A
+  recording larger than 200 MB alone is skipped (`too-big`), one that would
+  pass the 200 MB after others is skipped (`byte-cap`) and the scan goes on.
 - No `clip` stream-log message, so no SSE (decision 3). One
   `inventory-repair` record per run.
 
@@ -414,6 +417,50 @@ unexplained gaps.
   proxy's clocks (a few seconds' skew), and the report says so.
 - A clean restart explains a gap only from its `previousStop` (a stall fixed
   by a restart stays unexplained); a crash keeps the gap's start.
+
+PR 2 (clips, #74):
+
+- The repair takes the oldest missing recordings first (the SD card
+  overwrites them first; the plan said newest first). Skipped ones count
+  toward the 50-clip cap. The compare's items list the missing ones oldest
+  first too, so the item cut keeps the ones the repair takes first.
+- The repair button asks through the Maintenance page's shared confirm
+  dialog, with the dry-run numbers (clips and MB, picked as the server picks
+  them) in the message.
+- A recording that pairs with a local clip of the other stream (after an
+  `ftp.stream` change) counts as `pairedOtherStream`, never as missing: no
+  duplicate download.
+- Bounds of "gone": a clip is not judged (a note gives the count) when the
+  SD card's oldest day is unknown, or when it sits at the window start or
+  next to a day the camera did not list; it is never called gone then. A
+  clip before the oldest SD day, or before the first recording on that day,
+  counts as `olderThanSd`; `olderThanSd` stays 0 when the oldest day is
+  unknown. Events and recordings that ended less than 5 min ago aren't
+  judged; a busy Search day is tried 3 times 1 s apart, then `unknown`.
+- A recording the cache can't keep (disk paused, over the cache cap, no room
+  beside the pinned files) is streamed to a temp file under
+  `<dataDir>/inventory/tmp` (the data disk; `/tmp` is tmpfs on the Pi),
+  emptied at startup and when a repair starts; the item says `streamed`. A
+  viewer who takes the fetch's one client slot first has the file: the clip
+  is skipped (`viewer`).
+- Migration 6 adds `origin` (`ftp` or `camera`) and re-creates the
+  `clip_arrivals` trigger for FTP clips only; `countClips` (the daily
+  activity record) counts FTP clips only: a repaired clip never hides an FTP
+  stall.
+- Repair runs are kept apart: ids `<kind>repair-…` in
+  `<dataDir>/inventory/<kind>repair/`, audited as `inventory-repair`
+  (host / change).
+- A recording larger than one run's 200 MB is skipped (`too-big`) and the
+  run goes on; one that would pass the cap after others is skipped
+  (`byte-cap`) and smaller ones after it are still fetched; `ftp.maxGB`
+  still stops the run. A busy Search in the still-listed check is tried 3
+  times 1 s apart, then skipped (`busy`), not counted as a failure.
+- While the storage budget (or `ftp.maxGB`) prunes clips (the
+  `storage-daily` records saw older clips, the stills' test), recordings
+  older than the oldest local clip count as `prunedHere`, not missing: a
+  repair would fetch them and the next prune delete them again.
+- Repaired clips count toward storage usage, not toward its growth (the
+  "days until full" forecast).
 
 ## References
 

@@ -74,7 +74,7 @@ async function names(dir: string): Promise<Set<string>> {
 }
 
 // Every audit record of `actions` in [from, to], oldest first.
-function records(audit: Pick<AuditLog, 'list'>, actions: string[], from: number, to: number): AuditRecord[] {
+export function records(audit: Pick<AuditLog, 'list'>, actions: string[], from: number, to: number): AuditRecord[] {
   const out: AuditRecord[] = [];
   let after = '';
   for (;;) {
@@ -338,7 +338,7 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
     counts.missingPct = counts.expectedSeconds ? Math.round((counts.missingSeconds / counts.expectedSeconds) * 10_000) / 100 : 0;
     const problems = counts.unreadablePacks + counts.packsWithoutSprite + counts.spritesWithoutPack;
     const message =
-      `${duration(counts.missingSeconds)} of ${duration(counts.expectedSeconds)} missing (${counts.missingPct}%) since ${new Date(from).toISOString()}, ` +
+      `${duration(counts.missingSeconds)} of ${duration(counts.expectedSeconds)} missing (${counts.missingPct}%) since ${new Date(from).toISOString().slice(0, 16).replace('T', ' ')} UTC, ` +
       `${counts.gaps} gaps${top[0] ? ` (longest ${duration(top[0].seconds)})` : ''}, ${duration(counts.explainedSeconds)} explained by proxy stops or camera reboots, ` +
       `${duration(counts.restorableSeconds)} restorable from clips (camera clock), ${problems} file problems`;
     return { window: { from, to, reason, retentionFrom, protectedFrom, notes: counts.restorableSeconds > 0 ? [CLOCK_NOTE] : [] }, counts, top, items, message };

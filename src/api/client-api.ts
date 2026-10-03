@@ -176,6 +176,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     end: c.end_ts,
     stream: c.stream,
     size: c.size,
+    origin: c.origin,
     events: overlappingEvents(d.catalog, c.cam, c.start_ts, c.end_ts ?? c.start_ts),
     url: `${clipBase()}/${c.id}.mp4`,
     snapshotUrl: c.snapshot ? `${clipBase()}/${c.id}.jpg` : null,

@@ -21,3 +21,26 @@ test('Check stills: the result shows, and the audit log has the run', async ({ p
     }, { timeout: 10_000 })
     .toMatchObject({ kind: 'stills', outcome: 'ok', requestedBy: 'session' });
 });
+
+// The clips compare (#74): cam-sim's demo recordings of yesterday were never
+// uploaded, so they are missing here and the box offers to fetch them. The
+// fetch itself is not clicked here (the API test covers it), so the Status
+// page's Recordings card still shows no download.
+test('Compare clips with the camera: the result and the repair offer show', async ({ page }) => {
+  await page.goto('/#/maintenance');
+  await expect(page.getByTestId('inventory-clips-camera')).toBeEnabled();
+  const [resp] = await Promise.all([
+    page.waitForResponse((r) => r.url().endsWith('/control/actions/inventory') && r.request().method() === 'POST'),
+    page.getByTestId('inventory-clips-camera').click(),
+  ]);
+  expect(resp.status()).toBe(202);
+  await expect(page.getByTestId('inventory-clips-result')).toContainText('Clips inventory', { timeout: 30_000 });
+  await expect(page.getByTestId('inventory-clips-result')).toContainText('Camera (sub):');
+  await expect(page.getByTestId('inventory-repair')).toHaveText(/^Fetch \d+ lost clips \(\d+\.\d MB\)$/);
+  // The offer asks first, with the numbers; Cancel sends nothing.
+  await page.getByTestId('inventory-repair').click();
+  await expect(page.getByTestId('confirm-message')).toContainText(/Fetch \d+ lost clips \(\d+\.\d MB\)/);
+  await page.getByTestId('confirm-cancel').click();
+  await expect(page.getByTestId('confirm-dialog')).toHaveCount(0);
+  await expect(page.getByTestId('inventory-repair-result')).toHaveCount(0);
+});

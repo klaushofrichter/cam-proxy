@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
+import * as fsp from 'fs/promises';
 import { execFile } from 'child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -7,11 +8,16 @@ import { promisify } from 'util';
 import { openCatalog } from '../src/catalog/db';
 import { insertEvent, closeEvent } from '../src/catalog/events';
 import { clipById, listClips, setSnapshot } from '../src/catalog/clips';
-import { ClipIndexer, localToUtc, parseClipName } from '../src/clips/indexer';
+import { ClipExistsError, ClipIndexer, InvalidStartError, NotAVideoError, localToUtc, parseClipName } from '../src/clips/indexer';
 import { timeInfoFromGetTime } from '../src/camera/time';
 import { DEFAULTS } from '../src/config/defaults';
 import { StreamLog } from '../src/stream/log';
 import type { Upload } from '../src/clips/ftp-server';
+
+vi.mock('fs/promises', async (orig) => {
+  const m = await orig<typeof import('fs/promises')>();
+  return { ...m, copyFile: vi.fn(m.copyFile) };
+});
 
 const run = promisify(execFile);
 
@@ -248,5 +254,93 @@ describe('ClipIndexer', () => {
     const b = await indexer.add(upload('Den_00_20260927140301.mp4', readFileSync(clipFile)));
     expect(b!.path).toBe(a!.path);
     expect(listClips(catalog, 'cam1', a!.start_ts - 1000, a!.start_ts + 1000)).toHaveLength(1); // replaced, not added
+  });
+});
+
+// #74: a recording fetched from the SD card by an inventory repair.
+describe('ClipIndexer.addRecording', () => {
+  const START = Date.UTC(2026, 8, 27, 19, 3, 1);
+
+  it('copies the recording into clips/, marks it from the camera, links the FTP picture, and tells no stream client', async () => {
+    const { dir, catalog, log, indexer } = setup();
+    let stored = 0;
+    const counted = new ClipIndexer({ catalog, log, config: () => DEFAULTS, timeInfo: async () => chicago(1), dataDir: dir, cam: 'cam1', stored: (b) => (stored += b) });
+    // The camera's picture of that event came by FTP without its clip.
+    const pic = join(dir, 'clips', 'cam1', '2026', '09', '27', `1903-${START + 4000}.jpg`);
+    mkdirSync(join(dir, 'clips', 'cam1', '2026', '09', '27'), { recursive: true });
+    writeFileSync(pic, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+    const row = await counted.addRecording(clipFile, { start: START, stream: 'sub' });
+    expect(row).toMatchObject({ cam: 'cam1', start_ts: START, stream: 'sub', origin: 'camera', snapshot: pic, path: join(dir, 'clips', 'cam1', '2026', '09', '27', `1903-${START}.mp4`) });
+    expect(row.end_ts! - START).toBeGreaterThanOrEqual(2900);
+    expect(readFileSync(row.path).equals(readFileSync(clipFile))).toBe(true);
+    expect(existsSync(clipFile)).toBe(true); // the cached recording stays
+    expect(existsSync(`${row.path}.part`)).toBe(false);
+    expect(stored).toBe(row.size);
+    expect(log.since(0, { types: ['clip'] }, 100)).toEqual([]);
+    expect(counted.lastIndexed()).toBeNull();
+    expect(indexer.failures()).toBe(0);
+  });
+
+  it('refuses a second clip with the same start, and a file that is no video', async () => {
+    const { dir, catalog, indexer } = setup();
+    await indexer.addRecording(clipFile, { start: START, stream: 'sub' });
+    await expect(indexer.addRecording(clipFile, { start: START, stream: 'sub' })).rejects.toMatchObject({ name: 'ClipExistsError', reason: 'row' });
+    const junk = join(dir, 'junk.mp4');
+    writeFileSync(junk, 'not a video');
+    await expect(indexer.addRecording(junk, { start: START + 60_000, stream: 'sub' })).rejects.toBeInstanceOf(NotAVideoError);
+    expect(listClips(catalog, 'cam1', START - 1000, START + 120_000)).toHaveLength(1);
+    expect(existsSync(join(dir, 'clips', 'cam1', '2026', '09', '27', `1904-${START + 60_000}.mp4`))).toBe(false);
+  });
+
+  it('adopts a video file at the destination that has no row (a crash between rename and insert)', async () => {
+    const { dir, catalog, indexer } = setup();
+    const f = join(dir, 'clips', 'cam1', '2026', '09', '27', `1903-${START}.mp4`);
+    mkdirSync(join(dir, 'clips', 'cam1', '2026', '09', '27'), { recursive: true });
+    writeFileSync(f, readFileSync(clipFile));
+    const row = await indexer.addRecording(clipFile, { start: START, stream: 'sub' });
+    expect(row).toMatchObject({ path: f, origin: 'camera', start_ts: START });
+    expect(listClips(catalog, 'cam1', START - 1000, START + 1000)).toHaveLength(1);
+  });
+
+  it('leaves a non-video file at the destination alone and says it exists; rejects a start that is no timestamp', async () => {
+    const { dir, indexer } = setup();
+    const f = join(dir, 'clips', 'cam1', '2026', '09', '27', `1903-${START}.mp4`);
+    mkdirSync(join(dir, 'clips', 'cam1', '2026', '09', '27'), { recursive: true });
+    writeFileSync(f, 'old');
+    await expect(indexer.addRecording(clipFile, { start: START, stream: 'sub' })).rejects.toMatchObject({ name: 'ClipExistsError', reason: 'file' });
+    expect(readFileSync(f, 'utf8')).toBe('old');
+    await expect(indexer.addRecording(clipFile, { start: NaN, stream: 'sub' })).rejects.toBeInstanceOf(InvalidStartError);
+  });
+
+  it('keeps an FTP clip that lands while the copy runs: no overwrite, no second row', async () => {
+    const { dir, catalog, indexer } = setup();
+    const f = join(dir, 'clips', 'cam1', '2026', '09', '27', `1903-${START}.mp4`);
+    vi.mocked(fsp.copyFile).mockImplementationOnce(async (src, dst) => {
+      await vi.importActual<typeof import('fs/promises')>('fs/promises').then((m) => m.copyFile(src, dst));
+      mkdirSync(join(dir, 'clips', 'cam1', '2026', '09', '27'), { recursive: true });
+      writeFileSync(f, 'ftp copy'); // the FTP upload arrives meanwhile
+    });
+    await expect(indexer.addRecording(clipFile, { start: START, stream: 'sub' })).rejects.toBeInstanceOf(ClipExistsError);
+    expect(readFileSync(f, 'utf8')).toBe('ftp copy');
+    expect(existsSync(`${f}.part`)).toBe(false);
+    expect(listClips(catalog, 'cam1', START - 1000, START + 1000)).toHaveLength(0);
+  });
+
+  it('removes its file when the insert fails, and leaves nothing when the copy fails', async () => {
+    const { dir, catalog, indexer } = setup();
+    const f = join(dir, 'clips', 'cam1', '2026', '09', '27', `1903-${START}.mp4`);
+    catalog.db.exec("CREATE TRIGGER boom BEFORE INSERT ON clips BEGIN SELECT RAISE(ABORT, 'boom'); END");
+    await expect(indexer.addRecording(clipFile, { start: START, stream: 'sub' })).rejects.toThrow('boom');
+    expect(existsSync(f)).toBe(false);
+    expect(existsSync(`${f}.part`)).toBe(false);
+    catalog.db.exec('DROP TRIGGER boom');
+    vi.mocked(fsp.copyFile).mockImplementationOnce(async (_s, dst) => {
+      writeFileSync(String(dst), 'half');
+      throw new Error('disk full');
+    });
+    await expect(indexer.addRecording(clipFile, { start: START, stream: 'sub' })).rejects.toThrow('disk full');
+    expect(existsSync(f)).toBe(false);
+    expect(existsSync(`${f}.part`)).toBe(false);
+    expect(listClips(catalog, 'cam1', START - 1000, START + 1000)).toHaveLength(0);
   });
 });

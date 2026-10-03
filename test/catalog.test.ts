@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { chmodSync, mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { DatabaseSync } from 'node:sqlite';
+import { MIGRATIONS } from '../src/catalog/migrations';
 import { openCatalog, type Catalog } from '../src/catalog/db';
 import { insertClip, lastClipReceived } from '../src/catalog/clips';
 import { insertEvent, closeEvent, openEvents, listEvents, deleteEventsBefore, closeAllOpen } from '../src/catalog/events';
@@ -18,11 +20,11 @@ const ev = (kind: string, start_ts: number, cam = 'cam1') => insertEvent(c, { ca
 
 describe('catalog', () => {
   it('creates the schema once; opening again keeps data and version', () => {
-    expect(c.schemaVersion()).toBe(5);
+    expect(c.schemaVersion()).toBe(6);
     ev('person', 1000);
     c.close();
     c = openCatalog(join(dir, 'catalog.sqlite'));
-    expect(c.schemaVersion()).toBe(5);
+    expect(c.schemaVersion()).toBe(6);
     expect(listEvents(c, { cam: 'cam1' })).toHaveLength(1);
   });
 
@@ -31,11 +33,56 @@ describe('catalog', () => {
     insertClip(c, { cam: 'cam1', start_ts: 1, end_ts: 2, path: 'a.mp4', stream: 'main', size: 1, received_at: 5000, snapshot: null });
     insertClip(c, { cam: 'cam1', start_ts: 1, end_ts: 2, path: 'b.mp4', stream: 'main', size: 1, received_at: 7000, snapshot: null });
     // As a version 4 catalog with these clips.
-    c.db.exec('DROP TRIGGER clips_last_received; DROP TABLE clip_arrivals; DELETE FROM schema_version WHERE version = 5');
+    c.db.exec('DROP TRIGGER clips_last_received; ALTER TABLE clips DROP COLUMN origin; DROP TABLE clip_arrivals; DELETE FROM schema_version WHERE version >= 5');
     c.close();
     c = openCatalog(join(dir, 'catalog.sqlite'));
-    expect(c.schemaVersion()).toBe(5);
+    expect(c.schemaVersion()).toBe(6);
     expect(lastClipReceived(c, 'cam1')).toBe(7000);
+  });
+
+  // #74: version 6 marks where a clip came from; old rows are FTP uploads.
+  it('migrates to version 6: old clips are ftp, and a clip from the camera is no arrival', () => {
+    insertClip(c, { cam: 'cam1', start_ts: 1, end_ts: 2, path: 'a.mp4', stream: 'main', size: 1, received_at: 5000, snapshot: null });
+    c.db.exec("DROP TRIGGER clips_last_received; ALTER TABLE clips DROP COLUMN origin; DELETE FROM schema_version WHERE version = 6; CREATE TRIGGER clips_last_received AFTER INSERT ON clips BEGIN INSERT INTO clip_arrivals (cam, last_received) VALUES (NEW.cam, NEW.received_at) ON CONFLICT (cam) DO UPDATE SET last_received = MAX(last_received, excluded.last_received); END;");
+    c.close();
+    c = openCatalog(join(dir, 'catalog.sqlite'));
+    expect(c.schemaVersion()).toBe(6);
+    expect(c.db.prepare('SELECT origin FROM clips').all()).toEqual([{ origin: 'ftp' }]);
+    const repaired = insertClip(c, { cam: 'cam1', start_ts: 3, end_ts: 4, path: 'b.mp4', stream: 'sub', size: 1, received_at: 9000, snapshot: null, origin: 'camera' });
+    expect(repaired.origin).toBe('camera');
+    expect(lastClipReceived(c, 'cam1')).toBe(5000);
+    expect(insertClip(c, { cam: 'cam1', start_ts: 5, end_ts: 6, path: 'c.mp4', stream: 'sub', size: 1, received_at: 9500, snapshot: null }).origin).toBe('ftp');
+    expect(lastClipReceived(c, 'cam1')).toBe(9500);
+  });
+
+  it('refuses a clip origin other than ftp or camera', () => {
+    expect(() => c.db.prepare("INSERT INTO clips (cam, start_ts, path, stream, size, received_at, origin) VALUES ('cam1', 1, 'x.mp4', 'sub', 1, 1, 'sd')").run()).toThrow(/CHECK/);
+  });
+
+  // The Pi's real catalog is at version 5: built here from migrations 1-5 as released, then opened.
+  it('migrates a real version 5 catalog (migrations 1-5) with rows, arrivals and the trigger intact', () => {
+    c.close();
+    const path = join(dir, 'v5.sqlite');
+    const raw = new DatabaseSync(path);
+    raw.exec('CREATE TABLE schema_version (version INTEGER NOT NULL)');
+    MIGRATIONS.slice(0, 5).forEach((sql, i) => {
+      raw.exec(sql);
+      raw.prepare('INSERT INTO schema_version (version) VALUES (?)').run(i + 1);
+    });
+    const ins = raw.prepare('INSERT INTO clips (cam, start_ts, end_ts, path, stream, size, received_at, snapshot) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    ins.run('cam1', 1, 2, 'a.mp4', 'sub', 1, 5000, null);
+    ins.run('cam1', 3, 4, 'b.mp4', 'sub', 1, 6000, null);
+    ins.run('cam2', 3, 4, 'c.mp4', 'sub', 1, 4000, null);
+    raw.close();
+    c = openCatalog(path);
+    expect(c.schemaVersion()).toBe(6);
+    expect(c.db.prepare('SELECT origin FROM clips').all()).toEqual([{ origin: 'ftp' }, { origin: 'ftp' }, { origin: 'ftp' }]);
+    expect(lastClipReceived(c, 'cam1')).toBe(6000);
+    expect(lastClipReceived(c, 'cam2')).toBe(4000);
+    insertClip(c, { cam: 'cam1', start_ts: 5, end_ts: 6, path: 'd.mp4', stream: 'sub', size: 1, received_at: 9000, snapshot: null, origin: 'camera' });
+    expect(lastClipReceived(c, 'cam1')).toBe(6000);
+    insertClip(c, { cam: 'cam1', start_ts: 7, end_ts: 8, path: 'e.mp4', stream: 'sub', size: 1, received_at: 9500, snapshot: null });
+    expect(lastClipReceived(c, 'cam1')).toBe(9500);
   });
 
   it('uses WAL and counts the WAL file in its size', () => {

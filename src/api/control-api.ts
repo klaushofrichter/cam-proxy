@@ -22,7 +22,7 @@ import { eventsStored } from './metrics';
 import { readCookie, SESSION_COOKIE, SESSION_MS, type createSessionSigner } from './session';
 import type { createLoginLinks } from './login-links';
 import type { RecordingsStatus } from '../recordings/side';
-import { InventoryBusyError, InventoryStoppingError, RUN_ID, type InventoryRunner } from '../inventory/runner';
+import { InventoryBusyError, InventoryStoppingError, RepairRefusedError, RUN_ID, type InventoryRunner } from '../inventory/runner';
 
 export interface FtpStatus {
   enabled: boolean;
@@ -258,7 +258,7 @@ export function controlApi(d: ControlDeps): express.Router {
   });
 
   // Inventories (spec 2026-10-02-inventory-design): the running one and the last runs; one report.
-  r.get('/inventory', async (_req, res) => void res.json({ running: d.inventory.running(), runs: await d.inventory.list() }));
+  r.get('/inventory', async (_req, res) => void res.json({ running: d.inventory.running(), runs: await d.inventory.list(), repairs: await d.inventory.listRepairs() }));
   r.get('/inventory/runs/:id', async (req, res) => {
     if (!RUN_ID.test(req.params.id)) return void res.status(400).json({ error: 'invalid', detail: 'not a run id' });
     const run = await d.inventory.get(req.params.id);
@@ -306,10 +306,10 @@ export function controlApi(d: ControlDeps): express.Router {
     // the client went away ('close' fires in both cases; 'finish' only in the
     // first). Not for the camera reboot and the process restart (their own
     // records, camera-reboot and proxy-restart; an inventory writes `inventory`
-    // when it ends) or a retention preview
+    // when it ends, a repair `inventory-repair`) or a retention preview
     // (dryRun changes nothing). The power-cycle has its own records too
     // (camera-powercycle); a read of the switch is a control-action.
-    if (name !== 'camera-reboot' && name !== 'camera-powercycle' && name !== 'camera-poe-on' && name !== 'restart-proxy' && name !== 'inventory' && !(name === 'retention-run' && req.body?.dryRun === true)) {
+    if (name !== 'camera-reboot' && name !== 'camera-powercycle' && name !== 'camera-poe-on' && name !== 'restart-proxy' && name !== 'inventory' && name !== 'inventory-repair' && !(name === 'retention-run' && req.body?.dryRun === true)) {
       res.on('close', () => {
         const done = res.writableFinished;
         const ok = done && res.statusCode < 400;
@@ -410,15 +410,36 @@ export function controlApi(d: ControlDeps): express.Router {
       // goes on in the background and writes its own `inventory` record.
       case 'inventory': {
         const kind: unknown = req.body?.kind;
+        const camera: unknown = req.body?.camera;
         const kinds = d.inventory.kinds();
         if (typeof kind !== 'string' || !kinds.includes(kind)) return fail(400, 'invalid', `kind is one of: ${kinds.join(', ')}`);
+        if (camera !== undefined && typeof camera !== 'boolean') return fail(400, 'invalid', 'camera is true or false');
+        if (camera && !d.inventory.checks[kind]?.camera) return fail(400, 'invalid', `the ${kind} inventory has no camera compare`);
         try {
-          const { runId } = d.inventory.start(kind, { requestedBy, ip: clientIp(req), userAgent: req.get('user-agent') });
+          const { runId } = d.inventory.start(kind, { requestedBy, ip: clientIp(req), userAgent: req.get('user-agent') }, { camera: camera === true });
           return void res.status(202).json({ runId });
         } catch (err) {
           if (err instanceof InventoryStoppingError) return fail(503, 'stopping', err.message);
           if (!(err instanceof InventoryBusyError)) throw err;
           return fail(409, 'inventory_busy', err.message, { runId: err.runId });
+        }
+      }
+      // A repair from a check report (#74): 202 {runId}; it writes its own
+      // `inventory-repair` record when it ends. A refused start writes nothing.
+      case 'inventory-repair': {
+        const kind: unknown = req.body?.kind;
+        const source: unknown = req.body?.runId;
+        const kinds = d.inventory.repairKinds();
+        if (typeof kind !== 'string' || !kinds.includes(kind)) return fail(400, 'invalid', `kind is one of: ${kinds.join(', ')}`);
+        if (typeof source !== 'string' || !RUN_ID.test(source)) return fail(400, 'invalid', 'runId is the id of a check run');
+        try {
+          const { runId } = await d.inventory.repair(kind, { requestedBy, ip: clientIp(req), userAgent: req.get('user-agent') }, source);
+          return void res.status(202).json({ runId });
+        } catch (err) {
+          if (err instanceof InventoryStoppingError) return fail(503, 'stopping', err.message);
+          if (err instanceof InventoryBusyError) return fail(409, 'inventory_busy', err.message, { runId: err.runId });
+          if (!(err instanceof RepairRefusedError)) throw err;
+          return err.code === 'not_found' ? fail(404, 'not_found', err.message) : fail(409, err.code, err.message);
         }
       }
       // A control-action record; the run ends with its partial counts.
