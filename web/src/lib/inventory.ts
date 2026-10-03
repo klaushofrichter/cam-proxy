@@ -49,7 +49,7 @@ export function stillsLines(r: StillsReport, fmt: (ms: number) => string = local
     `Window: ${fmt(r.window.from)} to ${fmt(r.window.to)} (${REASONS[r.window.reason] ?? r.window.reason})`,
     `Missing: ${duration(c.missingSeconds)} of ${duration(c.expectedSeconds)} (${c.missingPct}%) in ${c.gaps} gaps`,
     `Explained (proxy stop or crash, camera reboot or power cycle, storage pause): ${duration(c.explainedSeconds)}; unexplained: ${duration(c.unexplainedSeconds)}`,
-    `Covered by local clips: ${duration(c.restorableSeconds)} (not restored, see issue #73)`,
+    `Covered by local clips: ${duration(c.restorableSeconds)} (not restored)`,
     `Files: ${c.unreadablePacks} unreadable packs, ${c.packsWithoutSprite} packs without sprite, ${c.spritesWithoutPack} sprites without pack`,
   ];
 }

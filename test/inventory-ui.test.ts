@@ -35,7 +35,7 @@ describe('Inventory box helpers', () => {
       'Window: 00:10:00 to 00:20:00 (shorter: the store is younger than the retention)',
       'Missing: 3 min 40 s of 10 min (36.67%) in 4 gaps',
       'Explained (proxy stop or crash, camera reboot or power cycle, storage pause): 2 min 30 s; unexplained: 1 min 10 s',
-      'Covered by local clips: 20 s (not restored, see issue #73)',
+      'Covered by local clips: 20 s (not restored)',
       'Files: 1 unreadable packs, 1 packs without sprite, 1 sprites without pack',
     ]);
     expect(stillsLines({ ...report, outcome: 'cancelled' }, fmt)[0]).toBe('Cancelled: the counts are partial');
