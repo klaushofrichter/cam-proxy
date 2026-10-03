@@ -36,6 +36,8 @@ import { InventoryRunner } from './inventory/runner';
 import { stillsCheck } from './inventory/stills';
 import { clipsCheck } from './inventory/clips';
 import { clipsRepair } from './inventory/repair-clips';
+import { eventsCheck } from './inventory/events';
+import { eventsRepair } from './inventory/repair-events';
 import { MinuteStore, minuteOf } from './stills/store';
 import type { StillsSide } from './api/client-api';
 import { StreamLog, type StreamMessage } from './stream/log';
@@ -316,6 +318,11 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   } catch (err) {
     logger.warn({ err: (err as Error).message }, 'inventory_tmp_cleanup_failed');
   }
+  const eventsDeps = {
+    catalog,
+    settings: () => ({ cam: running.camera.id, eventsDays: running.retention.eventsDays, stream: running.ftp.stream, eventMaxOpenMin: running.events.maxOpenMin }),
+    camera: { list: recordings.list, timeInfo: () => client.timeInfo() },
+  };
   const inventory = new InventoryRunner({
     dir: inventoryDir,
     audit,
@@ -351,6 +358,13 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
           paused: () => storage.paused(),
           clipsBytes: () => storage.usage().clips.bytes,
         }),
+      },
+      // #75: always against the camera (no local-only part); its repair adds
+      // recovered events, never sent over SSE or the stream log.
+      events: {
+        label: 'Events',
+        run: eventsCheck(eventsDeps),
+        repair: eventsRepair(eventsDeps),
       },
     },
   });
