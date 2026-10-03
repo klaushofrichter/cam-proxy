@@ -71,14 +71,15 @@ export function stillsNotes(r: StillsReport): string[] {
 }
 
 // The clips inventory (#74) and its repair.
-export const REPAIR_MAX_CLIPS = 50; // the server's cap per run (src/inventory/repair-clips.ts)
+export const REPAIR_MAX_CLIPS = 50; // the server's caps per run (src/inventory/repair-clips.ts)
+export const REPAIR_MAX_BYTES = 200 * 2 ** 20;
 export const REPAIR_MAX_AGE_MS = 3_600_000; // a repair needs a compare less than an hour old
 export interface CameraDayRow { date: string; state: 'listed' | 'unknown'; recordings: number; missingLocally: number; goneFromCamera: number }
 export interface ClipsReport extends RunSummary {
   window: { from: number | null; to: number; reason: string; notes?: string[]; camera?: { stream: string; to: number; oldestSdDay: string | null; unknownDays: string[] } } | null;
   options?: { camera?: boolean };
   top: CameraDayRow[];
-  items: { type: string; size?: number }[];
+  items: { type: string; start?: number; size?: number }[];
   itemsTruncated: boolean;
   error?: string;
 }
@@ -116,11 +117,25 @@ export function clipsLines(r: ClipsReport, fmt: (ms: number) => string = local):
 
 // The repair the newest clips report allows: a finished compare with the
 // camera, less than an hour old, with recordings missing here. `count` and
-// `bytes` are what one run fetches at most (the first 50 candidates).
-export function repairOffer(r: ClipsReport | null, now: number, repair: { source?: string } | null = null): { count: number; bytes: number } | null {
+// `bytes` are what one run fetches at most, picked as the server picks:
+// the oldest 50 candidates, a recording larger than 200 MB skipped
+// (`tooBig`), one that would pass the 200 MB after the others skipped too.
+export function repairOffer(r: ClipsReport | null, now: number, repair: { source?: string } | null = null): { count: number; bytes: number; tooBig: number } | null {
   if (!r || repair?.source === r.runId || r.outcome !== 'ok' || !r.options?.camera || now - r.startedAt >= REPAIR_MAX_AGE_MS || !r.counts.missingLocally) return null;
-  const first = r.items.filter((x) => x.type === 'missing-locally').slice(0, REPAIR_MAX_CLIPS);
-  return { count: Math.min(r.counts.missingLocally, REPAIR_MAX_CLIPS), bytes: first.reduce((n, x) => n + (x.size ?? 0), 0) };
+  const first = r.items
+    .filter((x) => x.type === 'missing-locally')
+    .sort((a, b) => (a.start ?? 0) - (b.start ?? 0))
+    .slice(0, REPAIR_MAX_CLIPS);
+  const offer = { count: 0, bytes: 0, tooBig: 0 };
+  for (const x of first) {
+    const size = x.size ?? 0;
+    if (size > REPAIR_MAX_BYTES) offer.tooBig++;
+    else if (offer.bytes + size <= REPAIR_MAX_BYTES) {
+      offer.count++;
+      offer.bytes += size;
+    }
+  }
+  return offer;
 }
 
 const SKIPS: Record<string, string> = {
@@ -130,6 +145,9 @@ const SKIPS: Record<string, string> = {
   'other-stream': 'of the other stream',
   viewer: 'a viewer was downloading it',
   invalid: 'unusable file name',
+  'too-big': "larger than one run's 200 MB",
+  'byte-cap': "would pass this run's 200 MB",
+  busy: "the camera's Search stayed busy",
 };
 const STOPS: Record<string, string> = {
   'clip-cap': 'the 50-clip cap',

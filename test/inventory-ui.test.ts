@@ -99,7 +99,7 @@ describe('Inventory box helpers, clips', () => {
   });
 
   it('offers a repair only under a recent, finished compare with something missing; at most 50 clips', () => {
-    expect(repairOffer(clipsReport, T + 60_000)).toEqual({ count: 50, bytes: 50 * 2 ** 20 });
+    expect(repairOffer(clipsReport, T + 60_000)).toEqual({ count: 50, bytes: 50 * 2 ** 20, tooBig: 0 });
     expect(repairOffer(clipsReport, T + 3_600_000)).toBeNull(); // an hour old
     expect(repairOffer({ ...clipsReport, options: undefined }, T)).toBeNull();
     expect(repairOffer({ ...clipsReport, outcome: 'cancelled' }, T)).toBeNull();
@@ -107,6 +107,27 @@ describe('Inventory box helpers, clips', () => {
     expect(repairOffer(null, T)).toBeNull();
     expect(repairOffer(clipsReport, T, { source: 'clips-1-abcdef' })).toBeNull(); // already repaired from this compare
     expect(repairOffer(clipsReport, T, { source: 'clips-0-other' })).not.toBeNull();
+  });
+
+  it('offers what the server fetches: oldest first, the 50-clip cap, the 200 MB cap skipping too-big ones (#74 final review)', () => {
+    const MB = 2 ** 20;
+    const item = (start: number, size: number) => ({ type: 'missing-locally', start, size });
+    // Listed newest first: the offer goes oldest first like the repair.
+    const r = { ...clipsReport, counts: { ...clipsReport.counts, missingLocally: 5 }, items: [item(5, 30 * MB), item(4, 40 * MB), item(3, 80 * MB), item(2, 150 * MB), item(1, 250 * MB)] };
+    // 250 too big (skipped); 150 + 80 = 230 > 200: 80 skipped; 150 + 40 = 190; + 30 = 220: skipped.
+    expect(repairOffer(r, T)).toEqual({ count: 2, bytes: 190 * MB, tooBig: 1 });
+    // The 50-clip cap counts the skipped ones too (the server's first 50, oldest first).
+    const many = { ...clipsReport, counts: { ...clipsReport.counts, missingLocally: 52 }, items: [item(0, 300 * MB), ...Array.from({ length: 51 }, (_, i) => item(i + 1, MB))] };
+    expect(repairOffer(many, T)).toEqual({ count: 49, bytes: 49 * MB, tooBig: 1 });
+  });
+
+  it('words the skips for size and a busy camera', () => {
+    const rep: RepairReport = {
+      runId: 'clipsrepair-1-abcdef', kind: 'clips', startedAt: T, tookMs: 5000, outcome: 'ok', message: 'x', stopped: null, top: [],
+      counts: { candidates: 3, requested: 3, done: 0, failed: 0, skipped: 3, bytes: 0 },
+      items: [{ id: 'a', start: T, result: 'skipped', reason: 'too-big' }, { id: 'b', start: T, result: 'skipped', reason: 'byte-cap' }, { id: 'c', start: T, result: 'skipped', reason: 'busy' }],
+    };
+    expect(repairLines(rep).slice(1)).toEqual(["Skipped, larger than one run's 200 MB: 1", "Skipped, would pass this run's 200 MB: 1", "Skipped, the camera's Search stayed busy: 1"]);
   });
 
   it('lists the failures of a repair', () => {

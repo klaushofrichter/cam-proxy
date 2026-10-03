@@ -127,9 +127,10 @@
       {/if}
       {#if offer}
         <div class="buttons">
-          <button onclick={() => onrepair(offer)} disabled={starting || busy} data-testid="inventory-repair">Fetch {offer.count} lost clips ({mb(offer.bytes)})</button>
+          <button onclick={() => onrepair(offer)} disabled={starting || busy || !offer.count} data-testid="inventory-repair">Fetch {offer.count} lost clips ({mb(offer.bytes)})</button>
         </div>
         <p class="small">Fetches them from the camera's SD card over Baichuan, one at a time, after any viewer's download; at most 50 clips or 200 MB per run.</p>
+        {#if offer.tooBig}<p class="small" data-testid="inventory-repair-too-big">{offer.tooBig} recordings are larger than one run's 200 MB and are skipped.</p>{/if}
       {/if}
     </div>
   {/if}
