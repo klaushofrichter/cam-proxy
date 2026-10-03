@@ -77,6 +77,12 @@ export class RecordingList {
     },
   ) {}
 
+  // Expired entries are never served: drop them, so the maps don't grow with every day browsed.
+  private prune(m: Map<string, { at: number }>, ttl: number): void {
+    const now = this.now();
+    for (const [k, v] of m) if (now - v.at >= ttl) m.delete(k);
+  }
+
   private now(): number {
     return (this.d.now ?? Date.now)();
   }
@@ -185,7 +191,11 @@ export class RecordingList {
       if (epoch === this.epoch) {
         const at = this.now();
         this.days.set(key, { at, entries: out });
-        if (!open && localDate(at - FINAL_AFTER_MS, t) > date) this.tails.set(key, { at, entries: out.filter(crossesMidnight) });
+        this.prune(this.days, DAY_TTL);
+        if (!open && localDate(at - FINAL_AFTER_MS, t) > date) {
+          this.tails.set(key, { at, entries: out.filter(crossesMidnight) });
+          this.prune(this.tails, TAIL_TTL);
+        }
       }
       return out;
     });
@@ -254,7 +264,10 @@ export class RecordingList {
         });
       }
       const out = [...days].sort((a, b) => a - b);
-      if (epoch === this.epoch) this.months.set(month, { at: this.now(), days: out });
+      if (epoch === this.epoch) {
+        this.months.set(month, { at: this.now(), days: out });
+        this.prune(this.months, MONTH_TTL);
+      }
       return out;
     });
     return this.join(this.monthRuns, month, run, signal);

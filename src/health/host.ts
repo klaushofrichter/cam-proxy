@@ -103,7 +103,8 @@ export function readHostStats(p: HostPaths): HostStats {
   };
 }
 
-const realStatfs: StatFs = (dir) => statfsSync(existsSync(dir) ? dir : join(dir, '..'));
+// statfs of the data folder, or of its parent before it exists.
+export const realStatfs: StatFs = (dir) => statfsSync(existsSync(dir) ? dir : join(dir, '..'));
 
 // The data folder's volume as df shows it: free is what the proxy can still
 // write (bavail), used is size minus all free blocks, and Use% is

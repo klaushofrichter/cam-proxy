@@ -134,8 +134,9 @@ export class ClipIndexer {
   // picture came late): link them now. Returns how many were linked.
   relinkSnapshots(): number {
     let n = 0;
+    const listings = new Map<string, string[] | null>(); // each day folder read once
     for (const clip of clipsWithoutSnapshot(this.d.catalog, this.d.cam)) {
-      const pic = this.pictureFor(clip.start_ts);
+      const pic = this.pictureFor(clip.start_ts, listings);
       if (pic) {
         setSnapshot(this.d.catalog, clip.id, pic);
         n++;
@@ -146,15 +147,19 @@ export class ClipIndexer {
   }
 
   // The earliest stored picture taken in a clip's first SNAPSHOT_WINDOW_MS.
-  private pictureFor(start: number): string | null {
+  private pictureFor(start: number, listings?: Map<string, string[] | null>): string | null {
     let best: { ts: number; path: string } | null = null;
     for (const folder of new Set([this.folder(start), this.folder(start + SNAPSHOT_WINDOW_MS)])) {
-      let names: string[];
-      try {
-        names = readdirSync(folder);
-      } catch {
-        continue;
+      let names = listings?.get(folder);
+      if (names === undefined) {
+        try {
+          names = readdirSync(folder);
+        } catch {
+          names = null;
+        }
+        listings?.set(folder, names);
       }
+      if (!names) continue;
       for (const name of names) {
         const m = /^\d{4}-(\d{1,15})\.jpg$/.exec(name);
         const ts = m ? Number(m[1]) : NaN;

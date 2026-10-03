@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, writeFileSync } from 'fs';
-import { open, type FileHandle } from 'fs/promises';
+import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from 'fs';
+import { mkdir, open, readFile, rename, stat, writeFile, type FileHandle } from 'fs/promises';
 import { dirname, join } from 'path';
 import sharp from 'sharp';
 import { logger } from '../log';
@@ -35,11 +35,11 @@ export function minutePath(dataDir: string, kind: 'stills' | 'previews', cam: st
   return join(dataDir, kind, cam, ...utcDayParts(minute), utcHhmm(minute));
 }
 
-function writeAtomic(file: string, data: Buffer | string): void {
-  mkdirSync(dirname(file), { recursive: true });
+async function writeAtomic(file: string, data: Buffer | string): Promise<void> {
+  await mkdir(dirname(file), { recursive: true });
   const tmp = `${file}.tmp-${process.pid}`;
-  writeFileSync(tmp, data);
-  renameSync(tmp, file);
+  await writeFile(tmp, data);
+  await rename(tmp, file);
 }
 
 // A pack's footer, read async and without the store's cache (the inventory
@@ -132,13 +132,13 @@ export class MinuteStore extends EventEmitter {
         logger.warn({ minute: cur.minute }, 'stills_minute_settings_changed_new_part_dropped');
         return;
       }
-      const buf = readFileSync(packFile);
+      const buf = await readFile(packFile);
       stills = stills.map((s, i) => (existing.slots[i]?.[1] ? buf.subarray(existing.slots[i][0], existing.slots[i][0] + existing.slots[i][1]) : s));
-      before.stills = statSync(packFile).size;
+      before.stills = (await stat(packFile)).size;
     }
     const sidecar = this.sidecar(`${base}.json`);
     if (sidecar && sidecar.intervalS === this.o.intervalS && sidecar.cols === this.cols && existsSync(`${base}.jpg`)) {
-      spriteBase = readFileSync(`${base}.jpg`);
+      spriteBase = await readFile(`${base}.jpg`);
       before.previews = spriteBase.length;
       tiles = tiles.map((t, i) => (sidecar.present[i] ? undefined : t));
     }
@@ -159,16 +159,16 @@ export class MinuteStore extends EventEmitter {
       const len = Buffer.alloc(4);
       len.writeUInt32LE(json.length);
       const pack = Buffer.concat([...parts, json, len, MAGIC]);
-      writeAtomic(packFile, pack);
+      await writeAtomic(packFile, pack);
       this.footers.delete(packFile);
       this.emit('written', { kind: 'stills', bytes: pack.length - before.stills, files: existing ? 0 : 1 });
     }
 
     // The sprite sheet (missing tiles dark), and its sidecar.
     const sprite = await this.compose(tiles, spriteBase);
-    writeAtomic(`${base}.jpg`, sprite);
+    await writeAtomic(`${base}.jpg`, sprite);
     const meta: Sidecar = { v: 1, minute: cur.minute, cols: this.cols, rows: this.rows, tileW: this.tileW, tileH: this.tileH, intervalS: this.o.intervalS, present: tilePresent };
-    writeAtomic(`${base}.json`, JSON.stringify(meta));
+    await writeAtomic(`${base}.json`, JSON.stringify(meta));
     this.sidecars.delete(`${base}.json`);
     this.emit('written', { kind: 'previews', bytes: sprite.length - before.previews, files: spriteBase ? 0 : 2 });
   }
@@ -176,13 +176,9 @@ export class MinuteStore extends EventEmitter {
   private async compose(tiles: (Buffer | undefined)[], base?: Buffer): Promise<Buffer> {
     const width = this.cols * this.tileW;
     const height = this.rows * this.tileH;
-    const layers = [];
-    for (let i = 0; i < tiles.length; i++) {
-      const t = tiles[i];
-      if (!t) continue;
-      const input = await sharp(t).resize(this.tileW, this.tileH, { fit: 'fill' }).toBuffer();
-      layers.push({ input, left: (i % this.cols) * this.tileW, top: Math.floor(i / this.cols) * this.tileH });
-    }
+    // The resizes run side by side (sharp's own thread pool).
+    const resized = await Promise.all(tiles.map((t) => t && sharp(t).resize(this.tileW, this.tileH, { fit: 'fill' }).toBuffer()));
+    const layers = resized.flatMap((input, i) => (input ? [{ input, left: (i % this.cols) * this.tileW, top: Math.floor(i / this.cols) * this.tileH }] : []));
     const img = base ? sharp(base) : sharp({ create: { width, height, channels: 3, background: '#111111' } });
     return img.composite(layers).jpeg({ quality: Math.max(30, 100 - this.o.tile.quality * 5) }).toBuffer();
   }
@@ -271,7 +267,7 @@ export class MinuteStore extends EventEmitter {
   // the first entry of the sorted YYYY/MM/DD/HHMM folders. Cheap: a few
   // directory reads, not a scan.
   oldest(kind: 'stills' | 'previews'): number | null {
-    const ext = kind === 'stills' ? '.pack' : '.json';
+    const minuteFile = kind === 'stills' ? /^\d{4}\.pack$/ : /^\d{4}\.json$/;
     const base = join(this.o.dataDir, kind, this.o.cam);
     const sorted = (dir: string, re: RegExp) => {
       try {
@@ -283,7 +279,7 @@ export class MinuteStore extends EventEmitter {
     for (const y of sorted(base, /^\d{4}$/)) {
       for (const mo of sorted(join(base, y), /^\d{2}$/)) {
         for (const d of sorted(join(base, y, mo), /^\d{2}$/)) {
-          const file = sorted(join(base, y, mo, d), new RegExp(`^\\d{4}\\${ext}$`))[0];
+          const file = sorted(join(base, y, mo, d), minuteFile)[0];
           if (file) return Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(file.slice(0, 2)), Number(file.slice(2, 4)));
         }
       }
@@ -325,7 +321,7 @@ export class MinuteStore extends EventEmitter {
   async readSprite(minute: number): Promise<Buffer | undefined> {
     if (this.current?.minute === minute) return this.compose(this.current.tiles);
     try {
-      return readFileSync(`${minutePath(this.o.dataDir, 'previews', this.o.cam, minute)}.jpg`);
+      return await readFile(`${minutePath(this.o.dataDir, 'previews', this.o.cam, minute)}.jpg`);
     } catch {
       return undefined;
     }

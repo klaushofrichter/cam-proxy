@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { existsSync, lstatSync, readdirSync, rmdirSync, statSync, statfsSync, unlinkSync } from 'fs';
+import { existsSync, lstatSync, readdirSync, rmdirSync, statSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import type { Catalog } from './catalog/db';
 import { deleteClip } from './catalog/clips';
@@ -10,6 +10,7 @@ import type { Config } from './config/defaults';
 import { logger } from './log';
 import type { StreamLog } from './stream/log';
 import { DAY, dayStart, HOUR } from './time-units';
+import { realStatfs } from './health/host';
 
 const GROWTH_WINDOW = 3 * DAY;
 
@@ -62,7 +63,7 @@ export class Storage extends EventEmitter {
   private disk(): { free: number; size: number } {
     const dir = this.d.config().server.dataDir;
     if (this.d.statfs) return this.d.statfs(dir);
-    const s = statfsSync(existsSync(dir) ? dir : join(dir, '..'));
+    const s = realStatfs(dir);
     return { free: s.bavail * s.bsize, size: s.blocks * s.bsize };
   }
 

@@ -508,7 +508,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // The newest finished inventory, a check or a repair of any kind.
   const lastInventory = async (): Promise<LastInventory | null> => {
     let last: LastInventory | null = null;
-    for (const [op, runs] of [['check', await inventory.list()], ['repair', await inventory.listRepairs()]] as const) {
+    const [checks, repairs] = await Promise.all([inventory.list(), inventory.listRepairs()]);
+    for (const [op, runs] of [['check', checks], ['repair', repairs]] as const) {
       for (const r of Object.values(runs).flat()) {
         if (!last || r.startedAt > last.startedAt) last = { kind: r.kind, op, outcome: r.outcome, startedAt: r.startedAt, message: r.message };
       }
