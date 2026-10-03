@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.10.03.4
+
 - CI: the required PR check runs `npm audit --audit-level=high` over all dependencies, dev included, so a high finding in a dev dependency blocks the PR (it only warned before). There are no open findings, so no allowlist.
 - Docs: the README has a Related repos section (cams, cam-sim, cam-proxy-pi-display) and names the e-paper display as the reader of `GET /api/local/health`; the settings table adds `composition` and `analytics`; `/health` answers `{ok, version, startedAt}`; `production` requires `e2e` too.
 
