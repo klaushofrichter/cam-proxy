@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.10.03.1
+
 - Inventory box: the buttons say when they change data. Renamed: "Compare clips with the camera" → "Search for and retrieve missing clips", "Check events" → "Search for and add missing events", "Fetch N lost clips" → "Retrieve N missing clips", the stills line "Restorable from local clips: X" → "Covered by local clips: X (not restored)" (the stills message and clock note say "covered by local clips"; the field stays `restorableSeconds`). When the run a click of the page started ends with something missing, the confirmation opens by itself ("Retrieve N clips (x MB) from the camera?", "Add N missing events …?"); Cancel leaves the follow-up button ("Retrieve N missing clips", "Add N missing events") for an hour. A report loaded on page open or a run started in another tab or through the API never asks. With nothing missing the box says "Nothing to retrieve: all the camera's recordings are here." or "Nothing to add." The box's intro says which buttons only read and which change data after a confirmation.
 
 ## v2026.10.02.7
