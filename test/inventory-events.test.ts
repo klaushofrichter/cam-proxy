@@ -168,6 +168,26 @@ describe('events inventory', () => {
     expect(res.window.notes).toContain(EDGE_NOTE(1));
   });
 
+  it('the message gives the window start as the camera-local date, as the per-day rows do (#114)', async () => {
+    // Camera 5 h behind UTC (CDT): the oldest recording, 2026-10-01 21:11
+    // camera time, is 2026-10-02 02:11 UTC; the message says 2026-10-01.
+    const first = rec(T('2026-10-02T02:11:00'));
+    const cam = camera({ months: { '2026-10': [1] }, recs: { '2026-10-01': [first] } });
+    cam.deps.timeInfo = async () => ({ stdOffsetMinutes: -360, dstOffsetMinutes: 60 });
+    const res = await eventsCheck(deps(cam.deps))(ctx());
+    expect(res.window.from).toBe(first.start);
+    expect(res.message).toMatch(/ since 2026-10-01 \(the SD card's reach\), /);
+  });
+
+  it('a late-night recording that may still be written is not judged until 01:00 the next day (#117 review)', async () => {
+    const late = { ...rec(T('2026-10-01T23:56:00')), end: T('2026-10-02T00:00:00') };
+    const cam = camera({ months: { '2026-10': [1] }, recs: { '2026-10-01': [late] } });
+    const early = await eventsCheck(deps(cam.deps))(ctx({ now: T('2026-10-02T00:20:00') }));
+    expect(early.counts).toMatchObject({ spans: 0, missingEvents: 0 });
+    const later = await eventsCheck(deps(cam.deps))(ctx({ now: T('2026-10-02T01:06:00') }));
+    expect(later.counts).toMatchObject({ spans: 1, missingEvents: 1 });
+  });
+
   it('an empty SD card: nothing judged', async () => {
     event('person', T('2026-10-01T14:00:00'), T('2026-10-01T14:00:10'));
     const cam = camera({ months: {}, recs: {} });

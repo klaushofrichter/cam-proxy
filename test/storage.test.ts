@@ -228,6 +228,23 @@ describe('storage: clips', () => {
 });
 
 describe('storage: audit', () => {
+  // #106: a pause explains still gaps only when it leaves a record.
+  it('writes storage-paused and storage-resumed records when the floor check flips', () => {
+    const { dir, catalog, log, config, fs } = setup();
+    const audit = new AuditLog({ dir: join(dir, 'audit'), version: 't', camera: () => 'cam1', now: () => NOW });
+    const s = new Storage({ catalog, log, config: () => config, now: () => NOW, statfs: () => fs, audit });
+    fs.free = config.storage.minFreeBytes - 1;
+    s.check();
+    s.check(); // no change: no second record
+    fs.free = config.storage.minFreeBytes + 1;
+    s.check();
+    const recs = audit.list({ actions: ['storage-paused', 'storage-resumed'], after: '', limit: 10 }).records;
+    expect(recs.map((r) => [r.event.action, r.event.outcome])).toEqual([['storage-paused', 'failure'], ['storage-resumed', 'success']]);
+    expect(recs[0].cam_proxy).toMatchObject({ free: config.storage.minFreeBytes - 1, minFreeBytes: config.storage.minFreeBytes });
+    expect(recs[0].event.category).toEqual(['host']);
+    expect(recs.map((r) => (r as { user?: { name?: string } }).user?.name)).toEqual(['system', 'system']);
+  });
+
   it('counts the audit folder in usage and the budget, and sweeps its old days by auditDays', () => {
     const { dir, catalog, log, config, fs } = setup();
     const auditDir = join(dir, 'audit');

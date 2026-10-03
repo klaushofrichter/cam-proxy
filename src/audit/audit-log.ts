@@ -122,6 +122,10 @@ export class AuditLog {
     const c = cur(up ? q.after : q.before);
     const days = this.days();
     const out: AuditRecord[] = [];
+    // A line can match only if it names a wanted action: the others are not
+    // parsed (#106: the inventories read days of records for a few actions).
+    // JSON.stringify writes `"action":"<name>"`, so this never drops a match.
+    const needles = q.actions?.map((a) => `"action":${JSON.stringify(a)}`);
     const ok = (r: AuditRecord) => {
       const t = Date.parse(r['@timestamp']);
       return (!q.actions || q.actions.includes(r.event?.action)) && (!q.outcome || r.event?.outcome === q.outcome) && (q.from === undefined || t >= q.from) && (q.to === undefined || t <= q.to);
@@ -135,7 +139,9 @@ export class AuditLog {
       const order = lines.map((_, k) => k + 1);
       for (const n of up ? order : order.reverse()) {
         if (c && day === c.day && (up ? n <= c.line : n >= c.line)) continue;
-        const r = parse(lines[n - 1]);
+        const line = lines[n - 1];
+        if (needles && !needles.some((x) => line.includes(x))) continue;
+        const r = parse(line);
         if (!r || !ok(r)) continue;
         out.push({ ...r, cam_proxy: { ...(r.cam_proxy ?? {}), cursor: `${day}:${n}` } });
         if (out.length > limit) break outer;

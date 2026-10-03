@@ -91,7 +91,7 @@ describe('RecordingFetcher', () => {
     await vi.waitFor(() => expect(c.w.writableEnded).toBe(true));
     expect(readFileSync(x.cache.path(e.id))).toEqual(x.files.get(e.path));
     expect(x.written).toEqual([e.size]);
-    expect(x.outcomes).toMatchObject([{ id: e.id, result: 'ok', stream: 'sub', bytes: e.size }]);
+    expect(x.outcomes).toMatchObject([{ id: e.id, result: 'ok', stream: 'sub', bytes: e.size, priority: 'high' }]);
   });
 
   it('a second request for the same id joins the running fetch: one transfer', async () => {
@@ -438,6 +438,8 @@ describe('RecordingFetcher', () => {
     expect(c.w.writableEnded).toBe(false);
     expect(low.kept).toBe(true);
     expect(readFileSync(x.cache.path(e.id))).toEqual(x.files.get(e.path));
+    // Started as a background (repair) download: its outcome says so (#111).
+    expect(x.outcomes).toMatchObject([{ id: e.id, result: 'ok', priority: 'low' }]);
   });
 
   const stuck = () => {

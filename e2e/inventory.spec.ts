@@ -68,3 +68,14 @@ test('Check events: the result and the offer to add missing events show', async 
   await expect(page.getByTestId('confirm-dialog')).toHaveCount(0);
   await expect(page.getByTestId('inventory-recover-result')).toHaveCount(0);
 });
+
+// A run started elsewhere (another tab, or the API) shows without a reload:
+// the box polls while idle too (#106).
+test('A stills run started through the API shows in an open page', async ({ page, request }) => {
+  await page.goto('/#/maintenance');
+  await expect(page.getByTestId('inventory-stills')).toBeEnabled();
+  const r = await request.post(`http://127.0.0.1:${PROXY_PORT}/control/actions/inventory`, { headers: { Authorization: `Bearer ${ADMIN_TOKEN}` }, data: { kind: 'stills' } });
+  expect(r.status()).toBe(202);
+  const { runId } = (await r.json()) as { runId: string };
+  await expect(page.getByTestId('inventory-result')).toHaveAttribute('data-run', runId, { timeout: 30_000 });
+});

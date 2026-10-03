@@ -10,12 +10,12 @@ import { download, type DownloadOptions } from '../camera/baichuan/vod';
 import type { TimeInfo } from '../camera/time';
 import { logger } from '../log';
 import { RecordingCache } from './cache';
-import { RecordingFetcher, type FetchOutcome } from './fetcher';
+import { RecordingFetcher, type FetchOutcome, type Priority } from './fetcher';
 import { RecordingList } from './list';
 import type { Stream } from './names';
 
 export interface RecordingsStatus {
-  last: { at: number; result: string; stream: Stream; bytes: number; ms: number } | null;
+  last: { at: number; result: string; stream: Stream; bytes: number; ms: number; priority: Priority } | null;
   cache: { bytes: number; files: number; capBytes: number };
 }
 
@@ -60,8 +60,8 @@ export function createRecordingsSide(d: RecordingsDeps): RecordingsSide {
     paused: d.paused,
     noteWritten: d.noteWritten,
     onDone: (o) => {
-      last = { at: o.at, result: o.result, stream: o.stream, bytes: o.bytes, ms: o.ms };
-      logger.info({ camera: d.cam(), id: o.id, stream: o.stream, bytes: o.bytes, ms: o.ms, result: o.result }, 'recording_download');
+      last = { at: o.at, result: o.result, stream: o.stream, bytes: o.bytes, ms: o.ms, priority: o.priority };
+      logger.info({ camera: d.cam(), id: o.id, stream: o.stream, bytes: o.bytes, ms: o.ms, result: o.result, priority: o.priority }, 'recording_download');
       d.onDownload?.(o);
     },
   });

@@ -118,7 +118,7 @@ export function createMetrics(s: MetricsSources) {
   const cameraSeconds = new Histogram({ name: 'camproxy_camera_request_seconds', help: 'Camera status check duration', labelNames: ['cam', 'cmd'], buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10], registers: [registry] });
   const retentionDeleted = new Counter({ name: 'camproxy_retention_deleted_total', help: 'Rows and files removed by retention', labelNames: ['kind'], registers: [registry] });
   const stillsTotal = new Counter({ name: 'camproxy_stills_total', help: 'Stills written', labelNames: ['cam'], registers: [registry] });
-  const recordingDownloads = new Counter({ name: 'camproxy_recording_downloads_total', help: 'Recording downloads over Baichuan, by result', labelNames: ['cam', 'stream', 'result'], registers: [registry] });
+  const recordingDownloads = new Counter({ name: 'camproxy_recording_downloads_total', help: 'Recording downloads over Baichuan, by result; priority low: an inventory repair', labelNames: ['cam', 'stream', 'result', 'priority'], registers: [registry] });
   const stillsMissing = new Counter({ name: 'camproxy_stills_missing_total', help: 'Stills not written (disk full)', labelNames: ['cam'], registers: [registry] });
   const lastStill = new Gauge({ name: 'camproxy_last_still_timestamp_seconds', help: 'Time of the last still', labelNames: ['cam'], registers: [registry] });
   stillsTotal.inc({ cam: cam() }, 0);
@@ -147,7 +147,7 @@ export function createMetrics(s: MetricsSources) {
     onResubscribe: () => resubscribes.inc({ cam: cam() }),
     onStill: (ts: number) => (stillsTotal.inc({ cam: cam() }), lastStill.set({ cam: cam() }, ts / 1000)),
     onStillMissing: () => stillsMissing.inc({ cam: cam() }),
-    onRecordingDownload: (o: { stream: string; result: string }) => recordingDownloads.inc({ cam: cam(), stream: o.stream, result: o.result }),
+    onRecordingDownload: (o: { stream: string; result: string; priority: string }) => recordingDownloads.inc({ cam: cam(), stream: o.stream, result: o.result, priority: o.priority }),
     onCameraCheck: (c: { ok: boolean; ms: number; error?: string }) => {
       cameraSeconds.observe({ cam: cam(), cmd: 'status' }, c.ms / 1000);
       if (!c.ok) cameraErrors.inc({ cam: cam(), code: c.error ?? 'unknown' });

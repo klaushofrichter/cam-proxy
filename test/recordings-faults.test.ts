@@ -73,7 +73,7 @@ const noTrace = (f: SimFile) => {
   expect(p.proxy.recordings.cache.has(id)).toBe(false);
   expect(p.proxy.recordings.cache.busy(p.proxy.recordings.cache.partPath(id))).toBe(false);
 };
-const refusedCount = async () => Number(/result="refused"} (\d+)/.exec((await request(p.base).get('/metrics')).text)?.[1] ?? 0);
+const refusedCount = async () => Number(/result="refused",priority="high"} (\d+)/.exec((await request(p.base).get('/metrics')).text)?.[1] ?? 0);
 const okWhole = async (f: SimFile) => {
   const r = await grab(fileUrl(f));
   expect([r.status, r.complete, r.body.length]).toEqual([200, true, f.size]);

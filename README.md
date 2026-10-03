@@ -410,9 +410,11 @@ as MP4, also the ones FTP never delivered.
 - **Status:** the Status page's "Recordings (SD card)" card shows the last
   download's result and the cache fill: amber for `timeout` and `offline`, red
   for `auth`, `refused` and `protocol`, grey for `not_found` (the camera
-  overwrote the file) and before the first download. `/control/status` has
-  `recordings`; the metric is
-  `camproxy_recording_downloads_total{cam,stream,result}`, and the disk gauges
+  overwrote the file) and before the first download; an inventory repair's
+  download says "inventory repair". `/control/status` has
+  `recordings` (`last.priority`: `high` for a viewer's download, `low` for a
+  repair's); the metric is
+  `camproxy_recording_downloads_total{cam,stream,result,priority}`, and the disk gauges
   have `kind="recordings"`. Reading or downloading a recording writes no audit
   record.
 - **Network:** the Pi reaches the real camera's port 9000 on the LAN. In the
@@ -559,7 +561,7 @@ arrive.
 
 | Route | |
 |---|---|
-| `GET /control/status` | `{version, camera (incl. webUiUrl, serial, reboot: {kind: reboot\|powercycle, requestedAt, confirmed, phase: power-cycling\|rebooting\|back\|not-back, offAt, endedAt, downSec} or null, and poeSwitch: {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state: on\|off\|elsewhere\|unknown, checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result, stream, bytes, ms} or null (the last recording download over Baichuan), cache: {bytes, files, capBytes}}, analytics: [{…, keyMasked, keySource}], analyticsUnmapped}` |
+| `GET /control/status` | `{version, camera (incl. webUiUrl, serial, reboot: {kind: reboot\|powercycle, requestedAt, confirmed, phase: power-cycling\|rebooting\|back\|not-back, offAt, endedAt, downSec} or null, and poeSwitch: {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state: on\|off\|elsewhere\|unknown, checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result, stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null (the last recording download over Baichuan), cache: {bytes, files, capBytes}}, analytics: [{…, keyMasked, keySource}], analyticsUnmapped}` |
 | `GET /control/stats` | `{disk: {catalog, audit, stills, previews, clips, recordings}` (each `{bytes, files, oldest, newest, growthPerDay}`), `events, stream, sse, storage}` |
 | `GET /control/config` | every setting: `{value, source, restart, pending, next?, type}` (`type`: `integer`, `boolean` or `string`); secrets never appear |
 | `PUT /control/config` | overrides, e.g. `{"sse":{"pingS":10}}`; a bad value answers 400 naming it, and nothing is written |
@@ -576,7 +578,7 @@ arrive.
 | `POST /control/actions/inventory-repair` (events) | `{"kind":"events","runId":"events-…"}`: adds the events that events run (finished, less than an hour old) found missing. It compares with the camera again and adds only spans that ended by the check's `window.camera.to`: one event per kind per missing span, `source` and `endReason` `recovered`, start and end of the span's recordings, `raw` `{runId, check, recordings, stream, bounds}`; the oldest first, at most 1000 per run (`stopped: "event-cap"`), in one transaction; a span whose kind has an event by then is skipped. Existing events are never changed. 202 `{runId}` (`eventsrepair-…`); 409 `not_repairable` (`no events are missing`), otherwise as for clips. Audited as `inventory-repair` |
 | `POST /control/actions/inventory-cancel` | cancels the running inventory: `{cancelled, runId}`; the run keeps its partial counts. Audited as `control-action` |
 | `GET /control/inventory` | `{running: {runId, kind, op: "check" or "repair", startedAt, outcome: "running", progress: {phase, done, total, note}} or null, runs: {stills: [the last 10 runs, newest first: {runId, kind, startedAt, tookMs, outcome, counts, message}], clips: […], events: […]}, repairs: {clips: […], events: […]}}` |
-| `GET /control/inventory/runs/{id}` | one report: `{runId, kind, op: check\|repair, camera, startedAt, tookMs, outcome: ok\|cancelled\|failed, error, cancelledBy, requestedBy, options, window: {from, to, reason: retention\|budget\|store-younger\|empty\|sd-card, retentionFrom, protectedFrom, notes}, counts, top, items, itemsTruncated, message}` (`notes`: caveats on the counts, such as the clock note when seconds are restorable; stills `counts` include `previewsPruned`, packs without a sprite whose previews were pruned earlier, and `prunedDuringRun`, packs deleted by retention while the run read them, counted as missing; `options: {camera: true}` for a clips compare, whose `counts` add `pairedOtherStream`, recordings here as clips of the other stream, and `prunedHere`, recordings older than the oldest local clip while the storage budget prunes clips, both never offered). The window `reason` `sd-card` is an events check's: the SD card's reach, shorter than `retention.eventsDays`; a clips compare and an events check add `camera: {stream, to, oldestSdDay, unknownDays}` to the window, an events check also `eventsDays`. An events check's items: `missing-event` `{kind, start, end, date, recordings}` oldest first, then `event-without-recording` `{eventId, kind, start, end, source}`. A repair's report has `source` (the clips or events check run it worked from), `stopped` (`clip-cap`, `byte-cap`, `max-gb`, `paused`, `failures`, `refused`, `camera_offline`, `event-cap` (an events repair: more than 1000 missing) or null); an events repair has one item per event added, `{eventId, kind, start, end, result: ok}`; a clips repair one per recording tried: `{id, start, result: ok\|skipped\|failed, reason, error, clipId, bytes, streamed}` (`reason` of a skip: `outside-retention`, `already-local`, `gone-from-camera`, `other-stream`, `viewer`, `invalid`, `too-big`, `byte-cap`, `busy`; `streamed: true` when it went through `<dataDir>/inventory/tmp`); 400 for a malformed id, 404 for an unknown one. Kept in `<dataDir>/inventory/<kind>/` and repairs in `<dataDir>/inventory/<kind>repair/` (the last 10 each) |
+| `GET /control/inventory/runs/{id}` | one report: `{runId, kind, op: check\|repair, camera, startedAt, tookMs, outcome: ok\|cancelled\|failed, error, cancelledBy, requestedBy, options, window: {from, to, reason: retention\|budget\|store-younger\|empty\|sd-card, retentionFrom, protectedFrom, notes}, counts, top, items, itemsTruncated, message}` (`notes`: caveats on the counts, such as the clock note when seconds are restorable; stills `counts` include `previewsPruned`, packs without a sprite whose previews were pruned earlier, and `prunedDuringRun`, packs deleted by retention while the run read them, counted as missing; `options: {camera: true}` for a clips compare, whose `counts` add `pairedOtherStream`, recordings here as clips of the other stream, and `prunedHere`, recordings older than the oldest local clip while the storage budget prunes clips, both never offered). The window `reason` `sd-card` is an events check's: the SD card's reach, shorter than `retention.eventsDays`; a clips compare and an events check add `camera: {stream, to, oldestSdDay, unknownDays}` to the window, an events check also `eventsDays`. An events check's items: `missing-event` `{kind, start, end, date, recordings}` oldest first, then `event-without-recording` `{eventId, kind, start, end, source}`. A repair's report has `source` (the clips or events check run it worked from), `stopped` (`clip-cap`, `byte-cap`, `max-gb`, `paused`, `failures`, `refused`, `camera_offline`, `event-cap` (an events repair: more than 1000 missing) or null); an events repair has one item per event added, `{eventId, kind, start, end, result: ok}`; a clips repair one per recording tried: `{id, start, result: ok\|skipped\|failed, reason, error, clipId, bytes, streamed}` (`reason` of a skip: `outside-retention`, `already-local`, `gone-from-camera`, `other-stream`, `viewer`, `invalid`, `too-big`, `byte-cap`, `busy`, `still-recording` (a recording that starts at 23:55 or later, listed with end 000000, before 01:00 the next day); `streamed: true` when it went through `<dataDir>/inventory/tmp`); 400 for a malformed id, 404 for an unknown one. Kept in `<dataDir>/inventory/<kind>/` and repairs in `<dataDir>/inventory/<kind>repair/` (the last 10 each) |
 | `GET /control/audit` | the audit log as JSON lines: `limit`, `before`/`after` (cursors), `from`, `to`, `action`, `outcome`; admin token, admin session or `CAMPROXY_AUDIT_TOKEN`; HEAD answers like GET without the body. See [docs/audit-log.md](docs/audit-log.md) |
 | `GET /health` | `{ok, version, startedAt}` (no auth): `startedAt` (ms) tells a new process apart |
 | `GET /control/log?limit` | recent log lines (info and above), redacted; default limit 100, buffer holds the last 500 |
@@ -612,13 +614,14 @@ exchanged for the cookie and not stored in the browser.
   process). After 2 minutes without the proxy it says so.
   The Inventory box's "Check stills" checks the stills of the retention
   window in the background: the missing seconds, the 10 longest gaps and
-  whether a proxy stop or crash, a camera reboot or a power cycle explains
-  them, the seconds a local clip could restore, and unreadable packs or
-  sprites without their pack. It shows the progress (with Cancel) and the
-  newest result.
+  whether a proxy stop or crash, a camera reboot or a power cycle, or a
+  storage pause (disk full) explains them, the seconds a local clip could
+  restore, and unreadable packs or sprites without their pack (the first 10
+  with their minute). It shows the progress (with Cancel) and the newest
+  result, also of a run started in another tab (it polls every 10 s).
   "Check clips" checks the clips of the retention window (rows without
-  their file, files without a row, recording events without a clip, clips
-  without an event); "Compare clips with the camera" also pairs them with the
+  their file, files without a row, snapshots no clip links, recording
+  events without a clip, clips without an event); "Compare clips with the camera" also pairs them with the
   SD card's recordings on `ftp.stream`. Under a compare less than an hour
   old with recordings missing here, "Fetch N lost clips" fetches them from
   the SD card (at most 50 or 200 MB per run) after a confirmation; the Clips
@@ -678,9 +681,10 @@ the API, polling and Grafana are in [docs/audit-log.md](docs/audit-log.md).
 - `camproxy_camera_ftp_enabled` (1/0, no sample before the first read),
   `camproxy_clips_stalled`, `camproxy_clips_last_received_timestamp_seconds`
   (while `ftp.enabled`);
-- `camproxy_recording_downloads_total{cam,stream,result}` (recordings over
+- `camproxy_recording_downloads_total{cam,stream,result,priority}` (recordings over
   Baichuan; `result` `ok`, `offline`, `refused`, `auth`, `timeout`,
-  `protocol` or `not_found`);
+  `protocol` or `not_found`; `priority` `high` for a viewer, `low` for an
+  inventory repair);
 - `camproxy_disk_files{kind}`, `camproxy_storage_budget_bytes`,
   `camproxy_storage_growth_bytes_per_day{kind}`,
   `camproxy_storage_days_until_full`, `camproxy_storage_writing_paused`;

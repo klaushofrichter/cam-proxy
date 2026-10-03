@@ -219,6 +219,18 @@ describe('AuditLog.list', () => {
     expect(log.list({ from: Date.UTC(2026, 8, 30), to: Date.UTC(2026, 8, 30, 23) }).records.map((x) => x.message)).toEqual(['d1i2', 'd1i1', 'd1i0']);
   });
 
+  // #106: the inventories read days of records for a few actions; a busy day
+  // is mostly other actions, which are not parsed at all.
+  it('parses only the lines that can carry a wanted action', () => {
+    const now = { t: Date.UTC(2026, 8, 29, 12) };
+    const { log } = make(now);
+    for (let i = 0; i < 200; i++) log.write({ ...base, action: 'login', message: `x${i}` });
+    log.write({ ...base, action: 'logout', message: 'the one' });
+    const parse = vi.spyOn(JSON, 'parse');
+    expect(log.list({ actions: ['logout'] }).records.map((x) => x.message)).toEqual(['the one']);
+    expect(parse.mock.calls.length).toBeLessThan(5);
+  });
+
   it('refuses a bad cursor, a bad range and a bad limit', () => {
     const log = seed();
     expect(() => log.list({ before: 'nope' })).toThrow(AuditQueryError);

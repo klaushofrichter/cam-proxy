@@ -298,7 +298,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     timeInfo: () => client.timeInfo(),
     paused: () => storage.paused(),
     noteWritten: (bytes) => storage.noteWritten('recordings', bytes, 1),
-    onDownload: (o) => metrics.onRecordingDownload({ stream: o.stream, result: o.result }),
+    onDownload: (o) => metrics.onRecordingDownload({ stream: o.stream, result: o.result, priority: o.priority }),
   });
   recordingBusy = (p) => recordings.cache.busy(p);
 
@@ -334,7 +334,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
           dataDir: running.server.dataDir,
           audit,
           catalog,
-          settings: () => ({ cam: running.camera.id, intervalS: running.stills.intervalS, stillsDays: running.retention.stillsDays, previewsDays: running.retention.previewsDays, keepHours: running.storage.keepHours.stills }),
+          settings: () => ({ cam: running.camera.id, intervalS: running.stills.intervalS, stillsDays: running.retention.stillsDays, previewsDays: running.retention.previewsDays, keepHours: running.storage.keepHours.stills, enabled: running.stills.enabled }),
         }),
       },
       clips: {

@@ -138,6 +138,8 @@ describe('CameraReboot.powerCycle', () => {
     expect(a).toEqual({ status: 502, error: 'switch_error', detail: 'PoE may still be OFF on port 8', poeOff: true, turnedOn: false });
     expect(r.state()).toMatchObject({ kind: 'powercycle', phase: 'rebooting' });
     expect(records()[0]).toMatchObject({ event: { outcome: 'failure' }, cam_proxy: { poeOff: true, turnedOn: false } });
+    // The cut's time (#106): the stills inventory counts the outage from it, not from this record.
+    expect(records()[0].cam_proxy!.offAt).toBe(r.state()!.offAt);
     expect(records()[0].message).toMatch(/PoE may have been cut; turned back on: no/);
     expect((await r.request(who)).status).toBe(429);
     r.stop();

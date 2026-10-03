@@ -50,6 +50,38 @@ describe('inventory API', () => {
     expect(recs.some((x) => x.event.action === 'control-action' && x.cam_proxy?.action === 'inventory')).toBe(false);
   });
 
+  // #106 review (task 3): the generic session and config paths, for these routes.
+  it('a session needs X-CamProxy-UI to start, repair or cancel; refused, nothing starts', async () => {
+    const login = await request(p.base).post('/control/login').send({ token: ADMIN_TOKEN });
+    const cookie = String(login.headers['set-cookie']).split(';')[0];
+    const before = (await request(p.base).get('/control/inventory').set(admin())).body.runs.stills.length;
+    for (const [path, body] of [['inventory', { kind: 'stills' }], ['inventory-repair', { kind: 'clips', runId: 'clips-1-abcdef' }], ['inventory-cancel', {}]] as const) {
+      const no = await request(p.base).post(`/control/actions/${path}`).set('Cookie', cookie).send(body);
+      expect([path, no.status, no.body]).toEqual([path, 403, { error: 'csrf' }]);
+    }
+    const list = (await request(p.base).get('/control/inventory').set(admin())).body;
+    expect(list.running).toBeNull();
+    expect(list.runs.stills).toHaveLength(before);
+    const ok = await request(p.base).post('/control/actions/inventory').set('Cookie', cookie).set('X-CamProxy-UI', '1').send({ kind: 'stills' });
+    expect(ok.status).toBe(202);
+    await finished(ok.body.runId);
+    expect(await report(ok.body.runId)).toMatchObject({ outcome: 'ok', requestedBy: 'session' });
+  });
+
+  it('a settings change applies to the next run', async () => {
+    const put = await request(p.base).put('/control/config').set(admin()).send({ retention: { stillsDays: 3 } });
+    expect(put.status).toBe(200);
+    try {
+      const r = await request(p.base).post('/control/actions/inventory').set(admin()).send({ kind: 'stills' });
+      await finished(r.body.runId);
+      const rep = await report(r.body.runId);
+      expect(rep.counts.stillsDays).toBe(3);
+      expect(rep.window.retentionFrom).toBe(Math.floor((rep.startedAt - 3 * 86_400_000) / 86_400_000) * 86_400_000);
+    } finally {
+      expect((await request(p.base).delete('/control/config/retention.stillsDays').set(admin())).status).toBe(200);
+    }
+  });
+
   it('refuses an unknown or missing kind with 400', async () => {
     for (const body of [{ kind: 'nope' }, {}]) {
       const r = await request(p.base).post('/control/actions/inventory').set(admin()).send(body);

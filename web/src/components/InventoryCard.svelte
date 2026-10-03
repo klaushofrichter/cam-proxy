@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api, ApiError } from '../lib/api';
-  import { clipsLines, eventsLines, eventsOffer, eventsRepairLines, gapRows, mb, progressText, recoverText, repairLines, repairOffer, repairRows, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type InventoryState, type RepairReport, type StillsReport } from '../lib/inventory';
+  import { clipsLines, LOAD_ERROR, loadMessage, eventsLines, eventsOffer, eventsRepairLines, gapRows, mb, problemRows, progressText, recoverText, repairLines, repairOffer, repairRows, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type InventoryState, type RepairReport, type StillsReport } from '../lib/inventory';
 
   // The inventories (spec 2026-10-02-inventory-design): start one, follow its
   // progress (polled every second while it runs), cancel it, and show the
@@ -27,6 +27,7 @@
   const offer = $derived(repairOffer(clips, now, repair));
   const recoverOffer = $derived(eventsOffer(events, now, recover));
 
+  const IDLE_POLL_MS = 10_000;
   const fetchReport = <T,>(runId: string) => api<T>('GET', `/control/inventory/runs/${encodeURIComponent(runId)}`);
   async function load() {
     const s = await api<InventoryState>('GET', '/control/inventory');
@@ -43,12 +44,16 @@
     const rc = s.repairs?.events?.[0];
     if (rc && rc.runId !== recover?.runId) recover = await fetchReport<RepairReport>(rc.runId);
   }
-  const reload = () => load().catch(() => (message = 'Could not load the inventory.'));
+  const reload = () => load().then(() => (message = loadMessage(message, true)), () => (message = LOAD_ERROR));
   onMount(() => {
     void reload();
     // The offer's one hour runs out while the page stays open.
     const t = setInterval(() => (now = Date.now()), 30_000);
-    return () => clearInterval(t);
+    // A run started elsewhere (another tab, the API) shows within IDLE_POLL_MS (#106).
+    const idle = setInterval(() => {
+      if (!busy && !starting && document.visibilityState !== 'hidden') void reload();
+    }, IDLE_POLL_MS);
+    return () => (clearInterval(t), clearInterval(idle));
   });
   $effect(() => {
     if (!busy) return;
@@ -100,7 +105,7 @@
   {#if inv?.running}<p class="busy" role="status" data-testid="inventory-progress">{progressText(inv.running)}</p>{/if}
   {#if message}<p class="bad" role="alert" data-testid="inventory-message">{message}</p>{/if}
   {#if stills}
-    <div class="result" data-testid="inventory-result">
+    <div class="result" data-testid="inventory-result" data-run={stills.runId}>
       <p class="line">{stills.message}</p>
       <p class="small">{new Date(stills.startedAt).toLocaleString()}, took {(stills.tookMs / 1000).toFixed(1)} s</p>
       <ul>
@@ -115,10 +120,19 @@
           </tbody>
         </table>
       {/if}
+      {#if stills.items.length}
+        <table data-testid="inventory-problems">
+          <thead><tr><th>minute</th><th>file problem</th></tr></thead>
+          <tbody>
+            {#each problemRows(stills) as p, i (i)}<tr><td class="mono">{p.at}</td><td>{p.what}</td></tr>{/each}
+          </tbody>
+        </table>
+        {#if stills.items.length > problemRows(stills).length}<p class="small">The first {problemRows(stills).length} of {stills.counts.unreadablePacks + stills.counts.packsWithoutSprite + stills.counts.spritesWithoutPack} file problems; the report has up to 500.</p>{/if}
+      {/if}
     </div>
   {/if}
   {#if clips}
-    <div class="result" data-testid="inventory-clips-result">
+    <div class="result" data-testid="inventory-clips-result" data-run={clips.runId}>
       <p class="line">{clips.message}</p>
       <p class="small">{new Date(clips.startedAt).toLocaleString()}, took {(clips.tookMs / 1000).toFixed(1)} s</p>
       <ul>
@@ -146,7 +160,7 @@
     </div>
   {/if}
   {#if repair}
-    <div class="result" data-testid="inventory-repair-result">
+    <div class="result" data-testid="inventory-repair-result" data-run={repair.runId}>
       <p class="line">{repair.message}</p>
       <p class="small">{new Date(repair.startedAt).toLocaleString()}, took {(repair.tookMs / 1000).toFixed(1)} s</p>
       <ul>
@@ -163,7 +177,7 @@
     </div>
   {/if}
   {#if events}
-    <div class="result" data-testid="inventory-events-result">
+    <div class="result" data-testid="inventory-events-result" data-run={events.runId}>
       <p class="line">{events.message}</p>
       <p class="small">{new Date(events.startedAt).toLocaleString()}, took {(events.tookMs / 1000).toFixed(1)} s</p>
       <ul>
@@ -190,7 +204,7 @@
     </div>
   {/if}
   {#if recover}
-    <div class="result" data-testid="inventory-recover-result">
+    <div class="result" data-testid="inventory-recover-result" data-run={recover.runId}>
       <p class="line">{recover.message}</p>
       <p class="small">{new Date(recover.startedAt).toLocaleString()}, took {(recover.tookMs / 1000).toFixed(1)} s</p>
       <ul>

@@ -3,7 +3,7 @@ import { basename, dirname, join } from 'path';
 import { setImmediate as yieldToLoop } from 'timers/promises';
 import type { AuditLog } from '../audit/audit-log';
 import type { Catalog } from '../catalog/db';
-import { localDate, type Kind, type Stream } from '../recordings/names';
+import { localDate, settlesAt, type Kind, type Stream } from '../recordings/names';
 import type { RecordingEntry } from '../recordings/list';
 import { listCamera, type CameraListDeps } from './camera-list';
 import { coverage, pairByStart, START_SLACK_MS } from './match';
@@ -48,6 +48,8 @@ export type ClipItem =
   | { type: 'gone-from-camera'; clipId: number; start: number }
   | { type: 'row-without-file'; clipId: number; start: number; file: string }
   | { type: 'file-without-row'; file: string }
+  // An FTP picture (.jpg) that no clip row links (#111: its clip never came, or was deleted).
+  | { type: 'snapshot-without-clip'; file: string }
   | { type: 'event-without-clip'; eventId: number; kind: string; start: number }
   | { type: 'clip-without-event'; clipId: number; start: number };
 // The camera days with problems, the most missing first (the report's `top`).
@@ -89,7 +91,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     const root = join(d.dataDir, 'clips', s.cam);
     const db = d.catalog.db;
     const counts: Record<string, number> = {
-      clipsDays: s.clipsDays, clips: 0, fromCamera: 0, rowsWithoutFile: 0, filesWithoutRow: 0,
+      clipsDays: s.clipsDays, clips: 0, fromCamera: 0, rowsWithoutFile: 0, filesWithoutRow: 0, snapshotsWithoutClip: 0,
       events: 0, eventsWithoutClip: 0, clipsWithoutEvent: 0,
     };
     const local: ClipItem[] = [];
@@ -131,9 +133,15 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
       for (const n of [...files].sort()) {
         if (known.has(n) || !/\.(mp4|jpg)$/.test(n)) continue;
         const path = join(folder, n);
-        if ((n.endsWith('.mp4') ? byPath : bySnapshot).get(path)) continue; // a row of another day points here
-        counts.filesWithoutRow++;
-        add({ type: 'file-without-row', file: rel(path) });
+        const video = n.endsWith('.mp4');
+        if ((video ? byPath : bySnapshot).get(path)) continue; // a row of another day points here
+        if (video) {
+          counts.filesWithoutRow++;
+          add({ type: 'file-without-row', file: rel(path) });
+        } else {
+          counts.snapshotsWithoutClip++;
+          add({ type: 'snapshot-without-clip', file: rel(path) });
+        }
       }
       ctx.progress({ phase: 'clips', done: i + 1, total: days.length, note: new Date(day).toISOString().slice(0, 10) });
       await yieldToLoop();
@@ -174,7 +182,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     }
 
     let message =
-      `${counts.clips} clips in the last ${s.clipsDays} days (since ${new Date(from).toISOString().slice(0, 10)}): ${counts.rowsWithoutFile} rows without file, ${counts.filesWithoutRow} files without row, ` +
+      `${counts.clips} clips in the last ${s.clipsDays} days (since ${new Date(from).toISOString().slice(0, 10)} UTC): ${counts.rowsWithoutFile} rows without file, ${counts.filesWithoutRow} files without row, ${counts.snapshotsWithoutClip} snapshots without a clip, ` +
       `${counts.eventsWithoutClip} of ${counts.events} events without clip, ${counts.clipsWithoutEvent} clips without event`;
     const window: CheckResult['window'] = { from, to, reason: 'retention', notes };
     if (!ctx.options?.camera || cancelled || ctx.signal.aborted) return { window, counts, top: [], items: local, message };
@@ -204,7 +212,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     const pool = listing.days.flatMap((x) => x.recordings);
     const edge = db.prepare('SELECT id, start_ts, end_ts, stream FROM clips WHERE cam = ? AND start_ts >= ? AND start_ts < ?').all(s.cam, from - START_SLACK_MS, from) as unknown as Pick<Row, 'id' | 'start_ts' | 'end_ts' | 'stream'>[];
     const near = [...edge, ...rows].map((r) => ({ id: r.id, start: r.start_ts, end: r.end_ts ?? r.start_ts, stream: r.stream }));
-    const judgedRec = (r: RecordingEntry) => r.start >= from && r.end <= cameraTo;
+    const judgedRec = (r: RecordingEntry) => r.start >= from && settlesAt(r) <= cameraTo;
     const judgedClip = (c: { start: number; end: number }) => c.start >= from && c.end <= cameraTo && listed.has(localDate(c.start, t));
     // A clip whose recording may have started outside what was listed (before
     // the window, or on an unknown or unlisted neighbour day) can't be called
@@ -228,7 +236,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     const oldestHere = (db.prepare('SELECT MIN(start_ts) AS t FROM clips WHERE cam = ?').get(s.cam) as { t: number | null } | undefined)?.t ?? null;
     const pruning =
       d.audit !== undefined && oldestHere !== null && oldestHere - from >= HOUR &&
-      records(d.audit, ['storage-daily'], from, now).some((r) => {
+      (await records(d.audit, ['storage-daily'], from, now)).some((r) => {
         const v = (r.cam_proxy as { kinds?: { clips?: { oldest?: unknown } } } | undefined)?.kinds?.clips?.oldest;
         return typeof v === 'number' && v < oldestHere - HOUR;
       });
