@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { localDate } from '../lib/format';
+  import { localDate, pad2 } from '../lib/format';
   import { api } from '../lib/api';
   import { analysedSeconds, analysedStills, eventLabel, eventsInMinute, isRecovered, marksByMinute, primaryEvent, RECOVERED_NOTE, secondKinds, secondRecovered, stepMinute } from '../lib/timeline';
   import AnalysisModal from '../components/AnalysisModal.svelte';
@@ -120,7 +120,7 @@
 
   {#each Object.entries(hours) as [hour, list] (hour)}
     <div class="card" data-testid="hour-card">
-      <h3>{pad(Number(hour))}:00</h3>
+      <h3>{pad2(Number(hour))}:00</h3>
       <div class="strip">
         {#each list as m (m.minute)}
           {@const e = eventIn(m)}
