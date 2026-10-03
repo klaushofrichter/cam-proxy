@@ -6,7 +6,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { promisify } from 'util';
 import { openCatalog } from '../src/catalog/db';
-import { insertEvent, closeEvent } from '../src/catalog/events';
+import { addRecoveredEvents, insertEvent, closeEvent } from '../src/catalog/events';
 import { clipById, listClips, setSnapshot } from '../src/catalog/clips';
 import { ClipExistsError, ClipIndexer, InvalidStartError, NotAVideoError, localToUtc, parseClipName } from '../src/clips/indexer';
 import { timeInfoFromGetTime } from '../src/camera/time';
@@ -102,6 +102,19 @@ describe('ClipIndexer', () => {
     expect(listClips(catalog, 'cam1', start - 1000, start + 1000).map((c) => c.id)).toEqual([row!.id]);
     const msg = log.since(0, { types: ['clip'] }, 100).find((m) => m.type === 'clip');
     expect(msg?.data).toMatchObject({ clipId: row!.id, start, end: row!.end_ts, stream: 'main', size: u.bytes, events: [inside.id], url: `/api/cameras/cam1/clips/${row!.id}.mp4` });
+  });
+
+  // SSE never carries a recovered event (#75): the clip message names live ones only.
+  it('leaves recovered events out of the clip message', async () => {
+    const { indexer, upload, catalog, log } = setup();
+    const start = Date.UTC(2026, 8, 27, 19, 3, 1);
+    const live = insertEvent(catalog, { cam: 'cam1', source: 'onvif', kind: 'motion', start_ts: start + 1000, raw: null });
+    closeEvent(catalog, live.id, start + 2000, 'state');
+    const { added } = addRecoveredEvents(catalog, 'cam1', [{ kind: 'person', start_ts: start, end_ts: start + 3000, raw: null }], { beforeMs: 10_000, afterMs: 5_000, openMs: 600_000 });
+    expect(added).toHaveLength(1);
+    const row = await indexer.add(upload('Den_00_20260927140301.mp4', readFileSync(clipFile)));
+    const msg = log.since(0, { types: ['clip'] }, 100).find((m) => m.type === 'clip');
+    expect(msg?.data).toMatchObject({ clipId: row!.id, events: [live.id] });
   });
 
   it('drops a file that is not a video, and counts the failure', async () => {

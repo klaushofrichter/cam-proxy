@@ -276,7 +276,8 @@ upload folder. While storage is paused, `STOR` answers 452.
   pre-record; measured on cam1 2026-09-30), so a picture goes to the clip
   that started last at most 10 s before it, whichever arrives first; on
   startup, clips without one are paired from the stored pictures. A `clip`
-  stream message follows, with the events the clip covers. One clip often
+  stream message follows, with the live events the clip covers (never a
+  recovered one: SSE carries none). One clip often
   covers several events: the camera extends a recording while events keep
   coming, and ends it `postRec` (its "Post-Motion Record", 15 s on cam1)
   after the last one.
@@ -659,7 +660,8 @@ the API, polling and Grafana are in [docs/audit-log.md](docs/audit-log.md).
 `GET /metrics` gives Prometheus text, without auth and counts only:
 - `camproxy_disk_bytes{kind}`, `camproxy_disk_free_bytes`,
   `camproxy_disk_size_bytes`;
-- `camproxy_events_total`, `camproxy_events_stored`;
+- `camproxy_events_total`, `camproxy_events_stored` (live events per kind;
+  recovered ones are left out, as in the status's `events.stored`);
 - `camproxy_onvif_subscribed`, `camproxy_onvif_resubscribes_total`;
 - `camproxy_camera_up`, `camproxy_camera_request_seconds`,
   `camproxy_camera_errors_total`;

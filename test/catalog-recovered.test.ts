@@ -6,6 +6,7 @@ import { openCatalog, type Catalog } from '../src/catalog/db';
 import { addRecoveredEvents, closeAllOpen, closeEvent, countEventsByKind, countEventsOfKinds, countRecoveredEvents, insertEvent, listEvents, type RecoveredEvent } from '../src/catalog/events';
 import { unanalysed } from '../src/catalog/analyses';
 import { clipsStalled } from '../src/clips/ftp-health';
+import { eventsStored } from '../src/api/metrics';
 
 // Recovered events (#75, spec 2026-10-02-inventory-design §5): added from
 // the SD recordings by the events repair, marked, closed at once, and kept
@@ -105,6 +106,12 @@ describe('recovered events are kept apart', () => {
     const NOW = Date.UTC(2026, 9, 1, 21, 0, 0);
     addRecoveredEvents(c, 'cam1', [rec('person', NOW - 3 * H, NOW - 3 * H + 30_000)], TOL);
     expect(clipsStalled(c, 'cam1', NOW, 6)).toMatchObject({ stalled: false, events: 0 });
+  });
+
+  it('the stored-events counts (camproxy_events_stored, the status) leave them out', () => {
+    live('person', 1000, 2000);
+    addRecoveredEvents(c, 'cam1', [rec('person', 30_000, 40_000), rec('motion', 30_000, 40_000)], TOL);
+    expect(eventsStored(c)).toEqual({ person: 1 });
   });
 
   it('a restart closes no recovered event (they are closed already)', () => {

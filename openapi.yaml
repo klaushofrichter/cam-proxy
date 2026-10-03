@@ -221,8 +221,8 @@ paths:
         carry `reason: timeout|restart`); camera-status
         `{cam, online, reason, clockOffsetMs}` (plus `stream: up|down` when
         the stills stream changes); clip
-        `{cam, clipId, start, end, stream, size, codec, events, url,
-        snapshotUrl}`; analysis (an event's analysis was stored)
+        `{cam, clipId, start, end, stream, size, codec, events (live event
+        ids; never a recovered one), url, snapshotUrl}`; analysis (an event's analysis was stored)
         `{eventId, kind, start, end, provider, status, reason, stillTs,
         summary, objects}` (`analysis` messages stored before this version
         lack kind, start, end, stillTs and summary: a missing `summary` means
@@ -342,7 +342,7 @@ paths:
     get:
       summary: Disk, events, stream log, storage budget (spec §13)
       responses:
-        '200': { description: '{ disk: {catalog, stills, previews, clips, recordings} (each {bytes, files, oldest, newest, growthPerDay}), events: {stored}, stream: {rows, lastId}, sse: {clients}, storage: {budget, used, daysUntilFull, paused} }' }
+        '200': { description: '{ disk: {catalog, stills, previews, clips, recordings} (each {bytes, files, oldest, newest, growthPerDay}), events: {stored (live events per kind, recovered ones left out)}, stream: {rows, lastId}, sse: {clients}, storage: {budget, used, daysUntilFull, paused} }' }
   /control/inventory:
     get:
       summary: The running inventory or repair and the last 10 runs per kind, newest first (spec 2026-10-02-inventory-design)

@@ -21,8 +21,10 @@ export interface MetricsSources {
   target: string;
 }
 
+// Live events per kind (camproxy_events_stored, the status): recovered ones
+// (#75) are left out, a reconstruction from the SD card, not intake.
 export function eventsStored(c: Catalog): Record<string, number> {
-  const rows = c.db.prepare('SELECT kind, COUNT(*) AS n FROM events GROUP BY kind').all() as { kind: string; n: number }[];
+  const rows = c.db.prepare("SELECT kind, COUNT(*) AS n FROM events WHERE source != 'recovered' GROUP BY kind").all() as { kind: string; n: number }[];
   return Object.fromEntries(rows.map((r) => [r.kind, r.n]));
 }
 
