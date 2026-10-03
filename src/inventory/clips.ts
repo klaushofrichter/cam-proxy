@@ -1,4 +1,4 @@
-import { access, readdir } from 'fs/promises';
+import { access } from 'fs/promises';
 import { basename, dirname, join } from 'path';
 import { setImmediate as yieldToLoop } from 'timers/promises';
 import type { AuditLog } from '../audit/audit-log';
@@ -10,6 +10,7 @@ import { coverage, pairByStart, START_SLACK_MS } from './match';
 import { MAX_ITEMS, MAX_TOP, type Check, type CheckResult } from './runner';
 import { records } from './stills';
 import { DAY, dayStart, HOUR, utcDayParts } from '../time-units';
+import { listDir } from '../fs-util';
 
 // The clips inventory (#74, spec 2026-10-02-inventory-design §4). Part 1,
 // local: the clip rows and files of the clips retention window, and the
@@ -59,13 +60,6 @@ interface Row { id: number; start_ts: number; end_ts: number | null; path: strin
 export const mb = (bytes: number) => `${(bytes / 2 ** 20).toFixed(1)} MB`;
 
 interface EventSpan { id: number; kind: string; start_ts: number; end_ts: number | null }
-async function names(dir: string): Promise<string[]> {
-  try {
-    return await readdir(dir);
-  } catch {
-    return [];
-  }
-}
 async function exists(file: string): Promise<boolean> {
   try {
     await access(file);
@@ -109,7 +103,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
         break;
       }
       const folder = join(root, ...utcDayParts(day));
-      const files = new Set(await names(folder));
+      const files = new Set(await listDir(folder));
       const dayRows = rowsOf.all(s.cam, day, Math.min(day + DAY, to)) as unknown as Row[];
       const known = new Set<string>();
       for (const r of dayRows) {

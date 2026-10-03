@@ -1,11 +1,12 @@
 import { EventEmitter } from 'events';
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from 'fs';
-import { mkdir, open, readFile, rename, stat, writeFile, type FileHandle } from 'fs/promises';
-import { dirname, join } from 'path';
+import { open, readFile, stat, type FileHandle } from 'fs/promises';
+import { join } from 'path';
 import sharp from 'sharp';
 import { logger } from '../log';
 import type { Frame } from './grabber';
 import { MINUTE, utcDayParts, utcHhmm } from '../time-units';
+import { writeFileAtomic } from '../fs-util';
 
 // One minute of stills is one pack: the JPEGs back to back, a JSON footer
 // (interval, size, quality and one [offset, length] per slot; length 0 means
@@ -33,13 +34,6 @@ export const minuteOf = (ts: number) => Math.floor(ts / MINUTE) * MINUTE;
 // Where a minute's files live: <dataDir>/<kind>/<cam>/YYYY/MM/DD/HHMM (UTC).
 export function minutePath(dataDir: string, kind: 'stills' | 'previews', cam: string, minute: number): string {
   return join(dataDir, kind, cam, ...utcDayParts(minute), utcHhmm(minute));
-}
-
-async function writeAtomic(file: string, data: Buffer | string): Promise<void> {
-  await mkdir(dirname(file), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}`;
-  await writeFile(tmp, data);
-  await rename(tmp, file);
 }
 
 // A pack's footer, read async and without the store's cache (the inventory
@@ -159,16 +153,16 @@ export class MinuteStore extends EventEmitter {
       const len = Buffer.alloc(4);
       len.writeUInt32LE(json.length);
       const pack = Buffer.concat([...parts, json, len, MAGIC]);
-      await writeAtomic(packFile, pack);
+      await writeFileAtomic(packFile, pack);
       this.footers.delete(packFile);
       this.emit('written', { kind: 'stills', bytes: pack.length - before.stills, files: existing ? 0 : 1 });
     }
 
     // The sprite sheet (missing tiles dark), and its sidecar.
     const sprite = await this.compose(tiles, spriteBase);
-    await writeAtomic(`${base}.jpg`, sprite);
+    await writeFileAtomic(`${base}.jpg`, sprite);
     const meta: Sidecar = { v: 1, minute: cur.minute, cols: this.cols, rows: this.rows, tileW: this.tileW, tileH: this.tileH, intervalS: this.o.intervalS, present: tilePresent };
-    await writeAtomic(`${base}.json`, JSON.stringify(meta));
+    await writeFileAtomic(`${base}.json`, JSON.stringify(meta));
     this.sidecars.delete(`${base}.json`);
     this.emit('written', { kind: 'previews', bytes: sprite.length - before.previews, files: spriteBase ? 0 : 2 });
   }

@@ -5,12 +5,13 @@
 // its 30 s day cache). A day whose Search fails is `unknown`: its recordings
 // are never counted as missing. An offline camera ends the listing
 // (SearchError camera_offline); a full Search queue (busy) is tried again.
-import { isAbort, sleep as defaultSleep } from '../async';
+import { abortError, isAbort, sleep as defaultSleep } from '../async';
 import { CameraError } from '../camera/client';
 import { SearchError, type RecordingEntry, type RecordingList } from '../recordings/list';
 import { localDays, type Stream } from '../recordings/names';
 import type { TimeInfo } from '../camera/time';
 import { pad2 } from '../time-units';
+import { errorMessage } from '../log';
 
 export interface CameraDay { date: string; state: 'listed' | 'unknown'; recordings: RecordingEntry[]; error?: string }
 export interface CameraListing {
@@ -26,6 +27,22 @@ export interface CameraListDeps {
 
 // A Search refused because the queue is full is tried this often in all, 1 s apart.
 export const BUSY_TRIES = 3;
+
+// fn, with a busy Search (the queue is full) tried again: BUSY_TRIES times
+// in all, 1 s apart. The last busy error, any other error, and a busy one
+// once the signal aborted are thrown as they are; an abort during the wait
+// is an AbortError.
+export async function withBusyRetry<T>(fn: () => Promise<T>, signal: AbortSignal, sleep: (ms: number, signal: AbortSignal) => Promise<void>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (!(err instanceof SearchError && err.code === 'busy') || signal.aborted || attempt >= BUSY_TRIES) throw err;
+      await sleep(1000, signal);
+      if (signal.aborted) throw abortError('cancelled');
+    }
+  }
+}
 
 const offline = (e: unknown) => e instanceof SearchError && e.code === 'camera_offline';
 // A camera that does not answer: CameraError camera_offline, or a socket-level error.
@@ -49,7 +66,7 @@ export async function listCamera(
   } catch (err) {
     if (err instanceof SearchError) throw err;
     if (isNetworkError(err)) throw new SearchError('camera_offline', 'the camera time is unknown');
-    throw new SearchError('search_failed', err instanceof Error ? err.message : String(err));
+    throw new SearchError('search_failed', errorMessage(err));
   }
   const sleep = d.sleep ?? defaultSleep;
   const dates = localDays(o.from, o.to, time);
@@ -93,18 +110,11 @@ export async function listCamera(
 }
 
 async function searchDay(d: CameraListDeps, date: string, stream: Stream, signal: AbortSignal, sleep: (ms: number, signal?: AbortSignal) => Promise<void>): Promise<CameraDay | null> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return { date, state: 'listed', recordings: await d.list.day(date, stream, false, signal) };
-    } catch (err) {
-      if (isAbort(err) || signal.aborted) return null;
-      if (offline(err)) throw err;
-      if (err instanceof SearchError && err.code === 'busy' && attempt < BUSY_TRIES) {
-        await sleep(1000, signal);
-        if (signal.aborted) return null;
-        continue;
-      }
-      return { date, state: 'unknown', recordings: [], error: err instanceof Error ? err.message : String(err) };
-    }
+  try {
+    return { date, state: 'listed', recordings: await withBusyRetry(() => d.list.day(date, stream, false, signal), signal, sleep) };
+  } catch (err) {
+    if (isAbort(err) || signal.aborted) return null;
+    if (offline(err)) throw err;
+    return { date, state: 'unknown', recordings: [], error: errorMessage(err) };
   }
 }

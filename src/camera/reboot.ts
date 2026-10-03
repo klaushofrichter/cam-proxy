@@ -138,16 +138,20 @@ export class CameraReboot {
       this.d.forgetToken(); // the camera loses every token
       this.current = { kind: 'powercycle', requestedAt, confirmed: true, phase: 'power-cycling', offAt: at, endedAt: null, downSec: null };
     };
+    // The camera may be dark now: watch for it to answer again.
+    const startWatch = () => {
+      this.current = { ...this.current!, phase: 'rebooting' };
+      this.watch(serialBefore);
+    };
     try {
       const r = await run(cut);
-      this.current = { ...this.current!, phase: 'rebooting' };
       this.d.audit.write({
         ...base, outcome: 'success',
         message: `Camera power-cycled through the PoE switch (${where}): ${r.watts} W before, PoE off for ${info.offSeconds} s`,
         details: { ...details, watts: r.watts, offAt: r.offAt, onAt: r.onAt },
       });
       logger.info({ watts: r.watts, offMs: r.onAt - r.offAt }, 'camera_powercycle_done');
-      this.watch(serialBefore);
+      startWatch();
       return { status: 202, ...r };
     } catch (err) {
       const e = err instanceof PoeSwitchError ? err : new PoeSwitchError('switch_error', (err as Error).message, offAt !== null, null);
@@ -168,9 +172,8 @@ export class CameraReboot {
       });
       (poeOff && !turnedOn ? logger.error : logger.warn).call(logger, { code: e.code, poeOff, turnedOn }, 'camera_powercycle_failed');
       if (poeOff) {
-        // The camera may have gone dark: the cooldown holds and the watch tells when (or whether) it is back.
-        this.current = { ...this.current!, phase: 'rebooting' };
-        this.watch(serialBefore);
+        // The cooldown holds and the watch tells when (or whether) it is back.
+        startWatch();
         return { status: 502, error: e.code, detail: e.message, poeOff: true, turnedOn };
       }
       this.current = previous;

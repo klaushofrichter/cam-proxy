@@ -9,10 +9,10 @@ import { ClipExistsError, type ClipIndexer } from '../clips/indexer';
 import type { RecordingCache } from '../recordings/cache';
 import { abortError, isAbort, sleep as defaultSleep } from '../async';
 import type { Fetch, RecordingFetcher, Waiter } from '../recordings/fetcher';
-import { logger } from '../log';
+import { errorMessage, logger } from '../log';
 import { SearchError, type RecordingEntry, type RecordingList } from '../recordings/list';
 import { settlesAt, type Stream } from '../recordings/names';
-import { BUSY_TRIES } from './camera-list';
+import { withBusyRetry } from './camera-list';
 import { mb, type ClipItem } from './clips';
 import { START_SLACK_MS } from './match';
 import type { InventoryReport, RepairEntry, RepairResult } from './runner';
@@ -111,14 +111,13 @@ const closed = (w: Writable) =>
 // The temp file, opened at once (so a bad folder fails before any fetch).
 const openTempFile = (path: string): Writable => createWriteStream(path, { fd: openSync(path, 'w') });
 
-const why = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 // Cleanup never turns a done clip into a failure, nor hides the real error.
 const quietly = (what: string, f: () => void) => {
   try {
     f();
   } catch (err) {
-    logger.warn({ err: why(err) }, what);
+    logger.warn({ err: errorMessage(err) }, what);
   }
 };
 
@@ -188,7 +187,7 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
         try {
           w = (d.openTemp ?? openTempFile)(path);
         } catch (err) {
-          throw new Error(`the temp file could not be made: ${why(err)}`);
+          throw new Error(`the temp file could not be made: ${errorMessage(err)}`);
         }
         const t: { path: string; w: Writable; err?: Error } = { path, w };
         w.on('error', (err) => void (t.err ??= err));
@@ -236,15 +235,11 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
     // The still-listed check; a busy Search (a viewer browsing) is tried
     // BUSY_TRIES times 1 s apart like the compare's, then 'busy'.
     const findListed = async (id: string, signal: AbortSignal): Promise<RecordingEntry | undefined | 'busy'> => {
-      for (let attempt = 1; ; attempt++) {
-        try {
-          return await d.list.find(id, signal);
-        } catch (err) {
-          if (!(err instanceof SearchError && err.code === 'busy') || signal.aborted) throw err;
-          if (attempt >= BUSY_TRIES) return 'busy';
-          await sleep(1000, signal);
-          if (signal.aborted) throw abortError('cancelled');
-        }
+      try {
+        return await withBusyRetry(() => d.list.find(id, signal), signal, sleep);
+      } catch (err) {
+        if (err instanceof SearchError && err.code === 'busy' && !signal.aborted) return 'busy';
+        throw err;
       }
     };
 
@@ -326,7 +321,7 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
           skip(c, 'gone-from-camera');
           continue;
         }
-        fail(c, why(err));
+        fail(c, errorMessage(err));
         const offline = (err instanceof SearchError && err.code === 'camera_offline') || (err instanceof BaichuanError && err.code === 'offline');
         if (offline) stopped = 'camera_offline';
         else if (err instanceof BaichuanError && err.code === 'refused') stopped = 'refused';

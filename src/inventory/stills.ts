@@ -1,4 +1,3 @@
-import { readdir } from 'fs/promises';
 import { join } from 'path';
 import { setImmediate as yieldToLoop } from 'timers/promises';
 import type { AuditLog, AuditRecord } from '../audit/audit-log';
@@ -7,6 +6,7 @@ import { REBOOT_WAIT_MS } from '../camera/reboot';
 import { minuteOf, readPackFooter } from '../stills/store';
 import { MAX_ITEMS, MAX_TOP, type Check, type CheckResult } from './runner';
 import { DAY, dayStart, HOUR, MINUTE, utcDayParts, utcHhmm } from '../time-units';
+import { listDir } from '../fs-util';
 
 // The stills inventory (#72, spec 2026-10-02-inventory-design §3): what the
 // store should hold for the retention window, and what it holds. Local only.
@@ -55,14 +55,7 @@ export interface Gap { from: number; to: number; seconds: number; explained: Gap
 export interface FileProblem { type: 'unreadable-pack' | 'pack-without-sprite' | 'sprite-without-pack'; minute: number }
 export type WindowReason = 'retention' | 'budget' | 'store-younger' | 'empty';
 
-
-async function names(dir: string): Promise<Set<string>> {
-  try {
-    return new Set(await readdir(dir));
-  } catch {
-    return new Set();
-  }
-}
+const names = async (dir: string) => new Set(await listDir(dir));
 
 // Every audit record of `actions` in [from, to], oldest first. AuditLog.list
 // reads a day file whole and synchronously (a busy day can reach 50 MB), so

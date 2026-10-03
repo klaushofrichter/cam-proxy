@@ -3,7 +3,7 @@ import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, 
 import { copyFile, link, stat, unlink } from 'fs/promises';
 import { dirname, join, resolve, sep } from 'path';
 import { promisify } from 'util';
-import type { DstRule, TimeInfo } from '../camera/time';
+import { dstBounds, inDst, type TimeInfo } from '../camera/time';
 import { clipByPath, clipForSnapshot, clipsWithoutSnapshot, deleteClip, insertClip, overlappingEvents, setSnapshot, type ClipRow } from '../catalog/clips';
 import type { Catalog } from '../catalog/db';
 import type { Config } from '../config/defaults';
@@ -49,22 +49,6 @@ function partsOf(local: string): number[] {
   return [local.slice(0, 4), local.slice(4, 6), local.slice(6, 8), local.slice(8, 10), local.slice(10, 12), local.slice(12, 14)].map(Number);
 }
 
-// The day of the nth weekday of a month (week 5, or past the month's end: the last).
-function nthWeekday(year: number, mon: number, week: number, weekday: number): number {
-  const first = new Date(Date.UTC(year, mon - 1, 1)).getUTCDay();
-  let day = 1 + ((weekday - first + 7) % 7) + (Math.max(1, week) - 1) * 7;
-  const days = new Date(Date.UTC(year, mon, 0)).getUTCDate();
-  while (day > days) day -= 7;
-  return day;
-}
-
-// The UTC instants DST starts and ends in a year.
-export function dstBounds(year: number, r: DstRule, std: number, dst: number): [number, number] {
-  const start = Date.UTC(year, r.startMon - 1, nthWeekday(year, r.startMon, r.startWeek, r.startWeekday), r.startHour, r.startMin) - std * 60_000;
-  const end = Date.UTC(year, r.endMon - 1, nthWeekday(year, r.endMon, r.endWeek, r.endWeekday), r.endHour, r.endMin) - (std + dst) * 60_000;
-  return [start, end];
-}
-
 // Both readings of a camera-local time: [DST, standard] in the repeated
 // autumn hour, else the one reading.
 export function localToUtcCandidates(local: string, t: TimeInfo): number[] {
@@ -74,9 +58,8 @@ export function localToUtcCandidates(local: string, t: TimeInfo): number[] {
   if (!t.dstRule || !t.dstOffsetMinutes) return [asStd];
   const asDst = asStd - t.dstOffsetMinutes * 60_000;
   const [start, end] = dstBounds(y, t.dstRule, t.stdOffsetMinutes, t.dstOffsetMinutes);
-  const inDst = (u: number) => (start < end ? u >= start && u < end : u >= start || u < end);
-  if (inDst(asDst) && !inDst(asStd)) return [asDst, asStd];
-  return [localToUtc(local, t)];
+  if (inDst(asDst, start, end) && !inDst(asStd, start, end)) return [asDst, asStd];
+  return [inDst(asDst, start, end) ? asDst : asStd]; // localToUtc's answer
 }
 
 // Camera-local YYYYMMDDHHMMSS → UTC ms. In the repeated fall hour the DST
@@ -89,8 +72,7 @@ export function localToUtc(local: string, t: TimeInfo): number {
   if (!t.dstRule || !t.dstOffsetMinutes) return asStd;
   const asDst = asStd - t.dstOffsetMinutes * 60_000;
   const [start, end] = dstBounds(y, t.dstRule, t.stdOffsetMinutes, t.dstOffsetMinutes);
-  const inDst = (u: number) => (start < end ? u >= start && u < end : u >= start || u < end);
-  return inDst(asDst) ? asDst : asStd;
+  return inDst(asDst, start, end) ? asDst : asStd;
 }
 
 export interface ClipIndexerDeps {

@@ -1,8 +1,9 @@
 import { randomBytes } from 'crypto';
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'fs/promises';
+import { readdir, readFile, rm } from 'fs/promises';
 import { join, resolve, sep } from 'path';
 import type { AuditLog } from '../audit/audit-log';
-import { logger } from '../log';
+import { errorMessage, logger } from '../log';
+import { writeFileAtomic } from '../fs-util';
 
 // The inventories (spec 2026-10-02-inventory-design): one run at a time per
 // proxy, cancellable, with progress. Each finished run (also a cancelled or
@@ -249,7 +250,7 @@ export class InventoryRunner {
         res = await job.work({ signal: cur.ac.signal, now: startedAt, runId, progress: (p) => void (cur.view.progress = p) });
       } catch (err) {
         failed = true;
-        error = err instanceof Error ? err.message : String(err);
+        error = errorMessage(err);
       }
       cur.settled = true;
       const outcome: RunOutcome = cur.ac.signal.aborted ? 'cancelled' : failed ? 'failed' : 'ok';
@@ -294,10 +295,7 @@ export class InventoryRunner {
   private async save(folder: string, r: InventoryReport): Promise<void> {
     try {
       const dir = join(this.d.dir, folder);
-      await mkdir(dir, { recursive: true });
-      const file = join(dir, `${r.runId}.json`);
-      await writeFile(`${file}.tmp`, JSON.stringify(r));
-      await rename(`${file}.tmp`, file);
+      await writeFileAtomic(join(dir, `${r.runId}.json`), JSON.stringify(r));
       for (const id of (await this.ids(folder)).slice(this.d.keep ?? KEEP_RUNS)) await rm(join(dir, `${id}.json`), { force: true });
     } finally {
       this.generation.set(folder, (this.generation.get(folder) ?? 0) + 1);

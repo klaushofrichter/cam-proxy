@@ -9,7 +9,7 @@ import { clearUnmapped, countAnalysesByStatus, listUnmapped, usageBetween } from
 import { countAllClips, countClips, lastClipReceived } from './catalog/clips';
 import { closeAllOpen, countEventsByKind, countRecoveredEvents } from './catalog/events';
 import { ReolinkClient } from './camera/client';
-import { splitHost } from './camera/http';
+import { bareHost, splitHost } from './camera/http';
 import { StatusPoller } from './camera/status';
 import { CameraReboot } from './camera/reboot';
 import { PoeSwitch } from './camera/poe-switch';
@@ -316,7 +316,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   const recordings = createRecordingsSide({
     dataDir: running.server.dataDir,
     cam: () => running.camera.id,
-    target: () => ({ host: splitHost(running.camera.host).hostname.replace(/^\[(.*)\]$/, '$1'), port: running.camera.baichuanPort, user: running.camera.user, password: loaded.secrets.cameraPassword }),
+    target: () => ({ host: bareHost(splitHost(running.camera.host).hostname), port: running.camera.baichuanPort, user: running.camera.user, password: loaded.secrets.cameraPassword }),
     capBytes: () => running.recordings.cacheMB * 2 ** 20,
     search: (param) => client.command('Search', param),
     timeInfo: () => client.timeInfo(),

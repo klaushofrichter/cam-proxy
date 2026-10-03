@@ -40,6 +40,9 @@ export function requestWasWritten(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { [WRITTEN]?: boolean })[WRITTEN] === true;
 }
 
+// A host for a socket: an IPv6 address without its URL brackets.
+export const bareHost = (hostname: string): string => hostname.replace(/^\[(.*)\]$/, '$1');
+
 export function splitHost(host: string): { hostname: string; port?: number } {
   const i = host.lastIndexOf(':');
   if (i > 0 && /^\d+$/.test(host.slice(i + 1))) return { hostname: host.slice(0, i), port: Number(host.slice(i + 1)) };

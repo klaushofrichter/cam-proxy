@@ -3,6 +3,7 @@ import { hostname } from 'os';
 import { join } from 'path';
 import { logger, maskPath } from '../log';
 import { addDays, DAY, dayStart } from '../time-units';
+import { fileSize } from '../fs-util';
 export { maskPath };
 
 // The audit log (spec 2026-10-01-audit-log-design): ECS 8.x JSON lines, one
@@ -89,7 +90,7 @@ export class AuditLog {
     const file = join(this.d.dir, `${day}.jsonl`);
     try {
       // Refused tokens and failed sign-ins are what a flood writes: those stop at the size limit.
-      if ((i.action === 'auth-refused' || (i.action === 'login' && i.outcome === 'failure')) && this.size(file) >= this.max) {
+      if ((i.action === 'auth-refused' || (i.action === 'login' && i.outcome === 'failure')) && fileSize(file) >= this.max) {
         if (this.throttledDay !== day) {
           this.throttledDay = day;
           const t = this.record(ts, { action: 'audit-throttled', category: ['host'], type: ['info'], outcome: 'unknown', message: 'The audit file reached its size limit; further refused-token and failed sign-in records today are dropped' });
@@ -183,7 +184,7 @@ export class AuditLog {
 
   usage(): { bytes: number; files: number; oldest: number | null; newest: number | null; growthPerDay: number } {
     const days = this.days();
-    const sizes = days.map((d) => this.size(join(this.d.dir, `${d}.jsonl`)));
+    const sizes = days.map((d) => fileSize(join(this.d.dir, `${d}.jsonl`)));
     const bytes = sizes.reduce((a, b) => a + b, 0);
     // Growth: bytes per calendar day over the last 7 whole UTC days (today is
     // partial), counting days without a file as 0, from the first file on.
@@ -241,9 +242,6 @@ export class AuditLog {
     } catch { return false; } finally { if (fd !== undefined) closeSync(fd); }
   }
 
-  private size(file: string): number {
-    try { return statSync(file).size; } catch { return 0; }
-  }
 
   private days(): string[] {
     let names: string[] = [];

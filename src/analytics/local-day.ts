@@ -1,5 +1,4 @@
-import type { TimeInfo } from '../camera/time';
-import { dstBounds } from '../clips/indexer';
+import { dstBounds, inDst, type TimeInfo } from '../camera/time';
 
 // The camera-local date of a moment: the limits count per camera day and
 // calendar month (the container runs in UTC). Without the camera's time
@@ -11,8 +10,7 @@ export function localDay(ts: number, t: TimeInfo | undefined): string {
     if (t.dstRule && t.dstOffsetMinutes) {
       const year = new Date(ts + offset * 60_000).getUTCFullYear();
       const [start, end] = dstBounds(year, t.dstRule, t.stdOffsetMinutes, t.dstOffsetMinutes);
-      // start > end: DST spans New Year (southern hemisphere).
-      if (start < end ? ts >= start && ts < end : ts >= start || ts < end) offset += t.dstOffsetMinutes;
+      if (inDst(ts, start, end)) offset += t.dstOffsetMinutes;
     }
   }
   return new Date(ts + offset * 60_000).toISOString().slice(0, 10);

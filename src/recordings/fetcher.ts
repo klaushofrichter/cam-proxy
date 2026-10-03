@@ -373,12 +373,7 @@ export class RecordingFetcher {
   // and room beside the pinned files. Evicts nothing. The route asks before a
   // Range request waits for a fetch whose file couldn't be kept.
   canKeep(size: number): boolean {
-    const { cache } = this.d;
-    if (this.d.paused()) return false;
-    const cap = cache.capBytes();
-    if (size > cap) return false;
-    const pinned = cache.files().filter((x) => cache.busy(x.path)).reduce((n, x) => n + x.bytes, 0);
-    return pinned + size <= cap;
+    return !this.d.paused() && this.d.cache.fits(size);
   }
 
   // canKeep (so nothing is evicted for a file that can't fit), then room

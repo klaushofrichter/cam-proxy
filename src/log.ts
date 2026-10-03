@@ -76,3 +76,6 @@ export function setLogLevel(level: string): void {
   logger.level = consoleLevel < INFO ? level : 'info';
 }
 setLogLevel(process.env.CAMPROXY_LOG_LEVEL ?? 'info');
+
+// An error's message for a log line or a report; anything thrown.
+export const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
