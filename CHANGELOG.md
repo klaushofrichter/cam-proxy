@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.10.03.5
+
 - Code cleanup across the repo (shared helpers for sleeps, time units, atomic writes, path settings, busy Search retries; one copy each of the camera-side start/stop and the API's range and file-send handling; unused exports dropped). No change in behaviour or API answers.
 - Lighter on the Pi: `GET /api/cameras/:cam/clips` reads the events for the whole list in one query (was one per clip) and `/recordings` its clip links in one (was one per recording); a day of previews reads each sidecar once until it changes; the minute's pack and sprite are written without blocking the event loop; SSE frames are built once for all clients; the admin UI sends one status+stats refresh at a time (a burst of stream events was one each) and none from a hidden tab.
 
