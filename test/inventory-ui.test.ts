@@ -146,6 +146,12 @@ describe('Inventory box helpers, clips', () => {
     expect(repairLines({ ...rep, outcome: 'failed', error: 'camera_offline: x' })).toEqual(['Failed: camera_offline: x']);
   });
 
+  it('mentions recordings not offered because the storage budget pruned clips that old', () => {
+    const l = clipsLines({ ...clipsReport, counts: { ...clipsReport.counts, prunedHere: 3 } }, fmt);
+    expect(l).toContain('3 recordings are older than the oldest clip here, deleted for space (not offered: they would be deleted again)');
+    expect(clipsLines(clipsReport, fmt).some((x) => x.includes('deleted for space'))).toBe(false);
+  });
+
   it('mentions recordings paired with the other stream', () => {
     const l = clipsLines({ ...clipsReport, counts: { ...clipsReport.counts, pairedOtherStream: 4 } }, fmt);
     expect(l).toContain('4 recordings are here as clips of the other stream (not counted as missing)');

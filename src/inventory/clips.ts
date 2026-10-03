@@ -1,12 +1,14 @@
 import { access, readdir } from 'fs/promises';
 import { basename, dirname, join } from 'path';
 import { setImmediate as yieldToLoop } from 'timers/promises';
+import type { AuditLog } from '../audit/audit-log';
 import type { Catalog } from '../catalog/db';
 import { localDate, type Kind, type Stream } from '../recordings/names';
 import type { RecordingEntry } from '../recordings/list';
 import { listCamera, type CameraListDeps } from './camera-list';
 import { pairByStart, START_SLACK_MS } from './match';
 import { MAX_ITEMS, MAX_TOP, type Check, type CheckResult } from './runner';
+import { records } from './stills';
 
 // The clips inventory (#74, spec 2026-10-02-inventory-design §4). Part 1,
 // local: the clip rows and files of the clips retention window, and the
@@ -26,6 +28,7 @@ export const SETTLE_MS = 5 * 60_000;
 export const RECORDING_KINDS = ['motion', 'person', 'vehicle', 'pet'] as const;
 const FTP_OFF_NOTE = 'FTP is off in the proxy: no clips arrive, so every event is without a clip';
 const UNJUDGED_NOTE = (n: number) => `${n} local clips not on the camera were not judged: the SD card's oldest day is unknown, or the clip is at the window start or next to a day the camera did not list`;
+const PRUNED_NOTE = (n: number, day: string) => `${n} recordings older than the oldest clip here (${day}) are not offered: the storage budget or ftp.maxGB deleted clips that old, and would delete them again`;
 const OTHER_STREAM_NOTE = (n: number, stream: string) => `${n} local clips of another stream than ${stream} (ftp.stream) only keep their recordings from counting as missing`;
 
 // eventMaxOpenMin: events.maxOpenMin, how long an open event can last.
@@ -35,6 +38,9 @@ export interface ClipsInventoryDeps {
   catalog: Catalog;
   settings: () => ClipsSettings; // read when a run starts
   camera: CameraListDeps;
+  // The daily storage records tell whether the budget (or ftp.maxGB) has
+  // been pruning clips, as for the stills; without it, never assumed.
+  audit?: Pick<AuditLog, 'list'>;
 }
 export type ClipItem =
   // A repair candidate: `date` is the camera-local day the recording is listed under.
@@ -233,7 +239,23 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     const recs = pool.filter(judgedRec);
     // Oldest first (#74 review): the item cut keeps the recordings the SD card
     // overwrites next, the ones the repair takes first.
-    const missing = other.recsAlone.filter((r) => judgedRec(r) && r.kinds.length > 0).sort((a, b) => a.start - b.start);
+    // While the storage budget (or ftp.maxGB) prunes clips, a recording
+    // older than the oldest clip here was most likely deleted for space: a
+    // repair would fetch it and the next prune delete it again. Such ones
+    // count as prunedHere, never missing (#74 final review). Pruning shows
+    // as for the stills: the store is younger than the window by an hour or
+    // more, and a daily storage record inside the window saw older clips.
+    const oldestHere = (db.prepare('SELECT MIN(start_ts) AS t FROM clips WHERE cam = ?').get(s.cam) as { t: number | null } | undefined)?.t ?? null;
+    const pruning =
+      d.audit !== undefined && oldestHere !== null && oldestHere - from >= HOUR &&
+      records(d.audit, ['storage-daily'], from, now).some((r) => {
+        const v = (r.cam_proxy as { kinds?: { clips?: { oldest?: unknown } } } | undefined)?.kinds?.clips?.oldest;
+        return typeof v === 'number' && v < oldestHere - HOUR;
+      });
+    const prunedHereFrom = pruning ? oldestHere! : -Infinity;
+    const alone = other.recsAlone.filter((r) => judgedRec(r) && r.kinds.length > 0);
+    const prunedHere = alone.filter((r) => r.start < prunedHereFrom).length;
+    const missing = alone.filter((r) => r.start >= prunedHereFrom).sort((a, b) => a.start - b.start);
     const otherStream = rows.filter((r) => r.stream !== s.stream).length;
     // A clip left over on a day the SD card covers is gone from the camera;
     // one before the card's oldest day is older than the SD. The card
@@ -256,9 +278,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
       else unjudged++;
     }
     // Not judged either way (no logic, on purpose): a row whose file is gone
-    // still pairs, so its recording is not offered again (conservative); a
-    // clip that the storage budget or ftp.maxGB deleted shows up as missing,
-    // and the next prune may delete the repaired copy again.
+    // still pairs, so its recording is not offered again (conservative).
     const camera = {
       cameraDays: listing.days.length,
       unknownDays: unknown.length,
@@ -268,6 +288,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
       pairedOtherStream: other.pairs.filter((p) => judgedRec(p.rec) && p.rec.kinds.length > 0).length,
       missingLocally: missing.length,
       missingLocallyBytes: missing.reduce((n, r) => n + r.size, 0),
+      prunedHere,
       goneFromCamera: gone.length,
       olderThanSd,
       otherStream,
@@ -290,6 +311,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
       .slice(0, MAX_TOP);
     if (otherStream) notes.push(OTHER_STREAM_NOTE(otherStream, s.stream));
     if (unjudged) notes.push(UNJUDGED_NOTE(unjudged));
+    if (prunedHere) notes.push(PRUNED_NOTE(prunedHere, new Date(oldestHere!).toISOString().slice(0, 10)));
     message +=
       `; camera (${s.stream}): ${camera.recordings} recordings, ${camera.missingLocally} missing locally (${mb(camera.missingLocallyBytes)}), ` +
       `${camera.goneFromCamera} local clips gone from the camera, ${camera.unknownDays} days unknown`;

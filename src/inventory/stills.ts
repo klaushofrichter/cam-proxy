@@ -74,7 +74,7 @@ async function names(dir: string): Promise<Set<string>> {
 }
 
 // Every audit record of `actions` in [from, to], oldest first.
-function records(audit: Pick<AuditLog, 'list'>, actions: string[], from: number, to: number): AuditRecord[] {
+export function records(audit: Pick<AuditLog, 'list'>, actions: string[], from: number, to: number): AuditRecord[] {
   const out: AuditRecord[] = [];
   let after = '';
   for (;;) {

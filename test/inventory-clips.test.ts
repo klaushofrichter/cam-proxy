@@ -13,6 +13,7 @@ import { MAX_ITEMS, type CheckContext } from '../src/inventory/runner';
 import { ReolinkClient } from '../src/camera/client';
 import { RecordingList } from '../src/recordings/list';
 import { createCamSim, type SeedClip } from 'cam-sim';
+import { AuditLog } from '../src/audit/audit-log';
 
 // Camera time is UTC here (offset 0): camera-local dates are UTC dates.
 const NOW = Date.UTC(2026, 9, 2, 12, 0);
@@ -226,6 +227,25 @@ describe('clips inventory: the edges (review of task 4)', () => {
     expect(r.counts.missingLocally).toBe(700);
     expect(r.counts.missingLocallyBytes).toBe(700 * 0x100000);
     expect((r.items.slice(0, MAX_ITEMS) as Item[]).map((x) => x.start)).toEqual(recs.slice(0, MAX_ITEMS).map((x) => x.start));
+  });
+
+  // #74 final review: a repair would fetch them, and the next prune delete them again.
+  it('while the storage budget prunes clips, recordings older than the oldest clip here are prunedHere, not missing', async () => {
+    clip(T('2026-10-01T12:00:00'));
+    const recs = [rec(T('2026-09-30T10:00:00')), rec(T('2026-10-01T11:00:00')), rec(T('2026-10-01T12:00:02')), rec(T('2026-10-01T14:00:00'))];
+    const cam = () => camera({ months: { '2026-09': [30], '2026-10': [1] }, recs: { '2026-09-30': [recs[0]], '2026-10-01': recs.slice(1) } }).deps;
+    // No sign of pruning: all three are missing.
+    const quiet = new AuditLog({ dir: join(dir, 'audit-quiet'), version: 't', camera: () => 'cam1', now: () => NOW - 3 * 3_600_000 });
+    quiet.write({ action: 'storage-daily', category: ['host'], type: ['info'], outcome: 'success', user: 'system', message: 'Storage', details: { kinds: { clips: { oldest: T('2026-10-01T12:00:00') } } } });
+    const r0 = await clipsCheck(deps(cam(), { audit: quiet }))(ctx({ options: { camera: true } }));
+    expect(r0.counts).toMatchObject({ missingLocally: 3, prunedHere: 0 });
+    // A daily storage record inside the window saw older clips than are kept: the budget (or ftp.maxGB) pruned them.
+    const pruned = new AuditLog({ dir: join(dir, 'audit-pruned'), version: 't', camera: () => 'cam1', now: () => NOW - 3 * 3_600_000 });
+    pruned.write({ action: 'storage-daily', category: ['host'], type: ['info'], outcome: 'success', user: 'system', message: 'Storage', details: { kinds: { clips: { oldest: T('2026-09-30T09:00:00') } } } });
+    const r = await clipsCheck(deps(cam(), { audit: pruned }))(ctx({ options: { camera: true } }));
+    expect(r.counts).toMatchObject({ missingLocally: 1, prunedHere: 2, missingLocallyBytes: 0x100000 });
+    expect(ofType(r.items, 'missing-locally').map((x) => x.start)).toEqual([T('2026-10-01T14:00:00')]);
+    expect(r.window.notes).toContain('2 recordings older than the oldest clip here (2026-10-01) are not offered: the storage budget or ftp.maxGB deleted clips that old, and would delete them again');
   });
 
   it('a recording whose clip came on another stream (ftp.stream changed) is not missing', async () => {

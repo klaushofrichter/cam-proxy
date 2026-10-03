@@ -108,6 +108,7 @@ export function clipsLines(r: ClipsReport, fmt: (ms: number) => string = local):
       ? [
           `Camera (${cam.stream}): ${c.recordings} recordings, ${c.paired} here, ${c.missingLocally} missing here (${mb(c.missingLocallyBytes)}), ${c.timerOnly} timer-only (ignored)`,
           ...(c.pairedOtherStream ? [`${c.pairedOtherStream} recordings are here as clips of the other stream (not counted as missing)`] : []),
+          ...(c.prunedHere ? [`${c.prunedHere} recordings are older than the oldest clip here, deleted for space (not offered: they would be deleted again)`] : []),
           `Gone from the camera: ${c.goneFromCamera} local clips; ${c.olderThanSd} older than the SD card's oldest day (${cam.oldestSdDay ?? 'none'})`,
           ...(cam.unknownDays.length ? [`Not listed (the Search failed, nothing counted as missing): ${cam.unknownDays.join(', ')}`] : []),
         ]

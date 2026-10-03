@@ -336,6 +336,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         run: clipsCheck({
           dataDir: running.server.dataDir,
           catalog,
+          audit,
           settings: () => ({ cam: running.camera.id, clipsDays: running.retention.clipsDays, stream: running.ftp.stream, ftpEnabled: running.ftp.enabled, eventMaxOpenMin: running.events.maxOpenMin }),
           camera: { list: recordings.list, timeInfo: () => client.timeInfo() },
         }),
