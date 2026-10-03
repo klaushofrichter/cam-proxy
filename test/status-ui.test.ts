@@ -93,6 +93,10 @@ describe('Status page: recordings (SD card)', () => {
     expect(recordingsLastText({ at: NOW - 120_000, result: 'ok', stream: 'sub', bytes: 1_084_649, ms: 310 }, NOW)).toBe('ok, 2 min ago (sub, 1.0 MB in 0.3 s)');
     expect(recordingsLastText({ at: NOW - 3 * 3600_000, result: 'refused', stream: 'main', bytes: 0, ms: 40 }, NOW)).toBe('refused, 3 h ago');
     expect(recordingsLastText({ at: NOW - 5_000, result: 'auth', stream: 'main', bytes: 0, ms: 1 }, NOW)).toBe('login rejected, 5 s ago');
+    // A repair's (low priority) download says so (#111): a refused one is not a viewer's.
+    expect(recordingsLastText({ at: NOW - 120_000, result: 'ok', stream: 'sub', bytes: 1_084_649, ms: 310, priority: 'low' }, NOW)).toBe('ok, 2 min ago (sub, 1.0 MB in 0.3 s; inventory repair)');
+    expect(recordingsLastText({ at: NOW - 3 * 3600_000, result: 'refused', stream: 'sub', bytes: 0, ms: 40, priority: 'low' }, NOW)).toBe('refused, 3 h ago (inventory repair)');
+    expect(recordingsLastText({ at: NOW - 3 * 3600_000, result: 'refused', stream: 'sub', bytes: 0, ms: 40, priority: 'high' }, NOW)).toBe('refused, 3 h ago');
     const words: Record<string, string> = { offline: 'offline', not_found: 'not found', timeout: 'timed out', protocol: 'protocol error' };
     for (const [code, word] of Object.entries(words)) expect(recordingsLastText({ at: NOW - 5_000, result: code, stream: 'main', bytes: 0, ms: 1 }, NOW)).toBe(`${word}, 5 s ago`);
   });

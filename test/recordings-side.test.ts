@@ -75,14 +75,15 @@ describe('the recordings side', () => {
     await p.proxy.recordings.fetcher.get(entry!, { priority: 'high' }).fetch.done;
     expect(p.proxy.recordings.cache.has(id)).toBe(true);
     const st = await request(p.base).get('/control/status').set(auth(ADMIN_TOKEN));
-    expect(st.body.recordings.last).toMatchObject({ result: 'ok', stream: 'sub', bytes: rec.files.sub.size });
+    // A viewer's download (high); a repair's is low (#111: told apart).
+    expect(st.body.recordings.last).toMatchObject({ result: 'ok', stream: 'sub', bytes: rec.files.sub.size, priority: 'high' });
     const m = await request(p.base).get('/metrics');
-    expect(m.text).toContain('camproxy_recording_downloads_total{cam="cam1",stream="sub",result="ok"} 1');
+    expect(m.text).toContain('camproxy_recording_downloads_total{cam="cam1",stream="sub",result="ok",priority="high"} 1');
     expect(m.text).toContain('camproxy_disk_bytes{kind="recordings"}');
     expect(p.proxy.recordings.session.connected()).toBe(true);
     // One info line per download: camera, id, stream, bytes, ms, result.
     const line = logBuffer.recent(500).find((l) => l.msg === 'recording_download' && l.id === id);
-    expect(line).toMatchObject({ camera: 'cam1', stream: 'sub', bytes: rec.files.sub.size, result: 'ok' });
+    expect(line).toMatchObject({ camera: 'cam1', stream: 'sub', bytes: rec.files.sub.size, result: 'ok', priority: 'high' });
     expect(typeof line?.ms).toBe('number');
     // Never a secret in the log.
     expect(JSON.stringify(logBuffer.recent(500))).not.toContain(sim.password);

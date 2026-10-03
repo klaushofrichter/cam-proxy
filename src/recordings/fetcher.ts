@@ -19,7 +19,9 @@ import { validId, type Stream } from './names';
 
 export type Priority = 'high' | 'low';
 export type FetchResult = 'ok' | BaichuanErrorCode;
-export interface FetchOutcome { id: string; at: number; result: FetchResult; stream: Stream; bytes: number; ms: number }
+// priority: what the download ran as; `low` is a background (inventory
+// repair) download, told apart on the Status page and in the metrics (#111).
+export interface FetchOutcome { id: string; at: number; result: FetchResult; stream: Stream; bytes: number; ms: number; priority: Priority }
 export interface FetcherDeps {
   cache: RecordingCache;
   // Never ends `out` (vod.ts); the fetcher does, through the tee.
@@ -390,6 +392,7 @@ export class RecordingFetcher {
     const { entry } = f;
     const { cache } = this.d;
     const t0 = this.now();
+    const priority = f.priority; // a queued low a viewer joined runs as high
     let file: WriteStream | null = null;
     let unpin: () => void = noop;
     try {
@@ -424,7 +427,7 @@ export class RecordingFetcher {
         }
       }
       this.byId.delete(entry.id);
-      this.report({ id: entry.id, at: this.now(), result: 'ok', stream: entry.stream, bytes, ms: this.now() - t0 });
+      this.report({ id: entry.id, at: this.now(), result: 'ok', stream: entry.stream, bytes, ms: this.now() - t0, priority });
       f.finish();
     } catch (err) {
       bytes = tee.written;
@@ -444,7 +447,7 @@ export class RecordingFetcher {
       if (e.code === 'refused' && e.status === 400 && !(await this.d.stillListed(entry).catch(() => true))) {
         e = new BaichuanError('not_found', 'the camera no longer has the recording', 400);
       }
-      this.report({ id: entry.id, at: this.now(), result: e.code, stream: entry.stream, bytes, ms: this.now() - t0 });
+      this.report({ id: entry.id, at: this.now(), result: e.code, stream: entry.stream, bytes, ms: this.now() - t0, priority });
       f.finish(e);
     } finally {
       unpin();

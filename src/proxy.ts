@@ -298,7 +298,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     timeInfo: () => client.timeInfo(),
     paused: () => storage.paused(),
     noteWritten: (bytes) => storage.noteWritten('recordings', bytes, 1),
-    onDownload: (o) => metrics.onRecordingDownload({ stream: o.stream, result: o.result }),
+    onDownload: (o) => metrics.onRecordingDownload({ stream: o.stream, result: o.result, priority: o.priority }),
   });
   recordingBusy = (p) => recordings.cache.busy(p);
 
