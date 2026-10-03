@@ -85,6 +85,7 @@ export class MinuteStore extends EventEmitter {
   private current: Current | undefined;
   private queue: Promise<void> = Promise.resolve();
   private readonly footers = new Map<string, { mtimeMs: number; footer: PackFooter | null }>();
+  private readonly sidecars = new Map<string, { mtimeMs: number; size: number; sidecar: Sidecar | null }>();
   private readonly slots: number;
   private readonly cols: number;
   private readonly rows: number;
@@ -168,6 +169,7 @@ export class MinuteStore extends EventEmitter {
     writeAtomic(`${base}.jpg`, sprite);
     const meta: Sidecar = { v: 1, minute: cur.minute, cols: this.cols, rows: this.rows, tileW: this.tileW, tileH: this.tileH, intervalS: this.o.intervalS, present: tilePresent };
     writeAtomic(`${base}.json`, JSON.stringify(meta));
+    this.sidecars.delete(`${base}.json`);
     this.emit('written', { kind: 'previews', bytes: sprite.length - before.previews, files: spriteBase ? 0 : 2 });
   }
 
@@ -219,13 +221,28 @@ export class MinuteStore extends EventEmitter {
     return footer;
   }
 
+  // The sidecar, or null for a missing or corrupt one. Cached by mtime and
+  // size (a day of previews is up to 1440 of them per list).
   private sidecar(file: string): Sidecar | null {
+    let st;
     try {
-      const s = JSON.parse(readFileSync(file, 'utf8')) as Sidecar;
-      return s.v === 1 && Array.isArray(s.present) ? s : null;
+      st = statSync(file);
     } catch {
+      this.sidecars.delete(file);
       return null;
     }
+    const hit = this.sidecars.get(file);
+    if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.sidecar;
+    let sidecar: Sidecar | null;
+    try {
+      const s = JSON.parse(readFileSync(file, 'utf8')) as Sidecar;
+      sidecar = s.v === 1 && Array.isArray(s.present) ? s : null;
+    } catch {
+      sidecar = null;
+    }
+    if (this.sidecars.size >= FOOTER_CACHE) this.sidecars.delete(this.sidecars.keys().next().value!);
+    this.sidecars.set(file, { mtimeMs: st.mtimeMs, size: st.size, sidecar });
+    return sidecar;
   }
 
   async readStill(ts: number): Promise<Buffer | undefined> {
@@ -282,9 +299,7 @@ export class MinuteStore extends EventEmitter {
       if (this.current?.minute === m) {
         stamps = this.current.stills.flatMap((s, i) => (s ? [m + i * this.o.intervalS * 1000] : []));
       } else {
-        const file = `${minutePath(this.o.dataDir, 'stills', this.o.cam, m)}.pack`;
-        if (!existsSync(file)) continue;
-        const f = this.footer(file);
+        const f = this.footer(`${minutePath(this.o.dataDir, 'stills', this.o.cam, m)}.pack`);
         if (!f) continue;
         stamps = f.slots.flatMap(([, len], i) => (len ? [m + i * f.intervalS * 1000] : []));
       }

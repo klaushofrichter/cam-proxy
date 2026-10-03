@@ -4,7 +4,7 @@ import { resolve } from 'path';
 import { analysesFor, analysesInRange, analysisFor, type AnalysisRow } from '../catalog/analyses';
 import { summarize } from '../analytics/classes';
 import type { Found } from '../analytics/providers';
-import { clipById, clipNear, listClips, oldestClip, overlappingEvents, type ClipRow } from '../catalog/clips';
+import { clipById, clipsNear, listClips, oldestClip, overlappingEventsOf, type ClipRow } from '../catalog/clips';
 import type { Catalog } from '../catalog/db';
 import { lastLiveEventTs, listEvents, type EventRow } from '../catalog/events';
 import type { Config } from '../config/defaults';
@@ -169,14 +169,14 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
 
   // Clips (spec §9, §10): lists over at most 31 days; files with HTTP Range.
   const clipBase = () => `/api/cameras/${encodeURIComponent(cam().id)}/clips`;
-  const clipJson = (c: ClipRow) => ({
+  const clipJson = (c: ClipRow, events: number[]) => ({
     id: c.id,
     start: c.start_ts,
     end: c.end_ts,
     stream: c.stream,
     size: c.size,
     origin: c.origin,
-    events: overlappingEvents(d.catalog, c.cam, c.start_ts, c.end_ts ?? c.start_ts),
+    events,
     url: `${clipBase()}/${c.id}.mp4`,
     snapshotUrl: c.snapshot ? `${clipBase()}/${c.id}.jpg` : null,
   });
@@ -186,7 +186,9 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     if (from === undefined || to === undefined || from === null || to === null) return bad(res, 'from and to (unix ms) are required');
     if (to < from) return bad(res, 'to is before from');
     if (to - from > 31 * DAY) return bad(res, 'at most 31 days per request');
-    res.json(listClips(d.catalog, cam().id, from, to).map(clipJson));
+    const clips = listClips(d.catalog, cam().id, from, to);
+    const events = overlappingEventsOf(d.catalog, cam().id, clips.map((c) => ({ from: c.start_ts, to: c.end_ts ?? c.start_ts })));
+    res.json(clips.map((c, i) => clipJson(c, events[i])));
   });
   r.get('/cameras/:cam/clips/:file', (req, res) => {
     const m = /^(\d{1,15})\.(mp4|jpg)$/.exec(req.params.file);
@@ -307,7 +309,8 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     const signal = leftSignal(res); // a Search still queued when the client leaves is dropped
     try {
       const list = day !== undefined ? await d.recordings().list.date(day, stream, signal) : await d.recordings().list.range(from!, to!, stream, signal);
-      res.json(list.map((e) => ({ id: e.id, start: e.start, end: e.end, stream: e.stream, size: e.size, kinds: e.kinds, clipId: clipNear(d.catalog, cam().id, e.stream, e.start, 5000)?.id ?? null })));
+      const near = clipsNear(d.catalog, cam().id, list.map((e) => ({ stream: e.stream, ts: e.start })), 5000);
+      res.json(list.map((e, i) => ({ id: e.id, start: e.start, end: e.end, stream: e.stream, size: e.size, kinds: e.kinds, clipId: near[i]?.id ?? null })));
     } catch (err) {
       recordingError(res, err);
     }
