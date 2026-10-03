@@ -54,6 +54,13 @@ export function listEvents(c: Catalog, q: { cam: string; from?: number; to?: num
   return (c.db.prepare(sql).all(...args) as DbRow[]).map(fromDb);
 }
 
+// The newest event's start, recovered ones left out (#75): a reconstruction
+// from the SD card is no fresh activity (the client API's lastEventTs).
+export function lastLiveEventTs(c: Catalog, cam: string): number | null {
+  const r = c.db.prepare("SELECT start_ts FROM events WHERE cam = ? AND source != 'recovered' ORDER BY start_ts DESC, id DESC LIMIT 1").get(cam) as { start_ts: number } | undefined;
+  return r?.start_ts ?? null;
+}
+
 export function deleteEventsBefore(c: Catalog, ts: number): number {
   return Number(c.db.prepare('DELETE FROM events WHERE start_ts < ?').run(ts).changes);
 }
