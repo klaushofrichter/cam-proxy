@@ -345,7 +345,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
           list: recordings.list,
           fetcher: recordings.fetcher,
           cache: recordings.cache,
-          indexer: () => new ClipIndexer({ catalog, log, config: () => running, timeInfo: () => client.timeInfo(), dataDir: running.server.dataDir, cam: running.camera.id, stored: (bytes) => storage.noteWritten('clips', bytes, 1) }),
+          indexer: () => new ClipIndexer({ catalog, log, config: () => running, timeInfo: () => client.timeInfo(), dataDir: running.server.dataDir, cam: running.camera.id, stored: (bytes) => storage.noteWritten('clips', bytes, 1, { growth: false }) }),
           tempDir: () => repairTmp,
           paused: () => storage.paused(),
           clipsBytes: () => storage.usage().clips.bytes,

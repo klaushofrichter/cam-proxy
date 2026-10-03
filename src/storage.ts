@@ -137,9 +137,11 @@ export class Storage extends EventEmitter {
 
   // The store reports what it wrote (bytes may be a difference after a merge).
   // Only an estimate for usage and growth between runs; run() recounts.
-  noteWritten(kind: FileKind, bytes: number, files: number): void {
+  // `growth: false`: usage only, not growth (the clips repair fetches old
+  // recordings back: a one-off, not the rate the disk fills at).
+  noteWritten(kind: FileKind, bytes: number, files: number, o: { growth?: boolean } = {}): void {
     const now = this.now();
-    this.writes.push({ at: now, kind, bytes: Math.max(0, bytes) });
+    if (o.growth !== false) this.writes.push({ at: now, kind, bytes: Math.max(0, bytes) });
     while (this.writes.length && this.writes[0].at < now - GROWTH_WINDOW) this.writes.shift();
     // A written minute: a unit for the latest minute (exact paths come with the next recount).
     const list = this.units[kind];
