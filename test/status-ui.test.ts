@@ -53,8 +53,9 @@ describe('Status page: the camera FTP warnings (#93)', () => {
     expect(ftpAlerts(ftp({ stalled: { stalled: true, hours: 6, lastClip: null, events: 1 } }))[0].text).toBe('No clip in the last 6 h although the camera recorded 1 event; no clip has arrived yet.');
   });
   // Review of #94.
-  it('never set up on the camera: a neutral note, not red', () => {
-    expect(ftpAlerts(ftp({ camera: cam({ state: 'not_set_up', enable: false, server: '', port: 21, user: '' }), stalled: { stalled: false, hours: 6, lastClip: null, events: 0 } }))).toEqual([{ kind: 'not_set_up', level: 'info', text: "FTP upload isn't set up on the camera." }]);
+  // Klaus, 2026-10-03 (health summary): a warning, no longer a neutral note.
+  it('never set up on the camera: a warning', () => {
+    expect(ftpAlerts(ftp({ camera: cam({ state: 'not_set_up', enable: false, server: '', port: 21, user: '' }), stalled: { stalled: false, hours: 6, lastClip: null, events: 0 } }))).toEqual([{ kind: 'not_set_up', level: 'warn', text: "FTP upload isn't set up on the camera." }]);
   });
   it('only the server name differs: an amber note naming both', () => {
     expect(ftpAlerts(ftp({ camera: cam({ state: 'server_differs', server: 'pi.local', mismatch: ['server'] }) }))).toEqual([{ kind: 'server_differs', level: 'warn', text: "The camera's FTP server is pi.local, this proxy is 192.168.1.50." }]);

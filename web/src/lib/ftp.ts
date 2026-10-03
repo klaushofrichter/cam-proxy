@@ -29,7 +29,7 @@ export function ftpAlerts(f: FtpHealth, time: (ts: number) => string = clipTime)
   if (!f.enabled) return [];
   const out: FtpAlert[] = [];
   const c = f.camera;
-  if (c?.state === 'not_set_up') out.push({ kind: 'not_set_up', level: 'info', text: "FTP upload isn't set up on the camera." });
+  if (c?.state === 'not_set_up') out.push({ kind: 'not_set_up', level: 'warn', text: "FTP upload isn't set up on the camera." });
   if (c?.state === 'off') out.push({ kind: 'off', level: 'bad', text: "The camera's FTP upload is off: no clips arrive." });
   if (c?.state === 'server_differs') out.push({ kind: 'server_differs', level: 'warn', text: `The camera's FTP server is ${c.server}, this proxy is ${f.publicHost}.` });
   if (c?.state === 'elsewhere') out.push({ kind: 'elsewhere', level: 'bad', text: `The camera's FTP upload points to ${c.server}:${c.port} (user ${c.user}), not to this proxy (${f.publicHost ?? 'ftp.publicHost not set'}).` });

@@ -22,6 +22,7 @@ import { eventsStored } from './metrics';
 import { readCookie, SESSION_COOKIE, SESSION_MS, type createSessionSigner } from './session';
 import type { createLoginLinks } from './login-links';
 import type { RecordingsStatus } from '../recordings/side';
+import type { HealthSummary } from '../health/summary';
 import { InventoryBusyError, InventoryStoppingError, RepairRefusedError, RUN_ID, type InventoryRunner } from '../inventory/runner';
 
 export interface FtpStatus {
@@ -58,6 +59,7 @@ export interface ControlDeps {
   cameraPowerCycle: (who: RebootRequester) => Promise<PowerCycleAnswer>;
   restartProcess: () => void; // stop, then exit 0 (the supervisor starts it again)
   ftp: () => FtpStatus;
+  health: () => Promise<HealthSummary>; // spec 2026-10-03-health-summary-design: the Health and Pi cards
   cameraFtp: {
     target: () => FtpTarget;
     setup: (t: FtpTarget) => Promise<unknown>;
@@ -210,7 +212,8 @@ export function controlApi(d: ControlDeps): express.Router {
     res.status(201).json(link);
   });
 
-  r.get('/status', (_req, res) => {
+  r.get('/status', async (_req, res) => {
+    const health = await d.health();
     res.json({
       version: d.version,
       camera: d.camera(),
@@ -223,6 +226,7 @@ export function controlApi(d: ControlDeps): express.Router {
       recordings: d.recordings(),
       analytics: d.analytics(),
       analyticsUnmapped: d.unmapped.list(20),
+      health,
     });
   });
 

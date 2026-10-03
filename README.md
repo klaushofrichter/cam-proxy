@@ -149,6 +149,8 @@ come only from the environment.
 | `stills` | `enabled` (true), `stream` (`sub`), `intervalS` (1), `size` (`896x512`), `quality` (5), `maxGB` |
 | `previews` | `tileSize` (`160x90`), `grid` (`10x6`), `quality` (7), `maxGB` |
 | `ftp` | `enabled` (false), `port` (2121), `passive` (`30000-30009`), `publicHost` (the address the camera connects to), `user` (`camera`), `tls` (true), `certFile`/`keyFile` (else a self-signed certificate), `stream` (`main`), `stalledHours` (6, 1–72: the Status page warns when no clip arrived for this long while the camera recorded events; applies at once, no restart), `maxGB` |
+| `health` | `diskPercent` (90, 50–99): the data volume's used percent from which the health summary (the Status page's Health card, `GET /api/local/health`) flags a problem; `tempC` (75, 40–95): the CPU temperature (°C, on a Raspberry Pi) from which it does. Both apply at once |
+| `host` | `stats` (`auto`): read the host figures (CPU temperature, under-voltage, memory, uptime, load) for the Pi card and the health summary; `auto` on a Raspberry Pi only (detected from `/proc/cpuinfo`), `on`, or `off`. Off a Pi, memory and load in a container would describe the node, not the proxy. Applies at once |
 | `recordings` | `cacheMB` (2048, 64–1,048,576): size cap of the recordings cache; least recently used files go first, and they are the first to go when the storage budget is exceeded. Applies at the next fetch or storage run |
 
 | Secret (environment, or `<NAME>_FILE`) | |
@@ -303,8 +305,10 @@ upload folder. While storage is paused, `STOR` answers 452.
   is no warning). Only another server name (port and user match: perhaps
   another name for this proxy; compared trimmed and in lower case, no DNS)
   is amber. A camera that has no FTP server set and never sent a clip (a
-  fresh or reset camera) is grey, "FTP upload isn't set up on the camera",
-  with the same button: no alarm, no audit record, no stall warning. The
+  fresh or reset camera) shows the amber warning "FTP upload isn't set up
+  on the camera", with the same button, and is a problem in the health
+  summary (the Health card's FTP line and the card's "Camera upload" line
+  are red), but writes no audit record and no stall warning. The
   time of the last clip is kept when retention deletes the clip. An
   intentional `camera-ftp-off` stays red while `ftp.enabled` is true in
   the proxy; set `ftp.enabled: false` to silence it. Each change of the
@@ -581,6 +585,7 @@ arrive.
 | `GET /control/inventory/runs/{id}` | one report: `{runId, kind, op: check\|repair, camera, startedAt, tookMs, outcome: ok\|cancelled\|failed, error, cancelledBy, requestedBy, options, window: {from, to, reason: retention\|budget\|store-younger\|empty\|sd-card, retentionFrom, protectedFrom, notes}, counts, top, items, itemsTruncated, message}` (`notes`: caveats on the counts, such as the clock note when seconds are restorable; stills `counts` include `previewsPruned`, packs without a sprite whose previews were pruned earlier, and `prunedDuringRun`, packs deleted by retention while the run read them, counted as missing; `options: {camera: true}` for a clips compare, whose `counts` add `pairedOtherStream`, recordings here as clips of the other stream, and `prunedHere`, recordings older than the oldest local clip while the storage budget prunes clips, both never offered). The window `reason` `sd-card` is an events check's: the SD card's reach, shorter than `retention.eventsDays`; a clips compare and an events check add `camera: {stream, to, oldestSdDay, unknownDays}` to the window, an events check also `eventsDays`. An events check's items: `missing-event` `{kind, start, end, date, recordings}` oldest first, then `event-without-recording` `{eventId, kind, start, end, source}`. A repair's report has `source` (the clips or events check run it worked from), `stopped` (`clip-cap`, `byte-cap`, `max-gb`, `paused`, `failures`, `refused`, `camera_offline`, `event-cap` (an events repair: more than 1000 missing) or null); an events repair has one item per event added, `{eventId, kind, start, end, result: ok}`; a clips repair one per recording tried: `{id, start, result: ok\|skipped\|failed, reason, error, clipId, bytes, streamed}` (`reason` of a skip: `outside-retention`, `already-local`, `gone-from-camera`, `other-stream`, `viewer`, `invalid`, `too-big`, `byte-cap`, `busy`, `still-recording` (a recording that starts at 23:55 or later, listed with end 000000, before 01:00 the next day); `streamed: true` when it went through `<dataDir>/inventory/tmp`); 400 for a malformed id, 404 for an unknown one. Kept in `<dataDir>/inventory/<kind>/` and repairs in `<dataDir>/inventory/<kind>repair/` (the last 10 each) |
 | `GET /control/audit` | the audit log as JSON lines: `limit`, `before`/`after` (cursors), `from`, `to`, `action`, `outcome`; admin token, admin session or `CAMPROXY_AUDIT_TOKEN`; HEAD answers like GET without the body. See [docs/audit-log.md](docs/audit-log.md) |
 | `GET /health` | `{ok, version, startedAt}` (no auth): `startedAt` (ms) tells a new process apart |
+| `GET /api/local/health` | **local only, no key:** the health summary for a process on the same host (the e-paper display on the Pi). Answered only when the TCP connection comes from `127.0.0.1`, `::1` or `::ffff:127.0.0.1` (never by `X-Forwarded-For` or `server.trustProxy`); any other caller gets what an unknown `/api` route gets (401, or 404 with a token). `{schema: 1, generatedAt, version, startedAt, ok, problemCount, thresholds, platform: {pi, model, hostStats}, items: [{id, label, value, text, problem}], camera, stream, events, ftp, proxy, disk, host}`; no tokens, passwords or FTP settings. The schema: [the plan](docs/superpowers/plans/2026-10-03-health-summary.md#the-api-schema). The same object is `health` in `GET /control/status` |
 | `GET /control/log?limit` | recent log lines (info and above), redacted; default limit 100, buffer holds the last 500 |
 | `POST /control/login` / `logout`, `GET /control/session` | the admin UI's session cookie (`camproxy_session`, HttpOnly, SameSite=Strict, 12 h; 40 sign-ins per 15 min) |
 | `POST /control/login-links`, `GET /control/login-link?code=` | a one-time sign-in link (admin token; the code works once, for 60 s, and is kept only in memory): cams opens the UI with it for a signed-in user |
@@ -588,8 +593,14 @@ arrive.
 The **admin UI** at `/` signs in with the admin token once; the token is
 exchanged for the cookie and not stored in the browser.
 
-- **Status:** the camera (and its model, linked to the camera's own web
-  page), events, stills, clips/FTP, recordings (SD card) and storage.
+- **Status:** a Health card first (one line per item of the health summary,
+  red when it is a problem, and "All OK" or "N problems"), then the camera
+  (and its model, linked to the camera's own web page), events, stills,
+  clips/FTP, recordings (SD card) and storage (with the data volume's "Disk
+  used"). On a Raspberry Pi a Pi card shows the model, CPU temperature,
+  under-voltage, memory, uptime, load and disk. The cards mark the same items
+  red as the Health card: one summary decides, with the thresholds
+  `health.diskPercent` and `health.tempC`.
 - **Events:** the live stream and the last 100 events.
 - **Timeline:** a day of preview sprites, one still per minute, with events
   marked.

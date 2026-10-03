@@ -203,6 +203,7 @@ This keeps the history: stills, previews, clips and the catalog.
 | Restart | `docker compose restart` |
 | Status | `curl -s http://<pi>:8480/health`, then `/control/status` with the admin token |
 | Load | `docker stats --no-stream`, `vcgencmd measure_temp`, `vcgencmd get_throttled` (0x0 = fine) |
+| Health | the Status page's Health and Pi cards, or on the Pi itself `curl -s http://127.0.0.1:8480/api/local/health` (no key; answered to loopback only) |
 
 - **Restarts:** the container restarts by itself (`restart: unless-stopped`)
   and comes back after a reboot, because Docker starts at boot. Tested on
@@ -222,6 +223,20 @@ This keeps the history: stills, previews, clips and the catalog.
   its 10 s timeout).
 - **Updates:** nothing updates the Pi on its own. A release to `production`
   updates only the cluster, so pull on the Pi after a release.
+- **The Pi card:** on a Pi the Status page shows a Pi card (model, CPU
+  temperature, under-voltage, memory, uptime, load, disk), and the Health card
+  flags the disk from `health.diskPercent` (90 %) and the CPU temperature from
+  `health.tempC` (75 °C). The proxy reads them inside the container: the model
+  from `/proc/cpuinfo`, the temperature and the under-voltage alarm from the
+  hwmon sensors `cpu_thermal` and `rpi_volt` in `/sys/class/hwmon`, memory,
+  uptime and load from `/proc`. These describe the Pi only because the
+  container runs with `network_mode: host` (and shares the host's `/proc`
+  figures for memory and load); `host.stats` (`auto`, `on`, `off`) switches
+  them. `GET /api/local/health` serves the same summary to a process on the Pi
+  (the e-paper display), without a key, from `127.0.0.1` only. That trust
+  assumes nothing on the Pi (or in a pod) forwards outside traffic from
+  `127.0.0.1`: no local reverse proxy, tunnel or sidecar in front of the
+  proxy, or it would hand its callers the local API.
 - **Memory:** with the memory cgroup on (see step 2), `docker stats` shows
   the proxy at about 350–390 MiB of the 3.7 GiB. On a Pi prepared before the
   script did this, `docker stats` shows `0B`: add `cgroup_enable=memory` to the
