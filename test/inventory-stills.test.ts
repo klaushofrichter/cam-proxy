@@ -137,6 +137,18 @@ describe('stills inventory', () => {
     expect(r.window.notes).toEqual([expect.stringMatching(/^Restorable .*camera's clock.*not aligned/)]);
   });
 
+  // #106: with stills off, the time after the last pack is no gap.
+  it('stills turned off: the window ends after the newest pack, with a note', async () => {
+    const later = M + 60 * MIN; // 50 minutes after the fixture's last pack (minute 10)
+    const on = await stillsCheck(deps())(ctx({ now: later }));
+    expect(on.window.to).toBe(later - MIN);
+    expect(on.counts.minutes).toBe(59); // on: the 48 minutes after the last pack are one gap
+    const off = await stillsCheck(deps({ settings: () => settings({ enabled: false }) }))(ctx({ now: later }));
+    expect(off.window).toMatchObject({ from: M, to: at(11) });
+    expect(off.counts).toMatchObject({ minutes: 11, gaps: 4 });
+    expect(off.window.notes).toContain('Stills are off: the window ends after the newest pack');
+  });
+
   it('has no clock note when no clip covers a gap (nothing restorable)', async () => {
     const empty = openCatalog(join(dir, 'empty.sqlite'));
     const r = await stillsCheck(deps({ catalog: empty }))(ctx());

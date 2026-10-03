@@ -32,6 +32,7 @@ export const STARTUP_MS = 120_000;
 // A camera reboot or power-cycle without an end record: the proxy's own watch
 // gives up after this long (REBOOT_WAIT_MS) and writes `not-back`.
 export const OUTAGE_MS = REBOOT_WAIT_MS;
+const OFF_NOTE = 'Stills are off: the window ends after the newest pack';
 const CLOCK_NOTE = "Restorable seconds compare the clips' times (the camera's clock) with the stills' (the proxy's clock), not aligned: a few seconds' skew";
 
 // 59 s, 1 min, 10 min 5 s, 1 h 30 min (the same words as the admin UI's list).
@@ -43,7 +44,8 @@ export function duration(seconds: number): string {
   return `${Math.floor(s / 3600)} h${m ? ` ${m} min` : ''}`;
 }
 
-export interface StillsSettings { cam: string; intervalS: number; stillsDays: number; previewsDays: number; keepHours: number }
+// enabled: stills.enabled (false: the window ends after the newest pack, #106).
+export interface StillsSettings { cam: string; intervalS: number; stillsDays: number; previewsDays: number; keepHours: number; enabled?: boolean }
 export interface StillsInventoryDeps {
   dataDir: string;
   settings: () => StillsSettings; // read when a run starts
@@ -200,7 +202,7 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
     const now = ctx.now;
     const retentionFrom = dayStart(now - s.stillsDays * DAY);
     // Exclusive: the current minute is in memory, and the one before is written only when the next frame comes.
-    const to = minuteOf(now) - MINUTE;
+    let to = minuteOf(now) - MINUTE;
     const protectedFrom = now - s.keepHours * HOUR;
     const stillsDir = join(d.dataDir, 'stills', s.cam);
     const previewsDir = join(d.dataDir, 'previews', s.cam);
@@ -228,6 +230,17 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
       }
       return null;
     };
+    // Stills turned off (#106): nothing is written after the newest pack, so
+    // the window ends there instead of counting the rest as one long gap.
+    const off = s.enabled === false;
+    if (off) {
+      let newest: number | null = null;
+      for (const day of days) for (const n of day.packs) {
+        const m = minuteOfName(day.start, n, /^pack$/);
+        if (m !== null && m < to && (newest === null || m > newest)) newest = m;
+      }
+      if (newest !== null) to = newest + MINUTE;
+    }
     const oldest = oldestIn((x) => x.packs, /^pack$/);
     // Previews may be pruned before stills (their own retention, cap or keepHours):
     // a pack without a sprite before the later of their retention cutoff and the
@@ -368,6 +381,6 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
       `${duration(counts.missingSeconds)} of ${duration(counts.expectedSeconds)} missing (${counts.missingPct}%) since ${new Date(from).toISOString().slice(0, 16).replace('T', ' ')} UTC, ` +
       `${counts.gaps} gaps${top[0] ? ` (longest ${duration(top[0].seconds)})` : ''}, ${duration(counts.explainedSeconds)} explained by proxy stops, camera reboots or storage pauses, ` +
       `${duration(counts.restorableSeconds)} restorable from clips (camera clock), ${problems} file problems`;
-    return { window: { from, to, reason, retentionFrom, protectedFrom, notes: counts.restorableSeconds > 0 ? [CLOCK_NOTE] : [] }, counts, top, items, message };
+    return { window: { from, to, reason, retentionFrom, protectedFrom, notes: [...(off ? [OFF_NOTE] : []), ...(counts.restorableSeconds > 0 ? [CLOCK_NOTE] : [])] }, counts, top, items, message };
   };
 }
