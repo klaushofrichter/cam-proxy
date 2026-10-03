@@ -10,14 +10,18 @@ export interface ClipRow {
   size: number;
   received_at: number;
   snapshot: string | null;
+  origin: ClipOrigin;
 }
+
+// 'ftp': uploaded by the camera; 'camera': fetched from its SD card by an inventory repair (#74).
+export type ClipOrigin = 'ftp' | 'camera';
 
 const MAX_LIST = 2000;
 
-export function insertClip(c: Catalog, r: Omit<ClipRow, 'id'>): ClipRow {
+export function insertClip(c: Catalog, r: Omit<ClipRow, 'id' | 'origin'> & { origin?: ClipOrigin }): ClipRow {
   return c.db
-    .prepare('INSERT INTO clips (cam, start_ts, end_ts, path, stream, size, received_at, snapshot) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *')
-    .get(r.cam, r.start_ts, r.end_ts, r.path, r.stream, r.size, r.received_at, r.snapshot) as unknown as ClipRow;
+    .prepare('INSERT INTO clips (cam, start_ts, end_ts, path, stream, size, received_at, snapshot, origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *')
+    .get(r.cam, r.start_ts, r.end_ts, r.path, r.stream, r.size, r.received_at, r.snapshot, r.origin ?? 'ftp') as unknown as ClipRow;
 }
 
 // Clips that overlap [from, to], oldest first.
@@ -78,9 +82,9 @@ export function overlappingEvents(c: Catalog, cam: string, from: number, to: num
   );
 }
 
-// Clips received in [from, to) (the daily audit record).
+// Clips received by FTP in [from, to) (the daily audit record); repaired ones are not received.
 export function countClips(c: Catalog, cam: string, from: number, to: number): number {
-  return Number((c.db.prepare('SELECT COUNT(*) AS n FROM clips WHERE cam = ? AND received_at >= ? AND received_at < ?').get(cam, from, to) as { n: number }).n);
+  return Number((c.db.prepare("SELECT COUNT(*) AS n FROM clips WHERE cam = ? AND origin = 'ftp' AND received_at >= ? AND received_at < ?").get(cam, from, to) as { n: number }).n);
 }
 
 // When the newest clip of a camera arrived (received_at), or null; kept

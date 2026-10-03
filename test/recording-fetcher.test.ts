@@ -552,4 +552,58 @@ describe('RecordingFetcher', () => {
     expect(calls).toBe(1);
     expect(fetch.kept).toBe(true);
   });
+
+  it('abortIfAlone: a running background fetch nobody else waits for is aborted (no outcome, no .part); a joined one runs on', async () => {
+    const x = setup({ chunk: 1000, delayMs: 2 });
+    const a = x.add(1);
+    const { fetch, waiter } = x.fetcher.get(a, { priority: 'low' });
+    expect(fetch.abortIfAlone({ waiter })).toBe(false); // queued: leaving the queue is join()'s job
+    await vi.waitFor(() => expect(x.dl.calls).toEqual([a.path]));
+    expect(fetch.abortIfAlone()).toBe(false); // the caller counts as another waiter when it doesn't name its own join
+    // Its own join named: subtracted whether or not it has left (no reliance on listener order).
+    expect(fetch.abortIfAlone({ waiter })).toBe(true);
+    await expect(fetch.done).rejects.toMatchObject({ name: 'AbortError' });
+    expect(x.outcomes).toEqual([]);
+    expect(readdirSync(x.dir)).toEqual([]);
+    // Its own client (the repair's temp writer) attached: still alone. Another's client: not.
+    const b = x.add(2);
+    const ab = new AbortController();
+    const jb = x.fetcher.get(b, { priority: 'low', signal: ab.signal });
+    const own = collector();
+    jb.fetch.attachWhenRunning(own.w, () => undefined);
+    await vi.waitFor(() => expect(x.dl.calls).toHaveLength(2));
+    expect(jb.fetch.holds(own.w)).toBe(true);
+    ab.abort(); // left already: subtracted once, not twice
+    expect(jb.fetch.abortIfAlone({ waiter: jb.waiter, res: collector().w })).toBe(false);
+    expect(jb.fetch.abortIfAlone({ waiter: jb.waiter, res: own.w })).toBe(true);
+    await expect(jb.fetch.done).rejects.toMatchObject({ name: 'AbortError' });
+    // A viewer joined: the fetch runs on and is kept.
+    const c = x.add(3);
+    const jc = x.fetcher.get(c, { priority: 'low' });
+    x.fetcher.get(c, { priority: 'high' });
+    await vi.waitFor(() => expect(x.dl.calls).toHaveLength(3));
+    expect(jc.fetch.abortIfAlone({ waiter: jc.waiter })).toBe(false);
+    await jc.fetch.done;
+    expect(jc.fetch.kept).toBe(true);
+  });
+
+  it('attachWhenRunning: a background client takes the slot only if no viewer attached while queued', async () => {
+    const x = setup({ gated: true, cap: 1000 });
+    const [a, b] = [x.add(1), x.add(2)];
+    x.fetcher.get(a, { priority: 'high' }); // running, gated: b stays queued
+    await vi.waitFor(() => expect(x.dl.calls).toEqual([a.path]));
+    const { fetch } = x.fetcher.get(b, { priority: 'low' });
+    const bg = collector();
+    fetch.attachWhenRunning(bg.w, () => undefined);
+    const viewer = collector();
+    expect(fetch.attach(viewer.w, () => undefined)).toBe(true); // the slot is still free
+    x.dl.release(a.path);
+    await vi.waitFor(() => expect(x.dl.calls).toHaveLength(2));
+    x.dl.release(b.path);
+    await fetch.done;
+    expect(fetch.holds(bg.w)).toBe(false);
+    expect(fetch.holds(viewer.w)).toBe(true);
+    expect(viewer.bytes().equals(x.files.get(b.path)!)).toBe(true);
+    expect(bg.bytes().length).toBe(0);
+  });
 });

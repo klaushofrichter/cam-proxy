@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { accessSync, constants, existsSync, mkdirSync, statSync } from 'fs';
 import { dirname } from 'path';
 import { MIGRATIONS } from './migrations';
+import { logger } from '../log';
 
 // The catalog: SQLite in WAL mode (node:sqlite, no native module). Images
 // never go in here.
@@ -39,6 +40,9 @@ export function openCatalog(file: string): Catalog {
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA synchronous = NORMAL;');
   db.exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)');
   const version = () => (db.prepare('SELECT MAX(version) AS v FROM schema_version').get() as { v: number | null }).v ?? 0;
+  if (version() > MIGRATIONS.length) {
+    logger.warn({ file, version: version(), known: MIGRATIONS.length }, 'catalog_newer_than_code');
+  }
   for (let v = version(); v < MIGRATIONS.length; v++) {
     db.exec('BEGIN');
     try {

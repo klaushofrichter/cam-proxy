@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { AuditLog } from '../src/audit/audit-log';
-import { InventoryBusyError, InventoryRunner, InventoryStoppingError, MAX_ITEMS, RUN_ID, type Check, type CheckResult, type InventoryKind } from '../src/inventory/runner';
+import { InventoryBusyError, InventoryRunner, InventoryStoppingError, MAX_ITEMS, RepairRefusedError, RUN_ID, type Check, type CheckResult, type InventoryKind, type Repair, type RepairResult } from '../src/inventory/runner';
 
 const T0 = Date.UTC(2026, 9, 2, 12, 0);
 const result = (n: number, items = 0): CheckResult => ({
@@ -36,7 +36,7 @@ function setup(checks: Record<string, InventoryKind>) {
   let clock = T0;
   const audit = new AuditLog({ dir: join(dir, 'audit'), version: 't', camera: () => 'cam1', now: () => clock });
   const runner = new InventoryRunner({ dir: join(dir, 'inventory'), audit, camera: () => 'cam1', checks, now: () => (clock += 1000) });
-  return { dir, audit, runner };
+  return { dir, audit, runner, advance: (ms: number) => void (clock += ms) };
 }
 const who = { requestedBy: 'token' as const, ip: '10.0.0.5', userAgent: 'vitest' };
 const records = (a: AuditLog) => a.list({ actions: ['inventory'] }).records;
@@ -189,5 +189,192 @@ describe('InventoryRunner', () => {
     await Promise.resolve();
     runner.cancel();
     expect((await done).outcome).toBe('ok');
+  });
+});
+
+// PR 2 (#106): options, repairs apart from checks, one lock, cached summaries.
+describe('InventoryRunner: options and repairs', () => {
+  const repaired = (n: number): RepairResult => ({ counts: { requested: n, done: n, failed: 0, skipped: 0, bytes: n * 10 }, top: [], items: [{ id: 'a', result: 'ok' }], message: `${n} fetched`, stopped: null });
+  // A clips kind whose check echoes its options and whose repair needs a camera compare.
+  const clipsKind = (repair: Repair = async () => repaired(2)): InventoryKind => ({
+    label: 'Clips',
+    camera: true,
+    run: async (ctx) => ({ ...result(1), counts: { missingSeconds: 1, camera: ctx.options?.camera ? 1 : 0 } }),
+    repair: { run: repair, ready: (r) => (r.options?.camera ? null : 'compare with the camera first') },
+  });
+  const repairRecords = (a: AuditLog) => a.list({ actions: ['inventory-repair'] }).records;
+
+  it('passes the camera option to the check, and keeps it in the report and the record', async () => {
+    const { runner, audit } = setup({ clips: clipsKind() });
+    const r = await runner.start('clips', who, { camera: true }).done;
+    expect(r).toMatchObject({ op: 'check', options: { camera: true }, counts: { camera: 1 } });
+    expect(records(audit)[0].cam_proxy).toMatchObject({ kind: 'clips', options: { camera: true } });
+    const plain = await runner.start('clips', who).done;
+    expect(plain).not.toHaveProperty('options');
+    expect(plain.counts.camera).toBe(0);
+  });
+
+  it('runs a repair from a recent check report: saved apart, audited as inventory-repair', async () => {
+    let seen: string | undefined;
+    const { runner, audit, dir } = setup({ clips: clipsKind(async (ctx) => ((seen = ctx.source.runId), repaired(2))) });
+    const check = await runner.start('clips', who, { camera: true }).done;
+    const { runId, done } = await runner.repair('clips', who, check.runId);
+    expect(runId).toMatch(/^clipsrepair-\d+-[0-9a-f]{6}$/);
+    expect(runner.running()).toMatchObject({ runId, kind: 'clips', op: 'repair' });
+    const r = await done;
+    expect(seen).toBe(check.runId);
+    expect(r).toMatchObject({ runId, kind: 'clips', op: 'repair', outcome: 'ok', source: check.runId, stopped: null, window: check.window, counts: { done: 2, bytes: 20 }, message: 'Clips repair: 2 fetched' });
+    expect(readdirSync(join(dir, 'inventory', 'clipsrepair'))).toEqual([`${runId}.json`]);
+    expect(await runner.get(runId)).toEqual(r);
+    expect((await runner.list()).clips.map((x) => x.runId)).toEqual([check.runId]);
+    expect((await runner.listRepairs()).clips.map((x) => x.runId)).toEqual([runId]);
+    expect(records(audit)).toHaveLength(1); // the check's
+    const rec = repairRecords(audit);
+    expect(rec).toHaveLength(1);
+    expect(rec[0]).toMatchObject({
+      event: { action: 'inventory-repair', category: ['host'], type: ['change'], outcome: 'success' },
+      user: { name: 'admin' }, message: 'Clips repair: 2 fetched',
+      cam_proxy: { runId, kind: 'clips', source: check.runId, outcome: 'ok', stopped: null, counts: { requested: 2, done: 2 }, failures: [] },
+    });
+  });
+
+  it('refuses a repair from a missing, foreign, unfinished, stale or unsuitable report', async () => {
+    const { runner, advance } = setup({ clips: clipsKind(), stills: stillsKind(async () => result(1)) });
+    const refused = async (id: string) => {
+      try {
+        await runner.repair('clips', who, id);
+      } catch (e) {
+        expect(e).toBeInstanceOf(RepairRefusedError);
+        return (e as RepairRefusedError).code;
+      }
+      return 'started';
+    };
+    expect(await refused('clips-1-abcdef')).toBe('not_found');
+    expect(await refused('../../catalog')).toBe('not_found');
+    const stills = await runner.start('stills', who).done;
+    expect(await refused(stills.runId)).toBe('not_found'); // another kind's report
+    const local = await runner.start('clips', who).done;
+    expect(await refused(local.runId)).toBe('not_repairable'); // no camera compare
+    const compared = await runner.start('clips', who, { camera: true }).done;
+    advance(3_600_000);
+    expect(await refused(compared.runId)).toBe('report_stale');
+    runner.checks.clips = { ...clipsKind(), run: async () => { throw new Error('boom'); } };
+    const failed = await runner.start('clips', who, { camera: true }).done;
+    expect(await refused(failed.runId)).toBe('not_repairable');
+    expect(runner.running()).toBeNull();
+    await expect(runner.repair('stills', who, stills.runId)).rejects.toThrow('no repair of kind stills');
+  });
+
+  it('a repair and a check share the one lock', async () => {
+    let release: () => void = () => undefined;
+    const { runner } = setup({ clips: clipsKind(() => new Promise((r) => (release = () => r(repaired(1))))) });
+    const check = await runner.start('clips', who, { camera: true }).done;
+    const rep = await runner.repair('clips', who, check.runId);
+    expect(() => runner.start('clips', who)).toThrow(InventoryBusyError);
+    await expect(runner.repair('clips', who, check.runId)).rejects.toBeInstanceOf(InventoryBusyError);
+    release();
+    expect((await rep.done).outcome).toBe('ok');
+  });
+
+  it('a cancelled repair keeps its partial counts and says who cancelled', async () => {
+    const { runner, audit } = setup({ clips: clipsKind((ctx) => new Promise((r) => ctx.signal.addEventListener('abort', () => r({ ...repaired(1), stopped: 'paused' })))) });
+    const check = await runner.start('clips', who, { camera: true }).done;
+    const rep = await runner.repair('clips', who, check.runId);
+    expect(runner.cancel()).toBe(rep.runId);
+    const r = await rep.done;
+    expect(r).toMatchObject({ outcome: 'cancelled', cancelledBy: 'request', counts: { done: 1 }, message: 'Clips repair cancelled (partial): 1 fetched' });
+    expect(repairRecords(audit)[0]).toMatchObject({ event: { outcome: 'unknown' }, cam_proxy: { cancelledBy: 'request' } });
+  });
+
+  it('list() reads the saved reports once, and again after the next save', async () => {
+    const { runner, dir } = setup({ stills: stillsKind(async () => result(1)) });
+    const a = await runner.start('stills', who).done;
+    expect((await runner.list()).stills.map((x) => x.runId)).toEqual([a.runId]);
+    // A file that appears behind the runner's back is not seen until the next save.
+    const other = { ...a, runId: 'stills-1-abcdef', startedAt: 1 };
+    writeFileSync(join(dir, 'inventory', 'stills', 'stills-1-abcdef.json'), JSON.stringify(other));
+    expect((await runner.list()).stills).toHaveLength(1);
+    const b = await runner.start('stills', who).done;
+    expect((await runner.list()).stills.map((x) => x.runId)).toEqual([b.runId, a.runId, 'stills-1-abcdef']);
+  });
+});
+
+describe('InventoryRunner: cache, restart, stop (review fixes)', () => {
+  const repaired = (n: number): RepairResult => ({ counts: { requested: n, done: n, failed: 0, skipped: 0, bytes: n }, top: [], items: [], message: `${n} fetched`, stopped: null });
+  const clips = (repair: Repair): InventoryKind => ({
+    label: 'Clips', camera: true,
+    run: async () => result(1),
+    repair: { run: repair, ready: () => null },
+  });
+
+  it('a save that lands while list() reads does not leave a stale list cached', async () => {
+    const { runner } = setup({ stills: stillsKind(async () => result(1)) });
+    const a = await runner.start('stills', who).done;
+    (runner as unknown as { summaries: Map<string, unknown> }).summaries.clear();
+    const priv = runner as unknown as { read: (f: string, id: string) => Promise<unknown> };
+    const real = priv.read.bind(runner);
+    let gate: () => void = () => undefined;
+    const held = new Promise<void>((r) => (gate = r));
+    let first = true;
+    priv.read = async (f, id) => {
+      if (first) {
+        first = false;
+        await held;
+      }
+      return real(f, id);
+    };
+    const inflight = runner.list();
+    await new Promise((r) => setTimeout(r, 20));
+    const b = await runner.start('stills', who).done;
+    gate();
+    await inflight;
+    expect((await runner.list()).stills.map((x) => x.runId)).toEqual([b.runId, a.runId]);
+  });
+
+  it('list() and listRepairs() return copies', async () => {
+    const { runner } = setup({ clips: clips(async () => repaired(1)) });
+    const c = await runner.start('clips', who).done;
+    const rep = await runner.repair('clips', who, c.runId);
+    await rep.done;
+    (await runner.list()).clips.pop();
+    (await runner.listRepairs()).clips.pop();
+    expect((await runner.list()).clips).toHaveLength(1);
+    expect((await runner.listRepairs()).clips).toHaveLength(1);
+  });
+
+  it('drops the camera option for a kind without a compare', async () => {
+    const { runner } = setup({ stills: stillsKind(async () => result(1)) });
+    const r = await runner.start('stills', who, { camera: true }).done;
+    expect(r).not.toHaveProperty('options');
+  });
+
+  it('a fresh runner on the same folder lists and reads the earlier runs', async () => {
+    const { runner, dir, audit } = setup({ clips: clips(async () => repaired(1)) });
+    const c = await runner.start('clips', who).done;
+    const rep = await (await runner.repair('clips', who, c.runId)).done;
+    const again = new InventoryRunner({ dir: join(dir, 'inventory'), audit, camera: () => 'cam1', checks: { clips: clips(async () => repaired(1)) } });
+    expect((await again.list()).clips.map((x) => x.runId)).toEqual([c.runId]);
+    expect((await again.listRepairs()).clips.map((x) => x.runId)).toEqual([rep.runId]);
+    expect(await again.get(rep.runId)).toEqual(rep);
+  });
+
+  it('a repair that throws a non-Error releases the lock and audits a failure', async () => {
+    const { runner, audit } = setup({ clips: clips(async () => { throw 'boom'; }) });
+    const c = await runner.start('clips', who).done;
+    const r = await (await runner.repair('clips', who, c.runId)).done;
+    expect(r).toMatchObject({ outcome: 'failed', error: 'boom', message: 'Clips repair failed: boom' });
+    expect(runner.running()).toBeNull();
+    expect(audit.list({ actions: ['inventory-repair'] }).records[0]).toMatchObject({ event: { outcome: 'failure' }, error: { message: 'boom' } });
+    expect(() => runner.start('clips', who)).not.toThrow();
+  });
+
+  it('stop() during a repair cancels it, and a later repair is refused as stopping', async () => {
+    const { runner, audit } = setup({ clips: clips((ctx) => new Promise((r) => ctx.signal.addEventListener('abort', () => r({ ...repaired(1), stopped: 'paused' })))) });
+    const c = await runner.start('clips', who).done;
+    const rep = await runner.repair('clips', who, c.runId);
+    await runner.stop();
+    expect(await rep.done).toMatchObject({ outcome: 'cancelled', cancelledBy: 'stop', stopped: 'paused' });
+    expect(audit.list({ actions: ['inventory-repair'] }).records[0]).toMatchObject({ cam_proxy: { cancelledBy: 'stop' } });
+    await expect(runner.repair('clips', who, c.runId)).rejects.toBeInstanceOf(InventoryStoppingError);
   });
 });

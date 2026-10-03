@@ -15,6 +15,7 @@ describe('audit page helpers', () => {
     expect(outcomeClass({})).toBe('unknown');
     expect(ACTIONS).toContain('storage-daily');
     expect(ACTIONS).toContain('camera-powercycle');
+    expect(ACTIONS).toContain('inventory-repair');
     expect(ACTIONS).toContain('camera-poe-on');
     expect(ACTIONS).toContain('camera-check'); // #93
     expect(ACTIONS).toContain('inventory'); // #72

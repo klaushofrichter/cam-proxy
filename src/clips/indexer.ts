@@ -1,16 +1,38 @@
 import { execFile } from 'child_process';
-import { closeSync, copyFileSync, mkdirSync, openSync, readdirSync, readSync, renameSync, unlinkSync } from 'fs';
-import { dirname, join } from 'path';
+import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readSync, renameSync, unlinkSync } from 'fs';
+import { copyFile, link, stat, unlink } from 'fs/promises';
+import { dirname, join, resolve, sep } from 'path';
 import { promisify } from 'util';
 import type { DstRule, TimeInfo } from '../camera/time';
-import { clipForSnapshot, clipsWithoutSnapshot, deleteClip, insertClip, overlappingEvents, setSnapshot, type ClipRow } from '../catalog/clips';
+import { clipByPath, clipForSnapshot, clipsWithoutSnapshot, deleteClip, insertClip, overlappingEvents, setSnapshot, type ClipRow } from '../catalog/clips';
 import type { Catalog } from '../catalog/db';
 import type { Config } from '../config/defaults';
 import { logger } from '../log';
+import type { Stream } from '../recordings/names';
 import type { StreamLog } from '../stream/log';
 import type { Upload } from './ftp-server';
 
 const run = promisify(execFile);
+
+export class InvalidStartError extends Error {
+  constructor() {
+    super('start is not a timestamp');
+    this.name = 'InvalidStartError';
+  }
+}
+export class NotAVideoError extends Error {
+  constructor() {
+    super('the recording is not a video');
+    this.name = 'NotAVideoError';
+  }
+}
+// reason: a catalog row, or only a file, sits at the clip's path.
+export class ClipExistsError extends Error {
+  constructor(readonly reason: 'row' | 'file') {
+    super('a clip with that start exists');
+    this.name = 'ClipExistsError';
+  }
+}
 const pad = (n: number) => String(n).padStart(2, '0');
 
 // The camera names uploads <Name>_00_YYYYMMDDHHMMSS.(mp4|jpg), in its local time.
@@ -162,6 +184,77 @@ export class ClipIndexer {
     } finally {
       remove(u.tmpFile); // moved already when it was kept
     }
+  }
+
+  // A recording fetched from the camera's SD card by an inventory repair
+  // (#74): `file` stays where it is (the recordings cache; the caller keeps it
+  // pinned), a copy goes into clips/ under the FTP layout, and the row has
+  // origin 'camera'. No stream-log entry (so no SSE), no FTP arrival or failure
+  // count. Throws InvalidStartError, NotAVideoError, or ClipExistsError.
+  //
+  // "Exists" is the exact path (same second). The repair's +-5 s pre-check
+  // covers near-duplicates; the FTP side has no slack check (by design for now).
+  // The copy goes to <path>.part and is hard-linked into place (link fails with
+  // EEXIST, never overwrites), so an FTP clip landing meanwhile always wins.
+  // A video file at the path with no row (a crash between link and insert) is
+  // adopted instead of skipped forever.
+  async addRecording(file: string, r: { start: number; stream: Stream }): Promise<ClipRow> {
+    if (!Number.isSafeInteger(r.start) || r.start < 0 || Number.isNaN(new Date(r.start).getTime())) throw new InvalidStartError();
+    const t = new Date(r.start);
+    const root = resolve(this.d.dataDir, 'clips');
+    const path = resolve(this.folder(r.start), `${pad(t.getUTCHours())}${pad(t.getUTCMinutes())}-${r.start}.mp4`);
+    if (!path.startsWith(root + sep)) throw new Error('the clip path is outside the clips folder');
+    const probe = await probeVideo(file);
+    if (!probe) throw new NotAVideoError();
+    if (clipByPath(this.d.catalog, path)) throw new ClipExistsError('row');
+    const row = (size: number, durationS: number): ClipRow => {
+      if (clipByPath(this.d.catalog, path)) throw new ClipExistsError('row'); // an FTP arrival indexed it meanwhile
+      return insertClip(this.d.catalog, {
+        cam: this.d.cam,
+        start_ts: r.start,
+        end_ts: r.start + Math.round(durationS * 1000),
+        path,
+        stream: r.stream,
+        size,
+        received_at: this.now(),
+        snapshot: this.pictureFor(r.start), // the camera's FTP picture may have come without its clip
+        origin: 'camera',
+      });
+    };
+    if (existsSync(path)) {
+      // An orphan: adopt it when it is a video, else leave it alone.
+      const own = await probeVideo(path);
+      if (!own) throw new ClipExistsError('file');
+      const size = (await stat(path)).size;
+      const adopted = row(size, own.durationS);
+      this.d.stored?.(size);
+      logger.info({ clipId: adopted.id, start: r.start, bytes: size }, 'clip_adopted');
+      return adopted;
+    }
+    mkdirSync(dirname(path), { recursive: true });
+    const part = `${path}.part`;
+    let size: number;
+    try {
+      await copyFile(file, part);
+      size = (await stat(part)).size;
+      await link(part, path); // EEXIST: an FTP clip landed meanwhile, it wins
+    } catch (err) {
+      await unlink(part).catch(() => undefined);
+      if ((err as NodeJS.ErrnoException).code === 'EEXIST') throw new ClipExistsError('file');
+      throw err;
+    }
+    await unlink(part).catch(() => undefined);
+    let inserted: ClipRow;
+    try {
+      inserted = row(size, probe.durationS);
+    } catch (err) {
+      // Ours (we created the path), unless a row appeared: then it is not ours to delete.
+      if (!(err instanceof ClipExistsError)) await unlink(path).catch(() => undefined);
+      throw err;
+    }
+    this.d.stored?.(size);
+    logger.info({ clipId: inserted.id, start: r.start, durationS: probe.durationS, bytes: size }, 'clip_repaired');
+    return inserted;
   }
 
   private async index(u: Upload): Promise<ClipRow | null> {

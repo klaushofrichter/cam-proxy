@@ -34,6 +34,9 @@ export interface FetcherDeps {
   clientStallMs?: number;
 }
 
+// One caller's join of a fetch; `left` once its signal aborted.
+export interface Waiter { readonly left: boolean }
+
 export const abortError = (why = 'aborted'): Error => Object.assign(new Error(why), { name: 'AbortError' });
 export const isAbort = (e: unknown): boolean => e instanceof Error && e.name === 'AbortError';
 
@@ -180,6 +183,8 @@ export class Fetch {
   state: 'queued' | 'running' | 'done' = 'queued';
   kept = false; // the file is in the cache (else it was only streamed)
   private live: { res: Writable; onStart: () => void } | null = null;
+  // A background client (attachWhenRunning): it gets the slot at begin() only if it is still free.
+  private spare: { res: Writable; onStart: () => void } | null = null;
   private tee: Tee | null = null;
   private waiters = 0;
   private settle!: { resolve: () => void; reject: (e: unknown) => void };
@@ -193,14 +198,18 @@ export class Fetch {
     this.done.catch(noop); // waiters handle it; no unhandled rejection
   }
 
-  join(signal?: AbortSignal): void {
+  join(signal?: AbortSignal): Waiter {
+    const w = { left: false };
     this.waiters++;
     const leave = () => {
+      if (w.left) return;
+      w.left = true;
       this.waiters--;
       if (this.waiters === 0 && this.state === 'queued') this.abandoned(this);
     };
-    if (signal?.aborted) return leave();
-    signal?.addEventListener('abort', leave, { once: true });
+    if (signal?.aborted) leave();
+    else signal?.addEventListener('abort', leave, { once: true });
+    return w;
   }
 
   // The first client: it gets the file through the tee while it arrives.
@@ -216,15 +225,49 @@ export class Fetch {
     return true;
   }
 
+  // A background client (the clips repair's temp file, #74): viewers first.
+  // While queued it holds nothing, so a viewer's attach() still gets the
+  // slot; when the fetch starts it takes the slot only if no viewer has it.
+  // On a running fetch it is attach(). holds() tells afterwards who had it.
+  attachWhenRunning(res: Writable, onStart: () => void): void {
+    if (this.state === 'running') {
+      this.attach(res, onStart);
+      return;
+    }
+    if (this.state === 'queued') this.spare = { res, onStart };
+  }
+
+  // Whether `res` is (or was) the client the file streamed to.
+  holds(res: Writable): boolean {
+    return this.live?.res === res;
+  }
+
   // The proxy is stopping: the tee fails, so the download stops (cmd 9).
   abort(): void {
     this.tee?.destroy(abortError('the proxy is stopping'));
   }
 
+  // A background caller (the clips repair) gives up: a running fetch that
+  // nobody else waits for is aborted like abort(). `mine.waiter` is the
+  // caller's own join (subtracted unless it has left already), `mine.res`
+  // its own client (its temp writer in temp mode), which doesn't count as
+  // another reader. A fetch a viewer joined or streams to runs on.
+  // Answers whether it aborted.
+  abortIfAlone(mine: { waiter?: Waiter; res?: Writable } = {}): boolean {
+    const others = this.waiters - (mine.waiter && !mine.waiter.left ? 1 : 0);
+    if (this.state !== 'running' || others > 0) return false;
+    const c = this.live;
+    if (c && c.res !== mine.res && !c.res.destroyed && !c.res.writableEnded) return false;
+    this.tee?.destroy(abortError('cancelled'));
+    return true;
+  }
+
   begin(tee: Tee): void {
     this.state = 'running';
     this.tee = tee;
-    if (this.live) tee.attach(this.live.res, this.live.onStart);
+    const viewer = this.live && tee.attach(this.live.res, this.live.onStart);
+    if (!viewer && this.spare && tee.attach(this.spare.res, this.spare.onStart)) this.live = this.spare;
+    this.spare = null;
   }
 
   finish(err?: unknown): void {
@@ -248,7 +291,7 @@ export class RecordingFetcher {
     return (this.d.now ?? Date.now)();
   }
 
-  get(entry: RecordingEntry, o: { priority: Priority; signal?: AbortSignal }): { fetch: Fetch; created: boolean } {
+  get(entry: RecordingEntry, o: { priority: Priority; signal?: AbortSignal }): { fetch: Fetch; created: boolean; waiter: Waiter } {
     if (!validId(entry.id)) throw new Error('invalid recording id');
     const known = this.byId.get(entry.id);
     if (known) {
@@ -256,21 +299,20 @@ export class RecordingFetcher {
         known.priority = 'high';
         this.sort();
       }
-      known.join(o.signal);
-      return { fetch: known, created: false };
+      return { fetch: known, created: false, waiter: known.join(o.signal) };
     }
     const f = new Fetch(entry, o.priority, (x) => this.abandon(x));
     if (this.stopped) {
       f.finish(new BaichuanError('offline', 'the proxy is stopping'));
-      return { fetch: f, created: true };
+      return { fetch: f, created: true, waiter: { left: false } };
     }
     this.byId.set(entry.id, f);
     this.queue.push(f);
     this.sort();
-    f.join(o.signal);
+    const waiter = f.join(o.signal);
     // After the caller attached its response (same tick).
     queueMicrotask(() => this.pump());
-    return { fetch: f, created: true };
+    return { fetch: f, created: true, waiter };
   }
 
   /** for tests */

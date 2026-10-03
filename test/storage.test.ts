@@ -361,6 +361,19 @@ describe('storage: the recordings cache', () => {
     expect(u.daysUntilFull).toBeCloseTo(before! - 3_000_000 / 1000, 3); // the used bytes count, the growth doesn't
   });
 
+  // #74 final review: repaired clips are old recordings fetched back, not growth.
+  it('a write marked not growth (the clips repair) counts as usage but not in growthPerDay', () => {
+    const x = setup();
+    x.storage.recount();
+    x.storage.noteWritten('clips', 3 * 1000, 1);
+    const before = x.storage.usage();
+    x.storage.noteWritten('clips', 3 * 1_000_000, 1, { growth: false });
+    const u = x.storage.usage();
+    expect(u.clips.growthPerDay).toBe(1000);
+    expect(u.clips.bytes).toBe(before.clips.bytes + 3_000_000);
+    expect(u.daysUntilFull).toBeCloseTo(before.daysUntilFull! - 3_000_000 / 1000, 3);
+  });
+
   // Final review 4.
   it('usage() recounts the recordings folder: files the cache evicted are gone from the bytes at once', () => {
     const x = setup();

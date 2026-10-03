@@ -3,7 +3,7 @@
   import { api } from '../lib/api';
   import { feed, refreshTick } from '../lib/state';
 
-  interface Clip { id: number; start: number; end: number | null; stream: string; size: number; events: number[]; url: string; snapshotUrl: string | null }
+  interface Clip { id: number; start: number; end: number | null; stream: string; size: number; origin?: string; events: number[]; url: string; snapshotUrl: string | null }
   interface Ev { id: number; kind: string }
 
   const pad = (n: number) => String(n).padStart(2, '0');
@@ -64,7 +64,7 @@
   <div class="card">
     <div class="head">
       <input type="date" bind:value={day} max={today()} data-testid="clips-day" />
-      <span class="muted small">Recordings the camera uploads by FTP, with the events they cover.</span>
+      <span class="muted small">Recordings the camera uploads by FTP (and lost ones an inventory repair fetched from its SD card: "from camera"), with the events they cover.</span>
     </div>
     {#if playing}
       <div class="player">
@@ -79,7 +79,7 @@
         <button class="clip" class:active={playing?.id === c.id} onclick={() => (playing = c)} data-testid="clip">
           {#if c.snapshotUrl}<img src={c.snapshotUrl} alt="" loading="lazy" />{:else}<div class="noimg">no snapshot</div>{/if}
           <span class="meta"><b>{time(c.start)}</b> {secs(c)} · {mb(c.size)}</span>
-          <span class="chips">{#each clipChips(c.events, kinds) as chip (chip)}<span class="chip">{chip}</span>{/each}</span>
+          <span class="chips">{#if c.origin === 'camera'}<span class="chip origin" data-testid="clip-origin">from camera</span>{/if}{#each clipChips(c.events, kinds) as chip (chip)}<span class="chip">{chip}</span>{/each}</span>
         </button>
       {/each}
     </div>
@@ -102,6 +102,7 @@
   .meta { font-size: 13px; }
   .chips { display: flex; flex-wrap: wrap; gap: 4px; }
   .chip { font-size: 11px; padding: 1px 6px; border-radius: 999px; background: var(--accent); color: #fff; }
+  .chip.origin { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
   button { padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); cursor: pointer; color: var(--text); }
   .muted { color: var(--muted); margin: 0; }
   .small { font-size: 13px; }

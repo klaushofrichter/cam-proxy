@@ -104,4 +104,16 @@ export const MIGRATIONS: string[] = [
       ON CONFLICT (cam) DO UPDATE SET last_received = MAX(last_received, excluded.last_received);
   END;
   `,
+  // 6: where a clip came from (spec 2026-10-02-inventory-design §4, #74):
+  // 'ftp' (the camera's upload) or 'camera' (fetched from the SD card by an
+  // inventory repair). Only FTP clips count as arrivals: a repaired clip must
+  // not hide an FTP stall (#93).
+  `
+  ALTER TABLE clips ADD COLUMN origin TEXT NOT NULL DEFAULT 'ftp' CHECK (origin IN ('ftp','camera'));
+  DROP TRIGGER clips_last_received;
+  CREATE TRIGGER clips_last_received AFTER INSERT ON clips WHEN NEW.origin = 'ftp' BEGIN
+    INSERT INTO clip_arrivals (cam, last_received) VALUES (NEW.cam, NEW.received_at)
+      ON CONFLICT (cam) DO UPDATE SET last_received = MAX(last_received, excluded.last_received);
+  END;
+  `,
 ];
