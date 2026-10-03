@@ -6,7 +6,7 @@ import type { AddressInfo } from 'net';
 import { join } from 'path';
 import { openCatalog, type Catalog } from './catalog/db';
 import { clearUnmapped, countAnalysesByStatus, listUnmapped, usageBetween } from './catalog/analyses';
-import { countClips, lastClipReceived } from './catalog/clips';
+import { countAllClips, countClips, lastClipReceived } from './catalog/clips';
 import { closeAllOpen, countEventsByKind, countRecoveredEvents } from './catalog/events';
 import { ReolinkClient } from './camera/client';
 import { splitHost } from './camera/http';
@@ -15,7 +15,7 @@ import { CameraReboot } from './camera/reboot';
 import { PoeSwitch } from './camera/poe-switch';
 import { restartProcess } from './process-restart';
 import type { Config } from './config/defaults';
-import { needsProcessRestart, needsRestart, type Loaded } from './config/load';
+import { getPath, needsProcessRestart, needsRestart, setPath, type Loaded } from './config/load';
 import { leafPaths } from './config/schema';
 import { cameraFtpOff, readCameraFtp, setupCameraFtp, testCameraFtp, type FtpTarget } from './clips/camera-ftp';
 import { CameraFtpWatch, clipsStalled } from './clips/ftp-health';
@@ -107,15 +107,6 @@ export interface ProxyOptions {
   host?: { root?: string; statfs?: StatFs; everyMs?: number };
 }
 
-const getPath = (o: unknown, p: string) => p.split('.').reduce<unknown>((x, k) => (x && typeof x === 'object' ? (x as Record<string, unknown>)[k] : undefined), o);
-function setPath(o: Record<string, unknown>, p: string, v: unknown): void {
-  const keys = p.split('.');
-  let x = o;
-  for (const k of keys.slice(0, -1)) x = (x[k] ??= {}) as Record<string, unknown>;
-  if (v === undefined) delete x[keys[keys.length - 1]];
-  else x[keys[keys.length - 1]] = v;
-}
-
 // The camera's own web page for the admin UI: camera.webUiUrl, none for no
 // link, or https://<host without its port>/.
 export function cameraWebUi(c: Config['camera']): string | null {
@@ -150,12 +141,16 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   storage.recount();
   const sessions = createSessionSigner(opts.sessionSecret);
   const links = createLoginLinks();
+  let stills: StillsSide | undefined;
+  // Stills may be off (or not built yet): no still, an empty list.
+  const stillAt = (ts: number) => stills?.store.readStill(ts) ?? Promise.resolve(undefined);
+  const stillsIn = (from: number, to: number) => stills?.store.listStills(from, to) ?? [];
   // Composed clips (spec 2026-09-28): one encoding at a time; abandoned and
   // old jobs are swept every 5 s.
   const font = running.composition?.font ?? defaultFont();
   const composer = createComposer({
     dir: join(running.server.dataDir, 'compositions'),
-    runner: ffmpegRunner({ font: font ?? '', clock: clockText, readStill: (ts) => stills?.store.readStill(ts) ?? Promise.resolve(undefined), hasAudio, paused: () => storage.paused(), stillsIntervalS: () => running.stills.intervalS }),
+    runner: ffmpegRunner({ font: font ?? '', clock: clockText, readStill: stillAt, hasAudio, paused: () => storage.paused(), stillsIntervalS: () => running.stills.intervalS }),
   });
   const sweeper = setInterval(() => composer.sweep(), 5000);
   sweeper.unref();
@@ -164,7 +159,6 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   let status: StatusPoller;
   let intake: EventIntake;
   let lastResubscribes = 0;
-  let stills: StillsSide | undefined;
   let clips: ReturnType<typeof createClipsSide> | undefined;
   const metrics = createMetrics({
     stills: () => stills,
@@ -182,6 +176,10 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   });
   storage.on('run', metrics.onRetention);
 
+  // A clip indexer for the camera now; `growth: false` for the repair's
+  // fetches (old recordings back: not the rate the disk fills at).
+  const makeIndexer = (growth: boolean) =>
+    new ClipIndexer({ catalog, log, config: () => running, timeInfo: () => client.timeInfo(), dataDir: running.server.dataDir, cam: running.camera.id, stored: (bytes) => storage.noteWritten('clips', bytes, 1, { growth }) });
   // The camera side: client, status poller, event tracker and intake. Built
   // again by restart() with the current settings.
   const buildCameraSide = () => {
@@ -230,8 +228,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     if (running.ftp.enabled) {
       if (!loaded.secrets.ftpPassword) logger.error('ftp_enabled_without_password');
       else {
-        const cam = c.id;
-        const indexer = new ClipIndexer({ catalog, log, config: () => running, timeInfo: () => client.timeInfo(), dataDir: running.server.dataDir, cam, stored: (bytes) => storage.noteWritten('clips', bytes, 1) });
+        const indexer = makeIndexer(true);
         // Pictures stored before they were paired by time (2026-09-30).
         try {
           indexer.relinkSnapshots();
@@ -273,6 +270,20 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     await s.go2rtc.stop();
     await s.store.flush();
   };
+  // The camera side's components in order (start, restart, stop).
+  const startCameraSide = async () => {
+    status.start();
+    intake.start();
+    startStills();
+    await startClips();
+  };
+  const stopCameraSide = async () => {
+    await intake.stop();
+    status.stop();
+    await stopStills();
+    await clips?.stop();
+    await client.logout();
+  };
   // What camera-ftp-setup writes for this proxy (never logged: it has the password).
   const ftpTarget = (): FtpTarget => ({ server: running.ftp.publicHost ?? '', port: running.ftp.port, user: running.ftp.user, password: loaded.secrets.ftpPassword ?? '', tls: running.ftp.tls, stream: running.ftp.stream });
   // The camera's FTP upload (#93): read every few minutes while the proxy
@@ -285,6 +296,12 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     clipsBefore: () => lastClipReceived(catalog, running.camera.id) !== null,
     everyMs: opts.cameraFtpCheckMs,
   });
+  // A camera answer from a setup or off action goes to the check at once (#93).
+  const noted = async <T extends Parameters<CameraFtpWatch['note']>[0]>(p: Promise<T>): Promise<T> => {
+    const ftp = await p;
+    ftpWatch.note(ftp);
+    return ftp;
+  };
   // No stall warning for a camera never set up, nor before the first read when no clip ever came.
   const ftpNotSetUp = () => {
     const st = ftpWatch.view().state;
@@ -360,7 +377,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
           list: recordings.list,
           fetcher: recordings.fetcher,
           cache: recordings.cache,
-          indexer: () => new ClipIndexer({ catalog, log, config: () => running, timeInfo: () => client.timeInfo(), dataDir: running.server.dataDir, cam: running.camera.id, stored: (bytes) => storage.noteWritten('clips', bytes, 1, { growth: false }) }),
+          indexer: () => makeIndexer(false),
           tempDir: () => repairTmp,
           paused: () => storage.paused(),
           clipsBytes: () => storage.usage().clips.bytes,
@@ -413,8 +430,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     },
     config: () => running,
     secrets: () => ({ googleVisionKey: loaded.secrets.googleVisionKey, googleVisionUrl: loaded.secrets.googleVisionUrl }),
-    readStill: (ts) => stills?.store.readStill(ts) ?? Promise.resolve(undefined),
-    listStills: (from, to) => stills?.store.listStills(from, to) ?? [],
+    readStill: stillAt,
+    listStills: stillsIn,
     timeInfo,
   });
   // Every camera-event start goes to the service (it filters by kind).
@@ -428,7 +445,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     timeInfo,
     storage: () => {
       const u = storage.usage();
-      const clipRows = Number((catalog.db.prepare('SELECT COUNT(*) AS n FROM clips').get() as { n: number }).n);
+      const clipRows = countAllClips(catalog);
       return {
         message: storageMessage({ used: u.used, budget: u.budget, stillMinutes: u.stills.files, clipRows, daysUntilFull: u.daysUntilFull }),
         details: { size: u.size, free: u.free, budget: u.budget, used: u.used, daysUntilFull: u.daysUntilFull, kinds: { stills: u.stills, previews: u.previews, clips: u.clips, recordings: u.recordings, catalog: u.catalog, audit: u.audit }, clipRows },
@@ -442,12 +459,16 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     },
   });
 
+  // Copies the loaded settings into `running`, except those `keep` holds back.
+  const applySettings = (keep: (path: string) => boolean) => {
+    for (const p of leafPaths()) if (!keep(p)) setPath(running as unknown as Record<string, unknown>, p, structuredClone(getPath(loaded.config, p)));
+  };
   // New settings from the control API: live ones take effect now.
   const setLoaded = (next: Loaded) => {
     const analyticsBefore = JSON.stringify(loaded.config.analytics);
     const baichuanPortBefore = running.camera.baichuanPort;
     loaded = next;
-    for (const p of leafPaths()) if (!needsRestart(p)) setPath(running as unknown as Record<string, unknown>, p, structuredClone(getPath(next.config, p)));
+    applySettings(needsRestart);
     sse.setOptions(running.sse);
     setLogLevel(running.server.logLevel);
     // Only a change to the analytics settings lifts a bad_key pause.
@@ -489,7 +510,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     passwordSet: !!loaded.secrets.ftpPassword,
     lastUpload: clips?.side.lastUpload() ?? null,
     lastClip: clips?.side.indexer.lastIndexed() ?? null,
-    clips: (catalog.db.prepare('SELECT COUNT(*) AS n FROM clips').get() as { n: number }).n,
+    clips: countAllClips(catalog),
     failures: (clips?.side.uploadFailures() ?? 0) + (clips?.side.indexer.failures() ?? 0),
     camera: running.ftp.enabled ? ftpWatch.view() : null,
     stalled: clipsHealth(),
@@ -517,7 +538,6 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     return last;
   };
   const healthNow = async (): Promise<HealthSummary> => {
-    const ftp = ftpStatus();
     const ps = running.camera.poeSwitch;
     return buildHealth({
       now: Date.now(),
@@ -527,7 +547,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       camera: { id: running.camera.id, name: running.camera.name, host: running.camera.host, state: status.state(), reboot: reboot.state()?.phase ?? null, poeSwitch: ps.model === 'none' ? null : { model: ps.model, port: ps.port ?? null } },
       stream: streamStatus(),
       intake: intake.state(),
-      ftp: { enabled: ftp.enabled, listening: ftp.listening, camera: ftp.camera, stalled: ftp.stalled, lastClip: ftp.lastClip, clips: ftp.clips, failures: ftp.failures },
+      ftp: ftpStatus(),
       storage: { paused: storage.paused(), lastRun: storage.lastRun() },
       recordingsCache: recordings.status().cache,
       sseClients: sse.clients(),
@@ -555,8 +575,9 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   };
   // Behind an ingress (issue #29): client addresses from X-Forwarded-For.
   if (running.server.trustProxy) app.set('trust proxy', running.server.trustProxy);
-  app.use(rateLimit({ windowMs: 60_000, limit: 1200, skip: isImage, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } }));
-  app.use(rateLimit({ windowMs: 60_000, limit: 6000, skip: (req) => !isImage(req), standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } }));
+  const limiter = (limit: number, skip: (req: Request) => boolean) => rateLimit({ windowMs: 60_000, limit, skip, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } });
+  app.use(limiter(1200, isImage));
+  app.use(limiter(6000, (req) => !isImage(req)));
   app.use(express.json({ limit: '64kb' }));
   // startedAt tells a new process apart (the Maintenance page's restart waits for it).
   app.get('/health', (_req, res) => void res.json({ ok: true, version: VERSION, startedAt }));
@@ -570,7 +591,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // key; anyone else goes on to the access check as for an unknown route.
   app.use('/api', localApi({ health: healthNow }));
   app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit }));
-  app.use('/api', requireAccess('client', access), composeApi({ config: () => running, catalog, composer, stillsIn: (f, t) => stills?.store.listStills(f, t) ?? [], paused: () => storage.paused(), font }));
+  app.use('/api', requireAccess('client', access), composeApi({ config: () => running, catalog, composer, stillsIn, paused: () => storage.paused(), font }));
   app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, status: () => status, sse, stills: () => stills, recordings: () => recordings }));
   // The audit log: admins and the audit token, GET (and HEAD) only. The access check is
   // on the route inside the router; other /control paths pass on untouched
@@ -607,17 +628,9 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       // The camera's answer goes to the FTP check at once (#93).
       cameraFtp: {
         target: ftpTarget,
-        setup: async (t) => {
-          const ftp = await setupCameraFtp(client, t);
-          ftpWatch.note(ftp);
-          return ftp;
-        },
+        setup: (t) => noted(setupCameraFtp(client, t)),
         test: (t) => testCameraFtp(client, t),
-        off: async () => {
-          const ftp = await cameraFtpOff(client, ftpTarget());
-          ftpWatch.note(ftp);
-          return ftp;
-        },
+        off: () => noted(cameraFtpOff(client, ftpTarget())),
       },
       storage,
       audit,
@@ -661,21 +674,11 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // Applies pending restart settings to the camera side (camera, events).
   // Settings read at process start (port, data folder, trust proxy, font) need a new process.
   const restartCameraSide = async () => {
-    await intake.stop();
-    status.stop();
-    await stopStills();
-    await clips?.stop();
-    await client.logout();
+    await stopCameraSide();
     recordings.reset();
-    for (const p of leafPaths()) {
-      if (needsProcessRestart(p)) continue;
-      setPath(running as unknown as Record<string, unknown>, p, structuredClone(getPath(loaded.config, p)));
-    }
+    applySettings(needsProcessRestart);
     buildCameraSide();
-    status.start();
-    intake.start();
-    startStills();
-    await startClips();
+    await startCameraSide();
     logger.info('cam_proxy_restarted');
   };
 
@@ -716,10 +719,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         s.once('error', reject);
         s.listen(opts.port ?? running.server.port, opts.host ?? '0.0.0.0', () => resolve((s.address() as AddressInfo).port));
       });
-      status.start();
-      intake.start();
-      startStills();
-      await startClips();
+      await startCameraSide();
       ftpWatch.start();
       hostMonitor.start();
       storage.start();
@@ -789,11 +789,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         s.closeAllConnections();
         await new Promise<void>((r) => s.close(() => r()));
       }
-      await intake.stop();
-      status.stop();
-      await stopStills();
-      await clips?.stop();
-      await client.logout();
+      await stopCameraSide();
       catalog.close();
   }
   return proxy;

@@ -122,6 +122,11 @@ export function countClips(c: Catalog, cam: string, from: number, to: number): n
   return Number((c.db.prepare("SELECT COUNT(*) AS n FROM clips WHERE cam = ? AND origin = 'ftp' AND received_at >= ? AND received_at < ?").get(cam, from, to) as { n: number }).n);
 }
 
+// All clip rows, every camera (the FTP status, the daily storage record).
+export function countAllClips(c: Catalog): number {
+  return Number((c.db.prepare('SELECT COUNT(*) AS n FROM clips').get() as { n: number }).n);
+}
+
 // When the newest clip of a camera arrived (received_at), or null; kept
 // after retention deletes the clip (clip_arrivals, #93).
 export function lastClipReceived(c: Catalog, cam: string): number | null {
