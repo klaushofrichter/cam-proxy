@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clipsLines, duration, eventsLines, eventsOffer, eventsRepairLines, gapRows, recoverText, kindsText, mb, progressText, RECOVER_MAX, repairLines, repairOffer, repairRows, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type RepairReport, type StillsReport } from '../web/src/lib/inventory';
+import { clipsLines, duration, problemRows, eventsLines, eventsOffer, eventsRepairLines, gapRows, recoverText, kindsText, mb, progressText, RECOVER_MAX, repairLines, repairOffer, repairRows, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type RepairReport, type StillsReport } from '../web/src/lib/inventory';
 
 const fmt = (ms: number) => new Date(ms).toISOString().slice(11, 19);
 const T = Date.UTC(2026, 8, 27, 0, 10);
@@ -55,6 +55,28 @@ describe('Inventory box helpers', () => {
     const noted = { ...report, counts: { ...report.counts, previewsPruned: 3 }, window: { ...report.window!, notes: ['Clock note'] } };
     expect(stillsNotes(noted)).toEqual(['3 packs without sprite were previews already pruned by their own retention; not counted as problems', 'Clock note']);
     expect(stillsNotes({ ...report, outcome: 'failed' })).toEqual([]);
+  });
+
+  it('notes the packs the retention deleted during the run (#106)', () => {
+    const noted = { ...report, counts: { ...report.counts, prunedDuringRun: 2 } };
+    expect(stillsNotes(noted)).toEqual(['2 packs were deleted by the retention while the check read them; their minutes count as missing']);
+  });
+
+  it('lists the first file problems with their minute (#106)', () => {
+    const items = [
+      { type: 'unreadable-pack', minute: T },
+      { type: 'pack-without-sprite', minute: T + 60_000 },
+      { type: 'sprite-without-pack', minute: T + 120_000 },
+      ...Array.from({ length: 12 }, (_, i) => ({ type: 'sprite-without-pack', minute: T + (3 + i) * 60_000 })),
+    ];
+    const rows = problemRows({ ...report, items }, fmt);
+    expect(rows).toHaveLength(10);
+    expect(rows.slice(0, 3)).toEqual([
+      { at: '00:10:00', what: 'unreadable pack' },
+      { at: '00:11:00', what: 'pack without sprite' },
+      { at: '00:12:00', what: 'sprite without pack' },
+    ]);
+    expect(problemRows(report, fmt)).toEqual([]);
   });
 
   it('lists the top gaps with their cause', () => {

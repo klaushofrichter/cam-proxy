@@ -64,11 +64,25 @@ export function gapRows(r: StillsReport, fmt: (ms: number) => string = local): {
 }
 
 // Quiet notes under the result: previews pruned by their own retention are not
-// file problems; the camera-clock note of the restorable count.
+// file problems; packs the retention deleted while the check read them count
+// as missing (#106); the window's own notes (the camera-clock note).
 export function stillsNotes(r: StillsReport): string[] {
   if (r.outcome === 'failed' || !r.window || r.window.from === null) return [];
   const pruned = r.counts.previewsPruned ?? 0;
-  return [...(pruned ? [`${pruned} packs without sprite were previews already pruned by their own retention; not counted as problems`] : []), ...(r.window.notes ?? [])];
+  const during = r.counts.prunedDuringRun ?? 0;
+  return [
+    ...(pruned ? [`${pruned} packs without sprite were previews already pruned by their own retention; not counted as problems`] : []),
+    ...(during ? [`${during} packs were deleted by the retention while the check read them; their minutes count as missing`] : []),
+    ...(r.window.notes ?? []),
+  ];
+}
+
+const PROBLEMS: Record<string, string> = { 'unreadable-pack': 'unreadable pack', 'pack-without-sprite': 'pack without sprite', 'sprite-without-pack': 'sprite without pack' };
+export const MAX_PROBLEM_ROWS = 10;
+
+// The first file problems of a stills report, by minute (#106: the counts alone don't say where).
+export function problemRows(r: StillsReport, fmt: (ms: number) => string = local): { at: string; what: string }[] {
+  return r.items.slice(0, MAX_PROBLEM_ROWS).map((x) => ({ at: fmt(x.minute), what: PROBLEMS[x.type] ?? x.type }));
 }
 
 // The clips inventory (#74) and its repair.
