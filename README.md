@@ -609,6 +609,13 @@ exchanged for the cookie and not stored in the browser.
   them, the seconds a local clip could restore, and unreadable packs or
   sprites without their pack. It shows the progress (with Cancel) and the
   newest result.
+  "Check clips" checks the clips of the retention window (rows without
+  their file, files without a row, recording events without a clip, clips
+  without an event); "Compare clips with the camera" also pairs them with the
+  SD card's recordings on `ftp.stream`. Under a compare less than an hour
+  old with recordings missing here, "Fetch N lost clips" fetches them from
+  the SD card (at most 50 or 200 MB per run) after a confirmation; the Clips
+  page marks them "from camera".
 - **Top bar:** the title links to the GitHub repo; badges for the camera
   online state and event intake; the camera's model (linked to
   `camera.webUiUrl`) · firmware · version; "updated … ago"; Refresh, the

@@ -2,7 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { ADMIN_TOKEN, CLIENT_TOKEN, auth, startProxy, until } from './helpers/proxy';
 import { startSim } from './helpers/sim';
-import { mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import type { Check } from '../src/inventory/runner';
 import { minuteOf, minutePath } from '../src/stills/store';
@@ -94,6 +95,7 @@ describe('inventory API', () => {
     for (const t of [CLIENT_TOKEN, AUDIT_TOKEN]) {
       expect((await request(p.base).get('/control/inventory').set(auth(t))).status).toBe(403);
       expect((await request(p.base).post('/control/actions/inventory').set(auth(t)).send({ kind: 'stills' })).status).toBe(403);
+      expect((await request(p.base).post('/control/actions/inventory-repair').set(auth(t)).send({ kind: 'clips', runId: 'clips-1-abcdef' })).status).toBe(403);
     }
   });
 
@@ -104,6 +106,22 @@ describe('inventory API', () => {
       const r = await request(own.base).post('/control/actions/inventory').set(admin()).send({ kind: 'stills' });
       expect(r.status).toBe(503);
       expect(r.body).toMatchObject({ error: 'stopping' });
+    } finally {
+      await own.proxy.stop();
+    }
+  });
+
+  it('empties the repair\'s temp folder at startup, a directory in it too', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'camproxy-tmpclean-'));
+    const tmp = join(dir, 'data', 'inventory', 'tmp');
+    mkdirSync(join(tmp, 'sub'), { recursive: true });
+    writeFileSync(join(tmp, 'sub', 'inner.part'), 'x');
+    writeFileSync(join(tmp, 'left.part'), 'x');
+    const own = await startProxy(sim, { dir });
+    try {
+      expect(existsSync(join(tmp, 'sub'))).toBe(false);
+      expect(existsSync(join(tmp, 'left.part'))).toBe(false);
+      expect(existsSync(tmp)).toBe(true);
     } finally {
       await own.proxy.stop();
     }

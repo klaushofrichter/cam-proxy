@@ -1,5 +1,5 @@
 import { createWriteStream, mkdirSync, openSync, readdirSync, rmSync, statSync } from 'fs';
-import { join } from 'path';
+import { join, resolve, sep } from 'path';
 import type { Writable } from 'stream';
 import { finished } from 'stream/promises';
 import { BaichuanError } from '../camera/baichuan/errors';
@@ -49,7 +49,7 @@ const STOP_TEXT: Record<RepairStop, string> = {
   camera_offline: 'the camera is offline',
 };
 // `viewer`: in temp mode a viewer took the fetch's one client slot (viewers first).
-export type SkipReason = 'outside-retention' | 'already-local' | 'gone-from-camera' | 'other-stream' | 'viewer';
+export type SkipReason = 'outside-retention' | 'already-local' | 'gone-from-camera' | 'other-stream' | 'viewer' | 'invalid';
 // `streamed`: the cache couldn't keep the file; it went through a temp file.
 export interface RepairItem { id: string; start: number; result: 'ok' | 'skipped' | 'failed'; reason?: SkipReason; error?: string; clipId?: number; bytes?: number; streamed?: true }
 
@@ -174,15 +174,17 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
     // second try), streamed to a temp file. 'viewer': in temp mode a viewer
     // took the client slot (it has the file). Null: nothing usable (the fetch
     // was another's that was aborted, or the file went before it was pinned).
-    const obtain = async (entry: RecordingEntry, attempt: number, signal: AbortSignal): Promise<Source | 'viewer' | null> => {
+    const obtain = async (entry: RecordingEntry, attempt: number, signal: AbortSignal): Promise<Source | 'viewer' | 'invalid' | null> => {
       const cached = d.cache.open(entry.id);
       if (cached) return { file: d.cache.path(entry.id), release: cached, streamed: false };
       if (downloads++ > 0) await sleep(REPAIR_GAP_MS, signal);
       if (signal.aborted) throw abortError('cancelled');
       let tmp: { path: string; w: Writable; err?: Error } | null = null;
       if (attempt > 0 || !d.fetcher.canKeep(entry.size)) {
-        // entry.id is an SD name (the list's): no path separators.
+        // entry.id is an SD name (the list's): no path separators; checked
+        // anyway before it becomes a file name.
         const path = join(tempDir, `${entry.id}.part`);
+        if (!resolve(path).startsWith(resolve(tempDir) + sep)) return 'invalid';
         let w: Writable;
         try {
           w = (d.openTemp ?? openTempFile)(path);
@@ -273,8 +275,8 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
           continue;
         }
         const src = (await obtain(entry, 0, clip.signal)) ?? (await obtain(entry, 1, clip.signal));
-        if (src === 'viewer') {
-          skip(c, 'viewer');
+        if (src === 'viewer' || src === 'invalid') {
+          skip(c, src);
           continue;
         }
         if (!src) throw new Error('the recording could not be kept or streamed');

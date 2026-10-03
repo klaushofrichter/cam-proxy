@@ -326,6 +326,17 @@ describe('clips repair', () => {
     expect(readdirSync(s.tempDir)).toEqual([]);
   });
 
+  it('a recording id that would leave the temp folder is skipped as invalid, nothing written or fetched', async () => {
+    const s = setup({ cap: Math.floor(video.length / 2) });
+    const a = recording(1, { id: '../escape' });
+    s.onCamera(a);
+    const r = await clipsRepair(s.deps).run(ctx(report([missing(a)])));
+    expect(r.counts).toMatchObject({ done: 0, failed: 0, skipped: 1 });
+    expect(r.items).toEqual([expect.objectContaining({ result: 'skipped', reason: 'invalid' })]);
+    expect(s.calls).toEqual([]);
+    expect(existsSync(join(s.dir, 'inventory', 'escape.part'))).toBe(false);
+  });
+
   it('an unusable temp folder: a clear failure in temp mode; the cache mode is unaffected', async () => {
     const base = mkdtempSync(join(tmpdir(), 'camproxy-badtmp-'));
     const notADir = join(base, 'file');

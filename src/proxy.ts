@@ -312,7 +312,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   const repairTmp = join(inventoryDir, 'tmp');
   try {
     mkdirSync(repairTmp, { recursive: true });
-    for (const f of readdirSync(repairTmp)) rmSync(join(repairTmp, f), { force: true });
+    for (const f of readdirSync(repairTmp)) rmSync(join(repairTmp, f), { force: true, recursive: true });
   } catch (err) {
     logger.warn({ err: (err as Error).message }, 'inventory_tmp_cleanup_failed');
   }
