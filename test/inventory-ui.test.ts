@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clipsLines, duration, LOAD_ERROR, loadMessage, problemRows, eventsLines, eventsOffer, eventsRepairLines, gapRows, recoverText, kindsText, mb, progressText, RECOVER_MAX, repairLines, repairOffer, repairRows, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type RepairReport, type StillsReport } from '../web/src/lib/inventory';
+import { addNothing, autoStep, clipsLines, duration, LOAD_ERROR, loadMessage, problemRows, eventsLines, eventsOffer, eventsRepairLines, gapRows, recoverText, kindsText, mb, progressText, RECOVER_MAX, repairLines, repairOffer, repairRows, retrieveNothing, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type RepairReport, type StillsReport } from '../web/src/lib/inventory';
 
 const fmt = (ms: number) => new Date(ms).toISOString().slice(11, 19);
 const T = Date.UTC(2026, 8, 27, 0, 10);
@@ -35,7 +35,7 @@ describe('Inventory box helpers', () => {
       'Window: 00:10:00 to 00:20:00 (shorter: the store is younger than the retention)',
       'Missing: 3 min 40 s of 10 min (36.67%) in 4 gaps',
       'Explained (proxy stop or crash, camera reboot or power cycle, storage pause): 2 min 30 s; unexplained: 1 min 10 s',
-      'Restorable from local clips: 20 s',
+      'Covered by local clips: 20 s (not restored)',
       'Files: 1 unreadable packs, 1 packs without sprite, 1 sprites without pack',
     ]);
     expect(stillsLines({ ...report, outcome: 'cancelled' }, fmt)[0]).toBe('Cancelled: the counts are partial');
@@ -189,6 +189,35 @@ describe('Inventory box helpers, clips', () => {
     const l = clipsLines({ ...clipsReport, counts: { ...clipsReport.counts, pairedOtherStream: 4 } }, fmt);
     expect(l).toContain('4 recordings are here as clips of the other stream (not counted as missing)');
   });
+  it('says when a finished compare found nothing to retrieve', () => {
+    const none = { ...clipsReport, counts: { ...clipsReport.counts, missingLocally: 0 } };
+    expect(retrieveNothing(none)).toBe('Nothing to retrieve: all the listed recordings are here.'); // a day was not listed
+    expect(retrieveNothing({ ...none, window: { ...none.window!, camera: { ...none.window!.camera!, unknownDays: [] } } })).toBe("Nothing to retrieve: all the camera's recordings are here.");
+    expect(retrieveNothing(clipsReport)).toBeNull(); // something missing: the offer instead
+    expect(retrieveNothing({ ...none, outcome: 'failed' })).toBeNull();
+    expect(retrieveNothing({ ...none, outcome: 'cancelled' })).toBeNull();
+    expect(retrieveNothing({ ...none, options: undefined })).toBeNull(); // "Check clips" never asks the camera
+    expect(retrieveNothing(null)).toBeNull();
+  });
+});
+
+describe('Inventory box: the search buttons ask by themselves (autoStep)', () => {
+  const run = { runId: 'clips-2-abc' };
+  it('waits while the clicked run runs or its report is not loaded yet', () => {
+    expect(autoStep('clips-2-abc', 'clips-2-abc', { runId: 'clips-1-old' }, { count: 3 })).toBe('wait');
+    // A poll sent before the click answers with the old report and nothing running.
+    expect(autoStep('clips-2-abc', null, { runId: 'clips-1-old' }, { count: 3 })).toBe('wait');
+    expect(autoStep('clips-2-abc', null, null, null)).toBe('wait');
+  });
+  it('asks once its report offers something, else drops it', () => {
+    expect(autoStep('clips-2-abc', null, run, { count: 3 })).toBe('ask');
+    expect(autoStep('clips-2-abc', 'eventsrepair-9', run, { count: 3 })).toBe('ask');
+    expect(autoStep('clips-2-abc', null, run, { count: 0 })).toBe('drop'); // all too big
+    expect(autoStep('clips-2-abc', null, run, null)).toBe('drop'); // nothing missing, failed, cancelled, stale or used
+  });
+  it('never asks without a click of this page (a report loaded on open, a run started elsewhere)', () => {
+    expect(autoStep(null, null, run, { count: 3 })).toBe('drop');
+  });
 });
 
 describe('Inventory box helpers, events (#75)', () => {
@@ -231,6 +260,15 @@ describe('Inventory box helpers, events (#75)', () => {
     expect(eventsOffer({ ...eventsReport, counts: { ...eventsReport.counts, missingEvents: 0 } }, T)).toBeNull();
     expect(eventsOffer(null, T)).toBeNull();
     expect(eventsOffer(eventsReport, T, { source: 'events-1-abcdef' })).toBeNull(); // already used
+  });
+
+  it('says when a finished check found nothing to add', () => {
+    const none = { ...eventsReport, counts: { ...eventsReport.counts, missingEvents: 0 } };
+    expect(addNothing(none)).toBe('Nothing to add.');
+    expect(addNothing(eventsReport)).toBeNull();
+    expect(addNothing({ ...none, outcome: 'failed' })).toBeNull();
+    expect(addNothing({ ...none, outcome: 'cancelled' })).toBeNull();
+    expect(addNothing(null)).toBeNull();
   });
 
   it('words an events repair result', () => {
