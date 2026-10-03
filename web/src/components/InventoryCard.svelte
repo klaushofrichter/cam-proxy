@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api, ApiError } from '../lib/api';
-  import { clipsLines, LOAD_ERROR, loadMessage, eventsLines, eventsOffer, eventsRepairLines, gapRows, mb, problemRows, progressText, recoverText, repairLines, repairOffer, repairRows, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type InventoryState, type RepairReport, type StillsReport } from '../lib/inventory';
+  import { addNothing, autoStep, clipsLines, LOAD_ERROR, loadMessage, eventsLines, eventsOffer, eventsRepairLines, gapRows, mb, problemRows, progressText, recoverText, repairLines, repairOffer, repairRows, retrieveNothing, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type InventoryState, type RepairReport, type StillsReport } from '../lib/inventory';
 
   // The inventories (spec 2026-10-02-inventory-design): start one, follow its
   // progress (polled every second while it runs), cancel it, and show the
@@ -12,7 +12,11 @@
   // hands it the dry-run numbers); fetchLost() runs after the confirm. The
   // events check (#75) is the dry run of "Add N missing events": onrecover
   // asks, addMissing() runs after the confirm.
-  let { onrepair, onrecover }: { onrepair: (offer: { count: number; bytes: number }) => void; onrecover: (offer: { count: number; text: string }) => void } = $props();
+  // "Search for and retrieve missing clips" (the compare) and "Search for and
+  // add missing events" (the check) open that dialog by themselves when the
+  // run their click started ends with something to take (`auto` true);
+  // Cancel leaves the follow-up button.
+  let { onrepair, onrecover }: { onrepair: (offer: { count: number; bytes: number }, auto?: boolean) => void; onrecover: (offer: { count: number; text: string }, auto?: boolean) => void } = $props();
   let inv = $state<InventoryState | null>(null);
   let stills = $state<StillsReport | null>(null);
   let clips = $state<ClipsReport | null>(null);
@@ -26,6 +30,11 @@
   const busy = $derived(!!inv?.running);
   const offer = $derived(repairOffer(clips, now, repair));
   const recoverOffer = $derived(eventsOffer(events, now, recover));
+  const clipsNothing = $derived(retrieveNothing(clips));
+  const eventsNothing = $derived(addNothing(events));
+  // The run this page's search click started, until its report is in.
+  let pendingClips = $state<string | null>(null);
+  let pendingEvents = $state<string | null>(null);
 
   const IDLE_POLL_MS = 10_000;
   const fetchReport = <T,>(runId: string) => api<T>('GET', `/control/inventory/runs/${encodeURIComponent(runId)}`);
@@ -44,7 +53,17 @@
     const rc = s.repairs?.events?.[0];
     if (rc && rc.runId !== recover?.runId) recover = await fetchReport<RepairReport>(rc.runId);
   }
-  const reload = () => load().then(() => (message = loadMessage(message, true)), () => (message = LOAD_ERROR));
+  const reload = () => load().then(() => ((message = loadMessage(message, true)), askIfDone()), () => (message = LOAD_ERROR));
+  const recoverArg = (o: { count: number }) => ({ ...o, text: recoverText(o.count, events?.counts ?? {}) });
+  function askIfDone() {
+    const runningId = inv?.running?.runId ?? null;
+    const c = autoStep(pendingClips, runningId, clips, offer);
+    if (c !== 'wait') pendingClips = null;
+    if (c === 'ask' && offer) onrepair(offer, true);
+    const e = autoStep(pendingEvents, runningId, events, recoverOffer);
+    if (e !== 'wait') pendingEvents = null;
+    if (e === 'ask' && recoverOffer) onrecover(recoverArg(recoverOffer), true);
+  }
   onMount(() => {
     void reload();
     // The offer's one hour runs out while the page stays open.
@@ -61,7 +80,7 @@
     return () => clearInterval(t);
   });
 
-  async function post(path: string, body: object, label: string) {
+  async function post(path: string, body: object, label: string, onstarted?: (runId: string) => void) {
     if (starting || busy) {
       message = `${label}: another inventory is running`;
       return;
@@ -69,7 +88,8 @@
     starting = true;
     message = '';
     try {
-      await api('POST', path, body);
+      const r = await api<{ runId?: string }>('POST', path, body);
+      if (r?.runId) onstarted?.(r.runId);
     } catch (e) {
       message = `${label}: ${e instanceof ApiError ? e.message : 'failed'}`;
     }
@@ -77,7 +97,9 @@
     cancelling = false;
     await reload();
   }
-  const start = (kind: string, camera = false) => post('/control/actions/inventory', camera ? { kind, camera } : { kind }, 'Inventory');
+  const start = (kind: string, camera = false, onstarted?: (runId: string) => void) => post('/control/actions/inventory', camera ? { kind, camera } : { kind }, 'Inventory', onstarted);
+  const searchClips = () => start('clips', true, (id) => (pendingClips = id));
+  const searchEvents = () => start('events', false, (id) => (pendingEvents = id));
   export const fetchLost = () => clips && post('/control/actions/inventory-repair', { kind: 'clips', runId: clips.runId }, 'Repair');
   export const addMissing = () => events && post('/control/actions/inventory-repair', { kind: 'events', runId: events.runId }, 'Repair');
   async function cancel() {
@@ -94,12 +116,12 @@
 
 <div class="card" data-testid="inventory">
   <h3>Inventory</h3>
-  <p class="small">Checks the local stills and clips against what the store should hold for the retention window. "Compare clips with the camera" also reads the camera's SD card list, and a repair fetches lost clips from it. "Check events" compares the events with the SD card's recordings, and a repair adds the missing ones. One run at a time.</p>
+  <p class="small">"Check stills" and "Check clips" only read: they check the local stills and clips against what the store should hold for the retention window. The two search buttons compare with the camera's SD card and then change data, after a confirmation: "Search for and retrieve missing clips" fetches the clips missing here from the camera, "Search for and add missing events" adds the events missing here. Cancel in the confirmation changes nothing; the offer stays for an hour. One run at a time.</p>
   <div class="buttons">
     <button onclick={() => void start('stills')} disabled={starting || busy} data-testid="inventory-stills">Check stills</button>
     <button onclick={() => void start('clips')} disabled={starting || busy} data-testid="inventory-clips">Check clips</button>
-    <button onclick={() => void start('clips', true)} disabled={starting || busy} data-testid="inventory-clips-camera">Compare clips with the camera</button>
-    <button onclick={() => void start('events')} disabled={starting || busy} data-testid="inventory-events">Check events</button>
+    <button onclick={() => void searchClips()} disabled={starting || busy} data-testid="inventory-clips-camera">Search for and retrieve missing clips</button>
+    <button onclick={() => void searchEvents()} disabled={starting || busy} data-testid="inventory-events">Search for and add missing events</button>
     {#if busy}<button onclick={() => void cancel()} disabled={cancelling} data-testid="inventory-cancel">{cancelling ? 'Cancelling…' : 'Cancel'}</button>{/if}
   </div>
   {#if inv?.running}<p class="busy" role="status" data-testid="inventory-progress">{progressText(inv.running)}</p>{/if}
@@ -147,12 +169,13 @@
           </tbody>
         </table>
       {/if}
+      {#if clipsNothing}<p class="line" role="status" data-testid="inventory-retrieve-nothing">{clipsNothing}</p>{/if}
       {#if !offer && clips.outcome === 'ok' && clips.options?.camera && clips.counts.missingLocally}
-        <p class="small" role="status" data-testid="inventory-repair-stale">Compare again first: a repair needs a compare less than an hour old, and one that no repair has used yet.</p>
+        <p class="small" role="status" data-testid="inventory-repair-stale">Search again first: retrieving needs a search less than an hour old, and one that no retrieval has used yet.</p>
       {/if}
       {#if offer}
         <div class="buttons">
-          <button onclick={() => onrepair(offer)} disabled={starting || busy || !offer.count} data-testid="inventory-repair">Fetch {offer.count} lost clips ({mb(offer.bytes)})</button>
+          <button onclick={() => onrepair(offer)} disabled={starting || busy || !offer.count} data-testid="inventory-repair">Retrieve {offer.count} missing clips ({mb(offer.bytes)})</button>
         </div>
         <p class="small">Fetches them from the camera's SD card over Baichuan, one at a time, after any viewer's download; at most 50 clips or 200 MB per run.</p>
         {#if offer.tooBig}<p class="small" data-testid="inventory-repair-too-big">{offer.tooBig} recordings are larger than one run's 200 MB and are skipped.</p>{/if}
@@ -192,12 +215,13 @@
           </tbody>
         </table>
       {/if}
+      {#if eventsNothing}<p class="line" role="status" data-testid="inventory-add-nothing">{eventsNothing}</p>{/if}
       {#if !recoverOffer && events.outcome === 'ok' && events.counts.missingEvents}
-        <p class="small" role="status" data-testid="inventory-recover-stale">Check again first: adding events needs a check less than an hour old, and one that no repair has used yet.</p>
+        <p class="small" role="status" data-testid="inventory-recover-stale">Search again first: adding events needs a search less than an hour old, and one that no repair has used yet.</p>
       {/if}
       {#if recoverOffer}
         <div class="buttons">
-          <button onclick={() => onrecover({ ...recoverOffer, text: recoverText(recoverOffer.count, events?.counts ?? {}) })} disabled={starting || busy} data-testid="inventory-recover">Add {recoverOffer.count} missing events</button>
+          <button onclick={() => recoverOffer && onrecover(recoverArg(recoverOffer))} disabled={starting || busy} data-testid="inventory-recover">Add {recoverOffer.count} missing events</button>
         </div>
         <p class="small">Adds one event per kind and missing recording span, marked "recovered"; no SSE message, no analysis. At most 1000 per run; existing events are not changed.</p>
       {/if}

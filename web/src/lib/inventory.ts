@@ -49,7 +49,7 @@ export function stillsLines(r: StillsReport, fmt: (ms: number) => string = local
     `Window: ${fmt(r.window.from)} to ${fmt(r.window.to)} (${REASONS[r.window.reason] ?? r.window.reason})`,
     `Missing: ${duration(c.missingSeconds)} of ${duration(c.expectedSeconds)} (${c.missingPct}%) in ${c.gaps} gaps`,
     `Explained (proxy stop or crash, camera reboot or power cycle, storage pause): ${duration(c.explainedSeconds)}; unexplained: ${duration(c.unexplainedSeconds)}`,
-    `Restorable from local clips: ${duration(c.restorableSeconds)}`,
+    `Covered by local clips: ${duration(c.restorableSeconds)} (not restored)`,
     `Files: ${c.unreadablePacks} unreadable packs, ${c.packsWithoutSprite} packs without sprite, ${c.spritesWithoutPack} sprites without pack`,
   ];
 }
@@ -159,6 +159,27 @@ export function repairOffer(r: ClipsReport | null, now: number, repair: { source
   return offer;
 }
 
+// The line under a finished compare with the camera that found nothing to
+// retrieve (no dialog then). With days the camera could not list, only the
+// listed ones are known to be complete.
+export function retrieveNothing(r: ClipsReport | null): string | null {
+  if (!r || r.outcome !== 'ok' || !r.options?.camera || r.counts.missingLocally) return null;
+  return r.window?.camera?.unknownDays.length ? "Nothing to retrieve: all the listed recordings are here." : "Nothing to retrieve: all the camera's recordings are here.";
+}
+
+// "Search for and retrieve missing clips" and "Search for and add missing
+// events" ask by themselves when their run ends: only for the run this page's
+// click started (pending), never for a report loaded on page open or a run
+// started elsewhere. 'wait' while it runs or its report is not loaded yet
+// (a poll sent before the click can answer after it); 'ask' when its report
+// offers something to take; 'drop' otherwise (nothing missing, failed,
+// cancelled, or already used).
+export function autoStep(pending: string | null, runningId: string | null, newest: { runId: string } | null, offer: { count: number } | null): 'wait' | 'ask' | 'drop' {
+  if (!pending) return 'drop';
+  if (runningId === pending || newest?.runId !== pending) return 'wait';
+  return offer && offer.count > 0 ? 'ask' : 'drop';
+}
+
 const SKIPS: Record<string, string> = {
   'outside-retention': 'outside the retention',
   'already-local': 'already here',
@@ -237,6 +258,11 @@ export function eventsLines(r: EventsReport, fmt: (ms: number) => string = local
 export function eventsOffer(r: EventsReport | null, now: number, repair: { source?: string } | null = null): { count: number } | null {
   if (!r || repair?.source === r.runId || r.outcome !== 'ok' || now - r.startedAt >= REPAIR_MAX_AGE_MS || !r.counts.missingEvents) return null;
   return { count: Math.min(r.counts.missingEvents, RECOVER_MAX) };
+}
+
+// The line under a finished events check with nothing missing.
+export function addNothing(r: EventsReport | null): string | null {
+  return r && r.outcome === 'ok' && !r.counts.missingEvents ? 'Nothing to add.' : null;
 }
 
 export function eventsRepairLines(r: RepairReport): string[] {
