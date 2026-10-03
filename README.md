@@ -614,13 +614,14 @@ exchanged for the cookie and not stored in the browser.
   process). After 2 minutes without the proxy it says so.
   The Inventory box's "Check stills" checks the stills of the retention
   window in the background: the missing seconds, the 10 longest gaps and
-  whether a proxy stop or crash, a camera reboot or a power cycle explains
-  them, the seconds a local clip could restore, and unreadable packs or
-  sprites without their pack. It shows the progress (with Cancel) and the
-  newest result.
+  whether a proxy stop or crash, a camera reboot or a power cycle, or a
+  storage pause (disk full) explains them, the seconds a local clip could
+  restore, and unreadable packs or sprites without their pack (the first 10
+  with their minute). It shows the progress (with Cancel) and the newest
+  result, also of a run started in another tab (it polls every 10 s).
   "Check clips" checks the clips of the retention window (rows without
-  their file, files without a row, recording events without a clip, clips
-  without an event); "Compare clips with the camera" also pairs them with the
+  their file, files without a row, snapshots no clip links, recording
+  events without a clip, clips without an event); "Compare clips with the camera" also pairs them with the
   SD card's recordings on `ftp.stream`. Under a compare less than an hour
   old with recordings missing here, "Fetch N lost clips" fetches them from
   the SD card (at most 50 or 200 MB per run) after a confirmation; the Clips
