@@ -1,4 +1,5 @@
 import { setImmediate as yieldToLoop } from 'timers/promises';
+import type { TimeInfo } from '../camera/time';
 import type { Catalog } from '../catalog/db';
 import { localDate, type Kind, type Stream } from '../recordings/names';
 import type { RecordingEntry } from '../recordings/list';
@@ -47,6 +48,7 @@ export interface EventsComparison {
   withoutRecording: EventItem[];
   stream: Stream;
   cancelled: boolean;
+  time: TimeInfo; // the camera's offsets: camera-local dates for the message
 }
 
 const UNJUDGED_NOTE = (n: number) => `${n} recording spans or events next to a day the camera did not list were not judged`;
@@ -181,7 +183,7 @@ export async function compareEvents(d: EventsInventoryDeps, ctx: Pick<CheckConte
     .filter((x) => x.state === 'unknown' || x.missing)
     .sort((a, b) => b.missing - a.missing || a.date.localeCompare(b.date))
     .slice(0, MAX_TOP);
-  return { window, counts, top, missing, withoutRecording, stream: s.stream, cancelled: ctx.signal.aborted };
+  return { window, counts, top, missing, withoutRecording, stream: s.stream, cancelled: ctx.signal.aborted, time: t };
 }
 
 // "person 3, motion 9" (the kinds with any), or "none".
@@ -194,7 +196,8 @@ export function eventsCheck(d: EventsInventoryDeps): Check {
     const r = await compareEvents(d, ctx);
     const c = r.counts;
     const w = r.window;
-    const since = w.from === null ? null : new Date(w.from).toISOString().slice(0, 10);
+    // The camera-local date, as the per-day rows (#114): not the UTC one.
+    const since = w.from === null ? null : localDate(w.from, r.time);
     const message = w.from === null
       ? `no recordings on the SD card (${r.stream}) in the last ${c.eventsDays} days`
       : `${c.missingEvents} of ${c.spans} recording spans without an event (${byKindText(c, 'missing')}) since ${since} (${w.reason === 'sd-card' ? "the SD card's reach" : `the ${c.eventsDays}-day retention`}), ` +

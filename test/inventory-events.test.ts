@@ -168,6 +168,17 @@ describe('events inventory', () => {
     expect(res.window.notes).toContain(EDGE_NOTE(1));
   });
 
+  it('the message gives the window start as the camera-local date, as the per-day rows do (#114)', async () => {
+    // Camera 5 h behind UTC (CDT): the oldest recording, 2026-10-01 21:11
+    // camera time, is 2026-10-02 02:11 UTC; the message says 2026-10-01.
+    const first = rec(T('2026-10-02T02:11:00'));
+    const cam = camera({ months: { '2026-10': [1] }, recs: { '2026-10-01': [first] } });
+    cam.deps.timeInfo = async () => ({ stdOffsetMinutes: -360, dstOffsetMinutes: 60 });
+    const res = await eventsCheck(deps(cam.deps))(ctx());
+    expect(res.window.from).toBe(first.start);
+    expect(res.message).toMatch(/ since 2026-10-01 \(the SD card's reach\), /);
+  });
+
   it('an empty SD card: nothing judged', async () => {
     event('person', T('2026-10-01T14:00:00'), T('2026-10-01T14:00:10'));
     const cam = camera({ months: {}, recs: {} });
