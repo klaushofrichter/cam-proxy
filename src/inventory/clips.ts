@@ -48,6 +48,8 @@ export type ClipItem =
   | { type: 'gone-from-camera'; clipId: number; start: number }
   | { type: 'row-without-file'; clipId: number; start: number; file: string }
   | { type: 'file-without-row'; file: string }
+  // An FTP picture (.jpg) that no clip row links (#111: its clip never came, or was deleted).
+  | { type: 'snapshot-without-clip'; file: string }
   | { type: 'event-without-clip'; eventId: number; kind: string; start: number }
   | { type: 'clip-without-event'; clipId: number; start: number };
 // The camera days with problems, the most missing first (the report's `top`).
@@ -89,7 +91,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     const root = join(d.dataDir, 'clips', s.cam);
     const db = d.catalog.db;
     const counts: Record<string, number> = {
-      clipsDays: s.clipsDays, clips: 0, fromCamera: 0, rowsWithoutFile: 0, filesWithoutRow: 0,
+      clipsDays: s.clipsDays, clips: 0, fromCamera: 0, rowsWithoutFile: 0, filesWithoutRow: 0, snapshotsWithoutClip: 0,
       events: 0, eventsWithoutClip: 0, clipsWithoutEvent: 0,
     };
     const local: ClipItem[] = [];
@@ -131,9 +133,15 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
       for (const n of [...files].sort()) {
         if (known.has(n) || !/\.(mp4|jpg)$/.test(n)) continue;
         const path = join(folder, n);
-        if ((n.endsWith('.mp4') ? byPath : bySnapshot).get(path)) continue; // a row of another day points here
-        counts.filesWithoutRow++;
-        add({ type: 'file-without-row', file: rel(path) });
+        const video = n.endsWith('.mp4');
+        if ((video ? byPath : bySnapshot).get(path)) continue; // a row of another day points here
+        if (video) {
+          counts.filesWithoutRow++;
+          add({ type: 'file-without-row', file: rel(path) });
+        } else {
+          counts.snapshotsWithoutClip++;
+          add({ type: 'snapshot-without-clip', file: rel(path) });
+        }
       }
       ctx.progress({ phase: 'clips', done: i + 1, total: days.length, note: new Date(day).toISOString().slice(0, 10) });
       await yieldToLoop();
@@ -174,7 +182,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     }
 
     let message =
-      `${counts.clips} clips in the last ${s.clipsDays} days (since ${new Date(from).toISOString().slice(0, 10)}): ${counts.rowsWithoutFile} rows without file, ${counts.filesWithoutRow} files without row, ` +
+      `${counts.clips} clips in the last ${s.clipsDays} days (since ${new Date(from).toISOString().slice(0, 10)}): ${counts.rowsWithoutFile} rows without file, ${counts.filesWithoutRow} files without row, ${counts.snapshotsWithoutClip} snapshots without a clip, ` +
       `${counts.eventsWithoutClip} of ${counts.events} events without clip, ${counts.clipsWithoutEvent} clips without event`;
     const window: CheckResult['window'] = { from, to, reason: 'retention', notes };
     if (!ctx.options?.camera || cancelled || ctx.signal.aborted) return { window, counts, top: [], items: local, message };

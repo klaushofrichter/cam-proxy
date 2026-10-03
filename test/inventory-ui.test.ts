@@ -93,6 +93,8 @@ describe('Inventory box helpers, clips', () => {
       "Gone from the camera: 1 local clips; 5 older than the SD card's oldest day (2026-09-25)",
       'Not listed (the Search failed, nothing counted as missing): 2026-09-26',
     ]);
+    // FTP pictures no clip links are named for what they are (#111).
+    expect(clipsLines({ ...clipsReport, counts: { ...clipsReport.counts, snapshotsWithoutClip: 29 } }, fmt)[1]).toBe('Clips: 40 (2 from the camera); 1 without their file, 0 files without a clip, 29 snapshots without a clip');
     const local = { ...clipsReport, options: undefined, window: { from: T, to: T + 600_000, reason: 'retention' } };
     expect(clipsLines(local, fmt)).toHaveLength(3);
     expect(clipsLines({ ...clipsReport, outcome: 'failed', error: 'camera_offline: the camera does not answer' }, fmt)).toEqual(['Failed: camera_offline: the camera does not answer']);

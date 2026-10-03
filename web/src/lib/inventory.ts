@@ -103,7 +103,7 @@ export function clipsLines(r: ClipsReport, fmt: (ms: number) => string = local):
   return [
     ...(r.outcome === 'cancelled' ? ['Cancelled: the counts are partial'] : []),
     `Window: ${fmt(r.window.from)} to ${fmt(r.window.to)} (the clips retention, ${c.clipsDays} days)`,
-    `Clips: ${c.clips}${c.fromCamera ? ` (${c.fromCamera} from the camera)` : ''}; ${c.rowsWithoutFile} without their file, ${c.filesWithoutRow} files without a clip`,
+    `Clips: ${c.clips}${c.fromCamera ? ` (${c.fromCamera} from the camera)` : ''}; ${c.rowsWithoutFile} without their file, ${c.filesWithoutRow} files without a clip${c.snapshotsWithoutClip ? `, ${c.snapshotsWithoutClip} snapshots without a clip` : ''}`,
     `Events: ${c.eventsWithoutClip} of ${c.events} recording events without a clip; ${c.clipsWithoutEvent} clips without an event`,
     ...(cam
       ? [
