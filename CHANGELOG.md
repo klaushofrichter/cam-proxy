@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Admin UI navigation works like cams: on desktop the sidebar shows icons and labels and "Collapse" shrinks it to icons (remembered per browser); on phones (767 px and narrower) the icon rail is gone and a hamburger at the top left opens the menu as a drawer over the page; its footer has what the phone top bar leaves out (the camera's model, linked to its web page, firmware and version, and "updated N s ago"), the theme toggle and Sign out. The drawer closes on navigation, Back or Forward, a tap outside, the close button, Escape or Sign out, and gives focus back to the hamburger. The phone top bar stays on one row: the camera and events pills show a dot and the state only.
+
 ## v2026.10.03.2
 
 - Health summary (spec 2026-10-03-health-summary-design): the Status page starts with a Health card, one line per item (camera, live stream, events intake, camera FTP upload, storage, disk, CPU temperature, under-voltage, last inventory, version), red when it is a problem, with "All OK" or "N problems". Problems: the camera offline, the stream down while enabled, ONVIF not subscribed, the camera's FTP upload off, pointing elsewhere or never set up (while `ftp.enabled`), or the FTP stall check stalled, storage paused, the data volume at or above `health.diskPercent` (new setting, default 90), the CPU temperature at or above `health.tempC` (new setting, default 75 °C), the under-voltage alarm, a failed last inventory. The other cards mark the same items red from the same summary (the FTP card's "Camera upload" and "Last clip" lines too), and the Storage card shows the data volume's "Disk used". The FTP card's "FTP upload isn't set up on the camera" note is now a warning (amber), no longer grey.

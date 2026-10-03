@@ -592,6 +592,10 @@ arrive.
 
 The **admin UI** at `/` signs in with the admin token once; the token is
 exchanged for the cookie and not stored in the browser.
+Its navigation works like cams: a sidebar with labels that "Collapse" shrinks
+to icons (remembered per browser), and on phones (767 px and narrower) a
+hamburger at the top left that opens the menu, with the theme toggle and Sign
+out, as a drawer over the page.
 
 - **Status:** a Health card first (one line per item of the health summary,
   red when it is a problem, and "All OK" or "N problems"), then the camera
