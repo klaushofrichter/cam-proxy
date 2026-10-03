@@ -83,7 +83,10 @@ export async function compareEvents(d: EventsInventoryDeps, ctx: Pick<CheckConte
   const triggered = pool.filter((r) => r.kinds.length > 0);
   // The SD card's reach: its oldest recording in the window (the card
   // overwrites from its oldest end, so that day keeps only its later hours).
-  const reach = pool.length ? Math.min(...pool.map((r) => r.start)) : null;
+  // A loop, not Math.min(...spread): the pool can be large enough to exceed
+  // the engine's argument limit.
+  let reach: number | null = null;
+  for (const r of pool) if (reach === null || r.start < reach) reach = r.start;
   const from = reach === null ? null : Math.max(retentionFrom, reach);
   const reason = from === null ? 'empty' : from > retentionFrom ? 'sd-card' : 'retention';
   const notes: string[] = reason === 'sd-card' ? [REACH_NOTE(s.eventsDays), BOUNDS_NOTE] : [BOUNDS_NOTE];
