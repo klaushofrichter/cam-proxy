@@ -31,15 +31,24 @@ paths:
         No secrets. Cache-Control: no-store.
       security: []
       responses:
-        '200': { description: '{ schema: 1, generatedAt, version, startedAt, ok, problemCount, thresholds: {diskPercent, tempC, ftpStalledHours}, platform: {pi, model, hostStats}, items: [{id (camera, stream, events, ftp, storage, disk, cpuTemp, underVoltage, inventory, version), label, value, text, problem}], camera: {id, name, address, online, since, model, firmware, clockOffsetMs, error, reboot, poeSwitch: {model, port} or null}, stream: {enabled, up, lastFrameAt}, events: {onvif, source, since, resubscribes}, ftp: {enabled, listening, cameraUpload, checkedAt, lastClipAt, clipsStored, failures, stalled, eventsWithoutClip}, proxy: {sseClients, storagePaused, lastRetentionRun, recordingsCache: {bytes, files, capBytes}, lastInventory: {kind, op, outcome, startedAt, message} or null}, disk: {sizeBytes, freeBytes, usedBytes, usedPercent} or null, host: {cpuTempC, underVoltage, memory: {totalBytes, availableBytes, usedPercent}, uptimeS, load: {m1, m5, m15}} or null }' }
+        '200': { description: '{ schema: 1, generatedAt, version, startedAt, ok, problemCount, thresholds: {diskPercent, tempC, ftpStalledHours}, platform: {pi, model, hostStats}, items: [{id (camera, stream, events, ftp, storage, disk, cpuTemp, underVoltage, inventory, version), label, value, text, problem}], camera: {id, name (the camera-reported name since the camera-name change; the configured camera.name until the camera was read), address, online, since, model, firmware, clockOffsetMs, error, reboot, poeSwitch: {model, port} or null}, stream: {enabled, up, lastFrameAt}, events: {onvif, source, since, resubscribes}, ftp: {enabled, listening, cameraUpload, checkedAt, lastClipAt, clipsStored, failures, stalled, eventsWithoutClip}, proxy: {sseClients, storagePaused, lastRetentionRun, recordingsCache: {bytes, files, capBytes}, lastInventory: {kind, op, outcome, startedAt, message} or null}, disk: {sizeBytes, freeBytes, usedBytes, usedPercent} or null, host: {cpuTempC, underVoltage, memory: {totalBytes, availableBytes, usedPercent}, uptimeS, load: {m1, m5, m15}} or null }' }
         '401': { description: not a loopback caller and no token (as an unknown route) }
         '404': { description: not a loopback caller, with a token (as an unknown route) }
   /api/cameras:
     get:
       summary: The camera and its state
       responses:
-        '200': { description: '[{ id, name, online, lastEventTs (the newest live (non-recovered) event's start, or null), stream: { up, lastFrameTs } | null, publicUrl }] (stream is null when stills are off; publicUrl is server.publicUrl or null)' }
+        '200': { description: '[{ id, name, online, lastEventTs (the newest live (non-recovered) event''s start, or null), stream: { up, lastFrameTs } | null, publicUrl }] (name: the camera''s own name as read from it, the configured camera.name until the camera was first read; stream is null when stills are off; publicUrl is server.publicUrl or null)' }
         '401': { description: missing or wrong token }
+  /api/cameras/{cam}:
+    get:
+      summary: One camera and its state (the entry of GET /api/cameras)
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: '{ id, name, online, lastEventTs, stream, publicUrl }, as in GET /api/cameras' }
+        '401': { description: missing or wrong token }
+        '404': { description: unknown camera }
   /api/cameras/{cam}/extent:
     get:
       summary: How far back the proxy has content (for a timeline's left edge)
@@ -242,7 +251,10 @@ paths:
         `{eventId, kind, start, end, provider, status, reason, stillTs,
         summary, objects}` (`analysis` messages stored before this version
         lack kind, start, end, stillTs and summary: a missing `summary` means
-        unknown, not "nothing found"); annotation (reserved, not sent yet); still
+        unknown, not "nothing found"); camera `{cam, name}` (once per change
+        of the camera's name: a rename through PUT /control/camera/name or one
+        made in the Reolink app, seen by the status poll); annotation
+        (reserved, not sent yet); still
         `{cam, ts, url, sprite, tile}` (only when named in `types`; live
         only, without an id, and not replayed).
       parameters:
@@ -306,9 +318,31 @@ paths:
         Admin token or admin session. Writes with the session cookie need
         `X-CamProxy-UI: 1`. A client token answers 403 `{"error":"admin_only"}`.
       responses:
-        '200': { description: '{ version, camera (incl. webUiUrl, reboot {kind, requestedAt, confirmed, phase, offAt, endedAt, downSec} or null, poeSwitch {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state (on, off, elsewhere, server_differs, not_set_up, unknown), checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result (ok, offline, refused, auth, timeout, protocol, not_found), stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null, cache: {bytes, files, capBytes}}, analytics: [provider state], analyticsUnmapped: top 20 unmapped objects [{mid, name, count, lastSeen}], health: the health summary, as GET /api/local/health }' }
+        '200': { description: '{ version, camera (incl. name (the camera''s name; the configured camera.name until the camera was read), nameSource (camera or config), webUiUrl, reboot {kind, requestedAt, confirmed, phase, offAt, endedAt, downSec} or null, poeSwitch {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state (on, off, elsewhere, server_differs, not_set_up, unknown), checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result (ok, offline, refused, auth, timeout, protocol, not_found), stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null, cache: {bytes, files, capBytes}}, analytics: [provider state], analyticsUnmapped: top 20 unmapped objects [{mid, name, count, lastSeen}], health: the health summary, as GET /api/local/health }' }
         '401': { description: not signed in }
         '403': { description: admin_only, or csrf }
+  /control/camera/name:
+    put:
+      summary: Renames the camera, on the camera (admin)
+      description: >
+        Checks the camera's rules (1 to 31 characters; ASCII letters, digits,
+        space and - ( ) + = [ ] { }; no leading or trailing space), writes
+        SetDevName {DevName: {name}}, reads GetDevName back and answers that
+        name. The camera stores the name; the configured camera.name is only
+        the fallback until it was read. Admin token, or an admin session with
+        `X-CamProxy-UI: 1`. Audited as camera-name. Stream clients get a
+        `camera` message.
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [name], properties: { name: { type: string, pattern: '^[A-Za-z0-9()+=\[\]{}-](?:[A-Za-z0-9 ()+=\[\]{}-]{0,29}[A-Za-z0-9()+=\[\]{}-])?$' } } }
+      responses:
+        '200': { description: '{ name }: the name read back from the camera' }
+        '400': { description: '{ error: invalid_name, reason }: against the rules (the camera is not asked), or refused by the camera (rspCode -54, -56)' }
+        '401': { description: not signed in }
+        '403': { description: admin_only, or csrf }
+        '502': { description: '{ error: camera_error } (or camera_auth_failed)' }
+        '503': { description: '{ error: camera_offline }' }
   /control/analytics:
     get:
       summary: External analytics providers - state, usage and limits (admin)

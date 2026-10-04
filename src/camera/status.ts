@@ -7,6 +7,7 @@ export interface CameraState {
   model?: string;
   firmware?: string;
   serial?: string; // the camera's serial number; a new one means it rebooted
+  name?: string; // the camera's name as last read (GetDevInfo.name); kept while offline
   clockOffsetMs?: number; // camera clock minus proxy clock
   error?: string; // why the last check failed (never contains credentials)
 }
@@ -30,12 +31,16 @@ function clockOffset(t: GetTime, now: number): number | undefined {
 }
 
 // Checks the camera every `intervalS`. Two failures in a row mean offline, one
-// success means online; 'change' fires only when `online` flips.
+// success means online; 'change' fires only when `online` flips, 'name'
+// (the new name) only when the camera's name changes, the first read included.
 export class StatusPoller extends EventEmitter {
   private current: CameraState;
   private failures = 0;
   private timer: NodeJS.Timeout | undefined;
   private running: Promise<CameraState> | undefined;
+  // Bumped by noteName(): a check that started before a write read the old
+  // name and must not report it as a rename (review of #137).
+  private nameEpoch = 0;
 
   constructor(
     private readonly client: ReolinkClient,
@@ -76,11 +81,12 @@ export class StatusPoller extends EventEmitter {
   // Emits 'check' ({ok, ms, error?}) after every check, for metrics.
   private async check(): Promise<CameraState> {
     const t0 = this.now();
+    const epoch = this.nameEpoch;
     try {
       const status = await this.client.status();
       const time = await this.client.command<GetTime>('GetTime');
       this.failures = 0;
-      this.set({ online: true, model: status.model, firmware: status.firmware, serial: status.serial, clockOffsetMs: clockOffset(time, this.now()), error: undefined });
+      this.set({ online: true, model: status.model, firmware: status.firmware, serial: status.serial, name: epoch === this.nameEpoch ? (status.name ?? this.current.name) : this.current.name, clockOffsetMs: clockOffset(time, this.now()), error: undefined });
       this.emit('check', { ok: true, ms: this.now() - t0 });
     } catch (err) {
       this.failures++;
@@ -92,10 +98,20 @@ export class StatusPoller extends EventEmitter {
     return this.state();
   }
 
+  // A name the proxy just wrote and read back: known at once, not at the next poll.
+  noteName(name: string): void {
+    const renamed = name !== this.current.name;
+    this.nameEpoch++;
+    this.current = { ...this.current, name };
+    if (renamed) this.emit('name', name);
+  }
+
   private set(next: Omit<CameraState, 'since'>): void {
     const flipped = next.online !== this.current.online;
+    const renamed = next.name !== undefined && next.name !== this.current.name;
     const since = flipped ? this.now() : this.current.since;
     this.current = { ...next, since };
     if (flipped) this.emit('change', this.state());
+    if (renamed) this.emit('name', next.name);
   }
 }

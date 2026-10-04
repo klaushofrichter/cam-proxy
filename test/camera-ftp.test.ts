@@ -151,7 +151,8 @@ describe('camera-ftp-off without a configured FTP password', () => {
       expect(r.body.error).toBe('not_configured');
       expect(r.body.detail).toMatch(/masked/);
       expect(ftp.enable).toBe(1);
-      ftp.userName = 'camera'; // the sim doesn't mask yet in this release
+      // cam-sim masks the user as the camera does (from v2026.10.03.5), 5 characters and up: a short one comes back unmasked.
+      ftp.userName = 'cam';
       expect((await off()).status).toBe(200);
       expect(ftp.enable).toBe(0);
     } finally {

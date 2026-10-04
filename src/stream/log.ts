@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 import type { Catalog } from '../catalog/db';
 
-export const STREAM_TYPES = ['camera-event', 'camera-status', 'clip', 'annotation', 'still', 'analysis'] as const;
+export const STREAM_TYPES = ['camera-event', 'camera-status', 'clip', 'annotation', 'still', 'analysis', 'camera'] as const;
 export type StreamType = (typeof STREAM_TYPES)[number];
 
 export interface StreamMessage {
@@ -46,6 +46,12 @@ export class StreamLog extends EventEmitter {
     if (f.kinds?.length) (where.push(`json_extract(data, '$.kind') IN (${f.kinds.map(() => '?').join(',')})`), args.push(...f.kinds));
     const rows = this.c.db.prepare(`SELECT * FROM stream_log WHERE ${where.join(' AND ')} ORDER BY id LIMIT ?`).all(...args, limit) as Row[];
     return rows.map(fromRow);
+  }
+
+  // The newest message of a type for a camera (the last camera name told), or undefined.
+  latest(cam: string, type: StreamType): StreamMessage | undefined {
+    const r = this.c.db.prepare('SELECT * FROM stream_log WHERE cam = ? AND type = ? ORDER BY id DESC LIMIT 1').get(cam, type) as Row | undefined;
+    return r && fromRow(r);
   }
 
   oldestId(): number | null {

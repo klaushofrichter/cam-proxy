@@ -21,7 +21,7 @@ const SETTINGS: Node = {
   },
   camera: {
     id: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,31}$', doc: 'camera id used in paths and the API' },
-    name: { type: 'string', pattern: '^.{1,64}$', doc: 'display name' },
+    name: { type: 'string', pattern: '^.{1,64}$', doc: "fallback display name until the camera's own name is read (the camera stores its name)" },
     host: { type: 'string', pattern: '^[^\\s/]*$', doc: 'address or name, optional :port (required)' },
     protocol: { type: 'string', enum: ['https', 'http'], doc: 'camera HTTP API protocol' },
     tlsName: { type: 'string', pattern: '^[^\\s]+$', optional: true, doc: 'verify the camera certificate against this name' },

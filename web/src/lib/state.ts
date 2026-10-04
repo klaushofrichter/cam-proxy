@@ -8,7 +8,7 @@ import type { UiHealth } from './health';
 
 export interface Status {
   version: string;
-  camera: { online: boolean; since: number; model?: string; firmware?: string; clockOffsetMs?: number; error?: string; webUiUrl?: string | null; reboot?: CameraReboot | null; poeSwitch?: PoeSwitchStatus };
+  camera: { name?: string; nameSource?: 'camera' | 'config'; online: boolean; since: number; model?: string; firmware?: string; clockOffsetMs?: number; error?: string; webUiUrl?: string | null; reboot?: CameraReboot | null; poeSwitch?: PoeSwitchStatus };
   intake: { onvif: string; since: number; source: string; lastError?: string; resubscribes: number };
   sse: { clients: number };
   stream: { enabled: boolean; up: boolean; go2rtcUp: boolean; lastFrameTs: number | null };
@@ -83,7 +83,7 @@ export function connect(): void {
   timer = setInterval(() => document.visibilityState !== 'hidden' && void refresh(), 5000);
   document.addEventListener('visibilitychange', onVisible);
   source = new EventSource('/api/stream', { withCredentials: true });
-  for (const type of ['camera-event', 'camera-status', 'clip', 'annotation', 'analysis']) {
+  for (const type of ['camera-event', 'camera-status', 'clip', 'annotation', 'analysis', 'camera']) {
     source.addEventListener(type, (ev) => {
       const e = ev as MessageEvent;
       feed.update((list) => [{ id: Number(e.lastEventId), type, data: JSON.parse(e.data), at: Date.now() }, ...list].slice(0, 300));
