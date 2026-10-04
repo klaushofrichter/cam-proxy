@@ -10,6 +10,8 @@ import { Storage } from '../src/storage';
 import { DEFAULTS, type Config } from '../src/config/defaults';
 import { minutePath, MinuteStore } from '../src/stills/store';
 import { AuditLog } from '../src/audit/audit-log';
+import { saveAnalysis } from '../src/catalog/analyses';
+import { checkById, insertCheck, setCheckImage } from '../src/catalog/still-checks';
 import sharp from 'sharp';
 
 const HOUR = 3_600_000;
@@ -400,5 +402,45 @@ describe('storage: the recordings cache', () => {
     expect(x.storage.usage().recordings.bytes).toBe(1500);
     unlinkSync(a); // the cache's makeRoom
     expect(x.storage.usage().recordings).toMatchObject({ bytes: 500, files: 1 });
+  });
+});
+
+// cams #179: still checks keep their JPEG in data/analytics/<cam>/ next to the
+// analyses' ones. Retention used to delete every file there that no analysis
+// names, so a check's image vanished within the hour.
+describe('storage: still checks', () => {
+  const jpg = (dir: string, name: string) => {
+    const d = join(dir, 'analytics', 'cam1');
+    mkdirSync(d, { recursive: true });
+    const f = join(d, name);
+    writeFileSync(f, Buffer.from([0xff, 0xd8]));
+    return f;
+  };
+  it("keeps the images that a check or an analysis names, deletes orphans and old checks with theirs", () => {
+    const { storage, catalog, dir } = setup();
+    const e = insertEvent(catalog, { cam: 'cam1', source: 'onvif', kind: 'person', start_ts: NOW - DAY, raw: null });
+    const analysisJpg = jpg(dir, `${e.id}.jpg`);
+    saveAnalysis(catalog, { event_id: e.id, provider: 'google-vision', status: 'ok', reason: null, still_ts: NOW - DAY + 1000, image: analysisJpg, requested_at: NOW, took_ms: 1, objects: '[]', raw: null, summary: '[]' });
+    const row = (ts: number) => insertCheck(catalog, { cam: 'cam1', still_ts: ts, provider: 'google-vision', requested_at: ts, requested_via: 'token', took_ms: 1, objects: '[]', raw: null, summary: '[]' });
+    const kept = row(NOW - 2 * DAY);
+    const keptJpg = jpg(dir, `check-${kept.id}.jpg`);
+    setCheckImage(catalog, kept.id, keptJpg);
+    const old = row(NOW - 31 * DAY);
+    const oldJpg = jpg(dir, `check-${old.id}.jpg`);
+    setCheckImage(catalog, old.id, oldJpg);
+    const orphan = jpg(dir, 'check-999.jpg');
+
+    const dry = storage.run({ dryRun: true });
+    expect(dry.deleted.stillChecks).toBe(1);
+    expect(existsSync(oldJpg)).toBe(true);
+
+    const r = storage.run({});
+    expect(r.deleted.stillChecks).toBe(1);
+    expect(checkById(catalog, old.id)).toBeUndefined();
+    expect(checkById(catalog, kept.id)).toBeDefined();
+    expect(existsSync(keptJpg)).toBe(true);
+    expect(existsSync(analysisJpg)).toBe(true);
+    expect(existsSync(oldJpg)).toBe(false);
+    expect(existsSync(orphan)).toBe(false);
   });
 });
