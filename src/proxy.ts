@@ -167,15 +167,30 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // Once retention (retention.streamLogDays) has pruned the last `camera`
   // message, the start value is the configured name again, so the first
   // read after a restart may send one extra message with an unchanged name.
+  // The message also carries the camera's address (camera.host as it runs;
+  // spec 2026-10-04-pi-config-design §2), and is sent with the address alone
+  // (plus the name, once one was told) when the camera side starts with
+  // another address than the one last told.
   let cameraNameRead: string | undefined;
   const cameraName = () => cameraNameRead ?? running.camera.name;
+  const lastTold = log.latest(running.camera.id, 'camera')?.data;
+  let toldName = typeof lastTold?.name === 'string' ? lastTold.name : undefined;
+  let toldAddress = typeof lastTold?.address === 'string' ? lastTold.address : undefined;
   const nameAnnouncer = new CameraNameAnnouncer(
-    String(log.latest(running.camera.id, 'camera')?.data.name ?? running.camera.name),
+    toldName ?? running.camera.name,
     (name, previous) => {
       logger.info({ cameraId: running.camera.id, name, previous }, 'camera_name_changed');
-      log.append(running.camera.id, 'camera', { name });
+      toldName = name;
+      toldAddress = running.camera.host;
+      log.append(running.camera.id, 'camera', { name, address: running.camera.host });
     },
   );
+  const announceAddress = () => {
+    if (toldAddress === running.camera.host) return;
+    toldAddress = running.camera.host;
+    logger.info({ cameraId: running.camera.id, address: toldAddress }, 'camera_address_told');
+    log.append(running.camera.id, 'camera', { ...(toldName !== undefined ? { name: toldName } : {}), address: toldAddress });
+  };
   let intake: EventIntake;
   let lastResubscribes = 0;
   let clips: ReturnType<typeof createClipsSide> | undefined;
@@ -203,6 +218,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // again by restart() with the current settings.
   const buildCameraSide = () => {
     const c = running.camera;
+    announceAddress();
     client = new ReolinkClient({ id: c.id, host: c.host, protocol: c.protocol, tlsServername: c.tlsName, user: c.user, password: loaded.secrets.cameraPassword });
     status = new StatusPoller(client, c.statusPollS);
     status.on('change', (s) => log.append(c.id, 'camera-status', { online: s.online, reason: s.error ?? null, clockOffsetMs: s.clockOffsetMs ?? null }));

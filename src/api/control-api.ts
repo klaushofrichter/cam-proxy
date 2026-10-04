@@ -96,7 +96,8 @@ function configView(loaded: Loaded, running: Config) {
       const value = getPath(running, p);
       const next = getPath(loaded.config, p);
       const pending = restart && JSON.stringify(value) !== JSON.stringify(next);
-      return [p, { value, source: loaded.sources[p], restart, pending, ...(pending ? { next } : {}), type: leafAt(p)?.type }];
+      // `env`: the variable that sets it (read-only on the Settings page).
+      return [p, { value, source: loaded.sources[p], ...(loaded.envNames[p] ? { env: loaded.envNames[p] } : {}), restart, pending, ...(pending ? { next } : {}), type: leafAt(p)?.type }];
     }),
   );
 }

@@ -38,7 +38,7 @@ paths:
     get:
       summary: The camera and its state
       responses:
-        '200': { description: '[{ id, name, online, lastEventTs (the newest live (non-recovered) event''s start, or null), stream: { up, lastFrameTs } | null, publicUrl }] (name: the camera''s own name as read from it, the configured camera.name until the camera was first read; stream is null when stills are off; publicUrl is server.publicUrl or null)' }
+        '200': { description: '[{ id, name, online, lastEventTs (the newest live (non-recovered) event''s start, or null), stream: { up, lastFrameTs } | null, publicUrl, address }] (address: the camera''s camera.host as it runs, host and optional port, for clients that reach the camera directly; name: the camera''s own name as read from it, the configured camera.name until the camera was first read; stream is null when stills are off; publicUrl is server.publicUrl or null)' }
         '401': { description: missing or wrong token }
   /api/cameras/{cam}:
     get:
@@ -46,7 +46,7 @@ paths:
       parameters:
         - { name: cam, in: path, required: true, schema: { type: string } }
       responses:
-        '200': { description: '{ id, name, online, lastEventTs, stream, publicUrl }, as in GET /api/cameras' }
+        '200': { description: '{ id, name, online, lastEventTs, stream, publicUrl, address }, as in GET /api/cameras' }
         '401': { description: missing or wrong token }
         '404': { description: unknown camera }
   /api/cameras/{cam}/extent:
@@ -318,9 +318,13 @@ paths:
         `{eventId, kind, start, end, provider, status, reason, stillTs,
         summary, objects}` (`analysis` messages stored before this version
         lack kind, start, end, stillTs and summary: a missing `summary` means
-        unknown, not "nothing found"); camera `{cam, name}` (once per change
+        unknown, not "nothing found"); camera `{cam, name, address}` (once per change
         of the camera's name: a rename through PUT /control/camera/name or one
-        made in the Reolink app, seen by the status poll); still-check (a new
+        made in the Reolink app, seen by the status poll; and once per change
+        of the camera's address, camera.host as it runs, when the camera side
+        starts with another one: then `name` is the name last told, left out
+        while none was told yet; messages stored before this version have no
+        `address`); still-check (a new
         still check, cams #179) `{cam, id, stillTs, provider, summary, objects,
         events: [{id, kind, confirmed}], imageUrl, requestedAt, tookMs}`; annotation
         (reserved, not sent yet); still
@@ -480,7 +484,7 @@ paths:
     get:
       summary: Every setting with value, source, restart flag and pending next value
       responses:
-        '200': { description: '{ "<path>": { value, source, restart, pending, next?, type (integer, boolean or string) } }' }
+        '200': { description: '{ "<path>": { value, source (default, file, override, env), env? (the variable that sets it: CAMERA_HOST, PI_ADDRESS or their CAMPROXY_ names), restart, pending, next?, type (integer, boolean or string) } }' }
     put:
       summary: Sets overrides (stored in overrides.json); live settings apply at once
       requestBody:
@@ -489,7 +493,7 @@ paths:
             schema: { type: object, description: 'a partial config.json, e.g. {"sse":{"pingS":10}}' }
       responses:
         '200': { description: the new view (as GET) }
-        '400': { description: '{ error: invalid, detail: "<path>: <why>" }' }
+        '400': { description: '{ error: invalid, detail: "<path>: <why>" } (also "<path>: set in .env (<VARIABLE>)" for a setting the environment sets)' }
   /control/config/{path}:
     delete:
       summary: Removes one override (back to the file or default value)
