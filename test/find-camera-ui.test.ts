@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deviceLabel, envNote, foundText, handLine, isEnvSet, notAvailableText, useAddressMessage, writtenText } from '../web/src/lib/find-camera';
+import { deviceLabel, envNote, mismatchText, foundText, handLine, isEnvSet, notAvailableText, useAddressMessage, writtenText } from '../web/src/lib/find-camera';
 
 // Settings → Find camera, and the settings set in .env (spec
 // 2026-10-04-pi-config-design §1, §3, §4).
@@ -14,12 +14,16 @@ describe('the Settings page: settings set in .env', () => {
 });
 
 describe('Find camera', () => {
-  const dev = { endpoint: 'urn:uuid:1', address: '192.168.1.20', xaddrs: [], name: 'RLC-1224A', hardware: 'RLC-1224A', model: 'RLC-1224A', current: false };
+  const dev = { endpoint: 'urn:uuid:1', address: '192.168.1.20', sender: '192.168.1.20', mismatch: false, useAddress: '192.168.1.20', xaddrs: [], name: 'RLC-1224A', hardware: 'RLC-1224A', model: 'RLC-1224A', current: false };
   it('labels a device by name, adding the model when it differs', () => {
     expect(deviceLabel(dev)).toBe('RLC-1224A');
     expect(deviceLabel({ ...dev, name: 'Garage Cam', model: 'XY-100' })).toBe('Garage Cam (XY-100)');
     expect(deviceLabel({ ...dev, name: null, model: 'XY-100' })).toBe('XY-100');
     expect(deviceLabel({ ...dev, name: null, model: null, hardware: null })).toBe('unnamed ONVIF device');
+  });
+  it('flags a device whose answer came from another address than it names', () => {
+    expect(mismatchText({ ...dev, sender: '192.168.1.66', mismatch: true, useAddress: '192.168.1.66' })).toBe('address mismatch: it answered from 192.168.1.66 but names 192.168.1.20; "Use this address" takes 192.168.1.66');
+    expect(mismatchText({ ...dev, sender: '192.168.1.20', mismatch: false, useAddress: '192.168.1.20' })).toBeNull();
   });
   it('says what was found', () => {
     expect(foundText(0, 3012)).toBe('No ONVIF camera answered within 3 s. Is the camera on this LAN, with ONVIF on?');

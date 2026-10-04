@@ -3,10 +3,13 @@ import { checkEnvPath, readEnvValue } from './env-file';
 
 // Settings from the environment (spec 2026-10-04-pi-config-design §1): the
 // camera's address and the Pi's own, so the Pi's one .env file carries them.
-// CAMPROXY_* wins over the plain name; with CAMPROXY_ENV_FILE the file's
-// current value wins over the process environment (a container restart keeps
-// the environment it was created with, so "Use this address" plus a restart
-// would otherwise not apply). Only these keys are read from the file.
+// Precedence, highest first: the file's CAMPROXY_* name, the file's plain
+// name, the process environment's CAMPROXY_* name, its plain name. Any value
+// in the file (CAMPROXY_ENV_FILE) beats any in the process environment: a
+// container restart keeps the environment it was created with, so "Use this
+// address" (which writes the file's CAMERA_HOST) plus a restart would
+// otherwise not apply, also against a CAMPROXY_CAMERA_HOST in compose's
+// environment. Only these keys are read from the file.
 
 export const CAMERA_HOST_NAMES = ['CAMPROXY_CAMERA_HOST', 'CAMERA_HOST'] as const;
 export const PI_ADDRESS_NAMES = ['CAMPROXY_PI_ADDRESS', 'PI_ADDRESS'] as const;
@@ -40,6 +43,7 @@ export function readEnvLayer(env: NodeJS.ProcessEnv): EnvLayer {
       text = undefined; // not readable: the process environment applies
     }
   }
+  // Sources in order (the file first), then names in order (CAMPROXY_ first).
   const pick = (names: readonly string[]): EnvValue | undefined => {
     for (const src of [text === undefined ? undefined : (n: string) => readEnvValue(text!, n), (n: string) => env[n]]) {
       if (!src) continue;

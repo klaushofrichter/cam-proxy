@@ -27,9 +27,12 @@ describe('probeXml', () => {
 
 describe('parseProbeMatches', () => {
   it('reads the Reolink sample: address from XAddrs (no ONVIF port), name and hardware from the scopes', () => {
-    expect(parseProbeMatches(reolink(ID), ID)).toEqual([
-      { endpoint: 'urn:uuid:2419d68a-2dd2-21b2-a205-ec71db000001', address: '192.168.1.20', xaddrs: ['http://192.168.1.20:8000/onvif/device_service'], name: 'RLC-1224A', hardware: 'RLC-1224A', model: 'RLC-1224A' },
+    expect(parseProbeMatches(reolink(ID), ID, '192.168.1.20')).toEqual([
+      { endpoint: 'urn:uuid:2419d68a-2dd2-21b2-a205-ec71db000001', address: '192.168.1.20', sender: '192.168.1.20', mismatch: false, useAddress: '192.168.1.20', xaddrs: ['http://192.168.1.20:8000/onvif/device_service'], name: 'RLC-1224A', hardware: 'RLC-1224A', model: 'RLC-1224A' },
     ]);
+  });
+  it('flags an XAddr that differs from the address the answer came from, and uses the sender then', () => {
+    expect(parseProbeMatches(reolink(ID), ID, '192.168.1.66')[0]).toMatchObject({ address: '192.168.1.20', sender: '192.168.1.66', mismatch: true, useAddress: '192.168.1.66' });
   });
   it('decodes scopes, prefers an IPv4 XAddr, and reads a model scope', () => {
     expect(parseProbeMatches(other(ID), ID)[0]).toMatchObject({ address: '192.168.1.30', name: 'Garage Cam', hardware: 'XY', model: 'XY-100' });
@@ -73,6 +76,8 @@ describe('discover', () => {
     const r = await discover({ target: { address: '127.0.0.1', port: f.port }, timeoutMs: 400 });
     expect(f.probes).toHaveLength(2);
     expect(r.devices.map((d) => d.address).sort()).toEqual(['192.168.1.20', '192.168.1.30']);
+    // The fake answers from 127.0.0.1: the sender, flagged as a mismatch.
+    expect(r.devices.every((d) => d.sender === '127.0.0.1' && d.mismatch && d.useAddress === '127.0.0.1')).toBe(true);
     expect(r.tookMs).toBeGreaterThanOrEqual(350);
   });
 

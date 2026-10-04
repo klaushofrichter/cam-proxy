@@ -39,8 +39,11 @@ the road only that one file changes.
   the existing naming; no compose mapping lines to forget — cost if wrong: one
   more name to support; dropping one later is a docs change.
 - **Ruling: when `CAMPROXY_ENV_FILE` is set, cam-proxy reads these two keys
-  from that file at every start, and the file's value wins over the process
-  environment** — why: "Use this address" writes the file and then restarts
+  from that file at every start, and any value in the file wins over any in
+  the process environment** (order: file `CAMPROXY_*`, file plain name,
+  process `CAMPROXY_*`, process plain name; security review 2026-10-04 asked
+  to pick and document: the file wins, also over a `CAMPROXY_CAMERA_HOST` in
+  compose's `environment:`) — why: "Use this address" writes the file and then restarts
   the process, but a container restart (restart-proxy exits, compose starts it
   again) keeps the environment from when the container was created, so the new
   `CAMERA_HOST` would not apply until `docker compose up -d`; reading the file
@@ -81,11 +84,17 @@ On Settings → Camera ("Find camera" card), admin only.
     a Reolink, while `camera.host` is the HTTP API's), and the scopes
     `onvif://www.onvif.org/name/…`, `/hardware/…`, `/model/…` (URL-decoded;
     `model` falls back to `hardware`). No login: the Probe answer is public.
-  - `current`: the device's address equals `camera.host`'s host.
+  - `sender`: the UDP source address of the answer; `mismatch`: the XAddr
+    host differs from it; `useAddress`: what "Use this address" writes, the
+    sender on a mismatch (security review 2026-10-04: a device can name any
+    address in its XAddrs, but it answered from its own). The UI shows the
+    sender and flags "address mismatch".
+  - `current`: the device's own address (XAddr host) equals `camera.host`'s host.
   - Only answers whose `RelatesTo` is our MessageID count; at most 64
     devices, at most 64 KB per datagram, text fields cut to 64 characters
     without control characters.
-  - Rate limit: 6 per minute per client (429 `rate_limited`). The generic
+  - Rate limit: 6 per minute per client, shared with `camera-address` (429
+    `rate_limited`). The generic
     `control-action` audit record (`find-camera: ok`) records it.
   - On the Pi the container has `network_mode: host`, so the multicast leaves
     on the LAN. In the cluster (cam2, pod network) nothing answers: an empty
@@ -126,17 +135,24 @@ On Settings → Camera ("Find camera" card), admin only.
   directory with the file's mode, then the new text to a temp file in that
   directory with the file's mode, then `rename` over the file (atomic).
   A temp file is removed when anything fails; the old file is untouched then.
+  Afterwards only the newest 5 backups stay (by time, then same-second
+  number; a new same-second backup is numbered after the highest existing
+  one); nothing else in the directory is touched.
 - **Audit**: one `camera-address` record (configuration/change): `Camera
   address set in .env: "<old>" → "<new>"`, details `{from, to, key, backup,
   requestedBy}`; a failed write records `failure` with the error code. The
   restart writes its own `proxy-restart` record.
-- **Ruling: compose mounts the project directory, not the single file** —
-  `- ./:/config` and `CAMPROXY_ENV_FILE=/config/.env` — why: a rename can't
-  replace a bind-mounted single file (EBUSY), and the backup and temp file need
-  a writable directory next to it; the directory is the Pi user's (uid 1000,
-  the container's user) anyway — cost if wrong: the container could write
-  other files in `/srv/cam-proxy` (compose.yaml, cams/); the code only ever
-  writes `.env`, its temp file and its backups. A single-file mount answers
+- **Ruling (coordinator, security review 2026-10-04): the settings file is
+  `/srv/cam-proxy/config/.env`** (uid 1000, mode 600) in `config/` (uid 1000,
+  mode 700), mounted as `./config:/config` with `CAMPROXY_ENV_FILE=/config/.env`
+  — why: the first layout mounted the whole project directory read-write, so a
+  compromised container could rewrite compose.yaml or plant compose
+  substitutions (e.g. a data path of `/`) and get root at the next `up`; now
+  the container can write only `config/`, compose.yaml has no `${…}` at all,
+  and the file is not compose's project `.env` (no symlink to it either). The
+  folder, not the file, is mounted: a rename can't replace a bind-mounted file
+  (EBUSY), and the backups go next to it — cost if wrong: one more folder and a
+  migration step on the Pi (docs/raspberry-pi.md). A single-file mount answers
   409 `not_available` ("mount the directory").
 - **Ruling: the UI chains restart-proxy after a successful write (two
   actions), the server never restarts by itself** — why: the restart already
@@ -150,15 +166,18 @@ On Settings → Camera ("Find camera" card), admin only.
 `compose.yaml` (the Pi):
 
 ```yaml
-    env_file: .env
+    env_file: config/.env
     environment:
       CAMPROXY_CONFIG: /data/config.json
       CAMPROXY_TARGET: pi
       CAMPROXY_ENV_FILE: /config/.env
     volumes:
-      - ${CAMPROXY_DATA:-./data}:/data
-      - ./:/config
+      - ./data:/data
+      - ./config:/config
 ```
+
+No `${…}` anywhere (`CAMPROXY_DATA` is gone); `test/compose-file.test.ts`
+checks it.
 
 - **Ruling: the `${CAMPROXY_…:?set in .env}` interpolations go, `env_file`
   carries every variable** — why: the one file holds them all; cam-proxy's own
@@ -166,7 +185,8 @@ On Settings → Camera ("Find camera" card), admin only.
   wrong: a missing secret fails at container start instead of at `docker
   compose up`.
 
-`docs/raspberry-pi.md`: the single `.env` (example without values), the new
+`docs/raspberry-pi.md`: the single `config/.env` (example without values), the
+migration from `/srv/cam-proxy/.env` (backups first; owner uid 1000), the new
 compose, config.json without `camera.host`, `ftp.publicHost` and
 `server.publicUrl`, "On the road" (Find camera → Use this address → "Point the
 camera's FTP here"; a new `PI_ADDRESS`: edit, restart, then "Point the

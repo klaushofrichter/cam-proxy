@@ -217,7 +217,8 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
 // a new action that audits itself goes here too.
 const OWN_AUDIT = new Set(['camera-reboot', 'camera-powercycle', 'camera-poe-on', 'restart-proxy', 'inventory', 'inventory-repair', 'camera-address']);
 
-// Find camera per client and minute: a probe is 3 s of multicast.
+// Find camera and Use this address together, per client and minute: a probe
+// is 3 s of multicast, a write a backup.
 export const FIND_CAMERA_PER_MINUTE = 6;
 
 // Whether "Use this address" can write the .env file, and why not.
@@ -364,9 +365,9 @@ export function controlApi(d: ControlDeps): express.Router {
     res.json(configView(d.loaded(), d.running()));
   });
 
-  // Find camera: a rate limit of its own (the other actions have none).
+  // Find camera and Use this address share a rate limit (the other actions have none).
   const findLimit = rateLimit({ windowMs: 60_000, limit: FIND_CAMERA_PER_MINUTE, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } });
-  const actionLimit: express.RequestHandler = (req, res, next) => (req.params.name === 'find-camera' ? findLimit(req, res, next) : next());
+  const actionLimit: express.RequestHandler = (req, res, next) => (req.params.name === 'find-camera' || req.params.name === 'camera-address' ? findLimit(req, res, next) : next());
 
   r.post('/actions/:name', actionLimit, async (req, res) => {
     const name = String(req.params.name);

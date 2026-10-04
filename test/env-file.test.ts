@@ -124,6 +124,28 @@ describe('writeEnvKey', () => {
     expect(r.backup).toBe('.env.bak-20261004-130509-2');
     expect(readFileSync(join(d, r.backup), 'utf8')).toBe('CAMERA_HOST=b\n');
   });
+  it('keeps only the last 5 backups, never touching the live file or other files', () => {
+    const d = dir();
+    const f = join(d, '.env');
+    writeFileSync(f, 'CAMERA_HOST=a\n');
+    writeFileSync(join(d, '.env.pi'), 'other\n');
+    writeFileSync(join(d, '.env.bak-notes.txt'), 'not a backup\n');
+    for (let i = 0; i < 8; i++) writeEnvKey(f, 'CAMERA_HOST', `h${i}`, new Date(Date.UTC(2026, 9, 4, 13, 0, i)));
+    const backups = readdirSync(d).filter((n) => n.startsWith('.env.bak-2')).sort();
+    expect(backups).toEqual(['.env.bak-20261004-130003', '.env.bak-20261004-130004', '.env.bak-20261004-130005', '.env.bak-20261004-130006', '.env.bak-20261004-130007']);
+    expect(readFileSync(f, 'utf8')).toBe('CAMERA_HOST=h7\n');
+    expect(readFileSync(join(d, '.env.pi'), 'utf8')).toBe('other\n');
+    expect(existsSync(join(d, '.env.bak-notes.txt'))).toBe(true);
+    // The newest backup holds the text before the last write.
+    expect(readFileSync(join(d, '.env.bak-20261004-130007'), 'utf8')).toBe('CAMERA_HOST=h6\n');
+  });
+  it('orders same-second backups by their number when pruning', () => {
+    const d = dir();
+    const f = join(d, '.env');
+    writeFileSync(f, 'CAMERA_HOST=a\n');
+    for (let i = 0; i < 12; i++) writeEnvKey(f, 'CAMERA_HOST', `h${i}`, at);
+    expect(readdirSync(d).filter((n) => n.startsWith('.env.bak-')).sort()).toEqual(['.env.bak-20261004-130509-10', '.env.bak-20261004-130509-11', '.env.bak-20261004-130509-12', '.env.bak-20261004-130509-8', '.env.bak-20261004-130509-9']);
+  });
   it('replaces CAMPROXY_CAMERA_HOST instead when the file sets that name', () => {
     const d = dir();
     const f = join(d, '.env');

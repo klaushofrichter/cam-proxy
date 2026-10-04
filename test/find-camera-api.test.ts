@@ -42,8 +42,8 @@ describe('POST /control/actions/find-camera', () => {
       const r = await request(p.base).post('/control/actions/find-camera').set(admin());
       expect(r.status).toBe(200);
       expect(r.body.devices).toEqual(expect.arrayContaining([
-        expect.objectContaining({ address: '192.168.1.20', name: 'RLC-1224A', model: 'RLC-1224A', current: false }),
-        expect.objectContaining({ address: '127.0.0.1', current: true }),
+        expect.objectContaining({ address: '192.168.1.20', sender: '127.0.0.1', mismatch: true, useAddress: '127.0.0.1', name: 'RLC-1224A', model: 'RLC-1224A', current: false }),
+        expect.objectContaining({ address: '127.0.0.1', mismatch: false, current: true }),
       ]));
       expect(r.body.envFile).toEqual({ writable: false, reason: 'CAMPROXY_ENV_FILE is not set' });
       expect(r.body.tookMs).toBeGreaterThanOrEqual(250);
@@ -67,6 +67,9 @@ describe('POST /control/actions/find-camera', () => {
       const limited = await request(p.base).post('/control/actions/find-camera').set(admin());
       expect(limited.status).toBe(429);
       expect(limited.body).toEqual({ error: 'rate_limited' });
+      // camera-address shares the limit (it writes a file and makes a backup).
+      const address = await request(p.base).post('/control/actions/camera-address').set(admin()).send({ host: '192.168.1.20' });
+      expect(address.status).toBe(429);
     } finally {
       await p.proxy.stop();
     }
@@ -90,7 +93,8 @@ describe('POST /control/actions/camera-address', () => {
     writeFileSync(join(dir, '.env'), SECRETS);
     const p = await start({ CAMPROXY_ENV_FILE: join(dir, '.env') });
     try {
-      for (const host of ['', 'http://x', 'a b', '1.2.3.4:0', 'x'.repeat(300), 7, 'h\nCAMPROXY_ADMIN_TOKEN=evil']) {
+      // Six: the limit shared with find-camera allows six a minute.
+      for (const host of ['', 'http://x', 'a b', '1.2.3.4:0', 7, 'h\nCAMPROXY_ADMIN_TOKEN=evil']) {
         const r = await request(p.base).post('/control/actions/camera-address').set(admin()).send({ host });
         expect(r.status).toBe(400);
         expect(r.body.error).toBe('invalid');

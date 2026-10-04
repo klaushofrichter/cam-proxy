@@ -1,4 +1,4 @@
-import { closeSync, constants, copyFileSync, fsyncSync, lstatSync, openSync, readFileSync, renameSync, chmodSync, unlinkSync, writeSync } from 'fs';
+import { closeSync, constants, copyFileSync, fsyncSync, lstatSync, openSync, readdirSync, readFileSync, renameSync, chmodSync, unlinkSync, writeSync } from 'fs';
 import { basename, dirname, isAbsolute, join, normalize } from 'path';
 
 // The Pi's one .env file (spec 2026-10-04-pi-config-design): cam-proxy reads
@@ -101,11 +101,33 @@ export function checkEnvPath(path: string | undefined): string {
   return path;
 }
 
+// Backups kept next to the file; older ones are deleted after a write.
+export const KEEP_BACKUPS = 5;
+// A backup's name sorts by time, then by its same-second number.
+const backupKey = (name: string, base: string): [string, number] | undefined => {
+  const m = new RegExp(`^${base.replace(/[.]/g, '\\.')}\\.bak-(\\d{8}-\\d{6})(?:-(\\d{1,3}))?$`).exec(name);
+  return m ? [m[1], m[2] ? Number(m[2]) : 1] : undefined;
+};
+function pruneBackups(dir: string, base: string): void {
+  const backups = readdirSync(dir)
+    .map((n) => ({ n, k: backupKey(n, base) }))
+    .filter((x): x is { n: string; k: [string, number] } => x.k !== undefined)
+    .sort((a, b) => (a.k[0] === b.k[0] ? a.k[1] - b.k[1] : a.k[0] < b.k[0] ? -1 : 1));
+  for (const { n } of backups.slice(0, Math.max(0, backups.length - KEEP_BACKUPS))) {
+    try {
+      unlinkSync(join(dir, n));
+    } catch {
+      // gone already
+    }
+  }
+}
+
 const stamp = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
 
 // Sets one key in the env file: a backup first (.env.bak-YYYYMMDD-HHMMSS,
 // UTC, the file's mode), then the new text to a temp file in the same
-// directory (the file's mode) and a rename over the file. `keys`: the names
+// directory (the file's mode) and a rename over the file; then only the
+// newest KEEP_BACKUPS backups stay. `keys`: the names
 // that set this value, strongest first; the first one the file sets is
 // replaced, else the last name is appended. Answers the key written, the
 // previous value (null: not set) and the backup's file name.
@@ -118,16 +140,28 @@ export function writeEnvKey(path: string, keys: string | string[], value: string
   const previous = readEnvValue(text, key) ?? null;
   const next = setEnvLine(text, key, value);
   const mode = lstatSync(path).mode & 0o777;
-  // The backup: never over an older one.
-  const base = `${basename(path)}.bak-${stamp(now)}`;
-  let backup = base;
-  for (let n = 2; ; n++) {
+  // The backup: never over an older one; in the same second, numbered after
+  // the highest existing one (pruning leaves gaps that must not be reused).
+  const st = stamp(now);
+  const base = `${basename(path)}.bak-${st}`;
+  let n = 0;
+  try {
+    for (const name of readdirSync(dir)) {
+      const k = backupKey(name, basename(path));
+      if (k && k[0] === st) n = Math.max(n, k[1]);
+    }
+  } catch {
+    // unreadable: the copy below says why
+  }
+  let backup = n === 0 ? base : `${base}-${n + 1}`;
+  for (let tries = 0; ; tries++) {
     try {
       copyFileSync(path, join(dir, backup), constants.COPYFILE_EXCL);
       break;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
-      if (code === 'EEXIST' && n < 100) {
+      if (code === 'EEXIST' && tries < 100) {
+        n = Math.max(n, 1) + 1;
         backup = `${base}-${n}`;
         continue;
       }
@@ -156,5 +190,6 @@ export function writeEnvKey(path: string, keys: string | string[], value: string
     if (code === 'EBUSY' || code === 'EXDEV') throw new EnvFileError('is_a_mount', 'the env file is mounted on its own; mount its directory instead');
     throw new EnvFileError('write_failed', `the env file could not be written (${code ?? 'error'})`);
   }
+  pruneBackups(dir, basename(path));
   return { key, previous, backup };
 }

@@ -16,6 +16,9 @@ const MAX_TEXT = 64;
 export interface FoundDevice {
   endpoint: string; // the device's EndpointReference (urn:uuid:…)
   address: string; // the first XAddr's host (IPv4 first), without the ONVIF port
+  sender: string; // where the answer came from (the UDP source address)
+  mismatch: boolean; // the XAddr host is not the sender: a device that names another address
+  useAddress: string; // what "Use this address" writes: the address when they agree, else the sender
   xaddrs: string[];
   name: string | null;
   hardware: string | null;
@@ -69,7 +72,8 @@ function scope(scopes: string[], kind: string): string | null {
 }
 
 // The ProbeMatches in one answer to the Probe `messageId` (others: none).
-export function parseProbeMatches(xml: string, messageId: string): FoundDevice[] {
+// `sender`: the UDP source address; without it the XAddr host stands in.
+export function parseProbeMatches(xml: string, messageId: string, sender?: string): FoundDevice[] {
   if (field(xml, 'RelatesTo') !== messageId) return [];
   const starts: number[] = [];
   for (const el of elements(xml)) if (el.local === 'ProbeMatch') starts.push(el.start);
@@ -84,6 +88,9 @@ export function parseProbeMatches(xml: string, messageId: string): FoundDevice[]
     out.push({
       endpoint: clean(field(xml, 'Address', from, to)) ?? address,
       address,
+      sender: sender ?? address,
+      mismatch: sender !== undefined && sender.toLowerCase() !== address.toLowerCase(),
+      useAddress: sender ?? address,
       xaddrs,
       name: scope(scopes, 'name'),
       hardware,
@@ -103,9 +110,9 @@ export async function discover(o: { timeoutMs?: number; target?: { address: stri
   const probe = Buffer.from(probeXml(messageId), 'utf8');
   const found = new Map<string, FoundDevice>();
   const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
-  socket.on('message', (msg) => {
+  socket.on('message', (msg, rinfo) => {
     if (msg.length > MAX_DATAGRAM || found.size >= MAX_DEVICES) return;
-    for (const d of parseProbeMatches(msg.toString('utf8'), messageId)) {
+    for (const d of parseProbeMatches(msg.toString('utf8'), messageId, rinfo.address.replace(/^::ffff:/, ''))) {
       if (found.size >= MAX_DEVICES) break;
       if (!found.has(d.endpoint)) found.set(d.endpoint, d);
     }

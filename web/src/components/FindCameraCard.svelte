@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import ConfirmDialog from './ConfirmDialog.svelte';
   import { api, ApiError } from '../lib/api';
-  import { deviceLabel, foundText, handLine, notAvailableText, useAddressMessage, writtenText, type FindResult, type FoundDevice } from '../lib/find-camera';
+  import { deviceLabel, foundText, mismatchText, handLine, notAvailableText, useAddressMessage, writtenText, type FindResult, type FoundDevice } from '../lib/find-camera';
   import { restartWatch, RESTART_GIVE_UP_MS, type Health } from '../lib/maintenance';
 
   // Find camera (spec 2026-10-04-pi-config-design §3, §4): an ONVIF
@@ -33,7 +33,7 @@
     line = '';
     if (result && !result.envFile.writable) {
       message = notAvailableText(result.envFile.reason);
-      line = handLine(d.address);
+      line = handLine(d.useAddress);
       return;
     }
     asking = d;
@@ -52,13 +52,13 @@
     asking = null;
     const before = await health();
     try {
-      const r = await api<{ host: string; previous: string | null; backup: string }>('POST', '/control/actions/camera-address', { host: d.address });
+      const r = await api<{ host: string; previous: string | null; backup: string }>('POST', '/control/actions/camera-address', { host: d.useAddress });
       message = writtenText(r);
     } catch (e) {
       const body = e instanceof ApiError ? (e.body as { error?: string; detail?: string; line?: string } | null) : null;
       if (body?.error === 'not_available') {
         message = notAvailableText(body.detail);
-        line = body.line ?? handLine(d.address);
+        line = body.line ?? handLine(d.useAddress);
       } else message = `Not written: ${e instanceof ApiError ? e.message : 'failed'}`;
       return;
     }
@@ -95,7 +95,7 @@
       <tbody>
         {#each result.devices as d (d.endpoint)}
           <tr data-testid="find-camera-device">
-            <td class="mono">{d.address}</td>
+            <td class="mono">{d.useAddress}{#if d.mismatch}<div class="warn" data-testid="find-camera-mismatch">{mismatchText(d)}</div>{/if}</td>
             <td>{deviceLabel(d)}</td>
             <td>{#if d.current}<span class="badge current" data-testid="find-camera-current">this camera</span>{/if}</td>
             <td class="actions">
@@ -117,7 +117,7 @@
 
 {#if asking}
   {@const d = asking}
-  <ConfirmDialog title="Use this camera address" message={useAddressMessage(d.address, result?.envFile.path)} confirmLabel="Use this address" oncancel={() => (asking = null)} onconfirm={() => void use(d)} />
+  <ConfirmDialog title="Use this camera address" message={useAddressMessage(d.useAddress, result?.envFile.path)} confirmLabel="Use this address" oncancel={() => (asking = null)} onconfirm={() => void use(d)} />
 {/if}
 
 <style>
@@ -129,6 +129,7 @@
   .msg { color: var(--accent); }
   .busy { color: var(--accent); font-weight: 600; }
   .bad { color: var(--danger); }
+  .warn { font-family: inherit; font-size: 12px; color: var(--danger); max-width: 360px; }
   .line { margin: 0; padding: 6px 8px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; user-select: all; }
   table { width: 100%; border-collapse: collapse; font-size: 14px; }
   td { padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }

@@ -102,6 +102,18 @@ describe('CAMPROXY_ENV_FILE', () => {
     expect(l.secrets.tokens).toEqual(['a'.repeat(32)]);
   });
 
+  it('any name in the file wins over any name in the process environment, CAMPROXY_CAMERA_HOST included', () => {
+    // "Use this address" writes the file and restarts: the file must win, or
+    // a CAMPROXY_CAMERA_HOST in compose's environment would undo it.
+    write('.env', 'CAMERA_HOST=10.0.0.9\n');
+    const l = load({ CAMPROXY_ENV_FILE: join(dir, '.env'), CAMPROXY_CAMERA_HOST: '10.0.0.1' });
+    expect(l.config.camera.host).toBe('10.0.0.9');
+    expect(l.envNames['camera.host']).toBe('CAMERA_HOST');
+    // Within one source the CAMPROXY_ name wins.
+    write('.env', 'CAMERA_HOST=10.0.0.9\nCAMPROXY_CAMERA_HOST=10.0.0.8\n');
+    expect(load({ CAMPROXY_ENV_FILE: join(dir, '.env') }).config.camera.host).toBe('10.0.0.8');
+  });
+
   it('falls back to the process environment for a key the file leaves out', () => {
     write('.env', 'PI_ADDRESS=10.0.0.8\n');
     const l = load({ CAMPROXY_ENV_FILE: join(dir, '.env'), CAMERA_HOST: '10.0.0.1' });

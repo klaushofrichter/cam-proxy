@@ -525,18 +525,18 @@ paths:
         find-camera sends an ONVIF WS-Discovery Probe (NetworkVideoTransmitter) to 239.255.255.250:3702
         and lists what answers within 3 s (no login; on the Pi the container's host network reaches the LAN);
         at most 6 per minute per client. camera-address ({"host":"<address>[:port]"}) writes CAMERA_HOST into
-        the .env file named by CAMPROXY_ENV_FILE (only that line; a backup .env.bak-<UTC time> first; temp
+        the .env file named by CAMPROXY_ENV_FILE (only that line; a backup .env.bak-<UTC time> first, the newest 5 kept; temp
         file + rename) and writes a camera-address audit record; the address applies after restart-proxy.
       parameters:
         - { name: name, in: path, required: true, schema: { type: string } }
       responses:
-        '200': { description: 'camera-test and retention-run results; camera-ftp-setup/-off: {ftp} (the camera''s settings, no password); camera-ftp-test: {ok, rspCode}; poe-switch-read: {at, port, index, poe, watts, link, sn, firmware}; camera-poe-on: the same plus wasOn; inventory-cancel: { cancelled, runId }; find-camera: { devices: [{endpoint, address, xaddrs, name, hardware, model, current}], tookMs, envFile: {writable, path?, reason?} }; camera-address: { host, previous, key, backup, restart: true }' }
+        '200': { description: 'camera-test and retention-run results; camera-ftp-setup/-off: {ftp} (the camera''s settings, no password); camera-ftp-test: {ok, rspCode}; poe-switch-read: {at, port, index, poe, watts, link, sn, firmware}; camera-poe-on: the same plus wasOn; inventory-cancel: { cancelled, runId }; find-camera: { devices: [{endpoint, address (XAddr host), sender (UDP source), mismatch, useAddress (sender on a mismatch), xaddrs, name, hardware, model, current}], tookMs, envFile: {writable, path?, reason?} }; camera-address: { host, previous, key, backup, restart: true }' }
         '202': { description: 'started (onvif-resubscribe, restart, restart-proxy); camera-reboot: { confirmed } (false: the camera dropped the connection after receiving the request); camera-powercycle: { offAt, onAt, watts } once PoE is back on; inventory, inventory-repair: { runId }' }
         '400': { description: 'camera-address: invalid (not an address or name with an optional :port); inventory: invalid (an unknown or missing kind, camera not a boolean, or camera for a kind without a camera compare); inventory-repair: invalid (a kind without a repair, or runId not a run id)' }
         '404': { description: 'unknown action; inventory-repair: not_found (no such check run of the kind)' }
         '409': { description: 'camera-address: not_available { detail, line } (CAMPROXY_ENV_FILE not set, the file fails the path guard, or its directory is not writable; line is what to add by hand); not_configured (camera-ftp-setup/-test: ftp.publicHost or the FTP password is not set; camera-powercycle, poe-switch-read: no switch or no CAMPROXY_POE_SWITCH_PASSWORD); camera-powercycle, poe-switch-read: switch_busy (someone is logged in to the switch''s web UI), no_power (the port has PoE off or draws 0 W; nothing switched); inventory, inventory-repair: inventory_busy { runId } (one runs already); inventory-repair: report_stale (the check run is an hour old or more), not_repairable (it did not finish, did not compare with the camera, or found nothing missing locally)' }
         '503': { description: 'stopping (inventory, inventory-repair: the proxy is stopping and starts no run)' }
-        '429': { description: 'find-camera: rate_limited (more than 6 per minute); camera-reboot, camera-powercycle: too_soon, within 120 s of the last reboot or power-cycle, or while one is being sent (Retry-After)' }
+        '429': { description: 'find-camera, camera-address: rate_limited (more than 6 per minute, together); camera-reboot, camera-powercycle: too_soon, within 120 s of the last reboot or power-cycle, or while one is being sent (Retry-After)' }
         '502': { description: 'the camera refused or failed the call; camera-reboot: the request never reached the camera (camera_offline, camera_auth_failed, camera_error); camera-powercycle, camera-poe-on, poe-switch-read: switch_auth, switch_unreachable, switch_error (camera-powercycle, camera-poe-on: poeOff, turnedOn when PoE may have been cut)' }
   /control/log:
     get:

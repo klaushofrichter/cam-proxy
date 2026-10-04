@@ -65,7 +65,8 @@ run:
 - the memory cgroup (`cgroup_enable=memory` in `/boot/firmware/cmdline.txt`):
   Raspberry Pi kernels ship without it, so without it `docker stats` shows no
   memory and memory limits don't work;
-- `/srv/cam-proxy` and `/srv/cam-proxy/data`, owned by `<user>`;
+- `/srv/cam-proxy`, `/srv/cam-proxy/data` and `/srv/cam-proxy/config`
+  (mode 700: the one settings file), owned by `<user>`;
 - then a reboot.
 
 ```sh
@@ -80,11 +81,17 @@ After the reboot, check that `docker compose version` works without `sudo`.
 The Pi uses the repository's [`compose.yaml`](../compose.yaml): host
 networking (the camera connects to the FTP server on 2121 and the passive
 ports, and Find camera's ONVIF probe reaches the LAN), the `:latest` image,
-`./data` as `/data`, every variable of `.env` (`env_file: .env`), and the
-directory itself as `/config` with `CAMPROXY_ENV_FILE=/config/.env`, so
-Settings → Find camera can write the camera's address into `.env`. It mounts
-the directory, not the file: a rename can't replace a file mounted on its own,
-and the backup goes next to it.
+`./data` as `/data`, every variable of `config/.env` (`env_file: config/.env`),
+and `./config` as `/config` with `CAMPROXY_ENV_FILE=/config/.env`, so
+Settings → Find camera can write the camera's address into it. It mounts the
+`config` folder, not the file: a rename can't replace a file mounted on its
+own, and the backups (the last 5) go next to it.
+
+compose.yaml has no `${…}` substitutions at all, and the settings file is not
+`/srv/cam-proxy/.env` (which compose would read for substitutions): the
+container can write `config/.env`, so nothing in it may change how compose
+starts the container (its image, volumes or user). Don't add a `.env` next to
+compose.yaml, and don't link one to `config/.env`.
 
 ```sh
 scp compose.yaml <user>@<pi>:/srv/cam-proxy/compose.yaml
@@ -112,7 +119,8 @@ which come from `.env`. Everything else can stay at its default.
   config.json, but `CAMERA_HOST` and `PI_ADDRESS` win over them (and over the
   Settings page's overrides).
 
-**`/srv/cam-proxy/.env`** (mode 600): the one file for the Pi, the secrets and
+**`/srv/cam-proxy/config/.env`** (owner uid 1000, the container's user, mode
+600, in `config/` with mode 700): the one file for the Pi, the secrets and
 the two addresses (and, when cams runs on the Pi too, cams' variables:
 cams' docs/pi-demo.md). Without values:
 
@@ -165,7 +173,7 @@ a local `.env` over SSH (then add `CAMERA_HOST` and `PI_ADDRESS` on the Pi):
 
 ```sh
 grep -E '^CAMPROXY_(TOKENS|ADMIN_TOKEN|CAMERA_PASSWORD|FTP_PASSWORD|GOOGLE_VISION_KEY|AUDIT_TOKEN|POE_SWITCH_PASSWORD)=' .env \
-  | ssh <user>@<pi> 'umask 077; cat > /srv/cam-proxy/.env'
+  | ssh <user>@<pi> 'umask 077; cat > /srv/cam-proxy/config/.env'
 ```
 
 Start it:
@@ -228,20 +236,54 @@ This keeps the history: stills, previews, clips and the catalog.
   - `camproxy_sse_clients` on `http://<pi>:8480/metrics` is 1 (cams' relay);
   - the next recording shows `clip_indexed` in `docker logs`.
 
+## Moving to the config/ layout (an install from before 2026-10-04)
+
+The settings file moves from `/srv/cam-proxy/.env` to
+`/srv/cam-proxy/config/.env`; compose.yaml no longer substitutes anything.
+
+```sh
+cd /srv/cam-proxy
+# 1. Back up the old file and the config (mode 600, never printed).
+umask 077
+cp -p .env .env.pre-config-$(date +%Y%m%d)
+cp -p data/config.json data/config.json.pre-config-$(date +%Y%m%d)
+# 2. The folder and the file: owner uid 1000 (the container's user).
+install -d -m 0700 config
+mv .env config/.env && chmod 600 config/.env
+ls -ln config/.env            # owner 1000, -rw-------
+# 3. The two addresses (if not there yet), then the new compose.yaml.
+grep -q '^CAMERA_HOST=' config/.env || echo 'CAMERA_HOST=<camera>' >> config/.env
+grep -q '^PI_ADDRESS=' config/.env || echo 'PI_ADDRESS=<pi>' >> config/.env
+#    (copy the repository's compose.yaml to /srv/cam-proxy/compose.yaml)
+docker compose pull && docker compose up -d
+docker compose logs --since 2m | grep config_env
+```
+
+- If `<user>` is not uid 1000: `sudo chown -R 1000:1000 config`.
+- `CAMPROXY_DATA` is gone: the data folder is always `./data`.
+- `camera.host`, `ftp.publicHost` and `server.publicUrl` may stay in
+  `data/config.json`; the two variables win over them.
+- Keep the backups until the proxy runs; they hold the secrets (mode 600).
+- When cams runs on the Pi too, its `cams/.env` becomes a link to
+  `../config/.env` (cams' docs/pi-demo.md).
+
 ## On the road (another LAN)
 
-Only `/srv/cam-proxy/.env` changes; cams follows cam-proxy (it takes the
+Only `/srv/cam-proxy/config/.env` changes; cams follows cam-proxy (it takes the
 camera's address from it).
 
 1. **The Pi's new address** (whatever the new LAN gives it): set
-   `PI_ADDRESS=<new pi>` in `.env`, then restart (`docker compose restart`, or
+   `PI_ADDRESS=<new pi>` in `config/.env`, then restart (`docker compose restart`, or
    "Restart proxy" on the Maintenance page at the new address: cam-proxy reads
    the file at start). Then "Point the camera's FTP here", or the camera keeps
    uploading to the old address.
 2. **The camera's new address:** Settings → **Find camera** lists the ONVIF
    devices on the LAN (address, name, model; the current camera is marked).
-   **Use this address** writes `CAMERA_HOST=<address>` into `.env` (a backup
-   `.env.bak-<time>` next to it) and restarts the proxy; sign in again.
+   **Use this address** writes `CAMERA_HOST=<address>` into `config/.env` (a
+   backup `.env.bak-<time>` next to it; the last 5 are kept) and restarts the
+   proxy; sign in again. A device whose answer came from another address than
+   it names is flagged "address mismatch", and the address it answered from
+   is the one written.
    Without `CAMPROXY_ENV_FILE` the page shows the line to add by hand.
 3. **"Point the camera's FTP here"** on the Maintenance page, once the camera
    answers at its new address.

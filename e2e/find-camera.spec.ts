@@ -12,14 +12,17 @@ test('Find camera lists the devices, marks the current camera, and offers the .e
   const rows = card.getByTestId('find-camera-device');
   await expect(rows).toHaveCount(2);
   const reolink = rows.filter({ hasText: '192.168.1.20' });
+  const current = rows.filter({ hasNotText: '192.168.1.20' });
   await expect(reolink).toContainText('RLC-1224A');
-  const current = rows.filter({ hasText: '127.0.0.1' });
+  // The fake answers from 127.0.0.1 while naming 192.168.1.20: flagged, and the sender is used.
+  await expect(reolink.getByTestId('find-camera-mismatch')).toHaveText('address mismatch: it answered from 127.0.0.1 but names 192.168.1.20; "Use this address" takes 127.0.0.1');
+  await expect(current.getByTestId('find-camera-mismatch')).toHaveCount(0);
   await expect(current.getByTestId('find-camera-current')).toHaveText('this camera');
   await expect(current.getByTestId('find-camera-use')).toHaveCount(0);
   await reolink.getByTestId('find-camera-use').click();
   await expect(page.getByTestId('confirm-dialog')).toHaveCount(0);
   await expect(card.getByTestId('find-camera-message')).toContainText("The proxy can't write its .env file (CAMPROXY_ENV_FILE is not set).");
-  await expect(card.getByTestId('find-camera-line')).toHaveText('CAMERA_HOST=192.168.1.20');
+  await expect(card.getByTestId('find-camera-line')).toHaveText('CAMERA_HOST=127.0.0.1');
 });
 
 test('a setting from PI_ADDRESS is read-only on the Settings page', async ({ page }) => {
