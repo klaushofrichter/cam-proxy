@@ -2,7 +2,6 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import request from 'supertest';
 import { startSim } from './helpers/sim';
 import { startProxy, auth, until, ADMIN_TOKEN, CLIENT_TOKEN } from './helpers/proxy';
-import { renameSim, startDevNameShim, type DevNameShim } from './helpers/devname-shim';
 import { sseConnect } from './helpers/sse';
 
 // Camera name design: the camera stores the name; the proxy reads it with
@@ -10,23 +9,25 @@ import { sseConnect } from './helpers/sse';
 // clients with one `camera` stream message per change.
 
 let sim: Awaited<ReturnType<typeof startSim>>;
-let shim: DevNameShim;
 let p: Awaited<ReturnType<typeof startProxy>>;
 const admin = () => auth(ADMIN_TOKEN);
+// A rename made in the Reolink app (cam-sim's one name value).
+const rename = (name: string) => expect(sim.sim.engine.settings.setName(name)).toBeNull();
+const setDevNameCalls = () => sim.sim.engine.counters.setCalls.filter((c) => c === 'SetDevName').length;
+// The next SetDevName fails with this rspCode (a refused write leaves the old name).
+const refuseNext = (rspCode: number) => sim.sim.engine.faults.set({ name: 'settings.fail', cmds: ['SetDevName'], rspCode, count: 1 });
 const cameraMessages = () => p.proxy.log.since(0, { types: ['camera'] }, 100).map((m) => ({ cam: m.cam, ...m.data }));
 const auditOf = async (action: string) => (await request(p.base).get(`/control/audit?action=${action}&after=&limit=50`).set(admin())).text.split('\n').filter(Boolean).map((l) => JSON.parse(l));
 
 beforeAll(async () => {
   sim = await startSim();
-  renameSim(sim.sim, 'Den');
-  shim = await startDevNameShim(sim.sim, sim.ports.http);
+  rename('Den');
   // camera.name in config.json differs from the camera's: the camera wins once read.
-  p = await startProxy({ ...sim, camera: { ...sim.camera, host: shim.host } }, { settings: { camera: { name: 'Configured Name', host: shim.host, protocol: 'http', user: 'proxy', onvifPort: sim.ports.onvif, rtspPort: sim.ports.rtsp || 554, baichuanPort: sim.camera.baichuanPort, statusPollS: 3600 } } });
+  p = await startProxy(sim, { settings: { camera: { name: 'Configured Name', host: sim.camera.host, protocol: 'http', user: 'proxy', onvifPort: sim.ports.onvif, rtspPort: sim.ports.rtsp || 554, baichuanPort: sim.camera.baichuanPort, statusPollS: 3600 } } });
   await until(() => p.proxy.status.state().name === 'Den');
 }, 30_000);
 afterAll(async () => {
   await p.proxy.stop();
-  await shim.close();
   await sim.close();
 });
 beforeEach(() => {
@@ -59,7 +60,7 @@ describe('reading the name', () => {
     const sse = sseConnect(`${p.base}/api/stream?types=camera`, auth(CLIENT_TOKEN));
     try {
       await until(() => sse.status() === 200);
-      renameSim(sim.sim, 'Backyard Left');
+      rename('Backyard Left');
       await p.proxy.status.checkNow();
       await p.proxy.status.checkNow();
       await sse.until(() => sse.events.length >= 1);
@@ -90,15 +91,15 @@ describe('reading the name', () => {
 
 describe('PUT /control/camera/name', () => {
   it('validates, writes, re-reads, answers the name read back, audits and announces once', async () => {
-    renameSim(sim.sim, 'Backyard Left');
+    rename('Backyard Left');
     await p.proxy.status.checkNow();
     const before = cameraMessages().length;
-    const sets = shim.setCalls.length;
+    const sets = setDevNameCalls();
     const r = await request(p.base).put('/control/camera/name').set(admin()).send({ name: 'Front Door (1)' });
     expect(r.status).toBe(200);
     expect(r.body).toEqual({ name: 'Front Door (1)' });
-    expect(shim.setCalls.slice(sets)).toEqual([{ name: 'Front Door (1)' }]);
-    expect(sim.sim.engine.config.name).toBe('Front Door (1)');
+    expect(setDevNameCalls()).toBe(sets + 1);
+    expect(sim.sim.engine.settings.name).toBe('Front Door (1)');
     // At once, without waiting for the next poll.
     expect((await request(p.base).get('/api/cameras').set(auth(CLIENT_TOKEN))).body[0].name).toBe('Front Door (1)');
     expect(cameraMessages().slice(before)).toEqual([{ cam: 'cam1', name: 'Front Door (1)' }]);
@@ -112,7 +113,7 @@ describe('PUT /control/camera/name', () => {
   });
 
   it('refuses a name against the rules with 400 invalid_name and a reason, without calling the camera or auditing', async () => {
-    const sets = shim.setCalls.length;
+    const sets = setDevNameCalls();
     const records = (await auditOf('camera-name')).length;
     for (const [name, reason] of [['Back_yard', 'not allowed: _'], ['x'.repeat(32), 'too long: 32 characters, at most 31'], [' Den', 'no leading or trailing space'], ['', 'empty: 1 to 31 characters'], [7, 'empty: 1 to 31 characters']] as const) {
       const r = await request(p.base).put('/control/camera/name').set(admin()).send({ name });
@@ -120,12 +121,12 @@ describe('PUT /control/camera/name', () => {
       expect(r.body).toEqual({ error: 'invalid_name', reason });
     }
     expect((await request(p.base).put('/control/camera/name').set(admin()).send([])).status).toBe(400);
-    expect(shim.setCalls.length).toBe(sets);
+    expect(setDevNameCalls()).toBe(sets);
     expect((await auditOf('camera-name')).length).toBe(records);
   });
 
   it('another camera failure is 502 camera_error, audited as a failure', async () => {
-    shim.refuseNext = -9;
+    refuseNext(-9);
     const r = await request(p.base).put('/control/camera/name').set(admin()).send({ name: 'Garage' });
     expect(r.status).toBe(502);
     expect(r.body).toEqual({ error: 'camera_error' });
@@ -135,11 +136,11 @@ describe('PUT /control/camera/name', () => {
   });
 
   it("a camera refusal is 400 invalid_name with the camera's reason, audited as a failure", async () => {
-    shim.refuseNext = -54;
+    refuseNext(-54);
     const r = await request(p.base).put('/control/camera/name').set(admin()).send({ name: 'Garage' });
     expect(r.status).toBe(400);
     expect(r.body).toEqual({ error: 'invalid_name', reason: 'not allowed by the camera (rspCode -54)' });
-    expect(sim.sim.engine.config.name).toBe('Front Door (1)'); // a refused write leaves the old name
+    expect(sim.sim.engine.settings.name).toBe('Front Door (1)'); // a refused write leaves the old name
     const rec = (await auditOf('camera-name')).at(-1);
     expect(rec.event).toMatchObject({ action: 'camera-name', outcome: 'failure' });
     expect(rec.message).toContain('not allowed by the camera');

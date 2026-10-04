@@ -7,8 +7,7 @@ import { loadConfig } from '../src/config/load';
 import { createProxy, type Proxy } from '../src/proxy';
 import { startVisionMock } from '../test/helpers/vision-mock';
 import { startPoeSwitchMock } from '../test/helpers/poe-switch-mock';
-import { startDevNameShim } from '../test/helpers/devname-shim';
-import { ADMIN_TOKEN, CLIENT_TOKEN, DEVNAME_SHIM_PORT, FTP, FTP_PASSWORD, POE_SWITCH_PASSWORD, POE_SWITCH_PORT, PROXY_PORT, SIM, SIM_CONTROL_TOKEN, VISION_KEY, VISION_MOCK_PORT } from './env';
+import { ADMIN_TOKEN, CLIENT_TOKEN, FTP, FTP_PASSWORD, POE_SWITCH_PASSWORD, POE_SWITCH_PORT, PROXY_PORT, SIM, SIM_CONTROL_TOKEN, VISION_KEY, VISION_MOCK_PORT } from './env';
 
 // go2rtc and MediaMTX from tools/ (scripts/install-*.sh) unless CI set them.
 const tool = (name: string) => (existsSync(join(__dirname, '..', 'tools', name)) ? join(__dirname, '..', 'tools', name) : undefined);
@@ -31,12 +30,9 @@ async function main() {
   const ports = await sim.listen(SIM, '127.0.0.1');
   // Recordings end a second after the event, so clips upload quickly.
   sim.engine.settings.running.Rec.postRec = '1 Seconds';
-  // The camera's name commands (camera-name.spec) until cam-sim has them;
-  // everything else passes through to the sim.
-  const shim = await startDevNameShim(sim, ports.http, DEVNAME_SHIM_PORT);
   const dir = mkdtempSync(join(tmpdir(), 'camproxy-e2e-'));
   writeFileSync(join(dir, 'config.json'), JSON.stringify({
-    camera: { host: shim.host, protocol: 'http', user: 'proxy', onvifPort: ports.onvif, rtspPort: ports.rtsp || 554, statusPollS: 5 },
+    camera: { host: `127.0.0.1:${ports.http}`, protocol: 'http', user: 'proxy', onvifPort: ports.onvif, rtspPort: ports.rtsp || 554, statusPollS: 5 },
     events: { onvif: { subscribeMin: 1, pullTimeoutS: 2 } },
     server: { logLevel: 'warn' },
     stills: { enabled: !!GO2RTC },
@@ -75,7 +71,6 @@ async function main() {
     await sim.close();
     await vision.close();
     await poeSwitch.close();
-    await shim.close();
     process.exit(0);
   };
   process.once('SIGINT', () => void stop('SIGINT'));

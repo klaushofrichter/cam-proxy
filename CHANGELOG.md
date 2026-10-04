@@ -6,6 +6,7 @@
 - `PUT /control/camera/name` `{"name"}` renames the camera: checked against the camera's rules (1 to 31 characters; ASCII letters, digits, space and `- ( ) + = [ ] { }`; no leading or trailing space; the same regex as cams), written with `SetDevName`, read back with `GetDevName`; 200 `{name}` (read back), 400 `{"error":"invalid_name","reason"}` (the rules, or the camera's -54/-56), 503 `{"error":"camera_offline"}`. Admin token or admin session (with `X-CamProxy-UI`); audited as `camera-name` (from, to, requestedBy).
 - Stream: a new `camera` message `{cam, name}`, once per change of the camera's name (a rename through the proxy, or one made in the Reolink app or the camera's web UI, seen by the next poll). It is in the default `types`; a client that names `types` adds `camera`.
 - Admin UI: the Status page's Camera card shows the name; the Settings page's camera name field is "Camera name (stored on the camera)", checked as you type and saved on the camera (the error under the field when it is refused).
+- Tests and e2e run against cam-sim v2026.10.03.5 (GetDevName/SetDevName with the measured rules; it masks the FTP user as the camera does).
 
 ## v2026.10.03.5
 

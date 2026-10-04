@@ -1,13 +1,14 @@
 import { test, expect } from '@playwright/test';
-import { ADMIN_TOKEN, DEVNAME_SHIM_PORT, PROXY_PORT } from './env';
+import { ADMIN_TOKEN, PROXY_PORT, SIM, SIM_CONTROL_TOKEN } from './env';
 
 // Camera name design: the Status card shows the camera's own name; the
 // Settings field "Camera name (stored on the camera)" validates as you type
-// and saves through PUT /control/camera/name. The camera is cam-sim behind
-// the GetDevName/SetDevName shim (start.ts).
+// and saves through PUT /control/camera/name, against cam-sim's
+// GetDevName/SetDevName (one name value with GetDevInfo and the OSD).
 const admin = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 const base = `http://127.0.0.1:${PROXY_PORT}`;
-const shim = `http://127.0.0.1:${DEVNAME_SHIM_PORT}`;
+const sim = `http://127.0.0.1:${SIM.control}/sim/api`;
+const simAuth = { Authorization: `Bearer ${SIM_CONTROL_TOKEN}` };
 
 test.afterAll(async ({ playwright }) => {
   // Back to cam-sim's own name for the other specs.
@@ -19,8 +20,11 @@ test.afterAll(async ({ playwright }) => {
 test("the Status card shows the camera's name, and follows a rename made elsewhere", async ({ page, request }) => {
   await page.goto('/#/status');
   await expect(page.getByTestId('camera-name')).toHaveText('Cam', { timeout: 15000 });
-  // Renamed in the Reolink app: the next poll reads it, the stream message refreshes the card.
-  expect((await request.post(`${shim}/__shim/rename`, { data: { name: 'Backyard Left' } })).status()).toBe(204);
+  // Renamed elsewhere (a whole-object SetOsd with a new OSD name, as the
+  // camera's web UI does): the next poll reads it, the stream message refreshes the card.
+  const { settings } = (await (await request.get(`${sim}/settings`, { headers: simAuth })).json()) as { settings: { Osd: { osdChannel: { name: string } } } };
+  const osd = { ...settings.Osd, osdChannel: { ...settings.Osd.osdChannel, name: 'Backyard Left' } };
+  expect((await request.put(`${sim}/settings/Osd`, { headers: simAuth, data: osd })).status()).toBe(200);
   expect((await request.post(`${base}/control/actions/camera-test`, { headers: admin })).status()).toBe(200);
   await expect(page.getByTestId('camera-name')).toHaveText('Backyard Left', { timeout: 15000 });
 });
@@ -53,7 +57,8 @@ test("a camera refusal shows the 400's reason under the field", async ({ page, r
   await page.goto('/#/settings');
   const input = page.getByTestId('input-camera-name');
   await expect(input).toHaveValue('Front Door (1)', { timeout: 15000 });
-  expect((await request.post(`${shim}/__shim/refuse-next`, { data: { rspCode: -54 } })).status()).toBe(204);
+  // The next SetDevName fails with -54, once.
+  expect((await request.put(`${sim}/faults/settings.fail`, { headers: simAuth, data: { cmds: ['SetDevName'], rspCode: -54, count: 1 } })).status()).toBe(200);
   await input.fill('Garage');
   await page.getByTestId('save-camera-name').click();
   await expect(page.getByTestId('camera-name-error')).toHaveText('Not saved: not allowed by the camera (rspCode -54)');
