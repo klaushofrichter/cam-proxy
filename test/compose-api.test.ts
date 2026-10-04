@@ -46,6 +46,11 @@ describe('compositions API', () => {
     expect((await post({ clipId, preS: 0, postS: 115, size: '1080p', badge: true })).body).toEqual({ error: 'invalid', detail: 'at most 120 s (2:00)' });
     expect((await post({ clipId, preS: 0, postS: 0, size: 'sd', badge: true, span: { start: T, end: 'x' } })).body).toMatchObject({ error: 'invalid', detail: expect.stringMatching(/^span/) });
     expect((await post({ clipId, preS: 0, postS: 0, size: 'sd', badge: true, span: { start: T + 10_000, end: T } })).status).toBe(400);
+    // The span must overlap the clip (T … T+6 s) by at least 1 s: another recording's span is refused.
+    const elsewhere = await post({ clipId, preS: 0, postS: 0, size: 'sd', badge: true, span: { start: T + 60_000, end: T + 80_000 } });
+    expect(elsewhere.status).toBe(400);
+    expect(elsewhere.body).toEqual({ error: 'invalid', detail: 'span must overlap the clip by at least 1 s' });
+    expect((await post({ clipId, preS: 0, postS: 0, size: 'sd', badge: true, span: { start: T + 5_500, end: T + 20_000 } })).body).toEqual({ error: 'invalid', detail: 'span must overlap the clip by at least 1 s' }); // 0.5 s
     expect((await post({ clipId, preS: 0, postS: 0, size: '4k', badge: true })).status).toBe(400);
     expect((await post({ clipId, preS: 0, postS: 0, size: 'sd', badge: true, timeZone: 'Mars/Olympus' })).status).toBe(400);
     expect((await post({ clipId: 999_999, preS: 0, postS: 0, size: 'sd', badge: true })).status).toBe(404);

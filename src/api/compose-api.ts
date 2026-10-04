@@ -43,6 +43,12 @@ export function composeApi(d: {
     if (d.paused()) return void res.status(503).json({ error: 'storage_paused' });
     const toSpan = (c: { id: number; start_ts: number; end_ts: number | null; path: string }) => ({ id: c.id, start: c.start_ts, end: c.end_ts ?? c.start_ts, path: c.path });
     const clip = toSpan(row);
+    // The span is the recording this clip is a copy of: it must overlap the
+    // clip by at least 1 s (the same 1 s as "at least 1 s must remain"), so
+    // a clip id can't be used to compose another time of day.
+    if (span && Math.min(span.end, clip.end) - Math.max(span.start, clip.start) < 1000) {
+      return void res.status(400).json({ error: 'invalid', detail: 'span must overlap the clip by at least 1 s' });
+    }
     const maxS = composeMaxS(b.size);
     // The window first: the clips and stills it needs are listed for it.
     const w = compositionWindow(span ?? clip, b.preS, b.postS, maxS);

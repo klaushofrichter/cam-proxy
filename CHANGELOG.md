@@ -3,7 +3,8 @@
 ## Unreleased
 
 - Composed clips are up to 300 s long (were 60 s), 120 s at `1080p` (encoding time on a Pi 4: about 3 minutes either way, estimated from the Mac). Pre-/post-roll are whole seconds from -3600 to 3600 (were -600…60); the result's length is the limit. A job may run 10 minutes (was 5). Refusals read `at most 300 s (5:00)`.
-- `POST /api/cameras/:cam/compositions` takes an optional `span: {start, end}` (unix ms): the recording the rolls apply to. cams sends the SD-card recording the viewer chose; the proxy's FTP copy of it can start earlier or run longer, and the rolls were applied to that copy, so a 114 s recording with pre-roll -100 and post-roll 30 (44 s) was refused as "at most 60 s". Without `span` the rolls apply to the clip, as before.
+- `POST /api/cameras/:cam/compositions` takes an optional `span: {start, end}` (unix ms): the recording the rolls apply to. cams sends the SD-card recording the viewer chose; the proxy's FTP copy of it can start earlier or run longer, and the rolls were applied to that copy, so a 114 s recording with pre-roll -100 and post-roll 30 (44 s) was refused as "at most 60 s". Without `span` the rolls apply to the clip, as before. A `span` that overlaps the clip by less than 1 s is a 400 (`span must overlap the clip by at least 1 s`).
+- Composition encodes run at nice 10, so a long one doesn't starve the stills and the stream on a Pi.
 
 ## v2026.10.03.6
 

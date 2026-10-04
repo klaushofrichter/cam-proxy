@@ -346,7 +346,8 @@ upload folder. While storage is paused, `STOR` answers 452.
   pre-/post-roll (whole seconds, −3600…3600 each; a negative one cuts). The
   rolls apply to `span` (`{start, end}` in unix ms: the recording the viewer
   chose, e.g. cams's SD-card file, which the proxy's FTP copy can outlast),
-  else to the clip itself; at least 1 s of it must remain. The result is at
+  else to the clip itself; the span must overlap the clip by at least 1 s,
+  and at least 1 s of it must remain. The result is at
   most 300 s, 120 s at `1080p` (encoding time on a Pi 4: about 3 minutes
   either way, estimated); a longer one is a 400 `invalid` with `detail`
   `at most 300 s (5:00)`. Each second comes from the clip,
@@ -357,7 +358,7 @@ upload folder. While storage is paused, `STOR` answers 452.
   `DELETE …/{id}` cancels. A job nobody polls for 30 s stops, and results
   are removed after 15 minutes, and one running over 10 minutes fails. Each clip
   part and each run of stills and cards is a small encode of its own (two
-  encoder threads), joined without encoding again: about 120 MB peak at SD,
+  encoder threads, at nice 10 so the stills and the stream keep their CPU), joined without encoding again: about 120 MB peak at SD,
   280 MB at 1080p. Cards show the time in `timeZone` (the viewer's), else the
   process's. The font comes from `composition.font`, else DejaVu Sans (the
   container) or Arial (macOS).

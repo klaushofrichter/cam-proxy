@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdtempSync, readdirSync, writeFileSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { ComposeError, createComposer, type Runner } from '../src/compose/jobs';
+import { ComposeError, createComposer, FFMPEG_NICE, lowerPriority, runFfmpeg, type Runner } from '../src/compose/jobs';
 import { planComposition } from '../src/compose/plan';
 
 const plan = planComposition({ clip: { id: 1, start: 0, end: 10_000, path: '/c.mp4' }, preS: 0, postS: 0, clips: [], stillAt: () => null });
@@ -209,5 +209,37 @@ describe('composer jobs', () => {
     await tick();
     await c.stop();
     expect(ended).toBe(true);
+  });
+});
+
+// Review of #140: ffmpeg runs at a lower priority (nice 10), so a long
+// composition doesn't starve the stills and the stream on a Pi.
+describe('lowerPriority', () => {
+  it('sets nice 10 for the process, and a refusal (or no pid) changes nothing', () => {
+    const calls: [number, number][] = [];
+    expect(lowerPriority(1234, (pid, prio) => void calls.push([pid, prio]))).toBe(true);
+    expect(calls).toEqual([[1234, 10]]);
+    expect(lowerPriority(1234, () => { throw new Error('EACCES'); })).toBe(false);
+    expect(lowerPriority(undefined, () => { throw new Error('not called'); })).toBe(false);
+    expect(FFMPEG_NICE).toBe(10);
+  });
+
+  it('is called for each ffmpeg the runner starts, with its pid', async () => {
+    const pids: (number | undefined)[] = [];
+    await runFfmpeg(['-hide_banner', '-version'], new AbortController().signal, () => {}, (pid) => (pids.push(pid), true));
+    expect(pids).toHaveLength(1);
+    expect(pids[0]).toBeGreaterThan(0);
+  });
+
+  it('lowers a real process', async () => {
+    const { spawn } = await import('child_process');
+    const { getPriority } = await import('os');
+    const p = spawn('sleep', ['2']);
+    try {
+      expect(lowerPriority(p.pid)).toBe(true);
+      expect(getPriority(p.pid!)).toBe(10);
+    } finally {
+      p.kill();
+    }
   });
 });

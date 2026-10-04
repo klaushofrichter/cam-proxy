@@ -105,7 +105,7 @@ paths:
       requestBody:
         content:
           application/json:
-            schema: { type: object, required: [clipId, preS, postS, size, badge], properties: { clipId: { type: integer }, span: { type: object, required: [start, end], properties: { start: { type: integer }, end: { type: integer } }, description: 'unix ms: the recording the rolls apply to (cams: the SD-card file); the clip itself when left out' }, preS: { type: integer, minimum: -3600, maximum: 3600 }, postS: { type: integer, minimum: -3600, maximum: 3600 }, size: { type: string, enum: [sd, 360p, 720p, 1080p] }, badge: { type: boolean }, timeZone: { type: string, description: 'IANA zone for the cards'' time, e.g. America/Chicago; default the process zone' } } }
+            schema: { type: object, required: [clipId, preS, postS, size, badge], properties: { clipId: { type: integer }, span: { type: object, required: [start, end], properties: { start: { type: integer }, end: { type: integer } }, description: 'unix ms: the recording the rolls apply to (cams: the SD-card file); must overlap the clip by at least 1 s; the clip itself when left out' }, preS: { type: integer, minimum: -3600, maximum: 3600 }, postS: { type: integer, minimum: -3600, maximum: 3600 }, size: { type: string, enum: [sd, 360p, 720p, 1080p] }, badge: { type: boolean }, timeZone: { type: string, description: 'IANA zone for the cards'' time, e.g. America/Chicago; default the process zone' } } }
       responses:
         '201': { description: '{ id, state, progress, durationS }' }
         '400': { description: 'invalid input or limits: at least 1 s of the span must remain, at most 300 s (120 s at 1080p), detail e.g. "at most 300 s (5:00)"' }

@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
 import { randomBytes } from 'crypto';
+import { setPriority } from 'os';
 import { linkSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { within } from '../async';
@@ -135,11 +136,28 @@ export function createComposer(o: { dir: string; runner: Runner; now?: () => num
   };
 }
 
-// One ffmpeg process: SIGTERM on cancel, SIGKILL 2 s later if it lingers.
-function ffmpeg(args: string[], signal: AbortSignal, onStdout: (text: string) => void): Promise<void> {
+// ffmpeg's niceness (review of #140): a 300 s composition encodes for
+// minutes on a Pi 4, and must not starve the stills grabber, the stream or
+// the API. os.setPriority works on Linux and macOS without a `nice` binary.
+export const FFMPEG_NICE = 10;
+export function lowerPriority(pid: number | undefined, set: (pid: number, prio: number) => void = setPriority): boolean {
+  if (pid === undefined) return false;
+  try {
+    set(pid, FFMPEG_NICE);
+    return true;
+  } catch (err) {
+    logger.debug({ err: (err as Error).message }, 'composition_nice_failed');
+    return false;
+  }
+}
+
+// One ffmpeg process at FFMPEG_NICE: SIGTERM on cancel, SIGKILL 2 s later if
+// it lingers.
+export function runFfmpeg(args: string[], signal: AbortSignal, onStdout: (text: string) => void, lower: (pid: number | undefined) => boolean = lowerPriority): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     if (signal.aborted) return reject(new ComposeError('cancelled'));
     const p = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    lower(p.pid);
     let err = '';
     p.stdout.on('data', (b: Buffer) => onStdout(b.toString()));
     p.stderr.on('data', (b: Buffer) => { err = (err + b.toString()).slice(-2000); });
@@ -187,7 +205,7 @@ export function ffmpegRunner(o: { font: string; clock: (ts: number, timeZone?: s
       }
     }
     const card = join(dir, 'card.jpg');
-    if (segments.some((s) => s.kind === 'card')) await ffmpeg(cardImageArgs(req.size, card), signal, () => {});
+    if (segments.some((s) => s.kind === 'card')) await runFfmpeg(cardImageArgs(req.size, card), signal, () => {});
     let k = 0;
     for (const g of groupRuns(segments)) {
       if (g.kind !== 'run') continue;
@@ -199,7 +217,7 @@ export function ffmpegRunner(o: { font: string; clock: (ts: number, timeZone?: s
     let done = 0;
     for (const p of pieces) {
       check();
-      await ffmpeg(p.args, signal, (text) => {
+      await runFfmpeg(p.args, signal, (text) => {
         const v = parseProgress(text, p.durationS);
         if (v !== null) onProgress(Math.min(0.99, (done + v * p.durationS) / total));
       });
@@ -210,7 +228,7 @@ export function ffmpegRunner(o: { font: string; clock: (ts: number, timeZone?: s
     check();
     const list = join(dir, 'pieces.txt');
     writeFileSync(list, joinList(pieces.map((p) => p.out)));
-    await ffmpeg(joinArgs(list, out), signal, () => {});
+    await runFfmpeg(joinArgs(list, out), signal, () => {});
     // The spec's per-job disk budget (a 300 s SD result is about 40 MB, a
     // 120 s 1080p one about 50 MB).
     if (statSync(out).size > MAX_BYTES) throw new ComposeError('the result is larger than 200 MB');
