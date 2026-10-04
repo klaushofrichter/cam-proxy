@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.10.04.2
+
 - Still checks (cams #179, phase 1): Vision on any second that has a still, picked by hand, stored apart from events. `POST /api/cameras/:cam/still-checks` `{"at": <unix ms>}` (client token, or admin; a session needs `X-CamProxy-UI`): 201 `{check, reused: false}` after one call; 200 `{check, reused: true, source}` without a call when the second was checked before (`check`) or an automatic analysis used its still (`event`, `check.id` null); 400 `invalid` (`at` not a whole second, in the future, or older than the stills kept); 404 `no_still`; 409 `analytics_off` (`off`, `no_key`, `checks_off`); 429 `limit` (`month`, `day`, `checks`), `busy` (one check at a time; the same second waits for the running call), `rate_limited` (20 a minute); 503 `analytics_paused`; 502 `provider_failed` (no retry; the call counted). `check`: `{id, stillTs, provider, summary, objects, events: [{id, kind, confirmed}], imageUrl, requestedAt, tookMs}`; the events the second sits in are computed when read, and a check only confirms (person, vehicle, pet; motion never).
 - `GET /api/cameras/:cam/still-checks?from&to` (at most 31 days, oldest first), `GET …/still-checks/:id` (with the raw answer) and `GET …/still-checks/:id.jpg` (immutable). A new stream message `still-check` (in the default types) for each new check.
 - `GET /api/cameras/:cam/analytics` (client token): the Vision budget for cams's button, `{enabled, paused, month, today, checks}`, never the key.
