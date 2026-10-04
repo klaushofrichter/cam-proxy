@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Composed clips are up to 300 s long (were 60 s), 120 s at `1080p` (encoding time on a Pi 4: about 3 minutes either way, estimated from the Mac). Pre-/post-roll are whole seconds from -3600 to 3600 (were -600…60); the result's length is the limit. A job may run 10 minutes (was 5). Refusals read `at most 300 s (5:00)`.
+- `POST /api/cameras/:cam/compositions` takes an optional `span: {start, end}` (unix ms): the recording the rolls apply to. cams sends the SD-card recording the viewer chose; the proxy's FTP copy of it can start earlier or run longer, and the rolls were applied to that copy, so a 114 s recording with pre-roll -100 and post-roll 30 (44 s) was refused as "at most 60 s". Without `span` the rolls apply to the clip, as before. A `span` that overlaps the clip by less than 1 s is a 400 (`span must overlap the clip by at least 1 s`).
+- Composition encodes run at nice 10, so a long one doesn't starve the stills and the stream on a Pi.
+
+## v2026.10.03.6
+
 - Camera name (camera-name design): the camera stores its name, and the proxy reads it with the routine status poll (`GetDevInfo.name`). `GET /api/cameras` (and the new `GET /api/cameras/:cam`, the same entry for one camera) `name`, `GET /control/status` `camera.name` (with `nameSource`: `camera` or `config`) and `GET /api/local/health` `camera.name` report the camera's own name; the configured `camera.name` is only the fallback until the camera was read after a start.
 - `PUT /control/camera/name` `{"name"}` renames the camera: checked against the camera's rules (1 to 31 characters; ASCII letters, digits, space and `- ( ) + = [ ] { }`; no leading or trailing space; the same regex as cams), written with `SetDevName`, read back with `GetDevName`; 200 `{name}` (read back), 400 `{"error":"invalid_name","reason"}` (the rules, or the camera's -54/-56), 503 `{"error":"camera_offline"}`. Admin token or admin session (with `X-CamProxy-UI`); audited as `camera-name` (from, to, requestedBy).
 - Stream: a new `camera` message `{cam, name}`, once per change of the camera's name (a rename through the proxy, or one made in the Reolink app or the camera's web UI, seen by the next poll). It is in the default `types`; a client that names `types` adds `camera`.
