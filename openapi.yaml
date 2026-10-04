@@ -235,6 +235,71 @@ paths:
         '400': { description: 'from or to missing, to before from, or more than one day' }
         '401': { description: not signed in }
         '404': { description: unknown camera }
+  /api/cameras/{cam}/still-checks:
+    post:
+      summary: Check a second with Vision (a still check, cams #179); stored apart from events
+      description: >
+        `at` is a still's time (unix ms): a whole second, not in the future,
+        not older than the stills kept (retention.stillsDays, from the start
+        of that UTC day). A stored check of that second, or a successful
+        automatic analysis that used its still, answers without a call. Then,
+        in order: Vision off, no key or checksPerDay 0 (409); no still at
+        `at` (404); another check running (429 busy; the same second waits
+        for the running call); paused (503); the monthly limit, the daily cap
+        (shared with the automatic analyses) and checksPerDay (429 limit).
+        One call, 10 s, no retry. Client token or admin; a session needs
+        X-CamProxy-UI. At most 20 valid requests a minute per client. Every
+        request past the input check is audited (still-check).
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [at], properties: { at: { type: integer, description: 'unix ms, a multiple of 1000' } } }
+      responses:
+        '201': { description: '{ reused: false, check: { id, stillTs, provider, summary: [{category, subtype, score, box}], objects: [{mid, name, score, box}], events: [{id, kind, confirmed}] (the events the second sits in, computed on read; confirmed: person/vehicle/pet found by the check; motion never), imageUrl (or null when the copy failed), requestedAt, tookMs } }' }
+        '200': { description: '{ reused: true, source: check | event, check }: the stored answer, no call. source event: from the automatic analysis of that still (check.id null, check.eventId, imageUrl the analysis image)' }
+        '400': { description: '{error: invalid, detail}: at missing, not a whole number, not a whole second, in the future, or older than the stills kept' }
+        '401': { description: not signed in (the audit token too) }
+        '403': { description: '{error: csrf}: a session without X-CamProxy-UI' }
+        '404': { description: '{error: no_still}: no still at at; {error: not_found}: unknown camera' }
+        '409': { description: '{error: analytics_off, reason: off | no_key | checks_off}' }
+        '429': { description: '{error: limit, reason: month | day | checks}, {error: busy} (another check is running), or {error: rate_limited}' }
+        '500': { description: '{error: internal}: the paid result could not be stored' }
+        '502': { description: '{error: provider_failed, reason (timeout, network, http_5xx, http_<n>, bad_response, bad_key (pauses analytics), quota (pauses 1 h), aborted (stopping))}: the call counted, nothing stored' }
+        '503': { description: '{error: analytics_paused, reason: bad_key | quota, until (ms, or null for bad_key)}' }
+    get:
+      summary: Still checks of a range, oldest first (at most 1000)
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: from, in: query, required: true, schema: { type: integer }, description: the second at or after (ms) }
+        - { name: to, in: query, required: true, schema: { type: integer }, description: the second at or before (ms); at most 31 days after from }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 1000 } }
+      responses:
+        '200': { description: '[{ id, stillTs, provider, summary, events: [{id, kind, confirmed}], imageUrl }]' }
+        '400': { description: 'from or to missing, to before from, more than 31 days, or a bad limit' }
+        '401': { description: not signed in }
+        '404': { description: unknown camera }
+  /api/cameras/{cam}/still-checks/{file}:
+    get:
+      summary: One still check (<id>, with the raw answer) or its JPEG (<id>.jpg)
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: file, in: path, required: true, schema: { type: string, pattern: '^\d{1,12}(\.jpg)?$' } }
+      responses:
+        '200': { description: '<id>: { id, stillTs, provider, summary, objects, events, imageUrl, requestedAt, tookMs, raw }; <id>.jpg: image/jpeg, cached as immutable (kept retention.eventsDays with the check)' }
+        '400': { description: '{error: invalid}: neither <id> nor <id>.jpg' }
+        '404': { description: 'unknown camera or check, or no image' }
+  /api/cameras/{cam}/analytics:
+    get:
+      summary: The Vision budget for clients (no key, no mask)
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: '{ enabled (on, a key, not stopping), paused: null | {reason, until}, month: {calls, limit}, today: {calls, cap (0: no cap)}, checks: {today, cap (0: checks off)} }; calls count automatic analyses and checks' }
+        '401': { description: not signed in }
+        '404': { description: unknown camera }
   /api/stream:
     get:
       summary: Server-Sent Events, resumable
@@ -253,7 +318,9 @@ paths:
         lack kind, start, end, stillTs and summary: a missing `summary` means
         unknown, not "nothing found"); camera `{cam, name}` (once per change
         of the camera's name: a rename through PUT /control/camera/name or one
-        made in the Reolink app, seen by the status poll); annotation
+        made in the Reolink app, seen by the status poll); still-check (a new
+        still check, cams #179) `{cam, id, stillTs, provider, summary, objects,
+        events: [{id, kind, confirmed}], imageUrl, requestedAt, tookMs}`; annotation
         (reserved, not sent yet); still
         `{cam, ts, url, sprite, tile}` (only when named in `types`; live
         only, without an id, and not replayed).
@@ -347,7 +414,7 @@ paths:
     get:
       summary: External analytics providers - state, usage and limits (admin)
       responses:
-        '200': { description: '[{ id, name, enabled, keyMasked (first4…last4, never the key), keySource (env, manual or none), month: {calls, limit}, today: {calls, cap}, paused: null | {reason, until}, lastCall, lastError }]' }
+        '200': { description: '[{ id, name, enabled, keyMasked (first4…last4, never the key), keySource (env, manual or none), month: {calls, limit}, today: {calls, cap}, paused: null | {reason, until}, lastCall, lastError, checks: {today, cap} (still checks today, checksPerDay) }]' }
         '401': { description: not signed in }
         '403': { description: admin_only }
   /control/analytics/unmapped:

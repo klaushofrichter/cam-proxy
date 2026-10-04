@@ -37,7 +37,8 @@ export interface Config {
   // and per provider its switch and call limits. 0 = no calls.
   analytics: {
     kinds: { person: boolean; vehicle: boolean; pet: boolean };
-    googleVision: { enabled: boolean; monthlyLimit: number; dailyCap: number };
+    // checksPerDay: still checks by hand per camera day (cams #179); 0 = none.
+    googleVision: { enabled: boolean; monthlyLimit: number; dailyCap: number; checksPerDay: number };
   };
 }
 
@@ -62,7 +63,7 @@ export const DEFAULTS: Config = {
   host: { stats: 'auto' },
   analytics: {
     kinds: { person: true, vehicle: false, pet: false },
-    googleVision: { enabled: false, monthlyLimit: 0, dailyCap: 0 },
+    googleVision: { enabled: false, monthlyLimit: 0, dailyCap: 0, checksPerDay: 10 },
   },
 };
 

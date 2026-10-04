@@ -142,3 +142,17 @@ export function countAnalysesByStatus(c: Catalog, cam: string, from: number, to:
     .all(cam, from, to) as { status: string; n: number }[];
   return Object.fromEntries(rows.map((r) => [r.status, Number(r.n)]));
 }
+
+// The newest successful analysis of a camera's event made with the still of
+// `stillTs` (a still check of that second is answered from it).
+export function okAnalysisAt(c: Catalog, cam: string, stillTs: number, provider = 'google-vision'): AnalysisRow | undefined {
+  return c.db
+    .prepare(`SELECT a.* FROM analyses a JOIN events e ON e.id = a.event_id WHERE e.cam = ? AND a.still_ts = ? AND a.provider = ? AND a.status = 'ok' ORDER BY a.requested_at DESC, a.id DESC LIMIT 1`)
+    .get(cam, stillTs, provider) as unknown as AnalysisRow | undefined;
+}
+
+// Gives back a reserved call that was never made (a still check reserves its
+// call before it reads the still).
+export function releaseUsage(c: Catalog, provider: string, day: string): void {
+  c.db.prepare('UPDATE analytics_usage SET calls = calls - 1 WHERE provider = ? AND day = ? AND calls > 0').run(provider, day);
+}

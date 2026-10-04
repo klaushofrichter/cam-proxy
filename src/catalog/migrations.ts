@@ -116,4 +116,25 @@ export const MIGRATIONS: string[] = [
       ON CONFLICT (cam) DO UPDATE SET last_received = MAX(last_received, excluded.last_received);
   END;
   `,
+  // 7: still checks (cams #179, spec 2026-10-04-still-checks-design): Vision
+  // on a second picked by hand. Not events: no event_id (the events a check
+  // sits in are computed when read); one per camera, second and provider;
+  // successful calls only; kept retention.eventsDays with their JPEG copy.
+  `
+  CREATE TABLE still_checks (
+    id INTEGER PRIMARY KEY,
+    cam TEXT NOT NULL,
+    still_ts INTEGER NOT NULL,
+    provider TEXT NOT NULL,
+    requested_at INTEGER NOT NULL,
+    requested_via TEXT NOT NULL,
+    took_ms INTEGER,
+    image TEXT,
+    objects TEXT NOT NULL,
+    raw TEXT,
+    summary TEXT NOT NULL,
+    UNIQUE (cam, still_ts, provider)
+  );
+  CREATE INDEX still_checks_cam_ts ON still_checks (cam, still_ts);
+  `,
 ];

@@ -101,7 +101,8 @@
     "googleVision": {
       "enabled": false,
       "monthlyLimit": 0,
-      "dailyCap": 0
+      "dailyCap": 0,
+      "checksPerDay": 10
     }
   }
 }

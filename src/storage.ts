@@ -4,6 +4,7 @@ import { join } from 'path';
 import type { Catalog } from './catalog/db';
 import { deleteClip } from './catalog/clips';
 import { analysisImages, pruneUsage } from './catalog/analyses';
+import { checkImages, countChecksBefore, deleteChecksBefore } from './catalog/still-checks';
 import { deleteEventsBefore } from './catalog/events';
 import type { AuditLog } from './audit/audit-log';
 import type { Config } from './config/defaults';
@@ -249,15 +250,22 @@ export class Storage extends EventEmitter {
     if (dry) {
       deleted.events = (db.prepare('SELECT COUNT(*) AS n FROM events WHERE start_ts < ?').get(eventsBefore) as { n: number }).n;
       deleted.streamLog = (db.prepare('SELECT COUNT(*) AS n FROM stream_log WHERE ts < ?').get(logBefore) as { n: number }).n;
+      deleted.stillChecks = countChecksBefore(this.d.catalog, eventsBefore);
     } else {
       deleted.events = deleteEventsBefore(this.d.catalog, eventsBefore);
-      // Analysis images whose analysis is gone (deleted with its event).
-      const keep = analysisImages(this.d.catalog);
-      const dir = join(cfg.server.dataDir, 'analytics', cfg.camera.id);
-      for (const f of existsSync(dir) ? readdirSync(dir) : []) {
-        const path = join(dir, f);
-        if (!keep.has(path)) try { unlinkSync(path); } catch { /* gone */ }
-      }
+      // Still checks (cams #179) are kept as long as events, by their second.
+      deleted.stillChecks = deleteChecksBefore(this.d.catalog, eventsBefore);
+      // Images no row names: analyses' (deleted with their event) in
+      // analytics/, still checks' in their own folder, still-checks/.
+      const sweep = (folder: string, keep: Set<string>) => {
+        const dir = join(cfg.server.dataDir, folder, cfg.camera.id);
+        for (const f of existsSync(dir) ? readdirSync(dir) : []) {
+          const path = join(dir, f);
+          if (!keep.has(path)) try { unlinkSync(path); } catch { /* gone */ }
+        }
+      };
+      sweep('analytics', analysisImages(this.d.catalog));
+      sweep('still-checks', checkImages(this.d.catalog));
       pruneUsage(this.d.catalog, new Date(now - 400 * DAY).toISOString().slice(0, 10));
       deleted.streamLog = this.d.log.deleteBefore(logBefore);
     }

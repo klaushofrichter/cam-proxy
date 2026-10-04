@@ -63,7 +63,7 @@ beforeEach(() => {
   log = new StreamLog(c, () => now);
   now = T0 + 3000;
   config = structuredClone(DEFAULTS);
-  config.analytics.googleVision = { enabled: true, monthlyLimit: 100, dailyCap: 0 };
+  config.analytics.googleVision = { enabled: true, monthlyLimit: 100, dailyCap: 0, checksPerDay: 10 };
   stills = new Map();
   calls = [];
   answers = [];
@@ -153,7 +153,7 @@ describe('AnalyticsService', () => {
     still(T0 + 1000, 7);
     still(T0 + 61_000, 7);
     still(T0 + 121_000, 7);
-    config.analytics.googleVision = { enabled: true, monthlyLimit: 2, dailyCap: 1 };
+    config.analytics.googleVision = { enabled: true, monthlyLimit: 2, dailyCap: 1, checksPerDay: 10 };
     const s = service();
     const [a, b] = [event('person'), event('person', T0 + 60_000)];
     s.onEvent(a);
@@ -171,7 +171,7 @@ describe('AnalyticsService', () => {
 
   // Review focus 2.
   it('counts per camera-local day and month', async () => {
-    config.analytics.googleVision = { enabled: true, monthlyLimit: 1, dailyCap: 0 };
+    config.analytics.googleVision = { enabled: true, monthlyLimit: 1, dailyCap: 0, checksPerDay: 10 };
     const late = Date.parse('2026-10-01T04:58:00Z'); // 23:58 CDT on Sep 30
     still(late + 1000, 1);
     still(late + 181_000, 1); // 00:01 CDT on Oct 1: a new month
