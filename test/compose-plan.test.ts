@@ -1,6 +1,6 @@
 // test/compose-plan.test.ts
 import { describe, expect, it } from 'vitest';
-import { compositionWindow, COMPOSE_MAX_S, COMPOSE_MAX_S_1080P, composeMaxS, formatSeconds, planComposition, type ClipSpan } from '../src/compose/plan';
+import { compositionWindow, COMPOSE_MAX_S, COMPOSE_MAX_S_1080P, composeMaxS, formatSeconds, planComposition, planSeconds, type ClipSpan } from '../src/compose/plan';
 
 const T = Date.UTC(2026, 8, 28, 19, 0, 0);
 const s = (sec: number) => T + sec * 1000;
@@ -152,6 +152,84 @@ describe('compositionWindow and the planner agree on the length', () => {
       expect(w).toEqual({ ok: true, start: s(-preS), end: s(-preS + want), durationS: want });
       expect(p).toMatchObject({ ok: true, durationS: want });
       if (p.ok) expect(p.segments.reduce((n, x) => n + (x.kind === 'clip' ? Math.ceil(x.outS - x.inS) : 1), 0)).toBe(want);
+    } else {
+      expect(w).toEqual({ ok: false, error: want });
+      expect(p).toEqual({ ok: false, error: want });
+    }
+  });
+});
+
+// Phase 3 of #179: a window around a second (`at`), no anchor clip. The span
+// is the second itself; each second is a clip that covers it, else a still,
+// else a card (spec 2026-10-04-still-checks-design §13).
+describe('planComposition around a second', () => {
+  const at = s(100);
+  const second = { start: at, end: at + 1000 };
+  const kinds = (p: ReturnType<typeof planComposition>) => (p.ok ? p.segments.map((x) => x.kind) : p.error);
+
+  it('is the clip where one covers the whole window', () => {
+    const c: ClipSpan = { id: 7, start: s(80), end: s(130), path: '/c/7.mp4' };
+    const p = planComposition({ span: second, preS: 10, postS: 10, clips: [c], stillAt: all });
+    expect(p).toEqual({ ok: true, start: s(90), end: s(111), durationS: 21, segments: [{ kind: 'clip', clipId: 7, path: '/c/7.mp4', inS: 10, outS: 31 }] });
+  });
+
+  it('crosses a clip edge: stills before the clip starts, the clip after', () => {
+    const c: ClipSpan = { id: 8, start: s(97), end: s(140), path: '/c/8.mp4' };
+    const p = planComposition({ span: second, preS: 10, postS: 10, clips: [c], stillAt: all });
+    if (!p.ok) throw new Error(p.error);
+    expect(p.segments.slice(0, 7)).toEqual([90, 91, 92, 93, 94, 95, 96].map((x) => ({ kind: 'still', ts: s(x) })));
+    expect(p.segments[7]).toEqual({ kind: 'clip', clipId: 8, path: '/c/8.mp4', inS: 0, outS: 14 });
+    expect(planSeconds(p)).toEqual({ clip: 14, still: 7, card: 0 });
+  });
+
+  it('is stills only where no clip is near', () => {
+    const p = planComposition({ span: second, preS: 10, postS: 10, clips: [], stillAt: all });
+    if (!p.ok) throw new Error(p.error);
+    expect(p.segments).toHaveLength(21);
+    expect(p.segments.every((x) => x.kind === 'still')).toBe(true);
+    expect(planSeconds(p)).toEqual({ clip: 0, still: 21, card: 0 });
+  });
+
+  it('shows a gap in the stills as cards', () => {
+    const gap = (t: number) => (t >= s(95) && t < s(98) ? null : t);
+    const p = planComposition({ span: second, preS: 10, postS: 10, clips: [], stillAt: gap });
+    expect(kinds(p)).toEqual([...Array(5).fill('still'), 'card', 'card', 'card', ...Array(13).fill('still')]);
+    if (p.ok) expect(planSeconds(p)).toEqual({ clip: 0, still: 18, card: 3 });
+  });
+
+  it('plans all cards where nothing covers it (the API refuses that)', () => {
+    const p = planComposition({ span: second, preS: 1, postS: 1, clips: [], stillAt: none });
+    expect(kinds(p)).toEqual(['card', 'card', 'card']);
+    if (p.ok) expect(planSeconds(p)).toEqual({ clip: 0, still: 0, card: 3 });
+  });
+
+  it('refuses a plan with neither a clip nor a span', () => {
+    expect(planComposition({ preS: 0, postS: 0, clips: [], stillAt: all })).toEqual({ ok: false, error: 'a clip or a span is required' });
+  });
+});
+
+// The same length rule around a second: the anchor is 1 s long, so the
+// result is pre + 1 + post (cams's AT_LENGTH_CASES are the same table).
+const AT_LENGTH_CASES: [string, number, number, number, number | string][] = [
+  ['the second alone', 0, 0, COMPOSE_MAX_S, 1],
+  ['the default, -10/+10', 10, 10, COMPOSE_MAX_S, 21],
+  ['up to the limit', 149, 150, COMPOSE_MAX_S, 300],
+  ['one second over the limit', 150, 150, COMPOSE_MAX_S, 'at most 300 s (5:00)'],
+  ['all before', 299, 0, COMPOSE_MAX_S, 300],
+  ['1080p: up to its limit', 60, 59, COMPOSE_MAX_S_1080P, 120],
+  ['1080p: over its limit', 60, 60, COMPOSE_MAX_S_1080P, 'at most 120 s (2:00)'],
+  ['a negative roll cuts the second', -1, 5, COMPOSE_MAX_S, 'at least 1 s of the clip must remain'],
+];
+
+describe('compositionWindow around a second', () => {
+  const second = { start: s(0), end: s(1) };
+  it.each(AT_LENGTH_CASES)('%s (pre %d, post %d, at most %d)', (_name, preS, postS, maxS, want) => {
+    const w = compositionWindow(second, preS, postS, maxS);
+    const p = planComposition({ span: second, preS, postS, maxS, clips: [], stillAt: all });
+    if (typeof want === 'number') {
+      expect(w).toEqual({ ok: true, start: s(-preS), end: s(-preS + want), durationS: want });
+      expect(p).toMatchObject({ ok: true, durationS: want });
+      if (p.ok) expect(p.segments).toHaveLength(want);
     } else {
       expect(w).toEqual({ ok: false, error: want });
       expect(p).toEqual({ ok: false, error: want });

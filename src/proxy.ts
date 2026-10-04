@@ -618,7 +618,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // key; anyone else goes on to the access check as for an unknown route.
   app.use('/api', localApi({ health: healthNow }));
   app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit }));
-  app.use('/api', requireAccess('client', access), composeApi({ config: () => running, catalog, composer, stillsIn, paused: () => storage.paused(), font }));
+  app.use('/api', requireAccess('client', access), composeApi({ config: () => running, catalog, composer, stillsIn, paused: () => storage.paused(), font, audit }));
   app.use('/api', requireAccess('client', access), stillChecksApi({ config: () => running, catalog, analytics, audit }));
   app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, status: () => status, cameraName, sse, stills: () => stills, recordings: () => recordings }));
   // The audit log: admins and the audit token, GET (and HEAD) only. The access check is
