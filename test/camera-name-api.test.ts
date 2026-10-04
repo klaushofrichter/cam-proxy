@@ -16,6 +16,7 @@ const rename = (name: string) => expect(sim.sim.engine.settings.setName(name)).t
 const setDevNameCalls = () => sim.sim.engine.counters.setCalls.filter((c) => c === 'SetDevName').length;
 // The next SetDevName fails with this rspCode (a refused write leaves the old name).
 const refuseNext = (rspCode: number) => sim.sim.engine.faults.set({ name: 'settings.fail', cmds: ['SetDevName'], rspCode, count: 1 });
+const addr = () => sim.camera.host;
 const cameraMessages = () => p.proxy.log.since(0, { types: ['camera'] }, 100).map((m) => ({ cam: m.cam, ...m.data }));
 const auditOf = async (action: string) => (await request(p.base).get(`/control/audit?action=${action}&after=&limit=50`).set(admin())).text.split('\n').filter(Boolean).map((l) => JSON.parse(l));
 
@@ -49,11 +50,12 @@ describe('reading the name', () => {
   });
 
   it('no stream message while the name stays the same (the configured fallback was never announced)', async () => {
+    // At the start: the address alone (no name told yet; pi-config spec §2).
     // The first read differs from the configured fallback: one message for that.
-    expect(cameraMessages()).toEqual([{ cam: 'cam1', name: 'Den' }]);
+    expect(cameraMessages()).toEqual([{ cam: 'cam1', address: addr() }, { cam: 'cam1', name: 'Den', address: addr() }]);
     await p.proxy.status.checkNow();
     await p.proxy.status.checkNow();
-    expect(cameraMessages()).toHaveLength(1);
+    expect(cameraMessages()).toHaveLength(2);
   });
 
   it('a rename made elsewhere (the Reolink app) is picked up by the poll: one SSE message', async () => {
@@ -65,7 +67,7 @@ describe('reading the name', () => {
       await p.proxy.status.checkNow();
       await sse.until(() => sse.events.length >= 1);
       await new Promise((r) => setTimeout(r, 100));
-      expect(sse.events).toEqual([{ id: expect.any(Number), event: 'camera', data: { cam: 'cam1', name: 'Backyard Left' } }]);
+      expect(sse.events).toEqual([{ id: expect.any(Number), event: 'camera', data: { cam: 'cam1', name: 'Backyard Left', address: addr() } }]);
       expect((await request(p.base).get('/api/cameras').set(auth(CLIENT_TOKEN))).body[0].name).toBe('Backyard Left');
     } finally {
       sse.close();
@@ -81,8 +83,8 @@ describe('reading the name', () => {
   it('the default stream (no types) includes camera messages, and a resume replays them', async () => {
     const sse = sseConnect(`${p.base}/api/stream?since=0`, auth(CLIENT_TOKEN));
     try {
-      await sse.until(() => sse.events.filter((e) => e.event === 'camera').length >= 2);
-      expect(sse.events.filter((e) => e.event === 'camera').map((e) => e.data)).toEqual([{ cam: 'cam1', name: 'Den' }, { cam: 'cam1', name: 'Backyard Left' }]);
+      await sse.until(() => sse.events.filter((e) => e.event === 'camera').length >= 3);
+      expect(sse.events.filter((e) => e.event === 'camera').map((e) => e.data)).toEqual([{ cam: 'cam1', address: addr() }, { cam: 'cam1', name: 'Den', address: addr() }, { cam: 'cam1', name: 'Backyard Left', address: addr() }]);
     } finally {
       sse.close();
     }
@@ -102,7 +104,7 @@ describe('PUT /control/camera/name', () => {
     expect(sim.sim.engine.settings.name).toBe('Front Door (1)');
     // At once, without waiting for the next poll.
     expect((await request(p.base).get('/api/cameras').set(auth(CLIENT_TOKEN))).body[0].name).toBe('Front Door (1)');
-    expect(cameraMessages().slice(before)).toEqual([{ cam: 'cam1', name: 'Front Door (1)' }]);
+    expect(cameraMessages().slice(before)).toEqual([{ cam: 'cam1', name: 'Front Door (1)', address: addr() }]);
     await p.proxy.status.checkNow(); // the poll reads the same name: nothing more
     expect(cameraMessages().slice(before)).toHaveLength(1);
     const rec = (await auditOf('camera-name')).at(-1);

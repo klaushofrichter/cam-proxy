@@ -148,7 +148,18 @@ come only from the environment.
   setting (e.g. `stills.intervall: unknown setting`).
 - **Changed in the admin UI** (or `PUT /control/config`): the change is stored
   as an override in `<dataDir>/overrides.json`. The effective value is
-  default, then file, then override.
+  default, then file, then override, then the environment (below).
+- **From the environment** (the Pi's one `.env`, [docs/raspberry-pi.md](docs/raspberry-pi.md)):
+  `CAMERA_HOST` (or `CAMPROXY_CAMERA_HOST`) sets `camera.host` (address or
+  name, optional `:port`), and `PI_ADDRESS` (or `CAMPROXY_PI_ADDRESS`; address
+  or name, no port) sets `ftp.publicHost` and `server.publicUrl`
+  (`http://<PI_ADDRESS>:<server.port>`). They win over overrides and
+  config.json, show read-only ("set in .env") on the Settings page, and an
+  override of them answers 400. With `CAMPROXY_ENV_FILE` (the mounted `.env`),
+  cam-proxy reads these two keys from that file at every start, and the file
+  wins over the process environment (a restarted container keeps its old
+  environment); nothing else is read from it. The startup line `config_env`
+  names what the environment set (addresses only).
 - **Live or restart:** most settings apply at once. Camera, go2rtc, stills,
   previews, the ONVIF subscription settings and most FTP settings (all but
   `ftp.stream`, `ftp.stalledHours` and `ftp.maxGB`) apply after a restart; the `restart` action
@@ -212,7 +223,8 @@ while one not yet cached counts as a normal request); more answer 429
 ```sh
 api() { curl -s -H "Authorization: Bearer $CAMPROXY_TOKEN" "http://localhost:8480/api$1"; }
 api /cameras
-# [{"id":"cam1","name":"Backyard Left","online":true,"lastEventTs":1790000000000,"stream":{"up":true,"lastFrameTs":1790000000000},"publicUrl":null}]
+# [{"id":"cam1","name":"Backyard Left","online":true,"lastEventTs":1790000000000,"stream":{"up":true,"lastFrameTs":1790000000000},"publicUrl":null,"address":"192.168.1.20"}]
+# address: the camera's camera.host as the proxy runs it (cams reaches the camera there)
 api /cameras/cam1   # the same entry for one camera (404 for another id)
 api '/cameras/cam1/events?kind=person&limit=10'
 # [{"id":12,"kind":"person","source":"onvif","start":1790000000000,"end":1790000004000,"endReason":"state"}]
@@ -532,7 +544,7 @@ privacy and cost): [docs/analytics.md](docs/analytics.md).
 - **Where the key is:** cam2's proxy in the cluster has no key (Klaus,
   2026-09-30), so analytics stays off there; an admin can give it one with
   the Settings field until its next restart. The Pi gets the key in
-  `/srv/cam-proxy/.env`; restart it with `docker compose up -d`, then turn it
+  `/srv/cam-proxy/config/.env`; restart it with `docker compose up -d`, then turn it
   on in Settings with a small monthly limit.
 
 ## Storage management
@@ -641,8 +653,8 @@ in the Reolink app, reaches stream clients once as a `camera` message.
 | `GET /control/status` | `{version, camera (incl. name (the camera's name; the configured `camera.name` until the camera was read), nameSource: camera\|config, webUiUrl, serial, reboot: {kind: reboot\|powercycle, requestedAt, confirmed, phase: power-cycling\|rebooting\|back\|not-back, offAt, endedAt, downSec} or null, and poeSwitch: {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state: on\|off\|elsewhere\|unknown, checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result, stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null (the last recording download over Baichuan), cache: {bytes, files, capBytes}}, analytics: [{…, keyMasked, keySource}], analyticsUnmapped}` |
 | `PUT /control/camera/name` | `{"name":"Backyard Left"}`: renames the camera on the camera itself ([Camera name](#camera-name)). 200 `{name}` (the name read back from the camera); 400 `{"error":"invalid_name","reason":…}` by the camera's rules (the camera is not asked) or refused by the camera (rspCode -54, -56); 503 `{"error":"camera_offline"}`; 502 `camera_error`. Admin token, or an admin session with `X-CamProxy-UI: 1`. Audited as `camera-name` |
 | `GET /control/stats` | `{disk: {catalog, audit, stills, previews, clips, recordings}` (each `{bytes, files, oldest, newest, growthPerDay}`), `events, stream, sse, storage}` |
-| `GET /control/config` | every setting: `{value, source, restart, pending, next?, type}` (`type`: `integer`, `boolean` or `string`); secrets never appear |
-| `PUT /control/config` | overrides, e.g. `{"sse":{"pingS":10}}`; a bad value answers 400 naming it, and nothing is written |
+| `GET /control/config` | every setting: `{value, source, env?, restart, pending, next?, type}` (`source`: `default`, `file`, `override` or `env`; `env`: the variable that sets it; `type`: `integer`, `boolean` or `string`); secrets never appear |
+| `PUT /control/config` | overrides, e.g. `{"sse":{"pingS":10}}`; a bad value answers 400 naming it, and nothing is written; so does a setting the environment sets (`camera.host: set in .env (CAMERA_HOST)`) |
 | `PUT /control/secrets/google-vision-key` | `{"key":"..."}` (20 to 200 printable ASCII characters, no spaces; else 400 `invalid`): sets the Google Vision key in memory only, at once, until the process restarts; answers `{keySource: "manual", keyMasked, replaced}`, never the key; audited as `secret-override` |
 | `DELETE /control/config/{path}` | removes one override |
 | `POST /control/actions/{name}` | `onvif-resubscribe`, `restart` (202, started: reconnects to the camera and applies restart settings; the process runs on); `camera-test`, `retention-run` (`{"dryRun":true}` previews); `camera-ftp-setup`, `camera-ftp-test` (409 `not_configured` without `ftp.publicHost` or the FTP password), `camera-ftp-off` (409 `not_configured` only without the FTP password when the camera shows its FTP user or password masked: it would write them back masked); any camera call that fails answers 502 `camera_error` |
@@ -650,6 +662,8 @@ in the Reolink app, reaches stream clients once as a `camera` message.
 | `POST /control/actions/camera-powercycle` | power-cycles the camera through its PoE switch (`camera.poeSwitch`): logs in to the switch, checks that the camera's port has PoE on and draws power, cuts it for `offSeconds`, turns it on again and logs out (always). Once the PoE-off request is sent, any failure turns PoE on again (retried for about 60 s) and answers 502 `switch_error` with `poeOff: true` and `turnedOn`. 202 `{offAt, onAt, watts}` once PoE is back on; 409 `not_configured` (no switch, or no `CAMPROXY_POE_SWITCH_PASSWORD`), `switch_busy` (someone is logged in to the switch's web UI) or `no_power` (the port has PoE off or draws 0 W: nothing is switched); 502 `switch_auth` (a wrong password), `switch_unreachable` or `switch_error`; 429 as `camera-reboot` (the 120 s cooldown is shared). `/control/status` shows `camera.reboot` with `kind: powercycle`, `power-cycling` while PoE is off, then `rebooting` until the camera answers. Audited as `camera-powercycle`. See [docs/poe-switch.md](docs/poe-switch.md) |
 | `POST /control/actions/camera-poe-on` | recovery: turns the camera's port on if its PoE is off (no power check, no cooldown; the switch lock applies). 200 the reading plus `wasOn`; 409 and 502 as `camera-powercycle`. Audited as `camera-poe-on` |
 | `POST /control/actions/poe-switch-read` | reads the camera's port on the switch now (log in, read, log out; never polled): `{at, port, index, poe, watts, link, sn, firmware}`; 409 and 502 as `camera-powercycle`. Audited as `control-action` |
+| `POST /control/actions/find-camera` | Settings → Find camera: one ONVIF WS-Discovery Probe (NetworkVideoTransmitter, sent twice) to `239.255.255.250:3702`, answers collected for 3 s; no login. 200 `{devices: [{endpoint, address (the first XAddr's host, without the ONVIF port), sender (the address the answer came from), mismatch (they differ), useAddress (what "Use this address" writes: the sender on a mismatch), xaddrs, name, hardware, model (from the scopes), current (the address is `camera.host`'s)}], tookMs, envFile: {writable, path?, reason?}}`; at most 64 devices; 6 a minute per client together with `camera-address` (429 `rate_limited`). On the Pi (host network) it probes the LAN; in a pod network nothing answers. Audited as `control-action` |
+| `POST /control/actions/camera-address` | `{"host":"192.168.1.20"}` (address or name, optional `:port`; else 400 `invalid`): writes `CAMERA_HOST=<host>` into the file `CAMPROXY_ENV_FILE` names (absolute, named `.env` or `.env.<word>`, a regular file, under 64 KB). Only that line changes (the last `CAMERA_HOST`, or `CAMPROXY_CAMERA_HOST` when the file sets that; appended when neither), every other byte stays; a backup `.env.bak-<YYYYMMDD-HHMMSS>` (UTC) goes next to it (the newest 5 are kept), then a temp file and a rename, the file's mode kept; shares find-camera's 6 a minute. 200 `{host, previous, key, backup, restart: true}`: the address applies after `restart-proxy` (the Settings page runs it). 409 `not_available` `{detail, line}` without `CAMPROXY_ENV_FILE`, for a path the guard refuses, or a directory it can't write (mount the directory, not the file). Audited as `camera-address` (old → new, the backup; never another line) |
 | `POST /control/actions/restart-proxy` | restarts the proxy process: 202, then the normal graceful stop (the same as SIGTERM; `proxy-stop` reason `restart-requested`) and exit 0, also after 15 s if the stop hangs. Compose (`restart: unless-stopped`) or the cluster starts it again; run directly (`npm start`), the process just ends. Admin sessions end with the process. Audited as `proxy-restart` |
 | `POST /control/actions/inventory` | `{"kind":"stills"}`, `{"kind":"clips"}`, `{"kind":"clips","camera":true}` (compare with the camera's SD card on `ftp.stream`) or `{"kind":"events"}` (the events against the SD card's recordings on `ftp.stream`, always with the camera): starts an inventory in the background ([the spec](docs/superpowers/specs/2026-10-02-inventory-design.md)); 202 `{runId}`; 400 `invalid` for an unknown kind or a `camera` it can't use; 409 `inventory_busy` `{runId}` while an inventory or repair runs (one at a time); 503 `stopping` once the proxy is stopping. Poll `GET /control/inventory/runs/{id}`. Audited as `inventory` when it ends |
 | `POST /control/actions/inventory-repair` | `{"kind":"clips","runId":"clips-…"}`: fetches the recordings that clips run (with the camera, finished, less than an hour old) found missing locally, over Baichuan at low priority (a viewer's download goes first), on `ftp.stream`, the oldest first; at most 50 clips or 200 MB per run (a recording larger than 200 MB is skipped as `too-big`; one that would pass the 200 MB after others is skipped and smaller ones still come), 1 s apart, never past `ftp.maxGB` or while storage is paused; it stops after 3 failures in a row, and at once when the camera refuses a download or is offline (a busy camera Search is tried 3 times, then that clip is skipped as `busy`). A recording the cache can't keep goes through a temp file in `<dataDir>/inventory/tmp`, emptied at startup. The clips are stored like FTP ones with `origin: "camera"`, without an SSE message. 202 `{runId}` (`clipsrepair-…`); 400 `invalid`; 404 `not_found` (no such run); 409 `report_stale`, `not_repairable` or `inventory_busy`; 503 `stopping`. Audited as `inventory-repair` when it ends |

@@ -36,7 +36,7 @@ describe('client API', () => {
   // name: the camera's own (cam-sim's "Cam"), not the configured "Den" (camera-name design).
   it('lists the camera with its state', async () => {
     const r = await request(p.base).get('/api/cameras').set(auth());
-    expect(r.body).toEqual([{ id: 'cam1', name: 'Cam', online: true, lastEventTs: 3000, stream: process.env.CAMPROXY_TEST_GO2RTC ? expect.objectContaining({ up: expect.any(Boolean) }) : null, publicUrl: null }]);
+    expect(r.body).toEqual([{ id: 'cam1', name: 'Cam', online: true, lastEventTs: 3000, stream: process.env.CAMPROXY_TEST_GO2RTC ? expect.objectContaining({ up: expect.any(Boolean) }) : null, publicUrl: null, address: sim.camera.host }]);
   });
 
   // #75: a recovered event (from the SD card) is no fresh activity.

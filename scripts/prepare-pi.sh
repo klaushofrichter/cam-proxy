@@ -55,6 +55,10 @@ fi
 echo "== cam-proxy folder"
 install -d -o "$USER_NAME" -g "$USER_NAME" -m 0750 /srv/cam-proxy
 install -d -o "$USER_NAME" -g "$USER_NAME" -m 0750 /srv/cam-proxy/data
+# The one settings file, config/.env (docs/raspberry-pi.md): the container
+# (uid 1000) writes it ("Use this address"), so the folder is that user's only.
+install -d -o "$USER_NAME" -g "$USER_NAME" -m 0700 /srv/cam-proxy/config
+[ "$(id -u "$USER_NAME")" = 1000 ] || echo "warning: $USER_NAME is not uid 1000, the container's user: chown 1000:1000 /srv/cam-proxy/data /srv/cam-proxy/config"
 
 echo "== check"
 docker --version

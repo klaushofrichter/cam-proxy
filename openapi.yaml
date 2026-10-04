@@ -38,7 +38,7 @@ paths:
     get:
       summary: The camera and its state
       responses:
-        '200': { description: '[{ id, name, online, lastEventTs (the newest live (non-recovered) event''s start, or null), stream: { up, lastFrameTs } | null, publicUrl }] (name: the camera''s own name as read from it, the configured camera.name until the camera was first read; stream is null when stills are off; publicUrl is server.publicUrl or null)' }
+        '200': { description: '[{ id, name, online, lastEventTs (the newest live (non-recovered) event''s start, or null), stream: { up, lastFrameTs } | null, publicUrl, address }] (address: the camera''s camera.host as it runs, host and optional port, for clients that reach the camera directly; name: the camera''s own name as read from it, the configured camera.name until the camera was first read; stream is null when stills are off; publicUrl is server.publicUrl or null)' }
         '401': { description: missing or wrong token }
   /api/cameras/{cam}:
     get:
@@ -46,7 +46,7 @@ paths:
       parameters:
         - { name: cam, in: path, required: true, schema: { type: string } }
       responses:
-        '200': { description: '{ id, name, online, lastEventTs, stream, publicUrl }, as in GET /api/cameras' }
+        '200': { description: '{ id, name, online, lastEventTs, stream, publicUrl, address }, as in GET /api/cameras' }
         '401': { description: missing or wrong token }
         '404': { description: unknown camera }
   /api/cameras/{cam}/extent:
@@ -318,9 +318,13 @@ paths:
         `{eventId, kind, start, end, provider, status, reason, stillTs,
         summary, objects}` (`analysis` messages stored before this version
         lack kind, start, end, stillTs and summary: a missing `summary` means
-        unknown, not "nothing found"); camera `{cam, name}` (once per change
+        unknown, not "nothing found"); camera `{cam, name, address}` (once per change
         of the camera's name: a rename through PUT /control/camera/name or one
-        made in the Reolink app, seen by the status poll); still-check (a new
+        made in the Reolink app, seen by the status poll; and once per change
+        of the camera's address, camera.host as it runs, when the camera side
+        starts with another one: then `name` is the name last told, left out
+        while none was told yet; messages stored before this version have no
+        `address`); still-check (a new
         still check, cams #179) `{cam, id, stillTs, provider, summary, objects,
         events: [{id, kind, confirmed}], imageUrl, requestedAt, tookMs}`; annotation
         (reserved, not sent yet); still
@@ -480,7 +484,7 @@ paths:
     get:
       summary: Every setting with value, source, restart flag and pending next value
       responses:
-        '200': { description: '{ "<path>": { value, source, restart, pending, next?, type (integer, boolean or string) } }' }
+        '200': { description: '{ "<path>": { value, source (default, file, override, env), env? (the variable that sets it: CAMERA_HOST, PI_ADDRESS or their CAMPROXY_ names), restart, pending, next?, type (integer, boolean or string) } }' }
     put:
       summary: Sets overrides (stored in overrides.json); live settings apply at once
       requestBody:
@@ -489,7 +493,7 @@ paths:
             schema: { type: object, description: 'a partial config.json, e.g. {"sse":{"pingS":10}}' }
       responses:
         '200': { description: the new view (as GET) }
-        '400': { description: '{ error: invalid, detail: "<path>: <why>" }' }
+        '400': { description: '{ error: invalid, detail: "<path>: <why>" } (also "<path>: set in .env (<VARIABLE>)" for a setting the environment sets)' }
   /control/config/{path}:
     delete:
       summary: Removes one override (back to the file or default value)
@@ -500,7 +504,7 @@ paths:
         '400': { description: unknown setting }
   /control/actions/{name}:
     post:
-      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart (the camera side), camera-reboot, camera-powercycle, camera-poe-on, poe-switch-read, restart-proxy (the process), inventory ({kind, camera?}), inventory-repair ({kind, runId}), inventory-cancel
+      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart (the camera side), camera-reboot, camera-powercycle, camera-poe-on, poe-switch-read, restart-proxy (the process), inventory ({kind, camera?}), inventory-repair ({kind, runId}), inventory-cancel, find-camera, camera-address ({host})
       description: |
         camera-reboot reboots the camera (about a minute offline; every camera token becomes invalid).
         camera-powercycle cuts the camera's PoE on its switch (camera.poeSwitch, CAMPROXY_POE_SWITCH_PASSWORD)
@@ -518,16 +522,21 @@ paths:
         run less than an hour old>} adds the missing events as recovered ones (at most 1000 per run). One run of
         either at a time.
         They write an inventory or inventory-repair audit record when they end, no control-action.
+        find-camera sends an ONVIF WS-Discovery Probe (NetworkVideoTransmitter) to 239.255.255.250:3702
+        and lists what answers within 3 s (no login; on the Pi the container's host network reaches the LAN);
+        at most 6 per minute per client. camera-address ({"host":"<address>[:port]"}) writes CAMERA_HOST into
+        the .env file named by CAMPROXY_ENV_FILE (only that line; a backup .env.bak-<UTC time> first, the newest 5 kept; temp
+        file + rename) and writes a camera-address audit record; the address applies after restart-proxy.
       parameters:
         - { name: name, in: path, required: true, schema: { type: string } }
       responses:
-        '200': { description: 'camera-test and retention-run results; camera-ftp-setup/-off: {ftp} (the camera''s settings, no password); camera-ftp-test: {ok, rspCode}; poe-switch-read: {at, port, index, poe, watts, link, sn, firmware}; camera-poe-on: the same plus wasOn; inventory-cancel: { cancelled, runId }' }
+        '200': { description: 'camera-test and retention-run results; camera-ftp-setup/-off: {ftp} (the camera''s settings, no password); camera-ftp-test: {ok, rspCode}; poe-switch-read: {at, port, index, poe, watts, link, sn, firmware}; camera-poe-on: the same plus wasOn; inventory-cancel: { cancelled, runId }; find-camera: { devices: [{endpoint, address (XAddr host), sender (UDP source), mismatch, useAddress (sender on a mismatch), xaddrs, name, hardware, model, current}], tookMs, envFile: {writable, path?, reason?} }; camera-address: { host, previous, key, backup, restart: true }' }
         '202': { description: 'started (onvif-resubscribe, restart, restart-proxy); camera-reboot: { confirmed } (false: the camera dropped the connection after receiving the request); camera-powercycle: { offAt, onAt, watts } once PoE is back on; inventory, inventory-repair: { runId }' }
-        '400': { description: 'inventory: invalid (an unknown or missing kind, camera not a boolean, or camera for a kind without a camera compare); inventory-repair: invalid (a kind without a repair, or runId not a run id)' }
+        '400': { description: 'camera-address: invalid (not an address or name with an optional :port); inventory: invalid (an unknown or missing kind, camera not a boolean, or camera for a kind without a camera compare); inventory-repair: invalid (a kind without a repair, or runId not a run id)' }
         '404': { description: 'unknown action; inventory-repair: not_found (no such check run of the kind)' }
-        '409': { description: 'not_configured (camera-ftp-setup/-test: ftp.publicHost or the FTP password is not set; camera-powercycle, poe-switch-read: no switch or no CAMPROXY_POE_SWITCH_PASSWORD); camera-powercycle, poe-switch-read: switch_busy (someone is logged in to the switch''s web UI), no_power (the port has PoE off or draws 0 W; nothing switched); inventory, inventory-repair: inventory_busy { runId } (one runs already); inventory-repair: report_stale (the check run is an hour old or more), not_repairable (it did not finish, did not compare with the camera, or found nothing missing locally)' }
+        '409': { description: 'camera-address: not_available { detail, line } (CAMPROXY_ENV_FILE not set, the file fails the path guard, or its directory is not writable; line is what to add by hand); not_configured (camera-ftp-setup/-test: ftp.publicHost or the FTP password is not set; camera-powercycle, poe-switch-read: no switch or no CAMPROXY_POE_SWITCH_PASSWORD); camera-powercycle, poe-switch-read: switch_busy (someone is logged in to the switch''s web UI), no_power (the port has PoE off or draws 0 W; nothing switched); inventory, inventory-repair: inventory_busy { runId } (one runs already); inventory-repair: report_stale (the check run is an hour old or more), not_repairable (it did not finish, did not compare with the camera, or found nothing missing locally)' }
         '503': { description: 'stopping (inventory, inventory-repair: the proxy is stopping and starts no run)' }
-        '429': { description: 'camera-reboot, camera-powercycle: too_soon, within 120 s of the last reboot or power-cycle, or while one is being sent (Retry-After)' }
+        '429': { description: 'find-camera, camera-address: rate_limited (more than 6 per minute, together); camera-reboot, camera-powercycle: too_soon, within 120 s of the last reboot or power-cycle, or while one is being sent (Retry-After)' }
         '502': { description: 'the camera refused or failed the call; camera-reboot: the request never reached the camera (camera_offline, camera_auth_failed, camera_error); camera-powercycle, camera-poe-on, poe-switch-read: switch_auth, switch_unreachable, switch_error (camera-powercycle, camera-poe-on: poeOff, turnedOn when PoE may have been cut)' }
   /control/log:
     get:

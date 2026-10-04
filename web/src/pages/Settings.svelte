@@ -5,10 +5,13 @@
   import { api, ApiError } from '../lib/api';
   import AnalyticsSettings from '../components/AnalyticsSettings.svelte';
   import PoeSwitchCard from '../components/PoeSwitchCard.svelte';
+  import FindCameraCard from '../components/FindCameraCard.svelte';
+  import { envNote, isEnvSet } from '../lib/find-camera';
 
   import { parseSetting, type SettingType } from '../lib/settings';
 
-  interface Setting { value: unknown; source: 'default' | 'file' | 'override'; restart: boolean; pending: boolean; next?: unknown; type?: SettingType }
+  // `env`: the variable that sets it (source env: read-only here).
+  interface Setting { value: unknown; source: 'default' | 'file' | 'override' | 'env'; env?: string; restart: boolean; pending: boolean; next?: unknown; type?: SettingType }
   let view = $state<Record<string, Setting>>({});
   let drafts = $state<Record<string, string>>({});
   let message = $state('');
@@ -76,9 +79,10 @@
     <h2>Settings</h2>
     {#if Object.values(view).some((s) => s.pending)}<button onclick={() => void restart()} data-testid="restart">Restart to apply</button>{/if}
   </div>
-  <p class="muted small">From config.json, with changes made here kept as overrides in the data folder. Secrets are never shown or set here.</p>
+  <p class="muted small">From config.json, with changes made here kept as overrides in the data folder. Settings marked "set in .env" come from the environment (CAMERA_HOST, PI_ADDRESS) and win over both; change them in the .env file. Secrets are never shown or set here.</p>
   {#if message}<p class="msg" data-testid="settings-message">{message}</p>{/if}
   <AnalyticsSettings {view} onsaved={(v) => (view = v as Record<string, Setting>)} />
+  <FindCameraCard />
   <PoeSwitchCard />
   {#each Object.entries(groups) as [group, paths] (group)}
     <div class="card">
@@ -104,7 +108,8 @@
             <tr data-testid="setting-{p}">
               <td class="mono">{p.slice(group.length + 1)}</td>
               <td>
-                <input value={drafts[p] ?? shown(s.value)} oninput={(e) => (drafts[p] = e.currentTarget.value)} data-testid="input-{p}" disabled={typeof s.value === 'object' && s.value !== null} />
+                <input value={drafts[p] ?? shown(s.value)} oninput={(e) => (drafts[p] = e.currentTarget.value)} data-testid="input-{p}" disabled={(typeof s.value === 'object' && s.value !== null) || isEnvSet(s)} readonly={isEnvSet(s)} title={isEnvSet(s) ? envNote(s) : undefined} />
+                {#if isEnvSet(s)}<div class="env-note" data-testid="env-note-{p}">{envNote(s)}</div>{/if}
               </td>
               <td><span class="badge {s.source}" data-testid="source-{p}">{s.source}</span>{#if s.restart}<span class="badge restart" title="applies after a restart">restart</span>{/if}{#if s.pending}<span class="badge pending">next: {shown(s.next)}</span>{/if}</td>
               <td class="actions">
@@ -131,6 +136,9 @@
   input { width: 100%; max-width: 280px; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; }
   .badge { font-size: 11px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border); margin-right: 4px; color: var(--muted); }
   .badge.override { color: var(--accent); border-color: var(--accent); }
+  .badge.env { color: var(--accent); border-style: dashed; }
+  .env-note { margin-top: 4px; font-size: 12px; color: var(--muted); }
+  input:disabled { opacity: 0.7; cursor: not-allowed; }
   .badge.pending { color: #f59e0b; }
   .actions { white-space: nowrap; text-align: right; }
   button { padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); cursor: pointer; color: var(--text); }

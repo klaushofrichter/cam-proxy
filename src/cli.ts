@@ -1,4 +1,4 @@
-import { ConfigError, loadConfig } from './config/load';
+import { ConfigError, envSummary, loadConfig } from './config/load';
 import { createProxy } from './proxy';
 import { logger } from './log';
 
@@ -17,6 +17,8 @@ async function main(): Promise<void> {
   // A restart-proxy action stops the proxy and exits 0; compose or the
   // cluster starts it again (#71).
   const proxy = createProxy(loaded, { exit: (code) => process.exit(code) });
+  // Which settings the environment (the Pi's .env) set: addresses only.
+  logger.info(envSummary(loaded), 'config_env');
   await proxy.start();
   const shutdown = (sig: string) => {
     logger.info({ sig }, 'cam_proxy_stopping');
