@@ -743,8 +743,10 @@ cams phase 2 ships.
     field next to the daily cap (every analytics setting has one there);
     the rest of the admin UI stays phase 4 — cost: a field.
 33. Ruling: the POST has its own limiter, 20 per minute per client on top
-    of the general one; the image `GET …/still-checks/{id}.jpg` counts in
-    the image bucket (1200/min) like the analysis image — cost: none.
+    of the general one, counting the requests that pass the input check
+    (a malformed one costs nothing and is in the general limit); the image
+    `GET …/still-checks/{id}.jpg` counts in the image bucket (1200/min) like
+    the analysis image — cost: none.
 34. Ruling: retention reports `deleted.stillChecks` (rows) next to
     `deleted.events`, so the run result and the metric show them — cost: a
     label.
