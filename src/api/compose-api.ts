@@ -4,7 +4,7 @@ import { promisify } from 'util';
 import { clipById, listClips } from '../catalog/clips';
 import type { Catalog } from '../catalog/db';
 import type { Config } from '../config/defaults';
-import { planComposition } from '../compose/plan';
+import { compositionWindow, composeMaxS, planComposition } from '../compose/plan';
 import { SIZES, validTimeZone, type ComposeSize } from '../compose/ffmpeg';
 import type { createComposer } from '../compose/jobs';
 
@@ -26,10 +26,14 @@ export function composeApi(d: {
 
   r.post('/cameras/:cam/compositions', (req, res) => {
     if (!known(req, res)) return;
-    const b = (req.body ?? {}) as { clipId?: unknown; preS?: unknown; postS?: unknown; size?: unknown; badge?: unknown; timeZone?: unknown };
+    const b = (req.body ?? {}) as { clipId?: unknown; span?: unknown; preS?: unknown; postS?: unknown; size?: unknown; badge?: unknown; timeZone?: unknown };
     if (!Number.isSafeInteger(b.clipId) || typeof b.preS !== 'number' || typeof b.postS !== 'number' || typeof b.badge !== 'boolean' || typeof b.size !== 'string' || !(b.size in SIZES)) {
       return void res.status(400).json({ error: 'invalid', detail: 'clipId, preS, postS (seconds), size (sd, 360p, 720p, 1080p) and badge (true/false) are required' });
     }
+    // The recording the viewer chose (cams: the SD-card file), when it isn't
+    // the clip itself: the rolls apply to it (cams's dialog, 2026-10-04).
+    const span = b.span === undefined ? undefined : spanOf(b.span);
+    if (span === null) return void res.status(400).json({ error: 'invalid', detail: 'span is {start, end} in unix ms, start before end, at most a day apart' });
     // The viewer's zone for the cards' time (the pod runs in UTC).
     if (b.timeZone !== undefined && !(typeof b.timeZone === 'string' && validTimeZone(b.timeZone))) {
       return void res.status(400).json({ error: 'invalid', detail: 'timeZone must be an IANA zone such as America/Chicago' });
@@ -37,12 +41,22 @@ export function composeApi(d: {
     const row = clipById(d.catalog, b.clipId as number);
     if (!row || row.cam !== cam() || row.end_ts === null) return void res.status(404).json({ error: 'not_found' });
     if (d.paused()) return void res.status(503).json({ error: 'storage_paused' });
-    const span = (c: { id: number; start_ts: number; end_ts: number | null; path: string }) => ({ id: c.id, start: c.start_ts, end: c.end_ts ?? c.start_ts, path: c.path });
-    const from = row.start_ts - 600_000, to = row.end_ts + 60_000;
+    const toSpan = (c: { id: number; start_ts: number; end_ts: number | null; path: string }) => ({ id: c.id, start: c.start_ts, end: c.end_ts ?? c.start_ts, path: c.path });
+    const clip = toSpan(row);
+    // The span is the recording this clip is a copy of: it must overlap the
+    // clip by at least 1 s (the same 1 s as "at least 1 s must remain"), so
+    // a clip id can't be used to compose another time of day.
+    if (span && Math.min(span.end, clip.end) - Math.max(span.start, clip.start) < 1000) {
+      return void res.status(400).json({ error: 'invalid', detail: 'span must overlap the clip by at least 1 s' });
+    }
+    const maxS = composeMaxS(b.size);
+    // The window first: the clips and stills it needs are listed for it.
+    const w = compositionWindow(span ?? clip, b.preS, b.postS, maxS);
+    if (!w.ok) return void res.status(400).json({ error: 'invalid', detail: w.error });
     // The still that shows at second t: the latest one within the stills
     // interval (stills every 2 s hold for 2 s instead of flickering to cards).
-    const stills = d.stillsIn(from, to).sort((x, y) => x - y);
     const holdMs = d.config().stills.intervalS * 1000;
+    const stills = d.stillsIn(w.start - holdMs, w.end).sort((x, y) => x - y);
     const stillAt = (t: number): number | null => {
       let lo = 0;
       let hi = stills.length;
@@ -55,8 +69,8 @@ export function composeApi(d: {
       return s !== undefined && t - s < holdMs ? s : null;
     };
     const plan = planComposition({
-      clip: span(row), preS: b.preS, postS: b.postS,
-      clips: listClips(d.catalog, cam(), from, to).map(span),
+      clip, ...(span ? { span } : {}), preS: b.preS, postS: b.postS, maxS,
+      clips: listClips(d.catalog, cam(), w.start, w.end).map(toSpan),
       stillAt,
     });
     if (!plan.ok) return void res.status(400).json({ error: 'invalid', detail: plan.error });
@@ -85,6 +99,14 @@ export function composeApi(d: {
     res.status(204).end();
   });
   return r;
+}
+
+// {start, end} in unix ms, start before end, at most a day apart; null if not.
+function spanOf(v: unknown): { start: number; end: number } | null {
+  const o = (v ?? {}) as { start?: unknown; end?: unknown };
+  if (typeof v !== 'object' || !Number.isSafeInteger(o.start) || !Number.isSafeInteger(o.end)) return null;
+  const start = o.start as number, end = o.end as number;
+  return end > start && end - start <= 86_400_000 ? { start, end } : null;
 }
 
 // Whether a clip file has an audio track (the camera may send none).
