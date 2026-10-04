@@ -38,6 +38,9 @@ export class StatusPoller extends EventEmitter {
   private failures = 0;
   private timer: NodeJS.Timeout | undefined;
   private running: Promise<CameraState> | undefined;
+  // Bumped by noteName(): a check that started before a write read the old
+  // name and must not report it as a rename (review of #137).
+  private nameEpoch = 0;
 
   constructor(
     private readonly client: ReolinkClient,
@@ -78,11 +81,12 @@ export class StatusPoller extends EventEmitter {
   // Emits 'check' ({ok, ms, error?}) after every check, for metrics.
   private async check(): Promise<CameraState> {
     const t0 = this.now();
+    const epoch = this.nameEpoch;
     try {
       const status = await this.client.status();
       const time = await this.client.command<GetTime>('GetTime');
       this.failures = 0;
-      this.set({ online: true, model: status.model, firmware: status.firmware, serial: status.serial, name: status.name ?? this.current.name, clockOffsetMs: clockOffset(time, this.now()), error: undefined });
+      this.set({ online: true, model: status.model, firmware: status.firmware, serial: status.serial, name: epoch === this.nameEpoch ? (status.name ?? this.current.name) : this.current.name, clockOffsetMs: clockOffset(time, this.now()), error: undefined });
       this.emit('check', { ok: true, ms: this.now() - t0 });
     } catch (err) {
       this.failures++;
@@ -97,6 +101,7 @@ export class StatusPoller extends EventEmitter {
   // A name the proxy just wrote and read back: known at once, not at the next poll.
   noteName(name: string): void {
     const renamed = name !== this.current.name;
+    this.nameEpoch++;
     this.current = { ...this.current, name };
     if (renamed) this.emit('name', name);
   }

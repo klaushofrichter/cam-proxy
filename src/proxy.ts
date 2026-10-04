@@ -163,6 +163,9 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // only the fallback until the first read. Each change goes to stream
   // clients once as a `camera` message (also a rename made in the Reolink
   // app); the last one told survives a process restart in the stream log.
+  // Once retention (retention.streamLogDays) has pruned the last `camera`
+  // message, the start value is the configured name again, so the first
+  // read after a restart may send one extra message with an unchanged name.
   let cameraNameRead: string | undefined;
   const cameraName = () => cameraNameRead ?? running.camera.name;
   const nameAnnouncer = new CameraNameAnnouncer(

@@ -143,6 +143,36 @@ describe('StatusPoller: the camera name', () => {
     expect(seen).toEqual(['Den', 'Backyard Left']);
   });
 
+  // Review of #137: a poll that read GetDevInfo before the write and finishes
+  // after noteName() must not flip the name back (new, old, new).
+  it('a poll that read the old name before a write keeps the written name: one announcement, no flip-back', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let calls = 0;
+    // Poll 1 reads "Den"; poll 2 read "Den" before the write but answers after it; then "Backyard Left".
+    const slow = {
+      status: async () => {
+        const n = ++calls;
+        if (n === 2) await gate;
+        return { model: 'RLC-1224A', firmware: 'v3', name: n <= 2 ? 'Den' : 'Backyard Left' };
+      },
+      command: async () => ({ Time: { year: 2026, mon: 10, day: 3, hour: 12, min: 0, sec: 0, timeZone: 0 } }),
+    } as unknown as ReolinkClient;
+    const poller = new StatusPoller(slow, 60);
+    const told: string[] = [];
+    const announcer = new CameraNameAnnouncer('Den', (name) => told.push(name));
+    poller.on('name', (n: string) => announcer.seen(n));
+    await poller.checkNow(); // Den
+    const stale = poller.checkNow(); // reads "Den" ... slowly
+    poller.noteName('Backyard Left'); // the write lands meanwhile
+    release();
+    await stale;
+    expect(poller.state().name).toBe('Backyard Left');
+    await poller.checkNow(); // the next poll reads the new name
+    expect(poller.state().name).toBe('Backyard Left');
+    expect(told).toEqual(['Backyard Left']);
+  });
+
   it('noteName (a write through the proxy) updates the state at once and emits once', async () => {
     const poller = new StatusPoller(client(['Den']), 60);
     await poller.checkNow();

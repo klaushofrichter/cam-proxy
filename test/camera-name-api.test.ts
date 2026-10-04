@@ -71,6 +71,12 @@ describe('reading the name', () => {
     }
   });
 
+  it('an unknown stream type is still refused now that camera is a known one', async () => {
+    const r = await request(p.base).get('/api/stream?types=camera,bogus').set(auth(CLIENT_TOKEN));
+    expect(r.status).toBe(400);
+    expect(r.body).toEqual({ error: 'invalid', detail: 'unknown type: bogus' });
+  });
+
   it('the default stream (no types) includes camera messages, and a resume replays them', async () => {
     const sse = sseConnect(`${p.base}/api/stream?since=0`, auth(CLIENT_TOKEN));
     try {
@@ -105,8 +111,9 @@ describe('PUT /control/camera/name', () => {
     expect(rec.cam_proxy).toMatchObject({ from: 'Backyard Left', to: 'Front Door (1)', requestedBy: 'token' });
   });
 
-  it('refuses a name against the rules with 400 invalid_name and a reason, without calling the camera', async () => {
+  it('refuses a name against the rules with 400 invalid_name and a reason, without calling the camera or auditing', async () => {
     const sets = shim.setCalls.length;
+    const records = (await auditOf('camera-name')).length;
     for (const [name, reason] of [['Back_yard', 'not allowed: _'], ['x'.repeat(32), 'too long: 32 characters, at most 31'], [' Den', 'no leading or trailing space'], ['', 'empty: 1 to 31 characters'], [7, 'empty: 1 to 31 characters']] as const) {
       const r = await request(p.base).put('/control/camera/name').set(admin()).send({ name });
       expect(r.status).toBe(400);
@@ -114,6 +121,17 @@ describe('PUT /control/camera/name', () => {
     }
     expect((await request(p.base).put('/control/camera/name').set(admin()).send([])).status).toBe(400);
     expect(shim.setCalls.length).toBe(sets);
+    expect((await auditOf('camera-name')).length).toBe(records);
+  });
+
+  it('another camera failure is 502 camera_error, audited as a failure', async () => {
+    shim.refuseNext = -9;
+    const r = await request(p.base).put('/control/camera/name').set(admin()).send({ name: 'Garage' });
+    expect(r.status).toBe(502);
+    expect(r.body).toEqual({ error: 'camera_error' });
+    const rec = (await auditOf('camera-name')).at(-1);
+    expect(rec.event).toMatchObject({ action: 'camera-name', outcome: 'failure' });
+    expect(rec.error).toEqual({ message: 'camera_error' });
   });
 
   it("a camera refusal is 400 invalid_name with the camera's reason, audited as a failure", async () => {
