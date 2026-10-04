@@ -105,7 +105,9 @@ export function checkEnvPath(path: string | undefined): string {
 export const KEEP_BACKUPS = 5;
 // A backup's name sorts by time, then by its same-second number.
 const backupKey = (name: string, base: string): [string, number] | undefined => {
-  const m = new RegExp(`^${base.replace(/[.]/g, '\\.')}\\.bak-(\\d{8}-\\d{6})(?:-(\\d{1,3}))?$`).exec(name);
+  const prefix = `${base}.bak-`;
+  if (!name.startsWith(prefix)) return undefined;
+  const m = /^(\d{8}-\d{6})(?:-(\d{1,3}))?$/.exec(name.slice(prefix.length));
   return m ? [m[1], m[2] ? Number(m[2]) : 1] : undefined;
 };
 function pruneBackups(dir: string, base: string): void {
