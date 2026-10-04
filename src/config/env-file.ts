@@ -107,9 +107,9 @@ const stamp = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace('T', '-'
 // UTC, the file's mode), then the new text to a temp file in the same
 // directory (the file's mode) and a rename over the file. `keys`: the names
 // that set this value, strongest first; the first one the file sets is
-// replaced, else the last name is appended. Answers the previous value (null:
-// not set) and the backup's file name.
-export function writeEnvKey(path: string, keys: string | string[], value: string, now = new Date()): { previous: string | null; backup: string } {
+// replaced, else the last name is appended. Answers the key written, the
+// previous value (null: not set) and the backup's file name.
+export function writeEnvKey(path: string, keys: string | string[], value: string, now = new Date()): { key: string; previous: string | null; backup: string } {
   const names = Array.isArray(keys) ? keys : [keys];
   checkEnvPath(path);
   const dir = dirname(path);
@@ -156,5 +156,5 @@ export function writeEnvKey(path: string, keys: string | string[], value: string
     if (code === 'EBUSY' || code === 'EXDEV') throw new EnvFileError('is_a_mount', 'the env file is mounted on its own; mount its directory instead');
     throw new EnvFileError('write_failed', `the env file could not be written (${code ?? 'error'})`);
   }
-  return { previous, backup };
+  return { key, previous, backup };
 }

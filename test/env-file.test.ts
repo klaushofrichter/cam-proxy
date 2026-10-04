@@ -108,7 +108,7 @@ describe('writeEnvKey', () => {
     writeFileSync(f, before, { mode: 0o600 });
     chmodSync(f, 0o640);
     const r = writeEnvKey(f, 'CAMERA_HOST', '10.0.0.7', at);
-    expect(r).toEqual({ previous: '10.0.0.1', backup: '.env.bak-20261004-130509' });
+    expect(r).toEqual({ key: 'CAMERA_HOST', previous: '10.0.0.1', backup: '.env.bak-20261004-130509' });
     expect(readFileSync(f, 'utf8')).toBe(`${SECRETS}CAMERA_HOST=10.0.0.7\n`);
     expect(statSync(f).mode & 0o777).toBe(0o640);
     expect(readFileSync(join(d, r.backup), 'utf8')).toBe(before);
