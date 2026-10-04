@@ -369,7 +369,7 @@ export function controlApi(d: ControlDeps): express.Router {
   const actionLimit: express.RequestHandler = (req, res, next) => (req.params.name === 'find-camera' ? findLimit(req, res, next) : next());
 
   r.post('/actions/:name', actionLimit, async (req, res) => {
-    const name = req.params.name;
+    const name = String(req.params.name);
     const requestedBy = res.locals.access?.viaCookie ? 'session' : 'token';
     const requester = { requestedBy, ...who(req) } as const;
     // A `control-action` record with the result, once the answer is sent or

@@ -1,9 +1,12 @@
 # cam-proxy on the Raspberry Pi, next to the real camera (spec §2).
-# Setup: docs/raspberry-pi.md. Next to this file: .env (the CAMPROXY_* secrets,
-# mode 600) and data/config.json ("server": { "dataDir": "/data" }); data/ is
-# owned by uid 1000, the container's user. Update: docker compose pull && docker compose up -d
+# Setup: docs/raspberry-pi.md. Next to this file: .env (mode 600; the one file
+# for the Pi: the CAMPROXY_* secrets, CAMERA_HOST, PI_ADDRESS, and cams' own
+# variables when cams runs here too) and data/config.json
+# ("server": { "dataDir": "/data" }); data/ is owned by uid 1000, the
+# container's user. Update: docker compose pull && docker compose up -d
 # Host networking: the camera connects to the FTP server (2121 and the passive
-# ports), and go2rtc stays on 127.0.0.1.
+# ports), go2rtc stays on 127.0.0.1, and Find camera's ONVIF probe (multicast
+# 239.255.255.250:3702) reaches the LAN.
 services:
   cam-proxy:
     image: ghcr.io/klaushofrichter/cam-proxy:latest
@@ -11,17 +14,19 @@ services:
     # Time to end an encode and store a Vision call in flight (up to 10 s) on stop.
     stop_grace_period: 20s
     network_mode: host
+    # Every variable in .env: the secrets (CAMPROXY_TOKENS, CAMPROXY_ADMIN_TOKEN,
+    # CAMPROXY_CAMERA_PASSWORD, CAMPROXY_FTP_PASSWORD, optional
+    # CAMPROXY_GOOGLE_VISION_KEY, CAMPROXY_AUDIT_TOKEN, CAMPROXY_POE_SWITCH_PASSWORD),
+    # CAMERA_HOST (camera.host) and PI_ADDRESS (ftp.publicHost, server.publicUrl).
+    env_file: .env
     environment:
       CAMPROXY_CONFIG: /data/config.json
       CAMPROXY_TARGET: pi
-      CAMPROXY_TOKENS: ${CAMPROXY_TOKENS:?set in .env}
-      CAMPROXY_ADMIN_TOKEN: ${CAMPROXY_ADMIN_TOKEN:?set in .env}
-      CAMPROXY_CAMERA_PASSWORD: ${CAMPROXY_CAMERA_PASSWORD:?set in .env}
-      CAMPROXY_FTP_PASSWORD: ${CAMPROXY_FTP_PASSWORD:-}
-      CAMPROXY_GOOGLE_VISION_KEY: ${CAMPROXY_GOOGLE_VISION_KEY:-}
-      # Optional: read-only access to GET /control/audit (docs/audit-log.md).
-      CAMPROXY_AUDIT_TOKEN: ${CAMPROXY_AUDIT_TOKEN:-}
-      # Optional: the camera's PoE switch login, for the power-cycle (docs/poe-switch.md).
-      CAMPROXY_POE_SWITCH_PASSWORD: ${CAMPROXY_POE_SWITCH_PASSWORD:-}
+      # "Use this address" (Settings → Find camera) writes CAMERA_HOST here,
+      # and cam-proxy reads CAMERA_HOST and PI_ADDRESS from it at every start.
+      CAMPROXY_ENV_FILE: /config/.env
     volumes:
       - ${CAMPROXY_DATA:-./data}:/data
+      # This directory, for .env: a rename can't replace a file mounted on its
+      # own, and the backup (.env.bak-<time>) goes next to it.
+      - ./:/config

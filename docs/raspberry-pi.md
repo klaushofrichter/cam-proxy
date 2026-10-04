@@ -79,34 +79,69 @@ After the reboot, check that `docker compose version` works without `sudo`.
 
 The Pi uses the repository's [`compose.yaml`](../compose.yaml): host
 networking (the camera connects to the FTP server on 2121 and the passive
-ports), the `:latest` image, and `./data` as `/data`.
+ports, and Find camera's ONVIF probe reaches the LAN), the `:latest` image,
+`./data` as `/data`, every variable of `.env` (`env_file: .env`), and the
+directory itself as `/config` with `CAMPROXY_ENV_FILE=/config/.env`, so
+Settings → Find camera can write the camera's address into `.env`. It mounts
+the directory, not the file: a rename can't replace a file mounted on its own,
+and the backup goes next to it.
 
 ```sh
 scp compose.yaml <user>@<pi>:/srv/cam-proxy/compose.yaml
 ```
 
-**`/srv/cam-proxy/data/config.json`**: the camera and the Pi's own address.
-Everything else can stay at its default.
+**`/srv/cam-proxy/data/config.json`**: everything but the two addresses,
+which come from `.env`. Everything else can stay at its default.
 
 ```json
 {
-  "camera": { "id": "cam1", "name": "Den", "host": "<camera>", "protocol": "https",
+  "camera": { "id": "cam1", "name": "Den", "protocol": "https",
               "tlsName": "cam1.skylar.technology", "user": "proxy" },
-  "server": { "dataDir": "/data", "publicUrl": "http://<pi>:8480" },
+  "server": { "dataDir": "/data" },
   "stills": { "enabled": true, "stream": "sub" },
   "storage": { "maxBytes": 161061273600, "minFreeBytes": 21474836480 },
   "ftp": { "enabled": true, "port": 2121, "passive": "30000-30009",
-           "publicHost": "<pi>", "tls": true, "stream": "sub" }
+           "tls": true, "stream": "sub" }
 }
 ```
 
-- `ftp.publicHost` is the address the camera is told to connect to for passive
-  data. It must be the Pi's LAN address.
 - There's no `go2rtc.binary`: the image has go2rtc on its `PATH`.
 - `storage.maxBytes`: the first install uses 150 GiB of the 229 GB disk, and
   keeps 20 GiB free.
+- `camera.host`, `ftp.publicHost` and `server.publicUrl` may stay in
+  config.json, but `CAMERA_HOST` and `PI_ADDRESS` win over them (and over the
+  Settings page's overrides).
 
-**`/srv/cam-proxy/.env`** (mode 600): the secrets.
+**`/srv/cam-proxy/.env`** (mode 600): the one file for the Pi, the secrets and
+the two addresses (and, when cams runs on the Pi too, cams' variables:
+cams' docs/pi-demo.md). Without values:
+
+```sh
+# The camera and this Pi (addresses; no port for PI_ADDRESS).
+CAMERA_HOST=<camera>
+PI_ADDRESS=<pi>
+# cam-proxy's secrets
+CAMPROXY_TOKENS=
+CAMPROXY_ADMIN_TOKEN=
+CAMPROXY_CAMERA_PASSWORD=
+CAMPROXY_FTP_PASSWORD=
+# optional
+CAMPROXY_GOOGLE_VISION_KEY=
+CAMPROXY_AUDIT_TOKEN=
+CAMPROXY_POE_SWITCH_PASSWORD=
+# cams on the Pi (cams docs/pi-demo.md)
+CAMS_LOGIN_TOKEN=
+COOKIE_SECRET=
+```
+
+- `CAMERA_HOST`: the camera's LAN address (optional `:port`), for its HTTP
+  API, ONVIF, RTSP and Baichuan; it sets `camera.host`. Settings → Find
+  camera → "Use this address" rewrites this line.
+- `PI_ADDRESS`: the Pi's LAN address. It sets `ftp.publicHost` (the address
+  the camera is told to connect to for passive data) and `server.publicUrl`
+  (`http://<PI_ADDRESS>:8480`, what cams links to).
+- The startup log line `config_env` shows what they set:
+  `docker logs cam-proxy-cam-proxy-1 2>&1 | grep config_env`.
 - `CAMPROXY_TOKENS` and `CAMPROXY_ADMIN_TOKEN`: when this Pi replaces another
   proxy, use the same tokens, and cams keeps working without new tokens.
 - `CAMPROXY_CAMERA_PASSWORD`: the camera's `proxy` user.
@@ -125,8 +160,8 @@ Everything else can stay at its default.
   `192.168.1.217`, port 8), then recreate the container. Without it the
   power-cycle answers 409 `not_configured`.
 
-Copy them without printing them. For example, pipe just those lines of a local
-`.env` over SSH:
+Copy the secrets without printing them. For example, pipe just those lines of
+a local `.env` over SSH (then add `CAMERA_HOST` and `PI_ADDRESS` on the Pi):
 
 ```sh
 grep -E '^CAMPROXY_(TOKENS|ADMIN_TOKEN|CAMERA_PASSWORD|FTP_PASSWORD|GOOGLE_VISION_KEY|AUDIT_TOKEN|POE_SWITCH_PASSWORD)=' .env \
@@ -179,11 +214,10 @@ This keeps the history: stills, previews, clips and the catalog.
 
 ## 5. Point the camera and cams at the Pi
 
-- **Camera FTP:** change only `server` in the camera's FTP settings to `<pi>`.
-  Use a whole-object `GetFtpV20` → `SetFtpV20` (a partial Set resets the
-  other keys), re-read it, and log out.
-  - The camera's `TestFtp` with the whole object should answer 200.
-  - The proxy's `ftp.lastUpload` then shows the test.
+- **Camera FTP:** the Maintenance page's "Point the camera's FTP here" sets the
+  camera's FTP server to `PI_ADDRESS` (a whole-object `GetFtpV20` →
+  `SetFtpV20`, re-read, logout), and "Test the camera's FTP" runs the
+  camera's `TestFtp`; the proxy's `ftp.lastUpload` then shows the test.
 - **cams:** the camera's `proxy.url` in the `cams-cameras` Secret becomes
   `http://<pi>:8480`. The tokens stay the same when they were kept.
   - cams reads the Secret when it starts, so replace its pod.
@@ -193,6 +227,27 @@ This keeps the history: stills, previews, clips and the catalog.
   - cams' Timeline and live events for the camera work;
   - `camproxy_sse_clients` on `http://<pi>:8480/metrics` is 1 (cams' relay);
   - the next recording shows `clip_indexed` in `docker logs`.
+
+## On the road (another LAN)
+
+Only `/srv/cam-proxy/.env` changes; cams follows cam-proxy (it takes the
+camera's address from it).
+
+1. **The Pi's new address** (whatever the new LAN gives it): set
+   `PI_ADDRESS=<new pi>` in `.env`, then restart (`docker compose restart`, or
+   "Restart proxy" on the Maintenance page at the new address: cam-proxy reads
+   the file at start). Then "Point the camera's FTP here", or the camera keeps
+   uploading to the old address.
+2. **The camera's new address:** Settings → **Find camera** lists the ONVIF
+   devices on the LAN (address, name, model; the current camera is marked).
+   **Use this address** writes `CAMERA_HOST=<address>` into `.env` (a backup
+   `.env.bak-<time>` next to it) and restarts the proxy; sign in again.
+   Without `CAMPROXY_ENV_FILE` the page shows the line to add by hand.
+3. **"Point the camera's FTP here"** on the Maintenance page, once the camera
+   answers at its new address.
+
+Nothing else: cams reads the camera's address from cam-proxy, and the camera's
+certificate still checks offline as long as it hasn't expired.
 
 ## Operating it
 

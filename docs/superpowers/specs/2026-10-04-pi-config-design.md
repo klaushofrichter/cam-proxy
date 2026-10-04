@@ -179,7 +179,7 @@ camera's FTP here").
   route multicast reliably, and the reply would copy an unmeasured sample (cam-sim
   copies the real camera) — cost if wrong: Find camera is tested against a
   fake UDP responder only; a cam-sim responder can follow once a real capture
-  exists.
+  exists (cam-sim #90).
 
 ## Tests
 
