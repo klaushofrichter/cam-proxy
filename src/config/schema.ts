@@ -135,6 +135,7 @@ const SETTINGS: Node = {
       enabled: { type: 'boolean', doc: 'send event stills to Google Vision (needs CAMPROXY_GOOGLE_VISION_KEY)' },
       monthlyLimit: int(0, 100000, 'Google Vision calls per calendar month (camera time); 0 = none'),
       dailyCap: int(0, 10000, 'Google Vision calls per day at most; 0 = no daily cap'),
+      checksPerDay: int(0, 1000, 'still checks (a second picked by hand in cams) per camera day at most, within the monthly limit and the daily cap; 0 = no checks'),
     },
   },
 };

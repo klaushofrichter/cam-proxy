@@ -37,7 +37,11 @@ export function storageMessage(u: { used: number; budget: number; stillMinutes: 
 // and the message), as 2026-09-30 would have. `clips` is the same count,
 // kept for readers of older records. `events` are the live ones; events
 // recovered from the SD card (#75) are counted apart (`events.recovered`).
-export function activityDaily(day: string, a: { events: Record<string, number>; recovered?: number; clips: number; vision: { day: number; monthToDate: number; monthlyLimit: number }; analyses: Record<string, number>; sseClients: number }): ActivityDaily {
+// `checks` (cams #179): the still checks of the day, `calls` the ones that
+// called Vision (ok or failed), the others the requests that made no call.
+type CheckCounts = { calls: number; reused: number; refused: number; failed: number };
+export function activityDaily(day: string, a: { events: Record<string, number>; recovered?: number; clips: number; vision: { day: number; monthToDate: number; monthlyLimit: number }; analyses: Record<string, number>; checks?: CheckCounts; sseClients: number }): ActivityDaily {
+  const checks = a.checks ?? { calls: 0, reused: 0, refused: 0, failed: 0 };
   const total = Object.values(a.events).reduce((x, y) => x + y, 0);
   const recovered = a.recovered ?? 0;
   const recordingEvents = RECORDING_KINDS.reduce((n, k) => n + (a.events[k] ?? 0), 0);
@@ -45,8 +49,8 @@ export function activityDaily(day: string, a: { events: Record<string, number>; 
   const kinds = Object.entries(a.events).map(([k, n]) => `${k} ${n}`).join(', ') || 'none';
   const clips = noClips ? `NO clips received for ${recordingEvents} recording events (is the camera's FTP upload on?)` : `${a.clips} clips received`;
   return {
-    message: `Activity ${day}: ${total} events (${kinds})${recovered ? `, ${recovered} recovered from the SD card` : ''}, ${clips}, Vision ${a.vision.monthToDate} of ${a.vision.monthlyLimit} this month`,
-    details: { events: { total, byKind: a.events, recovered }, recordingEvents, clips: a.clips, clipsReceived: a.clips, ...(noClips ? { noClips: true } : {}), analytics: { vision: a.vision, analyses: a.analyses }, stream: { clients: a.sseClients } },
+    message: `Activity ${day}: ${total} events (${kinds})${recovered ? `, ${recovered} recovered from the SD card` : ''}, ${clips}, Vision ${a.vision.monthToDate} of ${a.vision.monthlyLimit} this month${checks.calls ? `, ${checks.calls} still checks` : ''}`,
+    details: { events: { total, byKind: a.events, recovered }, recordingEvents, clips: a.clips, clipsReceived: a.clips, ...(noClips ? { noClips: true } : {}), analytics: { vision: a.vision, analyses: a.analyses, checks }, stream: { clients: a.sseClients } },
   };
 }
 

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Still checks (cams #179, phase 1): Vision on any second that has a still, picked by hand, stored apart from events. `POST /api/cameras/:cam/still-checks` `{"at": <unix ms>}` (client token, or admin; a session needs `X-CamProxy-UI`): 201 `{check, reused: false}` after one call; 200 `{check, reused: true, source}` without a call when the second was checked before (`check`) or an automatic analysis used its still (`event`, `check.id` null); 400 `invalid` (`at` not a whole second, in the future, or older than the stills kept); 404 `no_still`; 409 `analytics_off` (`off`, `no_key`, `checks_off`); 429 `limit` (`month`, `day`, `checks`), `busy` (one check at a time; the same second waits for the running call), `rate_limited` (20 a minute); 503 `analytics_paused`; 502 `provider_failed` (no retry; the call counted). `check`: `{id, stillTs, provider, summary, objects, events: [{id, kind, confirmed}], imageUrl, requestedAt, tookMs}`; the events the second sits in are computed when read, and a check only confirms (person, vehicle, pet; motion never).
+- `GET /api/cameras/:cam/still-checks?from&to` (at most 31 days, oldest first), `GET …/still-checks/:id` (with the raw answer) and `GET …/still-checks/:id.jpg` (immutable). A new stream message `still-check` (in the default types) for each new check.
+- `GET /api/cameras/:cam/analytics` (client token): the Vision budget for cams's button, `{enabled, paused, month, today, checks}`, never the key.
+- New setting `analytics.googleVision.checksPerDay` (default 10, 0–1000, 0 = no checks): still checks per camera day, on top of the shared monthly limit and daily cap, so checks can't spend the calls the person events need. In the Settings page's Analytics card. `GET /control/analytics` reports `checks: {today, cap}`.
+- Audit: a `still-check` record per request past the input check (outcome, reason, cost, what was found, who); `activity-daily` counts the day's checks (`analytics.checks`).
+- Catalog version 7: a new table `still_checks` (additive). Checks are kept `retention.eventsDays` (30) with their own JPEG copy in a new folder, `data/still-checks/<cam>/check-<id>.jpg`; retention deletes old checks with their images and files no check names there, and reports `deleted.stillChecks`. The analytics folder is unchanged.
+- Rollback: an older version runs with catalog version 7 (it logs `catalog_newer_than_code` and ignores the table) and never touches `data/still-checks/`, so the checks and their images are back when this version runs again; meanwhile cams's check button sees 404 (no still checks on that proxy).
+
 ## v2026.10.04.1
 
 - Composed clips are up to 300 s long (were 60 s), 120 s at `1080p` (encoding time on a Pi 4: about 3 minutes either way, estimated from the Mac). Pre-/post-roll are whole seconds from -3600 to 3600 (were -600…60); the result's length is the limit. A job may run 10 minutes (was 5). Refusals read `at most 300 s (5:00)`.

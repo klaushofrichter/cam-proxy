@@ -42,11 +42,12 @@ import { eventsRepair } from './inventory/repair-events';
 import { MinuteStore, minuteOf } from './stills/store';
 import type { StillsSide } from './api/client-api';
 import { StreamLog, type StreamMessage } from './stream/log';
-import { AnalyticsService } from './analytics/service';
+import { AnalyticsService, CHECK_USAGE } from './analytics/service';
 import { refreshingTimeInfo } from './analytics/time-info';
 import { sseHandler } from './stream/sse';
 import { clientIp, refuseTokenInUrl, requireAccess, type AccessDeps } from './api/auth';
 import { clientApi } from './api/client-api';
+import { stillChecksApi } from './api/still-checks-api';
 import { auditApi, controlApi, sessionRoutes } from './api/control-api';
 import { createMetrics } from './api/metrics';
 import { createSessionSigner } from './api/session';
@@ -476,8 +477,12 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     activity: (day, from, to) => {
       const cam = running.camera.id;
       // Usage days are camera days (localDay); month to date as of the reported day.
+      const checkCounts = (d: string) => {
+        const n = (p: string) => usageBetween(catalog, p, d, d);
+        return { calls: n(CHECK_USAGE.calls), reused: n(CHECK_USAGE.reused), refused: n(CHECK_USAGE.refused), failed: n(CHECK_USAGE.failed) };
+      };
       const vision = { day: usageBetween(catalog, 'google-vision', day, day), monthToDate: usageBetween(catalog, 'google-vision', `${day.slice(0, 7)}-01`, day), monthlyLimit: running.analytics.googleVision.monthlyLimit };
-      return activityDaily(day, { events: countEventsByKind(catalog, cam, from, to), recovered: countRecoveredEvents(catalog, cam, from, to), clips: countClips(catalog, cam, from, to), vision, analyses: countAnalysesByStatus(catalog, cam, from, to), sseClients: sse.clients() });
+      return activityDaily(day, { events: countEventsByKind(catalog, cam, from, to), recovered: countRecoveredEvents(catalog, cam, from, to), clips: countClips(catalog, cam, from, to), vision, analyses: countAnalysesByStatus(catalog, cam, from, to), checks: checkCounts(day), sseClients: sse.clients() });
     },
   });
 
@@ -587,7 +592,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // Clip and recording files too: a seeking video player sends many range
   // requests. A recording only once it is cached (#99): one not cached costs
   // a camera Search and a download, so it counts in the normal bucket.
-  const IMAGE = /^\/api\/cameras\/[^/]+\/((stills|previews)\/\d{1,15}\.jpg|clips\/\d{1,15}\.(mp4|jpg)|events\/\d{1,15}\/analysis\.jpg)$/;
+  const IMAGE = /^\/api\/cameras\/[^/]+\/((stills|previews)\/\d{1,15}\.jpg|clips\/\d{1,15}\.(mp4|jpg)|events\/\d{1,15}\/analysis\.jpg|still-checks\/\d{1,12}\.jpg)$/;
   const RECORDING = /^\/api\/cameras\/[^/]+\/recordings\/(Rec[0-9A-Za-z_]+\.mp4)$/;
   const isImage = (req: Request) => {
     if (req.method !== 'GET') return false;
@@ -614,6 +619,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   app.use('/api', localApi({ health: healthNow }));
   app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit }));
   app.use('/api', requireAccess('client', access), composeApi({ config: () => running, catalog, composer, stillsIn, paused: () => storage.paused(), font }));
+  app.use('/api', requireAccess('client', access), stillChecksApi({ config: () => running, catalog, analytics, audit }));
   app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, status: () => status, cameraName, sse, stills: () => stills, recordings: () => recordings }));
   // The audit log: admins and the audit token, GET (and HEAD) only. The access check is
   // on the route inside the router; other /control paths pass on untouched

@@ -171,7 +171,7 @@ come only from the environment.
 | `host` | `stats` (`auto`): read the host figures (CPU temperature, under-voltage, memory, uptime, load) for the Pi card and the health summary; `auto` on a Raspberry Pi only (detected from `/proc/cpuinfo`), `on`, or `off`. Off a Pi, memory and load in a container would describe the node, not the proxy. Applies at once |
 | `recordings` | `cacheMB` (2048, 64–1,048,576): size cap of the recordings cache; least recently used files go first, and they are the first to go when the storage budget is exceeded. Applies at the next fetch or storage run |
 | `composition` | `font`: the font file for the text of composed clips; default the first of DejaVu Sans (the container) or Arial (macOS) that exists |
-| `analytics` | `kinds.person` (true), `kinds.vehicle` and `kinds.pet` (false), `googleVision.enabled` (false), `.monthlyLimit` (0), `.dailyCap` (0); see [Analytics](#analytics-optional) |
+| `analytics` | `kinds.person` (true), `kinds.vehicle` and `kinds.pet` (false), `googleVision.enabled` (false), `.monthlyLimit` (0), `.dailyCap` (0), `.checksPerDay` (10, 0–1000; still checks by hand, 0 = none); see [Analytics](#analytics-optional) |
 
 | Secret (environment, or `<NAME>_FILE`) | |
 |---|---|
@@ -466,7 +466,8 @@ privacy and cost): [docs/analytics.md](docs/analytics.md).
 - **Settings** (Settings page, or `PUT /control/config`):
   `analytics.kinds.person` (default on), `.vehicle` and `.pet` (off);
   `analytics.googleVision.enabled` (off), `.monthlyLimit` (0 = no calls,
-  max 100000) and `.dailyCap` (0 = no daily cap, max 10000).
+  max 100000), `.dailyCap` (0 = no daily cap, max 10000) and
+  `.checksPerDay` (default 10, 0 = no still checks, max 1000).
 - **Key and URL:** `CAMPROXY_GOOGLE_VISION_KEY` in the environment (a secret,
   never in config.json or the UI; the UI shows it masked) and optionally
   `CAMPROXY_GOOGLE_VISION_URL` (default `https://vision.googleapis.com`;
@@ -490,6 +491,14 @@ privacy and cost): [docs/analytics.md](docs/analytics.md).
   free per feature; object localization is one unit per image, then $2.25 per
   1,000 (Google's price list, checked 2026-09-30). The Settings card shows
   the estimate for the monthly limit.
+- **Still checks (cams #179):** cams can ask Vision about any second that has
+  a still (`POST /api/cameras/{cam}/still-checks {at}`). The answer is a
+  check, stored apart from events for 30 days with its JPEG
+  (`data/still-checks/<cam>/check-<id>.jpg`); the same second again is answered
+  from the stored check (or from an event's analysis of that still) without a
+  call. Checks count toward the monthly limit and the daily cap, and at most
+  `checksPerDay` a camera day. Each request is audited (`still-check`). See
+  [docs/analytics.md](docs/analytics.md#still-checks).
 - **Summary:** each analysis keeps persons, vehicles and pets only, mapped
   by Open Images class id ([docs/analytics-classes.md](docs/analytics-classes.md)).
   Boxes of the same category that overlap by more than 90% are merged, the highest score first.
@@ -502,7 +511,9 @@ privacy and cost): [docs/analytics.md](docs/analytics.md).
   and the usage per day for 400 days. An analysis goes with its event.
 - **API:** the events list carries `analysis`; `GET
   /api/cameras/{cam}/events/{id}/analysis` (and `analysis.jpg`), an `analysis`
-  stream message, and `GET /control/analytics` for state and usage. See
+  stream message, and `GET /control/analytics` for state and usage; still
+  checks (`…/still-checks`, the `still-check` stream message) and the
+  client-token budget `GET /api/cameras/{cam}/analytics`. See
   [openapi.yaml](openapi.yaml).
 - **Live check, by hand only:** `CAMPROXY_GOOGLE_VISION_KEY=... npx tsx
   scripts/analytics-live.ts a.jpg b.jpg` sends up to `LIMIT` (default 5)

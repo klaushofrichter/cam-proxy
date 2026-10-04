@@ -93,6 +93,61 @@ so a restart doesn't inflate the list.
 This is where candidates for the class table come from. To add a class, see
 [Extending](analytics-classes.md#extending).
 
+## Still checks
+
+A still check is Vision on a second picked by hand (cams #179, spec
+`docs/superpowers/specs/2026-10-04-still-checks-design.md`): cams's Timeline
+sends any second that has a still, not only an event's. The result is a
+**check**, stored apart from the events and their analyses.
+
+1. **The request.** `POST /api/cameras/{cam}/still-checks` `{"at": <unix ms>}`
+   with the client token (or as an admin; a session needs `X-CamProxy-UI`).
+   `at` is a still's time: a whole second, not in the future, not older than
+   the stills kept (`retention.stillsDays`). The still must exist (else
+   404 `no_still`).
+2. **A stored answer first.** A second checked before is answered from its
+   check (`200`, `reused: true`, `source: "check"`); a second an automatic
+   analysis already sent from its analysis (`source: "event"`, `id: null`,
+   `eventId`). No call, no cost. There is no "check again": Vision answers the
+   same image the same way.
+3. **Limits, in order.** Vision off, no key, or `checksPerDay` 0: 409
+   `analytics_off` (`reason` `off`, `no_key`, `checks_off`). Paused: 503
+   `analytics_paused`. Then 429 `limit` with `reason` `month` (the monthly
+   limit), `day` (the daily cap; both shared with the automatic analyses), or
+   `checks` (`analytics.googleVision.checksPerDay`, default 10 a camera day,
+   so checks can't spend the cap the person events need). One check at a
+   time: another second meanwhile is 429 `busy`; the same second waits for
+   the running call and gets its answer. At most 20 requests a minute per
+   client.
+4. **The call.** As for events, but with no retry (the user is waiting): a
+   network error, timeout (10 s) or 5xx is 502 `provider_failed` with the
+   reason, counted, and nothing is stored, so pressing again can work. A 400,
+   401 or 403 pauses analytics (`bad_key`) for the events too (one key); a
+   429 pauses it for an hour (`quota`).
+5. **Stored.** Successful checks only, in the `still_checks` table: the
+   second, the objects, the raw answer and the summary (the same mapping as
+   above; unmapped objects are counted too). The JPEG is copied to
+   `data/still-checks/<cam>/check-<id>.jpg` (its own folder, apart from the
+   analyses' images), so a check outlives the 7-day
+   stills. Checks are kept as long as events (`retention.eventsDays`, 30 days).
+6. **The events it sits in** are computed when read, never stored: the
+   camera's events with start ≤ second ≤ end (an open one counted
+   `events.maxOpenMin` from its start). A person, vehicle or pet event is
+   `confirmed` when the check found its category; a motion event never is.
+   A check never says "not confirmed".
+7. **Sent.** A `still-check` stream message for each new check (not for
+   stored answers).
+8. **Counted.** Every call in the usage (`month`, `today`) next to the
+   automatic ones, and the checks per day apart (`checks.today`). Each
+   request past the input check writes a `still-check` audit record, and
+   `activity-daily` counts the day's checks.
+
+Ask `GET /api/cameras/{cam}/analytics` for the budget (`enabled`, `paused`,
+`month`, `today`, `checks`); it never shows the key. Reads:
+`GET /api/cameras/{cam}/still-checks?from&to` (at most 31 days, oldest
+first), `GET …/still-checks/{id}` (with the raw answer) and
+`GET …/still-checks/{id}.jpg`.
+
 ## Where it shows
 
 **cam-proxy's admin UI:**
@@ -124,6 +179,8 @@ This is where candidates for the class table come from. To add a class, see
 | Live | the `analysis` stream message: `{ eventId, kind, start, end, provider, status, reason, stillTs, summary, objects }`. `end` is null while the event is open |
 | State and usage | `GET /control/analytics`, and `analytics` in `GET /control/status` |
 | Unmapped objects | `GET` / `DELETE /control/analytics/unmapped`, and the top 20 as `analyticsUnmapped` in `/control/status` |
+| Still checks | `POST /api/cameras/{cam}/still-checks` `{at}`; `GET …/still-checks?from&to`, `…/still-checks/{id}`, `…/still-checks/{id}.jpg`; the `still-check` stream message: `{ id, stillTs, provider, summary, objects, events, imageUrl, requestedAt, tookMs }` (see [Still checks](#still-checks)) |
+| The budget, for clients | `GET /api/cameras/{cam}/analytics`: `{ enabled, paused, month, today, checks }`, no key |
 
 The stream keeps 7 days of messages, so a client resuming after the upgrade
 can replay older `analysis` messages without kind, start, still time or
@@ -132,8 +189,8 @@ full contract is in [openapi.yaml](../openapi.yaml).
 
 ## Privacy and cost
 
-- **Privacy:** Vision receives one SD still (896 × 512) per analysed event and
-  nothing else.
+- **Privacy:** Vision receives one SD still (896 × 512) per analysed event or
+  still check, and nothing else.
 - **Key:** the key lives in the environment (`CAMPROXY_GOOGLE_VISION_KEY`,
   in `/srv/cam-proxy/.env` on the Pi). It is never in config.json, the UI
   (masked), logs or the API.

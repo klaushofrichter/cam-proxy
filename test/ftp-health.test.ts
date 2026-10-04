@@ -294,6 +294,16 @@ describe('activity-daily (#93): clipsReceived next to the events', () => {
     expect(activityDaily('2026-09-30', { events: {}, clips: 0, vision, analyses: {}, sseClients: 0 }).details).toMatchObject({ events: { recovered: 0 } });
   });
 
+  // cams #179: still checks per day, apart from the automatic analyses.
+  it('counts the still checks of the day; the message names them only when there were any', () => {
+    const a = activityDaily('2026-09-30', { events: {}, clips: 0, vision, analyses: {}, checks: { calls: 3, reused: 2, refused: 1, failed: 1 }, sseClients: 0 });
+    expect(a.details).toMatchObject({ analytics: { vision, analyses: {}, checks: { calls: 3, reused: 2, refused: 1, failed: 1 } } });
+    expect(a.message).toBe('Activity 2026-09-30: 0 events (none), 0 clips received, Vision 3 of 100 this month, 3 still checks');
+    const none = activityDaily('2026-09-30', { events: {}, clips: 0, vision, analyses: {}, sseClients: 0 });
+    expect(none.details).toMatchObject({ analytics: { checks: { calls: 0, reused: 0, refused: 0, failed: 0 } } });
+    expect(none.message).not.toContain('still checks');
+  });
+
   it('a quiet day: no events, no clips, no flag', () => {
     const a = activityDaily('2026-09-30', { events: {}, clips: 0, vision, analyses: {}, sseClients: 0 });
     expect(a.message).toBe('Activity 2026-09-30: 0 events (none), 0 clips received, Vision 3 of 100 this month');

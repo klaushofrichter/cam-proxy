@@ -595,6 +595,12 @@
               "minimum": 0,
               "maximum": 10000,
               "description": "Google Vision calls per day at most; 0 = no daily cap"
+            },
+            "checksPerDay": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000,
+              "description": "still checks (a second picked by hand in cams) per camera day at most, within the monthly limit and the daily cap; 0 = no checks"
             }
           }
         }
