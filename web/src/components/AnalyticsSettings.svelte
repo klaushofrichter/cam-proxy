@@ -16,6 +16,10 @@
   const savedDaily = $derived(String(val<number>('analytics.googleVision.dailyCap') ?? 0));
   let monthlyDraft = $state<string | undefined>(undefined);
   let dailyDraft = $state<string | undefined>(undefined);
+  const savedChecks = $derived(String(val<number>('analytics.googleVision.checksPerDay') ?? 10));
+  let checksDraft = $state<string | undefined>(undefined);
+  const checks = $derived(checksDraft ?? savedChecks);
+  const checksValue = $derived(parseLimit(checks, 1000));
   const monthly = $derived(monthlyDraft ?? savedMonthly);
   const daily = $derived(dailyDraft ?? savedDaily);
   const monthlyValue = $derived(parseLimit(monthly, 100000));
@@ -97,6 +101,11 @@
     <div class="row"><label>At most per day (0 = no cap) <input type="number" min="0" max="10000" step="1" value={daily} oninput={(e) => (dailyDraft = e.currentTarget.value)} data-testid="analytics-daily" /></label>
       <button disabled={dailyValue === null} data-testid="analytics-daily-save" aria-label="Save the daily cap" onclick={() => dailyValue !== null && void put({ googleVision: { dailyCap: dailyValue } }, 'Daily cap', () => (dailyDraft = undefined))}>Save</button></div>
     {#if dailyValue === null}<p class="hint small" data-testid="analytics-daily-hint">a whole number from 0 to 10,000</p>{/if}
+    <!-- Still checks (cams #179): a second picked by hand in cams, within the limits above. -->
+    <div class="row"><label>Still checks per day (0 = off) <input type="number" min="0" max="1000" step="1" value={checks} oninput={(e) => (checksDraft = e.currentTarget.value)} data-testid="analytics-checks" /></label>
+      <button disabled={checksValue === null} data-testid="analytics-checks-save" aria-label="Save still checks per day" onclick={() => checksValue !== null && void put({ googleVision: { checksPerDay: checksValue } }, 'Still checks per day', () => (checksDraft = undefined))}>Save</button></div>
+    {#if checksValue === null}<p class="hint small" data-testid="analytics-checks-hint">a whole number from 0 to 1,000</p>{/if}
+    <p class="muted small">Still checks are made by hand in cams, on any second; they count toward the limits above.</p>
     <p class="small" data-testid="analytics-estimate">{estimateFor(monthly, Number(savedMonthly))}</p>
     <p class="muted small">The limit counts this proxy's calls only. Proxies that share a key share Google's budget: keep their limits' total within it.</p>
   </div>
