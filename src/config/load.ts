@@ -3,9 +3,10 @@ import { basename, dirname, isAbsolute, join, resolve } from 'path';
 import { DEFAULTS, type Config, type Secrets } from './defaults';
 import { checkPartial, leafPaths, SettingError } from './schema';
 import { loadSecrets } from './secrets';
+import { EnvSettingError, readEnvLayer, type EnvLayer } from './env';
 
 export class ConfigError extends Error {}
-export type Source = 'default' | 'file' | 'override';
+export type Source = 'default' | 'file' | 'override' | 'env';
 
 export interface Loaded {
   config: Config;
@@ -15,6 +16,11 @@ export interface Loaded {
   env: NodeJS.ProcessEnv;
   fileSettings: object;
   overrides: object;
+  // Settings set from the environment (spec 2026-10-04-pi-config-design):
+  // the variable that set each path, and the .env file if one is configured.
+  envLayer: EnvLayer;
+  envNames: Record<string, string>;
+  envFile?: { path: string; read: boolean };
 }
 
 // Settings that only take effect after a restart (spec §14).
@@ -94,7 +100,7 @@ function crossCheck(c: Config): void {
   if (!c.go2rtc.binary && !c.go2rtc.url) throw new ConfigError('go2rtc.binary: set go2rtc.binary or go2rtc.url');
 }
 
-function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSettings: Obj, overrides: Obj, baseDir: string): Loaded {
+function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSettings: Obj, overrides: Obj, baseDir: string, layer: EnvLayer): Loaded {
   // A copy: the result is changed below (dataDir), DEFAULTS never is.
   let merged = merge(structuredClone(DEFAULTS) as unknown as Obj, structuredClone(fileSettings));
   // storage.maxBytes replaces the default maxPercent budget.
@@ -107,15 +113,27 @@ function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSetti
     delete (merged.go2rtc as Obj).binary;
   }
   const config = merge(merged, structuredClone(overrides)) as unknown as Config;
+  // The environment last: it wins over the overrides and the file.
+  const envNames: Record<string, string> = {};
+  if (layer.cameraHost) {
+    config.camera.host = layer.cameraHost.value;
+    envNames['camera.host'] = layer.cameraHost.name;
+  }
+  if (layer.piAddress) {
+    config.ftp.publicHost = layer.piAddress.value;
+    config.server.publicUrl = `http://${layer.piAddress.value}:${config.server.port}`;
+    envNames['ftp.publicHost'] = layer.piAddress.name;
+    envNames['server.publicUrl'] = layer.piAddress.name;
+  }
   const dataDir = isAbsolute(config.server.dataDir) ? config.server.dataDir : resolve(baseDir, config.server.dataDir);
   config.server.dataDir = dataDir;
   crossCheck(config);
   const sources: Record<string, Source> = {};
   for (const p of leafPaths()) {
-    sources[p] = getPath(overrides, p) !== undefined ? 'override' : getPath(fileSettings, p) !== undefined ? 'file' : 'default';
+    sources[p] = envNames[p] ? 'env' : getPath(overrides, p) !== undefined ? 'override' : getPath(fileSettings, p) !== undefined ? 'file' : 'default';
   }
   const secrets = asConfigError(() => loadSecrets(env, config.ftp.enabled));
-  return { config, secrets, sources, files: { config: configFile, overrides: join(dataDir, 'overrides.json') }, env, fileSettings, overrides };
+  return { config, secrets, sources, files: { config: configFile, overrides: join(dataDir, 'overrides.json') }, env, fileSettings, overrides, envLayer: layer, envNames, ...(layer.file ? { envFile: layer.file } : {}) };
 }
 
 // Defaults, then config.json (CAMPROXY_CONFIG or ./config.json), then
@@ -132,7 +150,14 @@ export function loadConfig(env: NodeJS.ProcessEnv, opts: { cwd?: string } = {}):
   const overrides = existsSync(overridesFile) ? readJson(overridesFile) : {};
   asConfigError(() => checkPartial(overrides));
   if (getPath(overrides, 'server.dataDir') !== undefined) throw new ConfigError('server.dataDir: can only be set in config.json');
-  return build(env, file, fileSettings as Obj, overrides as Obj, baseDir);
+  let layer: EnvLayer;
+  try {
+    layer = readEnvLayer(env);
+  } catch (e) {
+    if (e instanceof EnvSettingError) throw new ConfigError(e.message);
+    throw e;
+  }
+  return build(env, file, fileSettings as Obj, overrides as Obj, baseDir, layer);
 }
 
 function writeOverrides(file: string, overrides: Obj): void {
@@ -147,9 +172,13 @@ function writeOverrides(file: string, overrides: Obj): void {
 export function applyOverrides(loaded: Loaded, patch: object): Loaded {
   asConfigError(() => checkPartial(patch));
   if (getPath(patch, 'server.dataDir') !== undefined) throw new ConfigError('server.dataDir: can only be set in config.json');
+  // An override of a setting the environment sets would never apply.
+  for (const [p, name] of Object.entries(loaded.envNames)) {
+    if (getPath(patch, p) !== undefined) throw new ConfigError(`${p}: set in .env (${name})`);
+  }
   const overrides = merge(loaded.overrides as Obj, patch as Obj);
   const baseDir = loaded.files.config ? dirname(loaded.files.config) : process.cwd();
-  const next = build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides, baseDir);
+  const next = build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides, baseDir, loaded.envLayer);
   writeOverrides(loaded.files.overrides, overrides);
   return next;
 }
@@ -170,7 +199,17 @@ export function removeOverride(loaded: Loaded, path: string): Loaded {
   };
   prune(overrides);
   const baseDir = loaded.files.config ? dirname(loaded.files.config) : process.cwd();
-  const next = build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides, baseDir);
+  const next = build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides, baseDir, loaded.envLayer);
   writeOverrides(loaded.files.overrides, overrides);
   return next;
+}
+
+// The startup line `config_env`: the settings taken from the environment,
+// with their values (addresses only, never a secret), and whether a .env
+// file was read.
+export function envSummary(loaded: Loaded): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const p of Object.keys(loaded.envNames)) out[p] = getPath(loaded.config, p);
+  out.envFile = loaded.envFile?.read === true;
+  return out;
 }

@@ -1,5 +1,6 @@
 // The e2e servers: a cam-sim and a cam-proxy pointed at it, in one process.
-import { existsSync, mkdtempSync, writeFileSync } from 'fs';
+import dgram from 'dgram';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createCamSim } from 'cam-sim';
@@ -7,7 +8,7 @@ import { loadConfig } from '../src/config/load';
 import { createProxy, type Proxy } from '../src/proxy';
 import { startVisionMock } from '../test/helpers/vision-mock';
 import { startPoeSwitchMock } from '../test/helpers/poe-switch-mock';
-import { ADMIN_TOKEN, CLIENT_TOKEN, FTP, FTP_PASSWORD, POE_SWITCH_PASSWORD, POE_SWITCH_PORT, PROXY_PORT, SIM, SIM_CONTROL_TOKEN, VISION_KEY, VISION_MOCK_PORT } from './env';
+import { ADMIN_TOKEN, CLIENT_TOKEN, DISCOVERY_PORT, FTP, FTP_PASSWORD, POE_SWITCH_PASSWORD, POE_SWITCH_PORT, PROXY_PORT, SIM, SIM_CONTROL_TOKEN, VISION_KEY, VISION_MOCK_PORT } from './env';
 
 // go2rtc and MediaMTX from tools/ (scripts/install-*.sh) unless CI set them.
 const tool = (name: string) => (existsSync(join(__dirname, '..', 'tools', name)) ? join(__dirname, '..', 'tools', name) : undefined);
@@ -53,7 +54,22 @@ async function main() {
       else sim.engine.powerOff();
     },
   });
-  const env = { CAMPROXY_POE_SWITCH_PASSWORD: POE_SWITCH_PASSWORD, CAMPROXY_GOOGLE_VISION_KEY: VISION_KEY, CAMPROXY_GOOGLE_VISION_URL: vision.url, CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: 'e2e-proxy-pw', CAMPROXY_FTP_PASSWORD: FTP_PASSWORD };
+  // Find camera (pi-config spec §3): a fake WS-Discovery responder on
+  // 127.0.0.1 answers with the documented Reolink sample (192.168.1.20) and
+  // the same answer for cam-sim's own address (the current camera).
+  const sample = readFileSync(join(__dirname, '..', 'test', 'fixtures', 'ws-discovery', 'reolink-probe-match.xml'), 'utf8');
+  const discovery = dgram.createSocket('udp4');
+  discovery.on('message', (msg, rinfo) => {
+    const id = /<a:MessageID>([^<]+)</.exec(msg.toString('utf8'))?.[1] ?? '';
+    const a = sample.replace('{{RELATES_TO}}', id);
+    discovery.send(a, rinfo.port, rinfo.address);
+    discovery.send(a.replace(/192\.168\.1\.20/g, '127.0.0.1').replace(/RLC-1224A/g, 'CAM-SIM').replace('ec71db000001</wsa:Address>', 'ec71db000002</wsa:Address>'), rinfo.port, rinfo.address);
+  });
+  await new Promise<void>((r) => discovery.bind(DISCOVERY_PORT, '127.0.0.1', () => r()));
+  // PI_ADDRESS (pi-config spec §1): ftp.publicHost and server.publicUrl come
+  // from the environment, read-only on the Settings page. No CAMPROXY_ENV_FILE:
+  // "Use this address" shows the line to add by hand.
+  const env = { PI_ADDRESS: '127.0.0.1', CAMPROXY_POE_SWITCH_PASSWORD: POE_SWITCH_PASSWORD, CAMPROXY_GOOGLE_VISION_KEY: VISION_KEY, CAMPROXY_GOOGLE_VISION_URL: vision.url, CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: 'e2e-proxy-pw', CAMPROXY_FTP_PASSWORD: FTP_PASSWORD };
   // The restart-proxy action (#71) ends with exit(0), and a supervisor starts
   // the process again. Here the exit is stubbed: a new proxy starts in this
   // process on the same port and data folder, so the server stays up. A fixed
@@ -62,7 +78,7 @@ async function main() {
   let proxy: Proxy;
   const boot = async () => {
     // The camera's FTP settings every 2 s, not every 5 min (ftp-health.spec, #93).
-    proxy = createProxy(loadConfig(env, { cwd: dir }), { sessionSecret, cameraFtpCheckMs: 2000, host: { root: HOST_ROOT }, exit: () => void boot().catch((err: Error) => process.stderr.write(`e2e: restart failed: ${err.message}\n`)) });
+    proxy = createProxy(loadConfig(env, { cwd: dir }), { sessionSecret, cameraFtpCheckMs: 2000, host: { root: HOST_ROOT }, discovery: { target: { address: '127.0.0.1', port: DISCOVERY_PORT }, timeoutMs: 500 }, exit: () => void boot().catch((err: Error) => process.stderr.write(`e2e: restart failed: ${err.message}\n`)) });
     await proxy.start({ port: PROXY_PORT, host: '127.0.0.1' });
   };
   await boot();
@@ -71,6 +87,7 @@ async function main() {
     await sim.close();
     await vision.close();
     await poeSwitch.close();
+    discovery.close();
     process.exit(0);
   };
   process.once('SIGINT', () => void stop('SIGINT'));

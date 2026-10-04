@@ -73,10 +73,12 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
   // The camera info. `name`: the camera's own name (camera-name design),
   // the configured camera.name until the camera was first read.
   // publicUrl: where people reach this proxy's web UI (cams links to it).
+  // address: the camera's camera.host as it runs (cams reaches the camera
+  // there for what it asks the camera directly; no secret).
   const info = () => {
     const s = d.stills();
     const stream = s ? { up: s.grabber.up(), lastFrameTs: s.grabber.lastFrameTs() } : null;
-    return { id: cam().id, name: d.cameraName(), online: d.status().state().online, lastEventTs: lastLiveEventTs(d.catalog, cam().id), stream, publicUrl: d.config().server.publicUrl ?? null };
+    return { id: cam().id, name: d.cameraName(), online: d.status().state().online, lastEventTs: lastLiveEventTs(d.catalog, cam().id), stream, publicUrl: d.config().server.publicUrl ?? null, address: cam().host };
   };
   r.get('/cameras', (_req, res) => void res.json([info()]));
   r.get('/cameras/:cam', (req, res) => {
