@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.10.04.3
+
 - Compositions around a second (cams #179, phase 3): `POST /api/cameras/:cam/compositions` takes `{at, preS, postS, size, badge, timeZone?}` (`at` unix ms, a whole second) instead of `{clipId, span?}`, exactly one of them. The window is `[at − preS, at + 1 s + postS]` (rolls 0…3600; the same limits, 300 s and 120 s at `1080p`), each second from an FTP clip that covers it, else its still ("STILLS 1 FPS" badge), else a "No recording" card. 400 `invalid` for an `at` that is not a whole second, in the future, or older than the stills and clips kept, and for a window that has not ended; 409 `nothing_to_compose` when no clip or still covers any second (also for `clipId`, which never happens there).
 - `dryRun: true` (either anchor) answers 200 `{start, end, durationS, seconds: {clip, still, card}, clips: [{start, end}]}` without a job, for cams's "made of" line.
 - Compositions are limited to 10 a minute per client (dry runs not counted; 429 `rate_limited`) and audited: a `composition` record per request past the input check (anchor, window, size, what it is made of, outcome, job id).
