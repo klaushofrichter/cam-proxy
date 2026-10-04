@@ -19,6 +19,8 @@ describe('audit page helpers', () => {
     expect(ACTIONS).toContain('storage-paused');
     expect(ACTIONS).toContain('storage-resumed');
     expect(ACTIONS).toContain('camera-poe-on');
+    expect(ACTIONS).toContain('still-check');
+    expect(ACTIONS).toContain('composition');
     expect(ACTIONS).toContain('camera-check'); // #93
     expect(ACTIONS).toContain('camera-name'); // camera-name design
     expect(ACTIONS).toContain('inventory'); // #72

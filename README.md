@@ -362,6 +362,16 @@ upload folder. While storage is paused, `STOR` answers 452.
   280 MB at 1080p. Cards show the time in `timeZone` (the viewer's), else the
   process's. The font comes from `composition.font`, else DejaVu Sans (the
   container) or Arial (macOS).
+- **Around a second** (cams #179): `{at, preS, postS, size, badge,
+  timeZone?}` instead of `{clipId, span?}` composes the window
+  `[at − preS, at + 1 s + postS]` (rolls 0…3600, the same limits: −10/+10 is
+  21 s) from the FTP clips where they cover it and the stills elsewhere.
+  `at` is a whole second, not in the future and not older than the stills
+  and clips kept; the window must have ended. A window no clip or still
+  covers is a 409 `nothing_to_compose`. `dryRun: true` (either anchor)
+  answers 200 `{start, end, durationS, seconds: {clip, still, card}, clips}`
+  without a job. Real requests are limited to 10 a minute per client and
+  audited (`composition`).
 - **Firewall:** the camera connects to the proxy, on `ftp.port` and the
   `ftp.passive` ports. On a Mac with the firewall on, node must be allowed
   to accept incoming connections, again after each Homebrew node upgrade

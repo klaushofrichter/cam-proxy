@@ -14,7 +14,10 @@ export type Segment =
 // proxy's FTP copy can start earlier or run longer than that recording
 // (cams's Save dialog, 2026-10-04: 114 s, -100, +30 gave "at most 60 s").
 // maxS: the size's limit (composeMaxS), COMPOSE_MAX_S when not given.
-interface PlanInput { clip: ClipSpan; span?: { start: number; end: number }; preS: number; postS: number; maxS?: number; clips: ClipSpan[]; stillAt: (t: number) => number | null }
+// Without a clip (#179 phase 3, "around a second") the span is the window's
+// anchor, e.g. {at, at + 1000}, and every second is any clip that covers it,
+// else a still, else a card.
+interface PlanInput { clip?: ClipSpan; span?: { start: number; end: number }; preS: number; postS: number; maxS?: number; clips: ClipSpan[]; stillAt: (t: number) => number | null }
 export type Plan = { ok: true; start: number; end: number; durationS: number; segments: Segment[] } | { ok: false; error: string };
 export type Window = { ok: true; start: number; end: number; durationS: number } | { ok: false; error: string };
 
@@ -58,13 +61,16 @@ export function compositionWindow(span: { start: number; end: number }, preS: nu
 }
 
 export function planComposition(p: PlanInput): Plan {
-  const w = compositionWindow(p.span ?? p.clip, p.preS, p.postS, p.maxS);
+  const anchor = p.span ?? p.clip;
+  if (!anchor) return { ok: false, error: 'a clip or a span is required' };
+  const w = compositionWindow(anchor, p.preS, p.postS, p.maxS);
   if (!w.ok) return w;
   const { start, end, durationS } = w;
 
-  const others = p.clips.filter((c) => c.id !== p.clip.id).sort((a, b) => a.start - b.start || a.id - b.id);
+  const others = p.clips.filter((c) => c.id !== p.clip?.id).sort((a, b) => a.start - b.start || a.id - b.id);
+  const candidates = p.clip ? [p.clip, ...others] : others;
   // A clip covers a second it fills at least half of.
-  const covering = (t: number) => [p.clip, ...others].find((c) => t >= c.start && t + 1000 <= c.end + 500);
+  const covering = (t: number) => candidates.find((c) => t >= c.start && t + 1000 <= c.end + 500);
   const segments: Segment[] = [];
   for (let t = start; t < end; t += 1000) {
     const c = covering(t);
@@ -80,4 +86,12 @@ export function planComposition(p: PlanInput): Plan {
     }
   }
   return { ok: true, start, end, durationS, segments };
+}
+
+// What a plan is made of, in seconds (a clip's partial last second counts as
+// one, as in the length table): the dry run's answer and the audit record.
+export function planSeconds(plan: Extract<Plan, { ok: true }>): { clip: number; still: number; card: number } {
+  const n = { clip: 0, still: 0, card: 0 };
+  for (const x of plan.segments) n[x.kind] += x.kind === 'clip' ? Math.ceil(x.outS - x.inS) : 1;
+  return n;
 }

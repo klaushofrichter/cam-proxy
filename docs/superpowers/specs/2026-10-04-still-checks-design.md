@@ -773,3 +773,70 @@ cams phase 2 ships.
 37. Ruling: every request is counted once in the daily outcome counts as
     what it came to; a request that joined a failed call counts as
     `failed` (cost 0) — cost: none.
+
+---
+
+## 13. Phase 3: compositions anchored at a second (cam-proxy)
+
+Built unsupervised; each ruling is cheap to change before cams ships its
+"Save clip around this". This section replaces §4.1's status codes and adds
+what §4 left open.
+
+**API.** `POST /api/cameras/{cam}/compositions` takes `{at, preS, postS,
+size, badge, timeZone?, dryRun?}` as an alternative to `{clipId, span?, …}`.
+The window is `[at − preS, at + 1 s + postS]`: the anchor second itself
+plus the rolls, so −10/+10 is 21 s. It goes through the same
+`compositionWindow` (span `{at, at + 1000}`) and the same limits (300 s,
+120 s at `1080p`); `planComposition` takes `clip` as optional and picks per
+second: a clip that covers it (earliest first), else the still (held for
+the stills interval), else a "No recording" card. Answers as today (201 job,
+429 `busy`, 503 `storage_paused` / `no_font`), plus 409
+`nothing_to_compose`.
+
+38. Ruling: exactly one anchor — `clipId` or `at`; both, neither, or
+    `span` with `at` are a 400 `invalid` — one meaning per request — cost
+    if wrong: none (additive).
+39. Ruling: `at` is checked like a still check's (ruling 25): a JSON safe
+    integer ≥ 0, a whole second, not in the future, and not older than the
+    longer of `retention.stillsDays` and `retention.clipsDays` (from the
+    start of that UTC day) → 400 `invalid` with a `detail` — nothing older
+    can be there — cost if wrong: a stored source missed (none today: both
+    are 7 days).
+40. Ruling: around a second the rolls are whole seconds from 0 to 3600
+    (400 `around a second, pre-roll and post-roll are whole seconds from 0
+    to 3600`); there is no recording to cut, and a negative roll would be
+    refused anyway by "at least 1 s must remain" — cost: none.
+41. Ruling: the window must have ended: `at + (postS + 1) s ≤ now`, else
+    400 `the window ends in the future (N s from now)` — the seconds after
+    now have no still yet and would be cards; cams caps the post-roll at
+    the seconds already past — cost if wrong: future seconds as cards.
+42. Ruling: a window whose every second would be a card answers 409
+    `nothing_to_compose` (`detail`: "no clip or still covers any second of
+    this window") instead of 404 as §4.1 sketched — 404 here already means
+    an unknown camera or clip, and the request is valid; only the store's
+    state refuses it — cost if wrong: a status code in cams's mapping.
+43. Ruling: a window that is partly covered is composed as asked, the
+    uncovered seconds (an edge, a gap in the stills) as "No recording"
+    cards as for clip-anchored compositions — the length the user chose,
+    and the gap is visible — cost if wrong: trimming cards at the edges.
+44. Ruling: `dryRun: true` (either anchor) answers 200 `{start, end,
+    durationS, seconds: {clip, still, card}, clips: [{start, end}]}` with
+    no job, no font check, no audit record, and the same 400/404/409 — the
+    dialog's plan line (ruling 22) and an early "nothing here" — cost if
+    wrong: drop the line.
+45. Ruling: the POST has its own limiter, 10 per minute per client,
+    counting requests past the input check that are not dry runs (each
+    starts or queues an encode; the queue holds 4); dry runs count in the
+    general limit only — cost if wrong: a number.
+46. Ruling: a `composition` audit record (host / access) for each non-dry
+    request past the input check, for both anchors: `anchor` (`clip` with
+    `clipId`, or `at`), `from`, `to`, `durationS`, `size`, `seconds`,
+    `outcome` (`started`, `busy`, `nothing_to_compose`, `storage_paused`,
+    `no_font`), `jobId`, `requestedBy` — an encode is minutes of the Pi's
+    CPU and the video leaves the proxy, unlike the reads cams makes all day
+    — cost: a few records a day.
+47. Ruling: no "STILLS 1 FPS" change — the composer's existing badge and
+    10 fps still runs are used as they are — cost: none.
+48. Ruling: the admin UI's Audit page filter lists `composition`, and
+    `still-check` (missing since phase 1) — every recorded action is
+    filterable — cost: none.
