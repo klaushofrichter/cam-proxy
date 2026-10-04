@@ -57,7 +57,7 @@
         "name": {
           "type": "string",
           "pattern": "^.{1,64}$",
-          "description": "display name"
+          "description": "fallback display name until the camera's own name is read (the camera stores its name)"
         },
         "host": {
           "type": "string",

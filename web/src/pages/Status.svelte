@@ -60,6 +60,7 @@
       <div class="card" data-testid="card-camera">
         <h3>Camera</h3>
         <dl>
+          <dt>Name</dt><dd data-testid="camera-name" title={$status.camera.nameSource === 'config' ? 'not read from the camera yet: the configured name' : 'stored on the camera'}>{$status.camera.name ?? '—'}{#if $status.camera.nameSource === 'config'} <span class="muted">(configured)</span>{/if}</dd>
           <dt>State</dt><dd class={$status.camera.reboot?.phase === 'rebooting' || $status.camera.reboot?.phase === 'power-cycling' ? 'warn' : (health ? bad('camera') : !$status.camera.online) ? 'bad' : 'ok'} data-testid="camera-state">{cameraStateText($status.camera)}</dd>
           <dt>Since</dt><dd>{ago($status.camera.since)}</dd>
           <dt>Model</dt><dd>{#if $status.camera.model && $status.camera.webUiUrl}<a href={$status.camera.webUiUrl} target="_blank" rel="noopener noreferrer" title="The camera's own web page">{$status.camera.model}</a>{:else}{$status.camera.model ?? '—'}{/if}</dd>

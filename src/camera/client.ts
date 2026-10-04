@@ -38,6 +38,7 @@ interface CameraStatus {
   model: string;
   firmware: string;
   serial?: string; // changes on every reboot (cams docs/reolink-api.md)
+  name?: string; // the camera's name (GetDevName and the OSD text are the same value)
 }
 
 interface ReolinkReply {
@@ -223,8 +224,9 @@ export class ReolinkClient {
   }
 
   async status(): Promise<CameraStatus> {
-    const value = await this.command<{ DevInfo?: { model?: string; firmVer?: string; serial?: string } }>('GetDevInfo');
-    return { model: value.DevInfo?.model ?? 'unknown', firmware: value.DevInfo?.firmVer ?? 'unknown', ...(value.DevInfo?.serial ? { serial: value.DevInfo.serial } : {}) };
+    const value = await this.command<{ DevInfo?: { model?: string; firmVer?: string; serial?: string; name?: unknown } }>('GetDevInfo');
+    const d = value.DevInfo;
+    return { model: d?.model ?? 'unknown', firmware: d?.firmVer ?? 'unknown', ...(d?.serial ? { serial: d.serial } : {}), ...(typeof d?.name === 'string' && d.name ? { name: d.name } : {}) };
   }
 
   // Real firmware limits concurrent sessions and never gets a Logout when we

@@ -204,7 +204,7 @@ the version string.
 | Field | Type | |
 |---|---|---|
 | `id` | string | `camera.id` (`cam1`) |
-| `name` | string | `camera.name` (`Den`) |
+| `name` | string | the camera's own name as the status poll reads it (`GetDevInfo.name`; camera-name design, still schema 1); the configured `camera.name` (`Den`) until the camera was read |
 | `address` | string | `camera.host` without its port (the camera's IP or name) |
 | `online` | boolean | |
 | `since` | integer (ms) | when `online` last changed |
