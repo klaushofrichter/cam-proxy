@@ -4,6 +4,7 @@ import request from 'supertest';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { join } from 'path';
+import { readdirSync } from 'fs';
 import { startSim } from './helpers/sim';
 import { startProxy, auth, until } from './helpers/proxy';
 import { insertClip } from '../src/catalog/clips';
@@ -162,8 +163,11 @@ describe('compositions around a second: the request', () => {
 
   it('a dry run over the clip\'s edge: stills before it, the clip after, no job and no record', async () => {
     const before = records().length;
+    const jobs = () => readdirSync(join(p.proxy.running.server.dataDir, 'compositions')).length; // each job has its folder
+    const jobsBefore = jobs();
     const r = await post({ at: M + 30_000, preS: 5, postS: 5, size: 'sd', badge: true, dryRun: true });
     expect(r.status).toBe(200);
+    expect(jobs()).toBe(jobsBefore);
     expect(r.body).toEqual({ start: M + 25_000, end: M + 36_000, durationS: 11, seconds: go2rtc ? { clip: 6, still: 5, card: 0 } : { clip: 6, still: 0, card: 5 }, clips: [{ start: M + 30_000, end: M + 45_000 }] });
     expect(records().length).toBe(before);
   });
