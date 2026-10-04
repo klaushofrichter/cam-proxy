@@ -13,18 +13,21 @@ describe('analytics settings', () => {
   it('default to no calls: disabled, limit 0, person only', () => {
     expect(DEFAULTS.analytics).toEqual({
       kinds: { person: true, vehicle: false, pet: false },
-      googleVision: { enabled: false, monthlyLimit: 0, dailyCap: 0 },
+      googleVision: { enabled: false, monthlyLimit: 0, dailyCap: 0, checksPerDay: 10 },
     });
   });
 
   it('accept valid values', () => {
-    expect(() => checkPartial({ analytics: { kinds: { vehicle: true }, googleVision: { enabled: true, monthlyLimit: 1000, dailyCap: 50 } } })).not.toThrow();
+    expect(() => checkPartial({ analytics: { kinds: { vehicle: true }, googleVision: { enabled: true, monthlyLimit: 1000, dailyCap: 50, checksPerDay: 0 } } })).not.toThrow();
+    expect(() => checkPartial({ analytics: { googleVision: { checksPerDay: 1000 } } })).not.toThrow();
   });
 
   it.each([
     [{ analytics: { kinds: { motion: true } } }, 'analytics.kinds.motion: unknown setting'],
     [{ analytics: { googleVision: { monthlyLimit: -1 } } }, 'analytics.googleVision.monthlyLimit: must be from 0 to 100000'],
     [{ analytics: { googleVision: { dailyCap: 10001 } } }, 'analytics.googleVision.dailyCap: must be from 0 to 10000'],
+    [{ analytics: { googleVision: { checksPerDay: 1001 } } }, 'analytics.googleVision.checksPerDay: must be from 0 to 1000'],
+    [{ analytics: { googleVision: { checksPerDay: -1 } } }, 'analytics.googleVision.checksPerDay: must be from 0 to 1000'],
     [{ analytics: { googleVision: { enabled: 'yes' } } }, 'analytics.googleVision.enabled: must be true or false'],
     [{ analytics: { roboflow: {} } }, 'analytics.roboflow: unknown setting'],
   ])('reject %j', (obj, message) => {
