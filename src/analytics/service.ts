@@ -2,7 +2,7 @@ import { mkdirSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { sleep } from '../async';
 import type { Catalog } from '../catalog/db';
-import { addUsage, analysisFor, countUnmapped, okAnalysisAt, saveAnalysis, setSummary, unanalysed, usageBetween, withoutSummary, type AnalysisRow } from '../catalog/analyses';
+import { addUsage, analysisFor, countUnmapped, okAnalysisAt, releaseUsage, saveAnalysis, setSummary, unanalysed, usageBetween, withoutSummary, type AnalysisRow } from '../catalog/analyses';
 import { checkAt, insertCheck, setCheckImage, type StillCheckRow } from '../catalog/still-checks';
 import { eventById } from '../catalog/events';
 import type { Config } from '../config/defaults';
@@ -243,7 +243,9 @@ export class AnalyticsService {
     if (running?.at === at) {
       const r = await running.done;
       if (r.outcome === 'ok') return this.count('reused'), { outcome: 'reused', source: 'check', row: r.row, joined: true };
-      return r.outcome === 'failed' ? { ...r, cost: 0 } : r;
+      // Each request is counted once, as what it came to (a 404 never is).
+      if (r.outcome === 'failed') return this.count('failed'), { ...r, cost: 0 };
+      return r;
     }
     const refuse = (status: 409 | 429 | 503, error: string, more: { reason?: string; until?: number | null } = {}): CheckOutcome => {
       this.count('refused');
@@ -261,6 +263,10 @@ export class AnalyticsService {
     if (this.monthUsage(day) >= g.monthlyLimit) return refuse(429, 'limit', { reason: 'month' });
     if (g.dailyCap > 0 && usageBetween(this.d.catalog, 'google-vision', day, day) >= g.dailyCap) return refuse(429, 'limit', { reason: 'day' });
     if (usageBetween(this.d.catalog, CHECK_USAGE.calls, day, day) >= g.checksPerDay) return refuse(429, 'limit', { reason: 'checks' });
+    // The call is reserved in the same synchronous step as the limit checks:
+    // an automatic analysis that runs while the still is read sees it.
+    addUsage(this.d.catalog, 'google-vision', day);
+    addUsage(this.d.catalog, CHECK_USAGE.calls, day);
     const abort = new AbortController();
     const done = this.callCheck(at, via, day, abort.signal);
     this.checking = { at, done, abort };
@@ -272,13 +278,30 @@ export class AnalyticsService {
   }
 
   private async callCheck(at: number, via: CheckVia, day: string, stop: AbortSignal): Promise<CheckOutcome> {
-    const jpeg = await this.d.readStill(at);
-    if (!jpeg) return { outcome: 'refused', status: 404, error: 'no_still' }; // deleted meanwhile
+    // No call made after all: the reservation (check()) is given back.
+    const release = () => {
+      try {
+        releaseUsage(this.d.catalog, 'google-vision', day);
+        releaseUsage(this.d.catalog, CHECK_USAGE.calls, day);
+      } catch (err) {
+        logger.warn({ err: (err as Error).message }, 'analytics_check_release_failed');
+      }
+    };
+    let jpeg: Buffer | undefined;
+    try {
+      jpeg = await this.d.readStill(at);
+    } catch {
+      jpeg = undefined;
+    }
+    if (stop.aborted) {
+      release();
+      this.count('failed');
+      return { outcome: 'failed', reason: 'aborted', tookMs: null, cost: 0 };
+    }
+    if (!jpeg) return release(), { outcome: 'refused', status: 404, error: 'no_still' }; // deleted meanwhile
     const key = this.key()!;
     const make = this.d.provider ?? ((id, k, url) => googleVision({ key: k, baseUrl: url }));
     const provider = make('google-vision', key, this.d.secrets().googleVisionUrl);
-    addUsage(this.d.catalog, 'google-vision', day);
-    addUsage(this.d.catalog, CHECK_USAGE.calls, day);
     const t0 = this.now();
     let res: { objects: unknown; raw: unknown };
     try {

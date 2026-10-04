@@ -23,6 +23,7 @@ let calls: number[];
 let answers: Array<'ok' | AnalyticsError>;
 let dir: string;
 let gate: Promise<void> | null; // holds the provider's answer while set
+let readGates: Map<number, Promise<void>>; // holds readStill(ts) while set
 
 const PERSON = { mid: '/m/01g317', name: 'Person', score: 0.84, box: { x0: 0.1, y0: 0.1, x1: 0.5, y1: 0.9 } };
 const FAN = { mid: '/m/0fan', name: 'Ceiling fan', score: 0.6, box: { x0: 0, y0: 0, x1: 0.2, y1: 0.2 } };
@@ -46,7 +47,10 @@ function deps(over: { key?: string } = {}): AnalyticsDeps {
     catalog: c, log, cam: 'cam1', dataDir: dir,
     config: () => config,
     secrets: () => ({ googleVisionKey: over.key ?? 'k-123456789012', googleVisionUrl: 'http://mock' }),
-    readStill: async (ts) => stills.get(ts),
+    readStill: async (ts) => {
+      await readGates.get(ts);
+      return stills.get(ts);
+    },
     listStills: (from, to) => [...stills.keys()].filter((t) => t >= from && t <= to).sort((a, b) => a - b),
     timeInfo: () => undefined,
     now: () => now,
@@ -70,7 +74,15 @@ beforeEach(() => {
   calls = [];
   answers = [];
   gate = null;
+  readGates = new Map();
 });
+
+const holdRead = (ts: number) => {
+  let open!: () => void;
+  readGates.set(ts, new Promise<void>((r) => (open = r)));
+  return open;
+};
+const tick = () => new Promise((r) => setTimeout(r, 0));
 
 describe('AnalyticsService.check', () => {
   it('calls Vision for the still, stores the check with its JPEG (named by the row id), announces it and counts it', async () => {
@@ -240,5 +252,72 @@ describe('AnalyticsService.check', () => {
     const s = service();
     await s.check(AT, 'token');
     expect(s.state()[0]).toMatchObject({ month: { calls: 1 }, today: { calls: 1 }, checks: { today: 1, cap: 10 } });
+  });
+});
+
+describe('AnalyticsService.check: the budget is reserved before the still is read', () => {
+  it.each([
+    ['the monthly limit', { monthlyLimit: 1, dailyCap: 0 }],
+    ['the daily cap', { monthlyLimit: 100, dailyCap: 1 }],
+  ])('an automatic analysis during the read cannot pass %s', async (_name, limits) => {
+    Object.assign(config.analytics.googleVision, limits);
+    still(AT, 7);
+    still(T0 + 1000, 9); // the event's still
+    const s = service();
+    const open = holdRead(AT);
+    const r = s.check(AT, 'token');
+    await tick();
+    const e = insertEvent(c, { cam: 'cam1', source: 'onvif', kind: 'person', start_ts: T0, raw: null });
+    s.onEvent(e);
+    await s.idle();
+    expect(analysisFor(c, e.id)).toMatchObject({ status: 'skipped', reason: 'limit' });
+    open();
+    expect((await r).outcome).toBe('ok');
+    expect(calls).toEqual([7]);
+    expect(usage('google-vision')).toBe(1);
+  });
+
+  it('stop() during the read: no call, no usage left behind', async () => {
+    still(AT, 7);
+    const s = service();
+    const open = holdRead(AT);
+    const r = s.check(AT, 'token');
+    await tick();
+    expect(usage('google-vision')).toBe(1); // reserved
+    const stopped = s.stop();
+    open();
+    await stopped;
+    expect(await r).toMatchObject({ outcome: 'failed', reason: 'aborted', cost: 0 });
+    expect(calls).toEqual([]);
+    expect(usage('google-vision')).toBe(0);
+    expect(usage('google-vision:check')).toBe(0);
+  });
+
+  it('a still gone by the time it is read: 404, the reservation released', async () => {
+    still(AT, 7);
+    const s = service();
+    const open = holdRead(AT);
+    const r = s.check(AT, 'token');
+    await tick();
+    stills.delete(AT);
+    open();
+    expect(await r).toEqual({ outcome: 'refused', status: 404, error: 'no_still' });
+    expect(usage('google-vision')).toBe(0);
+    expect(usage('google-vision:check')).toBe(0);
+  });
+
+  it('a request that joined a failed call is counted as failed too (each request once)', async () => {
+    still(AT, 7);
+    answers = [new AnalyticsError('timeout', true)];
+    const s = service();
+    const open = holdRead(AT);
+    const first = s.check(AT, 'token');
+    await tick();
+    const joined = s.check(AT, 'token');
+    open();
+    expect(await first).toMatchObject({ outcome: 'failed', cost: 1 });
+    expect(await joined).toMatchObject({ outcome: 'failed', cost: 0 });
+    expect(usage('google-vision:check-failed')).toBe(2);
+    expect(usage('google-vision:check')).toBe(1); // one call
   });
 });
