@@ -837,3 +837,6 @@ the stills interval), else a "No recording" card. Answers as today (201 job,
     — cost: a few records a day.
 47. Ruling: no "STILLS 1 FPS" change — the composer's existing badge and
     10 fps still runs are used as they are — cost: none.
+48. Ruling: the admin UI's Audit page filter lists `composition`, and
+    `still-check` (missing since phase 1) — every recorded action is
+    filterable — cost: none.

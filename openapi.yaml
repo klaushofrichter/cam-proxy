@@ -101,16 +101,18 @@ paths:
         '404': { description: 'no sprite for that minute, unknown camera, stills off, or a timestamp that is not a minute boundary' }
   /api/cameras/{cam}/compositions:
     post:
-      summary: Compose a clip with a pre-/post-roll (other clips, stills or "No recording" cards fill each second); H.264 10 fps, at most 300 s (120 s at 1080p)
+      summary: 'Compose a clip with a pre-/post-roll, anchored at a clip (clipId) or at a second (at, #179); other clips, stills or "No recording" cards fill each second; H.264 10 fps, at most 300 s (120 s at 1080p). 10 a minute per client (dry runs not counted)'
       requestBody:
         content:
           application/json:
-            schema: { type: object, required: [clipId, preS, postS, size, badge], properties: { clipId: { type: integer }, span: { type: object, required: [start, end], properties: { start: { type: integer }, end: { type: integer } }, description: 'unix ms: the recording the rolls apply to (cams: the SD-card file); must overlap the clip by at least 1 s; the clip itself when left out' }, preS: { type: integer, minimum: -3600, maximum: 3600 }, postS: { type: integer, minimum: -3600, maximum: 3600 }, size: { type: string, enum: [sd, 360p, 720p, 1080p] }, badge: { type: boolean }, timeZone: { type: string, description: 'IANA zone for the cards'' time, e.g. America/Chicago; default the process zone' } } }
+            schema: { type: object, required: [preS, postS, size, badge], properties: { clipId: { type: integer, description: 'the anchor clip; exactly one of clipId and at' }, at: { type: integer, description: 'unix ms, a whole second: the window is [at - preS, at + 1 s + postS]; not in the future, not older than the stills and clips kept; the window must have ended' }, span: { type: object, required: [start, end], properties: { start: { type: integer }, end: { type: integer } }, description: 'with clipId only. unix ms: the recording the rolls apply to (cams: the SD-card file); must overlap the clip by at least 1 s; the clip itself when left out' }, preS: { type: integer, minimum: -3600, maximum: 3600, description: '0…3600 with at' }, postS: { type: integer, minimum: -3600, maximum: 3600, description: '0…3600 with at' }, size: { type: string, enum: [sd, 360p, 720p, 1080p] }, badge: { type: boolean }, timeZone: { type: string, description: 'IANA zone for the cards'' time, e.g. America/Chicago; default the process zone' }, dryRun: { type: boolean, description: 'plan only: 200 with what the clip would be made of, no job' } } }
       responses:
+        '200': { description: 'dryRun: { start, end, durationS, seconds: { clip, still, card }, clips: [{ start, end }] }' }
         '201': { description: '{ id, state, progress, durationS }' }
-        '400': { description: 'invalid input or limits: at least 1 s of the span must remain, at most 300 s (120 s at 1080p), detail e.g. "at most 300 s (5:00)"' }
+        '400': { description: 'invalid input or limits: one anchor, at a whole second in the past and within retention, the window ended, at least 1 s of the span must remain, at most 300 s (120 s at 1080p), detail e.g. "at most 300 s (5:00)"' }
         '404': { description: unknown camera or clip }
-        '429': { description: 'busy: one encoding runs and 3 wait' }
+        '409': { description: 'nothing_to_compose: no clip or still covers any second of the window' }
+        '429': { description: 'busy (one encoding runs and 3 wait), or rate_limited' }
         '503': { description: storage_paused, or no_font (no font for the badge or cards) }
   /api/cameras/{cam}/compositions/{file}:
     get:
