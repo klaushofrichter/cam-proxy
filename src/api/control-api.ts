@@ -26,6 +26,10 @@ import { readCookie, SESSION_COOKIE, SESSION_MS, type createSessionSigner } from
 import type { createLoginLinks } from './login-links';
 import type { RecordingsStatus } from '../recordings/side';
 import type { HealthSummary } from '../health/summary';
+import type { FoundDevice } from '../camera/discovery';
+import { splitHost } from '../camera/http';
+import { checkEnvPath, EnvFileError, writeEnvKey } from '../config/env-file';
+import { CAMERA_HOST_NAMES, validCameraHost } from '../config/env';
 import { InventoryBusyError, InventoryStoppingError, RepairRefusedError, RUN_ID, type InventoryRunner } from '../inventory/runner';
 
 interface FtpStatus {
@@ -84,6 +88,11 @@ interface ControlDeps {
   sessions: ReturnType<typeof createSessionSigner>;
   links: ReturnType<typeof createLoginLinks>;
   version: string;
+  // Find camera (spec 2026-10-04-pi-config-design §3, §4): an ONVIF
+  // WS-Discovery probe, and the .env file "Use this address" writes
+  // (CAMPROXY_ENV_FILE; undefined when not set).
+  findCamera: () => Promise<{ devices: FoundDevice[]; tookMs: number }>;
+  envFile: () => string | undefined;
 }
 
 // The effective configuration for the UI: value (what runs), source, restart
@@ -206,7 +215,20 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
 
 // Actions that write their own audit records (no generic control-action);
 // a new action that audits itself goes here too.
-const OWN_AUDIT = new Set(['camera-reboot', 'camera-powercycle', 'camera-poe-on', 'restart-proxy', 'inventory', 'inventory-repair']);
+const OWN_AUDIT = new Set(['camera-reboot', 'camera-powercycle', 'camera-poe-on', 'restart-proxy', 'inventory', 'inventory-repair', 'camera-address']);
+
+// Find camera per client and minute: a probe is 3 s of multicast.
+export const FIND_CAMERA_PER_MINUTE = 6;
+
+// Whether "Use this address" can write the .env file, and why not.
+function envFileState(path: string | undefined): { writable: boolean; reason?: string; path?: string } {
+  try {
+    return { writable: true, path: checkEnvPath(path) };
+  } catch (err) {
+    if (err instanceof EnvFileError) return { writable: false, reason: err.message };
+    throw err;
+  }
+}
 
 // The control API (spec §11); admin access is checked by the caller.
 export function controlApi(d: ControlDeps): express.Router {
@@ -342,7 +364,11 @@ export function controlApi(d: ControlDeps): express.Router {
     res.json(configView(d.loaded(), d.running()));
   });
 
-  r.post('/actions/:name', async (req, res) => {
+  // Find camera: a rate limit of its own (the other actions have none).
+  const findLimit = rateLimit({ windowMs: 60_000, limit: FIND_CAMERA_PER_MINUTE, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } });
+  const actionLimit: express.RequestHandler = (req, res, next) => (req.params.name === 'find-camera' ? findLimit(req, res, next) : next());
+
+  r.post('/actions/:name', actionLimit, async (req, res) => {
     const name = req.params.name;
     const requestedBy = res.locals.access?.viaCookie ? 'session' : 'token';
     const requester = { requestedBy, ...who(req) } as const;
@@ -450,6 +476,31 @@ export function controlApi(d: ControlDeps): express.Router {
           return void res.json(await d.poeSwitch.read());
         } catch (err) {
           return switchFail(err);
+        }
+      }
+      // Find camera (pi-config spec §3): the devices that answer an ONVIF
+      // probe, the current camera marked, and whether the .env file can be written.
+      case 'find-camera': {
+        const r = await d.findCamera();
+        const current = splitHost(d.running().camera.host).hostname.toLowerCase();
+        return void res.json({ devices: r.devices.map((x) => ({ ...x, current: x.address.toLowerCase() === current })), tookMs: r.tookMs, envFile: envFileState(d.envFile()) });
+      }
+      // Use this address (pi-config spec §4): CAMERA_HOST into the .env file
+      // (backup, atomic), audited; the UI restarts the proxy next.
+      case 'camera-address': {
+        const host: unknown = req.body?.host;
+        if (!validCameraHost(host)) return fail(400, 'invalid', 'host: an address or name, optional :port');
+        const line = `CAMERA_HOST=${host}`;
+        const base = { action: 'camera-address', category: ['configuration'], type: ['change'], user: 'admin', ...who(req) };
+        try {
+          const w = writeEnvKey(checkEnvPath(d.envFile()), CAMERA_HOST_NAMES as unknown as string[], host);
+          d.audit.write({ ...base, outcome: 'success', message: `Camera address set in .env: "${w.previous ?? ''}" → "${host}" (applies after a restart)`, details: { from: w.previous, to: host, key: w.key, backup: w.backup, requestedBy } });
+          logger.info({ key: w.key, from: w.previous, to: host, backup: w.backup }, 'camera_address_written');
+          return void res.json({ host, previous: w.previous, key: w.key, backup: w.backup, restart: true });
+        } catch (err) {
+          if (!(err instanceof EnvFileError)) throw err;
+          d.audit.write({ ...base, outcome: 'failure', error: err.code, message: `Camera address "${host}" not written to .env: ${err.message}`, details: { to: host, requestedBy } });
+          return fail(409, 'not_available', err.message, { line });
         }
       }
       // Restart the process (#71): answer first, then the normal stop and exit 0.

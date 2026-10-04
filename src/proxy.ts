@@ -58,6 +58,7 @@ import { clockText, defaultFont } from './compose/ffmpeg';
 import { HostMonitor, type StatFs } from './health/host';
 import { buildHealth, type HealthSummary, type LastInventory } from './health/summary';
 import { localApi } from './api/local-api';
+import { discover } from './camera/discovery';
 
 export const VERSION = process.env.CAMPROXY_VERSION ?? 'dev';
 
@@ -107,6 +108,9 @@ export interface ProxyOptions {
   // /sys are ('/'; tests and e2e point at a fixture tree), the data volume's
   // statfs, and how often they are read (1 min).
   host?: { root?: string; statfs?: StatFs; everyMs?: number };
+  // Find camera's probe (spec 2026-10-04-pi-config-design §3): tests and
+  // e2e send it to a fake on 127.0.0.1 instead of the multicast group.
+  discovery?: { target?: { address: string; port: number }; timeoutMs?: number };
 }
 
 // The camera's own web page for the admin UI: camera.webUiUrl, none for no
@@ -698,6 +702,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       sessions,
       links,
       version: VERSION,
+      findCamera: () => discover(opts.discovery ?? {}),
+      envFile: () => loaded.env.CAMPROXY_ENV_FILE || undefined,
     }),
   );
   // The admin UI. The files are public; every API call needs a session.
