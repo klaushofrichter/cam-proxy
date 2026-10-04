@@ -92,7 +92,7 @@ describe('AnalyticsService.check', () => {
     expect(r).toMatchObject({ outcome: 'ok', tookMs: 600 });
     if (r.outcome !== 'ok') throw new Error('not ok');
     const row = checkById(c, r.row.id)!;
-    expect(row).toMatchObject({ cam: 'cam1', still_ts: AT, provider: 'google-vision', requested_via: 'token', took_ms: 600, image: join(dir, 'analytics', 'cam1', `check-${row.id}.jpg`) });
+    expect(row).toMatchObject({ cam: 'cam1', still_ts: AT, provider: 'google-vision', requested_via: 'token', took_ms: 600, image: join(dir, 'still-checks', 'cam1', `check-${row.id}.jpg`) });
     expect(readFileSync(row.image!)).toEqual(Buffer.from([7, 0xd8]));
     expect(JSON.parse(row.summary)).toEqual([{ category: 'person', subtype: 'person', score: 0.84, box: PERSON.box }]);
     expect(JSON.parse(row.objects)).toHaveLength(2);
@@ -239,11 +239,11 @@ describe('AnalyticsService.check', () => {
 
   it('keeps the check without an image when the copy cannot be written (the call was paid)', async () => {
     still(AT, 7);
-    writeFileSync(join(dir, 'analytics'), 'a file, so mkdir fails');
+    writeFileSync(join(dir, 'still-checks'), 'a file, so mkdir fails');
     const r = await service().check(AT, 'token');
     expect(r.outcome).toBe('ok');
     expect(checkAt(c, 'cam1', AT)).toMatchObject({ image: null });
-    expect(existsSync(join(dir, 'analytics', 'cam1'))).toBe(false);
+    expect(existsSync(join(dir, 'still-checks', 'cam1'))).toBe(false);
     expect(log.since(0, { types: ['still-check'] }, 10)[0].data).toMatchObject({ imageUrl: null });
   });
 

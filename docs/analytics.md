@@ -127,7 +127,8 @@ sends any second that has a still, not only an event's. The result is a
 5. **Stored.** Successful checks only, in the `still_checks` table: the
    second, the objects, the raw answer and the summary (the same mapping as
    above; unmapped objects are counted too). The JPEG is copied to
-   `data/analytics/<cam>/check-<id>.jpg`, so a check outlives the 7-day
+   `data/still-checks/<cam>/check-<id>.jpg` (its own folder, apart from the
+   analyses' images), so a check outlives the 7-day
    stills. Checks are kept as long as events (`retention.eventsDays`, 30 days).
 6. **The events it sits in** are computed when read, never stored: the
    camera's events with start ≤ second ≤ end (an open one counted

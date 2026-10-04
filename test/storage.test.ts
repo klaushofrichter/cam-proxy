@@ -405,42 +405,47 @@ describe('storage: the recordings cache', () => {
   });
 });
 
-// cams #179: still checks keep their JPEG in data/analytics/<cam>/ next to the
-// analyses' ones. Retention used to delete every file there that no analysis
-// names, so a check's image vanished within the hour.
+// cams #179: still checks keep their JPEG in their own folder,
+// data/still-checks/<cam>/ (coordinator ruling: an older proxy's retention
+// never sweeps it, so a rollback keeps the images). The analytics folder
+// keeps its old rule: only what an analysis names.
 describe('storage: still checks', () => {
-  const jpg = (dir: string, name: string) => {
-    const d = join(dir, 'analytics', 'cam1');
+  const jpg = (dir: string, folder: 'analytics' | 'still-checks', name: string) => {
+    const d = join(dir, folder, 'cam1');
     mkdirSync(d, { recursive: true });
     const f = join(d, name);
     writeFileSync(f, Buffer.from([0xff, 0xd8]));
     return f;
   };
-  it("keeps the images that a check or an analysis names, deletes orphans and old checks with theirs", () => {
+  it('keeps the images a check names in its folder, deletes orphans and old checks with theirs; analytics files as before', () => {
     const { storage, catalog, dir } = setup();
     const e = insertEvent(catalog, { cam: 'cam1', source: 'onvif', kind: 'person', start_ts: NOW - DAY, raw: null });
-    const analysisJpg = jpg(dir, `${e.id}.jpg`);
+    const analysisJpg = jpg(dir, 'analytics', `${e.id}.jpg`);
     saveAnalysis(catalog, { event_id: e.id, provider: 'google-vision', status: 'ok', reason: null, still_ts: NOW - DAY + 1000, image: analysisJpg, requested_at: NOW, took_ms: 1, objects: '[]', raw: null, summary: '[]' });
+    const analysisOrphan = jpg(dir, 'analytics', '424242.jpg');
     const row = (ts: number) => insertCheck(catalog, { cam: 'cam1', still_ts: ts, provider: 'google-vision', requested_at: ts, requested_via: 'token', took_ms: 1, objects: '[]', raw: null, summary: '[]' });
     const kept = row(NOW - 2 * DAY);
-    const keptJpg = jpg(dir, `check-${kept.id}.jpg`);
+    const keptJpg = jpg(dir, 'still-checks', `check-${kept.id}.jpg`);
     setCheckImage(catalog, kept.id, keptJpg);
     const old = row(NOW - 31 * DAY);
-    const oldJpg = jpg(dir, `check-${old.id}.jpg`);
+    const oldJpg = jpg(dir, 'still-checks', `check-${old.id}.jpg`);
     setCheckImage(catalog, old.id, oldJpg);
-    const orphan = jpg(dir, 'check-999.jpg');
+    const orphan = jpg(dir, 'still-checks', 'check-999.jpg');
 
     const dry = storage.run({ dryRun: true });
     expect(dry.deleted.stillChecks).toBe(1);
     expect(existsSync(oldJpg)).toBe(true);
+    expect(existsSync(orphan)).toBe(true);
 
     const r = storage.run({});
     expect(r.deleted.stillChecks).toBe(1);
     expect(checkById(catalog, old.id)).toBeUndefined();
     expect(checkById(catalog, kept.id)).toBeDefined();
     expect(existsSync(keptJpg)).toBe(true);
-    expect(existsSync(analysisJpg)).toBe(true);
     expect(existsSync(oldJpg)).toBe(false);
     expect(existsSync(orphan)).toBe(false);
+    // The analytics folder: the analysis image survives, an orphan goes.
+    expect(existsSync(analysisJpg)).toBe(true);
+    expect(existsSync(analysisOrphan)).toBe(false);
   });
 });

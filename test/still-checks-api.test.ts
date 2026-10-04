@@ -118,9 +118,9 @@ describe('still checks: reuse, reads and the image', () => {
     const c = p.proxy.catalog;
     const at = M - 120_000; // before the open person event above: in no event
     const row = insertCheck(c, { cam: 'cam1', still_ts: at, provider: 'google-vision', requested_at: at + 1000, requested_via: 'token', took_ms: 610, objects: '[{"name":"Dog","score":0.6}]', raw: '{"r":2}', summary: '[]' });
-    const img = join(p.dir, 'data', 'analytics', 'cam1', `check-${row.id}.jpg`);
+    const img = join(p.dir, 'data', 'still-checks', 'cam1', `check-${row.id}.jpg`);
     const { mkdirSync } = await import('fs');
-    mkdirSync(join(p.dir, 'data', 'analytics', 'cam1'), { recursive: true });
+    mkdirSync(join(p.dir, 'data', 'still-checks', 'cam1'), { recursive: true });
     writeFileSync(img, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
     setCheckImage(c, row.id, img);
     const list = await request(p.base).get(`/api/cameras/cam1/still-checks?from=${at - 1}&to=${at + 1}`).set(auth());
@@ -139,12 +139,19 @@ describe('still checks: reuse, reads and the image', () => {
     expect((await request(p.base).get(`/api/cameras/cam9/still-checks/${row.id}`).set(auth())).status).toBe(404);
   });
 
-  it('never serves an image path outside the analytics folder', async () => {
+  it('never serves an image path outside the still-checks folder', async () => {
     const c = p.proxy.catalog;
     const row = insertCheck(c, { cam: 'cam1', still_ts: M + 50_000, provider: 'google-vision', requested_at: M, requested_via: 'token', took_ms: 1, objects: '[]', raw: null, summary: '[]' });
     setCheckImage(c, row.id, join(p.dir, 'data', 'catalog.sqlite'));
     expect((await request(p.base).get(`/api/cameras/cam1/still-checks/${row.id}.jpg`).set(auth())).status).toBe(404);
     expect((await request(p.base).get(`/api/cameras/cam1/still-checks/${row.id}`).set(auth())).body.imageUrl).toMatch(/\.jpg$/);
+    // An existing JPEG in the analytics folder is not a check's either.
+    const { mkdirSync } = await import('fs');
+    mkdirSync(join(p.dir, 'data', 'analytics', 'cam1'), { recursive: true });
+    const other = join(p.dir, 'data', 'analytics', 'cam1', 'x.jpg');
+    writeFileSync(other, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+    setCheckImage(c, row.id, other);
+    expect((await request(p.base).get(`/api/cameras/cam1/still-checks/${row.id}.jpg`).set(auth())).status).toBe(404);
   });
 
   it('rejects a missing, reversed or longer-than-31-days range', async () => {

@@ -255,15 +255,17 @@ export class Storage extends EventEmitter {
       deleted.events = deleteEventsBefore(this.d.catalog, eventsBefore);
       // Still checks (cams #179) are kept as long as events, by their second.
       deleted.stillChecks = deleteChecksBefore(this.d.catalog, eventsBefore);
-      // Images no analysis (deleted with its event) and no still check names.
-      // Both tables' images share the folder: the keep-set is their union.
-      const keep = analysisImages(this.d.catalog);
-      for (const f of checkImages(this.d.catalog)) keep.add(f);
-      const dir = join(cfg.server.dataDir, 'analytics', cfg.camera.id);
-      for (const f of existsSync(dir) ? readdirSync(dir) : []) {
-        const path = join(dir, f);
-        if (!keep.has(path)) try { unlinkSync(path); } catch { /* gone */ }
-      }
+      // Images no row names: analyses' (deleted with their event) in
+      // analytics/, still checks' in their own folder, still-checks/.
+      const sweep = (folder: string, keep: Set<string>) => {
+        const dir = join(cfg.server.dataDir, folder, cfg.camera.id);
+        for (const f of existsSync(dir) ? readdirSync(dir) : []) {
+          const path = join(dir, f);
+          if (!keep.has(path)) try { unlinkSync(path); } catch { /* gone */ }
+        }
+      };
+      sweep('analytics', analysisImages(this.d.catalog));
+      sweep('still-checks', checkImages(this.d.catalog));
       pruneUsage(this.d.catalog, new Date(now - 400 * DAY).toISOString().slice(0, 10));
       deleted.streamLog = this.d.log.deleteBefore(logBefore);
     }

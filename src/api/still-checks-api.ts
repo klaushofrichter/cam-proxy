@@ -110,8 +110,8 @@ export function stillChecksApi(d: { config: () => Config; catalog: Catalog; anal
     if (!row || row.cam !== cam()) return void res.status(404).json({ error: 'not_found' });
     if (!m[2]) return void res.json(checkFullJson(d.catalog, row, maxOpenMs()));
     // The file name comes from the row (written by the service), never from
-    // the request; still, only a file inside this camera's analytics folder.
-    const root = resolve(d.config().server.dataDir, 'analytics', cam());
+    // the request; still, only a file inside this camera's still-checks folder.
+    const root = resolve(d.config().server.dataDir, 'still-checks', cam());
     const path = row.image ? resolve(row.image) : null;
     if (!path || !path.startsWith(root + sep)) return void res.status(404).json({ error: 'not_found' });
     let jpeg: Buffer;

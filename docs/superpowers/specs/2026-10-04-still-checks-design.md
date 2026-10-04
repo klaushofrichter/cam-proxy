@@ -145,7 +145,7 @@ CREATE TABLE still_checks (
   requested_at INTEGER NOT NULL,
   requested_via TEXT NOT NULL,    -- 'token' (cams) or 'session' (admin UI)
   took_ms INTEGER,
-  image TEXT,                     -- data/analytics/<cam>/check-<id>.jpg
+  image TEXT,                     -- data/still-checks/<cam>/check-<id>.jpg (ruling 35)
   objects TEXT NOT NULL,          -- JSON [{name, mid, score, box}]
   raw TEXT,                       -- JSON, the provider's answer
   summary TEXT NOT NULL,          -- JSON SummaryEntry[]
@@ -216,8 +216,11 @@ and its neighbours (the event, the card) live 30 days too; one knob less
 ### 1.4 The image files (a required fix)
 
 `storage.ts` deletes every file in `data/analytics/<cam>/` that no
-`analyses.image` names. The keep-set becomes the union of
-`analyses.image` and `still_checks.image`. File name `check-<rowid>.jpg`:
+`analyses.image` names. ~~The keep-set becomes the union of
+`analyses.image` and `still_checks.image`.~~ Changed by ruling 35: check
+images live in their own folder, `data/still-checks/<cam>/`, which
+retention sweeps with `still_checks.image` as its keep-set; the analytics
+folder keeps its old rule. File name `check-<rowid>.jpg`:
 from the row id, never from the request. The copy is written after the row
 exists (`INSERT … RETURNING id`, then write, then `UPDATE image`), and a
 failed copy keeps the row without an image (as `storeOk` does): the result
@@ -227,8 +230,10 @@ was paid for.
 
 - Migration 7 (catalog version 6 → 7), additive only: one table, one index.
 - A rollback to an older cam-proxy logs `catalog_newer_than_code` and runs;
-  the table is ignored, its images are deleted by the old retention (they
-  are unknown to it). Acceptable: the checks are information only.
+  the table is ignored. Its images are in `data/still-checks/`, which the old
+  retention never looks at (ruling 35), so they survive a rollback; they
+  are not deleted by age either until a version with still checks runs
+  again (≤ 45 MB).
 - cams talks to an older proxy: `POST still-checks` answers 404 → the button
   says "this camera gateway is too old for checks" (from the `GET
   analytics` 404, §5.1).
@@ -236,7 +241,8 @@ was paid for.
 ### 1.6 Backup, inventory, audit
 
 - **Backup:** there is none of the catalog today; nothing changes. The
-  checks are in `catalog.sqlite` and `data/analytics/`, like the analyses.
+  checks are in `catalog.sqlite` and `data/still-checks/` (the analyses in
+  `data/analytics/`).
 - **Inventory:** no new kind. There is nothing to compare a check with
   (the camera knows nothing about it). The events inventory must not count
   checks: it doesn't, they are not events.
@@ -750,3 +756,20 @@ cams phase 2 ships.
 34. Ruling: retention reports `deleted.stillChecks` (rows) next to
     `deleted.events`, so the run result and the metric show them — cost: a
     label.
+35. Ruling (coordinator, review of PR #143): check images go to their own
+    folder `data/still-checks/<cam>/check-<id>.jpg`, not
+    `data/analytics/<cam>/` — an older proxy's retention never sweeps it,
+    so a rollback keeps the images, and the analytics keep-set keeps its old
+    rule (only what an analysis names). Retention sweeps the new folder
+    with `still_checks.image` as the keep-set; the image route only serves
+    files inside it (resolve + startsWith) — cost if wrong: moving files
+    between folders in a later version.
+36. Ruling (review of PR #143): a check reserves its call (the usage rows)
+    in the same synchronous step as the limit checks, before the still is
+    read, and gives it back when no call is made (the still gone, stop()
+    during the read: 502 `aborted` with cost 0) — otherwise an automatic
+    analysis could pass the monthly limit or the daily cap while the still
+    was read — cost if wrong: none (the count is exact either way).
+37. Ruling: every request is counted once in the daily outcome counts as
+    what it came to; a request that joined a failed call counts as
+    `failed` (cost 0) — cost: none.

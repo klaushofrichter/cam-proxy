@@ -7,7 +7,8 @@
 - `GET /api/cameras/:cam/analytics` (client token): the Vision budget for cams's button, `{enabled, paused, month, today, checks}`, never the key.
 - New setting `analytics.googleVision.checksPerDay` (default 10, 0–1000, 0 = no checks): still checks per camera day, on top of the shared monthly limit and daily cap, so checks can't spend the calls the person events need. In the Settings page's Analytics card. `GET /control/analytics` reports `checks: {today, cap}`.
 - Audit: a `still-check` record per request past the input check (outcome, reason, cost, what was found, who); `activity-daily` counts the day's checks (`analytics.checks`).
-- Catalog version 7: a new table `still_checks` (additive; an older version runs with it and ignores it, but its retention would delete the check images). Checks are kept `retention.eventsDays` (30) with their own JPEG copy, `data/analytics/<cam>/check-<id>.jpg`. Retention now keeps every image a check or an analysis names (it used to keep the analyses' only) and reports `deleted.stillChecks`.
+- Catalog version 7: a new table `still_checks` (additive). Checks are kept `retention.eventsDays` (30) with their own JPEG copy in a new folder, `data/still-checks/<cam>/check-<id>.jpg`; retention deletes old checks with their images and files no check names there, and reports `deleted.stillChecks`. The analytics folder is unchanged.
+- Rollback: an older version runs with catalog version 7 (it logs `catalog_newer_than_code` and ignores the table) and never touches `data/still-checks/`, so the checks and their images are back when this version runs again; meanwhile cams's check button sees 404 (no still checks on that proxy).
 
 ## v2026.10.04.1
 

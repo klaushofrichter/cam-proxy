@@ -11,7 +11,7 @@ export interface StillCheckRow {
   requested_at: number;
   requested_via: 'token' | 'session';
   took_ms: number | null;
-  image: string | null; // data/analytics/<cam>/check-<id>.jpg, set after the row exists
+  image: string | null; // data/still-checks/<cam>/check-<id>.jpg, set after the row exists
   objects: string; // JSON [{name, mid, score, box}]
   raw: string | null; // JSON, the provider's answer
   summary: string; // JSON SummaryEntry[]
@@ -56,7 +56,7 @@ export function countChecksBefore(c: Catalog, ts: number): number {
   return (c.db.prepare('SELECT COUNT(*) AS n FROM still_checks WHERE still_ts < ?').get(ts) as { n: number }).n;
 }
 
-// The image files the rows name (retention's keep-set, with the analyses').
+// The image files the rows name (retention's keep-set for data/still-checks/).
 export function checkImages(c: Catalog): Set<string> {
   return new Set((c.db.prepare('SELECT image FROM still_checks WHERE image IS NOT NULL').all() as { image: string }[]).map((r) => r.image));
 }

@@ -328,7 +328,9 @@ export class AnalyticsService {
     }
     // The copy after the row (its name is the row id); a failed copy keeps
     // the row without an image: the result was paid for.
-    const dir = join(this.d.dataDir, 'analytics', this.d.cam);
+    // Its own folder, not analytics/: an older version's retention never
+    // sweeps it (a rollback keeps the images).
+    const dir = join(this.d.dataDir, 'still-checks', this.d.cam);
     const image = join(dir, `check-${row.id}.jpg`);
     try {
       mkdirSync(dir, { recursive: true });

@@ -494,7 +494,7 @@ privacy and cost): [docs/analytics.md](docs/analytics.md).
 - **Still checks (cams #179):** cams can ask Vision about any second that has
   a still (`POST /api/cameras/{cam}/still-checks {at}`). The answer is a
   check, stored apart from events for 30 days with its JPEG
-  (`data/analytics/<cam>/check-<id>.jpg`); the same second again is answered
+  (`data/still-checks/<cam>/check-<id>.jpg`); the same second again is answered
   from the stored check (or from an event's analysis of that still) without a
   call. Checks count toward the monthly limit and the daily cap, and at most
   `checksPerDay` a camera day. Each request is audited (`still-check`). See
