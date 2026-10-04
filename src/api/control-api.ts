@@ -2,6 +2,9 @@ import express, { type Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import type { Catalog } from '../catalog/db';
 import type { CameraState } from '../camera/status';
+import { CameraError } from '../camera/client';
+import { CameraNameRefused } from '../camera/name';
+import { cameraNameProblem } from '../camera/name-rules';
 import type { PowerCycleAnswer, RebootAnswer, RebootRequester, RebootState, TooSoon } from '../camera/reboot';
 import { PoeSwitchError, type PoeOnResult, type PoeSwitchStatus, type PortReading } from '../camera/poe-switch';
 import type { Config } from '../config/defaults';
@@ -48,7 +51,10 @@ interface ControlDeps {
   running: () => Config; // what the components run with
   catalog: Catalog;
   log: StreamLog;
-  camera: () => CameraState & { webUiUrl: string | null; reboot: RebootState | null; poeSwitch: PoeSwitchStatus };
+  // `name`: the camera's name (configured camera.name until first read, nameSource 'config').
+  camera: () => CameraState & { name: string; nameSource: 'camera' | 'config'; webUiUrl: string | null; reboot: RebootState | null; poeSwitch: PoeSwitchStatus };
+  // The camera's name (camera-name design): `write` validates, writes, reads back.
+  cameraName: { current: () => string; write: (name: string) => Promise<string> };
   checkCamera: () => Promise<CameraState>;
   intake: () => IntakeState;
   resubscribe: () => void;
@@ -233,6 +239,33 @@ export function controlApi(d: ControlDeps): express.Router {
       analyticsUnmapped: d.unmapped.list(20),
       health,
     });
+  });
+
+  // The camera's name (camera-name design): stored on the camera only.
+  // 200 {name} as read back; 400 invalid_name {reason} by the rules (the
+  // camera is not asked, nothing is audited) or refused by the camera; 503
+  // camera_offline; 502 camera_error. A `camera-name` record once the camera
+  // was asked. The stream message follows from the poller.
+  r.put('/camera/name', async (req, res) => {
+    const name: unknown = req.body?.name;
+    const problem = cameraNameProblem(name);
+    if (problem) return void res.status(400).json({ error: 'invalid_name', reason: problem });
+    const to = name as string;
+    const from = d.cameraName.current();
+    const requestedBy = res.locals.access?.viaCookie ? 'session' : 'token';
+    const base = { action: 'camera-name', category: ['configuration'], type: ['change'], user: 'admin', ...who(req) };
+    try {
+      const read = await d.cameraName.write(to);
+      d.audit.write({ ...base, outcome: 'success', message: read === from ? `Camera name set: "${read}" (unchanged)` : `Camera name changed: "${from}" → "${read}"`, details: { from, to: read, ...(read !== to ? { requested: to } : {}), requestedBy } });
+      res.json({ name: read });
+    } catch (err) {
+      const reason = err instanceof CameraNameRefused ? err.reason : err instanceof CameraError ? err.code : 'camera_error';
+      d.audit.write({ ...base, outcome: 'failure', error: reason, message: `Camera name change "${from}" → "${to}" failed: ${reason}`, details: { from, requested: to, requestedBy } });
+      if (err instanceof CameraNameRefused) return void res.status(400).json({ error: 'invalid_name', reason: err.reason });
+      if (err instanceof CameraError && err.code === 'camera_offline') return void res.status(503).json({ error: 'camera_offline' });
+      logger.warn({ err: (err as Error).message }, 'camera_name_write_failed');
+      res.status(502).json({ error: err instanceof CameraError ? err.code : 'camera_error' });
+    }
   });
 
   r.get('/analytics', (_req, res) => void res.json(d.analytics()));

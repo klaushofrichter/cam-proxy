@@ -62,7 +62,7 @@ const analysisSummary = (a: AnalysisRow | undefined) =>
   a ? { provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, objects: parseList(a.objects), summary: summaryOf(a) } : null;
 
 // The client API (spec §10); auth is applied by the caller.
-export function clientApi(d: { config: () => Config; catalog: Catalog; status: () => StatusPoller; sse: SseHandler; stills: () => StillsSide | undefined; recordings: () => RecordingsSide }): express.Router {
+export function clientApi(d: { config: () => Config; catalog: Catalog; status: () => StatusPoller; cameraName: () => string; sse: SseHandler; stills: () => StillsSide | undefined; recordings: () => RecordingsSide }): express.Router {
   const r = express.Router();
   const cam = () => d.config().camera;
   const known = (req: Request, res: Response) => {
@@ -70,11 +70,17 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     return true;
   };
 
-  r.get('/cameras', (_req, res) => {
+  // The camera info. `name`: the camera's own name (camera-name design),
+  // the configured camera.name until the camera was first read.
+  // publicUrl: where people reach this proxy's web UI (cams links to it).
+  const info = () => {
     const s = d.stills();
     const stream = s ? { up: s.grabber.up(), lastFrameTs: s.grabber.lastFrameTs() } : null;
-    // publicUrl: where people reach this proxy's web UI (cams links to it).
-    res.json([{ id: cam().id, name: cam().name, online: d.status().state().online, lastEventTs: lastLiveEventTs(d.catalog, cam().id), stream, publicUrl: d.config().server.publicUrl ?? null }]);
+    return { id: cam().id, name: d.cameraName(), online: d.status().state().online, lastEventTs: lastLiveEventTs(d.catalog, cam().id), stream, publicUrl: d.config().server.publicUrl ?? null };
+  };
+  r.get('/cameras', (_req, res) => void res.json([info()]));
+  r.get('/cameras/:cam', (req, res) => {
+    if (known(req, res)) res.json(info());
   });
 
   const sendJpeg = (res: Response, jpeg: Buffer | undefined, final: boolean) => {

@@ -10,6 +10,8 @@ export const VISION_MOCK_PORT = 18600;
 export const VISION_KEY = 'e2e-vision-key-not-a-secret';
 // The PoE switch mock (#85): its web protocol on this port; PoE on port 8 is cam-sim's power.
 export const POE_SWITCH_PORT = 18601;
+// GetDevName/SetDevName in front of cam-sim (test/helpers/devname-shim.ts): the proxy's camera.host.
+export const DEVNAME_SHIM_PORT = 18602;
 export const POE_SWITCH_PASSWORD = 'e2e-switch-password-not-a-secret';
 // The shared admin session (auth.setup.ts writes it; playwright.config.ts reads it).
 export const STATE_FILE = 'e2e/.auth/state.json';

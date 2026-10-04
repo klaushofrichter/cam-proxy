@@ -1,5 +1,5 @@
 // The Audit page's helpers (spec 2026-10-01-audit-log-design).
-export const ACTIONS = ['proxy-start', 'proxy-stop', 'proxy-restart', 'camera-reboot', 'camera-powercycle', 'camera-poe-on', 'camera-check', 'login', 'logout', 'login-link-issued', 'auth-refused', 'control-action', 'config-change', 'secret-override', 'storage-daily', 'storage-paused', 'storage-resumed', 'activity-daily', 'inventory', 'inventory-repair', 'audit-throttled'];
+export const ACTIONS = ['proxy-start', 'proxy-stop', 'proxy-restart', 'camera-reboot', 'camera-powercycle', 'camera-poe-on', 'camera-check', 'camera-name', 'login', 'logout', 'login-link-issued', 'auth-refused', 'control-action', 'config-change', 'secret-override', 'storage-daily', 'storage-paused', 'storage-resumed', 'activity-daily', 'inventory', 'inventory-repair', 'audit-throttled'];
 type R = { user?: { name?: string }; source?: { ip?: string }; event?: { outcome?: string } };
 export function who(r: R): string {
   const parts = [r.user?.name, r.source?.ip].filter(Boolean);

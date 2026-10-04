@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { refresh, refreshTick } from '../lib/state';
+  import { refresh, refreshTick, status } from '../lib/state';
+  import { cameraNameProblem, CAMERA_NAME_MAX, nameSaveError } from '../lib/camera-name';
   import { onMount } from 'svelte';
   import { api, ApiError } from '../lib/api';
   import AnalyticsSettings from '../components/AnalyticsSettings.svelte';
@@ -44,6 +45,29 @@
     message = 'Restarting the camera side…';
     setTimeout(() => void load(), 1500);
   }
+  // The camera's name is stored on the camera (camera-name design): the
+  // camera.name row edits it there; the configured value is only the
+  // fallback until the camera was read, set in config.json.
+  let nameDraft = $state<string | undefined>(undefined);
+  let nameSaving = $state(false);
+  let nameError = $state('');
+  const nameProblem = $derived(nameDraft === undefined ? null : cameraNameProblem(nameDraft));
+  async function saveName() {
+    if (nameDraft === undefined || nameProblem) return;
+    nameSaving = true;
+    nameError = '';
+    try {
+      const r = await api<{ name: string }>('PUT', '/control/camera/name', { name: nameDraft });
+      nameDraft = undefined;
+      message = `Camera name saved on the camera: ${r.name}`;
+      void refresh();
+    } catch (e) {
+      nameError = e instanceof ApiError ? nameSaveError(e.status, e.body) : 'Not saved';
+    } finally {
+      nameSaving = false;
+    }
+  }
+
   const shown = (v: unknown) => (v === undefined ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v));
 </script>
 
@@ -63,6 +87,20 @@
         <tbody>
           {#each paths as p (p)}
             {@const s = view[p]}
+            {#if p === 'camera.name'}
+            <tr data-testid="setting-camera-name">
+              <td><label for="camera-name">Camera name (stored on the camera)</label></td>
+              <td>
+                <input id="camera-name" value={nameDraft ?? $status?.camera.name ?? ''} maxlength={CAMERA_NAME_MAX + 8} oninput={(e) => ((nameDraft = e.currentTarget.value), (nameError = ''))} onkeydown={(e) => e.key === 'Enter' && void saveName()} aria-invalid={!!nameProblem} data-testid="input-camera-name" />
+                {#if nameProblem}<div class="field-error" data-testid="camera-name-problem">{nameProblem}</div>{/if}
+                {#if nameError}<div class="field-error" data-testid="camera-name-error">{nameError}</div>{/if}
+              </td>
+              <td>{#if $status?.camera.nameSource === 'config'}<span class="badge" title="the camera was not read yet: the name from config.json">not read yet</span>{/if}</td>
+              <td class="actions">
+                {#if nameDraft !== undefined}<button onclick={() => void saveName()} disabled={!!nameProblem || nameSaving} data-testid="save-camera-name">Save</button>{/if}
+              </td>
+            </tr>
+            {:else}
             <tr data-testid="setting-{p}">
               <td class="mono">{p.slice(group.length + 1)}</td>
               <td>
@@ -74,6 +112,7 @@
                 {#if s.source === 'override'}<button onclick={() => void reset(p)} data-testid="reset-{p}">Reset</button>{/if}
               </td>
             </tr>
+            {/if}
           {/each}
         </tbody>
       </table>
@@ -100,4 +139,7 @@
   .muted { color: var(--muted); margin: 0; }
   .small { font-size: 13px; }
   .msg { margin: 0; color: var(--accent); }
+  .field-error { margin-top: 4px; font-size: 12px; color: #ef4444; }
+  input[aria-invalid='true'] { border-color: #ef4444; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

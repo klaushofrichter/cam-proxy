@@ -71,6 +71,7 @@ A Mac runs it for development on `localhost:8480`.
 - [Analytics (optional)](#analytics-optional)
 - [Storage management](#storage-management)
 - [Event stream (SSE)](#event-stream-sse)
+- [Camera name](#camera-name)
 - [Control API and admin UI](#control-api-and-admin-ui)
 - [Audit log](#audit-log)
 - [Metrics](#metrics)
@@ -157,7 +158,7 @@ come only from the environment.
 | Group | Settings (defaults) |
 |---|---|
 | `server` | `port` (8480), `dataDir` (`data`, relative to the config file), `logLevel` (`info`), `publicUrl` (where people reach this proxy; reported in `/api/cameras` as `publicUrl`, so cams can link to it), `trustProxy` (0: none; behind the cluster ingress 1, so rate limits count clients by X-Forwarded-For) |
-| `camera` | `id` (`cam1`), `name` (`Den`), `host` (required), `protocol` (`https`), `tlsName`, `webUiUrl` (the camera's own web page, linked from the admin UI; default `https://<host>/`, `none` for no link), `user` (`proxy`), `onvifPort` (8000), `rtspPort` (554), `baichuanPort` (9000, recordings over TCP; applies at the next connection), `statusPollS` (30); `poeSwitch`: the camera's PoE switch for a power-cycle, `model` (`none`; `sscpoe-web` for the STEAMEMO GPS-208 and kin), `host` (its address, optional `:port`), `port` (the switch port the camera is on, 1–48), `ports` (8: the switch's PoE port count), `offSeconds` (10, 5–60). The `poeSwitch` settings apply at once; see [docs/poe-switch.md](docs/poe-switch.md) |
+| `camera` | `id` (`cam1`), `name` (`Den`; only the fallback until the camera's own name is read, see [Camera name](#camera-name)), `host` (required), `protocol` (`https`), `tlsName`, `webUiUrl` (the camera's own web page, linked from the admin UI; default `https://<host>/`, `none` for no link), `user` (`proxy`), `onvifPort` (8000), `rtspPort` (554), `baichuanPort` (9000, recordings over TCP; applies at the next connection), `statusPollS` (30); `poeSwitch`: the camera's PoE switch for a power-cycle, `model` (`none`; `sscpoe-web` for the STEAMEMO GPS-208 and kin), `host` (its address, optional `:port`), `port` (the switch port the camera is on, 1–48), `ports` (8: the switch's PoE port count), `offSeconds` (10, 5–60). The `poeSwitch` settings apply at once; see [docs/poe-switch.md](docs/poe-switch.md) |
 | `events` | `onvif.subscribeMin` (10), `onvif.pullTimeoutS` (30), `poll.enabled` (true), `poll.intervalS` (2), `poll.afterOnvifDownS` (60), `maxOpenMin` (10) |
 | `retention` | `stillsDays` (7), `previewsDays` (14), `clipsDays` (7), `eventsDays` (30), `auditDays` (90), `streamLogDays` (7), `intervalMin` (60) |
 | `storage` | `maxPercent` (85) or `maxBytes`, `minFreeBytes` (2 GB), `keepHours` (per kind: `stills` 24, `clips` 24, `previews` 72) |
@@ -211,7 +212,8 @@ while one not yet cached counts as a normal request); more answer 429
 ```sh
 api() { curl -s -H "Authorization: Bearer $CAMPROXY_TOKEN" "http://localhost:8480/api$1"; }
 api /cameras
-# [{"id":"cam1","name":"Den","online":true,"lastEventTs":1790000000000,"stream":{"up":true,"lastFrameTs":1790000000000}}]
+# [{"id":"cam1","name":"Backyard Left","online":true,"lastEventTs":1790000000000,"stream":{"up":true,"lastFrameTs":1790000000000},"publicUrl":null}]
+api /cameras/cam1   # the same entry for one camera (404 for another id)
 api '/cameras/cam1/events?kind=person&limit=10'
 # [{"id":12,"kind":"person","source":"onvif","start":1790000000000,"end":1790000004000,"endReason":"state"}]
 ```
@@ -554,6 +556,10 @@ never loses anything within the retention (default 7 days).
     from before this version lack `kind`, `start`, `end`, `stillTs` and
     `summary` (the stream keeps 7 days): treat a missing `summary` as
     unknown, not as "nothing found";
+  - `camera`: `{cam, name}` once per change of the camera's name (a rename
+    through `PUT /control/camera/name` or one made in the Reolink app or the
+    camera's web UI, seen by the status poll; also the first read after a
+    start when it differs from the name clients were last told);
   - `annotation`: reserved, not sent yet;
   - `still`: `{cam, ts, url, sprite, tile}` (the still's URL, its minute's
     sprite sheet, and the tile index within it); only when named in `types`,
@@ -575,6 +581,26 @@ curl -N -H "Authorization: Bearer $CAMPROXY_TOKEN" 'http://localhost:8480/api/st
 A camera person detection also sets motion, as on the real camera, so both
 arrive.
 
+## Camera name
+
+The camera stores its name (camera-name design): `GetDevName`, `GetDevInfo`'s
+`name` and the OSD text are one value on the camera. The status poll reads it
+(every `camera.statusPollS`), and the proxy reports it as `name` in
+`GET /api/cameras` and `/api/cameras/:cam`, `camera.name` in
+`GET /control/status` and `camera.name` in `GET /api/local/health` (the field
+was there before; it is the camera-reported name now). The configured
+`camera.name` is only the fallback while the camera has not been read since
+the proxy started.
+
+`PUT /control/camera/name` renames it: the proxy checks the camera's rules,
+writes `SetDevName` (the whole `DevName` object), reads `GetDevName` back and
+answers that name. The rules, measured on the RLC-1224A (firmware
+v3.2.0.6011): 1 to 31 characters; ASCII letters, digits, space and
+`- ( ) + = [ ] { }`; no leading or trailing space
+(`^[A-Za-z0-9()+=\[\]{}-](?:[A-Za-z0-9 ()+=\[\]{}-]{0,29}[A-Za-z0-9()+=\[\]{}-])?$`, the
+same list as cams, in `src/camera/name-rules.ts`). Each change, also one made
+in the Reolink app, reaches stream clients once as a `camera` message.
+
 ## Control API and admin UI
 
 `/control` needs the admin token, or an admin UI session (except
@@ -584,7 +610,8 @@ arrive.
 
 | Route | |
 |---|---|
-| `GET /control/status` | `{version, camera (incl. webUiUrl, serial, reboot: {kind: reboot\|powercycle, requestedAt, confirmed, phase: power-cycling\|rebooting\|back\|not-back, offAt, endedAt, downSec} or null, and poeSwitch: {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state: on\|off\|elsewhere\|unknown, checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result, stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null (the last recording download over Baichuan), cache: {bytes, files, capBytes}}, analytics: [{…, keyMasked, keySource}], analyticsUnmapped}` |
+| `GET /control/status` | `{version, camera (incl. name (the camera's name; the configured `camera.name` until the camera was read), nameSource: camera\|config, webUiUrl, serial, reboot: {kind: reboot\|powercycle, requestedAt, confirmed, phase: power-cycling\|rebooting\|back\|not-back, offAt, endedAt, downSec} or null, and poeSwitch: {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state: on\|off\|elsewhere\|unknown, checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result, stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null (the last recording download over Baichuan), cache: {bytes, files, capBytes}}, analytics: [{…, keyMasked, keySource}], analyticsUnmapped}` |
+| `PUT /control/camera/name` | `{"name":"Backyard Left"}`: renames the camera on the camera itself ([Camera name](#camera-name)). 200 `{name}` (the name read back from the camera); 400 `{"error":"invalid_name","reason":…}` by the camera's rules (the camera is not asked) or refused by the camera (rspCode -54, -56); 503 `{"error":"camera_offline"}`; 502 `camera_error`. Admin token, or an admin session with `X-CamProxy-UI: 1`. Audited as `camera-name` |
 | `GET /control/stats` | `{disk: {catalog, audit, stills, previews, clips, recordings}` (each `{bytes, files, oldest, newest, growthPerDay}`), `events, stream, sse, storage}` |
 | `GET /control/config` | every setting: `{value, source, restart, pending, next?, type}` (`type`: `integer`, `boolean` or `string`); secrets never appear |
 | `PUT /control/config` | overrides, e.g. `{"sse":{"pingS":10}}`; a bad value answers 400 naming it, and nothing is written |
@@ -637,7 +664,9 @@ the phone top bar leaves out (the camera's model, firmware and version, and
 - **Audit:** who did what, newest first, 50 per page, filtered by action
   and outcome; click a row for its JSON.
 - **Settings:** every setting with its source; changes become overrides, and
-  can be reset. A PoE switch card shows the configured switch and its last
+  can be reset. "Camera name (stored on the camera)" is the camera's own
+  name: checked against the camera's rules as you type and saved on the
+  camera through `PUT /control/camera/name`. A PoE switch card shows the configured switch and its last
   reading, with "Read the switch now".
 - **Maintenance:** the actions, including the camera FTP buttons; the log
   updates every 10 s. "Reboot camera", "Power-cycle camera" (only with a PoE

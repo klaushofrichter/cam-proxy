@@ -11,6 +11,7 @@ import { closeAllOpen, countEventsByKind, countRecoveredEvents } from './catalog
 import { ReolinkClient } from './camera/client';
 import { bareHost, splitHost } from './camera/http';
 import { StatusPoller } from './camera/status';
+import { CameraNameAnnouncer, writeCameraName } from './camera/name';
 import { CameraReboot } from './camera/reboot';
 import { PoeSwitch } from './camera/poe-switch';
 import { restartProcess } from './process-restart';
@@ -157,6 +158,20 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
 
   let client!: ReolinkClient;
   let status: StatusPoller;
+  // The camera's name (camera-name design): as last read from the camera,
+  // kept over a restart of the camera side; the configured camera.name is
+  // only the fallback until the first read. Each change goes to stream
+  // clients once as a `camera` message (also a rename made in the Reolink
+  // app); the last one told survives a process restart in the stream log.
+  let cameraNameRead: string | undefined;
+  const cameraName = () => cameraNameRead ?? running.camera.name;
+  const nameAnnouncer = new CameraNameAnnouncer(
+    String(log.latest(running.camera.id, 'camera')?.data.name ?? running.camera.name),
+    (name, previous) => {
+      logger.info({ cameraId: running.camera.id, name, previous }, 'camera_name_changed');
+      log.append(running.camera.id, 'camera', { name });
+    },
+  );
   let intake: EventIntake;
   let lastResubscribes = 0;
   let clips: ReturnType<typeof createClipsSide> | undefined;
@@ -188,6 +203,10 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     status = new StatusPoller(client, c.statusPollS);
     status.on('change', (s) => log.append(c.id, 'camera-status', { online: s.online, reason: s.error ?? null, clockOffsetMs: s.clockOffsetMs ?? null }));
     status.on('check', metrics.onCameraCheck);
+    status.on('name', (name: string) => {
+      cameraNameRead = name;
+      nameAnnouncer.seen(name);
+    });
     // The camera's FTP settings as soon as it answers (#93), then every few minutes.
     status.on('change', (s) => {
       if (s.online) void ftpWatch.checkNow();
@@ -544,7 +563,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       version: VERSION,
       startedAt,
       thresholds: { diskPercent: running.health.diskPercent, tempC: running.health.tempC, ftpStalledHours: running.ftp.stalledHours },
-      camera: { id: running.camera.id, name: running.camera.name, host: running.camera.host, state: status.state(), reboot: reboot.state()?.phase ?? null, poeSwitch: ps.model === 'none' ? null : { model: ps.model, port: ps.port ?? null } },
+      camera: { id: running.camera.id, name: cameraName(), host: running.camera.host, state: status.state(), reboot: reboot.state()?.phase ?? null, poeSwitch: ps.model === 'none' ? null : { model: ps.model, port: ps.port ?? null } },
       stream: streamStatus(),
       intake: intake.state(),
       ftp: ftpStatus(),
@@ -592,7 +611,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   app.use('/api', localApi({ health: healthNow }));
   app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit }));
   app.use('/api', requireAccess('client', access), composeApi({ config: () => running, catalog, composer, stillsIn, paused: () => storage.paused(), font }));
-  app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, status: () => status, sse, stills: () => stills, recordings: () => recordings }));
+  app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, status: () => status, cameraName, sse, stills: () => stills, recordings: () => recordings }));
   // The audit log: admins and the audit token, GET (and HEAD) only. The access check is
   // on the route inside the router; other /control paths pass on untouched
   // to the admin-only routes below.
@@ -606,7 +625,17 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       running: () => running,
       catalog,
       log,
-      camera: () => ({ ...status.state(), webUiUrl: cameraWebUi(running.camera), reboot: reboot.state(), poeSwitch: poeSwitch.status() }),
+      camera: () => ({ ...status.state(), name: cameraName(), nameSource: cameraNameRead === undefined ? 'config' : 'camera', webUiUrl: cameraWebUi(running.camera), reboot: reboot.state(), poeSwitch: poeSwitch.status() }),
+      // Writes through to the camera and reads back; the poller (and so the
+      // stream message) knows the new name at once.
+      cameraName: {
+        current: cameraName,
+        write: async (name) => {
+          const read = await writeCameraName((cmd, param) => client.command(cmd, param), name);
+          status.noteName(read);
+          return read;
+        },
+      },
       checkCamera: () => status.checkNow(),
       intake: () => intake.state(),
       resubscribe: () => intake.resubscribe(),
