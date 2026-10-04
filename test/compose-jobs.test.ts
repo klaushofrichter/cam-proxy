@@ -150,19 +150,25 @@ describe('composer jobs', () => {
   // Final review I7: an open modal keeps polling, so a hung encode would hold
   // the one encoder for ever.
   it('fails a job that runs longer than its limit, and frees the encoder', async () => {
-    const { c, m, advance } = make({ maxRunMs: 5 * 60_000 });
+    // The default: 10 minutes (a 300 s result takes about 3 on a Pi 4).
+    const { c, m, advance } = make();
     const a = c.start(req) as { id: string };
     const b = c.start(req) as { id: string };
     await tick();
-    for (let i = 0; i < 6; i++) {
-      advance(60_000);
-      c.get('cam1', a.id); // still polled
-      c.get('cam1', b.id);
-      c.sweep();
-    }
+    const minutes = (n: number) => {
+      for (let i = 0; i < n; i++) {
+        advance(60_000);
+        c.get('cam1', a.id); // still polled
+        c.get('cam1', b.id);
+        c.sweep();
+      }
+    };
+    minutes(10);
+    expect(c.get('cam1', a.id)).toMatchObject({ state: 'running' });
+    minutes(1);
     await tick();
     expect(m.jobs[0].signal.aborted).toBe(true);
-    expect(c.get('cam1', a.id)).toMatchObject({ state: 'failed', error: 'took longer than 5 minutes' });
+    expect(c.get('cam1', a.id)).toMatchObject({ state: 'failed', error: 'took longer than 10 minutes' });
     expect(c.get('cam1', b.id)).toMatchObject({ state: 'running' });
   });
 

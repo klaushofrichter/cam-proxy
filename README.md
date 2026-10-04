@@ -342,14 +342,20 @@ upload folder. While storage is paused, `STOR` answers 452.
   `/clips/{id}.mp4` serves the file with HTTP Range, `/clips/{id}.jpg` the
   snapshot. The admin UI's Clips page plays them.
 - **Composed clips:** `POST /api/cameras/{cam}/compositions`
-  `{clipId, preS, postS, size, badge, timeZone?}` composes a clip with a pre-/post-roll
-  (−600…60 s each, at most 60 s in all). Each second comes from the clip,
+  `{clipId, span?, preS, postS, size, badge, timeZone?}` composes a clip with a
+  pre-/post-roll (whole seconds, −3600…3600 each; a negative one cuts). The
+  rolls apply to `span` (`{start, end}` in unix ms: the recording the viewer
+  chose, e.g. cams's SD-card file, which the proxy's FTP copy can outlast),
+  else to the clip itself; at least 1 s of it must remain. The result is at
+  most 300 s, 120 s at `1080p` (encoding time on a Pi 4: about 3 minutes
+  either way, estimated); a longer one is a 400 `invalid` with `detail`
+  `at most 300 s (5:00)`. Each second comes from the clip,
   another clip, that second's still, or a "No recording" card; still and card
   seconds can carry a "STILLS 1 FPS" badge. H.264 10 fps, sizes `sd`, `360p`,
   `720p`, `1080p`. One encoding runs at a time (3 may wait); poll
   `GET …/compositions/{id}` for progress, fetch `…/{id}.mp4`, and
   `DELETE …/{id}` cancels. A job nobody polls for 30 s stops, and results
-  are removed after 15 minutes, and one running over 5 minutes fails. Each clip
+  are removed after 15 minutes, and one running over 10 minutes fails. Each clip
   part and each run of stills and cards is a small encode of its own (two
   encoder threads), joined without encoding again: about 120 MB peak at SD,
   280 MB at 1080p. Cards show the time in `timeZone` (the viewer's), else the

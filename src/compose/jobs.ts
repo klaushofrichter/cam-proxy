@@ -32,7 +32,9 @@ export function createComposer(o: { dir: string; runner: Runner; now?: () => num
   const idle = o.idleMs ?? 30_000;
   const maxQueued = o.maxQueued ?? 3;
   // An open modal keeps polling: a hung encode would hold the encoder for ever.
-  const maxRun = o.maxRunMs ?? 5 * 60_000;
+  // 10 minutes: the longest results (300 s at SD, 120 s at 1080p) take about
+  // 3 minutes on a Pi 4 (estimated, plan.ts), so this leaves a margin.
+  const maxRun = o.maxRunMs ?? 10 * 60_000;
   mkdirSync(o.dir, { recursive: true });
   for (const f of readdirSync(o.dir)) rmSync(join(o.dir, f), { recursive: true, force: true });
   const jobs = new Map<string, Job>();
@@ -209,7 +211,8 @@ export function ffmpegRunner(o: { font: string; clock: (ts: number, timeZone?: s
     const list = join(dir, 'pieces.txt');
     writeFileSync(list, joinList(pieces.map((p) => p.out)));
     await ffmpeg(joinArgs(list, out), signal, () => {});
-    // The spec's per-job disk budget (a 60 s 1080p result is far below it).
+    // The spec's per-job disk budget (a 300 s SD result is about 40 MB, a
+    // 120 s 1080p one about 50 MB).
     if (statSync(out).size > MAX_BYTES) throw new ComposeError('the result is larger than 200 MB');
     onProgress(1);
   };

@@ -101,14 +101,14 @@ paths:
         '404': { description: 'no sprite for that minute, unknown camera, stills off, or a timestamp that is not a minute boundary' }
   /api/cameras/{cam}/compositions:
     post:
-      summary: Compose a clip with a pre-/post-roll (other clips, stills or "No recording" cards fill each second); H.264 10 fps, at most 60 s
+      summary: Compose a clip with a pre-/post-roll (other clips, stills or "No recording" cards fill each second); H.264 10 fps, at most 300 s (120 s at 1080p)
       requestBody:
         content:
           application/json:
-            schema: { type: object, required: [clipId, preS, postS, size, badge], properties: { clipId: { type: integer }, preS: { type: integer, minimum: -600, maximum: 60 }, postS: { type: integer, minimum: -600, maximum: 60 }, size: { type: string, enum: [sd, 360p, 720p, 1080p] }, badge: { type: boolean }, timeZone: { type: string, description: 'IANA zone for the cards'' time, e.g. America/Chicago; default the process zone' } } }
+            schema: { type: object, required: [clipId, preS, postS, size, badge], properties: { clipId: { type: integer }, span: { type: object, required: [start, end], properties: { start: { type: integer }, end: { type: integer } }, description: 'unix ms: the recording the rolls apply to (cams: the SD-card file); the clip itself when left out' }, preS: { type: integer, minimum: -3600, maximum: 3600 }, postS: { type: integer, minimum: -3600, maximum: 3600 }, size: { type: string, enum: [sd, 360p, 720p, 1080p] }, badge: { type: boolean }, timeZone: { type: string, description: 'IANA zone for the cards'' time, e.g. America/Chicago; default the process zone' } } }
       responses:
         '201': { description: '{ id, state, progress, durationS }' }
-        '400': { description: invalid input or limits }
+        '400': { description: 'invalid input or limits: at least 1 s of the span must remain, at most 300 s (120 s at 1080p), detail e.g. "at most 300 s (5:00)"' }
         '404': { description: unknown camera or clip }
         '429': { description: 'busy: one encoding runs and 3 wait' }
         '503': { description: storage_paused, or no_font (no font for the badge or cards) }

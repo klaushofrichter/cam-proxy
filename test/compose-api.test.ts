@@ -14,6 +14,7 @@ let sim: Awaited<ReturnType<typeof startSim>>;
 let p: Awaited<ReturnType<typeof startProxy>>;
 let clipId = 0;
 let silentId = 0;
+let longId = 0;
 const T = Date.UTC(2026, 8, 28, 19, 0, 0);
 
 beforeAll(async () => {
@@ -26,6 +27,9 @@ beforeAll(async () => {
   const cam = p.proxy.running.camera.id;
   clipId = insertClip(p.proxy.catalog, { cam, start_ts: T, end_ts: T + 6000, path: withAudio, stream: 'sub', size: 1, received_at: T, snapshot: null }).id;
   silentId = insertClip(p.proxy.catalog, { cam, start_ts: T + 20_000, end_ts: T + 24_000, path: silent, stream: 'sub', size: 1, received_at: T, snapshot: null }).id;
+  // An FTP copy longer than the SD recording the viewer chose (cams's Save
+  // dialog, 2026-10-04): 245 s from 131 s before the recording's start.
+  longId = insertClip(p.proxy.catalog, { cam, start_ts: T + 3_600_000 - 131_000, end_ts: T + 3_600_000 + 114_000, path: withAudio, stream: 'sub', size: 1, received_at: T, snapshot: null }).id;
 });
 afterAll(async () => {
   await p.proxy.stop();
@@ -37,7 +41,11 @@ const post = (body: object) => request(p.base).post(`/api/cameras/${cam()}/compo
 
 describe('compositions API', () => {
   it('refuses bad input and unknown clips', async () => {
-    expect((await post({ clipId, preS: 99, postS: 0, size: 'sd', badge: true })).status).toBe(400);
+    expect((await post({ clipId, preS: 3601, postS: 0, size: 'sd', badge: true })).status).toBe(400);
+    expect((await post({ clipId, preS: 0, postS: 295, size: 'sd', badge: true })).body).toEqual({ error: 'invalid', detail: 'at most 300 s (5:00)' }); // 6 + 295
+    expect((await post({ clipId, preS: 0, postS: 115, size: '1080p', badge: true })).body).toEqual({ error: 'invalid', detail: 'at most 120 s (2:00)' });
+    expect((await post({ clipId, preS: 0, postS: 0, size: 'sd', badge: true, span: { start: T, end: 'x' } })).body).toMatchObject({ error: 'invalid', detail: expect.stringMatching(/^span/) });
+    expect((await post({ clipId, preS: 0, postS: 0, size: 'sd', badge: true, span: { start: T + 10_000, end: T } })).status).toBe(400);
     expect((await post({ clipId, preS: 0, postS: 0, size: '4k', badge: true })).status).toBe(400);
     expect((await post({ clipId, preS: 0, postS: 0, size: 'sd', badge: true, timeZone: 'Mars/Olympus' })).status).toBe(400);
     expect((await post({ clipId: 999_999, preS: 0, postS: 0, size: 'sd', badge: true })).status).toBe(404);
@@ -58,6 +66,20 @@ describe('compositions API', () => {
     expect((await request(p.base).delete(`/api/cameras/${cam()}/compositions/${id}`).set(auth())).status).toBe(204);
     expect((await request(p.base).get(`/api/cameras/${cam()}/compositions/${id}`).set(auth())).status).toBe(404);
   }, 90_000);
+
+  // Image 16 of 2026-10-04: a 114 s SD recording, pre-roll -100, post-roll
+  // 30 is 44 s, also when the proxy's copy of it is longer.
+  it.skipIf(!defaultFont())('applies the rolls to the span cams sends (114 s, -100, +30 → 44 s)', async () => {
+    const span = { start: T + 3_600_000, end: T + 3_600_000 + 114_000 };
+    const r = await post({ clipId: longId, span, preS: -100, postS: 30, size: 'sd', badge: false });
+    expect(r.status).toBe(201);
+    expect(r.body).toMatchObject({ durationS: 44 });
+    await request(p.base).delete(`/api/cameras/${cam()}/compositions/${r.body.id as string}`).set(auth());
+    // Without a span the rolls apply to the proxy's own clip (245 s - 100 s).
+    const own = await post({ clipId: longId, preS: -100, postS: 0, size: 'sd', badge: false });
+    expect(own.body).toMatchObject({ durationS: 145 });
+    await request(p.base).delete(`/api/cameras/${cam()}/compositions/${own.body.id as string}`).set(auth());
+  }, 30_000);
 
   it.skipIf(!defaultFont())('answers 409 for a result that is not ready, and hides jobs from other cameras', async () => {
     const r = await post({ clipId: silentId, preS: 0, postS: 30, size: 'sd', badge: false });

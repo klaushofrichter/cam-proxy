@@ -9,26 +9,58 @@ export type Segment =
   | { kind: 'card'; ts: number };
 // stillAt: the still that shows at second t (the latest within the stills
 // interval, so stills every 2 s don't flicker to cards), or null.
-interface PlanInput { clip: ClipSpan; preS: number; postS: number; clips: ClipSpan[]; stillAt: (t: number) => number | null }
+// span: the recording the viewer chose (cams: the SD-card file), whose
+// start and end the rolls apply to; the clip's own span when not given. The
+// proxy's FTP copy can start earlier or run longer than that recording
+// (cams's Save dialog, 2026-10-04: 114 s, -100, +30 gave "at most 60 s").
+// maxS: the size's limit (composeMaxS), COMPOSE_MAX_S when not given.
+interface PlanInput { clip: ClipSpan; span?: { start: number; end: number }; preS: number; postS: number; maxS?: number; clips: ClipSpan[]; stillAt: (t: number) => number | null }
 export type Plan = { ok: true; start: number; end: number; durationS: number; segments: Segment[] } | { ok: false; error: string };
+export type Window = { ok: true; start: number; end: number; durationS: number } | { ok: false; error: string };
 
-const MAX_S = 60;
-const MIN_ROLL = -600;
-const MAX_ROLL = 60;
+// The limits (Klaus, 2026-10-04), one place for the planner and the API: a
+// composed clip is at most 5 minutes, 2 minutes at 1080p. Encoding time on
+// the Pi 4, estimated from an M4 Mac (CPU time x12, about 2.5 cores busy):
+// 300 s takes about 2 to 2.5 minutes at SD, 3 at 720p, but 6 to 8 at 1080p,
+// so 1080p stays at 120 s (about 3 minutes). Peak memory doesn't grow with the
+// length (one small encode per piece), and 300 s at SD is about 40 MB.
+// cams mirrors these in server/clipLimits.ts.
+export const COMPOSE_MAX_S = 300;
+export const COMPOSE_MAX_S_1080P = 120;
+export const composeMaxS = (size: string): number => (size === '1080p' ? COMPOSE_MAX_S_1080P : COMPOSE_MAX_S);
+// Pre- and post-roll: whole seconds; a negative one cuts the recording. The
+// result's length is the real limit; this only keeps the numbers sane.
+const ROLL_LIMIT_S = 3600;
 
-const roll = (v: number) => Number.isInteger(v) && v >= MIN_ROLL && v <= MAX_ROLL;
+// Seconds as people read them: "44 s", and from a minute on "114 s (1:54)"
+// (Klaus, 2026-10-04); the same rule as cams's dialog.
+export function formatSeconds(s: number): string {
+  return s < 60 ? `${s} s` : `${s} s (${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')})`;
+}
 
-export function planComposition(p: PlanInput): Plan {
-  if (!roll(p.preS) || !roll(p.postS)) return { ok: false, error: 'pre-roll and post-roll are whole seconds from -600 to 60' };
-  const start = p.clip.start - p.preS * 1000;
-  const rawEnd = p.clip.end + p.postS * 1000;
-  const overlap = Math.min(rawEnd, p.clip.end) - Math.max(start, p.clip.start);
+const roll = (v: number) => Number.isInteger(v) && Math.abs(v) <= ROLL_LIMIT_S;
+
+// The composed clip's window: [span.start - pre, span.end + post], whole
+// seconds, at least 1 s of the span left, at most maxS long. The one rule for
+// the result's length (cams's resultLength is the same rule on the same table
+// of cases).
+export function compositionWindow(span: { start: number; end: number }, preS: number, postS: number, maxS: number = COMPOSE_MAX_S): Window {
+  if (!roll(preS) || !roll(postS)) return { ok: false, error: `pre-roll and post-roll are whole seconds from -${ROLL_LIMIT_S} to ${ROLL_LIMIT_S}` };
+  const start = span.start - preS * 1000;
+  const rawEnd = span.end + postS * 1000;
+  const overlap = Math.min(rawEnd, span.end) - Math.max(start, span.start);
   if (overlap < 1000) return { ok: false, error: 'at least 1 s of the clip must remain' };
   // Whole seconds: a clip ends on a fractional second (the camera's file),
   // and its last partial second is its own, not a still's (final review).
   const durationS = Math.round((rawEnd - start) / 1000);
-  if (durationS > MAX_S) return { ok: false, error: `at most ${MAX_S} s` };
-  const end = start + durationS * 1000;
+  if (durationS > maxS) return { ok: false, error: `at most ${formatSeconds(maxS)}` };
+  return { ok: true, start, end: start + durationS * 1000, durationS };
+}
+
+export function planComposition(p: PlanInput): Plan {
+  const w = compositionWindow(p.span ?? p.clip, p.preS, p.postS, p.maxS);
+  if (!w.ok) return w;
+  const { start, end, durationS } = w;
 
   const others = p.clips.filter((c) => c.id !== p.clip.id).sort((a, b) => a.start - b.start || a.id - b.id);
   // A clip covers a second it fills at least half of.

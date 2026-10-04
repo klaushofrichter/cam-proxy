@@ -20,7 +20,7 @@ camera, with no modal.
 | Full quality | Not composed. Full stays today's direct download from the camera. |
 | Pre-/post-roll | Seconds, 0 by default, negative (trim) or positive (extend) |
 | Filling | A covering clip first (the chosen one, then any other), else that second's still, else a "No recording" card with the time |
-| Length | The result is at most 60 s |
+| Length | The result is at most 60 s (since 2026-10-04: 300 s, 120 s at 1080p) |
 | Badge | Optional (checkbox, on by default): "STILLS 1 FPS" top left on still and card seconds |
 | Output | H.264 MP4, 10 fps; size SD 896×512 (default), 640×360, 1280×720 or 1920×1080 |
 | Progress | A progress bar while encoding; Cancel and Close stop it |
@@ -32,7 +32,7 @@ camera, with no modal.
   the camera has a cam-proxy in use; otherwise SD stays a direct download).
 - **Shows:** the clip's thumbnail, time, length and triggers.
 - **Inputs:**
-  - Pre-roll and Post-roll: whole seconds, −600…+60 each, 0 by default.
+  - Pre-roll and Post-roll: whole seconds, −600…+60 each, 0 by default (since 2026-10-04: −3600…3600; the length limit is what counts).
   - Checkbox "Mark still sections", on.
   - Output size: SD 896×512 · 640×360 · 1280×720 · 1920×1080 (upscaled: larger files, no more detail).
   - A live line "Result: 0:52", or an error "At most 1:00" / "At least 1 s of the clip must remain".
@@ -49,8 +49,8 @@ camera, with no modal.
 
 ### Plan
 
-- **Window:** `[clip.start − pre, clip.end + post]`, in whole seconds.
-- **Checks:** window length 1…60 s. The window must overlap the chosen clip by at least 1 s, which is what "trimming" means.
+- **Window:** `[clip.start − pre, clip.end + post]`, in whole seconds. Since 2026-10-04 the rolls apply to the request's `span` when given (the recording the viewer chose; the FTP copy can be longer).
+- **Checks:** window length 1…60 s (since 2026-10-04: 1…300 s, 1…120 s at 1080p). The window must overlap the chosen clip by at least 1 s, which is what "trimming" means.
 - **The planner** walks the window second by second and assigns each second a source:
   1. **The chosen clip,** if it covers the second.
   2. **Another clip of the same camera** that covers it (earliest start first).
