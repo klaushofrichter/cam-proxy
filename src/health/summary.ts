@@ -150,7 +150,12 @@ export function buildHealth(i: HealthInput): HealthSummary {
   const add = (id: ItemId, label: string, value: HealthItem['value'], text: string, problem: boolean) => items.push({ id, label, value, text, problem });
 
   const cams = [{ camera: i.camera, stream: i.stream, intake: i.intake, ftp: i.ftp }, ...(i.others ?? [])].map((c) => ({ id: c.camera.id, h: cameraHealth(c) }));
-  for (const id of ['camera', 'stream', 'events', 'ftp'] as const) items.push(aggregate(cams.map((c) => ({ cam: c.id, item: c.h.items.find((x) => x.id === id)! }))));
+  for (const id of ['camera', 'stream', 'events', 'ftp'] as const) {
+    let per = cams.map((c) => ({ cam: c.id, item: c.h.items.find((x) => x.id === id)! }));
+    // FTP: only the cameras that upload (one FTP camera: its item, as on one camera); none: the first's "off".
+    if (id === 'ftp') per = per.filter((p) => p.item.value !== 'disabled').length ? per.filter((p) => p.item.value !== 'disabled') : per.slice(0, 1);
+    items.push(aggregate(per));
+  }
 
   add('storage', 'Storage', i.storage.paused ? 'paused' : 'writing', i.storage.paused ? 'paused (low space)' : 'writing', i.storage.paused);
 

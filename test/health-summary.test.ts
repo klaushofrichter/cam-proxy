@@ -178,4 +178,12 @@ describe('several cameras (spec §6.5)', () => {
     const h = buildHealth(input({ others: [{ ...cam('cam4', true), stream: off }] }));
     expect(item(h, 'stream')).toMatchObject({ value: 2, text: 'no problem (2 cameras)', problem: false });
   });
+  // Live test 2026-10-05: one FTP camera of three read "no problem (3 cameras)".
+  it('the FTP item counts only the cameras with FTP on', () => {
+    const noFtp = { ...input().ftp, enabled: false };
+    const one = buildHealth(input({ ftp: noFtp, others: [cam('cam4', true), { ...cam('cam5', true), ftp: noFtp }] }));
+    expect(item(one, 'ftp')).toEqual({ ...item(buildHealth(input()), 'ftp'), id: 'ftp' });
+    const none = buildHealth(input({ ftp: noFtp, others: [{ ...cam('cam4', true), ftp: noFtp }] }));
+    expect(item(none, 'ftp')).toMatchObject({ value: 'disabled', text: 'off in the proxy', problem: false });
+  });
 });
