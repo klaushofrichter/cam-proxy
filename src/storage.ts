@@ -68,6 +68,11 @@ export class Storage extends EventEmitter {
     return { free: s.bavail * s.bsize, size: s.blocks * s.bsize };
   }
 
+  // The data volume's free and total bytes (the Archive's space check).
+  diskSpace(): { free: number; size: number } {
+    return this.disk();
+  }
+
   budget(): number {
     const s = this.d.config().storage;
     return s.maxBytes ?? Math.floor((this.disk().size * (s.maxPercent ?? 85)) / 100);

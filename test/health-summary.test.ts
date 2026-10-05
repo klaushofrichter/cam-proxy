@@ -172,6 +172,20 @@ describe('the health summary', () => {
     expect(h.problemCount).toBe(1);
   });
 
+  // Spec 2026-10-05-archive-design §6: the Archive's size against archive.warnPercent.
+  it('the archive item: after the disk while the Archive is on, a problem above warnPercent', () => {
+    const on = (percentOfDisk: number, warning: boolean, count = 12) => buildHealth(input({ thresholds: { diskPercent: 90, tempC: 75, ftpStalledHours: 6, archiveWarnPercent: 50 }, archive: { count, bytes: 1.25 * 1024 ** 3, percentOfDisk, warning } }));
+    const h = on(0.5, false);
+    expect(h.items.map((i) => i.id)).toEqual(['camera', 'stream', 'events', 'ftp', 'storage', 'disk', 'archive', 'cpuTemp', 'underVoltage', 'inventory', 'version']);
+    expect(item(h, 'archive')).toEqual({ id: 'archive', label: 'Archive', value: 0.5, text: '12 clips, 1.3 GB (0.5 % of disk)', problem: false });
+    expect(h.thresholds.archiveWarnPercent).toBe(50);
+    expect(h.ok).toBe(true);
+    const over = on(50.1, true, 1);
+    expect(item(over, 'archive')).toMatchObject({ problem: true, text: '1 clip, 1.3 GB (50.1 % of disk)' });
+    expect(over.problemCount).toBe(1);
+    expect(buildHealth(input({ archive: null })).items.map((i) => i.id)).not.toContain('archive');
+  });
+
   it('the version is never a problem', () => {
     expect(item(buildHealth(input({ version: 'dev' })), 'version')).toMatchObject({ value: 'dev', text: 'dev', problem: false });
   });

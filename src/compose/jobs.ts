@@ -14,7 +14,9 @@ import type { Plan, Segment } from './plan';
 
 type JobState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
 interface JobView { id: string; state: JobState; progress: number; durationS: number; error?: string }
-interface ComposeRequest { cam: string; plan: Extract<Plan, { ok: true }>; size: ComposeSize; badge: boolean; timeZone?: string }
+// `asked`: the request as the client made it (the anchor and rolls), kept for
+// the Archive's record of a composition (spec 2026-10-05-archive-design §2.1).
+export interface ComposeRequest { cam: string; plan: Extract<Plan, { ok: true }>; size: ComposeSize; badge: boolean; timeZone?: string; asked?: Record<string, unknown> }
 export interface Runner {
   (job: { dir: string; out: string; req: ComposeRequest; onProgress: (p: number) => void; signal: AbortSignal }): Promise<void>;
 }
@@ -99,6 +101,14 @@ export function createComposer(o: { dir: string; runner: Runner; now?: () => num
     file(cam: string, id: string): string | undefined {
       const j = jobs.get(id);
       return j && j.cam === cam && j.state === 'done' ? j.out : undefined;
+    },
+    // A job's request (any state), or undefined. Looking counts as a poll.
+    request(cam: string, id: string): ComposeRequest | undefined {
+      const j = jobs.get(id);
+      if (!j || j.cam !== cam) return undefined;
+      j.seen = now();
+      if (j.state === 'done') j.doneAt = j.seen;
+      return j.req;
     },
     cancel(cam: string, id: string): boolean {
       const j = jobs.get(id);

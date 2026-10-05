@@ -20,16 +20,13 @@ import type { FrameGrabber } from '../stills/grabber';
 import type { Go2rtc } from '../stills/go2rtc';
 import type { MinuteStore } from '../stills/store';
 import { DAY } from '../time-units';
+import { bad, IMMUTABLE, intParam, sendFileOr } from './respond';
 
 export interface StillsSide { go2rtc: Go2rtc; grabber: FrameGrabber; store: MinuteStore }
 
-const bad = (res: Response, detail: string) => void res.status(400).json({ error: 'invalid', detail });
-// Files that never change (final stills and sprites, clips, recordings).
-const IMMUTABLE = 'private, max-age=604800, immutable';
 // A calendar date, YYYY-MM-DD (2026-02-30 is not one), in the years 2000 to
 // 2099 (the camera's clock range; nothing else reaches a Search).
 const validDate = (v: string): boolean => /^20\d{2}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(`${v}T00:00:00Z`)) && new Date(`${v}T00:00:00Z`).toISOString().slice(0, 10) === v;
-const intParam = (v: unknown): number | undefined | null => (v === undefined ? undefined : typeof v === 'string' && /^\d{1,15}$/.test(v) ? Number(v) : null);
 
 const eventJson = (e: EventRow) => ({ id: e.id, kind: e.kind, source: e.source, start: e.start_ts, end: e.end_ts, endReason: e.end_reason });
 
@@ -99,16 +96,6 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     if (to - from > maxMs) return bad(res, tooLong), undefined;
     return [from, to];
   };
-  // sendFile with Range; a failure before any byte is 416 (it carries its
-  // Content-Range, bytes */size), 404 `notFound`, or 500.
-  const sendFileOr = (res: Response, path: string, opts: object, notFound: string, after: () => void = () => undefined) =>
-    res.sendFile(path, { cacheControl: false, acceptRanges: true, dotfiles: 'allow', ...opts }, (err) => {
-      after();
-      if (!err || res.headersSent) return;
-      const status = (err as { status?: number }).status;
-      if (status === 416) return void res.status(416).end();
-      res.status(status === 404 ? 404 : 500).json({ error: status === 404 ? notFound : 'internal' });
-    });
 
   r.get('/cameras/:cam/events', (req, res) => {
     if (!known(req, res)) return;

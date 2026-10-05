@@ -5,6 +5,7 @@ import type { CameraReboot, PoeSwitchStatus } from './maintenance';
 import type { RecordingsStatus } from './recordings';
 import type { CameraFtp, ClipsStall } from './ftp';
 import type { UiHealth } from './health';
+import type { UiArchive } from './archive';
 
 export interface Status {
   version: string;
@@ -19,6 +20,7 @@ export interface Status {
   ftp: { enabled: boolean; listening: boolean; port: number; tls: boolean; publicHost: string | null; passwordSet: boolean; lastUpload: number | null; lastClip: number | null; clips: number; failures: number; camera?: CameraFtp | null; stalled?: ClipsStall | null };
   recordings?: RecordingsStatus;
   health?: UiHealth; // the health summary (spec 2026-10-03-health-summary-design)
+  archive?: UiArchive; // spec 2026-10-05-archive-design §6
 }
 export interface Usage { bytes: number; files: number; oldest: number | null; newest: number | null; growthPerDay: number }
 export interface Stats {
@@ -83,7 +85,7 @@ export function connect(): void {
   timer = setInterval(() => document.visibilityState !== 'hidden' && void refresh(), 5000);
   document.addEventListener('visibilitychange', onVisible);
   source = new EventSource('/api/stream', { withCredentials: true });
-  for (const type of ['camera-event', 'camera-status', 'clip', 'annotation', 'analysis', 'camera']) {
+  for (const type of ['camera-event', 'camera-status', 'clip', 'annotation', 'analysis', 'camera', 'archive']) {
     source.addEventListener(type, (ev) => {
       const e = ev as MessageEvent;
       feed.update((list) => [{ id: Number(e.lastEventId), type, data: JSON.parse(e.data), at: Date.now() }, ...list].slice(0, 300));

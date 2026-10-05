@@ -62,6 +62,17 @@ export function lastLiveEventTs(c: Catalog, cam: string): number | null {
   return r?.start_ts ?? null;
 }
 
+// Events of a camera that overlap [from, to]: started by `to` and ended at
+// `from` or later (an open one counts up to `openMs` from its start).
+// Oldest start first. start_ts ≥ from − max(openMs, 1 day) bounds the index
+// scan (no event is longer: an open one ends after events.maxOpenMin).
+export function eventsOverlapping(c: Catalog, cam: string, from: number, to: number, openMs: number): EventRow[] {
+  const rows = c.db
+    .prepare('SELECT * FROM events WHERE cam = ? AND start_ts <= ? AND start_ts >= ? AND COALESCE(end_ts, start_ts + ?) >= ? ORDER BY start_ts, id LIMIT 1000')
+    .all(cam, to, from - Math.max(openMs, 86_400_000), openMs, from) as DbRow[];
+  return rows.map(fromDb);
+}
+
 export function deleteEventsBefore(c: Catalog, ts: number): number {
   return Number(c.db.prepare('DELETE FROM events WHERE start_ts < ?').run(ts).changes);
 }
