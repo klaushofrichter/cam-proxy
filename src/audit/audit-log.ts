@@ -12,7 +12,7 @@ export { maskPath };
 // direction across the day files.
 const AUDIT_DATASET = 'cam-proxy.audit';
 export type Outcome = 'success' | 'failure' | 'unknown';
-interface AuditInput {
+export interface AuditInput {
   action: string;
   category: string[];
   type: string[];
@@ -77,6 +77,7 @@ export class AuditLog {
   private readonly max: number;
   private throttledDay: string | null = null;
   private readonly clean = new Set<string>(); // files whose last byte was checked this process
+  private readonly counted = new Map<string, { size: number; mtimeMs: number; records: number }>(); // count(): per day file
 
   constructor(private readonly d: { dir: string; version: string; camera: () => string; now?: () => number; host?: string; maxFileBytes?: number }) {
     this.now = d.now ?? Date.now;
@@ -166,6 +167,26 @@ export class AuditLog {
       }
     }
     return undefined;
+  }
+
+  // The records in the day files from `fromDay` on (a line that parses as a
+  // record). A file is read again only when its size or time changed, so
+  // only today's file is read on each call.
+  count(fromDay: string): number {
+    const days = this.days();
+    for (const k of this.counted.keys()) if (!days.includes(k)) this.counted.delete(k);
+    let n = 0;
+    for (const day of days) {
+      if (day < fromDay) continue;
+      let st: { size: number; mtimeMs: number };
+      try { st = statSync(join(this.d.dir, `${day}.jsonl`)); } catch { continue; }
+      const seen = this.counted.get(day);
+      if (seen && seen.size === st.size && seen.mtimeMs === st.mtimeMs) { n += seen.records; continue; }
+      const records = this.lines(day).reduce((k, l) => (parse(l) ? k + 1 : k), 0);
+      this.counted.set(day, { size: st.size, mtimeMs: st.mtimeMs, records });
+      n += records;
+    }
+    return n;
   }
 
   deleteBefore(day: string, dryRun = false): number {

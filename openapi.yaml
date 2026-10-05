@@ -647,7 +647,7 @@ paths:
     get:
       summary: Every setting with value, source, restart flag and pending next value
       responses:
-        '200': { description: '{ "<path>": { value, source (default, file, override, env), env? (the variable that sets it: CAMERA_HOST, PI_ADDRESS or their CAMPROXY_ names), restart, pending, next?, type (integer, boolean or string) } }' }
+        '200': { description: '{ "<path>": { value, source (default, file, override, env), env? (the variable that sets it: CAMERA_HOST, PI_ADDRESS or their CAMPROXY_ names), restart, pending, next?, type (integer, boolean or string), resetTo? (an override: what removing it goes back to, { value?, source: file or default }) } }' }
     put:
       summary: Sets overrides (stored in overrides.json); live settings apply at once
       requestBody:
@@ -657,6 +657,11 @@ paths:
       responses:
         '200': { description: the new view (as GET) }
         '400': { description: '{ error: invalid, detail: "<path>: <why>" } (also "<path>: set in .env (<VARIABLE>)" for a setting the environment sets)' }
+    delete:
+      summary: Removes every override at once (the Settings page's "Reset to defaults"), back to the file or default values; one config-change audit record (reset all)
+      responses:
+        '200': { description: the new view (as GET) }
+        '400': { description: '{ error: invalid, detail } when the file and default values alone are not a valid configuration' }
   /control/config/{path}:
     delete:
       summary: Removes one override (back to the file or default value)
@@ -717,10 +722,17 @@ paths:
         - { name: after, in: query, description: "cursor: newer records, oldest first (empty: from the oldest)", schema: { type: string } }
         - { name: from, in: query, description: unix ms, schema: { type: integer } }
         - { name: to, in: query, description: unix ms, schema: { type: integer } }
-        - { name: action, in: query, description: "event.action values, comma-separated", schema: { type: string } }
+        - { name: action, in: query, description: "event.action values, comma-separated; each one of the known actions (docs/audit-log.md)", schema: { type: string } }
         - { name: outcome, in: query, schema: { type: string, enum: [success, failure, unknown] } }
       responses:
         '200': { description: "application/x-ndjson, one ECS record per line, each with cam_proxy.cursor; headers X-Next-Cursor and X-Has-More" }
-        '400': { description: bad cursor, range, limit or outcome }
+        '400': { description: 'bad cursor, range, limit or outcome, or an unknown action ({ error: invalid, detail: "unknown action: <name>" })' }
         '401': { description: no or unknown token }
-        '403': { description: a client token, or the audit token on anything but GET /control/audit }
+        '403': { description: a client token, or the audit token on anything but GET /control/audit and /control/audit/summary }
+  /control/audit/summary:
+    get:
+      summary: How long audit records are kept and how many are (admin token, admin session, or CAMPROXY_AUDIT_TOKEN)
+      responses:
+        '200': { description: '{ retentionDays (retention.auditDays), records (the records in the day files the retention keeps, all actions) }' }
+        '401': { description: no or unknown token }
+        '403': { description: a client token }

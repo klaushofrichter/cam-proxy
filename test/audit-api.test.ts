@@ -68,19 +68,47 @@ describe('audit API', () => {
   });
 
   it('pages newest first with before, oldest first with after, and answers 400 for bad queries', async () => {
-    for (let i = 0; i < 5; i++) p.proxy.audit.write({ action: 'test-entry', category: ['host'], type: ['info'], outcome: 'success', message: `t${i}` });
-    const first = await request(p.base).get('/control/audit?action=test-entry&limit=2').set(auth(ADMIN_TOKEN));
+    for (let i = 0; i < 5; i++) p.proxy.audit.write({ action: 'audit-throttled', category: ['host'], type: ['info'], outcome: 'success', message: `t${i}` });
+    const first = await request(p.base).get('/control/audit?action=audit-throttled&limit=2').set(auth(ADMIN_TOKEN));
     expect(lines(first.text).map((x) => x.message)).toEqual(['t4', 't3']);
     expect(first.headers['x-has-more']).toBe('true');
-    const second = await request(p.base).get(`/control/audit?action=test-entry&limit=2&before=${first.headers['x-next-cursor']}`).set(auth(ADMIN_TOKEN));
+    const second = await request(p.base).get(`/control/audit?action=audit-throttled&limit=2&before=${first.headers['x-next-cursor']}`).set(auth(ADMIN_TOKEN));
     expect(lines(second.text).map((x) => x.message)).toEqual(['t2', 't1']);
-    const up = await request(p.base).get('/control/audit?action=test-entry&limit=10&after=').set(auth(ADMIN_TOKEN));
+    const up = await request(p.base).get('/control/audit?action=audit-throttled&limit=10&after=').set(auth(ADMIN_TOKEN));
     expect(lines(up.text).map((x) => x.message)).toEqual(['t0', 't1', 't2', 't3', 't4']);
     for (const q of ['before=x', 'limit=0', 'limit=999', 'from=5&to=1', 'outcome=maybe', 'before=2026-10-01:1&after=2026-10-01:1', 'limit=abc']) {
       const r = await request(p.base).get(`/control/audit?${q}`).set(auth(ADMIN_TOKEN));
       expect(r.status, q).toBe(400);
       expect(r.body.error).toBe('invalid');
     }
+  });
+
+  // Klaus 2026-10-05: the Audit page's action filter picks several actions.
+  it('filters by several actions, comma-separated, and refuses an unknown one', async () => {
+    p.proxy.audit.write({ action: 'storage-paused', category: ['host'], type: ['change'], outcome: 'failure', message: 'm-paused' });
+    p.proxy.audit.write({ action: 'storage-resumed', category: ['host'], type: ['change'], outcome: 'success', message: 'm-resumed' });
+    p.proxy.audit.write({ action: 'activity-daily', category: ['host'], type: ['info'], outcome: 'success', message: 'm-activity' });
+    const r = await request(p.base).get('/control/audit?action=storage-paused,storage-resumed').set(auth(ADMIN_TOKEN));
+    expect(r.status).toBe(200);
+    expect(lines(r.text).map((x) => x.message)).toEqual(['m-resumed', 'm-paused']);
+    for (const q of ['action=storage-paused,nope', 'action=nope', 'action=event-analysis,%22x%22']) {
+      const bad = await request(p.base).get(`/control/audit?${q}`).set(auth(ADMIN_TOKEN));
+      expect(bad.status, q).toBe(400);
+      expect(bad.body).toEqual({ error: 'invalid', detail: expect.stringMatching(/^unknown action/) });
+    }
+    expect((await request(p.base).get('/control/audit?action=event-analysis').set(auth(ADMIN_TOKEN))).status).toBe(200);
+  });
+
+  // Klaus 2026-10-05: the Audit page says how many records the retention keeps.
+  it('summary: the retention days and the records kept within them', async () => {
+    const all = (await request(p.base).get('/control/audit?limit=500&after=').set(auth(ADMIN_TOKEN))).text;
+    const r = await request(p.base).get('/control/audit/summary').set(auth(ADMIN_TOKEN));
+    expect(r.status).toBe(200);
+    expect(r.headers['cache-control']).toBe('no-store');
+    expect(r.body).toEqual({ retentionDays: 90, records: lines(all).length });
+    expect((await request(p.base).get('/control/audit/summary').set(auth(AUDIT_TOKEN))).status).toBe(200);
+    expect((await request(p.base).get('/control/audit/summary').set(auth(CLIENT_TOKEN))).status).toBe(403);
+    expect((await request(p.base).get('/control/audit/summary')).status).toBe(401);
   });
 
   it('records the camera-side restart as a control-action (restart), by session or token', async () => {
