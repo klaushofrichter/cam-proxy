@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Settings → Find camera: "Currently used Camera" sits right-aligned in the button column; the button reads "Use this camera" (was "this camera" / "Use this address").
+
 ## v2026.10.05.1
 
 - Status page, Analytics card: the usage is on separate lines — This month, Today, Last call, and Still checks today (the manual checks' own daily limit) — instead of one long line.
