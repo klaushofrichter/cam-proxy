@@ -166,7 +166,7 @@ come only from the environment.
   overrides equal to the default as one "no change in effect" line
   (`DELETE /control/config`, one `config-change` record).
 - **From the environment** (the Pi's one `.env`, [docs/raspberry-pi.md](docs/raspberry-pi.md)):
-  `CAMERA_HOST` (or `CAMPROXY_CAMERA_HOST`) sets `camera.host` (address or
+  `CAMERA_HOST` (or `CAMPROXY_CAMERA_HOST`) sets the one camera's host (`cameras.<id>.host`; address or
   name, optional `:port`), and `PI_ADDRESS` (or `CAMPROXY_PI_ADDRESS`; address
   or name, no port) sets `ftp.publicHost` and `server.publicUrl`
   (`http://<PI_ADDRESS>:<server.port>`). They win over overrides and
@@ -185,7 +185,7 @@ come only from the environment.
 | Group | Settings (defaults) |
 |---|---|
 | `server` | `port` (8480), `dataDir` (`data`, relative to the config file), `logLevel` (`info`), `publicUrl` (where people reach this proxy; reported in `/api/cameras` as `publicUrl`, so cams can link to it), `trustProxy` (0: none; behind the cluster ingress 1, so rate limits count clients by X-Forwarded-For) |
-| `camera` | `id` (`cam1`), `name` (`Den`; only the fallback until the camera's own name is read, see [Camera name](#camera-name)), `host` (required), `protocol` (`https`), `tlsName`, `webUiUrl` (the camera's own web page, linked from the admin UI; default `https://<host>/`, `none` for no link), `user` (`proxy`), `onvifPort` (8000), `rtspPort` (554), `baichuanPort` (9000, recordings over TCP; applies at the next connection), `statusPollS` (30); `poeSwitch`: the camera's PoE switch for a power-cycle, `model` (`none`; `sscpoe-web` for the STEAMEMO GPS-208 and kin), `host` (its address, optional `:port`), `port` (the switch port the camera is on, 1–48), `ports` (8: the switch's PoE port count), `offSeconds` (10, 5–60). The `poeSwitch` settings apply at once; see [docs/poe-switch.md](docs/poe-switch.md) |
+| `camera` | one camera (or `cameras`, a list: [Several cameras](#several-cameras)): `id` (`cam1`), `name` (`Den`; only the fallback until the camera's own name is read, see [Camera name](#camera-name)), `host` (without it the camera waits idle), `protocol` (`https`), `tlsName`, `webUiUrl` (the camera's own web page, linked from the admin UI; default `https://<host>/`, `none` for no link), `user` (`proxy`), `onvifPort` (8000), `rtspPort` (554), `baichuanPort` (9000, recordings over TCP; applies at the next connection), `statusPollS` (30); `poeSwitch`: the camera's PoE switch for a power-cycle, `model` (`none`; `sscpoe-web` for the STEAMEMO GPS-208 and kin), `host` (its address, optional `:port`), `port` (the switch port the camera is on, 1–48), `ports` (8: the switch's PoE port count), `offSeconds` (10, 5–60). The `poeSwitch` settings apply at once; see [docs/poe-switch.md](docs/poe-switch.md) |
 | `events` | `onvif.subscribeMin` (10), `onvif.pullTimeoutS` (30), `poll.enabled` (true), `poll.intervalS` (2), `poll.afterOnvifDownS` (60), `maxOpenMin` (10) |
 | `retention` | `stillsDays` (7), `previewsDays` (14), `clipsDays` (7), `eventsDays` (30), `auditDays` (90), `streamLogDays` (7), `intervalMin` (60) |
 | `storage` | `maxPercent` (85) or `maxBytes`, `minFreeBytes` (2 GB), `keepHours` (per kind: `stills` 24, `clips` 24, `previews` 72) |
@@ -205,7 +205,8 @@ come only from the environment.
 |---|---|
 | `CAMPROXY_TOKENS` | client tokens, comma-separated, at least 32 characters each (a second token allows rotation without downtime) |
 | `CAMPROXY_ADMIN_TOKEN` | the control API and admin UI; different from every client token |
-| `CAMPROXY_CAMERA_PASSWORD` | the password of the proxy's camera user (`camera.user`) |
+| `CAMPROXY_CAMERA_PASSWORD` | the password of the proxy's camera user (`camera.user`); the default for every camera |
+| `CAMPROXY_CAMERA_PASSWORD_<ID>` | optional: one camera's own password (the id upper-cased, `-` → `_`, e.g. `CAMPROXY_CAMERA_PASSWORD_CAM_3`); without a default, every camera needs one |
 | `CAMPROXY_FTP_PASSWORD` | the camera's FTP login to the proxy; required when `ftp.enabled` |
 | `CAMPROXY_AUDIT_TOKEN` | optional: a read-only token for `GET /control/audit`; 32+ characters, different from the other tokens |
 | `CAMPROXY_POE_SWITCH_PASSWORD` | optional: the PoE switch's web password, for the camera power-cycle (`camera.poeSwitch`); never logged, returned or audited |
@@ -220,6 +221,54 @@ the cluster, a separate file holds cam2's values and the kube settings
 repo secret `KUBE_SETUP_DEPLOY_TOKEN` and applies the Secret
 `cam-proxy-secrets` (values on stdin or in a private temporary file, never in
 arguments).
+
+### Several cameras
+
+One proxy can serve several cameras (spec
+[2026-10-05-multi-camera-host-design](docs/superpowers/specs/2026-10-05-multi-camera-host-design.md),
+phase 1). Today's one-camera `config.json` with a `camera` object keeps
+working unchanged: it is read as a list of one at every start, and never
+rewritten. [config.cameras.example.json](config.cameras.example.json) shows
+the new form:
+
+- **`cameras`**: a list in config.json; its order is the display order.
+  Settings paths and overrides use the id: `cameras.cam4.stills.intervalS`.
+  Ids are unique, `^[a-z0-9][a-z0-9-]{0,31}$`; `camera` and `cameras` together
+  are an error. A new camera's `name` and `ftp.user` default to its id.
+- **Per camera:** `id`, `name`, `host`, `protocol`, `tlsName`, `webUiUrl`,
+  `user`, `onvifPort`, `rtspPort`, `baichuanPort`, `statusPollS`,
+  `poeSwitch.port`, `ftp.user`, and these overrides of a host default (absent:
+  the host value): `stills.enabled`, `stills.stream`, `stills.intervalS`,
+  `ftp.enabled`, `ftp.stream`, `analytics.kinds.*`, `events.poll.enabled`.
+  Everything else is host-wide.
+- **`poeSwitch`** (host-wide): `model`, `host`, `ports`, `offSeconds`; each
+  camera names its `poeSwitch.port`. A legacy `camera.poeSwitch` is read
+  that way; overrides with legacy paths (`camera.statusPollS`,
+  `camera.poeSwitch.host`, `ftp.user`) are read translated and written back
+  in the new form on the next save. `GET /control/config` shows the new
+  paths (a legacy file's values are marked "config.json (legacy camera)").
+- **Supervision:** each camera runs on its own; a camera that fails to start
+  retries after 5 s, doubling to 5 min, and the others never wait for it. A
+  camera without an address waits idle (`error: "no_address"`): the proxy no
+  longer refuses to start. A request for a camera that is restarting answers
+  `503 camera_restarting` with `Retry-After`; an unknown camera 404.
+- **API:** `GET /api/cameras` lists every camera in config order, each with
+  `error` (null when fine) and `features` (`["sse-cam-list"]`); `GET
+  /api/stream?cam=a,b` filters to several cameras; the health summary keeps
+  schema 1 with the first camera on top, adds `cameras[]`, and aggregates the
+  camera, stream, events and FTP items over the cameras. `GET /control/cameras`
+  gives each camera's status block; the admin UI shows a camera picker.
+  Audit records name their camera (`labels.camera`) only when they concern
+  one. The image rate limit grows with the number of cameras.
+- **Not yet (phase 2):** FTP for more than one camera (a config error until
+  per-camera FTP users exist), the camera routes for actions and settings
+  (`/control/actions/:name` answers `400 camera_required` for a camera action
+  on a proxy with several cameras; host actions work), one shared go2rtc
+  (until then camera *i* uses `go2rtc.rtspPort`/`apiPort` + 100 × *i*), and a
+  shared recordings cache (each camera gets an equal share of `cacheMB`).
+  `CAMERA_HOST` with several cameras is a config error.
+- **Tests:** `npm run test:e2e:multi` runs the admin UI against three cam-sims
+  behind one proxy.
 
 ## Client API
 
@@ -240,8 +289,9 @@ while one not yet cached counts as a normal request); more answer 429
 ```sh
 api() { curl -s -H "Authorization: Bearer $CAMPROXY_TOKEN" "http://localhost:8480/api$1"; }
 api /cameras
-# [{"id":"cam1","name":"Backyard Left","online":true,"lastEventTs":1790000000000,"stream":{"up":true,"lastFrameTs":1790000000000},"publicUrl":null,"address":"192.168.1.20"}]
-# address: the camera's camera.host as the proxy runs it (cams reaches the camera there)
+# [{"id":"cam1","name":"Backyard Left","online":true,"lastEventTs":1790000000000,"stream":{"up":true,"lastFrameTs":1790000000000},"publicUrl":null,"address":"192.168.1.20","error":null,"features":["sse-cam-list"]}]
+# address: the camera's host as the proxy runs it (cams reaches the camera there)
+# every camera of this proxy, config order; error: null when fine; features: what this proxy supports (sse-cam-list: ?cam=a,b)
 api /cameras/cam1   # the same entry for one camera (404 for another id)
 api '/cameras/cam1/events?kind=person&limit=10'
 # [{"id":12,"kind":"person","source":"onvif","start":1790000000000,"end":1790000004000,"endReason":"state"}]
@@ -656,7 +706,9 @@ never loses anything within the retention (default 7 days).
     sprite sheet, and the tile index within it); only when named in `types`,
     because it fires every second.
 - **Filters:** `types` and `kinds` (e.g. `kinds=person,vehicle`) are comma
-  lists.
+  lists; so is `cam` (`cam=cam3,cam5`: those cameras; empties are ignored, an
+  unknown id matches nothing). One stream carries every camera's messages,
+  each with `cam`, and one cursor covers them all.
 - **Keep-alive and backpressure:**
   - a `: ping` every 15 s, and `retry: 3000`;
   - a client that can't keep up is disconnected, and resumes from its last id;

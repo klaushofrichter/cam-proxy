@@ -320,6 +320,10 @@ certificate still checks offline as long as it hasn't expired.
   its 10 s timeout).
 - **Updates:** nothing updates the Pi on its own. A release to `production`
   updates only the cluster, so pull on the Pi after a release.
+- **Several cameras (from the multi-camera release on):** config.json may
+  keep its `camera` object and overrides.json its paths; nothing on the Pi
+  changes (the Settings page shows the paths as `cameras.cam1.*` and
+  `poeSwitch.*`, and saves new overrides that way).
 - **The Pi card:** on a Pi the Status page shows a Pi card (model, CPU
   temperature, under-voltage, memory, uptime, load, disk), and the Health card
   flags the disk from `health.diskPercent` (90 %) and the CPU temperature from

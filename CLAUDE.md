@@ -1,12 +1,13 @@
 # cam-proxy
 
-Camera gateway for one Reolink camera: an upload-only FTPS server for the camera's clips, a stills pipeline (go2rtc + ffmpeg, minute packs and sprites), ONVIF events as SSE, and a client API for cams, plus a control API and admin UI (Svelte). Runs in the cluster next to `cam2` (https://cam-proxy.skylar.technology, LAN only) and on the Pi next to the real camera (`docs/raspberry-pi.md`), where cam-proxy-pi-display reads `GET /api/local/health`. Spec: `docs/superpowers/specs/2026-09-27-cam-proxy-design.md`. Plans: `docs/superpowers/plans/`. Requirements: `docs/requirements.md`.
+Camera gateway for one or more Reolink cameras (several per proxy since multi-camera P1, `cameras` in config.json; spec `docs/superpowers/specs/2026-10-05-multi-camera-host-design.md`): an upload-only FTPS server for the camera's clips, a stills pipeline (go2rtc + ffmpeg, minute packs and sprites), ONVIF events as SSE, and a client API for cams, plus a control API and admin UI (Svelte). Runs in the cluster next to `cam2` (https://cam-proxy.skylar.technology, LAN only) and on the Pi next to the real camera (`docs/raspberry-pi.md`), where cam-proxy-pi-display reads `GET /api/local/health`. Spec: `docs/superpowers/specs/2026-09-27-cam-proxy-design.md`. Plans: `docs/superpowers/plans/`. Requirements: `docs/requirements.md`.
 
 ## Commands
 
 - `npm test`: vitest against cam-sim in process (a release tarball in package.json). Needs ffmpeg, and go2rtc/MediaMTX in `tools/` (`scripts/install-go2rtc.sh`, `scripts/install-mediamtx.sh`).
 - `npm run build`: tsc plus the admin UI (vite). `npm run lint:types` and `npm run check` are the type checks for tests and `web/`.
 - `npm run test:e2e`: Playwright against a proxy and a cam-sim.
+- `npm run test:e2e:multi`: Playwright against one proxy over three cam-sims (the camera picker).
 - `npm run schema`: regenerate `config.schema.json` after changing a setting.
 - `npx tsx scripts/verify-camera.ts [seconds]`: read-only run against the real camera.
 - Node 26 or later (`engines`).

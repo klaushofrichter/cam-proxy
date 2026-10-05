@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { cameraConfig } from '../src/config/cameras';
+import { cameraConfig, cameraIds } from '../src/config/cameras';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -238,6 +238,13 @@ describe('shipped files', () => {
     defaults.server.dataDir = example.server.dataDir;
     expect(example).toEqual(defaults);
     expect(cameraConfig(l.config, 'cam1')!.host).toBe(example.camera.host);
+  });
+
+  it('config.cameras.example.json loads: two cameras, the host switch', () => {
+    write('config.json', readFileSync(join(__dirname, '..', 'config.cameras.example.json'), 'utf8'));
+    const l = load();
+    expect(cameraIds(l.config)).toEqual(['cam3', 'cam4']);
+    expect(cameraConfig(l.config, 'cam4')!.poeSwitch).toMatchObject({ host: '192.168.60.2', port: 2 });
   });
 });
 
