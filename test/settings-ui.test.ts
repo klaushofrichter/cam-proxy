@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseSetting, resetLabel, resetPlan, settingText } from '../web/src/lib/settings';
+import { parseSetting, resetCounts, resetLabel, resetPlan, sameBadge, settingText } from '../web/src/lib/settings';
 
 // The Settings page turns its text fields into the setting's type (#85: an
 // optional number without a value, camera.poeSwitch.port, was saved as text).
@@ -62,5 +62,35 @@ describe('Settings page: Reset shows the default', () => {
       'stills.enabled: off → on',
     ]);
     expect(resetPlan({ 'retention.stillsDays': { value: 7, source: 'default' } })).toEqual([]);
+  });
+});
+
+// Klaus 2026-10-05 (the Pi's PoE rows): Reset only where it changes
+// something, and say what an unset state means.
+describe('Settings page: honest Reset', () => {
+  it('names what none / not set / off means on the button', () => {
+    expect(resetLabel('camera.poeSwitch.model', { value: 'none', source: 'default', means: 'no PoE switch: power-cycle off' })).toBe('Reset – none (no PoE switch: power-cycle off)');
+    expect(resetLabel('camera.poeSwitch.host', { source: 'default', means: 'PoE switch control off: no switch address' })).toBe('Reset – not set (PoE switch control off: no switch address)');
+  });
+  it('marks an override equal to the default (or config.json) instead of offering a Reset', () => {
+    expect(sameBadge('camera.poeSwitch.ports', { value: 8, source: 'default', same: true })).toEqual({ text: 'override = default', title: expect.stringMatching(/same as the default \(8\).*Reset would change nothing.*Reset to defaults/) });
+    expect(sameBadge('sse.pingS', { value: 20, source: 'file', same: true })).toEqual({ text: 'override = config.json', title: expect.stringMatching(/same as the config\.json value \(20 s\)/) });
+    expect(sameBadge('sse.pingS', { value: 20, source: 'file' })).toBeNull();
+    expect(sameBadge('sse.pingS', undefined)).toBeNull();
+  });
+  it('lists overrides equal to the default as one "no change in effect" line in Reset to defaults', () => {
+    const view = {
+      'camera.poeSwitch.model': { value: 'sscpoe-web', source: 'override' as const, resetTo: { value: 'none', source: 'default' as const, means: 'no PoE switch: power-cycle off' } },
+      'camera.poeSwitch.host': { value: '192.168.1.217', source: 'override' as const, resetTo: { source: 'default' as const, means: 'PoE switch control off: no switch address' } },
+      'camera.poeSwitch.ports': { value: 8, source: 'override' as const, resetTo: { value: 8, source: 'default' as const, same: true as const } },
+      'camera.poeSwitch.offSeconds': { value: 10, source: 'override' as const, resetTo: { value: 10, source: 'default' as const, same: true as const } },
+    };
+    expect(resetPlan(view)).toEqual([
+      'camera.poeSwitch.model: sscpoe-web → none (no PoE switch: power-cycle off)',
+      'camera.poeSwitch.host: 192.168.1.217 → not set (PoE switch control off: no switch address)',
+      '2 overrides equal to the default are removed too, no change in effect: camera.poeSwitch.ports, camera.poeSwitch.offSeconds',
+    ]);
+    expect(resetCounts(view)).toEqual({ changes: 2, same: 2 });
+    expect(resetPlan({ 'sse.pingS': view['camera.poeSwitch.ports'] })).toEqual(['1 override equal to the default is removed too, no change in effect: sse.pingS']);
   });
 });

@@ -1,14 +1,20 @@
 // The description of every setting: one place that drives validation and the
 // generated config.schema.json, so the two can't drift apart.
 
+// `unset`: what the setting's unset state does (not set, none, empty, off,
+// or 0 = none; `value` is that state, undefined for not set). The Settings
+// page says it on a Reset that goes back to it, and in Reset to defaults.
+type Unset = { value?: string | number | boolean; text: string };
 type Leaf =
-  | { type: 'integer'; min: number; max: number; optional?: boolean; oneOf?: number[]; doc: string }
-  | { type: 'boolean'; doc: string }
-  | { type: 'string'; enum?: string[]; pattern?: string; optional?: boolean; doc: string };
+  | { type: 'integer'; min: number; max: number; optional?: boolean; oneOf?: number[]; doc: string; unset?: Unset }
+  | { type: 'boolean'; doc: string; unset?: Unset }
+  | { type: 'string'; enum?: string[]; pattern?: string; optional?: boolean; doc: string; unset?: Unset };
 export type Node = { [key: string]: Node | Leaf };
 
 const port = (doc: string): Leaf => ({ type: 'integer', min: 1, max: 65535, doc });
 const int = (min: number, max: number, doc: string, optional = false): Leaf => ({ type: 'integer', min, max, doc, optional });
+// A leaf with its unset text (see Unset).
+const unset = (leaf: Leaf, text: string, value?: Unset['value']): Leaf => ({ ...leaf, unset: { ...(value !== undefined ? { value } : {}), text } });
 const size = (doc: string): Leaf => ({ type: 'string', pattern: '^[1-9][0-9]{1,4}x[1-9][0-9]{1,4}$', doc });
 
 const SETTINGS: Node = {
@@ -16,16 +22,16 @@ const SETTINGS: Node = {
     port: port('HTTP port for the API, control API and admin UI'),
     dataDir: { type: 'string', pattern: '^.+$', doc: 'data folder; relative to the config file' },
     logLevel: { type: 'string', enum: ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'], doc: 'pino log level' },
-    trustProxy: int(0, 5, 'reverse proxies in front (the cluster ingress: 1); rate limits then count clients by X-Forwarded-For', true),
-    publicUrl: { type: 'string', pattern: '^https?://[^\\s]+$', optional: true, doc: 'where people reach this proxy (its admin UI); reported in /api/cameras so clients can link to it' },
+    trustProxy: unset(int(0, 5, 'reverse proxies in front (the cluster ingress: 1); rate limits then count clients by X-Forwarded-For', true), 'no reverse proxy: rate limits count the connecting address'),
+    publicUrl: unset({ type: 'string', pattern: '^https?://[^\\s]+$', optional: true, doc: 'where people reach this proxy (its admin UI); reported in /api/cameras so clients can link to it' }, 'no link to this proxy for clients'),
   },
   camera: {
     id: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,31}$', doc: 'camera id used in paths and the API' },
     name: { type: 'string', pattern: '^.{1,64}$', doc: "fallback display name until the camera's own name is read (the camera stores its name)" },
-    host: { type: 'string', pattern: '^[^\\s/]*$', doc: 'address or name, optional :port (required)' },
+    host: unset({ type: 'string', pattern: '^[^\\s/]*$', doc: 'address or name, optional :port (required)' }, 'no camera address: the proxy does not start', ''),
     protocol: { type: 'string', enum: ['https', 'http'], doc: 'camera HTTP API protocol' },
-    tlsName: { type: 'string', pattern: '^[^\\s]+$', optional: true, doc: 'verify the camera certificate against this name' },
-    webUiUrl: { type: 'string', pattern: '^(https?://[^\\s]+|none)$', optional: true, doc: "the camera's own web page, linked from the admin UI; default https://<host>/, none for no link" },
+    tlsName: unset({ type: 'string', pattern: '^[^\\s]+$', optional: true, doc: 'verify the camera certificate against this name' }, "the camera's certificate is not verified"),
+    webUiUrl: unset({ type: 'string', pattern: '^(https?://[^\\s]+|none)$', optional: true, doc: "the camera's own web page, linked from the admin UI; default https://<host>/, none for no link" }, 'the link goes to https://<camera.host>/'),
     user: { type: 'string', pattern: '^[^\\s:]{1,31}$', doc: "the proxy's own camera user" },
     onvifPort: port('camera ONVIF port'),
     rtspPort: port('camera RTSP port'),
@@ -34,16 +40,16 @@ const SETTINGS: Node = {
     // The PoE switch the camera hangs on (issue #85): power-cycle the camera
     // through it. Applies at once; the password is CAMPROXY_POE_SWITCH_PASSWORD.
     poeSwitch: {
-      model: { type: 'string', enum: ['none', 'sscpoe-web'], doc: "the camera's PoE switch: none, or sscpoe-web (the STEAMEMO/SSCPOE local web protocol: GPS-208 and kin)" },
-      host: { type: 'string', pattern: '^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$', optional: true, doc: "the switch's address or name, optional :port (http)" },
-      port: int(1, 48, 'the switch port the camera is on, as numbered on the switch', true),
+      model: unset({ type: 'string', enum: ['none', 'sscpoe-web'], doc: "the camera's PoE switch: none, or sscpoe-web (the STEAMEMO/SSCPOE local web protocol: GPS-208 and kin)" }, 'no PoE switch: power-cycle off', 'none'),
+      host: unset({ type: 'string', pattern: '^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$', optional: true, doc: "the switch's address or name, optional :port (http)" }, 'PoE switch control off: no switch address'),
+      port: unset(int(1, 48, 'the switch port the camera is on, as numbered on the switch', true), "PoE switch control off: no camera port"),
       ports: int(1, 48, "the switch's PoE port count (maps the port to its internal index)"),
       offSeconds: int(5, 60, 'seconds the PoE stays off in a power-cycle'),
     },
   },
   go2rtc: {
-    binary: { type: 'string', pattern: '^.+$', optional: true, doc: 'go2rtc binary started by the proxy' },
-    url: { type: 'string', pattern: '^https?://[^\\s]+$', optional: true, doc: 'go2rtc API when it runs as its own container' },
+    binary: unset({ type: 'string', pattern: '^.+$', optional: true, doc: 'go2rtc binary started by the proxy' }, 'no go2rtc started (go2rtc.url instead)'),
+    url: unset({ type: 'string', pattern: '^https?://[^\\s]+$', optional: true, doc: 'go2rtc API when it runs as its own container' }, 'the proxy starts go2rtc itself (go2rtc.url is reserved, no effect yet)'),
     rtspPort: port('go2rtc local RTSP port'),
     apiPort: port('go2rtc local API port'),
   },
@@ -53,13 +59,13 @@ const SETTINGS: Node = {
     intervalS: { type: 'integer', min: 1, max: 60, oneOf: [1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60], doc: 'seconds between stills (divides a minute)' },
     size: size('still size, WxH'),
     quality: int(2, 31, 'ffmpeg JPEG quality (q:v); lower is better'),
-    maxGB: int(1, 100000, 'size cap for stills', true),
+    maxGB: unset(int(1, 100000, 'size cap for stills', true), 'no size cap for stills (the storage budget still applies)'),
   },
   previews: {
     tileSize: size('preview tile size, WxH'),
     grid: { type: 'string', pattern: '^[1-9][0-9]?x[1-9][0-9]?$', doc: 'sprite grid, CxR; holds one minute of tiles' },
     quality: int(2, 31, 'ffmpeg JPEG quality for tiles'),
-    maxGB: int(1, 100000, 'size cap for previews', true),
+    maxGB: unset(int(1, 100000, 'size cap for previews', true), 'no size cap for previews (the storage budget still applies)'),
   },
   events: {
     onvif: {
@@ -83,8 +89,8 @@ const SETTINGS: Node = {
     intervalMin: int(1, 1440, 'minutes between storage runs'),
   },
   storage: {
-    maxPercent: int(10, 99, 'size budget, percent of the disk', true),
-    maxBytes: int(1, Number.MAX_SAFE_INTEGER, 'size budget, bytes (instead of maxPercent)', true),
+    maxPercent: unset(int(10, 99, 'size budget, percent of the disk', true), 'no percent budget: storage.maxBytes applies'),
+    maxBytes: unset(int(1, Number.MAX_SAFE_INTEGER, 'size budget, bytes (instead of maxPercent)', true), 'no byte budget: storage.maxPercent applies'),
     minFreeBytes: int(0, Number.MAX_SAFE_INTEGER, 'stop writing below this much free space'),
     keepHours: {
       stills: int(0, 8760, 'hours of stills never deleted for the budget'),
@@ -93,7 +99,7 @@ const SETTINGS: Node = {
     },
   },
   composition: {
-    font: { type: 'string', pattern: '^.+$', optional: true, doc: 'font file for the badge and card text of composed clips; default: the first of DejaVu Sans (Alpine, Debian) or Arial (macOS) that exists' },
+    font: unset({ type: 'string', pattern: '^.+$', optional: true, doc: 'font file for the badge and card text of composed clips; default: the first of DejaVu Sans (Alpine, Debian) or Arial (macOS) that exists' }, 'the first of DejaVu Sans or Arial that exists'),
   },
   sse: {
     maxClients: int(1, 1000, 'most SSE clients at once'),
@@ -104,17 +110,17 @@ const SETTINGS: Node = {
     cacheMB: int(64, 1_048_576, 'size cap of the recordings cache, MB; least recently used files go first'),
   },
   ftp: {
-    enabled: { type: 'boolean', doc: 'accept clip uploads from the camera' },
+    enabled: unset({ type: 'boolean', doc: 'accept clip uploads from the camera' }, 'no clip uploads from the camera', false),
     port: port('FTP control port'),
     passive: { type: 'string', pattern: '^[1-9][0-9]{0,4}-[1-9][0-9]{0,4}$', doc: 'passive port range, A-B' },
     user: { type: 'string', pattern: '^[^\\s:]{1,31}$', doc: 'FTP user the camera logs in as' },
     tls: { type: 'boolean', doc: 'require FTPS' },
     stream: { type: 'string', enum: ['main', 'sub'], doc: 'the stream the camera uploads' },
     stalledHours: int(1, 72, 'warn on the Status page when no clip arrived for this many hours while the camera recorded events'),
-    maxGB: int(1, 100000, 'size cap for clips', true),
-    publicHost: { type: 'string', pattern: '^[A-Za-z0-9.:-]{1,253}$', optional: true, doc: 'the address the camera connects to (PASV replies and the camera FTP setup)' },
-    certFile: { type: 'string', pattern: '^.+$', optional: true, doc: 'FTPS certificate (PEM); a self-signed one otherwise' },
-    keyFile: { type: 'string', pattern: '^.+$', optional: true, doc: 'FTPS key (PEM)' },
+    maxGB: unset(int(1, 100000, 'size cap for clips', true), 'no size cap for clips (the storage budget still applies)'),
+    publicHost: unset({ type: 'string', pattern: '^[A-Za-z0-9.:-]{1,253}$', optional: true, doc: 'the address the camera connects to (PASV replies and the camera FTP setup)' }, "PASV answers the connection's own address; the camera's FTP setup can't be set from here"),
+    certFile: unset({ type: 'string', pattern: '^.+$', optional: true, doc: 'FTPS certificate (PEM); a self-signed one otherwise' }, 'a self-signed FTPS certificate'),
+    keyFile: unset({ type: 'string', pattern: '^.+$', optional: true, doc: 'FTPS key (PEM)' }, 'the key of the self-signed FTPS certificate'),
   },
   // The health summary (spec 2026-10-03-health-summary-design): the Status
   // page's Health card and GET /api/local/health flag a problem at these.
@@ -133,15 +139,15 @@ const SETTINGS: Node = {
   },
   analytics: {
     kinds: {
-      person: { type: 'boolean', doc: 'analyse person events' },
-      vehicle: { type: 'boolean', doc: 'analyse vehicle events' },
-      pet: { type: 'boolean', doc: 'analyse pet events' },
+      person: unset({ type: 'boolean', doc: 'analyse person events' }, 'person events are not analysed', false),
+      vehicle: unset({ type: 'boolean', doc: 'analyse vehicle events' }, 'vehicle events are not analysed', false),
+      pet: unset({ type: 'boolean', doc: 'analyse pet events' }, 'pet events are not analysed', false),
     },
     googleVision: {
-      enabled: { type: 'boolean', doc: 'send event stills to Google Vision (needs CAMPROXY_GOOGLE_VISION_KEY)' },
-      monthlyLimit: int(0, 100000, 'Google Vision calls per calendar month (camera time); 0 = none'),
-      dailyCap: int(0, 10000, 'Google Vision calls per day at most; 0 = no daily cap'),
-      checksPerDay: int(0, 1000, 'still checks (a second picked by hand in cams) per camera day at most, within the monthly limit and the daily cap; 0 = no checks'),
+      enabled: unset({ type: 'boolean', doc: 'send event stills to Google Vision (needs CAMPROXY_GOOGLE_VISION_KEY)' }, 'no stills sent to Google Vision', false),
+      monthlyLimit: unset(int(0, 100000, 'Google Vision calls per calendar month (camera time); 0 = none'), 'no Google Vision calls', 0),
+      dailyCap: unset(int(0, 10000, 'Google Vision calls per day at most; 0 = no daily cap'), 'no daily cap (the monthly limit still applies)', 0),
+      checksPerDay: unset(int(0, 1000, 'still checks (a second picked by hand in cams) per camera day at most, within the monthly limit and the daily cap; 0 = no checks'), 'no still checks', 0),
     },
   },
 };

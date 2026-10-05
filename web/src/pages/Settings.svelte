@@ -9,7 +9,7 @@
   import { envNote, isEnvSet } from '../lib/find-camera';
 
   import ConfirmDialog from '../components/ConfirmDialog.svelte';
-  import { parseSetting, resetLabel, resetPlan, type ResetTo, type SettingType } from '../lib/settings';
+  import { parseSetting, resetCounts, resetLabel, resetPlan, sameBadge, type ResetTo, type SettingType } from '../lib/settings';
 
   // `env`: the variable that sets it (source env: read-only here).
   interface Setting { value: unknown; source: 'default' | 'file' | 'override' | 'env'; env?: string; restart: boolean; pending: boolean; next?: unknown; type?: SettingType; resetTo?: ResetTo }
@@ -33,7 +33,9 @@
     try {
       view = await api('PUT', '/control/config', nest(path, parse(path, drafts[path])));
       delete drafts[path];
-      message = `${path} saved${view[path].restart ? ' (applies after a restart)' : ''}`;
+      // A value equal to config.json's or the default removes the override.
+      const kept = view[path].source === 'override';
+      message = kept ? `${path} saved${view[path].restart ? ' (applies after a restart)' : ''}` : `${path} saved: the same as the ${view[path].source === 'file' ? 'config.json value' : 'default'}, so no override is kept`;
       void refresh();
     } catch (e) {
       message = e instanceof ApiError ? e.message : 'not saved';
@@ -47,17 +49,23 @@
   // "Reset to defaults": every override at once (one request, one audit
   // record), after a confirmation that lists what changes.
   const overrides = $derived(Object.values(view).filter((s) => s.source === 'override').length);
+  // `counts`: overrides that change something, and those equal to the default.
   let asking = $state<string[] | null>(null);
+  let counts = $state({ changes: 0, same: 0 });
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   function askResetAll() {
+    counts = resetCounts(view);
     asking = resetPlan(view);
   }
+  const askMessage = $derived(counts.changes ? `${plural(counts.changes, 'setting', 'settings')} changed here go${counts.changes === 1 ? 'es' : ''} back to the value in config.json or the built-in default:` : 'Nothing changes in effect: every override equals the value in config.json or the built-in default.');
+  const askLabel = $derived(counts.changes ? `Reset ${plural(counts.changes, 'setting', 'settings')}` : `Remove ${plural(counts.same, 'override', 'overrides')}`);
   async function resetAll() {
-    const n = asking?.length ?? 0;
+    const n = counts.changes;
     asking = null;
     try {
       view = await api('DELETE', '/control/config');
       drafts = {};
-      message = `${n} setting${n === 1 ? '' : 's'} back to ${n === 1 ? 'its' : 'their'} default${Object.values(view).some((s) => s.pending) ? ' (restart to apply some)' : ''}`;
+      message = n ? `${plural(n, 'setting', 'settings')} back to ${n === 1 ? 'its' : 'their'} default${Object.values(view).some((s) => s.pending) ? ' (restart to apply some)' : ''}` : `${plural(counts.same, 'override', 'overrides')} equal to the default removed`;
       void refresh();
     } catch (e) {
       message = e instanceof ApiError ? e.message : 'not reset';
@@ -114,6 +122,7 @@
         <tbody>
           {#each paths as p (p)}
             {@const s = view[p]}
+            {@const same = s.source === 'override' ? sameBadge(p, s.resetTo) : null}
             {#if p === 'camera.name'}
             <tr data-testid="setting-camera-name">
               <td><label for="camera-name">Camera name (stored on the camera)</label></td>
@@ -134,10 +143,10 @@
                 <input value={drafts[p] ?? shown(s.value)} oninput={(e) => (drafts[p] = e.currentTarget.value)} data-testid="input-{p}" disabled={(typeof s.value === 'object' && s.value !== null) || isEnvSet(s)} readonly={isEnvSet(s)} title={isEnvSet(s) ? envNote(s) : undefined} />
                 {#if isEnvSet(s)}<div class="env-note" data-testid="env-note-{p}">{envNote(s)}</div>{/if}
               </td>
-              <td><span class="badge {s.source}" data-testid="source-{p}">{s.source}</span>{#if s.restart}<span class="badge restart" title="applies after a restart">restart</span>{/if}{#if s.pending}<span class="badge pending">next: {shown(s.next)}</span>{/if}</td>
+              <td><span class="badge {s.source}" class:same={!!same} data-testid="source-{p}" title={same?.title}>{same ? same.text : s.source}</span>{#if s.restart}<span class="badge restart" title="applies after a restart">restart</span>{/if}{#if s.pending}<span class="badge pending">next: {shown(s.next)}</span>{/if}</td>
               <td class="actions">
                 {#if drafts[p] !== undefined}<button onclick={() => void save(p)} data-testid="save-{p}">Save</button>{/if}
-                {#if s.source === 'override'}<button onclick={() => void reset(p)} data-testid="reset-{p}">{resetLabel(p, s.resetTo)}</button>{/if}
+                {#if s.source === 'override' && !same}<button onclick={() => void reset(p)} data-testid="reset-{p}">{resetLabel(p, s.resetTo && { ...s.resetTo, means: undefined })}{#if s.resetTo?.means}{' '}<span class="means">({s.resetTo.means})</span>{/if}</button>{/if}
               </td>
             </tr>
             {/if}
@@ -148,7 +157,7 @@
   {/each}
 </section>
 {#if asking}
-  <ConfirmDialog title="Reset to defaults" message={`${asking.length} setting${asking.length === 1 ? '' : 's'} changed here go${asking.length === 1 ? 'es' : ''} back to the value in config.json or the built-in default:`} items={asking} confirmLabel="Reset {asking.length} setting{asking.length === 1 ? '' : 's'}" oncancel={() => (asking = null)} onconfirm={() => void resetAll()} />
+  <ConfirmDialog title="Reset to defaults" message={askMessage} items={asking} confirmLabel={askLabel} oncancel={() => (asking = null)} onconfirm={() => void resetAll()} />
 {/if}
 
 <style>
@@ -163,8 +172,10 @@
   table { width: 100%; border-collapse: collapse; font-size: 14px; }
   td { padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
   input { width: 100%; min-width: 72px; max-width: 280px; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; }
-  .badge { font-size: 11px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border); margin-right: 4px; color: var(--muted); }
+  .badge { font-size: 11px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border); margin-right: 4px; color: var(--muted); white-space: nowrap; }
   .badge.override { color: var(--accent); border-color: var(--accent); }
+  /* An override equal to the default: no Reset, nothing to stand out. */
+  .badge.override.same { color: var(--muted); border-color: var(--border); border-style: dashed; cursor: help; }
   .badge.env { color: var(--accent); border-style: dashed; }
   .env-note { margin-top: 4px; font-size: 12px; color: var(--muted); }
   input:disabled { opacity: 0.7; cursor: not-allowed; }
@@ -173,7 +184,9 @@
   /* A phone: "Reset – 90 days" may take two lines rather than squeeze the field. */
   @media (max-width: 560px) {
     .actions { white-space: normal; }
-    .actions button { font-size: 12px; padding: 4px 8px; }
+    .actions button { font-size: 12px; padding: 4px 8px; min-width: 150px; }
+    /* What an unset state means: its own line under "Reset – none". */
+    .means { display: block; color: var(--muted); }
   }
   button { padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); cursor: pointer; color: var(--text); }
   button:hover { border-color: var(--accent); }

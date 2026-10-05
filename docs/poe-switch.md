@@ -48,6 +48,10 @@ POST http://<switch>/<callcmd>
 
 All in `camera.poeSwitch` (config.json, or the Settings page). They apply at
 once: the proxy reads them on every use.
+Only values that differ from config.json or the default become overrides
+(saving `ports` 8 or `offSeconds` 10 stores nothing). On the Settings page,
+Reset of `model` reads "Reset – none (no PoE switch: power-cycle off)", and of
+`host` or `port` "Reset – not set (PoE switch control off: …)".
 
 | Setting | Default | |
 |---|---|---|

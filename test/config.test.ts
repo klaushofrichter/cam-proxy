@@ -2,9 +2,9 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { loadConfig, applyOverrides, removeOverride, needsRestart, ConfigError } from '../src/config/load';
+import { loadConfig, applyOverrides, removeOverride, needsRestart, resetTarget, ConfigError } from '../src/config/load';
 import { DEFAULTS } from '../src/config/defaults';
-import { jsonSchema } from '../src/config/schema';
+import { jsonSchema, leafAt, leafPaths } from '../src/config/schema';
 
 const T1 = 'a'.repeat(32);
 const T2 = 'b'.repeat(40);
@@ -119,6 +119,73 @@ describe('overrides', () => {
 
   it('refuses secrets in overrides like any unknown key', () => {
     expect(err(() => applyOverrides(load(), { camera: { password: 'x' } }))).toBe('camera.password: unknown setting');
+  });
+});
+
+// Klaus 2026-10-05 (the Pi's Settings page): overrides equal to the default
+// (camera.poeSwitch.ports 8, offSeconds 10) offered a Reset that changed
+// nothing. The cause: every leaf of a PUT body was stored, whatever its value
+// (a whole poeSwitch group, or a Save of the unchanged default).
+describe('an override equal to what Reset restores', () => {
+  beforeEach(() => write('config.json', { camera: { host: 'h' }, sse: { pingS: 20 } }));
+  const stored = () => JSON.parse(readFileSync(join(dir, 'data', 'overrides.json'), 'utf8'));
+
+  it('is not stored when a group is saved whole: only what differs becomes an override', () => {
+    const l = applyOverrides(load(), { camera: { poeSwitch: { model: 'sscpoe-web', host: '192.168.1.217', port: 8, ports: 8, offSeconds: 10 } } });
+    expect(stored()).toEqual({ camera: { poeSwitch: { model: 'sscpoe-web', host: '192.168.1.217', port: 8 } } });
+    expect(l.sources['camera.poeSwitch.ports']).toBe('default');
+    expect(l.sources['camera.poeSwitch.offSeconds']).toBe('default');
+    expect(l.config.camera.poeSwitch).toEqual({ model: 'sscpoe-web', host: '192.168.1.217', port: 8, ports: 8, offSeconds: 10 });
+  });
+
+  it("is not stored when the value is config.json's", () => {
+    const l = applyOverrides(load(), { sse: { pingS: 20 } });
+    expect(l.sources['sse.pingS']).toBe('file');
+    expect(stored()).toEqual({});
+  });
+
+  it('removes an existing override when the default is saved over it', () => {
+    let l = applyOverrides(load(), { sse: { maxClients: 7 }, retention: { auditDays: 30 } });
+    l = applyOverrides(l, { sse: { maxClients: 50 } });
+    expect(l.sources['sse.maxClients']).toBe('default');
+    expect(l.config.sse.maxClients).toBe(50);
+    expect(stored()).toEqual({ retention: { auditDays: 30 } });
+  });
+
+  it('keeps an override whose removal changes the value (go2rtc.url drops the default binary)', () => {
+    const l = applyOverrides(load(), { go2rtc: { url: 'http://go2rtc:1984', binary: 'go2rtc' } });
+    expect(stored()).toEqual({ go2rtc: { url: 'http://go2rtc:1984', binary: 'go2rtc' } });
+    expect(l.config.go2rtc.binary).toBe('go2rtc');
+  });
+
+  it('one already stored (an older proxy) is marked: Reset would change nothing', () => {
+    mkdirSync(join(dir, 'data'), { recursive: true });
+    write('data/overrides.json', { camera: { poeSwitch: { model: 'sscpoe-web', host: '192.168.1.217', port: 8, ports: 8, offSeconds: 10 } }, sse: { pingS: 20 } });
+    const l = load();
+    expect(l.sources['camera.poeSwitch.ports']).toBe('override');
+    expect(resetTarget(l, 'camera.poeSwitch.ports')).toEqual({ value: 8, source: 'default', same: true });
+    expect(resetTarget(l, 'camera.poeSwitch.offSeconds')).toEqual({ value: 10, source: 'default', same: true });
+    expect(resetTarget(l, 'sse.pingS')).toEqual({ value: 20, source: 'file', same: true });
+    // A real change says what the unset state means.
+    expect(resetTarget(l, 'camera.poeSwitch.model')).toEqual({ value: 'none', source: 'default', means: 'no PoE switch: power-cycle off' });
+    expect(resetTarget(l, 'camera.poeSwitch.host')).toEqual({ source: 'default', means: expect.stringMatching(/^PoE switch control off/) });
+    expect(resetTarget(l, 'camera.poeSwitch.port')).toEqual({ source: 'default', means: expect.stringMatching(/^PoE switch control off/) });
+  });
+});
+
+// What the unset state means, for every setting whose default is not set,
+// none, empty, off or 0 = none: the Reset button and Reset to defaults say it.
+describe('the unset state of a setting', () => {
+  it('is described next to the schema for every setting without a value by default', () => {
+    const unsetByDefault = leafPaths().filter((p) => {
+      const v = p.split('.').reduce<unknown>((o, k) => (o as Record<string, unknown> | undefined)?.[k], DEFAULTS);
+      return v === undefined || v === '' || v === 'none' || v === false;
+    });
+    expect(unsetByDefault.length).toBeGreaterThan(15);
+    for (const p of unsetByDefault) expect(leafAt(p)?.unset?.text, p).toMatch(/\w/);
+    // 0 = none.
+    expect(leafAt('analytics.googleVision.monthlyLimit')?.unset).toEqual({ value: 0, text: expect.any(String) });
+    expect(leafAt('analytics.googleVision.dailyCap')?.unset).toEqual({ value: 0, text: expect.any(String) });
   });
 });
 
