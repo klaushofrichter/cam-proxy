@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.10.05.1
+
 - Status page, Analytics card: the usage is on separate lines — This month, Today, Last call, and Still checks today (the manual checks' own daily limit) — instead of one long line.
 
 ## v2026.10.04.4
