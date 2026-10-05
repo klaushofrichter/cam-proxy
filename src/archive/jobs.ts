@@ -56,8 +56,9 @@ export interface ArchiveRequest {
 export interface JobDeps {
   store: ArchiveStore;
   now?: () => number;
-  // Throws ArchiveJobError('insufficient_space', …, {needed, free, minFreeBytes}) when it won't fit.
-  checkSpace: (bytes: number) => void;
+  // Throws ArchiveJobError('insufficient_space', …, {needed, free, minFreeBytes, inFlight}) when
+  // it won't fit beside what the other jobs in flight still write (`jobId`: this job, not counted).
+  checkSpace: (bytes: number, jobId: string) => void;
   snapshot: (window: { from: number; to: number }) => Taken;
   thumbDeps: (clipPath: string) => ThumbDeps;
   duration: (clipPath: string) => Promise<number | null>;
@@ -106,6 +107,18 @@ export class ArchiveJobs {
     return this.view(j);
   }
 
+  // What the jobs in flight (but `except`) still have to write: their size
+  // and the spare, less what they wrote (review of #159: four jobs that each
+  // fit alone must not together pass storage.minFreeBytes).
+  pendingBytes(except?: string): number {
+    let n = 0;
+    for (const j of this.jobs.values()) {
+      if (j.view.id === except || (j.view.state !== 'queued' && j.view.state !== 'running')) continue;
+      n += Math.max(0, j.view.size + SPARE_BYTES - j.view.bytes);
+    }
+    return n;
+  }
+
   get(id: string): JobView | undefined {
     const j = this.jobs.get(id);
     return j && this.view(j);
@@ -151,7 +164,7 @@ export class ArchiveJobs {
     try {
       await Promise.resolve(); // start() answers first
       check();
-      this.d.checkSpace(req.size);
+      this.d.checkSpace(req.size, view.id);
       staged = this.d.store.stage();
       const clip = join(staged, 'clip.mp4');
       const got = await req.obtain({ dir: staged, signal, progress: (b) => this.progress(view, b, req.kind === 'recording' ? 0.9 : 0.95) });
@@ -165,7 +178,7 @@ export class ArchiveJobs {
         } else {
           view.phase = 'copying';
           view.bytes = 0;
-          this.d.checkSpace(req.size); // again: the fetch may have taken minutes
+          this.d.checkSpace(req.size, view.id); // again: the fetch may have taken minutes
           file = await copyWithCrc(got.path, clip, signal, (b) => this.progress(view, b, 0.95));
         }
       } finally {

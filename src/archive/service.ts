@@ -75,7 +75,7 @@ export class Archive {
     this.jobs = new ArchiveJobs({
       store: this.store,
       now: d.now,
-      checkSpace: (bytes) => this.checkSpace(bytes),
+      checkSpace: (bytes, jobId) => this.checkSpace(bytes, jobId),
       snapshot: (w) => takeSnapshot({ catalog: d.catalog, cam: d.config().camera.id, cameraName: d.cameraName(), model: d.cameraModel(), version: d.version, maxOpenMs: d.config().events.maxOpenMin * 60_000, now: this.now() }, w.from, w.to),
       thumbDeps: (clip) => this.thumbDeps(clip, media.frame),
       duration: media.duration,
@@ -108,12 +108,17 @@ export class Archive {
     await this.jobs.stop();
   }
 
-  // Ruling 5: free − (bytes + spare) must stay at or above storage.minFreeBytes.
-  checkSpace(bytes: number): void {
+  // Ruling 5: free − (bytes + spare) − what the other jobs in flight still
+  // write must stay at or above storage.minFreeBytes. `jobId`: the asking
+  // job, not counted against itself.
+  checkSpace(bytes: number, jobId?: string): void {
     const free = this.d.disk().free;
     const minFreeBytes = this.d.config().storage.minFreeBytes;
     const needed = bytes + SPARE_BYTES;
-    if (free - needed < minFreeBytes) throw new ArchiveJobError('insufficient_space', `the clip needs ${mb(needed)}, ${mb(free)} are free and ${mb(minFreeBytes)} must stay free`, { needed, free, minFreeBytes });
+    const inFlight = this.jobs ? this.jobs.pendingBytes(jobId) : 0;
+    if (free - needed - inFlight < minFreeBytes) {
+      throw new ArchiveJobError('insufficient_space', `the clip needs ${mb(needed)}, ${mb(free)} are free, ${mb(inFlight)} are being archived and ${mb(minFreeBytes)} must stay free`, { needed, free, minFreeBytes, inFlight });
+    }
   }
 
   private thumbDeps(clip: string, frame: (path: string) => Promise<Buffer | undefined>): ThumbDeps {
