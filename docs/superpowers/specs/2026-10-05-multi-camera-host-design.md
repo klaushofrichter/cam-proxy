@@ -49,10 +49,11 @@ cam-proxy-pi-display need no change (§11).
 2. **The site CA is per host, inside cam-proxy**, not a LAN-wide service
    (§10.1).
 3. **Camera subnet `192.168.60.0/24`**, behind the host: confirmed.
-4. **The camera network gets its own new PoE switch** (model not known yet).
-   The GPS-208 stays with the Pi. There is no VLAN option. Switch control
-   stays pluggable: one driver per model; the GPS-208 driver
-   (`sscpoe-web`) exists, and the new model's driver is a later input (§8.4).
+4. **The camera network gets its own new PoE switch: a second GPS-208**,
+   the same model as the Pi's. The Pi's GPS-208 stays with the Pi, and
+   there is no VLAN option. The existing driver (`sscpoe-web`) is used, so
+   v1 needs no new driver. Switch control stays pluggable, one driver per
+   model (§8.4).
 5. **Host OS: Linux, installed by us.** Debian 13 is recommended; Ubuntu
    Server 24.04 LTS is an acceptable alternative (§13.0).
 6. **The PC arrives in about two weeks.** The multi-camera runtime, the
@@ -483,15 +484,35 @@ Suggested cap on the mini PC: 8192 MB (the Pi keeps 2048).
 
 ### 8.4 PoE switch
 
-- **The switch is new.** The mini PC's cameras hang on their own new PoE
-  switch, model not known yet; the GPS-208 stays with the Pi. Switch
-  control is a **driver per model** behind one interface (log in, read
-  ports, set one port's PoE, log out; whether it allows only one session,
-  as the GPS-208 does). `sscpoe-web` (GPS-208 and kin) is the driver that
-  exists today. The new switch's driver is a later input: it is measured
-  once the model is known, the way the GPS-208 was (`poe-switch-gps208.md`).
-  Until then `poeSwitch.model: none` (no power-cycle) is a valid setup, and
-  P1/P2 test the queue against a fake driver.
+- **The switch: a second GPS-208** (Klaus), on the camera network. The
+  Pi's GPS-208 (`192.168.1.217`, cam1 on port 8) stays separate, with the
+  Pi's proxy as its only controller. The mini PC uses the existing
+  `sscpoe-web` driver unchanged: same protocol, same reverse port numbering,
+  its own password (`CAMPROXY_POE_SWITCH_PASSWORD` in the mini PC's
+  `config/.env`). Switch control stays a **driver per model** behind one
+  interface (log in, read ports, set one port's PoE, log out, and whether
+  only one session is allowed), so another model later means a new driver,
+  not a new design. P1/P2 test the queue against a fake driver.
+- **Its address.** The notes don't say how a GPS-208 gets its address: the
+  Pi's unit is at `192.168.1.217` on the router's LAN, and nothing records
+  whether that came from DHCP or a static setting. The protocol has a
+  network-config command (callcmd 108, `netcfg`), so both are possible. *To
+  verify on the device*, when the second unit is unpacked:
+  - If it uses DHCP: dnsmasq gives it the fixed lease `192.168.60.2` by its
+    MAC. The MAC is printed on the unit and also in callcmd 101's `mac`.
+  - If it has a static factory default: set `192.168.60.2/24` with gateway
+    `192.168.60.1` in its web UI. Do this from a laptop on the camera
+    switch, or from the host before the firewall is closed.
+
+  Either way, `poeSwitch.host` is `192.168.60.2`. The firewall blocks the
+  switch from the internet like the cameras (no cloud API), and its web UI
+  is reached from the LAN **over the route**, like the cameras' pages
+  (`http://192.168.60.2/`).
+- **One session at a time is the controller's rule.** The host-wide
+  controller is the switch's only automated client, and it serializes every
+  use (below). A browser logged in to the switch's web UI still blocks it
+  (`switch_busy`, and about 3 min after a session left open), so the setup
+  guide says to log out of the web UI after use.
 - One `PoeSwitch` controller per host. Requests (read, power-cycle, PoE on)
   go through a **FIFO queue**: a second camera's power-cycle waits for the
   first (bounded at `offSeconds + 60 s`; beyond that `503 switch_busy` as
@@ -823,7 +844,7 @@ top-bar merge. cams needs a relay route for `latest.jpg` that passes ETag and
   `192.168.60.0/24`, confirmed by Klaus**, behind the host. It doesn't
   overlap the LAN or the k3s defaults (10.42.0.0/16 pods, 10.43.0.0/16
   services); P4 checks this against kube-setup's actual CIDRs.
-- Fixed leases: the new PoE switch's management address `.2`, cameras `.11`–`.29` (cam3 → `.13`
+- Fixed leases: the second GPS-208's management address `.2` (§8.4), cameras `.11`–`.29` (cam3 → `.13`
   etc.), a small dynamic pool `.100`–`.149` for a new device until it gets
   its lease.
 
@@ -1067,7 +1088,7 @@ follows its arrival.
 
 | Phase | Repo | Content | Done when |
 |---|---|---|---|
-| **P4** host setup | cam-proxy (docs) | Debian 13 install, Docker from Docker's repository, nftables, dnsmasq, chrony, the router route and its on-device test (§13.3), compose; `docs/multi-camera-host.md` written as it is done (with the ranked fallbacks); measure the real cameras' `GetNtp`/`SetNtp` and certificate import; the new switch's model → its driver (if it has a usable local API); the kube-setup request (egress to the camera subnet and the host, the `cams-cameras` Secret) | cams in the cluster reaches the cameras and the proxy over the route |
+| **P4** host setup | cam-proxy (docs) | Debian 13 install, Docker from Docker's repository, nftables, dnsmasq, chrony, the router route and its on-device test (§13.3), compose; `docs/multi-camera-host.md` written as it is done (with the ranked fallbacks); measure the real cameras' `GetNtp`/`SetNtp` and certificate import; the second GPS-208 on `192.168.60.2` (DHCP or static, §8.4) with the existing driver; the kube-setup request (egress to the camera subnet and the host, the `cams-cameras` Secret) | cams in the cluster reaches the cameras and the proxy over the route |
 | **P5** TLS / site CA | cam-proxy, cam-sim, cams | CA + leaves, HTTPS listener, cert push and renewal, Certificates card, health item, `/tls/ca.pem`, NTP set; cam-sim refusal fault + NTP; cams CA/leaf pinning, proxy `tlsServername`, fallback pins | pushes verified on the real cameras; cams verifies proxy and cameras against the pin |
 
 Each phase is its own plan and PR series; releases follow the usual rule
@@ -1096,10 +1117,8 @@ is not planned.
 
 ## 17. Open questions for Klaus
 
-Klaus's answers resolved questions 1–4 of the first draft ("Answers" at the
-top), and the router test answered the NAT question (§13.3: not needed). Left,
-and it doesn't block P1–P3:
-
-1. **The new PoE switch's model**, once chosen: it decides whether
-   power-cycling works on the mini PC. A switch with a documented local API
-   is preferable; see §8.4.
+None open. Klaus's answers resolved the first draft's questions ("Answers"
+at the top). The router test answered the NAT question (§13.3: not needed),
+and the switch is a second GPS-208 (§8.4). Still to do, but not a question:
+the router test from a cluster node (§13.3), and the GPS-208's address
+setup on the device (§8.4).
