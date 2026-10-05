@@ -63,6 +63,7 @@ export interface CameraStatusBlock {
   stream: ReturnType<ControlDeps['stream']>;
   ftp: FtpStatus;
   recordings: RecordingsStatus;
+  source: 'config' | 'added'; // config.json, or added in the Settings page (overrides.json)
 }
 
 interface ControlDeps {

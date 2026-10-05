@@ -208,6 +208,16 @@ describe('the Pi: compositions', () => {
   });
 });
 
+// P2 (spec §6.3): cameras may be added in overrides.json; the Pi's camera is config.json's.
+describe('the Pi: where its camera is defined', () => {
+  it("GET /control/status: one camera, source config; it can't be removed from the UI", async () => {
+    const st = (await request(base).get('/control/status').set(auth(ADMIN_TOKEN))).body;
+    expect(st.cameras.map((c: { id: string; source: string }) => [c.id, c.source])).toEqual([['cam1', 'config']]);
+    const r = await request(base).delete('/control/config/cameras.cam1').set(auth(ADMIN_TOKEN));
+    expect([r.status, r.body.detail]).toEqual([400, 'cameras.cam1: defined in config.json; remove it there']);
+  });
+});
+
 // The health items the Pi's display reads, as release 8 answers them.
 const PI_ITEM_IDS = ['camera', 'stream', 'events', 'ftp', 'storage', 'disk', 'archive', 'inventory', 'version'];
 

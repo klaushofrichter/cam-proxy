@@ -578,7 +578,7 @@ paths:
     get:
       summary: Every camera's status block, in config order (spec 2026-10-05-multi-camera-host-design §6.3) (admin)
       responses:
-        '200': { description: 'A list of {id, camera, intake, stream, ftp, recordings}, each as in GET /control/status' }
+        '200': { description: 'A list of {id, camera, intake, stream, ftp, recordings, source (config: config.json; added: added in the Settings page)}, each as in GET /control/status' }
         '401': { description: not signed in }
         '403': { description: admin_only }
   /control/cameras/{cam}/status:
@@ -720,7 +720,7 @@ paths:
       requestBody:
         content:
           application/json:
-            schema: { type: object, description: 'a partial config.json, e.g. {"sse":{"pingS":10}}' }
+            schema: { type: object, description: 'a partial config.json, e.g. {"sse":{"pingS":10}}; {"cameras":{"<new id>":{"host":…}}} adds a camera (it starts at once, without a restart)' }
       responses:
         '200': { description: the new view (as GET) }
         '400': { description: '{ error: invalid, detail: "<path>: <why>" } (also "<path>: set in .env (<VARIABLE>)" for a setting the environment sets)' }
@@ -733,10 +733,10 @@ paths:
     delete:
       summary: Removes one override (back to the file or default value)
       parameters:
-        - { name: path, in: path, required: true, schema: { type: string }, description: 'e.g. sse.pingS' }
+        - { name: path, in: path, required: true, schema: { type: string }, description: 'e.g. sse.pingS; cameras.<id> removes a camera added here (its worker stops, its files stay until retention removes them)' }
       responses:
         '200': { description: the new view }
-        '400': { description: unknown setting }
+        '400': { description: 'unknown setting; cameras.<id> of a config.json camera: "defined in config.json; remove it there"' }
   /control/actions/{name}:
     post:
       summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart (the camera side), camera-reboot, camera-powercycle, camera-poe-on, poe-switch-read, restart-proxy (the process), inventory ({kind, camera?}), inventory-repair ({kind, runId}), inventory-cancel, find-camera, camera-address ({host}), archive-clear ({count})

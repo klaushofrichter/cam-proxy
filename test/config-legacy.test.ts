@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { applyOverrides, ConfigError, loadConfig, needsRestart, removeOverride } from '../src/config/load';
+import { applyOverrides, ConfigError, loadConfig, needsRestart, removeAllOverrides, removeOverride } from '../src/config/load';
 import { cameraConfig, cameraIds } from '../src/config/cameras';
 
 const SECRETS = { CAMPROXY_TOKENS: 'a'.repeat(32), CAMPROXY_ADMIN_TOKEN: 'c'.repeat(32), CAMPROXY_CAMERA_PASSWORD: 'cam-pw' };
@@ -124,10 +124,41 @@ describe('cameras (spec §4.1)', () => {
     expect(err(() => load())).toBe("camera.statusPollS: a legacy camera override can't be assigned with several cameras; use cameras.<id>.statusPollS");
   });
 
-  it('an override for a camera config.json does not define is refused (Ruling P1-13)', () => {
+  it('an override may add a camera (with a host); added ids follow the file, sorted (Ruling P2-5)', () => {
+    write('config.json', two);
+    write('data/overrides.json', { cameras: { cam9: { host: 'x' }, cam10: { host: 'y' } } });
+    const l = load();
+    expect(cameraIds(l.config)).toEqual(['cam3', 'cam4', 'cam10', 'cam9']);
+    expect(l.addedCameras).toEqual(['cam10', 'cam9']);
+    expect(cameraConfig(l.config, 'cam9')).toMatchObject({ host: 'x', name: 'cam9', user: 'proxy' });
+    write('data/overrides.json', { cameras: { cam9: { name: 'no host' } } });
+    expect(err(() => load())).toBe('cameras.cam9.host: required for a camera added here');
+  });
+
+  it('the Pi: a camera added next to the legacy camera keeps CAMERA_HOST and the legacy overrides on the config.json camera', () => {
+    write('config.json', PI_FILE);
+    write('data/overrides.json', { camera: { statusPollS: 60 }, cameras: { cam6: { host: '192.168.1.120', ftp: { enabled: false } } } });
+    const l = load({ CAMERA_HOST: '192.168.1.103', CAMPROXY_FTP_PASSWORD: 'f'.repeat(24) });
+    expect(cameraIds(l.config)).toEqual(['cam1', 'cam6']);
+    expect(cameraConfig(l.config, 'cam1')).toMatchObject({ host: '192.168.1.103', statusPollS: 60 });
+  });
+
+  it('"Reset to defaults" keeps the added cameras (it resets settings, not the camera list)', () => {
+    write('config.json', two);
+    write('data/overrides.json', { sse: { pingS: 20 }, cameras: { cam9: { host: 'x', statusPollS: 60 } } });
+    const l = removeAllOverrides(load());
+    expect(cameraIds(l.config)).toEqual(['cam3', 'cam4', 'cam9']);
+    expect(cameraConfig(l.config, 'cam9')!.host).toBe('x');
+    expect(l.overrides).toEqual({ cameras: { cam9: { host: 'x', statusPollS: 60 } } });
+  });
+
+  it('an added camera is removed with its override; a config.json camera answers why not', () => {
     write('config.json', two);
     write('data/overrides.json', { cameras: { cam9: { host: 'x' } } });
-    expect(err(() => load())).toBe('cameras.cam9: unknown camera (cameras are added in config.json)');
+    const l = removeOverride(load(), 'cameras.cam9');
+    expect(cameraIds(l.config)).toEqual(['cam3', 'cam4']);
+    expect(l.addedCameras).toEqual([]);
+    expect(err(() => removeOverride(l, 'cameras.cam3'))).toBe('cameras.cam3: defined in config.json; remove it there');
   });
 
   it('CAMERA_HOST with several cameras is a load error', () => {

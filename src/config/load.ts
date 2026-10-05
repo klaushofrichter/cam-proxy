@@ -25,7 +25,8 @@ export interface Loaded {
   envNames: Record<string, string>;
   envFile?: { path: string; read: boolean };
   // The cameras in config order, and whether config.json had a legacy `camera` (spec 2026-10-05-multi-camera-host-design §4.2).
-  order: string[];
+  order: string[]; // config.json's camera ids
+  addedCameras: string[]; // cameras added in overrides.json (Ruling P2-5), sorted; config order is order + these
   legacyCamera: boolean;
 }
 
@@ -126,13 +127,18 @@ function crossCheck(c: Config): void {
 }
 
 type Norm = { order: string[]; legacy: boolean };
+// The camera ids overrides.json adds to config.json's, sorted.
+const addedIds = (overrides: Obj, fileIds: string[]): string[] => Object.keys(isObj(overrides.cameras) ? (overrides.cameras as Obj) : {}).filter((id) => !fileIds.includes(id)).sort();
 const normOf = (l: Loaded): Norm => ({ order: l.order, legacy: l.legacyCamera });
 
 function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSettings: Obj, overrides: Obj, baseDir: string, layer: EnvLayer, norm: Norm): Loaded {
   // A copy: the result is changed below (dataDir), DEFAULTS never is.
   let merged = merge(structuredClone(DEFAULTS) as unknown as Obj, structuredClone(fileSettings));
+  // Cameras added in overrides.json follow config.json's, sorted by id (Ruling P2-5).
+  const added = addedIds(overrides, norm.order);
+  const order = [...norm.order, ...added];
   // Each camera: its defaults, then its config.json node (spec 2026-10-05-multi-camera-host-design §4.1).
-  merged.cameras = Object.fromEntries(norm.order.map((id) => [id, merge(cameraDefaults(id) as unknown as Obj, structuredClone(((fileSettings.cameras as Obj | undefined)?.[id] ?? {}) as Obj))]));
+  merged.cameras = Object.fromEntries(order.map((id) => [id, merge(cameraDefaults(id) as unknown as Obj, structuredClone(((fileSettings.cameras as Obj | undefined)?.[id] ?? {}) as Obj))]));
   // storage.maxBytes replaces the default maxPercent budget.
   if (getPath(fileSettings, 'storage.maxBytes') !== undefined || getPath(overrides, 'storage.maxBytes') !== undefined) {
     merged = merge(merged, { storage: { ...(merged.storage as Obj), maxPercent: undefined } });
@@ -143,7 +149,7 @@ function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSetti
     delete (merged.go2rtc as Obj).binary;
   }
   const config = merge(merged, structuredClone(overrides)) as unknown as Config;
-  config.cameraOrder = [...norm.order];
+  config.cameraOrder = order;
   // The environment last: it wins over the overrides and the file. CAMERA_HOST
   // means the one camera's address (spec §4.2).
   const envNames: Record<string, string> = {};
@@ -167,7 +173,7 @@ function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSetti
     sources[p] = envNames[p] ? 'env' : getPath(overrides, p) !== undefined ? 'override' : getPath(fileSettings, p) !== undefined ? 'file' : 'default';
   }
   const secrets = asConfigError(() => loadSecrets(env, config.cameraOrder.some((id) => cameraConfig(config, id)!.ftp.enabled), config.cameraOrder));
-  return { config, secrets, sources, files: { config: configFile, overrides: join(dataDir, 'overrides.json') }, env, fileSettings, overrides, envLayer: layer, envNames, ...(layer.file ? { envFile: layer.file } : {}), order: norm.order, legacyCamera: norm.legacy };
+  return { config, secrets, sources, files: { config: configFile, overrides: join(dataDir, 'overrides.json') }, env, fileSettings, overrides, envLayer: layer, envNames, ...(layer.file ? { envFile: layer.file } : {}), order: norm.order, addedCameras: added, legacyCamera: norm.legacy };
 }
 
 // Defaults, then config.json (CAMPROXY_CONFIG or ./config.json), then
@@ -236,7 +242,7 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 // 2026-10-05, overrides that only repeated the default).
 export function applyOverrides(loaded: Loaded, given: object): Loaded {
   // Legacy camera.* and ftp.user paths on one camera (Ruling P1-8).
-  const patch = normalizeOverrides(given, loaded.order);
+  const patch = normalizeOverrides(given, loaded.order, loaded.addedCameras);
   asConfigError(() => checkPartial(patch));
   if (getPath(patch, 'server.dataDir') !== undefined) throw new ConfigError('server.dataDir: can only be set in config.json');
   // An override of a setting the environment sets would never apply.
@@ -301,6 +307,23 @@ export function resetTarget(loaded: Loaded, path: string): ResetTarget {
 }
 
 export function removeOverride(loaded: Loaded, path: string): Loaded {
+  // A whole camera: only one added here (Ruling P2-5); its files stay (Ruling P2-6).
+  const m = /^cameras\.([^.]+)$/.exec(path);
+  if (m) {
+    if (!loaded.addedCameras.includes(m[1])) {
+      if (loaded.order.includes(m[1])) throw new ConfigError(`cameras.${m[1]}: defined in config.json; remove it there`);
+      throw new ConfigError(`cameras.${m[1]}: unknown camera`);
+    }
+    const baseDir = loaded.files.config ? dirname(loaded.files.config) : process.cwd();
+    const overrides = structuredClone(loaded.overrides as Obj);
+    const cams = { ...(overrides.cameras as Obj) };
+    delete cams[m[1]];
+    if (Object.keys(cams).length) overrides.cameras = cams;
+    else delete overrides.cameras;
+    const next = build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides, baseDir, loaded.envLayer, normOf(loaded));
+    writeOverrides(loaded.files.overrides, overrides);
+    return next;
+  }
   const next = withoutOverride(loaded, path);
   if (next !== loaded) writeOverrides(loaded.files.overrides, next.overrides as Obj);
   return next;
@@ -308,10 +331,13 @@ export function removeOverride(loaded: Loaded, path: string): Loaded {
 
 // Every override removed at once (the Settings page's "Reset to defaults"):
 // back to config.json and the built-in defaults; the environment still wins.
+// Cameras added here stay, whole: the reset is of settings, not of the camera list.
 export function removeAllOverrides(loaded: Loaded): Loaded {
   const baseDir = loaded.files.config ? dirname(loaded.files.config) : process.cwd();
-  const next = build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, {}, baseDir, loaded.envLayer, normOf(loaded));
-  writeOverrides(loaded.files.overrides, {});
+  const cams = (loaded.overrides as Obj).cameras as Obj | undefined;
+  const kept: Obj = loaded.addedCameras.length ? { cameras: Object.fromEntries(loaded.addedCameras.map((id) => [id, structuredClone(cams![id])])) } : {};
+  const next = build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, kept, baseDir, loaded.envLayer, normOf(loaded));
+  writeOverrides(loaded.files.overrides, kept);
   return next;
 }
 

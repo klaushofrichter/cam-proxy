@@ -88,6 +88,7 @@ export interface Proxy {
   readonly audit: AuditLog;
   readonly inventory: InventoryRunner;
   readonly archive: Archive;
+  go2rtcPid(): number | undefined;
   start(opts?: { port?: number; host?: string }): Promise<{ port: number }>;
   restart(): Promise<void>;
   stop(opts?: { reason?: string }): Promise<void>;
@@ -401,8 +402,21 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     const analyticsBefore = JSON.stringify(loaded.config.analytics);
     const before = new Map(cams.list().map((w) => [w.id, w.cam()]));
     loaded = next;
+    // Cameras added or removed in the overrides run or stop at once (spec
+    // 2026-10-05-multi-camera-host-design §6.3): a new camera's settings are
+    // copied in whole, although camera settings otherwise wait for a restart.
+    const was = cameraIds(running);
+    const now = cameraIds(next.config);
+    for (const id of now.filter((x) => !was.includes(x))) running.cameras[id] = structuredClone(next.config.cameras[id]);
+    if (JSON.stringify(was) !== JSON.stringify(now)) {
+      running.cameraOrder = [...now];
+      void reconcile();
+    }
     applySettings(needsRestart);
-    for (const w of cams.list()) w.settingsChanged(before.get(w.id)!);
+    for (const w of cams.list()) {
+      const b = before.get(w.id);
+      if (b) w.settingsChanged(b);
+    }
     sse.setOptions(running.sse);
     setLogLevel(running.server.logLevel);
     // Only a change to the analytics settings lifts a bad_key pause.
@@ -464,6 +478,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     stream: w.streamStatus(),
     ftp: ftpStatusOf(w),
     recordings: w.recordings.status(),
+    // Where the camera is defined: config.json, or added in the Settings page (overrides.json).
+    source: loaded.addedCameras.includes(w.id) ? ('added' as const) : ('config' as const),
   });
 
   // The health summary (spec 2026-10-03-health-summary-design): the host
@@ -660,6 +676,42 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     res.status(500).json({ error: 'internal' });
   });
 
+  // The workers follow the configured cameras (spec §6.3), one change at a
+  // time: a removed camera's worker stops and its go2rtc streams go (its
+  // files stay, Ruling P2-6); an added camera gets a worker, its streams in
+  // the running go2rtc (never a go2rtc restart) and FTP when it has it on.
+  let reconciling: Promise<void> = Promise.resolve();
+  const reconcile = (): Promise<void> =>
+    (reconciling = reconciling.then(async () => {
+      if (stopPromise) return;
+      const want = cameraIds(running);
+      for (const w of cams.all().filter((x) => !want.includes(x.id))) {
+        cams.remove(w.id);
+        await w.stopRecordings();
+        await w.stop();
+        await go2rtc?.removeStream(w.id).catch((err: Error) => logger.warn({ cameraId: w.id, err: err.message }, 'go2rtc_remove_failed'));
+        if (!cameraIds(running).includes(w.id)) delete running.cameras[w.id];
+        logger.info({ cameraId: w.id }, 'camera_removed');
+      }
+      for (const id of want.filter((x) => !cams.get(x))) {
+        if (!go2rtc && cameraConfig(running, id)?.stills.enabled) {
+          go2rtc = makeGo2rtc();
+          go2rtcMadeWith = go2rtcSettings();
+          startGo2rtc();
+        }
+        const w = makeWorker(id);
+        cams.add(w);
+        if (w.cam().stills.enabled) await go2rtc?.setStream(w.source()).catch((err: Error) => logger.warn({ cameraId: id, err: err.message }, 'go2rtc_add_failed'));
+        await w.start();
+        logger.info({ cameraId: id }, 'camera_added');
+      }
+      // The first camera with FTP on: the server starts now.
+      if (!clips && cams.list().some((w) => w.cam().ftp.enabled)) {
+        buildClips();
+        await startClips();
+      }
+    }).catch((err: Error) => logger.error({ err: err.message }, 'camera_reconcile_failed')));
+
   // Applies pending restart settings to the camera side (camera, events).
   // Settings read at process start (port, data folder, trust proxy, font) need a new process.
   // A camera whose id is no longer configured (a changed camera.id) stops
@@ -727,6 +779,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     },
     cameras: cams,
     analytics,
+    // Test seam: the host go2rtc's process id (adding a camera never restarts it).
+    go2rtcPid: () => go2rtc?.pid(),
     async start(opts = {}) {
       server = http.createServer(app);
       const s = server;
@@ -778,6 +832,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   async function doStop(opts: { reason?: string }): Promise<void> {
       daily.stop();
       hostMonitor.stop();
+      await reconciling;
       // First, while everything is still open.
       audit.write({ action: 'proxy-stop', category: ['process'], type: ['end'], outcome: 'success', user: 'system', message: `cam-proxy stopping${opts.reason ? ` (${opts.reason})` : ''}`, details: { reason: opts.reason ?? 'stop' } });
       // Each camera's PoE back on if a power-cycle is in its off time; one
