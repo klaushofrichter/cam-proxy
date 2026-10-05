@@ -1,6 +1,7 @@
 // Text for the analytics UI (spec 2026-09-30-analytics-design). Pure: tested
 // in test/analytics-ui.test.ts.
 export interface UiProviderState {
+  checks?: { today: number; cap: number };
   id: string;
   name: string;
   enabled: boolean;
@@ -59,6 +60,8 @@ export function usageRows(s: UiProviderState): { label: string; text: string; ke
     { key: 'today', label: 'Today', text: s.today.cap > 0 ? `${n(s.today.calls)} of ${n(s.today.cap)}` : n(s.today.calls) },
   ];
   if (s.lastCall) rows.push({ key: 'last', label: 'Last call', text: `${new Date(s.lastCall.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} (${(s.lastCall.tookMs / 1000).toFixed(1)} s)` });
+  // The manual still checks have their own daily limit (analytics.checksPerDay; 0 = off).
+  if (s.checks) rows.push({ key: 'checks', label: 'Still checks today', text: s.checks.cap > 0 ? `${n(s.checks.today)} of ${n(s.checks.cap)}` : 'off' });
   return rows;
 }
 

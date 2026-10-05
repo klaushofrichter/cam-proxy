@@ -28,6 +28,11 @@ describe('analytics UI text', () => {
     expect(usageRows({ ...base, lastCall: null }).map((r) => r.label)).toEqual(['This month', 'Today']);
     expect(usageRows({ ...base }).find((r) => r.label === 'Today')?.text).toBe('4');
     expect(usageRows({ ...base, enabled: false })).toEqual([]);
+    // Klaus 2026-10-05: the manual still checks' own daily limit as a fourth line.
+    const withChecks = usageRows({ ...base, checks: { today: 1, cap: 10 } });
+    expect(withChecks.map((r) => r.label)).toEqual(['This month', 'Today', 'Last call', 'Still checks today']);
+    expect(withChecks[3].text).toBe('1 of 10');
+    expect(usageRows({ ...base, checks: { today: 0, cap: 0 } }).find((r) => r.key === 'checks')?.text).toBe('off');
   });
 
   it('writes the Events tag from the summary: subtype and score in the order given (the server sorts); "nothing relevant"; or why not', () => {

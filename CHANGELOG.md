@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Status page, Analytics card: the usage is three lines — This month, Today, Last call — instead of one long line.
+- Status page, Analytics card: the usage is on separate lines — This month, Today, Last call, and Still checks today (the manual checks' own daily limit) — instead of one long line.
 
 ## v2026.10.04.4
 
