@@ -14,6 +14,7 @@ import { CameraRegistry } from './cameras/registry';
 import { CameraWorker, cameraWebUi } from './cameras/worker';
 import { cameraConfig, cameraIds } from './config/cameras';
 import { cameraPassword } from './config/secrets';
+import { reapOrphanGo2rtc } from './stills/orphans';
 import { restartProcess } from './process-restart';
 import type { Config } from './config/defaults';
 import { getPath, needsProcessRestart, needsRestart, setPath, settingPaths, type Loaded } from './config/load';
@@ -695,6 +696,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         s.once('error', reject);
         s.listen(opts.port ?? running.server.port, opts.host ?? '0.0.0.0', () => resolve((s.address() as AddressInfo).port));
       });
+      // go2rtc an earlier process left behind (killed hard) would hold the ports.
+      if (cams.list().some((w) => w.cam().stills.enabled)) await reapOrphanGo2rtc();
       await Promise.all(cams.list().map((w) => w.start()));
       await startClips();
       hostMonitor.start();
