@@ -66,6 +66,15 @@ export interface JobDeps {
   onFailed: (req: ArchiveRequest, job: JobView) => void;
 }
 
+// The HTTP status a create answers with the job's view (docs/archive.md
+// §2): 201 done, 202 still running, else its error's status.
+const FAILED_STATUS: Record<JobErrorCode, number> = { insufficient_space: 507, camera_offline: 503, unknown_recording: 404, source_gone: 404, fetch_failed: 502, store_failed: 500, cancelled: 409 };
+export function createStatus(v: JobView): number {
+  if (v.state === 'done') return 201;
+  if (v.state === 'queued' || v.state === 'running') return 202;
+  return FAILED_STATUS[v.error ?? 'store_failed'] ?? 500;
+}
+
 interface Job { view: JobView; req: ArchiveRequest; ctl: AbortController; endedAt?: number; done: Promise<void> }
 
 const round1 = (n: number) => Math.round(n * 10) / 10;

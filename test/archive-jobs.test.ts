@@ -10,7 +10,7 @@ import { crc32 } from 'zlib';
 import { openCatalog } from '../src/catalog/db';
 import { archiveById } from '../src/catalog/archive';
 import { ArchiveStore } from '../src/archive/store';
-import { ArchiveJobs, MAX_JOBS, type ArchiveRequest, type JobDeps, type JobView } from '../src/archive/jobs';
+import { ArchiveJobs, createStatus, MAX_JOBS, type ArchiveRequest, type JobDeps, type JobView } from '../src/archive/jobs';
 import { ArchiveJobError, fileSource, recordingSource, type Obtain } from '../src/archive/sources';
 import { RecordingCache } from '../src/recordings/cache';
 import { RecordingFetcher } from '../src/recordings/fetcher';
@@ -172,5 +172,20 @@ describe('recordingSource', () => {
   it('a short download fails', async () => {
     const s = side(1e6, send(Buffer.alloc(100, 1)));
     await expect(recordingSource({ entry: entry(200), cache: s.cache, fetcher: s.fetcher })({ dir: s.jobDir, signal: new AbortController().signal, progress: () => undefined })).rejects.toBeInstanceOf(ArchiveJobError);
+  });
+});
+
+describe('createStatus', () => {
+  const v = (o: Partial<JobView>): JobView => ({ id: 'x', cam: 'cam1', state: 'failed', phase: null, progress: 0, bytes: 0, size: 1, ...o });
+  it('201 done, 202 running, else the error status', () => {
+    expect(createStatus(v({ state: 'done' }))).toBe(201);
+    expect(createStatus(v({ state: 'running' }))).toBe(202);
+    expect(createStatus(v({ error: 'insufficient_space' }))).toBe(507);
+    expect(createStatus(v({ error: 'camera_offline' }))).toBe(503);
+    expect(createStatus(v({ error: 'unknown_recording' }))).toBe(404);
+    expect(createStatus(v({ error: 'source_gone' }))).toBe(404);
+    expect(createStatus(v({ error: 'fetch_failed' }))).toBe(502);
+    expect(createStatus(v({ error: 'store_failed' }))).toBe(500);
+    expect(createStatus(v({ state: 'cancelled', error: 'cancelled' }))).toBe(409);
   });
 });

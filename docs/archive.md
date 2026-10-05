@@ -151,7 +151,11 @@ Answer: always the **archive job** (`ArchiveJob`):
   it finished within 3 s (a composition or a small clip, usually);
 - **202** `{..., "state":"queued"|"running"}` otherwise: poll `GET
   /api/archive/jobs/{jobId}` (every 1 to 2 s), or wait for the SSE `archive`
-  `add`.
+  `add`;
+- a job that **failed** within the 3 s answers with its error's status and
+  the job as the body (`error` is the code): 507 `insufficient_space`, 503
+  `camera_offline`, 404 `unknown_recording` or `source_gone`, 502
+  `fetch_failed`, 500 `store_failed`, 409 `cancelled`.
 
 ```jsonc
 // ArchiveJob

@@ -15,7 +15,7 @@ import { parseSdName, recordingTimes, stillRecording, validId } from '../recordi
 import type { RecordingsSide } from '../recordings/side';
 import { logger } from '../log';
 import { filesOf, itemJson, metadataJson } from '../archive/json';
-import type { ArchiveRequest } from '../archive/jobs';
+import { createStatus, type ArchiveRequest } from '../archive/jobs';
 import { checkLabels, checkName, checkRetention, contentDisposition, onBehalfOf, RETENTION_DEFAULT_DAYS, RuleError, safeFileName } from '../archive/rules';
 import type { Archive, Who } from '../archive/service';
 import { ArchiveJobError, fileSource, recordingSource } from '../archive/sources';
@@ -187,7 +187,7 @@ export function archiveApi(d: ArchiveApiDeps): express.Router {
     const job = d.archive.create(ar, w);
     if (job === 'busy') return void res.status(429).json({ error: 'busy' });
     const v = (await d.archive.jobs.wait(job.id, WAIT_MS)) ?? job;
-    res.status(v.state === 'done' ? 201 : 202).json(v);
+    res.status(createStatus(v)).json(v);
   });
 
   r.get('/archive/jobs/:job', (req, res) => {
@@ -256,6 +256,7 @@ export function archiveApi(d: ArchiveApiDeps): express.Router {
     }
     if (missing.length) return void res.status(404).json({ error: 'not_found', missing });
     const layout = planZip(entries);
+    if (req.method === 'HEAD') return void res.status(200).set({ 'Content-Type': 'application/zip', 'Content-Length': String(layout.total) }).end();
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
     res.status(200).set({ 'Content-Type': 'application/zip', 'Content-Length': String(layout.total), 'Content-Disposition': contentDisposition(`archive-${cam()}-${stamp}.zip`), 'Cache-Control': 'no-store' });
     writeZip(res, entries, layout).then(
