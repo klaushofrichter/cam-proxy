@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync, rmSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, dirname, join } from 'path';
 import { logger } from '../log';
+import { trackedPids } from '../children';
 
 // go2rtc that an earlier cam-proxy process left behind (a SIGKILL of node:
 // review 2026-10-05) keeps its ports, and every later start would be
@@ -14,7 +15,7 @@ import { logger } from '../log';
 const PREFIX = 'camproxy-go2rtc-';
 const STALE_MS = 60_000;
 
-interface Proc { pid: number; ppid: number; args: string[] }
+export interface Proc { pid: number; ppid: number; args: string[] }
 
 function processes(): Proc[] {
   if (existsSync('/proc/self/stat')) {
@@ -47,12 +48,28 @@ function configOf(p: Proc): string | undefined {
   return file && basename(dirname(file)).startsWith(PREFIX) ? file : undefined;
 }
 
-export async function reapOrphanGo2rtc(now = Date.now()): Promise<{ killed: number[]; removed: string[] }> {
+let reaps = 0;
+// How often this process reaped (once, at its start; tests).
+export const reapCount = (): number => reaps;
+
+// Seams for tests: this process's pid, the process list, our tracked
+// children, the kill, and whether to sweep temp folders.
+export interface ReapOptions { pid?: number; processes?: () => Proc[]; tracked?: () => Set<number>; kill?: (pid: number) => void; sweep?: boolean; now?: number }
+
+export async function reapOrphanGo2rtc(o: ReapOptions = {}): Promise<{ killed: number[]; removed: string[] }> {
+  reaps++;
   const killed: number[] = [];
   const removed: string[] = [];
+  const self = o.pid ?? process.pid;
+  const now = o.now ?? Date.now();
+  // pid 1 is a container's process: in its pid namespace every process with
+  // ppid 1 is our own child, and no earlier proxy's go2rtc can be left over.
+  if (self === 1) return { killed, removed };
+  const tracked = (o.tracked ?? trackedPids)();
+  const kill = o.kill ?? ((pid: number) => process.kill(pid, 'SIGKILL'));
   let procs: Proc[];
   try {
-    procs = processes();
+    procs = (o.processes ?? processes)();
   } catch (err) {
     logger.warn({ err: (err as Error).message }, 'go2rtc_orphans_unreadable');
     return { killed, removed };
@@ -62,15 +79,16 @@ export async function reapOrphanGo2rtc(now = Date.now()): Promise<{ killed: numb
   const inUse = new Set<string>();
   for (const p of procs) {
     const file = configOf(p);
-    if (!file || p.pid === process.pid) continue;
+    if (!file || p.pid === self) continue;
     const parent = byPid.get(p.ppid);
-    const orphan = p.ppid !== process.pid && (p.ppid === 1 || !isNode(parent)) && process.pid !== 1;
+    // Ours and running (our child, or tracked) first; then: its parent is gone (pid 1, or a reaper that isn't node).
+    const orphan = p.ppid !== self && !tracked.has(p.pid) && (p.ppid === 1 || !isNode(parent));
     if (!orphan) {
       inUse.add(dirname(file));
       continue;
     }
     try {
-      process.kill(p.pid, 'SIGKILL');
+      kill(p.pid);
       killed.push(p.pid);
       logger.warn({ pid: p.pid, config: file }, 'go2rtc_orphan_killed');
     } catch {
@@ -78,6 +96,7 @@ export async function reapOrphanGo2rtc(now = Date.now()): Promise<{ killed: numb
     }
   }
   // Give the killed ones a moment to let go of their ports.
+  if (o.sweep === false) return { killed, removed };
   for (let i = 0; i < 20 && killed.some((pid) => alive(pid)); i++) await new Promise((r) => setTimeout(r, 50));
   for (const name of safeDir(tmpdir())) {
     if (!name.startsWith(PREFIX)) continue;

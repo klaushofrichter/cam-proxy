@@ -57,3 +57,24 @@ describe('orphaned go2rtc', () => {
     }
   });
 });
+
+// Review 2026-10-05 (the Pi): in the container the proxy is pid 1, and its own
+// go2rtc has ppid 1. The rules, with the process list given.
+describe('orphan rules', () => {
+  const cfg = (n: string) => join(tmpdir(), `camproxy-go2rtc-${n}`, 'go2rtc.json');
+  const go2rtc = (pid: number, ppid: number, n: string) => ({ pid, ppid, args: ['/usr/local/bin/go2rtc', '-c', cfg(n)] });
+  const run = (o: { pid: number; procs: { pid: number; ppid: number; args: string[] }[]; tracked?: number[] }) => {
+    const killed: number[] = [];
+    return reapOrphanGo2rtc({ pid: o.pid, processes: () => o.procs, tracked: () => new Set(o.tracked ?? []), kill: (p) => void killed.push(p), sweep: false }).then(() => killed);
+  };
+  it('pid 1 (a container): nothing is reaped, also not our own go2rtc with ppid 1', async () => {
+    expect(await run({ pid: 1, procs: [go2rtc(7, 1, 'a'), go2rtc(8, 1, 'b')], tracked: [7] })).toEqual([]);
+  });
+  it('on a host: a go2rtc of a camproxy folder whose parent is pid 1 and not ours is reaped', async () => {
+    expect(await run({ pid: 500, procs: [{ pid: 500, ppid: 1, args: ['node', 'cli.js'] }, go2rtc(9, 1, 'c')] })).toEqual([9]);
+  });
+  it('on a host: our own child, a tracked one, or one of another live node is never reaped', async () => {
+    const procs = [{ pid: 500, ppid: 1, args: ['node', 'cli.js'] }, { pid: 600, ppid: 1, args: ['/usr/bin/node', 'other.js'] }, go2rtc(10, 500, 'd'), go2rtc(11, 1, 'e'), go2rtc(12, 600, 'f')];
+    expect(await run({ pid: 500, procs, tracked: [11] })).toEqual([]);
+  });
+});

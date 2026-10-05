@@ -29,3 +29,6 @@ export function killChildren(): void {
 }
 
 export const liveChildren = (): number => live.size;
+
+// The pids of the live tracked children (never reaped as orphans).
+export const trackedPids = (): Set<number> => new Set([...live].flatMap((p) => (p.pid === undefined ? [] : [p.pid])));

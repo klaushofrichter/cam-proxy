@@ -3,6 +3,7 @@ import { tmpdir } from 'os';
 import { basename, join } from 'path';
 import { saveAnalysis } from '../src/catalog/analyses';
 import { insertEvent } from '../src/catalog/events';
+import { reapCount } from '../src/stills/orphans';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ADMIN_TOKEN, auth, until } from './helpers/proxy';
@@ -168,6 +169,16 @@ describe('one proxy, three cameras (spec §15)', () => {
     await until(async () => ((await request(p.base).get(`/control/inventory/runs/${ev.body.runId}`).set(admin())).body.outcome ?? 'running') !== 'running', 30_000);
     const rep = await request(p.base).post('/control/cameras/cam4/actions/inventory-repair').set(admin()).send({ kind: 'events', runId: ev.body.runId });
     expect([rep.status, rep.body.error]).toEqual([409, 'camera_mismatch']);
+  }, 60_000);
+
+  // Review (the Pi): go2rtc orphans are reaped only at the process start, never on a restart.
+  it('restarts never reap go2rtc', async () => {
+    const n = reapCount();
+    await request(p.base).post('/control/cameras/cam5/actions/restart').set(admin()).expect(202);
+    await until(() => p.proxy.cameras.get('cam5')!.phase() === 'ready');
+    await p.proxy.restart();
+    expect(reapCount()).toBe(n);
+    await until(() => p.proxy.cameras.list().every((w) => w.status.state().online), 30_000);
   }, 60_000);
 
   it('the old camera actions answer camera_required; host actions work', async () => {
