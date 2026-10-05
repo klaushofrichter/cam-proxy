@@ -10,6 +10,7 @@ import { Storage } from '../src/storage';
 import { AuditLog } from '../src/audit/audit-log';
 import { CameraWorker, type WorkerDeps } from '../src/cameras/worker';
 import { CameraRegistry } from '../src/cameras/registry';
+import { CachePool } from '../src/recordings/pool';
 import { ADMIN_TOKEN, CLIENT_TOKEN, freePort, until } from './helpers/proxy';
 import { logBuffer } from '../src/log';
 import type { Go2rtc, StreamSource } from '../src/stills/go2rtc';
@@ -43,6 +44,7 @@ function worker(o: { host?: string; over?: Partial<WorkerDeps>; stills?: boolean
     id: 'cam1', running: () => running, password: () => sim.password, poeSwitchPassword: () => undefined,
     ftpTarget: () => ({ server: '', port: 2121, user: 'camera', password: '', tls: true, stream: 'main' }),
     go2rtc: () => undefined,
+    cachePool: new CachePool(() => running.recordings.cacheMB * 2 ** 20),
     catalog, log, sse: sseHandler(log, running.sse), storage, audit, hooks: NO_HOOKS,
     ...o.over,
   });
@@ -69,9 +71,13 @@ describe('CameraWorker (spec §3.1)', () => {
     catalog.close();
   });
 
-  it('one camera: the whole recordings cache cap (Ruling P1-3)', () => {
-    const { w, running, catalog } = worker();
-    expect(w.recordings.status().cache.capBytes).toBe(running.recordings.cacheMB * 2 ** 20);
+  it("the host's recordings cache: the whole cap, the pool's figures and this camera's part (spec §8.3)", () => {
+    const pool = new CachePool(() => 5 * 2 ** 20);
+    const { w, running, catalog } = worker({ over: { cachePool: pool } });
+    writeFileSync(join(running.server.dataDir, 'recordings', 'cam1', 'RecM01.mp4'), Buffer.alloc(100));
+    expect(pool.usage().files).toBe(1);
+    expect(w.recordings.status().cache).toEqual({ bytes: 100, files: 1, capBytes: 5 * 2 ** 20 });
+    expect(w.recordings.status().camera).toEqual({ bytes: 100, files: 1 });
     catalog.close();
   });
 });

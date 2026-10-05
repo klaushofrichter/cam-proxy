@@ -16,6 +16,7 @@ import { cameraConfig, cameraIds } from './config/cameras';
 import { cameraPassword } from './config/secrets';
 import { reapOrphanGo2rtc } from './stills/orphans';
 import { Go2rtc } from './stills/go2rtc';
+import { CachePool } from './recordings/pool';
 import { restartProcess } from './process-restart';
 import type { Config } from './config/defaults';
 import { getPath, needsProcessRestart, needsRestart, setPath, settingPaths, type Loaded } from './config/load';
@@ -172,11 +173,14 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   let go2rtcMadeWith = go2rtcSettings();
   // Started in the background: each camera's grabber waits until it is up.
   const startGo2rtc = () => void go2rtc?.start().catch((err: Error) => logger.error({ err: err.message }, 'go2rtc_start_failed'));
+  // One recordings cache for every camera (spec §8.3): one LRU, capped by recordings.cacheMB.
+  const cachePool = new CachePool(() => running.recordings.cacheMB * 2 ** 20);
   const makeWorker = (id: string) =>
       new CameraWorker({
         id,
         running: () => running,
         go2rtc: () => go2rtc,
+        cachePool,
         password: () => cameraPassword(loaded.secrets, id),
         poeSwitchPassword: () => loaded.secrets.poeSwitchPassword,
         ftpTarget: ftpTargetFor(id),
@@ -489,9 +493,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   };
   const healthNow = async (): Promise<HealthSummary> => {
     const [first, ...others] = cams.list().map(cameraHealthInput);
-    // The recordings caches of every camera (one camera: its own, as before).
-    const caches = cams.list().map((w) => w.recordings.status().cache);
-    const recordingsCache = caches.length === 1 ? caches[0] : caches.reduce((a, c) => ({ bytes: a.bytes + c.bytes, files: a.files + c.files, capBytes: a.capBytes + c.capBytes }), { bytes: 0, files: 0, capBytes: 0 });
+    // The host's one recordings cache (spec 2026-10-05-multi-camera-host-design §8.3).
+    const recordingsCache = cachePool.usage();
     return buildHealth({
       now: Date.now(),
       version: VERSION,

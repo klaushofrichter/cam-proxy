@@ -17,11 +17,12 @@ import { readCameraFtp, type FtpTarget } from '../clips/camera-ftp';
 import { CameraFtpWatch, clipsStalled, type ClipsStall } from '../clips/ftp-health';
 import { ClipIndexer } from '../clips/indexer';
 import type { Config } from '../config/defaults';
-import { cameraConfig, cameraEvents, cameraIds, type ResolvedCamera } from '../config/cameras';
+import { cameraConfig, cameraEvents, type ResolvedCamera } from '../config/cameras';
 import { EventIntake } from '../events/intake';
 import { EventTracker } from '../events/tracker';
 import { cameraContext, logger } from '../log';
 import { createRecordingsSide, type RecordingsSide } from '../recordings/side';
+import type { CachePool } from '../recordings/pool';
 import type { Go2rtc, StreamSource } from '../stills/go2rtc';
 import { FrameGrabber, type Frame } from '../stills/grabber';
 import { MinuteStore, minuteOf } from '../stills/store';
@@ -46,7 +47,8 @@ export interface WorkerDeps {
   password: () => string;
   poeSwitchPassword: () => string | undefined;
   ftpTarget: () => FtpTarget;
-  ftpPassword?: () => string | undefined; // the host's FTP password: no indexer for uploads without it
+  ftpPassword?: () => string | undefined;
+  cachePool: CachePool; // the host's recordings cache (spec §8.3) // the host's FTP password: no indexer for uploads without it
   // The host's go2rtc (spec 2026-10-05-multi-camera-host-design §8.5); none without go2rtc.binary.
   go2rtc: () => Go2rtc | undefined;
   catalog: Catalog;
@@ -143,14 +145,16 @@ export class CameraWorker extends EventEmitter {
         const c = this.cam();
         return { host: bareHost(splitHost(c.host).hostname), port: c.baichuanPort, user: c.user, password: d.password() };
       },
-      // Ruling P1-3: the cap split evenly until the shared cache of P2.
-      capBytes: () => Math.floor((d.running().recordings.cacheMB * 2 ** 20) / Math.max(1, cameraIds(d.running()).length)),
+      // One cache for the host (spec §8.3): the whole recordings.cacheMB, shared through the pool.
+      capBytes: () => d.running().recordings.cacheMB * 2 ** 20,
+      pool: d.cachePool,
       search: (param) => this.client.command('Search', param),
       timeInfo: () => this.client.timeInfo(),
       paused: () => d.storage.paused(),
       noteWritten: (bytes) => d.storage.noteWritten('recordings', bytes, 1, { cam: this.id }),
       onDownload: (o) => d.hooks.onRecordingDownload({ stream: o.stream, result: o.result, priority: o.priority }),
     });
+    d.cachePool.add(this.recordings.cache);
     // A reboot (#83): the client and poller are read on use (restart builds
     // them anew); the Baichuan session dies with the camera.
     this.reboot = new CameraReboot({
@@ -473,6 +477,7 @@ export class CameraWorker extends EventEmitter {
     this.cancelRetry?.();
     await this.restarting;
     this.phaseNow = 'stopped';
+    this.d.cachePool.remove(this.recordings.cache);
     this.ftpWatch.stop();
     this.reboot.stop();
     await this.stopParts();

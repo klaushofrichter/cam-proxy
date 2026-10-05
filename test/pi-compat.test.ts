@@ -173,6 +173,14 @@ describe('the Pi: the storage budget', () => {
   });
 });
 
+// P2 (spec §8.3): one recordings cache for the host; the Pi's camera has the whole cap.
+describe('the Pi: the recordings cache', () => {
+  it('the whole recordings.cacheMB, as before', async () => {
+    const st = (await request(base).get('/control/status').set(auth(ADMIN_TOKEN))).body;
+    expect(st.recordings.cache.capBytes).toBe(proxy.running.recordings.cacheMB * 2 ** 20);
+  });
+});
+
 // The health items the Pi's display reads, as release 8 answers them.
 const PI_ITEM_IDS = ['camera', 'stream', 'events', 'ftp', 'storage', 'disk', 'archive', 'inventory', 'version'];
 

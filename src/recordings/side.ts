@@ -11,13 +11,15 @@ import type { TimeInfo } from '../camera/time';
 import { within } from '../async';
 import { logger } from '../log';
 import { RecordingCache } from './cache';
+import type { CachePool } from './pool';
 import { RecordingFetcher, type FetchOutcome, type Priority } from './fetcher';
 import { RecordingList } from './list';
 import type { Stream } from './names';
 
 export interface RecordingsStatus {
   last: { at: number; result: string; stream: Stream; bytes: number; ms: number; priority: Priority } | null;
-  cache: { bytes: number; files: number; capBytes: number };
+  cache: { bytes: number; files: number; capBytes: number }; // the host's cache with a pool
+  camera: { bytes: number; files: number }; // this camera's part
 }
 
 export interface RecordingsSide {
@@ -36,6 +38,7 @@ interface RecordingsDeps {
   cam: () => string;
   target: () => BaichuanTarget;
   capBytes: () => number;
+  pool?: CachePool; // the host's one LRU over every camera (spec 2026-10-05-multi-camera-host-design §8.3)
   search: (param: object) => Promise<unknown>;
   timeInfo: () => Promise<TimeInfo>;
   paused: () => boolean;
@@ -49,7 +52,7 @@ interface RecordingsDeps {
 export function createRecordingsSide(d: RecordingsDeps): RecordingsSide {
   const session = new BaichuanSession(d.target, d.session);
   const dirOf = () => join(d.dataDir, 'recordings', d.cam());
-  const cache = new RecordingCache({ dir: dirOf, capBytes: d.capBytes });
+  const cache = new RecordingCache({ dir: dirOf, capBytes: d.capBytes, pool: d.pool });
   cache.init(); // leftover .part files from the last run go
   let readyDir = dirOf();
   const list = new RecordingList({ search: d.search, timeInfo: d.timeInfo });
@@ -72,7 +75,7 @@ export function createRecordingsSide(d: RecordingsDeps): RecordingsSide {
     fetcher,
     session,
     paused: d.paused,
-    status: () => ({ last, cache: { ...cache.usage(), capBytes: d.capBytes() } }),
+    status: () => ({ last, cache: d.pool ? d.pool.usage() : { ...cache.usage(), capBytes: d.capBytes() }, camera: cache.usage() }),
     reset: () => {
       session.close();
       list.clear();
