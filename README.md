@@ -150,11 +150,21 @@ come only from the environment.
   setting (e.g. `stills.intervall: unknown setting`).
 - **Changed in the admin UI** (or `PUT /control/config`): the change is stored
   as an override in `<dataDir>/overrides.json`. The effective value is
-  default, then file, then override, then the environment (below). An
-  override's **Reset** button names what it goes back to ("Reset – 90 days";
-  "(config.json)" when the file sets it), and **Reset to defaults** (shown
-  while any override is set) removes them all at once after a confirmation
-  listing each change (`DELETE /control/config`, one `config-change` record).
+  default, then file, then override, then the environment (below). A value
+  equal to what the setting has without an override (config.json's, else the
+  default) is not stored: saving it removes the override, also when a whole
+  group is sent (`{"camera":{"poeSwitch":{…, "ports": 8}}}` stores no
+  `ports`). An override's **Reset** button names what it goes back to ("Reset
+  – 90 days"; "(config.json)" when the file sets it), and for an unset state
+  what that means ("Reset – none (no PoE switch: power-cycle off)", "Reset –
+  not set (PoE switch control off: no switch address)"; the texts are the
+  `unset` entries in `src/config/schema.ts`). An override equal to that value
+  (kept by an older version) has no Reset button: its badge reads "override =
+  default" (or "= config.json"), with a tooltip that Reset would change
+  nothing. **Reset to defaults** (shown while any override is set) removes
+  them all at once after a confirmation listing each change, and the
+  overrides equal to the default as one "no change in effect" line
+  (`DELETE /control/config`, one `config-change` record).
 - **From the environment** (the Pi's one `.env`, [docs/raspberry-pi.md](docs/raspberry-pi.md)):
   `CAMERA_HOST` (or `CAMPROXY_CAMERA_HOST`) sets `camera.host` (address or
   name, optional `:port`), and `PI_ADDRESS` (or `CAMPROXY_PI_ADDRESS`; address
@@ -694,8 +704,8 @@ in the Reolink app, reaches stream clients once as a `camera` message.
 | `GET /control/status` | `{version, camera (incl. name (the camera's name; the configured `camera.name` until the camera was read), nameSource: camera\|config, webUiUrl, serial, reboot: {kind: reboot\|powercycle, requestedAt, confirmed, phase: power-cycling\|rebooting\|back\|not-back, offAt, endedAt, downSec} or null, and poeSwitch: {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state: on\|off\|elsewhere\|unknown, checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result, stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null (the last recording download over Baichuan), cache: {bytes, files, capBytes}}, analytics: [{…, keyMasked, keySource}], analyticsUnmapped, health, archive (as `GET /api/archive/status`)}` |
 | `PUT /control/camera/name` | `{"name":"Backyard Left"}`: renames the camera on the camera itself ([Camera name](#camera-name)). 200 `{name}` (the name read back from the camera); 400 `{"error":"invalid_name","reason":…}` by the camera's rules (the camera is not asked) or refused by the camera (rspCode -54, -56); 503 `{"error":"camera_offline"}`; 502 `camera_error`. Admin token, or an admin session with `X-CamProxy-UI: 1`. Audited as `camera-name` |
 | `GET /control/stats` | `{disk: {catalog, audit, stills, previews, clips, recordings}` (each `{bytes, files, oldest, newest, growthPerDay}`), `events, stream, sse, storage}` |
-| `GET /control/config` | every setting: `{value, source, env?, restart, pending, next?, type, resetTo?}` (`source`: `default`, `file`, `override` or `env`; `env`: the variable that sets it; `type`: `integer`, `boolean` or `string`; `resetTo`, on an override: `{value, source: file\|default}`, what removing it goes back to); secrets never appear |
-| `PUT /control/config` | overrides, e.g. `{"sse":{"pingS":10}}`; a bad value answers 400 naming it, and nothing is written; so does a setting the environment sets (`camera.host: set in .env (CAMERA_HOST)`) |
+| `GET /control/config` | every setting: `{value, source, env?, restart, pending, next?, type, resetTo?}` (`source`: `default`, `file`, `override` or `env`; `env`: the variable that sets it; `type`: `integer`, `boolean` or `string`; `resetTo`, on an override: `{value, source: file\|default, same?, means?}`, what removing it goes back to; `same: true` when that is the override's own value, `means` what an unset target (not set, none, off, 0 = none) does); secrets never appear |
+| `PUT /control/config` | overrides, e.g. `{"sse":{"pingS":10}}`; a value equal to config.json's or the default is not stored (it removes that override); a bad value answers 400 naming it, and nothing is written; so does a setting the environment sets (`camera.host: set in .env (CAMERA_HOST)`) |
 | `PUT /control/secrets/google-vision-key` | `{"key":"..."}` (20 to 200 printable ASCII characters, no spaces; else 400 `invalid`): sets the Google Vision key in memory only, at once, until the process restarts; answers `{keySource: "manual", keyMasked, replaced}`, never the key; audited as `secret-override` |
 | `DELETE /control/config/{path}` | removes one override |
 | `DELETE /control/config` | removes every override at once (Reset to defaults); answers the new view; one `config-change` record with `reset: "all"` |

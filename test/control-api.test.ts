@@ -133,6 +133,25 @@ describe('control API: back to the defaults', () => {
     }
   });
 
+  // Klaus 2026-10-05: no override that only repeats the default; Reset says
+  // what an unset state means.
+  it('PUT of a whole group stores only what differs, and Reset to none / not set says what that means', async () => {
+    const r = await request(p.base).put('/control/config').set(admin()).send({ camera: { poeSwitch: { model: 'sscpoe-web', host: '192.0.2.98', port: 8, ports: 8, offSeconds: 10 } } });
+    try {
+      expect(r.status).toBe(200);
+      expect(r.body['camera.poeSwitch.ports']).toMatchObject({ value: 8, source: 'default' });
+      expect(r.body['camera.poeSwitch.offSeconds']).toMatchObject({ value: 10, source: 'default' });
+      expect(r.body['camera.poeSwitch.model']).toMatchObject({ source: 'override', resetTo: { value: 'none', source: 'default', means: 'no PoE switch: power-cycle off' } });
+      expect(r.body['camera.poeSwitch.host']).toMatchObject({ source: 'override', resetTo: { source: 'default', means: 'PoE switch control off: no switch address' } });
+      expect(JSON.parse(readFileSync(join(p.dir, 'data', 'overrides.json'), 'utf8')).camera.poeSwitch).toEqual({ model: 'sscpoe-web', host: '192.0.2.98', port: 8 });
+      // Saving the default over an override removes it.
+      const back = await request(p.base).put('/control/config').set(admin()).send({ camera: { poeSwitch: { model: 'none' } } });
+      expect(back.body['camera.poeSwitch.model']).toMatchObject({ value: 'none', source: 'default' });
+    } finally {
+      for (const k of ['model', 'host', 'port']) await request(p.base).delete(`/control/config/camera.poeSwitch.${k}`).set(admin());
+    }
+  });
+
   it('DELETE /control/config removes every override in one write and one config-change record', async () => {
     await request(p.base).put('/control/config').set(admin()).send({ retention: { auditDays: 30, eventsDays: 4 }, sse: { pingS: 11 } });
     const n = p.proxy.audit.list({ actions: ['config-change'], limit: 500 }).records.length;
