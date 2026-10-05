@@ -140,7 +140,8 @@ now kept on the job, so the archive records exactly what was asked.
 
 `POST /api/cameras/{cam}/archive` always starts an **archive job** and
 waits up to 3 s for it: done by then → 201 with the item (a composition of
-up to 200 MB copies in about a second on the Pi's SSD); else 202 with the
+up to 200 MB copies in about a second on the Pi's SSD); failed by then → its
+error's status (507, 503, 404, 502, 500) with the job; else 202 with the
 job, polled at `GET /api/archive/jobs/{id}` or followed by the SSE `add`.
 At most 4 jobs in flight (429 `busy`). Unlike compositions, a job runs to
 its end without polling (the user asked to keep the clip; a closed tab
