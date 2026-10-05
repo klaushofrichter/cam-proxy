@@ -3,7 +3,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { execFile } from 'child_process';
-import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, statSync, unlinkSync } from 'fs';
 import { basename, join } from 'path';
 import { promisify } from 'util';
 import { crc32 } from 'zlib';
@@ -136,6 +136,15 @@ describe('POST /api/cameras/{cam}/archive: the sources', () => {
       source: { type: 'composition', jobId: c.body.id, anchor: 'clip', clipId, span: null, preS: -1, postS: -1, size: '360p', badge: false },
     });
     expect(r.body.item.durationS).toBeCloseTo(4, 0);
+  });
+
+  it('a composition whose file went away: 404 source_gone, not a 500', async () => {
+    const c = await request(p.base).post(`/api/cameras/${cam()}/compositions`).set(auth()).send({ clipId, preS: -1, postS: -2, size: 'sd', badge: false });
+    await until(async () => (await request(p.base).get(`/api/cameras/${cam()}/compositions/${c.body.id}`).set(auth())).body.state === 'done', 60_000);
+    unlinkSync(join(p.dir, 'data', 'compositions', c.body.id, 'out.mp4'));
+    const r = await post({ source: { type: 'composition', id: c.body.id } });
+    expect(r.status).toBe(404);
+    expect(r.body).toEqual({ error: 'source_gone' });
   });
 
   it('an SD recording: fetched over Baichuan as it is (202 or 201, then done)', async () => {

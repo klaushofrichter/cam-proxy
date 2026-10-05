@@ -111,7 +111,9 @@ export function archiveApi(d: ArchiveApiDeps): express.Router {
     const ti = d.timeInfo();
     if (n && ti && side.cache.has(id) && !stillRecording(n)) {
       const t = recordingTimes(n, ti);
-      return { id, path: '', start: t.start, end: t.end, stream: n.stream, size: statSync(side.cache.path(id)).size, kinds: n.kinds };
+      const size = sizeOf(side.cache.path(id));
+      if (size !== null) return { id, path: '', start: t.start, end: t.end, stream: n.stream, size, kinds: n.kinds };
+      // evicted since has(): ask the camera's list as for one not cached
     }
     if (!d.online()) return void res.status(503).json({ error: 'camera_offline' }), undefined;
     const ac = new AbortController();
@@ -141,7 +143,8 @@ export function archiveApi(d: ArchiveApiDeps): express.Router {
       if (!creq || !job) return notFound(res), undefined;
       const file = d.composer.file(cam(), s.id!);
       if (job.state !== 'done' || !file) return void res.status(409).json({ error: 'not_ready', state: job.state }), undefined;
-      const size = statSync(file).size;
+      const size = sizeOf(file);
+      if (size === null) return void res.status(404).json({ error: 'source_gone' }), undefined; // swept since file()
       return {
         ...base, kind: 'composition', source: { type: 'composition', jobId: s.id, ...(creq.asked ?? {}), size: creq.size, badge: creq.badge },
         window: { from: creq.plan.start, to: creq.plan.end }, quality: creq.size, original: false, size, durationS: creq.plan.durationS, obtain: fileSource(file),
@@ -344,7 +347,8 @@ export function archiveApi(d: ArchiveApiDeps): express.Router {
     const path = d.archive.store.file(row, 'clip.mp4');
     res.setHeader('Cache-Control', IMMUTABLE);
     if (req.query.download === '1') res.setHeader('Content-Disposition', contentDisposition(`${safeFileName(row.name)}.mp4`));
-    res.sendFile(path, { cacheControl: false, acceptRanges: true, headers: { 'Content-Type': 'video/mp4' } }, (err) => {
+    // dotfiles: the data folder may sit under a dot folder (~/.cam-proxy/data); the path comes from the row and the guard.
+    res.sendFile(path, { cacheControl: false, acceptRanges: true, dotfiles: 'allow', headers: { 'Content-Type': 'video/mp4' } }, (err) => {
       if (!err || res.headersSent) return;
       const status = (err as { status?: number }).status;
       if (status === 416) return void res.status(416).end();
@@ -375,6 +379,15 @@ export function archiveApi(d: ArchiveApiDeps): express.Router {
 }
 
 const bufferStream = (data: Buffer) => Readable.from([data]);
+
+// A file's size, or null when it is gone (a race with a sweep or an eviction).
+function sizeOf(path: string): number | null {
+  try {
+    return statSync(path).size;
+  } catch {
+    return null;
+  }
+}
 
 // A file's CRC-32, read in chunks (a row without its stored CRC).
 async function fileCrc(path: string): Promise<number> {
