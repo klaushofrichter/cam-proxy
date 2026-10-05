@@ -56,6 +56,8 @@ export interface WorkerDeps {
   // Test seams: a throw from beforeStart is a start failure; schedule replaces setTimeout.
   beforeStart?: () => void | Promise<void>;
   schedule?: (ms: number, fn: () => void) => () => void;
+  // Test seam: how go2rtc is started (default: go2rtc.start()).
+  startGo2rtc?: (g: Go2rtc) => Promise<void>;
 }
 
 // The camera's own web page for the admin UI: webUiUrl, none for no link,
@@ -306,11 +308,15 @@ export class CameraWorker extends EventEmitter {
   private startStills(): void {
     const s = this.stills;
     if (!s) return;
-    this.stillsStarting = s.go2rtc.start().then(
+    this.stillsStarting = (this.d.startGo2rtc ? this.d.startGo2rtc(s.go2rtc) : s.go2rtc.start()).then(
       () => {
         if (this.stills === s && !this.stopping) s.grabber.start();
       },
-      (err: Error) => logger.error({ cameraId: this.id, err: err.message }, 'go2rtc_start_failed'),
+      // This camera's error and a supervised retry (spec §3.3), unless a restart or stop came in between.
+      (err: Error) => {
+        if (this.stills === s && !this.stopping && this.phaseNow !== 'stopped') this.failed(`go2rtc_start_failed: ${err.message}`);
+        else logger.error({ cameraId: this.id, err: err.message }, 'go2rtc_start_failed');
+      },
     );
   }
 
@@ -332,6 +338,17 @@ export class CameraWorker extends EventEmitter {
     return () => clearTimeout(t);
   }
 
+  // A start failure: this camera's error, and a restart after the backoff.
+  private failed(error: string): void {
+    this.errorNow = error;
+    // Healthy for 10 minutes before this failure (no status change needed to notice): 5 s again.
+    if (this.onlineSince !== null) this.backoff.healthy(this.onlineSince, Date.now());
+    const ms = this.backoff.next();
+    logger.warn({ cameraId: this.id, err: error, retryMs: ms }, 'camera_side_start_failed');
+    this.cancelRetry?.();
+    this.cancelRetry = this.schedule(ms, () => void this.restart().catch((e: Error) => logger.error({ cameraId: this.id, err: e.message }, 'camera_side_restart_failed')));
+  }
+
   // Starts the parts; a failure is this camera's error and a later retry,
   // never the process's (spec §3.3). Answers whether the parts run.
   private async startParts(): Promise<boolean> {
@@ -348,12 +365,7 @@ export class CameraWorker extends EventEmitter {
       this.errorNow = null;
       return true;
     } catch (err) {
-      this.errorNow = (err as Error).message;
-      // Healthy for 10 minutes before this failure (no status change needed to notice): 5 s again.
-      if (this.onlineSince !== null) this.backoff.healthy(this.onlineSince, Date.now());
-      const ms = this.backoff.next();
-      logger.warn({ cameraId: this.id, err: this.errorNow, retryMs: ms }, 'camera_side_start_failed');
-      this.cancelRetry = this.schedule(ms, () => void this.restart().catch((e: Error) => logger.error({ cameraId: this.id, err: e.message }, 'camera_side_restart_failed')));
+      this.failed((err as Error).message);
       return false;
     }
   }

@@ -23,11 +23,11 @@ afterAll(async () => {
 
 const NO_HOOKS = { onCameraCheck() {}, onResubscribe() {}, onStill() {}, onStillMissing() {}, onRecordingDownload() {} };
 
-function worker(o: { host?: string; over?: Partial<WorkerDeps> } = {}) {
+function worker(o: { host?: string; over?: Partial<WorkerDeps>; stills?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'camproxy-worker-'));
   writeFileSync(join(dir, 'config.json'), JSON.stringify({
     camera: { host: o.host ?? sim.camera.host, protocol: 'http', user: 'proxy', onvifPort: sim.ports.onvif, rtspPort: sim.ports.rtsp || 554, baichuanPort: sim.camera.baichuanPort, statusPollS: 5 },
-    stills: { enabled: false },
+    stills: { enabled: o.stills ?? false },
     server: { logLevel: 'silent' },
   }));
   const loaded = loadConfig({ CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: sim.password }, { cwd: dir });
@@ -123,6 +123,23 @@ describe('supervision (spec §3.3)', () => {
     pending!();
     await until(() => w.phase() === 'ready');
     expect(w.error()).not.toBe('go2rtc_start_failed');
+    await w.stopSwitch();
+    await w.stopRecordings();
+    await w.stop();
+    catalog.close();
+  });
+
+  // Review: a go2rtc that can't start reaches supervision (an error and a retry), not only the log.
+  it('a go2rtc start failure sets the error and retries with the backoff', async () => {
+    const delays: number[] = [];
+    const { w, catalog } = worker({
+      stills: true,
+      over: { startGo2rtc: () => Promise.reject(new Error('no such file')), schedule: (ms) => (delays.push(ms), () => undefined) },
+    });
+    await w.start();
+    await until(() => delays.length === 1);
+    expect(delays).toEqual([5000]);
+    expect(w.error()).toBe('go2rtc_start_failed: no such file');
     await w.stopSwitch();
     await w.stopRecordings();
     await w.stop();
