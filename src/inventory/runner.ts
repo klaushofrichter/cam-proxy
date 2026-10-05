@@ -28,13 +28,15 @@ export interface InventoryWindow { from: number | null; to: number; reason: stri
 export interface CheckResult { window: InventoryWindow; counts: Record<string, number>; top: unknown[]; items: unknown[]; message: string }
 // What a start may ask for besides the kind (PR 2: `camera`, the camera compare).
 interface StartOptions { camera?: boolean }
-export interface CheckContext { signal: AbortSignal; progress: (p: Progress) => void; now: number; options?: StartOptions }
+// A start names the camera it runs on (spec 2026-10-05-multi-camera-host-design §3.1).
+export interface StartRequest extends StartOptions { cam: string }
+export interface CheckContext { signal: AbortSignal; progress: (p: Progress) => void; now: number; cam: string; options?: StartOptions }
 // A check returns its partial result when the signal aborts (it checks between pages).
 export type Check = (ctx: CheckContext) => Promise<CheckResult>;
 // A repair's result: `stopped` names why it ended before its list was done (null: it was).
 export interface RepairResult { counts: Record<string, number>; top: unknown[]; items: unknown[]; message: string; stopped: string | null }
 // `runId`: the repair's own run id (the events repair marks its rows with it).
-export interface RepairContext { signal: AbortSignal; progress: (p: Progress) => void; now: number; runId: string; source: InventoryReport }
+export interface RepairContext { signal: AbortSignal; progress: (p: Progress) => void; now: number; cam: string; runId: string; source: InventoryReport }
 export type Repair = (ctx: RepairContext) => Promise<RepairResult>;
 // `ready` answers why a (finished, recent) check report can't be repaired from, or null.
 export interface RepairEntry { run: Repair; ready: (source: InventoryReport) => string | null }
@@ -94,7 +96,8 @@ interface Current { view: RunningView; ac: AbortController; cancelledBy?: 'reque
 // What one run does, whichever op: its work and how its report and record look.
 interface Job {
   title: string; // "Stills inventory", "Clips repair"
-  work: (ctx: { signal: AbortSignal; progress: (p: Progress) => void; now: number; runId: string }) => Promise<CheckResult | (RepairResult & { window: InventoryWindow | null })>;
+  cam: string; // the camera it runs on
+  work: (ctx: { signal: AbortSignal; progress: (p: Progress) => void; now: number; cam: string; runId: string }) => Promise<CheckResult | (RepairResult & { window: InventoryWindow | null })>;
   extra: Partial<InventoryReport>;
 }
 
@@ -108,7 +111,7 @@ export class InventoryRunner {
   // Bumped by each save: a list() that read the disk before a save doesn't cache.
   private readonly generation = new Map<string, number>();
 
-  constructor(private readonly d: { dir: string; audit: Pick<AuditLog, 'write'>; camera: () => string; checks: Partial<Record<string, InventoryKind>>; now?: () => number; keep?: number }) {
+  constructor(private readonly d: { dir: string; audit: Pick<AuditLog, 'write'>; checks: Partial<Record<string, InventoryKind>>; now?: () => number; keep?: number }) {
     this.checks = { ...d.checks };
     this.now = d.now ?? Date.now;
   }
@@ -132,12 +135,13 @@ export class InventoryRunner {
 
   // Starts a check in the background; throws InventoryBusyError while any run
   // (check or repair) goes on, InventoryStoppingError once stop() was called.
-  start(kind: string, who: Requester, options: StartOptions = {}): { runId: string; done: Promise<InventoryReport> } {
+  start(kind: string, who: Requester, request: StartRequest): { runId: string; done: Promise<InventoryReport> } {
     const check = this.entry(kind);
     if (!check) throw new Error(`no inventory of kind ${kind}`);
-    const opts: StartOptions = options.camera === true && check.camera ? { camera: true } : {};
+    const opts: StartOptions = request.camera === true && check.camera ? { camera: true } : {};
     return this.launch(kind, kind, 'check', who, {
       title: `${check.label} inventory`,
+      cam: request.cam,
       work: (ctx) => check.run({ ...ctx, options: opts }),
       extra: opts.camera ? { options: opts } : {},
     });
@@ -159,6 +163,7 @@ export class InventoryRunner {
     if (why) throw new RepairRefusedError('not_repairable', why);
     return this.launch(kind, repairFolder(kind), 'repair', who, {
       title: `${entry.label} repair`,
+      cam: source.camera, // the repair works on the report's camera
       work: async (ctx) => ({ ...(await repair.run({ ...ctx, source })), window: source.window }),
       extra: { source: source.runId },
     });
@@ -247,7 +252,7 @@ export class InventoryRunner {
       let error: string | undefined;
       let failed = false;
       try {
-        res = await job.work({ signal: cur.ac.signal, now: startedAt, runId, progress: (p) => void (cur.view.progress = p) });
+        res = await job.work({ signal: cur.ac.signal, now: startedAt, cam: job.cam, runId, progress: (p) => void (cur.view.progress = p) });
       } catch (err) {
         failed = true;
         error = errorMessage(err);
@@ -257,7 +262,7 @@ export class InventoryRunner {
       const items = res?.items ?? [];
       const stopped = res && 'stopped' in res ? res.stopped : undefined;
       const report: InventoryReport = {
-        runId, kind, op, camera: this.d.camera(), startedAt, tookMs: this.now() - startedAt, outcome,
+        runId, kind, op, camera: job.cam, startedAt, tookMs: this.now() - startedAt, outcome,
         ...(outcome === 'failed' ? { error } : {}),
         ...(outcome === 'cancelled' ? { cancelledBy: cur.cancelledBy ?? 'request' } : {}),
         requestedBy: who.requestedBy,
@@ -279,7 +284,7 @@ export class InventoryRunner {
       this.d.audit.write({
         action: op === 'repair' ? 'inventory-repair' : 'inventory', category: ['host'], type: [op === 'repair' ? 'change' : 'info'],
         outcome: outcome === 'ok' ? 'success' : outcome === 'failed' ? 'failure' : 'unknown',
-        user: 'admin', ip: who.ip, userAgent: who.userAgent, message: report.message,
+        user: 'admin', ip: who.ip, userAgent: who.userAgent, message: report.message, camera: job.cam,
         ...(report.error !== undefined ? { error: report.error } : {}),
         details: op === 'repair'
           ? { ...common, source: report.source, stopped: report.stopped, counts: report.counts, failures: report.top, tookMs: report.tookMs }

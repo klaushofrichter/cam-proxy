@@ -66,11 +66,12 @@ export interface RepairItem { id: string; start: number; result: 'ok' | 'skipped
 export interface ClipsRepairSettings { cam: string; stream: Stream; clipsDays: number; maxGB?: number }
 export interface ClipsRepairDeps {
   catalog: Catalog;
-  settings: () => ClipsRepairSettings; // read when a run starts
-  list: Pick<RecordingList, 'find'>;
-  fetcher: Pick<RecordingFetcher, 'get' | 'canKeep'>;
-  cache: Pick<RecordingCache, 'open' | 'path'>;
-  indexer: () => Pick<ClipIndexer, 'addRecording'>;
+  // Each for the run's camera (spec 2026-10-05-multi-camera-host-design §3.1).
+  settings: (cam: string) => ClipsRepairSettings; // read when a run starts
+  list: (cam: string) => Pick<RecordingList, 'find'>;
+  fetcher: (cam: string) => Pick<RecordingFetcher, 'get' | 'canKeep'>;
+  cache: (cam: string) => Pick<RecordingCache, 'open' | 'path'>;
+  indexer: (cam: string) => Pick<ClipIndexer, 'addRecording'>;
   // A folder on the data disk for a recording the cache can't keep; emptied
   // of leftover .part files when a run starts (runs hold the inventory lock).
   tempDir: () => string;
@@ -132,7 +133,9 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
   };
 
   const run = async (ctx: Parameters<RepairEntry['run']>[0]): Promise<RepairResult> => {
-    const s = d.settings();
+    const s = d.settings(ctx.cam);
+    // The run's camera's recordings side.
+    const rec = { list: d.list(ctx.cam), fetcher: d.fetcher(ctx.cam), cache: d.cache(ctx.cam), indexer: () => d.indexer(ctx.cam) };
     const maxClips = d.limits?.clips ?? REPAIR_MAX_CLIPS;
     const maxBytes = d.limits?.bytes ?? REPAIR_MAX_BYTES;
     const sleep = d.sleep ?? defaultSleep;
@@ -173,12 +176,12 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
     // took the client slot (it has the file). Null: nothing usable (the fetch
     // was another's that was aborted, or the file went before it was pinned).
     const obtain = async (entry: RecordingEntry, attempt: number, signal: AbortSignal): Promise<Source | 'viewer' | 'invalid' | null> => {
-      const cached = d.cache.open(entry.id);
-      if (cached) return { file: d.cache.path(entry.id), release: cached, streamed: false };
+      const cached = rec.cache.open(entry.id);
+      if (cached) return { file: rec.cache.path(entry.id), release: cached, streamed: false };
       if (downloads++ > 0) await sleep(REPAIR_GAP_MS, signal);
       if (signal.aborted) throw abortError('cancelled');
       let tmp: { path: string; w: Writable; err?: Error } | null = null;
-      if (attempt > 0 || !d.fetcher.canKeep(entry.size)) {
+      if (attempt > 0 || !rec.fetcher.canKeep(entry.size)) {
         // entry.id is an SD name (the list's): no path separators; checked
         // anyway before it becomes a file name.
         const path = join(tempDir, `${entry.id}.part`);
@@ -196,7 +199,7 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
       const diskError = () => (tmp?.err ? new Error(`the temp file failed: ${tmp.err.message}`) : null);
       let keep = false;
       try {
-        const { fetch, created, waiter } = d.fetcher.get(entry, { priority: 'low', signal });
+        const { fetch, created, waiter } = rec.fetcher.get(entry, { priority: 'low', signal });
         // Viewers first: the temp writer takes the client slot only when the
         // fetch starts and no viewer has attached meanwhile.
         if (tmp) fetch.attachWhenRunning(tmp.w, () => undefined);
@@ -211,8 +214,8 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
         const disk = diskError();
         if (disk) throw disk;
         if (fetch.kept) {
-          const unpin = d.cache.open(entry.id);
-          if (unpin) return { file: d.cache.path(entry.id), release: unpin, streamed: false };
+          const unpin = rec.cache.open(entry.id);
+          if (unpin) return { file: rec.cache.path(entry.id), release: unpin, streamed: false };
         }
         if (!tmp) return null;
         if (!fetch.holds(tmp.w)) return fetch.kept ? null : 'viewer';
@@ -236,7 +239,7 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
     // BUSY_TRIES times 1 s apart like the compare's, then 'busy'.
     const findListed = async (id: string, signal: AbortSignal): Promise<RecordingEntry | undefined | 'busy'> => {
       try {
-        return await withBusyRetry(() => d.list.find(id, signal), signal, sleep);
+        return await withBusyRetry(() => rec.list.find(id, signal), signal, sleep);
       } catch (err) {
         if (err instanceof SearchError && err.code === 'busy' && !signal.aborted) return 'busy';
         throw err;
@@ -303,7 +306,7 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
         }
         if (!src) throw new Error('the recording could not be kept or streamed');
         try {
-          const row = await d.indexer().addRecording(src.file, { start: entry.start, stream: s.stream });
+          const row = await rec.indexer().addRecording(src.file, { start: entry.start, stream: s.stream });
           counts.done++;
           counts.bytes += row.size;
           inARow = 0;

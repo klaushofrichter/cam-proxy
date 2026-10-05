@@ -35,7 +35,7 @@ function setup(checks: Record<string, InventoryKind>) {
   const dir = mkdtempSync(join(tmpdir(), 'camproxy-inv-'));
   let clock = T0;
   const audit = new AuditLog({ dir: join(dir, 'audit'), version: 't', camera: () => 'cam1', now: () => clock });
-  const runner = new InventoryRunner({ dir: join(dir, 'inventory'), audit, camera: () => 'cam1', checks, now: () => (clock += 1000) });
+  const runner = new InventoryRunner({ dir: join(dir, 'inventory'), audit, checks, now: () => (clock += 1000) });
   return { dir, audit, runner, advance: (ms: number) => void (clock += ms) };
 }
 const who = { requestedBy: 'token' as const, ip: '10.0.0.5', userAgent: 'vitest' };
@@ -44,7 +44,7 @@ const records = (a: AuditLog) => a.list({ actions: ['inventory'] }).records;
 describe('InventoryRunner', () => {
   it('runs a check, saves the report and writes one inventory record', async () => {
     const { runner, audit, dir } = setup({ stills: stillsKind(async () => result(7)) });
-    const { runId, done } = runner.start('stills', who);
+    const { runId, done } = runner.start('stills', who, { cam: 'cam1' });
     expect(runId).toMatch(RUN_ID);
     expect(runId.startsWith('stills-')).toBe(true);
     const r = await done;
@@ -65,10 +65,10 @@ describe('InventoryRunner', () => {
   it('one run at a time: a second start is refused with the running id; progress shows', async () => {
     const g = gated();
     const { runner } = setup({ stills: stillsKind(g.check) });
-    const a = runner.start('stills', who);
+    const a = runner.start('stills', who, { cam: 'cam1' });
     let busy: unknown;
     try {
-      runner.start('stills', who);
+      runner.start('stills', who, { cam: 'cam1' });
     } catch (e) {
       busy = e;
     }
@@ -78,7 +78,7 @@ describe('InventoryRunner', () => {
     expect(await runner.get(a.runId)).toMatchObject({ outcome: 'running' });
     g.release();
     expect((await a.done).outcome).toBe('ok');
-    const b = runner.start('stills', who); // the lock is free again
+    const b = runner.start('stills', who, { cam: 'cam1' }); // the lock is free again
     expect(b.runId).not.toBe(a.runId);
     runner.cancel();
     await b.done;
@@ -87,7 +87,7 @@ describe('InventoryRunner', () => {
   it('cancel keeps the partial counts; the record is unknown and says who cancelled', async () => {
     const g = gated();
     const { runner, audit } = setup({ stills: stillsKind(g.check) });
-    const { runId, done } = runner.start('stills', who);
+    const { runId, done } = runner.start('stills', who, { cam: 'cam1' });
     expect(runner.cancel()).toBe(runId);
     const r = await done;
     expect(r).toMatchObject({ outcome: 'cancelled', cancelledBy: 'request', counts: { missingSeconds: 2 }, message: 'Stills inventory cancelled (partial): 2 s missing' });
@@ -98,7 +98,7 @@ describe('InventoryRunner', () => {
 
   it('a check that throws ends failed, is audited and frees the lock', async () => {
     const { runner, audit } = setup({ stills: stillsKind(async () => { throw new Error('disk gone'); }) });
-    const r = await runner.start('stills', who).done;
+    const r = await runner.start('stills', who, { cam: 'cam1' }).done;
     expect(r).toMatchObject({ outcome: 'failed', error: 'disk gone', counts: {}, window: null, top: [], items: [], message: 'Stills inventory failed: disk gone' });
     expect(records(audit)[0]).toMatchObject({ event: { outcome: 'failure' }, error: { message: 'disk gone' } });
     expect(runner.running()).toBeNull();
@@ -108,7 +108,7 @@ describe('InventoryRunner', () => {
     const { runner, dir } = setup({ stills: stillsKind(async () => result(1)) });
     const ids: string[] = [];
     for (let i = 0; i < 12; i++) {
-      const s = runner.start('stills', who);
+      const s = runner.start('stills', who, { cam: 'cam1' });
       ids.push(s.runId);
       await s.done;
     }
@@ -123,7 +123,7 @@ describe('InventoryRunner', () => {
 
   it('caps the items at 500 and says so', async () => {
     const { runner } = setup({ stills: stillsKind(async () => result(1, MAX_ITEMS + 1)) });
-    const r = await runner.start('stills', who).done;
+    const r = await runner.start('stills', who, { cam: 'cam1' }).done;
     expect(r.items).toHaveLength(MAX_ITEMS);
     expect(r.itemsTruncated).toBe(true);
   });
@@ -131,7 +131,7 @@ describe('InventoryRunner', () => {
   it('stop() cancels a running check as "stop" and waits for its record', async () => {
     const g = gated();
     const { runner, audit } = setup({ stills: stillsKind(g.check) });
-    runner.start('stills', who);
+    runner.start('stills', who, { cam: 'cam1' });
     await runner.stop();
     expect(records(audit)[0].cam_proxy).toMatchObject({ outcome: 'cancelled', cancelledBy: 'stop' });
     expect(runner.running()).toBeNull();
@@ -141,37 +141,37 @@ describe('InventoryRunner', () => {
   it('refuses to start once stop() was called', async () => {
     const { runner } = setup({ stills: stillsKind(async () => result(1)) });
     await runner.stop();
-    expect(() => runner.start('stills', who)).toThrow(InventoryStoppingError);
+    expect(() => runner.start('stills', who, { cam: 'cam1' })).toThrow(InventoryStoppingError);
     expect(runner.running()).toBeNull();
   });
 
   it('takes the label of each kind from the check table', async () => {
     const { runner } = setup({ stills: stillsKind(async () => result(1)), clips: { label: 'Clips', run: async () => result(2) } });
     expect(runner.kinds()).toEqual(['stills', 'clips']);
-    expect((await runner.start('clips', who).done).message).toBe('Clips inventory: 2 s missing');
+    expect((await runner.start('clips', who, { cam: 'cam1' }).done).message).toBe('Clips inventory: 2 s missing');
   });
 
   it('knows only the kinds it has a check for', () => {
     const { runner } = setup({ stills: stillsKind(async () => result(0)) });
     expect(runner.kinds()).toEqual(['stills']);
-    expect(() => runner.start('clips', who)).toThrow('no inventory of kind clips');
+    expect(() => runner.start('clips', who, { cam: 'cam1' })).toThrow('no inventory of kind clips');
   });
 
   it.each([['null', null, 'null'], ['an object', {}, '[object Object]'], ['a string', 'x', 'x']])('a check that throws %s ends failed and frees the lock', async (_n, thrown, text) => {
     const { runner, audit } = setup({ stills: stillsKind(async () => { throw thrown; }) });
-    const r = await runner.start('stills', who).done;
+    const r = await runner.start('stills', who, { cam: 'cam1' }).done;
     expect(r).toMatchObject({ outcome: 'failed', error: text, message: `Stills inventory failed: ${text}` });
     expect(records(audit)[0]).toMatchObject({ event: { outcome: 'failure' } });
     expect(runner.running()).toBeNull();
-    expect(() => runner.start('stills', who)).not.toThrow();
+    expect(() => runner.start('stills', who, { cam: 'cam1' })).not.toThrow();
   });
 
   it('a save failure still frees the lock and writes the audit record', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'camproxy-inv-'));
     writeFileSync(join(dir, 'blocker'), 'x'); // a file where the directory should be
     const audit = new AuditLog({ dir: join(dir, 'audit'), version: 't', camera: () => 'cam1', now: () => T0 });
-    const runner = new InventoryRunner({ dir: join(dir, 'blocker', 'inventory'), audit, camera: () => 'cam1', checks: { stills: stillsKind(async () => result(3)) } });
-    const r = await runner.start('stills', who).done;
+    const runner = new InventoryRunner({ dir: join(dir, 'blocker', 'inventory'), audit, checks: { stills: stillsKind(async () => result(3)) } });
+    const r = await runner.start('stills', who, { cam: 'cam1' }).done;
     expect(r.outcome).toBe('ok');
     expect(records(audit)).toHaveLength(1);
     expect(runner.running()).toBeNull();
@@ -179,12 +179,12 @@ describe('InventoryRunner', () => {
 
   it('inherited names are not kinds', () => {
     const { runner } = setup({ stills: stillsKind(async () => result(0)) });
-    expect(() => runner.start('constructor', who)).toThrow('no inventory of kind constructor');
+    expect(() => runner.start('constructor', who, { cam: 'cam1' })).toThrow('no inventory of kind constructor');
   });
 
   it('a check that finished before the cancel is ok, not cancelled', async () => {
     const { runner } = setup({ stills: stillsKind(async () => result(4)) });
-    const { done } = runner.start('stills', who);
+    const { done } = runner.start('stills', who, { cam: 'cam1' });
     await Promise.resolve();
     await Promise.resolve();
     runner.cancel();
@@ -206,10 +206,10 @@ describe('InventoryRunner: options and repairs', () => {
 
   it('passes the camera option to the check, and keeps it in the report and the record', async () => {
     const { runner, audit } = setup({ clips: clipsKind() });
-    const r = await runner.start('clips', who, { camera: true }).done;
+    const r = await runner.start('clips', who, { camera: true, cam: 'cam1' }).done;
     expect(r).toMatchObject({ op: 'check', options: { camera: true }, counts: { camera: 1 } });
     expect(records(audit)[0].cam_proxy).toMatchObject({ kind: 'clips', options: { camera: true } });
-    const plain = await runner.start('clips', who).done;
+    const plain = await runner.start('clips', who, { cam: 'cam1' }).done;
     expect(plain).not.toHaveProperty('options');
     expect(plain.counts.camera).toBe(0);
   });
@@ -218,7 +218,7 @@ describe('InventoryRunner: options and repairs', () => {
     let seen: string | undefined;
     let own: string | undefined;
     const { runner, audit, dir } = setup({ clips: clipsKind(async (ctx) => ((seen = ctx.source.runId), (own = ctx.runId), repaired(2))) });
-    const check = await runner.start('clips', who, { camera: true }).done;
+    const check = await runner.start('clips', who, { camera: true, cam: 'cam1' }).done;
     const { runId, done } = await runner.repair('clips', who, check.runId);
     expect(runId).toMatch(/^clipsrepair-\d+-[0-9a-f]{6}$/);
     expect(runner.running()).toMatchObject({ runId, kind: 'clips', op: 'repair' });
@@ -253,15 +253,15 @@ describe('InventoryRunner: options and repairs', () => {
     };
     expect(await refused('clips-1-abcdef')).toBe('not_found');
     expect(await refused('../../catalog')).toBe('not_found');
-    const stills = await runner.start('stills', who).done;
+    const stills = await runner.start('stills', who, { cam: 'cam1' }).done;
     expect(await refused(stills.runId)).toBe('not_found'); // another kind's report
-    const local = await runner.start('clips', who).done;
+    const local = await runner.start('clips', who, { cam: 'cam1' }).done;
     expect(await refused(local.runId)).toBe('not_repairable'); // no camera compare
-    const compared = await runner.start('clips', who, { camera: true }).done;
+    const compared = await runner.start('clips', who, { camera: true, cam: 'cam1' }).done;
     advance(3_600_000);
     expect(await refused(compared.runId)).toBe('report_stale');
     runner.checks.clips = { ...clipsKind(), run: async () => { throw new Error('boom'); } };
-    const failed = await runner.start('clips', who, { camera: true }).done;
+    const failed = await runner.start('clips', who, { camera: true, cam: 'cam1' }).done;
     expect(await refused(failed.runId)).toBe('not_repairable');
     expect(runner.running()).toBeNull();
     await expect(runner.repair('stills', who, stills.runId)).rejects.toThrow('no repair of kind stills');
@@ -270,9 +270,9 @@ describe('InventoryRunner: options and repairs', () => {
   it('a repair and a check share the one lock', async () => {
     let release: () => void = () => undefined;
     const { runner } = setup({ clips: clipsKind(() => new Promise((r) => (release = () => r(repaired(1))))) });
-    const check = await runner.start('clips', who, { camera: true }).done;
+    const check = await runner.start('clips', who, { camera: true, cam: 'cam1' }).done;
     const rep = await runner.repair('clips', who, check.runId);
-    expect(() => runner.start('clips', who)).toThrow(InventoryBusyError);
+    expect(() => runner.start('clips', who, { cam: 'cam1' })).toThrow(InventoryBusyError);
     await expect(runner.repair('clips', who, check.runId)).rejects.toBeInstanceOf(InventoryBusyError);
     release();
     expect((await rep.done).outcome).toBe('ok');
@@ -280,7 +280,7 @@ describe('InventoryRunner: options and repairs', () => {
 
   it('a cancelled repair keeps its partial counts and says who cancelled', async () => {
     const { runner, audit } = setup({ clips: clipsKind((ctx) => new Promise((r) => ctx.signal.addEventListener('abort', () => r({ ...repaired(1), stopped: 'paused' })))) });
-    const check = await runner.start('clips', who, { camera: true }).done;
+    const check = await runner.start('clips', who, { camera: true, cam: 'cam1' }).done;
     const rep = await runner.repair('clips', who, check.runId);
     expect(runner.cancel()).toBe(rep.runId);
     const r = await rep.done;
@@ -290,13 +290,13 @@ describe('InventoryRunner: options and repairs', () => {
 
   it('list() reads the saved reports once, and again after the next save', async () => {
     const { runner, dir } = setup({ stills: stillsKind(async () => result(1)) });
-    const a = await runner.start('stills', who).done;
+    const a = await runner.start('stills', who, { cam: 'cam1' }).done;
     expect((await runner.list()).stills.map((x) => x.runId)).toEqual([a.runId]);
     // A file that appears behind the runner's back is not seen until the next save.
     const other = { ...a, runId: 'stills-1-abcdef', startedAt: 1 };
     writeFileSync(join(dir, 'inventory', 'stills', 'stills-1-abcdef.json'), JSON.stringify(other));
     expect((await runner.list()).stills).toHaveLength(1);
-    const b = await runner.start('stills', who).done;
+    const b = await runner.start('stills', who, { cam: 'cam1' }).done;
     expect((await runner.list()).stills.map((x) => x.runId)).toEqual([b.runId, a.runId, 'stills-1-abcdef']);
   });
 });
@@ -311,7 +311,7 @@ describe('InventoryRunner: cache, restart, stop (review fixes)', () => {
 
   it('a save that lands while list() reads does not leave a stale list cached', async () => {
     const { runner } = setup({ stills: stillsKind(async () => result(1)) });
-    const a = await runner.start('stills', who).done;
+    const a = await runner.start('stills', who, { cam: 'cam1' }).done;
     (runner as unknown as { summaries: Map<string, unknown> }).summaries.clear();
     const priv = runner as unknown as { read: (f: string, id: string) => Promise<unknown> };
     const real = priv.read.bind(runner);
@@ -327,7 +327,7 @@ describe('InventoryRunner: cache, restart, stop (review fixes)', () => {
     };
     const inflight = runner.list();
     await new Promise((r) => setTimeout(r, 20));
-    const b = await runner.start('stills', who).done;
+    const b = await runner.start('stills', who, { cam: 'cam1' }).done;
     gate();
     await inflight;
     expect((await runner.list()).stills.map((x) => x.runId)).toEqual([b.runId, a.runId]);
@@ -335,7 +335,7 @@ describe('InventoryRunner: cache, restart, stop (review fixes)', () => {
 
   it('list() and listRepairs() return copies', async () => {
     const { runner } = setup({ clips: clips(async () => repaired(1)) });
-    const c = await runner.start('clips', who).done;
+    const c = await runner.start('clips', who, { cam: 'cam1' }).done;
     const rep = await runner.repair('clips', who, c.runId);
     await rep.done;
     (await runner.list()).clips.pop();
@@ -346,15 +346,15 @@ describe('InventoryRunner: cache, restart, stop (review fixes)', () => {
 
   it('drops the camera option for a kind without a compare', async () => {
     const { runner } = setup({ stills: stillsKind(async () => result(1)) });
-    const r = await runner.start('stills', who, { camera: true }).done;
+    const r = await runner.start('stills', who, { camera: true, cam: 'cam1' }).done;
     expect(r).not.toHaveProperty('options');
   });
 
   it('a fresh runner on the same folder lists and reads the earlier runs', async () => {
     const { runner, dir, audit } = setup({ clips: clips(async () => repaired(1)) });
-    const c = await runner.start('clips', who).done;
+    const c = await runner.start('clips', who, { cam: 'cam1' }).done;
     const rep = await (await runner.repair('clips', who, c.runId)).done;
-    const again = new InventoryRunner({ dir: join(dir, 'inventory'), audit, camera: () => 'cam1', checks: { clips: clips(async () => repaired(1)) } });
+    const again = new InventoryRunner({ dir: join(dir, 'inventory'), audit, checks: { clips: clips(async () => repaired(1)) } });
     expect((await again.list()).clips.map((x) => x.runId)).toEqual([c.runId]);
     expect((await again.listRepairs()).clips.map((x) => x.runId)).toEqual([rep.runId]);
     expect(await again.get(rep.runId)).toEqual(rep);
@@ -362,17 +362,17 @@ describe('InventoryRunner: cache, restart, stop (review fixes)', () => {
 
   it('a repair that throws a non-Error releases the lock and audits a failure', async () => {
     const { runner, audit } = setup({ clips: clips(async () => { throw 'boom'; }) });
-    const c = await runner.start('clips', who).done;
+    const c = await runner.start('clips', who, { cam: 'cam1' }).done;
     const r = await (await runner.repair('clips', who, c.runId)).done;
     expect(r).toMatchObject({ outcome: 'failed', error: 'boom', message: 'Clips repair failed: boom' });
     expect(runner.running()).toBeNull();
     expect(audit.list({ actions: ['inventory-repair'] }).records[0]).toMatchObject({ event: { outcome: 'failure' }, error: { message: 'boom' } });
-    expect(() => runner.start('clips', who)).not.toThrow();
+    expect(() => runner.start('clips', who, { cam: 'cam1' })).not.toThrow();
   });
 
   it('stop() during a repair cancels it, and a later repair is refused as stopping', async () => {
     const { runner, audit } = setup({ clips: clips((ctx) => new Promise((r) => ctx.signal.addEventListener('abort', () => r({ ...repaired(1), stopped: 'paused' })))) });
-    const c = await runner.start('clips', who).done;
+    const c = await runner.start('clips', who, { cam: 'cam1' }).done;
     const rep = await runner.repair('clips', who, c.runId);
     await runner.stop();
     expect(await rep.done).toMatchObject({ outcome: 'cancelled', cancelledBy: 'stop', stopped: 'paused' });

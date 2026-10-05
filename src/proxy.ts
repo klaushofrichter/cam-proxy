@@ -233,20 +233,26 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   } catch (err) {
     logger.warn({ err: (err as Error).message }, 'inventory_tmp_cleanup_failed');
   }
+  const worker = (cam: string) => {
+    const w = cams.get(cam);
+    if (!w) throw new Error(`camera ${cam} is not configured`);
+    return w;
+  };
+  const camSettings = (cam: string) => {
+    const c = cameraConfig(running, cam);
+    if (!c) throw new Error(`camera ${cam} is not configured`);
+    return c;
+  };
+  const cameraList = (cam: string) => ({ list: worker(cam).recordings.list, timeInfo: () => worker(cam).client.timeInfo() });
   const eventsDeps = {
     catalog,
-    settings: () => ({ cam: running.camera.id, eventsDays: running.retention.eventsDays, stream: running.ftp.stream, eventMaxOpenMin: running.events.maxOpenMin }),
-    camera: {
-      get list() {
-        return cams.first().recordings.list;
-      },
-      timeInfo: () => cams.first().client.timeInfo(),
-    },
+    settings: (cam: string) => ({ cam, eventsDays: running.retention.eventsDays, stream: camSettings(cam).ftp.stream, eventMaxOpenMin: running.events.maxOpenMin }),
+    camera: cameraList,
   };
+  // One runner for every camera; each run names its camera (spec 2026-10-05-multi-camera-host-design §3.1).
   const inventory = new InventoryRunner({
     dir: inventoryDir,
     audit,
-    camera: () => running.camera.id,
     checks: {
       stills: {
         label: 'Stills',
@@ -254,7 +260,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
           dataDir: running.server.dataDir,
           audit,
           catalog,
-          settings: () => ({ cam: running.camera.id, intervalS: running.stills.intervalS, stillsDays: running.retention.stillsDays, previewsDays: running.retention.previewsDays, keepHours: running.storage.keepHours.stills, enabled: running.stills.enabled }),
+          settings: (cam) => ({ cam, intervalS: camSettings(cam).stills.intervalS, stillsDays: running.retention.stillsDays, previewsDays: running.retention.previewsDays, keepHours: running.storage.keepHours.stills, enabled: camSettings(cam).stills.enabled }),
         }),
       },
       clips: {
@@ -264,27 +270,16 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
           dataDir: running.server.dataDir,
           catalog,
           audit,
-          settings: () => ({ cam: running.camera.id, clipsDays: running.retention.clipsDays, stream: running.ftp.stream, ftpEnabled: running.ftp.enabled, eventMaxOpenMin: running.events.maxOpenMin }),
-          camera: {
-      get list() {
-        return cams.first().recordings.list;
-      },
-      timeInfo: () => cams.first().client.timeInfo(),
-    },
+          settings: (cam) => ({ cam, clipsDays: running.retention.clipsDays, stream: camSettings(cam).ftp.stream, ftpEnabled: camSettings(cam).ftp.enabled, eventMaxOpenMin: running.events.maxOpenMin }),
+          camera: cameraList,
         }),
         repair: clipsRepair({
           catalog,
-          settings: () => ({ cam: running.camera.id, stream: running.ftp.stream, clipsDays: running.retention.clipsDays, maxGB: running.ftp.maxGB }),
-          get list() {
-            return cams.first().recordings.list;
-          },
-          get fetcher() {
-            return cams.first().recordings.fetcher;
-          },
-          get cache() {
-            return cams.first().recordings.cache;
-          },
-          indexer: () => cams.first().makeIndexer(false),
+          settings: (cam) => ({ cam, stream: camSettings(cam).ftp.stream, clipsDays: running.retention.clipsDays, maxGB: running.ftp.maxGB }),
+          list: (cam) => worker(cam).recordings.list,
+          fetcher: (cam) => worker(cam).recordings.fetcher,
+          cache: (cam) => worker(cam).recordings.cache,
+          indexer: (cam) => worker(cam).makeIndexer(false),
           tempDir: () => repairTmp,
           paused: () => storage.paused(),
           clipsBytes: () => storage.usage().clips.bytes,
@@ -572,6 +567,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       findCamera: () => discover(opts.discovery ?? {}),
       envFile: () => loaded.env.CAMPROXY_ENV_FILE || undefined,
       archive,
+      inventoryCamera: () => (cams.size === 1 ? cams.first().id : null),
     }),
   );
   // The admin UI. The files are public; every API call needs a session.

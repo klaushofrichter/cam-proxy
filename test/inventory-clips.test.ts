@@ -73,8 +73,8 @@ function camera(o: { months: Record<string, number[]>; recs: Record<string, Reco
   return { deps, searched };
 }
 const settings = (o: Partial<ClipsSettings> = {}): ClipsSettings => ({ cam: 'cam1', clipsDays: 2, stream: 'sub', ftpEnabled: true, eventMaxOpenMin: 10, ...o });
-const deps = (cam: CameraListDeps, o: Partial<ClipsInventoryDeps> = {}): ClipsInventoryDeps => ({ dataDir: dir, catalog, settings: () => settings(), camera: cam, ...o });
-const ctx = (o: Partial<CheckContext> = {}): CheckContext => ({ signal: new AbortController().signal, progress: () => undefined, now: NOW, options: {}, ...o });
+const deps = (cam: CameraListDeps, o: Partial<ClipsInventoryDeps> = {}): ClipsInventoryDeps => ({ dataDir: dir, catalog, settings: () => settings(), camera: () => cam, ...o });
+const ctx = (o: Partial<CheckContext> = {}): CheckContext => ({ signal: new AbortController().signal, progress: () => undefined, now: NOW, cam: 'cam1', options: {}, ...o });
 
 // The window is 2026-09-30T00:00Z (clipsDays 2) to NOW.
 function fixture() {

@@ -36,8 +36,8 @@ export interface ClipsSettings { cam: string; clipsDays: number; stream: Stream;
 export interface ClipsInventoryDeps {
   dataDir: string;
   catalog: Catalog;
-  settings: () => ClipsSettings; // read when a run starts
-  camera: CameraListDeps;
+  settings: (cam: string) => ClipsSettings; // read when a run starts, for the run's camera
+  camera: (cam: string) => CameraListDeps;
   // The daily storage records tell whether the budget (or ftp.maxGB) has
   // been pruning clips, as for the stills; without it, never assumed.
   audit?: Pick<AuditLog, 'list'>;
@@ -71,7 +71,7 @@ async function exists(file: string): Promise<boolean> {
 
 export function clipsCheck(d: ClipsInventoryDeps): Check {
   return async (ctx): Promise<CheckResult> => {
-    const s = d.settings();
+    const s = d.settings(ctx.cam);
     const now = ctx.now;
     const from = dayStart(now - s.clipsDays * DAY);
     const to = now;
@@ -178,7 +178,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     const cameraTo = now - SETTLE_MS;
     let listing;
     try {
-      listing = await listCamera(d.camera, {
+      listing = await listCamera(d.camera(ctx.cam), {
         from, to, stream: s.stream, signal: ctx.signal,
         progress: (done, total, date) => ctx.progress({ phase: 'camera', done, total, note: date }),
       });

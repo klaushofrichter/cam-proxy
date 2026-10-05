@@ -33,7 +33,7 @@ async function writeMinute(s: MinuteStore, k: number, slots: number[], intervalS
 }
 const settings = (o: Partial<StillsSettings> = {}): StillsSettings => ({ cam: 'cam1', intervalS: 1, stillsDays: 7, previewsDays: 14, keepHours: 24, ...o });
 const deps = (o: Partial<StillsInventoryDeps> = {}): StillsInventoryDeps => ({ dataDir: dir, settings: () => settings(), audit, catalog, ...o });
-const ctx = (o: Partial<CheckContext> = {}): CheckContext => ({ signal: new AbortController().signal, progress: () => undefined, now: NOW, ...o });
+const ctx = (o: Partial<CheckContext> = {}): CheckContext => ({ signal: new AbortController().signal, progress: () => undefined, now: NOW, cam: 'cam1', ...o });
 // A pack written by hand: `footer` is the JSON footer (any shape), `stills` bytes before it.
 function rawPack(file: string, footer: unknown, stills = 0) {
   const json = Buffer.from(JSON.stringify(footer));

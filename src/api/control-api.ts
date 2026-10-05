@@ -98,6 +98,8 @@ interface ControlDeps {
   envFile: () => string | undefined;
   // The Archive (spec 2026-10-05-archive-design): the Status card, Clear the Archive.
   archive: Pick<Archive, 'status' | 'clear'>;
+  // The camera an inventory runs on: the only one, or null with several (multi-camera phase 1).
+  inventoryCamera: () => string | null;
 }
 
 // The effective configuration for the UI: value (what runs), source, restart
@@ -539,8 +541,10 @@ export function controlApi(d: ControlDeps): express.Router {
         if (typeof kind !== 'string' || !kinds.includes(kind)) return fail(400, 'invalid', `kind is one of: ${kinds.join(', ')}`);
         if (camera !== undefined && typeof camera !== 'boolean') return fail(400, 'invalid', 'camera is true or false');
         if (camera && !d.inventory.checks[kind]?.camera) return fail(400, 'invalid', `the ${kind} inventory has no camera compare`);
+        const cam = d.inventoryCamera();
+        if (cam === null) return fail(400, 'camera_required', 'several cameras: use /control/cameras/:cam/actions/inventory');
         try {
-          const { runId } = d.inventory.start(kind, requester, { camera: camera === true });
+          const { runId } = d.inventory.start(kind, requester, { camera: camera === true, cam });
           return void res.status(202).json({ runId });
         } catch (err) {
           if (!inventoryRefused(err)) throw err;

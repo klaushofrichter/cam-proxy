@@ -24,6 +24,8 @@ export interface AuditInput {
   error?: string;
   details?: Record<string, unknown>;
   ecs?: Record<string, unknown>;
+  // The camera the record concerns (spec 2026-10-05-multi-camera-host-design §5.2).
+  camera?: string;
 }
 export type AuditRecord = Record<string, unknown> & {
   '@timestamp': string;
