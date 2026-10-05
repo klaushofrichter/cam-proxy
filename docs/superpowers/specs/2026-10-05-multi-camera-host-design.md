@@ -803,20 +803,76 @@ cross the route (adding a camera by IP works).
 
 ### 13.3 The home router's static route (finding)
 
-- The home router is an ASUS on stock firmware (memory cam1-cert-setup).
-  Stock ASUSWRT has **LAN → Route → "Enable static routes"** with a list of
-  network/netmask/gateway/metric/interface, which is what is needed
-  (`192.168.60.0/24` via the host's LAN address, interface LAN). This is
-  from general knowledge of the firmware, not checked on Klaus's model: to
-  verify (§17).
-- It is a **hairpin route**: a LAN client sends to the router, the router
-  forwards back out the LAN port to the host; the camera's reply goes from
-  the host straight to the client. The host sees both directions (its
-  conntrack is complete); the router sees only one. ASUS's SPI firewall
-  filters WAN traffic, so this normally works, but it is the thing to test
-  first (a `curl` from the Mac to a camera, then from a cluster pod).
-- Clients may receive ICMP redirects from the router and then talk to the
-  host directly; that is harmless.
+**The router:** ASUS **RT-AX86U**, stock firmware **3.0.0.4.388_24436**
+(Klaus, 2026-10-05).
+
+**Where the route goes (stock Asuswrt 388).** This follows ASUS's
+documentation of the stock web UI. Every detail marked *(verify)* is still
+**to verify on the device**:
+
+1. Advanced Settings → **LAN** → tab **Route**.
+2. **Enable static routes: Yes** *(verify the label and that the switch
+   exists in 388_24436)*.
+3. Add one row to the static route list:
+   - **Network/Host IP:** `192.168.60.0`
+   - **Netmask:** `255.255.255.0`
+   - **Gateway:** the mini PC's LAN address (e.g. `192.168.1.230`)
+   - **Metric:** empty or `1` *(verify whether the field is required)*
+   - **Interface:** `LAN`
+4. Press **+** to add the row, then **Apply**. *(Verify that the route
+   applies without a router reboot and survives one.)*
+
+Whether the 388 UI also offers to push the route to clients by DHCP (option
+121) is *to verify on the device*. The design doesn't need it.
+
+**The hairpin.** A LAN client without its own route sends camera traffic to
+the router. The router forwards it back out of its LAN port to the mini PC,
+and the camera's reply goes from the mini PC straight to the client. The
+mini PC sees both directions, so its conntrack is complete; the router sees
+only the client's side. Stock Asuswrt filters WAN traffic with its SPI
+firewall, not LAN to LAN, so this usually works. Whether the RT-AX86U
+forwards LAN to LAN through its hardware acceleration without dropping the
+one-sided flow is *to verify on the device*. The test below checks it.
+
+**Test procedure** (P5; run it before anything else depends on the route):
+
+1. **From a LAN client** (the Mac), with no route of its own:
+   - `ping -c 3 192.168.60.13` (a camera)
+   - `curl -vk --connect-timeout 5 https://192.168.60.13/` (TLS handshake
+     and an answer from the camera's web server)
+   - `traceroute -n 192.168.60.13`: expect the router, then the mini PC,
+     then the camera. If an ICMP redirect was taken, the router hop may be
+     missing.
+2. **From a cluster node** (via the kube-setup session, which owns the
+   nodes): the same three commands, then the same `curl` from a pod in the
+   cams namespace. This is what cams will do; it needs the egress rule from
+   §13.4 first.
+3. **Check the reply path on the mini PC:** `tcpdump -ni enp1s0 host
+   192.168.60.13` and `tcpdump -ni enp2s0 host <client>` during the curl.
+   Expect the SYN in on `enp1s0` and out on `enp2s0`, and the SYN-ACK in on
+   `enp2s0` and out on `enp1s0` straight to the client's MAC (not the
+   router's). `conntrack -L -d 192.168.60.13` shows the flow as ASSURED.
+4. **If replies are dropped,** look in this order:
+   - the mini PC's nftables counters (the `forward` chain's drop counter;
+     `ct state established` must match the replies) and
+     `sysctl net.ipv4.ip_forward`;
+   - `rp_filter` on the mini PC (`net.ipv4.conf.*.rp_filter`): strict mode
+     can drop the client's packets if the client address looks like it
+     belongs on another interface; set it to 2 (loose) on `enp1s0`;
+   - **ICMP redirects:** the router may tell the client "use the mini PC
+     directly". That is harmless if the client follows it, and the result
+     is the same. If the client ignores it while the router stops
+     forwarding after sending it, set `send_redirects` off on the router
+     *(verify whether the stock UI allows it; it probably doesn't)*;
+   - **the router's LAN-to-LAN forwarding:** if a `tcpdump` on the mini PC
+     shows no SYN at all, the router doesn't forward. Check that the route
+     is listed under Network Tools / the routing table *(verify where 388
+     shows it)*, and try with NAT acceleration off (LAN → Switch Control)
+     *(verify the setting's name)*;
+   - a client with a stateful firewall (rare on the LAN) that drops the
+     SYN-ACK because it comes from the mini PC's MAC.
+5. **Decide:** if steps 1 and 2 pass and the route survives a router reboot,
+   keep the route. If not, use the fallbacks below in order.
 
 Alternatives if the router can't (ranked):
 
@@ -923,9 +979,9 @@ series; releases follow the usual rule (release when ready).
 
 ## 17. Open questions for Klaus
 
-1. **Router:** does your ASUS model's LAN → Route page take the static route
-   `192.168.60.0/24` via the mini PC, and is a quick hairpin test OK? If
-   not, is 1:1 NAT on the host (§13.3, alternative 1) acceptable?
+1. **Router (RT-AX86U, 388_24436):** may the static route `192.168.60.0/24`
+   via the mini PC be added, and the hairpin test of §13.3 be run? If it
+   fails, is 1:1 NAT on the host (§13.3, alternative 1) acceptable?
 2. **cam1:** stays on the Pi (A, default) or moves to the mini PC (B)? And
    may cam1 switch from its Let's Encrypt certificate to the Pi's site CA
    (retiring `cam1-cert-push` and its alerts)?
