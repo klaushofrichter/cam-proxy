@@ -166,6 +166,16 @@ describe('one proxy, three cameras (spec §15)', () => {
     expect((await request(p.base).get(`/api/cameras/cam4/events/${e.id}/analysis.jpg`).set(auth())).status).toBe(404);
   });
 
+  // Live test 2026-10-05: the Status page's Events card counted every camera's events.
+  it('stats: events stored per camera, summing to the host totals', async () => {
+    const st = (await request(p.base).get('/control/stats').set(admin())).body;
+    const by = st.events.byCamera as Record<string, Record<string, number>>;
+    expect(by.cam4.person).toBeGreaterThan(0);
+    const sum: Record<string, number> = {};
+    for (const kinds of Object.values(by)) for (const [k, n] of Object.entries(kinds)) sum[k] = (sum[k] ?? 0) + n;
+    expect(sum).toEqual(st.events.stored);
+  });
+
   it('health: one block per camera; the top level is the first camera', async () => {
     const h = (await request(p.base).get('/api/local/health')).body;
     expect(h.schema).toBe(1);

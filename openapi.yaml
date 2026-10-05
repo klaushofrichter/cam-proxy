@@ -694,7 +694,7 @@ paths:
     get:
       summary: Disk, events, stream log, storage budget (spec §13)
       responses:
-        '200': { description: '{ disk: {catalog, stills, previews, clips, recordings} (each {bytes, files, oldest, newest, growthPerDay}), events: {stored (live events per kind, recovered ones left out)}, stream: {rows, lastId}, sse: {clients}, storage: {budget, used, daysUntilFull, paused} }' }
+        '200': { description: '{ disk: {catalog, stills, previews, clips, recordings} (each {bytes, files, oldest, newest, growthPerDay}), events: {stored (live events per kind, recovered ones left out), byCamera (the same per camera id)}, stream: {rows, lastId}, sse: {clients}, storage: {budget, used, daysUntilFull, paused} }' }
   /control/inventory:
     get:
       summary: The running inventory or repair and the last 10 runs per kind, newest first (spec 2026-10-02-inventory-design)

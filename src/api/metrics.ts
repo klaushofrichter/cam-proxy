@@ -29,6 +29,14 @@ export function eventsStored(c: Catalog): Record<string, number> {
   return Object.fromEntries(rows.map((r) => [r.kind, r.n]));
 }
 
+// The same per camera (the Status page's Events card shows the picked camera's).
+export function eventsStoredByCamera(c: Catalog): Record<string, Record<string, number>> {
+  const rows = c.db.prepare("SELECT cam, kind, COUNT(*) AS n FROM events WHERE source != 'recovered' GROUP BY cam, kind").all() as { cam: string; kind: string; n: number }[];
+  const out: Record<string, Record<string, number>> = {};
+  for (const r of rows) (out[r.cam] ??= {})[r.kind] = r.n;
+  return out;
+}
+
 // The phase 1 metrics (spec §13). Counts only, never event content.
 export function createMetrics(s: MetricsSources) {
   const registry = new Registry();

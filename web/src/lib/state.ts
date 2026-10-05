@@ -12,7 +12,7 @@ import type { Status } from './status-types';
 export interface Usage { bytes: number; files: number; oldest: number | null; newest: number | null; growthPerDay: number }
 export interface Stats {
   disk: { catalog: Usage; audit: Usage; stills: Usage; previews: Usage; clips: Usage; recordings?: Usage; free: number; size: number };
-  events: { stored: Record<string, number> };
+  events: { stored: Record<string, number>; byCamera?: Record<string, Record<string, number>> };
   stream: { rows: number; lastId: number };
   sse: { clients: number };
   storage: { budget: number; used: number; daysUntilFull: number | null; paused: boolean };

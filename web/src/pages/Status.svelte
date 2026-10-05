@@ -85,7 +85,7 @@
           <dt>Source</dt><dd>{cs.intake.source}</dd>
           <dt>Re-subscriptions</dt><dd>{cs.intake.resubscribes}</dd>
           {#if cs.intake.lastError}<dt>Last error</dt><dd class="bad">{cs.intake.lastError}</dd>{/if}
-          {#each Object.entries($stats.events.stored) as [kind, n] (kind)}<dt>{kind} events</dt><dd>{n}</dd>{/each}
+          {#each Object.entries(cs.id && $stats.events.byCamera ? ($stats.events.byCamera[cs.id] ?? {}) : $stats.events.stored) as [kind, n] (kind)}<dt>{kind} events</dt><dd>{n}</dd>{/each}
         </dl>
       </div>
       {#each ($status.analytics ?? []).filter((a) => a.enabled) as a (a.id)}
