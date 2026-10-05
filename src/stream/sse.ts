@@ -19,7 +19,8 @@ function filterFrom(req: Request): Filter | string {
   if (bad) return `unknown type: ${bad}`;
   // ?cam=a,b: these cameras; empties dropped, duplicates once; an unknown id
   // matches nothing (spec 2026-10-05-multi-camera-host-design §6.2).
-  const cams = list(req.query.cam);
+  // A repeated ?cam=a&cam=b (an array) counts as a,b.
+  const cams = list(Array.isArray(req.query.cam) ? req.query.cam.filter((v) => typeof v === 'string').join(',') : req.query.cam);
   return { types: types as StreamType[], cams: cams?.length ? [...new Set(cams)] : undefined, kinds: list(req.query.kinds) };
 }
 

@@ -247,6 +247,18 @@ describe('several cameras on one stream (spec §6.2)', () => {
     expect(u.ids()).toEqual([]);
   });
 
+  // Review: a repeated ?cam=a&cam=b arrives as an array; it filters as a,b would.
+  it('a repeated cam parameter filters to those cameras', async () => {
+    await serve();
+    ev2('cam3', 1);
+    ev2('cam4', 2);
+    ev2('cam5', 3);
+    const c = connect('/stream?cam=cam3&cam=cam5&since=0');
+    await c.until(() => c.events.length >= 2);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(c.ids()).toEqual([1, 3]);
+  });
+
   it('live stills honour the list too', async () => {
     await serve();
     const c = connect('/stream?types=still&cam=cam4');
