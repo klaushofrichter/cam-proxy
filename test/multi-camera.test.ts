@@ -89,6 +89,23 @@ describe('one proxy, three cameras (spec §15)', () => {
     expect(sims[1].sim.engine.counters.baichuanDownloads).toBeGreaterThan(0);
   }, 60_000);
 
+  // Review: a refusal names no camera, points to what exists today, and is audited (also for actions with their own records).
+  it('camera_required: audited without a camera, and the detail points to what exists', async () => {
+    for (const name of ['camera-test', 'camera-reboot']) {
+      const r = await request(p.base).post(`/control/actions/${name}`).set(admin()).send({});
+      expect([r.status, r.body.error]).toEqual([400, 'camera_required']);
+      expect(r.body.detail).not.toMatch(/\/control\/cameras\/:cam/);
+      await until(() => !!p.proxy.audit.find((x) => x.event.action === 'control-action' && (x.cam_proxy as { action?: string } | undefined)?.action === name));
+      const rec = p.proxy.audit.find((x) => x.event.action === 'control-action' && (x.cam_proxy as { action?: string } | undefined)?.action === name)!;
+      expect(rec.cam_proxy).toMatchObject({ result: 'camera_required' });
+      expect(rec.labels).toBeUndefined();
+    }
+    const inv = await request(p.base).post('/control/actions/inventory').set(admin()).send({ kind: 'stills' });
+    expect(inv.body.detail).not.toMatch(/\/control\/cameras\/:cam/);
+    const n = await request(p.base).put('/control/camera/name').set(admin()).send({ name: 'X' });
+    expect(n.body.detail).not.toMatch(/\/control\/cameras\/:cam/);
+  });
+
   it('the old camera actions answer camera_required; host actions work', async () => {
     // The camera's name is a camera action too (spec §6.3): never the first camera's by accident.
     const n = await request(p.base).put('/control/camera/name').set(admin()).send({ name: 'Renamed' });

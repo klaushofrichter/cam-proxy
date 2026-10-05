@@ -248,6 +248,9 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
 // they need a camera (the routes of phase 2). The host actions work as before.
 export const CAMERA_ACTIONS = new Set(['camera-test', 'onvif-resubscribe', 'camera-ftp-setup', 'camera-ftp-test', 'camera-ftp-off', 'restart', 'camera-reboot', 'camera-powercycle', 'camera-poe-on', 'poe-switch-read', 'inventory', 'inventory-repair', 'inventory-cancel']);
 
+// What a camera action answers on a proxy with several cameras (spec §6.3; the camera routes are phase 2).
+const CAMERA_REQUIRED = 'several cameras: camera actions here come with multi-camera phase 2 (GET /control/cameras shows each camera; host actions work)';
+
 // Actions that write their own audit records (no generic control-action);
 // a new action that audits itself goes here too.
 const OWN_AUDIT = new Set(['camera-reboot', 'camera-powercycle', 'camera-poe-on', 'restart-proxy', 'inventory', 'inventory-repair', 'camera-address', 'archive-clear']);
@@ -319,7 +322,7 @@ export function controlApi(d: ControlDeps): express.Router {
   // was asked. The stream message follows from the poller.
   r.put('/camera/name', async (req, res) => {
     // Several cameras: the name is a camera's (the camera routes of phase 2; spec §6.3).
-    if (d.cameraCount() > 1) return void res.status(400).json({ error: 'camera_required', detail: 'several cameras: the name needs a camera (/control/cameras/:cam/name)' });
+    if (d.cameraCount() > 1) return void res.status(400).json({ error: 'camera_required', detail: 'several cameras: renaming a camera here comes with multi-camera phase 2; set cameras[].name in config.json (GET /control/cameras shows each camera)' });
     const name: unknown = req.body?.name;
     const problem = cameraNameProblem(name);
     if (problem) return void res.status(400).json({ error: 'invalid_name', reason: problem });
@@ -445,7 +448,7 @@ export function controlApi(d: ControlDeps): express.Router {
         const done = res.writableFinished;
         const ok = done && res.statusCode < 400;
         const result = !done ? 'aborted' : ok ? 'ok' : String((res.locals.errorCode as string | undefined) ?? res.statusCode);
-        d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: !done ? 'unknown' : ok ? 'success' : 'failure', user: 'admin', ...who(req), message: `Control action ${name}: ${result}`, details: { action: name, result, requestedBy }, ...(CAMERA_ACTIONS.has(name) ? { camera: d.cameraId() } : {}) });
+        d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: !done ? 'unknown' : ok ? 'success' : 'failure', user: 'admin', ...who(req), message: `Control action ${name}: ${result}`, details: { action: name, result, requestedBy }, ...(CAMERA_ACTIONS.has(name) && d.cameraCount() === 1 ? { camera: d.cameraId() } : {}) });
       });
     }
     const fail = (status: number, error: string, detail?: string, extra: object = {}) => {
@@ -453,7 +456,11 @@ export function controlApi(d: ControlDeps): express.Router {
       res.status(status).json({ error, ...(detail ? { detail } : {}), ...extra });
     };
     // Several cameras: a camera action names its camera (Ruling P1-12; the routes are phase 2).
-    if (CAMERA_ACTIONS.has(name) && d.cameraCount() > 1) return fail(400, 'camera_required', 'several cameras: this action needs a camera (/control/cameras/:cam/actions/…)');
+    if (CAMERA_ACTIONS.has(name) && d.cameraCount() > 1) {
+      // Actions with their own records are audited here; the others by the close handler above. No camera: none was named.
+      if (OWN_AUDIT.has(name)) d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: 'failure', user: 'admin', ...who(req), message: `Control action ${name}: camera_required`, details: { action: name, result: 'camera_required', requestedBy } });
+      return fail(400, 'camera_required', CAMERA_REQUIRED);
+    }
     // The reboot and the power-cycle share a cooldown (#83, #85).
     const tooSoon = (a: TooSoon) => {
       res.setHeader('Retry-After', String(a.retryAfterS));
@@ -586,7 +593,7 @@ export function controlApi(d: ControlDeps): express.Router {
         if (camera !== undefined && typeof camera !== 'boolean') return fail(400, 'invalid', 'camera is true or false');
         if (camera && !d.inventory.checks[kind]?.camera) return fail(400, 'invalid', `the ${kind} inventory has no camera compare`);
         const cam = d.inventoryCamera();
-        if (cam === null) return fail(400, 'camera_required', 'several cameras: use /control/cameras/:cam/actions/inventory');
+        if (cam === null) return fail(400, 'camera_required', CAMERA_REQUIRED);
         try {
           const { runId } = d.inventory.start(kind, requester, { camera: camera === true, cam });
           return void res.status(202).json({ runId });
