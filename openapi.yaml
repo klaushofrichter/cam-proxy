@@ -554,9 +554,26 @@ paths:
         Admin token or admin session. Writes with the session cookie need
         `X-CamProxy-UI: 1`. A client token answers 403 `{"error":"admin_only"}`.
       responses:
-        '200': { description: '{ version, camera (incl. name (the camera''s name; the configured camera.name until the camera was read), nameSource (camera or config), webUiUrl, reboot {kind, requestedAt, confirmed, phase, offAt, endedAt, downSec} or null, poeSwitch {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state (on, off, elsewhere, server_differs, not_set_up, unknown), checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result (ok, offline, refused, auth, timeout, protocol, not_found), stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null, cache: {bytes, files, capBytes}}, analytics: [provider state], analyticsUnmapped: top 20 unmapped objects [{mid, name, count, lastSeen}], health: the health summary, as GET /api/local/health, archive: as GET /api/archive/status }' }
+        '200': { description: '{ version, camera (incl. name (the camera''s name; the configured camera.name until the camera was read), nameSource (camera or config), webUiUrl, reboot {kind, requestedAt, confirmed, phase, offAt, endedAt, downSec} or null, poeSwitch {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state (on, off, elsewhere, server_differs, not_set_up, unknown), checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result (ok, offline, refused, auth, timeout, protocol, not_found), stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null, cache: {bytes, files, capBytes}}, analytics: [provider state], analyticsUnmapped: top 20 unmapped objects [{mid, name, count, lastSeen}], health: the health summary, as GET /api/local/health, archive: as GET /api/archive/status, cameras: every camera''s block {id, camera, intake, stream, ftp, recordings} in config order (the top-level camera, intake, stream, ftp and recordings are the first camera''s) }' }
         '401': { description: not signed in }
         '403': { description: admin_only, or csrf }
+  /control/cameras:
+    get:
+      summary: Every camera's status block, in config order (spec 2026-10-05-multi-camera-host-design §6.3) (admin)
+      responses:
+        '200': { description: 'A list of {id, camera, intake, stream, ftp, recordings}, each as in GET /control/status' }
+        '401': { description: not signed in }
+        '403': { description: admin_only }
+  /control/cameras/{cam}/status:
+    get:
+      summary: One camera's status block (admin)
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: '{id, camera, intake, stream, ftp, recordings}' }
+        '401': { description: not signed in }
+        '404': { description: not_found }
+        '503': { description: camera_restarting (Retry-After) }
   /control/camera/name:
     put:
       summary: Renames the camera, on the camera (admin)
@@ -700,7 +717,7 @@ paths:
       responses:
         '200': { description: 'camera-test and retention-run results; camera-ftp-setup/-off: {ftp} (the camera''s settings, no password); camera-ftp-test: {ok, rspCode}; poe-switch-read: {at, port, index, poe, watts, link, sn, firmware}; camera-poe-on: the same plus wasOn; inventory-cancel: { cancelled, runId }; find-camera: { devices: [{endpoint, address (XAddr host), sender (UDP source), mismatch, useAddress (sender on a mismatch), xaddrs, name, hardware, model, current}], tookMs, envFile: {writable, path?, reason?} }; camera-address: { host, previous, key, backup, restart: true }; archive-clear: { cleared, bytes }' }
         '202': { description: 'started (onvif-resubscribe, restart, restart-proxy); camera-reboot: { confirmed } (false: the camera dropped the connection after receiving the request); camera-powercycle: { offAt, onAt, watts } once PoE is back on; inventory, inventory-repair: { runId }' }
-        '400': { description: 'archive-clear: invalid (no count); camera-address: invalid (not an address or name with an optional :port); inventory: invalid (an unknown or missing kind, camera not a boolean, or camera for a kind without a camera compare); inventory-repair: invalid (a kind without a repair, or runId not a run id)' }
+        '400': { description: 'archive-clear: invalid (no count); camera-address: invalid (not an address or name with an optional :port); inventory: invalid (an unknown or missing kind, camera not a boolean, or camera for a kind without a camera compare); inventory-repair: invalid (a kind without a repair, or runId not a run id); a camera action (camera-test, onvif-resubscribe, camera-ftp-*, restart, camera-reboot, camera-powercycle, camera-poe-on, poe-switch-read, inventory*) on a proxy with several cameras: camera_required' }
         '404': { description: 'unknown action; inventory-repair: not_found (no such check run of the kind)' }
         '409': { description: 'archive-clear: count_mismatch { count } (count is not the number of clips in the Archive now); camera-address: not_available { detail, line } (CAMPROXY_ENV_FILE not set, the file fails the path guard, or its directory is not writable; line is what to add by hand); not_configured (camera-ftp-setup/-test: ftp.publicHost or the FTP password is not set; camera-powercycle, poe-switch-read: no switch or no CAMPROXY_POE_SWITCH_PASSWORD); camera-powercycle, poe-switch-read: switch_busy (someone is logged in to the switch''s web UI), no_power (the port has PoE off or draws 0 W; nothing switched); inventory, inventory-repair: inventory_busy { runId } (one runs already); inventory-repair: report_stale (the check run is an hour old or more), not_repairable (it did not finish, did not compare with the camera, or found nothing missing locally)' }
         '503': { description: 'stopping (inventory, inventory-repair: the proxy is stopping and starts no run)' }

@@ -425,6 +425,15 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   };
   const ftpStatus = () => ftpStatusOf(cams.first());
   const streamStatus = () => cams.first().streamStatus();
+  // One camera's block for the control API (spec 2026-10-05-multi-camera-host-design §6.3).
+  const cameraStatusBlock = (w: CameraWorker) => ({
+    id: w.id,
+    camera: { ...w.status.state(), name: w.name(), nameSource: w.nameSource(), webUiUrl: cameraWebUi(w.cam()), reboot: w.reboot.state(), poeSwitch: w.poeSwitch.status() },
+    intake: w.intake.state(),
+    stream: w.streamStatus(),
+    ftp: ftpStatusOf(w),
+    recordings: w.recordings.status(),
+  });
 
   // The health summary (spec 2026-10-03-health-summary-design): the host
   // figures once a minute, the rest as it is now; thresholds read on use.
@@ -530,10 +539,10 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       running: () => running,
       catalog,
       log,
-      camera: () => {
-        const w = cams.first();
-        return { ...w.status.state(), name: w.name(), nameSource: w.nameSource(), webUiUrl: cameraWebUi(w.cam()), reboot: w.reboot.state(), poeSwitch: w.poeSwitch.status() };
-      },
+      camera: () => cameraStatusBlock(cams.first()).camera,
+      cameras: cams,
+      cameraStatus: () => cams.list().map(cameraStatusBlock),
+      cameraCount: () => cams.size,
       // Writes through to the camera and reads back; the poller (and so the
       // stream message) knows the new name at once.
       cameraName: {

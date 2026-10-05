@@ -21,6 +21,8 @@ import type { Storage } from '../storage';
 import type { StreamLog } from '../stream/log';
 import { AuditQueryError, type AuditLog, type Outcome } from '../audit/audit-log';
 import { clientIp, tokenMatches } from './auth';
+import { cameraParam } from './camera-param';
+import type { CameraRegistry } from '../cameras/registry';
 import { RefusalThrottle } from '../audit/throttle';
 import { isAuditAction } from '../audit/actions';
 import { DAY, dayStart } from '../time-units';
@@ -51,6 +53,16 @@ interface FtpStatus {
   // arriving; null while FTP is off in the proxy.
   camera: CameraFtpView | null;
   stalled: ClipsStall | null;
+}
+
+// One camera's status, as /control/status gives the first camera's (spec 2026-10-05-multi-camera-host-design §6.3).
+export interface CameraStatusBlock {
+  id: string;
+  camera: ReturnType<ControlDeps['camera']>;
+  intake: IntakeState;
+  stream: ReturnType<ControlDeps['stream']>;
+  ftp: FtpStatus;
+  recordings: RecordingsStatus;
 }
 
 interface ControlDeps {
@@ -103,6 +115,10 @@ interface ControlDeps {
   inventoryCamera: () => string | null;
   // The camera the camera routes act on: the only (first) one in multi-camera phase 1.
   cameraId: () => string;
+  // Every camera's status block, config order; the number of cameras (spec 2026-10-05-multi-camera-host-design §6.3).
+  cameras: CameraRegistry;
+  cameraStatus: () => CameraStatusBlock[];
+  cameraCount: () => number;
 }
 
 // The effective configuration for the UI: value (what runs), source, restart
@@ -227,8 +243,10 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
   return r;
 }
 
-// Actions on the camera: their control-action record names it (spec 2026-10-05-multi-camera-host-design §6.3).
-const CAMERA_ACTIONS = new Set(['camera-test', 'onvif-resubscribe', 'camera-ftp-setup', 'camera-ftp-test', 'camera-ftp-off', 'restart', 'camera-reboot', 'camera-powercycle', 'camera-poe-on', 'poe-switch-read', 'inventory', 'inventory-repair', 'inventory-cancel']);
+// The camera actions (spec 2026-10-05-multi-camera-host-design §6.3): their
+// control-action record names the camera; on a proxy with several cameras
+// they need a camera (the routes of phase 2). The host actions work as before.
+export const CAMERA_ACTIONS = new Set(['camera-test', 'onvif-resubscribe', 'camera-ftp-setup', 'camera-ftp-test', 'camera-ftp-off', 'restart', 'camera-reboot', 'camera-powercycle', 'camera-poe-on', 'poe-switch-read', 'inventory', 'inventory-repair', 'inventory-cancel']);
 
 // Actions that write their own audit records (no generic control-action);
 // a new action that audits itself goes here too.
@@ -251,6 +269,8 @@ function envFileState(path: string | undefined): { writable: boolean; reason?: s
 // The control API (spec §11); admin access is checked by the caller.
 export function controlApi(d: ControlDeps): express.Router {
   const r = express.Router();
+  // :cam → its worker, 404 or 503 while it restarts (spec §3.3, §6.1).
+  r.param('cam', cameraParam(d.cameras, 'admin'));
   let restartRequested = false; // a restart-proxy request was recorded (the stop follows)
   const invalid = (res: Response, err: unknown) => {
     if (err instanceof ConfigError) return void res.status(400).json({ error: 'invalid', detail: err.message });
@@ -280,7 +300,16 @@ export function controlApi(d: ControlDeps): express.Router {
       analyticsUnmapped: d.unmapped.list(20),
       health,
       archive: d.archive.status(),
+      cameras: d.cameraStatus(),
     });
+  });
+
+  // Every camera's status block (spec §6.3); one camera's.
+  r.get('/cameras', (_req, res) => void res.json(d.cameraStatus()));
+  r.get('/cameras/:cam/status', (req, res) => {
+    const b = d.cameraStatus().find((x) => x.id === req.params.cam);
+    if (!b) return void res.status(404).json({ error: 'not_found' });
+    res.json(b);
   });
 
   // The camera's name (camera-name design): stored on the camera only.
@@ -421,6 +450,8 @@ export function controlApi(d: ControlDeps): express.Router {
       res.locals.errorCode = error;
       res.status(status).json({ error, ...(detail ? { detail } : {}), ...extra });
     };
+    // Several cameras: a camera action names its camera (Ruling P1-12; the routes are phase 2).
+    if (CAMERA_ACTIONS.has(name) && d.cameraCount() > 1) return fail(400, 'camera_required', 'several cameras: this action needs a camera (/control/cameras/:cam/actions/…)');
     // The reboot and the power-cycle share a cooldown (#83, #85).
     const tooSoon = (a: TooSoon) => {
       res.setHeader('Retry-After', String(a.retryAfterS));
