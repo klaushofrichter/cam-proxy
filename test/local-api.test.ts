@@ -108,10 +108,11 @@ describe('GET /api/local/health on the proxy', () => {
     const h = r.body as HealthSummary;
     expect(h.schema).toBe(1);
     expect(h.platform).toEqual({ pi: true, model: 'Raspberry Pi 4 Model B Rev 1.5', hostStats: true });
-    expect(h.items.map((i) => i.id)).toEqual(['camera', 'stream', 'events', 'ftp', 'storage', 'disk', 'cpuTemp', 'underVoltage', 'inventory', 'version']);
+    // archive: on by default (spec 2026-10-05-archive-design §6).
+    expect(h.items.map((i) => i.id)).toEqual(['camera', 'stream', 'events', 'ftp', 'storage', 'disk', 'archive', 'cpuTemp', 'underVoltage', 'inventory', 'version']);
     expect(h.items.find((i) => i.id === 'disk')).toMatchObject({ value: 73.7, problem: false });
     expect(h.items.find((i) => i.id === 'cpuTemp')).toMatchObject({ value: 53.6, problem: false });
-    expect(h.thresholds).toEqual({ diskPercent: 90, tempC: 75, ftpStalledHours: 6 });
+    expect(h.thresholds).toEqual({ diskPercent: 90, tempC: 75, ftpStalledHours: 6, archiveWarnPercent: 50 });
     expect(h.camera.poeSwitch).toEqual({ model: 'sscpoe-web', port: 8 });
     expect(h.version).toBe('dev');
     expect(typeof h.startedAt).toBe('number');
@@ -170,7 +171,7 @@ describe('GET /api/local/health off a Pi', () => {
       const h = (await request(p.base).get('/api/local/health')).body as HealthSummary;
       expect(h.platform).toEqual({ pi: false, model: null, hostStats: false });
       expect(h.host).toBeNull();
-      expect(h.items.map((i) => i.id)).toEqual(['camera', 'stream', 'events', 'ftp', 'storage', 'disk', 'inventory', 'version']);
+      expect(h.items.map((i) => i.id)).toEqual(['camera', 'stream', 'events', 'ftp', 'storage', 'disk', 'archive', 'inventory', 'version']);
       expect(h.disk?.sizeBytes).toBeGreaterThan(0); // the real statfs of the data folder
     } finally {
       await p.proxy.stop();
