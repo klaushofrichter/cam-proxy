@@ -151,6 +151,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   const font = running.composition?.font ?? defaultFont();
   const composer = createComposer({
     dir: join(running.server.dataDir, 'compositions'),
+    concurrent: () => running.composition.concurrent,
     runner: ffmpegRunner({ font: font ?? '', clock: clockText, readStill: stillAt, hasAudio, paused: () => storage.paused(), stillsIntervalS: (cam) => cameraConfig(running, cam)?.stills.intervalS ?? running.stills.intervalS }),
   });
   const sweeper = setInterval(() => composer.sweep(), 5000);

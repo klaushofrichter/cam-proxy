@@ -543,6 +543,12 @@
           "type": "string",
           "pattern": "^.+$",
           "description": "font file for the badge and card text of composed clips; default: the first of DejaVu Sans (Alpine, Debian) or Arial (macOS) that exists"
+        },
+        "concurrent": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4,
+          "description": "composed clips encoded at once (2 on a 4-core host, 1 on a Pi)"
         }
       }
     },

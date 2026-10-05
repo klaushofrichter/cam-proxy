@@ -46,7 +46,7 @@ export interface Config {
   };
   sse: { maxClients: number; queuePerClient: number; pingS: number };
   // Composed clips (spec 2026-09-28): the font for the badge and card text.
-  composition: { font?: string };
+  composition: { font?: string; concurrent: number };
   ftp: { enabled: boolean; port: number; passive: string; tls: boolean; stream: 'main' | 'sub'; stalledHours: number; maxGB?: number; publicHost?: string; certFile?: string; keyFile?: string };
   recordings: { cacheMB: number };
   // The health summary's thresholds and the host figures (spec 2026-10-03-health-summary-design).
@@ -80,7 +80,7 @@ export const DEFAULTS: Config = {
   retention: { stillsDays: 7, previewsDays: 14, clipsDays: 7, eventsDays: 30, auditDays: 90, streamLogDays: 7, intervalMin: 60 },
   storage: { maxPercent: 85, minFreeBytes: 2 * 1024 ** 3, keepHours: { stills: 24, clips: 24, previews: 72 } },
   sse: { maxClients: 50, queuePerClient: 1000, pingS: 15 },
-  composition: {},
+  composition: { concurrent: 1 },
   ftp: { enabled: false, port: 2121, passive: '30000-30009', tls: true, stream: 'main', stalledHours: 6 },
   recordings: { cacheMB: 2048 },
   health: { diskPercent: 90, tempC: 75 },

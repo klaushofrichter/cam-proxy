@@ -72,7 +72,9 @@
     "queuePerClient": 1000,
     "pingS": 15
   },
-  "composition": {},
+  "composition": {
+    "concurrent": 1
+  },
   "ftp": {
     "enabled": false,
     "port": 2121,

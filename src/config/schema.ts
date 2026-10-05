@@ -169,6 +169,7 @@ export const SETTINGS: Node = {
   },
   composition: {
     font: unset({ type: 'string', pattern: '^.+$', optional: true, doc: 'font file for the badge and card text of composed clips; default: the first of DejaVu Sans (Alpine, Debian) or Arial (macOS) that exists' }, 'the first of DejaVu Sans or Arial that exists'),
+    concurrent: int(1, 4, 'composed clips encoded at once (2 on a 4-core host, 1 on a Pi)'),
   },
   sse: {
     maxClients: int(1, 1000, 'most SSE clients at once'),

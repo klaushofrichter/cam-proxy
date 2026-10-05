@@ -201,6 +201,13 @@ describe('the Pi: the switch controller', () => {
   });
 });
 
+// P2 (spec §8.6): composed clips one at a time on the Pi (the default).
+describe('the Pi: compositions', () => {
+  it('composition.concurrent is 1', () => {
+    expect(proxy.running.composition.concurrent).toBe(1);
+  });
+});
+
 // The health items the Pi's display reads, as release 8 answers them.
 const PI_ITEM_IDS = ['camera', 'stream', 'events', 'ftp', 'storage', 'disk', 'archive', 'inventory', 'version'];
 
