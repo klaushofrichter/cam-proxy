@@ -172,3 +172,69 @@ test('typing in the analytics limits survives a refresh and a save of the other 
   await page.getByTestId('analytics-daily-save').click();
   await expect.poll(() => dailyCap(page)).toBe(original);
 });
+
+// Klaus 2026-10-05 (the Pi's PoE rows): a whole-group save keeps only what
+// differs; a Reset to none / not set says what that means; an override
+// equal to the default (an older proxy's) has no Reset, and Reset to
+// defaults lists it as "no change in effect".
+test('Reset only where it changes something, and says what none / not set means', async ({ page, request }) => {
+  const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+  expect((await request.delete('/control/config', { headers: auth })).ok()).toBe(true);
+  const put = await request.put('/control/config', { headers: auth, data: { camera: { poeSwitch: { model: 'sscpoe-web', host: '192.0.2.97', port: 8, ports: 8, offSeconds: 15 } } } });
+  expect(put.ok()).toBe(true);
+  const row = (k: string) => `camera.poeSwitch.${k}`;
+  try {
+    await signIn(page);
+    await page.getByTestId('nav-settings').click();
+    await expect(page.getByTestId(`source-${row('ports')}`)).toHaveText('default');
+    await expect(page.getByTestId(`reset-${row('model')}`)).toHaveText('Reset – none (no PoE switch: power-cycle off)');
+    await expect(page.getByTestId(`reset-${row('host')}`)).toHaveText('Reset – not set (PoE switch control off: no switch address)');
+    await expect(page.getByTestId(`reset-${row('port')}`)).toHaveText('Reset – not set (PoE switch control off: no camera port)');
+    await expect(page.getByTestId(`reset-${row('offSeconds')}`)).toHaveText('Reset – 10 s');
+
+    // An older proxy stored ports = 8 (the default) as an override: the answer
+    // of GET /control/config says so, as it does for such an overrides.json.
+    await page.route('**/control/config', async (route) => {
+      if (route.request().method() !== 'GET') return route.continue();
+      const res = await route.fetch();
+      const body = (await res.json()) as Record<string, Record<string, unknown>>;
+      body[row('ports')] = { ...body[row('ports')], source: 'override', resetTo: { value: 8, source: 'default', same: true } };
+      await route.fulfill({ response: res, json: body });
+    });
+    await page.reload();
+    await page.getByTestId('nav-settings').click();
+    const badge = page.getByTestId(`source-${row('ports')}`);
+    await expect(badge).toHaveText('override = default');
+    await expect(badge).toHaveAttribute('title', /same as the default \(8\): Reset would change nothing/);
+    await expect(page.getByTestId(`reset-${row('ports')}`)).toHaveCount(0);
+
+    const card = page.getByTestId(`setting-${row('model')}`).locator('xpath=ancestor::div[contains(@class, "card")]');
+    const shots = process.env.SHOT_DIR ? [['desktop', 1280, 900], ['phone', 390, 844]] as const : [];
+    for (const [name, width, height] of shots.length ? shots : [['desktop', 1280, 900] as const]) {
+      for (const scheme of shots.length ? (['dark', 'light'] as const) : (['dark'] as const)) {
+        await page.setViewportSize({ width, height });
+        await page.evaluate((s) => (document.documentElement.dataset.theme = s), scheme);
+        if (shots.length) {
+          // The PoE rows; on a phone the table scrolls inside its card: to the Reset column.
+          const rows = page.getByTestId(`setting-${row('model')}`);
+          await rows.scrollIntoViewIfNeeded();
+          await card.evaluate((el) => (el.scrollLeft = el.scrollWidth));
+          await page.screenshot({ path: `${process.env.SHOT_DIR}/poe-rows-${name}-${scheme}.png` });
+        }
+        await page.getByTestId('reset-all').click();
+        const items = page.getByTestId('confirm-items');
+        await expect(items).toContainText('camera.poeSwitch.model: sscpoe-web → none (no PoE switch: power-cycle off)');
+        await expect(items).toContainText('camera.poeSwitch.host: 192.0.2.97 → not set (PoE switch control off: no switch address)');
+        await expect(items).toContainText('camera.poeSwitch.offSeconds: 15 s → 10 s');
+        await expect(items).toContainText('1 override equal to the default is removed too, no change in effect: camera.poeSwitch.ports');
+        await expect(page.getByTestId('confirm-ok')).toHaveText('Reset 4 settings');
+        if (shots.length) await page.screenshot({ path: `${process.env.SHOT_DIR}/reset-dialog-${name}-${scheme}.png` });
+        await page.getByTestId('confirm-cancel').click();
+        await expect(page.getByTestId('confirm-dialog')).toHaveCount(0);
+      }
+    }
+  } finally {
+    await page.unrouteAll();
+    await request.delete('/control/config', { headers: auth });
+  }
+});

@@ -7,8 +7,8 @@ import { CameraNameRefused } from '../camera/name';
 import { cameraNameProblem } from '../camera/name-rules';
 import type { PowerCycleAnswer, RebootAnswer, RebootRequester, RebootState, TooSoon } from '../camera/reboot';
 import { PoeSwitchError, type PoeOnResult, type PoeSwitchStatus, type PortReading } from '../camera/poe-switch';
-import { DEFAULTS, type Config } from '../config/defaults';
-import { applyOverrides, ConfigError, getPath, needsProcessRestart, needsRestart, removeAllOverrides, removeOverride, withoutOverride, type Loaded } from '../config/load';
+import type { Config } from '../config/defaults';
+import { applyOverrides, ConfigError, getPath, needsProcessRestart, needsRestart, removeAllOverrides, removeOverride, resetTarget, type Loaded } from '../config/load';
 import { leafAt, leafPaths } from '../config/schema';
 import { FtpNotConfiguredError, type FtpTarget } from '../clips/camera-ftp';
 import type { CameraFtpView, ClipsStall } from '../clips/ftp-health';
@@ -111,26 +111,11 @@ function configView(loaded: Loaded, running: Config) {
       const next = getPath(loaded.config, p);
       const pending = restart && JSON.stringify(value) !== JSON.stringify(next);
       // `env`: the variable that sets it (read-only on the Settings page).
-      // `resetTo` (an override): what Reset goes back to, the file's value or the default.
-      return [p, { value, source: loaded.sources[p], ...(loaded.envNames[p] ? { env: loaded.envNames[p] } : {}), restart, pending, ...(pending ? { next } : {}), type: leafAt(p)?.type, ...(loaded.sources[p] === 'override' ? { resetTo: resetTo(loaded, p) } : {}) }];
+      // `resetTo` (an override): what Reset goes back to, the file's value or the
+      // default; `same` when that changes nothing, `means` for an unset state.
+      return [p, { value, source: loaded.sources[p], ...(loaded.envNames[p] ? { env: loaded.envNames[p] } : {}), restart, pending, ...(pending ? { next } : {}), type: leafAt(p)?.type, ...(loaded.sources[p] === 'override' ? { resetTo: resetTarget(loaded, p) } : {}) }];
     }),
   );
-}
-
-// The value an override's Reset goes back to, and where that comes from. A
-// reset the checks would refuse (a combination only the override makes
-// valid) answers the file's value or the default all the same.
-function resetTo(loaded: Loaded, p: string): { value?: unknown; source: 'file' | 'default' | 'env' } {
-  let after: Loaded;
-  try {
-    after = withoutOverride(loaded, p);
-  } catch {
-    const file = getPath(loaded.fileSettings, p);
-    return file !== undefined ? { value: file, source: 'file' } : { value: getPath(DEFAULTS, p), source: 'default' };
-  }
-  const source = after.sources[p] === 'override' ? 'default' : after.sources[p];
-  const value = getPath(after.config, p);
-  return { ...(value !== undefined ? { value } : {}), source };
 }
 
 // A camera call from an action: its answer, or 502 with the camera's error.

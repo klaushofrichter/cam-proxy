@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'path';
 import { DEFAULTS, type Config, type Secrets } from './defaults';
-import { checkPartial, leafPaths, SettingError } from './schema';
+import { checkPartial, leafAt, leafPaths, SettingError } from './schema';
 import { loadSecrets } from './secrets';
 import { EnvSettingError, readEnvLayer, type EnvLayer } from './env';
 
@@ -167,8 +167,37 @@ function writeOverrides(file: string, overrides: Obj): void {
   renameSync(tmp, file);
 }
 
+// The leaf paths an object sets ('sse.pingS'), e.g. a PUT body.
+function setPaths(o: Obj, prefix = ''): string[] {
+  return Object.entries(o).flatMap(([k, v]) => {
+    const p = prefix ? `${prefix}.${k}` : k;
+    return isObj(v) ? setPaths(v, p) : [p];
+  });
+}
+
+// A copy of the overrides without one path; groups left empty are dropped.
+function dropPath(overrides: Obj, path: string): Obj {
+  const out = structuredClone(overrides);
+  const keys = path.split('.');
+  let o: Obj = out;
+  for (const k of keys.slice(0, -1)) {
+    if (!isObj(o[k])) return out;
+    o = o[k] as Obj;
+  }
+  delete o[keys[keys.length - 1]];
+  const prune = (x: Obj) => {
+    for (const [k, v] of Object.entries(x)) if (isObj(v)) (prune(v), Object.keys(v).length === 0 && delete x[k]);
+  };
+  prune(out);
+  return out;
+}
+
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
 // Adds overrides (validated like the file); nothing is written if the result
-// is invalid.
+// is invalid. A value equal to what Reset would restore (config.json's, else
+// the default) is not stored: it removes the override instead (Klaus
+// 2026-10-05, overrides that only repeated the default).
 export function applyOverrides(loaded: Loaded, patch: object): Loaded {
   asConfigError(() => checkPartial(patch));
   if (getPath(patch, 'server.dataDir') !== undefined) throw new ConfigError('server.dataDir: can only be set in config.json');
@@ -176,32 +205,59 @@ export function applyOverrides(loaded: Loaded, patch: object): Loaded {
   for (const [p, name] of Object.entries(loaded.envNames)) {
     if (getPath(patch, p) !== undefined) throw new ConfigError(`${p}: set in .env (${name})`);
   }
-  const overrides = merge(loaded.overrides as Obj, patch as Obj);
+  let overrides = merge(loaded.overrides as Obj, patch as Obj);
   const baseDir = loaded.files.config ? dirname(loaded.files.config) : process.cwd();
   const next = build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides, baseDir, loaded.envLayer);
+  // The checks ran on the whole result above; a path is dropped only when the
+  // configuration without it is valid and holds the same value.
+  for (const p of setPaths(patch as Obj)) {
+    const without = dropPath(overrides, p);
+    try {
+      if (same(getPath(build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, without, baseDir, loaded.envLayer).config, p), getPath(next.config, p))) overrides = without;
+    } catch {
+      // Not valid without it: the override stays.
+    }
+  }
+  const result = overrides === next.overrides ? next : build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides, baseDir, loaded.envLayer);
   writeOverrides(loaded.files.overrides, overrides);
-  return next;
+  return result;
 }
 
 // The configuration without one override, not written: what Reset goes back
 // to (the Settings page shows it on the button).
 export function withoutOverride(loaded: Loaded, path: string): Loaded {
   if (!leafPaths().includes(path)) throw new ConfigError(`${path}: unknown setting`);
-  const overrides = structuredClone(loaded.overrides) as Obj;
-  const keys = path.split('.');
-  let o: Obj = overrides;
-  for (const k of keys.slice(0, -1)) {
-    if (!isObj(o[k])) return loaded;
-    o = o[k] as Obj;
-  }
-  delete o[keys[keys.length - 1]];
-  // Drop groups left empty.
-  const prune = (x: Obj) => {
-    for (const [k, v] of Object.entries(x)) if (isObj(v)) (prune(v), Object.keys(v).length === 0 && delete x[k]);
-  };
-  prune(overrides);
+  if (getPath(loaded.overrides, path) === undefined) return loaded;
   const baseDir = loaded.files.config ? dirname(loaded.files.config) : process.cwd();
-  return build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides, baseDir, loaded.envLayer);
+  return build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, dropPath(loaded.overrides as Obj, path), baseDir, loaded.envLayer);
+}
+
+// What an override's Reset goes back to (GET /control/config shows it):
+// the value and where it comes from; `same` when that is the value the
+// override holds (Reset would change nothing; the Settings page shows no
+// Reset then); `means` for a value that leaves the setting unset, none or
+// off: what that state does (the schema's `unset` text). A reset the checks
+// would refuse (a combination only the override makes valid) answers the
+// file's value or the default all the same.
+export interface ResetTarget { value?: unknown; source: 'file' | 'default' | 'env'; same?: true; means?: string }
+export function resetTarget(loaded: Loaded, p: string): ResetTarget {
+  let value: unknown;
+  let source: ResetTarget['source'];
+  try {
+    const after = withoutOverride(loaded, p);
+    source = after.sources[p] === 'override' ? 'default' : (after.sources[p] as ResetTarget['source']);
+    value = getPath(after.config, p);
+  } catch {
+    const file = getPath(loaded.fileSettings, p);
+    source = file !== undefined ? 'file' : 'default';
+    value = file !== undefined ? file : getPath(DEFAULTS, p);
+  }
+  const unset = leafAt(p)?.unset;
+  return {
+    ...(value !== undefined ? { value } : {}),
+    source,
+    ...(same(value, getPath(loaded.config, p)) ? { same: true as const } : unset && same(value, unset.value) ? { means: unset.text } : {}),
+  };
 }
 
 export function removeOverride(loaded: Loaded, path: string): Loaded {
