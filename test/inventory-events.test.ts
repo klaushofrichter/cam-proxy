@@ -54,8 +54,8 @@ function camera(o: { months: Record<string, number[]>; recs: Record<string, Reco
   return { deps, searched };
 }
 const settings = (o: Partial<EventsSettings> = {}): EventsSettings => ({ cam: 'cam1', eventsDays: 30, stream: 'sub', eventMaxOpenMin: 10, ...o });
-const deps = (cam: CameraListDeps, o: Partial<EventsSettings> = {}): EventsInventoryDeps => ({ catalog, settings: () => settings(o), camera: cam });
-const ctx = (o: Partial<CheckContext> = {}): CheckContext => ({ signal: new AbortController().signal, progress: () => undefined, now: NOW, options: {}, ...o });
+const deps = (cam: CameraListDeps, o: Partial<EventsSettings> = {}): EventsInventoryDeps => ({ catalog, settings: () => settings(o), camera: () => cam });
+const ctx = (o: Partial<CheckContext> = {}): CheckContext => ({ signal: new AbortController().signal, progress: () => undefined, now: NOW, cam: 'cam1', options: {}, ...o });
 const EDGE_NOTE = (n: number) => `${n} recording spans at the start of the events retention were not judged: an event that covered them may already be deleted`;
 const MONTHS = { '2026-09': [30], '2026-10': [1, 2] };
 

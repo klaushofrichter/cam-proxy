@@ -52,7 +52,7 @@ describe('migration 8: archive', () => {
     raw.close();
 
     const c = openCatalog(path);
-    expect(c.schemaVersion()).toBe(8);
+    expect(c.schemaVersion()).toBe(9);
     expect(listEvents(c, { cam: 'cam1' })).toHaveLength(3);
     expect([...analysisImages(c)]).toEqual(['/data/analytics/cam1/1.jpg']);
     expect([...checkImages(c)]).toEqual(['/data/still-checks/cam1/check-1.jpg']);
@@ -66,7 +66,7 @@ describe('migration 8: archive', () => {
     expect(idx).toEqual(['archive_created', 'archive_expires']);
     expect(insertArchive(c, input()).id).toBe(1);
     c.close();
-    expect(openCatalog(path).schemaVersion()).toBe(8);
+    expect(openCatalog(path).schemaVersion()).toBe(9);
   });
 
   it('ids are never reused (AUTOINCREMENT)', () => {

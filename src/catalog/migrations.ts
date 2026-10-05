@@ -168,4 +168,22 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX archive_created ON archive (created_at);
   CREATE INDEX archive_expires ON archive (expires_at);
   `,
+  // 9: several cameras on one proxy (spec 2026-10-05-multi-camera-host-design
+  // §5.1): usage per API key (key_id, '' for rows from before) and camera
+  // ('' here; adoptLegacyUsage assigns the configured camera at start).
+  // stream_log_cam_ts serves the per-camera latest() lookups.
+  `
+  CREATE TABLE analytics_usage_v9 (
+    provider TEXT NOT NULL,
+    key_id TEXT NOT NULL,
+    cam TEXT NOT NULL,
+    day TEXT NOT NULL,
+    calls INTEGER NOT NULL,
+    PRIMARY KEY (provider, key_id, cam, day)
+  );
+  INSERT INTO analytics_usage_v9 (provider, key_id, cam, day, calls) SELECT provider, '', '', day, calls FROM analytics_usage;
+  DROP TABLE analytics_usage;
+  ALTER TABLE analytics_usage_v9 RENAME TO analytics_usage;
+  CREATE INDEX stream_log_cam_ts ON stream_log (cam, ts);
+  `,
 ];

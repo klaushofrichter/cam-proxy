@@ -48,13 +48,38 @@ export function analysesFor(c: Catalog, eventIds: number[]): Map<number, Analysi
   return out;
 }
 
-export function addUsage(c: Catalog, provider: string, day: string): void {
-  c.db.prepare('INSERT INTO analytics_usage (provider, day, calls) VALUES (?, ?, 1) ON CONFLICT (provider, day) DO UPDATE SET calls = calls + 1').run(provider, day);
+// One usage counter: a provider's (or a still-check outcome's) calls with one
+// API key for one camera (spec 2026-10-05-multi-camera-host-design §5.1).
+export interface UsageKey { provider: string; keyId: string; cam: string }
+
+export function addUsage(c: Catalog, u: UsageKey, day: string): void {
+  c.db
+    .prepare('INSERT INTO analytics_usage (provider, key_id, cam, day, calls) VALUES (?, ?, ?, ?, 1) ON CONFLICT (provider, key_id, cam, day) DO UPDATE SET calls = calls + 1')
+    .run(u.provider, u.keyId, u.cam, day);
 }
 
-export function usageBetween(c: Catalog, provider: string, fromDay: string, toDay: string): number {
-  const r = c.db.prepare('SELECT COALESCE(SUM(calls), 0) AS n FROM analytics_usage WHERE provider = ? AND day >= ? AND day <= ?').get(provider, fromDay, toDay) as { n: number };
+// Calls of a provider between two days (inclusive), over every key and camera
+// unless `keyIds` or `cam` narrow it.
+export function usageBetween(c: Catalog, provider: string, fromDay: string, toDay: string, f: { keyIds?: string[]; cam?: string } = {}): number {
+  const where = ['provider = ?', 'day >= ?', 'day <= ?'];
+  const args: string[] = [provider, fromDay, toDay];
+  if (f.keyIds) (where.push(`key_id IN (${f.keyIds.map(() => '?').join(',') || 'NULL'})`), args.push(...f.keyIds));
+  if (f.cam !== undefined) (where.push('cam = ?'), args.push(f.cam));
+  const r = c.db.prepare(`SELECT COALESCE(SUM(calls), 0) AS n FROM analytics_usage WHERE ${where.join(' AND ')}`).get(...args) as { n: number };
   return r.n;
+}
+
+// The same, split by camera (the Status page and the daily audit).
+export function usageByCamera(c: Catalog, provider: string, fromDay: string, toDay: string): Record<string, number> {
+  const rows = c.db.prepare('SELECT cam, SUM(calls) AS n FROM analytics_usage WHERE provider = ? AND day >= ? AND day <= ? GROUP BY cam ORDER BY cam').all(provider, fromDay, toDay) as { cam: string; n: number }[];
+  return Object.fromEntries(rows.map((r) => [r.cam, r.n]));
+}
+
+// Rows the migration left without a camera (cam = ''): the one configured
+// camera's, or 'unknown' with several (spec §5.1). Runs at every start;
+// changes nothing once done.
+export function adoptLegacyUsage(c: Catalog, cams: string[]): number {
+  return Number(c.db.prepare("UPDATE analytics_usage SET cam = ? WHERE cam = ''").run(cams.length === 1 ? cams[0] : 'unknown').changes);
 }
 
 export function pruneUsage(c: Catalog, beforeDay: string): number {
@@ -153,6 +178,6 @@ export function okAnalysisAt(c: Catalog, cam: string, stillTs: number, provider 
 
 // Gives back a reserved call that was never made (a still check reserves its
 // call before it reads the still).
-export function releaseUsage(c: Catalog, provider: string, day: string): void {
-  c.db.prepare('UPDATE analytics_usage SET calls = calls - 1 WHERE provider = ? AND day = ? AND calls > 0').run(provider, day);
+export function releaseUsage(c: Catalog, u: UsageKey, day: string): void {
+  c.db.prepare('UPDATE analytics_usage SET calls = calls - 1 WHERE provider = ? AND key_id = ? AND cam = ? AND day = ? AND calls > 0').run(u.provider, u.keyId, u.cam, day);
 }

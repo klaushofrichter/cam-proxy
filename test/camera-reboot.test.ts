@@ -20,7 +20,7 @@ const who = { requestedBy: 'token' as const, ip: '10.0.0.5', userAgent: 'test' }
 function make(over: Partial<RebootDeps> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'reboot-audit-'));
   dirs.push(dir);
-  const audit = new AuditLog({ dir, version: 'dev', camera: () => 'cam1' });
+  const audit = new AuditLog({ dir, version: 'dev' });
   const checks: Array<{ ok: boolean; serial?: string }> = [];
   const deps: RebootDeps = {
     send: vi.fn(async () => ({ rspCode: 200 })),

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { cameraConfig } from '../src/config/cameras';
 import { mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -29,20 +30,20 @@ describe('CAMERA_HOST and PI_ADDRESS', () => {
   it('set camera.host, ftp.publicHost and server.publicUrl; config.json may leave camera.host out', () => {
     write('config.json', { server: { port: 8480 } });
     const l = load({ CAMERA_HOST: '192.168.1.20', PI_ADDRESS: '192.168.1.220' });
-    expect(l.config.camera.host).toBe('192.168.1.20');
+    expect(cameraConfig(l.config, 'cam1')!.host).toBe('192.168.1.20');
     expect(l.config.ftp.publicHost).toBe('192.168.1.220');
     expect(l.config.server.publicUrl).toBe('http://192.168.1.220:8480');
-    expect(l.sources['camera.host']).toBe('env');
+    expect(l.sources['cameras.cam1.host']).toBe('env');
     expect(l.sources['ftp.publicHost']).toBe('env');
     expect(l.sources['server.publicUrl']).toBe('env');
-    expect(l.envNames).toEqual({ 'camera.host': 'CAMERA_HOST', 'ftp.publicHost': 'PI_ADDRESS', 'server.publicUrl': 'PI_ADDRESS' });
+    expect(l.envNames).toEqual({ 'cameras.cam1.host': 'CAMERA_HOST', 'ftp.publicHost': 'PI_ADDRESS', 'server.publicUrl': 'PI_ADDRESS' });
   });
 
   it('accepts the CAMPROXY_ names, which win over the plain ones', () => {
     const l = load({ CAMERA_HOST: '10.0.0.1', CAMPROXY_CAMERA_HOST: '10.0.0.2:8443', PI_ADDRESS: '10.0.0.3', CAMPROXY_PI_ADDRESS: 'pi.lan' });
-    expect(l.config.camera.host).toBe('10.0.0.2:8443');
+    expect(cameraConfig(l.config, 'cam1')!.host).toBe('10.0.0.2:8443');
     expect(l.config.ftp.publicHost).toBe('pi.lan');
-    expect(l.envNames['camera.host']).toBe('CAMPROXY_CAMERA_HOST');
+    expect(l.envNames['cameras.cam1.host']).toBe('CAMPROXY_CAMERA_HOST');
   });
 
   it('uses server.port in publicUrl', () => {
@@ -54,11 +55,11 @@ describe('CAMERA_HOST and PI_ADDRESS', () => {
     write('config.json', { camera: { host: 'file-host' }, ftp: { publicHost: 'file-pi' }, server: { publicUrl: 'http://file' } });
     let l = load();
     l = applyOverrides(l, { camera: { host: 'override-host' } });
-    expect(l.config.camera.host).toBe('override-host');
-    expect(l.sources['camera.host']).toBe('override');
+    expect(cameraConfig(l.config, 'cam1')!.host).toBe('override-host');
+    expect(l.sources['cameras.cam1.host']).toBe('override');
     l = load({ CAMERA_HOST: 'env-host' });
-    expect(l.config.camera.host).toBe('env-host');
-    expect(l.sources['camera.host']).toBe('env');
+    expect(cameraConfig(l.config, 'cam1')!.host).toBe('env-host');
+    expect(l.sources['cameras.cam1.host']).toBe('env');
     expect(l.config.ftp.publicHost).toBe('file-pi');
     expect(l.sources['ftp.publicHost']).toBe('file');
   });
@@ -66,8 +67,8 @@ describe('CAMERA_HOST and PI_ADDRESS', () => {
   it('an empty value counts as unset', () => {
     write('config.json', { camera: { host: 'file-host' } });
     const l = load({ CAMERA_HOST: '', PI_ADDRESS: '' });
-    expect(l.config.camera.host).toBe('file-host');
-    expect(l.sources['camera.host']).toBe('file');
+    expect(cameraConfig(l.config, 'cam1')!.host).toBe('file-host');
+    expect(l.sources['cameras.cam1.host']).toBe('file');
     expect(l.config.server.publicUrl).toBeUndefined();
   });
 
@@ -80,7 +81,7 @@ describe('CAMERA_HOST and PI_ADDRESS', () => {
 
   it('an override of an env-set setting is refused', () => {
     const l = load({ CAMERA_HOST: '10.0.0.1' });
-    expect(err(() => applyOverrides(l, { camera: { host: 'x' } }))).toBe('camera.host: set in .env (CAMERA_HOST)');
+    expect(err(() => applyOverrides(l, { camera: { host: 'x' } }))).toBe('cameras.cam1.host: set in .env (CAMERA_HOST)');
     expect(err(() => applyOverrides(load({ CAMERA_HOST: 'h', PI_ADDRESS: 'p' }), { server: { publicUrl: 'http://x' } }))).toBe('server.publicUrl: set in .env (PI_ADDRESS)');
   });
 
@@ -88,7 +89,7 @@ describe('CAMERA_HOST and PI_ADDRESS', () => {
     write('config.json', { camera: { host: 'file-host' } });
     applyOverrides(load(), { camera: { host: 'override-host' } });
     const l = load({ CAMERA_HOST: 'env-host' });
-    expect(l.config.camera.host).toBe('env-host');
+    expect(cameraConfig(l.config, 'cam1')!.host).toBe('env-host');
   });
 });
 
@@ -96,7 +97,7 @@ describe('CAMPROXY_ENV_FILE', () => {
   it('its current CAMERA_HOST and PI_ADDRESS win over the process environment', () => {
     write('.env', 'CAMPROXY_TOKENS=never-read-from-here\nCAMERA_HOST=10.0.0.9\nPI_ADDRESS="10.0.0.8"\n');
     const l = load({ CAMPROXY_ENV_FILE: join(dir, '.env'), CAMERA_HOST: '10.0.0.1', PI_ADDRESS: '10.0.0.2' });
-    expect(l.config.camera.host).toBe('10.0.0.9');
+    expect(cameraConfig(l.config, 'cam1')!.host).toBe('10.0.0.9');
     expect(l.config.ftp.publicHost).toBe('10.0.0.8');
     // Secrets never come from the file.
     expect(l.secrets.tokens).toEqual(['a'.repeat(32)]);
@@ -107,22 +108,22 @@ describe('CAMPROXY_ENV_FILE', () => {
     // a CAMPROXY_CAMERA_HOST in compose's environment would undo it.
     write('.env', 'CAMERA_HOST=10.0.0.9\n');
     const l = load({ CAMPROXY_ENV_FILE: join(dir, '.env'), CAMPROXY_CAMERA_HOST: '10.0.0.1' });
-    expect(l.config.camera.host).toBe('10.0.0.9');
-    expect(l.envNames['camera.host']).toBe('CAMERA_HOST');
+    expect(cameraConfig(l.config, 'cam1')!.host).toBe('10.0.0.9');
+    expect(l.envNames['cameras.cam1.host']).toBe('CAMERA_HOST');
     // Within one source the CAMPROXY_ name wins.
     write('.env', 'CAMERA_HOST=10.0.0.9\nCAMPROXY_CAMERA_HOST=10.0.0.8\n');
-    expect(load({ CAMPROXY_ENV_FILE: join(dir, '.env') }).config.camera.host).toBe('10.0.0.8');
+    expect(load({ CAMPROXY_ENV_FILE: join(dir, '.env') }).config.cameras.cam1.host).toBe('10.0.0.8');
   });
 
   it('falls back to the process environment for a key the file leaves out', () => {
     write('.env', 'PI_ADDRESS=10.0.0.8\n');
     const l = load({ CAMPROXY_ENV_FILE: join(dir, '.env'), CAMERA_HOST: '10.0.0.1' });
-    expect(l.config.camera.host).toBe('10.0.0.1');
+    expect(cameraConfig(l.config, 'cam1')!.host).toBe('10.0.0.1');
   });
 
   it('a missing or bad file is not an error: the process environment applies', () => {
     const l = load({ CAMPROXY_ENV_FILE: join(dir, 'nope', '.env'), CAMERA_HOST: '10.0.0.1' });
-    expect(l.config.camera.host).toBe('10.0.0.1');
+    expect(cameraConfig(l.config, 'cam1')!.host).toBe('10.0.0.1');
     expect(l.envFile).toEqual({ path: join(dir, 'nope', '.env'), read: false });
   });
 });
@@ -131,7 +132,7 @@ describe('envSummary', () => {
   it('lists the settings taken from the environment, with values (no secrets)', () => {
     write('.env', 'CAMERA_HOST=10.0.0.9\n');
     const l = load({ CAMPROXY_ENV_FILE: join(dir, '.env'), PI_ADDRESS: '10.0.0.2' });
-    expect(envSummary(l)).toEqual({ 'camera.host': '10.0.0.9', 'ftp.publicHost': '10.0.0.2', 'server.publicUrl': 'http://10.0.0.2:8480', envFile: true });
+    expect(envSummary(l)).toEqual({ 'cameras.cam1.host': '10.0.0.9', 'ftp.publicHost': '10.0.0.2', 'server.publicUrl': 'http://10.0.0.2:8480', envFile: true });
     expect(JSON.stringify(envSummary(l))).not.toContain('cam-pw');
   });
   it('is empty without them', () => {

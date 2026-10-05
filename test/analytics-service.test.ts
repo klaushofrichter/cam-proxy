@@ -42,11 +42,11 @@ const provider: AnalyticsProvider = {
 
 function deps(over: { key?: string } = {}): AnalyticsDeps {
   return {
-    catalog: c, log, cam: 'cam1', dataDir: dir,
+    catalog: c, log, cams: () => ['cam1'], dataDir: dir,
     config: () => config,
     secrets: () => ({ googleVisionKey: over.key ?? 'k-123456789012', googleVisionUrl: 'http://mock' }),
-    readStill: async (ts) => stills.get(ts),
-    listStills: (from, to) => [...stills.keys()].filter((t) => t >= from && t <= to).sort((a, b) => a - b),
+    readStill: async (_cam, ts) => stills.get(ts),
+    listStills: (_cam, from, to) => [...stills.keys()].filter((t) => t >= from && t <= to).sort((a, b) => a - b),
     timeInfo: () => chicago,
     now: () => now,
     sleep: async (ms) => void (now += ms),
@@ -337,11 +337,11 @@ describe('AnalyticsService', () => {
   it('waits up to 5 s for the still at start + 1 s', async () => {
     now = T0 + 1000;
     const s = new AnalyticsService({
-      catalog: c, log, cam: 'cam1', dataDir: dir,
+      catalog: c, log, cams: () => ['cam1'], dataDir: dir,
       config: () => config,
       secrets: () => ({ googleVisionKey: 'k-123456789012', googleVisionUrl: 'http://mock' }),
-      readStill: async (ts) => stills.get(ts),
-      listStills: (from, to) => [...stills.keys()].filter((t) => t >= from && t <= to).sort((a, b) => a - b),
+      readStill: async (_cam, ts) => stills.get(ts),
+      listStills: (_cam, from, to) => [...stills.keys()].filter((t) => t >= from && t <= to).sort((a, b) => a - b),
       timeInfo: () => chicago,
       now: () => now,
       sleep: async (ms) => {
@@ -361,11 +361,11 @@ describe('AnalyticsService', () => {
     still(T0 + 1000, 7);
     answers = [new AnalyticsError('network', true)];
     const s = new AnalyticsService({
-      catalog: c, log, cam: 'cam1', dataDir: dir,
+      catalog: c, log, cams: () => ['cam1'], dataDir: dir,
       config: () => config,
       secrets: () => ({ googleVisionKey: 'k-123456789012', googleVisionUrl: 'http://mock' }),
-      readStill: async (ts) => stills.get(ts),
-      listStills: (from, to) => [...stills.keys()].filter((t) => t >= from && t <= to).sort((a, b) => a - b),
+      readStill: async (_cam, ts) => stills.get(ts),
+      listStills: (_cam, from, to) => [...stills.keys()].filter((t) => t >= from && t <= to).sort((a, b) => a - b),
       timeInfo: () => chicago,
       now: () => now,
       sleep: async (ms) => { now += ms; config.analytics.googleVision.enabled = false; },
@@ -459,11 +459,11 @@ describe('AnalyticsService', () => {
   it('makes no call when switched off while waiting for the still', async () => {
     now = T0 + 1000;
     const s = new AnalyticsService({
-      catalog: c, log, cam: 'cam1', dataDir: dir,
+      catalog: c, log, cams: () => ['cam1'], dataDir: dir,
       config: () => config,
       secrets: () => ({ googleVisionKey: 'k-123456789012', googleVisionUrl: 'http://mock' }),
-      readStill: async (ts) => stills.get(ts),
-      listStills: (from, to) => [...stills.keys()].filter((t) => t >= from && t <= to).sort((a, b) => a - b),
+      readStill: async (_cam, ts) => stills.get(ts),
+      listStills: (_cam, from, to) => [...stills.keys()].filter((t) => t >= from && t <= to).sort((a, b) => a - b),
       timeInfo: () => chicago,
       now: () => now,
       sleep: async (ms) => { now += ms; config.analytics.googleVision.enabled = false; still(T0 + 1000, 5); },
@@ -481,11 +481,11 @@ describe('AnalyticsService', () => {
     now = T0 + 1300;
     still(T0 + 1000, 4);
     const s = new AnalyticsService({
-      catalog: c, log, cam: 'cam1', dataDir: dir,
+      catalog: c, log, cams: () => ['cam1'], dataDir: dir,
       config: () => config,
       secrets: () => ({ googleVisionKey: 'k-123456789012', googleVisionUrl: 'http://mock' }),
-      readStill: async (ts) => stills.get(ts),
-      listStills: (from, to) => [...stills.keys()].filter((t) => t >= from && t <= to).sort((a, b) => a - b),
+      readStill: async (_cam, ts) => stills.get(ts),
+      listStills: (_cam, from, to) => [...stills.keys()].filter((t) => t >= from && t <= to).sort((a, b) => a - b),
       timeInfo: () => chicago,
       now: () => now,
       sleep: async (ms) => { now += ms; if (now >= T0 + 2000) still(T0 + 2000, 6); },
@@ -696,7 +696,7 @@ describe('recovered events and analytics', () => {
     const heard: StreamMessage[] = [];
     log.on('message', (m: StreamMessage) => {
       heard.push(m);
-      if (m.type === 'camera-event' && m.data.phase === 'start') s.onEvent({ id: Number(m.data.eventId), kind: String(m.data.kind), start_ts: Number(m.data.ts) });
+      if (m.type === 'camera-event' && m.data.phase === 'start') s.onEvent({ cam: m.cam, id: Number(m.data.eventId), kind: String(m.data.kind), start_ts: Number(m.data.ts) });
     });
     const { added } = addRecoveredEvents(c, 'cam1', [{ kind: 'person', start_ts: T0, end_ts: T0 + 30_000, raw: null }], { beforeMs: 10_000, afterMs: 5_000, openMs: 600_000 });
     expect(added).toHaveLength(1);

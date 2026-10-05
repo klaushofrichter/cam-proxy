@@ -231,12 +231,14 @@ describe('analytics in the proxy', () => {
     }
   });
 
-  it('files analyses under the camera id in force after a restart', async () => {
-    const q = await startProxy(sim, { settings: on, env: vision() });
+  // Several cameras (spec 2026-10-05-multi-camera-host-design §4.1): the id is
+  // the camera's key, set in config.json; an override can't change it.
+  it("files analyses under the camera's configured id; an override can't change the id", async () => {
+    const q = await startProxy(sim, { settings: { ...on, camera: { id: 'cam9', host: sim.camera.host, protocol: 'http', user: 'proxy', onvifPort: sim.ports.onvif, rtspPort: sim.ports.rtsp || 554, baichuanPort: sim.camera.baichuanPort, statusPollS: 5 } }, env: vision() });
     try {
-      await request(q.base).put('/control/config').set(auth(ADMIN_TOKEN)).send({ camera: { id: 'cam9' } });
-      await request(q.base).post('/control/actions/restart').set(auth(ADMIN_TOKEN));
-      await until(async () => (await request(q.base).get('/api/cameras').set(auth())).body[0]?.id === 'cam9');
+      const r = await request(q.base).put('/control/config').set(auth(ADMIN_TOKEN)).send({ camera: { id: 'cam8' } });
+      expect([r.status, r.body.detail]).toEqual([400, "cameras.cam9.id: must be the camera's key (cam9)"]);
+      expect((await request(q.base).get('/api/cameras').set(auth())).body[0]?.id).toBe('cam9');
       const e = insertEvent(q.proxy.catalog, { cam: 'cam9', source: 'onvif', kind: 'person', start_ts: Date.now() - 60_000, raw: null });
       q.proxy.log.append('cam9', 'camera-event', { eventId: e.id, kind: 'person', phase: 'start', ts: e.start_ts });
       await until(() => q.proxy.log.since(0, { types: ['analysis'] }, 10).length > 0);

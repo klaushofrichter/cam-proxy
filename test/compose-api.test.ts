@@ -31,7 +31,7 @@ beforeAll(async () => {
   const silent = join(p.dir, 's.mp4');
   await run('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=10', '-f', 'lavfi', '-i', 'sine=r=16000', '-t', '6', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', withAudio]);
   await run('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=10', '-t', '4', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', silent]);
-  const cam = p.proxy.running.camera.id;
+  const cam = p.proxy.running.cameraOrder[0];
   clipId = insertClip(p.proxy.catalog, { cam, start_ts: T, end_ts: T + 6000, path: withAudio, stream: 'sub', size: 1, received_at: T, snapshot: null }).id;
   silentId = insertClip(p.proxy.catalog, { cam, start_ts: T + 20_000, end_ts: T + 24_000, path: silent, stream: 'sub', size: 1, received_at: T, snapshot: null }).id;
   // An FTP copy longer than the SD recording the viewer chose (cams's Save
@@ -52,7 +52,7 @@ afterAll(async () => {
   await sim.close();
 });
 
-const cam = () => p.proxy.running.camera.id;
+const cam = () => p.proxy.running.cameraOrder[0];
 const post = (body: object) => request(p.base).post(`/api/cameras/${cam()}/compositions`).set(auth()).send(body);
 
 describe('compositions API', () => {

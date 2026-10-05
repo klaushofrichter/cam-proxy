@@ -5,6 +5,7 @@
   import AnalysisModal from '../components/AnalysisModal.svelte';
   import { tagText, type UiAnalysis } from '../lib/analytics';
   import { isRecovered, RECOVERED_NOTE } from '../lib/timeline';
+  import { pickCamera, selectedCamera } from '../lib/cameras';
 
   interface Ev { id: number; kind: string; source: string; start: number; end: number | null; endReason: string | null; analysis: UiAnalysis | null }
   let events = $state<Ev[]>([]);
@@ -14,14 +15,21 @@
   const load = async () => {
     try {
       const cams = await api<Array<{ id: string }>>('GET', '/api/cameras');
-      if (!cams[0]) return;
-      camId = cams[0].id;
-      events = await api<Ev[]>('GET', `/api/cameras/${encodeURIComponent(cams[0].id)}/events?limit=100`);
+      // The camera picked in the top bar (several cameras), else the first.
+      const id = pickCamera(cams.map((c) => c.id), $selectedCamera);
+      if (!id) return;
+      camId = id;
+      events = await api<Ev[]>('GET', `/api/cameras/${encodeURIComponent(id)}/events?limit=100`);
     } catch {
       // keep the last list
     }
   };
   onMount(() => void load());
+  // Another camera picked: its events.
+  $effect(() => {
+    void $selectedCamera;
+    void load();
+  });
   $effect(() => {
     if ($feed.length || $refreshTick) void load();
   });

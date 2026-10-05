@@ -10,6 +10,8 @@ import { checkById, checksInRange } from '../catalog/still-checks';
 import type { Config } from '../config/defaults';
 import { DAY, dayStart } from '../time-units';
 import { clientIp } from './auth';
+import { cameraParam, workerOf } from './camera-param';
+import type { CameraRegistry } from '../cameras/registry';
 import { bad, IMMUTABLE, intParam, perMinute } from './respond';
 
 // Still checks (cams #179, spec 2026-10-04-still-checks-design §5.1, §6):
@@ -17,15 +19,15 @@ import { bad, IMMUTABLE, intParam, perMinute } from './respond';
 // token, admin, CSRF for sessions) is applied by the caller.
 export const CHECKS_PER_MINUTE = 20;
 
-export function stillChecksApi(d: { config: () => Config; catalog: Catalog; analytics: AnalyticsService; audit: AuditLog }): express.Router {
+export function stillChecksApi(d: { config: () => Config; catalog: Catalog; cameras: CameraRegistry; analytics: AnalyticsService; audit: AuditLog }): express.Router {
   const r = express.Router();
-  const cam = () => d.config().camera.id;
+  // :cam → its worker, 404 or 503, before validAt and the limiter (spec 2026-10-05-multi-camera-host-design §6.1).
+  r.param('cam', cameraParam(d.cameras));
+  const cam = (res: Response) => workerOf(res).id;
   const maxOpenMs = () => d.config().events.maxOpenMin * 60_000;
-  const known = (req: Request, res: Response) => (req.params.cam === cam() ? true : (res.status(404).json({ error: 'not_found' }), false));
 
   // `at`: a still's time, checked before anything is looked up (§6, ruling 25).
   const validAt = (req: Request, res: Response, next: NextFunction) => {
-    if (!known(req, res)) return;
     const at: unknown = (req.body ?? {}).at;
     if (at === undefined) return bad(res, 'at (unix ms) is required');
     if (typeof at !== 'number' || !Number.isSafeInteger(at) || at < 0) return bad(res, 'at is a whole number (unix ms)');
@@ -45,11 +47,11 @@ export function stillChecksApi(d: { config: () => Config; catalog: Catalog; anal
     const at = res.locals.at as number;
     const access = res.locals.access as { access?: string; viaCookie?: boolean } | undefined;
     const requestedBy = access?.viaCookie ? 'session' : 'token';
-    const o = await d.analytics.check(at, requestedBy);
+    const o = await d.analytics.check(workerOf(res).id, at, requestedBy);
     if (o.outcome === 'refused' && o.status === 404) return void res.status(404).json({ error: o.error }); // like a bad request: no record
     const check: CheckJson | null =
       o.outcome === 'ok' || (o.outcome === 'reused' && o.source === 'check') ? checkJson(d.catalog, o.row, maxOpenMs())
-      : o.outcome === 'reused' ? analysisCheckJson(d.catalog, cam(), o.analysis, maxOpenMs())
+      : o.outcome === 'reused' ? analysisCheckJson(d.catalog, cam(res), o.analysis, maxOpenMs())
       : null;
     audit(req, o, at, requestedBy, access?.access === 'admin' ? 'admin' : 'client', check);
     if (o.outcome === 'ok') return void res.status(201).json({ check, reused: false });
@@ -85,26 +87,24 @@ export function stillChecksApi(d: { config: () => Config; catalog: Catalog; anal
   };
 
   r.get('/cameras/:cam/still-checks', (req, res) => {
-    if (!known(req, res)) return;
     const from = intParam(req.query.from), to = intParam(req.query.to), limit = intParam(req.query.limit);
     if (from === undefined || to === undefined || from === null || to === null) return bad(res, 'from and to (unix ms) are required');
     if (limit === null) return bad(res, 'limit is a whole number');
     if (to < from) return bad(res, 'to is before from');
     if (to - from > 31 * DAY) return bad(res, 'at most 31 days per request');
-    res.json(checksInRange(d.catalog, cam(), from, to, limit ?? 1000).map((row) => checkSummaryJson(d.catalog, row, maxOpenMs())));
+    res.json(checksInRange(d.catalog, cam(res), from, to, limit ?? 1000).map((row) => checkSummaryJson(d.catalog, row, maxOpenMs())));
   });
 
   // One check (`<id>`, with the provider's raw answer) or its JPEG (`<id>.jpg`).
   r.get('/cameras/:cam/still-checks/:file', async (req, res) => {
     const m = /^(\d{1,12})(\.jpg)?$/.exec(req.params.file);
     if (!m) return bad(res, 'a check is <id>, its image <id>.jpg');
-    if (!known(req, res)) return;
     const row = checkById(d.catalog, Number(m[1]));
-    if (!row || row.cam !== cam()) return void res.status(404).json({ error: 'not_found' });
+    if (!row || row.cam !== cam(res)) return void res.status(404).json({ error: 'not_found' });
     if (!m[2]) return void res.json(checkFullJson(d.catalog, row, maxOpenMs()));
     // The file name comes from the row (written by the service), never from
     // the request; still, only a file inside this camera's still-checks folder.
-    const root = resolve(d.config().server.dataDir, 'still-checks', cam());
+    const root = resolve(d.config().server.dataDir, 'still-checks', cam(res));
     const path = row.image ? resolve(row.image) : null;
     if (!path || !path.startsWith(root + sep)) return void res.status(404).json({ error: 'not_found' });
     let jpeg: Buffer;
@@ -119,7 +119,7 @@ export function stillChecksApi(d: { config: () => Config; catalog: Catalog; anal
 
   // The budget for cams's button (§2.4): never the key or its mask.
   r.get('/cameras/:cam/analytics', (req, res) => {
-    if (known(req, res)) res.json(d.analytics.usage());
+    res.json(d.analytics.usage());
   });
   return r;
 }

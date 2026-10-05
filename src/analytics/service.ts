@@ -2,7 +2,8 @@ import { mkdirSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { sleep } from '../async';
 import type { Catalog } from '../catalog/db';
-import { addUsage, analysisFor, countUnmapped, okAnalysisAt, releaseUsage, saveAnalysis, setSummary, unanalysed, usageBetween, withoutSummary, type AnalysisRow } from '../catalog/analyses';
+import { addUsage, analysisFor, countUnmapped, okAnalysisAt, releaseUsage, saveAnalysis, setSummary, unanalysed, usageBetween, withoutSummary, type AnalysisRow, type UsageKey } from '../catalog/analyses';
+import { keyId } from './key-id';
 import { checkAt, insertCheck, setCheckImage, type StillCheckRow } from '../catalog/still-checks';
 import { eventById } from '../catalog/events';
 import type { Config } from '../config/defaults';
@@ -28,12 +29,16 @@ const KINDS = ['person', 'vehicle', 'pet'] as const;
 export interface AnalyticsDeps {
   catalog: Catalog;
   log: StreamLog;
-  cam: string;
   dataDir: string;
+  // The configured cameras' ids, config order (spec 2026-10-05-multi-camera-host-design §8.2).
+  cams: () => string[];
+  // A camera's kinds to analyse (its override of the host's); default: the host kinds.
+  kinds?: (cam: string) => Config['analytics']['kinds'];
   config: () => Config;
   secrets: () => { googleVisionKey?: string; googleVisionUrl: string };
-  readStill: (ts: number) => Promise<Buffer | undefined>;
-  listStills: (from: number, to: number) => number[];
+  readStill: (cam: string, ts: number) => Promise<Buffer | undefined>;
+  listStills: (cam: string, from: number, to: number) => number[];
+  // The usage day's clock: the first camera's (Ruling P1-5).
   timeInfo: () => TimeInfo | undefined;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -79,7 +84,7 @@ export type CheckOutcome =
 // outcomes of the requests that made none, per camera day.
 export const CHECK_USAGE = { calls: 'google-vision:check', reused: 'google-vision:check-reused', refused: 'google-vision:check-refused', failed: 'google-vision:check-failed' } as const;
 
-type Job = { id: number; kind: string; start_ts: number };
+type Job = { cam: string; id: number; kind: string; start_ts: number };
 // Where the key in use comes from: the environment (or its _FILE), set at runtime, or none.
 export type KeySource = 'env' | 'manual' | 'none';
 
@@ -97,7 +102,7 @@ export class AnalyticsService {
   // A key set at runtime (issue #70): in memory only, gone with the process.
   private manualKey: string | undefined;
   // The still check in flight (one at a time) and how to abort it (stop()).
-  private checking: { at: number; done: Promise<CheckOutcome>; abort: AbortController } | null = null;
+  private checking: { cam: string; at: number; done: Promise<CheckOutcome>; abort: AbortController } | null = null;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
 
@@ -111,6 +116,11 @@ export class AnalyticsService {
   }
   private key(): string | undefined {
     return this.manualKey ?? (this.d.secrets().googleVisionKey || undefined);
+  }
+  // The usage counter of a provider (or check outcome) for this camera and
+  // the key in use now ('' when no key: nothing is counted against a key then).
+  private usageKey(provider: string, cam: string, key = this.key()): UsageKey {
+    return { provider, keyId: key ? keyId(key) : '', cam };
   }
   private keySource(): KeySource {
     return this.manualKey !== undefined ? 'manual' : this.d.secrets().googleVisionKey ? 'env' : 'none';
@@ -132,14 +142,17 @@ export class AnalyticsService {
   private active(): boolean {
     return !this.stopped && this.settings().googleVision.enabled && !!this.key();
   }
-  private wanted(kind: string): boolean {
-    const k = this.settings().kinds;
+  private kinds(cam: string): Config['analytics']['kinds'] {
+    return this.d.kinds ? this.d.kinds(cam) : this.settings().kinds;
+  }
+  private wanted(cam: string, kind: string): boolean {
+    const k = this.kinds(cam);
     return (KINDS as readonly string[]).includes(kind) && k[kind as (typeof KINDS)[number]] === true;
   }
 
   onEvent(e: Job): void {
-    if (this.stopped || !this.active() || !this.wanted(e.kind)) return;
-    this.queue.push({ id: e.id, kind: e.kind, start_ts: e.start_ts });
+    if (this.stopped || !this.active() || !this.wanted(e.cam, e.kind)) return;
+    this.queue.push({ cam: e.cam, id: e.id, kind: e.kind, start_ts: e.start_ts });
     if (!this.draining) {
       this.draining = true;
       this.running = this.drain();
@@ -149,8 +162,11 @@ export class AnalyticsService {
   // After a restart: the last 10 minutes of events that were never analysed.
   catchUp(): void {
     if (!this.active()) return;
-    const kinds = KINDS.filter((k) => this.settings().kinds[k]);
-    for (const e of unanalysed(this.d.catalog, this.d.cam, kinds, this.now() - CATCH_UP_MS)) this.onEvent(e);
+    for (const cam of this.d.cams()) {
+      const k = this.kinds(cam);
+      const kinds = KINDS.filter((x) => k[x]);
+      if (kinds.length) for (const e of unanalysed(this.d.catalog, cam, kinds, this.now() - CATCH_UP_MS)) this.onEvent({ cam, ...e });
+    }
   }
 
   // A changed analytics setting lifts a bad_key pause (so does a new key: setManualKey).
@@ -223,9 +239,9 @@ export class AnalyticsService {
     return this.d.config().events.maxOpenMin * 60_000;
   }
 
-  private count(what: keyof typeof CHECK_USAGE): void {
+  private count(what: keyof typeof CHECK_USAGE, cam: string): void {
     try {
-      addUsage(this.d.catalog, CHECK_USAGE[what], localDay(this.now(), this.d.timeInfo()));
+      addUsage(this.d.catalog, this.usageKey(CHECK_USAGE[what], cam), localDay(this.now(), this.d.timeInfo()));
     } catch (err) {
       logger.warn({ err: (err as Error).message }, 'analytics_check_count_failed');
     }
@@ -236,29 +252,28 @@ export class AnalyticsService {
   // a successful automatic analysis of that second without a call; else the
   // limits in order, one call at a time (the same second joins it), no
   // retry, 10 s.
-  async check(at: number, via: CheckVia): Promise<CheckOutcome> {
-    const cam = this.d.cam;
+  async check(cam: string, at: number, via: CheckVia): Promise<CheckOutcome> {
     const stored = checkAt(this.d.catalog, cam, at);
-    if (stored) return this.count('reused'), { outcome: 'reused', source: 'check', row: stored };
+    if (stored) return this.count('reused', cam), { outcome: 'reused', source: 'check', row: stored };
     const analysis = okAnalysisAt(this.d.catalog, cam, at);
-    if (analysis) return this.count('reused'), { outcome: 'reused', source: 'event', analysis };
+    if (analysis) return this.count('reused', cam), { outcome: 'reused', source: 'event', analysis };
     const running = this.checking;
-    if (running?.at === at) {
+    if (running?.at === at && running.cam === cam) {
       const r = await running.done;
-      if (r.outcome === 'ok') return this.count('reused'), { outcome: 'reused', source: 'check', row: r.row, joined: true };
+      if (r.outcome === 'ok') return this.count('reused', cam), { outcome: 'reused', source: 'check', row: r.row, joined: true };
       // Each request is counted once, as what it came to (a 404 never is).
-      if (r.outcome === 'failed') return this.count('failed'), { ...r, cost: 0 };
+      if (r.outcome === 'failed') return this.count('failed', cam), { ...r, cost: 0 };
       return r;
     }
     const refuse = (status: 409 | 429 | 503, error: string, more: { reason?: string; until?: number | null } = {}): CheckOutcome => {
-      this.count('refused');
+      this.count('refused', cam);
       return { outcome: 'refused', status, error, ...more };
     };
     const g = this.settings().googleVision;
     if (this.stopped || !g.enabled) return refuse(409, 'analytics_off', { reason: 'off' });
     if (!this.key()) return refuse(409, 'analytics_off', { reason: 'no_key' });
     if (g.checksPerDay === 0) return refuse(409, 'analytics_off', { reason: 'checks_off' });
-    if (!this.d.listStills(at, at).includes(at)) return { outcome: 'refused', status: 404, error: 'no_still' };
+    if (!this.d.listStills(cam, at, at).includes(at)) return { outcome: 'refused', status: 404, error: 'no_still' };
     if (running) return refuse(429, 'busy');
     this.paused = this.pause();
     if (this.paused) return refuse(503, 'analytics_paused', { reason: this.paused.reason, until: this.paused.until });
@@ -268,11 +283,11 @@ export class AnalyticsService {
     if (usageBetween(this.d.catalog, CHECK_USAGE.calls, day, day) >= g.checksPerDay) return refuse(429, 'limit', { reason: 'checks' });
     // The call is reserved in the same synchronous step as the limit checks:
     // an automatic analysis that runs while the still is read sees it.
-    addUsage(this.d.catalog, 'google-vision', day);
-    addUsage(this.d.catalog, CHECK_USAGE.calls, day);
+    const reserved = [this.usageKey('google-vision', cam), this.usageKey(CHECK_USAGE.calls, cam)];
+    for (const u of reserved) addUsage(this.d.catalog, u, day);
     const abort = new AbortController();
-    const done = this.callCheck(at, via, day, abort.signal);
-    this.checking = { at, done, abort };
+    const done = this.callCheck(cam, at, via, day, abort.signal, reserved);
+    this.checking = { cam, at, done, abort };
     try {
       return await done;
     } finally {
@@ -280,25 +295,24 @@ export class AnalyticsService {
     }
   }
 
-  private async callCheck(at: number, via: CheckVia, day: string, stop: AbortSignal): Promise<CheckOutcome> {
+  private async callCheck(cam: string, at: number, via: CheckVia, day: string, stop: AbortSignal, reserved: UsageKey[]): Promise<CheckOutcome> {
     // No call made after all: the reservation (check()) is given back.
     const release = () => {
       try {
-        releaseUsage(this.d.catalog, 'google-vision', day);
-        releaseUsage(this.d.catalog, CHECK_USAGE.calls, day);
+        for (const u of reserved) releaseUsage(this.d.catalog, u, day);
       } catch (err) {
         logger.warn({ err: (err as Error).message }, 'analytics_check_release_failed');
       }
     };
     let jpeg: Buffer | undefined;
     try {
-      jpeg = await this.d.readStill(at);
+      jpeg = await this.d.readStill(cam, at);
     } catch {
       jpeg = undefined;
     }
     if (stop.aborted) {
       release();
-      this.count('failed');
+      this.count('failed', cam);
       return { outcome: 'failed', reason: 'aborted', tookMs: null, cost: 0 };
     }
     if (!jpeg) return release(), { outcome: 'refused', status: 404, error: 'no_still' }; // deleted meanwhile
@@ -312,7 +326,7 @@ export class AnalyticsService {
     } catch (err) {
       const e = stop.aborted ? new AnalyticsError('aborted', false) : err instanceof AnalyticsError ? err : new AnalyticsError('network', true);
       this.noteFailure(e, key, t0);
-      this.count('failed');
+      this.count('failed', cam);
       return { outcome: 'failed', reason: e.reason, tookMs: this.now() - t0, cost: 1 };
     }
     const tookMs = this.now() - t0;
@@ -322,7 +336,7 @@ export class AnalyticsService {
     let row: StillCheckRow;
     try {
       row = insertCheck(this.d.catalog, {
-        cam: this.d.cam, still_ts: at, provider: 'google-vision', requested_at: t0, requested_via: via, took_ms: tookMs,
+        cam, still_ts: at, provider: 'google-vision', requested_at: t0, requested_via: via, took_ms: tookMs,
         objects: JSON.stringify(objects), raw: res.raw === undefined ? null : JSON.stringify(res.raw), summary: JSON.stringify(sum.summary),
       });
     } catch (err) {
@@ -333,7 +347,7 @@ export class AnalyticsService {
     // the row without an image: the result was paid for.
     // Its own folder, not analytics/: an older version's retention never
     // sweeps it (a rollback keeps the images).
-    const dir = join(this.d.dataDir, 'still-checks', this.d.cam);
+    const dir = join(this.d.dataDir, 'still-checks', cam);
     const image = join(dir, `check-${row.id}.jpg`);
     try {
       mkdirSync(dir, { recursive: true });
@@ -349,7 +363,7 @@ export class AnalyticsService {
       logger.warn({ err: (err as Error).message, stillTs: at }, 'analytics_check_image_failed');
     }
     try {
-      this.d.log.append(this.d.cam, 'still-check', { ...checkJson(this.d.catalog, row, this.maxOpenMs()) });
+      this.d.log.append(cam, 'still-check', { ...checkJson(this.d.catalog, row, this.maxOpenMs()) });
       if (sum.unmapped.length) countUnmapped(this.d.catalog, sum.unmapped, this.now());
     } catch (err) {
       logger.warn({ err: (err as Error).message, stillTs: at }, 'analytics_check_announce_failed');
@@ -385,12 +399,12 @@ export class AnalyticsService {
   }
 
   // The still at start + 1 s, else the nearest within ±2 s; waits for it.
-  private async pickStill(start: number): Promise<number | null> {
+  private async pickStill(cam: string, start: number): Promise<number | null> {
     const want = start + STILL_AFTER_MS;
     const deadline = want + STILL_WAIT_MS;
     for (;;) {
       if (this.stopped) return null; // stop() woke the wait: no spinning to the deadline
-      const near = this.d.listStills(want - STILL_NEAR_MS, want + STILL_NEAR_MS);
+      const near = this.d.listStills(cam, want - STILL_NEAR_MS, want + STILL_NEAR_MS);
       const nearest = () => near.reduce((a, b) => (Math.abs(b - want) < Math.abs(a - want) ? b : a));
       if (near.includes(want)) return want;
       // Stills sit on slot boundaries, events carry milliseconds: once a still
@@ -412,7 +426,7 @@ export class AnalyticsService {
       return;
     }
     const ev = eventById(this.d.catalog, job.id);
-    this.d.log.append(this.d.cam, 'analysis', {
+    this.d.log.append(job.cam, 'analysis', {
       eventId: job.id, kind: ev?.kind ?? job.kind, start: ev?.start_ts ?? job.start_ts, end: ev?.end_ts ?? null,
       provider: 'google-vision', status: r.status, reason: r.reason, stillTs: r.stillTs, summary: sum.summary, objects: r.objects ?? [],
     });
@@ -442,7 +456,7 @@ export class AnalyticsService {
       setSummary(this.d.catalog, a.id, JSON.stringify(summarize(objects).summary));
       n++;
     }
-    if (n) logger.info({ cam: this.d.cam, summarised: n }, 'analytics_summaries_backfilled');
+    if (n) logger.info({ summarised: n }, 'analytics_summaries_backfilled');
     return n;
   }
 
@@ -463,7 +477,7 @@ export class AnalyticsService {
     };
     let image: string | null = null;
     try {
-      const dir = join(this.d.dataDir, 'analytics', this.d.cam);
+      const dir = join(this.d.dataDir, 'analytics', job.cam);
       mkdirSync(dir, { recursive: true });
       image = join(dir, `${job.id}.jpg`);
       writeFileSync(image, jpeg);
@@ -489,12 +503,12 @@ export class AnalyticsService {
 
   private async run(job: Job): Promise<void> {
     if (!this.active()) return;
-    const stillTs = await this.pickStill(job.start_ts);
+    const stillTs = await this.pickStill(job.cam, job.start_ts);
     if (!this.active()) return; // switched off while waiting: nothing stored
     if (stillTs === null) return this.skip(job, 'no_still');
     this.paused = this.pause();
     if (this.paused) return this.skip(job, 'paused', stillTs);
-    const jpeg = await this.d.readStill(stillTs);
+    const jpeg = await this.d.readStill(job.cam, stillTs);
     if (!jpeg) return this.skip(job, 'no_still');
     const make = this.d.provider ?? ((id, k, url) => googleVision({ key: k, baseUrl: url }));
 
@@ -520,7 +534,7 @@ export class AnalyticsService {
         if (this.monthUsage(day) >= g.monthlyLimit || (g.dailyCap > 0 && usageBetween(this.d.catalog, 'google-vision', day, day) >= g.dailyCap)) {
           return this.skip(job, 'limit', stillTs);
         }
-        addUsage(this.d.catalog, 'google-vision', day);
+        addUsage(this.d.catalog, this.usageKey('google-vision', job.cam, key), day);
         made.calls++;
         t0 = this.now();
         let res: { objects: unknown; raw: unknown };
@@ -557,10 +571,10 @@ export class AnalyticsService {
     const head = `Vision on event ${job.id} (${job.kind})`;
     try {
       this.d.audit.write({
-        action: 'event-analysis', category: ['host'], type: ['access'], outcome: ok ? 'success' : 'failure', user: 'system',
+        action: 'event-analysis', category: ['host'], type: ['access'], outcome: ok ? 'success' : 'failure', user: 'system', camera: job.cam,
         message: ok ? `${head}: ${summaryText(made.summary!)}` : `${head} failed: ${reason}`,
         ...(ok ? {} : { error: reason }),
-        details: { cam: this.d.cam, eventId: job.id, kind: job.kind, stillTs, outcome: ok ? 'ok' : 'failed', reason: ok ? null : reason, calls: made.calls, tookMs: made.tookMs, found: ok ? summaryCategories(made.summary!) : [] },
+        details: { cam: job.cam, eventId: job.id, kind: job.kind, stillTs, outcome: ok ? 'ok' : 'failed', reason: ok ? null : reason, calls: made.calls, tookMs: made.tookMs, found: ok ? summaryCategories(made.summary!) : [] },
       });
     } catch (err) {
       logger.warn({ err: (err as Error).message, eventId: job.id }, 'analytics_audit_failed');

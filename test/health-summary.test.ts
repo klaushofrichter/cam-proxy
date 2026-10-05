@@ -1,42 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildHealth, type HealthInput } from '../src/health/summary';
+import { H, input, NOW } from './helpers/health-input';
 
-// Spec 2026-10-03-health-summary-design A2: one function, every problem rule.
-const NOW = Date.UTC(2026, 9, 3, 12, 0);
-const H = 3600_000;
-
-function input(over: Partial<HealthInput> = {}): HealthInput {
-  return {
-    now: NOW,
-    version: '2026.10.03.2',
-    startedAt: NOW - 2 * H,
-    thresholds: { diskPercent: 90, tempC: 75, ftpStalledHours: 6 },
-    camera: {
-      id: 'cam1', name: 'Den', host: '192.168.1.103:443',
-      state: { online: true, since: NOW - H, model: 'RLC-1224A', firmware: 'v3.1', serial: 'SERIAL-123', clockOffsetMs: -412 },
-      reboot: null,
-      poeSwitch: { model: 'sscpoe-web', port: 8 },
-    },
-    stream: { enabled: true, up: true, lastFrameTs: NOW - 1000 },
-    intake: { onvif: 'subscribed', since: NOW - H, source: 'onvif', resubscribes: 3 },
-    ftp: {
-      enabled: true, listening: true,
-      camera: { state: 'on', checkedAt: NOW - 60_000, enable: true, server: '192.168.1.220', port: 2121, user: 'camera', mismatch: [], error: null },
-      stalled: { stalled: false, hours: 6, lastClip: NOW - H, events: 0 },
-      lastClip: NOW - H, clips: 412, failures: 0,
-    },
-    storage: { paused: false, lastRun: NOW - 30 * 60_000 },
-    recordingsCache: { bytes: 1000, files: 1, capBytes: 2 ** 31 },
-    sseClients: 2,
-    lastInventory: { kind: 'clips', op: 'check', outcome: 'ok', startedAt: NOW - 5 * H, message: 'Clips check: nothing missing' },
-    reading: {
-      platform: { pi: true, model: 'Raspberry Pi 4 Model B Rev 1.5', hostStats: true },
-      disk: { sizeBytes: 245457289216, freeBytes: 205078347776, usedBytes: 26414358528, usedPercent: 11.4 },
-      host: { cpuTempC: 53.6, underVoltage: false, memory: { totalBytes: 4e9, availableBytes: 3e9, usedPercent: 25 }, uptimeS: 412233, load: { m1: 0.42, m5: 0.38, m15: 0.35 } },
-    },
-    ...over,
-  };
-}
 const item = (h: ReturnType<typeof buildHealth>, id: string) => h.items.find((i) => i.id === id);
 
 describe('the health summary', () => {
@@ -188,5 +153,37 @@ describe('the health summary', () => {
 
   it('the version is never a problem', () => {
     expect(item(buildHealth(input({ version: 'dev' })), 'version')).toMatchObject({ value: 'dev', text: 'dev', problem: false });
+  });
+});
+describe('several cameras (spec §6.5)', () => {
+  const cam = (id: string, online: boolean) => ({
+    camera: { ...input().camera, id, name: id, host: `192.168.60.${id.slice(3)}`, state: online ? input().camera.state : { online: false, since: NOW, error: 'timeout' } },
+    stream: input().stream, intake: input().intake, ftp: input().ftp,
+  });
+  it('the top level is the first camera; one aggregated item per kind', () => {
+    const h = buildHealth(input({ others: [cam('cam4', false), cam('cam5', true)] }));
+    expect(h.camera.id).toBe('cam1');
+    expect(h.cameras.map((c) => [c.camera.id, c.camera.online])).toEqual([['cam1', true], ['cam4', false], ['cam5', true]]);
+    expect(item(h, 'camera')).toEqual({ id: 'camera', label: 'Camera', value: 2, text: 'cam4 offline', problem: true });
+    expect(item(h, 'stream')).toEqual({ id: 'stream', label: 'Live stream', value: 3, text: 'all 3 up', problem: false });
+    expect(h.items.filter((i) => i.id === 'camera')).toHaveLength(1);
+    expect(h.problemCount).toBe(1);
+  });
+  it('more than one with the problem: "n of N"', () => {
+    const h = buildHealth(input({ camera: cam('cam1', false).camera, others: [cam('cam4', false), cam('cam5', true)] }));
+    expect(item(h, 'camera')).toMatchObject({ value: 1, text: '1 of 3 online', problem: true });
+  });
+  it('no problem but different states: says so without a count of a state', () => {
+    const off = { ...input().stream, enabled: false, up: false };
+    const h = buildHealth(input({ others: [{ ...cam('cam4', true), stream: off }] }));
+    expect(item(h, 'stream')).toMatchObject({ value: 2, text: 'no problem (2 cameras)', problem: false });
+  });
+  // Live test 2026-10-05: one FTP camera of three read "no problem (3 cameras)".
+  it('the FTP item counts only the cameras with FTP on', () => {
+    const noFtp = { ...input().ftp, enabled: false };
+    const one = buildHealth(input({ ftp: noFtp, others: [cam('cam4', true), { ...cam('cam5', true), ftp: noFtp }] }));
+    expect(item(one, 'ftp')).toEqual({ ...item(buildHealth(input()), 'ftp'), id: 'ftp' });
+    const none = buildHealth(input({ ftp: noFtp, others: [{ ...cam('cam4', true), ftp: noFtp }] }));
+    expect(item(none, 'ftp')).toMatchObject({ value: 'disabled', text: 'off in the proxy', problem: false });
   });
 });

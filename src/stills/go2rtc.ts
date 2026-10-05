@@ -7,12 +7,14 @@ import { join } from 'path';
 import { sleep } from '../async';
 import { logger } from '../log';
 import { stopProcess } from './grabber';
+import { trackChild } from '../children';
 
 interface Go2rtcOptions {
   binary?: string;
   rtspPort: number;
   apiPort: number;
   cam: string;
+  readyMs?: number; // how long a start waits for its go2rtc's API (10 s)
   source: { host: string; port: number; user: string; password: string };
 }
 
@@ -80,6 +82,7 @@ export class Go2rtc extends EventEmitter {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     this.proc = p;
+    trackChild(p);
     const clean = (d: Buffer) => String(d).trim().replaceAll(pass, '***').replaceAll(this.o.source.password, '***');
     p.stdout?.on('data', (d: Buffer) => logger.debug({ go2rtc: clean(d) }, 'go2rtc'));
     p.stderr?.on('data', (d: Buffer) => logger.debug({ go2rtc: clean(d) }, 'go2rtc'));
@@ -92,17 +95,22 @@ export class Go2rtc extends EventEmitter {
       this.restartTimer = setTimeout(() => void this.spawn().catch(() => undefined), this.backoff);
       this.backoff = Math.min(this.backoff * 2, 30_000);
     });
-    // Ready once its API answers.
+    // Ready once its API answers, and it is this start's go2rtc: an old one
+    // that still holds the port (a quick restart) answers too, with another
+    // config file. Not ready in time: a start failure (the worker retries
+    // with its backoff); a respawn after an exit just stays down.
     const t0 = Date.now();
-    while (this.running && this.proc === p && Date.now() - t0 < 10_000) {
-      if (await this.ping()) {
+    while (this.running && this.proc === p && Date.now() - t0 < (this.o.readyMs ?? 10_000)) {
+      if (await this.ping(file)) {
         this.backoff = 1000;
         this.setReady(true);
         return;
       }
       await sleep(100);
     }
-    if (this.running && this.proc === p) logger.warn('go2rtc_not_ready');
+    if (!this.running) return;
+    logger.warn({ cam: this.o.cam, apiPort: this.o.apiPort }, 'go2rtc_not_ready');
+    throw new Error(`go2rtc_not_ready: no go2rtc of this proxy on 127.0.0.1:${this.o.apiPort} (port in use?)`);
   }
 
   private setReady(v: boolean): void {
@@ -111,8 +119,15 @@ export class Go2rtc extends EventEmitter {
     this.emit('state', { up: v });
   }
 
-  private ping(): Promise<boolean> {
-    return this.get('/api').then(() => true, () => false);
+  // Answers, and runs our config file (go2rtc reports the -c path).
+  private ping(file: string): Promise<boolean> {
+    return this.get('/api').then((body) => {
+      try {
+        return (JSON.parse(body) as { config_path?: unknown }).config_path === file;
+      } catch {
+        return false;
+      }
+    }, () => false);
   }
 
   private get(path: string): Promise<string> {

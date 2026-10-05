@@ -31,8 +31,8 @@ const cap = (k: string) => k[0].toUpperCase() + k.slice(1);
 export interface EventsSettings { cam: string; eventsDays: number; stream: Stream; eventMaxOpenMin: number }
 export interface EventsInventoryDeps {
   catalog: Catalog;
-  settings: () => EventsSettings; // read when a run starts
-  camera: CameraListDeps;
+  settings: (cam: string) => EventsSettings; // read when a run starts, for the run's camera
+  camera: (cam: string) => CameraListDeps;
 }
 // A missing span: `date` is the camera-local day of its first recording;
 // `recordings` are the SD ids merged into it.
@@ -61,15 +61,15 @@ interface EventSpan { id: number; kind: string; source: string; start_ts: number
 
 // The comparison the check reports and the repair works from. `until`
 // (the repair): judge only spans that ended by then, the check's bound.
-export async function compareEvents(d: EventsInventoryDeps, ctx: Pick<CheckContext, 'signal' | 'progress' | 'now'>, until?: number): Promise<EventsComparison> {
-  const s = d.settings();
+export async function compareEvents(d: EventsInventoryDeps, ctx: Pick<CheckContext, 'signal' | 'progress' | 'now' | 'cam'>, until?: number): Promise<EventsComparison> {
+  const s = d.settings(ctx.cam);
   const now = ctx.now;
   const retentionFrom = now - s.eventsDays * DAY; // as the storage retention deletes them
   const settled = Math.min(now - SETTLE_MS, until ?? Infinity);
   const openCap = s.eventMaxOpenMin * 60_000;
   let listing;
   try {
-    listing = await listCamera(d.camera, {
+    listing = await listCamera(d.camera(ctx.cam), {
       from: retentionFrom, to: now, stream: s.stream, signal: ctx.signal,
       progress: (done, total, date) => ctx.progress({ phase: 'camera', done, total, note: date }),
     });

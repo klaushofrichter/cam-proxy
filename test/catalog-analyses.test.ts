@@ -14,7 +14,7 @@ const row = (event_id: number, over: object = {}) => ({
 
 describe('analyses', () => {
   it('migrate to version 4', () => {
-    expect(fresh().schemaVersion()).toBe(8);
+    expect(fresh().schemaVersion()).toBe(9);
   });
 
   it('store one per event and provider, the latest winning', () => {
@@ -68,9 +68,9 @@ describe('analyses', () => {
 describe('usage', () => {
   it('counts calls per provider per day, summed over a range', () => {
     const c = fresh();
-    addUsage(c, 'google-vision', '2026-09-30');
-    addUsage(c, 'google-vision', '2026-09-30');
-    addUsage(c, 'google-vision', '2026-10-01');
+    addUsage(c, { provider: 'google-vision', keyId: '', cam: 'cam1' }, '2026-09-30');
+    addUsage(c, { provider: 'google-vision', keyId: '', cam: 'cam1' }, '2026-09-30');
+    addUsage(c, { provider: 'google-vision', keyId: '', cam: 'cam1' }, '2026-10-01');
     expect(usageBetween(c, 'google-vision', '2026-09-01', '2026-09-30')).toBe(2);
     expect(usageBetween(c, 'google-vision', '2026-10-01', '2026-10-31')).toBe(1);
     expect(usageBetween(c, 'other', '2026-01-01', '2026-12-31')).toBe(0);
@@ -79,7 +79,7 @@ describe('usage', () => {
 
   it('includes both end days of a range; prune keeps the day it is given', () => {
     const c = fresh();
-    for (const d of ['2026-08-31', '2026-09-01', '2026-09-30', '2026-10-01']) addUsage(c, 'google-vision', d);
+    for (const d of ['2026-08-31', '2026-09-01', '2026-09-30', '2026-10-01']) addUsage(c, { provider: 'google-vision', keyId: '', cam: 'cam1' }, d);
     expect(usageBetween(c, 'google-vision', '2026-09-01', '2026-09-30')).toBe(2);
     expect(usageBetween(c, 'google-vision', '2026-09-30', '2026-09-30')).toBe(1);
     expect(usageBetween(c, 'google-vision', '2026-10-02', '2026-10-01')).toBe(0);
@@ -92,7 +92,7 @@ describe('usage', () => {
 describe('summary storage', () => {
   it('migrates to version 4 and stores the summary', () => {
     const c = fresh();
-    expect(c.schemaVersion()).toBe(8);
+    expect(c.schemaVersion()).toBe(9);
     const e = insertEvent(c, { cam: 'cam1', source: 'onvif', kind: 'person', start_ts: 1000, raw: null });
     const saved = saveAnalysis(c, row(e.id, { summary: '[{"category":"person"}]' }))!;
     expect(saved.summary).toBe('[{"category":"person"}]');

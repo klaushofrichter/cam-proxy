@@ -18,7 +18,7 @@ let p: Awaited<ReturnType<typeof startProxy>>;
 let clipId = 0;
 let clipFile = '';
 const T = Date.UTC(2026, 9, 5, 19, 3, 22); // 14:03:22 CDT
-const cam = () => p.proxy.running.camera.id;
+const cam = () => p.proxy.running.cameraOrder[0];
 const post = (body: object, headers: Record<string, string> = {}) => request(p.base).post(`/api/cameras/${cam()}/archive`).set(auth()).set(headers).send(body);
 const records = (action: string) => p.proxy.audit.list({ actions: [action], limit: 500 }).records as unknown as { event: { outcome: string }; user?: { name: string }; message: string; cam_proxy: Record<string, unknown>; error?: { message: string } }[];
 const stream = () => p.proxy.log.since(0, { types: ['archive'] }, 1000);

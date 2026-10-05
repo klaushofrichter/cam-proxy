@@ -22,7 +22,7 @@ function setup(now: { t: number }, zone: TimeInfo | null = CHICAGO, over: { stor
   const ti = zone ?? undefined;
   const dir = mkdtempSync(join(tmpdir(), 'audit-daily-'));
   dirs.push(dir);
-  const audit = new AuditLog({ dir, version: 't', camera: () => 'cam1', now: () => now.t });
+  const audit = new AuditLog({ dir, version: 't', now: () => now.t });
   const asked: [string, number, number][] = [];
   const mk = (everyMs?: number) => new DailyAudit({
     audit, now: () => now.t, timeInfo: () => ti, everyMs,
@@ -150,7 +150,7 @@ describe('DailyAudit', () => {
     vi.setSystemTime(Date.parse(at));
     const dir = mkdtempSync(join(tmpdir(), 'audit-daily-'));
     dirs.push(dir);
-    const audit = new AuditLog({ dir, version: 't', camera: () => 'cam1', now: () => Date.now() });
+    const audit = new AuditLog({ dir, version: 't', now: () => Date.now() });
     const asked: [string, number, number][] = [];
     let calls = 0;
     const d = new DailyAudit({

@@ -73,9 +73,9 @@ export function powerCycleMessage(s: { host: string | null; port: number | null;
 
 // Why the switch can't be used (as the proxy says it), or null.
 function notConfigured(s: PoeSwitchStatus): string | null {
-  if (!s.host) return 'camera.poeSwitch.host is not set';
-  if (!s.port) return 'camera.poeSwitch.port is not set';
-  if (s.port > s.ports) return 'camera.poeSwitch.port is above camera.poeSwitch.ports';
+  if (!s.host) return 'poeSwitch.host is not set';
+  if (!s.port) return "the camera's poeSwitch.port is not set";
+  if (s.port > s.ports) return "the camera's poeSwitch.port is above poeSwitch.ports";
   if (!s.passwordSet) return 'CAMPROXY_POE_SWITCH_PASSWORD is not set';
   return null;
 }

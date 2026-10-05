@@ -1,6 +1,7 @@
 import { ConfigError, envSummary, loadConfig } from './config/load';
 import { createProxy } from './proxy';
 import { logger } from './log';
+import { shutdownHandler } from './shutdown';
 
 // Starts cam-proxy from config.json and the environment (spec §14).
 async function main(): Promise<void> {
@@ -19,13 +20,13 @@ async function main(): Promise<void> {
   const proxy = createProxy(loaded, { exit: (code) => process.exit(code) });
   // Which settings the environment (the Pi's .env) set: addresses only.
   logger.info(envSummary(loaded), 'config_env');
+  // Before the start: a signal during it stops what has started. A stop over
+  // 15 s (a Vision call in flight may take 10; compose gives 20), or a second
+  // signal, kills the children and exits 1.
+  const onSignal = shutdownHandler({ stop: (reason) => proxy.stop({ reason }), exit: (code) => process.exit(code), timeoutMs: 15_000 });
+  process.on('SIGINT', () => onSignal('SIGINT'));
+  process.on('SIGTERM', () => onSignal('SIGTERM'));
   await proxy.start();
-  const shutdown = (sig: string) => {
-    logger.info({ sig }, 'cam_proxy_stopping');
-    void proxy.stop({ reason: sig }).then(() => process.exit(0));
-  };
-  process.once('SIGINT', () => shutdown('SIGINT'));
-  process.once('SIGTERM', () => shutdown('SIGTERM'));
 }
 
 main().catch((err: Error) => {

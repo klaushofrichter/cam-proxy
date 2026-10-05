@@ -10,7 +10,7 @@ afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, f
 function make(now: { t: number }, over: Partial<ConstructorParameters<typeof AuditLog>[0]> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'audit-'));
   dirs.push(dir);
-  return { dir, log: new AuditLog({ dir, version: '2026.10.01.1', camera: () => 'cam1', now: () => now.t, host: 'testhost', ...over }) };
+  return { dir, log: new AuditLog({ dir, version: '2026.10.01.1', now: () => now.t, host: 'testhost', ...over }) };
 }
 const base = { category: ['authentication'], type: ['start'], outcome: 'success' as const };
 const T = Date.UTC(2026, 9, 1, 23, 59, 0);
@@ -25,7 +25,7 @@ describe('AuditLog.write', () => {
     expect(JSON.parse(lines[0])).toEqual({
       '@timestamp': '2026-10-01T23:59:00.000Z', ecs: { version: '8.11.0' },
       event: { kind: 'event', category: ['authentication'], type: ['start'], action: 'login', outcome: 'success', dataset: 'cam-proxy.audit' },
-      service: { name: 'cam-proxy', version: '2026.10.01.1' }, host: { name: 'testhost' }, labels: { camera: 'cam1' },
+      service: { name: 'cam-proxy', version: '2026.10.01.1' }, host: { name: 'testhost' },
       user: { name: 'admin' }, source: { ip: '10.0.0.5' }, message: 'Admin signed in', cam_proxy: { auth: { method: 'token-form' } },
     });
   });
@@ -105,7 +105,7 @@ describe('AuditLog.write', () => {
     const { dir, log } = make(now);
     log.write({ ...base, action: 'a', message: 'first' });
     appendFileSync(join(dir, '2026-10-01.jsonl'), '{"broken');
-    const again = new AuditLog({ dir, version: 'v', camera: () => 'cam1', now: () => now.t, host: 'h' });
+    const again = new AuditLog({ dir, version: 'v', now: () => now.t, host: 'h' });
     again.write({ ...base, action: 'a', message: 'after' });
     expect(again.list({}).records.map((r) => [r.message, r.cam_proxy!.cursor])).toEqual([['after', '2026-10-01:3'], ['first', '2026-10-01:1']]);
   });

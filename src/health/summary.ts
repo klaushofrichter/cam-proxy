@@ -38,7 +38,13 @@ export interface HealthInput {
   reading: HostReading;
   // The Archive (spec 2026-10-05-archive-design §6): null or absent while it is off.
   archive?: { count: number; bytes: number; percentOfDisk: number; warning: boolean } | null;
+  // The other cameras, config order (spec 2026-10-05-multi-camera-host-design §6.5); camera, stream, intake and ftp above are the first.
+  others?: CameraHealthInput[];
 }
+
+// One camera's part of the input and of the summary (spec 2026-10-05-multi-camera-host-design §6.5).
+export interface CameraHealthInput { camera: HealthInput['camera']; stream: HealthInput['stream']; intake: IntakeState; ftp: HealthInput['ftp'] }
+export interface CameraHealth { camera: HealthSummary['camera']; stream: HealthSummary['stream']; events: HealthSummary['events']; ftp: HealthSummary['ftp']; cert: null; items: HealthItem[] }
 
 export interface HealthSummary {
   schema: 1;
@@ -57,6 +63,8 @@ export interface HealthSummary {
   proxy: { sseClients: number; storagePaused: boolean; lastRetentionRun: number | null; recordingsCache: { bytes: number; files: number; capBytes: number }; lastInventory: LastInventory | null };
   disk: DataVolume | null;
   host: HostStats | null;
+  // Every camera, config order; the first is the top level (schema 1: additive).
+  cameras: CameraHealth[];
 }
 
 const GB = 1024 ** 3;
@@ -69,27 +77,84 @@ const FTP_TEXT: Record<CameraFtpView['state'], string> = {
   unknown: 'not read yet',
 };
 
+// One camera's items and blocks (the rules of A2, unchanged).
+function cameraHealth(c: CameraHealthInput): CameraHealth {
+  const items: HealthItem[] = [];
+  const add = (id: ItemId, label: string, value: HealthItem['value'], text: string, problem: boolean) => items.push({ id, label, value, text, problem });
+
+  const cam = c.camera.state;
+  const camText = cam.online ? 'online' : c.camera.reboot === 'rebooting' || c.camera.reboot === 'power-cycling' ? c.camera.reboot : 'offline';
+  add('camera', 'Camera', cam.online, camText, !cam.online);
+
+  const stream = !c.stream.enabled ? 'off' : c.stream.up ? 'up' : 'down';
+  add('stream', 'Live stream', stream, stream, stream === 'down');
+
+  const onvif = c.intake.onvif;
+  add('events', 'Events intake', onvif, onvif === 'subscribed' ? onvif : `${onvif}${c.intake.source === 'poll' ? ', polling' : ''}`, onvif !== 'subscribed');
+
+  const stalled = c.ftp.enabled && c.ftp.stalled?.stalled === true;
+  if (!c.ftp.enabled) add('ftp', 'Camera FTP upload', 'disabled', 'off in the proxy', false);
+  else {
+    const st = c.ftp.camera?.state ?? 'unknown';
+    const text = stalled ? `no clip for ${c.ftp.stalled!.hours} h` : FTP_TEXT[st];
+    // Never set up counts too while the proxy takes clips (Klaus, 2026-10-03).
+    add('ftp', 'Camera FTP upload', st, text, stalled || st === 'off' || st === 'elsewhere' || st === 'not_set_up');
+  }
+  return {
+    camera: {
+      id: c.camera.id,
+      name: c.camera.name,
+      address: splitHost(c.camera.host).hostname,
+      online: cam.online,
+      since: cam.since,
+      model: cam.model ?? null,
+      firmware: cam.firmware ?? null,
+      clockOffsetMs: cam.clockOffsetMs ?? null,
+      error: cam.error ?? null,
+      reboot: c.camera.reboot,
+      poeSwitch: c.camera.poeSwitch ? { model: c.camera.poeSwitch.model, port: c.camera.poeSwitch.port } : null,
+    },
+    stream: { enabled: c.stream.enabled, up: c.stream.up, lastFrameAt: c.stream.lastFrameTs },
+    events: { onvif: c.intake.onvif, source: c.intake.source, since: c.intake.since, resubscribes: c.intake.resubscribes },
+    ftp: {
+      enabled: c.ftp.enabled,
+      listening: c.ftp.listening,
+      cameraUpload: c.ftp.enabled ? (c.ftp.camera?.state ?? 'unknown') : null,
+      checkedAt: c.ftp.enabled ? (c.ftp.camera?.checkedAt ?? null) : null,
+      lastClipAt: c.ftp.lastClip,
+      clipsStored: c.ftp.clips,
+      failures: c.ftp.failures,
+      stalled,
+      eventsWithoutClip: stalled ? c.ftp.stalled!.events : 0,
+    },
+    cert: null, // P5 fills it (spec §10.5)
+    items,
+  };
+}
+
+// One item per kind for the whole host (spec §6.5): with one camera exactly
+// that camera's; with several, value = the cameras without the problem.
+function aggregate(per: { cam: string; item: HealthItem }[]): HealthItem {
+  const first = per[0].item;
+  if (per.length === 1) return first;
+  const bad = per.filter((p) => p.item.problem);
+  const value = per.length - bad.length;
+  const word = { camera: 'online', stream: 'up', events: 'subscribed', ftp: 'on' }[first.id as 'camera' | 'stream' | 'events' | 'ftp'];
+  const same = per.every((p) => p.item.text === first.text);
+  const text = bad.length === 1 ? `${bad[0].cam} ${bad[0].item.text}` : bad.length > 1 ? `${value} of ${per.length} ${word}` : same ? `all ${per.length} ${first.text}` : `no problem (${per.length} cameras)`;
+  return { id: first.id, label: first.label, value, text, problem: bad.length > 0 };
+}
+
 export function buildHealth(i: HealthInput): HealthSummary {
   const items: HealthItem[] = [];
   const add = (id: ItemId, label: string, value: HealthItem['value'], text: string, problem: boolean) => items.push({ id, label, value, text, problem });
 
-  const cam = i.camera.state;
-  const camText = cam.online ? 'online' : i.camera.reboot === 'rebooting' || i.camera.reboot === 'power-cycling' ? i.camera.reboot : 'offline';
-  add('camera', 'Camera', cam.online, camText, !cam.online);
-
-  const stream = !i.stream.enabled ? 'off' : i.stream.up ? 'up' : 'down';
-  add('stream', 'Live stream', stream, stream, stream === 'down');
-
-  const onvif = i.intake.onvif;
-  add('events', 'Events intake', onvif, onvif === 'subscribed' ? onvif : `${onvif}${i.intake.source === 'poll' ? ', polling' : ''}`, onvif !== 'subscribed');
-
-  const stalled = i.ftp.enabled && i.ftp.stalled?.stalled === true;
-  if (!i.ftp.enabled) add('ftp', 'Camera FTP upload', 'disabled', 'off in the proxy', false);
-  else {
-    const st = i.ftp.camera?.state ?? 'unknown';
-    const text = stalled ? `no clip for ${i.ftp.stalled!.hours} h` : FTP_TEXT[st];
-    // Never set up counts too while the proxy takes clips (Klaus, 2026-10-03).
-    add('ftp', 'Camera FTP upload', st, text, stalled || st === 'off' || st === 'elsewhere' || st === 'not_set_up');
+  const cams = [{ camera: i.camera, stream: i.stream, intake: i.intake, ftp: i.ftp }, ...(i.others ?? [])].map((c) => ({ id: c.camera.id, h: cameraHealth(c) }));
+  for (const id of ['camera', 'stream', 'events', 'ftp'] as const) {
+    let per = cams.map((c) => ({ cam: c.id, item: c.h.items.find((x) => x.id === id)! }));
+    // FTP: only the cameras that upload (one FTP camera: its item, as on one camera); none: the first's "off".
+    if (id === 'ftp') per = per.filter((p) => p.item.value !== 'disabled').length ? per.filter((p) => p.item.value !== 'disabled') : per.slice(0, 1);
+    items.push(aggregate(per));
   }
 
   add('storage', 'Storage', i.storage.paused ? 'paused' : 'writing', i.storage.paused ? 'paused (low space)' : 'writing', i.storage.paused);
@@ -121,32 +186,10 @@ export function buildHealth(i: HealthInput): HealthSummary {
     thresholds: { ...i.thresholds },
     platform: { pi: i.reading.platform.pi, model: i.reading.platform.model, hostStats: i.reading.platform.hostStats },
     items,
-    camera: {
-      id: i.camera.id,
-      name: i.camera.name,
-      address: splitHost(i.camera.host).hostname,
-      online: cam.online,
-      since: cam.since,
-      model: cam.model ?? null,
-      firmware: cam.firmware ?? null,
-      clockOffsetMs: cam.clockOffsetMs ?? null,
-      error: cam.error ?? null,
-      reboot: i.camera.reboot,
-      poeSwitch: i.camera.poeSwitch ? { model: i.camera.poeSwitch.model, port: i.camera.poeSwitch.port } : null,
-    },
-    stream: { enabled: i.stream.enabled, up: i.stream.up, lastFrameAt: i.stream.lastFrameTs },
-    events: { onvif: i.intake.onvif, source: i.intake.source, since: i.intake.since, resubscribes: i.intake.resubscribes },
-    ftp: {
-      enabled: i.ftp.enabled,
-      listening: i.ftp.listening,
-      cameraUpload: i.ftp.enabled ? (i.ftp.camera?.state ?? 'unknown') : null,
-      checkedAt: i.ftp.enabled ? (i.ftp.camera?.checkedAt ?? null) : null,
-      lastClipAt: i.ftp.lastClip,
-      clipsStored: i.ftp.clips,
-      failures: i.ftp.failures,
-      stalled,
-      eventsWithoutClip: stalled ? i.ftp.stalled!.events : 0,
-    },
+    camera: cams[0].h.camera,
+    stream: cams[0].h.stream,
+    events: cams[0].h.events,
+    ftp: cams[0].h.ftp,
     proxy: {
       sseClients: i.sseClients,
       storagePaused: i.storage.paused,
@@ -156,5 +199,6 @@ export function buildHealth(i: HealthInput): HealthSummary {
     },
     disk: disk ? { ...disk } : null,
     host: host ? structuredClone(host) : null,
+    cameras: cams.map((c) => c.h),
   };
 }

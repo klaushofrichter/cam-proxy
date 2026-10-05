@@ -59,10 +59,11 @@ export interface JobDeps {
   // Throws ArchiveJobError('insufficient_space', …, {needed, free, minFreeBytes, inFlight}) when
   // it won't fit beside what the other jobs in flight still write (`jobId`: this job, not counted).
   checkSpace: (bytes: number, jobId: string) => void;
-  snapshot: (window: { from: number; to: number }) => Taken;
-  thumbDeps: (clipPath: string) => ThumbDeps;
+  // `cam`: the request's camera (spec 2026-10-05-multi-camera-host-design §5.2).
+  snapshot: (window: { from: number; to: number }, cam: string) => Taken;
+  thumbDeps: (clipPath: string, cam: string) => ThumbDeps;
   duration: (clipPath: string) => Promise<number | null>;
-  defaultName: (from: number) => string;
+  defaultName: (from: number, cam: string) => string;
   onDone: (row: ArchiveRow, req: ArchiveRequest, job: JobView) => void;
   onFailed: (req: ArchiveRequest, job: JobView) => void;
 }
@@ -187,8 +188,8 @@ export class ArchiveJobs {
       check();
       view.phase = 'finishing';
       const duration = await this.d.duration(clip).catch(() => null);
-      const taken = this.d.snapshot(req.window);
-      const thumb = await chooseThumbnail(this.d.thumbDeps(clip), taken, req.thumbnailAt);
+      const taken = this.d.snapshot(req.window, req.cam);
+      const thumb = await chooseThumbnail(this.d.thumbDeps(clip, req.cam), taken, req.thumbnailAt);
       let thumbFile: { bytes: number; crc32: number } | null = null;
       if (thumb.jpeg) {
         writeFileSync(join(staged, 'thumb.jpg'), thumb.jpeg);
@@ -197,7 +198,7 @@ export class ArchiveJobs {
       check();
       const row = this.d.store.commit(staged, {
         cam: req.cam,
-        name: req.name ?? this.d.defaultName(req.window.from),
+        name: req.name ?? this.d.defaultName(req.window.from, req.cam),
         labels: req.labels,
         retention_days: req.retentionDays,
         created_at: this.now(),

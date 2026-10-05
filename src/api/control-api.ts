@@ -8,8 +8,9 @@ import { cameraNameProblem } from '../camera/name-rules';
 import type { PowerCycleAnswer, RebootAnswer, RebootRequester, RebootState, TooSoon } from '../camera/reboot';
 import { PoeSwitchError, type PoeOnResult, type PoeSwitchStatus, type PortReading } from '../camera/poe-switch';
 import type { Config } from '../config/defaults';
-import { applyOverrides, ConfigError, getPath, needsProcessRestart, needsRestart, removeAllOverrides, removeOverride, resetTarget, type Loaded } from '../config/load';
-import { leafAt, leafPaths } from '../config/schema';
+import { applyOverrides, ConfigError, getPath, needsProcessRestart, needsRestart, removeAllOverrides, removeOverride, resetTarget, settingPaths, type Loaded } from '../config/load';
+import { leafAt } from '../config/schema';
+import { cameraConfig, cameraIds } from '../config/cameras';
 import { FtpNotConfiguredError, type FtpTarget } from '../clips/camera-ftp';
 import type { CameraFtpView, ClipsStall } from '../clips/ftp-health';
 import type { IntakeState } from '../events/intake';
@@ -20,10 +21,12 @@ import type { Storage } from '../storage';
 import type { StreamLog } from '../stream/log';
 import { AuditQueryError, type AuditLog, type Outcome } from '../audit/audit-log';
 import { clientIp, tokenMatches } from './auth';
+import { cameraParam, RESTART_RETRY_S } from './camera-param';
+import type { CameraRegistry } from '../cameras/registry';
 import { RefusalThrottle } from '../audit/throttle';
 import { isAuditAction } from '../audit/actions';
 import { DAY, dayStart } from '../time-units';
-import { eventsStored } from './metrics';
+import { eventsStored, eventsStoredByCamera } from './metrics';
 import { readCookie, SESSION_COOKIE, SESSION_MS, type createSessionSigner } from './session';
 import type { createLoginLinks } from './login-links';
 import type { RecordingsStatus } from '../recordings/side';
@@ -52,6 +55,16 @@ interface FtpStatus {
   stalled: ClipsStall | null;
 }
 
+// One camera's status, as /control/status gives the first camera's (spec 2026-10-05-multi-camera-host-design §6.3).
+export interface CameraStatusBlock {
+  id: string;
+  camera: ReturnType<ControlDeps['camera']>;
+  intake: IntakeState;
+  stream: ReturnType<ControlDeps['stream']>;
+  ftp: FtpStatus;
+  recordings: RecordingsStatus;
+}
+
 interface ControlDeps {
   loaded: () => Loaded;
   setLoaded: (l: Loaded) => void; // applies live settings
@@ -61,23 +74,25 @@ interface ControlDeps {
   // `name`: the camera's name (configured camera.name until first read, nameSource 'config').
   camera: () => CameraState & { name: string; nameSource: 'camera' | 'config'; webUiUrl: string | null; reboot: RebootState | null; poeSwitch: PoeSwitchStatus };
   // The camera's name (camera-name design): `write` validates, writes, reads back.
-  cameraName: { current: () => string; write: (name: string) => Promise<string> };
-  checkCamera: () => Promise<CameraState>;
+  // Camera functions take the camera they act on (spec 2026-10-05-multi-camera-host-design §6.3).
+  cameraName: { current: (cam: string) => string; write: (cam: string, name: string) => Promise<string> };
+  checkCamera: (cam: string) => Promise<CameraState>;
   intake: () => IntakeState;
-  resubscribe: () => void;
-  restart: () => Promise<void>; // the camera side
-  cameraReboot: (who: RebootRequester) => Promise<RebootAnswer>;
+  resubscribe: (cam: string) => void;
+  restart: () => Promise<void>; // every camera side, with the pending restart settings
+  restartCamera: (cam: string) => Promise<void>; // one camera's side (its client, poller, events, stills)
+  cameraReboot: (who: RebootRequester, cam: string) => Promise<RebootAnswer>;
   // The camera's PoE switch (#85): why it can't be used (or null), a read, a power-cycle.
-  poeSwitch: { notConfigured: () => string | null; read: () => Promise<PortReading>; poeOn: () => Promise<PoeOnResult>; info: () => { model: string; host: string; port: number } };
-  cameraPowerCycle: (who: RebootRequester) => Promise<PowerCycleAnswer>;
+  poeSwitch: { notConfigured: (cam: string) => string | null; read: (cam: string) => Promise<PortReading>; poeOn: (cam: string) => Promise<PoeOnResult>; info: (cam: string) => { model: string; host: string; port: number } };
+  cameraPowerCycle: (who: RebootRequester, cam: string) => Promise<PowerCycleAnswer>;
   restartProcess: () => void; // stop, then exit 0 (the supervisor starts it again)
   ftp: () => FtpStatus;
   health: () => Promise<HealthSummary>; // spec 2026-10-03-health-summary-design: the Health and Pi cards
   cameraFtp: {
-    target: () => FtpTarget;
-    setup: (t: FtpTarget) => Promise<unknown>;
-    test: (t: FtpTarget) => Promise<{ ok: boolean; rspCode: number }>;
-    off: () => Promise<unknown>;
+    target: (cam: string) => FtpTarget;
+    setup: (cam: string, t: FtpTarget) => Promise<unknown>;
+    test: (cam: string, t: FtpTarget) => Promise<{ ok: boolean; rspCode: number }>;
+    off: (cam: string) => Promise<unknown>;
   };
   storage: Storage;
   audit: AuditLog;
@@ -98,14 +113,22 @@ interface ControlDeps {
   envFile: () => string | undefined;
   // The Archive (spec 2026-10-05-archive-design): the Status card, Clear the Archive.
   archive: Pick<Archive, 'status' | 'clear'>;
+  // The first camera (the only one on a one-camera proxy).
+  cameraId: () => string;
+  // Every camera's status block, config order; the number of cameras (spec 2026-10-05-multi-camera-host-design §6.3).
+  cameras: CameraRegistry;
+  cameraStatus: () => CameraStatusBlock[];
+  cameraCount: () => number;
 }
 
 // The effective configuration for the UI: value (what runs), source, restart
 // flag, the next value for restart settings changed but not yet applied, and
 // the type (integer, boolean or string), for settings without a value.
+// `legacy`: a config.json value read from a legacy `camera` object (spec
+// 2026-10-05-multi-camera-host-design §4.2: "config.json (legacy camera)").
 function configView(loaded: Loaded, running: Config) {
   return Object.fromEntries(
-    leafPaths().map((p) => {
+    settingPaths(running).map((p) => {
       const restart = needsRestart(p);
       const value = getPath(running, p);
       const next = getPath(loaded.config, p);
@@ -113,7 +136,7 @@ function configView(loaded: Loaded, running: Config) {
       // `env`: the variable that sets it (read-only on the Settings page).
       // `resetTo` (an override): what Reset goes back to, the file's value or the
       // default; `same` when that changes nothing, `means` for an unset state.
-      return [p, { value, source: loaded.sources[p], ...(loaded.envNames[p] ? { env: loaded.envNames[p] } : {}), restart, pending, ...(pending ? { next } : {}), type: leafAt(p)?.type, ...(loaded.sources[p] === 'override' ? { resetTo: resetTarget(loaded, p) } : {}) }];
+      return [p, { value, source: loaded.sources[p], ...(loaded.envNames[p] ? { env: loaded.envNames[p] } : {}), restart, pending, ...(pending ? { next } : {}), type: leafAt(p)?.type, ...(loaded.sources[p] === 'override' ? { resetTo: resetTarget(loaded, p) } : {}), ...(loaded.legacyCamera && loaded.sources[p] === 'file' && (p.startsWith('cameras.') || p.startsWith('poeSwitch.')) ? { legacy: true } : {}) }];
     }),
   );
 }
@@ -220,6 +243,14 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
   return r;
 }
 
+// The camera actions (spec 2026-10-05-multi-camera-host-design §6.3): their
+// control-action record names the camera; on a proxy with several cameras
+// they need a camera (the routes of phase 2). The host actions work as before.
+export const CAMERA_ACTIONS = new Set(['camera-test', 'onvif-resubscribe', 'camera-ftp-setup', 'camera-ftp-test', 'camera-ftp-off', 'restart', 'camera-reboot', 'camera-powercycle', 'camera-poe-on', 'poe-switch-read', 'inventory', 'inventory-repair', 'inventory-cancel']);
+
+// What a camera action answers on a proxy with several cameras (spec §6.3; the camera routes are phase 2).
+const cameraRequired = (path: string) => `several cameras: name the camera, ${path} (or ?cam=<id>); GET /control/cameras lists them`;
+
 // Actions that write their own audit records (no generic control-action);
 // a new action that audits itself goes here too.
 const OWN_AUDIT = new Set(['camera-reboot', 'camera-powercycle', 'camera-poe-on', 'restart-proxy', 'inventory', 'inventory-repair', 'camera-address', 'archive-clear']);
@@ -241,6 +272,8 @@ function envFileState(path: string | undefined): { writable: boolean; reason?: s
 // The control API (spec §11); admin access is checked by the caller.
 export function controlApi(d: ControlDeps): express.Router {
   const r = express.Router();
+  // :cam → its worker, 404 or 503 while it restarts (spec §3.3, §6.1).
+  r.param('cam', cameraParam(d.cameras, 'admin'));
   let restartRequested = false; // a restart-proxy request was recorded (the stop follows)
   const invalid = (res: Response, err: unknown) => {
     if (err instanceof ConfigError) return void res.status(400).json({ error: 'invalid', detail: err.message });
@@ -270,7 +303,16 @@ export function controlApi(d: ControlDeps): express.Router {
       analyticsUnmapped: d.unmapped.list(20),
       health,
       archive: d.archive.status(),
+      cameras: d.cameraStatus(),
     });
+  });
+
+  // Every camera's status block (spec §6.3); one camera's.
+  r.get('/cameras', (_req, res) => void res.json(d.cameraStatus()));
+  r.get('/cameras/:cam/status', (req, res) => {
+    const b = d.cameraStatus().find((x) => x.id === req.params.cam);
+    if (!b) return void res.status(404).json({ error: 'not_found' });
+    res.json(b);
   });
 
   // The camera's name (camera-name design): stored on the camera only.
@@ -278,16 +320,37 @@ export function controlApi(d: ControlDeps): express.Router {
   // camera is not asked, nothing is audited) or refused by the camera; 503
   // camera_offline; 502 camera_error. A `camera-name` record once the camera
   // was asked. The stream message follows from the poller.
-  r.put('/camera/name', async (req, res) => {
+  // The camera of a camera route (:cam, already resolved), or ?cam=, or the
+  // only camera; null with several and none named. Answers 404/503 itself
+  // for an unknown/restarting ?cam= (undefined then).
+  const targetCamera = (req: express.Request, res: Response): string | null | undefined => {
+    if (typeof req.params.cam === 'string') return req.params.cam;
+    const q = req.query.cam;
+    if (typeof q === 'string' && q) {
+      const w = d.cameras.get(q);
+      if (!w) return void res.status(404).json({ error: 'not_found' }), undefined;
+      if (w.phase() === 'restarting') {
+        res.setHeader('Retry-After', String(RESTART_RETRY_S));
+        return void res.status(503).json({ error: 'camera_restarting' }), undefined;
+      }
+      return w.id;
+    }
+    return d.cameraCount() === 1 ? d.cameraId() : null;
+  };
+
+  const putName = async (req: express.Request, res: Response) => {
+    const cam = targetCamera(req, res);
+    if (cam === undefined) return;
+    if (cam === null) return void res.status(400).json({ error: 'camera_required', detail: cameraRequired('PUT /control/cameras/<id>/name') });
     const name: unknown = req.body?.name;
     const problem = cameraNameProblem(name);
     if (problem) return void res.status(400).json({ error: 'invalid_name', reason: problem });
     const to = name as string;
-    const from = d.cameraName.current();
+    const from = d.cameraName.current(cam);
     const requestedBy = res.locals.access?.viaCookie ? 'session' : 'token';
-    const base = { action: 'camera-name', category: ['configuration'], type: ['change'], user: 'admin', ...who(req) };
+    const base = { action: 'camera-name', category: ['configuration'], type: ['change'], user: 'admin', ...who(req), camera: cam };
     try {
-      const read = await d.cameraName.write(to);
+      const read = await d.cameraName.write(cam, to);
       d.audit.write({ ...base, outcome: 'success', message: read === from ? `Camera name set: "${read}" (unchanged)` : `Camera name changed: "${from}" → "${read}"`, details: { from, to: read, ...(read !== to ? { requested: to } : {}), requestedBy } });
       res.json({ name: read });
     } catch (err) {
@@ -298,7 +361,9 @@ export function controlApi(d: ControlDeps): express.Router {
       logger.warn({ err: (err as Error).message }, 'camera_name_write_failed');
       res.status(502).json({ error: err instanceof CameraError ? err.code : 'camera_error' });
     }
-  });
+  };
+  r.put('/camera/name', putName);
+  r.put('/cameras/:cam/name', putName);
 
   r.get('/analytics', (_req, res) => void res.json(d.analytics()));
   r.get('/analytics/unmapped', (_req, res) => void res.json(d.unmapped.list()));
@@ -324,7 +389,7 @@ export function controlApi(d: ControlDeps): express.Router {
     const u = d.storage.usage();
     res.json({
       disk: { catalog: u.catalog, audit: u.audit, stills: u.stills, previews: u.previews, clips: u.clips, recordings: u.recordings, free: u.free, size: u.size },
-      events: { stored: eventsStored(d.catalog) },
+      events: { stored: eventsStored(d.catalog), byCamera: eventsStoredByCamera(d.catalog) },
       stream: { rows: d.log.count(), lastId: d.log.lastId() },
       sse: { clients: d.sseClients() },
       storage: { budget: u.budget, used: u.used, daysUntilFull: u.daysUntilFull, paused: d.storage.paused() },
@@ -347,7 +412,7 @@ export function controlApi(d: ControlDeps): express.Router {
   const recordChanges = (req: express.Request, before: Config, all = false) => {
     const after = d.loaded().config;
     // `restart`: the change waits for a restart ('restart'), or for a new process ('process').
-    const changes = leafPaths()
+    const changes = settingPaths(after)
       .map((p) => ({ key: p, from: getPath(before, p), to: getPath(after, p), ...(needsProcessRestart(p) ? { restart: 'process' } : needsRestart(p) ? { restart: 'restart' } : {}) }))
       .filter((c) => JSON.stringify(c.from) !== JSON.stringify(c.to));
     if (changes.length) d.audit.write({ action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', user: 'admin', ...who(req), message: `${all ? 'Settings reset to defaults' : 'Settings changed'}: ${changes.map((c) => c.key).join(', ')}`, details: { changes, ...(all ? { reset: 'all' } : {}) } });
@@ -388,8 +453,13 @@ export function controlApi(d: ControlDeps): express.Router {
   const findLimit = rateLimit({ windowMs: 60_000, limit: FIND_CAMERA_PER_MINUTE, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } });
   const actionLimit: express.RequestHandler = (req, res, next) => (req.params.name === 'find-camera' || req.params.name === 'camera-address' ? findLimit(req, res, next) : next());
 
-  r.post('/actions/:name', actionLimit, async (req, res) => {
+  const action = async (req: express.Request, res: Response) => {
     const name = String(req.params.name);
+    const routed = typeof req.params.cam === 'string';
+    // Host actions have no camera route.
+    if (routed && !CAMERA_ACTIONS.has(name)) return void res.status(404).json({ error: 'not_found' });
+    const target = CAMERA_ACTIONS.has(name) ? targetCamera(req, res) : null;
+    if (target === undefined) return;
     const requestedBy = res.locals.access?.viaCookie ? 'session' : 'token';
     const requester = { requestedBy, ...who(req) } as const;
     // A `control-action` record with the result, once the answer is sent or
@@ -404,13 +474,21 @@ export function controlApi(d: ControlDeps): express.Router {
         const done = res.writableFinished;
         const ok = done && res.statusCode < 400;
         const result = !done ? 'aborted' : ok ? 'ok' : String((res.locals.errorCode as string | undefined) ?? res.statusCode);
-        d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: !done ? 'unknown' : ok ? 'success' : 'failure', user: 'admin', ...who(req), message: `Control action ${name}: ${result}`, details: { action: name, result, requestedBy } });
+        d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: !done ? 'unknown' : ok ? 'success' : 'failure', user: 'admin', ...who(req), message: `Control action ${name}: ${result}`, details: { action: name, result, requestedBy }, ...(target ? { camera: target } : {}) });
       });
     }
     const fail = (status: number, error: string, detail?: string, extra: object = {}) => {
       res.locals.errorCode = error;
       res.status(status).json({ error, ...(detail ? { detail } : {}), ...extra });
     };
+    // Several cameras: a camera action names its camera (Ruling P1-12; the routes are phase 2).
+    if (CAMERA_ACTIONS.has(name) && target === null) {
+      // Actions with their own records are audited here; the others by the close handler above. No camera: none was named.
+      if (OWN_AUDIT.has(name)) d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: 'failure', user: 'admin', ...who(req), message: `Control action ${name}: camera_required`, details: { action: name, result: 'camera_required', requestedBy } });
+      return fail(400, 'camera_required', cameraRequired(`POST /control/cameras/<id>/actions/${name}`));
+    }
+    // A camera action has its camera from here on.
+    const cam = target as string;
     // The reboot and the power-cycle share a cooldown (#83, #85).
     const tooSoon = (a: TooSoon) => {
       res.setHeader('Retry-After', String(a.retryAfterS));
@@ -420,7 +498,7 @@ export function controlApi(d: ControlDeps): express.Router {
     };
     // The power-cycle, PoE-on and switch read need a configured switch: 409 otherwise.
     const noSwitch = (): boolean => {
-      const why = d.poeSwitch.notConfigured();
+      const why = d.poeSwitch.notConfigured(cam);
       if (why) fail(409, 'not_configured', why);
       return !!why;
     };
@@ -436,29 +514,31 @@ export function controlApi(d: ControlDeps): express.Router {
     };
     switch (name) {
       case 'onvif-resubscribe':
-        d.resubscribe();
+        d.resubscribe(cam);
         return void res.status(202).end();
       case 'camera-test':
-        return void res.json(await d.checkCamera());
+        return void res.json(await d.checkCamera(cam));
       case 'retention-run':
         return void res.json(d.storage.run({ dryRun: req.body?.dryRun === true }));
       case 'camera-ftp-setup':
       case 'camera-ftp-test': {
-        const t = d.cameraFtp.target();
+        const t = d.cameraFtp.target(cam);
         if (!t.server) return fail(409, 'not_configured', 'ftp.publicHost is not set');
         if (!t.password) return fail(409, 'not_configured', 'CAMPROXY_FTP_PASSWORD is not set');
-        return void (await cameraCall(res, async () => (name === 'camera-ftp-setup' ? { ftp: await d.cameraFtp.setup(t) } : d.cameraFtp.test(t))));
+        return void (await cameraCall(res, async () => (name === 'camera-ftp-setup' ? { ftp: await d.cameraFtp.setup(cam, t) } : d.cameraFtp.test(cam, t))));
       }
       case 'camera-ftp-off':
-        return void (await cameraCall(res, async () => ({ ftp: await d.cameraFtp.off() })));
+        return void (await cameraCall(res, async () => ({ ftp: await d.cameraFtp.off(cam) })));
       // The camera side: reconnect and apply restart settings; the process runs on.
+      // A named camera (its route or ?cam=): that camera's side only; the old
+      // route without a camera: every camera side and the settings.
       case 'restart':
-        d.restart().catch((err: Error) => logger.error({ err: err.message }, 'restart_failed'));
+        (routed || typeof req.query.cam === 'string' ? d.restartCamera(cam) : d.restart()).catch((err: Error) => logger.error({ err: err.message }, 'restart_failed'));
         return void res.status(202).end();
       // Reboot the camera (#83): 202 {confirmed}, 429 within the cooldown,
       // 502 when the request never reached the camera.
       case 'camera-reboot': {
-        const a = await d.cameraReboot(requester);
+        const a = await d.cameraReboot(requester, cam);
         if (a.status === 202) return void res.status(202).json({ confirmed: a.confirmed });
         if (a.status === 429) return tooSoon(a);
         return fail(502, a.error, a.detail);
@@ -468,7 +548,7 @@ export function controlApi(d: ControlDeps): express.Router {
       // 502 switch_auth, switch_unreachable, switch_error; 429 as the reboot.
       case 'camera-powercycle': {
         if (noSwitch()) return;
-        const a = await d.cameraPowerCycle(requester);
+        const a = await d.cameraPowerCycle(requester, cam);
         if (a.status === 202) return void res.status(202).json({ offAt: a.offAt, onAt: a.onAt, watts: a.watts });
         if (a.status === 429) return tooSoon(a);
         return fail(a.status, a.error, a.detail, a.poeOff ? { poeOff: true, turnedOn: a.turnedOn } : {});
@@ -477,11 +557,11 @@ export function controlApi(d: ControlDeps): express.Router {
       // check and no cooldown. The same switch session lock as the rest.
       case 'camera-poe-on': {
         if (noSwitch()) return;
-        const sw = d.poeSwitch.info();
+        const sw = d.poeSwitch.info(cam);
         const where = `${sw.host} port ${sw.port}`;
-        const base = { action: 'camera-poe-on', category: ['host'], type: ['change'], user: 'admin', ...who(req) };
+        const base = { action: 'camera-poe-on', category: ['host'], type: ['change'], user: 'admin', ...who(req), camera: cam };
         try {
-          const r = await d.poeSwitch.poeOn();
+          const r = await d.poeSwitch.poeOn(cam);
           d.audit.write({ ...base, outcome: 'success', message: r.wasOn ? `Camera PoE on (${where}): it was on already` : `Camera PoE turned on (${where})`, details: { switch: sw, wasOn: r.wasOn, requestedBy } });
           return void res.json(r);
         } catch (err) {
@@ -493,7 +573,7 @@ export function controlApi(d: ControlDeps): express.Router {
       case 'poe-switch-read': {
         if (noSwitch()) return;
         try {
-          return void res.json(await d.poeSwitch.read());
+          return void res.json(await d.poeSwitch.read(cam));
         } catch (err) {
           return switchFail(err);
         }
@@ -502,14 +582,17 @@ export function controlApi(d: ControlDeps): express.Router {
       // probe, the current camera marked, and whether the .env file can be written.
       case 'find-camera': {
         const r = await d.findCamera();
-        const current = splitHost(d.running().camera.host).hostname.toLowerCase();
-        return void res.json({ devices: r.devices.map((x) => ({ ...x, current: x.address.toLowerCase() === current })), tookMs: r.tookMs, envFile: envFileState(d.envFile()) });
+        // `current`: the address of a configured camera.
+        const hosts = cameraIds(d.running()).map((id) => splitHost(cameraConfig(d.running(), id)!.host).hostname.toLowerCase());
+        return void res.json({ devices: r.devices.map((x) => ({ ...x, current: hosts.includes(x.address.toLowerCase()) })), tookMs: r.tookMs, envFile: envFileState(d.envFile()) });
       }
       // Use this address (pi-config spec §4): CAMERA_HOST into the .env file
       // (backup, atomic), audited; the UI restarts the proxy next.
       case 'camera-address': {
         const host: unknown = req.body?.host;
         if (!validCameraHost(host)) return fail(400, 'invalid', 'host: an address or name, optional :port');
+        // CAMERA_HOST is the one camera's address (spec §4.2).
+        if (cameraIds(d.running()).length > 1) return fail(409, 'not_available', 'several cameras: set cameras[].host in config.json');
         const line = `CAMERA_HOST=${host}`;
         const base = { action: 'camera-address', category: ['configuration'], type: ['change'], user: 'admin', ...who(req) };
         try {
@@ -540,7 +623,7 @@ export function controlApi(d: ControlDeps): express.Router {
         if (camera !== undefined && typeof camera !== 'boolean') return fail(400, 'invalid', 'camera is true or false');
         if (camera && !d.inventory.checks[kind]?.camera) return fail(400, 'invalid', `the ${kind} inventory has no camera compare`);
         try {
-          const { runId } = d.inventory.start(kind, requester, { camera: camera === true });
+          const { runId } = d.inventory.start(kind, requester, { camera: camera === true, cam });
           return void res.status(202).json({ runId });
         } catch (err) {
           if (!inventoryRefused(err)) throw err;
@@ -555,6 +638,9 @@ export function controlApi(d: ControlDeps): express.Router {
         const kinds = d.inventory.repairKinds();
         if (typeof kind !== 'string' || !kinds.includes(kind)) return fail(400, 'invalid', `kind is one of: ${kinds.join(', ')}`);
         if (typeof source !== 'string' || !RUN_ID.test(source)) return fail(400, 'invalid', 'runId is the id of a check run');
+        // A repair works on its report's camera: only under that camera.
+        const report = await d.inventory.get(source);
+        if (report && report.camera !== cam) return fail(409, 'camera_mismatch', `that inventory ran on camera ${report.camera}`);
         try {
           const { runId } = await d.inventory.repair(kind, requester, source);
           return void res.status(202).json({ runId });
@@ -575,13 +661,18 @@ export function controlApi(d: ControlDeps): express.Router {
       }
       // A control-action record; the run ends with its partial counts.
       case 'inventory-cancel': {
+        // Only this camera's run (one runs at a time, host-wide).
+        const run = d.inventory.running();
+        if (run && run.camera !== cam) return fail(409, 'camera_mismatch', `the running inventory is camera ${run.camera}'s`);
         const runId = d.inventory.cancel('request');
         return void res.json({ cancelled: runId !== null, runId });
       }
       default:
         return fail(404, 'not_found');
     }
-  });
+  };
+  r.post('/actions/:name', actionLimit, action);
+  r.post('/cameras/:cam/actions/:name', actionLimit, action);
 
   r.get('/log', (req, res) => {
     const limit = Number(req.query.limit);

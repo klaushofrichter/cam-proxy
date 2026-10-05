@@ -38,7 +38,7 @@ paths:
     get:
       summary: The camera and its state
       responses:
-        '200': { description: '[{ id, name, online, lastEventTs (the newest live (non-recovered) event''s start, or null), stream: { up, lastFrameTs } | null, publicUrl, address }] (address: the camera''s camera.host as it runs, host and optional port, for clients that reach the camera directly; name: the camera''s own name as read from it, the configured camera.name until the camera was first read; stream is null when stills are off; publicUrl is server.publicUrl or null)' }
+        '200': { description: '[{ id, name, online, lastEventTs (the newest live (non-recovered) event''s start, or null), stream: { up, lastFrameTs } | null, publicUrl, address }] (address: the camera''s camera.host as it runs, host and optional port, for clients that reach the camera directly; name: the camera''s own name as read from it, the configured camera.name until the camera was first read; stream is null when stills are off; publicUrl is server.publicUrl or null). Every configured camera in config order; each item also has error (the camera worker''s or its last check''s error, null when fine) and features (string[], the same on every item: what this proxy supports beyond the pre-multi-camera API, e.g. sse-cam-list for /api/stream?cam=a,b; clients test for a name)' }
         '401': { description: missing or wrong token }
   /api/cameras/{cam}:
     get:
@@ -46,9 +46,10 @@ paths:
       parameters:
         - { name: cam, in: path, required: true, schema: { type: string } }
       responses:
-        '200': { description: '{ id, name, online, lastEventTs, stream, publicUrl, address }, as in GET /api/cameras' }
+        '200': { description: '{ id, name, online, lastEventTs, stream, publicUrl, address, error, features }, as in GET /api/cameras' }
         '401': { description: missing or wrong token }
         '404': { description: unknown camera }
+        '503': { description: camera_restarting (Retry-After) while the camera restarts }
   /api/cameras/{cam}/extent:
     get:
       summary: How far back the proxy has content (for a timeline's left edge)
@@ -57,6 +58,7 @@ paths:
       responses:
         '200': { description: '{ clips, stills, previews }: the oldest clip start, still minute and preview minute kept (unix ms), each null when none' }
         '404': { description: unknown camera }
+        '503': { description: camera_restarting (Retry-After) while the camera restarts }
   /api/cameras/{cam}/stills:
     get:
       summary: Timestamps that have a still, in a range of at most one day
@@ -68,6 +70,7 @@ paths:
         '200': { description: '[ts, …] (unix ms), oldest first' }
         '400': { description: 'missing range, to before from, or more than a day' }
         '404': { description: unknown camera, or stills are off }
+        '503': { description: camera_restarting (Retry-After) while the camera restarts }
   /api/cameras/{cam}/stills/{file}:
     get:
       summary: One still, as <ts>.jpg
@@ -78,6 +81,7 @@ paths:
         '200': { description: 'image/jpeg; immutable once its minute is complete' }
         '400': { description: not <unix ms>.jpg }
         '404': { description: no still at that time }
+        '503': { description: camera_restarting (Retry-After) while the camera restarts }
   /api/cameras/{cam}/previews:
     get:
       summary: Preview sprite sheets (one per minute) in a range of at most one day
@@ -89,6 +93,7 @@ paths:
         '200': { description: '[{ minute, cols, rows, tileW, tileH, intervalS, present: [bool], url }]' }
         '400': { description: 'missing range, to before from, or more than a day' }
         '404': { description: unknown camera, or stills are off }
+        '503': { description: camera_restarting (Retry-After) while the camera restarts }
   /api/cameras/{cam}/previews/{file}:
     get:
       summary: One minute's sprite sheet, as <minute>.jpg
@@ -99,6 +104,7 @@ paths:
         '200': { description: 'image/jpeg: a cols × rows grid of tiles, missing tiles dark' }
         '400': { description: 'not <minute unix ms>.jpg' }
         '404': { description: 'no sprite for that minute, unknown camera, stills off, or a timestamp that is not a minute boundary' }
+        '503': { description: camera_restarting (Retry-After) while the camera restarts }
   /api/cameras/{cam}/compositions:
     post:
       summary: 'Compose a clip with a pre-/post-roll, anchored at a clip (clipId) or at a second (at, #179); other clips, stills or "No recording" cards fill each second; H.264 10 fps, at most 300 s (120 s at 1080p). 10 a minute per client (dry runs not counted)'
@@ -113,7 +119,7 @@ paths:
         '404': { description: unknown camera or clip }
         '409': { description: 'nothing_to_compose: no clip or still covers any second of the window' }
         '429': { description: 'busy (one encoding runs and 3 wait), or rate_limited' }
-        '503': { description: storage_paused, or no_font (no font for the badge or cards) }
+        '503': { description: storage_paused, or no_font (no font for the badge or cards); camera_restarting (Retry-After) while the camera restarts }
   /api/cameras/{cam}/compositions/{file}:
     get:
       summary: '{id}: the job (state, progress, durationS, error); {id}.mp4: the result once done (409 before)'
@@ -121,12 +127,14 @@ paths:
         '200': { description: the job, or the MP4 }
         '404': { description: unknown job (or another camera's) }
         '409': { description: not_ready }
+        '503': { description: camera_restarting (Retry-After) while the camera restarts }
   /api/cameras/{cam}/compositions/{id}:
     delete:
       summary: Cancel a job and delete its result
       responses:
         '204': { description: cancelled and deleted }
         '404': { description: unknown job }
+        '503': { description: camera_restarting (Retry-After) while the camera restarts }
   /api/cameras/{cam}/clips:
     get:
       summary: Clips that overlap a time range (at most 31 days), oldest first
@@ -138,6 +146,7 @@ paths:
         '200': { description: '[{id, start, end, stream, size, origin (ftp: uploaded by the camera; camera: fetched from its SD card by an inventory repair), events: [event ids], url, snapshotUrl (null without a snapshot)}]' }
         '400': { description: 'from/to missing, reversed, or more than 31 days apart' }
         '404': { description: unknown camera }
+        '503': { description: camera_restarting (Retry-After) while the camera restarts }
   /api/cameras/{cam}/clips/{file}:
     get:
       summary: A clip as <id>.mp4 (HTTP Range), or its snapshot as <id>.jpg
@@ -151,6 +160,7 @@ paths:
         '400': { description: not <id>.mp4 or <id>.jpg }
         '404': { description: 'unknown clip, or no snapshot' }
         '416': { description: 'range not satisfiable (Content-Range: bytes */size)' }
+        '503': { description: camera_restarting (Retry-After) while the camera restarts }
   /api/cameras/{cam}/recordings:
     get:
       summary: "The camera's SD-card recordings of a time range (from/to, at most 48 hours) or of one camera-local day (date), by start. Either includes a recording that starts on the day before and runs past midnight into it"
@@ -165,7 +175,7 @@ paths:
         '400': { description: '{error: invalid, detail}: neither from/to nor date, date together with from or to, date not a YYYY-MM-DD date, from/to reversed or more than 48 hours apart, or stream not sub/main' }
         '404': { description: unknown camera }
         '502': { description: '{error: recordings_unavailable, reason: search_failed, detail}' }
-        '503': { description: "{error: camera_offline}; or {error: recordings_unavailable, reason: busy, detail} with Retry-After: 5 when more camera Searches are waiting than the proxy queues (one runs, 8 wait)" }
+        '503': { description: "{error: camera_offline}; or {error: recordings_unavailable, reason: busy, detail} with Retry-After: 5 when more camera Searches are waiting than the proxy queues (one runs, 8 wait); camera_restarting (Retry-After) while the camera restarts" }
   /api/cameras/{cam}/recordings/days:
     get:
       summary: The days of a camera-local month that have recordings (the camera's month Search, kept 5 minutes)
@@ -177,7 +187,7 @@ paths:
         '400': { description: not YYYY-MM }
         '404': { description: unknown camera }
         '502': { description: '{error: recordings_unavailable, reason: search_failed, detail}' }
-        '503': { description: "{error: camera_offline}; or {error: recordings_unavailable, reason: busy, detail} with Retry-After: 5 when more camera Searches are waiting than the proxy queues (one runs, 8 wait)" }
+        '503': { description: "{error: camera_offline}; or {error: recordings_unavailable, reason: busy, detail} with Retry-After: 5 when more camera Searches are waiting than the proxy queues (one runs, 8 wait); camera_restarting (Retry-After) while the camera restarts" }
   /api/cameras/{cam}/recordings/{id}:
     get:
       summary: A recording as MP4 (HTTP Range; HEAD too). Fetched from the camera over Baichuan on the first request and streamed while it arrives; later and Range requests come from the cache
@@ -193,7 +203,7 @@ paths:
         '404': { description: '{error: unknown_recording} (or not_found: unknown camera)' }
         '416': { description: 'range not satisfiable (Content-Range: bytes */size); answered without a download when the file is not cached' }
         '502': { description: '{error: recordings_unavailable, reason (refused, auth, timeout, protocol, offline: the connection was lost during the transfer, search_failed), detail}' }
-        '503': { description: "{error: camera_offline}: the status poller says offline, or no connection to the camera could be made; or {error: recordings_unavailable, reason: busy, detail} with Retry-After: 5 when the camera Search that finds the file can't be queued (one runs, 8 wait)" }
+        '503': { description: "{error: camera_offline}: the status poller says offline, or no connection to the camera could be made; or {error: recordings_unavailable, reason: busy, detail} with Retry-After: 5 when the camera Search that finds the file can't be queued (one runs, 8 wait); camera_restarting (Retry-After) while the camera restarts" }
   /api/cameras/{cam}/events:
     get:
       summary: Events, newest first
@@ -207,6 +217,7 @@ paths:
         '200': { description: '[{ id, kind, source (onvif, poll, or recovered: added from the SD recordings by the events repair, never sent over SSE), start, end, endReason (state, timeout, restart, recovered), analysis: null | {provider, status, reason, stillTs, objects: [{name, score, box: {x0, y0, x1, y1}}], summary: [{category, subtype, score, box}]} }]' }
         '400': { description: invalid parameter }
         '404': { description: unknown camera }
+        '503': { description: camera_restarting (Retry-After) while the camera restarts }
   /api/cameras/{cam}/events/{id}/analysis:
     get:
       summary: The external analysis of an event, with the provider's raw answer
@@ -216,6 +227,7 @@ paths:
       responses:
         '200': { description: '{ eventId, provider, status, reason, stillTs, requestedAt, tookMs, objects, summary: [{category, subtype, score, box}], raw }' }
         '404': { description: 'unknown camera, or no analysis for the event' }
+        '503': { description: camera_restarting (Retry-After) while the camera restarts }
   /api/cameras/{cam}/events/{id}/analysis.jpg:
     get:
       summary: The still that was analysed
@@ -225,6 +237,7 @@ paths:
       responses:
         '200': { description: 'image/jpeg; cached as immutable' }
         '404': { description: 'unknown camera, no analysis, or no image' }
+        '503': { description: camera_restarting (Retry-After) while the camera restarts }
   /api/cameras/{cam}/analyses:
     get:
       summary: A day of analyses, oldest first (at most 1000), in the stream message's shape
@@ -237,6 +250,7 @@ paths:
         '400': { description: 'from or to missing, to before from, or more than one day' }
         '401': { description: not signed in }
         '404': { description: unknown camera }
+        '503': { description: camera_restarting (Retry-After) while the camera restarts }
   /api/cameras/{cam}/still-checks:
     post:
       summary: Check a second with Vision (a still check, cams #179); stored apart from events
@@ -270,7 +284,7 @@ paths:
         '429': { description: '{error: limit, reason: month | day | checks}, {error: busy} (another check is running), or {error: rate_limited}' }
         '500': { description: '{error: internal}: the paid result could not be stored' }
         '502': { description: '{error: provider_failed, reason (timeout, network, http_5xx, http_<n>, bad_response, bad_key (pauses analytics), quota (pauses 1 h), aborted (stopping))}: the call counted, nothing stored' }
-        '503': { description: '{error: analytics_paused, reason: bad_key | quota, until (ms, or null for bad_key)}' }
+        '503': { description: '{error: analytics_paused, reason: bad_key | quota, until (ms, or null for bad_key)}; camera_restarting (Retry-After) while the camera restarts' }
     get:
       summary: Still checks of a range, oldest first (at most 1000)
       parameters:
@@ -283,6 +297,7 @@ paths:
         '400': { description: 'from or to missing, to before from, more than 31 days, or a bad limit' }
         '401': { description: not signed in }
         '404': { description: unknown camera }
+        '503': { description: camera_restarting (Retry-After) while the camera restarts }
   /api/cameras/{cam}/still-checks/{file}:
     get:
       summary: One still check (<id>, with the raw answer) or its JPEG (<id>.jpg)
@@ -293,6 +308,7 @@ paths:
         '200': { description: '<id>: { id, stillTs, provider, summary, objects, events, imageUrl, requestedAt, tookMs, raw }; <id>.jpg: image/jpeg, cached as immutable (kept retention.eventsDays with the check)' }
         '400': { description: '{error: invalid}: neither <id> nor <id>.jpg' }
         '404': { description: 'unknown camera or check, or no image' }
+        '503': { description: camera_restarting (Retry-After) while the camera restarts }
   /api/cameras/{cam}/analytics:
     get:
       summary: The Vision budget for clients (no key, no mask)
@@ -302,6 +318,7 @@ paths:
         '200': { description: '{ enabled (on, a key, not stopping), paused: null | {reason, until}, month: {calls, limit}, today: {calls, cap (0: no cap)}, checks: {today, cap (0: checks off)} }; calls count automatic analyses and checks' }
         '401': { description: not signed in }
         '404': { description: unknown camera }
+        '503': { description: camera_restarting (Retry-After) while the camera restarts }
   /api/cameras/{cam}/archive:
     post:
       summary: Keep a clip in the Archive (apart from retention; docs/archive.md)
@@ -334,7 +351,7 @@ paths:
         '404': { description: '{error: not_found} (camera, composition, clip) or {error: unknown_recording}' }
         '409': { description: '{error: not_ready, state}: the composition is not done' }
         '429': { description: '{error: rate_limited} or {error: busy} (4 archive jobs in flight)' }
-        '503': { description: '{error: archive_off} (archive.enabled false) or {error: camera_offline}' }
+        '503': { description: '{error: archive_off} (archive.enabled false) or {error: camera_offline}; camera_restarting (Retry-After) while the camera restarts' }
         '507': { description: '{error: insufficient_space, needed, free, minFreeBytes}: the clip would not leave storage.minFreeBytes free' }
   /api/archive:
     get:
@@ -494,7 +511,7 @@ paths:
         `{cam, ts, url, sprite, tile}` (only when named in `types`; live
         only, without an id, and not replayed).
       parameters:
-        - { name: cam, in: query, schema: { type: string } }
+        - { name: cam, in: query, schema: { type: string }, description: 'one camera id, or several comma-separated (a,b; when the camera items list features sse-cam-list); empties are ignored, an unknown id matches nothing' }
         - { name: types, in: query, schema: { type: string }, description: comma list }
         - { name: kinds, in: query, schema: { type: string }, description: comma list, matches data.kind }
         - { name: since, in: query, schema: { type: integer } }
@@ -554,9 +571,59 @@ paths:
         Admin token or admin session. Writes with the session cookie need
         `X-CamProxy-UI: 1`. A client token answers 403 `{"error":"admin_only"}`.
       responses:
-        '200': { description: '{ version, camera (incl. name (the camera''s name; the configured camera.name until the camera was read), nameSource (camera or config), webUiUrl, reboot {kind, requestedAt, confirmed, phase, offAt, endedAt, downSec} or null, poeSwitch {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state (on, off, elsewhere, server_differs, not_set_up, unknown), checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result (ok, offline, refused, auth, timeout, protocol, not_found), stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null, cache: {bytes, files, capBytes}}, analytics: [provider state], analyticsUnmapped: top 20 unmapped objects [{mid, name, count, lastSeen}], health: the health summary, as GET /api/local/health, archive: as GET /api/archive/status }' }
+        '200': { description: '{ version, camera (incl. name (the camera''s name; the configured camera.name until the camera was read), nameSource (camera or config), webUiUrl, reboot {kind, requestedAt, confirmed, phase, offAt, endedAt, downSec} or null, poeSwitch {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state (on, off, elsewhere, server_differs, not_set_up, unknown), checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result (ok, offline, refused, auth, timeout, protocol, not_found), stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null, cache: {bytes, files, capBytes}}, analytics: [provider state], analyticsUnmapped: top 20 unmapped objects [{mid, name, count, lastSeen}], health: the health summary, as GET /api/local/health, archive: as GET /api/archive/status, cameras: every camera''s block {id, camera, intake, stream, ftp, recordings} in config order (the top-level camera, intake, stream, ftp and recordings are the first camera''s) }' }
         '401': { description: not signed in }
         '403': { description: admin_only, or csrf }
+  /control/cameras:
+    get:
+      summary: Every camera's status block, in config order (spec 2026-10-05-multi-camera-host-design §6.3) (admin)
+      responses:
+        '200': { description: 'A list of {id, camera, intake, stream, ftp, recordings}, each as in GET /control/status' }
+        '401': { description: not signed in }
+        '403': { description: admin_only }
+  /control/cameras/{cam}/status:
+    get:
+      summary: One camera's status block (admin)
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: '{id, camera, intake, stream, ftp, recordings}' }
+        '401': { description: not signed in }
+        '404': { description: not_found }
+        '503': { description: camera_restarting (Retry-After) }
+  /control/cameras/{cam}/actions/{name}:
+    post:
+      summary: A camera action on one camera (spec 2026-10-05-multi-camera-host-design §6.3) (admin)
+      description: >
+        The camera actions of POST /control/actions/{name} (camera-test,
+        onvif-resubscribe, camera-ftp-setup, camera-ftp-test, camera-ftp-off,
+        restart (that camera's side only; the old route without a camera restarts every camera side and applies pending restart settings), camera-reboot,
+        camera-powercycle, camera-poe-on, poe-switch-read, inventory,
+        inventory-repair, inventory-cancel) on the named camera, with the same
+        bodies and answers; inventory-cancel and inventory-repair answer 409
+        camera_mismatch for another camera's run. The old route takes ?cam=<id> as well; without it
+        it acts on the only camera, and answers 400 camera_required when there
+        are several. Host actions have no camera route (404).
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: as POST /control/actions/{name} }
+        '202': { description: as POST /control/actions/{name} }
+        '401': { description: not signed in }
+        '404': { description: not_found (unknown camera, or not a camera action) }
+        '503': { description: camera_restarting (Retry-After) }
+  /control/cameras/{cam}/name:
+    put:
+      summary: Rename one camera (stored on the camera), as PUT /control/camera/name (admin)
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: '{ name } as read back' }
+        '400': { description: invalid_name }
+        '401': { description: not signed in }
+        '404': { description: not_found }
+        '503': { description: camera_restarting (Retry-After), or camera_offline }
   /control/camera/name:
     put:
       summary: Renames the camera, on the camera (admin)
@@ -574,7 +641,7 @@ paths:
             schema: { type: object, required: [name], properties: { name: { type: string, pattern: '^[A-Za-z0-9()+=\[\]{}-](?:[A-Za-z0-9 ()+=\[\]{}-]{0,29}[A-Za-z0-9()+=\[\]{}-])?$' } } }
       responses:
         '200': { description: '{ name }: the name read back from the camera' }
-        '400': { description: '{ error: invalid_name, reason }: against the rules (the camera is not asked), or refused by the camera (rspCode -54, -56)' }
+        '400': { description: '{ error: invalid_name, reason }: against the rules (the camera is not asked), or refused by the camera (rspCode -54, -56); { error: camera_required } on a proxy with several cameras (use /control/cameras/{cam}/name or ?cam=)' }
         '401': { description: not signed in }
         '403': { description: admin_only, or csrf }
         '502': { description: '{ error: camera_error } (or camera_auth_failed)' }
@@ -628,7 +695,7 @@ paths:
     get:
       summary: Disk, events, stream log, storage budget (spec §13)
       responses:
-        '200': { description: '{ disk: {catalog, stills, previews, clips, recordings} (each {bytes, files, oldest, newest, growthPerDay}), events: {stored (live events per kind, recovered ones left out)}, stream: {rows, lastId}, sse: {clients}, storage: {budget, used, daysUntilFull, paused} }' }
+        '200': { description: '{ disk: {catalog, stills, previews, clips, recordings} (each {bytes, files, oldest, newest, growthPerDay}), events: {stored (live events per kind, recovered ones left out), byCamera (the same per camera id)}, stream: {rows, lastId}, sse: {clients}, storage: {budget, used, daysUntilFull, paused} }' }
   /control/inventory:
     get:
       summary: The running inventory or repair and the last 10 runs per kind, newest first (spec 2026-10-02-inventory-design)
@@ -700,7 +767,7 @@ paths:
       responses:
         '200': { description: 'camera-test and retention-run results; camera-ftp-setup/-off: {ftp} (the camera''s settings, no password); camera-ftp-test: {ok, rspCode}; poe-switch-read: {at, port, index, poe, watts, link, sn, firmware}; camera-poe-on: the same plus wasOn; inventory-cancel: { cancelled, runId }; find-camera: { devices: [{endpoint, address (XAddr host), sender (UDP source), mismatch, useAddress (sender on a mismatch), xaddrs, name, hardware, model, current}], tookMs, envFile: {writable, path?, reason?} }; camera-address: { host, previous, key, backup, restart: true }; archive-clear: { cleared, bytes }' }
         '202': { description: 'started (onvif-resubscribe, restart, restart-proxy); camera-reboot: { confirmed } (false: the camera dropped the connection after receiving the request); camera-powercycle: { offAt, onAt, watts } once PoE is back on; inventory, inventory-repair: { runId }' }
-        '400': { description: 'archive-clear: invalid (no count); camera-address: invalid (not an address or name with an optional :port); inventory: invalid (an unknown or missing kind, camera not a boolean, or camera for a kind without a camera compare); inventory-repair: invalid (a kind without a repair, or runId not a run id)' }
+        '400': { description: 'archive-clear: invalid (no count); camera-address: invalid (not an address or name with an optional :port); inventory: invalid (an unknown or missing kind, camera not a boolean, or camera for a kind without a camera compare); inventory-repair: invalid (a kind without a repair, or runId not a run id); a camera action (camera-test, onvif-resubscribe, camera-ftp-*, restart, camera-reboot, camera-powercycle, camera-poe-on, poe-switch-read, inventory*) on a proxy with several cameras without ?cam=<id>: camera_required (or POST /control/cameras/{cam}/actions/{name})' }
         '404': { description: 'unknown action; inventory-repair: not_found (no such check run of the kind)' }
         '409': { description: 'archive-clear: count_mismatch { count } (count is not the number of clips in the Archive now); camera-address: not_available { detail, line } (CAMPROXY_ENV_FILE not set, the file fails the path guard, or its directory is not writable; line is what to add by hand); not_configured (camera-ftp-setup/-test: ftp.publicHost or the FTP password is not set; camera-powercycle, poe-switch-read: no switch or no CAMPROXY_POE_SWITCH_PASSWORD); camera-powercycle, poe-switch-read: switch_busy (someone is logged in to the switch''s web UI), no_power (the port has PoE off or draws 0 W; nothing switched); inventory, inventory-repair: inventory_busy { runId } (one runs already); inventory-repair: report_stale (the check run is an hour old or more), not_repairable (it did not finish, did not compare with the camera, or found nothing missing locally)' }
         '503': { description: 'stopping (inventory, inventory-repair: the proxy is stopping and starts no run)' }

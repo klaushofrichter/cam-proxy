@@ -100,7 +100,7 @@ describe('audit records', () => {
     await request(p.base).put('/control/config').set(auth(ADMIN_TOKEN)).send({ camera: { statusPollS: 9 }, server: { trustProxy: 1 } });
     try {
       const changes = changesOf();
-      expect(changes.find((c) => c.key === 'camera.statusPollS')).toMatchObject({ to: 9, restart: 'restart' });
+      expect(changes.find((c) => c.key === 'cameras.cam1.statusPollS')).toMatchObject({ to: 9, restart: 'restart' });
       expect(changes.find((c) => c.key === 'server.trustProxy')).toMatchObject({ to: 1, restart: 'process' });
     } finally {
       for (const k of ['camera.statusPollS', 'server.trustProxy']) await request(p.base).delete(`/control/config/${k}`).set(auth(ADMIN_TOKEN));

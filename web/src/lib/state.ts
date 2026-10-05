@@ -7,25 +7,12 @@ import type { CameraFtp, ClipsStall } from './ftp';
 import type { UiHealth } from './health';
 import type { UiArchive } from './archive';
 
-export interface Status {
-  version: string;
-  camera: { name?: string; nameSource?: 'camera' | 'config'; online: boolean; since: number; model?: string; firmware?: string; clockOffsetMs?: number; error?: string; webUiUrl?: string | null; reboot?: CameraReboot | null; poeSwitch?: PoeSwitchStatus };
-  intake: { onvif: string; since: number; source: string; lastError?: string; resubscribes: number };
-  sse: { clients: number };
-  stream: { enabled: boolean; up: boolean; go2rtcUp: boolean; lastFrameTs: number | null };
-  retention: { lastRun: number | null; totals: Record<string, number> };
-  storage: { paused: boolean };
-  analytics?: UiProviderState[];
-  analyticsUnmapped?: { mid: string; name: string; count: number; lastSeen: number }[];
-  ftp: { enabled: boolean; listening: boolean; port: number; tls: boolean; publicHost: string | null; passwordSet: boolean; lastUpload: number | null; lastClip: number | null; clips: number; failures: number; camera?: CameraFtp | null; stalled?: ClipsStall | null };
-  recordings?: RecordingsStatus;
-  health?: UiHealth; // the health summary (spec 2026-10-03-health-summary-design)
-  archive?: UiArchive; // spec 2026-10-05-archive-design §6
-}
+export type { Status } from './status-types';
+import type { Status } from './status-types';
 export interface Usage { bytes: number; files: number; oldest: number | null; newest: number | null; growthPerDay: number }
 export interface Stats {
   disk: { catalog: Usage; audit: Usage; stills: Usage; previews: Usage; clips: Usage; recordings?: Usage; free: number; size: number };
-  events: { stored: Record<string, number> };
+  events: { stored: Record<string, number>; byCamera?: Record<string, Record<string, number>> };
   stream: { rows: number; lastId: number };
   sse: { clients: number };
   storage: { budget: number; used: number; daysUntilFull: number | null; paused: boolean };
