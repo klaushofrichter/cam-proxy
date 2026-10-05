@@ -17,6 +17,7 @@ import { cameraPassword } from './config/secrets';
 import { reapOrphanGo2rtc } from './stills/orphans';
 import { Go2rtc } from './stills/go2rtc';
 import { CachePool } from './recordings/pool';
+import { PoeSwitch } from './camera/poe-switch';
 import { restartProcess } from './process-restart';
 import type { Config } from './config/defaults';
 import { getPath, needsProcessRestart, needsRestart, setPath, settingPaths, type Loaded } from './config/load';
@@ -173,6 +174,9 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   let go2rtcMadeWith = go2rtcSettings();
   // Started in the background: each camera's grabber waits until it is up.
   const startGo2rtc = () => void go2rtc?.start().catch((err: Error) => logger.error({ err: err.message }, 'go2rtc_start_failed'));
+  // One PoE controller for the host (spec 2026-10-05-multi-camera-host-design §8.4):
+  // one switch session at a time, in arrival order; each camera has its port.
+  const poe = new PoeSwitch({ config: () => running.poeSwitch, password: () => loaded.secrets.poeSwitchPassword });
   // One recordings cache for every camera (spec §8.3): one LRU, capped by recordings.cacheMB.
   const cachePool = new CachePool(() => running.recordings.cacheMB * 2 ** 20);
   const makeWorker = (id: string) =>
@@ -182,7 +186,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         go2rtc: () => go2rtc,
         cachePool,
         password: () => cameraPassword(loaded.secrets, id),
-        poeSwitchPassword: () => loaded.secrets.poeSwitchPassword,
+        poe,
         ftpTarget: ftpTargetFor(id),
         ftpPassword: () => loaded.secrets.ftpPassword,
         catalog,
@@ -664,7 +668,6 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     const nextIds = cameraIds(loaded.config);
     const gone = cams.list().filter((w) => !nextIds.includes(w.id));
     for (const w of gone) {
-      await w.stopSwitch();
       await w.stopRecordings();
       await w.stop();
       cams.remove(w.id);
@@ -776,8 +779,21 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       hostMonitor.stop();
       // First, while everything is still open.
       audit.write({ action: 'proxy-stop', category: ['process'], type: ['end'], outcome: 'success', user: 'system', message: `cam-proxy stopping${opts.reason ? ` (${opts.reason})` : ''}`, details: { reason: opts.reason ?? 'stop' } });
-      // Each camera's PoE back on if a power-cycle is in its off time.
-      await Promise.all(cams.list().map((w) => w.stopSwitch()));
+      // Each camera's PoE back on if a power-cycle is in its off time; one
+      // record per camera the proxy may leave dark (spec §8.4).
+      const { portsLeftOff, sessionMaybeOpen } = await poe.stop();
+      const swInfo = { model: running.poeSwitch.model, host: running.poeSwitch.host ?? '' };
+      for (const port of portsLeftOff) {
+        const w = cams.list().find((x) => x.cam().poeSwitch.port === port);
+        const parts = [
+          `the camera's PoE may be left OFF on ${swInfo.host} port ${port}; turn it on in the switch's web UI, or with "Turn camera PoE on" once the proxy is back`,
+          ...(sessionMaybeOpen ? ["the proxy's web session on the switch may still be open: the switch's web UI may refuse logins until the switch ends it"] : []),
+        ];
+        audit.write({ action: 'camera-powercycle', category: ['host'], type: ['end'], outcome: 'failure', user: 'system', ...(w ? { camera: w.id } : {}), message: `cam-proxy stopping: ${parts.join('; ')}`, details: { phase: 'stop', poeLeftOff: true, sessionMaybeOpen, switch: { ...swInfo, port } } });
+      }
+      if (sessionMaybeOpen && !portsLeftOff.length) {
+        audit.write({ action: 'camera-powercycle', category: ['host'], type: ['end'], outcome: 'failure', user: 'system', message: "cam-proxy stopping: the proxy's web session on the switch may still be open: the switch's web UI may refuse logins until the switch ends it", details: { phase: 'stop', poeLeftOff: false, sessionMaybeOpen, switch: swInfo } });
+      }
       await restarting;
       clearInterval(sweeper);
       sse.closeAll();

@@ -8,7 +8,7 @@ import { ReolinkClient } from '../camera/client';
 import { bareHost, splitHost } from '../camera/http';
 import { CameraNameAnnouncer, writeCameraName } from '../camera/name';
 import { CameraReboot } from '../camera/reboot';
-import { PoeSwitch } from '../camera/poe-switch';
+import type { PoeSwitch, PortHandle } from '../camera/poe-switch';
 import { StatusPoller, type CameraState } from '../camera/status';
 import type { TimeInfo } from '../camera/time';
 import { refreshingTimeInfo } from '../analytics/time-info';
@@ -45,7 +45,7 @@ export interface WorkerDeps {
   id: string;
   running: () => Config;
   password: () => string;
-  poeSwitchPassword: () => string | undefined;
+  poe: PoeSwitch; // the host's PoE controller (spec 2026-10-05-multi-camera-host-design §8.4)
   ftpTarget: () => FtpTarget;
   ftpPassword?: () => string | undefined;
   cachePool: CachePool; // the host's recordings cache (spec §8.3) // the host's FTP password: no indexer for uploads without it
@@ -84,7 +84,7 @@ export class CameraWorker extends EventEmitter {
   stills: StillsSide | undefined;
   readonly recordings: RecordingsSide;
   readonly reboot: CameraReboot;
-  readonly poeSwitch: PoeSwitch;
+  readonly poeSwitch: PortHandle;
   readonly ftpWatch: CameraFtpWatch;
   readonly timeInfo: () => TimeInfo | undefined;
   private phaseNow: WorkerPhase = 'idle';
@@ -170,8 +170,8 @@ export class CameraWorker extends EventEmitter {
       },
       audit: this.audit,
     });
-    // Ruling P1-4: this camera's port on the host switch (one controller per host in P2).
-    this.poeSwitch = new PoeSwitch({ config: () => this.cam().poeSwitch, password: d.poeSwitchPassword });
+    // This camera's port on the host's switch (one controller per host, spec §8.4).
+    this.poeSwitch = d.poe.forPort(() => this.cam().poeSwitch.port);
     this.timeInfo = refreshingTimeInfo(() => this.client.timeInfo());
   }
 
@@ -454,19 +454,6 @@ export class CameraWorker extends EventEmitter {
       }
     });
     return this.restarting;
-  }
-
-  // A power-cycle in its off time turns the camera's PoE on now, not never;
-  // bounded, and loud (audited) when it could not.
-  async stopSwitch(): Promise<void> {
-    const { poeLeftOff, sessionMaybeOpen } = await this.poeSwitch.stop();
-    if (!poeLeftOff && !sessionMaybeOpen) return;
-    const sw = this.poeSwitchInfo();
-    const parts = [
-      ...(poeLeftOff ? [`the camera's PoE may be left OFF on ${sw.host} port ${sw.port}; turn it on in the switch's web UI, or with "Turn camera PoE on" once the proxy is back`] : []),
-      ...(sessionMaybeOpen ? ["the proxy's web session on the switch may still be open: the switch's web UI may refuse logins until the switch ends it"] : []),
-    ];
-    this.audit.write({ action: 'camera-powercycle', category: ['host'], type: ['end'], outcome: 'failure', user: 'system', message: `cam-proxy stopping: ${parts.join('; ')}`, details: { phase: 'stop', poeLeftOff, sessionMaybeOpen, switch: sw } });
   }
 
   stopRecordings(): Promise<void> {

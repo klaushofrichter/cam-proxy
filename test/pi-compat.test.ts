@@ -192,6 +192,15 @@ describe('the Pi: the Vision budget', () => {
   });
 });
 
+// P2 (spec §8.4): one PoE controller per host; the Pi's camera is its port 8.
+describe('the Pi: the switch controller', () => {
+  it("the camera's view is port 8 of the host's GPS-208 settings", () => {
+    const h = proxy.cameras.first().poeSwitch;
+    expect(h.status()).toMatchObject({ model: 'sscpoe-web', host: '127.0.0.1:9', port: 8, ports: 8, offSeconds: 12, passwordSet: false, configured: false, poeMaybeOff: false });
+    expect(h.notConfigured()).toBe('CAMPROXY_POE_SWITCH_PASSWORD is not set');
+  });
+});
+
 // The health items the Pi's display reads, as release 8 answers them.
 const PI_ITEM_IDS = ['camera', 'stream', 'events', 'ftp', 'storage', 'disk', 'archive', 'inventory', 'version'];
 

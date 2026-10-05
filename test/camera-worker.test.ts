@@ -11,6 +11,7 @@ import { AuditLog } from '../src/audit/audit-log';
 import { CameraWorker, type WorkerDeps } from '../src/cameras/worker';
 import { CameraRegistry } from '../src/cameras/registry';
 import { CachePool } from '../src/recordings/pool';
+import { PoeSwitch } from '../src/camera/poe-switch';
 import { ADMIN_TOKEN, CLIENT_TOKEN, freePort, until } from './helpers/proxy';
 import { logBuffer } from '../src/log';
 import type { Go2rtc, StreamSource } from '../src/stills/go2rtc';
@@ -41,7 +42,7 @@ function worker(o: { host?: string; over?: Partial<WorkerDeps>; stills?: boolean
   const audit = new AuditLog({ dir: join(running.server.dataDir, 'audit'), version: 'test' });
   const storage = new Storage({ catalog, log, config: () => running, audit });
   const w = new CameraWorker({
-    id: 'cam1', running: () => running, password: () => sim.password, poeSwitchPassword: () => undefined,
+    id: 'cam1', running: () => running, password: () => sim.password, poe: new PoeSwitch({ config: () => running.poeSwitch, password: () => undefined }),
     ftpTarget: () => ({ server: '', port: 2121, user: 'camera', password: '', tls: true, stream: 'main' }),
     go2rtc: () => undefined,
     cachePool: new CachePool(() => running.recordings.cacheMB * 2 ** 20),
@@ -64,7 +65,6 @@ describe('CameraWorker (spec §3.1)', () => {
     await restart;
     expect(w.phase()).toBe('ready');
     await until(() => w.status.state().online);
-    await w.stopSwitch();
     await w.stopRecordings();
     await w.stop();
     expect(w.phase()).toBe('stopped');
@@ -147,7 +147,6 @@ describe('supervision (spec §3.3)', () => {
     pending!();
     await until(() => w.phase() === 'ready');
     expect(w.error()).not.toBe('go2rtc_start_failed');
-    await w.stopSwitch();
     await w.stopRecordings();
     await w.stop();
     catalog.close();
@@ -163,7 +162,6 @@ describe('supervision (spec §3.3)', () => {
     expect(w.stills?.grabber.pid()).toBeUndefined();
     expect(w.error()).toBeNull();
     const t0 = Date.now();
-    await w.stopSwitch();
     await w.stopRecordings();
     await w.stop();
     expect(Date.now() - t0).toBeLessThan(2000);
@@ -181,7 +179,6 @@ describe('supervision (spec §3.3)', () => {
     password = 'changed-pw';
     await w.restart();
     expect(set.map((s) => [s.cam, s.password])).toEqual([['cam1', 'changed-pw']]);
-    await w.stopSwitch();
     await w.stopRecordings();
     await w.stop();
     catalog.close();
@@ -195,7 +192,6 @@ describe('supervision (spec §3.3)', () => {
     const line = () => logBuffer.recent(500).find((l) => l.msg === 'onvif_down' && (l.time as number) >= t0);
     await until(() => !!line(), 15_000);
     expect(line()!.cameraId).toBe('cam1');
-    await w.stopSwitch();
     await w.stopRecordings();
     await w.stop();
     catalog.close();
