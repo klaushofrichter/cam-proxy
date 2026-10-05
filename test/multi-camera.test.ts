@@ -1,4 +1,8 @@
-import { basename } from 'path';
+import { mkdtempSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { basename, join } from 'path';
+import { saveAnalysis } from '../src/catalog/analyses';
+import { insertEvent } from '../src/catalog/events';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ADMIN_TOKEN, auth, until } from './helpers/proxy';
@@ -101,6 +105,19 @@ describe('one proxy, three cameras (spec §15)', () => {
     expect(img.headers['ratelimit-policy']).toMatch(/q=18000/);
     const other = await request(p.base).get('/api/cameras').set(auth());
     expect(other.headers['ratelimit-policy']).toMatch(/q=1200/);
+  });
+
+  // Review: an event's analysis is served only under its own camera.
+  it("an event's analysis and its image only under the event's camera", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'camproxy-an-'));
+    const img = join(dir, 'a.jpg');
+    writeFileSync(img, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+    const e = insertEvent(p.proxy.catalog, { cam: 'cam3', source: 'onvif', kind: 'person', start_ts: 1000, raw: null });
+    saveAnalysis(p.proxy.catalog, { event_id: e.id, provider: 'google-vision', status: 'ok', reason: null, still_ts: 1000, image: img, requested_at: 2000, took_ms: 3, objects: '[]', raw: '{}', summary: '[]' });
+    expect((await request(p.base).get(`/api/cameras/cam3/events/${e.id}/analysis`).set(auth())).status).toBe(200);
+    expect((await request(p.base).get(`/api/cameras/cam3/events/${e.id}/analysis.jpg`).set(auth())).status).toBe(200);
+    expect((await request(p.base).get(`/api/cameras/cam4/events/${e.id}/analysis`).set(auth())).status).toBe(404);
+    expect((await request(p.base).get(`/api/cameras/cam4/events/${e.id}/analysis.jpg`).set(auth())).status).toBe(404);
   });
 
   it('health: one block per camera; the top level is the first camera', async () => {

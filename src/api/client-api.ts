@@ -6,7 +6,7 @@ import { summarize } from '../analytics/classes';
 import type { Found } from '../analytics/providers';
 import { clipById, clipsNear, listClips, oldestClip, overlappingEventsOf, type ClipRow } from '../catalog/clips';
 import type { Catalog } from '../catalog/db';
-import { lastLiveEventTs, listEvents, type EventRow } from '../catalog/events';
+import { eventById, lastLiveEventTs, listEvents, type EventRow } from '../catalog/events';
 import type { Config } from '../config/defaults';
 import { BaichuanError } from '../camera/baichuan/errors';
 import { logger } from '../log';
@@ -103,8 +103,13 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: 
     const an = analysesFor(d.catalog, rows.map((e) => e.id));
     res.json(rows.map((e) => ({ ...eventJson(e), analysis: analysisSummary(an.get(e.id)) })));
   });
+  // An event's analysis, only under the event's own camera.
+  const analysisOf = (req: Request, res: Response) => {
+    const id = Number(req.params.id);
+    return eventById(d.catalog, id)?.cam === workerOf(res).id ? analysisFor(d.catalog, id) : undefined;
+  };
   r.get('/cameras/:cam/events/:id/analysis', (req, res) => {
-    const a = analysisFor(d.catalog, Number(req.params.id));
+    const a = analysisOf(req, res);
     if (!a) return void res.status(404).json({ error: 'not_found' });
     res.json({ eventId: a.event_id, provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, requestedAt: a.requested_at, tookMs: a.took_ms, objects: parseList(a.objects), summary: summaryOf(a), raw: parse(a.raw) });
   });
@@ -119,7 +124,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: 
     })));
   });
   r.get('/cameras/:cam/events/:id/analysis.jpg', (req, res) => {
-    const a = analysisFor(d.catalog, Number(req.params.id));
+    const a = analysisOf(req, res);
     let jpeg: Buffer | undefined;
     try {
       jpeg = a?.image ? readFileSync(a.image) : undefined;
