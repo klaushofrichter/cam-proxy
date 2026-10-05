@@ -1,10 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
-import { PROXY_PORT, STATE_FILE } from './e2e/env';
+import { PROXY_PORT, STATE_FILE } from './e2e/multi/env';
 
 export default defineConfig({
-  testDir: 'e2e',
-  // The multi-camera run has its own config (playwright.multi.config.ts).
-  testIgnore: ['multi/**'],
+  testDir: 'e2e/multi',
   fullyParallel: false,
   workers: 1,
   reporter: 'list',
@@ -13,10 +11,5 @@ export default defineConfig({
     { name: 'setup', testMatch: /auth\.setup\.ts/ },
     { name: 'e2e', dependencies: ['setup'], testIgnore: /auth\.setup\.ts/, use: { storageState: STATE_FILE } },
   ],
-  webServer: {
-    command: 'npx tsx e2e/start.ts',
-    port: PROXY_PORT,
-    reuseExistingServer: !process.env.CI,
-    timeout: 60_000,
-  },
+  webServer: { command: 'npx tsx e2e/multi/start.ts', port: PROXY_PORT, reuseExistingServer: !process.env.CI, timeout: 60_000 },
 });
