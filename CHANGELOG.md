@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Status page, Analytics card: the usage is on separate lines — This month, Today, Last call, and Still checks today (the manual checks' own daily limit) — instead of one long line.
+
 ## v2026.10.04.4
 
 - The Pi's one `.env` (spec 2026-10-04-pi-config-design): `CAMERA_HOST` (or `CAMPROXY_CAMERA_HOST`) sets `camera.host`, `PI_ADDRESS` (or `CAMPROXY_PI_ADDRESS`) sets `ftp.publicHost` and `server.publicUrl` (`http://<PI_ADDRESS>:<port>`). The environment wins over the Settings overrides and config.json; such settings are read-only on the Settings page ("set in .env", `source: "env"`), and an override of them answers 400. With `CAMPROXY_ENV_FILE`, the two keys are read from that file at every start (any value there wins over the container's environment). Startup line `config_env`.

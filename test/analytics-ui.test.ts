@@ -1,6 +1,6 @@
 // test/analytics-ui.test.ts
 import { describe, expect, it } from 'vitest';
-import { boxLabel, costEstimate, keyNotice, validKey, scorePct, labelStyle, estimateFor, parseLimit, pausedText, tagText, stillUrl, toggleSelection, usageLine } from '../web/src/lib/analytics';
+import { boxLabel, costEstimate, keyNotice, validKey, scorePct, labelStyle, estimateFor, parseLimit, pausedText, tagText, stillUrl, toggleSelection, usageLine, usageRows } from '../web/src/lib/analytics';
 
 describe('analytics UI text', () => {
   it('links the plain still of a second like the Timeline does', () => {
@@ -19,6 +19,20 @@ describe('analytics UI text', () => {
     expect(usageLine(base)).toMatch(/^23 of 1,000 this month · 4 today · last \d{1,2}:02(\s?[AP]M)? \(0\.3 s\)$/);
     expect(usageLine({ ...base, today: { calls: 4, cap: 30 } })).toContain('4 of 30 today');
     expect(usageLine({ ...base, enabled: false })).toBe('not enabled');
+    // Klaus 2026-10-05: the Status card shows the three figures on three lines.
+    const rows = usageRows({ ...base, today: { calls: 4, cap: 30 } });
+    expect(rows.map((r) => r.label)).toEqual(['This month', 'Today', 'Last call']);
+    expect(rows[0].text).toBe('23 of 1,000');
+    expect(rows[1].text).toBe('4 of 30');
+    expect(rows[2].text).toMatch(/^\d{1,2}:02(\s?[AP]M)? \(0\.3 s\)$/);
+    expect(usageRows({ ...base, lastCall: null }).map((r) => r.label)).toEqual(['This month', 'Today']);
+    expect(usageRows({ ...base }).find((r) => r.label === 'Today')?.text).toBe('4');
+    expect(usageRows({ ...base, enabled: false })).toEqual([]);
+    // Klaus 2026-10-05: the manual still checks' own daily limit as a fourth line.
+    const withChecks = usageRows({ ...base, checks: { today: 1, cap: 10 } });
+    expect(withChecks.map((r) => r.label)).toEqual(['This month', 'Today', 'Last call', 'Still checks today']);
+    expect(withChecks[3].text).toBe('1 of 10');
+    expect(usageRows({ ...base, checks: { today: 0, cap: 0 } }).find((r) => r.key === 'checks')?.text).toBe('off');
   });
 
   it('writes the Events tag from the summary: subtype and score in the order given (the server sorts); "nothing relevant"; or why not', () => {

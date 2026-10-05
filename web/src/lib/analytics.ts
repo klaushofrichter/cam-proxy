@@ -1,6 +1,7 @@
 // Text for the analytics UI (spec 2026-09-30-analytics-design). Pure: tested
 // in test/analytics-ui.test.ts.
 export interface UiProviderState {
+  checks?: { today: number; cap: number };
   id: string;
   name: string;
   enabled: boolean;
@@ -49,6 +50,19 @@ export function keyNotice(s: Pick<UiProviderState, 'keySource' | 'keyMasked'> | 
 // What PUT /control/secrets/google-vision-key accepts: 20 to 200 printable ASCII characters, no spaces.
 export function validKey(text: string): boolean {
   return /^[\x21-\x7e]{20,200}$/.test(text);
+}
+
+// The Status card's usage, one figure per line (Klaus 2026-10-05): this month, today, the last call.
+export function usageRows(s: UiProviderState): { label: string; text: string; key: string }[] {
+  if (!s.enabled) return [];
+  const rows = [
+    { key: 'month', label: 'This month', text: `${n(s.month.calls)} of ${n(s.month.limit)}` },
+    { key: 'today', label: 'Today', text: s.today.cap > 0 ? `${n(s.today.calls)} of ${n(s.today.cap)}` : n(s.today.calls) },
+  ];
+  if (s.lastCall) rows.push({ key: 'last', label: 'Last call', text: `${new Date(s.lastCall.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} (${(s.lastCall.tookMs / 1000).toFixed(1)} s)` });
+  // The manual still checks have their own daily limit (analytics.checksPerDay; 0 = off).
+  if (s.checks) rows.push({ key: 'checks', label: 'Still checks today', text: s.checks.cap > 0 ? `${n(s.checks.today)} of ${n(s.checks.cap)}` : 'off' });
+  return rows;
 }
 
 export function usageLine(s: UiProviderState): string {
