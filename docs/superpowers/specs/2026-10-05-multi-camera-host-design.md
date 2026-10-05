@@ -898,27 +898,30 @@ firewall, not LAN to LAN, so this usually works. Whether the RT-AX86U
 forwards LAN to LAN through its hardware acceleration without dropping the
 one-sided flow is *to verify on the device*. The test below checks it.
 
-**Pre-arrival test, with the Mac standing in for the host** (Klaus can run
-it now; the coordinator gives him the step-by-step separately). It checks
-the router half of the design (route entry, hairpin, LAN-to-LAN forwarding)
-before the PC exists:
+**Pre-arrival test, with the Mac standing in for the host** (the steps
+Klaus was given, 2026-10-05). It checks the router half of the design
+(route entry, hairpin, LAN-to-LAN forwarding) before the PC exists. The Mac
+takes the host's future camera-side address, `192.168.60.1`:
 
-1. On the Mac: give it an address in the camera subnet without a second
-   network, e.g. an alias `192.168.60.13/32` on `lo0`. Then run a small
-   web server bound to that address, standing in for a camera's HTTPS port.
-   The macOS firewall must allow it.
-2. On the router: the static route `192.168.60.0/24` via **the Mac's** LAN
-   address (steps above).
-3. From another LAN client (a phone's browser, or a cluster node via the
-   kube-setup session): ping and curl `192.168.60.13`. The packets go to the
-   router, are hairpinned to the Mac, and the Mac answers straight back.
-   That is the same reply path the mini PC will use.
-4. Afterwards: remove the alias, stop the server, and delete the route or
-   leave it disabled (the mini PC's address will differ).
+1. On the Mac (LAN address `192.168.1.35`):
+   `sudo ifconfig lo0 alias 192.168.60.1/32`, then a test server
+   `python3 -m http.server 8060 --bind 192.168.60.1` (the macOS firewall
+   must allow it).
+2. On the router: static route network `192.168.60.0`, netmask
+   `255.255.255.0`, gateway `192.168.1.35` (the Mac), interface `LAN`
+   (steps above).
+3. From the Pi (another LAN client): `ping -c 3 192.168.60.1` and
+   `curl -v http://192.168.60.1:8060/`. The packets go to the router, are
+   hairpinned to the Mac, and the Mac answers the Pi directly. That is the
+   same reply path the mini PC will use. If anything fails:
+   `sudo tcpdump -ni en0 host 192.168.60.1` on the Mac shows whether the
+   router forwards at all.
+4. Cleanup: delete the route on the router, stop the server,
+   `sudo ifconfig lo0 -alias 192.168.60.1`.
 
-Success means the RT-AX86U accepts the route and forwards LAN-to-LAN
-hairpin traffic. Forwarding on the host itself and the firewall are tested
-on the device (below).
+Success means the RT-AX86U accepts the route and hairpins LAN-to-LAN
+traffic. Forwarding through the host itself and its firewall are tested on
+the device (below).
 
 **Test procedure on the device** (after the PC arrives; run it before
 anything else depends on the route):
