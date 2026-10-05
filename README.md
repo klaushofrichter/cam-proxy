@@ -262,8 +262,9 @@ the new form:
   one. The image rate limit grows with the number of cameras.
 - **Not yet (phase 2):** FTP for more than one camera (a config error until
   per-camera FTP users exist), the camera routes for actions and settings
-  (`/control/actions/:name` answers `400 camera_required` for a camera action
-  on a proxy with several cameras; host actions work), one shared go2rtc
+  (`/control/actions/:name` and `PUT /control/camera/name` answer `400
+  camera_required` for a camera action on a proxy with several cameras; host
+  actions work), one shared go2rtc
   (until then camera *i* uses `go2rtc.rtspPort`/`apiPort` + 100 × *i*), and a
   shared recordings cache (each camera gets an equal share of `cacheMB`).
   `CAMERA_HOST` with several cameras is a config error.

@@ -608,7 +608,7 @@ paths:
             schema: { type: object, required: [name], properties: { name: { type: string, pattern: '^[A-Za-z0-9()+=\[\]{}-](?:[A-Za-z0-9 ()+=\[\]{}-]{0,29}[A-Za-z0-9()+=\[\]{}-])?$' } } }
       responses:
         '200': { description: '{ name }: the name read back from the camera' }
-        '400': { description: '{ error: invalid_name, reason }: against the rules (the camera is not asked), or refused by the camera (rspCode -54, -56)' }
+        '400': { description: '{ error: invalid_name, reason }: against the rules (the camera is not asked), or refused by the camera (rspCode -54, -56); { error: camera_required } on a proxy with several cameras' }
         '401': { description: not signed in }
         '403': { description: admin_only, or csrf }
         '502': { description: '{ error: camera_error } (or camera_auth_failed)' }

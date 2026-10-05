@@ -86,6 +86,10 @@ describe('one proxy, three cameras (spec §15)', () => {
   }, 60_000);
 
   it('the old camera actions answer camera_required; host actions work', async () => {
+    // The camera's name is a camera action too (spec §6.3): never the first camera's by accident.
+    const n = await request(p.base).put('/control/camera/name').set(admin()).send({ name: 'Renamed' });
+    expect([n.status, n.body.error]).toEqual([400, 'camera_required']);
+    expect(sims.map((s) => s.sim.engine.settings.running.DevName?.name)).not.toContain('Renamed');
     const r = await request(p.base).post('/control/actions/camera-test').set(admin());
     expect([r.status, r.body.error]).toEqual([400, 'camera_required']);
     expect((await request(p.base).post('/control/actions/retention-run').set(admin()).send({ dryRun: true })).status).toBe(200);

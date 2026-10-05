@@ -1,6 +1,7 @@
 <script lang="ts">
   import { refresh, refreshTick, status } from '../lib/state';
   import { cameraNameProblem, CAMERA_NAME_MAX, nameSaveError } from '../lib/camera-name';
+  import { multiCamera } from '../lib/cameras';
   import { onMount } from 'svelte';
   import { api, ApiError } from '../lib/api';
   import AnalyticsSettings from '../components/AnalyticsSettings.svelte';
@@ -124,7 +125,7 @@
           {#each paths as p (p)}
             {@const s = view[p]}
             {@const same = s.source === 'override' ? sameBadge(p, s.resetTo) : null}
-            {#if /^cameras\.[^.]+\.name$/.test(p)}
+            {#if /^cameras\.[^.]+\.name$/.test(p) && !multiCamera($status)}
             <tr data-testid="setting-camera-name">
               <td><label for="camera-name">Camera name (stored on the camera)</label></td>
               <td>

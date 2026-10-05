@@ -318,6 +318,8 @@ export function controlApi(d: ControlDeps): express.Router {
   // camera_offline; 502 camera_error. A `camera-name` record once the camera
   // was asked. The stream message follows from the poller.
   r.put('/camera/name', async (req, res) => {
+    // Several cameras: the name is a camera's (the camera routes of phase 2; spec §6.3).
+    if (d.cameraCount() > 1) return void res.status(400).json({ error: 'camera_required', detail: 'several cameras: the name needs a camera (/control/cameras/:cam/name)' });
     const name: unknown = req.body?.name;
     const problem = cameraNameProblem(name);
     if (problem) return void res.status(400).json({ error: 'invalid_name', reason: problem });
