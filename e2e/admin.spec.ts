@@ -46,8 +46,51 @@ test('a setting changed in the UI becomes an override, and can be reset', async 
   await input.fill('12');
   await page.getByTestId('save-sse.pingS').click();
   await expect(page.getByTestId('source-sse.pingS')).toHaveText('override');
+  // Reset says what it goes back to (Klaus 2026-10-05).
+  await expect(page.getByTestId('reset-sse.pingS')).toHaveText('Reset – 15 s');
   await page.getByTestId('reset-sse.pingS').click();
   await expect(page.getByTestId('source-sse.pingS')).toHaveText('default');
+  await expect(page.getByTestId('reset-sse.pingS')).toHaveCount(0);
+});
+
+// Klaus 2026-10-05: one button back to the defaults, after a confirmation
+// that lists what changes; one request, one audit record.
+test('Reset to defaults lists what changes, resets every override and is audited once', async ({ page, request }) => {
+  const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+  // A clean start: nothing overridden, so no button.
+  expect((await request.delete('/control/config', { headers: auth })).ok()).toBe(true);
+  await signIn(page);
+  await page.getByTestId('nav-settings').click();
+  await expect(page.getByTestId('input-sse.pingS')).toBeVisible();
+  await expect(page.getByTestId('reset-all')).toHaveCount(0);
+  for (const [p, v] of [['retention.auditDays', '30'], ['sse.pingS', '12']] as const) {
+    await page.getByTestId(`input-${p}`).fill(v);
+    await page.getByTestId(`save-${p}`).click();
+    await expect(page.getByTestId(`source-${p}`)).toHaveText('override');
+  }
+  await expect(page.getByTestId('reset-retention.auditDays')).toHaveText('Reset – 90 days');
+  if (process.env.SHOT_DIR) await page.screenshot({ path: `${process.env.SHOT_DIR}/settings-resets.png`, fullPage: true });
+  // Cancel changes nothing.
+  await page.getByTestId('reset-all').click();
+  const dialog = page.getByTestId('confirm-dialog');
+  await expect(dialog).toBeVisible();
+  await expect(page.getByTestId('confirm-items')).toContainText('retention.auditDays: 30 days → 90 days');
+  await expect(page.getByTestId('confirm-items')).toContainText('sse.pingS: 12 s → 15 s');
+  await expect(page.getByTestId('confirm-ok')).toHaveText('Reset 2 settings');
+  if (process.env.SHOT_DIR) await page.screenshot({ path: `${process.env.SHOT_DIR}/settings-reset-dialog.png` });
+  await page.getByTestId('confirm-cancel').click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByTestId('source-sse.pingS')).toHaveText('override');
+  // Confirm: both back, the button gone, one config-change record for both.
+  await page.getByTestId('reset-all').click();
+  await page.getByTestId('confirm-ok').click();
+  await expect(page.getByTestId('source-sse.pingS')).toHaveText('default');
+  await expect(page.getByTestId('source-retention.auditDays')).toHaveText('default');
+  await expect(page.getByTestId('reset-all')).toHaveCount(0);
+  await expect(page.getByTestId('settings-message')).toHaveText('2 settings back to their default');
+  const rec = JSON.parse((await (await request.get('/control/audit?action=config-change&limit=1', { headers: auth })).text()).trim());
+  expect(rec.message).toBe('Settings reset to defaults: retention.auditDays, sse.pingS');
+  expect(rec.cam_proxy).toMatchObject({ reset: 'all', changes: [{ key: 'retention.auditDays', from: 30, to: 90 }, { key: 'sse.pingS', from: 12, to: 15 }] });
 });
 
 test.describe('token storage', () => {

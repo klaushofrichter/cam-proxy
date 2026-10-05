@@ -65,3 +65,10 @@ export function summarize(objects: Found[]): { summary: SummaryEntry[]; unmapped
   }
   return { summary, unmapped };
 }
+
+// For audit records (still checks, automatic analyses): the categories found,
+// and a short text such as "person 80%, vehicle 61%".
+type Named = { category?: unknown; score?: unknown };
+export const summaryCategories = (summary: unknown[]): string[] => [...new Set(summary.map((s) => (s as Named)?.category).filter((c): c is string => typeof c === 'string'))];
+export const summaryText = (s: unknown[]): string =>
+  s.length ? s.map((e) => `${String((e as Named).category)} ${Math.round(Number((e as Named).score) * 100)}%`).join(', ') : 'nothing relevant';

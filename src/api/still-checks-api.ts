@@ -1,6 +1,7 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { readFile } from 'fs/promises';
 import { resolve, sep } from 'path';
+import { summaryCategories as categories, summaryText as pct } from '../analytics/classes';
 import { analysisCheckJson, checkFullJson, checkJson, checkSummaryJson, type CheckJson } from '../analytics/check-json';
 import type { AnalyticsService, CheckOutcome } from '../analytics/service';
 import type { AuditLog } from '../audit/audit-log';
@@ -15,11 +16,6 @@ import { bad, IMMUTABLE, intParam, perMinute } from './respond';
 // Vision on a second picked by hand, stored apart from events. Auth (client
 // token, admin, CSRF for sessions) is applied by the caller.
 export const CHECKS_PER_MINUTE = 20;
-
-type Found = { category?: unknown };
-const categories = (summary: unknown[]): string[] => [...new Set(summary.map((s) => (s as Found)?.category).filter((c): c is string => typeof c === 'string'))];
-const pct = (s: unknown[]) =>
-  s.length ? s.map((e) => `${String((e as Found).category)} ${Math.round(Number((e as { score?: unknown }).score) * 100)}%`).join(', ') : 'nothing relevant';
 
 export function stillChecksApi(d: { config: () => Config; catalog: Catalog; analytics: AnalyticsService; audit: AuditLog }): express.Router {
   const r = express.Router();

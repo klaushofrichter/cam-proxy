@@ -8,9 +8,10 @@ import { eventById } from '../catalog/events';
 import type { Config } from '../config/defaults';
 import type { TimeInfo } from '../camera/time';
 import { logger } from '../log';
+import type { AuditInput } from '../audit/audit-log';
 import type { StreamLog } from '../stream/log';
 import { checkJson } from './check-json';
-import { summarize } from './classes';
+import { summarize, summaryCategories, summaryText } from './classes';
 import { googleVision } from './google-vision';
 import { localDay } from './local-day';
 import { AnalyticsError, maskKey, PROVIDERS, type AnalyticsProvider, type Found, type ProviderId } from './providers';
@@ -37,6 +38,8 @@ export interface AnalyticsDeps {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   provider?: (id: ProviderId, key: string, baseUrl: string) => AnalyticsProvider;
+  // The audit log: one `event-analysis` record per automatic analysis that made a call.
+  audit?: { write: (i: AuditInput) => unknown };
 }
 
 export interface ProviderState {
@@ -497,41 +500,70 @@ export class AnalyticsService {
 
     let failed: AnalyticsError | undefined; // the previous attempt's error
     let t0 = 0;
-    for (let attempt = 0; ; attempt++) {
-      // Switched off or stopped during the retry wait: no call; the counted
-      // attempt is stored, so the event and the usage agree.
-      if (!this.active()) {
-        if (failed) this.store(job, { status: 'failed', reason: failed.reason, stillTs, image: null, tookMs: null, objects: null, raw: null });
-        return;
-      }
-      // Retention may have removed the event meanwhile: no call for it.
-      if (!eventById(this.d.catalog, job.id)) return;
-      // The key as it is now: a key set during the retry wait is the one used.
-      const key = this.key()!;
-      const provider = make('google-vision', key, this.d.secrets().googleVisionUrl);
-      const g = this.settings().googleVision;
-      const day = localDay(this.now(), this.d.timeInfo());
-      if (this.monthUsage(day) >= g.monthlyLimit || (g.dailyCap > 0 && usageBetween(this.d.catalog, 'google-vision', day, day) >= g.dailyCap)) {
-        return this.skip(job, 'limit', stillTs);
-      }
-      addUsage(this.d.catalog, 'google-vision', day);
-      t0 = this.now();
-      let res: { objects: unknown; raw: unknown };
-      try {
-        res = await provider.analyze(jpeg, AbortSignal.timeout(TIMEOUT_MS));
-      } catch (err) {
-        const e = err instanceof AnalyticsError ? err : new AnalyticsError('network', true);
-        failed = e;
-        this.noteFailure(e, key, t0);
-        if (e.retry && attempt === 0) {
-          await this.wait(RETRY_AFTER_MS);
-          continue;
+    // For the audit record: the calls made, the last one's time, what it came to.
+    const made = { calls: 0, tookMs: null as number | null, summary: null as unknown[] | null };
+    try {
+      for (let attempt = 0; ; attempt++) {
+        // Switched off or stopped during the retry wait: no call; the counted
+        // attempt is stored, so the event and the usage agree.
+        if (!this.active()) {
+          if (failed) this.store(job, { status: 'failed', reason: failed.reason, stillTs, image: null, tookMs: null, objects: null, raw: null });
+          return;
         }
-        return this.store(job, { status: 'failed', reason: e.reason, stillTs, image: null, tookMs: this.now() - t0, objects: null, raw: null });
+        // Retention may have removed the event meanwhile: no call for it.
+        if (!eventById(this.d.catalog, job.id)) return;
+        // The key as it is now: a key set during the retry wait is the one used.
+        const key = this.key()!;
+        const provider = make('google-vision', key, this.d.secrets().googleVisionUrl);
+        const g = this.settings().googleVision;
+        const day = localDay(this.now(), this.d.timeInfo());
+        if (this.monthUsage(day) >= g.monthlyLimit || (g.dailyCap > 0 && usageBetween(this.d.catalog, 'google-vision', day, day) >= g.dailyCap)) {
+          return this.skip(job, 'limit', stillTs);
+        }
+        addUsage(this.d.catalog, 'google-vision', day);
+        made.calls++;
+        t0 = this.now();
+        let res: { objects: unknown; raw: unknown };
+        try {
+          res = await provider.analyze(jpeg, AbortSignal.timeout(TIMEOUT_MS));
+        } catch (err) {
+          const e = err instanceof AnalyticsError ? err : new AnalyticsError('network', true);
+          failed = e;
+          made.tookMs = this.now() - t0;
+          this.noteFailure(e, key, t0);
+          if (e.retry && attempt === 0) {
+            await this.wait(RETRY_AFTER_MS);
+            continue;
+          }
+          return this.store(job, { status: 'failed', reason: e.reason, stillTs, image: null, tookMs: this.now() - t0, objects: null, raw: null });
+        }
+        const tookMs = this.now() - t0;
+        this.lastCall = { at: t0, tookMs, status: 'ok' };
+        made.tookMs = tookMs;
+        made.summary = Array.isArray(res.objects) ? summarize(res.objects as Found[]).summary : [];
+        return this.storeOk(job, jpeg, stillTs, tookMs, res);
       }
-      const tookMs = this.now() - t0;
-      this.lastCall = { at: t0, tookMs, status: 'ok' };
-      return this.storeOk(job, jpeg, stillTs, tookMs, res);
+    } finally {
+      if (made.calls) this.auditCall(job, stillTs, made, failed?.reason ?? 'unknown');
+    }
+  }
+
+  // One `event-analysis` record per automatic analysis that made a Vision
+  // call (ok, or failed after its retry); never the image or the key. A skip
+  // made no call and writes nothing.
+  private auditCall(job: Job, stillTs: number, made: { calls: number; tookMs: number | null; summary: unknown[] | null }, reason: string): void {
+    if (!this.d.audit) return;
+    const ok = made.summary !== null;
+    const head = `Vision on event ${job.id} (${job.kind})`;
+    try {
+      this.d.audit.write({
+        action: 'event-analysis', category: ['host'], type: ['access'], outcome: ok ? 'success' : 'failure', user: 'system',
+        message: ok ? `${head}: ${summaryText(made.summary!)}` : `${head} failed: ${reason}`,
+        ...(ok ? {} : { error: reason }),
+        details: { cam: this.d.cam, eventId: job.id, kind: job.kind, stillTs, outcome: ok ? 'ok' : 'failed', reason: ok ? null : reason, calls: made.calls, tookMs: made.tookMs, found: ok ? summaryCategories(made.summary!) : [] },
+      });
+    } catch (err) {
+      logger.warn({ err: (err as Error).message, eventId: job.id }, 'analytics_audit_failed');
     }
   }
 }

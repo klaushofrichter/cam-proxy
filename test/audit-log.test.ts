@@ -327,3 +327,23 @@ describe('AuditLog.list day skipping', () => {
     expect(spy.mock.calls.map((c) => c[0])).toEqual(['2026-09-30']);
   });
 });
+
+describe('AuditLog.count', () => {
+  it('counts the records of the days from a day on, reading a file again only when it changed', () => {
+    const now = { t: Date.UTC(2026, 8, 29, 12) };
+    const { dir, log } = make(now);
+    log.write({ ...base, action: 'login', message: 'old' });
+    now.t = Date.UTC(2026, 8, 30, 12);
+    log.write({ ...base, action: 'login', message: 'a' });
+    log.write({ ...base, action: 'logout', message: 'b' });
+    writeFileSync(join(dir, '2026-09-30.jsonl'), readFileSync(join(dir, '2026-09-30.jsonl'), 'utf8') + '{broken\n\n');
+    expect(log.count('2026-09-29')).toBe(3);
+    expect(log.count('2026-09-30')).toBe(2); // a corrupt or empty line is no record
+    const read = vi.spyOn(JSON, 'parse');
+    expect(log.count('2026-09-30')).toBe(2);
+    expect(read).not.toHaveBeenCalled();
+    log.write({ ...base, action: 'login', message: 'c' });
+    expect(log.count('2026-09-30')).toBe(3);
+    expect(log.count('2026-10-01')).toBe(0);
+  });
+});

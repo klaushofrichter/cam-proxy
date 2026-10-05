@@ -1,7 +1,7 @@
 # Audit log
 
 Who did what on the proxy: starts and stops, restarts, camera reboots and power-cycles, changes of the camera's FTP upload, sign-ins (including
-failures), refused tokens, control actions, settings changes, still checks, composed clips, and a daily
+failures), refused tokens, control actions, settings changes, still checks, automatic Vision analyses, composed clips, and a daily
 storage and activity snapshot. Design: [the spec](superpowers/specs/2026-10-01-audit-log-design.md).
 
 ## What it records
@@ -20,10 +20,12 @@ storage and activity snapshot. Design: [the spec](superpowers/specs/2026-10-01-a
 | `login-link-issued` | authentication / creation | `POST /control/login-links` (cams mints a link) | |
 | `auth-refused` | authentication / denied | a request the auth layer answered with 401 or 403 | `auth.tokenKind` (`none`, `invalid`, `client`, `admin`, `audit`, `session`), `auth.reason` (`no-token`, `wrong-token`, `admin-only`, `csrf`), `auth.suppressed`; ECS `http.request.method` and `url.path` |
 | `camera-name` | configuration / change | `PUT /control/camera/name` (the Settings page's "Camera name (stored on the camera)"), once the camera was asked | `from` (the name before), `to` (the name read back from the camera; `requested` too when it differs), `requestedBy` (`token` or `session`); user `admin`. A failure (the camera refused the name, is offline or failed) has the reason as `error` and `requested`. A name refused by the rules before the call (400) writes nothing. A rename made in the Reolink app is not audited (it reaches clients as a `camera` stream message) |
+| `camera-address` | configuration / change | `POST /control/actions/camera-address` (Settings → Find camera → "Use this camera"), written or refused by the `.env` guard | user `admin`; `from`, `to` (the address), `key` (`CAMERA_HOST` or `CAMPROXY_CAMERA_HOST`), `backup` (the backup file), `requestedBy`; a failure has the code as `error.message`. Never another line of the file |
 | `control-action` | configuration / change | `POST /control/actions/:name` except `camera-reboot`, `camera-powercycle`, `camera-poe-on`, `restart-proxy`, `camera-address`, `archive-clear`, `inventory` and `inventory-repair` (their own records; an inventory's when the run ends) and a retention dry run (`poe-switch-read` and `inventory-cancel` are ones); the camera-side `restart` is one (`action: restart`) | `action`, `result` (`ok`, the error code or status, or `aborted`), `requestedBy` |
-| `config-change` | configuration / change | `PUT /control/config`, reset of an override | `changes`: `[{key, from, to, restart?}]`, secrets redacted; `restart` is `restart` for a setting that waits for a restart, `process` for one that waits for a new process, and missing for a live one. A refused change (400) writes nothing |
+| `config-change` | configuration / change | `PUT /control/config`, reset of an override (`DELETE /control/config/{path}`), and Reset to defaults (`DELETE /control/config`: one record for all, message "Settings reset to defaults: …", `reset: "all"`) | `changes`: `[{key, from, to, restart?}]`, secrets redacted; `restart` is `restart` for a setting that waits for a restart, `process` for one that waits for a new process, and missing for a live one. A refused change (400) writes nothing, nor does a reset with nothing to reset |
 | `secret-override` | configuration / change | `PUT /control/secrets/google-vision-key` (the Settings page's key field) | `secret` (`CAMPROXY_GOOGLE_VISION_KEY`), `masked` (first and last four characters, `AIza…wXyZ`), `replaced` (`env`, `manual` or `none`). Never the key. A refused key (400) writes nothing |
 | `still-check` | host / access | `POST /api/cameras/{cam}/still-checks` (a second checked with Vision by hand, cams #179), each request past the input check | user `client` (the client token) or `admin`; `stillTs`, `outcome` (`ok`, `reused`, `refused`, `failed`), `source` (a reused one: `check` or `event`), `reason` (refused: `off`, `no_key`, `checks_off`, `busy`, `bad_key`, `quota`, `month`, `day`, `checks`; failed: the provider's, as in the 502), `cost` (1 when this request made a Vision call, else 0), `tookMs`, `found` (the categories found, e.g. `["person"]`), `requestedBy` (`token` or `session`). Outcome `success` for ok and reused, else `failure` (`error.message` the reason). Never the image or the key. A 400 or 404 (`no_still`) and a rate-limited request write nothing |
+| `event-analysis` | host / access | an automatic Vision analysis of an event (the analytics service's call for a person, vehicle or pet event) that made a call: once per event, when it ends, ok or failed (after its one retry) | user `system`; `cam`, `eventId`, `kind`, `stillTs` (the still sent), `outcome` (`ok` or `failed`), `reason` (failed: the provider's, e.g. `timeout`, `quota`, `bad_key`), `calls` (the Vision calls made for it, 1 or 2 with the retry), `tookMs` (the last call), `found` (the categories found, e.g. `["person"]`). The message lists them with their scores ("Vision on event 812 (person): person 90%"). Outcome `success` for ok, else `failure` (`error.message` the reason). A skip (no still, the monthly limit or daily cap, a pause, analytics off) made no call and writes nothing; the analysis row and the daily `activity-daily` still count it. Never the image or the key. A result whose event was deleted meanwhile is still recorded (the call was paid) |
 | `composition` | host / access | `POST /api/cameras/{cam}/compositions` (a composed clip, cams's Save dialog), each request past the input check that is not a dry run | user `client` or `admin`; `anchor` (`clip` with `clipId`, or `at` with `at`, a second: cams #179), `from`, `to` (the window, unix ms), `durationS`, `size`, `seconds` (`{clip, still, card}`: what the clip is made of), `outcome` (`started`, `busy`, `nothing_to_compose`, `storage_paused`, `no_font`), `jobId` (when started), `requestedBy` (`token` or `session`). Outcome `success` for started, else `failure` (`error.message` the outcome). A 400 or 404, a dry run and a rate-limited request write nothing |
 | `archive-add` | file / creation | an archive job ended (`POST /api/cameras/{cam}/archive`, [archive.md](archive.md)), done or failed, or the space check refused it before a job (507) | user `client` or `admin`; `id`, `cam`, `name`, `source` (`{type: composition, jobId, anchor, …}`, `{type: clip, clipId, stream}` or `{type: recording, recording, stream}`), `bytes`, `labels`, `retentionDays` (null: forever), `durationS`, `quality`, `jobId`, `requestedBy` (`token` or `session`), `onBehalfOf` (the person cams names in `X-On-Behalf-Of`, when sent). A failure has the code as `error.message` (`insufficient_space` with `needed`, `free`, `minFreeBytes`; `camera_offline`, `unknown_recording`, `fetch_failed`, `source_gone`, `store_failed`, `cancelled`). A 400, 404, 409, 503 or a rate-limited request writes nothing |
 | `archive-update` | file / change | `PATCH /api/archive/{id}` that changed something | `id`, `cam`, `name` (after), `changes: [{field: name\|labels\|retentionDays, from, to}]`, `requestedBy`, `onBehalfOf`. An unchanged PATCH writes nothing |
@@ -245,7 +247,7 @@ per line.
 | `before=<cursor>` | records older than the cursor, newest first (the Audit page) |
 | `after=<cursor>` | records newer than the cursor, oldest first (a poller) |
 | `from`, `to` | unix ms bounds |
-| `action` | one or more `event.action` values, comma-separated |
+| `action` | one or more `event.action` values, comma-separated; each must be one of the actions in the table above (else 400 `unknown action: <name>`) |
 | `outcome` | `success`, `failure` or `unknown` |
 
 - With neither `before` nor `after`: the newest records, newest first.
@@ -306,8 +308,20 @@ The admin UI's sidebar entry **Audit** sits between Clips and Settings
 - A table, newest first, **50 per page**: time (local), action, outcome
   (green, red or grey dot), who (`user.name` and `source.ip`), and the
   `message`.
-- **Filters:** an action (a select of the known actions) and an outcome.
-  Changing one starts again from the newest.
+- **Filters:** actions and an outcome. The action filter is a drop-down
+  list of checkboxes, one per known action: all are selected at first (no
+  filter, so a newer action this page doesn't list shows too); clicking an
+  action selects or unselects it; **All actions** selects all, and when all
+  are selected it selects none. None selected shows no records: "No actions
+  selected". The button says "All actions", "No actions", the one action, or
+  "N actions". Keyboard: Enter or Space opens it, Tab or the arrow keys move,
+  Space toggles, Esc closes. Changing a filter starts again from the newest;
+  the selection is not kept in the URL (the page has no URL state).
+- **How many:** under the title, "Kept for 90 days (Settings) · 1,234
+  events in that time.": `retention.auditDays` and the records kept now,
+  all actions whatever the filter (`GET /control/audit/summary`, which the
+  audit token reads too; the records in the day files from the retention's
+  cutoff day on).
 - **Paging:** Newer, Older, and Newest (back to the top). The top bar's
   Refresh reloads the page.
 - Click (or press Enter on) a row to expand it to the full record as JSON.

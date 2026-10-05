@@ -8,10 +8,11 @@
   import FindCameraCard from '../components/FindCameraCard.svelte';
   import { envNote, isEnvSet } from '../lib/find-camera';
 
-  import { parseSetting, type SettingType } from '../lib/settings';
+  import ConfirmDialog from '../components/ConfirmDialog.svelte';
+  import { parseSetting, resetLabel, resetPlan, type ResetTo, type SettingType } from '../lib/settings';
 
   // `env`: the variable that sets it (source env: read-only here).
-  interface Setting { value: unknown; source: 'default' | 'file' | 'override' | 'env'; env?: string; restart: boolean; pending: boolean; next?: unknown; type?: SettingType }
+  interface Setting { value: unknown; source: 'default' | 'file' | 'override' | 'env'; env?: string; restart: boolean; pending: boolean; next?: unknown; type?: SettingType; resetTo?: ResetTo }
   let view = $state<Record<string, Setting>>({});
   let drafts = $state<Record<string, string>>({});
   let message = $state('');
@@ -42,6 +43,25 @@
     view = await api('DELETE', `/control/config/${encodeURIComponent(path)}`);
     void refresh();
     message = `${path} is back to its ${view[path].source} value`;
+  }
+  // "Reset to defaults": every override at once (one request, one audit
+  // record), after a confirmation that lists what changes.
+  const overrides = $derived(Object.values(view).filter((s) => s.source === 'override').length);
+  let asking = $state<string[] | null>(null);
+  function askResetAll() {
+    asking = resetPlan(view);
+  }
+  async function resetAll() {
+    const n = asking?.length ?? 0;
+    asking = null;
+    try {
+      view = await api('DELETE', '/control/config');
+      drafts = {};
+      message = `${n} setting${n === 1 ? '' : 's'} back to ${n === 1 ? 'its' : 'their'} default${Object.values(view).some((s) => s.pending) ? ' (restart to apply some)' : ''}`;
+      void refresh();
+    } catch (e) {
+      message = e instanceof ApiError ? e.message : 'not reset';
+    }
   }
   async function restart() {
     await api('POST', '/control/actions/restart');
@@ -77,7 +97,10 @@
 <section>
   <div class="head">
     <h2>Settings</h2>
-    {#if Object.values(view).some((s) => s.pending)}<button onclick={() => void restart()} data-testid="restart">Restart to apply</button>{/if}
+    <div class="head-buttons">
+      {#if overrides}<button onclick={askResetAll} data-testid="reset-all">Reset to defaults</button>{/if}
+      {#if Object.values(view).some((s) => s.pending)}<button onclick={() => void restart()} data-testid="restart">Restart to apply</button>{/if}
+    </div>
   </div>
   <p class="muted small">From config.json, with changes made here kept as overrides in the data folder. Settings marked "set in .env" come from the environment (CAMERA_HOST, PI_ADDRESS) and win over both; change them in the .env file. Secrets are never shown or set here.</p>
   {#if message}<p class="msg" data-testid="settings-message">{message}</p>{/if}
@@ -114,7 +137,7 @@
               <td><span class="badge {s.source}" data-testid="source-{p}">{s.source}</span>{#if s.restart}<span class="badge restart" title="applies after a restart">restart</span>{/if}{#if s.pending}<span class="badge pending">next: {shown(s.next)}</span>{/if}</td>
               <td class="actions">
                 {#if drafts[p] !== undefined}<button onclick={() => void save(p)} data-testid="save-{p}">Save</button>{/if}
-                {#if s.source === 'override'}<button onclick={() => void reset(p)} data-testid="reset-{p}">Reset</button>{/if}
+                {#if s.source === 'override'}<button onclick={() => void reset(p)} data-testid="reset-{p}">{resetLabel(p, s.resetTo)}</button>{/if}
               </td>
             </tr>
             {/if}
@@ -124,16 +147,22 @@
     </div>
   {/each}
 </section>
+{#if asking}
+  <ConfirmDialog title="Reset to defaults" message={`${asking.length} setting${asking.length === 1 ? '' : 's'} changed here go${asking.length === 1 ? 'es' : ''} back to the value in config.json or the built-in default:`} items={asking} confirmLabel="Reset {asking.length} setting{asking.length === 1 ? '' : 's'}" oncancel={() => (asking = null)} onconfirm={() => void resetAll()} />
+{/if}
 
 <style>
   section { display: grid; gap: 12px; }
-  .head { display: flex; justify-content: space-between; align-items: center; }
+  /* A narrow screen: the cards shrink to the page and a wide table scrolls inside its card. */
+  section > :global(*) { min-width: 0; }
+  .head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .head-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
   h2 { margin: 0; font-size: 20px; }
   h3 { margin: 0 0 6px; font-size: 16px; text-transform: capitalize; }
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 14px; }
   td { padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
-  input { width: 100%; max-width: 280px; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; }
+  input { width: 100%; min-width: 72px; max-width: 280px; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; }
   .badge { font-size: 11px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border); margin-right: 4px; color: var(--muted); }
   .badge.override { color: var(--accent); border-color: var(--accent); }
   .badge.env { color: var(--accent); border-style: dashed; }
@@ -141,6 +170,11 @@
   input:disabled { opacity: 0.7; cursor: not-allowed; }
   .badge.pending { color: #f59e0b; }
   .actions { white-space: nowrap; text-align: right; }
+  /* A phone: "Reset – 90 days" may take two lines rather than squeeze the field. */
+  @media (max-width: 560px) {
+    .actions { white-space: normal; }
+    .actions button { font-size: 12px; padding: 4px 8px; }
+  }
   button { padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); cursor: pointer; color: var(--text); }
   button:hover { border-color: var(--accent); }
   .mono { font-family: var(--mono); }
