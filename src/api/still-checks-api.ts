@@ -47,7 +47,7 @@ export function stillChecksApi(d: { config: () => Config; catalog: Catalog; came
     const at = res.locals.at as number;
     const access = res.locals.access as { access?: string; viaCookie?: boolean } | undefined;
     const requestedBy = access?.viaCookie ? 'session' : 'token';
-    const o = await d.analytics.check(at, requestedBy);
+    const o = await d.analytics.check(workerOf(res).id, at, requestedBy);
     if (o.outcome === 'refused' && o.status === 404) return void res.status(404).json({ error: o.error }); // like a bad request: no record
     const check: CheckJson | null =
       o.outcome === 'ok' || (o.outcome === 'reused' && o.source === 'check') ? checkJson(d.catalog, o.row, maxOpenMs())

@@ -44,14 +44,14 @@ const provider: AnalyticsProvider = {
 
 function deps(over: { key?: string } = {}): AnalyticsDeps {
   return {
-    catalog: c, log, cam: 'cam1', dataDir: dir,
+    catalog: c, log, cams: () => ['cam1'], dataDir: dir,
     config: () => config,
     secrets: () => ({ googleVisionKey: over.key ?? 'k-123456789012', googleVisionUrl: 'http://mock' }),
-    readStill: async (ts) => {
+    readStill: async (_cam, ts) => {
       await readGates.get(ts);
       return stills.get(ts);
     },
-    listStills: (from, to) => [...stills.keys()].filter((t) => t >= from && t <= to).sort((a, b) => a - b),
+    listStills: (_cam, from, to) => [...stills.keys()].filter((t) => t >= from && t <= to).sort((a, b) => a - b),
     timeInfo: () => undefined,
     now: () => now,
     sleep: async (ms) => void (now += ms),
@@ -88,7 +88,7 @@ describe('AnalyticsService.check', () => {
   it('calls Vision for the still, stores the check with its JPEG (named by the row id), announces it and counts it', async () => {
     still(AT, 7);
     const e = insertEvent(c, { cam: 'cam1', source: 'onvif', kind: 'person', start_ts: AT - 2000, raw: null });
-    const r = await service().check(AT, 'token');
+    const r = await service().check('cam1', AT, 'token');
     expect(r).toMatchObject({ outcome: 'ok', tookMs: 600 });
     if (r.outcome !== 'ok') throw new Error('not ok');
     const row = checkById(c, r.row.id)!;
@@ -109,8 +109,8 @@ describe('AnalyticsService.check', () => {
   it('answers the stored check for the same second again: no call, counted as reused', async () => {
     still(AT, 7);
     const s = service();
-    const first = await s.check(AT, 'token');
-    const again = await s.check(AT, 'session');
+    const first = await s.check('cam1', AT, 'token');
+    const again = await s.check('cam1', AT, 'session');
     expect(again).toMatchObject({ outcome: 'reused', source: 'check' });
     if (again.outcome !== 'reused' || again.source !== 'check' || first.outcome !== 'ok') throw new Error('shape');
     expect(again.row.id).toBe(first.row.id);
@@ -118,7 +118,7 @@ describe('AnalyticsService.check', () => {
     expect(usage('google-vision:check-reused')).toBe(1);
     // Reused even when Vision was switched off meanwhile: a stored answer costs nothing.
     config.analytics.googleVision.enabled = false;
-    expect((await s.check(AT, 'token')).outcome).toBe('reused');
+    expect((await s.check('cam1', AT, 'token')).outcome).toBe('reused');
   });
 
   it("answers a second the automatic analysis sent from that analysis (source event), with no call and no row", async () => {
@@ -128,39 +128,39 @@ describe('AnalyticsService.check', () => {
     const f = insertEvent(c, { cam: 'cam1', source: 'onvif', kind: 'person', start_ts: AT + 9000, raw: null });
     saveAnalysis(c, { event_id: f.id, provider: 'google-vision', status: 'skipped', reason: 'limit', still_ts: AT + 10_000, image: null, requested_at: AT, took_ms: null, objects: null, raw: null, summary: '[]' });
     still(AT + 10_000, 8);
-    const r = await service().check(AT, 'token');
+    const r = await service().check('cam1', AT, 'token');
     expect(r).toMatchObject({ outcome: 'reused', source: 'event', analysis: { event_id: e.id } });
     expect(checkAt(c, 'cam1', AT)).toBeUndefined();
     // A skipped analysis is no answer: that second gets a call.
-    expect((await service().check(AT + 10_000, 'token')).outcome).toBe('ok');
+    expect((await service().check('cam1', AT + 10_000, 'token')).outcome).toBe('ok');
     expect(calls).toHaveLength(1);
   });
 
   it('refuses in order: off, no key, checks off (409), no still (404), paused (503), month, day, checks (429)', async () => {
     still(AT, 7);
     config.analytics.googleVision.enabled = false;
-    expect(await service().check(AT, 'token')).toEqual({ outcome: 'refused', status: 409, error: 'analytics_off', reason: 'off' });
+    expect(await service().check('cam1', AT, 'token')).toEqual({ outcome: 'refused', status: 409, error: 'analytics_off', reason: 'off' });
     config.analytics.googleVision.enabled = true;
-    expect(await service({ key: '' }).check(AT, 'token')).toEqual({ outcome: 'refused', status: 409, error: 'analytics_off', reason: 'no_key' });
+    expect(await service({ key: '' }).check('cam1', AT, 'token')).toEqual({ outcome: 'refused', status: 409, error: 'analytics_off', reason: 'no_key' });
     config.analytics.googleVision.checksPerDay = 0;
-    expect(await service().check(AT, 'token')).toEqual({ outcome: 'refused', status: 409, error: 'analytics_off', reason: 'checks_off' });
+    expect(await service().check('cam1', AT, 'token')).toEqual({ outcome: 'refused', status: 409, error: 'analytics_off', reason: 'checks_off' });
     config.analytics.googleVision.checksPerDay = 10;
-    expect(await service().check(AT + 1000, 'token')).toEqual({ outcome: 'refused', status: 404, error: 'no_still' });
+    expect(await service().check('cam1', AT + 1000, 'token')).toEqual({ outcome: 'refused', status: 404, error: 'no_still' });
 
     const s = service();
     answers = [new AnalyticsError('quota', false, 'quota'), 'ok'];
-    expect(await s.check(AT, 'token')).toMatchObject({ outcome: 'failed', reason: 'quota', cost: 1 });
-    expect(await s.check(AT, 'token')).toEqual({ outcome: 'refused', status: 503, error: 'analytics_paused', reason: 'quota', until: now + 3_600_000 });
+    expect(await s.check('cam1', AT, 'token')).toMatchObject({ outcome: 'failed', reason: 'quota', cost: 1 });
+    expect(await s.check('cam1', AT, 'token')).toEqual({ outcome: 'refused', status: 503, error: 'analytics_paused', reason: 'quota', until: now + 3_600_000 });
     now += 3_600_000;
 
     config.analytics.googleVision.monthlyLimit = 1; // the failed call counted
-    expect(await s.check(AT, 'token')).toEqual({ outcome: 'refused', status: 429, error: 'limit', reason: 'month' });
+    expect(await s.check('cam1', AT, 'token')).toEqual({ outcome: 'refused', status: 429, error: 'limit', reason: 'month' });
     config.analytics.googleVision.monthlyLimit = 100;
     config.analytics.googleVision.dailyCap = 1;
-    expect(await s.check(AT, 'token')).toEqual({ outcome: 'refused', status: 429, error: 'limit', reason: 'day' });
+    expect(await s.check('cam1', AT, 'token')).toEqual({ outcome: 'refused', status: 429, error: 'limit', reason: 'day' });
     config.analytics.googleVision.dailyCap = 0;
     config.analytics.googleVision.checksPerDay = 1;
-    expect(await s.check(AT, 'token')).toEqual({ outcome: 'refused', status: 429, error: 'limit', reason: 'checks' });
+    expect(await s.check('cam1', AT, 'token')).toEqual({ outcome: 'refused', status: 429, error: 'limit', reason: 'checks' });
     expect(calls).toHaveLength(1);
     // Every refusal but no_still is counted; no_still is a 404 like a bad request.
     expect(usage('google-vision:check-refused')).toBe(7);
@@ -173,7 +173,7 @@ describe('AnalyticsService.check', () => {
     addUsage(c, { provider: 'google-vision', keyId: '', cam: 'cam1' }, DAY);
     addUsage(c, { provider: 'google-vision', keyId: '', cam: 'cam1' }, DAY);
     config.analytics.googleVision.checksPerDay = 1;
-    expect((await service().check(AT, 'token')).outcome).toBe('ok');
+    expect((await service().check('cam1', AT, 'token')).outcome).toBe('ok');
     expect(service().usage()).toEqual({ enabled: true, paused: null, month: { calls: 4, limit: 100 }, today: { calls: 4, cap: 0 }, checks: { today: 1, cap: 1 } });
   });
 
@@ -183,17 +183,17 @@ describe('AnalyticsService.check', () => {
     const s = service();
     let open!: () => void;
     gate = new Promise<void>((r) => (open = r));
-    const first = s.check(AT, 'token');
+    const first = s.check('cam1', AT, 'token');
     await new Promise((r) => setTimeout(r, 0));
-    expect(await s.check(AT + 1000, 'token')).toEqual({ outcome: 'refused', status: 429, error: 'busy' });
-    const joined = s.check(AT, 'session');
+    expect(await s.check('cam1', AT + 1000, 'token')).toEqual({ outcome: 'refused', status: 429, error: 'busy' });
+    const joined = s.check('cam1', AT, 'session');
     open();
     expect((await first).outcome).toBe('ok');
     expect(await joined).toMatchObject({ outcome: 'reused', source: 'check', joined: true });
     expect(calls).toHaveLength(1);
     // Free again.
     gate = null;
-    expect((await s.check(AT + 1000, 'token')).outcome).toBe('ok');
+    expect((await s.check('cam1', AT + 1000, 'token')).outcome).toBe('ok');
   });
 
   it('a timeout is not retried (the user is waiting); it is counted and stores nothing', async () => {
@@ -201,14 +201,14 @@ describe('AnalyticsService.check', () => {
     answers = [new AnalyticsError('timeout', true), 'ok'];
     const s = service();
     const before = now;
-    expect(await s.check(AT, 'token')).toMatchObject({ outcome: 'failed', reason: 'timeout', cost: 1 });
+    expect(await s.check('cam1', AT, 'token')).toMatchObject({ outcome: 'failed', reason: 'timeout', cost: 1 });
     expect(now - before).toBeLessThan(30_000);
     expect(calls).toHaveLength(1);
     expect(checkAt(c, 'cam1', AT)).toBeUndefined();
     expect(usage('google-vision')).toBe(1);
     expect(s.state()[0].lastCall).toMatchObject({ status: 'timeout' });
     // Trying again later is possible.
-    expect((await s.check(AT, 'token')).outcome).toBe('ok');
+    expect((await s.check('cam1', AT, 'token')).outcome).toBe('ok');
   });
 
   it("a bad key from a check pauses the automatic analyses too", async () => {
@@ -216,7 +216,7 @@ describe('AnalyticsService.check', () => {
     still(AT + 61_000, 7);
     answers = [new AnalyticsError('bad_key', false, 'bad_key')];
     const s = service();
-    expect(await s.check(AT, 'token')).toMatchObject({ outcome: 'failed', reason: 'bad_key' });
+    expect(await s.check('cam1', AT, 'token')).toMatchObject({ outcome: 'failed', reason: 'bad_key' });
     expect(s.state()[0].paused).toEqual({ reason: 'bad_key', until: null });
     const e = insertEvent(c, { cam: 'cam1', source: 'onvif', kind: 'person', start_ts: AT + 60_000, raw: null });
     s.onEvent(e);
@@ -228,19 +228,19 @@ describe('AnalyticsService.check', () => {
     still(AT, 7);
     const s = service();
     gate = new Promise<void>(() => undefined); // never answers by itself
-    const r = s.check(AT, 'token');
+    const r = s.check('cam1', AT, 'token');
     await new Promise((x) => setTimeout(x, 0));
     await s.stop();
     expect(await r).toMatchObject({ outcome: 'failed', reason: 'aborted', cost: 1 });
     expect(checkAt(c, 'cam1', AT)).toBeUndefined();
     expect(usage('google-vision')).toBe(1);
-    expect(await s.check(AT, 'token')).toMatchObject({ outcome: 'refused', status: 409, reason: 'off' });
+    expect(await s.check('cam1', AT, 'token')).toMatchObject({ outcome: 'refused', status: 409, reason: 'off' });
   });
 
   it('keeps the check without an image when the copy cannot be written (the call was paid)', async () => {
     still(AT, 7);
     writeFileSync(join(dir, 'still-checks'), 'a file, so mkdir fails');
-    const r = await service().check(AT, 'token');
+    const r = await service().check('cam1', AT, 'token');
     expect(r.outcome).toBe('ok');
     expect(checkAt(c, 'cam1', AT)).toMatchObject({ image: null });
     expect(existsSync(join(dir, 'still-checks', 'cam1'))).toBe(false);
@@ -250,7 +250,7 @@ describe('AnalyticsService.check', () => {
   it('reports the checks of today in the provider state', async () => {
     still(AT, 7);
     const s = service();
-    await s.check(AT, 'token');
+    await s.check('cam1', AT, 'token');
     expect(s.state()[0]).toMatchObject({ month: { calls: 1 }, today: { calls: 1 }, checks: { today: 1, cap: 10 } });
   });
 });
@@ -265,7 +265,7 @@ describe('AnalyticsService.check: the budget is reserved before the still is rea
     still(T0 + 1000, 9); // the event's still
     const s = service();
     const open = holdRead(AT);
-    const r = s.check(AT, 'token');
+    const r = s.check('cam1', AT, 'token');
     await tick();
     const e = insertEvent(c, { cam: 'cam1', source: 'onvif', kind: 'person', start_ts: T0, raw: null });
     s.onEvent(e);
@@ -281,7 +281,7 @@ describe('AnalyticsService.check: the budget is reserved before the still is rea
     still(AT, 7);
     const s = service();
     const open = holdRead(AT);
-    const r = s.check(AT, 'token');
+    const r = s.check('cam1', AT, 'token');
     await tick();
     expect(usage('google-vision')).toBe(1); // reserved
     const stopped = s.stop();
@@ -297,7 +297,7 @@ describe('AnalyticsService.check: the budget is reserved before the still is rea
     still(AT, 7);
     const s = service();
     const open = holdRead(AT);
-    const r = s.check(AT, 'token');
+    const r = s.check('cam1', AT, 'token');
     await tick();
     stills.delete(AT);
     open();
@@ -311,9 +311,9 @@ describe('AnalyticsService.check: the budget is reserved before the still is rea
     answers = [new AnalyticsError('timeout', true)];
     const s = service();
     const open = holdRead(AT);
-    const first = s.check(AT, 'token');
+    const first = s.check('cam1', AT, 'token');
     await tick();
-    const joined = s.check(AT, 'token');
+    const joined = s.check('cam1', AT, 'token');
     open();
     expect(await first).toMatchObject({ outcome: 'failed', cost: 1 });
     expect(await joined).toMatchObject({ outcome: 'failed', cost: 0 });

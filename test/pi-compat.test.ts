@@ -10,7 +10,7 @@ import { join } from 'path';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MIGRATIONS } from '../src/catalog/migrations';
-import { usageBetween } from '../src/catalog/analyses';
+import { usageBetween, usageByCamera } from '../src/catalog/analyses';
 import { cameraConfig } from '../src/config/cameras';
 import { loadConfig } from '../src/config/load';
 import { createProxy, type Proxy } from '../src/proxy';
@@ -96,6 +96,8 @@ describe('the Pi: one legacy camera, legacy overrides, a version 8 catalog', () 
     expect(r.status).toBe(200);
     expect(r.body.map((e: { kind: string }) => e.kind)).toEqual(['person']);
     expect(usageBetween(proxy.catalog, 'google-vision', '2000-01-01', '2999-12-31')).toBe(14);
+    // The month's usage is the one camera's now (spec §5.1).
+    expect(usageByCamera(proxy.catalog, 'google-vision', '2000-01-01', '2999-12-31')).toEqual({ cam1: 14 });
   });
 
   it('/api/local/health: schema 1, the camera on top, the same item ids', async () => {

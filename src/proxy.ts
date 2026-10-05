@@ -5,7 +5,7 @@ import http from 'http';
 import type { AddressInfo } from 'net';
 import { join } from 'path';
 import { openCatalog, type Catalog } from './catalog/db';
-import { clearUnmapped, countAnalysesByStatus, listUnmapped, usageBetween } from './catalog/analyses';
+import { adoptLegacyUsage, clearUnmapped, countAnalysesByStatus, listUnmapped, usageBetween } from './catalog/analyses';
 import { countAllClips, countClips } from './catalog/clips';
 import { closeAllOpen, countEventsByKind, countRecoveredEvents } from './catalog/events';
 import type { StatusPoller } from './camera/status';
@@ -126,6 +126,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     }
   }
 
+  // Vision usage counted before several cameras gets its camera (spec 2026-10-05-multi-camera-host-design §5.1, Ruling P1-7).
+  adoptLegacyUsage(catalog, cameraIds(running));
   const sse = sseHandler(log, running.sse);
   // The audit log (spec 2026-10-01-audit-log-design): daily JSON-lines files.
   const audit = new AuditLog({ dir: join(running.server.dataDir, 'audit'), version: VERSION, camera: () => running.camera.id });
@@ -302,14 +304,13 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   const timeInfo = () => cams.first().timeInfo();
   const analytics = new AnalyticsService({
     catalog, log, dataDir: running.server.dataDir,
-    // Read on use: restart() can change camera.id.
-    get cam() {
-      return running.camera.id;
-    },
+    // Read on use: restart() can change the cameras.
+    cams: () => cams.ids(),
+    kinds: (cam) => cameraConfig(running, cam)?.analytics.kinds ?? running.analytics.kinds,
     config: () => running,
     secrets: () => ({ googleVisionKey: loaded.secrets.googleVisionKey, googleVisionUrl: loaded.secrets.googleVisionUrl }),
-    readStill: stillAt,
-    listStills: stillsIn,
+    readStill: (cam, ts) => cams.get(cam)?.readStill(ts) ?? Promise.resolve(undefined),
+    listStills: (cam, from, to) => cams.get(cam)?.listStills(from, to) ?? [],
     timeInfo,
     audit,
   });
@@ -332,7 +333,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
 
   // Every camera-event start goes to the service (it filters by kind).
   log.on('message', (m: StreamMessage) => {
-    if (m.type === 'camera-event' && m.data.phase === 'start') analytics.onEvent({ id: Number(m.data.eventId), kind: String(m.data.kind), start_ts: Number(m.data.ts) });
+    if (m.type === 'camera-event' && m.data.phase === 'start') analytics.onEvent({ cam: m.cam, id: Number(m.data.eventId), kind: String(m.data.kind), start_ts: Number(m.data.ts) });
   });
 
   // The daily audit records at 00:05 camera time: storage now, activity of the previous camera day.
