@@ -84,11 +84,11 @@ export interface ClipsRepairDeps {
 type Candidate = Extract<ClipItem, { type: 'missing-locally' }>;
 const missingItems = (r: InventoryReport) => (r.items as ClipItem[]).filter((x): x is Candidate => x.type === 'missing-locally');
 
-// The fetch's end, or an AbortError when the signal aborts: then the fetch
+// The fetch's end, or an AbortError when the signal aborts (also the Archive's fetch): then the fetch
 // is aborted too, unless someone else (a viewer) still waits for it, and
 // given up to ABORT_WAIT_MS to end (its cmd 9 sent, its .part gone).
 const ABORT_WAIT_MS = 2_000;
-const settled = (fetch: Fetch, signal: AbortSignal, mine: { waiter: Waiter; res?: Writable }) =>
+export const settled = (fetch: Fetch, signal: AbortSignal, mine: { waiter: Waiter; res?: Writable }) =>
   new Promise<void>((resolve, reject) => {
     const onAbort = () => {
       const fail = () => reject(abortError('cancelled'));
