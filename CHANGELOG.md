@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.10.05.2
+
 - Settings → Find camera: "Currently used Camera" sits right-aligned in the button column; the button reads "Use this camera" (was "this camera" / "Use this address").
 
 ## v2026.10.05.1
