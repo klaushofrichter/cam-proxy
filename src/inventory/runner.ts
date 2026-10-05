@@ -67,7 +67,7 @@ export interface InventoryReport {
   message: string;
 }
 export type RunSummary = Pick<InventoryReport, 'runId' | 'kind' | 'startedAt' | 'tookMs' | 'outcome' | 'counts' | 'message'>;
-export interface RunningView { runId: string; kind: string; op: Op; startedAt: number; outcome: 'running'; progress: Progress }
+export interface RunningView { runId: string; kind: string; op: Op; camera: string; startedAt: number; outcome: 'running'; progress: Progress }
 
 export class InventoryBusyError extends Error {
   constructor(readonly runId: string) {
@@ -180,7 +180,7 @@ export class InventoryRunner {
     const startedAt = this.now();
     const runId = `${folder}-${startedAt}-${randomBytes(3).toString('hex')}`;
     const cur: Current = {
-      view: { runId, kind, op, startedAt, outcome: 'running', progress: { phase: 'starting', done: 0, total: 0 } },
+      view: { runId, kind, op, camera: job.cam, startedAt, outcome: 'running', progress: { phase: 'starting', done: 0, total: 0 } },
       ac: new AbortController(),
       settled: false,
       done: Promise.resolve(undefined as never),

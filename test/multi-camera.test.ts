@@ -147,6 +147,29 @@ describe('one proxy, three cameras (spec §15)', () => {
     await until(() => p.proxy.cameras.get('cam4')!.status.state().online && p.proxy.cameras.get('cam4')!.intake.state().onvif === 'subscribed', 30_000);
   }, 60_000);
 
+  // Review: inventory-cancel and -repair on a named camera act only on that camera's run.
+  it("inventory cancel and repair refuse another camera's run", async () => {
+    let release!: () => void;
+    p.proxy.inventory.checks.slow = { label: 'Slow', run: () => new Promise((r) => (release = () => r({ window: { from: null, to: 0, reason: 'test' }, counts: {}, top: [], items: [], message: 'slow' }))) };
+    try {
+      const st = await request(p.base).post('/control/cameras/cam5/actions/inventory').set(admin()).send({ kind: 'slow' });
+      expect(st.status).toBe(202);
+      const other = await request(p.base).post('/control/cameras/cam4/actions/inventory-cancel').set(admin());
+      expect([other.status, other.body.error]).toEqual([409, 'camera_mismatch']);
+      const mine = await request(p.base).post('/control/cameras/cam5/actions/inventory-cancel').set(admin());
+      expect(mine.body).toMatchObject({ cancelled: true, runId: st.body.runId });
+    } finally {
+      release?.();
+      delete p.proxy.inventory.checks.slow;
+    }
+    await until(() => p.proxy.inventory.running() === null);
+    const ev = await request(p.base).post('/control/cameras/cam5/actions/inventory').set(admin()).send({ kind: 'events' });
+    expect(ev.status).toBe(202);
+    await until(async () => ((await request(p.base).get(`/control/inventory/runs/${ev.body.runId}`).set(admin())).body.outcome ?? 'running') !== 'running', 30_000);
+    const rep = await request(p.base).post('/control/cameras/cam4/actions/inventory-repair').set(admin()).send({ kind: 'events', runId: ev.body.runId });
+    expect([rep.status, rep.body.error]).toEqual([409, 'camera_mismatch']);
+  }, 60_000);
+
   it('the old camera actions answer camera_required; host actions work', async () => {
     // The camera's name is a camera action too (spec §6.3): never the first camera's by accident.
     const n = await request(p.base).put('/control/camera/name').set(admin()).send({ name: 'Renamed' });

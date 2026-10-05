@@ -600,7 +600,8 @@ paths:
         restart (that camera's side only; the old route without a camera restarts every camera side and applies pending restart settings), camera-reboot,
         camera-powercycle, camera-poe-on, poe-switch-read, inventory,
         inventory-repair, inventory-cancel) on the named camera, with the same
-        bodies and answers. The old route takes ?cam=<id> as well; without it
+        bodies and answers; inventory-cancel and inventory-repair answer 409
+        camera_mismatch for another camera's run. The old route takes ?cam=<id> as well; without it
         it acts on the only camera, and answers 400 camera_required when there
         are several. Host actions have no camera route (404).
       parameters:

@@ -638,6 +638,9 @@ export function controlApi(d: ControlDeps): express.Router {
         const kinds = d.inventory.repairKinds();
         if (typeof kind !== 'string' || !kinds.includes(kind)) return fail(400, 'invalid', `kind is one of: ${kinds.join(', ')}`);
         if (typeof source !== 'string' || !RUN_ID.test(source)) return fail(400, 'invalid', 'runId is the id of a check run');
+        // A repair works on its report's camera: only under that camera.
+        const report = await d.inventory.get(source);
+        if (report && report.camera !== cam) return fail(409, 'camera_mismatch', `that inventory ran on camera ${report.camera}`);
         try {
           const { runId } = await d.inventory.repair(kind, requester, source);
           return void res.status(202).json({ runId });
@@ -658,6 +661,9 @@ export function controlApi(d: ControlDeps): express.Router {
       }
       // A control-action record; the run ends with its partial counts.
       case 'inventory-cancel': {
+        // Only this camera's run (one runs at a time, host-wide).
+        const run = d.inventory.running();
+        if (run && run.camera !== cam) return fail(409, 'camera_mismatch', `the running inventory is camera ${run.camera}'s`);
         const runId = d.inventory.cancel('request');
         return void res.json({ cancelled: runId !== null, runId });
       }
