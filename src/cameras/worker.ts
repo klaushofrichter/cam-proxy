@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import { withCamera, type AuditLog } from '../audit/audit-log';
 import type { Catalog } from '../catalog/db';
+import { Backoff } from './backoff';
 import { lastClipReceived } from '../catalog/clips';
 import { ReolinkClient } from '../camera/client';
 import { bareHost, splitHost } from '../camera/http';
@@ -52,6 +53,9 @@ export interface WorkerDeps {
   audit: AuditLog;
   hooks: WorkerHooks;
   cameraFtpCheckMs?: number;
+  // Test seams: a throw from beforeStart is a start failure; schedule replaces setTimeout.
+  beforeStart?: () => void | Promise<void>;
+  schedule?: (ms: number, fn: () => void) => () => void;
 }
 
 // The camera's own web page for the admin UI: webUiUrl, none for no link,
@@ -92,6 +96,10 @@ export class CameraWorker extends EventEmitter {
   private stopping = false;
   private watchStarted = false;
   private restarting: Promise<void> | undefined;
+  // Supervision (spec 2026-10-05-multi-camera-host-design §3.3).
+  private readonly backoff = new Backoff();
+  private cancelRetry: (() => void) | undefined;
+  private onlineSince: number | null = null;
   // Every record this camera's code writes names the camera (spec §5.2).
   private readonly audit: Pick<AuditLog, 'write'>;
 
@@ -253,6 +261,9 @@ export class CameraWorker extends EventEmitter {
     // The camera's FTP settings as soon as it answers (#93), then every few minutes.
     this.status.on('change', (s: CameraState) => {
       if (s.online) void this.ftpWatch.checkNow();
+      // Online for 10 minutes: the next failure starts the backoff at 5 s again.
+      this.onlineSince = s.online ? (this.onlineSince ?? Date.now()) : null;
+      if (this.onlineSince !== null) this.backoff.healthy(this.onlineSince, Date.now());
     });
     const events = cameraEvents(d.running(), this.id);
     const tracker = new EventTracker(d.catalog, d.log, c.id, events);
@@ -314,10 +325,37 @@ export class CameraWorker extends EventEmitter {
     await s.store.flush();
   }
 
-  private async startParts(): Promise<void> {
-    this.status.start();
-    this.intake.start();
-    this.startStills();
+  private schedule(ms: number, fn: () => void): () => void {
+    if (this.d.schedule) return this.d.schedule(ms, fn);
+    const t = setTimeout(fn, ms);
+    t.unref();
+    return () => clearTimeout(t);
+  }
+
+  // Starts the parts; a failure is this camera's error and a later retry,
+  // never the process's (spec §3.3). Answers whether the parts run.
+  private async startParts(): Promise<boolean> {
+    if (!this.cam().host) {
+      this.errorNow = 'no_address';
+      this.phaseNow = 'idle';
+      return false;
+    }
+    try {
+      await this.d.beforeStart?.();
+      this.status.start();
+      this.intake.start();
+      this.startStills();
+      this.errorNow = null;
+      return true;
+    } catch (err) {
+      this.errorNow = (err as Error).message;
+      // Healthy for 10 minutes before this failure (no status change needed to notice): 5 s again.
+      if (this.onlineSince !== null) this.backoff.healthy(this.onlineSince, Date.now());
+      const ms = this.backoff.next();
+      logger.warn({ cameraId: this.id, err: this.errorNow, retryMs: ms }, 'camera_side_start_failed');
+      this.cancelRetry = this.schedule(ms, () => void this.restart().catch((e: Error) => logger.error({ cameraId: this.id, err: e.message }, 'camera_side_restart_failed')));
+      return false;
+    }
   }
 
   private async stopParts(): Promise<void> {
@@ -329,12 +367,13 @@ export class CameraWorker extends EventEmitter {
 
   async start(): Promise<void> {
     this.phaseNow = 'starting';
-    await this.startParts();
+    const running = await this.startParts();
     if (!this.watchStarted) {
       this.ftpWatch.start();
       this.watchStarted = true;
     }
-    this.phaseNow = 'ready';
+    // Without an address: idle. A failed start serves stored data; its retry is scheduled.
+    this.phaseNow = running || this.errorNow !== 'no_address' ? 'ready' : 'idle';
   }
 
   // One at a time: a second call while one runs joins it.
@@ -345,8 +384,9 @@ export class CameraWorker extends EventEmitter {
         await this.stopParts();
         this.recordings.reset();
         this.build();
-        await this.startParts();
-        this.phaseNow = 'ready';
+        this.cancelRetry?.();
+        const running = await this.startParts();
+        this.phaseNow = running || this.errorNow !== 'no_address' ? 'ready' : 'idle';
         logger.info({ cameraId: this.id }, 'camera_side_restarted');
       } finally {
         this.restarting = undefined;
@@ -373,6 +413,7 @@ export class CameraWorker extends EventEmitter {
   }
 
   async stop(): Promise<void> {
+    this.cancelRetry?.();
     await this.restarting;
     this.phaseNow = 'stopped';
     this.ftpWatch.stop();

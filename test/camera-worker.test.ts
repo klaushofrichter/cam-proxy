@@ -8,7 +8,7 @@ import { StreamLog } from '../src/stream/log';
 import { sseHandler } from '../src/stream/sse';
 import { Storage } from '../src/storage';
 import { AuditLog } from '../src/audit/audit-log';
-import { CameraWorker } from '../src/cameras/worker';
+import { CameraWorker, type WorkerDeps } from '../src/cameras/worker';
 import { CameraRegistry } from '../src/cameras/registry';
 import { ADMIN_TOKEN, CLIENT_TOKEN, until } from './helpers/proxy';
 import { startSim } from './helpers/sim';
@@ -23,10 +23,10 @@ afterAll(async () => {
 
 const NO_HOOKS = { onCameraCheck() {}, onResubscribe() {}, onStill() {}, onStillMissing() {}, onRecordingDownload() {} };
 
-function worker() {
+function worker(o: { host?: string; over?: Partial<WorkerDeps> } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'camproxy-worker-'));
   writeFileSync(join(dir, 'config.json'), JSON.stringify({
-    camera: { host: sim.camera.host, protocol: 'http', user: 'proxy', onvifPort: sim.ports.onvif, rtspPort: sim.ports.rtsp || 554, baichuanPort: sim.camera.baichuanPort, statusPollS: 5 },
+    camera: { host: o.host ?? sim.camera.host, protocol: 'http', user: 'proxy', onvifPort: sim.ports.onvif, rtspPort: sim.ports.rtsp || 554, baichuanPort: sim.camera.baichuanPort, statusPollS: 5 },
     stills: { enabled: false },
     server: { logLevel: 'silent' },
   }));
@@ -40,6 +40,7 @@ function worker() {
     id: 'cam1', index: 0, running: () => running, password: () => sim.password, poeSwitchPassword: () => undefined,
     ftpTarget: () => ({ server: '', port: 2121, user: 'camera', password: '', tls: true, stream: 'main' }),
     catalog, log, sse: sseHandler(log, running.sse), storage, audit, hooks: NO_HOOKS,
+    ...o.over,
   });
   return { w, running, catalog };
 }
@@ -85,5 +86,46 @@ describe('CameraRegistry', () => {
     order = ['a', 'b'];
     expect(r.list().map((w) => w.id)).toEqual(['a', 'b']);
     expect(r.size).toBe(2);
+  });
+});
+
+describe('supervision (spec §3.3)', () => {
+  it('a camera without an address stays idle with no_address and starts nothing', async () => {
+    const before = sim.sim.engine.counters.loginAttempts;
+    const { w, catalog } = worker({ host: '' });
+    await w.start();
+    expect(w.phase()).toBe('idle');
+    expect(w.error()).toBe('no_address');
+    await new Promise((r) => setTimeout(r, 300));
+    expect(sim.sim.engine.counters.loginAttempts).toBe(before);
+    await w.stop();
+    catalog.close();
+  });
+
+  it('a failed start sets the error and retries after 5 s, then 10 s; success clears it', async () => {
+    let failures = 2;
+    const delays: number[] = [];
+    let pending: (() => void) | undefined;
+    const { w, catalog } = worker({
+      over: {
+        beforeStart: () => {
+          if (failures-- > 0) throw new Error('go2rtc_start_failed');
+        },
+        schedule: (ms, fn) => ((delays.push(ms), (pending = fn)), () => undefined),
+      },
+    });
+    await w.start();
+    expect(w.error()).toBe('go2rtc_start_failed');
+    expect(delays).toEqual([5000]);
+    pending!();
+    await until(() => delays.length === 2);
+    expect(delays).toEqual([5000, 10000]);
+    pending!();
+    await until(() => w.phase() === 'ready');
+    expect(w.error()).not.toBe('go2rtc_start_failed');
+    await w.stopSwitch();
+    await w.stopRecordings();
+    await w.stop();
+    catalog.close();
   });
 });

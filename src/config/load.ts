@@ -89,7 +89,6 @@ function asConfigError<T>(fn: () => T): T {
 }
 
 function crossCheck(c: Config): void {
-  if (!c.camera.host) throw new ConfigError('camera.host: required');
   const [cols, rows] = c.previews.grid.split('x').map(Number);
   if (cols * rows < 60 / c.stills.intervalS) throw new ConfigError(`previews.grid: ${c.previews.grid} holds fewer than the ${60 / c.stills.intervalS} tiles of a minute`);
   const [a, b] = c.ftp.passive.split('-').map(Number);

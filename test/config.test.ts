@@ -47,8 +47,9 @@ describe('config.json', () => {
     expect(l.config.server.dataDir).toBe(join(dir, 'etc/var'));
   });
 
-  it('refuses to start without a camera host', () => {
-    expect(err(() => load())).toBe('camera.host: required');
+  it('starts without a camera host: the camera waits idle (spec §3.3)', () => {
+    write('config.json', {});
+    expect(load().config.camera.host).toBe('');
   });
 
   it('names an unknown key with its full path', () => {
