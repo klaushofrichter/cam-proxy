@@ -38,7 +38,7 @@ paths:
     get:
       summary: The camera and its state
       responses:
-        '200': { description: '[{ id, name, online, lastEventTs (the newest live (non-recovered) event''s start, or null), stream: { up, lastFrameTs } | null, publicUrl, address }] (address: the camera''s camera.host as it runs, host and optional port, for clients that reach the camera directly; name: the camera''s own name as read from it, the configured camera.name until the camera was first read; stream is null when stills are off; publicUrl is server.publicUrl or null)' }
+        '200': { description: '[{ id, name, online, lastEventTs (the newest live (non-recovered) event''s start, or null), stream: { up, lastFrameTs } | null, publicUrl, address }] (address: the camera''s camera.host as it runs, host and optional port, for clients that reach the camera directly; name: the camera''s own name as read from it, the configured camera.name until the camera was first read; stream is null when stills are off; publicUrl is server.publicUrl or null). Every configured camera in config order; each item also has error (the camera worker''s or its last check''s error, null when fine) and features (string[], the same on every item: what this proxy supports beyond the pre-multi-camera API, e.g. sse-cam-list for /api/stream?cam=a,b; clients test for a name)' }
         '401': { description: missing or wrong token }
   /api/cameras/{cam}:
     get:
@@ -46,7 +46,7 @@ paths:
       parameters:
         - { name: cam, in: path, required: true, schema: { type: string } }
       responses:
-        '200': { description: '{ id, name, online, lastEventTs, stream, publicUrl, address }, as in GET /api/cameras' }
+        '200': { description: '{ id, name, online, lastEventTs, stream, publicUrl, address, error, features }, as in GET /api/cameras' }
         '401': { description: missing or wrong token }
         '404': { description: unknown camera }
   /api/cameras/{cam}/extent:
@@ -494,7 +494,7 @@ paths:
         `{cam, ts, url, sprite, tile}` (only when named in `types`; live
         only, without an id, and not replayed).
       parameters:
-        - { name: cam, in: query, schema: { type: string } }
+        - { name: cam, in: query, schema: { type: string }, description: 'one camera id, or several comma-separated (a,b; when the camera items list features sse-cam-list); empties are ignored, an unknown id matches nothing' }
         - { name: types, in: query, schema: { type: string }, description: comma list }
         - { name: kinds, in: query, schema: { type: string }, description: comma list, matches data.kind }
         - { name: since, in: query, schema: { type: integer } }

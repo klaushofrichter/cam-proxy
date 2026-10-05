@@ -13,7 +13,7 @@ export interface StreamMessage {
 }
 
 export interface Filter {
-  cam?: string;
+  cams?: string[]; // these cameras only (spec 2026-10-05-multi-camera-host-design §6.2)
   types: StreamType[];
   kinds?: string[]; // matches data.kind
 }
@@ -42,7 +42,7 @@ export class StreamLog extends EventEmitter {
   since(id: number, f: Filter, limit: number): StreamMessage[] {
     const where = ['id > ?', `type IN (${f.types.map(() => '?').join(',')})`];
     const args: (string | number)[] = [id, ...f.types];
-    if (f.cam) (where.push('cam = ?'), args.push(f.cam));
+    if (f.cams?.length) (where.push(`cam IN (${f.cams.map(() => '?').join(',')})`), args.push(...f.cams));
     if (f.kinds?.length) (where.push(`json_extract(data, '$.kind') IN (${f.kinds.map(() => '?').join(',')})`), args.push(...f.kinds));
     const rows = this.c.db.prepare(`SELECT * FROM stream_log WHERE ${where.join(' AND ')} ORDER BY id LIMIT ?`).all(...args, limit) as Row[];
     return rows.map(fromRow);
@@ -74,7 +74,7 @@ export class StreamLog extends EventEmitter {
 
 export function matches(m: StreamMessage, f: Filter): boolean {
   if (!f.types.includes(m.type)) return false;
-  if (f.cam && m.cam !== f.cam) return false;
+  if (f.cams?.length && !f.cams.includes(m.cam)) return false;
   if (f.kinds?.length && !f.kinds.includes(String(m.data.kind))) return false;
   return true;
 }

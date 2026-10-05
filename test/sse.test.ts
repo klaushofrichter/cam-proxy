@@ -215,3 +215,45 @@ describe('SSE', () => {
     expect(handler.clients()).toBe(0);
   });
 });
+describe('several cameras on one stream (spec §6.2)', () => {
+  const ev2 = (cam: string, n: number) => log.append(cam, 'camera-event', { eventId: n, kind: 'person', phase: 'start', ts: n });
+
+  it('?cam=a,b filters replay and live to those cameras; one cursor for all', async () => {
+    await serve();
+    ev2('cam3', 1);
+    ev2('cam4', 2);
+    ev2('cam5', 3);
+    const c = connect('/stream?cam=cam3,cam5&since=0');
+    await c.until(() => c.events.length >= 2);
+    ev2('cam4', 4);
+    ev2('cam5', 5);
+    await c.until(() => c.events.length >= 3);
+    expect(c.events.map((e) => [(e.data as { cam: string }).cam, e.id])).toEqual([['cam3', 1], ['cam5', 3], ['cam5', 5]]);
+  });
+
+  it('cam list edge cases: empties ignored, duplicates harmless, unknown id an empty stream', async () => {
+    await serve();
+    ev2('cam3', 1);
+    ev2('cam4', 2);
+    const a = connect('/stream?cam=cam3,&since=0');
+    const b = connect('/stream?cam=cam3,cam3&since=0');
+    const u = connect('/stream?cam=nope&since=0');
+    await a.until(() => a.events.length >= 1);
+    await b.until(() => b.events.length >= 1);
+    await u.until(() => u.status() === 200);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(a.ids()).toEqual([1]);
+    expect(b.ids()).toEqual([1]);
+    expect(u.ids()).toEqual([]);
+  });
+
+  it('live stills honour the list too', async () => {
+    await serve();
+    const c = connect('/stream?types=still&cam=cam4');
+    await c.until(() => c.status() === 200);
+    handler.live('cam3', 'still', { ts: 1 });
+    handler.live('cam4', 'still', { ts: 2 });
+    await c.until(() => c.events.length >= 1);
+    expect(c.events.map((e) => (e.data as { cam: string; ts: number }).ts)).toEqual([2]);
+  });
+});

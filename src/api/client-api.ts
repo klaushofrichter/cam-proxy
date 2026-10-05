@@ -17,7 +17,7 @@ import type { RecordingsSide } from '../recordings/side';
 import type { CameraRegistry } from '../cameras/registry';
 import type { CameraWorker } from '../cameras/worker';
 import { cameraParam, workerOf } from './camera-param';
-import type { SseHandler } from '../stream/sse';
+import { FEATURES, type SseHandler } from '../stream/sse';
 import type { FrameGrabber } from '../stills/grabber';
 import type { Go2rtc } from '../stills/go2rtc';
 import type { MinuteStore } from '../stills/store';
@@ -75,7 +75,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: 
   const info = (w: CameraWorker) => {
     const s = w.stills;
     const stream = s ? { up: s.grabber.up(), lastFrameTs: s.grabber.lastFrameTs() } : null;
-    return { id: w.id, name: w.name(), online: w.status.state().online, lastEventTs: lastLiveEventTs(d.catalog, w.id), stream, publicUrl: d.config().server.publicUrl ?? null, address: w.cam().host, error: w.error() };
+    return { id: w.id, name: w.name(), online: w.status.state().online, lastEventTs: lastLiveEventTs(d.catalog, w.id), stream, publicUrl: d.config().server.publicUrl ?? null, address: w.cam().host, error: w.error(), features: [...FEATURES] };
   };
   r.get('/cameras', (_req, res) => void res.json(d.cameras.list().map(info)));
   r.get('/cameras/:cam', (_req, res) => void res.json(info(workerOf(res))));

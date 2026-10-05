@@ -36,16 +36,22 @@ describe('client API', () => {
   // name: the camera's own (cam-sim's "Cam"), not the configured "Den" (camera-name design).
   it('lists the camera with its state', async () => {
     const r = await request(p.base).get('/api/cameras').set(auth());
-    expect(r.body).toEqual([{ id: 'cam1', name: 'Cam', online: true, lastEventTs: 3000, stream: process.env.CAMPROXY_TEST_GO2RTC ? expect.objectContaining({ up: expect.any(Boolean) }) : null, publicUrl: null, address: sim.camera.host, error: null }]);
+    expect(r.body).toEqual([{ id: 'cam1', name: 'Cam', online: true, lastEventTs: 3000, stream: process.env.CAMPROXY_TEST_GO2RTC ? expect.objectContaining({ up: expect.any(Boolean) }) : null, publicUrl: null, address: sim.camera.host, error: null, features: ['sse-cam-list'] }]);
   });
 
   it('GET /api/cameras: one camera, today\'s fields plus error (spec §6.1)', async () => {
     const r = await request(p.base).get('/api/cameras').set(auth());
     expect(r.status).toBe(200);
     expect(r.body).toHaveLength(1);
-    expect(Object.keys(r.body[0]).sort()).toEqual(['address', 'error', 'id', 'lastEventTs', 'name', 'online', 'publicUrl', 'stream']);
+    expect(Object.keys(r.body[0]).sort()).toEqual(['address', 'error', 'features', 'id', 'lastEventTs', 'name', 'online', 'publicUrl', 'stream']);
     expect(r.body[0].id).toBe('cam1');
     expect((await request(p.base).get('/api/cameras/cam9').set(auth())).status).toBe(404);
+  });
+
+  it('every camera item advertises the cam-list filter (spec §6.1)', async () => {
+    const r = await request(p.base).get('/api/cameras').set(auth());
+    expect(r.body.every((c: { features?: string[] }) => c.features?.includes('sse-cam-list'))).toBe(true);
+    expect((await request(p.base).get('/api/cameras/cam1').set(auth())).body.features).toEqual(['sse-cam-list']);
   });
 
   // #75: a recovered event (from the SD card) is no fresh activity.
