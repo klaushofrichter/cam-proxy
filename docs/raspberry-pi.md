@@ -324,6 +324,13 @@ certificate still checks offline as long as it hasn't expired.
   keep its `camera` object and overrides.json its paths; nothing on the Pi
   changes (the Settings page shows the paths as `cameras.cam1.*` and
   `poeSwitch.*`, and saves new overrides that way).
+  **No way back without a backup:** after this update the previous release
+  won't start on the new `overrides.json` (`cameras.*` paths, written at the
+  next save) or work on the catalog (schema 9, migrated at the first start).
+  Before updating, back up both:
+  `cp -p data/overrides.json data/overrides.json.pre-multicam && sqlite3 data/catalog.sqlite ".backup data/catalog.sqlite.pre-multicam"`
+  (or copy `catalog.sqlite` with the container stopped). A rollback is: stop
+  the container, restore both files, start the previous image.
 - **The Pi card:** on a Pi the Status page shows a Pi card (model, CPU
   temperature, under-voltage, memory, uptime, load, disk), and the Health card
   flags the disk from `health.diskPercent` (90 %) and the CPU temperature from

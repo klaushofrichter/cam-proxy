@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Before updating** (the Pi): back up `data/overrides.json` and `data/catalog.sqlite`. The previous release won't start on the new overrides (`cameras.*`) or the catalog's schema 9; a rollback is restoring both and the previous image (docs/raspberry-pi.md).
 - Several cameras per proxy: `cameras` in config.json (a list), a camera worker each, supervised (a failing camera retries with backoff, the others go on; a camera without an address waits idle instead of stopping the proxy). Today's `camera` object still works unchanged; overrides with legacy paths are read translated and written back as `cameras.<id>.*` / `poeSwitch.*`. `GET /control/config` shows the new paths.
 - `GET /api/cameras` lists every camera, with `error` and `features` (`["sse-cam-list"]`). A camera being restarted answers `503 camera_restarting`.
 - SSE: `?cam=a,b` filters to several cameras.
