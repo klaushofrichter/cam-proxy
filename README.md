@@ -260,11 +260,14 @@ the new form:
   gives each camera's status block; the admin UI shows a camera picker.
   Audit records name their camera (`labels.camera`) only when they concern
   one. The image rate limit grows with the number of cameras.
-- **Not yet (phase 2):** FTP for more than one camera (a config error until
-  per-camera FTP users exist), the camera routes for actions and settings
-  (`/control/actions/:name` and `PUT /control/camera/name` answer `400
-  camera_required` for a camera action on a proxy with several cameras; host
-  actions work), one shared go2rtc
+- **Camera actions** name their camera: `POST
+  /control/cameras/<id>/actions/<name>` or `?cam=<id>` on
+  `/control/actions/<name>`, and `PUT /control/cameras/<id>/name`; without
+  one, a proxy with several cameras answers `400 camera_required` (one camera:
+  as before). `restart` restarts every camera side; host actions have no
+  camera route. The admin UI sends them for the camera picked in the top bar.
+- **Not yet (phase 2):** per-camera settings in the admin UI, FTP for more
+  than one camera (a config error until per-camera FTP users exist), one shared go2rtc
   (until then camera *i* uses `go2rtc.rtspPort`/`apiPort` + 100 × *i*), and a
   shared recordings cache (each camera gets an equal share of `cacheMB`).
   `CAMERA_HOST` with several cameras is a config error.

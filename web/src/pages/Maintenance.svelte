@@ -8,7 +8,9 @@
   import { poeAlert, poeOnText, powerCycleFailText, powerCycleMessage, restartWatch, RESTART_GIVE_UP_MS, type Health } from '../lib/maintenance';
   import { refresh, refreshTick, status } from '../lib/state';
   import { clearMatches, clearMessage } from '../lib/archive';
-  import { multiCamera } from '../lib/cameras';
+  import { actionPath, blockOf, multiCamera, selectedCamera } from '../lib/cameras';
+  // The actions that act on a camera: the picked one when there are several.
+  const CAMERA_ACTIONS = ['camera-test', 'onvif-resubscribe', 'camera-ftp-setup', 'camera-ftp-test', 'camera-ftp-off', 'restart'];
 
   let result = $state('');
   let log = $state<Array<Record<string, unknown>>>([]);
@@ -25,7 +27,7 @@
 
   async function run(label: string, name: string, body?: unknown) {
     try {
-      const r = await api<unknown>('POST', `/control/actions/${name}`, body);
+      const r = await api<unknown>('POST', CAMERA_ACTIONS.includes(name) ? actionPath($status, $selectedCamera, name) : `/control/actions/${name}`, body);
       result = `${label}: ${r === null ? 'started' : JSON.stringify(r)}`;
     } catch (e) {
       result = `${label}: ${e instanceof ApiError ? e.message : 'failed'}`;
@@ -36,7 +38,7 @@
 
   // The camera reboot (#83), the power-cycle (#85) and the proxy restart
   // (#71) ask first, in one shared dialog; Cancel or Esc sends nothing.
-  const poe = $derived($status?.camera.poeSwitch ?? null);
+  const poe = $derived(blockOf($status, $selectedCamera)?.camera.poeSwitch ?? null);
   const DIALOGS = $derived({
     'camera-reboot': {
       title: 'Reboot the camera',
@@ -94,7 +96,7 @@
   // The camera reboot: "Rebooting…" and the camera's state while the proxy
   // waits for it, then how long it was away.
   let rebootAsked = $state(false);
-  const reboot = $derived($status?.camera.reboot ?? null);
+  const reboot = $derived(blockOf($status, $selectedCamera)?.camera.reboot ?? null);
   // A reboot or power-cycle on its way: set before the first await, so a
   // second confirm can't send another (#78 review).
   let sending = $state(false);
@@ -125,7 +127,7 @@
   async function rebootCamera() {
     asking = null;
     await cameraAction(async () => {
-      const r = await api<{ confirmed: boolean }>('POST', '/control/actions/camera-reboot');
+      const r = await api<{ confirmed: boolean }>('POST', actionPath($status, $selectedCamera, 'camera-reboot'));
       rebootAsked = true;
       return `Camera reboot: ${r.confirmed ? 'the camera confirmed it' : 'the camera went down before answering'}`;
     }, failedText('Camera reboot'));
@@ -140,7 +142,7 @@
       cycling = true;
       void refresh();
       try {
-        const r = await api<{ offAt: number; onAt: number; watts: number }>('POST', '/control/actions/camera-powercycle');
+        const r = await api<{ offAt: number; onAt: number; watts: number }>('POST', actionPath($status, $selectedCamera, 'camera-powercycle'));
         rebootAsked = true;
         return `Camera power-cycle: PoE back on after ${Math.round((r.onAt - r.offAt) / 1000)} s (the camera drew ${r.watts} W)`;
       } finally {
@@ -151,7 +153,7 @@
   // Recovery (#85 review): turn the camera's PoE on if it is off. Shown
   // whenever a switch is configured; it only ever turns PoE on, so no dialog.
   async function poeOn() {
-    await cameraAction(async () => poeOnText(await api<{ port: number; wasOn: boolean; watts: number }>('POST', '/control/actions/camera-poe-on')), failedText('Camera PoE on'));
+    await cameraAction(async () => poeOnText(await api<{ port: number; wasOn: boolean; watts: number }>('POST', actionPath($status, $selectedCamera, 'camera-poe-on'))), failedText('Camera PoE on'));
   }
   const alert = $derived(poeAlert(poe));
 
@@ -203,41 +205,41 @@
     }, 1000);
   }
   onMount(() => () => clearInterval(restartTimer));
-  // Several cameras: the camera actions need a camera (the routes of the next release); host actions work.
+  // Several cameras: the camera actions act on the camera picked in the top bar.
   const multi = $derived(multiCamera($status));
 </script>
 
 <section>
   <h2>Maintenance</h2>
   {#if multi}
-    <div class="card" data-testid="multi-camera-note"><p>Several cameras: camera actions and per-camera settings come with the next release; the status of each camera is on the Status page.</p></div>
+    <div class="card" data-testid="multi-camera-note"><p>Several cameras: the camera actions act on <strong>{$selectedCamera ?? 'the first camera'}</strong>, the camera picked in the top bar (restart restarts every camera side); per-camera settings come with the next release.</p></div>
   {/if}
   <div class="card">
     <div class="buttons">
-      <button onclick={() => void run('Camera test', 'camera-test')} disabled={multi} data-testid="action-camera-test">Test the camera</button>
-      <button onclick={() => void run('ONVIF', 'onvif-resubscribe')} disabled={multi} data-testid="action-resubscribe">Re-subscribe ONVIF</button>
+      <button onclick={() => void run('Camera test', 'camera-test')} data-testid="action-camera-test">Test the camera</button>
+      <button onclick={() => void run('ONVIF', 'onvif-resubscribe')} data-testid="action-resubscribe">Re-subscribe ONVIF</button>
       <button onclick={() => void run('Retention preview', 'retention-run', { dryRun: true })} data-testid="action-retention-dry">Preview retention</button>
       <button onclick={() => void run('Retention', 'retention-run', {})} data-testid="action-retention">Run retention now</button>
-      <button onclick={() => void run('Restart', 'restart')} disabled={multi} data-testid="action-restart">Restart camera side</button>
-      <button class="danger" onclick={() => (asking = 'camera-reboot')} disabled={cameraBusy || multi} data-testid="action-camera-reboot">Reboot camera</button>
+      <button onclick={() => void run('Restart', 'restart')} data-testid="action-restart">Restart camera side</button>
+      <button class="danger" onclick={() => (asking = 'camera-reboot')} disabled={cameraBusy} data-testid="action-camera-reboot">Reboot camera</button>
       {#if poe?.configured}
-        <button class="danger" onclick={() => (asking = 'camera-powercycle')} disabled={cameraBusy || multi} data-testid="action-camera-powercycle">Power-cycle camera</button>
-        <button onclick={() => void poeOn()} disabled={sending || cycling || multi} data-testid="action-camera-poe-on" title="Turns the camera's PoE on if it is off (no power check)">Turn camera PoE on</button>
+        <button class="danger" onclick={() => (asking = 'camera-powercycle')} disabled={cameraBusy} data-testid="action-camera-powercycle">Power-cycle camera</button>
+        <button onclick={() => void poeOn()} disabled={sending || cycling} data-testid="action-camera-poe-on" title="Turns the camera's PoE on if it is off (no power check)">Turn camera PoE on</button>
       {/if}
       <button class="danger" onclick={() => (asking = 'restart-proxy')} disabled={restarting === 'waiting'} data-testid="action-restart-proxy">Restart proxy</button>
       <button class="danger" onclick={askClear} disabled={!archive?.count} data-testid="action-archive-clear" title="Deletes every clip in the Archive (asks for the number of clips)">Clear the Archive…</button>
     </div>
     <div class="buttons">
-      <button onclick={() => void run('Camera FTP setup', 'camera-ftp-setup')} disabled={multi} data-testid="action-ftp-setup">Point the camera's FTP here</button>
-      <button onclick={() => void run('Camera FTP test', 'camera-ftp-test')} disabled={multi} data-testid="action-ftp-test">Test the camera's FTP</button>
-      <button onclick={() => void run('Camera FTP off', 'camera-ftp-off')} disabled={multi} data-testid="action-ftp-off">Turn the camera's FTP off</button>
+      <button onclick={() => void run('Camera FTP setup', 'camera-ftp-setup')} data-testid="action-ftp-setup">Point the camera's FTP here</button>
+      <button onclick={() => void run('Camera FTP test', 'camera-ftp-test')} data-testid="action-ftp-test">Test the camera's FTP</button>
+      <button onclick={() => void run('Camera FTP off', 'camera-ftp-off')} data-testid="action-ftp-off">Turn the camera's FTP off</button>
     </div>
     {#if alert}<p class="bad" data-testid="poe-alert">{alert}</p>{/if}
     {#if result}<p class="msg mono" data-testid="action-result">{result}</p>{/if}
     {#if cycling || reboot?.phase === 'power-cycling'}
       <p class="busy" data-testid="reboot-state">Power-cycling… the camera's PoE is off on {poe?.host} port {poe?.port}; it comes back on after {poe?.offSeconds} s.</p>
     {:else if reboot?.phase === 'rebooting'}
-      <p class="busy" data-testid="reboot-state">Rebooting… the camera is {$status?.camera.online ? 'still answering' : 'offline'}{$status?.camera.error ? ` (${$status.camera.error})` : ''}.</p>
+      <p class="busy" data-testid="reboot-state">Rebooting… the camera is {blockOf($status, $selectedCamera)?.camera.online ? 'still answering' : 'offline'}{blockOf($status, $selectedCamera)?.camera.error ? ` (${blockOf($status, $selectedCamera)?.camera.error})` : ''}.</p>
     {:else if rebootAsked && reboot?.phase === 'back'}
       <p class="msg" data-testid="reboot-state">The camera is back after {reboot.downSec} s.</p>
     {:else if rebootAsked && reboot?.phase === 'not-back'}

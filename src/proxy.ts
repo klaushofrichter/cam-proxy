@@ -545,18 +545,19 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       cameraCount: () => cams.size,
       // Writes through to the camera and reads back; the poller (and so the
       // stream message) knows the new name at once.
+      // The camera functions get the camera the request names (resolved by the router).
       cameraName: {
-        current: () => cams.first().name(),
-        write: (name) => cams.first().writeName(name),
+        current: (cam) => worker(cam).name(),
+        write: (cam, name) => worker(cam).writeName(name),
       },
-      checkCamera: () => cams.first().status.checkNow(),
+      checkCamera: (cam) => worker(cam).status.checkNow(),
       intake: () => cams.first().intake.state(),
-      resubscribe: () => cams.first().intake.resubscribe(),
+      resubscribe: (cam) => worker(cam).intake.resubscribe(),
       restart: () => proxy.restart(),
-      cameraReboot: (who) => cams.first().reboot.request(who),
-      poeSwitch: { notConfigured: () => cams.first().poeSwitch.notConfigured(), read: () => cams.first().poeSwitch.read(), poeOn: () => cams.first().poeSwitch.poeOn(), info: () => cams.first().poeSwitchInfo() },
-      cameraPowerCycle: (who) => {
-        const w = cams.first();
+      cameraReboot: (who, cam) => worker(cam).reboot.request(who),
+      poeSwitch: { notConfigured: (cam) => worker(cam).poeSwitch.notConfigured(), read: (cam) => worker(cam).poeSwitch.read(), poeOn: (cam) => worker(cam).poeSwitch.poeOn(), info: (cam) => worker(cam).poeSwitchInfo() },
+      cameraPowerCycle: (who, cam) => {
+        const w = worker(cam);
         return w.reboot.powerCycle(who, { switch: w.poeSwitchInfo(), offSeconds: w.cam().poeSwitch.offSeconds }, (onOff) => w.poeSwitch.cycle(onOff));
       },
       restartProcess: () => {
@@ -570,16 +571,16 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       health: healthNow,
       // The camera's answer goes to the FTP check at once (#93).
       cameraFtp: {
-        target: () => ftpTargetFor(cams.first().id)(),
-        setup: async (t) => {
-          const w = cams.first();
+        target: (cam) => ftpTargetFor(cam)(),
+        setup: async (cam, t) => {
+          const w = worker(cam);
           const f = await setupCameraFtp(w.client, t);
           w.ftpWatch.note(f);
           return f;
         },
-        test: (t) => testCameraFtp(cams.first().client, t),
-        off: async () => {
-          const w = cams.first();
+        test: (cam, t) => testCameraFtp(worker(cam).client, t),
+        off: async (cam) => {
+          const w = worker(cam);
           const f = await cameraFtpOff(w.client, ftpTargetFor(w.id)());
           w.ftpWatch.note(f);
           return f;
@@ -600,7 +601,6 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       findCamera: () => discover(opts.discovery ?? {}),
       envFile: () => loaded.env.CAMPROXY_ENV_FILE || undefined,
       archive,
-      inventoryCamera: () => (cams.size === 1 ? cams.first().id : null),
       cameraId: () => cams.first().id,
     }),
   );

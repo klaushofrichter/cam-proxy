@@ -106,6 +106,35 @@ describe('one proxy, three cameras (spec §15)', () => {
     expect(n.body.detail).not.toMatch(/\/control\/cameras\/:cam/);
   });
 
+  // Live test 2026-10-05: camera actions name their camera — /control/cameras/:cam/actions/:name (spec §6.3) or ?cam= on the old route.
+  it('camera actions on a named camera: the route, ?cam=, the name; unknown camera 404', async () => {
+    const t = await request(p.base).post('/control/cameras/cam4/actions/camera-test').set(admin());
+    expect(t.status).toBe(200);
+    expect(t.body.online).toBe(true);
+    const inv = await request(p.base).post('/control/actions/inventory?cam=cam5').set(admin()).send({ kind: 'stills' });
+    expect(inv.status).toBe(202);
+    const report = await (async () => {
+      for (;;) {
+        const r = await request(p.base).get(`/control/inventory/runs/${inv.body.runId}`).set(admin());
+        if (r.body.outcome && r.body.outcome !== 'running') return r.body;
+        await new Promise((x) => setTimeout(x, 100));
+      }
+    })();
+    expect(report.camera).toBe('cam5');
+    const reboot = await request(p.base).post('/control/cameras/cam9/actions/camera-reboot').set(admin());
+    expect(reboot.status).toBe(404);
+    expect((await request(p.base).post('/control/actions/camera-test?cam=cam9').set(admin())).status).toBe(404);
+    // Host actions have no camera route.
+    expect((await request(p.base).post('/control/cameras/cam4/actions/retention-run').set(admin()).send({ dryRun: true })).status).toBe(404);
+    // The refusal names the route that works.
+    expect((await request(p.base).post('/control/actions/camera-test').set(admin())).body.detail).toMatch(/\/control\/cameras\/<id>\/actions\/camera-test/);
+    const name = await request(p.base).put('/control/cameras/cam4/name').set(admin()).send({ name: 'Gate B' });
+    expect([name.status, name.body.name]).toEqual([200, 'Gate B']);
+    expect(sims[1].sim.engine.settings.name).toBe('Gate B');
+    const rec = p.proxy.audit.find((x) => x.event.action === 'camera-name')!;
+    expect(rec.labels).toEqual({ camera: 'cam4' });
+  }, 60_000);
+
   it('the old camera actions answer camera_required; host actions work', async () => {
     // The camera's name is a camera action too (spec §6.3): never the first camera's by accident.
     const n = await request(p.base).put('/control/camera/name').set(admin()).send({ name: 'Renamed' });

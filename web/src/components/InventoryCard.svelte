@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { actionPath, selectedCamera } from '../lib/cameras';
+  import { status } from '../lib/state';
   import { onMount } from 'svelte';
   import { api, ApiError } from '../lib/api';
   import { mbText } from '../lib/format';
@@ -98,15 +100,15 @@
     cancelling = false;
     await reload();
   }
-  const start = (kind: string, camera = false, onstarted?: (runId: string) => void) => post('/control/actions/inventory', camera ? { kind, camera } : { kind }, 'Inventory', onstarted);
+  const start = (kind: string, camera = false, onstarted?: (runId: string) => void) => post(actionPath($status, $selectedCamera, 'inventory'), camera ? { kind, camera } : { kind }, 'Inventory', onstarted);
   const searchClips = () => start('clips', true, (id) => (pendingClips = id));
   const searchEvents = () => start('events', false, (id) => (pendingEvents = id));
-  export const fetchLost = () => clips && post('/control/actions/inventory-repair', { kind: 'clips', runId: clips.runId }, 'Repair');
-  export const addMissing = () => events && post('/control/actions/inventory-repair', { kind: 'events', runId: events.runId }, 'Repair');
+  export const fetchLost = () => clips && post(actionPath($status, $selectedCamera, 'inventory-repair'), { kind: 'clips', runId: clips.runId }, 'Repair');
+  export const addMissing = () => events && post(actionPath($status, $selectedCamera, 'inventory-repair'), { kind: 'events', runId: events.runId }, 'Repair');
   async function cancel() {
     cancelling = true;
     try {
-      await api('POST', '/control/actions/inventory-cancel');
+      await api('POST', actionPath($status, $selectedCamera, 'inventory-cancel'));
     } catch (e) {
       message = `Cancel: ${e instanceof ApiError ? e.message : 'failed'}`;
     }

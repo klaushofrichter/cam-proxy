@@ -10,7 +10,7 @@
   import Icon from '../components/Icon.svelte';
   import { cameraUploadClass, lastClipClass, diskText, healthHeadline, itemOf, loadText, memoryText, piCardTitle, problemOf, uptimeText } from '../lib/health';
   import { archiveRows } from '../lib/archive';
-  import { blockOf, selectedCamera } from '../lib/cameras';
+  import { actionPath, blockOf, selectedCamera } from '../lib/cameras';
 
   const gb = (b: number) => `${(b / 1024 ** 3).toFixed(1)} GB`;
   const mb = mbText;
@@ -37,7 +37,7 @@
     fixing = true;
     fixResult = '';
     try {
-      await api('POST', '/control/actions/camera-ftp-setup');
+      await api('POST', actionPath($status, $selectedCamera, 'camera-ftp-setup'));
     } catch (e) {
       fixResult = `Camera FTP setup: ${e instanceof ApiError ? e.message : 'failed'}`;
     }

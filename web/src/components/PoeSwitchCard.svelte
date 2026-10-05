@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { actionPath, blockOf, selectedCamera } from '../lib/cameras';
   import { api, ApiError } from '../lib/api';
   import { refresh, status } from '../lib/state';
   import { poeLine, type PortReading } from '../lib/maintenance';
@@ -7,13 +8,13 @@
   // a read on request (never polled: the switch has one web session, and
   // each read takes it for a moment). The settings are poeSwitch.* (and the camera's cameras.<id>.poeSwitch.port) in
   // the camera group; the password is CAMPROXY_POE_SWITCH_PASSWORD.
-  const sw = $derived($status?.camera.poeSwitch ?? null);
+  const sw = $derived(blockOf($status, $selectedCamera)?.camera.poeSwitch ?? null);
   let message = $state('');
   let reading = $state(false);
   async function read() {
     reading = true;
     try {
-      const r = await api<PortReading>('POST', '/control/actions/poe-switch-read');
+      const r = await api<PortReading>('POST', actionPath($status, $selectedCamera, 'poe-switch-read'));
       message = `Port ${r.port} (index ${r.index}): PoE ${r.poe ? 'on' : 'off'}, ${r.watts} W, link ${r.link === null ? 'unknown' : r.link ? 'up' : 'down'}`;
     } catch (e) {
       message = e instanceof ApiError ? e.message : 'not read';

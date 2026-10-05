@@ -31,3 +31,12 @@ export function blockOf(s: Status | null, id: string | null): CameraBlock | null
   const found = s.cameras?.find((c) => c.id === pickCamera(cameraIds(s), id));
   return found ?? { id: s.cameras?.[0]?.id ?? '', camera: s.camera, intake: s.intake, stream: s.stream, ftp: s.ftp, recordings: s.recordings };
 }
+
+// Where a camera action goes: the old route on a one-camera proxy (or an
+// older one), the picked camera's route with several (spec
+// 2026-10-05-multi-camera-host-design §6.3).
+export function actionPath(s: Status | null, selected: string | null, name: string): string {
+  const ids = cameraIds(s);
+  const cam = ids.length > 1 ? pickCamera(ids, selected) : null;
+  return cam ? `/control/cameras/${encodeURIComponent(cam)}/actions/${name}` : `/control/actions/${name}`;
+}

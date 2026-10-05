@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { blockOf, cameraIds, multiCamera, pickCamera } from '../web/src/lib/cameras';
+import { actionPath, blockOf, cameraIds, multiCamera, pickCamera } from '../web/src/lib/cameras';
 
 const cam = (id: string, online = true) => ({ id, camera: { name: id, online, since: 0 }, intake: { onvif: 'subscribed', since: 0, source: 'onvif', resubscribes: 0 }, stream: { enabled: true, up: true, go2rtcUp: true, lastFrameTs: 1 }, ftp: { enabled: false } });
 const status = (ids: string[]) => ({ version: 'v', camera: cam(ids[0]).camera, intake: cam(ids[0]).intake, stream: cam(ids[0]).stream, ftp: cam(ids[0]).ftp, cameras: ids.map((i) => cam(i, i !== 'cam4')) }) as never;
@@ -21,5 +21,11 @@ describe('camera picker (spec §16 P1)', () => {
     const old = { ...(status(['cam1']) as object), cameras: undefined } as never;
     expect(blockOf(old, null)?.id).toBe('');
     expect(blockOf(old, null)?.camera.name).toBe('cam1');
+  });
+  it('camera actions: the old route on one camera, the picked camera\'s route with several', () => {
+    expect(actionPath(status(['cam1']), null, 'camera-reboot')).toBe('/control/actions/camera-reboot');
+    expect(actionPath(status(['cam3', 'cam4']), 'cam4', 'inventory')).toBe('/control/cameras/cam4/actions/inventory');
+    expect(actionPath(status(['cam3', 'cam4']), 'gone', 'camera-test')).toBe('/control/cameras/cam3/actions/camera-test');
+    expect(actionPath(null, null, 'camera-test')).toBe('/control/actions/camera-test');
   });
 });

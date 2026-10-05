@@ -591,6 +591,38 @@ paths:
         '401': { description: not signed in }
         '404': { description: not_found }
         '503': { description: camera_restarting (Retry-After) }
+  /control/cameras/{cam}/actions/{name}:
+    post:
+      summary: A camera action on one camera (spec 2026-10-05-multi-camera-host-design §6.3) (admin)
+      description: >
+        The camera actions of POST /control/actions/{name} (camera-test,
+        onvif-resubscribe, camera-ftp-setup, camera-ftp-test, camera-ftp-off,
+        restart (every camera side in this release), camera-reboot,
+        camera-powercycle, camera-poe-on, poe-switch-read, inventory,
+        inventory-repair, inventory-cancel) on the named camera, with the same
+        bodies and answers. The old route takes ?cam=<id> as well; without it
+        it acts on the only camera, and answers 400 camera_required when there
+        are several. Host actions have no camera route (404).
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: as POST /control/actions/{name} }
+        '202': { description: as POST /control/actions/{name} }
+        '401': { description: not signed in }
+        '404': { description: not_found (unknown camera, or not a camera action) }
+        '503': { description: camera_restarting (Retry-After) }
+  /control/cameras/{cam}/name:
+    put:
+      summary: Rename one camera (stored on the camera), as PUT /control/camera/name (admin)
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: '{ name } as read back' }
+        '400': { description: invalid_name }
+        '401': { description: not signed in }
+        '404': { description: not_found }
+        '503': { description: camera_restarting (Retry-After), or camera_offline }
   /control/camera/name:
     put:
       summary: Renames the camera, on the camera (admin)
@@ -608,7 +640,7 @@ paths:
             schema: { type: object, required: [name], properties: { name: { type: string, pattern: '^[A-Za-z0-9()+=\[\]{}-](?:[A-Za-z0-9 ()+=\[\]{}-]{0,29}[A-Za-z0-9()+=\[\]{}-])?$' } } }
       responses:
         '200': { description: '{ name }: the name read back from the camera' }
-        '400': { description: '{ error: invalid_name, reason }: against the rules (the camera is not asked), or refused by the camera (rspCode -54, -56); { error: camera_required } on a proxy with several cameras' }
+        '400': { description: '{ error: invalid_name, reason }: against the rules (the camera is not asked), or refused by the camera (rspCode -54, -56); { error: camera_required } on a proxy with several cameras (use /control/cameras/{cam}/name or ?cam=)' }
         '401': { description: not signed in }
         '403': { description: admin_only, or csrf }
         '502': { description: '{ error: camera_error } (or camera_auth_failed)' }
@@ -734,7 +766,7 @@ paths:
       responses:
         '200': { description: 'camera-test and retention-run results; camera-ftp-setup/-off: {ftp} (the camera''s settings, no password); camera-ftp-test: {ok, rspCode}; poe-switch-read: {at, port, index, poe, watts, link, sn, firmware}; camera-poe-on: the same plus wasOn; inventory-cancel: { cancelled, runId }; find-camera: { devices: [{endpoint, address (XAddr host), sender (UDP source), mismatch, useAddress (sender on a mismatch), xaddrs, name, hardware, model, current}], tookMs, envFile: {writable, path?, reason?} }; camera-address: { host, previous, key, backup, restart: true }; archive-clear: { cleared, bytes }' }
         '202': { description: 'started (onvif-resubscribe, restart, restart-proxy); camera-reboot: { confirmed } (false: the camera dropped the connection after receiving the request); camera-powercycle: { offAt, onAt, watts } once PoE is back on; inventory, inventory-repair: { runId }' }
-        '400': { description: 'archive-clear: invalid (no count); camera-address: invalid (not an address or name with an optional :port); inventory: invalid (an unknown or missing kind, camera not a boolean, or camera for a kind without a camera compare); inventory-repair: invalid (a kind without a repair, or runId not a run id); a camera action (camera-test, onvif-resubscribe, camera-ftp-*, restart, camera-reboot, camera-powercycle, camera-poe-on, poe-switch-read, inventory*) on a proxy with several cameras: camera_required' }
+        '400': { description: 'archive-clear: invalid (no count); camera-address: invalid (not an address or name with an optional :port); inventory: invalid (an unknown or missing kind, camera not a boolean, or camera for a kind without a camera compare); inventory-repair: invalid (a kind without a repair, or runId not a run id); a camera action (camera-test, onvif-resubscribe, camera-ftp-*, restart, camera-reboot, camera-powercycle, camera-poe-on, poe-switch-read, inventory*) on a proxy with several cameras without ?cam=<id>: camera_required (or POST /control/cameras/{cam}/actions/{name})' }
         '404': { description: 'unknown action; inventory-repair: not_found (no such check run of the kind)' }
         '409': { description: 'archive-clear: count_mismatch { count } (count is not the number of clips in the Archive now); camera-address: not_available { detail, line } (CAMPROXY_ENV_FILE not set, the file fails the path guard, or its directory is not writable; line is what to add by hand); not_configured (camera-ftp-setup/-test: ftp.publicHost or the FTP password is not set; camera-powercycle, poe-switch-read: no switch or no CAMPROXY_POE_SWITCH_PASSWORD); camera-powercycle, poe-switch-read: switch_busy (someone is logged in to the switch''s web UI), no_power (the port has PoE off or draws 0 W; nothing switched); inventory, inventory-repair: inventory_busy { runId } (one runs already); inventory-repair: report_stale (the check run is an hour old or more), not_repairable (it did not finish, did not compare with the camera, or found nothing missing locally)' }
         '503': { description: 'stopping (inventory, inventory-repair: the proxy is stopping and starts no run)' }
