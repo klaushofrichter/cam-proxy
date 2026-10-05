@@ -69,7 +69,7 @@ beforeEach(() => {
   log = new StreamLog(c, () => now);
   now = T0;
   config = structuredClone(DEFAULTS);
-  config.analytics.googleVision = { enabled: true, monthlyLimit: 100, dailyCap: 0, checksPerDay: 10 };
+  config.analytics.googleVision = { enabled: true, monthlyLimit: 100, dailyCap: 0, checksPerDay: 10, perCameraDailyCap: 0 };
   stills = new Map();
   calls = [];
   answers = [];

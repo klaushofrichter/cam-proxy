@@ -60,7 +60,7 @@ export interface Config {
   analytics: {
     kinds: { person: boolean; vehicle: boolean; pet: boolean };
     // checksPerDay: still checks by hand per camera day (cams #179); 0 = none.
-    googleVision: { enabled: boolean; monthlyLimit: number; dailyCap: number; checksPerDay: number };
+    googleVision: { enabled: boolean; monthlyLimit: number; dailyCap: number; checksPerDay: number; perCameraDailyCap: number };
   };
 }
 
@@ -88,7 +88,7 @@ export const DEFAULTS: Config = {
   archive: { enabled: true, warnPercent: 50 },
   analytics: {
     kinds: { person: true, vehicle: false, pet: false },
-    googleVision: { enabled: false, monthlyLimit: 0, dailyCap: 0, checksPerDay: 10 },
+    googleVision: { enabled: false, monthlyLimit: 0, dailyCap: 0, checksPerDay: 10, perCameraDailyCap: 0 },
   },
 };
 

@@ -19,7 +19,7 @@ function setup() {
   let now = T0 + 3000;
   const log = new StreamLog(c, () => now);
   const config = structuredClone(DEFAULTS);
-  config.analytics.googleVision = { enabled: true, monthlyLimit: 100, dailyCap: 0, checksPerDay: 10 };
+  config.analytics.googleVision = { enabled: true, monthlyLimit: 100, dailyCap: 0, checksPerDay: 10, perCameraDailyCap: 0 };
   // cam3 has a still at T0+1000 (byte 3), cam4 at the same time (byte 4).
   const stills: Record<string, Map<number, Buffer>> = { cam3: new Map([[T0 + 1000, Buffer.from([3])]]), cam4: new Map([[T0 + 1000, Buffer.from([4])]]) };
   const seen: number[] = [];

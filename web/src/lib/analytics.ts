@@ -12,6 +12,8 @@ export interface UiProviderState {
   paused: { reason: string; until: number | null } | null;
   lastCall: { at: number; tookMs: number; status: string } | null;
   lastError: string | null;
+  // This key's calls per camera (spec 2026-10-05-multi-camera-host-design §8.2).
+  cameras?: { id: string; today: number; month: number }[];
 }
 export interface UiObject { name: string; score: number; box?: { x0: number; y0: number; x1: number; y1: number } }
 export interface UiSummaryEntry { category: 'person' | 'vehicle' | 'pet'; subtype: string; score: number; box: { x0: number; y0: number; x1: number; y1: number } }
@@ -62,6 +64,8 @@ export function usageRows(s: UiProviderState): { label: string; text: string; ke
   if (s.lastCall) rows.push({ key: 'last', label: 'Last call', text: `${new Date(s.lastCall.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} (${(s.lastCall.tookMs / 1000).toFixed(1)} s)` });
   // The manual still checks have their own daily limit (analytics.checksPerDay; 0 = off).
   if (s.checks) rows.push({ key: 'checks', label: 'Still checks today', text: s.checks.cap > 0 ? `${n(s.checks.today)} of ${n(s.checks.cap)}` : 'off' });
+  // Several cameras: each one's calls with this key.
+  if ((s.cameras?.length ?? 0) > 1) for (const c of s.cameras!) rows.push({ key: `cam-${c.id}`, label: c.id, text: `${n(c.today)} today · ${n(c.month)} this month` });
   return rows;
 }
 

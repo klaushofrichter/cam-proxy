@@ -181,6 +181,17 @@ describe('the Pi: the recordings cache', () => {
   });
 });
 
+// P2 (spec §8.2): Vision limits count per key; the month counted before the
+// key ids (key_id '') stays in the Pi's month with the key in use.
+describe('the Pi: the Vision budget', () => {
+  it("the month's legacy calls count with the key in use (the last test here: it sets a key)", () => {
+    expect(proxy.analytics.state()[0].month.calls).toBe(14);
+    proxy.analytics.setManualKey('pi-vision-key-'.padEnd(30, 'k'));
+    expect(proxy.analytics.state()[0].month.calls).toBe(14);
+    expect(proxy.analytics.state()[0].cameras).toEqual([{ id: 'cam1', today: expect.any(Number), month: 14 }]);
+  });
+});
+
 // The health items the Pi's display reads, as release 8 answers them.
 const PI_ITEM_IDS = ['camera', 'stream', 'events', 'ftp', 'storage', 'disk', 'archive', 'inventory', 'version'];
 

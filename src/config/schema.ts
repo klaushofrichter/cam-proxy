@@ -216,6 +216,7 @@ export const SETTINGS: Node = {
       monthlyLimit: unset(int(0, 100000, 'Google Vision calls per calendar month (camera time); 0 = none'), 'no Google Vision calls', 0),
       dailyCap: unset(int(0, 10000, 'Google Vision calls per day at most; 0 = no daily cap'), 'no daily cap (the monthly limit still applies)', 0),
       checksPerDay: unset(int(0, 1000, 'still checks (a second picked by hand in cams) per camera day at most, within the monthly limit and the daily cap; 0 = no checks'), 'no still checks', 0),
+      perCameraDailyCap: unset(int(0, 10000, 'Google Vision calls per camera and day at most (automatic analyses and still checks together); 0 = no per-camera cap'), 'no per-camera cap', 0),
     },
   },
 };
