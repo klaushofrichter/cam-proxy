@@ -3,10 +3,10 @@
 Status: draft for Klaus's review, 2026-10-05. Design only; nothing is built.
 Klaus's decisions of 2026-10-05 (below, "Decisions") are binding; everything
 else is a proposal. Klaus answered the open questions the same day
-("Answers" below); what is still open is in §17.
+("Answers" below); what is still open is in §18.
 
 Repos touched by the later plans: cam-proxy (most of it), cams (§12), cam-sim
-(one measured command, §14), kube-setup (a request, §13). The Pi and
+(one measured command, §15), kube-setup (a request, §14). The Pi and
 cam-proxy-pi-display need no change (§11).
 
 ## Decisions (Klaus, 2026-10-05)
@@ -55,13 +55,13 @@ cam-proxy-pi-display need no change (§11).
    v1 needs no new driver. Switch control stays pluggable, one driver per
    model (§8.4).
 5. **Host OS: Linux, installed by us.** Debian 13 is recommended; Ubuntu
-   Server 24.04 LTS is an acceptable alternative (§13.0).
+   Server 24.04 LTS is an acceptable alternative (§14.0).
 6. **The PC arrives in about two weeks.** The multi-camera runtime, the
    host-wide services and the cams mapping are built and tested with several
    cam-sim instances before it arrives. Host setup and TLS come after, on the
-   device (§15).
+   device (§16).
 7. **Router:** Klaus can run tests now. A pre-arrival test uses his Mac as a
-   stand-in for the host (§13.3).
+   stand-in for the host (§14.3).
 
 ## 1. Goals and non-goals
 
@@ -696,7 +696,7 @@ Metrics: `camproxy_cert_not_after_seconds{cam}` and
   cameras' admin UI behind cam-proxy's session (a new, privileged surface),
   need path and cookie rewriting for a UI that isn't ours, and buy nothing
   while the route exists. It becomes worth a look only if neither the route
-  nor the 1:1 NAT alternative (§13.3) works.
+  nor the 1:1 NAT alternative (§14.3) works.
 
 ### 10.7 Operations
 
@@ -817,9 +817,114 @@ streams cams already holds (§12.2), merged across proxies by the existing
 top-bar merge. cams needs a relay route for `latest.jpg` that passes ETag and
 304 through.
 
-## 13. Network and firewall (the mini PC)
+## 13. Several proxy hosts
 
-### 13.0 Operating system
+Approved by Klaus, 2026-10-05. The house can have any number of proxy hosts:
+the Pi, one or more mini PCs, and the cluster's proxy for cam2. Each has one
+or more cameras.
+
+### 13.1 cams is the one aggregation layer
+
+- cams is where all proxies come together: one camera pulldown, Video and
+  Timeline per camera, the Archive page merging every proxy's archive (the
+  `via` groups, §12.4), the top bar merging the notifications of every
+  proxy's SSE stream (§12.2), and later the overview grid across all
+  cameras (§12.5).
+- **No "proxy of proxies" layer.** A middle tier that collects the proxies
+  would only add a single point of failure, and a second place for tokens
+  and pins. cams already talks to each proxy directly.
+- **Per proxy, by design:** the admin UI (settings, audit log, maintenance,
+  status) and the host-wide budgets (storage, Vision limits, recordings
+  cache, compositions) belong to that host. cams links to each proxy's UI
+  (`publicUrl`, sign-in links with `adminToken`) as today.
+
+### 13.2 Rules
+
+- **cams camera ids are unique across all proxies.** Proxy-local ids may
+  collide (two hosts may each call a camera `cam1`); `proxy.camera` maps
+  cams's id to the proxy's (§12.1).
+- **One subnet per proxy host's camera network**: `192.168.60.0/24` for the
+  first mini PC, `192.168.61.0/24` for a second, and so on. Each gets its own
+  static route on the router via that host's LAN address (§14.3). The Pi has
+  no camera network (cam1 is on the LAN).
+- **One CA fingerprint pin per proxy host** (§10.1): each host has its own
+  site CA, so cams holds one pin per proxy group. A proxy without a site CA
+  (the Pi, the cluster proxy) has no pin and keeps its current trust (§11).
+- **Shared Google Vision key:** proxies that use the same key each count only
+  their own calls (§8.2). Split the monthly limits so that their sum stays
+  within the budget, e.g. Pi 300 + mini PC 700 for the 1,000 free calls.
+
+### 13.3 Configuration now: a generated `cameras.json`
+
+A small generator in cams, **`scripts/cameras-config.ts`** (run with `npx tsx
+scripts/cameras-config.ts`), writes `cameras.json` from a short list of
+proxies, so nobody hand-edits several near-identical entries.
+
+- **Input:** a JSON file, by default `cameras-config.json` next to the
+  output, mode 600, never committed. It holds one entry per proxy:
+  - `url`, optional `tlsServername`;
+  - `caFingerprint` (absent for a proxy without a site CA);
+  - the `token` and optional `adminToken`;
+  - the cams camera user's credentials for that proxy's cameras
+    (`cameraUser`, `cameraPassword`; the proxy doesn't know them), with
+    per-camera overrides;
+  - an optional `prefix` for new cams ids and optional per-camera
+    `id`/`name`;
+  - for a proxy without a site CA, the camera TLS settings (`protocol`,
+    `tlsServername`) as they are today.
+
+  Every secret field may instead name an environment variable (`"token":
+  {"env": "PROXY_GARAGE_TOKEN"}`) or a file (`{"file": "…"}`). There are no
+  secrets on the command line, and the script never prints a secret (diffs
+  show `•••`).
+- **What it does:**
+  - For each proxy, it fetches `/tls/ca.pem` and checks it against the pin
+    (when there is one), then `GET /api/cameras` with the token over that
+    verified TLS.
+  - It builds one entry per camera: `host: "from-proxy"` (or the reported
+    address for a proxy without a site CA, as today), `protocol: "https"`,
+    the camera's `tlsServername` from the proxy's `tls.servername`, the
+    `proxy` object with `camera` = the proxy's id, and the shared
+    url/token/pin.
+- **Stable ids:** an existing entry whose `proxy.url` + `proxy.camera`
+  matches keeps its cams id and name, so preferences, the archive's `via`
+  and links don't change. A new camera gets `id` from the input, or `prefix`
+  + its proxy id.
+- **Checks:**
+  - Any id collision across proxies stops the script and names both.
+  - A camera that a proxy no longer lists is kept and reported (`--prune`
+    drops it).
+  - An unreachable proxy or a wrong pin stops the script; nothing is
+    written.
+- **Dry run by default:** it prints a diff against the existing file.
+  `--write` writes it atomically (mode 600), keeping the old file as
+  `cameras.json.bak-<time>`.
+- **Where the output goes:** on the Pi, straight to cams's `cameras.json`.
+  For the cluster, the file becomes the `cams-cameras` Secret: Klaus applies
+  it (kube-setup owns the manifests).
+- **Re-run when cameras are added** to any proxy.
+- Tests: against the fake proxy (`test/proxy/fakeProxy.ts`) with two fake
+  proxies, including colliding proxy ids, a wrong pin, and the stable-id
+  rule.
+- Built in P3 (before the hardware): it works for today's proxies without a
+  pin, and its pin path is tested against a fake proxy with a test CA. P5
+  uses it for real with the mini PC's pin.
+
+### 13.4 Later (not planned; seams kept)
+
+- **Configuration from the cams interface:** "Add proxy" (url + token + CA
+  fingerprint) imports its cameras, using the generator's logic as a library
+  (`server/cameraImport.ts`, which the script calls). The registry would then
+  need a writable store instead of the read-only Secret file.
+- **A separate Admin app with an installer wizard** for host setup, proxy and
+  cams config in one flow.
+- **A cams overview of every proxy's health and Vision usage**, from each
+  proxy's health summary (§6.5) and analytics state. It needs a client-token
+  read of the health summary, which is a small proxy API addition.
+
+## 14. Network and firewall (the mini PC)
+
+### 14.0 Operating system
 
 - **Debian 13 ("trixie"), installed by us (recommended).** It is the same
   family as Raspberry Pi OS on the Pi, so the packages, paths, systemd units
@@ -827,7 +932,7 @@ top-bar merge. cams needs a relay route for `latest.jpg` that passes ETag and
   firewall, and dnsmasq and chrony are stock packages.
 - **Docker from Docker's own apt repository** (not Debian's `docker.io`),
   with `"iptables": false, "ip6tables": false` in `/etc/docker/daemon.json`
-  (§13.2). Compose as on the Pi: `/srv/cam-proxy` with the same layout.
+  (§14.2). Compose as on the Pi: `/srv/cam-proxy` with the same layout.
 - **Ubuntu Server 24.04 LTS is an acceptable alternative.** Same tools
   (nftables, dnsmasq, chrony, Docker's apt repository). Netplan replaces
   `/etc/network/interfaces`, and systemd-resolved must be kept off the
@@ -835,7 +940,7 @@ top-bar merge. cams needs a relay route for `latest.jpg` that passes ETag and
 - A minimal install: no desktop, SSH with key auth, unattended security
   updates.
 
-### 13.1 Addresses
+### 14.1 Addresses
 
 - LAN side `enp1s0`: an address from the router's DHCP (the router keeps an
   address per MAC; no reservation needed), e.g. 192.168.1.230. The router's
@@ -848,7 +953,7 @@ top-bar merge. cams needs a relay route for `latest.jpg` that passes ETag and
   etc.), a small dynamic pool `.100`–`.149` for a new device until it gets
   its lease.
 
-### 13.2 The sketch (prose; the setup guide written in P4 has the files)
+### 14.2 The sketch (prose; the setup guide written in P4 has the files)
 
 - **sysctl:** `net.ipv4.ip_forward = 1`; no IPv6 forwarding and no router
   advertisements on the camera side (IPv4 only there).
@@ -878,7 +983,7 @@ top-bar merge. cams needs a relay route for `latest.jpg` that passes ETag and
 - **chrony:** syncs from public pools over the LAN; `allow 192.168.60.0/24`;
   `local stratum 10` so the cameras keep a common time while the internet is
   down (the demo case). The proxy also sets each camera's NTP server to
-  192.168.60.1 by a whole-object `SetNtp` (§14: measure `GetNtp` first),
+  192.168.60.1 by a whole-object `SetNtp` (§15: measure `GetNtp` first),
   because the firmware may ignore DHCP option 42.
 
 Consequences of "cameras → internet blocked" Klaus should expect: the
@@ -886,7 +991,7 @@ Reolink app's cloud/P2P remote view and push notifications stop for these
 cameras, firmware update checks stop, and LAN discovery in the app doesn't
 cross the route (adding a camera by IP works).
 
-### 13.3 The home router's static route (finding)
+### 14.3 The home router's static route (finding)
 
 **The router:** ASUS **RT-AX86U**, stock firmware **3.0.0.4.388_24436**
 (Klaus, 2026-10-05).
@@ -974,7 +1079,7 @@ anything else depends on the route):
 2. **From a cluster node** (via the kube-setup session, which owns the
    nodes): the same three commands, then the same `curl` from a pod in the
    cams namespace. This is what cams will do; it needs the egress rule from
-   §13.4 first.
+   §14.4 first.
 3. **Check the reply path on the mini PC:** `tcpdump -ni enp1s0 host
    192.168.60.13` and `tcpdump -ni enp2s0 host <client>` during the curl.
    Expect the SYN in on `enp1s0` and out on `enp2s0`, and the SYN-ACK in on
@@ -1019,7 +1124,7 @@ after the 2026-10-05 test):
    :443): simplest, but non-standard ports for every camera, a list to
    maintain, and only the forwarded ports work.
 
-### 13.4 How cams in the cluster reaches proxy and cameras
+### 14.4 How cams in the cluster reaches proxy and cameras
 
 - cams → proxy: the host's LAN address directly (`https://192.168.1.230:8443`),
   no route needed.
@@ -1031,7 +1136,7 @@ after the 2026-10-05 test):
   cam-proxy:8480 only), and update the `cams-cameras` Secret with the new
   entries and pins (Klaus).
 
-## 14. Testing
+## 15. Testing
 
 - **Unit:** config translation (legacy `camera`, overrides, env with one vs
   several cameras), the keyed-collection schema node, per-camera override
@@ -1069,7 +1174,7 @@ after the 2026-10-05 test):
   internet (a laptop on the camera switch: DNS and HTTP out fail, NTP to the
   host works); FTP from a camera; the router route survives a router reboot.
 
-## 15. Phased delivery
+## 16. Phased delivery
 
 The PC arrives in about two weeks (Klaus, 2026-10-05). Everything that can be
 built and tested with several cam-sim instances comes first; the device work
@@ -1081,14 +1186,14 @@ follows its arrival.
 |---|---|---|---|
 | **P1** config + runtime per camera | cam-proxy | `cameras[]` + legacy translation, keyed-collection schema, `CameraWorker`, `cameraParam` routing, `/api/cameras` list, health `cameras[]` with the compatible top level, audit/inventory camera labels, `analytics_usage` migration, admin UI camera picker (read-only status per camera), supervision | 3 cam-sims in tests; the one-camera suite and the display fixtures unchanged |
 | **P2** host-wide services | cam-proxy | one go2rtc with N streams, FTP user mapping, storage shares, Vision per key + per-camera cap, PoE queue with the driver interface (fake driver in tests; `sscpoe-web` unchanged), `composition.concurrent`, per-camera Settings/actions in the UI, control API camera routes, latest-still endpoints, metrics `cam` label | 4 cam-sims on the Mac or a CI runner; the Pi runs the release unchanged |
-| **P3** cams mapping | cams | proxy groups, one SSE per proxy with fan-out, archive and SSE on one group object, fake proxy with several cameras, real-proxy e2e with a two-camera proxy, livestack multi-camera variant (cams → one cam-proxy → 3 cam-sims over HTTP) | cams shows several cameras of one proxy over one stream |
-| — router pre-test | (Klaus) | the Mac stand-in test of §13.3 | the RT-AX86U hairpins to the stand-in |
+| **P3** cams mapping | cams | proxy groups, one SSE per proxy with fan-out, archive and SSE on one group object, the `cameras.json` generator `scripts/cameras-config.ts` (§13.3), fake proxy with several cameras, real-proxy e2e with a two-camera proxy, livestack multi-camera variant (cams → one cam-proxy → 3 cam-sims over HTTP) | cams shows several cameras of one proxy over one stream |
+| — router pre-test | (Klaus) | the Mac stand-in test of §14.3 | the RT-AX86U hairpins to the stand-in |
 
 **After the PC arrives (on the device):**
 
 | Phase | Repo | Content | Done when |
 |---|---|---|---|
-| **P4** host setup | cam-proxy (docs) | Debian 13 install, Docker from Docker's repository, nftables, dnsmasq, chrony, the router route and its on-device test (§13.3), compose; `docs/multi-camera-host.md` written as it is done (with the ranked fallbacks); measure the real cameras' `GetNtp`/`SetNtp` and certificate import; the second GPS-208 on `192.168.60.2` (DHCP or static, §8.4) with the existing driver; the kube-setup request (egress to the camera subnet and the host, the `cams-cameras` Secret) | cams in the cluster reaches the cameras and the proxy over the route |
+| **P4** host setup | cam-proxy (docs) | Debian 13 install, Docker from Docker's repository, nftables, dnsmasq, chrony, the router route and its on-device test (§14.3), compose; `docs/multi-camera-host.md` written as it is done (with the ranked fallbacks); measure the real cameras' `GetNtp`/`SetNtp` and certificate import; the second GPS-208 on `192.168.60.2` (DHCP or static, §8.4) with the existing driver; the kube-setup request (egress to the camera subnet and the host, the `cams-cameras` Secret) | cams in the cluster reaches the cameras and the proxy over the route |
 | **P5** TLS / site CA | cam-proxy, cam-sim, cams | CA + leaves, HTTPS listener, cert push and renewal, Certificates card, health item, `/tls/ca.pem`, NTP set; cam-sim refusal fault + NTP; cams CA/leaf pinning, proxy `tlsServername`, fallback pins | pushes verified on the real cameras; cams verifies proxy and cameras against the pin |
 
 Each phase is its own plan and PR series; releases follow the usual rule
@@ -1103,7 +1208,7 @@ new cameras and an empty data folder. Moving a camera with its data between
 hosts would need a catalog import tool (archive and event ids collide); it
 is not planned.
 
-## 16. Cluster dependency after the change
+## 17. Cluster dependency after the change
 
 | Today in the cluster | After |
 |---|---|
@@ -1115,10 +1220,10 @@ is not planned.
 | Prometheus/Grafana scraping cam-proxy | optional; nothing depends on it |
 | Release workflows (images, cluster rollout) | unchanged; the Pi and the mini PC are updated by `docker compose pull && up -d` (memory: update the Pi after releases; the mini PC joins that step) |
 
-## 17. Open questions for Klaus
+## 18. Open questions for Klaus
 
 None open. Klaus's answers resolved the first draft's questions ("Answers"
-at the top). The router test answered the NAT question (§13.3: not needed),
+at the top). The router test answered the NAT question (§14.3: not needed),
 and the switch is a second GPS-208 (§8.4). Still to do, but not a question:
-the router test from a cluster node (§13.3), and the GPS-208's address
+the router test from a cluster node (§14.3), and the GPS-208's address
 setup on the device (§8.4).
