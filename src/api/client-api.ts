@@ -14,7 +14,9 @@ import { isAbort } from '../async';
 import { SearchError, type RecordingEntry } from '../recordings/list';
 import { validId } from '../recordings/names';
 import type { RecordingsSide } from '../recordings/side';
-import type { StatusPoller } from '../camera/status';
+import type { CameraRegistry } from '../cameras/registry';
+import type { CameraWorker } from '../cameras/worker';
+import { cameraParam, workerOf } from './camera-param';
 import type { SseHandler } from '../stream/sse';
 import type { FrameGrabber } from '../stills/grabber';
 import type { Go2rtc } from '../stills/go2rtc';
@@ -59,28 +61,24 @@ const analysisSummary = (a: AnalysisRow | undefined) =>
   a ? { provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, objects: parseList(a.objects), summary: summaryOf(a) } : null;
 
 // The client API (spec §10); auth is applied by the caller.
-export function clientApi(d: { config: () => Config; catalog: Catalog; status: () => StatusPoller; cameraName: () => string; sse: SseHandler; stills: () => StillsSide | undefined; recordings: () => RecordingsSide }): express.Router {
+export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: CameraRegistry; sse: SseHandler }): express.Router {
   const r = express.Router();
-  const cam = () => d.config().camera;
-  const known = (req: Request, res: Response) => {
-    if (req.params.cam !== cam().id) return void res.status(404).json({ error: 'not_found' }), false;
-    return true;
-  };
+  // Every /cameras/:cam route: the camera's worker, 404 or 503 (spec 2026-10-05-multi-camera-host-design §6.1).
+  r.param('cam', cameraParam(d.cameras));
 
-  // The camera info. `name`: the camera's own name (camera-name design),
-  // the configured camera.name until the camera was first read.
-  // publicUrl: where people reach this proxy's web UI (cams links to it).
-  // address: the camera's camera.host as it runs (cams reaches the camera
-  // there for what it asks the camera directly; no secret).
-  const info = () => {
-    const s = d.stills();
+  // One camera's info. `name`: the camera's own name (camera-name design), the
+  // configured name until first read. publicUrl: where people reach this
+  // proxy's web UI (cams links to it). address: the camera's host as it runs
+  // (cams reaches the camera there for what it asks the camera directly; no
+  // secret). error: the worker's or the last check's error, null when fine
+  // (spec §6.1).
+  const info = (w: CameraWorker) => {
+    const s = w.stills;
     const stream = s ? { up: s.grabber.up(), lastFrameTs: s.grabber.lastFrameTs() } : null;
-    return { id: cam().id, name: d.cameraName(), online: d.status().state().online, lastEventTs: lastLiveEventTs(d.catalog, cam().id), stream, publicUrl: d.config().server.publicUrl ?? null, address: cam().host };
+    return { id: w.id, name: w.name(), online: w.status.state().online, lastEventTs: lastLiveEventTs(d.catalog, w.id), stream, publicUrl: d.config().server.publicUrl ?? null, address: w.cam().host, error: w.error() };
   };
-  r.get('/cameras', (_req, res) => void res.json([info()]));
-  r.get('/cameras/:cam', (req, res) => {
-    if (known(req, res)) res.json(info());
-  });
+  r.get('/cameras', (_req, res) => void res.json(d.cameras.list().map(info)));
+  r.get('/cameras/:cam', (_req, res) => void res.json(info(workerOf(res))));
 
   const sendJpeg = (res: Response, jpeg: Buffer | undefined, final: boolean) => {
     if (!jpeg) return void res.status(404).json({ error: 'not_found' });
@@ -98,16 +96,14 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
   };
 
   r.get('/cameras/:cam/events', (req, res) => {
-    if (!known(req, res)) return;
     const from = intParam(req.query.from), to = intParam(req.query.to), limit = intParam(req.query.limit);
     if (from === null || to === null || limit === null) return bad(res, 'from, to and limit are whole numbers (unix ms)');
     const kind = typeof req.query.kind === 'string' ? req.query.kind : undefined;
-    const rows = listEvents(d.catalog, { cam: cam().id, from, to, kind, limit });
+    const rows = listEvents(d.catalog, { cam: workerOf(res).id, from, to, kind, limit });
     const an = analysesFor(d.catalog, rows.map((e) => e.id));
     res.json(rows.map((e) => ({ ...eventJson(e), analysis: analysisSummary(an.get(e.id)) })));
   });
   r.get('/cameras/:cam/events/:id/analysis', (req, res) => {
-    if (!known(req, res)) return;
     const a = analysisFor(d.catalog, Number(req.params.id));
     if (!a) return void res.status(404).json({ error: 'not_found' });
     res.json({ eventId: a.event_id, provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, requestedAt: a.requested_at, tookMs: a.took_ms, objects: parseList(a.objects), summary: summaryOf(a), raw: parse(a.raw) });
@@ -115,16 +111,14 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
   // A day of analyses in the stream message's shape (spec
   // 2026-09-30-analytics-in-cams-design), for cams when it loads a day.
   r.get('/cameras/:cam/analyses', (req, res) => {
-    if (!known(req, res)) return;
     const rg = range(req, res);
     if (!rg) return;
-    res.json(analysesInRange(d.catalog, cam().id, rg[0], rg[1]).map((a) => ({
+    res.json(analysesInRange(d.catalog, workerOf(res).id, rg[0], rg[1]).map((a) => ({
       eventId: a.event_id, kind: a.kind, start: a.start_ts, end: a.end_ts, provider: a.provider, status: a.status, reason: a.reason,
       stillTs: a.still_ts, summary: summaryOf(a),
     })));
   });
   r.get('/cameras/:cam/events/:id/analysis.jpg', (req, res) => {
-    if (!known(req, res)) return;
     const a = analysisFor(d.catalog, Number(req.params.id));
     let jpeg: Buffer | undefined;
     try {
@@ -136,19 +130,18 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
   });
 
   // Stills and previews (spec §8, §10): lists over at most a day.
-  const store = (req: Request, res: Response) => {
-    if (!known(req, res)) return undefined;
-    const s = d.stills();
+  const store = (_req: Request, res: Response) => {
+    const s = workerOf(res).stills;
     if (!s) return void res.status(404).json({ error: 'stills_disabled' }), undefined;
     return s.store;
   };
   const jpegTs = (file: string) => (/^\d{1,15}\.jpg$/.test(file) ? Number(file.slice(0, -4)) : null);
   // How far back this proxy has content (the History strip's left edge):
   // the oldest clip, still minute and preview minute, each null when none.
-  r.get('/cameras/:cam/extent', (req, res) => {
-    if (!known(req, res)) return;
-    const s = d.stills()?.store;
-    res.json({ clips: oldestClip(d.catalog, cam().id), stills: s?.oldest('stills') ?? null, previews: s?.oldest('previews') ?? null });
+  r.get('/cameras/:cam/extent', (_req, res) => {
+    const w = workerOf(res);
+    const s = w.stills?.store;
+    res.json({ clips: oldestClip(d.catalog, w.id), stills: s?.oldest('stills') ?? null, previews: s?.oldest('previews') ?? null });
   });
 
   r.get('/cameras/:cam/stills', (req, res) => {
@@ -165,7 +158,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
   r.get('/cameras/:cam/previews', (req, res) => {
     const st = store(req, res);
     const rg = st && range(req, res);
-    if (st && rg) res.json(st.listPreviews(rg[0], rg[1]).map((p) => ({ ...p, url: `/api/cameras/${encodeURIComponent(cam().id)}/previews/${p.minute}.jpg` })));
+    if (st && rg) res.json(st.listPreviews(rg[0], rg[1]).map((p) => ({ ...p, url: `/api/cameras/${encodeURIComponent(workerOf(res).id)}/previews/${p.minute}.jpg` })));
   });
   r.get('/cameras/:cam/previews/:file', async (req, res) => {
     const minute = jpegTs(req.params.file);
@@ -175,7 +168,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
   });
 
   // Clips (spec §9, §10): lists over at most 31 days; files with HTTP Range.
-  const clipBase = () => `/api/cameras/${encodeURIComponent(cam().id)}/clips`;
+  const clipBase = (cam: string) => `/api/cameras/${encodeURIComponent(cam)}/clips`;
   const clipJson = (c: ClipRow, events: number[]) => ({
     id: c.id,
     start: c.start_ts,
@@ -184,23 +177,22 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     size: c.size,
     origin: c.origin,
     events,
-    url: `${clipBase()}/${c.id}.mp4`,
-    snapshotUrl: c.snapshot ? `${clipBase()}/${c.id}.jpg` : null,
+    url: `${clipBase(c.cam)}/${c.id}.mp4`,
+    snapshotUrl: c.snapshot ? `${clipBase(c.cam)}/${c.id}.jpg` : null,
   });
   r.get('/cameras/:cam/clips', (req, res) => {
-    if (!known(req, res)) return;
     const rg = range(req, res, 31 * DAY, 'at most 31 days per request');
     if (!rg) return;
-    const clips = listClips(d.catalog, cam().id, rg[0], rg[1]);
-    const events = overlappingEventsOf(d.catalog, cam().id, clips.map((c) => ({ from: c.start_ts, to: c.end_ts ?? c.start_ts })));
+    const cam = workerOf(res).id;
+    const clips = listClips(d.catalog, cam, rg[0], rg[1]);
+    const events = overlappingEventsOf(d.catalog, cam, clips.map((c) => ({ from: c.start_ts, to: c.end_ts ?? c.start_ts })));
     res.json(clips.map((c, i) => clipJson(c, events[i])));
   });
   r.get('/cameras/:cam/clips/:file', (req, res) => {
     const m = /^(\d{1,15})\.(mp4|jpg)$/.exec(req.params.file);
     if (!m) return bad(res, 'a clip is <id>.mp4, its snapshot <id>.jpg');
-    if (!known(req, res)) return;
     const clip = clipById(d.catalog, Number(m[1]));
-    const file = clip?.cam === cam().id ? (m[2] === 'mp4' ? clip.path : clip.snapshot) : null;
+    const file = clip?.cam === workerOf(res).id ? (m[2] === 'mp4' ? clip.path : clip.snapshot) : null;
     if (!file) return void res.status(404).json({ error: 'not_found' });
     res.setHeader('Cache-Control', IMMUTABLE);
     sendFileOr(res, resolve(file), { headers: { 'Content-Type': m[2] === 'mp4' ? 'video/mp4' : 'image/jpeg' } }, 'not_found');
@@ -209,13 +201,13 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
   // Recordings on the camera's SD card (spec 2026-10-02-baichuan-recordings-design):
   // listed by HTTP Search, fetched over Baichuan into the cache. /days is
   // registered before /:id.
-  const online = () => d.status().state().online;
+  const online = (res: Response) => workerOf(res).status.state().online;
   const offline = (res: Response) => void res.status(503).json({ error: 'camera_offline' });
   // 503 is for a camera that is offline: the status poller says so, or no
   // connection could be made. A connection lost mid-transfer is a 502 with
   // reason `offline` (the download's result on the Status line).
-  const cameraOffline = (err: unknown): boolean =>
-    (err instanceof SearchError && err.code === 'camera_offline') || (err instanceof BaichuanError && err.code === 'offline' && (err.phase === 'connect' || !online()));
+  const cameraOffline = (res: Response, err: unknown): boolean =>
+    (err instanceof SearchError && err.code === 'camera_offline') || (err instanceof BaichuanError && err.code === 'offline' && (err.phase === 'connect' || !online(res)));
   // `detail` is for people: never a path, a password or a key.
   const recordingError = (res: Response, err: unknown): void => {
     if (res.headersSent || isAbort(err)) return void res.destroy();
@@ -229,7 +221,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
       return void res.status(502).json({ error: 'recordings_unavailable', reason: 'search_failed', detail: err.message });
     }
     if (err instanceof BaichuanError) {
-      if (cameraOffline(err)) return offline(res);
+      if (cameraOffline(res, err)) return offline(res);
       if (err.code === 'not_found') return void res.status(404).json({ error: 'unknown_recording' });
       return void res.status(502).json({ error: 'recordings_unavailable', reason: err.code, detail: err.message });
     }
@@ -277,7 +269,6 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
   // (date=YYYY-MM-DD); both include a recording that starts the day before
   // and runs past midnight into it (#99).
   r.get('/cameras/:cam/recordings', async (req, res) => {
-    if (!known(req, res)) return;
     // Checked before the list: it has no guard of its own (from=0 would mean
     // a Search per day since 1970).
     const date = req.query.date;
@@ -294,11 +285,12 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
     }
     const stream = req.query.stream;
     if (stream !== 'sub' && stream !== 'main') return bad(res, 'stream is sub or main');
-    if (!online()) return offline(res);
+    if (!online(res)) return offline(res);
     const signal = leftSignal(res); // a Search still queued when the client leaves is dropped
     try {
-      const list = day !== undefined ? await d.recordings().list.date(day, stream, signal) : await d.recordings().list.range(from!, to!, stream, signal);
-      const near = clipsNear(d.catalog, cam().id, list.map((e) => ({ stream: e.stream, ts: e.start })), 5000);
+      const w = workerOf(res);
+      const list = day !== undefined ? await w.recordings.list.date(day, stream, signal) : await w.recordings.list.range(from!, to!, stream, signal);
+      const near = clipsNear(d.catalog, w.id, list.map((e) => ({ stream: e.stream, ts: e.start })), 5000);
       res.json(list.map((e, i) => ({ id: e.id, start: e.start, end: e.end, stream: e.stream, size: e.size, kinds: e.kinds, clipId: near[i]?.id ?? null })));
     } catch (err) {
       recordingError(res, err);
@@ -306,12 +298,11 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
   });
 
   r.get('/cameras/:cam/recordings/days', async (req, res) => {
-    if (!known(req, res)) return;
     const month = typeof req.query.month === 'string' ? req.query.month : '';
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return bad(res, 'month is YYYY-MM');
-    if (!online()) return offline(res);
+    if (!online(res)) return offline(res);
     try {
-      res.json({ month, days: await d.recordings().list.monthDays(month, leftSignal(res)) });
+      res.json({ month, days: await workerOf(res).recordings.list.monthDays(month, leftSignal(res)) });
     } catch (err) {
       recordingError(res, err);
     }
@@ -319,12 +310,11 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
 
   // GET and HEAD (Express answers HEAD with this route).
   r.get('/cameras/:cam/recordings/:id', async (req, res) => {
-    if (!known(req, res)) return;
     const id = req.params.id;
     if (!validId(id)) return bad(res, 'not a recording id'); // before the cache or the camera
-    const side = d.recordings();
+    const side = workerOf(res).recordings;
     if (serveCached(res, side, id)) return; // the cache needs no camera
-    if (!online()) return offline(res);
+    if (!online(res)) return offline(res);
     let entry: RecordingEntry | undefined;
     try {
       entry = await side.list.find(id, leftSignal(res)); // the camera path comes from Search, never from the request
@@ -369,7 +359,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; status: (
         await fetch.done;
       } catch (err) {
         if (res.headersSent || gone(res)) return void res.destroy(); // a short body: the client sees the failure
-        const final = (err instanceof BaichuanError && err.code === 'not_found') || cameraOffline(err);
+        const final = (err instanceof BaichuanError && err.code === 'not_found') || cameraOffline(res, err);
         if (attempt === 0 && (isAbort(err) || (!created && !final))) continue; // not this client's failure: try again
         return recordingError(res, err);
       }

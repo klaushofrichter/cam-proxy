@@ -478,7 +478,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   if (running.server.trustProxy) app.set('trust proxy', running.server.trustProxy);
   const limiter = (limit: number, skip: (req: Request) => boolean) => rateLimit({ windowMs: 60_000, limit, skip, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } });
   app.use(limiter(1200, isImage));
-  app.use(limiter(6000, (req) => !isImage(req)));
+  // Images: 6000 per minute per camera (a timeline per camera loads its own sprites; spec §6.1, Ruling P1-16).
+  app.use(rateLimit({ windowMs: 60_000, limit: () => 6000 * Math.max(1, cams.size), skip: (req) => !isImage(req), standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } }));
   app.use(express.json({ limit: '64kb' }));
   // startedAt tells a new process apart (the Maintenance page's restart waits for it).
   app.get('/health', (_req, res) => void res.json({ ok: true, version: VERSION, startedAt }));
@@ -492,10 +493,10 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // key; anyone else goes on to the access check as for an unknown route.
   app.use('/api', localApi({ health: healthNow }));
   app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit }));
-  app.use('/api', requireAccess('client', access), composeApi({ config: () => running, catalog, composer, stillsIn, paused: () => storage.paused(), font, audit }));
-  app.use('/api', requireAccess('client', access), stillChecksApi({ config: () => running, catalog, analytics, audit }));
-  app.use('/api', requireAccess('client', access), archiveApi({ config: () => running, catalog, archive, composer, recordings: () => cams.first().recordings, online: () => cams.first().status.state().online, timeInfo }));
-  app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, status: () => cams.first().status, cameraName: () => cams.first().name(), sse, stills: () => cams.first().stills, recordings: () => cams.first().recordings }));
+  app.use('/api', requireAccess('client', access), composeApi({ config: () => running, catalog, composer, cameras: cams, paused: () => storage.paused(), font, audit }));
+  app.use('/api', requireAccess('client', access), stillChecksApi({ config: () => running, catalog, cameras: cams, analytics, audit }));
+  app.use('/api', requireAccess('client', access), archiveApi({ config: () => running, catalog, archive, composer, cameras: cams }));
+  app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, cameras: cams, sse }));
   // The audit log: admins and the audit token, GET (and HEAD) only. The access check is
   // on the route inside the router; other /control paths pass on untouched
   // to the admin-only routes below.

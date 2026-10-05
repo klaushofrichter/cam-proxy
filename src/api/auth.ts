@@ -26,7 +26,18 @@ export function refuseTokenInUrl(req: Request, res: Response, next: NextFunction
 
 type Access = 'admin' | 'client' | 'audit' | null;
 type TokenKind = 'none' | 'invalid' | 'client' | 'admin' | 'audit' | 'session';
-interface AccessInfo { access: Access; viaCookie: boolean; tokenKind: TokenKind }
+export interface AccessInfo { access: Access; viaCookie: boolean; tokenKind: TokenKind }
+export type AccessNeed = 'client' | 'admin' | 'audit-read';
+
+// The one access decision (spec 2026-10-05-multi-camera-host-design §6.6):
+// today what the token kind allows, for any camera. A later roles project
+// replaces this function and the principal's source; routes stay as they are.
+export function can(principal: AccessInfo, need: AccessNeed, _cam?: string): boolean {
+  const a = principal.access;
+  if (need === 'admin') return a === 'admin';
+  if (need === 'audit-read') return a === 'admin' || a === 'audit';
+  return a === 'admin' || a === 'client';
+}
 export interface AccessDeps {
   tokens: () => string[];
   adminToken: () => string;
@@ -66,7 +77,7 @@ const WRITE = new Set(['POST', 'PUT', 'DELETE', 'PATCH']);
 // no client credential: elsewhere it answers like an unknown token (401) or
 // 403 admin_only, so an answer never tells which kind of token matched.
 // Sets res.locals.access to the AccessInfo.
-export function requireAccess(need: 'client' | 'admin' | 'audit-read', d: AccessDeps): RequestHandler {
+export function requireAccess(need: AccessNeed, d: AccessDeps): RequestHandler {
   return (req, res, next) => {
     const a = accessOf(req, d);
     res.locals.access = a;
@@ -78,9 +89,9 @@ export function requireAccess(need: 'client' | 'admin' | 'audit-read', d: Access
       logger.warn({ path: maskPath(withoutQuery(req.originalUrl)) }, 'unauthorized');
       return refuse(401, a.tokenKind === 'none' ? 'no-token' : 'wrong-token', 'unauthorized');
     }
-    if (need === 'admin' && a.access !== 'admin') return refuse(403, 'admin-only', 'admin_only');
+    if (!can(a, need)) return refuse(403, 'admin-only', 'admin_only');
     // HEAD too: Express answers it with the GET route, without the body.
-    if (need === 'audit-read' && ((a.access !== 'admin' && a.access !== 'audit') || (req.method !== 'GET' && req.method !== 'HEAD'))) return refuse(403, 'admin-only', 'admin_only');
+    if (need === 'audit-read' && req.method !== 'GET' && req.method !== 'HEAD') return refuse(403, 'admin-only', 'admin_only');
     if (a.viaCookie && WRITE.has(req.method) && req.get('x-camproxy-ui') !== '1') return refuse(403, 'csrf', 'csrf');
     next();
   };

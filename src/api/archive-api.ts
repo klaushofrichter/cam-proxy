@@ -21,6 +21,9 @@ import { ArchiveJobError, fileSource, recordingSource } from '../archive/sources
 import { planZip, writeZip, type ZipEntry } from '../archive/zip';
 import { CAM_ID } from '../archive/paths';
 import { clientIp } from './auth';
+import { cameraParam, workerOf } from './camera-param';
+import type { CameraRegistry } from '../cameras/registry';
+import type { CameraWorker } from '../cameras/worker';
 import { bad, IMMUTABLE, intParam, perMinute, sendFileOr } from './respond';
 
 // The Archive's client API (docs/archive.md, spec 2026-10-05-archive-design
@@ -46,14 +49,13 @@ export interface ArchiveApiDeps {
   catalog: Catalog;
   archive: Archive;
   composer: Composer;
-  recordings: () => RecordingsSide;
-  online: () => boolean;
-  timeInfo: () => TimeInfo | undefined;
+  cameras: CameraRegistry;
 }
 
 export function archiveApi(d: ArchiveApiDeps): express.Router {
   const r = express.Router();
-  const cam = () => d.config().camera.id;
+  // :cam → its worker, 404 or 503, before validate and the limiter (spec 2026-10-05-multi-camera-host-design §6.1).
+  r.param('cam', cameraParam(d.cameras));
 
   const who = (req: Request, res: Response): Who => {
     const a = res.locals.access as { access?: string; viaCookie?: boolean } | undefined;
@@ -72,7 +74,6 @@ export function archiveApi(d: ArchiveApiDeps): express.Router {
   // --- create -------------------------------------------------------------
   interface Checked { source: { type: 'composition' | 'clip' | 'recording'; id?: string; clipId?: number }; name?: string; labels: string[]; retentionDays: number | null; thumbnailAt?: number }
   const validate = (req: Request, res: Response, next: NextFunction) => {
-    if (req.params.cam !== cam()) return notFound(res);
     const b = (req.body ?? {}) as Record<string, unknown>;
     const c = rule(res, (): Checked => {
       const s = b.source as Record<string, unknown> | undefined;
@@ -103,17 +104,17 @@ export function archiveApi(d: ArchiveApiDeps): express.Router {
 
   // A recording's entry: from its name when it is cached and the camera's
   // time is known (no camera needed), else from the camera's list.
-  const recordingEntry = async (id: string, res: Response): Promise<RecordingEntry | undefined> => {
-    const side = d.recordings();
+  const recordingEntry = async (cw: CameraWorker, id: string, res: Response): Promise<RecordingEntry | undefined> => {
+    const side = cw.recordings;
     const n = parseSdName(id);
-    const ti = d.timeInfo();
+    const ti = cw.timeInfo();
     if (n && ti && side.cache.has(id) && !stillRecording(n)) {
       const t = recordingTimes(n, ti);
       const size = sizeOf(side.cache.path(id));
       if (size !== null) return { id, path: '', start: t.start, end: t.end, stream: n.stream, size, kinds: n.kinds };
       // evicted since has(): ask the camera's list as for one not cached
     }
-    if (!d.online()) return void res.status(503).json({ error: 'camera_offline' }), undefined;
+    if (!cw.status.state().online) return void res.status(503).json({ error: 'camera_offline' }), undefined;
     const ac = new AbortController();
     res.once('close', () => ac.abort());
     try {
@@ -133,13 +134,13 @@ export function archiveApi(d: ArchiveApiDeps): express.Router {
   };
 
   // The request's file and facts, or an answer sent (404, 409, 503).
-  const resolveSource = async (c: Checked, res: Response, base: Omit<ArchiveRequest, 'source' | 'kind' | 'window' | 'quality' | 'original' | 'size' | 'durationS' | 'obtain'>): Promise<ArchiveRequest | undefined> => {
+  const resolveSource = async (cw: CameraWorker, c: Checked, res: Response, base: Omit<ArchiveRequest, 'source' | 'kind' | 'window' | 'quality' | 'original' | 'size' | 'durationS' | 'obtain'>): Promise<ArchiveRequest | undefined> => {
     const s = c.source;
     if (s.type === 'composition') {
-      const creq = d.composer.request(cam(), s.id!);
-      const job = d.composer.get(cam(), s.id!);
+      const creq = d.composer.request(cw.id, s.id!);
+      const job = d.composer.get(cw.id, s.id!);
       if (!creq || !job) return notFound(res), undefined;
-      const file = d.composer.file(cam(), s.id!);
+      const file = d.composer.file(cw.id, s.id!);
       if (job.state !== 'done' || !file) return void res.status(409).json({ error: 'not_ready', state: job.state }), undefined;
       const size = sizeOf(file);
       if (size === null) return void res.status(404).json({ error: 'source_gone' }), undefined; // swept since file()
@@ -150,7 +151,7 @@ export function archiveApi(d: ArchiveApiDeps): express.Router {
     }
     if (s.type === 'clip') {
       const row = clipById(d.catalog, s.clipId!);
-      if (!row || row.cam !== cam() || row.end_ts === null) return notFound(res), undefined;
+      if (!row || row.cam !== cw.id || row.end_ts === null) return notFound(res), undefined;
       const size = sizeOf(row.path);
       if (size === null) return notFound(res), undefined;
       return {
@@ -158,9 +159,9 @@ export function archiveApi(d: ArchiveApiDeps): express.Router {
         window: { from: row.start_ts, to: row.end_ts }, quality: row.stream === 'main' ? '4k' : 'sd', original: true, size, durationS: (row.end_ts - row.start_ts) / 1000, obtain: fileSource(row.path),
       };
     }
-    const entry = await recordingEntry(s.id!, res);
+    const entry = await recordingEntry(cw, s.id!, res);
     if (!entry) return undefined;
-    const side = d.recordings();
+    const side = cw.recordings;
     return {
       ...base, kind: 'recording', source: { type: 'recording', recording: entry.id, stream: entry.stream },
       window: { from: entry.start, to: entry.end }, quality: entry.stream === 'main' ? '4k' : 'sd', original: true, size: entry.size, durationS: (entry.end - entry.start) / 1000,
@@ -172,7 +173,8 @@ export function archiveApi(d: ArchiveApiDeps): express.Router {
     const c = res.locals.archive as Checked;
     const w = who(req, res);
     const a = res.locals.access as { access?: string } | undefined;
-    const ar = await resolveSource(c, res, { cam: cam(), name: c.name, labels: c.labels, retentionDays: c.retentionDays, thumbnailAt: c.thumbnailAt, createdBy: a?.access === 'admin' ? 'admin' : 'client' });
+    const cw = workerOf(res);
+    const ar = await resolveSource(cw, c, res, { cam: cw.id, name: c.name, labels: c.labels, retentionDays: c.retentionDays, thumbnailAt: c.thumbnailAt, createdBy: a?.access === 'admin' ? 'admin' : 'client' });
     if (!ar || res.headersSent) return;
     try {
       d.archive.checkSpace(ar.size);
@@ -255,7 +257,7 @@ export function archiveApi(d: ArchiveApiDeps): express.Router {
     const layout = planZip(entries);
     if (req.method === 'HEAD') return void res.status(200).set({ 'Content-Type': 'application/zip', 'Content-Length': String(layout.total) }).end();
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
-    res.status(200).set({ 'Content-Type': 'application/zip', 'Content-Length': String(layout.total), 'Content-Disposition': contentDisposition(`archive-${cam()}-${stamp}.zip`), 'Cache-Control': 'no-store' });
+    res.status(200).set({ 'Content-Type': 'application/zip', 'Content-Length': String(layout.total), 'Content-Disposition': contentDisposition(`archive-${d.cameras.size === 1 ? d.cameras.first().id : 'all'}-${stamp}.zip`), 'Cache-Control': 'no-store' });
     writeZip(res, entries, layout).then(
       () => res.end(),
       (err: Error) => {
