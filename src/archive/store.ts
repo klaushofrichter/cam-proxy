@@ -86,8 +86,9 @@ export class ArchiveStore {
   // is missing stay (ruling 15) and are named in the answer.
   sweep(): { orphans: number; missing: number[] } {
     const root = archiveRoot(this.d.dataDir);
-    mkdirSync(this.incoming(), { recursive: true });
-    for (const f of readdirSync(this.incoming())) rmSync(join(this.incoming(), f), { recursive: true, force: true });
+    const incoming = this.incoming();
+    mkdirSync(incoming, { recursive: true });
+    for (const f of readdirSync(incoming)) rmSync(join(incoming, f), { recursive: true, force: true });
     const rows = allArchive(this.d.catalog);
     const known = new Set(rows.map((r) => `${r.cam}/${r.id}`));
     let orphans = 0;

@@ -78,7 +78,7 @@ export function createStatus(v: JobView): number {
 
 interface Job { view: JobView; req: ArchiveRequest; ctl: AbortController; endedAt?: number; done: Promise<void> }
 
-const round1 = (n: number) => Math.round(n * 10) / 10;
+export const round1 = (n: number) => Math.round(n * 10) / 10;
 
 export class ArchiveJobs {
   private readonly jobs = new Map<string, Job>();

@@ -1,5 +1,4 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
-import { rateLimit } from 'express-rate-limit';
 import { createReadStream, readFileSync, statSync } from 'fs';
 import { Readable } from 'stream';
 import { crc32 } from 'zlib';
@@ -22,6 +21,7 @@ import { ArchiveJobError, fileSource, recordingSource } from '../archive/sources
 import { planZip, writeZip, type ZipEntry } from '../archive/zip';
 import { CAM_ID } from '../archive/paths';
 import { clientIp } from './auth';
+import { bad, IMMUTABLE, intParam, perMinute, sendFileOr } from './respond';
 
 // The Archive's client API (docs/archive.md, spec 2026-10-05-archive-design
 // §2–4). Auth (client token or admin; CSRF for sessions) is applied by the
@@ -32,14 +32,12 @@ export const ZIPS_PER_MINUTE = 4;
 export const ZIP_MAX_IDS = 200;
 export const DELETE_MAX_IDS = 500;
 const WAIT_MS = 3000; // a create answers 201 when its job ends within this
-const IMMUTABLE = 'private, max-age=604800, immutable';
 const JOB_ID = /^[A-Za-z0-9_-]{22}$/;
 const QUALITIES = ['sd', '360p', '720p', '1080p', '4k'];
 
 class Bad extends Error {}
-const bad = (res: Response, detail: string) => void res.status(400).json({ error: 'invalid', detail });
 const notFound = (res: Response) => void res.status(404).json({ error: 'not_found' });
-const intParam = (v: unknown): number | undefined | null => (v === undefined ? undefined : typeof v === 'string' && /^\d{1,15}$/.test(v) ? Number(v) : null);
+const ID = /^\d{1,15}$/; // an archive id in a path or a list
 const listParam = (v: unknown): string[] | undefined | null => (v === undefined ? undefined : typeof v === 'string' ? v.split(',').map((s) => s.trim()).filter(Boolean) : null);
 
 type Composer = Pick<ReturnType<typeof createComposer>, 'get' | 'file' | 'request'>;
@@ -101,7 +99,7 @@ export function archiveApi(d: ArchiveApiDeps): express.Router {
     res.locals.archive = c;
     next();
   };
-  const addLimiter = rateLimit({ windowMs: 60_000, limit: ARCHIVE_ADDS_PER_MINUTE, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } });
+  const addLimiter = perMinute(ARCHIVE_ADDS_PER_MINUTE);
 
   // A recording's entry: from its name when it is cached and the camera's
   // time is known (no camera needed), else from the camera's list.
@@ -153,12 +151,8 @@ export function archiveApi(d: ArchiveApiDeps): express.Router {
     if (s.type === 'clip') {
       const row = clipById(d.catalog, s.clipId!);
       if (!row || row.cam !== cam() || row.end_ts === null) return notFound(res), undefined;
-      let size: number;
-      try {
-        size = statSync(row.path).size;
-      } catch {
-        return notFound(res), undefined;
-      }
+      const size = sizeOf(row.path);
+      if (size === null) return notFound(res), undefined;
       return {
         ...base, kind: 'clip', source: { type: 'clip', clipId: row.id, stream: row.stream },
         window: { from: row.start_ts, to: row.end_ts }, quality: row.stream === 'main' ? '4k' : 'sd', original: true, size, durationS: (row.end_ts - row.start_ts) / 1000, obtain: fileSource(row.path),
@@ -238,10 +232,10 @@ export function archiveApi(d: ArchiveApiDeps): express.Router {
   });
 
   // ZIP of several clips (§4.4): planned first, then streamed.
-  const zipLimiter = rateLimit({ windowMs: 60_000, limit: ZIPS_PER_MINUTE, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } });
+  const zipLimiter = perMinute(ZIPS_PER_MINUTE);
   r.get('/archive/zip', (req, res, next) => {
     const ids = listParam(req.query.ids);
-    if (!ids || !ids.length || ids.some((x) => !/^\d{1,15}$/.test(x))) return bad(res, 'ids is a comma-separated list of archive ids');
+    if (!ids || !ids.length || ids.some((x) => !ID.test(x))) return bad(res, 'ids is a comma-separated list of archive ids');
     const unique = [...new Set(ids.map(Number))];
     if (unique.length > ZIP_MAX_IDS) return bad(res, `at most ${ZIP_MAX_IDS} ids`);
     res.locals.zipIds = unique;
@@ -276,20 +270,19 @@ export function archiveApi(d: ArchiveApiDeps): express.Router {
     const files = filesOf(row);
     const store = d.archive.store;
     let clip: string;
-    let size: number;
     try {
       clip = store.file(row, 'clip.mp4');
-      size = statSync(clip).size;
     } catch {
       return undefined;
     }
+    const size = sizeOf(clip);
+    if (size === null) return undefined;
     const base = `${safeFileName(row.name)} (${row.id})`;
     const json = Buffer.from(JSON.stringify(metadataJson(row), null, 2));
     const mem = (name: string, data: Buffer): ZipEntry => ({ name, size: data.length, crc32: crc32(data), mtime: row.created_at, open: () => bufferStream(data) });
-    const out: ZipEntry[] = [];
-    if (files && files.clip.bytes === size) out.push({ name: `${base}.mp4`, size, crc32: files.clip.crc32, mtime: row.created_at, open: () => createReadStream(clip) });
-    else out.push({ name: `${base}.mp4`, size, crc32: await fileCrc(clip), mtime: row.created_at, open: () => createReadStream(clip) }); // no stored CRC: one read more
-    out.push(mem(`${base}.json`, json));
+    // No stored CRC (or the file changed): one read more.
+    const crc = files && files.clip.bytes === size ? files.clip.crc32 : await fileCrc(clip);
+    const out: ZipEntry[] = [{ name: `${base}.mp4`, size, crc32: crc, mtime: row.created_at, open: () => createReadStream(clip) }, mem(`${base}.json`, json)];
     if (row.thumb_from !== 'none') {
       try {
         out.push(mem(`${base}.jpg`, readFileSync(store.file(row, 'thumb.jpg'))));
@@ -309,7 +302,7 @@ export function archiveApi(d: ArchiveApiDeps): express.Router {
   // --- one item ---------------------------------------------------------------
   const rowOf = (req: Request, res: Response): ArchiveRow | undefined => {
     const id = String(req.params.id);
-    if (!/^\d{1,15}$/.test(id)) return bad(res, 'id is a whole number'), undefined;
+    if (!ID.test(id)) return bad(res, 'id is a whole number'), undefined;
     const row = archiveById(d.catalog, Number(id));
     if (!row) return notFound(res), undefined;
     return row;
@@ -319,7 +312,7 @@ export function archiveApi(d: ArchiveApiDeps): express.Router {
     if (row) res.json(itemJson(row));
   });
   r.patch('/archive/:id', (req, res) => {
-    if (!/^\d{1,15}$/.test(req.params.id)) return bad(res, 'id is a whole number');
+    if (!ID.test(req.params.id)) return bad(res, 'id is a whole number');
     const b = (req.body ?? {}) as Record<string, unknown>;
     const patch = rule(res, () => {
       if (b.name === undefined && b.labels === undefined && b.retentionDays === undefined) throw new Bad('name, labels or retentionDays');
@@ -335,7 +328,7 @@ export function archiveApi(d: ArchiveApiDeps): express.Router {
     res.json(itemJson(row));
   });
   r.delete('/archive/:id', (req, res) => {
-    if (!/^\d{1,15}$/.test(req.params.id)) return bad(res, 'id is a whole number');
+    if (!ID.test(req.params.id)) return bad(res, 'id is a whole number');
     const { deleted } = d.archive.delete([Number(req.params.id)], who(req, res));
     if (!deleted.length) return notFound(res);
     res.status(204).end();
@@ -347,14 +340,7 @@ export function archiveApi(d: ArchiveApiDeps): express.Router {
     const path = d.archive.store.file(row, 'clip.mp4');
     res.setHeader('Cache-Control', IMMUTABLE);
     if (req.query.download === '1') res.setHeader('Content-Disposition', contentDisposition(`${safeFileName(row.name)}.mp4`));
-    // dotfiles: the data folder may sit under a dot folder (~/.cam-proxy/data); the path comes from the row and the guard.
-    res.sendFile(path, { cacheControl: false, acceptRanges: true, dotfiles: 'allow', headers: { 'Content-Type': 'video/mp4' } }, (err) => {
-      if (!err || res.headersSent) return;
-      const status = (err as { status?: number }).status;
-      if (status === 416) return void res.status(416).end();
-      res.removeHeader('Content-Disposition');
-      res.status(status === 404 ? 404 : 500).json({ error: status === 404 ? 'not_found' : 'internal' });
-    });
+    sendFileOr(res, path, { headers: { 'Content-Type': 'video/mp4' } }, 'not_found'); // the path comes from the row and the guard
   });
   r.get('/archive/:id/thumbnail', (req, res) => {
     const row = rowOf(req, res);

@@ -8,7 +8,7 @@ import type { StreamLog } from '../stream/log';
 import { readFile } from 'fs/promises';
 import { resolve, sep } from 'path';
 import { ArchiveCleanup, type CleanupResult } from './cleanup';
-import { ArchiveJobs, SPARE_BYTES, type ArchiveRequest, type JobView } from './jobs';
+import { ArchiveJobs, round1, SPARE_BYTES, type ArchiveRequest, type JobView } from './jobs';
 import { itemJson, metadataJson } from './json';
 import { firstFrame, probeDuration } from './media';
 import { takeSnapshot, type ThumbDeps } from './metadata';
@@ -61,7 +61,6 @@ export interface ArchiveDeps {
 }
 
 const mb = (b: number) => `${(b / 1e6).toFixed(1)} MB`;
-const round1 = (n: number) => Math.round(n * 10) / 10;
 
 export class Archive {
   readonly store: ArchiveStore;
@@ -115,7 +114,7 @@ export class Archive {
     const free = this.d.disk().free;
     const minFreeBytes = this.d.config().storage.minFreeBytes;
     const needed = bytes + SPARE_BYTES;
-    const inFlight = this.jobs ? this.jobs.pendingBytes(jobId) : 0;
+    const inFlight = this.jobs.pendingBytes(jobId);
     if (free - needed - inFlight < minFreeBytes) {
       throw new ArchiveJobError('insufficient_space', `the clip needs ${mb(needed)}, ${mb(free)} are free, ${mb(inFlight)} are being archived and ${mb(minFreeBytes)} must stay free`, { needed, free, minFreeBytes, inFlight });
     }
@@ -269,16 +268,24 @@ export class Archive {
   }
 
   // --- reading --------------------------------------------------------
-  status(): ArchiveStatus {
+  // The totals and their share of the disk (the status and the health item).
+  private usage() {
     const t = archiveTotals(this.d.catalog);
     const disk = this.d.disk();
-    const cfg = this.d.config();
+    const warnPercent = this.d.config().archive.warnPercent;
     const percent = disk.size > 0 ? (t.bytes / disk.size) * 100 : 0;
+    return { t, disk, warnPercent, percentOfDisk: round1(percent), warning: percent > warnPercent };
+  }
+
+  status(): ArchiveStatus {
+    const { t, disk, warnPercent, percentOfDisk, warning } = this.usage();
+    const cfg = this.d.config();
     const next = this.cleanup.nextRunAt();
     const counts = archiveLabelCounts(this.d.catalog);
-    const lower = new Map([...counts].map(([k, n]) => [k.toLowerCase(), { k, n }]));
-    const predefined = PREDEFINED_LABELS.map((l) => ({ label: l, count: lower.get(l.toLowerCase())?.n ?? 0 }));
-    const custom = [...counts].filter(([k]) => !PREDEFINED_LABELS.some((p) => p.toLowerCase() === k.toLowerCase())).map(([label, count]) => ({ label, count })).sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+    const lower = new Map([...counts].map(([k, n]) => [k.toLowerCase(), n]));
+    const predefinedKeys = new Set(PREDEFINED_LABELS.map((l) => l.toLowerCase()));
+    const predefined = PREDEFINED_LABELS.map((l) => ({ label: l, count: lower.get(l.toLowerCase()) ?? 0 }));
+    const custom = [...counts].filter(([k]) => !predefinedKeys.has(k.toLowerCase())).map(([label, count]) => ({ label, count })).sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
     return {
       enabled: cfg.archive.enabled,
       count: t.count,
@@ -287,9 +294,9 @@ export class Archive {
       oldestCreatedAt: t.oldest,
       newestCreatedAt: t.newest,
       disk: { free: disk.free, size: disk.size },
-      percentOfDisk: round1(percent),
-      warnPercent: cfg.archive.warnPercent,
-      warning: percent > cfg.archive.warnPercent,
+      percentOfDisk,
+      warnPercent,
+      warning,
       minFreeBytes: cfg.storage.minFreeBytes,
       nextCleanupAt: next,
       expiringAtNextCleanup: countExpiringBy(this.d.catalog, next),
@@ -301,7 +308,7 @@ export class Archive {
   // The health item's input; null while the Archive is off.
   health(): { count: number; bytes: number; percentOfDisk: number; warning: boolean } | null {
     if (!this.d.config().archive.enabled) return null;
-    const s = this.status();
-    return { count: s.count, bytes: s.bytes, percentOfDisk: s.percentOfDisk, warning: s.warning };
+    const u = this.usage(); // not status(): no label counts or cleanup look-ahead for the health poll
+    return { count: u.t.count, bytes: u.t.bytes, percentOfDisk: u.percentOfDisk, warning: u.warning };
   }
 }

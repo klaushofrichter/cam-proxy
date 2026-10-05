@@ -48,7 +48,7 @@ export function archiveRows(a: UiArchive, now = Date.now()): ArchiveRow[] {
 // The dialog's button: only the exact number of clips, typed.
 export function clearMatches(typed: string, count: number): boolean {
   const t = typed.trim();
-  return /^(0|[1-9]\d*)$/.test(t) && Number(t) === count && t !== '';
+  return /^(0|[1-9]\d*)$/.test(t) && Number(t) === count;
 }
 
 export function clearMessage(a: { count: number; bytes: number }): string {
