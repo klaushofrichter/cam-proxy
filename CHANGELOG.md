@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.10.05.5
+
 - Settings: a value equal to config.json's or the default is no longer stored as an override; saving it removes the override (also in a whole-group `PUT /control/config`, which before stored every field it carried, e.g. `camera.poeSwitch.ports` 8 and `offSeconds` 10).
 - Settings page: an override equal to the default (kept by an older version) shows "override = default" (or "= config.json") with a tooltip, and no Reset button, since Reset would change nothing. Reset to defaults still removes it, listed as "N overrides equal to the default are removed too, no change in effect".
 - Settings page: a Reset to an unset state says what that means, e.g. "Reset – none (no PoE switch: power-cycle off)", "Reset – not set (PoE switch control off: no switch address)"; the same in Reset to defaults. `GET /control/config` `resetTo` has `same` and `means`.
