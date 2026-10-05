@@ -14,7 +14,8 @@ export type Leaf =
 // writes it as an array (order = display order).
 export type Collection = { collection: Node; doc: string };
 export type Node = { [key: string]: Node | Leaf | Collection };
-export const CAMERA_ID = '^[a-z0-9][a-z0-9-]{0,31}$';
+// Not `file` or `*-file`: CAMPROXY_CAMERA_PASSWORD_<ID> would collide with another id's _FILE variable.
+export const CAMERA_ID = '^(?!file$)(?!.*-file$)[a-z0-9][a-z0-9-]{0,31}$';
 export const collection = (of: Node, doc: string): Collection => ({ collection: of, doc });
 const isCollection = (n: Node | Leaf | Collection): n is Collection => typeof (n as Collection).collection === 'object' && typeof (n as Collection).doc === 'string';
 const isLeaf = (n: Node | Leaf | Collection): n is Leaf => !isCollection(n) && typeof (n as Leaf).type === 'string' && typeof (n as Leaf).doc === 'string';

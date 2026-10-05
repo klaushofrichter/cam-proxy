@@ -90,6 +90,16 @@ describe('cameras (spec §4.1)', () => {
     expect(l.sources['cameras.cam3.stills.intervalS']).toBe('default');
   });
 
+  // Review: `file` and `x-file` would read another variable's _FILE path as their password (CAMPROXY_CAMERA_PASSWORD_FILE, _X_FILE).
+  it('refuses the ids file and *-file', () => {
+    for (const id of ['file', 'cam3-file']) {
+      write('config.json', { cameras: [{ id, host: 'h' }] });
+      expect(err(() => load())).toBe(`cameras.${id}: not a camera id`);
+    }
+    write('config.json', { cameras: [{ id: 'filer', host: 'h' }, { id: 'file3', host: 'i' }] });
+    expect(cameraIds(load().config)).toEqual(['filer', 'file3']);
+  });
+
   it('integer-like ids keep config order', () => {
     write('config.json', { cameras: [{ id: '2', host: 'a' }, { id: '10', host: 'b' }, { id: '1', host: 'c' }] });
     expect(cameraIds(load().config)).toEqual(['2', '10', '1']);

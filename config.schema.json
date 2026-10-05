@@ -54,7 +54,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "pattern": "^[a-z0-9][a-z0-9-]{0,31}$",
+            "pattern": "^(?!file$)(?!.*-file$)[a-z0-9][a-z0-9-]{0,31}$",
             "description": "camera id used in paths and the API"
           },
           "name": {
