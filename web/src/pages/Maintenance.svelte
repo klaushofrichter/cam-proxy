@@ -8,6 +8,7 @@
   import { poeAlert, poeOnText, powerCycleFailText, powerCycleMessage, restartWatch, RESTART_GIVE_UP_MS, type Health } from '../lib/maintenance';
   import { refresh, refreshTick, status } from '../lib/state';
   import { clearMatches, clearMessage } from '../lib/archive';
+  import { multiCamera } from '../lib/cameras';
 
   let result = $state('');
   let log = $state<Array<Record<string, unknown>>>([]);
@@ -202,29 +203,34 @@
     }, 1000);
   }
   onMount(() => () => clearInterval(restartTimer));
+  // Several cameras: the camera actions need a camera (the routes of the next release); host actions work.
+  const multi = $derived(multiCamera($status));
 </script>
 
 <section>
   <h2>Maintenance</h2>
+  {#if multi}
+    <div class="card" data-testid="multi-camera-note"><p>Several cameras: camera actions and per-camera settings come with the next release; the status of each camera is on the Status page.</p></div>
+  {/if}
   <div class="card">
     <div class="buttons">
-      <button onclick={() => void run('Camera test', 'camera-test')} data-testid="action-camera-test">Test the camera</button>
-      <button onclick={() => void run('ONVIF', 'onvif-resubscribe')} data-testid="action-resubscribe">Re-subscribe ONVIF</button>
+      <button onclick={() => void run('Camera test', 'camera-test')} disabled={multi} data-testid="action-camera-test">Test the camera</button>
+      <button onclick={() => void run('ONVIF', 'onvif-resubscribe')} disabled={multi} data-testid="action-resubscribe">Re-subscribe ONVIF</button>
       <button onclick={() => void run('Retention preview', 'retention-run', { dryRun: true })} data-testid="action-retention-dry">Preview retention</button>
       <button onclick={() => void run('Retention', 'retention-run', {})} data-testid="action-retention">Run retention now</button>
-      <button onclick={() => void run('Restart', 'restart')} data-testid="action-restart">Restart camera side</button>
-      <button class="danger" onclick={() => (asking = 'camera-reboot')} disabled={cameraBusy} data-testid="action-camera-reboot">Reboot camera</button>
+      <button onclick={() => void run('Restart', 'restart')} disabled={multi} data-testid="action-restart">Restart camera side</button>
+      <button class="danger" onclick={() => (asking = 'camera-reboot')} disabled={cameraBusy || multi} data-testid="action-camera-reboot">Reboot camera</button>
       {#if poe?.configured}
-        <button class="danger" onclick={() => (asking = 'camera-powercycle')} disabled={cameraBusy} data-testid="action-camera-powercycle">Power-cycle camera</button>
-        <button onclick={() => void poeOn()} disabled={sending || cycling} data-testid="action-camera-poe-on" title="Turns the camera's PoE on if it is off (no power check)">Turn camera PoE on</button>
+        <button class="danger" onclick={() => (asking = 'camera-powercycle')} disabled={cameraBusy || multi} data-testid="action-camera-powercycle">Power-cycle camera</button>
+        <button onclick={() => void poeOn()} disabled={sending || cycling || multi} data-testid="action-camera-poe-on" title="Turns the camera's PoE on if it is off (no power check)">Turn camera PoE on</button>
       {/if}
       <button class="danger" onclick={() => (asking = 'restart-proxy')} disabled={restarting === 'waiting'} data-testid="action-restart-proxy">Restart proxy</button>
       <button class="danger" onclick={askClear} disabled={!archive?.count} data-testid="action-archive-clear" title="Deletes every clip in the Archive (asks for the number of clips)">Clear the Archive…</button>
     </div>
     <div class="buttons">
-      <button onclick={() => void run('Camera FTP setup', 'camera-ftp-setup')} data-testid="action-ftp-setup">Point the camera's FTP here</button>
-      <button onclick={() => void run('Camera FTP test', 'camera-ftp-test')} data-testid="action-ftp-test">Test the camera's FTP</button>
-      <button onclick={() => void run('Camera FTP off', 'camera-ftp-off')} data-testid="action-ftp-off">Turn the camera's FTP off</button>
+      <button onclick={() => void run('Camera FTP setup', 'camera-ftp-setup')} disabled={multi} data-testid="action-ftp-setup">Point the camera's FTP here</button>
+      <button onclick={() => void run('Camera FTP test', 'camera-ftp-test')} disabled={multi} data-testid="action-ftp-test">Test the camera's FTP</button>
+      <button onclick={() => void run('Camera FTP off', 'camera-ftp-off')} disabled={multi} data-testid="action-ftp-off">Turn the camera's FTP off</button>
     </div>
     {#if alert}<p class="bad" data-testid="poe-alert">{alert}</p>{/if}
     {#if result}<p class="msg mono" data-testid="action-result">{result}</p>{/if}

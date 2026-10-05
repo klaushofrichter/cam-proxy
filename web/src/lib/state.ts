@@ -1,3 +1,4 @@
+import type { CameraBlock } from './cameras';
 import { writable } from 'svelte/store';
 import { api } from './api';
 import type { UiProviderState } from './analytics';
@@ -21,6 +22,7 @@ export interface Status {
   recordings?: RecordingsStatus;
   health?: UiHealth; // the health summary (spec 2026-10-03-health-summary-design)
   archive?: UiArchive; // spec 2026-10-05-archive-design §6
+  cameras?: CameraBlock[]; // every camera, config order (spec 2026-10-05-multi-camera-host-design §6.3); absent from an older proxy
 }
 export interface Usage { bytes: number; files: number; oldest: number | null; newest: number | null; growthPerDay: number }
 export interface Stats {

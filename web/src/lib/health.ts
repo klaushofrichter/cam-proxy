@@ -19,6 +19,8 @@ export interface UiHealth {
   items: HealthItem[];
   disk: UiDisk | null;
   host: UiHost | null;
+  // Every camera's block (spec 2026-10-05-multi-camera-host-design §6.5); absent from an older proxy.
+  cameras?: { camera: { id: string }; items: HealthItem[] }[];
 }
 
 const GB = 1024 ** 3;

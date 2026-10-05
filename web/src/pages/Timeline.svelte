@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { pickCamera, selectedCamera } from '../lib/cameras';
   import { localDate, pad2 } from '../lib/format';
   import { api } from '../lib/api';
   import { analysedSeconds, analysedStills, eventLabel, eventsInMinute, isRecovered, marksByMinute, primaryEvent, RECOVERED_NOTE, secondKinds, secondRecovered, stepMinute } from '../lib/timeline';
@@ -74,7 +75,8 @@
     message = '';
     try {
       const cams = await api<Array<{ id: string }>>('GET', '/api/cameras');
-      camId = cams[0]?.id ?? '';
+      // The camera picked in the top bar (several cameras), else the first.
+      camId = pickCamera(cams.map((c) => c.id), $selectedCamera) ?? '';
       if (!camId) return;
       const from = new Date(`${day}T00:00:00`).getTime();
       const to = from + 86_400_000 - 1;
@@ -90,6 +92,7 @@
   }
   $effect(() => {
     void day;
+    void $selectedCamera;
     open = null;
     still = null;
     void load();
