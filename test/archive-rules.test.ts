@@ -11,7 +11,7 @@ describe('names', () => {
     expect(checkName('Füchse 🦊 / Garten')).toBe('Füchse 🦊 / Garten');
     expect(checkName('x'.repeat(120))).toHaveLength(120);
   });
-  it.each([[''], ['   '], ['x'.repeat(121)], ['a\nb'], ['a\u0000b'], ['tab\there'], [42], [null]])('refuses %j', (v) => {
+  it.each([[''], ['   '], ['x'.repeat(121)], ['a\nb'], ['a\u0000b'], ['tab\there'], ['evil\u202Egnp.exe'], ['zero\u200Bwidth'], [42], [null]])('refuses %j', (v) => {
     expect(() => checkName(v)).toThrow(RuleError);
   });
 });
@@ -61,6 +61,7 @@ describe('file names for downloads', () => {
     expect(safeFileName('a/b\\c*d?e"f<g>h|i')).toBe('a_b_c_d_e_f_g_h_i');
     expect(safeFileName('Füchse 🦊')).toBe('Füchse 🦊');
     expect(safeFileName('..')).toBe('clip');
+    expect(safeFileName('a\u202Ebc\u200B')).toBe('abc'); // format characters (RTL override) go
     expect(safeFileName('  . hidden .  ')).toBe('hidden');
     expect(safeFileName('x'.repeat(300)).length).toBe(100);
   });

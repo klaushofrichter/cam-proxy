@@ -46,7 +46,8 @@ Design and rulings: [the spec](superpowers/specs/2026-10-05-archive-design.md).
   URLs (a `?token=` answers 400 `token_in_url`).
 - **Who:** cams sends `X-On-Behalf-Of: <the signed-in person's email>` on
   every write (POST, PATCH, DELETE). It goes into the audit record as
-  `onBehalfOf` (as cams asserts it; not verified by the proxy). 1 to 254
+  `onBehalfOf`: attribution as asserted by the holder of the client token,
+  not verified by the proxy. 1 to 254
   printable ASCII characters, no spaces; anything else is ignored (not an
   error).
 - Ids are integers (`id`), never reused (SQLite AUTOINCREMENT). No path ever
@@ -63,8 +64,9 @@ Design and rulings: [the spec](superpowers/specs/2026-10-05-archive-design.md).
     cached while the camera is offline), 503 `recordings_unavailable`
     `{reason: "busy"}` with `Retry-After` (the camera's Search is busy) or 502
     `recordings_unavailable` `{reason: "search_failed"}`
-  - 507 `insufficient_space` `{needed, free, minFreeBytes}` (bytes): the clip
-    would not fit while keeping `storage.minFreeBytes` free
+  - 507 `insufficient_space` `{needed, free, minFreeBytes, inFlight}` (bytes):
+    the clip would not fit, beside what other archive jobs in flight still
+    write (`inFlight`), while keeping `storage.minFreeBytes` free
 - Rate limits per client and minute: POST archive 10, ZIP 4; the rest share
   the general limit (6000/min); video and thumbnail files share the image
   limit (1200/min).
@@ -111,7 +113,8 @@ Design and rulings: [the spec](superpowers/specs/2026-10-05-archive-design.md).
 
 #### Names and labels
 
-- `name`: 1 to 120 characters after trimming, no control characters.
+- `name`: 1 to 120 characters after trimming, no control characters and no
+  invisible format characters (such as U+202E or zero-width ones).
   Default `"<YYYY-MM-DD> <HH:MM:SS> <camera name>"` of `recordedFrom` in the
   camera's local time (its time settings and DST rule; UTC when the camera
   was never read).
@@ -213,7 +216,7 @@ case-insensitive; items without labels last in both orders). Ties: by
 - `DELETE /api/archive/{id}` → 204
 - `POST /api/archive/delete` body `{"ids":[1,2,3]}` (1 to 500 ids) → 200
   `{"deleted":[1,3], "notFound":[2]}`
-- `GET /api/archive/{id}/video` → `video/mp4`, Range requests (206, 416),
+- `GET /api/archive/{id}/video` → `video/mp4`, single Range requests (206, 416; a multi-range request gets the whole file, 200),
   `ETag`, `Cache-Control: private, max-age=604800, immutable`.
   `?download=1` adds `Content-Disposition: attachment` with the name
   (`<name>.mp4`, unsafe characters replaced; RFC 5987 `filename*`).
@@ -247,7 +250,7 @@ deleted later by retention stay in it.
 - Per clip three entries, stored (no compression), UTF-8 names:
   `<name> (<id>).mp4`, `<name> (<id>).json` (the metadata as in §4),
   `<name> (<id>).jpg` (when it has a thumbnail). Names have `/ \ : * ? " < > |`
-  and control characters replaced.
+  and control characters replaced, format characters dropped.
 - ZIP64 when the archive or an entry passes 4 GB (any unzip from the last
   15 years reads it; macOS Archive Utility and Windows Explorer do).
 - A clip deleted while the ZIP streams cuts the download (the browser shows

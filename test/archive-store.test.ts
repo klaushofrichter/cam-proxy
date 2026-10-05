@@ -1,12 +1,12 @@
 // The Archive's files (spec 2026-10-05-archive-design §1.2–1.4): the path
 // guard, the commit (row and folder together), delete and the start-up sweep.
 import { describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, unlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { openCatalog } from '../src/catalog/db';
 import { archiveById, type ArchiveInput } from '../src/catalog/archive';
-import { ArchivePathError, archivePath } from '../src/archive/paths';
+import { ArchivePathError, archivePath, inside } from '../src/archive/paths';
 import { ArchiveStore } from '../src/archive/store';
 
 const setup = () => {
@@ -25,6 +25,14 @@ const staged = (store: ArchiveStore) => {
   writeFileSync(join(d, 'clip.mp4'), 'mp4');
   return d;
 };
+
+describe('inside', () => {
+  it('a path that leaves the archive folder throws; one inside passes', () => {
+    expect(() => inside('/data', '/data/archive/../x')).toThrow(ArchivePathError);
+    expect(() => inside('/data', '/data/archive')).toThrow(ArchivePathError); // the root itself is no file of it
+    expect(inside('/data', '/data/archive/cam1/1')).toBe(resolve('/data/archive/cam1/1'));
+  });
+});
 
 describe('archivePath', () => {
   it('a file of a clip, inside <dataDir>/archive', () => {
@@ -109,5 +117,18 @@ describe('ArchiveStore', () => {
     const row = store.commit(staged(store), input(), () => '{}');
     catalog.db.prepare("UPDATE archive SET cam = '../x' WHERE id = ?").run(row.id);
     expect(() => store.file(archiveById(catalog, row.id)!, 'clip.mp4')).toThrow(ArchivePathError);
+  });
+
+  it('sweep never follows a symlink out of the archive folder', () => {
+    const { dir, store } = setup();
+    const outside = mkdtempSync(join(tmpdir(), 'camproxy-outside-'));
+    mkdirSync(join(outside, '3'));
+    writeFileSync(join(outside, '3', 'keep.txt'), 'x');
+    mkdirSync(join(dir, 'archive'), { recursive: true });
+    symlinkSync(outside, join(dir, 'archive', 'cam9')); // a camera folder that is a link
+    mkdirSync(join(dir, 'archive', 'cam1'), { recursive: true });
+    symlinkSync(join(outside, '3'), join(dir, 'archive', 'cam1', '5')); // an id folder that is a link
+    store.sweep();
+    expect(existsSync(join(outside, '3', 'keep.txt'))).toBe(true);
   });
 });

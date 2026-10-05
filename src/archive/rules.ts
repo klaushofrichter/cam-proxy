@@ -21,6 +21,9 @@ export function checkName(v: unknown): string {
   const s = v.trim();
   if (!s) throw new RuleError('name is empty');
   if (/\p{Cc}/u.test(s)) throw new RuleError('name has control characters');
+  // Format characters (U+202E right-to-left override, zero-width ones) can
+  // make a name read as another (review of #159).
+  if (/\p{Cf}/u.test(s)) throw new RuleError('name has invisible formatting characters');
   if ([...s].length > NAME_MAX) throw new RuleError(`name is at most ${NAME_MAX} characters`);
   return s;
 }
@@ -53,14 +56,14 @@ const pad = (n: number) => String(n).padStart(2, '0');
 export function defaultName(ts: number, cameraName: string, t: TimeInfo | undefined): string {
   const d = new Date(ts + localOffsetMinutes(ts, t) * 60_000);
   const when = `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
-  return [...`${when} ${cameraName}`.replace(/\p{Cc}/gu, ' ')].slice(0, NAME_MAX).join('').trim();
+  return [...`${when} ${cameraName}`.replace(/\p{Cc}/gu, ' ').replace(/\p{Cf}/gu, '')].slice(0, NAME_MAX).join('').trim();
 }
 
 // A name as a file name: colons become dashes (times), the characters file
 // systems refuse become "_", no leading or trailing dots or spaces, at most
 // 100 characters; "clip" when nothing is left.
 export function safeFileName(name: string): string {
-  const s = name.replace(/:/g, '-').replace(/[/\\*?"<>|\p{Cc}]/gu, '_').replace(/^[\s.]+|[\s.]+$/g, '');
+  const s = name.replace(/\p{Cf}/gu, '').replace(/:/g, '-').replace(/[/\\*?"<>|\p{Cc}]/gu, '_').replace(/^[\s.]+|[\s.]+$/g, '');
   const cut = [...s].slice(0, 100).join('').replace(/[\s.]+$/, '');
   return cut || 'clip';
 }

@@ -1,5 +1,5 @@
 import { randomBytes } from 'crypto';
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { Catalog } from '../catalog/db';
 import { allArchive, archiveById, deleteArchive, insertArchive, type ArchiveInput, type ArchiveRow } from '../catalog/archive';
@@ -94,9 +94,10 @@ export class ArchiveStore {
     for (const cam of readdirSync(root)) {
       if (!CAM_ID.test(cam)) continue;
       const camDir = join(root, cam);
-      if (!statSync(camDir).isDirectory()) continue;
+      if (!lstatSync(camDir).isDirectory()) continue; // a symlink is never followed
       for (const id of readdirSync(camDir)) {
         if (!/^[1-9]\d{0,15}$/.test(id) || known.has(`${cam}/${id}`)) continue;
+        if (lstatSync(join(camDir, id)).isSymbolicLink()) continue; // not ours: left alone
         rmSync(archivePath(this.d.dataDir, cam, Number(id)), { recursive: true, force: true });
         orphans++;
       }

@@ -122,6 +122,9 @@ describe('one item', () => {
     expect((part.body as Buffer).equals(file.subarray(10, 110))).toBe(true);
     const tail = await binary(get(`/api/archive/${ids[1]}/video`).set('Range', 'bytes=-50'));
     expect((tail.body as Buffer).equals(file.subarray(file.length - 50))).toBe(true);
+    const multi = await binary(get(`/api/archive/${ids[1]}/video`).set('Range', 'bytes=0-1,5-6'));
+    expect(multi.status).toBe(200); // several ranges: the whole file (docs/archive.md)
+    expect((multi.body as Buffer).length).toBe(file.length);
     const past = await get(`/api/archive/${ids[1]}/video`).set('Range', `bytes=${file.length + 10}-`);
     expect(past.status).toBe(416);
     expect(past.headers['content-range']).toBe(`bytes */${file.length}`);
