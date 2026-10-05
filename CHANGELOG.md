@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.10.05.4
+
 - Audit: every automatic Vision analysis of an event that made a call is an `event-analysis` record (user `system`; camera, event, still, `ok` or `failed`, calls, time taken, categories found). Skips (no still, the limits, a pause) write none.
 - Audit page: the action filter is a multi-select (checkboxes in a drop-down, keyboard accessible); "All actions" selects all, and again none ("No actions selected"). It lists every known action (also `event-analysis`, `camera-address` and the Archive's). `GET /control/audit?action=a,b` refuses an unknown action (400).
 - Audit page: the retention line says the real numbers, "Kept for 90 days (Settings) · 1,234 events in that time." (`GET /control/audit/summary`).
