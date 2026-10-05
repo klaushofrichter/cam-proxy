@@ -1,5 +1,5 @@
 import { writable } from 'svelte/store';
-import type { Status } from './state';
+import type { Status } from './status-types';
 import type { RecordingsStatus } from './recordings';
 
 export interface CameraBlock { id: string; camera: Status['camera']; intake: Status['intake']; stream: Status['stream']; ftp: Status['ftp']; recordings?: RecordingsStatus }

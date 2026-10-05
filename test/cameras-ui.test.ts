@@ -18,7 +18,7 @@ describe('camera picker (spec §16 P1)', () => {
   });
   it("the selected camera's block; an older proxy without cameras: the top level", () => {
     expect(blockOf(status(['cam3', 'cam4']), 'cam4')?.camera.online).toBe(false);
-    const old = { ...status(['cam1']), cameras: undefined } as never;
+    const old = { ...(status(['cam1']) as object), cameras: undefined } as never;
     expect(blockOf(old, null)?.id).toBe('');
     expect(blockOf(old, null)?.camera.name).toBe('cam1');
   });
