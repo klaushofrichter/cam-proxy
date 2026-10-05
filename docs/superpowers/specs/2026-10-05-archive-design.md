@@ -212,8 +212,11 @@ archive time. `eventKinds` and `found` on the item come from it.
 ### 4.1 List and items
 
 `GET /api/archive` (filters: camera, labels (all of them), text, recorded
-window, quality; sort created/recorded/name/size/expires; paging by
-limit ≤ 500 and offset). `GET /api/archive/{id}`, `/metadata`.
+window, quality; sort by created, recorded, name, size, expires, camera,
+quality (by resolution), duration or labels (the first label
+alphabetically), ties by recorded time descending, then id (Klaus,
+2026-10-05: sortable by date, title, quality, size, camera and the other
+data); paging by limit ≤ 500 and offset). `GET /api/archive/{id}`, `/metadata`.
 
 ### 4.2 Video
 

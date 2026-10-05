@@ -46,7 +46,7 @@ describe('migration 7: still_checks', () => {
     raw.close();
 
     const c = openCatalog(path);
-    expect(c.schemaVersion()).toBe(7);
+    expect(c.schemaVersion()).toBe(8);
     expect(listEvents(c, { cam: 'cam1' }).map((e) => e.source).sort()).toEqual(['onvif', 'poll', 'recovered']);
     expect([...analysisImages(c)]).toEqual(['/data/analytics/cam1/1.jpg']);
     expect(usageBetween(c, 'google-vision', '2026-10-01', '2026-10-31')).toBe(14);
@@ -62,11 +62,11 @@ describe('migration 7: still_checks', () => {
     expect(() => insertCheck(c, input(1001000))).toThrow(/UNIQUE/);
     c.close();
     // Opening again runs nothing more.
-    expect(openCatalog(path).schemaVersion()).toBe(7);
+    expect(openCatalog(path).schemaVersion()).toBe(8);
   });
 
-  it('a fresh catalog is at version 7', () => {
-    expect(fresh().schemaVersion()).toBe(7);
+  it('a fresh catalog is at version 8 (the archive, migration 8)', () => {
+    expect(fresh().schemaVersion()).toBe(8);
   });
 });
 

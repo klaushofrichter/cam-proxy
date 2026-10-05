@@ -137,4 +137,35 @@ export const MIGRATIONS: string[] = [
   );
   CREATE INDEX still_checks_cam_ts ON still_checks (cam, still_ts);
   `,
+  // 8: the Archive (spec 2026-10-05-archive-design §1.1): clips kept apart
+  // from retention, one row per clip, its files in archive/<cam>/<id>/.
+  // AUTOINCREMENT: an id is never reused (cams may hold an old one).
+  // expires_at (created_at + retention_days; NULL = forever) is stored so
+  // the daily cleanup is one indexed query. metadata: the snapshot taken
+  // when the clip was archived (events, analyses, still checks).
+  `
+  CREATE TABLE archive (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cam TEXT NOT NULL,
+    name TEXT NOT NULL,
+    labels TEXT NOT NULL,
+    retention_days INTEGER,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER,
+    recorded_from INTEGER NOT NULL,
+    recorded_to INTEGER NOT NULL,
+    quality TEXT NOT NULL,
+    original INTEGER NOT NULL,
+    duration_s REAL NOT NULL,
+    bytes INTEGER NOT NULL,
+    files TEXT NOT NULL,
+    source TEXT NOT NULL,
+    thumb_from TEXT NOT NULL,
+    thumb_at INTEGER,
+    created_by TEXT NOT NULL,
+    metadata TEXT NOT NULL
+  );
+  CREATE INDEX archive_created ON archive (created_at);
+  CREATE INDEX archive_expires ON archive (expires_at);
+  `,
 ];
