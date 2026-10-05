@@ -597,7 +597,7 @@ paths:
       description: >
         The camera actions of POST /control/actions/{name} (camera-test,
         onvif-resubscribe, camera-ftp-setup, camera-ftp-test, camera-ftp-off,
-        restart (every camera side in this release), camera-reboot,
+        restart (that camera's side only; the old route without a camera restarts every camera side and applies pending restart settings), camera-reboot,
         camera-powercycle, camera-poe-on, poe-switch-read, inventory,
         inventory-repair, inventory-cancel) on the named camera, with the same
         bodies and answers. The old route takes ?cam=<id> as well; without it

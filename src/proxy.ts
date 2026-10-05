@@ -554,6 +554,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       intake: () => cams.first().intake.state(),
       resubscribe: (cam) => worker(cam).intake.resubscribe(),
       restart: () => proxy.restart(),
+      restartCamera: (cam) => worker(cam).restart(),
       cameraReboot: (who, cam) => worker(cam).reboot.request(who),
       poeSwitch: { notConfigured: (cam) => worker(cam).poeSwitch.notConfigured(), read: (cam) => worker(cam).poeSwitch.read(), poeOn: (cam) => worker(cam).poeSwitch.poeOn(), info: (cam) => worker(cam).poeSwitchInfo() },
       cameraPowerCycle: (who, cam) => {

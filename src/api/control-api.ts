@@ -79,7 +79,8 @@ interface ControlDeps {
   checkCamera: (cam: string) => Promise<CameraState>;
   intake: () => IntakeState;
   resubscribe: (cam: string) => void;
-  restart: () => Promise<void>; // the camera side
+  restart: () => Promise<void>; // every camera side, with the pending restart settings
+  restartCamera: (cam: string) => Promise<void>; // one camera's side (its client, poller, events, stills)
   cameraReboot: (who: RebootRequester, cam: string) => Promise<RebootAnswer>;
   // The camera's PoE switch (#85): why it can't be used (or null), a read, a power-cycle.
   poeSwitch: { notConfigured: (cam: string) => string | null; read: (cam: string) => Promise<PortReading>; poeOn: (cam: string) => Promise<PoeOnResult>; info: (cam: string) => { model: string; host: string; port: number } };
@@ -529,8 +530,10 @@ export function controlApi(d: ControlDeps): express.Router {
       case 'camera-ftp-off':
         return void (await cameraCall(res, async () => ({ ftp: await d.cameraFtp.off(cam) })));
       // The camera side: reconnect and apply restart settings; the process runs on.
+      // A named camera (its route or ?cam=): that camera's side only; the old
+      // route without a camera: every camera side and the settings.
       case 'restart':
-        d.restart().catch((err: Error) => logger.error({ err: err.message }, 'restart_failed'));
+        (routed || typeof req.query.cam === 'string' ? d.restartCamera(cam) : d.restart()).catch((err: Error) => logger.error({ err: err.message }, 'restart_failed'));
         return void res.status(202).end();
       // Reboot the camera (#83): 202 {confirmed}, 429 within the cooldown,
       // 502 when the request never reached the camera.

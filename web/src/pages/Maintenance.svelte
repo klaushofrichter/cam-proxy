@@ -212,7 +212,7 @@
 <section>
   <h2>Maintenance</h2>
   {#if multi}
-    <div class="card" data-testid="multi-camera-note"><p>Several cameras: the camera actions act on <strong>{$selectedCamera ?? 'the first camera'}</strong>, the camera picked in the top bar (restart restarts every camera side); per-camera settings come with the next release.</p></div>
+    <div class="card" data-testid="multi-camera-note"><p>Several cameras: the camera actions act on <strong>{$selectedCamera ?? 'the first camera'}</strong>, the camera picked in the top bar; per-camera settings come with the next release.</p></div>
   {/if}
   <div class="card">
     <div class="buttons">

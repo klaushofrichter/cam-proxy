@@ -264,7 +264,8 @@ the new form:
   /control/cameras/<id>/actions/<name>` or `?cam=<id>` on
   `/control/actions/<name>`, and `PUT /control/cameras/<id>/name`; without
   one, a proxy with several cameras answers `400 camera_required` (one camera:
-  as before). `restart` restarts every camera side; host actions have no
+  as before). `restart` with a camera restarts that camera's side (without one: every
+  camera side, applying pending restart settings); host actions have no
   camera route. The admin UI sends them for the camera picked in the top bar.
 - **Not yet (phase 2):** per-camera settings in the admin UI, FTP for more
   than one camera (a config error until per-camera FTP users exist), one shared go2rtc

@@ -9,7 +9,7 @@
 - Health summary: `cameras[]` and one aggregated item per camera kind; schema 1, the top level is the first camera.
 - Audit records name their camera (`labels.camera`) only when they concern one.
 - `CAMPROXY_CAMERA_PASSWORD_<ID>` for a camera's own password.
-- Admin UI: a camera picker when the proxy has several cameras; the camera actions act on the picked camera. `GET /control/cameras`, `GET /control/cameras/:cam/status`, `POST /control/cameras/:cam/actions/:name` (or `?cam=<id>` on `/control/actions/:name`) and `PUT /control/cameras/:cam/name`; without a camera, a multi-camera proxy answers `400 camera_required`.
+- Admin UI: a camera picker when the proxy has several cameras; the camera actions act on the picked camera. `GET /control/cameras`, `GET /control/cameras/:cam/status`, `POST /control/cameras/:cam/actions/:name` (or `?cam=<id>` on `/control/actions/:name`) and `PUT /control/cameras/:cam/name`; without a camera, a multi-camera proxy answers `400 camera_required`; `restart` with a camera restarts that camera only.
 
 ## v2026.10.05.5
 

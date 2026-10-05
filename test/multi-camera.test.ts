@@ -135,6 +135,18 @@ describe('one proxy, three cameras (spec §15)', () => {
     expect(rec.labels).toEqual({ camera: 'cam4' });
   }, 60_000);
 
+  // Review: a camera's restart restarts that camera only, audited with it.
+  it('restart on a named camera restarts that camera only', async () => {
+    const [s3, s4] = [p.proxy.cameras.get('cam3')!.status, p.proxy.cameras.get('cam4')!.status];
+    const r = await request(p.base).post('/control/cameras/cam4/actions/restart').set(admin());
+    expect(r.status).toBe(202);
+    await until(() => p.proxy.cameras.get('cam4')!.status !== s4 && p.proxy.cameras.get('cam4')!.phase() === 'ready', 20_000);
+    expect(p.proxy.cameras.get('cam3')!.status).toBe(s3);
+    await until(() => !!p.proxy.audit.find((x) => x.event.action === 'control-action' && (x.cam_proxy as { action?: string }).action === 'restart'));
+    expect(p.proxy.audit.find((x) => x.event.action === 'control-action' && (x.cam_proxy as { action?: string }).action === 'restart')!.labels).toEqual({ camera: 'cam4' });
+    await until(() => p.proxy.cameras.get('cam4')!.status.state().online && p.proxy.cameras.get('cam4')!.intake.state().onvif === 'subscribed', 30_000);
+  }, 60_000);
+
   it('the old camera actions answer camera_required; host actions work', async () => {
     // The camera's name is a camera action too (spec §6.3): never the first camera's by accident.
     const n = await request(p.base).put('/control/camera/name').set(admin()).send({ name: 'Renamed' });
