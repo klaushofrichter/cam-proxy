@@ -2,7 +2,8 @@
 
 Status: draft for Klaus's review, 2026-10-05. Design only; nothing is built.
 Klaus's decisions of 2026-10-05 (below, "Decisions") are binding; everything
-else is a proposal, and the few points that need Klaus are in §17.
+else is a proposal. Klaus answered the open questions the same day
+("Answers" below); what is still open is in §17.
 
 Repos touched by the later plans: cam-proxy (most of it), cams (§12), cam-sim
 (one measured command, §14), kube-setup (a request, §13). The Pi and
@@ -38,6 +39,28 @@ cam-proxy-pi-display need no change (§11).
 8. **TLS without DNS:** a per-host **site CA** (§10), refined and confirmed
    below.
 9. Size the Ryzen host (§9).
+
+## Answers (Klaus, 2026-10-05, later the same day)
+
+1. **cam1 stays on the Pi**, independent of the new host: no shared CA and no
+   dependency either way. The Pi keeps its Let's Encrypt certificate through
+   the cluster CronJob `cam1-cert-push` for now. "The Pi gets its own site
+   CA" is an option for later, not planned (§11).
+2. **The site CA is per host, inside cam-proxy**, not a LAN-wide service
+   (§10.1).
+3. **Camera subnet `192.168.60.0/24`**, behind the host: confirmed.
+4. **The camera network gets its own new PoE switch** (model not known yet).
+   The GPS-208 stays with the Pi. There is no VLAN option. Switch control
+   stays pluggable: one driver per model; the GPS-208 driver
+   (`sscpoe-web`) exists, and the new model's driver is a later input (§8.4).
+5. **Host OS: Linux, installed by us.** Debian 13 is recommended; Ubuntu
+   Server 24.04 LTS is an acceptable alternative (§13.0).
+6. **The PC arrives in about two weeks.** The multi-camera runtime, the
+   host-wide services and the cams mapping are built and tested with several
+   cam-sim instances before it arrives. Host setup and TLS come after, on the
+   device (§15).
+7. **Router:** Klaus can run tests now. A pre-arrival test uses his Mac as a
+   stand-in for the host (§13.3).
 
 ## 1. Goals and non-goals
 
@@ -233,7 +256,7 @@ certificate scheduler, ONVIF discovery ("Find camera").
   closed; anything else is host-wide (retention, storage, quality and sizes,
   go2rtc, sse, recordings, composition, Vision, health, host, archive, tls).
 - **Host-wide `poeSwitch`** (model, host, ports, offSeconds): one switch per
-  host. A second switch is a later extension (`poeSwitches: {id: …}` and
+  host. `model` picks the driver (§8.4). A second switch is a later extension (`poeSwitches: {id: …}` and
   `cameras[].poeSwitch.switch`); not built.
 - `camera` and `cameras` together are a config error. Ids must be unique
   (`^[a-z0-9][a-z0-9-]{0,31}$`, as today).
@@ -460,6 +483,15 @@ Suggested cap on the mini PC: 8192 MB (the Pi keeps 2048).
 
 ### 8.4 PoE switch
 
+- **The switch is new.** The mini PC's cameras hang on their own new PoE
+  switch, model not known yet; the GPS-208 stays with the Pi. Switch
+  control is a **driver per model** behind one interface (log in, read
+  ports, set one port's PoE, log out; whether it allows only one session,
+  as the GPS-208 does). `sscpoe-web` (GPS-208 and kin) is the driver that
+  exists today. The new switch's driver is a later input: it is measured
+  once the model is known, the way the GPS-208 was (`poe-switch-gps208.md`).
+  Until then `poeSwitch.model: none` (no power-cycle) is a valid setup, and
+  P1/P2 test the queue against a fake driver.
 - One `PoeSwitch` controller per host. Requests (read, power-cycle, PoE on)
   go through a **FIFO queue**: a second camera's power-cycle waits for the
   first (bounded at `offSeconds + 60 s`; beyond that `503 switch_busy` as
@@ -519,15 +551,22 @@ about 0.5–1 MB per 5–10 s (the 2026-10-02 Baichuan measurements).
 - **Catalog:** one writer; ~4 rows/s of stream log and events at most; WAL
   is fine.
 
-These are estimates; P2 measures them on the host with 4 cam-sims and, once
-cameras are there, the real ones (the Status page shows load and memory with
+These are estimates. P4 measures them on the host, first with 4 cam-sims
+and then with the real cameras (the Status page shows load and memory with
 `host.stats: on`).
 
 ## 10. TLS without DNS: the site CA
 
 ### 10.1 Recommendation (final)
 
-Adopt the coordinator's proposal, with four refinements:
+Adopt the coordinator's proposal, with four refinements.
+
+**Scope (Klaus):** the site CA is **per host and lives inside cam-proxy**.
+It is not a LAN-wide service: no other machine issues or holds it, and it
+signs only that host's proxy and the cameras behind it. Two hosts have two
+unrelated CAs. The Pi doesn't share the mini PC's CA (it keeps Let's
+Encrypt for now, §11).
+
 
 1. **A per-host site CA, name-constrained.** The proxy generates on first
    start (when `tls.site` is set) a root CA, RSA 3072, valid 10 years,
@@ -554,7 +593,8 @@ Adopt the coordinator's proposal, with four refinements:
    with a clear; log out; success only by the served fingerprint). Schedule:
    on adding a camera, when the served fingerprint is not the current leaf,
    and renewal 30 days before expiry, at 04:00 camera time, one camera at a
-   time, never during an open event. This retires `cam1-cert-push`.
+   time, never during an open event. On the mini PC no CronJob is ever
+   needed; `cam1-cert-push` stays for the Pi until the later option of §11.
 4. **cams pins one thing per proxy: the CA's SHA-256 fingerprint**, and
    learns everything else over the pinned channel. cams fetches the CA
    certificate from `GET /tls/ca.pem` (public, no token), accepts it only if
@@ -603,8 +643,8 @@ keeps `from-proxy` valid with a site-CA pin and says so in cams's docs.
   loopback by firewall on the mini PC.
 - The proxy's own camera client verifies each camera against the site CA
   once its leaf is served (replaces `camera.tlsName` for those cameras; a
-  set `tlsName` still means public-CA verification, e.g. cam1 before its
-  switch-over).
+  set `tlsName` still means public-CA verification, e.g. cam1 on the Pi
+  with its Let's Encrypt certificate).
 - `GET /api/cameras` → `tls: {mode: "site-ca" | "pinned" | "public" |
   "none", servername, fingerprint, notAfter, lastPush: {at, outcome}}`.
 - `GET /tls/ca.pem` (public; mounted before the admin UI's catch-all route,
@@ -615,10 +655,10 @@ keeps `from-proxy` valid with a site-CA pin and says so in cams's docs.
 - FTPS: the FTP server uses the proxy's leaf too (today a self-signed one per
   process, `side.ts:22-27`; the camera doesn't verify it either way).
 
-### 10.5 Health and alerting (replacing the Grafana alerts)
+### 10.5 Health and alerting
 
-The `cam1-cert-push` alerts (push stale, < 14 days) move into the proxy: the
-health item `certificates` is a problem when any served camera certificate or
+On a site-CA host, the proxy itself checks what the `cam1-cert-push` alerts
+(push stale, < 14 days) check for the Pi: the health item `certificates` is a problem when any served camera certificate or
 the proxy's own expires within 14 days, or the last push of a camera failed.
 It shows on the Status page and on the e-paper display like the other items.
 Metrics: `camproxy_cert_not_after_seconds{cam}` and
@@ -654,7 +694,7 @@ Metrics: `camproxy_cert_not_after_seconds{cam}` and
 | **Let's Encrypt via HTTP-01 (today)** | Needs the cluster to answer the challenge: violates decision 7. |
 | **Self-signed pinning only** | Works with no CA, but every camera and the proxy need their own pin in cams, changed on every reset; browsers warn forever; nothing renews. Kept as the per-camera fallback. |
 | **Plain HTTP on the camera network** | The camera network is isolated, but cams reaches the cameras across the LAN and the router (the Login body carries the cams user's password, FLV carries the token), so it would put credentials on the LAN in clear. The proxy-to-camera hop could be HTTP, but the site CA makes HTTPS free there too. |
-| **One CA for all hosts (held by Klaus's Mac or the cluster)** | One pin in cams instead of one per proxy, but issuing needs that machine (or the cluster) to be there: violates decision 7 or adds a manual step per renewal. Per-host CAs are independent and cams already has a per-proxy object to put the pin in. |
+| **One CA for all hosts / a LAN-wide CA service (held by Klaus's Mac or the cluster)** | One pin in cams instead of one per proxy, but issuing needs that machine (or the cluster) to be there: violates decision 7 or adds a manual step per renewal, and it would tie the hosts together. Klaus ruled it out: per host, inside cam-proxy. |
 
 ## 11. The Pi (one camera) stays as it is
 
@@ -666,11 +706,18 @@ Metrics: `camproxy_cert_not_after_seconds{cam}` and
 - `/api/local/health` keeps schema 1 and every field the display reads (§6.5).
 - `GET /api/cameras` and SSE answer as before plus new fields; cams (on the
   Pi and in the cluster) keeps working before its own update.
-- Optional, P3: the Pi becomes its own site (`tls.site: "pi"`), its proxy
-  pushes cam1's certificate (SANs `cam1.pi.internal`, `192.168.1.164`), cams
-  pins the Pi's CA and sets `tlsServername: "cam1.pi.internal"`, and kube-setup
-  retires `cam1-cert-push`, its Secrets, the `cam1` Certificate and its
-  alerts (Klaus approves the switch-over, §17).
+- **Independent of the mini PC** (Klaus): no shared CA, no dependency either
+  way. cam1 keeps its Let's Encrypt certificate for `cam1.skylar.technology`
+  through the cluster CronJob `cam1-cert-push`; `tls.site` stays unset on
+  the Pi, so it serves HTTP on 8480 exactly as today.
+- **Option for later (not planned):** the Pi becomes its own site
+  (`tls.site: "pi"`, its own CA). Its proxy would then push cam1's
+  certificate (SANs `cam1.pi.internal`, `192.168.1.164`), cams would pin the
+  Pi's CA and set `tlsServername: "cam1.pi.internal"`, and kube-setup would
+  retire `cam1-cert-push`, its Secrets, the `cam1` Certificate and its
+  alerts. That would remove the **last camera dependency on the cluster**
+  (decision 7). It needs nothing beyond what the mini PC gets, so it can
+  be decided any time.
 
 ## 12. cams
 
@@ -729,9 +776,10 @@ notifications are unchanged (they already take several sources).
   proxy is away.
 - cams→proxy today: the Pi is reached over plain `http://192.168.1.220:8480`
   (token in clear on the LAN); the cluster proxy through the ingress over
-  HTTPS. With P3 + P4, LAN proxies are reached over `https://…:8443` with the
-  pin; the plain URL stays valid (cams on the same host keeps
-  `http://127.0.0.1:8480`).
+  HTTPS. With P5, a site-CA proxy (the mini PC) is reached over `https://…:8443` with the
+  pin. The plain URL stays valid: the Pi keeps `http://192.168.1.220:8480`
+  (it has no site CA, §11), and cams on the same host keeps
+  `http://127.0.0.1:8480`.
 
 ### 12.4 Archive and `via`
 
@@ -750,20 +798,36 @@ top-bar merge. cams needs a relay route for `latest.jpg` that passes ETag and
 
 ## 13. Network and firewall (the mini PC)
 
+### 13.0 Operating system
+
+- **Debian 13 ("trixie"), installed by us (recommended).** It is the same
+  family as Raspberry Pi OS on the Pi, so the packages, paths, systemd units
+  and the setup guide's habits carry over. nftables is Debian's default
+  firewall, and dnsmasq and chrony are stock packages.
+- **Docker from Docker's own apt repository** (not Debian's `docker.io`),
+  with `"iptables": false, "ip6tables": false` in `/etc/docker/daemon.json`
+  (§13.2). Compose as on the Pi: `/srv/cam-proxy` with the same layout.
+- **Ubuntu Server 24.04 LTS is an acceptable alternative.** Same tools
+  (nftables, dnsmasq, chrony, Docker's apt repository). Netplan replaces
+  `/etc/network/interfaces`, and systemd-resolved must be kept off the
+  camera side.
+- A minimal install: no desktop, SSH with key auth, unattended security
+  updates.
+
 ### 13.1 Addresses
 
 - LAN side `enp1s0`: an address from the router's DHCP (the router keeps an
   address per MAC; no reservation needed), e.g. 192.168.1.230. The router's
   static route points at it.
-- Camera side `enp2s0`: static `192.168.60.1/24`. **The subnet must not
-  overlap the k3s pod and service CIDRs** (k3s defaults 10.42.0.0/16 and
-  10.43.0.0/16; check kube-setup) or the LAN; 192.168.60.0/24 is the
-  proposal.
-- Fixed leases: switch management `.2`, cameras `.11`–`.29` (cam3 → `.13`
+- Camera side `enp2s0`: static `192.168.60.1/24`. **Camera subnet
+  `192.168.60.0/24`, confirmed by Klaus**, behind the host. It doesn't
+  overlap the LAN or the k3s defaults (10.42.0.0/16 pods, 10.43.0.0/16
+  services); P4 checks this against kube-setup's actual CIDRs.
+- Fixed leases: the new PoE switch's management address `.2`, cameras `.11`–`.29` (cam3 → `.13`
   etc.), a small dynamic pool `.100`–`.149` for a new device until it gets
   its lease.
 
-### 13.2 The sketch (prose; the setup guide in P5 has the files)
+### 13.2 The sketch (prose; the setup guide written in P4 has the files)
 
 - **sysctl:** `net.ipv4.ip_forward = 1`; no IPv6 forwarding and no router
   advertisements on the camera side (IPv4 only there).
@@ -834,7 +898,30 @@ firewall, not LAN to LAN, so this usually works. Whether the RT-AX86U
 forwards LAN to LAN through its hardware acceleration without dropping the
 one-sided flow is *to verify on the device*. The test below checks it.
 
-**Test procedure** (P5; run it before anything else depends on the route):
+**Pre-arrival test, with the Mac standing in for the host** (Klaus can run
+it now; the coordinator gives him the step-by-step separately). It checks
+the router half of the design (route entry, hairpin, LAN-to-LAN forwarding)
+before the PC exists:
+
+1. On the Mac: give it an address in the camera subnet without a second
+   network, e.g. an alias `192.168.60.13/32` on `lo0`. Then run a small
+   web server bound to that address, standing in for a camera's HTTPS port.
+   The macOS firewall must allow it.
+2. On the router: the static route `192.168.60.0/24` via **the Mac's** LAN
+   address (steps above).
+3. From another LAN client (a phone's browser, or a cluster node via the
+   kube-setup session): ping and curl `192.168.60.13`. The packets go to the
+   router, are hairpinned to the Mac, and the Mac answers straight back.
+   That is the same reply path the mini PC will use.
+4. Afterwards: remove the alias, stop the server, and delete the route or
+   leave it disabled (the mini PC's address will differ).
+
+Success means the RT-AX86U accepts the route and forwards LAN-to-LAN
+hairpin traffic. Forwarding on the host itself and the firewall are tested
+on the device (below).
+
+**Test procedure on the device** (after the PC arrives; run it before
+anything else depends on the route):
 
 1. **From a LAN client** (the Mac), with no route of its own:
    - `ping -c 3 192.168.60.13` (a camera)
@@ -933,7 +1020,7 @@ Alternatives if the router can't (ranked):
 - **Measure on the real camera first** (memory: the sim copies the real
   camera): `GetNtp`/`SetNtp` (whole object), and an import of a site-CA RSA
   2048 leaf. Both touch a camera setting; they run on a camera of the new
-  host when it arrives, or on cam1 with Klaus's approval. cam-sim then gets
+  host when it arrives (P4), never on cam1, which stays independent (§11). cam-sim then gets
   `GetNtp`/`SetNtp`.
 - **Network (manual, on the host, checklist in the guide):** from the Mac
   and from a cluster pod reach a camera's HTTPS; from the camera side no
@@ -942,36 +1029,45 @@ Alternatives if the router can't (ranked):
 
 ## 15. Phased delivery
 
+The PC arrives in about two weeks (Klaus, 2026-10-05). Everything that can be
+built and tested with several cam-sim instances comes first; the device work
+follows its arrival.
+
+**Before the hardware (cam-sim only):**
+
 | Phase | Repo | Content | Done when |
 |---|---|---|---|
 | **P1** config + runtime per camera | cam-proxy | `cameras[]` + legacy translation, keyed-collection schema, `CameraWorker`, `cameraParam` routing, `/api/cameras` list, health `cameras[]` with the compatible top level, audit/inventory camera labels, `analytics_usage` migration, admin UI camera picker (read-only status per camera), supervision | 3 cam-sims in tests; the one-camera suite and the display fixtures unchanged |
-| **P2** host-wide services | cam-proxy | one go2rtc with N streams, FTP user mapping, storage shares, Vision per key + per-camera cap, PoE queue, `composition.concurrent`, per-camera Settings/actions in the UI, control API camera routes, latest-still endpoints, metrics `cam` label | measured on the host with 4 cam-sims |
-| **P3** TLS / site CA | cam-proxy, cam-sim | CA + leaves, HTTPS listener, cert push and renewal, Certificates card, health item, `/tls/ca.pem`, NTP set (after measuring), cam-sim refusal fault + NTP | push verified on cam-sim and one real camera |
-| **P4** cams mapping | cams | proxy groups, one SSE per proxy, CA/leaf pinning, proxy `tlsServername`, fallback pins, fake proxy update; kube-setup request (egress, Secret) | cams shows the mini PC's cameras over the route with verified TLS |
-| **P5** host setup guide | cam-proxy | `docs/multi-camera-host.md`: OS, Docker config, nftables, dnsmasq, chrony, router route (+ the ranked alternatives), compose file, first start, pinning in cams, browser CA install, updates (pull + up -d like the Pi) | Klaus can rebuild the host from it |
+| **P2** host-wide services | cam-proxy | one go2rtc with N streams, FTP user mapping, storage shares, Vision per key + per-camera cap, PoE queue with the driver interface (fake driver in tests; `sscpoe-web` unchanged), `composition.concurrent`, per-camera Settings/actions in the UI, control API camera routes, latest-still endpoints, metrics `cam` label | 4 cam-sims on the Mac or a CI runner; the Pi runs the release unchanged |
+| **P3** cams mapping | cams | proxy groups, one SSE per proxy with fan-out, archive and SSE on one group object, fake proxy with several cameras, real-proxy e2e with a two-camera proxy, livestack multi-camera variant (cams → one cam-proxy → 3 cam-sims over HTTP) | cams shows several cameras of one proxy over one stream |
+| — router pre-test | (Klaus) | the Mac stand-in test of §13.3 | the RT-AX86U hairpins to the stand-in |
 
-P5 can start any time (the host's network doesn't depend on P1–P4). P3 must
-come before P4's pinning. Each phase is its own spec-reviewed plan and PR
-series; releases follow the usual rule (release when ready).
+**After the PC arrives (on the device):**
 
-### Migration (Klaus's choice, §17)
+| Phase | Repo | Content | Done when |
+|---|---|---|---|
+| **P4** host setup | cam-proxy (docs) | Debian 13 install, Docker from Docker's repository, nftables, dnsmasq, chrony, the router route and its on-device test (§13.3), compose; `docs/multi-camera-host.md` written as it is done (with the ranked fallbacks); measure the real cameras' `GetNtp`/`SetNtp` and certificate import; the new switch's model → its driver (if it has a usable local API); the kube-setup request (egress to the camera subnet and the host, the `cams-cameras` Secret) | cams in the cluster reaches the cameras and the proxy over the route |
+| **P5** TLS / site CA | cam-proxy, cam-sim, cams | CA + leaves, HTTPS listener, cert push and renewal, Certificates card, health item, `/tls/ca.pem`, NTP set; cam-sim refusal fault + NTP; cams CA/leaf pinning, proxy `tlsServername`, fallback pins | pushes verified on the real cameras; cams verifies proxy and cameras against the pin |
 
-- **A (default, decision 5):** the Pi keeps cam1; the mini PC gets the new
-  cameras. cam1's certificate moves to the Pi's own site CA when P3 is
-  released (optional, retires the last cluster CronJob).
-- **B:** cam1 moves to the mini PC as well. Its data can come along: media
-  folders are already keyed by camera, but the catalogs must be merged
-  (archive and event ids would collide), which needs an import tool (an
-  extra plan item, only if B is chosen). The Pi then keeps running as the
-  demo kit with whichever camera it has.
+Each phase is its own plan and PR series; releases follow the usual rule
+(release when ready). Because the multi-camera runtime is released before
+the PC arrives, the Pi runs it first, as a one-camera host. That is the
+compatibility gate of decision 5 in production.
+
+### Migration
+
+cam1 stays on the Pi (Klaus), so nothing migrates: the mini PC starts with
+new cameras and an empty data folder. Moving a camera with its data between
+hosts would need a catalog import tool (archive and event ids collide); it
+is not planned.
 
 ## 16. Cluster dependency after the change
 
 | Today in the cluster | After |
 |---|---|
 | cams + its certificate (cert-manager, Traefik) | stays (decision 7) |
-| cam1 Certificate (HTTP-01), `cam1-cert-push` CronJob, `cam1-camera-credentials`, the two Grafana certificate alerts | retired once the Pi is its own site (P3) → kube-setup removes them; the health item replaces the alerts |
-| `cam1.skylar.technology` public DNS name | unused afterwards; Klaus may delete it at Squarespace |
+| cam1 Certificate (HTTP-01), `cam1-cert-push` CronJob, `cam1-camera-credentials`, the two Grafana certificate alerts | **stay for now** (Klaus): the Pi keeps Let's Encrypt. They are the last camera dependency on the cluster; the later option of §11 (the Pi as its own site) would remove them. The mini PC's cameras never use them |
+| `cam1.skylar.technology` public DNS name | stays with cam1's Let's Encrypt certificate; the mini PC's cameras have no public names |
 | LAN DNS | none, before or after |
 | cam2 (cam-sim) + the cluster cam-proxy | stay as the cluster's simulated pair; not a dependency of any real camera |
 | Prometheus/Grafana scraping cam-proxy | optional; nothing depends on it |
@@ -979,13 +1075,11 @@ series; releases follow the usual rule (release when ready).
 
 ## 17. Open questions for Klaus
 
-1. **Router (RT-AX86U, 388_24436):** may the static route `192.168.60.0/24`
-   via the mini PC be added, and the hairpin test of §13.3 be run? If it
-   fails, is 1:1 NAT on the host (§13.3, alternative 1) acceptable?
-2. **cam1:** stays on the Pi (A, default) or moves to the mini PC (B)? And
-   may cam1 switch from its Let's Encrypt certificate to the Pi's site CA
-   (retiring `cam1-cert-push` and its alerts)?
-3. **PoE switch for the camera network:** a second PoE switch for the mini PC
-   (assumed here), or the GPS-208 split by VLAN?
-4. **Camera subnet** `192.168.60.0/24`: fine (once kube-setup confirms no
-   overlap)?
+Klaus's answers resolved questions 1–4 of the first draft ("Answers" at the
+top). Left, and none blocks P1–P3:
+
+1. **The new PoE switch's model**, once chosen: it decides whether
+   power-cycling works on the mini PC. A switch with a documented local API
+   is preferable; see §8.4.
+2. **The router pre-test result** (§13.3): if the RT-AX86U doesn't hairpin,
+   is 1:1 NAT on the host (fallback 1) acceptable?
