@@ -88,7 +88,7 @@
 
 <div class="card" data-testid="find-camera-card">
   <h3>Find camera</h3>
-  <p class="small">Asks the LAN for ONVIF cameras (WS-Discovery, about 3 s; no login). "Use this address" writes <span class="mono">CAMERA_HOST</span> into the proxy's .env file and restarts the proxy.</p>
+  <p class="small">Asks the LAN for ONVIF cameras (WS-Discovery, about 3 s; no login). "Use this camera" writes <span class="mono">CAMERA_HOST</span> into the proxy's .env file and restarts the proxy.</p>
   <div><button onclick={() => void find()} disabled={searching || restarting === 'waiting'} data-testid="find-camera-button">{searching ? 'Searching…' : 'Find camera'}</button></div>
   {#if result && result.devices.length}
     <table>
@@ -97,9 +97,8 @@
           <tr data-testid="find-camera-device">
             <td class="mono">{d.useAddress}{#if d.mismatch}<div class="warn" data-testid="find-camera-mismatch">{mismatchText(d)}</div>{/if}</td>
             <td>{deviceLabel(d)}</td>
-            <td>{#if d.current}<span class="badge current" data-testid="find-camera-current">this camera</span>{/if}</td>
             <td class="actions">
-              {#if !d.current}<button onclick={() => ask(d)} disabled={restarting === 'waiting'} data-testid="find-camera-use">Use this address</button>{/if}
+              {#if d.current}<span class="badge current" data-testid="find-camera-current">Currently used Camera</span>{:else}<button onclick={() => ask(d)} disabled={restarting === 'waiting'} data-testid="find-camera-use">Use this camera</button>{/if}
             </td>
           </tr>
         {/each}
@@ -117,7 +116,7 @@
 
 {#if asking}
   {@const d = asking}
-  <ConfirmDialog title="Use this camera address" message={useAddressMessage(d.useAddress, result?.envFile.path)} confirmLabel="Use this address" oncancel={() => (asking = null)} onconfirm={() => void use(d)} />
+  <ConfirmDialog title="Use this camera address" message={useAddressMessage(d.useAddress, result?.envFile.path)} confirmLabel="Use this camera" oncancel={() => (asking = null)} onconfirm={() => void use(d)} />
 {/if}
 
 <style>

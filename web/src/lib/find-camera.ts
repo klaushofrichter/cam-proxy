@@ -18,7 +18,7 @@ export function deviceLabel(d: Pick<FoundDevice, 'name' | 'model' | 'hardware'>)
 }
 
 export function mismatchText(d: Pick<FoundDevice, 'address' | 'sender' | 'mismatch' | 'useAddress'>): string | null {
-  return d.mismatch ? `address mismatch: it answered from ${d.sender} but names ${d.address}; "Use this address" takes ${d.useAddress}` : null;
+  return d.mismatch ? `address mismatch: it answered from ${d.sender} but names ${d.address}; "Use this camera" takes ${d.useAddress}` : null;
 }
 
 export function foundText(count: number, tookMs: number): string {
