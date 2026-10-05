@@ -94,7 +94,8 @@ export const DEFAULTS: Config = {
 export interface Secrets {
   tokens: string[];
   adminToken: string;
-  cameraPassword: string;
+  cameraPassword: string; // CAMPROXY_CAMERA_PASSWORD: every camera's default ('' when each has its own)
+  cameraPasswords: Record<string, string>; // CAMPROXY_CAMERA_PASSWORD_<ID>: one camera's own
   ftpPassword?: string;
   auditToken?: string; // CAMPROXY_AUDIT_TOKEN: reads GET /control/audit only
   googleVisionKey?: string;

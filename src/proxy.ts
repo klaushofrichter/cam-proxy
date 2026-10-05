@@ -13,6 +13,7 @@ import type { EventIntake } from './events/intake';
 import { CameraRegistry } from './cameras/registry';
 import { CameraWorker, cameraWebUi } from './cameras/worker';
 import { cameraConfig, cameraIds } from './config/cameras';
+import { cameraPassword } from './config/secrets';
 import { restartProcess } from './process-restart';
 import type { Config } from './config/defaults';
 import { getPath, needsProcessRestart, needsRestart, setPath, settingPaths, type Loaded } from './config/load';
@@ -162,7 +163,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         id,
         index,
         running: () => running,
-        password: () => loaded.secrets.cameraPassword,
+        password: () => cameraPassword(loaded.secrets, id),
         poeSwitchPassword: () => loaded.secrets.poeSwitchPassword,
         ftpTarget: ftpTargetFor(id),
         catalog,
