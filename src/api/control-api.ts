@@ -31,6 +31,7 @@ import { splitHost } from '../camera/http';
 import { checkEnvPath, EnvFileError, writeEnvKey } from '../config/env-file';
 import { CAMERA_HOST_NAMES, validCameraHost } from '../config/env';
 import { InventoryBusyError, InventoryStoppingError, RepairRefusedError, RUN_ID, type InventoryRunner } from '../inventory/runner';
+import type { Archive } from '../archive/service';
 
 interface FtpStatus {
   enabled: boolean;
@@ -93,6 +94,8 @@ interface ControlDeps {
   // (CAMPROXY_ENV_FILE; undefined when not set).
   findCamera: () => Promise<{ devices: FoundDevice[]; tookMs: number }>;
   envFile: () => string | undefined;
+  // The Archive (spec 2026-10-05-archive-design): the Status card, Clear the Archive.
+  archive: Pick<Archive, 'status' | 'clear'>;
 }
 
 // The effective configuration for the UI: value (what runs), source, restart
@@ -215,7 +218,7 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
 
 // Actions that write their own audit records (no generic control-action);
 // a new action that audits itself goes here too.
-const OWN_AUDIT = new Set(['camera-reboot', 'camera-powercycle', 'camera-poe-on', 'restart-proxy', 'inventory', 'inventory-repair', 'camera-address']);
+const OWN_AUDIT = new Set(['camera-reboot', 'camera-powercycle', 'camera-poe-on', 'restart-proxy', 'inventory', 'inventory-repair', 'camera-address', 'archive-clear']);
 
 // Find camera and Use this address together, per client and minute: a probe
 // is 3 s of multicast, a write a backup.
@@ -262,6 +265,7 @@ export function controlApi(d: ControlDeps): express.Router {
       analytics: d.analytics(),
       analyticsUnmapped: d.unmapped.list(20),
       health,
+      archive: d.archive.status(),
     });
   });
 
@@ -544,6 +548,15 @@ export function controlApi(d: ControlDeps): express.Router {
           if (!(err instanceof RepairRefusedError)) throw err;
           return err.code === 'not_found' ? fail(404, 'not_found', err.message) : fail(409, err.code, err.message);
         }
+      }
+      // Clear the Archive (spec 2026-10-05-archive-design §3, ruling 14):
+      // only with the current number of clips; one `archive-clear` record.
+      case 'archive-clear': {
+        const count: unknown = req.body?.count;
+        if (!Number.isSafeInteger(count) || (count as number) < 0) return fail(400, 'invalid', 'count is the number of clips in the Archive');
+        const r = d.archive.clear(count as number, { user: 'admin', ...who(req), requestedBy });
+        if ('mismatch' in r) return fail(409, 'count_mismatch', `the Archive has ${r.mismatch} clips`, { count: r.mismatch });
+        return void res.json(r);
       }
       // A control-action record; the run ends with its partial counts.
       case 'inventory-cancel': {

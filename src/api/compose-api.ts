@@ -146,7 +146,8 @@ export function composeApi(d: {
       audit('no_font');
       return void res.status(503).json({ error: 'no_font' });
     }
-    const job = d.composer.start({ cam: cam(), plan, size: b.size as ComposeSize, badge: b.badge as boolean, ...(typeof b.timeZone === 'string' ? { timeZone: b.timeZone } : {}) });
+    const asked = b.at !== undefined ? { anchor: 'at', at: b.at, preS: b.preS, postS: b.postS } : { anchor: 'clip', clipId: b.clipId, span: span ?? null, preS: b.preS, postS: b.postS };
+    const job = d.composer.start({ cam: cam(), plan, size: b.size as ComposeSize, badge: b.badge as boolean, ...(typeof b.timeZone === 'string' ? { timeZone: b.timeZone } : {}), asked });
     if (job === 'busy') {
       audit('busy');
       return void res.status(429).json({ error: 'busy' });
