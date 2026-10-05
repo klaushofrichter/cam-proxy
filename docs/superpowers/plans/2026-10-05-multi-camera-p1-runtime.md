@@ -76,13 +76,14 @@
 - **Ruling P1-6: limits sum over every key in P1** (`usageBetween` without a key filter, as today); per-key budgets come in P2 (spec §16 P2 "Vision per key") — cost if wrong: none for one key.
 - **Ruling P1-7: the legacy migration's `cam` is filled at startup**, not inside the SQL migration (migrations are static SQL; the camera list is runtime data): rows get `cam = ''` in migration 9, and `adoptLegacyUsage(catalog, ids)` sets them to the one id (or `'unknown'` with several) on start — cost if wrong: none; the rule is the spec's.
 - **Ruling P1-8: `PUT /control/config` and `DELETE /control/config/:path` accept legacy `camera.*`, `ftp.user` paths on a one-camera proxy** (translated like overrides.json) — spec §4.2 translates the file but is silent on the API; scripts and the e2e suite use these paths — cost if wrong: a second accepted spelling of the same setting.
-- **Ruling P1-9: `GET /control/config` keys are the new paths** (`cameras.cam1.statusPollS`, `poeSwitch.model`) as spec §4.2 says; the tests that read those keys are updated. This is the one place the "one-camera suite unchanged" gate of §16 gives way to §4.2 — cost if wrong: an external script reading `camera.*` keys from the settings view breaks (none known).
+- **Ruling P1-9: `GET /control/config` keys are the new paths** (`cameras.cam1.statusPollS`, `poeSwitch.model`) as spec §4.2 says; the tests that read those keys are updated. This is the one place the "one-camera suite unchanged" gate gives way to §4.2 (spec §4.2, §15 and §16 now say so) — cost if wrong: an external script reading `camera.*` keys from the settings view breaks (none known).
 - **Ruling P1-10: no `camera` and no `cameras` in config.json** means one default camera `cam1` (name `Den`), as today's defaults, idle with `no_address` — spec §3.3 removes "the proxy does not start" — cost if wrong: none.
 - **Ruling P1-11: a new-shape camera's default name is its id; its default `ftp.user` is its id; a legacy camera keeps today's defaults** (`name` "Den", `ftp.user` "camera") so the Pi's camera keeps logging in as `camera` — spec §7 says the default user is the camera id, §4.2 says nothing changes on the Pi — cost if wrong: none on the Pi.
 - **Ruling P1-12: the camera-scoped control routes are P2.** In P1 the old routes act on the only camera, and on a multi-camera proxy a camera action answers `400 camera_required` (spec §6.3); `GET /control/cameras` (read-only) is built in P1 because the picker needs it — cost if wrong: none.
 - **Ruling P1-13: overrides may only touch camera ids that config.json defines in P1** (`cameras.x: unknown camera`); adding a camera through `PUT /control/config` is P2 (spec §6.3 with §16 P2) — cost if wrong: none.
 - **Ruling P1-14: the `archive` stream message is sent once per camera of the rows it names** (`log.append(row.cam, 'archive', …)`), not once under the process camera — the stream log row needs a `cam`, and a cams group subscribed with `?cam=` must see it — cost if wrong: a client that filtered by camera now sees archive messages of its own cameras only, which is the intent.
-- **Ruling P1-16: the bucket multiplied by the number of cameras is the image bucket (6000/min, `src/proxy.ts:649`)**, not the 1200/min one — spec §6.1 calls the image bucket "1200/min, proxy.ts:648", but line 648 is the non-image bucket (its `skip` is `isImage`); the spec's reason ("a timeline per camera loads the same sprites") is about images — cost if wrong: the non-image bucket stays at 1200/min per client, as today.
+- **Ruling P1-16: the bucket multiplied by the number of cameras is the image bucket (6000/min, `src/proxy.ts:649`)**, not the 1200/min one — the first spec draft called the image bucket "1200/min, proxy.ts:648", but line 648 is the non-image bucket (its `skip` is `isImage`); spec §6.1 now says 6000/min at line 649; the spec's reason ("a timeline per camera loads the same sprites") is about images — cost if wrong: the non-image bucket stays at 1200/min per client, as today.
+- **Ruling P1-17: the cam-list filter is advertised as `features: ["sse-cam-list"]` on every `GET /api/cameras` item** (Task 13) — a client can't tell an old proxy (which reads `?cam=a,b` as one id and delivers nothing) from a new one otherwise; a list of names keeps the array shape old cams reads, and later phases append to it (spec §6.1, §6.2) — cost if wrong: one more field on each camera item.
 - **Ruling P1-15: the `Proxy` object keeps `status`, `intake`, `stills`, `recordings` getters as the first camera's**, next to the new `cameras` registry — tests and one-camera callers use them; new code uses the registry — cost if wrong: none; they are internal.
 
 ---
@@ -3224,14 +3225,15 @@ git commit -m "feat(config): CAMPROXY_CAMERA_PASSWORD_<ID> per camera"
 
 ---
 
-### Task 13: SSE `?cam=a,b`
+### Task 13: SSE `?cam=a,b`, advertised as `features: ["sse-cam-list"]`
 
 **Files:**
-- Modify: `src/stream/log.ts` (`Filter.cams`), `src/stream/sse.ts`
-- Test: `test/sse.test.ts` (extend)
+- Modify: `src/stream/log.ts` (`Filter.cams`), `src/stream/sse.ts` (`FEATURES`), `src/api/client-api.ts` (`features` in `info()`), `openapi.yaml`
+- Test: `test/sse.test.ts` (extend), `test/client-api.test.ts`
 
 **Interfaces:**
 - Produces: `interface Filter { cams?: string[]; types: StreamType[]; kinds?: string[] }` (`cam` is gone); `matches()` and `StreamLog.since()` honour `cams`.
+- Produces: `export const FEATURES: readonly string[] = ['sse-cam-list']` in `src/stream/sse.ts`; every `GET /api/cameras` (and `GET /api/cameras/:cam`) item gains `features: string[]` (a copy of `FEATURES`, the same on every item). cams (P3 Task 4) sends `?cam=a,b` only to a proxy whose items list `"sse-cam-list"`; a proxy without the field (every release before this one: the Pi until its update, the cluster proxy until its rollout) gets `?cam=<id>` or no `cam` (spec §6.1, §6.2 "Older proxies"). Later phases append names; none is ever removed or renamed.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3282,10 +3284,19 @@ describe('several cameras on one stream (spec §6.2)', () => {
 });
 ```
 
+And in `test/client-api.test.ts` (it has the app and the client token): the exact list assertion at line 39 gets `features: ['sse-cam-list']`, Task 4's key list (`Object.keys(r.body[0]).sort()`) gains `'features'`, plus
+
+```ts
+  it('every camera item advertises the cam-list filter (spec §6.1)', async () => {
+    const r = await get('/api/cameras'); // the file's client-token helper
+    expect(r.body.every((c: { features?: string[] }) => c.features?.includes('sse-cam-list'))).toBe(true);
+  });
+```
+
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `npx vitest run test/sse.test.ts`
-Expected: FAIL — `?cam=cam3,cam5` matches no camera named `cam3,cam5`, so the first test times out.
+Run: `npx vitest run test/sse.test.ts test/client-api.test.ts`
+Expected: FAIL — `?cam=cam3,cam5` matches no camera named `cam3,cam5`, so the first test times out; the camera items have no `features`.
 
 - [ ] **Step 3: Implement**
 
@@ -3311,6 +3322,16 @@ in `since()`: `if (f.cams?.length) (where.push(\`cam IN (${f.cams.map(() => '?')
 
 and the live check `(filter.cam && filter.cam !== cam)` becomes `(filter.cams && !filter.cams.includes(cam))`. Any other `Filter` literal with `cam:` in `src/` (find with `grep -rn "cam: " src/stream`) moves to `cams: [..]`.
 
+Add to `src/stream/sse.ts`:
+
+```ts
+// What this proxy supports beyond the pre-multi-camera API, listed on every
+// GET /api/cameras item (spec §6.1). Clients test for a name, never a version.
+export const FEATURES: readonly string[] = ['sse-cam-list'];
+```
+
+In `src/api/client-api.ts` `info(w)` add `features: [...FEATURES]` to the returned object (import `FEATURES` from `../stream/sse`). `openapi.yaml`: `features` (array of string) on the camera item schema.
+
 - [ ] **Step 4: Run tests**
 
 Run: `npx vitest run test/sse.test.ts && npm run lint:types && npm test`
@@ -3319,8 +3340,8 @@ Expected: all pass (the single `?cam=cam1` of today still works: a list of one).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/stream/log.ts src/stream/sse.ts test/sse.test.ts
-git commit -m "feat(sse): ?cam=a,b filters to several cameras"
+git add src/stream/log.ts src/stream/sse.ts src/api/client-api.ts openapi.yaml test/sse.test.ts test/client-api.test.ts
+git commit -m "feat(sse): ?cam=a,b filters to several cameras, advertised in features"
 ```
 
 ---

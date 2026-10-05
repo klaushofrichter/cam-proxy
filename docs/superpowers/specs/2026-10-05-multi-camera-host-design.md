@@ -203,7 +203,8 @@ certificate scheduler, ONVIF discovery ("Find camera").
 - go2rtc is shared: if it exits, the host restarts it (backoff as above) and
   every grabber reconnects; a stream's source error stays that camera's.
   Streams are added and removed through go2rtc's API (`PUT/DELETE
-  /api/streams`), so adding or restarting one camera never restarts go2rtc.
+  /api/streams`), so adding or restarting one camera never restarts go2rtc
+  (the password handling of such a stream: §8.5).
 - Restarts: "restart camera side" becomes per camera
   (`/control/cameras/:cam/actions/restart`); settings that need a process
   restart stay host-wide as today (`needsProcessRestart`).
@@ -274,7 +275,12 @@ certificate scheduler, ONVIF discovery ("Find camera").
   `poeSwitch`, its `poeSwitch.port` stays with the camera, and the top-level
   `ftp.user` becomes that camera's `ftp.user`. No file is rewritten: the
   translation happens at load, and `GET /control/config` shows the new shape
-  with `sources` saying "config.json (legacy camera)".
+  with `sources` saying "config.json (legacy camera)". This is the one
+  visible change for a one-camera proxy: tests and scripts that read those
+  keys from `GET /control/config` move to the new paths (no known external
+  reader; the display and cams don't use it). `PUT`/`DELETE /control/config`
+  still accept the legacy `camera.*` and `ftp.user` paths on a one-camera
+  proxy, translated like overrides.json.
 - **overrides.json** written by today's Settings page holds paths like
   `camera.statusPollS` and `camera.poeSwitch.host`. They are read with the
   same translation (`camera.X` → `cameras.<the one id>.X`, switch keys →
@@ -330,9 +336,15 @@ key in use, so this month's count survives the upgrade on the Pi.
 ### 6.1 Client API (`/api`, client token)
 
 - `GET /api/cameras`: every configured camera, in config order, each as
-  today's `info()` plus `error` (worker error or null), `tls` (§10.4) and
-  `latestStill` (§6.4). For one camera the array is what it is today plus
-  the new fields.
+  today's `info()` plus `error` (worker error or null, P1), `features`
+  (P1), `latestStill` (§6.4, P2) and `tls` (§10.4, P5). For one camera the
+  array is what it is today plus the new fields.
+- `features: string[]` is the same proxy-wide list on every item: what this
+  proxy supports beyond the pre-multi-camera API. The first entry is
+  `"sse-cam-list"` (SSE `?cam=a,b`, §6.2). A proxy without the field (every
+  release before P1: the Pi until its update, the cluster proxy until its
+  rollout) supports none of them. Clients test for a name, never for a
+  version.
 - Every `/api/cameras/:cam/…` route resolves `:cam` to its worker: unknown
   → 404 `not_found` (as today), restarting → 503 `camera_restarting`. The
   `known()` guards (`client-api.ts:64-67` and the same in compose, archive,
@@ -340,8 +352,10 @@ key in use, so this month's count survives the upgrade on the Pi.
   worker on `res.locals`.
 - Host-wide routes keep their paths: `/api/archive*` (rows carry `cam`;
   `GET /api/archive?cam=` filters), `/api/stream`.
-- Rate limits: the image bucket (1200/min, `proxy.ts:648`) is multiplied by
-  the number of cameras; a timeline per camera loads the same sprites.
+- Rate limits: the image bucket (6000/min per client, `proxy.ts:649`, the
+  limiter whose `skip` is `!isImage`) is multiplied by the number of
+  cameras; a timeline per camera loads the same sprites. The non-image
+  bucket (1200/min, `proxy.ts:648`) stays as it is.
 
 ### 6.2 SSE (`GET /api/stream`)
 
@@ -351,6 +365,14 @@ Replay by `Last-Event-ID` is over the host-wide stream log, so one cursor
 covers all cameras. `?types=` filters types as today; the `still` message
 (one per camera per second) stays off unless asked for (`sse.ts:12`).
 cams opens one stream per proxy (§12.2).
+
+**Older proxies.** Before P1, cam-proxy compares `?cam=` with its one id as
+a whole, so `?cam=a,b` to an old proxy delivers nothing. A proxy that
+understands the list says so with `"sse-cam-list"` in `features` (§6.1).
+A client sends a list only to such a proxy; otherwise it sends `?cam=<id>`
+for one camera (as today) or no `cam` at all for several, and filters by
+each message's `cam` itself. An unknown id in a list is not an error: it
+matches nothing (a removed camera never breaks a group's stream).
 
 ### 6.3 Control API (`/control`, admin)
 
@@ -515,8 +537,9 @@ Suggested cap on the mini PC: 8192 MB (the Pi keeps 2048).
   guide says to log out of the web UI after use.
 - One `PoeSwitch` controller per host. Requests (read, power-cycle, PoE on)
   go through a **FIFO queue**: a second camera's power-cycle waits for the
-  first (bounded at `offSeconds + 60 s`; beyond that `503 switch_busy` as
-  today, also when someone is logged in to the switch's web UI).
+  first (bounded at `offSeconds + 60 s`; beyond that `409 switch_busy` as
+  today, `src/api/control-api.ts` `switchFail`, also when someone is logged
+  in to the switch's web UI).
 - A read (callcmd 101) returns every port; one read serves every camera's
   status (cached 10 s).
 - The reboot/power-cycle cooldown (2 min) stays per camera.
@@ -527,7 +550,12 @@ Suggested cap on the mini PC: 8192 MB (the Pi keeps 2048).
 
 One go2rtc process for the host, two streams per camera (`<cam>_sub`,
 `<cam>_main`), each camera's password passed by its own environment variable
-(`${CAM_<ID>_PASSWORD}` in the 0600 config, as today for one). go2rtc opens a
+(`${CAM_<ID>_PASSWORD}` in the 0600 config, as today for one) for every
+camera known when go2rtc is spawned. A process's environment can't change
+after spawn, so a stream added at runtime (§3.3: a camera added or
+restarted) carries its password in the source URL of the `PUT /api/streams`
+call on go2rtc's loopback API (127.0.0.1 only, never logged); at the next
+spawn it moves into the config with its variable. go2rtc opens a
 source only while it has a consumer: the sub stream is always consumed by the
 grabber; the 4K main stream only while someone watches it. Ports are
 host-wide (`go2rtc.rtspPort`, `apiPort`).
@@ -592,8 +620,12 @@ Encrypt for now, §11).
 1. **A per-host site CA, name-constrained.** The proxy generates on first
    start (when `tls.site` is set) a root CA, RSA 3072, valid 10 years,
    subject `CN=cam-proxy site CA <site>`, with **critical X.509 name
-   constraints**: permitted DNS `.<site>.internal`, permitted IP ranges the
-   camera subnet and the host's own LAN address (/32). Installing it in
+   constraints**: permitted DNS `<site>.internal` (RFC 5280 form, no
+   leading dot: the name and every name under it), permitted IP ranges the
+   camera subnet and the host's own addresses (/32 each), taken from the
+   settings `tls.cameraSubnet` and `tls.proxyAddresses` (the P4 renderer
+   writes both). An address outside them gets no leaf; the health item
+   says so and `tls-ca-rotate` makes a new CA (a new pin in cams). Installing it in
    Klaus's browsers then can't let it vouch for any other site: a leaked key
    can only impersonate this host's cameras and the host itself. The key
    stays in `<dataDir>/tls/ca.key` (mode 600, never served, never logged);
@@ -667,7 +699,13 @@ keeps `from-proxy` valid with a site-CA pin and says so in cams's docs.
   set `tlsName` still means public-CA verification, e.g. cam1 on the Pi
   with its Let's Encrypt certificate).
 - `GET /api/cameras` → `tls: {mode: "site-ca" | "pinned" | "public" |
-  "none", servername, fingerprint, notAfter, lastPush: {at, outcome}}`.
+  "none", servername, fingerprint, notAfter, lastPush: {at, outcome}}`;
+  `servername`, `fingerprint`, `notAfter`, `lastPush` may be null;
+  `outcome` is `"pushed" | "current" | "refused" | "failed"`.
+- **Fingerprint format** (the CA's and a served leaf's): `SHA256:` + the
+  upper-case hex SHA-256 of the certificate's DER, no colons. The proxy
+  always emits this form; cams accepts it and also plain hex, with or without
+  `SHA256:` and colons, in any case (it compares 64 lower-case hex digits).
 - `GET /tls/ca.pem` (public; mounted before the admin UI's catch-all route,
   `proxy.ts:741`) and the admin UI's **Certificates** card: the
   CA fingerprint (to copy into cams), per camera the state, expiry, last push,
@@ -760,14 +798,27 @@ The file stays an array of cameras; several entries may name the same proxy:
 ```
 
 - **Proxy group** = entries with the same `url` + `token` (the archive's rule
-  today, `archive.ts:27`). Within a group, `caFingerprint`,
-  `tlsServername` and `adminToken` must be equal, else startup fails naming
-  both entries. `proxy.camera` maps cams's id to the proxy's id (exists
-  today).
-- New optional proxy fields: `caFingerprint` (string or list, §10.7) and
-  `tlsServername`. With `caFingerprint`, the proxy URL and every camera of
-  the group are verified against that CA only; a camera's `tlsServername` is
-  then a `.internal` name.
+  today, `archive.ts:27`). Within a group, `caFingerprint` and
+  `tlsServername` must be equal, else startup fails naming both entries.
+  `adminToken` may be set on some entries and absent on others (today's
+  `e2e/cameras.json` does that; each camera's sign-in link comes from its
+  own entry); only two **different set** values in one group are a startup
+  error. `proxy.camera` maps cams's id to the proxy's id (exists today).
+- New optional proxy fields: `caFingerprint` (string or list, §10.7; format
+  §10.4) and `tlsServername`. With `caFingerprint`, every camera of the
+  group is verified against that CA only (or its fallback leaf pin), and
+  the proxy URL must be `https://…`, verified against that CA only — except
+  a loopback URL (`127.0.0.0/8`, `[::1]`, `localhost`: cams on the proxy's
+  own host), which may stay plain `http://` with the pin still used for the
+  cameras. A pin on a LAN `http://` URL is refused at startup (it would
+  leave the token in clear). A proxy `tlsServername` needs an `https` URL.
+  A camera's `tlsServername` is then a `.internal` name; without one, a
+  site-CA camera is checked against its address (the leaf's IP SAN).
+- **`from-proxy`** (cams `cameraRegistry.ts:90-95`) needs `protocol:
+  "https"` and either the camera's `tlsServername` or the group's
+  `caFingerprint` (a camera on the leaf-pin fallback serves the factory
+  `CN=CERTIFICATE` and has no usable name; its trust is the pin reported
+  over the pinned channel, §10.2).
 - Repetition of url/token per camera is accepted to keep the file format (a
   Secret in the cluster) unchanged; a `proxies` section is not worth a second
   format.
@@ -775,9 +826,13 @@ The file stays an array of cameras; several entries may name the same proxy:
 ### 12.2 One SSE stream per proxy
 
 `ProxyStream` becomes one per proxy group (keyed like the archive). It
-subscribes with `?cam=<the group's proxy ids>` and fans out each message to
-the cams camera mapped from its `cam` (the group's `toCams` map, as the
-archive has); unknown cams are dropped. `proxyStates()` reports per cams
+subscribes with `?cam=<the group's proxy ids>` when the group has one id
+(any proxy) or when the proxy lists `"sse-cam-list"` in `features` (§6.1,
+read from the group's one `GET /api/cameras`); with several ids on a proxy
+without it, it subscribes without `cam` (§6.2 "Older proxies"). Either
+way it fans out each message to the cams camera mapped from its `cam` (the
+group's `toCams` map, as the archive has); unknown cams are dropped, so the
+client-side filter is always there. `proxyStates()` reports per cams
 camera from its group's state. Switching one camera's proxy off on the
 Settings page re-subscribes the group with the smaller `cam` list (or closes
 it when none is left). The browser relay and the top bar's merged
@@ -787,9 +842,15 @@ notifications are unchanged (they already take several sources).
 
 - `server/reolink/http.ts` and the certificate probe
   (`client.ts:228`) take a per-camera trust: `{ca: <site CA PEM>, servername}`,
-  `{fingerprint}` (leaf pin: `rejectUnauthorized: false` plus a
-  `checkServerIdentity` that compares the SHA-256 of the leaf, nothing
-  else), or today's public-CA `servername` check.
+  `{fingerprint}` (leaf pin), or today's public-CA `servername` check.
+- **The leaf pin is checked on the TLS socket at `secureConnect`, before
+  any request byte is written**: `rejectUnauthorized: false`, then the
+  SHA-256 of the peer's leaf DER is compared with the pin, and on a mismatch
+  the socket is destroyed with a certificate error (not "offline"). Not with
+  `checkServerIdentity`: Node calls it only after the chain verified, so for
+  a self-signed factory certificate it never runs and would accept any
+  certificate. The Login body carries the cams user's password, so nothing
+  may be sent before the check.
 - The proxy client (`server/proxy/client.ts`) uses an undici `Agent` with
   the same CA and servername for `https://` proxy URLs.
 - Fallback pins come from the proxy's `GET /api/cameras` `tls` block; the
@@ -800,7 +861,11 @@ notifications are unchanged (they already take several sources).
   HTTPS. With P5, a site-CA proxy (the mini PC) is reached over `https://…:8443` with the
   pin. The plain URL stays valid: the Pi keeps `http://192.168.1.220:8480`
   (it has no site CA, §11), and cams on the same host keeps
-  `http://127.0.0.1:8480`.
+  `http://127.0.0.1:8480`, with or without a pin (§12.1: plain http with a
+  pin only on loopback).
+- `/tls/ca.pem` itself is fetched without verifying the proxy's certificate
+  (it is signed by the CA being fetched); the PEM's fingerprint against the
+  pin is the check, and no token is sent on that request.
 
 ### 12.4 Archive and `via`
 
@@ -1135,6 +1200,12 @@ after the 2026-10-05 test):
   and to the host's `8443` (the NetworkPolicy today allows cams →
   cam-proxy:8480 only), and update the `cams-cameras` Secret with the new
   entries and pins (Klaus).
+- **Between P4 and P5** the proxy has no HTTPS yet, so the host opens 8480
+  to the LAN (the §14.2 switch-over case) and cams uses
+  `http://192.168.1.230:8480` without a pin, as it does for the Pi today; the
+  egress request covers 8480 for that time. P5 switches cams to the pinned
+  `https://…:8443` URL, then closes 8480 to the LAN again and drops that
+  egress.
 
 ## 15. Testing
 
@@ -1157,7 +1228,9 @@ after the 2026-10-05 test):
   fault to add, mirroring the real firmware's 200-and-no-change).
 - **e2e (Playwright):** the admin UI's camera picker, per-camera Settings
   and actions, the Certificates card; a one-camera config run of the
-  existing suite unchanged (the Pi compatibility gate).
+  existing suite unchanged (the Pi compatibility gate), except the tests
+  that read `GET /control/config` keys, which move to the new paths
+  (§4.2).
 - **cams:** the fake proxy (`test/proxy/fakeProxy.ts`) serves several
   cameras and one SSE; tests for proxy groups, one upstream stream per group,
   fan-out, CA-pin verification (good pin, wrong pin, rotation list), the
@@ -1184,7 +1257,7 @@ follows its arrival.
 
 | Phase | Repo | Content | Done when |
 |---|---|---|---|
-| **P1** config + runtime per camera | cam-proxy | `cameras[]` + legacy translation, keyed-collection schema, `CameraWorker`, `cameraParam` routing, `/api/cameras` list, health `cameras[]` with the compatible top level, audit/inventory camera labels, `analytics_usage` migration, admin UI camera picker (read-only status per camera), supervision | 3 cam-sims in tests; the one-camera suite and the display fixtures unchanged |
+| **P1** config + runtime per camera | cam-proxy | `cameras[]` + legacy translation, keyed-collection schema, `CameraWorker`, `cameraParam` routing, `/api/cameras` list, health `cameras[]` with the compatible top level, audit/inventory camera labels, `analytics_usage` migration, admin UI camera picker (read-only status per camera), supervision | 3 cam-sims in tests; the one-camera suite (apart from the `GET /control/config` keys, §4.2) and the display fixtures unchanged |
 | **P2** host-wide services | cam-proxy | one go2rtc with N streams, FTP user mapping, storage shares, Vision per key + per-camera cap, PoE queue with the driver interface (fake driver in tests; `sscpoe-web` unchanged), `composition.concurrent`, per-camera Settings/actions in the UI, control API camera routes, latest-still endpoints, metrics `cam` label | 4 cam-sims on the Mac or a CI runner; the Pi runs the release unchanged |
 | **P3** cams mapping | cams | proxy groups, one SSE per proxy with fan-out, archive and SSE on one group object, the `cameras.json` generator `scripts/cameras-config.ts` (§13.3), fake proxy with several cameras, real-proxy e2e with a two-camera proxy, livestack multi-camera variant (cams → one cam-proxy → 3 cam-sims over HTTP) | cams shows several cameras of one proxy over one stream |
 | — router pre-test | (Klaus) | the Mac stand-in test of §14.3 | the RT-AX86U hairpins to the stand-in |
@@ -1197,7 +1270,19 @@ follows its arrival.
 | **P5** TLS / site CA | cam-proxy, cam-sim, cams | CA + leaves, HTTPS listener, cert push and renewal, Certificates card, health item, `/tls/ca.pem`, NTP set; cam-sim refusal fault + NTP; cams CA/leaf pinning, proxy `tlsServername`, fallback pins | pushes verified on the real cameras; cams verifies proxy and cameras against the pin |
 
 Each phase is its own plan and PR series; releases follow the usual rule
-(release when ready). Because the multi-camera runtime is released before
+(release when ready).
+
+**Order across the repos.** cams P3 needs no proxy release except for its
+real-proxy e2e and the livestack variant, which wait for the P1+P2 release
+(`cameras[]`, `features`). cams P5 is built against its fake proxy and
+waits for proxy P5 only for its livestack HTTPS variant and for real use.
+**Mixed versions stay working after every phase:** a new cams with an old
+proxy (one id per group, `?cam=<id>` as today; no `features`, so no list
+filter; no `tls` block, so no fallback pins; no pin configured, so no
+`/tls/ca.pem`), and a new proxy with an old cams (a single `?cam=` is a
+list of one; new fields in `GET /api/cameras` are ignored; HTTP on 8480
+stays). The Pi and the cluster proxy are such one-camera proxies the whole
+time. Because the multi-camera runtime is released before
 the PC arrives, the Pi runs it first, as a one-camera host. That is the
 compatibility gate of decision 5 in production.
 

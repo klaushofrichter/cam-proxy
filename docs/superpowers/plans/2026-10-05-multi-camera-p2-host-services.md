@@ -59,9 +59,9 @@
 
 ## Rulings (spec gaps decided here)
 
-- **Ruling P2-1: streams added after go2rtc started carry the camera password in the API call** (`PUT /api/streams?name=…&src=rtsp://user:<pw>@…` on 127.0.0.1); at the next go2rtc (re)spawn every stream moves into the 0600 config with `${CAM_<ID>_PASSWORD}` — spec §8.5 wants env variables, spec §3.3 wants runtime adds without a restart; an environment can't change after spawn — cost if wrong: a password on the loopback API of a process we own (never logged; the API listens on 127.0.0.1 only).
+- **Ruling P2-1: streams added after go2rtc started carry the camera password in the API call** (`PUT /api/streams?name=…&src=rtsp://user:<pw>@…` on 127.0.0.1); at the next go2rtc (re)spawn every stream moves into the 0600 config with `${CAM_<ID>_PASSWORD}` — spec §8.5 wants env variables, spec §3.3 wants runtime adds without a restart; an environment can't change after spawn (spec §8.5 now says exactly this) — cost if wrong: a password on the loopback API of a process we own (never logged; the API listens on 127.0.0.1 only).
 - **Ruling P2-2: a camera without a share gets an equal part of what the shares leave** (`(100 − Σ shares) / cameras without a share`) for the "most above its share" choice — spec §8.1 says "the rest shared" without saying how it is split — cost if wrong: eviction order among unshared cameras differs slightly.
-- **Ruling P2-3: `switch_busy` stays HTTP 409** — spec §8.4 says "`503 switch_busy` as today", but today's code answers 409 (`src/api/control-api.ts`, `switchFail`); clients and the UI handle 409 — cost if wrong: one status code differs from the spec text.
+- **Ruling P2-3: `switch_busy` stays HTTP 409** — the first spec draft said "`503 switch_busy` as today", but today's code answers 409 (spec §8.4 now says 409) (`src/api/control-api.ts`, `switchFail`); clients and the UI handle 409 — cost if wrong: one status code differs from the spec text.
 - **Ruling P2-4: the FTP source-address check compares the camera's `host` (without its port) with the session's address**, IPv4-mapped prefix removed; a `host` that is a name (or empty) turns the check off for that camera — spec §7 — cost if wrong: none.
 - **Ruling P2-5: a camera added in the UI lives in overrides.json** (`cameras.<id>` with at least `host`), appended after the config.json cameras, sorted by id (overrides.json is an object, and integer-like keys would reorder; sorting is the stable rule); `DELETE /control/config/cameras.<id>` removes it (only one added this way); a config.json camera answers `400 invalid` "defined in config.json" — spec §6.3 — cost if wrong: none.
 - **Ruling P2-6: removing a camera stops its worker and removes its go2rtc streams; its files stay** and age out by retention (spec §5.2); its catalog rows stay too — cost if wrong: none (a "forget camera data" action is later work per the spec).
@@ -1869,7 +1869,7 @@ export function latestApi(d: { cameras: CameraRegistry }): express.Router {
 - [ ] **Step 4: Run tests**
 
 Run: `npx vitest run test/latest-still.test.ts test/client-api.test.ts test/stills-api.test.ts test/openapi.test.ts && npm run lint:types && npm test`
-Expected: all pass (`client-api.test.ts:39`'s exact object gets `latestStill: null` or `expect.anything()` when go2rtc runs).
+Expected: all pass (`client-api.test.ts:39`'s exact object gets `latestStill: null` or `expect.anything()` when go2rtc runs; P1 Task 4's key list `Object.keys(r.body[0]).sort()` gains `'latestStill'`).
 
 - [ ] **Step 5: Commit**
 

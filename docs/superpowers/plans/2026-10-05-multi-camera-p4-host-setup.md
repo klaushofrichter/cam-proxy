@@ -54,6 +54,7 @@
 - **Ruling P4-2: the dnsmasq `dhcp-option=option:dns-server` is set to nothing (`dhcp-option=6`)** so cameras get no DNS server — spec §14.2 sets `port=0` (no DNS) but dnsmasq would otherwise still announce itself as the DNS server — cost if wrong: a camera tries DNS against the host and times out; nothing else.
 - **Ruling P4-3: `rp_filter` is set to 2 (loose) on `enp1s0` from the start** — spec §14.3 lists it as a fix when replies are dropped; Debian's default is already loose for new interfaces, so setting it explicitly only pins the behaviour — cost if wrong: none.
 - **Ruling P4-4: the certificate-import measurement of P4 uses `push_cert.py` from the reolink workspace with a throwaway, name-constrained test CA made by `openssl`** (P5's own CA code doesn't exist yet) — spec §16 P4 asks to measure the import of a site-CA RSA 2048 leaf before P5 — cost if wrong: none; P5 repeats the push with its own code.
+- **Ruling P4-6: between P4 and P5 the mini PC's `proxy.httpFromLan` is `true`** (8480 open to the LAN, the cluster's egress to the host's 8480 in REQUEST.md); P5 Task 14 turns it off once cams uses the pinned `https://…:8443` URL — P4's "done when" needs the cluster's cams to reach the proxy, and the proxy has no HTTPS before P5 (spec §14.2 allows "the LAN during the switch-over"); the example keeps `false`, the default after P5 — cost if wrong: the client token crosses the LAN in clear for the days between P4 and P5, as it does for the Pi today.
 - **Ruling P4-5: the renderer also writes cam-proxy's `config.json` skeleton for the host** (cameras with ids and addresses from the leases, `poeSwitch.host`, `ftp.publicHost`, the passive range) so the firewall, DHCP and the proxy can't disagree — the spec has the proxy config by hand — cost if wrong: one more generated file; it is only written when absent.
 
 ---
@@ -1130,7 +1131,7 @@ Each task below runs on the mini PC (or against it) and ends by recording its ou
 - [ ] **Step 1: Install** (Klaus, at the device): Debian 13 netinst per guide §1; SSH key auth works: `ssh <user>@<host-lan> 'uname -m; . /etc/os-release; echo $PRETTY_NAME; ip -br link'`
 Expected: `x86_64`, `Debian GNU/Linux 13 (trixie)`, two Ethernet links (note their names: the guide's `enp1s0`/`enp2s0` may differ).
 
-- [ ] **Step 2: Describe and render**: `/srv/cam-proxy/host.json` from the example with the real NIC names; render.
+- [ ] **Step 2: Describe and render**: `/srv/cam-proxy/host.json` from the example with the real NIC names and `proxy.httpFromLan: true` (Ruling P4-6: cams in the cluster reaches the proxy over 8480 until P5); render.
 Run: `npx tsx scripts/host/render.ts /srv/cam-proxy/host.json /tmp/rendered`
 Expected: eight paths; no `HostConfigError`.
 

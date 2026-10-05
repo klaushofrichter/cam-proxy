@@ -32,7 +32,8 @@
 - `GET /tls/ca.pem` → `200 application/x-pem-file`, the CA certificate; `404 {error: 'no_site_ca'}` when `tls.site` is unset. No token.
 - The CA fingerprint cams pins: `SHA256:` + the upper-case hex SHA-256 of the CA certificate's DER, colon-free (e.g. `SHA256:9F…`), shown on the Certificates card and in `GET /control/tls` (`caFingerprint`).
 - `GET /api/cameras` item `tls`: `{ mode: 'site-ca' | 'pinned' | 'public' | 'none'; servername: string | null; fingerprint: string | null /* SHA256:… of the served leaf */; notAfter: number | null; lastPush: { at: number; outcome: 'pushed' | 'current' | 'refused' | 'failed' } | null }`.
-- The proxy's HTTPS URL: `https://<LAN address>:<server.tls.port>` with servername `proxy.<site>.internal`; camera servername `<camId>.<site>.internal`.
+- The proxy's HTTPS URL: `https://<LAN address>:<server.tls.port>` with servername `proxy.<site>.internal`; camera servername `<camId>.<site>.internal` (`<camId>` is the proxy's id, which `proxy.camera` maps in cams).
+- Unchanged from P1, for reference: `GET /api/cameras` items carry `features` (`"sse-cam-list"`, P1 Task 13); P5 adds no feature name (cams detects a site CA by its own `caFingerprint`, not by a flag). The HTTP listener on 8480 stays, so a cams on the same host may keep `http://127.0.0.1:8480` with the pin (spec §12.1).
 
 ## Review Focus
 
@@ -1481,7 +1482,7 @@ git commit -m "feat(tls): HTTPS with the site CA, /tls/ca.pem, cameras verified 
 
 **Files:**
 - Modify: `src/api/client-api.ts` (`tls` block), `src/health/summary.ts` (`certificates` item; `cameras[].cert`), `src/api/metrics.ts`, `src/proxy.ts`
-- Test: `test/health-certificates.test.ts` (new), `test/client-api.test.ts` (the exact object gains `tls`)
+- Test: `test/health-certificates.test.ts` (new), `test/client-api.test.ts` (the exact object gains `tls`; P1 Task 4's key list `Object.keys(r.body[0]).sort()` gains `'tls'`)
 
 **Interfaces:**
 - Produces:
@@ -1908,6 +1909,9 @@ Expected: `Verify return code: 0 (ok)` for each camera, or the camera shows `pin
 - [ ] **Step 4: HTTPS from the LAN**: from the Mac, `curl --cacert ca.pem --resolve proxy.camhost1.internal:8443:<lan> https://proxy.camhost1.internal:8443/health` answers `{"ok":true,…}`.
 
 - [ ] **Step 5: Hand the pin to cams** (Klaus): the card's CA fingerprint goes into cams' generator input (the cams P5 plan); cams verifies the proxy and the cameras against it.
+
+- [ ] **Step 5b: Close 8480 to the LAN** (P4 Ruling P4-6), once cams (cluster and any other) uses `https://<lan>:8443` with the pin: `proxy.httpFromLan: false` in `/srv/cam-proxy/host.json`, re-render, `prepare-host.sh`, `check-host.sh`; ask the kube-setup session to drop the cams egress to the host's 8480.
+Expected: from the Mac `curl -m 5 http://<lan>:8480/health` times out; cams still shows every camera of the host.
 
 - [ ] **Step 6: The Pi is unchanged**: `curl -s http://192.168.1.220:8480/tls/ca.pem` → `{"error":"no_site_ca"}`; cam1 still serves its Let's Encrypt certificate.
 
