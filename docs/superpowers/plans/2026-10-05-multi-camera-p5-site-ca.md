@@ -73,7 +73,7 @@
 - **Ruling P5-5: a push for a new camera or a served fingerprint that isn't the current leaf runs at the next scheduler tick (10 min), not at 04:00; renewals run at 04:00 camera time** — spec §10.1.3 lists the three triggers and "at 04:00 camera time" together; waiting a day for a new camera's first certificate helps nobody — cost if wrong: a first push during the day (the camera's web server restarts for a few seconds).
 - **Ruling P5-6: after a refused import, the next automatic attempt is the next 04:00 window** (and "Push now" any time) — prevents a push loop against firmware that answers 200 and changes nothing — cost if wrong: a camera stays `pinned` up to a day longer.
 - **Ruling P5-7: NTP is set when the camera comes online and its `GetNtp` server differs from `ntp.server`, at most once per camera per hour**, plus a `camera-ntp-set` action — spec §14.2 says "the proxy also sets each camera's NTP server" without a schedule — cost if wrong: one SetNtp per camera per hour while a camera keeps refusing.
-- **Ruling P5-9: a `refused` push counts as a failed push for the `certificates` health item** (also while the camera is `pinned`) — spec §10.5 says "the last push of a camera failed"; a refusal is the push not taking effect; the item clears after a successful push or a manual Push now that reports `current` — cost if wrong: a camera that can never take the leaf keeps the item red (by design visible; the pin still works).
+- **Ruling P5-9: a `refused` push counts as a failed push for the `certificates` health item** (also while the camera is `pinned`) — spec §10.5 says "the last push of a camera failed"; a refusal is the push not taking effect; the item clears once the camera serves its leaf (a later push, or a fix on the camera) — cost if wrong: a camera that can never take the leaf keeps the item red (by design visible; the pin still works).
 - **Ruling P5-8: the CA certificate's fingerprint format for cams is `SHA256:` + upper-case hex** (no colons) — spec §12.1 shows `SHA256:…` — the cams plan must parse exactly this; cost if wrong: a pin mismatch that the cams plan's tests would catch.
 
 ---
@@ -1262,7 +1262,10 @@ export class CameraCerts {
     const s = this.states.get(cam.id);
     const servesLeaf = served === leaf.fingerprint;
     if (servesLeaf) {
-      this.set(cam.id, { mode: 'site-ca', servername: `${cam.id}.${site}.internal`, fingerprint: leaf.fingerprint, notAfter: leaf.notAfter, problem: null });
+      // Serving the leaf clears an earlier failed or refused push (the health item, Ruling P5-9).
+      const stale = s?.lastPush && s.lastPush.outcome !== 'pushed' && s.lastPush.outcome !== 'current';
+      this.set(cam.id, { mode: 'site-ca', servername: `${cam.id}.${site}.internal`, fingerprint: leaf.fingerprint, notAfter: leaf.notAfter, problem: null, ...(stale ? { lastPush: { at: now, outcome: 'current' as const } } : {}) });
+      if (stale) this.saveState();
       if (s?.mode !== 'site-ca') this.d.onSiteCa?.(cam.id);
       return null;
     }
