@@ -73,7 +73,7 @@ test('a person event is analysed: Status counts it, Events tags it, the Timeline
   await expect.poll(() => calls(page), { timeout: 20000 }).toBe(before + 1);
 
   await page.getByTestId('nav-status').click();
-  await expect(page.getByTestId('analytics-usage')).toContainText('1 of 10 this month');
+  await expect(page.getByTestId('analytics-usage-month')).toHaveText('1 of 10');
   await expect(page.getByTestId('card-analytics-unmapped')).toContainText('Ceiling fan');
 
   await page.getByTestId('nav-events').click();

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Status page, Analytics card: the usage is on separate lines — This month, Today, Last call, and Still checks today (the manual checks' own daily limit) — instead of one long line.
+
+## v2026.10.04.4
+
 - The Pi's one `.env` (spec 2026-10-04-pi-config-design): `CAMERA_HOST` (or `CAMPROXY_CAMERA_HOST`) sets `camera.host`, `PI_ADDRESS` (or `CAMPROXY_PI_ADDRESS`) sets `ftp.publicHost` and `server.publicUrl` (`http://<PI_ADDRESS>:<port>`). The environment wins over the Settings overrides and config.json; such settings are read-only on the Settings page ("set in .env", `source: "env"`), and an override of them answers 400. With `CAMPROXY_ENV_FILE`, the two keys are read from that file at every start (any value there wins over the container's environment). Startup line `config_env`.
 - `GET /api/cameras` entries carry `address` (the camera's `camera.host`), and the `camera` stream message carries it too: `{cam, name, address}`, also sent (with the name last told, if any) when the camera side starts with another address.
 - Settings → Find camera: `POST /control/actions/find-camera` probes the LAN with ONVIF WS-Discovery (3 s, no login; 6 a minute) and lists the devices (address, name, model, the current camera marked). "Use this address" (`POST /control/actions/camera-address {host}`) writes `CAMERA_HOST` into the `.env` file (only that line; a backup `.env.bak-<time>`, the last 5 kept; atomic; audited as `camera-address`; it shares find-camera's limit), then restarts the proxy. Each device shows the address its answer came from; one that names another address in its XAddrs is flagged "address mismatch", and the address it answered from is the one used. Without `CAMPROXY_ENV_FILE` it shows the line to add by hand.

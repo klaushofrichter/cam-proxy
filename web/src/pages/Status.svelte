@@ -1,6 +1,6 @@
 <script lang="ts">
   import { status, stats } from '../lib/state';
-  import { pausedText, usageLine } from '../lib/analytics';
+  import { pausedText, usageLine, usageRows } from '../lib/analytics';
   import { agoText, daysUntilFullText, mbText } from '../lib/format';
   import { cameraStateText, poeLine } from '../lib/maintenance';
   import { cacheFillText, recordingsClass, recordingsLastText } from '../lib/recordings';
@@ -84,7 +84,7 @@
         <div class="card" data-testid={`card-analytics-${a.id}`}>
           <h3>Analytics · {a.name}</h3>
           <dl>
-            <dt>Usage</dt><dd data-testid="analytics-usage">{usageLine(a)}</dd>
+            {#each usageRows(a) as r (r.key)}<dt>{r.label}</dt><dd data-testid={`analytics-usage-${r.key}`}>{r.text}</dd>{:else}<dt>Usage</dt><dd data-testid="analytics-usage">{usageLine(a)}</dd>{/each}
             {#if a.paused}<dt>Paused</dt><dd class="bad">{pausedText(a.paused)}</dd>{/if}
             {#if a.lastError}<dt>Last error</dt><dd class="bad">{a.lastError}</dd>{/if}
           </dl>
