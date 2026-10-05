@@ -54,6 +54,10 @@ Measured on cam1 (2026-09-30):
    The analysed JPEG is copied to `data/analytics/<cam>/<eventId>.jpg`, so it
    outlives the 7-day stills. An analysis is deleted with its event (30 days).
 6. **Sent.** An `analysis` message goes out on the event stream (below).
+7. **Audited.** An analysis that made a Vision call writes one
+   `event-analysis` audit record (user `system`: the event, the still, ok or
+   failed, the calls made, the time taken, the categories found). A skip
+   made no call and writes none ([audit-log.md](audit-log.md)).
 
 ## The summary
 
