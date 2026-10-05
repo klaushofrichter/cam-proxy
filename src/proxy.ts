@@ -139,15 +139,15 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   const links = createLoginLinks();
   // The camera workers (spec 2026-10-05-multi-camera-host-design §3.1), in config order.
   const cams = new CameraRegistry(() => cameraIds(running));
-  // Stills may be off (or not built yet): no still, an empty list.
-  const stillAt = (ts: number) => cams.first().readStill(ts);
-  const stillsIn = (from: number, to: number) => cams.first().listStills(from, to);
+  // A camera's stills; stills may be off (or not built yet), the camera gone: no still, an empty list.
+  const stillAt = (cam: string, ts: number) => cams.get(cam)?.readStill(ts) ?? Promise.resolve(undefined);
+  const stillsIn = (cam: string, from: number, to: number) => cams.get(cam)?.listStills(from, to) ?? [];
   // Composed clips (spec 2026-09-28): one encoding at a time; abandoned and
   // old jobs are swept every 5 s.
   const font = running.composition?.font ?? defaultFont();
   const composer = createComposer({
     dir: join(running.server.dataDir, 'compositions'),
-    runner: ffmpegRunner({ font: font ?? '', clock: clockText, readStill: stillAt, hasAudio, paused: () => storage.paused(), stillsIntervalS: () => running.stills.intervalS }),
+    runner: ffmpegRunner({ font: font ?? '', clock: clockText, readStill: stillAt, hasAudio, paused: () => storage.paused(), stillsIntervalS: (cam) => cameraConfig(running, cam)?.stills.intervalS ?? running.stills.intervalS }),
   });
   const sweeper = setInterval(() => composer.sweep(), 5000);
   sweeper.unref();
@@ -309,8 +309,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     kinds: (cam) => cameraConfig(running, cam)?.analytics.kinds ?? running.analytics.kinds,
     config: () => running,
     secrets: () => ({ googleVisionKey: loaded.secrets.googleVisionKey, googleVisionUrl: loaded.secrets.googleVisionUrl }),
-    readStill: (cam, ts) => cams.get(cam)?.readStill(ts) ?? Promise.resolve(undefined),
-    listStills: (cam, from, to) => cams.get(cam)?.listStills(from, to) ?? [],
+    readStill: stillAt,
+    listStills: stillsIn,
     timeInfo,
     audit,
   });
@@ -324,8 +324,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     config: () => running,
     disk: () => storage.diskSpace(),
     timeInfo,
-    cameraName: () => cams.first().name(),
-    cameraModel: () => cams.first().status.state().model ?? null,
+    cameraName: (cam) => cams.get(cam)?.name() ?? cam,
+    cameraModel: (cam) => cams.get(cam)?.status.state().model ?? null,
     version: VERSION,
     stillsIn,
     readStill: stillAt,

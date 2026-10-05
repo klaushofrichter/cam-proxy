@@ -189,7 +189,7 @@ export function runFfmpeg(args: string[], signal: AbortSignal, onStdout: (text: 
 // The real runner (final review C1): stills written once and hard-linked
 // into numbered runs, then one small encode per piece, one after another,
 // then a join without encoding again. Checks for a cancel between steps.
-export function ffmpegRunner(o: { font: string; clock: (ts: number, timeZone?: string) => string; readStill: (ts: number) => Promise<Buffer | undefined>; hasAudio: (path: string) => Promise<boolean>; paused?: () => boolean; stillsIntervalS?: () => number; pieceMaxBytes?: number }): Runner {
+export function ffmpegRunner(o: { font: string; clock: (ts: number, timeZone?: string) => string; readStill: (cam: string, ts: number) => Promise<Buffer | undefined>; hasAudio: (path: string) => Promise<boolean>; paused?: () => boolean; stillsIntervalS?: (cam: string) => number; pieceMaxBytes?: number }): Runner {
   const pieceMax = o.pieceMaxBytes ?? PIECE_MAX_BYTES;
   return async ({ dir, out, req, onProgress, signal }) => {
     const check = () => {
@@ -201,7 +201,7 @@ export function ffmpegRunner(o: { font: string; clock: (ts: number, timeZone?: s
     for (const s of req.plan.segments) {
       check();
       if (s.kind === 'still') {
-        const jpeg = await o.readStill(s.ts);
+        const jpeg = await o.readStill(req.cam, s.ts);
         if (jpeg) {
           writeFileSync(join(dir, `still-${s.ts}.jpg`), jpeg);
           segments.push(s);
@@ -222,7 +222,7 @@ export function ffmpegRunner(o: { font: string; clock: (ts: number, timeZone?: s
       for (const f of runFrames(g.seconds, k)) linkSync(f.kind === 'still' ? join(dir, `still-${f.ts}.jpg`) : card, join(dir, f.file));
       k++;
     }
-    const pieces = pieceArgs({ segments, runFile: (n) => join(dir, `run-${n}-%04d.jpg`), pieceFile: (n) => join(dir, `piece-${n}.mp4`), size: req.size, badge: req.badge, font: o.font, clock: (ts) => o.clock(ts, req.timeZone), stillsIntervalS: o.stillsIntervalS?.() ?? 1, maxBytes: pieceMax });
+    const pieces = pieceArgs({ segments, runFile: (n) => join(dir, `run-${n}-%04d.jpg`), pieceFile: (n) => join(dir, `piece-${n}.mp4`), size: req.size, badge: req.badge, font: o.font, clock: (ts) => o.clock(ts, req.timeZone), stillsIntervalS: o.stillsIntervalS?.(req.cam) ?? 1, maxBytes: pieceMax });
     const total = pieces.reduce((a, p) => a + p.durationS, 0);
     let done = 0;
     for (const p of pieces) {
