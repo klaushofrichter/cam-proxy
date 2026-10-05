@@ -415,10 +415,10 @@ describe('PoeSwitch against the mock', () => {
     const base = { model: 'sscpoe-web' as const, host: '192.0.2.7', port: 8, ports: 8, offSeconds: 10 };
     const nc = (c: object, pw: string | null = PASSWORD) => new PoeSwitch({ config: () => ({ ...base, ...c }), password: () => pw ?? undefined }).notConfigured();
     expect(nc({})).toBeNull();
-    expect(nc({ model: 'none' })).toMatch(/camera.poeSwitch.model is none/);
-    expect(nc({ host: undefined })).toMatch(/camera.poeSwitch.host/);
-    expect(nc({ port: undefined })).toMatch(/camera.poeSwitch.port/);
-    expect(nc({ port: 9 })).toMatch(/camera.poeSwitch.port is above camera.poeSwitch.ports/);
+    expect(nc({ model: 'none' })).toMatch(/^poeSwitch.model is none/);
+    expect(nc({ host: undefined })).toMatch(/^poeSwitch.host/);
+    expect(nc({ port: undefined })).toMatch(/camera.s poeSwitch.port/);
+    expect(nc({ port: 9 })).toMatch(/poeSwitch.port is above poeSwitch.ports/);
     expect(nc({}, null)).toMatch(/CAMPROXY_POE_SWITCH_PASSWORD is not set/);
     const st = new PoeSwitch({ config: () => base, password: () => PASSWORD }).status();
     expect(st).toEqual({ model: 'sscpoe-web', host: '192.0.2.7', port: 8, ports: 8, offSeconds: 10, passwordSet: true, configured: true, busy: false, poeMaybeOff: false, last: null });

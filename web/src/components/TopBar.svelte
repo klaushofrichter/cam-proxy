@@ -6,8 +6,12 @@
   import UpdatedAgo from './UpdatedAgo.svelte';
   import { refreshNow, status } from '../lib/state';
   import { drawerOpen } from '../lib/nav';
+  import CameraPicker from './CameraPicker.svelte';
+  import { blockOf, selectedCamera } from '../lib/cameras';
 
-  const online = $derived($status ? ($status.camera.online ? 'online' : 'offline') : '…');
+  // The selected camera (several cameras), else the only one.
+  const block = $derived(blockOf($status, $selectedCamera));
+  const online = $derived(block ? (block.camera.online ? 'online' : 'offline') : '…');
 </script>
 
 <header data-testid="topbar">
@@ -15,10 +19,11 @@
     <Icon name="menu" />
   </button>
   <a class="brand" href="https://github.com/klaushofrichter/cam-proxy" target="_blank" rel="noopener noreferrer" title="cam-proxy on GitHub" aria-label="cam-proxy on GitHub" data-testid="brand"><Icon name="camera" size={22} /> <span class="brand-name">cam-proxy</span></a>
+  <CameraPicker />
   <!-- On phones the pills show a dot and the state only; the rest stays for screen readers and the title. -->
   <span class="badge {online}" title="Camera {online}" data-testid="camera-online"><span class="dot"></span><span class="long">{'camera '}</span>{online}</span>
-  <span class="badge {$status?.intake.onvif ?? ''}" title="Event intake: {$status ? `${$status.intake.source} (${$status.intake.onvif})` : '…'}" data-testid="events-intake"><span class="dot"></span>{#if $status}<span class="long">events: {$status.intake.source} (</span>{$status.intake.onvif}<span class="long">)</span>{:else}<span class="long">{'events: '}</span>…{/if}</span>
-  {#if $status?.camera.model}
+  <span class="badge {block?.intake.onvif ?? ''}" title="Event intake: {block ? `${block.intake.source} (${block.intake.onvif})` : '…'}" data-testid="events-intake"><span class="dot"></span>{#if block}<span class="long">events: {block.intake.source} (</span>{block.intake.onvif}<span class="long">)</span>{:else}<span class="long">{'events: '}</span>…{/if}</span>
+  {#if block?.camera.model}
     <span class="meta"><CameraMeta /></span>
   {/if}
   <span class="spacer"></span>

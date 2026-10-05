@@ -1,11 +1,14 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'path';
-import { DEFAULTS, type Config, type Secrets } from './defaults';
-import { checkPartial, leafAt, leafPaths, SettingError } from './schema';
+import { cameraDefaults, DEFAULTS, type Config, type Secrets } from './defaults';
+import { checkPartial, leafAt, leafPaths, SETTINGS, SettingError } from './schema';
+import { cameraConfig } from './cameras';
+import { normalizeFile, normalizeOverrides, translatePath } from './legacy';
 import { loadSecrets } from './secrets';
 import { EnvSettingError, readEnvLayer, type EnvLayer } from './env';
 
-export class ConfigError extends Error {}
+export { ConfigError } from './load-error';
+import { ConfigError } from './load-error';
 export type Source = 'default' | 'file' | 'override' | 'env';
 
 export interface Loaded {
@@ -21,21 +24,27 @@ export interface Loaded {
   envLayer: EnvLayer;
   envNames: Record<string, string>;
   envFile?: { path: string; read: boolean };
+  // The cameras in config order, and whether config.json had a legacy `camera` (spec 2026-10-05-multi-camera-host-design §4.2).
+  order: string[];
+  legacyCamera: boolean;
 }
 
+// Every setting path of this configuration: the cameras' paths under their ids.
+export const settingPaths = (c: Config): string[] => leafPaths(SETTINGS, '', c.cameraOrder);
+
 // Settings that only take effect after a restart (spec §14).
-const RESTART = ['server.port', 'server.dataDir', 'camera.', 'go2rtc.', 'events.onvif.', 'stills.enabled', 'stills.stream', 'stills.intervalS', 'stills.size', 'stills.quality', 'previews.tileSize', 'previews.grid', 'previews.quality', 'ftp.enabled', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.user', 'ftp.publicHost', 'ftp.certFile', 'ftp.keyFile', 'composition.font', 'server.trustProxy'];
+const RESTART = ['server.port', 'server.dataDir', 'cameras.', 'go2rtc.', 'events.onvif.', 'stills.enabled', 'stills.stream', 'stills.intervalS', 'stills.size', 'stills.quality', 'previews.tileSize', 'previews.grid', 'previews.quality', 'ftp.enabled', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.publicHost', 'ftp.certFile', 'ftp.keyFile', 'composition.font', 'server.trustProxy'];
 // Read once when the process starts: the in-process restart leaves them
 // pending until a new process.
 const PROCESS = ['server.port', 'server.dataDir', 'server.trustProxy', 'composition.font'];
 export function needsProcessRestart(path: string): boolean {
   return PROCESS.includes(path);
 }
-// Live although under a restart prefix: the PoE switch is read on every use;
-// the Baichuan port at the next connection.
-const LIVE = ['camera.poeSwitch.', 'camera.baichuanPort'];
+// Live although under a restart prefix: the PoE switch is read on every use,
+// the Baichuan port at the next connection, analytics kinds on every event.
+const LIVE = [/^poeSwitch\./, /^cameras\.[^.]+\.poeSwitch\./, /^cameras\.[^.]+\.baichuanPort$/, /^cameras\.[^.]+\.analytics\./];
 export function needsRestart(path: string): boolean {
-  if (LIVE.some((l) => (l.endsWith('.') ? path.startsWith(l) : path === l))) return false;
+  if (LIVE.some((re) => re.test(path))) return false;
   return RESTART.some((r) => (r.endsWith('.') ? path.startsWith(r) : path === r));
 }
 
@@ -89,9 +98,13 @@ function asConfigError<T>(fn: () => T): T {
 }
 
 function crossCheck(c: Config): void {
-  if (!c.camera.host) throw new ConfigError('camera.host: required');
   const [cols, rows] = c.previews.grid.split('x').map(Number);
-  if (cols * rows < 60 / c.stills.intervalS) throw new ConfigError(`previews.grid: ${c.previews.grid} holds fewer than the ${60 / c.stills.intervalS} tiles of a minute`);
+  for (const id of c.cameraOrder) {
+    const iv = cameraConfig(c, id)!.stills.intervalS;
+    if (cols * rows < 60 / iv) throw new ConfigError(`previews.grid: ${c.previews.grid} holds fewer than the ${60 / iv} tiles of a minute${c.cameraOrder.length > 1 ? ` (camera ${id})` : ''}`);
+  }
+  // Ruling P1-2: FTP for one camera until the per-camera users of phase 2.
+  if (c.cameraOrder.filter((id) => cameraConfig(c, id)!.ftp.enabled).length > 1) throw new ConfigError('ftp.enabled: several cameras need per-camera FTP users (multi-camera phase 2); enable it for one camera');
   const [a, b] = c.ftp.passive.split('-').map(Number);
   if (a > 65535 || b > 65535 || a > b || b - a > 100) throw new ConfigError('ftp.passive: must be A-B with A <= B, at most 100 ports');
   if (c.storage.maxPercent !== undefined && c.storage.maxBytes !== undefined) {
@@ -100,9 +113,14 @@ function crossCheck(c: Config): void {
   if (!c.go2rtc.binary && !c.go2rtc.url) throw new ConfigError('go2rtc.binary: set go2rtc.binary or go2rtc.url');
 }
 
-function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSettings: Obj, overrides: Obj, baseDir: string, layer: EnvLayer): Loaded {
+type Norm = { order: string[]; legacy: boolean };
+const normOf = (l: Loaded): Norm => ({ order: l.order, legacy: l.legacyCamera });
+
+function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSettings: Obj, overrides: Obj, baseDir: string, layer: EnvLayer, norm: Norm): Loaded {
   // A copy: the result is changed below (dataDir), DEFAULTS never is.
   let merged = merge(structuredClone(DEFAULTS) as unknown as Obj, structuredClone(fileSettings));
+  // Each camera: its defaults, then its config.json node (spec 2026-10-05-multi-camera-host-design §4.1).
+  merged.cameras = Object.fromEntries(norm.order.map((id) => [id, merge(cameraDefaults(id) as unknown as Obj, structuredClone(((fileSettings.cameras as Obj | undefined)?.[id] ?? {}) as Obj))]));
   // storage.maxBytes replaces the default maxPercent budget.
   if (getPath(fileSettings, 'storage.maxBytes') !== undefined || getPath(overrides, 'storage.maxBytes') !== undefined) {
     merged = merge(merged, { storage: { ...(merged.storage as Obj), maxPercent: undefined } });
@@ -113,11 +131,15 @@ function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSetti
     delete (merged.go2rtc as Obj).binary;
   }
   const config = merge(merged, structuredClone(overrides)) as unknown as Config;
-  // The environment last: it wins over the overrides and the file.
+  config.cameraOrder = [...norm.order];
+  // The environment last: it wins over the overrides and the file. CAMERA_HOST
+  // means the one camera's address (spec §4.2).
   const envNames: Record<string, string> = {};
   if (layer.cameraHost) {
-    config.camera.host = layer.cameraHost.value;
-    envNames['camera.host'] = layer.cameraHost.name;
+    if (norm.order.length !== 1) throw new ConfigError(`${layer.cameraHost.name}: set cameras[].host instead (several cameras)`);
+    const id = norm.order[0];
+    config.cameras[id].host = layer.cameraHost.value;
+    envNames[`cameras.${id}.host`] = layer.cameraHost.name;
   }
   if (layer.piAddress) {
     config.ftp.publicHost = layer.piAddress.value;
@@ -129,11 +151,11 @@ function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSetti
   config.server.dataDir = dataDir;
   crossCheck(config);
   const sources: Record<string, Source> = {};
-  for (const p of leafPaths()) {
+  for (const p of settingPaths(config)) {
     sources[p] = envNames[p] ? 'env' : getPath(overrides, p) !== undefined ? 'override' : getPath(fileSettings, p) !== undefined ? 'file' : 'default';
   }
-  const secrets = asConfigError(() => loadSecrets(env, config.ftp.enabled));
-  return { config, secrets, sources, files: { config: configFile, overrides: join(dataDir, 'overrides.json') }, env, fileSettings, overrides, envLayer: layer, envNames, ...(layer.file ? { envFile: layer.file } : {}) };
+  const secrets = asConfigError(() => loadSecrets(env, config.cameraOrder.some((id) => cameraConfig(config, id)!.ftp.enabled), config.cameraOrder));
+  return { config, secrets, sources, files: { config: configFile, overrides: join(dataDir, 'overrides.json') }, env, fileSettings, overrides, envLayer: layer, envNames, ...(layer.file ? { envFile: layer.file } : {}), order: norm.order, legacyCamera: norm.legacy };
 }
 
 // Defaults, then config.json (CAMPROXY_CONFIG or ./config.json), then
@@ -141,13 +163,15 @@ function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSetti
 export function loadConfig(env: NodeJS.ProcessEnv, opts: { cwd?: string } = {}): Loaded {
   const cwd = opts.cwd ?? process.cwd();
   const file = env.CAMPROXY_CONFIG ? resolve(cwd, env.CAMPROXY_CONFIG) : existsSync(join(cwd, 'config.json')) ? join(cwd, 'config.json') : undefined;
-  const fileSettings = file ? readJson(file) : {};
+  // A legacy `camera` is read as a list of one (spec §4.2); nothing is rewritten.
+  const norm = normalizeFile(file ? readJson(file) : {});
+  const fileSettings = norm.settings;
   asConfigError(() => checkPartial(fileSettings));
   const baseDir = file ? dirname(file) : cwd;
   // Overrides live in the data folder, which the file (not an override) sets.
   const fileDataDir = (getPath(fileSettings, 'server.dataDir') as string | undefined) ?? DEFAULTS.server.dataDir;
   const overridesFile = join(isAbsolute(fileDataDir) ? fileDataDir : resolve(baseDir, fileDataDir), 'overrides.json');
-  const overrides = existsSync(overridesFile) ? readJson(overridesFile) : {};
+  const overrides = normalizeOverrides(existsSync(overridesFile) ? readJson(overridesFile) : {}, norm.order);
   asConfigError(() => checkPartial(overrides));
   if (getPath(overrides, 'server.dataDir') !== undefined) throw new ConfigError('server.dataDir: can only be set in config.json');
   let layer: EnvLayer;
@@ -157,7 +181,7 @@ export function loadConfig(env: NodeJS.ProcessEnv, opts: { cwd?: string } = {}):
     if (e instanceof EnvSettingError) throw new ConfigError(e.message);
     throw e;
   }
-  return build(env, file, fileSettings as Obj, overrides as Obj, baseDir, layer);
+  return build(env, file, fileSettings as Obj, overrides as Obj, baseDir, layer, norm);
 }
 
 function writeOverrides(file: string, overrides: Obj): void {
@@ -198,7 +222,9 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 // is invalid. A value equal to what Reset would restore (config.json's, else
 // the default) is not stored: it removes the override instead (Klaus
 // 2026-10-05, overrides that only repeated the default).
-export function applyOverrides(loaded: Loaded, patch: object): Loaded {
+export function applyOverrides(loaded: Loaded, given: object): Loaded {
+  // Legacy camera.* and ftp.user paths on one camera (Ruling P1-8).
+  const patch = normalizeOverrides(given, loaded.order);
   asConfigError(() => checkPartial(patch));
   if (getPath(patch, 'server.dataDir') !== undefined) throw new ConfigError('server.dataDir: can only be set in config.json');
   // An override of a setting the environment sets would never apply.
@@ -207,18 +233,18 @@ export function applyOverrides(loaded: Loaded, patch: object): Loaded {
   }
   let overrides = merge(loaded.overrides as Obj, patch as Obj);
   const baseDir = loaded.files.config ? dirname(loaded.files.config) : process.cwd();
-  const next = build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides, baseDir, loaded.envLayer);
+  const next = build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides, baseDir, loaded.envLayer, normOf(loaded));
   // The checks ran on the whole result above; a path is dropped only when the
   // configuration without it is valid and holds the same value.
   for (const p of setPaths(patch as Obj)) {
     const without = dropPath(overrides, p);
     try {
-      if (same(getPath(build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, without, baseDir, loaded.envLayer).config, p), getPath(next.config, p))) overrides = without;
+      if (same(getPath(build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, without, baseDir, loaded.envLayer, normOf(loaded)).config, p), getPath(next.config, p))) overrides = without;
     } catch {
       // Not valid without it: the override stays.
     }
   }
-  const result = overrides === next.overrides ? next : build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides, baseDir, loaded.envLayer);
+  const result = overrides === next.overrides ? next : build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides, baseDir, loaded.envLayer, normOf(loaded));
   writeOverrides(loaded.files.overrides, overrides);
   return result;
 }
@@ -226,10 +252,11 @@ export function applyOverrides(loaded: Loaded, patch: object): Loaded {
 // The configuration without one override, not written: what Reset goes back
 // to (the Settings page shows it on the button).
 export function withoutOverride(loaded: Loaded, path: string): Loaded {
-  if (!leafPaths().includes(path)) throw new ConfigError(`${path}: unknown setting`);
+  path = translatePath(path, loaded.order);
+  if (!settingPaths(loaded.config).includes(path)) throw new ConfigError(`${path}: unknown setting`);
   if (getPath(loaded.overrides, path) === undefined) return loaded;
   const baseDir = loaded.files.config ? dirname(loaded.files.config) : process.cwd();
-  return build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, dropPath(loaded.overrides as Obj, path), baseDir, loaded.envLayer);
+  return build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, dropPath(loaded.overrides as Obj, path), baseDir, loaded.envLayer, normOf(loaded));
 }
 
 // What an override's Reset goes back to (GET /control/config shows it):
@@ -240,7 +267,8 @@ export function withoutOverride(loaded: Loaded, path: string): Loaded {
 // would refuse (a combination only the override makes valid) answers the
 // file's value or the default all the same.
 export interface ResetTarget { value?: unknown; source: 'file' | 'default' | 'env'; same?: true; means?: string }
-export function resetTarget(loaded: Loaded, p: string): ResetTarget {
+export function resetTarget(loaded: Loaded, path: string): ResetTarget {
+  const p = translatePath(path, loaded.order);
   let value: unknown;
   let source: ResetTarget['source'];
   try {
@@ -270,7 +298,7 @@ export function removeOverride(loaded: Loaded, path: string): Loaded {
 // back to config.json and the built-in defaults; the environment still wins.
 export function removeAllOverrides(loaded: Loaded): Loaded {
   const baseDir = loaded.files.config ? dirname(loaded.files.config) : process.cwd();
-  const next = build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, {}, baseDir, loaded.envLayer);
+  const next = build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, {}, baseDir, loaded.envLayer, normOf(loaded));
   writeOverrides(loaded.files.overrides, {});
   return next;
 }

@@ -35,11 +35,11 @@ export function eventsRepair(d: EventsRepairDeps, limits: { events?: number } = 
     if (cmp.cancelled || ctx.signal.aborted) return { counts, top: [], items: [], message: 'nothing added', stopped: null };
     counts.requested = list.length;
     ctx.progress({ phase: 'repair', done: 0, total: list.length });
-    const cam = d.settings().cam;
+    const cam = d.settings(ctx.cam).cam;
     const { added, matched } = addRecoveredEvents(
       d.catalog, cam,
       list.map((m) => ({ kind: m.kind, start_ts: m.start, end_ts: m.end, raw: { runId: ctx.runId, check: ctx.source.runId, recordings: m.recordings, stream: cmp.stream, bounds: BOUNDS } })),
-      { beforeMs: SPAN_BEFORE_MS, afterMs: SPAN_AFTER_MS, openMs: d.settings().eventMaxOpenMin * 60_000 },
+      { beforeMs: SPAN_BEFORE_MS, afterMs: SPAN_AFTER_MS, openMs: d.settings(ctx.cam).eventMaxOpenMin * 60_000 },
     );
     counts.done = added.length;
     counts.skipped = matched;

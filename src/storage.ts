@@ -261,12 +261,16 @@ export class Storage extends EventEmitter {
       // Still checks (cams #179) are kept as long as events, by their second.
       deleted.stillChecks = deleteChecksBefore(this.d.catalog, eventsBefore);
       // Images no row names: analyses' (deleted with their event) in
-      // analytics/, still checks' in their own folder, still-checks/.
+      // analytics/, still checks' in their own folder, still-checks/; in
+      // every camera's folder, also a camera removed from the config.
       const sweep = (folder: string, keep: Set<string>) => {
-        const dir = join(cfg.server.dataDir, folder, cfg.camera.id);
-        for (const f of existsSync(dir) ? readdirSync(dir) : []) {
-          const path = join(dir, f);
-          if (!keep.has(path)) try { unlinkSync(path); } catch { /* gone */ }
+        const base = join(cfg.server.dataDir, folder);
+        for (const cam of safeDir(base)) {
+          const dir = join(base, cam);
+          for (const f of safeDir(dir)) {
+            const path = join(dir, f);
+            if (!keep.has(path)) try { unlinkSync(path); } catch { /* gone, or a folder */ }
+          }
         }
       };
       sweep('analytics', analysisImages(this.d.catalog));

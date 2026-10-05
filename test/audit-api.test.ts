@@ -23,7 +23,8 @@ describe('audit API', () => {
     expect(r.status).toBe(200);
     expect(r.headers['content-type']).toMatch(/application\/x-ndjson/);
     const [rec] = lines(r.text);
-    expect(rec).toMatchObject({ event: { action: 'proxy-start', category: ['process'], type: ['start'], outcome: 'success' }, user: { name: 'system' }, labels: { camera: 'cam1' } });
+    expect(rec).toMatchObject({ event: { action: 'proxy-start', category: ['process'], type: ['start'], outcome: 'success' }, user: { name: 'system' } });
+    expect(rec.labels).toBeUndefined(); // a host record names no camera (spec §5.2)
     expect(rec.cam_proxy).toMatchObject({ config: { camera: 'cam1' } });
     expect(r.headers['x-has-more']).toBe('false');
     expect(r.headers['x-next-cursor']).toBe(rec.cam_proxy.cursor);

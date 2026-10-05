@@ -4,6 +4,11 @@ import { STREAM_TYPES, matches, type Filter, type StreamLog, type StreamMessage,
 interface SseOptions { maxClients: number; queuePerClient: number; pingS: number }
 interface SseStats { messages: Record<string, number>; replayed: number; dropped: number }
 
+// What this proxy supports beyond the pre-multi-camera API, listed on every
+// GET /api/cameras item (spec 2026-10-05-multi-camera-host-design §6.1).
+// Clients test for a name, never a version; names are only ever appended.
+export const FEATURES: readonly string[] = ['sse-cam-list'];
+
 const PAGE = 500;
 const BLOCKED_MS = 5000; // a client whose socket stays full this long is dropped
 const list = (v: unknown) => (typeof v === 'string' && v ? v.split(',').map((s) => s.trim()).filter(Boolean) : undefined);
@@ -12,8 +17,11 @@ function filterFrom(req: Request): Filter | string {
   const types = list(req.query.types) ?? STREAM_TYPES.filter((t) => t !== 'still');
   const bad = types.find((t) => !(STREAM_TYPES as readonly string[]).includes(t));
   if (bad) return `unknown type: ${bad}`;
-  const cam = typeof req.query.cam === 'string' ? req.query.cam : undefined;
-  return { types: types as StreamType[], cam, kinds: list(req.query.kinds) };
+  // ?cam=a,b: these cameras; empties dropped, duplicates once; an unknown id
+  // matches nothing (spec 2026-10-05-multi-camera-host-design §6.2).
+  // A repeated ?cam=a&cam=b (an array) counts as a,b.
+  const cams = list(Array.isArray(req.query.cam) ? req.query.cam.filter((v) => typeof v === 'string').join(',') : req.query.cam);
+  return { types: types as StreamType[], cams: cams?.length ? [...new Set(cams)] : undefined, kinds: list(req.query.kinds) };
 }
 
 function resumeFrom(req: Request): number | undefined {
@@ -113,7 +121,7 @@ export function sseHandler(log: StreamLog, opts: SseOptions): SseHandler {
     };
     log.on('message', onMessage);
     const onLive = (cam: string, type: StreamType, text: string) => {
-      if (replaying || !filter.types.includes(type) || (filter.cam && filter.cam !== cam)) return;
+      if (replaying || !filter.types.includes(type) || (filter.cams && !filter.cams.includes(cam))) return;
       stats.messages[type] = (stats.messages[type] ?? 0) + 1;
       queue.push(text);
       if (queue.length > o.queuePerClient) return drop();

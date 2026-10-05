@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Before updating** (the Pi): back up `data/overrides.json` and `data/catalog.sqlite`. The previous release won't start on the new overrides (`cameras.*`) or the catalog's schema 9; a rollback is restoring both and the previous image (docs/raspberry-pi.md).
+- Several cameras per proxy: `cameras` in config.json (a list), a camera worker each, supervised (a failing camera retries with backoff, the others go on; a camera without an address waits idle instead of stopping the proxy). Today's `camera` object still works unchanged; overrides with legacy paths are read translated and written back as `cameras.<id>.*` / `poeSwitch.*`. `GET /control/config` shows the new paths.
+- `GET /api/cameras` lists every camera, with `error` and `features` (`["sse-cam-list"]`). A camera being restarted answers `503 camera_restarting`.
+- SSE: `?cam=a,b` filters to several cameras.
+- Health summary: `cameras[]` and one aggregated item per camera kind; schema 1, the top level is the first camera.
+- Audit records name their camera (`labels.camera`) only when they concern one.
+- `CAMPROXY_CAMERA_PASSWORD_<ID>` for a camera's own password.
+- Admin UI: a camera picker when the proxy has several cameras; the camera actions act on the picked camera. `GET /control/cameras`, `GET /control/cameras/:cam/status`, `POST /control/cameras/:cam/actions/:name` (or `?cam=<id>` on `/control/actions/:name`) and `PUT /control/cameras/:cam/name`; without a camera, a multi-camera proxy answers `400 camera_required`; `restart` with a camera restarts that camera only.
+
+## v2026.10.05.5
+
 - Settings: a value equal to config.json's or the default is no longer stored as an override; saving it removes the override (also in a whole-group `PUT /control/config`, which before stored every field it carried, e.g. `camera.poeSwitch.ports` 8 and `offSeconds` 10).
 - Settings page: an override equal to the default (kept by an older version) shows "override = default" (or "= config.json") with a tooltip, and no Reset button, since Reset would change nothing. Reset to defaults still removes it, listed as "N overrides equal to the default are removed too, no change in effect".
 - Settings page: a Reset to an unset state says what that means, e.g. "Reset – none (no PoE switch: power-cycle off)", "Reset – not set (PoE switch control off: no switch address)"; the same in Reset to defaults. `GET /control/config` `resetTo` has `same` and `means`.

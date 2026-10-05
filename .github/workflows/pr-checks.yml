@@ -63,6 +63,10 @@ jobs:
       - run: npm run test:e2e
         env:
           CI: 'true'
+      # Three cam-sims behind one proxy (e2e/multi/start.ts): the camera picker.
+      - run: npm run test:e2e:multi
+        env:
+          CI: 'true'
 
   container:
     runs-on: ubuntu-latest

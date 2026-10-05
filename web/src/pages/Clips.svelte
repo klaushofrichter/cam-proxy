@@ -3,6 +3,7 @@
   import { clipChips } from '../lib/chips';
   import { api } from '../lib/api';
   import { feed, refreshTick } from '../lib/state';
+  import { pickCamera, selectedCamera } from '../lib/cameras';
 
   interface Clip { id: number; start: number; end: number | null; stream: string; size: number; origin?: string; events: number[]; url: string; snapshotUrl: string | null }
   interface Ev { id: number; kind: string }
@@ -24,8 +25,10 @@
     message = '';
     try {
       const cams = await api<Array<{ id: string }>>('GET', '/api/cameras');
-      if (!cams[0]) return;
-      const cam = encodeURIComponent(cams[0].id);
+      // The camera picked in the top bar (several cameras), else the first.
+      const id = pickCamera(cams.map((c) => c.id), $selectedCamera);
+      if (!id) return;
+      const cam = encodeURIComponent(id);
       const from = new Date(`${day}T00:00:00`).getTime();
       const to = from + 86_400_000 - 1;
       // Events from 6 h before the day: a clip just after midnight can cover an
@@ -42,6 +45,7 @@
   $effect(() => {
     void day;
     void $refreshTick;
+    void $selectedCamera;
     void load();
   });
   // A new clip announced on the stream shows up when today is open.

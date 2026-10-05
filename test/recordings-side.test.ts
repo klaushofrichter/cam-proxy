@@ -91,7 +91,7 @@ describe('the recordings side', () => {
 
   it('a change of camera.baichuanPort closes the session; the next use connects to the new port', async () => {
     expect(p.proxy.recordings.session.connected()).toBe(true);
-    const port = p.proxy.running.camera.baichuanPort;
+    const port = p.proxy.running.cameras.cam1.baichuanPort;
     const unused = await freePort();
     const r = await request(p.base).put('/control/config').set(auth(ADMIN_TOKEN)).send({ camera: { baichuanPort: unused } });
     expect(r.status).toBe(200);

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'child_process';
+import { trackChild } from '../children';
 import { EventEmitter } from 'events';
 import { Transform, type Readable } from 'stream';
 import { logger } from '../log';
@@ -144,6 +145,7 @@ export class FrameGrabber extends EventEmitter {
       '-map', '[t]', '-f', 'image2pipe', '-flush_packets', '1', '-c:v', 'mjpeg', '-q:v', String(this.o.tileQuality), 'pipe:3',
     ];
     const p = spawn(this.o.ffmpeg ?? 'ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
+    trackChild(p);
     this.proc = p;
     this.spawnedAt = this.now();
     const stills: Buffer[] = [];

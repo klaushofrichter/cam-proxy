@@ -50,11 +50,12 @@ export interface ArchiveDeps {
   config: () => Config;
   disk: () => { free: number; size: number };
   timeInfo: () => TimeInfo | undefined;
-  cameraName: () => string;
-  cameraModel: () => string | null;
+  // Per camera (spec 2026-10-05-multi-camera-host-design §5.2): the archive is host-wide, its rows name their camera.
+  cameraName: (cam: string) => string;
+  cameraModel: (cam: string) => string | null;
   version: string;
-  stillsIn: (from: number, to: number) => number[];
-  readStill: (ts: number) => Promise<Buffer | undefined>;
+  stillsIn: (cam: string, from: number, to: number) => number[];
+  readStill: (cam: string, ts: number) => Promise<Buffer | undefined>;
   now?: () => number;
   // tests: no ffmpeg/ffprobe
   media?: { duration: (path: string) => Promise<number | null>; frame: (path: string) => Promise<Buffer | undefined> };
@@ -75,10 +76,10 @@ export class Archive {
       store: this.store,
       now: d.now,
       checkSpace: (bytes, jobId) => this.checkSpace(bytes, jobId),
-      snapshot: (w) => takeSnapshot({ catalog: d.catalog, cam: d.config().camera.id, cameraName: d.cameraName(), model: d.cameraModel(), version: d.version, maxOpenMs: d.config().events.maxOpenMin * 60_000, now: this.now() }, w.from, w.to),
-      thumbDeps: (clip) => this.thumbDeps(clip, media.frame),
+      snapshot: (w, cam) => takeSnapshot({ catalog: d.catalog, cam, cameraName: d.cameraName(cam), model: d.cameraModel(cam), version: d.version, maxOpenMs: d.config().events.maxOpenMin * 60_000, now: this.now() }, w.from, w.to),
+      thumbDeps: (clip, cam) => this.thumbDeps(cam, clip, media.frame),
       duration: media.duration,
-      defaultName: (from) => defaultName(from, d.cameraName(), d.timeInfo()),
+      defaultName: (from, cam) => defaultName(from, d.cameraName(cam), d.timeInfo()),
       onDone: (row, req, job) => this.added(row, req, job),
       onFailed: (req, job) => this.failed(req, job),
     });
@@ -120,15 +121,15 @@ export class Archive {
     }
   }
 
-  private thumbDeps(clip: string, frame: (path: string) => Promise<Buffer | undefined>): ThumbDeps {
+  private thumbDeps(cam: string, clip: string, frame: (path: string) => Promise<Buffer | undefined>): ThumbDeps {
     const dataDir = resolve(this.d.dataDir);
     // Only image copies the analytics wrote (analytics/, still-checks/).
     const allowed = [resolve(dataDir, 'analytics'), resolve(dataDir, 'still-checks')];
     const intervalMs = this.d.config().stills.intervalS * 1000;
     return {
       stillNear: async (ts) => {
-        for (const t of this.d.stillsIn(ts, ts + Math.max(3000, 2 * intervalMs)).sort((a, b) => a - b)) {
-          const jpeg = await this.d.readStill(t);
+        for (const t of this.d.stillsIn(cam, ts, ts + Math.max(3000, 2 * intervalMs)).sort((a, b) => a - b)) {
+          const jpeg = await this.d.readStill(cam, t);
           if (jpeg) return { ts: t, jpeg };
         }
         return undefined;
@@ -142,13 +143,20 @@ export class Archive {
     };
   }
 
-  // Notes every change: one stream message (ruling 19).
-  notify(action: Action, ids: number[], items?: ArchiveRow[]): void {
-    if (!ids.length) return;
-    try {
-      this.d.log.append(this.d.config().camera.id, 'archive', { action, ids, ...(items ? { items: items.map(itemJson) } : {}) });
-    } catch (err) {
-      logger.warn({ err: (err as Error).message }, 'archive_notify_failed');
+  // Notes every change: one stream message per camera of the rows named
+  // (ruling 19; Ruling P1-14): a client subscribed to some cameras sees the
+  // changes of exactly those.
+  notify(action: Action, rows: { id: number; cam: string }[], items?: ArchiveRow[]): void {
+    if (!rows.length) return;
+    const byCam = new Map<string, number[]>();
+    for (const r of rows) byCam.set(r.cam, [...(byCam.get(r.cam) ?? []), r.id]);
+    for (const [cam, ids] of byCam) {
+      const mine = items?.filter((x) => x.cam === cam);
+      try {
+        this.d.log.append(cam, 'archive', { action, ids, ...(mine ? { items: mine.map(itemJson) } : {}) });
+      } catch (err) {
+        logger.warn({ err: (err as Error).message }, 'archive_notify_failed');
+      }
     }
   }
 
@@ -156,6 +164,8 @@ export class Archive {
     this.d.audit.write({
       action, category: ['file'], type: [type], outcome, user: who.user, ip: who.ip, userAgent: who.userAgent, message,
       ...(error ? { error } : {}),
+      // A record about one clip names its camera (spec 2026-10-05-multi-camera-host-design §5.2).
+      ...(typeof details.cam === 'string' ? { camera: details.cam } : {}),
       details: { ...details, ...(who.requestedBy ? { requestedBy: who.requestedBy } : {}), ...(who.onBehalfOf ? { onBehalfOf: who.onBehalfOf } : {}) },
     });
   }
@@ -186,7 +196,7 @@ export class Archive {
     this.record('archive-add', 'creation', who, 'success', `Archive: added "${row.name}" (${row.id}, ${mb(row.bytes)}, from ${this.what(req)})`, {
       id: row.id, cam: row.cam, name: row.name, source: req.source, bytes: row.bytes, labels: req.labels, retentionDays: req.retentionDays, durationS: row.duration_s, quality: row.quality, jobId: job.id,
     });
-    this.notify('add', [row.id], [row]);
+    this.notify('add', [row], [row]);
   }
 
   private failed(req: ArchiveRequest, job: JobView): void {
@@ -215,13 +225,14 @@ export class Archive {
       logger.warn({ err: (err as Error).message, id }, 'archive_meta_write_failed');
     }
     this.record('archive-update', 'change', who, 'success', `Archive: "${row.name}" (${id}) changed: ${changes.map((c) => c.field).join(', ')}`, { id, cam: row.cam, name: row.name, changes });
-    this.notify('update', [id], [row]);
+    this.notify('update', [row], [row]);
     return row;
   }
 
   // One record per clip, one stream message for all.
   delete(ids: number[], who: Who): { deleted: number[]; notFound: number[] } {
     const deleted: number[] = [];
+    const removed: ArchiveRow[] = [];
     const notFound: number[] = [];
     for (const id of ids) {
       const row = this.store.remove(id);
@@ -230,9 +241,10 @@ export class Archive {
         continue;
       }
       deleted.push(id);
+      removed.push(row);
       this.record('archive-delete', 'deletion', who, 'success', `Archive: deleted "${row.name}" (${id}, ${mb(row.bytes)})`, { id, cam: row.cam, name: row.name, bytes: row.bytes, createdAt: row.created_at });
     }
-    this.notify('delete', deleted);
+    this.notify('delete', removed);
     return { deleted, notFound };
   }
 
@@ -241,12 +253,13 @@ export class Archive {
     const rows = allArchive(this.d.catalog);
     if (count !== rows.length) return { mismatch: rows.length };
     let bytes = 0;
+    const removed: ArchiveRow[] = [];
     for (const r of rows) {
-      if (this.store.remove(r.id)) bytes += r.bytes;
+      if (this.store.remove(r.id)) (bytes += r.bytes), removed.push(r);
     }
     const ids = rows.map((r) => r.id);
     this.record('archive-clear', 'deletion', who, 'success', `Archive cleared: ${rows.length} clip${rows.length === 1 ? '' : 's'}, ${mb(bytes)}`, { count: rows.length, bytes, ids });
-    this.notify('clear', ids);
+    this.notify('clear', removed);
     return { cleared: rows.length, bytes };
   }
 
@@ -255,15 +268,17 @@ export class Archive {
     const rows = expiredArchive(this.d.catalog, now);
     let bytes = 0;
     const ids: number[] = [];
+    const removed: ArchiveRow[] = [];
     for (const r of rows) {
       if (!this.store.remove(r.id)) continue;
       bytes += r.bytes;
       ids.push(r.id);
+      removed.push(r);
       this.record('archive-expire', 'deletion', { user: 'system' }, 'success', `Archive: "${r.name}" (${r.id}) expired after ${r.retention_days} days`, {
         id: r.id, cam: r.cam, name: r.name, retentionDays: r.retention_days, createdAt: r.created_at, expiresAt: r.expires_at, bytes: r.bytes,
       });
     }
-    this.notify('expire', ids);
+    this.notify('expire', removed);
     return { removed: ids.length, bytes };
   }
 

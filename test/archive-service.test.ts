@@ -20,7 +20,7 @@ function setup(free: number) {
   config.server.dataDir = dir;
   config.storage.minFreeBytes = 100 * MB;
   const archive = new Archive({
-    dataDir: dir, catalog, log: new StreamLog(catalog), audit: new AuditLog({ dir: join(dir, 'audit'), version: 't', camera: () => 'cam1' }), config: () => config,
+    dataDir: dir, catalog, log: new StreamLog(catalog), audit: new AuditLog({ dir: join(dir, 'audit'), version: 't' }), config: () => config,
     disk: () => ({ free, size: 10_000 * MB }), timeInfo: () => undefined, cameraName: () => 'Den', cameraModel: () => null, version: 't',
     stillsIn: () => [], readStill: async () => undefined, media: { duration: async () => 1, frame: async () => undefined },
   });

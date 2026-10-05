@@ -5,11 +5,20 @@
 // or 0 = none; `value` is that state, undefined for not set). The Settings
 // page says it on a Reset that goes back to it, and in Reset to defaults.
 type Unset = { value?: string | number | boolean; text: string };
-type Leaf =
+export type Leaf =
   | { type: 'integer'; min: number; max: number; optional?: boolean; oneOf?: number[]; doc: string; unset?: Unset }
   | { type: 'boolean'; doc: string; unset?: Unset }
   | { type: 'string'; enum?: string[]; pattern?: string; optional?: boolean; doc: string; unset?: Unset };
-export type Node = { [key: string]: Node | Leaf };
+// A keyed collection (spec 2026-10-05-multi-camera-host-design §4.1): an
+// object keyed by camera id, each entry one `collection` node; config.json
+// writes it as an array (order = display order).
+export type Collection = { collection: Node; doc: string };
+export type Node = { [key: string]: Node | Leaf | Collection };
+// Not `file` or `*-file`: CAMPROXY_CAMERA_PASSWORD_<ID> would collide with another id's _FILE variable.
+export const CAMERA_ID = '^(?!file$)(?!.*-file$)[a-z0-9][a-z0-9-]{0,31}$';
+export const collection = (of: Node, doc: string): Collection => ({ collection: of, doc });
+const isCollection = (n: Node | Leaf | Collection): n is Collection => typeof (n as Collection).collection === 'object' && typeof (n as Collection).doc === 'string';
+const isLeaf = (n: Node | Leaf | Collection): n is Leaf => !isCollection(n) && typeof (n as Leaf).type === 'string' && typeof (n as Leaf).doc === 'string';
 
 const port = (doc: string): Leaf => ({ type: 'integer', min: 1, max: 65535, doc });
 const int = (min: number, max: number, doc: string, optional = false): Leaf => ({ type: 'integer', min, max, doc, optional });
@@ -17,7 +26,82 @@ const int = (min: number, max: number, doc: string, optional = false): Leaf => (
 const unset = (leaf: Leaf, text: string, value?: Unset['value']): Leaf => ({ ...leaf, unset: { ...(value !== undefined ? { value } : {}), text } });
 const size = (doc: string): Leaf => ({ type: 'string', pattern: '^[1-9][0-9]{1,4}x[1-9][0-9]{1,4}$', doc });
 
-const SETTINGS: Node = {
+// Today's `camera` object (one camera): read from legacy files and translated
+// at load (spec §4.2).
+export const LEGACY_CAMERA: Node = {
+  id: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,31}$', doc: 'camera id used in paths and the API' },
+  name: { type: 'string', pattern: '^.{1,64}$', doc: "fallback display name until the camera's own name is read (the camera stores its name)" },
+  host: unset({ type: 'string', pattern: '^[^\\s/]*$', doc: 'address or name, optional :port (required)' }, 'no camera address: the camera waits idle (Find camera can still be used)', ''),
+  protocol: { type: 'string', enum: ['https', 'http'], doc: 'camera HTTP API protocol' },
+  tlsName: unset({ type: 'string', pattern: '^[^\\s]+$', optional: true, doc: 'verify the camera certificate against this name' }, "the camera's certificate is not verified"),
+  webUiUrl: unset({ type: 'string', pattern: '^(https?://[^\\s]+|none)$', optional: true, doc: "the camera's own web page, linked from the admin UI; default https://<host>/, none for no link" }, 'the link goes to https://<camera.host>/'),
+  user: { type: 'string', pattern: '^[^\\s:]{1,31}$', doc: "the proxy's own camera user" },
+  onvifPort: port('camera ONVIF port'),
+  rtspPort: port('camera RTSP port'),
+  baichuanPort: port("camera Baichuan port (recordings over TCP); the host is camera.host's"),
+  statusPollS: int(5, 3600, 'seconds between status checks'),
+  // The PoE switch the camera hangs on (issue #85): power-cycle the camera
+  // through it. Applies at once; the password is CAMPROXY_POE_SWITCH_PASSWORD.
+  poeSwitch: {
+    model: unset({ type: 'string', enum: ['none', 'sscpoe-web'], doc: "the camera's PoE switch: none, or sscpoe-web (the STEAMEMO/SSCPOE local web protocol: GPS-208 and kin)" }, 'no PoE switch: power-cycle off', 'none'),
+    host: unset({ type: 'string', pattern: '^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$', optional: true, doc: "the switch's address or name, optional :port (http)" }, 'PoE switch control off: no switch address'),
+    port: unset(int(1, 48, 'the switch port the camera is on, as numbered on the switch', true), "PoE switch control off: no camera port"),
+    ports: int(1, 48, "the switch's PoE port count (maps the port to its internal index)"),
+    offSeconds: int(5, 60, 'seconds the PoE stays off in a power-cycle'),
+  },
+};
+// Today's top-level ftp.user (legacy files).
+export const LEGACY_FTP_USER: Leaf = { type: 'string', pattern: '^[^\\s:]{1,31}$', doc: 'FTP user the camera logs in as' };
+
+// One camera of `cameras` (spec §4.1): the per-camera keys and the closed
+// list of host defaults it may override.
+const hostValue = (path: string) => `the host value, ${path}`;
+export const CAMERA_NODE: Node = {
+  id: { type: 'string', pattern: CAMERA_ID, doc: 'camera id used in paths and the API' },
+  name: { type: 'string', pattern: '^.{1,64}$', doc: "fallback display name until the camera's own name is read (default: the id)" },
+  host: unset({ type: 'string', pattern: '^[^\\s/]*$', doc: 'address or name, optional :port' }, 'no camera address: the camera waits idle (Find camera can still be used)', ''),
+  protocol: { type: 'string', enum: ['https', 'http'], doc: 'camera HTTP API protocol' },
+  tlsName: unset({ type: 'string', pattern: '^[^\\s]+$', optional: true, doc: 'verify the camera certificate against this name' }, "the camera's certificate is not verified"),
+  webUiUrl: unset({ type: 'string', pattern: '^(https?://[^\\s]+|none)$', optional: true, doc: "the camera's own web page, linked from the admin UI; default https://<host>/, none for no link" }, 'the link goes to https://<host>/'),
+  user: { type: 'string', pattern: '^[^\\s:]{1,31}$', doc: "the proxy's own camera user" },
+  onvifPort: port('camera ONVIF port'),
+  rtspPort: port('camera RTSP port'),
+  baichuanPort: port("camera Baichuan port (recordings over TCP); the host is the camera's host"),
+  statusPollS: int(5, 3600, 'seconds between status checks'),
+  poeSwitch: {
+    port: unset(int(1, 48, "the port of the host's PoE switch this camera is on, as numbered on the switch", true), 'PoE switch control off for this camera: no port'),
+  },
+  ftp: {
+    user: unset({ type: 'string', pattern: '^[^\\s:]{1,31}$', optional: true, doc: 'FTP user this camera logs in as' }, 'the camera id'),
+    enabled: unset({ type: 'boolean', doc: 'accept clip uploads from this camera' }, hostValue('ftp.enabled')),
+    stream: unset({ type: 'string', enum: ['main', 'sub'], optional: true, doc: 'the stream this camera uploads' }, hostValue('ftp.stream')),
+  },
+  stills: {
+    enabled: unset({ type: 'boolean', doc: 'store stills of this camera' }, hostValue('stills.enabled')),
+    stream: unset({ type: 'string', enum: ['sub', 'main'], optional: true, doc: 'camera stream the stills come from' }, hostValue('stills.stream')),
+    intervalS: unset({ type: 'integer', min: 1, max: 60, optional: true, oneOf: [1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60], doc: 'seconds between stills (divides a minute)' }, hostValue('stills.intervalS')),
+  },
+  analytics: {
+    kinds: {
+      person: unset({ type: 'boolean', doc: "analyse this camera's person events" }, hostValue('analytics.kinds.person')),
+      vehicle: unset({ type: 'boolean', doc: "analyse this camera's vehicle events" }, hostValue('analytics.kinds.vehicle')),
+      pet: unset({ type: 'boolean', doc: "analyse this camera's pet events" }, hostValue('analytics.kinds.pet')),
+    },
+  },
+  events: {
+    poll: {
+      enabled: unset({ type: 'boolean', doc: 'poll GetMdState/GetAiState while ONVIF is down' }, hostValue('events.poll.enabled')),
+    },
+  },
+};
+export const HOST_POE_SWITCH: Node = {
+  model: unset({ type: 'string', enum: ['none', 'sscpoe-web'], doc: "the cameras' PoE switch: none, or sscpoe-web (the STEAMEMO/SSCPOE local web protocol: GPS-208 and kin)" }, 'no PoE switch: power-cycle off', 'none'),
+  host: unset({ type: 'string', pattern: '^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$', optional: true, doc: "the switch's address or name, optional :port (http)" }, 'PoE switch control off: no switch address'),
+  ports: int(1, 48, "the switch's PoE port count (maps a port to its internal index)"),
+  offSeconds: int(5, 60, 'seconds the PoE stays off in a power-cycle'),
+};
+
+export const SETTINGS: Node = {
   server: {
     port: port('HTTP port for the API, control API and admin UI'),
     dataDir: { type: 'string', pattern: '^.+$', doc: 'data folder; relative to the config file' },
@@ -25,28 +109,10 @@ const SETTINGS: Node = {
     trustProxy: unset(int(0, 5, 'reverse proxies in front (the cluster ingress: 1); rate limits then count clients by X-Forwarded-For', true), 'no reverse proxy: rate limits count the connecting address'),
     publicUrl: unset({ type: 'string', pattern: '^https?://[^\\s]+$', optional: true, doc: 'where people reach this proxy (its admin UI); reported in /api/cameras so clients can link to it' }, 'no link to this proxy for clients'),
   },
-  camera: {
-    id: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,31}$', doc: 'camera id used in paths and the API' },
-    name: { type: 'string', pattern: '^.{1,64}$', doc: "fallback display name until the camera's own name is read (the camera stores its name)" },
-    host: unset({ type: 'string', pattern: '^[^\\s/]*$', doc: 'address or name, optional :port (required)' }, 'no camera address: the proxy does not start', ''),
-    protocol: { type: 'string', enum: ['https', 'http'], doc: 'camera HTTP API protocol' },
-    tlsName: unset({ type: 'string', pattern: '^[^\\s]+$', optional: true, doc: 'verify the camera certificate against this name' }, "the camera's certificate is not verified"),
-    webUiUrl: unset({ type: 'string', pattern: '^(https?://[^\\s]+|none)$', optional: true, doc: "the camera's own web page, linked from the admin UI; default https://<host>/, none for no link" }, 'the link goes to https://<camera.host>/'),
-    user: { type: 'string', pattern: '^[^\\s:]{1,31}$', doc: "the proxy's own camera user" },
-    onvifPort: port('camera ONVIF port'),
-    rtspPort: port('camera RTSP port'),
-    baichuanPort: port("camera Baichuan port (recordings over TCP); the host is camera.host's"),
-    statusPollS: int(5, 3600, 'seconds between status checks'),
-    // The PoE switch the camera hangs on (issue #85): power-cycle the camera
-    // through it. Applies at once; the password is CAMPROXY_POE_SWITCH_PASSWORD.
-    poeSwitch: {
-      model: unset({ type: 'string', enum: ['none', 'sscpoe-web'], doc: "the camera's PoE switch: none, or sscpoe-web (the STEAMEMO/SSCPOE local web protocol: GPS-208 and kin)" }, 'no PoE switch: power-cycle off', 'none'),
-      host: unset({ type: 'string', pattern: '^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$', optional: true, doc: "the switch's address or name, optional :port (http)" }, 'PoE switch control off: no switch address'),
-      port: unset(int(1, 48, 'the switch port the camera is on, as numbered on the switch', true), "PoE switch control off: no camera port"),
-      ports: int(1, 48, "the switch's PoE port count (maps the port to its internal index)"),
-      offSeconds: int(5, 60, 'seconds the PoE stays off in a power-cycle'),
-    },
-  },
+  cameras: collection(CAMERA_NODE, 'the cameras of this proxy, in display order (config.json: a list; overrides: by id)'),
+  // The PoE switch the cameras hang on (issue #85; one per host, spec §4.1).
+  // Applies at once; the password is CAMPROXY_POE_SWITCH_PASSWORD.
+  poeSwitch: HOST_POE_SWITCH,
   go2rtc: {
     binary: unset({ type: 'string', pattern: '^.+$', optional: true, doc: 'go2rtc binary started by the proxy' }, 'no go2rtc started (go2rtc.url instead)'),
     url: unset({ type: 'string', pattern: '^https?://[^\\s]+$', optional: true, doc: 'go2rtc API when it runs as its own container' }, 'the proxy starts go2rtc itself (go2rtc.url is reserved, no effect yet)'),
@@ -113,7 +179,6 @@ const SETTINGS: Node = {
     enabled: unset({ type: 'boolean', doc: 'accept clip uploads from the camera' }, 'no clip uploads from the camera', false),
     port: port('FTP control port'),
     passive: { type: 'string', pattern: '^[1-9][0-9]{0,4}-[1-9][0-9]{0,4}$', doc: 'passive port range, A-B' },
-    user: { type: 'string', pattern: '^[^\\s:]{1,31}$', doc: 'FTP user the camera logs in as' },
     tls: { type: 'boolean', doc: 'require FTPS' },
     stream: { type: 'string', enum: ['main', 'sub'], doc: 'the stream the camera uploads' },
     stalledHours: int(1, 72, 'warn on the Status page when no clip arrived for this many hours while the camera recorded events'),
@@ -152,11 +217,10 @@ const SETTINGS: Node = {
   },
 };
 
-const isLeaf = (n: Node | Leaf): n is Leaf => typeof (n as Leaf).type === 'string' && typeof (n as Leaf).doc === 'string';
 
 export class SettingError extends Error {}
 
-function checkLeaf(path: string, leaf: Leaf, v: unknown): void {
+export function checkValue(path: string, leaf: Leaf, v: unknown): void {
   const bad = (why: string) => {
     throw new SettingError(`${path}: ${why}`);
   };
@@ -180,46 +244,78 @@ function checkLeaf(path: string, leaf: Leaf, v: unknown): void {
 }
 
 // Checks a (partial) settings object: every key must be known and every
-// value valid. Throws SettingError naming the full path.
+// value valid. Throws SettingError naming the full path. A collection is an
+// object keyed by camera id.
 export function checkPartial(obj: unknown, node: Node = SETTINGS, prefix = ''): void {
   if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) throw new SettingError(`${prefix || 'config'}: must be an object`);
   for (const [k, v] of Object.entries(obj)) {
     const path = prefix ? `${prefix}.${k}` : k;
     if (!Object.hasOwn(node, k)) throw new SettingError(`${path}: unknown setting`);
     const child = node[k];
-    if (isLeaf(child)) checkLeaf(path, child, v);
-    else checkPartial(v, child, path);
+    if (isLeaf(child)) checkValue(path, child, v);
+    else if (isCollection(child)) {
+      if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new SettingError(`${path}: must be an object`);
+      for (const [id, entry] of Object.entries(v)) {
+        if (!new RegExp(CAMERA_ID).test(id)) throw new SettingError(`${path}.${id}: not a camera id`);
+        checkPartial(entry, child.collection, `${path}.${id}`);
+        const own = (entry as Record<string, unknown>).id;
+        if (own !== undefined && own !== id) throw new SettingError(`${path}.${id}.id: must be the camera's key (${id})`);
+      }
+    } else checkPartial(v, child, path);
   }
 }
 
-// Every leaf path, e.g. 'sse.pingS'.
-export function leafPaths(node: Node = SETTINGS, prefix = ''): string[] {
+// Every leaf path, e.g. 'sse.pingS'; a collection expands to each of `ids`.
+export function leafPaths(node: Node = SETTINGS, prefix = '', ids: string[] = []): string[] {
   return Object.entries(node).flatMap(([k, v]) => {
     const path = prefix ? `${prefix}.${k}` : k;
-    return isLeaf(v) ? [path] : leafPaths(v, path);
+    if (isLeaf(v)) return [path];
+    if (isCollection(v)) return ids.flatMap((id) => leafPaths(v.collection, `${path}.${id}`));
+    return leafPaths(v, path, ids);
   });
 }
 
-// The description of one setting, e.g. leafAt('sse.pingS').
-export function leafAt(path: string): Leaf | undefined {
-  let n: Node | Leaf | undefined = SETTINGS;
-  for (const k of path.split('.')) n = n && !isLeaf(n) && Object.hasOwn(n, k) ? n[k] : undefined;
+// The description of one setting, e.g. leafAt('sse.pingS'); a collection
+// consumes one id segment (leafAt('cameras.cam3.host')).
+export function leafAt(path: string, node: Node = SETTINGS): Leaf | undefined {
+  let n: Node | Leaf | Collection | undefined = node;
+  const keys = path.split('.');
+  for (let i = 0; i < keys.length && n; i++) {
+    if (isLeaf(n)) return undefined;
+    if (isCollection(n)) {
+      n = n.collection; // keys[i] is the id
+      continue;
+    }
+    n = Object.hasOwn(n, keys[i]) ? n[keys[i]] : undefined;
+  }
   return n && isLeaf(n) ? n : undefined;
 }
 
-// The JSON Schema written to config.schema.json (see scripts/gen-schema.ts).
-export function jsonSchema(): object {
-  const conv = (node: Node): object => ({
+// The JSON Schema written to config.schema.json (see scripts/gen-schema.ts); a
+// collection is an array of its node, id required.
+// One node as JSON Schema (config.schema.json; the legacy camera object too).
+export function jsonSchemaOf(node: Node): object {
+  const leaf = (v: Leaf) =>
+    v.type === 'boolean' ? { type: 'boolean', description: v.doc }
+    : v.type === 'integer' ? { type: 'integer', minimum: v.min, maximum: v.max, ...(v.oneOf ? { enum: v.oneOf } : {}), description: v.doc }
+    : { type: 'string', ...(v.enum ? { enum: v.enum } : {}), ...(v.pattern ? { pattern: v.pattern } : {}), description: v.doc };
+  const conv = (n: Node): object => ({
     type: 'object',
     additionalProperties: false,
-    properties: Object.fromEntries(
-      Object.entries(node).map(([k, v]) => {
-        if (!isLeaf(v)) return [k, conv(v)];
-        if (v.type === 'boolean') return [k, { type: 'boolean', description: v.doc }];
-        if (v.type === 'integer') return [k, { type: 'integer', minimum: v.min, maximum: v.max, ...(v.oneOf ? { enum: v.oneOf } : {}), description: v.doc }];
-        return [k, { type: 'string', ...(v.enum ? { enum: v.enum } : {}), ...(v.pattern ? { pattern: v.pattern } : {}), description: v.doc }];
-      }),
-    ),
+    properties: Object.fromEntries(Object.entries(n).map(([k, v]) => [k, isLeaf(v) ? leaf(v) : isCollection(v) ? { type: 'array', description: v.doc, items: { ...conv(v.collection), required: ['id'] } } : conv(v)])),
   });
-  return { $schema: 'https://json-schema.org/draft/2020-12/schema', title: 'cam-proxy config.json', ...conv(SETTINGS) };
+  return conv(node);
+}
+
+export function jsonSchema(node: Node = SETTINGS, extra: Record<string, object> = {}): object {
+  const root = jsonSchemaOf(node) as { properties: Record<string, object> };
+  return { $schema: 'https://json-schema.org/draft/2020-12/schema', title: 'cam-proxy config.json', ...root, properties: { ...root.properties, ...extra } };
+}
+
+// config.schema.json: the settings plus the legacy one-camera `camera` object
+// (spec 2026-10-05-multi-camera-host-design §4.1), and today's top-level ftp.user.
+export function configJsonSchema(): object {
+  const js = jsonSchema(SETTINGS, { camera: { ...jsonSchemaOf(LEGACY_CAMERA), description: 'legacy: one camera (read as cameras: [camera]); use cameras' } }) as { properties: Record<string, { properties: Record<string, object> }> };
+  js.properties.ftp.properties.user = { ...(jsonSchemaOf({ user: LEGACY_FTP_USER }) as { properties: { user: object } }).properties.user, description: 'legacy (with camera): the FTP user the camera logs in as; use cameras[].ftp.user' };
+  return js;
 }

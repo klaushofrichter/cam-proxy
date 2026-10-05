@@ -18,7 +18,8 @@
     "build:web": "vite build --config web/vite.config.mts",
     "dev:web": "vite --config web/vite.config.mts",
     "check": "tsc --noEmit -p web/tsconfig.json",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:multi": "playwright test -c playwright.multi.config.ts"
   },
   "dependencies": {
     "express": "^5.2.1",

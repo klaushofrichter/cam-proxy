@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { cameraConfig, cameraIds } from '../src/config/cameras';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { loadConfig, applyOverrides, removeOverride, needsRestart, resetTarget, ConfigError } from '../src/config/load';
-import { DEFAULTS } from '../src/config/defaults';
-import { jsonSchema, leafAt, leafPaths } from '../src/config/schema';
+import { cameraDefaults, DEFAULTS } from '../src/config/defaults';
+import { configJsonSchema, leafAt, leafPaths } from '../src/config/schema';
 
 const T1 = 'a'.repeat(32);
 const T2 = 'b'.repeat(40);
@@ -31,11 +32,11 @@ describe('config.json', () => {
   it('needs only the camera host; everything else has a default', () => {
     write('config.json', { camera: { host: '192.0.2.10' } });
     const l = load();
-    expect(l.config.camera.host).toBe('192.0.2.10');
+    expect(cameraConfig(l.config, 'cam1')!.host).toBe('192.0.2.10');
     expect(l.config.server.port).toBe(8480);
     expect(l.config.stills.intervalS).toBe(1);
     expect(l.config.server.dataDir).toBe(join(dir, 'data'));
-    expect(l.sources['camera.host']).toBe('file');
+    expect(l.sources['cameras.cam1.host']).toBe('file');
     expect(l.sources['server.port']).toBe('default');
   });
 
@@ -47,8 +48,9 @@ describe('config.json', () => {
     expect(l.config.server.dataDir).toBe(join(dir, 'etc/var'));
   });
 
-  it('refuses to start without a camera host', () => {
-    expect(err(() => load())).toBe('camera.host: required');
+  it('starts without a camera host: the camera waits idle (spec §3.3)', () => {
+    write('config.json', {});
+    expect(cameraConfig(load().config, 'cam1')!.host).toBe('');
   });
 
   it('names an unknown key with its full path', () => {
@@ -108,7 +110,7 @@ describe('overrides', () => {
   });
 
   it('tells which settings need a restart', () => {
-    expect(needsRestart('camera.host')).toBe(true);
+    expect(needsRestart('cameras.cam1.host')).toBe(true);
     expect(needsRestart('stills.intervalS')).toBe(true);
     expect(needsRestart('composition.font')).toBe(true); // resolved once at start (issue #30)
     expect(needsRestart('server.trustProxy')).toBe(true);
@@ -132,10 +134,10 @@ describe('an override equal to what Reset restores', () => {
 
   it('is not stored when a group is saved whole: only what differs becomes an override', () => {
     const l = applyOverrides(load(), { camera: { poeSwitch: { model: 'sscpoe-web', host: '192.168.1.217', port: 8, ports: 8, offSeconds: 10 } } });
-    expect(stored()).toEqual({ camera: { poeSwitch: { model: 'sscpoe-web', host: '192.168.1.217', port: 8 } } });
-    expect(l.sources['camera.poeSwitch.ports']).toBe('default');
-    expect(l.sources['camera.poeSwitch.offSeconds']).toBe('default');
-    expect(l.config.camera.poeSwitch).toEqual({ model: 'sscpoe-web', host: '192.168.1.217', port: 8, ports: 8, offSeconds: 10 });
+    expect(stored()).toEqual({ cameras: { cam1: { poeSwitch: { port: 8 } } }, poeSwitch: { model: 'sscpoe-web', host: '192.168.1.217' } });
+    expect(l.sources['poeSwitch.ports']).toBe('default');
+    expect(l.sources['poeSwitch.offSeconds']).toBe('default');
+    expect(cameraConfig(l.config, 'cam1')!.poeSwitch).toEqual({ model: 'sscpoe-web', host: '192.168.1.217', port: 8, ports: 8, offSeconds: 10 });
   });
 
   it("is not stored when the value is config.json's", () => {
@@ -162,7 +164,7 @@ describe('an override equal to what Reset restores', () => {
     mkdirSync(join(dir, 'data'), { recursive: true });
     write('data/overrides.json', { camera: { poeSwitch: { model: 'sscpoe-web', host: '192.168.1.217', port: 8, ports: 8, offSeconds: 10 } }, sse: { pingS: 20 } });
     const l = load();
-    expect(l.sources['camera.poeSwitch.ports']).toBe('override');
+    expect(l.sources['poeSwitch.ports']).toBe('override');
     expect(resetTarget(l, 'camera.poeSwitch.ports')).toEqual({ value: 8, source: 'default', same: true });
     expect(resetTarget(l, 'camera.poeSwitch.offSeconds')).toEqual({ value: 10, source: 'default', same: true });
     expect(resetTarget(l, 'sse.pingS')).toEqual({ value: 20, source: 'file', same: true });
@@ -221,18 +223,28 @@ describe('secrets', () => {
 describe('shipped files', () => {
   const root = join(__dirname, '..');
   it('config.schema.json is generated from the settings description', () => {
-    expect(JSON.parse(readFileSync(join(root, 'config.schema.json'), 'utf8'))).toEqual(jsonSchema());
+    expect(JSON.parse(readFileSync(join(root, 'config.schema.json'), 'utf8'))).toEqual(configJsonSchema());
   });
 
   it('config.example.json is valid and shows every default', () => {
     const example = JSON.parse(readFileSync(join(root, 'config.example.json'), 'utf8'));
     write('config.json', example);
     const l = load();
-    const defaults = JSON.parse(JSON.stringify(DEFAULTS));
-    defaults.camera.host = example.camera.host;
+    // The one-camera (legacy) form: the defaults of camera cam1 and the host switch in `camera`, ftp.user (spec 2026-10-05-multi-camera-host-design §4.2).
+    const { cameras: _c, cameraOrder: _o, poeSwitch, ...defaults } = JSON.parse(JSON.stringify(DEFAULTS));
+    const { ftp: _f, stills: _s, analytics: _a, events: _e, poeSwitch: _p, ...cam } = cameraDefaults('cam1');
+    defaults.camera = { ...cam, name: 'Den', host: example.camera.host, poeSwitch };
+    defaults.ftp = { ...defaults.ftp, user: 'camera' };
     defaults.server.dataDir = example.server.dataDir;
     expect(example).toEqual(defaults);
-    expect(l.config.camera.host).toBe(example.camera.host);
+    expect(cameraConfig(l.config, 'cam1')!.host).toBe(example.camera.host);
+  });
+
+  it('config.cameras.example.json loads: two cameras, the host switch', () => {
+    write('config.json', readFileSync(join(__dirname, '..', 'config.cameras.example.json'), 'utf8'));
+    const l = load();
+    expect(cameraIds(l.config)).toEqual(['cam3', 'cam4']);
+    expect(cameraConfig(l.config, 'cam4')!.poeSwitch).toMatchObject({ host: '192.168.60.2', port: 2 });
   });
 });
 
@@ -243,7 +255,7 @@ describe('deploy/cluster/config.json', () => {
     const file = join(__dirname, '..', 'deploy', 'cluster', 'config.json');
     const c = loadConfig({ ...SECRETS, CAMPROXY_FTP_PASSWORD: 'f'.repeat(24), CAMPROXY_CONFIG: file }, { cwd: dir }).config;
     expect(c.server.dataDir).toBe('/data');
-    expect(c.camera).toMatchObject({ id: 'cam2', host: 'cam2.cam-sim.svc.cluster.local:443', protocol: 'https', tlsName: 'cam2.skylar.technology', user: 'proxy', webUiUrl: 'https://cam2.skylar.technology/' });
+    expect(cameraConfig(c, "cam2")).toMatchObject({ id: "cam2", host: 'cam2.cam-sim.svc.cluster.local:443', protocol: 'https', tlsName: 'cam2.skylar.technology', user: 'proxy', webUiUrl: 'https://cam2.skylar.technology/' });
     // cams plays these clips: the sub stream (H.264) plays in every browser.
     expect(c.ftp).toMatchObject({ enabled: true, publicHost: 'cam-proxy.cam-proxy.svc.cluster.local', tls: true, stream: 'sub' });
     expect(c.stills.enabled).toBe(true);
@@ -257,9 +269,9 @@ describe('deploy/cluster/config.json', () => {
 describe('camera.webUiUrl', () => {
   it('accepts an http(s) URL or none, and nothing else', () => {
     write('config.json', { camera: { host: '10.0.0.5', webUiUrl: 'https://cam1.skylar.technology/' } });
-    expect(load().config.camera.webUiUrl).toBe('https://cam1.skylar.technology/');
+    expect(cameraConfig(load().config, 'cam1')!.webUiUrl).toBe('https://cam1.skylar.technology/');
     write('config.json', { camera: { host: '10.0.0.5', webUiUrl: 'none' } });
-    expect(load().config.camera.webUiUrl).toBe('none');
+    expect(cameraConfig(load().config, 'cam1')!.webUiUrl).toBe('none');
     write('config.json', { camera: { host: '10.0.0.5', webUiUrl: 'javascript:alert(1)' } });
     expect(err(() => load())).toMatch(/camera.webUiUrl/);
   });
@@ -292,13 +304,13 @@ describe('audit settings', () => {
 describe('camera.poeSwitch', () => {
   beforeEach(() => write('config.json', { camera: { host: '192.0.2.10' } }));
   it('defaults to no switch, 8 ports and 10 s off', () => {
-    expect(load().config.camera.poeSwitch).toEqual({ model: 'none', ports: 8, offSeconds: 10 });
+    expect(cameraConfig(load().config, 'cam1')!.poeSwitch).toEqual({ model: 'none', ports: 8, offSeconds: 10 });
   });
 
   it('takes a model, a host (optional :port), the camera port 1-48, the port count and offSeconds 5-60', () => {
     const l = applyOverrides(load(), { camera: { poeSwitch: { model: 'sscpoe-web', host: '192.168.1.217', port: 8, ports: 8, offSeconds: 15 } } });
-    expect(l.config.camera.poeSwitch).toEqual({ model: 'sscpoe-web', host: '192.168.1.217', port: 8, ports: 8, offSeconds: 15 });
-    expect(applyOverrides(load(), { camera: { poeSwitch: { host: 'switch.lan:8080' } } }).config.camera.poeSwitch.host).toBe('switch.lan:8080');
+    expect(cameraConfig(l.config, 'cam1')!.poeSwitch).toEqual({ model: 'sscpoe-web', host: '192.168.1.217', port: 8, ports: 8, offSeconds: 15 });
+    expect(applyOverrides(load(), { camera: { poeSwitch: { host: 'switch.lan:8080' } } }).config.poeSwitch.host).toBe('switch.lan:8080');
     for (const [k, v] of [['model', 'gps208'], ['host', 'http://x'], ['host', 'a b'], ['port', 0], ['port', 49], ['ports', 0], ['ports', 49], ['offSeconds', 4], ['offSeconds', 61]] as const) {
       expect(() => applyOverrides(load(), { camera: { poeSwitch: { [k]: v } } }), `${k}=${v}`).toThrow(new RegExp(`camera.poeSwitch.${k}`));
     }
@@ -306,7 +318,7 @@ describe('camera.poeSwitch', () => {
 
   it('applies at once: no restart for the switch settings (read on every use)', () => {
     for (const k of ['model', 'host', 'port', 'ports', 'offSeconds']) expect(needsRestart(`camera.poeSwitch.${k}`), k).toBe(false);
-    expect(needsRestart('camera.host')).toBe(true);
+    expect(needsRestart('cameras.cam1.host')).toBe(true);
   });
 
   it('reads an optional CAMPROXY_POE_SWITCH_PASSWORD (or its _FILE)', () => {
@@ -328,16 +340,16 @@ describe('recordings settings', () => {
   it('recordings.cacheMB defaults to 2048 (64 to 1,048,576); camera.baichuanPort to 9000 (1 to 65535)', () => {
     const l = load();
     expect(l.config.recordings.cacheMB).toBe(2048);
-    expect(l.config.camera.baichuanPort).toBe(9000);
+    expect(cameraConfig(l.config, 'cam1')!.baichuanPort).toBe(9000);
     for (const v of [63, 1_048_577]) expect(() => applyOverrides(l, { recordings: { cacheMB: v } })).toThrow(/recordings.cacheMB/);
     for (const v of [0, 65536]) expect(() => applyOverrides(l, { camera: { baichuanPort: v } })).toThrow(/camera.baichuanPort/);
-    expect(applyOverrides(l, { recordings: { cacheMB: 64 }, camera: { baichuanPort: 9001 } }).config.camera.baichuanPort).toBe(9001);
+    expect(applyOverrides(l, { recordings: { cacheMB: 64 }, camera: { baichuanPort: 9001 } }).config.cameras.cam1.baichuanPort).toBe(9001);
   });
 
   it('both apply without a restart (the port at the next connection, the cap at the next fetch or storage run)', () => {
     expect(needsRestart('recordings.cacheMB')).toBe(false);
     expect(needsRestart('camera.baichuanPort')).toBe(false);
-    expect(needsRestart('camera.host')).toBe(true);
+    expect(needsRestart('cameras.cam1.host')).toBe(true);
   });
 });
 

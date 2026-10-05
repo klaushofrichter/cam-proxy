@@ -73,8 +73,8 @@ function camera(o: { months: Record<string, number[]>; recs: Record<string, Reco
   return { deps, searched };
 }
 const settings = (o: Partial<ClipsSettings> = {}): ClipsSettings => ({ cam: 'cam1', clipsDays: 2, stream: 'sub', ftpEnabled: true, eventMaxOpenMin: 10, ...o });
-const deps = (cam: CameraListDeps, o: Partial<ClipsInventoryDeps> = {}): ClipsInventoryDeps => ({ dataDir: dir, catalog, settings: () => settings(), camera: cam, ...o });
-const ctx = (o: Partial<CheckContext> = {}): CheckContext => ({ signal: new AbortController().signal, progress: () => undefined, now: NOW, options: {}, ...o });
+const deps = (cam: CameraListDeps, o: Partial<ClipsInventoryDeps> = {}): ClipsInventoryDeps => ({ dataDir: dir, catalog, settings: () => settings(), camera: () => cam, ...o });
+const ctx = (o: Partial<CheckContext> = {}): CheckContext => ({ signal: new AbortController().signal, progress: () => undefined, now: NOW, cam: 'cam1', options: {}, ...o });
 
 // The window is 2026-09-30T00:00Z (clipsDays 2) to NOW.
 function fixture() {
@@ -247,12 +247,12 @@ describe('clips inventory: the edges (review of task 4)', () => {
     const recs = [rec(T('2026-09-30T10:00:00')), rec(T('2026-10-01T11:00:00')), rec(T('2026-10-01T12:00:02')), rec(T('2026-10-01T14:00:00'))];
     const cam = () => camera({ months: { '2026-09': [30], '2026-10': [1] }, recs: { '2026-09-30': [recs[0]], '2026-10-01': recs.slice(1) } }).deps;
     // No sign of pruning: all three are missing.
-    const quiet = new AuditLog({ dir: join(dir, 'audit-quiet'), version: 't', camera: () => 'cam1', now: () => NOW - 3 * 3_600_000 });
+    const quiet = new AuditLog({ dir: join(dir, 'audit-quiet'), version: 't', now: () => NOW - 3 * 3_600_000 });
     quiet.write({ action: 'storage-daily', category: ['host'], type: ['info'], outcome: 'success', user: 'system', message: 'Storage', details: { kinds: { clips: { oldest: T('2026-10-01T12:00:00') } } } });
     const r0 = await clipsCheck(deps(cam(), { audit: quiet }))(ctx({ options: { camera: true } }));
     expect(r0.counts).toMatchObject({ missingLocally: 3, prunedHere: 0 });
     // A daily storage record inside the window saw older clips than are kept: the budget (or ftp.maxGB) pruned them.
-    const pruned = new AuditLog({ dir: join(dir, 'audit-pruned'), version: 't', camera: () => 'cam1', now: () => NOW - 3 * 3_600_000 });
+    const pruned = new AuditLog({ dir: join(dir, 'audit-pruned'), version: 't', now: () => NOW - 3 * 3_600_000 });
     pruned.write({ action: 'storage-daily', category: ['host'], type: ['info'], outcome: 'success', user: 'system', message: 'Storage', details: { kinds: { clips: { oldest: T('2026-09-30T09:00:00') } } } });
     const r = await clipsCheck(deps(cam(), { audit: pruned }))(ctx({ options: { camera: true } }));
     expect(r.counts).toMatchObject({ missingLocally: 1, prunedHere: 2, missingLocallyBytes: 0x100000 });

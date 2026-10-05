@@ -33,7 +33,7 @@ async function writeMinute(s: MinuteStore, k: number, slots: number[], intervalS
 }
 const settings = (o: Partial<StillsSettings> = {}): StillsSettings => ({ cam: 'cam1', intervalS: 1, stillsDays: 7, previewsDays: 14, keepHours: 24, ...o });
 const deps = (o: Partial<StillsInventoryDeps> = {}): StillsInventoryDeps => ({ dataDir: dir, settings: () => settings(), audit, catalog, ...o });
-const ctx = (o: Partial<CheckContext> = {}): CheckContext => ({ signal: new AbortController().signal, progress: () => undefined, now: NOW, ...o });
+const ctx = (o: Partial<CheckContext> = {}): CheckContext => ({ signal: new AbortController().signal, progress: () => undefined, now: NOW, cam: 'cam1', ...o });
 // A pack written by hand: `footer` is the JSON footer (any shape), `stills` bytes before it.
 function rawPack(file: string, footer: unknown, stills = 0) {
   const json = Buffer.from(JSON.stringify(footer));
@@ -83,7 +83,7 @@ beforeAll(async () => {
   clip(at(9), at(9, 30));
 
   let clock = 0;
-  audit = new AuditLog({ dir: join(dir, 'audit'), version: 't', camera: () => 'cam1', now: () => clock });
+  audit = new AuditLog({ dir: join(dir, 'audit'), version: 't', now: () => clock });
   clock = at(3, 20);
   start(audit, false);
   clock = at(7, 50);
@@ -169,7 +169,7 @@ describe('stills inventory', () => {
   it('retention: the window starts at the cutoff; a start explains up to 120 s past itself', async () => {
     expect(STARTUP_MS).toBe(120_000);
     let clock = Date.UTC(2026, 8, 27, 0, 1);
-    const a2 = new AuditLog({ dir: join(dir, 'audit-2'), version: 't', camera: () => 'cam1', now: () => clock });
+    const a2 = new AuditLog({ dir: join(dir, 'audit-2'), version: 't', now: () => clock });
     start(a2, true);
     clock = 0;
     const r = await stillsCheck(deps({ settings: () => settings({ stillsDays: 0 }), audit: a2 }))(ctx());
@@ -184,7 +184,7 @@ describe('stills inventory', () => {
     const D = Date.UTC(2026, 8, 26);
     for (const m of [...range(0, 10), ...range(370, 380)]) rawPack(`${minutePath(d4, 'stills', 'cam1', D + m * MIN)}.pack`, fullFooter(D + m * MIN), 600);
     let clock = 0;
-    const a4 = new AuditLog({ dir: join(d4, 'audit'), version: 't', camera: () => 'cam1', now: () => clock });
+    const a4 = new AuditLog({ dir: join(d4, 'audit'), version: 't', now: () => clock });
     clock = D + 365 * MIN; // the grabber stalled at 00:10; the proxy stopped at 06:05 and started at 06:15
     start(a4, false, D + 355 * MIN);
     const r = await stillsCheck(deps({ dataDir: d4, audit: a4 }))(ctx({ now: D + 381 * MIN + 5000 }));
@@ -197,7 +197,7 @@ describe('stills inventory', () => {
     const D = Date.UTC(2026, 8, 26);
     for (const m of [...range(0, 10), ...range(370, 380)]) rawPack(`${minutePath(d5, 'stills', 'cam1', D + m * MIN)}.pack`, fullFooter(D + m * MIN), 600);
     let clock = 0;
-    const a5 = new AuditLog({ dir: join(d5, 'audit'), version: 't', camera: () => 'cam1', now: () => clock });
+    const a5 = new AuditLog({ dir: join(d5, 'audit'), version: 't', now: () => clock });
     clock = D + 365 * MIN;
     start(a5, true);
     const r = await stillsCheck(deps({ dataDir: d5, audit: a5 }))(ctx({ now: D + 381 * MIN + 5000 }));
@@ -205,7 +205,7 @@ describe('stills inventory', () => {
   });
 
   it('budget: a daily storage record saw older stills than are kept', async () => {
-    const a3 = new AuditLog({ dir: join(dir, 'audit-3'), version: 't', camera: () => 'cam1', now: () => M - HOUR });
+    const a3 = new AuditLog({ dir: join(dir, 'audit-3'), version: 't', now: () => M - HOUR });
     a3.write({ action: 'storage-daily', category: ['host'], type: ['info'], outcome: 'success', user: 'system', message: 'Storage', details: { kinds: { stills: { oldest: M - 2 * DAY } } } });
     const r = await stillsCheck(deps({ audit: a3 }))(ctx());
     expect(r.window).toMatchObject({ from: M, reason: 'budget' });
@@ -241,7 +241,7 @@ describe('stills inventory: camera reboots and power-cycles', () => {
     a.write({ action, category: ['host'], type: [details.phase === 'requested' ? 'change' : 'end'], outcome, user: 'admin', message: action, details });
   const log = (name: string, write: (a: AuditLog, set: (t: number) => void) => void) => {
     let clock = 0;
-    const a = new AuditLog({ dir: join(dir, name), version: 't', camera: () => 'cam1', now: () => clock });
+    const a = new AuditLog({ dir: join(dir, name), version: 't', now: () => clock });
     start(a, false); // clock 0: outside the window
     write(a, (t) => void (clock = t));
     return a;
@@ -266,6 +266,20 @@ describe('stills inventory: camera reboots and power-cycles', () => {
       { from: at(1, 10), to: at(1, 20), seconds: 10, explained: 'powercycle', explainedSeconds: 8 }, // from the cut at 1:12
     ]);
     expect(r.counts).toMatchObject({ explainedSeconds: 113, unexplainedSeconds: 107 });
+  });
+
+  // Several cameras (spec 2026-10-05-multi-camera-host-design §5.2): another camera's reboot is no reason for this one's gap.
+  it("another camera's reboot explains nothing; this camera's does", async () => {
+    const write = (a: AuditLog, set: (t: number) => void, cam: string) => {
+      set(at(4, 58));
+      a.write({ action: 'camera-reboot', category: ['host'], type: ['change'], outcome: 'success', user: 'admin', message: 'r', details: { phase: 'requested', confirmed: true }, camera: cam });
+      set(at(5, 30));
+      a.write({ action: 'camera-reboot', category: ['host'], type: ['end'], outcome: 'success', user: 'admin', message: 'r', details: { phase: 'back', downSec: 32, confirmed: true }, camera: cam });
+    };
+    const other = await stillsCheck(deps({ audit: log('audit-reboot-other', (a, set) => write(a, set, 'cam4')) }))(ctx());
+    expect(other.top.find((g) => (g as { from: number }).from === at(5))).toMatchObject({ explained: null });
+    const mine = await stillsCheck(deps({ audit: log('audit-reboot-mine', (a, set) => write(a, set, 'cam1')) }))(ctx());
+    expect(mine.top.find((g) => (g as { from: number }).from === at(5))).toMatchObject({ explained: 'reboot' });
   });
 
   it('a request that never reached the camera explains nothing', async () => {

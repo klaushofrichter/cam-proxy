@@ -44,10 +44,10 @@ const camera: CameraListDeps = {
   sleep: async () => undefined,
   list: { monthDays: async (m) => (m === '2026-10' ? [1] : []), day: async (date) => (date === '2026-10-01' ? recs : []) },
 };
-const deps = (): EventsInventoryDeps => ({ catalog, settings: () => ({ cam: 'cam1', eventsDays: 30, stream: 'sub', eventMaxOpenMin: 10 }), camera });
-const ctx = (source: InventoryReport, o: Partial<RepairContext> = {}): RepairContext => ({ signal: new AbortController().signal, progress: () => undefined, now: NOW + 60_000, runId: 'eventsrepair-1-abcdef', source, ...o });
+const deps = (): EventsInventoryDeps => ({ catalog, settings: () => ({ cam: 'cam1', eventsDays: 30, stream: 'sub', eventMaxOpenMin: 10 }), camera: () => camera });
+const ctx = (source: InventoryReport, o: Partial<RepairContext> = {}): RepairContext => ({ signal: new AbortController().signal, progress: () => undefined, now: NOW + 60_000, cam: 'cam1', runId: 'eventsrepair-1-abcdef', source, ...o });
 async function check(): Promise<InventoryReport> {
-  const r = await eventsCheck(deps())({ signal: new AbortController().signal, progress: () => undefined, now: NOW });
+  const r = await eventsCheck(deps())({ signal: new AbortController().signal, progress: () => undefined, now: NOW, cam: 'cam1' });
   return { runId: 'events-1-abcdef', kind: 'events', op: 'check', camera: 'cam1', startedAt: NOW, tookMs: 5, outcome: 'ok', requestedBy: 'token', itemsTruncated: false, ...r };
 }
 beforeEach(() => {
@@ -125,7 +125,7 @@ describe('events repair', () => {
 
   it('fails when the camera is offline, adding nothing', async () => {
     const source = await check();
-    const offline: EventsInventoryDeps = { ...deps(), camera: { ...camera, timeInfo: async () => Promise.reject(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' })) } };
+    const offline: EventsInventoryDeps = { ...deps(), camera: () => ({ ...camera, timeInfo: async () => Promise.reject(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' })) }) };
     await expect(eventsRepair(offline).run(ctx(source))).rejects.toThrow(/^camera_offline: /);
     expect(listEvents(catalog, { cam: 'cam1' })).toEqual([]);
   });
@@ -161,13 +161,13 @@ describe('events repair against cam-sim, through the intake', () => {
     // A RecordingList per run: its 30 s day cache would hide the new recording.
     const simDeps = (): EventsInventoryDeps => ({
       ...deps(),
-      camera: { list: new RecordingList({ search: (param) => client.command('Search', param), timeInfo: () => client.timeInfo() }), timeInfo: () => client.timeInfo() },
+      camera: () => ({ list: new RecordingList({ search: (param) => client.command('Search', param), timeInfo: () => client.timeInfo() }), timeInfo: () => client.timeInfo() }),
     });
     // Judge what just ended: the run's "now" is past the settle time.
     const settledNow = () => Date.now() + SETTLE_MS + 5_000;
     const simCheck = async (): Promise<InventoryReport> => {
       const now = settledNow();
-      const r = await eventsCheck(simDeps())({ signal: new AbortController().signal, progress: () => undefined, now });
+      const r = await eventsCheck(simDeps())({ signal: new AbortController().signal, progress: () => undefined, now, cam: 'cam1' });
       return { runId: `events-${now}-abcdef`, kind: 'events', op: 'check', camera: 'cam1', startedAt: now, tookMs: 5, outcome: 'ok', requestedBy: 'token', itemsTruncated: false, ...r };
     };
     const person = async () => {

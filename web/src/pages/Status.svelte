@@ -10,6 +10,7 @@
   import Icon from '../components/Icon.svelte';
   import { cameraUploadClass, lastClipClass, diskText, healthHeadline, itemOf, loadText, memoryText, piCardTitle, problemOf, uptimeText } from '../lib/health';
   import { archiveRows } from '../lib/archive';
+  import { actionPath, blockOf, selectedCamera } from '../lib/cameras';
 
   const gb = (b: number) => `${(b / 1024 ** 3).toFixed(1)} GB`;
   const mb = mbText;
@@ -18,11 +19,17 @@
   // The health summary decides the red marks it shares with the cards below
   // (spec 2026-10-03-health-summary-design A3).
   const health = $derived($status?.health);
-  const bad = (id: string) => problemOf(health, id);
+  // The selected camera's block (several cameras), else the only one's
+  // (spec 2026-10-05-multi-camera-host-design §16 P1: read-only per camera).
+  // Non-null wherever $status is.
+  const cs = $derived(blockOf($status, $selectedCamera)!);
+  const camHealth = $derived(health?.cameras?.find((c) => c.camera.id === cs?.id));
+  // The camera items of the selected camera; the host items as they are.
+  const bad = (id: string) => (['camera', 'stream', 'events', 'ftp'].includes(id) && camHealth ? !!camHealth.items.find((i) => i.id === id)?.problem : problemOf(health, id));
   const hostItem = (id: string) => itemOf(health, id);
 
   // #93: the camera's FTP upload off, elsewhere, or no clips while events happen.
-  const alerts = $derived($status ? ftpAlerts({ enabled: $status.ftp.enabled, publicHost: $status.ftp.publicHost, camera: $status.ftp.camera ?? null, stalled: $status.ftp.stalled ?? null }) : []);
+  const alerts = $derived($status ? ftpAlerts({ enabled: cs.ftp.enabled, publicHost: cs.ftp.publicHost, camera: cs.ftp.camera ?? null, stalled: cs.ftp.stalled ?? null }) : []);
   let fixing = $state(false);
   let fixResult = $state('');
   async function pointFtpHere() {
@@ -30,7 +37,7 @@
     fixing = true;
     fixResult = '';
     try {
-      await api('POST', '/control/actions/camera-ftp-setup');
+      await api('POST', actionPath($status, $selectedCamera, 'camera-ftp-setup'));
     } catch (e) {
       fixResult = `Camera FTP setup: ${e instanceof ApiError ? e.message : 'failed'}`;
     }
@@ -61,24 +68,24 @@
       <div class="card" data-testid="card-camera">
         <h3>Camera</h3>
         <dl>
-          <dt>Name</dt><dd data-testid="camera-name" title={$status.camera.nameSource === 'config' ? 'not read from the camera yet: the configured name' : 'stored on the camera'}>{$status.camera.name ?? '—'}{#if $status.camera.nameSource === 'config'} <span class="muted">(configured)</span>{/if}</dd>
-          <dt>State</dt><dd class={$status.camera.reboot?.phase === 'rebooting' || $status.camera.reboot?.phase === 'power-cycling' ? 'warn' : (health ? bad('camera') : !$status.camera.online) ? 'bad' : 'ok'} data-testid="camera-state">{cameraStateText($status.camera)}</dd>
-          <dt>Since</dt><dd>{ago($status.camera.since)}</dd>
-          <dt>Model</dt><dd>{#if $status.camera.model && $status.camera.webUiUrl}<a href={$status.camera.webUiUrl} target="_blank" rel="noopener noreferrer" title="The camera's own web page">{$status.camera.model}</a>{:else}{$status.camera.model ?? '—'}{/if}</dd>
-          <dt>Firmware</dt><dd>{$status.camera.firmware ?? '—'}</dd>
-          <dt>Clock offset</dt><dd>{$status.camera.clockOffsetMs === undefined ? '—' : `${($status.camera.clockOffsetMs / 1000).toFixed(1)} s`}</dd>
-          {#if $status.camera.poeSwitch && $status.camera.poeSwitch.model !== 'none'}<dt>PoE switch</dt><dd data-testid="camera-poe">{poeLine($status.camera.poeSwitch)}</dd>{/if}
-          {#if $status.camera.error}<dt>Last error</dt><dd class="bad">{$status.camera.error}</dd>{/if}
+          <dt>Name</dt><dd data-testid="camera-name" title={cs.camera.nameSource === 'config' ? 'not read from the camera yet: the configured name' : 'stored on the camera'}>{cs.camera.name ?? '—'}{#if cs.camera.nameSource === 'config'} <span class="muted">(configured)</span>{/if}</dd>
+          <dt>State</dt><dd class={cs.camera.reboot?.phase === 'rebooting' || cs.camera.reboot?.phase === 'power-cycling' ? 'warn' : (health ? bad('camera') : !cs.camera.online) ? 'bad' : 'ok'} data-testid="camera-state">{cameraStateText(cs.camera)}</dd>
+          <dt>Since</dt><dd>{ago(cs.camera.since)}</dd>
+          <dt>Model</dt><dd>{#if cs.camera.model && cs.camera.webUiUrl}<a href={cs.camera.webUiUrl} target="_blank" rel="noopener noreferrer" title="The camera's own web page">{cs.camera.model}</a>{:else}{cs.camera.model ?? '—'}{/if}</dd>
+          <dt>Firmware</dt><dd>{cs.camera.firmware ?? '—'}</dd>
+          <dt>Clock offset</dt><dd>{cs.camera.clockOffsetMs === undefined ? '—' : `${(cs.camera.clockOffsetMs / 1000).toFixed(1)} s`}</dd>
+          {#if cs.camera.poeSwitch && cs.camera.poeSwitch.model !== 'none'}<dt>PoE switch</dt><dd data-testid="camera-poe">{poeLine(cs.camera.poeSwitch)}</dd>{/if}
+          {#if cs.camera.error}<dt>Last error</dt><dd class="bad">{cs.camera.error}</dd>{/if}
         </dl>
       </div>
       <div class="card" data-testid="card-intake">
         <h3>Events</h3>
         <dl>
-          <dt>ONVIF</dt><dd class={(health ? bad('events') : $status.intake.onvif !== 'subscribed') ? 'bad' : 'ok'} data-testid="onvif-state">{$status.intake.onvif}</dd>
-          <dt>Source</dt><dd>{$status.intake.source}</dd>
-          <dt>Re-subscriptions</dt><dd>{$status.intake.resubscribes}</dd>
-          {#if $status.intake.lastError}<dt>Last error</dt><dd class="bad">{$status.intake.lastError}</dd>{/if}
-          {#each Object.entries($stats.events.stored) as [kind, n] (kind)}<dt>{kind} events</dt><dd>{n}</dd>{/each}
+          <dt>ONVIF</dt><dd class={(health ? bad('events') : cs.intake.onvif !== 'subscribed') ? 'bad' : 'ok'} data-testid="onvif-state">{cs.intake.onvif}</dd>
+          <dt>Source</dt><dd>{cs.intake.source}</dd>
+          <dt>Re-subscriptions</dt><dd>{cs.intake.resubscribes}</dd>
+          {#if cs.intake.lastError}<dt>Last error</dt><dd class="bad">{cs.intake.lastError}</dd>{/if}
+          {#each Object.entries(cs.id && $stats.events.byCamera ? ($stats.events.byCamera[cs.id] ?? {}) : $stats.events.stored) as [kind, n] (kind)}<dt>{kind} events</dt><dd>{n}</dd>{/each}
         </dl>
       </div>
       {#each ($status.analytics ?? []).filter((a) => a.enabled) as a (a.id)}
@@ -105,9 +112,9 @@
       <div class="card" data-testid="card-stream">
         <h3>Stills</h3>
         <dl>
-          <dt>Stream</dt><dd class={(health ? bad('stream') : !$status.stream.up) ? 'bad' : $status.stream.up ? 'ok' : ''} data-testid="stream-state">{$status.stream.enabled ? ($status.stream.up ? 'up' : 'down') : 'off'}</dd>
-          <dt>go2rtc</dt><dd class={$status.stream.go2rtcUp ? 'ok' : 'bad'}>{$status.stream.go2rtcUp ? 'running' : 'stopped'}</dd>
-          <dt>Last still</dt><dd>{ago($status.stream.lastFrameTs)}</dd>
+          <dt>Stream</dt><dd class={(health ? bad('stream') : !cs.stream.up) ? 'bad' : cs.stream.up ? 'ok' : ''} data-testid="stream-state">{cs.stream.enabled ? (cs.stream.up ? 'up' : 'down') : 'off'}</dd>
+          <dt>go2rtc</dt><dd class={cs.stream.go2rtcUp ? 'ok' : 'bad'}>{cs.stream.go2rtcUp ? 'running' : 'stopped'}</dd>
+          <dt>Last still</dt><dd>{ago(cs.stream.lastFrameTs)}</dd>
           <dt>Still minutes</dt><dd>{$stats.disk.stills.files}</dd>
           <dt>Preview minutes</dt><dd>{Math.round($stats.disk.previews.files / 2)}</dd>
         </dl>
@@ -115,17 +122,17 @@
       <div class="card" data-testid="card-ftp">
         <h3>Clips (FTP)</h3>
         <dl>
-          <dt>Server</dt><dd class={$status.ftp.listening ? 'ok' : $status.ftp.enabled ? 'bad' : ''} data-testid="ftp-state">{$status.ftp.enabled ? ($status.ftp.listening ? `listening on ${$status.ftp.port}${$status.ftp.tls ? ' (FTPS)' : ''}` : 'not listening') : 'off'}</dd>
-          {#if $status.ftp.enabled && !$status.ftp.passwordSet}<dt>Password</dt><dd class="bad">CAMPROXY_FTP_PASSWORD not set</dd>{/if}
-          <dt>Camera connects to</dt><dd>{$status.ftp.publicHost ?? '— (ftp.publicHost)'}</dd>
-          {#if $status.ftp.camera}
-            <dt>Camera upload</dt><dd class={cameraUploadClass(health, $status.ftp.camera.state)} data-testid="camera-ftp-state">{cameraFtpText($status.ftp.camera)}</dd>
-            <dt>Checked</dt><dd title={$status.ftp.camera.error ? `last read failed: ${$status.ftp.camera.error}` : undefined}>{ago($status.ftp.camera.checkedAt)}</dd>
+          <dt>Server</dt><dd class={cs.ftp.listening ? 'ok' : cs.ftp.enabled ? 'bad' : ''} data-testid="ftp-state">{cs.ftp.enabled ? (cs.ftp.listening ? `listening on ${cs.ftp.port}${cs.ftp.tls ? ' (FTPS)' : ''}` : 'not listening') : 'off'}</dd>
+          {#if cs.ftp.enabled && !cs.ftp.passwordSet}<dt>Password</dt><dd class="bad">CAMPROXY_FTP_PASSWORD not set</dd>{/if}
+          <dt>Camera connects to</dt><dd>{cs.ftp.publicHost ?? '— (ftp.publicHost)'}</dd>
+          {#if cs.ftp.camera}
+            <dt>Camera upload</dt><dd class={cameraUploadClass(health, cs.ftp.camera.state)} data-testid="camera-ftp-state">{cameraFtpText(cs.ftp.camera)}</dd>
+            <dt>Checked</dt><dd title={cs.ftp.camera.error ? `last read failed: ${cs.ftp.camera.error}` : undefined}>{ago(cs.ftp.camera.checkedAt)}</dd>
           {/if}
-          <dt>Last upload</dt><dd>{ago($status.ftp.lastUpload)}</dd>
-          <dt>Last clip</dt><dd class={lastClipClass(health, $status.ftp.stalled?.stalled === true)} data-testid="ftp-last-clip" title={$status.ftp.lastClip ? clipTime($status.ftp.lastClip) : undefined}>{ago($status.ftp.lastClip)}</dd>
-          <dt>Clips stored</dt><dd>{$status.ftp.clips}</dd>
-          <dt>Failures</dt><dd class={$status.ftp.failures ? 'bad' : ''}>{$status.ftp.failures}</dd>
+          <dt>Last upload</dt><dd>{ago(cs.ftp.lastUpload)}</dd>
+          <dt>Last clip</dt><dd class={lastClipClass(health, cs.ftp.stalled?.stalled === true)} data-testid="ftp-last-clip" title={cs.ftp.lastClip ? clipTime(cs.ftp.lastClip) : undefined}>{ago(cs.ftp.lastClip)}</dd>
+          <dt>Clips stored</dt><dd>{cs.ftp.clips}</dd>
+          <dt>Failures</dt><dd class={cs.ftp.failures ? 'bad' : ''}>{cs.ftp.failures}</dd>
         </dl>
         {#if alerts.length}
           <div class="alerts">
@@ -135,13 +142,13 @@
           </div>
         {/if}
       </div>
-      {#if $status.recordings}
+      {#if cs.recordings}
         <div class="card" data-testid="card-recordings">
           <h3>Recordings (SD card)</h3>
           <dl>
-            <dt>Last download</dt><dd class={recordingsClass($status.recordings.last)} data-testid="recordings-last" title={$status.recordings.last ? `${$status.recordings.last.result}, ${clipTime($status.recordings.last.at)}` : undefined}>{recordingsLastText($status.recordings.last)}</dd>
-            <dt>Cache</dt><dd data-testid="recordings-cache">{cacheFillText($status.recordings.cache)}</dd>
-            <dt>Files cached</dt><dd>{$status.recordings.cache.files}</dd>
+            <dt>Last download</dt><dd class={recordingsClass(cs.recordings.last)} data-testid="recordings-last" title={cs.recordings.last ? `${cs.recordings.last.result}, ${clipTime(cs.recordings.last.at)}` : undefined}>{recordingsLastText(cs.recordings.last)}</dd>
+            <dt>Cache</dt><dd data-testid="recordings-cache">{cacheFillText(cs.recordings.cache)}</dd>
+            <dt>Files cached</dt><dd>{cs.recordings.cache.files}</dd>
           </dl>
         </div>
       {/if}

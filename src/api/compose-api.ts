@@ -11,6 +11,8 @@ import type { createComposer } from '../compose/jobs';
 import type { AuditLog } from '../audit/audit-log';
 import { DAY, dayStart } from '../time-units';
 import { clientIp } from './auth';
+import { cameraParam, workerOf } from './camera-param';
+import type { CameraRegistry } from '../cameras/registry';
 
 const run = promisify(execFile);
 export const COMPOSITIONS_PER_MINUTE = 10;
@@ -26,20 +28,20 @@ export function composeApi(d: {
   config: () => Config;
   catalog: Catalog;
   composer: ReturnType<typeof createComposer>;
-  stillsIn: (from: number, to: number) => number[];
+  cameras: CameraRegistry;
   paused: () => boolean;
   font: string | null;
   audit: AuditLog;
 }): express.Router {
   const r = express.Router();
-  const cam = () => d.config().camera.id;
-  const known = (req: Request, res: Response) => (req.params.cam === cam() ? true : (res.status(404).json({ error: 'not_found' }), false));
+  // :cam → its worker, 404 or 503, before validate and the limiter (spec 2026-10-05-multi-camera-host-design §6.1).
+  r.param('cam', cameraParam(d.cameras));
+  const cam = (res: Response) => workerOf(res).id;
 
   // The request, checked before anything is planned (spec 2026-10-04-still-
   // checks-design §13): one anchor, a clip (`clipId`, `span?`) or a second
   // (`at`); the window from compositionWindow; a 400 or 404 writes nothing.
   const validate = (req: Request, res: Response, next: NextFunction) => {
-    if (!known(req, res)) return;
     const b = (req.body ?? {}) as Body;
     if (typeof b.preS !== 'number' || typeof b.postS !== 'number' || typeof b.badge !== 'boolean' || typeof b.size !== 'string' || !(b.size in SIZES)) {
       return bad(res, 'clipId or at, preS, postS (seconds), size (sd, 360p, 720p, 1080p) and badge (true/false) are required');
@@ -72,7 +74,7 @@ export function composeApi(d: {
       const chosen = b.span === undefined ? undefined : spanOf(b.span);
       if (chosen === null) return bad(res, 'span is {start, end} in unix ms, start before end, at most a day apart');
       const row = clipById(d.catalog, b.clipId as number);
-      if (!row || row.cam !== cam() || row.end_ts === null) return void res.status(404).json({ error: 'not_found' });
+      if (!row || row.cam !== cam(res) || row.end_ts === null) return void res.status(404).json({ error: 'not_found' });
       clip = toSpan(row);
       // The span is the recording this clip is a copy of: it must overlap the
       // clip by at least 1 s (the same 1 s as "at least 1 s must remain"), so
@@ -100,7 +102,7 @@ export function composeApi(d: {
     // The still that shows at second t: the latest one within the stills
     // interval (stills every 2 s hold for 2 s instead of flickering to cards).
     const holdMs = d.config().stills.intervalS * 1000;
-    const stills = d.stillsIn(w.start - holdMs, w.end).sort((x, y) => x - y);
+    const stills = workerOf(res).listStills(w.start - holdMs, w.end).sort((x, y) => x - y);
     const stillAt = (t: number): number | null => {
       let lo = 0;
       let hi = stills.length;
@@ -112,7 +114,7 @@ export function composeApi(d: {
       const s = stills[lo - 1];
       return s !== undefined && t - s < holdMs ? s : null;
     };
-    const clips = listClips(d.catalog, cam(), w.start, w.end).map(toSpan);
+    const clips = listClips(d.catalog, cam(res), w.start, w.end).map(toSpan);
     const plan = planComposition({ ...(clip ? { clip } : {}), ...(span ? { span } : {}), preS: b.preS, postS: b.postS, maxS, clips, stillAt });
     if (!plan.ok) return bad(res, plan.error);
     const seconds = planSeconds(plan);
@@ -147,7 +149,7 @@ export function composeApi(d: {
       return void res.status(503).json({ error: 'no_font' });
     }
     const asked = b.at !== undefined ? { anchor: 'at', at: b.at, preS: b.preS, postS: b.postS } : { anchor: 'clip', clipId: b.clipId, span: span ?? null, preS: b.preS, postS: b.postS };
-    const job = d.composer.start({ cam: cam(), plan, size: b.size as ComposeSize, badge: b.badge as boolean, ...(typeof b.timeZone === 'string' ? { timeZone: b.timeZone } : {}), asked });
+    const job = d.composer.start({ cam: cam(res), plan, size: b.size as ComposeSize, badge: b.badge as boolean, ...(typeof b.timeZone === 'string' ? { timeZone: b.timeZone } : {}), asked });
     if (job === 'busy') {
       audit('busy');
       return void res.status(429).json({ error: 'busy' });
@@ -157,21 +159,19 @@ export function composeApi(d: {
   });
 
   r.get('/cameras/:cam/compositions/:file', (req, res) => {
-    if (!known(req, res)) return;
     const m = /^([A-Za-z0-9_-]{22})(\.mp4)?$/.exec(String(req.params.file));
     if (!m) return void res.status(404).json({ error: 'not_found' });
-    const job = d.composer.get(cam(), m[1]);
+    const job = d.composer.get(cam(res), m[1]);
     if (!job) return void res.status(404).json({ error: 'not_found' });
     if (!m[2]) return void res.json(job);
-    const file = d.composer.file(cam(), m[1]);
+    const file = d.composer.file(cam(res), m[1]);
     if (!file) return void res.status(409).json({ error: 'not_ready' });
     res.setHeader('Cache-Control', 'no-store');
     res.sendFile(file, { headers: { 'Content-Type': 'video/mp4' }, acceptRanges: true });
   });
 
   r.delete('/cameras/:cam/compositions/:id', (req, res) => {
-    if (!known(req, res)) return;
-    if (!d.composer.cancel(cam(), String(req.params.id))) return void res.status(404).json({ error: 'not_found' });
+    if (!d.composer.cancel(cam(res), String(req.params.id))) return void res.status(404).json({ error: 'not_found' });
     res.status(204).end();
   });
   return r;

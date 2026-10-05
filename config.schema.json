@@ -45,108 +45,222 @@
         }
       }
     },
-    "camera": {
+    "cameras": {
+      "type": "array",
+      "description": "the cameras of this proxy, in display order (config.json: a list; overrides: by id)",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^(?!file$)(?!.*-file$)[a-z0-9][a-z0-9-]{0,31}$",
+            "description": "camera id used in paths and the API"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^.{1,64}$",
+            "description": "fallback display name until the camera's own name is read (default: the id)"
+          },
+          "host": {
+            "type": "string",
+            "pattern": "^[^\\s/]*$",
+            "description": "address or name, optional :port"
+          },
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "https",
+              "http"
+            ],
+            "description": "camera HTTP API protocol"
+          },
+          "tlsName": {
+            "type": "string",
+            "pattern": "^[^\\s]+$",
+            "description": "verify the camera certificate against this name"
+          },
+          "webUiUrl": {
+            "type": "string",
+            "pattern": "^(https?://[^\\s]+|none)$",
+            "description": "the camera's own web page, linked from the admin UI; default https://<host>/, none for no link"
+          },
+          "user": {
+            "type": "string",
+            "pattern": "^[^\\s:]{1,31}$",
+            "description": "the proxy's own camera user"
+          },
+          "onvifPort": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535,
+            "description": "camera ONVIF port"
+          },
+          "rtspPort": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535,
+            "description": "camera RTSP port"
+          },
+          "baichuanPort": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535,
+            "description": "camera Baichuan port (recordings over TCP); the host is the camera's host"
+          },
+          "statusPollS": {
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 3600,
+            "description": "seconds between status checks"
+          },
+          "poeSwitch": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 48,
+                "description": "the port of the host's PoE switch this camera is on, as numbered on the switch"
+              }
+            }
+          },
+          "ftp": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "user": {
+                "type": "string",
+                "pattern": "^[^\\s:]{1,31}$",
+                "description": "FTP user this camera logs in as"
+              },
+              "enabled": {
+                "type": "boolean",
+                "description": "accept clip uploads from this camera"
+              },
+              "stream": {
+                "type": "string",
+                "enum": [
+                  "main",
+                  "sub"
+                ],
+                "description": "the stream this camera uploads"
+              }
+            }
+          },
+          "stills": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "description": "store stills of this camera"
+              },
+              "stream": {
+                "type": "string",
+                "enum": [
+                  "sub",
+                  "main"
+                ],
+                "description": "camera stream the stills come from"
+              },
+              "intervalS": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 60,
+                "enum": [
+                  1,
+                  2,
+                  3,
+                  4,
+                  5,
+                  6,
+                  10,
+                  12,
+                  15,
+                  20,
+                  30,
+                  60
+                ],
+                "description": "seconds between stills (divides a minute)"
+              }
+            }
+          },
+          "analytics": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kinds": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "person": {
+                    "type": "boolean",
+                    "description": "analyse this camera's person events"
+                  },
+                  "vehicle": {
+                    "type": "boolean",
+                    "description": "analyse this camera's vehicle events"
+                  },
+                  "pet": {
+                    "type": "boolean",
+                    "description": "analyse this camera's pet events"
+                  }
+                }
+              }
+            }
+          },
+          "events": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "poll": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "enabled": {
+                    "type": "boolean",
+                    "description": "poll GetMdState/GetAiState while ONVIF is down"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    },
+    "poeSwitch": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "id": {
+        "model": {
           "type": "string",
-          "pattern": "^[a-z0-9][a-z0-9-]{0,31}$",
-          "description": "camera id used in paths and the API"
-        },
-        "name": {
-          "type": "string",
-          "pattern": "^.{1,64}$",
-          "description": "fallback display name until the camera's own name is read (the camera stores its name)"
+          "enum": [
+            "none",
+            "sscpoe-web"
+          ],
+          "description": "the cameras' PoE switch: none, or sscpoe-web (the STEAMEMO/SSCPOE local web protocol: GPS-208 and kin)"
         },
         "host": {
           "type": "string",
-          "pattern": "^[^\\s/]*$",
-          "description": "address or name, optional :port (required)"
+          "pattern": "^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$",
+          "description": "the switch's address or name, optional :port (http)"
         },
-        "protocol": {
-          "type": "string",
-          "enum": [
-            "https",
-            "http"
-          ],
-          "description": "camera HTTP API protocol"
-        },
-        "tlsName": {
-          "type": "string",
-          "pattern": "^[^\\s]+$",
-          "description": "verify the camera certificate against this name"
-        },
-        "webUiUrl": {
-          "type": "string",
-          "pattern": "^(https?://[^\\s]+|none)$",
-          "description": "the camera's own web page, linked from the admin UI; default https://<host>/, none for no link"
-        },
-        "user": {
-          "type": "string",
-          "pattern": "^[^\\s:]{1,31}$",
-          "description": "the proxy's own camera user"
-        },
-        "onvifPort": {
+        "ports": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 65535,
-          "description": "camera ONVIF port"
+          "maximum": 48,
+          "description": "the switch's PoE port count (maps a port to its internal index)"
         },
-        "rtspPort": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 65535,
-          "description": "camera RTSP port"
-        },
-        "baichuanPort": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 65535,
-          "description": "camera Baichuan port (recordings over TCP); the host is camera.host's"
-        },
-        "statusPollS": {
+        "offSeconds": {
           "type": "integer",
           "minimum": 5,
-          "maximum": 3600,
-          "description": "seconds between status checks"
-        },
-        "poeSwitch": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "model": {
-              "type": "string",
-              "enum": [
-                "none",
-                "sscpoe-web"
-              ],
-              "description": "the camera's PoE switch: none, or sscpoe-web (the STEAMEMO/SSCPOE local web protocol: GPS-208 and kin)"
-            },
-            "host": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$",
-              "description": "the switch's address or name, optional :port (http)"
-            },
-            "port": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 48,
-              "description": "the switch port the camera is on, as numbered on the switch"
-            },
-            "ports": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 48,
-              "description": "the switch's PoE port count (maps the port to its internal index)"
-            },
-            "offSeconds": {
-              "type": "integer",
-              "minimum": 5,
-              "maximum": 60,
-              "description": "seconds the PoE stays off in a power-cycle"
-            }
-          }
+          "maximum": 60,
+          "description": "seconds the PoE stays off in a power-cycle"
         }
       }
     },
@@ -475,11 +589,6 @@
           "pattern": "^[1-9][0-9]{0,4}-[1-9][0-9]{0,4}$",
           "description": "passive port range, A-B"
         },
-        "user": {
-          "type": "string",
-          "pattern": "^[^\\s:]{1,31}$",
-          "description": "FTP user the camera logs in as"
-        },
         "tls": {
           "type": "boolean",
           "description": "require FTPS"
@@ -518,6 +627,11 @@
           "type": "string",
           "pattern": "^.+$",
           "description": "FTPS key (PEM)"
+        },
+        "user": {
+          "type": "string",
+          "pattern": "^[^\\s:]{1,31}$",
+          "description": "legacy (with camera): the FTP user the camera logs in as; use cameras[].ftp.user"
         }
       }
     },
@@ -621,6 +735,112 @@
           }
         }
       }
+    },
+    "camera": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,31}$",
+          "description": "camera id used in paths and the API"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^.{1,64}$",
+          "description": "fallback display name until the camera's own name is read (the camera stores its name)"
+        },
+        "host": {
+          "type": "string",
+          "pattern": "^[^\\s/]*$",
+          "description": "address or name, optional :port (required)"
+        },
+        "protocol": {
+          "type": "string",
+          "enum": [
+            "https",
+            "http"
+          ],
+          "description": "camera HTTP API protocol"
+        },
+        "tlsName": {
+          "type": "string",
+          "pattern": "^[^\\s]+$",
+          "description": "verify the camera certificate against this name"
+        },
+        "webUiUrl": {
+          "type": "string",
+          "pattern": "^(https?://[^\\s]+|none)$",
+          "description": "the camera's own web page, linked from the admin UI; default https://<host>/, none for no link"
+        },
+        "user": {
+          "type": "string",
+          "pattern": "^[^\\s:]{1,31}$",
+          "description": "the proxy's own camera user"
+        },
+        "onvifPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "camera ONVIF port"
+        },
+        "rtspPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "camera RTSP port"
+        },
+        "baichuanPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "camera Baichuan port (recordings over TCP); the host is camera.host's"
+        },
+        "statusPollS": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 3600,
+          "description": "seconds between status checks"
+        },
+        "poeSwitch": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "model": {
+              "type": "string",
+              "enum": [
+                "none",
+                "sscpoe-web"
+              ],
+              "description": "the camera's PoE switch: none, or sscpoe-web (the STEAMEMO/SSCPOE local web protocol: GPS-208 and kin)"
+            },
+            "host": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$",
+              "description": "the switch's address or name, optional :port (http)"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 48,
+              "description": "the switch port the camera is on, as numbered on the switch"
+            },
+            "ports": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 48,
+              "description": "the switch's PoE port count (maps the port to its internal index)"
+            },
+            "offSeconds": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 60,
+              "description": "seconds the PoE stays off in a power-cycle"
+            }
+          }
+        }
+      },
+      "description": "legacy: one camera (read as cameras: [camera]); use cameras"
     }
   }
 }

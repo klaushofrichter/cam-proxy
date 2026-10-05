@@ -34,7 +34,7 @@ function parsePassive(range: string): [number, number] {
   return [lo, hi];
 }
 
-export function createClipsSide(d: { config: Config; password: string; indexer: ClipIndexer; accept: () => boolean }): { side: ClipsSide; start: () => Promise<void>; stop: () => Promise<void> } {
+export function createClipsSide(d: { config: Config; user: string; password: string; indexer: ClipIndexer; accept: () => boolean }): { side: ClipsSide; start: () => Promise<void>; stop: () => Promise<void> } {
   let last: number | null = null;
   let failures = 0;
   let server: FtpServer | undefined;
@@ -54,7 +54,7 @@ export function createClipsSide(d: { config: Config; password: string; indexer: 
       port: f.port,
       passive: parsePassive(f.passive),
       publicHost: f.publicHost,
-      user: f.user,
+      user: d.user,
       password: d.password,
       tls: await ftpTls(f),
       root: join(d.config.server.dataDir, 'ftp'),

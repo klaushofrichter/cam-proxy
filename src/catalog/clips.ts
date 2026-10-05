@@ -122,8 +122,9 @@ export function countClips(c: Catalog, cam: string, from: number, to: number): n
   return Number((c.db.prepare("SELECT COUNT(*) AS n FROM clips WHERE cam = ? AND origin = 'ftp' AND received_at >= ? AND received_at < ?").get(cam, from, to) as { n: number }).n);
 }
 
-// All clip rows, every camera (the FTP status, the daily storage record).
-export function countAllClips(c: Catalog): number {
+// All clip rows, every camera (the FTP status, the daily storage record), or one camera's.
+export function countAllClips(c: Catalog, cam?: string): number {
+  if (cam !== undefined) return Number((c.db.prepare('SELECT COUNT(*) AS n FROM clips WHERE cam = ?').get(cam) as { n: number }).n);
   return Number((c.db.prepare('SELECT COUNT(*) AS n FROM clips').get() as { n: number }).n);
 }
 

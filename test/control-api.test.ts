@@ -88,10 +88,11 @@ describe('control API: status, stats, config', () => {
 
   it('shows every setting with its value, source and restart flag, and never a secret', async () => {
     const r = await request(p.base).get('/control/config').set(admin());
-    expect(r.body['camera.host']).toEqual({ value: sim.camera.host, source: 'file', restart: true, pending: false, type: 'string' });
+    // legacy: the test config.json has a one-camera `camera` object (spec 2026-10-05-multi-camera-host-design §4.2).
+    expect(r.body['cameras.cam1.host']).toEqual({ value: sim.camera.host, source: 'file', restart: true, pending: false, type: 'string', legacy: true });
     expect(r.body['retention.stillsDays']).toEqual({ value: 7, source: 'default', restart: false, pending: false, type: 'integer' });
     // The type, so the Settings page can save a number for an optional setting with no value yet (#85).
-    expect(r.body['camera.poeSwitch.port']).toEqual({ source: 'default', restart: false, pending: false, type: 'integer' });
+    expect(r.body['cameras.cam1.poeSwitch.port']).toEqual({ source: 'default', restart: false, pending: false, type: 'integer' });
     expect(r.body['stills.enabled']).toMatchObject({ type: 'boolean' });
     const text = JSON.stringify(r.body);
     for (const s of [CLIENT_TOKEN, ADMIN_TOKEN, sim.password]) expect(text).not.toContain(s);
@@ -101,7 +102,7 @@ describe('control API: status, stats, config', () => {
     const live = await request(p.base).put('/control/config').set(admin()).send({ sse: { maxClients: 7 } });
     expect(live.body['sse.maxClients']).toMatchObject({ value: 7, source: 'override', pending: false });
     const r = await request(p.base).put('/control/config').set(admin()).send({ camera: { statusPollS: 6 } });
-    expect(r.body['camera.statusPollS']).toMatchObject({ value: 5, source: 'override', restart: true, pending: true, next: 6 });
+    expect(r.body['cameras.cam1.statusPollS']).toMatchObject({ value: 5, source: 'override', restart: true, pending: true, next: 6 });
   });
 
   it('refuses a bad setting with its name, and writes nothing', async () => {
@@ -126,7 +127,7 @@ describe('control API: back to the defaults', () => {
     const r = await request(p.base).put('/control/config').set(admin()).send({ retention: { auditDays: 30 }, camera: { statusPollS: 8 } });
     try {
       expect(r.body['retention.auditDays']).toMatchObject({ value: 30, source: 'override', resetTo: { value: 90, source: 'default' } });
-      expect(r.body['camera.statusPollS']).toMatchObject({ source: 'override', resetTo: { value: 5, source: 'file' } });
+      expect(r.body['cameras.cam1.statusPollS']).toMatchObject({ source: 'override', resetTo: { value: 5, source: 'file' } });
       expect(r.body['retention.stillsDays']).not.toHaveProperty('resetTo');
     } finally {
       for (const k of ['retention.auditDays', 'camera.statusPollS']) await request(p.base).delete(`/control/config/${k}`).set(admin());
@@ -139,14 +140,15 @@ describe('control API: back to the defaults', () => {
     const r = await request(p.base).put('/control/config').set(admin()).send({ camera: { poeSwitch: { model: 'sscpoe-web', host: '192.0.2.98', port: 8, ports: 8, offSeconds: 10 } } });
     try {
       expect(r.status).toBe(200);
-      expect(r.body['camera.poeSwitch.ports']).toMatchObject({ value: 8, source: 'default' });
-      expect(r.body['camera.poeSwitch.offSeconds']).toMatchObject({ value: 10, source: 'default' });
-      expect(r.body['camera.poeSwitch.model']).toMatchObject({ source: 'override', resetTo: { value: 'none', source: 'default', means: 'no PoE switch: power-cycle off' } });
-      expect(r.body['camera.poeSwitch.host']).toMatchObject({ source: 'override', resetTo: { source: 'default', means: 'PoE switch control off: no switch address' } });
-      expect(JSON.parse(readFileSync(join(p.dir, 'data', 'overrides.json'), 'utf8')).camera.poeSwitch).toEqual({ model: 'sscpoe-web', host: '192.0.2.98', port: 8 });
+      expect(r.body['poeSwitch.ports']).toMatchObject({ value: 8, source: 'default' });
+      expect(r.body['poeSwitch.offSeconds']).toMatchObject({ value: 10, source: 'default' });
+      expect(r.body['poeSwitch.model']).toMatchObject({ source: 'override', resetTo: { value: 'none', source: 'default', means: 'no PoE switch: power-cycle off' } });
+      expect(r.body['poeSwitch.host']).toMatchObject({ source: 'override', resetTo: { source: 'default', means: 'PoE switch control off: no switch address' } });
+      const stored = JSON.parse(readFileSync(join(p.dir, 'data', 'overrides.json'), 'utf8'));
+      expect([stored.poeSwitch, stored.cameras.cam1.poeSwitch]).toEqual([{ model: 'sscpoe-web', host: '192.0.2.98' }, { port: 8 }]);
       // Saving the default over an override removes it.
       const back = await request(p.base).put('/control/config').set(admin()).send({ camera: { poeSwitch: { model: 'none' } } });
-      expect(back.body['camera.poeSwitch.model']).toMatchObject({ value: 'none', source: 'default' });
+      expect(back.body['poeSwitch.model']).toMatchObject({ value: 'none', source: 'default' });
     } finally {
       for (const k of ['model', 'host', 'port']) await request(p.base).delete(`/control/config/camera.poeSwitch.${k}`).set(admin());
     }
@@ -198,7 +200,7 @@ describe('control API: actions and log', () => {
   it('restart applies the pending settings', async () => {
     await request(p.base).put('/control/config').set(admin()).send({ camera: { statusPollS: 8 } });
     expect((await request(p.base).post('/control/actions/restart').set(admin())).status).toBe(202);
-    await until(async () => (await request(p.base).get('/control/config').set(admin())).body['camera.statusPollS'].value === 8);
+    await until(async () => (await request(p.base).get('/control/config').set(admin())).body['cameras.cam1.statusPollS'].value === 8);
     await until(() => p.proxy.intake.state().onvif === 'subscribed');
   });
 

@@ -46,7 +46,7 @@ export function duration(seconds: number): string {
 export interface StillsSettings { cam: string; intervalS: number; stillsDays: number; previewsDays: number; keepHours: number; enabled?: boolean }
 export interface StillsInventoryDeps {
   dataDir: string;
-  settings: () => StillsSettings; // read when a run starts
+  settings: (cam: string) => StillsSettings; // read when a run starts, for the run's camera
   audit: Pick<AuditLog, 'list'>;
   catalog: Catalog;
 }
@@ -179,7 +179,7 @@ class Gaps {
 
 export function stillsCheck(d: StillsInventoryDeps): Check {
   return async (ctx): Promise<CheckResult> => {
-    const s = d.settings();
+    const s = d.settings(ctx.cam);
     const now = ctx.now;
     const retentionFrom = dayStart(now - s.stillsDays * DAY);
     // Exclusive: the current minute is in memory, and the one before is written only when the next frame comes.
@@ -230,7 +230,9 @@ export function stillsCheck(d: StillsInventoryDeps): Check {
     const previewsFrom = Math.max(dayStart(now - s.previewsDays * DAY), oldestPreview ?? to);
     if (oldest === null) return { window: { from: null, to, reason: 'empty', retentionFrom, protectedFrom, notes: [] }, counts, top: [], items: [], message: 'no stills stored' };
     // One pass over the audit log for every action the check needs.
-    const audit = await records(d.audit, AUDIT_ACTIONS, retentionFrom - OUTAGE_MS, now);
+    // Records of another camera don't explain this camera's gaps (spec 2026-10-05-multi-camera-host-design §5.2).
+    const mine = (r: AuditRecord) => { const cam = (r.labels as { camera?: string } | undefined)?.camera; return cam === undefined || cam === ctx.cam; };
+    const audit = (await records(d.audit, AUDIT_ACTIONS, retentionFrom - OUTAGE_MS, now)).filter(mine);
     let from: number;
     let reason: WindowReason;
     if (oldest - retentionFrom < HOUR) {

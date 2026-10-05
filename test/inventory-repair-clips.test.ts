@@ -85,9 +85,9 @@ function setup(o: { settings?: Partial<ClipsRepairSettings>; fail?: (path: strin
   const deps: ClipsRepairDeps = {
     catalog,
     settings: () => ({ cam: 'cam1', stream: 'sub', clipsDays: 7, ...o.settings }),
-    list: { find: async (id) => known.get(id) },
-    fetcher,
-    cache,
+    list: () => ({ find: async (id) => known.get(id) }),
+    fetcher: () => fetcher,
+    cache: () => cache,
     indexer: () => indexer,
     tempDir: () => tempDir,
     paused: () => o.paused ?? false,
@@ -101,7 +101,7 @@ function setup(o: { settings?: Partial<ClipsRepairSettings>; fail?: (path: strin
 }
 // An item's skip reason, or its result.
 const outcome = (x: unknown) => (x as RepairItem).reason ?? (x as RepairItem).result;
-const ctx = (source: InventoryReport, o: Partial<RepairContext> = {}): RepairContext => ({ signal: new AbortController().signal, progress: () => undefined, now: NOW, runId: 'clipsrepair-1-abcdef', source, ...o });
+const ctx = (source: InventoryReport, o: Partial<RepairContext> = {}): RepairContext => ({ signal: new AbortController().signal, progress: () => undefined, now: NOW, cam: 'cam1', runId: 'clipsrepair-1-abcdef', source, ...o });
 const until = async (ok: () => boolean, ms = 5000) => {
   const t = Date.now();
   while (!ok()) {
@@ -233,7 +233,7 @@ describe('clips repair', () => {
 
   it('stops on an offline camera: the list, or the download', async () => {
     const s = setup();
-    s.deps.list = { find: async () => { throw new SearchError('camera_offline', 'the camera does not answer'); } };
+    s.deps.list = () => ({ find: async () => { throw new SearchError('camera_offline', 'the camera does not answer'); } });
     const r = await clipsRepair(s.deps).run(ctx(report([recording(1), recording(2)].map(missing))));
     expect(r.stopped).toBe('camera_offline');
     expect(r.counts).toMatchObject({ failed: 1, done: 0 });
@@ -295,14 +295,14 @@ describe('clips repair', () => {
     s.onCamera(...es);
     const busy = new Set([es[0].id, es[1].id, es[2].id]);
     const tries = new Map<string, number>();
-    const find = s.deps.list.find;
-    s.deps.list = {
+    const find = s.deps.list('cam1').find;
+    s.deps.list = () => ({
       find: async (id, signal) => {
         tries.set(id, (tries.get(id) ?? 0) + 1);
         if (busy.has(id)) throw new SearchError('busy', 'too many recording Searches waiting; try again shortly');
         return find(id, signal);
       },
-    };
+    });
     const r = await clipsRepair(s.deps).run(ctx(report(es.map(missing))));
     // Three busy ones in a row never stop the run.
     expect(r.items.map(outcome)).toEqual(['busy', 'busy', 'busy', 'ok']);
@@ -314,7 +314,7 @@ describe('clips repair', () => {
     const t = setup();
     t.onCamera(es[0]);
     const ac = new AbortController();
-    t.deps.list = { find: async () => { throw new SearchError('busy', 'busy'); } };
+    t.deps.list = () => ({ find: async () => { throw new SearchError('busy', 'busy'); } });
     t.deps.sleep = async () => ac.abort();
     const q = await clipsRepair(t.deps).run(ctx(report([missing(es[0])]), { signal: ac.signal }));
     expect([q.items, q.counts.failed]).toEqual([[], 0]);
@@ -433,7 +433,7 @@ describe('clips repair', () => {
     const [a, b] = [recording(1), recording(2)];
     const s = setup({ cap: Math.floor(video.length / 2) });
     s.onCamera(a, b);
-    const real = s.deps.indexer();
+    const real = s.deps.indexer('cam1');
     let fail = false;
     s.deps.indexer = () => ({
       addRecording: async (file, r) => {
@@ -527,14 +527,14 @@ describe('clips repair against cam-sim', () => {
       catalog = openCatalog(join(dir, 'catalog.sqlite'));
       const list: RecordingList = side.list;
       const settings = { cam: 'cam1', clipsDays: 2, stream: 'sub' as const };
-      const check = await clipsCheck({ dataDir: dir, catalog, settings: () => ({ ...settings, ftpEnabled: true, eventMaxOpenMin: 10 }), camera: { list, timeInfo: () => client.timeInfo() } })({ signal: new AbortController().signal, progress: () => undefined, now: NOW, options: { camera: true } });
+      const check = await clipsCheck({ dataDir: dir, catalog, settings: () => ({ ...settings, ftpEnabled: true, eventMaxOpenMin: 10 }), camera: () => ({ list, timeInfo: () => client.timeInfo() }) })({ signal: new AbortController().signal, progress: () => undefined, now: NOW, cam: 'cam1', options: { camera: true } });
       expect(check.counts).toMatchObject({ missingLocally: 2 });
       const source = report(check.items as ClipItem[], { window: check.window });
       const config = structuredClone(DEFAULTS);
       config.server.dataDir = dir;
       const indexer = new ClipIndexer({ catalog, log: new StreamLog(catalog), config: () => config, timeInfo: () => client.timeInfo(), dataDir: dir, cam: 'cam1' });
       const r = await clipsRepair({
-        catalog, settings: () => settings, list, fetcher: side.fetcher, cache: side.cache, indexer: () => indexer, tempDir: () => join(dir, 'inventory', 'tmp'),
+        catalog, settings: () => settings, list: () => list, fetcher: () => side.fetcher, cache: () => side.cache, indexer: () => indexer, tempDir: () => join(dir, 'inventory', 'tmp'),
         paused: () => false, clipsBytes: () => 0, sleep: async () => undefined,
       }).run(ctx(source));
       expect(r.stopped).toBeNull();

@@ -61,3 +61,28 @@ describe.skipIf(!binary)('go2rtc supervisor', () => {
     expect(() => process.kill(second, 0)).toThrow();
   }, 40000);
 });
+
+// Live test 2026-10-05: a proxy restarted within a second met the old
+// go2rtc still on the ports; its /api answered, so the new one counted as up
+// and the stream stayed down for good.
+describe('go2rtc: only our own go2rtc counts', () => {
+  it('a foreign go2rtc on the API port is not ours: start fails (supervision retries)', async () => {
+    const { createServer } = await import('http');
+    const { chmodSync, mkdtempSync, writeFileSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const apiPort = await freePort();
+    const foreign = createServer((_req, res) => void res.end(JSON.stringify({ config_path: '/tmp/someone-else/go2rtc.json', version: '1.9.14' })));
+    await new Promise<void>((r) => foreign.listen(apiPort, '127.0.0.1', () => r()));
+    cleanup.push(() => new Promise((r) => foreign.close(() => r(undefined))));
+    // A stand-in go2rtc that can't bind and just lingers.
+    const dir = mkdtempSync(join(tmpdir(), 'camproxy-fake-go2rtc-'));
+    const fake = join(dir, 'go2rtc');
+    writeFileSync(fake, '#!/bin/sh\nexec sleep 30\n');
+    chmodSync(fake, 0o755);
+    const g = new Go2rtc({ binary: fake, rtspPort: await freePort(), apiPort, cam: 'cam1', readyMs: 600, source: { host: '127.0.0.1', port: 554, user: 'proxy', password: 'x' } });
+    cleanup.push(() => g.stop());
+    await expect(g.start()).rejects.toThrow(/go2rtc_not_ready/);
+    expect(g.up()).toBe(false);
+  });
+});
