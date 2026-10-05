@@ -10,6 +10,7 @@ export interface CameraNode {
   poeSwitch: { port?: number };
   ftp: { user?: string; enabled?: boolean; stream?: 'main' | 'sub' };
   stills: { enabled?: boolean; stream?: 'sub' | 'main'; intervalS?: number };
+  storage: { sharePercent?: number };
   analytics: { kinds: { person?: boolean; vehicle?: boolean; pet?: boolean } };
   events: { poll: { enabled?: boolean } };
 }
@@ -17,7 +18,7 @@ export interface CameraNode {
 // A new camera's defaults: its name is its id (Ruling P1-11; a legacy camera
 // keeps the name Den, src/config/legacy.ts).
 export function cameraDefaults(id: string): CameraNode {
-  return { id, name: id, host: '', protocol: 'https', user: 'proxy', onvifPort: 8000, rtspPort: 554, baichuanPort: 9000, statusPollS: 30, poeSwitch: {}, ftp: {}, stills: {}, analytics: { kinds: {} }, events: { poll: {} } };
+  return { id, name: id, host: '', protocol: 'https', user: 'proxy', onvifPort: 8000, rtspPort: 554, baichuanPort: 9000, statusPollS: 30, poeSwitch: {}, ftp: {}, stills: {}, storage: {}, analytics: { kinds: {} }, events: { poll: {} } };
 }
 
 export interface Config {

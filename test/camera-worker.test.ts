@@ -76,6 +76,20 @@ describe('CameraWorker (spec §3.1)', () => {
   });
 });
 
+describe('storage per camera (spec §8.1)', () => {
+  it("the worker's stills and clips writes name its camera", async () => {
+    const fake = { ready: () => new Promise<void>(() => undefined), up: () => false, streamUrl: () => 'rtsp://127.0.0.1:1/x', setStream: async () => undefined };
+    const { w, catalog } = worker({ stills: true, over: { go2rtc: () => fake as unknown as Go2rtc } });
+    const calls: unknown[][] = [];
+    const storage = (w as unknown as { d: { storage: { noteWritten: (...a: unknown[]) => void } } }).d.storage;
+    storage.noteWritten = (...a: unknown[]) => void calls.push(a);
+    w.stills!.store.emit('written', { kind: 'stills', bytes: 10, files: 1 });
+    (w.makeIndexer(true) as unknown as { d: { stored: (b: number) => void } }).d.stored(20);
+    expect(calls).toEqual([['stills', 10, 1, { cam: 'cam1' }], ['clips', 20, 1, { growth: true, cam: 'cam1' }]]);
+    catalog.close();
+  });
+});
+
 describe('CameraRegistry', () => {
   it('lists in config order, finds by id, first()', () => {
     let order = ['b', 'a'];

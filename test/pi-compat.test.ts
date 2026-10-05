@@ -10,6 +10,7 @@ import { join } from 'path';
 import { Client } from 'basic-ftp';
 import request from 'supertest';
 import { ftpUsers } from '../src/clips/side';
+import { shareBytes } from '../src/storage';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MIGRATIONS } from '../src/catalog/migrations';
 import { usageBetween, usageByCamera } from '../src/catalog/analyses';
@@ -157,6 +158,18 @@ describe('the Pi: FTP for its one camera', () => {
     } finally {
       c.close();
     }
+  });
+});
+
+// P2 (spec §8.1): one storage budget; the Pi's one camera has no share and
+// gets the whole budget; the stats name its part.
+describe('the Pi: the storage budget', () => {
+  it('the whole budget is cam1\'s; storage per camera is cam1 only', async () => {
+    expect(Object.fromEntries(shareBytes(proxy.running, 1000))).toEqual({ cam1: 1000 });
+    proxy.storage.noteWritten('stills', 10, 1, { cam: 'cam1' });
+    const st = (await request(base).get('/control/stats').set(auth(ADMIN_TOKEN))).body;
+    expect(Object.keys(st.cameras)).toEqual(['cam1']);
+    expect(st.storage.budget).toBe(161061273600);
   });
 });
 

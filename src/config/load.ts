@@ -103,6 +103,10 @@ function crossCheck(c: Config): void {
     const iv = cameraConfig(c, id)!.stills.intervalS;
     if (cols * rows < 60 / iv) throw new ConfigError(`previews.grid: ${c.previews.grid} holds fewer than the ${60 / iv} tiles of a minute${c.cameraOrder.length > 1 ? ` (camera ${id})` : ''}`);
   }
+  // Shares of the storage budget (spec §8.1): together at most 100 %.
+  const shared = c.cameraOrder.flatMap((id) => (c.cameras[id].storage?.sharePercent !== undefined ? [[id, c.cameras[id].storage.sharePercent!] as const] : []));
+  const sum = shared.reduce((n, [, p]) => n + p, 0);
+  if (sum > 100) throw new ConfigError(`cameras: storage.sharePercent adds up to ${sum} % (${shared.map(([id, p]) => `${id} ${p}`).join(', ')}); at most 100`);
   const [a, b] = c.ftp.passive.split('-').map(Number);
   if (a > 65535 || b > 65535 || a > b || b - a > 100) throw new ConfigError('ftp.passive: must be A-B with A <= B, at most 100 ports');
   // One FTP server for every camera (spec 2026-10-05-multi-camera-host-design §7):

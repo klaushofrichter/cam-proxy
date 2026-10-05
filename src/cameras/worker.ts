@@ -148,7 +148,7 @@ export class CameraWorker extends EventEmitter {
       search: (param) => this.client.command('Search', param),
       timeInfo: () => this.client.timeInfo(),
       paused: () => d.storage.paused(),
-      noteWritten: (bytes) => d.storage.noteWritten('recordings', bytes, 1),
+      noteWritten: (bytes) => d.storage.noteWritten('recordings', bytes, 1, { cam: this.id }),
       onDownload: (o) => d.hooks.onRecordingDownload({ stream: o.stream, result: o.result, priority: o.priority }),
     });
     // A reboot (#83): the client and poller are read on use (restart builds
@@ -225,7 +225,7 @@ export class CameraWorker extends EventEmitter {
   // A clip indexer for this camera; `growth: false` for a repair's fetches.
   makeIndexer(growth: boolean): ClipIndexer {
     const d = this.d;
-    return new ClipIndexer({ catalog: d.catalog, log: d.log, config: d.running, timeInfo: () => this.client.timeInfo(), dataDir: d.running().server.dataDir, cam: this.id, stored: (bytes) => d.storage.noteWritten('clips', bytes, 1, { growth }) });
+    return new ClipIndexer({ catalog: d.catalog, log: d.log, config: d.running, timeInfo: () => this.client.timeInfo(), dataDir: d.running().server.dataDir, cam: this.id, stored: (bytes) => d.storage.noteWritten('clips', bytes, 1, { growth, cam: this.id }) });
   }
 
   // The indexer of this camera's FTP uploads (spec 2026-10-05-multi-camera-host-design §7);
@@ -320,7 +320,7 @@ export class CameraWorker extends EventEmitter {
         const s = c.stills;
         const grabber = new FrameGrabber({ input: go2rtc.streamUrl(c.id, s.stream), intervalS: s.intervalS, size: s.size, tileSize: r.previews.tileSize, quality: s.quality, tileQuality: r.previews.quality });
         const store = new MinuteStore({ dataDir: r.server.dataDir, cam: c.id, intervalS: s.intervalS, still: { size: s.size, quality: s.quality }, tile: { size: r.previews.tileSize, grid: r.previews.grid, quality: r.previews.quality } });
-        store.on('written', (w: { kind: 'stills' | 'previews'; bytes: number; files: number }) => d.storage.noteWritten(w.kind, w.bytes, w.files));
+        store.on('written', (w: { kind: 'stills' | 'previews'; bytes: number; files: number }) => d.storage.noteWritten(w.kind, w.bytes, w.files, { cam: this.id }));
         grabber.on('frame', (f: Frame) => {
           if (d.storage.paused()) return d.hooks.onStillMissing(); // the disk is full: no writing
           store.add(f);

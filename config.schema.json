@@ -187,6 +187,18 @@
               }
             }
           },
+          "storage": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "sharePercent": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100,
+                "description": "this camera's share of the storage budget, percent (all shares together at most 100)"
+              }
+            }
+          },
           "analytics": {
             "type": "object",
             "additionalProperties": false,

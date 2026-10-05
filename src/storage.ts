@@ -12,10 +12,11 @@ import { logger } from './log';
 import type { StreamLog } from './stream/log';
 import { DAY, dayStart, HOUR } from './time-units';
 import { realStatfs } from './health/host';
+import { cameraConfig, cameraIds } from './config/cameras';
 
 const GROWTH_WINDOW = 3 * DAY;
 
-type FileKind = 'stills' | 'previews' | 'clips' | 'recordings';
+export type FileKind = 'stills' | 'previews' | 'clips' | 'recordings';
 type MinuteKind = Exclude<FileKind, 'recordings'>;
 const MINUTE_KINDS: MinuteKind[] = ['stills', 'previews', 'clips'];
 const KINDS: FileKind[] = [...MINUTE_KINDS, 'recordings'];
@@ -25,10 +26,24 @@ const BUDGET_ORDER: MinuteKind[] = ['stills', 'clips', 'previews'];
 interface KindUsage { bytes: number; files: number; oldest: number | null; newest: number | null; growthPerDay: number }
 interface StorageRun { dryRun: boolean; at: number; deleted: Record<string, number>; freedBytes: number; reason: string[] }
 
-// One stored minute of a kind: its files (a pack; a sprite and its sidecar).
-interface Unit { ts: number; files: { path: string; bytes: number }[] }
+// One stored minute of a kind of one camera: its files (a pack; a sprite and
+// its sidecar). `cam` is '' for a write reported without its camera.
+interface Unit { ts: number; cam: string; files: { path: string; bytes: number }[] }
 
 const unitBytes = (u: Unit) => u.files.reduce((n, f) => n + f.bytes, 0);
+
+// Each camera's share of the budget in bytes (spec 2026-10-05-multi-camera-host-design
+// §8.1, Ruling P2-2): its sharePercent, or an equal part of what the shares leave.
+export function shareBytes(c: Config, budget: number): Map<string, number> {
+  const ids = cameraIds(c);
+  const own = new Map(ids.flatMap((id) => {
+    const p = cameraConfig(c, id)!.storage.sharePercent;
+    return p === undefined ? [] : [[id, p] as const];
+  }));
+  const rest = Math.max(0, 100 - [...own.values()].reduce((a, b) => a + b, 0));
+  const others = ids.filter((id) => !own.has(id));
+  return new Map(ids.map((id) => [id, Math.floor((budget * (own.get(id) ?? rest / Math.max(1, others.length))) / 100)]));
+}
 
 // Keeps the data folder within its limits (spec §8a): age per kind, a size
 // budget (oldest hour first: stills, clips, previews; never below keepHours),
@@ -106,7 +121,7 @@ export class Storage extends EventEmitter {
                 } catch {
                   continue;
                 }
-                const u = byMinute.get(key) ?? { ts, files: [] };
+                const u = byMinute.get(key) ?? { ts, cam, files: [] };
                 u.files.push({ path, bytes });
                 byMinute.set(key, u);
               }
@@ -131,7 +146,7 @@ export class Storage extends EventEmitter {
         const path = join(recDir, cam, name);
         try {
           const s = lstatSync(path);
-          if (s.isFile()) recs.push({ ts: s.mtimeMs, files: [{ path, bytes: s.size }] });
+          if (s.isFile()) recs.push({ ts: s.mtimeMs, cam, files: [{ path, bytes: s.size }] });
         } catch {
           // gone
         }
@@ -144,7 +159,8 @@ export class Storage extends EventEmitter {
   // Only an estimate for usage and growth between runs; run() recounts.
   // `growth: false`: usage only, not growth (the clips repair fetches old
   // recordings back: a one-off, not the rate the disk fills at).
-  noteWritten(kind: FileKind, bytes: number, files: number, o: { growth?: boolean } = {}): void {
+  noteWritten(kind: FileKind, bytes: number, files: number, o: { growth?: boolean; cam?: string } = {}): void {
+    const cam = o.cam ?? '';
     const now = this.now();
     if (o.growth !== false) this.writes.push({ at: now, kind, bytes: Math.max(0, bytes) });
     while (this.writes.length && this.writes[0].at < now - GROWTH_WINDOW) this.writes.shift();
@@ -152,8 +168,8 @@ export class Storage extends EventEmitter {
     const list = this.units[kind];
     const ts = Math.floor(now / 60_000) * 60_000;
     const lastUnit = list[list.length - 1];
-    if (lastUnit && lastUnit.ts === ts) lastUnit.files.push({ path: '', bytes });
-    else list.push({ ts, files: [{ path: '', bytes }, ...Array.from({ length: Math.max(0, files - 1) }, () => ({ path: '', bytes: 0 }))] });
+    if (lastUnit && lastUnit.ts === ts && lastUnit.cam === cam) lastUnit.files.push({ path: '', bytes });
+    else list.push({ ts, cam, files: [{ path: '', bytes }, ...Array.from({ length: Math.max(0, files - 1) }, () => ({ path: '', bytes: 0 }))] });
   }
 
   usage(): Record<FileKind | 'catalog' | 'audit', KindUsage> & { free: number; size: number; budget: number; used: number; daysUntilFull: number | null } {
@@ -180,6 +196,21 @@ export class Storage extends EventEmitter {
     const disk = this.disk();
     const budget = this.budget();
     return { ...out, free: disk.free, size: disk.size, budget, used, daysUntilFull: growth > 0 ? Math.max(0, (budget - used) / growth) : null };
+  }
+
+  // Each camera's part (spec §8.1): the Status page and the metrics.
+  usageByCamera(): Record<string, Record<FileKind, { bytes: number; files: number }>> {
+    this.recountRecordings();
+    const out: Record<string, Record<FileKind, { bytes: number; files: number }>> = {};
+    for (const kind of KINDS) {
+      for (const u of this.units[kind]) {
+        if (!u.cam) continue;
+        const c = (out[u.cam] ??= { stills: { bytes: 0, files: 0 }, previews: { bytes: 0, files: 0 }, clips: { bytes: 0, files: 0 }, recordings: { bytes: 0, files: 0 } });
+        c[kind].bytes += unitBytes(u);
+        c[kind].files += u.files.length;
+      }
+    }
+    return out;
   }
 
   paused(): boolean {
@@ -312,8 +343,33 @@ export class Storage extends EventEmitter {
     const budget = this.budget();
     const catalog = this.d.catalog.sizeBytes() + (this.d.audit?.usage().bytes ?? 0); // audit bytes count, are never dropped
     const used = () => KINDS.reduce((n, k) => n + bytesOf(k), 0) + catalog;
+    // With shares (spec §8.1): the camera most above its share loses its
+    // oldest hour first; without: the oldest hour across all cameras.
+    const shared = cameraIds(cfg).some((id) => cameraConfig(cfg, id)!.storage.sharePercent !== undefined);
+    const usedBy = (cam: string) => KINDS.reduce((n, k) => n + sim[k].filter((u) => u.cam === cam).reduce((m, u) => m + unitBytes(u), 0), 0);
+    // The oldest hour of one camera's kind, never its newest keepHours.
+    const dropOldestHourOf = (kind: MinuteKind, cam: string): boolean => {
+      const keepFrom = now - cfg.storage.keepHours[kind] * HOUR;
+      const first = sim[kind].find((u) => u.cam === cam);
+      if (!first || first.ts >= keepFrom) return false;
+      const hour = Math.floor(first.ts / HOUR) * HOUR;
+      sim[kind] = sim[kind].filter((u) => {
+        const go = u.cam === cam && u.ts < hour + HOUR && u.ts < keepFrom;
+        if (go) drop(kind, u);
+        return !go;
+      });
+      return true;
+    };
+    const share = shared ? shareBytes(cfg, budget) : null;
     while (used() > budget) {
-      if (!(dropRecording() || BUDGET_ORDER.some((k) => dropOldestHour(k)))) {
+      let progressed = dropRecording();
+      if (!progressed && share) {
+        const order = [...share.keys()].sort((a, b) => usedBy(b) - share.get(b)! - (usedBy(a) - share.get(a)!));
+        progressed = order.some((cam) => BUDGET_ORDER.some((k) => dropOldestHourOf(k, cam)));
+      }
+      // Without shares, or files of no configured camera: by age.
+      if (!progressed) progressed = BUDGET_ORDER.some((k) => dropOldestHour(k));
+      if (!progressed) {
         if (!reason.includes('budget_unreachable')) reason.push('budget_unreachable');
         break;
       }

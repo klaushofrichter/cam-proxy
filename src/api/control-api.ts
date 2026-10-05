@@ -393,6 +393,8 @@ export function controlApi(d: ControlDeps): express.Router {
       stream: { rows: d.log.count(), lastId: d.log.lastId() },
       sse: { clients: d.sseClients() },
       storage: { budget: u.budget, used: u.used, daysUntilFull: u.daysUntilFull, paused: d.storage.paused() },
+      // Each camera's part of the disk (spec 2026-10-05-multi-camera-host-design §8.1).
+      cameras: d.storage.usageByCamera(),
     });
   });
 

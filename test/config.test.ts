@@ -232,7 +232,7 @@ describe('shipped files', () => {
     const l = load();
     // The one-camera (legacy) form: the defaults of camera cam1 and the host switch in `camera`, ftp.user (spec 2026-10-05-multi-camera-host-design §4.2).
     const { cameras: _c, cameraOrder: _o, poeSwitch, ...defaults } = JSON.parse(JSON.stringify(DEFAULTS));
-    const { ftp: _f, stills: _s, analytics: _a, events: _e, poeSwitch: _p, ...cam } = cameraDefaults('cam1');
+    const { ftp: _f, stills: _s, storage: _st, analytics: _a, events: _e, poeSwitch: _p, ...cam } = cameraDefaults('cam1');
     defaults.camera = { ...cam, name: 'Den', host: example.camera.host, poeSwitch };
     defaults.ftp = { ...defaults.ftp, user: 'camera' };
     defaults.server.dataDir = example.server.dataDir;

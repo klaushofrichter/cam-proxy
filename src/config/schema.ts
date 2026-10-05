@@ -81,6 +81,9 @@ export const CAMERA_NODE: Node = {
     stream: unset({ type: 'string', enum: ['sub', 'main'], optional: true, doc: 'camera stream the stills come from' }, hostValue('stills.stream')),
     intervalS: unset({ type: 'integer', min: 1, max: 60, optional: true, oneOf: [1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60], doc: 'seconds between stills (divides a minute)' }, hostValue('stills.intervalS')),
   },
+  storage: {
+    sharePercent: unset(int(0, 100, "this camera's share of the storage budget, percent (all shares together at most 100)", true), 'no share: the camera has an equal part of what the shares leave'),
+  },
   analytics: {
     kinds: {
       person: unset({ type: 'boolean', doc: "analyse this camera's person events" }, hostValue('analytics.kinds.person')),

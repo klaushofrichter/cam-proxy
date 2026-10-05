@@ -135,6 +135,14 @@ describe('cameras (spec §4.1)', () => {
     expect(err(() => load({ CAMERA_HOST: '10.0.0.1' }))).toBe('CAMERA_HOST: set cameras[].host instead (several cameras)');
   });
 
+  it('storage.sharePercent: the sum may not exceed 100', () => {
+    write('config.json', { cameras: [{ id: 'cam3', storage: { sharePercent: 70 } }, { id: 'cam4', storage: { sharePercent: 50 } }] });
+    expect(err(() => load())).toBe('cameras: storage.sharePercent adds up to 120 % (cam3 70, cam4 50); at most 100');
+    write('config.json', { cameras: [{ id: 'cam3', storage: { sharePercent: 70 } }, { id: 'cam4' }] });
+    expect(cameraConfig(load().config, 'cam3')!.storage).toEqual({ sharePercent: 70 });
+    expect(cameraConfig(load().config, 'cam4')!.storage).toEqual({});
+  });
+
   it('FTP for several cameras: unique users, ≥ 10 passive ports per camera', () => {
     write('config.json', { ...two, ftp: { enabled: true, passive: '50000-50019' } });
     expect(cameraIds(load({ CAMPROXY_FTP_PASSWORD: 'f' }).config)).toEqual(['cam3', 'cam4']);

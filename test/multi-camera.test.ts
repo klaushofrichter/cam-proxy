@@ -222,6 +222,13 @@ describe('one proxy, three cameras (spec §15)', () => {
     expect(sum).toEqual(st.events.stored);
   });
 
+  it('stats: storage per camera (spec §8.1)', async () => {
+    p.proxy.storage.noteWritten('stills', 1234, 1, { cam: 'cam4' });
+    const st = (await request(p.base).get('/control/stats').set(admin())).body;
+    expect(st.cameras.cam4.stills.bytes).toBeGreaterThanOrEqual(1234);
+    expect(Object.keys(st.cameras.cam4).sort()).toEqual(['clips', 'previews', 'recordings', 'stills']);
+  });
+
   it('health: one block per camera; the top level is the first camera', async () => {
     const h = (await request(p.base).get('/api/local/health')).body;
     expect(h.schema).toBe(1);
