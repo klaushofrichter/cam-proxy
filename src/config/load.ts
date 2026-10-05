@@ -183,7 +183,9 @@ export function applyOverrides(loaded: Loaded, patch: object): Loaded {
   return next;
 }
 
-export function removeOverride(loaded: Loaded, path: string): Loaded {
+// The configuration without one override, not written: what Reset goes back
+// to (the Settings page shows it on the button).
+export function withoutOverride(loaded: Loaded, path: string): Loaded {
   if (!leafPaths().includes(path)) throw new ConfigError(`${path}: unknown setting`);
   const overrides = structuredClone(loaded.overrides) as Obj;
   const keys = path.split('.');
@@ -199,8 +201,21 @@ export function removeOverride(loaded: Loaded, path: string): Loaded {
   };
   prune(overrides);
   const baseDir = loaded.files.config ? dirname(loaded.files.config) : process.cwd();
-  const next = build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides, baseDir, loaded.envLayer);
-  writeOverrides(loaded.files.overrides, overrides);
+  return build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides, baseDir, loaded.envLayer);
+}
+
+export function removeOverride(loaded: Loaded, path: string): Loaded {
+  const next = withoutOverride(loaded, path);
+  if (next !== loaded) writeOverrides(loaded.files.overrides, next.overrides as Obj);
+  return next;
+}
+
+// Every override removed at once (the Settings page's "Reset to defaults"):
+// back to config.json and the built-in defaults; the environment still wins.
+export function removeAllOverrides(loaded: Loaded): Loaded {
+  const baseDir = loaded.files.config ? dirname(loaded.files.config) : process.cwd();
+  const next = build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, {}, baseDir, loaded.envLayer);
+  writeOverrides(loaded.files.overrides, {});
   return next;
 }
 

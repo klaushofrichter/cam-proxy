@@ -7,8 +7,8 @@ import { CameraNameRefused } from '../camera/name';
 import { cameraNameProblem } from '../camera/name-rules';
 import type { PowerCycleAnswer, RebootAnswer, RebootRequester, RebootState, TooSoon } from '../camera/reboot';
 import { PoeSwitchError, type PoeOnResult, type PoeSwitchStatus, type PortReading } from '../camera/poe-switch';
-import type { Config } from '../config/defaults';
-import { applyOverrides, ConfigError, getPath, needsProcessRestart, needsRestart, removeOverride, type Loaded } from '../config/load';
+import { DEFAULTS, type Config } from '../config/defaults';
+import { applyOverrides, ConfigError, getPath, needsProcessRestart, needsRestart, removeAllOverrides, removeOverride, withoutOverride, type Loaded } from '../config/load';
 import { leafAt, leafPaths } from '../config/schema';
 import { FtpNotConfiguredError, type FtpTarget } from '../clips/camera-ftp';
 import type { CameraFtpView, ClipsStall } from '../clips/ftp-health';
@@ -21,6 +21,8 @@ import type { StreamLog } from '../stream/log';
 import { AuditQueryError, type AuditLog, type Outcome } from '../audit/audit-log';
 import { clientIp, tokenMatches } from './auth';
 import { RefusalThrottle } from '../audit/throttle';
+import { isAuditAction } from '../audit/actions';
+import { DAY, dayStart } from '../time-units';
 import { eventsStored } from './metrics';
 import { readCookie, SESSION_COOKIE, SESSION_MS, type createSessionSigner } from './session';
 import type { createLoginLinks } from './login-links';
@@ -109,9 +111,26 @@ function configView(loaded: Loaded, running: Config) {
       const next = getPath(loaded.config, p);
       const pending = restart && JSON.stringify(value) !== JSON.stringify(next);
       // `env`: the variable that sets it (read-only on the Settings page).
-      return [p, { value, source: loaded.sources[p], ...(loaded.envNames[p] ? { env: loaded.envNames[p] } : {}), restart, pending, ...(pending ? { next } : {}), type: leafAt(p)?.type }];
+      // `resetTo` (an override): what Reset goes back to, the file's value or the default.
+      return [p, { value, source: loaded.sources[p], ...(loaded.envNames[p] ? { env: loaded.envNames[p] } : {}), restart, pending, ...(pending ? { next } : {}), type: leafAt(p)?.type, ...(loaded.sources[p] === 'override' ? { resetTo: resetTo(loaded, p) } : {}) }];
     }),
   );
+}
+
+// The value an override's Reset goes back to, and where that comes from. A
+// reset the checks would refuse (a combination only the override makes
+// valid) answers the file's value or the default all the same.
+function resetTo(loaded: Loaded, p: string): { value?: unknown; source: 'file' | 'default' | 'env' } {
+  let after: Loaded;
+  try {
+    after = withoutOverride(loaded, p);
+  } catch {
+    const file = getPath(loaded.fileSettings, p);
+    return file !== undefined ? { value: file, source: 'file' } : { value: getPath(DEFAULTS, p), source: 'default' };
+  }
+  const source = after.sources[p] === 'override' ? 'default' : after.sources[p];
+  const value = getPath(after.config, p);
+  return { ...(value !== undefined ? { value } : {}), source };
 }
 
 // A camera call from an action: its answer, or 502 with the camera's error.
@@ -340,13 +359,13 @@ export function controlApi(d: ControlDeps): express.Router {
   // A `config-change` record: the changed leaf settings, old → new. Secret
   // values are redacted by AuditLog by the setting's name. A refused change
   // (400) writes nothing.
-  const recordChanges = (req: express.Request, before: Config) => {
+  const recordChanges = (req: express.Request, before: Config, all = false) => {
     const after = d.loaded().config;
     // `restart`: the change waits for a restart ('restart'), or for a new process ('process').
     const changes = leafPaths()
       .map((p) => ({ key: p, from: getPath(before, p), to: getPath(after, p), ...(needsProcessRestart(p) ? { restart: 'process' } : needsRestart(p) ? { restart: 'restart' } : {}) }))
       .filter((c) => JSON.stringify(c.from) !== JSON.stringify(c.to));
-    if (changes.length) d.audit.write({ action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', user: 'admin', ...who(req), message: `Settings changed: ${changes.map((c) => c.key).join(', ')}`, details: { changes } });
+    if (changes.length) d.audit.write({ action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', user: 'admin', ...who(req), message: `${all ? 'Settings reset to defaults' : 'Settings changed'}: ${changes.map((c) => c.key).join(', ')}`, details: { changes, ...(all ? { reset: 'all' } : {}) } });
   };
   r.put('/config', (req, res) => {
     const before = d.loaded().config;
@@ -356,6 +375,17 @@ export function controlApi(d: ControlDeps): express.Router {
       return invalid(res, err);
     }
     recordChanges(req, before);
+    res.json(configView(d.loaded(), d.running()));
+  });
+  // "Reset to defaults" (the Settings page): every override at once, one record.
+  r.delete('/config', (req, res) => {
+    const before = d.loaded().config;
+    try {
+      d.setLoaded(removeAllOverrides(d.loaded()));
+    } catch (err) {
+      return invalid(res, err);
+    }
+    recordChanges(req, before, true);
     res.json(configView(d.loaded(), d.running()));
   });
   r.delete('/config/:path', (req, res) => {
@@ -582,8 +612,15 @@ export function controlApi(d: ControlDeps): express.Router {
 // the handler's own route, so every path Express routes here (any case, a
 // trailing slash) is checked; other /control paths and methods pass on
 // untouched to the admin-only routes.
-export function auditApi(d: { audit: AuditLog; guard: express.RequestHandler }): express.Router {
+export function auditApi(d: { audit: AuditLog; guard: express.RequestHandler; retentionDays: () => number; now?: () => number }): express.Router {
   const r = express.Router();
+  // The records the retention keeps (the Audit page's line): the day files
+  // from the retention run's cutoff day on, the same rule it deletes by.
+  r.get('/audit/summary', d.guard, (_req, res) => {
+    const days = d.retentionDays();
+    const from = new Date(dayStart((d.now ?? Date.now)() - days * DAY)).toISOString().slice(0, 10);
+    res.set('Cache-Control', 'no-store').json({ retentionDays: days, records: d.audit.count(from) });
+  });
   r.get('/audit', d.guard, (req, res) => {
     const q = req.query;
     const num = (v: unknown) => (v === undefined ? undefined : /^\d{1,15}$/.test(String(v)) ? Number(v) : NaN);
@@ -591,12 +628,15 @@ export function auditApi(d: { audit: AuditLog; guard: express.RequestHandler }):
     if (outcome !== undefined && !['success', 'failure', 'unknown'].includes(outcome)) return void res.status(400).json({ error: 'invalid', detail: 'outcome is success, failure or unknown' });
     const from = num(q.from), to = num(q.to), limit = num(q.limit);
     if ([from, to, limit].some((v) => Number.isNaN(v))) return void res.status(400).json({ error: 'invalid', detail: 'from, to and limit are numbers' });
+    const actions = q.action === undefined ? undefined : String(q.action).split(',').map((s) => s.trim()).filter(Boolean);
+    const unknown = actions?.find((a) => !isAuditAction(a));
+    if (unknown !== undefined) return void res.status(400).json({ error: 'invalid', detail: `unknown action: ${unknown.slice(0, 40)}` });
     try {
       const out = d.audit.list({
         limit, from, to, outcome: outcome as Outcome | undefined,
         before: q.before === undefined ? undefined : String(q.before),
         after: q.after === undefined ? undefined : String(q.after),
-        actions: q.action === undefined ? undefined : String(q.action).split(',').map((s) => s.trim()).filter(Boolean),
+        actions,
       });
       res.set({ 'Content-Type': 'application/x-ndjson; charset=utf-8', 'X-Has-More': String(out.hasMore), 'Cache-Control': 'no-store' });
       if (out.next) res.set('X-Next-Cursor', out.next);

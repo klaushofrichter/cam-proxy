@@ -120,6 +120,39 @@ describe('control API: status, stats, config', () => {
   });
 });
 
+// Klaus 2026-10-05: Reset says what it goes back to; one request resets all.
+describe('control API: back to the defaults', () => {
+  it('an override says what Reset goes back to: the file value, else the default', async () => {
+    const r = await request(p.base).put('/control/config').set(admin()).send({ retention: { auditDays: 30 }, camera: { statusPollS: 8 } });
+    try {
+      expect(r.body['retention.auditDays']).toMatchObject({ value: 30, source: 'override', resetTo: { value: 90, source: 'default' } });
+      expect(r.body['camera.statusPollS']).toMatchObject({ source: 'override', resetTo: { value: 5, source: 'file' } });
+      expect(r.body['retention.stillsDays']).not.toHaveProperty('resetTo');
+    } finally {
+      for (const k of ['retention.auditDays', 'camera.statusPollS']) await request(p.base).delete(`/control/config/${k}`).set(admin());
+    }
+  });
+
+  it('DELETE /control/config removes every override in one write and one config-change record', async () => {
+    await request(p.base).put('/control/config').set(admin()).send({ retention: { auditDays: 30, eventsDays: 4 }, sse: { pingS: 11 } });
+    const n = p.proxy.audit.list({ actions: ['config-change'], limit: 500 }).records.length;
+    const r = await request(p.base).delete('/control/config').set(admin());
+    expect(r.status).toBe(200);
+    expect(Object.values(r.body as Record<string, { source: string }>).filter((s) => s.source === 'override')).toEqual([]);
+    expect(r.body['retention.auditDays']).toMatchObject({ value: 90, source: 'default' });
+    expect(r.body['sse.pingS']).toMatchObject({ value: 15, source: 'default' });
+    expect(JSON.parse(readFileSync(join(p.dir, 'data', 'overrides.json'), 'utf8'))).toEqual({});
+    const records = p.proxy.audit.list({ actions: ['config-change'], limit: 500 }).records;
+    expect(records.length).toBe(n + 1);
+    expect(records[0]).toMatchObject({ message: expect.stringMatching(/^Settings reset to defaults: /), cam_proxy: { reset: 'all' } });
+    const keys = (records[0].cam_proxy as { changes: { key: string }[] }).changes.map((c) => c.key);
+    expect(keys).toEqual(expect.arrayContaining(['retention.auditDays', 'retention.eventsDays', 'sse.pingS'])); // and earlier tests' overrides
+    // Nothing to reset: no record.
+    expect((await request(p.base).delete('/control/config').set(admin())).status).toBe(200);
+    expect(p.proxy.audit.list({ actions: ['config-change'], limit: 500 }).records.length).toBe(n + 1);
+  });
+});
+
 describe('control API: actions and log', () => {
   it('re-subscribes ONVIF on request', async () => {
     const before = p.proxy.intake.state().resubscribes;

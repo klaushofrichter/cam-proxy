@@ -707,3 +707,73 @@ describe('recovered events and analytics', () => {
     expect(s.state()[0].month.calls).toBe(0);
   });
 });
+
+// Automatic analyses are audited (Klaus 2026-10-05): one `event-analysis`
+// record per event that made a Vision call, user system; skips write nothing.
+describe('audit records of automatic analyses', () => {
+  type Written = { action: string; outcome: string; user?: string; message: string; error?: string; category: string[]; type: string[]; details?: Record<string, unknown> };
+  let written: Written[];
+  const audited = () => new AnalyticsService({ ...deps(), audit: { write: (i: Written) => void written.push(i) } } as AnalyticsDeps);
+  beforeEach(() => (written = []));
+
+  it('writes one success record with the event, the still, the time taken and what was found', async () => {
+    still(T0 + 1000, 7);
+    const s = audited();
+    const e = event('person');
+    s.onEvent(e);
+    await s.idle();
+    expect(written).toHaveLength(1);
+    expect(written[0]).toMatchObject({
+      action: 'event-analysis', category: ['host'], type: ['access'], outcome: 'success', user: 'system',
+      details: { cam: 'cam1', eventId: e.id, kind: 'person', stillTs: T0 + 1000, outcome: 'ok', reason: null, calls: 1, tookMs: 0, found: ['person'] },
+    });
+    expect(written[0].message).toBe(`Vision on event ${e.id} (person): person 80%`);
+  });
+
+  it('writes one failure record after the retry, with both calls counted', async () => {
+    still(T0 + 1000, 7);
+    answers = [new AnalyticsError('timeout', true), new AnalyticsError('timeout', true)];
+    const s = audited();
+    const e = event('person');
+    s.onEvent(e);
+    await s.idle();
+    expect(written).toHaveLength(1);
+    expect(written[0]).toMatchObject({ action: 'event-analysis', outcome: 'failure', user: 'system', error: 'timeout', details: { eventId: e.id, outcome: 'failed', reason: 'timeout', calls: 2, found: [] } });
+    expect(written[0].message).toBe(`Vision on event ${e.id} (person) failed: timeout`);
+  });
+
+  it('a retry that succeeds is one success record with two calls', async () => {
+    still(T0 + 1000, 7);
+    answers = [new AnalyticsError('network', true), 'ok'];
+    const s = audited();
+    s.onEvent(event('person'));
+    await s.idle();
+    expect(written).toHaveLength(1);
+    expect(written[0]).toMatchObject({ outcome: 'success', details: { outcome: 'ok', calls: 2 } });
+  });
+
+  it('writes nothing for a skip (no still, the limit, a pause): no call was made', async () => {
+    config.analytics.googleVision = { enabled: true, monthlyLimit: 0, dailyCap: 0, checksPerDay: 10 };
+    still(T0 + 1000, 7);
+    const s = audited();
+    s.onEvent(event('person')); // the limit
+    s.onEvent(event('person', T0 + 600_000)); // no still
+    await s.idle();
+    expect(calls).toHaveLength(0);
+    expect(written).toEqual([]);
+  });
+
+  it('records a paid call whose event went during the call', async () => {
+    still(T0 + 1000, 7);
+    const s = new AnalyticsService({ ...deps(), audit: { write: (i: Written) => void written.push(i) }, provider: () => ({ id: 'google-vision', name: 'Google Vision', async analyze() {
+      deleteEventsBefore(c, T0 + 1);
+      return { objects: [], raw: {} };
+    } }) } as AnalyticsDeps);
+    const e = event('person');
+    s.onEvent(e);
+    await s.idle();
+    expect(written).toHaveLength(1);
+    expect(written[0]).toMatchObject({ outcome: 'success', details: { eventId: e.id, outcome: 'ok', calls: 1, found: [] } });
+    expect(written[0].message).toBe(`Vision on event ${e.id} (person): nothing relevant`);
+  });
+});

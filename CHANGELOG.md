@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Audit: every automatic Vision analysis of an event that made a call is an `event-analysis` record (user `system`; camera, event, still, `ok` or `failed`, calls, time taken, categories found). Skips (no still, the limits, a pause) write none.
+- Audit page: the action filter is a multi-select (checkboxes in a drop-down, keyboard accessible); "All actions" selects all, and again none ("No actions selected"). It lists every known action (also `event-analysis`, `camera-address` and the Archive's). `GET /control/audit?action=a,b` refuses an unknown action (400).
+- Audit page: the retention line says the real numbers, "Kept for 90 days (Settings) · 1,234 events in that time." (`GET /control/audit/summary`).
+- Settings page: an override's Reset button names what it goes back to ("Reset – 90 days", "Reset – on", "(config.json)" for a file value); `GET /control/config` has `resetTo` on overrides. "Reset to defaults" (shown while any override is set) removes them all after a confirmation listing each change (`DELETE /control/config`, one `config-change` record with `reset: "all"`). On a phone the settings cards fit the screen.
+
 ## v2026.10.05.3
 
 - The Archive (spec 2026-10-05-archive-design, API in docs/archive.md): clips kept apart from retention and the storage budget, in `<dataDir>/archive/<camera>/<id>/` (`clip.mp4`, `thumb.jpg`, `meta.json`) with a catalog row (migration 8). `POST /api/cameras/:cam/archive` stores a finished composition (`source.type: composition`), the SD card's recording as it is (`recording`, fetched over Baichuan unless cached) or the proxy's FTP clip (`clip`), with a name (default `<date> <time> <camera name>` in camera time), labels (Pet, Person, Vehicle, SD, 4K, custom; case-insensitive), a retention (365 days by default, or `null` for forever) and an optional thumbnail second; it answers the archive job (201 when done within 3 s, else 202; `GET /api/archive/jobs/:id`). The metadata snapshot has the window's events with their Vision analyses, the still checks, the camera, quality, duration and size; the thumbnail follows #157 (the analysed or detection still), else the first frame. 507 `insufficient_space {needed, free, minFreeBytes}` when the clip would not leave `storage.minFreeBytes` free.

@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { ADMIN_TOKEN, CLIENT_TOKEN, SIM, SIM_CONTROL_TOKEN, VISION_KEY, VISION_MOCK_PORT } from './env';
+import { showActions } from './audit-filter';
 
 async function signIn(page: Page) {
   await page.goto('/'); // signed in by the storageState from auth.setup.ts
@@ -71,6 +72,17 @@ test('a person event is analysed: Status counts it, Events tags it, the Timeline
   const before = await calls(page);
   expect((await person(page)).status()).toBe(201);
   await expect.poll(() => calls(page), { timeout: 20000 }).toBe(before + 1);
+
+  // The automatic analysis is an audit record (Klaus 2026-10-05), by the proxy itself.
+  await page.getByTestId('nav-audit').click();
+  await showActions(page, ['event-analysis']);
+  const audited = page.getByTestId('audit-row').first();
+  await expect(audited).toHaveAttribute('data-action', 'event-analysis', { timeout: 15000 });
+  await expect(audited).toContainText('system');
+  await expect(audited).toContainText('(person): person 90%');
+  await audited.click();
+  await expect(page.getByTestId('audit-row-json')).toContainText('"found": [');
+  await expect(page.getByTestId('audit-row-json')).not.toContainText(VISION_KEY);
 
   await page.getByTestId('nav-status').click();
   await expect(page.getByTestId('analytics-usage-month')).toHaveText('1 of 10');
@@ -262,7 +274,7 @@ test('a Google Vision key set on the Settings page shows the manual-key notice a
   expect(await page.content()).not.toContain(VISION_KEY);
 
   await page.getByTestId('nav-audit').click();
-  await page.getByTestId('audit-filter-action').selectOption('secret-override');
+  await showActions(page, ['secret-override']);
   const row = page.getByTestId('audit-row').first();
   await expect(row).toHaveAttribute('data-action', 'secret-override');
   await row.click();

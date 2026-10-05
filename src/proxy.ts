@@ -479,6 +479,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     readStill: stillAt,
     listStills: stillsIn,
     timeInfo,
+    audit,
   });
   // The Archive (spec 2026-10-05-archive-design): clips kept apart from
   // retention in <dataDir>/archive, with their own daily cleanup.
@@ -666,7 +667,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // The audit log: admins and the audit token, GET (and HEAD) only. The access check is
   // on the route inside the router; other /control paths pass on untouched
   // to the admin-only routes below.
-  app.use('/control', auditApi({ audit, guard: requireAccess('audit-read', access) }));
+  app.use('/control', auditApi({ audit, guard: requireAccess('audit-read', access), retentionDays: () => running.retention.auditDays }));
   app.use(
     '/control',
     requireAccess('admin', access),
