@@ -82,7 +82,7 @@ describe('CameraFtpWatch', () => {
   function make(over: { active?: () => boolean; dir?: string; clipsBefore?: () => boolean } = {}) {
     const now = { t: Date.UTC(2026, 9, 1, 21, 0, 0) };
     const dir = over.dir ?? tmp('ftp-audit-');
-    const audit = new AuditLog({ dir, version: 'test', camera: () => 'cam1', now: () => now.t, host: 'h' });
+    const audit = new AuditLog({ dir, version: 'test', now: () => now.t, host: 'h' });
     let answer: Record<string, unknown> | Error = camFtp();
     let reads = 0;
     const watch = new CameraFtpWatch({
@@ -195,7 +195,7 @@ describe('CameraFtpWatch', () => {
     // A slow read of the old state, overtaken by the setup's answer.
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
-    const slow = new CameraFtpWatch({ read: async () => (await gate, camFtp({ enable: 0 })), target: () => TARGET, audit: new AuditLog({ dir, version: 't', camera: () => 'cam1' }), active: () => true });
+    const slow = new CameraFtpWatch({ read: async () => (await gate, camFtp({ enable: 0 })), target: () => TARGET, audit: new AuditLog({ dir, version: 't' }), active: () => true });
     const inFlight = slow.checkNow();
     slow.note(camFtp());
     release();
@@ -206,7 +206,7 @@ describe('CameraFtpWatch', () => {
   });
 
   it('checks every everyMs while started', async () => {
-    const audit = new AuditLog({ dir: tmp('ftp-audit-'), version: 't', camera: () => 'cam1' });
+    const audit = new AuditLog({ dir: tmp('ftp-audit-'), version: 't' });
     let reads = 0;
     const w = new CameraFtpWatch({ read: async () => (reads++, camFtp()), target: () => TARGET, audit, active: () => true, everyMs: 20 });
     w.start();

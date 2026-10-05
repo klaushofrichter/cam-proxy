@@ -34,7 +34,7 @@ function worker() {
   const running = structuredClone(loaded.config);
   const catalog = openCatalog(join(running.server.dataDir, 'catalog.sqlite'));
   const log = new StreamLog(catalog);
-  const audit = new AuditLog({ dir: join(running.server.dataDir, 'audit'), version: 'test', camera: () => 'cam1' });
+  const audit = new AuditLog({ dir: join(running.server.dataDir, 'audit'), version: 'test' });
   const storage = new Storage({ catalog, log, config: () => running, audit });
   const w = new CameraWorker({
     id: 'cam1', index: 0, running: () => running, password: () => sim.password, poeSwitchPassword: () => undefined,

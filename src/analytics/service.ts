@@ -571,7 +571,7 @@ export class AnalyticsService {
     const head = `Vision on event ${job.id} (${job.kind})`;
     try {
       this.d.audit.write({
-        action: 'event-analysis', category: ['host'], type: ['access'], outcome: ok ? 'success' : 'failure', user: 'system',
+        action: 'event-analysis', category: ['host'], type: ['access'], outcome: ok ? 'success' : 'failure', user: 'system', camera: job.cam,
         message: ok ? `${head}: ${summaryText(made.summary!)}` : `${head} failed: ${reason}`,
         ...(ok ? {} : { error: reason }),
         details: { cam: job.cam, eventId: job.id, kind: job.kind, stillTs, outcome: ok ? 'ok' : 'failed', reason: ok ? null : reason, calls: made.calls, tookMs: made.tookMs, found: ok ? summaryCategories(made.summary!) : [] },

@@ -45,7 +45,7 @@ export interface RebootDeps {
   forgetToken: () => void; // a reboot invalidates every token
   serial: () => string | undefined; // from the last good status check
   check: () => Promise<{ ok: boolean; serial?: string }>; // a status check now
-  audit: AuditLog;
+  audit: Pick<AuditLog, 'write'>;
   now?: () => number;
   pollMs?: number;
   timeoutMs?: number;

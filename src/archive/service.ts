@@ -164,6 +164,8 @@ export class Archive {
     this.d.audit.write({
       action, category: ['file'], type: [type], outcome, user: who.user, ip: who.ip, userAgent: who.userAgent, message,
       ...(error ? { error } : {}),
+      // A record about one clip names its camera (spec 2026-10-05-multi-camera-host-design §5.2).
+      ...(typeof details.cam === 'string' ? { camera: details.cam } : {}),
       details: { ...details, ...(who.requestedBy ? { requestedBy: who.requestedBy } : {}), ...(who.onBehalfOf ? { onBehalfOf: who.onBehalfOf } : {}) },
     });
   }

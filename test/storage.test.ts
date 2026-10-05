@@ -233,7 +233,7 @@ describe('storage: audit', () => {
   // #106: a pause explains still gaps only when it leaves a record.
   it('writes storage-paused and storage-resumed records when the floor check flips', () => {
     const { dir, catalog, log, config, fs } = setup();
-    const audit = new AuditLog({ dir: join(dir, 'audit'), version: 't', camera: () => 'cam1', now: () => NOW });
+    const audit = new AuditLog({ dir: join(dir, 'audit'), version: 't', now: () => NOW });
     const s = new Storage({ catalog, log, config: () => config, now: () => NOW, statfs: () => fs, audit });
     fs.free = config.storage.minFreeBytes - 1;
     s.check();
@@ -250,7 +250,7 @@ describe('storage: audit', () => {
   it('counts the audit folder in usage and the budget, and sweeps its old days by auditDays', () => {
     const { dir, catalog, log, config, fs } = setup();
     const auditDir = join(dir, 'audit');
-    const audit = new AuditLog({ dir: auditDir, version: 't', camera: () => 'cam1', now: () => NOW });
+    const audit = new AuditLog({ dir: auditDir, version: 't', now: () => NOW });
     mkdirSync(auditDir, { recursive: true });
     for (const t of [NOW - 200 * DAY, NOW - 100 * DAY, NOW]) writeFileSync(join(auditDir, `${new Date(t).toISOString().slice(0, 10)}.jsonl`), 'x'.repeat(100) + '\n');
     config.retention.auditDays = 90;
@@ -267,7 +267,7 @@ describe('storage: audit', () => {
   it('never deletes audit days for the budget; a dry run reports the sweep and deletes nothing', () => {
     const x = setup((c) => (c.storage.keepHours = { stills: 0, clips: 0, previews: 0 }));
     const auditDir = join(x.dir, 'audit');
-    const audit = new AuditLog({ dir: auditDir, version: 't', camera: () => 'cam1', now: () => NOW });
+    const audit = new AuditLog({ dir: auditDir, version: 't', now: () => NOW });
     mkdirSync(auditDir, { recursive: true });
     const days = [NOW - 200 * DAY, NOW - 2 * DAY, NOW - DAY, NOW].map((t) => `${new Date(t).toISOString().slice(0, 10)}.jsonl`);
     for (const d of days) writeFileSync(join(auditDir, d), 'x'.repeat(5000) + '\n');
@@ -473,3 +473,19 @@ describe('the Archive folder', () => {
   });
 });
 
+describe('storage: images of every camera (spec §5.2)', () => {
+  it('sweeps unreferenced analysis and check images of every camera folder, also a removed camera', () => {
+    const { dir, storage } = setup();
+    for (const cam of ['cam3', 'cam4', 'gone']) {
+      mkdirSync(join(dir, 'analytics', cam), { recursive: true });
+      writeFileSync(join(dir, 'analytics', cam, '1.jpg'), 'x');
+      mkdirSync(join(dir, 'still-checks', cam), { recursive: true });
+      writeFileSync(join(dir, 'still-checks', cam, 'check-1.jpg'), 'x');
+    }
+    storage.run({});
+    for (const cam of ['cam3', 'cam4', 'gone']) {
+      expect(existsSync(join(dir, 'analytics', cam, '1.jpg'))).toBe(false);
+      expect(existsSync(join(dir, 'still-checks', cam, 'check-1.jpg'))).toBe(false);
+    }
+  });
+});

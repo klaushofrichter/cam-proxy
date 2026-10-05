@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import type { AuditLog } from '../audit/audit-log';
+import { withCamera, type AuditLog } from '../audit/audit-log';
 import type { Catalog } from '../catalog/db';
 import { lastClipReceived } from '../catalog/clips';
 import { ReolinkClient } from '../camera/client';
@@ -92,10 +92,13 @@ export class CameraWorker extends EventEmitter {
   private stopping = false;
   private watchStarted = false;
   private restarting: Promise<void> | undefined;
+  // Every record this camera's code writes names the camera (spec §5.2).
+  private readonly audit: Pick<AuditLog, 'write'>;
 
   constructor(private readonly d: WorkerDeps) {
     super();
     this.id = d.id;
+    this.audit = withCamera(d.audit, d.id);
     const lastTold = d.log.latest(d.id, 'camera')?.data;
     this.toldName = typeof lastTold?.name === 'string' ? lastTold.name : undefined;
     this.toldAddress = typeof lastTold?.address === 'string' ? lastTold.address : undefined;
@@ -109,7 +112,8 @@ export class CameraWorker extends EventEmitter {
     this.ftpWatch = new CameraFtpWatch({
       read: () => readCameraFtp(this.client),
       target: d.ftpTarget,
-      audit: d.audit,
+      // Its last record is this camera's (a record without a camera: from before several cameras).
+      audit: { write: this.audit.write, find: (pred, days) => d.audit.find((r) => pred(r) && ((r.labels as { camera?: string } | undefined)?.camera ?? this.id) === this.id, days) },
       active: () => this.cam().ftp.enabled && this.status.state().online,
       clipsBefore: () => lastClipReceived(d.catalog, this.id) !== null,
       everyMs: d.cameraFtpCheckMs,
@@ -144,7 +148,7 @@ export class CameraWorker extends EventEmitter {
         const s = await this.status.checkNow();
         return { ok: s.error === undefined, serial: s.serial };
       },
-      audit: d.audit,
+      audit: this.audit,
     });
     // Ruling P1-4: this camera's port on the host switch (one controller per host in P2).
     this.poeSwitch = new PoeSwitch({ config: () => this.cam().poeSwitch, password: d.poeSwitchPassword });
@@ -361,7 +365,7 @@ export class CameraWorker extends EventEmitter {
       ...(poeLeftOff ? [`the camera's PoE may be left OFF on ${sw.host} port ${sw.port}; turn it on in the switch's web UI, or with "Turn camera PoE on" once the proxy is back`] : []),
       ...(sessionMaybeOpen ? ["the proxy's web session on the switch may still be open: the switch's web UI may refuse logins until the switch ends it"] : []),
     ];
-    this.d.audit.write({ action: 'camera-powercycle', category: ['host'], type: ['end'], outcome: 'failure', user: 'system', message: `cam-proxy stopping: ${parts.join('; ')}`, details: { phase: 'stop', poeLeftOff, sessionMaybeOpen, switch: sw } });
+    this.audit.write({ action: 'camera-powercycle', category: ['host'], type: ['end'], outcome: 'failure', user: 'system', message: `cam-proxy stopping: ${parts.join('; ')}`, details: { phase: 'stop', poeLeftOff, sessionMaybeOpen, switch: sw } });
   }
 
   stopRecordings(): Promise<void> {

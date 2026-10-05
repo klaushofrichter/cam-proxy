@@ -34,7 +34,7 @@ const stillsKind = (run: Check): InventoryKind => ({ label: 'Stills', run });
 function setup(checks: Record<string, InventoryKind>) {
   const dir = mkdtempSync(join(tmpdir(), 'camproxy-inv-'));
   let clock = T0;
-  const audit = new AuditLog({ dir: join(dir, 'audit'), version: 't', camera: () => 'cam1', now: () => clock });
+  const audit = new AuditLog({ dir: join(dir, 'audit'), version: 't', now: () => clock });
   const runner = new InventoryRunner({ dir: join(dir, 'inventory'), audit, checks, now: () => (clock += 1000) });
   return { dir, audit, runner, advance: (ms: number) => void (clock += ms) };
 }
@@ -169,7 +169,7 @@ describe('InventoryRunner', () => {
   it('a save failure still frees the lock and writes the audit record', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'camproxy-inv-'));
     writeFileSync(join(dir, 'blocker'), 'x'); // a file where the directory should be
-    const audit = new AuditLog({ dir: join(dir, 'audit'), version: 't', camera: () => 'cam1', now: () => T0 });
+    const audit = new AuditLog({ dir: join(dir, 'audit'), version: 't', now: () => T0 });
     const runner = new InventoryRunner({ dir: join(dir, 'blocker', 'inventory'), audit, checks: { stills: stillsKind(async () => result(3)) } });
     const r = await runner.start('stills', who, { cam: 'cam1' }).done;
     expect(r.outcome).toBe('ok');

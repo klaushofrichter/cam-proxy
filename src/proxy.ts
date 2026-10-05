@@ -5,7 +5,7 @@ import http from 'http';
 import type { AddressInfo } from 'net';
 import { join } from 'path';
 import { openCatalog, type Catalog } from './catalog/db';
-import { adoptLegacyUsage, clearUnmapped, countAnalysesByStatus, listUnmapped, usageBetween } from './catalog/analyses';
+import { adoptLegacyUsage, usageByCamera, clearUnmapped, countAnalysesByStatus, listUnmapped, usageBetween } from './catalog/analyses';
 import { countAllClips, countClips } from './catalog/clips';
 import { closeAllOpen, countEventsByKind, countRecoveredEvents } from './catalog/events';
 import type { StatusPoller } from './camera/status';
@@ -130,7 +130,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   adoptLegacyUsage(catalog, cameraIds(running));
   const sse = sseHandler(log, running.sse);
   // The audit log (spec 2026-10-01-audit-log-design): daily JSON-lines files.
-  const audit = new AuditLog({ dir: join(running.server.dataDir, 'audit'), version: VERSION, camera: () => running.camera.id });
+  const audit = new AuditLog({ dir: join(running.server.dataDir, 'audit'), version: VERSION });
   // A recording being read is never deleted (set once the recordings side exists).
   let recordingBusy: (path: string) => boolean = () => false;
   const storage = new Storage({ catalog, log, config: () => running, audit, recordingsBusy: (p) => recordingBusy(p) });
@@ -152,21 +152,6 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   const sweeper = setInterval(() => composer.sweep(), 5000);
   sweeper.unref();
 
-  const metrics = createMetrics({
-    stills: () => cams.first().stills,
-    storage,
-    config: () => running,
-    catalog,
-    log,
-    cameraUp: () => cams.first().status.state().online,
-    cameraFtpEnabled: () => (cams.first().cam().ftp.enabled ? cams.first().ftpWatch.view().enable : null),
-    clipsHealth: () => cams.first().clipsHealth(),
-    onvifSubscribed: () => cams.first().intake.state().onvif === 'subscribed',
-    sseClients: () => sse.clients(),
-    version: VERSION,
-    target: TARGET,
-  });
-  storage.on('run', metrics.onRetention);
 
   // What camera-ftp-setup writes for a camera (never logged: it has the password).
   const ftpTargetFor = (id: string) => (): FtpTarget => {
@@ -186,10 +171,23 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         sse,
         storage,
         audit,
-        hooks: { onCameraCheck: metrics.onCameraCheck, onResubscribe: metrics.onResubscribe, onStill: metrics.onStill, onStillMissing: metrics.onStillMissing, onRecordingDownload: metrics.onRecordingDownload },
+        // Each camera's counters under its id (bound late: metrics is made once the workers exist).
+        hooks: { onCameraCheck: (c) => metrics.onCameraCheck(id, c), onResubscribe: () => metrics.onResubscribe(id), onStill: (ts) => metrics.onStill(id, ts), onStillMissing: () => metrics.onStillMissing(id), onRecordingDownload: (o) => metrics.onRecordingDownload(id, o) },
         cameraFtpCheckMs: opts.cameraFtpCheckMs,
       });
   cameraIds(running).forEach((id, index) => cams.add(makeWorker(id, index)));
+  const metrics = createMetrics({
+    storage,
+    config: () => running,
+    catalog,
+    log,
+    cameras: () =>
+      cams.list().map((w) => ({ id: w.id, up: w.status.state().online, ftpEnabled: w.cam().ftp.enabled ? w.ftpWatch.view().enable : null, clips: w.clipsHealth(), onvifSubscribed: w.intake.state().onvif === 'subscribed', stills: w.stills })),
+    sseClients: () => sse.clients(),
+    version: VERSION,
+    target: TARGET,
+  });
+  storage.on('run', metrics.onRetention);
   recordingBusy = (p) => cams.list().some((w) => w.recordings.cache.busy(p));
   // The FTP server (host-wide): uploads go to the one camera with FTP on (Ruling P1-2).
   let clips: ReturnType<typeof createClipsSide> | undefined;
@@ -344,14 +342,23 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       };
     },
     activity: (day, from, to) => {
-      const cam = running.camera.id;
+      const sum = (rs: Record<string, number>[]) =>
+        rs.reduce<Record<string, number>>((a, r) => {
+          for (const [k, n] of Object.entries(r)) a[k] = (a[k] ?? 0) + n;
+          return a;
+        }, {});
+      // Every camera's counts, summed (spec 2026-10-05-multi-camera-host-design §5.2).
+      const per = cams.ids().map((cam) => ({ cam, events: countEventsByKind(catalog, cam, from, to), recovered: countRecoveredEvents(catalog, cam, from, to), clips: countClips(catalog, cam, from, to), analyses: countAnalysesByStatus(catalog, cam, from, to) }));
       // Usage days are camera days (localDay); month to date as of the reported day.
       const checkCounts = (d: string) => {
         const n = (p: string) => usageBetween(catalog, p, d, d);
         return { calls: n(CHECK_USAGE.calls), reused: n(CHECK_USAGE.reused), refused: n(CHECK_USAGE.refused), failed: n(CHECK_USAGE.failed) };
       };
       const vision = { day: usageBetween(catalog, 'google-vision', day, day), monthToDate: usageBetween(catalog, 'google-vision', `${day.slice(0, 7)}-01`, day), monthlyLimit: running.analytics.googleVision.monthlyLimit };
-      return activityDaily(day, { events: countEventsByKind(catalog, cam, from, to), recovered: countRecoveredEvents(catalog, cam, from, to), clips: countClips(catalog, cam, from, to), vision, analyses: countAnalysesByStatus(catalog, cam, from, to), checks: checkCounts(day), sseClients: sse.clients() });
+      const a = activityDaily(day, { events: sum(per.map((p) => p.events)), recovered: per.reduce((n, p) => n + p.recovered, 0), clips: per.reduce((n, p) => n + p.clips, 0), vision, analyses: sum(per.map((p) => p.analyses)), checks: checkCounts(day), sseClients: sse.clients() });
+      if (per.length < 2) return a; // one camera: the record as before
+      const visionBy = usageByCamera(catalog, 'google-vision', day, day);
+      return { ...a, details: { ...a.details, cameras: Object.fromEntries(per.map((p) => [p.cam, { events: p.events, recovered: p.recovered, clips: p.clips, analyses: p.analyses, vision: visionBy[p.cam] ?? 0 }])) } };
     },
   });
 
@@ -568,6 +575,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       envFile: () => loaded.env.CAMPROXY_ENV_FILE || undefined,
       archive,
       inventoryCamera: () => (cams.size === 1 ? cams.first().id : null),
+      cameraId: () => cams.first().id,
     }),
   );
   // The admin UI. The files are public; every API call needs a session.

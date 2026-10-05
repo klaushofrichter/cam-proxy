@@ -81,7 +81,7 @@ export class AuditLog {
   private readonly clean = new Set<string>(); // files whose last byte was checked this process
   private readonly counted = new Map<string, { size: number; mtimeMs: number; records: number }>(); // count(): per day file
 
-  constructor(private readonly d: { dir: string; version: string; camera: () => string; now?: () => number; host?: string; maxFileBytes?: number }) {
+  constructor(private readonly d: { dir: string; version: string; now?: () => number; host?: string; maxFileBytes?: number }) {
     this.now = d.now ?? Date.now;
     this.host = d.host ?? hostname();
     this.max = d.maxFileBytes ?? 50 * 1024 * 1024;
@@ -231,7 +231,7 @@ export class AuditLog {
       event: { kind: 'event', category: i.category, type: i.type, action: i.action, outcome: i.outcome, dataset: AUDIT_DATASET },
       service: { name: 'cam-proxy', version: this.d.version },
       host: { name: this.host },
-      labels: { camera: this.d.camera() },
+      ...(i.camera ? { labels: { camera: i.camera } } : {}),
     };
     if (i.user) r.user = { name: i.user };
     if (i.ip) r.source = { ip: i.ip };
@@ -288,3 +288,8 @@ function parse(line: string | undefined): AuditRecord | null {
   } catch { return null; }
 }
 
+// The audit log as one camera's code sees it: every record names that camera
+// (spec 2026-10-05-multi-camera-host-design §5.2).
+export function withCamera(audit: Pick<AuditLog, 'write'>, cam: string): Pick<AuditLog, 'write'> {
+  return { write: (i: AuditInput) => audit.write({ ...i, camera: cam }) };
+}

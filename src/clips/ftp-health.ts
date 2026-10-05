@@ -91,7 +91,7 @@ export class CameraFtpWatch {
     private readonly d: {
       read: () => Promise<Record<string, unknown>>; // the camera's Ftp object, without the password
       target: () => Target;
-      audit: AuditLog;
+      audit: Pick<AuditLog, 'write' | 'find'>;
       active: () => boolean; // FTP on in the proxy and the camera online
       clipsBefore?: () => boolean; // a clip was ever received
       now?: () => number;

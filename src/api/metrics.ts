@@ -5,17 +5,18 @@ import type { StreamLog, StreamMessage } from '../stream/log';
 import type { Storage } from '../storage';
 import type { StillsSide } from './client-api';
 
+// One camera's figures (spec 2026-10-05-multi-camera-host-design §3.1). ftpEnabled:
+// the camera's FTP upload as last read (null: not read, or FTP off for it);
+// clips: clip arrival (#93; null: FTP off).
+export interface CameraMetrics { id: string; up: boolean; ftpEnabled: boolean | null; clips: { lastClip: number | null; stalled: boolean } | null; onvifSubscribed: boolean; stills: StillsSide | undefined }
+
 interface MetricsSources {
-  stills: () => StillsSide | undefined;
   storage: Storage;
   config: () => Config;
   catalog: Catalog;
   log: StreamLog;
-  cameraUp: () => boolean;
-  // The camera's FTP upload as last read (null: not read, or FTP off in the proxy), and clip arrival (#93).
-  cameraFtpEnabled: () => boolean | null;
-  clipsHealth: () => { lastClip: number | null; stalled: boolean } | null;
-  onvifSubscribed: () => boolean;
+  // Every camera, config order.
+  cameras: () => CameraMetrics[];
   sseClients: () => number;
   version: string;
   target: string;
@@ -31,7 +32,8 @@ export function eventsStored(c: Catalog): Record<string, number> {
 // The phase 1 metrics (spec §13). Counts only, never event content.
 export function createMetrics(s: MetricsSources) {
   const registry = new Registry();
-  const cam = () => s.config().camera.id;
+  // Host totals not yet split per camera (storage, events) carry the first camera's label until P2.
+  const cam = () => s.cameras()[0]?.id ?? '';
   // usage() scans the data folders: one scrape (render) measures once for all gauges.
   let scrape: ReturnType<Storage['usage']> | undefined;
   const usage = () => scrape ?? s.storage.usage();
@@ -73,35 +75,36 @@ export function createMetrics(s: MetricsSources) {
     this.set({ cam: cam() }, Math.round(usage().previews.files / 2));
   });
   g('frame_grabber_up', '1 while stills arrive', ['cam'], function () {
-    this.set({ cam: cam() }, s.stills()?.grabber.up() ? 1 : 0);
+    this.reset();
+    for (const c of s.cameras()) this.set({ cam: c.id }, c.stills?.grabber.up() ? 1 : 0);
   });
   g('go2rtc_up', '1 while go2rtc runs', ['cam'], function () {
-    this.set({ cam: cam() }, s.stills()?.go2rtc.up() ? 1 : 0);
+    this.reset();
+    for (const c of s.cameras()) this.set({ cam: c.id }, c.stills?.go2rtc.up() ? 1 : 0);
   });
   g('events_stored', 'Events in the catalog', ['cam', 'kind'], function () {
     this.reset();
     for (const [kind, n] of Object.entries(eventsStored(s.catalog))) this.set({ cam: cam(), kind }, n);
   });
   g('onvif_subscribed', '1 while the ONVIF subscription is active', ['cam'], function () {
-    this.set({ cam: cam() }, s.onvifSubscribed() ? 1 : 0);
+    this.reset();
+    for (const c of s.cameras()) this.set({ cam: c.id }, c.onvifSubscribed ? 1 : 0);
   });
   g('camera_up', '1 while the camera answers', ['cam'], function () {
-    this.set({ cam: cam() }, s.cameraUp() ? 1 : 0);
+    this.reset();
+    for (const c of s.cameras()) this.set({ cam: c.id }, c.up ? 1 : 0);
   });
   g('camera_ftp_enabled', "1 while the camera's FTP upload is on (no sample before the first read)", ['cam'], function () {
     this.reset();
-    const on = s.cameraFtpEnabled();
-    if (on !== null) this.set({ cam: cam() }, on ? 1 : 0);
+    for (const c of s.cameras()) if (c.ftpEnabled !== null) this.set({ cam: c.id }, c.ftpEnabled ? 1 : 0);
   });
   g('clips_last_received_timestamp_seconds', 'When the newest clip arrived (0: none)', ['cam'], function () {
     this.reset();
-    const h = s.clipsHealth();
-    if (h) this.set({ cam: cam() }, (h.lastClip ?? 0) / 1000);
+    for (const c of s.cameras()) if (c.clips) this.set({ cam: c.id }, (c.clips.lastClip ?? 0) / 1000);
   });
   g('clips_stalled', '1 while no clip arrived for ftp.stalledHours although the camera recorded events', ['cam'], function () {
     this.reset();
-    const h = s.clipsHealth();
-    if (h) this.set({ cam: cam() }, h.stalled ? 1 : 0);
+    for (const c of s.cameras()) if (c.clips) this.set({ cam: c.id }, c.clips.stalled ? 1 : 0);
   });
   g('sse_clients', 'Connected SSE clients', [], function () {
     this.set(s.sseClients());
@@ -121,11 +124,13 @@ export function createMetrics(s: MetricsSources) {
   const recordingDownloads = new Counter({ name: 'camproxy_recording_downloads_total', help: 'Recording downloads over Baichuan, by result; priority low: an inventory repair', labelNames: ['cam', 'stream', 'result', 'priority'], registers: [registry] });
   const stillsMissing = new Counter({ name: 'camproxy_stills_missing_total', help: 'Stills not written (disk full)', labelNames: ['cam'], registers: [registry] });
   const lastStill = new Gauge({ name: 'camproxy_last_still_timestamp_seconds', help: 'Time of the last still', labelNames: ['cam'], registers: [registry] });
-  stillsTotal.inc({ cam: cam() }, 0);
-  stillsMissing.inc({ cam: cam() }, 0);
-  lastStill.set({ cam: cam() }, 0);
+  for (const { id } of s.cameras()) {
+    stillsTotal.inc({ cam: id }, 0);
+    stillsMissing.inc({ cam: id }, 0);
+    lastStill.set({ cam: id }, 0);
+    resubscribes.inc({ cam: id }, 0);
+  }
   const retentionLast = new Gauge({ name: 'camproxy_retention_last_run_timestamp_seconds', help: 'Last retention run', registers: [registry] });
-  resubscribes.inc({ cam: cam() }, 0);
   for (const kind of ['events', 'streamLog', 'audit']) retentionDeleted.inc({ kind }, 0);
 
   s.log.on('message', (m: StreamMessage) => {
@@ -144,13 +149,14 @@ export function createMetrics(s: MetricsSources) {
         scrape = undefined;
       }
     },
-    onResubscribe: () => resubscribes.inc({ cam: cam() }),
-    onStill: (ts: number) => (stillsTotal.inc({ cam: cam() }), lastStill.set({ cam: cam() }, ts / 1000)),
-    onStillMissing: () => stillsMissing.inc({ cam: cam() }),
-    onRecordingDownload: (o: { stream: string; result: string; priority: string }) => recordingDownloads.inc({ cam: cam(), stream: o.stream, result: o.result, priority: o.priority }),
-    onCameraCheck: (c: { ok: boolean; ms: number; error?: string }) => {
-      cameraSeconds.observe({ cam: cam(), cmd: 'status' }, c.ms / 1000);
-      if (!c.ok) cameraErrors.inc({ cam: cam(), code: c.error ?? 'unknown' });
+    // Each hook names the camera it came from.
+    onResubscribe: (cam: string) => resubscribes.inc({ cam }),
+    onStill: (cam: string, ts: number) => (stillsTotal.inc({ cam }), lastStill.set({ cam }, ts / 1000)),
+    onStillMissing: (cam: string) => stillsMissing.inc({ cam }),
+    onRecordingDownload: (cam: string, o: { stream: string; result: string; priority: string }) => recordingDownloads.inc({ cam, stream: o.stream, result: o.result, priority: o.priority }),
+    onCameraCheck: (cam: string, c: { ok: boolean; ms: number; error?: string }) => {
+      cameraSeconds.observe({ cam, cmd: 'status' }, c.ms / 1000);
+      if (!c.ok) cameraErrors.inc({ cam, code: c.error ?? 'unknown' });
     },
     onRetention: (r: { deleted: Record<string, number>; at: number }) => {
       for (const [kind, n] of Object.entries(r.deleted)) retentionDeleted.inc({ kind }, n);

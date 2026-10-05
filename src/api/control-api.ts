@@ -100,6 +100,8 @@ interface ControlDeps {
   archive: Pick<Archive, 'status' | 'clear'>;
   // The camera an inventory runs on: the only one, or null with several (multi-camera phase 1).
   inventoryCamera: () => string | null;
+  // The camera the camera routes act on: the only (first) one in multi-camera phase 1.
+  cameraId: () => string;
 }
 
 // The effective configuration for the UI: value (what runs), source, restart
@@ -222,6 +224,9 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
   return r;
 }
 
+// Actions on the camera: their control-action record names it (spec 2026-10-05-multi-camera-host-design §6.3).
+const CAMERA_ACTIONS = new Set(['camera-test', 'onvif-resubscribe', 'camera-ftp-setup', 'camera-ftp-test', 'camera-ftp-off', 'restart', 'camera-reboot', 'camera-powercycle', 'camera-poe-on', 'poe-switch-read', 'inventory', 'inventory-repair', 'inventory-cancel']);
+
 // Actions that write their own audit records (no generic control-action);
 // a new action that audits itself goes here too.
 const OWN_AUDIT = new Set(['camera-reboot', 'camera-powercycle', 'camera-poe-on', 'restart-proxy', 'inventory', 'inventory-repair', 'camera-address', 'archive-clear']);
@@ -287,7 +292,7 @@ export function controlApi(d: ControlDeps): express.Router {
     const to = name as string;
     const from = d.cameraName.current();
     const requestedBy = res.locals.access?.viaCookie ? 'session' : 'token';
-    const base = { action: 'camera-name', category: ['configuration'], type: ['change'], user: 'admin', ...who(req) };
+    const base = { action: 'camera-name', category: ['configuration'], type: ['change'], user: 'admin', ...who(req), camera: d.cameraId() };
     try {
       const read = await d.cameraName.write(to);
       d.audit.write({ ...base, outcome: 'success', message: read === from ? `Camera name set: "${read}" (unchanged)` : `Camera name changed: "${from}" → "${read}"`, details: { from, to: read, ...(read !== to ? { requested: to } : {}), requestedBy } });
@@ -406,7 +411,7 @@ export function controlApi(d: ControlDeps): express.Router {
         const done = res.writableFinished;
         const ok = done && res.statusCode < 400;
         const result = !done ? 'aborted' : ok ? 'ok' : String((res.locals.errorCode as string | undefined) ?? res.statusCode);
-        d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: !done ? 'unknown' : ok ? 'success' : 'failure', user: 'admin', ...who(req), message: `Control action ${name}: ${result}`, details: { action: name, result, requestedBy } });
+        d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: !done ? 'unknown' : ok ? 'success' : 'failure', user: 'admin', ...who(req), message: `Control action ${name}: ${result}`, details: { action: name, result, requestedBy }, ...(CAMERA_ACTIONS.has(name) ? { camera: d.cameraId() } : {}) });
       });
     }
     const fail = (status: number, error: string, detail?: string, extra: object = {}) => {
@@ -481,7 +486,7 @@ export function controlApi(d: ControlDeps): express.Router {
         if (noSwitch()) return;
         const sw = d.poeSwitch.info();
         const where = `${sw.host} port ${sw.port}`;
-        const base = { action: 'camera-poe-on', category: ['host'], type: ['change'], user: 'admin', ...who(req) };
+        const base = { action: 'camera-poe-on', category: ['host'], type: ['change'], user: 'admin', ...who(req), camera: d.cameraId() };
         try {
           const r = await d.poeSwitch.poeOn();
           d.audit.write({ ...base, outcome: 'success', message: r.wasOn ? `Camera PoE on (${where}): it was on already` : `Camera PoE turned on (${where})`, details: { switch: sw, wasOn: r.wasOn, requestedBy } });
