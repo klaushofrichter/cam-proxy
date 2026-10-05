@@ -91,10 +91,10 @@ describe.skipIf(!binary)('FrameGrabber against go2rtc and cam-sim', () => {
   async function setup(staleMs = 3000) {
     const sim = await startSim();
     cleanup.push(() => sim.close());
-    const g = new Go2rtc({ binary, rtspPort: await freePort(), apiPort: await freePort(), cam: 'cam1', source: { host: '127.0.0.1', port: sim.ports.rtsp, user: 'proxy', password: sim.password } });
+    const g = new Go2rtc({ binary, rtspPort: await freePort(), apiPort: await freePort(), sources: () => [{ cam: 'cam1', host: '127.0.0.1', port: sim.ports.rtsp, user: 'proxy', password: sim.password }] });
     cleanup.push(() => g.stop());
     await g.start();
-    const grabber = new FrameGrabber({ input: g.streamUrl('sub'), intervalS: 1, size: '896x512', tileSize: '160x90', quality: 5, tileQuality: 7, staleMs });
+    const grabber = new FrameGrabber({ input: g.streamUrl('cam1', 'sub'), intervalS: 1, size: '896x512', tileSize: '160x90', quality: 5, tileQuality: 7, staleMs });
     cleanup.push(() => grabber.stop());
     const frames: Frame[] = [];
     grabber.on('frame', (f: Frame) => frames.push(f));

@@ -21,6 +21,7 @@ let sim: Awaited<ReturnType<typeof startSim>>;
 let proxy: Proxy;
 let base: string;
 let dir: string;
+let go2rtcPorts: { rtspPort: number; apiPort: number };
 const EVENT_TS = Date.now() - 3600_000;
 
 // A catalog at schema version 8 with one event and this month's Vision usage.
@@ -45,13 +46,14 @@ beforeAll(async () => {
   const go2rtc = process.env.CAMPROXY_TEST_GO2RTC;
   const ftpPort = await freePort();
   const passive = await freePort();
+  go2rtcPorts = { rtspPort: await freePort(), apiPort: await freePort() };
   // docs/raspberry-pi.md, plus the PoE switch (docs/poe-switch.md) and the test's ports.
   writeFileSync(join(dir, 'config.json'), JSON.stringify({
     camera: { id: 'cam1', name: 'Den', protocol: 'http', user: 'proxy', onvifPort: sim.ports.onvif, rtspPort: sim.ports.rtsp || 554, baichuanPort: sim.camera.baichuanPort,
       poeSwitch: { model: 'sscpoe-web', host: '127.0.0.1:9', port: 8, ports: 8, offSeconds: 10 } },
     server: { logLevel: 'silent' },
     stills: { enabled: !!go2rtc, stream: 'sub' },
-    go2rtc: { binary: go2rtc ?? 'go2rtc', rtspPort: await freePort(), apiPort: await freePort() },
+    go2rtc: { binary: go2rtc ?? 'go2rtc', ...go2rtcPorts },
     storage: { maxBytes: 161061273600, minFreeBytes: 0 },
     ftp: { enabled: true, port: ftpPort, passive: `${passive}-${passive}`, tls: true, stream: 'sub' },
   }));
@@ -120,6 +122,24 @@ describe('the Pi: one legacy camera, legacy overrides, a version 8 catalog', () 
     expect(reloaded.config.retention.eventsDays).toBe(40);
     expect(saved.retention.eventsDays).toBe(40);
   });
+});
+
+// P2 (spec §8.5): one go2rtc for the host; on the Pi it serves the one camera
+// on go2rtc.rtspPort/apiPort as before (cam1_sub, cam1_main), with the password
+// only in its environment.
+describe.skipIf(!process.env.CAMPROXY_TEST_GO2RTC)('the Pi: stills through the host go2rtc', () => {
+  it('cam1_sub and cam1_main on the configured ports; frames arrive', async () => {
+    await until(() => proxy.stills?.grabber.up() === true, 30_000);
+    const streams = await new Promise<Record<string, unknown>>((resolve, reject) => {
+      import('http').then(({ get }) => get({ host: '127.0.0.1', port: go2rtcPorts.apiPort, path: '/api/streams' }, (res) => {
+        let body = '';
+        res.on('data', (c) => (body += c));
+        res.on('end', () => resolve(JSON.parse(body)));
+      }).on('error', reject));
+    });
+    expect(Object.keys(streams).sort()).toEqual(['cam1_main', 'cam1_sub']);
+    expect(proxy.stills!.go2rtc.streamUrl('cam1', 'sub')).toBe(`rtsp://127.0.0.1:${go2rtcPorts.rtspPort}/cam1_sub`);
+  }, 40_000);
 });
 
 // The health items the Pi's display reads, as release 8 answers them.

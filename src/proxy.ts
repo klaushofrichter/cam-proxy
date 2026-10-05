@@ -15,6 +15,7 @@ import { CameraWorker, cameraWebUi } from './cameras/worker';
 import { cameraConfig, cameraIds } from './config/cameras';
 import { cameraPassword } from './config/secrets';
 import { reapOrphanGo2rtc } from './stills/orphans';
+import { Go2rtc } from './stills/go2rtc';
 import { restartProcess } from './process-restart';
 import type { Config } from './config/defaults';
 import { getPath, needsProcessRestart, needsRestart, setPath, settingPaths, type Loaded } from './config/load';
@@ -159,11 +160,23 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     const c = cameraConfig(running, id)!;
     return { server: running.ftp.publicHost ?? '', port: running.ftp.port, user: c.ftp.user, password: loaded.secrets.ftpPassword ?? '', tls: running.ftp.tls, stream: c.ftp.stream };
   };
-  const makeWorker = (id: string, index: number) =>
+  // One go2rtc for every camera with stills (spec 2026-10-05-multi-camera-host-design
+  // §8.5), none while stills are off everywhere. Made anew on a restart that
+  // changed its settings (go2rtc.*) or turned stills on for the first camera.
+  const go2rtcSettings = () => JSON.stringify({ binary: running.go2rtc.binary, rtspPort: running.go2rtc.rtspPort, apiPort: running.go2rtc.apiPort });
+  const makeGo2rtc = () =>
+    cameraIds(running).some((id) => cameraConfig(running, id)!.stills.enabled)
+      ? new Go2rtc({ binary: running.go2rtc.binary, rtspPort: running.go2rtc.rtspPort, apiPort: running.go2rtc.apiPort, sources: () => cams.list().filter((w) => w.cam().stills.enabled).map((w) => w.source()) })
+      : undefined;
+  let go2rtc = makeGo2rtc();
+  let go2rtcMadeWith = go2rtcSettings();
+  // Started in the background: each camera's grabber waits until it is up.
+  const startGo2rtc = () => void go2rtc?.start().catch((err: Error) => logger.error({ err: err.message }, 'go2rtc_start_failed'));
+  const makeWorker = (id: string) =>
       new CameraWorker({
         id,
-        index,
         running: () => running,
+        go2rtc: () => go2rtc,
         password: () => cameraPassword(loaded.secrets, id),
         poeSwitchPassword: () => loaded.secrets.poeSwitchPassword,
         ftpTarget: ftpTargetFor(id),
@@ -176,7 +189,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         hooks: { onCameraCheck: (c) => metrics.onCameraCheck(id, c), onResubscribe: () => metrics.onResubscribe(id), onStill: (ts) => metrics.onStill(id, ts), onStillMissing: () => metrics.onStillMissing(id), onRecordingDownload: (o) => metrics.onRecordingDownload(id, o) },
         cameraFtpCheckMs: opts.cameraFtpCheckMs,
       });
-  cameraIds(running).forEach((id, index) => cams.add(makeWorker(id, index)));
+  cameraIds(running).forEach((id) => cams.add(makeWorker(id)));
   const metrics = createMetrics({
     storage,
     config: () => running,
@@ -644,11 +657,21 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       await w.stopRecordings();
       await w.stop();
       cams.remove(w.id);
+      await go2rtc?.removeStream(w.id);
     }
     applySettings(needsProcessRestart);
     const kept = cams.list();
-    const added = cameraIds(running).flatMap((id, index) => (cams.get(id) ? [] : [makeWorker(id, index)]));
+    const added = cameraIds(running).flatMap((id) => (cams.get(id) ? [] : [makeWorker(id)]));
     for (const w of added) cams.add(w);
+    // go2rtc's own settings changed, or stills went on or off everywhere: a new one.
+    if (go2rtcSettings() !== go2rtcMadeWith || !go2rtc !== !makeGo2rtc()) {
+      await go2rtc?.stop();
+      go2rtc = makeGo2rtc();
+      go2rtcMadeWith = go2rtcSettings();
+      startGo2rtc();
+    } else {
+      for (const w of added) if (w.cam().stills.enabled) await go2rtc?.setStream(w.source()).catch((err: Error) => logger.warn({ cameraId: w.id, err: err.message }, 'go2rtc_add_failed'));
+    }
     await Promise.all([...kept.map((w) => w.restart()), ...added.map((w) => w.start())]);
     buildClips();
     await startClips();
@@ -698,6 +721,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       });
       // go2rtc an earlier process left behind (killed hard) would hold the ports.
       if (cams.list().some((w) => w.cam().stills.enabled)) await reapOrphanGo2rtc();
+      startGo2rtc();
       await Promise.all(cams.list().map((w) => w.start()));
       await startClips();
       hostMonitor.start();
@@ -761,6 +785,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       }
       await clips?.stop();
       await Promise.all(cams.list().map((w) => w.stop()));
+      await go2rtc?.stop();
       catalog.close();
   }
   return proxy;

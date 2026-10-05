@@ -23,7 +23,7 @@ async function main() {
     events: { onvif: { subscribeMin: 1, pullTimeoutS: 2 } },
     server: { logLevel: 'warn' },
     stills: { enabled: !!GO2RTC },
-    // Ruling P1-1: camera i uses these ports + 100*i.
+    // One go2rtc for every camera (spec §8.5).
     go2rtc: { binary: GO2RTC ?? 'go2rtc', rtspPort: 18800, apiPort: 18850 },
   }));
   const proxy = createProxy(loadConfig({ CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: 'e2e-proxy-pw' }, { cwd: dir }));

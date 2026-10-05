@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { EventEmitter } from 'events';
 import { withCamera, type AuditLog } from '../audit/audit-log';
 import type { Catalog } from '../catalog/db';
@@ -21,7 +22,7 @@ import { EventIntake } from '../events/intake';
 import { EventTracker } from '../events/tracker';
 import { cameraContext, logger } from '../log';
 import { createRecordingsSide, type RecordingsSide } from '../recordings/side';
-import { Go2rtc } from '../stills/go2rtc';
+import type { Go2rtc, StreamSource } from '../stills/go2rtc';
 import { FrameGrabber, type Frame } from '../stills/grabber';
 import { MinuteStore, minuteOf } from '../stills/store';
 import type { Storage } from '../storage';
@@ -41,11 +42,12 @@ export interface WorkerHooks {
 
 export interface WorkerDeps {
   id: string;
-  index: number; // position in config order: go2rtc ports until P2 (Ruling P1-1)
   running: () => Config;
   password: () => string;
   poeSwitchPassword: () => string | undefined;
   ftpTarget: () => FtpTarget;
+  // The host's go2rtc (spec 2026-10-05-multi-camera-host-design §8.5); none without go2rtc.binary.
+  go2rtc: () => Go2rtc | undefined;
   catalog: Catalog;
   log: StreamLog;
   sse: SseHandler;
@@ -56,8 +58,6 @@ export interface WorkerDeps {
   // Test seams: a throw from beforeStart is a start failure; schedule replaces setTimeout.
   beforeStart?: () => void | Promise<void>;
   schedule?: (ms: number, fn: () => void) => () => void;
-  // Test seam: how go2rtc is started (default: go2rtc.start()).
-  startGo2rtc?: (g: Go2rtc) => Promise<void>;
 }
 
 // The camera's own web page for the admin UI: webUiUrl, none for no link,
@@ -95,9 +95,12 @@ export class CameraWorker extends EventEmitter {
   private readonly announcer: CameraNameAnnouncer;
   private lastResubscribes = 0;
   private stillsStarting: Promise<void> | undefined;
+  private stillsAbort: (() => void) | undefined;
   private stopping = false;
   private watchStarted = false;
   private restarting: Promise<void> | undefined;
+  // The stream source the host's go2rtc has for this camera (no password in it).
+  private registered: string;
   // Supervision (spec 2026-10-05-multi-camera-host-design §3.3).
   private readonly backoff = new Backoff();
   private cancelRetry: (() => void) | undefined;
@@ -129,6 +132,7 @@ export class CameraWorker extends EventEmitter {
       everyMs: d.cameraFtpCheckMs,
     });
     this.build();
+    this.registered = this.sourceKey();
     // Recordings on the SD card over Baichuan (spec 2026-10-02-baichuan-recordings-design).
     this.recordings = createRecordingsSide({
       dataDir: d.running().server.dataDir,
@@ -169,6 +173,18 @@ export class CameraWorker extends EventEmitter {
     const c = cameraConfig(this.d.running(), this.id);
     if (!c) throw new Error(`camera ${this.id} is not configured`);
     return c;
+  }
+
+  // This camera's stream source for the host's go2rtc.
+  source(): StreamSource {
+    const c = this.cam();
+    return { cam: this.id, host: splitHost(c.host).hostname, port: c.rtspPort, user: c.user, password: this.d.password() };
+  }
+
+  // The source without its password: a hash of it instead.
+  private sourceKey(): string {
+    const s = this.source();
+    return JSON.stringify({ host: s.host, port: s.port, user: s.user, pw: createHash('sha256').update(s.password).digest('hex') });
   }
 
   phase(): WorkerPhase {
@@ -274,63 +290,59 @@ export class CameraWorker extends EventEmitter {
     this.intake.on('state', (st: { resubscribes: number }) => {
       for (; this.lastResubscribes < st.resubscribes; this.lastResubscribes++) d.hooks.onResubscribe();
     });
-    // Stills: go2rtc holds the camera connection, one ffmpeg makes stills and
-    // tiles, the store writes a pack and a sprite per minute.
+    // Stills: the host's go2rtc holds the camera connection, one ffmpeg makes
+    // stills and tiles, the store writes a pack and a sprite per minute.
     this.stills = undefined;
     if (c.stills.enabled) {
-      const r = d.running();
-      const s = c.stills;
-      const offset = 100 * d.index; // Ruling P1-1: index 0 keeps today's ports
-      const go2rtc = new Go2rtc({ binary: r.go2rtc.binary, rtspPort: r.go2rtc.rtspPort + offset, apiPort: r.go2rtc.apiPort + offset, cam: c.id,
-        source: { host: splitHost(c.host).hostname, port: c.rtspPort, user: c.user, password: d.password() } });
-      const grabber = new FrameGrabber({ input: go2rtc.streamUrl(s.stream), intervalS: s.intervalS, size: s.size, tileSize: r.previews.tileSize, quality: s.quality, tileQuality: r.previews.quality });
-      const store = new MinuteStore({ dataDir: r.server.dataDir, cam: c.id, intervalS: s.intervalS, still: { size: s.size, quality: s.quality }, tile: { size: r.previews.tileSize, grid: r.previews.grid, quality: r.previews.quality } });
-      store.on('written', (w: { kind: 'stills' | 'previews'; bytes: number; files: number }) => d.storage.noteWritten(w.kind, w.bytes, w.files));
-      grabber.on('frame', (f: Frame) => {
-        if (d.storage.paused()) return d.hooks.onStillMissing(); // the disk is full: no writing
-        store.add(f);
-        d.hooks.onStill(f.ts);
-        const minute = minuteOf(f.ts);
-        const base = `/api/cameras/${encodeURIComponent(c.id)}`;
-        d.sse.live(c.id, 'still', { ts: f.ts, url: `${base}/stills/${f.ts}.jpg`, sprite: `${base}/previews/${minute}.jpg`, tile: Math.floor((f.ts - minute) / (s.intervalS * 1000)) });
-      });
-      // Stream up and down reach stream clients as camera-status (spec §8).
-      grabber.on('state', (st: { up: boolean }) => {
-        const cs = this.status.state();
-        d.log.append(c.id, 'camera-status', { online: cs.online, stream: st.up ? 'up' : 'down', reason: st.up ? null : 'no_frames', clockOffsetMs: cs.clockOffsetMs ?? null });
-      });
-      this.stills = { go2rtc, grabber, store };
+      const go2rtc = d.go2rtc();
+      if (!go2rtc) {
+        logger.error({ cameraId: this.id }, 'go2rtc_missing');
+      } else {
+        const r = d.running();
+        const s = c.stills;
+        const grabber = new FrameGrabber({ input: go2rtc.streamUrl(c.id, s.stream), intervalS: s.intervalS, size: s.size, tileSize: r.previews.tileSize, quality: s.quality, tileQuality: r.previews.quality });
+        const store = new MinuteStore({ dataDir: r.server.dataDir, cam: c.id, intervalS: s.intervalS, still: { size: s.size, quality: s.quality }, tile: { size: r.previews.tileSize, grid: r.previews.grid, quality: r.previews.quality } });
+        store.on('written', (w: { kind: 'stills' | 'previews'; bytes: number; files: number }) => d.storage.noteWritten(w.kind, w.bytes, w.files));
+        grabber.on('frame', (f: Frame) => {
+          if (d.storage.paused()) return d.hooks.onStillMissing(); // the disk is full: no writing
+          store.add(f);
+          d.hooks.onStill(f.ts);
+          const minute = minuteOf(f.ts);
+          const base = `/api/cameras/${encodeURIComponent(c.id)}`;
+          d.sse.live(c.id, 'still', { ts: f.ts, url: `${base}/stills/${f.ts}.jpg`, sprite: `${base}/previews/${minute}.jpg`, tile: Math.floor((f.ts - minute) / (s.intervalS * 1000)) });
+        });
+        // Stream up and down reach stream clients as camera-status (spec §8).
+        grabber.on('state', (st: { up: boolean }) => {
+          const cs = this.status.state();
+          d.log.append(c.id, 'camera-status', { online: cs.online, stream: st.up ? 'up' : 'down', reason: st.up ? null : 'no_frames', clockOffsetMs: cs.clockOffsetMs ?? null });
+        });
+        this.stills = { go2rtc, grabber, store };
+      }
     }
   }
 
-  // go2rtc takes a moment to start; the grabber starts only if its side is
-  // still the current one (a restart or stop may come in between).
+  // The grabber starts once the host's go2rtc is up (it retries go2rtc
+  // itself), and only if its side is still the current one (a restart or stop
+  // may come in between).
   private startStills(): void {
     const s = this.stills;
     if (!s) return;
-    this.stillsStarting = (this.d.startGo2rtc ? this.d.startGo2rtc(s.go2rtc) : s.go2rtc.start()).then(
-      () => {
-        if (this.stills === s && !this.stopping) s.grabber.start();
-      },
-      // This camera's error and a supervised retry (spec §3.3), unless a restart or stop came in between.
-      (err: Error) => {
-        if (this.stills === s && !this.stopping && this.phaseNow !== 'stopped') this.failed(`go2rtc_start_failed: ${err.message}`);
-        else logger.error({ cameraId: this.id, err: err.message }, 'go2rtc_start_failed');
-      },
-    );
+    let stop!: () => void;
+    const stopped = new Promise<void>((r) => (stop = r));
+    this.stillsAbort = stop;
+    this.stillsStarting = Promise.race([s.go2rtc.ready(), stopped]).then(() => {
+      if (this.stills === s && !this.stopping) s.grabber.start();
+    });
   }
 
   private async stopStills(): Promise<void> {
     const s = this.stills;
     if (!s) return;
     this.stopping = true;
-    // go2rtc first: a start still waiting for it ends at once, and its ports
-    // are free when this returns (live test 2026-10-05).
-    const go2rtcStopped = s.go2rtc.stop();
+    this.stillsAbort?.();
     await this.stillsStarting;
     this.stopping = false;
     await s.grabber.stop();
-    await go2rtcStopped;
     await s.store.flush();
   }
 
@@ -406,6 +418,12 @@ export class CameraWorker extends EventEmitter {
         this.recordings.reset();
         this.build();
         this.cancelRetry?.();
+        // A changed address, port, user or password: the host's go2rtc gets the new source.
+        const key = this.sourceKey();
+        if (this.cam().stills.enabled && key !== this.registered) {
+          await this.d.go2rtc()?.setStream(this.source()).catch((err: Error) => logger.warn({ cameraId: this.id, err: err.message }, 'go2rtc_set_stream_failed'));
+          this.registered = key;
+        }
         const running = await this.startParts();
         this.phaseNow = running || this.errorNow !== 'no_address' ? 'ready' : 'idle';
         logger.info({ cameraId: this.id }, 'camera_side_restarted');
