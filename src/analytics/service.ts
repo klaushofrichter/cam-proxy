@@ -2,7 +2,8 @@ import { mkdirSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { sleep } from '../async';
 import type { Catalog } from '../catalog/db';
-import { addUsage, analysisFor, countUnmapped, okAnalysisAt, releaseUsage, saveAnalysis, setSummary, unanalysed, usageBetween, withoutSummary, type AnalysisRow } from '../catalog/analyses';
+import { addUsage, analysisFor, countUnmapped, okAnalysisAt, releaseUsage, saveAnalysis, setSummary, unanalysed, usageBetween, withoutSummary, type AnalysisRow, type UsageKey } from '../catalog/analyses';
+import { keyId } from './key-id';
 import { checkAt, insertCheck, setCheckImage, type StillCheckRow } from '../catalog/still-checks';
 import { eventById } from '../catalog/events';
 import type { Config } from '../config/defaults';
@@ -111,6 +112,11 @@ export class AnalyticsService {
   }
   private key(): string | undefined {
     return this.manualKey ?? (this.d.secrets().googleVisionKey || undefined);
+  }
+  // The usage counter of a provider (or check outcome) for this camera and
+  // the key in use now ('' when no key: nothing is counted against a key then).
+  private usageKey(provider: string, key = this.key()): UsageKey {
+    return { provider, keyId: key ? keyId(key) : '', cam: this.d.cam };
   }
   private keySource(): KeySource {
     return this.manualKey !== undefined ? 'manual' : this.d.secrets().googleVisionKey ? 'env' : 'none';
@@ -225,7 +231,7 @@ export class AnalyticsService {
 
   private count(what: keyof typeof CHECK_USAGE): void {
     try {
-      addUsage(this.d.catalog, CHECK_USAGE[what], localDay(this.now(), this.d.timeInfo()));
+      addUsage(this.d.catalog, this.usageKey(CHECK_USAGE[what]), localDay(this.now(), this.d.timeInfo()));
     } catch (err) {
       logger.warn({ err: (err as Error).message }, 'analytics_check_count_failed');
     }
@@ -268,10 +274,10 @@ export class AnalyticsService {
     if (usageBetween(this.d.catalog, CHECK_USAGE.calls, day, day) >= g.checksPerDay) return refuse(429, 'limit', { reason: 'checks' });
     // The call is reserved in the same synchronous step as the limit checks:
     // an automatic analysis that runs while the still is read sees it.
-    addUsage(this.d.catalog, 'google-vision', day);
-    addUsage(this.d.catalog, CHECK_USAGE.calls, day);
+    const reserved = [this.usageKey('google-vision'), this.usageKey(CHECK_USAGE.calls)];
+    for (const u of reserved) addUsage(this.d.catalog, u, day);
     const abort = new AbortController();
-    const done = this.callCheck(at, via, day, abort.signal);
+    const done = this.callCheck(at, via, day, abort.signal, reserved);
     this.checking = { at, done, abort };
     try {
       return await done;
@@ -280,12 +286,11 @@ export class AnalyticsService {
     }
   }
 
-  private async callCheck(at: number, via: CheckVia, day: string, stop: AbortSignal): Promise<CheckOutcome> {
+  private async callCheck(at: number, via: CheckVia, day: string, stop: AbortSignal, reserved: UsageKey[]): Promise<CheckOutcome> {
     // No call made after all: the reservation (check()) is given back.
     const release = () => {
       try {
-        releaseUsage(this.d.catalog, 'google-vision', day);
-        releaseUsage(this.d.catalog, CHECK_USAGE.calls, day);
+        for (const u of reserved) releaseUsage(this.d.catalog, u, day);
       } catch (err) {
         logger.warn({ err: (err as Error).message }, 'analytics_check_release_failed');
       }
@@ -520,7 +525,7 @@ export class AnalyticsService {
         if (this.monthUsage(day) >= g.monthlyLimit || (g.dailyCap > 0 && usageBetween(this.d.catalog, 'google-vision', day, day) >= g.dailyCap)) {
           return this.skip(job, 'limit', stillTs);
         }
-        addUsage(this.d.catalog, 'google-vision', day);
+        addUsage(this.d.catalog, this.usageKey('google-vision', key), day);
         made.calls++;
         t0 = this.now();
         let res: { objects: unknown; raw: unknown };

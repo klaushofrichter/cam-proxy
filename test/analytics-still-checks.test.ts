@@ -169,9 +169,9 @@ describe('AnalyticsService.check', () => {
 
   it('the checks cap counts checks only; automatic calls count toward month and day but not toward it', async () => {
     still(AT, 7);
-    addUsage(c, 'google-vision', DAY); // three automatic calls today
-    addUsage(c, 'google-vision', DAY);
-    addUsage(c, 'google-vision', DAY);
+    addUsage(c, { provider: 'google-vision', keyId: '', cam: 'cam1' }, DAY); // three automatic calls today
+    addUsage(c, { provider: 'google-vision', keyId: '', cam: 'cam1' }, DAY);
+    addUsage(c, { provider: 'google-vision', keyId: '', cam: 'cam1' }, DAY);
     config.analytics.googleVision.checksPerDay = 1;
     expect((await service().check(AT, 'token')).outcome).toBe('ok');
     expect(service().usage()).toEqual({ enabled: true, paused: null, month: { calls: 4, limit: 100 }, today: { calls: 4, cap: 0 }, checks: { today: 1, cap: 1 } });
