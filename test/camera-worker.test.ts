@@ -10,7 +10,8 @@ import { Storage } from '../src/storage';
 import { AuditLog } from '../src/audit/audit-log';
 import { CameraWorker, type WorkerDeps } from '../src/cameras/worker';
 import { CameraRegistry } from '../src/cameras/registry';
-import { ADMIN_TOKEN, CLIENT_TOKEN, until } from './helpers/proxy';
+import { ADMIN_TOKEN, CLIENT_TOKEN, freePort, until } from './helpers/proxy';
+import { logBuffer } from '../src/log';
 import { startSim } from './helpers/sim';
 
 let sim: Awaited<ReturnType<typeof startSim>>;
@@ -23,10 +24,10 @@ afterAll(async () => {
 
 const NO_HOOKS = { onCameraCheck() {}, onResubscribe() {}, onStill() {}, onStillMissing() {}, onRecordingDownload() {} };
 
-function worker(o: { host?: string; over?: Partial<WorkerDeps>; stills?: boolean; go2rtc?: string } = {}) {
+function worker(o: { host?: string; over?: Partial<WorkerDeps>; stills?: boolean; go2rtc?: string; onvifPort?: number } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'camproxy-worker-'));
   writeFileSync(join(dir, 'config.json'), JSON.stringify({
-    camera: { host: o.host ?? sim.camera.host, protocol: 'http', user: 'proxy', onvifPort: sim.ports.onvif, rtspPort: sim.ports.rtsp || 554, baichuanPort: sim.camera.baichuanPort, statusPollS: 5 },
+    camera: { host: o.host ?? sim.camera.host, protocol: 'http', user: 'proxy', onvifPort: o.onvifPort ?? sim.ports.onvif, rtspPort: sim.ports.rtsp || 554, baichuanPort: sim.camera.baichuanPort, statusPollS: 5 },
     stills: { enabled: o.stills ?? false },
     ...(o.go2rtc ? { go2rtc: { binary: o.go2rtc } } : {}),
     server: { logLevel: 'silent' },
@@ -162,6 +163,20 @@ describe('supervision (spec §3.3)', () => {
     await w.stop();
     expect(Date.now() - t0).toBeLessThan(4000);
     expect(w.stills?.go2rtc.pid()).toBeUndefined();
+    catalog.close();
+  }, 20_000);
+
+  // Live test 2026-10-05: log lines of a camera's parts (onvif_down, poll_failed, frame_grabber_exited, …) name the camera.
+  it("its parts' log lines carry the camera id", async () => {
+    const t0 = Date.now();
+    const { w, catalog } = worker({ onvifPort: await freePort() });
+    await w.start();
+    const line = () => logBuffer.recent(500).find((l) => l.msg === 'onvif_down' && (l.time as number) >= t0);
+    await until(() => !!line(), 15_000);
+    expect(line()!.cameraId).toBe('cam1');
+    await w.stopSwitch();
+    await w.stopRecordings();
+    await w.stop();
     catalog.close();
   }, 20_000);
 });

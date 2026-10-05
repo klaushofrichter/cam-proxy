@@ -19,7 +19,7 @@ import type { Config } from '../config/defaults';
 import { cameraConfig, cameraEvents, cameraIds, type ResolvedCamera } from '../config/cameras';
 import { EventIntake } from '../events/intake';
 import { EventTracker } from '../events/tracker';
-import { logger } from '../log';
+import { cameraContext, logger } from '../log';
 import { createRecordingsSide, type RecordingsSide } from '../recordings/side';
 import { Go2rtc } from '../stills/go2rtc';
 import { FrameGrabber, type Frame } from '../stills/grabber';
@@ -380,7 +380,13 @@ export class CameraWorker extends EventEmitter {
     await this.client.logout();
   }
 
-  async start(): Promise<void> {
+  // Inside this camera's log context: timers, sockets and children started
+  // here (and so their log lines) carry the camera id.
+  start(): Promise<void> {
+    return cameraContext.run(this.id, () => this.startInContext());
+  }
+
+  private async startInContext(): Promise<void> {
     this.phaseNow = 'starting';
     const running = await this.startParts();
     if (!this.watchStarted) {
@@ -393,7 +399,7 @@ export class CameraWorker extends EventEmitter {
 
   // One at a time: a second call while one runs joins it.
   restart(): Promise<void> {
-    this.restarting ??= (async () => {
+    this.restarting ??= cameraContext.run(this.id, async () => {
       this.phaseNow = 'restarting';
       try {
         await this.stopParts();
@@ -406,7 +412,7 @@ export class CameraWorker extends EventEmitter {
       } finally {
         this.restarting = undefined;
       }
-    })();
+    });
     return this.restarting;
   }
 

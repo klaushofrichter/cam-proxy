@@ -1,4 +1,5 @@
 import pino from 'pino';
+import { AsyncLocalStorage } from 'async_hooks';
 import { Writable } from 'stream';
 
 // Secrets never reach the logs: passwords and tokens anywhere a caller might
@@ -65,9 +66,21 @@ const toBuffer = new Writable({
   },
 });
 
+// The camera whose code runs now (a camera worker runs its parts inside it):
+// every log line written there carries `cameraId` (spec
+// 2026-10-05-multi-camera-host-design §3.1; live test 2026-10-05).
+export const cameraContext = new AsyncLocalStorage<string>();
+
 // The process-wide logger: console at the configured level, the buffer at info.
 export const logger = pino(
-  { level: 'info', redact: { paths: REDACT, censor: '[redacted]' } },
+  {
+    level: 'info',
+    redact: { paths: REDACT, censor: '[redacted]' },
+    mixin: () => {
+      const cameraId = cameraContext.getStore();
+      return cameraId === undefined ? {} : { cameraId };
+    },
+  },
   pino.multistream([{ level: 'trace', stream: toConsole }, { level: 'trace', stream: toBuffer }]),
 );
 
