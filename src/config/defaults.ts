@@ -1,14 +1,32 @@
 // Every setting that isn't a secret, with its default (spec §14). The file
 // config.json only needs what differs; secrets come from the environment.
+import type { HostPoeSwitch } from './cameras';
+
+// One camera of `cameras` (spec 2026-10-05-multi-camera-host-design §4.1).
+// The optional groups override a host default; absent = the host value.
+export interface CameraNode {
+  id: string; name: string; host: string; protocol: 'https' | 'http'; tlsName?: string; webUiUrl?: string;
+  user: string; onvifPort: number; rtspPort: number; baichuanPort: number; statusPollS: number;
+  poeSwitch: { port?: number };
+  ftp: { user?: string; enabled?: boolean; stream?: 'main' | 'sub' };
+  stills: { enabled?: boolean; stream?: 'sub' | 'main'; intervalS?: number };
+  analytics: { kinds: { person?: boolean; vehicle?: boolean; pet?: boolean } };
+  events: { poll: { enabled?: boolean } };
+}
+
+// A new camera's defaults: its name is its id (Ruling P1-11; a legacy camera
+// keeps the name Den, src/config/legacy.ts).
+export function cameraDefaults(id: string): CameraNode {
+  return { id, name: id, host: '', protocol: 'https', user: 'proxy', onvifPort: 8000, rtspPort: 554, baichuanPort: 9000, statusPollS: 30, poeSwitch: {}, ftp: {}, stills: {}, analytics: { kinds: {} }, events: { poll: {} } };
+}
 
 export interface Config {
   server: { port: number; dataDir: string; logLevel: string; publicUrl?: string; trustProxy?: number };
-  camera: {
-    id: string; name: string; host: string; protocol: 'https' | 'http'; tlsName?: string; webUiUrl?: string;
-    user: string; onvifPort: number; rtspPort: number; baichuanPort: number; statusPollS: number;
-    // The camera's PoE switch (issue #85); `none` for no switch.
-    poeSwitch: { model: 'none' | 'sscpoe-web'; host?: string; port?: number; ports: number; offSeconds: number };
-  };
+  // The cameras by id, and their order (config order: display order).
+  cameras: Record<string, CameraNode>;
+  cameraOrder: string[];
+  // The cameras' PoE switch, one per host (issue #85); `none` for no switch.
+  poeSwitch: HostPoeSwitch;
   go2rtc: { binary?: string; url?: string; rtspPort: number; apiPort: number };
   stills: { enabled: boolean; stream: 'sub' | 'main'; intervalS: number; size: string; quality: number; maxGB?: number };
   previews: { tileSize: string; grid: string; quality: number; maxGB?: number };
@@ -28,7 +46,7 @@ export interface Config {
   sse: { maxClients: number; queuePerClient: number; pingS: number };
   // Composed clips (spec 2026-09-28): the font for the badge and card text.
   composition: { font?: string };
-  ftp: { enabled: boolean; port: number; passive: string; user: string; tls: boolean; stream: 'main' | 'sub'; stalledHours: number; maxGB?: number; publicHost?: string; certFile?: string; keyFile?: string };
+  ftp: { enabled: boolean; port: number; passive: string; tls: boolean; stream: 'main' | 'sub'; stalledHours: number; maxGB?: number; publicHost?: string; certFile?: string; keyFile?: string };
   recordings: { cacheMB: number };
   // The health summary's thresholds and the host figures (spec 2026-10-03-health-summary-design).
   health: { diskPercent: number; tempC: number };
@@ -47,7 +65,9 @@ export interface Config {
 
 export const DEFAULTS: Config = {
   server: { port: 8480, dataDir: 'data', logLevel: 'info' },
-  camera: { id: 'cam1', name: 'Den', host: '', protocol: 'https', user: 'proxy', onvifPort: 8000, rtspPort: 554, baichuanPort: 9000, statusPollS: 30, poeSwitch: { model: 'none', ports: 8, offSeconds: 10 } },
+  cameras: {},
+  cameraOrder: [],
+  poeSwitch: { model: 'none', ports: 8, offSeconds: 10 },
   go2rtc: { binary: 'go2rtc', rtspPort: 18554, apiPort: 11984 },
   stills: { enabled: true, stream: 'sub', intervalS: 1, size: '896x512', quality: 5 },
   previews: { tileSize: '160x90', grid: '10x6', quality: 7 },
@@ -60,7 +80,7 @@ export const DEFAULTS: Config = {
   storage: { maxPercent: 85, minFreeBytes: 2 * 1024 ** 3, keepHours: { stills: 24, clips: 24, previews: 72 } },
   sse: { maxClients: 50, queuePerClient: 1000, pingS: 15 },
   composition: {},
-  ftp: { enabled: false, port: 2121, passive: '30000-30009', user: 'camera', tls: true, stream: 'main', stalledHours: 6 },
+  ftp: { enabled: false, port: 2121, passive: '30000-30009', tls: true, stream: 'main', stalledHours: 6 },
   recordings: { cacheMB: 2048 },
   health: { diskPercent: 90, tempC: 75 },
   host: { stats: 'auto' },

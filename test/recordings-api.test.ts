@@ -371,7 +371,7 @@ describe('GET /recordings/:id: validators, ranges past the end, a dropped transf
     } finally {
       sim.sim.engine.faults.clear('baichuan.dropMidway');
     }
-    const cam = p.proxy.running.camera;
+    const cam = p.proxy.running.cameras.cam1;
     const port = cam.baichuanPort;
     cam.baichuanPort = await freePort(); // nothing listens: the connect fails
     p.proxy.recordings.session.close();

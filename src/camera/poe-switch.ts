@@ -222,10 +222,10 @@ export class PoeSwitch {
   // Why the switch can't be used, naming the setting; null when it can.
   notConfigured(): string | null {
     const c = this.d.config();
-    if (c.model === 'none') return 'camera.poeSwitch.model is none';
-    if (!c.host) return 'camera.poeSwitch.host is not set';
-    if (!c.port) return 'camera.poeSwitch.port is not set';
-    if (c.port > c.ports) return 'camera.poeSwitch.port is above camera.poeSwitch.ports';
+    if (c.model === 'none') return 'poeSwitch.model is none';
+    if (!c.host) return 'poeSwitch.host is not set';
+    if (!c.port) return "the camera's poeSwitch.port is not set";
+    if (c.port > c.ports) return "the camera's poeSwitch.port is above poeSwitch.ports";
     if (!this.d.password()) return 'CAMPROXY_POE_SWITCH_PASSWORD is not set';
     return null;
   }

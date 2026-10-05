@@ -12,7 +12,8 @@
   import { parseSetting, resetCounts, resetLabel, resetPlan, sameBadge, type ResetTo, type SettingType } from '../lib/settings';
 
   // `env`: the variable that sets it (source env: read-only here).
-  interface Setting { value: unknown; source: 'default' | 'file' | 'override' | 'env'; env?: string; restart: boolean; pending: boolean; next?: unknown; type?: SettingType; resetTo?: ResetTo }
+  // `legacy`: read from a legacy `camera` object in config.json.
+  interface Setting { value: unknown; source: 'default' | 'file' | 'override' | 'env'; env?: string; restart: boolean; pending: boolean; next?: unknown; type?: SettingType; resetTo?: ResetTo; legacy?: true }
   let view = $state<Record<string, Setting>>({});
   let drafts = $state<Record<string, string>>({});
   let message = $state('');
@@ -123,7 +124,7 @@
           {#each paths as p (p)}
             {@const s = view[p]}
             {@const same = s.source === 'override' ? sameBadge(p, s.resetTo) : null}
-            {#if p === 'camera.name'}
+            {#if /^cameras\.[^.]+\.name$/.test(p)}
             <tr data-testid="setting-camera-name">
               <td><label for="camera-name">Camera name (stored on the camera)</label></td>
               <td>
@@ -143,7 +144,7 @@
                 <input value={drafts[p] ?? shown(s.value)} oninput={(e) => (drafts[p] = e.currentTarget.value)} data-testid="input-{p}" disabled={(typeof s.value === 'object' && s.value !== null) || isEnvSet(s)} readonly={isEnvSet(s)} title={isEnvSet(s) ? envNote(s) : undefined} />
                 {#if isEnvSet(s)}<div class="env-note" data-testid="env-note-{p}">{envNote(s)}</div>{/if}
               </td>
-              <td><span class="badge {s.source}" class:same={!!same} data-testid="source-{p}" title={same?.title}>{same ? same.text : s.source}</span>{#if s.restart}<span class="badge restart" title="applies after a restart">restart</span>{/if}{#if s.pending}<span class="badge pending">next: {shown(s.next)}</span>{/if}</td>
+              <td><span class="badge {s.source}" class:same={!!same} data-testid="source-{p}" title={same?.title}>{same ? same.text : s.legacy ? 'config.json (legacy camera)' : s.source}</span>{#if s.restart}<span class="badge restart" title="applies after a restart">restart</span>{/if}{#if s.pending}<span class="badge pending">next: {shown(s.next)}</span>{/if}</td>
               <td class="actions">
                 {#if drafts[p] !== undefined}<button onclick={() => void save(p)} data-testid="save-{p}">Save</button>{/if}
                 {#if s.source === 'override' && !same}<button onclick={() => void reset(p)} data-testid="reset-{p}">{resetLabel(p, s.resetTo && { ...s.resetTo, means: undefined })}{#if s.resetTo?.means}{' '}<span class="means">({s.resetTo.means})</span>{/if}</button>{/if}

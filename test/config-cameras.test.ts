@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULTS, type Config } from '../src/config/defaults';
+import { cameraDefaults, DEFAULTS, type Config } from '../src/config/defaults';
 import { cameraConfig, cameraEvents, cameraIds, firstCameraId } from '../src/config/cameras';
 
 const cfg = (): Config => {
   const c = structuredClone(DEFAULTS);
-  c.camera.host = '192.0.2.10';
-  c.camera.poeSwitch = { model: 'sscpoe-web', host: '192.0.2.2', port: 8, ports: 8, offSeconds: 10 };
+  c.cameras = { cam1: { ...cameraDefaults('cam1'), name: 'Den', host: '192.0.2.10', poeSwitch: { port: 8 }, ftp: { user: 'camera' } } };
+  c.cameraOrder = ['cam1'];
+  c.poeSwitch = { model: 'sscpoe-web', host: '192.0.2.2', ports: 8, offSeconds: 10 };
   return c;
 };
 

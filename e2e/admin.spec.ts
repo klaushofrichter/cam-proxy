@@ -182,14 +182,15 @@ test('Reset only where it changes something, and says what none / not set means'
   expect((await request.delete('/control/config', { headers: auth })).ok()).toBe(true);
   const put = await request.put('/control/config', { headers: auth, data: { camera: { poeSwitch: { model: 'sscpoe-web', host: '192.0.2.97', port: 8, ports: 8, offSeconds: 15 } } } });
   expect(put.ok()).toBe(true);
-  const row = (k: string) => `camera.poeSwitch.${k}`;
+  // Several cameras (spec 2026-10-05-multi-camera-host-design §4.1): the switch is the host's, the port the camera's.
+  const row = (k: string) => (k === 'port' ? 'cameras.cam1.poeSwitch.port' : `poeSwitch.${k}`);
   try {
     await signIn(page);
     await page.getByTestId('nav-settings').click();
     await expect(page.getByTestId(`source-${row('ports')}`)).toHaveText('default');
     await expect(page.getByTestId(`reset-${row('model')}`)).toHaveText('Reset – none (no PoE switch: power-cycle off)');
     await expect(page.getByTestId(`reset-${row('host')}`)).toHaveText('Reset – not set (PoE switch control off: no switch address)');
-    await expect(page.getByTestId(`reset-${row('port')}`)).toHaveText('Reset – not set (PoE switch control off: no camera port)');
+    await expect(page.getByTestId(`reset-${row('port')}`)).toHaveText('Reset – not set (PoE switch control off for this camera: no port)');
     await expect(page.getByTestId(`reset-${row('offSeconds')}`)).toHaveText('Reset – 10 s');
 
     // An older proxy stored ports = 8 (the default) as an override: the answer
@@ -223,10 +224,10 @@ test('Reset only where it changes something, and says what none / not set means'
         }
         await page.getByTestId('reset-all').click();
         const items = page.getByTestId('confirm-items');
-        await expect(items).toContainText('camera.poeSwitch.model: sscpoe-web → none (no PoE switch: power-cycle off)');
-        await expect(items).toContainText('camera.poeSwitch.host: 192.0.2.97 → not set (PoE switch control off: no switch address)');
-        await expect(items).toContainText('camera.poeSwitch.offSeconds: 15 s → 10 s');
-        await expect(items).toContainText('1 override equal to the default is removed too, no change in effect: camera.poeSwitch.ports');
+        await expect(items).toContainText('poeSwitch.model: sscpoe-web → none (no PoE switch: power-cycle off)');
+        await expect(items).toContainText('poeSwitch.host: 192.0.2.97 → not set (PoE switch control off: no switch address)');
+        await expect(items).toContainText('poeSwitch.offSeconds: 15 s → 10 s');
+        await expect(items).toContainText('1 override equal to the default is removed too, no change in effect: poeSwitch.ports');
         await expect(page.getByTestId('confirm-ok')).toHaveText('Reset 4 settings');
         if (shots.length) await page.screenshot({ path: `${process.env.SHOT_DIR}/reset-dialog-${name}-${scheme}.png` });
         await page.getByTestId('confirm-cancel').click();

@@ -15,9 +15,12 @@ export interface ResolvedCamera {
   analytics: { kinds: Config['analytics']['kinds'] };
 }
 
-// The configured cameras' ids in config order (today: the one camera).
+const defined = <T extends object>(o: T): Partial<T> => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as Partial<T>;
+
+// The configured cameras' ids in config order (never the object key order:
+// integer-like ids would sort numerically).
 export function cameraIds(c: Config): string[] {
-  return [c.camera.id];
+  return [...c.cameraOrder];
 }
 
 export function firstCameraId(c: Config): string {
@@ -25,20 +28,24 @@ export function firstCameraId(c: Config): string {
 }
 
 // Live: the tracker and the intake read maxOpenMin and poll.* on every use,
-// and a Settings change applies at once (as before several cameras).
-export function cameraEvents(c: Config, _id: string): Config['events'] {
-  return c.events;
+// and a Settings change applies at once — the host object itself while the
+// camera overrides nothing, else a copy with its override.
+export function cameraEvents(c: Config, id: string): Config['events'] {
+  const p = c.cameras[id]?.events?.poll?.enabled;
+  return p === undefined ? c.events : { ...structuredClone(c.events), poll: { ...structuredClone(c.events.poll), enabled: p } };
 }
 
 export function cameraConfig(c: Config, id: string): ResolvedCamera | undefined {
-  if (id !== c.camera.id) return undefined;
-  const { poeSwitch, ...cam } = structuredClone(c.camera);
+  const n = Object.hasOwn(c.cameras, id) ? c.cameras[id] : undefined;
+  if (!n) return undefined;
+  const o = structuredClone(n);
   return {
-    ...cam,
-    poeSwitch,
-    ftp: { user: c.ftp.user, enabled: c.ftp.enabled, stream: c.ftp.stream },
-    stills: structuredClone(c.stills),
-    events: structuredClone(c.events),
-    analytics: { kinds: { ...c.analytics.kinds } },
+    id, name: o.name, host: o.host, protocol: o.protocol, ...(o.tlsName !== undefined ? { tlsName: o.tlsName } : {}), ...(o.webUiUrl !== undefined ? { webUiUrl: o.webUiUrl } : {}),
+    user: o.user, onvifPort: o.onvifPort, rtspPort: o.rtspPort, baichuanPort: o.baichuanPort, statusPollS: o.statusPollS,
+    poeSwitch: { ...structuredClone(c.poeSwitch), ...(o.poeSwitch?.port !== undefined ? { port: o.poeSwitch.port } : {}) },
+    ftp: { user: o.ftp?.user ?? id, enabled: o.ftp?.enabled ?? c.ftp.enabled, stream: o.ftp?.stream ?? c.ftp.stream },
+    stills: { ...structuredClone(c.stills), ...defined(o.stills ?? {}) },
+    events: structuredClone(cameraEvents(c, id)),
+    analytics: { kinds: { ...c.analytics.kinds, ...defined(o.analytics?.kinds ?? {}) } },
   };
 }

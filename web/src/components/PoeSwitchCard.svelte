@@ -5,7 +5,7 @@
 
   // The camera's PoE switch (#85): what is configured, the last reading, and
   // a read on request (never polled: the switch has one web session, and
-  // each read takes it for a moment). The settings are camera.poeSwitch.* in
+  // each read takes it for a moment). The settings are poeSwitch.* (and the camera's cameras.<id>.poeSwitch.port) in
   // the camera group; the password is CAMPROXY_POE_SWITCH_PASSWORD.
   const sw = $derived($status?.camera.poeSwitch ?? null);
   let message = $state('');
@@ -28,7 +28,7 @@
     <h3>PoE switch</h3>
     <p class="line" data-testid="poe-switch-line">{poeLine(sw)}</p>
     {#if sw.last}<p class="small">Switch {sw.last.sn ?? '—'}{sw.last.firmware ? `, firmware ${sw.last.firmware}` : ''}; port {sw.last.port} is internal index {sw.last.index}.</p>{/if}
-    <p class="small">Model, host, port and the off time are <span class="mono">camera.poeSwitch.*</span> below; they apply at once. The password is the secret <span class="mono">CAMPROXY_POE_SWITCH_PASSWORD</span> ({sw.passwordSet ? 'set' : 'not set'}). A read or a power-cycle only works while nobody is logged in to the switch's web UI.</p>
+    <p class="small">Model, host and the off time are <span class="mono">poeSwitch.*</span> below, the port <span class="mono">cameras.&lt;id&gt;.poeSwitch.port</span>; they apply at once. The password is the secret <span class="mono">CAMPROXY_POE_SWITCH_PASSWORD</span> ({sw.passwordSet ? 'set' : 'not set'}). A read or a power-cycle only works while nobody is logged in to the switch's web UI.</p>
     {#if sw.configured}
       <div><button onclick={() => void read()} disabled={reading || sw.busy} data-testid="poe-switch-read">Read the switch now</button></div>
     {/if}

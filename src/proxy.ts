@@ -15,8 +15,7 @@ import { CameraWorker, cameraWebUi } from './cameras/worker';
 import { cameraConfig, cameraIds } from './config/cameras';
 import { restartProcess } from './process-restart';
 import type { Config } from './config/defaults';
-import { getPath, needsProcessRestart, needsRestart, setPath, type Loaded } from './config/load';
-import { leafPaths } from './config/schema';
+import { getPath, needsProcessRestart, needsRestart, setPath, settingPaths, type Loaded } from './config/load';
 import { cameraFtpOff, setupCameraFtp, testCameraFtp, type FtpTarget } from './clips/camera-ftp';
 import { createClipsSide, type ClipsSide } from './clips/side';
 import type { RecordingsSide } from './recordings/side';
@@ -364,7 +363,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
 
   // Copies the loaded settings into `running`, except those `keep` holds back.
   const applySettings = (keep: (path: string) => boolean) => {
-    for (const p of leafPaths()) if (!keep(p)) setPath(running as unknown as Record<string, unknown>, p, structuredClone(getPath(loaded.config, p)));
+    for (const p of settingPaths(loaded.config)) if (!keep(p)) setPath(running as unknown as Record<string, unknown>, p, structuredClone(getPath(loaded.config, p)));
   };
   // New settings from the control API: live ones take effect now.
   const setLoaded = (next: Loaded) => {

@@ -8,8 +8,9 @@ import { cameraNameProblem } from '../camera/name-rules';
 import type { PowerCycleAnswer, RebootAnswer, RebootRequester, RebootState, TooSoon } from '../camera/reboot';
 import { PoeSwitchError, type PoeOnResult, type PoeSwitchStatus, type PortReading } from '../camera/poe-switch';
 import type { Config } from '../config/defaults';
-import { applyOverrides, ConfigError, getPath, needsProcessRestart, needsRestart, removeAllOverrides, removeOverride, resetTarget, type Loaded } from '../config/load';
-import { leafAt, leafPaths } from '../config/schema';
+import { applyOverrides, ConfigError, getPath, needsProcessRestart, needsRestart, removeAllOverrides, removeOverride, resetTarget, settingPaths, type Loaded } from '../config/load';
+import { leafAt } from '../config/schema';
+import { cameraConfig, cameraIds } from '../config/cameras';
 import { FtpNotConfiguredError, type FtpTarget } from '../clips/camera-ftp';
 import type { CameraFtpView, ClipsStall } from '../clips/ftp-health';
 import type { IntakeState } from '../events/intake';
@@ -107,9 +108,11 @@ interface ControlDeps {
 // The effective configuration for the UI: value (what runs), source, restart
 // flag, the next value for restart settings changed but not yet applied, and
 // the type (integer, boolean or string), for settings without a value.
+// `legacy`: a config.json value read from a legacy `camera` object (spec
+// 2026-10-05-multi-camera-host-design §4.2: "config.json (legacy camera)").
 function configView(loaded: Loaded, running: Config) {
   return Object.fromEntries(
-    leafPaths().map((p) => {
+    settingPaths(running).map((p) => {
       const restart = needsRestart(p);
       const value = getPath(running, p);
       const next = getPath(loaded.config, p);
@@ -117,7 +120,7 @@ function configView(loaded: Loaded, running: Config) {
       // `env`: the variable that sets it (read-only on the Settings page).
       // `resetTo` (an override): what Reset goes back to, the file's value or the
       // default; `same` when that changes nothing, `means` for an unset state.
-      return [p, { value, source: loaded.sources[p], ...(loaded.envNames[p] ? { env: loaded.envNames[p] } : {}), restart, pending, ...(pending ? { next } : {}), type: leafAt(p)?.type, ...(loaded.sources[p] === 'override' ? { resetTo: resetTarget(loaded, p) } : {}) }];
+      return [p, { value, source: loaded.sources[p], ...(loaded.envNames[p] ? { env: loaded.envNames[p] } : {}), restart, pending, ...(pending ? { next } : {}), type: leafAt(p)?.type, ...(loaded.sources[p] === 'override' ? { resetTo: resetTarget(loaded, p) } : {}), ...(loaded.legacyCamera && loaded.sources[p] === 'file' && (p.startsWith('cameras.') || p.startsWith('poeSwitch.')) ? { legacy: true } : {}) }];
     }),
   );
 }
@@ -354,7 +357,7 @@ export function controlApi(d: ControlDeps): express.Router {
   const recordChanges = (req: express.Request, before: Config, all = false) => {
     const after = d.loaded().config;
     // `restart`: the change waits for a restart ('restart'), or for a new process ('process').
-    const changes = leafPaths()
+    const changes = settingPaths(after)
       .map((p) => ({ key: p, from: getPath(before, p), to: getPath(after, p), ...(needsProcessRestart(p) ? { restart: 'process' } : needsRestart(p) ? { restart: 'restart' } : {}) }))
       .filter((c) => JSON.stringify(c.from) !== JSON.stringify(c.to));
     if (changes.length) d.audit.write({ action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', user: 'admin', ...who(req), message: `${all ? 'Settings reset to defaults' : 'Settings changed'}: ${changes.map((c) => c.key).join(', ')}`, details: { changes, ...(all ? { reset: 'all' } : {}) } });
@@ -509,14 +512,17 @@ export function controlApi(d: ControlDeps): express.Router {
       // probe, the current camera marked, and whether the .env file can be written.
       case 'find-camera': {
         const r = await d.findCamera();
-        const current = splitHost(d.running().camera.host).hostname.toLowerCase();
-        return void res.json({ devices: r.devices.map((x) => ({ ...x, current: x.address.toLowerCase() === current })), tookMs: r.tookMs, envFile: envFileState(d.envFile()) });
+        // `current`: the address of a configured camera.
+        const hosts = cameraIds(d.running()).map((id) => splitHost(cameraConfig(d.running(), id)!.host).hostname.toLowerCase());
+        return void res.json({ devices: r.devices.map((x) => ({ ...x, current: hosts.includes(x.address.toLowerCase()) })), tookMs: r.tookMs, envFile: envFileState(d.envFile()) });
       }
       // Use this address (pi-config spec §4): CAMERA_HOST into the .env file
       // (backup, atomic), audited; the UI restarts the proxy next.
       case 'camera-address': {
         const host: unknown = req.body?.host;
         if (!validCameraHost(host)) return fail(400, 'invalid', 'host: an address or name, optional :port');
+        // CAMERA_HOST is the one camera's address (spec §4.2).
+        if (cameraIds(d.running()).length > 1) return fail(409, 'not_available', 'several cameras: set cameras[].host in config.json');
         const line = `CAMERA_HOST=${host}`;
         const base = { action: 'camera-address', category: ['configuration'], type: ['change'], user: 'admin', ...who(req) };
         try {

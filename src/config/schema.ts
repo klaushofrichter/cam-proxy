@@ -100,7 +100,7 @@ export const HOST_POE_SWITCH: Node = {
   offSeconds: int(5, 60, 'seconds the PoE stays off in a power-cycle'),
 };
 
-const SETTINGS: Node = {
+export const SETTINGS: Node = {
   server: {
     port: port('HTTP port for the API, control API and admin UI'),
     dataDir: { type: 'string', pattern: '^.+$', doc: 'data folder; relative to the config file' },
@@ -108,7 +108,10 @@ const SETTINGS: Node = {
     trustProxy: unset(int(0, 5, 'reverse proxies in front (the cluster ingress: 1); rate limits then count clients by X-Forwarded-For', true), 'no reverse proxy: rate limits count the connecting address'),
     publicUrl: unset({ type: 'string', pattern: '^https?://[^\\s]+$', optional: true, doc: 'where people reach this proxy (its admin UI); reported in /api/cameras so clients can link to it' }, 'no link to this proxy for clients'),
   },
-  camera: LEGACY_CAMERA,
+  cameras: collection(CAMERA_NODE, 'the cameras of this proxy, in display order (config.json: a list; overrides: by id)'),
+  // The PoE switch the cameras hang on (issue #85; one per host, spec §4.1).
+  // Applies at once; the password is CAMPROXY_POE_SWITCH_PASSWORD.
+  poeSwitch: HOST_POE_SWITCH,
   go2rtc: {
     binary: unset({ type: 'string', pattern: '^.+$', optional: true, doc: 'go2rtc binary started by the proxy' }, 'no go2rtc started (go2rtc.url instead)'),
     url: unset({ type: 'string', pattern: '^https?://[^\\s]+$', optional: true, doc: 'go2rtc API when it runs as its own container' }, 'the proxy starts go2rtc itself (go2rtc.url is reserved, no effect yet)'),
@@ -175,7 +178,6 @@ const SETTINGS: Node = {
     enabled: unset({ type: 'boolean', doc: 'accept clip uploads from the camera' }, 'no clip uploads from the camera', false),
     port: port('FTP control port'),
     passive: { type: 'string', pattern: '^[1-9][0-9]{0,4}-[1-9][0-9]{0,4}$', doc: 'passive port range, A-B' },
-    user: LEGACY_FTP_USER,
     tls: { type: 'boolean', doc: 'require FTPS' },
     stream: { type: 'string', enum: ['main', 'sub'], doc: 'the stream the camera uploads' },
     stalledHours: int(1, 72, 'warn on the Status page when no clip arrived for this many hours while the camera recorded events'),
@@ -290,7 +292,8 @@ export function leafAt(path: string, node: Node = SETTINGS): Leaf | undefined {
 
 // The JSON Schema written to config.schema.json (see scripts/gen-schema.ts); a
 // collection is an array of its node, id required.
-export function jsonSchema(node: Node = SETTINGS, extra: Record<string, object> = {}): object {
+// One node as JSON Schema (config.schema.json; the legacy camera object too).
+export function jsonSchemaOf(node: Node): object {
   const leaf = (v: Leaf) =>
     v.type === 'boolean' ? { type: 'boolean', description: v.doc }
     : v.type === 'integer' ? { type: 'integer', minimum: v.min, maximum: v.max, ...(v.oneOf ? { enum: v.oneOf } : {}), description: v.doc }
@@ -300,6 +303,18 @@ export function jsonSchema(node: Node = SETTINGS, extra: Record<string, object> 
     additionalProperties: false,
     properties: Object.fromEntries(Object.entries(n).map(([k, v]) => [k, isLeaf(v) ? leaf(v) : isCollection(v) ? { type: 'array', description: v.doc, items: { ...conv(v.collection), required: ['id'] } } : conv(v)])),
   });
-  const root = conv(node) as { properties: Record<string, object> };
+  return conv(node);
+}
+
+export function jsonSchema(node: Node = SETTINGS, extra: Record<string, object> = {}): object {
+  const root = jsonSchemaOf(node) as { properties: Record<string, object> };
   return { $schema: 'https://json-schema.org/draft/2020-12/schema', title: 'cam-proxy config.json', ...root, properties: { ...root.properties, ...extra } };
+}
+
+// config.schema.json: the settings plus the legacy one-camera `camera` object
+// (spec 2026-10-05-multi-camera-host-design §4.1), and today's top-level ftp.user.
+export function configJsonSchema(): object {
+  const js = jsonSchema(SETTINGS, { camera: { ...jsonSchemaOf(LEGACY_CAMERA), description: 'legacy: one camera (read as cameras: [camera]); use cameras' } }) as { properties: Record<string, { properties: Record<string, object> }> };
+  js.properties.ftp.properties.user = { ...(jsonSchemaOf({ user: LEGACY_FTP_USER }) as { properties: { user: object } }).properties.user, description: 'legacy (with camera): the FTP user the camera logs in as; use cameras[].ftp.user' };
+  return js;
 }

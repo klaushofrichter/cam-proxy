@@ -198,7 +198,7 @@ describe('POST /control/actions/camera-powercycle', () => {
     try {
       const calls = sw.calls.length;
       const r = await post(p.base);
-      expect([r.status, r.body]).toEqual([409, { error: 'not_configured', detail: 'camera.poeSwitch.model is none' }]);
+      expect([r.status, r.body]).toEqual([409, { error: 'not_configured', detail: 'poeSwitch.model is none' }]);
       expect((await request(p.base).get('/control/status').set(admin())).body.camera.poeSwitch).toMatchObject({ model: 'none', configured: false, passwordSet: true });
       await configure(q.base);
       const r2 = await post(q.base);
@@ -351,7 +351,7 @@ describe('POST /control/actions/camera-powercycle', () => {
     const p = await startProxy(sim, { env: { CAMPROXY_POE_SWITCH_PASSWORD: PASSWORD, CAMPROXY_AUDIT_TOKEN: AUDIT_TOKEN } });
     const on = (t = ADMIN_TOKEN) => request(p.base).post('/control/actions/camera-poe-on').set(auth(t));
     try {
-      expect((await on()).body).toEqual({ error: 'not_configured', detail: 'camera.poeSwitch.model is none' });
+      expect((await on()).body).toEqual({ error: 'not_configured', detail: 'poeSwitch.model is none' });
       await configure(p.base);
       expect((await on(CLIENT_TOKEN)).status).toBe(403);
       expect((await on(AUDIT_TOKEN)).status).toBe(403);
