@@ -324,10 +324,13 @@ export class CameraWorker extends EventEmitter {
     const s = this.stills;
     if (!s) return;
     this.stopping = true;
+    // go2rtc first: a start still waiting for it ends at once, and its ports
+    // are free when this returns (live test 2026-10-05).
+    const go2rtcStopped = s.go2rtc.stop();
     await this.stillsStarting;
     this.stopping = false;
     await s.grabber.stop();
-    await s.go2rtc.stop();
+    await go2rtcStopped;
     await s.store.flush();
   }
 

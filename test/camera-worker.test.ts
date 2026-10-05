@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'fs';
+import { chmodSync, mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -23,11 +23,12 @@ afterAll(async () => {
 
 const NO_HOOKS = { onCameraCheck() {}, onResubscribe() {}, onStill() {}, onStillMissing() {}, onRecordingDownload() {} };
 
-function worker(o: { host?: string; over?: Partial<WorkerDeps>; stills?: boolean } = {}) {
+function worker(o: { host?: string; over?: Partial<WorkerDeps>; stills?: boolean; go2rtc?: string } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'camproxy-worker-'));
   writeFileSync(join(dir, 'config.json'), JSON.stringify({
     camera: { host: o.host ?? sim.camera.host, protocol: 'http', user: 'proxy', onvifPort: sim.ports.onvif, rtspPort: sim.ports.rtsp || 554, baichuanPort: sim.camera.baichuanPort, statusPollS: 5 },
     stills: { enabled: o.stills ?? false },
+    ...(o.go2rtc ? { go2rtc: { binary: o.go2rtc } } : {}),
     server: { logLevel: 'silent' },
   }));
   const loaded = loadConfig({ CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: sim.password }, { cwd: dir });
@@ -145,4 +146,22 @@ describe('supervision (spec §3.3)', () => {
     await w.stop();
     catalog.close();
   });
+
+  // Live test 2026-10-05: a stop while go2rtc is still starting ends it at once (its ports free), not after the ready wait.
+  it('a stop during the go2rtc start ends go2rtc at once', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'camproxy-slow-go2rtc-'));
+    const fake = join(dir, 'go2rtc');
+    writeFileSync(fake, '#!/bin/sh\nexec sleep 30\n');
+    chmodSync(fake, 0o755);
+    const { w, catalog } = worker({ stills: true, go2rtc: fake });
+    await w.start();
+    await until(() => w.stills?.go2rtc.pid() !== undefined);
+    const t0 = Date.now();
+    await w.stopSwitch();
+    await w.stopRecordings();
+    await w.stop();
+    expect(Date.now() - t0).toBeLessThan(4000);
+    expect(w.stills?.go2rtc.pid()).toBeUndefined();
+    catalog.close();
+  }, 20_000);
 });

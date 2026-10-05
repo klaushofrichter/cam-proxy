@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { trackChild } from '../children';
 import { randomBytes } from 'crypto';
 import { setPriority } from 'os';
 import { linkSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs';
@@ -167,6 +168,7 @@ export function runFfmpeg(args: string[], signal: AbortSignal, onStdout: (text: 
   return new Promise<void>((resolve, reject) => {
     if (signal.aborted) return reject(new ComposeError('cancelled'));
     const p = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    trackChild(p);
     lower(p.pid);
     let err = '';
     p.stdout.on('data', (b: Buffer) => onStdout(b.toString()));
