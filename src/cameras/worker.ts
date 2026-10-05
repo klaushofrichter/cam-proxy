@@ -46,6 +46,7 @@ export interface WorkerDeps {
   password: () => string;
   poeSwitchPassword: () => string | undefined;
   ftpTarget: () => FtpTarget;
+  ftpPassword?: () => string | undefined; // the host's FTP password: no indexer for uploads without it
   // The host's go2rtc (spec 2026-10-05-multi-camera-host-design §8.5); none without go2rtc.binary.
   go2rtc: () => Go2rtc | undefined;
   catalog: Catalog;
@@ -96,6 +97,7 @@ export class CameraWorker extends EventEmitter {
   private lastResubscribes = 0;
   private stillsStarting: Promise<void> | undefined;
   private stillsAbort: (() => void) | undefined;
+  private ftpIx: ClipIndexer | undefined;
   private stopping = false;
   private watchStarted = false;
   private restarting: Promise<void> | undefined;
@@ -226,6 +228,12 @@ export class CameraWorker extends EventEmitter {
     return new ClipIndexer({ catalog: d.catalog, log: d.log, config: d.running, timeInfo: () => this.client.timeInfo(), dataDir: d.running().server.dataDir, cam: this.id, stored: (bytes) => d.storage.noteWritten('clips', bytes, 1, { growth }) });
   }
 
+  // The indexer of this camera's FTP uploads (spec 2026-10-05-multi-camera-host-design §7);
+  // none while FTP is off for it or the host has no FTP password.
+  ftpIndexer(): ClipIndexer | undefined {
+    return this.ftpIx;
+  }
+
   streamStatus(): { enabled: boolean; up: boolean; go2rtcUp: boolean; lastFrameTs: number | null } {
     const s = this.stills;
     return { enabled: !!s, up: s?.grabber.up() ?? false, go2rtcUp: s?.go2rtc.up() ?? false, lastFrameTs: s?.grabber.lastFrameTs() ?? null };
@@ -287,6 +295,16 @@ export class CameraWorker extends EventEmitter {
     const tracker = new EventTracker(d.catalog, d.log, c.id, events);
     this.intake = new EventIntake({ client: this.client, tracker, cfg: events, onvif: { host: splitHost(c.host).hostname, port: c.onvifPort, user: c.user, password: d.password() } });
     this.lastResubscribes = 0;
+    this.ftpIx = undefined;
+    if (c.ftp.enabled && d.ftpPassword?.()) {
+      this.ftpIx = this.makeIndexer(true);
+      // Pictures stored before they were paired by time (2026-09-30).
+      try {
+        this.ftpIx.relinkSnapshots();
+      } catch (err) {
+        logger.warn({ cameraId: this.id, err: (err as Error).message }, 'snapshots_relink_failed');
+      }
+    }
     this.intake.on('state', (st: { resubscribes: number }) => {
       for (; this.lastResubscribes < st.resubscribes; this.lastResubscribes++) d.hooks.onResubscribe();
     });

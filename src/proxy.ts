@@ -20,7 +20,7 @@ import { restartProcess } from './process-restart';
 import type { Config } from './config/defaults';
 import { getPath, needsProcessRestart, needsRestart, setPath, settingPaths, type Loaded } from './config/load';
 import { cameraFtpOff, setupCameraFtp, testCameraFtp, type FtpTarget } from './clips/camera-ftp';
-import { createClipsSide, type ClipsSide } from './clips/side';
+import { createClipsSide, ftpUsers, type ClipsSide } from './clips/side';
 import type { RecordingsSide } from './recordings/side';
 import { validId } from './recordings/names';
 import { logger, setLogLevel, withoutQuery } from './log';
@@ -180,6 +180,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         password: () => cameraPassword(loaded.secrets, id),
         poeSwitchPassword: () => loaded.secrets.poeSwitchPassword,
         ftpTarget: ftpTargetFor(id),
+        ftpPassword: () => loaded.secrets.ftpPassword,
         catalog,
         log,
         sse,
@@ -203,22 +204,28 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   });
   storage.on('run', metrics.onRetention);
   recordingBusy = (p) => cams.list().some((w) => w.recordings.cache.busy(p));
-  // The FTP server (host-wide): uploads go to the one camera with FTP on (Ruling P1-2).
+  // The FTP server (host-wide, spec 2026-10-05-multi-camera-host-design §7):
+  // one for every camera with FTP on, a user each; a login from another
+  // address than the camera's is refused and audited (throttled per address and user).
   let clips: ReturnType<typeof createClipsSide> | undefined;
-  const ftpCamera = () => cams.list().find((w) => w.cam().ftp.enabled);
+  const ftpRefusals = new RefusalThrottle();
   const buildClips = () => {
     clips = undefined;
-    const w = ftpCamera();
-    if (!w) return;
+    if (!cams.list().some((w) => w.cam().ftp.enabled)) return;
     if (!loaded.secrets.ftpPassword) return void logger.error('ftp_enabled_without_password');
-    const indexer = w.makeIndexer(true);
-    // Pictures stored before they were paired by time (2026-09-30).
-    try {
-      indexer.relinkSnapshots();
-    } catch (err) {
-      logger.warn({ err: (err as Error).message }, 'snapshots_relink_failed');
-    }
-    clips = createClipsSide({ config: running, user: w.cam().ftp.user, password: loaded.secrets.ftpPassword, indexer, accept: () => !storage.paused() });
+    clips = createClipsSide({
+      config: running,
+      password: loaded.secrets.ftpPassword,
+      users: () => ftpUsers(running),
+      indexer: (cam) => cams.get(cam)?.ftpIndexer(),
+      accept: () => !storage.paused(),
+      onRefused: (r) => {
+        const t = ftpRefusals.take(r.ip, r.user);
+        if (!t.record) return;
+        const cam = ftpUsers(running).get(r.user)?.cam;
+        audit.write({ action: 'ftp-login-refused', category: ['authentication'], type: ['denied'], outcome: 'failure', ip: r.ip, ...(cam ? { camera: cam } : {}), message: `FTP login as ${r.user} from ${r.ip} refused: the camera is at ${r.expected}`, details: { user: r.user, expected: r.expected, ...(t.suppressed ? { suppressed: t.suppressed } : {}) } });
+      },
+    });
   };
   buildClips();
   const startClips = async () => {
@@ -417,11 +424,12 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       audit.write({ action: 'auth-refused', category: ['authentication'], type: ['denied'], outcome: 'failure', ip, userAgent: req.get('user-agent'), message: `Refused ${req.method} ${path} (${info.reason})`, ecs: { http: { request: { method: req.method } }, url: { path } }, details: { auth: { tokenKind: info.tokenKind, reason: info.reason, ...(t.suppressed ? { suppressed: t.suppressed } : {}) } } });
     },
   };
-  // One camera's FTP status: the server's figures only for the camera that
-  // uploads to it (Ruling P1-2); the clip count of every camera while there
-  // is one (the Pi's number as before), else this camera's.
+  // One camera's FTP status: the server's figures for this camera's user;
+  // the clip count of every camera while there is one (the Pi's number as
+  // before), else this camera's.
   const ftpStatusOf = (w: CameraWorker) => {
-    const mine = clips !== undefined && ftpCamera() === w;
+    const mine = clips !== undefined && w.cam().ftp.enabled;
+    const ix = w.ftpIndexer();
     return {
       enabled: w.cam().ftp.enabled,
       listening: mine ? clips!.side.listening() : false,
@@ -429,10 +437,10 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       tls: running.ftp.tls,
       publicHost: running.ftp.publicHost ?? null,
       passwordSet: !!loaded.secrets.ftpPassword,
-      lastUpload: mine ? clips!.side.lastUpload() : null,
-      lastClip: mine ? clips!.side.indexer.lastIndexed() : null,
+      lastUpload: mine ? clips!.side.lastUpload(w.id) : null,
+      lastClip: mine ? (ix?.lastIndexed() ?? null) : null,
       clips: cams.size === 1 ? countAllClips(catalog) : countAllClips(catalog, w.id),
-      failures: mine ? clips!.side.uploadFailures() + clips!.side.indexer.failures() : 0,
+      failures: mine ? clips!.side.uploadFailures(w.id) + (ix?.failures() ?? 0) : 0,
       camera: w.cam().ftp.enabled ? w.ftpWatch.view() : null,
       stalled: w.clipsHealth(),
     };

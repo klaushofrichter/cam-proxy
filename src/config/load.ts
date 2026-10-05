@@ -103,10 +103,18 @@ function crossCheck(c: Config): void {
     const iv = cameraConfig(c, id)!.stills.intervalS;
     if (cols * rows < 60 / iv) throw new ConfigError(`previews.grid: ${c.previews.grid} holds fewer than the ${60 / iv} tiles of a minute${c.cameraOrder.length > 1 ? ` (camera ${id})` : ''}`);
   }
-  // Ruling P1-2: FTP for one camera until the per-camera users of phase 2.
-  if (c.cameraOrder.filter((id) => cameraConfig(c, id)!.ftp.enabled).length > 1) throw new ConfigError('ftp.enabled: several cameras need per-camera FTP users (multi-camera phase 2); enable it for one camera');
   const [a, b] = c.ftp.passive.split('-').map(Number);
   if (a > 65535 || b > 65535 || a > b || b - a > 100) throw new ConfigError('ftp.passive: must be A-B with A <= B, at most 100 ports');
+  // One FTP server for every camera (spec 2026-10-05-multi-camera-host-design §7):
+  // a user each, and at least 10 passive ports per camera (one camera keeps today's rules).
+  const ftpCams = c.cameraOrder.filter((id) => cameraConfig(c, id)!.ftp.enabled);
+  const seen = new Map<string, string>();
+  for (const id of ftpCams) {
+    const user = cameraConfig(c, id)!.ftp.user;
+    if (seen.has(user)) throw new ConfigError(`cameras: ${seen.get(user)} and ${id} both use the FTP user ${user}`);
+    seen.set(user, id);
+  }
+  if (ftpCams.length > 1 && b - a + 1 < 10 * ftpCams.length) throw new ConfigError(`ftp.passive: ${b - a + 1} ports for ${ftpCams.length} cameras with FTP; at least 10 per camera`);
   if (c.storage.maxPercent !== undefined && c.storage.maxBytes !== undefined) {
     throw new ConfigError('storage.maxBytes: set either storage.maxPercent or storage.maxBytes, not both');
   }

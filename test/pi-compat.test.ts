@@ -7,7 +7,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { Client } from 'basic-ftp';
 import request from 'supertest';
+import { ftpUsers } from '../src/clips/side';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MIGRATIONS } from '../src/catalog/migrations';
 import { usageBetween, usageByCamera } from '../src/catalog/analyses';
@@ -21,6 +23,7 @@ let sim: Awaited<ReturnType<typeof startSim>>;
 let proxy: Proxy;
 let base: string;
 let dir: string;
+let ftpPort = 0;
 let go2rtcPorts: { rtspPort: number; apiPort: number };
 const EVENT_TS = Date.now() - 3600_000;
 
@@ -44,7 +47,7 @@ beforeAll(async () => {
   const data = join(dir, 'data');
   mkdirSync(data);
   const go2rtc = process.env.CAMPROXY_TEST_GO2RTC;
-  const ftpPort = await freePort();
+  ftpPort = await freePort();
   const passive = await freePort();
   go2rtcPorts = { rtspPort: await freePort(), apiPort: await freePort() };
   // docs/raspberry-pi.md, plus the PoE switch (docs/poe-switch.md) and the test's ports.
@@ -140,6 +143,21 @@ describe.skipIf(!process.env.CAMPROXY_TEST_GO2RTC)('the Pi: stills through the h
     expect(Object.keys(streams).sort()).toEqual(['cam1_main', 'cam1_sub']);
     expect(proxy.stills!.go2rtc.streamUrl('cam1', 'sub')).toBe(`rtsp://127.0.0.1:${go2rtcPorts.rtspPort}/cam1_sub`);
   }, 40_000);
+});
+
+// P2 (spec §7): one FTP server with a user per camera. The Pi's camera keeps
+// its user (picam from the overrides) and logs in from its own address.
+describe('the Pi: FTP for its one camera', () => {
+  it('the user picam is cam1, from the camera address only; it logs in', async () => {
+    expect([...ftpUsers(proxy.running)]).toEqual([['picam', { cam: 'cam1', ip: '127.0.0.1' }]]);
+    const c = new Client(5000);
+    try {
+      await c.access({ host: '127.0.0.1', port: ftpPort, user: 'picam', password: 'ftp-secret-'.padEnd(24, 'z'), secure: true, secureOptions: { rejectUnauthorized: false } });
+      expect(await c.pwd()).toBe('/');
+    } finally {
+      c.close();
+    }
+  });
 });
 
 // The health items the Pi's display reads, as release 8 answers them.

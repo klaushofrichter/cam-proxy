@@ -135,12 +135,17 @@ describe('cameras (spec §4.1)', () => {
     expect(err(() => load({ CAMERA_HOST: '10.0.0.1' }))).toBe('CAMERA_HOST: set cameras[].host instead (several cameras)');
   });
 
-  it('FTP on for two cameras is refused until P2 (Ruling P1-2)', () => {
-    write('config.json', { ...two, ftp: { enabled: true } });
-    expect(err(() => load({ CAMPROXY_FTP_PASSWORD: 'f' }))).toBe('ftp.enabled: several cameras need per-camera FTP users (multi-camera phase 2); enable it for one camera');
+  it('FTP for several cameras: unique users, ≥ 10 passive ports per camera', () => {
+    write('config.json', { ...two, ftp: { enabled: true, passive: '50000-50019' } });
+    expect(cameraIds(load({ CAMPROXY_FTP_PASSWORD: 'f' }).config)).toEqual(['cam3', 'cam4']);
+    write('config.json', { ...two, ftp: { enabled: true, passive: '50000-50009' } });
+    expect(err(() => load({ CAMPROXY_FTP_PASSWORD: 'f' }))).toBe('ftp.passive: 10 ports for 2 cameras with FTP; at least 10 per camera');
+    write('config.json', { ftp: { enabled: true, passive: '50000-50019' }, cameras: [{ id: 'cam3', ftp: { user: 'cam' } }, { id: 'cam4', ftp: { user: 'cam' } }] });
+    expect(err(() => load({ CAMPROXY_FTP_PASSWORD: 'f' }))).toBe('cameras: cam3 and cam4 both use the FTP user cam');
     write('config.json', { ...two, ftp: { enabled: false }, cameras: [{ id: 'cam3', ftp: { enabled: true } }, { id: 'cam4' }] });
     expect(cameraConfig(load({ CAMPROXY_FTP_PASSWORD: 'f' }).config, 'cam3')!.ftp.enabled).toBe(true);
   });
+
 
   it('per-camera restart and live rules', async () => {
 
