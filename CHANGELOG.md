@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- The Archive (spec 2026-10-05-archive-design, API in docs/archive.md): clips kept apart from retention and the storage budget, in `<dataDir>/archive/<camera>/<id>/` (`clip.mp4`, `thumb.jpg`, `meta.json`) with a catalog row (migration 8). `POST /api/cameras/:cam/archive` stores a finished composition (`source.type: composition`), the SD card's recording as it is (`recording`, fetched over Baichuan unless cached) or the proxy's FTP clip (`clip`), with a name (default `<date> <time> <camera name>` in camera time), labels (Pet, Person, Vehicle, SD, 4K, custom; case-insensitive), a retention (365 days by default, or `null` for forever) and an optional thumbnail second; it answers the archive job (201 when done within 3 s, else 202; `GET /api/archive/jobs/:id`). The metadata snapshot has the window's events with their Vision analyses, the still checks, the camera, quality, duration and size; the thumbnail follows #157 (the analysed or detection still), else the first frame. 507 `insufficient_space {needed, free, minFreeBytes}` when the clip would not leave `storage.minFreeBytes` free.
+- `GET /api/archive` (filters: camera, labels, text, recorded window, quality; sort by created, recorded, name, size, expires, camera, quality, duration or labels; paging), `GET|PATCH|DELETE /api/archive/:id`, `POST /api/archive/delete` (up to 500), `GET /api/archive/:id/video` (Range; `?download=1`), `/thumbnail`, `/metadata`, `GET /api/archive/zip?ids=…` (a streamed ZIP: the clips stored, their metadata and thumbnails; ZIP64 past 4 GB), `GET /api/archive/status`. Client token; `X-On-Behalf-Of` names the person in the audit records. A stream message `archive` (`add`, `update`, `delete`, `clear`, `expire`) for every change.
+- A daily cleanup at 03:30 camera time removes clips past their retention. Audit records `archive-add`, `archive-update`, `archive-delete`, `archive-clear`, `archive-expire`.
+- Status page: an Archive card (clips, size, share of the disk, disk free, oldest, newest, next cleanup and how many expire, last cleanup), with a WARNING above `archive.warnPercent` (new setting, default 50 %); the health summary has an `archive` item (a problem above it; the e-paper display shows it). Maintenance: "Clear the Archive…" (`POST /control/actions/archive-clear {count}`), confirmed by typing the number of clips. New settings `archive.enabled` (true) and `archive.warnPercent` (50).
+
+## v2026.10.05.2
+
 - Settings → Find camera: "Currently used Camera" sits right-aligned in the button column; the button reads "Use this camera" (was "this camera" / "Use this address").
 
 ## v2026.10.05.1

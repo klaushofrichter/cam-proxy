@@ -125,6 +125,12 @@ const SETTINGS: Node = {
   host: {
     stats: { type: 'string', enum: ['auto', 'on', 'off'], doc: 'read the host figures (CPU temperature, under-voltage, memory, uptime, load): auto on a Raspberry Pi only, on, or off' },
   },
+  // The Archive (spec 2026-10-05-archive-design §6): clips kept apart from
+  // retention, in <dataDir>/archive. Both apply at once.
+  archive: {
+    enabled: { type: 'boolean', doc: 'take new clips into the Archive (reading, editing, deleting and its daily cleanup go on when off)' },
+    warnPercent: int(1, 99, "the Archive's size, percent of the data volume, above which the Status page and the health summary warn (no limit)"),
+  },
   analytics: {
     kinds: {
       person: { type: 'boolean', doc: 'analyse person events' },

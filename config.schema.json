@@ -554,6 +554,22 @@
         }
       }
     },
+    "archive": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "take new clips into the Archive (reading, editing, deleting and its daily cleanup go on when off)"
+        },
+        "warnPercent": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 99,
+          "description": "the Archive's size, percent of the data volume, above which the Status page and the health summary warn (no limit)"
+        }
+      }
+    },
     "analytics": {
       "type": "object",
       "additionalProperties": false,

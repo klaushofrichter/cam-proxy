@@ -7,6 +7,7 @@
   import { REPAIR_MAX_BYTES, REPAIR_MAX_CLIPS } from '../lib/inventory';
   import { poeAlert, poeOnText, powerCycleFailText, powerCycleMessage, restartWatch, RESTART_GIVE_UP_MS, type Health } from '../lib/maintenance';
   import { refresh, refreshTick, status } from '../lib/state';
+  import { clearMatches, clearMessage } from '../lib/archive';
 
   let result = $state('');
   let log = $state<Array<Record<string, unknown>>>([]);
@@ -56,13 +57,32 @@
       message: `Add ${recoverText} from the camera's SD recordings? Each one gets the kind, start and end of its recordings (pre- and post-record included) and is marked "recovered" on the Events page and the Timeline; cams sees it marked too. No SSE message is sent and it is never analysed. At most 1000 per run; existing events are not changed.`,
       confirmLabel: 'Add events',
     },
+    'archive-clear': {
+      title: 'Clear the Archive',
+      message: clearMessage(archiveNow),
+      confirmLabel: 'Clear the Archive',
+    },
     'restart-proxy': {
       title: 'Restart the proxy',
       message: 'Restart the proxy? Live streams and uploads in progress are interrupted; the proxy is back in a few seconds. You sign in again afterwards.',
       confirmLabel: 'Restart proxy',
     },
   });
-  let asking = $state<'camera-reboot' | 'camera-powercycle' | 'restart-proxy' | 'inventory-repair' | 'inventory-recover' | null>(null);
+  let asking = $state<'camera-reboot' | 'camera-powercycle' | 'restart-proxy' | 'inventory-repair' | 'inventory-recover' | 'archive-clear' | null>(null);
+  // Clear the Archive (spec 2026-10-05-archive-design §6, ruling 14): the
+  // count when the dialog opened goes into the message and must be typed;
+  // the proxy refuses it when the Archive changed meanwhile.
+  let archiveNow = $state({ count: 0, bytes: 0 });
+  const archive = $derived($status?.archive ?? null);
+  function askClear() {
+    if (!archive) return;
+    archiveNow = { count: archive.count, bytes: archive.bytes };
+    asking = 'archive-clear';
+  }
+  async function clearArchive() {
+    asking = null;
+    await run('Clear the Archive', 'archive-clear', { count: archiveNow.count });
+  }
   // The Inventory box's repair (#74): its dry-run numbers go into the message.
   // A search that ends asks by itself (auto), but never over another open dialog.
   let inventory = $state<{ fetchLost: () => void; addMissing: () => void } | undefined>();
@@ -199,6 +219,7 @@
         <button onclick={() => void poeOn()} disabled={sending || cycling} data-testid="action-camera-poe-on" title="Turns the camera's PoE on if it is off (no power check)">Turn camera PoE on</button>
       {/if}
       <button class="danger" onclick={() => (asking = 'restart-proxy')} disabled={restarting === 'waiting'} data-testid="action-restart-proxy">Restart proxy</button>
+      <button class="danger" onclick={askClear} disabled={!archive?.count} data-testid="action-archive-clear" title="Deletes every clip in the Archive (asks for the number of clips)">Clear the Archive…</button>
     </div>
     <div class="buttons">
       <button onclick={() => void run('Camera FTP setup', 'camera-ftp-setup')} data-testid="action-ftp-setup">Point the camera's FTP here</button>
@@ -239,7 +260,7 @@
 
 {#if asking}
   {@const dlg = DIALOGS[asking]}
-  <ConfirmDialog title={dlg.title} message={dlg.message} confirmLabel={dlg.confirmLabel} oncancel={() => (asking = null)} onconfirm={() => void (asking === 'inventory-repair' ? fetchLost() : asking === 'inventory-recover' ? addMissing() : asking === 'camera-reboot' ? rebootCamera() : asking === 'camera-powercycle' ? powerCycleCamera() : restartProxy())} />
+  <ConfirmDialog title={dlg.title} message={dlg.message} confirmLabel={dlg.confirmLabel} typed={asking === 'archive-clear' ? { label: 'Number of clips', matches: (v) => clearMatches(v, archiveNow.count) } : undefined} oncancel={() => (asking = null)} onconfirm={() => void (asking === 'archive-clear' ? clearArchive() : asking === 'inventory-repair' ? fetchLost() : asking === 'inventory-recover' ? addMissing() : asking === 'camera-reboot' ? rebootCamera() : asking === 'camera-powercycle' ? powerCycleCamera() : restartProxy())} />
 {/if}
 
 <style>

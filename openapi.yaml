@@ -302,6 +302,167 @@ paths:
         '200': { description: '{ enabled (on, a key, not stopping), paused: null | {reason, until}, month: {calls, limit}, today: {calls, cap (0: no cap)}, checks: {today, cap (0: checks off)} }; calls count automatic analyses and checks' }
         '401': { description: not signed in }
         '404': { description: unknown camera }
+  /api/cameras/{cam}/archive:
+    post:
+      summary: Keep a clip in the Archive (apart from retention; docs/archive.md)
+      description: >
+        source is {type: composition, id} (a finished composition of this camera),
+        {type: clip, clipId} (the proxy's FTP copy) or {type: recording, id} (the
+        SD card's file, fetched over Baichuan unless cached). Optional name (1-120
+        characters, no control characters; default "<YYYY-MM-DD HH:MM:SS> <camera
+        name>" of the recording's start, camera time), labels (at most 16 words of
+        letters and digits, case-insensitive; Pet, Person, Vehicle, SD, 4K keep
+        their spelling), retentionDays (1-36500, null = forever; default 365),
+        thumbnailAt (a still second). Starts an archive job and waits up to 3 s.
+        Client token or admin; a session needs X-CamProxy-UI; X-On-Behalf-Of (the
+        person, from cams) goes into the audit record. At most 10 a minute per
+        client. Audited (archive-add) past the input check.
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: X-On-Behalf-Of, in: header, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [source], properties: { source: { type: object }, name: { type: string }, labels: { type: array, items: { type: string } }, retentionDays: { type: [integer, 'null'] }, thumbnailAt: { type: integer } } }
+      responses:
+        '201': { description: 'the archive job, done: { id, cam, state: done, phase: null, progress: 1, bytes, size, archiveId, item }' }
+        '202': { description: 'the archive job, still running: { id, cam, state, phase (fetching | copying | finishing), progress, bytes, size }; poll /api/archive/jobs/{job}' }
+        '400': { description: '{error: invalid, detail}' }
+        '401': { description: not signed in }
+        '403': { description: '{error: csrf}' }
+        '404': { description: '{error: not_found} (camera, composition, clip) or {error: unknown_recording}' }
+        '409': { description: '{error: not_ready, state}: the composition is not done' }
+        '429': { description: '{error: rate_limited} or {error: busy} (4 archive jobs in flight)' }
+        '503': { description: '{error: archive_off} (archive.enabled false) or {error: camera_offline}' }
+        '507': { description: '{error: insufficient_space, needed, free, minFreeBytes}: the clip would not leave storage.minFreeBytes free' }
+  /api/archive:
+    get:
+      summary: The Archive's clips (this proxy's), with filters, sorting and paging
+      parameters:
+        - { name: cam, in: query, schema: { type: string } }
+        - { name: labels, in: query, schema: { type: string }, description: comma-separated; clips with all of them (case-insensitive) }
+        - { name: q, in: query, schema: { type: string }, description: text in the name }
+        - { name: from, in: query, schema: { type: integer }, description: recordedFrom at or after (ms) }
+        - { name: to, in: query, schema: { type: integer }, description: recordedFrom at or before (ms) }
+        - { name: quality, in: query, schema: { type: string }, description: 'comma-separated: sd, 360p, 720p, 1080p, 4k' }
+        - { name: sort, in: query, schema: { type: string, enum: [created, recorded, name, size, expires, cam, quality, duration, labels] } }
+        - { name: order, in: query, schema: { type: string, enum: [desc, asc] } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0 } }
+      responses:
+        '200': { description: '{ total, offset, limit, items: [ArchiveItem] } (docs/archive.md §1)' }
+        '400': { description: '{error: invalid, detail}' }
+        '401': { description: not signed in }
+  /api/archive/status:
+    get:
+      summary: The Archive's figures (the Status card)
+      responses:
+        '200': { description: '{ enabled, count, bytes, forever, oldestCreatedAt, newestCreatedAt, disk: {free, size}, percentOfDisk, warnPercent, warning, minFreeBytes, nextCleanupAt, expiringAtNextCleanup, lastCleanup, labels: [{label, count}] }' }
+        '401': { description: not signed in }
+  /api/archive/zip:
+    get:
+      summary: Several clips as one ZIP, streamed (stored entries, ZIP64 when needed)
+      parameters:
+        - { name: ids, in: query, required: true, schema: { type: string }, description: 'comma-separated archive ids, at most 200' }
+      responses:
+        '200': { description: 'application/zip with Content-Length: per clip "<name> (<id>).mp4", ".json" (the metadata), ".jpg" (the thumbnail, when there is one). At most 4 a minute per client' }
+        '400': { description: '{error: invalid}' }
+        '401': { description: not signed in }
+        '404': { description: '{error: not_found, missing: [ids]}' }
+        '429': { description: '{error: rate_limited}' }
+  /api/archive/jobs/{job}:
+    get:
+      summary: An archive job (kept 15 minutes after it ended)
+      parameters:
+        - { name: job, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: '{ id, cam, state (queued | running | done | failed | cancelled), phase, progress, bytes, size, archiveId?, item?, error?, detail? }; error: insufficient_space, camera_offline, unknown_recording, fetch_failed, source_gone, store_failed, cancelled' }
+        '401': { description: not signed in }
+        '404': { description: unknown job }
+    delete:
+      summary: Cancel an archive job
+      parameters:
+        - { name: job, in: path, required: true, schema: { type: string } }
+      responses:
+        '204': { description: cancelled (or forgotten, when it had ended) }
+        '401': { description: not signed in }
+        '404': { description: unknown job }
+  /api/archive/delete:
+    post:
+      summary: Delete several clips (one archive-delete record each)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [ids], properties: { ids: { type: array, items: { type: integer }, minItems: 1, maxItems: 500 } } }
+      responses:
+        '200': { description: '{ deleted: [ids], notFound: [ids] }' }
+        '400': { description: '{error: invalid}' }
+        '401': { description: not signed in }
+  /api/archive/{id}:
+    get:
+      summary: One clip (ArchiveItem)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: ArchiveItem }
+        '400': { description: not a whole number }
+        '401': { description: not signed in }
+        '404': { description: unknown id }
+    patch:
+      summary: Change a clip's name, labels or retention (archive-update when something changed)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, properties: { name: { type: string }, labels: { type: array, items: { type: string } }, retentionDays: { type: [integer, 'null'] } } }
+      responses:
+        '200': { description: ArchiveItem }
+        '400': { description: '{error: invalid, detail}' }
+        '401': { description: not signed in }
+        '404': { description: unknown id }
+    delete:
+      summary: Delete a clip (archive-delete)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '204': { description: deleted }
+        '400': { description: not a whole number }
+        '401': { description: not signed in }
+        '404': { description: unknown id }
+  /api/archive/{id}/video:
+    get:
+      summary: The clip (video/mp4), with Range requests; ?download=1 for an attachment named after the clip
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - { name: download, in: query, schema: { type: string, enum: ['1'] } }
+      responses:
+        '200': { description: video/mp4, immutable }
+        '206': { description: a range }
+        '401': { description: not signed in }
+        '404': { description: unknown id or no file }
+        '416': { description: the range is past the end }
+  /api/archive/{id}/thumbnail:
+    get:
+      summary: The clip's thumbnail (image/jpeg)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: image/jpeg, immutable }
+        '401': { description: not signed in }
+        '404': { description: unknown id, or no thumbnail (thumbnail.from none) }
+  /api/archive/{id}/metadata:
+    get:
+      summary: 'The clip''s metadata: { schema: 1, item, camera, window, events (with analyses), stillChecks, proxy, archivedAt }'
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: ArchiveMetadata (docs/archive.md §4) }
+        '401': { description: not signed in }
+        '404': { description: unknown id }
   /api/stream:
     get:
       summary: Server-Sent Events, resumable
@@ -326,7 +487,9 @@ paths:
         while none was told yet; messages stored before this version have no
         `address`); still-check (a new
         still check, cams #179) `{cam, id, stillTs, provider, summary, objects,
-        events: [{id, kind, confirmed}], imageUrl, requestedAt, tookMs}`; annotation
+        events: [{id, kind, confirmed}], imageUrl, requestedAt, tookMs}`; archive (a change
+        to the Archive, docs/archive.md §7) `{cam, action (add, update, delete, clear,
+        expire), ids, items (add and update: ArchiveItem)}`; annotation
         (reserved, not sent yet); still
         `{cam, ts, url, sprite, tile}` (only when named in `types`; live
         only, without an id, and not replayed).
@@ -391,7 +554,7 @@ paths:
         Admin token or admin session. Writes with the session cookie need
         `X-CamProxy-UI: 1`. A client token answers 403 `{"error":"admin_only"}`.
       responses:
-        '200': { description: '{ version, camera (incl. name (the camera''s name; the configured camera.name until the camera was read), nameSource (camera or config), webUiUrl, reboot {kind, requestedAt, confirmed, phase, offAt, endedAt, downSec} or null, poeSwitch {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state (on, off, elsewhere, server_differs, not_set_up, unknown), checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result (ok, offline, refused, auth, timeout, protocol, not_found), stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null, cache: {bytes, files, capBytes}}, analytics: [provider state], analyticsUnmapped: top 20 unmapped objects [{mid, name, count, lastSeen}], health: the health summary, as GET /api/local/health }' }
+        '200': { description: '{ version, camera (incl. name (the camera''s name; the configured camera.name until the camera was read), nameSource (camera or config), webUiUrl, reboot {kind, requestedAt, confirmed, phase, offAt, endedAt, downSec} or null, poeSwitch {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state (on, off, elsewhere, server_differs, not_set_up, unknown), checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result (ok, offline, refused, auth, timeout, protocol, not_found), stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null, cache: {bytes, files, capBytes}}, analytics: [provider state], analyticsUnmapped: top 20 unmapped objects [{mid, name, count, lastSeen}], health: the health summary, as GET /api/local/health, archive: as GET /api/archive/status }' }
         '401': { description: not signed in }
         '403': { description: admin_only, or csrf }
   /control/camera/name:
@@ -504,7 +667,7 @@ paths:
         '400': { description: unknown setting }
   /control/actions/{name}:
     post:
-      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart (the camera side), camera-reboot, camera-powercycle, camera-poe-on, poe-switch-read, restart-proxy (the process), inventory ({kind, camera?}), inventory-repair ({kind, runId}), inventory-cancel, find-camera, camera-address ({host})
+      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart (the camera side), camera-reboot, camera-powercycle, camera-poe-on, poe-switch-read, restart-proxy (the process), inventory ({kind, camera?}), inventory-repair ({kind, runId}), inventory-cancel, find-camera, camera-address ({host}), archive-clear ({count})
       description: |
         camera-reboot reboots the camera (about a minute offline; every camera token becomes invalid).
         camera-powercycle cuts the camera's PoE on its switch (camera.poeSwitch, CAMPROXY_POE_SWITCH_PASSWORD)
@@ -530,11 +693,11 @@ paths:
       parameters:
         - { name: name, in: path, required: true, schema: { type: string } }
       responses:
-        '200': { description: 'camera-test and retention-run results; camera-ftp-setup/-off: {ftp} (the camera''s settings, no password); camera-ftp-test: {ok, rspCode}; poe-switch-read: {at, port, index, poe, watts, link, sn, firmware}; camera-poe-on: the same plus wasOn; inventory-cancel: { cancelled, runId }; find-camera: { devices: [{endpoint, address (XAddr host), sender (UDP source), mismatch, useAddress (sender on a mismatch), xaddrs, name, hardware, model, current}], tookMs, envFile: {writable, path?, reason?} }; camera-address: { host, previous, key, backup, restart: true }' }
+        '200': { description: 'camera-test and retention-run results; camera-ftp-setup/-off: {ftp} (the camera''s settings, no password); camera-ftp-test: {ok, rspCode}; poe-switch-read: {at, port, index, poe, watts, link, sn, firmware}; camera-poe-on: the same plus wasOn; inventory-cancel: { cancelled, runId }; find-camera: { devices: [{endpoint, address (XAddr host), sender (UDP source), mismatch, useAddress (sender on a mismatch), xaddrs, name, hardware, model, current}], tookMs, envFile: {writable, path?, reason?} }; camera-address: { host, previous, key, backup, restart: true }; archive-clear: { cleared, bytes }' }
         '202': { description: 'started (onvif-resubscribe, restart, restart-proxy); camera-reboot: { confirmed } (false: the camera dropped the connection after receiving the request); camera-powercycle: { offAt, onAt, watts } once PoE is back on; inventory, inventory-repair: { runId }' }
-        '400': { description: 'camera-address: invalid (not an address or name with an optional :port); inventory: invalid (an unknown or missing kind, camera not a boolean, or camera for a kind without a camera compare); inventory-repair: invalid (a kind without a repair, or runId not a run id)' }
+        '400': { description: 'archive-clear: invalid (no count); camera-address: invalid (not an address or name with an optional :port); inventory: invalid (an unknown or missing kind, camera not a boolean, or camera for a kind without a camera compare); inventory-repair: invalid (a kind without a repair, or runId not a run id)' }
         '404': { description: 'unknown action; inventory-repair: not_found (no such check run of the kind)' }
-        '409': { description: 'camera-address: not_available { detail, line } (CAMPROXY_ENV_FILE not set, the file fails the path guard, or its directory is not writable; line is what to add by hand); not_configured (camera-ftp-setup/-test: ftp.publicHost or the FTP password is not set; camera-powercycle, poe-switch-read: no switch or no CAMPROXY_POE_SWITCH_PASSWORD); camera-powercycle, poe-switch-read: switch_busy (someone is logged in to the switch''s web UI), no_power (the port has PoE off or draws 0 W; nothing switched); inventory, inventory-repair: inventory_busy { runId } (one runs already); inventory-repair: report_stale (the check run is an hour old or more), not_repairable (it did not finish, did not compare with the camera, or found nothing missing locally)' }
+        '409': { description: 'archive-clear: count_mismatch { count } (count is not the number of clips in the Archive now); camera-address: not_available { detail, line } (CAMPROXY_ENV_FILE not set, the file fails the path guard, or its directory is not writable; line is what to add by hand); not_configured (camera-ftp-setup/-test: ftp.publicHost or the FTP password is not set; camera-powercycle, poe-switch-read: no switch or no CAMPROXY_POE_SWITCH_PASSWORD); camera-powercycle, poe-switch-read: switch_busy (someone is logged in to the switch''s web UI), no_power (the port has PoE off or draws 0 W; nothing switched); inventory, inventory-repair: inventory_busy { runId } (one runs already); inventory-repair: report_stale (the check run is an hour old or more), not_repairable (it did not finish, did not compare with the camera, or found nothing missing locally)' }
         '503': { description: 'stopping (inventory, inventory-repair: the proxy is stopping and starts no run)' }
         '429': { description: 'find-camera, camera-address: rate_limited (more than 6 per minute, together); camera-reboot, camera-powercycle: too_soon, within 120 s of the last reboot or power-cycle, or while one is being sent (Retry-After)' }
         '502': { description: 'the camera refused or failed the call; camera-reboot: the request never reached the camera (camera_offline, camera_auth_failed, camera_error); camera-powercycle, camera-poe-on, poe-switch-read: switch_auth, switch_unreachable, switch_error (camera-powercycle, camera-poe-on: poeOff, turnedOn when PoE may have been cut)' }

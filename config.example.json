@@ -92,6 +92,10 @@
   "host": {
     "stats": "auto"
   },
+  "archive": {
+    "enabled": true,
+    "warnPercent": 50
+  },
   "analytics": {
     "kinds": {
       "person": true,

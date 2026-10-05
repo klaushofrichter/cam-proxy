@@ -27,6 +27,7 @@ camera's quirks (one search at a time, few logins, broken downloads, no push).
 - recordings from the camera's SD card, over Baichuan;
 - inventory checks and repairs (stills, clips, events);
 - optional Google Vision analytics;
+- the Archive: clips kept apart from retention, with metadata and labels;
 - the health summary (Status page, `GET /api/local/health`);
 - the client and control APIs and the admin UI.
 
@@ -70,6 +71,7 @@ A Mac runs it for development on `localhost:8480`.
 - [Recordings (SD card)](#recordings-sd-card)
 - [Analytics (optional)](#analytics-optional)
 - [Storage management](#storage-management)
+- [Archive](#archive)
 - [Event stream (SSE)](#event-stream-sse)
 - [Camera name](#camera-name)
 - [Control API and admin UI](#control-api-and-admin-ui)
@@ -182,6 +184,7 @@ come only from the environment.
 | `host` | `stats` (`auto`): read the host figures (CPU temperature, under-voltage, memory, uptime, load) for the Pi card and the health summary; `auto` on a Raspberry Pi only (detected from `/proc/cpuinfo`), `on`, or `off`. Off a Pi, memory and load in a container would describe the node, not the proxy. Applies at once |
 | `recordings` | `cacheMB` (2048, 64–1,048,576): size cap of the recordings cache; least recently used files go first, and they are the first to go when the storage budget is exceeded. Applies at the next fetch or storage run |
 | `composition` | `font`: the font file for the text of composed clips; default the first of DejaVu Sans (the container) or Arial (macOS) that exists |
+| `archive` | `enabled` (true): take new clips into the [Archive](#archive) (reading, editing, deleting and its daily cleanup go on when off); `warnPercent` (50, 1–99): the Archive's share of the data volume above which the Status card and the health summary warn (no limit). Both apply at once |
 | `analytics` | `kinds.person` (true), `kinds.vehicle` and `kinds.pet` (false), `googleVision.enabled` (false), `.monthlyLimit` (0), `.dailyCap` (0), `.checksPerDay` (10, 0–1000; still checks by hand, 0 = none); see [Analytics](#analytics-optional) |
 
 | Secret (environment, or `<NAME>_FILE`) | |
@@ -573,6 +576,38 @@ uploads in `data/ftp/.incoming` are never counted, and go after a day.
 `/control/stats` shows usage per kind, growth per day,
 days until full and whether writing is paused.
 
+The [Archive](#archive) is outside all of this: neither age nor the budget
+touches it, and it isn't counted in the budget.
+
+## Archive
+
+cams's Save dialog stores a clip in the proxy's Archive: the composition it
+would download (`source.type: composition`), or the camera's own file (the SD
+card's recording, `recording`, or the proxy's FTP copy, `clip`), with a name,
+labels (Pet, Person, Vehicle, SD, 4K and custom ones), a retention (365 days,
+or forever), the metadata of its window (events, Vision analyses and still
+checks, camera, quality, duration, size) and a thumbnail (#157's detection or
+Vision still, else the first frame). Files go to
+`<dataDir>/archive/<camera>/<id>/` (`clip.mp4`, `thumb.jpg`, `meta.json`).
+
+- Outside retention and the storage budget; a clip that would not leave
+  `storage.minFreeBytes` free is refused (507 `insufficient_space`).
+- A daily cleanup at 03:30 camera time removes clips past their retention.
+- The Status page's Archive card shows count, size, share of the disk, free
+  disk, oldest and newest, and the next cleanup; above `archive.warnPercent`
+  (50 %) of the disk it warns, and so does the health summary's `archive`
+  item (the Pi's e-paper display). No limit.
+- Maintenance → "Clear the Archive…" deletes everything once the number of
+  clips is typed.
+- API (client token): `POST /api/cameras/{cam}/archive`, `GET /api/archive`
+  (filters, sorting, paging), `GET|PATCH|DELETE /api/archive/{id}`,
+  `POST /api/archive/delete`, `GET /api/archive/{id}/video` (Range),
+  `/thumbnail`, `/metadata`, `GET /api/archive/zip?ids=…` (a streamed ZIP),
+  `GET /api/archive/status`, the SSE type `archive`. Every change is audited
+  (`archive-add`, `-update`, `-delete`, `-clear`, `-expire`).
+
+The API contract and operating notes: [docs/archive.md](docs/archive.md).
+
 ## Event stream (SSE)
 
 `GET /api/stream?cam&types&kinds&since`: a Server-Sent Events stream that
@@ -600,6 +635,8 @@ never loses anything within the retention (default 7 days).
     through `PUT /control/camera/name` or one made in the Reolink app or the
     camera's web UI, seen by the status poll; also the first read after a
     start when it differs from the name clients were last told);
+  - `archive`: `{cam, action: add|update|delete|clear|expire, ids, items}`
+    for every change to the [Archive](#archive) (`items` with add and update);
   - `annotation`: reserved, not sent yet;
   - `still`: `{cam, ts, url, sprite, tile}` (the still's URL, its minute's
     sprite sheet, and the tile index within it); only when named in `types`,
@@ -650,7 +687,7 @@ in the Reolink app, reaches stream clients once as a `camera` message.
 
 | Route | |
 |---|---|
-| `GET /control/status` | `{version, camera (incl. name (the camera's name; the configured `camera.name` until the camera was read), nameSource: camera\|config, webUiUrl, serial, reboot: {kind: reboot\|powercycle, requestedAt, confirmed, phase: power-cycling\|rebooting\|back\|not-back, offAt, endedAt, downSec} or null, and poeSwitch: {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state: on\|off\|elsewhere\|unknown, checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result, stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null (the last recording download over Baichuan), cache: {bytes, files, capBytes}}, analytics: [{…, keyMasked, keySource}], analyticsUnmapped}` |
+| `GET /control/status` | `{version, camera (incl. name (the camera's name; the configured `camera.name` until the camera was read), nameSource: camera\|config, webUiUrl, serial, reboot: {kind: reboot\|powercycle, requestedAt, confirmed, phase: power-cycling\|rebooting\|back\|not-back, offAt, endedAt, downSec} or null, and poeSwitch: {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state: on\|off\|elsewhere\|unknown, checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result, stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null (the last recording download over Baichuan), cache: {bytes, files, capBytes}}, analytics: [{…, keyMasked, keySource}], analyticsUnmapped, health, archive (as `GET /api/archive/status`)}` |
 | `PUT /control/camera/name` | `{"name":"Backyard Left"}`: renames the camera on the camera itself ([Camera name](#camera-name)). 200 `{name}` (the name read back from the camera); 400 `{"error":"invalid_name","reason":…}` by the camera's rules (the camera is not asked) or refused by the camera (rspCode -54, -56); 503 `{"error":"camera_offline"}`; 502 `camera_error`. Admin token, or an admin session with `X-CamProxy-UI: 1`. Audited as `camera-name` |
 | `GET /control/stats` | `{disk: {catalog, audit, stills, previews, clips, recordings}` (each `{bytes, files, oldest, newest, growthPerDay}`), `events, stream, sse, storage}` |
 | `GET /control/config` | every setting: `{value, source, env?, restart, pending, next?, type}` (`source`: `default`, `file`, `override` or `env`; `env`: the variable that sets it; `type`: `integer`, `boolean` or `string`); secrets never appear |
@@ -669,6 +706,7 @@ in the Reolink app, reaches stream clients once as a `camera` message.
 | `POST /control/actions/inventory-repair` | `{"kind":"clips","runId":"clips-…"}`: fetches the recordings that clips run (with the camera, finished, less than an hour old) found missing locally, over Baichuan at low priority (a viewer's download goes first), on `ftp.stream`, the oldest first; at most 50 clips or 200 MB per run (a recording larger than 200 MB is skipped as `too-big`; one that would pass the 200 MB after others is skipped and smaller ones still come), 1 s apart, never past `ftp.maxGB` or while storage is paused; it stops after 3 failures in a row, and at once when the camera refuses a download or is offline (a busy camera Search is tried 3 times, then that clip is skipped as `busy`). A recording the cache can't keep goes through a temp file in `<dataDir>/inventory/tmp`, emptied at startup. The clips are stored like FTP ones with `origin: "camera"`, without an SSE message. 202 `{runId}` (`clipsrepair-…`); 400 `invalid`; 404 `not_found` (no such run); 409 `report_stale`, `not_repairable` or `inventory_busy`; 503 `stopping`. Audited as `inventory-repair` when it ends |
 | `POST /control/actions/inventory-repair` (events) | `{"kind":"events","runId":"events-…"}`: adds the events that events run (finished, less than an hour old) found missing. It compares with the camera again and adds only spans that ended by the check's `window.camera.to`: one event per kind per missing span, `source` and `endReason` `recovered`, start and end of the span's recordings, `raw` `{runId, check, recordings, stream, bounds}`; the oldest first, at most 1000 per run (`stopped: "event-cap"`), in one transaction; a span whose kind has an event by then is skipped. Existing events are never changed. 202 `{runId}` (`eventsrepair-…`); 409 `not_repairable` (`no events are missing`), otherwise as for clips. Audited as `inventory-repair` |
 | `POST /control/actions/inventory-cancel` | cancels the running inventory: `{cancelled, runId}`; the run keeps its partial counts. Audited as `control-action` |
+| `POST /control/actions/archive-clear` | `{"count": N}`: deletes every clip in the [Archive](#archive) when N is the number of clips now; 200 `{cleared, bytes}`; 409 `count_mismatch` `{count}` otherwise; 400 `invalid` without a count. Audited as `archive-clear` |
 | `GET /control/inventory` | `{running: {runId, kind, op: "check" or "repair", startedAt, outcome: "running", progress: {phase, done, total, note}} or null, runs: {stills: [the last 10 runs, newest first: {runId, kind, startedAt, tookMs, outcome, counts, message}], clips: […], events: […]}, repairs: {clips: […], events: […]}}` |
 | `GET /control/inventory/runs/{id}` | one report: `{runId, kind, op: check\|repair, camera, startedAt, tookMs, outcome: ok\|cancelled\|failed, error, cancelledBy, requestedBy, options, window: {from, to, reason: retention\|budget\|store-younger\|empty\|sd-card, retentionFrom, protectedFrom, notes}, counts, top, items, itemsTruncated, message}` (`notes`: caveats on the counts, such as the clock note when seconds are restorable; stills `counts` include `previewsPruned`, packs without a sprite whose previews were pruned earlier, and `prunedDuringRun`, packs deleted by retention while the run read them, counted as missing; `options: {camera: true}` for a clips compare, whose `counts` add `pairedOtherStream`, recordings here as clips of the other stream, and `prunedHere`, recordings older than the oldest local clip while the storage budget prunes clips, both never offered). The window `reason` `sd-card` is an events check's: the SD card's reach, shorter than `retention.eventsDays`; a clips compare and an events check add `camera: {stream, to, oldestSdDay, unknownDays}` to the window, an events check also `eventsDays`. An events check's items: `missing-event` `{kind, start, end, date, recordings}` oldest first, then `event-without-recording` `{eventId, kind, start, end, source}`. A repair's report has `source` (the clips or events check run it worked from), `stopped` (`clip-cap`, `byte-cap`, `max-gb`, `paused`, `failures`, `refused`, `camera_offline`, `event-cap` (an events repair: more than 1000 missing) or null); an events repair has one item per event added, `{eventId, kind, start, end, result: ok}`; a clips repair one per recording tried: `{id, start, result: ok\|skipped\|failed, reason, error, clipId, bytes, streamed}` (`reason` of a skip: `outside-retention`, `already-local`, `gone-from-camera`, `other-stream`, `viewer`, `invalid`, `too-big`, `byte-cap`, `busy`, `still-recording` (a recording that starts at 23:55 or later, listed with end 000000, before 01:00 the next day); `streamed: true` when it went through `<dataDir>/inventory/tmp`); 400 for a malformed id, 404 for an unknown one. Kept in `<dataDir>/inventory/<kind>/` and repairs in `<dataDir>/inventory/<kind>repair/` (the last 10 each) |
 | `GET /control/audit` | the audit log as JSON lines: `limit`, `before`/`after` (cursors), `from`, `to`, `action`, `outcome`; admin token, admin session or `CAMPROXY_AUDIT_TOKEN`; HEAD answers like GET without the body. See [docs/audit-log.md](docs/audit-log.md) |
@@ -690,7 +728,7 @@ the phone top bar leaves out (the camera's model, firmware and version, and
   red when it is a problem, and "All OK" or "N problems"), then the camera
   (and its model, linked to the camera's own web page), events, analytics,
   stills, clips/FTP, recordings (SD card), storage (with the data volume's
-  "Disk used") and the stream. On a Raspberry Pi a Pi card shows the model, CPU temperature,
+  "Disk used"), the Archive (with its WARNING above `archive.warnPercent`) and the stream. On a Raspberry Pi a Pi card shows the model, CPU temperature,
   under-voltage, memory, uptime, load and disk. The cards mark the same items
   red as the Health card: one summary decides, with the thresholds
   `health.diskPercent` and `health.tempC`. The same summary is
@@ -721,6 +759,8 @@ the phone top bar leaves out (the camera's model, firmware and version, and
   restart it shows "Restarting…", waits for `/health` to answer with a new
   start time or version, and reloads (sign in again: sessions end with the
   process). After 2 minutes without the proxy it says so.
+  "Clear the Archive…" deletes every archived clip; its dialog shows the
+  count, and its button works only once that number is typed.
   The Inventory box's "Check stills" checks the stills of the retention
   window in the background: the missing seconds, the 10 longest gaps and
   whether a proxy stop or crash, a camera reboot or a power cycle, or a
@@ -769,6 +809,7 @@ The proxy records who did what, as ECS JSON lines, one file per UTC day in
 - refused tokens, throttled to one record per IP and path per 10 minutes;
 - control actions and settings changes (secret values redacted);
 - inventory runs and repairs, with their counts;
+- every change to the Archive (added, changed, deleted, cleared, expired), with the person cams names;
 - changes of the camera's FTP upload (on, off, pointing elsewhere);
 - a storage snapshot and an activity summary at 00:05 camera time.
 

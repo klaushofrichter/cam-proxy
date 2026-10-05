@@ -449,3 +449,27 @@ describe('storage: still checks', () => {
     expect(existsSync(analysisOrphan)).toBe(false);
   });
 });
+
+// The Archive (spec 2026-10-05-archive-design, review of #159): outside
+// retention and the budget, and not counted in `used`.
+describe('the Archive folder', () => {
+  it('survives an over-budget retention run and is not counted', () => {
+    const { dir, storage, put, fs } = setup((c) => {
+      c.storage.maxPercent = undefined;
+      c.storage.maxBytes = 5000;
+      c.storage.keepHours = { stills: 0, clips: 0, previews: 0 };
+    });
+    fs.free = 50 * 2 ** 30;
+    put('stills', NOW - 10 * DAY, 4000); // past retention
+    put('stills', NOW - HOUR, 4000); // over the budget
+    const clip = join(dir, 'archive', 'cam1', '1', 'clip.mp4');
+    mkdirSync(dirname(clip), { recursive: true });
+    writeFileSync(clip, Buffer.alloc(5 * 2 ** 20));
+    const before = storage.usage().used;
+    storage.run({});
+    expect(existsSync(clip)).toBe(true);
+    expect(storage.usage().used).toBeLessThan(5 * 2 ** 20);
+    expect(before).toBeLessThan(5 * 2 ** 20);
+  });
+});
+

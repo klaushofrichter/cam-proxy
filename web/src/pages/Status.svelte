@@ -9,6 +9,7 @@
   import { refresh } from '../lib/state';
   import Icon from '../components/Icon.svelte';
   import { cameraUploadClass, lastClipClass, diskText, healthHeadline, itemOf, loadText, memoryText, piCardTitle, problemOf, uptimeText } from '../lib/health';
+  import { archiveRows } from '../lib/archive';
 
   const gb = (b: number) => `${(b / 1024 ** 3).toFixed(1)} GB`;
   const mb = mbText;
@@ -160,6 +161,15 @@
           <dt>Last cleanup</dt><dd>{ago($status.retention.lastRun)}</dd>
         </dl>
       </div>
+      {#if $status.archive}
+        <!-- Spec 2026-10-05-archive-design §6: clips kept apart from retention. -->
+        <div class="card" data-testid="card-archive">
+          <h3>Archive</h3>
+          <dl>
+            {#each archiveRows($status.archive) as r (r.key)}<dt>{r.label}</dt><dd class={r.bad ? 'bad' : ''} title={r.title} data-testid={`archive-${r.key}`}>{r.text}</dd>{/each}
+          </dl>
+        </div>
+      {/if}
       {#if health?.host}
         <div class="card" data-testid="card-pi">
           <h3>{piCardTitle(health.platform)}</h3>

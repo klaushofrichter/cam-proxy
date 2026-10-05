@@ -20,11 +20,11 @@ const ev = (kind: string, start_ts: number, cam = 'cam1') => insertEvent(c, { ca
 
 describe('catalog', () => {
   it('creates the schema once; opening again keeps data and version', () => {
-    expect(c.schemaVersion()).toBe(7);
+    expect(c.schemaVersion()).toBe(8);
     ev('person', 1000);
     c.close();
     c = openCatalog(join(dir, 'catalog.sqlite'));
-    expect(c.schemaVersion()).toBe(7);
+    expect(c.schemaVersion()).toBe(8);
     expect(listEvents(c, { cam: 'cam1' })).toHaveLength(1);
   });
 
@@ -33,20 +33,20 @@ describe('catalog', () => {
     insertClip(c, { cam: 'cam1', start_ts: 1, end_ts: 2, path: 'a.mp4', stream: 'main', size: 1, received_at: 5000, snapshot: null });
     insertClip(c, { cam: 'cam1', start_ts: 1, end_ts: 2, path: 'b.mp4', stream: 'main', size: 1, received_at: 7000, snapshot: null });
     // As a version 4 catalog with these clips.
-    c.db.exec('DROP TABLE still_checks; DROP TRIGGER clips_last_received; ALTER TABLE clips DROP COLUMN origin; DROP TABLE clip_arrivals; DELETE FROM schema_version WHERE version >= 5');
+    c.db.exec('DROP TABLE archive; DROP TABLE still_checks; DROP TRIGGER clips_last_received; ALTER TABLE clips DROP COLUMN origin; DROP TABLE clip_arrivals; DELETE FROM schema_version WHERE version >= 5');
     c.close();
     c = openCatalog(join(dir, 'catalog.sqlite'));
-    expect(c.schemaVersion()).toBe(7);
+    expect(c.schemaVersion()).toBe(8);
     expect(lastClipReceived(c, 'cam1')).toBe(7000);
   });
 
   // #74: version 6 marks where a clip came from; old rows are FTP uploads.
   it('migrates to version 6: old clips are ftp, and a clip from the camera is no arrival', () => {
     insertClip(c, { cam: 'cam1', start_ts: 1, end_ts: 2, path: 'a.mp4', stream: 'main', size: 1, received_at: 5000, snapshot: null });
-    c.db.exec("DROP TABLE still_checks; DROP TRIGGER clips_last_received; ALTER TABLE clips DROP COLUMN origin; DELETE FROM schema_version WHERE version >= 6; CREATE TRIGGER clips_last_received AFTER INSERT ON clips BEGIN INSERT INTO clip_arrivals (cam, last_received) VALUES (NEW.cam, NEW.received_at) ON CONFLICT (cam) DO UPDATE SET last_received = MAX(last_received, excluded.last_received); END;");
+    c.db.exec("DROP TABLE archive; DROP TABLE still_checks; DROP TRIGGER clips_last_received; ALTER TABLE clips DROP COLUMN origin; DELETE FROM schema_version WHERE version >= 6; CREATE TRIGGER clips_last_received AFTER INSERT ON clips BEGIN INSERT INTO clip_arrivals (cam, last_received) VALUES (NEW.cam, NEW.received_at) ON CONFLICT (cam) DO UPDATE SET last_received = MAX(last_received, excluded.last_received); END;");
     c.close();
     c = openCatalog(join(dir, 'catalog.sqlite'));
-    expect(c.schemaVersion()).toBe(7);
+    expect(c.schemaVersion()).toBe(8);
     expect(c.db.prepare('SELECT origin FROM clips').all()).toEqual([{ origin: 'ftp' }]);
     const repaired = insertClip(c, { cam: 'cam1', start_ts: 3, end_ts: 4, path: 'b.mp4', stream: 'sub', size: 1, received_at: 9000, snapshot: null, origin: 'camera' });
     expect(repaired.origin).toBe('camera');
@@ -75,7 +75,7 @@ describe('catalog', () => {
     ins.run('cam2', 3, 4, 'c.mp4', 'sub', 1, 4000, null);
     raw.close();
     c = openCatalog(path);
-    expect(c.schemaVersion()).toBe(7);
+    expect(c.schemaVersion()).toBe(8);
     expect(c.db.prepare('SELECT origin FROM clips').all()).toEqual([{ origin: 'ftp' }, { origin: 'ftp' }, { origin: 'ftp' }]);
     expect(lastClipReceived(c, 'cam1')).toBe(6000);
     expect(lastClipReceived(c, 'cam2')).toBe(4000);

@@ -14,7 +14,7 @@ const row = (event_id: number, over: object = {}) => ({
 
 describe('analyses', () => {
   it('migrate to version 4', () => {
-    expect(fresh().schemaVersion()).toBe(7);
+    expect(fresh().schemaVersion()).toBe(8);
   });
 
   it('store one per event and provider, the latest winning', () => {
@@ -92,7 +92,7 @@ describe('usage', () => {
 describe('summary storage', () => {
   it('migrates to version 4 and stores the summary', () => {
     const c = fresh();
-    expect(c.schemaVersion()).toBe(7);
+    expect(c.schemaVersion()).toBe(8);
     const e = insertEvent(c, { cam: 'cam1', source: 'onvif', kind: 'person', start_ts: 1000, raw: null });
     const saved = saveAnalysis(c, row(e.id, { summary: '[{"category":"person"}]' }))!;
     expect(saved.summary).toBe('[{"category":"person"}]');

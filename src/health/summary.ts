@@ -15,9 +15,10 @@ import type { RebootState } from '../camera/reboot';
 // No secrets: no tokens, passwords, FTP settings, the PoE switch's host or
 // the camera serial.
 
-type ItemId = 'camera' | 'stream' | 'events' | 'ftp' | 'storage' | 'disk' | 'cpuTemp' | 'underVoltage' | 'inventory' | 'version';
+type ItemId = 'camera' | 'stream' | 'events' | 'ftp' | 'storage' | 'disk' | 'archive' | 'cpuTemp' | 'underVoltage' | 'inventory' | 'version';
 export interface HealthItem { id: ItemId; label: string; value: boolean | number | string | null; text: string; problem: boolean }
-interface Thresholds { diskPercent: number; tempC: number; ftpStalledHours: number }
+// archiveWarnPercent: while the Archive is on (spec 2026-10-05-archive-design §6).
+interface Thresholds { diskPercent: number; tempC: number; ftpStalledHours: number; archiveWarnPercent?: number }
 export interface LastInventory { kind: string; op: 'check' | 'repair'; outcome: 'ok' | 'cancelled' | 'failed'; startedAt: number; message: string }
 type RebootPhase = RebootState['phase'];
 
@@ -35,6 +36,8 @@ export interface HealthInput {
   sseClients: number;
   lastInventory: LastInventory | null;
   reading: HostReading;
+  // The Archive (spec 2026-10-05-archive-design §6): null or absent while it is off.
+  archive?: { count: number; bytes: number; percentOfDisk: number; warning: boolean } | null;
 }
 
 export interface HealthSummary {
@@ -93,6 +96,10 @@ export function buildHealth(i: HealthInput): HealthSummary {
 
   const disk = i.reading.disk;
   if (disk) add('disk', 'Disk', disk.usedPercent, `${disk.usedPercent.toFixed(1)} % of ${(disk.sizeBytes / GB).toFixed(1)} GB`, disk.usedPercent >= i.thresholds.diskPercent);
+
+  // The Archive's size against archive.warnPercent: a warning, never a limit.
+  const ar = i.archive;
+  if (ar) add('archive', 'Archive', ar.percentOfDisk, `${ar.count} clip${ar.count === 1 ? '' : 's'}, ${(ar.bytes / GB).toFixed(1)} GB (${ar.percentOfDisk.toFixed(1)} % of disk)`, ar.warning);
 
   const host = i.reading.host;
   if (host?.cpuTempC != null) add('cpuTemp', 'CPU temperature', host.cpuTempC, `${host.cpuTempC.toFixed(1)} °C`, host.cpuTempC >= i.thresholds.tempC);

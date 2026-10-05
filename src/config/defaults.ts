@@ -33,6 +33,9 @@ export interface Config {
   // The health summary's thresholds and the host figures (spec 2026-10-03-health-summary-design).
   health: { diskPercent: number; tempC: number };
   host: { stats: 'auto' | 'on' | 'off' };
+  // The Archive (spec 2026-10-05-archive-design §6): new clips on or off,
+  // and the size warning, percent of the data volume (no limit).
+  archive: { enabled: boolean; warnPercent: number };
   // External analytics (spec 2026-09-30-analytics-design): which event kinds,
   // and per provider its switch and call limits. 0 = no calls.
   analytics: {
@@ -61,6 +64,7 @@ export const DEFAULTS: Config = {
   recordings: { cacheMB: 2048 },
   health: { diskPercent: 90, tempC: 75 },
   host: { stats: 'auto' },
+  archive: { enabled: true, warnPercent: 50 },
   analytics: {
     kinds: { person: true, vehicle: false, pet: false },
     googleVision: { enabled: false, monthlyLimit: 0, dailyCap: 0, checksPerDay: 10 },

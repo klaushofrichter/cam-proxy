@@ -1,5 +1,4 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
-import { rateLimit } from 'express-rate-limit';
 import { readFile } from 'fs/promises';
 import { resolve, sep } from 'path';
 import { analysisCheckJson, checkFullJson, checkJson, checkSummaryJson, type CheckJson } from '../analytics/check-json';
@@ -10,14 +9,12 @@ import { checkById, checksInRange } from '../catalog/still-checks';
 import type { Config } from '../config/defaults';
 import { DAY, dayStart } from '../time-units';
 import { clientIp } from './auth';
+import { bad, IMMUTABLE, intParam, perMinute } from './respond';
 
 // Still checks (cams #179, spec 2026-10-04-still-checks-design §5.1, §6):
 // Vision on a second picked by hand, stored apart from events. Auth (client
 // token, admin, CSRF for sessions) is applied by the caller.
 export const CHECKS_PER_MINUTE = 20;
-const IMMUTABLE = 'private, max-age=604800, immutable';
-const intParam = (v: unknown): number | undefined | null => (v === undefined ? undefined : typeof v === 'string' && /^\d{1,15}$/.test(v) ? Number(v) : null);
-const bad = (res: Response, detail: string) => void res.status(400).json({ error: 'invalid', detail });
 
 type Found = { category?: unknown };
 const categories = (summary: unknown[]): string[] => [...new Set(summary.map((s) => (s as Found)?.category).filter((c): c is string => typeof c === 'string'))];
@@ -46,7 +43,7 @@ export function stillChecksApi(d: { config: () => Config; catalog: Catalog; anal
   };
   // Requests that passed the input check, per client (ruling 33); the
   // general limiter counts every request.
-  const limiter = rateLimit({ windowMs: 60_000, limit: CHECKS_PER_MINUTE, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } });
+  const limiter = perMinute(CHECKS_PER_MINUTE);
 
   r.post('/cameras/:cam/still-checks', validAt, limiter, async (req, res) => {
     const at = res.locals.at as number;

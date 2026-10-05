@@ -58,6 +58,8 @@ import { clockText, defaultFont } from './compose/ffmpeg';
 import { HostMonitor, type StatFs } from './health/host';
 import { buildHealth, type HealthSummary, type LastInventory } from './health/summary';
 import { localApi } from './api/local-api';
+import { archiveApi } from './api/archive-api';
+import { Archive } from './archive/service';
 import { discover } from './camera/discovery';
 
 export const VERSION = process.env.CAMPROXY_VERSION ?? 'dev';
@@ -89,6 +91,7 @@ export interface Proxy {
   storage: Storage;
   readonly audit: AuditLog;
   readonly inventory: InventoryRunner;
+  readonly archive: Archive;
   start(opts?: { port?: number; host?: string }): Promise<{ port: number }>;
   restart(): Promise<void>;
   stop(opts?: { reason?: string }): Promise<void>;
@@ -477,6 +480,23 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     listStills: stillsIn,
     timeInfo,
   });
+  // The Archive (spec 2026-10-05-archive-design): clips kept apart from
+  // retention in <dataDir>/archive, with their own daily cleanup.
+  const archive = new Archive({
+    dataDir: running.server.dataDir,
+    catalog,
+    log,
+    audit,
+    config: () => running,
+    disk: () => storage.diskSpace(),
+    timeInfo,
+    cameraName,
+    cameraModel: () => status.state().model ?? null,
+    version: VERSION,
+    stillsIn,
+    readStill: stillAt,
+  });
+
   // Every camera-event start goes to the service (it filters by kind).
   log.on('message', (m: StreamMessage) => {
     if (m.type === 'camera-event' && m.data.phase === 'start') analytics.onEvent({ id: Number(m.data.eventId), kind: String(m.data.kind), start_ts: Number(m.data.ts) });
@@ -590,7 +610,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       now: Date.now(),
       version: VERSION,
       startedAt,
-      thresholds: { diskPercent: running.health.diskPercent, tempC: running.health.tempC, ftpStalledHours: running.ftp.stalledHours },
+      thresholds: { diskPercent: running.health.diskPercent, tempC: running.health.tempC, ftpStalledHours: running.ftp.stalledHours, ...(running.archive.enabled ? { archiveWarnPercent: running.archive.warnPercent } : {}) },
       camera: { id: running.camera.id, name: cameraName(), host: running.camera.host, state: status.state(), reboot: reboot.state()?.phase ?? null, poeSwitch: ps.model === 'none' ? null : { model: ps.model, port: ps.port ?? null } },
       stream: streamStatus(),
       intake: intake.state(),
@@ -600,6 +620,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       sseClients: sse.clients(),
       lastInventory: await lastInventory(),
       reading: hostMonitor.reading(),
+      archive: archive.health(),
     });
   };
 
@@ -612,7 +633,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // Clip and recording files too: a seeking video player sends many range
   // requests. A recording only once it is cached (#99): one not cached costs
   // a camera Search and a download, so it counts in the normal bucket.
-  const IMAGE = /^\/api\/cameras\/[^/]+\/((stills|previews)\/\d{1,15}\.jpg|clips\/\d{1,15}\.(mp4|jpg)|events\/\d{1,15}\/analysis\.jpg|still-checks\/\d{1,12}\.jpg)$/;
+  const IMAGE = /^\/api\/cameras\/[^/]+\/((stills|previews)\/\d{1,15}\.jpg|clips\/\d{1,15}\.(mp4|jpg)|events\/\d{1,15}\/analysis\.jpg|still-checks\/\d{1,12}\.jpg)$|^\/api\/archive\/\d{1,15}\/(video|thumbnail)$/;
   const RECORDING = /^\/api\/cameras\/[^/]+\/recordings\/(Rec[0-9A-Za-z_]+\.mp4)$/;
   const isImage = (req: Request) => {
     if (req.method !== 'GET') return false;
@@ -640,6 +661,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit }));
   app.use('/api', requireAccess('client', access), composeApi({ config: () => running, catalog, composer, stillsIn, paused: () => storage.paused(), font, audit }));
   app.use('/api', requireAccess('client', access), stillChecksApi({ config: () => running, catalog, analytics, audit }));
+  app.use('/api', requireAccess('client', access), archiveApi({ config: () => running, catalog, archive, composer, recordings: () => recordings, online: () => status.state().online, timeInfo }));
   app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, status: () => status, cameraName, sse, stills: () => stills, recordings: () => recordings }));
   // The audit log: admins and the audit token, GET (and HEAD) only. The access check is
   // on the route inside the router; other /control paths pass on untouched
@@ -704,6 +726,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       version: VERSION,
       findCamera: () => discover(opts.discovery ?? {}),
       envFile: () => loaded.env.CAMPROXY_ENV_FILE || undefined,
+      archive,
     }),
   );
   // The admin UI. The files are public; every API call needs a session.
@@ -764,6 +787,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     storage,
     audit,
     inventory,
+    archive,
     get stills() {
       return stills;
     },
@@ -783,6 +807,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       ftpWatch.start();
       hostMonitor.start();
       storage.start();
+      archive.start();
       try {
         analytics.backfillSummaries();
       } catch (err) {
@@ -843,7 +868,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       // stored before the catalog closes (up to its 10 s timeout).
       // A recording download is aborted (cmd 9) and the Baichuan session closed (up to 2 s).
       // A running inventory is cancelled ('stop'), saved and audited before the catalog closes.
-      await Promise.all([composer.stop(), analytics.stop(), recordings.stop(), inventory.stop()]);
+      // An archive job in flight is cancelled (its staged folder removed) before the catalog closes.
+      await Promise.all([composer.stop(), analytics.stop(), archive.stop(), recordings.stop(), inventory.stop()]);
       const s = server;
       if (s) {
         s.closeAllConnections();
