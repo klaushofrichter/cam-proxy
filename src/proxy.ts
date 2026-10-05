@@ -47,7 +47,7 @@ import { composeApi, hasAudio } from './api/compose-api';
 import { createComposer, ffmpegRunner } from './compose/jobs';
 import { clockText, defaultFont } from './compose/ffmpeg';
 import { HostMonitor, type StatFs } from './health/host';
-import { buildHealth, type HealthSummary, type LastInventory } from './health/summary';
+import { buildHealth, type CameraHealthInput, type HealthSummary, type LastInventory } from './health/summary';
 import { localApi } from './api/local-api';
 import { archiveApi } from './api/archive-api';
 import { Archive } from './archive/service';
@@ -403,20 +403,27 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       audit.write({ action: 'auth-refused', category: ['authentication'], type: ['denied'], outcome: 'failure', ip, userAgent: req.get('user-agent'), message: `Refused ${req.method} ${path} (${info.reason})`, ecs: { http: { request: { method: req.method } }, url: { path } }, details: { auth: { tokenKind: info.tokenKind, reason: info.reason, ...(t.suppressed ? { suppressed: t.suppressed } : {}) } } });
     },
   };
-  const ftpStatus = () => ({
-    enabled: running.ftp.enabled,
-    listening: clips?.side.listening() ?? false,
-    port: running.ftp.port,
-    tls: running.ftp.tls,
-    publicHost: running.ftp.publicHost ?? null,
-    passwordSet: !!loaded.secrets.ftpPassword,
-    lastUpload: clips?.side.lastUpload() ?? null,
-    lastClip: clips?.side.indexer.lastIndexed() ?? null,
-    clips: countAllClips(catalog),
-    failures: (clips?.side.uploadFailures() ?? 0) + (clips?.side.indexer.failures() ?? 0),
-    camera: running.ftp.enabled ? cams.first().ftpWatch.view() : null,
-    stalled: cams.first().clipsHealth(),
-  });
+  // One camera's FTP status: the server's figures only for the camera that
+  // uploads to it (Ruling P1-2); the clip count of every camera while there
+  // is one (the Pi's number as before), else this camera's.
+  const ftpStatusOf = (w: CameraWorker) => {
+    const mine = clips !== undefined && ftpCamera() === w;
+    return {
+      enabled: w.cam().ftp.enabled,
+      listening: mine ? clips!.side.listening() : false,
+      port: running.ftp.port,
+      tls: running.ftp.tls,
+      publicHost: running.ftp.publicHost ?? null,
+      passwordSet: !!loaded.secrets.ftpPassword,
+      lastUpload: mine ? clips!.side.lastUpload() : null,
+      lastClip: mine ? clips!.side.indexer.lastIndexed() : null,
+      clips: cams.size === 1 ? countAllClips(catalog) : countAllClips(catalog, w.id),
+      failures: mine ? clips!.side.uploadFailures() + clips!.side.indexer.failures() : 0,
+      camera: w.cam().ftp.enabled ? w.ftpWatch.view() : null,
+      stalled: w.clipsHealth(),
+    };
+  };
+  const ftpStatus = () => ftpStatusOf(cams.first());
   const streamStatus = () => cams.first().streamStatus();
 
   // The health summary (spec 2026-10-03-health-summary-design): the host
@@ -439,20 +446,30 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     }
     return last;
   };
-  const healthNow = async (): Promise<HealthSummary> => {
-    const w = cams.first();
+  // One camera's part of the health summary (spec 2026-10-05-multi-camera-host-design §6.5).
+  const cameraHealthInput = (w: CameraWorker): CameraHealthInput => {
     const ps = w.cam().poeSwitch;
+    return {
+      camera: { id: w.id, name: w.name(), host: w.cam().host, state: w.status.state(), reboot: w.reboot.state()?.phase ?? null, poeSwitch: ps.model === 'none' ? null : { model: ps.model, port: ps.port ?? null } },
+      stream: w.streamStatus(),
+      intake: w.intake.state(),
+      ftp: ftpStatusOf(w),
+    };
+  };
+  const healthNow = async (): Promise<HealthSummary> => {
+    const [first, ...others] = cams.list().map(cameraHealthInput);
+    // The recordings caches of every camera (one camera: its own, as before).
+    const caches = cams.list().map((w) => w.recordings.status().cache);
+    const recordingsCache = caches.length === 1 ? caches[0] : caches.reduce((a, c) => ({ bytes: a.bytes + c.bytes, files: a.files + c.files, capBytes: a.capBytes + c.capBytes }), { bytes: 0, files: 0, capBytes: 0 });
     return buildHealth({
       now: Date.now(),
       version: VERSION,
       startedAt,
       thresholds: { diskPercent: running.health.diskPercent, tempC: running.health.tempC, ftpStalledHours: running.ftp.stalledHours, ...(running.archive.enabled ? { archiveWarnPercent: running.archive.warnPercent } : {}) },
-      camera: { id: w.id, name: w.name(), host: w.cam().host, state: w.status.state(), reboot: w.reboot.state()?.phase ?? null, poeSwitch: ps.model === 'none' ? null : { model: ps.model, port: ps.port ?? null } },
-      stream: streamStatus(),
-      intake: w.intake.state(),
-      ftp: ftpStatus(),
+      ...first,
+      others,
       storage: { paused: storage.paused(), lastRun: storage.lastRun() },
-      recordingsCache: w.recordings.status().cache,
+      recordingsCache,
       sseClients: sse.clients(),
       lastInventory: await lastInventory(),
       reading: hostMonitor.reading(),

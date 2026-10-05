@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { openCatalog, type Catalog } from '../src/catalog/db';
 import { countEventsByKind, insertEvent } from '../src/catalog/events';
-import { countClips, insertClip } from '../src/catalog/clips';
+import { countAllClips, countClips, insertClip } from '../src/catalog/clips';
 import { countAnalysesByStatus, saveAnalysis, type AnalysisStatus } from '../src/catalog/analyses';
 
 let dir: string;
@@ -43,5 +43,12 @@ describe('catalog counts', () => {
     insertClip(c, { cam: 'cam1', start_ts: 1900, end_ts: 2000, path: 'cam1/r.mp4', stream: 'sub', size: 1, received_at: 2000, snapshot: null, origin: 'camera' });
     expect(countClips(c, 'cam1', 0, 5000)).toBe(1);
     expect(countAnalysesByStatus(c, 'cam1', 0, 5000)).toEqual({ ok: 1, skipped: 1 });
+  });
+
+  it('countAllClips: every camera, or one (the health summary per camera)', () => {
+    insertClip(c, { cam: 'cam3', start_ts: 1, end_ts: 2, path: 'cam3/a.mp4', stream: 'sub', size: 1, received_at: 2, snapshot: null });
+    insertClip(c, { cam: 'cam4', start_ts: 1, end_ts: 2, path: 'cam4/a.mp4', stream: 'sub', size: 1, received_at: 2, snapshot: null });
+    expect(countAllClips(c)).toBe(2);
+    expect(countAllClips(c, 'cam4')).toBe(1);
   });
 });

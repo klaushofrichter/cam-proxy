@@ -1,0 +1,129 @@
+{
+  "schema": 1,
+  "generatedAt": 1791041100000,
+  "version": "2026.10.03.2",
+  "startedAt": 1791012000000,
+  "ok": false,
+  "problemCount": 1,
+  "thresholds": {
+    "diskPercent": 90,
+    "tempC": 75,
+    "ftpStalledHours": 6
+  },
+  "platform": {
+    "pi": false,
+    "model": null,
+    "hostStats": false
+  },
+  "items": [
+    {
+      "id": "camera",
+      "label": "Camera",
+      "value": true,
+      "text": "online",
+      "problem": false
+    },
+    {
+      "id": "stream",
+      "label": "Live stream",
+      "value": "up",
+      "text": "up",
+      "problem": false
+    },
+    {
+      "id": "events",
+      "label": "Events intake",
+      "value": "subscribed",
+      "text": "subscribed",
+      "problem": false
+    },
+    {
+      "id": "ftp",
+      "label": "Camera FTP upload",
+      "value": "on",
+      "text": "no clip for 6 h",
+      "problem": true
+    },
+    {
+      "id": "storage",
+      "label": "Storage",
+      "value": "writing",
+      "text": "writing",
+      "problem": false
+    },
+    {
+      "id": "disk",
+      "label": "Disk",
+      "value": 62.3,
+      "text": "62.3 % of 19.6 GB",
+      "problem": false
+    },
+    {
+      "id": "inventory",
+      "label": "Last inventory",
+      "value": null,
+      "text": "none yet",
+      "problem": false
+    },
+    {
+      "id": "version",
+      "label": "Version",
+      "value": "2026.10.03.2",
+      "text": "2026.10.03.2",
+      "problem": false
+    }
+  ],
+  "camera": {
+    "id": "cam2",
+    "name": "cam2",
+    "address": "cam2.example.test",
+    "online": true,
+    "since": 1791012003000,
+    "model": "RLC-1224A",
+    "firmware": "v3.1.0.4054_2409213180",
+    "clockOffsetMs": 3,
+    "error": null,
+    "reboot": null,
+    "poeSwitch": null
+  },
+  "stream": {
+    "enabled": true,
+    "up": true,
+    "lastFrameAt": 1791041099000
+  },
+  "events": {
+    "onvif": "subscribed",
+    "source": "onvif",
+    "since": 1791012004000,
+    "resubscribes": 48
+  },
+  "ftp": {
+    "enabled": true,
+    "listening": true,
+    "cameraUpload": "on",
+    "checkedAt": 1791040900000,
+    "lastClipAt": 1791016000000,
+    "clipsStored": 95,
+    "failures": 0,
+    "stalled": true,
+    "eventsWithoutClip": 4
+  },
+  "proxy": {
+    "sseClients": 1,
+    "storagePaused": false,
+    "lastRetentionRun": 1791038400000,
+    "recordingsCache": {
+      "bytes": 0,
+      "files": 0,
+      "capBytes": 2147483648
+    },
+    "lastInventory": null
+  },
+  "disk": {
+    "sizeBytes": 21003583488,
+    "freeBytes": 7918845952,
+    "usedBytes": 13084737536,
+    "usedPercent": 62.3
+  },
+  "host": null
+}
