@@ -896,32 +896,49 @@ mini PC sees both directions, so its conntrack is complete; the router sees
 only the client's side. Stock Asuswrt filters WAN traffic with its SPI
 firewall, not LAN to LAN, so this usually works. Whether the RT-AX86U
 forwards LAN to LAN through its hardware acceleration without dropping the
-one-sided flow is *to verify on the device*. The test below checks it.
+one-sided flow was the open point; the pre-arrival test below showed that it
+hairpins.
 
-**Pre-arrival test, with the Mac standing in for the host** (the steps
-Klaus was given, 2026-10-05). It checks the router half of the design
-(route entry, hairpin, LAN-to-LAN forwarding) before the PC exists. The Mac
-takes the host's future camera-side address, `192.168.60.1`:
+**Pre-arrival test, with the Mac standing in for the host.** It checks
+the router half of the design (route entry, hairpin, LAN-to-LAN forwarding)
+before the PC exists. The Mac takes the host's future camera-side address,
+`192.168.60.1`:
 
-1. On the Mac (LAN address `192.168.1.35`):
-   `sudo ifconfig lo0 alias 192.168.60.1/32`, then a test server
-   `python3 -m http.server 8060 --bind 192.168.60.1` (the macOS firewall
-   must allow it).
-2. On the router: static route network `192.168.60.0`, netmask
-   `255.255.255.0`, gateway `192.168.1.35` (the Mac), interface `LAN`
-   (steps above).
-3. From the Pi (another LAN client): `ping -c 3 192.168.60.1` and
-   `curl -v http://192.168.60.1:8060/`. The packets go to the router, are
-   hairpinned to the Mac, and the Mac answers the Pi directly. That is the
-   same reply path the mini PC will use. If anything fails:
+1. On the Mac (LAN address `192.168.1.35`, Wi-Fi `en0`): put the alias **on
+   the interface the route points to**:
+   `sudo ifconfig en0 alias 192.168.60.1 netmask 255.255.255.255`. Then run
+   a test server, `python3 -m http.server 8060 --bind 192.168.60.1` (the
+   macOS firewall must allow it). Not `lo0`: macOS sends replies out of the
+   interface that holds the source address, so with the alias on `lo0` the
+   requests arrive but no reply ever leaves (seen in the run below).
+2. On the router (LAN → Route, static routes enabled): network
+   `192.168.60.0`, netmask `255.255.255.0`, gateway `192.168.1.35`,
+   interface `LAN`, then Apply. **Double-check the Network field.** A typo
+   that makes it a /24 over the LAN itself (e.g. `192.168.1.x`) would send
+   the LAN's own traffic to the gateway, which is harmful.
+3. From the Pi (`192.168.1.220`, another LAN client): `ping -c 3
+   192.168.60.1` and `curl -v http://192.168.60.1:8060/`. The packets go to
+   the router, are hairpinned to the Mac, and the Mac answers the Pi
+   directly: the same reply path the mini PC will use. If anything fails,
    `sudo tcpdump -ni en0 host 192.168.60.1` on the Mac shows whether the
    router forwards at all.
-4. Cleanup: delete the route on the router, stop the server,
-   `sudo ifconfig lo0 -alias 192.168.60.1`.
+4. Cleanup: stop the server, `sudo ifconfig en0 -alias 192.168.60.1`, delete
+   the route on the router and Apply.
 
-Success means the RT-AX86U accepts the route and hairpins LAN-to-LAN
-traffic. Forwarding through the host itself and its firewall are tested on
-the device (below).
+**Result (Klaus, 2026-10-05, about 12:40):** on the RT-AX86U
+3.0.0.4.388_24436, the static route was entered as in step 2 (the first try
+had the typo `192.168.1.60` in the Network field and was corrected). With the
+alias on `lo0`, tcpdump showed the requests arriving but macOS sent no
+replies: a stand-in artifact, not the router. With the alias on `en0`, from
+the Pi: ping with 0 % loss (about 70 ms, over the Mac's Wi-Fi), and `curl
+http://192.168.60.1:8060/` answered 200 in 14 ms. The router also sends ICMP
+redirects (the Pi's ping counts them as "+N errors"). They are harmless:
+clients may then go to the gateway directly.
+
+**Conclusion: the hairpin static route works on this router.** The NAT
+fallback is not needed. Still to run: the same test from a **cluster node**
+(k3s pods leave the cluster with the node's address, so a node test covers
+cams's path), through the kube-setup session, before P4 depends on it.
 
 **Test procedure on the device** (after the PC arrives; run it before
 anything else depends on the route):
@@ -964,7 +981,8 @@ anything else depends on the route):
 5. **Decide:** if steps 1 and 2 pass and the route survives a router reboot,
    keep the route. If not, use the fallbacks below in order.
 
-Alternatives if the router can't (ranked):
+Alternatives if the router can't (ranked; kept for reference, not needed
+after the 2026-10-05 test):
 
 1. **1:1 NAT on the host:** the host takes one extra LAN address per camera
    (outside the router's DHCP pool) and DNATs/SNATs it to the camera. No
@@ -1079,10 +1097,9 @@ is not planned.
 ## 17. Open questions for Klaus
 
 Klaus's answers resolved questions 1–4 of the first draft ("Answers" at the
-top). Left, and none blocks P1–P3:
+top), and the router test answered the NAT question (§13.3: not needed). Left,
+and it doesn't block P1–P3:
 
 1. **The new PoE switch's model**, once chosen: it decides whether
    power-cycling works on the mini PC. A switch with a documented local API
    is preferable; see §8.4.
-2. **The router pre-test result** (§13.3): if the RT-AX86U doesn't hairpin,
-   is 1:1 NAT on the host (fallback 1) acceptable?
