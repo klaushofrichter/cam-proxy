@@ -22,7 +22,7 @@ describe('Find camera', () => {
     expect(deviceLabel({ ...dev, name: null, model: null, hardware: null })).toBe('unnamed ONVIF device');
   });
   it('flags a device whose answer came from another address than it names', () => {
-    expect(mismatchText({ ...dev, sender: '192.168.1.66', mismatch: true, useAddress: '192.168.1.66' })).toBe('address mismatch: it answered from 192.168.1.66 but names 192.168.1.20; "Use this address" takes 192.168.1.66');
+    expect(mismatchText({ ...dev, sender: '192.168.1.66', mismatch: true, useAddress: '192.168.1.66' })).toBe('address mismatch: it answered from 192.168.1.66 but names 192.168.1.20; "Use this camera" takes 192.168.1.66');
     expect(mismatchText({ ...dev, sender: '192.168.1.20', mismatch: false, useAddress: '192.168.1.20' })).toBeNull();
   });
   it('says what was found', () => {
