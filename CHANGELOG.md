@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.10.06.2
+
 - cams-admin client (off unless `camsAdmin.url` is set; the Pi is unchanged until enrolled): enroll with a one-time code (`admin-enroll --url U`, the code on stdin, or the Status page's cams-admin card), then one outbound WebSocket that sends the health summary as a heartbeat (signed handshake, the server key pinned at enrollment, backoff with jitter, close codes per cams-admin's spec §8.8). `admin-unenroll`. Key file `data/admin/key.json` (mode 600). `GET /control/admin`, `POST /control/admin/enroll|reconnect|unenroll`; audit actions `admin-enroll`, `admin-unenroll`; `camproxy_cams_admin_state{state}`. Settings `camsAdmin.url`, `camsAdmin.keyFile`, `camsAdmin.enabled` (`camsAdmin.allowCommands` must be empty). docs/cams-admin.md.
 
 ## v2026.10.06.1
