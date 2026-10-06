@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { canEnroll, commandsBanner, stateClass, stateText, tokenStateText, widenErrorText } from '../web/src/lib/cams-admin';
-import { ApiError } from '../web/src/lib/api';
+// Shaped like web/src/lib/api's ApiError (that module needs a browser's types).
+const apiError = (status: number, body: unknown) => Object.assign(new Error(`HTTP ${status}`), { status, body });
 
 // The Status page's cams-admin card (spec 2026-10-06-cams-admin-phase1-design §9.2).
 describe('the cams-admin card', () => {
@@ -45,8 +46,8 @@ describe('commands and managed tokens on the card', () => {
     expect(tokenStateText({ ...t, retireAt: now + 120_000 }, now)).toBe('retires in 2 min');
   });
   it('a refused widening says how to do it', () => {
-    expect(widenErrorText(new ApiError(403, { error: 'local_admin_only' }), 'x')).toBe("Adding a command needs the proxy's own admin token: sign in with it (not through cams).");
-    expect(widenErrorText(new ApiError(400, { error: 'invalid', detail: 'bad' }), 'Not saved')).toBe('bad');
+    expect(widenErrorText(apiError(403, { error: 'local_admin_only' }), 'x')).toBe("Adding a command needs the proxy's own admin token: sign in with it (not through cams).");
+    expect(widenErrorText(apiError(400, { error: 'invalid', detail: 'bad' }), 'Not saved')).toBe('bad');
     expect(widenErrorText(new Error('x'), 'Not saved')).toBe('Not saved');
   });
 });

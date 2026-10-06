@@ -15,7 +15,13 @@ import { vectors } from './contract';
 // - reject: closes after the hello with 4401;
 // - bad-sig: signs the challenge with another key;
 // - no-ack: never acknowledges a heartbeat.
-export type Mode = 'normal' | 'silent' | 'garbage' | 'flap' | 'reject' | 'bad-sig' | 'no-ack';
+// P2 command modes (after the welcome):
+// - command-flood: 500 validly signed commands a second for a command not allowed (config.get);
+// - forged: tokens.apply commands signed with another key;
+// - replay: a command, re-sent 1 s later on the same connection and again on the next one;
+// - oversize: tokens.apply with 200 KiB of args;
+// - junk-commands: commands whose bodies miss every field.
+export type Mode = 'normal' | 'silent' | 'garbage' | 'flap' | 'reject' | 'bad-sig' | 'no-ack' | 'command-flood' | 'forged' | 'replay' | 'oversize' | 'junk-commands';
 
 export interface Received { conn: number; msg: Envelope }
 
@@ -199,12 +205,53 @@ export class FakeAdmin {
         if (!ok || mode === 'reject') return void ws.close(4401);
         this.chan.get(ws)!.proxyId = b.proxyId;
         this.sendTo(ws, 'welcome', { heartbeatS: this.welcomeHeartbeatS, offlineAfterS: 90, maxMessageBytes: 262144, serverTime: Date.now() });
+        this.hostile(ws, mode, connId, b.proxyId);
       } else if (msg.type === 'heartbeat') {
         if (mode !== 'no-ack') this.sendTo(ws, 'ack', { nextInS: this.nextInS }, { re: msg.id });
       } else if (msg.type === 'result' && this.closeAfterReceived && (msg.body as { phase?: string }).phase === 'received') {
         ws.terminate();
       }
     });
+  }
+
+  // The last command of replay mode, re-sent on the next connection too.
+  private captured: string | null = null;
+  private hostile(ws: WebSocket, mode: Mode, connId: string, proxyId: string): void {
+    const raw = (body: Record<string, unknown>, o: { key?: string; ts?: number } = {}): string => {
+      const seq = (this.seqOut.get(ws) ?? 0) + 1;
+      this.seqOut.set(ws, seq);
+      const ts = o.ts ?? Date.now();
+      const m: Record<string, unknown> = { v: 1, type: 'command', id: ulid(Date.now()), seq, ts, body };
+      m.sig = signEnvelope(o.key ?? this.server.privateKey, m as never);
+      return JSON.stringify(m);
+    };
+    const cmd = (command: string, args: Record<string, unknown>) => ({ proxyId, connId, cmdId: `cmd_${ulid(Date.now()).slice(6)}`, exp: Date.now() + 30_000, actor: 'mallory@example.org', command, args });
+    const tokens = { v: 1, revision: 99, tokens: [{ id: 'tok_00000000000000000099', kind: 'admin', hash: `sha256:${'9'.repeat(64)}`, label: 'evil', retireAt: null }] };
+    const every = (ms: number, n: number, fn: () => void) => {
+      const t = setInterval(() => {
+        if (ws.readyState !== ws.OPEN) return clearInterval(t);
+        for (let i = 0; i < n; i++) fn();
+      }, ms);
+      ws.on('close', () => clearInterval(t));
+    };
+    if (mode === 'command-flood') every(10, 5, () => ws.send(raw(cmd('config.get', { v: 1 }))));
+    else if (mode === 'forged') every(20, 1, () => ws.send(raw(cmd('tokens.apply', tokens), { key: vectors.keys.other.privateKey })));
+    else if (mode === 'oversize') every(100, 1, () => ws.send(raw(cmd('tokens.apply', { ...tokens, pad: 'x'.repeat(200 * 1024) }))));
+    else if (mode === 'junk-commands') every(20, 1, () => ws.send(raw({})));
+    else if (mode === 'replay') {
+      // A captured command is sent again as it was (its seq is then out of order: the proxy closes).
+      // On the next connection: the captured envelope as it was (its seq happens to fit).
+      if (this.captured) {
+        ws.send(this.captured);
+        this.seqOut.set(ws, (JSON.parse(this.captured) as { seq: number }).seq);
+        return;
+      }
+      const text = raw(cmd('config.get', { v: 1 }));
+      ws.send(text);
+      this.captured = text;
+      const t = setTimeout(() => ws.readyState === ws.OPEN && ws.send(text), 1000);
+      ws.on('close', () => clearTimeout(t));
+    }
   }
 
   private onRequest(req: http.IncomingMessage, res: http.ServerResponse): void {

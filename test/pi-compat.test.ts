@@ -4,7 +4,7 @@
 // Settings page with legacy paths, CAMERA_HOST / PI_ADDRESS, and a catalog
 // as release 8 left it (events, Vision usage).
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { Client } from 'basic-ftp';
@@ -20,6 +20,8 @@ import { createProxy, type Proxy } from '../src/proxy';
 import { ADMIN_TOKEN, CLIENT_TOKEN, auth, freePort, startProxy, until } from './helpers/proxy';
 import { servedFingerprint } from '../src/tls/served';
 import { startSim } from './helpers/sim';
+import { startFakeAdmin } from './helpers/fake-admin';
+import { writeKeyFile } from '../src/fleet/keyfile';
 
 let sim: Awaited<ReturnType<typeof startSim>>;
 let proxy: Proxy;
@@ -260,6 +262,48 @@ describe('the Pi: no cams-admin', () => {
     expect(h.items.map((i: { id: string }) => i.id)).toEqual(PI_ITEM_IDS);
     expect((await request(base).get('/metrics')).text).not.toMatch(/^camproxy_cams_admin_state\{/m);
   });
+  it('migration P2: commands off, no managed tokens; the card reads without writing; an unknown bearer is 401 as before', async () => {
+    expect((await request(base).get('/control/admin/commands').set(auth(ADMIN_TOKEN))).body).toMatchObject({ enabled: true, paused: false, allow: [], recent: [] });
+    expect((await request(base).get('/control/admin/tokens').set(auth(ADMIN_TOKEN))).body).toEqual({ revision: 0, problem: null, items: [] });
+    expect((await request(base).get('/api/cameras').set(auth('x'.repeat(43)))).status).toBe(401);
+    expect((await request(base).get('/api/cameras').set(auth(CLIENT_TOKEN))).status).toBe(200);
+    expect(existsSync(join(dir, 'data', 'admin'))).toBe(false);
+  });
+});
+
+// The Pi as it runs now: enrolled with cams-admin (camsAdmin.url in
+// overrides.json, the key file), updated to P2 with nothing allowed: it
+// connects as before, announces commands, refuses every one, writes nothing new.
+describe('the Pi enrolled with cams-admin, after the P2 update (commands off)', () => {
+  it('connects, reports commands off-by-list, refuses tokens.apply, writes only its key file', async () => {
+    const fake = await startFakeAdmin();
+    fake.welcomeHeartbeatS = 1;
+    const s2 = await startSim();
+    const d2 = mkdtempSync(join(tmpdir(), 'camproxy-pi-enrolled-'));
+    mkdirSync(join(d2, 'data'));
+    writeFileSync(join(d2, 'config.json'), JSON.stringify({
+      camera: { id: 'cam1', name: 'Den', protocol: 'http', user: 'proxy', onvifPort: s2.ports.onvif, rtspPort: s2.ports.rtsp || 554, baichuanPort: s2.camera.baichuanPort },
+      server: { logLevel: 'silent' }, stills: { enabled: false },
+    }));
+    writeFileSync(join(d2, 'data', 'overrides.json'), JSON.stringify({ camsAdmin: { url: fake.url } }));
+    writeKeyFile(join(d2, 'data', 'admin', 'key.json'), fake.keyFile());
+    const q = createProxy(loadConfig({ CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: s2.password, CAMERA_HOST: s2.camera.host, PI_ADDRESS: '127.0.0.1' }, { cwd: d2 }), { camsAdmin: { timing: { minIntervalS: 0.2, jitterS: 0 } } });
+    const { port } = await q.start({ port: 0, host: '127.0.0.1' });
+    try {
+      await until(() => fake.heartbeats().length >= 1 && q.camsAdmin.view().state === 'connected', 10_000);
+      expect(fake.received.find((r) => r.msg.type === 'hello')!.msg.body).toMatchObject({ capabilities: ['status', 'commands'] });
+      expect((fake.heartbeats()[0].msg.body as { proxy: unknown }).proxy).toMatchObject({ commands: { enabled: true, paused: false, allow: [] }, tokens: { revision: 0, client: 0, admin: 0, blocked: [] } });
+      const { cmdId } = fake.sendCommand('tokens.apply', { v: 1, revision: 1, tokens: [] });
+      await until(() => fake.results(cmdId).length === 1);
+      expect(fake.results(cmdId)[0].msg.body).toMatchObject({ phase: 'done', status: 'refused', code: 'not_allowed' });
+      expect((await request(`http://127.0.0.1:${port}`).get('/api/cameras').set(auth(CLIENT_TOKEN))).status).toBe(200);
+      expect(readdirSync(join(d2, 'data', 'admin'))).toEqual(['key.json']);
+    } finally {
+      await q.stop();
+      await fake.close();
+      await s2.close();
+    }
+  }, 60_000);
 });
 
 describe("cam1 as on the Pi (https, tlsName: its Let's Encrypt name) with a site CA on: never pushed to", () => {

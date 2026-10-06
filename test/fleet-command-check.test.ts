@@ -60,6 +60,12 @@ describe('each refusal', () => {
     expect(code(cmd((b) => (b.command = 'frobnicate')), ctx())).toBe('not_allowed');
     expect(code(cmd((b) => (b.command = 'config.get')), ctx({ policy: { enabled: true, paused: false, allow: ['config.get'] } }))).toBe('not_allowed');
   });
+  it('args over 16384 bytes of canonical JSON are invalid_args (the contract bound), checked before the validator', () => {
+    // 64 tokens with 64-character labels of 4-byte characters: each entry valid, the whole too big.
+    const big = (b: Record<string, any>) => (b.args.tokens = Array.from({ length: 64 }, (_, i) => ({ id: `tok_${String(i).padStart(20, '0')}`, kind: 'client', hash: hash(`t${i}`), label: '\u{1F600}'.repeat(64), retireAt: null })));
+    expect(code(cmd(big), ctx())).toBe('invalid_args');
+    expect(code(cmd((b) => (b.args = 'not an object')), ctx())).toBe('invalid_args');
+  });
   it('unsupported_version and invalid_args', () => {
     expect(code(cmd((b) => (b.args.v = 2)), ctx())).toBe('unsupported_version');
     expect(code(cmd((b) => (b.args.tokens[0].hash = b.args.tokens[0].hash.toUpperCase())), ctx())).toBe('invalid_args');

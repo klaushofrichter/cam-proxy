@@ -1,5 +1,6 @@
 import type { Envelope } from './protocol';
 import { verifyEnvelope } from './protocol';
+import { jcs } from './jcs';
 import { ARGS_VALIDATORS } from './command-args';
 import type { JournalEntry } from './journal';
 
@@ -14,6 +15,14 @@ export type Decision =
 const CMD_ID = /^cmd_[0-9A-HJKMNP-TV-Z]{20}$/;
 const SLACK_MS = 120_000;
 const MAX_LIFETIME_MS = 60_000;
+const MAX_ARGS_BYTES = 16_384;
+const argsBytes = (a: unknown): number => {
+  try {
+    return Buffer.byteLength(jcs(a));
+  } catch {
+    return Infinity;
+  }
+};
 const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 
 export class SeenIds {
@@ -70,6 +79,8 @@ export function checkCommand(m: Envelope, c: CheckContext): Decision {
   if (!c.implemented.has(command) || !c.policy.allow.includes(command)) return nack('not_allowed');
   const t = c.limits.take(command);
   if (!t.ok) return nack('rate_limited', t.retryAfterS);
+  // The contract bound: jcs(args) at most 16384 bytes (UTF-8), before any validator.
+  if (!isObj(b.args) || argsBytes(b.args) > MAX_ARGS_BYTES) return nack('invalid_args');
   const v = ARGS_VALIDATORS[command]?.(b.args);
   if (!v || !v.ok) return nack(v && !v.ok ? v.code : 'invalid_args');
   if (command === 'tokens.apply' && (v.args as { tokens: { kind: string }[] }).tokens.some((x) => x.kind === 'admin') && !c.policy.allow.includes('tokens.apply.admin')) return nack('not_allowed');
