@@ -180,6 +180,7 @@ const actor = (req: express.Request) => actorOf(req.res?.locals.access as Access
 
 // Sign-ins with the token form per client and 15 minutes (Klaus, 2026-10-01: 40).
 export const LOGIN_ATTEMPTS = 40;
+const MANAGED_RENAMES_PER_MIN = 6;
 
 export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnType<typeof createSessionSigner>; links: ReturnType<typeof createLoginLinks>; audit: AuditLog; managedAdminLive?: (tokenId: string) => { label: string } | null }): express.Router {
   const r = express.Router();
@@ -366,6 +367,7 @@ export function controlApi(d: ControlDeps): express.Router {
     return d.cameraCount() === 1 ? d.cameraId() : null;
   };
 
+  const renames = new Map<string, number[]>();
   const putName = async (req: express.Request, res: Response) => {
     const cam = targetCamera(req, res);
     if (cam === undefined) return;
@@ -373,6 +375,18 @@ export function controlApi(d: ControlDeps): express.Router {
     const name: unknown = req.body?.name;
     const problem = cameraNameProblem(name);
     if (problem) return void res.status(400).json({ error: 'invalid_name', reason: problem });
+    // Managed admin rights (cams-admin's token): at most 6 renames a minute per
+    // camera; each one is a SetDevName on the real camera.
+    if ((res.locals.access as AccessInfo | undefined)?.origin === 'managed') {
+      const t = Date.now();
+      const w = (renames.get(cam) ?? []).filter((x) => t - x < 60_000);
+      if (w.length >= MANAGED_RENAMES_PER_MIN) {
+        res.setHeader('Retry-After', String(Math.max(1, Math.ceil((w[0] + 60_000 - t) / 1000))));
+        return void res.status(429).json({ error: 'rate_limited' });
+      }
+      w.push(t);
+      renames.set(cam, w);
+    }
     const to = name as string;
     const from = d.cameraName.current(cam);
     const requestedBy = res.locals.access?.viaCookie ? 'session' : 'token';

@@ -88,4 +88,11 @@ describe('a managed admin token on the admin API', () => {
     const l = await session(ADMIN_TOKEN);
     expect((await send('PUT', '/control/config', { Cookie: l, 'x-camproxy-ui': '1' }, { sse: { pingS: 9 } })).status).toBe(200);
   });
+  it('camera rename with managed rights: at most 6 a minute per camera (each one writes the real camera); local rights unaffected', async () => {
+    for (let i = 0; i < 6; i++) expect((await send('PUT', '/control/cameras/cam1/name', auth(MANAGED_ADMIN), { name: `Den ${i}` })).status, String(i)).toBe(200);
+    const r = await send('PUT', '/control/cameras/cam1/name', auth(MANAGED_ADMIN), { name: 'Den 7' });
+    expect([r.status, r.body.error]).toEqual([429, 'rate_limited']);
+    expect(Number(r.headers['retry-after'])).toBeGreaterThan(0);
+    expect((await send('PUT', '/control/cameras/cam1/name', auth(ADMIN_TOKEN), { name: 'Den local' })).status).toBe(200);
+  });
 });
