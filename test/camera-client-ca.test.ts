@@ -55,4 +55,34 @@ describe('camera requests verified against the site CA (spec §10.4)', () => {
       server.close();
     }
   }, 120_000);
+
+  it('a pinned camera: only the certificate with that SHA-256 is accepted, before any request byte (security review #178)', async () => {
+    const ca = await siteCa(mkdtempSync(join(tmpdir(), 'camproxy-cca5-')), { site: 'g', cameraSubnet: '127.0.0.0/16', proxyAddresses: ['127.0.0.1'] });
+    const a = await issueLeaf(ca, { cn: 'x', dns: ['cam3.g.internal'], ips: ['127.0.0.1'] });
+    const b = await issueLeaf(ca, { cn: 'x', dns: ['cam3.g.internal'], ips: ['127.0.0.1'] });
+    let requests = 0;
+    const server = https.createServer({ cert: a.certPem, key: a.keyPem }, (_q, r) => (requests++, r.end('{}')));
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const host = `127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      // The served certificate itself as the trust anchor, and its fingerprint.
+      const ok = await openRequest({ protocol: 'https', host, ca: a.certPem, pin: a.fingerprint }, '/', { timeoutMs: 5000 });
+      ok.resume();
+      expect(ok.statusCode).toBe(200);
+      await expect(openRequest({ protocol: 'https', host, ca: a.certPem, pin: b.fingerprint }, '/', { timeoutMs: 5000 })).rejects.toThrow();
+      // The site CA with a name and a binding to the leaf read just before: another leaf of the same CA is refused.
+      await expect(openRequest({ protocol: 'https', host, ca: ca.certPem, tlsServername: 'cam3.g.internal', pin: b.fingerprint }, '/', { timeoutMs: 5000 })).rejects.toThrow();
+      expect(requests).toBe(1);
+      const client = new ReolinkClient({ id: 'cam3', host, protocol: 'https', user: 'u', password: 'p' });
+      client.setTrust({ ca: b.certPem, fingerprint: b.fingerprint });
+      expect(await client.cameraCertificate()).toBeNull();
+      client.setTrust({ ca: a.certPem, fingerprint: a.fingerprint });
+      expect(await client.cameraCertificate()).not.toBeNull();
+      expect(client.trusted()).toBe(true);
+      client.setTrust(undefined);
+      expect(client.trusted()).toBe(false);
+    } finally {
+      server.close();
+    }
+  }, 120_000);
 });

@@ -5,6 +5,12 @@ import { IncomingMessage } from 'node:http';
 import { logger } from '../log';
 import { type TimeInfo, timeInfoFromGetTime } from './time';
 
+// How a camera is verified (spec 2026-10-05-multi-camera-host-design §10.4):
+// the site CA by its .internal name, or one pinned certificate (ca = that
+// certificate, fingerprint = its SHA-256); a fingerprint with the CA binds a
+// session to the leaf read just before.
+export interface CameraTrust { ca: string; servername?: string; fingerprint?: string }
+
 // The camera as the client needs it.
 export interface CameraConfig {
   id: string;
@@ -15,7 +21,7 @@ export interface CameraConfig {
   user: string;
   password: string;
 }
-import { bareHost, CameraTarget, openRequest, readBody, requestWasWritten, ResponseTooLargeError, splitHost } from './http';
+import { bareHost, CameraTarget, openRequest, pinCheck, readBody, requestWasWritten, ResponseTooLargeError, splitHost } from './http';
 import { Semaphore } from './semaphore';
 
 export type CameraErrorCode = 'camera_offline' | 'camera_auth_failed' | 'camera_error';
@@ -83,8 +89,8 @@ export class ReolinkClient {
   private readonly gate: Semaphore;
   private readonly timeoutMs: number;
   private target: CameraTarget;
-  // The site CA's trust, once the camera serves its leaf (setTrust).
-  private trust: { ca: string; servername: string } | undefined;
+  // The site CA's trust or a pin (setTrust).
+  private trust: CameraTrust | undefined;
 
   constructor(
     private readonly cam: CameraConfig,
@@ -104,9 +110,16 @@ export class ReolinkClient {
   // on (spec 2026-10-05-multi-camera-host-design §10.4), or, with undefined,
   // as configured again (the camera stopped serving its leaf). Requests in
   // flight finish on their connection.
-  setTrust(t: { ca: string; servername: string } | undefined): void {
+  setTrust(t: CameraTrust | undefined): void {
     this.trust = t;
-    this.target = t ? { protocol: this.cam.protocol, host: this.cam.host, tlsServername: t.servername, ca: t.ca } : { protocol: this.cam.protocol, host: this.cam.host, tlsServername: this.cam.tlsServername };
+    this.target = t
+      ? { protocol: this.cam.protocol, host: this.cam.host, tlsServername: t.servername, ca: t.ca, ...(t.fingerprint ? { pin: t.fingerprint } : {}) }
+      : { protocol: this.cam.protocol, host: this.cam.host, tlsServername: this.cam.tlsServername };
+  }
+
+  // Whether requests verify the camera (a CA or a pin set, or a public-CA name).
+  trusted(): boolean {
+    return this.cam.protocol === 'https' && Boolean(this.target.ca || this.target.tlsServername);
   }
 
   private now(): number {
@@ -223,7 +236,7 @@ export class ReolinkClient {
         socket.destroy();
         resolve(v);
       };
-      const socket = tlsConnect({ host, port: port ?? 443, servername: this.trust?.servername ?? this.cam.tlsServername ?? (isIP(host) ? undefined : host), ca: this.trust?.ca ?? this.opts.tlsCa }, () => {
+      const socket = tlsConnect({ host, port: port ?? 443, servername: this.trust ? this.trust.servername : (this.cam.tlsServername ?? (isIP(host) ? undefined : host)), ca: this.trust?.ca ?? this.opts.tlsCa, ...(this.trust?.fingerprint ? { checkServerIdentity: pinCheck(this.trust.servername, this.trust.fingerprint), allowPartialTrustChain: true } : {}) }, () => {
         const c = socket.getPeerCertificate();
         const t = c?.valid_to ? Date.parse(c.valid_to) : NaN;
         // A throw here would be an uncaught exception in a socket listener.

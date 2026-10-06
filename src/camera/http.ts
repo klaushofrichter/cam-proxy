@@ -1,5 +1,7 @@
 import http, { IncomingMessage } from 'node:http';
 import https from 'node:https';
+import { createHash } from 'node:crypto';
+import { checkServerIdentity, type PeerCertificate } from 'node:tls';
 
 export interface CameraTarget {
   protocol: 'https' | 'http';
@@ -8,6 +10,22 @@ export interface CameraTarget {
   // The only CA the camera is verified against (the site CA, spec
   // 2026-10-05-multi-camera-host-design §10.4): set means always verified.
   ca?: string;
+  // SHA256:<HEX> of the one leaf accepted (a pinned camera, or a push bound to
+  // what it read just before): checked in the handshake, before any request byte.
+  pin?: string;
+}
+
+const fingerprint = (raw: Buffer) => `SHA256:${createHash('sha256').update(raw).digest('hex').toUpperCase()}`;
+
+// The handshake's identity check: the name (when there is one), then the pin.
+export function pinCheck(servername: string | undefined, pin: string): (host: string, cert: PeerCertificate) => Error | undefined {
+  return (host, cert) => {
+    if (servername) {
+      const e = checkServerIdentity(servername, cert);
+      if (e) return e;
+    }
+    return fingerprint(cert.raw) === pin ? undefined : new Error('the camera certificate does not match its pin');
+  };
 }
 
 interface OpenOptions {
@@ -59,7 +77,7 @@ export function openRequest(target: CameraTarget, path: string, opts: OpenOption
   const { hostname, port } = splitHost(target.host);
   const tls =
     target.protocol === 'https'
-      ? { servername: target.tlsServername, rejectUnauthorized: Boolean(target.tlsServername || target.ca), ...(target.ca ? { ca: target.ca } : {}) }
+      ? { servername: target.tlsServername, rejectUnauthorized: Boolean(target.tlsServername || target.ca || target.pin), ...(target.ca ? { ca: target.ca } : {}), ...(target.pin ? { checkServerIdentity: pinCheck(target.tlsServername, target.pin), allowPartialTrustChain: true } : {}) }
       : {};
   const lib = target.protocol === 'https' ? https : http;
   return new Promise((resolve, reject) => {
