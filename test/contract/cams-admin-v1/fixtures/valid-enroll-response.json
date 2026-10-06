@@ -1,0 +1,15 @@
+{
+  "$note": "",
+  "schema": "enroll-response",
+  "message": {
+    "v": 1,
+    "proxyId": "prx_0123456789ABCDEFGHJK",
+    "keyId": "key_0123456789ABCDEFGHJK",
+    "account": "home",
+    "connectUrl": "wss://cams-admin.example.net/proxy/v1/connect",
+    "serverKeys": [
+      "MCowBQYDK2VwAyEAgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q="
+    ],
+    "heartbeatS": 30
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "$note": "ack answers a heartbeat id",
+  "schema": "ack",
+  "$expect": {
+    "runtime": "bad_message",
+    "strict": "invalid"
+  },
+  "message": {
+    "v": 1,
+    "type": "ack",
+    "id": "01K60000000000000000000001",
+    "seq": 1,
+    "ts": 1791273600001,
+    "body": {
+      "nextInS": 30
+    }
+  }
+}

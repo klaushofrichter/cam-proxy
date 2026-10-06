@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/challenge.schema.json",
+  "title": "cams-admin v1 challenge",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "type": {
+      "const": "challenge"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "ts": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "body": {
+      "type": "object",
+      "properties": {
+        "connId": {
+          "type": "string",
+          "pattern": "^con_[0-9A-HJKMNP-TV-Z]{20}$"
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "serverTime": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "serverKeyId": {
+          "type": "string",
+          "pattern": "^SHA256:[0-9A-F]{64}$"
+        }
+      },
+      "required": [
+        "connId",
+        "nonce",
+        "serverTime"
+      ]
+    },
+    "sig": {
+      "type": "string",
+      "maxLength": 100,
+      "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+    }
+  },
+  "required": [
+    "v",
+    "type",
+    "id",
+    "seq",
+    "ts",
+    "body",
+    "sig"
+  ]
+}

@@ -1,0 +1,265 @@
+{
+  "$note": "run time ignores an unknown field; strict refuses: add it to the contract first",
+  "schema": "heartbeat",
+  "$expect": {
+    "runtime": "accepted",
+    "strict": "invalid"
+  },
+  "message": {
+    "v": 1,
+    "type": "heartbeat",
+    "id": "01K60000000000000000000002",
+    "seq": 2,
+    "ts": 1791273600002,
+    "body": {
+      "summary": {
+        "schema": 1,
+        "generatedAt": 1791273600000,
+        "version": "v2026.10.06.1",
+        "startedAt": 1791187200000,
+        "ok": true,
+        "problemCount": 0,
+        "thresholds": {
+          "diskPercent": 90,
+          "tempC": 75,
+          "ftpStalledHours": 6
+        },
+        "platform": {
+          "pi": true,
+          "model": "Raspberry Pi 4 Model B Rev 1.5",
+          "hostStats": true
+        },
+        "items": [
+          {
+            "id": "camera",
+            "label": "Camera",
+            "value": true,
+            "text": "online",
+            "problem": false
+          },
+          {
+            "id": "stream",
+            "label": "Live stream",
+            "value": "up",
+            "text": "up",
+            "problem": false
+          },
+          {
+            "id": "events",
+            "label": "Events intake",
+            "value": "subscribed",
+            "text": "subscribed",
+            "problem": false
+          },
+          {
+            "id": "ftp",
+            "label": "Camera FTP upload",
+            "value": "on",
+            "text": "on",
+            "problem": false
+          },
+          {
+            "id": "storage",
+            "label": "Storage",
+            "value": "writing",
+            "text": "writing",
+            "problem": false
+          },
+          {
+            "id": "disk",
+            "label": "Disk",
+            "value": 41.5,
+            "text": "41.5 % of 234.0 GB",
+            "problem": false
+          },
+          {
+            "id": "cpuTemp",
+            "label": "CPU temperature",
+            "value": 52.1,
+            "text": "52.1 °C",
+            "problem": false
+          },
+          {
+            "id": "underVoltage",
+            "label": "Under-voltage",
+            "value": false,
+            "text": "no",
+            "problem": false
+          },
+          {
+            "id": "inventory",
+            "label": "Last inventory",
+            "value": "ok",
+            "text": "clips: ok",
+            "problem": false
+          },
+          {
+            "id": "version",
+            "label": "Version",
+            "value": "v2026.10.06.1",
+            "text": "v2026.10.06.1",
+            "problem": false
+          }
+        ],
+        "camera": {
+          "id": "cam1",
+          "name": "Camera 1",
+          "address": "192.0.2.10",
+          "online": true,
+          "since": 1791270000000,
+          "model": "RLC-1224A",
+          "firmware": "v3.1.0.4054_2408211442",
+          "clockOffsetMs": 120,
+          "error": null,
+          "reboot": null,
+          "poeSwitch": {
+            "model": "sscpoe-web",
+            "port": 8
+          }
+        },
+        "stream": {
+          "enabled": true,
+          "up": true,
+          "lastFrameAt": 1791273599000
+        },
+        "events": {
+          "onvif": "subscribed",
+          "source": "onvif",
+          "since": 1791266400000,
+          "resubscribes": 3
+        },
+        "ftp": {
+          "enabled": true,
+          "listening": true,
+          "cameraUpload": "on",
+          "checkedAt": 1791273540000,
+          "lastClipAt": 1791272700000,
+          "clipsStored": 120,
+          "failures": 0,
+          "stalled": false,
+          "eventsWithoutClip": 0
+        },
+        "proxy": {
+          "sseClients": 2,
+          "storagePaused": false,
+          "lastRetentionRun": 1791271800000,
+          "recordingsCache": {
+            "bytes": 1234567890,
+            "files": 42,
+            "capBytes": 10737418240
+          },
+          "lastInventory": {
+            "kind": "clips",
+            "op": "check",
+            "outcome": "ok",
+            "startedAt": 1791187200000,
+            "message": "clips: 120 checked, 0 missing"
+          }
+        },
+        "disk": {
+          "sizeBytes": 251000000000,
+          "freeBytes": 146800000000,
+          "usedBytes": 104200000000,
+          "usedPercent": 41.5
+        },
+        "host": {
+          "cpuTempC": 52.1,
+          "underVoltage": false,
+          "memory": {
+            "totalBytes": 8000000000,
+            "availableBytes": 5500000000,
+            "usedPercent": 31.3
+          },
+          "uptimeS": 864000,
+          "load": {
+            "m1": 0.42,
+            "m5": 0.38,
+            "m15": 0.35
+          }
+        },
+        "cameras": [
+          {
+            "camera": {
+              "id": "cam1",
+              "name": "Camera 1",
+              "address": "192.0.2.10",
+              "online": true,
+              "since": 1791270000000,
+              "model": "RLC-1224A",
+              "firmware": "v3.1.0.4054_2408211442",
+              "clockOffsetMs": 120,
+              "error": null,
+              "reboot": null,
+              "poeSwitch": {
+                "model": "sscpoe-web",
+                "port": 8
+              }
+            },
+            "stream": {
+              "enabled": true,
+              "up": true,
+              "lastFrameAt": 1791273599000
+            },
+            "events": {
+              "onvif": "subscribed",
+              "source": "onvif",
+              "since": 1791266400000,
+              "resubscribes": 3
+            },
+            "ftp": {
+              "enabled": true,
+              "listening": true,
+              "cameraUpload": "on",
+              "checkedAt": 1791273540000,
+              "lastClipAt": 1791272700000,
+              "clipsStored": 120,
+              "failures": 0,
+              "stalled": false,
+              "eventsWithoutClip": 0
+            },
+            "cert": null,
+            "items": [
+              {
+                "id": "camera",
+                "label": "Camera",
+                "value": true,
+                "text": "online",
+                "problem": false
+              },
+              {
+                "id": "stream",
+                "label": "Live stream",
+                "value": "up",
+                "text": "up",
+                "problem": false
+              },
+              {
+                "id": "events",
+                "label": "Events intake",
+                "value": "subscribed",
+                "text": "subscribed",
+                "problem": false
+              },
+              {
+                "id": "ftp",
+                "label": "Camera FTP upload",
+                "value": "on",
+                "text": "on",
+                "problem": false
+              }
+            ]
+          }
+        ],
+        "newThing": 1
+      },
+      "proxy": {
+        "startedAt": 1791187200000,
+        "uptimeS": 86400,
+        "configSchema": 7,
+        "tls": null,
+        "publicUrl": null
+      },
+      "truncated": false
+    }
+  }
+}

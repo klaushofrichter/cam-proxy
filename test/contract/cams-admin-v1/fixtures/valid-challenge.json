@@ -1,0 +1,18 @@
+{
+  "$note": "signed by the vectors server key",
+  "schema": "challenge",
+  "message": {
+    "v": 1,
+    "type": "challenge",
+    "id": "01K60000000000000000000001",
+    "seq": 1,
+    "ts": 1791273600001,
+    "sig": "Ihp3EoTokGhz8c/ZEF1uTinJ7rRQWfo5Fl9TKyjtNbwDUo2n4b49Lp5zgHVJtrqCPrJtU4hY/8PvAmBOhrQ4Dg==",
+    "body": {
+      "connId": "con_0123456789ABCDEFGHJK",
+      "nonce": "q83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA",
+      "serverTime": 1791273600000,
+      "serverKeyId": "SHA256:47DEA58EA00FAE9417EE19D76755BFEF690899021132EFFB04FE1F9E4F0C8059"
+    }
+  }
+}

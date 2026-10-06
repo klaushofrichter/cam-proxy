@@ -1,0 +1,18 @@
+{
+  "$note": "seq starts at 1",
+  "schema": "envelope",
+  "$expect": {
+    "runtime": "bad_message",
+    "strict": "invalid"
+  },
+  "message": {
+    "v": 1,
+    "type": "bye",
+    "id": "01K60000000000000000000000",
+    "seq": 0,
+    "ts": 1791273600000,
+    "body": {
+      "reason": "shutdown"
+    }
+  }
+}

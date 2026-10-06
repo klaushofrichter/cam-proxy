@@ -1,0 +1,23 @@
+{
+  "$note": "signed by the vectors proxy key",
+  "schema": "hello",
+  "message": {
+    "v": 1,
+    "type": "hello",
+    "id": "01K60000000000000000000001",
+    "seq": 1,
+    "ts": 1791273600001,
+    "sig": "xKF7aNBBhNmG17Bpmp2NFszl/FMvyzPv4swoHhjPuMqpMGPKAP9ibqO1RhkmRdWJVW0j/+qBhsrgsAlK1QiLAQ==",
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "keyId": "key_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "nonce": "q83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA",
+      "ts": 1791273600000,
+      "version": "v2026.10.06.1",
+      "capabilities": [
+        "status"
+      ]
+    }
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/strict/enroll-response.schema.json",
+  "title": "POST /proxy/v1/enroll 201 answer",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "proxyId": {
+      "type": "string",
+      "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+    },
+    "keyId": {
+      "type": "string",
+      "pattern": "^key_[0-9A-HJKMNP-TV-Z]{20}$"
+    },
+    "account": {
+      "type": "string",
+      "maxLength": 32
+    },
+    "connectUrl": {
+      "type": "string",
+      "pattern": "^wss?://"
+    },
+    "serverKeys": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 100,
+        "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+      },
+      "maxItems": 4,
+      "minItems": 1
+    },
+    "heartbeatS": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "required": [
+    "v",
+    "proxyId",
+    "keyId",
+    "account",
+    "connectUrl",
+    "serverKeys",
+    "heartbeatS"
+  ],
+  "additionalProperties": false
+}

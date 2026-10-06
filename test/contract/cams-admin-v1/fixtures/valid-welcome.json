@@ -1,0 +1,17 @@
+{
+  "$note": "",
+  "schema": "welcome",
+  "message": {
+    "v": 1,
+    "type": "welcome",
+    "id": "01K60000000000000000000002",
+    "seq": 2,
+    "ts": 1791273600002,
+    "body": {
+      "heartbeatS": 30,
+      "offlineAfterS": 90,
+      "maxMessageBytes": 262144,
+      "serverTime": 1791273600000
+    }
+  }
+}
