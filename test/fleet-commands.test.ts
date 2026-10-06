@@ -33,9 +33,9 @@ const bodyOf = (r: { msg: Envelope }) => r.msg.body as Record<string, any>;
 const readdir = (d: string) => readdirSync(d).sort();
 
 // A runner on its own (no socket): a temp data folder, the policy allowing tokens.apply.
-function runnerFixture(o: { allow?: string[]; handlers?: Record<string, (args: unknown) => Done | Promise<Done>>; now?: () => number; localDigests?: Buffer[] } = {}) {
+function runnerFixture(o: { allow?: string[]; handlers?: Record<string, (args: unknown) => Done | Promise<Done>>; now?: () => number; localDigests?: Buffer[]; env?: NodeJS.ProcessEnv } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'runner-'));
-  const policy = new CommandPolicy({ base: () => ({ allow: o.allow ?? ['tokens.apply'], paused: false }), file: join(dir, 'admin', 'policy.json'), env: () => readEnvLayer({}), log: quiet });
+  const policy = new CommandPolicy({ base: () => ({ allow: o.allow ?? ['tokens.apply'], paused: false }), file: join(dir, 'admin', 'policy.json'), env: () => readEnvLayer(o.env ?? {}), log: quiet });
   const journal = new Journal(join(dir, 'admin', 'commands.json'));
   const tokens = new TokenStore({ file: join(dir, 'admin', 'tokens.json'), localDigests: () => o.localDigests ?? [] });
   const audit: Record<string, any>[] = [];
@@ -133,6 +133,63 @@ describe('the runner', () => {
   it('status(): the allow entries this version implements, with pause and enabled', () => {
     const f = runnerFixture({ allow: ['tokens.apply', 'config.get', 'camera.action:camera-reboot'] });
     expect(f.runner.status()).toEqual({ enabled: true, paused: false, pauseReason: null, allow: ['tokens.apply'], seenWindow: 1000 });
+  });
+});
+
+// A pure revocation (cross-repo ruling): cams-admin can always revoke a token,
+// even while paused or with tokens.apply not allowed (a leaked managed admin
+// token could otherwise pause cams-admin out); only the kill switch stops it.
+describe('revocationOnly tokens.apply', () => {
+  const T1 = tok();
+  const T2 = tok();
+  const two = [{ id: TOK(1), kind: 'client' as const, t: T1 }, { id: TOK(2), kind: 'admin' as const, t: T2 }];
+  const seeded = (o: Parameters<typeof runnerFixture>[0] = {}) => {
+    const f = runnerFixture({ ...o, allow: ['tokens.apply', 'tokens.apply.admin'] });
+    f.tokens.apply(argsOf(1, two) as never);
+    return f;
+  };
+  const revoke = (f: ReturnType<typeof runnerFixture>, c: ConnCtx, args: Record<string, unknown>) => f.runner.onCommand(f.command('tokens.apply', { ...args, revocationOnly: true }, c), c, f.send);
+  it('paused: a pure revocation is applied anyway', async () => {
+    const f = seeded();
+    f.policy.pause('incident', 'local');
+    const c = f.conn();
+    await revoke(f, c, argsOf(2, [two[0]]));
+    expect(f.sent.at(-1)!.body).toMatchObject({ phase: 'done', status: 'ok', result: { revision: 2, applied: true, admin: 0, client: 1 } });
+    expect(f.tokens.match(T2)).toBeNull();
+    expect(f.audit.at(-1)).toMatchObject({ action: 'admin-command', outcome: 'success', details: { command: 'tokens.apply' } });
+  });
+  it('tokens.apply not allowed: a pure revocation is applied anyway', async () => {
+    const f = seeded();
+    f.policy.setAllow([], 'local');
+    const c = f.conn();
+    await revoke(f, c, argsOf(2, []));
+    expect(f.sent.at(-1)!.body).toMatchObject({ phase: 'done', status: 'ok', result: { applied: true, client: 0, admin: 0 } });
+  });
+  it('a claim that adds or changes a token is refused not_revocation_only; nothing changes', async () => {
+    const f = seeded();
+    f.policy.pause('incident', 'local');
+    const c = f.conn();
+    await revoke(f, c, argsOf(2, [two[0], { id: TOK(3), kind: 'admin', t: tok() }]));
+    expect(f.sent.at(-1)!.body).toMatchObject({ phase: 'done', status: 'refused', code: 'not_revocation_only' });
+    await revoke(f, c, argsOf(3, [{ ...two[0], label: 'renamed' }]));
+    expect(f.sent.at(-1)!.body).toMatchObject({ status: 'refused', code: 'not_revocation_only' });
+    await revoke(f, c, argsOf(4, two));
+    expect(f.sent.at(-1)!.body).toMatchObject({ status: 'refused', code: 'not_revocation_only' });
+    expect(f.tokens.revision()).toBe(1);
+  });
+  it('the kill switch still refuses it (paused)', async () => {
+    const f = seeded({ env: { CAMPROXY_ADMIN_COMMANDS: 'off' } });
+    const c = f.conn();
+    await revoke(f, c, argsOf(2, []));
+    expect(f.sent.at(-1)!.body).toMatchObject({ status: 'refused', code: 'paused' });
+    expect(f.tokens.revision()).toBe(1);
+  });
+  it('without the field it is a normal tokens.apply (paused → paused)', async () => {
+    const f = seeded();
+    f.policy.pause('incident', 'local');
+    const c = f.conn();
+    await f.runner.onCommand(f.command('tokens.apply', argsOf(2, []), c), c, f.send);
+    expect(f.sent.at(-1)!.body).toMatchObject({ status: 'refused', code: 'paused' });
   });
 });
 

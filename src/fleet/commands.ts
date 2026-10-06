@@ -79,6 +79,7 @@ export class CommandRunner {
       policy: { enabled: p.enabled, paused: p.paused, allow: p.allow },
       journal: (id) => (this.running === id ? 'running' : this.d.journal.get(id)),
       limits: this.limits, implemented: IMPLEMENTED,
+      isRevocation: (a) => this.d.tokens.isRevocation(a),
       ...(this.d.replay ? { seenCmd: { has: (id: string) => this.d.replay!.hasCmd(id), add: (id: string, exp: number) => this.d.replay!.addCmd(id, exp) } } : {}),
     });
     const base = { proxyId: this.d.proxyId(), connId: conn.connId };

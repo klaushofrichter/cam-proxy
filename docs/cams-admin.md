@@ -183,6 +183,14 @@ or link it started, can only **narrow**: untick, pause, block (403
 `local_admin_only` otherwise). So a compromised cams-admin can't allow itself
 more.
 
+**Revocation always gets through.** A `tokens.apply` that cams-admin marks
+`revocationOnly: true` is accepted while paused and even when `tokens.apply`
+isn't allowed, once the proxy has checked the claim: the new set only removes
+entries from the stored one (every entry identical, at least one fewer);
+anything else is refused `not_revocation_only`. So a leaked managed admin
+token can't pause cams-admin out of revoking it. Only the kill switch
+(`CAMPROXY_ADMIN_COMMANDS`) stops it. It is audited like any `tokens.apply`.
+
 ### Pause and the kill switch
 
 - **Pause** (card, `admin-commands pause [reason]`, `camsAdmin.commandsPaused`):

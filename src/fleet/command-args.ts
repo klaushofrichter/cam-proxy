@@ -13,7 +13,9 @@ const LABEL = /^[^\u0000-\u001f\u007f]{1,64}$/u;
 export function validateTokensApply(a: unknown): ArgsVerdict<TokensApplyArgs> {
   if (!isObj(a)) return { ok: false, code: 'invalid_args', detail: 'args: not an object' };
   if (a.v !== 1) return Number.isInteger(a.v) ? { ok: false, code: 'unsupported_version', detail: `args.v ${String(a.v)}` } : { ok: false, code: 'invalid_args', detail: 'args.v' };
-  if (!only(a, ['v', 'revision', 'tokens'])) return { ok: false, code: 'invalid_args', detail: 'args: unknown field' };
+  if (!only(a, ['v', 'revision', 'tokens', 'revocationOnly'])) return { ok: false, code: 'invalid_args', detail: 'args: unknown field' };
+  // A pure revocation (cross-repo ruling): accepted while paused or not allowed, once the proxy has checked the claim.
+  if (a.revocationOnly !== undefined && typeof a.revocationOnly !== 'boolean') return { ok: false, code: 'invalid_args', detail: 'revocationOnly' };
   if (!Number.isSafeInteger(a.revision) || (a.revision as number) < 1) return { ok: false, code: 'invalid_args', detail: 'revision' };
   if (!Array.isArray(a.tokens) || a.tokens.length > 64) return { ok: false, code: 'invalid_args', detail: 'tokens' };
   const ids = new Set<string>();
@@ -31,7 +33,7 @@ export function validateTokensApply(a: unknown): ArgsVerdict<TokensApplyArgs> {
     hashes.add(t.hash);
     out.push({ id: t.id, kind: t.kind, hash: t.hash, label: t.label, retireAt: t.retireAt as number | null });
   }
-  return { ok: true, args: { v: 1, revision: a.revision as number, tokens: out } };
+  return { ok: true, args: { v: 1, revision: a.revision as number, tokens: out, ...(a.revocationOnly === true ? { revocationOnly: true } : {}) } };
 }
 
 export const ARGS_VALIDATORS: Record<string, (a: unknown) => ArgsVerdict<unknown>> = { 'tokens.apply': validateTokensApply };
