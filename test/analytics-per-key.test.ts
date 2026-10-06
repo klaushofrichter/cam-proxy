@@ -63,4 +63,16 @@ describe('Vision per key (spec 2026-10-05-multi-camera-host-design §8.2)', () =
     const r = await s.check('cam3', T0 + 1000, 'token');
     expect(r).toMatchObject({ outcome: 'refused', status: 429, error: 'limit', reason: 'camera' });
   });
+
+  it("checksPerDay is per camera and day (the doc; 10 a day for the Pi's one camera)", async () => {
+    const key = { v: 'key-one-123456789' };
+    const { s, config } = setup(key);
+    config.analytics.googleVision.monthlyLimit = 100;
+    config.analytics.googleVision.checksPerDay = 1;
+    expect((await s.check('cam3', T0 + 1000, 'token')).outcome).toBe('ok');
+    expect(await s.check('cam3', T0 + 2000, 'token')).toMatchObject({ outcome: 'refused', reason: 'checks' });
+    expect((await s.check('cam4', T0 + 1000, 'token')).outcome).toBe('ok');
+    expect(s.usage('cam4').checks).toEqual({ today: 1, cap: 1 });
+    expect(s.state()[0].checks).toEqual({ today: 2, cap: 2 }); // the host: every camera's
+  });
 });

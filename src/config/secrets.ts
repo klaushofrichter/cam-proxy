@@ -50,6 +50,8 @@ export function loadSecrets(env: NodeJS.ProcessEnv, ftpEnabled: boolean, cameraI
   }
   const ftpPassword = read(env, 'CAMPROXY_FTP_PASSWORD');
   if (ftpEnabled && !ftpPassword) throw new SettingError('CAMPROXY_FTP_PASSWORD: required when ftp.enabled');
+  // The FTP server compares at most 256 bytes (src/clips/ftp-server.ts).
+  if (ftpPassword && Buffer.byteLength(ftpPassword, 'utf8') > 256) throw new SettingError('CAMPROXY_FTP_PASSWORD: longer than 256 bytes');
   const auditToken = read(env, 'CAMPROXY_AUDIT_TOKEN');
   if (auditToken !== undefined) {
     if (auditToken.length < MIN_TOKEN || /\s/.test(auditToken)) throw new SettingError(`CAMPROXY_AUDIT_TOKEN: at least ${MIN_TOKEN} characters, no spaces`);

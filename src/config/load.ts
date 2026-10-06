@@ -108,6 +108,8 @@ function crossCheck(c: Config): void {
   const shared = c.cameraOrder.flatMap((id) => (c.cameras[id].storage?.sharePercent !== undefined ? [[id, c.cameras[id].storage.sharePercent!] as const] : []));
   const sum = shared.reduce((n, [, p]) => n + p, 0);
   if (sum > 100) throw new ConfigError(`cameras: storage.sharePercent adds up to ${sum} % (${shared.map(([id, p]) => `${id} ${p}`).join(', ')}); at most 100`);
+  const unshared = c.cameraOrder.filter((id) => c.cameras[id].storage?.sharePercent === undefined);
+  if (shared.length && sum === 100 && unshared.length) throw new ConfigError(`cameras: storage.sharePercent adds up to 100 % (${shared.map(([id, p]) => `${id} ${p}`).join(', ')}); ${unshared.join(', ')} ${unshared.length === 1 ? 'has' : 'have'} no share and would get nothing: give it one, or lower the others`);
   const [a, b] = c.ftp.passive.split('-').map(Number);
   if (a > 65535 || b > 65535 || a > b || b - a > 100) throw new ConfigError('ftp.passive: must be A-B with A <= B, at most 100 ports');
   // One FTP server for every camera (spec 2026-10-05-multi-camera-host-design §7):

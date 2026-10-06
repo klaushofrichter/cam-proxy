@@ -333,8 +333,8 @@ certificate still checks offline as long as it hasn't expired.
   the container, restore both files, start the previous image.
   The host-wide release after it (multi-camera phase 2) adds no migration,
   but overrides.json may then hold settings an older release refuses
-  (`composition.concurrent`, `analytics.googleVision.perCameraDailyCap`, a
-  camera added in the Settings page): back up `data/overrides.json` again
+  (`composition.concurrent`, `analytics.googleVision.perCameraDailyCap`,
+  `cameras.<id>.storage.sharePercent`, a camera added in the Settings page): back up `data/overrides.json` again
   before that update, and restore it for a rollback. From that release on,
   the camera's FTP login is accepted only from its configured address
   (`CAMERA_HOST`, as an IP address); the Pi's host networking keeps that the

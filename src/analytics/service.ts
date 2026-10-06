@@ -241,15 +241,18 @@ export class AnalyticsService {
       paused: this.pause(),
       lastCall: this.lastCall,
       lastError: this.lastError,
-      checks: { today: this.dayUsage(CHECK_USAGE.calls, day), cap: g.checksPerDay },
+      // Every camera's still checks today against checksPerDay per camera.
+      checks: { today: this.dayUsage(CHECK_USAGE.calls, day), cap: g.checksPerDay * Math.max(1, this.d.cams().length) },
       // This key's calls per camera (spec §8.2).
       cameras: this.d.cams().map((id) => ({ id, today: this.dayUsage('google-vision', day, id), month: this.monthUsage(day, id) })),
     }));
   }
 
-  usage(): AnalyticsUsage {
+  // The budget as one camera's client sees it: its still checks today.
+  usage(cam?: string): AnalyticsUsage {
     const { month, today, paused, checks } = this.state()[0];
-    return { enabled: this.active(), paused, month, today, checks };
+    const day = localDay(this.now(), this.d.timeInfo());
+    return { enabled: this.active(), paused, month, today, checks: cam ? { today: this.dayUsage(CHECK_USAGE.calls, day, cam), cap: this.settings().googleVision.checksPerDay } : checks };
   }
 
   private maxOpenMs(): number {
@@ -298,7 +301,8 @@ export class AnalyticsService {
     if (this.monthUsage(day) >= g.monthlyLimit) return refuse(429, 'limit', { reason: 'month' });
     if (g.dailyCap > 0 && this.dayUsage('google-vision', day) >= g.dailyCap) return refuse(429, 'limit', { reason: 'day' });
     if (this.cameraCapReached(cam, day)) return refuse(429, 'limit', { reason: 'camera' });
-    if (this.dayUsage(CHECK_USAGE.calls, day) >= g.checksPerDay) return refuse(429, 'limit', { reason: 'checks' });
+    // Still checks: checksPerDay per camera and day.
+    if (this.dayUsage(CHECK_USAGE.calls, day, cam) >= g.checksPerDay) return refuse(429, 'limit', { reason: 'checks' });
     // The call is reserved in the same synchronous step as the limit checks:
     // an automatic analysis that runs while the still is read sees it.
     const reserved = [this.usageKey('google-vision', cam), this.usageKey(CHECK_USAGE.calls, cam)];

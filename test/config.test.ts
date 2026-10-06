@@ -217,6 +217,9 @@ describe('secrets', () => {
     write('config.json', { camera: { host: 'h' }, ftp: { enabled: true } });
     expect(err(() => load())).toBe('CAMPROXY_FTP_PASSWORD: required when ftp.enabled');
     expect(load({ CAMPROXY_FTP_PASSWORD: 'f' }).secrets.ftpPassword).toBe('f');
+    // The server compares at most 256 bytes: a longer password could never log in.
+    expect(err(() => load({ CAMPROXY_FTP_PASSWORD: 'f'.repeat(257) }))).toBe('CAMPROXY_FTP_PASSWORD: longer than 256 bytes');
+    expect(load({ CAMPROXY_FTP_PASSWORD: 'f'.repeat(256) }).secrets.ftpPassword).toHaveLength(256);
   });
 });
 

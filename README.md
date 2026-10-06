@@ -199,7 +199,7 @@ come only from the environment.
 | `recordings` | `cacheMB` (2048, 64–1,048,576): size cap of the recordings cache; least recently used files go first, and they are the first to go when the storage budget is exceeded. Applies at the next fetch or storage run |
 | `composition` | `font`: the font file for the text of composed clips; default the first of DejaVu Sans (the container) or Arial (macOS) that exists; `concurrent` (1, 1–4): composed clips encoded at once (2 on a 4-core host), applies at once |
 | `archive` | `enabled` (true): take new clips into the [Archive](#archive) (reading, editing, deleting and its daily cleanup go on when off); `warnPercent` (50, 1–99): the Archive's share of the data volume above which the Status card and the health summary warn (no limit). Both apply at once |
-| `analytics` | `kinds.person` (true), `kinds.vehicle` and `kinds.pet` (false), `googleVision.enabled` (false), `.monthlyLimit` (0), `.dailyCap` (0), `.checksPerDay` (10, 0–1000; still checks by hand, 0 = none), `.perCameraDailyCap` (0 = none; one camera's calls per day, analyses and still checks together); the limits count every camera's calls with the key in use; see [Analytics](#analytics-optional) |
+| `analytics` | `kinds.person` (true), `kinds.vehicle` and `kinds.pet` (false), `googleVision.enabled` (false), `.monthlyLimit` (0), `.dailyCap` (0), `.checksPerDay` (10, 0–1000; still checks by hand per camera and day, 0 = none), `.perCameraDailyCap` (0 = none; one camera's calls per day, analyses and still checks together); the limits count every camera's calls with the key in use; see [Analytics](#analytics-optional) |
 
 | Secret (environment, or `<NAME>_FILE`) | |
 |---|---|
@@ -235,7 +235,7 @@ the new form:
   Settings paths and overrides use the id: `cameras.cam4.stills.intervalS`.
   Ids are unique, `^[a-z0-9][a-z0-9-]{0,31}$`; `camera` and `cameras` together
   are an error. A new camera's `name` and `ftp.user` default to its id.
-- **Per camera:** `id`, `name`, `host`, `protocol`, `tlsName`, `webUiUrl`,
+- **Per camera:** `id`, `name`, `host` (a name or IPv4 address, optional `:port`), `protocol`, `tlsName`, `webUiUrl`,
   `user`, `onvifPort`, `rtspPort`, `baichuanPort`, `statusPollS`,
   `poeSwitch.port`, `ftp.user`, and these overrides of a host default (absent:
   the host value): `stills.enabled`, `stills.stream`, `stills.intervalS`,
@@ -276,18 +276,21 @@ the new form:
   - **FTP:** one server, one port and one passive range (at least 10 ports
     per camera with FTP) for every camera. Each camera logs in as its own
     user (`cameras[].ftp.user`, default its id; users are unique) with the
-    one `CAMPROXY_FTP_PASSWORD`. When a camera's `host` is an IP address, a
-    login with its user from another address is refused (530), logged and
-    audited (`ftp-login-refused`).
+    one `CAMPROXY_FTP_PASSWORD` (at most 256 bytes). When a camera's `host`
+    is an IPv4 address, a login with its user from another address is
+    refused (530), logged and audited (`ftp-login-refused`); a camera reached
+    by name (as `cam2` in the cluster) has no address check.
   - **Storage:** one budget for the host; the Status page and the metrics
     show each camera's part. Optional `cameras[].storage.sharePercent` (all
-    together at most 100): over budget the camera most above its share loses
+    together at most 100; 100 only when every camera has one): over budget the camera most above its share loses
     its oldest hour first; a camera without a share has an equal part of what
     the shares leave. Without shares the oldest hour of any camera goes first.
-  - **Vision:** the limits (`monthlyLimit`, `dailyCap`, `checksPerDay`)
-    count every camera's calls with the API key in use; a new key starts a
-    fresh count. `analytics.googleVision.perCameraDailyCap` (0 = none) caps
-    one camera's calls per day.
+  - **Vision:** `monthlyLimit` and `dailyCap` count every camera's calls
+    with the API key in use; `checksPerDay` is per camera and day. A new key
+    starts a fresh count, also a new key of the same Google project, although
+    Google's free tier is per project: keep the limits within it.
+    `analytics.googleVision.perCameraDailyCap` (0 = none) caps one camera's
+    calls per day.
   - **PoE switch:** one controller per host. Requests from several cameras
     wait their turn (a power-cycle of one camera, then the next) up to
     `offSeconds` + 60 s, then `409 switch_busy`; one read serves every
