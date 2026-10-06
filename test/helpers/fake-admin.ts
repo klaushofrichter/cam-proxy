@@ -29,6 +29,9 @@ export class FakeAdmin {
   enrollRequests: Record<string, unknown>[] = [];
   // Upgrades refused with 426 (an incompatible server); GET then answers `supported`.
   refuseUpgrade = false;
+  // Upgrades left unanswered (a server that hangs before the handshake); counted.
+  muteUpgrade = false;
+  upgrades = 0;
   supported = ['cams-admin.v1'];
   received: Received[] = [];
   connections = 0;
@@ -60,6 +63,8 @@ export class FakeAdmin {
     });
     this.http.on('upgrade', (req, socket, head) => {
       if (!req.url?.startsWith('/proxy/v1/connect')) return void socket.destroy();
+      this.upgrades++;
+      if (this.muteUpgrade) return;
       if (this.refuseUpgrade || !String(req.headers['sec-websocket-protocol'] ?? '').split(',').map((s) => s.trim()).some((p) => this.supported.includes(p))) {
         socket.end(`HTTP/1.1 426 Upgrade Required\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n${JSON.stringify({ error: 'unsupported_protocol', supported: this.supported })}`);
         return;

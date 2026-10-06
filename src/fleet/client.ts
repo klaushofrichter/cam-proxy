@@ -116,6 +116,8 @@ export class AdminClient {
   // Node's WebSocket keeps a socket whose close the server never answers
   // (no way to drop it): those are counted, and bound the new ones.
   private readonly lingering = new Set<WebSocket>();
+  // Sockets whose close event fired (readyState may still say CLOSING then, e.g. after a close() while connecting).
+  private readonly closed = new WeakSet<WebSocket>();
   private readonly fp: string;
 
   constructor(private readonly d: ClientDeps) {
@@ -269,6 +271,7 @@ export class AdminClient {
       return;
     }
     this.ws = ws;
+    ws.addEventListener('close', () => this.closed.add(ws));
     this.handshakeTimer = setTimeout(() => {
       if (this.ws === ws && this.state === 'connecting') {
         this.reason = this.opened ? 'no welcome from cams-admin in time' : 'cams-admin did not answer in time';
@@ -317,7 +320,7 @@ export class AdminClient {
       /* closing already */
     }
     const t = setTimeout(() => {
-      if (ws.readyState !== WebSocket.CLOSED) {
+      if (!this.closed.has(ws)) {
         this.lingering.add(ws);
         ws.addEventListener('close', () => {
           this.lingering.delete(ws);

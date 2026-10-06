@@ -109,6 +109,17 @@ describe('sockets that never close', () => {
   });
 });
 
+describe('a server that hangs before the handshake', () => {
+  it('the connect timeout closes the socket; it never counts as lingering, and the retries go on', async () => {
+    fake.muteUpgrade = true;
+    const c = make({ timing: { connectTimeoutMs: 200 } });
+    c.start();
+    await until(() => fake.upgrades >= 6, 8000);
+    expect(c.view().lingering).toBe(0);
+    expect(c.view().lastError).toMatch(/did not answer/);
+  });
+});
+
 describe('close codes (spec §8.8)', () => {
   it('4401 after the hello: rejected, retried after rejectedRetryMs, logged once', async () => {
     fake.mode = 'reject';
