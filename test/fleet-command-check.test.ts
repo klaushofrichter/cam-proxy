@@ -144,10 +144,13 @@ describe('every contract fixture for the proxy', () => {
   const ctxOf = (c: FixtureContext): CheckContext => {
     const seen = new SeenIds();
     for (const s of c.seen ?? []) seen.add(s, c.now);
-    return { proxyId: c.proxyId, connId: c.connId, serverKeys: c.serverKeys, serverNow: c.now, seen, policy: { enabled: true, paused: !!c.paused, allow: c.allow ?? [] }, journal: () => undefined, limits: new CommandLimits(() => c.now), implemented: IMPLEMENTED };
+    return { proxyId: c.proxyId, connId: c.connId, serverKeys: c.serverKeys, serverNow: c.now, seen, policy: { enabled: c.enabled ?? true, paused: !!c.paused, allow: c.allow ?? [] }, journal: () => undefined, limits: new CommandLimits(() => c.now), implemented: IMPLEMENTED, currentTokens: c.tokens ?? [] };
   };
   const cmds = fixtures().filter(({ f }) => f.schema === 'command' && f.$context);
-  it('there are command fixtures (the vendored copy is P2)', () => expect(cmds.length).toBeGreaterThanOrEqual(14));
+  it('there are command fixtures (the vendored copy is P2, with revocationOnly)', () => {
+    expect(cmds.length).toBeGreaterThanOrEqual(17);
+    expect(cmds.map((x) => x.name)).toContain('valid-command-revocation-while-paused');
+  });
   for (const { name, f } of cmds) {
     it(name, () => {
       const d = checkCommand(f.message as never, ctxOf(f.$context!));

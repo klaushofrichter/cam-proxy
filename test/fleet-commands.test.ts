@@ -148,7 +148,7 @@ describe('revocationOnly tokens.apply', () => {
     f.tokens.apply(argsOf(1, two) as never);
     return f;
   };
-  const revoke = (f: ReturnType<typeof runnerFixture>, c: ConnCtx, args: Record<string, unknown>) => f.runner.onCommand(f.command('tokens.apply', { ...args, revocationOnly: true }, c), c, f.send);
+  const revoke = (f: ReturnType<typeof runnerFixture>, c: ConnCtx, args: Record<string, unknown>) => f.runner.onCommand(f.command('tokens.apply', args, c, { revocationOnly: true }), c, f.send);
   it('paused: a pure revocation is applied anyway', async () => {
     const f = seeded();
     f.policy.pause('incident', 'local');
@@ -165,17 +165,23 @@ describe('revocationOnly tokens.apply', () => {
     await revoke(f, c, argsOf(2, []));
     expect(f.sent.at(-1)!.body).toMatchObject({ phase: 'done', status: 'ok', result: { applied: true, client: 0, admin: 0 } });
   });
-  it('a claim that adds or changes a token is refused not_revocation_only; nothing changes', async () => {
+  it('a claim that adds or changes a token is refused invalid_args (the contract); nothing changes', async () => {
     const f = seeded();
     f.policy.pause('incident', 'local');
     const c = f.conn();
     await revoke(f, c, argsOf(2, [two[0], { id: TOK(3), kind: 'admin', t: tok() }]));
-    expect(f.sent.at(-1)!.body).toMatchObject({ phase: 'done', status: 'refused', code: 'not_revocation_only' });
+    expect(f.sent.at(-1)!.body).toMatchObject({ phase: 'done', status: 'refused', code: 'invalid_args' });
     await revoke(f, c, argsOf(3, [{ ...two[0], label: 'renamed' }]));
-    expect(f.sent.at(-1)!.body).toMatchObject({ status: 'refused', code: 'not_revocation_only' });
-    await revoke(f, c, argsOf(4, two));
-    expect(f.sent.at(-1)!.body).toMatchObject({ status: 'refused', code: 'not_revocation_only' });
+    expect(f.sent.at(-1)!.body).toMatchObject({ status: 'refused', code: 'invalid_args' });
+    await revoke(f, c, argsOf(4, [{ ...two[0], retireAt: 5 }]));
+    expect(f.sent.at(-1)!.body).toMatchObject({ status: 'refused', code: 'invalid_args' });
     expect(f.tokens.revision()).toBe(1);
+  });
+  it('revocationOnly inside args (not the contract field) is invalid_args', async () => {
+    const f = seeded();
+    const c = f.conn();
+    await f.runner.onCommand(f.command('tokens.apply', { ...argsOf(2, []), revocationOnly: true }, c), c, f.send);
+    expect(f.sent.at(-1)!.body).toMatchObject({ status: 'refused', code: 'invalid_args' });
   });
   it('the kill switch still refuses it (paused)', async () => {
     const f = seeded({ env: { CAMPROXY_ADMIN_COMMANDS: 'off' } });

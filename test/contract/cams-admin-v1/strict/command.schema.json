@@ -69,6 +69,9 @@
           "required": [
             "v"
           ]
+        },
+        "revocationOnly": {
+          "type": "boolean"
         }
       },
       "required": [

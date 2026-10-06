@@ -35,7 +35,7 @@ export interface Vectors {
 export const vectors = json(join(CONTRACT, 'vectors.json')) as Vectors;
 
 // $context (P2 command fixtures): what the receiver knows when it judges the message.
-export interface FixtureContext { now: number; proxyId: string; connId: string; serverKeys: string[]; allow?: string[]; paused?: boolean; seen?: string[] }
+export interface FixtureContext { now: number; proxyId: string; connId: string; serverKeys: string[]; allow?: string[]; paused?: boolean; seen?: string[]; enabled?: boolean; tokens?: { id: string; kind: 'client' | 'admin'; hash: string; label: string; retireAt: number | null }[] }
 export interface Fixture { schema: string; message: unknown; $context?: FixtureContext; $expect?: { runtime?: string; strict?: string; receiver?: 'proxy' | 'server' } }
 export const fixtures = (): { name: string; f: Fixture }[] =>
   readdirSync(join(CONTRACT, 'fixtures')).filter((n) => n.endsWith('.json')).map((n) => ({ name: n.replace(/\.json$/, ''), f: json(join(CONTRACT, 'fixtures', n)) as Fixture }));

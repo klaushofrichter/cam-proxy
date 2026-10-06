@@ -1,7 +1,7 @@
 import type { Envelope } from './protocol';
 import { verifyEnvelope } from './protocol';
 import { jcs } from './jcs';
-import type { TokensApplyArgs } from './token-store';
+import type { ManagedToken, TokensApplyArgs } from './token-store';
 import { ARGS_VALIDATORS } from './command-args';
 import type { JournalEntry } from './journal';
 
@@ -17,6 +17,8 @@ const CMD_ID = /^cmd_[0-9A-HJKMNP-TV-Z]{20}$/;
 const SLACK_MS = 120_000;
 const MAX_LIFETIME_MS = 60_000;
 const MAX_ARGS_BYTES = 16_384;
+const isRevocation = (a: TokensApplyArgs, cur: ManagedToken[] | undefined): boolean =>
+  !!cur && a.tokens.every((t) => cur.some((x) => x.id === t.id && x.kind === t.kind && x.hash === t.hash && x.label === t.label && x.retireAt === t.retireAt));
 const argsBytes = (a: unknown): number => {
   try {
     return Buffer.byteLength(jcs(a));
@@ -63,9 +65,9 @@ export interface CheckContext {
   // replayed session can't run a command again, refused or not. Optional for
   // cams-admin's cross-check.
   seenCmd?: { has(cmdId: string): boolean; add(cmdId: string, exp: number): void };
-  // A tokens.apply claiming revocationOnly: true when its set only removes
-  // entries from the stored one. Absent = every claim is refused.
-  isRevocation?: (args: TokensApplyArgs) => boolean;
+  // The proxy's stored managed set: a tokens.apply with body.revocationOnly
+  // must only keep entries of it, unchanged. Absent = every claim is refused.
+  currentTokens?: ManagedToken[];
 }
 
 // The contract's check order, steps 1-11 (the runner adds 12, busy).
@@ -89,7 +91,7 @@ export function checkCommand(m: Envelope, c: CheckContext): Decision {
   const command = typeof b.command === 'string' ? b.command : '';
   // A pure revocation (cross-repo ruling) passes a pause and the allow-list
   // once its claim holds (checked below); only the env kill switch stops it.
-  const claim = command === 'tokens.apply' && isObj(b.args) && b.args.revocationOnly === true;
+  const claim = command === 'tokens.apply' && b.revocationOnly === true;
   if (!c.policy.enabled || (c.policy.paused && !claim)) return nack('paused');
   if (!c.implemented.has(command) || (!claim && !c.policy.allow.includes(command))) return nack('not_allowed');
   const t = c.limits.take(command);
@@ -98,7 +100,8 @@ export function checkCommand(m: Envelope, c: CheckContext): Decision {
   if (!isObj(b.args) || argsBytes(b.args) > MAX_ARGS_BYTES) return nack('invalid_args');
   const v = ARGS_VALIDATORS[command]?.(b.args);
   if (!v || !v.ok) return nack(v && !v.ok ? v.code : 'invalid_args');
-  if (claim && !c.isRevocation?.(v.args as TokensApplyArgs)) return nack('not_revocation_only');
+  // The claim, checked (contract step 10): every entry is one of the stored set, unchanged.
+  if (claim && !isRevocation(v.args as TokensApplyArgs, c.currentTokens)) return nack('invalid_args');
   if (!claim && command === 'tokens.apply' && (v.args as { tokens: { kind: string }[] }).tokens.some((x) => x.kind === 'admin') && !c.policy.allow.includes('tokens.apply.admin')) return nack('not_allowed');
   if (typeof b.actor !== 'string' || !isObj(b.args)) return nack('invalid_args');
   return { kind: 'run', cmd: { proxyId: c.proxyId, connId: c.connId, cmdId, exp: exp as number, actor: (b.actor as string).slice(0, 200), command, args: b.args as Record<string, unknown> }, args: v.args };

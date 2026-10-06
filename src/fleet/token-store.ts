@@ -7,7 +7,7 @@ import { PrivateFileInvalid, PrivateFileUnsafe, readPrivateJson, writePrivateJso
 // atomic. Written by tokens.apply and the local block list only; read
 // whenever the file exists (R2-7). Never holds a token, never logs a hash.
 export interface ManagedToken { id: string; kind: 'client' | 'admin'; hash: string; label: string; retireAt: number | null }
-export interface TokensApplyArgs { v: 1; revision: number; tokens: ManagedToken[]; revocationOnly?: boolean }
+export interface TokensApplyArgs { v: 1; revision: number; tokens: ManagedToken[] }
 export interface TokensApplyResult { revision: number; applied: boolean; stale: boolean; client: number; admin: number; blocked: string[] }
 // The local block list holds each blocked token's id (for display and the
 // heartbeat) and its hash: a blocked hash stays blocked under any id, and
@@ -79,13 +79,9 @@ export class TokenStore {
     return hit ? { id: hit.id, kind: hit.kind, label: hit.label } : null;
   }
 
-  // A pure revocation: the new set is a strict subset of the stored one (only
-  // removals: every entry identical to a stored one, at least one fewer).
-  isRevocation(a: TokensApplyArgs): boolean {
-    if (this.err) return false;
-    const cur = this.state.tokens;
-    const same = (x: ManagedToken, y: ManagedToken) => x.id === y.id && x.kind === y.kind && x.hash === y.hash && x.label === y.label && x.retireAt === y.retireAt;
-    return a.tokens.length < cur.length && a.tokens.every((t) => cur.some((c) => same(c, t)));
+  // The stored managed set (what a revocationOnly claim is checked against); empty while unusable.
+  current(): ManagedToken[] {
+    return this.err ? [] : this.state.tokens.map((t) => ({ ...t }));
   }
 
   // A managed admin token by id that works now (in the set, not blocked, not retired): what its sessions and links need.

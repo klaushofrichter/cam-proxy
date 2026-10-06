@@ -47,7 +47,7 @@ describe('signed envelopes (round trip; the contract vectors are checked below o
 
 describe('signed envelopes: the contract vectors', () => {
   it('every envelope vector: canonical text and signature, byte for byte', () => {
-    expect(vectors.envelopes.map((e) => e.kind).sort()).toEqual(['command', 'event', 'result']);
+    expect([...new Set(vectors.envelopes.map((e) => e.kind))].sort()).toEqual(['command', 'event', 'result']);
     for (const e of vectors.envelopes) {
       expect(jcs(e.envelope)).toBe(e.text);
       const key = vectors.keys[e.key];
