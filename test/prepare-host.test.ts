@@ -74,6 +74,16 @@ describe('prepare-host.sh (spec §14)', () => {
     expect(readFileSync(join(root, 'srv', 'cam-proxy', 'data', 'config.json'), 'utf8')).toBe('{"edited":true}\n');
   });
 
+  it('--files-only without root (nft present but not allowed to check, as on a CI runner): the check is skipped, not fatal', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'camproxy-nft-'));
+    writeFileSync(join(dir, 'nft'), '#!/bin/sh\necho "Error: Operation not permitted" >&2\nexit 1\n');
+    chmodSync(join(dir, 'nft'), 0o755);
+    const r = spawnSync('bash', [SCRIPT, '--rendered', render(), '--files-only'], { encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, ROOT: mkdtempSync(join(tmpdir(), 'camproxy-root-')), PREPARE_HOST_ALLOW_NON_ROOT: '1' } });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toContain('skipped: nft -c');
+    expect(r.stdout).toContain('changed etc/nftables.conf');
+  });
+
   // Every system command stubbed and logged; `fail` names commands (with an
   // argument pattern) that exit 1; `routes` is what `ip route` answers.
   function stubbed() {

@@ -58,10 +58,12 @@ fi
 echo "== checks"
 # The rendered ruleset is checked before it replaces the installed one: a
 # broken ruleset is never placed (nftables.service would fail at the next boot).
-if [ "$FILES_ONLY" = 0 ] || command -v nft >/dev/null; then
+# --files-only (staging, tests) checks only where nft can: it needs
+# CAP_NET_ADMIN even to check.
+if [ "$FILES_ONLY" = 0 ] || echo 'table inet probe {}' | nft -c -f - >/dev/null 2>&1; then
   run nft -c -f "$RENDERED/etc/nftables.conf"
 else
-  echo "skipped: nft -c (nftables is not installed; --files-only)"
+  echo "skipped: nft -c (no nft, or not allowed to check without root; --files-only)"
 fi
 # The camera side must not be the interface this host is reached by: the run
 # brings it down and readdresses it.
