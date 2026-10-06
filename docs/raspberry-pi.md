@@ -331,6 +331,14 @@ certificate still checks offline as long as it hasn't expired.
   `cp -p data/overrides.json data/overrides.json.pre-multicam && sqlite3 data/catalog.sqlite ".backup data/catalog.sqlite.pre-multicam"`
   (or copy `catalog.sqlite` with the container stopped). A rollback is: stop
   the container, restore both files, start the previous image.
+  The host-wide release after it (multi-camera phase 2) adds no migration,
+  but overrides.json may then hold settings an older release refuses
+  (`composition.concurrent`, `analytics.googleVision.perCameraDailyCap`, a
+  camera added in the Settings page): back up `data/overrides.json` again
+  before that update, and restore it for a rollback. From that release on,
+  the camera's FTP login is accepted only from its configured address
+  (`CAMERA_HOST`, as an IP address); the Pi's host networking keeps that the
+  camera's own address.
 - **The Pi card:** on a Pi the Status page shows a Pi card (model, CPU
   temperature, under-voltage, memory, uptime, load, disk), and the Health card
   flags the disk from `health.diskPercent` (90 %) and the CPU temperature from

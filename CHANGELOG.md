@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Rollback note** (the Pi): no new migration (the catalog stays at schema 9). The previous release refuses overrides it doesn't know (`composition.concurrent`, `analytics.googleVision.perCameraDailyCap`, `cameras.<id>.storage.sharePercent`, a camera added in the Settings page): a rollback restores the `overrides.json` backup taken before this update.
+- One go2rtc for all cameras; a camera added or restarted never restarts it.
+- FTP: one server, a user per camera (default: the camera id); a login from another address than the camera's is refused and audited (`ftp-login-refused`). On the Pi the camera's FTP login must come from its configured address (`CAMERA_HOST`), as it does.
+- Storage: per-camera accounting (Status page, metrics, `/control/stats` `cameras`) and optional `cameras[].storage.sharePercent`.
+- Vision: limits count per API key (a new key starts a fresh count); `analytics.googleVision.perCameraDailyCap`.
+- PoE switch: one controller per host with a queue (a second camera's request waits, then `409 switch_busy`); a driver per switch model; one read serves every port for 10 s.
+- `composition.concurrent`: encodes at once (default 1).
+- One recordings cache for all cameras (`recordings.cacheMB`).
+- Control: `/control/cameras/:cam/name` and `/control/cameras/:cam/actions/:name` (since P1); cameras can be added and removed in the Settings page, which shows the host's settings and the picked camera's.
+- `GET /api/cameras/:cam/stills/latest.jpg`, `…/previews/latest.jpg`, `GET /api/stills/latest`; `GET /api/cameras` items carry `latestStill`.
+- CPU temperature on AMD hosts (k10temp Tctl).
+
 ## v2026.10.05.6
 
 - **Before updating** (the Pi): back up `data/overrides.json` and `data/catalog.sqlite`. The previous release won't start on the new overrides (`cameras.*`) or the catalog's schema 9; a rollback is restoring both and the previous image (docs/raspberry-pi.md).

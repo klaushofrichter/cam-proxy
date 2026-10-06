@@ -44,6 +44,34 @@ POST http://<switch>/<callcmd>
 - **The other protocols** (UDP multicast for older firmware, and a cloud API)
   are not used.
 
+## Several cameras: one controller per host
+
+With several cameras (spec 2026-10-05-multi-camera-host-design §8.4) the
+switch settings (`poeSwitch.model`, `host`, `ports`, `offSeconds`) are the
+host's; each camera names its `cameras[].poeSwitch.port`. One controller in
+the proxy serves every camera:
+
+- **One session at a time, in arrival order.** The GPS-208 takes one web
+  session, so a second camera's request (a power-cycle, a read, PoE on)
+  waits for the first. A request still waiting after `offSeconds` + 60 s
+  fails with 409 `switch_busy` without touching the switch.
+- **One read serves every port for 10 s:** "Read the switch now" for another
+  camera within 10 s answers from that read; a power-cycle and PoE on always
+  read afresh inside their own session.
+- **State per port:** "PoE may be off" belongs to the port that was cut. The
+  2-minute reboot/power-cycle cooldown stays per camera.
+- **Stopping** turns on every port the proxy may have left off and writes one
+  `camera-powercycle` record per camera left dark.
+- **A driver per model:** `src/camera/switch/driver.ts` defines the
+  interface (log in, read the ports, set one port's PoE, log out, and whether
+  the switch takes one session at a time); `sscpoe-web.ts` is the GPS-208's.
+  A new model is a new driver registered there and an enum value of
+  `poeSwitch.model`. Tests use `test/helpers/fake-switch.ts` or the GPS-208
+  mock, never a real switch.
+
+Log out of the switch's web UI after using it: while a browser is logged in,
+the proxy's requests are refused (`switch_busy`).
+
 ## Settings
 
 All in `camera.poeSwitch` (config.json, or the Settings page). They apply at
@@ -120,8 +148,8 @@ still has PoE on and draws power, the off was refused and nothing was cut (502
 **Recovery:** `POST /control/actions/camera-poe-on` (admin only) logs in,
 reads the port and, if its PoE is off, turns it on (with the same retries),
 then logs out. It skips the power check (an unpowered port is the point) and
-the cooldown, and uses the same switch lock (409 `switch_busy` during a
-power-cycle). Answer: the reading plus `wasOn`. Audited as `camera-poe-on`.
+the cooldown, and waits its turn in the same queue as a power-cycle (see
+[Several cameras](#several-cameras-one-controller-per-host)). Answer: the reading plus `wasOn`. Audited as `camera-poe-on`.
 The Maintenance page's "Turn camera PoE on" button sends it. The button shows
 whenever a switch is configured, so it also works after a proxy restart has
 lost the failure state. It only ever turns PoE on, so it doesn't ask first.

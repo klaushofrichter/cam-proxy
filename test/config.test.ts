@@ -242,8 +242,10 @@ describe('shipped files', () => {
 
   it('config.cameras.example.json loads: two cameras, the host switch', () => {
     write('config.json', readFileSync(join(__dirname, '..', 'config.cameras.example.json'), 'utf8'));
-    const l = load();
+    const l = load({ CAMPROXY_FTP_PASSWORD: 'f'.repeat(24) });
     expect(cameraIds(l.config)).toEqual(['cam3', 'cam4']);
+    expect(cameraConfig(l.config, 'cam4')!.storage).toEqual({ sharePercent: 20 });
+    expect(l.config.composition.concurrent).toBe(2);
     expect(cameraConfig(l.config, 'cam4')!.poeSwitch).toMatchObject({ host: '192.168.60.2', port: 2 });
   });
 });

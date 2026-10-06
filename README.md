@@ -197,9 +197,9 @@ come only from the environment.
 | `health` | `diskPercent` (90, 50–99): the data volume's used percent from which the health summary (the Status page's Health card, `GET /api/local/health`) flags a problem; `tempC` (75, 40–95): the CPU temperature (°C, on a Raspberry Pi) from which it does. Both apply at once |
 | `host` | `stats` (`auto`): read the host figures (CPU temperature, under-voltage, memory, uptime, load) for the Pi card and the health summary; `auto` on a Raspberry Pi only (detected from `/proc/cpuinfo`), `on`, or `off`. Off a Pi, memory and load in a container would describe the node, not the proxy. Applies at once |
 | `recordings` | `cacheMB` (2048, 64–1,048,576): size cap of the recordings cache; least recently used files go first, and they are the first to go when the storage budget is exceeded. Applies at the next fetch or storage run |
-| `composition` | `font`: the font file for the text of composed clips; default the first of DejaVu Sans (the container) or Arial (macOS) that exists |
+| `composition` | `font`: the font file for the text of composed clips; default the first of DejaVu Sans (the container) or Arial (macOS) that exists; `concurrent` (1, 1–4): composed clips encoded at once (2 on a 4-core host), applies at once |
 | `archive` | `enabled` (true): take new clips into the [Archive](#archive) (reading, editing, deleting and its daily cleanup go on when off); `warnPercent` (50, 1–99): the Archive's share of the data volume above which the Status card and the health summary warn (no limit). Both apply at once |
-| `analytics` | `kinds.person` (true), `kinds.vehicle` and `kinds.pet` (false), `googleVision.enabled` (false), `.monthlyLimit` (0), `.dailyCap` (0), `.checksPerDay` (10, 0–1000; still checks by hand, 0 = none); see [Analytics](#analytics-optional) |
+| `analytics` | `kinds.person` (true), `kinds.vehicle` and `kinds.pet` (false), `googleVision.enabled` (false), `.monthlyLimit` (0), `.dailyCap` (0), `.checksPerDay` (10, 0–1000; still checks by hand, 0 = none), `.perCameraDailyCap` (0 = none; one camera's calls per day, analyses and still checks together); the limits count every camera's calls with the key in use; see [Analytics](#analytics-optional) |
 
 | Secret (environment, or `<NAME>_FILE`) | |
 |---|---|
@@ -207,7 +207,7 @@ come only from the environment.
 | `CAMPROXY_ADMIN_TOKEN` | the control API and admin UI; different from every client token |
 | `CAMPROXY_CAMERA_PASSWORD` | the password of the proxy's camera user (`camera.user`); the default for every camera |
 | `CAMPROXY_CAMERA_PASSWORD_<ID>` | optional: one camera's own password (the id upper-cased, `-` → `_`, e.g. `CAMPROXY_CAMERA_PASSWORD_CAM_3`); without a default, every camera needs one |
-| `CAMPROXY_FTP_PASSWORD` | the camera's FTP login to the proxy; required when `ftp.enabled` |
+| `CAMPROXY_FTP_PASSWORD` | the cameras' FTP login to the proxy (each camera with its own user); required when `ftp.enabled` |
 | `CAMPROXY_AUDIT_TOKEN` | optional: a read-only token for `GET /control/audit`; 32+ characters, different from the other tokens |
 | `CAMPROXY_POE_SWITCH_PASSWORD` | optional: the PoE switch's web password, for the camera power-cycle (`camera.poeSwitch`); never logged, returned or audited |
 
@@ -226,7 +226,7 @@ arguments).
 
 One proxy can serve several cameras (spec
 [2026-10-05-multi-camera-host-design](docs/superpowers/specs/2026-10-05-multi-camera-host-design.md),
-phase 1). Today's one-camera `config.json` with a `camera` object keeps
+phases 1 and 2). Today's one-camera `config.json` with a `camera` object keeps
 working unchanged: it is read as a list of one at every start, and never
 rewritten. [config.cameras.example.json](config.cameras.example.json) shows
 the new form:
@@ -267,11 +267,51 @@ the new form:
   as before). `restart` with a camera restarts that camera's side (without one: every
   camera side, applying pending restart settings); host actions have no
   camera route. The admin UI sends them for the camera picked in the top bar.
-- **Not yet (phase 2):** per-camera settings in the admin UI, FTP for more
-  than one camera (a config error until per-camera FTP users exist), one shared go2rtc
-  (until then camera *i* uses `go2rtc.rtspPort`/`apiPort` + 100 × *i*), and a
-  shared recordings cache (each camera gets an equal share of `cacheMB`).
-  `CAMERA_HOST` with several cameras is a config error.
+- **Host-wide services (phase 2):** what a host has once serves every
+  camera.
+  - **go2rtc:** one process for the host on `go2rtc.rtspPort`/`apiPort`, two
+    streams per camera (`<id>_sub`, `<id>_main`), each camera's password only
+    in its own environment variable. A camera added or restarted gets its
+    streams through go2rtc's API: go2rtc never restarts for it.
+  - **FTP:** one server, one port and one passive range (at least 10 ports
+    per camera with FTP) for every camera. Each camera logs in as its own
+    user (`cameras[].ftp.user`, default its id; users are unique) with the
+    one `CAMPROXY_FTP_PASSWORD`. When a camera's `host` is an IP address, a
+    login with its user from another address is refused (530), logged and
+    audited (`ftp-login-refused`).
+  - **Storage:** one budget for the host; the Status page and the metrics
+    show each camera's part. Optional `cameras[].storage.sharePercent` (all
+    together at most 100): over budget the camera most above its share loses
+    its oldest hour first; a camera without a share has an equal part of what
+    the shares leave. Without shares the oldest hour of any camera goes first.
+  - **Vision:** the limits (`monthlyLimit`, `dailyCap`, `checksPerDay`)
+    count every camera's calls with the API key in use; a new key starts a
+    fresh count. `analytics.googleVision.perCameraDailyCap` (0 = none) caps
+    one camera's calls per day.
+  - **PoE switch:** one controller per host. Requests from several cameras
+    wait their turn (a power-cycle of one camera, then the next) up to
+    `offSeconds` + 60 s, then `409 switch_busy`; one read serves every
+    camera's port for 10 s. See [docs/poe-switch.md](docs/poe-switch.md).
+  - **Compositions:** `composition.concurrent` (1–4, default 1) encodes at once.
+  - **Recordings cache:** one least-recently-used cache for every camera,
+    capped by `recordings.cacheMB`.
+- **Adding and removing cameras:** the Settings page shows the host's
+  settings and the picked camera's, adds a camera (`PUT /control/config` with
+  `{"cameras": {"<id>": {"host": …}}}`, kept in overrides.json, started at once
+  without a restart) and removes one added that way (`DELETE
+  /control/config/cameras.<id>`; its files stay until retention removes them).
+  A camera in config.json is changed there. `GET /control/cameras` says where
+  each camera is defined (`source`: `config` or `added`).
+- **Latest stills:** `GET /api/cameras/<id>/stills/latest.jpg` and
+  `…/previews/latest.jpg` serve the newest still and tile from memory, with
+  `ETag: "<id>-<ts>"`, `X-Still-Ts` and `Cache-Control: no-cache`; a poll with
+  the same ETag gets 304, and while the stream is down 404 `no_still` with the
+  last `ts`. `GET /api/stills/latest` lists every camera's at once (an
+  overview grid); `GET /api/cameras` items carry `latestStill`.
+- **Host figures:** on a mini PC with `host.stats: on`, the CPU temperature
+  comes from the `k10temp` sensor's `Tctl` (AMD).
+- `CAMERA_HOST` with several cameras in config.json is a config error; with
+  cameras added in the Settings page it still sets the config.json camera.
 - **Tests:** `npm run test:e2e:multi` runs the admin UI against three cam-sims
   behind one proxy.
 
