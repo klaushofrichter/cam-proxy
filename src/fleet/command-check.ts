@@ -58,6 +58,10 @@ export interface CheckContext {
   policy: { enabled: boolean; paused: boolean; allow: string[] };
   journal: (cmdId: string) => JournalEntry | 'running' | undefined;
   limits: CommandLimits; implemented: ReadonlySet<string>;
+  // cmdIds seen on any connection since before a restart (ReplayGuard): a
+  // replayed session can't run a command again, refused or not. Optional for
+  // cams-admin's cross-check.
+  seenCmd?: { has(cmdId: string): boolean; add(cmdId: string, exp: number): void };
 }
 
 // The contract's check order, steps 1-11 (the runner adds 12, busy).
@@ -74,6 +78,10 @@ export function checkCommand(m: Envelope, c: CheckContext): Decision {
   if (!Number.isSafeInteger(exp) || (exp as number) - m.ts < 1 || (exp as number) - m.ts > MAX_LIFETIME_MS || (exp as number) + SLACK_MS < c.serverNow) return nack('expired');
   const j = c.journal(cmdId);
   if (j) return { kind: 'duplicate', cmdId, entry: j };
+  // Seen before (on another connection, or before a restart) and not
+  // journaled: refused then, or a replay. cams-admin never re-sends a refused cmdId (R2-8).
+  if (c.seenCmd?.has(cmdId)) return nack('replayed');
+  c.seenCmd?.add(cmdId, exp as number);
   if (!c.policy.enabled || c.policy.paused) return nack('paused');
   const command = typeof b.command === 'string' ? b.command : '';
   if (!c.implemented.has(command) || !c.policy.allow.includes(command)) return nack('not_allowed');

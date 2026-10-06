@@ -4,6 +4,7 @@ import type { AdminKeyFile } from './keyfile';
 import { buildEnvelope, fingerprint, parseEnvelope, readCapped, sign, signedText, signEnvelope, verify, type Envelope } from './protocol';
 import { SeenIds } from './command-check';
 import type { CommandRunner, ConnCtx } from './commands';
+import type { ReplayGuard } from './replay';
 
 // The outbound client to cams-admin (spec 2026-10-06-cams-admin-phase1-design
 // §8.3-§8.8, §9.1): one WebSocket (Node's global), one timer for the next
@@ -78,6 +79,8 @@ export interface ClientDeps {
   // Commands from cams-admin (migration P2): hello then says 'commands'.
   commands?: CommandRunner;
   monotonic?: () => number; // ms, for cams-admin's clock between challenges (tests)
+  // The signed serverTime's high-water mark (a replayed challenge is refused).
+  replay?: Pick<ReplayGuard, 'challenge'>;
 }
 
 const PROTOCOL = 'cams-admin.v1';
@@ -400,6 +403,12 @@ export class AdminClient {
           this.untrusted = true;
           this.reason = 'cams-admin is not trusted: its challenge signature does not match the pinned key';
           this.d.log.warn({ url: this.key.connectUrl }, 'admin_server_untrusted');
+          this.closeSocket();
+          return;
+        }
+        if (this.d.replay && !this.d.replay.challenge(this.key.keyId, serverTime)) {
+          this.reason = 'a stale challenge (older than one already seen): a replay? not answered';
+          this.d.log.warn({ url: this.key.connectUrl }, 'admin_challenge_stale');
           this.closeSocket();
           return;
         }

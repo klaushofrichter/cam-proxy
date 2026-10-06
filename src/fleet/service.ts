@@ -2,6 +2,7 @@ import { join } from 'path';
 import type { HealthSummary } from '../health/summary';
 import { AdminClient, type ClientLog, type ClientView, type Timing } from './client';
 import type { CommandRunner } from './commands';
+import type { ReplayGuard } from './replay';
 import { enrollWithCode, EnrollError } from './enroll';
 import type { HeartbeatProxyInfo } from './heartbeat';
 import { deleteKeyFile, KeyFileInvalid, KeyFileUnsafe, readKeyFile, type AdminKeyFile } from './keyfile';
@@ -46,6 +47,7 @@ export interface CamsAdminDeps {
   setUrl: (url: string | undefined) => Promise<void>;
   // Commands from cams-admin (migration P2), given to each client.
   commands?: () => CommandRunner | null;
+  replay?: ReplayGuard;
 }
 
 const EMPTY = { account: null, proxyId: null, fingerprint: null, enrolledAt: null, connectedSince: null, lastHeartbeatAt: null, lastAckAt: null, retryInMs: null, truncated: false, lingering: 0 };
@@ -186,7 +188,7 @@ export class CamsAdmin {
     if (this.client && this.running === want) return;
     await this.stopClient(this.client ? 'restart' : 'shutdown');
     if (this.stopped) return;
-    this.client = new AdminClient({ keyFile: key, health: this.d.health, proxyInfo: this.d.proxyInfo, version: this.d.version, log: this.d.log, changeKey: this.d.changeKey, timing: this.d.timing, commands: this.d.commands?.() ?? undefined });
+    this.client = new AdminClient({ keyFile: key, health: this.d.health, proxyInfo: this.d.proxyInfo, version: this.d.version, log: this.d.log, changeKey: this.d.changeKey, timing: this.d.timing, commands: this.d.commands?.() ?? undefined, replay: this.d.replay });
     this.running = want;
     this.client.start();
   }

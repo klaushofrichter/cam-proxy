@@ -5,6 +5,7 @@ import { checkCommand, CommandLimits, type CommandBody, type Nack, type SeenIds 
 import type { Journal, JournalEntry } from './journal';
 import { IMPLEMENTED, type CommandPolicy } from './policy';
 import type { Envelope } from './protocol';
+import type { ReplayGuard } from './replay';
 import { ShadowsLocalToken, type TokenStore, type TokensApplyArgs } from './token-store';
 
 // Commands from cams-admin (migration spec M §7, contract "The P2 contract"):
@@ -31,6 +32,8 @@ export interface RunnerDeps {
   audit: Pick<AuditLog, 'write'>;
   log: ClientLog;
   now?: () => number;
+  // cmdIds across connections and restarts (data/admin/replay.json).
+  replay?: Pick<ReplayGuard, 'hasCmd' | 'addCmd'>;
   // The handlers by command name (default: tokens.apply on `tokens`).
   handlers?: Record<string, Handler>;
 }
@@ -74,6 +77,7 @@ export class CommandRunner {
       policy: { enabled: p.enabled, paused: p.paused, allow: p.allow },
       journal: (id) => (this.running === id ? 'running' : this.d.journal.get(id)),
       limits: this.limits, implemented: IMPLEMENTED,
+      ...(this.d.replay ? { seenCmd: { has: (id: string) => this.d.replay!.hasCmd(id), add: (id: string, exp: number) => this.d.replay!.addCmd(id, exp) } } : {}),
     });
     const base = { proxyId: this.d.proxyId(), connId: conn.connId };
     switch (decision.kind) {

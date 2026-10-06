@@ -47,6 +47,10 @@ export class FakeAdmin {
   connections = 0;
   // P2: close a connection right after a `received` result arrives on it.
   closeAfterReceived = false;
+  // A MITM replay (security review): everything a past connection sent, as
+  // sent, on the next connection: its challenge first, the rest after the hello.
+  replayConn: number | null = null;
+  readonly outbound = new Map<number, string[]>();
   // P2: the channel of each socket (after its hello).
   private chan = new Map<WebSocket, { conn: number; connId: string; proxyId: string | null }>();
   readonly sockets = new Set<WebSocket>();
@@ -173,6 +177,24 @@ export class FakeAdmin {
     if (mode === 'silent') {
       // Accepts and never reads: the socket's data is left in the buffers.
       (ws as unknown as { _socket: Socket })._socket.pause();
+      return;
+    }
+    const rec: string[] = [];
+    this.outbound.set(conn, rec);
+    const send = ws.send.bind(ws);
+    ws.send = ((d: unknown, ...r: unknown[]) => {
+      if (typeof d === 'string') rec.push(d);
+      return (send as (...a: unknown[]) => void)(d, ...r);
+    }) as typeof ws.send;
+    if (this.replayConn !== null) {
+      const texts = [...(this.outbound.get(this.replayConn) ?? [])];
+      this.replayConn = null;
+      ws.send(texts[0]);
+      ws.once('message', (data) => {
+        this.received.push({ conn, msg: JSON.parse(String(data)) as Envelope });
+        for (const t of texts.slice(1)) ws.send(t);
+        ws.on('message', (d) => this.received.push({ conn, msg: JSON.parse(String(d)) as Envelope }));
+      });
       return;
     }
     if (mode === 'flap') setTimeout(() => ws.close(1011), 1000);

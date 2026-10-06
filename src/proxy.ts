@@ -64,6 +64,7 @@ import { TokenStore } from './fleet/token-store';
 import { CommandPolicy } from './fleet/policy';
 import { Journal } from './fleet/journal';
 import { CommandRunner } from './fleet/commands';
+import { ReplayGuard } from './fleet/replay';
 import { composeApi, hasAudio } from './api/compose-api';
 import { createComposer, ffmpegRunner } from './compose/jobs';
 import { clockText, defaultFont } from './compose/ffmpeg';
@@ -140,7 +141,7 @@ export interface ProxyOptions {
   // certificate, polled every 5 s); tests shorten them against cam-sim.
   tlsPush?: { clearWaitMs?: number; verifyMs?: number; pollMs?: number };
   // The cams-admin client's waits (tests shorten them).
-  camsAdmin?: { timing?: Partial<Timing> };
+  camsAdmin?: { timing?: Partial<Timing>; replaySlackMs?: number };
 }
 
 export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
@@ -779,7 +780,9 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // Nothing is read or written until a command arrives or the card asks.
   const commandPolicy = new CommandPolicy({ base: () => loaded.commandPolicyBase, file: join(loaded.config.server.dataDir, 'admin', 'policy.json'), env: () => loaded.envLayer, log: logger });
   const journal = new Journal(join(loaded.config.server.dataDir, 'admin', 'commands.json'), Date.now, logger);
+  const replayGuard = new ReplayGuard({ file: join(loaded.config.server.dataDir, 'admin', 'replay.json'), log: logger, slackMs: opts.camsAdmin?.replaySlackMs });
   const commandRunner = new CommandRunner({
+    replay: replayGuard,
     proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
     serverKeys: () => camsAdmin.keyInfo()?.serverKeys ?? [],
     policy: commandPolicy, journal, tokens: tokenStore, audit, log: logger,
@@ -813,6 +816,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       ...commandsInfo(),
     }),
     commands: () => commandRunner,
+    replay: replayGuard,
     // What changes ok, problemCount or a camera's online flag, read cheaply (an early heartbeat).
     changeKey: () => `${storage.paused() ? 1 : 0}|${cams.list().map((w) => `${w.id}:${w.status.state().online ? 1 : 0}${w.streamStatus().up ? 1 : 0}:${w.intake.state().onvif}`).join(',')}`,
     log: logger,
@@ -1191,6 +1195,11 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       // An archive job in flight is cancelled (its staged folder removed) before the catalog closes.
       // cams-admin: bye and close within 1 s, before the HTTP server (spec §9.1).
       await Promise.all([composer.stop(), analytics.stop(), archive.stop(), ...cams.list().map((w) => w.stopRecordings()), inventory.stop(), camsAdmin.stop(opts.reason === 'restart-requested' ? 'restart' : 'shutdown')]);
+      try {
+        replayGuard.flush();
+      } catch (err) {
+        logger.warn({ err: (err as Error).message }, 'admin_replay_save_failed');
+      }
       certs?.stop();
       clearInterval(proxyLeafTimer);
       const s = server;

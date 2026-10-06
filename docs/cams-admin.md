@@ -138,8 +138,9 @@ proxy checks it in this order; the first refusal wins (contract "Check order"):
 | 2 | the signature verifies against a pinned cams-admin key | `bad_signature` |
 | 3 | `proxyId` is this proxy's and `connId` this connection's | `wrong_target` |
 | 4 | the envelope id was not seen on this connection | `replayed` |
-| 5 | `exp` is 1 ms to 60 s after `ts`, and not older than 120 s on cams-admin's clock as measured at the handshake (the Pi has no RTC: its own clock never decides) | `expired` |
+| 5 | `exp` is 1 ms to 60 s after `ts`, and not older than 120 s on cams-admin's clock as measured at the handshake (the Pi has no RTC: its own clock never decides). A handshake whose signed time is more than 5 minutes older than the newest one seen is not answered (a replay) | `expired` |
 | 6 | the `cmdId` is in the journal: its stored answer again, `duplicate: true`; nothing runs | |
+| 6b | the `cmdId` was seen before (another connection, before a restart) and is not in the journal | `replayed` |
 | 7 | `CAMPROXY_ADMIN_COMMANDS` is on and commands are not paused | `paused` |
 | 8 | this version runs the command and it is allowed here | `not_allowed` |
 | 9 | 30 commands a minute, 300 a day, `tokens.apply` 6 an hour | `rate_limited` (with `retryAfterS`) |
@@ -224,6 +225,7 @@ read them or they belong to another user; never printed, logged or served.
 | `tokens.json` | the managed token hashes, their revision, the local block list | `tokens.apply`, Block/Unblock |
 | `commands.json` | the journal: the final result of the last 1000 commands (and all of the last 7 days, at most 2500) | each command that ran |
 | `policy.json` | the allowed commands and the pause | the card, `admin-commands` |
+| `replay.json` | the newest signed challenge time seen and the command ids seen (accepted or refused) until they expire: a recorded session replayed later (e.g. on the plain-http in-cluster path) is refused, also after a restart | each handshake and command |
 
 An unusable `policy.json` pauses every command until it is fixed; an
 unusable `tokens.json` makes no managed token match (local tokens are
