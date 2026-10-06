@@ -1,8 +1,16 @@
 import { randomBytes } from 'crypto';
+import { isIP } from 'net';
 import { connect as tlsConnect } from 'tls';
 import { IncomingMessage } from 'node:http';
 import { logger } from '../log';
 import { type TimeInfo, timeInfoFromGetTime } from './time';
+
+// How a camera is verified (spec 2026-10-05-multi-camera-host-design §10.4):
+// the site CA by its .internal name, or one pinned certificate (ca = that
+// certificate, fingerprint = its SHA-256); a fingerprint with the CA binds a
+// session to the leaf read just before.
+// { refuse }: a camera whose known trust isn't available: nothing is sent at all.
+export type CameraTrust = { ca: string; servername?: string; fingerprint?: string; refuse?: undefined } | { refuse: string };
 
 // The camera as the client needs it.
 export interface CameraConfig {
@@ -10,10 +18,11 @@ export interface CameraConfig {
   host: string; // address or name, optional :port
   protocol: 'https' | 'http';
   tlsServername?: string; // verify the camera's certificate against this name
+  tlsCa?: string; // ...and against this CA only (the site CA); without it, the public CAs
   user: string;
   password: string;
 }
-import { bareHost, CameraTarget, openRequest, readBody, requestWasWritten, ResponseTooLargeError, splitHost } from './http';
+import { bareHost, CameraTarget, openRequest, pinCheck, readBody, requestWasWritten, ResponseTooLargeError, splitHost } from './http';
 import { Semaphore } from './semaphore';
 
 export type CameraErrorCode = 'camera_offline' | 'camera_auth_failed' | 'camera_error';
@@ -80,7 +89,10 @@ export class ReolinkClient {
   private lastLoginFailure = Number.NEGATIVE_INFINITY;
   private readonly gate: Semaphore;
   private readonly timeoutMs: number;
-  private readonly target: CameraTarget;
+  private target: CameraTarget;
+  // The site CA's trust or a pin (setTrust).
+  private trust: Exclude<CameraTrust, { refuse: string }> | undefined;
+  private refusal: string | undefined;
 
   constructor(
     private readonly cam: CameraConfig,
@@ -89,10 +101,29 @@ export class ReolinkClient {
   ) {
     this.gate = new Semaphore(opts.maxConcurrent ?? 2);
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.target = { protocol: cam.protocol, host: cam.host, tlsServername: cam.tlsServername };
-    if (cam.protocol === 'https' && !cam.tlsServername) {
+    this.target = { protocol: cam.protocol, host: cam.host, tlsServername: cam.tlsServername, ...(cam.tlsCa ? { ca: cam.tlsCa } : {}) };
+    if (cam.tlsCa && cam.tlsServername) this.trust = { ca: cam.tlsCa, servername: cam.tlsServername };
+    if (cam.protocol === 'https' && !cam.tlsServername && !cam.tlsCa) {
       logger.warn({ cameraId: cam.id }, 'camera TLS certificate is not verified (no tlsServername configured)');
     }
+  }
+
+  // Verify the camera against the site CA by this name from the next request
+  // on (spec 2026-10-05-multi-camera-host-design §10.4), or, with undefined,
+  // as configured again (the camera stopped serving its leaf). Requests in
+  // flight finish on their connection.
+  setTrust(t0: CameraTrust | undefined): void {
+    this.refusal = t0?.refuse;
+    const t = t0 && t0.refuse === undefined ? t0 : undefined;
+    this.trust = t;
+    this.target = t
+      ? { protocol: this.cam.protocol, host: this.cam.host, tlsServername: t.servername, ca: t.ca, ...(t.fingerprint ? { pin: t.fingerprint } : {}) }
+      : { protocol: this.cam.protocol, host: this.cam.host, tlsServername: this.cam.tlsServername };
+  }
+
+  // Whether requests verify the camera (a CA or a pin set, or a public-CA name).
+  trusted(): boolean {
+    return this.cam.protocol === 'https' && Boolean(this.refusal || this.target.ca || this.target.tlsServername);
   }
 
   private now(): number {
@@ -102,6 +133,7 @@ export class ReolinkClient {
   private async post(cmd: string, param: object, token?: string): Promise<ReolinkReply> {
     const path = `/cgi-bin/api.cgi?cmd=${encodeURIComponent(cmd)}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
     const body = JSON.stringify([{ cmd, action: 0, param }]);
+    if (this.refusal) throw new CameraError('camera_error', `no trusted certificate for this camera: ${this.refusal}`);
     return this.gate.run(async () => {
       let res: IncomingMessage;
       try {
@@ -191,7 +223,7 @@ export class ReolinkClient {
   // The certificate the camera presents (subject, issuer, expiry). The camera's
   // GetCertificateInfo only says whether a custom one is installed.
   async cameraCertificate(): Promise<{ subject: string; issuer: string; validTo: string } | null> {
-    if (this.cam.protocol !== 'https') return null;
+    if (this.cam.protocol !== 'https' || this.refusal) return null;
     // Same host parsing as requests (bracketed IPv6 included). This only
     // reads the certificate for display: nothing is sent, and it runs outside
     // the API gate because it opens no camera session. The certificate is
@@ -209,7 +241,7 @@ export class ReolinkClient {
         socket.destroy();
         resolve(v);
       };
-      const socket = tlsConnect({ host, port: port ?? 443, servername: this.cam.tlsServername ?? host, ca: this.opts.tlsCa }, () => {
+      const socket = tlsConnect({ host, port: port ?? 443, servername: this.trust ? this.trust.servername : (this.cam.tlsServername ?? (isIP(host) ? undefined : host)), ca: this.trust?.ca ?? this.opts.tlsCa, ...(this.trust?.fingerprint ? { checkServerIdentity: pinCheck(this.trust.servername, this.trust.fingerprint), allowPartialTrustChain: true } : {}) }, () => {
         const c = socket.getPeerCertificate();
         const t = c?.valid_to ? Date.parse(c.valid_to) : NaN;
         // A throw here would be an uncaught exception in a socket listener.
@@ -271,6 +303,7 @@ export class ReolinkClient {
   // itself needs a gate slot via post(), and a slot this attempt is already
   // holding can't be re-acquired - that deadlocked permanently.
   private async snapshotAttempt(token: string): Promise<{ ok: true; body: Buffer } | { ok: false }> {
+    if (this.refusal) throw new CameraError('camera_error', `no trusted certificate for this camera: ${this.refusal}`);
     return this.gate.run(async () => {
       const path = `/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=${randomBytes(6).toString('hex')}&token=${encodeURIComponent(token)}`;
       let res: IncomingMessage;

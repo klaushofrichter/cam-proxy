@@ -95,4 +95,16 @@ describe('the host description (spec §14.1)', () => {
     z.proxy.passive = '0-39';
     expect(msg(z)).toBe('proxy.passive: must be A-B with A <= B');
   });
+
+  it("lan.address: the PC's LAN address (the router keeps it), inside lan.subnet; the hostname is the site label", () => {
+    const e = example();
+    delete e.lan.address;
+    expect(msg(e)).toBe('lan.address: required (the address the router keeps for this PC)');
+    const o = example();
+    o.lan.address = '192.168.2.230';
+    expect(msg(o)).toBe('lan.address: 192.168.2.230 is outside 192.168.1.0/24');
+    const n = example();
+    n.hostname = 'CamHost';
+    expect(msg(n)).toBe('hostname: "CamHost" is not a site label (a-z 0-9 -, up to 31; it names the site CA)');
+  });
 });

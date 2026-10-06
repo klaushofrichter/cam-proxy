@@ -1,9 +1,10 @@
+import { ensureNtp, type NtpOutcome } from './ntp';
 import { EventEmitter } from 'events';
 import { withCamera, type AuditLog } from '../audit/audit-log';
 import type { Catalog } from '../catalog/db';
 import { Backoff } from './backoff';
 import { lastClipReceived } from '../catalog/clips';
-import { ReolinkClient } from '../camera/client';
+import { ReolinkClient, type CameraTrust } from '../camera/client';
 import { bareHost, splitHost } from '../camera/http';
 import { CameraNameAnnouncer, writeCameraName } from '../camera/name';
 import { CameraReboot } from '../camera/reboot';
@@ -57,6 +58,9 @@ export interface WorkerDeps {
   audit: AuditLog;
   hooks: WorkerHooks;
   cameraFtpCheckMs?: number;
+  // The site CA's trust for this camera once it serves its leaf (spec
+  // 2026-10-05-multi-camera-host-design §10.4); a camera with tlsName keeps public-CA verification.
+  tls?: (id: string) => CameraTrust | undefined;
   // Test seams: a throw from beforeStart is a start failure; schedule replaces setTimeout.
   beforeStart?: () => void | Promise<void>;
   schedule?: (ms: number, fn: () => void) => () => void;
@@ -281,12 +285,36 @@ export class CameraWorker extends EventEmitter {
     this.d.log.append(this.id, 'camera', { ...(this.toldName !== undefined ? { name: this.toldName } : {}), address: host });
   }
 
+  private ntpAt = 0;
+  // The camera's NTP server → ntp.server (spec 2026-10-05-multi-camera-host-design
+  // §14.2): a whole-object SetNtp, read back, logged out. Once an hour at most
+  // unless forced (the camera-ntp-set action); null without ntp.server (the Pi).
+  async syncNtp(force = false): Promise<NtpOutcome | null> {
+    const server = this.d.running().ntp.server;
+    if (!server || (!force && Date.now() - this.ntpAt < 3600_000)) return null;
+    this.ntpAt = Date.now();
+    const r = await ensureNtp(this.client, server);
+    if (r.outcome !== 'already') {
+      this.audit.write({ action: 'camera-ntp', category: ['configuration'], type: ['change'], outcome: r.outcome === 'set' ? 'success' : 'failure', user: 'system', message: `Camera NTP server ${r.outcome} (${server})${r.detail ? `: ${r.detail}` : ''}`, details: { server, outcome: r.outcome } });
+    }
+    return r.outcome;
+  }
+
+  // The camera's trust changed (it serves its site-CA leaf now, or stopped):
+  // the client verifies accordingly from its next request on.
+  applyTrust(): void {
+    if (this.cam().tlsName) return;
+    this.client.setTrust(this.d.tls?.(this.id));
+  }
+
   // The parts restart() makes anew: client, poller, tracker, intake, stills.
   private build(): void {
     const d = this.d;
     const c = this.cam();
     this.announceAddress();
+    const t = c.tlsName ? undefined : d.tls?.(this.id);
     this.client = new ReolinkClient({ id: c.id, host: c.host, protocol: c.protocol, tlsServername: c.tlsName, user: c.user, password: d.password() });
+    if (t) this.client.setTrust(t);
     this.status = new StatusPoller(this.client, c.statusPollS);
     this.status.on('change', (s: CameraState) => d.log.append(c.id, 'camera-status', { online: s.online, reason: s.error ?? null, clockOffsetMs: s.clockOffsetMs ?? null }));
     this.status.on('check', (x: { ok: boolean; ms: number; error?: string }) => d.hooks.onCameraCheck(x));
@@ -297,6 +325,8 @@ export class CameraWorker extends EventEmitter {
     // The camera's FTP settings as soon as it answers (#93), then every few minutes.
     this.status.on('change', (s: CameraState) => {
       if (s.online) void this.ftpWatch.checkNow();
+      // The camera's NTP server on the host (spec §14.2, Ruling P5-7): at most once an hour.
+      if (s.online) void this.syncNtp().catch((err: Error) => logger.warn({ cameraId: this.id, err: err.message }, 'camera_ntp_failed'));
       // Online for 10 minutes: the next failure starts the backoff at 5 s again.
       this.onlineSince = s.online ? (this.onlineSince ?? Date.now()) : null;
       if (this.onlineSince !== null) this.backoff.healthy(this.onlineSince, Date.now());

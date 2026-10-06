@@ -93,6 +93,11 @@ is `https://download.docker.com/linux/ubuntu`).
 
 - `lan.iface`, `cameraNet.iface`: the real NIC names.
 - `lan.subnet`: the home LAN (`192.168.1.0/24`).
+- `lan.address`: the address the router keeps for the PC (by MAC; no
+  reservation). It becomes an IP name of the proxy's certificate and is
+  covered by the site CA (§13); if the router ever gives the PC another one,
+  the Certificates card says so and `tls-ca-rotate` makes a new CA.
+- `hostname`: also the site label of the site CA (`<camera>.<hostname>.internal`).
 - `clusterCidrs`: the cluster's pod and service ranges, from the kube-setup
   session (k3s `--cluster-cidr` and `--service-cidr`; the defaults are
   `10.42.0.0/16` and `10.43.0.0/16`). The camera subnet must not overlap them
@@ -417,7 +422,7 @@ Per camera, once it has its lease:
 
 The proxy's 8480 is reachable from loopback only, and from the LAN while
 `httpFromLan` is `true` (P4 to P5). HTTPS on 8443 comes with the site CA
-(P5). Two proxies on one data volume are not supported (§10).
+(§13). Two proxies on one data volume are not supported (§10).
 
 **Result:** _(on the device)_
 
@@ -509,3 +514,110 @@ changed, and reads it back.
 
 Record them also in the Obsidian note *Cameras/Reolink API Behaviour* and as
 a cam-sim issue (cam-sim mirrors the real camera: measure first).
+
+## 13. TLS: the site CA
+
+The host has its own certificate authority, inside cam-proxy (spec
+2026-10-05-multi-camera-host-design §10). Nothing of it comes from the
+cluster; the Pi doesn't have one (it keeps Let's Encrypt, `cam1-cert-push`).
+
+**Turning it on.** The rendered `data/config.json` already has it:
+
+```json
+"server": { "tls": { "port": 8443 } },
+"tls": { "site": "camhost1", "cameraSubnet": "192.168.60.0/24", "proxyAddresses": "<lan.address>,192.168.60.1" },
+"ntp": { "server": "192.168.60.1" }
+```
+
+A host rendered before P5 adds these three by hand (or in the Settings
+page); they need a restart of the process. On its first start the proxy
+creates `data/tls/ca.pem` and `data/tls/ca.key` (mode 600): RSA 3072, ten
+years, `CN=cam-proxy site CA camhost1`, with critical name constraints, so it
+can only vouch for `camhost1.internal` and the names under it, the camera
+subnet and the proxy's own two addresses. Then:
+
+- **The proxy's certificate** (`proxy.camhost1.internal`, the LAN and
+  camera-side addresses) serves HTTPS on 8443; renewed by itself.
+- **Each camera's certificate** (`cam3.camhost1.internal`, its address; RSA
+  2048, 397 days) is pushed to the camera within ten minutes of the start or
+  of adding the camera, one camera at a time, never during an open event;
+  renewed 30 days before expiry at 04:00 camera time. The camera's web server
+  restarts for a few seconds during a push.
+- **A camera that refuses the import** (the firmware answers 200 and keeps
+  its certificate) shows `pinned` on the Certificates card with its own
+  (factory) fingerprint; the proxy pins that certificate itself and cams pins
+  the same. The next try is at the next 04:00, or "Push now".
+- **A camera that served its leaf and then serves something else** (a factory
+  reset, a replaced camera, or someone else on the camera network) is not
+  pushed to by itself: the proxy refuses to talk to it, the card and the
+  `certificates` health item say "serves an unexpected certificate". Check the
+  camera (is it the one you expect, at its address?), then "Push now". A
+  push binds its session to the certificate it read just before; the first
+  push to a camera trusts what it serves at that moment (trust on first use),
+  so add cameras while the camera network is yours alone.
+- **FTPS** uses the proxy's certificate as read when the FTP server starts;
+  after a rotation it picks up the new one at the next restart.
+- **NTP:** the proxy sets each camera's NTP server to `192.168.60.1`
+  (`GetNtp`, a whole-object `SetNtp`, read back) when it comes online, at most
+  once an hour; the audit log has a `camera-ntp` record when it changed.
+
+**Checking.** The CA and its constraints:
+
+```sh
+curl -s http://127.0.0.1:8480/tls/ca.pem | openssl x509 -noout -subject -ext nameConstraints
+```
+
+Each camera, verified against the CA by its name:
+
+```sh
+openssl s_client -connect 192.168.60.13:443 -servername cam3.camhost1.internal \
+  -CAfile <(curl -s http://127.0.0.1:8480/tls/ca.pem) </dev/null 2>/dev/null | grep 'Verify return code'
+# Verify return code: 0 (ok)
+```
+
+The proxy over HTTPS from the Mac:
+
+```sh
+curl -s http://<lan.address>:8480/tls/ca.pem > ca.pem   # or the card's "Download the CA"
+curl --cacert ca.pem --resolve proxy.camhost1.internal:8443:<lan.address> https://proxy.camhost1.internal:8443/health
+```
+
+**Klaus's devices.** Installing the CA lets the browser open
+`https://192.168.60.13/` (over the route) and the proxy's page without a
+warning. The name constraints make that safe: the CA can't vouch for any
+other site, even if its key leaked. macOS: open `ca.pem`, Keychain Access →
+the certificate → Trust → "Always Trust". iOS: AirDrop or mail the file,
+install the profile, then Settings → General → About → Certificate Trust
+Settings → turn it on. Firefox has its own store (Settings → Certificates →
+Import, "trust this CA to identify websites").
+
+**cams.** The Certificates card shows the CA fingerprint (`SHA256:` and 64
+upper-case hex digits; Copy fingerprint copies it plain). It goes into cams'
+generator input as this proxy's `caFingerprint` (the cams P5 plan); cams then
+reaches the proxy at `https://<lan.address>:8443` with servername
+`proxy.camhost1.internal` and each camera with `<camId>.camhost1.internal`.
+
+**Rotating the CA** (`POST /control/actions/tls-ca-rotate` with
+`{"confirm":"rotate"}`, admin): a new CA, the old files kept as
+`*.old-<time>` in `data/tls`, a new proxy certificate, and every camera
+pushed again (a camera stays trusted through the previous CA until then, at
+most 30 days; `tls-ca-drop-previous` ends that at once).
+
+**Clearing a camera's trust** (`POST /control/cameras/<cam>/actions/camera-trust-clear`
+with `{"confirm":"clear"}`, admin, audited): needed when a camera is replaced
+on purpose and it should be treated as new; then "Push now" pushes its first
+certificate (it trusts what the camera serves at that moment). Losing
+`data/tls/cameras` entirely makes every camera new again: restore it from the
+backup. Without it the
+proxy keeps refusing a camera that serves an unexpected certificate, also
+when `tls.site` is removed or the CA can't be loaded. Every cams pin of this proxy breaks: give cams the new
+fingerprint (it accepts a list, so add the new one first). Needed after an
+address change the CA doesn't cover (the Certificates card and the
+`certificates` health item name the address).
+
+**Backups.** `data/tls/` is part of the data backup. A restore without
+`ca.key` is refused (the proxy keeps serving HTTP, the health item says
+`ca.key is missing`): restore the key, or rotate.
+
+**Result:** _(on the device: plan Task 14)_
+

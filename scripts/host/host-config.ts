@@ -5,7 +5,8 @@ export class HostConfigError extends Error {}
 export interface Lease { name: string; mac: string; ip: string; role?: 'switch'; camera?: { id: string; poeSwitchPort?: number } }
 export interface HostDescription {
   hostname: string;
-  lan: { iface: string; subnet: string };
+  // address: the PC's LAN address (the router keeps it per MAC): the proxy certificate's IP name.
+  lan: { iface: string; subnet: string; address: string };
   cameraNet: { iface: string; address: string; prefix: number; pool: [string, string] };
   clusterCidrs: string[];
   proxy: { httpsPort: number; httpPort: number; httpFromLan: boolean; ftpPort: number; passive: string };
@@ -50,8 +51,12 @@ export function parseHost(json: unknown): HostDescription {
     if (typeof v !== 'string' || !IFACE.test(v) || v.includes('..')) fail(`${k}: ${JSON.stringify(v)} is not an interface name (1-15 of a-z A-Z 0-9 _ . -, no "..")`);
   }
   if (h.cameraNet.iface === h.lan.iface) fail(`cameraNet.iface: ${h.cameraNet.iface} is also lan.iface (the camera side must be the other NIC)`);
+  // The hostname is the site label (spec 2026-10-05-multi-camera-host-design §10.3): <cam>.<hostname>.internal.
+  if (typeof h.hostname !== 'string' || !/^[a-z0-9][a-z0-9-]{0,30}$/.test(h.hostname)) fail(`hostname: ${JSON.stringify(h.hostname)} is not a site label (a-z 0-9 -, up to 31; it names the site CA)`);
   const net = cidrOf(`${h.cameraNet.address}/${h.cameraNet.prefix}`);
   const lan = cidrOf(h.lan.subnet);
+  if (h.lan.address === undefined) fail('lan.address: required (the address the router keeps for this PC)');
+  if (typeof h.lan.address !== 'string' || !/^\d{1,3}(\.\d{1,3}){3}$/.test(h.lan.address) || !inCidr(h.lan.address, lan.base, lan.prefix)) fail(`lan.address: ${h.lan.address} is outside ${show(lan)}`);
   if (overlap(net, lan)) fail(`cameraNet: ${show(net)} overlaps lan ${show(lan)}`);
   for (const c of h.clusterCidrs) if (overlap(net, cidrOf(c))) fail(`cameraNet: ${show(net)} overlaps the cluster range ${c}`);
   for (const ip of h.cameraNet.pool) if (!inCidr(ip, net.base, net.prefix)) fail(`cameraNet.pool: ${ip} is outside ${show(net)}`);

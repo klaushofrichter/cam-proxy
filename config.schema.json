@@ -42,6 +42,18 @@
           "type": "string",
           "pattern": "^https?://[^\\s]+$",
           "description": "where people reach this proxy (its admin UI); reported in /api/cameras so clients can link to it"
+        },
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535,
+              "description": "HTTPS port with the site CA certificate (needs tls.site); the HTTP port stays"
+            }
+          }
         }
       }
     },
@@ -757,6 +769,42 @@
               "description": "Google Vision calls per camera and day at most (automatic analyses and still checks together); 0 = no per-camera cap"
             }
           }
+        }
+      }
+    },
+    "tls": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "site": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,30}$",
+          "description": "this host's site label: names are <camera>.<site>.internal and proxy.<site>.internal"
+        },
+        "cameraCerts": {
+          "type": "boolean",
+          "description": "issue and push camera certificates from the site CA"
+        },
+        "cameraSubnet": {
+          "type": "string",
+          "pattern": "^\\d{1,3}(\\.\\d{1,3}){3}/\\d{1,2}$",
+          "description": "the camera network the CA may vouch for (CIDR, /16 or narrower), e.g. 192.168.60.0/24"
+        },
+        "proxyAddresses": {
+          "type": "string",
+          "pattern": "^\\d{1,3}(\\.\\d{1,3}){3}(,\\d{1,3}(\\.\\d{1,3}){3})*$",
+          "description": "the proxy's own IPv4 addresses (LAN, camera side), comma-separated: its certificate's IP names"
+        }
+      }
+    },
+    "ntp": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "server": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9.-]{1,253}$",
+          "description": "the NTP server the proxy sets on its cameras (the host's camera-side address)"
         }
       }
     },

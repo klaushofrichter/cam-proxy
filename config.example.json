@@ -2,7 +2,8 @@
   "server": {
     "port": 8480,
     "dataDir": "data",
-    "logLevel": "info"
+    "logLevel": "info",
+    "tls": {}
   },
   "camera": {
     "id": "cam1",
@@ -111,5 +112,9 @@
       "checksPerDay": 10,
       "perCameraDailyCap": 0
     }
-  }
+  },
+  "tls": {
+    "cameraCerts": true
+  },
+  "ntp": {}
 }
