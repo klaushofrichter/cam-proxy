@@ -53,7 +53,7 @@ the fingerprint, never the code.
 | setting | default | |
 |---|---|---|
 | `camsAdmin.url` | unset (off) | `https://…`; plain `http://` only for loopback and `*.svc.cluster.local` (the cluster's proxy reaches cams-admin over its Service). Anything else is a config error |
-| `camsAdmin.keyFile` | `admin/key.json` | relative to `server.dataDir`, inside it |
+| `camsAdmin.keyFile` | `admin/key.json` | `admin/<name>.json` in `server.dataDir` (letters, digits, `-`, `_`); nothing else, so the data folder and `overrides.json` are never touched |
 | `camsAdmin.enabled` | `true` | `false` keeps the key and stays off |
 | `camsAdmin.allowCommands` | `[]` | reserved for commands from cams-admin (a later phase); anything in it is a config error in this version. Not a Settings-page setting |
 
@@ -120,6 +120,34 @@ server, inside the 15 s budget. `test/fleet-isolation.test.ts` runs events,
 FTP clips, stills and the API against a cams-admin that never answers, sends
 garbage, closes every second, answers 4401, never acknowledges, and a
 blackholed link.
+
+## Threat notes (accepted risks)
+
+- **Large messages from cams-admin.** Node's built-in WebSocket has no
+  payload option (`maxPayloadSize` is ignored, measured on Node 26.8.1 /
+  undici 8.10.0): it buffers a whole message, up to its own limit of 128 MiB,
+  before the client sees it and refuses anything over 256 KiB. Measured on
+  the Mac: a 100 MiB message peaks at ~150 MB RSS, a 127 MiB one at ~190 MB,
+  briefly; a 200 MiB one is closed by Node (1006) at ~55 MB. Only a
+  compromised cams-admin (or something on the in-cluster `http` path) can
+  send one. After an oversize message the connection closes and the backoff
+  is **not** reset, however long it was up, so the spikes come at most once
+  per backoff step (up to 5 min apart). Avoiding it would need a WebSocket
+  implementation of our own or a dependency; accepted for this phase.
+- **Answers are read with a cap.** The enrollment answer at most 64 KiB, the
+  426 probe at most 4 KiB, the CLI's `/health` probe at most 4 KiB; a longer
+  or endless body is dropped at once. At most 20 messages of an unsupported
+  type are answered per connection (none while the socket isn't draining);
+  more close it.
+- **The channel stays on cams-admin's host.** The `connectUrl` of the
+  enrollment answer must be on the same host as `camsAdmin.url`.
+- **The CLI only talks to a cam-proxy.** It sends the admin token and the
+  code only when the proxy's port answers `/health` as a cam-proxy; if the
+  port answers otherwise or not in time it does nothing (it never writes
+  `overrides.json` behind a running proxy).
+- **CodeQL `js/request-forgery`** on the enrollment request is an accepted
+  finding (`.github/codeql-accepted.tsv`): contacting the URL the admin gives
+  is the request's purpose.
 
 ## The contract
 

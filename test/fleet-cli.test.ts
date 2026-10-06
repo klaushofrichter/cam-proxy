@@ -2,10 +2,12 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFil
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { Readable } from 'stream';
+import http from 'http';
+import type { AddressInfo } from 'net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runAdminCli } from '../src/fleet/cli';
 import { startFakeAdmin, type FakeAdmin } from './helpers/fake-admin';
-import { ADMIN_TOKEN, CLIENT_TOKEN, startProxy, until } from './helpers/proxy';
+import { ADMIN_TOKEN, CLIENT_TOKEN, freePort, startProxy, until } from './helpers/proxy';
 import { startSim } from './helpers/sim';
 
 // admin-enroll / admin-unenroll (spec 2026-10-06-cams-admin-phase1-design §9.2):
@@ -14,8 +16,10 @@ import { startSim } from './helpers/sim';
 const CODE = 'CAE1-7Q2M-K9XD-4HPA-W3ZT-RN6B';
 const ENV = { CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: 'x' };
 let fake: FakeAdmin;
+let closedPort = 0; // nothing listens there: the proxy is not running
 beforeAll(async () => {
   fake = await startFakeAdmin();
+  closedPort = await freePort();
 });
 afterAll(() => fake.close());
 
@@ -23,7 +27,7 @@ const stdin = (text: string) => Object.assign(Readable.from([text]), { isTTY: fa
 const run = async (argv: string[], o: { cwd: string; input?: string; proxyUrl?: string }) => {
   const out: string[] = [];
   const err: string[] = [];
-  const code = await runAdminCli(argv, { env: ENV, cwd: o.cwd, stdin: stdin(o.input ?? ''), out: (s) => out.push(s), err: (s) => err.push(s), proxyUrl: o.proxyUrl ?? 'http://127.0.0.1:9' });
+  const code = await runAdminCli(argv, { env: ENV, cwd: o.cwd, stdin: stdin(o.input ?? ''), out: (s) => out.push(s), err: (s) => err.push(s), proxyUrl: o.proxyUrl ?? `http://127.0.0.1:${closedPort}` });
   return { code, out: out.join(''), err: err.join('') };
 };
 const workDir = () => {
@@ -84,6 +88,48 @@ describe('admin-enroll', () => {
     const r = await run(['admin-enroll', '--url', fake.url], { cwd: workDir(), input: '' });
     expect(r.code).toBe(2);
   });
+});
+
+describe('admin-enroll: something else on the proxy port', () => {
+  const serve = (handler: (res: import('http').ServerResponse) => void) =>
+    new Promise<{ url: string; hits: string[]; close: () => void }>((resolve) => {
+      const hits: string[] = [];
+      const s = http.createServer((req, res) => {
+        hits.push(`${req.method} ${req.url} ${req.headers.authorization ? 'auth' : ''}`);
+        handler(res);
+      });
+      s.listen(0, '127.0.0.1', () => resolve({ url: `http://127.0.0.1:${(s.address() as AddressInfo).port}`, hits, close: () => { s.closeAllConnections(); s.close(); } }));
+    });
+
+  it('not a cam-proxy answering /health: refused, the token and the code never sent, nothing written', async () => {
+    const other = await serve((res) => res.end('{"status":"ok"}'));
+    try {
+      const dir = workDir();
+      const r = await run(['admin-enroll', '--url', fake.url], { cwd: dir, input: CODE, proxyUrl: other.url });
+      expect(r.code).toBe(1);
+      expect(r.err).toMatch(/not a cam-proxy/);
+      expect(other.hits.filter((h) => h.includes('auth') || !h.startsWith('GET /health'))).toEqual([]);
+      expect(existsSync(join(dir, 'data', 'admin'))).toBe(false);
+    } finally {
+      other.close();
+    }
+  });
+
+  it('a proxy port that does not answer: refused, overrides.json never written behind it', async () => {
+    const hung = await serve(() => undefined);
+    try {
+      const dir = workDir();
+      fake.codes.add(CODE);
+      const r = await run(['admin-enroll', '--url', fake.url], { cwd: dir, input: CODE, proxyUrl: hung.url });
+      expect(r.code).toBe(1);
+      expect(r.err).toMatch(/did not answer/);
+      expect(existsSync(join(dir, 'data', 'overrides.json'))).toBe(false);
+      expect(existsSync(join(dir, 'data', 'admin'))).toBe(false);
+    } finally {
+      fake.codes.delete(CODE);
+      hung.close();
+    }
+  }, 15_000);
 });
 
 describe('admin-enroll with the proxy running', () => {

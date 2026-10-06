@@ -120,6 +120,41 @@ describe('a server that hangs before the handshake', () => {
   });
 });
 
+describe('a hostile server: bounded work', () => {
+  it('the 426 probe reads at most a few KiB: an endless body does not hold the retry', async () => {
+    fake.refuseUpgrade = true;
+    fake.endlessProbe = true;
+    const c = make();
+    const t0 = Date.now();
+    c.start();
+    await until(() => c.view().state === 'backoff', 1500);
+    expect(Date.now() - t0).toBeLessThan(1500);
+  });
+
+  it('a flood of unsupported messages: answered up to a limit, then the connection closes', async () => {
+    const c = make();
+    c.start();
+    await until(() => c.view().state === 'connected');
+    for (let i = 0; i < 30; i++) fake.send('command', { n: i });
+    await until(() => fake.connections >= 2, 3000);
+    expect(fake.received.filter((r) => r.conn === 1 && r.msg.type === 'error').length).toBeLessThanOrEqual(20);
+    expect(c.view().lastError).toMatch(/unsupported/);
+  });
+
+  it('an oversize message never resets the backoff, however long the connection was up', async () => {
+    const c = make({ timing: { maxInboundBytes: 1024, resetAfterMs: 100, backoffCapMs: 300 } });
+    c.start();
+    for (let n = 1; n <= 2; n++) {
+      await until(() => c.view().state === 'connected' && fake.connections === n, 5000);
+      await new Promise((r) => setTimeout(r, 300));
+      fake.sendRaw(JSON.stringify({ v: 1, type: 'error', id: 'x', seq: 99, ts: 1, body: { pad: 'x'.repeat(2048) } }));
+      await until(() => c.view().state !== 'connected', 3000);
+    }
+    expect(c.view().attempt).toBeGreaterThanOrEqual(2);
+    expect(c.view().lastError).toMatch(/size limit/);
+  });
+});
+
 describe('close codes (spec §8.8)', () => {
   it('4401 after the hello: rejected, retried after rejectedRetryMs, logged once', async () => {
     fake.mode = 'reject';

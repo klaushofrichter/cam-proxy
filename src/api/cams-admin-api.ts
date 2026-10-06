@@ -27,7 +27,7 @@ export function camsAdminApi(d: { camsAdmin: CamsAdmin; audit: AuditLog }): expr
     } catch (err) {
       const e = err instanceof EnrollError ? err : null;
       d.audit.write({ action: 'admin-enroll', category: ['configuration'], type: ['creation'], outcome: 'failure', ...who(req), message: `Enrollment with cams-admin ${url} failed: ${e?.code ?? 'error'}`, error: e?.code ?? 'error', details: { url, reason: e?.code ?? 'error' } });
-      if (e) return void res.status(e.code === 'unreachable' || e.code === 'server_error' || e.code === 'bad_answer' ? 502 : e.code === 'rate_limited' ? 429 : 400).json({ error: e.code, message: e.message, ...(e.retryAfterS ? { retryAfterS: e.retryAfterS } : {}) });
+      if (e) return void res.status(e.code === 'unreachable' || e.code === 'server_error' || e.code === 'bad_answer' ? 502 : e.code === 'rate_limited' ? 429 : e.code === 'busy' ? 409 : 400).json({ error: e.code, message: e.message, ...(e.retryAfterS ? { retryAfterS: e.retryAfterS } : {}) });
       res.status(500).json({ error: 'internal', message: (err as Error).message.slice(0, 200) });
     }
   });

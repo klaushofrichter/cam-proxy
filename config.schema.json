@@ -819,8 +819,8 @@
         },
         "keyFile": {
           "type": "string",
-          "pattern": "^.+$",
-          "description": "the proxy's cams-admin key file, relative to server.dataDir (mode 600, written at enrollment)"
+          "pattern": "^admin/[A-Za-z0-9_-]{1,64}\\.json$",
+          "description": "the proxy's cams-admin key file: admin/<name>.json in server.dataDir (mode 600 in the 700 folder admin/, written at enrollment)"
         },
         "enabled": {
           "type": "boolean",

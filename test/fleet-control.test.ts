@@ -91,6 +91,19 @@ describe('enroll, reconnect, unenroll', () => {
     expect(JSON.stringify(g)).not.toMatch(/privateKey|serverKeys/);
   });
 
+  it('two enrollments at once: one goes on, the other is 409 busy', async () => {
+    fake.codes.add(CODE);
+    fake.enrollDelayMs = 300;
+    try {
+      const [a, b] = await Promise.all([0, 1].map(() => request(p.base).post('/control/admin/enroll').set(admin).send({ url: fake.url, code: CODE })));
+      expect([a.status, b.status].sort()).toEqual([200, 409]);
+      expect([a.body.error, b.body.error]).toContain('busy');
+    } finally {
+      fake.enrollDelayMs = 0;
+    }
+    await until(() => p.proxy.camsAdmin.view().state === 'connected');
+  });
+
   it('reconnect: a new connection at once', async () => {
     const n = fake.connections;
     await request(p.base).post('/control/admin/reconnect').set(admin).expect(200);

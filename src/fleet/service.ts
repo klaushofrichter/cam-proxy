@@ -1,7 +1,7 @@
 import { join } from 'path';
 import type { HealthSummary } from '../health/summary';
 import { AdminClient, type ClientLog, type ClientView, type Timing } from './client';
-import { enrollWithCode } from './enroll';
+import { enrollWithCode, EnrollError } from './enroll';
 import type { HeartbeatProxyInfo } from './heartbeat';
 import { deleteKeyFile, KeyFileInvalid, KeyFileUnsafe, readKeyFile, type AdminKeyFile } from './keyfile';
 import { fingerprint, trimSlashes } from './protocol';
@@ -55,6 +55,7 @@ export class CamsAdmin {
   private chain: Promise<void> = Promise.resolve();
   private stopped = false;
   private warned: string | null = null;
+  private enrolling = false;
 
   constructor(private readonly d: CamsAdminDeps) {}
 
@@ -100,12 +101,19 @@ export class CamsAdmin {
 
   // Enrollment from the CLI or the admin UI: the key file, then the URL
   // override (which starts the client). Throws EnrollError.
+  // One at a time: a second one is refused (busy), never redeemed alongside.
   async enroll(url: string, code: string): Promise<AdminKeyFile> {
-    const key = await enrollWithCode({ url, code, keyPath: this.keyPath(), version: this.d.version, cameraIds: this.d.cameraIds() });
-    this.running = null;
-    if (this.d.settings().url !== key.url) await this.d.setUrl(key.url);
-    await this.apply();
-    return key;
+    if (this.enrolling) throw new EnrollError('busy');
+    this.enrolling = true;
+    try {
+      const key = await enrollWithCode({ url, code, keyPath: this.keyPath(), version: this.d.version, cameraIds: this.d.cameraIds() });
+      this.running = null;
+      if (this.d.settings().url !== key.url) await this.d.setUrl(key.url);
+      await this.apply();
+      return key;
+    } finally {
+      this.enrolling = false;
+    }
   }
 
   // bye unenrolled if connected (cams-admin then revokes the key), the key

@@ -150,7 +150,6 @@ function crossCheck(c: Config): void {
     const p = /^https?:\/\//.test(c.camsAdmin.url) ? adminUrlProblem(c.camsAdmin.url) : 'must be https://';
     if (p) throw new ConfigError(`camsAdmin.url: ${p}`);
   }
-  if (isAbsolute(c.camsAdmin.keyFile) || c.camsAdmin.keyFile.split(/[\\/]/).includes('..')) throw new ConfigError('camsAdmin.keyFile: must be a path inside server.dataDir');
 }
 
 // camsAdmin.allowCommands (P3's command allowlist): only an empty list in this

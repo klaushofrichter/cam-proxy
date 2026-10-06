@@ -94,6 +94,32 @@ export function parseEnvelope(data: string): Envelope {
   return m as unknown as Envelope;
 }
 
+// A response body as text, at most `max` bytes: null (and the rest dropped)
+// when it says or turns out to be longer. A hostile server can't make the
+// proxy buffer or wait for an endless body.
+export async function readCapped(r: Response, max: number): Promise<string | null> {
+  const declared = Number(r.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > max) {
+    await r.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  if (!r.body) return '';
+  const reader = r.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let n = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    n += value.byteLength;
+    if (n > max) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 // Without trailing slashes, in linear time (a /\/+$/ regex backtracks on many slashes).
 export function trimSlashes(url: string): string {
   let end = url.length;

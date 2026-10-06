@@ -7,7 +7,7 @@ import { applyOverrides, ConfigError, loadConfig, removeOverride } from '../conf
 import { setLogLevel } from '../log';
 import { enrollWithCode, EnrollError } from './enroll';
 import { deleteKeyFile } from './keyfile';
-import { fingerprint } from './protocol';
+import { fingerprint, readCapped } from './protocol';
 
 // `cam-proxy admin-enroll --url U` and `admin-unenroll` (spec
 // 2026-10-06-cams-admin-phase1-design §9.2). The code comes from stdin (a
@@ -43,11 +43,19 @@ async function readCode(io: CliIo): Promise<string> {
   return text.split(/\r?\n/).find((l) => l.trim())?.trim() ?? '';
 }
 
-async function running(base: string): Promise<boolean> {
+// Whether the proxy runs on its port: 'running' (its /health answered as a
+// cam-proxy's: {ok, version, startedAt}), 'stopped' (nothing listens), or
+// 'unknown' (something else answers, or nothing in time). The admin token and
+// the code go only to a running cam-proxy; nothing is written behind an unknown one.
+async function probe(base: string): Promise<'running' | 'stopped' | 'unknown'> {
   try {
-    return (await fetch(`${base}/health`, { signal: AbortSignal.timeout(2000) })).ok;
-  } catch {
-    return false;
+    const r = await fetch(`${base}/health`, { signal: AbortSignal.timeout(2000), redirect: 'error' });
+    const text = await readCapped(r, 4096);
+    const b = text ? (JSON.parse(text) as Record<string, unknown>) : null;
+    return r.ok && b && b.ok === true && typeof b.version === 'string' && 'startedAt' in b ? 'running' : 'unknown';
+  } catch (err) {
+    const code = (err as { cause?: { code?: string } }).cause?.code;
+    return code === 'ECONNREFUSED' ? 'stopped' : 'unknown';
   }
 }
 
@@ -86,7 +94,12 @@ export async function runAdminCli(argv: string[], io: CliIo): Promise<number> {
     throw err;
   }
   const base = io.proxyUrl ?? `http://127.0.0.1:${loaded.config.server.port}`;
-  const live = await running(base);
+  const state = await probe(base);
+  if (state === 'unknown') {
+    io.err(`cam-proxy ${cmd}: ${base} did not answer as a cam-proxy (not a cam-proxy, or it did not answer in time); nothing was sent or written. Retry, or stop the proxy first\n`);
+    return 1;
+  }
+  const live = state === 'running';
   const headers = { Authorization: `Bearer ${loaded.secrets.adminToken}`, 'Content-Type': 'application/json', 'User-Agent': 'cam-proxy-cli' };
 
   if (cmd === 'admin-unenroll') {

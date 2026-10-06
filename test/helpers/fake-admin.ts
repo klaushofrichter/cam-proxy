@@ -31,6 +31,10 @@ export class FakeAdmin {
   refuseUpgrade = false;
   // Upgrades left unanswered (a server that hangs before the handshake); counted.
   muteUpgrade = false;
+  // A body that never ends (1 KiB every 10 ms) for the 426 probe or the enrollment answer.
+  endlessProbe = false;
+  endlessEnroll = false;
+  enrollDelayMs = 0;
   upgrades = 0;
   supported = ['cams-admin.v1'];
   received: Received[] = [];
@@ -164,7 +168,13 @@ export class FakeAdmin {
       res.writeHead(status, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(body));
     };
-    if (req.method === 'GET' && req.url?.startsWith('/proxy/v1/connect')) return answer(426, { error: 'unsupported_protocol', supported: this.supported });
+    const endless = (status: number) => {
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.write('{"error":"unsupported_protocol","supported":["cams-admin.v2"],"pad":"');
+      const t = setInterval(() => (res.destroyed ? clearInterval(t) : res.write('x'.repeat(1024))), 10);
+      setTimeout(() => (clearInterval(t), res.end('"}')), 20_000).unref();
+    };
+    if (req.method === 'GET' && req.url?.startsWith('/proxy/v1/connect')) return this.endlessProbe ? endless(426) : answer(426, { error: 'unsupported_protocol', supported: this.supported });
     if (req.method !== 'POST' || req.url !== '/proxy/v1/enroll') return answer(404, { error: 'not_found' });
     let text = '';
     req.on('data', (c: Buffer) => (text += c.toString()));
@@ -176,6 +186,7 @@ export class FakeAdmin {
         return answer(400, { error: 'bad_request' });
       }
       this.enrollRequests.push(body);
+      if (this.endlessEnroll) return endless(201);
       if (this.enrollReply) return answer(this.enrollReply.status, this.enrollReply.body);
       const code = normaliseCode(body.code);
       if (!code || !this.codes.has(code)) return answer(401, { error: 'invalid_code' });
@@ -184,7 +195,7 @@ export class FakeAdmin {
       const proxyId = `prx_${ulid(Date.now()).slice(6)}`;
       const keyId = `key_${ulid(Date.now()).slice(6)}`;
       this.keys.set(proxyId, { keyId, publicKey: String(body.publicKey) });
-      answer(201, { v: 1, proxyId, keyId, account: 'home', connectUrl: this.connectUrl, serverKeys: [this.server.publicKey], heartbeatS: 30 });
+      setTimeout(() => answer(201, { v: 1, proxyId, keyId, account: 'home', connectUrl: this.connectUrl, serverKeys: [this.server.publicKey], heartbeatS: 30 }), this.enrollDelayMs);
     });
   }
 }

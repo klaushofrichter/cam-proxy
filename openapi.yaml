@@ -770,6 +770,7 @@ paths:
       responses:
         '200': { description: the card's view (as GET /control/admin) }
         '400': { description: '{ error, message }: bad_url, not_a_code, invalid_code (unknown, used, cancelled or expired), bad_proof, bad_request, unsupported_version, too_large' }
+        '409': { description: '{ error: busy, message }: another enrollment is running' }
         '429': { description: '{ error: rate_limited, message, retryAfterS }' }
         '502': { description: '{ error: unreachable | server_error | bad_answer, message }' }
   /control/admin/reconnect:

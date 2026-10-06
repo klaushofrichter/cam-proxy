@@ -46,9 +46,9 @@ describe('camsAdmin settings', () => {
     expect(refused({ camsAdmin: { allowCommands: ['reboot'] } })).toMatch(/^camsAdmin\.allowCommands: must be empty/);
     expect(refused({ camsAdmin: { allowCommands: 'reboot' } })).toMatch(/^camsAdmin\.allowCommands/);
   });
-  it('the key file stays inside the data folder', () => {
-    expect(refused({ camsAdmin: { keyFile: '/etc/key.json' } })).toMatch(/^camsAdmin\.keyFile/);
-    expect(refused({ camsAdmin: { keyFile: '../key.json' } })).toMatch(/^camsAdmin\.keyFile/);
+  it('the key file is admin/<name>.json: never the data folder itself, overrides.json or anything outside', () => {
+    for (const k of ['/etc/key.json', '../key.json', 'key.json', 'overrides.json', 'admin/../overrides.json', 'admin/sub/key.json', 'admin/.json', 'admin/key.txt']) expect(refused({ camsAdmin: { keyFile: k } }), k).toMatch(/^camsAdmin\.keyFile/);
+    expect(loadWith({ camsAdmin: { keyFile: 'admin/key-2.json' } }).config.camsAdmin.keyFile).toBe('admin/key-2.json');
   });
   it('applies at once (no restart); an override of an http LAN URL is refused', () => {
     for (const p of ['camsAdmin.url', 'camsAdmin.enabled', 'camsAdmin.keyFile']) expect(needsRestart(p), p).toBe(false);
@@ -94,6 +94,8 @@ describe('the wired client (four cameras, every secret set)', () => {
         ftp: { enabled: true, port: ftpPort, passive: `${passive}-${passive + 40}`, publicHost: '127.0.0.1' },
         analytics: { googleVision: { enabled: true, monthlyLimit: 10 } },
         poeSwitch: { model: 'sscpoe-web', host: '127.0.0.1:9', ports: 8, offSeconds: 10 },
+        // A site CA, so the heartbeat's tls block (site, CA fingerprint) is sent too.
+        tls: { site: 'garage', cameraSubnet: '127.0.0.0/16', proxyAddresses: '127.0.0.1', cameraCerts: false },
       },
       proxy: { camsAdmin: { timing: { minIntervalS: 0.2, jitterS: 0, backoffCapMs: 300, closeGraceMs: 200 } } },
     });
@@ -114,7 +116,7 @@ describe('the wired client (four cameras, every secret set)', () => {
     const local = (await request(base).get('/api/local/health').expect(200)).body as { cameras: { camera: { id: string } }[] };
     const body = hb.body as { summary: { cameras: { camera: { id: string } }[]; schema: number }; proxy: { configSchema: number; publicUrl: string | null } };
     expect(body.summary.cameras.map((c) => c.camera.id)).toEqual(local.cameras.map((c) => c.camera.id));
-    expect(body.proxy).toMatchObject({ configSchema: CONFIG_SCHEMA, publicUrl: 'https://proxy.example' });
+    expect(body.proxy).toMatchObject({ configSchema: CONFIG_SCHEMA, publicUrl: 'https://proxy.example', tls: { site: 'garage', caFingerprint: [expect.stringMatching(/^SHA256:[0-9A-F]{64}$/)] } });
     expect(proxy.camsAdmin.view().state).toBe('connected');
   });
 
@@ -123,6 +125,8 @@ describe('the wired client (four cameras, every secret set)', () => {
     const all = JSON.stringify(fake.received);
     for (const [name, m] of Object.entries(MARKERS)) expect(all.includes(m), name).toBe(false);
     expect(all.includes(key.privateKey)).toBe(false);
+    // The cameras' password (the sims need the real one).
+    expect(all.includes(sims[0].password)).toBe(false);
   });
 
   it('a settings change restarts the client only: one socket at a time, the old one says bye', async () => {

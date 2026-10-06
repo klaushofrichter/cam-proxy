@@ -71,6 +71,24 @@ describe('enrollment', () => {
     fake.enrollReply = null;
   });
 
+  it('an answer that never ends is cut after 64 KiB: bad_answer at once', async () => {
+    fake.codes.add(CODE);
+    fake.endlessEnroll = true;
+    const t0 = Date.now();
+    try {
+      await expect(enroll(keyPath())).rejects.toMatchObject({ code: 'bad_answer' });
+    } finally {
+      fake.endlessEnroll = false;
+    }
+    expect(Date.now() - t0).toBeLessThan(2000);
+  });
+
+  it('a connectUrl on another host than the cams-admin URL is refused', async () => {
+    fake.enrollReply = { status: 201, body: { v: 1, proxyId: 'prx_0123456789ABCDEFGHJK', keyId: 'key_0123456789ABCDEFGHJK', account: 'home', connectUrl: 'ws://127.0.0.2:1/proxy/v1/connect', serverKeys: [fake.server.publicKey], heartbeatS: 30 } };
+    await expect(enroll(keyPath())).rejects.toMatchObject({ code: 'bad_answer', message: expect.stringMatching(/connectUrl/) });
+    fake.enrollReply = null;
+  });
+
   it('cams-admin unreachable: a clear error', async () => {
     await expect(enroll(keyPath(), CODE, 'http://127.0.0.1:9')).rejects.toMatchObject({ code: 'unreachable' });
   });

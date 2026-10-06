@@ -1,7 +1,7 @@
 import type { HealthSummary } from '../health/summary';
 import { buildHeartbeat, type HeartbeatProxyInfo } from './heartbeat';
 import type { AdminKeyFile } from './keyfile';
-import { buildEnvelope, fingerprint, parseEnvelope, sign, signedText, verify, type Envelope } from './protocol';
+import { buildEnvelope, fingerprint, parseEnvelope, readCapped, sign, signedText, verify, type Envelope } from './protocol';
 
 // The outbound client to cams-admin (spec 2026-10-06-cams-admin-phase1-design
 // §8.3-§8.8, §9.1): one WebSocket (Node's global), one timer for the next
@@ -78,6 +78,7 @@ export interface ClientDeps {
 const PROTOCOL = 'cams-admin.v1';
 // The server may slow heartbeats to 300 s (spec §8.5); anything above is capped.
 const MAX_INTERVAL_S = 300;
+const MAX_UNSUPPORTED = 20;
 const interval = (v: unknown, fallback: number): number => (typeof v === 'number' && Number.isFinite(v) ? Math.min(Math.max(0, v), MAX_INTERVAL_S) : fallback);
 
 // Full jitter: random(0, min(cap, 1 s · 2^attempt)).
@@ -113,6 +114,8 @@ export class AdminClient {
   private lastError: string | null = null;
   private lastErrorAt: number | null = null;
   private reason: string | null = null; // why this connection ends, if known
+  private unsupported = 0; // unsupported messages on this connection
+  private noReset = false; // this connection ended for an oversize message: no backoff reset
   private lastOutcome: ClientState | null = null;
   private lastChangeKey: string | null = null;
   private truncated = false;
@@ -265,6 +268,8 @@ export class AdminClient {
     this.untrusted = false;
     this.immediate = false;
     this.reason = null;
+    this.unsupported = 0;
+    this.noReset = false;
     this.d.log.debug({ url: this.key.connectUrl, attempt: this.attempt }, 'admin_connecting');
     let ws: WebSocket;
     try {
@@ -300,7 +305,11 @@ export class AdminClient {
       if (this.ws !== ws) return;
       try {
         if (typeof ev.data !== 'string') throw new Error('a binary message');
-        if (ev.data.length > this.t.maxInboundBytes) throw new Error('a message over the size limit');
+        if (ev.data.length > this.t.maxInboundBytes) {
+          // Node's WebSocket has buffered it already (up to its own 128 MiB): never again soon.
+          this.noReset = true;
+          throw new Error('a message over the size limit');
+        }
         this.onMessage(ws, parseEnvelope(ev.data));
       } catch (err) {
         this.clientError('message', err);
@@ -393,7 +402,10 @@ export class AdminClient {
         this.d.log.debug({ reason: String(b.reason).slice(0, 64) }, 'admin_server_bye');
         return;
       default:
-        // P2/P3 types (command, result, event, key.rotate) and anything unknown.
+        // P2/P3 types (command, result, event, key.rotate) and anything unknown:
+        // answered while the socket drains, up to MAX_UNSUPPORTED per connection.
+        if (++this.unsupported > MAX_UNSUPPORTED) throw new Error('too many unsupported messages');
+        if (ws.bufferedAmount > this.t.maxBufferedBytes) return;
         this.trySend(ws, 'error', { code: 'unsupported_type', message: `type ${m.type.slice(0, 100)} is not supported` }, { re: m.id });
     }
   }
@@ -411,7 +423,7 @@ export class AdminClient {
       return;
     }
     if (wasConnected) this.d.log.info({ code }, 'admin_disconnected');
-    if (wasConnected && Date.now() - this.connectedAt >= this.t.resetAfterMs) this.attempt = 0;
+    if (wasConnected && !this.noReset && Date.now() - this.connectedAt >= this.t.resetAfterMs) this.attempt = 0;
     const random = this.d.random ?? Math.random;
     const normal = () => backoffDelay(this.attempt++, this.t.backoffCapMs, random);
     if (this.immediate) return this.retry('backoff', 0);
@@ -457,8 +469,14 @@ export class AdminClient {
       const u = new URL(this.key.connectUrl);
       u.protocol = u.protocol === 'wss:' ? 'https:' : 'http:';
       const r = await (this.d.fetchImpl ?? fetch)(u, { signal: AbortSignal.timeout(5000), redirect: 'error' });
-      if (r.status !== 426) return false;
-      const b = (await r.json()) as { supported?: unknown };
+      if (r.status !== 426) {
+        await r.body?.cancel().catch(() => undefined);
+        return false;
+      }
+      // At most 4 KiB: the answer is one short JSON object.
+      const text = await readCapped(r, 4096);
+      if (text === null) return false;
+      const b = JSON.parse(text) as { supported?: unknown };
       return Array.isArray(b.supported) && !b.supported.includes(PROTOCOL);
     } catch {
       return false;

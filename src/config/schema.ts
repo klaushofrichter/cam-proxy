@@ -242,7 +242,7 @@ export const SETTINGS: Node = {
   // the client only). camsAdmin.allowCommands is checked at load (must be empty).
   camsAdmin: {
     url: unset({ type: 'string', pattern: '^https?://[^\\s]+$', optional: true, doc: 'the cams-admin this proxy reports to: https://, or http:// for loopback and *.svc.cluster.local; set by admin-enroll' }, 'off: no connection to cams-admin'),
-    keyFile: { type: 'string', pattern: '^.+$', doc: "the proxy's cams-admin key file, relative to server.dataDir (mode 600, written at enrollment)" },
+    keyFile: { type: 'string', pattern: '^admin/[A-Za-z0-9_-]{1,64}\\.json$', doc: "the proxy's cams-admin key file: admin/<name>.json in server.dataDir (mode 600 in the 700 folder admin/, written at enrollment)" },
     enabled: { type: 'boolean', doc: 'connect to cams-admin (false keeps the key and stays off)' },
   },
 };
