@@ -637,7 +637,7 @@ paths:
         onvif-resubscribe, camera-ftp-setup, camera-ftp-test, camera-ftp-off,
         restart (that camera's side only; the old route without a camera restarts every camera side and applies pending restart settings), camera-reboot,
         camera-powercycle, camera-poe-on, poe-switch-read, inventory,
-        inventory-repair, inventory-cancel, camera-cert-push, camera-ntp-set) on the named camera, with the same
+        inventory-repair, inventory-cancel, camera-cert-push, camera-ntp-set, camera-trust-clear) on the named camera, with the same
         bodies and answers; inventory-cancel and inventory-repair answer 409
         camera_mismatch for another camera's run. The old route takes ?cam=<id> as well; without it
         it acts on the only camera, and answers 400 camera_required when there
@@ -783,8 +783,12 @@ paths:
         '400': { description: 'unknown setting; cameras.<id> of a config.json camera: "defined in config.json; remove it there"' }
   /control/actions/{name}:
     post:
-      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart (the camera side), camera-reboot, camera-powercycle, camera-poe-on, poe-switch-read, restart-proxy (the process), inventory ({kind, camera?}), inventory-repair ({kind, runId}), inventory-cancel, find-camera, camera-address ({host}), archive-clear ({count}), camera-cert-push, camera-ntp-set, tls-ca-rotate ({confirm: rotate})
+      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart (the camera side), camera-reboot, camera-powercycle, camera-poe-on, poe-switch-read, restart-proxy (the process), inventory ({kind, camera?}), inventory-repair ({kind, runId}), inventory-cancel, find-camera, camera-address ({host}), archive-clear ({count}), camera-cert-push, camera-ntp-set, camera-trust-clear, tls-ca-rotate ({confirm: rotate}), tls-ca-drop-previous
       description: |
+        camera-trust-clear drops a camera's site-CA trust or pin (its leaf moved aside; the next push trusts what it serves
+        then): answers the camera's certificate state; 409 not_available when no camera trust is kept here; a camera-trust
+        audit record. tls-ca-drop-previous stops trusting the previous CA after a rotation now (otherwise 30 days):
+        { dropped: true }; 409 not_available without one; a camera-trust audit record.
         camera-ntp-set sets the camera's NTP server to ntp.server now (GetNtp, a whole-object SetNtp, GetNtp again;
         the proxy also does it when the camera comes online, at most once an hour): { outcome (set, already,
         unsupported, failed) }; 409 not_configured without ntp.server. A camera-ntp audit record unless already.

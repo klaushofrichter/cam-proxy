@@ -979,7 +979,17 @@ certificate through the cluster's `cam1-cert-push`.
   proxy pins its served (factory) certificate itself (SHA-256, in the
   handshake) and `GET /api/cameras` reports that fingerprint, which cams pins
   too. A site-CA camera becomes `pinned` only by an admin's "Push now".
-  Modes and pins survive a restart (`data/tls/cameras/state.json`).
+  Modes and pins survive a restart (`data/tls/cameras/state.json`); a stored
+  or old leaf on disk counts as "served our leaf" even without that file, and
+  an unreadable file stops every automatic push until an admin pushes.
+- **A known trust is never dropped to unverified** (certificates off, an
+  address outside the CA, a CA that can't be loaded, `tls.site` removed): the
+  camera keeps its CA (`ca.pem` alone verifies), else its stored leaf as a pin,
+  else nothing is sent; the health item says why. Only the admin's
+  `camera-trust-clear` (audited, `camera-trust`) drops it.
+- **TLS resumption:** the pin and the CA are checked on every full handshake;
+  Node resumes a session only with the same server (the session cache is per
+  agent and options), so a resumed connection is one that was checked.
 - **HTTPS:** `server.tls.port` (e.g. 8443) with the proxy's own
   certificate; the HTTP port stays (loopback callers, the display). FTPS uses
   the same certificate, read when the FTP server starts (after a renewal or a
@@ -998,10 +1008,11 @@ certificate through the cluster's `cam1-cert-push`.
   item `certificates` (a problem within 14 days of an expiry, after a failed
   or refused push, or when an address is outside the CA).
 - **`tls-ca-rotate`** (`{"confirm":"rotate"}`): a new CA; the old files are
-  kept as `*.old-<time>`; the cameras keep trusting the previous CA until
-  each serves a new leaf (pushed automatically on a session verified against
-  the previous CA); every cams pin of this proxy must change (cams accepts a
-  list).
+  kept as `*.old-<time>`; a camera still serving a leaf of the previous CA
+  keeps trusting it (only that camera) until it serves a new leaf (pushed
+  automatically on a session verified against the previous CA), at most 30
+  days, or until `tls-ca-drop-previous` (audited); the health item names the
+  laggards. Every cams pin of this proxy must change (cams accepts a list).
 - **NTP:** with `ntp.server`, the proxy sets each camera's NTP server
   (whole-object `SetNtp`, read back) when it comes online, at most once an
   hour; `camera-ntp-set` does it now.

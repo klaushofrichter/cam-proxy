@@ -85,4 +85,21 @@ describe('camera requests verified against the site CA (spec §10.4)', () => {
       server.close();
     }
   }, 120_000);
+
+  it('a trust that refuses: nothing is sent at all (a camera whose known trust is not available)', async () => {
+    let requests = 0;
+    const server = https.createServer({}, () => requests++);
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const host = `127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      const client = new ReolinkClient({ id: 'cam3', host, protocol: 'https', user: 'u', password: 'p' });
+      client.setTrust({ refuse: 'no CA and no stored leaf' });
+      await expect(client.command('GetDevInfo')).rejects.toThrow('no trusted certificate for this camera: no CA and no stored leaf');
+      expect(await client.cameraCertificate()).toBeNull();
+      expect(client.trusted()).toBe(true);
+      expect(requests).toBe(0);
+    } finally {
+      server.close();
+    }
+  });
 });

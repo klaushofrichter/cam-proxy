@@ -22,6 +22,7 @@ export interface PushResult {
   served: string | null; // SHA256:… the camera serves at the end
   servedPem?: string | null; // and its certificate (what the proxy pins after a refusal)
   leaf?: PushedLeaf; // the leaf the camera serves now (pushed)
+  clearedTo?: string | null; // what the camera served right after a CertificateClear (its factory certificate)
   detail?: string;
   tookMs: number;
 }
@@ -41,13 +42,15 @@ const part = (pem: string, name: string) => {
 };
 
 // `current`: the fingerprint of the leaf the camera should serve; served already → 'current', nothing sent.
-export async function pushCertificate(d: PushDeps, issue: () => Promise<PushedLeaf>, o: { clearWaitMs?: number; verifyMs?: number; pollMs?: number } = {}, current?: string): Promise<PushResult> {
+// `factory`: what the camera served after an earlier clear; after this clear anything else aborts.
+export async function pushCertificate(d: PushDeps, issue: () => Promise<PushedLeaf>, o: { clearWaitMs?: number; verifyMs?: number; pollMs?: number; factory?: string } = {}, current?: string): Promise<PushResult> {
   const sleep = d.sleep ?? realSleep;
   const now = d.now ?? Date.now;
   const verifyMs = o.verifyMs ?? 90_000;
   const pollMs = o.pollMs ?? 5000;
   const t0 = now();
-  const done = (outcome: PushOutcome, s: Served | null, extra: { leaf?: PushedLeaf; detail?: string } = {}): PushResult => ({ outcome, served: s?.fingerprint ?? null, servedPem: s?.pem ?? null, ...extra, tookMs: now() - t0 });
+  let clearedTo: string | null = null;
+  const done = (outcome: PushOutcome, s: Served | null, extra: { leaf?: PushedLeaf; detail?: string } = {}): PushResult => ({ outcome, served: s?.fingerprint ?? null, servedPem: s?.pem ?? null, ...extra, ...(clearedTo ? { clearedTo } : {}), tookMs: now() - t0 });
   // Until the camera serves something (its web server restarts), up to the verify time.
   const servedNow = async (): Promise<Served | null> => {
     const until = now() + verifyMs;
@@ -87,6 +90,8 @@ export async function pushCertificate(d: PushDeps, issue: () => Promise<PushedLe
       await sleep(o.clearWaitMs ?? 10_000);
       const after = await servedNow();
       if (!after) throw new Error('the camera did not come back after CertificateClear');
+      if (o.factory && after.fingerprint !== o.factory) throw new Error(`after CertificateClear the camera serves ${after.fingerprint}, not its factory certificate ${o.factory}`);
+      clearedTo = after.fingerprint;
       bindTo(after); // trust on first use: nothing vouches for the factory certificate
       await info();
     }

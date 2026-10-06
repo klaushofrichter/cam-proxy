@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, statSync } from 'fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -26,6 +26,7 @@ function setup(o: { cameras?: CertCamera[]; refuse?: boolean; fail?: boolean; di
   const pushes: string[] = [];
   const issued: Leaf[] = [];
   const trust: string[] = [];
+  const audits: { action: string; message: string; outcome: string; user?: string; details?: Record<string, unknown> }[] = [];
   const dir = o.dir ?? mkdtempSync(join(tmpdir(), 'camproxy-ccerts-'));
   let cameras = o.cameras ?? [{ id: 'cam3', address: '192.168.60.13', protocol: 'https' as const }];
   let mode = { refuse: !!o.refuse, fail: !!o.fail };
@@ -41,8 +42,8 @@ function setup(o: { cameras?: CertCamera[]; refuse?: boolean; fail?: boolean; di
       const a = await issue();
       issued.push(a);
       if (mode.refuse) {
-        issued.push(await issue()); // the retry: a fresh key
-        return { outcome: 'refused', served: s?.fingerprint ?? null, servedPem: s?.pem ?? null, tookMs: 1 };
+        issued.push(await issue()); // the retry: a fresh key, after a clear
+        return { outcome: 'refused', served: s?.fingerprint ?? null, servedPem: s?.pem ?? null, clearedTo: s?.fingerprint ?? null, tookMs: 1 };
       }
       served.set(id, servedOf(a));
       return { outcome: 'pushed', served: a.fingerprint, servedPem: a.certPem, leaf: a, tookMs: 1 };
@@ -50,11 +51,12 @@ function setup(o: { cameras?: CertCamera[]; refuse?: boolean; fail?: boolean; di
     openEvent: (id) => open.has(id),
     localHour: (t) => new Date(t).getUTCHours(),
     onTrust: (id) => trust.push(`${id}:${certs.state(id).mode}`),
+    audit: { write: (r) => (audits.push(r as (typeof audits)[number]), null) },
     now: () => now,
     ...o.deps,
   });
   return {
-    certs, pushes, issued, trust, open, served, dir,
+    certs, pushes, issued, trust, audits, open, served, dir,
     at: (ms: number) => (now = ms), now: () => now,
     setCameras: (c: CertCamera[]) => (cameras = c),
     setMode: (m: { refuse?: boolean; fail?: boolean }) => (mode = { refuse: !!m.refuse, fail: !!m.fail }),
@@ -297,4 +299,134 @@ describe('camera certificates (spec §10.1.3)', () => {
     await b.certs.tick();
     expect(b.certs.trustedCas()).toEqual([other.certPem]); // every camera on the new CA: the old one dropped
   }, 60_000);
+
+  describe('security re-review of 4e13ca2', () => {
+    it('a pinned camera that serves another certificate: no automatic push, also at 04:00; a problem', async () => {
+      const { certs, pushes, served, at, now } = setup({ refuse: true });
+      await certs.tick();
+      expect(certs.state('cam3').mode).toBe('pinned');
+      served.set('cam3', foreign('EVIL'));
+      at(dayAt(now(), 1, 4, 5));
+      await certs.tick();
+      expect(pushes).toEqual(['cam3']);
+      expect(certs.state('cam3')).toMatchObject({ mode: 'pinned', fingerprint: 'SHA256:FACTORY3', problem: 'cam3 serves an unexpected certificate (SHA256:EVIL): check the camera, then Push now' });
+      // While it serves its pinned certificate, the 04:00 retry goes on.
+      served.set('cam3', foreign('FACTORY3'));
+      at(dayAt(now(), 1, 4, 5));
+      await certs.tick();
+      expect(pushes).toEqual(['cam3', 'cam3']);
+    }, 60_000);
+
+    it('state.json deleted: a camera with a stored leaf is still one that served our leaf (site-ca; no automatic push to another certificate)', async () => {
+      const a = setup();
+      await a.certs.tick();
+      rmSync(join(a.dir, 'cameras', 'state.json'));
+      const b = setup({ dir: a.dir, served: a.served });
+      expect(b.certs.state('cam3')).toMatchObject({ mode: 'site-ca', servername: 'cam3.garage.internal' });
+      b.served.set('cam3', foreign('EVIL'));
+      await b.certs.tick();
+      expect(b.pushes).toEqual([]);
+    }, 60_000);
+
+    it('only an old leaf left (<id>.crt.old-*): still a camera that served our leaf', async () => {
+      const a = setup();
+      await a.certs.tick();
+      a.certs.reset('t9', null);
+      rmSync(join(a.dir, 'cameras', 'state.json'));
+      const b = setup({ dir: a.dir, served: new Map([['cam3', foreign('EVIL')]]) });
+      await b.certs.tick();
+      expect(b.pushes).toEqual([]);
+      expect(b.certs.state('cam3').problem).toMatch(/serves an unexpected certificate/);
+    }, 60_000);
+
+    it('state.json unreadable or invalid: no automatic pushes at all, a problem; Push now still works', async () => {
+      for (const text of ['{not json', JSON.stringify({ cameras: { cam3: { mode: 'weird' } } })]) {
+        const dir = mkdtempSync(join(tmpdir(), 'camproxy-ccerts-bad-'));
+        const { mkdirSync } = await import('fs');
+        mkdirSync(join(dir, 'cameras'), { recursive: true });
+        writeFileSync(join(dir, 'cameras', 'state.json'), text);
+        const b = setup({ dir });
+        await b.certs.tick();
+        expect(b.pushes).toEqual([]);
+        expect(b.certs.problems()).toEqual(['the camera certificate state (data/tls/cameras/state.json) is unreadable: no automatic pushes; check each camera, then Push now']);
+        expect((await b.certs.pushNow('cam3')).outcome).toBe('pushed');
+      }
+    }, 60_000);
+
+    it('camera certificates switched off, or the address outside the CA: the known trust stays, with a problem', async () => {
+      let enabled = true;
+      const a = setup({ deps: { enabled: () => enabled } });
+      await a.certs.tick();
+      enabled = false;
+      await a.certs.tick();
+      expect(a.certs.state('cam3')).toMatchObject({ mode: 'site-ca', problem: 'camera certificates are off (tls.cameraCerts): cam3 keeps its trust; nothing is pushed' });
+      enabled = true;
+      a.setCameras([{ id: 'cam3', address: '192.168.61.13', protocol: 'https' }]);
+      await a.certs.tick();
+      expect(a.certs.state('cam3')).toMatchObject({ mode: 'site-ca', problem: '192.168.61.13 is outside the site CA: rotate the CA (tls-ca-rotate)' });
+      expect(a.trust).toEqual(['cam3:site-ca']);
+    }, 60_000);
+
+    it('clearTrust (the admin action): the camera back to first use, audited', async () => {
+      const a = setup();
+      await a.certs.tick();
+      a.certs.clearTrust('cam3', { user: 'admin', ip: '10.0.0.5', requestedBy: 'session' });
+      expect(a.certs.state('cam3').mode).toBe('none');
+      expect(a.certs.leaf('cam3')).toBeNull();
+      expect(a.audits.at(-1)).toMatchObject({ action: 'camera-trust', user: 'admin', message: 'Camera trust cleared (cam3): site-ca → none' });
+      a.served.set('cam3', foreign('NEWCAM'));
+      await a.certs.tick();
+      expect(a.pushes).toEqual(['cam3', 'cam3']); // first use again
+    }, 60_000);
+
+    it('the previous CA: only for cameras still serving its leaf; dropped after 30 days or by the admin, the laggards named', async () => {
+      const a = setup({ cameras: [{ id: 'cam3', address: '192.168.60.13', protocol: 'https' }, { id: 'cam4', address: '192.168.60.14', protocol: 'https' }] });
+      await a.certs.tick();
+      let current = ca;
+      const b = setup({ dir: a.dir, served: a.served, cameras: [{ id: 'cam3', address: '192.168.60.13', protocol: 'https' }, { id: 'cam4', address: '192.168.60.14', protocol: 'https' }], deps: { ca: () => current } });
+      current = other;
+      b.certs.reset('t1', ca.certPem);
+      b.open.add('cam4'); // cam4 lags behind
+      await b.certs.tick();
+      expect(b.certs.trustedCas('cam3')).toEqual([other.certPem]);
+      expect(b.certs.trustedCas('cam4')).toEqual([other.certPem, ca.certPem]);
+      expect(b.certs.problems()).toEqual(['cam4 still serves a leaf of the previous CA (trusted until 2026-11-19)']);
+      b.at(b.now() + 31 * 86400_000);
+      await b.certs.tick();
+      expect(b.certs.trustedCas('cam4')).toEqual([other.certPem]);
+      expect(b.audits.some((r) => r.message === 'Previous site CA no longer trusted (30 days after the rotation)')).toBe(true);
+      const c = setup({ dir: a.dir, served: a.served, deps: { ca: () => other } });
+      c.certs.dropPreviousCa({ user: 'admin' });
+      expect(c.certs.trustedCas('cam4')).toEqual([other.certPem]);
+    }, 60_000);
+
+    it("ours() needs the camera's name in the leaf: a leaf of our CA for another camera is foreign", async () => {
+      const a = setup();
+      await a.certs.tick();
+      const cam9 = await issueLeaf(ca, { cn: 'cam9.garage.internal', dns: ['cam9.garage.internal'], ips: ['192.168.60.13'] });
+      a.served.set('cam3', servedOf(cam9));
+      await a.certs.tick();
+      expect(a.pushes).toEqual(['cam3']);
+      expect(a.certs.state('cam3').problem).toMatch(/serves an unexpected certificate/);
+    }, 60_000);
+
+    it('mode changes and skipped pushes are audited; Push now names who asked', async () => {
+      const a = setup({ refuse: true });
+      await a.certs.tick();
+      expect(a.audits.find((r) => r.action === 'camera-trust')).toMatchObject({ message: 'Camera trust cam3: none → pinned (SHA256:FACTORY3)' });
+      a.open.add('cam3');
+      await a.certs.pushNow('cam3', { user: 'admin', ip: '10.0.0.5', requestedBy: 'session' });
+      expect(a.audits.at(-1)).toMatchObject({ action: 'camera-cert-push', outcome: 'failure', user: 'admin', message: 'Camera certificate push not done (cam3): an event is open: try again when it has ended', details: { requestedBy: 'session' } });
+    }, 60_000);
+
+    it("the camera's factory certificate is recorded when first seen after a clear, and expected after the next clear", async () => {
+      const a = setup({ refuse: true });
+      await a.certs.tick();
+      expect(a.certs.factory('cam3')).toBe('SHA256:FACTORY3');
+      let expected: string | undefined;
+      const b = setup({ dir: a.dir, served: a.served, deps: { push: async (_id, _issue, o) => ((expected = o?.factory), { outcome: 'failed', served: null, tookMs: 0 }) } });
+      await b.certs.pushNow('cam3');
+      expect(expected).toBe('SHA256:FACTORY3');
+    }, 60_000);
+  });
 });

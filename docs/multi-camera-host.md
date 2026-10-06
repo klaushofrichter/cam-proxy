@@ -600,7 +600,14 @@ reaches the proxy at `https://<lan.address>:8443` with servername
 **Rotating the CA** (`POST /control/actions/tls-ca-rotate` with
 `{"confirm":"rotate"}`, admin): a new CA, the old files kept as
 `*.old-<time>` in `data/tls`, a new proxy certificate, and every camera
-pushed again (the cameras stay trusted through the previous CA until then). Every cams pin of this proxy breaks: give cams the new
+pushed again (a camera stays trusted through the previous CA until then, at
+most 30 days; `tls-ca-drop-previous` ends that at once).
+
+**Clearing a camera's trust** (`POST /control/cameras/<cam>/actions/camera-trust-clear`,
+admin, audited): needed when a camera is replaced on purpose and it should be
+treated as new (the next push trusts what it serves then). Without it the
+proxy keeps refusing a camera that serves an unexpected certificate, also
+when `tls.site` is removed or the CA can't be loaded. Every cams pin of this proxy breaks: give cams the new
 fingerprint (it accepts a list, so add the new one first). Needed after an
 address change the CA doesn't cover (the Certificates card and the
 `certificates` health item name the address).

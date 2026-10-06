@@ -110,4 +110,16 @@ describe('camera certificate push (spec §10.1.3)', () => {
     expect(r.outcome).toBe('failed');
     expect(r.detail).not.toMatch(/PRIVATE|BEGIN/);
   }, 60_000);
+
+  it('after a clear: the factory certificate seen before is expected; another one aborts before the import', async () => {
+    const { deps, calls } = await camera();
+    await pushCertificate(deps, issued().issue, O);
+    const r = await pushCertificate(deps, issued().issue, O);
+    expect(r.clearedTo).toMatch(/^SHA256:/);
+    calls.length = 0;
+    const bad = await pushCertificate(deps, issued().issue, { ...O, factory: 'SHA256:' + '0'.repeat(64) });
+    expect(bad.outcome).toBe('failed');
+    expect(calls.map((c) => c.cmd)).not.toContain('ImportCertificate');
+    expect((await pushCertificate(deps, issued().issue, { ...O, factory: r.clearedTo! })).outcome).toBe('pushed');
+  }, 60_000);
 });

@@ -97,4 +97,48 @@ describe('the site CA end to end (spec §15)', () => {
     for (const a of answers) expect(a).not.toMatch(/PRIVATE KEY|BEGIN RSA/);
     expect(answers[2]).toContain('Camera certificate pushed (cam3');
   });
+
+  const restartWith = async (settings: object) => {
+    const dir = p.dir;
+    await p.proxy.stop();
+    p = await startMultiProxy(sims, { dir, https: true, proxy: { tlsPush: { clearWaitMs: 50, verifyMs: 3000, pollMs: 100 } }, settings: { server: { logLevel: 'silent' }, ...settings } });
+    return p;
+  };
+  const certItem = async () => (await request(p.base).get('/api/local/health')).body.items.find((i: { id: string }) => i.id === 'certificates');
+
+  it('the CA cannot be loaded (ca.key missing): the cameras keep their trust (never unverified); health says so (security re-review)', async () => {
+    const dir = p.dir;
+    const { renameSync } = await import('fs');
+    const { join } = await import('path');
+    await p.proxy.stop();
+    renameSync(join(dir, 'data', 'tls', 'ca.key'), join(dir, 'data', 'tls', 'ca.key.away'));
+    try {
+      p = await startMultiProxy(sims, { dir, https: true, settings: { tls: { site: 't', cameraSubnet: '127.0.0.0/16', proxyAddresses: '127.0.0.1' }, server: { logLevel: 'silent' } } });
+      const w = p.proxy.cameras.get('cam3')!;
+      expect(w.client.trusted()).toBe(true);
+      expect(p.proxy.cameras.get('cam4')!.client.trusted()).toBe(true);
+      await p.proxy.certs!.tick();
+      expect(w.client.trusted()).toBe(true);
+      await w.client.command('GetDevInfo'); // verified against ca.pem
+      expect(await certItem()).toMatchObject({ problem: true, text: expect.stringMatching(/^ca\.key is missing/) });
+    } finally {
+      await p.proxy.stop();
+      renameSync(join(dir, 'data', 'tls', 'ca.key.away'), join(dir, 'data', 'tls', 'ca.key'));
+      p = await startMultiProxy(sims, { dir, https: true, settings: { tls: { site: 't', cameraSubnet: '127.0.0.0/16', proxyAddresses: '127.0.0.1' }, server: { logLevel: 'silent' } } });
+    }
+  }, 90_000);
+
+  it('tls.site removed later: the cameras keep their trust, health says so; camera-trust-clear (admin) drops it, audited', async () => {
+    await restartWith({});
+    const w = p.proxy.cameras.get('cam3')!;
+    expect(w.client.trusted()).toBe(true);
+    expect(p.proxy.certs).toBeDefined();
+    expect(await certItem()).toMatchObject({ problem: true, text: 'tls.site is not set: the cameras keep their site-CA trust (camera-trust-clear drops it)' });
+    const r = await request(p.base).post('/control/cameras/cam3/actions/camera-trust-clear').set(auth(ADMIN_TOKEN));
+    expect([r.status, r.body.mode]).toEqual([200, 'none']);
+    expect(w.client.trusted()).toBe(false);
+    const audit = (await request(p.base).get('/control/audit?action=camera-trust').set(auth(ADMIN_TOKEN))).text;
+    expect(audit).toContain('Camera trust cleared (cam3): site-ca → none');
+    expect((await request(p.base).post('/control/actions/tls-ca-drop-previous').set(auth(ADMIN_TOKEN))).status).toBe(409);
+  }, 90_000);
 });
