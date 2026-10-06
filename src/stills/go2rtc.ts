@@ -60,6 +60,7 @@ export class Go2rtc extends EventEmitter {
   private cwd: string | undefined;
   private restartTimer: NodeJS.Timeout | undefined;
   private readonly backoff: Backoff;
+  private readonly sent = new Set<string>(); // passwords sent through the API (masked in its output)
   private readyWait: { promise: Promise<void>; resolve: () => void } = Go2rtc.pending();
 
   constructor(private readonly o: Go2rtcOptions) {
@@ -109,9 +110,12 @@ export class Go2rtc extends EventEmitter {
     });
     this.proc = p;
     trackChild(p);
-    // Never a password in a log line: every source's, plain and encoded.
-    const secrets = sources.flatMap((s) => [s.password, encodeURIComponent(s.password)]).filter((x) => x.length >= 3);
-    const clean = (d: Buffer) => secrets.reduce((t, x) => t.replaceAll(x, '***'), String(d).trim());
+    // Never a password in a log line: every source's as it is now (a camera
+    // added after the spawn too) and every one sent through the API, plain and encoded.
+    const clean = (d: Buffer) => {
+      const secrets = [...this.o.sources().map((x) => x.password), ...this.sent].flatMap((pw) => [pw, encodeURIComponent(pw)]).filter((x) => x.length >= 3);
+      return secrets.reduce((t, x) => t.replaceAll(x, '***'), String(d).trim());
+    };
     p.stdout?.on('data', (d: Buffer) => logger.debug({ go2rtc: clean(d) }, 'go2rtc'));
     p.stderr?.on('data', (d: Buffer) => logger.debug({ go2rtc: clean(d) }, 'go2rtc'));
     p.on('error', (err) => logger.error({ err: err.message }, 'go2rtc_spawn_failed'));
@@ -206,6 +210,7 @@ export class Go2rtc extends EventEmitter {
   // (Ruling P2-1: the password travels in the loopback API call, never
   // logged; at the next spawn it is in the environment instead).
   async setStream(s: StreamSource): Promise<void> {
+    this.sent.add(s.password);
     if (!(await this.reachable())) return;
     for (const kind of ['sub', 'main'] as const) {
       const name = `${s.cam}_${kind}`;

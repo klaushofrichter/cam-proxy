@@ -47,8 +47,8 @@ export interface WorkerDeps {
   password: () => string;
   poe: PoeSwitch; // the host's PoE controller (spec 2026-10-05-multi-camera-host-design §8.4)
   ftpTarget: () => FtpTarget;
-  ftpPassword?: () => string | undefined;
-  cachePool: CachePool; // the host's recordings cache (spec §8.3) // the host's FTP password: no indexer for uploads without it
+  ftpPassword?: () => string | undefined; // the host's FTP password: no indexer for uploads without it
+  cachePool: CachePool; // the host's recordings cache (spec §8.3)
   // The host's go2rtc (spec 2026-10-05-multi-camera-host-design §8.5); none without go2rtc.binary.
   go2rtc: () => Go2rtc | undefined;
   catalog: Catalog;

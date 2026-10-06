@@ -3,6 +3,7 @@ import { promisify } from 'util';
 import { afterEach, describe, expect, it } from 'vitest';
 import { freePort } from './helpers/proxy';
 import { Backoff } from '../src/cameras/backoff';
+import { setLogLevel } from '../src/log';
 import { Go2rtc, go2rtcConfig, passwordEnv, type StreamSource } from '../src/stills/go2rtc';
 
 const run = promisify(execFile);
@@ -73,5 +74,36 @@ describe('go2rtc that never gets ready', () => {
       await new Promise((r) => setTimeout(r, 50));
     }
     expect(() => process.kill(first!, 0)).toThrow(); // the first one was ended
+  }, 15_000);
+});
+
+describe('go2rtc output: no password in a log line', () => {
+  it("masks a camera's password that came after the spawn (an added camera, Ruling P2-1)", async () => {
+    const { chmodSync, mkdtempSync, writeFileSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const dir = mkdtempSync(join(tmpdir(), 'camproxy-fake-go2rtc-'));
+    const fake = join(dir, 'go2rtc');
+    writeFileSync(fake, '#!/bin/sh\nsleep 0.3\necho "dial rtsp://proxy:late-secret-77@192.0.2.5:554/x failed" 1>&2\nexec sleep 30\n');
+    chmodSync(fake, 0o755);
+    let sources: StreamSource[] = [];
+    const g = new Go2rtc({ binary: fake, rtspPort: await freePort(), apiPort: await freePort(), readyMs: 3000, sources: () => sources });
+    cleanup.push(() => g.stop());
+    const out: string[] = [];
+    const write = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => (out.push(String(chunk)), (write as (...a: unknown[]) => boolean)(chunk, ...rest))) as typeof process.stdout.write;
+    setLogLevel('debug');
+    try {
+      const started = g.start().catch(() => undefined);
+      sources = [src('cam5', 'late-secret-77')];
+      await new Promise((r) => setTimeout(r, 1000));
+      expect(out.some((l) => l.includes('"go2rtc"') && l.includes('dial rtsp://proxy:'))).toBe(true);
+      expect(out.join('')).not.toContain('late-secret-77');
+      await g.stop();
+      await started;
+    } finally {
+      process.stdout.write = write;
+      setLogLevel('silent');
+    }
   }, 15_000);
 });
