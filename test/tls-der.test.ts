@@ -1,6 +1,6 @@
 import { spawnSync } from 'child_process';
 import { describe, expect, it } from 'vitest';
-import { nameConstraintsDer } from '../src/tls/der';
+import { nameConstraintsDer, parseNameConstraints } from '../src/tls/der';
 
 describe('NameConstraints DER (RFC 5280 §4.2.1.10)', () => {
   it('permittedSubtrees: a dNSName and an iPAddress with its mask', () => {
@@ -18,6 +18,11 @@ describe('NameConstraints DER (RFC 5280 §4.2.1.10)', () => {
   it('refuses what it cannot encode exactly', () => {
     expect(() => nameConstraintsDer({ dns: [], ip: [{ address: '192.168.1.0', prefix: 33 }] })).toThrow(/prefix/);
     expect(() => nameConstraintsDer({ dns: [], ip: [{ address: '192.168.1.256', prefix: 32 }] })).toThrow(/IPv4/);
+  });
+  it('reads back what it wrote (the CA checks its own constraints, not the settings)', () => {
+    const p = { dns: ['garage.internal'], ip: [{ address: '192.168.60.0', prefix: 24 }, { address: '192.168.1.230', prefix: 32 }] };
+    expect(parseNameConstraints(nameConstraintsDer(p))).toEqual(p);
+    expect(() => parseNameConstraints(Buffer.from('3003020101', 'hex'))).toThrow();
   });
   it.skipIf(spawnSync('openssl', ['version']).status !== 0)('openssl parses it', () => {
     const der = nameConstraintsDer({ dns: ['garage.internal'], ip: [{ address: '192.168.60.0', prefix: 24 }] });

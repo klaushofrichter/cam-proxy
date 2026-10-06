@@ -22,6 +22,7 @@
     "test:e2e:multi": "playwright test -c playwright.multi.config.ts"
   },
   "dependencies": {
+    "@peculiar/x509": "^1.14.3",
     "express": "^5.2.1",
     "express-rate-limit": "^8.7.0",
     "pino": "^10.3.1",
