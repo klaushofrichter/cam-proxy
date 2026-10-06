@@ -126,7 +126,7 @@ describe('the proxy side of the site CA (spec §10.4)', () => {
       expect((await request(q.base).get('/health')).status).toBe(200);
       const h = (await request(q.base).get('/api/local/health')).body;
       expect(h.items.find((i: { id: string }) => i.id === 'certificates')).toMatchObject({ problem: true, text: expect.stringMatching(/^ca\.key is missing/) });
-      await expect(new Promise((resolve, reject) => https.get({ host: '127.0.0.1', port: port2, path: '/health', rejectUnauthorized: false }, resolve).on('error', reject))).rejects.toThrow(/ECONNREFUSED/);
+      await expect(new Promise((resolve, reject) => https.get({ host: '127.0.0.1', port: port2, path: '/health', servername: 'proxy.test.internal', ca: old.certPem }, resolve).on('error', reject))).rejects.toThrow(/ECONNREFUSED/);
     } finally {
       await q.proxy.stop();
       await s2.close();
