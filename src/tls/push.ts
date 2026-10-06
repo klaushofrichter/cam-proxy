@@ -1,6 +1,5 @@
-import { createHash } from 'crypto';
-import { connect } from 'tls';
 import { sleep as realSleep } from '../async';
+import type { Served } from './served';
 
 // push_cert.py's logic inside cam-proxy (spec 2026-10-05-multi-camera-host-design
 // §10.1.3), with the measured firmware rules (spec §2): an import over an
@@ -8,10 +7,27 @@ import { sleep as realSleep } from '../async';
 // installed one is cleared first; the files are server.crt / server.key;
 // success only ever by the fingerprint the camera serves. The key never
 // reaches a log line or an error message.
+//
+// The session (security review of #178): bound to the certificate read just
+// before it (bind: a pin on its SHA-256, and the site CA as well while the
+// camera serves a leaf of it), so nothing goes to another host. After a
+// CertificateClear the camera serves its factory certificate, which nothing
+// vouches for: the session is bound again to what is served then (trust on
+// first use, per attempt). Every attempt imports a fresh key: a key that went
+// into a refused or failed import is never sent again.
 export type PushOutcome = 'current' | 'pushed' | 'refused' | 'failed';
-export interface PushResult { outcome: PushOutcome; served: string | null; detail?: string; tookMs: number }
+export interface PushedLeaf { certPem: string; keyPem: string; fingerprint: string; notAfter: number; names: string[]; ips: string[] }
+export interface PushResult {
+  outcome: PushOutcome;
+  served: string | null; // SHA256:… the camera serves at the end
+  servedPem?: string | null; // and its certificate (what the proxy pins after a refusal)
+  leaf?: PushedLeaf; // the leaf the camera serves now (pushed)
+  detail?: string;
+  tookMs: number;
+}
 export interface PushDeps {
-  served(): Promise<string | null>;
+  served(): Promise<Served | null>;
+  bind(s: Served): void; // the push session verifies exactly this certificate from now on (and logs in again)
   command<T>(cmd: string, param?: object): Promise<T>;
   relogin(): void;
   logout(): Promise<void>;
@@ -19,80 +35,86 @@ export interface PushDeps {
   now?(): number;
 }
 
-export function servedFingerprint(host: string, port: number, timeoutMs = 10_000): Promise<string | null> {
-  return new Promise((resolve) => {
-    const s = connect({ host, port, rejectUnauthorized: false }, () => {
-      const raw = s.getPeerCertificate()?.raw;
-      s.destroy();
-      resolve(raw ? `SHA256:${createHash('sha256').update(raw).digest('hex').toUpperCase()}` : null);
-    });
-    s.setTimeout(timeoutMs, () => (s.destroy(), resolve(null)));
-    s.on('error', () => resolve(null));
-  });
-}
-
 const part = (pem: string, name: string) => {
   const b = Buffer.from(pem, 'utf8');
   return { size: b.length, name, content: b.toString('base64') };
 };
 
-export async function pushCertificate(d: PushDeps, leaf: { certPem: string; keyPem: string; fingerprint: string }, o: { clearWaitMs?: number; verifyMs?: number; pollMs?: number } = {}): Promise<PushResult> {
+// `current`: the fingerprint of the leaf the camera should serve; served already → 'current', nothing sent.
+export async function pushCertificate(d: PushDeps, issue: () => Promise<PushedLeaf>, o: { clearWaitMs?: number; verifyMs?: number; pollMs?: number } = {}, current?: string): Promise<PushResult> {
   const sleep = d.sleep ?? realSleep;
   const now = d.now ?? Date.now;
+  const verifyMs = o.verifyMs ?? 90_000;
+  const pollMs = o.pollMs ?? 5000;
   const t0 = now();
-  const done = (outcome: PushOutcome, served: string | null, detail?: string): PushResult => ({ outcome, served, ...(detail ? { detail } : {}), tookMs: now() - t0 });
-  const waitFor = async (): Promise<string | null> => {
-    const until = now() + (o.verifyMs ?? 90_000);
-    let last: string | null = null;
-    while (now() < until) {
-      await sleep(o.pollMs ?? 5000);
-      last = await d.served(); // null while the web server restarts
-      if (last === leaf.fingerprint) return last;
+  const done = (outcome: PushOutcome, s: Served | null, extra: { leaf?: PushedLeaf; detail?: string } = {}): PushResult => ({ outcome, served: s?.fingerprint ?? null, servedPem: s?.pem ?? null, ...extra, tookMs: now() - t0 });
+  // Until the camera serves something (its web server restarts), up to the verify time.
+  const servedNow = async (): Promise<Served | null> => {
+    const until = now() + verifyMs;
+    for (;;) {
+      const s = await d.served();
+      if (s || now() >= until) return s;
+      await sleep(pollMs);
     }
-    return last;
   };
-  // GetCertificateInfo until the camera's API answers (a new login after its
-  // web server restarted), up to the verify time; then the last error.
+  // GetCertificateInfo until the API answers on the bound session, up to the verify time; then the last error.
   const info = async (): Promise<{ CertificateInfo?: { enable?: number } }> => {
-    const until = now() + (o.verifyMs ?? 90_000);
+    const until = now() + verifyMs;
     for (;;) {
       try {
         return await d.command<{ CertificateInfo?: { enable?: number } }>('GetCertificateInfo');
       } catch (err) {
         d.relogin();
         if (now() >= until) throw err;
-        await sleep(o.pollMs ?? 5000);
+        await sleep(pollMs);
       }
     }
   };
-  // After a clear or an import: until the API answers again; the next step tries anyway.
-  const back = async (): Promise<void> => void (await info().catch(() => undefined));
-  const once = async (clearFirst: boolean): Promise<string | null> => {
+  const waitFor = async (fp: string): Promise<Served | null> => {
+    const until = now() + verifyMs;
+    let last: Served | null = null;
+    while (now() < until) {
+      await sleep(pollMs);
+      last = await d.served(); // null while the web server restarts
+      if (last?.fingerprint === fp) return last;
+    }
+    return last;
+  };
+  const bindTo = (s: Served) => d.bind(s);
+  const once = async (clearFirst: boolean): Promise<{ served: Served | null; leaf: PushedLeaf }> => {
     if (clearFirst) {
       await d.command('CertificateClear');
-      d.relogin(); // the web server restarts: a new session after the wait
       await sleep(o.clearWaitMs ?? 10_000);
-      await back();
+      const after = await servedNow();
+      if (!after) throw new Error('the camera did not come back after CertificateClear');
+      bindTo(after); // trust on first use: nothing vouches for the factory certificate
+      await info();
     }
+    const leaf = await issue(); // a fresh key for every attempt
     await d.command('ImportCertificate', { importCertificate: { crt: part(leaf.certPem, 'server.crt'), key: part(leaf.keyPem, 'server.key') } });
-    d.relogin();
-    const served = await waitFor();
-    // The new certificate shows before the API is back: wait for it, so the
-    // logout reaches the camera and the next request finds it answering.
-    if (served === leaf.fingerprint) await back();
-    return served;
+    const served = await waitFor(leaf.fingerprint);
+    if (served?.fingerprint === leaf.fingerprint) {
+      bindTo(served); // our leaf: the logout goes to the camera that took it
+      await info().catch(() => undefined);
+    }
+    return { served, leaf };
   };
+  let last: Served | null = null;
   try {
-    const before = await d.served();
-    if (before === leaf.fingerprint) return done('current', before);
+    const first = await servedNow();
+    if (!first) return done('failed', null, { detail: 'the camera does not answer on HTTPS' });
+    last = first;
+    if (current && first.fingerprint === current) return done('current', first);
+    bindTo(first);
     const installed = (await info()).CertificateInfo?.enable === 1;
-    let served = await once(installed);
-    if (served === leaf.fingerprint) return done('pushed', served);
-    served = await once(true); // retry once, with a clear
-    if (served === leaf.fingerprint) return done('pushed', served);
-    return done('refused', served ?? (await d.served()), 'the camera kept serving another certificate');
+    let r = await once(installed);
+    if (r.served?.fingerprint === r.leaf.fingerprint) return done('pushed', r.served, { leaf: r.leaf });
+    r = await once(true); // retry once, with a clear and a fresh key
+    if (r.served?.fingerprint === r.leaf.fingerprint) return done('pushed', r.served, { leaf: r.leaf });
+    last = r.served ?? (await d.served());
+    return done('refused', last, { detail: 'the camera kept serving another certificate' });
   } catch (err) {
-    return done('failed', await d.served().catch(() => null), (err as Error).message);
+    return done('failed', (await d.served().catch(() => null)) ?? last, { detail: (err as Error).message });
   } finally {
     await d.logout().catch(() => undefined);
   }

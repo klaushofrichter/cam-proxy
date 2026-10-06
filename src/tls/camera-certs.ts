@@ -3,8 +3,10 @@ import { join } from 'path';
 import type { AuditLog } from '../audit/audit-log';
 import { logger } from '../log';
 import { writeSecret, type SiteCa } from './ca';
+import { X509Certificate } from 'crypto';
 import { issuedBy, issueLeaf, leafOf, renewalDue, type Leaf } from './leaf';
 import type { PushOutcome, PushResult } from './push';
+import type { Served } from './served';
 
 export type CertMode = 'site-ca' | 'pinned' | 'public' | 'none';
 export interface CertState {
@@ -34,11 +36,12 @@ export interface CameraCertsDeps {
   site: () => string | undefined;
   enabled: () => boolean; // tls.cameraCerts
   cameras: () => CertCamera[];
-  served: (id: string) => Promise<string | null>; // the leaf the camera presents now (null: no answer)
-  push: (id: string, leaf: Leaf) => Promise<PushResult>;
+  served: (id: string) => Promise<Served | null>; // the certificate the camera presents now (null: no answer)
+  // One push (src/tls/push.ts); `issue` makes a fresh leaf for each attempt.
+  push: (id: string, issue: () => Promise<Leaf>) => Promise<PushResult>;
   openEvent: (id: string) => boolean;
   localHour: (now: number, id: string) => number; // camera time
-  // A camera's mode changed (site-ca or not): its client trusts the CA, or not.
+  // A camera's trust changed (mode, pin, or the CAs): its client follows.
   onTrust?: (id: string) => void;
   audit?: Pick<AuditLog, 'write'>;
   onPush?: (id: string, outcome: PushOutcome) => void; // metrics
@@ -48,21 +51,41 @@ export interface CameraCertsDeps {
 const WINDOW_HOUR = 4; // renewals and retries after a refusal: 04:00 camera time
 const HOUR = 3600_000;
 const FAILED_RETRY_MS = HOUR; // a failed push (not a refusal) is tried again after an hour
+const OUTCOMES = ['pushed', 'current', 'refused', 'failed'];
+const MODES = ['site-ca', 'pinned', 'public', 'none'];
+
+// What is kept per camera besides the public state (state.json).
+interface Extra {
+  everSiteCa: boolean; // the camera once served our leaf: a mismatch is never pushed to automatically
+  pin: Served | null; // what the proxy itself pins (mode pinned)
+  pendingRenewal: boolean; // a renewal the 04:00 window couldn't push (an open event): pushed when it ends
+}
+interface Stored extends CertState { everSiteCa?: boolean; pin?: Served | null }
 
 // Each camera's certificate from the site CA (spec 2026-10-05-multi-camera-host-design
 // §10.1.3, §10.4): issued, pushed and renewed one camera at a time. Leaf keys
-// live in <dir>/cameras/<id>.key (600) and never leave the proxy except in the
-// push to their own camera.
+// live in <dir>/cameras/<id>.key (600), only for a leaf the camera took, and
+// never leave the proxy except in the push to their own camera.
+//
+// Trust (security review of #178): a camera that once served our leaf is
+// never pushed to automatically when it serves something else (an impostor on
+// the camera network would get the login and a key): it keeps the CA as its
+// only trust, the health item says so, and an admin's "Push now" decides. A
+// camera is `pinned` only to a certificate the proxy pins itself, and a
+// site-CA camera becomes `pinned` only by an admin's push. Modes and pins
+// survive a restart, so no worker logs in unverified when its trust was known.
 export class CameraCerts {
   private readonly states = new Map<string, CertState>();
+  private readonly extras = new Map<string, Extra>();
   private readonly leaves = new Map<string, Leaf>();
+  private previousCa: string | null = null; // after tls-ca-rotate, until every camera serves a new leaf
   private timer: NodeJS.Timeout | undefined;
   private running: Promise<void> | null = null;
   private lock: Promise<unknown> = Promise.resolve();
   private stopped = false;
 
   constructor(private readonly d: CameraCertsDeps) {
-    for (const [id, lastPush] of Object.entries(this.readState())) this.states.set(id, { ...this.blank(), lastPush });
+    this.restore();
   }
 
   private now(): number {
@@ -71,25 +94,57 @@ export class CameraCerts {
   private blank(): CertState {
     return { mode: 'none', servername: null, fingerprint: null, notAfter: null, lastPush: null, problem: null };
   }
+  private extra(id: string): Extra {
+    let e = this.extras.get(id);
+    if (!e) this.extras.set(id, (e = { everSiteCa: false, pin: null, pendingRenewal: false }));
+    return e;
+  }
   private camDir(): string {
     const dir = join(this.d.dir, 'cameras');
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     return dir;
   }
-  private readState(): Record<string, CertState['lastPush']> {
+
+  // The CAs a camera's leaf may come from: the current one, and the previous one after a rotation.
+  trustedCas(): string[] {
+    const ca = this.d.ca();
+    return [...(ca ? [ca.certPem] : []), ...(this.previousCa ? [this.previousCa] : [])];
+  }
+  // What a pinned camera's client pins (null otherwise).
+  pin(id: string): Served | null {
+    const e = this.extras.get(id);
+    return this.states.get(id)?.mode === 'pinned' && e?.pin ? { ...e.pin } : null;
+  }
+
+  private restore(): void {
+    let raw: { cameras?: Record<string, Stored>; previousCa?: unknown } = {};
     try {
-      const raw = JSON.parse(readFileSync(join(this.d.dir, 'cameras', 'state.json'), 'utf8')) as Record<string, unknown>;
-      const ok = (v: unknown): v is CertState['lastPush'] =>
-        v === null || (typeof v === 'object' && typeof (v as { at?: unknown }).at === 'number' && ['pushed', 'current', 'refused', 'failed'].includes(String((v as { outcome?: unknown }).outcome)));
-      return Object.fromEntries(Object.entries(raw).filter(([, v]) => ok(v))) as Record<string, CertState['lastPush']>;
+      raw = JSON.parse(readFileSync(join(this.d.dir, 'cameras', 'state.json'), 'utf8'));
     } catch {
-      return {};
+      return;
+    }
+    if (typeof raw.previousCa === 'string' && raw.previousCa.includes('BEGIN CERTIFICATE')) this.previousCa = raw.previousCa;
+    const ca = this.d.ca();
+    for (const [id, r] of Object.entries(raw.cameras ?? {})) {
+      if (!r || typeof r !== 'object' || !MODES.includes(r.mode)) continue;
+      const lastPush = r.lastPush && typeof r.lastPush.at === 'number' && OUTCOMES.includes(r.lastPush.outcome) ? { at: r.lastPush.at, outcome: r.lastPush.outcome } : null;
+      const st: CertState = { ...this.blank(), lastPush, problem: typeof r.problem === 'string' ? r.problem : null };
+      const leaf = this.load(id);
+      const pin = r.pin && typeof r.pin.fingerprint === 'string' && typeof r.pin.pem === 'string' ? { fingerprint: r.pin.fingerprint, pem: r.pin.pem } : null;
+      // site-ca only with a stored leaf of a trusted CA; pinned only with its pin.
+      if (r.mode === 'site-ca' && ca && leaf && this.trustedCas().some((c) => issuedBy(leaf, { certPem: c }))) {
+        Object.assign(st, { mode: 'site-ca', servername: typeof r.servername === 'string' ? r.servername : null, fingerprint: typeof r.fingerprint === 'string' ? r.fingerprint : leaf.fingerprint, notAfter: typeof r.notAfter === 'number' ? r.notAfter : leaf.notAfter });
+      } else if (r.mode === 'pinned' && pin) {
+        Object.assign(st, { mode: 'pinned', fingerprint: pin.fingerprint });
+      }
+      this.states.set(id, st);
+      this.extras.set(id, { everSiteCa: r.everSiteCa === true, pin, pendingRenewal: false });
     }
   }
-  private saveState(): void {
-    const out = Object.fromEntries([...this.states].map(([id, s]) => [id, s.lastPush]));
+  private save(): void {
+    const cameras = Object.fromEntries([...this.states].map(([id, s]) => [id, { ...s, everSiteCa: this.extras.get(id)?.everSiteCa ?? false, pin: this.extras.get(id)?.pin ?? null }]));
     const file = join(this.camDir(), 'state.json');
-    writeFileSync(`${file}.tmp`, JSON.stringify(out));
+    writeFileSync(`${file}.tmp`, JSON.stringify({ cameras, previousCa: this.previousCa }), { mode: 0o600 });
     renameSync(`${file}.tmp`, file);
   }
 
@@ -101,12 +156,16 @@ export class CameraCerts {
   }
 
   // A new CA (tls-ca-rotate): every leaf moved aside (<id>.crt|key.old-<stamp>)
-  // and forgotten, and no camera trusted by the CA until it serves a leaf of the new one.
-  reset(stamp = String(this.now())): void {
+  // and forgotten; the previous CA stays trusted until every camera serves a
+  // leaf of the new one (they are pushed automatically: their sessions start
+  // verified against it).
+  reset(stamp: string, previousCa: string | null): void {
     const dir = join(this.d.dir, 'cameras');
     if (existsSync(dir)) for (const f of readdirSync(dir)) if (/^[a-z0-9-]+\.(crt|key)$/.test(f)) renameSync(join(dir, f), join(dir, `${f}.old-${stamp}`));
     this.leaves.clear();
-    for (const id of [...this.states.keys()]) this.set(id, { mode: 'none', servername: null, fingerprint: null, notAfter: null });
+    this.previousCa = previousCa;
+    this.save();
+    for (const id of this.states.keys()) this.d.onTrust?.(id);
   }
 
   private load(id: string): Leaf | null {
@@ -122,20 +181,31 @@ export class CameraCerts {
     }
   }
 
-  private async issue(cam: CertCamera, ca: SiteCa, name: string): Promise<Leaf> {
-    const l = await issueLeaf(ca, { cn: name, dns: [name], ips: [cam.address] });
+  // Only a leaf the camera took is stored (a key of a failed import is dropped).
+  private store(id: string, l: Leaf): void {
     const dir = this.camDir();
-    writeSecret(join(dir, `${cam.id}.key`), l.keyPem);
-    writeFileSync(join(dir, `${cam.id}.crt`), l.certPem, { mode: 0o644 });
-    this.leaves.set(cam.id, l);
-    return l;
+    writeSecret(join(dir, `${id}.key`), l.keyPem);
+    writeFileSync(join(dir, `${id}.crt`), l.certPem, { mode: 0o644 });
+    this.leaves.set(id, l);
+  }
+
+  // A served certificate from a trusted CA that hasn't expired.
+  private ours(s: Served, now: number): { notAfter: number } | null {
+    try {
+      const x = new X509Certificate(s.pem);
+      const notAfter = Date.parse(x.validTo);
+      if (notAfter <= now) return null;
+      return this.trustedCas().some((c) => issuedBy({ certPem: s.pem }, { certPem: c })) ? { notAfter } : null;
+    } catch {
+      return null;
+    }
   }
 
   private set(id: string, s: Partial<CertState>): CertState {
     const prev = this.states.get(id);
     const next = { ...(prev ?? this.blank()), ...s };
     this.states.set(id, next);
-    if ((prev?.mode ?? 'none') !== next.mode) this.d.onTrust?.(id);
+    if ((prev?.mode ?? 'none') !== next.mode || (s.fingerprint !== undefined && next.mode === 'pinned' && prev?.fingerprint !== next.fingerprint)) this.d.onTrust?.(id);
     return next;
   }
 
@@ -153,6 +223,7 @@ export class CameraCerts {
   }
 
   private async pass(): Promise<void> {
+    let allOnCurrent = true;
     for (const cam of this.d.cameras()) {
       if (this.stopped) return;
       try {
@@ -160,6 +231,14 @@ export class CameraCerts {
       } catch (err) {
         logger.warn({ cameraId: cam.id, err: (err as Error).message }, 'camera_cert_check_failed');
       }
+      const st = this.states.get(cam.id);
+      if (st?.mode === 'site-ca' && st.fingerprint !== this.leaf(cam.id)?.fingerprint) allOnCurrent = false;
+    }
+    // Every site-CA camera serves a leaf of the current CA: the previous one is no longer trusted.
+    if (this.previousCa && allOnCurrent) {
+      this.previousCa = null;
+      this.save();
+      for (const id of this.states.keys()) this.d.onTrust?.(id);
     }
   }
 
@@ -182,7 +261,8 @@ export class CameraCerts {
       return skip(`${cam.id} has no site-CA certificate (http)`);
     }
     if (cam.tlsName) {
-      this.set(cam.id, { mode: 'public', servername: cam.tlsName, fingerprint: await this.d.served(cam.id), notAfter: null, problem: null });
+      const s = await this.d.served(cam.id);
+      this.set(cam.id, { mode: 'public', servername: cam.tlsName, fingerprint: s?.fingerprint ?? null, notAfter: null, problem: null });
       return skip(`${cam.id} has no site-CA certificate (verified by its public name ${cam.tlsName})`);
     }
     if (!ca || !site || !this.d.enabled()) {
@@ -198,41 +278,66 @@ export class CameraCerts {
     }
     const now = this.now();
     const inWindow = this.d.localHour(now, cam.id) === WINDOW_HOUR;
-    let leaf = this.leaf(cam.id);
-    if (!leaf || !leaf.ips.includes(cam.address) || !leaf.names.includes(name) || !issuedBy(leaf, ca)) leaf = await this.issue(cam, ca, name);
+    const e = this.extra(cam.id);
+    let stored = this.leaf(cam.id);
+    if (stored && (!stored.ips.includes(cam.address) || !stored.names.includes(name) || !issuedBy(stored, ca))) stored = null;
     const served = await this.d.served(cam.id);
-    if (served === null) return skip('the camera does not answer on HTTPS'); // unreachable: nothing to push to
-    const renewing = renewalDue(leaf, now);
-    // A due renewal waits for 04:00 while the camera serves the old leaf; a camera
-    // that serves something else (reset, replaced) gets a fresh leaf at once.
-    if (renewing && (inWindow || manual || served !== leaf.fingerprint)) leaf = await this.issue(cam, ca, name);
+    if (!served) return skip('the camera does not answer on HTTPS'); // unreachable: nothing to push to
     const s = this.states.get(cam.id);
-    if (served === leaf.fingerprint) {
-      // Serving the leaf clears an earlier failed or refused push (the health item, Ruling P5-9).
-      const stale = s?.lastPush && s.lastPush.outcome !== 'pushed' && s.lastPush.outcome !== 'current';
-      this.set(cam.id, { mode: 'site-ca', servername: name, fingerprint: leaf.fingerprint, notAfter: leaf.notAfter, problem: null, ...(stale ? { lastPush: { at: now, outcome: 'current' as const } } : {}) });
-      if (stale) this.saveState();
-      return null;
-    }
     const last = s?.lastPush;
-    if (!manual) {
-      // Ruling P5-6: after a refusal, the next try is the next 04:00 window (once in it).
-      if (last?.outcome === 'refused') {
-        this.set(cam.id, { mode: 'pinned', servername: null, fingerprint: served, notAfter: null });
-        if (!inWindow || now - last.at < HOUR) return null;
+    let renewal = false;
+    if (stored && served.fingerprint === stored.fingerprint) {
+      const due = renewalDue(stored, now);
+      if (!due || !(inWindow || manual || e.pendingRenewal)) {
+        // Serving the leaf clears an earlier failed or refused push (the health item, Ruling P5-9), unless a renewal is still due.
+        const stale = !due && last && last.outcome !== 'pushed' && last.outcome !== 'current';
+        e.everSiteCa = true;
+        this.set(cam.id, { mode: 'site-ca', servername: name, fingerprint: stored.fingerprint, notAfter: stored.notAfter, problem: null, ...(stale ? { lastPush: { at: now, outcome: 'current' as const } } : {}) });
+        this.save();
+        return manual ? { outcome: 'current', served: served.fingerprint, tookMs: 0 } : null;
       }
-      if (last?.outcome === 'failed' && now - last.at < FAILED_RETRY_MS) return null;
-    }
-    if (this.d.openEvent(cam.id)) return skip('an event is open: try again when it has ended', served); // never during an event: the next tick
-    const r = await this.d.push(cam.id, leaf);
-    const lastPush = { at: now, outcome: r.outcome };
-    if (r.outcome === 'pushed' || r.outcome === 'current') {
-      this.set(cam.id, { mode: 'site-ca', servername: name, fingerprint: leaf.fingerprint, notAfter: leaf.notAfter, lastPush, problem: null });
+      renewal = true;
     } else {
-      // The fallback (spec §10.1.4): cams pins what the camera serves.
-      this.set(cam.id, { mode: 'pinned', servername: null, fingerprint: r.served, notAfter: null, lastPush, problem: r.outcome === 'failed' ? `push failed: ${r.detail ?? 'unknown'}` : null });
+      const ours = this.ours(served, now);
+      if (ours) {
+        // Our leaf, not the stored one (a new address, the previous CA, lost files):
+        // trusted as it is; the push starts on a session verified against the CA.
+        e.everSiteCa = true;
+        this.set(cam.id, { mode: 'site-ca', servername: name, fingerprint: served.fingerprint, notAfter: ours.notAfter, problem: null });
+      } else if (e.everSiteCa && !manual) {
+        // Never an automatic push to a camera that served our leaf and now serves something else.
+        const problem = `${cam.id} serves an unexpected certificate (${served.fingerprint}): check the camera, then Push now`;
+        if (s?.problem !== problem) logger.warn({ cameraId: cam.id, served: served.fingerprint }, 'camera_cert_unexpected');
+        this.set(cam.id, { problem });
+        this.save();
+        return null;
+      } else if (!manual) {
+        // Ruling P5-6: after a refusal, the next try is the next 04:00 window (once in it); a failure: an hour later.
+        if (last?.outcome === 'refused' && (!inWindow || now - last.at < HOUR)) return null;
+        if (last?.outcome === 'failed' && now - last.at < FAILED_RETRY_MS) return null;
+      }
     }
-    this.saveState();
+    if (this.d.openEvent(cam.id)) {
+      if (renewal && inWindow) e.pendingRenewal = true; // never during an event: when it ends (Review Focus 1)
+      return skip('an event is open: try again when it has ended', served.fingerprint);
+    }
+    const r = await this.d.push(cam.id, () => issueLeaf(ca, { cn: name, dns: [name], ips: [cam.address] }));
+    e.pendingRenewal = false;
+    const lastPush = { at: now, outcome: r.outcome };
+    if ((r.outcome === 'pushed' || r.outcome === 'current') && r.leaf) {
+      this.store(cam.id, r.leaf as Leaf);
+      e.everSiteCa = true;
+      e.pin = null;
+      this.set(cam.id, { mode: 'site-ca', servername: name, fingerprint: r.leaf.fingerprint, notAfter: r.leaf.notAfter, lastPush, problem: null });
+    } else if (r.outcome === 'refused' && (!e.everSiteCa || manual) && r.served && r.servedPem) {
+      // The fallback (spec §10.1.4): the proxy pins what the camera serves, and cams pins the same.
+      e.pin = { fingerprint: r.served, pem: r.servedPem };
+      this.set(cam.id, { mode: 'pinned', servername: null, fingerprint: r.served, notAfter: null, lastPush, problem: null });
+    } else {
+      // A failure, or a refusal of a camera that served our leaf (automatic): the trust stays as it is.
+      this.set(cam.id, { lastPush, problem: r.outcome === 'failed' ? `push failed: ${r.detail ?? 'unknown'}` : null });
+    }
+    this.save();
     this.d.onPush?.(cam.id, r.outcome);
     this.d.audit?.write({
       action: 'camera-cert-push',
@@ -241,8 +346,8 @@ export class CameraCerts {
       outcome: r.outcome === 'pushed' || r.outcome === 'current' ? 'success' : 'failure',
       user: manual ? 'admin' : 'system',
       camera: cam.id,
-      message: `Camera certificate ${r.outcome} (${cam.id}, ${Math.round(r.tookMs / 1000)} s)`,
-      details: { served: r.served, leaf: leaf.fingerprint, notAfter: leaf.notAfter, ...(r.detail ? { detail: r.detail } : {}) },
+      message: `Camera certificate ${r.outcome} (${cam.id}, ${Math.round(r.tookMs / 1000)} s)${this.states.get(cam.id)?.mode === 'pinned' && r.outcome === 'refused' ? `: pinned to ${r.served}` : ''}`,
+      details: { served: r.served, ...(r.leaf ? { leaf: r.leaf.fingerprint, notAfter: r.leaf.notAfter } : {}), ...(r.detail ? { detail: r.detail } : {}) },
     });
     return r;
   }

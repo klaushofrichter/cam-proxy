@@ -18,7 +18,7 @@ import { cameraConfig } from '../src/config/cameras';
 import { loadConfig } from '../src/config/load';
 import { createProxy, type Proxy } from '../src/proxy';
 import { ADMIN_TOKEN, CLIENT_TOKEN, auth, freePort, startProxy, until } from './helpers/proxy';
-import { servedFingerprint } from '../src/tls/push';
+import { servedFingerprint } from '../src/tls/served';
 import { startSim } from './helpers/sim';
 
 let sim: Awaited<ReturnType<typeof startSim>>;

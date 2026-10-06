@@ -965,11 +965,26 @@ certificate through the cluster's `cam1-cert-push`.
   camera time, one camera at a time, never during an open event. The proxy
   then verifies the camera against the CA (a camera with `tlsName` keeps
   public-CA verification and is never pushed to).
-- **The fallback:** a camera that refuses the import is `pinned`: `GET
-  /api/cameras` reports its served (factory) fingerprint, which cams pins.
+- **The push session** is bound to the certificate read just before it
+  (verified against the CA and pinned to its SHA-256 while the camera serves
+  our leaf; after `CertificateClear` pinned to what the camera serves then:
+  trust on first use, per attempt), and every attempt imports a fresh key; a
+  key of a refused or failed import is never stored or sent again.
+- **A camera that served our leaf and then serves another certificate** (a
+  reset, a replaced camera, an impostor on the camera network) is never pushed
+  to automatically: it keeps the CA as its only trust (so the proxy refuses
+  it), the `certificates` health item says "serves an unexpected
+  certificate", and an admin's "Push now" decides (audited).
+- **The fallback:** a camera whose first push is refused is `pinned`: the
+  proxy pins its served (factory) certificate itself (SHA-256, in the
+  handshake) and `GET /api/cameras` reports that fingerprint, which cams pins
+  too. A site-CA camera becomes `pinned` only by an admin's "Push now".
+  Modes and pins survive a restart (`data/tls/cameras/state.json`).
 - **HTTPS:** `server.tls.port` (e.g. 8443) with the proxy's own
   certificate; the HTTP port stays (loopback callers, the display). FTPS uses
-  the same certificate.
+  the same certificate, read when the FTP server starts (after a renewal or a
+  rotation it picks up the new one on the next restart; the cameras don't
+  verify it).
 - **`GET /tls/ca.pem`**: public, the CA certificate only (`404
   {error:"no_site_ca"}` without a site). cams pins the CA's fingerprint:
   `SHA256:` plus the upper-case hex SHA-256 of its DER, no colons (the
@@ -983,8 +998,10 @@ certificate through the cluster's `cam1-cert-push`.
   item `certificates` (a problem within 14 days of an expiry, after a failed
   or refused push, or when an address is outside the CA).
 - **`tls-ca-rotate`** (`{"confirm":"rotate"}`): a new CA; the old files are
-  kept as `*.old-<time>`; every cams pin of this proxy must change (cams
-  accepts a list).
+  kept as `*.old-<time>`; the cameras keep trusting the previous CA until
+  each serves a new leaf (pushed automatically on a session verified against
+  the previous CA); every cams pin of this proxy must change (cams accepts a
+  list).
 - **NTP:** with `ntp.server`, the proxy sets each camera's NTP server
   (whole-object `SetNtp`, read back) when it comes online, at most once an
   hour; `camera-ntp-set` does it now.

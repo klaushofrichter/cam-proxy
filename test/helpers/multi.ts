@@ -14,8 +14,8 @@ export const startSims = (n: number, o: { ignoreImport?: number[] } = {}): Promi
 // One proxy over several cam-sims: cameras cam3, cam4, … (or `ids`), in that
 // order; `extra` camera nodes are appended as they are (e.g. one without host).
 // `https`: the cameras on their sims' HTTPS port (protocol https), for the site CA.
-export async function startMultiProxy(sims: Sim[], opts: { ids?: string[]; extra?: object[]; settings?: object; env?: Record<string, string>; https?: boolean; proxy?: ProxyOptions } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'camproxy-multi-'));
+export async function startMultiProxy(sims: Sim[], opts: { ids?: string[]; extra?: object[]; settings?: object; env?: Record<string, string>; https?: boolean; proxy?: ProxyOptions; dir?: string } = {}) {
+  const dir = opts.dir ?? mkdtempSync(join(tmpdir(), 'camproxy-multi-'));
   const go2rtc = process.env.CAMPROXY_TEST_GO2RTC;
   const ids = opts.ids ?? sims.map((_, i) => `cam${i + 3}`);
   const cameras = [

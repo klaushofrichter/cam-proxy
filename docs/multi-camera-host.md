@@ -545,8 +545,18 @@ subnet and the proxy's own two addresses. Then:
   restarts for a few seconds during a push.
 - **A camera that refuses the import** (the firmware answers 200 and keeps
   its certificate) shows `pinned` on the Certificates card with its own
-  (factory) fingerprint; cams pins that one for it. The next try is at the
-  next 04:00, or "Push now".
+  (factory) fingerprint; the proxy pins that certificate itself and cams pins
+  the same. The next try is at the next 04:00, or "Push now".
+- **A camera that served its leaf and then serves something else** (a factory
+  reset, a replaced camera, or someone else on the camera network) is not
+  pushed to by itself: the proxy refuses to talk to it, the card and the
+  `certificates` health item say "serves an unexpected certificate". Check the
+  camera (is it the one you expect, at its address?), then "Push now". A
+  push binds its session to the certificate it read just before; the first
+  push to a camera trusts what it serves at that moment (trust on first use),
+  so add cameras while the camera network is yours alone.
+- **FTPS** uses the proxy's certificate as read when the FTP server starts;
+  after a rotation it picks up the new one at the next restart.
 - **NTP:** the proxy sets each camera's NTP server to `192.168.60.1`
   (`GetNtp`, a whole-object `SetNtp`, read back) when it comes online, at most
   once an hour; the audit log has a `camera-ntp` record when it changed.
@@ -590,7 +600,7 @@ reaches the proxy at `https://<lan.address>:8443` with servername
 **Rotating the CA** (`POST /control/actions/tls-ca-rotate` with
 `{"confirm":"rotate"}`, admin): a new CA, the old files kept as
 `*.old-<time>` in `data/tls`, a new proxy certificate, and every camera
-pushed again. Every cams pin of this proxy breaks: give cams the new
+pushed again (the cameras stay trusted through the previous CA until then). Every cams pin of this proxy breaks: give cams the new
 fingerprint (it accepts a list, so add the new one first). Needed after an
 address change the CA doesn't cover (the Certificates card and the
 `certificates` health item name the address).

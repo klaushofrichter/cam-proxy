@@ -16,7 +16,9 @@ import { tlsApi } from './api/tls-api';
 import { CaError, siteCa, writeSecret, type SiteCa } from './tls/ca';
 import { CameraCerts, RotateBusyError, type TlsView } from './tls/camera-certs';
 import { issuedBy, issueLeaf, leafOf, renewalDue, type Leaf } from './tls/leaf';
-import { pushCertificate, servedFingerprint } from './tls/push';
+import { pushCertificate } from './tls/push';
+import { servedCertificate, type Served } from './tls/served';
+import type { CameraTrust } from './camera/client';
 import type { StatusPoller } from './camera/status';
 import type { EventIntake } from './events/intake';
 import { CameraRegistry } from './cameras/registry';
@@ -192,7 +194,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     ...(caProblem ? [caProblem] : []),
     ...(ca ? [...proxyAddresses().filter((a) => !ca!.covers(a)), ...(ca.coversName(proxyName()) ? [] : [proxyName()])].map(outside) : []),
     // A camera's own (an address outside the CA, a failed push), named.
-    ...(certs ? cams.ids().flatMap((id) => { const p = certs!.state(id).problem; return p ? [`${id}: ${p}`] : []; }) : []),
+    ...(certs ? cams.ids().flatMap((id) => { const p = certs!.state(id).problem; return p ? [p.startsWith(`${id} `) ? p : `${id}: ${p}`] : []; }) : []),
   ];
   // The proxy's own leaf: <dataDir>/tls/proxy.crt|key, issued anew when
   // missing, from another CA, for other addresses, or due for renewal.
@@ -226,12 +228,20 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     const c = cameraConfig(running, id);
     if (!c) return Promise.resolve(null);
     const { hostname, port } = splitHost(c.host);
-    return servedFingerprint(bareHost(hostname), port ?? 443);
+    return servedCertificate(bareHost(hostname), port ?? 443);
   };
-  // A camera's trust for its client: the CA and its .internal name once it serves its leaf.
-  const tlsFor = (id: string) => {
+  // A camera's trust for its client (security review of #178): site-ca → the
+  // CAs (current, and the previous one after a rotation) by its .internal
+  // name; pinned → the one certificate the proxy pinned; else none (a camera
+  // never seen serving anything of ours, as before P5).
+  const tlsFor = (id: string): CameraTrust | undefined => {
     const st = certs?.state(id);
-    return ca && st?.mode === 'site-ca' && st.servername ? { ca: ca.certPem, servername: st.servername } : undefined;
+    if (st?.mode === 'site-ca' && st.servername) {
+      const cas = certs!.trustedCas();
+      return cas.length ? { ca: cas.join('\n'), servername: st.servername } : undefined;
+    }
+    const pin = certs?.pin(id);
+    return pin ? { ca: pin.pem, fingerprint: pin.fingerprint } : undefined;
   };
   const makeCerts = () =>
     new CameraCerts({
@@ -246,14 +256,22 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
           return address ? [{ id: w.id, address, protocol: c.protocol, ...(c.tlsName ? { tlsName: c.tlsName } : {}) }] : [];
         }),
       served: servedOf,
-      // The push's own session, not the worker's: the camera serves its factory
-      // certificate between the clear and the import, which a client that
-      // trusts the CA would refuse. Unverified, like any camera without a
-      // tlsName, on the camera network (the camera's own admin login travels the same way).
-      push: (id, leaf) => {
+      // The push's own session, not the worker's (the camera serves its factory
+      // certificate between the clear and the import). Bound to the
+      // certificate read just before every step (security review of #178): a
+      // leaf of ours → the CAs, its name and its fingerprint; anything else →
+      // pinned to exactly that certificate (trust on first use, per attempt).
+      push: (id, issue) => {
         const c = cameraConfig(running, id)!;
+        const name = `${id}.${running.tls.site}.internal`;
         const client = new ReolinkClient({ id, host: c.host, protocol: c.protocol, user: c.user, password: cameraPassword(loaded.secrets, id) });
-        return pushCertificate({ served: () => servedOf(id), command: (cmd, p) => client.command(cmd, p), relogin: () => client.forgetToken(), logout: () => client.logout() }, leaf, opts.tlsPush);
+        const bind = (sv: Served) => {
+          const cas = certs!.trustedCas();
+          const oursNow = cas.some((p) => issuedBy({ certPem: sv.pem }, { certPem: p }));
+          client.setTrust(oursNow ? { ca: cas.join('\n'), servername: name, fingerprint: sv.fingerprint } : { ca: sv.pem, fingerprint: sv.fingerprint });
+          client.forgetToken();
+        };
+        return pushCertificate({ served: () => servedOf(id), bind, command: (cmd, p) => client.command(cmd, p), relogin: () => client.forgetToken(), logout: () => client.logout() }, issue, opts.tlsPush);
       },
       openEvent: (id) => openEvents(catalog, id).length > 0,
       localHour: (t, id) => new Date(t + localOffsetMinutes(t, cams.get(id)?.timeInfo()) * 60_000).getUTCHours(),
@@ -275,6 +293,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       return;
     }
     certs ??= makeCerts();
+    // The known trust before any worker logs in (no unverified window at start).
+    for (const w of cams.list()) w.applyTrust();
     certs.start();
     proxyLeafTimer = setInterval(() => void renewProxyLeaf().catch((err: Error) => logger.warn({ err: err.message }, 'proxy_certificate_renewal_failed')), 86400_000);
     proxyLeafTimer.unref();
@@ -299,11 +319,13 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     const site = running.tls.site!;
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const from = ca?.fingerprint ?? null;
+    const previous = ca?.certPem ?? null;
     for (const f of ['ca.pem', 'ca.key', 'proxy.crt', 'proxy.key']) if (existsSync(join(tlsDir, f))) renameSync(join(tlsDir, f), join(tlsDir, `${f}.old-${stamp}`));
-    certs?.reset(stamp);
     ca = null;
     ca = await siteCa(tlsDir, { site, cameraSubnet: running.tls.cameraSubnet!, proxyAddresses: proxyAddresses() });
     caProblem = null;
+    // The cameras keep the previous CA's trust until each serves a new leaf (pushed automatically).
+    certs?.reset(stamp, previous);
     proxyLeaf = await ensureProxyLeaf(ca);
     if (proxyLeaf) httpsServer?.setSecureContext({ cert: proxyLeaf.certPem, key: proxyLeaf.keyPem });
     if (!certs) {

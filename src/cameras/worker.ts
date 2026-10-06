@@ -4,7 +4,7 @@ import { withCamera, type AuditLog } from '../audit/audit-log';
 import type { Catalog } from '../catalog/db';
 import { Backoff } from './backoff';
 import { lastClipReceived } from '../catalog/clips';
-import { ReolinkClient } from '../camera/client';
+import { ReolinkClient, type CameraTrust } from '../camera/client';
 import { bareHost, splitHost } from '../camera/http';
 import { CameraNameAnnouncer, writeCameraName } from '../camera/name';
 import { CameraReboot } from '../camera/reboot';
@@ -60,7 +60,7 @@ export interface WorkerDeps {
   cameraFtpCheckMs?: number;
   // The site CA's trust for this camera once it serves its leaf (spec
   // 2026-10-05-multi-camera-host-design §10.4); a camera with tlsName keeps public-CA verification.
-  tls?: (id: string) => { ca: string; servername: string } | undefined;
+  tls?: (id: string) => CameraTrust | undefined;
   // Test seams: a throw from beforeStart is a start failure; schedule replaces setTimeout.
   beforeStart?: () => void | Promise<void>;
   schedule?: (ms: number, fn: () => void) => () => void;
@@ -313,7 +313,8 @@ export class CameraWorker extends EventEmitter {
     const c = this.cam();
     this.announceAddress();
     const t = c.tlsName ? undefined : d.tls?.(this.id);
-    this.client = new ReolinkClient({ id: c.id, host: c.host, protocol: c.protocol, tlsServername: t?.servername ?? c.tlsName, ...(t ? { tlsCa: t.ca } : {}), user: c.user, password: d.password() });
+    this.client = new ReolinkClient({ id: c.id, host: c.host, protocol: c.protocol, tlsServername: c.tlsName, user: c.user, password: d.password() });
+    if (t) this.client.setTrust(t);
     this.status = new StatusPoller(this.client, c.statusPollS);
     this.status.on('change', (s: CameraState) => d.log.append(c.id, 'camera-status', { online: s.online, reason: s.error ?? null, clockOffsetMs: s.clockOffsetMs ?? null }));
     this.status.on('check', (x: { ok: boolean; ms: number; error?: string }) => d.hooks.onCameraCheck(x));

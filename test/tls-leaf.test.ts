@@ -47,11 +47,17 @@ describe('leaves (spec §10.1.2)', () => {
   }, 60_000);
 
   it("Node enforces the CA's name constraints: a name or an address outside is refused", async () => {
-    const evil = await issueLeaf(ca, { cn: 'evil.example', dns: ['evil.example'], ips: ['127.0.0.1'] });
+    // A test seam builds what issueLeaf refuses, to prove the client enforces the constraints too.
+    const evil = await issueLeaf(ca, { cn: 'evil.example', dns: ['evil.example'], ips: ['127.0.0.1'], unconstrained: true });
     expect(await handshake(evil, 'evil.example')).toMatch(/permitted|constraint/i);
-    const far = await issueLeaf(ca, { cn: 'cam9.garage.internal', dns: ['cam9.garage.internal'], ips: ['10.9.9.9'] });
+    const far = await issueLeaf(ca, { cn: 'cam9.garage.internal', dns: ['cam9.garage.internal'], ips: ['10.9.9.9'], unconstrained: true });
     expect(await handshake(far, 'cam9.garage.internal')).toMatch(/permitted|constraint/i);
   }, 60_000);
+
+  it('issueLeaf refuses a name or an address outside the CA (security review #178)', async () => {
+    await expect(issueLeaf(ca, { cn: 'evil.example', dns: ['evil.example'], ips: ['127.0.0.1'] })).rejects.toThrow('evil.example is outside the site CA');
+    await expect(issueLeaf(ca, { cn: 'cam9.garage.internal', dns: ['cam9.garage.internal'], ips: ['10.9.9.9'] })).rejects.toThrow('10.9.9.9 is outside the site CA');
+  });
 
   it('renewal 30 days before expiry', () => {
     const notAfter = Date.UTC(2027, 10, 5);

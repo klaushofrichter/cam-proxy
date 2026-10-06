@@ -1,7 +1,7 @@
 import https from 'https';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { servedFingerprint } from '../src/tls/push';
+import { servedFingerprint } from '../src/tls/served';
 import { ADMIN_TOKEN, auth, freePort, until } from './helpers/proxy';
 import { startMultiProxy, startSims, type Sim } from './helpers/multi';
 
@@ -47,18 +47,45 @@ describe('the site CA end to end (spec §15)', () => {
     expect([r.status, r.body.outcome]).toEqual([200, 'current']);
   });
 
-  it("a camera that serves a certificate not from the CA is refused, until its leaf is pushed again", async () => {
+  it('a camera that served our leaf and now serves another certificate: refused, never pushed to automatically; Push now (admin) pushes (security review #178)', async () => {
     const w = p.proxy.cameras.get('cam3')!;
     const leaf = p.proxy.certs!.leaf('cam3')!.fingerprint;
-    sims[0].sim.engine.clearCertificate(); // a reset camera: its factory certificate again
+    const imports = () => sims[0].sim.engine.counters.setCalls.length; // a baseline that changes with any write
+    sims[0].sim.engine.clearCertificate(); // a reset camera, or an impostor: another certificate
     await until(async () => ![null, leaf].includes(await servedFingerprint('127.0.0.1', sims[0].ports.https)), 10_000);
     https.globalAgent.destroy(); // a real camera's web server restart drops kept-alive connections; cam-sim's doesn't
     // The client trusts the site CA only: nothing is sent to a camera with another certificate.
     await expect(w.client.command('GetDevInfo')).rejects.toThrow(/TLS certificate check failed/);
-    await p.proxy.certs!.tick(); // served ≠ leaf: pushed again at once (Ruling P5-5)
+    const before = imports();
+    await p.proxy.certs!.tick();
+    expect(sims[0].sim.engine.certs.state.enable).toBe(0); // nothing imported
+    expect(imports()).toBe(before);
+    expect(p.proxy.certs!.state('cam3')).toMatchObject({ mode: 'site-ca', problem: expect.stringMatching(/^cam3 serves an unexpected certificate \(SHA256:[0-9A-F]{64}\): check the camera, then Push now$/) });
+    await expect(w.client.command('GetDevInfo')).rejects.toThrow(/TLS certificate check failed/); // still no fallback
+    const h = (await request(p.base).get('/api/local/health')).body;
+    expect(h.items.find((i: { id: string }) => i.id === 'certificates')).toMatchObject({ problem: true, text: expect.stringMatching(/^cam3 serves an unexpected certificate/) });
+    const r = await request(p.base).post('/control/cameras/cam3/actions/camera-cert-push').set(auth(ADMIN_TOKEN));
+    expect([r.status, r.body.outcome]).toEqual([200, 'pushed']);
     await until(() => w.client.command('GetDevInfo').then(() => true, () => false), 30_000);
-    expect(p.proxy.certs!.state('cam3')).toMatchObject({ mode: 'site-ca', lastPush: { outcome: 'pushed' } });
+    expect(p.proxy.certs!.state('cam3')).toMatchObject({ mode: 'site-ca', lastPush: { outcome: 'pushed' }, problem: null });
   }, 90_000);
+
+  it('cam4 (pinned): the proxy itself pins the certificate it reports; another one is refused', async () => {
+    const w = p.proxy.cameras.get('cam4')!;
+    expect(w.client.trusted()).toBe(true);
+    expect(p.proxy.certs!.pin('cam4')!.fingerprint).toBe(p.proxy.certs!.state('cam4').fingerprint);
+    await w.client.command('GetDevInfo'); // the pinned factory certificate
+  });
+
+  it('a restart: the known trust is in place before the first login (no unverified window)', async () => {
+    const dir = p.dir;
+    await p.proxy.stop();
+    const q = await startMultiProxy(sims, { dir, https: true, proxy: { tlsPush: { clearWaitMs: 50, verifyMs: 3000, pollMs: 100 } }, settings: { tls: { site: 't', cameraSubnet: '127.0.0.0/16', proxyAddresses: '127.0.0.1' }, server: { logLevel: 'silent', tls: { port: tlsPort } } } });
+    p = q; // afterAll stops this one
+    expect(q.proxy.certs!.state('cam3').mode).toBe('site-ca');
+    expect(q.proxy.cameras.get('cam3')!.client.trusted()).toBe(true);
+    expect(q.proxy.cameras.get('cam4')!.client.trusted()).toBe(true);
+  }, 60_000);
 
   it('the keys never leave the proxy: not in /api/cameras, /control/tls, the audit log or the health summary', async () => {
     const answers = [

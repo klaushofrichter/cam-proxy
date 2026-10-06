@@ -18,7 +18,13 @@ export function leafOf(certPem: string, keyPem: string): Leaf {
 
 // A leaf signed directly by the site CA (spec §10.1.2): RSA 2048, 397 days
 // (under Apple's 825-day limit), serverAuth, the SANs given.
-export async function issueLeaf(ca: SiteCa, o: { cn: string; dns: string[]; ips: string[]; days?: number; keyFormat?: 'pkcs1' | 'pkcs8'; now?: () => number }): Promise<Leaf> {
+// Never a name or address outside the CA's own constraints (`unconstrained`
+// is a test seam: it proves that clients enforce them too).
+export async function issueLeaf(ca: SiteCa, o: { cn: string; dns: string[]; ips: string[]; days?: number; keyFormat?: 'pkcs1' | 'pkcs8'; now?: () => number; unconstrained?: boolean }): Promise<Leaf> {
+  if (!o.unconstrained) {
+    const outside = [...o.dns.filter((n) => !ca.coversName(n)), ...o.ips.filter((ip) => !ca.covers(ip))];
+    if (outside.length) throw new Error(`${outside.join(', ')} is outside the site CA`);
+  }
   const now = (o.now ?? Date.now)();
   const alg = RSA(2048);
   const caKey = await webcrypto.subtle.importKey('pkcs8', createPrivateKey(ca.keyPem).export({ type: 'pkcs8', format: 'der' }), alg, false, ['sign']);
