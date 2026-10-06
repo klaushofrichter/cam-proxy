@@ -96,6 +96,21 @@ export const actorOf = (a: AccessInfo | undefined): string => (a?.origin !== 'ma
 
 const WRITE = new Set(['POST', 'PUT', 'DELETE', 'PATCH']);
 
+// What managed admin rights (a cams-admin-managed admin token, or a session
+// or sign-in link it started) may change (spec M2: sign-in links and camera
+// rename; R2-3: only narrowing the command policy). Every other write to an
+// admin route answers 403 local_admin_only: a new route is local-only unless
+// it is added here (test/auth-managed-routes.test.ts).
+export const MANAGED_ALLOWED: readonly (readonly [string, RegExp])[] = [
+  ['POST', /^\/control\/login-links$/],
+  ['PUT', /^\/control\/camera\/name$/],
+  ['PUT', /^\/control\/cameras\/[^/]+\/name$/],
+  ['PUT', /^\/control\/admin\/commands$/], // narrowing only (CommandPolicy.setAllow)
+  ['POST', /^\/control\/admin\/commands\/pause$/],
+  ['POST', /^\/control\/admin\/tokens\/[^/]+\/block$/],
+];
+const managedMay = (method: string, path: string) => !WRITE.has(method) || MANAGED_ALLOWED.some(([m, re]) => m === method && re.test(path));
+
 // `need`: 'client' lets clients and admins in; 'admin' only admins;
 // 'audit-read' admins and the audit token, for GET (and HEAD) only. The audit token is
 // no client credential: elsewhere it answers like an unknown token (401) or
@@ -114,6 +129,7 @@ export function requireAccess(need: AccessNeed, d: AccessDeps): RequestHandler {
       return refuse(401, a.tokenKind === 'none' ? 'no-token' : 'wrong-token', 'unauthorized');
     }
     if (!can(a, need)) return refuse(403, 'admin-only', 'admin_only');
+    if (need === 'admin' && a.origin === 'managed' && !managedMay(req.method, withoutQuery(req.originalUrl))) return refuse(403, 'local-admin-only', 'local_admin_only');
     // HEAD too: Express answers it with the GET route, without the body.
     if (need === 'audit-read' && req.method !== 'GET' && req.method !== 'HEAD') return refuse(403, 'admin-only', 'admin_only');
     if (a.viaCookie && WRITE.has(req.method) && req.get('x-camproxy-ui') !== '1') return refuse(403, 'csrf', 'csrf');
