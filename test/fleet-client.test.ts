@@ -31,6 +31,8 @@ const make = (o: { timing?: Partial<Timing>; health?: () => Promise<HealthSummar
     timing: { ...FAST, ...o.timing },
     now: o.now,
     changeKey: o.changeKey,
+    // A backoff long enough to be seen by a 25 ms poll (full jitter could make it 0).
+    random: () => 0.9,
   });
   return client;
 };
