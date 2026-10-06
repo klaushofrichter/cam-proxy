@@ -1,11 +1,10 @@
-import { randomBytes } from 'crypto';
+import { randomBytes, timingSafeEqual } from 'crypto';
 import { lookup as dnsLookup } from 'dns/promises';
 import { EventEmitter } from 'events';
 import { createWriteStream, mkdirSync, unlinkSync } from 'fs';
 import net from 'net';
 import { join, posix } from 'path';
 import tls from 'tls';
-import { tokenMatches } from '../api/auth';
 
 // A small upload-only FTP(S) server for the camera's clip uploads. It speaks
 // what an uploader needs (login, explicit TLS, passive mode, folders, STOR)
@@ -49,8 +48,20 @@ const IPV4 = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 const plainIp = (a: string | undefined) => (a ?? '').replace(/^::ffff:/, '');
 const OPEN = new Set(['USER', 'PASS', 'AUTH', 'QUIT', 'SYST', 'FEAT', 'NOOP', 'PBSZ', 'PROT', 'OPTS']);
 const KNOWN = new Set([...OPEN, 'PWD', 'XPWD', 'CWD', 'CDUP', 'MKD', 'XMKD', 'TYPE', 'MODE', 'STRU', 'PASV', 'EPSV', 'STOR', 'SIZE']);
-// Constant time, as the API's tokens.
-const same = (given: string, expected: string): boolean => tokenMatches(given, [expected]);
+// The FTP password compared in constant time without hashing it: both padded
+// to 256 bytes (longer is never equal), then the lengths.
+const PAD = 256;
+const padded = (s: string) => {
+  const b = Buffer.alloc(PAD);
+  Buffer.from(s, 'utf8').copy(b, 0, 0, PAD);
+  return b;
+};
+const same = (given: string, expected: string): boolean => {
+  const equal = timingSafeEqual(padded(given), padded(expected));
+  const g = Buffer.byteLength(given, 'utf8');
+  const e = Buffer.byteLength(expected, 'utf8');
+  return equal && g === e && e <= PAD;
+};
 
 interface Session {
   stream: net.Socket; // the control connection (a TLSSocket after AUTH TLS)

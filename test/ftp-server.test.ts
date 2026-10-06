@@ -472,3 +472,12 @@ describe('a user per camera (spec 2026-10-05-multi-camera-host-design §7)', () 
     for (const x of [...open, fifth]) x.close();
   });
 });
+
+describe('the password compare', () => {
+  it('a password that only starts with the right one, or is cut short, is refused', async () => {
+    const { client } = await setup();
+    await expect(client('ftp-pw-and-more')).rejects.toThrow(/530/);
+    await expect(client('ftp-p')).rejects.toThrow(/530/);
+    expect(await (await client('ftp-pw')).pwd()).toBe('/');
+  });
+});
