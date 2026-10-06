@@ -1,7 +1,9 @@
 import type { HealthSummary } from '../health/summary';
 import { buildHeartbeat, type HeartbeatProxyInfo } from './heartbeat';
 import type { AdminKeyFile } from './keyfile';
-import { buildEnvelope, fingerprint, parseEnvelope, readCapped, sign, signedText, verify, type Envelope } from './protocol';
+import { buildEnvelope, fingerprint, parseEnvelope, readCapped, sign, signedText, signEnvelope, verify, type Envelope } from './protocol';
+import { SeenIds } from './command-check';
+import type { CommandRunner, ConnCtx } from './commands';
 
 // The outbound client to cams-admin (spec 2026-10-06-cams-admin-phase1-design
 // §8.3-§8.8, §9.1): one WebSocket (Node's global), one timer for the next
@@ -73,6 +75,9 @@ export interface ClientDeps {
   now?: () => number; // the proxy's clock for envelope ts (tests: a clock that is off)
   WebSocketImpl?: typeof WebSocket;
   fetchImpl?: typeof fetch;
+  // Commands from cams-admin (migration P2): hello then says 'commands'.
+  commands?: CommandRunner;
+  monotonic?: () => number; // ms, for cams-admin's clock between challenges (tests)
 }
 
 const PROTOCOL = 'cams-admin.v1';
@@ -125,6 +130,8 @@ export class AdminClient {
   // Sockets whose close event fired (readyState may still say CLOSING then, e.g. after a close() while connecting).
   private readonly closed = new WeakSet<WebSocket>();
   private readonly fp: string;
+  // This connection's command context (P2): set from the verified challenge.
+  private conn: ConnCtx | null = null;
 
   constructor(private readonly d: ClientDeps) {
     this.t = { ...DEFAULT_TIMING, ...d.timing };
@@ -270,6 +277,7 @@ export class AdminClient {
     this.reason = null;
     this.unsupported = 0;
     this.noReset = false;
+    this.conn = null;
     this.d.log.debug({ url: this.key.connectUrl, attempt: this.attempt }, 'admin_connecting');
     let ws: WebSocket;
     try {
@@ -353,6 +361,31 @@ export class AdminClient {
     return m.id;
   }
 
+  // A signed result or event (P2): false when the socket can't take it now.
+  private sendSigned(ws: WebSocket, type: 'result' | 'event', body: Record<string, unknown>, re?: string): boolean {
+    if (this.ws !== ws || ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > this.t.maxBufferedBytes) return false;
+    const m = buildEnvelope(type, ++this.seqOut, body, { now: this.now(), ...(re ? { re } : {}) });
+    m.sig = signEnvelope(this.key.privateKey, m);
+    ws.send(JSON.stringify(m));
+    return true;
+  }
+
+  private onCommand(ws: WebSocket, m: Envelope): void {
+    const conn = this.conn;
+    if (this.state !== 'connected' || !conn || !this.d.commands) throw new Error('a command before the welcome');
+    void this.d.commands
+      .onCommand(m, conn, (type, body, re) => this.sendSigned(ws, type, body, re))
+      .then((r) => {
+        if (r === 'bad_message' && this.ws === ws) this.trySend(ws, 'error', { code: 'bad_message', message: 'command without a cmdId' }, { re: m.id });
+        // Junk before the signature held counts against the unsupported limit.
+        if ((r === 'bad_message' || r === 'bad_signature') && this.ws === ws && ++this.unsupported > MAX_UNSUPPORTED) {
+          this.reason = 'too many unsigned or malformed commands';
+          this.closeSocket(4400);
+        }
+      })
+      .catch((err: unknown) => this.clientError('command', err));
+  }
+
   private onMessage(ws: WebSocket, m: Envelope): void {
     if (m.seq !== this.seqIn + 1) throw new Error(`seq ${m.seq} after ${this.seqIn}`);
     this.seqIn = m.seq;
@@ -373,7 +406,12 @@ export class AdminClient {
         const ts = Math.max(0, Math.floor(this.now()));
         const k = this.key;
         this.helloSent = true;
-        this.trySend(ws, 'hello', { proxyId: k.proxyId, keyId: k.keyId, connId, nonce, ts, version: this.d.version.slice(0, 64), capabilities: ['status'] }, { sig: sign(k.privateKey, signedText.hello(connId, nonce, k.proxyId, k.keyId, ts)) });
+        // cams-admin's clock as this connection measured it (R2-4): the signed
+        // serverTime plus monotonic time since, whatever the proxy's own clock says.
+        const mono = this.d.monotonic ?? (() => performance.now());
+        const at = mono();
+        this.conn = { connId, serverNow: () => serverTime + (mono() - at), seen: new SeenIds() };
+        this.trySend(ws, 'hello', { proxyId: k.proxyId, keyId: k.keyId, connId, nonce, ts, version: this.d.version.slice(0, 64), capabilities: this.d.commands ? ['status', 'commands'] : ['status'] }, { sig: sign(k.privateKey, signedText.hello(connId, nonce, k.proxyId, k.keyId, ts)) });
         return;
       }
       case 'welcome': {
@@ -385,6 +423,8 @@ export class AdminClient {
         this.nextInS = interval(b.heartbeatS, 30);
         this.d.log.info({ url: this.key.url, proxyId: this.key.proxyId }, 'admin_connected');
         this.heartbeat();
+        // Every done that could not be sent before, as events (P2).
+        if (this.d.commands && this.conn) this.d.commands.afterWelcome(this.conn, (type, body, re) => this.sendSigned(ws, type, body, re));
         return;
       }
       case 'ack':
@@ -401,8 +441,11 @@ export class AdminClient {
       case 'bye':
         this.d.log.debug({ reason: String(b.reason).slice(0, 64) }, 'admin_server_bye');
         return;
+      case 'command':
+        if (this.d.commands) return this.onCommand(ws, m);
+      // falls through: a proxy without commands answers unsupported_type
       default:
-        // P2/P3 types (command, result, event, key.rotate) and anything unknown:
+        // P3 types (key.rotate), result/event (never from a server) and anything unknown:
         // answered while the socket drains, up to MAX_UNSUPPORTED per connection.
         if (++this.unsupported > MAX_UNSUPPORTED) throw new Error('too many unsupported messages');
         if (ws.bufferedAmount > this.t.maxBufferedBytes) return;

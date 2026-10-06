@@ -1,7 +1,7 @@
 import http from 'http';
 import type { AddressInfo, Socket } from 'net';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { generateKeyPair, normaliseCode, sign, signedText, ulid, verify, type Envelope } from '../../src/fleet/protocol';
+import { generateKeyPair, normaliseCode, sign, signedText, signEnvelope, ulid, verify, verifyEnvelope, type Envelope } from '../../src/fleet/protocol';
 import type { AdminKeyFile } from '../../src/fleet/keyfile';
 import { vectors } from './contract';
 
@@ -39,6 +39,10 @@ export class FakeAdmin {
   supported = ['cams-admin.v1'];
   received: Received[] = [];
   connections = 0;
+  // P2: close a connection right after a `received` result arrives on it.
+  closeAfterReceived = false;
+  // P2: the channel of each socket (after its hello).
+  private chan = new Map<WebSocket, { conn: number; connId: string; proxyId: string | null }>();
   readonly sockets = new Set<WebSocket>();
   readonly server = { privateKey: vectors.keys.server.privateKey, publicKey: vectors.keys.server.publicKey };
   private keys = new Map<string, { keyId: string; publicKey: string }>();
@@ -58,6 +62,40 @@ export class FakeAdmin {
   }
   heartbeats(): Received[] {
     return this.received.filter((r) => r.msg.type === 'heartbeat');
+  }
+  results(cmdId?: string): Received[] {
+    return this.received.filter((r) => r.msg.type === 'result' && (cmdId === undefined || (r.msg.body as { cmdId?: string }).cmdId === cmdId));
+  }
+  events(): Received[] {
+    return this.received.filter((r) => r.msg.type === 'event');
+  }
+  // The connIds the proxy was given, oldest first.
+  readonly allConnIds: string[] = [];
+  connIds(): string[] {
+    return [...this.allConnIds];
+  }
+  // A signed command (contract P2) to every open, welcomed socket; the last one's ids.
+  // exp 'past': older than the 120 s slack; key: another signer; unsigned: no sig.
+  sendCommand(command: string, args: Record<string, unknown>, o: { connId?: string; proxyId?: string; exp?: number | 'past' | 'far'; key?: string; actor?: string; cmdId?: string; unsigned?: boolean } = {}): { id: string; cmdId: string } {
+    const cmdId = o.cmdId ?? `cmd_${ulid(Date.now()).slice(6)}`;
+    let id = '';
+    for (const [ws, c] of this.chan) {
+      if (ws.readyState !== ws.OPEN || !c.proxyId) continue;
+      const seq = (this.seqOut.get(ws) ?? 0) + 1;
+      this.seqOut.set(ws, seq);
+      const ts = o.exp === 'past' ? Date.now() - 200_000 : Date.now();
+      const exp = typeof o.exp === 'number' ? o.exp : o.exp === 'far' ? ts + 60_001 : ts + 30_000;
+      id = ulid(Date.now());
+      const m: Record<string, unknown> = { v: 1, type: 'command', id, seq, ts, body: { proxyId: o.proxyId ?? c.proxyId, connId: o.connId ?? c.connId, cmdId, exp, actor: o.actor ?? 'ops@example.org', command, args } };
+      if (!o.unsigned) m.sig = signEnvelope(o.key ?? this.server.privateKey, m as never);
+      ws.send(JSON.stringify(m));
+    }
+    return { id, cmdId };
+  }
+  // A result or event signed by the proxy key registered for its proxyId.
+  verifyFromProxy(m: Envelope): boolean {
+    const k = this.keys.get(String((m.body as { proxyId?: string }).proxyId));
+    return !!k && verifyEnvelope([k.publicKey], m);
   }
 
   async start(port = 0): Promise<this> {
@@ -139,6 +177,9 @@ export class FakeAdmin {
       return;
     }
     const connId = `con_${ulid(Date.now()).slice(6)}`;
+    this.chan.set(ws, { conn, connId, proxyId: null });
+    this.allConnIds.push(connId);
+    ws.on('close', () => this.chan.delete(ws));
     const nonce = Buffer.from(Array.from({ length: 32 }, () => Math.floor(Math.random() * 256))).toString('base64url');
     const serverTime = Date.now();
     const signer = mode === 'bad-sig' ? vectors.keys.other.privateKey : this.server.privateKey;
@@ -156,9 +197,12 @@ export class FakeAdmin {
         const k = this.keys.get(b.proxyId);
         const ok = !!k && k.keyId === b.keyId && b.connId === connId && b.nonce === nonce && verify(k.publicKey, signedText.hello(connId, nonce, b.proxyId, b.keyId, b.ts), msg.sig);
         if (!ok || mode === 'reject') return void ws.close(4401);
+        this.chan.get(ws)!.proxyId = b.proxyId;
         this.sendTo(ws, 'welcome', { heartbeatS: this.welcomeHeartbeatS, offlineAfterS: 90, maxMessageBytes: 262144, serverTime: Date.now() });
       } else if (msg.type === 'heartbeat') {
         if (mode !== 'no-ack') this.sendTo(ws, 'ack', { nextInS: this.nextInS }, { re: msg.id });
+      } else if (msg.type === 'result' && this.closeAfterReceived && (msg.body as { phase?: string }).phase === 'received') {
+        ws.terminate();
       }
     });
   }

@@ -33,7 +33,7 @@ import { CachePool } from './recordings/pool';
 import { PoeSwitch } from './camera/poe-switch';
 import { restartProcess } from './process-restart';
 import type { Config } from './config/defaults';
-import { applyOverrides, getPath, needsProcessRestart, needsRestart, removeOverride, setPath, settingPaths, type Loaded } from './config/load';
+import { applyOverrides, configRevision, getPath, needsProcessRestart, needsRestart, removeOverride, setPath, settingPaths, type Loaded } from './config/load';
 import { cameraFtpOff, setupCameraFtp, testCameraFtp, type FtpTarget } from './clips/camera-ftp';
 import { createClipsSide, ftpUsers, type ClipsSide } from './clips/side';
 import type { RecordingsSide } from './recordings/side';
@@ -61,6 +61,9 @@ import { createMetrics } from './api/metrics';
 import { createSessionSigner } from './api/session';
 import { createLoginLinks } from './api/login-links';
 import { TokenStore } from './fleet/token-store';
+import { CommandPolicy } from './fleet/policy';
+import { Journal } from './fleet/journal';
+import { CommandRunner } from './fleet/commands';
 import { composeApi, hasAudio } from './api/compose-api';
 import { createComposer, ffmpegRunner } from './compose/jobs';
 import { clockText, defaultFont } from './compose/ffmpeg';
@@ -771,9 +774,30 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     });
   };
 
+  // Commands from cams-admin (migration P2): the policy (config.json's base,
+  // data/admin/policy.json, the env kill switch), the journal and the runner.
+  // Nothing is read or written until a command arrives or the card asks.
+  const commandPolicy = new CommandPolicy({ base: () => loaded.commandPolicyBase, file: join(loaded.config.server.dataDir, 'admin', 'policy.json'), env: () => loaded.envLayer, log: logger });
+  const journal = new Journal(join(loaded.config.server.dataDir, 'admin', 'commands.json'), Date.now, logger);
+  const commandRunner = new CommandRunner({
+    proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
+    serverKeys: () => camsAdmin.keyInfo()?.serverKeys ?? [],
+    policy: commandPolicy, journal, tokens: tokenStore, audit, log: logger,
+  });
+  let envOffLogged = false;
+
   let startedAt: number | null = null;
   // cams-admin (spec 2026-10-06-cams-admin-phase1-design §9): a leaf; it
   // reads the summary GET /api/local/health serves, at most once per heartbeat.
+  // The heartbeat's P2 fields (only sent with camsAdmin.url: the client runs only then).
+  const commandsInfo = () => {
+    const status = commandRunner.status();
+    if (!status.enabled && !envOffLogged) {
+      envOffLogged = true;
+      logger.info({ name: 'CAMPROXY_ADMIN_COMMANDS' }, 'admin_commands_env_off');
+    }
+    return { commands: status, tokens: tokenStore.counts(), configRevision: configRevision(loaded) };
+  };
   const camsAdmin = new CamsAdmin({
     settings: () => running.camsAdmin,
     dataDir: () => running.server.dataDir,
@@ -786,7 +810,9 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       configSchema: CONFIG_SCHEMA,
       tls: running.tls.site && ca ? { site: running.tls.site, caFingerprint: [ca.fingerprint] } : null,
       publicUrl: running.server.publicUrl ?? null,
+      ...commandsInfo(),
     }),
+    commands: () => commandRunner,
     // What changes ok, problemCount or a camera's online flag, read cheaply (an early heartbeat).
     changeKey: () => `${storage.paused() ? 1 : 0}|${cams.list().map((w) => `${w.id}:${w.status.state().online ? 1 : 0}${w.streamStatus().up ? 1 : 0}:${w.intake.state().onvif}`).join(',')}`,
     log: logger,

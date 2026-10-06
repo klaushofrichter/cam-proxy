@@ -52,14 +52,14 @@ describe('signed envelopes: the contract vectors', () => {
       expect(jcs(e.envelope)).toBe(e.text);
       const key = vectors.keys[e.key];
       expect(signEnvelope(key.privateKey, e.envelope as never)).toBe(e.sig);
-      expect(verifyEnvelope([key.publicKey], { ...(e.envelope as never), sig: e.sig })).toBe(true);
-      expect(verifyEnvelope([vectors.keys.other.publicKey], { ...(e.envelope as never), sig: e.sig })).toBe(false);
+      expect(verifyEnvelope([key.publicKey], { ...(e.envelope as Record<string, unknown>), sig: e.sig } as never)).toBe(true);
+      expect(verifyEnvelope([vectors.keys.other.publicKey], { ...(e.envelope as Record<string, unknown>), sig: e.sig } as never)).toBe(false);
     }
   });
   it('an added unknown field breaks the command vector\'s signature', () => {
     const e = vectors.envelopes.find((x) => x.kind === 'command')!;
     const m = { ...(e.envelope as Record<string, unknown>), sig: e.sig, extra: 1 };
     expect(verifyEnvelope([vectors.keys.server.publicKey], m as never)).toBe(false);
-    expect(unsigned({ ...(e.envelope as never), sig: e.sig })).toEqual(e.envelope);
+    expect(unsigned({ ...(e.envelope as Record<string, unknown>), sig: e.sig } as never)).toEqual(e.envelope);
   });
 });
