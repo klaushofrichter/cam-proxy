@@ -37,8 +37,11 @@ let generated: Promise<{ cert: string; key: string }> | undefined;
 
 // The FTPS certificate: ftp.certFile/keyFile, or one made for this process
 // (the camera doesn't verify it).
-async function ftpTls(cfg: Config['ftp']): Promise<{ cert: string; key: string } | undefined> {
+// With a site CA, the proxy's own leaf (spec 2026-10-05-multi-camera-host-design §10.4).
+async function ftpTls(cfg: Config['ftp'], leaf?: () => { cert: string; key: string } | undefined): Promise<{ cert: string; key: string } | undefined> {
   if (!cfg.tls) return undefined;
+  const own = leaf?.();
+  if (own) return own;
   if (cfg.certFile && cfg.keyFile) return { cert: readFileSync(cfg.certFile, 'utf8'), key: readFileSync(cfg.keyFile, 'utf8') };
   generated ??= generate([{ name: 'commonName', value: 'cam-proxy' }], { keyType: 'ec' }).then((p) => ({ cert: p.cert, key: p.private }));
   return generated;
@@ -59,6 +62,7 @@ export function createClipsSide(d: {
   indexer: (cam: string) => ClipIndexer | undefined;
   accept: () => boolean;
   onRefused?: (r: { user: string; ip: string; expected: string }) => void;
+  tls?: () => { cert: string; key: string } | undefined; // the proxy's site-CA leaf
 }): { side: ClipsSide; start: () => Promise<void>; stop: () => Promise<void> } {
   const last = new Map<string, number>();
   const failures = new Map<string, number>();
@@ -81,7 +85,7 @@ export function createClipsSide(d: {
       publicHost: f.publicHost,
       users: d.users,
       password: d.password,
-      tls: await ftpTls(f),
+      tls: await ftpTls(f, d.tls),
       root: join(d.config.server.dataDir, 'ftp'),
       log: (line) => logger.debug({ ftp: line }, 'ftp_command'),
       // Refuse at STOR while storage is paused (spec §8a); a file that got

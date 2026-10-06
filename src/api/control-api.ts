@@ -37,6 +37,8 @@ import { checkEnvPath, EnvFileError, writeEnvKey } from '../config/env-file';
 import { CAMERA_HOST_NAMES, validCameraHost } from '../config/env';
 import { InventoryBusyError, InventoryStoppingError, RepairRefusedError, RUN_ID, type InventoryRunner } from '../inventory/runner';
 import type { Archive } from '../archive/service';
+import type { TlsView } from '../tls/camera-certs';
+import type { PushResult } from '../tls/push';
 
 interface FtpStatus {
   enabled: boolean;
@@ -116,6 +118,9 @@ interface ControlDeps {
   archive: Pick<Archive, 'status' | 'clear'>;
   // The first camera (the only one on a one-camera proxy).
   cameraId: () => string;
+  // The site CA (spec 2026-10-05-multi-camera-host-design §10.4): the Certificates
+  // card, "Push now", and a new CA. rotate() is null without tls.site.
+  tls: { view: () => TlsView; pushNow: (cam: string) => Promise<PushResult>; rotate: () => Promise<{ from: string | null; to: string }> | null };
   // Every camera's status block, config order; the number of cameras (spec 2026-10-05-multi-camera-host-design §6.3).
   cameras: CameraRegistry;
   cameraStatus: () => CameraStatusBlock[];
@@ -247,14 +252,14 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
 // The camera actions (spec 2026-10-05-multi-camera-host-design §6.3): their
 // control-action record names the camera; on a proxy with several cameras
 // they need a camera (the routes of phase 2). The host actions work as before.
-export const CAMERA_ACTIONS = new Set(['camera-test', 'onvif-resubscribe', 'camera-ftp-setup', 'camera-ftp-test', 'camera-ftp-off', 'restart', 'camera-reboot', 'camera-powercycle', 'camera-poe-on', 'poe-switch-read', 'inventory', 'inventory-repair', 'inventory-cancel']);
+export const CAMERA_ACTIONS = new Set(['camera-test', 'onvif-resubscribe', 'camera-ftp-setup', 'camera-ftp-test', 'camera-ftp-off', 'restart', 'camera-reboot', 'camera-powercycle', 'camera-poe-on', 'poe-switch-read', 'inventory', 'inventory-repair', 'inventory-cancel', 'camera-cert-push']);
 
 // What a camera action answers on a proxy with several cameras (spec §6.3; the camera routes are phase 2).
 const cameraRequired = (path: string) => `several cameras: name the camera, ${path} (or ?cam=<id>); GET /control/cameras lists them`;
 
 // Actions that write their own audit records (no generic control-action);
 // a new action that audits itself goes here too.
-const OWN_AUDIT = new Set(['camera-reboot', 'camera-powercycle', 'camera-poe-on', 'restart-proxy', 'inventory', 'inventory-repair', 'camera-address', 'archive-clear']);
+const OWN_AUDIT = new Set(['camera-reboot', 'camera-powercycle', 'camera-poe-on', 'restart-proxy', 'inventory', 'inventory-repair', 'camera-address', 'archive-clear', 'tls-ca-rotate']);
 
 // Find camera and Use this address together, per client and minute: a probe
 // is 3 s of multicast, a write a backup.
@@ -409,6 +414,7 @@ export function controlApi(d: ControlDeps): express.Router {
   });
 
   r.get('/config', (_req, res) => void res.json(configView(d.loaded(), d.running())));
+  r.get('/tls', (_req, res) => void res.json(d.tls.view()));
   // A `config-change` record: the changed leaf settings, old → new. Secret
   // values are redacted by AuditLog by the setting's name. A refused change
   // (400) writes nothing.
@@ -675,6 +681,25 @@ export function controlApi(d: ControlDeps): express.Router {
         if (run && run.camera !== cam) return fail(409, 'camera_mismatch', `the running inventory is camera ${run.camera}'s`);
         const runId = d.inventory.cancel('request');
         return void res.json({ cancelled: runId !== null, runId });
+      }
+      // "Push now" (spec §10.4): the push's own camera-cert-push record when one ran.
+      case 'camera-cert-push':
+        return void res.json(await d.tls.pushNow(cam));
+      // A new site CA (Ruling P5-3): every cams pin of this proxy breaks, so
+      // only with {confirm: 'rotate'}; one config-change record.
+      case 'tls-ca-rotate': {
+        if (req.body?.confirm !== 'rotate') return fail(400, 'invalid', "a new CA breaks every cams pin of this proxy: send {confirm: 'rotate'}");
+        const base = { action: 'config-change', category: ['configuration'], type: ['change'], user: 'admin', ...who(req) };
+        const rotating = d.tls.rotate();
+        if (!rotating) return fail(409, 'not_available', 'no site CA: tls.site is not set');
+        try {
+          const r = await rotating;
+          d.audit.write({ ...base, outcome: 'success', message: `Site CA rotated: ${r.from ?? 'none'} → ${r.to}`, details: { setting: 'tls-ca', from: r.from, to: r.to, requestedBy } });
+          return void res.json({ caFingerprint: r.to });
+        } catch (err) {
+          d.audit.write({ ...base, outcome: 'failure', error: (err as Error).message, message: `Site CA rotation failed: ${(err as Error).message}`, details: { setting: 'tls-ca', requestedBy } });
+          return fail(500, 'rotate_failed', (err as Error).message);
+        }
       }
       default:
         return fail(404, 'not_found');

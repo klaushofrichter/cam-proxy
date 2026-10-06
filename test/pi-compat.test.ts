@@ -4,7 +4,7 @@
 // Settings page with legacy paths, CAMERA_HOST / PI_ADDRESS, and a catalog
 // as release 8 left it (events, Vision usage).
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { Client } from 'basic-ftp';
@@ -17,7 +17,8 @@ import { usageBetween, usageByCamera } from '../src/catalog/analyses';
 import { cameraConfig } from '../src/config/cameras';
 import { loadConfig } from '../src/config/load';
 import { createProxy, type Proxy } from '../src/proxy';
-import { ADMIN_TOKEN, CLIENT_TOKEN, auth, freePort, until } from './helpers/proxy';
+import { ADMIN_TOKEN, CLIENT_TOKEN, auth, freePort, startProxy, until } from './helpers/proxy';
+import { servedFingerprint } from '../src/tls/push';
 import { startSim } from './helpers/sim';
 
 let sim: Awaited<ReturnType<typeof startSim>>;
@@ -224,6 +225,45 @@ describe('the Pi: where its camera is defined', () => {
 
 // The health items the Pi's display reads, as release 8 answers them.
 const PI_ITEM_IDS = ['camera', 'stream', 'events', 'ftp', 'storage', 'disk', 'archive', 'inventory', 'version'];
+
+// The Pi stays on Let's Encrypt through the cluster's cam1-cert-push (spec
+// 2026-10-05-multi-camera-host-design §11): no tls.site, no site CA, no
+// HTTPS listener, no certificate push, ever.
+describe('the Pi: no site CA', () => {
+  it('/tls/ca.pem: 404 no_site_ca; no tls folder; no certificate scheduler', async () => {
+    const r = await request(base).get('/tls/ca.pem');
+    expect([r.status, r.body]).toEqual([404, { error: 'no_site_ca' }]);
+    expect(proxy.running.tls).toEqual({ cameraCerts: true });
+    expect(proxy.running.server.tls).toEqual({});
+    expect(proxy.certs).toBeUndefined();
+    expect(existsSync(join(dir, 'data', 'tls'))).toBe(false);
+    expect((await request(base).post('/control/cameras/cam1/actions/camera-cert-push').set(auth(ADMIN_TOKEN))).body).toMatchObject({ outcome: 'failed', detail: 'no site CA: tls.site is not set' });
+    expect((await request(base).post('/control/actions/tls-ca-rotate').set(auth(ADMIN_TOKEN)).send({ confirm: 'rotate' })).status).toBe(409);
+    expect(existsSync(join(dir, 'data', 'tls'))).toBe(false);
+  });
+});
+
+describe("cam1 as on the Pi (https, tlsName: its Let's Encrypt name) with a site CA on: never pushed to", () => {
+  it('mode public; nothing imported into the camera', async () => {
+    const s2 = await startSim();
+    const before = await servedFingerprint('127.0.0.1', s2.ports.https);
+    const q = await startProxy(s2, { settings: {
+      camera: { host: `127.0.0.1:${s2.ports.https}`, protocol: 'https', tlsName: 'cam1.skylar.technology', user: 'proxy', onvifPort: s2.ports.onvif, rtspPort: s2.ports.rtsp || 554, baichuanPort: s2.camera.baichuanPort, statusPollS: 5 },
+      tls: { site: 'pi', cameraSubnet: '127.0.0.0/16', proxyAddresses: '127.0.0.1' },
+    } });
+    try {
+      await q.proxy.certs!.tick();
+      expect(q.proxy.certs!.state('cam1')).toMatchObject({ mode: 'public', servername: 'cam1.skylar.technology', lastPush: null });
+      expect((await request(q.base).post('/control/cameras/cam1/actions/camera-cert-push').set(auth(ADMIN_TOKEN))).body.outcome).toBe('failed');
+      expect(s2.sim.engine.certs.state.enable).toBe(0);
+      expect(await servedFingerprint('127.0.0.1', s2.ports.https)).toBe(before);
+      expect(existsSync(join(q.dir, 'data', 'tls', 'cameras', 'cam1.key'))).toBe(false);
+    } finally {
+      await q.proxy.stop();
+      await s2.close();
+    }
+  }, 60_000);
+});
 
 describe('the cluster proxy (deploy/cluster/config.json, camera cam2)', () => {
   it('loads unchanged: one camera cam2 with FTP on the sub stream', () => {

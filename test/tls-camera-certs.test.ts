@@ -17,6 +17,7 @@ function setup(o: { cameras?: CertCamera[]; refuse?: boolean; fail?: boolean } =
   const served = new Map<string, string | null>([['cam3', 'SHA256:FACTORY3'], ['cam4', 'SHA256:FACTORY4']]);
   const open = new Set<string>();
   const pushes: string[] = [];
+  const trust: string[] = [];
   const dir = mkdtempSync(join(tmpdir(), 'camproxy-ccerts-'));
   let cameras = o.cameras ?? [{ id: 'cam3', address: '192.168.60.13', protocol: 'https' as const }];
   const certs = new CameraCerts({
@@ -33,9 +34,10 @@ function setup(o: { cameras?: CertCamera[]; refuse?: boolean; fail?: boolean } =
     },
     openEvent: (id) => open.has(id),
     localHour: (t) => new Date(t).getUTCHours(),
+    onTrust: (id) => trust.push(`${id}:${certs.state(id).mode}`),
     now: () => now,
   });
-  return { certs, pushes, open, served, dir, at: (ms: number) => (now = ms), now: () => now, setCameras: (c: CertCamera[]) => (cameras = c) };
+  return { certs, pushes, trust, open, served, dir, at: (ms: number) => (now = ms), now: () => now, setCameras: (c: CertCamera[]) => (cameras = c) };
 }
 
 describe('camera certificates (spec §10.1.3)', () => {
@@ -173,5 +175,28 @@ describe('camera certificates (spec §10.1.3)', () => {
     await certs.tick();
     await certs.pushNow('cam3');
     expect(pushes).toEqual(['cam3', 'cam3']);
+  }, 60_000);
+
+  it("onTrust on every change of a camera's mode (its client follows: CA or not)", async () => {
+    const { certs, trust, served, at, now } = setup();
+    await certs.tick();
+    expect(trust).toEqual(['cam3:site-ca']);
+    await certs.tick();
+    expect(trust).toEqual(['cam3:site-ca']); // no change, no call
+    served.set('cam3', 'SHA256:RESET'); // the camera was reset: its factory certificate again
+    at(now() + 3600_000);
+    await certs.tick(); // pushed again: still site-ca
+    expect(trust).toEqual(['cam3:site-ca']);
+  }, 60_000);
+
+  it('reset (a new CA): every camera drops the CA until its new leaf is served', async () => {
+    const { certs, trust, pushes } = setup();
+    await certs.tick();
+    certs.reset();
+    expect(certs.state('cam3').mode).toBe('none');
+    expect(trust).toEqual(['cam3:site-ca', 'cam3:none']);
+    await certs.tick();
+    expect(pushes).toEqual(['cam3', 'cam3']); // a new leaf: pushed again
+    expect(trust).toEqual(['cam3:site-ca', 'cam3:none', 'cam3:site-ca']);
   }, 60_000);
 });

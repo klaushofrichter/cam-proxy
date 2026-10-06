@@ -1,4 +1,5 @@
 import { randomBytes } from 'crypto';
+import { isIP } from 'net';
 import { connect as tlsConnect } from 'tls';
 import { IncomingMessage } from 'node:http';
 import { logger } from '../log';
@@ -81,7 +82,9 @@ export class ReolinkClient {
   private lastLoginFailure = Number.NEGATIVE_INFINITY;
   private readonly gate: Semaphore;
   private readonly timeoutMs: number;
-  private readonly target: CameraTarget;
+  private target: CameraTarget;
+  // The site CA's trust, once the camera serves its leaf (setTrust).
+  private trust: { ca: string; servername: string } | undefined;
 
   constructor(
     private readonly cam: CameraConfig,
@@ -91,9 +94,19 @@ export class ReolinkClient {
     this.gate = new Semaphore(opts.maxConcurrent ?? 2);
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.target = { protocol: cam.protocol, host: cam.host, tlsServername: cam.tlsServername, ...(cam.tlsCa ? { ca: cam.tlsCa } : {}) };
+    if (cam.tlsCa && cam.tlsServername) this.trust = { ca: cam.tlsCa, servername: cam.tlsServername };
     if (cam.protocol === 'https' && !cam.tlsServername && !cam.tlsCa) {
       logger.warn({ cameraId: cam.id }, 'camera TLS certificate is not verified (no tlsServername configured)');
     }
+  }
+
+  // Verify the camera against the site CA by this name from the next request
+  // on (spec 2026-10-05-multi-camera-host-design §10.4), or, with undefined,
+  // as configured again (the camera stopped serving its leaf). Requests in
+  // flight finish on their connection.
+  setTrust(t: { ca: string; servername: string } | undefined): void {
+    this.trust = t;
+    this.target = t ? { protocol: this.cam.protocol, host: this.cam.host, tlsServername: t.servername, ca: t.ca } : { protocol: this.cam.protocol, host: this.cam.host, tlsServername: this.cam.tlsServername };
   }
 
   private now(): number {
@@ -210,7 +223,7 @@ export class ReolinkClient {
         socket.destroy();
         resolve(v);
       };
-      const socket = tlsConnect({ host, port: port ?? 443, servername: this.cam.tlsServername ?? host, ca: this.cam.tlsCa ?? this.opts.tlsCa }, () => {
+      const socket = tlsConnect({ host, port: port ?? 443, servername: this.trust?.servername ?? this.cam.tlsServername ?? (isIP(host) ? undefined : host), ca: this.trust?.ca ?? this.opts.tlsCa }, () => {
         const c = socket.getPeerCertificate();
         const t = c?.valid_to ? Date.parse(c.valid_to) : NaN;
         // A throw here would be an uncaught exception in a socket listener.

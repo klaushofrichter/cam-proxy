@@ -48,3 +48,12 @@ export async function issueLeaf(ca: SiteCa, o: { cn: string; dns: string[]; ips:
   const keyPem = createPrivateKey({ key: der, format: 'der', type: 'pkcs8' }).export({ type: o.keyFormat ?? 'pkcs1', format: 'pem' }).toString();
   return leafOf(cert.toString('pem') + '\n', keyPem);
 }
+
+// Whether a stored leaf is the current CA's (restored files, a rotation: not).
+export function issuedBy(leaf: { certPem: string }, ca: { certPem: string }): boolean {
+  try {
+    return new X509Certificate(leaf.certPem).verify(new X509Certificate(ca.certPem).publicKey);
+  } catch {
+    return false;
+  }
+}

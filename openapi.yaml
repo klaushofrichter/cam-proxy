@@ -18,6 +18,17 @@ paths:
       security: []
       responses:
         '200': { description: '{ ok: true, version, startedAt } (the real running version: the release version, dev locally; startedAt: when this process started serving, unix ms)' }
+  /tls/ca.pem:
+    get:
+      summary: The site CA's certificate, public (spec 2026-10-05-multi-camera-host-design §10.1.4)
+      description: >
+        PEM (application/x-pem-file) of this host's name-constrained site CA, for cams
+        (which accepts it only if its SHA-256 matches its pin) and for browsers. Never a key;
+        nothing else is served under /tls/.
+      security: []
+      responses:
+        '200': { description: the CA certificate (PEM) }
+        '404': { description: "{ error: no_site_ca } (tls.site is not set)" }
   /api/local/health:
     get:
       summary: The health summary, local only (loopback callers, no key)
@@ -626,7 +637,7 @@ paths:
         onvif-resubscribe, camera-ftp-setup, camera-ftp-test, camera-ftp-off,
         restart (that camera's side only; the old route without a camera restarts every camera side and applies pending restart settings), camera-reboot,
         camera-powercycle, camera-poe-on, poe-switch-read, inventory,
-        inventory-repair, inventory-cancel) on the named camera, with the same
+        inventory-repair, inventory-cancel, camera-cert-push) on the named camera, with the same
         bodies and answers; inventory-cancel and inventory-repair answer 409
         camera_mismatch for another camera's run. The old route takes ?cam=<id> as well; without it
         it acts on the only camera, and answers 400 camera_required when there
@@ -737,6 +748,12 @@ paths:
         '200': { description: '{ runId, kind, op (check|repair), camera, startedAt, tookMs, outcome, error?, cancelledBy? (request|stop), requestedBy, options? ({camera: true}: compared with the camera), source? (a repair: the check run it worked from), stopped? (a repair: why it ended early or left candidates: clip-cap, byte-cap (also when candidates were skipped for the 200 MB), max-gb, paused, failures, refused, camera_offline, event-cap (an events repair: more than 1000 missing), or null), window: { from, to, reason (retention|budget|store-younger|empty|sd-card: the SD card's reach, shorter than the events retention), retentionFrom, protectedFrom, notes (caveats on the counts); clips with the camera and events: camera: { stream, to (judged up to here), oldestSdDay, unknownDays }; events: eventsDays }, counts (clips with the camera: cameraDays, unknownDays, recordings, timerOnly, paired, pairedOtherStream (recordings here as clips of the other stream, never missing), missingLocally, missingLocallyBytes, prunedHere (older than the oldest local clip while the storage budget prunes clips: not offered), goneFromCamera, olderThanSd, otherStream; events: eventsDays, cameraDays, unknownDays, recordings, timerOnly, spans, matched, missingEvents, missingPerson, missingVehicle, missingPet, missingMotion, events, eventsWithoutRecording; a repair: candidates, requested, done, failed, skipped, bytes; an events repair: checked (missing in the check), candidates (missing now), requested, done, skipped (an event of the kind by then), failed, donePerson, doneVehicle, donePet, doneMotion), top (stills: the 10 longest gaps; clips: the camera days with the most missing; events: the camera days with the most missing spans {date, state, spans, missing}; a repair: up to 10 failures), items (up to 500: stills file problems; clips missing-locally first, then gone-from-camera, row-without-file, file-without-row, snapshot-without-clip, event-without-clip, clip-without-event; events: missing-event {kind, start, end, date, recordings} oldest first, then event-without-recording {eventId, kind, start, end, source}; an events repair: one per event added {eventId, kind, start, end, result: ok}; a clips repair: one per recording tried, {id, start, result: ok|skipped|failed, reason? (skipped: outside-retention, already-local, gone-from-camera, other-stream, viewer, invalid, too-big, byte-cap, busy, still-recording), error?, clipId?, bytes?, streamed? (went through a temp file under inventory/tmp)}), itemsTruncated, message }' }
         '400': { description: not a run id }
         '404': { description: unknown run }
+  /control/tls:
+    get:
+      summary: The site CA, the proxy's certificate and every camera's (the Certificates card) (admin)
+      responses:
+        '200': { description: '{ site (or null), caFingerprint ("SHA256:" + upper-case hex of the CA DER; the pin cams takes), caNotAfter, proxy: { servername, fingerprint, notAfter } or null, cameras: [{ id, mode (site-ca, pinned, public, none), servername, fingerprint, notAfter, lastPush: { at, outcome (pushed, current, refused, failed) } or null, problem }], problems: [text] }; without tls.site: site null, cameras [], problems []' }
+        '401': { description: not signed in }
   /control/config:
     get:
       summary: Every setting with value, source, restart flag and pending next value
@@ -766,8 +783,14 @@ paths:
         '400': { description: 'unknown setting; cameras.<id> of a config.json camera: "defined in config.json; remove it there"' }
   /control/actions/{name}:
     post:
-      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart (the camera side), camera-reboot, camera-powercycle, camera-poe-on, poe-switch-read, restart-proxy (the process), inventory ({kind, camera?}), inventory-repair ({kind, runId}), inventory-cancel, find-camera, camera-address ({host}), archive-clear ({count})
+      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart (the camera side), camera-reboot, camera-powercycle, camera-poe-on, poe-switch-read, restart-proxy (the process), inventory ({kind, camera?}), inventory-repair ({kind, runId}), inventory-cancel, find-camera, camera-address ({host}), archive-clear ({count}), camera-cert-push, tls-ca-rotate ({confirm: rotate})
       description: |
+        camera-cert-push ("Push now", site CA): issues the camera's leaf if needed and pushes it now (no 04:00 window,
+        never during an open event); answers the push result { outcome (pushed, current, refused, failed), served, detail?, tookMs }
+        (failed with a detail when nothing was pushed: an open event, an HTTP camera, a tlsName camera, an address outside the CA).
+        tls-ca-rotate ({"confirm":"rotate"}) makes a new site CA (the old files kept as *.old-<time>), a new proxy
+        certificate, and pushes every camera again; every cams pin of this proxy must change. Answers { caFingerprint };
+        400 invalid without the confirm, 409 not_available without tls.site; a config-change audit record.
         camera-reboot reboots the camera (about a minute offline; every camera token becomes invalid).
         camera-powercycle cuts the camera's PoE on its switch (camera.poeSwitch, CAMPROXY_POE_SWITCH_PASSWORD)
         for offSeconds and turns it on again; it answers once PoE is back on. It shares the 120 s cooldown

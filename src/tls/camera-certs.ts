@@ -1,10 +1,9 @@
-import { X509Certificate } from 'crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { AuditLog } from '../audit/audit-log';
 import { logger } from '../log';
 import { writeSecret, type SiteCa } from './ca';
-import { issueLeaf, leafOf, renewalDue, type Leaf } from './leaf';
+import { issuedBy, issueLeaf, leafOf, renewalDue, type Leaf } from './leaf';
 import type { PushOutcome, PushResult } from './push';
 
 export type CertMode = 'site-ca' | 'pinned' | 'public' | 'none';
@@ -16,6 +15,15 @@ export interface CertState {
   lastPush: { at: number; outcome: PushOutcome } | null;
   problem: string | null;
 }
+// GET /control/tls (the Certificates card); the key never.
+export interface TlsView {
+  site: string | null;
+  caFingerprint: string | null;
+  caNotAfter: number | null;
+  proxy: { servername: string; fingerprint: string; notAfter: number } | null;
+  cameras: (CertState & { id: string })[];
+  problems: string[];
+}
 export interface CertCamera { id: string; address: string; protocol: 'https' | 'http'; tlsName?: string }
 export interface CameraCertsDeps {
   dir: string; // <dataDir>/tls
@@ -26,8 +34,9 @@ export interface CameraCertsDeps {
   served: (id: string) => Promise<string | null>; // the leaf the camera presents now (null: no answer)
   push: (id: string, leaf: Leaf) => Promise<PushResult>;
   openEvent: (id: string) => boolean;
-  localHour: (now: number) => number; // camera time
-  onSiteCa?: (id: string) => void; // the camera serves its leaf now: its client switches to the CA
+  localHour: (now: number, id: string) => number; // camera time
+  // A camera's mode changed (site-ca or not): its client trusts the CA, or not.
+  onTrust?: (id: string) => void;
   audit?: Pick<AuditLog, 'write'>;
   onPush?: (id: string, outcome: PushOutcome) => void; // metrics
   now?: () => number;
@@ -88,9 +97,13 @@ export class CameraCerts {
     return this.leaves.get(id) ?? this.load(id);
   }
 
-  // Forget every leaf (a new CA: tls-ca-rotate moved the files away).
-  reset(): void {
+  // A new CA (tls-ca-rotate): every leaf moved aside (<id>.crt|key.old-<stamp>)
+  // and forgotten, and no camera trusted by the CA until it serves a leaf of the new one.
+  reset(stamp = String(this.now())): void {
+    const dir = join(this.d.dir, 'cameras');
+    if (existsSync(dir)) for (const f of readdirSync(dir)) if (/^[a-z0-9-]+\.(crt|key)$/.test(f)) renameSync(join(dir, f), join(dir, `${f}.old-${stamp}`));
     this.leaves.clear();
+    for (const id of [...this.states.keys()]) this.set(id, { mode: 'none', servername: null, fingerprint: null, notAfter: null });
   }
 
   private load(id: string): Leaf | null {
@@ -116,8 +129,10 @@ export class CameraCerts {
   }
 
   private set(id: string, s: Partial<CertState>): CertState {
-    const next = { ...(this.states.get(id) ?? this.blank()), ...s };
+    const prev = this.states.get(id);
+    const next = { ...(prev ?? this.blank()), ...s };
     this.states.set(id, next);
+    if ((prev?.mode ?? 'none') !== next.mode) this.d.onTrust?.(id);
     return next;
   }
 
@@ -179,7 +194,7 @@ export class CameraCerts {
       return skip(problem);
     }
     const now = this.now();
-    const inWindow = this.d.localHour(now) === WINDOW_HOUR;
+    const inWindow = this.d.localHour(now, cam.id) === WINDOW_HOUR;
     let leaf = this.leaf(cam.id);
     if (!leaf || !leaf.ips.includes(cam.address) || !leaf.names.includes(name) || !issuedBy(leaf, ca)) leaf = await this.issue(cam, ca, name);
     const served = await this.d.served(cam.id);
@@ -194,7 +209,6 @@ export class CameraCerts {
       const stale = s?.lastPush && s.lastPush.outcome !== 'pushed' && s.lastPush.outcome !== 'current';
       this.set(cam.id, { mode: 'site-ca', servername: name, fingerprint: leaf.fingerprint, notAfter: leaf.notAfter, problem: null, ...(stale ? { lastPush: { at: now, outcome: 'current' as const } } : {}) });
       if (stale) this.saveState();
-      if (s?.mode !== 'site-ca') this.d.onSiteCa?.(cam.id);
       return null;
     }
     const last = s?.lastPush;
@@ -211,7 +225,6 @@ export class CameraCerts {
     const lastPush = { at: now, outcome: r.outcome };
     if (r.outcome === 'pushed' || r.outcome === 'current') {
       this.set(cam.id, { mode: 'site-ca', servername: name, fingerprint: leaf.fingerprint, notAfter: leaf.notAfter, lastPush, problem: null });
-      this.d.onSiteCa?.(cam.id);
     } else {
       // The fallback (spec §10.1.4): cams pins what the camera serves.
       this.set(cam.id, { mode: 'pinned', servername: null, fingerprint: r.served, notAfter: null, lastPush, problem: r.outcome === 'failed' ? `push failed: ${r.detail ?? 'unknown'}` : null });
@@ -247,14 +260,5 @@ export class CameraCerts {
   stop(): void {
     this.stopped = true;
     clearTimeout(this.timer);
-  }
-}
-
-// A stored leaf from another CA (restored files, a rotation) is issued anew.
-function issuedBy(leaf: Leaf, ca: SiteCa): boolean {
-  try {
-    return new X509Certificate(leaf.certPem).verify(new X509Certificate(ca.certPem).publicKey);
-  } catch {
-    return false;
   }
 }
