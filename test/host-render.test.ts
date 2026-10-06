@@ -46,6 +46,13 @@ describe('host files (spec §14.2)', () => {
     ]));
   });
 
+  it('the DHCP netmask follows the prefix', () => {
+    const d = h();
+    d.cameraNet = { ...d.cameraNet, prefix: 26, pool: ['192.168.60.40', '192.168.60.49'] };
+    d.leases = d.leases.filter((l) => l.role === 'switch');
+    expect(lines(renderHost(parseHost(d))['etc/dnsmasq.d/camera-net.conf'].text)).toContain('dhcp-range=192.168.60.40,192.168.60.49,255.255.255.192,12h');
+  });
+
   it('chrony, sysctl, the camera interface, docker', () => {
     const r = renderHost(h());
     expect(lines(r['etc/chrony/conf.d/camera-net.conf'].text)).toEqual(expect.arrayContaining(['allow 192.168.60.0/24', 'local stratum 10']));

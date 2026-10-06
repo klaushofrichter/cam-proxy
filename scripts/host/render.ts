@@ -3,7 +3,7 @@ import { dirname, join } from 'path';
 import { cameraSubnet, parseHost, type HostDescription } from './host-config';
 
 export type Rendered = Record<string, { text: string; mode: number }>;
-const MASKS: Record<number, string> = { 24: '255.255.255.0', 23: '255.255.254.0', 25: '255.255.255.128' };
+const netmask = (prefix: number) => [24, 16, 8, 0].map((sh) => ((prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0) >>> sh) & 255).join('.');
 
 function nftables(h: HostDescription): string {
   const lan = h.lan.iface;
@@ -52,7 +52,7 @@ function dnsmasq(h: HostDescription): string {
     `interface=${n.iface}`,
     'bind-interfaces',
     'port=0',
-    `dhcp-range=${n.pool[0]},${n.pool[1]},${MASKS[n.prefix] ?? '255.255.255.0'},12h`,
+    `dhcp-range=${n.pool[0]},${n.pool[1]},${netmask(n.prefix)},12h`,
     `dhcp-option=option:router,${n.address}`,
     `dhcp-option=option:ntp-server,${n.address}`,
     '# No DNS server for the cameras (Ruling P4-2).',
