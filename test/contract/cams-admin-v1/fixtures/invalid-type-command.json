@@ -1,6 +1,6 @@
 {
-  "$note": "reserved for P3",
-  "schema": "envelope",
+  "$note": "a proxy never sends a command: error unsupported_type, connection stays",
+  "schema": "command",
   "$expect": {
     "runtime": "unsupported_type",
     "strict": "invalid"

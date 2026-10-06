@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/strict/command.schema.json",
+  "title": "cams-admin v1 command",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "type": {
+      "const": "command"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "ts": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "body": {
+      "type": "object",
+      "properties": {
+        "proxyId": {
+          "type": "string",
+          "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+        },
+        "connId": {
+          "type": "string",
+          "pattern": "^con_[0-9A-HJKMNP-TV-Z]{20}$"
+        },
+        "cmdId": {
+          "type": "string",
+          "pattern": "^cmd_[0-9A-HJKMNP-TV-Z]{20}$"
+        },
+        "exp": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "actor": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "command": {
+          "type": "string",
+          "enum": [
+            "tokens.apply",
+            "config.get",
+            "config.set",
+            "config.unset",
+            "config.rollback",
+            "camera.action",
+            "camera.name.set",
+            "proxy.restart"
+          ]
+        },
+        "args": {
+          "type": "object",
+          "properties": {
+            "v": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "v"
+          ]
+        }
+      },
+      "required": [
+        "proxyId",
+        "connId",
+        "cmdId",
+        "exp",
+        "actor",
+        "command",
+        "args"
+      ],
+      "additionalProperties": false
+    },
+    "sig": {
+      "type": "string",
+      "maxLength": 100,
+      "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+    }
+  },
+  "required": [
+    "v",
+    "type",
+    "id",
+    "seq",
+    "ts",
+    "body",
+    "sig"
+  ],
+  "additionalProperties": false
+}

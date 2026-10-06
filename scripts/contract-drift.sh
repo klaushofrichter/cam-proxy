@@ -3,15 +3,22 @@
 # 2026-10-06-cams-admin-phase1-design §15.4): the vendored copy in
 # test/contract/cams-admin-v1 must equal cams-admin main's contract/v1
 # (SOURCE excluded). Vendoring a new contract = copy + update SOURCE in the
-# same PR. Until cams-admin main has contract/v1, the commit in SOURCE is
-# the reference.
+# same PR. SOURCE names the branch the copy came from ("(contract/v1,
+# <branch>)"): while a contract change is still on a cams-admin branch, that
+# branch's head is the reference (back to main once SOURCE says main). Until
+# cams-admin main has contract/v1, the commit in SOURCE is the reference.
 set -euo pipefail
 dir=test/contract/cams-admin-v1
 repo=${CAMS_ADMIN_REPO:-https://github.com/klaushofrichter/cams-admin.git}
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 git clone -q --filter=blob:none --no-checkout "$repo" "$tmp/repo"
-ref=origin/main
+branch=$(sed -n 's/.*(contract\/v1, \([A-Za-z0-9._\/-]*\)).*/\1/p' "$dir/SOURCE")
+ref=origin/${branch:-main}
+if [ "$ref" != origin/main ] && ! git -C "$tmp/repo" rev-parse -q --verify "$ref" >/dev/null; then
+  echo "::error::SOURCE names cams-admin branch ${branch}, which no longer exists: vendor from main"
+  exit 1
+fi
 if ! git -C "$tmp/repo" cat-file -e "$ref:contract/v1/vectors.json" 2>/dev/null; then
   ref=$(awk '{print $2}' "$dir/SOURCE")
   echo "::notice::cams-admin main has no contract/v1 yet: checking against $ref (SOURCE)"
