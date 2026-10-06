@@ -1,5 +1,5 @@
 import { randomBytes } from 'crypto';
-import type { SessionOrigin } from './session';
+import type { SessionInfo, SessionOrigin } from './session';
 
 // One-time sign-in links for the admin UI (Klaus, 2026-09-28). cams holds the
 // admin token and mints a code server to server; the browser redeems it once
@@ -11,19 +11,20 @@ const LINK_MS = 60_000;
 const MAX_CODES = 100;
 
 export function createLoginLinks(ttlMs = LINK_MS) {
-  const codes = new Map<string, { expires: number; origin: SessionOrigin }>(); // Map keeps insertion order
+  const codes = new Map<string, { expires: number; info: SessionInfo }>(); // Map keeps insertion order
   return {
-    issue(origin: SessionOrigin): { code: string; expiresInS: number } {
+    // A managed link names the managed admin token that minted it.
+    issue(origin: SessionOrigin, tokenId?: string): { code: string; expiresInS: number } {
       const code = randomBytes(24).toString('base64url');
-      codes.set(code, { expires: Date.now() + ttlMs, origin });
+      codes.set(code, { expires: Date.now() + ttlMs, info: origin === 'local' ? { origin } : { origin, tokenId: tokenId ?? '' } });
       while (codes.size > MAX_CODES) codes.delete(codes.keys().next().value as string);
       return { code, expiresInS: Math.round(ttlMs / 1000) };
     },
-    consume(code: string | undefined): SessionOrigin | null {
+    consume(code: string | undefined): SessionInfo | null {
       if (typeof code !== 'string') return null;
       const c = codes.get(code);
       codes.delete(code);
-      return c !== undefined && c.expires > Date.now() ? c.origin : null;
+      return c !== undefined && c.expires > Date.now() ? c.info : null;
     },
   };
 }

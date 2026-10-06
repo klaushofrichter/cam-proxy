@@ -79,6 +79,12 @@ export class TokenStore {
     return hit ? { id: hit.id, kind: hit.kind, label: hit.label } : null;
   }
 
+  // A managed admin token by id that works now (in the set, not blocked, not retired): what its sessions and links need.
+  liveAdmin(id: string): { label: string } | null {
+    const t = this.digests.find((x) => x.t.id === id && x.t.kind === 'admin' && this.live(x.t))?.t;
+    return t ? { label: t.label } : null;
+  }
+
   counts(): { revision: number; client: number; admin: number; blocked: string[] } {
     const live = this.digests.map((x) => x.t).filter((t) => this.live(t));
     return { revision: this.state.revision, client: live.filter((t) => t.kind === 'client').length, admin: live.filter((t) => t.kind === 'admin').length, blocked: this.state.blocked.map((b) => b.id) };

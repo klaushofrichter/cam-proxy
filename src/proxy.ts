@@ -671,6 +671,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   });
   const access: AccessDeps = {
     managed: (b) => tokenStore.match(b),
+    managedAdminLive: (id) => tokenStore.liveAdmin(id),
     tokens: () => loaded.secrets.tokens,
     adminToken: () => loaded.secrets.adminToken,
     auditToken: () => loaded.secrets.auditToken,
@@ -864,7 +865,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // The health summary for the display on the Pi: loopback callers only, no
   // key; anyone else goes on to the access check as for an unknown route.
   app.use('/api', localApi({ health: healthNow }));
-  app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit }));
+  app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit, managedAdminLive: access.managedAdminLive }));
   // Before clientApi: its /cameras/:cam/stills/:file would take latest.jpg.
   app.use('/api', requireAccess('client', access), latestApi({ cameras: cams }));
   app.use('/api', requireAccess('client', access), composeApi({ config: () => running, catalog, composer, cameras: cams, paused: () => storage.paused(), font, audit }));

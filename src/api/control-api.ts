@@ -27,7 +27,7 @@ import { RefusalThrottle } from '../audit/throttle';
 import { isAuditAction } from '../audit/actions';
 import { DAY, dayStart } from '../time-units';
 import { eventsStored, eventsStoredByCamera } from './metrics';
-import { readCookie, SESSION_COOKIE, SESSION_MS, type createSessionSigner, type SessionOrigin } from './session';
+import { readCookie, SESSION_COOKIE, SESSION_MS, type createSessionSigner, type SessionInfo, type SessionOrigin } from './session';
 import type { createLoginLinks } from './login-links';
 import type { RecordingsStatus } from '../recordings/side';
 import type { HealthSummary } from '../health/summary';
@@ -181,10 +181,13 @@ const actor = (req: express.Request) => actorOf(req.res?.locals.access as Access
 // Sign-ins with the token form per client and 15 minutes (Klaus, 2026-10-01: 40).
 export const LOGIN_ATTEMPTS = 40;
 
-export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnType<typeof createSessionSigner>; links: ReturnType<typeof createLoginLinks>; audit: AuditLog }): express.Router {
+export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnType<typeof createSessionSigner>; links: ReturnType<typeof createLoginLinks>; audit: AuditLog; managedAdminLive?: (tokenId: string) => { label: string } | null }): express.Router {
   const r = express.Router();
   const flags = (req: express.Request) => `HttpOnly; SameSite=Strict; Path=/${req.secure ? '; Secure' : ''}`;
-  const startSession = (req: express.Request, res: Response, origin: SessionOrigin) => res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${d.sessions.issue(origin)}; Max-Age=${SESSION_MS / 1000}; ${flags(req)}`);
+  const startSession = (req: express.Request, res: Response, info: SessionInfo) => res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${info.origin === 'local' ? d.sessions.issue('local') : d.sessions.issue('managed', info.tokenId)}; Max-Age=${SESSION_MS / 1000}; ${flags(req)}`);
+  // A managed session or link lives only as long as its token (blocked, removed, retired: gone).
+  const live = (info: SessionInfo | null): SessionInfo | null => (!info ? null : info.origin === 'local' || d.managedAdminLive?.(info.tokenId) ? info : null);
+  const sessionOf = (req: express.Request) => live(d.sessions.verify(readCookie(req.get('cookie'), SESSION_COOKIE)));
   // A `login` audit record; never the token or the code, only how and why.
   const MESSAGES = {
     'token-form': { ok: 'Admin signed in with the admin token', refused: 'Sign-in with the admin token refused' },
@@ -228,13 +231,13 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
     },
   });
   r.get('/login-link', linkAttempts, (req, res) => {
-    const origin = d.links.consume(typeof req.query.code === 'string' ? req.query.code : undefined);
-    if (!origin) {
+    const info = live(d.links.consume(typeof req.query.code === 'string' ? req.query.code : undefined));
+    if (!info) {
       rec(req, 'failure', 'login-link', 'link-used-or-expired');
       return void res.redirect(302, '/?link=expired');
     }
-    rec(req, 'success', 'login-link', undefined, 0, origin);
-    startSession(req, res, origin);
+    rec(req, 'success', 'login-link', undefined, 0, info.origin);
+    startSession(req, res, info);
     res.redirect(302, '/');
   });
   r.post('/login', attempts, (req, res) => {
@@ -244,12 +247,12 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
       return void res.status(401).json({ error: 'unauthorized' });
     }
     rec(req, 'success', 'token-form');
-    startSession(req, res, 'local');
+    startSession(req, res, { origin: 'local' });
     res.status(204).end();
   });
-  r.get('/session', (req, res) => void res.json({ loggedIn: !!d.sessions.verify(readCookie(req.get('cookie'), SESSION_COOKIE)) }));
+  r.get('/session', (req, res) => void res.json({ loggedIn: !!sessionOf(req) }));
   r.post('/logout', (req, res) => {
-    const valid = d.sessions.verify(readCookie(req.get('cookie'), SESSION_COOKIE));
+    const valid = sessionOf(req);
     const base = { action: 'logout', category: ['authentication'], type: ['end'], outcome: 'success' as const, ...who(req) };
     if (valid) d.audit.write({ ...base, user: valid.origin === 'local' ? 'admin' : 'managed-admin', message: 'Admin signed out' });
     else {
@@ -306,7 +309,8 @@ export function controlApi(d: ControlDeps): express.Router {
   r.post('/login-links', (req, res) => {
     // The link keeps the minting rights' origin (R2-3): a managed admin token
     // can't mint a link to a local session.
-    const link = d.links.issue((res.locals.access as AccessInfo | undefined)?.origin === 'local' ? 'local' : 'managed');
+    const a = res.locals.access as AccessInfo | undefined;
+    const link = a?.origin === 'local' ? d.links.issue('local') : d.links.issue('managed', a?.tokenId);
     d.audit.write({ action: 'login-link-issued', category: ['authentication'], type: ['creation'], outcome: 'success', user: actor(req), ...who(req), message: 'One-time sign-in link issued' });
     res.status(201).json(link);
   });

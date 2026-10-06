@@ -16,7 +16,7 @@ describe('createLoginLinks', () => {
       const b = links.issue('local');
       expect(a.code).toMatch(/^[A-Za-z0-9_-]{32,}$/);
       expect(a.code).not.toBe(b.code);
-      expect(links.consume(a.code)).toBe('local');
+      expect(links.consume(a.code)).toEqual({ origin: 'local' });
       expect(links.consume(a.code)).toBeNull(); // once
       vi.advanceTimersByTime(60_001);
       expect(links.consume(b.code)).toBeNull(); // expired

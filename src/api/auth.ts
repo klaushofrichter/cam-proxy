@@ -47,7 +47,9 @@ export interface AccessDeps {
   adminToken: () => string;
   // CAMPROXY_AUDIT_TOKEN: reads GET /control/audit, nothing else.
   auditToken: () => string | undefined;
-  sessionValid: (v: string | undefined) => { origin: 'local' | 'managed' } | null;
+  sessionValid: (v: string | undefined) => { origin: 'local' } | { origin: 'managed'; tokenId: string } | null;
+  // A managed admin token by id: still in the set, not blocked, not retired.
+  managedAdminLive?: (tokenId: string) => { label: string } | null;
   // The cams-admin-managed tokens (data/admin/tokens.json); absent = none.
   managed?: (bearer: string) => { id: string; kind: 'client' | 'admin'; label: string } | null;
   // Every 401/403 answered here, with why (the audit log records them).
@@ -78,7 +80,13 @@ function accessOf(req: Request, d: AccessDeps): AccessInfo {
     return { access: null, viaCookie: false, tokenKind: 'invalid', origin: null };
   }
   const s = d.sessionValid(readCookie(req.get('cookie'), SESSION_COOKIE));
-  if (s) return { access: 'admin', viaCookie: true, tokenKind: 'session', origin: s.origin };
+  if (s?.origin === 'local') return { access: 'admin', viaCookie: true, tokenKind: 'session', origin: 'local' };
+  if (s?.origin === 'managed') {
+    // Ends with its token: blocked, removed or retired → no session.
+    const t = d.managedAdminLive?.(s.tokenId) ?? null;
+    if (t) return { access: 'admin', viaCookie: true, tokenKind: 'session', origin: 'managed', tokenId: s.tokenId, tokenLabel: t.label };
+    return { access: null, viaCookie: false, tokenKind: 'invalid', origin: null };
+  }
   return { access: null, viaCookie: false, tokenKind: 'none', origin: null };
 }
 

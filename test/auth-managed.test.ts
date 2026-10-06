@@ -23,18 +23,19 @@ describe('sessions and login links carry their origin', () => {
   it('a session says whether it came from local or managed admin rights', () => {
     const s = createSessionSigner();
     expect(s.verify(s.issue('local'))).toEqual({ origin: 'local' });
-    expect(s.verify(s.issue('managed'))).toEqual({ origin: 'managed' });
-    const v = s.issue('managed');
-    // Flipping the origin breaks the signature.
-    expect(s.verify(v.replace('.m.', '.l.'))).toBeNull();
+    expect(s.verify(s.issue('managed', id(2)))).toEqual({ origin: 'managed', tokenId: id(2) });
+    const v = s.issue('managed', id(2));
+    // Changing the origin or the token id breaks the signature.
+    expect(s.verify(v.replace(`.m~${id(2)}.`, '.l.'))).toBeNull();
+    expect(s.verify(v.replace(id(2), id(3)))).toBeNull();
     expect(s.verify(undefined)).toBeNull();
   });
   it('a login link answers the origin it was minted with', () => {
     const l = createLoginLinks();
     const a = l.issue('local');
-    const b = l.issue('managed');
-    expect(l.consume(b.code)).toBe('managed');
-    expect(l.consume(a.code)).toBe('local');
+    const b = l.issue('managed', id(2));
+    expect(l.consume(b.code)).toEqual({ origin: 'managed', tokenId: id(2) });
+    expect(l.consume(a.code)).toEqual({ origin: 'local' });
     expect(l.consume(a.code)).toBeNull();
   });
 });
@@ -92,7 +93,7 @@ describe('managed tokens over HTTP', () => {
     const code = (await request(p.base).post('/control/login-links').set(auth(MANAGED_ADMIN)).expect(201)).body.code;
     const res = await request(p.base).get(`/control/login-link?code=${code}`).expect(302);
     const cookie = String(res.headers['set-cookie']).split(';')[0];
-    expect(cookie).toMatch(/^camproxy_session=v2\.\d+\.m\./);
+    expect(cookie).toMatch(/^camproxy_session=v2\.\d+\.m~tok_\w{20}\./);
     const local = (await request(p.base).post('/control/login-links').set(auth(ADMIN_TOKEN)).expect(201)).body.code;
     const res2 = await request(p.base).get(`/control/login-link?code=${local}`).expect(302);
     expect(String(res2.headers['set-cookie'])).toMatch(/^camproxy_session=v2\.\d+\.l\./);
@@ -104,5 +105,17 @@ describe('managed tokens over HTTP', () => {
     expect(JSON.stringify(recs)).toContain('token:cams cluster');
     expect(text).not.toContain(hashOf(MANAGED_ADMIN).slice(7, 23));
     expect(text).not.toContain(MANAGED_ADMIN);
+  });
+  it('blocking the managed admin token ends its sessions and its unredeemed links at once (the last test: it blocks the token)', async () => {
+    const mint = async () => (await request(p.base).post('/control/login-links').set(auth(MANAGED_ADMIN)).expect(201)).body.code as string;
+    const code = await mint();
+    const cookie = String((await request(p.base).get(`/control/login-link?code=${code}`).expect(302)).headers['set-cookie']).split(';')[0];
+    expect((await request(p.base).get('/control/status').set('Cookie', cookie)).status).toBe(200);
+    const pending = await mint();
+    await request(p.base).post(`/control/admin/tokens/${id(2)}/block`).set(auth(ADMIN_TOKEN)).expect(200);
+    expect((await request(p.base).get('/control/status').set('Cookie', cookie)).status).toBe(401);
+    const r = await request(p.base).get(`/control/login-link?code=${pending}`).expect(302);
+    expect(r.headers.location).toBe('/?link=expired');
+    expect(r.headers['set-cookie']).toBeUndefined();
   });
 });
