@@ -27,5 +27,6 @@ Camera gateway for one or more Reolink cameras (several per proxy since multi-ca
 - The multi-camera host: `docs/multi-camera-host.md`; its files are rendered by `scripts/host/render.ts` from `host.json` (checked with `scripts/host/validate-rendered.sh`); never edit them on the host by hand.
 - Network exposure and cluster manifests belong to kube-setup (`deploy/cluster/REQUEST.md` records what was asked). Manifests: kube-setup `manifests/cam-proxy/`. Ask the kube-setup session; don't edit that repo from here.
 - Several cameras: one go2rtc, one FTP server and one PoE controller per host; `test/helpers/fake-switch.ts` for switch logic, never the real switch. `test/pi-compat.test.ts` pins what the Pi (one legacy camera) needs from every host-wide service.
+- `data/tls/ca.key` is the site CA's key (and `data/tls/cameras/*.key`, `proxy.key` its leaves): never print, copy into a repo, or log them; `tls-ca-rotate` invalidates every cams pin. The Pi has no `tls.site` and must never get a site-CA push (`test/pi-compat.test.ts`).
 - `go2rtc.url` and `server.publicUrl` are reserved settings with no effect yet; keep them documented as such.
 - No clips or media go to GitHub before Klaus has reviewed them. `.superpowers/` is gitignored scratch space.

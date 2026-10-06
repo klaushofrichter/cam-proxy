@@ -111,13 +111,16 @@ function proxyConfig(h: HostDescription): string {
   const sw = h.leases.find((l) => l.role === 'switch');
   const cams = h.leases.filter((l) => l.camera);
   return `${JSON.stringify({
-    server: { port: h.proxy.httpPort, dataDir: '/data' },
+    server: { port: h.proxy.httpPort, dataDir: '/data', tls: { port: h.proxy.httpsPort } },
     ...(sw ? { poeSwitch: { model: 'sscpoe-web', host: sw.ip, ports: 8, offSeconds: 10 } } : {}),
     ftp: { enabled: true, port: h.proxy.ftpPort, passive: h.proxy.passive, tls: true, publicHost: h.cameraNet.address },
     composition: { concurrent: 2 },
     recordings: { cacheMB: 8192 },
     host: { stats: 'on' },
     cameras: cams.map((l) => ({ id: l.camera!.id, name: l.camera!.id, host: l.ip, user: 'proxy', ...(l.camera!.poeSwitchPort ? { poeSwitch: { port: l.camera!.poeSwitchPort } } : {}) })),
+    // The site CA (spec §10): this host's own, named after it; the cameras' NTP on the host (§14.2).
+    tls: { site: h.hostname, cameraSubnet: cameraSubnet(h), proxyAddresses: [h.lan.address, h.cameraNet.address].join(',') },
+    ntp: { server: h.cameraNet.address },
   }, null, 2)}\n`;
 }
 

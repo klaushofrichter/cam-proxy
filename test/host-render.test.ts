@@ -103,4 +103,11 @@ describe('host files (spec §14.2)', () => {
     const loaded = loadConfig({ CAMPROXY_TOKENS: 'a'.repeat(32), CAMPROXY_ADMIN_TOKEN: 'c'.repeat(32), CAMPROXY_CAMERA_PASSWORD: 'cam-pw', CAMPROXY_FTP_PASSWORD: 'f'.repeat(16) }, { cwd: dir });
     expect(loaded.config.cameraOrder).toEqual(['cam3', 'cam4', 'cam5', 'cam6']);
   });
+
+  it('the proxy config turns the site CA on for the host', () => {
+    const cfg = JSON.parse(renderHost(h())['srv/cam-proxy/data/config.json'].text);
+    expect(cfg.tls).toEqual({ site: 'camhost1', cameraSubnet: '192.168.60.0/24', proxyAddresses: '192.168.1.230,192.168.60.1' });
+    expect(cfg.server.tls).toEqual({ port: 8443 });
+    expect(cfg.ntp).toEqual({ server: '192.168.60.1' });
+  });
 });
