@@ -3,7 +3,7 @@
 // this order. A new action goes here (test/audit-actions.test.ts checks).
 export const AUDIT_ACTIONS = [
   'proxy-start', 'proxy-stop', 'proxy-restart',
-  'camera-reboot', 'camera-powercycle', 'camera-poe-on', 'camera-check', 'camera-name', 'camera-address',
+  'camera-reboot', 'camera-powercycle', 'camera-poe-on', 'camera-check', 'camera-name', 'camera-address', 'camera-cert-push', 'camera-ntp',
   'login', 'logout', 'login-link-issued', 'auth-refused', 'ftp-login-refused',
   'control-action', 'config-change', 'secret-override',
   'still-check', 'event-analysis', 'composition',
