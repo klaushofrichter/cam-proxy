@@ -237,6 +237,17 @@ describe('heartbeats', () => {
     expect(c.view().state).toBe('connected');
   });
 
+  it('a huge nextInS or heartbeatS is capped (a timer over 2^31 ms would fire at once: a heartbeat flood)', async () => {
+    fake.welcomeHeartbeatS = 1e7;
+    fake.nextInS = 1e7;
+    const c = make();
+    c.start();
+    await until(() => fake.heartbeats().length >= 1);
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(fake.heartbeats().length).toBe(1);
+    expect(c.view().state).toBe('connected');
+  });
+
   it('an early heartbeat on a change, not before the floor since the last', async () => {
     fake.welcomeHeartbeatS = 30;
     let key = 'a';

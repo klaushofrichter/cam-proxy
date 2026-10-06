@@ -76,6 +76,9 @@ export interface ClientDeps {
 }
 
 const PROTOCOL = 'cams-admin.v1';
+// The server may slow heartbeats to 300 s (spec §8.5); anything above is capped.
+const MAX_INTERVAL_S = 300;
+const interval = (v: unknown, fallback: number): number => (typeof v === 'number' && Number.isFinite(v) ? Math.min(Math.max(0, v), MAX_INTERVAL_S) : fallback);
 
 // Full jitter: random(0, min(cap, 1 s · 2^attempt)).
 export function backoffDelay(attempt: number, capMs: number, random: () => number = Math.random): number {
@@ -235,6 +238,7 @@ export class AdminClient {
 
   private setTimer(ms: number, fn: () => void): void {
     this.clearTimer();
+    ms = Math.min(Math.max(0, ms), 2 ** 31 - 1); // a longer timer would fire at once
     this.timerDue = Date.now() + ms;
     this.timer = setTimeout(() => {
       this.timer = null;
@@ -369,7 +373,7 @@ export class AdminClient {
         this.state = 'connected';
         this.connectedAt = Date.now();
         this.lastOutcome = 'connected';
-        this.nextInS = typeof b.heartbeatS === 'number' ? b.heartbeatS : 30;
+        this.nextInS = interval(b.heartbeatS, 30);
         this.d.log.info({ url: this.key.url, proxyId: this.key.proxyId }, 'admin_connected');
         this.heartbeat();
         return;
@@ -379,7 +383,7 @@ export class AdminClient {
           this.unacked.clear();
           this.lastAckAt = Date.now();
         }
-        if (typeof b.nextInS === 'number' && Number.isFinite(b.nextInS)) this.nextInS = b.nextInS;
+        this.nextInS = interval(b.nextInS, this.nextInS);
         return;
       case 'error':
         if (typeof b.retryAfterS === 'number' && Number.isFinite(b.retryAfterS)) this.retryAfterS = Math.min(Math.max(0, b.retryAfterS), 3600);
