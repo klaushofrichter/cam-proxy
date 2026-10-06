@@ -237,6 +237,9 @@ describe('the Pi: no site CA', () => {
     expect(proxy.running.server.tls).toEqual({});
     expect(proxy.certs).toBeUndefined();
     expect(existsSync(join(dir, 'data', 'tls'))).toBe(false);
+    expect((await request(base).get('/api/cameras').set(auth())).body[0].tls).toEqual({ mode: 'none', servername: null, fingerprint: null, notAfter: null, lastPush: null });
+    const h = (await request(base).get('/api/local/health')).body;
+    expect(h.items.find((i: { id: string }) => i.id === 'certificates')).toBeUndefined();
     expect((await request(base).post('/control/cameras/cam1/actions/camera-cert-push').set(auth(ADMIN_TOKEN))).body).toMatchObject({ outcome: 'failed', detail: 'no site CA: tls.site is not set' });
     expect((await request(base).post('/control/actions/tls-ca-rotate').set(auth(ADMIN_TOKEN)).send({ confirm: 'rotate' })).status).toBe(409);
     expect(existsSync(join(dir, 'data', 'tls'))).toBe(false);
@@ -258,6 +261,7 @@ describe("cam1 as on the Pi (https, tlsName: its Let's Encrypt name) with a site
       expect(s2.sim.engine.certs.state.enable).toBe(0);
       expect(await servedFingerprint('127.0.0.1', s2.ports.https)).toBe(before);
       expect(existsSync(join(q.dir, 'data', 'tls', 'cameras', 'cam1.key'))).toBe(false);
+      expect((await request(q.base).get('/api/cameras').set(auth())).body[0].tls).toMatchObject({ mode: 'public', servername: 'cam1.skylar.technology', lastPush: null });
     } finally {
       await q.proxy.stop();
       await s2.close();

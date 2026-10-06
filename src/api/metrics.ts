@@ -20,6 +20,8 @@ interface MetricsSources {
   sseClients: () => number;
   version: string;
   target: string;
+  // The site CA's certificates (spec 2026-10-05-multi-camera-host-design §10.5): the proxy's under cam="proxy".
+  certs?: () => { cam: string; notAfter: number | null }[];
 }
 
 // Live events per kind (camproxy_events_stored, the status): recovered ones
@@ -141,6 +143,17 @@ export function createMetrics(s: MetricsSources) {
     lastStill.set({ cam: id }, 0);
     resubscribes.inc({ cam: id }, 0);
   }
+  new Gauge({
+    name: 'camproxy_cert_not_after_seconds',
+    help: 'Expiry of the site-CA certificate each camera serves, and of the proxy\'s own (cam="proxy")',
+    labelNames: ['cam'],
+    registers: [registry],
+    collect() {
+      this.reset();
+      for (const c of s.certs?.() ?? []) if (c.notAfter !== null) this.set({ cam: c.cam }, c.notAfter / 1000);
+    },
+  });
+  const certPushes = new Counter({ name: 'camproxy_cert_push_total', help: 'Camera certificate pushes, by outcome (pushed, current, refused, failed)', labelNames: ['cam', 'outcome'], registers: [registry] });
   const retentionLast = new Gauge({ name: 'camproxy_retention_last_run_timestamp_seconds', help: 'Last retention run', registers: [registry] });
   for (const kind of ['events', 'streamLog', 'audit']) retentionDeleted.inc({ kind }, 0);
 
@@ -162,6 +175,7 @@ export function createMetrics(s: MetricsSources) {
     },
     // Each hook names the camera it came from.
     onResubscribe: (cam: string) => resubscribes.inc({ cam }),
+    onCertPush: (cam: string, outcome: string) => certPushes.inc({ cam, outcome }),
     onStill: (cam: string, ts: number) => (stillsTotal.inc({ cam }), lastStill.set({ cam }, ts / 1000)),
     onStillMissing: (cam: string) => stillsMissing.inc({ cam }),
     onRecordingDownload: (cam: string, o: { stream: string; result: string; priority: string }) => recordingDownloads.inc({ cam, stream: o.stream, result: o.result, priority: o.priority }),

@@ -1,3 +1,4 @@
+import type { CertState } from '../tls/camera-certs';
 import express, { type Request, type Response } from 'express';
 import { readFileSync, statSync } from 'fs';
 import { resolve } from 'path';
@@ -62,7 +63,9 @@ const analysisSummary = (a: AnalysisRow | undefined) =>
   a ? { provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, objects: parseList(a.objects), summary: summaryOf(a) } : null;
 
 // The client API (spec §10); auth is applied by the caller.
-export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: CameraRegistry; sse: SseHandler }): express.Router {
+// `tls`: a camera's certificate state from the site CA (spec 2026-10-05-multi-camera-host-design
+// §10.4); undefined without one (then mode public for a tlsName camera, none otherwise).
+export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: CameraRegistry; sse: SseHandler; tls?: (id: string) => CertState | undefined }): express.Router {
   const r = express.Router();
   // Every /cameras/:cam route: the camera's worker, 404 or 503 (spec 2026-10-05-multi-camera-host-design §6.1).
   r.param('cam', cameraParam(d.cameras));
@@ -79,7 +82,16 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: 
     // The newest still in memory (spec 2026-10-05-multi-camera-host-design §6.4), for an overview grid.
     const f = w.latestFrame();
     const latestStill = f ? { ts: f.ts, ...latestUrls(w.id) } : null;
-    return { id: w.id, name: w.name(), online: w.status.state().online, lastEventTs: lastLiveEventTs(d.catalog, w.id), stream, publicUrl: d.config().server.publicUrl ?? null, address: w.cam().host, error: w.error(), features: [...FEATURES], latestStill };
+    return { id: w.id, name: w.name(), online: w.status.state().online, lastEventTs: lastLiveEventTs(d.catalog, w.id), stream, publicUrl: d.config().server.publicUrl ?? null, address: w.cam().host, error: w.error(), features: [...FEATURES], latestStill, tls: tlsOf(w) };
+  };
+  // The interface cams consumes (the cams P5 plan): mode, servername, the served
+  // leaf's SHA256: fingerprint, notAfter, lastPush. Never a key.
+  const tlsOf = (w: CameraWorker) => {
+    const st = d.tls?.(w.id);
+    if (st) return { mode: st.mode, servername: st.servername, fingerprint: st.fingerprint, notAfter: st.notAfter, lastPush: st.lastPush ? { at: st.lastPush.at, outcome: st.lastPush.outcome } : null };
+    const c = w.cam();
+    const pub = c.protocol === 'https' && !!c.tlsName;
+    return { mode: pub ? ('public' as const) : ('none' as const), servername: pub ? c.tlsName! : null, fingerprint: null, notAfter: null, lastPush: null };
   };
   r.get('/cameras', (_req, res) => void res.json(d.cameras.list().map(info)));
   r.get('/cameras/:cam', (_req, res) => void res.json(info(workerOf(res))));

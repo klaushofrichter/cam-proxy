@@ -1,4 +1,5 @@
 import { splitHost } from '../camera/http';
+import type { CertState } from '../tls/camera-certs';
 import type { CameraState } from '../camera/status';
 import type { CameraFtpView, ClipsStall } from '../clips/ftp-health';
 import type { IntakeState } from '../events/intake';
@@ -15,7 +16,7 @@ import type { RebootState } from '../camera/reboot';
 // No secrets: no tokens, passwords, FTP settings, the PoE switch's host or
 // the camera serial.
 
-type ItemId = 'camera' | 'stream' | 'events' | 'ftp' | 'storage' | 'disk' | 'archive' | 'cpuTemp' | 'underVoltage' | 'inventory' | 'version';
+type ItemId = 'camera' | 'stream' | 'events' | 'ftp' | 'storage' | 'disk' | 'archive' | 'certificates' | 'cpuTemp' | 'underVoltage' | 'inventory' | 'version';
 export interface HealthItem { id: ItemId; label: string; value: boolean | number | string | null; text: string; problem: boolean }
 // archiveWarnPercent: while the Archive is on (spec 2026-10-05-archive-design §6).
 interface Thresholds { diskPercent: number; tempC: number; ftpStalledHours: number; archiveWarnPercent?: number }
@@ -40,11 +41,13 @@ export interface HealthInput {
   archive?: { count: number; bytes: number; percentOfDisk: number; warning: boolean } | null;
   // The other cameras, config order (spec 2026-10-05-multi-camera-host-design §6.5); camera, stream, intake and ftp above are the first.
   others?: CameraHealthInput[];
+  // The site CA (spec §10.5): absent or null without tls.site (the Pi: no item).
+  certificates?: { proxy: { notAfter: number } | null; cameras: { id: string; state: CertState }[]; problems: string[] } | null;
 }
 
 // One camera's part of the input and of the summary (spec 2026-10-05-multi-camera-host-design §6.5).
 export interface CameraHealthInput { camera: HealthInput['camera']; stream: HealthInput['stream']; intake: IntakeState; ftp: HealthInput['ftp'] }
-export interface CameraHealth { camera: HealthSummary['camera']; stream: HealthSummary['stream']; events: HealthSummary['events']; ftp: HealthSummary['ftp']; cert: null; items: HealthItem[] }
+export interface CameraHealth { camera: HealthSummary['camera']; stream: HealthSummary['stream']; events: HealthSummary['events']; ftp: HealthSummary['ftp']; cert: CertState | null; items: HealthItem[] }
 
 export interface HealthSummary {
   schema: 1;
@@ -127,7 +130,7 @@ function cameraHealth(c: CameraHealthInput): CameraHealth {
       stalled,
       eventsWithoutClip: stalled ? c.ftp.stalled!.events : 0,
     },
-    cert: null, // P5 fills it (spec §10.5)
+    cert: null, // buildHealth fills it from the certificates input (spec §10.5)
     items,
   };
 }
@@ -150,6 +153,7 @@ export function buildHealth(i: HealthInput): HealthSummary {
   const add = (id: ItemId, label: string, value: HealthItem['value'], text: string, problem: boolean) => items.push({ id, label, value, text, problem });
 
   const cams = [{ camera: i.camera, stream: i.stream, intake: i.intake, ftp: i.ftp }, ...(i.others ?? [])].map((c) => ({ id: c.camera.id, h: cameraHealth(c) }));
+  for (const c of cams) c.h.cert = i.certificates?.cameras.find((x) => x.id === c.id)?.state ?? null;
   for (const id of ['camera', 'stream', 'events', 'ftp'] as const) {
     let per = cams.map((c) => ({ cam: c.id, item: c.h.items.find((x) => x.id === id)! }));
     // FTP: only the cameras that upload (one FTP camera: its item, as on one camera); none: the first's "off".
@@ -165,6 +169,22 @@ export function buildHealth(i: HealthInput): HealthSummary {
   // The Archive's size against archive.warnPercent: a warning, never a limit.
   const ar = i.archive;
   if (ar) add('archive', 'Archive', ar.percentOfDisk, `${ar.count} clip${ar.count === 1 ? '' : 's'}, ${(ar.bytes / GB).toFixed(1)} GB (${ar.percentOfDisk.toFixed(1)} % of disk)`, ar.warning);
+
+  // The site CA's certificates (spec §10.5, Ruling P5-9): a problem within 14
+  // days of the first expiry, after a failed or refused push, or with a CA problem.
+  const ce = i.certificates;
+  if (ce) {
+    const days = (t: number) => Math.floor((t - i.now) / 86400_000);
+    const bad = ce.cameras.find((c) => c.state.lastPush && (c.state.lastPush.outcome === 'failed' || c.state.lastPush.outcome === 'refused'));
+    const expiries = [
+      ...(ce.proxy ? [{ who: 'the proxy', at: ce.proxy.notAfter }] : []),
+      ...ce.cameras.flatMap((c) => (c.state.mode === 'site-ca' && c.state.notAfter !== null ? [{ who: c.id, at: c.state.notAfter }] : [])),
+    ].sort((a, b) => a.at - b.at);
+    const first = expiries[0];
+    const soon = first !== undefined && days(first.at) < 14;
+    const text = ce.problems[0] ?? (bad ? `${bad.id}: push ${bad.state.lastPush!.outcome}${bad.state.mode === 'pinned' ? ' (pinned)' : ''}` : soon ? `${first.who} expires in ${days(first.at)} days` : first ? `valid ${days(first.at)} more days` : 'no certificates yet');
+    add('certificates', 'Certificates', first ? days(first.at) : null, text, ce.problems.length > 0 || !!bad || soon);
+  }
 
   const host = i.reading.host;
   if (host?.cpuTempC != null) add('cpuTemp', 'CPU temperature', host.cpuTempC, `${host.cpuTempC.toFixed(1)} °C`, host.cpuTempC >= i.thresholds.tempC);

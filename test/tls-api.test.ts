@@ -1,4 +1,6 @@
-import { existsSync, readdirSync, statSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { siteCa } from '../src/tls/ca';
 import https from 'https';
 import { join } from 'path';
 import request from 'supertest';
@@ -80,6 +82,45 @@ describe('the proxy side of the site CA (spec §10.4)', () => {
     const audit = (await request(p.base).get('/control/audit?action=config-change').set(auth(ADMIN_TOKEN))).text;
     expect(audit).not.toContain('PRIVATE');
     expect(audit).toContain(`Site CA rotated: ${before} → ${r.body.caFingerprint}`);
+  }, 60_000);
+
+  it('a camera outside the CA: no leaf, and the health item names it (Ruling P5-3)', async () => {
+    const s2 = await startSim();
+    const q = await startProxy(s2, { settings: {
+      camera: { host: `127.0.0.1:${s2.ports.https}`, protocol: 'https', user: 'proxy', onvifPort: s2.ports.onvif, rtspPort: s2.ports.rtsp || 554, baichuanPort: s2.camera.baichuanPort, statusPollS: 5 },
+      tls: { site: 'test', cameraSubnet: '10.9.0.0/16', proxyAddresses: '127.0.0.2' },
+    } });
+    try {
+      await q.proxy.certs!.tick();
+      const h = (await request(q.base).get('/api/local/health')).body;
+      expect(h.items.find((i: { id: string }) => i.id === 'certificates')).toMatchObject({ problem: true, text: 'cam1: 127.0.0.1 is outside the site CA: rotate the CA (tls-ca-rotate)' });
+      expect(s2.sim.engine.certs.state.enable).toBe(0);
+    } finally {
+      await q.proxy.stop();
+      await s2.close();
+    }
+  }, 60_000);
+
+  it('a CA without its key (a restore without ca.key): no new CA, HTTP as before, the health item says so (Review Focus 3)', async () => {
+    const s2 = await startSim();
+    const dir = mkdtempSync(join(tmpdir(), 'camproxy-nokey-'));
+    const made = mkdtempSync(join(tmpdir(), 'camproxy-nokey-ca-'));
+    const old = await siteCa(made, { site: 'test', cameraSubnet: '127.0.0.0/16', proxyAddresses: ['127.0.0.1'] });
+    mkdirSync(join(dir, 'data', 'tls'), { recursive: true });
+    writeFileSync(join(dir, 'data', 'tls', 'ca.pem'), old.certPem);
+    const port2 = await freePort();
+    const q = await startProxy(s2, { dir, settings: { tls: { site: 'test', cameraSubnet: '127.0.0.0/16', proxyAddresses: '127.0.0.1' }, server: { logLevel: 'silent', tls: { port: port2 } } } });
+    try {
+      expect(readFileSync(join(dir, 'data', 'tls', 'ca.pem'), 'utf8')).toBe(old.certPem);
+      expect(existsSync(join(dir, 'data', 'tls', 'ca.key'))).toBe(false);
+      expect((await request(q.base).get('/health')).status).toBe(200);
+      const h = (await request(q.base).get('/api/local/health')).body;
+      expect(h.items.find((i: { id: string }) => i.id === 'certificates')).toMatchObject({ problem: true, text: expect.stringMatching(/^ca\.key is missing/) });
+      await expect(new Promise((resolve, reject) => https.get({ host: '127.0.0.1', port: port2, path: '/health', rejectUnauthorized: false }, resolve).on('error', reject))).rejects.toThrow(/ECONNREFUSED/);
+    } finally {
+      await q.proxy.stop();
+      await s2.close();
+    }
   }, 60_000);
 
   it('without tls.site: 404 no_site_ca', async () => {

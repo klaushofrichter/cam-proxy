@@ -188,6 +188,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   const tlsProblems = (): string[] => [
     ...(caProblem ? [caProblem] : []),
     ...(ca ? [...proxyAddresses().filter((a) => !ca!.covers(a)), ...(ca.coversName(proxyName()) ? [] : [proxyName()])].map(outside) : []),
+    // A camera's own (an address outside the CA, a failed push), named.
+    ...(certs ? cams.ids().flatMap((id) => { const p = certs!.state(id).problem; return p ? [`${id}: ${p}`] : []; }) : []),
   ];
   // The proxy's own leaf: <dataDir>/tls/proxy.crt|key, issued anew when
   // missing, from another CA, for other addresses, or due for renewal.
@@ -254,6 +256,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       localHour: (t, id) => new Date(t + localOffsetMinutes(t, cams.get(id)?.timeInfo()) * 60_000).getUTCHours(),
       onTrust: (id) => cams.get(id)?.applyTrust(),
       audit,
+      onPush: (id, outcome) => metrics.onCertPush(id, outcome),
     });
   const startSiteCa = async (): Promise<void> => {
     const site = running.tls.site;
@@ -357,6 +360,10 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     sseClients: () => sse.clients(),
     version: VERSION,
     target: TARGET,
+    certs: () => [
+      ...(proxyLeaf ? [{ cam: 'proxy', notAfter: proxyLeaf.notAfter }] : []),
+      ...(certs ? cams.ids().flatMap((id) => { const st = certs!.state(id); return st.mode === 'site-ca' ? [{ cam: id, notAfter: st.notAfter }] : []; }) : []),
+    ],
   });
   storage.on('run', metrics.onRetention);
   recordingBusy = (p) => cams.list().some((w) => w.recordings.cache.busy(p));
@@ -676,6 +683,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       lastInventory: await lastInventory(),
       reading: hostMonitor.reading(),
       archive: archive.health(),
+      // The site CA (spec §10.5): only with tls.site (the Pi has no item).
+      certificates: running.tls.site ? { proxy: proxyLeaf ? { notAfter: proxyLeaf.notAfter } : null, cameras: cams.ids().map((id) => ({ id, state: certs?.state(id) ?? { mode: 'none' as const, servername: null, fingerprint: null, notAfter: null, lastPush: null, problem: null } })), problems: tlsProblems() } : null,
     });
   };
 
@@ -723,7 +732,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   app.use('/api', requireAccess('client', access), composeApi({ config: () => running, catalog, composer, cameras: cams, paused: () => storage.paused(), font, audit }));
   app.use('/api', requireAccess('client', access), stillChecksApi({ config: () => running, catalog, cameras: cams, analytics, audit }));
   app.use('/api', requireAccess('client', access), archiveApi({ config: () => running, catalog, archive, composer, cameras: cams }));
-  app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, cameras: cams, sse }));
+  app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, cameras: cams, sse, tls: (id) => certs?.state(id) }));
   // The audit log: admins and the audit token, GET (and HEAD) only. The access check is
   // on the route inside the router; other /control paths pass on untouched
   // to the admin-only routes below.
