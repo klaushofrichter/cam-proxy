@@ -1,7 +1,9 @@
 <script lang="ts">
   import { refresh, refreshTick, status } from '../lib/state';
   import { cameraNameProblem, CAMERA_NAME_MAX, nameSaveError } from '../lib/camera-name';
-  import { multiCamera } from '../lib/cameras';
+  import { blockOf, cameraIds, multiCamera, pickCamera, selectedCamera } from '../lib/cameras';
+  import { cameraPath, settingGroups } from '../lib/camera-settings';
+  import AddCameraCard from '../components/AddCameraCard.svelte';
   import { onMount } from 'svelte';
   import { api, ApiError } from '../lib/api';
   import AnalyticsSettings from '../components/AnalyticsSettings.svelte';
@@ -19,7 +21,16 @@
   let drafts = $state<Record<string, string>>({});
   let message = $state('');
 
-  const groups = $derived(Object.keys(view).filter((p) => !p.startsWith('analytics.')).reduce<Record<string, string[]>>((g, p) => ((g[p.split('.')[0]] ??= []).push(p), g), {}));
+  // The host's settings by group, then the camera picked in the top bar
+  // (spec 2026-10-05-multi-camera-host-design §6.3).
+  const multi = $derived(multiCamera($status));
+  const cam = $derived(pickCamera(cameraIds($status), $selectedCamera));
+  const block = $derived(blockOf($status, $selectedCamera));
+  const split = $derived(settingGroups(Object.keys(view).filter((p) => !p.startsWith('analytics.')), cam));
+  const cards = $derived([
+    ...Object.entries(split.host).map(([group, paths]) => ({ key: group, title: group, prefix: group, paths, camera: false })),
+    ...(cam && split.camera.length ? [{ key: `camera-${cam}`, title: `Camera ${block?.camera.name ?? cam}${multi ? ` (${cam})` : ''}`, prefix: `cameras.${cam}`, paths: split.camera, camera: true }] : []),
+  ]);
   const load = async () => (view = await api<Record<string, Setting>>('GET', '/control/config'));
   onMount(() => void load());
   $effect(() => {
@@ -90,7 +101,7 @@
     nameSaving = true;
     nameError = '';
     try {
-      const r = await api<{ name: string }>('PUT', '/control/camera/name', { name: nameDraft });
+      const r = await api<{ name: string }>('PUT', cameraPath(cam, multi, 'name'), { name: nameDraft });
       nameDraft = undefined;
       message = `Camera name saved on the camera: ${r.name}`;
       void refresh();
@@ -98,6 +109,20 @@
       nameError = e instanceof ApiError ? nameSaveError(e.status, e.body) : 'Not saved';
     } finally {
       nameSaving = false;
+    }
+  }
+
+  // A camera added here (overrides.json) can be removed here; its files stay
+  // until retention removes them (Ruling P2-6).
+  let removing = $state<string | null>(null);
+  async function removeCamera(id: string) {
+    removing = null;
+    try {
+      view = await api('DELETE', `/control/config/${encodeURIComponent(`cameras.${id}`)}`);
+      message = `Camera ${id} removed; its stills, clips and events stay until retention removes them`;
+      void refresh();
+    } catch (e) {
+      message = e instanceof ApiError ? e.message : 'not removed';
     }
   }
 
@@ -117,30 +142,30 @@
   <AnalyticsSettings {view} onsaved={(v) => (view = v as Record<string, Setting>)} />
   <FindCameraCard />
   <PoeSwitchCard />
-  {#each Object.entries(groups) as [group, paths] (group)}
-    <div class="card">
-      <h3>{group}</h3>
+  {#each cards as card (card.key)}
+    <div class="card" data-testid="settings-card-{card.key}">
+      <div class="card-head"><h3 class:camera={card.camera}>{card.title}</h3>{#if card.camera && block?.source === 'added'}<button class="danger" onclick={() => (removing = cam)} data-testid="remove-camera">Remove camera</button>{/if}</div>
       <table>
         <tbody>
-          {#each paths as p (p)}
+          {#each card.paths as p (p)}
             {@const s = view[p]}
             {@const same = s.source === 'override' ? sameBadge(p, s.resetTo) : null}
-            {#if /^cameras\.[^.]+\.name$/.test(p) && !multiCamera($status)}
+            {#if /^cameras\.[^.]+\.name$/.test(p)}
             <tr data-testid="setting-camera-name">
               <td><label for="camera-name">Camera name (stored on the camera)</label></td>
               <td>
-                <input id="camera-name" value={nameDraft ?? $status?.camera.name ?? ''} maxlength={CAMERA_NAME_MAX + 8} oninput={(e) => ((nameDraft = e.currentTarget.value), (nameError = ''))} onkeydown={(e) => e.key === 'Enter' && void saveName()} aria-invalid={!!nameProblem} data-testid="input-camera-name" />
+                <input id="camera-name" value={nameDraft ?? block?.camera.name ?? ''} maxlength={CAMERA_NAME_MAX + 8} oninput={(e) => ((nameDraft = e.currentTarget.value), (nameError = ''))} onkeydown={(e) => e.key === 'Enter' && void saveName()} aria-invalid={!!nameProblem} data-testid="input-camera-name" />
                 {#if nameProblem}<div class="field-error" data-testid="camera-name-problem">{nameProblem}</div>{/if}
                 {#if nameError}<div class="field-error" data-testid="camera-name-error">{nameError}</div>{/if}
               </td>
-              <td>{#if $status?.camera.nameSource === 'config'}<span class="badge" title="the camera was not read yet: the name from config.json">not read yet</span>{/if}</td>
+              <td>{#if block?.camera.nameSource === 'config'}<span class="badge" title="the camera was not read yet: the name from config.json">not read yet</span>{/if}</td>
               <td class="actions">
                 {#if nameDraft !== undefined}<button onclick={() => void saveName()} disabled={!!nameProblem || nameSaving} data-testid="save-camera-name">Save</button>{/if}
               </td>
             </tr>
             {:else}
             <tr data-testid="setting-{p}">
-              <td class="mono">{p.slice(group.length + 1)}</td>
+              <td class="mono">{p.slice(card.prefix.length + 1)}</td>
               <td>
                 <input value={drafts[p] ?? shown(s.value)} oninput={(e) => (drafts[p] = e.currentTarget.value)} data-testid="input-{p}" disabled={(typeof s.value === 'object' && s.value !== null) || isEnvSet(s)} readonly={isEnvSet(s)} title={isEnvSet(s) ? envNote(s) : undefined} />
                 {#if isEnvSet(s)}<div class="env-note" data-testid="env-note-{p}">{envNote(s)}</div>{/if}
@@ -157,7 +182,11 @@
       </table>
     </div>
   {/each}
+  <AddCameraCard existing={cameraIds($status)} onadded={(v) => ((view = v as Record<string, Setting>), void refresh())} />
 </section>
+{#if removing}
+  <ConfirmDialog title="Remove camera {removing}" message="The proxy stops this camera at once. Its stills, clips and events stay until retention removes them." confirmLabel="Remove camera" oncancel={() => (removing = null)} onconfirm={() => void removeCamera(removing!)} />
+{/if}
 {#if asking}
   <ConfirmDialog title="Reset to defaults" message={askMessage} items={asking} confirmLabel={askLabel} oncancel={() => (asking = null)} onconfirm={() => void resetAll()} />
 {/if}
@@ -170,6 +199,9 @@
   .head-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
   h2 { margin: 0; font-size: 20px; }
   h3 { margin: 0 0 6px; font-size: 16px; text-transform: capitalize; }
+  h3.camera { text-transform: none; }
+  .card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+  button.danger { border-color: #ef4444; color: #ef4444; }
   .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 14px; }
   td { padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }

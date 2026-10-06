@@ -8,7 +8,7 @@
   import { poeAlert, poeOnText, powerCycleFailText, powerCycleMessage, restartWatch, RESTART_GIVE_UP_MS, type Health } from '../lib/maintenance';
   import { refresh, refreshTick, status } from '../lib/state';
   import { clearMatches, clearMessage } from '../lib/archive';
-  import { actionPath, blockOf, multiCamera, selectedCamera } from '../lib/cameras';
+  import { actionPath, blockOf, selectedCamera } from '../lib/cameras';
   // The actions that act on a camera: the picked one when there are several.
   const CAMERA_ACTIONS = ['camera-test', 'onvif-resubscribe', 'camera-ftp-setup', 'camera-ftp-test', 'camera-ftp-off', 'restart'];
 
@@ -205,15 +205,10 @@
     }, 1000);
   }
   onMount(() => () => clearInterval(restartTimer));
-  // Several cameras: the camera actions act on the camera picked in the top bar.
-  const multi = $derived(multiCamera($status));
 </script>
 
 <section>
   <h2>Maintenance</h2>
-  {#if multi}
-    <div class="card" data-testid="multi-camera-note"><p>Several cameras: the camera actions act on <strong>{$selectedCamera ?? 'the first camera'}</strong>, the camera picked in the top bar; per-camera settings come with the next release.</p></div>
-  {/if}
   <div class="card">
     <div class="buttons">
       <button onclick={() => void run('Camera test', 'camera-test')} data-testid="action-camera-test">Test the camera</button>
