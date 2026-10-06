@@ -1,3 +1,4 @@
+import { ensureNtp, type NtpOutcome } from './ntp';
 import { EventEmitter } from 'events';
 import { withCamera, type AuditLog } from '../audit/audit-log';
 import type { Catalog } from '../catalog/db';
@@ -284,6 +285,21 @@ export class CameraWorker extends EventEmitter {
     this.d.log.append(this.id, 'camera', { ...(this.toldName !== undefined ? { name: this.toldName } : {}), address: host });
   }
 
+  private ntpAt = 0;
+  // The camera's NTP server → ntp.server (spec 2026-10-05-multi-camera-host-design
+  // §14.2): a whole-object SetNtp, read back, logged out. Once an hour at most
+  // unless forced (the camera-ntp-set action); null without ntp.server (the Pi).
+  async syncNtp(force = false): Promise<NtpOutcome | null> {
+    const server = this.d.running().ntp.server;
+    if (!server || (!force && Date.now() - this.ntpAt < 3600_000)) return null;
+    this.ntpAt = Date.now();
+    const r = await ensureNtp(this.client, server);
+    if (r.outcome !== 'already') {
+      this.audit.write({ action: 'camera-ntp', category: ['configuration'], type: ['change'], outcome: r.outcome === 'set' ? 'success' : 'failure', user: 'system', message: `Camera NTP server ${r.outcome} (${server})${r.detail ? `: ${r.detail}` : ''}`, details: { server, outcome: r.outcome } });
+    }
+    return r.outcome;
+  }
+
   // The camera's trust changed (it serves its site-CA leaf now, or stopped):
   // the client verifies accordingly from its next request on.
   applyTrust(): void {
@@ -308,6 +324,8 @@ export class CameraWorker extends EventEmitter {
     // The camera's FTP settings as soon as it answers (#93), then every few minutes.
     this.status.on('change', (s: CameraState) => {
       if (s.online) void this.ftpWatch.checkNow();
+      // The camera's NTP server on the host (spec §14.2, Ruling P5-7): at most once an hour.
+      if (s.online) void this.syncNtp().catch((err: Error) => logger.warn({ cameraId: this.id, err: err.message }, 'camera_ntp_failed'));
       // Online for 10 minutes: the next failure starts the backoff at 5 s again.
       this.onlineSince = s.online ? (this.onlineSince ?? Date.now()) : null;
       if (this.onlineSince !== null) this.backoff.healthy(this.onlineSince, Date.now());

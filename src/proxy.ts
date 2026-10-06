@@ -815,6 +815,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       envFile: () => loaded.env.CAMPROXY_ENV_FILE || undefined,
       archive,
       cameraId: () => cams.first().id,
+      cameraNtp: (cam) => worker(cam).syncNtp(true),
       tls: {
         view: tlsView,
         pushNow: (cam) => (certs ? certs.pushNow(cam) : Promise.resolve({ outcome: 'failed' as const, served: null, detail: running.tls.site ? (caProblem ?? 'the site CA is not ready') : 'no site CA: tls.site is not set', tookMs: 0 })),

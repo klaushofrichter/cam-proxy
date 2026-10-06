@@ -39,6 +39,7 @@ import { InventoryBusyError, InventoryStoppingError, RepairRefusedError, RUN_ID,
 import type { Archive } from '../archive/service';
 import type { TlsView } from '../tls/camera-certs';
 import type { PushResult } from '../tls/push';
+import type { NtpOutcome } from '../cameras/ntp';
 
 interface FtpStatus {
   enabled: boolean;
@@ -120,6 +121,8 @@ interface ControlDeps {
   cameraId: () => string;
   // The site CA (spec 2026-10-05-multi-camera-host-design §10.4): the Certificates
   // card, "Push now", and a new CA. rotate() is null without tls.site.
+  // The camera's NTP server → ntp.server now (spec §14.2); null without ntp.server.
+  cameraNtp: (cam: string) => Promise<NtpOutcome | null>;
   tls: { view: () => TlsView; pushNow: (cam: string) => Promise<PushResult>; rotate: () => Promise<{ from: string | null; to: string }> | null };
   // Every camera's status block, config order; the number of cameras (spec 2026-10-05-multi-camera-host-design §6.3).
   cameras: CameraRegistry;
@@ -252,7 +255,7 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
 // The camera actions (spec 2026-10-05-multi-camera-host-design §6.3): their
 // control-action record names the camera; on a proxy with several cameras
 // they need a camera (the routes of phase 2). The host actions work as before.
-export const CAMERA_ACTIONS = new Set(['camera-test', 'onvif-resubscribe', 'camera-ftp-setup', 'camera-ftp-test', 'camera-ftp-off', 'restart', 'camera-reboot', 'camera-powercycle', 'camera-poe-on', 'poe-switch-read', 'inventory', 'inventory-repair', 'inventory-cancel', 'camera-cert-push']);
+export const CAMERA_ACTIONS = new Set(['camera-test', 'onvif-resubscribe', 'camera-ftp-setup', 'camera-ftp-test', 'camera-ftp-off', 'restart', 'camera-reboot', 'camera-powercycle', 'camera-poe-on', 'poe-switch-read', 'inventory', 'inventory-repair', 'inventory-cancel', 'camera-cert-push', 'camera-ntp-set']);
 
 // What a camera action answers on a proxy with several cameras (spec §6.3; the camera routes are phase 2).
 const cameraRequired = (path: string) => `several cameras: name the camera, ${path} (or ?cam=<id>); GET /control/cameras lists them`;
@@ -685,6 +688,11 @@ export function controlApi(d: ControlDeps): express.Router {
       // "Push now" (spec §10.4): the push's own camera-cert-push record when one ran.
       case 'camera-cert-push':
         return void res.json(await d.tls.pushNow(cam));
+      case 'camera-ntp-set': {
+        const outcome = await d.cameraNtp(cam);
+        if (outcome === null) return fail(409, 'not_configured', 'ntp.server is not set');
+        return void res.json({ outcome });
+      }
       // A new site CA (Ruling P5-3): every cams pin of this proxy breaks, so
       // only with {confirm: 'rotate'}; one config-change record.
       case 'tls-ca-rotate': {
