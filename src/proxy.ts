@@ -69,6 +69,7 @@ import { archiveApi } from './api/archive-api';
 import { Archive } from './archive/service';
 import { discover } from './camera/discovery';
 import { CamsAdmin } from './fleet/service';
+import { camsAdminApi } from './api/cams-admin-api';
 import type { Timing } from './fleet/client';
 import { CONFIG_SCHEMA } from './config/schema';
 
@@ -835,6 +836,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // on the route inside the router; other /control paths pass on untouched
   // to the admin-only routes below.
   app.use('/control', auditApi({ audit, guard: requireAccess('audit-read', access), retentionDays: () => running.retention.auditDays }));
+  // The cams-admin card (spec 2026-10-06-cams-admin-phase1-design §9.2).
+  app.use('/control', requireAccess('admin', access), camsAdminApi({ camsAdmin, audit }));
   app.use(
     '/control',
     requireAccess('admin', access),
