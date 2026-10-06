@@ -376,7 +376,10 @@ describe('camera certificates (spec §10.1.3)', () => {
       expect(a.audits.at(-1)).toMatchObject({ action: 'camera-trust', user: 'admin', message: 'Camera trust cleared (cam3): site-ca → none' });
       a.served.set('cam3', foreign('NEWCAM'));
       await a.certs.tick();
-      expect(a.pushes).toEqual(['cam3', 'cam3']); // first use again
+      expect(a.pushes).toEqual(['cam3']); // no automatic first push after a clear (third review)
+      expect(a.certs.state('cam3').problem).toBe('cam3: its trust was cleared: Push now to push its first certificate');
+      await a.certs.pushNow('cam3');
+      expect(a.pushes).toEqual(['cam3', 'cam3']);
     }, 60_000);
 
     it('the previous CA: only for cameras still serving its leaf; dropped after 30 days or by the admin, the laggards named', async () => {
@@ -427,6 +430,75 @@ describe('camera certificates (spec §10.1.3)', () => {
       const b = setup({ dir: a.dir, served: a.served, deps: { push: async (_id, _issue, o) => ((expected = o?.factory), { outcome: 'failed', served: null, tookMs: 0 }) } });
       await b.certs.pushNow('cam3');
       expect(expected).toBe('SHA256:FACTORY3');
+    }, 60_000);
+  });
+
+  describe('third security review', () => {
+    const two = [{ id: 'cam3', address: '192.168.60.13', protocol: 'https' as const }, { id: 'cam4', address: '192.168.60.14', protocol: 'https' as const }];
+    it('an unreadable state blocks automatic pushes per camera: an admin push to cam3 does not unblock cam4 (pinned, its pin lost)', async () => {
+      const a = setup({ cameras: two, refuse: true });
+      await a.certs.tick(); // both pinned (refused)
+      a.setMode({});
+      writeFileSync(join(a.dir, 'cameras', 'state.json'), '{broken');
+      const b = setup({ dir: a.dir, served: a.served, cameras: two });
+      expect((await b.certs.pushNow('cam3')).outcome).toBe('pushed');
+      b.served.set('cam4', foreign('EVIL4'));
+      b.at(dayAt(b.now(), 1, 4, 5));
+      await b.certs.tick();
+      expect(b.pushes).toEqual(['cam3']);
+      expect(b.certs.state('cam4').problem).toBe('cam4: no automatic push since the certificate state was unreadable: check the camera, then Push now');
+      // Also after a restart (the block is kept in the rewritten state).
+      const c = setup({ dir: a.dir, served: b.served, cameras: two });
+      c.at(dayAt(c.now(), 1, 4, 5));
+      await c.certs.tick();
+      expect(c.pushes).toEqual([]);
+      expect((await c.certs.pushNow('cam4')).outcome).toBe('pushed');
+    }, 60_000);
+
+    it('clearTrust also forgets the factory certificate (a replaced camera), audited with the cleared value', async () => {
+      const a = setup({ refuse: true });
+      await a.certs.tick();
+      expect(a.certs.factory('cam3')).toBe('SHA256:FACTORY3');
+      a.certs.clearTrust('cam3', { user: 'admin' });
+      expect(a.certs.factory('cam3')).toBeNull();
+      expect(a.audits.at(-1)).toMatchObject({ action: 'camera-trust', details: { factory: 'SHA256:FACTORY3' } });
+    }, 60_000);
+
+    it('everServed: a camera that served our leaf keeps that mark whatever its mode (public, http, an old leaf only)', async () => {
+      const a = setup();
+      await a.certs.tick();
+      expect(a.certs.everServed('cam3')).toBe(true);
+      a.setCameras([{ id: 'cam3', address: '192.168.60.13', protocol: 'http' }]);
+      await a.certs.tick();
+      expect(a.certs.state('cam3').mode).toBe('none');
+      expect(a.certs.everServed('cam3')).toBe(true);
+      a.certs.clearTrust('cam3', { user: 'admin' });
+      expect(a.certs.everServed('cam3')).toBe(false);
+    }, 60_000);
+
+    it('the previous CA: dropped (audited) when the clock went back before the rotation, or its time is unknown', async () => {
+      const a = setup();
+      await a.certs.tick();
+      let current = ca;
+      const b = setup({ dir: a.dir, served: a.served, deps: { ca: () => current } });
+      current = other;
+      b.certs.reset('t1', ca.certPem);
+      b.open.add('cam3');
+      b.at(b.now() - 3600_000);
+      await b.certs.tick();
+      expect(b.certs.trustedCas('cam3')).toEqual([other.certPem]);
+      expect(b.audits.some((r) => r.message === 'Previous site CA no longer trusted (the clock is before the rotation)')).toBe(true);
+    }, 60_000);
+
+    it('the previous CA dropped because no camera serves its leaf any more: audited', async () => {
+      const a = setup();
+      await a.certs.tick();
+      let current = ca;
+      const b = setup({ dir: a.dir, served: a.served, deps: { ca: () => current } });
+      current = other;
+      b.certs.reset('t1', ca.certPem);
+      await b.certs.tick();
+      expect(b.audits.some((r) => r.message === 'Previous site CA no longer trusted (every camera serves a leaf of the new one)')).toBe(true);
     }, 60_000);
   });
 });

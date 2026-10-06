@@ -273,6 +273,8 @@ const OWN_AUDIT = new Set(['camera-reboot', 'camera-powercycle', 'camera-poe-on'
 // Find camera and Use this address together, per client and minute: a probe
 // is 3 s of multicast, a write a backup.
 export const FIND_CAMERA_PER_MINUTE = 6;
+// tls-ca-rotate, tls-ca-drop-previous and camera-trust-clear together, per client and minute.
+export const TRUST_ACTIONS_PER_MINUTE = 6;
 
 // Whether "Use this address" can write the .env file, and why not.
 function envFileState(path: string | undefined): { writable: boolean; reason?: string; path?: string } {
@@ -469,7 +471,11 @@ export function controlApi(d: ControlDeps): express.Router {
 
   // Find camera and Use this address share a rate limit (the other actions have none).
   const findLimit = rateLimit({ windowMs: 60_000, limit: FIND_CAMERA_PER_MINUTE, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } });
-  const actionLimit: express.RequestHandler = (req, res, next) => (req.params.name === 'find-camera' || req.params.name === 'camera-address' ? findLimit(req, res, next) : next());
+  // The site CA's trust actions (rotate, drop the previous CA, clear a camera): their own limit.
+  const trustLimit = rateLimit({ windowMs: 60_000, limit: TRUST_ACTIONS_PER_MINUTE, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } });
+  const TRUST = new Set(['tls-ca-rotate', 'tls-ca-drop-previous', 'camera-trust-clear']);
+  const actionLimit: express.RequestHandler = (req, res, next) =>
+    req.params.name === 'find-camera' || req.params.name === 'camera-address' ? findLimit(req, res, next) : TRUST.has(String(req.params.name)) ? trustLimit(req, res, next) : next();
 
   const action = async (req: express.Request, res: Response) => {
     const name = String(req.params.name);
@@ -696,12 +702,14 @@ export function controlApi(d: ControlDeps): express.Router {
         return void res.json(await d.tls.pushNow(cam, { user: 'admin', ...who(req), requestedBy }));
       // The admin's decision to drop a camera's site-CA trust or pin (back to first use); audited.
       case 'camera-trust-clear': {
+        if (req.body?.confirm !== 'clear') return fail(400, 'invalid', "the camera loses its site-CA trust or pin and needs a Push now: send {confirm: 'clear'}");
         const st = d.tls.clearTrust(cam, { user: 'admin', ...who(req), requestedBy });
         if (!st) return fail(409, 'not_available', 'no camera certificate trust is kept on this proxy');
         return void res.json(st);
       }
       // After tls-ca-rotate: stop trusting the previous CA now (else 30 days); audited.
       case 'tls-ca-drop-previous':
+        if (req.body?.confirm !== 'drop') return fail(400, 'invalid', "cameras still on the previous CA are refused from now on: send {confirm: 'drop'}");
         if (!d.tls.dropPrevious({ user: 'admin', ...who(req), requestedBy })) return fail(409, 'not_available', 'no previous CA is trusted');
         return void res.json({ dropped: true });
       case 'camera-ntp-set': {

@@ -69,8 +69,11 @@ interface Extra {
   pendingRenewal: boolean; // a renewal the 04:00 window couldn't push (an open event): pushed when it ends
   onPrevious: boolean; // serves a leaf of the previous CA (after a rotation)
   factory: string | null; // the certificate seen after a CertificateClear: expected after the next one
+  // No automatic push until an admin pushes to (or clears) this camera: 'unreadable' (state.json was), 'cleared' (camera-trust-clear).
+  blocked: 'unreadable' | 'cleared' | null;
 }
-interface Stored extends CertState { everSiteCa?: boolean; pin?: Served | null; onPrevious?: boolean; factory?: string | null }
+interface Stored extends CertState { everSiteCa?: boolean; pin?: Served | null; onPrevious?: boolean; factory?: string | null; blocked?: string | null }
+const BLOCKED = { unreadable: (id: string) => `${id}: no automatic push since the certificate state was unreadable: check the camera, then Push now`, cleared: (id: string) => `${id}: its trust was cleared: Push now to push its first certificate` };
 
 // Each camera's certificate from the site CA (spec 2026-10-05-multi-camera-host-design
 // §10.1.3, §10.4): issued, pushed and renewed one camera at a time. Leaf keys
@@ -131,7 +134,7 @@ export class CameraCerts {
   }
   private extra(id: string): Extra {
     let e = this.extras.get(id);
-    if (!e) this.extras.set(id, (e = { everSiteCa: this.hadLeaf(id), pin: null, pendingRenewal: false, onPrevious: false, factory: null }));
+    if (!e) this.extras.set(id, (e = { everSiteCa: this.hadLeaf(id), pin: null, pendingRenewal: false, onPrevious: false, factory: null, blocked: this.corrupt ? 'unreadable' : null }));
     return e;
   }
 
@@ -149,6 +152,10 @@ export class CameraCerts {
   pin(id: string): Served | null {
     const e = this.extras.get(id);
     return this.states.get(id)?.mode === 'pinned' && e?.pin ? { ...e.pin } : null;
+  }
+  // Whether the camera ever served our leaf (its client never falls back to unverified).
+  everServed(id: string): boolean {
+    return this.extra(id).everSiteCa;
   }
   factory(id: string): string | null {
     return this.extras.get(id)?.factory ?? null;
@@ -174,7 +181,7 @@ export class CameraCerts {
     }
     if (typeof raw.previousCa === 'string' && raw.previousCa.includes('BEGIN CERTIFICATE')) {
       this.previousCa = raw.previousCa;
-      this.previousSince = typeof raw.previousSince === 'number' ? raw.previousSince : this.now();
+      this.previousSince = typeof raw.previousSince === 'number' ? raw.previousSince : 0; // unknown: dropped at the next pass
     }
     const ids = new Set(Object.keys(raw.cameras ?? {}));
     try {
@@ -206,14 +213,15 @@ export class CameraCerts {
         Object.assign(st, { mode: 'site-ca', servername: ok.servername, fingerprint: ok.fingerprint, notAfter: typeof ok.notAfter === 'number' ? ok.notAfter : null });
       }
       this.states.set(id, st);
-      this.extras.set(id, { everSiteCa: ok?.everSiteCa === true || this.hadLeaf(id), pin, pendingRenewal: false, onPrevious, factory: typeof ok?.factory === 'string' ? ok.factory : null });
+      const blocked = ok?.blocked === 'unreadable' || ok?.blocked === 'cleared' ? ok.blocked : this.corrupt ? 'unreadable' : null;
+      this.extras.set(id, { everSiteCa: ok?.everSiteCa === true || this.hadLeaf(id), pin, pendingRenewal: false, onPrevious, factory: typeof ok?.factory === 'string' ? ok.factory : null, blocked });
     }
   }
   private save(): void {
     const cameras = Object.fromEntries(
       [...this.states].map(([id, s]) => {
         const e = this.extras.get(id);
-        return [id, { ...s, everSiteCa: e?.everSiteCa ?? false, pin: e?.pin ?? null, onPrevious: e?.onPrevious ?? false, factory: e?.factory ?? null }];
+        return [id, { ...s, everSiteCa: e?.everSiteCa ?? false, pin: e?.pin ?? null, onPrevious: e?.onPrevious ?? false, factory: e?.factory ?? null, blocked: e?.blocked ?? null }];
       }),
     );
     const file = join(this.camDir(), 'state.json');
@@ -290,10 +298,12 @@ export class CameraCerts {
     if (existsSync(dir)) for (const f of readdirSync(dir)) if (f.startsWith(`${id}.crt.old-`) || f.startsWith(`${id}.key.old-`)) renameSync(join(dir, f), join(dir, f.replace('.old-', '.cleared-old-')));
     this.leaves.delete(id);
     const e = this.extra(id);
-    Object.assign(e, { everSiteCa: false, pin: null, pendingRenewal: false, onPrevious: false });
-    this.states.set(id, { ...this.blank(), lastPush: prev.lastPush });
+    const factory = e.factory;
+    // Back to first use, but the first push is the admin's: no automatic one.
+    Object.assign(e, { everSiteCa: false, pin: null, pendingRenewal: false, onPrevious: false, factory: null, blocked: 'cleared' });
+    this.states.set(id, { ...this.blank(), lastPush: prev.lastPush, problem: BLOCKED.cleared(id) });
     this.save();
-    this.audit(id, 'success', `Camera trust cleared (${id}): ${prev.mode} → none`, who, { from: prev.mode, fingerprint: prev.fingerprint });
+    this.audit(id, 'success', `Camera trust cleared (${id}): ${prev.mode} → none`, who, { from: prev.mode, fingerprint: prev.fingerprint, factory });
     this.d.onTrust?.(id);
     return this.state(id);
   }
@@ -361,7 +371,9 @@ export class CameraCerts {
   }
 
   private async pass(): Promise<void> {
-    if (this.previousCa && this.now() - this.previousSince >= PREVIOUS_CA_DAYS * DAY) this.dropPrevious(`Previous site CA no longer trusted (${PREVIOUS_CA_DAYS} days after the rotation)`);
+    // The window never grows: a clock before the rotation (or an unknown rotation time) ends it too.
+    if (this.previousCa && (!this.previousSince || this.now() < this.previousSince)) this.dropPrevious('Previous site CA no longer trusted (the clock is before the rotation)');
+    else if (this.previousCa && this.now() - this.previousSince >= PREVIOUS_CA_DAYS * DAY) this.dropPrevious(`Previous site CA no longer trusted (${PREVIOUS_CA_DAYS} days after the rotation)`);
     for (const cam of this.d.cameras()) {
       if (this.stopped) return;
       try {
@@ -371,11 +383,7 @@ export class CameraCerts {
       }
     }
     // No camera on the previous CA's leaf any more: it is no longer trusted.
-    if (this.previousCa && ![...this.extras.values()].some((e) => e.onPrevious)) {
-      this.previousCa = null;
-      this.save();
-      for (const id of this.states.keys()) this.d.onTrust?.(id);
-    }
+    if (this.previousCa && ![...this.extras.values()].some((e) => e.onPrevious)) this.dropPrevious('Previous site CA no longer trusted (every camera serves a leaf of the new one)');
   }
 
   // The "Push now" action: no window, no back-off, still never during an open event.
@@ -462,7 +470,12 @@ export class CameraCerts {
         if (last?.outcome === 'failed' && now - last.at < FAILED_RETRY_MS) return null;
       }
     }
-    if (this.corrupt && !manual) return null; // an unreadable state: no automatic pushes (problems())
+    if (e.blocked && !manual) {
+      // After an unreadable state or a clear: only the admin pushes to this camera.
+      this.set(cam.id, { problem: BLOCKED[e.blocked](cam.id) });
+      this.save();
+      return null;
+    }
     if (this.d.openEvent(cam.id)) {
       if (renewal && inWindow) e.pendingRenewal = true; // never during an event: when it ends (Review Focus 1)
       return skip('an event is open: try again when it has ended', served.fingerprint);
@@ -473,8 +486,7 @@ export class CameraCerts {
     const lastPush = { at: now, outcome: r.outcome };
     if ((r.outcome === 'pushed' || r.outcome === 'current') && r.leaf) {
       this.store(cam.id, r.leaf as Leaf);
-      Object.assign(e, { everSiteCa: true, pin: null, onPrevious: false });
-      if (manual) this.corrupt = false; // an admin's push puts the state right again
+      Object.assign(e, { everSiteCa: true, pin: null, onPrevious: false, blocked: null });
       this.set(cam.id, { mode: 'site-ca', servername: name, fingerprint: r.leaf.fingerprint, notAfter: r.leaf.notAfter, lastPush, problem: null });
     } else if (r.outcome === 'refused' && (!e.everSiteCa || manual) && r.served && r.servedPem) {
       // The fallback (spec §10.1.4): the proxy pins what the camera serves, and cams pins the same.

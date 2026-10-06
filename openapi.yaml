@@ -785,10 +785,13 @@ paths:
     post:
       summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart (the camera side), camera-reboot, camera-powercycle, camera-poe-on, poe-switch-read, restart-proxy (the process), inventory ({kind, camera?}), inventory-repair ({kind, runId}), inventory-cancel, find-camera, camera-address ({host}), archive-clear ({count}), camera-cert-push, camera-ntp-set, camera-trust-clear, tls-ca-rotate ({confirm: rotate}), tls-ca-drop-previous
       description: |
-        camera-trust-clear drops a camera's site-CA trust or pin (its leaf moved aside; the next push trusts what it serves
-        then): answers the camera's certificate state; 409 not_available when no camera trust is kept here; a camera-trust
-        audit record. tls-ca-drop-previous stops trusting the previous CA after a rotation now (otherwise 30 days):
-        { dropped: true }; 409 not_available without one; a camera-trust audit record.
+        camera-trust-clear ({"confirm":"clear"}) drops a camera's site-CA trust or pin (its leaf moved aside, its factory
+        certificate forgotten; its next push is an admin's camera-cert-push, which trusts what it serves then): answers the
+        camera's certificate state; 400 invalid without the confirm; 409 not_available when no camera trust is kept here; a
+        camera-trust audit record. tls-ca-drop-previous ({"confirm":"drop"}) stops trusting the previous CA after a rotation
+        now (otherwise 30 days): { dropped: true }; 400 invalid without the confirm, 409 not_available without one; a
+        camera-trust audit record. tls-ca-rotate, tls-ca-drop-previous and camera-trust-clear: at most 6 a minute per client
+        together (429 rate_limited).
         camera-ntp-set sets the camera's NTP server to ntp.server now (GetNtp, a whole-object SetNtp, GetNtp again;
         the proxy also does it when the camera comes online, at most once an hour): { outcome (set, already,
         unsupported, failed) }; 409 not_configured without ntp.server. A camera-ntp audit record unless already.

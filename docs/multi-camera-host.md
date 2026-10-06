@@ -603,9 +603,12 @@ reaches the proxy at `https://<lan.address>:8443` with servername
 pushed again (a camera stays trusted through the previous CA until then, at
 most 30 days; `tls-ca-drop-previous` ends that at once).
 
-**Clearing a camera's trust** (`POST /control/cameras/<cam>/actions/camera-trust-clear`,
-admin, audited): needed when a camera is replaced on purpose and it should be
-treated as new (the next push trusts what it serves then). Without it the
+**Clearing a camera's trust** (`POST /control/cameras/<cam>/actions/camera-trust-clear`
+with `{"confirm":"clear"}`, admin, audited): needed when a camera is replaced
+on purpose and it should be treated as new; then "Push now" pushes its first
+certificate (it trusts what the camera serves at that moment). Losing
+`data/tls/cameras` entirely makes every camera new again: restore it from the
+backup. Without it the
 proxy keeps refusing a camera that serves an unexpected certificate, also
 when `tls.site` is removed or the CA can't be loaded. Every cams pin of this proxy breaks: give cams the new
 fingerprint (it accepts a list, so add the new one first). Needed after an

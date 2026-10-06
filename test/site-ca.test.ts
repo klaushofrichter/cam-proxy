@@ -134,11 +134,17 @@ describe('the site CA end to end (spec §15)', () => {
     expect(w.client.trusted()).toBe(true);
     expect(p.proxy.certs).toBeDefined();
     expect(await certItem()).toMatchObject({ problem: true, text: 'tls.site is not set: the cameras keep their site-CA trust (camera-trust-clear drops it)' });
-    const r = await request(p.base).post('/control/cameras/cam3/actions/camera-trust-clear').set(auth(ADMIN_TOKEN));
+    expect((await request(p.base).post('/control/cameras/cam3/actions/camera-trust-clear').set(auth(ADMIN_TOKEN)).send({})).status).toBe(400);
+    const r = await request(p.base).post('/control/cameras/cam3/actions/camera-trust-clear').set(auth(ADMIN_TOKEN)).send({ confirm: 'clear' });
     expect([r.status, r.body.mode]).toEqual([200, 'none']);
     expect(w.client.trusted()).toBe(false);
     const audit = (await request(p.base).get('/control/audit?action=camera-trust').set(auth(ADMIN_TOKEN))).text;
     expect(audit).toContain('Camera trust cleared (cam3): site-ca → none');
-    expect((await request(p.base).post('/control/actions/tls-ca-drop-previous').set(auth(ADMIN_TOKEN))).status).toBe(409);
+    expect((await request(p.base).post('/control/actions/tls-ca-drop-previous').set(auth(ADMIN_TOKEN)).send({})).status).toBe(400);
+    expect((await request(p.base).post('/control/actions/tls-ca-drop-previous').set(auth(ADMIN_TOKEN)).send({ confirm: 'drop' })).status).toBe(409);
+    // The trust actions share a rate limit (6 a minute per client).
+    const codes = [];
+    for (let i = 0; i < 6; i++) codes.push((await request(p.base).post('/control/actions/tls-ca-drop-previous').set(auth(ADMIN_TOKEN)).send({ confirm: 'drop' })).status);
+    expect(codes).toContain(429);
   }, 90_000);
 });

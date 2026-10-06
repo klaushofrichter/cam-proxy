@@ -986,7 +986,13 @@ certificate through the cluster's `cam1-cert-push`.
   address outside the CA, a CA that can't be loaded, `tls.site` removed): the
   camera keeps its CA (`ca.pem` alone verifies), else its stored leaf as a pin,
   else nothing is sent; the health item says why. Only the admin's
-  `camera-trust-clear` (audited, `camera-trust`) drops it.
+  `camera-trust-clear` (`{"confirm":"clear"}`, audited as `camera-trust`)
+  drops it, and then the camera's first push is the admin's "Push now" (no
+  automatic one). Losing `state.json` and the camera leaves (`data/tls/cameras`)
+  together makes every camera a first use again: restore `data/tls` from the
+  backup instead. After an unreadable `state.json` each camera waits for its
+  own "Push now". The trust actions (`tls-ca-rotate`, `tls-ca-drop-previous`
+  with `{"confirm":"drop"}`, `camera-trust-clear`) share a limit of 6 a minute.
 - **TLS resumption:** the pin and the CA are checked on every full handshake;
   Node resumes a session only with the same server (the session cache is per
   agent and options), so a resumed connection is one that was checked.

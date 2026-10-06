@@ -197,7 +197,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     ...(certs ? certs.problems() : []),
     ...(ca ? [...proxyAddresses().filter((a) => !ca!.covers(a)), ...(ca.coversName(proxyName()) ? [] : [proxyName()])].map(outside) : []),
     // A camera's own (an address outside the CA, a failed push), named.
-    ...(certs ? cams.ids().flatMap((id) => { const p = certs!.state(id).problem; return p ? [p.startsWith(`${id} `) ? p : `${id}: ${p}`] : []; }) : []),
+    ...(certs ? cams.ids().flatMap((id) => { const p = certs!.state(id).problem; return p ? [p.startsWith(`${id} `) || p.startsWith(`${id}:`) ? p : `${id}: ${p}`] : []; }) : []),
   ];
   // The proxy's own leaf: <dataDir>/tls/proxy.crt|key, issued anew when
   // missing, from another CA, for other addresses, or due for renewal.
@@ -248,7 +248,10 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       return { refuse: 'its site-CA trust is not available (no CA certificate and no stored leaf)' };
     }
     const pin = certs?.pin(id);
-    return pin ? { ca: pin.pem, fingerprint: pin.fingerprint } : undefined;
+    if (pin) return { ca: pin.pem, fingerprint: pin.fingerprint };
+    // A camera that once served our leaf, now neither site-ca nor pinned (protocol switched, state lost): refused, never unverified.
+    if (certs?.everServed(id)) return { refuse: 'it served a site-CA leaf before: Push now, or camera-trust-clear' };
+    return undefined;
   };
   const makeCerts = () =>
     new CameraCerts({
