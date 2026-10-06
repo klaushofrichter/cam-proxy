@@ -40,6 +40,7 @@ export interface RunnerDeps {
 
 const NACKS_PER_MIN = 60;
 const UNDELIVERED_MAX = 32;
+const SUPPRESSED_IDS = 50;
 
 export class CommandRunner {
   private running: string | null = null;
@@ -47,6 +48,7 @@ export class CommandRunner {
   private readonly nackAudit: RefusalThrottle;
   private nackWindow = { start: 0, n: 0, dropped: 0 };
   private readonly undelivered = new Map<string, Record<string, unknown>>();
+  private readonly suppressedIds = new Map<string, string[]>();
   private readonly now: () => number;
   private readonly handlers: Record<string, Handler>;
 
@@ -157,11 +159,18 @@ export class CommandRunner {
     const command = typeof b.command === 'string' && /^[a-z][a-z.:-]{0,31}$/.test(b.command) ? b.command : '';
     const a = this.nackAudit.take('cams-admin', code);
     if (a.record) {
+      const ids = this.suppressedIds.get(code) ?? [];
+      this.suppressedIds.delete(code);
       this.d.audit.write({
         action: 'admin-command', category: ['configuration'], type: ['denied'], outcome: 'failure', user: 'cams-admin',
         message: `cams-admin command ${command || '(none)'} refused: ${code}`, error: code,
-        details: { cmdId, command, outcome: code, ...(a.suppressed ? { suppressed: a.suppressed } : {}) },
+        details: { cmdId, command, outcome: code, ...(a.suppressed ? { suppressed: a.suppressed } : {}), ...(ids.length ? { suppressedCmdIds: ids } : {}) },
       });
+    } else {
+      // Not recorded now: its cmdId goes into the next record of this code (the first 50; the rest are counted).
+      const ids = this.suppressedIds.get(code) ?? [];
+      if (ids.length < SUPPRESSED_IDS) ids.push(cmdId);
+      this.suppressedIds.set(code, ids);
     }
     if (this.nackWindow.n >= NACKS_PER_MIN) {
       this.nackWindow.dropped++;

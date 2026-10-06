@@ -125,6 +125,10 @@ describe('the runner', () => {
     now += 600_000;
     await f.runner.onCommand(f.command('tokens.apply', argsOf(1), c), c, f.send);
     expect(f.audit.at(-1)).toMatchObject({ details: { outcome: 'not_allowed', suppressed: 80 } });
+    // The suppressed refusals' cmdIds are kept (the first 50) for the next record.
+    const ids = f.audit.at(-1)!.details.suppressedCmdIds as string[];
+    expect(ids).toHaveLength(50);
+    expect(ids[0]).toBe(`cmd_${String(2).padStart(20, '0')}`);
   });
   it('status(): the allow entries this version implements, with pause and enabled', () => {
     const f = runnerFixture({ allow: ['tokens.apply', 'config.get', 'camera.action:camera-reboot'] });
