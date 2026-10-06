@@ -1,4 +1,3 @@
-import { createHash } from 'crypto';
 import { EventEmitter } from 'events';
 import { withCamera, type AuditLog } from '../audit/audit-log';
 import type { Catalog } from '../catalog/db';
@@ -105,8 +104,8 @@ export class CameraWorker extends EventEmitter {
   private stopping = false;
   private watchStarted = false;
   private restarting: Promise<void> | undefined;
-  // The stream source the host's go2rtc has for this camera (no password in it).
-  private registered: string;
+  // The stream source the host's go2rtc has for this camera.
+  private registered: StreamSource;
   // Supervision (spec 2026-10-05-multi-camera-host-design §3.3).
   private readonly backoff = new Backoff();
   private cancelRetry: (() => void) | undefined;
@@ -138,7 +137,7 @@ export class CameraWorker extends EventEmitter {
       everyMs: d.cameraFtpCheckMs,
     });
     this.build();
-    this.registered = this.sourceKey();
+    this.registered = this.source();
     // Recordings on the SD card over Baichuan (spec 2026-10-02-baichuan-recordings-design).
     this.recordings = createRecordingsSide({
       dataDir: d.running().server.dataDir,
@@ -189,10 +188,11 @@ export class CameraWorker extends EventEmitter {
     return { cam: this.id, host: splitHost(c.host).hostname, port: c.rtspPort, user: c.user, password: this.d.password() };
   }
 
-  // The source without its password: a hash of it instead.
-  private sourceKey(): string {
-    const s = this.source();
-    return JSON.stringify({ host: s.host, port: s.port, user: s.user, pw: createHash('sha256').update(s.password).digest('hex') });
+  // Whether the source differs from the one go2rtc has (kept in memory only, never logged).
+  private sourceChanged(): boolean {
+    const a = this.source();
+    const b = this.registered;
+    return a.host !== b.host || a.port !== b.port || a.user !== b.user || a.password !== b.password;
   }
 
   phase(): WorkerPhase {
@@ -449,10 +449,10 @@ export class CameraWorker extends EventEmitter {
         this.build();
         this.cancelRetry?.();
         // A changed address, port, user or password: the host's go2rtc gets the new source.
-        const key = this.sourceKey();
-        if (this.cam().stills.enabled && key !== this.registered) {
-          await this.d.go2rtc()?.setStream(this.source()).catch((err: Error) => logger.warn({ cameraId: this.id, err: err.message }, 'go2rtc_set_stream_failed'));
-          this.registered = key;
+        if (this.cam().stills.enabled && this.sourceChanged()) {
+          const next = this.source();
+          await this.d.go2rtc()?.setStream(next).catch((err: Error) => logger.warn({ cameraId: this.id, err: err.message }, 'go2rtc_set_stream_failed'));
+          this.registered = next;
         }
         const running = await this.startParts();
         this.phaseNow = running || this.errorNow !== 'no_address' ? 'ready' : 'idle';
