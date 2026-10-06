@@ -64,4 +64,35 @@ describe('the host description (spec §14.1)', () => {
     n.proxy.passive = '50000-50029';
     expect(msg(n)).toBe('proxy.passive: 50000-50029 has 30 ports; 4 cameras need at least 40 (10 per camera)');
   });
+
+  it('interface names: distinct, and a plain Linux name (they become file names and nft words)', () => {
+    const e = example();
+    e.cameraNet.iface = 'enp1s0';
+    expect(msg(e)).toBe('cameraNet.iface: enp1s0 is also lan.iface (the camera side must be the other NIC)');
+    for (const bad of ['../../../x', '..', 'en p2s0', 'a'.repeat(16), '', 'enp2s0"']) {
+      const b = example();
+      b.cameraNet.iface = bad;
+      expect(msg(b)).toBe(`cameraNet.iface: ${JSON.stringify(bad)} is not an interface name (1-15 of a-z A-Z 0-9 _ . -, no "..")`);
+    }
+    const l = example();
+    l.lan.iface = 'x/y';
+    expect(msg(l)).toBe('lan.iface: "x/y" is not an interface name (1-15 of a-z A-Z 0-9 _ . -, no "..")');
+  });
+
+  it('proxy ports: integers 1-65535, distinct, outside the passive range', () => {
+    for (const [k, v] of [['httpsPort', 0], ['httpPort', 70000], ['ftpPort', 21.5], ['httpsPort', '8443']] as const) {
+      const p = example();
+      (p.proxy as Record<string, unknown>)[k] = v;
+      expect(msg(p)).toBe(`proxy.${k}: ${JSON.stringify(v)} is not a port (1-65535)`);
+    }
+    const d = example();
+    d.proxy.ftpPort = 8480;
+    expect(msg(d)).toBe('proxy.ftpPort: 8480 is also proxy.httpPort');
+    const r = example();
+    r.proxy.ftpPort = 50010;
+    expect(msg(r)).toBe('proxy.ftpPort: 50010 is inside proxy.passive 50000-50039');
+    const z = example();
+    z.proxy.passive = '0-39';
+    expect(msg(z)).toBe('proxy.passive: must be A-B with A <= B');
+  });
 });

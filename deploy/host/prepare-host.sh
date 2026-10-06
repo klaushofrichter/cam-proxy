@@ -2,8 +2,11 @@
 # Prepares the multi-camera host (Debian 13) for cam-proxy and its camera
 # network (docs/multi-camera-host.md, spec 2026-10-05-multi-camera-host-design §14).
 # Run as root after rendering the host files:
-#   npx tsx scripts/host/render.ts /srv/cam-proxy/host.json /tmp/rendered
-#   sudo bash deploy/host/prepare-host.sh --rendered /tmp/rendered
+#   (on the Mac) npx tsx scripts/host/render.ts host.json /tmp/rendered, copy it over
+#   sudo bash prepare-host.sh --rendered /tmp/rendered
+# Refuses a ruleset nft won't load and a camera interface that carries the
+# default route or this SSH session; forwarding comes on only with the
+# ruleset (the nftables.service drop-in).
 # Idempotent: a second run changes nothing. --dry-run prints the commands;
 # --files-only installs only the files (no packages, no services).
 # ROOT=<dir> puts every target under <dir> (tests).
@@ -52,18 +55,76 @@ if [ "$FILES_ONLY" = 0 ]; then
   run apt-get install -y nftables dnsmasq chrony unattended-upgrades ca-certificates curl
 fi
 
+echo "== checks"
+# The rendered ruleset is checked before it replaces the installed one: a
+# broken ruleset is never placed (nftables.service would fail at the next boot).
+if [ "$FILES_ONLY" = 0 ] || command -v nft >/dev/null; then
+  run nft -c -f "$RENDERED/etc/nftables.conf"
+else
+  echo "skipped: nft -c (nftables is not installed; --files-only)"
+fi
+# The camera side must not be the interface this host is reached by: the run
+# brings it down and readdresses it.
+CAM_IFACE=$(sed -n 's/^interface=//p' "$RENDERED/etc/dnsmasq.d/camera-net.conf" | head -1)
+carries() { # <iface> <ip route output>: whether the route goes out of <iface>
+  echo "$2" | grep -E "dev $1( |\$)" >/dev/null
+}
+if command -v ip >/dev/null; then
+  if carries "$CAM_IFACE" "$(ip route show default 2>/dev/null)"; then
+    echo "refused: $CAM_IFACE carries the default route; the camera side must be the other NIC (host.json cameraNet.iface)" >&2; exit 1
+  fi
+  SSH_PEER=${SSH_CLIENT:-}; SSH_PEER=${SSH_PEER%% *}
+  if [ -n "$SSH_PEER" ] && carries "$CAM_IFACE" "$(ip route get "$SSH_PEER" 2>/dev/null)"; then
+    echo "refused: $CAM_IFACE carries this SSH session ($SSH_PEER); the camera side must be the other NIC (host.json cameraNet.iface)" >&2; exit 1
+  fi
+elif [ "$DRY" = 0 ] && [ "$FILES_ONLY" = 0 ]; then
+  echo "refused: no ip command to check the routes" >&2; exit 1
+fi
+# An interface that carries the default route or the SSH session is never brought down.
+safe_down() {
+  local i=$1
+  command -v ip >/dev/null || return 1
+  carries "$i" "$(ip route show default 2>/dev/null)" && return 1
+  [ -n "${SSH_CLIENT:-}" ] && carries "$i" "$(ip route get "${SSH_CLIENT%% *}" 2>/dev/null)" && return 1
+  return 0
+}
+
 # The files go in before Docker is installed: its first start must already
 # read "iptables": false (otherwise it adds its own chains and sets FORWARD to
 # drop, and the routing breaks until nftables flushes them).
 echo "== files"
 place etc/nftables.conf 0755
+place etc/systemd/system/nftables.service.d/camera-net.conf 0644
 place etc/dnsmasq.d/camera-net.conf 0644
 place etc/chrony/conf.d/camera-net.conf 0644
 place etc/sysctl.d/90-camera-net.conf 0644
 for f in "$RENDERED"/etc/network/interfaces.d/*; do place "etc/network/interfaces.d/$(basename "$f")" 0644; done
+# A renamed NIC: the interface file rendered for the old name goes.
+for f in "$ROOT"/etc/network/interfaces.d/*; do
+  [ -f "$f" ] || continue
+  n=$(basename "$f")
+  [ -e "$RENDERED/etc/network/interfaces.d/$n" ] && continue
+  grep -q '^# Rendered by scripts/host/render.ts' "$f" || continue
+  run rm -f "$f"
+  echo "removed etc/network/interfaces.d/$n"
+  CHANGED+=("etc/network/interfaces.d/$n")
+done
 place etc/docker/daemon.json 0644
 place srv/cam-proxy/compose.yaml 0644
 place srv/cam-proxy/data/config.json 0644 keep
+
+# Changes not yet applied survive a failed run (here, while installing Docker,
+# or in the services step): the next run finds the files unchanged but still
+# applies them.
+PENDING="$ROOT/var/lib/cam-proxy-host/pending"
+if [ "$DRY" = 0 ]; then
+  if [ -f "$PENDING" ]; then while read -r rel; do [ -n "$rel" ] && CHANGED+=("$rel"); done < "$PENDING"; fi
+  mkdir -p "$(dirname "$PENDING")"
+  printf '%s\n' ${CHANGED[@]+"${CHANGED[@]}"} | sort -u | grep -v '^$' > "$PENDING.tmp" || true
+  mv "$PENDING.tmp" "$PENDING"
+  CHANGED=()
+  while read -r rel; do CHANGED+=("$rel"); done < "$PENDING"
+fi
 
 [ "$FILES_ONLY" = 1 ] && exit 0
 
@@ -78,33 +139,37 @@ fi
 run apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
 echo "== services"
-# Changes not yet applied survive a failed run: a second run finds the files
-# unchanged but still restarts what they belong to.
-PENDING="$ROOT/var/lib/cam-proxy-host/pending"
-if [ "$DRY" = 0 ]; then
-  if [ -f "$PENDING" ]; then while read -r rel; do [ -n "$rel" ] && CHANGED+=("$rel"); done < "$PENDING"; fi
-  mkdir -p "$(dirname "$PENDING")"
-  printf '%s\n' ${CHANGED[@]+"${CHANGED[@]}"} | sort -u | grep -v '^$' > "$PENDING.tmp" || true
-  mv "$PENDING.tmp" "$PENDING"
-  CHANGED=()
-  while read -r rel; do CHANGED+=("$rel"); done < "$PENDING"
-fi
+# ${CHANGED[@]+…}: an empty array under set -u (bash 3.2 on a Mac).
 has() { for c in ${CHANGED[@]+"${CHANGED[@]}"}; do case "$c" in $1) return 0 ;; esac; done; return 1; }
-run sysctl --system
 # The camera side gets its address before dnsmasq starts (bind-interfaces
-# needs it). ifdown first, so a changed file takes effect; the camera side
-# carries no SSH session.
+# needs it). ifdown first, so a changed file takes effect; an interface that
+# carries the default route or the SSH session is never brought down.
 for rel in ${CHANGED[@]+"${CHANGED[@]}"}; do
   case "$rel" in
-    etc/network/interfaces.d/*) run ifdown --force "$(basename "$rel")" 2>/dev/null || true; run ifup "$(basename "$rel")" ;;
+    etc/network/interfaces.d/*)
+      n=$(basename "$rel")
+      if [ "$DRY" = 1 ] || safe_down "$n"; then run ifdown --force "$n" 2>/dev/null || true; fi
+      if [ -e "$RENDERED/$rel" ]; then run ifup "$n"; fi
+      ;;
   esac
 done
-# Checked before it is loaded: a broken ruleset never replaces a working one
-# (the SSH session stays: established connections and SSH from the LAN are accepted).
-run nft -c -f "$ROOT/etc/nftables.conf"
-run systemctl enable --now nftables dnsmasq chrony
-# ${CHANGED[@]+…}: an empty array under set -u (bash 3.2 on a Mac).
-has 'etc/nftables.conf' && run systemctl reload nftables
+# The ruleset first, then sysctl: no window without the firewall. IPv4
+# forwarding is switched on by nftables.service itself once the ruleset is
+# loaded (the rendered drop-in), never by sysctl.d: a ruleset that fails to
+# load leaves the host not routing.
+# A unit started here loads everything; one already running reloads the
+# ruleset atomically (a restart only for a changed drop-in, which applies
+# only at start).
+WAS_ACTIVE=$(systemctl is-active nftables 2>/dev/null || true)
+run systemctl daemon-reload
+run systemctl enable --now nftables
+if [ "$WAS_ACTIVE" = active ]; then
+  if has 'etc/systemd/system/nftables.service.d/*'; then run systemctl restart nftables
+  elif has 'etc/nftables.conf'; then run systemctl reload nftables
+  fi
+fi
+run sysctl --system
+run systemctl enable --now dnsmasq chrony
 has 'etc/dnsmasq.d/*' && run systemctl restart dnsmasq
 has 'etc/chrony/*' && run systemctl restart chrony
 has 'etc/docker/daemon.json' && run systemctl restart docker
@@ -112,4 +177,4 @@ echo "== /srv/cam-proxy for uid 1000 (the container's user)"
 run install -d -o 1000 -g 1000 -m 0755 "$ROOT/srv/cam-proxy" "$ROOT/srv/cam-proxy/data"
 run install -d -o 1000 -g 1000 -m 0700 "$ROOT/srv/cam-proxy/config"
 [ "$DRY" = 0 ] && rm -f "$PENDING"
-echo "done: run deploy/host/check-host.sh"
+echo "done: run sudo bash deploy/host/check-host.sh"

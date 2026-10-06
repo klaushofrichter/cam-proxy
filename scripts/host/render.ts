@@ -34,6 +34,7 @@ table inet filter {
   chain forward {
     type filter hook forward priority filter; policy drop;
     ct state established,related accept
+    ct state invalid drop
     iifname "${lan}" oifname "${cam}" ip daddr ${cameraSubnet(h)} accept
     iifname "${cam}" counter name "cameras_dropped" drop
   }
@@ -67,16 +68,26 @@ const chrony = (h: HostDescription) => `# Rendered by scripts/host/render.ts: NT
 
 const sysctl = (h: HostDescription) => [
   '# Rendered by scripts/host/render.ts (spec §14.2; rp_filter: Ruling P4-3).',
-  'net.ipv4.ip_forward = 1',
+  '# IPv4 forwarding is not set here: nftables.service turns it on once the ruleset is loaded',
+  '# (/etc/systemd/system/nftables.service.d/camera-net.conf).',
   'net.ipv6.conf.all.forwarding = 0',
   `net.ipv6.conf.${h.cameraNet.iface}.disable_ipv6 = 1`,
   `net.ipv4.conf.${h.lan.iface}.rp_filter = 2`,
   '',
 ].join('\n');
 
+// Fail closed: forwarding only while the ruleset is loaded. ExecStartPost runs
+// only after nft loaded /etc/nftables.conf; a broken ruleset fails the unit at
+// boot and the host routes nothing (systemd-sysctl would turn it on first).
+const nftDropIn = () => `# Rendered by scripts/host/render.ts: route only while the firewall is loaded.
+[Service]
+ExecStartPost=/usr/sbin/sysctl -w net.ipv4.ip_forward=1
+ExecStopPost=/usr/sbin/sysctl -w net.ipv4.ip_forward=0
+`;
+
 const iface = (h: HostDescription) => `# Rendered by scripts/host/render.ts: the camera network side, static.\nauto ${h.cameraNet.iface}\niface ${h.cameraNet.iface} inet static\n    address ${h.cameraNet.address}/${h.cameraNet.prefix}\n`;
 
-const daemon = () => `${JSON.stringify({ iptables: false, ip6tables: false, 'log-driver': 'json-file', 'log-opts': { 'max-size': '10m', 'max-file': '3' } }, null, 2)}\n`;
+const daemon = () => `${JSON.stringify({ iptables: false, ip6tables: false, 'ip-forward': false, 'log-driver': 'json-file', 'log-opts': { 'max-size': '10m', 'max-file': '3' } }, null, 2)}\n`;
 
 const compose = () => `# cam-proxy on the multi-camera host (docs/multi-camera-host.md). Rendered by
 # scripts/host/render.ts. Next to this file: config/.env (secrets, mode 600) and
@@ -116,6 +127,7 @@ export function renderHost(h: HostDescription): Rendered {
     'etc/dnsmasq.d/camera-net.conf': { text: dnsmasq(h), mode: 0o644 },
     'etc/chrony/conf.d/camera-net.conf': { text: chrony(h), mode: 0o644 },
     'etc/sysctl.d/90-camera-net.conf': { text: sysctl(h), mode: 0o644 },
+    'etc/systemd/system/nftables.service.d/camera-net.conf': { text: nftDropIn(), mode: 0o644 },
     [`etc/network/interfaces.d/${h.cameraNet.iface}`]: { text: iface(h), mode: 0o644 },
     'etc/docker/daemon.json': { text: daemon(), mode: 0o644 },
     'srv/cam-proxy/compose.yaml': { text: compose(), mode: 0o644 },

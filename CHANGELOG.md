@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- The multi-camera host (the mini PC, docs/multi-camera-host.md): `scripts/host/render.ts` renders nftables, dnsmasq, chrony, sysctl, the camera-side interface, Docker's `daemon.json` (`"iptables": false`), compose and the first `config.json` from one `host.json`, refusing bad leases and overlapping subnets; `scripts/host/validate-rendered.sh` checks them with Debian 13's tools in containers; `deploy/host/prepare-host.sh` installs them (idempotent) and `deploy/host/check-host.sh` verifies the host. `scripts/measure-camera.ts` reads a camera's `GetNtp` and certificate state (`--set-ntp` writes the whole `Ntp` object). The kube-setup request for the camera subnet is in `deploy/cluster/REQUEST.md`.
+- The multi-camera host (the mini PC, docs/multi-camera-host.md): `scripts/host/render.ts` renders nftables, dnsmasq, chrony, sysctl, the camera-side interface, Docker's `daemon.json` (`"iptables": false`), compose and the first `config.json` from one `host.json`, refusing bad leases, overlapping subnets, a shared or odd NIC name and bad ports; IPv4 forwarding comes on only once the ruleset is loaded (fails closed); `scripts/host/validate-rendered.sh` checks them with Debian 13's tools in containers; `deploy/host/prepare-host.sh` installs them (idempotent) and `deploy/host/check-host.sh` verifies the host. `scripts/measure-camera.ts` reads a camera's `GetNtp` and certificate state (`--set-ntp` writes the whole `Ntp` object). The kube-setup request for the camera subnet is in `deploy/cluster/REQUEST.md`.
 
 ## v2026.10.05.6
 

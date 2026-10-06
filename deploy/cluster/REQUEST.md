@@ -136,11 +136,13 @@ questions".
 ## 2026-10 multi-camera host (P4 of the multi-camera spec)
 
 Asked of the kube-setup session (Klaus applies; nothing here edits kube-setup).
-The guide is [docs/multi-camera-host.md](../../docs/multi-camera-host.md).
+Not sent yet: `<host-lan>` below is filled in on the device (guide §1). The
+guide is [docs/multi-camera-host.md](../../docs/multi-camera-host.md).
 
 1. cams egress: allow the cams pods to reach `192.168.60.0/24` on TCP 443
    (the cameras, over the router's static route to the mini PC) and the mini
-   PC's LAN address on TCP 8480 (cam-proxy over HTTP, between P4 and P5:
+   PC's LAN address `<host-lan>` (to fill in once the PC has its address from
+   the router; the spec's example is 192.168.1.230) on TCP 8480 (cam-proxy over HTTP, between P4 and P5:
    Klaus approved 8480 open to the LAN for that time) and on TCP 8443
    (cam-proxy over HTTPS from P5 on; P5 then drops the 8480 rule). Today the
    NetworkPolicy allows cams → cam-proxy:8480 only.

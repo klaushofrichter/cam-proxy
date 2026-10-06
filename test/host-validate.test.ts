@@ -15,7 +15,7 @@ const render = () => {
   expect(r.status).toBe(0);
   return out;
 };
-const CHECKS = ['nftables', 'dnsmasq', 'chrony', 'interfaces', 'sysctl', 'docker-daemon', 'compose'];
+const CHECKS = ['nftables', 'nftables-unit', 'dnsmasq', 'chrony', 'interfaces', 'sysctl', 'docker-daemon', 'compose'];
 
 describe('validate-rendered.sh', () => {
   it('is valid bash; refuses a missing directory', () => {

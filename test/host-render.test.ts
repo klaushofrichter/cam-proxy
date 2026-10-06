@@ -53,12 +53,25 @@ describe('host files (spec §14.2)', () => {
     expect(lines(renderHost(parseHost(d))['etc/dnsmasq.d/camera-net.conf'].text)).toContain('dhcp-range=192.168.60.40,192.168.60.49,255.255.255.192,12h');
   });
 
+  it('fail closed: forwarding is on only while the ruleset is loaded (a drop-in of nftables.service), never from sysctl.d', () => {
+    const r = renderHost(h());
+    expect(r['etc/sysctl.d/90-camera-net.conf'].text).not.toContain('ip_forward');
+    const l = lines(r['etc/systemd/system/nftables.service.d/camera-net.conf'].text);
+    expect(l).toEqual(expect.arrayContaining(['[Service]', 'ExecStartPost=/usr/sbin/sysctl -w net.ipv4.ip_forward=1', 'ExecStopPost=/usr/sbin/sysctl -w net.ipv4.ip_forward=0']));
+  });
+
+  it('forward drops invalid packets before anything is accepted', () => {
+    const l = lines(renderHost(h())['etc/nftables.conf'].text);
+    const fwd = l.indexOf('type filter hook forward priority filter; policy drop;');
+    expect(l.slice(fwd, fwd + 3)).toEqual(['type filter hook forward priority filter; policy drop;', 'ct state established,related accept', 'ct state invalid drop']);
+  });
+
   it('chrony, sysctl, the camera interface, docker', () => {
     const r = renderHost(h());
     expect(lines(r['etc/chrony/conf.d/camera-net.conf'].text)).toEqual(expect.arrayContaining(['allow 192.168.60.0/24', 'local stratum 10']));
-    expect(lines(r['etc/sysctl.d/90-camera-net.conf'].text)).toEqual(expect.arrayContaining(['net.ipv4.ip_forward = 1', 'net.ipv6.conf.all.forwarding = 0', 'net.ipv6.conf.enp2s0.disable_ipv6 = 1', 'net.ipv4.conf.enp1s0.rp_filter = 2']));
+    expect(lines(r['etc/sysctl.d/90-camera-net.conf'].text)).toEqual(expect.arrayContaining(['net.ipv6.conf.all.forwarding = 0', 'net.ipv6.conf.enp2s0.disable_ipv6 = 1', 'net.ipv4.conf.enp1s0.rp_filter = 2']));
     expect(lines(r['etc/network/interfaces.d/enp2s0'].text)).toEqual(expect.arrayContaining(['auto enp2s0', 'iface enp2s0 inet static', 'address 192.168.60.1/24']));
-    expect(JSON.parse(r['etc/docker/daemon.json'].text)).toMatchObject({ iptables: false, ip6tables: false });
+    expect(JSON.parse(r['etc/docker/daemon.json'].text)).toMatchObject({ iptables: false, ip6tables: false, 'ip-forward': false });
   });
 
   it('one passive range everywhere: firewall, proxy config', () => {

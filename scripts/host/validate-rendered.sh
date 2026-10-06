@@ -17,7 +17,7 @@ if [ -z "$DIR" ] || [ ! -d "$DIR" ]; then
   exit 2
 fi
 DIR=$(cd "$DIR" && pwd)
-IMAGE=cam-proxy-host-check:debian13
+IMAGE=cam-proxy-host-check:debian13-v2
 FAILED=0
 
 # The interface names come from the rendered files themselves.
@@ -28,7 +28,7 @@ CAM_ADDR=$(sed -n 's/^ *address //p' "$DIR/etc/network/interfaces.d/$CAM_IFACE" 
 docker build -q -t "$IMAGE" - >/dev/null <<'EOF' || { echo "FAIL image: docker build of the Debian 13 check image failed"; exit 1; }
 FROM debian:13
 RUN apt-get update -qq \
- && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends nftables dnsmasq chrony ifupdown iproute2 procps >/dev/null \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends nftables dnsmasq chrony ifupdown iproute2 procps systemd >/dev/null \
  && rm -rf /var/lib/apt/lists/*
 EOF
 
@@ -39,6 +39,11 @@ RESULT=$(docker run --rm --network none --cap-add NET_ADMIN -e CAM_IFACE="$CAM_I
   ip link add "$LAN_IFACE" type dummy && ip link add "$CAM_IFACE" type dummy
 
   if out=$(nft -c -f /r/etc/nftables.conf 2>&1); then ok nftables; else bad nftables "$(echo "$out" | head -5)"; fi
+
+  # The drop-in that turns forwarding on once the ruleset is loaded.
+  mkdir -p /etc/systemd/system/nftables.service.d
+  cp /r/etc/systemd/system/nftables.service.d/*.conf /etc/systemd/system/nftables.service.d/
+  if out=$(systemd-analyze verify --man=no nftables.service 2>&1) && grep "^ExecStartPost=/usr/sbin/sysctl -w net.ipv4.ip_forward=1" /etc/systemd/system/nftables.service.d/*.conf >/dev/null; then ok nftables-unit; else bad nftables-unit "$out"; fi
 
   cp /r/etc/dnsmasq.d/*.conf /etc/dnsmasq.d/
   # The conf-dir argument of Debian'"'"'s dnsmasq service.

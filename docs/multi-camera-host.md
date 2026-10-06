@@ -108,7 +108,9 @@ is `https://download.docker.com/linux/ubuntu`).
   ([poe-switch.md](poe-switch.md)).
 
 `scripts/host/host-config.ts` refuses a description that would break the
-network, naming the entry: a lease outside the camera subnet, inside the
+network, naming the entry: the same NIC for both sides or a name that isn't
+a plain interface name, a proxy port outside 1–65535, repeated or inside the
+passive range, a lease outside the camera subnet, inside the
 dynamic pool or on the host's own address, a duplicate MAC, address or camera
 id, a camera subnet that overlaps the LAN or the cluster, a passive range too
 small for the cameras.
@@ -124,9 +126,10 @@ scp -r /tmp/rendered deploy/host/prepare-host.sh deploy/host/check-host.sh <user
 ssh <user>@<host-lan> 'sudo install -d /srv/cam-proxy && sudo install -m 0644 /tmp/host.json /srv/cam-proxy/host.json'
 ```
 
-The render prints the eight files it wrote. `scripts/host/validate-rendered.sh`
+The render prints the nine files it wrote. `scripts/host/validate-rendered.sh`
 checks them with the host's own tools in throwaway Docker containers, without
-touching the Mac's network: `nft -c` on the ruleset, `dnsmasq --test` with
+touching the Mac's network: `nft -c` on the ruleset, `systemd-analyze verify`
+on nftables.service with the forwarding drop-in, `dnsmasq --test` with
 Debian's conf-dir, `chronyd -p`, `ifup` of the camera interface on a dummy
 NIC, every sysctl key, `dockerd --validate` on `daemon.json`, and
 `docker compose config`. Every line must say `PASS`.
@@ -143,31 +146,50 @@ sudo bash /tmp/check-host.sh
 ```
 
 `prepare-host.sh` installs nftables, dnsmasq, chrony, unattended-upgrades,
-then the rendered files, then Docker CE with the Compose plugin from Docker's
+checks the rendered ruleset (`nft -c`) and refuses to go on when the camera
+interface carries the default route or this SSH session (a swapped
+`lan.iface`/`cameraNet.iface`: the run brings the camera side down and
+readdresses it), then installs the rendered files, then Docker CE with the Compose plugin from Docker's
 own apt repository (not Debian's `docker.io`), and starts the services. It is
 idempotent: a second run prints `unchanged` for every file and restarts
 nothing. A file is replaced only when it differs, `config.json` only when it
 is absent (`kept` otherwise: the proxy's settings are yours after the first
-start), and changes a failed run didn't apply stay pending for the next run.
-The ruleset is checked (`nft -c`) before it is loaded, and the SSH session
-survives a reload (established connections and SSH from the LAN are
-accepted). `--dry-run` prints what it would do.
+start), and changes a failed run didn't apply stay pending for the next run
+(also when the Docker install fails). A ruleset that `nft -c` refuses is
+never placed. The firewall is loaded before `sysctl --system`; on a running
+host a changed ruleset is reloaded atomically, and the SSH session survives
+(established connections and SSH from the LAN are accepted). When a NIC is
+renamed in `host.json`, the interface file rendered for the old name is
+removed. `--dry-run` prints what it would do.
 
-`check-host.sh` needs `sudo` (nft reads the ruleset only as root) and prints
-`PASS` or `FAIL` per check: `ip_forward`, `docker-iptables`,
-`nft-forward-drop`, `services`, `chrony-synced` (may need a minute after the
-first start), `camera-address`, and the number of DHCP leases.
+**Forwarding fails closed.** IPv4 forwarding is not in sysctl.d (systemd-sysctl
+would turn it on at boot before the firewall). A drop-in of nftables.service
+turns it on after the ruleset has loaded and off when the unit stops: a
+ruleset that fails to load at boot leaves the host not routing at all.
+Docker's own `ip-forward` is off too.
+
+`check-host.sh` needs `sudo` (nft reads the ruleset only as root). It takes
+the camera interface and its address from the installed files
+(`/etc/dnsmasq.d/camera-net.conf`, `/etc/network/interfaces.d/<iface>`;
+`--camera-iface` and `--camera-address` override them) and prints `PASS` or
+`FAIL` per check: `ip_forward`, `docker-iptables` (`daemon.json`, a `DOCKER`
+chain in any nftables table, or rules in the legacy iptables backend),
+`nft-forward-drop`, `ruleset-loaded` (the loaded ruleset is exactly
+`/etc/nftables.conf`, compared in an empty network namespace), `services`,
+`chrony-synced` (may need a minute after the first start), `camera-address`,
+`camera-ipv6-off`, and the number of DHCP leases.
 
 What the rendered files do (spec §14.2):
 
 | File | What |
 |---|---|
-| `/etc/nftables.conf` | the host's only ruleset, `table inet filter`. `forward` (policy drop): established/related; LAN → `192.168.60.0/24` on every port (HTTPS, RTSP, ONVIF, 9000 for the Reolink app); everything from the camera side dropped and counted (`cameras_dropped`). `input` (policy drop): established, loopback; from the LAN SSH and 8443 (8480 too while `httpFromLan`), ICMP echo; from the camera side DHCP (UDP 67), NTP (UDP 123), FTP (TCP 2121 and the passive range), ICMP echo. `output`: accept. No masquerade anywhere: the cameras see the real LAN client, and their replies go back through the host |
+| `/etc/nftables.conf` | the host's only ruleset, `table inet filter`. `forward` (policy drop): established/related; LAN → `192.168.60.0/24` on every port (HTTPS, RTSP, ONVIF, 9000 for the Reolink app); everything from the camera side dropped and counted (`cameras_dropped`). `input` (policy drop): established, loopback; from the LAN SSH and 8443 (8480 too while `httpFromLan`), ICMP echo; from the camera side DHCP (UDP 67), NTP (UDP 123), FTP (TCP 2121 and the passive range), ICMP echo. Invalid packets are dropped. `output`: accept. No masquerade anywhere: the cameras see the real LAN client, and their replies go back through the host |
 | `/etc/dnsmasq.d/camera-net.conf` | DHCP on the camera side only (`interface=enp2s0`, `bind-interfaces`), no DNS (`port=0`, and no DNS server announced), the pool, one `infinite` lease per device, the host as gateway and NTP server |
 | `/etc/chrony/conf.d/camera-net.conf` | serves time to `192.168.60.0/24`; `local stratum 10` keeps the cameras on a common time while the internet is down. The PC itself syncs from Debian's pools |
-| `/etc/sysctl.d/90-camera-net.conf` | `ip_forward = 1`; no IPv6 forwarding, IPv6 off on the camera side; `rp_filter = 2` (loose) on the LAN side |
+| `/etc/systemd/system/nftables.service.d/camera-net.conf` | `net.ipv4.ip_forward=1` after the ruleset has loaded, `0` when nftables stops (fails closed) |
+| `/etc/sysctl.d/90-camera-net.conf` | no IPv6 forwarding, IPv6 off on the camera side; `rp_filter = 2` (loose) on the LAN side |
 | `/etc/network/interfaces.d/enp2s0` | the camera side, static `192.168.60.1/24` |
-| `/etc/docker/daemon.json` | `"iptables": false, "ip6tables": false`, log rotation |
+| `/etc/docker/daemon.json` | `"iptables": false, "ip6tables": false, "ip-forward": false`, log rotation |
 | `/srv/cam-proxy/compose.yaml` | cam-proxy with host networking (§8) |
 | `/srv/cam-proxy/data/config.json` | the proxy's first config: the cameras with their addresses and switch ports, the switch, FTP with the same passive range as the firewall |
 
@@ -181,13 +203,19 @@ chain).
 
 **Checked before the device (2026-10-05):** the files rendered from the
 example passed `scripts/host/validate-rendered.sh` (Debian 13 container:
-nftables, dnsmasq, chrony, ifupdown, sysctl; `dockerd --validate`; compose).
-`prepare-host.sh` ran for real in a Debian 13 container (systemctl and sysctl
-stubbed): the packages, Docker 29 and the Compose plugin from Docker's trixie
-repository, the camera address on a dummy `enp2s0`, the uid 1000 folders; a
-second run changed nothing. `check-host.sh` against the loaded ruleset
-passed the firewall checks, failed on an added `DOCKER` chain, and failed
-(instead of passing) without root.
+nftables, the nftables.service drop-in, dnsmasq, chrony, ifupdown, sysctl;
+`dockerd --validate`; compose). `prepare-host.sh` ran for real in a Debian 13
+container (systemctl and sysctl stubbed): the packages, Docker 29 and the
+Compose plugin from Docker's trixie repository, the camera address on a dummy
+`enp2s0`, the uid 1000 folders; a second run changed nothing. It then ran
+again in a Debian 13 container booted with systemd (dummy `enp1s0`/`enp2s0`,
+no network; apt stubbed, Docker a placeholder unit): nftables, dnsmasq and
+chrony started, forwarding came on only with the ruleset, and `check-host.sh`
+passed every check but `chrony-synced` (no internet there). A second run
+changed and restarted nothing. A broken `/etc/nftables.conf` made the next
+`systemctl restart nftables` fail and left forwarding at 0. With the default
+route, or the SSH client's route, on `enp2s0` the run was refused. Against
+real nft, `check-host.sh` failed on an added `DOCKER` chain and without root.
 
 **Result:** _(on the device)_
 

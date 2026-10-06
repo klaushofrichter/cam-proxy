@@ -44,6 +44,12 @@ export function parseHost(json: unknown): HostDescription {
   const h = json as HostDescription;
   if (typeof h !== 'object' || h === null) fail('host: must be an object');
   for (const k of ['hostname', 'lan', 'cameraNet', 'clusterCidrs', 'proxy', 'leases'] as const) if (h[k] === undefined) fail(`${k}: required`);
+  // Interface names become a file name (interfaces.d) and nft words.
+  const IFACE = /^[a-zA-Z0-9_.-]{1,15}$/;
+  for (const [k, v] of [['lan.iface', h.lan.iface], ['cameraNet.iface', h.cameraNet.iface]] as const) {
+    if (typeof v !== 'string' || !IFACE.test(v) || v.includes('..')) fail(`${k}: ${JSON.stringify(v)} is not an interface name (1-15 of a-z A-Z 0-9 _ . -, no "..")`);
+  }
+  if (h.cameraNet.iface === h.lan.iface) fail(`cameraNet.iface: ${h.cameraNet.iface} is also lan.iface (the camera side must be the other NIC)`);
   const net = cidrOf(`${h.cameraNet.address}/${h.cameraNet.prefix}`);
   const lan = cidrOf(h.lan.subnet);
   if (overlap(net, lan)) fail(`cameraNet: ${show(net)} overlaps lan ${show(lan)}`);
@@ -52,7 +58,17 @@ export function parseHost(json: unknown): HostDescription {
   const [lo, hi] = h.cameraNet.pool.map(ipToInt);
   if (lo > hi) fail('cameraNet.pool: the first address must come first');
   const m = /^(\d{1,5})-(\d{1,5})$/.exec(h.proxy.passive);
-  if (!m || Number(m[1]) > Number(m[2]) || Number(m[2]) > 65535) fail('proxy.passive: must be A-B with A <= B');
+  if (!m || Number(m[1]) < 1 || Number(m[1]) > Number(m[2]) || Number(m[2]) > 65535) fail('proxy.passive: must be A-B with A <= B');
+  const portKeys = ['httpsPort', 'httpPort', 'ftpPort'] as const;
+  for (const k of portKeys) {
+    const v = h.proxy[k];
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > 65535) fail(`proxy.${k}: ${JSON.stringify(v)} is not a port (1-65535)`);
+  }
+  portKeys.forEach((k, i) => {
+    const other = portKeys.slice(0, i).find((o) => h.proxy[o] === h.proxy[k]);
+    if (other) fail(`proxy.${k}: ${h.proxy[k]} is also proxy.${other}`);
+    if (h.proxy[k] >= Number(m![1]) && h.proxy[k] <= Number(m![2])) fail(`proxy.${k}: ${h.proxy[k]} is inside proxy.passive ${h.proxy.passive}`);
+  });
   // cam-proxy wants at least 10 passive ports per camera (spec §7).
   const ports = Number(m![2]) - Number(m![1]) + 1;
   const cams = h.leases.filter((l) => l.camera).length;
