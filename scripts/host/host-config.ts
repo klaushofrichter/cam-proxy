@@ -53,6 +53,10 @@ export function parseHost(json: unknown): HostDescription {
   if (lo > hi) fail('cameraNet.pool: the first address must come first');
   const m = /^(\d{1,5})-(\d{1,5})$/.exec(h.proxy.passive);
   if (!m || Number(m[1]) > Number(m[2]) || Number(m[2]) > 65535) fail('proxy.passive: must be A-B with A <= B');
+  // cam-proxy wants at least 10 passive ports per camera (spec §7).
+  const ports = Number(m![2]) - Number(m![1]) + 1;
+  const cams = h.leases.filter((l) => l.camera).length;
+  if (ports < 10 * cams) fail(`proxy.passive: ${h.proxy.passive} has ${ports} ports; ${cams} cameras need at least ${10 * cams} (10 per camera)`);
   const seen = { mac: new Map<string, number>(), ip: new Map<string, number>(), cam: new Map<string, number>() };
   h.leases.forEach((l, i) => {
     const at = `leases[${i}] (${l.name})`;

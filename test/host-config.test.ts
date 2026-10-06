@@ -60,5 +60,8 @@ describe('the host description (spec §14.1)', () => {
     const r = example();
     r.proxy.passive = '50039-50000';
     expect(msg(r)).toBe('proxy.passive: must be A-B with A <= B');
+    const n = example();
+    n.proxy.passive = '50000-50029';
+    expect(msg(n)).toBe('proxy.passive: 50000-50029 has 30 ports; 4 cameras need at least 40 (10 per camera)');
   });
 });
