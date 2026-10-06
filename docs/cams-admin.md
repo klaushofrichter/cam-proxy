@@ -214,7 +214,9 @@ managed client token is live.
 **Local block:** the card's **Block** (or `cam-proxy admin-tokens block <id>`)
 stops a managed token at once. The block holds the token's hash as well as its
 id: `tokens.apply` never brings it back, under the same id or a new one, and
-never removes a block.
+never removes a block. At most 64 blocks; at the cap a new one is refused (409
+`too_many_blocks`), none is ever evicted. Managed admin rights block only
+tokens that exist in the set (404 `unknown_token` otherwise).
 **Unblock** (local admin rights) drops the entry; cams-admin's next
 `tokens.apply` installs it again if it still lists it.
 

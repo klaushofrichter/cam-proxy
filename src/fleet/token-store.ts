@@ -19,6 +19,8 @@ export class ShadowsLocalToken extends Error {}
 // or changed until someone fixes or removes it (its revision is unknown, so
 // a replayed set must not count as fresh).
 export class TokenStoreUnusable extends Error {}
+// The block list is full: a block is never evicted, so a new one is refused.
+export class TooManyBlocks extends Error {}
 
 const EMPTY: FileShape = { v: 1, revision: 0, tokens: [], blocked: [] };
 const MAX_BLOCKS = 64;
@@ -108,7 +110,9 @@ export class TokenStore {
     this.usable();
     const hash = this.state.tokens.find((t) => t.id === id)?.hash ?? null;
     if (this.state.blocked.some((b) => b.id === id && b.hash === hash)) return;
-    const next = { ...this.state, blocked: [...this.state.blocked.filter((b) => b.id !== id), { id, hash }].slice(-MAX_BLOCKS) };
+    const rest = this.state.blocked.filter((b) => b.id !== id);
+    if (rest.length >= MAX_BLOCKS) throw new TooManyBlocks(`at most ${MAX_BLOCKS} blocked tokens: unblock one first`);
+    const next = { ...this.state, blocked: [...rest, { id, hash }] };
     writePrivateJson(this.d.file, next);
     this.set(next);
   }

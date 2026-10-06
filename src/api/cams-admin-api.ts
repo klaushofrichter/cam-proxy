@@ -7,7 +7,7 @@ import { actorOf, clientIp, requireLocalAdmin, type AccessInfo } from './auth';
 import { ConfigError } from '../config/load-error';
 import type { CommandRunner } from '../fleet/commands';
 import { ALLOW_ENTRIES, ENTRY_TEXT, IMPLEMENTED, WideningRefused, type CommandPolicy } from '../fleet/policy';
-import type { TokenStore } from '../fleet/token-store';
+import { TooManyBlocks, type TokenStore } from '../fleet/token-store';
 
 // The Status page's cams-admin card (spec 2026-10-06-cams-admin-phase1-design
 // §9.2): mounted behind requireAccess('admin') (the admin session with the
@@ -113,10 +113,13 @@ export function camsAdminApi(d: { camsAdmin: CamsAdmin; audit: AuditLog; command
       const id = String(req.params.id);
       if (!TOK_ID.test(id)) return void res.status(400).json({ error: 'invalid', detail: 'not a token id' });
       const t = c.tokens.list().find((x) => x.id === id);
+      // Managed rights block only tokens that exist (they can't fill the list).
+      if (!t && origin(res) !== 'local') return void res.status(404).json({ error: 'unknown_token' });
       try {
         if (op === 'block') c.tokens.block(id);
         else c.tokens.unblock(id);
-      } catch {
+      } catch (err) {
+        if (err instanceof TooManyBlocks) return void res.status(409).json({ error: 'too_many_blocks', message: err.message });
         return void res.status(500).json({ error: 'store_error' });
       }
       d.audit.write({ action: 'admin-token', category: ['configuration'], type: ['change'], outcome: 'success', ...who(req), message: `Managed token ${id}${t ? ` (${t.label})` : ''} ${op === 'block' ? 'blocked' : 'unblocked'}`, details: { op, id, label: t?.label ?? null, kind: t?.kind ?? null } });

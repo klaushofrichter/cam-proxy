@@ -200,3 +200,36 @@ describe('allowed commands, pause and managed tokens', () => {
     expect((await request(q.base).get('/control/admin/commands').set(auth(MANAGED_ADMIN))).status).toBe(401);
   });
 });
+
+// Security re-review: a managed caller can't evict the local admin's block.
+describe('the local block list under a managed flood', () => {
+  const tok = () => randomBytes(32).toString('base64url');
+  const hashOf = (t: string) => `sha256:${createHash('sha256').update(t).digest('hex')}`;
+  const TOK = (n: number) => `tok_${String(n).padStart(20, '0')}`;
+  const A = tok();
+  const M = tok();
+  let q: Awaited<ReturnType<typeof startProxy>>;
+  beforeAll(async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'camproxy-blocks-'));
+    writePrivateJson(join(dir, 'data', 'admin', 'tokens.json'), { v: 1, revision: 1, blocked: [], tokens: [{ id: TOK(1), kind: 'client', hash: hashOf(A), label: 'a', retireAt: null }, { id: TOK(2), kind: 'admin', hash: hashOf(M), label: 'm', retireAt: null }] });
+    q = await startProxy(sim, { dir });
+  });
+  afterAll(async () => {
+    await q?.proxy.stop();
+  });
+  it('managed: only ids in tokens.json; 64 junk blocks never evict the local block on A', async () => {
+    await request(q.base).post(`/control/admin/tokens/${TOK(1)}/block`).set(admin).expect(200);
+    for (let i = 100; i < 170; i++) {
+      const r = await request(q.base).post(`/control/admin/tokens/${TOK(i)}/block`).set(auth(M));
+      expect([r.status, r.body.error], TOK(i)).toEqual([404, 'unknown_token']);
+    }
+    expect((await request(q.base).get('/api/cameras').set(auth(A))).status).toBe(401);
+  });
+  it('local: at the cap a new block is refused (409), none is ever evicted', async () => {
+    for (let i = 200; i < 263; i++) await request(q.base).post(`/control/admin/tokens/${TOK(i)}/block`).set(admin).expect(200);
+    const r = await request(q.base).post(`/control/admin/tokens/${TOK(300)}/block`).set(admin);
+    expect([r.status, r.body.error]).toEqual([409, 'too_many_blocks']);
+    expect((await request(q.base).get('/api/cameras').set(auth(A))).status).toBe(401);
+    expect((await request(q.base).get('/control/admin/tokens').set(admin)).body.items.find((t: { id: string }) => t.id === TOK(1)).blocked).toBe(true);
+  });
+});
