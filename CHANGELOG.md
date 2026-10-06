@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.10.05.7
+
 - **Rollback note** (the Pi): no new migration (the catalog stays at schema 9). The previous release refuses overrides it doesn't know (`composition.concurrent`, `analytics.googleVision.perCameraDailyCap`, `cameras.<id>.storage.sharePercent`, a camera added in the Settings page): a rollback restores the `overrides.json` backup taken before this update.
 - One go2rtc for all cameras; a camera added or restarted never restarts it.
 - FTP: one server, a user per camera (default: the camera id); a login from another address than the camera's IPv4 address is refused and audited (`ftp-login-refused`; a camera reached by name has no address check). `CAMPROXY_FTP_PASSWORD` at most 256 bytes. On the Pi the camera's FTP login must come from its configured address (`CAMERA_HOST`), as it does.
