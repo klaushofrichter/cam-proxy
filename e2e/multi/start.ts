@@ -28,6 +28,8 @@ async function main() {
     go2rtc: { binary: GO2RTC ?? 'go2rtc', rtspPort: 18800, apiPort: 18850 },
     // One FTP server, a user per camera (spec §7).
     ftp: { enabled: true, port: 18760, passive: '18761-18790', publicHost: '127.0.0.1', stream: 'sub' },
+    // The site CA (spec §10): on; the cameras stay on HTTP (mode none).
+    tls: { site: 'e2e', cameraSubnet: '127.0.0.0/16', proxyAddresses: '127.0.0.1' },
   }));
   const proxy = createProxy(loadConfig({ CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: 'e2e-proxy-pw', CAMPROXY_FTP_PASSWORD: 'e2e-multi-ftp-password-000' }, { cwd: dir }));
   await proxy.start({ port: PROXY_PORT, host: '127.0.0.1' });
