@@ -190,8 +190,12 @@ more.
   pause; only local admin rights resume.
 - **`CAMPROXY_ADMIN_COMMANDS`** in the process environment or the `.env` file
   (`CAMPROXY_ENV_FILE`): unset or `on` = commands possible; `off`, empty or
-  anything else = off (fail closed; either source not saying `on` wins). Read
-  at start. cams-admin can't change it; the card shows the banner.
+  anything else = off (fail closed; either source not saying `on` wins).
+  **Read only at start: a change takes a proxy restart** (`docker compose up -d`
+  on the Pi after editing `.env`, a rollout in the cluster). While it is off
+  the hello doesn't announce `commands` (cams-admin then sends none and shows
+  the proxy as not supporting commands), and any command that arrives anyway
+  is refused `paused`. cams-admin can't change it; the card shows the banner.
 
 ### Managed tokens
 

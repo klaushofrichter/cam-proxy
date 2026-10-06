@@ -337,6 +337,9 @@ describe('CAMPROXY_ADMIN_COMMANDS=off', () => {
     await fake?.close();
     await sim?.close();
   });
+  it('the hello does not announce commands (cams-admin sends none)', () => {
+    expect(fake.received.find((r) => r.msg.type === 'hello')!.msg.body).toMatchObject({ capabilities: ['status'] });
+  });
   it('enabled false in the heartbeat; every command paused', async () => {
     expect((fake.heartbeats()[0].msg.body as Record<string, any>).proxy.commands).toMatchObject({ enabled: false, allow: ['tokens.apply'] });
     const { cmdId } = fake.sendCommand('tokens.apply', argsOf(1));

@@ -76,7 +76,8 @@ export interface ClientDeps {
   now?: () => number; // the proxy's clock for envelope ts (tests: a clock that is off)
   WebSocketImpl?: typeof WebSocket;
   fetchImpl?: typeof fetch;
-  // Commands from cams-admin (migration P2): hello then says 'commands'.
+  // Commands from cams-admin (migration P2): hello then says 'commands',
+  // unless CAMPROXY_ADMIN_COMMANDS is off (read at start).
   commands?: CommandRunner;
   monotonic?: () => number; // ms, for cams-admin's clock between challenges (tests)
   // The signed serverTime's high-water mark (a replayed challenge is refused).
@@ -420,7 +421,7 @@ export class AdminClient {
         const mono = this.d.monotonic ?? (() => performance.now());
         const at = mono();
         this.conn = { connId, serverNow: () => serverTime + (mono() - at), seen: new SeenIds() };
-        this.trySend(ws, 'hello', { proxyId: k.proxyId, keyId: k.keyId, connId, nonce, ts, version: this.d.version.slice(0, 64), capabilities: this.d.commands ? ['status', 'commands'] : ['status'] }, { sig: sign(k.privateKey, signedText.hello(connId, nonce, k.proxyId, k.keyId, ts)) });
+        this.trySend(ws, 'hello', { proxyId: k.proxyId, keyId: k.keyId, connId, nonce, ts, version: this.d.version.slice(0, 64), capabilities: this.d.commands && this.d.commands.status().enabled ? ['status', 'commands'] : ['status'] }, { sig: sign(k.privateKey, signedText.hello(connId, nonce, k.proxyId, k.keyId, ts)) });
         return;
       }
       case 'welcome': {
