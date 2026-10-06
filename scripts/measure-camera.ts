@@ -21,6 +21,9 @@ export interface Measure {
 const CAMERA_NET = /^192\.168\.60\.\d{1,3}$/;
 const err = (e: unknown) => ({ error: (e as Error).message });
 
+// The certificate the camera serves, read without validation (a factory
+// certificate is self-signed): nothing is sent, the socket closes after the
+// handshake. Accepted in .github/codeql-accepted.tsv.
 function served(host: string, port: number): Promise<Measure['served']> {
   return new Promise((resolve) => {
     const s = connect({ host, port, rejectUnauthorized: false, servername: undefined }, () => {
