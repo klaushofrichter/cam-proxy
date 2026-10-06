@@ -950,6 +950,12 @@ and checks it as the cluster runs it.
   [cam-proxy-pi-display](https://github.com/klaushofrichter/cam-proxy-pi-display),
   a systemd service that reads `GET /api/local/health` over loopback (host
   networking makes it reachable) and needs no token.
+- **Multi-camera host** (the mini PC with a camera network of its own):
+  every host file (nftables, dnsmasq, chrony, sysctl, Docker's
+  `daemon.json`, compose, the first `config.json`) is rendered from one
+  `host.json` by `scripts/host/render.ts` and installed by
+  `deploy/host/prepare-host.sh`. See
+  [docs/multi-camera-host.md](docs/multi-camera-host.md).
 
 ## Development
 
