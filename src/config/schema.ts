@@ -237,7 +237,20 @@ export const SETTINGS: Node = {
   ntp: {
     server: unset({ type: 'string', pattern: '^[A-Za-z0-9.-]{1,253}$', optional: true, doc: "the NTP server the proxy sets on its cameras (the host's camera-side address)" }, "the cameras' NTP setting is left alone"),
   },
+  // cams-admin (spec 2026-10-06-cams-admin-phase1-design §9.2): the outbound
+  // status client; unset url = off (the default). Applies at once (restarts
+  // the client only). camsAdmin.allowCommands is checked at load (must be empty).
+  camsAdmin: {
+    url: unset({ type: 'string', pattern: '^https?://[^\\s]+$', optional: true, doc: 'the cams-admin this proxy reports to: https://, or http:// for loopback and *.svc.cluster.local; set by admin-enroll' }, 'off: no connection to cams-admin'),
+    keyFile: { type: 'string', pattern: '^.+$', doc: "the proxy's cams-admin key file, relative to server.dataDir (mode 600, written at enrollment)" },
+    enabled: { type: 'boolean', doc: 'connect to cams-admin (false keeps the key and stays off)' },
+  },
 };
+
+// The version of this settings schema, reported to cams-admin in the
+// heartbeat (proxy.configSchema): raise it when a setting is added, renamed
+// or changes meaning. 1: the first versioned schema (with camsAdmin).
+export const CONFIG_SCHEMA = 1;
 
 
 export class SettingError extends Error {}

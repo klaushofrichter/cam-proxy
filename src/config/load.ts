@@ -6,6 +6,7 @@ import { cameraConfig } from './cameras';
 import { normalizeFile, normalizeOverrides, translatePath } from './legacy';
 import { loadSecrets } from './secrets';
 import { EnvSettingError, readEnvLayer, type EnvLayer } from './env';
+import { adminUrlProblem } from '../fleet/protocol';
 
 export { ConfigError } from './load-error';
 import { ConfigError } from './load-error';
@@ -144,6 +145,22 @@ function crossCheck(c: Config): void {
   }
   if (c.server.tls.port !== undefined && !c.tls.site) throw new ConfigError('server.tls.port: needs tls.site (the proxy certificate comes from the site CA)');
   if (c.server.tls.port !== undefined && c.server.tls.port === c.server.port) throw new ConfigError('server.tls.port: must differ from server.port');
+  // cams-admin (spec 2026-10-06-cams-admin-phase1-design §8.9, §9.2).
+  if (c.camsAdmin.url !== undefined) {
+    const p = /^https?:\/\//.test(c.camsAdmin.url) ? adminUrlProblem(c.camsAdmin.url) : 'must be https://';
+    if (p) throw new ConfigError(`camsAdmin.url: ${p}`);
+  }
+  if (isAbsolute(c.camsAdmin.keyFile) || c.camsAdmin.keyFile.split(/[\\/]/).includes('..')) throw new ConfigError('camsAdmin.keyFile: must be a path inside server.dataDir');
+}
+
+// camsAdmin.allowCommands (P3's command allowlist): only an empty list in this
+// version (spec §9.2), and not a setting: taken out before the checks.
+function takeAllowCommands(o: unknown): void {
+  const ca = isObj(o) && isObj(o.camsAdmin) ? (o.camsAdmin as Obj) : undefined;
+  if (!ca || !Object.hasOwn(ca, 'allowCommands')) return;
+  if (!Array.isArray(ca.allowCommands) || ca.allowCommands.length) throw new ConfigError('camsAdmin.allowCommands: must be empty (cams-admin commands are not supported in this version)');
+  delete ca.allowCommands;
+  if (!Object.keys(ca).length) delete (o as Obj).camsAdmin;
 }
 
 const ipv4Int = (ip: string): number | null => {
@@ -209,12 +226,14 @@ export function loadConfig(env: NodeJS.ProcessEnv, opts: { cwd?: string } = {}):
   // A legacy `camera` is read as a list of one (spec §4.2); nothing is rewritten.
   const norm = normalizeFile(file ? readJson(file) : {});
   const fileSettings = norm.settings;
+  takeAllowCommands(fileSettings);
   asConfigError(() => checkPartial(fileSettings));
   const baseDir = file ? dirname(file) : cwd;
   // Overrides live in the data folder, which the file (not an override) sets.
   const fileDataDir = (getPath(fileSettings, 'server.dataDir') as string | undefined) ?? DEFAULTS.server.dataDir;
   const overridesFile = join(isAbsolute(fileDataDir) ? fileDataDir : resolve(baseDir, fileDataDir), 'overrides.json');
   const overrides = normalizeOverrides(existsSync(overridesFile) ? readJson(overridesFile) : {}, norm.order);
+  takeAllowCommands(overrides);
   asConfigError(() => checkPartial(overrides));
   if (getPath(overrides, 'server.dataDir') !== undefined) throw new ConfigError('server.dataDir: can only be set in config.json');
   let layer: EnvLayer;
@@ -268,6 +287,7 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 export function applyOverrides(loaded: Loaded, given: object): Loaded {
   // Legacy camera.* and ftp.user paths on one camera (Ruling P1-8).
   const patch = normalizeOverrides(given, loaded.order, loaded.addedCameras);
+  takeAllowCommands(patch);
   asConfigError(() => checkPartial(patch));
   if (getPath(patch, 'server.dataDir') !== undefined) throw new ConfigError('server.dataDir: can only be set in config.json');
   // An override of a setting the environment sets would never apply.
