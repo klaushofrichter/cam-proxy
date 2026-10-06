@@ -1,0 +1,16 @@
+{
+  "$note": "",
+  "schema": "error",
+  "message": {
+    "v": 1,
+    "type": "error",
+    "id": "01K60000000000000000000004",
+    "seq": 4,
+    "ts": 1791273600004,
+    "body": {
+      "code": "rate_limited",
+      "message": "too many messages",
+      "retryAfterS": 60
+    }
+  }
+}

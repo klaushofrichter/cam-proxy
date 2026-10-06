@@ -1,0 +1,72 @@
+{
+  "$comment": "Fixed Ed25519 test keys (PKCS#8 = 302e020100300506032b657004220420 + seed) and the signed strings of spec 8.2/8.3. Test keys only: never use them for a real proxy.",
+  "keys": {
+    "proxy": {
+      "seedHex": "0101010101010101010101010101010101010101010101010101010101010101",
+      "privateKey": "MC4CAQAwBQYDK2VwBCIEIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB",
+      "publicKey": "MCowBQYDK2VwAyEAiojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=",
+      "fingerprint": "SHA256:FD110D301D2F077DE1414B8F99F441B1403FAB207B2052FBD2C065E4EE8E7DC2"
+    },
+    "server": {
+      "seedHex": "0202020202020202020202020202020202020202020202020202020202020202",
+      "privateKey": "MC4CAQAwBQYDK2VwBCIEIAICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC",
+      "publicKey": "MCowBQYDK2VwAyEAgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=",
+      "fingerprint": "SHA256:47DEA58EA00FAE9417EE19D76755BFEF690899021132EFFB04FE1F9E4F0C8059"
+    },
+    "other": {
+      "seedHex": "0303030303030303030303030303030303030303030303030303030303030303",
+      "privateKey": "MC4CAQAwBQYDK2VwBCIEIAMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMD",
+      "publicKey": "MCowBQYDK2VwAyEA7UkoxijRwsbq6QM4kFmVYSlZJzpcY/k2NsFGFKyHN9E=",
+      "fingerprint": "SHA256:8CEF065B7AF83669150B7D32704D3D3E75C3E9AEE0D4F6740544C68E81B377AA"
+    }
+  },
+  "signatures": [
+    {
+      "kind": "enroll",
+      "key": "proxy",
+      "args": [
+        "CAE1-7Q2M-K9XD-4HPA-W3ZT-RN6B",
+        "MCowBQYDK2VwAyEAiojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w="
+      ],
+      "text": "cams-admin enroll v1\nCAE1-7Q2M-K9XD-4HPA-W3ZT-RN6B\nMCowBQYDK2VwAyEAiojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=",
+      "sig": "aagO4iYxOC0rfYZgYDAQtbGFIvCgxn5qn0pccayI/OXqoG696Bhlpu6slJjSug4adYBWFpZHQXgqGXX96HMNBw=="
+    },
+    {
+      "kind": "challenge",
+      "key": "server",
+      "args": [
+        "con_0123456789ABCDEFGHJK",
+        "q83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA",
+        1791273600000
+      ],
+      "text": "cams-admin/v1 challenge\ncon_0123456789ABCDEFGHJK\nq83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA\n1791273600000",
+      "sig": "Ihp3EoTokGhz8c/ZEF1uTinJ7rRQWfo5Fl9TKyjtNbwDUo2n4b49Lp5zgHVJtrqCPrJtU4hY/8PvAmBOhrQ4Dg=="
+    },
+    {
+      "kind": "hello",
+      "key": "proxy",
+      "args": [
+        "con_0123456789ABCDEFGHJK",
+        "q83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA",
+        "prx_0123456789ABCDEFGHJK",
+        "key_0123456789ABCDEFGHJK",
+        1791273600123
+      ],
+      "text": "cams-admin/v1 hello\ncon_0123456789ABCDEFGHJK\nq83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA\nprx_0123456789ABCDEFGHJK\nkey_0123456789ABCDEFGHJK\n1791273600123",
+      "sig": "uC6zqMdU/0AJERMt+7+mSZ3sI2xhtSDsZZ35F1C5dfU0fMgdN8nyXkAYHzu8EayvCkKUr/hI/8M+aKFutIDfDg=="
+    },
+    {
+      "kind": "hello",
+      "key": "proxy",
+      "args": [
+        "con_0123456789ABCDEFGHJK",
+        "q83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA",
+        "prx_0123456789ABCDEFGHJK",
+        "key_0123456789ABCDEFGHJK",
+        0
+      ],
+      "text": "cams-admin/v1 hello\ncon_0123456789ABCDEFGHJK\nq83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA\nprx_0123456789ABCDEFGHJK\nkey_0123456789ABCDEFGHJK\n0",
+      "sig": "wKwpCgs5JS/OAgvVHVcYAF5O55F92LdqWiWMUtycNUd9olmXJMDuqZSjRgtX1ylHk6wAuUtMZZwYLEMzKkf+Cg=="
+    }
+  ]
+}

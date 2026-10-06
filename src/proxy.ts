@@ -32,7 +32,7 @@ import { CachePool } from './recordings/pool';
 import { PoeSwitch } from './camera/poe-switch';
 import { restartProcess } from './process-restart';
 import type { Config } from './config/defaults';
-import { getPath, needsProcessRestart, needsRestart, setPath, settingPaths, type Loaded } from './config/load';
+import { applyOverrides, getPath, needsProcessRestart, needsRestart, removeOverride, setPath, settingPaths, type Loaded } from './config/load';
 import { cameraFtpOff, setupCameraFtp, testCameraFtp, type FtpTarget } from './clips/camera-ftp';
 import { createClipsSide, ftpUsers, type ClipsSide } from './clips/side';
 import type { RecordingsSide } from './recordings/side';
@@ -68,6 +68,10 @@ import { localApi } from './api/local-api';
 import { archiveApi } from './api/archive-api';
 import { Archive } from './archive/service';
 import { discover } from './camera/discovery';
+import { CamsAdmin } from './fleet/service';
+import { camsAdminApi } from './api/cams-admin-api';
+import type { Timing } from './fleet/client';
+import { CONFIG_SCHEMA } from './config/schema';
 
 export const VERSION = process.env.CAMPROXY_VERSION ?? 'dev';
 
@@ -102,6 +106,8 @@ export interface Proxy {
   readonly archive: Archive;
   // The camera certificates of the site CA (spec §10.1.3); undefined without tls.site (the Pi). Test seam: tick().
   readonly certs: CameraCerts | undefined;
+  // cams-admin (spec 2026-10-06-cams-admin-phase1-design §9): off unless camsAdmin.url is set.
+  readonly camsAdmin: CamsAdmin;
   go2rtcPid(): number | undefined;
   start(opts?: { port?: number; host?: string }): Promise<{ port: number }>;
   restart(): Promise<void>;
@@ -128,6 +134,8 @@ export interface ProxyOptions {
   // The certificate push's waits (10 s after a clear, up to 90 s for the new
   // certificate, polled every 5 s); tests shorten them against cam-sim.
   tlsPush?: { clearWaitMs?: number; verifyMs?: number; pollMs?: number };
+  // The cams-admin client's waits (tests shorten them).
+  camsAdmin?: { timing?: Partial<Timing> };
 }
 
 export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
@@ -423,6 +431,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     sseClients: () => sse.clients(),
     version: VERSION,
     target: TARGET,
+    // Defined further down; read on a scrape only. Absent while off (the Pi).
+    camsAdmin: () => (running.camsAdmin.url ? camsAdmin.view().state : null),
     certs: () => [
       ...(proxyLeaf ? [{ cam: 'proxy', notAfter: proxyLeaf.notAfter }] : []),
       ...(certs ? cams.ids().flatMap((id) => { const st = certs!.state(id); return st.mode === 'site-ca' ? [{ cam: id, notAfter: st.notAfter }] : []; }) : []),
@@ -638,6 +648,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     setLogLevel(running.server.logLevel);
     // Only a change to the analytics settings lifts a bad_key pause.
     if (JSON.stringify(next.config.analytics) !== analyticsBefore) analytics.settingsChanged();
+    void camsAdmin.apply();
   };
 
   // An `auth-refused` record per source IP and path per 10 minutes; the
@@ -751,9 +762,34 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     });
   };
 
+  let startedAt: number | null = null;
+  // cams-admin (spec 2026-10-06-cams-admin-phase1-design §9): a leaf; it
+  // reads the summary GET /api/local/health serves, at most once per heartbeat.
+  const camsAdmin = new CamsAdmin({
+    settings: () => running.camsAdmin,
+    dataDir: () => running.server.dataDir,
+    version: VERSION,
+    cameraIds: () => cams.ids(),
+    health: healthNow,
+    proxyInfo: () => ({
+      startedAt,
+      uptimeS: startedAt ? Math.round((Date.now() - startedAt) / 1000) : null,
+      configSchema: CONFIG_SCHEMA,
+      tls: running.tls.site && ca ? { site: running.tls.site, caFingerprint: [ca.fingerprint] } : null,
+      publicUrl: running.server.publicUrl ?? null,
+    }),
+    // What changes ok, problemCount or a camera's online flag, read cheaply (an early heartbeat).
+    changeKey: () => `${storage.paused() ? 1 : 0}|${cams.list().map((w) => `${w.id}:${w.status.state().online ? 1 : 0}${w.streamStatus().up ? 1 : 0}:${w.intake.state().onvif}`).join(',')}`,
+    log: logger,
+    timing: opts.camsAdmin?.timing,
+    setUrl: async (url) => {
+      const next = url ? applyOverrides(loaded, { camsAdmin: { url } }) : loaded.sources['camsAdmin.url'] === 'override' ? removeOverride(loaded, 'camsAdmin.url') : loaded;
+      if (next !== loaded) setLoaded(next);
+    },
+  });
+
   const app = express();
   app.disable('x-powered-by');
-  let startedAt: number | null = null;
   // Far above real use (the UI, cams, a scraper); stops a flood. SSE is one
   // long request. Still and sprite images have their own, higher limit: a
   // day on the timeline is up to 1440 sprites.
@@ -800,6 +836,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // on the route inside the router; other /control paths pass on untouched
   // to the admin-only routes below.
   app.use('/control', auditApi({ audit, guard: requireAccess('audit-read', access), retentionDays: () => running.retention.auditDays }));
+  // The cams-admin card (spec 2026-10-06-cams-admin-phase1-design §9.2).
+  app.use('/control', requireAccess('admin', access), camsAdminApi({ camsAdmin, audit }));
   app.use(
     '/control',
     requireAccess('admin', access),
@@ -1019,6 +1057,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     get certs() {
       return certs;
     },
+    camsAdmin,
     // Test seam: the host go2rtc's process id (adding a camera never restarts it).
     go2rtcPid: () => go2rtc?.pid(),
     async start(opts = {}) {
@@ -1062,6 +1101,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       audit.write({ action: 'proxy-start', category: ['process'], type: ['start'], outcome: 'success', user: 'system', message: `cam-proxy ${VERSION} started`, details: { config: { camera: cams.first().id, cameras: cams.ids(), stills: running.stills.enabled, ftp: running.ftp.enabled, analytics: running.analytics.googleVision.enabled }, previousStop, uncleanStop } });
       daily.start();
       startedAt = Date.now();
+      // Only with camsAdmin.url (the Pi: nothing until enrolled).
+      void camsAdmin.apply();
       logger.info({ port, cameras: cams.ids(), version: VERSION }, 'cam_proxy_started');
       return { port };
     },
@@ -1113,7 +1154,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       // A recording download is aborted (cmd 9) and the Baichuan session closed (up to 2 s).
       // A running inventory is cancelled ('stop'), saved and audited before the catalog closes.
       // An archive job in flight is cancelled (its staged folder removed) before the catalog closes.
-      await Promise.all([composer.stop(), analytics.stop(), archive.stop(), ...cams.list().map((w) => w.stopRecordings()), inventory.stop()]);
+      // cams-admin: bye and close within 1 s, before the HTTP server (spec §9.1).
+      await Promise.all([composer.stop(), analytics.stop(), archive.stop(), ...cams.list().map((w) => w.stopRecordings()), inventory.stop(), camsAdmin.stop(opts.reason === 'restart-requested' ? 'restart' : 'shutdown')]);
       certs?.stop();
       clearInterval(proxyLeafTimer);
       const s = server;

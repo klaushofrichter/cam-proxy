@@ -248,6 +248,20 @@ describe('the Pi: no site CA', () => {
   });
 });
 
+// cams-admin (spec 2026-10-06-cams-admin-phase1-design §9.1): no camsAdmin.url,
+// so no socket, no timer, no data/admin folder, no new health item or metric.
+describe('the Pi: no cams-admin', () => {
+  it('off: no client, no data/admin, the same health items, no cams-admin metric', async () => {
+    expect(proxy.running.camsAdmin).toEqual({ keyFile: 'admin/key.json', enabled: true });
+    expect(proxy.camsAdmin.view()).toMatchObject({ state: 'off', url: null });
+    expect(proxy.camsAdmin.active()).toBe(false);
+    expect(existsSync(join(dir, 'data', 'admin'))).toBe(false);
+    const h = (await request(base).get('/api/local/health')).body;
+    expect(h.items.map((i: { id: string }) => i.id)).toEqual(PI_ITEM_IDS);
+    expect((await request(base).get('/metrics')).text).not.toMatch(/^camproxy_cams_admin_state\{/m);
+  });
+});
+
 describe("cam1 as on the Pi (https, tlsName: its Let's Encrypt name) with a site CA on: never pushed to", () => {
   it('mode public; nothing imported into the camera', async () => {
     const s2 = await startSim();

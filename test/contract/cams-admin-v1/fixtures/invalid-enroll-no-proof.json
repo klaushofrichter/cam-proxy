@@ -1,0 +1,13 @@
+{
+  "$note": "",
+  "schema": "enroll-request",
+  "$expect": {
+    "runtime": "bad_request",
+    "strict": "invalid"
+  },
+  "message": {
+    "v": 1,
+    "code": "CAE1-7Q2M-K9XD-4HPA-W3ZT-RN6B",
+    "publicKey": "MCowBQYDK2VwAyEAiojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w="
+  }
+}

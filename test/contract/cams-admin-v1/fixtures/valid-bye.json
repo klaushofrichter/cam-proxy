@@ -1,0 +1,14 @@
+{
+  "$note": "",
+  "schema": "bye",
+  "message": {
+    "v": 1,
+    "type": "bye",
+    "id": "01K60000000000000000000005",
+    "seq": 5,
+    "ts": 1791273600005,
+    "body": {
+      "reason": "shutdown"
+    }
+  }
+}

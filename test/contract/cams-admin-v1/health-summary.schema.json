@@ -1,0 +1,901 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/health-summary.schema.json",
+  "title": "cam-proxy health summary, schema 1",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": 1
+    },
+    "generatedAt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "version": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "startedAt": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "problemCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "thresholds": {
+      "type": "object",
+      "properties": {
+        "diskPercent": {
+          "type": "number"
+        },
+        "tempC": {
+          "type": "number"
+        },
+        "ftpStalledHours": {
+          "type": "number"
+        },
+        "archiveWarnPercent": {
+          "type": "number"
+        }
+      },
+      "required": []
+    },
+    "platform": {
+      "type": "object",
+      "properties": {
+        "pi": {
+          "type": "boolean"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hostStats": {
+          "type": "boolean"
+        }
+      },
+      "required": []
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "problem": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "text",
+          "problem"
+        ]
+      },
+      "maxItems": 64
+    },
+    "camera": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "address": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "online": {
+          "type": "boolean"
+        },
+        "since": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "firmware": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clockOffsetMs": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reboot": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "poeSwitch": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "port": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "model"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "online"
+      ]
+    },
+    "stream": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "up": {
+          "type": "boolean"
+        },
+        "lastFrameAt": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": []
+    },
+    "events": {
+      "type": "object",
+      "properties": {
+        "onvif": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "source": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "since": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resubscribes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": []
+    },
+    "ftp": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "listening": {
+          "type": "boolean"
+        },
+        "cameraUpload": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "checkedAt": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lastClipAt": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clipsStored": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failures": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stalled": {
+          "type": "boolean"
+        },
+        "eventsWithoutClip": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": []
+    },
+    "proxy": {
+      "type": "object",
+      "properties": {
+        "sseClients": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "storagePaused": {
+          "type": "boolean"
+        },
+        "lastRetentionRun": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recordingsCache": {
+          "type": "object",
+          "properties": {
+            "bytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "files": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "capBytes": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": []
+        },
+        "lastInventory": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "op": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "outcome": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "startedAt": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "message": {
+                  "type": "string",
+                  "maxLength": 200
+                }
+              },
+              "required": []
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": []
+    },
+    "disk": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "sizeBytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "freeBytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "usedBytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "usedPercent": {
+              "type": "number"
+            }
+          },
+          "required": []
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "host": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "cpuTempC": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "underVoltage": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "memory": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "totalBytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "availableBytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "usedPercent": {
+                      "type": "number"
+                    }
+                  },
+                  "required": []
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "uptimeS": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "load": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "m1": {
+                      "type": "number"
+                    },
+                    "m5": {
+                      "type": "number"
+                    },
+                    "m15": {
+                      "type": "number"
+                    }
+                  },
+                  "required": []
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": []
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "cameras": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "camera": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "address": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "online": {
+                "type": "boolean"
+              },
+              "since": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "model": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "firmware": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "clockOffsetMs": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "error": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "reboot": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "poeSwitch": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "model": {
+                        "type": "string",
+                        "maxLength": 64
+                      },
+                      "port": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "model"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "online"
+            ]
+          },
+          "stream": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "up": {
+                "type": "boolean"
+              },
+              "lastFrameAt": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": []
+          },
+          "events": {
+            "type": "object",
+            "properties": {
+              "onvif": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "source": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "since": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "resubscribes": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": []
+          },
+          "ftp": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "listening": {
+                "type": "boolean"
+              },
+              "cameraUpload": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "checkedAt": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "lastClipAt": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "clipsStored": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "failures": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "stalled": {
+                "type": "boolean"
+              },
+              "eventsWithoutClip": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": []
+          },
+          "cert": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "servername": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 200
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "fingerprint": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 200
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "notAfter": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastPush": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "at": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "outcome": {
+                            "type": "string",
+                            "maxLength": 64
+                          }
+                        },
+                        "required": []
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "problem": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 200
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": []
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "label": {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                "value": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "text": {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                "problem": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "label",
+                "text",
+                "problem"
+              ]
+            },
+            "maxItems": 64
+          }
+        },
+        "required": [
+          "camera",
+          "items"
+        ]
+      },
+      "maxItems": 64
+    }
+  },
+  "required": [
+    "schema",
+    "generatedAt",
+    "version",
+    "ok",
+    "problemCount",
+    "items"
+  ]
+}

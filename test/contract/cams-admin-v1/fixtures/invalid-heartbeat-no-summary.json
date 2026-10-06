@@ -1,0 +1,18 @@
+{
+  "$note": "",
+  "schema": "heartbeat",
+  "$expect": {
+    "runtime": "bad_message",
+    "strict": "invalid"
+  },
+  "message": {
+    "v": 1,
+    "type": "heartbeat",
+    "id": "01K60000000000000000000001",
+    "seq": 1,
+    "ts": 1791273600001,
+    "body": {
+      "truncated": false
+    }
+  }
+}

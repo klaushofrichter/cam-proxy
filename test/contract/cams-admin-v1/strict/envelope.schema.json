@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/strict/envelope.schema.json",
+  "title": "cams-admin v1 envelope (any message)",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "type": {
+      "enum": [
+        "challenge",
+        "hello",
+        "welcome",
+        "heartbeat",
+        "ack",
+        "error",
+        "bye"
+      ]
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "ts": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "re": {
+      "type": "string",
+      "maxLength": 40
+    },
+    "body": {
+      "type": "object"
+    },
+    "sig": {
+      "type": "string",
+      "maxLength": 100,
+      "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+    }
+  },
+  "required": [
+    "v",
+    "type",
+    "id",
+    "seq",
+    "ts",
+    "body"
+  ],
+  "additionalProperties": false
+}

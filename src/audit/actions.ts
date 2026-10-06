@@ -9,7 +9,7 @@ export const AUDIT_ACTIONS = [
   'still-check', 'event-analysis', 'composition',
   'archive-add', 'archive-update', 'archive-delete', 'archive-clear', 'archive-expire',
   'storage-daily', 'storage-paused', 'storage-resumed', 'activity-daily',
-  'inventory', 'inventory-repair', 'audit-throttled',
+  'inventory', 'inventory-repair', 'admin-enroll', 'admin-unenroll', 'audit-throttled',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 const KNOWN = new Set<string>(AUDIT_ACTIONS);

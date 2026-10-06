@@ -1,0 +1,16 @@
+{
+  "$note": "unknown type: error unsupported_type, connection stays",
+  "schema": "envelope",
+  "$expect": {
+    "runtime": "unsupported_type",
+    "strict": "invalid"
+  },
+  "message": {
+    "v": 1,
+    "type": "frobnicate",
+    "id": "01K60000000000000000000001",
+    "seq": 1,
+    "ts": 1791273600001,
+    "body": {}
+  }
+}
