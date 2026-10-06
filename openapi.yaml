@@ -754,6 +754,36 @@ paths:
       responses:
         '200': { description: '{ site (or null), caFingerprint ("SHA256:" + upper-case hex of the CA DER; the pin cams takes), caNotAfter, proxy: { servername, fingerprint, notAfter } or null, cameras: [{ id, mode (site-ca, pinned, public, none), servername, fingerprint, notAfter, lastPush: { at, outcome (pushed, current, refused, failed) } or null, problem }], problems: [text] }; without tls.site: site null, cameras [], problems []' }
         '401': { description: not signed in }
+  /control/admin:
+    get:
+      summary: The cams-admin card (docs/cams-admin.md); never any key material (admin)
+      responses:
+        '200': { description: '{ state (off, disabled, not-enrolled, key-unsafe, key-invalid, connecting, connected, backoff, rejected, incompatible), url, account, proxyId, fingerprint ("SHA256:" + upper-case hex of the proxy key), enrolledAt, connectedSince, lastHeartbeatAt, lastAckAt, lastError, lastErrorAt, retryInMs, truncated, lingering }' }
+        '401': { description: not signed in }
+  /control/admin/enroll:
+    post:
+      summary: Enroll with cams-admin with a one-time code ({url, code}); the key file, camsAdmin.url, connects at once; audited (admin-enroll), never the code
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [url, code], properties: { url: { type: string }, code: { type: string } } }
+      responses:
+        '200': { description: the card's view (as GET /control/admin) }
+        '400': { description: '{ error, message }: bad_url, not_a_code, invalid_code (unknown, used, cancelled or expired), bad_proof, bad_request, unsupported_version, too_large' }
+        '409': { description: '{ error: busy, message }: another enrollment is running' }
+        '429': { description: '{ error: rate_limited, message, retryAfterS }' }
+        '502': { description: '{ error: unreachable | server_error | bad_answer, message }' }
+  /control/admin/reconnect:
+    post:
+      summary: Closes the cams-admin connection and connects again now
+      responses:
+        '200': { description: the card's view }
+        '409': { description: '{ error: not_connecting, state }: no client (not enrolled, off, key problem)' }
+  /control/admin/unenroll:
+    post:
+      summary: bye unenrolled (cams-admin revokes the key), the key file deleted, the camsAdmin.url override cleared; audited (admin-unenroll)
+      responses:
+        '200': { description: the card's view }
   /control/config:
     get:
       summary: Every setting with value, source, restart flag and pending next value

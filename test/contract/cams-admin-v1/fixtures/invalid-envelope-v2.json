@@ -1,0 +1,18 @@
+{
+  "$note": "an unknown envelope version",
+  "schema": "envelope",
+  "$expect": {
+    "runtime": "unsupported_version",
+    "strict": "invalid"
+  },
+  "message": {
+    "v": 2,
+    "type": "bye",
+    "id": "01K60000000000000000000001",
+    "seq": 1,
+    "ts": 1791273600001,
+    "body": {
+      "reason": "shutdown"
+    }
+  }
+}

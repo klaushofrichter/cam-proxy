@@ -1,0 +1,487 @@
+{
+  "$note": "run time clamps text to 200 characters; strict refuses: the proxy must clamp",
+  "schema": "heartbeat",
+  "$expect": {
+    "runtime": "accepted",
+    "strict": "invalid"
+  },
+  "message": {
+    "v": 1,
+    "type": "heartbeat",
+    "id": "01K60000000000000000000002",
+    "seq": 2,
+    "ts": 1791273600002,
+    "body": {
+      "summary": {
+        "schema": 1,
+        "generatedAt": 1791273600000,
+        "version": "v2026.10.06.1",
+        "startedAt": 1791187200000,
+        "ok": false,
+        "problemCount": 3,
+        "thresholds": {
+          "diskPercent": 90,
+          "tempC": 75,
+          "ftpStalledHours": 6
+        },
+        "platform": {
+          "pi": false,
+          "model": null,
+          "hostStats": false
+        },
+        "items": [
+          {
+            "id": "camera",
+            "label": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "value": 3,
+            "text": "3 of 4 online",
+            "problem": true
+          },
+          {
+            "id": "stream",
+            "label": "Live stream",
+            "value": 3,
+            "text": "3 of 4 up",
+            "problem": true
+          },
+          {
+            "id": "events",
+            "label": "Events intake",
+            "value": 3,
+            "text": "3 of 4 subscribed",
+            "problem": true
+          },
+          {
+            "id": "ftp",
+            "label": "Camera FTP upload",
+            "value": 4,
+            "text": "all 4 on",
+            "problem": false
+          },
+          {
+            "id": "storage",
+            "label": "Storage",
+            "value": "writing",
+            "text": "writing",
+            "problem": false
+          },
+          {
+            "id": "disk",
+            "label": "Disk",
+            "value": 41.5,
+            "text": "41.5 % of 234.0 GB",
+            "problem": false
+          },
+          {
+            "id": "certificates",
+            "label": "Certificates",
+            "value": 300,
+            "text": "valid 300 more days",
+            "problem": false
+          },
+          {
+            "id": "inventory",
+            "label": "Last inventory",
+            "value": "ok",
+            "text": "clips: ok",
+            "problem": false
+          },
+          {
+            "id": "version",
+            "label": "Version",
+            "value": "v2026.10.06.1",
+            "text": "v2026.10.06.1",
+            "problem": false
+          }
+        ],
+        "camera": {
+          "id": "cam1",
+          "name": "Camera 1",
+          "address": "192.0.2.10",
+          "online": true,
+          "since": 1791270000000,
+          "model": "RLC-1224A",
+          "firmware": "v3.1.0.4054_2408211442",
+          "clockOffsetMs": 120,
+          "error": null,
+          "reboot": null,
+          "poeSwitch": {
+            "model": "sscpoe-web",
+            "port": 8
+          }
+        },
+        "stream": {
+          "enabled": true,
+          "up": true,
+          "lastFrameAt": 1791273599000
+        },
+        "events": {
+          "onvif": "subscribed",
+          "source": "onvif",
+          "since": 1791266400000,
+          "resubscribes": 3
+        },
+        "ftp": {
+          "enabled": true,
+          "listening": true,
+          "cameraUpload": "on",
+          "checkedAt": 1791273540000,
+          "lastClipAt": 1791272700000,
+          "clipsStored": 120,
+          "failures": 0,
+          "stalled": false,
+          "eventsWithoutClip": 0
+        },
+        "proxy": {
+          "sseClients": 2,
+          "storagePaused": false,
+          "lastRetentionRun": 1791271800000,
+          "recordingsCache": {
+            "bytes": 1234567890,
+            "files": 42,
+            "capBytes": 10737418240
+          },
+          "lastInventory": {
+            "kind": "clips",
+            "op": "check",
+            "outcome": "ok",
+            "startedAt": 1791187200000,
+            "message": "clips: 120 checked, 0 missing"
+          }
+        },
+        "disk": {
+          "sizeBytes": 251000000000,
+          "freeBytes": 146800000000,
+          "usedBytes": 104200000000,
+          "usedPercent": 41.5
+        },
+        "host": null,
+        "cameras": [
+          {
+            "camera": {
+              "id": "cam1",
+              "name": "Camera 1",
+              "address": "192.0.2.10",
+              "online": true,
+              "since": 1791270000000,
+              "model": "RLC-1224A",
+              "firmware": "v3.1.0.4054_2408211442",
+              "clockOffsetMs": 120,
+              "error": null,
+              "reboot": null,
+              "poeSwitch": {
+                "model": "sscpoe-web",
+                "port": 8
+              }
+            },
+            "stream": {
+              "enabled": true,
+              "up": true,
+              "lastFrameAt": 1791273599000
+            },
+            "events": {
+              "onvif": "subscribed",
+              "source": "onvif",
+              "since": 1791266400000,
+              "resubscribes": 3
+            },
+            "ftp": {
+              "enabled": true,
+              "listening": true,
+              "cameraUpload": "on",
+              "checkedAt": 1791273540000,
+              "lastClipAt": 1791272700000,
+              "clipsStored": 120,
+              "failures": 0,
+              "stalled": false,
+              "eventsWithoutClip": 0
+            },
+            "cert": {
+              "mode": "site-ca",
+              "servername": "cam1.garage.internal",
+              "fingerprint": "SHA256:ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB",
+              "notAfter": 1817193600000,
+              "lastPush": {
+                "at": 1791187200000,
+                "outcome": "current"
+              },
+              "problem": null
+            },
+            "items": [
+              {
+                "id": "camera",
+                "label": "Camera",
+                "value": true,
+                "text": "online",
+                "problem": false
+              },
+              {
+                "id": "stream",
+                "label": "Live stream",
+                "value": "up",
+                "text": "up",
+                "problem": false
+              },
+              {
+                "id": "events",
+                "label": "Events intake",
+                "value": "subscribed",
+                "text": "subscribed",
+                "problem": false
+              },
+              {
+                "id": "ftp",
+                "label": "Camera FTP upload",
+                "value": "on",
+                "text": "on",
+                "problem": false
+              }
+            ]
+          },
+          {
+            "camera": {
+              "id": "cam2",
+              "name": "Camera 2",
+              "address": "192.0.2.11",
+              "online": true,
+              "since": 1791266400000,
+              "model": "RLC-1224A",
+              "firmware": "v3.1.0.4054_2408211442",
+              "clockOffsetMs": 121,
+              "error": null,
+              "reboot": null,
+              "poeSwitch": null
+            },
+            "stream": {
+              "enabled": true,
+              "up": true,
+              "lastFrameAt": 1791273599000
+            },
+            "events": {
+              "onvif": "subscribed",
+              "source": "onvif",
+              "since": 1791266400000,
+              "resubscribes": 4
+            },
+            "ftp": {
+              "enabled": true,
+              "listening": true,
+              "cameraUpload": "on",
+              "checkedAt": 1791273540000,
+              "lastClipAt": 1791272700000,
+              "clipsStored": 121,
+              "failures": 0,
+              "stalled": false,
+              "eventsWithoutClip": 0
+            },
+            "cert": {
+              "mode": "site-ca",
+              "servername": "cam2.garage.internal",
+              "fingerprint": "SHA256:ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB",
+              "notAfter": 1817193600000,
+              "lastPush": {
+                "at": 1791187200000,
+                "outcome": "current"
+              },
+              "problem": null
+            },
+            "items": [
+              {
+                "id": "camera",
+                "label": "Camera",
+                "value": true,
+                "text": "online",
+                "problem": false
+              },
+              {
+                "id": "stream",
+                "label": "Live stream",
+                "value": "up",
+                "text": "up",
+                "problem": false
+              },
+              {
+                "id": "events",
+                "label": "Events intake",
+                "value": "subscribed",
+                "text": "subscribed",
+                "problem": false
+              },
+              {
+                "id": "ftp",
+                "label": "Camera FTP upload",
+                "value": "on",
+                "text": "on",
+                "problem": false
+              }
+            ]
+          },
+          {
+            "camera": {
+              "id": "cam3",
+              "name": "Camera 3",
+              "address": "192.0.2.12",
+              "online": false,
+              "since": 1791262800000,
+              "model": "RLC-1224A",
+              "firmware": "v3.1.0.4054_2408211442",
+              "clockOffsetMs": 122,
+              "error": "connect ETIMEDOUT",
+              "reboot": null,
+              "poeSwitch": null
+            },
+            "stream": {
+              "enabled": true,
+              "up": false,
+              "lastFrameAt": 1791273000000
+            },
+            "events": {
+              "onvif": "down",
+              "source": "poll",
+              "since": 1791266400000,
+              "resubscribes": 5
+            },
+            "ftp": {
+              "enabled": true,
+              "listening": true,
+              "cameraUpload": "on",
+              "checkedAt": 1791273540000,
+              "lastClipAt": 1791272700000,
+              "clipsStored": 122,
+              "failures": 0,
+              "stalled": false,
+              "eventsWithoutClip": 0
+            },
+            "cert": {
+              "mode": "site-ca",
+              "servername": "cam3.garage.internal",
+              "fingerprint": "SHA256:ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB",
+              "notAfter": 1817193600000,
+              "lastPush": {
+                "at": 1791187200000,
+                "outcome": "current"
+              },
+              "problem": null
+            },
+            "items": [
+              {
+                "id": "camera",
+                "label": "Camera",
+                "value": false,
+                "text": "offline",
+                "problem": true
+              },
+              {
+                "id": "stream",
+                "label": "Live stream",
+                "value": "down",
+                "text": "down",
+                "problem": true
+              },
+              {
+                "id": "events",
+                "label": "Events intake",
+                "value": "down",
+                "text": "down, polling",
+                "problem": true
+              },
+              {
+                "id": "ftp",
+                "label": "Camera FTP upload",
+                "value": "on",
+                "text": "on",
+                "problem": false
+              }
+            ]
+          },
+          {
+            "camera": {
+              "id": "cam4",
+              "name": "Camera 4",
+              "address": "192.0.2.13",
+              "online": true,
+              "since": 1791259200000,
+              "model": "RLC-1224A",
+              "firmware": "v3.1.0.4054_2408211442",
+              "clockOffsetMs": 123,
+              "error": null,
+              "reboot": null,
+              "poeSwitch": null
+            },
+            "stream": {
+              "enabled": true,
+              "up": true,
+              "lastFrameAt": 1791273599000
+            },
+            "events": {
+              "onvif": "subscribed",
+              "source": "onvif",
+              "since": 1791266400000,
+              "resubscribes": 6
+            },
+            "ftp": {
+              "enabled": true,
+              "listening": true,
+              "cameraUpload": "on",
+              "checkedAt": 1791273540000,
+              "lastClipAt": 1791272700000,
+              "clipsStored": 123,
+              "failures": 0,
+              "stalled": false,
+              "eventsWithoutClip": 0
+            },
+            "cert": {
+              "mode": "site-ca",
+              "servername": "cam4.garage.internal",
+              "fingerprint": "SHA256:ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB",
+              "notAfter": 1817193600000,
+              "lastPush": {
+                "at": 1791187200000,
+                "outcome": "current"
+              },
+              "problem": null
+            },
+            "items": [
+              {
+                "id": "camera",
+                "label": "Camera",
+                "value": true,
+                "text": "online",
+                "problem": false
+              },
+              {
+                "id": "stream",
+                "label": "Live stream",
+                "value": "up",
+                "text": "up",
+                "problem": false
+              },
+              {
+                "id": "events",
+                "label": "Events intake",
+                "value": "subscribed",
+                "text": "subscribed",
+                "problem": false
+              },
+              {
+                "id": "ftp",
+                "label": "Camera FTP upload",
+                "value": "on",
+                "text": "on",
+                "problem": false
+              }
+            ]
+          }
+        ]
+      },
+      "proxy": {
+        "startedAt": 1791187200000,
+        "uptimeS": 86400,
+        "configSchema": 7,
+        "tls": null,
+        "publicUrl": null
+      },
+      "truncated": false
+    }
+  }
+}

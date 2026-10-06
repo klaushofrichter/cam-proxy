@@ -1,0 +1,22 @@
+{
+  "$note": "hello must be signed",
+  "schema": "hello",
+  "$expect": {
+    "runtime": "bad_message",
+    "strict": "invalid"
+  },
+  "message": {
+    "v": 1,
+    "type": "hello",
+    "id": "01K60000000000000000000001",
+    "seq": 1,
+    "ts": 1791273600001,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "keyId": "key_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "nonce": "q83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA",
+      "ts": 1791273600000
+    }
+  }
+}

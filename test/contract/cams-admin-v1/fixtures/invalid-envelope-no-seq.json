@@ -1,0 +1,17 @@
+{
+  "$note": "seq missing",
+  "schema": "envelope",
+  "$expect": {
+    "runtime": "bad_message",
+    "strict": "invalid"
+  },
+  "message": {
+    "v": 1,
+    "type": "bye",
+    "id": "01K60000000000000000000001",
+    "ts": 1791273600001,
+    "body": {
+      "reason": "shutdown"
+    }
+  }
+}

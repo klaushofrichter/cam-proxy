@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/strict/welcome.schema.json",
+  "title": "cams-admin v1 welcome",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "type": {
+      "const": "welcome"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "ts": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "body": {
+      "type": "object",
+      "properties": {
+        "heartbeatS": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "offlineAfterS": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxMessageBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "serverTime": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "heartbeatS",
+        "offlineAfterS",
+        "maxMessageBytes",
+        "serverTime"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "type",
+    "id",
+    "seq",
+    "ts",
+    "body"
+  ],
+  "additionalProperties": false
+}

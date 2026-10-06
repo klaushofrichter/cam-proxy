@@ -81,6 +81,7 @@ A Mac runs it for development on `localhost:8480`.
 - [Deployment](#deployment)
 - [Development](#development)
 - [cams integration](#cams-integration)
+- [cams-admin (optional)](#cams-admin-optional)
 - [Operating the cluster](#operating-the-cluster)
 
 ## Quick start (Mac, against cam-sim)
@@ -1055,6 +1056,8 @@ certificate through the cluster's `cam1-cert-push`.
 - `camproxy_cert_not_after_seconds{cam}` (the site-CA certificate each
   camera serves, and the proxy's under `cam="proxy"`),
   `camproxy_cert_push_total{cam,outcome}` (only with `tls.site`);
+- `camproxy_cams_admin_state{state}` (1 for the cams-admin client's current
+  state; only with `camsAdmin.url`);
 - `camproxy_build_info`.
 
 ## Deployment
@@ -1130,6 +1133,26 @@ the proxy first (the camera only when the proxy has none), and Live falls
 back to the proxy's stills when live video isn't playing. See the
 [cams README](https://github.com/klaushofrichter/cams#readme) for the
 `proxy` setting and the rest of its camera configuration.
+
+## cams-admin (optional)
+
+[cams-admin](https://github.com/klaushofrichter/cams-admin) is the registry
+and dashboard for several cam-proxies. Enrolled with a one-time code, a proxy
+keeps one outbound WebSocket to it and sends its health summary (the one
+`GET /api/local/health` serves) as a heartbeat every 30 s. It is **off
+unless `camsAdmin.url` is set**: no connection, no timer, no `data/admin/`.
+
+```sh
+# The code comes from cams-admin's UI; it is read from stdin, never an argument.
+docker compose exec cam-proxy node dist/src/cli.js admin-enroll --url https://cams-admin.skylar.technology
+docker compose exec cam-proxy node dist/src/cli.js admin-unenroll
+```
+
+or the **cams-admin** card on the Status page (Enroll, Reconnect, Unenroll;
+`GET /control/admin`, `POST /control/admin/enroll|reconnect|unenroll`, admin
+only). The proxy's private key is `data/admin/key.json` (mode 600; never
+share it). Settings, states, what is and isn't sent, and the contract tests:
+[docs/cams-admin.md](docs/cams-admin.md).
 
 ## Operating the cluster
 

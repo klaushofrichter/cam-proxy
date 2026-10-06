@@ -14,6 +14,7 @@
   import { cameraIds } from '../lib/cameras';
   import { actionPath, blockOf, selectedCamera } from '../lib/cameras';
   import CertificatesCard from '../components/CertificatesCard.svelte';
+  import CamsAdminCard from '../components/CamsAdminCard.svelte';
   import type { TlsView } from '../lib/tls';
 
   const gb = (b: number) => `${(b / 1024 ** 3).toFixed(1)} GB`;
@@ -191,6 +192,7 @@
       {#if tls?.site}
         <CertificatesCard view={tls} reload={loadTls} />
       {/if}
+      <CamsAdminCard />
       {#if health?.host}
         <div class="card" data-testid="card-pi">
           <h3>{piCardTitle(health.platform)}</h3>

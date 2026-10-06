@@ -1,0 +1,253 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/health-summary-truncated.schema.json",
+  "title": "cam-proxy health summary, schema 1, truncated",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": 1
+    },
+    "generatedAt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "version": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "problemCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "problem": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "text",
+          "problem"
+        ]
+      },
+      "maxItems": 64
+    },
+    "cameras": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "camera": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "address": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "online": {
+                "type": "boolean"
+              },
+              "since": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "model": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "firmware": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "clockOffsetMs": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "error": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "reboot": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "poeSwitch": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "model": {
+                        "type": "string",
+                        "maxLength": 64
+                      },
+                      "port": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "model"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "online"
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "label": {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                "value": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "text": {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                "problem": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "label",
+                "text",
+                "problem"
+              ]
+            },
+            "maxItems": 64
+          }
+        },
+        "required": [
+          "camera",
+          "items"
+        ]
+      },
+      "maxItems": 64
+    }
+  },
+  "required": [
+    "schema",
+    "generatedAt",
+    "version",
+    "ok",
+    "problemCount",
+    "items"
+  ]
+}

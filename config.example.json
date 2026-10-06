@@ -116,5 +116,9 @@
   "tls": {
     "cameraCerts": true
   },
-  "ntp": {}
+  "ntp": {},
+  "camsAdmin": {
+    "keyFile": "admin/key.json",
+    "enabled": true
+  }
 }

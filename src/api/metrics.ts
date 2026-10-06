@@ -22,6 +22,8 @@ interface MetricsSources {
   target: string;
   // The site CA's certificates (spec 2026-10-05-multi-camera-host-design §10.5): the proxy's under cam="proxy".
   certs?: () => { cam: string; notAfter: number | null }[];
+  // cams-admin's connection state (spec 2026-10-06-cams-admin-phase1-design §9); null while off.
+  camsAdmin?: () => string | null;
 }
 
 // Live events per kind (camproxy_events_stored, the status): recovered ones
@@ -56,6 +58,12 @@ export function createMetrics(s: MetricsSources) {
   g('disk_files', 'Files on disk by kind', ['kind'], function () {
     const u = usage();
     for (const k of kinds) this.set({ kind: k }, u[k].files);
+  });
+  // One series, the current state, = 1; none while cams-admin is off.
+  g('cams_admin_state', "The cams-admin client's state (1 for the current one)", ['state'], function () {
+    this.reset();
+    const st = s.camsAdmin?.();
+    if (st) this.set({ state: st }, 1);
   });
   g('disk_free_bytes', 'Free bytes on the data disk', [], function () {
     this.set(usage().free);

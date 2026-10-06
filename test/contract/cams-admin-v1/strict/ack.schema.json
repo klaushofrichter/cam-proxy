@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/strict/ack.schema.json",
+  "title": "cams-admin v1 ack",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "type": {
+      "const": "ack"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "ts": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "body": {
+      "type": "object",
+      "properties": {
+        "nextInS": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "nextInS"
+      ],
+      "additionalProperties": false
+    },
+    "re": {
+      "type": "string",
+      "maxLength": 40
+    }
+  },
+  "required": [
+    "v",
+    "type",
+    "id",
+    "seq",
+    "ts",
+    "body",
+    "re"
+  ],
+  "additionalProperties": false
+}

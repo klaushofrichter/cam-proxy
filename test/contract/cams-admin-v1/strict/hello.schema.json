@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/strict/hello.schema.json",
+  "title": "cams-admin v1 hello",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "type": {
+      "const": "hello"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "ts": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "body": {
+      "type": "object",
+      "properties": {
+        "proxyId": {
+          "type": "string",
+          "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+        },
+        "keyId": {
+          "type": "string",
+          "pattern": "^key_[0-9A-HJKMNP-TV-Z]{20}$"
+        },
+        "connId": {
+          "type": "string",
+          "pattern": "^con_[0-9A-HJKMNP-TV-Z]{20}$"
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "version": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "maxItems": 16
+        }
+      },
+      "required": [
+        "proxyId",
+        "keyId",
+        "connId",
+        "nonce",
+        "ts",
+        "version",
+        "capabilities"
+      ],
+      "additionalProperties": false
+    },
+    "sig": {
+      "type": "string",
+      "maxLength": 100,
+      "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+    }
+  },
+  "required": [
+    "v",
+    "type",
+    "id",
+    "seq",
+    "ts",
+    "body",
+    "sig"
+  ],
+  "additionalProperties": false
+}

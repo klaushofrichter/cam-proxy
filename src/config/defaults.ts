@@ -66,6 +66,8 @@ export interface Config {
   tls: { site?: string; cameraCerts: boolean; cameraSubnet?: string; proxyAddresses?: string };
   // The NTP server the proxy keeps on its cameras (§14.2); unset = left alone.
   ntp: { server?: string };
+  // cams-admin (spec 2026-10-06-cams-admin-phase1-design §9.2): no url = off.
+  camsAdmin: { url?: string; keyFile: string; enabled: boolean };
 }
 
 export const DEFAULTS: Config = {
@@ -96,6 +98,7 @@ export const DEFAULTS: Config = {
   },
   tls: { cameraCerts: true },
   ntp: {},
+  camsAdmin: { keyFile: 'admin/key.json', enabled: true },
 };
 
 export interface Secrets {

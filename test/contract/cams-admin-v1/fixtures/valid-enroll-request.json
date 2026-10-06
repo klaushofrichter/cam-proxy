@@ -1,0 +1,16 @@
+{
+  "$note": "proof signed by the vectors proxy key",
+  "schema": "enroll-request",
+  "message": {
+    "v": 1,
+    "code": "CAE1-7Q2M-K9XD-4HPA-W3ZT-RN6B",
+    "publicKey": "MCowBQYDK2VwAyEAiojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=",
+    "proof": "aagO4iYxOC0rfYZgYDAQtbGFIvCgxn5qn0pccayI/OXqoG696Bhlpu6slJjSug4adYBWFpZHQXgqGXX96HMNBw==",
+    "proxy": {
+      "version": "v2026.10.06.1",
+      "cameraIds": [
+        "cam1"
+      ]
+    }
+  }
+}

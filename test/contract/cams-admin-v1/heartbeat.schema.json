@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/heartbeat.schema.json",
+  "title": "cams-admin v1 heartbeat",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "type": {
+      "const": "heartbeat"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "ts": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "body": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "object"
+        },
+        "proxy": {
+          "type": "object",
+          "properties": {
+            "startedAt": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "uptimeS": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "configSchema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "tls": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "site": {
+                      "type": "string",
+                      "maxLength": 63
+                    },
+                    "caFingerprint": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^SHA256:[0-9A-F]{64}$"
+                      },
+                      "maxItems": 2
+                    }
+                  },
+                  "required": [
+                    "site",
+                    "caFingerprint"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "publicUrl": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": []
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "summary"
+      ]
+    }
+  },
+  "required": [
+    "v",
+    "type",
+    "id",
+    "seq",
+    "ts",
+    "body"
+  ]
+}

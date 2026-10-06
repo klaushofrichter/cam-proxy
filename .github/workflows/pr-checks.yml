@@ -29,6 +29,9 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npm run lint:types
+      # The vendored cams-admin contract equals cams-admin main's (docs/cams-admin.md).
+      - name: contract-drift
+        run: scripts/contract-drift.sh
       # Blocking at high for all dependencies, dev included (repository baseline).
       # No allowlist: there are no open high findings. If one cannot be fixed
       # by an update or an override, allowlist it by advisory id here, with a
