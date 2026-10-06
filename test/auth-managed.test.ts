@@ -72,8 +72,22 @@ describe('managed tokens over HTTP', () => {
     expect(r.status).toBe(401);
     expect(r.body).toEqual({ error: 'unauthorized' });
   });
-  it.todo('a managed admin token can narrow but not widen (R2-3) — Task 7');
-  it.todo('a UI session from a login link minted with a managed admin token is managed too — Task 7');
+  it('a managed admin token can narrow but not widen (R2-3)', async () => {
+    await request(p.base).put('/control/admin/commands').set(auth(ADMIN_TOKEN)).send({ allow: ['tokens.apply'] }).expect(200);
+    await request(p.base).put('/control/admin/commands').set(auth(MANAGED_ADMIN)).send({ allow: ['tokens.apply', 'tokens.apply.admin'] }).expect(403, { error: 'local_admin_only', message: 'adding an allowed command needs the local admin token' });
+    await request(p.base).post('/control/admin/commands/pause').set(auth(MANAGED_ADMIN)).send({ reason: 'test' }).expect(200);
+    await request(p.base).post('/control/admin/commands/resume').set(auth(MANAGED_ADMIN)).expect(403);
+    await request(p.base).post('/control/admin/commands/resume').set(auth(ADMIN_TOKEN)).expect(200);
+  });
+  it('a UI session from a login link minted with a managed admin token is managed too', async () => {
+    const link = (await request(p.base).post('/control/login-links').set(auth(MANAGED_ADMIN)).expect(201)).body.code;
+    const res = await request(p.base).get(`/control/login-link?code=${link}`).expect(302);
+    const cookie = String(res.headers['set-cookie']).split(';')[0];
+    await request(p.base).put('/control/admin/commands').set('Cookie', cookie).set('x-camproxy-ui', '1').send({ allow: ['tokens.apply', 'config.get'] }).expect(403);
+    const local = (await request(p.base).post('/control/login-links').set(auth(ADMIN_TOKEN)).expect(201)).body.code;
+    const res2 = await request(p.base).get(`/control/login-link?code=${local}`).expect(302);
+    await request(p.base).put('/control/admin/commands').set('Cookie', String(res2.headers['set-cookie']).split(';')[0]).set('x-camproxy-ui', '1').send({ allow: ['tokens.apply', 'config.get'] }).expect(200);
+  });
   it('a login link minted with a managed admin token gives a managed session', async () => {
     const code = (await request(p.base).post('/control/login-links').set(auth(MANAGED_ADMIN)).expect(201)).body.code;
     const res = await request(p.base).get(`/control/login-link?code=${code}`).expect(302);

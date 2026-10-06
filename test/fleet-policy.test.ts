@@ -2,7 +2,7 @@ import { mkdtempSync, statSync, writeFileSync, chmodSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, it } from 'vitest';
-import { ALLOW_ENTRIES, CommandPolicy, DENIED_PATH_PREFIXES, isDeniedPath, NEVER_REMOTE_ACTIONS, validateAllowList, WideningRefused } from '../src/fleet/policy';
+import { ALLOW_ENTRIES, CommandPolicy, ENTRY_TEXT, IMPLEMENTED, DENIED_PATH_PREFIXES, isDeniedPath, NEVER_REMOTE_ACTIONS, validateAllowList, WideningRefused } from '../src/fleet/policy';
 import { readEnvLayer } from '../src/config/env';
 import { settingPaths } from '../src/config/load';
 import { DEFAULTS } from '../src/config/defaults';
@@ -23,6 +23,15 @@ describe('the closed lists', () => {
     for (const p of ['stills.intervalS', 'retention.days', 'cameras.cam1.name']) expect(isDeniedPath(p), p).toBe(false);
     // Every real setting under a denied prefix is denied (no prefix typo hides one).
     for (const p of settingPaths(DEFAULTS)) if (DENIED_PATH_PREFIXES.some((x) => p === x || p.startsWith(`${x}.`))) expect(isDeniedPath(p), p).toBe(true);
+  });
+});
+
+describe('entry texts', () => {
+  it('every allow entry has a sentence for the card; entries not in this version say so', () => {
+    for (const e of ALLOW_ENTRIES) {
+      expect(ENTRY_TEXT[e], e).toMatch(/\w{3,}/);
+      if (!IMPLEMENTED.has(e)) expect(ENTRY_TEXT[e], e).toMatch(/not in this version/);
+    }
   });
 });
 

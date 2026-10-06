@@ -872,7 +872,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // to the admin-only routes below.
   app.use('/control', auditApi({ audit, guard: requireAccess('audit-read', access), retentionDays: () => running.retention.auditDays }));
   // The cams-admin card (spec 2026-10-06-cams-admin-phase1-design §9.2).
-  app.use('/control', requireAccess('admin', access), camsAdminApi({ camsAdmin, audit }));
+  app.use('/control', requireAccess('admin', access), camsAdminApi({ camsAdmin, audit, commands: { policy: commandPolicy, tokens: tokenStore, runner: commandRunner } }));
   app.use(
     '/control',
     requireAccess('admin', access),

@@ -8,6 +8,9 @@ import { setLogLevel } from '../log';
 import { enrollWithCode, EnrollError } from './enroll';
 import { deleteKeyFile } from './keyfile';
 import { fingerprint, readCapped } from './protocol';
+import { ALLOW_ENTRIES, CommandPolicy } from './policy';
+import { TokenStore } from './token-store';
+import { createHash } from 'crypto';
 
 // `cam-proxy admin-enroll --url U` and `admin-unenroll` (spec
 // 2026-10-06-cams-admin-phase1-design §9.2). The code comes from stdin (a
@@ -24,7 +27,7 @@ export interface CliIo {
   proxyUrl?: string; // default http://127.0.0.1:<server.port>
 }
 
-const USAGE = 'usage: cam-proxy admin-enroll --url <cams-admin URL>   (the code is read from stdin)\n       cam-proxy admin-unenroll\n';
+const USAGE = 'usage: cam-proxy admin-enroll --url <cams-admin URL>   (the code is read from stdin)\n       cam-proxy admin-unenroll\n       cam-proxy admin-commands [status | allow <entry…> | deny <entry…> | pause [reason] | resume]\n       cam-proxy admin-tokens [list | block <id> | unblock <id>]\n';
 
 async function readCode(io: CliIo): Promise<string> {
   if (io.stdin.isTTY) {
@@ -64,6 +67,7 @@ const printView = (io: CliIo, v: { proxyId?: string | null; account?: string | n
 
 export async function runAdminCli(argv: string[], io: CliIo): Promise<number> {
   const [cmd, ...rest] = argv;
+  if (cmd === 'admin-commands' || cmd === 'admin-tokens') return runPolicyCli(cmd, rest, io);
   if (cmd !== 'admin-enroll' && cmd !== 'admin-unenroll') {
     io.err(USAGE);
     return 2;
@@ -151,4 +155,123 @@ export async function runAdminCli(argv: string[], io: CliIo): Promise<number> {
     io.err(`cam-proxy admin-enroll: ${e ? e.message : (err as Error).message}\n`);
     return e && (e.code === 'not_a_code' || e.code === 'bad_url') ? 2 : 1;
   }
+}
+
+// `admin-commands` and `admin-tokens` (migration P2): local admin rights (the
+// CAMPROXY_ADMIN_TOKEN from the environment), so they may widen. With the
+// proxy running they call its routes (audited there); stopped, they write
+// data/admin/policy.json or tokens.json here and audit it.
+type Loaded = ReturnType<typeof loadConfig>;
+interface PolicyView { enabled: boolean; envName: string | null; paused: boolean; pauseReason: string | null; allow: string[] }
+interface TokenItem { id: string; kind: string; label: string; retireAt: number | null; blocked: boolean; live: boolean; hashPrefix: string }
+
+const printPolicy = (io: CliIo, v: PolicyView) =>
+  io.out(`commands: ${v.enabled ? 'on' : `off (${v.envName ?? 'CAMPROXY_ADMIN_COMMANDS'} in the environment)`}\npaused: ${v.paused ? (v.pauseReason ?? 'yes') : 'no'}\nallowed: ${v.allow.join(', ') || 'none'}\n`);
+const printTokens = (io: CliIo, v: { revision: number; problem: string | null; items: TokenItem[] }) => {
+  if (v.problem) io.err(`the token file is unusable: ${v.problem}\n`);
+  if (!v.items.length) return io.out(`no managed tokens (revision ${v.revision})\n`);
+  io.out(`revision ${v.revision}\n`);
+  for (const t of v.items) io.out(`${t.id}  ${t.kind.padEnd(6)}  ${t.blocked ? 'blocked' : !t.live ? 'retired' : t.retireAt ? `retires ${new Date(t.retireAt).toISOString()}` : 'live'}  ${t.hashPrefix}…  ${t.label}\n`);
+};
+
+async function runPolicyCli(cmd: 'admin-commands' | 'admin-tokens', rest: string[], io: CliIo): Promise<number> {
+  const [op = cmd === 'admin-commands' ? 'status' : 'list', ...args] = rest;
+  const usage = (why: string) => (io.err(`cam-proxy ${cmd}: ${why}\n${USAGE}`), 2);
+  if (cmd === 'admin-commands') {
+    if (!['status', 'allow', 'deny', 'pause', 'resume'].includes(op)) return usage(`unknown command ${op.slice(0, 32)}`);
+    if ((op === 'allow' || op === 'deny') && !args.length) return usage(`${op} needs one or more command names`);
+    if (op === 'allow' || op === 'deny') {
+      const bad = args.find((a) => !ALLOW_ENTRIES.includes(a));
+      if (bad) return usage(`${bad.slice(0, 64)} is not a command cams-admin may be allowed (one of: ${ALLOW_ENTRIES.join(', ')})`);
+    }
+    if ((op === 'status' || op === 'resume') && args.length) return usage('unexpected argument');
+  } else {
+    if (!['list', 'block', 'unblock'].includes(op)) return usage(`unknown command ${op.slice(0, 32)}`);
+    if (op !== 'list' && (args.length !== 1 || !/^tok_[0-9A-HJKMNP-TV-Z]{20}$/.test(args[0]))) return usage(`${op} needs one token id (tok_…)`);
+    if (op === 'list' && args.length) return usage('unexpected argument');
+  }
+  setLogLevel('warn');
+  let loaded: Loaded;
+  try {
+    loaded = loadConfig(io.env, { cwd: io.cwd });
+  } catch (err) {
+    if (err instanceof ConfigError) {
+      io.err(`cam-proxy: ${err.message}\n`);
+      return 2;
+    }
+    throw err;
+  }
+  const base = io.proxyUrl ?? `http://127.0.0.1:${loaded.config.server.port}`;
+  const state = await probe(base);
+  if (state === 'unknown') {
+    io.err(`cam-proxy ${cmd}: ${base} did not answer as a cam-proxy; nothing was sent or written. Retry, or stop the proxy first\n`);
+    return 1;
+  }
+  return state === 'running' ? policyLive(cmd, op, args, io, base, loaded) : policyFiles(cmd, op, args, io, loaded);
+}
+
+async function policyLive(cmd: string, op: string, args: string[], io: CliIo, base: string, loaded: Loaded): Promise<number> {
+  const headers = { Authorization: `Bearer ${loaded.secrets.adminToken}`, 'Content-Type': 'application/json', 'User-Agent': 'cam-proxy-cli' };
+  const call = async (method: string, path: string, body?: unknown): Promise<{ ok: boolean; status: number; b: Record<string, unknown> }> => {
+    const r = await fetch(`${base}${path}`, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(15_000), redirect: 'error' });
+    const text = await readCapped(r, 1024 * 1024);
+    let b: Record<string, unknown> = {};
+    try {
+      b = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+    } catch {
+      /* not JSON */
+    }
+    return { ok: r.ok, status: r.status, b };
+  };
+  const fail = (r: { status: number; b: Record<string, unknown> }) => (io.err(`cam-proxy ${cmd}: ${String(r.b.message ?? r.b.detail ?? r.b.error ?? `the proxy answered ${r.status}`)}\n`), r.status === 400 ? 2 : 1);
+  if (cmd === 'admin-commands') {
+    let r;
+    if (op === 'status') r = await call('GET', '/control/admin/commands');
+    else if (op === 'allow' || op === 'deny') {
+      const cur = await call('GET', '/control/admin/commands');
+      if (!cur.ok) return fail(cur);
+      const now = cur.b.allow as string[];
+      r = await call('PUT', '/control/admin/commands', { allow: op === 'allow' ? [...new Set([...now, ...args])] : now.filter((a) => !args.includes(a)) });
+    } else if (op === 'pause') r = await call('POST', '/control/admin/commands/pause', { reason: args.join(' ') });
+    else r = await call('POST', '/control/admin/commands/resume');
+    if (!r.ok) return fail(r);
+    printPolicy(io, r.b as unknown as PolicyView);
+    return 0;
+  }
+  const r = op === 'list' ? await call('GET', '/control/admin/tokens') : await call('POST', `/control/admin/tokens/${args[0]}/${op}`);
+  if (!r.ok) return fail(r);
+  printTokens(io, r.b as unknown as { revision: number; problem: string | null; items: TokenItem[] });
+  return 0;
+}
+
+function policyFiles(cmd: string, op: string, args: string[], io: CliIo, loaded: Loaded): number {
+  const dataDir = loaded.config.server.dataDir;
+  const audit = () => new AuditLog({ dir: join(dataDir, 'audit'), version: 'cli' });
+  const record = (action: 'admin-policy' | 'admin-token', message: string, details: Record<string, unknown>) =>
+    audit().write({ action, category: ['configuration'], type: ['change'], outcome: 'success', user: 'admin', userAgent: 'cam-proxy-cli', message: `${message} (CLI, proxy not running)`, details });
+  if (cmd === 'admin-commands') {
+    const policy = new CommandPolicy({ base: () => loaded.commandPolicyBase, file: join(dataDir, 'admin', 'policy.json'), env: () => loaded.envLayer, log: { warn() {} } });
+    const view = () => {
+      const e = policy.effective();
+      return { allow: e.allow, paused: e.paused, pauseReason: e.pauseReason };
+    };
+    const before = view();
+    if (op === 'allow') policy.setAllow([...new Set([...before.allow, ...args])], 'local');
+    else if (op === 'deny') policy.setAllow(before.allow.filter((a) => !args.includes(a)), 'local');
+    else if (op === 'pause') policy.pause(args.join(' ') || null, 'local');
+    else if (op === 'resume') policy.resume('local');
+    if (op !== 'status') record('admin-policy', op === 'pause' ? 'cams-admin commands paused' : op === 'resume' ? 'cams-admin commands resumed' : `Allowed cams-admin commands: ${view().allow.join(', ') || 'none'}`, { from: before, to: view(), requestedBy: 'cli' });
+    printPolicy(io, policy.effective());
+    return 0;
+  }
+  const s = loaded.secrets;
+  const tokens = new TokenStore({ file: join(dataDir, 'admin', 'tokens.json'), localDigests: () => [s.adminToken, ...s.tokens, ...(s.auditToken ? [s.auditToken] : [])].map((x) => createHash('sha256').update(x).digest()) });
+  if (op !== 'list') {
+    const t = tokens.list().find((x) => x.id === args[0]);
+    if (op === 'block') tokens.block(args[0]);
+    else tokens.unblock(args[0]);
+    record('admin-token', `Managed token ${args[0]}${t ? ` (${t.label})` : ''} ${op === 'block' ? 'blocked' : 'unblocked'}`, { op, id: args[0], label: t?.label ?? null, kind: t?.kind ?? null });
+  }
+  printTokens(io, { revision: tokens.revision(), problem: tokens.problem(), items: tokens.list() });
+  return 0;
 }

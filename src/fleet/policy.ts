@@ -10,6 +10,21 @@ export const NEVER_REMOTE_ACTIONS = ['find-camera', 'camera-address', 'camera-tr
 export const ALLOW_ENTRIES: readonly string[] = ['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`)];
 // What this version runs (P2). The heartbeat reports allow ∩ IMPLEMENTED.
 export const IMPLEMENTED: ReadonlySet<string> = new Set(['tokens.apply', 'tokens.apply.admin']);
+// One sentence per allow entry: what allowing it lets cams-admin change (the
+// Status card shows them next to the boxes).
+const LATER = ' (not in this version)';
+export const ENTRY_TEXT: Record<string, string> = {
+  'tokens.apply': 'cams-admin may add, rotate and revoke managed client tokens for cams (CAMPROXY_TOKENS keeps working)',
+  'tokens.apply.admin': 'cams-admin may also manage admin tokens (sign-in links, camera rename); your local admin token is never affected',
+  'config.get': `cams-admin may read this proxy's settings${LATER}`,
+  'config.set': `cams-admin may change settings that are not addresses, ports, files or trust${LATER}`,
+  'config.unset': `cams-admin may reset such settings to their defaults${LATER}`,
+  'config.rollback': `cams-admin may roll the settings back to an earlier revision${LATER}`,
+  'camera.name.set': `cams-admin may rename a camera${LATER}`,
+  'proxy.restart': `cams-admin may restart this proxy${LATER}`,
+  ...Object.fromEntries(REMOTE_ACTIONS.map((a) => [`camera.action:${a}`, `cams-admin may run the camera action ${a}${LATER}`])),
+};
+
 // M §8.2 right column (M5): never settable by cams-admin. P3's config.set
 // checks every path against isDeniedPath before anything else; the per-camera
 // entries apply under cameras.<id>.

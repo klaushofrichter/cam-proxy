@@ -784,6 +784,59 @@ paths:
       summary: bye unenrolled (cams-admin revokes the key), the key file deleted, the camsAdmin.url override cleared; audited (admin-unenroll)
       responses:
         '200': { description: the card's view }
+  /control/admin/commands:
+    get:
+      summary: Commands from cams-admin (migration P2, docs/cams-admin.md); the policy, the known allow entries with what each lets cams-admin change, and the 20 most recent commands (admin)
+      responses:
+        '200': { description: '{ enabled (false when CAMPROXY_ADMIN_COMMANDS is not on), envName, paused, pauseReason, allow: [entry], implemented: [entry], known: [{ entry, text }], recent: [{ cmdId, command, actor, at, status, code?, result?, changed? }] }' }
+        '401': { description: not signed in }
+    put:
+      summary: The allowed commands ({allow}); written to data/admin/policy.json; audited (admin-policy). Adding an entry needs local admin rights (the admin token, or a session it started)
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [allow], properties: { allow: { type: array, maxItems: 32, items: { type: string } } } }
+      responses:
+        '200': { description: the view (as GET) }
+        '400': { description: '{ error: invalid, detail }: an unknown or never-remote entry' }
+        '403': { description: '{ error: local_admin_only, message }: a cams-admin-managed admin token (or its session) tried to add an entry' }
+  /control/admin/commands/pause:
+    post:
+      summary: Pause every cams-admin command ({reason?}); any admin rights; audited (admin-policy)
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { reason: { type: string, maxLength: 200 } } }
+      responses:
+        '200': { description: the view (as GET /control/admin/commands) }
+  /control/admin/commands/resume:
+    post:
+      summary: Resume cams-admin commands; local admin rights only; audited (admin-policy)
+      responses:
+        '200': { description: the view (as GET /control/admin/commands) }
+        '403': { description: '{ error: local_admin_only }' }
+  /control/admin/tokens:
+    get:
+      summary: The cams-admin-managed tokens (data/admin/tokens.json); never a hash beyond its first 8 hex
+      responses:
+        '200': { description: '{ revision, problem (the token file is unusable: why; else null), items: [{ id, kind (client, admin), label, retireAt, blocked, live, hashPrefix ("sha256:" + 8 hex) }] }' }
+  /control/admin/tokens/{id}/block:
+    post:
+      summary: Block a managed token locally (it stops working at once; tokens.apply never brings it back); any admin rights; audited (admin-token)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^tok_[0-9A-HJKMNP-TV-Z]{20}$' } }
+      responses:
+        '200': { description: the view (as GET /control/admin/tokens) }
+        '400': { description: '{ error: invalid }: not a token id' }
+  /control/admin/tokens/{id}/unblock:
+    post:
+      summary: Unblock a managed token (it comes back with cams-admin's next tokens.apply); local admin rights only; audited (admin-token)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^tok_[0-9A-HJKMNP-TV-Z]{20}$' } }
+      responses:
+        '200': { description: the view (as GET /control/admin/tokens) }
+        '400': { description: '{ error: invalid }: not a token id' }
+        '403': { description: '{ error: local_admin_only }' }
   /control/config:
     get:
       summary: Every setting with value, source, restart flag and pending next value
@@ -797,7 +850,7 @@ paths:
             schema: { type: object, description: 'a partial config.json, e.g. {"sse":{"pingS":10}}; {"cameras":{"<new id>":{"host":…}}} adds a camera (it starts at once, without a restart)' }
       responses:
         '200': { description: the new view (as GET) }
-        '400': { description: '{ error: invalid, detail: "<path>: <why>" } (also "<path>: set in .env (<VARIABLE>)" for a setting the environment sets)' }
+        '400': { description: '{ error: invalid, detail: "<path>: <why>" } (also "<path>: set in .env (<VARIABLE>)" for a setting the environment sets); { error: not_a_setting, detail } for camsAdmin.allowCommands or camsAdmin.commandsPaused (config.json or /control/admin/commands only)' }
     delete:
       summary: Removes every override at once (the Settings page's "Reset to defaults"), back to the file or default values; one config-change audit record (reset all)
       responses:
