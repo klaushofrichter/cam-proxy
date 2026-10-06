@@ -34,18 +34,18 @@
     "@playwright/test": "^1.63.0",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@types/express": "^5.0.6",
-    "@types/node": "^26.6.3",
+    "@types/node": "^26.6.4",
     "@types/supertest": "^7.2.1",
     "@types/ws": "^8.18.2",
     "ajv": "^8.20.0",
     "basic-ftp": "^6.2.1",
     "cam-sim": "https://github.com/klaushofrichter/cam-sim/releases/download/v2026.10.05.1/cam-sim-v2026.10.05.1.tgz",
-    "supertest": "^7.3.0",
+    "supertest": "^7.3.1",
     "svelte": "^5.57.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vite": "^8.3.1",
-    "vitest": "^5.0.2",
+    "vite": "^8.3.2",
+    "vitest": "^5.0.3",
     "ws": "^8.22.0"
   }
 }
