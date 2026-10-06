@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.10.06.1
+
 - Site CA (`tls.site`, off unless set; the Pi keeps it unset): a name-constrained CA per host (`<site>.internal`, `tls.cameraSubnet`, `tls.proxyAddresses`); camera certificates issued, pushed and renewed by the proxy (a refusing camera is reported `pinned` with its own fingerprint); HTTPS on `server.tls.port`; `GET /tls/ca.pem`; `GET /api/cameras` items carry `tls`; `GET /control/tls`, `camera-cert-push`, `tls-ca-rotate`; the Certificates card; the `certificates` health item; `camproxy_cert_not_after_seconds`, `camproxy_cert_push_total`; FTPS with the proxy's certificate. `ntp.server` keeps the cameras' NTP on the host (`camera-ntp-set`). The host renderer turns all of it on (`lan.address` is new in `host.json`).
 
 ## v2026.10.05.7
