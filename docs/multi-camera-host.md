@@ -80,7 +80,9 @@ The NIC names `enp1s0` and `enp2s0` are the guide's; the PC's may differ
 **Ubuntu Server 24.04 LTS** works too, with the same tools. Netplan replaces
 `/etc/network/interfaces`: give the camera port `192.168.60.1/24` in a netplan
 file instead of the rendered `interfaces.d` file, and keep systemd-resolved
-off the camera side.
+off the camera side. `deploy/host/prepare-host.sh` is written for Debian and
+refuses another system: on Ubuntu, do its steps by hand (Docker's repository
+is `https://download.docker.com/linux/ubuntu`).
 
 **Result:** _(on the device)_
 

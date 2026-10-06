@@ -23,6 +23,13 @@ done
 [ -n "$RENDERED" ] && [ -d "$RENDERED" ] || { echo "--rendered <dir> (the output of scripts/host/render.ts) is required" >&2; exit 2; }
 ROOT=${ROOT:-}
 if [ "$(id -u)" -ne 0 ] && [ -z "${PREPARE_HOST_ALLOW_NON_ROOT:-}" ]; then echo "run with sudo" >&2; exit 1; fi
+# Debian 13 only (Ubuntu 24.04 works with netplan instead of ifupdown: by
+# hand, docs/multi-camera-host.md §1). $ROOT/etc/os-release: tests.
+ID=debian
+VERSION_CODENAME=trixie
+# shellcheck disable=SC1091
+[ -r "$ROOT/etc/os-release" ] && . "$ROOT/etc/os-release"
+if [ "$ID" != debian ]; then echo "prepare-host.sh is written for Debian (this is $ID): see docs/multi-camera-host.md §1" >&2; exit 1; fi
 
 run() { if [ "$DRY" = 1 ]; then echo "+ $*"; else "$@"; fi; }
 CHANGED=()
@@ -64,8 +71,7 @@ echo "== Docker from Docker's repository (not Debian's docker.io)"
 if [ ! -f "$ROOT/etc/apt/sources.list.d/docker.list" ]; then
   run install -m 0755 -d "$ROOT/etc/apt/keyrings"
   run curl -fsSL https://download.docker.com/linux/debian/gpg -o "$ROOT/etc/apt/keyrings/docker.asc"
-  [ -r /etc/os-release ] && . /etc/os-release
-  LINE="deb [arch=$(dpkg --print-architecture 2>/dev/null || echo amd64) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian ${VERSION_CODENAME:-trixie} stable"
+  LINE="deb [arch=$(dpkg --print-architecture 2>/dev/null || echo amd64) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian ${VERSION_CODENAME} stable"
   if [ "$DRY" = 1 ]; then echo "+ echo '$LINE' > $ROOT/etc/apt/sources.list.d/docker.list"; else echo "$LINE" > "$ROOT/etc/apt/sources.list.d/docker.list"; fi
   run apt-get update
 fi

@@ -28,6 +28,18 @@ describe('prepare-host.sh (spec §14)', () => {
     expect(r.stdout).toContain('+ systemctl enable --now nftables dnsmasq chrony');
   });
 
+  it('Debian only: another system is refused before anything is installed; the repository line names its release', () => {
+    const root = mkdtempSync(join(tmpdir(), 'camproxy-root-'));
+    mkdirSync(join(root, 'etc'), { recursive: true });
+    writeFileSync(join(root, 'etc', 'os-release'), 'ID=ubuntu\nVERSION_CODENAME=noble\n');
+    const r = run(['--rendered', render(), '--dry-run'], root);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('written for Debian (this is ubuntu)');
+    expect(r.stdout).not.toContain('apt-get');
+    writeFileSync(join(root, 'etc', 'os-release'), 'ID=debian\nVERSION_CODENAME=trixie\n');
+    expect(run(['--rendered', render(), '--dry-run'], root).stdout).toContain('https://download.docker.com/linux/debian trixie stable');
+  });
+
   it('order: daemon.json before Docker is installed; the camera interface before dnsmasq starts', () => {
     const out = run(['--rendered', render(), '--dry-run'], mkdtempSync(join(tmpdir(), 'camproxy-root-'))).stdout;
     const at = (s: string) => {
