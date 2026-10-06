@@ -109,6 +109,8 @@ export class CameraCerts {
 
   constructor(private readonly d: CameraCertsDeps) {
     this.restore();
+    // An unreadable state: every camera configured now waits for its own admin push.
+    if (this.corrupt) for (const c of this.d.cameras()) this.extra(c.id);
   }
 
   private now(): number {
@@ -273,6 +275,12 @@ export class CameraCerts {
     for (const id of this.states.keys()) this.d.onTrust?.(id);
   }
 
+  // An unreadable state is over once no camera waits for its admin push any more
+  // (the health item clears; a camera added later starts as a first use).
+  private settleCorrupt(): void {
+    if (this.corrupt && ![...this.extras.values()].some((e) => e.blocked === 'unreadable')) this.corrupt = false;
+  }
+
   // The admin's "drop the previous CA" (tls-ca-drop-previous); false when there is none.
   dropPreviousCa(who: Requester): boolean {
     if (!this.previousCa) return false;
@@ -302,6 +310,7 @@ export class CameraCerts {
     // Back to first use, but the first push is the admin's: no automatic one.
     Object.assign(e, { everSiteCa: false, pin: null, pendingRenewal: false, onPrevious: false, factory: null, blocked: 'cleared' });
     this.states.set(id, { ...this.blank(), lastPush: prev.lastPush, problem: BLOCKED.cleared(id) });
+    this.settleCorrupt();
     this.save();
     this.audit(id, 'success', `Camera trust cleared (${id}): ${prev.mode} → none`, who, { from: prev.mode, fingerprint: prev.fingerprint, factory });
     this.d.onTrust?.(id);
@@ -491,11 +500,13 @@ export class CameraCerts {
     } else if (r.outcome === 'refused' && (!e.everSiteCa || manual) && r.served && r.servedPem) {
       // The fallback (spec §10.1.4): the proxy pins what the camera serves, and cams pins the same.
       e.pin = { fingerprint: r.served, pem: r.servedPem };
+      if (manual) e.blocked = null; // the pin is the admin's decision
       this.set(cam.id, { mode: 'pinned', servername: null, fingerprint: r.served, notAfter: null, lastPush, problem: null });
     } else {
       // A failure, or a refusal of a camera that served our leaf (automatic): the trust stays as it is.
       this.set(cam.id, { lastPush, problem: r.outcome === 'failed' ? `push failed: ${r.detail ?? 'unknown'}` : null });
     }
+    this.settleCorrupt();
     this.save();
     this.d.onPush?.(cam.id, r.outcome);
     this.d.audit?.write({

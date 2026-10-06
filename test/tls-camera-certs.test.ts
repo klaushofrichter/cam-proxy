@@ -501,4 +501,36 @@ describe('camera certificates (spec §10.1.3)', () => {
       expect(b.audits.some((r) => r.message === 'Previous site CA no longer trusted (every camera serves a leaf of the new one)')).toBe(true);
     }, 60_000);
   });
+
+  describe('final check', () => {
+    it('cleared, then Push now refused: pinned, and no longer blocked (the pin is the admin decision)', async () => {
+      const a = setup();
+      await a.certs.tick();
+      a.certs.clearTrust('cam3', { user: 'admin' });
+      a.setMode({ refuse: true });
+      a.served.set('cam3', foreign('NEW3'));
+      await a.certs.pushNow('cam3');
+      expect(a.certs.state('cam3')).toMatchObject({ mode: 'pinned', fingerprint: 'SHA256:NEW3', problem: null });
+      a.at(dayAt(a.now(), 1, 4, 5));
+      await a.certs.tick(); // the 04:00 retry of a pinned camera serving its pin
+      expect(a.certs.state('cam3').problem).toBeNull();
+      expect(a.pushes).toEqual(['cam3', 'cam3', 'cam3']);
+    }, 60_000);
+
+    it('unreadable state, then Push now refused: pinned and unblocked; once no camera is blocked the state problem clears and a new camera is not blocked', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'camproxy-ccerts-final-'));
+      const { mkdirSync } = await import('fs');
+      mkdirSync(join(dir, 'cameras'), { recursive: true });
+      writeFileSync(join(dir, 'cameras', 'state.json'), '{broken');
+      const b = setup({ dir, refuse: true });
+      await b.certs.tick();
+      expect(b.pushes).toEqual([]);
+      await b.certs.pushNow('cam3');
+      expect(b.certs.state('cam3')).toMatchObject({ mode: 'pinned', problem: null });
+      expect(b.certs.problems()).toEqual([]);
+      b.setCameras([{ id: 'cam3', address: '192.168.60.13', protocol: 'https' }, { id: 'cam4', address: '192.168.60.14', protocol: 'https' }]);
+      await b.certs.tick();
+      expect(b.pushes).toEqual(['cam3', 'cam4']); // cam4 is a first use, not blocked
+    }, 60_000);
+  });
 });
