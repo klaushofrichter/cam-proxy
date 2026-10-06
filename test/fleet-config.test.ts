@@ -79,6 +79,12 @@ describe('camsAdmin settings', () => {
     for (const k of ['/etc/key.json', '../key.json', 'key.json', 'overrides.json', 'admin/../overrides.json', 'admin/sub/key.json', 'admin/.json', 'admin/key.txt']) expect(refused({ camsAdmin: { keyFile: k } }), k).toMatch(/^camsAdmin\.keyFile/);
     expect(loadWith({ camsAdmin: { keyFile: 'admin/key-2.json' } }).config.camsAdmin.keyFile).toBe('admin/key-2.json');
   });
+  it('the key file can never be one of the P2 files (an unenroll would delete it: a managed admin could lift a pause)', () => {
+    for (const k of ['admin/tokens.json', 'admin/commands.json', 'admin/policy.json']) {
+      expect(refused({ camsAdmin: { keyFile: k } }), k).toMatch(/^camsAdmin\.keyFile/);
+      expect(() => applyOverrides(loadWith({}), { camsAdmin: { keyFile: k } }), k).toThrow(/^camsAdmin\.keyFile/);
+    }
+  });
   it('applies at once (no restart); an override of an http LAN URL is refused', () => {
     for (const p of ['camsAdmin.url', 'camsAdmin.enabled', 'camsAdmin.keyFile']) expect(needsRestart(p), p).toBe(false);
     const l = loadWith({});

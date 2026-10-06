@@ -153,6 +153,9 @@ function crossCheck(c: Config): void {
   if (c.server.tls.port !== undefined && !c.tls.site) throw new ConfigError('server.tls.port: needs tls.site (the proxy certificate comes from the site CA)');
   if (c.server.tls.port !== undefined && c.server.tls.port === c.server.port) throw new ConfigError('server.tls.port: must differ from server.port');
   // cams-admin (spec 2026-10-06-cams-admin-phase1-design §8.9, §9.2).
+  // The key file is never one of the P2 files: enrollment overwrites it and
+  // unenroll deletes it (deleting policy.json would lift a local pause).
+  if (['admin/tokens.json', 'admin/commands.json', 'admin/policy.json'].includes(c.camsAdmin.keyFile)) throw new ConfigError(`camsAdmin.keyFile: ${c.camsAdmin.keyFile} is the proxy's own file; use admin/key.json`);
   if (c.camsAdmin.url !== undefined) {
     const p = /^https?:\/\//.test(c.camsAdmin.url) ? adminUrlProblem(c.camsAdmin.url) : 'must be https://';
     if (p) throw new ConfigError(`camsAdmin.url: ${p}`);
