@@ -1,5 +1,5 @@
 import { writeKeyFile, type AdminKeyFile } from './keyfile';
-import { adminUrlProblem, enrollRequest, generateKeyPair, normaliseCode } from './protocol';
+import { adminUrlProblem, enrollRequest, generateKeyPair, normaliseCode, trimSlashes } from './protocol';
 
 // Enrollment with a one-time code (spec 2026-10-06-cams-admin-phase1-design
 // §8.2, §9.2), shared by the CLI and the admin UI: a new Ed25519 key, the
@@ -45,7 +45,7 @@ function answerOf(url: string, b: Record<string, unknown>, k: { privateKey: stri
 }
 
 export async function enrollWithCode(o: { url: string; code: string; keyPath: string; version: string; cameraIds: string[]; fetchImpl?: typeof fetch }): Promise<AdminKeyFile> {
-  const url = o.url.replace(/\/+$/, '');
+  const url = trimSlashes(o.url);
   if (!normaliseCode(o.code)) throw new EnrollError('not_a_code');
   if (adminUrlProblem(url) || !/^https?:/.test(url)) throw new EnrollError('bad_url');
   const k = generateKeyPair();

@@ -4,7 +4,7 @@ import { AdminClient, type ClientLog, type ClientView, type Timing } from './cli
 import { enrollWithCode } from './enroll';
 import type { HeartbeatProxyInfo } from './heartbeat';
 import { deleteKeyFile, KeyFileInvalid, KeyFileUnsafe, readKeyFile, type AdminKeyFile } from './keyfile';
-import { fingerprint } from './protocol';
+import { fingerprint, trimSlashes } from './protocol';
 
 // cams-admin for the proxy (spec 2026-10-06-cams-admin-phase1-design §9):
 // follows camsAdmin.* and the key file, holds at most one client, and gives
@@ -158,7 +158,7 @@ export class CamsAdmin {
     }
     this.warned = null;
     this.key = key;
-    if (key.url.replace(/\/+$/, '') !== s.url.replace(/\/+$/, '')) {
+    if (trimSlashes(key.url) !== trimSlashes(s.url)) {
       await this.stopClient('shutdown');
       return this.setOwn('not-enrolled', `the key file is for ${key.url}: enroll with ${s.url}`);
     }

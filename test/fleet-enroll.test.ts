@@ -79,6 +79,12 @@ describe('enrollment', () => {
     await expect(enroll(keyPath(), CODE, 'http://cams-admin.example')).rejects.toMatchObject({ code: 'bad_url' });
   });
 
+  it('a URL with many slashes is handled in linear time (no regex backtracking)', async () => {
+    const t0 = Date.now();
+    await expect(enroll(keyPath(), CODE, `https://x.example${'/'.repeat(60_000)}x`)).rejects.toBeInstanceOf(EnrollError);
+    expect(Date.now() - t0).toBeLessThan(500);
+  });
+
   it('re-enrollment replaces the old key file atomically', async () => {
     const path = keyPath();
     writeKeyFile(path, { ...fake.keyFile(), account: 'old' });

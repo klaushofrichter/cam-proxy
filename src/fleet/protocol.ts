@@ -94,6 +94,13 @@ export function parseEnvelope(data: string): Envelope {
   return m as unknown as Envelope;
 }
 
+// Without trailing slashes, in linear time (a /\/+$/ regex backtracks on many slashes).
+export function trimSlashes(url: string): string {
+  let end = url.length;
+  while (end > 0 && url[end - 1] === '/') end--;
+  return url.slice(0, end);
+}
+
 // Spec §8.9: https/wss, or http/ws only for loopback and *.svc.cluster.local.
 // null when fine, else why not (no credentials in the URL either).
 export function adminUrlProblem(url: string): string | null {
