@@ -293,6 +293,7 @@ export function controlApi(d: ControlDeps): express.Router {
   r.param('cam', cameraParam(d.cameras, 'admin'));
   let restartRequested = false; // a restart-proxy request was recorded (the stop follows)
   const invalid = (res: Response, err: unknown) => {
+    if (err instanceof ConfigError && err.message.startsWith('not_a_setting:')) return void res.status(400).json({ error: 'not_a_setting', detail: err.message.slice('not_a_setting:'.length).trim() });
     if (err instanceof ConfigError) return void res.status(400).json({ error: 'invalid', detail: err.message });
     throw err;
   };

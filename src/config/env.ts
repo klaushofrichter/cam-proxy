@@ -13,6 +13,10 @@ import { checkEnvPath, readEnvValue } from './env-file';
 
 export const CAMERA_HOST_NAMES = ['CAMPROXY_CAMERA_HOST', 'CAMERA_HOST'] as const;
 export const PI_ADDRESS_NAMES = ['CAMPROXY_PI_ADDRESS', 'PI_ADDRESS'] as const;
+// The cams-admin command kill switch (migration P2, Ruling R2-5): unset or
+// "on" = commands possible; anything else = off. The file's value and the
+// process environment's are both read: either one not "on" wins (fail closed).
+export const ADMIN_COMMANDS_NAMES = ['CAMPROXY_ADMIN_COMMANDS'] as const;
 
 // An address or name with an optional :port (1-65535): what camera.host
 // takes from the environment and from "Use this address".
@@ -31,6 +35,7 @@ export interface EnvLayer {
   cameraHost?: EnvValue;
   piAddress?: EnvValue;
   file?: { path: string; read: boolean };
+  adminCommands?: { value: 'on' | 'off'; name: string; raw: string };
 }
 
 export function readEnvLayer(env: NodeJS.ProcessEnv): EnvLayer {
@@ -65,5 +70,8 @@ export function readEnvLayer(env: NodeJS.ProcessEnv): EnvLayer {
     if (!validPiAddress(piAddress.value)) throw new EnvSettingError(`${piAddress.name}: must be an address or name, without a port`);
     layer.piAddress = piAddress;
   }
+  const isOn = (v: string) => v.trim().toLowerCase() === 'on';
+  const vals = [text === undefined ? undefined : readEnvValue(text, ADMIN_COMMANDS_NAMES[0]), env[ADMIN_COMMANDS_NAMES[0]]].filter((v): v is string => v !== undefined);
+  if (vals.length) layer.adminCommands = { value: vals.every(isOn) ? 'on' : 'off', name: ADMIN_COMMANDS_NAMES[0], raw: vals.find((v) => !isOn(v))?.slice(0, 16) ?? 'on' };
   return layer;
 }

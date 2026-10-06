@@ -1,10 +1,13 @@
-import { existsSync, mkdtempSync, writeFileSync } from 'fs';
+import { createHash } from 'crypto';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { applyOverrides, ConfigError, loadConfig, needsRestart } from '../src/config/load';
-import { CONFIG_SCHEMA } from '../src/config/schema';
+import { applyOverrides, ConfigError, configRevision, loadConfig, needsRestart } from '../src/config/load';
+import { jcs } from '../src/fleet/jcs';
+import { CONFIG_SCHEMA, configJsonSchema } from '../src/config/schema';
+import { ALLOW_ENTRIES } from '../src/fleet/policy';
 import { writeKeyFile } from '../src/fleet/keyfile';
 import type { Proxy } from '../src/proxy';
 import { startFakeAdmin, type FakeAdmin } from './helpers/fake-admin';
@@ -41,10 +44,36 @@ describe('camsAdmin settings', () => {
     expect(refused({ camsAdmin: { url: 'http://192.168.1.10:29000' } })).toMatch(/^camsAdmin\.url: must be https/);
     expect(refused({ camsAdmin: { url: 'ftp://x.example' } })).toMatch(/^camsAdmin\.url/);
   });
-  it('allowCommands: [] is fine, anything in it is a load error in this version', () => {
-    expect(loadWith({ camsAdmin: { allowCommands: [] } }).config.camsAdmin).toEqual({ keyFile: 'admin/key.json', enabled: true });
-    expect(refused({ camsAdmin: { allowCommands: ['reboot'] } })).toMatch(/^camsAdmin\.allowCommands: must be empty/);
+  it('allowCommands: known entries load (P2); unknown or never-remote entries are a load error naming the entry', () => {
+    const l = loadWith({ camsAdmin: { allowCommands: ['tokens.apply'], commandsPaused: true } });
+    expect(l.config.camsAdmin).toEqual({ keyFile: 'admin/key.json', enabled: true });
+    expect(l.commandPolicyBase).toEqual({ allow: ['tokens.apply'], paused: true });
+    expect(loadWith({}).commandPolicyBase).toEqual({ allow: [], paused: false });
+    expect(refused({ camsAdmin: { allowCommands: ['camera.action:find-camera'] } })).toMatch(/camera\.action:find-camera/);
     expect(refused({ camsAdmin: { allowCommands: 'reboot' } })).toMatch(/^camsAdmin\.allowCommands/);
+    expect(refused({ camsAdmin: { commandsPaused: 'yes' } })).toMatch(/^camsAdmin\.commandsPaused/);
+  });
+  it('config.schema.json knows the command policy keys (editors validate config.json)', () => {
+    const ca = (configJsonSchema() as { properties: { camsAdmin: { properties: Record<string, { type: string; items?: { enum: string[] }; maxItems?: number }> } } }).properties.camsAdmin.properties;
+    expect(ca.allowCommands).toMatchObject({ type: 'array', maxItems: 32, items: { enum: [...ALLOW_ENTRIES] } });
+    expect(ca.commandsPaused).toMatchObject({ type: 'boolean' });
+  });
+  it('the command policy is never in overrides.json: a load error there, not_a_setting in a PUT', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'camproxy-acfg-'));
+    writeFileSync(join(dir, 'config.json'), JSON.stringify({ camera: { host: '127.0.0.1' }, server: { dataDir: 'data' } }));
+    mkdirSync(join(dir, 'data'));
+    writeFileSync(join(dir, 'data', 'overrides.json'), JSON.stringify({ camsAdmin: { allowCommands: ['tokens.apply'] } }));
+    expect(() => loadConfig(SECRETS, { cwd: dir })).toThrow(/camsAdmin\.allowCommands: only in config\.json or data\/admin\/policy\.json/);
+    const l = loadWith({});
+    for (const patch of [{ camsAdmin: { allowCommands: ['tokens.apply'] } }, { camsAdmin: { commandsPaused: false } }]) expect(() => applyOverrides(l, patch), JSON.stringify(patch)).toThrow(/^not_a_setting:/);
+    expect(existsSync(l.files.overrides)).toBe(false);
+  });
+  it('configRevision: sha256 of jcs(overrides), {} when there are none', () => {
+    const l = loadWith({});
+    expect(configRevision(l)).toBe(`sha256:${createHash('sha256').update('{}').digest('hex')}`);
+    const m = applyOverrides(l, { sse: { pingS: 7 }, retention: { clipsDays: 3 } });
+    expect(configRevision(m)).toBe(`sha256:${createHash('sha256').update(jcs(m.overrides)).digest('hex')}`);
+    expect(jcs(m.overrides)).toMatch(/^\{"retention":.*"sse":/);
   });
   it('the key file is admin/<name>.json: never the data folder itself, overrides.json or anything outside', () => {
     for (const k of ['/etc/key.json', '../key.json', 'key.json', 'overrides.json', 'admin/../overrides.json', 'admin/sub/key.json', 'admin/.json', 'admin/key.txt']) expect(refused({ camsAdmin: { keyFile: k } }), k).toMatch(/^camsAdmin\.keyFile/);
@@ -127,6 +156,13 @@ describe('the wired client (four cameras, every secret set)', () => {
     expect(all.includes(key.privateKey)).toBe(false);
     // The cameras' password (the sims need the real one).
     expect(all.includes(sims[0].password)).toBe(false);
+  });
+
+  it('PUT /control/config with the command policy answers 400 not_a_setting and changes nothing', async () => {
+    const r = await request(base).put('/control/config').set('Authorization', `Bearer ${MARKERS.CAMPROXY_ADMIN_TOKEN}`).send({ camsAdmin: { allowCommands: ['tokens.apply'] } });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toBe('not_a_setting');
+    expect(existsSync(join(dir, 'data', 'overrides.json')) ? readFileSync(join(dir, 'data', 'overrides.json'), 'utf8') : '').not.toMatch(/allowCommands/);
   });
 
   it('a settings change restarts the client only: one socket at a time, the old one says bye', async () => {
