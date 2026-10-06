@@ -1,0 +1,14 @@
+{
+  "hostname": "camhost1",
+  "lan": { "iface": "enp1s0", "subnet": "192.168.1.0/24" },
+  "cameraNet": { "iface": "enp2s0", "address": "192.168.60.1", "prefix": 24, "pool": ["192.168.60.100", "192.168.60.149"] },
+  "clusterCidrs": ["10.42.0.0/16", "10.43.0.0/16"],
+  "proxy": { "httpsPort": 8443, "httpPort": 8480, "httpFromLan": false, "ftpPort": 2121, "passive": "50000-50039" },
+  "leases": [
+    { "name": "gps208", "mac": "02:00:00:00:60:02", "ip": "192.168.60.2", "role": "switch" },
+    { "name": "cam3", "mac": "02:00:00:00:60:13", "ip": "192.168.60.13", "camera": { "id": "cam3", "poeSwitchPort": 1 } },
+    { "name": "cam4", "mac": "02:00:00:00:60:14", "ip": "192.168.60.14", "camera": { "id": "cam4", "poeSwitchPort": 2 } },
+    { "name": "cam5", "mac": "02:00:00:00:60:15", "ip": "192.168.60.15", "camera": { "id": "cam5", "poeSwitchPort": 3 } },
+    { "name": "cam6", "mac": "02:00:00:00:60:16", "ip": "192.168.60.16", "camera": { "id": "cam6", "poeSwitchPort": 4 } }
+  ]
+}

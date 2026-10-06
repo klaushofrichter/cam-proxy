@@ -14,6 +14,8 @@
 - Control: `/control/cameras/:cam/name` and `/control/cameras/:cam/actions/:name` (since P1); cameras can be added and removed in the Settings page, which shows the host's settings and the picked camera's.
 - `GET /api/cameras/:cam/stills/latest.jpg`, `…/previews/latest.jpg`, `GET /api/stills/latest`; `GET /api/cameras` items carry `latestStill`.
 - CPU temperature on AMD hosts (k10temp Tctl).
+- Several cameras: `POST /control/actions/restart` without a camera restarts every camera side and applies every pending setting (the Settings page's "Restart to apply"); a camera's restart applies its pending `cameras.<id>.*` settings; `GET /control/config` says `restartScope`.
+- The multi-camera host (the mini PC, docs/multi-camera-host.md): `scripts/host/render.ts` renders nftables, dnsmasq, chrony, sysctl, the camera-side interface, Docker's `daemon.json` (`"iptables": false`), compose and the first `config.json` from one `host.json`, refusing bad leases, overlapping subnets, a shared or odd NIC name and bad ports; IPv4 forwarding comes on only once the ruleset is loaded (fails closed); `scripts/host/validate-rendered.sh` checks them with Debian 13's tools in containers; `deploy/host/prepare-host.sh` installs them (idempotent) and `deploy/host/check-host.sh` verifies the host. `scripts/measure-camera.ts` reads a camera's `GetNtp` and certificate state (`--set-ntp` writes the whole `Ntp` object). The kube-setup request for the camera subnet is in `deploy/cluster/REQUEST.md`.
 
 ## v2026.10.05.6
 
