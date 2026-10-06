@@ -1,4 +1,6 @@
 import { createHash, timingSafeEqual } from 'crypto';
+import { join } from 'path';
+import { ConfigError } from '../config/load-error';
 import { PrivateFileInvalid, PrivateFileUnsafe, readPrivateJson, writePrivateJson } from './private-file';
 
 // The managed token hashes (M §10.2): data/admin/tokens.json, mode 600,
@@ -96,4 +98,13 @@ export class TokenStore {
   list(): { id: string; kind: 'client' | 'admin'; label: string; retireAt: number | null; blocked: boolean; live: boolean; hashPrefix: string }[] {
     return this.state.tokens.map((t) => ({ id: t.id, kind: t.kind, label: t.label, retireAt: t.retireAt, blocked: this.state.blocked.includes(t.id), live: this.live(t), hashPrefix: t.hash.slice(0, 15) }));
   }
+}
+
+// The start without CAMPROXY_TOKENS (migration P2, M §10.2): fine while
+// <dataDir>/admin/tokens.json holds a live, unblocked managed client token;
+// else the error as before. Reads the file only when CAMPROXY_TOKENS is unset.
+export function checkClientTokens(l: { config: { server: { dataDir: string } }; secrets: { tokens: string[] } }): void {
+  if (l.secrets.tokens.length) return;
+  const store = new TokenStore({ file: join(l.config.server.dataDir, 'admin', 'tokens.json'), localDigests: () => [] });
+  if (store.counts().client === 0) throw new ConfigError('CAMPROXY_TOKENS: required (no live cams-admin-managed client token either)');
 }

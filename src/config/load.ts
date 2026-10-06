@@ -34,6 +34,8 @@ export interface Loaded {
   legacyCamera: boolean;
   // camsAdmin.allowCommands / commandsPaused from config.json (Ruling R2-1).
   commandPolicyBase: CommandPolicyBase;
+  // CAMPROXY_TOKENS may be unset (the start then needs a live managed client token).
+  tokensOptional: boolean;
 }
 
 // Every setting path of this configuration: the cameras' paths under their ids.
@@ -192,10 +194,10 @@ const ipv4Int = (ip: string): number | null => {
   return parts.length === 4 && parts.every((x) => Number.isInteger(x) && x >= 0 && x <= 255) ? parts.reduce((n, x) => n * 256 + x, 0) : null;
 };
 
-type Norm = { order: string[]; legacy: boolean; policy: CommandPolicyBase };
+type Norm = { order: string[]; legacy: boolean; policy: CommandPolicyBase; tokensOptional: boolean };
 // The camera ids overrides.json adds to config.json's, sorted.
 const addedIds = (overrides: Obj, fileIds: string[]): string[] => Object.keys(isObj(overrides.cameras) ? (overrides.cameras as Obj) : {}).filter((id) => !fileIds.includes(id)).sort();
-const normOf = (l: Loaded): Norm => ({ order: l.order, legacy: l.legacyCamera, policy: l.commandPolicyBase });
+const normOf = (l: Loaded): Norm => ({ order: l.order, legacy: l.legacyCamera, policy: l.commandPolicyBase, tokensOptional: l.tokensOptional });
 
 function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSettings: Obj, overrides: Obj, baseDir: string, layer: EnvLayer, norm: Norm): Loaded {
   // A copy: the result is changed below (dataDir), DEFAULTS never is.
@@ -238,13 +240,13 @@ function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSetti
   for (const p of settingPaths(config)) {
     sources[p] = envNames[p] ? 'env' : getPath(overrides, p) !== undefined ? 'override' : getPath(fileSettings, p) !== undefined ? 'file' : 'default';
   }
-  const secrets = asConfigError(() => loadSecrets(env, config.cameraOrder.some((id) => cameraConfig(config, id)!.ftp.enabled), config.cameraOrder));
-  return { config, secrets, sources, files: { config: configFile, overrides: join(dataDir, 'overrides.json') }, env, fileSettings, overrides, envLayer: layer, envNames, ...(layer.file ? { envFile: layer.file } : {}), order: norm.order, addedCameras: added, legacyCamera: norm.legacy, commandPolicyBase: norm.policy };
+  const secrets = asConfigError(() => loadSecrets(env, config.cameraOrder.some((id) => cameraConfig(config, id)!.ftp.enabled), config.cameraOrder, { tokensOptional: norm.tokensOptional }));
+  return { config, secrets, sources, files: { config: configFile, overrides: join(dataDir, 'overrides.json') }, env, fileSettings, overrides, envLayer: layer, envNames, ...(layer.file ? { envFile: layer.file } : {}), order: norm.order, addedCameras: added, legacyCamera: norm.legacy, commandPolicyBase: norm.policy, tokensOptional: norm.tokensOptional };
 }
 
 // Defaults, then config.json (CAMPROXY_CONFIG or ./config.json), then
 // <dataDir>/overrides.json; secrets from the environment.
-export function loadConfig(env: NodeJS.ProcessEnv, opts: { cwd?: string } = {}): Loaded {
+export function loadConfig(env: NodeJS.ProcessEnv, opts: { cwd?: string; tokensOptional?: boolean } = {}): Loaded {
   const cwd = opts.cwd ?? process.cwd();
   const file = env.CAMPROXY_CONFIG ? resolve(cwd, env.CAMPROXY_CONFIG) : existsSync(join(cwd, 'config.json')) ? join(cwd, 'config.json') : undefined;
   // A legacy `camera` is read as a list of one (spec §4.2); nothing is rewritten.
@@ -267,7 +269,7 @@ export function loadConfig(env: NodeJS.ProcessEnv, opts: { cwd?: string } = {}):
     if (e instanceof EnvSettingError) throw new ConfigError(e.message);
     throw e;
   }
-  return build(env, file, fileSettings as Obj, overrides as Obj, baseDir, layer, { order: norm.order, legacy: norm.legacy, policy: policyBase });
+  return build(env, file, fileSettings as Obj, overrides as Obj, baseDir, layer, { order: norm.order, legacy: norm.legacy, policy: policyBase, tokensOptional: !!opts.tokensOptional });
 }
 
 function writeOverrides(file: string, overrides: Obj): void {

@@ -3,6 +3,7 @@ import { createProxy } from './proxy';
 import { logger } from './log';
 import { shutdownHandler } from './shutdown';
 import { runAdminCli } from './fleet/cli';
+import { checkClientTokens } from './fleet/token-store';
 
 // Starts cam-proxy from config.json and the environment (spec §14).
 // `admin-enroll --url U` / `admin-unenroll`: cams-admin enrollment; `admin-commands`,
@@ -15,7 +16,9 @@ async function main(): Promise<void> {
   }
   let loaded;
   try {
-    loaded = loadConfig(process.env);
+    loaded = loadConfig(process.env, { tokensOptional: true });
+    // CAMPROXY_TOKENS may be unset while a managed client token is live (M §10.2).
+    checkClientTokens(loaded);
   } catch (err) {
     if (err instanceof ConfigError) {
       process.stderr.write(`cam-proxy: ${err.message}\n`);
