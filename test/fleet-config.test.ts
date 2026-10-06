@@ -80,7 +80,7 @@ describe('camsAdmin settings', () => {
     expect(loadWith({ camsAdmin: { keyFile: 'admin/key-2.json' } }).config.camsAdmin.keyFile).toBe('admin/key-2.json');
   });
   it('the key file can never be one of the P2 files (an unenroll would delete it: a managed admin could lift a pause)', () => {
-    for (const k of ['admin/tokens.json', 'admin/commands.json', 'admin/policy.json']) {
+    for (const k of ['admin/tokens.json', 'admin/commands.json', 'admin/policy.json', 'admin/replay.json', 'admin/Policy.json', 'admin/TOKENS.json']) {
       expect(refused({ camsAdmin: { keyFile: k } }), k).toMatch(/^camsAdmin\.keyFile/);
       expect(() => applyOverrides(loadWith({}), { camsAdmin: { keyFile: k } }), k).toThrow(/^camsAdmin\.keyFile/);
     }

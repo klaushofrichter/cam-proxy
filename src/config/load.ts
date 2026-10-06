@@ -155,7 +155,8 @@ function crossCheck(c: Config): void {
   // cams-admin (spec 2026-10-06-cams-admin-phase1-design §8.9, §9.2).
   // The key file is never one of the P2 files: enrollment overwrites it and
   // unenroll deletes it (deleting policy.json would lift a local pause).
-  if (['admin/tokens.json', 'admin/commands.json', 'admin/policy.json'].includes(c.camsAdmin.keyFile)) throw new ConfigError(`camsAdmin.keyFile: ${c.camsAdmin.keyFile} is the proxy's own file; use admin/key.json`);
+  // Case-insensitively: macOS file systems are (a dev run).
+  if (['admin/tokens.json', 'admin/commands.json', 'admin/policy.json', 'admin/replay.json'].includes(c.camsAdmin.keyFile.toLowerCase())) throw new ConfigError(`camsAdmin.keyFile: ${c.camsAdmin.keyFile} is the proxy's own file; use admin/key.json`);
   if (c.camsAdmin.url !== undefined) {
     const p = /^https?:\/\//.test(c.camsAdmin.url) ? adminUrlProblem(c.camsAdmin.url) : 'must be https://';
     if (p) throw new ConfigError(`camsAdmin.url: ${p}`);
