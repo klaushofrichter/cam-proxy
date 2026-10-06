@@ -604,7 +604,12 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       intake: () => cams.first().intake.state(),
       resubscribe: (cam) => worker(cam).intake.resubscribe(),
       restart: () => proxy.restart(),
-      restartCamera: (cam) => worker(cam).restart(),
+      // One camera's restart applies its own pending settings (cameras.<id>.*), nothing host-wide.
+      restartCamera: (cam) => {
+        const prefix = `cameras.${cam}.`;
+        for (const p of settingPaths(loaded.config)) if (p.startsWith(prefix) && needsRestart(p)) setPath(running as unknown as Record<string, unknown>, p, structuredClone(getPath(loaded.config, p)));
+        return worker(cam).restart();
+      },
       cameraReboot: (who, cam) => worker(cam).reboot.request(who),
       poeSwitch: { notConfigured: (cam) => worker(cam).poeSwitch.notConfigured(), read: (cam) => worker(cam).poeSwitch.read(), poeOn: (cam) => worker(cam).poeSwitch.poeOn(), info: (cam) => worker(cam).poeSwitchInfo() },
       cameraPowerCycle: (who, cam) => {

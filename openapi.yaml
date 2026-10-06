@@ -741,7 +741,7 @@ paths:
     get:
       summary: Every setting with value, source, restart flag and pending next value
       responses:
-        '200': { description: '{ "<path>": { value, source (default, file, override, env), env? (the variable that sets it: CAMERA_HOST, PI_ADDRESS or their CAMPROXY_ names), restart, pending, next?, type (integer, boolean or string), resetTo? (an override: what removing it goes back to, { value?, source: file or default }) } }' }
+        '200': { description: '{ "<path>": { value, source (default, file, override, env), env? (the variable that sets it: CAMERA_HOST, PI_ADDRESS or their CAMPROXY_ names), restart, restartScope? (camera: a cameras.<id>.* setting, applied by that camera's restart or the host-wide one; host: applied by the host-wide restart, POST /control/actions/restart without a camera), pending, next?, type (integer, boolean or string), resetTo? (an override: what removing it goes back to, { value?, source: file or default }) } }' }
     put:
       summary: Sets overrides (stored in overrides.json); live settings apply at once
       requestBody:

@@ -1,3 +1,4 @@
+import { cameraPasswordEnv } from '../../../src/config/password-env';
 // Per-camera settings and actions in the admin UI (spec
 // 2026-10-05-multi-camera-host-design §6.3). Pure: tested in
 // test/camera-settings-ui.test.ts.
@@ -46,4 +47,20 @@ export function storageRows(by: Record<string, Usage> | undefined, ids: string[]
     if (!u || !Object.values(u).some((k) => k.bytes > 0)) return { id, text: 'nothing stored' };
     return { id, text: (['stills', 'previews', 'clips', 'recordings'] as const).map((k) => `${k} ${size(u[k]?.bytes ?? 0)}`).join(' · ') };
   });
+}
+
+// Where an added camera's password comes from (the variable the proxy reads).
+export function passwordHint(id: string): string {
+  return `Its password comes from the environment: ${cameraPasswordEnv(id || '<id>')}, or CAMPROXY_CAMERA_PASSWORD for all.`;
+}
+
+// "Restart to apply": the host-wide restart (every camera side, every pending
+// setting). Answers the message to show; never throws.
+export async function restartToApply(api: (method: string, path: string) => Promise<unknown>): Promise<string> {
+  try {
+    await api('POST', '/control/actions/restart');
+    return 'Restarting every camera side; pending settings apply…';
+  } catch (e) {
+    return `Restart failed: ${e instanceof Error ? e.message : 'unknown error'}`;
+  }
 }

@@ -2,7 +2,7 @@
   import { refresh, refreshTick, status } from '../lib/state';
   import { cameraNameProblem, CAMERA_NAME_MAX, nameSaveError } from '../lib/camera-name';
   import { blockOf, cameraIds, multiCamera, pickCamera, selectedCamera } from '../lib/cameras';
-  import { cameraPath, settingGroups } from '../lib/camera-settings';
+  import { cameraPath, restartToApply, settingGroups } from '../lib/camera-settings';
   import AddCameraCard from '../components/AddCameraCard.svelte';
   import { onMount } from 'svelte';
   import { api, ApiError } from '../lib/api';
@@ -16,7 +16,7 @@
 
   // `env`: the variable that sets it (source env: read-only here).
   // `legacy`: read from a legacy `camera` object in config.json.
-  interface Setting { value: unknown; source: 'default' | 'file' | 'override' | 'env'; env?: string; restart: boolean; pending: boolean; next?: unknown; type?: SettingType; resetTo?: ResetTo; legacy?: true }
+  interface Setting { value: unknown; source: 'default' | 'file' | 'override' | 'env'; env?: string; restart: boolean; restartScope?: 'camera' | 'host'; pending: boolean; next?: unknown; type?: SettingType; resetTo?: ResetTo; legacy?: true }
   let view = $state<Record<string, Setting>>({});
   let drafts = $state<Record<string, string>>({});
   let message = $state('');
@@ -84,9 +84,9 @@
       message = e instanceof ApiError ? e.message : 'not reset';
     }
   }
+  // The host-wide restart: every camera side, every pending setting.
   async function restart() {
-    await api('POST', '/control/actions/restart');
-    message = 'Restarting the camera side…';
+    message = await restartToApply(api);
     setTimeout(() => void load(), 1500);
   }
   // The camera's name is stored on the camera (camera-name design): the
@@ -170,7 +170,7 @@
                 <input value={drafts[p] ?? shown(s.value)} oninput={(e) => (drafts[p] = e.currentTarget.value)} data-testid="input-{p}" disabled={(typeof s.value === 'object' && s.value !== null) || isEnvSet(s)} readonly={isEnvSet(s)} title={isEnvSet(s) ? envNote(s) : undefined} />
                 {#if isEnvSet(s)}<div class="env-note" data-testid="env-note-{p}">{envNote(s)}</div>{/if}
               </td>
-              <td><span class="badge {s.source}" class:same={!!same} data-testid="source-{p}" title={same?.title}>{same ? same.text : s.legacy ? 'config.json (legacy camera)' : s.source}</span>{#if s.restart}<span class="badge restart" title="applies after a restart">restart</span>{/if}{#if s.pending}<span class="badge pending">next: {shown(s.next)}</span>{/if}</td>
+              <td><span class="badge {s.source}" class:same={!!same} data-testid="source-{p}" title={same?.title}>{same ? same.text : s.legacy ? 'config.json (legacy camera)' : s.source}</span>{#if s.restart}<span class="badge restart" title={s.restartScope === 'camera' ? "applies after this camera's restart (Maintenance → Restart camera side) or Restart to apply" : 'applies after Restart to apply (every camera side)'}>restart</span>{/if}{#if s.pending}<span class="badge pending">next: {shown(s.next)}</span>{/if}</td>
               <td class="actions">
                 {#if drafts[p] !== undefined}<button onclick={() => void save(p)} data-testid="save-{p}">Save</button>{/if}
                 {#if s.source === 'override' && !same}<button onclick={() => void reset(p)} data-testid="reset-{p}">{resetLabel(p, s.resetTo && { ...s.resetTo, means: undefined })}{#if s.resetTo?.means}{' '}<span class="means">({s.resetTo.means})</span>{/if}</button>{/if}

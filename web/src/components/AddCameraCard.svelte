@@ -1,10 +1,10 @@
 <script lang="ts">
   import { api, ApiError } from '../lib/api';
-  import { newCameraProblem } from '../lib/camera-settings';
+  import { newCameraProblem, passwordHint } from '../lib/camera-settings';
 
   // Add a camera (spec 2026-10-05-multi-camera-host-design §6.3): it goes into
-  // overrides.json and starts at once. Its password is CAMPROXY_CAMERA_<ID>_PASSWORD
-  // (or the shared CAMPROXY_CAMERA_PASSWORD) in the environment: never set here.
+  // overrides.json and starts at once. Its password comes from the environment
+  // (passwordHint): never set here.
   let { existing, onadded }: { existing: string[]; onadded: (view: Record<string, unknown>) => void } = $props();
   let id = $state('');
   let name = $state('');
@@ -36,7 +36,7 @@
 
 <div class="card" data-testid="add-camera">
   <h3>Add a camera</h3>
-  <p class="muted small">The camera starts at once and is kept in the data folder's overrides (cameras in config.json are changed there). Its password comes from the environment: CAMPROXY_CAMERA_&lt;ID&gt;_PASSWORD, or CAMPROXY_CAMERA_PASSWORD for all.</p>
+  <p class="muted small">The camera starts at once and is kept in the data folder's overrides (cameras in config.json are changed there). {passwordHint(id.trim())}</p>
   <form class="grid" onsubmit={(e) => { e.preventDefault(); void add(); }}>
     <label>Id <input bind:value={id} placeholder="cam6" autocomplete="off" data-testid="add-camera-id" /></label>
     <label>Name <input bind:value={name} placeholder="(the id)" autocomplete="off" data-testid="add-camera-name" /></label>

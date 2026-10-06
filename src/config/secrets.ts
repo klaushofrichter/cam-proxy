@@ -19,7 +19,8 @@ function read(env: NodeJS.ProcessEnv, name: string): string | undefined {
 const MIN_TOKEN = 32;
 
 // One camera's own password variable (spec 2026-10-05-multi-camera-host-design §4.2).
-export const cameraPasswordEnv = (id: string): string => `CAMPROXY_CAMERA_PASSWORD_${id.toUpperCase().replace(/-/g, '_')}`;
+import { cameraPasswordEnv } from './password-env';
+export { cameraPasswordEnv };
 
 // The password a camera's worker logs in with: its own, else the default.
 export function cameraPassword(s: Secrets, id: string): string {

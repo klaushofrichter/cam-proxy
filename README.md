@@ -264,8 +264,10 @@ the new form:
   /control/cameras/<id>/actions/<name>` or `?cam=<id>` on
   `/control/actions/<name>`, and `PUT /control/cameras/<id>/name`; without
   one, a proxy with several cameras answers `400 camera_required` (one camera:
-  as before). `restart` with a camera restarts that camera's side (without one: every
-  camera side, applying pending restart settings); host actions have no
+  as before). `restart` with a camera restarts that camera's side and applies
+  its pending `cameras.<id>.*` settings; without one it restarts every camera
+  side and applies every pending setting (the Settings page's "Restart to
+  apply"; `GET /control/config` says `restartScope`: `camera` or `host`); host actions have no
   camera route. The admin UI sends them for the camera picked in the top bar.
 - **Host-wide services (phase 2):** what a host has once serves every
   camera.
@@ -282,7 +284,9 @@ the new form:
     by name (as `cam2` in the cluster) has no address check.
   - **Storage:** one budget for the host; the Status page and the metrics
     show each camera's part. Optional `cameras[].storage.sharePercent` (all
-    together at most 100; 100 only when every camera has one): over budget the camera most above its share loses
+    together at most 100; 100 only when every camera has one). Cleanup
+    removes a whole hour at a time, so a camera with a small share can end
+    well below its share after a run: over budget the camera most above its share loses
     its oldest hour first; a camera without a share has an equal part of what
     the shares leave. Without shares the oldest hour of any camera goes first.
   - **Vision:** `monthlyLimit` and `dailyCap` count every camera's calls
