@@ -51,21 +51,22 @@ export async function pushCertificate(d: PushDeps, leaf: { certPem: string; keyP
     }
     return last;
   };
-  // After a clear, until the camera's API answers again (a new login after its
-  // web server restarted), or the verify time is up: then the import tries anyway.
-  const back = async (): Promise<void> => {
+  // GetCertificateInfo until the camera's API answers (a new login after its
+  // web server restarted), up to the verify time; then the last error.
+  const info = async (): Promise<{ CertificateInfo?: { enable?: number } }> => {
     const until = now() + (o.verifyMs ?? 90_000);
     for (;;) {
       try {
-        await d.command('GetCertificateInfo');
-        return;
-      } catch {
+        return await d.command<{ CertificateInfo?: { enable?: number } }>('GetCertificateInfo');
+      } catch (err) {
         d.relogin();
-        if (now() >= until) return;
+        if (now() >= until) throw err;
         await sleep(o.pollMs ?? 5000);
       }
     }
   };
+  // After a clear or an import: until the API answers again; the next step tries anyway.
+  const back = async (): Promise<void> => void (await info().catch(() => undefined));
   const once = async (clearFirst: boolean): Promise<string | null> => {
     if (clearFirst) {
       await d.command('CertificateClear');
@@ -84,8 +85,7 @@ export async function pushCertificate(d: PushDeps, leaf: { certPem: string; keyP
   try {
     const before = await d.served();
     if (before === leaf.fingerprint) return done('current', before);
-    const info = await d.command<{ CertificateInfo?: { enable?: number } }>('GetCertificateInfo');
-    const installed = info.CertificateInfo?.enable === 1;
+    const installed = (await info()).CertificateInfo?.enable === 1;
     let served = await once(installed);
     if (served === leaf.fingerprint) return done('pushed', served);
     served = await once(true); // retry once, with a clear

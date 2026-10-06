@@ -123,6 +123,9 @@ export interface ProxyOptions {
   // Find camera's probe (spec 2026-10-04-pi-config-design §3): tests and
   // e2e send it to a fake on 127.0.0.1 instead of the multicast group.
   discovery?: { target?: { address: string; port: number }; timeoutMs?: number };
+  // The certificate push's waits (10 s after a clear, up to 90 s for the new
+  // certificate, polled every 5 s); tests shorten them against cam-sim.
+  tlsPush?: { clearWaitMs?: number; verifyMs?: number; pollMs?: number };
 }
 
 export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
@@ -250,7 +253,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       push: (id, leaf) => {
         const c = cameraConfig(running, id)!;
         const client = new ReolinkClient({ id, host: c.host, protocol: c.protocol, user: c.user, password: cameraPassword(loaded.secrets, id) });
-        return pushCertificate({ served: () => servedOf(id), command: (cmd, p) => client.command(cmd, p), relogin: () => client.forgetToken(), logout: () => client.logout() }, leaf);
+        return pushCertificate({ served: () => servedOf(id), command: (cmd, p) => client.command(cmd, p), relogin: () => client.forgetToken(), logout: () => client.logout() }, leaf, opts.tlsPush);
       },
       openEvent: (id) => openEvents(catalog, id).length > 0,
       localHour: (t, id) => new Date(t + localOffsetMinutes(t, cams.get(id)?.timeInfo()) * 60_000).getUTCHours(),

@@ -61,4 +61,20 @@ describe('camera certificate push (spec §10.1.3)', () => {
     expect(calls.filter((c) => c === 'ImportCertificate')).toHaveLength(2);
     expect(calls.filter((c) => c === 'CertificateClear')).toHaveLength(1);
   }, 60_000);
+
+  it("a camera whose web server is still restarting: the first call is tried again, not a failed push", async () => {
+    const { sim, deps } = await camera();
+    const leaf = await issueLeaf(ca, { cn: 'cam3.g.internal', dns: ['cam3.g.internal'], ips: ['127.0.0.1'] });
+    sim.sim.engine.clearCertificate(); // the API answers again after cam-sim's 200 ms restart
+    expect(await pushCertificate(deps, leaf, { clearWaitMs: 10, verifyMs: 5000, pollMs: 50 })).toMatchObject({ outcome: 'pushed', served: leaf.fingerprint });
+  }, 60_000);
+
+  it('a camera that never answers its API: failed once the verify time is up', async () => {
+    const { sim, deps } = await camera();
+    const leaf = await issueLeaf(ca, { cn: 'cam3.g.internal', dns: ['cam3.g.internal'], ips: ['127.0.0.1'] });
+    sim.sim.engine.faults.set({ name: 'offline' });
+    const r = await pushCertificate(deps, leaf, { clearWaitMs: 10, verifyMs: 300, pollMs: 50 });
+    expect(r.outcome).toBe('failed');
+    expect(r.detail).not.toMatch(/PRIVATE|BEGIN/);
+  }, 60_000);
 });
