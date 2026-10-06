@@ -5,6 +5,9 @@ export interface CameraTarget {
   protocol: 'https' | 'http';
   host: string; // "ip" or "ip:port"
   tlsServername?: string;
+  // The only CA the camera is verified against (the site CA, spec
+  // 2026-10-05-multi-camera-host-design §10.4): set means always verified.
+  ca?: string;
 }
 
 interface OpenOptions {
@@ -56,7 +59,7 @@ export function openRequest(target: CameraTarget, path: string, opts: OpenOption
   const { hostname, port } = splitHost(target.host);
   const tls =
     target.protocol === 'https'
-      ? { servername: target.tlsServername, rejectUnauthorized: Boolean(target.tlsServername) }
+      ? { servername: target.tlsServername, rejectUnauthorized: Boolean(target.tlsServername || target.ca), ...(target.ca ? { ca: target.ca } : {}) }
       : {};
   const lib = target.protocol === 'https' ? https : http;
   return new Promise((resolve, reject) => {

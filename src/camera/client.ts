@@ -10,6 +10,7 @@ export interface CameraConfig {
   host: string; // address or name, optional :port
   protocol: 'https' | 'http';
   tlsServername?: string; // verify the camera's certificate against this name
+  tlsCa?: string; // ...and against this CA only (the site CA); without it, the public CAs
   user: string;
   password: string;
 }
@@ -89,8 +90,8 @@ export class ReolinkClient {
   ) {
     this.gate = new Semaphore(opts.maxConcurrent ?? 2);
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.target = { protocol: cam.protocol, host: cam.host, tlsServername: cam.tlsServername };
-    if (cam.protocol === 'https' && !cam.tlsServername) {
+    this.target = { protocol: cam.protocol, host: cam.host, tlsServername: cam.tlsServername, ...(cam.tlsCa ? { ca: cam.tlsCa } : {}) };
+    if (cam.protocol === 'https' && !cam.tlsServername && !cam.tlsCa) {
       logger.warn({ cameraId: cam.id }, 'camera TLS certificate is not verified (no tlsServername configured)');
     }
   }
@@ -209,7 +210,7 @@ export class ReolinkClient {
         socket.destroy();
         resolve(v);
       };
-      const socket = tlsConnect({ host, port: port ?? 443, servername: this.cam.tlsServername ?? host, ca: this.opts.tlsCa }, () => {
+      const socket = tlsConnect({ host, port: port ?? 443, servername: this.cam.tlsServername ?? host, ca: this.cam.tlsCa ?? this.opts.tlsCa }, () => {
         const c = socket.getPeerCertificate();
         const t = c?.valid_to ? Date.parse(c.valid_to) : NaN;
         // A throw here would be an uncaught exception in a socket listener.
