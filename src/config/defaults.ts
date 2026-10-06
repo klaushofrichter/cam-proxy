@@ -22,7 +22,7 @@ export function cameraDefaults(id: string): CameraNode {
 }
 
 export interface Config {
-  server: { port: number; dataDir: string; logLevel: string; publicUrl?: string; trustProxy?: number };
+  server: { port: number; dataDir: string; logLevel: string; publicUrl?: string; trustProxy?: number; tls: { port?: number } };
   // The cameras by id, and their order (config order: display order).
   cameras: Record<string, CameraNode>;
   cameraOrder: string[];
@@ -62,10 +62,14 @@ export interface Config {
     // checksPerDay: still checks by hand per camera day (cams #179); 0 = none.
     googleVision: { enabled: boolean; monthlyLimit: number; dailyCap: number; checksPerDay: number; perCameraDailyCap: number };
   };
+  // The site CA (spec 2026-10-05-multi-camera-host-design §10.4); no site = off.
+  tls: { site?: string; cameraCerts: boolean; cameraSubnet?: string; proxyAddresses?: string };
+  // The NTP server the proxy keeps on its cameras (§14.2); unset = left alone.
+  ntp: { server?: string };
 }
 
 export const DEFAULTS: Config = {
-  server: { port: 8480, dataDir: 'data', logLevel: 'info' },
+  server: { port: 8480, dataDir: 'data', logLevel: 'info', tls: {} },
   cameras: {},
   cameraOrder: [],
   poeSwitch: { model: 'none', ports: 8, offSeconds: 10 },
@@ -90,6 +94,8 @@ export const DEFAULTS: Config = {
     kinds: { person: true, vehicle: false, pet: false },
     googleVision: { enabled: false, monthlyLimit: 0, dailyCap: 0, checksPerDay: 10, perCameraDailyCap: 0 },
   },
+  tls: { cameraCerts: true },
+  ntp: {},
 };
 
 export interface Secrets {

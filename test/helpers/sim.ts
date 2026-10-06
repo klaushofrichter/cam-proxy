@@ -16,6 +16,8 @@ export interface SimCameraOptions {
   ignoreWrites?: string[];
   rebootMs?: number;
   rebootDropsConnection?: boolean;
+  // cam-sim's cert.ignoreImport: ImportCertificate answers 200 and installs nothing.
+  ignoreImport?: boolean;
 }
 
 export interface SimState {
@@ -52,6 +54,7 @@ export async function createSimCamera(opts: SimCameraOptions): Promise<{ app: Ca
   if (opts.dropFirstDownloads) faults.push({ name: 'downloads.dropFirst', count: opts.dropFirstDownloads });
   if (opts.settingsFailures?.length) faults.push({ name: 'settings.fail', cmds: opts.settingsFailures });
   if (opts.ignoreWrites?.length) faults.push({ name: 'settings.ignore', cmds: opts.ignoreWrites });
+  if (opts.ignoreImport) faults.push({ name: 'cert.ignoreImport' });
 
   const sim = await createCamSim({
     users: [{ name: opts.user, level: 'admin', password: opts.password }],
@@ -92,7 +95,8 @@ export async function createSimCamera(opts: SimCameraOptions): Promise<{ app: Ca
 
 // A fully listening cam-sim (camera HTTP, ONVIF, RTSP, Baichuan) for the proxy's
 // integration tests. Users: `admin` and `proxy` (the proxy's own user).
-export async function startSim(opts: { rebootMs?: number } = {}) {
+// `ignoreImport`: the camera refuses a certificate import (cam-sim's cert.ignoreImport).
+export async function startSim(opts: { rebootMs?: number; ignoreImport?: boolean } = {}) {
   const password = 'proxy-pw';
   const sim = await createCamSim({
     users: [
@@ -101,6 +105,7 @@ export async function startSim(opts: { rebootMs?: number } = {}) {
     ],
     seedClips: 'demo',
     reboot: { ms: opts.rebootMs ?? 200, dropsConnection: true },
+    faults: opts.ignoreImport ? [{ name: 'cert.ignoreImport' }] : [],
   });
   const ports = await sim.listen({ http: 0, https: 0, control: 0, rtsp: 0, onvif: 0, baichuan: 0 }, '127.0.0.1');
   // Always set when listening in process (the type makes it optional).

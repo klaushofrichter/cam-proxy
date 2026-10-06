@@ -44,3 +44,14 @@ test('a camera added in the Settings page starts, and can be removed again', asy
   await expect(page.getByTestId('camera-picker').locator('option')).toHaveCount(3, { timeout: 15_000 });
   void request;
 });
+
+test('the Certificates card: the CA fingerprint and its download', async ({ page, request }) => {
+  await page.goto('/');
+  await expect(page.getByTestId('card-certificates')).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId('ca-fingerprint')).toContainText('SHA256:');
+  const ca = await request.get('/tls/ca.pem');
+  expect(ca.status()).toBe(200);
+  expect(await ca.text()).toContain('BEGIN CERTIFICATE');
+  await expect(page.getByTestId('cert-row-cam3')).toContainText('HTTP: no certificate');
+  await expect(page.getByTestId('cert-push-cam3')).toBeDisabled();
+});

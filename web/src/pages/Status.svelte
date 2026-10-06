@@ -13,6 +13,8 @@
   import { storageRows } from '../lib/camera-settings';
   import { cameraIds } from '../lib/cameras';
   import { actionPath, blockOf, selectedCamera } from '../lib/cameras';
+  import CertificatesCard from '../components/CertificatesCard.svelte';
+  import type { TlsView } from '../lib/tls';
 
   const gb = (b: number) => `${(b / 1024 ** 3).toFixed(1)} GB`;
   const mb = mbText;
@@ -32,6 +34,12 @@
 
   // #93: the camera's FTP upload off, elsewhere, or no clips while events happen.
   const alerts = $derived($status ? ftpAlerts({ enabled: cs.ftp.enabled, publicHost: cs.ftp.publicHost, camera: cs.ftp.camera ?? null, stalled: cs.ftp.stalled ?? null }) : []);
+  // The site CA (spec 2026-10-05-multi-camera-host-design §10.4): read with each status refresh; a card only with a site.
+  let tls = $state<TlsView | null>(null);
+  const loadTls = () => void api<TlsView>('GET', '/control/tls').then((v) => (tls = v)).catch(() => undefined);
+  $effect(() => {
+    if ($status) loadTls();
+  });
   let fixing = $state(false);
   let fixResult = $state('');
   async function pointFtpHere() {
@@ -179,6 +187,9 @@
             {#each archiveRows($status.archive) as r (r.key)}<dt>{r.label}</dt><dd class={r.bad ? 'bad' : ''} title={r.title} data-testid={`archive-${r.key}`}>{r.text}</dd>{/each}
           </dl>
         </div>
+      {/if}
+      {#if tls?.site}
+        <CertificatesCard view={tls} reload={loadTls} />
       {/if}
       {#if health?.host}
         <div class="card" data-testid="card-pi">

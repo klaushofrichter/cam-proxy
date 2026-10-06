@@ -1,13 +1,24 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
-import { existsSync, mkdirSync, readdirSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
 import http from 'http';
+import https from 'https';
 import type { AddressInfo } from 'net';
 import { join } from 'path';
 import { openCatalog, type Catalog } from './catalog/db';
 import { adoptLegacyUsage, usageByCamera, clearUnmapped, countAnalysesByStatus, listUnmapped, usageBetween } from './catalog/analyses';
 import { countAllClips, countClips } from './catalog/clips';
-import { closeAllOpen, countEventsByKind, countRecoveredEvents } from './catalog/events';
+import { closeAllOpen, countEventsByKind, countRecoveredEvents, openEvents } from './catalog/events';
+import { bareHost, splitHost } from './camera/http';
+import { ReolinkClient } from './camera/client';
+import { localOffsetMinutes } from './analytics/local-day';
+import { tlsApi } from './api/tls-api';
+import { CaError, siteCa, writeSecret, type SiteCa } from './tls/ca';
+import { CameraCerts, RotateBusyError, type TlsView } from './tls/camera-certs';
+import { issuedBy, issueLeaf, leafOf, renewalDue, type Leaf } from './tls/leaf';
+import { pushCertificate } from './tls/push';
+import { servedCertificate, type Served } from './tls/served';
+import type { CameraTrust } from './camera/client';
 import type { StatusPoller } from './camera/status';
 import type { EventIntake } from './events/intake';
 import { CameraRegistry } from './cameras/registry';
@@ -89,6 +100,8 @@ export interface Proxy {
   readonly audit: AuditLog;
   readonly inventory: InventoryRunner;
   readonly archive: Archive;
+  // The camera certificates of the site CA (spec §10.1.3); undefined without tls.site (the Pi). Test seam: tick().
+  readonly certs: CameraCerts | undefined;
   go2rtcPid(): number | undefined;
   start(opts?: { port?: number; host?: string }): Promise<{ port: number }>;
   restart(): Promise<void>;
@@ -112,6 +125,9 @@ export interface ProxyOptions {
   // Find camera's probe (spec 2026-10-04-pi-config-design §3): tests and
   // e2e send it to a fake on 127.0.0.1 instead of the multicast group.
   discovery?: { target?: { address: string; port: number }; timeoutMs?: number };
+  // The certificate push's waits (10 s after a clear, up to 90 s for the new
+  // certificate, polled every 5 s); tests shorten them against cam-sim.
+  tlsPush?: { clearWaitMs?: number; verifyMs?: number; pollMs?: number };
 }
 
 export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
@@ -159,6 +175,200 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   const sweeper = setInterval(() => composer.sweep(), 5000);
   sweeper.unref();
 
+  // The site CA (spec 2026-10-05-multi-camera-host-design §10): only with
+  // tls.site (the Pi has none and runs exactly as before). Loaded in start()
+  // (RSA generation is async); a CA that can't be loaded leaves the proxy on
+  // HTTP with the problem in the health item (Review Focus 3).
+  const tlsDir = join(running.server.dataDir, 'tls');
+  let ca: SiteCa | null = null;
+  let caProblem: string | null = null;
+  let proxyLeaf: Leaf | null = null;
+  let httpsServer: https.Server | undefined;
+  let certs: CameraCerts | undefined;
+  let proxyLeafTimer: NodeJS.Timeout | undefined;
+  let caPemOnly: string | null = null; // ca.pem when the CA can't be loaded with its key
+  const proxyAddresses = () => (running.tls.proxyAddresses ?? '').split(',').filter(Boolean);
+  const proxyName = () => `proxy.${running.tls.site}.internal`;
+  const outside = (what: string) => `${what} is outside the site CA: rotate the CA (tls-ca-rotate)`;
+  // What the CA doesn't cover of the proxy's own names (Review Focus 2): named, never a silent bad leaf.
+  const tlsProblems = (): string[] => [
+    ...(caProblem ? [caProblem] : []),
+    ...(!running.tls.site && certs ? ['tls.site is not set: the cameras keep their site-CA trust (camera-trust-clear drops it)'] : []),
+    ...(certs ? certs.problems() : []),
+    ...(ca ? [...proxyAddresses().filter((a) => !ca!.covers(a)), ...(ca.coversName(proxyName()) ? [] : [proxyName()])].map(outside) : []),
+    // A camera's own (an address outside the CA, a failed push), named.
+    ...(certs ? cams.ids().flatMap((id) => { const p = certs!.state(id).problem; return p ? [p.startsWith(`${id} `) || p.startsWith(`${id}:`) ? p : `${id}: ${p}`] : []; }) : []),
+  ];
+  // The proxy's own leaf: <dataDir>/tls/proxy.crt|key, issued anew when
+  // missing, from another CA, for other addresses, or due for renewal.
+  const ensureProxyLeaf = async (c: SiteCa): Promise<Leaf | null> => {
+    const name = proxyName();
+    if (!c.coversName(name)) return null;
+    const ips = proxyAddresses().filter((a) => c.covers(a));
+    const crt = join(tlsDir, 'proxy.crt');
+    const key = join(tlsDir, 'proxy.key');
+    let l: Leaf | null = null;
+    try {
+      if (existsSync(crt) && existsSync(key)) l = leafOf(readFileSync(crt, 'utf8'), readFileSync(key, 'utf8'));
+    } catch {
+      l = null;
+    }
+    const same = l && issuedBy(l, c) && !renewalDue(l, Date.now()) && l.names.join() === name && [...l.ips].sort().join() === [...ips].sort().join();
+    if (l && same) return l;
+    l = await issueLeaf(c, { cn: name, dns: [name], ips, keyFormat: 'pkcs8' });
+    writeSecret(key, l.keyPem);
+    writeFileSync(crt, l.certPem, { mode: 0o644 });
+    logger.info({ fingerprint: l.fingerprint, notAfter: new Date(l.notAfter).toISOString() }, 'proxy_certificate_issued');
+    return l;
+  };
+  const renewProxyLeaf = async (): Promise<void> => {
+    if (!ca) return;
+    const before = proxyLeaf?.fingerprint;
+    proxyLeaf = await ensureProxyLeaf(ca);
+    if (proxyLeaf && proxyLeaf.fingerprint !== before) httpsServer?.setSecureContext({ cert: proxyLeaf.certPem, key: proxyLeaf.keyPem });
+  };
+  const servedOf = (id: string) => {
+    const c = cameraConfig(running, id);
+    if (!c) return Promise.resolve(null);
+    const { hostname, port } = splitHost(c.host);
+    return servedCertificate(bareHost(hostname), port ?? 443);
+  };
+  // A camera's trust for its client (security review of #178): site-ca → the
+  // CAs (current, and the previous one after a rotation) by its .internal
+  // name; pinned → the one certificate the proxy pinned; else none (a camera
+  // never seen serving anything of ours, as before P5).
+  const tlsFor = (id: string): CameraTrust | undefined => {
+    const st = certs?.state(id);
+    if (st?.mode === 'site-ca') {
+      // Never unverified: the CAs, else the camera's stored leaf as a pin, else nothing at all.
+      const cas = certs!.trustedCas(id);
+      if (cas.length && st.servername) return { ca: cas.join('\n'), servername: st.servername };
+      const leaf = certs!.leaf(id);
+      if (leaf) return { ca: leaf.certPem, fingerprint: leaf.fingerprint };
+      return { refuse: 'its site-CA trust is not available (no CA certificate and no stored leaf)' };
+    }
+    const pin = certs?.pin(id);
+    if (pin) return { ca: pin.pem, fingerprint: pin.fingerprint };
+    // A camera that once served our leaf, now neither site-ca nor pinned (protocol switched, state lost): refused, never unverified.
+    if (certs?.everServed(id)) return { refuse: 'it served a site-CA leaf before: Push now, or camera-trust-clear' };
+    return undefined;
+  };
+  const makeCerts = () =>
+    new CameraCerts({
+      dir: tlsDir,
+      ca: () => ca,
+      caPem: () => caPemOnly,
+      site: () => running.tls.site,
+      enabled: () => running.tls.cameraCerts,
+      cameras: () =>
+        cams.list().flatMap((w) => {
+          const c = w.cam();
+          const address = bareHost(splitHost(c.host).hostname);
+          return address ? [{ id: w.id, address, protocol: c.protocol, ...(c.tlsName ? { tlsName: c.tlsName } : {}) }] : [];
+        }),
+      served: servedOf,
+      // The push's own session, not the worker's (the camera serves its factory
+      // certificate between the clear and the import). Bound to the
+      // certificate read just before every step (security review of #178): a
+      // leaf of ours → the CAs, its name and its fingerprint; anything else →
+      // pinned to exactly that certificate (trust on first use, per attempt).
+      push: (id, issue, po) => {
+        const c = cameraConfig(running, id)!;
+        const name = `${id}.${running.tls.site}.internal`;
+        const client = new ReolinkClient({ id, host: c.host, protocol: c.protocol, user: c.user, password: cameraPassword(loaded.secrets, id) });
+        const bind = (sv: Served) => {
+          const cas = certs!.trustedCas();
+          const oursNow = cas.some((p) => issuedBy({ certPem: sv.pem }, { certPem: p }));
+          client.setTrust(oursNow ? { ca: cas.join('\n'), servername: name, fingerprint: sv.fingerprint } : { ca: sv.pem, fingerprint: sv.fingerprint });
+          client.forgetToken();
+        };
+        return pushCertificate({ served: () => servedOf(id), bind, command: (cmd, p) => client.command(cmd, p), relogin: () => client.forgetToken(), logout: () => client.logout() }, issue, { ...opts.tlsPush, ...po });
+      },
+      openEvent: (id) => openEvents(catalog, id).length > 0,
+      localHour: (t, id) => new Date(t + localOffsetMinutes(t, cams.get(id)?.timeInfo()) * 60_000).getUTCHours(),
+      onTrust: (id) => cams.get(id)?.applyTrust(),
+      audit,
+      onPush: (id, outcome) => metrics.onCertPush(id, outcome),
+    });
+  // Camera trust left from a site CA (tls.site unset later): kept, never dropped to unverified.
+  const hasCameraTrust = () => existsSync(join(tlsDir, 'cameras', 'state.json')) || (existsSync(join(tlsDir, 'cameras')) && readdirSync(join(tlsDir, 'cameras')).some((f) => /\.crt(\.old-.*)?$/.test(f)));
+  const startSiteCa = async (): Promise<void> => {
+    const site = running.tls.site;
+    if (!site) {
+      if (!hasCameraTrust()) return; // the Pi: nothing
+      if (existsSync(join(tlsDir, 'ca.pem'))) caPemOnly = readFileSync(join(tlsDir, 'ca.pem'), 'utf8');
+      certs = makeCerts(); // trust only: no scheduler, no pushes
+      for (const w of cams.list()) w.applyTrust();
+      return;
+    }
+    try {
+      ca = await siteCa(tlsDir, { site, cameraSubnet: running.tls.cameraSubnet!, proxyAddresses: proxyAddresses() });
+      caProblem = null;
+      proxyLeaf = await ensureProxyLeaf(ca);
+    } catch (err) {
+      ca = null;
+      caProblem = err instanceof CaError ? err.message : `the site CA could not be loaded: ${(err as Error).message}`;
+      logger.error({ err: caProblem }, 'site_ca_unavailable');
+      // The cameras keep their trust: ca.pem alone (it verifies, it can't issue), else their stored leaves.
+      try {
+        if (existsSync(join(tlsDir, 'ca.pem'))) caPemOnly = readFileSync(join(tlsDir, 'ca.pem'), 'utf8');
+      } catch {
+        caPemOnly = null;
+      }
+    }
+    certs ??= makeCerts();
+    // The known trust before any worker logs in (no unverified window at start).
+    for (const w of cams.list()) w.applyTrust();
+    certs.start();
+    proxyLeafTimer = setInterval(() => void renewProxyLeaf().catch((err: Error) => logger.warn({ err: err.message }, 'proxy_certificate_renewal_failed')), 86400_000);
+    proxyLeafTimer.unref();
+  };
+  // tls-ca-rotate (Ruling P5-3): the old files kept as *.old-<time>, a new CA,
+  // a new proxy leaf, every camera pushed again (from the next tick on).
+  let rotating = false;
+  const rotateCa = async (): Promise<{ from: string | null; to: string }> => {
+    // One at a time: the files move and a new key is made (a second request is refused, not queued).
+    if (rotating) throw new RotateBusyError('a CA rotation is running');
+    rotating = true;
+    try {
+      return await rotateNow();
+    } catch (err) {
+      if (!ca) caProblem = `the site CA rotation failed: ${(err as Error).message}`;
+      throw err;
+    } finally {
+      rotating = false;
+    }
+  };
+  const rotateNow = async (): Promise<{ from: string | null; to: string }> => {
+    const site = running.tls.site!;
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const from = ca?.fingerprint ?? null;
+    const previous = ca?.certPem ?? null;
+    for (const f of ['ca.pem', 'ca.key', 'proxy.crt', 'proxy.key']) if (existsSync(join(tlsDir, f))) renameSync(join(tlsDir, f), join(tlsDir, `${f}.old-${stamp}`));
+    ca = null;
+    ca = await siteCa(tlsDir, { site, cameraSubnet: running.tls.cameraSubnet!, proxyAddresses: proxyAddresses() });
+    caProblem = null;
+    // The cameras keep the previous CA's trust until each serves a new leaf (pushed automatically).
+    certs?.reset(stamp, previous);
+    proxyLeaf = await ensureProxyLeaf(ca);
+    if (proxyLeaf) httpsServer?.setSecureContext({ cert: proxyLeaf.certPem, key: proxyLeaf.keyPem });
+    if (!certs) {
+      certs = makeCerts();
+      certs.start();
+    }
+    void certs.tick();
+    logger.warn({ from, to: ca.fingerprint }, 'site_ca_rotated');
+    return { from, to: ca.fingerprint };
+  };
+  const tlsView = (): TlsView => ({
+    site: running.tls.site ?? null,
+    caFingerprint: ca?.fingerprint ?? null,
+    caNotAfter: ca?.notAfter ?? null,
+    proxy: proxyLeaf ? { servername: proxyName(), fingerprint: proxyLeaf.fingerprint, notAfter: proxyLeaf.notAfter } : null,
+    cameras: running.tls.site || certs ? cams.list().map((w) => ({ id: w.id, ...(certs?.state(w.id) ?? { mode: 'none' as const, servername: null, fingerprint: null, notAfter: null, lastPush: null, problem: null }) })) : [],
+    problems: running.tls.site || certs ? tlsProblems() : [],
+  });
+
 
   // What camera-ftp-setup writes for a camera (never logged: it has the password).
   const ftpTargetFor = (id: string) => (): FtpTarget => {
@@ -200,6 +410,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         // Each camera's counters under its id (bound late: metrics is made once the workers exist).
         hooks: { onCameraCheck: (c) => metrics.onCameraCheck(id, c), onResubscribe: () => metrics.onResubscribe(id), onStill: (ts) => metrics.onStill(id, ts), onStillMissing: () => metrics.onStillMissing(id), onRecordingDownload: (o) => metrics.onRecordingDownload(id, o) },
         cameraFtpCheckMs: opts.cameraFtpCheckMs,
+        tls: tlsFor,
       });
   cameraIds(running).forEach((id) => cams.add(makeWorker(id)));
   const metrics = createMetrics({
@@ -212,6 +423,10 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     sseClients: () => sse.clients(),
     version: VERSION,
     target: TARGET,
+    certs: () => [
+      ...(proxyLeaf ? [{ cam: 'proxy', notAfter: proxyLeaf.notAfter }] : []),
+      ...(certs ? cams.ids().flatMap((id) => { const st = certs!.state(id); return st.mode === 'site-ca' ? [{ cam: id, notAfter: st.notAfter }] : []; }) : []),
+    ],
   });
   storage.on('run', metrics.onRetention);
   recordingBusy = (p) => cams.list().some((w) => w.recordings.cache.busy(p));
@@ -230,6 +445,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       users: () => ftpUsers(running),
       indexer: (cam) => cams.get(cam)?.ftpIndexer(),
       accept: () => !storage.paused(),
+      tls: () => (proxyLeaf ? { cert: proxyLeaf.certPem, key: proxyLeaf.keyPem } : undefined),
       onRefused: (r) => {
         const t = ftpRefusals.take(r.ip, r.user);
         if (!t.record) return;
@@ -530,6 +746,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       lastInventory: await lastInventory(),
       reading: hostMonitor.reading(),
       archive: archive.health(),
+      // The site CA (spec §10.5): only with tls.site (the Pi has no item).
+      certificates: running.tls.site || certs ? { proxy: proxyLeaf ? { notAfter: proxyLeaf.notAfter } : null, cameras: cams.ids().map((id) => ({ id, state: certs?.state(id) ?? { mode: 'none' as const, servername: null, fingerprint: null, notAfter: null, lastPush: null, problem: null } })), problems: tlsProblems() } : null,
     });
   };
 
@@ -565,6 +783,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   });
   // Tokens never travel in URLs: checked once per request, before any access
   // check and before the session routes (the login link carries ?code=).
+  // The site CA's certificate: public, before the token checks and the admin UI's catch-all.
+  app.use('/tls', tlsApi({ ca: () => ca }));
   app.use(['/api', '/control'], refuseTokenInUrl);
   // The health summary for the display on the Pi: loopback callers only, no
   // key; anyone else goes on to the access check as for an unknown route.
@@ -575,7 +795,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   app.use('/api', requireAccess('client', access), composeApi({ config: () => running, catalog, composer, cameras: cams, paused: () => storage.paused(), font, audit }));
   app.use('/api', requireAccess('client', access), stillChecksApi({ config: () => running, catalog, cameras: cams, analytics, audit }));
   app.use('/api', requireAccess('client', access), archiveApi({ config: () => running, catalog, archive, composer, cameras: cams }));
-  app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, cameras: cams, sse }));
+  app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, cameras: cams, sse, tls: (id) => certs?.state(id) }));
   // The audit log: admins and the audit token, GET (and HEAD) only. The access check is
   // on the route inside the router; other /control paths pass on untouched
   // to the admin-only routes below.
@@ -658,6 +878,14 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       envFile: () => loaded.env.CAMPROXY_ENV_FILE || undefined,
       archive,
       cameraId: () => cams.first().id,
+      cameraNtp: (cam) => worker(cam).syncNtp(true),
+      tls: {
+        view: tlsView,
+        pushNow: (cam, who) => (certs && running.tls.site ? certs.pushNow(cam, who) : Promise.resolve({ outcome: 'failed' as const, served: null, detail: running.tls.site ? (caProblem ?? 'the site CA is not ready') : 'no site CA: tls.site is not set', tookMs: 0 })),
+        rotate: () => (running.tls.site ? rotateCa() : null),
+        clearTrust: (cam, who) => certs?.clearTrust(cam, who) ?? null,
+        dropPrevious: (who) => certs?.dropPreviousCa(who) ?? false,
+      },
     }),
   );
   // The admin UI. The files are public; every API call needs a session.
@@ -668,7 +896,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     app.use('/assets', express.static(join(webDir, 'assets'), { immutable: true, maxAge: '1y', index: false, fallthrough: false }));
     // Top-level files of the build (favicon.svg).
     app.get('/favicon.svg', (_req, res) => void res.sendFile(join(webDir, 'favicon.svg'), { maxAge: '1d' }));
-    app.get(/^\/(?!api\/|control\/|health$|metrics$).*/, (_req, res) => {
+    app.get(/^\/(?!api\/|control\/|tls\/|health$|metrics$).*/, (_req, res) => {
       res.setHeader('Cache-Control', 'no-store');
       // The UI has restart and retention buttons: never inside another page's frame.
       res.setHeader('X-Frame-Options', 'DENY');
@@ -788,15 +1016,31 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     },
     cameras: cams,
     analytics,
+    get certs() {
+      return certs;
+    },
     // Test seam: the host go2rtc's process id (adding a camera never restarts it).
     go2rtcPid: () => go2rtc?.pid(),
     async start(opts = {}) {
+      await startSiteCa();
       server = http.createServer(app);
       const s = server;
       const port = await new Promise<number>((resolve, reject) => {
         s.once('error', reject);
         s.listen(opts.port ?? running.server.port, opts.host ?? '0.0.0.0', () => resolve((s.address() as AddressInfo).port));
       });
+      // HTTPS with the proxy's leaf (spec §10.4); the HTTP listener stays.
+      if (running.server.tls.port && proxyLeaf) {
+        const hs = https.createServer({ cert: proxyLeaf.certPem, key: proxyLeaf.keyPem, minVersion: 'TLSv1.2' }, app);
+        httpsServer = hs;
+        await new Promise<void>((resolve, reject) => {
+          hs.once('error', reject);
+          hs.listen(running.server.tls.port, opts.host ?? '0.0.0.0', () => resolve());
+        });
+        logger.info({ port: running.server.tls.port, servername: proxyName() }, 'https_listening');
+      } else if (running.server.tls.port) {
+        logger.error({ port: running.server.tls.port }, 'https_not_started_no_certificate');
+      }
       // go2rtc an earlier process left behind (killed hard) would hold the ports.
       if (cams.list().some((w) => w.cam().stills.enabled)) await reapOrphanGo2rtc();
       startGo2rtc();
@@ -870,10 +1114,17 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       // A running inventory is cancelled ('stop'), saved and audited before the catalog closes.
       // An archive job in flight is cancelled (its staged folder removed) before the catalog closes.
       await Promise.all([composer.stop(), analytics.stop(), archive.stop(), ...cams.list().map((w) => w.stopRecordings()), inventory.stop()]);
+      certs?.stop();
+      clearInterval(proxyLeafTimer);
       const s = server;
       if (s) {
         s.closeAllConnections();
         await new Promise<void>((r) => s.close(() => r()));
+      }
+      const hs = httpsServer;
+      if (hs) {
+        hs.closeAllConnections();
+        await new Promise<void>((r) => hs.close(() => r()));
       }
       await clips?.stop();
       await Promise.all(cams.list().map((w) => w.stop()));

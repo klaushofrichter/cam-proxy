@@ -27,14 +27,14 @@ function registered(app: any): string[] {
       if (layer.route) {
         for (const m of Object.keys(layer.route.methods)) out.push(`${m.toUpperCase()} ${prefix}${layer.route.path.replace(/:(\w+)/g, '{$1}')}`);
       } else if (layer.handle?.stack) {
-        const mount = ['/api', '/control'].find((p) => layer.match(`${p}/x`)) ?? '';
+        const mount = ['/api', '/control', '/tls'].find((p) => layer.match(`${p}/x`)) ?? '';
         walk(layer.handle.stack, prefix + mount);
       }
     }
   };
   walk(app.router.stack, '');
   // Only the API; the admin UI's files (favicon, page fallback) aren't in openapi.yaml.
-  return [...new Set(out)].filter((r) => / \/(api|control)\/| \/(health|metrics)$/.test(r)).sort();
+  return [...new Set(out)].filter((r) => / \/(api|control|tls)\/| \/(health|metrics)$/.test(r)).sort();
 }
 
 let cleanup: () => Promise<void>;

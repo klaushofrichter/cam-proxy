@@ -37,7 +37,7 @@ export const settingPaths = (c: Config): string[] => leafPaths(SETTINGS, '', c.c
 const RESTART = ['server.port', 'server.dataDir', 'cameras.', 'go2rtc.', 'events.onvif.', 'stills.enabled', 'stills.stream', 'stills.intervalS', 'stills.size', 'stills.quality', 'previews.tileSize', 'previews.grid', 'previews.quality', 'ftp.enabled', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.publicHost', 'ftp.certFile', 'ftp.keyFile', 'composition.font', 'server.trustProxy'];
 // Read once when the process starts: the in-process restart leaves them
 // pending until a new process.
-const PROCESS = ['server.port', 'server.dataDir', 'server.trustProxy', 'composition.font'];
+const PROCESS = ['server.port', 'server.dataDir', 'server.trustProxy', 'composition.font', 'server.tls.port', 'tls.site', 'tls.cameraCerts', 'tls.cameraSubnet', 'tls.proxyAddresses'];
 export function needsProcessRestart(path: string): boolean {
   return PROCESS.includes(path);
 }
@@ -126,7 +126,30 @@ function crossCheck(c: Config): void {
     throw new ConfigError('storage.maxBytes: set either storage.maxPercent or storage.maxBytes, not both');
   }
   if (!c.go2rtc.binary && !c.go2rtc.url) throw new ConfigError('go2rtc.binary: set go2rtc.binary or go2rtc.url');
+  // The site CA (spec 2026-10-05-multi-camera-host-design §10.1.1, Ruling P5-2):
+  // the addresses its name constraints permit.
+  if (c.tls.site) {
+    if (!c.tls.cameraSubnet) throw new ConfigError('tls.cameraSubnet: required with tls.site');
+    if (!c.tls.proxyAddresses) throw new ConfigError('tls.proxyAddresses: required with tls.site');
+  }
+  if (c.tls.cameraSubnet) {
+    const [ip, bits] = c.tls.cameraSubnet.split('/');
+    const n = ipv4Int(ip);
+    const prefix = Number(bits);
+    if (n === null || prefix > 32 || (prefix < 32 && (n & (2 ** (32 - prefix) - 1)) !== 0)) throw new ConfigError(`tls.cameraSubnet: ${c.tls.cameraSubnet} is not an IPv4 network`);
+    if (prefix < 16) throw new ConfigError(`tls.cameraSubnet: ${c.tls.cameraSubnet} is wider than /16`);
+  }
+  for (const a of c.tls.proxyAddresses?.split(',') ?? []) {
+    if (ipv4Int(a) === null) throw new ConfigError(`tls.proxyAddresses: ${a} is not an IPv4 address`);
+  }
+  if (c.server.tls.port !== undefined && !c.tls.site) throw new ConfigError('server.tls.port: needs tls.site (the proxy certificate comes from the site CA)');
+  if (c.server.tls.port !== undefined && c.server.tls.port === c.server.port) throw new ConfigError('server.tls.port: must differ from server.port');
 }
+
+const ipv4Int = (ip: string): number | null => {
+  const parts = ip.split('.').map(Number);
+  return parts.length === 4 && parts.every((x) => Number.isInteger(x) && x >= 0 && x <= 255) ? parts.reduce((n, x) => n * 256 + x, 0) : null;
+};
 
 type Norm = { order: string[]; legacy: boolean };
 // The camera ids overrides.json adds to config.json's, sorted.

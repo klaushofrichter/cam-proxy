@@ -76,6 +76,7 @@ A Mac runs it for development on `localhost:8480`.
 - [Camera name](#camera-name)
 - [Control API and admin UI](#control-api-and-admin-ui)
 - [Audit log](#audit-log)
+- [TLS: the site CA](#tls-the-site-ca)
 - [Metrics](#metrics)
 - [Deployment](#deployment)
 - [Development](#development)
@@ -939,6 +940,90 @@ admin token or the optional read-only `CAMPROXY_AUDIT_TOKEN`. In the cluster
 the records also reach Grafana Cloud Loki through the pod logs. The format,
 the API, polling and Grafana are in [docs/audit-log.md](docs/audit-log.md).
 
+## TLS: the site CA
+
+On a host with `tls.site` set (the multi-camera host; spec
+`docs/superpowers/specs/2026-10-05-multi-camera-host-design.md` §10), the
+proxy runs its own certificate authority, so neither the proxy nor its
+cameras need DNS, the internet or the cluster for TLS. The Pi keeps
+`tls.site` unset: HTTP on 8480 as before, and cam1 keeps its Let's Encrypt
+certificate through the cluster's `cam1-cert-push`.
+
+- **The CA** (`data/tls/ca.pem`, key `data/tls/ca.key`, mode 600, never served
+  or logged): RSA 3072, ten years, `CN=cam-proxy site CA <site>`, critical
+  name constraints: `<site>.internal` and the names under it,
+  `tls.cameraSubnet` (at most a /16) and `tls.proxyAddresses`. It can't
+  vouch for any other name or address.
+- **Names:** cameras are `<camId>.<site>.internal`, the proxy
+  `proxy.<site>.internal`; clients connect by IP and check the name.
+- **Camera certificates** (RSA 2048, 397 days, key PKCS#1 as the camera
+  takes it): issued and pushed by the proxy (`tls.cameraCerts`, default on):
+  compare the served fingerprint; `GetCertificateInfo`, `CertificateClear`
+  when one is installed, `ImportCertificate` (`server.crt`/`server.key`),
+  then success only by the fingerprint the camera serves; one retry with a
+  clear. New cameras within ten minutes, renewals 30 days ahead at 04:00
+  camera time, one camera at a time, never during an open event. The proxy
+  then verifies the camera against the CA (a camera with `tlsName` keeps
+  public-CA verification and is never pushed to).
+- **The push session** is bound to the certificate read just before it
+  (verified against the CA and pinned to its SHA-256 while the camera serves
+  our leaf; after `CertificateClear` pinned to what the camera serves then:
+  trust on first use, per attempt), and every attempt imports a fresh key; a
+  key of a refused or failed import is never stored or sent again.
+- **A camera that served our leaf and then serves another certificate** (a
+  reset, a replaced camera, an impostor on the camera network) is never pushed
+  to automatically: it keeps the CA as its only trust (so the proxy refuses
+  it), the `certificates` health item says "serves an unexpected
+  certificate", and an admin's "Push now" decides (audited).
+- **The fallback:** a camera whose first push is refused is `pinned`: the
+  proxy pins its served (factory) certificate itself (SHA-256, in the
+  handshake) and `GET /api/cameras` reports that fingerprint, which cams pins
+  too. A site-CA camera becomes `pinned` only by an admin's "Push now".
+  Modes and pins survive a restart (`data/tls/cameras/state.json`); a stored
+  or old leaf on disk counts as "served our leaf" even without that file, and
+  an unreadable file stops every automatic push until an admin pushes.
+- **A known trust is never dropped to unverified** (certificates off, an
+  address outside the CA, a CA that can't be loaded, `tls.site` removed): the
+  camera keeps its CA (`ca.pem` alone verifies), else its stored leaf as a pin,
+  else nothing is sent; the health item says why. Only the admin's
+  `camera-trust-clear` (`{"confirm":"clear"}`, audited as `camera-trust`)
+  drops it, and then the camera's first push is the admin's "Push now" (no
+  automatic one). Losing `state.json` and the camera leaves (`data/tls/cameras`)
+  together makes every camera a first use again: restore `data/tls` from the
+  backup instead. After an unreadable `state.json` each camera waits for its
+  own "Push now". The trust actions (`tls-ca-rotate`, `tls-ca-drop-previous`
+  with `{"confirm":"drop"}`, `camera-trust-clear`) share a limit of 6 a minute.
+- **TLS resumption:** the pin and the CA are checked on every full handshake;
+  Node resumes a session only with the same server (the session cache is per
+  agent and options), so a resumed connection is one that was checked.
+- **HTTPS:** `server.tls.port` (e.g. 8443) with the proxy's own
+  certificate; the HTTP port stays (loopback callers, the display). FTPS uses
+  the same certificate, read when the FTP server starts (after a renewal or a
+  rotation it picks up the new one on the next restart; the cameras don't
+  verify it).
+- **`GET /tls/ca.pem`**: public, the CA certificate only (`404
+  {error:"no_site_ca"}` without a site). cams pins the CA's fingerprint:
+  `SHA256:` plus the upper-case hex SHA-256 of its DER, no colons (the
+  Certificates card and `GET /control/tls` `caFingerprint`).
+- **`GET /api/cameras`** items carry `tls: {mode: site-ca | pinned | public |
+  none, servername, fingerprint, notAfter, lastPush: {at, outcome: pushed |
+  current | refused | failed}}`.
+- **Status page:** the Certificates card (the fingerprint with Copy, the CA
+  download, the proxy's certificate, per camera its state and "Push now",
+  `POST /control/cameras/<cam>/actions/camera-cert-push`), and the health
+  item `certificates` (a problem within 14 days of an expiry, after a failed
+  or refused push, or when an address is outside the CA).
+- **`tls-ca-rotate`** (`{"confirm":"rotate"}`): a new CA; the old files are
+  kept as `*.old-<time>`; a camera still serving a leaf of the previous CA
+  keeps trusting it (only that camera) until it serves a new leaf (pushed
+  automatically on a session verified against the previous CA), at most 30
+  days, or until `tls-ca-drop-previous` (audited); the health item names the
+  laggards. Every cams pin of this proxy must change (cams accepts a list).
+- **NTP:** with `ntp.server`, the proxy sets each camera's NTP server
+  (whole-object `SetNtp`, read back) when it comes online, at most once an
+  hour; `camera-ntp-set` does it now.
+- **Backups:** `data/tls/` with the data. The setup: docs/multi-camera-host.md §13.
+
 ## Metrics
 
 `GET /metrics` gives Prometheus text, without auth and counts only:
@@ -967,6 +1052,9 @@ the API, polling and Grafana are in [docs/audit-log.md](docs/audit-log.md).
   `camproxy_storage_days_until_full`, `camproxy_storage_writing_paused`;
 - `camproxy_retention_deleted_total`,
   `camproxy_retention_last_run_timestamp_seconds`;
+- `camproxy_cert_not_after_seconds{cam}` (the site-CA certificate each
+  camera serves, and the proxy's under `cam="proxy"`),
+  `camproxy_cert_push_total{cam,outcome}` (only with `tls.site`);
 - `camproxy_build_info`.
 
 ## Deployment

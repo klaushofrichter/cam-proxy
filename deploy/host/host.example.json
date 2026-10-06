@@ -1,6 +1,6 @@
 {
   "hostname": "camhost1",
-  "lan": { "iface": "enp1s0", "subnet": "192.168.1.0/24" },
+  "lan": { "iface": "enp1s0", "subnet": "192.168.1.0/24", "address": "192.168.1.230" },
   "cameraNet": { "iface": "enp2s0", "address": "192.168.60.1", "prefix": 24, "pool": ["192.168.60.100", "192.168.60.149"] },
   "clusterCidrs": ["10.42.0.0/16", "10.43.0.0/16"],
   "proxy": { "httpsPort": 8443, "httpPort": 8480, "httpFromLan": false, "ftpPort": 2121, "passive": "50000-50039" },
