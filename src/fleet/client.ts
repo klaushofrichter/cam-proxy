@@ -81,7 +81,7 @@ export interface ClientDeps {
   commands?: CommandRunner;
   monotonic?: () => number; // ms, for cams-admin's clock between challenges (tests)
   // The signed serverTime's high-water mark (a replayed challenge is refused).
-  replay?: Pick<ReplayGuard, 'challenge'>;
+  replay?: Pick<ReplayGuard, 'challenge'> & { problem?: () => string | null };
 }
 
 const PROTOCOL = 'cams-admin.v1';
@@ -407,11 +407,24 @@ export class AdminClient {
           this.closeSocket();
           return;
         }
-        if (this.d.replay && !this.d.replay.challenge(this.key.keyId, serverTime)) {
-          this.reason = 'a stale challenge (older than one already seen): a replay? not answered';
-          this.d.log.warn({ url: this.key.connectUrl }, 'admin_challenge_stale');
-          this.closeSocket();
-          return;
+        if (this.d.replay) {
+          let fresh: boolean;
+          try {
+            fresh = this.d.replay.challenge(this.key.keyId, serverTime);
+          } catch (err) {
+            // The mark could not be saved: not answered; the close and the retry as for any failure.
+            this.reason = `the replay mark could not be saved: ${String((err as Error).message).slice(0, 120)}`;
+            this.fail(this.reason);
+            this.d.log.warn({ err: String((err as Error).message).slice(0, 200) }, 'admin_replay_save_failed');
+            this.closeSocket();
+            return;
+          }
+          if (!fresh) {
+            this.reason = this.d.replay.problem?.() ?? 'a stale challenge (older than one already seen): a replay? not answered';
+            this.d.log.warn({ url: this.key.connectUrl }, 'admin_challenge_stale');
+            this.closeSocket();
+            return;
+          }
         }
         const ts = Math.max(0, Math.floor(this.now()));
         const k = this.key;

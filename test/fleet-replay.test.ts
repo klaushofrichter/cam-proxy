@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'crypto';
-import { chmodSync, mkdtempSync, readdirSync, statSync, writeFileSync } from 'fs';
+import { mkdtempSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import request from 'supertest';
@@ -52,17 +52,38 @@ describe('ReplayGuard', () => {
     expect(h.hasCmd('cmd_2')).toBe(false);
     expect(h.hasCmd('cmd_5')).toBe(true);
   });
-  it('an unusable file is set aside and the guard starts empty (logged)', () => {
+  it('fails closed: replay.json unusable → the mark from replay-mark.json; both unusable → every challenge refused until a local fix', () => {
     const f = dir();
     const g = new ReplayGuard({ file: f, slackMs: 1000, log: quiet });
     g.challenge(KEY, 10_000);
     g.flush();
-    chmodSync(f, 0o644);
+    const mark = join(f, '..', 'replay-mark.json');
+    expect(statSync(mark).mode & 0o777).toBe(0o600);
+    writeFileSync(f, '{', { mode: 0o600 });
     const lines: string[] = [];
-    const h = new ReplayGuard({ file: f, slackMs: 1000, log: { warn: (_o: object, m: string) => void lines.push(m) } });
-    expect(h.challenge(KEY, 1)).toBe(true);
-    expect(lines).toContain('admin_replay_reset');
-    expect(readdirSync(join(f, '..')).some((n) => /^replay\.json\.bad-\d+$/.test(n))).toBe(true);
+    const log = { warn: (_o: object, m: string) => void lines.push(m) };
+    const h = new ReplayGuard({ file: f, slackMs: 1000, log });
+    expect(h.challenge(KEY, 1)).toBe(false);
+    expect(h.challenge(KEY, 10_000)).toBe(true);
+    writeFileSync(f, '{', { mode: 0o600 });
+    writeFileSync(mark, '{', { mode: 0o600 });
+    const k = new ReplayGuard({ file: f, slackMs: 1000, log });
+    expect(k.challenge(KEY, 99_999_999)).toBe(false);
+    expect(k.problem()).toMatch(/replay/);
+    expect(lines).toContain('admin_replay_unusable');
+    // The local fix: remove both files (a fresh start).
+    rmSync(f);
+    rmSync(mark);
+    expect(new ReplayGuard({ file: f, slackMs: 1000, log }).challenge(KEY, 5)).toBe(true);
+  });
+  it('a failed coalesced write is logged (admin_replay_save_failed), never thrown from the timer', async () => {
+    const blocker = join(mkdtempSync(join(tmpdir(), 'replay-')), 'file');
+    writeFileSync(blocker, 'x');
+    const lines: string[] = [];
+    const g = new ReplayGuard({ file: join(blocker, 'admin', 'replay.json'), slackMs: 1000, log: { warn: (_o: object, m: string) => void lines.push(m) } });
+    g.addCmd('cmd_1', 1);
+    await new Promise((r) => setTimeout(r, 1300));
+    expect(lines).toContain('admin_replay_save_failed');
   });
 });
 

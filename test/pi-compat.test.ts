@@ -298,7 +298,7 @@ describe('the Pi enrolled with cams-admin, after the P2 update (commands off)', 
       expect(fake.results(cmdId)[0].msg.body).toMatchObject({ phase: 'done', status: 'refused', code: 'not_allowed' });
       expect((await request(`http://127.0.0.1:${port}`).get('/api/cameras').set(auth(CLIENT_TOKEN))).status).toBe(200);
       // key.json, and replay.json (the signed challenge time's high-water mark).
-      expect(readdirSync(join(d2, 'data', 'admin')).sort()).toEqual(['key.json', 'replay.json']);
+      expect(readdirSync(join(d2, 'data', 'admin')).sort()).toEqual(['key.json', 'replay-mark.json', 'replay.json']);
     } finally {
       await q.stop();
       await fake.close();

@@ -232,6 +232,7 @@ read them or they belong to another user; never printed, logged or served.
 | `commands.json` | the journal: the final result of the last 1000 commands (and all of the last 7 days, at most 2500) | each command that ran |
 | `policy.json` | the allowed commands and the pause | the card, `admin-commands` |
 | `replay.json` | the newest signed challenge time seen and the command ids seen (accepted or refused) until they expire: a recorded session replayed later (e.g. on the plain-http in-cluster path) is refused, also after a restart | each handshake and command |
+| `replay-mark.json` | the same newest challenge time again: if `replay.json` is unusable this one holds; if both are unusable no handshake is answered (fail closed) until they are fixed or removed (removing both = a fresh start) | each handshake |
 
 An unusable `policy.json` pauses every command until it is fixed; an
 unusable `tokens.json` makes no managed token match (local tokens are

@@ -204,6 +204,18 @@ describe('the client with commands', () => {
     expect(fake.verifyFromProxy(ev.msg)).toBe(true);
     expect(strict('event')(ev.msg), why(strict('event'))).toBe(true);
   });
+  it('the replay mark cannot be saved: admin_replay_save_failed, no hello, the client retries', async () => {
+    fake = await startFakeAdmin();
+    const f = runnerFixture();
+    const key = fake.keyFile();
+    const lines: string[] = [];
+    client = new AdminClient({ keyFile: key, health: async () => buildHealth(input({ now: Date.now() })), proxyInfo: () => ({ startedAt: 1, uptimeS: 2, configSchema: 2, tls: null, publicUrl: null }), version: 'test', log: { ...quiet, warn: (_o, m) => void lines.push(m) }, timing: FAST, random: () => 0.5, commands: f.runner, replay: { challenge: () => { throw new Error('EACCES: permission denied'); } } });
+    client.start();
+    await until(() => fake.connections >= 2, 5000);
+    expect(lines).toContain('admin_replay_save_failed');
+    expect(lines).not.toContain('admin_client_error');
+    expect(fake.received.filter((r) => r.msg.type === 'hello')).toHaveLength(0);
+  });
   it('a command without a readable cmdId: error bad_message with re, no result', async () => {
     fake = await startFakeAdmin();
     make(runnerFixture());

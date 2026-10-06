@@ -1,5 +1,5 @@
-import { renameSync } from 'fs';
-import { PrivateFileInvalid, PrivateFileUnsafe, readPrivateJson, writePrivateJson } from './private-file';
+import { dirname, join } from 'path';
+import { readPrivateJson, writePrivateJson } from './private-file';
 
 // Replays across connections and restarts (security review of PR #186): a
 // MITM on the plain-http *.svc.cluster.local path could replay a recorded
@@ -10,9 +10,13 @@ import { PrivateFileInvalid, PrivateFileUnsafe, readPrivateJson, writePrivateJso
 // - every cmdId that passed the signature check, accepted or refused, until
 //   it can't be fresh any more (exp + 120 s + slack before the mark).
 // Writes are coalesced (at most one a second); a challenge is written at once.
+// The mark is also kept in replay-mark.json: when replay.json is unusable the
+// mark from there applies; when both are unusable every challenge is refused
+// (fail closed) until someone fixes or removes them (both missing = a fresh start).
 const EXP_SLACK_MS = 120_000;
 
 interface FileShape { v: 1; keyId: string; highWater: number; cmds: [string, number][] }
+interface MarkShape { v: 1; keyId: string; highWater: number }
 
 export class ReplayGuard {
   private loaded = false;
@@ -20,6 +24,7 @@ export class ReplayGuard {
   private highWater = 0;
   private cmds = new Map<string, number>(); // cmdId → exp, in insertion order
   private timer: NodeJS.Timeout | null = null;
+  private err: string | null = null;
   private readonly slackMs: number;
   private readonly cap: number;
 
@@ -28,31 +33,56 @@ export class ReplayGuard {
     this.cap = d.cap ?? 10_000;
   }
 
+  private get markFile(): string {
+    return join(dirname(this.d.file), 'replay-mark.json');
+  }
+
+  private read<T>(file: string, ok: (f: Record<string, unknown>) => boolean): T | null | 'unusable' {
+    try {
+      const f = readPrivateJson(file) as Record<string, unknown>;
+      return f && f.v === 1 && typeof f.keyId === 'string' && Number.isSafeInteger(f.highWater) && ok(f) ? (f as T) : 'unusable';
+    } catch (e) {
+      // Not there (ENOTDIR: a path that can't hold it): nothing known yet.
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return null;
+      return 'unusable'; // unsafe, invalid or unreadable: fail closed
+    }
+  }
+
   private load(): void {
     if (this.loaded) return;
     this.loaded = true;
-    try {
-      const f = readPrivateJson(this.d.file) as Partial<FileShape>;
-      if (f?.v !== 1 || typeof f.keyId !== 'string' || !Number.isSafeInteger(f.highWater) || !Array.isArray(f.cmds)) throw new PrivateFileInvalid(`${this.d.file} is not version 1`);
-      this.keyId = f.keyId;
-      this.highWater = f.highWater as number;
-      for (const c of f.cmds) if (Array.isArray(c) && typeof c[0] === 'string' && Number.isSafeInteger(c[1])) this.cmds.set(c[0], c[1]);
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
-      // Unusable (only a local change can do that): set aside, start empty.
-      try {
-        renameSync(this.d.file, `${this.d.file}.bad-${Date.now()}`);
-      } catch {
-        /* gone already */
-      }
-      this.d.log.warn({ reason: e instanceof PrivateFileUnsafe || e instanceof PrivateFileInvalid ? e.message : 'unreadable' }, 'admin_replay_reset');
+    const main = this.read<FileShape>(this.d.file, (f) => Array.isArray(f.cmds));
+    const mark = this.read<MarkShape>(this.markFile, () => true);
+    if (main && main !== 'unusable') {
+      this.keyId = main.keyId;
+      this.highWater = Math.max(main.highWater, mark && mark !== 'unusable' && mark.keyId === main.keyId ? mark.highWater : 0);
+      for (const c of main.cmds) if (Array.isArray(c) && typeof c[0] === 'string' && Number.isSafeInteger(c[1])) this.cmds.set(c[0], c[1]);
+      return;
     }
+    if (mark && mark !== 'unusable') {
+      // replay.json is missing or unusable: the mark still holds.
+      this.keyId = mark.keyId;
+      this.highWater = mark.highWater;
+      if (main === 'unusable') this.d.log.warn({ file: this.d.file }, 'admin_replay_reset');
+      return;
+    }
+    if (main === 'unusable' || mark === 'unusable') {
+      this.err = `${this.d.file} and replay-mark.json are unusable: no cams-admin handshake is answered until they are fixed or removed`;
+      this.d.log.warn({ file: this.d.file }, 'admin_replay_unusable');
+    }
+  }
+
+  problem(): string | null {
+    this.load();
+    return this.err;
   }
 
   // A verified challenge of this key: false when it is older than one seen
   // before (minus the slack): a replay. Moves the mark and saves at once.
   challenge(keyId: string, serverTime: number): boolean {
     this.load();
+    if (this.err) return false;
     if (keyId !== this.keyId) {
       // Enrolled again (another key, maybe another cams-admin): afresh.
       this.keyId = keyId;
@@ -76,8 +106,14 @@ export class ReplayGuard {
     this.cmds.set(cmdId, exp);
     for (const [k, e] of this.cmds) if (e + EXP_SLACK_MS + this.slackMs < this.highWater) this.cmds.delete(k);
     while (this.cmds.size > this.cap) this.cmds.delete(this.cmds.keys().next().value as string);
-    if (!this.timer) {
-      this.timer = setTimeout(() => this.flush(), 1000);
+    if (!this.timer && !this.err) {
+      this.timer = setTimeout(() => {
+        try {
+          this.flush();
+        } catch (err) {
+          this.d.log.warn({ err: String((err as Error).message).slice(0, 200) }, 'admin_replay_save_failed');
+        }
+      }, 1000);
       this.timer.unref();
     }
   }
@@ -85,7 +121,8 @@ export class ReplayGuard {
   flush(): void {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
-    if (!this.loaded) return;
+    if (!this.loaded || this.err) return;
+    writePrivateJson(this.markFile, { v: 1, keyId: this.keyId, highWater: this.highWater } satisfies MarkShape, false);
     writePrivateJson(this.d.file, { v: 1, keyId: this.keyId, highWater: this.highWater, cmds: [...this.cmds] } satisfies FileShape, false);
   }
 }
