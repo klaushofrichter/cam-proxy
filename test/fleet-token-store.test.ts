@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, it } from 'vitest';
-import { ShadowsLocalToken, TokenStore } from '../src/fleet/token-store';
+import { ShadowsLocalToken, TokenStore, TokenStoreUnusable } from '../src/fleet/token-store';
 import { validateTokensApply } from '../src/fleet/command-args';
 import { fixtures, strict, why } from './helpers/contract';
 
@@ -116,5 +116,36 @@ describe('tokens.apply args against the vendored contract', () => {
     const v = strict('commands/tokens.apply.result');
     const r = s.apply({ v: 1, revision: 1, tokens: [] });
     expect(v(r), why(v)).toBe(true);
+  });
+});
+
+describe('the local block holds (security review)', () => {
+  it('a blocked token stays blocked under a new id (the block is by hash)', () => {
+    const { s } = store();
+    const t = tok();
+    s.apply({ v: 1, revision: 1, tokens: [{ id: id(1), kind: 'admin', hash: hashOf(t), label: 'cams', retireAt: null }] });
+    s.block(id(1));
+    expect(s.apply({ v: 1, revision: 2, tokens: [{ id: id(9), kind: 'admin', hash: hashOf(t), label: 'cams', retireAt: null }] })).toMatchObject({ applied: true, admin: 0, blocked: [id(9)] });
+    expect(s.match(t)).toBeNull();
+  });
+  it('leaving the blocked id out of later revisions never prunes the block', () => {
+    const { s } = store();
+    const t = tok();
+    s.apply({ v: 1, revision: 1, tokens: [{ id: id(1), kind: 'client', hash: hashOf(t), label: 'cams', retireAt: null }] });
+    s.block(id(1));
+    s.apply({ v: 1, revision: 2, tokens: [] });
+    s.apply({ v: 1, revision: 3, tokens: [] });
+    s.apply({ v: 1, revision: 4, tokens: [{ id: id(1), kind: 'client', hash: hashOf(t), label: 'cams', retireAt: null }] });
+    expect(s.match(t)).toBeNull();
+    expect(s.counts().blocked).toEqual([id(1)]);
+  });
+  it('an unusable tokens.json refuses tokens.apply and local changes (a replay must not count as fresh at revision 0)', () => {
+    const { s, file } = store();
+    s.apply({ v: 1, revision: 5, tokens: [] });
+    writeFileSync(file, '{', { mode: 0o600 });
+    const fresh = new TokenStore({ file, now: () => 1_000, localDigests: () => [] });
+    expect(() => fresh.apply({ v: 1, revision: 1, tokens: [] })).toThrow(TokenStoreUnusable);
+    expect(() => fresh.block(id(1))).toThrow(TokenStoreUnusable);
+    expect(readFileSync(file, 'utf8')).toBe('{');
   });
 });

@@ -207,7 +207,9 @@ down or the proxy is unenrolled; `CAMPROXY_TOKENS` may be left unset while a
 managed client token is live.
 
 **Local block:** the card's **Block** (or `cam-proxy admin-tokens block <id>`)
-stops a managed token at once; `tokens.apply` never brings a blocked id back.
+stops a managed token at once. The block holds the token's hash as well as its
+id: `tokens.apply` never brings it back, under the same id or a new one, and
+never removes a block.
 **Unblock** (local admin rights) drops the entry; cams-admin's next
 `tokens.apply` installs it again if it still lists it.
 
@@ -225,7 +227,8 @@ read them or they belong to another user; never printed, logged or served.
 
 An unusable `policy.json` pauses every command until it is fixed; an
 unusable `tokens.json` makes no managed token match (local tokens are
-unaffected); an unusable `commands.json` is set aside
+unaffected) and refuses `tokens.apply` (`store_error`), Block and Unblock
+until it is fixed or removed; an unusable `commands.json` is set aside
 (`commands.json.bad-<ms>`) on the next command.
 
 ### Audit

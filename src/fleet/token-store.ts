@@ -9,10 +9,20 @@ import { PrivateFileInvalid, PrivateFileUnsafe, readPrivateJson, writePrivateJso
 export interface ManagedToken { id: string; kind: 'client' | 'admin'; hash: string; label: string; retireAt: number | null }
 export interface TokensApplyArgs { v: 1; revision: number; tokens: ManagedToken[] }
 export interface TokensApplyResult { revision: number; applied: boolean; stale: boolean; client: number; admin: number; blocked: string[] }
-interface FileShape { v: 1; revision: number; tokens: ManagedToken[]; blocked: string[] }
+// The local block list holds each blocked token's id (for display and the
+// heartbeat) and its hash: a blocked hash stays blocked under any id, and
+// tokens.apply never prunes a block (security review of PR #186).
+interface Block { id: string; hash: string | null }
+interface FileShape { v: 1; revision: number; tokens: ManagedToken[]; blocked: Block[] }
 export class ShadowsLocalToken extends Error {}
+// tokens.json is unusable: no managed token matches, and nothing is applied
+// or changed until someone fixes or removes it (its revision is unknown, so
+// a replayed set must not count as fresh).
+export class TokenStoreUnusable extends Error {}
 
 const EMPTY: FileShape = { v: 1, revision: 0, tokens: [], blocked: [] };
+const MAX_BLOCKS = 64;
+const HASH = /^sha256:[0-9a-f]{64}$/;
 
 export class TokenStore {
   private state: FileShape = EMPTY;
@@ -27,9 +37,11 @@ export class TokenStore {
 
   private load(): void {
     try {
-      const f = readPrivateJson(this.d.file) as FileShape;
+      const f = readPrivateJson(this.d.file) as { v?: unknown; revision?: unknown; tokens?: unknown; blocked?: unknown };
       if (f?.v !== 1 || !Number.isSafeInteger(f.revision) || !Array.isArray(f.tokens) || !Array.isArray(f.blocked)) throw new PrivateFileInvalid(`${this.d.file} is not version 1`);
-      this.set(f);
+      // A block is {id, hash}; a plain id (an older file) blocks by id only.
+      const blocked = (f.blocked as unknown[]).map((b) => (typeof b === 'string' ? { id: b, hash: null } : (b as Block))).filter((b) => typeof b?.id === 'string' && (b.hash === null || (typeof b.hash === 'string' && HASH.test(b.hash))));
+      this.set({ v: 1, revision: f.revision as number, tokens: f.tokens as ManagedToken[], blocked });
       this.err = null;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') return this.set(EMPTY);
@@ -39,9 +51,17 @@ export class TokenStore {
     }
   }
 
+  private isBlocked(t: ManagedToken, blocked = this.state.blocked): boolean {
+    return blocked.some((b) => b.id === t.id || b.hash === t.hash);
+  }
+
   private set(f: FileShape): void {
     this.state = f;
-    this.digests = f.tokens.filter((t) => !f.blocked.includes(t.id)).map((t) => ({ t, d: Buffer.from(t.hash.slice(7), 'hex') }));
+    this.digests = f.tokens.filter((t) => !this.isBlocked(t, f.blocked)).map((t) => ({ t, d: Buffer.from(t.hash.slice(7), 'hex') }));
+  }
+
+  private usable(): void {
+    if (this.err) throw new TokenStoreUnusable(this.err);
   }
 
   problem(): string | null { return this.err; }
@@ -59,22 +79,24 @@ export class TokenStore {
 
   counts(): { revision: number; client: number; admin: number; blocked: string[] } {
     const live = this.digests.map((x) => x.t).filter((t) => this.live(t));
-    return { revision: this.state.revision, client: live.filter((t) => t.kind === 'client').length, admin: live.filter((t) => t.kind === 'admin').length, blocked: [...this.state.blocked] };
+    return { revision: this.state.revision, client: live.filter((t) => t.kind === 'client').length, admin: live.filter((t) => t.kind === 'admin').length, blocked: this.state.blocked.map((b) => b.id) };
   }
 
+  // Throws TokenStoreUnusable (store_error), ShadowsLocalToken, or the write error.
   apply(a: TokensApplyArgs): TokensApplyResult {
+    this.usable();
     if (a.revision <= this.state.revision) return { revision: this.state.revision, applied: false, stale: true, ...this.countsOnly(), blocked: [] };
     const local = this.d.localDigests();
     for (const t of a.tokens) {
       const d = Buffer.from(t.hash.slice(7), 'hex');
       if (local.some((l) => timingSafeEqual(l, d))) throw new ShadowsLocalToken(`token ${t.id} has the hash of a local token`);
     }
-    const blocked = a.tokens.filter((t) => this.state.blocked.includes(t.id)).map((t) => t.id);
-    const next: FileShape = { v: 1, revision: a.revision, tokens: a.tokens, blocked: this.state.blocked.filter((b) => a.tokens.some((t) => t.id === b) || this.state.tokens.some((t) => t.id === b)).slice(-64) };
+    const dropped = a.tokens.filter((t) => this.isBlocked(t)).map((t) => t.id);
+    // The blocks stay as they are: tokens.apply never removes one.
+    const next: FileShape = { v: 1, revision: a.revision, tokens: a.tokens, blocked: this.state.blocked };
     writePrivateJson(this.d.file, next);
     this.set(next);
-    this.err = null;
-    return { revision: a.revision, applied: true, stale: false, ...this.countsOnly(), blocked };
+    return { revision: a.revision, applied: true, stale: false, ...this.countsOnly(), blocked: dropped };
   }
 
   private countsOnly(): { client: number; admin: number } {
@@ -83,20 +105,25 @@ export class TokenStore {
   }
 
   block(id: string): void {
-    if (this.state.blocked.includes(id)) return;
-    const next = { ...this.state, blocked: [...this.state.blocked, id].slice(-64) };
+    this.usable();
+    const hash = this.state.tokens.find((t) => t.id === id)?.hash ?? null;
+    if (this.state.blocked.some((b) => b.id === id && b.hash === hash)) return;
+    const next = { ...this.state, blocked: [...this.state.blocked.filter((b) => b.id !== id), { id, hash }].slice(-MAX_BLOCKS) };
     writePrivateJson(this.d.file, next);
     this.set(next);
   }
 
+  // Drops the block and the entry: cams-admin's next tokens.apply brings it back.
   unblock(id: string): void {
-    const next = { ...this.state, blocked: this.state.blocked.filter((b) => b !== id), tokens: this.state.tokens.filter((t) => t.id !== id) };
+    this.usable();
+    const hashes = new Set(this.state.blocked.filter((b) => b.id === id && b.hash).map((b) => b.hash));
+    const next = { ...this.state, blocked: this.state.blocked.filter((b) => b.id !== id && !(b.hash && hashes.has(b.hash))), tokens: this.state.tokens.filter((t) => t.id !== id) };
     writePrivateJson(this.d.file, next);
     this.set(next);
   }
 
   list(): { id: string; kind: 'client' | 'admin'; label: string; retireAt: number | null; blocked: boolean; live: boolean; hashPrefix: string }[] {
-    return this.state.tokens.map((t) => ({ id: t.id, kind: t.kind, label: t.label, retireAt: t.retireAt, blocked: this.state.blocked.includes(t.id), live: this.live(t), hashPrefix: t.hash.slice(0, 15) }));
+    return this.state.tokens.map((t) => ({ id: t.id, kind: t.kind, label: t.label, retireAt: t.retireAt, blocked: this.isBlocked(t), live: this.live(t), hashPrefix: t.hash.slice(0, 15) }));
   }
 }
 

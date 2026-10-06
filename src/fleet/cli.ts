@@ -268,8 +268,13 @@ function policyFiles(cmd: string, op: string, args: string[], io: CliIo, loaded:
   const tokens = new TokenStore({ file: join(dataDir, 'admin', 'tokens.json'), localDigests: () => [s.adminToken, ...s.tokens, ...(s.auditToken ? [s.auditToken] : [])].map((x) => createHash('sha256').update(x).digest()) });
   if (op !== 'list') {
     const t = tokens.list().find((x) => x.id === args[0]);
-    if (op === 'block') tokens.block(args[0]);
-    else tokens.unblock(args[0]);
+    try {
+      if (op === 'block') tokens.block(args[0]);
+      else tokens.unblock(args[0]);
+    } catch (err) {
+      io.err(`cam-proxy ${cmd}: ${(err as Error).message}; fix or remove the token file first\n`);
+      return 1;
+    }
     record('admin-token', `Managed token ${args[0]}${t ? ` (${t.label})` : ''} ${op === 'block' ? 'blocked' : 'unblocked'}`, { op, id: args[0], label: t?.label ?? null, kind: t?.kind ?? null });
   }
   printTokens(io, { revision: tokens.revision(), problem: tokens.problem(), items: tokens.list() });
