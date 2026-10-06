@@ -28,6 +28,7 @@ export interface CamsAdminView {
   lastErrorAt: number | null;
   retryInMs: number | null;
   truncated: boolean;
+  lingering: number; // closed sockets cams-admin never let go (bounded)
 }
 
 export interface CamsAdminDeps {
@@ -44,7 +45,7 @@ export interface CamsAdminDeps {
   setUrl: (url: string | undefined) => Promise<void>;
 }
 
-const EMPTY = { account: null, proxyId: null, fingerprint: null, enrolledAt: null, connectedSince: null, lastHeartbeatAt: null, lastAckAt: null, retryInMs: null, truncated: false };
+const EMPTY = { account: null, proxyId: null, fingerprint: null, enrolledAt: null, connectedSince: null, lastHeartbeatAt: null, lastAckAt: null, retryInMs: null, truncated: false, lingering: 0 };
 
 export class CamsAdmin {
   private client: AdminClient | null = null;

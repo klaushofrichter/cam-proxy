@@ -28,12 +28,13 @@ export interface Timing {
   healthTimeoutMs: number; // a summary that takes longer is a failure (10 s)
   maxBufferedBytes: number; // unsent data above this: the heartbeat is skipped (512 KiB)
   maxInboundBytes: number; // a larger message is refused (256 KiB, the server's own frame cap)
+  maxLingering: number; // closed sockets the server never let go: no new connection beyond this many (4)
 }
 
 export const DEFAULT_TIMING: Timing = {
   connectTimeoutMs: 10_000, helloTimeoutMs: 10_000, closeGraceMs: 2000, backoffCapMs: 300_000, resetAfterMs: 60_000,
   replacedWaitMs: 30_000, rejectedRetryMs: 15 * 60_000, incompatibleRetryMs: 6 * 3600_000, rateLimitedDefaultS: 60,
-  minIntervalS: 10, jitterS: 2, byeWaitMs: 1000, changeCheckMs: 5000, healthTimeoutMs: 10_000, maxBufferedBytes: 512 * 1024, maxInboundBytes: 256 * 1024,
+  minIntervalS: 10, jitterS: 2, byeWaitMs: 1000, changeCheckMs: 5000, healthTimeoutMs: 10_000, maxBufferedBytes: 512 * 1024, maxInboundBytes: 256 * 1024, maxLingering: 4,
 };
 
 export interface ClientLog {
@@ -56,6 +57,7 @@ export interface ClientView {
   retryInMs: number | null;
   attempt: number;
   truncated: boolean;
+  lingering: number; // closed sockets still held open by the server
 }
 
 export interface ClientDeps {
@@ -111,6 +113,9 @@ export class AdminClient {
   private lastOutcome: ClientState | null = null;
   private lastChangeKey: string | null = null;
   private truncated = false;
+  // Node's WebSocket keeps a socket whose close the server never answers
+  // (no way to drop it): those are counted, and bound the new ones.
+  private readonly lingering = new Set<WebSocket>();
   private readonly fp: string;
 
   constructor(private readonly d: ClientDeps) {
@@ -134,6 +139,7 @@ export class AdminClient {
       retryInMs: this.timer && this.state !== 'connected' ? Math.max(0, this.timerDue - Date.now()) : null,
       attempt: this.attempt,
       truncated: this.truncated,
+      lingering: this.lingering.size,
     };
   }
 
@@ -237,6 +243,11 @@ export class AdminClient {
 
   private connect(): void {
     if (this.stopping) return;
+    if (this.lingering.size >= this.t.maxLingering) {
+      this.fail(`${this.lingering.size} closed connections left open by cams-admin: waiting for them to end`);
+      this.state = 'backoff';
+      return this.setTimer(backoffDelay(this.attempt++, this.t.backoffCapMs, this.d.random ?? Math.random), () => this.connect());
+    }
     this.state = 'connecting';
     this.seqOut = 0;
     this.seqIn = 0;
@@ -306,6 +317,14 @@ export class AdminClient {
       /* closing already */
     }
     const t = setTimeout(() => {
+      if (ws.readyState !== WebSocket.CLOSED) {
+        this.lingering.add(ws);
+        ws.addEventListener('close', () => {
+          this.lingering.delete(ws);
+          // Waiting only for these: try at once.
+          if (!this.ws && this.state === 'backoff' && !this.stopping && this.lingering.size === this.t.maxLingering - 1) this.setTimer(0, () => this.connect());
+        });
+      }
       if (this.ws === ws) void this.afterClose(1006).catch((err: unknown) => this.clientError('close', err));
     }, this.t.closeGraceMs);
     t.unref();

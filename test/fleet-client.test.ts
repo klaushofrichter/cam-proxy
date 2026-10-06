@@ -90,6 +90,23 @@ describe('the handshake', () => {
   });
 });
 
+describe('sockets that never close', () => {
+  it("a server that never answers a close: Node's WebSocket keeps that socket, so at most 4 linger and no new one opens beyond them", async () => {
+    fake.mode = 'silent';
+    const c = make({ timing: { helloTimeoutMs: 200 } });
+    c.start();
+    await new Promise((r) => setTimeout(r, 4000));
+    expect(c.view().lingering).toBeLessThanOrEqual(4);
+    expect(fake.connections).toBeLessThanOrEqual(5);
+    expect(c.view().lastError).toMatch(/left open/);
+    // The server lets them go: the client connects again.
+    fake.mode = 'normal';
+    fake.destroyAll();
+    await until(() => c.view().state === 'connected', 5000);
+    expect(c.view().lingering).toBe(0);
+  });
+});
+
 describe('close codes (spec §8.8)', () => {
   it('4401 after the hello: rejected, retried after rejectedRetryMs, logged once', async () => {
     fake.mode = 'reject';
