@@ -115,6 +115,9 @@ export const SETTINGS: Node = {
     logLevel: { type: 'string', enum: ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'], doc: 'pino log level' },
     trustProxy: unset(int(0, 5, 'reverse proxies in front (the cluster ingress: 1); rate limits then count clients by X-Forwarded-For', true), 'no reverse proxy: rate limits count the connecting address'),
     publicUrl: unset({ type: 'string', pattern: '^https?://[^\\s]+$', optional: true, doc: 'where people reach this proxy (its admin UI); reported in /api/cameras so clients can link to it' }, 'no link to this proxy for clients'),
+    tls: {
+      port: unset(int(1, 65535, 'HTTPS port with the site CA certificate (needs tls.site); the HTTP port stays', true), 'HTTP only'),
+    },
   },
   cameras: collection(CAMERA_NODE, 'the cameras of this proxy, in display order (config.json: a list; overrides: by id)'),
   // The PoE switch the cameras hang on (issue #85; one per host, spec §4.1).
@@ -223,6 +226,16 @@ export const SETTINGS: Node = {
       checksPerDay: unset(int(0, 1000, 'still checks (a second picked by hand in cams) per camera day at most, within the monthly limit and the daily cap; 0 = no checks'), 'no still checks', 0),
       perCameraDailyCap: unset(int(0, 10000, 'Google Vision calls per camera and day at most (automatic analyses and still checks together); 0 = no per-camera cap'), 'no per-camera cap', 0),
     },
+  },
+  // The site CA (spec 2026-10-05-multi-camera-host-design §10): unset site = off (the Pi).
+  tls: {
+    site: unset({ type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,30}$', optional: true, doc: "this host's site label: names are <camera>.<site>.internal and proxy.<site>.internal" }, 'no site CA: HTTP only, cameras verified as configured'),
+    cameraCerts: { type: 'boolean', doc: 'issue and push camera certificates from the site CA' },
+    cameraSubnet: unset({ type: 'string', pattern: '^\\d{1,3}(\\.\\d{1,3}){3}/\\d{1,2}$', optional: true, doc: 'the camera network the CA may vouch for (CIDR, /16 or narrower), e.g. 192.168.60.0/24' }, 'none'),
+    proxyAddresses: unset({ type: 'string', pattern: '^\\d{1,3}(\\.\\d{1,3}){3}(,\\d{1,3}(\\.\\d{1,3}){3})*$', optional: true, doc: "the proxy's own IPv4 addresses (LAN, camera side), comma-separated: its certificate's IP names" }, 'none'),
+  },
+  ntp: {
+    server: unset({ type: 'string', pattern: '^[A-Za-z0-9.-]{1,253}$', optional: true, doc: "the NTP server the proxy sets on its cameras (the host's camera-side address)" }, "the cameras' NTP setting is left alone"),
   },
 };
 
