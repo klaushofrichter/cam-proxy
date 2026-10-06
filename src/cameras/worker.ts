@@ -100,6 +100,8 @@ export class CameraWorker extends EventEmitter {
   private stillsStarting: Promise<void> | undefined;
   private stillsAbort: (() => void) | undefined;
   private ftpIx: ClipIndexer | undefined;
+  // The grabber's newest frame, kept whatever storage does (spec §6.4: the latest still).
+  private lastFrame: Frame | undefined;
   private stopping = false;
   private watchStarted = false;
   private restarting: Promise<void> | undefined;
@@ -238,6 +240,10 @@ export class CameraWorker extends EventEmitter {
     return this.ftpIx;
   }
 
+  latestFrame(): Frame | undefined {
+    return this.lastFrame;
+  }
+
   streamStatus(): { enabled: boolean; up: boolean; go2rtcUp: boolean; lastFrameTs: number | null } {
     const s = this.stills;
     return { enabled: !!s, up: s?.grabber.up() ?? false, go2rtcUp: s?.go2rtc.up() ?? false, lastFrameTs: s?.grabber.lastFrameTs() ?? null };
@@ -315,6 +321,7 @@ export class CameraWorker extends EventEmitter {
     // Stills: the host's go2rtc holds the camera connection, one ffmpeg makes
     // stills and tiles, the store writes a pack and a sprite per minute.
     this.stills = undefined;
+    this.lastFrame = undefined;
     if (c.stills.enabled) {
       const go2rtc = d.go2rtc();
       if (!go2rtc) {
@@ -326,6 +333,7 @@ export class CameraWorker extends EventEmitter {
         const store = new MinuteStore({ dataDir: r.server.dataDir, cam: c.id, intervalS: s.intervalS, still: { size: s.size, quality: s.quality }, tile: { size: r.previews.tileSize, grid: r.previews.grid, quality: r.previews.quality } });
         store.on('written', (w: { kind: 'stills' | 'previews'; bytes: number; files: number }) => d.storage.noteWritten(w.kind, w.bytes, w.files, { cam: this.id }));
         grabber.on('frame', (f: Frame) => {
+          if (this.stills?.grabber === grabber) this.lastFrame = f;
           if (d.storage.paused()) return d.hooks.onStillMissing(); // the disk is full: no writing
           store.add(f);
           d.hooks.onStill(f.ts);

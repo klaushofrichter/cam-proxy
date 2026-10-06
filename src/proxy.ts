@@ -16,6 +16,7 @@ import { cameraConfig, cameraIds } from './config/cameras';
 import { cameraPassword } from './config/secrets';
 import { reapOrphanGo2rtc } from './stills/orphans';
 import { Go2rtc } from './stills/go2rtc';
+import { latestApi } from './api/latest-api';
 import { CachePool } from './recordings/pool';
 import { PoeSwitch } from './camera/poe-switch';
 import { restartProcess } from './process-restart';
@@ -541,7 +542,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // Clip and recording files too: a seeking video player sends many range
   // requests. A recording only once it is cached (#99): one not cached costs
   // a camera Search and a download, so it counts in the normal bucket.
-  const IMAGE = /^\/api\/cameras\/[^/]+\/((stills|previews)\/\d{1,15}\.jpg|clips\/\d{1,15}\.(mp4|jpg)|events\/\d{1,15}\/analysis\.jpg|still-checks\/\d{1,12}\.jpg)$|^\/api\/archive\/\d{1,15}\/(video|thumbnail)$/;
+  // The latest still and tile (spec 2026-10-05-multi-camera-host-design §6.4) too: an overview grid polls them.
+  const IMAGE = /^\/api\/cameras\/[^/]+\/((stills|previews)\/(\d{1,15}|latest)\.jpg|clips\/\d{1,15}\.(mp4|jpg)|events\/\d{1,15}\/analysis\.jpg|still-checks\/\d{1,12}\.jpg)$|^\/api\/archive\/\d{1,15}\/(video|thumbnail)$|^\/api\/stills\/latest$/;
   const RECORDING = /^\/api\/cameras\/[^/]+\/recordings\/(Rec[0-9A-Za-z_]+\.mp4)$/;
   const isImage = (req: Request) => {
     if (req.method !== 'GET') return false;
@@ -568,6 +570,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // key; anyone else goes on to the access check as for an unknown route.
   app.use('/api', localApi({ health: healthNow }));
   app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit }));
+  // Before clientApi: its /cameras/:cam/stills/:file would take latest.jpg.
+  app.use('/api', requireAccess('client', access), latestApi({ cameras: cams }));
   app.use('/api', requireAccess('client', access), composeApi({ config: () => running, catalog, composer, cameras: cams, paused: () => storage.paused(), font, audit }));
   app.use('/api', requireAccess('client', access), stillChecksApi({ config: () => running, catalog, cameras: cams, analytics, audit }));
   app.use('/api', requireAccess('client', access), archiveApi({ config: () => running, catalog, archive, composer, cameras: cams }));

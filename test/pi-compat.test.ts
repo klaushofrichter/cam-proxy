@@ -143,6 +143,10 @@ describe.skipIf(!process.env.CAMPROXY_TEST_GO2RTC)('the Pi: stills through the h
     });
     expect(Object.keys(streams).sort()).toEqual(['cam1_main', 'cam1_sub']);
     expect(proxy.stills!.go2rtc.streamUrl('cam1', 'sub')).toBe(`rtsp://127.0.0.1:${go2rtcPorts.rtspPort}/cam1_sub`);
+    // P2 (spec §6.4): the newest still from memory.
+    await until(() => proxy.cameras.first().latestFrame() !== undefined, 15_000);
+    const r = await request(base).get('/api/cameras/cam1/stills/latest.jpg').set(auth());
+    expect([r.status, r.headers['content-type']]).toEqual([200, 'image/jpeg']);
   }, 40_000);
 });
 

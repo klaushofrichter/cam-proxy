@@ -58,6 +58,28 @@ describe('one proxy, three cameras (spec §15)', () => {
     }
   });
 
+  it.skipIf(!go2rtc)('the latest still of each camera from memory (spec §6.4)', async () => {
+    await until(() => p.proxy.cameras.list().every((w) => w.latestFrame() !== undefined), 30_000);
+    const r = await request(p.base).get('/api/cameras/cam4/stills/latest.jpg').set(auth());
+    expect([r.status, r.headers['content-type']]).toEqual([200, 'image/jpeg']);
+    expect(r.headers.etag).toBe(`"cam4-${r.headers['x-still-ts']}"`);
+    expect((await request(p.base).get('/api/cameras/cam4/stills/latest.jpg').set(auth()).set('If-None-Match', r.headers.etag)).status).toBeOneOf([200, 304]);
+    expect((await request(p.base).get('/api/cameras/cam3/previews/latest.jpg').set(auth())).status).toBe(200);
+    const all = (await request(p.base).get('/api/stills/latest').set(auth())).body;
+    expect(all.map((x: { cam: string; up: boolean }) => [x.cam, x.up])).toEqual([['cam3', true], ['cam4', true], ['cam5', true]]);
+    const cams = (await request(p.base).get('/api/cameras').set(auth())).body;
+    expect(cams[1].latestStill).toEqual({ ts: expect.any(Number), url: '/api/cameras/cam4/stills/latest.jpg', tileUrl: '/api/cameras/cam4/previews/latest.jpg' });
+  });
+
+  it('a camera without a still yet: latest.jpg is 404 no_still, not a stored still lookup', async () => {
+    const r = await request(p.base).get('/api/cameras/cam9/stills/latest.jpg').set(auth());
+    expect(r.status).toBe(404);
+    if (!go2rtc) {
+      const own = await request(p.base).get('/api/cameras/cam3/stills/latest.jpg').set(auth());
+      expect([own.status, own.body]).toEqual([404, { error: 'no_still', ts: null }]);
+    }
+  });
+
   it('a camera that goes away and comes back: the others keep producing (supervision)', async () => {
     sims[0].sim.engine.powerOff();
     await until(() => !p.proxy.cameras.get('cam3')!.status.state().online, 20_000);
