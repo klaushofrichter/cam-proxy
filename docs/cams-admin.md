@@ -2,14 +2,18 @@
 
 [cams-admin](https://github.com/klaushofrichter/cams-admin) keeps a registry
 of cam-proxies and shows their health on one dashboard. A proxy reports to it
-over one **outbound** WebSocket: cams-admin can't connect to a proxy, and in
-this version it can't tell a proxy to do anything. The protocol and the design
-are cams-admin's spec `docs/superpowers/specs/2026-10-06-cams-admin-phase1-design.md`
-(§8 protocol, §9 this proxy's side); the wire format is cams-admin's
+over one **outbound** WebSocket: cams-admin can't connect to a proxy. Over
+that channel it may send **signed commands**, and the proxy runs only the ones
+allowed **on this proxy** (none by default; see [Commands](#commands-from-cams-admin)).
+The protocol and the design are cams-admin's specs
+`docs/superpowers/specs/2026-10-06-cams-admin-phase1-design.md` (§8 protocol,
+§9 this proxy's side) and `…/2026-10-06-cams-admin-migration-design.md`
+(commands and managed tokens, M §7, §10); the wire format is cams-admin's
 `contract/v1/`, vendored here in `test/contract/cams-admin-v1/`.
 
 **Off unless configured.** Without `camsAdmin.url` the proxy opens no
-connection, starts no timer, reads and writes no `data/admin/` folder and has
+connection, starts no timer, writes no `data/admin/` file (it reads
+`tokens.json` only if one exists: managed tokens outlive the channel) and has
 no new health item or metric. The Pi runs exactly as before until it is
 enrolled (`test/pi-compat.test.ts`).
 
@@ -55,7 +59,8 @@ the fingerprint, never the code.
 | `camsAdmin.url` | unset (off) | `https://…`; plain `http://` only for loopback and `*.svc.cluster.local` (the cluster's proxy reaches cams-admin over its Service). Anything else is a config error |
 | `camsAdmin.keyFile` | `admin/key.json` | `admin/<name>.json` in `server.dataDir` (letters, digits, `-`, `_`); nothing else, so the data folder and `overrides.json` are never touched |
 | `camsAdmin.enabled` | `true` | `false` keeps the key and stays off |
-| `camsAdmin.allowCommands` | `[]` | reserved for commands from cams-admin (a later phase); anything in it is a config error in this version. Not a Settings-page setting |
+| `camsAdmin.allowCommands` | `[]` | the commands cams-admin may send (deploy-time base; `data/admin/policy.json`, written by the Status card and `admin-commands`, replaces it). `config.json` only: never in `overrides.json`, refused by `PUT /control/config` (`not_a_setting`). An unknown or never-remote entry is a config error |
+| `camsAdmin.commandsPaused` | `false` | refuse every command (`paused`); `config.json` only |
 
 All apply at once: a change restarts only the client (the old connection says
 `bye` first; never two connections).
@@ -121,6 +126,134 @@ FTP clips, stills and the API against a cams-admin that never answers, sends
 garbage, closes every second, answers 4401, never acknowledges, and a
 blackholed link.
 
+## Commands from cams-admin
+
+cams-admin may send a **command** over the channel (contract `command`,
+signed with its key over the canonical JSON of the envelope, RFC 8785). The
+proxy checks it in this order; the first refusal wins (contract "Check order"):
+
+| step | check | refusal |
+|---|---|---|
+| 1 | the body has a `cmdId` | `error bad_message` (no result) |
+| 2 | the signature verifies against a pinned cams-admin key | `bad_signature` |
+| 3 | `proxyId` is this proxy's and `connId` this connection's | `wrong_target` |
+| 4 | the envelope id was not seen on this connection | `replayed` |
+| 5 | `exp` is 1 ms to 60 s after `ts`, and not older than 120 s on cams-admin's clock as measured at the handshake (the Pi has no RTC: its own clock never decides) | `expired` |
+| 6 | the `cmdId` is in the journal: its stored answer again, `duplicate: true`; nothing runs | |
+| 7 | `CAMPROXY_ADMIN_COMMANDS` is on and commands are not paused | `paused` |
+| 8 | this version runs the command and it is allowed here | `not_allowed` |
+| 9 | 30 commands a minute, 300 a day, `tokens.apply` 6 an hour | `rate_limited` (with `retryAfterS`) |
+| 10 | `args.v` is 1 and the args pass the command's strict check (at most 16384 bytes) | `unsupported_version`, `invalid_args` |
+| 11 | a token set with an admin token also needs `tokens.apply.admin` | `not_allowed` |
+| 12 | no other command runs | `busy` |
+
+Then a signed `result` `received`, the command, the journal entry, and a
+signed `result` `done` (`ok`, `failed`, `conflict`). A `done` that could not
+be sent goes out as a signed `command.done` event after the next handshake.
+Refusals are signed results too (at most 60 a minute; the rest are dropped
+and counted) and are not journaled. A connection that sends more than 20
+unsigned or malformed commands is closed.
+
+### Allowed commands
+
+Nothing is allowed until someone allows it **here**: on the Status page's
+cams-admin card (**Commands from cams-admin**), with
+`cam-proxy admin-commands allow <entry…>`, or in `config.json`
+(`camsAdmin.allowCommands`). The entries:
+
+| entry | lets cams-admin |
+|---|---|
+| `tokens.apply` | add, rotate and revoke managed **client** tokens for cams (`CAMPROXY_TOKENS` keeps working) |
+| `tokens.apply.admin` | also manage **admin** tokens (sign-in links, camera rename); the local admin token is never affected |
+| `config.get`, `config.set`, `config.unset`, `config.rollback`, `camera.name.set`, `proxy.restart`, `camera.action:<action>` | not in this version (known names, so a later `config.json` loads; allowing them does nothing yet) |
+
+Camera actions that change trust, delete data or need someone at the
+hardware (`find-camera`, `camera-address`, `camera-trust-clear`,
+`tls-ca-rotate`, `tls-ca-drop-previous`, `archive-clear`, `inventory-repair`,
+`camera-poe-on`) can never be allowed. Settings under `camsAdmin`, `server`,
+`go2rtc`, `tls`, `poeSwitch`, the FTP ports and files, `ntp.server`,
+`composition.font` and each camera's address, user, ports and TLS name can
+never be changed by cams-admin (`isDeniedPath` in `src/fleet/policy.ts`).
+
+**Widening is local only.** Adding an entry, resuming and unblocking a token
+need the proxy's own `CAMPROXY_ADMIN_TOKEN` (or a session signed in with it,
+or a sign-in link it minted). A cams-admin-managed admin token, and a session
+or link it started, can only **narrow**: untick, pause, block (403
+`local_admin_only` otherwise). So a compromised cams-admin can't allow itself
+more.
+
+### Pause and the kill switch
+
+- **Pause** (card, `admin-commands pause [reason]`, `camsAdmin.commandsPaused`):
+  every command is refused `paused`; the heartbeat says so. Any admin can
+  pause; only local admin rights resume.
+- **`CAMPROXY_ADMIN_COMMANDS`** in the process environment or the `.env` file
+  (`CAMPROXY_ENV_FILE`): unset or `on` = commands possible; `off`, empty or
+  anything else = off (fail closed; either source not saying `on` wins). Read
+  at start. cams-admin can't change it; the card shows the banner.
+
+### Managed tokens
+
+`tokens.apply` installs cams-admin's full set of managed tokens: only their
+**hashes** (`sha256:` + hex) with an id, a kind (`client` or `admin`), a label
+and an optional `retireAt` (a rotation: the old token keeps working until
+then). They work **beside** `CAMPROXY_TOKENS` and `CAMPROXY_ADMIN_TOKEN`
+(access order: local admin, managed admin, local client, managed client,
+audit). A set whose revision is not newer is answered `stale` with the
+proxy's revision and changes nothing (a cams-admin restored from an older
+backup can't bring a revoked token back). A hash equal to a local token's is
+refused (`shadows_local_token`). The tokens keep working when cams-admin is
+down or the proxy is unenrolled; `CAMPROXY_TOKENS` may be left unset while a
+managed client token is live.
+
+**Local block:** the card's **Block** (or `cam-proxy admin-tokens block <id>`)
+stops a managed token at once; `tokens.apply` never brings a blocked id back.
+**Unblock** (local admin rights) drops the entry; cams-admin's next
+`tokens.apply` installs it again if it still lists it.
+
+### The files in `data/admin/`
+
+All mode 600 in the 700 folder, written atomically, refused when others can
+read them or they belong to another user; never printed, logged or served.
+
+| file | holds | written by |
+|---|---|---|
+| `key.json` | the proxy's private key | enrollment |
+| `tokens.json` | the managed token hashes, their revision, the local block list | `tokens.apply`, Block/Unblock |
+| `commands.json` | the journal: the final result of the last 1000 commands (and all of the last 7 days, at most 2500) | each command that ran |
+| `policy.json` | the allowed commands and the pause | the card, `admin-commands` |
+
+An unusable `policy.json` pauses every command until it is fixed; an
+unusable `tokens.json` makes no managed token match (local tokens are
+unaffected); an unusable `commands.json` is set aside
+(`commands.json.bad-<ms>`) on the next command.
+
+### Audit
+
+`admin-command` (each command that ran; refusals at most one per code per
+10 minutes), `admin-policy` (allowed commands, pause, resume) and
+`admin-token` (block, unblock); `docs/audit-log.md`. Managed tokens appear
+by id and label, never by hash.
+
+### Cut-over (M §11.4, steps 1-2)
+
+1. On this proxy's card, signed in with its **own** admin token, allow
+   `tokens.apply` (and `tokens.apply.admin` if cams should get a managed
+   admin token).
+2. cams-admin issues the tokens; Klaus (through the kube-setup session) puts
+   them into cams's configuration; check cams.
+3. Rollback at any step: remove the managed token from cams (its
+   `CAMPROXY_TOKENS` value never stopped working), or Pause on the card.
+
+### Recovery: cams-admin compromised
+
+1. Set `CAMPROXY_ADMIN_COMMANDS=off` in the `.env` file (the Pi) or the
+   environment and restart the proxy: no command runs, whatever cams-admin
+   sends.
+2. Block every managed token on the card (or `admin-tokens block <id>`).
+3. If a UI session may have leaked, rotate `CAMPROXY_ADMIN_TOKEN` (a restart
+   signs every session out).
+
 ## Threat notes (accepted risks)
 
 - **Large messages from cams-admin.** Node's built-in WebSocket has no
@@ -157,9 +290,13 @@ signature vectors byte for byte, and the hello, enrollment request and
 heartbeats (one camera, four cameras, truncated) must pass the **strict**
 schemas: a new health-summary field fails here until cams-admin's contract
 has it. The `contract-drift` CI step (`scripts/contract-drift.sh`) fails when
-the copy differs from cams-admin main's (until cams-admin main has
-`contract/v1`, from the `SOURCE` commit). To take a new contract: copy it
-over and update `SOURCE` in the same PR.
+the copy differs from cams-admin's: the branch `SOURCE` names (`(contract/v1,
+main)` normally; a cams-admin branch while a contract change is in review).
+To take a new contract: copy it over and update `SOURCE` in the same PR.
+`test/fleet-jcs.test.ts` reproduces the canonical-JSON and signed-envelope
+vectors byte for byte, and `test/fleet-command-check.test.ts` runs every
+command fixture through the proxy's check (cams-admin runs the same check
+from a cam-proxy checkout: `scripts/contract/cam-proxy-commands.ts` there).
 
 ## Testing against a real cams-admin
 
