@@ -19,7 +19,8 @@ function read(env: NodeJS.ProcessEnv, name: string): string | undefined {
 const MIN_TOKEN = 32;
 
 // One camera's own password variable (spec 2026-10-05-multi-camera-host-design §4.2).
-export const cameraPasswordEnv = (id: string): string => `CAMPROXY_CAMERA_PASSWORD_${id.toUpperCase().replace(/-/g, '_')}`;
+import { cameraPasswordEnv } from './password-env';
+export { cameraPasswordEnv };
 
 // The password a camera's worker logs in with: its own, else the default.
 export function cameraPassword(s: Secrets, id: string): string {
@@ -50,6 +51,8 @@ export function loadSecrets(env: NodeJS.ProcessEnv, ftpEnabled: boolean, cameraI
   }
   const ftpPassword = read(env, 'CAMPROXY_FTP_PASSWORD');
   if (ftpEnabled && !ftpPassword) throw new SettingError('CAMPROXY_FTP_PASSWORD: required when ftp.enabled');
+  // The FTP server compares at most 256 bytes (src/clips/ftp-server.ts).
+  if (ftpPassword && Buffer.byteLength(ftpPassword, 'utf8') > 256) throw new SettingError('CAMPROXY_FTP_PASSWORD: longer than 256 bytes');
   const auditToken = read(env, 'CAMPROXY_AUDIT_TOKEN');
   if (auditToken !== undefined) {
     if (auditToken.length < MIN_TOKEN || /\s/.test(auditToken)) throw new SettingError(`CAMPROXY_AUDIT_TOKEN: at least ${MIN_TOKEN} characters, no spaces`);

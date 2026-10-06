@@ -30,7 +30,7 @@ export class ComposeError extends Error {}
 
 interface Job extends JobView { cam: string; req: ComposeRequest; dir: string; out: string; seen: number; startedAt?: number; doneAt?: number; ctl: AbortController }
 
-export function createComposer(o: { dir: string; runner: Runner; now?: () => number; doneTtlMs?: number; idleMs?: number; maxQueued?: number; maxRunMs?: number }) {
+export function createComposer(o: { dir: string; runner: Runner; now?: () => number; doneTtlMs?: number; idleMs?: number; maxQueued?: number; maxRunMs?: number; concurrent?: () => number }) {
   const now = o.now ?? Date.now;
   const doneTtl = o.doneTtlMs ?? 15 * 60_000;
   const idle = o.idleMs ?? 30_000;
@@ -42,8 +42,9 @@ export function createComposer(o: { dir: string; runner: Runner; now?: () => num
   mkdirSync(o.dir, { recursive: true });
   for (const f of readdirSync(o.dir)) rmSync(join(o.dir, f), { recursive: true, force: true });
   const jobs = new Map<string, Job>();
-  let running: Job | undefined;
-  let runningDone: Promise<unknown> | undefined; // stop() waits for it
+  // The jobs encoding now and their ends (stop() waits for them); at most
+  // composition.concurrent at once (spec 2026-10-05-multi-camera-host-design §8.6).
+  const running = new Map<Job, Promise<unknown>>();
   let stopped = false;
 
   const view = (j: Job): JobView => ({ id: j.id, state: j.state, progress: j.progress, durationS: j.durationS, ...(j.error ? { error: j.error } : {}) });
@@ -51,34 +52,35 @@ export function createComposer(o: { dir: string; runner: Runner; now?: () => num
   // to 2 s after the abort and still writes there).
   const drop = (j: Job) => {
     jobs.delete(j.id);
-    if (j !== running) rmSync(j.dir, { recursive: true, force: true });
+    if (!running.has(j)) rmSync(j.dir, { recursive: true, force: true });
   };
   const next = () => {
-    if (running || stopped) return;
-    const j = [...jobs.values()].find((x) => x.state === 'queued');
-    if (!j) return;
-    running = j;
-    j.state = 'running';
-    j.startedAt = now();
-    runningDone = o.runner({ dir: j.dir, out: j.out, req: j.req, signal: j.ctl.signal, onProgress: (p) => { if (j.state === 'running') j.progress = Math.max(j.progress, Math.min(1, p)); } })
-      .then(() => {
-        if (j.state !== 'running') return;
-        j.state = 'done';
-        j.progress = 1;
-        j.doneAt = now();
-      })
-      .catch((err: Error) => {
-        if (j.state !== 'running') return;
-        j.state = 'failed';
-        if (!(err instanceof ComposeError)) logger.warn({ err: err.message }, 'composition_failed');
-        j.error = err instanceof ComposeError ? err.message : 'the encoder failed';
-        j.doneAt = now();
-      })
-      .finally(() => {
-        running = undefined;
-        if (!jobs.has(j.id)) rmSync(j.dir, { recursive: true, force: true });
-        next();
-      });
+    while (!stopped && running.size < Math.max(1, Math.min(4, o.concurrent?.() ?? 1))) {
+      const j = [...jobs.values()].find((x) => x.state === 'queued');
+      if (!j) return;
+      j.state = 'running';
+      j.startedAt = now();
+      const done = o.runner({ dir: j.dir, out: j.out, req: j.req, signal: j.ctl.signal, onProgress: (p) => { if (j.state === 'running') j.progress = Math.max(j.progress, Math.min(1, p)); } })
+        .then(() => {
+          if (j.state !== 'running') return;
+          j.state = 'done';
+          j.progress = 1;
+          j.doneAt = now();
+        })
+        .catch((err: Error) => {
+          if (j.state !== 'running') return;
+          j.state = 'failed';
+          if (!(err instanceof ComposeError)) logger.warn({ err: err.message }, 'composition_failed');
+          j.error = err instanceof ComposeError ? err.message : 'the encoder failed';
+          j.doneAt = now();
+        })
+        .finally(() => {
+          running.delete(j);
+          if (!jobs.has(j.id)) rmSync(j.dir, { recursive: true, force: true });
+          next();
+        });
+      running.set(j, done);
+    }
   };
 
   return {
@@ -141,7 +143,7 @@ export function createComposer(o: { dir: string; runner: Runner; now?: () => num
       stopped = true;
       for (const j of [...jobs.values()]) j.ctl.abort();
       // Let a running ffmpeg end (it's killed within 2 s) before its folder goes.
-      if (runningDone) await within(runningDone.catch(() => {}), 3000);
+      if (running.size) await within(Promise.all([...running.values()]).catch(() => {}), 3000);
       for (const j of [...jobs.values()]) drop(j);
     },
   };

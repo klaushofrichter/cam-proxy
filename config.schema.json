@@ -64,7 +64,7 @@
           },
           "host": {
             "type": "string",
-            "pattern": "^[^\\s/]*$",
+            "pattern": "^([A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?)?$",
             "description": "address or name, optional :port"
           },
           "protocol": {
@@ -184,6 +184,18 @@
                   60
                 ],
                 "description": "seconds between stills (divides a minute)"
+              }
+            }
+          },
+          "storage": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "sharePercent": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100,
+                "description": "this camera's share of the storage budget, percent (all shares together at most 100)"
               }
             }
           },
@@ -531,6 +543,12 @@
           "type": "string",
           "pattern": "^.+$",
           "description": "font file for the badge and card text of composed clips; default: the first of DejaVu Sans (Alpine, Debian) or Arial (macOS) that exists"
+        },
+        "concurrent": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4,
+          "description": "composed clips encoded at once (2 on a 4-core host, 1 on a Pi)"
         }
       }
     },
@@ -731,6 +749,12 @@
               "minimum": 0,
               "maximum": 1000,
               "description": "still checks (a second picked by hand in cams) per camera day at most, within the monthly limit and the daily cap; 0 = no checks"
+            },
+            "perCameraDailyCap": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000,
+              "description": "Google Vision calls per camera and day at most (automatic analyses and still checks together); 0 = no per-camera cap"
             }
           }
         }
@@ -752,7 +776,7 @@
         },
         "host": {
           "type": "string",
-          "pattern": "^[^\\s/]*$",
+          "pattern": "^([A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?)?$",
           "description": "address or name, optional :port (required)"
         },
         "protocol": {

@@ -101,11 +101,14 @@ describe.skipIf(!process.env.CAMPROXY_TEST_GO2RTC)('proxy restart while stills s
     const p = await startProxy(sim);
     cleanup.push(() => p.proxy.stop());
     const old = p.proxy.stills!;
+    const go2rtcPid = old.go2rtc.pid();
     await p.proxy.restart(); // go2rtc of the first side is still starting
     await until(() => p.proxy.stills!.grabber.up(), 30000);
     await new Promise((r) => setTimeout(r, 1500));
     expect(old.grabber.pid()).toBeUndefined();
-    expect(old.go2rtc.pid()).toBeUndefined();
+    // One go2rtc for the host (spec 2026-10-05-multi-camera-host-design §8.5): a restart keeps it.
+    expect(p.proxy.stills!.go2rtc).toBe(old.go2rtc);
+    expect(old.go2rtc.pid()).toBe(go2rtcPid);
   }, 60000);
 });
 

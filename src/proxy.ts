@@ -15,11 +15,15 @@ import { CameraWorker, cameraWebUi } from './cameras/worker';
 import { cameraConfig, cameraIds } from './config/cameras';
 import { cameraPassword } from './config/secrets';
 import { reapOrphanGo2rtc } from './stills/orphans';
+import { Go2rtc } from './stills/go2rtc';
+import { latestApi } from './api/latest-api';
+import { CachePool } from './recordings/pool';
+import { PoeSwitch } from './camera/poe-switch';
 import { restartProcess } from './process-restart';
 import type { Config } from './config/defaults';
 import { getPath, needsProcessRestart, needsRestart, setPath, settingPaths, type Loaded } from './config/load';
 import { cameraFtpOff, setupCameraFtp, testCameraFtp, type FtpTarget } from './clips/camera-ftp';
-import { createClipsSide, type ClipsSide } from './clips/side';
+import { createClipsSide, ftpUsers, type ClipsSide } from './clips/side';
 import type { RecordingsSide } from './recordings/side';
 import { validId } from './recordings/names';
 import { logger, setLogLevel, withoutQuery } from './log';
@@ -85,6 +89,7 @@ export interface Proxy {
   readonly audit: AuditLog;
   readonly inventory: InventoryRunner;
   readonly archive: Archive;
+  go2rtcPid(): number | undefined;
   start(opts?: { port?: number; host?: string }): Promise<{ port: number }>;
   restart(): Promise<void>;
   stop(opts?: { reason?: string }): Promise<void>;
@@ -148,6 +153,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   const font = running.composition?.font ?? defaultFont();
   const composer = createComposer({
     dir: join(running.server.dataDir, 'compositions'),
+    concurrent: () => running.composition.concurrent,
     runner: ffmpegRunner({ font: font ?? '', clock: clockText, readStill: stillAt, hasAudio, paused: () => storage.paused(), stillsIntervalS: (cam) => cameraConfig(running, cam)?.stills.intervalS ?? running.stills.intervalS }),
   });
   const sweeper = setInterval(() => composer.sweep(), 5000);
@@ -159,14 +165,33 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     const c = cameraConfig(running, id)!;
     return { server: running.ftp.publicHost ?? '', port: running.ftp.port, user: c.ftp.user, password: loaded.secrets.ftpPassword ?? '', tls: running.ftp.tls, stream: c.ftp.stream };
   };
-  const makeWorker = (id: string, index: number) =>
+  // One go2rtc for every camera with stills (spec 2026-10-05-multi-camera-host-design
+  // §8.5), none while stills are off everywhere. Made anew on a restart that
+  // changed its settings (go2rtc.*) or turned stills on for the first camera.
+  const go2rtcSettings = () => JSON.stringify({ binary: running.go2rtc.binary, rtspPort: running.go2rtc.rtspPort, apiPort: running.go2rtc.apiPort });
+  const makeGo2rtc = () =>
+    cameraIds(running).some((id) => cameraConfig(running, id)!.stills.enabled)
+      ? new Go2rtc({ binary: running.go2rtc.binary, rtspPort: running.go2rtc.rtspPort, apiPort: running.go2rtc.apiPort, sources: () => cams.list().filter((w) => w.cam().stills.enabled).map((w) => w.source()) })
+      : undefined;
+  let go2rtc = makeGo2rtc();
+  let go2rtcMadeWith = go2rtcSettings();
+  // Started in the background: each camera's grabber waits until it is up.
+  const startGo2rtc = () => void go2rtc?.start().catch((err: Error) => logger.error({ err: err.message }, 'go2rtc_start_failed'));
+  // One PoE controller for the host (spec 2026-10-05-multi-camera-host-design §8.4):
+  // one switch session at a time, in arrival order; each camera has its port.
+  const poe = new PoeSwitch({ config: () => running.poeSwitch, password: () => loaded.secrets.poeSwitchPassword });
+  // One recordings cache for every camera (spec §8.3): one LRU, capped by recordings.cacheMB.
+  const cachePool = new CachePool(() => running.recordings.cacheMB * 2 ** 20);
+  const makeWorker = (id: string) =>
       new CameraWorker({
         id,
-        index,
         running: () => running,
+        go2rtc: () => go2rtc,
+        cachePool,
         password: () => cameraPassword(loaded.secrets, id),
-        poeSwitchPassword: () => loaded.secrets.poeSwitchPassword,
+        poe,
         ftpTarget: ftpTargetFor(id),
+        ftpPassword: () => loaded.secrets.ftpPassword,
         catalog,
         log,
         sse,
@@ -176,7 +201,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         hooks: { onCameraCheck: (c) => metrics.onCameraCheck(id, c), onResubscribe: () => metrics.onResubscribe(id), onStill: (ts) => metrics.onStill(id, ts), onStillMissing: () => metrics.onStillMissing(id), onRecordingDownload: (o) => metrics.onRecordingDownload(id, o) },
         cameraFtpCheckMs: opts.cameraFtpCheckMs,
       });
-  cameraIds(running).forEach((id, index) => cams.add(makeWorker(id, index)));
+  cameraIds(running).forEach((id) => cams.add(makeWorker(id)));
   const metrics = createMetrics({
     storage,
     config: () => running,
@@ -190,22 +215,28 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   });
   storage.on('run', metrics.onRetention);
   recordingBusy = (p) => cams.list().some((w) => w.recordings.cache.busy(p));
-  // The FTP server (host-wide): uploads go to the one camera with FTP on (Ruling P1-2).
+  // The FTP server (host-wide, spec 2026-10-05-multi-camera-host-design §7):
+  // one for every camera with FTP on, a user each; a login from another
+  // address than the camera's is refused and audited (throttled per address and user).
   let clips: ReturnType<typeof createClipsSide> | undefined;
-  const ftpCamera = () => cams.list().find((w) => w.cam().ftp.enabled);
+  const ftpRefusals = new RefusalThrottle();
   const buildClips = () => {
     clips = undefined;
-    const w = ftpCamera();
-    if (!w) return;
+    if (!cams.list().some((w) => w.cam().ftp.enabled)) return;
     if (!loaded.secrets.ftpPassword) return void logger.error('ftp_enabled_without_password');
-    const indexer = w.makeIndexer(true);
-    // Pictures stored before they were paired by time (2026-09-30).
-    try {
-      indexer.relinkSnapshots();
-    } catch (err) {
-      logger.warn({ err: (err as Error).message }, 'snapshots_relink_failed');
-    }
-    clips = createClipsSide({ config: running, user: w.cam().ftp.user, password: loaded.secrets.ftpPassword, indexer, accept: () => !storage.paused() });
+    clips = createClipsSide({
+      config: running,
+      password: loaded.secrets.ftpPassword,
+      users: () => ftpUsers(running),
+      indexer: (cam) => cams.get(cam)?.ftpIndexer(),
+      accept: () => !storage.paused(),
+      onRefused: (r) => {
+        const t = ftpRefusals.take(r.ip, r.user);
+        if (!t.record) return;
+        const cam = ftpUsers(running).get(r.user)?.cam;
+        audit.write({ action: 'ftp-login-refused', category: ['authentication'], type: ['denied'], outcome: 'failure', ip: r.ip, ...(cam ? { camera: cam } : {}), message: `FTP login as ${r.user} from ${r.ip} refused: the camera is at ${r.expected}`, details: { user: r.user, expected: r.expected, ...(t.suppressed ? { suppressed: t.suppressed } : {}) } });
+      },
+    });
   };
   buildClips();
   const startClips = async () => {
@@ -372,8 +403,21 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     const analyticsBefore = JSON.stringify(loaded.config.analytics);
     const before = new Map(cams.list().map((w) => [w.id, w.cam()]));
     loaded = next;
+    // Cameras added or removed in the overrides run or stop at once (spec
+    // 2026-10-05-multi-camera-host-design §6.3): a new camera's settings are
+    // copied in whole, although camera settings otherwise wait for a restart.
+    const was = cameraIds(running);
+    const now = cameraIds(next.config);
+    for (const id of now.filter((x) => !was.includes(x))) running.cameras[id] = structuredClone(next.config.cameras[id]);
+    if (JSON.stringify(was) !== JSON.stringify(now)) {
+      running.cameraOrder = [...now];
+      void reconcile();
+    }
     applySettings(needsRestart);
-    for (const w of cams.list()) w.settingsChanged(before.get(w.id)!);
+    for (const w of cams.list()) {
+      const b = before.get(w.id);
+      if (b) w.settingsChanged(b);
+    }
     sse.setOptions(running.sse);
     setLogLevel(running.server.logLevel);
     // Only a change to the analytics settings lifts a bad_key pause.
@@ -404,11 +448,12 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       audit.write({ action: 'auth-refused', category: ['authentication'], type: ['denied'], outcome: 'failure', ip, userAgent: req.get('user-agent'), message: `Refused ${req.method} ${path} (${info.reason})`, ecs: { http: { request: { method: req.method } }, url: { path } }, details: { auth: { tokenKind: info.tokenKind, reason: info.reason, ...(t.suppressed ? { suppressed: t.suppressed } : {}) } } });
     },
   };
-  // One camera's FTP status: the server's figures only for the camera that
-  // uploads to it (Ruling P1-2); the clip count of every camera while there
-  // is one (the Pi's number as before), else this camera's.
+  // One camera's FTP status: the server's figures for this camera's user;
+  // the clip count of every camera while there is one (the Pi's number as
+  // before), else this camera's.
   const ftpStatusOf = (w: CameraWorker) => {
-    const mine = clips !== undefined && ftpCamera() === w;
+    const mine = clips !== undefined && w.cam().ftp.enabled;
+    const ix = w.ftpIndexer();
     return {
       enabled: w.cam().ftp.enabled,
       listening: mine ? clips!.side.listening() : false,
@@ -416,10 +461,10 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       tls: running.ftp.tls,
       publicHost: running.ftp.publicHost ?? null,
       passwordSet: !!loaded.secrets.ftpPassword,
-      lastUpload: mine ? clips!.side.lastUpload() : null,
-      lastClip: mine ? clips!.side.indexer.lastIndexed() : null,
+      lastUpload: mine ? clips!.side.lastUpload(w.id) : null,
+      lastClip: mine ? (ix?.lastIndexed() ?? null) : null,
       clips: cams.size === 1 ? countAllClips(catalog) : countAllClips(catalog, w.id),
-      failures: mine ? clips!.side.uploadFailures() + clips!.side.indexer.failures() : 0,
+      failures: mine ? clips!.side.uploadFailures(w.id) + (ix?.failures() ?? 0) : 0,
       camera: w.cam().ftp.enabled ? w.ftpWatch.view() : null,
       stalled: w.clipsHealth(),
     };
@@ -434,6 +479,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     stream: w.streamStatus(),
     ftp: ftpStatusOf(w),
     recordings: w.recordings.status(),
+    // Where the camera is defined: config.json, or added in the Settings page (overrides.json).
+    source: loaded.addedCameras.includes(w.id) ? ('added' as const) : ('config' as const),
   });
 
   // The health summary (spec 2026-10-03-health-summary-design): the host
@@ -468,9 +515,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   };
   const healthNow = async (): Promise<HealthSummary> => {
     const [first, ...others] = cams.list().map(cameraHealthInput);
-    // The recordings caches of every camera (one camera: its own, as before).
-    const caches = cams.list().map((w) => w.recordings.status().cache);
-    const recordingsCache = caches.length === 1 ? caches[0] : caches.reduce((a, c) => ({ bytes: a.bytes + c.bytes, files: a.files + c.files, capBytes: a.capBytes + c.capBytes }), { bytes: 0, files: 0, capBytes: 0 });
+    // The host's one recordings cache (spec 2026-10-05-multi-camera-host-design §8.3).
+    const recordingsCache = cachePool.usage();
     return buildHealth({
       now: Date.now(),
       version: VERSION,
@@ -496,7 +542,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // Clip and recording files too: a seeking video player sends many range
   // requests. A recording only once it is cached (#99): one not cached costs
   // a camera Search and a download, so it counts in the normal bucket.
-  const IMAGE = /^\/api\/cameras\/[^/]+\/((stills|previews)\/\d{1,15}\.jpg|clips\/\d{1,15}\.(mp4|jpg)|events\/\d{1,15}\/analysis\.jpg|still-checks\/\d{1,12}\.jpg)$|^\/api\/archive\/\d{1,15}\/(video|thumbnail)$/;
+  // The latest still and tile (spec 2026-10-05-multi-camera-host-design §6.4) too: an overview grid polls them.
+  const IMAGE = /^\/api\/cameras\/[^/]+\/((stills|previews)\/(\d{1,15}|latest)\.jpg|clips\/\d{1,15}\.(mp4|jpg)|events\/\d{1,15}\/analysis\.jpg|still-checks\/\d{1,12}\.jpg)$|^\/api\/archive\/\d{1,15}\/(video|thumbnail)$|^\/api\/stills\/latest$/;
   const RECORDING = /^\/api\/cameras\/[^/]+\/recordings\/(Rec[0-9A-Za-z_]+\.mp4)$/;
   const isImage = (req: Request) => {
     if (req.method !== 'GET') return false;
@@ -523,6 +570,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // key; anyone else goes on to the access check as for an unknown route.
   app.use('/api', localApi({ health: healthNow }));
   app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit }));
+  // Before clientApi: its /cameras/:cam/stills/:file would take latest.jpg.
+  app.use('/api', requireAccess('client', access), latestApi({ cameras: cams }));
   app.use('/api', requireAccess('client', access), composeApi({ config: () => running, catalog, composer, cameras: cams, paused: () => storage.paused(), font, audit }));
   app.use('/api', requireAccess('client', access), stillChecksApi({ config: () => running, catalog, cameras: cams, analytics, audit }));
   app.use('/api', requireAccess('client', access), archiveApi({ config: () => running, catalog, archive, composer, cameras: cams }));
@@ -555,7 +604,12 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       intake: () => cams.first().intake.state(),
       resubscribe: (cam) => worker(cam).intake.resubscribe(),
       restart: () => proxy.restart(),
-      restartCamera: (cam) => worker(cam).restart(),
+      // One camera's restart applies its own pending settings (cameras.<id>.*), nothing host-wide.
+      restartCamera: (cam) => {
+        const prefix = `cameras.${cam}.`;
+        for (const p of settingPaths(loaded.config)) if (p.startsWith(prefix) && needsRestart(p)) setPath(running as unknown as Record<string, unknown>, p, structuredClone(getPath(loaded.config, p)));
+        return worker(cam).restart();
+      },
       cameraReboot: (who, cam) => worker(cam).reboot.request(who),
       poeSwitch: { notConfigured: (cam) => worker(cam).poeSwitch.notConfigured(), read: (cam) => worker(cam).poeSwitch.read(), poeOn: (cam) => worker(cam).poeSwitch.poeOn(), info: (cam) => worker(cam).poeSwitchInfo() },
       cameraPowerCycle: (who, cam) => {
@@ -631,6 +685,42 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     res.status(500).json({ error: 'internal' });
   });
 
+  // The workers follow the configured cameras (spec §6.3), one change at a
+  // time: a removed camera's worker stops and its go2rtc streams go (its
+  // files stay, Ruling P2-6); an added camera gets a worker, its streams in
+  // the running go2rtc (never a go2rtc restart) and FTP when it has it on.
+  let reconciling: Promise<void> = Promise.resolve();
+  const reconcile = (): Promise<void> =>
+    (reconciling = reconciling.then(async () => {
+      if (stopPromise) return;
+      const want = cameraIds(running);
+      for (const w of cams.all().filter((x) => !want.includes(x.id))) {
+        cams.remove(w.id);
+        await w.stopRecordings();
+        await w.stop();
+        await go2rtc?.removeStream(w.id).catch((err: Error) => logger.warn({ cameraId: w.id, err: err.message }, 'go2rtc_remove_failed'));
+        if (!cameraIds(running).includes(w.id)) delete running.cameras[w.id];
+        logger.info({ cameraId: w.id }, 'camera_removed');
+      }
+      for (const id of want.filter((x) => !cams.get(x))) {
+        if (!go2rtc && cameraConfig(running, id)?.stills.enabled) {
+          go2rtc = makeGo2rtc();
+          go2rtcMadeWith = go2rtcSettings();
+          startGo2rtc();
+        }
+        const w = makeWorker(id);
+        cams.add(w);
+        if (w.cam().stills.enabled) await go2rtc?.setStream(w.source()).catch((err: Error) => logger.warn({ cameraId: id, err: err.message }, 'go2rtc_add_failed'));
+        await w.start();
+        logger.info({ cameraId: id }, 'camera_added');
+      }
+      // The first camera with FTP on: the server starts now.
+      if (!clips && cams.list().some((w) => w.cam().ftp.enabled)) {
+        buildClips();
+        await startClips();
+      }
+    }).catch((err: Error) => logger.error({ err: err.message }, 'camera_reconcile_failed')));
+
   // Applies pending restart settings to the camera side (camera, events).
   // Settings read at process start (port, data folder, trust proxy, font) need a new process.
   // A camera whose id is no longer configured (a changed camera.id) stops
@@ -640,15 +730,24 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     const nextIds = cameraIds(loaded.config);
     const gone = cams.list().filter((w) => !nextIds.includes(w.id));
     for (const w of gone) {
-      await w.stopSwitch();
       await w.stopRecordings();
       await w.stop();
       cams.remove(w.id);
+      await go2rtc?.removeStream(w.id);
     }
     applySettings(needsProcessRestart);
     const kept = cams.list();
-    const added = cameraIds(running).flatMap((id, index) => (cams.get(id) ? [] : [makeWorker(id, index)]));
+    const added = cameraIds(running).flatMap((id) => (cams.get(id) ? [] : [makeWorker(id)]));
     for (const w of added) cams.add(w);
+    // go2rtc's own settings changed, or stills went on or off everywhere: a new one.
+    if (go2rtcSettings() !== go2rtcMadeWith || !go2rtc !== !makeGo2rtc()) {
+      await go2rtc?.stop();
+      go2rtc = makeGo2rtc();
+      go2rtcMadeWith = go2rtcSettings();
+      startGo2rtc();
+    } else {
+      for (const w of added) if (w.cam().stills.enabled) await go2rtc?.setStream(w.source()).catch((err: Error) => logger.warn({ cameraId: w.id, err: err.message }, 'go2rtc_add_failed'));
+    }
     await Promise.all([...kept.map((w) => w.restart()), ...added.map((w) => w.start())]);
     buildClips();
     await startClips();
@@ -689,6 +788,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     },
     cameras: cams,
     analytics,
+    // Test seam: the host go2rtc's process id (adding a camera never restarts it).
+    go2rtcPid: () => go2rtc?.pid(),
     async start(opts = {}) {
       server = http.createServer(app);
       const s = server;
@@ -698,6 +799,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       });
       // go2rtc an earlier process left behind (killed hard) would hold the ports.
       if (cams.list().some((w) => w.cam().stills.enabled)) await reapOrphanGo2rtc();
+      startGo2rtc();
       await Promise.all(cams.list().map((w) => w.start()));
       await startClips();
       hostMonitor.start();
@@ -739,10 +841,24 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   async function doStop(opts: { reason?: string }): Promise<void> {
       daily.stop();
       hostMonitor.stop();
+      await reconciling;
       // First, while everything is still open.
       audit.write({ action: 'proxy-stop', category: ['process'], type: ['end'], outcome: 'success', user: 'system', message: `cam-proxy stopping${opts.reason ? ` (${opts.reason})` : ''}`, details: { reason: opts.reason ?? 'stop' } });
-      // Each camera's PoE back on if a power-cycle is in its off time.
-      await Promise.all(cams.list().map((w) => w.stopSwitch()));
+      // Each camera's PoE back on if a power-cycle is in its off time; one
+      // record per camera the proxy may leave dark (spec §8.4).
+      const { portsLeftOff, sessionMaybeOpen } = await poe.stop();
+      const swInfo = { model: running.poeSwitch.model, host: running.poeSwitch.host ?? '' };
+      for (const port of portsLeftOff) {
+        const w = cams.list().find((x) => x.cam().poeSwitch.port === port);
+        const parts = [
+          `the camera's PoE may be left OFF on ${swInfo.host} port ${port}; turn it on in the switch's web UI, or with "Turn camera PoE on" once the proxy is back`,
+          ...(sessionMaybeOpen ? ["the proxy's web session on the switch may still be open: the switch's web UI may refuse logins until the switch ends it"] : []),
+        ];
+        audit.write({ action: 'camera-powercycle', category: ['host'], type: ['end'], outcome: 'failure', user: 'system', ...(w ? { camera: w.id } : {}), message: `cam-proxy stopping: ${parts.join('; ')}`, details: { phase: 'stop', poeLeftOff: true, sessionMaybeOpen, switch: { ...swInfo, port } } });
+      }
+      if (sessionMaybeOpen && !portsLeftOff.length) {
+        audit.write({ action: 'camera-powercycle', category: ['host'], type: ['end'], outcome: 'failure', user: 'system', message: "cam-proxy stopping: the proxy's web session on the switch may still be open: the switch's web UI may refuse logins until the switch ends it", details: { phase: 'stop', poeLeftOff: false, sessionMaybeOpen, switch: swInfo } });
+      }
       await restarting;
       clearInterval(sweeper);
       sse.closeAll();
@@ -761,6 +877,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       }
       await clips?.stop();
       await Promise.all(cams.list().map((w) => w.stop()));
+      await go2rtc?.stop();
       catalog.close();
   }
   return proxy;

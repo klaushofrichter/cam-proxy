@@ -1,5 +1,8 @@
 // test/compose-jobs.test.ts
 import { afterEach, describe, expect, it } from 'vitest';
+import { DEFAULTS } from '../src/config/defaults';
+import { checkPartial } from '../src/config/schema';
+import { needsRestart } from '../src/config/load';
 import { existsSync, mkdtempSync, readdirSync, writeFileSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -241,5 +244,36 @@ describe('lowerPriority', () => {
     } finally {
       p.kill();
     }
+  });
+});
+
+describe('composition.concurrent (spec 2026-10-05-multi-camera-host-design §8.6)', () => {
+  it('runs that many encodes at once; the next waits', async () => {
+    const { c, m } = make({ concurrent: () => 2 });
+    c.start({ ...req, cam: 'cam3' });
+    c.start({ ...req, cam: 'cam4' });
+    c.start({ ...req, cam: 'cam5' });
+    await tick();
+    expect(m.jobs).toHaveLength(2);
+    m.jobs[0].finish();
+    await tick();
+    await tick();
+    expect(m.jobs).toHaveLength(3);
+  });
+  it('one by default (the Pi)', async () => {
+    const { c, m } = make();
+    c.start(req);
+    c.start(req);
+    await tick();
+    expect(m.jobs).toHaveLength(1);
+  });
+});
+
+describe('the setting composition.concurrent', () => {
+  it('1 to 4, default 1, applied live', () => {
+    expect(DEFAULTS.composition.concurrent).toBe(1);
+    expect(() => checkPartial({ composition: { concurrent: 2 } })).not.toThrow();
+    expect(() => checkPartial({ composition: { concurrent: 5 } })).toThrow();
+    expect(needsRestart('composition.concurrent')).toBe(false);
   });
 });

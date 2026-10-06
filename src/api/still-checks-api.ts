@@ -119,7 +119,7 @@ export function stillChecksApi(d: { config: () => Config; catalog: Catalog; came
 
   // The budget for cams's button (§2.4): never the key or its mask.
   r.get('/cameras/:cam/analytics', (req, res) => {
-    res.json(d.analytics.usage());
+    res.json(d.analytics.usage(workerOf(res).id));
   });
   return r;
 }

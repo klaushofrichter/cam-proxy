@@ -11,8 +11,15 @@ export class CameraRegistry {
     this.byId.set(w.id, w);
   }
 
-  remove(id: string): void {
+  remove(id: string): CameraWorker | undefined {
+    const w = this.byId.get(id);
     this.byId.delete(id);
+    return w;
+  }
+
+  // Every worker, also one whose id left the config (being removed).
+  all(): CameraWorker[] {
+    return [...this.byId.values()];
   }
 
   get(id: string): CameraWorker | undefined {

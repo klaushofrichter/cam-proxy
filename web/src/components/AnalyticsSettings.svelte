@@ -18,6 +18,11 @@
   let dailyDraft = $state<string | undefined>(undefined);
   const savedChecks = $derived(String(val<number>('analytics.googleVision.checksPerDay') ?? 10));
   let checksDraft = $state<string | undefined>(undefined);
+  // Per camera and day (spec 2026-10-05-multi-camera-host-design §8.2); 0 = none.
+  const savedPerCamera = $derived(String(val<number>('analytics.googleVision.perCameraDailyCap') ?? 0));
+  let perCameraDraft = $state<string | undefined>(undefined);
+  const perCamera = $derived(perCameraDraft ?? savedPerCamera);
+  const perCameraValue = $derived(parseLimit(perCamera, 10000));
   const checks = $derived(checksDraft ?? savedChecks);
   const checksValue = $derived(parseLimit(checks, 1000));
   const monthly = $derived(monthlyDraft ?? savedMonthly);
@@ -105,9 +110,12 @@
     <div class="row"><label>Still checks per day (0 = off) <input type="number" min="0" max="1000" step="1" value={checks} oninput={(e) => (checksDraft = e.currentTarget.value)} data-testid="analytics-checks" /></label>
       <button disabled={checksValue === null} data-testid="analytics-checks-save" aria-label="Save still checks per day" onclick={() => checksValue !== null && void put({ googleVision: { checksPerDay: checksValue } }, 'Still checks per day', () => (checksDraft = undefined))}>Save</button></div>
     {#if checksValue === null}<p class="hint small" data-testid="analytics-checks-hint">a whole number from 0 to 1,000</p>{/if}
+    <div class="row"><label>Per camera and day (0 = no cap) <input type="number" min="0" max="10000" step="1" value={perCamera} oninput={(e) => (perCameraDraft = e.currentTarget.value)} data-testid="analytics-per-camera" /></label>
+      <button disabled={perCameraValue === null} data-testid="analytics-per-camera-save" aria-label="Save the per-camera daily cap" onclick={() => perCameraValue !== null && void put({ googleVision: { perCameraDailyCap: perCameraValue } }, 'Per-camera cap', () => (perCameraDraft = undefined))}>Save</button></div>
+    {#if perCameraValue === null}<p class="hint small" data-testid="analytics-per-camera-hint">a whole number from 0 to 10,000</p>{/if}
     <p class="muted small">Still checks are made by hand in cams, on any second; they count toward the limits above.</p>
     <p class="small" data-testid="analytics-estimate">{estimateFor(monthly, Number(savedMonthly))}</p>
-    <p class="muted small">The limit counts this proxy's calls only. Proxies that share a key share Google's budget: keep their limits' total within it.</p>
+    <p class="muted small">The limits count this key's calls by every camera of this proxy; a new key starts a fresh count. Each proxy counts only its own calls. Proxies that share a key share its budget: keep the sum of their monthly limits within it.</p>
   </div>
   {#if message}<p class="msg" data-testid="analytics-message">{message}</p>{/if}
 </div>

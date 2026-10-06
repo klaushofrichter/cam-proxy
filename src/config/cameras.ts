@@ -11,6 +11,7 @@ export interface ResolvedCamera {
   poeSwitch: HostPoeSwitch & { port?: number };
   ftp: { user: string; enabled: boolean; stream: 'main' | 'sub' };
   stills: Config['stills'];
+  storage: { sharePercent?: number };
   events: Config['events'];
   analytics: { kinds: Config['analytics']['kinds'] };
 }
@@ -45,6 +46,7 @@ export function cameraConfig(c: Config, id: string): ResolvedCamera | undefined 
     poeSwitch: { ...structuredClone(c.poeSwitch), ...(o.poeSwitch?.port !== undefined ? { port: o.poeSwitch.port } : {}) },
     ftp: { user: o.ftp?.user ?? id, enabled: o.ftp?.enabled ?? c.ftp.enabled, stream: o.ftp?.stream ?? c.ftp.stream },
     stills: { ...structuredClone(c.stills), ...defined(o.stills ?? {}) },
+    storage: o.storage?.sharePercent !== undefined ? { sharePercent: o.storage.sharePercent } : {},
     events: structuredClone(cameraEvents(c, id)),
     analytics: { kinds: { ...c.analytics.kinds, ...defined(o.analytics?.kinds ?? {}) } },
   };

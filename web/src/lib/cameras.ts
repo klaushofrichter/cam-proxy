@@ -2,7 +2,8 @@ import { writable } from 'svelte/store';
 import type { Status } from './status-types';
 import type { RecordingsStatus } from './recordings';
 
-export interface CameraBlock { id: string; camera: Status['camera']; intake: Status['intake']; stream: Status['stream']; ftp: Status['ftp']; recordings?: RecordingsStatus }
+// `source`: config.json, or added in the Settings page (overrides.json); absent from an older proxy.
+export interface CameraBlock { id: string; camera: Status['camera']; intake: Status['intake']; stream: Status['stream']; ftp: Status['ftp']; recordings?: RecordingsStatus; source?: 'config' | 'added' }
 
 const KEY = 'camproxy.camera';
 const stored = (): string | null => {

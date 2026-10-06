@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **Rollback note** (the Pi): no new migration (the catalog stays at schema 9). The previous release refuses overrides it doesn't know (`composition.concurrent`, `analytics.googleVision.perCameraDailyCap`, `cameras.<id>.storage.sharePercent`, a camera added in the Settings page): a rollback restores the `overrides.json` backup taken before this update.
+- One go2rtc for all cameras; a camera added or restarted never restarts it.
+- FTP: one server, a user per camera (default: the camera id); a login from another address than the camera's IPv4 address is refused and audited (`ftp-login-refused`; a camera reached by name has no address check). `CAMPROXY_FTP_PASSWORD` at most 256 bytes. On the Pi the camera's FTP login must come from its configured address (`CAMERA_HOST`), as it does.
+- Storage: per-camera accounting (Status page, metrics, `/control/stats` `cameras`) and optional `cameras[].storage.sharePercent` (100 % only when every camera has a share).
+- Vision: limits count per API key (a new key starts a fresh count, also one of the same Google project); `checksPerDay` per camera and day, as documented; `analytics.googleVision.perCameraDailyCap`.
+- A camera's `host` is a name or IPv4 address with an optional `:port` (as `CAMERA_HOST`); anything else (e.g. `${…}`, which go2rtc would expand) is a config error.
+- PoE switch: one controller per host with a queue (a second camera's request waits, then `409 switch_busy`); a driver per switch model; one read serves every port for 10 s.
+- `composition.concurrent`: encodes at once (default 1).
+- One recordings cache for all cameras (`recordings.cacheMB`).
+- Control: `/control/cameras/:cam/name` and `/control/cameras/:cam/actions/:name` (since P1); cameras can be added and removed in the Settings page, which shows the host's settings and the picked camera's.
+- `GET /api/cameras/:cam/stills/latest.jpg`, `…/previews/latest.jpg`, `GET /api/stills/latest`; `GET /api/cameras` items carry `latestStill`.
+- CPU temperature on AMD hosts (k10temp Tctl).
+- Several cameras: `POST /control/actions/restart` without a camera restarts every camera side and applies every pending setting (the Settings page's "Restart to apply"); a camera's restart applies its pending `cameras.<id>.*` settings; `GET /control/config` says `restartScope`.
+- The multi-camera host (the mini PC, docs/multi-camera-host.md): `scripts/host/render.ts` renders nftables, dnsmasq, chrony, sysctl, the camera-side interface, Docker's `daemon.json` (`"iptables": false`), compose and the first `config.json` from one `host.json`, refusing bad leases, overlapping subnets, a shared or odd NIC name and bad ports; IPv4 forwarding comes on only once the ruleset is loaded (fails closed); `scripts/host/validate-rendered.sh` checks them with Debian 13's tools in containers; `deploy/host/prepare-host.sh` installs them (idempotent) and `deploy/host/check-host.sh` verifies the host. `scripts/measure-camera.ts` reads a camera's `GetNtp` and certificate state (`--set-ntp` writes the whole `Ntp` object). The kube-setup request for the camera subnet is in `deploy/cluster/REQUEST.md`.
+
+## v2026.10.05.6
+
 - **Before updating** (the Pi): back up `data/overrides.json` and `data/catalog.sqlite`. The previous release won't start on the new overrides (`cameras.*`) or the catalog's schema 9; a rollback is restoring both and the previous image (docs/raspberry-pi.md).
 - Several cameras per proxy: `cameras` in config.json (a list), a camera worker each, supervised (a failing camera retries with backoff, the others go on; a camera without an address waits idle instead of stopping the proxy). Today's `camera` object still works unchanged; overrides with legacy paths are read translated and written back as `cameras.<id>.*` / `poeSwitch.*`. `GET /control/config` shows the new paths.
 - `GET /api/cameras` lists every camera, with `error` and `features` (`["sse-cam-list"]`). A camera being restarted answers `503 camera_restarting`.

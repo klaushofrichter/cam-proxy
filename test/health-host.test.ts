@@ -147,3 +147,11 @@ describe('HostMonitor', () => {
     expect(m.reading()).toMatchObject({ disk: expect.anything() });
   });
 });
+
+describe('the mini PC (spec 2026-10-05-multi-camera-host-design §6.5)', () => {
+  it('CPU temperature from k10temp Tctl (whichever channel is labelled so); no under-voltage reading', () => {
+    const s = readHostStats({ root: join(__dirname, 'fixtures', 'host', 'ryzen') });
+    expect(s.cpuTempC).toBe(48.1);
+    expect(s.underVoltage).toBeNull();
+  });
+});

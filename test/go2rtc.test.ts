@@ -16,8 +16,8 @@ afterEach(async () => {
 async function setup() {
   const sim = await startSim();
   cleanup.push(() => sim.close());
-  const g = new Go2rtc({ binary, rtspPort: await freePort(), apiPort: await freePort(), cam: 'cam1',
-    source: { host: '127.0.0.1', port: sim.ports.rtsp, user: 'proxy', password: sim.password } });
+  const g = new Go2rtc({ binary, rtspPort: await freePort(), apiPort: await freePort(),
+    sources: () => [{ cam: 'cam1', host: '127.0.0.1', port: sim.ports.rtsp, user: 'proxy', password: sim.password }] });
   cleanup.push(() => g.stop());
   await g.start();
   return { sim, g };
@@ -28,13 +28,13 @@ describe.skipIf(!binary)('go2rtc supervisor', () => {
   it('restreams the camera sub stream on 127.0.0.1', async () => {
     const { g } = await setup();
     expect(g.up()).toBe(true);
-    expect(g.streamUrl('sub')).toMatch(/^rtsp:\/\/127\.0\.0\.1:\d+\/cam1_sub$/);
-    expect(await probe(g.streamUrl('sub'))).toBe('h264,896');
+    expect(g.streamUrl('cam1', 'sub')).toMatch(/^rtsp:\/\/127\.0\.0\.1:\d+\/cam1_sub$/);
+    expect(await probe(g.streamUrl('cam1', 'sub'))).toBe('h264,896');
   }, 40000);
 
   it('serves two readers over one camera connection', async () => {
     const { g } = await setup();
-    const [a, b] = await Promise.all([probe(g.streamUrl('sub')), probe(g.streamUrl('sub'))]);
+    const [a, b] = await Promise.all([probe(g.streamUrl('cam1', 'sub')), probe(g.streamUrl('cam1', 'sub'))]);
     expect([a, b]).toEqual(['h264,896', 'h264,896']);
     const streams = await g.streams();
     expect(streams.cam1_sub.producers).toHaveLength(1);
@@ -80,7 +80,7 @@ describe('go2rtc: only our own go2rtc counts', () => {
     const fake = join(dir, 'go2rtc');
     writeFileSync(fake, '#!/bin/sh\nexec sleep 30\n');
     chmodSync(fake, 0o755);
-    const g = new Go2rtc({ binary: fake, rtspPort: await freePort(), apiPort, cam: 'cam1', readyMs: 600, source: { host: '127.0.0.1', port: 554, user: 'proxy', password: 'x' } });
+    const g = new Go2rtc({ binary: fake, rtspPort: await freePort(), apiPort, readyMs: 600, sources: () => [{ cam: 'cam1', host: '127.0.0.1', port: 554, user: 'proxy', password: 'x' }] });
     cleanup.push(() => g.stop());
     await expect(g.start()).rejects.toThrow(/go2rtc_not_ready/);
     expect(g.up()).toBe(false);

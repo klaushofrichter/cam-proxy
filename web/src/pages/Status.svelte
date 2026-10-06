@@ -10,6 +10,8 @@
   import Icon from '../components/Icon.svelte';
   import { cameraUploadClass, lastClipClass, diskText, healthHeadline, itemOf, loadText, memoryText, piCardTitle, problemOf, uptimeText } from '../lib/health';
   import { archiveRows } from '../lib/archive';
+  import { storageRows } from '../lib/camera-settings';
+  import { cameraIds } from '../lib/cameras';
   import { actionPath, blockOf, selectedCamera } from '../lib/cameras';
 
   const gb = (b: number) => `${(b / 1024 ** 3).toFixed(1)} GB`;
@@ -165,6 +167,7 @@
           {#if health?.disk}<dt>Disk used</dt><dd class={bad('disk') ? 'bad' : ''} data-testid="storage-disk" title={`a problem from ${health.thresholds.diskPercent} % (health.diskPercent)`}>{health.disk.usedPercent.toFixed(1)} %</dd>{/if}
           <dt>Days until full</dt><dd data-testid="days-until-full">{daysUntilFullText($stats.storage.daysUntilFull)}</dd>
           <dt>Writing</dt><dd class={(health ? bad('storage') : $stats.storage.paused) ? 'bad' : 'ok'} data-testid="storage-writing">{$stats.storage.paused ? 'paused (disk full)' : 'on'}</dd>
+          {#each storageRows($stats.cameras, cameraIds($status)) as row (row.id)}<dt>{row.id}</dt><dd class="small" data-testid="storage-camera-{row.id}">{row.text}</dd>{/each}
           <dt>Last cleanup</dt><dd>{ago($status.retention.lastRun)}</dd>
         </dl>
       </div>

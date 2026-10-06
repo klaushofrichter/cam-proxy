@@ -7,7 +7,7 @@ import { ReolinkClient } from '../camera/client';
 import { bareHost, splitHost } from '../camera/http';
 import { CameraNameAnnouncer, writeCameraName } from '../camera/name';
 import { CameraReboot } from '../camera/reboot';
-import { PoeSwitch } from '../camera/poe-switch';
+import type { PoeSwitch, PortHandle } from '../camera/poe-switch';
 import { StatusPoller, type CameraState } from '../camera/status';
 import type { TimeInfo } from '../camera/time';
 import { refreshingTimeInfo } from '../analytics/time-info';
@@ -16,12 +16,13 @@ import { readCameraFtp, type FtpTarget } from '../clips/camera-ftp';
 import { CameraFtpWatch, clipsStalled, type ClipsStall } from '../clips/ftp-health';
 import { ClipIndexer } from '../clips/indexer';
 import type { Config } from '../config/defaults';
-import { cameraConfig, cameraEvents, cameraIds, type ResolvedCamera } from '../config/cameras';
+import { cameraConfig, cameraEvents, type ResolvedCamera } from '../config/cameras';
 import { EventIntake } from '../events/intake';
 import { EventTracker } from '../events/tracker';
 import { cameraContext, logger } from '../log';
 import { createRecordingsSide, type RecordingsSide } from '../recordings/side';
-import { Go2rtc } from '../stills/go2rtc';
+import type { CachePool } from '../recordings/pool';
+import type { Go2rtc, StreamSource } from '../stills/go2rtc';
 import { FrameGrabber, type Frame } from '../stills/grabber';
 import { MinuteStore, minuteOf } from '../stills/store';
 import type { Storage } from '../storage';
@@ -41,11 +42,14 @@ export interface WorkerHooks {
 
 export interface WorkerDeps {
   id: string;
-  index: number; // position in config order: go2rtc ports until P2 (Ruling P1-1)
   running: () => Config;
   password: () => string;
-  poeSwitchPassword: () => string | undefined;
+  poe: PoeSwitch; // the host's PoE controller (spec 2026-10-05-multi-camera-host-design §8.4)
   ftpTarget: () => FtpTarget;
+  ftpPassword?: () => string | undefined; // the host's FTP password: no indexer for uploads without it
+  cachePool: CachePool; // the host's recordings cache (spec §8.3)
+  // The host's go2rtc (spec 2026-10-05-multi-camera-host-design §8.5); none without go2rtc.binary.
+  go2rtc: () => Go2rtc | undefined;
   catalog: Catalog;
   log: StreamLog;
   sse: SseHandler;
@@ -56,8 +60,6 @@ export interface WorkerDeps {
   // Test seams: a throw from beforeStart is a start failure; schedule replaces setTimeout.
   beforeStart?: () => void | Promise<void>;
   schedule?: (ms: number, fn: () => void) => () => void;
-  // Test seam: how go2rtc is started (default: go2rtc.start()).
-  startGo2rtc?: (g: Go2rtc) => Promise<void>;
 }
 
 // The camera's own web page for the admin UI: webUiUrl, none for no link,
@@ -81,7 +83,7 @@ export class CameraWorker extends EventEmitter {
   stills: StillsSide | undefined;
   readonly recordings: RecordingsSide;
   readonly reboot: CameraReboot;
-  readonly poeSwitch: PoeSwitch;
+  readonly poeSwitch: PortHandle;
   readonly ftpWatch: CameraFtpWatch;
   readonly timeInfo: () => TimeInfo | undefined;
   private phaseNow: WorkerPhase = 'idle';
@@ -95,9 +97,15 @@ export class CameraWorker extends EventEmitter {
   private readonly announcer: CameraNameAnnouncer;
   private lastResubscribes = 0;
   private stillsStarting: Promise<void> | undefined;
+  private stillsAbort: (() => void) | undefined;
+  private ftpIx: ClipIndexer | undefined;
+  // The grabber's newest frame, kept whatever storage does (spec §6.4: the latest still).
+  private lastFrame: Frame | undefined;
   private stopping = false;
   private watchStarted = false;
   private restarting: Promise<void> | undefined;
+  // The stream source the host's go2rtc has for this camera.
+  private registered: StreamSource;
   // Supervision (spec 2026-10-05-multi-camera-host-design §3.3).
   private readonly backoff = new Backoff();
   private cancelRetry: (() => void) | undefined;
@@ -129,6 +137,7 @@ export class CameraWorker extends EventEmitter {
       everyMs: d.cameraFtpCheckMs,
     });
     this.build();
+    this.registered = this.source();
     // Recordings on the SD card over Baichuan (spec 2026-10-02-baichuan-recordings-design).
     this.recordings = createRecordingsSide({
       dataDir: d.running().server.dataDir,
@@ -137,14 +146,16 @@ export class CameraWorker extends EventEmitter {
         const c = this.cam();
         return { host: bareHost(splitHost(c.host).hostname), port: c.baichuanPort, user: c.user, password: d.password() };
       },
-      // Ruling P1-3: the cap split evenly until the shared cache of P2.
-      capBytes: () => Math.floor((d.running().recordings.cacheMB * 2 ** 20) / Math.max(1, cameraIds(d.running()).length)),
+      // One cache for the host (spec §8.3): the whole recordings.cacheMB, shared through the pool.
+      capBytes: () => d.running().recordings.cacheMB * 2 ** 20,
+      pool: d.cachePool,
       search: (param) => this.client.command('Search', param),
       timeInfo: () => this.client.timeInfo(),
       paused: () => d.storage.paused(),
-      noteWritten: (bytes) => d.storage.noteWritten('recordings', bytes, 1),
+      noteWritten: (bytes) => d.storage.noteWritten('recordings', bytes, 1, { cam: this.id }),
       onDownload: (o) => d.hooks.onRecordingDownload({ stream: o.stream, result: o.result, priority: o.priority }),
     });
+    d.cachePool.add(this.recordings.cache);
     // A reboot (#83): the client and poller are read on use (restart builds
     // them anew); the Baichuan session dies with the camera.
     this.reboot = new CameraReboot({
@@ -160,8 +171,8 @@ export class CameraWorker extends EventEmitter {
       },
       audit: this.audit,
     });
-    // Ruling P1-4: this camera's port on the host switch (one controller per host in P2).
-    this.poeSwitch = new PoeSwitch({ config: () => this.cam().poeSwitch, password: d.poeSwitchPassword });
+    // This camera's port on the host's switch (one controller per host, spec §8.4).
+    this.poeSwitch = d.poe.forPort(() => this.cam().poeSwitch.port);
     this.timeInfo = refreshingTimeInfo(() => this.client.timeInfo());
   }
 
@@ -169,6 +180,19 @@ export class CameraWorker extends EventEmitter {
     const c = cameraConfig(this.d.running(), this.id);
     if (!c) throw new Error(`camera ${this.id} is not configured`);
     return c;
+  }
+
+  // This camera's stream source for the host's go2rtc.
+  source(): StreamSource {
+    const c = this.cam();
+    return { cam: this.id, host: splitHost(c.host).hostname, port: c.rtspPort, user: c.user, password: this.d.password() };
+  }
+
+  // Whether the source differs from the one go2rtc has (kept in memory only, never logged).
+  private sourceChanged(): boolean {
+    const a = this.source();
+    const b = this.registered;
+    return a.host !== b.host || a.port !== b.port || a.user !== b.user || a.password !== b.password;
   }
 
   phase(): WorkerPhase {
@@ -207,7 +231,17 @@ export class CameraWorker extends EventEmitter {
   // A clip indexer for this camera; `growth: false` for a repair's fetches.
   makeIndexer(growth: boolean): ClipIndexer {
     const d = this.d;
-    return new ClipIndexer({ catalog: d.catalog, log: d.log, config: d.running, timeInfo: () => this.client.timeInfo(), dataDir: d.running().server.dataDir, cam: this.id, stored: (bytes) => d.storage.noteWritten('clips', bytes, 1, { growth }) });
+    return new ClipIndexer({ catalog: d.catalog, log: d.log, config: d.running, timeInfo: () => this.client.timeInfo(), dataDir: d.running().server.dataDir, cam: this.id, stored: (bytes) => d.storage.noteWritten('clips', bytes, 1, { growth, cam: this.id }) });
+  }
+
+  // The indexer of this camera's FTP uploads (spec 2026-10-05-multi-camera-host-design §7);
+  // none while FTP is off for it or the host has no FTP password.
+  ftpIndexer(): ClipIndexer | undefined {
+    return this.ftpIx;
+  }
+
+  latestFrame(): Frame | undefined {
+    return this.lastFrame;
   }
 
   streamStatus(): { enabled: boolean; up: boolean; go2rtcUp: boolean; lastFrameTs: number | null } {
@@ -271,66 +305,74 @@ export class CameraWorker extends EventEmitter {
     const tracker = new EventTracker(d.catalog, d.log, c.id, events);
     this.intake = new EventIntake({ client: this.client, tracker, cfg: events, onvif: { host: splitHost(c.host).hostname, port: c.onvifPort, user: c.user, password: d.password() } });
     this.lastResubscribes = 0;
+    this.ftpIx = undefined;
+    if (c.ftp.enabled && d.ftpPassword?.()) {
+      this.ftpIx = this.makeIndexer(true);
+      // Pictures stored before they were paired by time (2026-09-30).
+      try {
+        this.ftpIx.relinkSnapshots();
+      } catch (err) {
+        logger.warn({ cameraId: this.id, err: (err as Error).message }, 'snapshots_relink_failed');
+      }
+    }
     this.intake.on('state', (st: { resubscribes: number }) => {
       for (; this.lastResubscribes < st.resubscribes; this.lastResubscribes++) d.hooks.onResubscribe();
     });
-    // Stills: go2rtc holds the camera connection, one ffmpeg makes stills and
-    // tiles, the store writes a pack and a sprite per minute.
+    // Stills: the host's go2rtc holds the camera connection, one ffmpeg makes
+    // stills and tiles, the store writes a pack and a sprite per minute.
     this.stills = undefined;
+    this.lastFrame = undefined;
     if (c.stills.enabled) {
-      const r = d.running();
-      const s = c.stills;
-      const offset = 100 * d.index; // Ruling P1-1: index 0 keeps today's ports
-      const go2rtc = new Go2rtc({ binary: r.go2rtc.binary, rtspPort: r.go2rtc.rtspPort + offset, apiPort: r.go2rtc.apiPort + offset, cam: c.id,
-        source: { host: splitHost(c.host).hostname, port: c.rtspPort, user: c.user, password: d.password() } });
-      const grabber = new FrameGrabber({ input: go2rtc.streamUrl(s.stream), intervalS: s.intervalS, size: s.size, tileSize: r.previews.tileSize, quality: s.quality, tileQuality: r.previews.quality });
-      const store = new MinuteStore({ dataDir: r.server.dataDir, cam: c.id, intervalS: s.intervalS, still: { size: s.size, quality: s.quality }, tile: { size: r.previews.tileSize, grid: r.previews.grid, quality: r.previews.quality } });
-      store.on('written', (w: { kind: 'stills' | 'previews'; bytes: number; files: number }) => d.storage.noteWritten(w.kind, w.bytes, w.files));
-      grabber.on('frame', (f: Frame) => {
-        if (d.storage.paused()) return d.hooks.onStillMissing(); // the disk is full: no writing
-        store.add(f);
-        d.hooks.onStill(f.ts);
-        const minute = minuteOf(f.ts);
-        const base = `/api/cameras/${encodeURIComponent(c.id)}`;
-        d.sse.live(c.id, 'still', { ts: f.ts, url: `${base}/stills/${f.ts}.jpg`, sprite: `${base}/previews/${minute}.jpg`, tile: Math.floor((f.ts - minute) / (s.intervalS * 1000)) });
-      });
-      // Stream up and down reach stream clients as camera-status (spec §8).
-      grabber.on('state', (st: { up: boolean }) => {
-        const cs = this.status.state();
-        d.log.append(c.id, 'camera-status', { online: cs.online, stream: st.up ? 'up' : 'down', reason: st.up ? null : 'no_frames', clockOffsetMs: cs.clockOffsetMs ?? null });
-      });
-      this.stills = { go2rtc, grabber, store };
+      const go2rtc = d.go2rtc();
+      if (!go2rtc) {
+        logger.error({ cameraId: this.id }, 'go2rtc_missing');
+      } else {
+        const r = d.running();
+        const s = c.stills;
+        const grabber = new FrameGrabber({ input: go2rtc.streamUrl(c.id, s.stream), intervalS: s.intervalS, size: s.size, tileSize: r.previews.tileSize, quality: s.quality, tileQuality: r.previews.quality });
+        const store = new MinuteStore({ dataDir: r.server.dataDir, cam: c.id, intervalS: s.intervalS, still: { size: s.size, quality: s.quality }, tile: { size: r.previews.tileSize, grid: r.previews.grid, quality: r.previews.quality } });
+        store.on('written', (w: { kind: 'stills' | 'previews'; bytes: number; files: number }) => d.storage.noteWritten(w.kind, w.bytes, w.files, { cam: this.id }));
+        grabber.on('frame', (f: Frame) => {
+          if (this.stills?.grabber === grabber) this.lastFrame = f;
+          if (d.storage.paused()) return d.hooks.onStillMissing(); // the disk is full: no writing
+          store.add(f);
+          d.hooks.onStill(f.ts);
+          const minute = minuteOf(f.ts);
+          const base = `/api/cameras/${encodeURIComponent(c.id)}`;
+          d.sse.live(c.id, 'still', { ts: f.ts, url: `${base}/stills/${f.ts}.jpg`, sprite: `${base}/previews/${minute}.jpg`, tile: Math.floor((f.ts - minute) / (s.intervalS * 1000)) });
+        });
+        // Stream up and down reach stream clients as camera-status (spec §8).
+        grabber.on('state', (st: { up: boolean }) => {
+          const cs = this.status.state();
+          d.log.append(c.id, 'camera-status', { online: cs.online, stream: st.up ? 'up' : 'down', reason: st.up ? null : 'no_frames', clockOffsetMs: cs.clockOffsetMs ?? null });
+        });
+        this.stills = { go2rtc, grabber, store };
+      }
     }
   }
 
-  // go2rtc takes a moment to start; the grabber starts only if its side is
-  // still the current one (a restart or stop may come in between).
+  // The grabber starts once the host's go2rtc is up (it retries go2rtc
+  // itself), and only if its side is still the current one (a restart or stop
+  // may come in between).
   private startStills(): void {
     const s = this.stills;
     if (!s) return;
-    this.stillsStarting = (this.d.startGo2rtc ? this.d.startGo2rtc(s.go2rtc) : s.go2rtc.start()).then(
-      () => {
-        if (this.stills === s && !this.stopping) s.grabber.start();
-      },
-      // This camera's error and a supervised retry (spec §3.3), unless a restart or stop came in between.
-      (err: Error) => {
-        if (this.stills === s && !this.stopping && this.phaseNow !== 'stopped') this.failed(`go2rtc_start_failed: ${err.message}`);
-        else logger.error({ cameraId: this.id, err: err.message }, 'go2rtc_start_failed');
-      },
-    );
+    let stop!: () => void;
+    const stopped = new Promise<void>((r) => (stop = r));
+    this.stillsAbort = stop;
+    this.stillsStarting = Promise.race([s.go2rtc.ready(), stopped]).then(() => {
+      if (this.stills === s && !this.stopping) s.grabber.start();
+    });
   }
 
   private async stopStills(): Promise<void> {
     const s = this.stills;
     if (!s) return;
     this.stopping = true;
-    // go2rtc first: a start still waiting for it ends at once, and its ports
-    // are free when this returns (live test 2026-10-05).
-    const go2rtcStopped = s.go2rtc.stop();
+    this.stillsAbort?.();
     await this.stillsStarting;
     this.stopping = false;
     await s.grabber.stop();
-    await go2rtcStopped;
     await s.store.flush();
   }
 
@@ -406,6 +448,12 @@ export class CameraWorker extends EventEmitter {
         this.recordings.reset();
         this.build();
         this.cancelRetry?.();
+        // A changed address, port, user or password: the host's go2rtc gets the new source.
+        if (this.cam().stills.enabled && this.sourceChanged()) {
+          const next = this.source();
+          await this.d.go2rtc()?.setStream(next).catch((err: Error) => logger.warn({ cameraId: this.id, err: err.message }, 'go2rtc_set_stream_failed'));
+          this.registered = next;
+        }
         const running = await this.startParts();
         this.phaseNow = running || this.errorNow !== 'no_address' ? 'ready' : 'idle';
         logger.info({ cameraId: this.id }, 'camera_side_restarted');
@@ -416,19 +464,6 @@ export class CameraWorker extends EventEmitter {
     return this.restarting;
   }
 
-  // A power-cycle in its off time turns the camera's PoE on now, not never;
-  // bounded, and loud (audited) when it could not.
-  async stopSwitch(): Promise<void> {
-    const { poeLeftOff, sessionMaybeOpen } = await this.poeSwitch.stop();
-    if (!poeLeftOff && !sessionMaybeOpen) return;
-    const sw = this.poeSwitchInfo();
-    const parts = [
-      ...(poeLeftOff ? [`the camera's PoE may be left OFF on ${sw.host} port ${sw.port}; turn it on in the switch's web UI, or with "Turn camera PoE on" once the proxy is back`] : []),
-      ...(sessionMaybeOpen ? ["the proxy's web session on the switch may still be open: the switch's web UI may refuse logins until the switch ends it"] : []),
-    ];
-    this.audit.write({ action: 'camera-powercycle', category: ['host'], type: ['end'], outcome: 'failure', user: 'system', message: `cam-proxy stopping: ${parts.join('; ')}`, details: { phase: 'stop', poeLeftOff, sessionMaybeOpen, switch: sw } });
-  }
-
   stopRecordings(): Promise<void> {
     return this.recordings.stop();
   }
@@ -437,6 +472,7 @@ export class CameraWorker extends EventEmitter {
     this.cancelRetry?.();
     await this.restarting;
     this.phaseNow = 'stopped';
+    this.d.cachePool.remove(this.recordings.cache);
     this.ftpWatch.stop();
     this.reboot.stop();
     await this.stopParts();

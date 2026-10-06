@@ -35,7 +35,7 @@ describe('the recordings side', () => {
   it('deletes leftover .part files at start and reports the cache in /control/status', async () => {
     expect(existsSync(join(recDir, LEFTOVER))).toBe(false);
     const st = await request(p.base).get('/control/status').set(auth(ADMIN_TOKEN));
-    expect(st.body.recordings).toEqual({ last: null, cache: { bytes: 1000, files: 1, capBytes: 2048 * 2 ** 20 } });
+    expect(st.body.recordings).toEqual({ last: null, cache: { bytes: 1000, files: 1, capBytes: 2048 * 2 ** 20 }, camera: { bytes: 1000, files: 1 } });
   });
 
   it('storage over the cache cap keeps a pinned recording (recordingsBusy) and deletes an unpinned one', async () => {

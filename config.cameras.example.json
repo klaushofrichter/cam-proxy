@@ -1,8 +1,12 @@
 {
   "server": { "port": 8480, "dataDir": "data", "logLevel": "info" },
   "poeSwitch": { "model": "sscpoe-web", "host": "192.168.60.2", "ports": 8, "offSeconds": 10 },
+  "ftp": { "enabled": true, "port": 2121, "passive": "50000-50039", "tls": true, "publicHost": "192.168.60.1" },
+  "composition": { "concurrent": 2 },
+  "recordings": { "cacheMB": 8192 },
+  "host": { "stats": "on" },
   "cameras": [
     { "id": "cam3", "name": "Driveway", "host": "192.168.60.13", "user": "proxy", "poeSwitch": { "port": 1 } },
-    { "id": "cam4", "name": "Gate", "host": "192.168.60.14", "user": "proxy", "poeSwitch": { "port": 2 }, "stills": { "intervalS": 2 } }
+    { "id": "cam4", "name": "Gate", "host": "192.168.60.14", "user": "proxy", "poeSwitch": { "port": 2 }, "stills": { "intervalS": 2 }, "storage": { "sharePercent": 20 } }
   ]
 }

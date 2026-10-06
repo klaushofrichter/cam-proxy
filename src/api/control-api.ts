@@ -63,6 +63,7 @@ export interface CameraStatusBlock {
   stream: ReturnType<ControlDeps['stream']>;
   ftp: FtpStatus;
   recordings: RecordingsStatus;
+  source: 'config' | 'added'; // config.json, or added in the Settings page (overrides.json)
 }
 
 interface ControlDeps {
@@ -136,7 +137,7 @@ function configView(loaded: Loaded, running: Config) {
       // `env`: the variable that sets it (read-only on the Settings page).
       // `resetTo` (an override): what Reset goes back to, the file's value or the
       // default; `same` when that changes nothing, `means` for an unset state.
-      return [p, { value, source: loaded.sources[p], ...(loaded.envNames[p] ? { env: loaded.envNames[p] } : {}), restart, pending, ...(pending ? { next } : {}), type: leafAt(p)?.type, ...(loaded.sources[p] === 'override' ? { resetTo: resetTarget(loaded, p) } : {}), ...(loaded.legacyCamera && loaded.sources[p] === 'file' && (p.startsWith('cameras.') || p.startsWith('poeSwitch.')) ? { legacy: true } : {}) }];
+      return [p, { value, source: loaded.sources[p], ...(loaded.envNames[p] ? { env: loaded.envNames[p] } : {}), restart, ...(restart ? { restartScope: /^cameras\.[^.]+\./.test(p) ? 'camera' : 'host' } : {}), pending, ...(pending ? { next } : {}), type: leafAt(p)?.type, ...(loaded.sources[p] === 'override' ? { resetTo: resetTarget(loaded, p) } : {}), ...(loaded.legacyCamera && loaded.sources[p] === 'file' && (p.startsWith('cameras.') || p.startsWith('poeSwitch.')) ? { legacy: true } : {}) }];
     }),
   );
 }
@@ -393,6 +394,8 @@ export function controlApi(d: ControlDeps): express.Router {
       stream: { rows: d.log.count(), lastId: d.log.lastId() },
       sse: { clients: d.sseClients() },
       storage: { budget: u.budget, used: u.used, daysUntilFull: u.daysUntilFull, paused: d.storage.paused() },
+      // Each camera's part of the disk (spec 2026-10-05-multi-camera-host-design §8.1).
+      cameras: d.storage.usageByCamera(),
     });
   });
 
@@ -481,6 +484,12 @@ export function controlApi(d: ControlDeps): express.Router {
       res.locals.errorCode = error;
       res.status(status).json({ error, ...(detail ? { detail } : {}), ...extra });
     };
+    // `restart` without a camera is the host-wide restart: every camera side,
+    // every pending setting (as on one camera; live test of #173).
+    if (name === 'restart' && target === null) {
+      d.restart().catch((err: Error) => logger.error({ err: err.message }, 'restart_failed'));
+      return void res.status(202).end();
+    }
     // Several cameras: a camera action names its camera (Ruling P1-12; the routes are phase 2).
     if (CAMERA_ACTIONS.has(name) && target === null) {
       // Actions with their own records are audited here; the others by the close handler above. No camera: none was named.

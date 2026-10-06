@@ -7,7 +7,10 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { Client } from 'basic-ftp';
 import request from 'supertest';
+import { ftpUsers } from '../src/clips/side';
+import { shareBytes } from '../src/storage';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MIGRATIONS } from '../src/catalog/migrations';
 import { usageBetween, usageByCamera } from '../src/catalog/analyses';
@@ -21,6 +24,8 @@ let sim: Awaited<ReturnType<typeof startSim>>;
 let proxy: Proxy;
 let base: string;
 let dir: string;
+let ftpPort = 0;
+let go2rtcPorts: { rtspPort: number; apiPort: number };
 const EVENT_TS = Date.now() - 3600_000;
 
 // A catalog at schema version 8 with one event and this month's Vision usage.
@@ -43,15 +48,16 @@ beforeAll(async () => {
   const data = join(dir, 'data');
   mkdirSync(data);
   const go2rtc = process.env.CAMPROXY_TEST_GO2RTC;
-  const ftpPort = await freePort();
+  ftpPort = await freePort();
   const passive = await freePort();
+  go2rtcPorts = { rtspPort: await freePort(), apiPort: await freePort() };
   // docs/raspberry-pi.md, plus the PoE switch (docs/poe-switch.md) and the test's ports.
   writeFileSync(join(dir, 'config.json'), JSON.stringify({
     camera: { id: 'cam1', name: 'Den', protocol: 'http', user: 'proxy', onvifPort: sim.ports.onvif, rtspPort: sim.ports.rtsp || 554, baichuanPort: sim.camera.baichuanPort,
       poeSwitch: { model: 'sscpoe-web', host: '127.0.0.1:9', port: 8, ports: 8, offSeconds: 10 } },
     server: { logLevel: 'silent' },
     stills: { enabled: !!go2rtc, stream: 'sub' },
-    go2rtc: { binary: go2rtc ?? 'go2rtc', rtspPort: await freePort(), apiPort: await freePort() },
+    go2rtc: { binary: go2rtc ?? 'go2rtc', ...go2rtcPorts },
     storage: { maxBytes: 161061273600, minFreeBytes: 0 },
     ftp: { enabled: true, port: ftpPort, passive: `${passive}-${passive}`, tls: true, stream: 'sub' },
   }));
@@ -119,6 +125,100 @@ describe('the Pi: one legacy camera, legacy overrides, a version 8 catalog', () 
     expect(c.ftp.user).toBe('picam');
     expect(reloaded.config.retention.eventsDays).toBe(40);
     expect(saved.retention.eventsDays).toBe(40);
+  });
+});
+
+// P2 (spec §8.5): one go2rtc for the host; on the Pi it serves the one camera
+// on go2rtc.rtspPort/apiPort as before (cam1_sub, cam1_main), with the password
+// only in its environment.
+describe.skipIf(!process.env.CAMPROXY_TEST_GO2RTC)('the Pi: stills through the host go2rtc', () => {
+  it('cam1_sub and cam1_main on the configured ports; frames arrive', async () => {
+    await until(() => proxy.stills?.grabber.up() === true, 30_000);
+    const streams = await new Promise<Record<string, unknown>>((resolve, reject) => {
+      import('http').then(({ get }) => get({ host: '127.0.0.1', port: go2rtcPorts.apiPort, path: '/api/streams' }, (res) => {
+        let body = '';
+        res.on('data', (c) => (body += c));
+        res.on('end', () => resolve(JSON.parse(body)));
+      }).on('error', reject));
+    });
+    expect(Object.keys(streams).sort()).toEqual(['cam1_main', 'cam1_sub']);
+    expect(proxy.stills!.go2rtc.streamUrl('cam1', 'sub')).toBe(`rtsp://127.0.0.1:${go2rtcPorts.rtspPort}/cam1_sub`);
+    // P2 (spec §6.4): the newest still from memory.
+    await until(() => proxy.cameras.first().latestFrame() !== undefined, 15_000);
+    const r = await request(base).get('/api/cameras/cam1/stills/latest.jpg').set(auth());
+    expect([r.status, r.headers['content-type']]).toEqual([200, 'image/jpeg']);
+  }, 40_000);
+});
+
+// P2 (spec §7): one FTP server with a user per camera. The Pi's camera keeps
+// its user (picam from the overrides) and logs in from its own address.
+describe('the Pi: FTP for its one camera', () => {
+  it('the user picam is cam1, from the camera address only; it logs in', async () => {
+    expect([...ftpUsers(proxy.running)]).toEqual([['picam', { cam: 'cam1', ip: '127.0.0.1' }]]);
+    const c = new Client(5000);
+    try {
+      await c.access({ host: '127.0.0.1', port: ftpPort, user: 'picam', password: 'ftp-secret-'.padEnd(24, 'z'), secure: true, secureOptions: { rejectUnauthorized: false } });
+      expect(await c.pwd()).toBe('/');
+    } finally {
+      c.close();
+    }
+  });
+});
+
+// P2 (spec §8.1): one storage budget; the Pi's one camera has no share and
+// gets the whole budget; the stats name its part.
+describe('the Pi: the storage budget', () => {
+  it('the whole budget is cam1\'s; storage per camera is cam1 only', async () => {
+    expect(Object.fromEntries(shareBytes(proxy.running, 1000))).toEqual({ cam1: 1000 });
+    proxy.storage.noteWritten('stills', 10, 1, { cam: 'cam1' });
+    const st = (await request(base).get('/control/stats').set(auth(ADMIN_TOKEN))).body;
+    expect(Object.keys(st.cameras)).toEqual(['cam1']);
+    expect(st.storage.budget).toBe(161061273600);
+  });
+});
+
+// P2 (spec §8.3): one recordings cache for the host; the Pi's camera has the whole cap.
+describe('the Pi: the recordings cache', () => {
+  it('the whole recordings.cacheMB, as before', async () => {
+    const st = (await request(base).get('/control/status').set(auth(ADMIN_TOKEN))).body;
+    expect(st.recordings.cache.capBytes).toBe(proxy.running.recordings.cacheMB * 2 ** 20);
+  });
+});
+
+// P2 (spec §8.2): Vision limits count per key; the month counted before the
+// key ids (key_id '') stays in the Pi's month with the key in use.
+describe('the Pi: the Vision budget', () => {
+  it("the month's legacy calls count with the key in use (the last test here: it sets a key)", () => {
+    expect(proxy.analytics.state()[0].month.calls).toBe(14);
+    proxy.analytics.setManualKey('pi-vision-key-'.padEnd(30, 'k'));
+    expect(proxy.analytics.state()[0].month.calls).toBe(14);
+    expect(proxy.analytics.state()[0].cameras).toEqual([{ id: 'cam1', today: expect.any(Number), month: 14 }]);
+  });
+});
+
+// P2 (spec §8.4): one PoE controller per host; the Pi's camera is its port 8.
+describe('the Pi: the switch controller', () => {
+  it("the camera's view is port 8 of the host's GPS-208 settings", () => {
+    const h = proxy.cameras.first().poeSwitch;
+    expect(h.status()).toMatchObject({ model: 'sscpoe-web', host: '127.0.0.1:9', port: 8, ports: 8, offSeconds: 12, passwordSet: false, configured: false, poeMaybeOff: false });
+    expect(h.notConfigured()).toBe('CAMPROXY_POE_SWITCH_PASSWORD is not set');
+  });
+});
+
+// P2 (spec §8.6): composed clips one at a time on the Pi (the default).
+describe('the Pi: compositions', () => {
+  it('composition.concurrent is 1', () => {
+    expect(proxy.running.composition.concurrent).toBe(1);
+  });
+});
+
+// P2 (spec §6.3): cameras may be added in overrides.json; the Pi's camera is config.json's.
+describe('the Pi: where its camera is defined', () => {
+  it("GET /control/status: one camera, source config; it can't be removed from the UI", async () => {
+    const st = (await request(base).get('/control/status').set(auth(ADMIN_TOKEN))).body;
+    expect(st.cameras.map((c: { id: string; source: string }) => [c.id, c.source])).toEqual([['cam1', 'config']]);
+    const r = await request(base).delete('/control/config/cameras.cam1').set(auth(ADMIN_TOKEN));
+    expect([r.status, r.body.detail]).toEqual([400, 'cameras.cam1: defined in config.json; remove it there']);
   });
 });
 
