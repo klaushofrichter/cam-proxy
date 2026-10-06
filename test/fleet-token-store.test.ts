@@ -5,6 +5,7 @@ import { join } from 'path';
 import { describe, expect, it } from 'vitest';
 import { ShadowsLocalToken, TokenStore } from '../src/fleet/token-store';
 import { validateTokensApply } from '../src/fleet/command-args';
+import { fixtures, strict, why } from './helpers/contract';
 
 const tok = () => randomBytes(32).toString('base64url');
 const hashOf = (t: string) => `sha256:${createHash('sha256').update(t).digest('hex')}`;
@@ -95,5 +96,25 @@ describe('TokenStore', () => {
     s.apply({ v: 1, revision: 1, tokens: [{ id: id(1), kind: 'client', hash: hashOf(t), label: 'x', retireAt: null }] });
     expect(JSON.stringify(s.list())).not.toContain(hashOf(t).slice(7, 7 + 9));
     expect(s.list()[0].hashPrefix).toBe(hashOf(t).slice(0, 15));
+  });
+});
+
+describe('tokens.apply args against the vendored contract', () => {
+  it('every tokens.apply args object in the fixtures: the same verdict as the strict args schema', () => {
+    const v = strict('commands/tokens.apply.args');
+    const all = fixtures().filter(({ f }) => f.schema === 'command' && (f.message as { body?: { command?: string } }).body?.command === 'tokens.apply');
+    expect(all.length).toBeGreaterThanOrEqual(10);
+    for (const { name, f } of all) {
+      const args = (f.message as { body: { args: unknown } }).body.args;
+      const mine = validateTokensApply(args);
+      // v ≠ 1 is unsupported_version at run time; the strict schema (const 1) refuses it too.
+      expect(mine.ok, `${name}: ${mine.ok ? '' : mine.detail} / ${why(v)}`).toBe(v(args));
+    }
+  });
+  it('the result shape is on the strict result schema', () => {
+    const { s } = store();
+    const v = strict('commands/tokens.apply.result');
+    const r = s.apply({ v: 1, revision: 1, tokens: [] });
+    expect(v(r), why(v)).toBe(true);
   });
 });
