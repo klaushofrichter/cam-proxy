@@ -49,7 +49,7 @@ function setup() {
   const upload = (name: string, content: Buffer): Upload => {
     const tmpFile = join(incoming, `t${n++}`);
     writeFileSync(tmpFile, content);
-    return { path: `/2026/09/27/${name}`, name, dir: '/2026/09/27', bytes: content.length, tmpFile };
+    return { path: `/2026/09/27/${name}`, name, dir: '/2026/09/27', bytes: content.length, tmpFile, user: 'camera', cam: 'cam1' };
   };
   return { dir, catalog, log, indexer, upload };
 }

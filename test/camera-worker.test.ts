@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, writeFileSync } from 'fs';
+import { mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -10,8 +10,11 @@ import { Storage } from '../src/storage';
 import { AuditLog } from '../src/audit/audit-log';
 import { CameraWorker, type WorkerDeps } from '../src/cameras/worker';
 import { CameraRegistry } from '../src/cameras/registry';
+import { CachePool } from '../src/recordings/pool';
+import { PoeSwitch } from '../src/camera/poe-switch';
 import { ADMIN_TOKEN, CLIENT_TOKEN, freePort, until } from './helpers/proxy';
 import { logBuffer } from '../src/log';
+import type { Go2rtc, StreamSource } from '../src/stills/go2rtc';
 import { startSim } from './helpers/sim';
 
 let sim: Awaited<ReturnType<typeof startSim>>;
@@ -39,8 +42,10 @@ function worker(o: { host?: string; over?: Partial<WorkerDeps>; stills?: boolean
   const audit = new AuditLog({ dir: join(running.server.dataDir, 'audit'), version: 'test' });
   const storage = new Storage({ catalog, log, config: () => running, audit });
   const w = new CameraWorker({
-    id: 'cam1', index: 0, running: () => running, password: () => sim.password, poeSwitchPassword: () => undefined,
+    id: 'cam1', running: () => running, password: () => sim.password, poe: new PoeSwitch({ config: () => running.poeSwitch, password: () => undefined }),
     ftpTarget: () => ({ server: '', port: 2121, user: 'camera', password: '', tls: true, stream: 'main' }),
+    go2rtc: () => undefined,
+    cachePool: new CachePool(() => running.recordings.cacheMB * 2 ** 20),
     catalog, log, sse: sseHandler(log, running.sse), storage, audit, hooks: NO_HOOKS,
     ...o.over,
   });
@@ -60,16 +65,33 @@ describe('CameraWorker (spec §3.1)', () => {
     await restart;
     expect(w.phase()).toBe('ready');
     await until(() => w.status.state().online);
-    await w.stopSwitch();
     await w.stopRecordings();
     await w.stop();
     expect(w.phase()).toBe('stopped');
     catalog.close();
   });
 
-  it('one camera: the whole recordings cache cap (Ruling P1-3)', () => {
-    const { w, running, catalog } = worker();
-    expect(w.recordings.status().cache.capBytes).toBe(running.recordings.cacheMB * 2 ** 20);
+  it("the host's recordings cache: the whole cap, the pool's figures and this camera's part (spec §8.3)", () => {
+    const pool = new CachePool(() => 5 * 2 ** 20);
+    const { w, running, catalog } = worker({ over: { cachePool: pool } });
+    writeFileSync(join(running.server.dataDir, 'recordings', 'cam1', 'RecM01.mp4'), Buffer.alloc(100));
+    expect(pool.usage().files).toBe(1);
+    expect(w.recordings.status().cache).toEqual({ bytes: 100, files: 1, capBytes: 5 * 2 ** 20 });
+    expect(w.recordings.status().camera).toEqual({ bytes: 100, files: 1 });
+    catalog.close();
+  });
+});
+
+describe('storage per camera (spec §8.1)', () => {
+  it("the worker's stills and clips writes name its camera", async () => {
+    const fake = { ready: () => new Promise<void>(() => undefined), up: () => false, streamUrl: () => 'rtsp://127.0.0.1:1/x', setStream: async () => undefined };
+    const { w, catalog } = worker({ stills: true, over: { go2rtc: () => fake as unknown as Go2rtc } });
+    const calls: unknown[][] = [];
+    const storage = (w as unknown as { d: { storage: { noteWritten: (...a: unknown[]) => void } } }).d.storage;
+    storage.noteWritten = (...a: unknown[]) => void calls.push(a);
+    w.stills!.store.emit('written', { kind: 'stills', bytes: 10, files: 1 });
+    (w.makeIndexer(true) as unknown as { d: { stored: (b: number) => void } }).d.stored(20);
+    expect(calls).toEqual([['stills', 10, 1, { cam: 'cam1' }], ['clips', 20, 1, { growth: true, cam: 'cam1' }]]);
     catalog.close();
   });
 });
@@ -125,46 +147,42 @@ describe('supervision (spec §3.3)', () => {
     pending!();
     await until(() => w.phase() === 'ready');
     expect(w.error()).not.toBe('go2rtc_start_failed');
-    await w.stopSwitch();
     await w.stopRecordings();
     await w.stop();
     catalog.close();
   });
 
-  // Review: a go2rtc that can't start reaches supervision (an error and a retry), not only the log.
-  it('a go2rtc start failure sets the error and retries with the backoff', async () => {
-    const delays: number[] = [];
-    const { w, catalog } = worker({
-      stills: true,
-      over: { startGo2rtc: () => Promise.reject(new Error('no such file')), schedule: (ms) => (delays.push(ms), () => undefined) },
-    });
+  // P2 (spec §8.5): one go2rtc for the host. A go2rtc that isn't up is the
+  // host's to retry; the camera's grabber waits for it, and a stop meanwhile is quick.
+  it("waits for the host's go2rtc; a stop while waiting ends at once", async () => {
+    const fake = { ready: () => new Promise<void>(() => undefined), up: () => false, streamUrl: (cam: string, s: string) => `rtsp://127.0.0.1:1/${cam}_${s}`, setStream: async () => undefined };
+    const { w, catalog } = worker({ stills: true, over: { go2rtc: () => fake as unknown as Go2rtc } });
     await w.start();
-    await until(() => delays.length === 1);
-    expect(delays).toEqual([5000]);
-    expect(w.error()).toBe('go2rtc_start_failed: no such file');
-    await w.stopSwitch();
-    await w.stopRecordings();
-    await w.stop();
-    catalog.close();
-  });
-
-  // Live test 2026-10-05: a stop while go2rtc is still starting ends it at once (its ports free), not after the ready wait.
-  it('a stop during the go2rtc start ends go2rtc at once', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'camproxy-slow-go2rtc-'));
-    const fake = join(dir, 'go2rtc');
-    writeFileSync(fake, '#!/bin/sh\nexec sleep 30\n');
-    chmodSync(fake, 0o755);
-    const { w, catalog } = worker({ stills: true, go2rtc: fake });
-    await w.start();
-    await until(() => w.stills?.go2rtc.pid() !== undefined);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(w.stills?.grabber.pid()).toBeUndefined();
+    expect(w.error()).toBeNull();
     const t0 = Date.now();
-    await w.stopSwitch();
     await w.stopRecordings();
     await w.stop();
-    expect(Date.now() - t0).toBeLessThan(4000);
-    expect(w.stills?.go2rtc.pid()).toBeUndefined();
+    expect(Date.now() - t0).toBeLessThan(2000);
     catalog.close();
-  }, 20_000);
+  });
+
+  it('a restart registers the stream source again only when it changed', async () => {
+    let password = sim.password;
+    const set: StreamSource[] = [];
+    const fake = { ready: () => new Promise<void>(() => undefined), up: () => false, streamUrl: () => 'rtsp://127.0.0.1:1/x', setStream: async (s: StreamSource) => void set.push(s) };
+    const { w, catalog } = worker({ stills: true, over: { go2rtc: () => fake as unknown as Go2rtc, password: () => password } });
+    await w.start();
+    await w.restart();
+    expect(set).toEqual([]);
+    password = 'changed-pw';
+    await w.restart();
+    expect(set.map((s) => [s.cam, s.password])).toEqual([['cam1', 'changed-pw']]);
+    await w.stopRecordings();
+    await w.stop();
+    catalog.close();
+  });
 
   // Live test 2026-10-05: log lines of a camera's parts (onvif_down, poll_failed, frame_grabber_exited, …) name the camera.
   it("its parts' log lines carry the camera id", async () => {
@@ -174,7 +192,6 @@ describe('supervision (spec §3.3)', () => {
     const line = () => logBuffer.recent(500).find((l) => l.msg === 'onvif_down' && (l.time as number) >= t0);
     await until(() => !!line(), 15_000);
     expect(line()!.cameraId).toBe('cam1');
-    await w.stopSwitch();
     await w.stopRecordings();
     await w.stop();
     catalog.close();

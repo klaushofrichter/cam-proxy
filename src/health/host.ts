@@ -15,7 +15,7 @@ import { join } from 'path';
 interface HostPaths { root: string }
 interface Platform { pi: boolean; model: string | null }
 export interface HostStats {
-  cpuTempC: number | null; // hwmon cpu_thermal temp1_input, one decimal
+  cpuTempC: number | null; // hwmon cpu_thermal temp1_input (a Pi) or k10temp Tctl (AMD), one decimal
   underVoltage: boolean | null; // hwmon rpi_volt in0_lcrit_alarm
   memory: { totalBytes: number; availableBytes: number; usedPercent: number } | null;
   uptimeS: number | null;
@@ -79,7 +79,15 @@ export function readHostStats(p: HostPaths): HostStats {
     const dir = hw.get(name);
     return dir ? intOf(readAt(join(dir, file))) : null;
   };
-  const milli = sensor('cpu_thermal', 'temp1_input');
+  // A Raspberry Pi's cpu_thermal; an AMD Ryzen's k10temp, its Tctl channel
+  // (spec 2026-10-05-multi-camera-host-design §6.5).
+  const labelled = (name: string, label: string): number | null => {
+    const dir = hw.get(name);
+    if (!dir) return null;
+    for (let i = 1; i <= 10; i++) if (readAt(join(dir, `temp${i}_label`))?.trim() === label) return intOf(readAt(join(dir, `temp${i}_input`)));
+    return null;
+  };
+  const milli = sensor('cpu_thermal', 'temp1_input') ?? labelled('k10temp', 'Tctl');
   const alarm = sensor('rpi_volt', 'in0_lcrit_alarm');
 
   let memory: HostStats['memory'] = null;

@@ -10,6 +10,7 @@ export interface CameraNode {
   poeSwitch: { port?: number };
   ftp: { user?: string; enabled?: boolean; stream?: 'main' | 'sub' };
   stills: { enabled?: boolean; stream?: 'sub' | 'main'; intervalS?: number };
+  storage: { sharePercent?: number };
   analytics: { kinds: { person?: boolean; vehicle?: boolean; pet?: boolean } };
   events: { poll: { enabled?: boolean } };
 }
@@ -17,7 +18,7 @@ export interface CameraNode {
 // A new camera's defaults: its name is its id (Ruling P1-11; a legacy camera
 // keeps the name Den, src/config/legacy.ts).
 export function cameraDefaults(id: string): CameraNode {
-  return { id, name: id, host: '', protocol: 'https', user: 'proxy', onvifPort: 8000, rtspPort: 554, baichuanPort: 9000, statusPollS: 30, poeSwitch: {}, ftp: {}, stills: {}, analytics: { kinds: {} }, events: { poll: {} } };
+  return { id, name: id, host: '', protocol: 'https', user: 'proxy', onvifPort: 8000, rtspPort: 554, baichuanPort: 9000, statusPollS: 30, poeSwitch: {}, ftp: {}, stills: {}, storage: {}, analytics: { kinds: {} }, events: { poll: {} } };
 }
 
 export interface Config {
@@ -45,7 +46,7 @@ export interface Config {
   };
   sse: { maxClients: number; queuePerClient: number; pingS: number };
   // Composed clips (spec 2026-09-28): the font for the badge and card text.
-  composition: { font?: string };
+  composition: { font?: string; concurrent: number };
   ftp: { enabled: boolean; port: number; passive: string; tls: boolean; stream: 'main' | 'sub'; stalledHours: number; maxGB?: number; publicHost?: string; certFile?: string; keyFile?: string };
   recordings: { cacheMB: number };
   // The health summary's thresholds and the host figures (spec 2026-10-03-health-summary-design).
@@ -59,7 +60,7 @@ export interface Config {
   analytics: {
     kinds: { person: boolean; vehicle: boolean; pet: boolean };
     // checksPerDay: still checks by hand per camera day (cams #179); 0 = none.
-    googleVision: { enabled: boolean; monthlyLimit: number; dailyCap: number; checksPerDay: number };
+    googleVision: { enabled: boolean; monthlyLimit: number; dailyCap: number; checksPerDay: number; perCameraDailyCap: number };
   };
 }
 
@@ -79,7 +80,7 @@ export const DEFAULTS: Config = {
   retention: { stillsDays: 7, previewsDays: 14, clipsDays: 7, eventsDays: 30, auditDays: 90, streamLogDays: 7, intervalMin: 60 },
   storage: { maxPercent: 85, minFreeBytes: 2 * 1024 ** 3, keepHours: { stills: 24, clips: 24, previews: 72 } },
   sse: { maxClients: 50, queuePerClient: 1000, pingS: 15 },
-  composition: {},
+  composition: { concurrent: 1 },
   ftp: { enabled: false, port: 2121, passive: '30000-30009', tls: true, stream: 'main', stalledHours: 6 },
   recordings: { cacheMB: 2048 },
   health: { diskPercent: 90, tempC: 75 },
@@ -87,7 +88,7 @@ export const DEFAULTS: Config = {
   archive: { enabled: true, warnPercent: 50 },
   analytics: {
     kinds: { person: true, vehicle: false, pet: false },
-    googleVision: { enabled: false, monthlyLimit: 0, dailyCap: 0, checksPerDay: 10 },
+    googleVision: { enabled: false, monthlyLimit: 0, dailyCap: 0, checksPerDay: 10, perCameraDailyCap: 0 },
   },
 };
 

@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { applyOverrides, ConfigError, loadConfig, needsRestart, removeOverride } from '../src/config/load';
+import { applyOverrides, ConfigError, loadConfig, needsRestart, removeAllOverrides, removeOverride } from '../src/config/load';
 import { cameraConfig, cameraIds } from '../src/config/cameras';
 
 const SECRETS = { CAMPROXY_TOKENS: 'a'.repeat(32), CAMPROXY_ADMIN_TOKEN: 'c'.repeat(32), CAMPROXY_CAMERA_PASSWORD: 'cam-pw' };
@@ -124,10 +124,41 @@ describe('cameras (spec §4.1)', () => {
     expect(err(() => load())).toBe("camera.statusPollS: a legacy camera override can't be assigned with several cameras; use cameras.<id>.statusPollS");
   });
 
-  it('an override for a camera config.json does not define is refused (Ruling P1-13)', () => {
+  it('an override may add a camera (with a host); added ids follow the file, sorted (Ruling P2-5)', () => {
+    write('config.json', two);
+    write('data/overrides.json', { cameras: { cam9: { host: 'x' }, cam10: { host: 'y' } } });
+    const l = load();
+    expect(cameraIds(l.config)).toEqual(['cam3', 'cam4', 'cam10', 'cam9']);
+    expect(l.addedCameras).toEqual(['cam10', 'cam9']);
+    expect(cameraConfig(l.config, 'cam9')).toMatchObject({ host: 'x', name: 'cam9', user: 'proxy' });
+    write('data/overrides.json', { cameras: { cam9: { name: 'no host' } } });
+    expect(err(() => load())).toBe('cameras.cam9.host: required for a camera added here');
+  });
+
+  it('the Pi: a camera added next to the legacy camera keeps CAMERA_HOST and the legacy overrides on the config.json camera', () => {
+    write('config.json', PI_FILE);
+    write('data/overrides.json', { camera: { statusPollS: 60 }, cameras: { cam6: { host: '192.168.1.120', ftp: { enabled: false } } } });
+    const l = load({ CAMERA_HOST: '192.168.1.103', CAMPROXY_FTP_PASSWORD: 'f'.repeat(24) });
+    expect(cameraIds(l.config)).toEqual(['cam1', 'cam6']);
+    expect(cameraConfig(l.config, 'cam1')).toMatchObject({ host: '192.168.1.103', statusPollS: 60 });
+  });
+
+  it('"Reset to defaults" keeps the added cameras (it resets settings, not the camera list)', () => {
+    write('config.json', two);
+    write('data/overrides.json', { sse: { pingS: 20 }, cameras: { cam9: { host: 'x', statusPollS: 60 } } });
+    const l = removeAllOverrides(load());
+    expect(cameraIds(l.config)).toEqual(['cam3', 'cam4', 'cam9']);
+    expect(cameraConfig(l.config, 'cam9')!.host).toBe('x');
+    expect(l.overrides).toEqual({ cameras: { cam9: { host: 'x', statusPollS: 60 } } });
+  });
+
+  it('an added camera is removed with its override; a config.json camera answers why not', () => {
     write('config.json', two);
     write('data/overrides.json', { cameras: { cam9: { host: 'x' } } });
-    expect(err(() => load())).toBe('cameras.cam9: unknown camera (cameras are added in config.json)');
+    const l = removeOverride(load(), 'cameras.cam9');
+    expect(cameraIds(l.config)).toEqual(['cam3', 'cam4']);
+    expect(l.addedCameras).toEqual([]);
+    expect(err(() => removeOverride(l, 'cameras.cam3'))).toBe('cameras.cam3: defined in config.json; remove it there');
   });
 
   it('CAMERA_HOST with several cameras is a load error', () => {
@@ -135,12 +166,45 @@ describe('cameras (spec §4.1)', () => {
     expect(err(() => load({ CAMERA_HOST: '10.0.0.1' }))).toBe('CAMERA_HOST: set cameras[].host instead (several cameras)');
   });
 
-  it('FTP on for two cameras is refused until P2 (Ruling P1-2)', () => {
-    write('config.json', { ...two, ftp: { enabled: true } });
-    expect(err(() => load({ CAMPROXY_FTP_PASSWORD: 'f' }))).toBe('ftp.enabled: several cameras need per-camera FTP users (multi-camera phase 2); enable it for one camera');
+  it('a camera host is a name or address with an optional port: never ${…} (go2rtc would expand it)', () => {
+    const exploit = 'x${CAM_CAM1_PASSWORD}.evil.example';
+    write('config.json', { cameras: [{ id: 'cam3', host: exploit }] });
+    expect(err(() => load())).toMatch(/^cameras\.cam3\.host/);
+    write('config.json', { camera: { host: exploit } });
+    expect(err(() => load())).toMatch(/^camera\.host/);
+    write('config.json', two);
+    expect(err(() => applyOverrides(load(), { cameras: { cam6: { host: exploit } } }))).toMatch(/^cameras\.cam6\.host/);
+    expect(err(() => applyOverrides(load(), { cameras: { cam3: { host: 'a@b' } } }))).toMatch(/^cameras\.cam3\.host/);
+    for (const host of ['192.168.60.13', 'cam2.cam-sim.svc.cluster.local:443', '127.0.0.1:18700', '']) {
+      write('config.json', { cameras: [{ id: 'cam3', host }] });
+      expect(cameraConfig(load().config, 'cam3')!.host).toBe(host);
+    }
+  });
+
+  it('storage.sharePercent: the sum may not exceed 100', () => {
+    write('config.json', { cameras: [{ id: 'cam3', storage: { sharePercent: 70 } }, { id: 'cam4', storage: { sharePercent: 50 } }] });
+    expect(err(() => load())).toBe('cameras: storage.sharePercent adds up to 120 % (cam3 70, cam4 50); at most 100');
+    // 100 % with a camera left without a share: it would get nothing (review of #173).
+    write('config.json', { cameras: [{ id: 'cam3', storage: { sharePercent: 60 } }, { id: 'cam4', storage: { sharePercent: 40 } }, { id: 'cam5' }] });
+    expect(err(() => load())).toBe('cameras: storage.sharePercent adds up to 100 % (cam3 60, cam4 40); cam5 has no share and would get nothing: give it one, or lower the others');
+    write('config.json', { cameras: [{ id: 'cam3', storage: { sharePercent: 60 } }, { id: 'cam4', storage: { sharePercent: 40 } }] });
+    expect(cameraIds(load().config)).toEqual(['cam3', 'cam4']);
+    write('config.json', { cameras: [{ id: 'cam3', storage: { sharePercent: 70 } }, { id: 'cam4' }] });
+    expect(cameraConfig(load().config, 'cam3')!.storage).toEqual({ sharePercent: 70 });
+    expect(cameraConfig(load().config, 'cam4')!.storage).toEqual({});
+  });
+
+  it('FTP for several cameras: unique users, ≥ 10 passive ports per camera', () => {
+    write('config.json', { ...two, ftp: { enabled: true, passive: '50000-50019' } });
+    expect(cameraIds(load({ CAMPROXY_FTP_PASSWORD: 'f' }).config)).toEqual(['cam3', 'cam4']);
+    write('config.json', { ...two, ftp: { enabled: true, passive: '50000-50009' } });
+    expect(err(() => load({ CAMPROXY_FTP_PASSWORD: 'f' }))).toBe('ftp.passive: 10 ports for 2 cameras with FTP; at least 10 per camera');
+    write('config.json', { ftp: { enabled: true, passive: '50000-50019' }, cameras: [{ id: 'cam3', ftp: { user: 'cam' } }, { id: 'cam4', ftp: { user: 'cam' } }] });
+    expect(err(() => load({ CAMPROXY_FTP_PASSWORD: 'f' }))).toBe('cameras: cam3 and cam4 both use the FTP user cam');
     write('config.json', { ...two, ftp: { enabled: false }, cameras: [{ id: 'cam3', ftp: { enabled: true } }, { id: 'cam4' }] });
     expect(cameraConfig(load({ CAMPROXY_FTP_PASSWORD: 'f' }).config, 'cam3')!.ftp.enabled).toBe(true);
   });
+
 
   it('per-camera restart and live rules', async () => {
 

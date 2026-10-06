@@ -15,6 +15,10 @@ export type Leaf =
 export type Collection = { collection: Node; doc: string };
 export type Node = { [key: string]: Node | Leaf | Collection };
 // Not `file` or `*-file`: CAMPROXY_CAMERA_PASSWORD_<ID> would collide with another id's _FILE variable.
+// A camera's address: a name or IPv4 address, optional :port, as CAMERA_HOST
+// takes it. Nothing else: the host goes into go2rtc's config, which expands
+// ${VAR} anywhere (review of #173), and into URLs.
+export const CAMERA_HOST = '^([A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?)?$';
 export const CAMERA_ID = '^(?!file$)(?!.*-file$)[a-z0-9][a-z0-9-]{0,31}$';
 export const collection = (of: Node, doc: string): Collection => ({ collection: of, doc });
 const isCollection = (n: Node | Leaf | Collection): n is Collection => typeof (n as Collection).collection === 'object' && typeof (n as Collection).doc === 'string';
@@ -31,7 +35,7 @@ const size = (doc: string): Leaf => ({ type: 'string', pattern: '^[1-9][0-9]{1,4
 export const LEGACY_CAMERA: Node = {
   id: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,31}$', doc: 'camera id used in paths and the API' },
   name: { type: 'string', pattern: '^.{1,64}$', doc: "fallback display name until the camera's own name is read (the camera stores its name)" },
-  host: unset({ type: 'string', pattern: '^[^\\s/]*$', doc: 'address or name, optional :port (required)' }, 'no camera address: the camera waits idle (Find camera can still be used)', ''),
+  host: unset({ type: 'string', pattern: CAMERA_HOST, doc: 'address or name, optional :port (required)' }, 'no camera address: the camera waits idle (Find camera can still be used)', ''),
   protocol: { type: 'string', enum: ['https', 'http'], doc: 'camera HTTP API protocol' },
   tlsName: unset({ type: 'string', pattern: '^[^\\s]+$', optional: true, doc: 'verify the camera certificate against this name' }, "the camera's certificate is not verified"),
   webUiUrl: unset({ type: 'string', pattern: '^(https?://[^\\s]+|none)$', optional: true, doc: "the camera's own web page, linked from the admin UI; default https://<host>/, none for no link" }, 'the link goes to https://<camera.host>/'),
@@ -59,7 +63,7 @@ const hostValue = (path: string) => `the host value, ${path}`;
 export const CAMERA_NODE: Node = {
   id: { type: 'string', pattern: CAMERA_ID, doc: 'camera id used in paths and the API' },
   name: { type: 'string', pattern: '^.{1,64}$', doc: "fallback display name until the camera's own name is read (default: the id)" },
-  host: unset({ type: 'string', pattern: '^[^\\s/]*$', doc: 'address or name, optional :port' }, 'no camera address: the camera waits idle (Find camera can still be used)', ''),
+  host: unset({ type: 'string', pattern: CAMERA_HOST, doc: 'address or name, optional :port' }, 'no camera address: the camera waits idle (Find camera can still be used)', ''),
   protocol: { type: 'string', enum: ['https', 'http'], doc: 'camera HTTP API protocol' },
   tlsName: unset({ type: 'string', pattern: '^[^\\s]+$', optional: true, doc: 'verify the camera certificate against this name' }, "the camera's certificate is not verified"),
   webUiUrl: unset({ type: 'string', pattern: '^(https?://[^\\s]+|none)$', optional: true, doc: "the camera's own web page, linked from the admin UI; default https://<host>/, none for no link" }, 'the link goes to https://<host>/'),
@@ -80,6 +84,9 @@ export const CAMERA_NODE: Node = {
     enabled: unset({ type: 'boolean', doc: 'store stills of this camera' }, hostValue('stills.enabled')),
     stream: unset({ type: 'string', enum: ['sub', 'main'], optional: true, doc: 'camera stream the stills come from' }, hostValue('stills.stream')),
     intervalS: unset({ type: 'integer', min: 1, max: 60, optional: true, oneOf: [1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60], doc: 'seconds between stills (divides a minute)' }, hostValue('stills.intervalS')),
+  },
+  storage: {
+    sharePercent: unset(int(0, 100, "this camera's share of the storage budget, percent (all shares together at most 100)", true), 'no share: the camera has an equal part of what the shares leave'),
   },
   analytics: {
     kinds: {
@@ -166,6 +173,7 @@ export const SETTINGS: Node = {
   },
   composition: {
     font: unset({ type: 'string', pattern: '^.+$', optional: true, doc: 'font file for the badge and card text of composed clips; default: the first of DejaVu Sans (Alpine, Debian) or Arial (macOS) that exists' }, 'the first of DejaVu Sans or Arial that exists'),
+    concurrent: int(1, 4, 'composed clips encoded at once (2 on a 4-core host, 1 on a Pi)'),
   },
   sse: {
     maxClients: int(1, 1000, 'most SSE clients at once'),
@@ -213,6 +221,7 @@ export const SETTINGS: Node = {
       monthlyLimit: unset(int(0, 100000, 'Google Vision calls per calendar month (camera time); 0 = none'), 'no Google Vision calls', 0),
       dailyCap: unset(int(0, 10000, 'Google Vision calls per day at most; 0 = no daily cap'), 'no daily cap (the monthly limit still applies)', 0),
       checksPerDay: unset(int(0, 1000, 'still checks (a second picked by hand in cams) per camera day at most, within the monthly limit and the daily cap; 0 = no checks'), 'no still checks', 0),
+      perCameraDailyCap: unset(int(0, 10000, 'Google Vision calls per camera and day at most (automatic analyses and still checks together); 0 = no per-camera cap'), 'no per-camera cap', 0),
     },
   },
 };

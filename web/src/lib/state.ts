@@ -16,6 +16,8 @@ export interface Stats {
   stream: { rows: number; lastId: number };
   sse: { clients: number };
   storage: { budget: number; used: number; daysUntilFull: number | null; paused: boolean };
+  // Each camera's part of the disk (spec 2026-10-05-multi-camera-host-design §8.1); absent from an older proxy.
+  cameras?: Record<string, Record<string, Usage>>;
 }
 export interface FeedItem { id: number; type: string; data: Record<string, unknown>; at: number }
 

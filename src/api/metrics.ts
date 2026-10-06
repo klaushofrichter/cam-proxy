@@ -40,8 +40,6 @@ export function eventsStoredByCamera(c: Catalog): Record<string, Record<string, 
 // The phase 1 metrics (spec §13). Counts only, never event content.
 export function createMetrics(s: MetricsSources) {
   const registry = new Registry();
-  // Host totals not yet split per camera (storage, events) carry the first camera's label until P2.
-  const cam = () => s.cameras()[0]?.id ?? '';
   // usage() scans the data folders: one scrape (render) measures once for all gauges.
   let scrape: ReturnType<Storage['usage']> | undefined;
   const usage = () => scrape ?? s.storage.usage();
@@ -76,11 +74,16 @@ export function createMetrics(s: MetricsSources) {
   g('storage_writing_paused', '1 while free space is below the floor', [], function () {
     this.set(s.storage.paused() ? 1 : 0);
   });
+  // Per camera (spec 2026-10-05-multi-camera-host-design §8.1).
   g('stills_minutes_stored', 'Minute packs of stills on disk', ['cam'], function () {
-    this.set({ cam: cam() }, usage().stills.files);
+    this.reset();
+    const by = s.storage.usageByCamera();
+    for (const c of s.cameras()) this.set({ cam: c.id }, by[c.id]?.stills.files ?? 0);
   });
   g('previews_stored', 'Preview sprite sheets on disk', ['cam'], function () {
-    this.set({ cam: cam() }, Math.round(usage().previews.files / 2));
+    this.reset();
+    const by = s.storage.usageByCamera();
+    for (const c of s.cameras()) this.set({ cam: c.id }, Math.round((by[c.id]?.previews.files ?? 0) / 2));
   });
   g('frame_grabber_up', '1 while stills arrive', ['cam'], function () {
     this.reset();
@@ -92,7 +95,7 @@ export function createMetrics(s: MetricsSources) {
   });
   g('events_stored', 'Events in the catalog', ['cam', 'kind'], function () {
     this.reset();
-    for (const [kind, n] of Object.entries(eventsStored(s.catalog))) this.set({ cam: cam(), kind }, n);
+    for (const [c, kinds] of Object.entries(eventsStoredByCamera(s.catalog))) for (const [kind, n] of Object.entries(kinds)) this.set({ cam: c, kind }, n);
   });
   g('onvif_subscribed', '1 while the ONVIF subscription is active', ['cam'], function () {
     this.reset();

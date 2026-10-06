@@ -89,7 +89,7 @@ describe('control API: status, stats, config', () => {
   it('shows every setting with its value, source and restart flag, and never a secret', async () => {
     const r = await request(p.base).get('/control/config').set(admin());
     // legacy: the test config.json has a one-camera `camera` object (spec 2026-10-05-multi-camera-host-design §4.2).
-    expect(r.body['cameras.cam1.host']).toEqual({ value: sim.camera.host, source: 'file', restart: true, pending: false, type: 'string', legacy: true });
+    expect(r.body['cameras.cam1.host']).toEqual({ value: sim.camera.host, source: 'file', restart: true, restartScope: 'camera', pending: false, type: 'string', legacy: true });
     expect(r.body['retention.stillsDays']).toEqual({ value: 7, source: 'default', restart: false, pending: false, type: 'integer' });
     // The type, so the Settings page can save a number for an optional setting with no value yet (#85).
     expect(r.body['cameras.cam1.poeSwitch.port']).toEqual({ source: 'default', restart: false, pending: false, type: 'integer' });

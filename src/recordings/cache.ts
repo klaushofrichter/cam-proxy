@@ -9,6 +9,7 @@
 // that could leave the folder.
 import { lstatSync, mkdirSync, readdirSync, renameSync, unlinkSync, utimesSync } from 'fs';
 import { join, resolve, sep } from 'path';
+import type { CachePool } from './pool';
 
 const TOUCH_EVERY_MS = 60_000;
 
@@ -25,7 +26,8 @@ function safeDir(dir: string): string[] {
 export class RecordingCache {
   private readonly pins = new Map<string, number>();
 
-  constructor(private readonly d: { dir: () => string; capBytes: () => number; now?: () => number }) {}
+  // With a pool (the host's, spec 2026-10-05-multi-camera-host-design §8.3), room is made across every camera.
+  constructor(private readonly d: { dir: () => string; capBytes: () => number; now?: () => number; pool?: CachePool }) {}
 
   private now(): number {
     return (this.d.now ?? Date.now)();
@@ -131,7 +133,7 @@ export class RecordingCache {
     return { bytes: f.reduce((n, x) => n + x.bytes, 0), files: f.length };
   }
 
-  private partBytes(): number {
+  partBytes(): number {
     const dir = this.d.dir();
     let n = 0;
     for (const name of safeDir(dir)) {
@@ -151,6 +153,7 @@ export class RecordingCache {
   fits(size: number): boolean {
     const cap = this.capBytes();
     if (size > cap) return false;
+    if (this.d.pool) return this.d.pool.pinnedBytes() + size <= cap;
     const pinned = this.files().filter((x) => this.busy(x.path)).reduce((n, x) => n + x.bytes, 0);
     return pinned + size <= cap;
   }
@@ -158,6 +161,7 @@ export class RecordingCache {
   // Evicts least-recently-used files (never a pinned one) until `incoming`
   // fits beside the rest and any .part files; answers whether it fits.
   makeRoom(incoming: number): boolean {
+    if (this.d.pool) return this.d.pool.makeRoom(incoming);
     const files = this.files();
     const cap = this.d.capBytes();
     let total = files.reduce((n, f) => n + f.bytes, 0) + this.partBytes();

@@ -59,6 +59,7 @@ export interface ProviderState {
   lastCall: { at: number; tookMs: number; status: string } | null;
   lastError: string | null;
   checks: { today: number; cap: number };
+  cameras: { id: string; today: number; month: number }[]; // this key's calls per camera
 }
 
 // The client's view of the budget (GET /api/cameras/{cam}/analytics): no key, no mask.
@@ -208,8 +209,22 @@ export class AnalyticsService {
     return this.paused && this.paused.until !== null && this.paused.until <= this.now() ? null : this.paused;
   }
 
-  private monthUsage(day: string): number {
-    return usageBetween(this.d.catalog, 'google-vision', `${day.slice(0, 7)}-01`, `${day.slice(0, 7)}-31`);
+  // The rows that count for the key in use (spec 2026-10-05-multi-camera-host-design
+  // §8.2): its own and the legacy rows from before the migration (key_id '').
+  // A new key starts a fresh count.
+  private keyIds(key = this.key()): string[] {
+    return key ? [keyId(key), ''] : [''];
+  }
+  private monthUsage(day: string, cam?: string): number {
+    return usageBetween(this.d.catalog, 'google-vision', `${day.slice(0, 7)}-01`, `${day.slice(0, 7)}-31`, { keyIds: this.keyIds(), ...(cam !== undefined ? { cam } : {}) });
+  }
+  private dayUsage(provider: string, day: string, cam?: string): number {
+    return usageBetween(this.d.catalog, provider, day, day, { keyIds: this.keyIds(), ...(cam !== undefined ? { cam } : {}) });
+  }
+  // A camera's Vision calls today (automatic analyses and still checks together, Ruling P2-8).
+  private cameraCapReached(cam: string, day: string): boolean {
+    const cap = this.settings().googleVision.perCameraDailyCap;
+    return cap > 0 && this.dayUsage('google-vision', day, cam) >= cap;
   }
 
   state(): ProviderState[] {
@@ -222,17 +237,22 @@ export class AnalyticsService {
       keyMasked: maskKey(this.key()),
       keySource: this.keySource(),
       month: { calls: this.monthUsage(day), limit: g.monthlyLimit },
-      today: { calls: usageBetween(this.d.catalog, p.id, day, day), cap: g.dailyCap },
+      today: { calls: this.dayUsage(p.id, day), cap: g.dailyCap },
       paused: this.pause(),
       lastCall: this.lastCall,
       lastError: this.lastError,
-      checks: { today: usageBetween(this.d.catalog, CHECK_USAGE.calls, day, day), cap: g.checksPerDay },
+      // Every camera's still checks today against checksPerDay per camera.
+      checks: { today: this.dayUsage(CHECK_USAGE.calls, day), cap: g.checksPerDay * Math.max(1, this.d.cams().length) },
+      // This key's calls per camera (spec §8.2).
+      cameras: this.d.cams().map((id) => ({ id, today: this.dayUsage('google-vision', day, id), month: this.monthUsage(day, id) })),
     }));
   }
 
-  usage(): AnalyticsUsage {
+  // The budget as one camera's client sees it: its still checks today.
+  usage(cam?: string): AnalyticsUsage {
     const { month, today, paused, checks } = this.state()[0];
-    return { enabled: this.active(), paused, month, today, checks };
+    const day = localDay(this.now(), this.d.timeInfo());
+    return { enabled: this.active(), paused, month, today, checks: cam ? { today: this.dayUsage(CHECK_USAGE.calls, day, cam), cap: this.settings().googleVision.checksPerDay } : checks };
   }
 
   private maxOpenMs(): number {
@@ -279,8 +299,10 @@ export class AnalyticsService {
     if (this.paused) return refuse(503, 'analytics_paused', { reason: this.paused.reason, until: this.paused.until });
     const day = localDay(this.now(), this.d.timeInfo());
     if (this.monthUsage(day) >= g.monthlyLimit) return refuse(429, 'limit', { reason: 'month' });
-    if (g.dailyCap > 0 && usageBetween(this.d.catalog, 'google-vision', day, day) >= g.dailyCap) return refuse(429, 'limit', { reason: 'day' });
-    if (usageBetween(this.d.catalog, CHECK_USAGE.calls, day, day) >= g.checksPerDay) return refuse(429, 'limit', { reason: 'checks' });
+    if (g.dailyCap > 0 && this.dayUsage('google-vision', day) >= g.dailyCap) return refuse(429, 'limit', { reason: 'day' });
+    if (this.cameraCapReached(cam, day)) return refuse(429, 'limit', { reason: 'camera' });
+    // Still checks: checksPerDay per camera and day.
+    if (this.dayUsage(CHECK_USAGE.calls, day, cam) >= g.checksPerDay) return refuse(429, 'limit', { reason: 'checks' });
     // The call is reserved in the same synchronous step as the limit checks:
     // an automatic analysis that runs while the still is read sees it.
     const reserved = [this.usageKey('google-vision', cam), this.usageKey(CHECK_USAGE.calls, cam)];
@@ -531,7 +553,7 @@ export class AnalyticsService {
         const provider = make('google-vision', key, this.d.secrets().googleVisionUrl);
         const g = this.settings().googleVision;
         const day = localDay(this.now(), this.d.timeInfo());
-        if (this.monthUsage(day) >= g.monthlyLimit || (g.dailyCap > 0 && usageBetween(this.d.catalog, 'google-vision', day, day) >= g.dailyCap)) {
+        if (this.monthUsage(day) >= g.monthlyLimit || (g.dailyCap > 0 && this.dayUsage('google-vision', day) >= g.dailyCap) || this.cameraCapReached(job.cam, day)) {
           return this.skip(job, 'limit', stillTs);
         }
         addUsage(this.d.catalog, this.usageKey('google-vision', job.cam, key), day);

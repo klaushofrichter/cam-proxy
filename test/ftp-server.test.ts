@@ -14,7 +14,7 @@ afterEach(async () => {
   for (const f of cleanup.splice(0).reverse()) await f();
 });
 
-async function setup(opts: { tls?: boolean; maxSessions?: number; host?: string; publicHost?: string; timeouts?: FtpServerOptions['timeouts']; now?: () => number; lookup?: FtpServerOptions['lookup']; log?: FtpServerOptions['log']; accept?: FtpServerOptions['accept'] } = {}) {
+async function setup(opts: { tls?: boolean; maxSessions?: number; host?: string; publicHost?: string; timeouts?: FtpServerOptions['timeouts']; now?: () => number; lookup?: FtpServerOptions['lookup']; log?: FtpServerOptions['log']; accept?: FtpServerOptions['accept']; users?: FtpServerOptions['users'] } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'camproxy-ftp-'));
   const port = await freePort();
   const p0 = await freePort();
@@ -23,18 +23,18 @@ async function setup(opts: { tls?: boolean; maxSessions?: number; host?: string;
     const pems = await generate([{ name: 'commonName', value: 'cam-proxy' }], { keyType: 'ec' });
     tls = { cert: pems.cert, key: pems.private };
   }
-  const server = new FtpServer({ port, host: opts.host ?? '127.0.0.1', passive: [p0, p0 + 20], publicHost: 'publicHost' in opts ? opts.publicHost : '127.0.0.1', user: 'camera', password: 'ftp-pw', tls, root, maxSessions: opts.maxSessions, timeouts: opts.timeouts, now: opts.now, lookup: opts.lookup, log: opts.log, accept: opts.accept });
+  const server = new FtpServer({ port, host: opts.host ?? '127.0.0.1', passive: [p0, p0 + 20], publicHost: 'publicHost' in opts ? opts.publicHost : '127.0.0.1', users: opts.users ?? (() => new Map([['camera', { cam: 'cam1' }]])), password: 'ftp-pw', tls, root, maxSessions: opts.maxSessions, timeouts: opts.timeouts, now: opts.now, lookup: opts.lookup, log: opts.log, accept: opts.accept });
   const uploads: Upload[] = [];
   const failures: string[] = [];
   server.on('upload', (u: Upload) => uploads.push(u));
   server.on('failed', (f: { reason: string }) => failures.push(f.reason));
   await server.start();
   cleanup.push(() => server.stop());
-  const client = async (password = 'ftp-pw') => {
+  const client = async (password = 'ftp-pw', user = 'camera') => {
     const c = new Client(5000);
     cleanup.push(() => c.close());
     try {
-      await c.access({ host: '127.0.0.1', port, user: 'camera', password, secure: !!opts.tls, secureOptions: { rejectUnauthorized: false } });
+      await c.access({ host: '127.0.0.1', port, user, password, secure: !!opts.tls, secureOptions: { rejectUnauthorized: false } });
     } catch (err) {
       c.close(); // like the camera: a refused login ends the connection
       throw err;
@@ -432,3 +432,52 @@ async function rawSession(port: number, _wait = true) {
     close: () => socket.destroy(),
   };
 }
+
+describe('a user per camera (spec 2026-10-05-multi-camera-host-design §7)', () => {
+  it('each camera logs in as its own user; the upload names the camera', async () => {
+    const { client, uploads } = await setup({ users: () => new Map([['cam3', { cam: 'cam3' }], ['cam4', { cam: 'cam4' }]]) });
+    const c = await client('ftp-pw', 'cam4');
+    await c.uploadFrom(Readable.from([Buffer.from('x')]), 'RecS02_20261005_120000_120010_0.mp4');
+    await new Promise((r) => setTimeout(r, 100));
+    expect(uploads.map((u) => ({ cam: u.cam, user: u.user }))).toEqual([{ cam: 'cam4', user: 'cam4' }]);
+  });
+
+  it('a login from another address is refused (530) and reported', async () => {
+    const { client, server, uploads } = await setup({ users: () => new Map([['cam3', { cam: 'cam3', ip: '192.168.60.13' }]]) });
+    const refused: unknown[] = [];
+    server.on('refused', (r: unknown) => refused.push(r));
+    await expect(client('ftp-pw', 'cam3')).rejects.toThrow(/530/);
+    expect(refused).toEqual([{ user: 'cam3', ip: '127.0.0.1', expected: '192.168.60.13' }]);
+    expect(uploads).toEqual([]);
+  });
+
+  it('an unknown user is refused like a wrong password', async () => {
+    const { client } = await setup({ users: () => new Map([['cam3', { cam: 'cam3' }]]) });
+    await expect(client('ftp-pw', 'cam9')).rejects.toThrow(/530/);
+  });
+
+  it('the session cap scales with the users: two sessions per camera (MP4 and JPEG)', async () => {
+    const { client } = await setup({ users: () => new Map([['cam3', { cam: 'cam3' }], ['cam4', { cam: 'cam4' }], ['cam5', { cam: 'cam5' }]]) });
+    for (let i = 0; i < 12; i++) await client('ftp-pw', ['cam3', 'cam4', 'cam5'][i % 3]);
+    await expect(client('ftp-pw', 'cam3')).rejects.toThrow(/421/);
+  });
+
+  it('two sessions before login per camera at that address: four cameras on one address may connect at once', async () => {
+    const users = () => new Map(['cam3', 'cam4'].map((u) => [u, { cam: u, ip: '127.0.0.1' }]));
+    const { port } = await setup({ users });
+    const open = await Promise.all([1, 2, 3, 4].map(() => rawSession(port)));
+    expect(open.map((x) => x.greeting.slice(0, 3))).toEqual(['220', '220', '220', '220']);
+    const fifth = await rawSession(port);
+    expect(fifth.greeting).toMatch(/^421/);
+    for (const x of [...open, fifth]) x.close();
+  });
+});
+
+describe('the password compare', () => {
+  it('a password that only starts with the right one, or is cut short, is refused', async () => {
+    const { client } = await setup();
+    await expect(client('ftp-pw-and-more')).rejects.toThrow(/530/);
+    await expect(client('ftp-p')).rejects.toThrow(/530/);
+    expect(await (await client('ftp-pw')).pwd()).toBe('/');
+  });
+});

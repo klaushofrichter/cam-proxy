@@ -88,9 +88,10 @@ const setIn = (o: Obj, path: string, v: unknown) => {
   x[keys[keys.length - 1]] = v;
 };
 
-// overrides.json (or a PUT body) in the new form; camera ids must be
-// configured ones (Ruling P1-13).
-export function normalizeOverrides(over: unknown, ids: string[]): Obj {
+// overrides.json (or a PUT body) in the new form. Legacy paths mean the one
+// config.json camera (`ids`: config.json's). A camera not in config.json
+// and not added before (`added`) is added here and needs its host (Ruling P2-5).
+export function normalizeOverrides(over: unknown, ids: string[], added: string[] = []): Obj {
   if (!isObj(over)) return over as Obj;
   const { camera, ...rest } = over;
   const out: Obj = structuredClone(rest);
@@ -114,7 +115,10 @@ export function normalizeOverrides(over: unknown, ids: string[]): Obj {
     setIn(out, to, v);
   }
   if (isObj(out.cameras)) {
-    for (const id of Object.keys(out.cameras)) if (!ids.includes(id)) throw new ConfigError(`cameras.${id}: unknown camera (cameras are added in config.json)`);
+    for (const [id, entry] of Object.entries(out.cameras)) {
+      if (ids.includes(id) || added.includes(id)) continue;
+      if (!isObj(entry) || typeof entry.host !== 'string') throw new ConfigError(`cameras.${id}.host: required for a camera added here`);
+    }
   }
   return out;
 }

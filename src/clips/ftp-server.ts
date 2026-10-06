@@ -1,11 +1,10 @@
-import { randomBytes } from 'crypto';
+import { randomBytes, timingSafeEqual } from 'crypto';
 import { lookup as dnsLookup } from 'dns/promises';
 import { EventEmitter } from 'events';
 import { createWriteStream, mkdirSync, unlinkSync } from 'fs';
 import net from 'net';
 import { join, posix } from 'path';
 import tls from 'tls';
-import { tokenMatches } from '../api/auth';
 
 // A small upload-only FTP(S) server for the camera's clip uploads. It speaks
 // what an uploader needs (login, explicit TLS, passive mode, folders, STOR)
@@ -17,6 +16,8 @@ export interface Upload {
   dir: string;
   bytes: number;
   tmpFile: string; // the received file; the listener moves or deletes it
+  user: string; // the FTP user that sent it
+  cam: string; // the camera of that user
 }
 
 export interface FtpServerOptions {
@@ -24,7 +25,9 @@ export interface FtpServerOptions {
   host?: string;
   passive: [number, number];
   publicHost?: string; // the address in PASV replies
-  user: string;
+  // The FTP users (spec 2026-10-05-multi-camera-host-design §7): one per
+  // camera; with `ip`, a login from another address is refused.
+  users: () => Map<string, { cam: string; ip?: string }>;
   password: string;
   tls?: { cert: string; key: string }; // then TLS is required (AUTH TLS, PROT P)
   root: string; // uploads land in <root>/.incoming
@@ -45,14 +48,27 @@ const IPV4 = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 const plainIp = (a: string | undefined) => (a ?? '').replace(/^::ffff:/, '');
 const OPEN = new Set(['USER', 'PASS', 'AUTH', 'QUIT', 'SYST', 'FEAT', 'NOOP', 'PBSZ', 'PROT', 'OPTS']);
 const KNOWN = new Set([...OPEN, 'PWD', 'XPWD', 'CWD', 'CDUP', 'MKD', 'XMKD', 'TYPE', 'MODE', 'STRU', 'PASV', 'EPSV', 'STOR', 'SIZE']);
-// Constant time, as the API's tokens.
-const same = (given: string, expected: string): boolean => tokenMatches(given, [expected]);
+// The FTP password compared in constant time without hashing it: both padded
+// to 256 bytes (longer is never equal), then the lengths.
+const PAD = 256;
+const padded = (s: string) => {
+  const b = Buffer.alloc(PAD);
+  Buffer.from(s, 'utf8').copy(b, 0, 0, PAD);
+  return b;
+};
+const same = (given: string, expected: string): boolean => {
+  const equal = timingSafeEqual(padded(given), padded(expected));
+  const g = Buffer.byteLength(given, 'utf8');
+  const e = Buffer.byteLength(expected, 'utf8');
+  return equal && g === e && e <= PAD;
+};
 
 interface Session {
   stream: net.Socket; // the control connection (a TLSSocket after AUTH TLS)
   secure: boolean;
   prot: 'C' | 'P';
   user?: string;
+  cam?: string;
   authed: boolean;
   cwd: string;
   closed: boolean;
@@ -167,7 +183,7 @@ export class FtpServer extends EventEmitter {
     // Connections that haven't logged in are limited per address and time
     // out quickly, so nobody on the LAN can hold the camera's slots.
     const preLogin = [...this.sessionsOpen].filter((x) => !x.authed && x.ip === ip).length;
-    if (preLogin >= (this.o.maxPreLoginPerIp ?? 2) || this.sessionsOpen.size >= (this.o.maxSessions ?? 4) + 8) {
+    if (preLogin >= this.maxPreLogin(ip) || this.sessionsOpen.size >= this.maxSessions() + 8) {
       this.log(`refused ${ip}`);
       socket.end('421 Too many connections\r\n');
       setTimeout(() => socket.destroy(), 1000).unref();
@@ -246,6 +262,18 @@ export class FtpServer extends EventEmitter {
   }
 
   // Failed logins per address in the last minute (the map is pruned as it goes).
+  // Two connections before login per address (a camera's MP4 and JPEG
+  // sessions), times the cameras configured at that address (several cameras
+  // behind one address, spec 2026-10-05-multi-camera-host-design §7).
+  private maxPreLogin(ip: string): number {
+    if (this.o.maxPreLoginPerIp !== undefined) return this.o.maxPreLoginPerIp;
+    return 2 * Math.max(1, [...this.o.users().values()].filter((u) => u.ip === ip).length);
+  }
+
+  private maxSessions(): number {
+    return this.o.maxSessions ?? 4 * Math.max(1, this.o.users().size);
+  }
+
   private recentFailures(ip: string): number[] {
     const now = this.now();
     for (const [k, v] of this.failures) {
@@ -301,13 +329,24 @@ export class FtpServer extends EventEmitter {
           reply('421 Too many failed logins, try later');
           return void s.stream.end();
         }
-        if (s.user !== undefined && same(s.user, this.o.user) && same(arg, this.o.password)) {
-          if ([...this.sessionsOpen].filter((x) => x.authed).length >= (this.o.maxSessions ?? 4)) {
+        const entry = s.user !== undefined ? this.o.users().get(s.user) : undefined;
+        if (entry && same(arg, this.o.password)) {
+          // Defence in depth (spec §7, Ruling P2-4): a camera with an IP
+          // address logs in from that address only.
+          if (entry.ip && entry.ip !== ip) {
+            this.failures.set(ip, [...this.recentFailures(ip), this.now()]);
+            this.log(`login for ${s.user} from ${ip} refused (camera address ${entry.ip})`);
+            this.emit('refused', { user: s.user, ip, expected: entry.ip });
+            return reply('530 Login incorrect');
+          }
+          // Each camera holds up to two sessions (MP4 and JPEG): the default cap scales with the users.
+          if ([...this.sessionsOpen].filter((x) => x.authed).length >= this.maxSessions()) {
             reply('421 Too many sessions');
             return void s.stream.end();
           }
           this.failures.delete(ip);
           s.authed = true;
+          s.cam = entry.cam;
           this.arm(s);
           return reply('230 Logged in');
         }
@@ -444,7 +483,7 @@ export class FtpServer extends EventEmitter {
         // not created
       }
       reply(code);
-      this.emit('failed', { name: posix.basename(path), reason: code });
+      this.emit('failed', { name: posix.basename(path), reason: code, cam: s.cam });
     };
     data.on('data', (chunk: Buffer) => {
       bytes += chunk.length;
@@ -473,7 +512,7 @@ export class FtpServer extends EventEmitter {
           s.busy = false;
           this.arm(s);
           reply('226 Transfer complete');
-          this.emit('upload', { path, name: posix.basename(path), dir: posix.dirname(path), bytes, tmpFile } satisfies Upload);
+          this.emit('upload', { path, name: posix.basename(path), dir: posix.dirname(path), bytes, tmpFile, user: s.user!, cam: s.cam! } satisfies Upload);
         }, 50);
       });
       if (out.writableFinished) out.emit('finish');

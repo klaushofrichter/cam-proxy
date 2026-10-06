@@ -134,3 +134,15 @@ describe('analytics UI text', () => {
     expect(toggleSelection(2, 0)).toBe(0);
   });
 });
+
+describe('Vision per camera on the Status card (spec 2026-10-05-multi-camera-host-design §8.2)', () => {
+  const base = { id: 'google-vision', name: 'Google Vision', enabled: true, keyMasked: null, month: { calls: 3, limit: 100 }, today: { calls: 2, cap: 0 }, paused: null, lastCall: null, lastError: null };
+  it('one row per camera when there are several; none with one', () => {
+    const rows = usageRows({ ...base, cameras: [{ id: 'cam3', today: 2, month: 3 }, { id: 'cam4', today: 0, month: 0 }] });
+    expect(rows.filter((r) => r.key.startsWith('cam-'))).toEqual([
+      { key: 'cam-cam3', label: 'cam3', text: '2 today · 3 this month' },
+      { key: 'cam-cam4', label: 'cam4', text: '0 today · 0 this month' },
+    ]);
+    expect(usageRows({ ...base, cameras: [{ id: 'cam1', today: 2, month: 3 }] }).some((r) => r.key.startsWith('cam-'))).toBe(false);
+  });
+});

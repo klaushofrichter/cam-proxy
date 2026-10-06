@@ -217,6 +217,9 @@ describe('secrets', () => {
     write('config.json', { camera: { host: 'h' }, ftp: { enabled: true } });
     expect(err(() => load())).toBe('CAMPROXY_FTP_PASSWORD: required when ftp.enabled');
     expect(load({ CAMPROXY_FTP_PASSWORD: 'f' }).secrets.ftpPassword).toBe('f');
+    // The server compares at most 256 bytes: a longer password could never log in.
+    expect(err(() => load({ CAMPROXY_FTP_PASSWORD: 'f'.repeat(257) }))).toBe('CAMPROXY_FTP_PASSWORD: longer than 256 bytes');
+    expect(load({ CAMPROXY_FTP_PASSWORD: 'f'.repeat(256) }).secrets.ftpPassword).toHaveLength(256);
   });
 });
 
@@ -232,7 +235,7 @@ describe('shipped files', () => {
     const l = load();
     // The one-camera (legacy) form: the defaults of camera cam1 and the host switch in `camera`, ftp.user (spec 2026-10-05-multi-camera-host-design §4.2).
     const { cameras: _c, cameraOrder: _o, poeSwitch, ...defaults } = JSON.parse(JSON.stringify(DEFAULTS));
-    const { ftp: _f, stills: _s, analytics: _a, events: _e, poeSwitch: _p, ...cam } = cameraDefaults('cam1');
+    const { ftp: _f, stills: _s, storage: _st, analytics: _a, events: _e, poeSwitch: _p, ...cam } = cameraDefaults('cam1');
     defaults.camera = { ...cam, name: 'Den', host: example.camera.host, poeSwitch };
     defaults.ftp = { ...defaults.ftp, user: 'camera' };
     defaults.server.dataDir = example.server.dataDir;
@@ -242,8 +245,10 @@ describe('shipped files', () => {
 
   it('config.cameras.example.json loads: two cameras, the host switch', () => {
     write('config.json', readFileSync(join(__dirname, '..', 'config.cameras.example.json'), 'utf8'));
-    const l = load();
+    const l = load({ CAMPROXY_FTP_PASSWORD: 'f'.repeat(24) });
     expect(cameraIds(l.config)).toEqual(['cam3', 'cam4']);
+    expect(cameraConfig(l.config, 'cam4')!.storage).toEqual({ sharePercent: 20 });
+    expect(l.config.composition.concurrent).toBe(2);
     expect(cameraConfig(l.config, 'cam4')!.poeSwitch).toMatchObject({ host: '192.168.60.2', port: 2 });
   });
 });

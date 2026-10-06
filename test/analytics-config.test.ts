@@ -13,7 +13,7 @@ describe('analytics settings', () => {
   it('default to no calls: disabled, limit 0, person only', () => {
     expect(DEFAULTS.analytics).toEqual({
       kinds: { person: true, vehicle: false, pet: false },
-      googleVision: { enabled: false, monthlyLimit: 0, dailyCap: 0, checksPerDay: 10 },
+      googleVision: { enabled: false, monthlyLimit: 0, dailyCap: 0, checksPerDay: 10, perCameraDailyCap: 0 },
     });
   });
 
