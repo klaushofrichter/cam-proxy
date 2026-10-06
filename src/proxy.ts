@@ -14,7 +14,7 @@ import { ReolinkClient } from './camera/client';
 import { localOffsetMinutes } from './analytics/local-day';
 import { tlsApi } from './api/tls-api';
 import { CaError, siteCa, writeSecret, type SiteCa } from './tls/ca';
-import { CameraCerts, type TlsView } from './tls/camera-certs';
+import { CameraCerts, RotateBusyError, type TlsView } from './tls/camera-certs';
 import { issuedBy, issueLeaf, leafOf, renewalDue, type Leaf } from './tls/leaf';
 import { pushCertificate, servedFingerprint } from './tls/push';
 import type { StatusPoller } from './camera/status';
@@ -281,7 +281,21 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   };
   // tls-ca-rotate (Ruling P5-3): the old files kept as *.old-<time>, a new CA,
   // a new proxy leaf, every camera pushed again (from the next tick on).
+  let rotating = false;
   const rotateCa = async (): Promise<{ from: string | null; to: string }> => {
+    // One at a time: the files move and a new key is made (a second request is refused, not queued).
+    if (rotating) throw new RotateBusyError('a CA rotation is running');
+    rotating = true;
+    try {
+      return await rotateNow();
+    } catch (err) {
+      if (!ca) caProblem = `the site CA rotation failed: ${(err as Error).message}`;
+      throw err;
+    } finally {
+      rotating = false;
+    }
+  };
+  const rotateNow = async (): Promise<{ from: string | null; to: string }> => {
     const site = running.tls.site!;
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const from = ca?.fingerprint ?? null;

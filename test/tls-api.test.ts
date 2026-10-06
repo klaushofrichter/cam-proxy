@@ -84,6 +84,16 @@ describe('the proxy side of the site CA (spec §10.4)', () => {
     expect(audit).toContain(`Site CA rotated: ${before} → ${r.body.caFingerprint}`);
   }, 60_000);
 
+  it('two rotations at once: one runs, the other is refused (409 busy)', async () => {
+    const send = () => request(p.base).post('/control/actions/tls-ca-rotate').set(auth(ADMIN_TOKEN)).send({ confirm: 'rotate' });
+    const rs = await Promise.all([send(), send()]);
+    expect(rs.map((r) => r.status).sort()).toEqual([200, 409]);
+    expect(rs.find((r) => r.status === 409)!.body.error).toBe('busy');
+    const t = (await request(p.base).get('/control/tls').set(auth(ADMIN_TOKEN))).body;
+    expect(t.caFingerprint).toBe(rs.find((r) => r.status === 200)!.body.caFingerprint);
+    expect(t.problems).toEqual([]);
+  }, 60_000);
+
   it('a camera outside the CA: no leaf, and the health item names it (Ruling P5-3)', async () => {
     const s2 = await startSim();
     const q = await startProxy(s2, { settings: {

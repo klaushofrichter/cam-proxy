@@ -37,7 +37,7 @@ import { checkEnvPath, EnvFileError, writeEnvKey } from '../config/env-file';
 import { CAMERA_HOST_NAMES, validCameraHost } from '../config/env';
 import { InventoryBusyError, InventoryStoppingError, RepairRefusedError, RUN_ID, type InventoryRunner } from '../inventory/runner';
 import type { Archive } from '../archive/service';
-import type { TlsView } from '../tls/camera-certs';
+import { RotateBusyError, type TlsView } from '../tls/camera-certs';
 import type { PushResult } from '../tls/push';
 import type { NtpOutcome } from '../cameras/ntp';
 
@@ -705,6 +705,7 @@ export function controlApi(d: ControlDeps): express.Router {
           d.audit.write({ ...base, outcome: 'success', message: `Site CA rotated: ${r.from ?? 'none'} → ${r.to}`, details: { setting: 'tls-ca', from: r.from, to: r.to, requestedBy } });
           return void res.json({ caFingerprint: r.to });
         } catch (err) {
+          if (err instanceof RotateBusyError) return fail(409, 'busy', err.message);
           d.audit.write({ ...base, outcome: 'failure', error: (err as Error).message, message: `Site CA rotation failed: ${(err as Error).message}`, details: { setting: 'tls-ca', requestedBy } });
           return fail(500, 'rotate_failed', (err as Error).message);
         }

@@ -793,7 +793,8 @@ paths:
         (failed with a detail when nothing was pushed: an open event, an HTTP camera, a tlsName camera, an address outside the CA).
         tls-ca-rotate ({"confirm":"rotate"}) makes a new site CA (the old files kept as *.old-<time>), a new proxy
         certificate, and pushes every camera again; every cams pin of this proxy must change. Answers { caFingerprint };
-        400 invalid without the confirm, 409 not_available without tls.site; a config-change audit record.
+        400 invalid without the confirm, 409 not_available without tls.site, 409 busy while another rotation runs;
+        a config-change audit record.
         camera-reboot reboots the camera (about a minute offline; every camera token becomes invalid).
         camera-powercycle cuts the camera's PoE on its switch (camera.poeSwitch, CAMPROXY_POE_SWITCH_PASSWORD)
         for offSeconds and turns it on again; it answers once PoE is back on. It shares the 120 s cooldown

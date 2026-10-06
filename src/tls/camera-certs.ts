@@ -15,6 +15,9 @@ export interface CertState {
   lastPush: { at: number; outcome: PushOutcome } | null;
   problem: string | null;
 }
+// tls-ca-rotate while another rotation runs.
+export class RotateBusyError extends Error {}
+
 // GET /control/tls (the Certificates card); the key never.
 export interface TlsView {
   site: string | null;
