@@ -25,8 +25,12 @@ export function refuseTokenInUrl(req: Request, res: Response, next: NextFunction
 }
 
 type Access = 'admin' | 'client' | 'audit' | null;
-type TokenKind = 'none' | 'invalid' | 'client' | 'admin' | 'audit' | 'session';
-export interface AccessInfo { access: Access; viaCookie: boolean; tokenKind: TokenKind }
+type TokenKind = 'none' | 'invalid' | 'client' | 'admin' | 'audit' | 'session' | 'managed-client' | 'managed-admin';
+// origin: local rights (CAMPROXY_* tokens, or a session they started) or
+// managed ones (a cams-admin-managed token, or a session it started); null
+// when nothing matched. Only local admin rights widen the command policy
+// (migration P2, Ruling R2-3).
+export interface AccessInfo { access: Access; viaCookie: boolean; tokenKind: TokenKind; origin: 'local' | 'managed' | null; tokenId?: string; tokenLabel?: string }
 export type AccessNeed = 'client' | 'admin' | 'audit-read';
 
 // The one access decision (spec 2026-10-05-multi-camera-host-design §6.6):
@@ -43,7 +47,9 @@ export interface AccessDeps {
   adminToken: () => string;
   // CAMPROXY_AUDIT_TOKEN: reads GET /control/audit, nothing else.
   auditToken: () => string | undefined;
-  sessionValid: (v: string | undefined) => boolean;
+  sessionValid: (v: string | undefined) => { origin: 'local' | 'managed' } | null;
+  // The cams-admin-managed tokens (data/admin/tokens.json); absent = none.
+  managed?: (bearer: string) => { id: string; kind: 'client' | 'admin'; label: string } | null;
   // Every 401/403 answered here, with why (the audit log records them).
   onRefused?: (req: Request, info: { status: 401 | 403; reason: string; tokenKind: TokenKind }) => void;
 }
@@ -57,18 +63,36 @@ export function clientIp(req: Request): string {
 // token is 'client', the audit token 'audit'. `viaCookie` marks a session
 // (writes then need the CSRF header). `tokenKind` says which credential
 // matched, for the audit log only; answers never tell it.
+// Order (M §10.2): local admin, managed admin, local client, managed client,
+// audit. The bearer is hashed for the managed tokens once per request.
 function accessOf(req: Request, d: AccessDeps): AccessInfo {
   const t = bearerOf(req);
   if (t !== undefined) {
-    if (tokenMatches(t, [d.adminToken()])) return { access: 'admin', viaCookie: false, tokenKind: 'admin' };
-    if (tokenMatches(t, d.tokens())) return { access: 'client', viaCookie: false, tokenKind: 'client' };
+    if (tokenMatches(t, [d.adminToken()])) return { access: 'admin', viaCookie: false, tokenKind: 'admin', origin: 'local' };
+    const m = d.managed?.(t) ?? null;
+    if (m?.kind === 'admin') return { access: 'admin', viaCookie: false, tokenKind: 'managed-admin', origin: 'managed', tokenId: m.id, tokenLabel: m.label };
+    if (tokenMatches(t, d.tokens())) return { access: 'client', viaCookie: false, tokenKind: 'client', origin: 'local' };
+    if (m?.kind === 'client') return { access: 'client', viaCookie: false, tokenKind: 'managed-client', origin: 'managed', tokenId: m.id, tokenLabel: m.label };
     const a = d.auditToken();
-    if (a && tokenMatches(t, [a])) return { access: 'audit', viaCookie: false, tokenKind: 'audit' };
-    return { access: null, viaCookie: false, tokenKind: 'invalid' };
+    if (a && tokenMatches(t, [a])) return { access: 'audit', viaCookie: false, tokenKind: 'audit', origin: 'local' };
+    return { access: null, viaCookie: false, tokenKind: 'invalid', origin: null };
   }
-  if (d.sessionValid(readCookie(req.get('cookie'), SESSION_COOKIE))) return { access: 'admin', viaCookie: true, tokenKind: 'session' };
-  return { access: null, viaCookie: false, tokenKind: 'none' };
+  const s = d.sessionValid(readCookie(req.get('cookie'), SESSION_COOKIE));
+  if (s) return { access: 'admin', viaCookie: true, tokenKind: 'session', origin: s.origin };
+  return { access: null, viaCookie: false, tokenKind: 'none', origin: null };
 }
+
+// After requireAccess('admin'): 403 local_admin_only unless the rights are
+// local (the CAMPROXY_ADMIN_TOKEN, or a session it started). Widening the
+// command policy needs it (Ruling R2-3).
+export function requireLocalAdmin(): RequestHandler {
+  return (_req, res, next) => ((res.locals.access as AccessInfo | undefined)?.origin === 'local' ? next() : void res.status(403).json({ error: 'local_admin_only' }));
+}
+
+// The audit `user` of an admin request: 'admin' for local rights,
+// `token:<label>` for a managed admin token, 'managed-admin' for a session a
+// managed token started. Never a token or a hash.
+export const actorOf = (a: AccessInfo | undefined): string => (a?.origin !== 'managed' ? 'admin' : a.tokenLabel ? `token:${a.tokenLabel}` : 'managed-admin');
 
 const WRITE = new Set(['POST', 'PUT', 'DELETE', 'PATCH']);
 

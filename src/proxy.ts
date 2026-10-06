@@ -5,6 +5,7 @@ import http from 'http';
 import https from 'https';
 import type { AddressInfo } from 'net';
 import { join } from 'path';
+import { createHash } from 'crypto';
 import { openCatalog, type Catalog } from './catalog/db';
 import { adoptLegacyUsage, usageByCamera, clearUnmapped, countAnalysesByStatus, listUnmapped, usageBetween } from './catalog/analyses';
 import { countAllClips, countClips } from './catalog/clips';
@@ -59,6 +60,7 @@ import { auditApi, controlApi, sessionRoutes } from './api/control-api';
 import { createMetrics } from './api/metrics';
 import { createSessionSigner } from './api/session';
 import { createLoginLinks } from './api/login-links';
+import { TokenStore } from './fleet/token-store';
 import { composeApi, hasAudio } from './api/compose-api';
 import { createComposer, ffmpegRunner } from './compose/jobs';
 import { clockText, defaultFont } from './compose/ffmpeg';
@@ -657,7 +659,14 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // previews are one key), and at most 60 records per IP per 10 minutes.
   const refusals = new RefusalThrottle();
   const refusalsPerIp = new IpCap(60);
+  // cams-admin-managed token hashes (migration P2, M §10.2): read whenever
+  // data/admin/tokens.json exists (R2-7); nothing is created when it doesn't.
+  const tokenStore = new TokenStore({
+    file: join(loaded.config.server.dataDir, 'admin', 'tokens.json'),
+    localDigests: () => [loaded.secrets.adminToken, ...loaded.secrets.tokens, ...(loaded.secrets.auditToken ? [loaded.secrets.auditToken] : [])].map((x) => createHash('sha256').update(x).digest()),
+  });
   const access: AccessDeps = {
+    managed: (b) => tokenStore.match(b),
     tokens: () => loaded.secrets.tokens,
     adminToken: () => loaded.secrets.adminToken,
     auditToken: () => loaded.secrets.auditToken,

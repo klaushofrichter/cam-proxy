@@ -47,7 +47,7 @@ describe('cameraParam (spec §6.1, §3.3)', () => {
 });
 
 describe('can() (spec §6.6): what the token kind allows, for any camera', () => {
-  const p = (access: AccessInfo['access'], tokenKind: AccessInfo['tokenKind'] = 'client'): AccessInfo => ({ access, viaCookie: tokenKind === 'session', tokenKind });
+  const p = (access: AccessInfo['access'], tokenKind: AccessInfo['tokenKind'] = 'client'): AccessInfo => ({ access, viaCookie: tokenKind === 'session', tokenKind, origin: access ? 'local' : null });
   it.each([
     [p('admin', 'admin'), 'admin', true],
     [p('admin', 'session'), 'client', true],

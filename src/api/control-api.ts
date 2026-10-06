@@ -20,14 +20,14 @@ import { maskKey } from '../analytics/providers';
 import type { Storage } from '../storage';
 import type { StreamLog } from '../stream/log';
 import { AuditQueryError, type AuditLog, type Outcome } from '../audit/audit-log';
-import { clientIp, tokenMatches } from './auth';
+import { actorOf, clientIp, tokenMatches, type AccessInfo } from './auth';
 import { cameraParam, RESTART_RETRY_S } from './camera-param';
 import type { CameraRegistry } from '../cameras/registry';
 import { RefusalThrottle } from '../audit/throttle';
 import { isAuditAction } from '../audit/actions';
 import { DAY, dayStart } from '../time-units';
 import { eventsStored, eventsStoredByCamera } from './metrics';
-import { readCookie, SESSION_COOKIE, SESSION_MS, type createSessionSigner } from './session';
+import { readCookie, SESSION_COOKIE, SESSION_MS, type createSessionSigner, type SessionOrigin } from './session';
 import type { createLoginLinks } from './login-links';
 import type { RecordingsStatus } from '../recordings/side';
 import type { HealthSummary } from '../health/summary';
@@ -174,6 +174,9 @@ async function cameraCall(res: Response, f: () => Promise<unknown>): Promise<voi
 
 // Who sent a request, for its audit record.
 const who = (req: express.Request) => ({ ip: clientIp(req), userAgent: req.get('user-agent') });
+// The audit user of an admin request (after requireAccess): 'admin', or the
+// managed token's label (migration P2).
+const actor = (req: express.Request) => actorOf(req.res?.locals.access as AccessInfo | undefined);
 
 // Sign-ins with the token form per client and 15 minutes (Klaus, 2026-10-01: 40).
 export const LOGIN_ATTEMPTS = 40;
@@ -181,16 +184,16 @@ export const LOGIN_ATTEMPTS = 40;
 export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnType<typeof createSessionSigner>; links: ReturnType<typeof createLoginLinks>; audit: AuditLog }): express.Router {
   const r = express.Router();
   const flags = (req: express.Request) => `HttpOnly; SameSite=Strict; Path=/${req.secure ? '; Secure' : ''}`;
-  const startSession = (req: express.Request, res: Response) => res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${d.sessions.issue()}; Max-Age=${SESSION_MS / 1000}; ${flags(req)}`);
+  const startSession = (req: express.Request, res: Response, origin: SessionOrigin) => res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${d.sessions.issue(origin)}; Max-Age=${SESSION_MS / 1000}; ${flags(req)}`);
   // A `login` audit record; never the token or the code, only how and why.
   const MESSAGES = {
     'token-form': { ok: 'Admin signed in with the admin token', refused: 'Sign-in with the admin token refused' },
     'login-link': { ok: 'Admin signed in with a one-time link', refused: 'One-time link refused (used or expired)' },
   } as const;
-  const rec = (req: express.Request, outcome: Outcome, method: 'token-form' | 'login-link', reason?: string, suppressed = 0) =>
+  const rec = (req: express.Request, outcome: Outcome, method: 'token-form' | 'login-link', reason?: string, suppressed = 0, origin: SessionOrigin = 'local') =>
     d.audit.write({
       action: 'login', category: ['authentication'], type: ['start'], outcome,
-      ...(outcome === 'success' ? { user: 'admin' } : {}),
+      ...(outcome === 'success' ? { user: origin === 'local' ? 'admin' : 'managed-admin' } : {}),
       ...who(req),
       message: reason === 'rate-limited' ? 'Sign-in refused: too many attempts' : MESSAGES[method][outcome === 'success' ? 'ok' : 'refused'],
       details: { auth: { method, ...(reason ? { reason } : {}), ...(suppressed ? { suppressed } : {}) } },
@@ -225,12 +228,13 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
     },
   });
   r.get('/login-link', linkAttempts, (req, res) => {
-    if (!d.links.consume(typeof req.query.code === 'string' ? req.query.code : undefined)) {
+    const origin = d.links.consume(typeof req.query.code === 'string' ? req.query.code : undefined);
+    if (!origin) {
       rec(req, 'failure', 'login-link', 'link-used-or-expired');
       return void res.redirect(302, '/?link=expired');
     }
-    rec(req, 'success', 'login-link');
-    startSession(req, res);
+    rec(req, 'success', 'login-link', undefined, 0, origin);
+    startSession(req, res, origin);
     res.redirect(302, '/');
   });
   r.post('/login', attempts, (req, res) => {
@@ -240,14 +244,14 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
       return void res.status(401).json({ error: 'unauthorized' });
     }
     rec(req, 'success', 'token-form');
-    startSession(req, res);
+    startSession(req, res, 'local');
     res.status(204).end();
   });
-  r.get('/session', (req, res) => void res.json({ loggedIn: d.sessions.verify(readCookie(req.get('cookie'), SESSION_COOKIE)) }));
+  r.get('/session', (req, res) => void res.json({ loggedIn: !!d.sessions.verify(readCookie(req.get('cookie'), SESSION_COOKIE)) }));
   r.post('/logout', (req, res) => {
     const valid = d.sessions.verify(readCookie(req.get('cookie'), SESSION_COOKIE));
     const base = { action: 'logout', category: ['authentication'], type: ['end'], outcome: 'success' as const, ...who(req) };
-    if (valid) d.audit.write({ ...base, user: 'admin', message: 'Admin signed out' });
+    if (valid) d.audit.write({ ...base, user: valid.origin === 'local' ? 'admin' : 'managed-admin', message: 'Admin signed out' });
     else {
       const t = anonLogouts.take(base.ip, 'logout-without-session');
       if (t.record) d.audit.write({ ...base, message: 'Sign-out without a session', details: { auth: { reason: 'no-session', ...(t.suppressed ? { suppressed: t.suppressed } : {}) } } });
@@ -300,8 +304,10 @@ export function controlApi(d: ControlDeps): express.Router {
 
   // A one-time sign-in link for a signed-in cams user (admin token only).
   r.post('/login-links', (req, res) => {
-    const link = d.links.issue();
-    d.audit.write({ action: 'login-link-issued', category: ['authentication'], type: ['creation'], outcome: 'success', user: 'admin', ...who(req), message: 'One-time sign-in link issued' });
+    // The link keeps the minting rights' origin (R2-3): a managed admin token
+    // can't mint a link to a local session.
+    const link = d.links.issue((res.locals.access as AccessInfo | undefined)?.origin === 'local' ? 'local' : 'managed');
+    d.audit.write({ action: 'login-link-issued', category: ['authentication'], type: ['creation'], outcome: 'success', user: actor(req), ...who(req), message: 'One-time sign-in link issued' });
     res.status(201).json(link);
   });
 
@@ -366,7 +372,7 @@ export function controlApi(d: ControlDeps): express.Router {
     const to = name as string;
     const from = d.cameraName.current(cam);
     const requestedBy = res.locals.access?.viaCookie ? 'session' : 'token';
-    const base = { action: 'camera-name', category: ['configuration'], type: ['change'], user: 'admin', ...who(req), camera: cam };
+    const base = { action: 'camera-name', category: ['configuration'], type: ['change'], user: actor(req), ...who(req), camera: cam };
     try {
       const read = await d.cameraName.write(cam, to);
       d.audit.write({ ...base, outcome: 'success', message: read === from ? `Camera name set: "${read}" (unchanged)` : `Camera name changed: "${from}" → "${read}"`, details: { from, to: read, ...(read !== to ? { requested: to } : {}), requestedBy } });
@@ -396,7 +402,7 @@ export function controlApi(d: ControlDeps): express.Router {
     const replaced = d.setVisionKey(key);
     const masked = maskKey(key)!;
     d.audit.write({
-      action: 'secret-override', category: ['configuration'], type: ['change'], outcome: 'success', user: 'admin', ...who(req),
+      action: 'secret-override', category: ['configuration'], type: ['change'], outcome: 'success', user: actor(req), ...who(req),
       message: `Google Vision key set manually (${masked}), ${replaced === 'none' ? 'where no key was set' : `replacing the ${replaced} key`}`,
       details: { secret: 'CAMPROXY_GOOGLE_VISION_KEY', masked, replaced },
     });
@@ -436,7 +442,7 @@ export function controlApi(d: ControlDeps): express.Router {
     const changes = settingPaths(after)
       .map((p) => ({ key: p, from: getPath(before, p), to: getPath(after, p), ...(needsProcessRestart(p) ? { restart: 'process' } : needsRestart(p) ? { restart: 'restart' } : {}) }))
       .filter((c) => JSON.stringify(c.from) !== JSON.stringify(c.to));
-    if (changes.length) d.audit.write({ action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', user: 'admin', ...who(req), message: `${all ? 'Settings reset to defaults' : 'Settings changed'}: ${changes.map((c) => c.key).join(', ')}`, details: { changes, ...(all ? { reset: 'all' } : {}) } });
+    if (changes.length) d.audit.write({ action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', user: actor(req), ...who(req), message: `${all ? 'Settings reset to defaults' : 'Settings changed'}: ${changes.map((c) => c.key).join(', ')}`, details: { changes, ...(all ? { reset: 'all' } : {}) } });
   };
   r.put('/config', (req, res) => {
     const before = d.loaded().config;
@@ -499,7 +505,7 @@ export function controlApi(d: ControlDeps): express.Router {
         const done = res.writableFinished;
         const ok = done && res.statusCode < 400;
         const result = !done ? 'aborted' : ok ? 'ok' : String((res.locals.errorCode as string | undefined) ?? res.statusCode);
-        d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: !done ? 'unknown' : ok ? 'success' : 'failure', user: 'admin', ...who(req), message: `Control action ${name}: ${result}`, details: { action: name, result, requestedBy }, ...(target ? { camera: target } : {}) });
+        d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: !done ? 'unknown' : ok ? 'success' : 'failure', user: actor(req), ...who(req), message: `Control action ${name}: ${result}`, details: { action: name, result, requestedBy }, ...(target ? { camera: target } : {}) });
       });
     }
     const fail = (status: number, error: string, detail?: string, extra: object = {}) => {
@@ -515,7 +521,7 @@ export function controlApi(d: ControlDeps): express.Router {
     // Several cameras: a camera action names its camera (Ruling P1-12; the routes are phase 2).
     if (CAMERA_ACTIONS.has(name) && target === null) {
       // Actions with their own records are audited here; the others by the close handler above. No camera: none was named.
-      if (OWN_AUDIT.has(name)) d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: 'failure', user: 'admin', ...who(req), message: `Control action ${name}: camera_required`, details: { action: name, result: 'camera_required', requestedBy } });
+      if (OWN_AUDIT.has(name)) d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: 'failure', user: actor(req), ...who(req), message: `Control action ${name}: camera_required`, details: { action: name, result: 'camera_required', requestedBy } });
       return fail(400, 'camera_required', cameraRequired(`POST /control/cameras/<id>/actions/${name}`));
     }
     // A camera action has its camera from here on.
@@ -590,7 +596,7 @@ export function controlApi(d: ControlDeps): express.Router {
         if (noSwitch()) return;
         const sw = d.poeSwitch.info(cam);
         const where = `${sw.host} port ${sw.port}`;
-        const base = { action: 'camera-poe-on', category: ['host'], type: ['change'], user: 'admin', ...who(req), camera: cam };
+        const base = { action: 'camera-poe-on', category: ['host'], type: ['change'], user: actor(req), ...who(req), camera: cam };
         try {
           const r = await d.poeSwitch.poeOn(cam);
           d.audit.write({ ...base, outcome: 'success', message: r.wasOn ? `Camera PoE on (${where}): it was on already` : `Camera PoE turned on (${where})`, details: { switch: sw, wasOn: r.wasOn, requestedBy } });
@@ -625,7 +631,7 @@ export function controlApi(d: ControlDeps): express.Router {
         // CAMERA_HOST is the one camera's address (spec §4.2).
         if (cameraIds(d.running()).length > 1) return fail(409, 'not_available', 'several cameras: set cameras[].host in config.json');
         const line = `CAMERA_HOST=${host}`;
-        const base = { action: 'camera-address', category: ['configuration'], type: ['change'], user: 'admin', ...who(req) };
+        const base = { action: 'camera-address', category: ['configuration'], type: ['change'], user: actor(req), ...who(req) };
         try {
           const w = writeEnvKey(checkEnvPath(d.envFile()), CAMERA_HOST_NAMES as unknown as string[], host);
           d.audit.write({ ...base, outcome: 'success', message: `Camera address set in .env: "${w.previous ?? ''}" → "${host}" (applies after a restart)`, details: { from: w.previous, to: host, key: w.key, backup: w.backup, requestedBy } });
@@ -640,7 +646,7 @@ export function controlApi(d: ControlDeps): express.Router {
       // Restart the process (#71): answer first, then the normal stop and exit 0.
       case 'restart-proxy':
         // One record per restart: a second request before the stop is the same restart.
-        if (!restartRequested) d.audit.write({ action: 'proxy-restart', category: ['process'], type: ['change'], outcome: 'success', user: 'admin', ...who(req), message: 'Proxy process restart requested through the control API', details: { requestedBy } });
+        if (!restartRequested) d.audit.write({ action: 'proxy-restart', category: ['process'], type: ['change'], outcome: 'success', user: actor(req), ...who(req), message: 'Proxy process restart requested through the control API', details: { requestedBy } });
         restartRequested = true;
         res.once('close', () => setImmediate(() => d.restartProcess()));
         return void res.status(202).end();
@@ -686,7 +692,7 @@ export function controlApi(d: ControlDeps): express.Router {
       case 'archive-clear': {
         const count: unknown = req.body?.count;
         if (!Number.isSafeInteger(count) || (count as number) < 0) return fail(400, 'invalid', 'count is the number of clips in the Archive');
-        const r = d.archive.clear(count as number, { user: 'admin', ...who(req), requestedBy });
+        const r = d.archive.clear(count as number, { user: actor(req), ...who(req), requestedBy });
         if ('mismatch' in r) return fail(409, 'count_mismatch', `the Archive has ${r.mismatch} clips`, { count: r.mismatch });
         return void res.json(r);
       }
@@ -700,18 +706,18 @@ export function controlApi(d: ControlDeps): express.Router {
       }
       // "Push now" (spec §10.4): the push's own camera-cert-push record when one ran.
       case 'camera-cert-push':
-        return void res.json(await d.tls.pushNow(cam, { user: 'admin', ...who(req), requestedBy }));
+        return void res.json(await d.tls.pushNow(cam, { user: actor(req), ...who(req), requestedBy }));
       // The admin's decision to drop a camera's site-CA trust or pin (back to first use); audited.
       case 'camera-trust-clear': {
         if (req.body?.confirm !== 'clear') return fail(400, 'invalid', "the camera loses its site-CA trust or pin and needs a Push now: send {confirm: 'clear'}");
-        const st = d.tls.clearTrust(cam, { user: 'admin', ...who(req), requestedBy });
+        const st = d.tls.clearTrust(cam, { user: actor(req), ...who(req), requestedBy });
         if (!st) return fail(409, 'not_available', 'no camera certificate trust is kept on this proxy');
         return void res.json(st);
       }
       // After tls-ca-rotate: stop trusting the previous CA now (else 30 days); audited.
       case 'tls-ca-drop-previous':
         if (req.body?.confirm !== 'drop') return fail(400, 'invalid', "cameras still on the previous CA are refused from now on: send {confirm: 'drop'}");
-        if (!d.tls.dropPrevious({ user: 'admin', ...who(req), requestedBy })) return fail(409, 'not_available', 'no previous CA is trusted');
+        if (!d.tls.dropPrevious({ user: actor(req), ...who(req), requestedBy })) return fail(409, 'not_available', 'no previous CA is trusted');
         return void res.json({ dropped: true });
       case 'camera-ntp-set': {
         const outcome = await d.cameraNtp(cam);
@@ -722,7 +728,7 @@ export function controlApi(d: ControlDeps): express.Router {
       // only with {confirm: 'rotate'}; one config-change record.
       case 'tls-ca-rotate': {
         if (req.body?.confirm !== 'rotate') return fail(400, 'invalid', "a new CA breaks every cams pin of this proxy: send {confirm: 'rotate'}");
-        const base = { action: 'config-change', category: ['configuration'], type: ['change'], user: 'admin', ...who(req) };
+        const base = { action: 'config-change', category: ['configuration'], type: ['change'], user: actor(req), ...who(req) };
         const rotating = d.tls.rotate();
         if (!rotating) return fail(409, 'not_available', 'no site CA: tls.site is not set');
         try {

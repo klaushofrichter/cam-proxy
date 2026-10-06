@@ -3,7 +3,7 @@ import type { AuditLog } from '../audit/audit-log';
 import { EnrollError } from '../fleet/enroll';
 import { adminUrlProblem, normaliseCode } from '../fleet/protocol';
 import type { CamsAdmin } from '../fleet/service';
-import { clientIp } from './auth';
+import { actorOf, clientIp, type AccessInfo } from './auth';
 
 // The Status page's cams-admin card (spec 2026-10-06-cams-admin-phase1-design
 // §9.2): mounted behind requireAccess('admin') (the admin session with the
@@ -11,7 +11,7 @@ import { clientIp } from './auth';
 // audited or answered; no key material is ever served.
 export function camsAdminApi(d: { camsAdmin: CamsAdmin; audit: AuditLog }): express.Router {
   const r = express.Router();
-  const who = (req: express.Request) => ({ user: 'admin', ip: clientIp(req), userAgent: req.get('user-agent') });
+  const who = (req: express.Request) => ({ user: actorOf(req.res?.locals.access as AccessInfo | undefined), ip: clientIp(req), userAgent: req.get('user-agent') });
 
   r.get('/admin', (_req, res) => void res.json(d.camsAdmin.view()));
 
