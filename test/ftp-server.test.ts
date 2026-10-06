@@ -461,4 +461,14 @@ describe('a user per camera (spec 2026-10-05-multi-camera-host-design §7)', () 
     for (let i = 0; i < 12; i++) await client('ftp-pw', ['cam3', 'cam4', 'cam5'][i % 3]);
     await expect(client('ftp-pw', 'cam3')).rejects.toThrow(/421/);
   });
+
+  it('two sessions before login per camera at that address: four cameras on one address may connect at once', async () => {
+    const users = () => new Map(['cam3', 'cam4'].map((u) => [u, { cam: u, ip: '127.0.0.1' }]));
+    const { port } = await setup({ users });
+    const open = await Promise.all([1, 2, 3, 4].map(() => rawSession(port)));
+    expect(open.map((x) => x.greeting.slice(0, 3))).toEqual(['220', '220', '220', '220']);
+    const fifth = await rawSession(port);
+    expect(fifth.greeting).toMatch(/^421/);
+    for (const x of [...open, fifth]) x.close();
+  });
 });

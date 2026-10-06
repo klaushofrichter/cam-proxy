@@ -172,7 +172,7 @@ export class FtpServer extends EventEmitter {
     // Connections that haven't logged in are limited per address and time
     // out quickly, so nobody on the LAN can hold the camera's slots.
     const preLogin = [...this.sessionsOpen].filter((x) => !x.authed && x.ip === ip).length;
-    if (preLogin >= (this.o.maxPreLoginPerIp ?? 2) || this.sessionsOpen.size >= this.maxSessions() + 8) {
+    if (preLogin >= this.maxPreLogin(ip) || this.sessionsOpen.size >= this.maxSessions() + 8) {
       this.log(`refused ${ip}`);
       socket.end('421 Too many connections\r\n');
       setTimeout(() => socket.destroy(), 1000).unref();
@@ -251,6 +251,14 @@ export class FtpServer extends EventEmitter {
   }
 
   // Failed logins per address in the last minute (the map is pruned as it goes).
+  // Two connections before login per address (a camera's MP4 and JPEG
+  // sessions), times the cameras configured at that address (several cameras
+  // behind one address, spec 2026-10-05-multi-camera-host-design §7).
+  private maxPreLogin(ip: string): number {
+    if (this.o.maxPreLoginPerIp !== undefined) return this.o.maxPreLoginPerIp;
+    return 2 * Math.max(1, [...this.o.users().values()].filter((u) => u.ip === ip).length);
+  }
+
   private maxSessions(): number {
     return this.o.maxSessions ?? 4 * Math.max(1, this.o.users().size);
   }

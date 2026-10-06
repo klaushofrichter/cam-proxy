@@ -1,4 +1,5 @@
-// The multi-camera e2e servers: three cam-sims and one cam-proxy over them.
+// The multi-camera e2e servers: three cam-sims and one cam-proxy over them
+// (one go2rtc, one FTP server for all three).
 import { existsSync, mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -25,8 +26,10 @@ async function main() {
     stills: { enabled: !!GO2RTC },
     // One go2rtc for every camera (spec §8.5).
     go2rtc: { binary: GO2RTC ?? 'go2rtc', rtspPort: 18800, apiPort: 18850 },
+    // One FTP server, a user per camera (spec §7).
+    ftp: { enabled: true, port: 18760, passive: '18761-18790', publicHost: '127.0.0.1', stream: 'sub' },
   }));
-  const proxy = createProxy(loadConfig({ CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: 'e2e-proxy-pw' }, { cwd: dir }));
+  const proxy = createProxy(loadConfig({ CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: 'e2e-proxy-pw', CAMPROXY_FTP_PASSWORD: 'e2e-multi-ftp-password-000' }, { cwd: dir }));
   await proxy.start({ port: PROXY_PORT, host: '127.0.0.1' });
   const stop = async () => {
     await proxy.stop({ reason: 'e2e' });

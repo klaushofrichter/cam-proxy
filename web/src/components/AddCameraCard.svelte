@@ -11,6 +11,8 @@
   let host = $state('');
   let protocol = $state<'https' | 'http'>('https');
   let user = $state('proxy');
+  // FTP clip uploads: off until asked for (the passive range needs 10 ports per camera with FTP).
+  let ftp = $state(false);
   let message = $state('');
   let touched = $state(false);
   const problem = $derived(newCameraProblem({ id: id.trim(), host }, existing));
@@ -21,7 +23,7 @@
     message = '';
     const cam = id.trim();
     try {
-      const view = await api<Record<string, unknown>>('PUT', '/control/config', { cameras: { [cam]: { host: host.trim(), protocol, user: user.trim() || 'proxy', ...(name.trim() ? { name: name.trim() } : {}) } } });
+      const view = await api<Record<string, unknown>>('PUT', '/control/config', { cameras: { [cam]: { host: host.trim(), protocol, user: user.trim() || 'proxy', ftp: { enabled: ftp }, ...(name.trim() ? { name: name.trim() } : {}) } } });
       message = `Camera ${cam} added; it starts now`;
       id = name = host = '';
       touched = false;
@@ -43,6 +45,7 @@
       <select bind:value={protocol} data-testid="add-camera-protocol"><option value="https">https</option><option value="http">http</option></select>
     </label>
     <label>User <input bind:value={user} autocomplete="off" data-testid="add-camera-user" /></label>
+    <label class="check"><input type="checkbox" bind:checked={ftp} data-testid="add-camera-ftp" /> Clip uploads (FTP)</label>
     <div class="row"><button type="submit" data-testid="add-camera-save">Add</button></div>
   </form>
   {#if touched && problem}<p class="field-error" data-testid="add-camera-problem">{problem}</p>{/if}
@@ -54,6 +57,7 @@
   h3 { margin: 0 0 6px; font-size: 16px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; align-items: end; }
   label { display: grid; gap: 4px; font-size: 13px; }
+  label.check { display: flex; align-items: center; gap: 6px; }
   input, select { padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; }
   button { padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); cursor: pointer; color: var(--text); }
   button:hover { border-color: var(--accent); }
