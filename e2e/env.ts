@@ -15,3 +15,6 @@ export const POE_SWITCH_PASSWORD = 'e2e-switch-password-not-a-secret';
 export const STATE_FILE = 'e2e/.auth/state.json';
 // Find camera (pi-config spec §3): a fake ONVIF WS-Discovery responder on this UDP port.
 export const DISCOVERY_PORT = 18602;
+// A cams-admin-managed client token seeded into data/admin/tokens.json (migration P2; test-only).
+export const MANAGED_TOKEN = 'e2e-managed-client-token-not-a-secret-000';
+export const MANAGED_TOKEN_ID = 'tok_E2E0000000000000000M';

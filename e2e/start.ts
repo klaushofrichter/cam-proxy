@@ -8,6 +8,9 @@ import { loadConfig } from '../src/config/load';
 import { createProxy, type Proxy } from '../src/proxy';
 import { startVisionMock } from '../test/helpers/vision-mock';
 import { startPoeSwitchMock } from '../test/helpers/poe-switch-mock';
+import { MANAGED_TOKEN, MANAGED_TOKEN_ID } from './env';
+import { writePrivateJson } from '../src/fleet/private-file';
+import { createHash } from 'crypto';
 import { ADMIN_TOKEN, CLIENT_TOKEN, DISCOVERY_PORT, FTP, FTP_PASSWORD, POE_SWITCH_PASSWORD, POE_SWITCH_PORT, PROXY_PORT, SIM, SIM_CONTROL_TOKEN, VISION_KEY, VISION_MOCK_PORT } from './env';
 
 // go2rtc and MediaMTX from tools/ (scripts/install-*.sh) unless CI set them.
@@ -40,6 +43,8 @@ async function main() {
     go2rtc: { binary: GO2RTC ?? 'go2rtc', rtspPort: 18585, apiPort: 18586 },
     ftp: { enabled: true, port: FTP.port, passive: FTP.passive, publicHost: '127.0.0.1', stream: 'sub' },
   }));
+  // One cams-admin-managed client token (migration P2: the card's Managed tokens).
+  writePrivateJson(join(dir, 'data', 'admin', 'tokens.json'), { v: 1, revision: 1, blocked: [], tokens: [{ id: MANAGED_TOKEN_ID, kind: 'client', hash: `sha256:${createHash('sha256').update(MANAGED_TOKEN).digest('hex')}`, label: 'cams e2e', retireAt: null }] });
   // A stand-in for Google Vision; GET /calls tells the tests how often it was asked.
   const vision = await startVisionMock({ key: VISION_KEY, port: VISION_MOCK_PORT });
   // A stand-in for the camera's PoE switch (#85; the real one is never used):
