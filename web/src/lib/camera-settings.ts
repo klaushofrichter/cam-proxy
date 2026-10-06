@@ -1,7 +1,9 @@
 // Per-camera settings and actions in the admin UI (spec
 // 2026-10-05-multi-camera-host-design §6.3). Pure: tested in
 // test/camera-settings-ui.test.ts.
-const ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
+// The server's rules (src/config/schema.ts CAMERA_ID, CAMERA_HOST).
+const ID = /^(?!file$)(?!.*-file$)[a-z0-9][a-z0-9-]{0,31}$/;
+const HOST = /^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$/;
 
 // The host's settings by group (first path segment), and the selected camera's.
 export function settingGroups(paths: string[], camera: string | null): { host: Record<string, string[]>; camera: string[] } {
@@ -26,9 +28,10 @@ export function cameraPath(id: string | null, multi: boolean, suffix: string): s
 
 // Why a camera can't be added like this, or null.
 export function newCameraProblem(c: { id: string; host: string }, existing: string[]): string | null {
-  if (!ID.test(c.id)) return 'the id is lower-case letters, digits and -, up to 32';
+  if (!ID.test(c.id)) return 'the id is lower-case letters, digits and -, up to 32 (not "file" or ending in "-file")';
   if (existing.includes(c.id)) return `${c.id} exists already`;
   if (!c.host.trim()) return 'the camera needs an address';
+  if (!HOST.test(c.host.trim())) return 'the address is a name or IP address, optional :port';
   return null;
 }
 

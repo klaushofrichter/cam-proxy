@@ -26,7 +26,21 @@ interface StreamInfo { producers: unknown[]; consumers: unknown[] }
 // Each camera's password reaches go2rtc only through its own environment
 // variable (spec 2026-10-05-multi-camera-host-design §8.5).
 export const passwordEnv = (cam: string): string => `CAM_${cam.toUpperCase().replace(/-/g, '_')}_PASSWORD`;
-const rtsp = (s: StreamSource, pass: string, path: string) => `rtsp://${encodeURIComponent(s.user)}:${pass}@${s.host}:${s.port}/${path}`;
+// go2rtc expands ${VAR} anywhere in its config, and it holds every camera's
+// password variable: a source field that could carry one is refused (review
+// of #173). The user is percent-encoded; the password is an env reference or
+// percent-encoded; the paths are fixed.
+const SAFE_HOST = /^[A-Za-z0-9.-]{1,253}$/;
+const SAFE_CAM = /^[a-z0-9][a-z0-9-]{0,31}$/;
+function checkSource(s: StreamSource): void {
+  if (!SAFE_CAM.test(s.cam)) throw new Error(`${s.cam}: unsafe stream source camera id`);
+  if (!SAFE_HOST.test(s.host)) throw new Error(`${s.cam}: unsafe stream source host`);
+  if (!Number.isInteger(s.port) || s.port < 1 || s.port > 65535) throw new Error(`${s.cam}: unsafe stream source port`);
+}
+const rtsp = (s: StreamSource, pass: string, path: string) => {
+  checkSource(s);
+  return `rtsp://${encodeURIComponent(s.user)}:${pass}@${s.host}:${s.port}/${path}`;
+};
 const PATHS = { sub: 'h264Preview_01_sub', main: 'h264Preview_01_main' } as const;
 
 // The config file: two streams per camera, no password in it.
@@ -100,7 +114,16 @@ export class Go2rtc extends EventEmitter {
 
   private async spawn(): Promise<void> {
     const binary = this.o.binary ?? 'go2rtc';
-    const sources = this.o.sources();
+    // An unsafe source (never past the config checks) leaves only that camera out.
+    const sources = this.o.sources().filter((x) => {
+      try {
+        checkSource(x);
+        return true;
+      } catch (err) {
+        logger.error({ cameraId: x.cam, err: (err as Error).message }, 'go2rtc_source_refused');
+        return false;
+      }
+    });
     const file = join(this.cwd!, 'go2rtc.json');
     writeFileSync(file, go2rtcConfig(this.o, sources), { mode: 0o600 });
     const p = spawn(binary, ['-c', file], {
@@ -210,6 +233,7 @@ export class Go2rtc extends EventEmitter {
   // (Ruling P2-1: the password travels in the loopback API call, never
   // logged; at the next spawn it is in the environment instead).
   async setStream(s: StreamSource): Promise<void> {
+    checkSource(s);
     this.sent.add(s.password);
     if (!(await this.reachable())) return;
     for (const kind of ['sub', 'main'] as const) {

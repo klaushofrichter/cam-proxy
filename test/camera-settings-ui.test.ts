@@ -16,8 +16,12 @@ describe('per-camera settings (spec 2026-10-05-multi-camera-host-design §6.3)',
   it('a new camera: a valid, unused id and an address', () => {
     expect(newCameraProblem({ id: 'cam6', host: '192.168.60.16' }, ['cam3'])).toBeNull();
     expect(newCameraProblem({ id: 'cam3', host: 'x' }, ['cam3'])).toBe('cam3 exists already');
-    expect(newCameraProblem({ id: 'Cam 6', host: 'x' }, [])).toBe('the id is lower-case letters, digits and -, up to 32');
+    expect(newCameraProblem({ id: 'Cam 6', host: 'x' }, [])).toBe('the id is lower-case letters, digits and -, up to 32 (not "file" or ending in "-file")');
     expect(newCameraProblem({ id: 'cam6', host: '' }, [])).toBe('the camera needs an address');
+    // As the server checks it (review of #173): a name or address with an optional port, nothing else.
+    expect(newCameraProblem({ id: 'cam6', host: 'x${CAM_CAM1_PASSWORD}.evil.example' }, [])).toBe('the address is a name or IP address, optional :port');
+    expect(newCameraProblem({ id: 'cam6', host: '192.168.60.16:8443' }, [])).toBeNull();
+    expect(newCameraProblem({ id: 'file', host: 'x' }, [])).toBe('the id is lower-case letters, digits and -, up to 32 (not "file" or ending in "-file")');
   });
   it("the Status page's storage per camera: one row each, with several", () => {
     const by = { cam3: { stills: { bytes: 2 * 2 ** 30, files: 1 }, previews: { bytes: 0, files: 0 }, clips: { bytes: 2 ** 20, files: 1 }, recordings: { bytes: 0, files: 0 } } };
