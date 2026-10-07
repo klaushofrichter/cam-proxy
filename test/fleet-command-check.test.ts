@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { checkCommand, CommandLimits, SeenIds, type CheckContext } from '../src/fleet/command-check';
 import { IMPLEMENTED } from '../src/fleet/policy';
 import { generateKeyPair, signEnvelope, type Envelope } from '../src/fleet/protocol';
-import { fixtures, vectors, type FixtureContext } from './helpers/contract';
+import { fixtures, pending, vectors, type FixtureContext } from './helpers/contract';
 
 // The command check (contract P2, "Check order on the proxy"), steps 1-11.
 const SERVER = generateKeyPair();
@@ -152,6 +152,10 @@ describe('every contract fixture for the proxy', () => {
     expect(cmds.map((x) => x.name)).toContain('valid-command-revocation-while-paused');
   });
   for (const { name, f } of cmds) {
+    if (pending(f, IMPLEMENTED)) {
+      it.skip(`${name} (pending: not implemented yet)`, () => {});
+      continue;
+    }
     it(name, () => {
       const d = checkCommand(f.message as never, ctxOf(f.$context!));
       if (name.startsWith('valid-')) expect(d.kind).toBe('run');

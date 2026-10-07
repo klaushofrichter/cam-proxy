@@ -35,10 +35,19 @@ export interface Vectors {
 export const vectors = json(join(CONTRACT, 'vectors.json')) as Vectors;
 
 // $context (P2 command fixtures): what the receiver knows when it judges the message.
-export interface FixtureContext { now: number; proxyId: string; connId: string; serverKeys: string[]; allow?: string[]; paused?: boolean; seen?: string[]; enabled?: boolean; tokens?: { id: string; kind: 'client' | 'admin'; hash: string; label: string; retireAt: number | null }[] }
+// P3: `journal`, the command journal's entries the journal budget counts.
+export interface FixtureContext { now: number; proxyId: string; connId: string; serverKeys: string[]; allow?: string[]; paused?: boolean; seen?: string[]; enabled?: boolean; tokens?: { id: string; kind: 'client' | 'admin'; hash: string; label: string; retireAt: number | null }[]; journal?: { cmdId: string; command: string; at: number; action?: string }[] }
 export interface Fixture { schema: string; message: unknown; $context?: FixtureContext; $expect?: { runtime?: string; strict?: string; receiver?: 'proxy' | 'server' } }
 export const fixtures = (): { name: string; f: Fixture }[] =>
   readdirSync(join(CONTRACT, 'fixtures')).filter((n) => n.endsWith('.json')).map((n) => ({ name: n.replace(/\.json$/, ''), f: json(join(CONTRACT, 'fixtures', n)) as Fixture }));
 
 // The first error, readable.
 export const why = (v: ValidateFunction): string => (v.errors ?? []).slice(0, 3).map((e) => `${e.instancePath || '/'} ${e.message} ${JSON.stringify(e.params)}`).join('; ');
+
+// A command fixture this version can't run yet (the cross-repo rule of the
+// P3 contract): skipped and listed, never passed silently. A test asserts
+// that nothing is pending once P3 is implemented.
+export const pending = (f: Fixture, implemented: ReadonlySet<string>): boolean => {
+  const b = (f.message as { body?: { command?: unknown } })?.body;
+  return f.schema === 'command' && typeof b?.command === 'string' && !implemented.has(b.command);
+};

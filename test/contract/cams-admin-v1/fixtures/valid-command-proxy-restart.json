@@ -1,0 +1,36 @@
+{
+  "$note": "restart the proxy after the result is sent",
+  "schema": "command",
+  "$context": {
+    "now": 1791273600010,
+    "proxyId": "prx_0123456789ABCDEFGHJK",
+    "connId": "con_0123456789ABCDEFGHJK",
+    "serverKeys": [
+      "MCowBQYDK2VwAyEAgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q="
+    ],
+    "allow": [
+      "proxy.restart"
+    ],
+    "paused": false,
+    "seen": []
+  },
+  "message": {
+    "v": 1,
+    "type": "command",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "exp": 1791273660003,
+      "actor": "admin@example.org",
+      "command": "proxy.restart",
+      "args": {
+        "v": 1
+      }
+    },
+    "sig": "rDSkzxH4ny5u/ZnjzTFf5/dpFDWV4eTxfmODbYqGzJmTPwhwAOU6jYPKIFkpAdxvWEcoK52SNQ3D+PAIFQveAQ=="
+  }
+}

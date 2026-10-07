@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/commands/proxy.restart.result.schema.json",
+  "title": "proxy.restart result v1",
+  "type": "object",
+  "properties": {
+    "restartAt": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "restartAt"
+  ]
+}

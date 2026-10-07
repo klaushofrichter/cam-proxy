@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/strict/commands/config.get.result.schema.json",
+  "title": "config.get result v1",
+  "type": "object",
+  "properties": {
+    "revision": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "schema": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "cameras": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+      },
+      "maxItems": 256
+    },
+    "omittedCameras": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+      },
+      "maxItems": 256
+    },
+    "paths": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z][A-Za-z0-9]{0,31}(\\.[a-z0-9][A-Za-z0-9-]{0,31}){0,5}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "v": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "maxLength": 4096
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "s": {
+            "type": "string",
+            "enum": [
+              "default",
+              "file",
+              "override",
+              "env"
+            ]
+          },
+          "r": {
+            "type": "string",
+            "enum": [
+              "restart",
+              "process"
+            ]
+          },
+          "p": {
+            "type": "boolean"
+          },
+          "n": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "maxLength": 4096
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "by": {
+            "type": "object",
+            "properties": {
+              "cmdId": {
+                "type": "string",
+                "pattern": "^cmd_[0-9A-HJKMNP-TV-Z]{20}$"
+              },
+              "actor": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "at": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "cmdId",
+              "actor",
+              "at"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "s"
+        ],
+        "additionalProperties": false
+      },
+      "maxProperties": 4096
+    },
+    "settable": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "integer",
+              "boolean",
+              "string"
+            ]
+          },
+          "min": {
+            "type": "number"
+          },
+          "max": {
+            "type": "number"
+          },
+          "oneOf": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxItems": 64
+          },
+          "enum": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "maxItems": 64
+          },
+          "pattern": {
+            "type": "string",
+            "maxLength": 400
+          },
+          "optional": {
+            "type": "boolean"
+          },
+          "dir": {
+            "type": "string",
+            "enum": [
+              "less",
+              "more"
+            ]
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "additionalProperties": false
+      },
+      "maxProperties": 512
+    }
+  },
+  "required": [
+    "revision",
+    "paths",
+    "settable"
+  ],
+  "additionalProperties": false
+}
