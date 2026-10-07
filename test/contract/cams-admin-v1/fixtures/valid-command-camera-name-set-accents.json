@@ -1,0 +1,38 @@
+{
+  "$note": "a name with accents, spaces and a dash",
+  "schema": "command",
+  "$context": {
+    "now": 1791273600010,
+    "proxyId": "prx_0123456789ABCDEFGHJK",
+    "connId": "con_0123456789ABCDEFGHJK",
+    "serverKeys": [
+      "MCowBQYDK2VwAyEAgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q="
+    ],
+    "allow": [
+      "camera.name.set"
+    ],
+    "paused": false,
+    "seen": []
+  },
+  "message": {
+    "v": 1,
+    "type": "command",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "exp": 1791273660003,
+      "actor": "admin@example.org",
+      "command": "camera.name.set",
+      "args": {
+        "v": 1,
+        "camera": "cam1",
+        "name": "Garage Süd – Einfahrt"
+      }
+    },
+    "sig": "7ZyFqQR+5hRcb6x8UQwB09eK/9KPQI0WUe4A4H6u7EKYaOh5vc56jzPOQFUrTGagesii+OWKH64NP7K4rtAwCw=="
+  }
+}

@@ -473,6 +473,32 @@
       },
       "text": "{\"body\":{\"actor\":\"admin@example.org\",\"args\":{\"baseRevision\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"dryRun\":true,\"paths\":[\"sse.pingS\",\"cameras.cam1.name\"],\"v\":1},\"cmdId\":\"cmd_7123456789ABCDEFGHJK\",\"command\":\"config.unset\",\"connId\":\"con_0123456789ABCDEFGHJK\",\"exp\":1791273660013,\"proxyId\":\"prx_0123456789ABCDEFGHJK\"},\"id\":\"01K60000000000000000000013\",\"seq\":13,\"ts\":1791273600013,\"type\":\"command\",\"v\":1}",
       "sig": "7aHM423q4haJ1EuCfwMZzcBThAVc7EZEGfKHAP+CDjJ/RlCSY0jXHU0Fm1FNdZQkxU8JgWok1AYf2TTeYTmHAQ=="
+    },
+    {
+      "kind": "command",
+      "key": "server",
+      "envelope": {
+        "v": 1,
+        "type": "command",
+        "id": "01K60000000000000000000014",
+        "seq": 14,
+        "ts": 1791273600014,
+        "body": {
+          "proxyId": "prx_0123456789ABCDEFGHJK",
+          "connId": "con_0123456789ABCDEFGHJK",
+          "cmdId": "cmd_8123456789ABCDEFGHJK",
+          "exp": 1791273660014,
+          "actor": "admin@example.org",
+          "command": "camera.name.set",
+          "args": {
+            "v": 1,
+            "camera": "cam1",
+            "name": "evil؜name"
+          }
+        }
+      },
+      "text": "{\"body\":{\"actor\":\"admin@example.org\",\"args\":{\"camera\":\"cam1\",\"name\":\"evil؜name\",\"v\":1},\"cmdId\":\"cmd_8123456789ABCDEFGHJK\",\"command\":\"camera.name.set\",\"connId\":\"con_0123456789ABCDEFGHJK\",\"exp\":1791273660014,\"proxyId\":\"prx_0123456789ABCDEFGHJK\"},\"id\":\"01K60000000000000000000014\",\"seq\":14,\"ts\":1791273600014,\"type\":\"command\",\"v\":1}",
+      "sig": "zxgtfRK1yEUFRJ0gLfDOhWyr5mWe/85CCOUk1ULgpDSnzpROk2D5xf4UOdnaaEXBK43zMETvqJTdQpsFBTPFDA=="
     }
   ]
 }

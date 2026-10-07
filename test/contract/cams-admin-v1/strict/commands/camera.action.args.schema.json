@@ -32,7 +32,6 @@
         "camera-reboot",
         "camera-powercycle",
         "camera-ftp-setup",
-        "camera-ftp-off",
         "camera-ntp-set",
         "camera-cert-push"
       ]

@@ -1,5 +1,5 @@
 {
-  "$note": "never remote, whatever the allow-list (strict: not a remote action)",
+  "$note": "camera-ftp-off is never remote (cam-proxy #196), whatever the allow-list",
   "schema": "command",
   "$context": {
     "now": 1791273600010,
@@ -55,9 +55,9 @@
       "args": {
         "v": 1,
         "camera": "cam1",
-        "action": "find-camera"
+        "action": "camera-ftp-off"
       }
     },
-    "sig": "PeD2sPk38RW5ZKwkQWJiJkHBTe5D/Ru0GWqog92nPUW0ElNOYX7x9UO9AGMllyngPzy29sR69q11CmyycH2wBw=="
+    "sig": "ff7xbaQtehep2BPsesiIqtiKMNa9KVL2JmLqrgawMgk0+pSEPCQEfNYPc7GcGGOxjoRTRWIewYBAuOUo62vWBQ=="
   }
 }

@@ -42,13 +42,13 @@
         "cmdId": "cmd_00000000000000000004",
         "command": "camera.action",
         "at": 1791273300000,
-        "action": "camera-ftp-off"
+        "action": "camera-ntp-set"
       },
       {
         "cmdId": "cmd_00000000000000000005",
         "command": "camera.action",
         "at": 1791273240000,
-        "action": "camera-ntp-set"
+        "action": "camera-cert-push"
       }
     ]
   },
