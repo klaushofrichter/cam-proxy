@@ -6,7 +6,11 @@ import { PrivateFileInvalid, PrivateFileUnsafe, readPrivateJson, writePrivateJso
 // and the ones it never may: they change trust, delete data, or need
 // someone at the hardware. Compiled in: no setting widens them.
 export const REMOTE_ACTIONS = ['camera-test', 'onvif-resubscribe', 'camera-ftp-test', 'poe-switch-read', 'inventory', 'inventory-cancel', 'retention-run', 'restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ftp-off', 'camera-ntp-set', 'camera-cert-push'] as const;
-export const NEVER_REMOTE_ACTIONS = ['find-camera', 'camera-address', 'camera-trust-clear', 'tls-ca-rotate', 'tls-ca-drop-previous', 'archive-clear', 'inventory-repair', 'camera-poe-on'] as const;
+export const NEVER_REMOTE_ACTIONS = ['find-camera', 'camera-address', 'camera-trust-clear', 'tls-ca-rotate', 'tls-ca-drop-previous', 'archive-clear', 'inventory-repair', 'camera-poe-on', 'restart-proxy'] as const;
+// The remote actions that disrupt service (Klaus's decision 3): each its own
+// allow entry, off by default; with proxy.restart, under the journal budget.
+export const DISRUPTIVE_ACTIONS = ['restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ftp-off', 'camera-ntp-set', 'camera-cert-push'] as const;
+export const DISRUPTIVE_ENTRIES: ReadonlySet<string> = new Set(['proxy.restart', ...DISRUPTIVE_ACTIONS.map((a) => `camera.action:${a}`)]);
 export const ALLOW_ENTRIES: readonly string[] = ['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`)];
 // What this version runs (P2). The heartbeat reports allow ∩ IMPLEMENTED.
 export const IMPLEMENTED: ReadonlySet<string> = new Set(['tokens.apply', 'tokens.apply.admin']);

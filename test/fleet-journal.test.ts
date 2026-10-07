@@ -83,4 +83,16 @@ describe('Journal', () => {
     expect(j.get(cmd(1))).toBeDefined();
     expect(statSync(file).mode & 0o777).toBe(0o600);
   });
+  it('countSince: entries at or after the time matching the predicate, and the oldest one\'s time (P3 journal budget)', () => {
+    const j = new Journal(fresh(), () => 10_000);
+    j.record({ ...entry(1, 1_000), command: 'proxy.restart' });
+    j.record({ ...entry(2, 5_000), command: 'proxy.restart' });
+    j.record({ ...entry(3, 6_000), command: 'camera.action', action: 'camera-reboot' });
+    j.record({ ...entry(4, 7_000), command: 'proxy.restart' });
+    expect(j.countSince((e) => e.command === 'proxy.restart', 2_000)).toEqual({ n: 2, oldest: 5_000 });
+    expect(j.countSince((e) => e.command === 'proxy.restart', 0)).toEqual({ n: 3, oldest: 1_000 });
+    expect(j.countSince((e) => e.action === 'camera-reboot', 0)).toEqual({ n: 1, oldest: 6_000 });
+    expect(j.countSince(() => true, 8_000)).toEqual({ n: 0, oldest: null });
+  });
 });
+
