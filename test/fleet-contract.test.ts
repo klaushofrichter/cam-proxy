@@ -12,7 +12,8 @@ describe('the contract vectors', () => {
     for (const { name, f } of fixtures()) {
       const v = strict(f.schema);
       const ok = v(f.message);
-      if (name.startsWith('valid-')) expect(ok, `${name}: ${why(v)}`).toBe(true);
+      // refused-* fixtures are valid by the strict schema; the receiver refuses them at run time (R2-9).
+      if (name.startsWith('valid-') || name.startsWith('refused-')) expect(ok, `${name}: ${why(v)}`).toBe(true);
       else expect(ok, name).toBe(false);
     }
   });

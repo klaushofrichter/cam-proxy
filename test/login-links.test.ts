@@ -12,16 +12,16 @@ describe('createLoginLinks', () => {
     vi.useFakeTimers();
     try {
       const links = createLoginLinks(60_000);
-      const a = links.issue();
-      const b = links.issue();
+      const a = links.issue('local');
+      const b = links.issue('local');
       expect(a.code).toMatch(/^[A-Za-z0-9_-]{32,}$/);
       expect(a.code).not.toBe(b.code);
-      expect(links.consume(a.code)).toBe(true);
-      expect(links.consume(a.code)).toBe(false); // once
+      expect(links.consume(a.code)).toEqual({ origin: 'local' });
+      expect(links.consume(a.code)).toBeNull(); // once
       vi.advanceTimersByTime(60_001);
-      expect(links.consume(b.code)).toBe(false); // expired
-      expect(links.consume('nope')).toBe(false);
-      expect(links.consume(undefined)).toBe(false);
+      expect(links.consume(b.code)).toBeNull(); // expired
+      expect(links.consume('nope')).toBeNull();
+      expect(links.consume(undefined)).toBeNull();
     } finally {
       vi.useRealTimers();
     }
@@ -29,9 +29,9 @@ describe('createLoginLinks', () => {
 
   it('keeps at most 100 codes, dropping the oldest', () => {
     const links = createLoginLinks(60_000);
-    const first = links.issue();
-    for (let i = 0; i < 100; i++) links.issue();
-    expect(links.consume(first.code)).toBe(false);
+    const first = links.issue('local');
+    for (let i = 0; i < 100; i++) links.issue('local');
+    expect(links.consume(first.code)).toBeNull();
   });
 });
 
@@ -61,7 +61,7 @@ describe('login links over HTTP', () => {
     expect(r.status).toBe(302);
     expect(r.headers.location).toBe('/');
     const cookie = String(r.headers['set-cookie']);
-    expect(cookie).toMatch(/^camproxy_session=v1\..*HttpOnly.*SameSite=Strict/);
+    expect(cookie).toMatch(/^camproxy_session=v2\.\d+\.l\..*HttpOnly.*SameSite=Strict/);
     const session = cookie.split(';')[0];
     expect((await request(p.base).get('/control/session').set('Cookie', session)).body).toEqual({ loggedIn: true });
     const again = await request(p.base).get(`/control/login-link?code=${code}`);

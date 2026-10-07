@@ -5,6 +5,7 @@
   import { fingerprintGroups } from '../lib/tls';
   import { canEnroll, stateClass, stateText, type CamsAdminView } from '../lib/cams-admin';
   import ConfirmDialog from './ConfirmDialog.svelte';
+  import CamsAdminCommands from './CamsAdminCommands.svelte';
 
   // cams-admin (spec 2026-10-06-cams-admin-phase1-design §9.2): the
   // connection's state, what this proxy is enrolled as, and Enroll /
@@ -101,7 +102,8 @@
       {#if view.proxyId || view.state !== 'off'}<button onclick={() => (asking = true)} disabled={busy} data-testid="cams-admin-unenroll">Unenroll</button>{/if}
     </div>
     {#if message}<p class="msg" data-testid="cams-admin-message">{message}</p>{/if}
-    <p class="small">The proxy reports its health summary to cams-admin over one outbound connection; cams-admin can't reach into the proxy.</p>
+    <p class="small">The proxy reports its health summary to cams-admin over one outbound connection; cams-admin can only send the commands allowed below.</p>
+    <CamsAdminCommands />
   {:else}
     <p class="small">Loading…</p>
   {/if}

@@ -1,8 +1,12 @@
-import { existsSync, readdirSync, readFileSync } from 'fs';
+import { createHash, randomBytes } from 'crypto';
+import { existsSync, mkdtempSync, readdirSync, readFileSync } from 'fs';
+import { tmpdir } from 'os';
 import { join } from 'path';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startFakeAdmin, type FakeAdmin } from './helpers/fake-admin';
+import { ALLOW_ENTRIES } from '../src/fleet/policy';
+import { writePrivateJson } from '../src/fleet/private-file';
 import { ADMIN_TOKEN, auth, startProxy, until } from './helpers/proxy';
 import { startSim } from './helpers/sim';
 
@@ -123,5 +127,109 @@ describe('enroll, reconnect, unenroll', () => {
 
   it('reconnect while off: 409', async () => {
     expect((await request(p.base).post('/control/admin/reconnect').set(admin)).status).toBe(409);
+  });
+});
+
+// The command policy and managed tokens on the card (migration P2, Task 7):
+// any admin narrows; only local admin rights widen (R2-3).
+describe('allowed commands, pause and managed tokens', () => {
+  const tok = () => randomBytes(32).toString('base64url');
+  const hashOf = (t: string) => `sha256:${createHash('sha256').update(t).digest('hex')}`;
+  const TOK = (n: number) => `tok_${String(n).padStart(20, '0')}`;
+  const MANAGED_ADMIN = tok();
+  const MANAGED_CLIENT = tok();
+  let q: Awaited<ReturnType<typeof startProxy>>;
+  const qRecords = (action: string) => q.proxy.audit.list({ actions: [action], limit: 50 }).records as unknown as Record<string, any>[];
+  beforeAll(async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'camproxy-policy-'));
+    writePrivateJson(join(dir, 'data', 'admin', 'tokens.json'), {
+      v: 1, revision: 4, blocked: [],
+      tokens: [
+        { id: TOK(1), kind: 'admin', hash: hashOf(MANAGED_ADMIN), label: 'cams cluster', retireAt: null },
+        { id: TOK(2), kind: 'client', hash: hashOf(MANAGED_CLIENT), label: 'cams client', retireAt: null },
+      ],
+    });
+    q = await startProxy(sim, { dir });
+  });
+  afterAll(async () => {
+    await q?.proxy.stop();
+  });
+  const put = (t: string, allow: unknown) => request(q.base).put('/control/admin/commands').set(auth(t)).send({ allow });
+
+  it('GET: off by default, every known entry with its sentence, the implemented ones, recent commands', async () => {
+    const r = await request(q.base).get('/control/admin/commands').set(admin).expect(200);
+    expect(r.body).toMatchObject({ enabled: true, paused: false, pauseReason: null, envName: null, allow: [], implemented: ['tokens.apply', 'tokens.apply.admin'], recent: [] });
+    expect(r.body.known.map((k: { entry: string }) => k.entry)).toEqual([...ALLOW_ENTRIES]);
+    for (const k of r.body.known) expect(k.text.length, k.entry).toBeGreaterThan(10);
+    expect((await request(q.base).get('/control/admin/commands').set(auth())).status).toBe(403);
+  });
+  it('PUT with the local admin token widens; an unknown entry is 400; a managed admin token can only narrow (403 local_admin_only)', async () => {
+    expect((await put(ADMIN_TOKEN, ['tokens.apply', 'tokens.apply.admin'])).status).toBe(200);
+    expect((await put(ADMIN_TOKEN, ['frobnicate'])).body).toMatchObject({ error: 'invalid' });
+    expect((await put(ADMIN_TOKEN, ['camera.action:find-camera'])).status).toBe(400);
+    const w = await put(MANAGED_ADMIN, ['tokens.apply', 'tokens.apply.admin', 'config.get']);
+    expect([w.status, w.body.error]).toEqual([403, 'local_admin_only']);
+    expect((await put(MANAGED_ADMIN, ['tokens.apply'])).status).toBe(200);
+    expect((await request(q.base).get('/control/admin/commands').set(admin)).body.allow).toEqual(['tokens.apply']);
+    const recs = qRecords('admin-policy');
+    expect(recs.length).toBeGreaterThanOrEqual(2);
+    expect(JSON.stringify(recs[0])).toContain('token:cams cluster');
+    expect(JSON.stringify(recs)).not.toContain(hashOf(MANAGED_ADMIN).slice(7, 23));
+  });
+  it('pause works with any admin rights; resume only with local ones', async () => {
+    await request(q.base).post('/control/admin/commands/pause').set(auth(MANAGED_ADMIN)).send({ reason: 'incident 7' }).expect(200);
+    expect((await request(q.base).get('/control/admin/commands').set(admin)).body).toMatchObject({ paused: true, pauseReason: 'incident 7' });
+    expect((await request(q.base).post('/control/admin/commands/resume').set(auth(MANAGED_ADMIN))).status).toBe(403);
+    await request(q.base).post('/control/admin/commands/resume').set(admin).expect(200);
+    expect((await request(q.base).get('/control/admin/commands').set(admin)).body.paused).toBe(false);
+  });
+  it('tokens: listed without hashes beyond 8 hex; block with any admin, unblock with local rights only; one admin-token record each', async () => {
+    const l = await request(q.base).get('/control/admin/tokens').set(admin).expect(200);
+    expect(l.body).toMatchObject({ revision: 4, problem: null });
+    expect(l.body.items.map((i: { id: string }) => i.id)).toEqual([TOK(1), TOK(2)]);
+    expect(JSON.stringify(l.body)).not.toContain(hashOf(MANAGED_CLIENT).slice(15, 31));
+    await request(q.base).post(`/control/admin/tokens/${TOK(2)}/block`).set(auth(MANAGED_ADMIN)).expect(200);
+    expect((await request(q.base).get('/api/cameras').set(auth(MANAGED_CLIENT))).status).toBe(401);
+    expect((await request(q.base).post(`/control/admin/tokens/${TOK(2)}/unblock`).set(auth(MANAGED_ADMIN))).status).toBe(403);
+    await request(q.base).post(`/control/admin/tokens/${TOK(2)}/unblock`).set(admin).expect(200);
+    expect((await request(q.base).post('/control/admin/tokens/nope/block').set(admin)).status).toBe(400);
+    expect(qRecords('admin-token').map((r) => r.cam_proxy?.details?.op ?? r.details?.op ?? JSON.stringify(r).match(/"op":"(\w+)"/)?.[1])).toEqual(['unblock', 'block']);
+  });
+  it('a managed admin token blocking itself: blocked at once', async () => {
+    await request(q.base).post(`/control/admin/tokens/${TOK(1)}/block`).set(auth(MANAGED_ADMIN)).expect(200);
+    expect((await request(q.base).get('/control/admin/commands').set(auth(MANAGED_ADMIN))).status).toBe(401);
+  });
+});
+
+// Security re-review: a managed caller can't evict the local admin's block.
+describe('the local block list under a managed flood', () => {
+  const tok = () => randomBytes(32).toString('base64url');
+  const hashOf = (t: string) => `sha256:${createHash('sha256').update(t).digest('hex')}`;
+  const TOK = (n: number) => `tok_${String(n).padStart(20, '0')}`;
+  const A = tok();
+  const M = tok();
+  let q: Awaited<ReturnType<typeof startProxy>>;
+  beforeAll(async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'camproxy-blocks-'));
+    writePrivateJson(join(dir, 'data', 'admin', 'tokens.json'), { v: 1, revision: 1, blocked: [], tokens: [{ id: TOK(1), kind: 'client', hash: hashOf(A), label: 'a', retireAt: null }, { id: TOK(2), kind: 'admin', hash: hashOf(M), label: 'm', retireAt: null }] });
+    q = await startProxy(sim, { dir });
+  });
+  afterAll(async () => {
+    await q?.proxy.stop();
+  });
+  it('managed: only ids in tokens.json; 64 junk blocks never evict the local block on A', async () => {
+    await request(q.base).post(`/control/admin/tokens/${TOK(1)}/block`).set(admin).expect(200);
+    for (let i = 100; i < 170; i++) {
+      const r = await request(q.base).post(`/control/admin/tokens/${TOK(i)}/block`).set(auth(M));
+      expect([r.status, r.body.error], TOK(i)).toEqual([404, 'unknown_token']);
+    }
+    expect((await request(q.base).get('/api/cameras').set(auth(A))).status).toBe(401);
+  });
+  it('local: at the cap a new block is refused (409), none is ever evicted', async () => {
+    for (let i = 200; i < 263; i++) await request(q.base).post(`/control/admin/tokens/${TOK(i)}/block`).set(admin).expect(200);
+    const r = await request(q.base).post(`/control/admin/tokens/${TOK(300)}/block`).set(admin);
+    expect([r.status, r.body.error]).toEqual([409, 'too_many_blocks']);
+    expect((await request(q.base).get('/api/cameras').set(auth(A))).status).toBe(401);
+    expect((await request(q.base).get('/control/admin/tokens').set(admin)).body.items.find((t: { id: string }) => t.id === TOK(1)).blocked).toBe(true);
   });
 });

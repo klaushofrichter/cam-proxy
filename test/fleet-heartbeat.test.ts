@@ -73,6 +73,24 @@ describe('the heartbeat body on the strict contract', () => {
   });
 });
 
+describe('the P2 proxy fields', () => {
+  it('absent: the P1 shape (the Pi before it is enrolled sends nothing new)', () => {
+    const hb = buildHeartbeat(buildHealth(input()), PI_INFO);
+    expect(Object.keys(hb.body.proxy as object).sort()).toEqual(['configSchema', 'publicUrl', 'startedAt', 'tls', 'uptimeS']);
+  });
+  it('present: clamped to the contract bounds, on the strict schema', () => {
+    const allow = Array.from({ length: 40 }, () => 'tokens.apply');
+    const hb = buildHeartbeat(buildHealth(input()), { ...PI_INFO, commands: { enabled: true, paused: true, pauseReason: 'r'.repeat(300), allow, seenWindow: 1000 }, tokens: { revision: 3, client: 1, admin: 0, blocked: Array.from({ length: 70 }, (_, i) => `tok_${String(i).padStart(20, '0')}`) }, configRevision: `sha256:${'a'.repeat(64)}` });
+    const p = hb.body.proxy as { commands: { allow: string[]; pauseReason: string }; tokens: { blocked: string[] }; configRevision: string };
+    expect(p.commands.allow).toHaveLength(32);
+    expect(p.commands.pauseReason).toHaveLength(200);
+    expect(p.tokens.blocked).toHaveLength(64);
+    const v = strict('heartbeat');
+    const m = buildEnvelope('heartbeat', 2, hb.body, { now: NOW });
+    expect(v(m), why(v)).toBe(true);
+  });
+});
+
 describe('the change key (an early heartbeat)', () => {
   it('changes with ok, problemCount or a camera going on- or offline; not with the time', () => {
     const a = fourCams();

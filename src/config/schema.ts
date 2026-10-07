@@ -1,5 +1,6 @@
 // The description of every setting: one place that drives validation and the
 // generated config.schema.json, so the two can't drift apart.
+import { ALLOW_ENTRIES } from '../fleet/policy';
 
 // `unset`: what the setting's unset state does (not set, none, empty, off,
 // or 0 = none; `value` is that state, undefined for not set). The Settings
@@ -239,7 +240,9 @@ export const SETTINGS: Node = {
   },
   // cams-admin (spec 2026-10-06-cams-admin-phase1-design §9.2): the outbound
   // status client; unset url = off (the default). Applies at once (restarts
-  // the client only). camsAdmin.allowCommands is checked at load (must be empty).
+  // the client only). camsAdmin.allowCommands and camsAdmin.commandsPaused are
+  // not settings: config.json's base of the command policy (migration P2, R2-1),
+  // taken out at load; never in overrides.json.
   camsAdmin: {
     url: unset({ type: 'string', pattern: '^https?://[^\\s]+$', optional: true, doc: 'the cams-admin this proxy reports to: https://, or http:// for loopback and *.svc.cluster.local; set by admin-enroll' }, 'off: no connection to cams-admin'),
     keyFile: { type: 'string', pattern: '^admin/[A-Za-z0-9_-]{1,64}\\.json$', doc: "the proxy's cams-admin key file: admin/<name>.json in server.dataDir (mode 600 in the 700 folder admin/, written at enrollment)" },
@@ -249,8 +252,9 @@ export const SETTINGS: Node = {
 
 // The version of this settings schema, reported to cams-admin in the
 // heartbeat (proxy.configSchema): raise it when a setting is added, renamed
-// or changes meaning. 1: the first versioned schema (with camsAdmin).
-export const CONFIG_SCHEMA = 1;
+// or changes meaning. 1: the first versioned schema (with camsAdmin). 2:
+// camsAdmin.allowCommands takes entries, camsAdmin.commandsPaused is known.
+export const CONFIG_SCHEMA = 2;
 
 
 export class SettingError extends Error {}
@@ -352,5 +356,8 @@ export function jsonSchema(node: Node = SETTINGS, extra: Record<string, object> 
 export function configJsonSchema(): object {
   const js = jsonSchema(SETTINGS, { camera: { ...jsonSchemaOf(LEGACY_CAMERA), description: 'legacy: one camera (read as cameras: [camera]); use cameras' } }) as { properties: Record<string, { properties: Record<string, object> }> };
   js.properties.ftp.properties.user = { ...(jsonSchemaOf({ user: LEGACY_FTP_USER }) as { properties: { user: object } }).properties.user, description: 'legacy (with camera): the FTP user the camera logs in as; use cameras[].ftp.user' };
+  // The command policy's base (migration P2, R2-1): config.json only, not a setting.
+  js.properties.camsAdmin.properties.allowCommands = { type: 'array', maxItems: 32, uniqueItems: true, items: { type: 'string', enum: [...ALLOW_ENTRIES] }, description: 'commands cams-admin may send this proxy (default none); data/admin/policy.json (the Status card, admin-commands) replaces this list. config.json only' };
+  js.properties.camsAdmin.properties.commandsPaused = { type: 'boolean', description: 'refuse every cams-admin command (paused); config.json only' };
   return js;
 }

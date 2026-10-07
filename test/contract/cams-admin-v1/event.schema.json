@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/event.schema.json",
+  "title": "cams-admin v1 event",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "type": {
+      "const": "event"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "ts": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "body": {
+      "type": "object",
+      "properties": {
+        "proxyId": {
+          "type": "string",
+          "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+        },
+        "connId": {
+          "type": "string",
+          "pattern": "^con_[0-9A-HJKMNP-TV-Z]{20}$"
+        },
+        "cmdId": {
+          "type": "string",
+          "pattern": "^cmd_[0-9A-HJKMNP-TV-Z]{20}$"
+        },
+        "phase": {
+          "const": "done"
+        },
+        "status": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "code": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "retryAfterS": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "duplicate": {
+          "type": "boolean"
+        },
+        "result": {
+          "type": "object"
+        },
+        "kind": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "proxyId",
+        "connId",
+        "kind",
+        "cmdId",
+        "phase",
+        "status"
+      ]
+    },
+    "sig": {
+      "type": "string",
+      "maxLength": 100,
+      "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+    }
+  },
+  "required": [
+    "v",
+    "type",
+    "id",
+    "seq",
+    "ts",
+    "body",
+    "sig"
+  ]
+}

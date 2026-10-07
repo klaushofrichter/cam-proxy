@@ -5,6 +5,7 @@ import http from 'http';
 import https from 'https';
 import type { AddressInfo } from 'net';
 import { join } from 'path';
+import { createHash } from 'crypto';
 import { openCatalog, type Catalog } from './catalog/db';
 import { adoptLegacyUsage, usageByCamera, clearUnmapped, countAnalysesByStatus, listUnmapped, usageBetween } from './catalog/analyses';
 import { countAllClips, countClips } from './catalog/clips';
@@ -32,7 +33,7 @@ import { CachePool } from './recordings/pool';
 import { PoeSwitch } from './camera/poe-switch';
 import { restartProcess } from './process-restart';
 import type { Config } from './config/defaults';
-import { applyOverrides, getPath, needsProcessRestart, needsRestart, removeOverride, setPath, settingPaths, type Loaded } from './config/load';
+import { applyOverrides, configRevision, getPath, needsProcessRestart, needsRestart, removeOverride, setPath, settingPaths, type Loaded } from './config/load';
 import { cameraFtpOff, setupCameraFtp, testCameraFtp, type FtpTarget } from './clips/camera-ftp';
 import { createClipsSide, ftpUsers, type ClipsSide } from './clips/side';
 import type { RecordingsSide } from './recordings/side';
@@ -59,6 +60,11 @@ import { auditApi, controlApi, sessionRoutes } from './api/control-api';
 import { createMetrics } from './api/metrics';
 import { createSessionSigner } from './api/session';
 import { createLoginLinks } from './api/login-links';
+import { TokenStore } from './fleet/token-store';
+import { CommandPolicy } from './fleet/policy';
+import { Journal } from './fleet/journal';
+import { CommandRunner } from './fleet/commands';
+import { ReplayGuard } from './fleet/replay';
 import { composeApi, hasAudio } from './api/compose-api';
 import { createComposer, ffmpegRunner } from './compose/jobs';
 import { clockText, defaultFont } from './compose/ffmpeg';
@@ -135,7 +141,7 @@ export interface ProxyOptions {
   // certificate, polled every 5 s); tests shorten them against cam-sim.
   tlsPush?: { clearWaitMs?: number; verifyMs?: number; pollMs?: number };
   // The cams-admin client's waits (tests shorten them).
-  camsAdmin?: { timing?: Partial<Timing> };
+  camsAdmin?: { timing?: Partial<Timing>; replaySlackMs?: number };
 }
 
 export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
@@ -657,7 +663,15 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // previews are one key), and at most 60 records per IP per 10 minutes.
   const refusals = new RefusalThrottle();
   const refusalsPerIp = new IpCap(60);
+  // cams-admin-managed token hashes (migration P2, M §10.2): read whenever
+  // data/admin/tokens.json exists (R2-7); nothing is created when it doesn't.
+  const tokenStore = new TokenStore({
+    file: join(loaded.config.server.dataDir, 'admin', 'tokens.json'),
+    localDigests: () => [loaded.secrets.adminToken, ...loaded.secrets.tokens, ...(loaded.secrets.auditToken ? [loaded.secrets.auditToken] : [])].map((x) => createHash('sha256').update(x).digest()),
+  });
   const access: AccessDeps = {
+    managed: (b) => tokenStore.match(b),
+    managedAdminLive: (id) => tokenStore.liveAdmin(id),
     tokens: () => loaded.secrets.tokens,
     adminToken: () => loaded.secrets.adminToken,
     auditToken: () => loaded.secrets.auditToken,
@@ -762,9 +776,32 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     });
   };
 
+  // Commands from cams-admin (migration P2): the policy (config.json's base,
+  // data/admin/policy.json, the env kill switch), the journal and the runner.
+  // Nothing is read or written until a command arrives or the card asks.
+  const commandPolicy = new CommandPolicy({ base: () => loaded.commandPolicyBase, file: join(loaded.config.server.dataDir, 'admin', 'policy.json'), env: () => loaded.envLayer, log: logger });
+  const journal = new Journal(join(loaded.config.server.dataDir, 'admin', 'commands.json'), Date.now, logger);
+  const replayGuard = new ReplayGuard({ file: join(loaded.config.server.dataDir, 'admin', 'replay.json'), log: logger, slackMs: opts.camsAdmin?.replaySlackMs });
+  const commandRunner = new CommandRunner({
+    replay: replayGuard,
+    proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
+    serverKeys: () => camsAdmin.keyInfo()?.serverKeys ?? [],
+    policy: commandPolicy, journal, tokens: tokenStore, audit, log: logger,
+  });
+  let envOffLogged = false;
+
   let startedAt: number | null = null;
   // cams-admin (spec 2026-10-06-cams-admin-phase1-design §9): a leaf; it
   // reads the summary GET /api/local/health serves, at most once per heartbeat.
+  // The heartbeat's P2 fields (only sent with camsAdmin.url: the client runs only then).
+  const commandsInfo = () => {
+    const status = commandRunner.status();
+    if (!status.enabled && !envOffLogged) {
+      envOffLogged = true;
+      logger.info({ name: 'CAMPROXY_ADMIN_COMMANDS' }, 'admin_commands_env_off');
+    }
+    return { commands: status, tokens: tokenStore.counts(), configRevision: configRevision(loaded) };
+  };
   const camsAdmin = new CamsAdmin({
     settings: () => running.camsAdmin,
     dataDir: () => running.server.dataDir,
@@ -777,7 +814,10 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       configSchema: CONFIG_SCHEMA,
       tls: running.tls.site && ca ? { site: running.tls.site, caFingerprint: [ca.fingerprint] } : null,
       publicUrl: running.server.publicUrl ?? null,
+      ...commandsInfo(),
     }),
+    commands: () => commandRunner,
+    replay: replayGuard,
     // What changes ok, problemCount or a camera's online flag, read cheaply (an early heartbeat).
     changeKey: () => `${storage.paused() ? 1 : 0}|${cams.list().map((w) => `${w.id}:${w.status.state().online ? 1 : 0}${w.streamStatus().up ? 1 : 0}:${w.intake.state().onvif}`).join(',')}`,
     log: logger,
@@ -825,7 +865,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // The health summary for the display on the Pi: loopback callers only, no
   // key; anyone else goes on to the access check as for an unknown route.
   app.use('/api', localApi({ health: healthNow }));
-  app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit }));
+  app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit, managedAdminLive: access.managedAdminLive }));
   // Before clientApi: its /cameras/:cam/stills/:file would take latest.jpg.
   app.use('/api', requireAccess('client', access), latestApi({ cameras: cams }));
   app.use('/api', requireAccess('client', access), composeApi({ config: () => running, catalog, composer, cameras: cams, paused: () => storage.paused(), font, audit }));
@@ -837,7 +877,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // to the admin-only routes below.
   app.use('/control', auditApi({ audit, guard: requireAccess('audit-read', access), retentionDays: () => running.retention.auditDays }));
   // The cams-admin card (spec 2026-10-06-cams-admin-phase1-design §9.2).
-  app.use('/control', requireAccess('admin', access), camsAdminApi({ camsAdmin, audit }));
+  app.use('/control', requireAccess('admin', access), camsAdminApi({ camsAdmin, audit, commands: { policy: commandPolicy, tokens: tokenStore, runner: commandRunner } }));
   app.use(
     '/control',
     requireAccess('admin', access),
@@ -1156,6 +1196,11 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       // An archive job in flight is cancelled (its staged folder removed) before the catalog closes.
       // cams-admin: bye and close within 1 s, before the HTTP server (spec §9.1).
       await Promise.all([composer.stop(), analytics.stop(), archive.stop(), ...cams.list().map((w) => w.stopRecordings()), inventory.stop(), camsAdmin.stop(opts.reason === 'restart-requested' ? 'restart' : 'shutdown')]);
+      try {
+        replayGuard.flush();
+      } catch (err) {
+        logger.warn({ err: (err as Error).message }, 'admin_replay_save_failed');
+      }
       certs?.stop();
       clearInterval(proxyLeafTimer);
       const s = server;

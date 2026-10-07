@@ -27,11 +27,13 @@ export function cameraPassword(s: Secrets, id: string): string {
   return s.cameraPasswords[id] ?? s.cameraPassword;
 }
 
-export function loadSecrets(env: NodeJS.ProcessEnv, ftpEnabled: boolean, cameraIds: string[] = []): Secrets {
+// tokensOptional (migration P2, M §10.2): CAMPROXY_TOKENS may be unset while
+// a cams-admin-managed client token is live; the start checks that
+// (checkClientTokens), the CLI keeps the strict default.
+export function loadSecrets(env: NodeJS.ProcessEnv, ftpEnabled: boolean, cameraIds: string[] = [], o: { tokensOptional?: boolean } = {}): Secrets {
   const tokensRaw = read(env, 'CAMPROXY_TOKENS');
-  if (!tokensRaw) throw new SettingError('CAMPROXY_TOKENS: required');
-  const tokens = tokensRaw.split(',').map((t) => t.trim()).filter(Boolean);
-  if (!tokens.length) throw new SettingError('CAMPROXY_TOKENS: required');
+  const tokens = (tokensRaw ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+  if (!tokens.length && !(o.tokensOptional && !tokensRaw)) throw new SettingError('CAMPROXY_TOKENS: required');
   tokens.forEach((t, i) => {
     if (t.length < MIN_TOKEN) throw new SettingError(`CAMPROXY_TOKENS: token ${i + 1} is shorter than ${MIN_TOKEN} characters`);
   });

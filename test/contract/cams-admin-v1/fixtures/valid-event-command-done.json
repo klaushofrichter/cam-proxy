@@ -1,0 +1,28 @@
+{
+  "$note": "a done that could not be sent on its own connection, after the next welcome",
+  "schema": "event",
+  "message": {
+    "v": 1,
+    "type": "event",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "kind": "command.done",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "phase": "done",
+      "status": "ok",
+      "result": {
+        "revision": 1,
+        "applied": true,
+        "stale": false,
+        "client": 1,
+        "admin": 0,
+        "blocked": []
+      }
+    },
+    "sig": "THjGl++pRVKTjSM957tRWsa0l7ZVYvjoRG3u3Vr+fSRoyqISdF9z66jkpljdOu6yOvOgnfq9cfPfU/qqmbbpDA=="
+  }
+}

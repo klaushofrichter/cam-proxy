@@ -825,6 +825,43 @@
         "enabled": {
           "type": "boolean",
           "description": "connect to cams-admin (false keeps the key and stays off)"
+        },
+        "allowCommands": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "tokens.apply",
+              "tokens.apply.admin",
+              "config.get",
+              "config.set",
+              "config.unset",
+              "config.rollback",
+              "camera.name.set",
+              "proxy.restart",
+              "camera.action:camera-test",
+              "camera.action:onvif-resubscribe",
+              "camera.action:camera-ftp-test",
+              "camera.action:poe-switch-read",
+              "camera.action:inventory",
+              "camera.action:inventory-cancel",
+              "camera.action:retention-run",
+              "camera.action:restart",
+              "camera.action:camera-reboot",
+              "camera.action:camera-powercycle",
+              "camera.action:camera-ftp-setup",
+              "camera.action:camera-ftp-off",
+              "camera.action:camera-ntp-set",
+              "camera.action:camera-cert-push"
+            ]
+          },
+          "description": "commands cams-admin may send this proxy (default none); data/admin/policy.json (the Status card, admin-commands) replaces this list. config.json only"
+        },
+        "commandsPaused": {
+          "type": "boolean",
+          "description": "refuse every cams-admin command (paused); config.json only"
         }
       }
     },

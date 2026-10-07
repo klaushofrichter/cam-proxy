@@ -16,6 +16,11 @@ export interface HeartbeatProxyInfo {
   configSchema: number | null;
   tls: { site: string; caFingerprint: string[] } | null; // the site CA: public values cams users copy
   publicUrl: string | null;
+  // Migration P2 (optional, so a P1 heartbeat stays valid): the command
+  // policy, the managed tokens' counts, and the overrides' revision.
+  commands?: { enabled: boolean; paused: boolean; pauseReason: string | null; allow: string[]; seenWindow: number };
+  tokens?: { revision: number; client: number; admin: number; blocked: string[] };
+  configRevision?: string | null;
 }
 
 // A copy with every string at most `max` characters.
@@ -34,6 +39,9 @@ function info(i: HeartbeatProxyInfo): HeartbeatProxyInfo {
     tls: i.tls ? { site: i.tls.site.slice(0, 63), caFingerprint: i.tls.caFingerprint.slice(0, 2) } : null,
     // A URL cut short would be wrong: none instead.
     publicUrl: i.publicUrl && i.publicUrl.length <= URL_MAX ? i.publicUrl : null,
+    ...(i.commands ? { commands: { enabled: i.commands.enabled, paused: i.commands.paused, pauseReason: i.commands.pauseReason === null ? null : i.commands.pauseReason.slice(0, TEXT_MAX), allow: i.commands.allow.filter((a) => a.length <= 64).slice(0, 32), seenWindow: i.commands.seenWindow } } : {}),
+    ...(i.tokens ? { tokens: { revision: i.tokens.revision, client: i.tokens.client, admin: i.tokens.admin, blocked: i.tokens.blocked.slice(0, 64) } } : {}),
+    ...(i.configRevision !== undefined ? { configRevision: i.configRevision } : {}),
   };
 }
 
