@@ -90,6 +90,23 @@ describe('SdWatch', () => {
     await w.checkNow();
     expect(w.view()).toMatchObject({ freeMB: 900, checkedAt: NOW, error: 'camera_offline' });
   });
+  // CI, PR #200: a read still running when the proxy stopped asked the closed catalog.
+  it('never rejects: a throwing lastClip (a closed catalog) compares nothing', async () => {
+    const w = new SdWatch({ read: async () => parseSd(HDD_FULL, rec()), active: () => true, lastClip: () => { throw new Error('database is not open'); }, recordings: async () => [], now: () => NOW });
+    await expect(w.checkNow()).resolves.toMatchObject({ freeMB: 900, lastClipAt: null });
+  });
+  it('stopped during a read: nothing else is asked and nothing changes', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let asked = 0;
+    const w = new SdWatch({ read: async () => (await gate, parseSd(HDD_FULL, rec())), active: () => true, lastClip: () => (asked++, NOW), recordings: async () => (asked++, []), now: () => NOW });
+    const p = w.checkNow();
+    w.stop();
+    release();
+    await expect(p).resolves.toBeNull();
+    expect(asked).toBe(0);
+    expect(w.view()).toBeNull();
+  });
   it('concurrent callers share one read', async () => {
     const { w, st } = watch();
     await Promise.all([w.checkNow(), w.checkNow()]);

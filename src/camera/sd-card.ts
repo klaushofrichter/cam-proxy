@@ -69,6 +69,7 @@ export class SdWatch {
   private current: SdView | null = null;
   private running: Promise<SdView | null> | undefined;
   private timer: NodeJS.Timeout | undefined;
+  private stopped = false; // a read still running at stop() changes nothing and asks nothing more
   private readonly now: () => number;
 
   constructor(
@@ -91,6 +92,7 @@ export class SdWatch {
 
   start(): void {
     if (this.timer) return;
+    this.stopped = false;
     const tick = () => {
       void this.checkNow().finally(() => {
         if (this.timer) this.timer = setTimeout(tick, this.d.everyMs ?? SD_CHECK_MS);
@@ -101,6 +103,7 @@ export class SdWatch {
   }
 
   stop(): void {
+    this.stopped = true;
     clearTimeout(this.timer);
     this.timer = undefined;
   }
@@ -119,12 +122,16 @@ export class SdWatch {
     try {
       r = await this.d.read();
     } catch (err) {
+      if (this.stopped) return this.view();
       if (this.current) this.current = { ...this.current, error: err instanceof CameraError ? err.code : (err as Error).message };
       return this.view();
     }
+    if (this.stopped) return this.view();
     const at = this.now();
     const before = this.current;
-    this.current = { ...r, checkedAt: at, error: null, ...(await this.newest(r, at)) };
+    const newest = await this.newest(r, at);
+    if (this.stopped) return this.view();
+    this.current = { ...r, checkedAt: at, error: null, ...newest };
     if (before?.overwrite !== r.overwrite && r.overwrite === false) logger.warn('camera_sd_overwrite_off');
     return this.view();
   }
@@ -133,10 +140,11 @@ export class SdWatch {
   // Only while the card can record and a clip came within that time; a failed search compares nothing.
   private async newest(r: SdReading, now: number): Promise<Pick<SdView, 'lastClipAt' | 'lastRecordingAt' | 'recordingsFrom'>> {
     const none = { lastClipAt: null, lastRecordingAt: null, recordingsFrom: null };
-    const clip = this.d.lastClip();
-    if (!r.present || !r.mounted || !r.formatted || r.recordingEnabled === false || clip === null || now - clip > SD_STALL_LOOKBACK_MS) return none;
+    if (!r.present || !r.mounted || !r.formatted || r.recordingEnabled === false) return none;
     const newestEnd = (list: { end: number }[]) => (list.length ? Math.max(...list.map((x) => x.end)) : null);
     try {
+      const clip = this.d.lastClip();
+      if (clip === null || now - clip > SD_STALL_LOOKBACK_MS) return none;
       const near = clip - NEAR_CLIP_MS;
       const recent = newestEnd(await this.d.recordings(near, now));
       if (recent !== null) return { lastClipAt: clip, lastRecordingAt: recent, recordingsFrom: near };
