@@ -21,13 +21,13 @@ Klaus pre-approved spec, plan, implementation and deployment, and answered M §1
 ## Rulings made in this plan (where the spec is silent or unclear)
 
 - **R3-1 Exact-leaf classification; the contract is the upper bound.** `src/fleet/remote-settable.ts` lists every remote-settable leaf exactly (`cameras.*.<leaf>` for camera leaves) and every denied leaf or prefix explicitly. A test walks `SETTINGS` and fails for any leaf in neither list (a new setting is denied until someone classifies it), and another fails when the compiled remote list is not a subset of the vendored `remote-settable.json`. Deny wins over remote. Making a new setting remote-settable therefore needs a cams-admin contract PR first: a second review on the security boundary.
-- **R3-2 Narrow-only paths.** Google Vision's switch and limits may only move toward **less spending** (`0` = no cap for `dailyCap` and `perCameraDailyCap`), and `retention.auditDays` only **up**: a compromised cams-admin must not be able to run up a paid bill or shorten the audit log that records its own commands. A widening fails `widening_local_only`. `config.rollback` is exempt: it only restores the value the path held before cams-admin's own change.
+- **R3-2 Narrow-only paths; storage local only (coordinator ruling 2026-10-07).** Google Vision's switch and limits may only move toward **less spending** (`0` = no cap for `dailyCap` and `perCameraDailyCap`); **every retention period** (`retention.*Days`, `auditDays` included) and **every size cap** (`stills.maxGB`, `previews.maxGB`, `ftp.maxGB`; unset = no cap) may only go **up**; **`storage.*` and `cameras.*.storage.*` are denied** (local only). A compromised cams-admin must not be able to run up a paid bill, make the proxy delete stills, clips or events, or shorten the audit log that records its own commands. A widening fails `widening_local_only` with a detail saying why; a storage path fails `not_remote_settable`. `config.rollback` is exempt from the direction check: it only restores the value the path held before cams-admin's own change (which a local person set).
 - **R3-3 Path refusals are `done` results, not nacks.** They depend on the proxy's current configuration (camera list, env layer, revision), are journaled like any outcome, and write nothing. The nack list stays the transport-level list of P2.
 - **R3-4 Whole-revision conflict; cams-admin computes the local diff.** `config.set`/`config.unset` compare `baseRevision` with `configRevision` (also on a dry run) and answer `conflict` with the current revision and the current values of the command's paths. The proxy can't know cams-admin's base content (M §8.4's "paths that differ"), so cams-admin re-reads (`config.get`) and diffs its stored view.
 - **R3-5 Rollback is path-level from the backup.** Each cams-admin write (not a dry run) saves `{overridesBefore, paths: [{path, before, after}]}` in `data/admin/overrides.bak-<cmdId>.json` (mode 600, the last 20). `config.rollback {cmdId}` restores each path's override state (`before`) when its current override state still equals `after`; otherwise `conflict` naming the paths that changed. A rolled-back backup is marked; a second rollback fails `already_rolled_back`. The rollback writes its own backup (so it can be rolled back). The card's **Undo** is the same operation with the local admin's rights.
 - **R3-6 `config.get` is compact.** One object per path (`v`, `s`, `r`, `p`, `n`, `by`), plus the remote-settable leaves with the proxy's own bounds (`settable`), at most 24 cameras (the rest in `omittedCameras`). A 24-camera proxy stays under the contract's 64 KiB (a test).
 - **R3-7 `performAction` core.** The body of `POST /control/(cameras/:cam/)actions/:name` moves into `src/api/actions.ts` as `performAction(d, name, cam, input, who): Promise<ActionOutcome>`; the Express handler maps the outcome to the response exactly as today (existing tests unchanged). Commands call the same core with `who = {user: 'cams-admin', requestedBy: 'cams-admin', cmdId}`. The host-wide `restart` (no camera) and every never-remote action stay unreachable from a command (args validation + step 11 + a guard in the handler).
-- **R3-8 Results are projected; the Push-now key leak is fixed.** Every `camera.action` answer is scrubbed (keys matching `/pem|key|password|passwd|secret|token|cookie/i` dropped at any depth) and clamped to 16 KiB. `camera-cert-push` is projected explicitly to `{outcome, served, leaf: {fingerprint, notAfter, names, ips}, detail, tookMs}`. **Finding:** today `POST …/actions/camera-cert-push` answers the whole `PushResult`, including `leaf.keyPem` (the camera certificate's **private key**) and `servedPem`, to the admin's browser. The same projection now applies to the HTTP answer (CHANGELOG: security fix).
+- **R3-8 Results are projected; the Push-now key leak is fixed first** (coordinator ruling: Task 1, the first commit of PR A, so it ships with the next release). Every `camera.action` answer is scrubbed (keys matching `/pem|key|password|passwd|secret|token|cookie/i` dropped at any depth) and clamped to 16 KiB. `camera-cert-push` is projected explicitly to `{outcome, served, leaf: {fingerprint, notAfter, names, ips}, detail, tookMs}`. **Finding:** today `POST …/actions/camera-cert-push` answers the whole `PushResult`, including `leaf.keyPem` (the camera certificate's **private key**) and `servedPem`, to the admin's browser. The same projection now applies to the HTTP answer (CHANGELOG: security fix).
 - **R3-9 Disruptive budgets survive restarts.** The journal budget (contract step 11): `proxy.restart` ≤ 2 per hour, disruptive `camera.action`s ≤ 6 per hour per proxy, counted from `data/admin/commands.json`. An in-memory limit alone would let a compromised cams-admin restart the proxy in a loop (each restart resets memory). The camera's own reboot/power-cycle cooldown (2 min) applies unchanged on top.
 - **R3-10 `proxy.restart` answers first.** The handler journals `ok`, the runner sends `done`, then an `after` hook calls `restartProcess()` (the existing stop-and-exit path). A re-sent `cmdId` after the restart is answered from the journal (`duplicate`), never restarts again.
 - **R3-11 Rate windows.** `config.set`, `config.unset`, `config.rollback` share one 6/min window (a dry run + apply = 2); `camera.action` 12/min; `camera.name.set` 6/min (as the managed rename limit); `config.get` only the totals.
@@ -52,11 +52,11 @@ Klaus pre-approved spec, plan, implementation and deployment, and answered M §1
 
 ## Review Focus
 
-1. **A settings path that looks harmless but redirects trust** — e.g. `cameras.cam1.host` via `config.set`, a camera id that doesn't exist (`cameras.evil.host` adding a camera), `cameras.cam1` as a whole, a legacy path `camera.host` that `normalizeOverrides` translates, or `camsAdmin.url` — must fail **before** `planOverrides` sees it (classification runs on the **translated** paths), and the overrides file must stay byte-identical. Task 6 (a test per case, with a spy on `writeOverrides`).
-2. **A local edit between cams-admin's dry run and its apply** must make the apply answer `conflict` with the current values, write nothing, and leave the local value in place; a dry run after a local edit must also answer `conflict`. Task 6.
-3. **Rollback after a later local edit to one of the same paths** must answer `conflict` naming only that path and restore nothing; a rollback after a local edit to an *unrelated* path must succeed and keep that edit. Task 6.
-4. **A compromised cams-admin looping disruptive commands** (proxy restarts, camera reboots across proxy restarts, Google Vision limits raised, audit days lowered) is bounded by the journal budget and the narrow paths, and each attempt is visible in the audit log. Task 11.
-5. **A camera action's answer carrying key material** (the cert push's `leaf.keyPem`, `servedPem`, an FTP object's `password`) never reaches cams-admin or the admin browser. Tasks 7, 8.
+1. **A settings path that looks harmless but redirects trust** — e.g. `cameras.cam1.host` via `config.set`, a camera id that doesn't exist (`cameras.evil.host` adding a camera), `cameras.cam1` as a whole, a legacy path `camera.host` that `normalizeOverrides` translates, or `camsAdmin.url` — must fail **before** `planOverrides` sees it (classification runs on the **translated** paths), and the overrides file must stay byte-identical. Task 7 (a test per case, with a spy on `writeOverrides`).
+2. **A local edit between cams-admin's dry run and its apply** must make the apply answer `conflict` with the current values, write nothing, and leave the local value in place; a dry run after a local edit must also answer `conflict`. Task 7.
+3. **Rollback after a later local edit to one of the same paths** must answer `conflict` naming only that path and restore nothing; a rollback after a local edit to an *unrelated* path must succeed and keep that edit. Task 7.
+4. **A compromised cams-admin looping disruptive commands or trying to destroy data** (proxy restarts, camera reboots across proxy restarts, Google Vision limits raised, any retention period or size cap lowered, any `storage.*` write) is bounded by the journal budget and the narrow paths, and each attempt is visible in the audit log. Task 12.
+5. **A camera action's answer carrying key material** (the cert push's `leaf.keyPem`, `servedPem`, an FTP object's `password`) never reaches cams-admin or the admin browser. Tasks 8, 9.
 
 ---
 
@@ -125,14 +125,13 @@ Additive to "The P2 contract" (cams-admin `docs/superpowers/plans/2026-10-06-mig
   "denied": [ "<prefix>", … ] }
 ```
 
-`remote` is the **upper bound**: cam-proxy's compiled list must be a subset of it (a test on each side); a path not in `remote` is never remote-settable, whatever a proxy says. `narrow`: cams-admin may only move the value in that direction (`less` spending, `more` evidence): `analytics.googleVision.enabled` (`less`: only to false), `analytics.googleVision.monthlyLimit`, `.dailyCap`, `.checksPerDay`, `.perCameraDailyCap` (`less`; for `dailyCap` and `perCameraDailyCap`, 0 means **no cap**, so 0 counts as infinitely high), `retention.auditDays` (`more`). A widening `config.set`/`config.unset` fails `widening_local_only`; a `config.rollback` is exempt (it restores a value the path had before cams-admin's own change). `denied` documents M §8.2's right column (and `retention.auditDays` is not in it: it is narrow). The `remote` list:
+`remote` is the **upper bound**: cam-proxy's compiled list must be a subset of it (a test on each side); a path not in `remote` is never remote-settable, whatever a proxy says. `narrow`: cams-admin may only move the value in that direction (`less` spending, `more` data kept): `analytics.googleVision.enabled` (`less`: only to false), `analytics.googleVision.monthlyLimit`, `.dailyCap`, `.checksPerDay`, `.perCameraDailyCap` (`less`; for `dailyCap` and `perCameraDailyCap`, 0 means **no cap**, so 0 counts as infinitely high); **every retention period** `retention.stillsDays`, `.previewsDays`, `.clipsDays`, `.eventsDays`, `.auditDays`, `.streamLogDays` and **every size cap** `stills.maxGB`, `previews.maxGB`, `ftp.maxGB` (`more`: a remote write may only keep data longer; for a size cap, unset means **no cap**, so unset counts as infinitely high). A widening `config.set`/`config.unset` fails `widening_local_only` with `detail` "a remote change may only lower spending" or "a remote change may only keep data longer"; a `config.rollback` is exempt (it restores a value the path had before cams-admin's own change, which a local person set). **`storage.*` and `cameras.*.storage.*` are not remote-settable in P3** (local only): a storage budget lowered remotely would make the proxy delete stills and clips. `denied` documents M §8.2's right column plus `storage` and `cameras.*.storage`. The `remote` list:
 
 ```
 stills.enabled stills.stream stills.intervalS stills.size stills.quality stills.maxGB
 previews.tileSize previews.grid previews.quality previews.maxGB
 events.onvif.subscribeMin events.onvif.pullTimeoutS events.poll.enabled events.poll.intervalS events.poll.afterOnvifDownS events.maxOpenMin
 retention.stillsDays retention.previewsDays retention.clipsDays retention.eventsDays retention.auditDays retention.streamLogDays retention.intervalMin
-storage.maxPercent storage.maxBytes storage.minFreeBytes storage.keepHours.stills storage.keepHours.clips storage.keepHours.previews
 composition.concurrent sse.maxClients sse.queuePerClient sse.pingS recordings.cacheMB
 health.diskPercent health.tempC host.stats
 ftp.enabled ftp.stream ftp.stalledHours ftp.maxGB
@@ -140,13 +139,13 @@ archive.enabled archive.warnPercent
 analytics.kinds.person analytics.kinds.vehicle analytics.kinds.pet
 analytics.googleVision.enabled analytics.googleVision.monthlyLimit analytics.googleVision.dailyCap analytics.googleVision.checksPerDay analytics.googleVision.perCameraDailyCap
 cameras.*.name cameras.*.statusPollS cameras.*.stills.enabled cameras.*.stills.stream cameras.*.stills.intervalS
-cameras.*.ftp.enabled cameras.*.ftp.stream cameras.*.storage.sharePercent
+cameras.*.ftp.enabled cameras.*.ftp.stream
 cameras.*.analytics.kinds.person cameras.*.analytics.kinds.vehicle cameras.*.analytics.kinds.pet cameras.*.events.poll.enabled
 ```
 
-`denied`: `server`, `go2rtc`, `ftp.port`, `ftp.passive`, `ftp.tls`, `ftp.publicHost`, `ftp.certFile`, `ftp.keyFile`, `tls`, `composition.font`, `ntp.server`, `poeSwitch`, `camsAdmin`, `cameras.*.id`, `cameras.*.host`, `cameras.*.protocol`, `cameras.*.tlsName`, `cameras.*.user`, `cameras.*.onvifPort`, `cameras.*.rtspPort`, `cameras.*.baichuanPort`, `cameras.*.poeSwitch`, `cameras.*.ftp.user`, `cameras.*.webUiUrl`.
+`denied`: `server`, `go2rtc`, `storage`, `ftp.port`, `ftp.passive`, `ftp.tls`, `ftp.publicHost`, `ftp.certFile`, `ftp.keyFile`, `tls`, `composition.font`, `ntp.server`, `poeSwitch`, `camsAdmin`, `cameras.*.id`, `cameras.*.host`, `cameras.*.protocol`, `cameras.*.tlsName`, `cameras.*.user`, `cameras.*.onvifPort`, `cameras.*.rtspPort`, `cameras.*.baichuanPort`, `cameras.*.poeSwitch`, `cameras.*.ftp.user`, `cameras.*.webUiUrl`, `cameras.*.storage`.
 
-**Path checks on the proxy** (`config.set`/`config.unset`, in this order, every path; any failure fails the whole command, nothing written): (1) a camera path `cameras.<id>.…` whose `<id>` is not a configured camera → `unknown_camera` (adding or removing a camera is never remote); (2) not in the proxy's compiled remote list (deny wins over everything) → `not_remote_settable`; (3) `sources[path] === 'env'` → `held_by_env` (also on a dry run); (4) `baseRevision` ≠ current → `conflict` (also on a dry run); (5) a narrow path moved the wrong way → `widening_local_only`; (6) the result fails the proxy's own validation (`applyOverrides` rules, cross-checks) → `invalid_value` with the proxy's message as `detail`.
+**Path checks on the proxy** (`config.set`/`config.unset`, in this order, every path; any failure fails the whole command, nothing written): (1) a camera path `cameras.<id>.…` whose `<id>` is not a configured camera → `unknown_camera` (adding or removing a camera is never remote); (2) not in the proxy's compiled remote list (deny wins over everything) → `not_remote_settable`; (3) `sources[path] === 'env'` → `held_by_env` (also on a dry run); (4) `baseRevision` ≠ current → `conflict` (also on a dry run); (5) a narrow path moved the wrong way (a retention period or size cap lowered, Google Vision spending raised) → `widening_local_only`; (6) the result fails the proxy's own validation (`applyOverrides` rules, cross-checks) → `invalid_value` with the proxy's message as `detail`.
 
 **`configRevision`** (P2, unchanged): `sha256:` + hex SHA-256 of `jcs(overrides)`. P3 adds behaviour only: a change of it makes an early heartbeat (the 10 s floor applies), so cams-admin learns about a local edit within seconds.
 
@@ -167,6 +166,7 @@ cameras.*.analytics.kinds.person cameras.*.analytics.kinds.vehicle cameras.*.ana
 | `refused-proxy-restart-budget` (allow `["proxy.restart"]`, `$context.journal` two `proxy.restart` within the hour) | valid | `rate_limited` |
 | `refused-camera-action-budget` (allow `["camera.action:camera-reboot"]`, journal six disruptive actions within the hour) | valid | `rate_limited` |
 | `refused-proxy-restart-paused` | valid | `paused` |
+| `valid-result-config-set-failed-retention` (`retention.clipsDays` lowered → `failed`, `widening_local_only`) and `valid-result-config-set-failed-storage` (`storage.maxPercent` → `failed`, `not_remote_settable`) | valid | accepted (server) |
 
 \* the `command` schema checks only that `args` is an object; strict refuses the fixture's args against `commands/<name>.args.schema.json` (a test says so for each).
 
@@ -180,7 +180,7 @@ cameras.*.analytics.kinds.person cameras.*.analytics.kinds.vehicle cameras.*.ana
 
 | file | responsibility |
 |---|---|
-| `test/contract/cams-admin-v1/**` | the vendored P3 contract (Task 1) |
+| `test/contract/cams-admin-v1/**` | the vendored P3 contract (Task 2) |
 | `test/helpers/contract.ts` | `$context.journal`; `pending()` for fixtures this version doesn't implement yet |
 | `src/fleet/remote-settable.ts` (new) | `REMOTE`, `DENIED`, `NARROW`, `classify()`, `narrowingOk()`, `settableView()` (R3-1, R3-2) |
 | `src/fleet/policy.ts` | `IMPLEMENTED` grows; `NEVER_REMOTE_ACTIONS` gains `restart-proxy`; `DISRUPTIVE_ACTIONS`; entry texts without "(not in this version)"; `isDeniedPath`/`DENIED_PATH_PREFIXES` move to `remote-settable.ts` |
@@ -191,7 +191,8 @@ cameras.*.analytics.kinds.person cameras.*.analytics.kinds.vehicle cameras.*.ana
 | `src/fleet/journal.ts` | `countSince(pred, sinceMs)`; entries keep `action` for `camera.action` |
 | `src/fleet/backups.ts` (new) | `OverridesBackups`: save, get, list, markRolledBack, prune to 20 |
 | `src/fleet/config-commands.ts` (new) | handlers `config.get`, `config.set`, `config.unset`, `config.rollback`; `undoLocal()` for the card |
-| `src/api/actions.ts` (new) | `performAction()` (moved from `control-api.ts`), `ActionOutcome`, `projectPush()` |
+| `src/tls/push.ts` | `projectPush()` (Task 1, the security fix) |
+| `src/api/actions.ts` (new) | `performAction()` (moved from `control-api.ts`), `ActionOutcome` |
 | `src/api/control-api.ts` | the action route maps `performAction`; `configView` gains `by`; `recordChanges` uses `configChanges` |
 | `src/fleet/camera-commands.ts` (new) | handlers `camera.action`, `camera.name.set`, `proxy.restart`; `scrub()`, verify functions |
 | `src/fleet/commands.ts` | `Done.after`; journal entries keep `action`; the runner takes the handler map |
@@ -204,7 +205,45 @@ cameras.*.analytics.kinds.person cameras.*.analytics.kinds.vehicle cameras.*.ana
 
 ---
 
-### Task 1: Vendor the P3 contract (PR A)
+### Task 1: "Push now" never answers key material (security fix, first)
+
+The camera-cert-push action answers `PushResult` whole today: `leaf.keyPem` (the private key of the certificate the proxy just pushed to the camera), `leaf.certPem` and `servedPem` reach the admin's browser (`src/api/control-api.ts`, case `camera-cert-push`). This task ships first, with PR A (coordinator ruling); it doesn't depend on the contract, so if cams-admin PR A is delayed, Task 1 goes out as its own PR and release; Task 8 later moves the same projection into the `performAction` core.
+
+**Files:**
+- Modify: `src/api/control-api.ts`, `src/tls/push.ts` (export `projectPush`), `CHANGELOG.md`
+- Test: `test/config-tls.test.ts` (or the existing Push-now route test file: `grep -ln "camera-cert-push" test/*.test.ts`)
+
+**Interfaces:**
+- Produces: `export function projectPush(r: PushResult): { outcome: PushOutcome; served: string | null; leaf?: { fingerprint: string; notAfter: number; names: string[]; ips: string[] }; clearedTo?: string | null; detail?: string; tookMs: number }` in `src/tls/push.ts`.
+
+- [ ] **Step 1: Failing test** next to the existing Push-now route test:
+
+```ts
+it('Push now answers no key material (no PEM, no keyPem/certPem/servedPem)', async () => {
+  const res = await request(app).post('/control/cameras/cam1/actions/camera-cert-push').set(adminAuth);
+  expect(res.status).toBe(200);
+  expect(JSON.stringify(res.body)).not.toMatch(/BEGIN|PRIVATE|keyPem|certPem|servedPem/);
+  if (res.body.outcome === 'pushed') expect(res.body.leaf).toEqual({ fingerprint: expect.any(String), notAfter: expect.any(Number), names: expect.any(Array), ips: expect.any(Array) });
+});
+it('projectPush keeps exactly the public fields', () => {
+  const r = { outcome: 'pushed', served: 'SHA256:AA', servedPem: 'PEM', leaf: { certPem: 'C', keyPem: 'K', fingerprint: 'SHA256:AA', notAfter: 1, names: ['n'], ips: ['192.0.2.1'] }, tookMs: 5 } as PushResult;
+  expect(projectPush(r)).toEqual({ outcome: 'pushed', served: 'SHA256:AA', leaf: { fingerprint: 'SHA256:AA', notAfter: 1, names: ['n'], ips: ['192.0.2.1'] }, tookMs: 5 });
+});
+```
+
+- [ ] **Step 2: Run** the test file → FAIL (the answer holds `keyPem`).
+- [ ] **Step 3: Implement** `projectPush` in `src/tls/push.ts` (copy `outcome`, `served`, `clearedTo` when present, `detail` when present, `tookMs`; `leaf` → `{fingerprint, notAfter, names, ips}`), and in `control-api.ts`: `case 'camera-cert-push': return void res.json(projectPush(await d.tls.pushNow(cam, {...})));`. The web client reads only `outcome` and `detail` (`CertificatesCard.svelte`): no UI change. `CHANGELOG.md` under `## Unreleased`: "Security: Push now no longer returns the camera certificate's private key in its answer".
+- [ ] **Step 4: Run** `npx vitest run <that file> test/control-api.test.ts` and `npm run check` → PASS.
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/api/control-api.ts src/tls/push.ts CHANGELOG.md test/<that file>
+git commit -m "fix(tls): Push now no longer answers the camera certificate's private key"
+```
+
+---
+
+### Task 2: Vendor the P3 contract (PR A)
 
 **Files:**
 - Modify: `test/contract/cams-admin-v1/**` (copied from cams-admin `main` after cams-admin PR A), `test/contract/cams-admin-v1/SOURCE`, `test/helpers/contract.ts`, `test/fleet-contract.test.ts`, `test/fleet-command-check.test.ts` (the fixture loop)
@@ -218,7 +257,7 @@ cameras.*.analytics.kinds.person cameras.*.analytics.kinds.vehicle cameras.*.ana
 
 ```ts
 // A command fixture this version can't run yet (the cross-repo rule of the
-// P3 contract): skipped and listed, never passed silently. Task 12 asserts
+// P3 contract): skipped and listed, never passed silently. Task 13 asserts
 // that nothing is pending any more.
 export const pending = (f: Fixture, implemented: ReadonlySet<string>): boolean => {
   const b = (f.message as { body?: { command?: unknown } })?.body;
@@ -226,7 +265,7 @@ export const pending = (f: Fixture, implemented: ReadonlySet<string>): boolean =
 };
 ```
 
-and in the fixture loop of `test/fleet-command-check.test.ts`: `if (pending(f, IMPLEMENTED)) { it.skip(\`${name} (pending: not implemented yet)\`, () => {}); continue; }`. Add `journal` to `FixtureContext` and pass it on in the context builder as `journal` entries (Task 4 reads them).
+and in the fixture loop of `test/fleet-command-check.test.ts`: `if (pending(f, IMPLEMENTED)) { it.skip(\`${name} (pending: not implemented yet)\`, () => {}); continue; }`. Add `journal` to `FixtureContext` and pass it on in the context builder as `journal` entries (Task 5 reads them).
 - [ ] **Step 4: Run** `npx vitest run test/fleet-contract.test.ts test/fleet-command-check.test.ts && scripts/contract-drift.sh` → PASS (P3 fixtures listed as skipped).
 - [ ] **Step 5: Commit**
 
@@ -235,11 +274,11 @@ git add test/contract/cams-admin-v1 test/helpers/contract.ts test/fleet-contract
 git commit -m "test(contract): vendor the P3 contract; P3 command fixtures pending until implemented"
 ```
 
-**→ PR A ends here** (vendor, no behaviour change). Merge the same day as cams-admin PR A.
+**→ PR A ends here** (the Push-now security fix and the vendored contract; no other behaviour change). Release cam-proxy after it merges, so the fix ships early. Merge the same day as cams-admin PR A.
 
 ---
 
-### Task 2: The remote-settable classification
+### Task 3: The remote-settable classification
 
 **Files:**
 - Create: `src/fleet/remote-settable.ts`, `test/fleet-remote-settable.test.ts`
@@ -315,10 +354,19 @@ describe('narrow paths (R3-2)', () => {
     expect(narrowingOk('analytics.googleVision.perCameraDailyCap', 5, 0)).toBe(false);
     expect(narrowingOk('analytics.googleVision.checksPerDay', 5, 0)).toBe(true); // 0 = no checks
   });
-  it('audit days only up; other paths are free', () => {
-    expect(narrowingOk('retention.auditDays', 90, 30)).toBe(false);
-    expect(narrowingOk('retention.auditDays', 30, 90)).toBe(true);
+  it('every retention period and size cap only up (keep data longer); other paths are free', () => {
+    for (const p of ['retention.stillsDays', 'retention.previewsDays', 'retention.clipsDays', 'retention.eventsDays', 'retention.auditDays', 'retention.streamLogDays']) {
+      expect(narrowingOk(p, 90, 30), p).toBe(false);
+      expect(narrowingOk(p, 30, 90), p).toBe(true);
+    }
+    expect(narrowingOk('stills.maxGB', 50, 10)).toBe(false);
+    expect(narrowingOk('stills.maxGB', undefined, 10)).toBe(false); // unset = no cap
+    expect(narrowingOk('stills.maxGB', 10, undefined)).toBe(true);
+    expect(narrowingOk('retention.intervalMin', 60, 5)).toBe(true); // timing only, deletes nothing more
     expect(narrowingOk('sse.pingS', 30, 5)).toBe(true);
+  });
+  it('storage is local only (coordinator ruling): every storage.* and cameras.*.storage.* leaf is denied', () => {
+    for (const p of leafPaths(SETTINGS, '', IDS).filter((x) => /^storage\.|^cameras\.[^.]+\.storage\./.test(x))) expect(classify(p, IDS), p).toBe('denied');
   });
   it('settableView: every remote leaf with its bounds, narrow ones marked', () => {
     const v = settableView();
@@ -345,7 +393,6 @@ export const REMOTE: readonly string[] = [
   'previews.tileSize', 'previews.grid', 'previews.quality', 'previews.maxGB',
   'events.onvif.subscribeMin', 'events.onvif.pullTimeoutS', 'events.poll.enabled', 'events.poll.intervalS', 'events.poll.afterOnvifDownS', 'events.maxOpenMin',
   'retention.stillsDays', 'retention.previewsDays', 'retention.clipsDays', 'retention.eventsDays', 'retention.auditDays', 'retention.streamLogDays', 'retention.intervalMin',
-  'storage.maxPercent', 'storage.maxBytes', 'storage.minFreeBytes', 'storage.keepHours.stills', 'storage.keepHours.clips', 'storage.keepHours.previews',
   'composition.concurrent', 'sse.maxClients', 'sse.queuePerClient', 'sse.pingS', 'recordings.cacheMB',
   'health.diskPercent', 'health.tempC', 'host.stats',
   'ftp.enabled', 'ftp.stream', 'ftp.stalledHours', 'ftp.maxGB',
@@ -353,20 +400,26 @@ export const REMOTE: readonly string[] = [
   'analytics.kinds.person', 'analytics.kinds.vehicle', 'analytics.kinds.pet',
   'analytics.googleVision.enabled', 'analytics.googleVision.monthlyLimit', 'analytics.googleVision.dailyCap', 'analytics.googleVision.checksPerDay', 'analytics.googleVision.perCameraDailyCap',
   'cameras.*.name', 'cameras.*.statusPollS', 'cameras.*.stills.enabled', 'cameras.*.stills.stream', 'cameras.*.stills.intervalS',
-  'cameras.*.ftp.enabled', 'cameras.*.ftp.stream', 'cameras.*.storage.sharePercent',
+  'cameras.*.ftp.enabled', 'cameras.*.ftp.stream',
   'cameras.*.analytics.kinds.person', 'cameras.*.analytics.kinds.vehicle', 'cameras.*.analytics.kinds.pet', 'cameras.*.events.poll.enabled',
 ];
 export const DENIED: readonly string[] = [
-  'server', 'go2rtc', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.publicHost', 'ftp.certFile', 'ftp.keyFile', 'tls', 'composition.font', 'ntp.server', 'poeSwitch', 'camsAdmin',
-  'cameras.*.id', 'cameras.*.host', 'cameras.*.protocol', 'cameras.*.tlsName', 'cameras.*.user', 'cameras.*.onvifPort', 'cameras.*.rtspPort', 'cameras.*.baichuanPort', 'cameras.*.poeSwitch', 'cameras.*.ftp.user', 'cameras.*.webUiUrl',
+  'server', 'go2rtc', 'storage', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.publicHost', 'ftp.certFile', 'ftp.keyFile', 'tls', 'composition.font', 'ntp.server', 'poeSwitch', 'camsAdmin',
+  'cameras.*.id', 'cameras.*.host', 'cameras.*.protocol', 'cameras.*.tlsName', 'cameras.*.user', 'cameras.*.onvifPort', 'cameras.*.rtspPort', 'cameras.*.baichuanPort', 'cameras.*.poeSwitch', 'cameras.*.ftp.user', 'cameras.*.webUiUrl', 'cameras.*.storage',
 ];
-// R3-2: toward less spending, or toward more audit evidence.
+// R3-2: toward less spending, or toward keeping data longer (retention
+// periods, size caps). storage.* is denied outright (local only).
 export const NARROW: Readonly<Record<string, 'less' | 'more'>> = {
   'analytics.googleVision.enabled': 'less', 'analytics.googleVision.monthlyLimit': 'less', 'analytics.googleVision.dailyCap': 'less',
-  'analytics.googleVision.checksPerDay': 'less', 'analytics.googleVision.perCameraDailyCap': 'less', 'retention.auditDays': 'more',
+  'analytics.googleVision.checksPerDay': 'less', 'analytics.googleVision.perCameraDailyCap': 'less',
+  'retention.stillsDays': 'more', 'retention.previewsDays': 'more', 'retention.clipsDays': 'more', 'retention.eventsDays': 'more', 'retention.auditDays': 'more', 'retention.streamLogDays': 'more',
+  'stills.maxGB': 'more', 'previews.maxGB': 'more', 'ftp.maxGB': 'more',
 };
 // Caps where 0 means "no cap" (schema docs): 0 counts as infinitely high.
 const ZERO_IS_UNLIMITED = new Set(['analytics.googleVision.dailyCap', 'analytics.googleVision.perCameraDailyCap']);
+// Size caps where unset means "no cap": unset counts as infinitely high.
+const UNSET_IS_UNLIMITED = new Set(['stills.maxGB', 'previews.maxGB', 'ftp.maxGB']);
+export const NARROW_REASON = { less: 'a remote change may only lower spending', more: 'a remote change may only keep data longer' } as const;
 const CAMERA_ID_RE = new RegExp(CAMERA_ID);
 const under = (p: string, x: string) => p === x || p.startsWith(`${x}.`);
 
@@ -391,7 +444,7 @@ export function narrowingOk(path: string, from: unknown, to: unknown): boolean {
   const dir = NARROW[path];
   if (!dir) return true;
   if (typeof from === 'boolean' || typeof to === 'boolean') return dir === 'less' ? to === false || from === to : to === true || from === to;
-  const n = (x: unknown) => (typeof x !== 'number' ? 0 : ZERO_IS_UNLIMITED.has(path) && x === 0 ? Infinity : x);
+  const n = (x: unknown) => (x === undefined && UNSET_IS_UNLIMITED.has(path) ? Infinity : typeof x !== 'number' ? 0 : ZERO_IS_UNLIMITED.has(path) && x === 0 ? Infinity : x);
   return dir === 'less' ? n(to) <= n(from) : n(to) >= n(from);
 }
 
@@ -415,7 +468,7 @@ git commit -m "feat(fleet): remote-settable classification (exact leaves, deny w
 
 ---
 
-### Task 3: Pure planning of overrides (no behaviour change)
+### Task 4: Pure planning of overrides (no behaviour change)
 
 **Files:**
 - Create: `src/config/changes.ts`, `test/config-plan.test.ts`
@@ -482,7 +535,7 @@ git commit -m "refactor(config): plan overrides without writing; shared change l
 
 ---
 
-### Task 4: The command check for P3 (args, entries, windows, journal budgets)
+### Task 5: The command check for P3 (args, entries, windows, journal budgets)
 
 **Files:**
 - Modify: `src/fleet/command-args.ts`, `src/fleet/command-check.ts`, `src/fleet/journal.ts`, `src/fleet/policy.ts`, `test/fleet-command-check.test.ts`, `test/fleet-journal.test.ts`, `test/fleet-policy.test.ts`
@@ -490,7 +543,7 @@ git commit -m "refactor(config): plan overrides without writing; shared change l
 **Interfaces:**
 - Produces:
   - `command-args.ts`: `ConfigSetArgs { v: 1; dryRun: boolean; baseRevision: string; set: Record<string, boolean | number | string> }`, `ConfigUnsetArgs { v: 1; dryRun: boolean; baseRevision: string; paths: string[] }`, `ConfigRollbackArgs { v: 1; dryRun: boolean; cmdId: string }`, `CameraActionArgs { v: 1; camera: string | null; action: string; input?: { kind: string; camera?: boolean } }`, `CameraNameArgs { v: 1; camera: string; name: string }`; `validateConfigGet`, `validateConfigSet`, `validateConfigUnset`, `validateConfigRollback`, `validateCameraAction`, `validateCameraName`, `validateProxyRestart`, all in `ARGS_VALIDATORS`.
-  - `policy.ts`: `NEVER_REMOTE_ACTIONS` + `'restart-proxy'`; `export const DISRUPTIVE_ACTIONS = ['restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ftp-off', 'camera-ntp-set', 'camera-cert-push'] as const`; `export const DISRUPTIVE_ENTRIES: ReadonlySet<string>` (`proxy.restart` + `camera.action:<d>`); `IMPLEMENTED` stays P2 here and grows in Task 9.
+  - `policy.ts`: `NEVER_REMOTE_ACTIONS` + `'restart-proxy'`; `export const DISRUPTIVE_ACTIONS = ['restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ftp-off', 'camera-ntp-set', 'camera-cert-push'] as const`; `export const DISRUPTIVE_ENTRIES: ReadonlySet<string>` (`proxy.restart` + `camera.action:<d>`); `IMPLEMENTED` stays P2 here and grows in Task 10.
   - `journal.ts`: `JournalEntry.action?: string`; `countSince(pred: (e: JournalEntry) => boolean, sinceMs: number): { n: number; oldest: number | null }`.
   - `CheckContext.journalBudget?: (command: string, action: string | undefined) => { ok: true } | { ok: false; retryAfterS: number }`.
   - `CommandLimits`: groups `config.set|config.unset|config.rollback` → one 6/min window; `camera.action` 12/min; `camera.name.set` 6/min.
@@ -629,7 +682,7 @@ git commit -m "feat(fleet): P3 command check: args, camera.action entries, share
 
 ---
 
-### Task 5: Overrides backups
+### Task 6: Overrides backups
 
 **Files:**
 - Create: `src/fleet/backups.ts`, `test/fleet-backups.test.ts`
@@ -668,14 +721,14 @@ git commit -m "feat(fleet): overrides backups per cams-admin write (last 20, pri
 
 ---
 
-### Task 6: `config.get`, `config.set`, `config.unset`, `config.rollback`
+### Task 7: `config.get`, `config.set`, `config.unset`, `config.rollback`
 
 **Files:**
 - Create: `src/fleet/config-commands.ts`, `test/fleet-config-commands.test.ts`
 - Modify: `src/api/control-api.ts` (export `configView` from a small module or move it to `src/config/view.ts` so both use it)
 
 **Interfaces:**
-- Consumes: Tasks 2, 3, 5; `configRevision(l)` (P2); `Handler`, `Done` (P2 `commands.ts`).
+- Consumes: Tasks 3, 4, 6; `configRevision(l)` (P2); `Handler`, `Done` (P2 `commands.ts`).
 - Produces:
 
 ```ts
@@ -754,7 +807,25 @@ it('Review Focus 2: a local edit between dry run and apply → conflict with the
   const dry = await run('config.set', { v: 1, dryRun: true, baseRevision: base, set: { 'sse.pingS': 7 } }, 3);
   expect(dry.status).toBe('conflict');
 });
-it('narrow paths (R3-2): raising a Vision limit or lowering audit days fails widening_local_only', async () => {});
+it('R3-2: lowering any retention period or size cap, or raising a Vision limit, fails widening_local_only with the reason; any storage.* write fails not_remote_settable; nothing written', async () => {
+  const before = readFileSync(overridesFile, 'utf8');
+  for (const [set, code, detail] of [
+    [{ 'retention.clipsDays': 1 }, 'widening_local_only', 'a remote change may only keep data longer'],
+    [{ 'retention.stillsDays': 1 }, 'widening_local_only', 'a remote change may only keep data longer'],
+    [{ 'retention.auditDays': 1 }, 'widening_local_only', 'a remote change may only keep data longer'],
+    [{ 'ftp.maxGB': 1 }, 'widening_local_only', 'a remote change may only keep data longer'],
+    [{ 'analytics.googleVision.monthlyLimit': 99999 }, 'widening_local_only', 'a remote change may only lower spending'],
+    [{ 'storage.maxPercent': 10 }, 'not_remote_settable', undefined], [{ 'storage.maxBytes': 1 }, 'not_remote_settable', undefined],
+    [{ 'storage.keepHours.clips': 0 }, 'not_remote_settable', undefined], [{ 'cameras.cam1.storage.sharePercent': 1 }, 'not_remote_settable', undefined],
+  ] as const) {
+    const r = await run('config.set', { v: 1, dryRun: false, baseRevision: rev(), set });
+    expect(r, JSON.stringify(set)).toMatchObject({ status: 'failed', code, result: { paths: [expect.objectContaining({ code, ...(detail ? { detail } : {}) })] } });
+  }
+  expect(readFileSync(overridesFile, 'utf8')).toBe(before);
+  // raising a retention period works
+  expect((await run('config.set', { v: 1, dryRun: true, baseRevision: rev(), set: { 'retention.clipsDays': 400 > 365 ? 365 : 400 } })).status).toBe('ok');
+  // config.unset of a size cap set locally (back to "no cap") is allowed; of a retention period above the default it is refused
+});
 it('invalid_value: the proxy\'s own rules (e.g. previews.grid too small for stills.intervalS), the message as detail', async () => {});
 it('config.unset: back to file/default, same checks, backup saved', async () => {});
 it('Review Focus 3: rollback restores only the command\'s paths; an unrelated local edit stays; the same path edited since → conflict', async () => {
@@ -818,7 +889,7 @@ function write(d: ConfigCommandDeps, cmd: CommandBody, args: { dryRun: boolean; 
   }
   const changes = configChanges(l, plan.next);
   const widening = changes.filter((c) => !narrowingOk(c.path, c.from, c.to));
-  if (widening.length) return failed('widening_local_only', widening.map((c) => ({ path: c.path, code: 'widening_local_only' })));
+  if (widening.length) return failed('widening_local_only', widening.map((c) => ({ path: c.path, code: 'widening_local_only', detail: NARROW_REASON[NARROW[c.path]] })));
   const unchanged = req.paths.filter((p) => !changes.some((c) => c.path === p));
   if (args.dryRun) return { status: 'ok', result: { dryRun: true, baseRevision: revision, revision, changes, unchanged } };
   try {
@@ -853,7 +924,7 @@ git commit -m "feat(fleet): config.get/set/unset/rollback with dry run, revision
 
 ---
 
-### Task 7: The `performAction` core, and the Push-now key leak
+### Task 8: The `performAction` core (keeps Task 1's projection)
 
 **Files:**
 - Create: `src/api/actions.ts`, `test/control-actions-core.test.ts`
@@ -869,7 +940,6 @@ export type ActionOutcome =
   | { status: number; error: string; detail?: string; extra?: Record<string, unknown>; retryAfterS?: number };
 export type ActionDeps = Pick<ControlDeps, 'cameras' | 'cameraCount' | 'cameraId' | 'running' | 'resubscribe' | 'checkCamera' | 'storage' | 'cameraFtp' | 'restart' | 'restartCamera' | 'cameraReboot' | 'cameraPowerCycle' | 'poeSwitch' | 'findCamera' | 'envFile' | 'restartProcess' | 'inventory' | 'archive' | 'tls' | 'cameraNtp' | 'audit'>;
 export async function performAction(d: ActionDeps, name: string, cam: string | null, body: Record<string, unknown>, who: ActionWho): Promise<ActionOutcome>;
-export function projectPush(r: PushResult): { outcome: string; served: string | null; leaf?: { fingerprint: string; notAfter: number; names: string[]; ips: string[] }; detail?: string; tookMs: number };
 export const OWN_AUDIT: ReadonlySet<string>; // moved, unchanged
 ```
 
@@ -905,19 +975,19 @@ The route keeps the parts that are HTTP-only: `targetCamera` (404/503), the `con
 
 ```bash
 git add src/api/actions.ts src/api/control-api.ts src/camera/reboot.ts src/tls/camera-certs.ts test/control-actions-core.test.ts test/control-api.test.ts
-git commit -m "refactor(api): actions as an Express-free core; Push now no longer answers key material"
+git commit -m "refactor(api): actions as an Express-free core"
 ```
 
 ---
 
-### Task 8: `camera.action`, `camera.name.set`, `proxy.restart`
+### Task 9: `camera.action`, `camera.name.set`, `proxy.restart`
 
 **Files:**
 - Create: `src/fleet/camera-commands.ts`, `test/fleet-camera-commands.test.ts`
 - Modify: `src/fleet/commands.ts` (`Done.after`, journal `action`)
 
 **Interfaces:**
-- Consumes: `performAction`, `ActionWho` (Task 7); `cameraName.write` (existing); `restartProcess` (existing).
+- Consumes: `performAction`, `ActionWho` (Task 8); `cameraName.write` (existing); `restartProcess` (existing).
 - Produces:
 
 ```ts
@@ -1024,7 +1094,7 @@ export function cameraHandlers(d: CameraCommandDeps): Record<'camera.action' | '
 }
 ```
 
-`camera.name.set` writes the same `camera-name` audit record the route writes (`user: 'cams-admin'`, `details.cmdId`, `details.actor`): factor the route's record into `cameraNameRecord(audit, base, from, read, to, outcome)` in `control-api.ts` and call it from both. `verifyFtp` compares the re-read (redacted) object against the intended target: setup → `enable === 1`, `server`, `port`, `onlyFtps`, `streamType`, and `uploadOn` ⊇ `['MD','AI_PEOPLE','AI_VEHICLE','AI_DOG_CAT']`; off → `enable === 0`. `verifyNtp`: `set`/`already` → verified; `failed` → `mismatch: ['server']`; `unsupported` → `verified: false, mismatch: []`. `verifyPush`: `outcome` `pushed`/`current` and `served === leaf.fingerprint`. The projection of `camera-cert-push` already happened in `performAction` (Task 7).
+`camera.name.set` writes the same `camera-name` audit record the route writes (`user: 'cams-admin'`, `details.cmdId`, `details.actor`): factor the route's record into `cameraNameRecord(audit, base, from, read, to, outcome)` in `control-api.ts` and call it from both. `verifyFtp` compares the re-read (redacted) object against the intended target: setup → `enable === 1`, `server`, `port`, `onlyFtps`, `streamType`, and `uploadOn` ⊇ `['MD','AI_PEOPLE','AI_VEHICLE','AI_DOG_CAT']`; off → `enable === 0`. `verifyNtp`: `set`/`already` → verified; `failed` → `mismatch: ['server']`; `unsupported` → `verified: false, mismatch: []`. `verifyPush`: `outcome` `pushed`/`current` and `served === leaf.fingerprint`. The projection of `camera-cert-push` already happened in `performAction` (Task 8).
 - [ ] **Step 4: Run** `npx vitest run test/fleet-camera-commands.test.ts test/fleet-commands.test.ts` → PASS.
 - [ ] **Step 5: Commit**
 
@@ -1035,7 +1105,7 @@ git commit -m "feat(fleet): camera.action, camera.name.set, proxy.restart throug
 
 ---
 
-### Task 9: Wiring, `IMPLEMENTED`, early heartbeat on a local edit
+### Task 10: Wiring, `IMPLEMENTED`, early heartbeat on a local edit
 
 **Files:**
 - Modify: `src/proxy.ts`, `src/fleet/policy.ts` (`IMPLEMENTED`, `ENTRY_TEXT`), `test/fleet-commands.test.ts`, `test/fleet-heartbeat.test.ts`, `test/fleet-client.test.ts`
@@ -1074,7 +1144,7 @@ git commit -m "feat(fleet): run the P3 commands; a local settings edit sends an 
 
 ---
 
-### Task 10: Visible on the proxy — changes list, Undo, CLI, Settings marker, card
+### Task 11: Visible on the proxy — changes list, Undo, CLI, Settings marker, card
 
 **Files:**
 - Modify: `src/api/cams-admin-api.ts`, `src/api/control-api.ts` (`configView` `by`), `src/fleet/cli.ts`, `src/cli.ts` (usage), `web/src/lib/cams-admin.ts`, `web/src/components/CamsAdminCommands.svelte`, `web/src/lib/settings.ts` and the Settings page row component, `test/fleet-control.test.ts`, `test/fleet-cli.test.ts`, `test/cams-admin-ui.test.ts`, `e2e/` (one spec, see Step 1)
@@ -1097,14 +1167,14 @@ git commit -m "feat(ui): cams-admin changes with Undo, grouped command entries, 
 
 ---
 
-### Task 11: Hostile cams-admin (P3), camera round trip against cam-sim, Pi compatibility
+### Task 12: Hostile cams-admin (P3), camera round trip against cam-sim, Pi compatibility
 
 **Files:**
 - Modify: `test/fleet-isolation.test.ts`, `test/pi-compat.test.ts`
 - Create: `test/fleet-p3-roundtrip.test.ts`
 
 - [ ] **Step 1: Write the tests.**
-  - `fleet-isolation.test.ts` (the P1/P2 suite with the fake cams-admin) gains a P3 block, **every allow entry allowed**: (a) `config.set` of every `DENIED` prefix's first leaf and of `cameras.<new id>.host` → `failed`, `overrides.json` byte-identical, one `admin-command` failure record each; (b) 50 `config.set` in a minute → at most 6 run, the rest `rate_limited`; (c) `proxy.restart` three times in an hour, with a simulated process restart (a new runner on the same journal file) between them → the third `rate_limited` (R3-9) and `restartProcess` called twice; (d) seven `camera.action camera-reboot` across two runners in an hour → the seventh `rate_limited`; (e) Google Vision `monthlyLimit` raised and `retention.auditDays` lowered → `widening_local_only`, nothing written; (f) `camera.action` with every `NEVER_REMOTE_ACTIONS` name → `not_allowed`, the never-remote functions' spies (`findCamera`, `writeEnvKey`, `tls.rotate`, `tls.clearTrust`, `tls.dropPrevious`, `archive.clear`, `inventory.repair`, `poeSwitch.poeOn`, `restartProcess`) never called; (g) stills, events, FTP intake and the client API keep answering within their usual time during (b) (the P2 flood check, extended).
+  - `fleet-isolation.test.ts` (the P1/P2 suite with the fake cams-admin) gains a P3 block, **every allow entry allowed**: (a) `config.set` of every `DENIED` prefix's first leaf and of `cameras.<new id>.host` → `failed`, `overrides.json` byte-identical, one `admin-command` failure record each; (b) 50 `config.set` in a minute → at most 6 run, the rest `rate_limited`; (c) `proxy.restart` three times in an hour, with a simulated process restart (a new runner on the same journal file) between them → the third `rate_limited` (R3-9) and `restartProcess` called twice; (d) seven `camera.action camera-reboot` across two runners in an hour → the seventh `rate_limited`; (e) Google Vision `monthlyLimit` raised, every `retention.*Days` and `*.maxGB` lowered → `widening_local_only`; every `storage.*` and `cameras.*.storage.*` leaf → `not_remote_settable`; stills and clips on disk unchanged after a forced storage run, nothing written; (f) `camera.action` with every `NEVER_REMOTE_ACTIONS` name → `not_allowed`, the never-remote functions' spies (`findCamera`, `writeEnvKey`, `tls.rotate`, `tls.clearTrust`, `tls.dropPrevious`, `archive.clear`, `inventory.repair`, `poeSwitch.poeOn`, `restartProcess`) never called; (g) stills, events, FTP intake and the client API keep answering within their usual time during (b) (the P2 flood check, extended).
   - `fleet-p3-roundtrip.test.ts` (in-process cam-sim, the proxy started as the e2e harness does, the fake cams-admin connected): allow `config.get`, `config.set`, `config.rollback`, `camera.name.set`, `camera.action:camera-ntp-set` **in the test's own temp policy file**; `config.get` → `set` dry run → apply (`sse.pingS`) → the live SSE ping interval changed → rollback → the default again, and both `config-change` records present; `camera.name.set` → cam-sim's `GetDevName` returns the new name, `verified: true`, then set back; with `ntp.server` set locally to `192.0.2.123`, `camera-ntp-set` → cam-sim's `GetNtp` server is `192.0.2.123`, `verified: true`.
   - `pi-compat.test.ts`: the Pi config (no `camsAdmin.url`) loads, `GET /control/config` has no `by`, `data/admin/` holds no `overrides.bak-*` after a start and a local settings change.
 - [ ] **Step 2: Run** `npx vitest run test/fleet-isolation.test.ts test/fleet-p3-roundtrip.test.ts test/pi-compat.test.ts` → PASS (fix the code, not the test, on a failure).
@@ -1117,13 +1187,13 @@ git commit -m "test(fleet): hostile P3 commands, budgets across restarts, camera
 
 ---
 
-### Task 12: Docs, CHANGELOG, final checks
+### Task 13: Docs, CHANGELOG, final checks
 
 **Files:**
 - Modify: `docs/cams-admin.md`, `CHANGELOG.md` (`## Unreleased`), `CLAUDE.md`, `README.md` (one line), `deploy/cluster/REQUEST.md` (one line: "P3 needs no cluster change")
 - Test: whole suite
 
-- [ ] **Step 1:** `docs/cams-admin.md`: "Remote configuration (P3)" — the commands; the remote-settable and denied lists (link to `src/fleet/remote-settable.ts`); narrow-only paths and why; dry run, conflict, rollback, Undo; the disruptive entries and their budgets; "cams-admin compromised" runbook extended (pause on the card or `CAMPROXY_ADMIN_COMMANDS=off`; review `GET /control/admin/changes`; Undo each change; block the managed tokens); cut-over steps 3–4 for this proxy (allow `config.get` only and compare; then `config.set` + `config.rollback`, one harmless change `sse.pingS` and its rollback from cams-admin; disruptive entries only when Klaus asks for them on that proxy). `CHANGELOG.md`: user-visible changes plus **Security: "Push now" no longer returns the camera certificate's private key**. `CLAUDE.md`: the `data/admin/` rule names `overrides.bak-*.json`; "P3: settings commands only on `src/fleet/remote-settable.ts`'s list; a new setting is denied until classified (remote needs the cams-admin contract first)".
+- [ ] **Step 1:** `docs/cams-admin.md`: "Remote configuration (P3)" — the commands; the remote-settable and denied lists (link to `src/fleet/remote-settable.ts`); narrow-only paths and why (spending only lower; retention and size caps only higher; storage local only); dry run, conflict, rollback, Undo; the disruptive entries and their budgets; "cams-admin compromised" runbook extended (pause on the card or `CAMPROXY_ADMIN_COMMANDS=off`; review `GET /control/admin/changes`; Undo each change; block the managed tokens); cut-over steps 3–4 for this proxy (allow `config.get` only and compare; then `config.set` + `config.rollback`, one harmless change `sse.pingS` and its rollback from cams-admin; disruptive entries only when Klaus asks for them on that proxy). `CHANGELOG.md`: user-visible changes plus **Security: "Push now" no longer returns the camera certificate's private key**. `CLAUDE.md`: the `data/admin/` rule names `overrides.bak-*.json`; "P3: settings commands only on `src/fleet/remote-settable.ts`'s list; a new setting is denied until classified (remote needs the cams-admin contract first)".
 - [ ] **Step 2:** Add to `test/fleet-contract.test.ts`: `it('no vendored command fixture is pending (P3 implemented)', …)` with the real `IMPLEMENTED`.
 - [ ] **Step 3:** `npm test && npm run build && npm run lint:types && npm run check && npm run schema && git diff --exit-code config.schema.json && scripts/contract-drift.sh && npm run test:e2e && npm run test:e2e:multi && npm audit --audit-level=high` → all green (`config.schema.json` unchanged: P3 adds no setting).
 - [ ] **Step 4: Commit**
@@ -1142,10 +1212,10 @@ git commit -m "docs: remote configuration (P3), runbook, Push now security fix"
 Each step is its own PR to `main`; merge only when every check passes; every step leaves the Pi and the cluster proxy working.
 
 1. **cams-admin PR A — P3 contract** (cams-admin plan Tasks 1–2). cam-proxy's `contract-drift` fails on cam-proxy PRs until step 2: do it the same day. The cams-admin cross-check reports the P3 fixtures `pending` until step 4.
-2. **cam-proxy PR A — vendor** (this plan, Task 1). No behaviour change; no release.
+2. **cam-proxy PR A — Push-now fix + vendor** (this plan, Tasks 1–2). Release cam-proxy right after (the security fix; nothing else changes). The cluster proxy updates itself; the Pi by the release owner.
 3. **cams-admin PR B — remote configuration** (cams-admin plan Tasks 3–7, 9). Release cams-admin. Safe: a P2 proxy doesn't implement P3, reports no P3 entry in `allow`, and cams-admin greys everything out.
-4. **cam-proxy PR B** (this plan, Tasks 2–12). Release cam-proxy: the cluster proxy updates through the release workflow; **the Pi** is updated by the release owner (pull + `docker compose up -d`; not by a session told not to touch the Pi). Both proxies still allow nothing new → nothing changes until step 6. The cams-admin cross-check now runs every P3 fixture against cam-proxy `main` (no `pending`).
-5. **cams-admin PR C — local stack** (cams-admin plan Task 8): real `admin-enroll`, the two-proxy P3 check against cam-proxy `main`, on the Mac.
+4. **cam-proxy PR B** (this plan, Tasks 3–13). Release cam-proxy: the cluster proxy updates through the release workflow; **the Pi** is updated by the release owner (pull + `docker compose up -d`; not by a session told not to touch the Pi). Both proxies still allow nothing new → nothing changes until step 6. The cams-admin cross-check now runs every P3 fixture against cam-proxy `main` (no `pending`).
+5. **cams-admin PR C — local stack** (cams-admin plan Task 9): real `admin-enroll`, the two-proxy P3 check against cam-proxy `main`, on the Mac.
 6. **Cut-over steps 3–4** (M §11.4), with Klaus, one proxy at a time (cluster first, then the Pi): on the proxy's own card with its **local** admin token allow `config.get` only; compare cams-admin's Settings tab with the proxy's Settings page; then allow `config.set` + `config.rollback` (+ `config.unset`), change `sse.pingS` from cams-admin (dry run, apply), see it in both audit logs, roll it back. **Disruptive entries stay off** on both proxies until Klaus allows one locally. Rollback at any step: pause on the card, or clear the entries. **P3 done** (M §15) when both proxies passed step 4 and one camera action showed a re-read result in cams-admin.
 
 ## kube-setup
@@ -1154,6 +1224,6 @@ No change. P3 rides the existing in-cluster channel; `data/admin/overrides.bak-*
 
 ## Self-review
 
-- **Spec coverage:** M §7.6 P3 commands (Tasks 4, 6, 8, 9); §7.8 limits (Task 4, R3-9, R3-11); §7.9 double audit (Tasks 6, 8, 9); §8.1 reading + early report (Tasks 6, 9, R3-12); §8.2 remote-settable list, deny list, `held_by_env`, no camera added (Tasks 2, 6); §8.3 no new camera write, re-read results (Tasks 7, 8); §8.4 dry run, diff, conflict (Task 6, R3-4); §8.5 backups, path-level rollback, card Undo, Settings reset unchanged (Tasks 5, 6, 10); §8.6 remote and never-remote actions as separate entries, off by default (Tasks 4, 8, 9, Klaus's decision 3); §12.2 (all files); §13.1 compromised cams-admin bounded (Tasks 2, 4, 11, R3-2, R3-9); §14.1 classification walk, conflict, `held_by_env`, rollback, journal duplicate, hostile suite (Tasks 2, 6, 8, 11); §14.2 contract (Tasks 1, 4, 12); §14.3 two-proxy stack (cams-admin plan); §15 P3 done (rollout step 6).
-- **Placeholder scan:** test bodies left as one-line `it(...)` names in Tasks 4, 6, 8 state the exact assertion in their name and follow the fully written neighbours' pattern; every code step has the code.
-- **Type consistency:** `planOverrides/planUnset/writeOverridesFile/rebuildWith`, `configChanges/overrideState`, `classify/narrowingOk/settableView/patternOf`, `OverridesBackups.save/get/list/markRolledBack/byPath`, `performAction/ActionWho/ActionOutcome/projectPush`, `configHandlers/cameraHandlers/undoLocal/compactView`, `Done.after/action`, `journalBudgetOf`, `Journal.countSince` are used with the same names in Tasks 3–11.
+- **Spec coverage:** M §7.6 P3 commands (Tasks 5, 7, 9, 10); §7.8 limits (Task 5, R3-9, R3-11); §7.9 double audit (Tasks 7, 9, 10); §8.1 reading + early report (Tasks 7, 10, R3-12); §8.2 remote-settable list, deny list, `held_by_env`, no camera added (Tasks 3, 7); §8.3 no new camera write, re-read results (Tasks 8, 9); §8.4 dry run, diff, conflict (Task 7, R3-4); §8.5 backups, path-level rollback, card Undo, Settings reset unchanged (Tasks 6, 7, 11); §8.6 remote and never-remote actions as separate entries, off by default (Tasks 5, 9, 10, Klaus's decision 3); §12.2 (all files); §13.1 compromised cams-admin bounded (Tasks 3, 5, 12, R3-2, R3-9); §14.1 classification walk, conflict, `held_by_env`, rollback, journal duplicate, hostile suite (Tasks 3, 7, 9, 12); §14.2 contract (Tasks 2, 5, 13); §14.3 two-proxy stack (cams-admin plan); §15 P3 done (rollout step 6).
+- **Placeholder scan:** test bodies left as one-line `it(...)` names in Tasks 5, 7, 9 state the exact assertion in their name and follow the fully written neighbours' pattern; every code step has the code.
+- **Type consistency:** `planOverrides/planUnset/writeOverridesFile/rebuildWith`, `configChanges/overrideState`, `classify/narrowingOk/settableView/patternOf`, `OverridesBackups.save/get/list/markRolledBack/byPath`, `performAction/ActionWho/ActionOutcome/projectPush`, `configHandlers/cameraHandlers/undoLocal/compactView`, `Done.after/action`, `journalBudgetOf`, `Journal.countSince` are used with the same names in Tasks 4–12.
