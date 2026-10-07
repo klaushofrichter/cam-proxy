@@ -148,10 +148,10 @@ proxy checks it in this order; the first refusal wins (contract "Check order"):
 | 6 | the `cmdId` is in the journal: its stored answer again, `duplicate: true`; nothing runs | |
 | 6b | the `cmdId` was seen before (another connection, before a restart) and is not in the journal | `replayed` |
 | 7 | `CAMPROXY_ADMIN_COMMANDS` is on and commands are not paused | `paused` |
-| 8 | this version runs the command and it is allowed here | `not_allowed` |
-| 9 | 30 commands a minute, 300 a day, `tokens.apply` 6 an hour | `rate_limited` (with `retryAfterS`) |
+| 8 | this version runs the command and it is allowed here (`camera.action`: any `camera.action:*` entry; its own entry is step 11's) | `not_allowed` |
+| 9 | 30 commands a minute, 300 a day, `tokens.apply` 6 an hour; `config.set`, `config.unset` and `config.rollback` together 6 a minute (dry runs count), `camera.action` 12 a minute, `camera.name.set` 6 a minute | `rate_limited` (with `retryAfterS`) |
 | 10 | `args.v` is 1 and the args pass the command's strict check (at most 16384 bytes) | `unsupported_version`, `invalid_args` |
-| 11 | a token set with an admin token also needs `tokens.apply.admin` | `not_allowed` |
+| 11 | a token set with an admin token also needs `tokens.apply.admin`; a camera action needs its own `camera.action:<action>` entry and is never one of the never-remote actions; `proxy.restart` at most 2 an hour and the disruptive camera actions at most 6 an hour, counted from the journal (a restart doesn't reset it) | `not_allowed`, `rate_limited` |
 | 12 | no other command runs | `busy` |
 
 Then a signed `result` `received`, the command, the journal entry, and a
@@ -172,15 +172,18 @@ cams-admin card (**Commands from cams-admin**), with
 |---|---|
 | `tokens.apply` | add, rotate and revoke managed **client** tokens for cams (`CAMPROXY_TOKENS` keeps working) |
 | `tokens.apply.admin` | also manage **admin** tokens (sign-in links, camera rename); the local admin token is never affected |
-| `config.get`, `config.set`, `config.unset`, `config.rollback`, `camera.name.set`, `proxy.restart`, `camera.action:<action>` | not in this version (known names, so a later `config.json` loads; allowing them does nothing yet) |
+| `config.get` | read this proxy's settings: values, sources, restart needs (no secrets) |
+| `config.set`, `config.unset` | change or reset the **remote-settable** settings (below); local edits win |
+| `config.rollback` | undo its own settings change |
+| `camera.name.set` | rename a camera (the camera's own name, re-read) |
+| `camera.action:<action>` | run that camera action: `camera-test`, `onvif-resubscribe`, `camera-ftp-test`, `poe-switch-read`, `inventory`, `inventory-cancel`, `retention-run` (always a dry run) |
+| **disruptive**: `proxy.restart`, `camera.action:restart`, `camera-reboot`, `camera-powercycle`, `camera-ftp-setup`, `camera-ftp-off`, `camera-ntp-set`, `camera-cert-push` | restart this proxy or a camera's worker, reboot or power-cycle a camera, rewrite its FTP or NTP settings, replace its HTTPS certificate. Grouped under **Disruptive — off by default** on the card; allow one only while it's needed (Klaus's decision, M §16 Q3) |
 
 Camera actions that change trust, delete data or need someone at the
 hardware (`find-camera`, `camera-address`, `camera-trust-clear`,
 `tls-ca-rotate`, `tls-ca-drop-previous`, `archive-clear`, `inventory-repair`,
-`camera-poe-on`) can never be allowed. Settings under `camsAdmin`, `server`,
-`go2rtc`, `tls`, `poeSwitch`, the FTP ports and files, `ntp.server`,
-`composition.font` and each camera's address, user, ports and TLS name can
-never be changed by cams-admin (`isDeniedPath` in `src/fleet/policy.ts`).
+`camera-poe-on`, and the process restart `restart-proxy` by any name but
+`proxy.restart`) can never be allowed.
 
 **Widening is local only.** Adding an entry, resuming and unblocking a token
 need the proxy's own `CAMPROXY_ADMIN_TOKEN` (or a session signed in with it,
@@ -197,6 +200,65 @@ label and `retireAt` (only removals); a false claim is refused `invalid_args`.
 So a leaked managed admin token can't pause cams-admin out of revoking it.
 The rate limit and the kill switch (`CAMPROXY_ADMIN_COMMANDS`, answered
 `paused`) still apply. It is audited like any `tokens.apply`.
+
+### Remote configuration (P3)
+
+What cams-admin may set is compiled in, `src/fleet/remote-settable.ts`
+(`REMOTE`), and is at most the contract's `remote-settable.json`:
+
+- `stills.stream`, `.intervalS`, `.size`, `.quality`, `.maxGB`;
+  `previews.tileSize`, `.grid`, `.quality`, `.maxGB`; `events.onvif.*`,
+  `events.poll.intervalS`, `.afterOnvifDownS`, `events.maxOpenMin`;
+  `retention.*`; `composition.concurrent`; `sse.*`; `recordings.cacheMB`;
+  `ftp.stream`, `ftp.maxGB`; the Google Vision limits (`monthlyLimit`,
+  `dailyCap`, `checksPerDay`, `perCameraDailyCap`); per camera `name`,
+  `statusPollS`, `stills.stream`, `stills.intervalS`, `ftp.stream`.
+- **Never** (`DENIED`, deny wins): `camsAdmin`, `server`, `go2rtc`, `tls`,
+  `poeSwitch`, the FTP port, passive range, TLS, public host and files,
+  `ntp.server`, `composition.font`, each camera's id, address, protocol, TLS
+  name, user, ports, PoE port, FTP user and web page; a camera that doesn't
+  exist (`unknown_camera`: no camera is added or removed remotely); and,
+  **local only**, `storage.*` and every camera's storage share (a lower
+  budget would delete stills and clips), the capture and feature switches
+  (`stills.enabled`, `ftp.enabled`, `archive.enabled`, `events.poll.enabled`,
+  the analytics kinds, `analytics.googleVision.enabled`, their per-camera
+  forms) and the health thresholds (`health.*`, `host.stats`,
+  `ftp.stalledHours`, `archive.warnPercent`): a compromised cams-admin must
+  not blind a proxy or open its FTP port. A refusal names the reason.
+- **One way only** (`widening_local_only`): every retention period and size
+  cap may only go **up** (keep data longer; an unset size cap is no cap), the
+  Google Vision limits only **down** (`dailyCap`/`perCameraDailyCap` 0 = no
+  cap). A rollback is exempt: it restores what a person here had set.
+- A path the environment sets (`.env`) is refused `held_by_env`. A new
+  setting is denied until someone classifies it here; making it
+  remote-settable needs the cams-admin contract first.
+
+**Dry run, conflict, rollback.** `config.set`/`config.unset` carry
+`baseRevision` (the SHA-256 of `overrides.json`, also in every heartbeat); if
+someone changed a setting here since, the answer is `conflict` with the
+current values and nothing is written, also for a dry run (cams-admin reads
+again; local edits win). A dry run returns the change list the write would
+make. Each write saves `data/admin/overrides.bak-<cmdId>.json` (the override
+state of each path before and after; the last 20). `config.rollback` puts
+the paths that command named back, when they still hold its values (else
+`conflict` naming the changed ones); a local edit of another path stays. A
+local settings edit sends cams-admin an early heartbeat within seconds.
+
+**Visible here.** Each command writes `admin-command`; a settings change
+also `config-change` (user `cams-admin`, the `cmdId`, on whose behalf); a
+camera action its usual record with user `cams-admin`. The Settings page marks
+a setting cams-admin set ("set by cams-admin (on behalf of …)") with
+**Undo**; the card lists **Settings changed by cams-admin** with **Undo**
+(`GET /control/admin/changes`, `POST /control/admin/changes/<cmdId>/undo`,
+local admin rights; `cam-proxy admin-commands changes`, `admin-commands undo
+<cmdId>`). Reset on the Settings page works as before.
+
+**Camera actions** run the control API's own code (no new camera write):
+the camera writes are the existing whole-object Set + re-read; the result
+carries `verified` and the mismatching keys. Every answer is scrubbed (keys
+like `pem`, `key`, `password`, `secret`, `token`, `cookie` dropped) and at
+most 16 KiB. "Push now" never answers the certificate's private key (also
+fixed for the admin UI). `proxy.restart` answers first, then restarts.
 
 ### Pause and the kill switch
 
@@ -247,6 +309,7 @@ read them or they belong to another user; never printed, logged or served.
 | `commands.json` | the journal: the final result of the last 1000 commands (and all of the last 7 days, at most 2500) | each command that ran |
 | `policy.json` | the allowed commands and the pause | the card, `admin-commands` |
 | `replay.json` | the newest signed challenge time seen and the command ids seen (accepted or refused) until they expire: a recorded session replayed later (e.g. on the plain-http in-cluster path) is refused, also after a restart | each handshake and command |
+| `overrides.bak-<cmdId>.json` | the override state of each path a cams-admin settings change named, before and after (the last 20) | `config.set`, `config.unset`, `config.rollback`; marked by Undo |
 | `replay-mark.json` | the same newest challenge time again: if `replay.json` is unusable this one holds; if both are unusable no handshake is answered (fail closed) until they are fixed or removed (removing both = a fresh start) | each handshake |
 
 An unusable `policy.json` pauses every command until it is fixed; an
@@ -272,13 +335,26 @@ by id and label, never by hash.
 3. Rollback at any step: remove the managed token from cams (its
    `CAMPROXY_TOKENS` value never stopped working), or Pause on the card.
 
+### Cut-over (M §11.4, steps 3-4: remote configuration)
+
+1. On this proxy's card, with its **own** admin token, allow `config.get`
+   only; compare cams-admin's Settings tab with this proxy's Settings page.
+2. Allow `config.set` and `config.rollback` (and `config.unset`); change
+   `sse.pingS` from cams-admin (dry run, apply), see it in both audit logs
+   and marked on the Settings page, roll it back.
+3. Disruptive entries stay off until Klaus asks for one on this proxy.
+4. Rollback at any step: Pause on the card, or untick the entries; Undo
+   each change on the card.
+
 ### Recovery: cams-admin compromised
 
 1. Set `CAMPROXY_ADMIN_COMMANDS=off` in the `.env` file (the Pi) or the
    environment and restart the proxy: no command runs, whatever cams-admin
    sends.
 2. Block every managed token on the card (or `admin-tokens block <id>`).
-3. If a UI session may have leaked, rotate `CAMPROXY_ADMIN_TOKEN` (a restart
+3. Review `GET /control/admin/changes` (or `admin-commands changes`) and
+   **Undo** each settings change cams-admin made; untick every entry.
+4. If a UI session may have leaked, rotate `CAMPROXY_ADMIN_TOKEN` (a restart
    signs every session out).
 
 ## Threat notes (accepted risks)
