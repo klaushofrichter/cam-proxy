@@ -48,7 +48,13 @@ export interface CamsAdminDeps {
   // Commands from cams-admin (migration P2), given to each client.
   commands?: () => CommandRunner | null;
   replay?: ReplayGuard;
+  // While the key file is unsafe, invalid or missing (cams-admin on): how
+  // often it is read again, so a chmod or a restore needs no restart (30 s).
+  recheckMs?: number;
 }
+
+// While the key file is unsafe, invalid or missing: read again this often.
+export const DEFAULT_RECHECK_MS = 30_000;
 
 const EMPTY = { account: null, proxyId: null, fingerprint: null, enrolledAt: null, connectedSince: null, lastHeartbeatAt: null, lastAckAt: null, retryInMs: null, truncated: false, lingering: 0 };
 
@@ -61,6 +67,7 @@ export class CamsAdmin {
   private stopped = false;
   private warned: string | null = null;
   private enrolling = false;
+  private recheck: NodeJS.Timeout | null = null;
 
   constructor(private readonly d: CamsAdminDeps) {}
 
@@ -105,6 +112,7 @@ export class CamsAdmin {
   // Shutdown (spec §9.1): bye, at most byeWaitMs; before the HTTP server.
   async stop(reason: 'shutdown' | 'restart' = 'shutdown'): Promise<void> {
     this.stopped = true;
+    this.clearRecheck();
     await this.chain;
     await this.stopClient(reason);
   }
@@ -144,6 +152,22 @@ export class CamsAdmin {
     this.own = { state, lastError, lastErrorAt: lastError ? Date.now() : null };
   }
 
+  private clearRecheck(): void {
+    if (this.recheck) clearTimeout(this.recheck);
+    this.recheck = null;
+  }
+
+  // A local problem with the key file: read it again soon, not only on a settings change.
+  private scheduleRecheck(): void {
+    this.clearRecheck();
+    if (this.stopped) return;
+    this.recheck = setTimeout(() => {
+      this.recheck = null;
+      void this.apply();
+    }, this.d.recheckMs ?? DEFAULT_RECHECK_MS);
+    this.recheck.unref();
+  }
+
   private async stopClient(reason: 'shutdown' | 'restart' | 'unenrolled'): Promise<void> {
     const c = this.client;
     this.client = null;
@@ -152,6 +176,7 @@ export class CamsAdmin {
   }
 
   private async applyNow(): Promise<void> {
+    this.clearRecheck();
     if (this.stopped) return;
     const s = this.d.settings();
     if (!s.url) {
@@ -170,8 +195,10 @@ export class CamsAdmin {
         const state = err instanceof KeyFileUnsafe ? 'key-unsafe' : 'key-invalid';
         if (this.warned !== err.message) this.d.log.warn({ err: err.message }, state === 'key-unsafe' ? 'admin_key_unsafe' : 'admin_key_invalid');
         this.warned = err.message;
+        this.scheduleRecheck();
         return this.setOwn(state, err.message);
       }
+      this.scheduleRecheck();
       return this.setOwn('not-enrolled', 'no key file: enroll with a code from cams-admin');
     }
     this.warned = null;

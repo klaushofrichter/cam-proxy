@@ -65,6 +65,7 @@ import { CommandPolicy } from './fleet/policy';
 import { Journal } from './fleet/journal';
 import { CommandRunner } from './fleet/commands';
 import { ReplayGuard } from './fleet/replay';
+import { privateFileHooks, tightenAdminFiles } from './fleet/private-file';
 import { composeApi, hasAudio } from './api/compose-api';
 import { createComposer, ffmpegRunner } from './compose/jobs';
 import { clockText, defaultFont } from './compose/ffmpeg';
@@ -141,7 +142,7 @@ export interface ProxyOptions {
   // certificate, polled every 5 s); tests shorten them against cam-sim.
   tlsPush?: { clearWaitMs?: number; verifyMs?: number; pollMs?: number };
   // The cams-admin client's waits (tests shorten them).
-  camsAdmin?: { timing?: Partial<Timing>; replaySlackMs?: number };
+  camsAdmin?: { timing?: Partial<Timing>; replaySlackMs?: number; recheckMs?: number };
 }
 
 export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
@@ -663,6 +664,11 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // previews are one key), and at most 60 records per IP per 10 minutes.
   const refusals = new RefusalThrottle();
   const refusalsPerIp = new IpCap(60);
+  // data/admin: our files tightened to 600 (folder 700) before anything reads
+  // them; in the cluster the pod's fsGroup makes them 660 on every start.
+  // Each read tightens again; a file of another user is refused (logged once here).
+  privateFileHooks.onTightened = (file, from) => logger.info({ file, from: from.toString(8) }, 'admin_file_tightened');
+  for (const r of tightenAdminFiles(join(loaded.config.server.dataDir, 'admin'))) logger.warn({ file: r.file, err: r.reason }, 'admin_file_refused');
   // cams-admin-managed token hashes (migration P2, M §10.2): read whenever
   // data/admin/tokens.json exists (R2-7); nothing is created when it doesn't.
   const tokenStore = new TokenStore({
@@ -822,6 +828,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     changeKey: () => `${storage.paused() ? 1 : 0}|${cams.list().map((w) => `${w.id}:${w.status.state().online ? 1 : 0}${w.streamStatus().up ? 1 : 0}:${w.intake.state().onvif}`).join(',')}`,
     log: logger,
     timing: opts.camsAdmin?.timing,
+    recheckMs: opts.camsAdmin?.recheckMs,
     setUrl: async (url) => {
       const next = url ? applyOverrides(loaded, { camsAdmin: { url } }) : loaded.sources['camsAdmin.url'] === 'override' ? removeOverride(loaded, 'camsAdmin.url') : loaded;
       if (next !== loaded) setLoaded(next);

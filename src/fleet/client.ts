@@ -32,12 +32,14 @@ export interface Timing {
   maxBufferedBytes: number; // unsent data above this: the heartbeat is skipped (512 KiB)
   maxInboundBytes: number; // a larger message is refused (256 KiB, the server's own frame cap)
   maxLingering: number; // closed sockets the server never let go: no new connection beyond this many (4)
+  localRetryMs: number; // a local problem (replay files unusable or not writable): retried within this (30 s)
 }
 
 export const DEFAULT_TIMING: Timing = {
   connectTimeoutMs: 10_000, helloTimeoutMs: 10_000, closeGraceMs: 2000, backoffCapMs: 300_000, resetAfterMs: 60_000,
   replacedWaitMs: 30_000, rejectedRetryMs: 15 * 60_000, incompatibleRetryMs: 6 * 3600_000, rateLimitedDefaultS: 60,
   minIntervalS: 10, jitterS: 2, byeWaitMs: 1000, changeCheckMs: 5000, healthTimeoutMs: 10_000, maxBufferedBytes: 512 * 1024, maxInboundBytes: 256 * 1024, maxLingering: 4,
+  localRetryMs: 30_000,
 };
 
 export interface ClientLog {
@@ -125,6 +127,7 @@ export class AdminClient {
   private reason: string | null = null; // why this connection ends, if known
   private unsupported = 0; // unsupported messages on this connection
   private noReset = false; // this connection ended for an oversize message: no backoff reset
+  private local = false; // this connection ended for a local problem (files under data/admin): retried soon
   private lastOutcome: ClientState | null = null;
   private lastChangeKey: string | null = null;
   private truncated = false;
@@ -281,6 +284,7 @@ export class AdminClient {
     this.reason = null;
     this.unsupported = 0;
     this.noReset = false;
+    this.local = false;
     this.conn = null;
     this.d.log.debug({ url: this.key.connectUrl, attempt: this.attempt }, 'admin_connecting');
     let ws: WebSocket;
@@ -414,13 +418,16 @@ export class AdminClient {
           } catch (err) {
             // The mark could not be saved: not answered; the close and the retry as for any failure.
             this.reason = `the replay mark could not be saved: ${String((err as Error).message).slice(0, 120)}`;
+            this.local = true;
             this.fail(this.reason);
             this.d.log.warn({ err: String((err as Error).message).slice(0, 200) }, 'admin_replay_save_failed');
             this.closeSocket();
             return;
           }
           if (!fresh) {
-            this.reason = this.d.replay.problem?.() ?? 'a stale challenge (older than one already seen): a replay? not answered';
+            const problem = this.d.replay.problem?.() ?? null;
+            this.local = problem !== null;
+            this.reason = problem ?? 'a stale challenge (older than one already seen): a replay? not answered';
             this.d.log.warn({ url: this.key.connectUrl }, 'admin_challenge_stale');
             this.closeSocket();
             return;
@@ -493,6 +500,12 @@ export class AdminClient {
     const random = this.d.random ?? Math.random;
     const normal = () => backoffDelay(this.attempt++, this.t.backoffCapMs, random);
     if (this.immediate) return this.retry('backoff', 0);
+    if (this.local) {
+      // Ours to fix (a chmod, a removed file): checked again soon, whatever the backoff says.
+      this.fail(this.reason ?? 'a local problem');
+      this.lastOutcome = 'backoff';
+      return this.retry('backoff', Math.min(normal(), this.t.localRetryMs));
+    }
     if (this.untrusted || code === 4401 || code === 4403) {
       this.fail(this.untrusted ? this.reason! : `rejected by cams-admin (${code}): re-enroll`);
       if (this.lastOutcome !== 'rejected') this.d.log.info({ code }, 'admin_rejected');

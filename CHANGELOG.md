@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- cams-admin files under `data/admin/` (key, tokens, commands, policy, replay): a file of the proxy's own user that others could read is set back to 600 (folder 700) instead of refused. Fixes the cluster's client stopping after v2026.10.06.3 (`fsGroup` makes the volume's files 660 on every pod start). Another user's file is still refused; a refused key file, or unusable replay files, are checked again within 30 s, so a `chmod`/`chown` needs no restart.
+
 ## v2026.10.06.3
 
 - Commands from cams-admin (migration P2): signed, allow-listed, idempotent and audited, over the existing outbound channel; **off unless allowed on the proxy** (Status card, `admin-commands`, or `camsAdmin.allowCommands` in `config.json`; never `overrides.json`). Pause (any admin) and resume (local admin token only); the `CAMPROXY_ADMIN_COMMANDS` kill switch (anything but `on` = off). A cams-admin-managed admin token, and sessions or sign-in links it starts, can only narrow. The first command, `tokens.apply`, installs managed client (and, with `tokens.apply.admin`, admin) token hashes beside `CAMPROXY_TOKENS`, with rotation (`retireAt`), stale-revision protection and a local block list (`admin-tokens`); `CAMPROXY_TOKENS` may be unset while a managed client token is live. Files `data/admin/tokens.json`, `commands.json`, `policy.json` (mode 600). Heartbeat `commands`, `tokens`, `configRevision`; hello capability `commands`. Routes `/control/admin/commands*`, `/control/admin/tokens*`; audit actions `admin-command`, `admin-policy`, `admin-token`. Config schema 2. Session cookies are `v2` (a restart signs everyone out, as before). docs/cams-admin.md.

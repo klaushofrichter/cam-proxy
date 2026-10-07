@@ -3,8 +3,8 @@ import { PrivateFileInvalid, PrivateFileUnsafe, readPrivateJson, writePrivateJso
 
 // The cams-admin key file (spec 2026-10-06-cams-admin-phase1-design §9.2):
 // <dataDir>/admin/key.json, mode 600 in a 700 folder, written atomically.
-// Refused when group- or world-readable or owned by another user (the rule
-// cams applies to proxy-tls.json). Never printed, logged, served or put in a
+// Ours but readable by others (660 under the cluster's fsGroup): set back to
+// 600 before it is read; owned by another user, or still loose: refused. Never printed, logged, served or put in a
 // download. Error messages name the file, never its content.
 export interface AdminKeyFile {
   v: 1;
