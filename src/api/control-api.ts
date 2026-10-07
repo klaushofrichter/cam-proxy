@@ -38,7 +38,7 @@ import { CAMERA_HOST_NAMES, validCameraHost } from '../config/env';
 import { InventoryBusyError, InventoryStoppingError, RepairRefusedError, RUN_ID, type InventoryRunner } from '../inventory/runner';
 import type { Archive } from '../archive/service';
 import { RotateBusyError, type CertState, type Requester, type TlsView } from '../tls/camera-certs';
-import type { PushResult } from '../tls/push';
+import { projectPush, type PushResult } from '../tls/push';
 import type { NtpOutcome } from '../cameras/ntp';
 
 interface FtpStatus {
@@ -723,8 +723,9 @@ export function controlApi(d: ControlDeps): express.Router {
         return void res.json({ cancelled: runId !== null, runId });
       }
       // "Push now" (spec §10.4): the push's own camera-cert-push record when one ran.
+      // The answer is projected: never the leaf's private key or a PEM (R3-8).
       case 'camera-cert-push':
-        return void res.json(await d.tls.pushNow(cam, { user: actor(req), ...who(req), requestedBy }));
+        return void res.json(projectPush(await d.tls.pushNow(cam, { user: actor(req), ...who(req), requestedBy })));
       // The admin's decision to drop a camera's site-CA trust or pin (back to first use); audited.
       case 'camera-trust-clear': {
         if (req.body?.confirm !== 'clear') return fail(400, 'invalid', "the camera loses its site-CA trust or pin and needs a Push now: send {confirm: 'clear'}");
