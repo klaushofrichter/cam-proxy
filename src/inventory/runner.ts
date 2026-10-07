@@ -44,7 +44,7 @@ export interface RepairEntry { run: Repair; ready: (source: InventoryReport) => 
 // `camera` says it takes the `camera` option.
 export interface InventoryKind { label: string; run: Check; camera?: boolean; repair?: RepairEntry }
 type RunOutcome = 'ok' | 'cancelled' | 'failed';
-interface Requester { requestedBy: 'session' | 'token'; ip?: string; userAgent?: string }
+interface Requester { user?: string; requestedBy: 'session' | 'token' | 'cams-admin'; ip?: string; userAgent?: string; cmdId?: string; actor?: string }
 export interface InventoryReport {
   runId: string;
   kind: string;
@@ -280,11 +280,11 @@ export class InventoryRunner {
       } catch (err) {
         logger.error({ err: (err as Error).message, runId }, 'inventory_save_failed');
       }
-      const common = { runId, kind, outcome, requestedBy: who.requestedBy, ...(report.cancelledBy ? { cancelledBy: report.cancelledBy } : {}) };
+      const common = { runId, kind, outcome, requestedBy: who.requestedBy, ...(who.cmdId ? { cmdId: who.cmdId } : {}), ...(who.actor ? { actor: who.actor } : {}), ...(report.cancelledBy ? { cancelledBy: report.cancelledBy } : {}) };
       this.d.audit.write({
         action: op === 'repair' ? 'inventory-repair' : 'inventory', category: ['host'], type: [op === 'repair' ? 'change' : 'info'],
         outcome: outcome === 'ok' ? 'success' : outcome === 'failed' ? 'failure' : 'unknown',
-        user: 'admin', ip: who.ip, userAgent: who.userAgent, message: report.message, camera: job.cam,
+        user: who.user ?? 'admin', ip: who.ip, userAgent: who.userAgent, message: report.message, camera: job.cam,
         ...(report.error !== undefined ? { error: report.error } : {}),
         details: op === 'repair'
           ? { ...common, source: report.source, stopped: report.stopped, counts: report.counts, failures: report.top, tookMs: report.tookMs }

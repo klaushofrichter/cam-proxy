@@ -39,7 +39,8 @@ import { CAMERA_HOST_NAMES, validCameraHost } from '../config/env';
 import { InventoryBusyError, InventoryStoppingError, RepairRefusedError, RUN_ID, type InventoryRunner } from '../inventory/runner';
 import type { Archive } from '../archive/service';
 import { RotateBusyError, type CertState, type Requester, type TlsView } from '../tls/camera-certs';
-import { projectPush, type PushResult } from '../tls/push';
+import type { PushResult } from '../tls/push';
+import { OWN_AUDIT, performAction, type ActionOutcome } from './actions';
 import type { NtpOutcome } from '../cameras/ntp';
 
 interface FtpStatus {
@@ -70,7 +71,7 @@ export interface CameraStatusBlock {
   source: 'config' | 'added'; // config.json, or added in the Settings page (overrides.json)
 }
 
-interface ControlDeps {
+export interface ControlDeps {
   loaded: () => Loaded;
   setLoaded: (l: Loaded) => void; // applies live settings
   running: () => Config; // what the components run with
@@ -135,22 +136,6 @@ interface ControlDeps {
   cameras: CameraRegistry;
   cameraStatus: () => CameraStatusBlock[];
   cameraCount: () => number;
-}
-
-// A camera call from an action: its answer, or 502 with the camera's error.
-async function cameraCall(res: Response, f: () => Promise<unknown>): Promise<void> {
-  try {
-    res.json(await f());
-  } catch (err) {
-    if (err instanceof FtpNotConfiguredError) {
-      res.locals.errorCode = 'not_configured';
-      res.status(409).json({ error: 'not_configured', detail: err.message });
-      return;
-    }
-    logger.warn({ err: (err as Error).message }, 'camera_action_failed');
-    res.locals.errorCode = 'camera_error';
-    res.status(502).json({ error: 'camera_error', detail: (err as Error).message });
-  }
 }
 
 // Who sent a request, for its audit record.
@@ -255,9 +240,6 @@ export const CAMERA_ACTIONS = new Set(['camera-test', 'onvif-resubscribe', 'came
 // What a camera action answers on a proxy with several cameras (spec §6.3; the camera routes are phase 2).
 const cameraRequired = (path: string) => `several cameras: name the camera, ${path} (or ?cam=<id>); GET /control/cameras lists them`;
 
-// Actions that write their own audit records (no generic control-action);
-// a new action that audits itself goes here too.
-const OWN_AUDIT = new Set(['camera-reboot', 'camera-powercycle', 'camera-poe-on', 'restart-proxy', 'inventory', 'inventory-repair', 'camera-address', 'archive-clear', 'tls-ca-rotate', 'camera-trust-clear', 'tls-ca-drop-previous']);
 
 // Find camera and Use this address together, per client and minute: a probe
 // is 3 s of multicast, a write a backup.
@@ -266,15 +248,6 @@ export const FIND_CAMERA_PER_MINUTE = 6;
 export const TRUST_ACTIONS_PER_MINUTE = 6;
 
 // Whether "Use this address" can write the .env file, and why not.
-function envFileState(path: string | undefined): { writable: boolean; reason?: string; path?: string } {
-  try {
-    return { writable: true, path: checkEnvPath(path) };
-  } catch (err) {
-    if (err instanceof EnvFileError) return { writable: false, reason: err.message };
-    throw err;
-  }
-}
-
 // The control API (spec §11); admin access is checked by the caller.
 export function controlApi(d: ControlDeps): express.Router {
   const r = express.Router();
@@ -480,6 +453,15 @@ export function controlApi(d: ControlDeps): express.Router {
   const actionLimit: express.RequestHandler = (req, res, next) =>
     req.params.name === 'find-camera' || req.params.name === 'camera-address' ? findLimit(req, res, next) : TRUST.has(String(req.params.name)) ? trustLimit(req, res, next) : next();
 
+  // An action's outcome as the HTTP answer.
+  const send = (res: Response, o: ActionOutcome) => {
+    if (o.retryAfterS !== undefined) res.setHeader('Retry-After', String(o.retryAfterS));
+    if ('error' in o) {
+      res.locals.errorCode = o.error;
+      return void res.status(o.status).json({ error: o.error, ...(o.detail ? { detail: o.detail } : {}), ...(o.extra ?? {}) });
+    }
+    return o.json === undefined ? void res.status(o.status).end() : void res.status(o.status).json(o.json);
+  };
   const action = async (req: express.Request, res: Response) => {
     const name = String(req.params.name);
     const routed = typeof req.params.cam === 'string';
@@ -488,7 +470,6 @@ export function controlApi(d: ControlDeps): express.Router {
     const target = CAMERA_ACTIONS.has(name) ? targetCamera(req, res) : null;
     if (target === undefined) return;
     const requestedBy = res.locals.access?.viaCookie ? 'session' : 'token';
-    const requester = { requestedBy, ...who(req) } as const;
     // A `control-action` record with the result, once the answer is sent or
     // the client went away ('close' fires in both cases; 'finish' only in the
     // first). Not for the camera reboot and the process restart (their own
@@ -504,10 +485,7 @@ export function controlApi(d: ControlDeps): express.Router {
         d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: !done ? 'unknown' : ok ? 'success' : 'failure', user: actor(req), ...who(req), message: `Control action ${name}: ${result}`, details: { action: name, result, requestedBy }, ...(target ? { camera: target } : {}) });
       });
     }
-    const fail = (status: number, error: string, detail?: string, extra: object = {}) => {
-      res.locals.errorCode = error;
-      res.status(status).json({ error, ...(detail ? { detail } : {}), ...extra });
-    };
+    const fail = (status: number, error: string, detail?: string) => send(res, { status, error, ...(detail ? { detail } : {}) });
     // `restart` without a camera is the host-wide restart: every camera side,
     // every pending setting (as on one camera; live test of #173).
     if (name === 'restart' && target === null) {
@@ -520,227 +498,20 @@ export function controlApi(d: ControlDeps): express.Router {
       if (OWN_AUDIT.has(name)) d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: 'failure', user: actor(req), ...who(req), message: `Control action ${name}: camera_required`, details: { action: name, result: 'camera_required', requestedBy } });
       return fail(400, 'camera_required', cameraRequired(`POST /control/cameras/<id>/actions/${name}`));
     }
-    // A camera action has its camera from here on.
-    const cam = target as string;
-    // The reboot and the power-cycle share a cooldown (#83, #85).
-    const tooSoon = (a: TooSoon) => {
-      res.setHeader('Retry-After', String(a.retryAfterS));
-      fail(429, 'too_soon', a.inFlight
-        ? `a camera reboot or power-cycle is in progress; try again in ${a.retryAfterS} s`
-        : `the camera was rebooted or power-cycled less than 2 minutes ago; try again in ${a.retryAfterS} s`);
-    };
-    // The power-cycle, PoE-on and switch read need a configured switch: 409 otherwise.
-    const noSwitch = (): boolean => {
-      const why = d.poeSwitch.notConfigured(cam);
-      if (why) fail(409, 'not_configured', why);
-      return !!why;
-    };
-    // A refused inventory start: true when answered (stopping, busy).
-    const inventoryRefused = (err: unknown): boolean => {
-      if (err instanceof InventoryStoppingError) return fail(503, 'stopping', err.message), true;
-      if (err instanceof InventoryBusyError) return fail(409, 'inventory_busy', err.message, { runId: err.runId }), true;
-      return false;
-    };
-    const switchFail = (err: unknown) => {
-      if (!(err instanceof PoeSwitchError)) throw err;
-      fail(err.code === 'switch_busy' || err.code === 'no_power' ? 409 : 502, err.code, err.message, err.poeOff ? { poeOff: true, turnedOn: err.turnedOn === true } : {});
-    };
-    switch (name) {
-      case 'onvif-resubscribe':
-        d.resubscribe(cam);
-        return void res.status(202).end();
-      case 'camera-test':
-        return void res.json(await d.checkCamera(cam));
-      case 'retention-run':
-        return void res.json(d.storage.run({ dryRun: req.body?.dryRun === true }));
-      case 'camera-ftp-setup':
-      case 'camera-ftp-test': {
-        const t = d.cameraFtp.target(cam);
-        if (!t.server) return fail(409, 'not_configured', 'ftp.publicHost is not set');
-        if (!t.password) return fail(409, 'not_configured', 'CAMPROXY_FTP_PASSWORD is not set');
-        return void (await cameraCall(res, async () => (name === 'camera-ftp-setup' ? { ftp: await d.cameraFtp.setup(cam, t) } : d.cameraFtp.test(cam, t))));
-      }
-      case 'camera-ftp-off':
-        return void (await cameraCall(res, async () => ({ ftp: await d.cameraFtp.off(cam) })));
-      // The camera side: reconnect and apply restart settings; the process runs on.
-      // A named camera (its route or ?cam=): that camera's side only; the old
-      // route without a camera: every camera side and the settings.
-      case 'restart':
-        (routed || typeof req.query.cam === 'string' ? d.restartCamera(cam) : d.restart()).catch((err: Error) => logger.error({ err: err.message }, 'restart_failed'));
-        return void res.status(202).end();
-      // Reboot the camera (#83): 202 {confirmed}, 429 within the cooldown,
-      // 502 when the request never reached the camera.
-      case 'camera-reboot': {
-        const a = await d.cameraReboot(requester, cam);
-        if (a.status === 202) return void res.status(202).json({ confirmed: a.confirmed });
-        if (a.status === 429) return tooSoon(a);
-        return fail(502, a.error, a.detail);
-      }
-      // Power-cycle the camera through its PoE switch (#85): 202 {offAt, onAt,
-      // watts} once PoE is back on; 409 not_configured, switch_busy, no_power;
-      // 502 switch_auth, switch_unreachable, switch_error; 429 as the reboot.
-      case 'camera-powercycle': {
-        if (noSwitch()) return;
-        const a = await d.cameraPowerCycle(requester, cam);
-        if (a.status === 202) return void res.status(202).json({ offAt: a.offAt, onAt: a.onAt, watts: a.watts });
-        if (a.status === 429) return tooSoon(a);
-        return fail(a.status, a.error, a.detail, a.poeOff ? { poeOff: true, turnedOn: a.turnedOn } : {});
-      }
-      // Recovery (#85): PoE on for the camera's port if it is off; no power
-      // check and no cooldown. The same switch session lock as the rest.
-      case 'camera-poe-on': {
-        if (noSwitch()) return;
-        const sw = d.poeSwitch.info(cam);
-        const where = `${sw.host} port ${sw.port}`;
-        const base = { action: 'camera-poe-on', category: ['host'], type: ['change'], user: actor(req), ...who(req), camera: cam };
-        try {
-          const r = await d.poeSwitch.poeOn(cam);
-          d.audit.write({ ...base, outcome: 'success', message: r.wasOn ? `Camera PoE on (${where}): it was on already` : `Camera PoE turned on (${where})`, details: { switch: sw, wasOn: r.wasOn, requestedBy } });
-          return void res.json(r);
-        } catch (err) {
-          if (err instanceof PoeSwitchError) d.audit.write({ ...base, outcome: 'failure', error: err.code, message: `Camera PoE on (${where}) failed: ${err.message}`, details: { switch: sw, requestedBy, ...(err.poeOff ? { poeStillOff: true } : {}) } });
-          return switchFail(err);
-        }
-      }
-      // The camera's port on the switch now (log in, read, log out); never polled.
-      case 'poe-switch-read': {
-        if (noSwitch()) return;
-        try {
-          return void res.json(await d.poeSwitch.read(cam));
-        } catch (err) {
-          return switchFail(err);
-        }
-      }
-      // Find camera (pi-config spec §3): the devices that answer an ONVIF
-      // probe, the current camera marked, and whether the .env file can be written.
-      case 'find-camera': {
-        const r = await d.findCamera();
-        // `current`: the address of a configured camera.
-        const hosts = cameraIds(d.running()).map((id) => splitHost(cameraConfig(d.running(), id)!.host).hostname.toLowerCase());
-        return void res.json({ devices: r.devices.map((x) => ({ ...x, current: hosts.includes(x.address.toLowerCase()) })), tookMs: r.tookMs, envFile: envFileState(d.envFile()) });
-      }
-      // Use this address (pi-config spec §4): CAMERA_HOST into the .env file
-      // (backup, atomic), audited; the UI restarts the proxy next.
-      case 'camera-address': {
-        const host: unknown = req.body?.host;
-        if (!validCameraHost(host)) return fail(400, 'invalid', 'host: an address or name, optional :port');
-        // CAMERA_HOST is the one camera's address (spec §4.2).
-        if (cameraIds(d.running()).length > 1) return fail(409, 'not_available', 'several cameras: set cameras[].host in config.json');
-        const line = `CAMERA_HOST=${host}`;
-        const base = { action: 'camera-address', category: ['configuration'], type: ['change'], user: actor(req), ...who(req) };
-        try {
-          const w = writeEnvKey(checkEnvPath(d.envFile()), CAMERA_HOST_NAMES as unknown as string[], host);
-          d.audit.write({ ...base, outcome: 'success', message: `Camera address set in .env: "${w.previous ?? ''}" → "${host}" (applies after a restart)`, details: { from: w.previous, to: host, key: w.key, backup: w.backup, requestedBy } });
-          logger.info({ key: w.key, from: w.previous, to: host, backup: w.backup }, 'camera_address_written');
-          return void res.json({ host, previous: w.previous, key: w.key, backup: w.backup, restart: true });
-        } catch (err) {
-          if (!(err instanceof EnvFileError)) throw err;
-          d.audit.write({ ...base, outcome: 'failure', error: err.code, message: `Camera address "${host}" not written to .env: ${err.message}`, details: { to: host, requestedBy } });
-          return fail(409, 'not_available', err.message, { line });
-        }
-      }
-      // Restart the process (#71): answer first, then the normal stop and exit 0.
-      case 'restart-proxy':
-        // One record per restart: a second request before the stop is the same restart.
-        if (!restartRequested) d.audit.write({ action: 'proxy-restart', category: ['process'], type: ['change'], outcome: 'success', user: actor(req), ...who(req), message: 'Proxy process restart requested through the control API', details: { requestedBy } });
-        restartRequested = true;
-        res.once('close', () => setImmediate(() => d.restartProcess()));
-        return void res.status(202).end();
-      // Inventories (spec 2026-10-02-inventory-design): 202 {runId}; the run
-      // goes on in the background and writes its own `inventory` record.
-      case 'inventory': {
-        const kind: unknown = req.body?.kind;
-        const camera: unknown = req.body?.camera;
-        const kinds = d.inventory.kinds();
-        if (typeof kind !== 'string' || !kinds.includes(kind)) return fail(400, 'invalid', `kind is one of: ${kinds.join(', ')}`);
-        if (camera !== undefined && typeof camera !== 'boolean') return fail(400, 'invalid', 'camera is true or false');
-        if (camera && !d.inventory.checks[kind]?.camera) return fail(400, 'invalid', `the ${kind} inventory has no camera compare`);
-        try {
-          const { runId } = d.inventory.start(kind, requester, { camera: camera === true, cam });
-          return void res.status(202).json({ runId });
-        } catch (err) {
-          if (!inventoryRefused(err)) throw err;
-          return;
-        }
-      }
-      // A repair from a check report (#74): 202 {runId}; it writes its own
-      // `inventory-repair` record when it ends. A refused start writes nothing.
-      case 'inventory-repair': {
-        const kind: unknown = req.body?.kind;
-        const source: unknown = req.body?.runId;
-        const kinds = d.inventory.repairKinds();
-        if (typeof kind !== 'string' || !kinds.includes(kind)) return fail(400, 'invalid', `kind is one of: ${kinds.join(', ')}`);
-        if (typeof source !== 'string' || !RUN_ID.test(source)) return fail(400, 'invalid', 'runId is the id of a check run');
-        // A repair works on its report's camera: only under that camera.
-        const report = await d.inventory.get(source);
-        if (report && report.camera !== cam) return fail(409, 'camera_mismatch', `that inventory ran on camera ${report.camera}`);
-        try {
-          const { runId } = await d.inventory.repair(kind, requester, source);
-          return void res.status(202).json({ runId });
-        } catch (err) {
-          if (inventoryRefused(err)) return;
-          if (!(err instanceof RepairRefusedError)) throw err;
-          return err.code === 'not_found' ? fail(404, 'not_found', err.message) : fail(409, err.code, err.message);
-        }
-      }
-      // Clear the Archive (spec 2026-10-05-archive-design §3, ruling 14):
-      // only with the current number of clips; one `archive-clear` record.
-      case 'archive-clear': {
-        const count: unknown = req.body?.count;
-        if (!Number.isSafeInteger(count) || (count as number) < 0) return fail(400, 'invalid', 'count is the number of clips in the Archive');
-        const r = d.archive.clear(count as number, { user: actor(req), ...who(req), requestedBy });
-        if ('mismatch' in r) return fail(409, 'count_mismatch', `the Archive has ${r.mismatch} clips`, { count: r.mismatch });
-        return void res.json(r);
-      }
-      // A control-action record; the run ends with its partial counts.
-      case 'inventory-cancel': {
-        // Only this camera's run (one runs at a time, host-wide).
-        const run = d.inventory.running();
-        if (run && run.camera !== cam) return fail(409, 'camera_mismatch', `the running inventory is camera ${run.camera}'s`);
-        const runId = d.inventory.cancel('request');
-        return void res.json({ cancelled: runId !== null, runId });
-      }
-      // "Push now" (spec §10.4): the push's own camera-cert-push record when one ran.
-      // The answer is projected: never the leaf's private key or a PEM (R3-8).
-      case 'camera-cert-push':
-        return void res.json(projectPush(await d.tls.pushNow(cam, { user: actor(req), ...who(req), requestedBy })));
-      // The admin's decision to drop a camera's site-CA trust or pin (back to first use); audited.
-      case 'camera-trust-clear': {
-        if (req.body?.confirm !== 'clear') return fail(400, 'invalid', "the camera loses its site-CA trust or pin and needs a Push now: send {confirm: 'clear'}");
-        const st = d.tls.clearTrust(cam, { user: actor(req), ...who(req), requestedBy });
-        if (!st) return fail(409, 'not_available', 'no camera certificate trust is kept on this proxy');
-        return void res.json(st);
-      }
-      // After tls-ca-rotate: stop trusting the previous CA now (else 30 days); audited.
-      case 'tls-ca-drop-previous':
-        if (req.body?.confirm !== 'drop') return fail(400, 'invalid', "cameras still on the previous CA are refused from now on: send {confirm: 'drop'}");
-        if (!d.tls.dropPrevious({ user: actor(req), ...who(req), requestedBy })) return fail(409, 'not_available', 'no previous CA is trusted');
-        return void res.json({ dropped: true });
-      case 'camera-ntp-set': {
-        const outcome = await d.cameraNtp(cam);
-        if (outcome === null) return fail(409, 'not_configured', 'ntp.server is not set');
-        return void res.json({ outcome });
-      }
-      // A new site CA (Ruling P5-3): every cams pin of this proxy breaks, so
-      // only with {confirm: 'rotate'}; one config-change record.
-      case 'tls-ca-rotate': {
-        if (req.body?.confirm !== 'rotate') return fail(400, 'invalid', "a new CA breaks every cams pin of this proxy: send {confirm: 'rotate'}");
-        const base = { action: 'config-change', category: ['configuration'], type: ['change'], user: actor(req), ...who(req) };
-        const rotating = d.tls.rotate();
-        if (!rotating) return fail(409, 'not_available', 'no site CA: tls.site is not set');
-        try {
-          const r = await rotating;
-          d.audit.write({ ...base, outcome: 'success', message: `Site CA rotated: ${r.from ?? 'none'} → ${r.to}`, details: { setting: 'tls-ca', from: r.from, to: r.to, requestedBy } });
-          return void res.json({ caFingerprint: r.to });
-        } catch (err) {
-          if (err instanceof RotateBusyError) return fail(409, 'busy', err.message);
-          d.audit.write({ ...base, outcome: 'failure', error: (err as Error).message, message: `Site CA rotation failed: ${(err as Error).message}`, details: { setting: 'tls-ca', requestedBy } });
-          return fail(500, 'rotate_failed', (err as Error).message);
-        }
-      }
-      default:
-        return fail(404, 'not_found');
+    // The process restart (#71): answer first, then the normal stop and exit 0. Never in the core.
+    if (name === 'restart-proxy') {
+      // One record per restart: a second request before the stop is the same restart.
+      if (!restartRequested) d.audit.write({ action: 'proxy-restart', category: ['process'], type: ['change'], outcome: 'success', user: actor(req), ...who(req), message: 'Proxy process restart requested through the control API', details: { requestedBy } });
+      restartRequested = true;
+      res.once('close', () => setImmediate(() => d.restartProcess()));
+      return void res.status(202).end();
     }
+    // `restart` on the old route without a camera named: every camera side and the settings.
+    if (name === 'restart' && !routed && typeof req.query.cam !== 'string') {
+      d.restart().catch((err: Error) => logger.error({ err: err.message }, 'restart_failed'));
+      return void res.status(202).end();
+    }
+    send(res, await performAction(d, name, target, typeof req.body === 'object' && req.body !== null ? req.body : {}, { user: actor(req), requestedBy, ...who(req) }));
   };
   r.post('/actions/:name', actionLimit, action);
   r.post('/cameras/:cam/actions/:name', actionLimit, action);

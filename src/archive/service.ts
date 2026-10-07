@@ -22,7 +22,7 @@ import { ArchiveStore } from './store';
 
 // Who made a change, for its audit record (ruling 8).
 // user: 'client', 'admin', 'system', or a managed token's 'token:<label>'.
-export interface Who { user: string; ip?: string; userAgent?: string; requestedBy?: 'token' | 'session'; onBehalfOf?: string }
+export interface Who { user: string; ip?: string; userAgent?: string; requestedBy?: 'token' | 'session' | 'cams-admin'; onBehalfOf?: string }
 export type Action = 'add' | 'update' | 'delete' | 'clear' | 'expire';
 
 export interface ArchiveStatus {

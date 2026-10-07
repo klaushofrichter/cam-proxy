@@ -56,7 +56,8 @@ import { sseHandler } from './stream/sse';
 import { clientIp, refuseTokenInUrl, requireAccess, type AccessDeps } from './api/auth';
 import { clientApi } from './api/client-api';
 import { stillChecksApi } from './api/still-checks-api';
-import { auditApi, controlApi, sessionRoutes } from './api/control-api';
+import { auditApi, controlApi, sessionRoutes, type ControlDeps } from './api/control-api';
+import type { ActionDeps } from './api/actions';
 import { createMetrics } from './api/metrics';
 import { createSessionSigner } from './api/session';
 import { createLoginLinks } from './api/login-links';
@@ -115,6 +116,8 @@ export interface Proxy {
   readonly certs: CameraCerts | undefined;
   // cams-admin (spec 2026-10-06-cams-admin-phase1-design §9): off unless camsAdmin.url is set.
   readonly camsAdmin: CamsAdmin;
+  // The control actions' dependencies (performAction; the route and cams-admin's camera.action share them).
+  readonly actions: ActionDeps;
   go2rtcPid(): number | undefined;
   start(opts?: { port?: number; host?: string }): Promise<{ port: number }>;
   restart(): Promise<void>;
@@ -885,94 +888,91 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   app.use('/control', auditApi({ audit, guard: requireAccess('audit-read', access), retentionDays: () => running.retention.auditDays }));
   // The cams-admin card (spec 2026-10-06-cams-admin-phase1-design §9.2).
   app.use('/control', requireAccess('admin', access), camsAdminApi({ camsAdmin, audit, commands: { policy: commandPolicy, tokens: tokenStore, runner: commandRunner } }));
-  app.use(
-    '/control',
-    requireAccess('admin', access),
-    controlApi({
-      loaded: () => loaded,
-      setLoaded,
-      running: () => running,
-      catalog,
-      log,
-      camera: () => cameraStatusBlock(cams.first()).camera,
-      cameras: cams,
-      cameraStatus: () => cams.list().map(cameraStatusBlock),
-      cameraCount: () => cams.size,
-      // Writes through to the camera and reads back; the poller (and so the
-      // stream message) knows the new name at once.
-      // The camera functions get the camera the request names (resolved by the router).
-      cameraName: {
-        current: (cam) => worker(cam).name(),
-        write: (cam, name) => worker(cam).writeName(name),
-      },
-      checkCamera: (cam) => worker(cam).status.checkNow(),
-      intake: () => cams.first().intake.state(),
-      resubscribe: (cam) => worker(cam).intake.resubscribe(),
-      restart: () => proxy.restart(),
-      // One camera's restart applies its own pending settings (cameras.<id>.*), nothing host-wide.
-      restartCamera: (cam) => {
-        const prefix = `cameras.${cam}.`;
-        for (const p of settingPaths(loaded.config)) if (p.startsWith(prefix) && needsRestart(p)) setPath(running as unknown as Record<string, unknown>, p, structuredClone(getPath(loaded.config, p)));
-        return worker(cam).restart();
-      },
-      cameraReboot: (who, cam) => worker(cam).reboot.request(who),
-      poeSwitch: { notConfigured: (cam) => worker(cam).poeSwitch.notConfigured(), read: (cam) => worker(cam).poeSwitch.read(), poeOn: (cam) => worker(cam).poeSwitch.poeOn(), info: (cam) => worker(cam).poeSwitchInfo() },
-      cameraPowerCycle: (who, cam) => {
-        const w = worker(cam);
-        return w.reboot.powerCycle(who, { switch: w.poeSwitchInfo(), offSeconds: w.cam().poeSwitch.offSeconds }, (onOff) => w.poeSwitch.cycle(onOff));
-      },
-      restartProcess: () => {
-        processRestart ??= restartProcess({
-          stop: () => proxy.stop({ reason: 'restart-requested' }),
-          exit: opts.exit ?? ((code) => logger.warn({ code }, 'cam_proxy_exit_not_wired')),
-          timeoutMs: opts.restartTimeoutMs,
-        });
-      },
-      ftp: ftpStatus,
-      health: healthNow,
-      // The camera's answer goes to the FTP check at once (#93).
-      cameraFtp: {
-        target: (cam) => ftpTargetFor(cam)(),
-        setup: async (cam, t) => {
-          const w = worker(cam);
-          const f = await setupCameraFtp(w.client, t);
-          w.ftpWatch.note(f);
-          return f;
-        },
-        test: (cam, t) => testCameraFtp(worker(cam).client, t),
-        off: async (cam) => {
-          const w = worker(cam);
-          const f = await cameraFtpOff(w.client, ftpTargetFor(w.id)());
-          w.ftpWatch.note(f);
-          return f;
-        },
-      },
-      storage,
-      audit,
-      analytics: () => analytics.state(),
-      setVisionKey: (key) => analytics.setManualKey(key),
-      unmapped: { list: (limit) => listUnmapped(catalog, limit), clear: () => clearUnmapped(catalog) },
-      sseClients: () => sse.clients(),
-      recordings: () => cams.first().recordings.status(),
-      inventory,
-      stream: streamStatus,
-      sessions,
-      links,
-      version: VERSION,
-      findCamera: () => discover(opts.discovery ?? {}),
-      envFile: () => loaded.env.CAMPROXY_ENV_FILE || undefined,
-      archive,
-      cameraId: () => cams.first().id,
-      cameraNtp: (cam) => worker(cam).syncNtp(true),
-      tls: {
-        view: tlsView,
-        pushNow: (cam, who) => (certs && running.tls.site ? certs.pushNow(cam, who) : Promise.resolve({ outcome: 'failed' as const, served: null, detail: running.tls.site ? (caProblem ?? 'the site CA is not ready') : 'no site CA: tls.site is not set', tookMs: 0 })),
-        rotate: () => (running.tls.site ? rotateCa() : null),
-        clearTrust: (cam, who) => certs?.clearTrust(cam, who) ?? null,
-        dropPrevious: (who) => certs?.dropPreviousCa(who) ?? false,
-      },
-    }),
-  );
+  const controlDeps: ControlDeps = {
+  loaded: () => loaded,
+  setLoaded,
+  running: () => running,
+  catalog,
+  log,
+  camera: () => cameraStatusBlock(cams.first()).camera,
+  cameras: cams,
+  cameraStatus: () => cams.list().map(cameraStatusBlock),
+  cameraCount: () => cams.size,
+  // Writes through to the camera and reads back; the poller (and so the
+  // stream message) knows the new name at once.
+  // The camera functions get the camera the request names (resolved by the router).
+  cameraName: {
+    current: (cam) => worker(cam).name(),
+    write: (cam, name) => worker(cam).writeName(name),
+  },
+  checkCamera: (cam) => worker(cam).status.checkNow(),
+  intake: () => cams.first().intake.state(),
+  resubscribe: (cam) => worker(cam).intake.resubscribe(),
+  restart: () => proxy.restart(),
+  // One camera's restart applies its own pending settings (cameras.<id>.*), nothing host-wide.
+  restartCamera: (cam) => {
+    const prefix = `cameras.${cam}.`;
+    for (const p of settingPaths(loaded.config)) if (p.startsWith(prefix) && needsRestart(p)) setPath(running as unknown as Record<string, unknown>, p, structuredClone(getPath(loaded.config, p)));
+    return worker(cam).restart();
+  },
+  cameraReboot: (who, cam) => worker(cam).reboot.request(who),
+  poeSwitch: { notConfigured: (cam) => worker(cam).poeSwitch.notConfigured(), read: (cam) => worker(cam).poeSwitch.read(), poeOn: (cam) => worker(cam).poeSwitch.poeOn(), info: (cam) => worker(cam).poeSwitchInfo() },
+  cameraPowerCycle: (who, cam) => {
+    const w = worker(cam);
+    return w.reboot.powerCycle(who, { switch: w.poeSwitchInfo(), offSeconds: w.cam().poeSwitch.offSeconds }, (onOff) => w.poeSwitch.cycle(onOff));
+  },
+  restartProcess: () => {
+    processRestart ??= restartProcess({
+      stop: () => proxy.stop({ reason: 'restart-requested' }),
+      exit: opts.exit ?? ((code) => logger.warn({ code }, 'cam_proxy_exit_not_wired')),
+      timeoutMs: opts.restartTimeoutMs,
+    });
+  },
+  ftp: ftpStatus,
+  health: healthNow,
+  // The camera's answer goes to the FTP check at once (#93).
+  cameraFtp: {
+    target: (cam) => ftpTargetFor(cam)(),
+    setup: async (cam, t) => {
+      const w = worker(cam);
+      const f = await setupCameraFtp(w.client, t);
+      w.ftpWatch.note(f);
+      return f;
+    },
+    test: (cam, t) => testCameraFtp(worker(cam).client, t),
+    off: async (cam) => {
+      const w = worker(cam);
+      const f = await cameraFtpOff(w.client, ftpTargetFor(w.id)());
+      w.ftpWatch.note(f);
+      return f;
+    },
+  },
+  storage,
+  audit,
+  analytics: () => analytics.state(),
+  setVisionKey: (key) => analytics.setManualKey(key),
+  unmapped: { list: (limit) => listUnmapped(catalog, limit), clear: () => clearUnmapped(catalog) },
+  sseClients: () => sse.clients(),
+  recordings: () => cams.first().recordings.status(),
+  inventory,
+  stream: streamStatus,
+  sessions,
+  links,
+  version: VERSION,
+  findCamera: () => discover(opts.discovery ?? {}),
+  envFile: () => loaded.env.CAMPROXY_ENV_FILE || undefined,
+  archive,
+  cameraId: () => cams.first().id,
+  cameraNtp: (cam) => worker(cam).syncNtp(true),
+  tls: {
+    view: tlsView,
+    pushNow: (cam, who) => (certs && running.tls.site ? certs.pushNow(cam, who) : Promise.resolve({ outcome: 'failed' as const, served: null, detail: running.tls.site ? (caProblem ?? 'the site CA is not ready') : 'no site CA: tls.site is not set', tookMs: 0 })),
+    rotate: () => (running.tls.site ? rotateCa() : null),
+    clearTrust: (cam, who) => certs?.clearTrust(cam, who) ?? null,
+    dropPrevious: (who) => certs?.dropPreviousCa(who) ?? false,
+  },
+};
+  app.use('/control', requireAccess('admin', access), controlApi(controlDeps));
   // The admin UI. The files are public; every API call needs a session.
   const webDir = findWebDir();
   if (!webDir) logger.warn('admin_ui_not_built');
@@ -1105,6 +1105,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       return certs;
     },
     camsAdmin,
+    actions: controlDeps,
     // Test seam: the host go2rtc's process id (adding a camera never restarts it).
     go2rtcPid: () => go2rtc?.pid(),
     async start(opts = {}) {
