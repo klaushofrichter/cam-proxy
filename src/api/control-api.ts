@@ -9,7 +9,7 @@ import type { PowerCycleAnswer, RebootAnswer, RebootRequester, RebootState, TooS
 import { PoeSwitchError, type PoeOnResult, type PoeSwitchStatus, type PortReading } from '../camera/poe-switch';
 import type { Config } from '../config/defaults';
 import { configChanges } from '../config/changes';
-import { configView } from '../config/view';
+import { configView, type ChangeMarks } from '../config/view';
 import { applyOverrides, ConfigError, removeAllOverrides, removeOverride, type Loaded } from '../config/load';
 import { cameraConfig, cameraIds } from '../config/cameras';
 import { FtpNotConfiguredError, type FtpTarget } from '../clips/camera-ftp';
@@ -136,6 +136,8 @@ export interface ControlDeps {
   cameras: CameraRegistry;
   cameraStatus: () => CameraStatusBlock[];
   cameraCount: () => number;
+  // The overrides a cams-admin command set (plan P3 R3-14): GET /control/config's `by`.
+  changeMarks?: () => ChangeMarks;
 }
 
 // Who sent a request, for its audit record.
@@ -403,7 +405,7 @@ export function controlApi(d: ControlDeps): express.Router {
     res.json(run);
   });
 
-  r.get('/config', (_req, res) => void res.json(configView(d.loaded(), d.running())));
+  r.get('/config', (_req, res) => void res.json(configView(d.loaded(), d.running(), d.changeMarks?.())));
   r.get('/tls', (_req, res) => void res.json(d.tls.view()));
   // A `config-change` record: the changed leaf settings, old → new. Secret
   // values are redacted by AuditLog by the setting's name. A refused change
@@ -421,7 +423,7 @@ export function controlApi(d: ControlDeps): express.Router {
       return invalid(res, err);
     }
     recordChanges(req, before);
-    res.json(configView(d.loaded(), d.running()));
+    res.json(configView(d.loaded(), d.running(), d.changeMarks?.()));
   });
   // "Reset to defaults" (the Settings page): every override at once, one record.
   r.delete('/config', (req, res) => {
@@ -432,7 +434,7 @@ export function controlApi(d: ControlDeps): express.Router {
       return invalid(res, err);
     }
     recordChanges(req, before, true);
-    res.json(configView(d.loaded(), d.running()));
+    res.json(configView(d.loaded(), d.running(), d.changeMarks?.()));
   });
   r.delete('/config/:path', (req, res) => {
     const before = d.loaded();
@@ -442,7 +444,7 @@ export function controlApi(d: ControlDeps): express.Router {
       return invalid(res, err);
     }
     recordChanges(req, before);
-    res.json(configView(d.loaded(), d.running()));
+    res.json(configView(d.loaded(), d.running(), d.changeMarks?.()));
   });
 
   // Find camera and Use this address share a rate limit (the other actions have none).

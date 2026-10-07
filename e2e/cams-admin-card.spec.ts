@@ -52,7 +52,9 @@ test('allowed commands, pause, recent commands and managed tokens', async ({ pag
   await expect(box).toContainText('Commands from cams-admin');
   const tokensApply = page.getByTestId('cams-admin-allow-tokens.apply');
   await expect(tokensApply).not.toBeChecked();
-  await expect(page.getByTestId('cams-admin-allow-config.get')).toBeDisabled();
+  // P3: implemented, so tickable, and still off by default.
+  await expect(page.getByTestId('cams-admin-allow-config.get')).toBeEnabled();
+  await expect(page.getByTestId('cams-admin-allow-config.get')).not.toBeChecked();
   await tokensApply.check();
   await page.getByTestId('cams-admin-commands-save').click();
   await expect(page.getByTestId('cams-admin-commands-message')).toContainText('Saved');

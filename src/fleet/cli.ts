@@ -27,7 +27,7 @@ export interface CliIo {
   proxyUrl?: string; // default http://127.0.0.1:<server.port>
 }
 
-const USAGE = 'usage: cam-proxy admin-enroll --url <cams-admin URL>   (the code is read from stdin)\n       cam-proxy admin-unenroll\n       cam-proxy admin-commands [status | allow <entry…> | deny <entry…> | pause [reason] | resume]\n       cam-proxy admin-tokens [list | block <id> | unblock <id>]\n';
+const USAGE = 'usage: cam-proxy admin-enroll --url <cams-admin URL>   (the code is read from stdin)\n       cam-proxy admin-unenroll\n       cam-proxy admin-commands [status | allow <entry…> | deny <entry…> | pause [reason] | resume | changes | undo <cmdId>]\n       cam-proxy admin-tokens [list | block <id> | unblock <id>]\n';
 
 async function readCode(io: CliIo): Promise<string> {
   if (io.stdin.isTTY) {
@@ -174,11 +174,21 @@ const printTokens = (io: CliIo, v: { revision: number; problem: string | null; i
   for (const t of v.items) io.out(`${t.id}  ${t.kind.padEnd(6)}  ${t.blocked ? 'blocked' : !t.live ? 'retired' : t.retireAt ? `retires ${new Date(t.retireAt).toISOString()}` : 'live'}  ${t.hashPrefix}…  ${t.label}\n`);
 };
 
+// cams-admin's settings changes (plan P3 R3-5): when, which command, on whose
+// behalf, which paths; never a value.
+interface ChangeItem { cmdId: string; command: string; actor: string; at: number; paths: { path: string }[]; rolledBack: { at: number; by: string; user?: string; cmdId?: string } | null }
+const printChanges = (io: CliIo, v: { items: ChangeItem[] }) => {
+  if (!v.items.length) return io.out('no settings changes from cams-admin\n');
+  for (const c of v.items) io.out(`${new Date(c.at).toISOString()}  ${c.cmdId}  ${c.command.padEnd(15)}  ${c.actor}  ${c.paths.map((x) => x.path).join(', ')}${c.rolledBack ? `  (undone ${c.rolledBack.by === 'local' ? `here by ${c.rolledBack.user ?? 'admin'}` : `by cams-admin ${c.rolledBack.cmdId ?? ''}`.trim()})` : ''}\n`);
+};
+
 async function runPolicyCli(cmd: 'admin-commands' | 'admin-tokens', rest: string[], io: CliIo): Promise<number> {
   const [op = cmd === 'admin-commands' ? 'status' : 'list', ...args] = rest;
   const usage = (why: string) => (io.err(`cam-proxy ${cmd}: ${why}\n${USAGE}`), 2);
   if (cmd === 'admin-commands') {
-    if (!['status', 'allow', 'deny', 'pause', 'resume'].includes(op)) return usage(`unknown command ${op.slice(0, 32)}`);
+    if (!['status', 'allow', 'deny', 'pause', 'resume', 'changes', 'undo'].includes(op)) return usage(`unknown command ${op.slice(0, 32)}`);
+    if (op === 'undo' && (args.length !== 1 || !/^cmd_[0-9A-HJKMNP-TV-Z]{20}$/.test(args[0]))) return usage('undo needs one command id (cmd_…)');
+    if (op === 'changes' && args.length) return usage('unexpected argument');
     if ((op === 'allow' || op === 'deny') && !args.length) return usage(`${op} needs one or more command names`);
     if (op === 'allow' || op === 'deny') {
       const bad = args.find((a) => !ALLOW_ENTRIES.includes(a));
@@ -207,6 +217,11 @@ async function runPolicyCli(cmd: 'admin-commands' | 'admin-tokens', rest: string
     io.err(`cam-proxy ${cmd}: ${base} did not answer as a cam-proxy; nothing was sent or written. Retry, or stop the proxy first\n`);
     return 1;
   }
+  // cams-admin's changes and their Undo go through the running proxy (it applies the settings live).
+  if (state !== 'running' && (op === 'changes' || op === 'undo')) {
+    io.err(`cam-proxy ${cmd} ${op}: the proxy is not running; start it, then try again (or reset the setting on the Settings page)\n`);
+    return 1;
+  }
   return state === 'running' ? policyLive(cmd, op, args, io, base, loaded) : policyFiles(cmd, op, args, io, loaded);
 }
 
@@ -224,6 +239,20 @@ async function policyLive(cmd: string, op: string, args: string[], io: CliIo, ba
     return { ok: r.ok, status: r.status, b };
   };
   const fail = (r: { status: number; b: Record<string, unknown> }) => (io.err(`cam-proxy ${cmd}: ${String(r.b.message ?? r.b.detail ?? r.b.error ?? `the proxy answered ${r.status}`)}\n`), r.status === 400 ? 2 : 1);
+  if (cmd === 'admin-commands' && op === 'changes') {
+    const r = await call('GET', '/control/admin/changes');
+    if (!r.ok) return fail(r);
+    printChanges(io, r.b as unknown as { items: ChangeItem[] });
+    return 0;
+  }
+  if (cmd === 'admin-commands' && op === 'undo') {
+    const r = await call('POST', `/control/admin/changes/${args[0]}/undo`);
+    if (r.status === 409 && r.b.error === 'conflict') return (io.err(`cam-proxy ${cmd} undo: changed here since: ${(r.b.paths as string[]).join(', ')}; nothing undone\n`), 1);
+    if (!r.ok) return fail(r);
+    const changes = (r.b.changes ?? []) as { path: string }[];
+    io.out(`undone ${args[0]}: ${changes.map((c) => c.path).join(', ') || 'nothing changed'}\n`);
+    return 0;
+  }
   if (cmd === 'admin-commands') {
     let r;
     if (op === 'status') r = await call('GET', '/control/admin/commands');

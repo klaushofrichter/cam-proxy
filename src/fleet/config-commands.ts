@@ -191,13 +191,12 @@ export function compactView(l: Loaded, running: Config, marks: ReturnType<Overri
   const all = l.config.cameraOrder;
   const cameras = all.slice(0, maxCameras);
   const omitted = all.slice(maxCameras);
-  const view = configView(l, running) as Record<string, { value?: unknown; source: string; pending?: boolean; next?: unknown }>;
+  const view = configView(l, running, marks) as Record<string, { value?: unknown; source: string; pending?: boolean; next?: unknown; by?: { cmdId: string; actor: string; at: number } }>;
   const paths: Record<string, unknown> = {};
   for (const [p, e] of Object.entries(view)) {
     const m = /^cameras\.([^.]+)\./.exec(p);
     if ((m && !cameras.includes(m[1])) || SECRET_PATH.test(p)) continue;
-    const mark = marks.get(p);
-    const by = mark && l.sources[p] === 'override' && same(getPath(l.overrides, p), mark.value) ? { cmdId: mark.cmdId, actor: mark.actor, at: mark.at } : null;
+    const by = e.by;
     const r = needsProcessRestart(p) ? 'process' : needsRestart(p) ? 'restart' : null;
     paths[p] = { ...(e.value !== undefined ? { v: e.value } : {}), s: e.source, ...(r ? { r } : {}), ...(e.pending ? { p: true, ...(e.next !== undefined ? { n: e.next } : {}) } : {}), ...(by ? { by } : {}) };
   }

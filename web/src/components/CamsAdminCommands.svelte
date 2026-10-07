@@ -2,7 +2,8 @@
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
   import { agoText } from '../lib/format';
-  import { commandsBanner, tokenStateText, widenErrorText, type CommandsView, type TokensView } from '../lib/cams-admin';
+  import { changeLines, commandsBanner, entryGroups, tokenStateText, undoErrorText, widenErrorText, type ChangeItem, type CommandsView, type TokensView } from '../lib/cams-admin';
+  import ConfirmDialog from './ConfirmDialog.svelte';
 
   // Commands from cams-admin and the managed tokens (migration P2,
   // docs/cams-admin.md): off unless allowed here. Any admin can narrow
@@ -10,6 +11,9 @@
   // the proxy's own admin token (a session signed in with it).
   let cmds = $state<CommandsView | null>(null);
   let tokens = $state<TokensView | null>(null);
+  // cams-admin's settings changes (migration P3), each with Undo.
+  let changes = $state<ChangeItem[]>([]);
+  let undoing = $state<ChangeItem | null>(null);
   let chosen = $state<string[]>([]);
   let dirty = $state(false);
   let reason = $state('');
@@ -22,6 +26,7 @@
       cmds = await api<CommandsView>('GET', '/control/admin/commands');
       if (!dirty) chosen = [...cmds.allow];
       tokens = await api<TokensView>('GET', '/control/admin/tokens');
+      changes = (await api<{ items: ChangeItem[] }>('GET', '/control/admin/changes')).items;
     } catch {
       // the next tick tries again
     }
@@ -55,7 +60,22 @@
   const resume = () => act(async () => { cmds = await api<CommandsView>('POST', '/control/admin/commands/resume'); }, 'Commands resumed', "Resuming needs the proxy's own admin token");
   const block = (id: string) => act(async () => { tokens = await api<TokensView>('POST', `/control/admin/tokens/${id}/block`); }, `${id} blocked`, 'Not blocked');
   const unblock = (id: string) => act(async () => { tokens = await api<TokensView>('POST', `/control/admin/tokens/${id}/unblock`); }, `${id} unblocked: cams-admin's next token update brings it back`, "Unblocking needs the proxy's own admin token");
+  async function undo(c: ChangeItem) {
+    undoing = null;
+    busy = true;
+    message = '';
+    try {
+      await api('POST', `/control/admin/changes/${c.cmdId}/undo`);
+      message = `Undone: ${c.paths.map((p) => p.path).join(', ')}`;
+    } catch (e) {
+      message = undoErrorText(e);
+    } finally {
+      busy = false;
+      await load();
+    }
+  }
   const banner = $derived(cmds ? commandsBanner(cmds) : null);
+  const groups = $derived(cmds ? entryGroups({ known: cmds.known, groups: cmds.groups, allow: chosen }) : []);
 </script>
 
 {#if cmds}
@@ -63,18 +83,24 @@
     <h4>Commands from cams-admin</h4>
     {#if banner}<p class="banner" data-testid="cams-admin-commands-banner">{banner}</p>{/if}
     <p class="small">cams-admin can only send what is ticked here; everything else is refused. Adding a command needs the proxy's own admin token.</p>
-    <ul class="entries">
-      {#each cmds.known ?? [] as k (k.entry)}
-        {@const implemented = (cmds.implemented ?? []).includes(k.entry)}
-        <li class:later={!implemented}>
-          <label>
-            <input type="checkbox" checked={chosen.includes(k.entry)} disabled={busy || !implemented} onchange={(e) => toggle(k.entry, (e.currentTarget as HTMLInputElement).checked)} data-testid="cams-admin-allow-{k.entry}" />
-            <span class="mono">{k.entry}</span>
-          </label>
-          <span class="small">{k.text}</span>
-        </li>
-      {/each}
-    </ul>
+    {#each groups as g (g.key)}
+      <div class="group" class:disruptive={g.key === 'disruptive'} data-testid="cams-admin-group-{g.key}">
+        <h5>{g.title}</h5>
+        {#if g.warning}<p class="warn small">{g.warning}</p>{/if}
+        <ul class="entries">
+          {#each g.entries as k (k.entry)}
+            {@const implemented = (cmds.implemented ?? []).includes(k.entry)}
+            <li class:later={!implemented}>
+              <label>
+                <input type="checkbox" checked={k.allowed} disabled={busy || !implemented} onchange={(e) => toggle(k.entry, (e.currentTarget as HTMLInputElement).checked)} data-testid="cams-admin-allow-{k.entry}" />
+                <span class="mono">{k.entry}</span>
+              </label>
+              <span class="small">{k.text}</span>
+            </li>
+          {/each}
+        </ul>
+      </div>
+    {/each}
     <div class="actions">
       <button onclick={() => void save()} disabled={busy || !dirty} data-testid="cams-admin-commands-save">Save</button>
       {#if cmds.paused}
@@ -101,6 +127,32 @@
       <p class="small">No commands yet.</p>
     {/if}
     <a href="#/audit" class="small">Audit log (filter: admin-command)</a>
+  </section>
+
+  <section class="sub" data-testid="cams-admin-changes">
+    <h4>Settings changed by cams-admin</h4>
+    {#if changes.length}
+      <table>
+        <tbody>
+          {#each changes as c (c.cmdId)}
+            <tr data-testid="cams-admin-change-{c.cmdId}">
+              <td>{agoText(c.at, now)}</td>
+              <td class="wrap">{c.actor}</td>
+              <td class="wrap">{#each changeLines(c) as line (line)}<div class="mono">{line}</div>{/each}</td>
+              <td>
+                {#if c.rolledBack}
+                  <span class="small">undone{c.rolledBack.by === 'local' ? ' here' : ' by cams-admin'}</span>
+                {:else if c.command !== 'config.rollback'}
+                  <button onclick={() => (undoing = c)} disabled={busy} data-testid="cams-admin-undo-{c.cmdId}">Undo</button>
+                {/if}
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    {:else}
+      <p class="small">None. The Settings page marks a setting cams-admin set.</p>
+    {/if}
   </section>
 
   {#if tokens}
@@ -132,9 +184,17 @@
   {/if}
 {/if}
 
+{#if undoing}
+  <ConfirmDialog title="Undo cams-admin's change" message="These settings go back to what they were before cams-admin changed them (a setting changed here since is left alone, and nothing is undone then):" items={changeLines(undoing)} confirmLabel="Undo" oncancel={() => (undoing = null)} onconfirm={() => void undo(undoing!)} />
+{/if}
+
 <style>
   .sub { display: grid; gap: 6px; border-top: 1px solid var(--border); padding-top: 8px; }
   h4 { margin: 0; font-size: 14px; }
+  h5 { margin: 4px 0 0; font-size: 13px; }
+  .group { display: grid; gap: 4px; }
+  .group.disruptive { border: 1px solid var(--danger); border-radius: 8px; padding: 6px 8px; }
+  .warn { color: var(--danger); }
   p { margin: 0; }
   .banner { color: var(--danger); font-weight: 600; }
   .entries { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }

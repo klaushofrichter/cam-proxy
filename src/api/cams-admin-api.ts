@@ -6,7 +6,8 @@ import type { CamsAdmin } from '../fleet/service';
 import { actorOf, clientIp, requireLocalAdmin, type AccessInfo } from './auth';
 import { ConfigError } from '../config/load-error';
 import type { CommandRunner } from '../fleet/commands';
-import { ALLOW_ENTRIES, ENTRY_TEXT, IMPLEMENTED, WideningRefused, type CommandPolicy } from '../fleet/policy';
+import { ALLOW_ENTRIES, DISRUPTIVE_ENTRIES, ENTRY_TEXT, IMPLEMENTED, WideningRefused, type CommandPolicy } from '../fleet/policy';
+import { undoLocal, type ConfigCommandDeps } from '../fleet/config-commands';
 import { TooManyBlocks, type TokenStore } from '../fleet/token-store';
 
 // The Status page's cams-admin card (spec 2026-10-06-cams-admin-phase1-design
@@ -17,7 +18,20 @@ export interface CommandsApiDeps {
   policy: CommandPolicy;
   tokens: TokenStore;
   runner: CommandRunner;
+  // cams-admin's settings changes (plan P3 R3-5): the card's list and Undo.
+  config?: ConfigCommandDeps;
 }
+
+// The allow entries by kind, for the card (plan P3 Task 11): the disruptive
+// ones (Klaus's decision 3) under their own warning.
+const GROUPS = {
+  tokens: ALLOW_ENTRIES.filter((e) => e.startsWith('tokens.')),
+  read: ['config.get'],
+  settings: ['config.set', 'config.unset', 'config.rollback'],
+  camera: ALLOW_ENTRIES.filter((e) => (e.startsWith('camera.action:') || e === 'camera.name.set') && !DISRUPTIVE_ENTRIES.has(e)),
+  disruptive: ALLOW_ENTRIES.filter((e) => DISRUPTIVE_ENTRIES.has(e)),
+};
+const CMD_ID = /^cmd_[0-9A-HJKMNP-TV-Z]{20}$/;
 
 export function camsAdminApi(d: { camsAdmin: CamsAdmin; audit: AuditLog; commands?: CommandsApiDeps }): express.Router {
   const r = express.Router();
@@ -65,7 +79,7 @@ export function camsAdminApi(d: { camsAdmin: CamsAdmin; audit: AuditLog; command
       const p = c.policy.effective();
       return { allow: p.allow, paused: p.paused, pauseReason: p.pauseReason };
     };
-    const commandsView = () => ({ ...c.policy.effective(), implemented: ALLOW_ENTRIES.filter((e) => IMPLEMENTED.has(e)), known: ALLOW_ENTRIES.map((entry) => ({ entry, text: ENTRY_TEXT[entry] })), recent: c.runner.recent(20) });
+    const commandsView = () => ({ ...c.policy.effective(), implemented: ALLOW_ENTRIES.filter((e) => IMPLEMENTED.has(e)), known: ALLOW_ENTRIES.map((entry) => ({ entry, text: ENTRY_TEXT[entry] })), recent: c.runner.recent(20), groups: GROUPS });
     const policyRecord = (req: express.Request, before: ReturnType<typeof policyOf>, message: string) =>
       d.audit.write({ action: 'admin-policy', category: ['configuration'], type: ['change'], outcome: 'success', ...who(req), message, details: { from: before, to: policyOf(), requestedBy: req.res?.locals.access?.viaCookie ? 'session' : 'token' } });
     const failed = (res: express.Response, err: unknown) => {
@@ -125,6 +139,25 @@ export function camsAdminApi(d: { camsAdmin: CamsAdmin; audit: AuditLog; command
       d.audit.write({ action: 'admin-token', category: ['configuration'], type: ['change'], outcome: 'success', ...who(req), message: `Managed token ${id}${t ? ` (${t.label})` : ''} ${op === 'block' ? 'blocked' : 'unblocked'}`, details: { op, id, label: t?.label ?? null, kind: t?.kind ?? null } });
       res.json(tokensView());
     };
+    // cams-admin's settings changes (R3-5): the backups, newest first; Undo
+    // with the proxy's own admin rights (a managed admin token can't).
+    const cfg = c.config;
+    if (cfg) {
+      const val = (x: { set: boolean; value?: unknown }, k: 'from' | 'to') => (x.set ? { [k]: x.value } : {});
+      r.get('/admin/changes', (_req, res) => void res.json({ items: cfg.backups.list().map((b) => ({ cmdId: b.cmdId, command: b.command, actor: b.actor, at: b.at, paths: b.paths.map((x) => ({ path: x.path, ...val(x.before, 'from'), ...val(x.after, 'to') })), rolledBack: b.rolledBack ?? null })) }));
+      r.post('/admin/changes/:cmdId/undo', requireLocalAdmin(), (req, res) => {
+        const id = String(req.params.cmdId);
+        if (!CMD_ID.test(id)) return void res.status(400).json({ error: 'invalid', detail: 'not a command id' });
+        const w = who(req);
+        const done = undoLocal(cfg, id, { user: w.user, ip: w.ip, ...(w.userAgent ? { userAgent: w.userAgent } : {}) });
+        if (done.status === 'ok') return void res.json({ changes: done.result?.changes ?? [] });
+        if (done.status === 'conflict') return void res.status(409).json({ error: 'conflict', paths: Object.keys((done.result?.current ?? {}) as object) });
+        if (done.code === 'no_backup') return void res.status(404).json({ error: 'no_backup' });
+        if (done.code === 'store_error') return void res.status(500).json({ error: 'store_error' });
+        res.status(409).json({ error: done.code ?? 'failed', ...(done.result?.paths ? { paths: done.result.paths } : {}) });
+      });
+    }
+
     r.get('/admin/tokens', (_req, res) => void res.json(tokensView()));
     r.post('/admin/tokens/:id/block', tokenOp('block'));
     r.post('/admin/tokens/:id/unblock', requireLocalAdmin(), tokenOp('unblock'));
