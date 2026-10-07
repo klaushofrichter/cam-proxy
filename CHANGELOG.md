@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.10.06.4
+
 - cams-admin files under `data/admin/` (key, tokens, commands, policy, replay): a file of the proxy's own user that others could read is set back to 600 (folder 700) instead of refused. Fixes the cluster's client stopping after v2026.10.06.3 (`fsGroup` makes the volume's files 660 on every pod start). Another user's file is still refused; a refused key file, or unusable replay files, are checked again within 30 s, so a `chmod`/`chown` needs no restart.
 
 ## v2026.10.06.3
