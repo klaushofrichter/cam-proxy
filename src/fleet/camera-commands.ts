@@ -37,10 +37,10 @@ export function scrub(x: unknown, depth = 0): unknown {
 const UPLOAD_ON = ['MD', 'AI_PEOPLE', 'AI_VEHICLE', 'AI_DOG_CAT'];
 type Verdict = { verified: boolean; mismatch: string[] };
 // The FTP object the camera answered after the Set (re-read, redacted) against what was asked.
-export function verifyFtp(action: 'camera-ftp-setup' | 'camera-ftp-off', answer: Record<string, unknown>, target?: { server: string; port: number; tls: boolean; stream: 'main' | 'sub' }): Verdict {
+export function verifyFtp(which: 'camera-ftp-setup' | 'camera-ftp-off', answer: Record<string, unknown>, target?: { server: string; port: number; tls: boolean; stream: 'main' | 'sub' }): Verdict {
   const f = (answer?.ftp ?? {}) as Record<string, unknown>;
   const mismatch: string[] = [];
-  if (action === 'camera-ftp-off') {
+  if (which === 'camera-ftp-off') {
     if (f.enable !== 0) mismatch.push('enable');
   } else {
     if (f.enable !== 1) mismatch.push('enable');
