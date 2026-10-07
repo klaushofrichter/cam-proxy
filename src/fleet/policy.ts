@@ -25,18 +25,7 @@ export const ENTRY_TEXT: Record<string, string> = {
   ...Object.fromEntries(REMOTE_ACTIONS.map((a) => [`camera.action:${a}`, `cams-admin may run the camera action ${a}${LATER}`])),
 };
 
-// M §8.2 right column (M5): never settable by cams-admin. P3's config.set
-// checks every path against isDeniedPath before anything else; the per-camera
-// entries apply under cameras.<id>.
-export const DENIED_PATH_PREFIXES = ['camsAdmin', 'server', 'go2rtc', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.publicHost', 'ftp.certFile', 'ftp.keyFile', 'tls', 'composition.font', 'ntp.server', 'poeSwitch'] as const;
-const DENIED_CAMERA_KEYS = ['host', 'protocol', 'tlsName', 'user', 'onvifPort', 'rtspPort', 'baichuanPort', 'poeSwitch', 'ftp.user', 'webUiUrl'] as const;
-const under = (p: string, x: string) => p === x || p.startsWith(`${x}.`);
-
-export function isDeniedPath(path: string): boolean {
-  if (DENIED_PATH_PREFIXES.some((x) => under(path, x))) return true;
-  const m = /^cameras\.[^.]+\.(.+)$/.exec(path);
-  return !!m && DENIED_CAMERA_KEYS.some((k) => under(m[1], k));
-}
+// The settings cams-admin may set (and never may): src/fleet/remote-settable.ts.
 
 export function validateAllowList(list: unknown, where: string): string[] {
   if (!Array.isArray(list) || list.length > 32) throw new ConfigError(`${where}: a list of at most 32 command names`);

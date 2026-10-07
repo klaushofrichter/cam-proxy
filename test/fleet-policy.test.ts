@@ -2,11 +2,12 @@ import { mkdtempSync, statSync, writeFileSync, chmodSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, it } from 'vitest';
-import { ALLOW_ENTRIES, CommandPolicy, ENTRY_TEXT, IMPLEMENTED, DENIED_PATH_PREFIXES, isDeniedPath, NEVER_REMOTE_ACTIONS, validateAllowList, WideningRefused } from '../src/fleet/policy';
+import { ALLOW_ENTRIES, CommandPolicy, ENTRY_TEXT, IMPLEMENTED, NEVER_REMOTE_ACTIONS, validateAllowList, WideningRefused } from '../src/fleet/policy';
 import { readEnvLayer } from '../src/config/env';
 import { privateFileHooks } from '../src/fleet/private-file';
 import { settingPaths } from '../src/config/load';
 import { DEFAULTS } from '../src/config/defaults';
+import { classify, DENIED } from '../src/fleet/remote-settable';
 
 const dir = () => mkdtempSync(join(tmpdir(), 'policy-'));
 const quiet = { info() {}, warn() {}, debug() {} };
@@ -20,10 +21,11 @@ describe('the closed lists', () => {
     for (const a of NEVER_REMOTE_ACTIONS) expect(ALLOW_ENTRIES).not.toContain(`camera.action:${a}`);
   });
   it('the deny list covers camsAdmin.*, every address, port, file path and trust setting (M5)', () => {
-    for (const p of ['camsAdmin.url', 'camsAdmin.keyFile', 'server.port', 'tls.site', 'go2rtc.url', 'ftp.port', 'ftp.certFile', 'ntp.server', 'poeSwitch.host', 'composition.font', 'cameras.cam1.host', 'cameras.cam1.user', 'cameras.cam1.tlsName', 'cameras.cam1.poeSwitch.port']) expect(isDeniedPath(p), p).toBe(true);
-    for (const p of ['stills.intervalS', 'retention.days', 'cameras.cam1.name']) expect(isDeniedPath(p), p).toBe(false);
+    const ids = ['cam1'];
+    for (const p of ['camsAdmin.url', 'camsAdmin.keyFile', 'server.port', 'tls.site', 'go2rtc.url', 'ftp.port', 'ftp.certFile', 'ntp.server', 'poeSwitch.host', 'composition.font', 'cameras.cam1.host', 'cameras.cam1.user', 'cameras.cam1.tlsName', 'cameras.cam1.poeSwitch.port']) expect(classify(p, ids), p).toBe('denied');
+    for (const p of ['stills.intervalS', 'retention.stillsDays', 'cameras.cam1.name']) expect(classify(p, ids), p).toBe('remote');
     // Every real setting under a denied prefix is denied (no prefix typo hides one).
-    for (const p of settingPaths(DEFAULTS)) if (DENIED_PATH_PREFIXES.some((x) => p === x || p.startsWith(`${x}.`))) expect(isDeniedPath(p), p).toBe(true);
+    for (const p of settingPaths(DEFAULTS)) if (DENIED.some((x) => p === x || p.startsWith(`${x}.`))) expect(classify(p, ids), p).toBe('denied');
   });
 });
 
