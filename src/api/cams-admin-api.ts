@@ -65,7 +65,7 @@ export function camsAdminApi(d: { camsAdmin: CamsAdmin; audit: AuditLog; command
       const p = c.policy.effective();
       return { allow: p.allow, paused: p.paused, pauseReason: p.pauseReason };
     };
-    const commandsView = () => ({ ...c.policy.effective(), implemented: [...IMPLEMENTED], known: ALLOW_ENTRIES.map((entry) => ({ entry, text: ENTRY_TEXT[entry] })), recent: c.runner.recent(20) });
+    const commandsView = () => ({ ...c.policy.effective(), implemented: ALLOW_ENTRIES.filter((e) => IMPLEMENTED.has(e)), known: ALLOW_ENTRIES.map((entry) => ({ entry, text: ENTRY_TEXT[entry] })), recent: c.runner.recent(20) });
     const policyRecord = (req: express.Request, before: ReturnType<typeof policyOf>, message: string) =>
       d.audit.write({ action: 'admin-policy', category: ['configuration'], type: ['change'], outcome: 'success', ...who(req), message, details: { from: before, to: policyOf(), requestedBy: req.res?.locals.access?.viaCookie ? 'session' : 'token' } });
     const failed = (res: express.Response, err: unknown) => {

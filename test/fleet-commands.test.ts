@@ -160,7 +160,7 @@ describe('the runner', () => {
   });
   it('status(): the allow entries this version implements, with pause and enabled', () => {
     const f = runnerFixture({ allow: ['tokens.apply', 'config.get', 'camera.action:camera-reboot'] });
-    expect(f.runner.status()).toEqual({ enabled: true, paused: false, pauseReason: null, allow: ['tokens.apply'], seenWindow: 1000 });
+    expect(f.runner.status()).toEqual({ enabled: true, paused: false, pauseReason: null, allow: ['tokens.apply', 'config.get', 'camera.action:camera-reboot'], seenWindow: 1000 });
   });
 });
 

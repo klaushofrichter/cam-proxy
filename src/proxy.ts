@@ -64,7 +64,10 @@ import { createLoginLinks } from './api/login-links';
 import { TokenStore } from './fleet/token-store';
 import { CommandPolicy } from './fleet/policy';
 import { Journal } from './fleet/journal';
-import { CommandRunner } from './fleet/commands';
+import { OverridesBackups } from './fleet/backups';
+import { configHandlers } from './fleet/config-commands';
+import { cameraHandlers } from './fleet/camera-commands';
+import { CommandRunner, type Handler } from './fleet/commands';
 import { ReplayGuard } from './fleet/replay';
 import { privateFileHooks, tightenAdminFiles } from './fleet/private-file';
 import { composeApi, hasAudio } from './api/compose-api';
@@ -791,12 +794,17 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   const commandPolicy = new CommandPolicy({ base: () => loaded.commandPolicyBase, file: join(loaded.config.server.dataDir, 'admin', 'policy.json'), env: () => loaded.envLayer, log: logger });
   const journal = new Journal(join(loaded.config.server.dataDir, 'admin', 'commands.json'), Date.now, logger);
   const replayGuard = new ReplayGuard({ file: join(loaded.config.server.dataDir, 'admin', 'replay.json'), log: logger, slackMs: opts.camsAdmin?.replaySlackMs });
+  // The P3 handlers join once the control API's dependencies exist (below).
+  const commandHandlers: Record<string, Handler> = {};
   const commandRunner = new CommandRunner({
+    handlers: commandHandlers,
     replay: replayGuard,
     proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
     serverKeys: () => camsAdmin.keyInfo()?.serverKeys ?? [],
     policy: commandPolicy, journal, tokens: tokenStore, audit, log: logger,
   });
+  // Overrides backups per cams-admin settings write (plan P3 R3-5): data/admin/overrides.bak-*.json.
+  const overridesBackups = new OverridesBackups(join(loaded.config.server.dataDir, 'admin'), Date.now, logger);
   let envOffLogged = false;
 
   let startedAt: number | null = null;
@@ -828,7 +836,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     commands: () => commandRunner,
     replay: replayGuard,
     // What changes ok, problemCount or a camera's online flag, read cheaply (an early heartbeat).
-    changeKey: () => `${storage.paused() ? 1 : 0}|${cams.list().map((w) => `${w.id}:${w.status.state().online ? 1 : 0}${w.streamStatus().up ? 1 : 0}:${w.intake.state().onvif}`).join(',')}`,
+    // A local settings edit too (R3-12): cams-admin re-reads within seconds.
+    changeKey: () => `${storage.paused() ? 1 : 0}|${cams.list().map((w) => `${w.id}:${w.status.state().online ? 1 : 0}${w.streamStatus().up ? 1 : 0}:${w.intake.state().onvif}`).join(',')}|${configRevision(loaded)}`,
     log: logger,
     timing: opts.camsAdmin?.timing,
     recheckMs: opts.camsAdmin?.recheckMs,
@@ -973,6 +982,12 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   },
 };
   app.use('/control', requireAccess('admin', access), controlApi(controlDeps));
+  // cams-admin's P3 commands (plan P3 Task 10): each off unless allowed locally.
+  Object.assign(
+    commandHandlers,
+    configHandlers({ loaded: () => loaded, setLoaded, running: () => running, backups: overridesBackups, audit }),
+    cameraHandlers({ actions: controlDeps, cameraIds: () => cams.ids(), cameraName: controlDeps.cameraName, audit, restartProcess: () => controlDeps.restartProcess() }),
+  );
   // The admin UI. The files are public; every API call needs a session.
   const webDir = findWebDir();
   if (!webDir) logger.warn('admin_ui_not_built');

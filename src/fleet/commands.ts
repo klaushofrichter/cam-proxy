@@ -1,7 +1,7 @@
 import type { AuditLog } from '../audit/audit-log';
 import { RefusalThrottle } from '../audit/throttle';
 import type { ClientLog } from './client';
-import { checkCommand, CommandLimits, type CommandBody, type Nack, type SeenIds } from './command-check';
+import { checkCommand, CommandLimits, journalBudgetOf, type CommandBody, type Nack, type SeenIds } from './command-check';
 import type { Journal, JournalEntry } from './journal';
 import { IMPLEMENTED, type CommandPolicy } from './policy';
 import type { Envelope } from './protocol';
@@ -36,7 +36,9 @@ export interface RunnerDeps {
   now?: () => number;
   // cmdIds across connections and restarts (data/admin/replay.json).
   replay?: Pick<ReplayGuard, 'hasCmd' | 'addCmd'>;
-  // The handlers by command name (default: tokens.apply on `tokens`).
+  // The handlers by command name, read when a command runs (so the proxy can
+  // add the P3 handlers once their dependencies exist); tokens.apply on
+  // `tokens` unless given.
   handlers?: Record<string, Handler>;
 }
 
@@ -52,13 +54,13 @@ export class CommandRunner {
   private readonly undelivered = new Map<string, Record<string, unknown>>();
   private readonly suppressedIds = new Map<string, string[]>();
   private readonly now: () => number;
-  private readonly handlers: Record<string, Handler>;
+  private readonly defaults: Record<string, Handler>;
 
   constructor(private readonly d: RunnerDeps) {
     this.now = d.now ?? Date.now;
     this.limits = new CommandLimits(this.now);
     this.nackAudit = new RefusalThrottle(600_000, this.now);
-    this.handlers = d.handlers ?? { 'tokens.apply': (args) => this.tokensApply(args as TokensApplyArgs) };
+    this.defaults = { 'tokens.apply': (args) => this.tokensApply(args as TokensApplyArgs) };
   }
 
   // The heartbeat's proxy.commands block.
@@ -81,6 +83,8 @@ export class CommandRunner {
       policy: { enabled: p.enabled, paused: p.paused, allow: p.allow },
       journal: (id) => (this.running === id ? 'running' : this.d.journal.get(id)),
       limits: this.limits, implemented: IMPLEMENTED,
+      // The journal budget (step 11, R3-9): on the proxy's own clock, from the persisted journal.
+      journalBudget: journalBudgetOf(this.d.journal.countSince.bind(this.d.journal), this.now()),
       currentTokens: this.d.tokens.current(),
       ...(this.d.replay ? { seenCmd: { has: (id: string) => this.d.replay!.hasCmd(id), add: (id: string, exp: number) => this.d.replay!.addCmd(id, exp) } } : {}),
     });
@@ -115,7 +119,7 @@ export class CommandRunner {
     let done: Done;
     try {
       send('result', { ...base, cmdId: cmd.cmdId, phase: 'received' }, m.id);
-      const h = this.handlers[cmd.command];
+      const h = (this.d.handlers && Object.hasOwn(this.d.handlers, cmd.command) ? this.d.handlers[cmd.command] : undefined) ?? (Object.hasOwn(this.defaults, cmd.command) ? this.defaults[cmd.command] : undefined);
       done = h ? await h(args, cmd) : { status: 'failed', code: 'not_implemented' };
     } catch (err) {
       this.d.log.warn({ command: cmd.command, err: String((err as Error)?.message ?? err).slice(0, 200) }, 'admin_command_error');

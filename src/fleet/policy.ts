@@ -12,21 +12,31 @@ export const NEVER_REMOTE_ACTIONS = ['find-camera', 'camera-address', 'camera-tr
 export const DISRUPTIVE_ACTIONS = ['restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ftp-off', 'camera-ntp-set', 'camera-cert-push'] as const;
 export const DISRUPTIVE_ENTRIES: ReadonlySet<string> = new Set(['proxy.restart', ...DISRUPTIVE_ACTIONS.map((a) => `camera.action:${a}`)]);
 export const ALLOW_ENTRIES: readonly string[] = ['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`)];
-// What this version runs (P2). The heartbeat reports allow ∩ IMPLEMENTED.
-export const IMPLEMENTED: ReadonlySet<string> = new Set(['tokens.apply', 'tokens.apply.admin']);
+// What this version runs (P2, P3): command names and allow entries. The
+// heartbeat reports allow ∩ IMPLEMENTED.
+export const IMPLEMENTED: ReadonlySet<string> = new Set(['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`)]);
 // One sentence per allow entry: what allowing it lets cams-admin change (the
 // Status card shows them next to the boxes).
-const LATER = ' (not in this version)';
+const EFFECT: Record<string, string> = {
+  restart: "restarts a camera's worker (stills and events pause)",
+  'camera-reboot': 'reboots the camera (recording stops for about a minute)',
+  'camera-powercycle': "cuts the camera's PoE power",
+  'camera-ftp-setup': "rewrites the camera's FTP upload settings",
+  'camera-ftp-off': "rewrites the camera's FTP upload settings",
+  'camera-ntp-set': "rewrites the camera's NTP settings",
+  'camera-cert-push': "replaces the camera's HTTPS certificate",
+};
+const actionText = (a: string) => ((DISRUPTIVE_ACTIONS as readonly string[]).includes(a) ? `DISRUPTIVE: cams-admin may run ${a} on a camera: ${EFFECT[a]}` : `cams-admin may run ${a} on a camera`);
 export const ENTRY_TEXT: Record<string, string> = {
   'tokens.apply': 'cams-admin may add, rotate and revoke managed client tokens for cams (CAMPROXY_TOKENS keeps working)',
   'tokens.apply.admin': 'cams-admin may also manage admin tokens (sign-in links, camera rename); your local admin token is never affected',
-  'config.get': `cams-admin may read this proxy's settings${LATER}`,
-  'config.set': `cams-admin may change settings that are not addresses, ports, files or trust${LATER}`,
-  'config.unset': `cams-admin may reset such settings to their defaults${LATER}`,
-  'config.rollback': `cams-admin may roll the settings back to an earlier revision${LATER}`,
-  'camera.name.set': `cams-admin may rename a camera${LATER}`,
-  'proxy.restart': `cams-admin may restart this proxy${LATER}`,
-  ...Object.fromEntries(REMOTE_ACTIONS.map((a) => [`camera.action:${a}`, `cams-admin may run the camera action ${a}${LATER}`])),
+  'config.get': "cams-admin may read this proxy's settings (values and sources; no secrets)",
+  'config.set': 'cams-admin may change the settings marked remote-settable (never addresses, ports, files, trust, users, storage, capture switches or cams-admin itself); local edits win',
+  'config.unset': "cams-admin may reset those settings to config.json's value or the default",
+  'config.rollback': 'cams-admin may undo its own setting changes',
+  'camera.name.set': "cams-admin may rename a camera (the camera's own name)",
+  'proxy.restart': 'DISRUPTIVE: cams-admin may restart this proxy (at most 2 an hour)',
+  ...Object.fromEntries(REMOTE_ACTIONS.map((a) => [`camera.action:${a}`, actionText(a)])),
 };
 
 // The settings cams-admin may set (and never may): src/fleet/remote-settable.ts.

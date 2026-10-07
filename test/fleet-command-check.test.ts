@@ -68,7 +68,7 @@ describe('each refusal', () => {
   it('not_allowed: not in the allow-list, unknown, or not implemented by this version', () => {
     expect(code(cmd(), ctx({ policy: { enabled: true, paused: false, allow: [] } }))).toBe('not_allowed');
     expect(code(cmd((b) => (b.command = 'frobnicate')), ctx())).toBe('not_allowed');
-    expect(code(cmd((b) => (b.command = 'config.get')), ctx({ policy: { enabled: true, paused: false, allow: ['config.get'] } }))).toBe('not_allowed');
+    expect(code(cmd((b) => (b.command = 'camera.action')), ctx({ policy: { enabled: true, paused: false, allow: ['tokens.apply'] } }))).toBe('not_allowed');
   });
   it('args over 16384 bytes of canonical JSON are invalid_args (the contract bound), checked before the validator', () => {
     // 64 tokens with 64-character labels of 4-byte characters: each entry valid, the whole too big.
@@ -247,6 +247,9 @@ describe('P3: entries, args and budgets', () => {
     expect(kind('camera.name.set', { v: 1, camera: 'cam1', name: 'a\nb' }, c3(['camera.name.set']))).toBe('invalid_args');
     expect(kind('camera.name.set', { v: 1, camera: 'cam1', name: 'x'.repeat(65) }, c3(['camera.name.set']))).toBe('invalid_args');
     expect(kind('camera.name.set', { v: 1, camera: 'cam1', name: '' }, c3(['camera.name.set']))).toBe('invalid_args');
+    // CAMERA_NAME_PATTERN (contract, security review M3): no C1, bidi, separator or zero-width characters.
+    for (const bad of ['a\u202eb', 'a\u2066b', 'a\u200bb', 'a\u2028b', 'a\u0085b', 'a\ufeffb']) expect(kind('camera.name.set', { v: 1, camera: 'cam1', name: bad }, c3(['camera.name.set'])), JSON.stringify(bad)).toBe('invalid_args');
+    expect(kind('camera.name.set', { v: 1, camera: 'cam1', name: 'Garten Süd' }, c3(['camera.name.set']))).toBe('run');
   });
   it('step 9: config.set/unset/rollback share 6 a minute (dry runs count); camera.action 12, camera.name.set 6', () => {
     const limits = new CommandLimits(() => NOW);
