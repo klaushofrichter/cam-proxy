@@ -36,6 +36,19 @@ describe('the heartbeat body on the strict contract', () => {
     expect(r.ok, r.why).toBe(true);
   });
 
+  // #199: the camera's SD card (camera.sd, the sd item, a warning item and a problem one, several cameras).
+  it('the SD card: read, a warning, a problem, not read yet', () => {
+    const sd = { present: true, mounted: true, formatted: true, capacityMB: 30432, freeMB: 900, overwrite: false, recordingEnabled: true, checkedAt: NOW - 60_000, error: null, lastClipAt: NOW - 600_000, lastRecordingAt: NOW - 3 * 3600_000, recordingsFrom: NOW - 48 * 3600_000 };
+    for (const h of [
+      buildHealth(input({ sd: { ...sd, freeMB: 20000 } })),
+      buildHealth(input({ sd, others: [{ ...cam('cam3', true), sd: { ...sd, freeMB: 20000, lastClipAt: null } }, { ...cam('cam4', false), sd: null }] })),
+      buildHealth(input({ sd: null })),
+    ]) {
+      const r = valid(buildHeartbeat(h, PI_INFO).body);
+      expect(r.ok, r.why).toBe(true);
+    }
+  });
+
   it('four cameras with a site CA and the Archive', () => {
     const hb = buildHeartbeat(fourCams(), SITE_INFO);
     expect(hb.truncated).toBe(false);

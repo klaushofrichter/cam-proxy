@@ -10,6 +10,7 @@ import { CameraNameAnnouncer, writeCameraName } from '../camera/name';
 import { CameraReboot } from '../camera/reboot';
 import type { PoeSwitch, PortHandle } from '../camera/poe-switch';
 import { StatusPoller, type CameraState } from '../camera/status';
+import { readCameraSd, SdWatch } from '../camera/sd-card';
 import type { TimeInfo } from '../camera/time';
 import { refreshingTimeInfo } from '../analytics/time-info';
 import type { StillsSide } from '../api/client-api';
@@ -58,6 +59,7 @@ export interface WorkerDeps {
   audit: AuditLog;
   hooks: WorkerHooks;
   cameraFtpCheckMs?: number;
+  cameraSdCheckMs?: number; // how often the camera's SD card and recording settings are read (#199; 5 min)
   // The site CA's trust for this camera once it serves its leaf (spec
   // 2026-10-05-multi-camera-host-design §10.4); a camera with tlsName keeps public-CA verification.
   tls?: (id: string) => CameraTrust | undefined;
@@ -89,6 +91,7 @@ export class CameraWorker extends EventEmitter {
   readonly reboot: CameraReboot;
   readonly poeSwitch: PortHandle;
   readonly ftpWatch: CameraFtpWatch;
+  readonly sdWatch: SdWatch;
   readonly timeInfo: () => TimeInfo | undefined;
   private phaseNow: WorkerPhase = 'idle';
   private errorNow: string | null = null;
@@ -139,6 +142,15 @@ export class CameraWorker extends EventEmitter {
       active: () => this.cam().ftp.enabled && this.status.state().online,
       clipsBefore: () => lastClipReceived(d.catalog, this.id) !== null,
       everyMs: d.cameraFtpCheckMs,
+    });
+    // The SD card and the recording settings (#199), read-only; the newest SD
+    // recording against the newest FTP clip. Made before build() (its status listener reads it).
+    this.sdWatch = new SdWatch({
+      read: () => readCameraSd(this.client),
+      active: () => this.status.state().online,
+      lastClip: () => lastClipReceived(d.catalog, this.id),
+      recordings: (from, to) => this.recordings.list.range(from, to, 'main'),
+      everyMs: d.cameraSdCheckMs,
     });
     this.build();
     this.registered = this.source();
@@ -325,6 +337,7 @@ export class CameraWorker extends EventEmitter {
     // The camera's FTP settings as soon as it answers (#93), then every few minutes.
     this.status.on('change', (s: CameraState) => {
       if (s.online) void this.ftpWatch.checkNow();
+      if (s.online) void this.sdWatch.checkNow();
       // The camera's NTP server on the host (spec §14.2, Ruling P5-7): at most once an hour.
       if (s.online) void this.syncNtp().catch((err: Error) => logger.warn({ cameraId: this.id, err: err.message }, 'camera_ntp_failed'));
       // Online for 10 minutes: the next failure starts the backoff at 5 s again.
@@ -463,6 +476,7 @@ export class CameraWorker extends EventEmitter {
     const running = await this.startParts();
     if (!this.watchStarted) {
       this.ftpWatch.start();
+      this.sdWatch.start();
       this.watchStarted = true;
     }
     // Without an address: idle. A failed start serves stored data; its retry is scheduled.
@@ -504,6 +518,7 @@ export class CameraWorker extends EventEmitter {
     this.phaseNow = 'stopped';
     this.d.cachePool.remove(this.recordings.cache);
     this.ftpWatch.stop();
+    this.sdWatch.stop();
     this.reboot.stop();
     await this.stopParts();
   }
