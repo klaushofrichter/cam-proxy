@@ -15,7 +15,10 @@
         "heartbeat",
         "ack",
         "error",
-        "bye"
+        "bye",
+        "command",
+        "result",
+        "event"
       ]
     },
     "id": {

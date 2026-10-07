@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/result.schema.json",
+  "title": "cams-admin v1 result",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "type": {
+      "const": "result"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "ts": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "body": {
+      "type": "object",
+      "properties": {
+        "proxyId": {
+          "type": "string",
+          "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+        },
+        "connId": {
+          "type": "string",
+          "pattern": "^con_[0-9A-HJKMNP-TV-Z]{20}$"
+        },
+        "cmdId": {
+          "type": "string",
+          "pattern": "^cmd_[0-9A-HJKMNP-TV-Z]{20}$"
+        },
+        "phase": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "status": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "code": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "retryAfterS": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "duplicate": {
+          "type": "boolean"
+        },
+        "result": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "proxyId",
+        "connId",
+        "cmdId",
+        "phase"
+      ],
+      "if": {
+        "properties": {
+          "phase": {
+            "const": "done"
+          }
+        },
+        "required": [
+          "phase"
+        ]
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "status"
+        ]
+      }
+    },
+    "re": {
+      "type": "string",
+      "maxLength": 40
+    },
+    "sig": {
+      "type": "string",
+      "maxLength": 100,
+      "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+    }
+  },
+  "required": [
+    "v",
+    "type",
+    "id",
+    "seq",
+    "ts",
+    "body",
+    "sig",
+    "re"
+  ]
+}

@@ -21,7 +21,8 @@ import { ArchiveStore } from './store';
 // API resolves requests; this holds the rules that don't depend on HTTP.
 
 // Who made a change, for its audit record (ruling 8).
-export interface Who { user: 'client' | 'admin' | 'system'; ip?: string; userAgent?: string; requestedBy?: 'token' | 'session'; onBehalfOf?: string }
+// user: 'client', 'admin', 'system', or a managed token's 'token:<label>'.
+export interface Who { user: string; ip?: string; userAgent?: string; requestedBy?: 'token' | 'session'; onBehalfOf?: string }
 export type Action = 'add' | 'update' | 'delete' | 'clear' | 'expire';
 
 export interface ArchiveStatus {

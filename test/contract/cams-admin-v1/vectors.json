@@ -68,5 +68,179 @@
       "text": "cams-admin/v1 hello\ncon_0123456789ABCDEFGHJK\nq83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA\nprx_0123456789ABCDEFGHJK\nkey_0123456789ABCDEFGHJK\n0",
       "sig": "wKwpCgs5JS/OAgvVHVcYAF5O55F92LdqWiWMUtycNUd9olmXJMDuqZSjRgtX1ylHk6wAuUtMZZwYLEMzKkf+Cg=="
     }
+  ],
+  "jcs": [
+    {
+      "name": "rfc8785-sorting",
+      "input": {
+        "1": "One",
+        "€": "Euro",
+        "\r": "CR",
+        "דּ": "Hebrew",
+        "😀": "Smiley",
+        "": "Control",
+        "ö": "Latin"
+      },
+      "text": "{\"\\r\":\"CR\",\"1\":\"One\",\"\":\"Control\",\"ö\":\"Latin\",\"€\":\"Euro\",\"😀\":\"Smiley\",\"דּ\":\"Hebrew\"}"
+    },
+    {
+      "name": "numbers",
+      "input": [
+        0,
+        0,
+        1,
+        -1,
+        0.1,
+        1e+21,
+        1e-7,
+        9007199254740991,
+        1791273600000
+      ],
+      "text": "[0,0,1,-1,0.1,1e+21,1e-7,9007199254740991,1791273600000]"
+    },
+    {
+      "name": "escapes",
+      "input": {
+        "s": "a\"\\\b\f\n\r\t\u0001\u001f /<>&é😀"
+      },
+      "text": "{\"s\":\"a\\\"\\\\\\b\\f\\n\\r\\t\\u0001\\u001f /<>&é😀\"}"
+    },
+    {
+      "name": "nesting",
+      "input": {
+        "b": [
+          true,
+          false,
+          null,
+          {
+            "z": [],
+            "a": {}
+          }
+        ],
+        "a": ""
+      },
+      "text": "{\"a\":\"\",\"b\":[true,false,null,{\"a\":{},\"z\":[]}]}"
+    }
+  ],
+  "envelopes": [
+    {
+      "kind": "command",
+      "key": "server",
+      "envelope": {
+        "v": 1,
+        "type": "command",
+        "id": "01K60000000000000000000003",
+        "seq": 3,
+        "ts": 1791273600003,
+        "body": {
+          "proxyId": "prx_0123456789ABCDEFGHJK",
+          "connId": "con_0123456789ABCDEFGHJK",
+          "cmdId": "cmd_0123456789ABCDEFGHJK",
+          "exp": 1791273660003,
+          "actor": "admin@example.org",
+          "command": "tokens.apply",
+          "args": {
+            "v": 1,
+            "revision": 1,
+            "tokens": [
+              {
+                "id": "tok_0123456789ABCDEFGHJK",
+                "kind": "client",
+                "hash": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+                "label": "cams example",
+                "retireAt": null
+              }
+            ]
+          }
+        }
+      },
+      "text": "{\"body\":{\"actor\":\"admin@example.org\",\"args\":{\"revision\":1,\"tokens\":[{\"hash\":\"sha256:0000000000000000000000000000000000000000000000000000000000000001\",\"id\":\"tok_0123456789ABCDEFGHJK\",\"kind\":\"client\",\"label\":\"cams example\",\"retireAt\":null}],\"v\":1},\"cmdId\":\"cmd_0123456789ABCDEFGHJK\",\"command\":\"tokens.apply\",\"connId\":\"con_0123456789ABCDEFGHJK\",\"exp\":1791273660003,\"proxyId\":\"prx_0123456789ABCDEFGHJK\"},\"id\":\"01K60000000000000000000003\",\"seq\":3,\"ts\":1791273600003,\"type\":\"command\",\"v\":1}",
+      "sig": "2+AGCON9Z4yVVO4lw9rjAQJ3kr+zWAcIIwPKTE14DAN9913X9KVJgETCbUorjafHp/i300fwPTgAMTA98lEyDA=="
+    },
+    {
+      "kind": "result",
+      "key": "proxy",
+      "envelope": {
+        "v": 1,
+        "type": "result",
+        "id": "01K60000000000000000000004",
+        "seq": 4,
+        "ts": 1791273600004,
+        "re": "01K60000000000000000000003",
+        "body": {
+          "proxyId": "prx_0123456789ABCDEFGHJK",
+          "connId": "con_0123456789ABCDEFGHJK",
+          "cmdId": "cmd_0123456789ABCDEFGHJK",
+          "phase": "done",
+          "status": "ok",
+          "result": {
+            "revision": 1,
+            "applied": true,
+            "stale": false,
+            "client": 1,
+            "admin": 0,
+            "blocked": []
+          }
+        }
+      },
+      "text": "{\"body\":{\"cmdId\":\"cmd_0123456789ABCDEFGHJK\",\"connId\":\"con_0123456789ABCDEFGHJK\",\"phase\":\"done\",\"proxyId\":\"prx_0123456789ABCDEFGHJK\",\"result\":{\"admin\":0,\"applied\":true,\"blocked\":[],\"client\":1,\"revision\":1,\"stale\":false},\"status\":\"ok\"},\"id\":\"01K60000000000000000000004\",\"re\":\"01K60000000000000000000003\",\"seq\":4,\"ts\":1791273600004,\"type\":\"result\",\"v\":1}",
+      "sig": "BjwYOLTWJTBSnZVAg8W+9wpCdaRQ8wkOAS22myA+oLbzCy/x1SUzW+jVjdvu2lKkU9/TKCZyecjs7S9WfTNYCA=="
+    },
+    {
+      "kind": "event",
+      "key": "proxy",
+      "envelope": {
+        "v": 1,
+        "type": "event",
+        "id": "01K60000000000000000000002",
+        "seq": 2,
+        "ts": 1791273600002,
+        "body": {
+          "proxyId": "prx_0123456789ABCDEFGHJK",
+          "connId": "con_0123456789ABCDEFGHJK",
+          "kind": "command.done",
+          "cmdId": "cmd_0123456789ABCDEFGHJK",
+          "phase": "done",
+          "status": "ok",
+          "result": {
+            "revision": 1,
+            "applied": true,
+            "stale": false,
+            "client": 1,
+            "admin": 0,
+            "blocked": []
+          }
+        }
+      },
+      "text": "{\"body\":{\"cmdId\":\"cmd_0123456789ABCDEFGHJK\",\"connId\":\"con_0123456789ABCDEFGHJK\",\"kind\":\"command.done\",\"phase\":\"done\",\"proxyId\":\"prx_0123456789ABCDEFGHJK\",\"result\":{\"admin\":0,\"applied\":true,\"blocked\":[],\"client\":1,\"revision\":1,\"stale\":false},\"status\":\"ok\"},\"id\":\"01K60000000000000000000002\",\"seq\":2,\"ts\":1791273600002,\"type\":\"event\",\"v\":1}",
+      "sig": "kaV0usHND2jyyRt85sCKzbFegkxdc78Diq/1NOBUdDc5P0URhmMflSF4ea1ad0V7J08P99nArYegYxivl8rZAw=="
+    },
+    {
+      "kind": "command",
+      "key": "server",
+      "envelope": {
+        "v": 1,
+        "type": "command",
+        "id": "01K60000000000000000000005",
+        "seq": 5,
+        "ts": 1791273600005,
+        "body": {
+          "proxyId": "prx_0123456789ABCDEFGHJK",
+          "connId": "con_0123456789ABCDEFGHJK",
+          "cmdId": "cmd_1123456789ABCDEFGHJK",
+          "exp": 1791273660005,
+          "actor": "admin@example.org",
+          "command": "tokens.apply",
+          "args": {
+            "v": 1,
+            "revision": 2,
+            "tokens": []
+          },
+          "revocationOnly": true
+        }
+      },
+      "text": "{\"body\":{\"actor\":\"admin@example.org\",\"args\":{\"revision\":2,\"tokens\":[],\"v\":1},\"cmdId\":\"cmd_1123456789ABCDEFGHJK\",\"command\":\"tokens.apply\",\"connId\":\"con_0123456789ABCDEFGHJK\",\"exp\":1791273660005,\"proxyId\":\"prx_0123456789ABCDEFGHJK\",\"revocationOnly\":true},\"id\":\"01K60000000000000000000005\",\"seq\":5,\"ts\":1791273600005,\"type\":\"command\",\"v\":1}",
+      "sig": "9rV6arIMbdIyaisdCZDq4u+nY5KHnD1ItYjnugfLNtd19LTuvs6ksgQjyJAFuBxer7MBFq4KOiEbLKoZSp9zDg=="
+    }
   ]
 }

@@ -1,0 +1,51 @@
+{
+  "$note": "exp + 120 s is past cams-admin time",
+  "schema": "command",
+  "$context": {
+    "now": 1791273720005,
+    "proxyId": "prx_0123456789ABCDEFGHJK",
+    "connId": "con_0123456789ABCDEFGHJK",
+    "serverKeys": [
+      "MCowBQYDK2VwAyEAgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q="
+    ],
+    "allow": [
+      "tokens.apply"
+    ],
+    "paused": false,
+    "seen": []
+  },
+  "$expect": {
+    "runtime": "expired",
+    "strict": "valid",
+    "receiver": "proxy"
+  },
+  "message": {
+    "v": 1,
+    "type": "command",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "exp": 1791273600004,
+      "actor": "admin@example.org",
+      "command": "tokens.apply",
+      "args": {
+        "v": 1,
+        "revision": 1,
+        "tokens": [
+          {
+            "id": "tok_00000000000000000001",
+            "kind": "client",
+            "hash": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+            "label": "cams example",
+            "retireAt": null
+          }
+        ]
+      }
+    },
+    "sig": "MZT0T5go8++EJMuhumTUAVNzS9mwZXdWs09hJE51vYrFUdJ/ZP4dzRq4XkubRJZ7Y0J8BApVprXGiLWMeR8QAw=="
+  }
+}

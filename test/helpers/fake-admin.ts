@@ -1,7 +1,7 @@
 import http from 'http';
 import type { AddressInfo, Socket } from 'net';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { generateKeyPair, normaliseCode, sign, signedText, ulid, verify, type Envelope } from '../../src/fleet/protocol';
+import { generateKeyPair, normaliseCode, sign, signedText, signEnvelope, ulid, verify, verifyEnvelope, type Envelope } from '../../src/fleet/protocol';
 import type { AdminKeyFile } from '../../src/fleet/keyfile';
 import { vectors } from './contract';
 
@@ -15,7 +15,13 @@ import { vectors } from './contract';
 // - reject: closes after the hello with 4401;
 // - bad-sig: signs the challenge with another key;
 // - no-ack: never acknowledges a heartbeat.
-export type Mode = 'normal' | 'silent' | 'garbage' | 'flap' | 'reject' | 'bad-sig' | 'no-ack';
+// P2 command modes (after the welcome):
+// - command-flood: 500 validly signed commands a second for a command not allowed (config.get);
+// - forged: tokens.apply commands signed with another key;
+// - replay: a command, re-sent 1 s later on the same connection and again on the next one;
+// - oversize: tokens.apply with 200 KiB of args;
+// - junk-commands: commands whose bodies miss every field.
+export type Mode = 'normal' | 'silent' | 'garbage' | 'flap' | 'reject' | 'bad-sig' | 'no-ack' | 'command-flood' | 'forged' | 'replay' | 'oversize' | 'junk-commands';
 
 export interface Received { conn: number; msg: Envelope }
 
@@ -39,6 +45,14 @@ export class FakeAdmin {
   supported = ['cams-admin.v1'];
   received: Received[] = [];
   connections = 0;
+  // P2: close a connection right after a `received` result arrives on it.
+  closeAfterReceived = false;
+  // A MITM replay (security review): everything a past connection sent, as
+  // sent, on the next connection: its challenge first, the rest after the hello.
+  replayConn: number | null = null;
+  readonly outbound = new Map<number, string[]>();
+  // P2: the channel of each socket (after its hello).
+  private chan = new Map<WebSocket, { conn: number; connId: string; proxyId: string | null }>();
   readonly sockets = new Set<WebSocket>();
   readonly server = { privateKey: vectors.keys.server.privateKey, publicKey: vectors.keys.server.publicKey };
   private keys = new Map<string, { keyId: string; publicKey: string }>();
@@ -58,6 +72,40 @@ export class FakeAdmin {
   }
   heartbeats(): Received[] {
     return this.received.filter((r) => r.msg.type === 'heartbeat');
+  }
+  results(cmdId?: string): Received[] {
+    return this.received.filter((r) => r.msg.type === 'result' && (cmdId === undefined || (r.msg.body as { cmdId?: string }).cmdId === cmdId));
+  }
+  events(): Received[] {
+    return this.received.filter((r) => r.msg.type === 'event');
+  }
+  // The connIds the proxy was given, oldest first.
+  readonly allConnIds: string[] = [];
+  connIds(): string[] {
+    return [...this.allConnIds];
+  }
+  // A signed command (contract P2) to every open, welcomed socket; the last one's ids.
+  // exp 'past': older than the 120 s slack; key: another signer; unsigned: no sig.
+  sendCommand(command: string, args: Record<string, unknown>, o: { connId?: string; proxyId?: string; exp?: number | 'past' | 'far'; key?: string; actor?: string; cmdId?: string; unsigned?: boolean } = {}): { id: string; cmdId: string } {
+    const cmdId = o.cmdId ?? `cmd_${ulid(Date.now()).slice(6)}`;
+    let id = '';
+    for (const [ws, c] of this.chan) {
+      if (ws.readyState !== ws.OPEN || !c.proxyId) continue;
+      const seq = (this.seqOut.get(ws) ?? 0) + 1;
+      this.seqOut.set(ws, seq);
+      const ts = o.exp === 'past' ? Date.now() - 200_000 : Date.now();
+      const exp = typeof o.exp === 'number' ? o.exp : o.exp === 'far' ? ts + 60_001 : ts + 30_000;
+      id = ulid(Date.now());
+      const m: Record<string, unknown> = { v: 1, type: 'command', id, seq, ts, body: { proxyId: o.proxyId ?? c.proxyId, connId: o.connId ?? c.connId, cmdId, exp, actor: o.actor ?? 'ops@example.org', command, args } };
+      if (!o.unsigned) m.sig = signEnvelope(o.key ?? this.server.privateKey, m as never);
+      ws.send(JSON.stringify(m));
+    }
+    return { id, cmdId };
+  }
+  // A result or event signed by the proxy key registered for its proxyId.
+  verifyFromProxy(m: Envelope): boolean {
+    const k = this.keys.get(String((m.body as { proxyId?: string }).proxyId));
+    return !!k && verifyEnvelope([k.publicKey], m);
   }
 
   async start(port = 0): Promise<this> {
@@ -131,6 +179,24 @@ export class FakeAdmin {
       (ws as unknown as { _socket: Socket })._socket.pause();
       return;
     }
+    const rec: string[] = [];
+    this.outbound.set(conn, rec);
+    const send = ws.send.bind(ws);
+    ws.send = ((d: unknown, ...r: unknown[]) => {
+      if (typeof d === 'string') rec.push(d);
+      return (send as (...a: unknown[]) => void)(d, ...r);
+    }) as typeof ws.send;
+    if (this.replayConn !== null) {
+      const texts = [...(this.outbound.get(this.replayConn) ?? [])];
+      this.replayConn = null;
+      ws.send(texts[0]);
+      ws.once('message', (data) => {
+        this.received.push({ conn, msg: JSON.parse(String(data)) as Envelope });
+        for (const t of texts.slice(1)) ws.send(t);
+        ws.on('message', (d) => this.received.push({ conn, msg: JSON.parse(String(d)) as Envelope }));
+      });
+      return;
+    }
     if (mode === 'flap') setTimeout(() => ws.close(1011), 1000);
     if (mode === 'garbage') {
       ws.send('}{ not json');
@@ -139,6 +205,9 @@ export class FakeAdmin {
       return;
     }
     const connId = `con_${ulid(Date.now()).slice(6)}`;
+    this.chan.set(ws, { conn, connId, proxyId: null });
+    this.allConnIds.push(connId);
+    ws.on('close', () => this.chan.delete(ws));
     const nonce = Buffer.from(Array.from({ length: 32 }, () => Math.floor(Math.random() * 256))).toString('base64url');
     const serverTime = Date.now();
     const signer = mode === 'bad-sig' ? vectors.keys.other.privateKey : this.server.privateKey;
@@ -156,11 +225,55 @@ export class FakeAdmin {
         const k = this.keys.get(b.proxyId);
         const ok = !!k && k.keyId === b.keyId && b.connId === connId && b.nonce === nonce && verify(k.publicKey, signedText.hello(connId, nonce, b.proxyId, b.keyId, b.ts), msg.sig);
         if (!ok || mode === 'reject') return void ws.close(4401);
+        this.chan.get(ws)!.proxyId = b.proxyId;
         this.sendTo(ws, 'welcome', { heartbeatS: this.welcomeHeartbeatS, offlineAfterS: 90, maxMessageBytes: 262144, serverTime: Date.now() });
+        this.hostile(ws, mode, connId, b.proxyId);
       } else if (msg.type === 'heartbeat') {
         if (mode !== 'no-ack') this.sendTo(ws, 'ack', { nextInS: this.nextInS }, { re: msg.id });
+      } else if (msg.type === 'result' && this.closeAfterReceived && (msg.body as { phase?: string }).phase === 'received') {
+        ws.terminate();
       }
     });
+  }
+
+  // The last command of replay mode, re-sent on the next connection too.
+  private captured: string | null = null;
+  private hostile(ws: WebSocket, mode: Mode, connId: string, proxyId: string): void {
+    const raw = (body: Record<string, unknown>, o: { key?: string; ts?: number } = {}): string => {
+      const seq = (this.seqOut.get(ws) ?? 0) + 1;
+      this.seqOut.set(ws, seq);
+      const ts = o.ts ?? Date.now();
+      const m: Record<string, unknown> = { v: 1, type: 'command', id: ulid(Date.now()), seq, ts, body };
+      m.sig = signEnvelope(o.key ?? this.server.privateKey, m as never);
+      return JSON.stringify(m);
+    };
+    const cmd = (command: string, args: Record<string, unknown>) => ({ proxyId, connId, cmdId: `cmd_${ulid(Date.now()).slice(6)}`, exp: Date.now() + 30_000, actor: 'mallory@example.org', command, args });
+    const tokens = { v: 1, revision: 99, tokens: [{ id: 'tok_00000000000000000099', kind: 'admin', hash: `sha256:${'9'.repeat(64)}`, label: 'evil', retireAt: null }] };
+    const every = (ms: number, n: number, fn: () => void) => {
+      const t = setInterval(() => {
+        if (ws.readyState !== ws.OPEN) return clearInterval(t);
+        for (let i = 0; i < n; i++) fn();
+      }, ms);
+      ws.on('close', () => clearInterval(t));
+    };
+    if (mode === 'command-flood') every(10, 5, () => ws.send(raw(cmd('config.get', { v: 1 }))));
+    else if (mode === 'forged') every(20, 1, () => ws.send(raw(cmd('tokens.apply', tokens), { key: vectors.keys.other.privateKey })));
+    else if (mode === 'oversize') every(100, 1, () => ws.send(raw(cmd('tokens.apply', { ...tokens, pad: 'x'.repeat(200 * 1024) }))));
+    else if (mode === 'junk-commands') every(20, 1, () => ws.send(raw({})));
+    else if (mode === 'replay') {
+      // A captured command is sent again as it was (its seq is then out of order: the proxy closes).
+      // On the next connection: the captured envelope as it was (its seq happens to fit).
+      if (this.captured) {
+        ws.send(this.captured);
+        this.seqOut.set(ws, (JSON.parse(this.captured) as { seq: number }).seq);
+        return;
+      }
+      const text = raw(cmd('config.get', { v: 1 }));
+      ws.send(text);
+      this.captured = text;
+      const t = setTimeout(() => ws.readyState === ws.OPEN && ws.send(text), 1000);
+      ws.on('close', () => clearTimeout(t));
+    }
   }
 
   private onRequest(req: http.IncomingMessage, res: http.ServerResponse): void {

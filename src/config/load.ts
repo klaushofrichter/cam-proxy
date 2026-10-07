@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'path';
 import { cameraDefaults, DEFAULTS, type Config, type Secrets } from './defaults';
@@ -7,6 +8,8 @@ import { normalizeFile, normalizeOverrides, translatePath } from './legacy';
 import { loadSecrets } from './secrets';
 import { EnvSettingError, readEnvLayer, type EnvLayer } from './env';
 import { adminUrlProblem } from '../fleet/protocol';
+import { jcs } from '../fleet/jcs';
+import { validateAllowList } from '../fleet/policy';
 
 export { ConfigError } from './load-error';
 import { ConfigError } from './load-error';
@@ -29,6 +32,10 @@ export interface Loaded {
   order: string[]; // config.json's camera ids
   addedCameras: string[]; // cameras added in overrides.json (Ruling P2-5), sorted; config order is order + these
   legacyCamera: boolean;
+  // camsAdmin.allowCommands / commandsPaused from config.json (Ruling R2-1).
+  commandPolicyBase: CommandPolicyBase;
+  // CAMPROXY_TOKENS may be unset (the start then needs a live managed client token).
+  tokensOptional: boolean;
 }
 
 // Every setting path of this configuration: the cameras' paths under their ids.
@@ -146,31 +153,55 @@ function crossCheck(c: Config): void {
   if (c.server.tls.port !== undefined && !c.tls.site) throw new ConfigError('server.tls.port: needs tls.site (the proxy certificate comes from the site CA)');
   if (c.server.tls.port !== undefined && c.server.tls.port === c.server.port) throw new ConfigError('server.tls.port: must differ from server.port');
   // cams-admin (spec 2026-10-06-cams-admin-phase1-design §8.9, §9.2).
+  // The key file is never one of the P2 files: enrollment overwrites it and
+  // unenroll deletes it (deleting policy.json would lift a local pause).
+  // Case-insensitively: macOS file systems are (a dev run).
+  if (['admin/tokens.json', 'admin/commands.json', 'admin/policy.json', 'admin/replay.json'].includes(c.camsAdmin.keyFile.toLowerCase())) throw new ConfigError(`camsAdmin.keyFile: ${c.camsAdmin.keyFile} is the proxy's own file; use admin/key.json`);
   if (c.camsAdmin.url !== undefined) {
     const p = /^https?:\/\//.test(c.camsAdmin.url) ? adminUrlProblem(c.camsAdmin.url) : 'must be https://';
     if (p) throw new ConfigError(`camsAdmin.url: ${p}`);
   }
 }
 
-// camsAdmin.allowCommands (P3's command allowlist): only an empty list in this
-// version (spec §9.2), and not a setting: taken out before the checks.
-function takeAllowCommands(o: unknown): void {
+// camsAdmin.allowCommands and camsAdmin.commandsPaused (migration P2,
+// Ruling R2-1): the command policy's deploy-time base, read from config.json
+// only and taken out before the checks (not settings). overrides.json (the
+// file a remote config.set writes) can never hold them; data/admin/policy.json
+// (the Status card and the CLI) changes them at run time.
+const POLICY_KEYS = ['allowCommands', 'commandsPaused'] as const;
+export interface CommandPolicyBase { allow: string[]; paused: boolean }
+function takeCommandPolicy(o: unknown, where: 'config.json' | 'overrides.json' | 'patch'): CommandPolicyBase {
+  const base: CommandPolicyBase = { allow: [], paused: false };
   const ca = isObj(o) && isObj(o.camsAdmin) ? (o.camsAdmin as Obj) : undefined;
-  if (!ca || !Object.hasOwn(ca, 'allowCommands')) return;
-  if (!Array.isArray(ca.allowCommands) || ca.allowCommands.length) throw new ConfigError('camsAdmin.allowCommands: must be empty (cams-admin commands are not supported in this version)');
-  delete ca.allowCommands;
+  if (!ca) return base;
+  for (const k of POLICY_KEYS) {
+    if (!Object.hasOwn(ca, k)) continue;
+    if (where === 'patch') throw new ConfigError(`not_a_setting: camsAdmin.${k} is not a setting (the Status card or admin-commands changes it)`);
+    if (where === 'overrides.json') throw new ConfigError(`camsAdmin.${k}: only in config.json or data/admin/policy.json`);
+  }
+  if (Object.hasOwn(ca, 'allowCommands')) base.allow = validateAllowList(ca.allowCommands, 'camsAdmin.allowCommands');
+  if (Object.hasOwn(ca, 'commandsPaused')) {
+    if (typeof ca.commandsPaused !== 'boolean') throw new ConfigError('camsAdmin.commandsPaused: must be true or false');
+    base.paused = ca.commandsPaused;
+  }
+  for (const k of POLICY_KEYS) delete ca[k];
   if (!Object.keys(ca).length) delete (o as Obj).camsAdmin;
+  return base;
 }
+
+// The overrides' revision, reported to cams-admin (migration P2): sha256 of
+// their canonical JSON ({} when there are none).
+export const configRevision = (l: Loaded): string => `sha256:${createHash('sha256').update(jcs(l.overrides)).digest('hex')}`;
 
 const ipv4Int = (ip: string): number | null => {
   const parts = ip.split('.').map(Number);
   return parts.length === 4 && parts.every((x) => Number.isInteger(x) && x >= 0 && x <= 255) ? parts.reduce((n, x) => n * 256 + x, 0) : null;
 };
 
-type Norm = { order: string[]; legacy: boolean };
+type Norm = { order: string[]; legacy: boolean; policy: CommandPolicyBase; tokensOptional: boolean };
 // The camera ids overrides.json adds to config.json's, sorted.
 const addedIds = (overrides: Obj, fileIds: string[]): string[] => Object.keys(isObj(overrides.cameras) ? (overrides.cameras as Obj) : {}).filter((id) => !fileIds.includes(id)).sort();
-const normOf = (l: Loaded): Norm => ({ order: l.order, legacy: l.legacyCamera });
+const normOf = (l: Loaded): Norm => ({ order: l.order, legacy: l.legacyCamera, policy: l.commandPolicyBase, tokensOptional: l.tokensOptional });
 
 function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSettings: Obj, overrides: Obj, baseDir: string, layer: EnvLayer, norm: Norm): Loaded {
   // A copy: the result is changed below (dataDir), DEFAULTS never is.
@@ -213,26 +244,26 @@ function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSetti
   for (const p of settingPaths(config)) {
     sources[p] = envNames[p] ? 'env' : getPath(overrides, p) !== undefined ? 'override' : getPath(fileSettings, p) !== undefined ? 'file' : 'default';
   }
-  const secrets = asConfigError(() => loadSecrets(env, config.cameraOrder.some((id) => cameraConfig(config, id)!.ftp.enabled), config.cameraOrder));
-  return { config, secrets, sources, files: { config: configFile, overrides: join(dataDir, 'overrides.json') }, env, fileSettings, overrides, envLayer: layer, envNames, ...(layer.file ? { envFile: layer.file } : {}), order: norm.order, addedCameras: added, legacyCamera: norm.legacy };
+  const secrets = asConfigError(() => loadSecrets(env, config.cameraOrder.some((id) => cameraConfig(config, id)!.ftp.enabled), config.cameraOrder, { tokensOptional: norm.tokensOptional }));
+  return { config, secrets, sources, files: { config: configFile, overrides: join(dataDir, 'overrides.json') }, env, fileSettings, overrides, envLayer: layer, envNames, ...(layer.file ? { envFile: layer.file } : {}), order: norm.order, addedCameras: added, legacyCamera: norm.legacy, commandPolicyBase: norm.policy, tokensOptional: norm.tokensOptional };
 }
 
 // Defaults, then config.json (CAMPROXY_CONFIG or ./config.json), then
 // <dataDir>/overrides.json; secrets from the environment.
-export function loadConfig(env: NodeJS.ProcessEnv, opts: { cwd?: string } = {}): Loaded {
+export function loadConfig(env: NodeJS.ProcessEnv, opts: { cwd?: string; tokensOptional?: boolean } = {}): Loaded {
   const cwd = opts.cwd ?? process.cwd();
   const file = env.CAMPROXY_CONFIG ? resolve(cwd, env.CAMPROXY_CONFIG) : existsSync(join(cwd, 'config.json')) ? join(cwd, 'config.json') : undefined;
   // A legacy `camera` is read as a list of one (spec §4.2); nothing is rewritten.
   const norm = normalizeFile(file ? readJson(file) : {});
   const fileSettings = norm.settings;
-  takeAllowCommands(fileSettings);
+  const policyBase = takeCommandPolicy(fileSettings, 'config.json');
   asConfigError(() => checkPartial(fileSettings));
   const baseDir = file ? dirname(file) : cwd;
   // Overrides live in the data folder, which the file (not an override) sets.
   const fileDataDir = (getPath(fileSettings, 'server.dataDir') as string | undefined) ?? DEFAULTS.server.dataDir;
   const overridesFile = join(isAbsolute(fileDataDir) ? fileDataDir : resolve(baseDir, fileDataDir), 'overrides.json');
   const overrides = normalizeOverrides(existsSync(overridesFile) ? readJson(overridesFile) : {}, norm.order);
-  takeAllowCommands(overrides);
+  takeCommandPolicy(overrides, 'overrides.json');
   asConfigError(() => checkPartial(overrides));
   if (getPath(overrides, 'server.dataDir') !== undefined) throw new ConfigError('server.dataDir: can only be set in config.json');
   let layer: EnvLayer;
@@ -242,7 +273,7 @@ export function loadConfig(env: NodeJS.ProcessEnv, opts: { cwd?: string } = {}):
     if (e instanceof EnvSettingError) throw new ConfigError(e.message);
     throw e;
   }
-  return build(env, file, fileSettings as Obj, overrides as Obj, baseDir, layer, norm);
+  return build(env, file, fileSettings as Obj, overrides as Obj, baseDir, layer, { order: norm.order, legacy: norm.legacy, policy: policyBase, tokensOptional: !!opts.tokensOptional });
 }
 
 function writeOverrides(file: string, overrides: Obj): void {
@@ -286,7 +317,7 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 export function applyOverrides(loaded: Loaded, given: object): Loaded {
   // Legacy camera.* and ftp.user paths on one camera (Ruling P1-8).
   const patch = normalizeOverrides(given, loaded.order, loaded.addedCameras);
-  takeAllowCommands(patch);
+  takeCommandPolicy(patch, 'patch');
   asConfigError(() => checkPartial(patch));
   if (getPath(patch, 'server.dataDir') !== undefined) throw new ConfigError('server.dataDir: can only be set in config.json');
   // An override of a setting the environment sets would never apply.

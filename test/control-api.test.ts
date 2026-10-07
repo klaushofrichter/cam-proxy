@@ -23,7 +23,7 @@ async function login(): Promise<string> {
   const r = await request(p.base).post('/control/login').send({ token: ADMIN_TOKEN });
   expect(r.status).toBe(204);
   const cookie = String(r.headers['set-cookie']);
-  expect(cookie).toMatch(/^camproxy_session=v1\./);
+  expect(cookie).toMatch(/^camproxy_session=v2\.\d+\.l\./);
   expect(cookie).toMatch(/HttpOnly/);
   expect(cookie).toMatch(/SameSite=Strict/);
   return cookie.split(';')[0];

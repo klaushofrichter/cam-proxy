@@ -1151,7 +1151,10 @@ docker compose exec cam-proxy node dist/src/cli.js admin-unenroll
 or the **cams-admin** card on the Status page (Enroll, Reconnect, Unenroll;
 `GET /control/admin`, `POST /control/admin/enroll|reconnect|unenroll`, admin
 only). The proxy's private key is `data/admin/key.json` (mode 600; never
-share it). Settings, states, what is and isn't sent, and the contract tests:
+share it). cams-admin may send signed commands, and the proxy runs only the ones
+allowed on its own card (none by default; `admin-commands`, `admin-tokens`,
+the `CAMPROXY_ADMIN_COMMANDS=off` kill switch). Settings, states, commands,
+managed tokens, what is and isn't sent, and the contract tests:
 [docs/cams-admin.md](docs/cams-admin.md).
 
 ## Operating the cluster

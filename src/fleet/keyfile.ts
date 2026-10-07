@@ -1,6 +1,5 @@
-import { randomBytes } from 'crypto';
-import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeSync } from 'fs';
-import { dirname, join } from 'path';
+import { rmSync } from 'fs';
+import { PrivateFileInvalid, PrivateFileUnsafe, readPrivateJson, writePrivateJson, type Stat } from './private-file';
 
 // The cams-admin key file (spec 2026-10-06-cams-admin-phase1-design §9.2):
 // <dataDir>/admin/key.json, mode 600 in a 700 folder, written atomically.
@@ -20,10 +19,8 @@ export interface AdminKeyFile {
   enrolledAt: number;
 }
 
-export class KeyFileUnsafe extends Error {}
-export class KeyFileInvalid extends Error {}
-
-type Stat = (p: string) => { mode: number; uid: number };
+export class KeyFileUnsafe extends PrivateFileUnsafe {}
+export class KeyFileInvalid extends PrivateFileInvalid {}
 
 const STRINGS = ['url', 'connectUrl', 'proxyId', 'keyId', 'privateKey', 'publicKey', 'account'] as const;
 
@@ -38,40 +35,12 @@ function check(k: unknown): AdminKeyFile {
 
 // Throws KeyFileUnsafe / KeyFileInvalid (and the fs error when it is missing).
 export function readKeyFile(path: string, o: { stat?: Stat; uid?: number } = {}): AdminKeyFile {
-  const st = (o.stat ?? statSync)(path);
-  const uid = o.uid ?? process.getuid?.();
-  if (st.mode & 0o077) throw new KeyFileUnsafe(`${path} can be read by others (mode ${(st.mode & 0o777).toString(8)}); chmod 600 it or enroll again`);
-  if (uid !== undefined && st.uid !== uid) throw new KeyFileUnsafe(`${path} belongs to another user (uid ${st.uid})`);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(path, 'utf8'));
-  } catch {
-    throw new KeyFileInvalid(`${path} is not valid JSON`);
-  }
-  return check(parsed);
+  return check(readPrivateJson(path, { ...o, unsafe: KeyFileUnsafe, invalid: KeyFileInvalid }));
 }
 
-// Folder 700, file 600, a random temp name, fsync, rename: a crash leaves the
-// old file or the new one, never half of one; a failure removes the temp file.
+// Atomic, 600 in a 700 folder (private-file.ts).
 export function writeKeyFile(path: string, k: AdminKeyFile): void {
-  const text = `${JSON.stringify(check(k), null, 2)}\n`;
-  const dir = dirname(path);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  chmodSync(dir, 0o700);
-  const tmp = join(dir, `.key-${randomBytes(8).toString('hex')}.tmp`);
-  try {
-    const fd = openSync(tmp, 'wx', 0o600);
-    try {
-      writeSync(fd, text);
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-    renameSync(tmp, path);
-  } catch (err) {
-    rmSync(tmp, { force: true });
-    throw err;
-  }
+  writePrivateJson(path, check(k));
 }
 
 export function deleteKeyFile(path: string): void {

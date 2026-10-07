@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/strict/commands/tokens.apply.result.schema.json",
+  "title": "tokens.apply result v1",
+  "type": "object",
+  "properties": {
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "applied": {
+      "type": "boolean"
+    },
+    "stale": {
+      "type": "boolean"
+    },
+    "client": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "admin": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "blocked": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^tok_[0-9A-HJKMNP-TV-Z]{20}$"
+      },
+      "maxItems": 64
+    }
+  },
+  "required": [
+    "revision",
+    "applied",
+    "stale",
+    "client",
+    "admin",
+    "blocked"
+  ],
+  "additionalProperties": false
+}

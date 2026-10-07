@@ -3,18 +3,22 @@ import { createProxy } from './proxy';
 import { logger } from './log';
 import { shutdownHandler } from './shutdown';
 import { runAdminCli } from './fleet/cli';
+import { checkClientTokens } from './fleet/token-store';
 
 // Starts cam-proxy from config.json and the environment (spec §14).
-// `admin-enroll --url U` / `admin-unenroll`: cams-admin enrollment (src/fleet/cli.ts).
+// `admin-enroll --url U` / `admin-unenroll`: cams-admin enrollment; `admin-commands`,
+// `admin-tokens`: the command policy and managed tokens (src/fleet/cli.ts).
 async function main(): Promise<void> {
   const cmd = process.argv[2];
-  if (cmd === 'admin-enroll' || cmd === 'admin-unenroll') {
+  if (cmd === 'admin-enroll' || cmd === 'admin-unenroll' || cmd === 'admin-commands' || cmd === 'admin-tokens') {
     const code = await runAdminCli(process.argv.slice(2), { env: process.env, cwd: process.cwd(), stdin: process.stdin, out: (t) => process.stdout.write(t), err: (t) => process.stderr.write(t) });
     process.exit(code);
   }
   let loaded;
   try {
-    loaded = loadConfig(process.env);
+    loaded = loadConfig(process.env, { tokensOptional: true });
+    // CAMPROXY_TOKENS may be unset while a managed client token is live (M §10.2).
+    checkClientTokens(loaded);
   } catch (err) {
     if (err instanceof ConfigError) {
       process.stderr.write(`cam-proxy: ${err.message}\n`);

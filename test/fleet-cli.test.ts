@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { Readable } from 'stream';
@@ -6,6 +6,7 @@ import http from 'http';
 import type { AddressInfo } from 'net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runAdminCli } from '../src/fleet/cli';
+import { writePrivateJson } from '../src/fleet/private-file';
 import { startFakeAdmin, type FakeAdmin } from './helpers/fake-admin';
 import { ADMIN_TOKEN, CLIENT_TOKEN, freePort, startProxy, until } from './helpers/proxy';
 import { startSim } from './helpers/sim';
@@ -148,6 +149,71 @@ describe('admin-enroll with the proxy running', () => {
       expect(u.code, u.err).toBe(0);
       await until(() => fake.received.some((x) => x.msg.type === 'bye' && (x.msg.body as { reason: string }).reason === 'unenrolled'));
       expect(p.proxy.camsAdmin.view().state).toBe('off');
+    } finally {
+      await p.proxy.stop();
+      await sim.close();
+    }
+  });
+});
+
+// admin-commands / admin-tokens (migration P2): local rights (the admin token
+// from the environment); through the running proxy's routes, else the files.
+describe('admin-commands and admin-tokens, proxy stopped', () => {
+  const TOK = (n: number) => `tok_${String(n).padStart(20, '0')}`;
+  it('allow, deny, pause, resume write data/admin/policy.json (600); status prints the policy', async () => {
+    const dir = workDir();
+    let r = await run(['admin-commands', 'status'], { cwd: dir });
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toMatch(/allowed: none/);
+    expect(existsSync(join(dir, 'data', 'admin'))).toBe(false);
+    r = await run(['admin-commands', 'allow', 'tokens.apply', 'tokens.apply.admin'], { cwd: dir });
+    expect(r.code, r.err).toBe(0);
+    expect(statSync(join(dir, 'data', 'admin', 'policy.json')).mode & 0o777).toBe(0o600);
+    r = await run(['admin-commands', 'deny', 'tokens.apply.admin'], { cwd: dir });
+    expect(r.code, r.err).toBe(0);
+    r = await run(['admin-commands', 'pause', 'maintenance', 'window'], { cwd: dir });
+    expect(r.code, r.err).toBe(0);
+    r = await run(['admin-commands', 'status'], { cwd: dir });
+    expect(r.out).toMatch(/allowed: tokens\.apply\n/);
+    expect(r.out).toMatch(/paused: maintenance window/);
+    r = await run(['admin-commands', 'resume'], { cwd: dir });
+    expect(r.code, r.err).toBe(0);
+    expect((await run(['admin-commands', 'status'], { cwd: dir })).out).toMatch(/paused: no/);
+    r = await run(['admin-commands', 'allow', 'frobnicate'], { cwd: dir });
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/frobnicate/);
+    const audit = readdirSync(join(dir, 'data', 'audit')).map((f) => readFileSync(join(dir, 'data', 'audit', f), 'utf8')).join('');
+    expect(audit.match(/"action":"admin-policy"/g)).toHaveLength(4);
+  });
+  it('tokens: list, block, unblock on data/admin/tokens.json; never a full hash', async () => {
+    const dir = workDir();
+    const hash = `sha256:${'ab'.repeat(32)}`;
+    writePrivateJson(join(dir, 'data', 'admin', 'tokens.json'), { v: 1, revision: 2, blocked: [], tokens: [{ id: TOK(1), kind: 'client', hash, label: 'cams', retireAt: null }] });
+    let r = await run(['admin-tokens', 'list'], { cwd: dir });
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain(TOK(1));
+    expect(r.out).toContain('sha256:abababab');
+    expect(r.out).not.toContain('ab'.repeat(8));
+    r = await run(['admin-tokens', 'block', TOK(1)], { cwd: dir });
+    expect(r.code, r.err).toBe(0);
+    expect((await run(['admin-tokens', 'list'], { cwd: dir })).out).toMatch(/blocked/);
+    r = await run(['admin-tokens', 'unblock', TOK(1)], { cwd: dir });
+    expect(r.code, r.err).toBe(0);
+    expect((await run(['admin-tokens', 'block', 'x'], { cwd: dir })).code).toBe(2);
+  });
+});
+
+describe('admin-commands with the proxy running', () => {
+  it('goes through the routes with the local admin token (never printed)', async () => {
+    const sim = await startSim();
+    const p = await startProxy(sim);
+    try {
+      const r = await run(['admin-commands', 'allow', 'tokens.apply'], { cwd: p.dir, proxyUrl: p.base });
+      expect(r.code, r.err).toBe(0);
+      expect(r.out + r.err).not.toContain(ADMIN_TOKEN);
+      expect((await run(['admin-commands', 'status'], { cwd: p.dir, proxyUrl: p.base })).out).toMatch(/allowed: tokens\.apply/);
+      expect(p.proxy.audit.list({ actions: ['admin-policy'], limit: 5 }).records).toHaveLength(1);
+      expect((await run(['admin-tokens', 'list'], { cwd: p.dir, proxyUrl: p.base })).out).toMatch(/no managed tokens/);
     } finally {
       await p.proxy.stop();
       await sim.close();

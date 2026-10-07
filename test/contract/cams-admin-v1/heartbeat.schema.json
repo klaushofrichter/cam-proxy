@@ -101,6 +101,84 @@
                   "type": "null"
                 }
               ]
+            },
+            "commands": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "paused": {
+                  "type": "boolean"
+                },
+                "pauseReason": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "allow": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "maxItems": 32
+                },
+                "seenWindow": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "enabled",
+                "paused",
+                "allow"
+              ]
+            },
+            "tokens": {
+              "type": "object",
+              "properties": {
+                "revision": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "client": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "admin": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "blocked": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^tok_[0-9A-HJKMNP-TV-Z]{20}$"
+                  },
+                  "maxItems": 64
+                }
+              },
+              "required": [
+                "revision"
+              ]
+            },
+            "configRevision": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": []

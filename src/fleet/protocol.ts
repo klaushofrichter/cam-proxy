@@ -1,4 +1,5 @@
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign as nodeSign, verify as nodeVerify } from 'crypto';
+import { jcs } from './jcs';
 import { isIP } from 'net';
 
 // The cams-admin proxy protocol v1 (cams-admin contract/v1, spec
@@ -77,6 +78,25 @@ export function enrollRequest(o: { code: string; privateKey: string; publicKey: 
 }
 
 export interface Envelope { v: 1; type: string; id: string; seq: number; ts: number; re?: string; body: Record<string, unknown>; sig?: string }
+
+// The envelope without its signature (what the signature covers).
+export const unsigned = (m: Envelope): Omit<Envelope, 'sig'> => {
+  const { sig: _sig, ...rest } = m;
+  return rest;
+};
+// The envelope's signature (contract P2: Ed25519 over jcs(envelope without sig)).
+export const signEnvelope = (privateKeyB64: string, m: Omit<Envelope, 'sig'>): string => sign(privateKeyB64, jcs(m));
+// False for anything that is not a valid signature by one of the keys over
+// this exact message (unknown fields included); never throws.
+export function verifyEnvelope(publicKeysB64: string[], m: Envelope): boolean {
+  let text: string;
+  try {
+    text = jcs(unsigned(m));
+  } catch {
+    return false;
+  }
+  return publicKeysB64.some((k) => verify(k, text, m.sig));
+}
 
 export function buildEnvelope(type: string, seq: number, body: Record<string, unknown>, o: { now: number; re?: string; sig?: string }): Envelope {
   return { v: 1, type, id: ulid(o.now), seq, ts: Math.max(0, Math.floor(o.now)), ...(o.re ? { re: o.re } : {}), body, ...(o.sig ? { sig: o.sig } : {}) };

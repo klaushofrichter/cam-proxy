@@ -25,8 +25,12 @@ export function refuseTokenInUrl(req: Request, res: Response, next: NextFunction
 }
 
 type Access = 'admin' | 'client' | 'audit' | null;
-type TokenKind = 'none' | 'invalid' | 'client' | 'admin' | 'audit' | 'session';
-export interface AccessInfo { access: Access; viaCookie: boolean; tokenKind: TokenKind }
+type TokenKind = 'none' | 'invalid' | 'client' | 'admin' | 'audit' | 'session' | 'managed-client' | 'managed-admin';
+// origin: local rights (CAMPROXY_* tokens, or a session they started) or
+// managed ones (a cams-admin-managed token, or a session it started); null
+// when nothing matched. Only local admin rights widen the command policy
+// (migration P2, Ruling R2-3).
+export interface AccessInfo { access: Access; viaCookie: boolean; tokenKind: TokenKind; origin: 'local' | 'managed' | null; tokenId?: string; tokenLabel?: string }
 export type AccessNeed = 'client' | 'admin' | 'audit-read';
 
 // The one access decision (spec 2026-10-05-multi-camera-host-design §6.6):
@@ -43,7 +47,11 @@ export interface AccessDeps {
   adminToken: () => string;
   // CAMPROXY_AUDIT_TOKEN: reads GET /control/audit, nothing else.
   auditToken: () => string | undefined;
-  sessionValid: (v: string | undefined) => boolean;
+  sessionValid: (v: string | undefined) => { origin: 'local' } | { origin: 'managed'; tokenId: string } | null;
+  // A managed admin token by id: still in the set, not blocked, not retired.
+  managedAdminLive?: (tokenId: string) => { label: string } | null;
+  // The cams-admin-managed tokens (data/admin/tokens.json); absent = none.
+  managed?: (bearer: string) => { id: string; kind: 'client' | 'admin'; label: string } | null;
   // Every 401/403 answered here, with why (the audit log records them).
   onRefused?: (req: Request, info: { status: 401 | 403; reason: string; tokenKind: TokenKind }) => void;
 }
@@ -57,20 +65,59 @@ export function clientIp(req: Request): string {
 // token is 'client', the audit token 'audit'. `viaCookie` marks a session
 // (writes then need the CSRF header). `tokenKind` says which credential
 // matched, for the audit log only; answers never tell it.
+// Order (M §10.2): local admin, managed admin, local client, managed client,
+// audit. The bearer is hashed for the managed tokens once per request.
 function accessOf(req: Request, d: AccessDeps): AccessInfo {
   const t = bearerOf(req);
   if (t !== undefined) {
-    if (tokenMatches(t, [d.adminToken()])) return { access: 'admin', viaCookie: false, tokenKind: 'admin' };
-    if (tokenMatches(t, d.tokens())) return { access: 'client', viaCookie: false, tokenKind: 'client' };
+    if (tokenMatches(t, [d.adminToken()])) return { access: 'admin', viaCookie: false, tokenKind: 'admin', origin: 'local' };
+    const m = d.managed?.(t) ?? null;
+    if (m?.kind === 'admin') return { access: 'admin', viaCookie: false, tokenKind: 'managed-admin', origin: 'managed', tokenId: m.id, tokenLabel: m.label };
+    if (tokenMatches(t, d.tokens())) return { access: 'client', viaCookie: false, tokenKind: 'client', origin: 'local' };
+    if (m?.kind === 'client') return { access: 'client', viaCookie: false, tokenKind: 'managed-client', origin: 'managed', tokenId: m.id, tokenLabel: m.label };
     const a = d.auditToken();
-    if (a && tokenMatches(t, [a])) return { access: 'audit', viaCookie: false, tokenKind: 'audit' };
-    return { access: null, viaCookie: false, tokenKind: 'invalid' };
+    if (a && tokenMatches(t, [a])) return { access: 'audit', viaCookie: false, tokenKind: 'audit', origin: 'local' };
+    return { access: null, viaCookie: false, tokenKind: 'invalid', origin: null };
   }
-  if (d.sessionValid(readCookie(req.get('cookie'), SESSION_COOKIE))) return { access: 'admin', viaCookie: true, tokenKind: 'session' };
-  return { access: null, viaCookie: false, tokenKind: 'none' };
+  const s = d.sessionValid(readCookie(req.get('cookie'), SESSION_COOKIE));
+  if (s?.origin === 'local') return { access: 'admin', viaCookie: true, tokenKind: 'session', origin: 'local' };
+  if (s?.origin === 'managed') {
+    // Ends with its token: blocked, removed or retired → no session.
+    const t = d.managedAdminLive?.(s.tokenId) ?? null;
+    if (t) return { access: 'admin', viaCookie: true, tokenKind: 'session', origin: 'managed', tokenId: s.tokenId, tokenLabel: t.label };
+    return { access: null, viaCookie: false, tokenKind: 'invalid', origin: null };
+  }
+  return { access: null, viaCookie: false, tokenKind: 'none', origin: null };
 }
 
+// After requireAccess('admin'): 403 local_admin_only unless the rights are
+// local (the CAMPROXY_ADMIN_TOKEN, or a session it started). Widening the
+// command policy needs it (Ruling R2-3).
+export function requireLocalAdmin(): RequestHandler {
+  return (_req, res, next) => ((res.locals.access as AccessInfo | undefined)?.origin === 'local' ? next() : void res.status(403).json({ error: 'local_admin_only' }));
+}
+
+// The audit `user` of an admin request: 'admin' for local rights,
+// `token:<label>` for a managed admin token, 'managed-admin' for a session a
+// managed token started. Never a token or a hash.
+export const actorOf = (a: AccessInfo | undefined): string => (a?.origin !== 'managed' ? 'admin' : a.tokenLabel ? `token:${a.tokenLabel}` : 'managed-admin');
+
 const WRITE = new Set(['POST', 'PUT', 'DELETE', 'PATCH']);
+
+// What managed admin rights (a cams-admin-managed admin token, or a session
+// or sign-in link it started) may change (spec M2: sign-in links and camera
+// rename; R2-3: only narrowing the command policy). Every other write to an
+// admin route answers 403 local_admin_only: a new route is local-only unless
+// it is added here (test/auth-managed-routes.test.ts).
+export const MANAGED_ALLOWED: readonly (readonly [string, RegExp])[] = [
+  ['POST', /^\/control\/login-links$/],
+  ['PUT', /^\/control\/camera\/name$/],
+  ['PUT', /^\/control\/cameras\/[^/]+\/name$/],
+  ['PUT', /^\/control\/admin\/commands$/], // narrowing only (CommandPolicy.setAllow)
+  ['POST', /^\/control\/admin\/commands\/pause$/],
+  ['POST', /^\/control\/admin\/tokens\/[^/]+\/block$/],
+];
+const managedMay = (method: string, path: string) => !WRITE.has(method) || MANAGED_ALLOWED.some(([m, re]) => m === method && re.test(path));
 
 // `need`: 'client' lets clients and admins in; 'admin' only admins;
 // 'audit-read' admins and the audit token, for GET (and HEAD) only. The audit token is
@@ -90,6 +137,7 @@ export function requireAccess(need: AccessNeed, d: AccessDeps): RequestHandler {
       return refuse(401, a.tokenKind === 'none' ? 'no-token' : 'wrong-token', 'unauthorized');
     }
     if (!can(a, need)) return refuse(403, 'admin-only', 'admin_only');
+    if (need === 'admin' && a.origin === 'managed' && !managedMay(req.method, withoutQuery(req.originalUrl))) return refuse(403, 'local-admin-only', 'local_admin_only');
     // HEAD too: Express answers it with the GET route, without the body.
     if (need === 'audit-read' && req.method !== 'GET' && req.method !== 'HEAD') return refuse(403, 'admin-only', 'admin_only');
     if (a.viaCookie && WRITE.has(req.method) && req.get('x-camproxy-ui') !== '1') return refuse(403, 'csrf', 'csrf');

@@ -1,0 +1,19 @@
+{
+  "$note": "signed by the vectors proxy key",
+  "schema": "result",
+  "message": {
+    "v": 1,
+    "type": "result",
+    "id": "01K60000000000000000000004",
+    "seq": 4,
+    "ts": 1791273600004,
+    "re": "01K60000000000000000000003",
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "phase": "received"
+    },
+    "sig": "3U2gBQT4uani5LcncZiEMOvsVwvWRAuULMxmDG5Eo+IoY2pX5lBdJc/a5t1542iYsXmrZOpt/EN9z5Q1v24gDA=="
+  }
+}

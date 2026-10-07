@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { startFakeAdmin, type FakeAdmin } from '../test/helpers/fake-admin';
+import { MANAGED_TOKEN, MANAGED_TOKEN_ID } from './env';
 
 // The Status page's cams-admin card (spec 2026-10-06-cams-admin-phase1-design
 // §9.2, §15.2): not enrolled, enroll with a code against a fake cams-admin,
@@ -40,4 +41,45 @@ test('enroll from the card, connected, unenroll', async ({ page }) => {
   await page.getByRole('button', { name: 'Unenroll' }).last().click();
   await expect(page.getByTestId('cams-admin-state')).toHaveText('not enrolled', { timeout: 15000 });
   await expect.poll(() => fake.received.some((r) => r.msg.type === 'bye' && (r.msg.body as { reason: string }).reason === 'unenrolled')).toBe(true);
+});
+
+// Commands from cams-admin and managed tokens (migration P2): off by default;
+// allow, pause and resume with the local admin session; block a managed token.
+test('allowed commands, pause, recent commands and managed tokens', async ({ page, request }) => {
+  await page.goto('/#/status');
+  const box = page.getByTestId('cams-admin-commands');
+  await expect(box).toBeVisible({ timeout: 15000 });
+  await expect(box).toContainText('Commands from cams-admin');
+  const tokensApply = page.getByTestId('cams-admin-allow-tokens.apply');
+  await expect(tokensApply).not.toBeChecked();
+  await expect(page.getByTestId('cams-admin-allow-config.get')).toBeDisabled();
+  await tokensApply.check();
+  await page.getByTestId('cams-admin-commands-save').click();
+  await expect(page.getByTestId('cams-admin-commands-message')).toContainText('Saved');
+  await page.reload();
+  await expect(page.getByTestId('cams-admin-allow-tokens.apply')).toBeChecked({ timeout: 15000 });
+
+  await page.getByTestId('cams-admin-pause-reason').fill('maintenance');
+  await page.getByTestId('cams-admin-pause').click();
+  await expect(page.getByTestId('cams-admin-commands-banner')).toHaveText('Paused: maintenance');
+  await page.getByTestId('cams-admin-resume').click();
+  await expect(page.getByTestId('cams-admin-commands-banner')).toHaveCount(0);
+  await expect(page.getByTestId('cams-admin-recent')).toContainText('No commands yet');
+
+  const tokens = page.getByTestId('cams-admin-tokens');
+  await expect(tokens).toContainText(MANAGED_TOKEN_ID);
+  await expect(tokens).toContainText('cams e2e');
+  await expect(tokens).toContainText('live');
+  expect((await request.get('/api/cameras', { headers: { Authorization: `Bearer ${MANAGED_TOKEN}` } })).status()).toBe(200);
+  await page.getByTestId(`cams-admin-token-block-${MANAGED_TOKEN_ID}`).click();
+  await expect(tokens).toContainText('blocked');
+  expect((await request.get('/api/cameras', { headers: { Authorization: `Bearer ${MANAGED_TOKEN}` } })).status()).toBe(401);
+  await page.getByTestId(`cams-admin-token-unblock-${MANAGED_TOKEN_ID}`).click();
+  // Unblocking drops the entry: cams-admin's next tokens.apply brings it back.
+  await expect(tokens).not.toContainText(MANAGED_TOKEN_ID);
+
+  // Leave the policy as it was (other specs share this proxy).
+  await page.getByTestId('cams-admin-allow-tokens.apply').uncheck();
+  await page.getByTestId('cams-admin-commands-save').click();
+  await expect(page.getByTestId('cams-admin-commands-message')).toContainText('Saved');
 });
