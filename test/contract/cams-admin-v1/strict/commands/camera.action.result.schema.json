@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/strict/commands/camera.action.result.schema.json",
+  "title": "camera.action result v1",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "maxLength": 32
+    },
+    "camera": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "httpStatus": {
+      "type": "integer",
+      "minimum": 100
+    },
+    "answer": {
+      "anyOf": [
+        {
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "clamped": {
+      "type": "boolean"
+    },
+    "verified": {
+      "type": "boolean"
+    },
+    "mismatch": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 64
+      },
+      "maxItems": 32
+    }
+  },
+  "required": [
+    "action",
+    "camera",
+    "httpStatus",
+    "answer"
+  ],
+  "additionalProperties": false
+}

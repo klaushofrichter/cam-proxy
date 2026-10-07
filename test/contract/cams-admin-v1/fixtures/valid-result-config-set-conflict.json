@@ -1,0 +1,30 @@
+{
+  "$note": "baseRevision is not the current revision: the current values of the named paths",
+  "$command": "config.set",
+  "schema": "result",
+  "message": {
+    "v": 1,
+    "type": "result",
+    "id": "01K60000000000000000000005",
+    "seq": 5,
+    "ts": 1791273600005,
+    "re": "01K60000000000000000000003",
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "phase": "done",
+      "status": "conflict",
+      "result": {
+        "revision": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "current": {
+          "sse.pingS": {
+            "v": 9,
+            "s": "override"
+          }
+        }
+      }
+    },
+    "sig": "7BRnndBtBWG5y8CqkumB057dsuCwZVp5iPMoTV0oOVVe3jL3AoIgZdxiBXcqe0+3L1UQExr91vtG5KZMs0bXCQ=="
+  }
+}

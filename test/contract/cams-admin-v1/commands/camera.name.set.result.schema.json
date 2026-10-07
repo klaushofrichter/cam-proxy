@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/commands/camera.name.set.result.schema.json",
+  "title": "camera.name.set result v1",
+  "type": "object",
+  "properties": {
+    "camera": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+    },
+    "requested": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "name": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "verified": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "camera",
+    "requested",
+    "name",
+    "verified"
+  ]
+}

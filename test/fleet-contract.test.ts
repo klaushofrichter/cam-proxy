@@ -1,11 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { adminUrlProblem, buildEnvelope, enrollRequest, fingerprint, normaliseCode, parseEnvelope, sign, signedText, ulid, verify } from '../src/fleet/protocol';
-import { fixtures, strict, vectors, why } from './helpers/contract';
+import { fixtures, pending, strict, vectors, why } from './helpers/contract';
+import { IMPLEMENTED } from '../src/fleet/policy';
 
 // cam-proxy against the vendored cams-admin contract v1 (spec
 // 2026-10-06-cams-admin-phase1-design §15.4): the signed strings and
 // signatures byte for byte, the enrollment request and hello on the strict schemas.
 const k = vectors.keys;
+
+describe('the P3 cross-check rule', () => {
+  it('no vendored command fixture is pending (P3 implemented)', () => {
+    const p = fixtures().filter(({ f }) => pending(f, IMPLEMENTED)).map((x) => x.name);
+    expect(p).toEqual([]);
+    // and the rule itself: a P2 proxy would see the P3 fixtures pending, never an unknown command.
+    const p2 = fixtures().filter(({ f }) => pending(f, new Set(['tokens.apply', 'tokens.apply.admin']))).map((x) => x.name);
+    expect(p2).toContain('valid-command-config-set');
+    expect(p2).not.toContain('invalid-command-unknown-name');
+  });
+});
 
 describe('the contract vectors', () => {
   it('the vendored fixtures agree with the strict schemas (the copy is whole)', () => {

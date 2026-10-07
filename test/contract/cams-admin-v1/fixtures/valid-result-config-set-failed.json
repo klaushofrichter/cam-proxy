@@ -1,0 +1,30 @@
+{
+  "$note": "a denied path fails the whole command",
+  "$command": "config.set",
+  "schema": "result",
+  "message": {
+    "v": 1,
+    "type": "result",
+    "id": "01K60000000000000000000005",
+    "seq": 5,
+    "ts": 1791273600005,
+    "re": "01K60000000000000000000003",
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "phase": "done",
+      "status": "failed",
+      "code": "not_remote_settable",
+      "result": {
+        "paths": [
+          {
+            "path": "cameras.cam1.host",
+            "code": "not_remote_settable"
+          }
+        ]
+      }
+    },
+    "sig": "u3Fp5C0JnKVl3RBLcfdk3gsDfd9q7aHV/+FLpr3NlcLtkfbjLNFLjG+wO6t8fFwdVaOero6rd3W9YKf3BXPUCw=="
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/commands/camera.name.set.args.schema.json",
+  "title": "camera.name.set args v1",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "camera": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^(?:(?![\\p{Cc}\\p{Cf}\\p{Cs}\\p{Co}\\p{Zl}\\p{Zp}])\\P{Cn}){1,64}$"
+    }
+  },
+  "required": [
+    "v",
+    "camera",
+    "name"
+  ]
+}

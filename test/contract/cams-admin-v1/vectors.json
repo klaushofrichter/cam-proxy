@@ -241,6 +241,264 @@
       },
       "text": "{\"body\":{\"actor\":\"admin@example.org\",\"args\":{\"revision\":2,\"tokens\":[],\"v\":1},\"cmdId\":\"cmd_1123456789ABCDEFGHJK\",\"command\":\"tokens.apply\",\"connId\":\"con_0123456789ABCDEFGHJK\",\"exp\":1791273660005,\"proxyId\":\"prx_0123456789ABCDEFGHJK\",\"revocationOnly\":true},\"id\":\"01K60000000000000000000005\",\"seq\":5,\"ts\":1791273600005,\"type\":\"command\",\"v\":1}",
       "sig": "9rV6arIMbdIyaisdCZDq4u+nY5KHnD1ItYjnugfLNtd19LTuvs6ksgQjyJAFuBxer7MBFq4KOiEbLKoZSp9zDg=="
+    },
+    {
+      "kind": "command",
+      "key": "server",
+      "envelope": {
+        "v": 1,
+        "type": "command",
+        "id": "01K60000000000000000000006",
+        "seq": 6,
+        "ts": 1791273600006,
+        "body": {
+          "proxyId": "prx_0123456789ABCDEFGHJK",
+          "connId": "con_0123456789ABCDEFGHJK",
+          "cmdId": "cmd_2123456789ABCDEFGHJK",
+          "exp": 1791273660006,
+          "actor": "admin@example.org",
+          "command": "config.set",
+          "args": {
+            "v": 1,
+            "dryRun": false,
+            "baseRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "set": {
+              "sse.pingS": 5
+            }
+          }
+        }
+      },
+      "text": "{\"body\":{\"actor\":\"admin@example.org\",\"args\":{\"baseRevision\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"dryRun\":false,\"set\":{\"sse.pingS\":5},\"v\":1},\"cmdId\":\"cmd_2123456789ABCDEFGHJK\",\"command\":\"config.set\",\"connId\":\"con_0123456789ABCDEFGHJK\",\"exp\":1791273660006,\"proxyId\":\"prx_0123456789ABCDEFGHJK\"},\"id\":\"01K60000000000000000000006\",\"seq\":6,\"ts\":1791273600006,\"type\":\"command\",\"v\":1}",
+      "sig": "/SSey/BSILU3XYTpgCePg0zB+i+poI2mRh5keStEppT8ZFOusQVnAdvr5pS5gy2Gr/sBUgibmUyQXMGdNvhOAA=="
+    },
+    {
+      "kind": "result",
+      "key": "proxy",
+      "envelope": {
+        "v": 1,
+        "type": "result",
+        "id": "01K60000000000000000000007",
+        "seq": 7,
+        "ts": 1791273600007,
+        "re": "01K60000000000000000000006",
+        "body": {
+          "proxyId": "prx_0123456789ABCDEFGHJK",
+          "connId": "con_0123456789ABCDEFGHJK",
+          "cmdId": "cmd_2123456789ABCDEFGHJK",
+          "phase": "done",
+          "status": "ok",
+          "result": {
+            "dryRun": false,
+            "baseRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "revision": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "changes": [
+              {
+                "path": "sse.pingS",
+                "from": 30,
+                "to": 5,
+                "sourceFrom": "default",
+                "sourceTo": "override"
+              }
+            ],
+            "unchanged": []
+          }
+        }
+      },
+      "text": "{\"body\":{\"cmdId\":\"cmd_2123456789ABCDEFGHJK\",\"connId\":\"con_0123456789ABCDEFGHJK\",\"phase\":\"done\",\"proxyId\":\"prx_0123456789ABCDEFGHJK\",\"result\":{\"baseRevision\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"changes\":[{\"from\":30,\"path\":\"sse.pingS\",\"sourceFrom\":\"default\",\"sourceTo\":\"override\",\"to\":5}],\"dryRun\":false,\"revision\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"unchanged\":[]},\"status\":\"ok\"},\"id\":\"01K60000000000000000000007\",\"re\":\"01K60000000000000000000006\",\"seq\":7,\"ts\":1791273600007,\"type\":\"result\",\"v\":1}",
+      "sig": "IAj4kePNDQ5iPJIrBXr7WSNfqaGdMHZjoL0zB9ElwodghUmsDku7baoyS+OLy9XoHEeQFsy3chUNsx6kheVPAQ=="
+    },
+    {
+      "kind": "command",
+      "key": "server",
+      "envelope": {
+        "v": 1,
+        "type": "command",
+        "id": "01K60000000000000000000008",
+        "seq": 8,
+        "ts": 1791273600008,
+        "body": {
+          "proxyId": "prx_0123456789ABCDEFGHJK",
+          "connId": "con_0123456789ABCDEFGHJK",
+          "cmdId": "cmd_3123456789ABCDEFGHJK",
+          "exp": 1791273660008,
+          "actor": "admin@example.org",
+          "command": "config.set",
+          "args": {
+            "v": 1,
+            "dryRun": true,
+            "baseRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "set": {
+              "ftp.enabled": false
+            }
+          }
+        }
+      },
+      "text": "{\"body\":{\"actor\":\"admin@example.org\",\"args\":{\"baseRevision\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"dryRun\":true,\"set\":{\"ftp.enabled\":false},\"v\":1},\"cmdId\":\"cmd_3123456789ABCDEFGHJK\",\"command\":\"config.set\",\"connId\":\"con_0123456789ABCDEFGHJK\",\"exp\":1791273660008,\"proxyId\":\"prx_0123456789ABCDEFGHJK\"},\"id\":\"01K60000000000000000000008\",\"seq\":8,\"ts\":1791273600008,\"type\":\"command\",\"v\":1}",
+      "sig": "RLoMOc50e8K8z5TexW71K7W8JACDap53lAxTevdNkSH87sd769WpD5H357/Sgpq/dpSiew+isZuU89oq92lCCw=="
+    },
+    {
+      "kind": "result",
+      "key": "proxy",
+      "envelope": {
+        "v": 1,
+        "type": "result",
+        "id": "01K60000000000000000000009",
+        "seq": 9,
+        "ts": 1791273600009,
+        "re": "01K60000000000000000000008",
+        "body": {
+          "proxyId": "prx_0123456789ABCDEFGHJK",
+          "connId": "con_0123456789ABCDEFGHJK",
+          "cmdId": "cmd_3123456789ABCDEFGHJK",
+          "phase": "done",
+          "status": "failed",
+          "code": "not_remote_settable",
+          "result": {
+            "paths": [
+              {
+                "path": "ftp.enabled",
+                "code": "not_remote_settable"
+              }
+            ]
+          }
+        }
+      },
+      "text": "{\"body\":{\"cmdId\":\"cmd_3123456789ABCDEFGHJK\",\"code\":\"not_remote_settable\",\"connId\":\"con_0123456789ABCDEFGHJK\",\"phase\":\"done\",\"proxyId\":\"prx_0123456789ABCDEFGHJK\",\"result\":{\"paths\":[{\"code\":\"not_remote_settable\",\"path\":\"ftp.enabled\"}]},\"status\":\"failed\"},\"id\":\"01K60000000000000000000009\",\"re\":\"01K60000000000000000000008\",\"seq\":9,\"ts\":1791273600009,\"type\":\"result\",\"v\":1}",
+      "sig": "s5MMRQGbwQHJsuUAOlO2IHOtp37ABypdRZQuNjUuarnWLE+df4+xk6FFcubgQqJz9ALDw47O6WvWhz/veFTsAw=="
+    },
+    {
+      "kind": "command",
+      "key": "server",
+      "envelope": {
+        "v": 1,
+        "type": "command",
+        "id": "01K60000000000000000000010",
+        "seq": 10,
+        "ts": 1791273600010,
+        "body": {
+          "proxyId": "prx_0123456789ABCDEFGHJK",
+          "connId": "con_0123456789ABCDEFGHJK",
+          "cmdId": "cmd_4123456789ABCDEFGHJK",
+          "exp": 1791273660010,
+          "actor": "admin@example.org",
+          "command": "camera.name.set",
+          "args": {
+            "v": 1,
+            "camera": "cam1",
+            "name": "Café 😀 Ost"
+          }
+        }
+      },
+      "text": "{\"body\":{\"actor\":\"admin@example.org\",\"args\":{\"camera\":\"cam1\",\"name\":\"Café 😀 Ost\",\"v\":1},\"cmdId\":\"cmd_4123456789ABCDEFGHJK\",\"command\":\"camera.name.set\",\"connId\":\"con_0123456789ABCDEFGHJK\",\"exp\":1791273660010,\"proxyId\":\"prx_0123456789ABCDEFGHJK\"},\"id\":\"01K60000000000000000000010\",\"seq\":10,\"ts\":1791273600010,\"type\":\"command\",\"v\":1}",
+      "sig": "0PhYzuE5yPEs40x5m35XG0jlDDQL9f+KiMywmiEq8TOzgGpGwTGsgTOIDEGZsYIxDhAry61pIYzuS4SEezi/AA=="
+    },
+    {
+      "kind": "command",
+      "key": "server",
+      "envelope": {
+        "v": 1,
+        "type": "command",
+        "id": "01K60000000000000000000011",
+        "seq": 11,
+        "ts": 1791273600011,
+        "body": {
+          "proxyId": "prx_0123456789ABCDEFGHJK",
+          "connId": "con_0123456789ABCDEFGHJK",
+          "cmdId": "cmd_5123456789ABCDEFGHJK",
+          "exp": 1791273660011,
+          "actor": "admin@example.org",
+          "command": "camera.action",
+          "args": {
+            "v": 1,
+            "camera": null,
+            "action": "retention-run"
+          }
+        }
+      },
+      "text": "{\"body\":{\"actor\":\"admin@example.org\",\"args\":{\"action\":\"retention-run\",\"camera\":null,\"v\":1},\"cmdId\":\"cmd_5123456789ABCDEFGHJK\",\"command\":\"camera.action\",\"connId\":\"con_0123456789ABCDEFGHJK\",\"exp\":1791273660011,\"proxyId\":\"prx_0123456789ABCDEFGHJK\"},\"id\":\"01K60000000000000000000011\",\"seq\":11,\"ts\":1791273600011,\"type\":\"command\",\"v\":1}",
+      "sig": "9PP6U/KS7oTpYKGR4Z2gkXS3mAx94Aob94/Jn1OGkx3Yb9g9vX8m4PpYDnzYzTElGtNfAqFcQJYf0I/0L/nSAQ=="
+    },
+    {
+      "kind": "command",
+      "key": "server",
+      "envelope": {
+        "v": 1,
+        "type": "command",
+        "id": "01K60000000000000000000012",
+        "seq": 12,
+        "ts": 1791273600012,
+        "body": {
+          "proxyId": "prx_0123456789ABCDEFGHJK",
+          "connId": "con_0123456789ABCDEFGHJK",
+          "cmdId": "cmd_6123456789ABCDEFGHJK",
+          "exp": 1791273660012,
+          "actor": "admin@example.org",
+          "command": "config.rollback",
+          "args": {
+            "v": 1,
+            "dryRun": false,
+            "cmdId": "cmd_2123456789ABCDEFGHJK"
+          }
+        }
+      },
+      "text": "{\"body\":{\"actor\":\"admin@example.org\",\"args\":{\"cmdId\":\"cmd_2123456789ABCDEFGHJK\",\"dryRun\":false,\"v\":1},\"cmdId\":\"cmd_6123456789ABCDEFGHJK\",\"command\":\"config.rollback\",\"connId\":\"con_0123456789ABCDEFGHJK\",\"exp\":1791273660012,\"proxyId\":\"prx_0123456789ABCDEFGHJK\"},\"id\":\"01K60000000000000000000012\",\"seq\":12,\"ts\":1791273600012,\"type\":\"command\",\"v\":1}",
+      "sig": "FZkbDJBwj5+kY3nUW2KDjkACLaKBbSVEmffFjJfe+G/j3YqTCwkT/siQXC6r2ljvYpgl0BOgVaa4FsZTUMbpAQ=="
+    },
+    {
+      "kind": "command",
+      "key": "server",
+      "envelope": {
+        "v": 1,
+        "type": "command",
+        "id": "01K60000000000000000000013",
+        "seq": 13,
+        "ts": 1791273600013,
+        "body": {
+          "proxyId": "prx_0123456789ABCDEFGHJK",
+          "connId": "con_0123456789ABCDEFGHJK",
+          "cmdId": "cmd_7123456789ABCDEFGHJK",
+          "exp": 1791273660013,
+          "actor": "admin@example.org",
+          "command": "config.unset",
+          "args": {
+            "v": 1,
+            "dryRun": true,
+            "baseRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "paths": [
+              "sse.pingS",
+              "cameras.cam1.name"
+            ]
+          }
+        }
+      },
+      "text": "{\"body\":{\"actor\":\"admin@example.org\",\"args\":{\"baseRevision\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"dryRun\":true,\"paths\":[\"sse.pingS\",\"cameras.cam1.name\"],\"v\":1},\"cmdId\":\"cmd_7123456789ABCDEFGHJK\",\"command\":\"config.unset\",\"connId\":\"con_0123456789ABCDEFGHJK\",\"exp\":1791273660013,\"proxyId\":\"prx_0123456789ABCDEFGHJK\"},\"id\":\"01K60000000000000000000013\",\"seq\":13,\"ts\":1791273600013,\"type\":\"command\",\"v\":1}",
+      "sig": "7aHM423q4haJ1EuCfwMZzcBThAVc7EZEGfKHAP+CDjJ/RlCSY0jXHU0Fm1FNdZQkxU8JgWok1AYf2TTeYTmHAQ=="
+    },
+    {
+      "kind": "command",
+      "key": "server",
+      "envelope": {
+        "v": 1,
+        "type": "command",
+        "id": "01K60000000000000000000014",
+        "seq": 14,
+        "ts": 1791273600014,
+        "body": {
+          "proxyId": "prx_0123456789ABCDEFGHJK",
+          "connId": "con_0123456789ABCDEFGHJK",
+          "cmdId": "cmd_8123456789ABCDEFGHJK",
+          "exp": 1791273660014,
+          "actor": "admin@example.org",
+          "command": "camera.name.set",
+          "args": {
+            "v": 1,
+            "camera": "cam1",
+            "name": "evil؜name"
+          }
+        }
+      },
+      "text": "{\"body\":{\"actor\":\"admin@example.org\",\"args\":{\"camera\":\"cam1\",\"name\":\"evil؜name\",\"v\":1},\"cmdId\":\"cmd_8123456789ABCDEFGHJK\",\"command\":\"camera.name.set\",\"connId\":\"con_0123456789ABCDEFGHJK\",\"exp\":1791273660014,\"proxyId\":\"prx_0123456789ABCDEFGHJK\"},\"id\":\"01K60000000000000000000014\",\"seq\":14,\"ts\":1791273600014,\"type\":\"command\",\"v\":1}",
+      "sig": "zxgtfRK1yEUFRJ0gLfDOhWyr5mWe/85CCOUk1ULgpDSnzpROk2D5xf4UOdnaaEXBK43zMETvqJTdQpsFBTPFDA=="
     }
   ]
 }

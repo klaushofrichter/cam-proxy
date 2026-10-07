@@ -1,0 +1,30 @@
+{
+  "$note": "storage settings are local only",
+  "$command": "config.set",
+  "schema": "result",
+  "message": {
+    "v": 1,
+    "type": "result",
+    "id": "01K60000000000000000000005",
+    "seq": 5,
+    "ts": 1791273600005,
+    "re": "01K60000000000000000000003",
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "phase": "done",
+      "status": "failed",
+      "code": "not_remote_settable",
+      "result": {
+        "paths": [
+          {
+            "path": "storage.maxPercent",
+            "code": "not_remote_settable"
+          }
+        ]
+      }
+    },
+    "sig": "1+0/LP/W7ZeXO7JHsJQyuBwjY3Y23SJj3KKCBvpX8UkJCE9OvRMOrO2nmoXp5fCOSgfIuRi0/NC1j4z3aKhYAg=="
+  }
+}

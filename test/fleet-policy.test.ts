@@ -2,11 +2,12 @@ import { mkdtempSync, statSync, writeFileSync, chmodSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, it } from 'vitest';
-import { ALLOW_ENTRIES, CommandPolicy, ENTRY_TEXT, IMPLEMENTED, DENIED_PATH_PREFIXES, isDeniedPath, NEVER_REMOTE_ACTIONS, validateAllowList, WideningRefused } from '../src/fleet/policy';
+import { ALLOW_ENTRIES, CommandPolicy, ENTRY_TEXT, IMPLEMENTED, NEVER_REMOTE_ACTIONS, validateAllowList, WideningRefused } from '../src/fleet/policy';
 import { readEnvLayer } from '../src/config/env';
-import { privateFileHooks } from '../src/fleet/private-file';
+import { privateFileHooks, writePrivateJson } from '../src/fleet/private-file';
 import { settingPaths } from '../src/config/load';
 import { DEFAULTS } from '../src/config/defaults';
+import { classify, DENIED } from '../src/fleet/remote-settable';
 
 const dir = () => mkdtempSync(join(tmpdir(), 'policy-'));
 const quiet = { info() {}, warn() {}, debug() {} };
@@ -20,10 +21,11 @@ describe('the closed lists', () => {
     for (const a of NEVER_REMOTE_ACTIONS) expect(ALLOW_ENTRIES).not.toContain(`camera.action:${a}`);
   });
   it('the deny list covers camsAdmin.*, every address, port, file path and trust setting (M5)', () => {
-    for (const p of ['camsAdmin.url', 'camsAdmin.keyFile', 'server.port', 'tls.site', 'go2rtc.url', 'ftp.port', 'ftp.certFile', 'ntp.server', 'poeSwitch.host', 'composition.font', 'cameras.cam1.host', 'cameras.cam1.user', 'cameras.cam1.tlsName', 'cameras.cam1.poeSwitch.port']) expect(isDeniedPath(p), p).toBe(true);
-    for (const p of ['stills.intervalS', 'retention.days', 'cameras.cam1.name']) expect(isDeniedPath(p), p).toBe(false);
+    const ids = ['cam1'];
+    for (const p of ['camsAdmin.url', 'camsAdmin.keyFile', 'server.port', 'tls.site', 'go2rtc.url', 'ftp.port', 'ftp.certFile', 'ntp.server', 'poeSwitch.host', 'composition.font', 'cameras.cam1.host', 'cameras.cam1.user', 'cameras.cam1.tlsName', 'cameras.cam1.poeSwitch.port']) expect(classify(p, ids), p).toBe('denied');
+    for (const p of ['stills.intervalS', 'retention.stillsDays', 'cameras.cam1.name']) expect(classify(p, ids), p).toBe('remote');
     // Every real setting under a denied prefix is denied (no prefix typo hides one).
-    for (const p of settingPaths(DEFAULTS)) if (DENIED_PATH_PREFIXES.some((x) => p === x || p.startsWith(`${x}.`))) expect(isDeniedPath(p), p).toBe(true);
+    for (const p of settingPaths(DEFAULTS)) if (DENIED.some((x) => p === x || p.startsWith(`${x}.`))) expect(classify(p, ids), p).toBe('denied');
   });
 });
 
@@ -39,7 +41,7 @@ describe('entry texts', () => {
 describe('CommandPolicy', () => {
   it('defaults: enabled, not paused, nothing allowed; no file written by reading', () => {
     const d = dir();
-    expect(make(d).effective()).toEqual({ enabled: true, paused: false, pauseReason: null, allow: [], envName: null });
+    expect(make(d).effective()).toEqual({ enabled: true, paused: false, pauseReason: null, allow: [], unconfirmed: [], envName: null });
     expect(() => statSync(join(d, 'admin'))).toThrow();
   });
   it('policy.json wins over config.json for allow; paused if either says so', () => {
@@ -88,4 +90,28 @@ describe('CommandPolicy', () => {
     expect(p.effective()).toMatchObject({ paused: false, allow: ['tokens.apply'] });
     expect(statSync(join(d, 'admin', 'policy.json')).mode & 0o777).toBe(0o600);
   });
+  it('I3: entries a P2 version stored for commands it did not run need fresh local consent; tokens.apply stays', () => {
+    const d = dir();
+    writePrivateJson(join(d, 'admin', 'policy.json'), { v: 1, allow: ['tokens.apply', 'config.set', 'camera.action:camera-reboot'], changedAt: 1, changedBy: 'local' });
+    const p = make(d);
+    expect(p.effective()).toMatchObject({ allow: ['tokens.apply'], unconfirmed: ['config.set', 'camera.action:camera-reboot'] });
+    // config.json's base the same way (a P2 deployment may list them).
+    expect(make(dir(), { allow: ['tokens.apply.admin', 'proxy.restart'], paused: false }).effective()).toMatchObject({ allow: ['tokens.apply.admin'], unconfirmed: ['proxy.restart'] });
+    // A managed admin can't confirm (that widens); the local admin can.
+    expect(() => p.setAllow(['tokens.apply', 'config.set'], 'managed')).toThrow(WideningRefused);
+    p.setAllow(['tokens.apply', 'config.set'], 'local');
+    expect(p.effective()).toMatchObject({ allow: ['tokens.apply', 'config.set'], unconfirmed: [] });
+    expect(make(d).effective()).toMatchObject({ allow: ['tokens.apply', 'config.set'], unconfirmed: [] });
+    // A pause keeps the consent.
+    p.pause('x', 'managed');
+    expect(p.effective()).toMatchObject({ allow: ['tokens.apply', 'config.set'], paused: true });
+  });
+  it('M5: a stored camera.action:camera-ftp-off (allowed before) is dropped, never makes the file unusable', () => {
+    const d = dir();
+    writePrivateJson(join(d, 'admin', 'policy.json'), { v: 1, allow: ['tokens.apply', 'camera.action:camera-ftp-off'], changedAt: 1, changedBy: 'local' });
+    expect(make(d).effective()).toMatchObject({ paused: false, allow: ['tokens.apply'], unconfirmed: [] });
+    expect(validateAllowList(['tokens.apply', 'camera.action:camera-ftp-off'], 'x', true)).toEqual(['tokens.apply']);
+    expect(() => validateAllowList(['camera.action:camera-ftp-off'], 'x')).toThrow();
+  });
 });
+

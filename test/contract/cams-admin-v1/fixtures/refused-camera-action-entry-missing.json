@@ -1,0 +1,43 @@
+{
+  "$note": "step 8 passes (a camera.action entry), step 11 needs camera.action:camera-reboot",
+  "schema": "command",
+  "$context": {
+    "now": 1791273600010,
+    "proxyId": "prx_0123456789ABCDEFGHJK",
+    "connId": "con_0123456789ABCDEFGHJK",
+    "serverKeys": [
+      "MCowBQYDK2VwAyEAgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q="
+    ],
+    "allow": [
+      "camera.action:camera-test"
+    ],
+    "paused": false,
+    "seen": []
+  },
+  "$expect": {
+    "runtime": "not_allowed",
+    "strict": "valid",
+    "receiver": "proxy"
+  },
+  "message": {
+    "v": 1,
+    "type": "command",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "exp": 1791273660003,
+      "actor": "admin@example.org",
+      "command": "camera.action",
+      "args": {
+        "v": 1,
+        "camera": "cam1",
+        "action": "camera-reboot"
+      }
+    },
+    "sig": "nXdR9gd9z4spjAUuX1F3fk3KJE9EIz83ZYIbD1abXyYqvDvNE58Mpo4ZlYJtpRtqI8NsqT2xpa9T4TsYDWRbBQ=="
+  }
+}

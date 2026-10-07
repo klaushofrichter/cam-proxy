@@ -1,0 +1,30 @@
+{
+  "$note": "health thresholds are local only (ruling I4)",
+  "$command": "config.set",
+  "schema": "result",
+  "message": {
+    "v": 1,
+    "type": "result",
+    "id": "01K60000000000000000000005",
+    "seq": 5,
+    "ts": 1791273600005,
+    "re": "01K60000000000000000000003",
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "phase": "done",
+      "status": "failed",
+      "code": "not_remote_settable",
+      "result": {
+        "paths": [
+          {
+            "path": "health.diskPercent",
+            "code": "not_remote_settable"
+          }
+        ]
+      }
+    },
+    "sig": "32viQm5tQQWFPcswr8dSaerOA+4lxoOl4B+daJrsWKGYa4mWI2t0Uc6EOrBXjkG8kqpsn5WkBWjpVykS2w9NCg=="
+  }
+}

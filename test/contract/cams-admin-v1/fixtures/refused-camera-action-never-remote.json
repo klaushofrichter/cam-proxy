@@ -1,0 +1,63 @@
+{
+  "$note": "never remote, whatever the allow-list (strict: not a remote action)",
+  "schema": "command",
+  "$context": {
+    "now": 1791273600010,
+    "proxyId": "prx_0123456789ABCDEFGHJK",
+    "connId": "con_0123456789ABCDEFGHJK",
+    "serverKeys": [
+      "MCowBQYDK2VwAyEAgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q="
+    ],
+    "allow": [
+      "tokens.apply",
+      "tokens.apply.admin",
+      "config.get",
+      "config.set",
+      "config.unset",
+      "config.rollback",
+      "camera.name.set",
+      "proxy.restart",
+      "camera.action:camera-test",
+      "camera.action:onvif-resubscribe",
+      "camera.action:camera-ftp-test",
+      "camera.action:poe-switch-read",
+      "camera.action:inventory",
+      "camera.action:inventory-cancel",
+      "camera.action:retention-run",
+      "camera.action:restart",
+      "camera.action:camera-reboot",
+      "camera.action:camera-powercycle",
+      "camera.action:camera-ftp-setup",
+      "camera.action:camera-ntp-set",
+      "camera.action:camera-cert-push"
+    ],
+    "paused": false,
+    "seen": []
+  },
+  "$expect": {
+    "runtime": "not_allowed",
+    "strict": "valid",
+    "receiver": "proxy"
+  },
+  "message": {
+    "v": 1,
+    "type": "command",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "exp": 1791273660003,
+      "actor": "admin@example.org",
+      "command": "camera.action",
+      "args": {
+        "v": 1,
+        "camera": "cam1",
+        "action": "find-camera"
+      }
+    },
+    "sig": "PeD2sPk38RW5ZKwkQWJiJkHBTe5D/Ru0GWqog92nPUW0ElNOYX7x9UO9AGMllyngPzy29sR69q11CmyycH2wBw=="
+  }
+}

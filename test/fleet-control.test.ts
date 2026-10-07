@@ -158,7 +158,7 @@ describe('allowed commands, pause and managed tokens', () => {
 
   it('GET: off by default, every known entry with its sentence, the implemented ones, recent commands', async () => {
     const r = await request(q.base).get('/control/admin/commands').set(admin).expect(200);
-    expect(r.body).toMatchObject({ enabled: true, paused: false, pauseReason: null, envName: null, allow: [], implemented: ['tokens.apply', 'tokens.apply.admin'], recent: [] });
+    expect(r.body).toMatchObject({ enabled: true, paused: false, pauseReason: null, envName: null, allow: [], implemented: [...ALLOW_ENTRIES], recent: [] });
     expect(r.body.known.map((k: { entry: string }) => k.entry)).toEqual([...ALLOW_ENTRIES]);
     for (const k of r.body.known) expect(k.text.length, k.entry).toBeGreaterThan(10);
     expect((await request(q.base).get('/control/admin/commands').set(auth())).status).toBe(403);

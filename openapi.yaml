@@ -788,7 +788,7 @@ paths:
     get:
       summary: Commands from cams-admin (migration P2, docs/cams-admin.md); the policy, the known allow entries with what each lets cams-admin change, and the 20 most recent commands (admin)
       responses:
-        '200': { description: '{ enabled (false when CAMPROXY_ADMIN_COMMANDS is not on), envName, paused, pauseReason, allow: [entry], implemented: [entry], known: [{ entry, text }], recent: [{ cmdId, command, actor, at, status, code?, result?, changed? }] }' }
+        '200': { description: '{ enabled (false when CAMPROXY_ADMIN_COMMANDS is not on), envName, paused, pauseReason, allow: [entry], implemented: [entry], known: [{ entry, text }], recent: [{ cmdId, command, actor, at, status, code?, result?, changed? }], groups: { tokens, read, settings, camera, disruptive: [entry] } }' }
         '401': { description: not signed in }
     put:
       summary: The allowed commands ({allow}); written to data/admin/policy.json; audited (admin-policy). Adding an entry needs local admin rights (the admin token, or a session it started)
@@ -815,6 +815,22 @@ paths:
       responses:
         '200': { description: the view (as GET /control/admin/commands) }
         '403': { description: '{ error: local_admin_only }' }
+  /control/admin/changes:
+    get:
+      summary: Settings changed by cams-admin (migration P3, data/admin/overrides.bak-*.json, the last 20), newest first; never a secret
+      responses:
+        '200': { description: '{ items: [{ cmdId, command (config.set, config.unset, config.rollback), actor, at, paths: [{ path, from?, to? }] (absent = no override), rolledBack: { at, by (cams-admin, local), user?, cmdId? } | null }] }' }
+  /control/admin/changes/{cmdId}/undo:
+    post:
+      summary: Undo a cams-admin settings change (its paths back to before, when they still hold its values); local admin rights only; audited (config-change, undoOf)
+      parameters:
+        - { name: cmdId, in: path, required: true, schema: { type: string, pattern: '^cmd_[0-9A-HJKMNP-TV-Z]{20}$' } }
+      responses:
+        '200': { description: '{ changes: [{ path, from?, to?, sourceFrom, sourceTo, restart? }] }' }
+        '400': { description: '{ error: invalid }: not a command id' }
+        '403': { description: '{ error: local_admin_only }' }
+        '404': { description: '{ error: no_backup }' }
+        '409': { description: '{ error: conflict, paths }: changed here since; { error: already_rolled_back }' }
   /control/admin/tokens:
     get:
       summary: The cams-admin-managed tokens (data/admin/tokens.json); never a hash beyond its first 8 hex
@@ -841,7 +857,7 @@ paths:
     get:
       summary: Every setting with value, source, restart flag and pending next value
       responses:
-        '200': { description: '{ "<path>": { value, source (default, file, override, env), env? (the variable that sets it: CAMERA_HOST, PI_ADDRESS or their CAMPROXY_ names), restart, restartScope? (camera: a cameras.<id>.* setting, applied by that camera's restart or the host-wide one; host: applied by the host-wide restart, POST /control/actions/restart without a camera), pending, next?, type (integer, boolean or string), resetTo? (an override: what removing it goes back to, { value?, source: file or default }) } }' }
+        '200': { description: '{ "<path>": { value, source (default, file, override, env), env? (the variable that sets it: CAMERA_HOST, PI_ADDRESS or their CAMPROXY_ names), restart, restartScope? (camera: a cameras.<id>.* setting, applied by that camera's restart or the host-wide one; host: applied by the host-wide restart, POST /control/actions/restart without a camera), pending, next?, type (integer, boolean or string), resetTo? (an override: what removing it goes back to, { value?, source: file or default }), by? (migration P3: the override holds the value a cams-admin command set, { cmdId, actor, at }) } }' }
     put:
       summary: Sets overrides (stored in overrides.json); live settings apply at once
       requestBody:

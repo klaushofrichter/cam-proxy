@@ -2,8 +2,9 @@ import type { Envelope } from './protocol';
 import { verifyEnvelope } from './protocol';
 import { jcs } from './jcs';
 import type { ManagedToken, TokensApplyArgs } from './token-store';
-import { ARGS_VALIDATORS } from './command-args';
-import type { JournalEntry } from './journal';
+import { ARGS_VALIDATORS, type CameraActionArgs } from './command-args';
+import type { Journal, JournalEntry } from './journal';
+import { BUDGETED_ACTIONS, DISRUPTIVE_ACTIONS, NEVER_REMOTE_ACTIONS } from './policy';
 
 export type Nack = 'bad_signature' | 'wrong_target' | 'expired' | 'replayed' | 'not_allowed' | 'paused' | 'rate_limited' | 'invalid_args' | 'unsupported_version' | 'busy' | 'not_revocation_only';
 export interface CommandBody { proxyId: string; connId: string; cmdId: string; exp: number; actor: string; command: string; args: Record<string, unknown> }
@@ -28,6 +29,11 @@ const argsBytes = (a: unknown): number => {
 };
 const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 
+// The actor is a cams-admin string shown in the audit log, the card and the
+// CLI: control, bidi and format characters (and lone surrogates) become
+// spaces (security review M2: no terminal escapes, no spoofing).
+const cleanActor = (a: string): string => a.slice(0, 200).replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/gu, ' ');
+
 export class SeenIds {
   private m = new Map<string, number>();
   constructor(private readonly ttlMs = 300_000, private readonly cap = 4096) {}
@@ -43,8 +49,12 @@ export class SeenIds {
 class Window { constructor(readonly ms: number, readonly cap: number, public start = 0, public n = 0) {} }
 export class CommandLimits {
   private total = [new Window(60_000, 30), new Window(86_400_000, 300)];
-  private per: Record<string, Window[]> = { 'tokens.apply': [new Window(3_600_000, 6)] };
-  constructor(private readonly now: () => number) {}
+  private per: Record<string, Window[]>;
+  constructor(private readonly now: () => number) {
+    // config.set, config.unset and config.rollback share one window (R3-11; dry runs count).
+    const cfg = new Window(60_000, 6);
+    this.per = { 'tokens.apply': [new Window(3_600_000, 6)], 'config.set': [cfg], 'config.unset': [cfg], 'config.rollback': [cfg], 'camera.action': [new Window(60_000, 12)], 'camera.name.set': [new Window(60_000, 6)] };
+  }
   take(command: string): { ok: true } | { ok: false; retryAfterS: number } {
     const t = this.now();
     const ws = [...this.total, ...(this.per[command] ?? [])];
@@ -68,6 +78,23 @@ export interface CheckContext {
   // The proxy's stored managed set: a tokens.apply with body.revocationOnly
   // must only keep entries of it, unchanged. Absent = every claim is refused.
   currentTokens?: ManagedToken[];
+  // P3 step 11: proxy.restart and the disruptive camera actions, counted from
+  // the command journal (journalBudgetOf). Absent = no budget (tests only).
+  journalBudget?: (command: string, action: string | undefined) => { ok: true } | { ok: false; retryAfterS: number };
+}
+
+const isDisruptive = (a: string | undefined) => (DISRUPTIVE_ACTIONS as readonly string[]).includes(a ?? '');
+// The journal budget (contract step 11, R3-9): proxy.restart at most 2 an
+// hour, disruptive camera actions at most 6 an hour per proxy, whatever their
+// status. On the proxy's own clock (the journal's `at`).
+export function journalBudgetOf(count: Journal['countSince'], now: number) {
+  return (command: string, _action?: string): { ok: true } | { ok: false; retryAfterS: number } => {
+    const hour = now - 3_600_000;
+    const r = command === 'proxy.restart'
+      ? { ...count((e) => e.command === 'proxy.restart', hour), cap: 2 }
+      : { ...count((e) => e.command === 'camera.action' && BUDGETED_ACTIONS.has(e.action ?? ''), hour), cap: 6 };
+    return r.n < r.cap ? { ok: true } : { ok: false, retryAfterS: Math.max(1, Math.ceil((r.oldest! + 3_600_000 - now) / 1000)) };
+  };
 }
 
 // The contract's check order, steps 1-11 (the runner adds 12, busy).
@@ -93,7 +120,9 @@ export function checkCommand(m: Envelope, c: CheckContext): Decision {
   // once its claim holds (checked below); only the env kill switch stops it.
   const claim = command === 'tokens.apply' && b.revocationOnly === true;
   if (!c.policy.enabled || (c.policy.paused && !claim)) return nack('paused');
-  if (!c.implemented.has(command) || (!claim && !c.policy.allow.includes(command))) return nack('not_allowed');
+  // camera.action passes with any camera.action:* entry; its own entry is step 11's.
+  const entryOk = command === 'camera.action' ? c.policy.allow.some((e) => e.startsWith('camera.action:')) : c.policy.allow.includes(command);
+  if (!c.implemented.has(command) || (!claim && !entryOk)) return nack('not_allowed');
   const t = c.limits.take(command);
   if (!t.ok) return nack('rate_limited', t.retryAfterS);
   // The contract bound: jcs(args) at most 16384 bytes (UTF-8), before any validator.
@@ -104,5 +133,12 @@ export function checkCommand(m: Envelope, c: CheckContext): Decision {
   if (claim && !isRevocation(v.args as TokensApplyArgs, c.currentTokens)) return nack('invalid_args');
   if (!claim && command === 'tokens.apply' && (v.args as { tokens: { kind: string }[] }).tokens.some((x) => x.kind === 'admin') && !c.policy.allow.includes('tokens.apply.admin')) return nack('not_allowed');
   if (typeof b.actor !== 'string' || !isObj(b.args)) return nack('invalid_args');
-  return { kind: 'run', cmd: { proxyId: c.proxyId, connId: c.connId, cmdId, exp: exp as number, actor: (b.actor as string).slice(0, 200), command, args: b.args as Record<string, unknown> }, args: v.args };
+  // Step 11 (P3): the entry the args need, and the journal budget.
+  const action = command === 'camera.action' ? (v.args as CameraActionArgs).action : undefined;
+  if (action !== undefined && ((NEVER_REMOTE_ACTIONS as readonly string[]).includes(action) || !c.policy.allow.includes(`camera.action:${action}`))) return nack('not_allowed');
+  if (command === 'proxy.restart' || isDisruptive(action)) {
+    const budget = c.journalBudget?.(command, action) ?? { ok: true };
+    if (!budget.ok) return nack('rate_limited', budget.retryAfterS);
+  }
+  return { kind: 'run', cmd: { proxyId: c.proxyId, connId: c.connId, cmdId, exp: exp as number, actor: cleanActor(b.actor as string), command, args: b.args as Record<string, unknown> }, args: v.args };
 }

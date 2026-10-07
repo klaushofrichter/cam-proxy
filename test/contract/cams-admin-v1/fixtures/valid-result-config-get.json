@@ -1,0 +1,110 @@
+{
+  "$note": "a compact view: values, sources, restart marks, settable bounds",
+  "$command": "config.get",
+  "schema": "result",
+  "message": {
+    "v": 1,
+    "type": "result",
+    "id": "01K60000000000000000000005",
+    "seq": 5,
+    "ts": 1791273600005,
+    "re": "01K60000000000000000000003",
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "phase": "done",
+      "status": "ok",
+      "result": {
+        "revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "schema": 1,
+        "cameras": [
+          "cam1"
+        ],
+        "omittedCameras": [],
+        "paths": {
+          "sse.pingS": {
+            "v": 5,
+            "s": "override",
+            "by": {
+              "cmdId": "cmd_0123456789ABCDEFGHJK",
+              "actor": "admin@example.org",
+              "at": 1791273600000
+            }
+          },
+          "sse.maxClients": {
+            "v": 20,
+            "s": "default"
+          },
+          "stills.quality": {
+            "v": 5,
+            "s": "file",
+            "r": "restart",
+            "p": true,
+            "n": 6
+          },
+          "retention.clipsDays": {
+            "v": 90,
+            "s": "file"
+          },
+          "ftp.publicHost": {
+            "v": "proxy.example.net",
+            "s": "env"
+          },
+          "cameras.cam1.name": {
+            "v": "Front door",
+            "s": "file"
+          },
+          "cameras.cam1.host": {
+            "v": "192.0.2.10",
+            "s": "file"
+          },
+          "stills.maxGB": {
+            "s": "default"
+          }
+        },
+        "settable": {
+          "sse.pingS": {
+            "type": "integer",
+            "min": 5,
+            "max": 300
+          },
+          "sse.maxClients": {
+            "type": "integer",
+            "min": 1,
+            "max": 100
+          },
+          "stills.quality": {
+            "type": "integer",
+            "oneOf": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ]
+          },
+          "retention.clipsDays": {
+            "type": "integer",
+            "min": 1,
+            "max": 3650,
+            "dir": "more"
+          },
+          "stills.maxGB": {
+            "type": "integer",
+            "min": 1,
+            "max": 10000,
+            "optional": true,
+            "dir": "more"
+          },
+          "cameras.*.name": {
+            "type": "string",
+            "pattern": "^[^\\u0000-\\u001f]{1,64}$"
+          }
+        }
+      }
+    },
+    "sig": "bSYMBLOi4AaSoezMdsGEf+ETyuEDymCDY3srHY1tryBE9DIAimqCvohg07PveW+UJL1qN6qEJfig/VGOlQl3Bw=="
+  }
+}

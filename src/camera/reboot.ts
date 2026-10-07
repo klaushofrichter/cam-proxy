@@ -38,7 +38,11 @@ export type PowerCycleAnswer =
   | { status: 409 | 502; error: PoeSwitchErrorCode; detail: string; poeOff?: true; turnedOn?: boolean };
 // What the audit records name: never the password.
 interface PowerCycleInfo { switch: { model: string; host: string; port: number }; offSeconds: number }
-export interface RebootRequester { requestedBy: 'session' | 'token'; ip: string; userAgent?: string }
+// Who asked (R3-13): the admin (a session or the token), or cams-admin
+// (a command: its cmdId and actor go into the record's details).
+export interface RebootRequester { user?: string; requestedBy: 'session' | 'token' | 'cams-admin'; ip?: string; userAgent?: string; cmdId?: string; actor?: string }
+const requesterRecord = (who: RebootRequester) => ({ user: who.user ?? 'admin', ...(who.ip ? { ip: who.ip } : {}), ...(who.userAgent ? { userAgent: who.userAgent } : {}) });
+const requesterDetails = (who: RebootRequester) => ({ requestedBy: who.requestedBy, ...(who.cmdId ? { cmdId: who.cmdId } : {}), ...(who.actor ? { actor: who.actor } : {}) });
 
 export interface RebootDeps {
   send: () => Promise<unknown>; // the camera's Reboot command
@@ -85,7 +89,7 @@ export class CameraReboot {
     if (refused) return refused;
     this.sending = true;
     const serialBefore = this.d.serial();
-    const base = { action: 'camera-reboot', category: ['host'], type: ['change'], user: 'admin', ip: who.ip, userAgent: who.userAgent };
+    const base = { action: 'camera-reboot', category: ['host'], type: ['change'], ...requesterRecord(who) };
     let confirmed: boolean;
     try {
       await this.d.send();
@@ -95,7 +99,7 @@ export class CameraReboot {
       if (!sent) {
         this.sending = false;
         const code: CameraErrorCode = err instanceof CameraError ? err.code : 'camera_error';
-        this.d.audit.write({ ...base, outcome: 'failure', error: code, message: `Camera reboot requested; the request did not reach the camera (${code})`, details: { confirmed: false, requestedBy: who.requestedBy, phase: 'requested' } });
+        this.d.audit.write({ ...base, outcome: 'failure', error: code, message: `Camera reboot requested; the request did not reach the camera (${code})`, details: { confirmed: false, ...requesterDetails(who), phase: 'requested' } });
         return { status: 502, error: code, detail: (err as Error).message };
       }
       confirmed = false; // received, then the connection dropped: the camera is going down
@@ -108,7 +112,7 @@ export class CameraReboot {
     this.d.audit.write({
       ...base, outcome: confirmed ? 'success' : 'unknown',
       message: confirmed ? 'Camera reboot requested; the camera confirmed it' : 'Camera reboot requested; the camera dropped the connection before answering',
-      details: { confirmed, requestedBy: who.requestedBy, phase: 'requested' },
+      details: { confirmed, ...requesterDetails(who), phase: 'requested' },
     });
     logger.info({ confirmed }, 'camera_reboot_requested');
     this.watch(serialBefore);
@@ -127,9 +131,9 @@ export class CameraReboot {
     const requestedAt = this.now();
     const previous = this.current;
     let offAt: number | null = null;
-    const base = { action: 'camera-powercycle', category: ['host'], type: ['change'], user: 'admin', ip: who.ip, userAgent: who.userAgent };
+    const base = { action: 'camera-powercycle', category: ['host'], type: ['change'], ...requesterRecord(who) };
     const where = `${info.switch.host} port ${info.switch.port}`;
-    const details = { switch: { ...info.switch }, offSeconds: info.offSeconds, requestedBy: who.requestedBy, phase: 'requested' };
+    const details = { switch: { ...info.switch }, offSeconds: info.offSeconds, ...requesterDetails(who), phase: 'requested' };
     // The cut, on this class's clock (the cooldown and downSec count from it).
     const cut = () => {
       const at = this.now();

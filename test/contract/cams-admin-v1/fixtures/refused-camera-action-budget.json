@@ -1,0 +1,81 @@
+{
+  "$note": "six disruptive actions within the hour",
+  "schema": "command",
+  "$context": {
+    "now": 1791273600010,
+    "proxyId": "prx_0123456789ABCDEFGHJK",
+    "connId": "con_0123456789ABCDEFGHJK",
+    "serverKeys": [
+      "MCowBQYDK2VwAyEAgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q="
+    ],
+    "allow": [
+      "camera.action:camera-reboot"
+    ],
+    "paused": false,
+    "seen": [],
+    "journal": [
+      {
+        "cmdId": "cmd_00000000000000000000",
+        "command": "camera.action",
+        "at": 1791273540000,
+        "action": "restart"
+      },
+      {
+        "cmdId": "cmd_00000000000000000001",
+        "command": "camera.action",
+        "at": 1791273480000,
+        "action": "camera-reboot"
+      },
+      {
+        "cmdId": "cmd_00000000000000000002",
+        "command": "camera.action",
+        "at": 1791273420000,
+        "action": "camera-powercycle"
+      },
+      {
+        "cmdId": "cmd_00000000000000000003",
+        "command": "camera.action",
+        "at": 1791273360000,
+        "action": "camera-ftp-setup"
+      },
+      {
+        "cmdId": "cmd_00000000000000000004",
+        "command": "camera.action",
+        "at": 1791273300000,
+        "action": "camera-ntp-set"
+      },
+      {
+        "cmdId": "cmd_00000000000000000005",
+        "command": "camera.action",
+        "at": 1791273240000,
+        "action": "camera-cert-push"
+      }
+    ]
+  },
+  "$expect": {
+    "runtime": "rate_limited",
+    "strict": "valid",
+    "receiver": "proxy"
+  },
+  "message": {
+    "v": 1,
+    "type": "command",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "exp": 1791273660003,
+      "actor": "admin@example.org",
+      "command": "camera.action",
+      "args": {
+        "v": 1,
+        "camera": "cam1",
+        "action": "camera-reboot"
+      }
+    },
+    "sig": "nXdR9gd9z4spjAUuX1F3fk3KJE9EIz83ZYIbD1abXyYqvDvNE58Mpo4ZlYJtpRtqI8NsqT2xpa9T4TsYDWRbBQ=="
+  }
+}

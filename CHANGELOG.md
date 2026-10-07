@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Remote configuration from cams-admin (migration P3), **each command off unless allowed on this proxy's card**: `config.get`; `config.set` / `config.unset` with a dry run and a revision check (a local edit since cams-admin read wins: `conflict`); `config.rollback`; `camera.name.set`; `camera.action:<action>` per action; `proxy.restart`. Only a compiled list of settings may be set remotely (never addresses, ports, files, trust, users, cams-admin's own settings, storage, capture switches or health thresholds); retention periods and size caps only up, Google Vision limits only down. Disruptive entries (proxy restart, camera reboot, power-cycle, FTP/NTP/certificate setup) are grouped and warned on the card, at most 2 restarts and 6 disruptive actions an hour. Each change is audited (`config-change` by `cams-admin`), marked on the Settings page and listed on the card with **Undo** (also `cam-proxy admin-commands changes|undo`). A local settings edit reaches cams-admin within seconds. Entries ticked under the previous version (when these commands did nothing yet) need a fresh tick on the card. `camera-ftp-off` can't be allowed for cams-admin (it would stop clip intake). `overrides.json` is now written with fsync (a power cut can't leave it torn). docs/cams-admin.md.
+
 - Security: "Push now" (`camera-cert-push`) no longer returns the camera certificate's private key (or any certificate PEM) in its answer; it answers the outcome, the served fingerprint and the leaf's fingerprint, expiry, names and addresses.
 
 ## v2026.10.06.4

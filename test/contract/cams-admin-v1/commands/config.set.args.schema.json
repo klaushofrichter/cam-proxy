@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/commands/config.set.args.schema.json",
+  "title": "config.set args v1",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "dryRun": {
+      "type": "boolean"
+    },
+    "baseRevision": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "set": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 64,
+      "propertyNames": {
+        "pattern": "^[a-z][A-Za-z0-9]{0,31}(\\.[a-z0-9][A-Za-z0-9-]{0,31}){0,5}$"
+      },
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          {
+            "type": "string",
+            "maxLength": 512
+          }
+        ]
+      }
+    }
+  },
+  "required": [
+    "v",
+    "dryRun",
+    "baseRevision",
+    "set"
+  ]
+}

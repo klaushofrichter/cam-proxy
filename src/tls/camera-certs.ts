@@ -30,7 +30,7 @@ export interface TlsView {
   problems: string[];
 }
 // Who asked for an admin action (the audit record names them).
-export interface Requester { user: string; ip?: string; userAgent?: string; requestedBy?: string }
+export interface Requester { user: string; ip?: string; userAgent?: string; requestedBy?: string; cmdId?: string; actor?: string }
 export interface CertCamera { id: string; address: string; protocol: 'https' | 'http'; tlsName?: string }
 export interface CameraCertsDeps {
   dir: string; // <dataDir>/tls
@@ -256,7 +256,7 @@ export class CameraCerts {
       ...(who?.userAgent ? { userAgent: who.userAgent } : {}),
       ...(id ? { camera: id } : {}),
       message,
-      details: { ...details, ...(who?.requestedBy ? { requestedBy: who.requestedBy } : {}) },
+      details: { ...details, ...(who?.requestedBy ? { requestedBy: who.requestedBy } : {}), ...(who?.cmdId ? { cmdId: who.cmdId, actor: who.actor } : {}) },
     });
   }
 
@@ -408,7 +408,7 @@ export class CameraCerts {
     // Why nothing was pushed: for "Push now", an answer and an audit record.
     const skip = (detail: string, served: string | null = null): PushResult | null => {
       if (!manual) return null;
-      this.d.audit?.write({ action: 'camera-cert-push', category: ['configuration'], type: ['change'], outcome: 'failure', user: who?.user ?? 'admin', ...(who?.ip ? { ip: who.ip } : {}), ...(who?.userAgent ? { userAgent: who.userAgent } : {}), camera: cam.id, message: `Camera certificate push not done (${cam.id}): ${detail}`, details: { detail, ...(who?.requestedBy ? { requestedBy: who.requestedBy } : {}) } });
+      this.d.audit?.write({ action: 'camera-cert-push', category: ['configuration'], type: ['change'], outcome: 'failure', user: who?.user ?? 'admin', ...(who?.ip ? { ip: who.ip } : {}), ...(who?.userAgent ? { userAgent: who.userAgent } : {}), camera: cam.id, message: `Camera certificate push not done (${cam.id}): ${detail}`, details: { detail, ...(who?.requestedBy ? { requestedBy: who.requestedBy } : {}), ...(who?.cmdId ? { cmdId: who.cmdId, actor: who.actor } : {}) } });
       return { outcome: 'failed', served, detail, tookMs: 0 };
     };
     const known = (): boolean => ['site-ca', 'pinned'].includes(this.states.get(cam.id)?.mode ?? 'none');
@@ -519,7 +519,7 @@ export class CameraCerts {
       ...(who?.userAgent ? { userAgent: who.userAgent } : {}),
       camera: cam.id,
       message: `Camera certificate ${r.outcome} (${cam.id}, ${Math.round(r.tookMs / 1000)} s)${this.states.get(cam.id)?.mode === 'pinned' && r.outcome === 'refused' ? `: pinned to ${r.served}` : ''}`,
-      details: { served: r.served, ...(r.leaf ? { leaf: r.leaf.fingerprint, notAfter: r.leaf.notAfter } : {}), ...(r.detail ? { detail: r.detail } : {}), ...(who?.requestedBy ? { requestedBy: who.requestedBy } : {}) },
+      details: { served: r.served, ...(r.leaf ? { leaf: r.leaf.fingerprint, notAfter: r.leaf.notAfter } : {}), ...(r.detail ? { detail: r.detail } : {}), ...(who?.requestedBy ? { requestedBy: who.requestedBy } : {}), ...(who?.cmdId ? { cmdId: who.cmdId, actor: who.actor } : {}) },
     });
     return r;
   }
