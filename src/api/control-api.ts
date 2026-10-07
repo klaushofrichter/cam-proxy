@@ -8,7 +8,8 @@ import { cameraNameProblem } from '../camera/name-rules';
 import type { PowerCycleAnswer, RebootAnswer, RebootRequester, RebootState, TooSoon } from '../camera/reboot';
 import { PoeSwitchError, type PoeOnResult, type PoeSwitchStatus, type PortReading } from '../camera/poe-switch';
 import type { Config } from '../config/defaults';
-import { applyOverrides, ConfigError, getPath, needsProcessRestart, needsRestart, removeAllOverrides, removeOverride, resetTarget, settingPaths, type Loaded } from '../config/load';
+import { configChanges } from '../config/changes';
+import { applyOverrides, ConfigError, getPath, needsRestart, removeAllOverrides, removeOverride, resetTarget, settingPaths, type Loaded } from '../config/load';
 import { leafAt } from '../config/schema';
 import { cameraConfig, cameraIds } from '../config/cameras';
 import { FtpNotConfiguredError, type FtpTarget } from '../clips/camera-ftp';
@@ -454,16 +455,13 @@ export function controlApi(d: ControlDeps): express.Router {
   // A `config-change` record: the changed leaf settings, old → new. Secret
   // values are redacted by AuditLog by the setting's name. A refused change
   // (400) writes nothing.
-  const recordChanges = (req: express.Request, before: Config, all = false) => {
-    const after = d.loaded().config;
+  const recordChanges = (req: express.Request, before: Loaded, all = false) => {
     // `restart`: the change waits for a restart ('restart'), or for a new process ('process').
-    const changes = settingPaths(after)
-      .map((p) => ({ key: p, from: getPath(before, p), to: getPath(after, p), ...(needsProcessRestart(p) ? { restart: 'process' } : needsRestart(p) ? { restart: 'restart' } : {}) }))
-      .filter((c) => JSON.stringify(c.from) !== JSON.stringify(c.to));
+    const changes = configChanges(before, d.loaded()).map((c) => ({ key: c.path, from: c.from, to: c.to, ...(c.restart ? { restart: c.restart } : {}) }));
     if (changes.length) d.audit.write({ action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', user: actor(req), ...who(req), message: `${all ? 'Settings reset to defaults' : 'Settings changed'}: ${changes.map((c) => c.key).join(', ')}`, details: { changes, ...(all ? { reset: 'all' } : {}) } });
   };
   r.put('/config', (req, res) => {
-    const before = d.loaded().config;
+    const before = d.loaded();
     try {
       d.setLoaded(applyOverrides(d.loaded(), req.body ?? {}));
     } catch (err) {
@@ -474,7 +472,7 @@ export function controlApi(d: ControlDeps): express.Router {
   });
   // "Reset to defaults" (the Settings page): every override at once, one record.
   r.delete('/config', (req, res) => {
-    const before = d.loaded().config;
+    const before = d.loaded();
     try {
       d.setLoaded(removeAllOverrides(d.loaded()));
     } catch (err) {
@@ -484,7 +482,7 @@ export function controlApi(d: ControlDeps): express.Router {
     res.json(configView(d.loaded(), d.running()));
   });
   r.delete('/config/:path', (req, res) => {
-    const before = d.loaded().config;
+    const before = d.loaded();
     try {
       d.setLoaded(removeOverride(d.loaded(), req.params.path));
     } catch (err) {

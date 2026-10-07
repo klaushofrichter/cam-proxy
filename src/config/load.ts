@@ -276,6 +276,10 @@ export function loadConfig(env: NodeJS.ProcessEnv, opts: { cwd?: string; tokensO
   return build(env, file, fileSettings as Obj, overrides as Obj, baseDir, layer, { order: norm.order, legacy: norm.legacy, policy: policyBase, tokensOptional: !!opts.tokensOptional });
 }
 
+// overrides.json, atomically (mode 600).
+export function writeOverridesFile(file: string, overrides: object): void {
+  writeOverrides(file, overrides as Obj);
+}
 function writeOverrides(file: string, overrides: Obj): void {
   mkdirSync(dirname(file), { recursive: true });
   const tmp = `${file}.tmp-${process.pid}`;
@@ -284,6 +288,7 @@ function writeOverrides(file: string, overrides: Obj): void {
 }
 
 // The leaf paths an object sets ('sse.pingS'), e.g. a PUT body.
+export const leafPathsOf = (o: object): string[] => setPaths(o as Obj);
 function setPaths(o: Obj, prefix = ''): string[] {
   return Object.entries(o).flatMap(([k, v]) => {
     const p = prefix ? `${prefix}.${k}` : k;
@@ -310,11 +315,18 @@ function dropPath(overrides: Obj, path: string): Obj {
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
-// Adds overrides (validated like the file); nothing is written if the result
-// is invalid. A value equal to what Reset would restore (config.json's, else
-// the default) is not stored: it removes the override instead (Klaus
+// A change to overrides.json computed but not written (plan P3 Task 4): the
+// configuration it makes, the overrides to write, and the (translated) leaf
+// paths the request names. A dry run and a real write use the same plan.
+export interface Plan { next: Loaded; overrides: Record<string, unknown>; paths: string[] }
+
+const baseDirOf = (l: Loaded) => (l.files.config ? dirname(l.files.config) : process.cwd());
+
+// What applyOverrides does, without writing: throws ConfigError as it does.
+// A value equal to what Reset would restore (config.json's, else the
+// default) is not stored: it removes the override instead (Klaus
 // 2026-10-05, overrides that only repeated the default).
-export function applyOverrides(loaded: Loaded, given: object): Loaded {
+export function planOverrides(loaded: Loaded, given: object): Plan {
   // Legacy camera.* and ftp.user paths on one camera (Ruling P1-8).
   const patch = normalizeOverrides(given, loaded.order, loaded.addedCameras);
   takeCommandPolicy(patch, 'patch');
@@ -325,11 +337,12 @@ export function applyOverrides(loaded: Loaded, given: object): Loaded {
     if (getPath(patch, p) !== undefined) throw new ConfigError(`${p}: set in .env (${name})`);
   }
   let overrides = merge(loaded.overrides as Obj, patch as Obj);
-  const baseDir = loaded.files.config ? dirname(loaded.files.config) : process.cwd();
+  const baseDir = baseDirOf(loaded);
   const next = build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides, baseDir, loaded.envLayer, normOf(loaded));
   // The checks ran on the whole result above; a path is dropped only when the
   // configuration without it is valid and holds the same value.
-  for (const p of setPaths(patch as Obj)) {
+  const paths = setPaths(patch as Obj);
+  for (const p of paths) {
     const without = dropPath(overrides, p);
     try {
       if (same(getPath(build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, without, baseDir, loaded.envLayer, normOf(loaded)).config, p), getPath(next.config, p))) overrides = without;
@@ -338,8 +351,33 @@ export function applyOverrides(loaded: Loaded, given: object): Loaded {
     }
   }
   const result = overrides === next.overrides ? next : build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides, baseDir, loaded.envLayer, normOf(loaded));
-  writeOverrides(loaded.files.overrides, overrides);
-  return result;
+  return { next: result, overrides, paths };
+}
+
+// Several overrides removed at once, not written: leaf paths only (a whole
+// camera is removeOverride's). A path with no override is left as it is.
+export function planUnset(loaded: Loaded, paths: string[]): Plan {
+  const all = settingPaths(loaded.config);
+  const leaves = paths.map((x) => translatePath(x, loaded.order));
+  let overrides = loaded.overrides as Obj;
+  for (const p of leaves) {
+    if (!all.includes(p)) throw new ConfigError(`${p}: unknown setting`);
+    if (getPath(overrides, p) !== undefined) overrides = dropPath(overrides, p);
+  }
+  return { next: rebuildWith(loaded, overrides), overrides, paths: leaves };
+}
+
+// The configuration with these overrides (validated), not written.
+export function rebuildWith(loaded: Loaded, overrides: object): Loaded {
+  return build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides as Obj, baseDirOf(loaded), loaded.envLayer, normOf(loaded));
+}
+
+// Adds overrides (validated like the file); nothing is written if the result
+// is invalid (see planOverrides).
+export function applyOverrides(loaded: Loaded, given: object): Loaded {
+  const p = planOverrides(loaded, given);
+  writeOverrides(loaded.files.overrides, p.overrides);
+  return p.next;
 }
 
 // The configuration without one override, not written: what Reset goes back
