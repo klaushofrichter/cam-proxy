@@ -5,28 +5,45 @@ import { leafAt, CAMERA_ID } from '../config/schema';
 // a remote one must also be in the contract's remote-settable.json (the upper
 // bound; a test). Deny wins. Compiled in: no setting, file or command widens it.
 export const REMOTE: readonly string[] = [
-  'stills.enabled', 'stills.stream', 'stills.intervalS', 'stills.size', 'stills.quality', 'stills.maxGB',
+  'stills.stream', 'stills.intervalS', 'stills.size', 'stills.quality', 'stills.maxGB',
   'previews.tileSize', 'previews.grid', 'previews.quality', 'previews.maxGB',
-  'events.onvif.subscribeMin', 'events.onvif.pullTimeoutS', 'events.poll.enabled', 'events.poll.intervalS', 'events.poll.afterOnvifDownS', 'events.maxOpenMin',
+  'events.onvif.subscribeMin', 'events.onvif.pullTimeoutS', 'events.poll.intervalS', 'events.poll.afterOnvifDownS', 'events.maxOpenMin',
   'retention.stillsDays', 'retention.previewsDays', 'retention.clipsDays', 'retention.eventsDays', 'retention.auditDays', 'retention.streamLogDays', 'retention.intervalMin',
   'composition.concurrent', 'sse.maxClients', 'sse.queuePerClient', 'sse.pingS', 'recordings.cacheMB',
-  'health.diskPercent', 'health.tempC', 'host.stats',
-  'ftp.enabled', 'ftp.stream', 'ftp.stalledHours', 'ftp.maxGB',
-  'archive.enabled', 'archive.warnPercent',
-  'analytics.kinds.person', 'analytics.kinds.vehicle', 'analytics.kinds.pet',
-  'analytics.googleVision.enabled', 'analytics.googleVision.monthlyLimit', 'analytics.googleVision.dailyCap', 'analytics.googleVision.checksPerDay', 'analytics.googleVision.perCameraDailyCap',
-  'cameras.*.name', 'cameras.*.statusPollS', 'cameras.*.stills.enabled', 'cameras.*.stills.stream', 'cameras.*.stills.intervalS',
-  'cameras.*.ftp.enabled', 'cameras.*.ftp.stream',
-  'cameras.*.analytics.kinds.person', 'cameras.*.analytics.kinds.vehicle', 'cameras.*.analytics.kinds.pet', 'cameras.*.events.poll.enabled',
+  'host.stats',
+  'ftp.stream', 'ftp.stalledHours', 'ftp.maxGB',
+  'analytics.googleVision.monthlyLimit', 'analytics.googleVision.dailyCap', 'analytics.googleVision.checksPerDay', 'analytics.googleVision.perCameraDailyCap',
+  'cameras.*.name', 'cameras.*.statusPollS', 'cameras.*.stills.stream', 'cameras.*.stills.intervalS',
+  'cameras.*.ftp.stream',
 ];
+// Local only (coordinator rulings 2026-10-07: storage; I4: capture and feature
+// on/off switches, health thresholds): a person at the proxy decides them.
+// Denied like the trust paths; a refusal names the reason.
+const LOCAL_ONLY: Readonly<Record<string, string>> = {
+  storage: 'local only: a storage budget lowered remotely would make the proxy delete stills and clips',
+  'cameras.*.storage': 'local only: a storage share lowered remotely would make the proxy delete stills and clips',
+  'stills.enabled': 'local only: turns capture on or off',
+  'cameras.*.stills.enabled': 'local only: turns capture on or off',
+  'ftp.enabled': 'local only: turns clip intake on or off',
+  'cameras.*.ftp.enabled': 'local only: turns clip intake on or off',
+  'archive.enabled': 'local only: turns the Archive on or off',
+  'events.poll.enabled': 'local only: turns event polling on or off',
+  'cameras.*.events.poll.enabled': 'local only: turns event polling on or off',
+  'analytics.kinds': 'local only: turns analysis on or off',
+  'cameras.*.analytics.kinds': 'local only: turns analysis on or off',
+  'analytics.googleVision.enabled': 'local only: turns analysis on or off',
+  health: 'local only: a health threshold decides what the proxy reports as a problem',
+  'archive.warnPercent': 'local only: a health threshold decides what the proxy reports as a problem',
+};
 export const DENIED: readonly string[] = [
   'server', 'go2rtc', 'storage', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.publicHost', 'ftp.certFile', 'ftp.keyFile', 'tls', 'composition.font', 'ntp.server', 'poeSwitch', 'camsAdmin',
-  'cameras.*.id', 'cameras.*.host', 'cameras.*.protocol', 'cameras.*.tlsName', 'cameras.*.user', 'cameras.*.onvifPort', 'cameras.*.rtspPort', 'cameras.*.baichuanPort', 'cameras.*.poeSwitch', 'cameras.*.ftp.user', 'cameras.*.webUiUrl', 'cameras.*.storage',
+  'cameras.*.id', 'cameras.*.host', 'cameras.*.protocol', 'cameras.*.tlsName', 'cameras.*.user', 'cameras.*.onvifPort', 'cameras.*.rtspPort', 'cameras.*.baichuanPort', 'cameras.*.poeSwitch', 'cameras.*.ftp.user', 'cameras.*.webUiUrl',
+  ...Object.keys(LOCAL_ONLY),
 ];
 // R3-2: toward less spending, or toward keeping data longer (retention
 // periods, size caps). storage.* is denied outright (local only).
 export const NARROW: Readonly<Record<string, 'less' | 'more'>> = {
-  'analytics.googleVision.enabled': 'less', 'analytics.googleVision.monthlyLimit': 'less', 'analytics.googleVision.dailyCap': 'less',
+  'analytics.googleVision.monthlyLimit': 'less', 'analytics.googleVision.dailyCap': 'less',
   'analytics.googleVision.checksPerDay': 'less', 'analytics.googleVision.perCameraDailyCap': 'less',
   'retention.stillsDays': 'more', 'retention.previewsDays': 'more', 'retention.clipsDays': 'more', 'retention.eventsDays': 'more', 'retention.auditDays': 'more', 'retention.streamLogDays': 'more',
   'stills.maxGB': 'more', 'previews.maxGB': 'more', 'ftp.maxGB': 'more',
@@ -38,6 +55,13 @@ const UNSET_IS_UNLIMITED = new Set(['stills.maxGB', 'previews.maxGB', 'ftp.maxGB
 export const NARROW_REASON = { less: 'a remote change may only lower spending', more: 'a remote change may only keep data longer' } as const;
 const CAMERA_ID_RE = new RegExp(CAMERA_ID);
 const under = (p: string, x: string) => p === x || p.startsWith(`${x}.`);
+
+// Why a denied path is local only (a refusal's detail), or undefined.
+export function denyReason(path: string): string | undefined {
+  const pat = patternOf(path);
+  const hit = Object.keys(LOCAL_ONLY).filter((k) => under(pat, k)).sort((a, b) => b.length - a.length)[0];
+  return hit ? LOCAL_ONLY[hit] : undefined;
+}
 
 export type PathClass = 'remote' | 'denied' | 'unknown_camera' | 'not_a_setting';
 

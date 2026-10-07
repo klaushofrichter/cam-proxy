@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { leafPaths, SETTINGS } from '../src/config/schema';
-import { classify, DENIED, NARROW, narrowingOk, patternOf, REMOTE, settableView } from '../src/fleet/remote-settable';
+import { classify, DENIED, denyReason, NARROW, narrowingOk, patternOf, REMOTE, settableView } from '../src/fleet/remote-settable';
 import { CONTRACT } from './helpers/contract';
 
 const contract = JSON.parse(readFileSync(join(CONTRACT, 'remote-settable.json'), 'utf8')) as { remote: string[]; narrow: Record<string, string>; denied: string[] };
@@ -21,7 +21,9 @@ describe('the classification (R3-1)', () => {
   });
   it('the compiled remote list is a subset of the contract (the upper bound); narrow paths agree', () => {
     for (const r of REMOTE) expect(contract.remote, r).toContain(r);
-    expect(NARROW).toEqual(contract.narrow);
+    // Every narrow path the contract names that is remote here is narrow here, the same way.
+    for (const [p, d] of Object.entries(contract.narrow)) if (REMOTE.includes(p)) expect(NARROW[p], p).toBe(d);
+    for (const p of Object.keys(NARROW)) expect(contract.narrow[p], p).toBe(NARROW[p]);
   });
   it('M5: the deny list holds every trust, address, port, file and camsAdmin path', () => {
     for (const p of ['camsAdmin.url', 'camsAdmin.enabled', 'camsAdmin.keyFile', 'server.port', 'server.publicUrl', 'go2rtc.binary', 'ftp.port', 'ftp.publicHost', 'ftp.certFile', 'tls.site', 'tls.cameraSubnet', 'composition.font', 'ntp.server', 'poeSwitch.host', 'poeSwitch.model',
@@ -35,17 +37,31 @@ describe('the classification (R3-1)', () => {
     expect(classify('cameras', IDS)).toBe('not_a_setting');
     expect(classify('stills', IDS)).toBe('not_a_setting');
     expect(classify('nosuch.path', IDS)).toBe('not_a_setting');
-    expect(classify('cameras.cam-2.stills.enabled', IDS)).toBe('remote');
+    expect(classify('cameras.cam-2.stills.intervalS', IDS)).toBe('remote');
   });
   it('no remote path has a secret-looking name (settings never hold secrets)', () => {
     for (const r of REMOTE) expect(r).not.toMatch(/token|password|secret|key|credential/i);
   });
 });
 
+describe('local only (coordinator ruling I4)', () => {
+  it('capture and feature on/off switches and health thresholds are denied, with a reason', () => {
+    for (const p of ['stills.enabled', 'ftp.enabled', 'archive.enabled', 'events.poll.enabled', 'analytics.kinds.person', 'analytics.kinds.vehicle', 'analytics.kinds.pet', 'analytics.googleVision.enabled',
+      'health.diskPercent', 'health.tempC', 'archive.warnPercent',
+      'cameras.cam1.stills.enabled', 'cameras.cam1.ftp.enabled', 'cameras.cam1.analytics.kinds.person', 'cameras.cam1.events.poll.enabled']) {
+      expect(classify(p, IDS), p).toBe('denied');
+      expect(denyReason(p), p).toMatch(/^local only: /);
+    }
+    expect(denyReason('storage.maxPercent')).toMatch(/^local only: /);
+    expect(denyReason('cameras.cam1.host')).toBeUndefined();
+  });
+  it('every remote boolean is not an on/off switch of capture (none remain)', () => {
+    for (const p of REMOTE) expect(p, p).not.toMatch(/\.enabled$|^analytics\.kinds\.|\.kinds\./);
+  });
+});
+
 describe('narrow paths (R3-2)', () => {
   it('Google Vision only toward less spending; 0 = no cap for the caps', () => {
-    expect(narrowingOk('analytics.googleVision.enabled', true, false)).toBe(true);
-    expect(narrowingOk('analytics.googleVision.enabled', false, true)).toBe(false);
     expect(narrowingOk('analytics.googleVision.monthlyLimit', 1000, 100)).toBe(true);
     expect(narrowingOk('analytics.googleVision.monthlyLimit', 100, 1000)).toBe(false);
     expect(narrowingOk('analytics.googleVision.dailyCap', 50, 10)).toBe(true);
