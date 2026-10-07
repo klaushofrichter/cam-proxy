@@ -62,3 +62,22 @@ test('the Storage card: Disk used red from health.diskPercent', async ({ page, r
   }
   await expect(page.getByTestId('storage-disk')).not.toHaveClass(/bad/, { timeout: 15000 });
 });
+
+// Issue #199: the camera's SD card. cam-sim's profile has overwrite 0, as the
+// real camera had: an amber warning, the same in the Health card, the Camera
+// card's SD card line and GET /api/local/health.
+test('the SD card: the Health item and the Camera card line, with the overwrite warning', async ({ page, request }) => {
+  await page.goto('/#/status');
+  await expect(page.getByTestId('health-item-sd')).toBeVisible({ timeout: 15000 });
+  const h = (await (await request.get(`${base}/api/local/health`)).json()) as { camera: { sd: { overwrite: boolean | null } | null }; items: { id: string; text: string; problem: boolean; warning?: boolean }[] };
+  const item = h.items.find((i) => i.id === 'sd')!;
+  expect(h.camera.sd).not.toBeNull();
+  await expect(page.getByTestId('health-item-sd').locator('dd')).toHaveText(item.text);
+  await expect(page.getByTestId('camera-sd')).toContainText('GB free');
+  if (h.camera.sd!.overwrite === false) {
+    expect(item).toMatchObject({ text: 'Overwrite is off: the camera stops recording to its SD card when it is full', problem: false, warning: true });
+    await expect(page.getByTestId('health-item-sd')).toHaveAttribute('data-warning', 'true');
+    await expect(page.getByTestId('camera-sd')).toHaveClass(/warn/);
+    await expect(page.getByTestId('camera-sd')).toContainText('overwrite off');
+  }
+});

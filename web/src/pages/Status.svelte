@@ -8,7 +8,7 @@
   import { api, ApiError } from '../lib/api';
   import { refresh } from '../lib/state';
   import Icon from '../components/Icon.svelte';
-  import { cameraUploadClass, lastClipClass, diskText, healthHeadline, itemOf, loadText, memoryText, piCardTitle, problemOf, uptimeText } from '../lib/health';
+  import { cameraUploadClass, lastClipClass, diskText, healthHeadline, itemOf, loadText, memoryText, piCardTitle, problemOf, sdClass, sdText, uptimeText } from '../lib/health';
   import { archiveRows } from '../lib/archive';
   import { storageRows } from '../lib/camera-settings';
   import { cameraIds } from '../lib/cameras';
@@ -65,12 +65,12 @@
         <div class="card health" data-testid="card-health">
           <div class="health-head">
             <h3>Health</h3>
-            <span class="headline {health.ok ? 'ok' : 'bad'}" data-testid="health-headline">{#if !health.ok}<Icon name="alert" size={16} />{/if}{healthHeadline(health)}</span>
+            <span class="headline {health.ok ? (health.items.some((i) => i.warning) ? 'warn' : 'ok') : 'bad'}" data-testid="health-headline">{#if !health.ok}<Icon name="alert" size={16} />{/if}{healthHeadline(health)}</span>
           </div>
           <dl class="health-items">
             {#each health.items as it (it.id)}
-              <div class="hitem" class:problem={it.problem} data-testid="health-item-{it.id}" data-problem={it.problem}>
-                <dt>{it.label}</dt><dd class={it.problem ? 'bad' : ''}>{it.text}</dd>
+              <div class="hitem" class:problem={it.problem} class:warning={!it.problem && it.warning} data-testid="health-item-{it.id}" data-problem={it.problem} data-warning={!!it.warning}>
+                <dt>{it.label}</dt><dd class="{it.problem ? 'bad' : it.warning ? 'warn' : ''} wrap">{it.text}</dd>
               </div>
             {/each}
           </dl>
@@ -85,6 +85,7 @@
           <dt>Model</dt><dd>{#if cs.camera.model && cs.camera.webUiUrl}<a href={cs.camera.webUiUrl} target="_blank" rel="noopener noreferrer" title="The camera's own web page">{cs.camera.model}</a>{:else}{cs.camera.model ?? '—'}{/if}</dd>
           <dt>Firmware</dt><dd>{cs.camera.firmware ?? '—'}</dd>
           <dt>Clock offset</dt><dd>{cs.camera.clockOffsetMs === undefined ? '—' : `${(cs.camera.clockOffsetMs / 1000).toFixed(1)} s`}</dd>
+          {#if camHealth && camHealth.camera.sd !== undefined}<dt>SD card</dt><dd class={sdClass(camHealth)} data-testid="camera-sd" title={camHealth.items.find((i) => i.id === 'sd')?.text}>{sdText(camHealth.camera.sd)}</dd>{/if}
           {#if cs.camera.poeSwitch && cs.camera.poeSwitch.model !== 'none'}<dt>PoE switch</dt><dd data-testid="camera-poe">{poeLine(cs.camera.poeSwitch)}</dd>{/if}
           {#if cs.camera.error}<dt>Last error</dt><dd class="bad">{cs.camera.error}</dd>{/if}
         </dl>
@@ -240,6 +241,7 @@
   .health-items { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 4px 24px; }
   .hitem { display: grid; grid-template-columns: 1fr auto; gap: 12px; padding: 2px 0; }
   .hitem.problem dt { color: var(--danger); }
+  .hitem.warning dt { color: #f59e0b; }
   .wrap { white-space: normal; overflow-wrap: anywhere; }
   .small { font-size: 13px; margin: 0 0 8px; }
   .alerts { display: grid; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); justify-items: start; }

@@ -470,6 +470,24 @@ upload folder. While storage is paused, `STOR` answers 452.
   `camproxy_camera_ftp_enabled`, `camproxy_clips_stalled` and
   `camproxy_clips_last_received_timestamp_seconds`. On 2026-10-01 the
   upload had been off for 37 hours unnoticed.
+- **The camera's SD card (#199):** the proxy reads the card (`GetHddInfo`)
+  and the recording settings (`GetRecV20`) when the camera comes online and
+  every 5 minutes after, read-only (it never changes them). The health
+  summary has an `sd` item ("SD card") and `camera.sd` `{mounted, formatted,
+  capacityMB, freeMB, overwrite, recordingEnabled, checkedAt,
+  lastRecordingAt, stalled}` (null before the first read); the Status page's
+  Camera card has an "SD card" line. Overwrite off is a **warning** on its
+  own (amber, `warning: true` on the item, not counted in `problemCount`):
+  the camera stops recording to the card when it is full. **Problems:** no
+  card, not mounted or not formatted; recording off (`Rec.enable` 0); less
+  than 5 % free with overwrite off; and recording to the card that stopped:
+  the newest SD recording (main stream, looked for from an hour before the
+  newest FTP clip, else in the last 48 hours) ends more than an hour before
+  the newest FTP clip while the camera is online. `/metrics` has
+  `camproxy_camera_sd_free_bytes`, `camproxy_camera_sd_capacity_bytes` and
+  `camproxy_camera_sd_overwrite`. On 2026-10-06 cam1's card filled with
+  overwrite off and the camera stopped recording to it for 28 hours while
+  FTP went on.
 - **API:** `GET /api/cameras/{cam}/clips?from&to` (at most 31 days) lists
   `{id, start, end, stream, size, events, url, snapshotUrl}`;
   `/clips/{id}.mp4` serves the file with HTTP Range, `/clips/{id}.jpg` the
@@ -833,7 +851,7 @@ in the Reolink app, reaches stream clients once as a `camera` message.
 | `GET /control/audit` | the audit log as JSON lines: `limit`, `before`/`after` (cursors), `from`, `to`, `action` (one or more known actions, comma-separated; an unknown one answers 400), `outcome`; admin token, admin session or `CAMPROXY_AUDIT_TOKEN`; HEAD answers like GET without the body. See [docs/audit-log.md](docs/audit-log.md) |
 | `GET /control/audit/summary` | `{retentionDays, records}`: `retention.auditDays` and the records kept within it (all actions); same access as `GET /control/audit` |
 | `GET /health` | `{ok, version, startedAt}` (no auth): `startedAt` (ms) tells a new process apart |
-| `GET /api/local/health` | **local only, no key:** the health summary for a process on the same host (the e-paper display on the Pi). Answered only when the TCP connection comes from `127.0.0.1`, `::1` or `::ffff:127.0.0.1` (never by `X-Forwarded-For` or `server.trustProxy`); any other caller gets what an unknown `/api` route gets (401, or 404 with a token). `{schema: 1, generatedAt, version, startedAt, ok, problemCount, thresholds, platform: {pi, model, hostStats}, items: [{id, label, value, text, problem}], camera, stream, events, ftp, proxy, disk, host}`; no tokens, passwords or FTP settings. The schema: [the plan](docs/superpowers/plans/2026-10-03-health-summary.md#the-api-schema). The same object is `health` in `GET /control/status` |
+| `GET /api/local/health` | **local only, no key:** the health summary for a process on the same host (the e-paper display on the Pi). Answered only when the TCP connection comes from `127.0.0.1`, `::1` or `::ffff:127.0.0.1` (never by `X-Forwarded-For` or `server.trustProxy`); any other caller gets what an unknown `/api` route gets (401, or 404 with a token). `{schema: 1, generatedAt, version, startedAt, ok, problemCount, thresholds, platform: {pi, model, hostStats}, items: [{id, label, value, text, problem, warning?}], camera (with `sd`, the SD card, null before the first read), stream, events, ftp, proxy, disk, host}`; an item with `warning: true` (the SD card's overwrite off) needs a look but is no problem; no tokens, passwords or FTP settings. The schema: [the plan](docs/superpowers/plans/2026-10-03-health-summary.md#the-api-schema). The same object is `health` in `GET /control/status` |
 | `GET /control/log?limit` | recent log lines (info and above), redacted; default limit 100, buffer holds the last 500 |
 | `POST /control/login` / `logout`, `GET /control/session` | the admin UI's session cookie (`camproxy_session`, HttpOnly, SameSite=Strict, 12 h; 40 sign-ins per 15 min) |
 | `POST /control/login-links`, `GET /control/login-link?code=` | a one-time sign-in link (admin token; the code works once, for 60 s, and is kept only in memory): cams opens the UI with it for a signed-in user |
@@ -1044,6 +1062,9 @@ certificate through the cluster's `cam1-cert-push`.
 - `camproxy_camera_ftp_enabled` (1/0, no sample before the first read),
   `camproxy_clips_stalled`, `camproxy_clips_last_received_timestamp_seconds`
   (while `ftp.enabled`);
+- `camproxy_camera_sd_free_bytes`, `camproxy_camera_sd_capacity_bytes`,
+  `camproxy_camera_sd_overwrite` (1/0) per camera (no sample before the first
+  read of the SD card);
 - `camproxy_recording_downloads_total{cam,stream,result,priority}` (recordings over
   Baichuan; `result` `ok`, `offline`, `refused`, `auth`, `timeout`,
   `protocol` or `not_found`; `priority` `high` for a viewer, `low` for an
