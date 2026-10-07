@@ -49,9 +49,13 @@ export class ReplayGuard {
     }
   }
 
+  // Unusable files are read again on the next handshake (a chmod or a fix
+  // needs no restart); the warning is logged once until they are usable.
   private load(): void {
-    if (this.loaded) return;
+    if (this.loaded && !this.err) return;
     this.loaded = true;
+    const wasErr = this.err;
+    this.err = null;
     const main = this.read<FileShape>(this.d.file, (f) => Array.isArray(f.cmds));
     const mark = this.read<MarkShape>(this.markFile, () => true);
     if (main && main !== 'unusable') {
@@ -69,7 +73,7 @@ export class ReplayGuard {
     }
     if (main === 'unusable' || mark === 'unusable') {
       this.err = `${this.d.file} and replay-mark.json are unusable: no cams-admin handshake is answered until they are fixed or removed`;
-      this.d.log.warn({ file: this.d.file }, 'admin_replay_unusable');
+      if (!wasErr) this.d.log.warn({ file: this.d.file }, 'admin_replay_unusable');
     }
   }
 

@@ -4,7 +4,7 @@
 // Settings page with legacy paths, CAMERA_HOST / PI_ADDRESS, and a catalog
 // as release 8 left it (events, Vision usage).
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { Client } from 'basic-ftp';
@@ -299,6 +299,9 @@ describe('the Pi enrolled with cams-admin, after the P2 update (commands off)', 
       expect((await request(`http://127.0.0.1:${port}`).get('/api/cameras').set(auth(CLIENT_TOKEN))).status).toBe(200);
       // key.json, and replay.json (the signed challenge time's high-water mark).
       expect(readdirSync(join(d2, 'data', 'admin')).sort()).toEqual(['key.json', 'replay-mark.json', 'replay.json']);
+      // No fsGroup on the Pi: the files stay 600 in a 700 folder; the fsGroup tightening changes nothing here.
+      for (const n of ['key.json', 'replay-mark.json', 'replay.json']) expect(statSync(join(d2, 'data', 'admin', n)).mode & 0o777, n).toBe(0o600);
+      expect(statSync(join(d2, 'data', 'admin')).mode & 0o777).toBe(0o700);
     } finally {
       await q.stop();
       await fake.close();

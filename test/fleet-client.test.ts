@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { AdminClient, backoffDelay, type ClientLog, type Timing } from '../src/fleet/client';
+import { AdminClient, backoffDelay, type ClientDeps, type ClientLog, type Timing } from '../src/fleet/client';
 import { buildHealth } from '../src/health/summary';
 import type { HealthSummary } from '../src/health/summary';
 import { input } from './helpers/health-input';
@@ -21,7 +21,7 @@ const log: ClientLog = {
 };
 const named = (m: string) => logs.filter((l) => l.msg === m);
 let summary: HealthSummary;
-const make = (o: { timing?: Partial<Timing>; health?: () => Promise<HealthSummary>; now?: () => number; changeKey?: () => string } = {}) => {
+const make = (o: { timing?: Partial<Timing>; health?: () => Promise<HealthSummary>; now?: () => number; changeKey?: () => string; replay?: ClientDeps['replay'] } = {}) => {
   client = new AdminClient({
     keyFile: fake.keyFile(),
     health: o.health ?? (async () => summary),
@@ -31,6 +31,7 @@ const make = (o: { timing?: Partial<Timing>; health?: () => Promise<HealthSummar
     timing: { ...FAST, ...o.timing },
     now: o.now,
     changeKey: o.changeKey,
+    replay: o.replay,
     // A backoff long enough to be seen by a 25 ms poll (full jitter could make it 0).
     random: () => 0.9,
   });
@@ -339,6 +340,24 @@ describe('messages it does not serve', () => {
     c.start();
     await until(() => fake.connections >= 2, 3000);
     expect(c.view().state).not.toBe('connected');
+  });
+});
+
+describe('a local problem (replay files unusable)', () => {
+  it('retried within localRetryMs, whatever the backoff; connects once it is fixed', async () => {
+    let broken = true;
+    const replay = { problem: () => (broken ? 'data/admin/replay.json and replay-mark.json are unusable' : null), challenge: () => !broken };
+    // Without the local rule the 3rd failure would wait 0.9 · 8 s.
+    const c = make({ replay, timing: { backoffCapMs: 60_000, localRetryMs: 300 } });
+    c.start();
+    await until(() => fake.connections >= 3, 5000);
+    expect(c.view().lastError).toMatch(/replay\.json/);
+    expect(['backoff', 'connecting']).toContain(c.view().state);
+    expect(c.view().retryInMs ?? 0).toBeLessThanOrEqual(300);
+    broken = false; // the operator's fix
+    const t0 = Date.now();
+    await until(() => c.view().state === 'connected', 3000);
+    expect(Date.now() - t0).toBeLessThan(1500);
   });
 });
 

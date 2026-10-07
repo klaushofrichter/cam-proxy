@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import request from 'supertest';
@@ -9,6 +9,9 @@ import { jcs } from '../src/fleet/jcs';
 import { CONFIG_SCHEMA, configJsonSchema } from '../src/config/schema';
 import { ALLOW_ENTRIES } from '../src/fleet/policy';
 import { writeKeyFile } from '../src/fleet/keyfile';
+import { privateFileHooks } from '../src/fleet/private-file';
+import { DEFAULT_RECHECK_MS } from '../src/fleet/service';
+import { DEFAULT_TIMING } from '../src/fleet/client';
 import type { Proxy } from '../src/proxy';
 import { startFakeAdmin, type FakeAdmin } from './helpers/fake-admin';
 import { startMultiProxy, startSims, type Sim } from './helpers/multi';
@@ -119,6 +122,9 @@ describe('the wired client (four cameras, every secret set)', () => {
     const ftpPort = await freePort();
     const passive = await freePort();
     writeKeyFile(join(dir, 'data', 'admin', 'key.json'), key);
+    // As kubelet leaves the volume under fsGroup: files 660, folders g+rws.
+    chmodSync(join(dir, 'data', 'admin', 'key.json'), 0o660);
+    chmodSync(join(dir, 'data', 'admin'), 0o2770);
     const r = await startMultiProxy(sims, {
       dir,
       extra: [{ id: 'cam9', host: '' }],
@@ -132,7 +138,7 @@ describe('the wired client (four cameras, every secret set)', () => {
         // A site CA, so the heartbeat's tls block (site, CA fingerprint) is sent too.
         tls: { site: 'garage', cameraSubnet: '127.0.0.0/16', proxyAddresses: '127.0.0.1', cameraCerts: false },
       },
-      proxy: { camsAdmin: { timing: { minIntervalS: 0.2, jitterS: 0, backoffCapMs: 300, closeGraceMs: 200 } } },
+      proxy: { camsAdmin: { timing: { minIntervalS: 0.2, jitterS: 0, backoffCapMs: 300, closeGraceMs: 200 }, recheckMs: 300 } },
     });
     proxy = r.proxy;
     base = r.base;
@@ -152,6 +158,12 @@ describe('the wired client (four cameras, every secret set)', () => {
     const body = hb.body as { summary: { cameras: { camera: { id: string } }[]; schema: number }; proxy: { configSchema: number; publicUrl: string | null } };
     expect(body.summary.cameras.map((c) => c.camera.id)).toEqual(local.cameras.map((c) => c.camera.id));
     expect(body.proxy).toMatchObject({ configSchema: CONFIG_SCHEMA, publicUrl: 'https://proxy.example', tls: { site: 'garage', caFingerprint: [expect.stringMatching(/^SHA256:[0-9A-F]{64}$/)] } });
+    expect(proxy.camsAdmin.view().state).toBe('connected');
+  });
+
+  it('started with key.json 660 in a g+rws folder (the cluster under fsGroup): tightened to 600 / 700 and used', () => {
+    expect(statSync(join(dir, 'data', 'admin', 'key.json')).mode & 0o777).toBe(0o600);
+    expect(statSync(join(dir, 'data', 'admin')).mode & 0o077).toBe(0);
     expect(proxy.camsAdmin.view().state).toBe('connected');
   });
 
@@ -199,21 +211,53 @@ describe('the wired client (four cameras, every secret set)', () => {
     await until(() => proxy.camsAdmin.view().state === 'connected', 10_000);
   });
 
-  it('a key file others can read: key-unsafe, never used', async () => {
-    const { chmodSync } = await import('fs');
+  it('key.json made 660 again (a pod restart under fsGroup): tightened on the next read, still used', async () => {
+    const file = join(dir, 'data', 'admin', 'key.json');
+    chmodSync(file, 0o660);
+    await proxy.camsAdmin.reload();
+    await until(() => proxy.camsAdmin.view().state === 'connected', 10_000);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+  });
+
+  it('a key file left loose (the chmod does not take): key-unsafe, never used; a manual chmod 600 is picked up without a restart', async () => {
+    const file = join(dir, 'data', 'admin', 'key.json');
     const n = fake.connections;
-    chmodSync(join(dir, 'data', 'admin', 'key.json'), 0o644);
+    privateFileHooks.fchmod = () => {};
+    chmodSync(file, 0o644);
     try {
-      proxy.camsAdmin.reload();
+      void proxy.camsAdmin.reload();
       await until(() => proxy.camsAdmin.view().state === 'key-unsafe');
-      await new Promise((r) => setTimeout(r, 300));
+      await new Promise((r) => setTimeout(r, 700)); // two rechecks: still refused, never used
+      expect(proxy.camsAdmin.view().state).toBe('key-unsafe');
       expect(fake.connections).toBe(n);
-      expect(proxy.camsAdmin.view().lastError).toMatch(/read by others/);
+      expect(proxy.camsAdmin.view().lastError).toMatch(/read by others.*could not be set to 600/);
+      chmodSync(file, 0o600); // the operator's fix; no reload, no settings change
+      await until(() => proxy.camsAdmin.view().state === 'connected', 10_000);
     } finally {
-      chmodSync(join(dir, 'data', 'admin', 'key.json'), 0o600);
-      proxy.camsAdmin.reload();
+      delete privateFileHooks.fchmod;
+      chmodSync(file, 0o600);
+    }
+  });
+
+  it("another user's key file: key-unsafe, never used; picked up again once it is fixed, without a restart", async () => {
+    const n = fake.connections;
+    privateFileHooks.fstat = () => ({ mode: 0o100640, uid: (process.getuid?.() ?? 0) + 1 });
+    try {
+      void proxy.camsAdmin.reload();
+      await until(() => proxy.camsAdmin.view().state === 'key-unsafe');
+      await new Promise((r) => setTimeout(r, 400));
+      expect(fake.connections).toBe(n);
+      expect(proxy.camsAdmin.view().lastError).toMatch(/another user/);
+    } finally {
+      delete privateFileHooks.fstat; // the chown
     }
     await until(() => proxy.camsAdmin.view().state === 'connected', 10_000);
+  });
+
+  it('a local problem is checked again within 60 s by default (not only on the 15 min rejected interval)', () => {
+    expect(DEFAULT_RECHECK_MS).toBeLessThanOrEqual(60_000);
+    expect(DEFAULT_TIMING.localRetryMs).toBeLessThanOrEqual(60_000);
+    expect(DEFAULT_TIMING.localRetryMs).toBeLessThan(DEFAULT_TIMING.rejectedRetryMs);
   });
 
   it('the camsAdmin metric names the state', async () => {
