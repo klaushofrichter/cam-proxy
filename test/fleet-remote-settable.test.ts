@@ -22,6 +22,10 @@ describe('the classification (R3-1)', () => {
   it('this version lets cams-admin set exactly the contract\'s remote list', () => {
     expect([...REMOTE].sort()).toEqual([...contract.remote].sort());
   });
+  it('the deny list names each prefix once, and every prefix the contract denies', () => {
+    expect(new Set(DENIED).size).toBe(DENIED.length);
+    expect([...DENIED].sort()).toEqual([...contract.denied].sort());
+  });
   it('the compiled remote list is a subset of the contract (the upper bound); narrow paths agree', () => {
     for (const r of REMOTE) expect(contract.remote, r).toContain(r);
     // Every narrow path the contract names that is remote here is narrow here, the same way.

@@ -269,6 +269,19 @@ describe('the Pi: no cams-admin', () => {
     expect((await request(base).get('/api/cameras').set(auth(CLIENT_TOKEN))).status).toBe(200);
     expect(existsSync(join(dir, 'data', 'admin'))).toBe(false);
   });
+  it('migration P3: no change is marked as cams-admin\'s, none listed; a local settings save writes no backup and no data/admin', async () => {
+    const before = (await request(base).get('/control/config').set(auth(ADMIN_TOKEN))).body as Record<string, { by?: unknown }>;
+    expect(Object.values(before).some((e) => e.by)).toBe(false);
+    expect((await request(base).get('/control/admin/changes').set(auth(ADMIN_TOKEN))).body).toEqual({ items: [] });
+    await request(base).put('/control/config').set(auth(ADMIN_TOKEN)).send({ sse: { maxClients: 33 } }).expect(200);
+    const after = (await request(base).get('/control/config').set(auth(ADMIN_TOKEN))).body as Record<string, { by?: unknown; value: unknown }>;
+    expect(after['sse.maxClients']).toMatchObject({ value: 33 });
+    expect(after['sse.maxClients'].by).toBeUndefined();
+    expect(existsSync(join(dir, 'data', 'admin'))).toBe(false);
+    // Every P3 allow entry is off; nothing that ships allows one.
+    expect((await request(base).get('/control/admin/commands').set(auth(ADMIN_TOKEN))).body.allow).toEqual([]);
+    await request(base).delete('/control/config/sse.maxClients').set(auth(ADMIN_TOKEN)).expect(200);
+  });
 });
 
 // The Pi as it runs now: enrolled with cams-admin (camsAdmin.url in
@@ -296,6 +309,14 @@ describe('the Pi enrolled with cams-admin, after the P2 update (commands off)', 
       const { cmdId } = fake.sendCommand('tokens.apply', { v: 1, revision: 1, tokens: [] });
       await until(() => fake.results(cmdId).length === 1);
       expect(fake.results(cmdId)[0].msg.body).toMatchObject({ phase: 'done', status: 'refused', code: 'not_allowed' });
+      // After the P3 update: every P3 command refused too, nothing changed.
+      const rev = (fake.heartbeats().at(-1)!.msg.body as { proxy: { configRevision: string } }).proxy.configRevision;
+      for (const [c, a] of [['config.get', { v: 1 }], ['config.set', { v: 1, dryRun: false, baseRevision: rev, set: { 'sse.pingS': 7 } }], ['camera.action', { v: 1, camera: 'cam1', action: 'camera-reboot' }], ['camera.name.set', { v: 1, camera: 'cam1', name: 'x' }], ['proxy.restart', { v: 1 }]] as const) {
+        const r = fake.sendCommand(c, a as Record<string, unknown>);
+        await until(() => fake.results(r.cmdId).length === 1);
+        expect(fake.results(r.cmdId)[0].msg.body, c).toMatchObject({ phase: 'done', status: 'refused', code: 'not_allowed' });
+      }
+      expect(q.running.sse.pingS).toBe(15);
       expect((await request(`http://127.0.0.1:${port}`).get('/api/cameras').set(auth(CLIENT_TOKEN))).status).toBe(200);
       // key.json, and replay.json (the signed challenge time's high-water mark).
       expect(readdirSync(join(d2, 'data', 'admin')).sort()).toEqual(['key.json', 'replay-mark.json', 'replay.json']);

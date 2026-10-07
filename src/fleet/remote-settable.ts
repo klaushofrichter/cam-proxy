@@ -29,19 +29,19 @@ const LOCAL_ONLY: Readonly<Record<string, string>> = {
   'archive.enabled': 'local only: turns the Archive on or off',
   'events.poll.enabled': 'local only: turns event polling on or off',
   'cameras.*.events.poll.enabled': 'local only: turns event polling on or off',
-  'analytics.kinds': 'local only: turns analysis on or off',
-  'cameras.*.analytics.kinds': 'local only: turns analysis on or off',
+  ...Object.fromEntries(['person', 'vehicle', 'pet'].flatMap((k) => [[`analytics.kinds.${k}`, 'local only: turns analysis on or off'], [`cameras.*.analytics.kinds.${k}`, 'local only: turns analysis on or off']])),
   'analytics.googleVision.enabled': 'local only: turns analysis on or off',
-  health: 'local only: a health threshold decides what the proxy reports as a problem',
+  'health.diskPercent': 'local only: a health threshold decides what the proxy reports as a problem',
+  'health.tempC': 'local only: a health threshold decides what the proxy reports as a problem',
   'host.stats': 'local only: turns reading the host figures on or off',
   'ftp.stalledHours': 'local only: a health threshold decides what the proxy reports as a problem',
   'archive.warnPercent': 'local only: a health threshold decides what the proxy reports as a problem',
 };
-export const DENIED: readonly string[] = [
+export const DENIED: readonly string[] = [...new Set([
   'server', 'go2rtc', 'storage', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.publicHost', 'ftp.certFile', 'ftp.keyFile', 'tls', 'composition.font', 'ntp.server', 'poeSwitch', 'camsAdmin',
   'cameras.*.id', 'cameras.*.host', 'cameras.*.protocol', 'cameras.*.tlsName', 'cameras.*.user', 'cameras.*.onvifPort', 'cameras.*.rtspPort', 'cameras.*.baichuanPort', 'cameras.*.poeSwitch', 'cameras.*.ftp.user', 'cameras.*.webUiUrl',
   ...Object.keys(LOCAL_ONLY),
-];
+])];
 // R3-2: toward less spending, or toward keeping data longer (retention
 // periods, size caps). storage.* is denied outright (local only).
 export const NARROW: Readonly<Record<string, 'less' | 'more'>> = {
