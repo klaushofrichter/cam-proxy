@@ -162,13 +162,21 @@ describe('a replayed session through the proxy', () => {
     expect((await request(p.base).get('/api/cameras').set(auth(t))).status).toBe(401);
   });
   it('a recorded challenge older than the newest one minus the slack: refused, no hello', async () => {
+    // Any challenge recorded so far is the replay; the fresh ones from here on
+    // are signed 60 s ahead (cams-admin's clock), so the recorded one is older
+    // than the newest minus the 1.5 s slack without waiting for time to pass.
     const old = fake.connections;
-    await new Promise((r) => setTimeout(r, 2000));
+    fake.serverTimeOffsetMs = 60_000;
     await reconnect();
     await until(() => p.proxy.camsAdmin.view().state === 'connected', 10_000);
+    const n = fake.replays.length;
     await reconnect(old);
-    const replayed = fake.connections;
-    await new Promise((r) => setTimeout(r, 1000));
+    // The replay connection itself, not the latest one: after refusing it the
+    // proxy reconnects on its own (backoff 0.2 s), and that one gets a hello.
+    await until(() => fake.replays.length > n, 10_000);
+    const replayed = fake.replays[n];
+    // Refused: the proxy closes it without a hello.
+    await until(() => fake.closedConns.has(replayed), 10_000);
     expect(fake.received.filter((r) => r.conn === replayed && r.msg.type === 'hello')).toHaveLength(0);
     await until(() => /stale challenge/.test(p.proxy.camsAdmin.view().lastError ?? ''), 10_000);
   });

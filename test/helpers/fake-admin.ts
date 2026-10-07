@@ -50,6 +50,12 @@ export class FakeAdmin {
   // A MITM replay (security review): everything a past connection sent, as
   // sent, on the next connection: its challenge first, the rest after the hello.
   replayConn: number | null = null;
+  // The connections that were such replays, and every connection that has closed.
+  readonly replays: number[] = [];
+  readonly closedConns = new Set<number>();
+  // Added to the signed serverTime of fresh challenges: cams-admin's clock
+  // ahead, so a recorded challenge is stale without waiting for real time to pass.
+  serverTimeOffsetMs = 0;
   readonly outbound = new Map<number, string[]>();
   // P2: the channel of each socket (after its hello).
   private chan = new Map<WebSocket, { conn: number; connId: string; proxyId: string | null }>();
@@ -171,7 +177,10 @@ export class FakeAdmin {
   private onSocket(ws: WebSocket): void {
     const conn = ++this.connections;
     this.sockets.add(ws);
-    ws.on('close', () => this.sockets.delete(ws));
+    ws.on('close', () => {
+      this.sockets.delete(ws);
+      this.closedConns.add(conn);
+    });
     ws.on('error', () => undefined);
     const mode = this.mode;
     if (mode === 'silent') {
@@ -189,6 +198,7 @@ export class FakeAdmin {
     if (this.replayConn !== null) {
       const texts = [...(this.outbound.get(this.replayConn) ?? [])];
       this.replayConn = null;
+      this.replays.push(conn);
       ws.send(texts[0]);
       ws.once('message', (data) => {
         this.received.push({ conn, msg: JSON.parse(String(data)) as Envelope });
@@ -209,7 +219,7 @@ export class FakeAdmin {
     this.allConnIds.push(connId);
     ws.on('close', () => this.chan.delete(ws));
     const nonce = Buffer.from(Array.from({ length: 32 }, () => Math.floor(Math.random() * 256))).toString('base64url');
-    const serverTime = Date.now();
+    const serverTime = Date.now() + this.serverTimeOffsetMs;
     const signer = mode === 'bad-sig' ? vectors.keys.other.privateKey : this.server.privateKey;
     this.sendTo(ws, 'challenge', { connId, nonce, serverTime, serverKeyId: 'SHA256:FAKE' }, { sig: sign(signer, signedText.challenge(connId, nonce, serverTime)) });
     ws.on('message', (data) => {
