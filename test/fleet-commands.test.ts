@@ -36,6 +36,8 @@ const readdir = (d: string) => readdirSync(d).sort();
 function runnerFixture(o: { allow?: string[]; handlers?: Record<string, (args: unknown) => Done | Promise<Done>>; now?: () => number; localDigests?: Buffer[]; env?: NodeJS.ProcessEnv } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'runner-'));
   const policy = new CommandPolicy({ base: () => ({ allow: o.allow ?? ['tokens.apply'], paused: false }), file: join(dir, 'admin', 'policy.json'), env: () => readEnvLayer(o.env ?? {}), log: quiet });
+  // P3 entries count only with local consent (review I3): the allow-list as the card writes it.
+  if (o.allow?.some((e) => !e.startsWith('tokens.'))) policy.setAllow(o.allow, 'local');
   const journal = new Journal(join(dir, 'admin', 'commands.json'));
   const tokens = new TokenStore({ file: join(dir, 'admin', 'tokens.json'), localDigests: () => o.localDigests ?? [] });
   const audit: Record<string, any>[] = [];
@@ -73,6 +75,13 @@ describe('the runner', () => {
     await new Promise((r) => setImmediate(r));
     expect(order.filter((x) => x === 'after')).toHaveLength(1);
     expect(order.at(-1)).toBe('result:done');
+  });
+  it('M1: a camera action that throws is journaled with its action (the disruptive budget counts it)', async () => {
+    const f = runnerFixture({ allow: ['camera.action:camera-cert-push'], handlers: { 'camera.action': () => { throw new Error('boom'); } } });
+    const c = f.conn();
+    const m = f.command('camera.action', { v: 1, camera: 'cam1', action: 'camera-cert-push' }, c);
+    await f.runner.onCommand(m, c, f.send);
+    expect(f.journal.get((m.body as { cmdId: string }).cmdId)).toMatchObject({ status: 'failed', code: 'internal', action: 'camera-cert-push' });
   });
   it('an after hook that throws is logged, never breaks the runner', async () => {
     const warned: string[] = [];

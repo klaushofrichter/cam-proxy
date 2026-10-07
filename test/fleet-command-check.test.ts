@@ -207,6 +207,15 @@ describe('P3: entries, args and budgets', () => {
     expect(kind('camera.action', { v: 1, camera: 'cam1', action: 'restart-proxy' }, c3(allowAll))).toBe('not_allowed');
     expect(kind('camera.action', { v: 1, camera: 'cam1', action: 'frobnicate' }, c3(allowAll))).toBe('invalid_args');
   });
+  it('M5: camera-ftp-off is never remote (it would stop clip intake): not_allowed, not an allow entry', () => {
+    expect(ALLOW_ENTRIES).not.toContain('camera.action:camera-ftp-off');
+    expect(kind('camera.action', { v: 1, camera: 'cam1', action: 'camera-ftp-off' }, c3([...allowAll, 'camera.action:camera-ftp-off']))).toBe('not_allowed');
+  });
+  it('M2: the actor loses control, bidi and format characters before anything prints or audits it', () => {
+    const d = checkCommand(cmd((b) => { b.command = 'config.get'; b.args = { v: 1 }; b.actor = 'ops\u001b]52;c;QUJD\u0007\u202e@example.org\u0085x'; }), c3(['config.get']));
+    expect(d.kind).toBe('run');
+    expect((d as { cmd: { actor: string } }).cmd.actor).toBe('ops ]52;c;QUJD  @example.org x');
+  });
   it('camera null only for retention-run; retention-run with a camera is invalid; input only for inventory', () => {
     expect(kind('camera.action', { v: 1, camera: null, action: 'camera-reboot' }, c3(allowAll))).toBe('invalid_args');
     expect(kind('camera.action', { v: 1, camera: null, action: 'retention-run' }, c3(allowAll))).toBe('run');
@@ -250,6 +259,7 @@ describe('P3: entries, args and budgets', () => {
     // CAMERA_NAME_PATTERN (contract, security review M3): no C1, bidi, separator or zero-width characters.
     for (const bad of ['a\u202eb', 'a\u2066b', 'a\u200bb', 'a\u2028b', 'a\u0085b', 'a\ufeffb']) expect(kind('camera.name.set', { v: 1, camera: 'cam1', name: bad }, c3(['camera.name.set'])), JSON.stringify(bad)).toBe('invalid_args');
     expect(kind('camera.name.set', { v: 1, camera: 'cam1', name: 'Garten Süd' }, c3(['camera.name.set']))).toBe('run');
+    for (const bad of ['a\u061Cb', 'a\u{E0041}b', 'a\uD800b', 'a\u00ADb', 'a\u180Eb']) expect(kind('camera.name.set', { v: 1, camera: 'cam1', name: bad }, c3(['camera.name.set'])), JSON.stringify(bad)).toBe('invalid_args');
   });
   it('step 9: config.set/unset/rollback share 6 a minute (dry runs count); camera.action 12, camera.name.set 6', () => {
     const limits = new CommandLimits(() => NOW);

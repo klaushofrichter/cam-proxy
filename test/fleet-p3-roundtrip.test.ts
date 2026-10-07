@@ -35,7 +35,7 @@ beforeAll(async () => {
   fake.welcomeHeartbeatS = 1;
   const dir = mkdtempSync(join(tmpdir(), 'camproxy-p3-rt-'));
   writeKeyFile(join(dir, 'data', 'admin', 'key.json'), fake.keyFile());
-  writePrivateJson(join(dir, 'data', 'admin', 'policy.json'), { v: 1, allow: ['config.get', 'config.set', 'config.rollback', 'camera.name.set', 'camera.action:camera-ntp-set'], changedAt: 1, changedBy: 'local' });
+  writePrivateJson(join(dir, 'data', 'admin', 'policy.json'), { v: 1, allow: ['config.get', 'config.set', 'config.rollback', 'camera.name.set', 'camera.action:camera-ntp-set'], consent: 3, changedAt: 1, changedBy: 'local' });
   p = await startProxy(sim, { dir, settings: { camsAdmin: { url: fake.url }, ntp: { server: '192.0.2.123' } }, proxy: { camsAdmin: { timing: { minIntervalS: 0.2, jitterS: 0, backoffCapMs: 300, closeGraceMs: 200 } } } });
   await until(() => fake.open() === 1 && p.proxy.cameras.first().status.state().online, 20_000);
 }, 60_000);

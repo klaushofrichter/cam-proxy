@@ -23,7 +23,7 @@ describe('P3 through the proxy', () => {
   let fake: FakeAdmin;
   let p: Awaited<ReturnType<typeof startProxy>>;
   const exit = vi.fn();
-  const setPolicy = (o: Record<string, unknown>) => writePrivateJson(join(p.dir, 'data', 'admin', 'policy.json'), { v: 1, changedAt: Date.now(), changedBy: 'local', ...o });
+  const setPolicy = (o: Record<string, unknown>) => writePrivateJson(join(p.dir, 'data', 'admin', 'policy.json'), { v: 1, changedAt: Date.now(), changedBy: 'local', consent: 3, ...o });
   const done = async (command: string, args: Record<string, unknown>) => {
     const { cmdId } = fake.sendCommand(command, args);
     await until(() => fake.results(cmdId).some((r) => bodyOf(r).phase === 'done'), 15_000);

@@ -36,6 +36,10 @@ beforeAll(async () => {
   writePrivateJson(join(data, 'admin', `overrides.bak-${CMD(2)}.json`), backup(2, [{ path: 'sse.maxClients', before: { set: false }, after: { set: true, value: 9 } }]));
   writePrivateJson(join(data, 'admin', 'tokens.json'), { v: 1, revision: 1, blocked: [], tokens: [{ id: `tok_${'1'.repeat(20)}`, kind: 'admin', hash: hashOf(MANAGED_ADMIN), label: 'cams cluster', retireAt: null }] });
   writeFileSync(join(data, 'overrides.json'), JSON.stringify({ sse: { pingS: 7, maxClients: 9 } }));
+  // A P2 policy.json that listed P3 entries (they were 'not in this version' then).
+  writePrivateJson(join(data, 'admin', 'policy.json'), { v: 1, allow: ['tokens.apply', 'config.set', 'proxy.restart'], changedAt: 1, changedBy: 'local' });
+  // A backup whose actor carries a terminal escape (the CLI must not pass it on).
+  writePrivateJson(join(data, 'admin', `overrides.bak-${CMD(3)}.json`), { ...backup(3, [{ path: 'sse.queuePerClient', before: { set: false }, after: { set: false } }], 1_791_000_000_000), actor: 'evil\u001b]52;c;QUJD\u0007@example.org' });
   p = await startProxy(sim, { dir });
 }, 30_000);
 afterAll(async () => {
@@ -46,7 +50,7 @@ afterAll(async () => {
 describe('cams-admin changes on the proxy', () => {
   it('GET /control/admin/changes: newest first, the paths with from/to, never more', async () => {
     const r = await request(p.base).get('/control/admin/changes').set(admin).expect(200);
-    expect(r.body.items).toEqual([
+    expect(r.body.items.slice(0, 2)).toEqual([
       { cmdId: CMD(2), command: 'config.set', actor: 'admin@example.org', at: 1_791_000_000_002, paths: [{ path: 'sse.maxClients', to: 9 }], rolledBack: null },
       { cmdId: CMD(1), command: 'config.set', actor: 'admin@example.org', at: 1_791_000_000_001, paths: [{ path: 'sse.pingS', to: 7 }], rolledBack: null },
     ]);
@@ -66,7 +70,9 @@ describe('cams-admin changes on the proxy', () => {
     expect(r.groups.camera).toContain('camera.name.set');
     expect(r.groups.camera).not.toContain('camera.action:camera-reboot');
     for (const e of r.groups.disruptive) expect(r.known.find((k: { entry: string }) => k.entry === e).text, e).toMatch(/^DISRUPTIVE: /);
-    expect(r.allow).toEqual([]);
+    expect(r.allow).toEqual(['tokens.apply']);
+    // I3: the P3 entries a P2 version stored wait for a fresh local tick.
+    expect(r.unconfirmed).toEqual(['config.set', 'proxy.restart']);
   });
   it('Undo: a managed admin token is refused (403); a bad id is 400, an unknown one 404', async () => {
     expect((await request(p.base).post(`/control/admin/changes/${CMD(1)}/undo`).set(auth(MANAGED_ADMIN))).status).toBe(403);
@@ -110,6 +116,13 @@ describe('the CLI', () => {
     expect(r.out).toMatch(/undone/);
     expect(r.out).not.toMatch(/\b9\b.*sse|sse\.maxClients.*\b9\b/);
     expect(r.out + r.err).not.toContain(ADMIN_TOKEN);
+    expect(r.out).not.toMatch(/\u001b|\u0007/);
+    expect(r.out).toContain('evil ]52;c;QUJD @example.org');
+  });
+  it('admin-commands status: the entries waiting for a fresh confirmation (I3)', async () => {
+    const r = await run(['admin-commands', 'status'], p.base);
+    expect(r.out).toMatch(/allowed: tokens\.apply/);
+    expect(r.out).toMatch(/needs re-confirming \(allowed before this version\): config\.set, proxy\.restart/);
   });
   it('admin-commands undo <cmdId>: through the running proxy; a conflict says which paths', async () => {
     const r = await run(['admin-commands', 'undo', CMD(2)], p.base);

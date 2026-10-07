@@ -162,11 +162,11 @@ export async function runAdminCli(argv: string[], io: CliIo): Promise<number> {
 // proxy running they call its routes (audited there); stopped, they write
 // data/admin/policy.json or tokens.json here and audit it.
 type Loaded = ReturnType<typeof loadConfig>;
-interface PolicyView { enabled: boolean; envName: string | null; paused: boolean; pauseReason: string | null; allow: string[] }
+interface PolicyView { enabled: boolean; envName: string | null; paused: boolean; pauseReason: string | null; allow: string[]; unconfirmed?: string[] }
 interface TokenItem { id: string; kind: string; label: string; retireAt: number | null; blocked: boolean; live: boolean; hashPrefix: string }
 
 const printPolicy = (io: CliIo, v: PolicyView) =>
-  io.out(`commands: ${v.enabled ? 'on' : `off (${v.envName ?? 'CAMPROXY_ADMIN_COMMANDS'} in the environment)`}\npaused: ${v.paused ? (v.pauseReason ?? 'yes') : 'no'}\nallowed: ${v.allow.join(', ') || 'none'}\n`);
+  io.out(`commands: ${v.enabled ? 'on' : `off (${v.envName ?? 'CAMPROXY_ADMIN_COMMANDS'} in the environment)`}\npaused: ${v.paused ? (v.pauseReason ?? 'yes') : 'no'}\nallowed: ${v.allow.join(', ') || 'none'}\n${v.unconfirmed?.length ? `needs re-confirming (allowed before this version): ${v.unconfirmed.join(', ')}\n` : ''}`);
 const printTokens = (io: CliIo, v: { revision: number; problem: string | null; items: TokenItem[] }) => {
   if (v.problem) io.err(`the token file is unusable: ${v.problem}\n`);
   if (!v.items.length) return io.out(`no managed tokens (revision ${v.revision})\n`);
@@ -177,9 +177,11 @@ const printTokens = (io: CliIo, v: { revision: number; problem: string | null; i
 // cams-admin's settings changes (plan P3 R3-5): when, which command, on whose
 // behalf, which paths; never a value.
 interface ChangeItem { cmdId: string; command: string; actor: string; at: number; paths: { path: string }[]; rolledBack: { at: number; by: string; user?: string; cmdId?: string } | null }
+// A string from cams-admin, safe for a terminal (review M2): no control, bidi or format characters.
+const plain = (x: string) => x.replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/gu, ' ');
 const printChanges = (io: CliIo, v: { items: ChangeItem[] }) => {
   if (!v.items.length) return io.out('no settings changes from cams-admin\n');
-  for (const c of v.items) io.out(`${new Date(c.at).toISOString()}  ${c.cmdId}  ${c.command.padEnd(15)}  ${c.actor}  ${c.paths.map((x) => x.path).join(', ')}${c.rolledBack ? `  (undone ${c.rolledBack.by === 'local' ? `here by ${c.rolledBack.user ?? 'admin'}` : `by cams-admin ${c.rolledBack.cmdId ?? ''}`.trim()})` : ''}\n`);
+  for (const c of v.items) io.out(`${new Date(c.at).toISOString()}  ${c.cmdId}  ${plain(c.command).padEnd(15)}  ${plain(c.actor)}  ${c.paths.map((x) => plain(x.path)).join(', ')}${c.rolledBack ? `  (undone ${c.rolledBack.by === 'local' ? `here by ${plain(c.rolledBack.user ?? 'admin')}` : `by cams-admin ${c.rolledBack.cmdId ?? ''}`.trim()})` : ''}\n`);
 };
 
 async function runPolicyCli(cmd: 'admin-commands' | 'admin-tokens', rest: string[], io: CliIo): Promise<number> {

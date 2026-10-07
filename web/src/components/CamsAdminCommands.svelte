@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
   import { agoText } from '../lib/format';
-  import { changeLines, commandsBanner, entryGroups, tokenStateText, undoErrorText, widenErrorText, type ChangeItem, type CommandsView, type TokensView } from '../lib/cams-admin';
+  import { changeLines, commandsBanner, entryGroups, unconfirmedText, tokenStateText, undoErrorText, widenErrorText, type ChangeItem, type CommandsView, type TokensView } from '../lib/cams-admin';
   import ConfirmDialog from './ConfirmDialog.svelte';
 
   // Commands from cams-admin and the managed tokens (migration P2,
@@ -75,7 +75,7 @@
     }
   }
   const banner = $derived(cmds ? commandsBanner(cmds) : null);
-  const groups = $derived(cmds ? entryGroups({ known: cmds.known, groups: cmds.groups, allow: chosen }) : []);
+  const groups = $derived(cmds ? entryGroups({ known: cmds.known, groups: cmds.groups, allow: chosen, unconfirmed: cmds.unconfirmed }) : []);
 </script>
 
 {#if cmds}
@@ -96,6 +96,7 @@
                 <span class="mono">{k.entry}</span>
               </label>
               <span class="small">{k.text}</span>
+              {#if k.unconfirmed}<span class="warn small" data-testid="cams-admin-unconfirmed-{k.entry}">{unconfirmedText}</span>{/if}
             </li>
           {/each}
         </ul>

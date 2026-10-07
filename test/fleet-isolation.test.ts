@@ -245,7 +245,7 @@ describe('a hostile cams-admin with every P3 entry allowed', () => {
   beforeAll(async () => {
     fake.mode = 'normal';
     await until(() => p.proxy.camsAdmin.view().state === 'connected', 15_000);
-    writePrivateJson(join(adminDir, 'policy.json'), { v: 1, allow: [...ALLOW_ENTRIES], changedAt: 2, changedBy: 'local' });
+    writePrivateJson(join(adminDir, 'policy.json'), { v: 1, allow: [...ALLOW_ENTRIES], consent: 3, changedAt: 2, changedBy: 'local' });
     // A fresh minute for the windows (earlier tests sent commands too).
     await new Promise((r) => setTimeout(r, 61_000));
   }, 90_000);

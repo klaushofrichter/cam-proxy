@@ -49,6 +49,7 @@ export interface CommandsView {
   paused: boolean;
   pauseReason: string | null;
   allow: string[];
+  unconfirmed?: string[];
   implemented?: string[];
   known?: CommandEntry[];
   recent?: RecentCommand[];
@@ -94,10 +95,13 @@ const GROUP_TITLES: [keyof EntryGroups, string, string?][] = [
   ['camera', 'Camera actions'],
   ['disruptive', 'Disruptive — off by default', 'Each of these lets cams-admin interrupt this proxy or a camera (a restart, a reboot, power off, rewritten camera settings). Allow one only while you need it.'],
 ];
-export interface EntryGroup { key: string; title: string; warning?: string; entries: (CommandEntry & { allowed: boolean })[] }
-export function entryGroups(v: Pick<CommandsView, 'known' | 'groups' | 'allow'>): EntryGroup[] {
+// `unconfirmed`: allowed before this version, when the command did nothing
+// yet; it counts only once the local admin ticks it again (review I3).
+export const unconfirmedText = 'allowed before this version: tick and Save to confirm';
+export interface EntryGroup { key: string; title: string; warning?: string; entries: (CommandEntry & { allowed: boolean; unconfirmed: boolean })[] }
+export function entryGroups(v: Pick<CommandsView, 'known' | 'groups' | 'allow' | 'unconfirmed'>): EntryGroup[] {
   const known = v.known ?? [];
-  const mark = (e: CommandEntry) => ({ ...e, allowed: v.allow.includes(e.entry) });
+  const mark = (e: CommandEntry) => ({ ...e, allowed: v.allow.includes(e.entry), unconfirmed: (v.unconfirmed ?? []).includes(e.entry) && !v.allow.includes(e.entry) });
   if (!v.groups) return [{ key: 'all', title: 'Commands', entries: known.map(mark) }];
   return GROUP_TITLES.flatMap(([key, title, warning]) => {
     const entries = known.filter((k) => v.groups![key].includes(k.entry)).map(mark);

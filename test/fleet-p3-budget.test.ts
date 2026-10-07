@@ -20,7 +20,8 @@ const quiet: ClientLog = { info() {}, warn() {}, debug() {} };
 const PRX = `prx_${'1'.repeat(20)}`;
 let n = 0;
 function proxyRun(dir: string, allow: string[], handlers: Record<string, Handler>) {
-  const policy = new CommandPolicy({ base: () => ({ allow, paused: false }), file: join(dir, 'admin', 'policy.json'), env: () => readEnvLayer({}), log: quiet });
+  const policy = new CommandPolicy({ base: () => ({ allow: [], paused: false }), file: join(dir, 'admin', 'policy.json'), env: () => readEnvLayer({}), log: quiet });
+  policy.setAllow(allow, 'local');
   const audit: Record<string, any>[] = [];
   const runner = new CommandRunner({ proxyId: () => PRX, serverKeys: () => [vectors.keys.server.publicKey], policy, journal: new Journal(join(dir, 'admin', 'commands.json')), tokens: new TokenStore({ file: join(dir, 'admin', 'tokens.json'), localDigests: () => [] }), audit: { write: (r: Record<string, any>) => (audit.push(r), r) as never }, log: quiet, handlers });
   const conn: ConnCtx = { connId: `con_${String(++n).padStart(20, '0')}`, serverNow: () => Date.now(), seen: new SeenIds() };

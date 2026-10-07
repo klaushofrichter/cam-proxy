@@ -4,7 +4,7 @@ import { jcs } from './jcs';
 import type { ManagedToken, TokensApplyArgs } from './token-store';
 import { ARGS_VALIDATORS, type CameraActionArgs } from './command-args';
 import type { Journal, JournalEntry } from './journal';
-import { DISRUPTIVE_ACTIONS, NEVER_REMOTE_ACTIONS } from './policy';
+import { BUDGETED_ACTIONS, DISRUPTIVE_ACTIONS, NEVER_REMOTE_ACTIONS } from './policy';
 
 export type Nack = 'bad_signature' | 'wrong_target' | 'expired' | 'replayed' | 'not_allowed' | 'paused' | 'rate_limited' | 'invalid_args' | 'unsupported_version' | 'busy' | 'not_revocation_only';
 export interface CommandBody { proxyId: string; connId: string; cmdId: string; exp: number; actor: string; command: string; args: Record<string, unknown> }
@@ -28,6 +28,11 @@ const argsBytes = (a: unknown): number => {
   }
 };
 const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
+
+// The actor is a cams-admin string shown in the audit log, the card and the
+// CLI: control, bidi and format characters (and lone surrogates) become
+// spaces (security review M2: no terminal escapes, no spoofing).
+const cleanActor = (a: string): string => a.slice(0, 200).replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/gu, ' ');
 
 export class SeenIds {
   private m = new Map<string, number>();
@@ -87,7 +92,7 @@ export function journalBudgetOf(count: Journal['countSince'], now: number) {
     const hour = now - 3_600_000;
     const r = command === 'proxy.restart'
       ? { ...count((e) => e.command === 'proxy.restart', hour), cap: 2 }
-      : { ...count((e) => e.command === 'camera.action' && isDisruptive(e.action), hour), cap: 6 };
+      : { ...count((e) => e.command === 'camera.action' && BUDGETED_ACTIONS.has(e.action ?? ''), hour), cap: 6 };
     return r.n < r.cap ? { ok: true } : { ok: false, retryAfterS: Math.max(1, Math.ceil((r.oldest! + 3_600_000 - now) / 1000)) };
   };
 }
@@ -135,5 +140,5 @@ export function checkCommand(m: Envelope, c: CheckContext): Decision {
     const budget = c.journalBudget?.(command, action) ?? { ok: true };
     if (!budget.ok) return nack('rate_limited', budget.retryAfterS);
   }
-  return { kind: 'run', cmd: { proxyId: c.proxyId, connId: c.connId, cmdId, exp: exp as number, actor: (b.actor as string).slice(0, 200), command, args: b.args as Record<string, unknown> }, args: v.args };
+  return { kind: 'run', cmd: { proxyId: c.proxyId, connId: c.connId, cmdId, exp: exp as number, actor: cleanActor(b.actor as string), command, args: b.args as Record<string, unknown> }, args: v.args };
 }

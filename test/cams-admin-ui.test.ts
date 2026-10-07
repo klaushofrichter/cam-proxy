@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { byText, canEnroll, changeLines, commandsBanner, entryGroups, stateClass, stateText, tokenStateText, undoErrorText, widenErrorText } from '../web/src/lib/cams-admin';
+import { byText, unconfirmedText, canEnroll, changeLines, commandsBanner, entryGroups, stateClass, stateText, tokenStateText, undoErrorText, widenErrorText } from '../web/src/lib/cams-admin';
 // Shaped like web/src/lib/api's ApiError (that module needs a browser's types).
 const apiError = (status: number, body: unknown) => Object.assign(new Error(`HTTP ${status}`), { status, body });
 
@@ -66,6 +66,12 @@ describe('P3 on the card', () => {
     expect(d.entries.map((e) => e.entry)).toEqual(['camera.action:camera-reboot', 'proxy.restart']);
     expect(g.flatMap((x) => x.entries).every((e) => !e.allowed)).toBe(true);
     expect(entryGroups({ known, groups, allow: ['proxy.restart'] }).at(-1)!.entries.find((e) => e.entry === 'proxy.restart')!.allowed).toBe(true);
+  });
+  it('I3: an entry allowed before this version shows as needing a fresh confirmation, unticked', () => {
+    const g = entryGroups({ known, groups, allow: [], unconfirmed: ['proxy.restart'] });
+    const e = g.at(-1)!.entries.find((x) => x.entry === 'proxy.restart')!;
+    expect(e).toMatchObject({ allowed: false, unconfirmed: true });
+    expect(unconfirmedText).toBe('allowed before this version: tick and Save to confirm');
   });
   it('an older proxy without groups: one list', () => {
     const g = entryGroups({ known, allow: [] });

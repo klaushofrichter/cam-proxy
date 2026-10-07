@@ -89,9 +89,9 @@ describe('camera.action', () => {
     expect(JSON.stringify(r.result)).not.toMatch(/password|ftp-secret-pw/i);
     expect(sim.sim.engine.settings.get('Ftp')).toMatchObject({ enable: 1, server: '127.0.0.1' });
     resultOk(r, 'camera.action');
-    const off = await act({ camera: 'cam1', action: 'camera-ftp-off' });
-    expect(off).toMatchObject({ status: 'ok', result: { verified: true, mismatch: [] } });
-    expect(sim.sim.engine.settings.get('Ftp')).toMatchObject({ enable: 0 });
+    // camera-ftp-off is never remote (review M5): refused, the camera keeps uploading.
+    expect(await act({ camera: 'cam1', action: 'camera-ftp-off' })).toMatchObject({ status: 'failed', code: 'not_allowed' });
+    expect(sim.sim.engine.settings.get('Ftp')).toMatchObject({ enable: 1 });
   });
   it('camera-ntp-set: the camera takes ntp.server, verified; a failed outcome → verified false, mismatch [server]', async () => {
     const r = await act({ camera: 'cam1', action: 'camera-ntp-set' });

@@ -1,5 +1,5 @@
-import { createHash } from 'crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
+import { createHash, randomBytes } from 'crypto';
+import { closeSync, existsSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'path';
 import { cameraDefaults, DEFAULTS, type Config, type Secrets } from './defaults';
 import { checkPartial, leafAt, leafPaths, SETTINGS, SettingError } from './schema';
@@ -179,7 +179,7 @@ function takeCommandPolicy(o: unknown, where: 'config.json' | 'overrides.json' |
     if (where === 'patch') throw new ConfigError(`not_a_setting: camsAdmin.${k} is not a setting (the Status card or admin-commands changes it)`);
     if (where === 'overrides.json') throw new ConfigError(`camsAdmin.${k}: only in config.json or data/admin/policy.json`);
   }
-  if (Object.hasOwn(ca, 'allowCommands')) base.allow = validateAllowList(ca.allowCommands, 'camsAdmin.allowCommands');
+  if (Object.hasOwn(ca, 'allowCommands')) base.allow = validateAllowList(ca.allowCommands, 'camsAdmin.allowCommands', true);
   if (Object.hasOwn(ca, 'commandsPaused')) {
     if (typeof ca.commandsPaused !== 'boolean') throw new ConfigError('camsAdmin.commandsPaused: must be true or false');
     base.paused = ca.commandsPaused;
@@ -281,10 +281,39 @@ export function writeOverridesFile(file: string, overrides: object): void {
   writeOverrides(file, overrides as Obj);
 }
 function writeOverrides(file: string, overrides: Obj): void {
-  mkdirSync(dirname(file), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}`;
-  writeFileSync(tmp, `${JSON.stringify(overrides, null, 2)}\n`, { mode: 0o600 });
-  renameSync(tmp, file);
+  // Atomic and durable (review M4: P3 makes this write remote): a fresh temp
+  // file (wx, mode 600), fsync, rename, fsync of the folder. A torn write
+  // would keep the proxy from starting.
+  const dir = dirname(file);
+  mkdirSync(dir, { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}-${randomBytes(6).toString('hex')}`;
+  const fd = openSync(tmp, 'wx', 0o600);
+  try {
+    fchmodSync(fd, 0o600);
+    writeSync(fd, `${JSON.stringify(overrides, null, 2)}\n`);
+    fsyncSync(fd);
+  } catch (err) {
+    closeSync(fd);
+    rmSync(tmp, { force: true });
+    throw err;
+  }
+  closeSync(fd);
+  try {
+    renameSync(tmp, file);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
+  try {
+    const d = openSync(dir, 'r');
+    try {
+      fsyncSync(d);
+    } finally {
+      closeSync(d);
+    }
+  } catch {
+    // Not every platform syncs a folder; the rename is done.
+  }
 }
 
 // The leaf paths an object sets ('sse.pingS'), e.g. a PUT body.
