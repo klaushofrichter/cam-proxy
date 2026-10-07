@@ -18,6 +18,9 @@ export interface Backup {
 const CMD_ID = /^cmd_[0-9A-HJKMNP-TV-Z]{20}$/;
 const FILE = /^overrides\.bak-(cmd_[0-9A-HJKMNP-TV-Z]{20})\.json$/;
 const KEEP = 20;
+// A hard cap: the newest backup per path is kept beyond KEEP (review I1), and
+// paths are bounded (the remote-settable leaves), so this is never reached in use.
+const HARD_CAP = 500;
 const isState = (x: unknown): x is PathState => typeof x === 'object' && x !== null && typeof (x as PathState).set === 'boolean';
 const valid = (b: unknown, cmdId: string): b is Backup => {
   const x = b as Backup;
@@ -40,8 +43,27 @@ export class OverridesBackups {
 
   save(b: Backup): void {
     writePrivateJson(this.file(b.cmdId), b);
+    this.prune();
+  }
+
+  // The newest 20, and beyond them every not-undone backup that is still the
+  // newest one naming one of its paths (review I1): a flood of other remote
+  // changes never takes away the Undo or the marker of an earlier change.
+  private prune(): void {
     const all = this.list();
-    for (const old of all.slice(KEEP)) rmSync(this.file(old.cmdId), { force: true });
+    const newest = new Set<string>();
+    const seen = new Set<string>();
+    for (const b of all) {
+      if (b.rolledBack) continue;
+      for (const p of b.paths) {
+        if (seen.has(p.path)) continue;
+        seen.add(p.path);
+        newest.add(b.cmdId);
+      }
+    }
+    const keep = all.filter((b, i) => i < KEEP || newest.has(b.cmdId)).slice(0, HARD_CAP);
+    const kept = new Set(keep.map((b) => b.cmdId));
+    for (const old of all) if (!kept.has(old.cmdId)) rmSync(this.file(old.cmdId), { force: true });
   }
 
   // A backup whose write did not happen after all.

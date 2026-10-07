@@ -228,6 +228,8 @@ describe('config.set', () => {
     // A camera name from cams-admin follows CAMERA_NAME_PATTERN (no bidi, zero-width, separators).
     expect(await run('config.set', { v: 1, dryRun: true, baseRevision: rev(), set: { 'cameras.cam1.name': 'Gate\u202eevil' } })).toMatchObject({ status: 'failed', code: 'invalid_value', result: { paths: [{ path: 'cameras.cam1.name', code: 'invalid_value' }] } });
     expect((await run('config.set', { v: 1, dryRun: true, baseRevision: rev(), set: { 'cameras.cam1.name': 'Garten Süd' } })).status).toBe('ok');
+    // M3: Arabic letter mark, tag characters, a lone surrogate, soft hyphen, Mongolian vowel separator.
+    for (const bad of ['a\u061Cb', 'a\u{E0041}\u{E0042}', 'a\uD800b', 'a\u00ADb', 'a\u180Eb']) expect((await run('config.set', { v: 1, dryRun: true, baseRevision: rev(), set: { 'cameras.cam1.name': bad } })).code, JSON.stringify(bad)).toBe('invalid_value');
   });
   it('a store error (overrides.json not writable) fails store_error and leaves the running config unchanged', async () => {
     const adminDir = join(holder.loaded.config.server.dataDir);
@@ -278,20 +280,57 @@ describe('config.rollback (R3-5)', () => {
     expect(Object.keys(c.result!.current as object)).toEqual(['sse.pingS']); // only the changed path
     expect(fileText()).toBe(before);
   });
-  it('no_backup for an unknown cmdId; a dry run writes nothing; a rollback of a rollback restores again; no direction check', async () => {
+  it('no_backup for an unknown cmdId; a dry run writes nothing; a rollback of a rollback restores again', async () => {
     expect(await run('config.rollback', { v: 1, dryRun: false, cmdId: CMD(99) })).toMatchObject({ status: 'failed', code: 'no_backup' });
+    await run('config.set', { v: 1, dryRun: false, baseRevision: rev(), set: { 'sse.pingS': 9 } }, 2);
+    const before = fileText();
+    const dry = await run('config.rollback', { v: 1, dryRun: true, cmdId: CMD(2) }, 3);
+    expect(dry).toMatchObject({ status: 'ok', result: { dryRun: true, of: CMD(2), changes: [expect.objectContaining({ path: 'sse.pingS', from: 9, to: DEFAULTS.sse.pingS })] } });
+    expect(fileText()).toBe(before);
+    expect(backups.get(CMD(2))!.rolledBack).toBeUndefined();
+    expect((await run('config.rollback', { v: 1, dryRun: false, cmdId: CMD(2) }, 4)).status).toBe('ok');
+    expect(getPath(holder.loaded.config, 'sse.pingS')).toBe(DEFAULTS.sse.pingS);
+    expect((await run('config.rollback', { v: 1, dryRun: false, cmdId: CMD(4) }, 5)).status).toBe('ok');
+    expect(getPath(holder.loaded.config, 'sse.pingS')).toBe(9);
+  });
+  it('I2: a remote rollback passes the direction check against the current value (never lowers retention); the local Undo may', async () => {
     localEdit({ retention: { clipsDays: 3 } });
     await run('config.set', { v: 1, dryRun: false, baseRevision: rev(), set: { 'retention.clipsDays': 30 } }, 2);
     const before = fileText();
-    const dry = await run('config.rollback', { v: 1, dryRun: true, cmdId: CMD(2) }, 3);
-    expect(dry).toMatchObject({ status: 'ok', result: { dryRun: true, of: CMD(2), changes: [expect.objectContaining({ path: 'retention.clipsDays', from: 30, to: 3 })] } });
+    for (const dryRun of [true, false]) expect(await run('config.rollback', { v: 1, dryRun, cmdId: CMD(2) }, 3)).toMatchObject({ status: 'failed', code: 'widening_local_only', result: { paths: [{ path: 'retention.clipsDays', code: 'widening_local_only', detail: 'a remote change may only keep data longer' }] } });
     expect(fileText()).toBe(before);
-    expect(backups.get(CMD(2))!.rolledBack).toBeUndefined();
-    // the rollback lowers a retention period: allowed (it restores the local value)
-    expect((await run('config.rollback', { v: 1, dryRun: false, cmdId: CMD(2) }, 4)).status).toBe('ok');
+    expect(undoLocal(deps, CMD(2), { user: 'admin' })).toMatchObject({ status: 'ok' });
     expect(getPath(holder.loaded.config, 'retention.clipsDays')).toBe(3);
-    expect((await run('config.rollback', { v: 1, dryRun: false, cmdId: CMD(4) }, 5)).status).toBe('ok');
-    expect(getPath(holder.loaded.config, 'retention.clipsDays')).toBe(30);
+  });
+  it('I2: a rollback of a rollback after config.json was raised is refused (the reviewer\'s P2 probe)', async () => {
+    setup({ ...TWO, retention: { clipsDays: 30 } });
+    await run('config.set', { v: 1, dryRun: false, baseRevision: rev(), set: { 'retention.clipsDays': 60 } }, 1);
+    expect((await run('config.rollback', { v: 1, dryRun: false, cmdId: CMD(1) }, 2)).status).toBe('failed'); // 60 → 30 lowers: refused remotely
+    expect(undoLocal(deps, CMD(1), { user: 'admin' }).status).toBe('ok'); // the person undoes it here
+    writeFileSync(join(dir, 'config.json'), JSON.stringify({ ...TWO, retention: { clipsDays: 120 } }));
+    holder.loaded = loadConfig(SECRETS, { cwd: dir });
+    // a crafted rollback-of-rollback backup (as B would have left it): restoring 60 would lower 120
+    backups.save({ v: 1, cmdId: CMD(3), command: 'config.rollback', actor: ACTOR, at: 5, revisionBefore: rev(), revisionAfter: rev(), paths: [{ path: 'retention.clipsDays', before: { set: true, value: 60 }, after: { set: false } }] });
+    expect(await run('config.rollback', { v: 1, dryRun: false, cmdId: CMD(3) }, 4)).toMatchObject({ status: 'failed', code: 'widening_local_only' });
+    expect(getPath(holder.loaded.config, 'retention.clipsDays')).toBe(120);
+  });
+  it('I1: a config.set that changes nothing writes nothing: no backup, overrides.json untouched', async () => {
+    localEdit({ sse: { pingS: 9 } });
+    const before = fileText();
+    const r = await run('config.set', { v: 1, dryRun: false, baseRevision: rev(), set: { 'sse.pingS': 9 } }, 2);
+    expect(r).toMatchObject({ status: 'ok', result: { dryRun: false, changes: [], unchanged: ['sse.pingS'] }, changed: [] });
+    expect(r.result!.revision).toBe(r.result!.baseRevision);
+    expect(backups.list()).toHaveLength(0);
+    expect(fileText()).toBe(before);
+    expect(setLoaded).not.toHaveBeenCalled();
+  });
+  it('I1: 25 later remote changes of another setting never evict a harmful change\'s backup: Undo and the marker survive', async () => {
+    await run('config.set', { v: 1, dryRun: false, baseRevision: rev(), set: { 'stills.quality': 30 } }, 1);
+    for (let i = 0; i < 25; i++) await run('config.set', { v: 1, dryRun: false, baseRevision: rev(), set: { 'sse.pingS': 5 + (i % 2) } }, 10 + i);
+    expect(backups.get(CMD(1))).not.toBeNull();
+    expect(backups.byPath().get('stills.quality')).toMatchObject({ cmdId: CMD(1) });
+    expect(undoLocal(deps, CMD(1), { user: 'admin' })).toMatchObject({ status: 'ok' });
+    expect(getPath(holder.loaded.config, 'stills.quality')).toBe(DEFAULTS.stills.quality);
   });
   it('rollback re-checks the classification (a backup naming a denied path is refused not_remote_settable)', async () => {
     backups.save({ v: 1, cmdId: CMD(8), command: 'config.set', actor: ACTOR, at: 1, revisionBefore: rev(), revisionAfter: rev(), paths: [{ path: 'cameras.cam1.host', before: { set: true, value: '192.0.2.66' }, after: { set: false } }] });

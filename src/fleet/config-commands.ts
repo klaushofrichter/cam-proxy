@@ -113,6 +113,9 @@ function write(d: ConfigCommandDeps, cmd: CommandBody, args: { dryRun: boolean; 
   if (widening.length) return failed('widening_local_only', widening.map((c) => ({ path: c.path, code: 'widening_local_only', detail: NARROW_REASON[NARROW[c.path]] })));
   const unchanged = paths.filter((x) => !changes.some((c) => c.path === x));
   if (args.dryRun) return { status: 'ok', result: { dryRun: true, baseRevision: revision, revision, changes, unchanged } };
+  // Nothing changes: nothing written, no backup (review I1: no-op writes
+  // must not push an earlier change's backup out). The rate limit counted it.
+  if (!changes.length) return { status: 'ok', result: { dryRun: false, baseRevision: revision, revision, changes, unchanged }, changed: [] };
   const after = configRevision(p.next);
   const backup: Backup = {
     v: 1, cmdId: cmd.cmdId, command: cmd.command as Backup['command'], actor: cmd.actor, at: (d.now ?? Date.now)(), revisionBefore: revision, revisionAfter: after,
@@ -144,7 +147,10 @@ type Undoer = { by: 'cams-admin'; cmd: CommandBody } | { by: 'local'; who: { use
 
 // config.rollback and the card's Undo (R3-5): each path the command named
 // back to its override state before, when it still holds the state the
-// command left; no direction check (it restores what a person had set).
+// command left. A remote rollback passes config.set's direction check on the
+// current effective values (review I2: a rollback, or a rollback of a
+// rollback, never lowers retention or raises spending); the local Undo is the
+// person's own decision and is not checked.
 function rollback(d: ConfigCommandDeps, of: string, dryRun: boolean, u: Undoer): Done {
   const b = d.backups.get(of);
   if (!b) return { status: 'failed', code: 'no_backup' };
@@ -165,6 +171,10 @@ function rollback(d: ConfigCommandDeps, of: string, dryRun: boolean, u: Undoer):
     throw err;
   }
   const changes = configChanges(l, next);
+  if (u.by === 'cams-admin') {
+    const widening = changes.filter((c) => !narrowingOk(c.path, c.from, c.to));
+    if (widening.length) return failed('widening_local_only', widening.map((c) => ({ path: c.path, code: 'widening_local_only', detail: NARROW_REASON[NARROW[c.path]] })));
+  }
   const unchanged = paths.filter((x) => !changes.some((c) => c.path === x));
   if (dryRun) return { status: 'ok', result: { dryRun: true, baseRevision: revision, revision, changes, unchanged, of } };
   const at = (d.now ?? Date.now)();

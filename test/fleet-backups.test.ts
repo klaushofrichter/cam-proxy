@@ -37,6 +37,18 @@ describe('OverridesBackups', () => {
     expect(b.get(CMD(21))).not.toBeNull();
     expect(b.list().map((x) => x.cmdId)).toEqual(Array.from({ length: 20 }, (_, i) => CMD(21 - i)));
   });
+  it('I1: beyond the newest 20, the newest not-undone backup of each path is kept (a flood of other changes never evicts it)', () => {
+    const d = dir();
+    const b = new OverridesBackups(d);
+    b.save(backup(1, 1, [{ path: 'stills.quality', before: { set: false }, after: { set: true, value: 30 } }]));
+    b.save(backup(2, 2, [{ path: 'stills.size', before: { set: false }, after: { set: true, value: '1x1' } }]));
+    b.markRolledBack(CMD(2), { at: 3, by: 'local', user: 'admin' });
+    for (let i = 3; i <= 40; i++) b.save(backup(i, i));
+    expect(b.get(CMD(1))).not.toBeNull(); // the newest for stills.quality
+    expect(b.get(CMD(2))).toBeNull(); // undone: evictable
+    expect(b.get(CMD(20))).toBeNull(); // superseded for sse.pingS, older than the newest 20
+    expect(b.list()).toHaveLength(21);
+  });
   it("another user's file, or a malformed one, is no backup (null), logged", () => {
     const d = dir();
     const q = quiet();
