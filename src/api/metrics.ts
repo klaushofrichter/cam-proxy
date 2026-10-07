@@ -4,11 +4,13 @@ import type { Config } from '../config/defaults';
 import type { StreamLog, StreamMessage } from '../stream/log';
 import type { Storage } from '../storage';
 import type { StillsSide } from './client-api';
+import type { SdReading } from '../camera/sd-card';
 
 // One camera's figures (spec 2026-10-05-multi-camera-host-design §3.1). ftpEnabled:
 // the camera's FTP upload as last read (null: not read, or FTP off for it);
 // clips: clip arrival (#93; null: FTP off).
-export interface CameraMetrics { id: string; up: boolean; ftpEnabled: boolean | null; clips: { lastClip: number | null; stalled: boolean } | null; onvifSubscribed: boolean; stills: StillsSide | undefined }
+// sd: the camera's SD card as last read (#199; null: not read yet).
+export interface CameraMetrics { id: string; up: boolean; ftpEnabled: boolean | null; clips: { lastClip: number | null; stalled: boolean } | null; onvifSubscribed: boolean; stills: StillsSide | undefined; sd?: Pick<SdReading, 'capacityMB' | 'freeMB' | 'overwrite'> | null }
 
 interface MetricsSources {
   storage: Storage;
@@ -126,6 +128,20 @@ export function createMetrics(s: MetricsSources) {
   g('clips_stalled', '1 while no clip arrived for ftp.stalledHours although the camera recorded events', ['cam'], function () {
     this.reset();
     for (const c of s.cameras()) if (c.clips) this.set({ cam: c.id }, c.clips.stalled ? 1 : 0);
+  });
+  // The camera's SD card (#199): no sample before the first read or for a figure the camera didn't give.
+  const MB = 2 ** 20;
+  g('camera_sd_free_bytes', "Free bytes on the camera's SD card", ['cam'], function () {
+    this.reset();
+    for (const c of s.cameras()) if (c.sd?.freeMB != null) this.set({ cam: c.id }, c.sd.freeMB * MB);
+  });
+  g('camera_sd_capacity_bytes', "Size of the camera's SD card", ['cam'], function () {
+    this.reset();
+    for (const c of s.cameras()) if (c.sd?.capacityMB != null) this.set({ cam: c.id }, c.sd.capacityMB * MB);
+  });
+  g('camera_sd_overwrite', "1 while the camera overwrites its oldest recordings when the SD card is full (0: it stops recording)", ['cam'], function () {
+    this.reset();
+    for (const c of s.cameras()) if (c.sd?.overwrite != null) this.set({ cam: c.id }, c.sd.overwrite ? 1 : 0);
   });
   g('sse_clients', 'Connected SSE clients', [], function () {
     this.set(s.sseClients());

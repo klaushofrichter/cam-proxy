@@ -110,6 +110,9 @@
           },
           "problem": {
             "type": "boolean"
+          },
+          "warning": {
+            "const": true
           }
         },
         "required": [
@@ -221,6 +224,83 @@
               "required": [
                 "model"
               ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sd": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "mounted": {
+                  "type": "boolean"
+                },
+                "formatted": {
+                  "type": "boolean"
+                },
+                "capacityMB": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "freeMB": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "overwrite": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "recordingEnabled": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "checkedAt": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "lastRecordingAt": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "stalled": {
+                  "type": "boolean"
+                }
+              },
+              "required": []
             },
             {
               "type": "null"
@@ -640,6 +720,83 @@
                     "type": "null"
                   }
                 ]
+              },
+              "sd": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "mounted": {
+                        "type": "boolean"
+                      },
+                      "formatted": {
+                        "type": "boolean"
+                      },
+                      "capacityMB": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "freeMB": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "overwrite": {
+                        "anyOf": [
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "recordingEnabled": {
+                        "anyOf": [
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "checkedAt": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "lastRecordingAt": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "stalled": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": []
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
@@ -870,6 +1027,9 @@
                 },
                 "problem": {
                   "type": "boolean"
+                },
+                "warning": {
+                  "const": true
                 }
               },
               "required": [

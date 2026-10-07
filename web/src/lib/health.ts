@@ -5,7 +5,10 @@ import { cameraFtpClass, type CameraFtp } from './ftp';
 // GET /api/local/health) decides every problem; the page only draws it, so
 // the page, its red marks and the e-paper display never disagree.
 
-export interface HealthItem { id: string; label: string; value: boolean | number | string | null; text: string; problem: boolean }
+// warning (#199): needs a look, no problem (amber); never in problemCount.
+export interface HealthItem { id: string; label: string; value: boolean | number | string | null; text: string; problem: boolean; warning?: boolean }
+// The camera's SD card (#199): camera.sd in the summary; null before the first read, absent from an older proxy.
+export interface UiSd { mounted: boolean; formatted: boolean; capacityMB: number | null; freeMB: number | null; overwrite: boolean | null; recordingEnabled: boolean | null; checkedAt: number; lastRecordingAt: number | null; stalled: boolean }
 export interface UiDisk { sizeBytes: number; freeBytes: number; usedBytes: number; usedPercent: number }
 export interface UiMemory { totalBytes: number; availableBytes: number; usedPercent: number }
 export interface UiLoad { m1: number; m5: number; m15: number }
@@ -20,13 +23,32 @@ export interface UiHealth {
   disk: UiDisk | null;
   host: UiHost | null;
   // Every camera's block (spec 2026-10-05-multi-camera-host-design §6.5); absent from an older proxy.
-  cameras?: { camera: { id: string }; items: HealthItem[] }[];
+  cameras?: { camera: { id: string; sd?: UiSd | null }; items: HealthItem[] }[];
 }
 
 const GB = 1024 ** 3;
 
 export function healthHeadline(h: UiHealth): string {
-  return h.problemCount === 0 ? 'All OK' : `${h.problemCount} problem${h.problemCount === 1 ? '' : 's'}`;
+  if (h.problemCount > 0) return `${h.problemCount} problem${h.problemCount === 1 ? '' : 's'}`;
+  const w = h.items.filter((i) => i.warning).length;
+  return w ? `All OK · ${w} warning${w === 1 ? '' : 's'}` : 'All OK';
+}
+
+// The Camera card's SD card line (#199).
+export function sdText(sd: UiSd | null | undefined): string {
+  if (sd === undefined) return '—';
+  if (sd === null) return 'not read yet';
+  if (!sd.mounted) return 'not mounted';
+  if (!sd.formatted) return 'not formatted';
+  const gb = (m: number) => (m / 1024).toFixed(1);
+  const space = sd.capacityMB !== null && sd.freeMB !== null ? `${gb(sd.freeMB)} of ${gb(sd.capacityMB)} GB free` : 'mounted';
+  return sd.overwrite === null ? space : `${space} · overwrite ${sd.overwrite ? 'on' : 'off'}`;
+}
+
+// Its colour: the camera's sd item decides (red: a problem, amber: a warning).
+export function sdClass(h: { items: HealthItem[] } | null | undefined): string {
+  const it = h?.items.find((i) => i.id === 'sd');
+  return it?.problem ? 'bad' : it?.warning ? 'warn' : '';
 }
 
 export function itemOf(h: UiHealth | null | undefined, id: string): HealthItem | undefined {

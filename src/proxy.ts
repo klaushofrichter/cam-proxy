@@ -137,6 +137,7 @@ export interface ProxyOptions {
   sessionSecret?: Buffer;
   restartTimeoutMs?: number; // how long a restart waits for stop() (15 s)
   cameraFtpCheckMs?: number; // how often the camera's FTP settings are read (#93; 5 min)
+  cameraSdCheckMs?: number; // how often the camera's SD card and recording settings are read (#199; 5 min)
   // The host figures (spec 2026-10-03-health-summary-design): where /proc and
   // /sys are ('/'; tests and e2e point at a fixture tree), the data volume's
   // statfs, and how often they are read (1 min).
@@ -431,6 +432,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         // Each camera's counters under its id (bound late: metrics is made once the workers exist).
         hooks: { onCameraCheck: (c) => metrics.onCameraCheck(id, c), onResubscribe: () => metrics.onResubscribe(id), onStill: (ts) => metrics.onStill(id, ts), onStillMissing: () => metrics.onStillMissing(id), onRecordingDownload: (o) => metrics.onRecordingDownload(id, o) },
         cameraFtpCheckMs: opts.cameraFtpCheckMs,
+        cameraSdCheckMs: opts.cameraSdCheckMs,
         tls: tlsFor,
       });
   cameraIds(running).forEach((id) => cams.add(makeWorker(id)));
@@ -440,7 +442,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     catalog,
     log,
     cameras: () =>
-      cams.list().map((w) => ({ id: w.id, up: w.status.state().online, ftpEnabled: w.cam().ftp.enabled ? w.ftpWatch.view().enable : null, clips: w.clipsHealth(), onvifSubscribed: w.intake.state().onvif === 'subscribed', stills: w.stills })),
+      cams.list().map((w) => ({ id: w.id, up: w.status.state().online, ftpEnabled: w.cam().ftp.enabled ? w.ftpWatch.view().enable : null, clips: w.clipsHealth(), onvifSubscribed: w.intake.state().onvif === 'subscribed', stills: w.stills, sd: w.sdWatch.view() })),
     sseClients: () => sse.clients(),
     version: VERSION,
     target: TARGET,
@@ -759,11 +761,14 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // One camera's part of the health summary (spec 2026-10-05-multi-camera-host-design §6.5).
   const cameraHealthInput = (w: CameraWorker): CameraHealthInput => {
     const ps = w.cam().poeSwitch;
+    const sd = w.sdWatch.view();
     return {
       camera: { id: w.id, name: w.name(), host: w.cam().host, state: w.status.state(), reboot: w.reboot.state()?.phase ?? null, poeSwitch: ps.model === 'none' ? null : { model: ps.model, port: ps.port ?? null } },
       stream: w.streamStatus(),
       intake: w.intake.state(),
       ftp: ftpStatusOf(w),
+      // The SD card (#199), with the camera's offset at its newest recording for the text.
+      sd: sd && { ...sd, ...(sd.lastRecordingAt !== null && w.timeInfo() ? { offsetMinutes: localOffsetMinutes(sd.lastRecordingAt, w.timeInfo()) } : {}) },
     };
   };
   const healthNow = async (): Promise<HealthSummary> => {

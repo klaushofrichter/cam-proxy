@@ -110,6 +110,8 @@ describe('the Pi: one legacy camera, legacy overrides, a version 8 catalog', () 
   });
 
   it('/api/local/health: schema 1, the camera on top, the same item ids', async () => {
+    // The SD card is read right after the camera answers (#199).
+    await until(async () => (await request(base).get('/api/local/health')).body.camera.sd != null);
     const h = (await request(base).get('/api/local/health')).body;
     expect(h.schema).toBe(1);
     expect(h.camera).toMatchObject({ id: 'cam1' });
@@ -225,8 +227,9 @@ describe('the Pi: where its camera is defined', () => {
   });
 });
 
-// The health items the Pi's display reads, as release 8 answers them.
-const PI_ITEM_IDS = ['camera', 'stream', 'events', 'ftp', 'storage', 'disk', 'archive', 'inventory', 'version'];
+// The health items the Pi's display reads, as release 8 answers them, plus
+// the camera's SD card once read (#199, additive: the display draws every item).
+const PI_ITEM_IDS = ['camera', 'stream', 'events', 'ftp', 'sd', 'storage', 'disk', 'archive', 'inventory', 'version'];
 
 // The Pi stays on Let's Encrypt through the cluster's cam1-cert-push (spec
 // 2026-10-05-multi-camera-host-design §11): no tls.site, no site CA, no

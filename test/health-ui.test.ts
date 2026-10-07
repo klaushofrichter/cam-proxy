@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cameraUploadClass, lastClipClass, diskText, healthHeadline, itemOf, loadText, memoryText, piCardTitle, problemOf, uptimeText, type UiHealth } from '../web/src/lib/health';
+import { cameraUploadClass, lastClipClass, diskText, healthHeadline, itemOf, loadText, memoryText, piCardTitle, problemOf, sdClass, sdText, uptimeText, type UiHealth } from '../web/src/lib/health';
 
 // Spec 2026-10-03-health-summary-design A3: the Status page's Health and Pi cards.
 const GB = 1024 ** 3;
@@ -69,5 +69,31 @@ describe('the Clips card from the summary', () => {
     expect(lastClipClass(withFtp(false), true)).toBe('');
     expect(lastClipClass(undefined, true)).toBe('bad');
     expect(lastClipClass(undefined, false)).toBe('');
+  });
+});
+
+// Issue #199: the Camera card's SD card line, and the Health card's warnings.
+describe('the SD card on the Status page', () => {
+  const sd = { mounted: true, formatted: true, capacityMB: 30432, freeMB: 900, overwrite: false, recordingEnabled: true, checkedAt: 1, lastRecordingAt: null, stalled: false };
+  const withSd = (item: Partial<UiHealth['items'][number]> | null): UiHealth => ({ ...health(item?.problem ? ['sd'] : []), items: item ? [{ id: 'sd', label: 'SD card', value: 'x', text: '', problem: false, ...item }] : [] });
+  it('the line: free of capacity and the overwrite setting; no card, not mounted, not formatted', () => {
+    expect(sdText(sd)).toBe('0.9 of 29.7 GB free · overwrite off');
+    expect(sdText({ ...sd, overwrite: true, freeMB: 20000 })).toBe('19.5 of 29.7 GB free · overwrite on');
+    expect(sdText({ ...sd, overwrite: null })).toBe('0.9 of 29.7 GB free');
+    expect(sdText({ ...sd, mounted: false, capacityMB: null, freeMB: null })).toBe('not mounted');
+    expect(sdText({ ...sd, formatted: false })).toBe('not formatted');
+    expect(sdText(null)).toBe('not read yet');
+    expect(sdText(undefined)).toBe('—');
+  });
+  it('red with a problem, amber with a warning, else plain', () => {
+    expect(sdClass(withSd({ problem: true }))).toBe('bad');
+    expect(sdClass(withSd({ warning: true }))).toBe('warn');
+    expect(sdClass(withSd({}))).toBe('');
+    expect(sdClass(withSd(null))).toBe('');
+    expect(sdClass(undefined)).toBe('');
+  });
+  it('the headline names warnings while there is no problem', () => {
+    expect(healthHeadline({ ...health(), items: [{ id: 'sd', label: 'SD card', value: 'x', text: '', problem: false, warning: true }] })).toBe('All OK · 1 warning');
+    expect(healthHeadline({ ...health(['disk']), items: [{ id: 'sd', label: 'SD card', value: 'x', text: '', problem: false, warning: true }, { id: 'disk', label: 'Disk', value: 1, text: '', problem: true }] })).toBe('1 problem');
   });
 });

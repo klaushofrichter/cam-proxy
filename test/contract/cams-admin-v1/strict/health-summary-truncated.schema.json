@@ -34,6 +34,7 @@
               "stream",
               "events",
               "ftp",
+              "sd",
               "storage",
               "disk",
               "archive",
@@ -71,6 +72,9 @@
           },
           "problem": {
             "type": "boolean"
+          },
+          "warning": {
+            "const": true
           }
         },
         "required": [
@@ -201,6 +205,94 @@
                     "type": "null"
                   }
                 ]
+              },
+              "sd": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "mounted": {
+                        "type": "boolean"
+                      },
+                      "formatted": {
+                        "type": "boolean"
+                      },
+                      "capacityMB": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "freeMB": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "overwrite": {
+                        "anyOf": [
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "recordingEnabled": {
+                        "anyOf": [
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "checkedAt": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "lastRecordingAt": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "stalled": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "mounted",
+                      "formatted",
+                      "capacityMB",
+                      "freeMB",
+                      "overwrite",
+                      "recordingEnabled",
+                      "checkedAt",
+                      "lastRecordingAt",
+                      "stalled"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
@@ -230,6 +322,7 @@
                     "stream",
                     "events",
                     "ftp",
+                    "sd",
                     "storage",
                     "disk",
                     "archive",
@@ -267,6 +360,9 @@
                 },
                 "problem": {
                   "type": "boolean"
+                },
+                "warning": {
+                  "const": true
                 }
               },
               "required": [
