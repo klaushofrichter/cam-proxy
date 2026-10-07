@@ -56,7 +56,11 @@ const ZERO_IS_UNLIMITED = new Set(['analytics.googleVision.dailyCap', 'analytics
 const UNSET_IS_UNLIMITED = new Set(['stills.maxGB', 'previews.maxGB', 'ftp.maxGB']);
 // The contract's CAMERA_NAME_PATTERN (security review M3): a camera name from
 // cams-admin (camera.name.set, config.set of cameras.*.name).
-export const CAMERA_NAME_PATTERN = /^[^\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]{1,64}$/u;
+// 1-64 code points, none a control (Cc), format (Cf: bidi marks incl. U+061C,
+// zero-width, soft hyphen, U+180E, tag characters), surrogate (Cs: a lone
+// one), private-use (Co), line/paragraph separator or unassigned (Cn)
+// character (security review M3; the contract follows).
+export const CAMERA_NAME_PATTERN = /^(?:(?![\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Zl}\p{Zp}])\P{Cn}){1,64}$/u;
 // The contract's SECRET_KEY_PATTERN: never a remote path; dropped from answers.
 export const SECRET_KEY_PATTERN = /pem|key|password|passwd|secret|token|cookie/i;
 export const NARROW_REASON = { less: 'a remote change may only lower spending', more: 'a remote change may only keep data longer' } as const;

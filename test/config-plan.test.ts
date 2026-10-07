@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { applyOverrides, ConfigError, getPath, loadConfig, planOverrides, planUnset } from '../src/config/load';
 import { configChanges, overrideState } from '../src/config/changes';
 import { DEFAULTS } from '../src/config/defaults';
@@ -34,6 +34,14 @@ describe('planOverrides / planUnset', () => {
     expect(written.overrides).toEqual(p.overrides);
     expect(getPath(written.config, 'sse.pingS')).toBe(7);
     expect(getPath(p.next.config, 'sse.pingS')).toBe(7);
+  });
+  it('M4: overrides.json is written through a fresh temp file (a leftover tmp of the same pid is no obstacle), mode 600', () => {
+    const l = load();
+    mkdirSync(`${l.files.overrides}.tmp-${process.pid}`, { recursive: true });
+    const n = applyOverrides(l, { sse: { pingS: 7 } });
+    expect(JSON.parse(readFileSync(n.files.overrides, 'utf8'))).toEqual({ sse: { pingS: 7 } });
+    expect(statSync(n.files.overrides).mode & 0o777).toBe(0o600);
+    expect(readdirSync(dirname(n.files.overrides)).filter((f) => f.startsWith('overrides.json.tmp') && f !== `overrides.json.tmp-${process.pid}`)).toEqual([]);
   });
   it('a value equal to Reset drops the override in the plan too', () => {
     const l = applyOverrides(load(), { sse: { pingS: 7 } });

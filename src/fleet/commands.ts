@@ -123,7 +123,9 @@ export class CommandRunner {
       done = h ? await h(args, cmd) : { status: 'failed', code: 'not_implemented' };
     } catch (err) {
       this.d.log.warn({ command: cmd.command, err: String((err as Error)?.message ?? err).slice(0, 200) }, 'admin_command_error');
-      done = { status: 'failed', code: 'internal' };
+      // A camera action that threw still counts toward the journal budget (review M1).
+      const action = cmd.command === 'camera.action' && typeof cmd.args.action === 'string' ? cmd.args.action : undefined;
+      done = { status: 'failed', code: 'internal', ...(action ? { action } : {}) };
     }
     const entry: JournalEntry = { cmdId: cmd.cmdId, command: cmd.command, actor: cmd.actor, at: this.now(), status: done.status, ...(done.code ? { code: done.code } : {}), ...(done.result ? { result: done.result } : {}), ...(done.changed ? { changed: done.changed } : {}), ...(done.action ? { action: done.action } : {}) };
     try {

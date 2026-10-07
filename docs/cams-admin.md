@@ -177,13 +177,23 @@ cams-admin card (**Commands from cams-admin**), with
 | `config.rollback` | undo its own settings change |
 | `camera.name.set` | rename a camera (the camera's own name, re-read) |
 | `camera.action:<action>` | run that camera action: `camera-test`, `onvif-resubscribe`, `camera-ftp-test`, `poe-switch-read`, `inventory`, `inventory-cancel`, `retention-run` (always a dry run) |
-| **disruptive**: `proxy.restart`, `camera.action:restart`, `camera-reboot`, `camera-powercycle`, `camera-ftp-setup`, `camera-ftp-off`, `camera-ntp-set`, `camera-cert-push` | restart this proxy or a camera's worker, reboot or power-cycle a camera, rewrite its FTP or NTP settings, replace its HTTPS certificate. Grouped under **Disruptive — off by default** on the card; allow one only while it's needed (Klaus's decision, M §16 Q3) |
+| **disruptive**: `proxy.restart`, `camera.action:restart`, `camera-reboot`, `camera-powercycle`, `camera-ftp-setup`, `camera-ntp-set`, `camera-cert-push` | restart this proxy or a camera's worker, reboot or power-cycle a camera, point its FTP upload here or set its NTP server, replace its HTTPS certificate. Grouped under **Disruptive — off by default** on the card; allow one only while it's needed (Klaus's decision, M §16 Q3) |
 
 Camera actions that change trust, delete data or need someone at the
 hardware (`find-camera`, `camera-address`, `camera-trust-clear`,
 `tls-ca-rotate`, `tls-ca-drop-previous`, `archive-clear`, `inventory-repair`,
-`camera-poe-on`, and the process restart `restart-proxy` by any name but
-`proxy.restart`) can never be allowed.
+`camera-poe-on`, `camera-ftp-off` (it stops clip intake, like `ftp.enabled`),
+and the process restart `restart-proxy` by any name but `proxy.restart`) can
+never be allowed. An older `policy.json` or `config.json` that lists
+`camera.action:camera-ftp-off` is read without it.
+
+**Fresh consent after the upgrade.** An entry for a command an earlier
+version did not run yet (P2 showed them "not in this version") counts only
+once someone ticks it again here: the card shows it as "allowed before this
+version: tick and Save to confirm", `admin-commands status` as "needs
+re-confirming". `policy.json` written by this version records that
+(`consent: 3`). `camsAdmin.allowCommands` in `config.json` can pre-allow only
+`tokens.apply` and `tokens.apply.admin`; P3 entries there wait for the same tick.
 
 **Widening is local only.** Adding an entry, resuming and unblocking a token
 need the proxy's own `CAMPROXY_ADMIN_TOKEN` (or a session signed in with it,
@@ -228,7 +238,9 @@ What cams-admin may set is compiled in, `src/fleet/remote-settable.ts`
 - **One way only** (`widening_local_only`): every retention period and size
   cap may only go **up** (keep data longer; an unset size cap is no cap), the
   Google Vision limits only **down** (`dailyCap`/`perCameraDailyCap` 0 = no
-  cap). A rollback is exempt: it restores what a person here had set.
+  cap). A remote `config.rollback` passes the same check against the current
+values (it never lowers retention or raises spending, also as a rollback of a
+rollback); the card's **Undo** here is not checked.
 - A path the environment sets (`.env`) is refused `held_by_env`. A new
   setting is denied until someone classifies it here; making it
   remote-settable needs the cams-admin contract first.
@@ -238,15 +250,19 @@ What cams-admin may set is compiled in, `src/fleet/remote-settable.ts`
 someone changed a setting here since, the answer is `conflict` with the
 current values and nothing is written, also for a dry run (cams-admin reads
 again; local edits win). A dry run returns the change list the write would
-make. Each write saves `data/admin/overrides.bak-<cmdId>.json` (the override
-state of each path before and after; the last 20). `config.rollback` puts
+make. A write that changes nothing writes nothing. Each other write saves
+`data/admin/overrides.bak-<cmdId>.json` (the override state of each path
+before and after): the newest 20, and beyond them the newest not-undone one
+for each path, so a flood of later changes never takes an earlier change's
+Undo away. `config.rollback` puts
 the paths that command named back, when they still hold its values (else
 `conflict` naming the changed ones); a local edit of another path stays. A
 local settings edit sends cams-admin an early heartbeat within seconds.
 
 **Visible here.** Each command writes `admin-command`; a settings change
 also `config-change` (user `cams-admin`, the `cmdId`, on whose behalf); a
-camera action its usual record with user `cams-admin`. The Settings page marks
+camera action its usual record with user `cams-admin`. The `actor` cams-admin
+names is shown without control, bidi or format characters. The Settings page marks
 a setting cams-admin set ("set by cams-admin (on behalf of …)") with
 **Undo**; the card lists **Settings changed by cams-admin** with **Undo**
 (`GET /control/admin/changes`, `POST /control/admin/changes/<cmdId>/undo`,
