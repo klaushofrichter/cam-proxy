@@ -44,6 +44,11 @@ export class OverridesBackups {
     for (const old of all.slice(KEEP)) rmSync(this.file(old.cmdId), { force: true });
   }
 
+  // A backup whose write did not happen after all.
+  remove(cmdId: string): void {
+    rmSync(this.file(cmdId), { force: true });
+  }
+
   // null: missing, unsafe or invalid (logged once per file).
   get(cmdId: string): Backup | null {
     const f = this.file(cmdId);
