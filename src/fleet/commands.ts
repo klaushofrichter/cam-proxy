@@ -20,7 +20,9 @@ import { ShadowsLocalToken, type TokenStore, type TokensApplyArgs } from './toke
 export interface ConnCtx { connId: string; serverNow: () => number; seen: SeenIds }
 // False when the socket is gone (or not draining).
 export type SignedSend = (type: 'result' | 'event', body: Record<string, unknown>, re?: string) => boolean;
-export type Done = { status: 'ok' | 'failed' | 'conflict'; code?: string; result?: Record<string, unknown>; changed?: string[] };
+// `action`: camera.action's action (journaled: the journal budget counts it).
+// `after`: runs once the result went out (or could not): proxy.restart's restart (R3-10).
+export type Done = { status: 'ok' | 'failed' | 'conflict'; code?: string; result?: Record<string, unknown>; changed?: string[]; action?: string; after?: () => void };
 export type Handler = (args: unknown, cmd: CommandBody) => Done | Promise<Done>;
 
 export interface RunnerDeps {
@@ -119,7 +121,7 @@ export class CommandRunner {
       this.d.log.warn({ command: cmd.command, err: String((err as Error)?.message ?? err).slice(0, 200) }, 'admin_command_error');
       done = { status: 'failed', code: 'internal' };
     }
-    const entry: JournalEntry = { cmdId: cmd.cmdId, command: cmd.command, actor: cmd.actor, at: this.now(), status: done.status, ...(done.code ? { code: done.code } : {}), ...(done.result ? { result: done.result } : {}), ...(done.changed ? { changed: done.changed } : {}) };
+    const entry: JournalEntry = { cmdId: cmd.cmdId, command: cmd.command, actor: cmd.actor, at: this.now(), status: done.status, ...(done.code ? { code: done.code } : {}), ...(done.result ? { result: done.result } : {}), ...(done.changed ? { changed: done.changed } : {}), ...(done.action ? { action: done.action } : {}) };
     try {
       this.d.journal.record(entry);
     } catch (err) {
@@ -132,6 +134,16 @@ export class CommandRunner {
     if (!send('result', body, m.id)) {
       this.undelivered.set(cmd.cmdId, body);
       while (this.undelivered.size > UNDELIVERED_MAX) this.undelivered.delete(this.undelivered.keys().next().value as string);
+    }
+    const after = done.after;
+    if (after) {
+      setImmediate(() => {
+        try {
+          after();
+        } catch (err) {
+          this.d.log.warn({ command: cmd.command, err: String((err as Error)?.message ?? err).slice(0, 200) }, 'admin_command_after_error');
+        }
+      });
     }
   }
 

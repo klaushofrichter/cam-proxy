@@ -55,6 +55,34 @@ function runnerFixture(o: { allow?: string[]; handlers?: Record<string, (args: u
 const signEnvelopeWith = (k: string, m: Omit<Envelope, 'sig'>) => signEnvelope(k, m);
 
 describe('the runner', () => {
+  it('Done.after runs once the done result went out; a re-sent cmdId answers duplicate and never runs it again (R3-10); action is journaled', async () => {
+    const order: string[] = [];
+    const f = runnerFixture({ handlers: { 'tokens.apply': () => ({ status: 'ok', result: { restartAt: 1 }, action: 'camera-reboot', after: () => void order.push('after') }) } });
+    const c = f.conn();
+    const send = (type: 'result' | 'event', body: Record<string, unknown>) => (order.push(`${type}:${String(body.phase)}`), true);
+    const m = f.command('tokens.apply', argsOf(1), c);
+    await f.runner.onCommand(m, c, send);
+    expect(order).toEqual(['result:received', 'result:done']);
+    await new Promise((r) => setImmediate(r));
+    expect(order).toEqual(['result:received', 'result:done', 'after']);
+    expect(f.journal.get((m.body as { cmdId: string }).cmdId)).toMatchObject({ action: 'camera-reboot' });
+    const c2 = f.conn(`con_${'3'.repeat(20)}`);
+    const again = { ...m, body: { ...(m.body as object), connId: c2.connId } } as Record<string, unknown>;
+    delete again.sig;
+    await f.runner.onCommand({ ...again, sig: signEnvelope(vectors.keys.server.privateKey, again as never) } as Envelope, c2, send);
+    await new Promise((r) => setImmediate(r));
+    expect(order.filter((x) => x === 'after')).toHaveLength(1);
+    expect(order.at(-1)).toBe('result:done');
+  });
+  it('an after hook that throws is logged, never breaks the runner', async () => {
+    const warned: string[] = [];
+    const f = runnerFixture({ handlers: { 'tokens.apply': () => ({ status: 'ok', after: () => { throw new Error('boom'); } }) } });
+    (f.runner as unknown as { d: { log: ClientLog } }).d.log = { info() {}, debug() {}, warn: (_o: object, msg: string) => void warned.push(msg) };
+    const c = f.conn();
+    await f.runner.onCommand(f.command('tokens.apply', argsOf(1), c), c, f.send);
+    await new Promise((r) => setImmediate(r));
+    expect(warned).toContain('admin_command_after_error');
+  });
   it('received, then done; journaled; tokens applied; one admin-command record without any hash', async () => {
     const f = runnerFixture();
     const c = f.conn();
