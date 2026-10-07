@@ -3,7 +3,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, it } from 'vitest';
 import { Journal, type JournalEntry } from '../src/fleet/journal';
-import { writePrivateJson } from '../src/fleet/private-file';
+import { privateFileHooks, writePrivateJson } from '../src/fleet/private-file';
 
 // The command journal (M §7.6): data/admin/commands.json, the final result
 // of each cmdId, so a re-sent command answers its stored result.
@@ -57,9 +57,15 @@ describe('Journal', () => {
       const file = fresh();
       new Journal(file, () => 1).record(entry(1, 1));
       if (spoil === 'corrupt') writeFileSync(file, '{', { mode: 0o600 });
-      else chmodSync(file, 0o644);
+      // Another user's file (ours with 644 would be tightened and used).
+      else privateFileHooks.fstat = () => ({ mode: 0o100644, uid: (process.getuid?.() ?? 0) + 1 });
       const q = quiet();
-      const j = new Journal(file, () => 2, q.log);
+      let j: Journal;
+      try {
+        j = new Journal(file, () => 2, q.log);
+      } finally {
+        delete privateFileHooks.fstat;
+      }
       expect(j.get(cmd(1))).toBeUndefined();
       j.record(entry(2, 2));
       expect(j.get(cmd(2))).toBeDefined();
@@ -67,5 +73,14 @@ describe('Journal', () => {
       expect(q.lines).toContain('admin_journal_reset');
       expect(readdirSync(join(file, '..')).some((n) => /^commands\.json\.bad-\d+$/.test(n)), spoil).toBe(true);
     }
+  });
+  it('ours with 660 (the cluster volume under fsGroup): tightened to 600 and used', () => {
+    const file = fresh();
+    new Journal(file, () => 1).record(entry(1, 1));
+    chmodSync(file, 0o660);
+    const j = new Journal(file, () => 2);
+    expect(j.problem()).toBeNull();
+    expect(j.get(cmd(1))).toBeDefined();
+    expect(statSync(file).mode & 0o777).toBe(0o600);
   });
 });

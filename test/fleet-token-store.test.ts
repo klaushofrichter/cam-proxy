@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'crypto';
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'fs';
+import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, it } from 'vitest';
@@ -47,6 +47,16 @@ describe('TokenStore', () => {
     expect(readFileSync(file, 'utf8')).not.toContain(t);
     const again = new TokenStore({ file, now: () => 1_000, localDigests: () => [] });
     expect(again.match(t)?.id).toBe(id(1));
+  });
+  it('ours with 660 (the cluster volume under fsGroup): tightened to 600 and used after a restart', () => {
+    const { s, file } = store();
+    const t = tok();
+    s.apply({ v: 1, revision: 1, tokens: [{ id: id(1), kind: 'client', hash: hashOf(t), label: 'cams cluster', retireAt: null }] });
+    chmodSync(file, 0o660);
+    const again = new TokenStore({ file, now: () => 1_000, localDigests: () => [] });
+    expect(again.problem()).toBeNull();
+    expect(again.match(t)?.id).toBe(id(1));
+    expect(statSync(file).mode & 0o777).toBe(0o600);
   });
   it('an older or equal revision is stale: nothing changes (a replay or a restored cams-admin)', () => {
     const { s } = store();

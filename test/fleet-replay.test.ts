@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'crypto';
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'fs';
+import { chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import request from 'supertest';
@@ -75,6 +75,38 @@ describe('ReplayGuard', () => {
     rmSync(f);
     rmSync(mark);
     expect(new ReplayGuard({ file: f, slackMs: 1000, log }).challenge(KEY, 5)).toBe(true);
+  });
+  it('unusable files are read again: a local fix needs no restart; the warning is logged once', () => {
+    const f = dir();
+    const g = new ReplayGuard({ file: f, slackMs: 1000, log: quiet });
+    g.challenge(KEY, 10_000);
+    g.flush();
+    const mark = join(f, '..', 'replay-mark.json');
+    writeFileSync(f, '{', { mode: 0o600 });
+    writeFileSync(mark, '{', { mode: 0o600 });
+    const lines: string[] = [];
+    const k = new ReplayGuard({ file: f, slackMs: 1000, log: { warn: (_o: object, m: string) => void lines.push(m) } });
+    expect(k.challenge(KEY, 20_000)).toBe(false);
+    expect(k.challenge(KEY, 20_000)).toBe(false);
+    expect(lines.filter((l) => l === 'admin_replay_unusable')).toHaveLength(1);
+    rmSync(f);
+    rmSync(mark);
+    expect(k.problem()).toBeNull();
+    expect(k.challenge(KEY, 20_000)).toBe(true);
+  });
+  it('ours with 660 (the cluster volume under fsGroup): tightened to 600 and used', () => {
+    const f = dir();
+    const g = new ReplayGuard({ file: f, slackMs: 1000, log: quiet });
+    g.challenge(KEY, 10_000_000);
+    g.flush();
+    const mark = join(f, '..', 'replay-mark.json');
+    chmodSync(f, 0o660);
+    chmodSync(mark, 0o660);
+    const h = new ReplayGuard({ file: f, slackMs: 1000, log: quiet });
+    expect(h.problem()).toBeNull();
+    expect(h.challenge(KEY, 1)).toBe(false); // the mark held: older than it
+    expect(statSync(f).mode & 0o777).toBe(0o600);
+    expect(statSync(mark).mode & 0o777).toBe(0o600);
   });
   it('a failed coalesced write is logged (admin_replay_save_failed), never thrown from the timer', async () => {
     const blocker = join(mkdtempSync(join(tmpdir(), 'replay-')), 'file');

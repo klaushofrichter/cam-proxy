@@ -69,10 +69,16 @@ All apply at once: a change restarts only the client (the old connection says
 
 `<dataDir>/admin/key.json`, mode 600 in a 700 folder, written atomically
 (random temp file, fsync, rename). It holds the proxy's private key: never
-print, copy, log or serve it, and keep it out of backups you share. The proxy
-refuses a key file that others can read or that belongs to another user
-(state `key-unsafe`, e.g. a restored backup with mode 644: `chmod 600` it, or
-enroll again). Losing it means enrolling again.
+print, copy, log or serve it, and keep it out of backups you share. A key
+file of the proxy's own user that others could read (660 in the cluster, where
+the pod's `fsGroup` makes kubelet add g+rw to the volume on every start; a
+restored backup with 644) is set back to 600 (the folder to 700) before it is
+read, at startup and on every read (`admin_file_tightened`); the same holds
+for `tokens.json`, `commands.json`, `policy.json`, `replay.json` and
+`replay-mark.json`. A file of another user, or one that stays readable after
+the chmod, is refused (state `key-unsafe`: `chown`/`chmod 600` it, or enroll
+again); the proxy reads it again every 30 s, so the fix needs no restart.
+Losing it means enrolling again.
 
 ## What is sent
 

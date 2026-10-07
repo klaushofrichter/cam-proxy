@@ -4,6 +4,7 @@ import { join } from 'path';
 import { describe, expect, it } from 'vitest';
 import { ALLOW_ENTRIES, CommandPolicy, ENTRY_TEXT, IMPLEMENTED, DENIED_PATH_PREFIXES, isDeniedPath, NEVER_REMOTE_ACTIONS, validateAllowList, WideningRefused } from '../src/fleet/policy';
 import { readEnvLayer } from '../src/config/env';
+import { privateFileHooks } from '../src/fleet/private-file';
 import { settingPaths } from '../src/config/load';
 import { DEFAULTS } from '../src/config/defaults';
 
@@ -67,11 +68,24 @@ describe('CommandPolicy', () => {
     writeFileSync(envFile, 'CAMPROXY_ADMIN_COMMANDS=off\n', { mode: 0o600 });
     expect(make(d, { allow: [], paused: false }, { CAMPROXY_ENV_FILE: envFile, CAMPROXY_ADMIN_COMMANDS: 'on' }).effective().enabled).toBe(false);
   });
-  it('a policy.json readable by others is not used: paused, with the reason', () => {
+  it("another user's policy.json is not used: paused, with the reason", () => {
     const d = dir();
     const p = make(d);
     p.setAllow(['tokens.apply'], 'local');
-    chmodSync(join(d, 'admin', 'policy.json'), 0o644);
-    expect(p.effective()).toMatchObject({ paused: true, allow: [], pauseReason: expect.stringMatching(/policy\.json.*others/) });
+    privateFileHooks.fstat = () => ({ mode: 0o100644, uid: (process.getuid?.() ?? 0) + 1 });
+    try {
+      expect(p.effective()).toMatchObject({ paused: true, allow: [], pauseReason: expect.stringMatching(/policy\.json.*another user/) });
+    } finally {
+      delete privateFileHooks.fstat;
+    }
+    expect(p.effective()).toMatchObject({ paused: false, allow: ['tokens.apply'] });
+  });
+  it('our policy.json with 660 (the cluster volume under fsGroup): tightened to 600 and used', () => {
+    const d = dir();
+    const p = make(d);
+    p.setAllow(['tokens.apply'], 'local');
+    chmodSync(join(d, 'admin', 'policy.json'), 0o660);
+    expect(p.effective()).toMatchObject({ paused: false, allow: ['tokens.apply'] });
+    expect(statSync(join(d, 'admin', 'policy.json')).mode & 0o777).toBe(0o600);
   });
 });
