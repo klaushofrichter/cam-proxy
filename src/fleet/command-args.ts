@@ -2,6 +2,7 @@
 // strict variant). Hand-written: no schema library at run time. A test runs
 // them against the vendored strict schemas on the fixtures.
 import { NEVER_REMOTE_ACTIONS, REMOTE_ACTIONS } from './policy';
+import { CAMERA_NAME_PATTERN } from './remote-settable';
 import type { ManagedToken, TokensApplyArgs } from './token-store';
 
 export type ArgsVerdict<T> = { ok: true; args: T } | { ok: false; code: 'unsupported_version' | 'invalid_args'; detail: string };
@@ -48,7 +49,6 @@ export const PATH_RE = /^[a-z][A-Za-z0-9]{0,31}(\.[a-z0-9][A-Za-z0-9-]{0,31}){0,
 const REV = /^sha256:[0-9a-f]{64}$/;
 const CMD_ID = /^cmd_[0-9A-HJKMNP-TV-Z]{20}$/;
 const CAM = /^[a-z0-9][a-z0-9-]{0,31}$/;
-const NAME = /^[^\u0000-\u001f\u007f]{1,64}$/u;
 const leafValue = (x: unknown) => typeof x === 'boolean' || Number.isSafeInteger(x) || (typeof x === 'string' && x.length <= 512);
 const v1 = <T>(a: unknown, keys: string[], rest: (o: Record<string, unknown>) => string | null): ArgsVerdict<T> => {
   if (!isObj(a)) return { ok: false, code: 'invalid_args', detail: 'args: not an object' };
@@ -86,7 +86,7 @@ export const validateCameraAction = (a: unknown) => v1<CameraActionArgs>(a, ['ca
   }
   return null;
 });
-export const validateCameraName = (a: unknown) => v1<CameraNameArgs>(a, ['camera', 'name'], (o) => (typeof o.camera !== 'string' || !CAM.test(o.camera) ? 'camera' : typeof o.name !== 'string' || !NAME.test(o.name) ? 'name' : null));
+export const validateCameraName = (a: unknown) => v1<CameraNameArgs>(a, ['camera', 'name'], (o) => (typeof o.camera !== 'string' || !CAM.test(o.camera) ? 'camera' : typeof o.name !== 'string' || !CAMERA_NAME_PATTERN.test(o.name) ? 'name' : null));
 
 export const ARGS_VALIDATORS: Record<string, (a: unknown) => ArgsVerdict<unknown>> = {
   'tokens.apply': validateTokensApply,

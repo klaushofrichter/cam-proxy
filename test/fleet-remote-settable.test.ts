@@ -19,6 +19,9 @@ describe('the classification (R3-1)', () => {
       expect(listed || denied, `${p} is unclassified: add it to REMOTE (contract first) or DENIED`).toBe(true);
     }
   });
+  it('this version lets cams-admin set exactly the contract\'s remote list', () => {
+    expect([...REMOTE].sort()).toEqual([...contract.remote].sort());
+  });
   it('the compiled remote list is a subset of the contract (the upper bound); narrow paths agree', () => {
     for (const r of REMOTE) expect(contract.remote, r).toContain(r);
     // Every narrow path the contract names that is remote here is narrow here, the same way.
@@ -47,7 +50,7 @@ describe('the classification (R3-1)', () => {
 describe('local only (coordinator ruling I4)', () => {
   it('capture and feature on/off switches and health thresholds are denied, with a reason', () => {
     for (const p of ['stills.enabled', 'ftp.enabled', 'archive.enabled', 'events.poll.enabled', 'analytics.kinds.person', 'analytics.kinds.vehicle', 'analytics.kinds.pet', 'analytics.googleVision.enabled',
-      'health.diskPercent', 'health.tempC', 'archive.warnPercent',
+      'health.diskPercent', 'health.tempC', 'archive.warnPercent', 'host.stats', 'ftp.stalledHours',
       'cameras.cam1.stills.enabled', 'cameras.cam1.ftp.enabled', 'cameras.cam1.analytics.kinds.person', 'cameras.cam1.events.poll.enabled']) {
       expect(classify(p, IDS), p).toBe('denied');
       expect(denyReason(p), p).toMatch(/^local only: /);

@@ -47,7 +47,15 @@ export const why = (v: ValidateFunction): string => (v.errors ?? []).slice(0, 3)
 // A command fixture this version can't run yet (the cross-repo rule of the
 // P3 contract): skipped and listed, never passed silently. A test asserts
 // that nothing is pending once P3 is implemented.
+// Only a command of the contract's closed list can be pending (an unknown name is refused as such).
+const COMMANDS: string[] = (() => {
+  const find = (x: unknown): string[] | null => {
+    if (Array.isArray(x)) return x.includes('tokens.apply') && x.every((y) => typeof y === 'string') ? (x as string[]) : x.map(find).find(Boolean) ?? null;
+    return x && typeof x === 'object' ? Object.values(x).map(find).find(Boolean) ?? null : null;
+  };
+  return find(json(join(CONTRACT, 'strict', 'command.schema.json'))) ?? [];
+})();
 export const pending = (f: Fixture, implemented: ReadonlySet<string>): boolean => {
   const b = (f.message as { body?: { command?: unknown } })?.body;
-  return f.schema === 'command' && typeof b?.command === 'string' && !implemented.has(b.command);
+  return f.schema === 'command' && typeof b?.command === 'string' && COMMANDS.includes(b.command) && !implemented.has(b.command);
 };

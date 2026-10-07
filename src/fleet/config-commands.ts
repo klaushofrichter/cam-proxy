@@ -9,7 +9,7 @@ import type { OverridesBackups, Backup, PathState } from './backups';
 import type { CommandBody } from './command-check';
 import type { ConfigRollbackArgs, ConfigSetArgs, ConfigUnsetArgs } from './command-args';
 import type { Done, Handler } from './commands';
-import { classify, denyReason, NARROW, NARROW_REASON, narrowingOk, settableView } from './remote-settable';
+import { CAMERA_NAME_PATTERN, classify, denyReason, NARROW, NARROW_REASON, narrowingOk, SECRET_KEY_PATTERN, settableView } from './remote-settable';
 
 // cams-admin's settings commands (migration spec M §8, plan P3 Task 7):
 // config.get, config.set / config.unset (dry run, revision conflict) and
@@ -32,8 +32,9 @@ const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const failed = (code: string, paths: Failure[]): Done => ({ status: 'failed', code, result: { paths } });
 const MAX_CAMERAS = 24;
-// Settings never hold a secret; a path that looked like one would never be sent (defence).
-const SECRET_PATH = /password|passwd|secret|token|cookie|pem|privatekey/i;
+// Settings never hold a secret; a path that looks like one (the contract's
+// SECRET_KEY_PATTERN, e.g. a key file's path) is never sent.
+const SECRET_PATH = SECRET_KEY_PATTERN;
 
 // A legacy path (camera.*, ftp.user) as the proxy reads it; one it can't
 // assign (several cameras) stays as sent and is refused as not a remote setting.
@@ -218,6 +219,8 @@ export function configHandlers(d: ConfigCommandDeps): Record<'config.get' | 'con
       const entries = Object.entries(a.set).map(([p, v]) => [translate(l, p), v] as const);
       const paths = entries.map(([p]) => p);
       return write(d, cmd, a, paths, (cur) => {
+        // A camera name from cams-admin: the contract's CAMERA_NAME_PATTERN (an invalid_value, as the proxy's own rules).
+        for (const [p, v] of entries) if (/^cameras\.[^.]+\.name$/.test(p) && (typeof v !== 'string' || !CAMERA_NAME_PATTERN.test(v))) throw new ConfigError(`${p}: 1 to 64 characters, no control, bidi, separator or zero-width characters`);
         const patch: Obj = {};
         for (const [p, v] of entries) setPath(patch, p, v);
         return planOverrides(cur, patch);

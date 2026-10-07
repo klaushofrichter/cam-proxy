@@ -10,14 +10,14 @@ export const REMOTE: readonly string[] = [
   'events.onvif.subscribeMin', 'events.onvif.pullTimeoutS', 'events.poll.intervalS', 'events.poll.afterOnvifDownS', 'events.maxOpenMin',
   'retention.stillsDays', 'retention.previewsDays', 'retention.clipsDays', 'retention.eventsDays', 'retention.auditDays', 'retention.streamLogDays', 'retention.intervalMin',
   'composition.concurrent', 'sse.maxClients', 'sse.queuePerClient', 'sse.pingS', 'recordings.cacheMB',
-  'host.stats',
-  'ftp.stream', 'ftp.stalledHours', 'ftp.maxGB',
+  'ftp.stream', 'ftp.maxGB',
   'analytics.googleVision.monthlyLimit', 'analytics.googleVision.dailyCap', 'analytics.googleVision.checksPerDay', 'analytics.googleVision.perCameraDailyCap',
   'cameras.*.name', 'cameras.*.statusPollS', 'cameras.*.stills.stream', 'cameras.*.stills.intervalS',
   'cameras.*.ftp.stream',
 ];
-// Local only (coordinator rulings 2026-10-07: storage; I4: capture and feature
-// on/off switches, health thresholds): a person at the proxy decides them.
+// Local only (coordinator rulings 2026-10-07: storage; I4, contract LOCAL_ONLY:
+// capture and feature on/off switches, health thresholds): a person at the
+// proxy decides them.
 // Denied like the trust paths; a refusal names the reason.
 const LOCAL_ONLY: Readonly<Record<string, string>> = {
   storage: 'local only: a storage budget lowered remotely would make the proxy delete stills and clips',
@@ -33,6 +33,8 @@ const LOCAL_ONLY: Readonly<Record<string, string>> = {
   'cameras.*.analytics.kinds': 'local only: turns analysis on or off',
   'analytics.googleVision.enabled': 'local only: turns analysis on or off',
   health: 'local only: a health threshold decides what the proxy reports as a problem',
+  'host.stats': 'local only: turns reading the host figures on or off',
+  'ftp.stalledHours': 'local only: a health threshold decides what the proxy reports as a problem',
   'archive.warnPercent': 'local only: a health threshold decides what the proxy reports as a problem',
 };
 export const DENIED: readonly string[] = [
@@ -52,6 +54,11 @@ export const NARROW: Readonly<Record<string, 'less' | 'more'>> = {
 const ZERO_IS_UNLIMITED = new Set(['analytics.googleVision.dailyCap', 'analytics.googleVision.perCameraDailyCap']);
 // Size caps where unset means "no cap": unset counts as infinitely high.
 const UNSET_IS_UNLIMITED = new Set(['stills.maxGB', 'previews.maxGB', 'ftp.maxGB']);
+// The contract's CAMERA_NAME_PATTERN (security review M3): a camera name from
+// cams-admin (camera.name.set, config.set of cameras.*.name).
+export const CAMERA_NAME_PATTERN = /^[^\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]{1,64}$/u;
+// The contract's SECRET_KEY_PATTERN: never a remote path; dropped from answers.
+export const SECRET_KEY_PATTERN = /pem|key|password|passwd|secret|token|cookie/i;
 export const NARROW_REASON = { less: 'a remote change may only lower spending', more: 'a remote change may only keep data longer' } as const;
 const CAMERA_ID_RE = new RegExp(CAMERA_ID);
 const under = (p: string, x: string) => p === x || p.startsWith(`${x}.`);

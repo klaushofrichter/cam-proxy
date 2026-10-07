@@ -7,6 +7,7 @@ import type { CameraActionArgs, CameraNameArgs } from './command-args';
 import type { CommandBody } from './command-check';
 import type { Done, Handler } from './commands';
 import { NEVER_REMOTE_ACTIONS, REMOTE_ACTIONS } from './policy';
+import { SECRET_KEY_PATTERN } from './remote-settable';
 
 // cams-admin's camera commands (migration spec M §8.3, §8.6; plan P3 Task 9):
 // camera.action through the control API's own action code (performAction, no
@@ -23,7 +24,7 @@ export interface CameraCommandDeps {
   now?: () => number;
 }
 
-const SECRET_KEY = /pem|key|password|passwd|secret|token|cookie/i;
+const SECRET_KEY = SECRET_KEY_PATTERN;
 const MAX_ANSWER = 16_384;
 // Every key that could hold key material or a credential, dropped at any depth.
 export function scrub(x: unknown, depth = 0): unknown {

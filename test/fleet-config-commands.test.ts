@@ -225,6 +225,9 @@ describe('config.set', () => {
     expect(r).toMatchObject({ status: 'failed', code: 'invalid_value', result: { paths: [{ path: 'previews.grid', code: 'invalid_value', detail: expect.stringMatching(/^previews\.grid: /) }] } });
     expect((await run('config.set', { v: 1, dryRun: true, baseRevision: rev(), set: { 'sse.pingS': 100000 } })).code).toBe('invalid_value');
     expect((await run('config.set', { v: 1, dryRun: true, baseRevision: rev(), set: { 'sse.pingS': 'x' } })).code).toBe('invalid_value');
+    // A camera name from cams-admin follows CAMERA_NAME_PATTERN (no bidi, zero-width, separators).
+    expect(await run('config.set', { v: 1, dryRun: true, baseRevision: rev(), set: { 'cameras.cam1.name': 'Gate\u202eevil' } })).toMatchObject({ status: 'failed', code: 'invalid_value', result: { paths: [{ path: 'cameras.cam1.name', code: 'invalid_value' }] } });
+    expect((await run('config.set', { v: 1, dryRun: true, baseRevision: rev(), set: { 'cameras.cam1.name': 'Garten Süd' } })).status).toBe('ok');
   });
   it('a store error (overrides.json not writable) fails store_error and leaves the running config unchanged', async () => {
     const adminDir = join(holder.loaded.config.server.dataDir);
