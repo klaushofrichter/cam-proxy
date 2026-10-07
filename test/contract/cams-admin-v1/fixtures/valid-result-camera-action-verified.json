@@ -1,0 +1,31 @@
+{
+  "$note": "a camera write, re-read and compared",
+  "$command": "camera.action",
+  "schema": "result",
+  "message": {
+    "v": 1,
+    "type": "result",
+    "id": "01K60000000000000000000005",
+    "seq": 5,
+    "ts": 1791273600005,
+    "re": "01K60000000000000000000003",
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "phase": "done",
+      "status": "ok",
+      "result": {
+        "action": "camera-ntp-set",
+        "camera": "cam1",
+        "httpStatus": 200,
+        "answer": {
+          "ok": true
+        },
+        "verified": true,
+        "mismatch": []
+      }
+    },
+    "sig": "0fdvhpvGmnxfOFMKZNGqQa/7gG1DKT/KLNHqMhn2xUVw6CmN8cj/lnrGhAnEMBakLV2MUKRRj9uDIKGlR15qDA=="
+  }
+}

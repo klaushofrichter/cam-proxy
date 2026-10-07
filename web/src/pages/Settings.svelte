@@ -12,11 +12,12 @@
   import { envNote, isEnvSet } from '../lib/find-camera';
 
   import ConfirmDialog from '../components/ConfirmDialog.svelte';
+  import { byText, undoErrorText } from '../lib/cams-admin';
   import { parseSetting, resetCounts, resetLabel, resetPlan, sameBadge, type ResetTo, type SettingType } from '../lib/settings';
 
   // `env`: the variable that sets it (source env: read-only here).
   // `legacy`: read from a legacy `camera` object in config.json.
-  interface Setting { value: unknown; source: 'default' | 'file' | 'override' | 'env'; env?: string; restart: boolean; restartScope?: 'camera' | 'host'; pending: boolean; next?: unknown; type?: SettingType; resetTo?: ResetTo; legacy?: true }
+  interface Setting { value: unknown; source: 'default' | 'file' | 'override' | 'env'; env?: string; restart: boolean; restartScope?: 'camera' | 'host'; pending: boolean; next?: unknown; type?: SettingType; resetTo?: ResetTo; legacy?: true; by?: { cmdId: string; actor: string; at: number } }
   let view = $state<Record<string, Setting>>({});
   let drafts = $state<Record<string, string>>({});
   let message = $state('');
@@ -53,6 +54,20 @@
     } catch (e) {
       message = e instanceof ApiError ? e.message : 'not saved';
     }
+  }
+  // A setting cams-admin set (migration P3): Undo that whole change (every
+  // path it set), as on the Status page's cams-admin card.
+  let undoing = $state<{ path: string; cmdId: string; actor: string } | null>(null);
+  async function undo(u: { path: string; cmdId: string }) {
+    undoing = null;
+    try {
+      await api('POST', `/control/admin/changes/${u.cmdId}/undo`);
+      message = `cams-admin's change ${u.cmdId} undone`;
+    } catch (e) {
+      message = undoErrorText(e);
+    }
+    await load();
+    void refresh();
   }
   async function reset(path: string) {
     view = await api('DELETE', `/control/config/${encodeURIComponent(path)}`);
@@ -170,7 +185,7 @@
                 <input value={drafts[p] ?? shown(s.value)} oninput={(e) => (drafts[p] = e.currentTarget.value)} data-testid="input-{p}" disabled={(typeof s.value === 'object' && s.value !== null) || isEnvSet(s)} readonly={isEnvSet(s)} title={isEnvSet(s) ? envNote(s) : undefined} />
                 {#if isEnvSet(s)}<div class="env-note" data-testid="env-note-{p}">{envNote(s)}</div>{/if}
               </td>
-              <td><span class="badge {s.source}" class:same={!!same} data-testid="source-{p}" title={same?.title}>{same ? same.text : s.legacy ? 'config.json (legacy camera)' : s.source}</span>{#if s.restart}<span class="badge restart" title={s.restartScope === 'camera' ? "applies after this camera's restart (Maintenance → Restart camera side) or Restart to apply" : 'applies after Restart to apply (every camera side)'}>restart</span>{/if}{#if s.pending}<span class="badge pending">next: {shown(s.next)}</span>{/if}</td>
+              <td><span class="badge {s.source}" class:same={!!same} data-testid="source-{p}" title={same?.title}>{same ? same.text : s.legacy ? 'config.json (legacy camera)' : s.source}</span>{#if s.restart}<span class="badge restart" title={s.restartScope === 'camera' ? "applies after this camera's restart (Maintenance → Restart camera side) or Restart to apply" : 'applies after Restart to apply (every camera side)'}>restart</span>{/if}{#if s.pending}<span class="badge pending">next: {shown(s.next)}</span>{/if}{#if s.by}<span class="badge by" data-testid="by-{p}">{byText(s.by)}</span> <button class="link" onclick={() => (undoing = { path: p, cmdId: s.by!.cmdId, actor: s.by!.actor })} data-testid="undo-{p}">Undo</button>{/if}</td>
               <td class="actions">
                 {#if drafts[p] !== undefined}<button onclick={() => void save(p)} data-testid="save-{p}">Save</button>{/if}
                 {#if s.source === 'override' && !same}<button onclick={() => void reset(p)} data-testid="reset-{p}">{resetLabel(p, s.resetTo && { ...s.resetTo, means: undefined })}{#if s.resetTo?.means}{' '}<span class="means">({s.resetTo.means})</span>{/if}</button>{/if}
@@ -186,6 +201,9 @@
 </section>
 {#if removing}
   <ConfirmDialog title="Remove camera {removing}" message="The proxy stops this camera at once. Its stills, clips and events stay until retention removes them." confirmLabel="Remove camera" oncancel={() => (removing = null)} onconfirm={() => void removeCamera(removing!)} />
+{/if}
+{#if undoing}
+  <ConfirmDialog title="Undo cams-admin's change" message="{undoing.path} and every other setting that change ({undoing.cmdId}, on behalf of {undoing.actor}) made go back to what they were before. A setting changed here since is left alone, and nothing is undone then." confirmLabel="Undo" oncancel={() => (undoing = null)} onconfirm={() => void undo(undoing!)} />
 {/if}
 {#if asking}
   <ConfirmDialog title="Reset to defaults" message={askMessage} items={asking} confirmLabel={askLabel} oncancel={() => (asking = null)} onconfirm={() => void resetAll()} />
@@ -214,6 +232,8 @@
   .env-note { margin-top: 4px; font-size: 12px; color: var(--muted); }
   input:disabled { opacity: 0.7; cursor: not-allowed; }
   .badge.pending { color: #f59e0b; }
+  .badge.by { color: var(--accent); border-style: dotted; }
+  button.link { border: none; background: none; padding: 0; color: var(--accent); cursor: pointer; text-decoration: underline; font-size: 12px; }
   .actions { white-space: nowrap; text-align: right; }
   /* A phone: "Reset – 90 days" may take two lines rather than squeeze the field. */
   @media (max-width: 560px) {

@@ -16,6 +16,8 @@ export interface JournalEntry {
   code?: string;
   result?: Record<string, unknown>;
   changed?: string[];
+  // camera.action: the action it ran (the journal budget counts disruptive ones).
+  action?: string;
 }
 
 const KEEP = 1000;
@@ -74,6 +76,19 @@ export class Journal {
     const next = list.slice(drop);
     writePrivateJson(this.file, { v: 1, entries: next }, false);
     this.set(next);
+  }
+
+  // How many entries at or after `sinceMs` match, and the oldest one's time
+  // (the journal budget, contract step 11: persisted, so a restart never resets it).
+  countSince(pred: (e: JournalEntry) => boolean, sinceMs: number): { n: number; oldest: number | null } {
+    let n = 0;
+    let oldest: number | null = null;
+    for (let i = this.entries.length - 1; i >= 0 && this.entries[i].at >= sinceMs; i--) {
+      if (!pred(this.entries[i])) continue;
+      n++;
+      oldest = this.entries[i].at;
+    }
+    return { n, oldest };
   }
 
   // The newest first.

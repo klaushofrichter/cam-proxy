@@ -26,6 +26,26 @@ export interface PushResult {
   detail?: string;
   tookMs: number;
 }
+// What an answer may carry of a push (R3-8): never the leaf's private key, its
+// PEM or the served PEM. The HTTP route and cams-admin's camera.action answer this.
+export interface PushAnswer {
+  outcome: PushOutcome;
+  served: string | null;
+  leaf?: { fingerprint: string; notAfter: number; names: string[]; ips: string[] };
+  clearedTo?: string | null;
+  detail?: string;
+  tookMs: number;
+}
+export function projectPush(r: PushResult): PushAnswer {
+  return {
+    outcome: r.outcome,
+    served: r.served,
+    ...(r.leaf ? { leaf: { fingerprint: r.leaf.fingerprint, notAfter: r.leaf.notAfter, names: [...r.leaf.names], ips: [...r.leaf.ips] } } : {}),
+    ...(r.clearedTo !== undefined ? { clearedTo: r.clearedTo } : {}),
+    ...(r.detail !== undefined ? { detail: r.detail } : {}),
+    tookMs: r.tookMs,
+  };
+}
 export interface PushDeps {
   served(): Promise<Served | null>;
   bind(s: Served): void; // the push session verifies exactly this certificate from now on (and logs in again)

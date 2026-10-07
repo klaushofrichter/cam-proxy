@@ -1,3 +1,5 @@
+import { settingText } from './settings';
+
 // The Status page's cams-admin card (spec 2026-10-06-cams-admin-phase1-design §9.2):
 // GET /control/admin; never any key material.
 export type CamsAdminState = 'off' | 'disabled' | 'not-enrolled' | 'key-unsafe' | 'key-invalid' | 'connecting' | 'connected' | 'backoff' | 'rejected' | 'incompatible' | 'stopped';
@@ -47,10 +49,14 @@ export interface CommandsView {
   paused: boolean;
   pauseReason: string | null;
   allow: string[];
+  unconfirmed?: string[];
   implemented?: string[];
   known?: CommandEntry[];
   recent?: RecentCommand[];
+  groups?: EntryGroups;
 }
+// The allow entries by kind (migration P3): the disruptive ones apart.
+export interface EntryGroups { tokens: string[]; read: string[]; settings: string[]; camera: string[]; disruptive: string[] }
 export interface ManagedToken { id: string; kind: string; label: string; retireAt: number | null; blocked: boolean; live: boolean; hashPrefix: string }
 export interface TokensView { revision: number; problem: string | null; items: ManagedToken[] }
 
@@ -77,4 +83,43 @@ export function widenErrorText(e: unknown, fallback: string): string {
   const b = (e as { body?: unknown })?.body as { error?: string; detail?: string; message?: string } | undefined;
   if (b?.error === 'local_admin_only') return "Adding a command needs the proxy's own admin token: sign in with it (not through cams).";
   return b?.detail ?? b?.message ?? fallback;
+}
+
+// The allow entries in groups for the card (migration P3): the disruptive
+// ones (Klaus's decision 3) last, under a warning. An older proxy sends no
+// groups: one list.
+const GROUP_TITLES: [keyof EntryGroups, string, string?][] = [
+  ['tokens', 'Managed tokens'],
+  ['read', 'Read settings'],
+  ['settings', 'Change settings'],
+  ['camera', 'Camera actions'],
+  ['disruptive', 'Disruptive — off by default', 'Each of these lets cams-admin interrupt this proxy or a camera (a restart, a reboot, power off, rewritten camera settings). Allow one only while you need it.'],
+];
+// `unconfirmed`: allowed before this version, when the command did nothing
+// yet; it counts only once the local admin ticks it again (review I3).
+export const unconfirmedText = 'allowed before this version: tick and Save to confirm';
+export interface EntryGroup { key: string; title: string; warning?: string; entries: (CommandEntry & { allowed: boolean; unconfirmed: boolean })[] }
+export function entryGroups(v: Pick<CommandsView, 'known' | 'groups' | 'allow' | 'unconfirmed'>): EntryGroup[] {
+  const known = v.known ?? [];
+  const mark = (e: CommandEntry) => ({ ...e, allowed: v.allow.includes(e.entry), unconfirmed: (v.unconfirmed ?? []).includes(e.entry) && !v.allow.includes(e.entry) });
+  if (!v.groups) return [{ key: 'all', title: 'Commands', entries: known.map(mark) }];
+  return GROUP_TITLES.flatMap(([key, title, warning]) => {
+    const entries = known.filter((k) => v.groups![key].includes(k.entry)).map(mark);
+    return entries.length ? [{ key, title, ...(warning ? { warning } : {}), entries }] : [];
+  });
+}
+
+// cams-admin's settings changes (GET /control/admin/changes) and the Settings marker.
+export interface ChangeItem { cmdId: string; command: string; actor: string; at: number; paths: { path: string; from?: unknown; to?: unknown }[]; rolledBack: { at: number; by: 'cams-admin' | 'local'; user?: string; cmdId?: string } | null }
+// A side without a value had no override: config.json's value or the default.
+const side = (path: string, v: unknown) => (v === undefined ? 'default' : settingText(path, v));
+export const changeLines = (c: ChangeItem): string[] => c.paths.map((p) => `${p.path}: ${side(p.path, p.from)} → ${side(p.path, p.to)}`);
+export const byText = (by: { cmdId: string; actor: string; at: number }): string => `set by cams-admin (on behalf of ${by.actor})`;
+export function undoErrorText(e: unknown): string {
+  const b = (e as { body?: unknown })?.body as { error?: string; paths?: string[] } | undefined;
+  if (b?.error === 'conflict') return `Not undone: ${(b.paths ?? []).join(', ')} changed here since. Reset it on the Settings page instead.`;
+  if (b?.error === 'already_rolled_back') return 'Already undone.';
+  if (b?.error === 'local_admin_only') return "Undo needs the proxy's own admin token: sign in with it (not through cams).";
+  if (b?.error === 'no_backup') return 'Not undone: the record of that change is gone (only the last 20 are kept).';
+  return 'Not undone';
 }

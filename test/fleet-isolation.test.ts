@@ -8,7 +8,11 @@ import { monitorEventLoopDelay } from 'perf_hooks';
 import { Readable } from 'stream';
 import { promisify } from 'util';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { configRevision } from '../src/config/load';
+import { leafPaths, SETTINGS } from '../src/config/schema';
+import { ALLOW_ENTRIES, NEVER_REMOTE_ACTIONS } from '../src/fleet/policy';
+import { DENIED } from '../src/fleet/remote-settable';
 import { listClips } from '../src/catalog/clips';
 import { listEvents } from '../src/catalog/events';
 import { writeKeyFile } from '../src/fleet/keyfile';
@@ -217,4 +221,85 @@ describe('a hostile cams-admin', () => {
     fake.closeAll(1001);
     await until(() => fake.connections > before && p.proxy.camsAdmin.view().state === 'connected', 15_000);
   }, 20_000);
+});
+
+// P3 (plan P3 Task 12, Review Focus 1, 4, 5): a compromised cams-admin with
+// every allow entry allowed. Trust paths, a new camera, data-destroying or
+// spending settings and never-remote actions are refused (visible in the
+// audit log); a flood is held to the windows; the proxy carries on.
+describe('a hostile cams-admin with every P3 entry allowed', () => {
+  type Res = { msg: { body: Record<string, any> } };
+  const done = async (command: string, args: Record<string, unknown>) => {
+    const { cmdId } = fake.sendCommand(command, args);
+    await until(() => fake.results(cmdId).some((r) => (r as Res).msg.body.phase === 'done'), 10_000);
+    return (fake.results(cmdId).find((r) => (r as Res).msg.body.phase === 'done') as Res).msg.body;
+  };
+  const overrides = () => {
+    try {
+      return readFileSync(join(p.dir, 'data', 'overrides.json'), 'utf8');
+    } catch {
+      return null;
+    }
+  };
+  const failures = () => p.proxy.audit.list({ actions: ['admin-command'], limit: 200 }).records.filter((r) => (r as { event: { outcome: string } }).event.outcome === 'failure').length;
+  beforeAll(async () => {
+    fake.mode = 'normal';
+    await until(() => p.proxy.camsAdmin.view().state === 'connected', 15_000);
+    writePrivateJson(join(adminDir, 'policy.json'), { v: 1, allow: [...ALLOW_ENTRIES], consent: 3, changedAt: 2, changedBy: 'local' });
+    // A fresh minute for the windows (earlier tests sent commands too).
+    await new Promise((r) => setTimeout(r, 61_000));
+  }, 90_000);
+  afterAll(() => writePrivateJson(join(adminDir, 'policy.json'), { v: 1, allow: ['tokens.apply', 'tokens.apply.admin'], changedAt: 3, changedBy: 'local' }));
+  const rev = () => configRevision(p.proxy.loaded);
+
+  it('(a) every denied prefix and a new camera fail before planning; overrides.json byte-identical; each a failure record', async () => {
+    const before = overrides();
+    const f0 = failures();
+    const leaves = leafPaths(SETTINGS, '', ['cam1']);
+    const set = Object.fromEntries(DENIED.map((d) => d.replace('cameras.*.', 'cameras.cam1.')).map((d) => [leaves.find((l) => l === d || l.startsWith(`${d}.`))!, 1]).filter(([l]) => l));
+    expect(Object.keys(set).length).toBe(DENIED.length);
+    const r = await done('config.set', { v: 1, dryRun: false, baseRevision: rev(), set });
+    expect(r).toMatchObject({ status: 'failed', code: 'not_remote_settable' });
+    expect((r.result.paths as { code: string }[]).length).toBe(Object.keys(set).length);
+    expect(await done('config.set', { v: 1, dryRun: false, baseRevision: rev(), set: { 'cameras.newcam.host': '192.0.2.9', 'cameras.newcam.name': 'x' } })).toMatchObject({ status: 'failed', code: 'unknown_camera' });
+    expect(overrides()).toBe(before);
+    expect(p.proxy.running.cameraOrder).toEqual(['cam1']);
+    expect(failures()).toBe(f0 + 2);
+  });
+  it('(e) spending raised, any retention period or size cap lowered: widening_local_only; storage: not_remote_settable; nothing deleted, nothing written', async () => {
+    const before = overrides();
+    const clips = listClips(p.proxy.catalog, 'cam1', 0, Date.now() + 86_400_000).length;
+    const lower = { 'retention.stillsDays': 1, 'retention.previewsDays': 1, 'retention.clipsDays': 1, 'retention.eventsDays': 1, 'retention.auditDays': 1, 'retention.streamLogDays': 1, 'stills.maxGB': 1, 'previews.maxGB': 1, 'ftp.maxGB': 1, 'analytics.googleVision.monthlyLimit': 100000 };
+    const r = await done('config.set', { v: 1, dryRun: false, baseRevision: rev(), set: lower });
+    expect(r).toMatchObject({ status: 'failed', code: 'widening_local_only' });
+    expect((r.result.paths as { path: string }[]).map((x) => x.path).sort()).toEqual(Object.keys(lower).sort());
+    const storage = Object.fromEntries(leafPaths(SETTINGS, '', ['cam1']).filter((x) => /^storage\.|^cameras\.cam1\.storage\./.test(x)).map((x) => [x, 1]));
+    expect(await done('config.set', { v: 1, dryRun: false, baseRevision: rev(), set: storage })).toMatchObject({ status: 'failed', code: 'not_remote_settable' });
+    p.proxy.storage.run({ dryRun: false });
+    expect(listClips(p.proxy.catalog, 'cam1', 0, Date.now() + 86_400_000).length).toBe(clips);
+    expect(overrides()).toBe(before);
+  });
+  it('(f) every never-remote action: not_allowed whatever the allow-list; none of their functions called', async () => {
+    const a = p.proxy.actions;
+    const spies = [vi.spyOn(a, 'findCamera'), vi.spyOn(a, 'restartProcess'), vi.spyOn(a, 'restart'), vi.spyOn(a.tls, 'rotate'), vi.spyOn(a.tls, 'clearTrust'), vi.spyOn(a.tls, 'dropPrevious'), vi.spyOn(a.archive, 'clear'), vi.spyOn(a.inventory, 'repair'), vi.spyOn(a.poeSwitch, 'poeOn')];
+    try {
+      for (const action of NEVER_REMOTE_ACTIONS) expect(await done('camera.action', { v: 1, camera: 'cam1', action }), action).toMatchObject({ status: 'refused', code: 'not_allowed' });
+      for (const s of spies) expect(s).not.toHaveBeenCalled();
+    } finally {
+      for (const s of spies) s.mockRestore();
+    }
+  });
+  it('(b, g) 20 config.set in a minute: at most 6 run in the minute (with the 4 above), the rest rate_limited; the proxy carries on meanwhile', async () => {
+    lag.reset();
+    const ids = Array.from({ length: 20 }, () => fake.sendCommand('config.set', { v: 1, dryRun: true, baseRevision: rev(), set: { 'sse.pingS': 7 } }).cmdId);
+    await proxyCarriesOn();
+    await until(() => ids.every((id) => fake.results(id).some((r) => (r as Res).msg.body.phase === 'done')), 15_000);
+    const outcome = ids.map((id) => (fake.results(id).find((r) => (r as Res).msg.body.phase === 'done') as Res).msg.body);
+    const ran = outcome.filter((b) => b.status !== 'refused');
+    expect(ran.length).toBeLessThanOrEqual(2);
+    // The rest refused: rate_limited, or busy while one ran (one command at a time).
+    expect(outcome.filter((b) => b.code === 'rate_limited' || b.code === 'busy').length).toBe(20 - ran.length);
+    expect(outcome.filter((b) => b.code === 'rate_limited').length).toBeGreaterThanOrEqual(12);
+    expect(lag.percentile(99) / 1e6).toBeLessThan(LAG_P99_MS);
+  }, 60_000);
 });

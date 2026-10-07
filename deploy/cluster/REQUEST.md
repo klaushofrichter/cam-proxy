@@ -161,3 +161,8 @@ WebSocket to `cams-admin.cams-admin.svc.cluster.local:8080`; `data/admin/`
 is on the existing PVC; no new port, host, egress, variable or volume. At
 the cut-over only, a data update of the cams `cams-cameras` Secret (the
 managed tokens) is requested through the kube-setup session.
+
+## 2026-10 cams-admin migration P3 (remote configuration)
+
+P3 needs no cluster change: the commands ride the same channel; the settings
+backups (`data/admin/overrides.bak-*.json`) live on the existing PVC.

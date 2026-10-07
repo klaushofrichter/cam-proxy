@@ -147,7 +147,6 @@
                       "camera.action:camera-reboot",
                       "camera.action:camera-powercycle",
                       "camera.action:camera-ftp-setup",
-                      "camera.action:camera-ftp-off",
                       "camera.action:camera-ntp-set",
                       "camera.action:camera-cert-push"
                     ]

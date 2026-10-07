@@ -1,6 +1,7 @@
 import https from 'https';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { projectPush, type PushResult } from '../src/tls/push';
 import { servedFingerprint } from '../src/tls/served';
 import { ADMIN_TOKEN, auth, freePort, until } from './helpers/proxy';
 import { startMultiProxy, startSims, type Sim } from './helpers/multi';
@@ -18,6 +19,14 @@ beforeAll(async () => {
 afterAll(async () => {
   await p.proxy.stop();
   await Promise.all(sims.map((s) => s.close()));
+});
+
+describe('projectPush (the Push now answer)', () => {
+  it('keeps exactly the public fields', () => {
+    const r = { outcome: 'pushed', served: 'SHA256:AA', servedPem: 'PEM', leaf: { certPem: 'C', keyPem: 'K', fingerprint: 'SHA256:AA', notAfter: 1, names: ['n'], ips: ['192.0.2.1'] }, tookMs: 5 } as PushResult;
+    expect(projectPush(r)).toEqual({ outcome: 'pushed', served: 'SHA256:AA', leaf: { fingerprint: 'SHA256:AA', notAfter: 1, names: ['n'], ips: ['192.0.2.1'] }, tookMs: 5 });
+    expect(projectPush({ outcome: 'refused', served: 'SHA256:BB', servedPem: 'PEM', clearedTo: 'SHA256:CC', detail: 'd', tookMs: 2 })).toEqual({ outcome: 'refused', served: 'SHA256:BB', clearedTo: 'SHA256:CC', detail: 'd', tookMs: 2 });
+  });
 });
 
 describe('the site CA end to end (spec §15)', () => {
@@ -66,6 +75,9 @@ describe('the site CA end to end (spec §15)', () => {
     expect(h.items.find((i: { id: string }) => i.id === 'certificates')).toMatchObject({ problem: true, text: expect.stringMatching(/^cam3 serves an unexpected certificate/) });
     const r = await request(p.base).post('/control/cameras/cam3/actions/camera-cert-push').set(auth(ADMIN_TOKEN));
     expect([r.status, r.body.outcome]).toEqual([200, 'pushed']);
+    // Push now answers no key material (R3-8): no PEM, no keyPem/certPem/servedPem.
+    expect(JSON.stringify(r.body)).not.toMatch(/BEGIN|PRIVATE|keyPem|certPem|servedPem/);
+    expect(r.body.leaf).toEqual({ fingerprint: expect.any(String), notAfter: expect.any(Number), names: expect.any(Array), ips: expect.any(Array) });
     await until(() => w.client.command('GetDevInfo').then(() => true, () => false), 30_000);
     expect(p.proxy.certs!.state('cam3')).toMatchObject({ mode: 'site-ca', lastPush: { outcome: 'pushed' }, problem: null });
   }, 90_000);

@@ -1,0 +1,46 @@
+{
+  "$note": "args v 2",
+  "schema": "command",
+  "$context": {
+    "now": 1791273600010,
+    "proxyId": "prx_0123456789ABCDEFGHJK",
+    "connId": "con_0123456789ABCDEFGHJK",
+    "serverKeys": [
+      "MCowBQYDK2VwAyEAgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q="
+    ],
+    "allow": [
+      "config.set"
+    ],
+    "paused": false,
+    "seen": []
+  },
+  "$expect": {
+    "runtime": "unsupported_version",
+    "strict": "valid",
+    "receiver": "proxy"
+  },
+  "message": {
+    "v": 1,
+    "type": "command",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "exp": 1791273660003,
+      "actor": "admin@example.org",
+      "command": "config.set",
+      "args": {
+        "v": 2,
+        "dryRun": true,
+        "baseRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "set": {
+          "sse.pingS": 5
+        }
+      }
+    },
+    "sig": "h2c3/Zor4yMIdqi15R+wAfK3nqqMWpdgvm/OLVKGmRw2Vh3b1Tu7DVAqb7lus/l8N1aSgmSuhwudVnuyNdGhDA=="
+  }
+}

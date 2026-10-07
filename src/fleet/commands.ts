@@ -1,7 +1,7 @@
 import type { AuditLog } from '../audit/audit-log';
 import { RefusalThrottle } from '../audit/throttle';
 import type { ClientLog } from './client';
-import { checkCommand, CommandLimits, type CommandBody, type Nack, type SeenIds } from './command-check';
+import { checkCommand, CommandLimits, journalBudgetOf, type CommandBody, type Nack, type SeenIds } from './command-check';
 import type { Journal, JournalEntry } from './journal';
 import { IMPLEMENTED, type CommandPolicy } from './policy';
 import type { Envelope } from './protocol';
@@ -20,7 +20,9 @@ import { ShadowsLocalToken, type TokenStore, type TokensApplyArgs } from './toke
 export interface ConnCtx { connId: string; serverNow: () => number; seen: SeenIds }
 // False when the socket is gone (or not draining).
 export type SignedSend = (type: 'result' | 'event', body: Record<string, unknown>, re?: string) => boolean;
-export type Done = { status: 'ok' | 'failed' | 'conflict'; code?: string; result?: Record<string, unknown>; changed?: string[] };
+// `action`: camera.action's action (journaled: the journal budget counts it).
+// `after`: runs once the result went out (or could not): proxy.restart's restart (R3-10).
+export type Done = { status: 'ok' | 'failed' | 'conflict'; code?: string; result?: Record<string, unknown>; changed?: string[]; action?: string; after?: () => void };
 export type Handler = (args: unknown, cmd: CommandBody) => Done | Promise<Done>;
 
 export interface RunnerDeps {
@@ -34,7 +36,9 @@ export interface RunnerDeps {
   now?: () => number;
   // cmdIds across connections and restarts (data/admin/replay.json).
   replay?: Pick<ReplayGuard, 'hasCmd' | 'addCmd'>;
-  // The handlers by command name (default: tokens.apply on `tokens`).
+  // The handlers by command name, read when a command runs (so the proxy can
+  // add the P3 handlers once their dependencies exist); tokens.apply on
+  // `tokens` unless given.
   handlers?: Record<string, Handler>;
 }
 
@@ -50,13 +54,13 @@ export class CommandRunner {
   private readonly undelivered = new Map<string, Record<string, unknown>>();
   private readonly suppressedIds = new Map<string, string[]>();
   private readonly now: () => number;
-  private readonly handlers: Record<string, Handler>;
+  private readonly defaults: Record<string, Handler>;
 
   constructor(private readonly d: RunnerDeps) {
     this.now = d.now ?? Date.now;
     this.limits = new CommandLimits(this.now);
     this.nackAudit = new RefusalThrottle(600_000, this.now);
-    this.handlers = d.handlers ?? { 'tokens.apply': (args) => this.tokensApply(args as TokensApplyArgs) };
+    this.defaults = { 'tokens.apply': (args) => this.tokensApply(args as TokensApplyArgs) };
   }
 
   // The heartbeat's proxy.commands block.
@@ -79,6 +83,8 @@ export class CommandRunner {
       policy: { enabled: p.enabled, paused: p.paused, allow: p.allow },
       journal: (id) => (this.running === id ? 'running' : this.d.journal.get(id)),
       limits: this.limits, implemented: IMPLEMENTED,
+      // The journal budget (step 11, R3-9): on the proxy's own clock, from the persisted journal.
+      journalBudget: journalBudgetOf(this.d.journal.countSince.bind(this.d.journal), this.now()),
       currentTokens: this.d.tokens.current(),
       ...(this.d.replay ? { seenCmd: { has: (id: string) => this.d.replay!.hasCmd(id), add: (id: string, exp: number) => this.d.replay!.addCmd(id, exp) } } : {}),
     });
@@ -113,13 +119,15 @@ export class CommandRunner {
     let done: Done;
     try {
       send('result', { ...base, cmdId: cmd.cmdId, phase: 'received' }, m.id);
-      const h = this.handlers[cmd.command];
+      const h = (this.d.handlers && Object.hasOwn(this.d.handlers, cmd.command) ? this.d.handlers[cmd.command] : undefined) ?? (Object.hasOwn(this.defaults, cmd.command) ? this.defaults[cmd.command] : undefined);
       done = h ? await h(args, cmd) : { status: 'failed', code: 'not_implemented' };
     } catch (err) {
       this.d.log.warn({ command: cmd.command, err: String((err as Error)?.message ?? err).slice(0, 200) }, 'admin_command_error');
-      done = { status: 'failed', code: 'internal' };
+      // A camera action that threw still counts toward the journal budget (review M1).
+      const action = cmd.command === 'camera.action' && typeof cmd.args.action === 'string' ? cmd.args.action : undefined;
+      done = { status: 'failed', code: 'internal', ...(action ? { action } : {}) };
     }
-    const entry: JournalEntry = { cmdId: cmd.cmdId, command: cmd.command, actor: cmd.actor, at: this.now(), status: done.status, ...(done.code ? { code: done.code } : {}), ...(done.result ? { result: done.result } : {}), ...(done.changed ? { changed: done.changed } : {}) };
+    const entry: JournalEntry = { cmdId: cmd.cmdId, command: cmd.command, actor: cmd.actor, at: this.now(), status: done.status, ...(done.code ? { code: done.code } : {}), ...(done.result ? { result: done.result } : {}), ...(done.changed ? { changed: done.changed } : {}), ...(done.action ? { action: done.action } : {}) };
     try {
       this.d.journal.record(entry);
     } catch (err) {
@@ -132,6 +140,16 @@ export class CommandRunner {
     if (!send('result', body, m.id)) {
       this.undelivered.set(cmd.cmdId, body);
       while (this.undelivered.size > UNDELIVERED_MAX) this.undelivered.delete(this.undelivered.keys().next().value as string);
+    }
+    const after = done.after;
+    if (after) {
+      setImmediate(() => {
+        try {
+          after();
+        } catch (err) {
+          this.d.log.warn({ command: cmd.command, err: String((err as Error)?.message ?? err).slice(0, 200) }, 'admin_command_after_error');
+        }
+      });
     }
   }
 

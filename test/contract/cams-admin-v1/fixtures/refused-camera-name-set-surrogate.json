@@ -1,0 +1,43 @@
+{
+  "$note": "a lone surrogate (U+D800) in a camera name",
+  "schema": "command",
+  "$context": {
+    "now": 1791273600010,
+    "proxyId": "prx_0123456789ABCDEFGHJK",
+    "connId": "con_0123456789ABCDEFGHJK",
+    "serverKeys": [
+      "MCowBQYDK2VwAyEAgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q="
+    ],
+    "allow": [
+      "camera.name.set"
+    ],
+    "paused": false,
+    "seen": []
+  },
+  "$expect": {
+    "runtime": "invalid_args",
+    "strict": "valid",
+    "receiver": "proxy"
+  },
+  "message": {
+    "v": 1,
+    "type": "command",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "exp": 1791273660003,
+      "actor": "admin@example.org",
+      "command": "camera.name.set",
+      "args": {
+        "v": 1,
+        "camera": "cam1",
+        "name": "lone\ud800name"
+      }
+    },
+    "sig": "qxD+dfNNLXhikqKrHOJu935yh4PFz8nK2lQZW+u6oc4WNqD4juj/e4tn8RzflWncSz7brnGLpjBs4M2wJ5VHDA=="
+  }
+}
