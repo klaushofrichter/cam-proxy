@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fingerprintChunks, hostOf, shortId } from '../web/src/lib/long-value';
+import { fingerprintChunks, hostOf, httpUrl, shortId } from '../web/src/lib/long-value';
 
 // Long values in the admin UI (#203): ids shortened in the middle, the full
 // value on hover and copy; fingerprints in groups of four that wrap cleanly.
@@ -23,5 +23,10 @@ describe('long values', () => {
     expect(hostOf('https://cams-admin.skylar.technology/x')).toBe('cams-admin.skylar.technology');
     expect(hostOf('http://127.0.0.1:18700')).toBe('127.0.0.1:18700');
     expect(hostOf('not a url')).toBe('not a url');
+  });
+  it('a link only for an http(s) URL', () => {
+    expect(httpUrl('https://cams-admin.skylar.technology')).toBe('https://cams-admin.skylar.technology/');
+    expect(httpUrl('http://127.0.0.1:18700/x')).toBe('http://127.0.0.1:18700/x');
+    for (const v of ['javascript:alert(1)', 'data:text/html,x', 'file:///etc/passwd', 'ftp://host/', 'not a url', '']) expect(httpUrl(v)).toBeNull();
   });
 });

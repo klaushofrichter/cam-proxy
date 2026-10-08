@@ -3,7 +3,7 @@
   import { api } from '../lib/api';
   import { agoText } from '../lib/format';
   import { allowedText, commandsStateText, lastCommandText, sinceOf, stateClass, stateText, summaryWarnings, tokensCountText, type CamsAdminView, type CommandsView, type TokensView } from '../lib/cams-admin';
-  import { hostOf } from '../lib/long-value';
+  import { hostOf, httpUrl } from '../lib/long-value';
   import Icon from './Icon.svelte';
 
   // The Status page's short cams-admin card (#203): the connection, the
@@ -31,6 +31,8 @@
   });
   const since = $derived(view ? sinceOf(view) : null);
   const warnings = $derived(view ? summaryWarnings(view, cmds, tokens) : []);
+  // The host links to cams-admin (http(s) only), in a new tab.
+  const href = $derived(view?.url ? httpUrl(view.url) : null);
   const parts = (s: string) => s.split(' · ');
 </script>
 
@@ -43,7 +45,7 @@
     <dl>
       <dt>State</dt>
       <dd><span class={stateClass(view.state)} data-testid="summary-cams-admin-state">{stateText(view.state)}</span>{#if since}{" "}<span class="muted nw" data-testid="summary-cams-admin-since">· {view.state === 'connected' ? `for ${agoText(since, now).replace(' ago', '')}` : agoText(since, now)}</span>{/if}</dd>
-      {#if view.url}<dt>Host</dt><dd><span class="ell" title={view.url} data-testid="summary-cams-admin-host">{hostOf(view.url)}</span></dd>{/if}
+      {#if view.url}<dt>Host</dt><dd>{#if href}<a class="ell link" {href} target="_blank" rel="noopener noreferrer" title={view.url} data-testid="summary-cams-admin-host">{hostOf(view.url)}</a>{:else}<span class="ell" title={view.url} data-testid="summary-cams-admin-host">{hostOf(view.url)}</span>{/if}</dd>{/if}
       {#if view.account}<dt>Account</dt><dd><span class="ell" data-testid="summary-cams-admin-account">{view.account}</span></dd>{/if}
       {#if cmds}
         <dt>Commands</dt><dd class={cmds.enabled && !cmds.paused ? '' : 'bad'} data-testid="summary-cams-admin-commands">{commandsStateText(cmds)}</dd>
@@ -68,6 +70,8 @@
   dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: 14px; align-items: baseline; }
   dt { color: var(--muted); white-space: nowrap; }
   dd { margin: 0; font-family: var(--mono); text-align: right; min-width: 0; }
+  .link { color: var(--accent); text-decoration: none; }
+  .link:hover { text-decoration: underline; }
   .ell { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
   .nw { white-space: nowrap; }
   .muted { color: var(--muted); }

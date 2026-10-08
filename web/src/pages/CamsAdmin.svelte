@@ -79,13 +79,13 @@
 </script>
 
 <section class="page" data-testid="page-cams-admin">
-<div class="title"><h2>cams-admin</h2><a href="#/status" class="back">← Status</a></div>
+<div class="title"><h2>Cams-Admin</h2><a href="#/status" class="back">← Status</a></div>
 <div class="card" data-testid="cams-admin-connection">
   <h3>Connection</h3>
   {#if view}
     <dl>
       <dt>State</dt><dd><span class={stateClass(view.state)} data-testid="cams-admin-state">{stateText(view.state)}</span>{#if sinceOf(view)}{" "}<span class="muted nw" data-testid="cams-admin-since">· {view.state === 'connected' ? 'since ' : ''}{agoText(sinceOf(view), now)}</span>{/if}</dd>
-      {#if view.url}<dt>URL</dt><dd><LongValue value={view.url} kind="text" copy label="the cams-admin URL" testid="cams-admin-url" /></dd>{/if}
+      {#if view.url}<dt>URL</dt><dd><LongValue value={view.url} kind="text" copy link label="the cams-admin URL" testid="cams-admin-url" /></dd>{/if}
       {#if view.account}<dt>Account</dt><dd><LongValue value={view.account} kind="text" testid="cams-admin-account" /></dd>{/if}
       {#if view.proxyId}<dt>Proxy id</dt><dd><LongValue value={view.proxyId} kind="id" copy label="the proxy id" testid="cams-admin-proxy-id" /></dd>{/if}
       {#if view.fingerprint}<dt>Key fingerprint</dt><dd class="fpbox" title="cams-admin shows the same on the proxy's page"><LongValue value={view.fingerprint} kind="fingerprint" copy label="the key fingerprint" testid="cams-admin-fingerprint" /></dd>{/if}
@@ -117,7 +117,8 @@
 {/if}
 
 <style>
-  .page { display: grid; gap: 12px; max-width: 1100px; min-width: 0; }
+  /* Full width like Maintenance; the allowed commands use the width in two columns (CamsAdminCommands). */
+  .page { display: grid; gap: 12px; min-width: 0; }
   .title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
   h2 { margin: 0; font-size: 20px; }
   .back { font-size: 13px; color: var(--accent); text-decoration: none; white-space: nowrap; }

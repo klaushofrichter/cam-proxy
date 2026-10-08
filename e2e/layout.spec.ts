@@ -4,7 +4,7 @@ import { test, expect, type Locator, type Page } from '@playwright/test';
 
 // The layout of the cams-admin and Certificates pages and of the Status
 // page's short cards (#203), at phone and desktop width, light and dark:
-// nothing wider than the page, summary rows that don't stretch, ids and
+// both pages as wide as Maintenance, nothing wider than the page, summary rows that don't stretch, ids and
 // fingerprints that don't break mid-token. The proxy's answers for cams-admin
 // and the certificates are test fixtures (made-up ids, never real data), with
 // values as long as the real ones. Screenshots go to .superpowers/e2e-screens
@@ -104,6 +104,11 @@ for (const width of [360, 1280]) {
         await expect(page.getByTestId('summary-cams-admin-allowed')).toHaveText('2 allowed, 1 needs re-confirming');
         await expect(page.getByTestId('summary-cams-admin-tokens')).toHaveText('2 live, 1 blocked');
         await expect(certs).toBeVisible();
+        // The host links to cams-admin, in a new tab.
+        const host = page.getByTestId('summary-cams-admin-host');
+        await expect(host).toHaveAttribute('href', ADMIN.url);
+        await expect(host).toHaveAttribute('target', '_blank');
+        await expect(host).toHaveAttribute('rel', 'noopener noreferrer');
         await expect(page.getByTestId('summary-cert-row-cam1')).toContainText(/site CA · expires in (199|200) days/);
         await noHorizontalOverflow(page);
         // No row taller than two lines: the cards don't spread their rows over
@@ -123,6 +128,13 @@ for (const width of [360, 1280]) {
         await page.goto('/#/cams-admin');
         await expect(page.getByTestId('cams-admin-state')).toHaveText('connected', { timeout: 15000 });
         await expect(page.getByTestId('cams-admin-recent-row')).toHaveCount(10);
+        await expect(page.getByRole('heading', { level: 2 })).toHaveText('Cams-Admin');
+        // The URL opens cams-admin in a new tab; the copy button stays.
+        const link = page.getByTestId('cams-admin-url');
+        await expect(link).toHaveAttribute('href', ADMIN.url);
+        await expect(link).toHaveAttribute('target', '_blank');
+        await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+        await expect(page.getByTestId('cams-admin-url-copy')).toBeVisible();
         await shot(page, `cams-admin-${width}-${theme}`);
         await noHorizontalOverflow(page);
         // Ids on one line (shortened at phone width), the key fingerprint in a few lines.
@@ -152,12 +164,53 @@ for (const width of [360, 1280]) {
   }
 }
 
+// Both pages use the full width of the main area, like Maintenance.
+test.describe('1280 px, dark: as wide as Maintenance', () => {
+  test.use({ viewport: { width: 1280, height: 900 } });
+  test('the cams-admin and Certificates pages', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('camproxy-theme', 'dark'));
+    await fixtures(page);
+    const width = () => page.locator('main > section').evaluate((el) => el.getBoundingClientRect().width);
+    await page.goto('/#/maintenance');
+    await expect(page.getByRole('heading', { level: 2, name: 'Maintenance' })).toBeVisible({ timeout: 15000 });
+    const maintenance = await width();
+    expect(maintenance).toBeGreaterThan(900);
+    await shot(page, 'maintenance-1280-dark');
+    await page.goto('/#/cams-admin');
+    await expect(page.getByTestId('cams-admin-state')).toHaveText('connected', { timeout: 15000 });
+    expect(await width()).toBe(maintenance);
+    // The cards full width; the allowed commands' groups in two columns.
+    const box = async (id: string) => (await page.getByTestId(id).boundingBox())!;
+    for (const id of ['cams-admin-connection', 'cams-admin-commands', 'cams-admin-recent', 'cams-admin-tokens']) expect(Math.round((await box(id)).width), id).toBe(Math.round(maintenance));
+    const first = (await page.locator('[data-testid^="cams-admin-group-"]').first().boundingBox())!;
+    const disruptive = await box('cams-admin-group-disruptive');
+    expect(disruptive.x).toBeGreaterThan(first.x + first.width - 1);
+    await page.goto('/#/certificates');
+    await expect(page.getByTestId('ca-fingerprint')).toContainText('SHA256:', { timeout: 15000 });
+    expect(await width()).toBe(maintenance);
+    const [ca, proxy] = [await box('cert-ca'), await box('cert-proxy-card')];
+    expect(proxy.x).toBeGreaterThan(ca.x + ca.width - 1);
+  });
+});
+
+test('a cams-admin URL other than http(s) is not a link', async ({ page }) => {
+  await fixtures(page);
+  await page.route('**/control/admin', (r) => r.fulfill({ json: { ...ADMIN, url: 'javascript:alert(1)' } }));
+  await page.goto('/#/cams-admin');
+  await expect(page.getByTestId('cams-admin-state')).toHaveText('connected', { timeout: 15000 });
+  expect(await page.getByTestId('cams-admin-url').evaluate((el) => el.tagName)).toBe('SPAN');
+  await page.goto('/#/status');
+  await expect(page.getByTestId('summary-cams-admin-state')).toHaveText('connected', { timeout: 15000 });
+  expect(await page.getByTestId('summary-cams-admin-host').evaluate((el) => el.tagName)).toBe('SPAN');
+});
+
 test('the Details links and the navigation reach both pages', async ({ page }) => {
   await fixtures(page);
   await page.goto('/#/status');
   await page.getByTestId('certificates-details-link').click();
   await expect(page).toHaveURL(/#\/certificates$/);
   await expect(page.getByTestId('nav-certificates')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('nav-cams-admin')).toHaveText('Cams-Admin');
   await page.getByTestId('nav-cams-admin').click();
   await expect(page).toHaveURL(/#\/cams-admin$/);
   await expect(page.getByTestId('page-cams-admin')).toBeVisible();

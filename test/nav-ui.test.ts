@@ -62,7 +62,7 @@ describe('persistedBoolean', () => {
 describe('the detail pages', () => {
   it('cams-admin and Certificates follow Maintenance in the navigation', () => {
     expect(PAGES.slice(-3)).toEqual(['maintenance', 'cams-admin', 'certificates']);
-    expect(NAV_ITEMS.find((i) => i.id === 'cams-admin')?.label).toBe('cams-admin');
+    expect(NAV_ITEMS.find((i) => i.id === 'cams-admin')?.label).toBe('Cams-Admin');
     expect(NAV_ITEMS.find((i) => i.id === 'certificates')?.label).toBe('Certificates');
   });
 });

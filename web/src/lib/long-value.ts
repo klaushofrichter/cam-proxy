@@ -13,6 +13,17 @@ export function fingerprintChunks(fp: string): { algo: string | null; groups: st
   return { algo: m ? m[1] : null, groups: body.match(/.{1,4}/g) ?? [] };
 }
 
+// A URL to open as a link: only http(s), never another scheme (javascript:,
+// data:, file:); null for anything else.
+export function httpUrl(value: string): string | null {
+  try {
+    const u = new URL(value);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.href : null;
+  } catch {
+    return null;
+  }
+}
+
 export function hostOf(url: string): string {
   try {
     return new URL(url).host;

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Admin UI: the cams-admin page is called **Cams-Admin** in the navigation and its heading. The Cams-Admin and Certificates pages use the full width like Maintenance: on wide screens the allowed commands sit in two columns and the Site CA and This proxy cards side by side; phone width is unchanged. The cams-admin URL on the Cams-Admin page and the host on the Status card are links that open cams-admin in a new tab (http and https only; the copy button stays).
+
+## v2026.10.08.1
+
 - Admin UI: cams-admin and Certificates get their own pages (#203), in the navigation after Maintenance. The Status page keeps short cards with **Details →**: cams-admin shows the state and since when, the cams-admin host, the account, commands on/paused, how many are allowed (and how many need re-confirming), managed tokens live/blocked, the last command and warnings; Certificates shows the site, the CA's end, one line per camera (mode, what is left, the last push) and warnings. The pages are laid out for phone width: recent commands, changes and managed tokens are rows that stack on narrow screens; ids and hashes are shortened in the middle with the full value on hover and a copy button; fingerprints are shown in groups of four that wrap between groups; times never wrap. The Certificates card's rows no longer spread over the card's height next to a taller card. Nothing changes in what is allowed, audited or in the API.
 
 ## v2026.10.07.2
