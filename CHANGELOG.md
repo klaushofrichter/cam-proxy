@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.10.08.2
+
 - Admin UI: the cams-admin page is called **Cams-Admin** in the navigation and its heading. The Cams-Admin and Certificates pages use the full width like Maintenance: on wide screens the allowed commands sit in two columns and the Site CA and This proxy cards side by side; phone width is unchanged. The cams-admin URL on the Cams-Admin page and the host on the Status card are links that open cams-admin in a new tab (http and https only; the copy button stays).
 
 ## v2026.10.08.1
