@@ -45,13 +45,17 @@ test('a camera added in the Settings page starts, and can be removed again', asy
   void request;
 });
 
-test('the Certificates card: the CA fingerprint and its download', async ({ page, request }) => {
+test('Certificates: the short card, the page with the CA fingerprint and its download', async ({ page, request }) => {
   await page.goto('/');
   await expect(page.getByTestId('card-certificates')).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByTestId('ca-fingerprint')).toContainText('SHA256:');
+  await expect(page.getByTestId('summary-cert-site')).toHaveText('e2e');
+  await expect(page.getByTestId('summary-cert-row-cam3')).toContainText('HTTP');
+  await page.getByTestId('certificates-details-link').click();
+  await expect(page).toHaveURL(/#\/certificates$/);
+  await expect(page.getByTestId('ca-fingerprint')).toContainText('SHA256:', { timeout: 15_000 });
   const ca = await request.get('/tls/ca.pem');
   expect(ca.status()).toBe(200);
   expect(await ca.text()).toContain('BEGIN CERTIFICATE');
-  await expect(page.getByTestId('cert-row-cam3')).toContainText('HTTP: no certificate');
+  await expect(page.getByTestId('cert-mode-cam3')).toHaveText('HTTP: no certificate');
   await expect(page.getByTestId('cert-push-cam3')).toBeDisabled();
 });

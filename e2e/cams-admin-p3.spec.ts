@@ -2,9 +2,9 @@ import { test, expect } from '@playwright/test';
 import { startFakeAdmin, type FakeAdmin } from '../test/helpers/fake-admin';
 import { ADMIN_TOKEN } from './env';
 
-// Remote configuration (migration P3) against a fake cams-admin: the card's
-// entries are grouped and off by default; a config.set from cams-admin is
-// marked on the Settings page and listed on the card; Undo restores it.
+// Remote configuration (migration P3) against a fake cams-admin: the cams-admin
+// page's entries are grouped and off by default; a config.set from cams-admin
+// is marked on the Settings page and listed on the cams-admin page; Undo restores it.
 const CODE = 'CAE1-7Q2M-K9XD-4HPA-W3ZT-RN6C';
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 let fake: FakeAdmin;
@@ -17,7 +17,7 @@ test.afterAll(async () => {
 });
 
 test('a setting changed by cams-admin: marked, listed, undone', async ({ page, request }) => {
-  await page.goto('/#/status');
+  await page.goto('/#/cams-admin');
   await expect(page.getByTestId('cams-admin-commands')).toBeVisible({ timeout: 15000 });
   // Grouped, the disruptive ones apart, nothing allowed.
   const disruptive = page.getByTestId('cams-admin-group-disruptive');
@@ -50,8 +50,8 @@ test('a setting changed by cams-admin: marked, listed, undone', async ({ page, r
   await page.goto('/#/settings');
   await expect(page.getByTestId('by-sse.pingS')).toHaveText('set by cams-admin (on behalf of admin@example.org)', { timeout: 15000 });
 
-  // The card lists it; Undo (confirmed) restores the default.
-  await page.goto('/#/status');
+  // The cams-admin page lists it; Undo (confirmed) restores the default.
+  await page.goto('/#/cams-admin');
   const row = page.getByTestId(`cams-admin-change-${set.cmdId}`);
   await expect(row).toContainText('sse.pingS: default → 7 s', { timeout: 15000 });
   await page.getByTestId(`cams-admin-undo-${set.cmdId}`).click();

@@ -1023,12 +1023,14 @@ certificate through the cluster's `cam1-cert-push`.
 - **`GET /tls/ca.pem`**: public, the CA certificate only (`404
   {error:"no_site_ca"}` without a site). cams pins the CA's fingerprint:
   `SHA256:` plus the upper-case hex SHA-256 of its DER, no colons (the
-  Certificates card and `GET /control/tls` `caFingerprint`).
+  Certificates page and `GET /control/tls` `caFingerprint`).
 - **`GET /api/cameras`** items carry `tls: {mode: site-ca | pinned | public |
   none, servername, fingerprint, notAfter, lastPush: {at, outcome: pushed |
   current | refused | failed}}`.
-- **Status page:** the Certificates card (the fingerprint with Copy, the CA
-  download, the proxy's certificate, per camera its state and "Push now",
+- **Status page:** a short Certificates card (the site, the CA's end, per
+  camera its mode, what is left and the last push, warnings) with a link to
+  the **Certificates page** (the fingerprint with Copy, the CA download, the
+  proxy's certificate, per camera its state and "Push now",
   `POST /control/cameras/<cam>/actions/camera-cert-push`), and the health
   item `certificates` (a problem within 14 days of an expiry, after a failed
   or refused push, or when an address is outside the CA).

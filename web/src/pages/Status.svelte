@@ -13,8 +13,8 @@
   import { storageRows } from '../lib/camera-settings';
   import { cameraIds } from '../lib/cameras';
   import { actionPath, blockOf, selectedCamera } from '../lib/cameras';
-  import CertificatesCard from '../components/CertificatesCard.svelte';
-  import CamsAdminCard from '../components/CamsAdminCard.svelte';
+  import CertificatesSummary from '../components/CertificatesSummary.svelte';
+  import CamsAdminSummary from '../components/CamsAdminSummary.svelte';
   import type { TlsView } from '../lib/tls';
 
   const gb = (b: number) => `${(b / 1024 ** 3).toFixed(1)} GB`;
@@ -35,7 +35,7 @@
 
   // #93: the camera's FTP upload off, elsewhere, or no clips while events happen.
   const alerts = $derived($status ? ftpAlerts({ enabled: cs.ftp.enabled, publicHost: cs.ftp.publicHost, camera: cs.ftp.camera ?? null, stalled: cs.ftp.stalled ?? null }) : []);
-  // The site CA (spec 2026-10-05-multi-camera-host-design §10.4): read with each status refresh; a card only with a site.
+  // The site CA (spec 2026-10-05-multi-camera-host-design §10.4): read with each status refresh; a short card only with a site (#203).
   let tls = $state<TlsView | null>(null);
   const loadTls = () => void api<TlsView>('GET', '/control/tls').then((v) => (tls = v)).catch(() => undefined);
   $effect(() => {
@@ -191,9 +191,9 @@
         </div>
       {/if}
       {#if tls?.site}
-        <CertificatesCard view={tls} reload={loadTls} />
+        <CertificatesSummary view={tls} names={Object.fromEntries(($status.cameras ?? []).map((c) => [c.id, c.camera.name]))} />
       {/if}
-      <CamsAdminCard />
+      <CamsAdminSummary />
       {#if health?.host}
         <div class="card" data-testid="card-pi">
           <h3>{piCardTitle(health.platform)}</h3>
@@ -227,8 +227,8 @@
   section { display: grid; gap: 12px; }
   h2 { margin: 0; font-size: 20px; }
   h3 { margin: 0 0 8px; font-size: 16px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; align-content: start; min-width: 0; }
   dl { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; margin: 0; font-size: 14px; }
   dt { color: var(--muted); } dd { margin: 0; font-family: var(--mono); text-align: right; }
   .ok { color: #22c55e; } .bad { color: var(--danger); } .warn { color: #f59e0b; } .info { color: var(--muted); }

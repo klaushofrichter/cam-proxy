@@ -32,6 +32,9 @@ export const ICONS = {
   sim: 'M9 3h6M10 3v5l-5 9a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3',
   download: 'M12 4v11m0 0-4-4m4 4 4-4M5 20h14',
   audit: 'M7 3h8l4 4v14H7zM14 3v5h5M10 14l2 2 3-4',
+  cloud: 'M7 18h10a4 4 0 0 0 .6-8A6 6 0 0 0 6.2 9.1 4.5 4.5 0 0 0 7 18z',
+  lock: 'M6 11h12v10H6zM8 11V7a4 4 0 0 1 8 0v4',
+  copy: 'M9 9h11v11H9zM5 15H4V4h11v1',
   bolt: 'M13 2 4 14h7l-1 8 9-12h-7z',
   alert: 'M12 3 2 20h20L12 3zm0 6v5m0 3h.01',
 } as const;

@@ -34,7 +34,7 @@ enrolled (`test/pi-compat.test.ts`).
 
      The code is **never** an argument (shell history, the process list); the
      CLI refuses one. With the proxy running, the CLI asks it to enroll
-     through its control API (the card's code path, with the admin token
+     through its control API (the cams-admin page's code path, with the admin token
      from the environment), so it connects at once. With the proxy stopped,
      the CLI writes the key file and the override itself; the next start
      connects.
@@ -59,7 +59,7 @@ the fingerprint, never the code.
 | `camsAdmin.url` | unset (off) | `https://…`; plain `http://` only for loopback and `*.svc.cluster.local` (the cluster's proxy reaches cams-admin over its Service). Anything else is a config error |
 | `camsAdmin.keyFile` | `admin/key.json` | `admin/<name>.json` in `server.dataDir` (letters, digits, `-`, `_`); nothing else, so the data folder and `overrides.json` are never touched |
 | `camsAdmin.enabled` | `true` | `false` keeps the key and stays off |
-| `camsAdmin.allowCommands` | `[]` | the commands cams-admin may send (deploy-time base; `data/admin/policy.json`, written by the Status card and `admin-commands`, replaces it). `config.json` only: never in `overrides.json`, refused by `PUT /control/config` (`not_a_setting`). An unknown or never-remote entry is a config error |
+| `camsAdmin.allowCommands` | `[]` | the commands cams-admin may send (deploy-time base; `data/admin/policy.json`, written by the cams-admin page and `admin-commands`, replaces it). `config.json` only: never in `overrides.json`, refused by `PUT /control/config` (`not_a_setting`). An unknown or never-remote entry is a config error |
 | `camsAdmin.commandsPaused` | `false` | refuse every command (`paused`); `config.json` only |
 
 All apply at once: a change restarts only the client (the old connection says
@@ -99,7 +99,7 @@ Losing it means enrolling again.
 
 ## Connection states
 
-The Status page's cams-admin card (`GET /control/admin`) and
+The Status page's short cams-admin card and the cams-admin page (`GET /control/admin`) and
 `camproxy_cams_admin_state{state}` show:
 
 | state | meaning |
@@ -177,7 +177,7 @@ cams-admin card (**Commands from cams-admin**), with
 | `config.rollback` | undo its own settings change |
 | `camera.name.set` | rename a camera (the camera's own name, re-read) |
 | `camera.action:<action>` | run that camera action: `camera-test`, `onvif-resubscribe`, `camera-ftp-test`, `poe-switch-read`, `inventory`, `inventory-cancel`, `retention-run` (always a dry run) |
-| **disruptive**: `proxy.restart`, `camera.action:restart`, `camera-reboot`, `camera-powercycle`, `camera-ftp-setup`, `camera-ntp-set`, `camera-cert-push` | restart this proxy or a camera's worker, reboot or power-cycle a camera, point its FTP upload here or set its NTP server, replace its HTTPS certificate. Grouped under **Disruptive — off by default** on the card; allow one only while it's needed (Klaus's decision, M §16 Q3) |
+| **disruptive**: `proxy.restart`, `camera.action:restart`, `camera-reboot`, `camera-powercycle`, `camera-ftp-setup`, `camera-ntp-set`, `camera-cert-push` | restart this proxy or a camera's worker, reboot or power-cycle a camera, point its FTP upload here or set its NTP server, replace its HTTPS certificate. Grouped under **Disruptive — off by default** on the cams-admin page; allow one only while it's needed (Klaus's decision, M §16 Q3) |
 
 Camera actions that change trust, delete data or need someone at the
 hardware (`find-camera`, `camera-address`, `camera-trust-clear`,
@@ -189,7 +189,7 @@ never be allowed. An older `policy.json` or `config.json` that lists
 
 **Fresh consent after the upgrade.** An entry for a command an earlier
 version did not run yet (P2 showed them "not in this version") counts only
-once someone ticks it again here: the card shows it as "allowed before this
+once someone ticks it again here: the cams-admin page shows it as "allowed before this
 version: tick and Save to confirm", `admin-commands status` as "needs
 re-confirming". `policy.json` written by this version records that
 (`consent: 3`). `camsAdmin.allowCommands` in `config.json` can pre-allow only
@@ -240,7 +240,7 @@ What cams-admin may set is compiled in, `src/fleet/remote-settable.ts`
   Google Vision limits only **down** (`dailyCap`/`perCameraDailyCap` 0 = no
   cap). A remote `config.rollback` passes the same check against the current
 values (it never lowers retention or raises spending, also as a rollback of a
-rollback); the card's **Undo** here is not checked.
+rollback); the cams-admin page's **Undo** here is not checked.
 - A path the environment sets (`.env`) is refused `held_by_env`. A new
   setting is denied until someone classifies it here; making it
   remote-settable needs the cams-admin contract first.
@@ -264,7 +264,7 @@ also `config-change` (user `cams-admin`, the `cmdId`, on whose behalf); a
 camera action its usual record with user `cams-admin`. The `actor` cams-admin
 names is shown without control, bidi or format characters. The Settings page marks
 a setting cams-admin set ("set by cams-admin (on behalf of …)") with
-**Undo**; the card lists **Settings changed by cams-admin** with **Undo**
+**Undo**; the cams-admin page lists **Changes by cams-admin** with **Undo**
 (`GET /control/admin/changes`, `POST /control/admin/changes/<cmdId>/undo`,
 local admin rights; `cam-proxy admin-commands changes`, `admin-commands undo
 <cmdId>`). Reset on the Settings page works as before.
@@ -288,7 +288,7 @@ fixed for the admin UI). `proxy.restart` answers first, then restarts.
   on the Pi after editing `.env`, a rollout in the cluster). While it is off
   the hello doesn't announce `commands` (cams-admin then sends none and shows
   the proxy as not supporting commands), and any command that arrives anyway
-  is refused `paused`. cams-admin can't change it; the card shows the banner.
+  is refused `paused`. cams-admin can't change it; the cams-admin page shows the banner.
 
 ### Managed tokens
 
@@ -304,7 +304,7 @@ refused (`shadows_local_token`). The tokens keep working when cams-admin is
 down or the proxy is unenrolled; `CAMPROXY_TOKENS` may be left unset while a
 managed client token is live.
 
-**Local block:** the card's **Block** (or `cam-proxy admin-tokens block <id>`)
+**Local block:** the cams-admin page's **Block** (or `cam-proxy admin-tokens block <id>`)
 stops a managed token at once. The block holds the token's hash as well as its
 id: `tokens.apply` never brings it back, under the same id or a new one, and
 never removes a block. At most 64 blocks; at the cap a new one is refused (409
@@ -323,7 +323,7 @@ read them or they belong to another user; never printed, logged or served.
 | `key.json` | the proxy's private key | enrollment |
 | `tokens.json` | the managed token hashes, their revision, the local block list | `tokens.apply`, Block/Unblock |
 | `commands.json` | the journal: the final result of the last 1000 commands (and all of the last 7 days, at most 2500) | each command that ran |
-| `policy.json` | the allowed commands and the pause | the card, `admin-commands` |
+| `policy.json` | the allowed commands and the pause | the cams-admin page, `admin-commands` |
 | `replay.json` | the newest signed challenge time seen and the command ids seen (accepted or refused) until they expire: a recorded session replayed later (e.g. on the plain-http in-cluster path) is refused, also after a restart | each handshake and command |
 | `overrides.bak-<cmdId>.json` | the override state of each path a cams-admin settings change named, before and after (the last 20) | `config.set`, `config.unset`, `config.rollback`; marked by Undo |
 | `replay-mark.json` | the same newest challenge time again: if `replay.json` is unusable this one holds; if both are unusable no handshake is answered (fail closed) until they are fixed or removed (removing both = a fresh start) | each handshake |
@@ -349,7 +349,7 @@ by id and label, never by hash.
 2. cams-admin issues the tokens; Klaus (through the kube-setup session) puts
    them into cams's configuration; check cams.
 3. Rollback at any step: remove the managed token from cams (its
-   `CAMPROXY_TOKENS` value never stopped working), or Pause on the card.
+   `CAMPROXY_TOKENS` value never stopped working), or Pause on the cams-admin page.
 
 ### Cut-over (M §11.4, steps 3-4: remote configuration)
 
@@ -359,15 +359,15 @@ by id and label, never by hash.
    `sse.pingS` from cams-admin (dry run, apply), see it in both audit logs
    and marked on the Settings page, roll it back.
 3. Disruptive entries stay off until Klaus asks for one on this proxy.
-4. Rollback at any step: Pause on the card, or untick the entries; Undo
-   each change on the card.
+4. Rollback at any step: Pause on the cams-admin page, or untick the entries; Undo
+   each change on the cams-admin page.
 
 ### Recovery: cams-admin compromised
 
 1. Set `CAMPROXY_ADMIN_COMMANDS=off` in the `.env` file (the Pi) or the
    environment and restart the proxy: no command runs, whatever cams-admin
    sends.
-2. Block every managed token on the card (or `admin-tokens block <id>`).
+2. Block every managed token on the cams-admin page (or `admin-tokens block <id>`).
 3. Review `GET /control/admin/changes` (or `admin-commands changes`) and
    **Undo** each settings change cams-admin made; untick every entry.
 4. If a UI session may have leaked, rotate `CAMPROXY_ADMIN_TOKEN` (a restart

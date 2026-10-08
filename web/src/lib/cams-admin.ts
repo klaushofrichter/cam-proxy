@@ -1,4 +1,6 @@
 import { settingText } from './settings';
+import { agoText } from './format';
+import { shortId } from './long-value';
 
 // The Status page's cams-admin card (spec 2026-10-06-cams-admin-phase1-design §9.2):
 // GET /control/admin; never any key material.
@@ -122,4 +124,54 @@ export function undoErrorText(e: unknown): string {
   if (b?.error === 'local_admin_only') return "Undo needs the proxy's own admin token: sign in with it (not through cams).";
   if (b?.error === 'no_backup') return 'Not undone: the record of that change is gone (only the last 20 are kept).';
   return 'Not undone';
+}
+
+// #203: the Status page's short cams-admin card.
+// Since when the state holds: connected since, else the last error, else the enrollment.
+export const sinceOf = (v: Pick<CamsAdminView, 'state' | 'connectedSince' | 'lastErrorAt' | 'enrolledAt'>): number | null =>
+  v.state === 'connected' ? v.connectedSince : (v.lastErrorAt ?? v.enrolledAt ?? null);
+
+export function commandsStateText(v: Pick<CommandsView, 'enabled' | 'envName' | 'paused' | 'pauseReason'>): string {
+  if (!v.enabled) return `off (${v.envName ?? 'CAMPROXY_ADMIN_COMMANDS'})`;
+  if (v.paused) return v.pauseReason ? `paused: ${v.pauseReason}` : 'paused';
+  return 'on';
+}
+
+// Entries allowed before this version that wait for a fresh tick (review I3).
+const toConfirm = (v: Pick<CommandsView, 'allow' | 'unconfirmed'>): number => (v.unconfirmed ?? []).filter((e) => !v.allow.includes(e)).length;
+
+export function allowedText(v: Pick<CommandsView, 'allow' | 'unconfirmed'>): string {
+  const n = toConfirm(v);
+  return `${v.allow.length ? `${v.allow.length} allowed` : 'none allowed'}${n ? `, ${n} need${n === 1 ? 's' : ''} re-confirming` : ''}`;
+}
+
+export function tokensCountText(t: TokensView, now = Date.now()): string {
+  if (!t.items.length) return 'none';
+  const states = t.items.map((x) => tokenStateText(x, now));
+  const blocked = states.filter((s) => s === 'blocked').length;
+  const retired = states.filter((s) => s === 'retired').length;
+  const live = states.length - blocked - retired;
+  return [`${live} live`, ...(blocked ? [`${blocked} blocked`] : []), ...(retired ? [`${retired} retired`] : [])].join(', ');
+}
+
+// `recent` is newest first (GET /control/admin/commands).
+export function lastCommandText(recent: RecentCommand[], now = Date.now()): string {
+  const c = recent[0];
+  return c ? `${agoText(c.at, now)} · ${c.command} · ${c.status}${c.code ? ` (${c.code})` : ''}` : 'none yet';
+}
+
+export function summaryWarnings(v: Pick<CamsAdminView, 'state' | 'lastError'>, cmds: Pick<CommandsView, 'allow' | 'unconfirmed'> | null, tokens: Pick<TokensView, 'problem'> | null): string[] {
+  const n = cmds ? toConfirm(cmds) : 0;
+  return [
+    ...(v.lastError && v.state !== 'connected' ? [`Last error: ${v.lastError}`] : []),
+    ...(tokens?.problem ? [tokens.problem] : []),
+    ...(n ? [`${n} command${n === 1 ? ' needs' : 's need'} re-confirming on the cams-admin page`] : []),
+  ];
+}
+
+// Who sent a command, as cams-admin names it: an email as it is; an opaque
+// id (a cams instance, cms_…) shortened, the full value for the title and
+// copy. The proxy has no directory of names (the API is unchanged, #203).
+export function actorLabel(actor: string): { text: string; full: string } {
+  return { text: /^[a-z]{2,6}_[A-Za-z0-9]{12,}$/.test(actor) ? shortId(actor) : actor, full: actor };
 }
