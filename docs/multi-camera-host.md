@@ -96,7 +96,7 @@ is `https://download.docker.com/linux/ubuntu`).
 - `lan.address`: the address the router keeps for the PC (by MAC; no
   reservation). It becomes an IP name of the proxy's certificate and is
   covered by the site CA (§13); if the router ever gives the PC another one,
-  the Certificates card says so and `tls-ca-rotate` makes a new CA.
+  the Certificates page says so and `tls-ca-rotate` makes a new CA.
 - `hostname`: also the site label of the site CA (`<camera>.<hostname>.internal`).
 - `clusterCidrs`: the cluster's pod and service ranges, from the kube-setup
   session (k3s `--cluster-cidr` and `--service-cidr`; the defaults are
@@ -544,12 +544,12 @@ subnet and the proxy's own two addresses. Then:
   renewed 30 days before expiry at 04:00 camera time. The camera's web server
   restarts for a few seconds during a push.
 - **A camera that refuses the import** (the firmware answers 200 and keeps
-  its certificate) shows `pinned` on the Certificates card with its own
+  its certificate) shows `pinned` on the Certificates page with its own
   (factory) fingerprint; the proxy pins that certificate itself and cams pins
   the same. The next try is at the next 04:00, or "Push now".
 - **A camera that served its leaf and then serves something else** (a factory
   reset, a replaced camera, or someone else on the camera network) is not
-  pushed to by itself: the proxy refuses to talk to it, the card and the
+  pushed to by itself: the proxy refuses to talk to it, the Certificates page and the
   `certificates` health item say "serves an unexpected certificate". Check the
   camera (is it the one you expect, at its address?), then "Push now". A
   push binds its session to the certificate it read just before; the first
@@ -578,7 +578,7 @@ openssl s_client -connect 192.168.60.13:443 -servername cam3.camhost1.internal \
 The proxy over HTTPS from the Mac:
 
 ```sh
-curl -s http://<lan.address>:8480/tls/ca.pem > ca.pem   # or the card's "Download the CA"
+curl -s http://<lan.address>:8480/tls/ca.pem > ca.pem   # or "Download the CA" on the Certificates page
 curl --cacert ca.pem --resolve proxy.camhost1.internal:8443:<lan.address> https://proxy.camhost1.internal:8443/health
 ```
 
@@ -591,8 +591,8 @@ install the profile, then Settings → General → About → Certificate Trust
 Settings → turn it on. Firefox has its own store (Settings → Certificates →
 Import, "trust this CA to identify websites").
 
-**cams.** The Certificates card shows the CA fingerprint (`SHA256:` and 64
-upper-case hex digits; Copy fingerprint copies it plain). It goes into cams'
+**cams.** The Certificates page shows the CA fingerprint (`SHA256:` and 64
+upper-case hex digits; its copy button copies it plain). It goes into cams'
 generator input as this proxy's `caFingerprint` (the cams P5 plan); cams then
 reaches the proxy at `https://<lan.address>:8443` with servername
 `proxy.camhost1.internal` and each camera with `<camId>.camhost1.internal`.
@@ -612,7 +612,7 @@ backup. Without it the
 proxy keeps refusing a camera that serves an unexpected certificate, also
 when `tls.site` is removed or the CA can't be loaded. Every cams pin of this proxy breaks: give cams the new
 fingerprint (it accepts a list, so add the new one first). Needed after an
-address change the CA doesn't cover (the Certificates card and the
+address change the CA doesn't cover (the Certificates page and the
 `certificates` health item name the address).
 
 **Backups.** `data/tls/` is part of the data backup. A restore without

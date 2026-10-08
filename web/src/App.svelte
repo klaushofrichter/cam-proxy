@@ -16,6 +16,8 @@
   import Audit from './pages/Audit.svelte';
   import Settings from './pages/Settings.svelte';
   import Maintenance from './pages/Maintenance.svelte';
+  import CamsAdmin from './pages/CamsAdmin.svelte';
+  import Certificates from './pages/Certificates.svelte';
 
   onMount(() => void checkSession());
 
@@ -81,6 +83,8 @@
         {:else if $page === 'clips'}<Clips />
         {:else if $page === 'audit'}<Audit />
         {:else if $page === 'settings'}<Settings />
+        {:else if $page === 'cams-admin'}<CamsAdmin />
+        {:else if $page === 'certificates'}<Certificates />
         {:else}<Maintenance />{/if}
       </main>
     </div>

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Admin UI: cams-admin and Certificates get their own pages (#203), in the navigation after Maintenance. The Status page keeps short cards with **Details →**: cams-admin shows the state and since when, the cams-admin host, the account, commands on/paused, how many are allowed (and how many need re-confirming), managed tokens live/blocked, the last command and warnings; Certificates shows the site, the CA's end, one line per camera (mode, what is left, the last push) and warnings. The pages are laid out for phone width: recent commands, changes and managed tokens are rows that stack on narrow screens; ids and hashes are shortened in the middle with the full value on hover and a copy button; fingerprints are shown in groups of four that wrap between groups; times never wrap. The Certificates card's rows no longer spread over the card's height next to a taller card. Nothing changes in what is allowed, audited or in the API.
+
+## v2026.10.07.2
+
 - Health: the camera's SD card (#199). The proxy reads the card and the recording settings (`GetHddInfo`, `GetRecV20`; read-only) when the camera comes online and every 5 minutes. A new health item "SD card" and `camera.sd` (`mounted`, `formatted`, `capacityMB`, `freeMB`, `overwrite`, `recordingEnabled`, `checkedAt`, `lastRecordingAt`, `stalled`) in `GET /api/local/health`, the Status page (Health card, and an "SD card" line on the Camera card) and the cams-admin heartbeat. Overwrite off is a warning on its own ("Overwrite is off: the camera stops recording to its SD card when it is full"; amber, `warning: true`, not counted as a problem). Problems: no card, not mounted or not formatted; recording off; under 5 % free with overwrite off ("SD card almost full and overwrite is off: recording to the SD card will stop"); and recording to the card stopped while FTP clips still come ("The camera hasn't recorded to its SD card since …": its newest recording more than an hour before the newest clip). Metrics `camproxy_camera_sd_free_bytes`, `camproxy_camera_sd_capacity_bytes`, `camproxy_camera_sd_overwrite`. Vendored cams-admin contract with these fields.
 
 ## v2026.10.07.1

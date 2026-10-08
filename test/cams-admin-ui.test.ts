@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { byText, unconfirmedText, canEnroll, changeLines, commandsBanner, entryGroups, stateClass, stateText, tokenStateText, undoErrorText, widenErrorText } from '../web/src/lib/cams-admin';
+import { actorLabel, allowedText, byText, unconfirmedText, canEnroll, changeLines, commandsBanner, commandsStateText, entryGroups, lastCommandText, sinceOf, stateClass, stateText, summaryWarnings, tokensCountText, tokenStateText, undoErrorText, widenErrorText } from '../web/src/lib/cams-admin';
 // Shaped like web/src/lib/api's ApiError (that module needs a browser's types).
 const apiError = (status: number, body: unknown) => Object.assign(new Error(`HTTP ${status}`), { status, body });
 
@@ -86,5 +86,51 @@ describe('P3 on the card', () => {
     expect(undoErrorText(err(409, { error: 'already_rolled_back' }))).toBe('Already undone.');
     expect(undoErrorText(err(403, { error: 'local_admin_only' }))).toBe("Undo needs the proxy's own admin token: sign in with it (not through cams).");
     expect(undoErrorText(new Error('x'))).toBe('Not undone');
+  });
+});
+
+// #203: the Status page's short cams-admin card and the cams-admin page.
+describe('the cams-admin summary', () => {
+  const NOW = Date.UTC(2026, 9, 8, 12, 0);
+  const view = { state: 'connected' as const, url: 'https://cams-admin.example.org/', account: 'home', proxyId: 'prx_01J9ABCDEFGHJKMNPQ9F5X', fingerprint: 'SHA256:AB', enrolledAt: NOW - 86400_000, connectedSince: NOW - 3600_000, lastHeartbeatAt: NOW - 5000, lastAckAt: null, lastError: null, lastErrorAt: null, retryInMs: null, truncated: false };
+  const cmds = { enabled: true, envName: null, paused: false, pauseReason: null, allow: ['tokens.apply', 'config.get'], unconfirmed: ['config.set', 'tokens.apply'], recent: [{ cmdId: 'c2', command: 'tokens.apply', actor: 'cms_79S6GNGR8RP1QG00ZJZS', at: NOW - 120_000, status: 'ok' as const }, { cmdId: 'c1', command: 'config.set', actor: 'a@b.c', at: NOW - 7200_000, status: 'conflict' as const, code: 'changed' }] };
+  const token = (id: string, over: Partial<{ blocked: boolean; live: boolean; retireAt: number | null }> = {}) => ({ id, kind: 'client', label: 'cams', retireAt: null, blocked: false, live: true, hashPrefix: 'sha256:0123456', ...over });
+
+  it('since when: connected since, else the last error or the enrollment', () => {
+    expect(sinceOf(view)).toBe(NOW - 3600_000);
+    expect(sinceOf({ ...view, state: 'backoff', lastErrorAt: NOW - 60_000 })).toBe(NOW - 60_000);
+    expect(sinceOf({ ...view, state: 'connecting', lastErrorAt: null })).toBe(NOW - 86400_000);
+    expect(sinceOf({ ...view, state: 'off', enrolledAt: null, lastErrorAt: null })).toBeNull();
+  });
+  it('commands: on, paused (with the reason) or off in the environment', () => {
+    expect(commandsStateText(cmds)).toBe('on');
+    expect(commandsStateText({ ...cmds, paused: true, pauseReason: 'maintenance' })).toBe('paused: maintenance');
+    expect(commandsStateText({ ...cmds, paused: true })).toBe('paused');
+    expect(commandsStateText({ ...cmds, enabled: false, envName: 'CAMPROXY_ADMIN_COMMANDS' })).toBe('off (CAMPROXY_ADMIN_COMMANDS)');
+  });
+  it('how many are allowed, and how many need re-confirming', () => {
+    expect(allowedText(cmds)).toBe('2 allowed, 1 needs re-confirming');
+    expect(allowedText({ ...cmds, unconfirmed: [] })).toBe('2 allowed');
+    expect(allowedText({ ...cmds, allow: [], unconfirmed: ['a', 'b'] })).toBe('none allowed, 2 need re-confirming');
+  });
+  it('managed tokens: live and blocked', () => {
+    expect(tokensCountText({ revision: 1, problem: null, items: [] }, NOW)).toBe('none');
+    expect(tokensCountText({ revision: 1, problem: null, items: [token('a'), token('b'), token('c', { blocked: true })] }, NOW)).toBe('2 live, 1 blocked');
+    expect(tokensCountText({ revision: 1, problem: null, items: [token('a'), token('b', { live: false })] }, NOW)).toBe('1 live, 1 retired');
+  });
+  it('the last command: when, what, how it ended', () => {
+    expect(lastCommandText(cmds.recent, NOW)).toBe('2 min ago · tokens.apply · ok');
+    expect(lastCommandText(cmds.recent.slice(1), NOW)).toBe('2 h ago · config.set · conflict (changed)');
+    expect(lastCommandText([], NOW)).toBe('none yet');
+  });
+  it('warnings: an error while not connected, the tokens problem, commands to re-confirm', () => {
+    expect(summaryWarnings(view, cmds, { problem: null })).toEqual(['1 command needs re-confirming on the cams-admin page']);
+    expect(summaryWarnings({ ...view, state: 'backoff', lastError: 'ECONNREFUSED' }, { ...cmds, unconfirmed: [] }, { problem: 'tokens.json unreadable' })).toEqual(['Last error: ECONNREFUSED', 'tokens.json unreadable']);
+    expect(summaryWarnings({ ...view, lastError: 'old' }, null, null)).toEqual([]);
+  });
+  it('an actor: an email as it is, an id shortened, the full value kept', () => {
+    expect(actorLabel('a@b.c')).toEqual({ text: 'a@b.c', full: 'a@b.c' });
+    expect(actorLabel('cms_79S6GNGR8RP1QG00ZJZS')).toEqual({ text: 'cms_79S6…ZJZS', full: 'cms_79S6GNGR8RP1QG00ZJZS' });
+    expect(actorLabel('system')).toEqual({ text: 'system', full: 'system' });
   });
 });
