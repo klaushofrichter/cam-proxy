@@ -96,6 +96,7 @@
     <h3>Allowed commands</h3>
     {#if banner}<p class="banner" data-testid="cams-admin-commands-banner">{banner}</p>{/if}
     <p class="small">Commands from cams-admin: it can only send what is ticked here; everything else is refused. Adding a command needs the proxy's own admin token.</p>
+    <div class="groups" data-testid="cams-admin-groups">
     {#each groups as g (g.key)}
       <div class="group" class:disruptive={g.key === 'disruptive'} data-testid="cams-admin-group-{g.key}">
         <h4>{g.title}</h4>
@@ -115,6 +116,7 @@
         </ul>
       </div>
     {/each}
+    </div>
     <div class="actions">
       <button onclick={() => void save()} disabled={busy || !dirty} data-testid="cams-admin-commands-save">Save</button>
       {#if cmds.paused}
@@ -214,7 +216,9 @@
   h3 { margin: 0; font-size: 16px; }
   h4 { margin: 4px 0 0; font-size: 14px; }
   p { margin: 0; }
-  .group { display: grid; gap: 6px; min-width: 0; }
+  /* The groups in two columns where the card is wide enough, each group whole. */
+  .groups { columns: 2 380px; column-gap: 24px; }
+  .group { display: grid; gap: 6px; min-width: 0; break-inside: avoid; margin-bottom: 10px; }
   .group.disruptive { border: 1px solid var(--danger); border-radius: 8px; padding: 8px 10px; }
   .danger { color: var(--danger); }
   .banner { color: var(--danger); font-weight: 600; }

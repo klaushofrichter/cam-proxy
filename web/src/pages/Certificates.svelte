@@ -59,6 +59,7 @@
     {#each view.problems as p (p)}<p class="bad banner" data-testid="cert-problem">{p}</p>{/each}
     {#if message}<p class="msg" data-testid="cert-message">{message}</p>{/if}
 
+    <div class="pair">
     <div class="card" data-testid="cert-ca">
       <h3>Site CA</h3>
       <dl>
@@ -85,6 +86,7 @@
       {:else}
         <p class="muted" data-testid="cert-proxy">No certificate of its own yet.</p>
       {/if}
+    </div>
     </div>
 
     <h3 class="sub">Cameras</h3>
@@ -115,7 +117,9 @@
 </section>
 
 <style>
-  .page { display: grid; gap: 12px; max-width: 1100px; min-width: 0; }
+  /* Full width like Maintenance; on wide screens the CA and the proxy side by side. */
+  .page { display: grid; gap: 12px; min-width: 0; }
+  .pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 12px; align-items: start; min-width: 0; }
   .title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
   h2 { margin: 0; font-size: 20px; }
   h3 { margin: 0; font-size: 16px; }
