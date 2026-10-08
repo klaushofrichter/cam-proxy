@@ -14,7 +14,7 @@ export const NAV_ITEMS: ReadonlyArray<{ id: Page; label: string; icon: IconName 
   { id: 'audit', label: 'Audit', icon: 'audit' },
   { id: 'settings', label: 'Settings', icon: 'settings' },
   { id: 'maintenance', label: 'Maintenance', icon: 'bolt' },
-  { id: 'cams-admin', label: 'cams-admin', icon: 'cloud' },
+  { id: 'cams-admin', label: 'Cams-Admin', icon: 'cloud' },
   { id: 'certificates', label: 'Certificates', icon: 'lock' },
 ];
 
