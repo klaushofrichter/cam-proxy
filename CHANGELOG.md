@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.10.13.1
+
 - Dependencies: @peculiar/x509 2.x (#213). The library no longer brings its own Reflect polyfill, so the proxy loads `reflect-metadata` before it (one entry, `src/tls/x509.ts`); without it the proxy did not start. Nothing changes in the site CA or the certificates: a CA created before the update still loads with the same fingerprint (pin) and issues leaves with the same extensions, which verify against it. A regression test checks this with a test-only CA and leaf made by 1.14.3 (`test/fixtures/tls-x509-1.14.3/`).
 
 ## v2026.10.08.2
