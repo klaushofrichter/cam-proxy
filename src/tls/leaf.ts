@@ -1,6 +1,6 @@
-import * as x509 from '@peculiar/x509';
 import { createPrivateKey, randomBytes, webcrypto, X509Certificate } from 'crypto';
 import { fingerprintOf, RSA, type SiteCa } from './ca';
+import { x509 } from './x509';
 
 export interface Leaf { certPem: string; keyPem: string; fingerprint: string; notAfter: number; names: string[]; ips: string[] }
 export const RENEW_BEFORE_MS = 30 * 86400_000;
