@@ -1,10 +1,8 @@
-import * as x509 from '@peculiar/x509';
 import { createHash, createPrivateKey, createPublicKey, randomBytes, webcrypto, X509Certificate } from 'crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { nameConstraintsDer, parseNameConstraints } from './der';
-
-x509.cryptoProvider.set(webcrypto as unknown as Crypto);
+import { x509 } from './x509';
 
 export const RSA = (bits: number) => ({ name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256', publicExponent: new Uint8Array([1, 0, 1]), modulusLength: bits }) as const;
 const YEAR = 365 * 86400_000;
