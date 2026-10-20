@@ -39,19 +39,23 @@ export const RECORDING_KINDS = ['motion', 'person', 'vehicle', 'pet'] as const;
 export const STALL_GRACE_MS = 10 * 60_000;
 const CHECK_MS = 5 * 60_000;
 
-// The camera masks the FTP user in its answer. Measured 2026-10-02: only the
-// 6-character `camera` -> `ca**ra` (first two characters, stars, last two).
-// The match is best effort: any number of stars, the expected user needs 5+
-// characters, and with more than two stars the length must agree (a fixed `**`
-// leaves it unchecked). A different user with the same first and last two
-// characters passes.
+// The camera masks the FTP user in its answer. Measured: the RLC-1224A shows
+// `camera` as `ca**ra` (2026-10-02), the CX820 `cam4` as `c**4` (2026-10-20):
+// one or two characters on each side, stars between. The match is best
+// effort: any number of stars, the expected user must hide at least one
+// character behind the visible ones, and with more than two stars the length
+// must agree (a fixed `**` leaves it unchecked). A different user with the
+// same visible characters passes.
 function sameFtpUser(seen: string, expected: string): boolean {
   if (!seen.includes('*')) return seen === expected;
-  const m = /^([^*]{2})(\*+)([^*]{2})$/u.exec(seen);
+  const m = /^([^*]{1,2})(\*+)([^*]{1,2})$/u.exec(seen);
   const e = Array.from(expected);
-  if (!m || e.length < 5) return false;
+  if (!m) return false;
+  const head = Array.from(m[1]).length;
+  const tail = Array.from(m[3]).length;
+  if (e.length <= head + tail) return false;
   if (m[2].length > 2 && Array.from(seen).length !== e.length) return false;
-  return m[1] === e.slice(0, 2).join('') && m[3] === e.slice(-2).join('');
+  return m[1] === e.slice(0, head).join('') && m[3] === e.slice(-tail).join('');
 }
 
 // What camera-ftp-setup would write for this proxy, compared with the
