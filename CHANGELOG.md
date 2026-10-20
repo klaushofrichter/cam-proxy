@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.10.20.1
+
 - Camera FTP status: the Reolink CX820 hides the FTP user with one visible character on each side (`cam4` → `c**4`), the RLC-1224A with two (`camera` → `ca**ra`). The proxy now accepts both, so a CX820 pointed at it shows FTP **on** instead of "uploads elsewhere". Uploads themselves were never affected.
 
 ## v2026.10.13.1
