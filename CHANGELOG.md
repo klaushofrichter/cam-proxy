@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.10.20.2
+
 - Dependencies: @peculiar/x509 2.2.0 (#217), used by the site CA; test tools (#218). cam-sim v2026.10.20.1 for the tests (CX820 model, #222).
 
 ## v2026.10.20.1
