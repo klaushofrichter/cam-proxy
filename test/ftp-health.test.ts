@@ -41,7 +41,12 @@ describe('classifyFtp', () => {
     expect(classifyFtp(camFtp({ userName: 'ca***ra' }), TARGET)).toMatchObject({ state: 'elsewhere', mismatch: ['user'] });
     expect(classifyFtp(camFtp({ userName: 'ca**ra' }), { ...TARGET, user: 'camexxx' })).toMatchObject({ state: 'elsewhere' });
   });
-  it('a short expected user (under 5 characters) is compared literally, even against a masked answer', () => {
+  it('the CX820 keeps one character on each side (cam4 -> c**4, measured 2026-10-20)', () => {
+    expect(classifyFtp(camFtp({ userName: 'c**4' }), { ...TARGET, user: 'cam4' })).toMatchObject({ state: 'on', mismatch: [] });
+    expect(classifyFtp(camFtp({ userName: 'c**4' }), { ...TARGET, user: 'cam5' })).toMatchObject({ state: 'elsewhere', mismatch: ['user'] });
+    expect(classifyFtp(camFtp({ userName: 'c**4' }), { ...TARGET, user: 'c4' })).toMatchObject({ state: 'elsewhere', mismatch: ['user'] }); // nothing hidden: not a mask of it
+  });
+  it('a user too short to hide anything behind the visible characters never matches a mask', () => {
     expect(classifyFtp(camFtp({ userName: 'cam' }), { ...TARGET, user: 'cam' })).toMatchObject({ state: 'on' });
     expect(classifyFtp(camFtp({ userName: 'ca**am' }), { ...TARGET, user: 'cam' })).toMatchObject({ state: 'elsewhere', mismatch: ['user'] });
   });

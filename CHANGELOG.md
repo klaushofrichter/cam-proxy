@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Camera FTP status: the Reolink CX820 hides the FTP user with one visible character on each side (`cam4` → `c**4`), the RLC-1224A with two (`camera` → `ca**ra`). The proxy now accepts both, so a CX820 pointed at it shows FTP **on** instead of "uploads elsewhere". Uploads themselves were never affected.
+
+## v2026.10.13.1
+
 - Dependencies: @peculiar/x509 2.x (#213). The library no longer brings its own Reflect polyfill, so the proxy loads `reflect-metadata` before it (one entry, `src/tls/x509.ts`); without it the proxy did not start. Nothing changes in the site CA or the certificates: a CA created before the update still loads with the same fingerprint (pin) and issues leaves with the same extensions, which verify against it. A regression test checks this with a test-only CA and leaf made by 1.14.3 (`test/fixtures/tls-x509-1.14.3/`).
 
 ## v2026.10.08.2
