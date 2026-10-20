@@ -22,7 +22,7 @@
     "test:e2e:multi": "playwright test -c playwright.multi.config.ts"
   },
   "dependencies": {
-    "@peculiar/x509": "^2.1.0",
+    "@peculiar/x509": "^2.2.0",
     "express": "^5.3.0",
     "express-rate-limit": "^8.7.1",
     "pino": "^10.4.0",
@@ -32,7 +32,7 @@
     "sharp": "^0.35.5"
   },
   "devDependencies": {
-    "@playwright/test": "^1.64.0",
+    "@playwright/test": "^1.64.1",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@types/express": "^5.0.6",
     "@types/node": "^26.6.5",
@@ -40,13 +40,13 @@
     "@types/ws": "^8.18.2",
     "ajv": "^8.20.0",
     "basic-ftp": "^6.2.3",
-    "cam-sim": "https://github.com/klaushofrichter/cam-sim/releases/download/v2026.10.05.1/cam-sim-v2026.10.05.1.tgz",
+    "cam-sim": "https://github.com/klaushofrichter/cam-sim/releases/download/v2026.10.20.1/cam-sim-v2026.10.20.1.tgz",
     "supertest": "^7.3.1",
     "svelte": "^5.57.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.4",
-    "vitest": "^5.0.3",
+    "vitest": "^5.0.5",
     "ws": "^8.22.0"
   }
 }
