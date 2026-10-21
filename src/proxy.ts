@@ -62,7 +62,7 @@ import { createMetrics } from './api/metrics';
 import { createSessionSigner } from './api/session';
 import { createLoginLinks } from './api/login-links';
 import { TokenStore } from './fleet/token-store';
-import { CommandPolicy } from './fleet/policy';
+import { CommandPolicy, uiUnlocked } from './fleet/policy';
 import { Journal } from './fleet/journal';
 import { OverridesBackups } from './fleet/backups';
 import { configHandlers, type ConfigCommandDeps } from './fleet/config-commands';
@@ -797,6 +797,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // data/admin/policy.json, the env kill switch), the journal and the runner.
   // Nothing is read or written until a command arrives or the card asks.
   const commandPolicy = new CommandPolicy({ base: () => loaded.commandPolicyBase, file: join(loaded.config.server.dataDir, 'admin', 'policy.json'), env: () => loaded.envLayer, log: logger });
+  // What the allow-list unlocks for a cams-admin sign-in (issue #227): read per request, so a change or a pause applies at once.
+  access.managedUnlocked = () => uiUnlocked(commandPolicy.effective());
   const journal = new Journal(join(loaded.config.server.dataDir, 'admin', 'commands.json'), Date.now, logger);
   const replayGuard = new ReplayGuard({ file: join(loaded.config.server.dataDir, 'admin', 'replay.json'), log: logger, slackMs: opts.camsAdmin?.replaySlackMs });
   // The P3 handlers join once the control API's dependencies exist (below).
@@ -890,7 +892,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // The health summary for the display on the Pi: loopback callers only, no
   // key; anyone else goes on to the access check as for an unknown route.
   app.use('/api', localApi({ health: healthNow }));
-  app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit, managedAdminLive: access.managedAdminLive }));
+  app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit, managedAdminLive: access.managedAdminLive, managedUnlocked: access.managedUnlocked }));
   // Before clientApi: its /cameras/:cam/stills/:file would take latest.jpg.
   app.use('/api', requireAccess('client', access), latestApi({ cameras: cams }));
   app.use('/api', requireAccess('client', access), composeApi({ config: () => running, catalog, composer, cameras: cams, paused: () => storage.paused(), font, audit }));

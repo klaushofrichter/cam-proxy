@@ -1,11 +1,20 @@
 import { writable } from 'svelte/store';
+import { ALL_RIGHTS, REFUSED_TEXT, rights, rightsOf } from './rights';
 
 // null while checking, then whether the session cookie is valid.
 export const loggedIn = writable<boolean | null>(null);
 
+// An error answer in words: a local-admin-only refusal (issue #227) says so
+// plainly, else the answer's detail, else the status.
+export function errorText(status: number, body: unknown): string {
+  const b = typeof body === 'object' && body ? (body as { error?: unknown; detail?: unknown }) : null;
+  if (b?.error === 'local_admin_only') return REFUSED_TEXT;
+  return b && 'detail' in b ? String(b.detail) : `HTTP ${status}`;
+}
+
 export class ApiError extends Error {
   constructor(readonly status: number, readonly body: unknown) {
-    super(typeof body === 'object' && body && 'detail' in body ? String((body as { detail: unknown }).detail) : `HTTP ${status}`);
+    super(errorText(status, body));
   }
 }
 
@@ -49,12 +58,15 @@ export async function apiLines<T>(path: string): Promise<{ records: T[]; next: s
 }
 
 export async function checkSession(): Promise<void> {
-  const r = await fetch('/control/session', { credentials: 'same-origin' }).then((x) => x.json()).catch(() => ({ loggedIn: false }));
+  const r = (await fetch('/control/session', { credentials: 'same-origin' }).then((x) => x.json()).catch(() => ({ loggedIn: false }))) as { loggedIn?: unknown };
+  rights.set(rightsOf(r));
   loggedIn.set(!!r.loggedIn);
 }
 
 export async function login(token: string): Promise<boolean> {
   const res = await fetch('/control/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ token }) });
+  // The token form is the local admin token: every right.
+  if (res.status === 204) rights.set(ALL_RIGHTS);
   loggedIn.set(res.status === 204);
   return res.status === 204;
 }

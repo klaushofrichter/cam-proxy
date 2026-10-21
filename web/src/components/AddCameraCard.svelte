@@ -1,6 +1,8 @@
 <script lang="ts">
   import { api, ApiError } from '../lib/api';
   import { newCameraProblem, passwordHint } from '../lib/camera-settings';
+  import { lockedWhy, rights } from '../lib/rights';
+  import LockedNote from './LockedNote.svelte';
 
   // Add a camera (spec 2026-10-05-multi-camera-host-design §6.3): it goes into
   // overrides.json and starts at once. Its password comes from the environment
@@ -16,6 +18,8 @@
   let message = $state('');
   let touched = $state(false);
   const problem = $derived(newCameraProblem({ id: id.trim(), host }, existing));
+  // A new camera has an address: the local admin's (issue #227).
+  const locked = $derived(lockedWhy($rights, 'local'));
 
   async function add() {
     touched = true;
@@ -46,8 +50,9 @@
     </label>
     <label>User <input bind:value={user} autocomplete="off" data-testid="add-camera-user" /></label>
     <label class="check"><input type="checkbox" bind:checked={ftp} data-testid="add-camera-ftp" /> Clip uploads (FTP)</label>
-    <div class="row"><button type="submit" data-testid="add-camera-save">Add</button></div>
+    <div class="row"><button type="submit" disabled={!!locked} title={locked ?? undefined} data-testid="add-camera-save">Add</button></div>
   </form>
+  <LockedNote why={locked} testid="add-camera-locked" />
   {#if touched && problem}<p class="field-error" data-testid="add-camera-problem">{problem}</p>{/if}
   {#if message}<p class="msg" role="status" data-testid="add-camera-message">{message}</p>{/if}
 </div>

@@ -1,6 +1,7 @@
 // The Maintenance page's restart, reboot and power-cycle helpers (#71, #83, #85).
 
 import { localHhmm } from './format';
+import { REFUSED_TEXT } from './rights';
 
 // After this long without a new proxy, the page says it did not come back.
 export const RESTART_GIVE_UP_MS = 120_000;
@@ -56,6 +57,7 @@ export function poeAlert(s: PoeSwitchStatus | null): string | null {
 
 // A failed power-cycle's line, from the 409/502 body.
 export function powerCycleFailText(body: { error: string; detail?: string; poeOff?: boolean; turnedOn?: boolean }, port: number | null): string {
+  if (body.error === 'local_admin_only') return `Camera power-cycle: ${REFUSED_TEXT}`;
   const detail = body.detail ?? body.error;
   if (body.poeOff && body.turnedOn) return `Camera power-cycle failed after the PoE-off request: PoE may have been cut, and it is on again (${detail})`;
   if (body.poeOff) return `Camera power-cycle failed: the camera's PoE may be OFF: use 'Turn camera PoE on', or the switch's web UI (port ${port ?? '?'}). (${detail})`;

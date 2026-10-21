@@ -4,6 +4,8 @@
   import { onMount } from 'svelte';
   import { api, ApiError } from '../lib/api';
   import { mbText } from '../lib/format';
+  import { lockedWhy, rights } from '../lib/rights';
+  import LockedNote from './LockedNote.svelte';
   import { addNothing, autoStep, clipsLines, LOAD_ERROR, loadMessage, eventsLines, eventsOffer, eventsRepairLines, gapRows, problemRows, progressText, ranText, recoverText, repairLines, repairOffer, repairRows, retrieveNothing, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type InventoryState, type RepairReport, type StillsReport } from '../lib/inventory';
 
   // The inventories (spec 2026-10-02-inventory-design): start one, follow its
@@ -20,6 +22,8 @@
   // run their click started ends with something to take (`auto` true);
   // Cancel leaves the follow-up button.
   let { onrepair, onrecover }: { onrepair: (offer: { count: number; bytes: number }, auto?: boolean) => void; onrecover: (offer: { count: number; text: string }, auto?: boolean) => void } = $props();
+  // Issue #227: inventory runs are the local admin's.
+  const locked = $derived(lockedWhy($rights, 'local'));
   let inv = $state<InventoryState | null>(null);
   let stills = $state<StillsReport | null>(null);
   let clips = $state<ClipsReport | null>(null);
@@ -120,12 +124,13 @@
 <div class="card" data-testid="inventory">
   <h3>Inventory</h3>
   <p class="small">"Check stills" and "Check clips" only read: they check the local stills and clips against what the store should hold for the retention window. The two search buttons compare with the camera's SD card and then change data, after a confirmation: "Search for and retrieve missing clips" fetches the clips missing here from the camera, "Search for and add missing events" adds the events missing here. Cancel in the confirmation changes nothing; the offer stays for an hour. One run at a time.</p>
+  <LockedNote why={locked} testid="inventory-locked" />
   <div class="buttons">
-    <button onclick={() => void start('stills')} disabled={starting || busy} data-testid="inventory-stills">Check stills</button>
-    <button onclick={() => void start('clips')} disabled={starting || busy} data-testid="inventory-clips">Check clips</button>
-    <button onclick={() => void searchClips()} disabled={starting || busy} data-testid="inventory-clips-camera">Search for and retrieve missing clips</button>
-    <button onclick={() => void searchEvents()} disabled={starting || busy} data-testid="inventory-events">Search for and add missing events</button>
-    {#if busy}<button onclick={() => void cancel()} disabled={cancelling} data-testid="inventory-cancel">{cancelling ? 'Cancelling…' : 'Cancel'}</button>{/if}
+    <button onclick={() => void start('stills')} disabled={starting || busy || !!locked} data-testid="inventory-stills">Check stills</button>
+    <button onclick={() => void start('clips')} disabled={starting || busy || !!locked} data-testid="inventory-clips">Check clips</button>
+    <button onclick={() => void searchClips()} disabled={starting || busy || !!locked} data-testid="inventory-clips-camera">Search for and retrieve missing clips</button>
+    <button onclick={() => void searchEvents()} disabled={starting || busy || !!locked} data-testid="inventory-events">Search for and add missing events</button>
+    {#if busy}<button onclick={() => void cancel()} disabled={cancelling || !!locked} data-testid="inventory-cancel">{cancelling ? 'Cancelling…' : 'Cancel'}</button>{/if}
   </div>
   {#if inv?.running}<p class="busy" role="status" data-testid="inventory-progress">{progressText(inv.running)}</p>{/if}
   {#if message}<p class="bad" role="alert" data-testid="inventory-message">{message}</p>{/if}
@@ -178,7 +183,7 @@
       {/if}
       {#if offer}
         <div class="buttons">
-          <button onclick={() => onrepair(offer)} disabled={starting || busy || !offer.count} data-testid="inventory-repair">Retrieve {offer.count} missing clips ({mbText(offer.bytes)})</button>
+          <button onclick={() => onrepair(offer)} disabled={starting || busy || !offer.count || !!locked} data-testid="inventory-repair">Retrieve {offer.count} missing clips ({mbText(offer.bytes)})</button>
         </div>
         <p class="small">Fetches them from the camera's SD card over Baichuan, one at a time, after any viewer's download; at most 50 clips or 200 MB per run.</p>
         {#if offer.tooBig}<p class="small" data-testid="inventory-repair-too-big">{offer.tooBig} recordings are larger than one run's 200 MB and are skipped.</p>{/if}
@@ -224,7 +229,7 @@
       {/if}
       {#if recoverOffer}
         <div class="buttons">
-          <button onclick={() => recoverOffer && onrecover(recoverArg(recoverOffer))} disabled={starting || busy} data-testid="inventory-recover">Add {recoverOffer.count} missing events</button>
+          <button onclick={() => recoverOffer && onrecover(recoverArg(recoverOffer))} disabled={starting || busy || !!locked} data-testid="inventory-recover">Add {recoverOffer.count} missing events</button>
         </div>
         <p class="small">Adds one event per kind and missing recording span, marked "recovered"; no SSE message, no analysis. At most 1000 per run; existing events are not changed.</p>
       {/if}

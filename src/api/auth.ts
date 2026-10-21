@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from 'crypto';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { logger, maskPath, withoutQuery } from '../log';
 import { readCookie, SESSION_COOKIE } from './session';
+import { NEVER_FROM_CAMS_ADMIN } from '../fleet/remote-settable';
 
 const digest = (s: string) => createHash('sha256').update(s).digest();
 
@@ -52,6 +53,8 @@ export interface AccessDeps {
   managedAdminLive?: (tokenId: string) => { label: string } | null;
   // The cams-admin-managed tokens (data/admin/tokens.json); absent = none.
   managed?: (bearer: string) => { id: string; kind: 'client' | 'admin'; label: string } | null;
+  // The ui.* allow entries in effect (issue #227; src/fleet/policy.ts uiUnlocked); absent = none.
+  managedUnlocked?: () => readonly string[];
   // Every 401/403 answered here, with why (the audit log records them).
   onRefused?: (req: Request, info: { status: 401 | 403; reason: string; tokenKind: TokenKind }) => void;
 }
@@ -101,6 +104,8 @@ export function requireLocalAdmin(): RequestHandler {
 // `token:<label>` for a managed admin token, 'managed-admin' for a session a
 // managed token started. Never a token or a hash.
 export const actorOf = (a: AccessInfo | undefined): string => (a?.origin !== 'managed' ? 'admin' : a.tokenLabel ? `token:${a.tokenLabel}` : 'managed-admin');
+// For an audit record's details: the ui.* entry that let a managed session do it (issue #227).
+export const allowedByOf = (res: Response | undefined): { allowedBy?: string } => (typeof res?.locals.allowedBy === 'string' ? { allowedBy: res.locals.allowedBy } : {});
 
 const WRITE = new Set(['POST', 'PUT', 'DELETE', 'PATCH']);
 
@@ -118,6 +123,52 @@ export const MANAGED_ALLOWED: readonly (readonly [string, RegExp])[] = [
   ['POST', /^\/control\/admin\/tokens\/[^/]+\/block$/],
 ];
 const managedMay = (method: string, path: string) => !WRITE.has(method) || MANAGED_ALLOWED.some(([m, re]) => m === method && re.test(path));
+
+// Issue #227 (Klaus, 2026-10-21): what the proxy's own allow-list may unlock
+// for an admin UI session from a cams-admin sign-in link (never for a managed
+// token itself), off by default; only the local admin adds an entry
+// (CommandPolicy.setAllow). ui.config: the Settings page's writes; a reset
+// only goes back to config.json, so only a PUT is checked against
+// UI_CONFIG_LOCAL. ui.restart: the proxy restart and the camera-side restart.
+export const UI_UNLOCKS: readonly (readonly [string, string, RegExp])[] = [
+  ['ui.config', 'PUT', /^\/control\/config$/],
+  ['ui.config', 'DELETE', /^\/control\/config(\/[^/]+)?$/],
+  ['ui.restart', 'POST', /^\/control\/actions\/(restart|restart-proxy)$/],
+  ['ui.restart', 'POST', /^\/control\/cameras\/[^/]+\/actions\/restart$/],
+];
+// Settings ui.config never sets (src/fleet/remote-settable.ts): addresses,
+// ports, files, trust, users and the cams-admin connection; a new camera
+// (it has an address) neither.
+export const UI_CONFIG_LOCAL: readonly string[] = NEVER_FROM_CAMS_ADMIN;
+
+// Every leaf path in a settings patch; dotted keys count as their parts.
+function patchPaths(o: unknown, prefix = ''): string[] {
+  if (o === null || typeof o !== 'object' || Array.isArray(o)) return prefix ? [prefix] : [];
+  const out: string[] = [];
+  for (const [k, v] of Object.entries(o)) out.push(...patchPaths(v, prefix ? `${prefix}.${k}` : k));
+  return out.length || !prefix ? out : [prefix];
+}
+// A path as a pattern of UI_CONFIG_LOCAL: cameras.<id>.x and the legacy
+// camera.x / ftp.user as cameras.*.x, camera.poeSwitch.x as poeSwitch.x.
+function localPattern(p: string): string {
+  if (p === 'ftp.user') return 'cameras.*.ftp.user';
+  if (p.startsWith('camera.poeSwitch.')) return `poeSwitch.${p.slice('camera.poeSwitch.'.length)}`;
+  if (p.startsWith('camera.')) return `cameras.*.${p.slice('camera.'.length)}`;
+  return p.replace(/^cameras\.[^.]+(?=\.)/, 'cameras.*');
+}
+export function touchesLocal(body: unknown): boolean {
+  return patchPaths(body).some((p) => /^cameras(\.[^.]+)?$/.test(p) || UI_CONFIG_LOCAL.some((x) => { const q = localPattern(p); return q === x || q.startsWith(`${x}.`); }));
+}
+
+// The ui.* entry that lets this managed request through, or null.
+function uiUnlock(req: Request, a: AccessInfo, unlocked: (() => readonly string[]) | undefined): string | null {
+  if (!a.viaCookie || !unlocked) return null;
+  const path = withoutQuery(req.originalUrl);
+  const hit = UI_UNLOCKS.find(([, m, re]) => m === req.method && re.test(path));
+  if (!hit || !unlocked().includes(hit[0])) return null;
+  if (hit[0] === 'ui.config' && req.method === 'PUT' && touchesLocal(req.body)) return null;
+  return hit[0];
+}
 
 // `need`: 'client' lets clients and admins in; 'admin' only admins;
 // 'audit-read' admins and the audit token, for GET (and HEAD) only. The audit token is
@@ -137,7 +188,12 @@ export function requireAccess(need: AccessNeed, d: AccessDeps): RequestHandler {
       return refuse(401, a.tokenKind === 'none' ? 'no-token' : 'wrong-token', 'unauthorized');
     }
     if (!can(a, need)) return refuse(403, 'admin-only', 'admin_only');
-    if (need === 'admin' && a.origin === 'managed' && !managedMay(req.method, withoutQuery(req.originalUrl))) return refuse(403, 'local-admin-only', 'local_admin_only');
+    if (need === 'admin' && a.origin === 'managed' && !managedMay(req.method, withoutQuery(req.originalUrl))) {
+      const entry = uiUnlock(req, a, d.managedUnlocked);
+      if (!entry) return refuse(403, 'local-admin-only', 'local_admin_only');
+      // The audit records of the route name the entry (allowedBy).
+      res.locals.allowedBy = entry;
+    }
     // HEAD too: Express answers it with the GET route, without the body.
     if (need === 'audit-read' && req.method !== 'GET' && req.method !== 'HEAD') return refuse(403, 'admin-only', 'admin_only');
     if (a.viaCookie && WRITE.has(req.method) && req.get('x-camproxy-ui') !== '1') return refuse(403, 'csrf', 'csrf');

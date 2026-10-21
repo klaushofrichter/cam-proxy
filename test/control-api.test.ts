@@ -47,7 +47,7 @@ describe('control API: auth', () => {
   it('signs in with the admin token only, and signs out', async () => {
     expect((await request(p.base).post('/control/login').send({ token: CLIENT_TOKEN })).status).toBe(401);
     const cookie = await login();
-    expect((await request(p.base).get('/control/session').set('Cookie', cookie)).body).toEqual({ loggedIn: true });
+    expect((await request(p.base).get('/control/session').set('Cookie', cookie)).body).toEqual({ loggedIn: true, origin: 'local', rights: { localAdmin: true, config: true, restart: true } });
     const out = await request(p.base).post('/control/logout').set('Cookie', cookie).set('X-CamProxy-UI', '1');
     expect(out.status).toBe(204);
     expect(String(out.headers['set-cookie'])).toMatch(/Max-Age=0/);

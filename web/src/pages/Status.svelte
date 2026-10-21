@@ -8,6 +8,8 @@
   import { api, ApiError } from '../lib/api';
   import { refresh } from '../lib/state';
   import Icon from '../components/Icon.svelte';
+  import { lockedWhy, rights } from '../lib/rights';
+  import LockedNote from '../components/LockedNote.svelte';
   import { cameraUploadClass, lastClipClass, diskText, healthHeadline, itemOf, loadText, memoryText, piCardTitle, problemOf, sdClass, sdText, uptimeText } from '../lib/health';
   import { archiveRows } from '../lib/archive';
   import { storageRows } from '../lib/camera-settings';
@@ -43,6 +45,7 @@
   });
   let fixing = $state(false);
   let fixResult = $state('');
+  const fixLocked = $derived(lockedWhy($rights, 'local')); // issue #227
   async function pointFtpHere() {
     if (fixing) return;
     fixing = true;
@@ -149,7 +152,8 @@
         {#if alerts.length}
           <div class="alerts">
             {#each alerts as a (a.kind)}<p class="alert {a.level}" data-testid="ftp-alert" data-kind={a.kind} role={a.level === 'info' ? 'note' : 'alert'}><Icon name={a.level === 'info' ? 'about' : 'alert'} size={16} /><span>{a.text}</span></p>{/each}
-            <button onclick={() => void pointFtpHere()} disabled={fixing} data-testid="ftp-alert-fix">Point the camera's FTP here</button>
+            <button onclick={() => void pointFtpHere()} disabled={fixing || !!fixLocked} data-testid="ftp-alert-fix">Point the camera's FTP here</button>
+            <LockedNote why={fixLocked} testid="ftp-fix-locked" />
             {#if fixResult}<p class="bad small" data-testid="ftp-fix-result">{fixResult}</p>{/if}
           </div>
         {/if}

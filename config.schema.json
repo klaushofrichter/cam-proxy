@@ -853,7 +853,9 @@
               "camera.action:camera-powercycle",
               "camera.action:camera-ftp-setup",
               "camera.action:camera-ntp-set",
-              "camera.action:camera-cert-push"
+              "camera.action:camera-cert-push",
+              "ui.config",
+              "ui.restart"
             ]
           },
           "description": "commands cams-admin may send this proxy (default none); data/admin/policy.json (the Status card, admin-commands) replaces this list. config.json only"
