@@ -62,7 +62,7 @@ import { createMetrics } from './api/metrics';
 import { createSessionSigner } from './api/session';
 import { createLoginLinks } from './api/login-links';
 import { TokenStore } from './fleet/token-store';
-import { CommandPolicy, uiUnlocked } from './fleet/policy';
+import { CommandPolicy, sessionUnlocked } from './fleet/policy';
 import { uiConfigAgainst } from './api/ui-config';
 import { Journal } from './fleet/journal';
 import { OverridesBackups } from './fleet/backups';
@@ -70,7 +70,10 @@ import { configHandlers, type ConfigCommandDeps } from './fleet/config-commands'
 import { cameraHandlers } from './fleet/camera-commands';
 import { moveHandlers } from './moves/commands';
 import { MoveJournal } from './moves/journal';
-import { movesSourceApi } from './api/moves-api';
+import { movesSourceApi, refreshManifest } from './api/moves-api';
+import { movesControlApi } from './api/moves-control-api';
+import { ManifestCache } from './moves/manifest-cache';
+import { MoveSource } from './moves/source';
 import { availableParallelism, loadavg } from 'os';
 import { CommandRunner, type Handler } from './fleet/commands';
 import { ReplayGuard } from './fleet/replay';
@@ -213,6 +216,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   let httpsServer: https.Server | undefined;
   let certs: CameraCerts | undefined;
   let proxyLeafTimer: NodeJS.Timeout | undefined;
+  // A camera move's expected leaf (P8): what the camera serves, read every 5 s while one is set.
+  let expectedTimer: NodeJS.Timeout | undefined;
   let caPemOnly: string | null = null; // ca.pem when the CA can't be loaded with its key
   const proxyAddresses = () => (running.tls.proxyAddresses ?? '').split(',').filter(Boolean);
   const proxyName = () => `proxy.${running.tls.site}.internal`;
@@ -265,6 +270,9 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // name; pinned → the one certificate the proxy pinned; else none (a camera
   // never seen serving anything of ours, as before P5).
   const tlsFor = (id: string): CameraTrust | undefined => {
+    // A camera move's expected leaf while the camera serves it (P8): exactly that certificate, pinned.
+    const ex = certs?.expectedTrust(id);
+    if (ex) return { ca: ex.pem, fingerprint: ex.fingerprint };
     const st = certs?.state(id);
     if (st?.mode === 'site-ca') {
       // Never unverified: the CAs, else the camera's stored leaf as a pin, else nothing at all.
@@ -349,6 +357,10 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     certs.start();
     proxyLeafTimer = setInterval(() => void renewProxyLeaf().catch((err: Error) => logger.warn({ err: err.message }, 'proxy_certificate_renewal_failed')), 86400_000);
     proxyLeafTimer.unref();
+    expectedTimer = setInterval(() => {
+      if (certs?.expecting()) void certs.checkExpected().catch((err: Error) => logger.warn({ err: err.message }, 'camera_expected_leaf_check_failed'));
+    }, 5000);
+    expectedTimer.unref();
   };
   // tls-ca-rotate (Ruling P5-3): the old files kept as *.old-<time>, a new CA,
   // a new proxy leaf, every camera pushed again (from the next tick on).
@@ -810,7 +822,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // Nothing is read or written until a command arrives or the card asks.
   const commandPolicy = new CommandPolicy({ base: () => loaded.commandPolicyBase, file: join(loaded.config.server.dataDir, 'admin', 'policy.json'), env: () => loaded.envLayer, log: logger });
   // What the allow-list unlocks for a cams-admin sign-in (issue #227): read per request, so a change or a pause applies at once.
-  access.managedUnlocked = () => uiUnlocked(commandPolicy.effective());
+  // And move.send for starting a camera move from the sign-in (camera-move plan P9).
+  access.managedUnlocked = () => sessionUnlocked(commandPolicy.effective());
   // ui.config's direction rules on the configuration as it is now (Klaus, 2026-10-21).
   access.uiConfigAgainst = (req) => uiConfigAgainst(loaded, req);
   const journal = new Journal(join(loaded.config.server.dataDir, 'admin', 'commands.json'), Date.now, logger);
@@ -911,14 +924,43 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   app.use('/api', localApi({ health: healthNow }));
   // The source's move endpoints (camera-move plan Task 5): ahead of the client
   // auth; the per-move token bound to the target's address is their only guard.
+  // One journal for the moves router and the move commands (never two on the folder).
   const moveJournal = new MoveJournal(join(loaded.config.server.dataDir, 'admin', 'moves'), (m) => logger.warn({ problem: m }, 'move_journal_problem'));
+  const moveInventory = { catalog, dataDir: running.server.dataDir };
+  const manifestCache = new ManifestCache(running.server.dataDir);
   app.use('/api', movesSourceApi({
     journal: moveJournal,
     audit,
-    inventory: { catalog, dataDir: running.server.dataDir },
+    inventory: moveInventory,
     busy: () => storage.paused() || loadavg()[0] > availableParallelism(),
     password: (cam) => cameraPassword(loaded.secrets, cam),
+    cache: manifestCache,
+    // A valid move token from another address (B46): cams-admin hears it once.
+    onWrongAddress: (r) => camsAdmin.emitEvent({ kind: 'move.phase', moveId: r.id, role: 'source', phase: 'failed', ok: false, code: 'token_address' }),
   }));
+  // The source side of a camera move (camera-move plan Task 7).
+  const moveSource = new MoveSource({
+    journal: moveJournal,
+    audit,
+    emit: (e) => camsAdmin.emitEvent(e),
+    running: () => running,
+    loaded: () => loaded,
+    setLoaded: (l) => setLoaded(l),
+    sendAllowed: () => { const e = commandPolicy.effective(); return e.enabled && !e.paused && e.allow.includes('move.send'); },
+    siteReady: () => !!running.tls.site && !!ca,
+    inventory: moveInventory,
+    certs: () => certs,
+    refreshManifest: (id) => void refreshManifest({ journal: moveJournal, inventory: moveInventory }, id, manifestCache),
+    proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
+  });
+  // After every welcome: the open move's phase again (B2).
+  camsAdmin.onWelcome(() => {
+    try {
+      moveSource.reemit(moveJournal.currentPhase());
+    } catch (err) {
+      logger.warn({ err: (err as Error).message }, 'move_phase_reemit_failed');
+    }
+  });
   app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit, managedAdminLive: access.managedAdminLive, managedUnlocked: access.managedUnlocked }));
   // Before clientApi: its /cameras/:cam/stills/:file would take latest.jpg.
   app.use('/api', requireAccess('client', access), latestApi({ cameras: cams }));
@@ -1017,6 +1059,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       dropPrevious: (who) => certs?.dropPreviousCa(who) ?? false,
     },
   };
+  app.use('/control', requireAccess('admin', access), movesControlApi(moveSource));
   app.use('/control', requireAccess('admin', access), controlApi(controlDeps));
   // cams-admin's P3 commands (plan P3 Task 10): each off unless allowed locally.
   Object.assign(
@@ -1027,6 +1070,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     moveHandlers({
       emit: (e) => camsAdmin.emitEvent(e),
       audit,
+      source: moveSource,
       evaluate: {
         receiveAllowed: () => commandPolicy.effective().allow.includes('move.receive'),
         journal: moveJournal,
@@ -1275,6 +1319,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       }
       certs?.stop();
       clearInterval(proxyLeafTimer);
+      clearInterval(expectedTimer);
       const s = server;
       if (s) {
         s.closeAllConnections();

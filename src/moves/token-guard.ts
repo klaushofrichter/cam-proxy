@@ -17,10 +17,14 @@ import { moveTokenMatches } from './token';
 // record of a later wrong-token or wrong-address attempt; refusals for move
 // ids this proxy doesn't have share one bucket, so made-up ids can't flood
 // the log. Never the token in a record or log line.
+// A valid token from another address (B46/X15): the token is out of the
+// target's hands; `onWrongAddress` reports the move once (the proxy sends
+// move.phase failed, code token_address), whatever the audit throttle does.
 export interface MoveGuardDeps {
   journal: Pick<MoveJournal, 'load'>;
   audit: Pick<AuditLog, 'write'>;
   now?: () => number;
+  onWrongAddress?: (r: MoveRecord) => void;
 }
 
 export type MoveRefusal = 'no-token' | 'unknown-move' | 'ended' | 'wrong-token' | 'wrong-address';
@@ -45,6 +49,7 @@ function check(req: Request, r: MoveRecord | null): MoveRefusal | null {
 export function moveTokenGuard(d: MoveGuardDeps) {
   const now = d.now ?? Date.now;
   const buckets = new Map<string, { until: number; suppressed: number }>();
+  const reported = new Set<string>();
 
   const refused = (req: Request, id: string, r: MoveRecord | null, reason: MoveRefusal) => {
     const key = r ? `${id}|${reason}` : UNKNOWN;
@@ -80,6 +85,14 @@ export function moveTokenGuard(d: MoveGuardDeps) {
     const why = check(req, r);
     if (why) {
       refused(req, id, r, why);
+      if (why === 'wrong-address' && r && !reported.has(r.id)) {
+        reported.add(r.id);
+        try {
+          d.onWrongAddress?.(r);
+        } catch (err) {
+          logger.warn({ moveId: r.id, err: (err as Error).message }, 'move_wrong_address_report_failed');
+        }
+      }
       res.set('Cache-Control', 'no-store');
       return void res.status(403).json({ error: 'move_token' });
     }

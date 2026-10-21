@@ -85,6 +85,11 @@ export const ENTRY_TEXT: Record<string, string> = {
 export function uiUnlocked(p: EffectivePolicy): string[] {
   return p.enabled && !p.paused ? p.allow.filter((e) => (UI_ENTRIES as readonly string[]).includes(e)) : [];
 }
+// What a cams-admin sign-in may do on this proxy's admin routes: the ui.*
+// entries and move.send (camera-move plan P9: starting a move from the sign-in).
+export function sessionUnlocked(p: EffectivePolicy): string[] {
+  return [...uiUnlocked(p), ...(p.enabled && !p.paused && p.allow.includes('move.send') ? ['move.send'] : [])];
+}
 
 // `stored`: a list an earlier version wrote (policy.json, config.json): retired entries are dropped.
 export function validateAllowList(list: unknown, where: string, stored = false): string[] {

@@ -2,7 +2,7 @@ import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, rea
 import { join } from 'path';
 import type { AuditLog } from '../audit/audit-log';
 import { logger } from '../log';
-import { writeSecret, type SiteCa } from './ca';
+import { fingerprintOf, writeSecret, type SiteCa } from './ca';
 import { X509Certificate } from 'crypto';
 import { issuedBy, issueLeaf, leafOf, renewalDue, type Leaf } from './leaf';
 import type { PushOutcome, PushResult } from './push';
@@ -71,8 +71,26 @@ interface Extra {
   factory: string | null; // the certificate seen after a CertificateClear: expected after the next one
   // No automatic push until an admin pushes to (or clears) this camera: 'unreadable' (state.json was), 'cleared' (camera-trust-clear).
   blocked: 'unreadable' | 'cleared' | null;
+  // A camera move (camera-move plan P8): the one leaf (its fingerprint) the camera
+  // may serve besides ours without being unexpected: the target's on the source
+  // (set by move.go), the source's on the target (move.cancel); cleared at the end.
+  expected: string | null;
+  // That leaf as the camera served it (only a PEM that hashes to `expected`), and
+  // whether the camera served it when last read: then its client pins exactly it.
+  expectedPem: string | null;
+  expectedServing: boolean;
 }
-interface Stored extends CertState { everSiteCa?: boolean; pin?: Served | null; onPrevious?: boolean; factory?: string | null; blocked?: string | null }
+interface Stored extends CertState { everSiteCa?: boolean; pin?: Served | null; onPrevious?: boolean; factory?: string | null; blocked?: string | null; expected?: string | null; expectedPem?: string | null; expectedServing?: boolean }
+const FINGERPRINT = /^SHA256:[0-9A-F]{64}$/;
+// The PEM when it is exactly the certificate of this fingerprint, else null.
+const pemOf = (fingerprint: string, pem: unknown): string | null => {
+  if (typeof pem !== 'string') return null;
+  try {
+    return fingerprintOf(pem) === fingerprint ? pem : null;
+  } catch {
+    return null;
+  }
+};
 const BLOCKED = { unreadable: (id: string) => `${id}: no automatic push since the certificate state was unreadable: check the camera, then Push now`, cleared: (id: string) => `${id}: its trust was cleared: Push now to push its first certificate` };
 
 // Each camera's certificate from the site CA (spec 2026-10-05-multi-camera-host-design
@@ -136,7 +154,7 @@ export class CameraCerts {
   }
   private extra(id: string): Extra {
     let e = this.extras.get(id);
-    if (!e) this.extras.set(id, (e = { everSiteCa: this.hadLeaf(id), pin: null, pendingRenewal: false, onPrevious: false, factory: null, blocked: this.corrupt ? 'unreadable' : null }));
+    if (!e) this.extras.set(id, (e = { everSiteCa: this.hadLeaf(id), pin: null, pendingRenewal: false, onPrevious: false, factory: null, blocked: this.corrupt ? 'unreadable' : null, expected: null, expectedPem: null, expectedServing: false }));
     return e;
   }
 
@@ -161,6 +179,57 @@ export class CameraCerts {
   }
   factory(id: string): string | null {
     return this.extras.get(id)?.factory ?? null;
+  }
+
+  // A camera move's expected leaf (P8; src/moves): a fingerprint, or null to
+  // clear it. Audited; the camera's client follows (onTrust).
+  setExpected(id: string, fingerprint: string | null, who?: Requester): void {
+    if (fingerprint !== null && !FINGERPRINT.test(fingerprint)) throw new Error('expected leaf: not a SHA256 fingerprint');
+    const e = this.extra(id);
+    if (e.expected === fingerprint) return;
+    const was = e.expectedServing;
+    Object.assign(e, { expected: fingerprint, expectedPem: null, expectedServing: false });
+    if (!this.states.has(id)) this.states.set(id, this.blank());
+    this.save();
+    this.audit(id, 'success', fingerprint ? `Camera trust ${id}: expects the leaf ${fingerprint} (camera move)` : `Camera trust ${id}: no expected leaf any more (camera move)`, who, { expected: fingerprint });
+    if (was) this.d.onTrust?.(id);
+  }
+  expected(id: string): string | null {
+    return this.extras.get(id)?.expected ?? null;
+  }
+  // The expected leaf while the camera serves it: its client pins exactly that
+  // certificate (src/proxy.ts tlsFor); null otherwise (the normal trust).
+  expectedTrust(id: string): Served | null {
+    const e = this.extras.get(id);
+    return e?.expected && e.expectedPem && e.expectedServing ? { fingerprint: e.expected, pem: e.expectedPem } : null;
+  }
+  // What a camera with an expected leaf serves now (true: it is that leaf). An
+  // unreachable camera keeps what was seen last. Saves and tells the client on a change.
+  private noteExpected(id: string, served: Served): boolean {
+    const e = this.extra(id);
+    if (!e.expected) return false;
+    const pem = served.fingerprint === e.expected ? pemOf(e.expected, served.pem) : null;
+    const serving = pem !== null;
+    const changed = serving !== e.expectedServing || (serving && e.expectedPem !== pem);
+    if (serving) e.expectedPem = pem;
+    e.expectedServing = serving;
+    if (changed) {
+      this.save();
+      this.d.onTrust?.(id);
+    }
+    return serving;
+  }
+  // Every camera with an expected leaf, read now (a move's switch-over, src/proxy.ts runs it every few seconds while one is set).
+  async checkExpected(): Promise<void> {
+    for (const cam of this.d.cameras()) {
+      if (!this.extras.get(cam.id)?.expected) continue;
+      const served = await this.d.served(cam.id);
+      if (served) this.noteExpected(cam.id, served);
+    }
+  }
+  // Whether any camera has an expected leaf (the proxy's watch runs only then).
+  expecting(): boolean {
+    return [...this.extras.values()].some((e) => e.expected !== null);
   }
   // Host-level problems for the health item: an unreadable state, cameras on the previous CA.
   problems(): string[] {
@@ -216,14 +285,17 @@ export class CameraCerts {
       }
       this.states.set(id, st);
       const blocked = ok?.blocked === 'unreadable' || ok?.blocked === 'cleared' ? ok.blocked : this.corrupt ? 'unreadable' : null;
-      this.extras.set(id, { everSiteCa: ok?.everSiteCa === true || this.hadLeaf(id), pin, pendingRenewal: false, onPrevious, factory: typeof ok?.factory === 'string' ? ok.factory : null, blocked });
+      // The expected leaf: a fingerprint only; its PEM only when it hashes to it.
+      const expected = typeof ok?.expected === 'string' && FINGERPRINT.test(ok.expected) ? ok.expected : null;
+      const expectedPem = expected ? pemOf(expected, ok?.expectedPem) : null;
+      this.extras.set(id, { everSiteCa: ok?.everSiteCa === true || this.hadLeaf(id), pin, pendingRenewal: false, onPrevious, factory: typeof ok?.factory === 'string' ? ok.factory : null, blocked, expected, expectedPem, expectedServing: !!expectedPem && ok?.expectedServing === true });
     }
   }
   private save(): void {
     const cameras = Object.fromEntries(
       [...this.states].map(([id, s]) => {
         const e = this.extras.get(id);
-        return [id, { ...s, everSiteCa: e?.everSiteCa ?? false, pin: e?.pin ?? null, onPrevious: e?.onPrevious ?? false, factory: e?.factory ?? null, blocked: e?.blocked ?? null }];
+        return [id, { ...s, everSiteCa: e?.everSiteCa ?? false, pin: e?.pin ?? null, onPrevious: e?.onPrevious ?? false, factory: e?.factory ?? null, blocked: e?.blocked ?? null, expected: e?.expected ?? null, expectedPem: e?.expectedPem ?? null, expectedServing: e?.expectedServing ?? false }];
       }),
     );
     const file = join(this.camDir(), 'state.json');
@@ -444,6 +516,13 @@ export class CameraCerts {
     if (stored && (!stored.ips.includes(cam.address) || !stored.names.includes(name) || !issuedBy(stored, ca))) stored = null;
     const served = await this.d.served(cam.id);
     if (!served) return skip('the camera does not answer on HTTPS'); // unreachable: nothing to push to
+    // A camera move's expected leaf (P8): not unexpected, never pushed over
+    // automatically (the move owns the camera's certificate now); "Push now" still pushes.
+    if (this.noteExpected(cam.id, served) && !manual) {
+      if (this.states.get(cam.id)?.problem) this.set(cam.id, { problem: null });
+      this.save();
+      return null;
+    }
     const s = this.states.get(cam.id);
     const last = s?.lastPush;
     let renewal = false;

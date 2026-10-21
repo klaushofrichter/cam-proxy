@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { MANAGED_ALLOWED } from '../src/api/auth';
+import { MANAGED_ALLOWED, UI_UNLOCKS } from '../src/api/auth';
 import { writePrivateJson } from '../src/fleet/private-file';
 import { ADMIN_TOKEN, auth, startProxy } from './helpers/proxy';
 import { startSim } from './helpers/sim';
@@ -69,6 +69,15 @@ describe('a managed admin token on the admin API', () => {
       expect((await send('POST', `/control/actions/${a}`, auth(MANAGED_ADMIN), { count: 0 })).status, a).toBe(403);
     }
     expect(p.proxy.running.camsAdmin.url).toBeUndefined();
+  });
+  it('the camera-move routes are among them: local-only for a managed token; move.send unlocks them for a sign-in only (P9)', () => {
+    const ops = mutating().map((o) => `${o.method} ${o.path}`);
+    expect(ops).toEqual(expect.arrayContaining(['POST /control/moves', 'POST /control/moves/targets', 'POST /control/moves/{id}/approve', 'POST /control/moves/{id}/cancel']));
+    for (const o of ['POST /control/moves', 'POST /control/moves/targets', 'POST /control/moves/{id}/approve', 'POST /control/moves/{id}/cancel']) expect(allowed(o.split(' ')[0], concrete(o.split(' ')[1])), o).toBe(false);
+    const send = UI_UNLOCKS.filter(([e]) => e === 'move.send');
+    expect(send.map(([, m]) => m)).toEqual(['POST', 'POST', 'POST', 'POST']);
+    for (const path of ['/control/moves', '/control/moves/targets', `/control/moves/mv_${'1'.repeat(20)}/approve`, `/control/moves/mv_${'1'.repeat(20)}/cancel`]) expect(send.some(([, , re]) => re.test(path)), path).toBe(true);
+    expect(send.some(([, , re]) => re.test('/control/moves/x/y/approve'))).toBe(false);
   });
   it('reads and the allowed routes work: GET status, sign-in link, rename reaches its own checks', async () => {
     expect((await request(p.base).get('/control/status').set(auth(MANAGED_ADMIN))).status).toBe(200);

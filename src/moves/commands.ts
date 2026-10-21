@@ -3,6 +3,7 @@ import type { Handler } from '../fleet/commands';
 import { MOVE_COMMANDS } from '../fleet/policy';
 import type { MoveOfferArgs } from '../fleet/command-args';
 import { evaluate, type EvaluateDeps } from './evaluate';
+import type { MoveSource } from './source';
 import type { MoveEvent } from './types';
 
 // cams-admin's move commands (cam-proxy plan 2026-10-21-camera-move-cam-proxy):
@@ -17,6 +18,8 @@ export interface MoveDeps {
   // storage (Tasks 3, 9), certificates (Task 7), configuration and secrets (Tasks 6, 7).
   // Task 6: the target's evaluation of an offer (move.offer).
   evaluate?: EvaluateDeps;
+  // Task 7: the source side (move.targets, move.open, move.answer, move.go, move.release).
+  source?: MoveSource;
   journal?: unknown;
   catalog?: unknown;
   storage?: unknown;
@@ -39,5 +42,6 @@ export function moveHandlers(deps: MoveDeps): Record<string, Handler> {
       }
     };
   }
+  if (deps.source) Object.assign(handlers, deps.source.handlers());
   return handlers;
 }

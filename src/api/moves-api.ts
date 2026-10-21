@@ -29,6 +29,10 @@ export interface MovesSourceDeps {
   // then the store, then the default). Never logged, audited or sent unsealed.
   password: (cam: string) => string;
   now?: () => number;
+  // The cached chunk manifests, shared with move.release's refreshManifest (one index of the listed paths).
+  cache?: ManifestCache;
+  // A valid move token from another address (B46): see moveTokenGuard.
+  onWrongAddress?: (r: MoveRecord) => void;
 }
 
 const PROBE_MAX = 67_108_864;
@@ -69,7 +73,7 @@ export function refreshManifest(d: Pick<MovesSourceDeps, 'journal' | 'inventory'
 export function movesSourceApi(d: MovesSourceDeps): express.Router {
   const router = express.Router();
   const inflight = new Map<string, Promise<{ files: ManifestFile[]; rows: number; expired: number }>>();
-  const cache = new ManifestCache(d.inventory.dataDir);
+  const cache = d.cache ?? new ManifestCache(d.inventory.dataDir);
   const busyGate = (_req: Request, res: Response, next: NextFunction) => (d.busy() ? void res.status(503).json({ error: 'busy' }) : next());
 
   // The chunk id a request names, when it is one of the frozen manifest's.
@@ -87,7 +91,7 @@ export function movesSourceApi(d: MovesSourceDeps): express.Router {
     return id;
   };
 
-  router.use('/moves/:id', moveTokenGuard({ journal: d.journal, audit: d.audit, now: d.now }), (_req, res, next) => {
+  router.use('/moves/:id', moveTokenGuard({ journal: d.journal, audit: d.audit, now: d.now, onWrongAddress: d.onWrongAddress }), (_req, res, next) => {
     res.set('Cache-Control', 'no-store');
     next();
   });

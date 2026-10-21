@@ -956,6 +956,89 @@ paths:
         '200': { description: the view (as GET /control/admin/tokens) }
         '400': { description: '{ error: invalid }: not a token id' }
         '403': { description: '{ error: local_admin_only }' }
+  /control/moves:
+    get:
+      summary: "The camera moves of this proxy (source side; camera-move plan Task 7): { items: [{ id?, requestId, camera, target: { proxyId, name }, phase, answer?, settings, summary, plan, progress?, budgetExceeded }] }"
+      description: >
+        The requests not opened yet (phase requested, offered or rejected; kept 30 minutes in memory)
+        and the source moves of the journal. phase: requested, offered (opened, no answer), rejected,
+        awaiting-approval (the target accepted), approved, then the journal's (switching, released, ...).
+        answer: { accept, reason?, space?, estimateS? } as the target gave it. Never a password, token or key.
+      responses:
+        '200': { description: the list }
+    post:
+      summary: Start a camera move to another proxy ({camera, target}); emits move.request (the camera's connection fields and settings from the config, the per-kind summary; never a password); audited (move-request)
+      description: >
+        Admin; a cams-admin sign-in only with the move.send entry (a managed token never). Refused
+        before any event (camera-move plan P10): no_site_ca (tls.site not set, the Pi; also for an
+        unknown camera there), external_cert (the camera has tlsName), moves_not_allowed (no move.send
+        or commands paused), busy (another move is open here, or the journal is unreadable).
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [camera, target], properties: { camera: { type: string, pattern: '^[a-z0-9][a-z0-9-]{0,31}$' }, target: { type: string, pattern: '^prx_[0-9A-HJKMNP-TV-Z]{20}$' } } }
+      responses:
+        '202': { description: '{ requestId }' }
+        '400': { description: '{ error: invalid, detail: camera | target }' }
+        '403': { description: '{ error: local_admin_only } (a cams-admin sign-in without move.send, or a managed token)' }
+        '404': { description: '{ error: unknown_camera }' }
+        '409': { description: '{ error: move_refused, reason: no_site_ca | external_cert | moves_not_allowed | busy }' }
+  /control/moves/targets:
+    post:
+      summary: Ask cams-admin for the proxies this camera may move to ({camera}); emits move.targets; the list arrives with the move.targets command
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [camera], properties: { camera: { type: string, pattern: '^[a-z0-9][a-z0-9-]{0,31}$' } } }
+      responses:
+        '202': { description: '{ requestId }' }
+        '400': { description: '{ error: invalid, detail: camera }' }
+        '403': { description: '{ error: local_admin_only }' }
+        '404': { description: '{ error: unknown_camera }' }
+        '409': { description: '{ error: move_refused, reason } (as POST /control/moves)' }
+  /control/moves/targets/{requestId}:
+    get:
+      summary: "The target list of a POST /control/moves/targets: { targets: [{ proxyId, name, site }] | null } (null until cams-admin sent it)"
+      parameters:
+        - { name: requestId, in: path, required: true, schema: { type: string, pattern: '^rq_[0-9A-HJKMNP-TV-Z]{20}$' } }
+      responses:
+        '200': { description: the list, or null }
+        '404': { description: '{ error: unknown_request } (never asked here, or older than 30 minutes)' }
+  /control/moves/{id}/approve:
+    post:
+      summary: Approve the move's plan ({plan} as the panel shows it, S §7); emits move.approve; audited (move-approve)
+      description: >
+        Checked against the target's answer: estimateS is the answer's and budgetS at least that;
+        kinds only those with content; space all when it fits, else omit (the kinds left must fit),
+        fit, or retention (targetSettings: keys of the answer's retentionProposal, among them
+        storage.maxBytes in bytes, each at least the proposed value); targetSettings null otherwise.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^mv_[0-9A-HJKMNP-TV-Z]{20}$' } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [plan], properties: { plan: { type: object, required: [transfer, kinds, space, targetSettings, budgetS, estimateS] } } }
+      responses:
+        '202': { description: '{} (the same plan again: the event is sent again)' }
+        '400': { description: '{ error: invalid, detail: plan | plan.kinds | plan.space | plan.targetSettings | plan.budgetS | plan.estimateS | answer }' }
+        '403': { description: '{ error: local_admin_only }' }
+        '404': { description: '{ error: unknown_move }' }
+        '409': { description: '{ error: wrong_phase | not_ready (no accepting answer yet) | already_approved }; { error: move_refused, reason: no_site_ca | moves_not_allowed }' }
+  /control/moves/{id}/cancel:
+    post:
+      summary: Ask cams-admin to cancel the move ({copied: delete | age-out}, what happens to content already copied); emits move.cancel
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^mv_[0-9A-HJKMNP-TV-Z]{20}$' } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [copied], properties: { copied: { type: string, enum: [delete, age-out] } } }
+      responses:
+        '202': { description: '{}' }
+        '400': { description: '{ error: invalid, detail: copied }' }
+        '403': { description: '{ error: local_admin_only }' }
+        '404': { description: '{ error: unknown_move }' }
+        '409': { description: '{ error: wrong_phase } (the move ended)' }
   /control/config:
     get:
       summary: Every setting with value, source, restart flag and pending next value

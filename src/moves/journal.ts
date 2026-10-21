@@ -1,7 +1,7 @@
 import { lstatSync, readdirSync, renameSync, rmSync } from 'fs';
 import { join } from 'path';
 import { PrivateFileInvalid, readPrivateJson, writePrivateJson } from '../fleet/private-file';
-import type { ChunkState, MoveCameraConnection, MoveCopied, MoveKind, MovePhaseName, MovePlan, MoveRole, MoveSummary, Settings } from './types';
+import type { ChunkState, MoveActor, MoveAnswer, MoveCameraConnection, MoveCopied, MoveKind, MovePhaseName, MovePlan, MoveRole, MoveSummary, Settings } from './types';
 
 // The durable record of one move on this proxy: <dataDir>/admin/moves/<id>.json,
 // mode 600 (it holds the move token hash or the plain token and the target's
@@ -33,6 +33,10 @@ export interface MoveRecord {
   // source: the target's X25519 public key (SPKI DER, base64) stored by move.go;
   // the camera password is sealed to it (GET /api/moves/:id/secrets).
   targetPublicSpki?: string;
+  // source (Task 7): the request it came from, who asked, and the target's answer.
+  requestId?: string;
+  actor?: MoveActor;
+  answer?: MoveAnswer;
   // source: when the chunks from the approval day on were listed again (at released, P12).
   manifestRefreshedAt?: number;
   // target only

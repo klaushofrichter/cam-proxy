@@ -60,7 +60,8 @@ async function fixture(o: { phase?: MoveRecord['phase']; busy?: boolean; journal
   const audit = new AuditLog({ dir: join(dataDir, 'audit'), version: 'test' });
   let now = 1_000_000;
   let busy = o.busy ?? false;
-  const deps: MovesSourceDeps = { journal: o.journal ?? journal, audit, inventory, busy: () => busy, password: (cam) => (cam === 'cam3' ? PASSWORD : 'wrong-camera'), now: () => now };
+  const wrongAddress: string[] = [];
+  const deps: MovesSourceDeps = { journal: o.journal ?? journal, audit, inventory, busy: () => busy, password: (cam) => (cam === 'cam3' ? PASSWORD : 'wrong-camera'), now: () => now, onWrongAddress: (r) => void wrongAddress.push(r.id) };
   const app = express();
   app.set('trust proxy', true);
   app.use('/api', movesSourceApi(deps));
@@ -91,7 +92,7 @@ async function fixture(o: { phase?: MoveRecord['phase']; busy?: boolean; journal
     r.approvedAt = D2;
   });
   return {
-    dataDir, journal, put, base, records, update, freeze, audit,
+    dataDir, journal, put, base, records, update, freeze, audit, wrongAddress,
     setNow: (t: number) => void (now = t),
     setBusy: (b: boolean) => void (busy = b),
     get: (path: string, o2: { ip?: string; token?: string | null } = {}) => {
@@ -138,6 +139,19 @@ describe('the move-token guard', () => {
     recs = f.records().filter((r) => r.event.action === 'move-token-refused');
     expect(recs).toHaveLength(2);
     expect(recs[1].cam_proxy.suppressed).toBe(2);
+  });
+
+  it('a valid token from another address reports the move once (B46: move.phase failed token_address); a wrong token does not', async () => {
+    const f = await fixture();
+    await f.get(`/api/moves/${MOVE}/manifest`, { token: 'other-token-'.padEnd(43, 'z'), ip: OTHER_IP });
+    expect(f.wrongAddress).toEqual([]);
+    await f.get(`/api/moves/${MOVE}/manifest`, { ip: OTHER_IP });
+    await f.get(`/api/moves/${MOVE}/probe?bytes=1`, { ip: OTHER_IP });
+    f.setNow(1_000_000 + 11 * 60_000);
+    await f.get(`/api/moves/${MOVE}/manifest`, { ip: OTHER_IP });
+    expect(f.wrongAddress).toEqual([MOVE]);
+    // From the target's address it still works.
+    expect((await f.get(`/api/moves/${MOVE}/probe?bytes=1`)).status).toBe(200);
   });
 
   it('junk refusals do not use up the record of a later wrong-address attempt (throttle per move and reason)', async () => {

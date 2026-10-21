@@ -46,6 +46,12 @@ export interface MovePlan {
   estimateS: number;
 }
 
+// Who started a move on the source (B33): the local admin, or a cams-admin
+// sign-in (a managed session, the move.send UI unlock) by its display name.
+export interface MoveActor { origin: 'local' | 'managed'; label: string }
+// The target's answer as cams-admin relays it (move.answer).
+export interface MoveAnswer { accept: boolean; reason?: MoveReason; space?: Space; estimateS?: number }
+
 export interface ChunkProgress { id: string; state: ChunkState }
 
 export interface MoveCameraConnection {
