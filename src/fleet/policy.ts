@@ -20,7 +20,15 @@ export const DISRUPTIVE_ACTIONS = ['restart', 'camera-reboot', 'camera-powercycl
 // (disruptive in the contract; journaled by a version that ran it).
 export const BUDGETED_ACTIONS: ReadonlySet<string> = new Set([...DISRUPTIVE_ACTIONS, 'camera-ftp-off']);
 export const DISRUPTIVE_ENTRIES: ReadonlySet<string> = new Set(['proxy.restart', ...DISRUPTIVE_ACTIONS.map((a) => `camera.action:${a}`)]);
-export const ALLOW_ENTRIES: readonly string[] = ['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`)];
+// Issue #227 (Klaus, 2026-10-21): what an admin UI session from a cams-admin
+// sign-in link (managed-admin) may also do on this proxy, unlocked here by the
+// local admin like a command (src/api/auth.ts enforces them). No command:
+// cams-admin never sends them and the heartbeat never reports them (not in
+// IMPLEMENTED). ui.config: the Settings page's writes (PUT and DELETE
+// /control/config, never UI_CONFIG_LOCAL); ui.restart: the proxy restart and
+// the camera-side restart.
+export const UI_ENTRIES = ['ui.config', 'ui.restart'] as const;
+export const ALLOW_ENTRIES: readonly string[] = ['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`), ...UI_ENTRIES];
 // What this version runs (P2, P3): command names and allow entries. The
 // heartbeat reports allow ∩ IMPLEMENTED.
 export const IMPLEMENTED: ReadonlySet<string> = new Set(['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`)]);
@@ -44,10 +52,18 @@ export const ENTRY_TEXT: Record<string, string> = {
   'config.rollback': 'cams-admin may undo its own setting changes',
   'camera.name.set': "cams-admin may rename a camera (the camera's own name)",
   'proxy.restart': 'DISRUPTIVE: cams-admin may restart this proxy (at most 2 an hour)',
+  'ui.config': "a cams-admin sign-in (one-time link) may change this proxy's settings on the Settings page and reset them to config.json's value; never addresses, ports, files, trust, users or cams-admin itself",
+  'ui.restart': 'DISRUPTIVE: a cams-admin sign-in (one-time link) may restart this proxy and its camera side',
   ...Object.fromEntries(REMOTE_ACTIONS.map((a) => [`camera.action:${a}`, actionText(a)])),
 };
 
 // The settings cams-admin may set (and never may): src/fleet/remote-settable.ts.
+
+// The ui.* entries in effect (issue #227): allowed, with commands on and not
+// paused (a pause or CAMPROXY_ADMIN_COMMANDS=off locks them again).
+export function uiUnlocked(p: EffectivePolicy): string[] {
+  return p.enabled && !p.paused ? p.allow.filter((e) => (UI_ENTRIES as readonly string[]).includes(e)) : [];
+}
 
 // `stored`: a list an earlier version wrote (policy.json, config.json): retired entries are dropped.
 export function validateAllowList(list: unknown, where: string, stored = false): string[] {

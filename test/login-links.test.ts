@@ -63,7 +63,7 @@ describe('login links over HTTP', () => {
     const cookie = String(r.headers['set-cookie']);
     expect(cookie).toMatch(/^camproxy_session=v2\.\d+\.l\..*HttpOnly.*SameSite=Strict/);
     const session = cookie.split(';')[0];
-    expect((await request(p.base).get('/control/session').set('Cookie', session)).body).toEqual({ loggedIn: true });
+    expect((await request(p.base).get('/control/session').set('Cookie', session)).body).toEqual({ loggedIn: true, origin: 'local', rights: { localAdmin: true, config: true, restart: true } });
     const again = await request(p.base).get(`/control/login-link?code=${code}`);
     expect(again.status).toBe(302);
     expect(again.headers.location).toBe('/?link=expired');

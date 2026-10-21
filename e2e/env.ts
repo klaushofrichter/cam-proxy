@@ -18,3 +18,6 @@ export const DISCOVERY_PORT = 18602;
 // A cams-admin-managed client token seeded into data/admin/tokens.json (migration P2; test-only).
 export const MANAGED_TOKEN = 'e2e-managed-client-token-not-a-secret-000';
 export const MANAGED_TOKEN_ID = 'tok_E2E0000000000000000M';
+// A cams-admin-managed admin token (#227: its sign-in links start managed-admin sessions; test-only).
+export const MANAGED_ADMIN_TOKEN = 'e2e-managed-admin-token-not-a-secret-0000';
+export const MANAGED_ADMIN_TOKEN_ID = 'tok_E2E000000000000000MA';

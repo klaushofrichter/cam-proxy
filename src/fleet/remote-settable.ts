@@ -37,9 +37,16 @@ const LOCAL_ONLY: Readonly<Record<string, string>> = {
   'ftp.stalledHours': 'local only: a health threshold decides what the proxy reports as a problem',
   'archive.warnPercent': 'local only: a health threshold decides what the proxy reports as a problem',
 };
-export const DENIED: readonly string[] = [...new Set([
-  'server', 'go2rtc', 'storage', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.publicHost', 'ftp.certFile', 'ftp.keyFile', 'tls', 'composition.font', 'ntp.server', 'poeSwitch', 'camsAdmin',
+// Addresses, ports, files, trust, users and cams-admin itself: never remote,
+// and never through a cams-admin sign-in's ui.config either (issue #227,
+// src/api/auth.ts): a changed address would send the camera's or the
+// switch's password elsewhere.
+export const NEVER_FROM_CAMS_ADMIN: readonly string[] = [
+  'server', 'go2rtc', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.publicHost', 'ftp.certFile', 'ftp.keyFile', 'tls', 'composition.font', 'ntp.server', 'poeSwitch', 'camsAdmin',
   'cameras.*.id', 'cameras.*.host', 'cameras.*.protocol', 'cameras.*.tlsName', 'cameras.*.user', 'cameras.*.onvifPort', 'cameras.*.rtspPort', 'cameras.*.baichuanPort', 'cameras.*.poeSwitch', 'cameras.*.ftp.user', 'cameras.*.webUiUrl',
+];
+export const DENIED: readonly string[] = [...new Set([
+  ...NEVER_FROM_CAMS_ADMIN, 'storage',
   ...Object.keys(LOCAL_ONLY),
 ])];
 // R3-2: toward less spending, or toward keeping data longer (retention

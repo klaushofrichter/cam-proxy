@@ -6,7 +6,7 @@ import type { CamsAdmin } from '../fleet/service';
 import { actorOf, clientIp, requireLocalAdmin, type AccessInfo } from './auth';
 import { ConfigError } from '../config/load-error';
 import type { CommandRunner } from '../fleet/commands';
-import { ALLOW_ENTRIES, DISRUPTIVE_ENTRIES, ENTRY_TEXT, IMPLEMENTED, WideningRefused, type CommandPolicy } from '../fleet/policy';
+import { ALLOW_ENTRIES, DISRUPTIVE_ENTRIES, ENTRY_TEXT, IMPLEMENTED, UI_ENTRIES, WideningRefused, type CommandPolicy } from '../fleet/policy';
 import { undoLocal, type ConfigCommandDeps } from '../fleet/config-commands';
 import { TooManyBlocks, type TokenStore } from '../fleet/token-store';
 
@@ -30,7 +30,11 @@ const GROUPS = {
   settings: ['config.set', 'config.unset', 'config.rollback'],
   camera: ALLOW_ENTRIES.filter((e) => (e.startsWith('camera.action:') || e === 'camera.name.set') && !DISRUPTIVE_ENTRIES.has(e)),
   disruptive: ALLOW_ENTRIES.filter((e) => DISRUPTIVE_ENTRIES.has(e)),
+  // Issue #227: what a cams-admin sign-in (one-time link) may also do here.
+  signin: [...UI_ENTRIES],
 };
+// What the card can tick: the commands this version runs, and the ui.* entries.
+const TICKABLE: ReadonlySet<string> = new Set([...IMPLEMENTED, ...UI_ENTRIES]);
 const CMD_ID = /^cmd_[0-9A-HJKMNP-TV-Z]{20}$/;
 
 export function camsAdminApi(d: { camsAdmin: CamsAdmin; audit: AuditLog; commands?: CommandsApiDeps }): express.Router {
@@ -79,7 +83,7 @@ export function camsAdminApi(d: { camsAdmin: CamsAdmin; audit: AuditLog; command
       const p = c.policy.effective();
       return { allow: p.allow, paused: p.paused, pauseReason: p.pauseReason };
     };
-    const commandsView = () => ({ ...c.policy.effective(), implemented: ALLOW_ENTRIES.filter((e) => IMPLEMENTED.has(e)), known: ALLOW_ENTRIES.map((entry) => ({ entry, text: ENTRY_TEXT[entry] })), recent: c.runner.recent(20), groups: GROUPS });
+    const commandsView = () => ({ ...c.policy.effective(), implemented: ALLOW_ENTRIES.filter((e) => TICKABLE.has(e)), known: ALLOW_ENTRIES.map((entry) => ({ entry, text: ENTRY_TEXT[entry] })), recent: c.runner.recent(20), groups: GROUPS });
     const policyRecord = (req: express.Request, before: ReturnType<typeof policyOf>, message: string) =>
       d.audit.write({ action: 'admin-policy', category: ['configuration'], type: ['change'], outcome: 'success', ...who(req), message, details: { from: before, to: policyOf(), requestedBy: req.res?.locals.access?.viaCookie ? 'session' : 'token' } });
     const failed = (res: express.Response, err: unknown) => {

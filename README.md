@@ -855,6 +855,7 @@ in the Reolink app, reaches stream clients once as a `camera` message.
 | `GET /control/log?limit` | recent log lines (info and above), redacted; default limit 100, buffer holds the last 500 |
 | `POST /control/login` / `logout`, `GET /control/session` | the admin UI's session cookie (`camproxy_session`, HttpOnly, SameSite=Strict, 12 h; 40 sign-ins per 15 min) |
 | `POST /control/login-links`, `GET /control/login-link?code=` | a one-time sign-in link (admin token; the code works once, for 60 s, and is kept only in memory): cams opens the UI with it for a signed-in user |
+| `GET /control/session` | whether the browser is signed in, and what the session may do (`origin`, `rights`: a cams-admin sign-in has only what `ui.config` and `ui.restart` unlock) |
 
 The **admin UI** at `/` signs in with the admin token once; the token is
 exchanged for the cookie and not stored in the browser.
@@ -1177,9 +1178,15 @@ only). The proxy's private key is `data/admin/key.json` (mode 600; never
 share it). cams-admin may send signed commands, and the proxy runs only the ones
 allowed on its own card (none by default; `admin-commands`, `admin-tokens`,
 the `CAMPROXY_ADMIN_COMMANDS=off` kill switch), including remote changes to a
-compiled list of settings, each visible and undoable on the card. Settings, states, commands,
-managed tokens, what is and isn't sent, and the contract tests:
-[docs/cams-admin.md](docs/cams-admin.md).
+compiled list of settings, each visible and undoable on the card. Someone
+who signs in here through a cams-admin one-time link (`managed-admin`) can
+look around, rename cameras and narrow the allowed commands; the page shows
+every other change off with the reason. Two entries on the same card,
+`ui.config` (settings) and `ui.restart` (restarts), off by default, let such
+a sign-in do more on this proxy
+([docs/cams-admin.md](docs/cams-admin.md#signing-in-from-cams-admin)).
+Settings, states, commands, managed tokens, what is and isn't sent, and the
+contract tests: [docs/cams-admin.md](docs/cams-admin.md).
 
 ## Operating the cluster
 

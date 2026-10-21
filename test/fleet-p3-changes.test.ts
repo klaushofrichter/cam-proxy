@@ -69,6 +69,9 @@ describe('cams-admin changes on the proxy', () => {
     expect(r.groups.camera).toContain('camera.action:camera-test');
     expect(r.groups.camera).toContain('camera.name.set');
     expect(r.groups.camera).not.toContain('camera.action:camera-reboot');
+    // #227: the sign-in group, tickable although no command.
+    expect(r.groups.signin).toEqual(['ui.config', 'ui.restart']);
+    expect(r.implemented).toEqual(expect.arrayContaining(['ui.config', 'ui.restart']));
     for (const e of r.groups.disruptive) expect(r.known.find((k: { entry: string }) => k.entry === e).text, e).toMatch(/^DISRUPTIVE: /);
     expect(r.allow).toEqual(['tokens.apply']);
     // I3: the P3 entries a P2 version stored wait for a fresh local tick.

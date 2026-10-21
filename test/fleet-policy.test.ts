@@ -2,7 +2,7 @@ import { mkdtempSync, statSync, writeFileSync, chmodSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, it } from 'vitest';
-import { ALLOW_ENTRIES, CommandPolicy, ENTRY_TEXT, IMPLEMENTED, NEVER_REMOTE_ACTIONS, validateAllowList, WideningRefused } from '../src/fleet/policy';
+import { ALLOW_ENTRIES, CommandPolicy, ENTRY_TEXT, IMPLEMENTED, NEVER_REMOTE_ACTIONS, UI_ENTRIES, validateAllowList, WideningRefused } from '../src/fleet/policy';
 import { readEnvLayer } from '../src/config/env';
 import { privateFileHooks, writePrivateJson } from '../src/fleet/private-file';
 import { settingPaths } from '../src/config/load';
@@ -33,7 +33,8 @@ describe('entry texts', () => {
   it('every allow entry has a sentence for the card; entries not in this version say so', () => {
     for (const e of ALLOW_ENTRIES) {
       expect(ENTRY_TEXT[e], e).toMatch(/\w{3,}/);
-      if (!IMPLEMENTED.has(e)) expect(ENTRY_TEXT[e], e).toMatch(/not in this version/);
+      // The ui.* entries (#227) are no command: they unlock the admin UI for a cams-admin sign-in.
+      if (!IMPLEMENTED.has(e) && !(UI_ENTRIES as readonly string[]).includes(e)) expect(ENTRY_TEXT[e], e).toMatch(/not in this version/);
     }
   });
 });

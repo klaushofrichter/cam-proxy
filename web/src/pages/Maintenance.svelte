@@ -9,10 +9,16 @@
   import { refresh, refreshTick, status } from '../lib/state';
   import { clearMatches, clearMessage } from '../lib/archive';
   import { actionPath, blockOf, selectedCamera } from '../lib/cameras';
+  import { lockedWhy, rights } from '../lib/rights';
+  import LockedNote from '../components/LockedNote.svelte';
   // The actions that act on a camera: the picked one when there are several.
   const CAMERA_ACTIONS = ['camera-test', 'onvif-resubscribe', 'camera-ftp-setup', 'camera-ftp-test', 'camera-ftp-off', 'restart'];
 
   let result = $state('');
+  // Issue #227: a cams-admin sign-in runs none of these unless the proxy's
+  // allow-list unlocks the restarts (ui.restart); the reason shows once.
+  const locked = $derived(lockedWhy($rights, 'local'));
+  const restartLocked = $derived(lockedWhy($rights, 'restart'));
   let log = $state<Array<Record<string, unknown>>>([]);
   const loadLog = async () => (log = (await api<Array<Record<string, unknown>>>('GET', '/control/log?limit=200')).reverse());
   onMount(() => void loadLog());
@@ -211,24 +217,25 @@
   <h2>Maintenance</h2>
   <div class="card">
     <div class="buttons">
-      <button onclick={() => void run('Camera test', 'camera-test')} data-testid="action-camera-test">Test the camera</button>
-      <button onclick={() => void run('ONVIF', 'onvif-resubscribe')} data-testid="action-resubscribe">Re-subscribe ONVIF</button>
-      <button onclick={() => void run('Retention preview', 'retention-run', { dryRun: true })} data-testid="action-retention-dry">Preview retention</button>
-      <button onclick={() => void run('Retention', 'retention-run', {})} data-testid="action-retention">Run retention now</button>
-      <button onclick={() => void run('Restart', 'restart')} data-testid="action-restart">Restart camera side</button>
-      <button class="danger" onclick={() => (asking = 'camera-reboot')} disabled={cameraBusy} data-testid="action-camera-reboot">Reboot camera</button>
+      <button onclick={() => void run('Camera test', 'camera-test')} disabled={!!locked} data-testid="action-camera-test">Test the camera</button>
+      <button onclick={() => void run('ONVIF', 'onvif-resubscribe')} disabled={!!locked} data-testid="action-resubscribe">Re-subscribe ONVIF</button>
+      <button onclick={() => void run('Retention preview', 'retention-run', { dryRun: true })} disabled={!!locked} data-testid="action-retention-dry">Preview retention</button>
+      <button onclick={() => void run('Retention', 'retention-run', {})} disabled={!!locked} data-testid="action-retention">Run retention now</button>
+      <button onclick={() => void run('Restart', 'restart')} disabled={!!restartLocked} data-testid="action-restart">Restart camera side</button>
+      <button class="danger" onclick={() => (asking = 'camera-reboot')} disabled={cameraBusy || !!locked} data-testid="action-camera-reboot">Reboot camera</button>
       {#if poe?.configured}
-        <button class="danger" onclick={() => (asking = 'camera-powercycle')} disabled={cameraBusy} data-testid="action-camera-powercycle">Power-cycle camera</button>
-        <button onclick={() => void poeOn()} disabled={sending || cycling} data-testid="action-camera-poe-on" title="Turns the camera's PoE on if it is off (no power check)">Turn camera PoE on</button>
+        <button class="danger" onclick={() => (asking = 'camera-powercycle')} disabled={cameraBusy || !!locked} data-testid="action-camera-powercycle">Power-cycle camera</button>
+        <button onclick={() => void poeOn()} disabled={sending || cycling || !!locked} data-testid="action-camera-poe-on" title="Turns the camera's PoE on if it is off (no power check)">Turn camera PoE on</button>
       {/if}
-      <button class="danger" onclick={() => (asking = 'restart-proxy')} disabled={restarting === 'waiting'} data-testid="action-restart-proxy">Restart proxy</button>
-      <button class="danger" onclick={askClear} disabled={!archive?.count} data-testid="action-archive-clear" title="Deletes every clip in the Archive (asks for the number of clips)">Clear the Archive…</button>
+      <button class="danger" onclick={() => (asking = 'restart-proxy')} disabled={restarting === 'waiting' || !!restartLocked} data-testid="action-restart-proxy">Restart proxy</button>
+      <button class="danger" onclick={askClear} disabled={!archive?.count || !!locked} data-testid="action-archive-clear" title="Deletes every clip in the Archive (asks for the number of clips)">Clear the Archive…</button>
     </div>
     <div class="buttons">
-      <button onclick={() => void run('Camera FTP setup', 'camera-ftp-setup')} data-testid="action-ftp-setup">Point the camera's FTP here</button>
-      <button onclick={() => void run('Camera FTP test', 'camera-ftp-test')} data-testid="action-ftp-test">Test the camera's FTP</button>
-      <button onclick={() => void run('Camera FTP off', 'camera-ftp-off')} data-testid="action-ftp-off">Turn the camera's FTP off</button>
+      <button onclick={() => void run('Camera FTP setup', 'camera-ftp-setup')} disabled={!!locked} data-testid="action-ftp-setup">Point the camera's FTP here</button>
+      <button onclick={() => void run('Camera FTP test', 'camera-ftp-test')} disabled={!!locked} data-testid="action-ftp-test">Test the camera's FTP</button>
+      <button onclick={() => void run('Camera FTP off', 'camera-ftp-off')} disabled={!!locked} data-testid="action-ftp-off">Turn the camera's FTP off</button>
     </div>
+    <LockedNote why={locked && restartLocked ? locked : locked ? `${locked} Only the restarts are allowed here.` : null} testid="maintenance-locked" />
     {#if alert}<p class="bad" data-testid="poe-alert">{alert}</p>{/if}
     {#if result}<p class="msg mono" data-testid="action-result">{result}</p>{/if}
     {#if cycling || reboot?.phase === 'power-cycling'}

@@ -5,6 +5,8 @@
   import { actorLabel, changeLines, commandsBanner, entryGroups, unconfirmedText, tokenStateText, undoErrorText, widenErrorText, type ChangeItem, type CommandsView, type TokensView } from '../lib/cams-admin';
   import ConfirmDialog from './ConfirmDialog.svelte';
   import LongValue from './LongValue.svelte';
+  import { lockedWhy, rights } from '../lib/rights';
+  import LockedNote from './LockedNote.svelte';
 
   // Commands from cams-admin and the managed tokens (migration P2,
   // docs/cams-admin.md), on the cams-admin page (#203): off unless allowed
@@ -20,6 +22,9 @@
   let dirty = $state(false);
   let reason = $state('');
   let busy = $state(false);
+  // Issue #227: a cams-admin sign-in only narrows (untick, pause, block);
+  // ticking a new entry, Resume, Unblock and Undo are the local admin's.
+  const locked = $derived(lockedWhy($rights, 'local'));
   let message = $state('');
   let now = $state(Date.now());
   // Actors shown in full after a tap (the short form hides the middle of an id).
@@ -106,7 +111,7 @@
             {@const implemented = (cmds.implemented ?? []).includes(k.entry)}
             <li class:later={!implemented}>
               <label>
-                <input type="checkbox" checked={k.allowed} disabled={busy || !implemented} onchange={(e) => toggle(k.entry, (e.currentTarget as HTMLInputElement).checked)} data-testid="cams-admin-allow-{k.entry}" />
+                <input type="checkbox" checked={k.allowed} disabled={busy || !implemented || (!!locked && !cmds.allow.includes(k.entry))} onchange={(e) => toggle(k.entry, (e.currentTarget as HTMLInputElement).checked)} data-testid="cams-admin-allow-{k.entry}" />
                 <span class="mono entry">{k.entry}</span>
               </label>
               <span class="explain">{k.text}</span>
@@ -117,10 +122,11 @@
       </div>
     {/each}
     </div>
+    <LockedNote why={locked ? `${locked} Here you can only untick, pause and block.` : null} testid="cams-admin-commands-locked" />
     <div class="actions">
       <button onclick={() => void save()} disabled={busy || !dirty} data-testid="cams-admin-commands-save">Save</button>
       {#if cmds.paused}
-        <button onclick={() => void resume()} disabled={busy || !cmds.enabled} data-testid="cams-admin-resume">Resume</button>
+        <button onclick={() => void resume()} disabled={busy || !cmds.enabled || !!locked} data-testid="cams-admin-resume">Resume</button>
       {:else}
         <span class="pause">
           <input type="text" bind:value={reason} maxlength="200" placeholder="reason (optional)" data-testid="cams-admin-pause-reason" />
@@ -162,7 +168,7 @@
               {#if c.rolledBack}
                 <span class="small nw">undone{c.rolledBack.by === 'local' ? ' here' : ' by cams-admin'}</span>
               {:else if c.command !== 'config.rollback'}
-                <button onclick={() => (undoing = c)} disabled={busy} data-testid="cams-admin-undo-{c.cmdId}">Undo</button>
+                <button onclick={() => (undoing = c)} disabled={busy || !!locked} title={locked ?? undefined} data-testid="cams-admin-undo-{c.cmdId}">Undo</button>
               {/if}
             </span>
           </li>
@@ -190,7 +196,7 @@
               </span>
               <span class="act">
                 {#if t.blocked}
-                  <button onclick={() => void unblock(t.id)} disabled={busy} data-testid="cams-admin-token-unblock-{t.id}">Unblock</button>
+                  <button onclick={() => void unblock(t.id)} disabled={busy || !!locked} title={locked ?? undefined} data-testid="cams-admin-token-unblock-{t.id}">Unblock</button>
                 {:else}
                   <button onclick={() => void block(t.id)} disabled={busy} data-testid="cams-admin-token-block-{t.id}">Block</button>
                 {/if}

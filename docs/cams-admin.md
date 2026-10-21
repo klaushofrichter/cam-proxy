@@ -179,6 +179,8 @@ cams-admin card (**Commands from cams-admin**), with
 | `camera.action:<action>` | run that camera action: `camera-test`, `onvif-resubscribe`, `camera-ftp-test`, `poe-switch-read`, `inventory`, `inventory-cancel`, `retention-run` (always a dry run) |
 | **disruptive**: `proxy.restart`, `camera.action:restart`, `camera-reboot`, `camera-powercycle`, `camera-ftp-setup`, `camera-ntp-set`, `camera-cert-push` | restart this proxy or a camera's worker, reboot or power-cycle a camera, point its FTP upload here or set its NTP server, replace its HTTPS certificate. Grouped under **Disruptive — off by default** on the cams-admin page; allow one only while it's needed (Klaus's decision, M §16 Q3) |
 
+| **cams-admin sign-in**: `ui.config`, `ui.restart` | no command: what someone signed in to this admin UI through a cams-admin one-time link (user `managed-admin`) may also do here; see [Signing in from cams-admin](#signing-in-from-cams-admin) |
+
 Camera actions that change trust, delete data or need someone at the
 hardware (`find-camera`, `camera-address`, `camera-trust-clear`,
 `tls-ca-rotate`, `tls-ca-drop-previous`, `archive-clear`, `inventory-repair`,
@@ -201,6 +203,38 @@ or a sign-in link it minted). A cams-admin-managed admin token, and a session
 or link it started, can only **narrow**: untick, pause, block (403
 `local_admin_only` otherwise). So a compromised cams-admin can't allow itself
 more.
+
+### Signing in from cams-admin
+
+A one-time link from cams-admin (minted with a managed admin token) signs in
+to the admin UI as `managed-admin`. Such a session looks around freely, renames
+cameras, mints sign-in links and narrows the allowed commands (untick, pause,
+block), but every other change is the local admin's: the page shows those
+controls off, with the line "Needs the local admin token: you signed in from
+cams-admin.", and a request sent anyway answers 403 `local_admin_only`
+(recorded as `auth-refused`, reason `local-admin-only`) and shows as an error
+at the control.
+
+Two allow entries let such a session do more, on this proxy only (Klaus's
+decision, issue #227). Both are off by default, and only the local admin adds
+them, like any entry (the cams-admin page's group **cams-admin sign-in**, or
+`cam-proxy admin-commands allow ui.config`):
+
+| entry | lets a cams-admin sign-in |
+|---|---|
+| `ui.config` | change settings on the Settings page (`PUT /control/config`) and reset them to config.json's value or the default (`DELETE /control/config/{path}`, Reset to defaults `DELETE /control/config`). Never, neither set nor reset, the settings cams-admin can never set: addresses, ports, files, trust, users and cams-admin itself (`server`, `go2rtc`, `tls`, `poeSwitch`, `camsAdmin`, the FTP ports, files and public host, `ntp.server`, a camera's address, user, ports and certificate name); a changed address would send a camera's or the switch's password elsewhere, a reset `camsAdmin.url` would undo the enrollment. Never adding or removing a camera. Reset to defaults keeps the overrides of those settings (the dialog names them); the local admin's Reset to defaults still removes them. Such a refusal is recorded as `auth-refused` with reason `local-setting` |
+| `ui.restart` | restart the proxy (`restart-proxy`) and its camera side (`restart`, also one camera's): **disruptive** |
+
+They are no commands: cams-admin never sends them, the heartbeat never
+reports them, and a managed admin token itself (not signed in to the UI) gets
+nothing from them. A pause or `CAMPROXY_ADMIN_COMMANDS` set to anything but
+`on` locks them again at once. The proxy tells the page what the session may
+do (`GET /control/session`: `origin`, `rights`), so the page disables what it
+would refuse. A change made this way is recorded as usual, with the user
+`token:<label>` (the managed admin token whose link started the session) and
+`allowedBy: ui.config` or `ui.restart`. Everything else (actions, the
+Archive, Find camera, the Google Vision key, enrolling, Undo, unblocking,
+ticking an entry) stays the local admin's.
 
 **Revocation always gets through.** A `tokens.apply` whose command body has
 `revocationOnly: true` (contract) skips the pause, the allow-list and the
