@@ -608,7 +608,7 @@ paths:
         other local-admin write answers 403 `local_admin_only`.
       security: []
       responses:
-        '200': { description: '{ loggedIn: boolean, origin?: local | managed, rights?: { localAdmin, config, restart: boolean, localSettings?: [setting pattern] (with ui.config: the settings it never sets) } }' }
+        '200': { description: '{ loggedIn: boolean, origin?: local | managed, rights?: { localAdmin, config, restart: boolean, localSettings?: [setting pattern] (with ui.config: the settings it never sets), narrowSettings?: { <setting>: { dir: less | more, unlimited?: 0 | unset } } (with ui.config: the settings it changes one way only: retention and size caps up, spending caps down) } }' }
   /control/status:
     get:
       summary: Camera, event intake, SSE clients, retention (admin)

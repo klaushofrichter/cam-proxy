@@ -52,7 +52,7 @@ export const ENTRY_TEXT: Record<string, string> = {
   'config.rollback': 'cams-admin may undo its own setting changes',
   'camera.name.set': "cams-admin may rename a camera (the camera's own name)",
   'proxy.restart': 'DISRUPTIVE: cams-admin may restart this proxy (at most 2 an hour)',
-  'ui.config': "a cams-admin sign-in (one-time link) may change this proxy's settings on the Settings page and reset them to config.json's value; never addresses, ports, files, trust, users or cams-admin itself",
+  'ui.config': "a cams-admin sign-in (one-time link) may change this proxy's settings on the Settings page and reset them to config.json's value; never addresses, ports, files, trust, users, cams-admin itself, storage limits or Google Vision on/off, and retention only longer, spending caps only lower",
   'ui.restart': 'DISRUPTIVE: a cams-admin sign-in (one-time link) may restart this proxy and its camera side',
   ...Object.fromEntries(REMOTE_ACTIONS.map((a) => [`camera.action:${a}`, actionText(a)])),
 };

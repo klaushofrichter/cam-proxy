@@ -63,6 +63,7 @@ import { createSessionSigner } from './api/session';
 import { createLoginLinks } from './api/login-links';
 import { TokenStore } from './fleet/token-store';
 import { CommandPolicy, uiUnlocked } from './fleet/policy';
+import { uiConfigAgainst } from './api/ui-config';
 import { Journal } from './fleet/journal';
 import { OverridesBackups } from './fleet/backups';
 import { configHandlers, type ConfigCommandDeps } from './fleet/config-commands';
@@ -799,6 +800,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   const commandPolicy = new CommandPolicy({ base: () => loaded.commandPolicyBase, file: join(loaded.config.server.dataDir, 'admin', 'policy.json'), env: () => loaded.envLayer, log: logger });
   // What the allow-list unlocks for a cams-admin sign-in (issue #227): read per request, so a change or a pause applies at once.
   access.managedUnlocked = () => uiUnlocked(commandPolicy.effective());
+  // ui.config's direction rules on the configuration as it is now (Klaus, 2026-10-21).
+  access.uiConfigAgainst = (req) => uiConfigAgainst(loaded, req);
   const journal = new Journal(join(loaded.config.server.dataDir, 'admin', 'commands.json'), Date.now, logger);
   const replayGuard = new ReplayGuard({ file: join(loaded.config.server.dataDir, 'admin', 'replay.json'), log: logger, slackMs: opts.camsAdmin?.replaySlackMs });
   // The P3 handlers join once the control API's dependencies exist (below).

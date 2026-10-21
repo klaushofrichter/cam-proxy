@@ -21,7 +21,9 @@ import { maskKey } from '../analytics/providers';
 import type { Storage } from '../storage';
 import type { StreamLog } from '../stream/log';
 import { AuditQueryError, type AuditLog, type Outcome } from '../audit/audit-log';
-import { actorOf, allowedByOf, clientIp, isLocalSetting, tokenMatches, UI_CONFIG_LOCAL, type AccessInfo } from './auth';
+import { actorOf, allowedByOf, clientIp, tokenMatches, UI_CONFIG_LOCAL, type AccessInfo } from './auth';
+import { uiConfigResetKeep } from './ui-config';
+import { narrowRules } from '../fleet/remote-settable';
 import { cameraParam, RESTART_RETRY_S } from './camera-param';
 import type { CameraRegistry } from '../cameras/registry';
 import { RefusalThrottle } from '../audit/throttle';
@@ -229,7 +231,8 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
     const unlocked = local ? [] : (d.managedUnlocked?.() ?? []);
     const config = local || unlocked.includes('ui.config');
     // `localSettings`: what ui.config never sets (patterns, cameras.* for every camera).
-    res.json({ loggedIn: true, origin: s.origin, rights: { localAdmin: local, config, restart: local || unlocked.includes('ui.restart'), ...(config && !local ? { localSettings: UI_CONFIG_LOCAL } : {}) } });
+    // `narrowSettings`: the settings ui.config changes only one way (retention up, spending caps down).
+    res.json({ loggedIn: true, origin: s.origin, rights: { localAdmin: local, config, restart: local || unlocked.includes('ui.restart'), ...(config && !local ? { localSettings: UI_CONFIG_LOCAL, narrowSettings: narrowRules() } : {}) } });
   });
   r.post('/logout', (req, res) => {
     const valid = sessionOf(req);
@@ -441,7 +444,8 @@ export function controlApi(d: ControlDeps): express.Router {
     const before = d.loaded();
     try {
       // A cams-admin sign-in (ui.config) keeps the overrides only the local admin changes.
-      d.setLoaded(removeAllOverrides(d.loaded(), res.locals.allowedBy === 'ui.config' ? isLocalSetting : undefined));
+      // ...and those whose reset would shorten retention or raise spending (src/api/ui-config.ts).
+      d.setLoaded(removeAllOverrides(d.loaded(), res.locals.allowedBy === 'ui.config' ? uiConfigResetKeep(d.loaded()) : undefined));
     } catch (err) {
       return invalid(res, err);
     }
