@@ -132,8 +132,9 @@ export function tightenAdminFiles(dir: string): { file: string; reason: string }
   return refused;
 }
 
-// admin/moves/ (the move journal and its leftovers): same tightening as ADMIN_FILES.
-function sweepMoves(dir: string, refused: { file: string; reason: string }[]): void {
+// admin/moves/ (the move journal and its leftovers) and its <moveId>.manifests/
+// folders (the source's cached chunk manifests): same tightening as ADMIN_FILES.
+function sweepMoves(dir: string, refused: { file: string; reason: string }[], depth = 0): void {
   let names: string[];
   try {
     names = readdirSync(dir);
@@ -146,7 +147,9 @@ function sweepMoves(dir: string, refused: { file: string; reason: string }[]): v
   for (const n of names) {
     const path = join(dir, n);
     try {
-      if (!lstatSync(path).isFile()) continue;
+      const st = lstatSync(path);
+      if (st.isDirectory() && depth === 0 && n.endsWith('.manifests')) sweepMoves(path, refused, 1);
+      if (!st.isFile()) continue;
     } catch {
       continue;
     }

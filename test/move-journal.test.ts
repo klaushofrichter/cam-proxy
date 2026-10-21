@@ -109,6 +109,31 @@ describe('move journal', () => {
     });
   });
 
+  it('tightenAdminFiles tightens the cached manifests in moves/<id>.manifests/', () => {
+    const d = dir();
+    const side = join(d, 'mv_1.manifests');
+    mkdirSync(side, { recursive: true, mode: 0o755 });
+    chmodSync(side, 0o755);
+    const f = join(side, 'clips-2026-10-01.json');
+    writeFileSync(f, '{}', { mode: 0o644 });
+    chmodSync(f, 0o644);
+    expect(tightenAdminFiles(join(d, '..'))).toEqual([]);
+    expect(statSync(f).mode & 0o777).toBe(0o600);
+    expect(statSync(side).mode & 0o777).toBe(0o700);
+  });
+
+  it('all() and load() ignore the manifest folders', () => {
+    const d = dir();
+    const j = new MoveJournal(d);
+    j.save(rec('m1'));
+    mkdirSync(join(d, 'm1.manifests'), { recursive: true });
+    writeFileSync(join(d, 'm1.manifests', 'clips-2026-10-01.json'), '{}');
+    mkdirSync(join(d, 'm2.json'), { recursive: true }); // a folder named like a record
+    expect(j.all().map((r) => r.id)).toEqual(['m1']);
+    expect(j.problems()).toEqual([]);
+    expect(() => j.load('m1.manifests')).toThrow();
+  });
+
   it('tightenAdminFiles tightens set-aside and temp files in moves/', () => {
     const d = dir();
     mkdirSync(d, { recursive: true });

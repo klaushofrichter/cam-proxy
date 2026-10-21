@@ -6,6 +6,7 @@ import type { AuditLog } from '../audit/audit-log';
 import { logger } from '../log';
 import { chunkManifest, chunkRows, CONTENT_FOLDERS, listChunks, parseChunkId, type InventoryDeps, type ManifestFile } from '../moves/inventory';
 import type { MoveJournal, MoveRecord } from '../moves/journal';
+import { ManifestCache } from '../moves/manifest-cache';
 import { seal } from '../moves/seal';
 import { moveTokenGuard } from '../moves/token-guard';
 import type { MovePhaseName } from '../moves/types';
@@ -49,24 +50,15 @@ function contentPath(dataDir: string, cam: string, p: unknown): string | null {
   return join(dataDir, ...parts);
 }
 
-// The chunk's cached manifest from the journal (P5), or null.
-function cached(r: MoveRecord, chunkId: string): { files: ManifestFile[]; rows: number; expired: number } | null {
-  const c = r.chunks[chunkId];
-  if (!c?.files || typeof c.rows !== 'number') return null;
-  const files = Object.entries(c.files).map(([path, f]) => ({ path, size: f.size, sha256: f.sha256 ?? '' })).sort((x, y) => (x.path < y.path ? -1 : 1));
-  return { files, rows: c.rows, expired: c.expired ?? 0 };
-}
-
 // The chunks from the approval day on, listed again once at released (P12):
 // what the source captured during the overlap; their cached manifests go.
-export function refreshManifest(d: Pick<MovesSourceDeps, 'journal' | 'inventory' | 'now'>, id: string): MoveRecord | null {
+export function refreshManifest(d: Pick<MovesSourceDeps, 'journal' | 'inventory' | 'now'>, id: string, cache = new ManifestCache(d.inventory.dataDir)): MoveRecord | null {
   const r = d.journal.load(id);
   if (!r || r.role !== 'source' || !r.manifest || r.manifestRefreshedAt !== undefined) return r;
   const from = dayOf(r.approvedAt ?? r.startedAt);
   const kinds = r.plan?.kinds ?? [...new Set(r.manifest.map((c) => c.kind))];
   const fresh = listChunks(d.inventory, r.camera, kinds).filter((c) => c.day >= from);
-  for (const c of r.manifest) if (c.day >= from) delete r.chunks[c.id];
-  for (const c of fresh) delete r.chunks[c.id];
+  cache.drop(r.id, [...r.manifest, ...fresh].filter((c) => c.day >= from).map((c) => c.id));
   // Both lists are newest day first; the older days stay as frozen.
   r.manifest = [...fresh, ...r.manifest.filter((c) => c.day < from)];
   r.manifestRefreshedAt = (d.now ?? Date.now)();
@@ -77,6 +69,7 @@ export function refreshManifest(d: Pick<MovesSourceDeps, 'journal' | 'inventory'
 export function movesSourceApi(d: MovesSourceDeps): express.Router {
   const router = express.Router();
   const inflight = new Map<string, Promise<{ files: ManifestFile[]; rows: number; expired: number }>>();
+  const cache = new ManifestCache(d.inventory.dataDir);
   const busyGate = (_req: Request, res: Response, next: NextFunction) => (d.busy() ? void res.status(503).json({ error: 'busy' }) : next());
 
   // The chunk id a request names, when it is one of the frozen manifest's.
@@ -121,7 +114,7 @@ export function movesSourceApi(d: MovesSourceDeps): express.Router {
   router.get('/moves/:id/manifest', (_req, res) => {
     let r = recordOf(res);
     if (!r.manifest) return notReady(res);
-    if (AFTER_RELEASE.includes(r.phase) && r.manifestRefreshedAt === undefined) r = refreshManifest(d, r.id) ?? r;
+    if (AFTER_RELEASE.includes(r.phase) && r.manifestRefreshedAt === undefined) r = refreshManifest(d, r.id, cache) ?? r;
     res.json({ chunks: r.manifest });
   });
 
@@ -129,7 +122,13 @@ export function movesSourceApi(d: MovesSourceDeps): express.Router {
     const chunkId = chunkOf(req, res);
     if (!chunkId) return;
     const r = recordOf(res);
-    const hit = cached(r, chunkId);
+    let hit;
+    try {
+      hit = cache.get(r.id, chunkId);
+    } catch (err) {
+      logger.warn({ moveId: r.id, chunkId, code: (err as NodeJS.ErrnoException).code ?? 'error' }, 'move_manifest_cache_unreadable');
+      return void res.status(500).json({ error: 'internal' });
+    }
     if (hit) return void res.json(hit);
     const key = `${r.id}|${chunkId}`;
     let p = inflight.get(key);
@@ -140,10 +139,7 @@ export function movesSourceApi(d: MovesSourceDeps): express.Router {
           // Cache it (P5), unless the chunk list was refreshed meanwhile.
           try {
             const fresh = d.journal.load(r.id);
-            if (fresh && fresh.manifestRefreshedAt === refreshedAt) {
-              fresh.chunks[chunkId] = { state: fresh.chunks[chunkId]?.state ?? 'pending', files: Object.fromEntries(m.files.map((f) => [f.path, { size: f.size, sha256: f.sha256, state: 'listed' }])), rows: m.rows, expired: m.expired };
-              d.journal.save(fresh);
-            }
+            if (fresh && fresh.manifestRefreshedAt === refreshedAt) cache.set(r.id, chunkId, m);
           } catch (err) {
             logger.warn({ moveId: r.id, chunkId, code: (err as NodeJS.ErrnoException).code ?? 'error' }, 'move_manifest_not_cached');
           }
@@ -173,7 +169,7 @@ export function movesSourceApi(d: MovesSourceDeps): express.Router {
     const rel = req.query.path;
     const abs = contentPath(d.inventory.dataDir, r.camera, rel);
     if (!abs) return bad(res, 'path');
-    if (!Object.values(r.chunks).some((c) => c.files && Object.hasOwn(c.files, rel as string))) return void res.status(404).json({ error: 'not_listed' });
+    if (!cache.lists(r.id, rel as string)) return void res.status(404).json({ error: 'not_listed' });
     // No link anywhere on the way out of the camera's folder.
     let real: string;
     try {

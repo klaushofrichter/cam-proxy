@@ -3,7 +3,7 @@
 // client auth: the move token is their only guard.
 import { generateKeyPairSync } from 'crypto';
 import express from 'express';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import type { Server } from 'http';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -14,6 +14,7 @@ import { AuditLog } from '../src/audit/audit-log';
 import { openCatalog } from '../src/catalog/db';
 import { MoveJournal, type MoveRecord } from '../src/moves/journal';
 import { listChunks } from '../src/moves/inventory';
+import { removeManifestCache } from '../src/moves/manifest-cache';
 import { unseal } from '../src/moves/seal';
 import { hashMoveToken } from '../src/moves/token';
 import { setLogLevel } from '../src/log';
@@ -124,7 +125,7 @@ describe('the move-token guard', () => {
     expect(r1.status).toBe(403);
     expect(r1.body).toEqual({ error: 'move_token' });
     await f.get(`/api/moves/${MOVE}/manifest`, { ip: OTHER_IP });
-    await f.get(`/api/moves/${MOVE}/manifest`, { token: 'wrong' });
+    await f.get(`/api/moves/${MOVE}/file?path=x`, { ip: OTHER_IP });
     let recs = f.records().filter((r) => r.event.action === 'move-token-refused');
     expect(recs).toHaveLength(1);
     expect(recs[0].event.outcome).toBe('failure');
@@ -137,6 +138,15 @@ describe('the move-token guard', () => {
     recs = f.records().filter((r) => r.event.action === 'move-token-refused');
     expect(recs).toHaveLength(2);
     expect(recs[1].cam_proxy.suppressed).toBe(2);
+  });
+
+  it('junk refusals do not use up the record of a later wrong-address attempt (throttle per move and reason)', async () => {
+    const f = await fixture();
+    for (let i = 0; i < 3; i++) await f.get(`/api/moves/${MOVE}/manifest`, { token: null });
+    await f.get(`/api/moves/${MOVE}/manifest`, { token: 'junk' });
+    await f.get(`/api/moves/${MOVE}/manifest`, { ip: OTHER_IP });
+    const recs = f.records().filter((r) => r.event.action === 'move-token-refused');
+    expect(recs.map((r) => r.cam_proxy.reason)).toEqual(['no-token', 'wrong-token', 'wrong-address']);
   });
 
   it('refusals for unknown moves share one throttle, so made-up ids cannot flood the log', async () => {
@@ -230,21 +240,31 @@ describe('the source endpoints', () => {
     expect(day).toMatchObject({ files: 2, bytes: 6 + 7 });
     // older days stay as frozen
     expect(res.body.chunks.find((c: { id: string }) => c.id === 'clips:2026-10-01')).toMatchObject({ files: 1, bytes: 16 });
-    expect(f.journal.load(MOVE)!.chunks['stills:2026-10-02']).toBeUndefined();
+    expect(existsSync(join(f.dataDir, 'admin', 'moves', `${MOVE}.manifests`, 'stills-2026-10-02.json'))).toBe(false);
     expect((await f.get(`/api/moves/${MOVE}/chunks/stills:2026-10-02`)).body.files).toHaveLength(2);
     // once only
     f.put('stills/cam3/2026/10/02/0020.pack', 'later');
     expect((await f.get(`/api/moves/${MOVE}/manifest`)).body.chunks.find((c: { id: string }) => c.id === 'stills:2026-10-02').files).toBe(2);
   });
 
-  it('a chunk manifest is computed once and cached in the journal', async () => {
+  it('a chunk manifest is computed once and cached in a 600 sidecar file, not in the journal record', async () => {
     const f = await fixture();
     f.freeze();
     const res = await f.get(`/api/moves/${MOVE}/chunks/clips:2026-10-01`);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ files: [{ path: 'clips/cam3/2026/10/01/1200-1.mp4', size: 16, sha256: expect.stringMatching(/^[0-9a-f]{64}$/) }], rows: 1, expired: 0 });
-    const cached = f.journal.load(MOVE)!.chunks['clips:2026-10-01'];
-    expect(cached.files!['clips/cam3/2026/10/01/1200-1.mp4']).toMatchObject({ size: 16 });
+    const sidecar = join(f.dataDir, 'admin', 'moves', `${MOVE}.manifests`, 'clips-2026-10-01.json');
+    expect(statSync(sidecar).mode & 0o777).toBe(0o600);
+    expect(statSync(dirname(sidecar)).mode & 0o777).toBe(0o700);
+    expect(readFileSync(sidecar, 'utf8')).toContain('clips/cam3/2026/10/01/1200-1.mp4');
+    expect(f.journal.load(MOVE)!.chunks['clips:2026-10-01']).toBeUndefined();
+    // the journal file does not grow with cached manifests
+    const journalFile = join(f.dataDir, 'admin', 'moves', `${MOVE}.json`);
+    const size = statSync(journalFile).size;
+    await f.get(`/api/moves/${MOVE}/chunks/stills:2026-10-01`);
+    await f.get(`/api/moves/${MOVE}/chunks/stills:2026-10-02`);
+    expect(statSync(journalFile).size).toBe(size);
+    expect(f.journal.all().map((r) => r.id)).toEqual([MOVE]);
     // a change on disk after the first computation does not change the answer
     writeFileSync(join(f.dataDir, 'clips/cam3/2026/10/01/1200-1.mp4'), 'changed');
     expect((await f.get(`/api/moves/${MOVE}/chunks/clips:2026-10-01`)).body).toEqual(res.body);
@@ -312,6 +332,19 @@ describe('the source endpoints', () => {
     expect(res.body.files.map((x: { path: string }) => x.path)).toEqual(['stills/cam3/2026/10/01/1200.pack']);
   });
 
+  it('removeManifestCache deletes the move\'s cached manifests', async () => {
+    const f = await fixture();
+    f.freeze();
+    await f.get(`/api/moves/${MOVE}/chunks/clips:2026-10-01`);
+    const folder = join(f.dataDir, 'admin', 'moves', `${MOVE}.manifests`);
+    expect(existsSync(folder)).toBe(true);
+    removeManifestCache(f.dataDir, MOVE);
+    expect(existsSync(folder)).toBe(false);
+    expect(existsSync(join(f.dataDir, 'admin', 'moves', `${MOVE}.json`))).toBe(true);
+    removeManifestCache(f.dataDir, MOVE); // twice is fine
+    expect(() => removeManifestCache(f.dataDir, '../x')).toThrow();
+  });
+
   it('file and chunk endpoints answer 503 busy under pressure; probe and manifest do not', async () => {
     const f = await fixture();
     f.freeze();
@@ -369,5 +402,12 @@ describe('in the proxy', () => {
     const probe = await request(p.base).get(`/api/moves/${MOVE}/probe?bytes=5`).set('Authorization', `Bearer ${TOKEN}`).buffer(true);
     expect(probe.status).toBe(200);
     expect(probe.headers['content-length']).toBe('5');
-  }, 30_000);
+    // Not under the app-wide 1200/min per-address limit: the token and the peer address guard it.
+    const statuses: number[] = [];
+    for (let i = 0; i < 1300; i += 100) {
+      statuses.push(...(await Promise.all(Array.from({ length: 100 }, () => request(p.base).get(`/api/moves/${MOVE}/probe?bytes=1`).set('Authorization', `Bearer ${TOKEN}`).then((r) => r.status)))));
+    }
+    expect(statuses.filter((x) => x === 429)).toHaveLength(0);
+    expect(statuses.every((x) => x === 200)).toBe(true);
+  }, 60_000);
 });

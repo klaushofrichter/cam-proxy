@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Camera moves, groundwork: a camera with the new local setting `cameras.<id>.moved` (the id of its move) is hidden like a removed one: its worker stops, it leaves the APIs and its FTP user is refused, while its configuration and files stay; clearing the setting starts it again, live. New local setting `moves.maxCameras` (no limit by default). cams-admin cannot set either. Internal: `purgeCamera` deletes every row and file of one camera.
-- Camera moves, source side: new endpoints under `/api/moves/{id}/` (probe, manifest, chunk manifests and rows, files, the sealed camera password) for the proxy taking a camera over. Only that move's token opens them, from the target's address and until the move ends; no other token does. The password is sent only sealed to the target's key. Under storage pressure or high load the file and chunk endpoints answer 503 so the target slows down. A refused request is audited as `move-token-refused` (at most once per move per 10 minutes).
+- Camera moves, source side: new endpoints under `/api/moves/{id}/` (probe, manifest, chunk manifests and rows, files, the sealed camera password) for the proxy taking a camera over. Only that move's token opens them, from the target's address and until the move ends; no other token does. The password is sent only sealed to the target's key. Under storage pressure or high load the file and chunk endpoints answer 503 so the target slows down. A refused request is audited as `move-token-refused` (at most once per move and reason per 10 minutes). The move endpoints are not under the general limit of 1200 requests per minute per address.
 
 ## v2026.10.21.1
 

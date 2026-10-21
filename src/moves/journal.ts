@@ -1,4 +1,4 @@
-import { readdirSync, renameSync, rmSync } from 'fs';
+import { lstatSync, readdirSync, renameSync, rmSync } from 'fs';
 import { join } from 'path';
 import { PrivateFileInvalid, readPrivateJson, writePrivateJson } from '../fleet/private-file';
 import type { ChunkState, MoveCameraConnection, MoveCopied, MoveKind, MovePhaseName, MovePlan, MoveRole, MoveSummary, Settings } from './types';
@@ -8,8 +8,7 @@ import type { ChunkState, MoveCameraConnection, MoveCopied, MoveKind, MovePhaseN
 // X25519 private key). Never printed, logged or served.
 export interface ChunkMeta { id: string; kind: MoveKind; day: string; files: number; bytes: number; rows: number }
 export interface ChunkFile { size: number; sha256?: string; state: string }
-// Source: `files` + `rows` + `expired` cache the chunk's manifest (P5) once computed.
-export interface ChunkRecord { state: ChunkState; files?: Record<string, ChunkFile>; rows?: number; expired?: number }
+export interface ChunkRecord { state: ChunkState; files?: Record<string, ChunkFile> }
 
 export interface MovePeer {
   proxyId: string;
@@ -123,9 +122,16 @@ export class MoveJournal {
       return [];
     }
     const out: MoveRecord[] = [];
+    // Records only: <id>.json files; the <id>.manifests/ folders (the source's
+    // cached chunk manifests) and anything else are not records.
     for (const n of names.sort()) {
       const m = /^(.+)\.json$/.exec(n);
       if (!m || !ID.test(m[1])) continue;
+      try {
+        if (!lstatSync(join(this.dir, n)).isFile()) continue;
+      } catch {
+        continue;
+      }
       const r = this.load(m[1]);
       if (r) out.push(r);
     }

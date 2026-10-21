@@ -61,7 +61,7 @@ paths:
       responses:
         '200': { description: application/octet-stream, exactly `bytes` random bytes }
         '400': { description: "{ error: invalid, detail: bytes }" }
-        '403': { description: "{ error: move_token } (no or wrong move token, not from the target's address, the move ended or is unknown; audited as move-token-refused, at most once per move per 10 minutes)" }
+        '403': { description: "{ error: move_token } (no or wrong move token, not from the target's address, the move ended or is unknown; audited as move-token-refused, at most once per move and reason per 10 minutes). Not under the app-wide 1200/min per-address limit" }
         '503': { description: "{ error: busy } (the move journal can't be read)" }
   /api/moves/{id}/manifest:
     get:
@@ -81,7 +81,7 @@ paths:
     get:
       summary: "A chunk's file manifest: { files: [{ path, size, sha256 }], rows, expired }"
       description: >
-        Hashed on the first request and cached in the move journal (plan P5). `expired`
+        Hashed on the first request and cached in a private file per chunk next to the move journal (plan P5). `expired`
         counts files retention removed between listing and hashing; any other read
         error is a 500 and nothing is cached.
       security: [{ moveToken: [] }]

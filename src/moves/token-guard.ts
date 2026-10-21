@@ -12,9 +12,11 @@ import { moveTokenMatches } from './token';
 // (constant time, B3/B31), and the caller's address equals the target's
 // (`peer.ip`, IPv4-mapped forms folded like clientIp). Anything else is one
 // answer, 403 move_token, whatever failed; an unreadable journal is 503 busy.
-// Refusals are audited (`move-token-refused`) at most once per move per 10
-// minutes; refusals for move ids this proxy doesn't have share one bucket, so
-// made-up ids can't flood the log. Never the token in a record or log line.
+// Refusals are audited (`move-token-refused`) at most once per move and
+// reason per 10 minutes, so junk requests naming a real move can't use up the
+// record of a later wrong-token or wrong-address attempt; refusals for move
+// ids this proxy doesn't have share one bucket, so made-up ids can't flood
+// the log. Never the token in a record or log line.
 export interface MoveGuardDeps {
   journal: Pick<MoveJournal, 'load'>;
   audit: Pick<AuditLog, 'write'>;
@@ -45,7 +47,7 @@ export function moveTokenGuard(d: MoveGuardDeps) {
   const buckets = new Map<string, { until: number; suppressed: number }>();
 
   const refused = (req: Request, id: string, r: MoveRecord | null, reason: MoveRefusal) => {
-    const key = r ? id : UNKNOWN;
+    const key = r ? `${id}|${reason}` : UNKNOWN;
     const t = now();
     const b = buckets.get(key);
     if (b && t < b.until) {
