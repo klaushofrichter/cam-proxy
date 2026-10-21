@@ -39,7 +39,7 @@ const offer = (over: Partial<MoveOfferArgs> = {}): MoveOfferArgs => ({
 
 const fakeCa: SiteCa = { certPem: '', keyPem: '', fingerprint: '', notAfter: 0, covers: (ip) => ip.startsWith('192.0.2.'), coversName: (n) => n.endsWith('.garage.internal') };
 
-function fixture(o: { config?: object; allowed?: boolean; ca?: SiteCa | null; free?: number; usage?: { stills: number; previews: number; clips: number }; connect?: boolean; probe?: number; journal?: Pick<MoveJournal, 'active' | 'save'> } = {}) {
+function fixture(o: { config?: object; allowed?: boolean; ca?: SiteCa | null; free?: number; usage?: { stills: number; previews: number; clips: number; used?: number; budget?: number }; connect?: boolean; probe?: number; journal?: Pick<MoveJournal, 'active' | 'save'> } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'camproxy-offer-'));
   writeFileSync(join(dir, 'config.json'), JSON.stringify({ cameras: [{ id: 'cam3', host: '192.0.2.3' }], tls: SITE, storage: { minFreeBytes: 1 * GB }, ...(o.config ?? {}) }));
   const loaded = loadConfig(SECRETS, { cwd: dir });
@@ -50,7 +50,7 @@ function fixture(o: { config?: object; allowed?: boolean; ca?: SiteCa | null; fr
     journal: o.journal ?? journal,
     loaded: () => loaded,
     ca: () => (o.ca === undefined ? fakeCa : o.ca),
-    usage: () => o.usage ?? { stills: 0, previews: 0, clips: 0 },
+    usage: () => ({ used: 0, budget: 1000 * GB, ...(o.usage ?? { stills: 0, previews: 0, clips: 0 }) }),
     freeBytes: () => o.free ?? 100 * GB,
     now: () => 5000,
     connect: async (h, p) => (connects.push([h, p]), o.connect ?? true),
@@ -163,6 +163,22 @@ describe('space (P4, S §7)', () => {
   });
 });
 
+describe('the storage budget (ruling: budget headroom caps available)', () => {
+  it('fits false when the caps fit but total use plus the move exceeds the budget', () => {
+    const f = fixture({ usage: { stills: 0, previews: 0, clips: 0, used: 90 * GB, budget: 92 * GB } });
+    const s = spaceFor(f.deps, summary({ clips: 5 * GB }));
+    expect([s.fits, s.available]).toEqual([false, 2 * GB]);
+  });
+  it('the proposal includes storage.maxBytes when the disk has room', () => {
+    const f = fixture({ usage: { stills: 0, previews: 0, clips: 0, used: 90 * GB, budget: 92 * GB } });
+    expect(spaceFor(f.deps, summary({ clips: 5 * GB })).retentionProposal).toEqual({ 'storage.maxBytes': 95 * GB });
+  });
+  it('no maxBytes proposal when the disk is short', () => {
+    const f = fixture({ free: 3 * GB, usage: { stills: 0, previews: 0, clips: 0, used: 90 * GB, budget: 90 * GB } });
+    expect(spaceFor(f.deps, summary({ clips: 5 * GB })).retentionProposal).toBeNull();
+  });
+});
+
 describe('accepting writes the target record (B4, B32)', () => {
   it('journals peer, connection, summary, settings and the token as phase opened', async () => {
     const f = fixture({ probe: 777 });
@@ -243,6 +259,17 @@ describe('the throughput probe', () => {
     // Another CA fingerprint: nothing is sent.
     seen.length = 0;
     expect(await probeSource({ ...src, caFingerprints: [`SHA256:${'B'.repeat(64)}`] }, MOVE, TOKEN)).toBe(0);
+    // A bundle whose first certificate matches: refused, no token sent.
+    const bundle = `${ca.certPem}\n${leaf.certPem}`;
+    const bundled = createHttpsServer({ cert: leaf.certPem, key: leaf.keyPem }, (req, res) => {
+      if (req.url === '/tls/ca.pem') return void res.end(bundle);
+      seen.push(String(req.headers.authorization));
+      res.end('x');
+    });
+    servers.push(bundled as unknown as HttpServer);
+    await new Promise<void>((r) => bundled.listen(0, '127.0.0.1', r));
+    expect(await probeSource({ ...src, url: `https://127.0.0.1:${(bundled.address() as { port: number }).port}` }, MOVE, TOKEN)).toBe(0);
+    expect(seen).toEqual([]);
     // The right CA but a name the leaf does not carry.
     expect(await probeSource({ ...src, tlsServername: 'other.garage.internal' }, MOVE, TOKEN)).toBe(0);
     expect(seen).toEqual([]);

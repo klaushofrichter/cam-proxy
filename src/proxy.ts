@@ -1032,7 +1032,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         journal: moveJournal,
         loaded: () => loaded,
         ca: () => ca,
-        usage: () => { const u = storage.usage(); return { stills: u.stills.bytes, previews: u.previews.bytes, clips: u.clips.bytes }; },
+        usage: () => { const u = storage.usage(); return { stills: u.stills.bytes, previews: u.previews.bytes, clips: u.clips.bytes, used: u.used, budget: u.budget }; },
         freeBytes: () => storage.diskSpace().free,
       },
     }),

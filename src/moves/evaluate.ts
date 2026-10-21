@@ -1,5 +1,6 @@
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
+import { X509Certificate } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { connect, isIP } from 'node:net';
 import { splitHost } from '../camera/http';
@@ -28,7 +29,8 @@ export interface EvaluateDeps {
   loaded: () => Loaded;
   ca: () => SiteCa | null;
   // Bytes now held of the kinds with a size cap.
-  usage: () => { stills: number; previews: number; clips: number };
+  // `used`/`budget`: the storage budget's total use and limit (storage.budget()).
+  usage: () => { stills: number; previews: number; clips: number; used: number; budget: number };
   freeBytes: () => number;
   now?: () => number;
   // Overridable for tests: a TCP connect, the source's address, the throughput probe.
@@ -83,12 +85,15 @@ export function spaceFor(deps: Pick<EvaluateDeps, 'loaded' | 'usage' | 'freeByte
     takeable += Math.min(n, h);
     if (n > h) capShort = true;
   }
-  const available = Math.min(disk, takeable);
+  const budgetRoom = Math.max(0, use.budget - use.used);
+  const available = Math.min(disk, takeable, budgetRoom);
   const fits = available >= needed;
   let retentionProposal: Space['retentionProposal'] = null;
   // Raising caps helps only when the disk can hold all of it.
-  if (!fits && capShort && needed <= disk) {
+  const budgetShort = needed > budgetRoom;
+  if (!fits && (capShort || budgetShort) && needed <= disk) {
     const p: Record<string, number> = {};
+    if (budgetShort) p['storage.maxBytes'] = use.used + needed;
     if (need('clips') > (headroom.clips ?? Infinity)) p['ftp.maxGB'] = Math.ceil((use.clips + need('clips')) / GB);
     if (need('stills') > (headroom.stills ?? Infinity)) {
       const total = Math.ceil((use.stills + use.previews + need('stills')) / GB);
@@ -220,14 +225,16 @@ async function probe(source: MoveOfferArgs['source'], moveId: string, token: str
   let ca: string | undefined;
   if (source.url.startsWith('https:')) {
     const f = await get(source, '/tls/ca.pem', { keep: 64 * 1024, capMs: 3000 });
-    const pem = f.status === 200 && f.body ? f.body.toString('utf8') : '';
-    let fp = '';
+    const text = f.status === 200 && f.body ? f.body.toString('utf8') : '';
+    // Exactly one certificate: a bundle could carry a second CA behind the pinned one.
+    if ((text.match(/BEGIN CERTIFICATE/g) ?? []).length !== 1) return 0;
+    let pem: string;
     try {
-      fp = fingerprintOf(pem);
+      pem = new X509Certificate(text).toString();
     } catch {
       return 0;
     }
-    if (!source.caFingerprints.includes(fp)) return 0;
+    if (!source.caFingerprints.includes(fingerprintOf(pem))) return 0;
     ca = pem;
   }
   const t0 = Date.now();
