@@ -25,6 +25,7 @@ test.afterEach(async ({ request }) => {
   // Other specs share this proxy: nothing stays allowed, sse.pingS back to before.
   expect((await allow(request, [])).status()).toBe(200);
   await request.delete('/control/config/sse.pingS', { headers: admin });
+  await request.delete('/control/config/ntp.server', { headers: admin });
 });
 
 test('a cams-admin sign-in: settings, restarts and actions are off, with the reason', async ({ browser, request }) => {
@@ -52,6 +53,13 @@ test('ui.config unlocks the Settings page except addresses; a refusal shows at t
   await input.fill('17');
   await page.getByTestId('save-sse.pingS').click();
   await expect(page.getByTestId('settings-message')).toContainText('sse.pingS saved');
+  // The local admin's override of a protected setting: no row Reset, and Reset to defaults keeps it and says so.
+  expect((await request.put('/control/config', { headers: admin, data: { ntp: { server: 'ntp.example' } } })).status()).toBe(200);
+  await page.reload();
+  await expect(page.getByTestId('reset-ntp.server')).toBeDisabled({ timeout: 15000 });
+  await page.getByTestId('reset-all').click();
+  await expect(page.getByTestId('confirm-dialog')).toContainText('These stay as they are (only the local admin token resets them): ntp.server.');
+  await page.getByTestId('confirm-cancel').click();
   // The local admin takes it back; the page still shows the control, and the refusal appears at the row.
   expect((await allow(request, [])).status()).toBe(200);
   await input.fill('18');

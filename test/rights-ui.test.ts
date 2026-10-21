@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import { ApiError, errorText } from '../web/src/lib/api';
+import { get } from 'svelte/store';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { api, ApiError, errorText, refreshRights } from '../web/src/lib/api';
 import { powerCycleFailText } from '../web/src/lib/maintenance';
-import { ALL_RIGHTS, LOCKED_TEXT, lockedWhy, REFUSED_TEXT, rightsOf, settingLockedWhy, settingsNote, SOME_SETTINGS_TEXT } from '../web/src/lib/rights';
+import { ALL_RIGHTS, LOCKED_TEXT, lockedWhy, REFUSED_TEXT, resetKeeps, rights, rightsOf, settingLockedWhy, settingsNote, SOME_SETTINGS_TEXT } from '../web/src/lib/rights';
 import { restartToApply } from '../web/src/lib/camera-settings';
 
 // Issue #227: a session from a cams-admin sign-in link (managed-admin) sees
@@ -72,5 +73,39 @@ describe('a refusal shown in words', () => {
   it('Restart to apply and the power-cycle show it too', async () => {
     expect(await restartToApply(async () => { throw new ApiError(403, { error: 'local_admin_only' }); })).toBe(`Restart failed: ${REFUSED_TEXT}`);
     expect(powerCycleFailText({ error: 'local_admin_only' }, 8)).toBe(`Camera power-cycle: ${REFUSED_TEXT}`);
+  });
+});
+
+describe('Reset to defaults for a cams-admin sign-in', () => {
+  it('names the overrides that stay (the ones ui.config never changes)', () => {
+    const r = { localAdmin: false, config: true, restart: false, localSettings: ['ntp.server', 'cameras.*.host'] };
+    expect(resetKeeps(r, ['sse.pingS', 'ntp.server', 'cameras.cam1.host'])).toEqual(['ntp.server', 'cameras.cam1.host']);
+    expect(resetKeeps(ALL_RIGHTS, ['ntp.server'])).toEqual([]);
+  });
+});
+
+// The controls follow a pause or an unticked entry without a reload.
+describe('the rights follow the proxy', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    rights.set(ALL_RIGHTS);
+  });
+  const answer = (status: number, body: unknown) => ({ status, ok: status < 400, text: async () => JSON.stringify(body), json: async () => body });
+  const managed = { loggedIn: true, origin: 'managed', rights: { localAdmin: false, config: false, restart: false } };
+  it('a 403 local_admin_only reads the session again', async () => {
+    const fetch = vi.fn(async (url: string) => (url === '/control/session' ? answer(200, managed) : answer(403, { error: 'local_admin_only' })));
+    vi.stubGlobal('fetch', fetch);
+    await expect(api('PUT', '/control/config', {})).rejects.toThrow(REFUSED_TEXT);
+    await vi.waitFor(() => expect(get(rights)).toEqual({ localAdmin: false, config: false, restart: false, localSettings: [] }));
+    expect(fetch.mock.calls.map((c) => c[0])).toEqual(['/control/config', '/control/session']);
+  });
+  it('refreshRights keeps the last rights when the session can\'t be read or is gone', async () => {
+    rights.set({ localAdmin: false, config: true, restart: false, localSettings: [] });
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline'); }));
+    await refreshRights();
+    expect(get(rights).config).toBe(true);
+    vi.stubGlobal('fetch', vi.fn(async () => answer(200, managed)));
+    await refreshRights();
+    expect(get(rights).config).toBe(false);
   });
 });

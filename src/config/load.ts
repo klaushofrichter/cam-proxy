@@ -474,10 +474,13 @@ export function removeOverride(loaded: Loaded, path: string): Loaded {
 // Every override removed at once (the Settings page's "Reset to defaults"):
 // back to config.json and the built-in defaults; the environment still wins.
 // Cameras added here stay, whole: the reset is of settings, not of the camera list.
-export function removeAllOverrides(loaded: Loaded): Loaded {
+// `keep`: overrides that stay too (a cams-admin sign-in's reset keeps the
+// settings only the local admin changes, issue #227).
+export function removeAllOverrides(loaded: Loaded, keep?: (path: string) => boolean): Loaded {
   const baseDir = loaded.files.config ? dirname(loaded.files.config) : process.cwd();
   const cams = (loaded.overrides as Obj).cameras as Obj | undefined;
   const kept: Obj = loaded.addedCameras.length ? { cameras: Object.fromEntries(loaded.addedCameras.map((id) => [id, structuredClone(cams![id])])) } : {};
+  if (keep) for (const p of setPaths(loaded.overrides as Obj)) if (keep(p)) setPath(kept, p, structuredClone(getPath(loaded.overrides, p)));
   const next = build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, kept, baseDir, loaded.envLayer, normOf(loaded));
   writeOverrides(loaded.files.overrides, kept);
   return next;

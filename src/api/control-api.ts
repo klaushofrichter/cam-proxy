@@ -21,7 +21,7 @@ import { maskKey } from '../analytics/providers';
 import type { Storage } from '../storage';
 import type { StreamLog } from '../stream/log';
 import { AuditQueryError, type AuditLog, type Outcome } from '../audit/audit-log';
-import { actorOf, allowedByOf, clientIp, tokenMatches, UI_CONFIG_LOCAL, type AccessInfo } from './auth';
+import { actorOf, allowedByOf, clientIp, isLocalSetting, tokenMatches, UI_CONFIG_LOCAL, type AccessInfo } from './auth';
 import { cameraParam, RESTART_RETRY_S } from './camera-param';
 import type { CameraRegistry } from '../cameras/registry';
 import { RefusalThrottle } from '../audit/throttle';
@@ -440,7 +440,8 @@ export function controlApi(d: ControlDeps): express.Router {
   r.delete('/config', (req, res) => {
     const before = d.loaded();
     try {
-      d.setLoaded(removeAllOverrides(d.loaded()));
+      // A cams-admin sign-in (ui.config) keeps the overrides only the local admin changes.
+      d.setLoaded(removeAllOverrides(d.loaded(), res.locals.allowedBy === 'ui.config' ? isLocalSetting : undefined));
     } catch (err) {
       return invalid(res, err);
     }

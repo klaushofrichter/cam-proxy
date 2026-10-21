@@ -52,3 +52,9 @@ export const SOME_SETTINGS_TEXT = 'Addresses, ports, files, trust and users need
 export function settingsNote(r: Rights): string | null {
   return lockedWhy(r, 'config') ?? (!r.localAdmin && r.localSettings.length ? SOME_SETTINGS_TEXT : null);
 }
+
+// Reset to defaults by a cams-admin sign-in keeps the overrides it may not
+// change (the proxy keeps them too): which of `overrides` stay.
+export function resetKeeps(r: Rights, overrides: string[]): string[] {
+  return r.localAdmin ? [] : overrides.filter((p) => settingLockedWhy(r, p) !== null);
+}

@@ -32,6 +32,9 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
   }
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
+  // Refused as local-admin-only: the rights may have changed (a pause, an
+  // unticked ui.* entry); the controls follow them (issue #227).
+  if (res.status === 403 && (data as { error?: unknown } | null)?.error === 'local_admin_only') void refreshRights();
   if (!res.ok) throw new ApiError(res.status, data);
   return data as T;
 }
@@ -61,6 +64,17 @@ export async function checkSession(): Promise<void> {
   const r = (await fetch('/control/session', { credentials: 'same-origin' }).then((x) => x.json()).catch(() => ({ loggedIn: false }))) as { loggedIn?: unknown };
   rights.set(rightsOf(r));
   loggedIn.set(!!r.loggedIn);
+}
+
+// The session's rights read again (after a refusal, with every status
+// refresh); a failed read or a signed-out answer keeps the last ones.
+export async function refreshRights(): Promise<void> {
+  try {
+    const r = (await (await fetch('/control/session', { credentials: 'same-origin' })).json()) as { loggedIn?: unknown };
+    if (r.loggedIn) rights.set(rightsOf(r));
+  } catch {
+    // keep the last rights
+  }
 }
 
 export async function login(token: string): Promise<boolean> {

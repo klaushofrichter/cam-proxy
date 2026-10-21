@@ -56,7 +56,8 @@ export interface AccessDeps {
   // The ui.* allow entries in effect (issue #227; src/fleet/policy.ts uiUnlocked); absent = none.
   managedUnlocked?: () => readonly string[];
   // Every 401/403 answered here, with why (the audit log records them).
-  onRefused?: (req: Request, info: { status: 401 | 403; reason: string; tokenKind: TokenKind }) => void;
+  // `user`: for managed rights, who (actorOf: token:<label>), never a token.
+  onRefused?: (req: Request, info: { status: 401 | 403; reason: string; tokenKind: TokenKind; user?: string }) => void;
 }
 
 // The client's address, without the IPv4-mapped prefix (::ffff:10.0.0.1).
@@ -127,9 +128,10 @@ const managedMay = (method: string, path: string) => !WRITE.has(method) || MANAG
 // Issue #227 (Klaus, 2026-10-21): what the proxy's own allow-list may unlock
 // for an admin UI session from a cams-admin sign-in link (never for a managed
 // token itself), off by default; only the local admin adds an entry
-// (CommandPolicy.setAllow). ui.config: the Settings page's writes; a reset
-// only goes back to config.json, so only a PUT is checked against
-// UI_CONFIG_LOCAL. ui.restart: the proxy restart and the camera-side restart.
+// (CommandPolicy.setAllow). ui.config: the Settings page's writes, never a
+// setting on UI_CONFIG_LOCAL (a set, a reset or a whole camera; Reset to
+// defaults keeps those overrides, src/api/control-api.ts). ui.restart: the
+// proxy restart and the camera-side restart.
 export const UI_UNLOCKS: readonly (readonly [string, string, RegExp])[] = [
   ['ui.config', 'PUT', /^\/control\/config$/],
   ['ui.config', 'DELETE', /^\/control\/config(\/[^/]+)?$/],
@@ -156,18 +158,39 @@ function localPattern(p: string): string {
   if (p.startsWith('camera.')) return `cameras.*.${p.slice('camera.'.length)}`;
   return p.replace(/^cameras\.[^.]+(?=\.)/, 'cameras.*');
 }
+// A setting (or a whole camera, or `cameras`) ui.config never changes.
+export function isLocalSetting(p: string): boolean {
+  if (/^cameras(\.[^.]+)?$/.test(p)) return true;
+  const q = localPattern(p);
+  return UI_CONFIG_LOCAL.some((x) => q === x || q.startsWith(`${x}.`));
+}
 export function touchesLocal(body: unknown): boolean {
-  return patchPaths(body).some((p) => /^cameras(\.[^.]+)?$/.test(p) || UI_CONFIG_LOCAL.some((x) => { const q = localPattern(p); return q === x || q.startsWith(`${x}.`); }));
+  return patchPaths(body).some(isLocalSetting);
 }
 
-// The ui.* entry that lets this managed request through, or null.
-function uiUnlock(req: Request, a: AccessInfo, unlocked: (() => readonly string[]) | undefined): string | null {
-  if (!a.viaCookie || !unlocked) return null;
+const CONFIG_PATH = '/control/config/';
+// The ui.* entry that lets this managed request through, or why not:
+// 'local-admin-only' (no entry for it), 'local-setting' (ui.config, but a
+// setting it never changes; an undecodable path counts as one).
+function uiUnlock(req: Request, a: AccessInfo, unlocked: (() => readonly string[]) | undefined): { entry: string } | { refuse: 'local-admin-only' | 'local-setting' } {
+  const no = { refuse: 'local-admin-only' } as const;
+  if (!a.viaCookie || !unlocked) return no;
   const path = withoutQuery(req.originalUrl);
   const hit = UI_UNLOCKS.find(([, m, re]) => m === req.method && re.test(path));
-  if (!hit || !unlocked().includes(hit[0])) return null;
-  if (hit[0] === 'ui.config' && req.method === 'PUT' && touchesLocal(req.body)) return null;
-  return hit[0];
+  if (!hit || !unlocked().includes(hit[0])) return no;
+  if (hit[0] === 'ui.config') {
+    if (req.method === 'PUT' && touchesLocal(req.body)) return { refuse: 'local-setting' };
+    if (req.method === 'DELETE' && path.startsWith(CONFIG_PATH)) {
+      let p: string;
+      try {
+        p = decodeURIComponent(path.slice(CONFIG_PATH.length));
+      } catch {
+        return { refuse: 'local-setting' };
+      }
+      if (isLocalSetting(p)) return { refuse: 'local-setting' };
+    }
+  }
+  return { entry: hit[0] };
 }
 
 // `need`: 'client' lets clients and admins in; 'admin' only admins;
@@ -180,7 +203,7 @@ export function requireAccess(need: AccessNeed, d: AccessDeps): RequestHandler {
     const a = accessOf(req, d);
     res.locals.access = a;
     const refuse = (status: 401 | 403, reason: string, error: string) => {
-      d.onRefused?.(req, { status, reason, tokenKind: a.tokenKind });
+      d.onRefused?.(req, { status, reason, tokenKind: a.tokenKind, ...(a.origin === 'managed' ? { user: actorOf(a) } : {}) });
       res.status(status).json({ error });
     };
     if (!a.access || (need === 'client' && a.access === 'audit')) {
@@ -189,10 +212,10 @@ export function requireAccess(need: AccessNeed, d: AccessDeps): RequestHandler {
     }
     if (!can(a, need)) return refuse(403, 'admin-only', 'admin_only');
     if (need === 'admin' && a.origin === 'managed' && !managedMay(req.method, withoutQuery(req.originalUrl))) {
-      const entry = uiUnlock(req, a, d.managedUnlocked);
-      if (!entry) return refuse(403, 'local-admin-only', 'local_admin_only');
-      // The audit records of the route name the entry (allowedBy).
-      res.locals.allowedBy = entry;
+      const u = uiUnlock(req, a, d.managedUnlocked);
+      if ('refuse' in u) return refuse(403, u.refuse, 'local_admin_only');
+      // The audit records of the route (and Reset to defaults) know the entry (allowedBy).
+      res.locals.allowedBy = u.entry;
     }
     // HEAD too: Express answers it with the GET route, without the body.
     if (need === 'audit-read' && req.method !== 'GET' && req.method !== 'HEAD') return refuse(403, 'admin-only', 'admin_only');

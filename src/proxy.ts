@@ -700,7 +700,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       const c = refusalsPerIp.take(ip);
       if (!c.record) return;
       t.suppressed += c.suppressed;
-      audit.write({ action: 'auth-refused', category: ['authentication'], type: ['denied'], outcome: 'failure', ip, userAgent: req.get('user-agent'), message: `Refused ${req.method} ${path} (${info.reason})`, ecs: { http: { request: { method: req.method } }, url: { path } }, details: { auth: { tokenKind: info.tokenKind, reason: info.reason, ...(t.suppressed ? { suppressed: t.suppressed } : {}) } } });
+      audit.write({ action: 'auth-refused', category: ['authentication'], type: ['denied'], outcome: 'failure', ...(info.user ? { user: info.user } : {}), ip, userAgent: req.get('user-agent'), message: `Refused ${req.method} ${path} (${info.reason})`, ecs: { http: { request: { method: req.method } }, url: { path } }, details: { auth: { tokenKind: info.tokenKind, reason: info.reason, ...(t.suppressed ? { suppressed: t.suppressed } : {}) } } });
     },
   };
   // One camera's FTP status: the server's figures for this camera's user;

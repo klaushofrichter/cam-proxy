@@ -222,7 +222,7 @@ them, like any entry (the cams-admin page's group **cams-admin sign-in**, or
 
 | entry | lets a cams-admin sign-in |
 |---|---|
-| `ui.config` | change settings on the Settings page (`PUT /control/config`) and reset them to config.json's value or the default (`DELETE /control/config`, `DELETE /control/config/{path}`). Never the settings cams-admin can never set: addresses, ports, files, trust, users and cams-admin itself (`server`, `go2rtc`, `tls`, `poeSwitch`, `camsAdmin`, the FTP ports, files and public host, `ntp.server`, a camera's address, user, ports and certificate name, and adding a camera); a changed address would send a camera's or the switch's password elsewhere |
+| `ui.config` | change settings on the Settings page (`PUT /control/config`) and reset them to config.json's value or the default (`DELETE /control/config/{path}`, Reset to defaults `DELETE /control/config`). Never, neither set nor reset, the settings cams-admin can never set: addresses, ports, files, trust, users and cams-admin itself (`server`, `go2rtc`, `tls`, `poeSwitch`, `camsAdmin`, the FTP ports, files and public host, `ntp.server`, a camera's address, user, ports and certificate name); a changed address would send a camera's or the switch's password elsewhere, a reset `camsAdmin.url` would undo the enrollment. Never adding or removing a camera. Reset to defaults keeps the overrides of those settings (the dialog names them); the local admin's Reset to defaults still removes them. Such a refusal is recorded as `auth-refused` with reason `local-setting` |
 | `ui.restart` | restart the proxy (`restart-proxy`) and its camera side (`restart`, also one camera's): **disruptive** |
 
 They are no commands: cams-admin never sends them, the heartbeat never

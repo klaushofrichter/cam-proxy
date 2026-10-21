@@ -1,5 +1,5 @@
 import { writable } from 'svelte/store';
-import { api } from './api';
+import { api, refreshRights } from './api';
 import type { UiProviderState } from './analytics';
 import type { CameraReboot, PoeSwitchStatus } from './maintenance';
 import type { RecordingsStatus } from './recordings';
@@ -55,7 +55,8 @@ export function refresh(): Promise<void> {
 
 async function load(): Promise<void> {
   try {
-    const [s, st] = await Promise.all([api<Status>('GET', '/control/status'), api<Stats>('GET', '/control/stats')]);
+    // The rights too (issue #227): a pause or an unticked ui.* entry shows without a reload.
+    const [s, st] = await Promise.all([api<Status>('GET', '/control/status'), api<Stats>('GET', '/control/stats'), refreshRights()]);
     status.set(s);
     stats.set(st);
     updatedAt.set(Date.now());

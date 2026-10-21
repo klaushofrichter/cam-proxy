@@ -89,7 +89,8 @@ describe('a managed-admin UI session and the ui.* entries', () => {
       const r = await request(p.base)[method](path).set(ui(m)).send(body);
       expect([r.status, r.body.error], `${method} ${path}`).toEqual([403, 'local_admin_only']);
     }
-    expect(refusals('PUT /control/config')[0]).toMatchObject({ cam_proxy: { auth: { reason: 'local-admin-only', tokenKind: 'session' } } });
+    // The refusal names who: the managed token's label, never a token.
+    expect(refusals('PUT /control/config')[0]).toMatchObject({ user: { name: 'token:cams cluster' }, cam_proxy: { auth: { reason: 'local-admin-only', tokenKind: 'session' } } });
     expect(exit).not.toHaveBeenCalled();
   });
 
@@ -139,6 +140,27 @@ describe('a managed-admin UI session and the ui.* entries', () => {
     expect((await request(p.base).put('/control/config').set(auth(ADMIN_TOKEN)).send({ go2rtc: { rtspPort: p.proxy.running.go2rtc.rtspPort } })).status).toBe(200);
   });
 
+  it('ui.config resets never reach those settings either: a single reset, a whole camera, Reset to defaults', async () => {
+    const m = await session(MANAGED_ADMIN);
+    // The local admin's own overrides on protected settings, and a camera it added.
+    await request(p.base).put('/control/config').set(auth(ADMIN_TOKEN)).send({ ntp: { server: 'ntp.example' }, cameras: { cam6: { host: '127.0.0.1:1', protocol: 'http', user: 'proxy6' } } }).expect(200);
+    for (const path of ['camsAdmin.url', 'cameras.cam1.host', 'cameras.cam1.user', 'ftp.publicHost', 'poeSwitch.host', 'tls.site', 'server.trustProxy', 'ntp.server', 'camsAdmin%2Eurl', 'cameras.cam6', 'cameras', '%E0%A4%A']) {
+      const r = await request(p.base).delete(`/control/config/${path}`).set(ui(m));
+      expect([r.status, r.body.error], path).toEqual([403, 'local_admin_only']);
+    }
+    // A protected setting refused under ui.config: its own reason, and who.
+    expect(refusals('DELETE /control/config/camsAdmin.url')[0]).toMatchObject({ user: { name: 'token:cams cluster' }, cam_proxy: { auth: { reason: 'local-setting', tokenKind: 'session' } } });
+    // Reset to defaults keeps the protected overrides (and the added camera); the rest goes.
+    await request(p.base).put('/control/config').set(ui(m)).send({ sse: { pingS: 13 } }).expect(200);
+    const view = (await request(p.base).delete('/control/config').set(ui(m)).expect(200)).body;
+    expect(view['ntp.server']).toMatchObject({ value: 'ntp.example', source: 'override' });
+    expect(view['sse.pingS'].source).not.toBe('override');
+    expect(p.proxy.cameras.ids()).toContain('cam6');
+    // The local admin's Reset to defaults still takes everything (cameras added here stay).
+    await request(p.base).delete('/control/config/cameras.cam6').set(auth(ADMIN_TOKEN)).expect(200);
+    expect((await request(p.base).delete('/control/config').set(auth(ADMIN_TOKEN)).expect(200)).body['ntp.server'].source).not.toBe('override');
+  });
+
   it('a pause locks ui.config again at once', async () => {
     const m = await session(MANAGED_ADMIN);
     await request(p.base).post('/control/admin/commands/pause').set(auth(ADMIN_TOKEN)).send({}).expect(200);
@@ -151,9 +173,34 @@ describe('a managed-admin UI session and the ui.* entries', () => {
     await allow(['ui.restart']).expect(200);
     const m = await session(MANAGED_ADMIN);
     expect((await request(p.base).put('/control/config').set(ui(m)).send({ sse: { pingS: 15 } })).status).toBe(403);
+    // A pause locks ui.restart too.
+    await request(p.base).post('/control/admin/commands/pause').set(auth(ADMIN_TOKEN)).send({}).expect(200);
+    expect((await request(p.base).post('/control/actions/restart').set(ui(m))).status).toBe(403);
+    expect((await request(p.base).get('/control/session').set('Cookie', m)).body.rights.restart).toBe(false);
+    await request(p.base).post('/control/admin/commands/resume').set(auth(ADMIN_TOKEN)).expect(200);
     expect((await request(p.base).post('/control/actions/restart').set(ui(m))).status).toBe(202);
     expect((await request(p.base).post('/control/actions/restart-proxy').set(ui(m))).status).toBe(202);
     expect(p.proxy.audit.list({ actions: ['proxy-restart'] }).records[0]).toMatchObject({ user: { name: 'token:cams cluster' }, cam_proxy: { requestedBy: 'session', allowedBy: 'ui.restart' } });
     await until(() => exit.mock.calls.length > 0);
+  });
+});
+
+describe('CAMPROXY_ADMIN_COMMANDS=off over HTTP', () => {
+  it('locks ui.config although the local admin allowed it', async () => {
+    const sim = await startSim();
+    const dir = mkdtempSync(join(tmpdir(), 'camproxy-uioff-'));
+    writePrivateJson(join(dir, 'data', 'admin', 'tokens.json'), { v: 1, revision: 1, blocked: [], tokens: [{ id: TOKEN_ID, kind: 'admin', hash: hashOf(MANAGED_ADMIN), label: 'cams cluster', retireAt: null }] });
+    const p = await startProxy(sim, { dir, env: { CAMPROXY_ADMIN_COMMANDS: 'off' } });
+    try {
+      await request(p.base).put('/control/admin/commands').set(auth(ADMIN_TOKEN)).send({ allow: ['ui.config'] }).expect(200);
+      const code = (await request(p.base).post('/control/login-links').set(auth(MANAGED_ADMIN)).expect(201)).body.code;
+      const m = String((await request(p.base).get(`/control/login-link?code=${code}`).expect(302)).headers['set-cookie']).split(';')[0];
+      expect((await request(p.base).get('/control/session').set('Cookie', m)).body.rights.config).toBe(false);
+      const r = await request(p.base).put('/control/config').set({ Cookie: m, 'x-camproxy-ui': '1' }).send({ sse: { pingS: 9 } });
+      expect([r.status, r.body.error]).toEqual([403, 'local_admin_only']);
+    } finally {
+      await p.proxy.stop();
+      await sim.close();
+    }
   });
 });

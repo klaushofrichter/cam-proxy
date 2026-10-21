@@ -10,7 +10,7 @@
   import PoeSwitchCard from '../components/PoeSwitchCard.svelte';
   import FindCameraCard from '../components/FindCameraCard.svelte';
   import { envNote, isEnvSet } from '../lib/find-camera';
-  import { lockedWhy, rights, settingLockedWhy, settingsNote } from '../lib/rights';
+  import { lockedWhy, resetKeeps, rights, settingLockedWhy, settingsNote } from '../lib/rights';
   import LockedNote from '../components/LockedNote.svelte';
 
   import ConfirmDialog from '../components/ConfirmDialog.svelte';
@@ -29,6 +29,7 @@
   // the proxy's allow-list unlocks it; Undo is the local admin's.
   const configLocked = $derived(lockedWhy($rights, 'config'));
   const restartLocked = $derived(lockedWhy($rights, 'restart'));
+  // Undo and Remove camera (a whole camera: never through ui.config) are the local admin's.
   const undoLocked = $derived(lockedWhy($rights, 'local'));
 
   // The host's settings by group, then the camera picked in the top bar
@@ -98,11 +99,17 @@
   let asking = $state<string[] | null>(null);
   let counts = $state({ changes: 0, same: 0 });
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  // A cams-admin sign-in's reset keeps the overrides it may not change (the
+  // proxy keeps them too, issue #227): the dialog plans without them and names them.
+  let keeps = $state<string[]>([]);
   function askResetAll() {
-    counts = resetCounts(view);
-    asking = resetPlan(view);
+    keeps = resetKeeps($rights, Object.keys(view).filter((p) => view[p].source === 'override'));
+    const resettable = Object.fromEntries(Object.entries(view).filter(([p]) => !keeps.includes(p)));
+    counts = resetCounts(resettable);
+    asking = resetPlan(resettable);
   }
-  const askMessage = $derived(counts.changes ? `${plural(counts.changes, 'setting', 'settings')} changed here go${counts.changes === 1 ? 'es' : ''} back to the value in config.json or the built-in default:` : 'Nothing changes in effect: every override equals the value in config.json or the built-in default.');
+  const keepText = $derived(keeps.length ? ` These stay as they are (only the local admin token resets them): ${keeps.join(', ')}.` : '');
+  const askMessage = $derived((counts.changes ? `${plural(counts.changes, 'setting', 'settings')} changed here go${counts.changes === 1 ? 'es' : ''} back to the value in config.json or the built-in default:` : 'Nothing changes in effect: every override equals the value in config.json or the built-in default.') + keepText);
   const askLabel = $derived(counts.changes ? `Reset ${plural(counts.changes, 'setting', 'settings')}` : `Remove ${plural(counts.same, 'override', 'overrides')}`);
   async function resetAll() {
     const n = counts.changes;
@@ -177,7 +184,7 @@
   <PoeSwitchCard />
   {#each cards as card (card.key)}
     <div class="card" data-testid="settings-card-{card.key}">
-      <div class="card-head"><h3 class:camera={card.camera}>{card.title}</h3>{#if card.camera && block?.source === 'added'}<button class="danger" onclick={() => (removing = cam)} disabled={!!configLocked} title={configLocked ?? undefined} data-testid="remove-camera">Remove camera</button>{/if}</div>
+      <div class="card-head"><h3 class:camera={card.camera}>{card.title}</h3>{#if card.camera && block?.source === 'added'}<button class="danger" onclick={() => (removing = cam)} disabled={!!undoLocked} title={undoLocked ?? undefined} data-testid="remove-camera">Remove camera</button>{/if}</div>
       <table>
         <tbody>
           {#each card.paths as p (p)}
@@ -208,7 +215,7 @@
               <td><span class="badge {s.source}" class:same={!!same} data-testid="source-{p}" title={same?.title}>{same ? same.text : s.legacy ? 'config.json (legacy camera)' : s.source}</span>{#if s.restart}<span class="badge restart" title={s.restartScope === 'camera' ? "applies after this camera's restart (Maintenance → Restart camera side) or Restart to apply" : 'applies after Restart to apply (every camera side)'}>restart</span>{/if}{#if s.pending}<span class="badge pending">next: {shown(s.next)}</span>{/if}{#if s.by}<span class="badge by" data-testid="by-{p}">{byText(s.by)}</span> <button class="link" onclick={() => (undoing = { path: p, cmdId: s.by!.cmdId, actor: s.by!.actor })} disabled={!!undoLocked} title={undoLocked ?? undefined} data-testid="undo-{p}">Undo</button>{/if}</td>
               <td class="actions">
                 {#if drafts[p] !== undefined}<button onclick={() => void save(p)} disabled={!!locked} data-testid="save-{p}">Save</button>{/if}
-                {#if s.source === 'override' && !same}<button onclick={() => void reset(p)} disabled={!!configLocked} title={configLocked ?? undefined} data-testid="reset-{p}">{resetLabel(p, s.resetTo && { ...s.resetTo, means: undefined })}{#if s.resetTo?.means}{' '}<span class="means">({s.resetTo.means})</span>{/if}</button>{/if}
+                {#if s.source === 'override' && !same}<button onclick={() => void reset(p)} disabled={!!locked} title={locked ?? undefined} data-testid="reset-{p}">{resetLabel(p, s.resetTo && { ...s.resetTo, means: undefined })}{#if s.resetTo?.means}{' '}<span class="means">({s.resetTo.means})</span>{/if}</button>{/if}
               </td>
             </tr>
             {/if}
