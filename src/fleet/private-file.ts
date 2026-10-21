@@ -1,5 +1,5 @@
 import { randomBytes } from 'crypto';
-import { chmodSync, closeSync, constants, fchmodSync, fstatSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeSync } from 'fs';
+import { chmodSync, closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeSync } from 'fs';
 import { dirname, join } from 'path';
 
 // The files in <dataDir>/admin/ (key.json, tokens.json, commands.json,
@@ -132,7 +132,7 @@ export function tightenAdminFiles(dir: string): { file: string; reason: string }
   return refused;
 }
 
-// admin/moves/*.json (the move journal): same tightening as ADMIN_FILES.
+// admin/moves/ (the move journal and its leftovers): same tightening as ADMIN_FILES.
 function sweepMoves(dir: string, refused: { file: string; reason: string }[]): void {
   let names: string[];
   try {
@@ -141,9 +141,15 @@ function sweepMoves(dir: string, refused: { file: string; reason: string }[]): v
     return;
   }
   tightenDir(dir, process.getuid?.());
+  // Every regular file: set-aside <id>.json.bad-<ts> and crash leftovers
+  // .tmp-*.tmp hold the same secrets as the journal files.
   for (const n of names) {
-    if (!n.endsWith('.json')) continue;
     const path = join(dir, n);
+    try {
+      if (!lstatSync(path).isFile()) continue;
+    } catch {
+      continue;
+    }
     let fd: number;
     try {
       fd = openPrivate(path, PrivateFileUnsafe);

@@ -1,6 +1,6 @@
 import { readdirSync, renameSync, rmSync } from 'fs';
 import { join } from 'path';
-import { readPrivateJson, writePrivateJson } from '../fleet/private-file';
+import { PrivateFileInvalid, readPrivateJson, writePrivateJson } from '../fleet/private-file';
 import type { ChunkState, MoveCameraConnection, MoveCopied, MoveKind, MovePhaseName, MovePlan, MoveRole, MoveSummary, Settings } from './types';
 
 // The durable record of one move on this proxy: <dataDir>/admin/moves/<id>.json,
@@ -77,7 +77,10 @@ export class MoveJournal {
       raw = readPrivateJson(path);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      return this.setAside(path, (err as Error).message);
+      // Only a file that is not valid JSON is corrupt; an unsafe owner, EACCES,
+      // EIO, EMFILE ... may pass: the file stays and the error is rethrown.
+      if (err instanceof PrivateFileInvalid) return this.setAside(path, err.message);
+      throw err;
     }
     const r = raw as Partial<MoveRecord> | null;
     if (!r || r.v !== 1 || r.id !== id || (r.role !== 'source' && r.role !== 'target') || typeof r.phase !== 'string' || !r.chunks || typeof r.chunks !== 'object') {

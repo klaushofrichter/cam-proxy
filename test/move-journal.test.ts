@@ -1,8 +1,8 @@
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { describe, expect, it } from 'vitest';
-import { tightenAdminFiles } from '../src/fleet/private-file';
+import { afterEach, describe, expect, it } from 'vitest';
+import { privateFileHooks, tightenAdminFiles } from '../src/fleet/private-file';
 import { MoveJournal, type MoveRecord } from '../src/moves/journal';
 import { hashMoveToken, moveTokenMatches } from '../src/moves/token';
 
@@ -75,5 +75,50 @@ describe('move journal', () => {
     expect(moveTokenMatches('x', stored)).toBe(false);
     expect(moveTokenMatches('secret-token', 'sha256:abc')).toBe(false);
     expect(moveTokenMatches('secret-token', '')).toBe(false);
+  });
+
+  describe('read failures that are not corruption', () => {
+    afterEach(() => {
+      delete privateFileHooks.fstat;
+    });
+
+    it('an unsafe-owner journal is refused, not renamed, and the move is kept', () => {
+      const d = dir();
+      const j = new MoveJournal(d);
+      j.save(rec('m1'));
+      privateFileHooks.fstat = (fd) => ({ mode: 0o600, uid: (process.getuid?.() ?? 0) + 1 + fd * 0 });
+      expect(() => j.load('m1')).toThrow(/another user/);
+      expect(() => j.active()).toThrow();
+      expect(readdirSync(d)).toEqual(['m1.json']);
+      delete privateFileHooks.fstat;
+      expect(j.active().map((r) => r.id)).toEqual(['m1']);
+      expect(j.problems()).toEqual([]);
+    });
+
+    it('a transient EMFILE is not renamed and the move is not lost', () => {
+      const d = dir();
+      const j = new MoveJournal(d);
+      j.save(rec('m1'));
+      privateFileHooks.fstat = () => {
+        throw Object.assign(new Error('too many open files'), { code: 'EMFILE' });
+      };
+      expect(() => j.load('m1')).toThrow(/too many/);
+      expect(readdirSync(d)).toEqual(['m1.json']);
+      delete privateFileHooks.fstat;
+      expect(j.load('m1')?.id).toBe('m1');
+    });
+  });
+
+  it('tightenAdminFiles tightens set-aside and temp files in moves/', () => {
+    const d = dir();
+    mkdirSync(d, { recursive: true });
+    const bad = join(d, 'm1.json.bad-123');
+    const tmp = join(d, '.tmp-abcd.tmp');
+    for (const f of [bad, tmp]) writeFileSync(f, 'x', { mode: 0o644 });
+    chmodSync(bad, 0o644);
+    chmodSync(tmp, 0o644);
+    expect(tightenAdminFiles(join(d, '..'))).toEqual([]);
+    expect(statSync(bad).mode & 0o777).toBe(0o600);
+    expect(statSync(tmp).mode & 0o777).toBe(0o600);
   });
 });
