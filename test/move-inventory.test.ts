@@ -1,6 +1,6 @@
 // Inventory, chunks and manifests of one camera (camera-move plan Task 4, P5/P6/P11, B13).
 import { createHash } from 'crypto';
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { describe, expect, it } from 'vitest';
@@ -45,7 +45,7 @@ function fixture() {
 const sha = (p: string) => createHash('sha256').update(readFileSync(p)).digest('hex');
 
 describe('move inventory', () => {
-  it('summary counts per kind match the fixture', () => {
+  it('summary counts per kind match the fixture', async () => {
     const f = fixture();
     const s = summarize(f.deps, 'cam3');
     expect(Object.keys(s).sort()).toEqual([...MOVE_KINDS].sort());
@@ -69,21 +69,21 @@ describe('move inventory', () => {
     expect(c).toEqual({ id: 'clips:2026-10-01', kind: 'clips', day: '2026-10-01', files: 2, bytes: 12, rows: 1 });
   });
 
-  it('manifest hashes match sha256 of the files, with dataDir-relative posix paths', () => {
+  it('manifest hashes match sha256 of the files, with dataDir-relative posix paths', async () => {
     const f = fixture();
-    const m = chunkManifest(f.deps, 'cam3', 'stills:2026-10-01');
+    const m = await chunkManifest(f.deps, 'cam3', 'stills:2026-10-01');
     expect(m.rows).toBe(0);
     expect(m.files.map((x) => x.path)).toEqual(['previews/cam3/2026/10/01/1200.jpg', 'previews/cam3/2026/10/01/1200.json', 'stills/cam3/2026/10/01/1200.pack']);
     for (const x of m.files) {
       expect(x.sha256).toBe(sha(join(f.dataDir, x.path)));
       expect(x.size).toBe(readFileSync(join(f.dataDir, x.path)).length);
     }
-    const c = chunkManifest(f.deps, 'cam3', 'clips:2026-10-01');
+    const c = await chunkManifest(f.deps, 'cam3', 'clips:2026-10-01');
     expect(c.rows).toBe(1);
     expect(c.files.map((x) => x.path)).toEqual(['clips/cam3/2026/10/01/1200-1.jpg', 'clips/cam3/2026/10/01/1200-1.mp4']);
   });
 
-  it("manifest never lists a path outside the camera's folders", () => {
+  it("manifest never lists a path outside the camera's folders", async () => {
     const f = fixture();
     mkdirSync(join(f.dataDir, 'secret'), { recursive: true });
     writeFileSync(join(f.dataDir, 'secret', 'x.mp4'), 'x');
@@ -95,7 +95,7 @@ describe('move inventory', () => {
     // a symlink inside the camera's folder pointing out
     symlinkSync(join(f.dataDir, 'secret', 'x.mp4'), join(f.dataDir, 'stills', 'cam3', '2026', '10', '01', '1201.pack'));
     for (const id of ['clips:2026-10-01', 'stills:2026-10-01']) {
-      const m = chunkManifest(f.deps, 'cam3', id);
+      const m = await chunkManifest(f.deps, 'cam3', id);
       for (const x of m.files) expect(x.path.startsWith('clips/cam3/') || x.path.startsWith('stills/cam3/') || x.path.startsWith('previews/cam3/'), x.path).toBe(true);
       expect(m.files.some((x) => x.path.includes('..') || x.path.includes('secret') || x.path.includes('cam4'))).toBe(false);
     }
@@ -104,14 +104,14 @@ describe('move inventory', () => {
     expect(rows).toHaveLength(1);
   });
 
-  it('rejects a camera id or chunk id that is not valid', () => {
+  it('rejects a camera id or chunk id that is not valid', async () => {
     const f = fixture();
-    expect(() => chunkManifest(f.deps, '../cam4', 'clips:2026-10-01')).toThrow(/camera id/);
-    expect(() => chunkManifest(f.deps, 'cam3', 'clips:../../x')).toThrow(/chunk id/);
+    await expect(chunkManifest(f.deps, '../cam4', 'clips:2026-10-01')).rejects.toThrow(/camera id/);
+    await expect(chunkManifest(f.deps, 'cam3', 'clips:../../x')).rejects.toThrow(/chunk id/);
     expect(() => chunkRows(f.deps, 'cam3', 'recordings:2026-10-01')).toThrow(/chunk id/);
   });
 
-  it('rows of an events chunk include its analyses after the events, with relative paths and source ids', () => {
+  it('rows of an events chunk include its analyses after the events, with relative paths and source ids', async () => {
     const f = fixture();
     const out = chunkRows(f.deps, 'cam3', 'events:2026-10-02');
     expect(out.map((t) => t.table)).toEqual(['events', 'analyses']);
@@ -124,7 +124,7 @@ describe('move inventory', () => {
     expect(an[0].image).toBe(`analytics/cam3/${ev[0].id}.jpg`);
   });
 
-  it('clip, check and archive rows carry dataDir-relative paths and keep their ids', () => {
+  it('clip, check and archive rows carry dataDir-relative paths and keep their ids', async () => {
     const f = fixture();
     const clip = chunkRows(f.deps, 'cam3', 'clips:2026-10-01');
     expect(clip.map((t) => t.table)).toEqual(['clips']);
@@ -137,14 +137,43 @@ describe('move inventory', () => {
     expect(sc.image).toBe(`still-checks/cam3/check-${sc.id}.jpg`);
     const ar = chunkRows(f.deps, 'cam3', 'archive:2026-10-02');
     expect(ar.map((t) => t.table)).toEqual(['archive']);
-    expect(chunkManifest(f.deps, 'cam3', 'archive:2026-10-02').files.map((x) => x.path)).toEqual([`archive/cam3/${(ar[0].rows[0] as { id: number }).id}/clip.mp4`, `archive/cam3/${(ar[0].rows[0] as { id: number }).id}/meta.json`]);
+    expect((await chunkManifest(f.deps, 'cam3', 'archive:2026-10-02')).files.map((x) => x.path)).toEqual([`archive/cam3/${(ar[0].rows[0] as { id: number }).id}/clip.mp4`, `archive/cam3/${(ar[0].rows[0] as { id: number }).id}/meta.json`]);
     expect(chunkRows(f.deps, 'cam3', 'stills:2026-10-01')).toEqual([]);
     for (const t of [...clip, ...chk]) for (const r of t.rows) expect(JSON.stringify(r)).not.toContain(f.dataDir);
   });
 
-  it('an empty day has an empty manifest', () => {
+  it('an empty day has an empty manifest', async () => {
     const f = fixture();
-    expect(chunkManifest(f.deps, 'cam3', 'checks:2026-10-01').files).toHaveLength(1);
-    expect(chunkManifest(f.deps, 'cam3', 'checks:2026-10-05')).toEqual({ files: [], rows: 0 });
+    expect((await chunkManifest(f.deps, 'cam3', 'checks:2026-10-01')).files).toHaveLength(1);
+    expect(await chunkManifest(f.deps, 'cam3', 'checks:2026-10-05')).toEqual({ files: [], rows: 0 });
+  });
+
+  it('the event loop stays responsive while a large file is hashed', async () => {
+    const f = fixture();
+    writeFileSync(join(f.dataDir, 'previews', 'cam3', '2026', '10', '01', '1200.jpg'), Buffer.alloc(128 << 20, 7));
+    let ticked = false;
+    setImmediate(() => (ticked = true));
+    let tickedBefore = false;
+    const p = chunkManifest(f.deps, 'cam3', 'stills:2026-10-01').then((m) => {
+      tickedBefore = ticked;
+      return m;
+    });
+    await p;
+    expect(tickedBefore).toBe(true);
+  });
+
+  it('a file replaced between listing and hashing gets the size of the bytes hashed', async () => {
+    const f = fixture();
+    const target = join(f.dataDir, 'previews', 'cam3', '2026', '10', '01', '1200.jpg');
+    const m = await chunkManifest(f.deps, 'cam3', 'stills:2026-10-01', {
+      beforeOpen: (abs) => {
+        if (abs !== target) return;
+        writeFileSync(`${target}.tmp`, 'a much longer replacement');
+        renameSync(`${target}.tmp`, target);
+      },
+    });
+    const x = m.files.find((y) => y.path.endsWith('1200.jpg'))!;
+    expect(x.size).toBe(25);
+    expect(x.sha256).toBe(sha(target));
   });
 });

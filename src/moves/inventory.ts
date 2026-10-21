@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
-import { closeSync, existsSync, lstatSync, openSync, readdirSync, readSync } from 'fs';
+import { constants, existsSync, lstatSync, readdirSync } from 'fs';
+import { open } from 'fs/promises';
 import { join, relative, resolve, sep } from 'path';
 import { CAM_ID } from '../archive/paths';
 import type { Catalog } from '../catalog/db';
@@ -195,42 +196,48 @@ export function listChunks(d: InventoryDeps, cam: string, kinds: MoveKind[]): Ch
   return out.sort((a, b) => (a.day === b.day ? ORDER.indexOf(a.kind) - ORDER.indexOf(b.kind) : a.day < b.day ? 1 : -1));
 }
 
-function sha256(path: string): string {
-  const h = createHash('sha256');
-  const buf = Buffer.alloc(1 << 20);
-  const fd = openSync(path, 'r');
+// Opens the file (a link is refused), checks it is a regular file and streams
+// it through the hash. The size is the number of bytes hashed, so the two
+// always describe the same bytes even if the file is replaced meanwhile.
+async function hashFile(path: string): Promise<{ size: number; sha256: string }> {
+  const fh = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
-    for (;;) {
-      const n = readSync(fd, buf, 0, buf.length, null);
-      if (n === 0) break;
-      h.update(buf.subarray(0, n));
+    if (!(await fh.stat()).isFile()) throw new Error('not a regular file');
+    const h = createHash('sha256');
+    let size = 0;
+    for await (const chunk of fh.createReadStream({ autoClose: false })) {
+      h.update(chunk as Buffer);
+      size += (chunk as Buffer).length;
     }
+    return { size, sha256: h.digest('hex') };
   } finally {
-    closeSync(fd);
+    await fh.close();
   }
-  return h.digest('hex');
 }
 
-// Hashes the chunk's files now. A file that vanishes meanwhile is left out.
-export function chunkManifest(d: InventoryDeps, cam: string, chunkId: string): { files: ManifestFile[]; rows: number } {
+// Hashes the chunk's files now, without blocking the event loop. A file that
+// vanishes (or stops being a regular file) meanwhile is left out. `hooks` is
+// for tests.
+export async function chunkManifest(d: InventoryDeps, cam: string, chunkId: string, hooks: { beforeOpen?: (abs: string) => void } = {}): Promise<{ files: ManifestFile[]; rows: number }> {
   const c = new Cam(d, cam);
   const { kind, from, to } = parseChunkId(chunkId);
-  const files = new Map<string, number>();
+  const files = new Set<string>();
   let rows = 0;
   for (const it of items(c, kind, { from, to })) {
-    for (const f of existing(c, it.files)) files.set(f.abs, f.size);
+    for (const f of existing(c, it.files)) files.add(f.abs);
     rows += it.rows.length;
   }
   const out: ManifestFile[] = [];
-  for (const [abs, size] of files) {
+  for (const abs of files) {
     if (!c.valid(abs)) continue;
     try {
-      out.push({ path: c.rel(abs), size, sha256: sha256(abs) });
+      hooks.beforeOpen?.(abs);
+      out.push({ path: c.rel(abs), ...(await hashFile(abs)) });
     } catch {
       // removed by retention between listing and hashing
     }
   }
-  return { files: out.sort((a, b) => (a.path < b.path ? -1 : 1)), rows };
+  return { files: out.sort((x, y) => (x.path < y.path ? -1 : 1)), rows };
 }
 
 // Rows in insert order (an event's analyses follow the events), paths made relative.
