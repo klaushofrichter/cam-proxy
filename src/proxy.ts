@@ -69,6 +69,9 @@ import { OverridesBackups } from './fleet/backups';
 import { configHandlers, type ConfigCommandDeps } from './fleet/config-commands';
 import { cameraHandlers } from './fleet/camera-commands';
 import { moveHandlers } from './moves/commands';
+import { MoveJournal } from './moves/journal';
+import { movesSourceApi } from './api/moves-api';
+import { availableParallelism, loadavg } from 'os';
 import { CommandRunner, type Handler } from './fleet/commands';
 import { ReplayGuard } from './fleet/replay';
 import { privateFileHooks, tightenAdminFiles } from './fleet/private-file';
@@ -903,6 +906,16 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // The health summary for the display on the Pi: loopback callers only, no
   // key; anyone else goes on to the access check as for an unknown route.
   app.use('/api', localApi({ health: healthNow }));
+  // The source's move endpoints (camera-move plan Task 5): ahead of the client
+  // auth; the per-move token bound to the target's address is their only guard.
+  const moveJournal = new MoveJournal(join(loaded.config.server.dataDir, 'admin', 'moves'), (m) => logger.warn({ problem: m }, 'move_journal_problem'));
+  app.use('/api', movesSourceApi({
+    journal: moveJournal,
+    audit,
+    inventory: { catalog, dataDir: running.server.dataDir },
+    busy: () => storage.paused() || loadavg()[0] > availableParallelism(),
+    password: (cam) => cameraPassword(loaded.secrets, cam),
+  }));
   app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit, managedAdminLive: access.managedAdminLive, managedUnlocked: access.managedUnlocked }));
   // Before clientApi: its /cameras/:cam/stills/:file would take latest.jpg.
   app.use('/api', requireAccess('client', access), latestApi({ cameras: cams }));

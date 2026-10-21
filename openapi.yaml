@@ -9,6 +9,7 @@ info:
 components:
   securitySchemes:
     bearer: { type: http, scheme: bearer }
+    moveToken: { type: http, scheme: bearer, description: 'the per-move token (camera moves): only /api/moves/{id}/...' }
 security:
   - bearer: []
 paths:
@@ -45,6 +46,101 @@ paths:
         '200': { description: '{ schema: 1, generatedAt, version, startedAt, ok, problemCount, thresholds: {diskPercent, tempC, ftpStalledHours}, platform: {pi, model, hostStats}, items: [{id (camera, stream, events, ftp, sd, storage, disk, cpuTemp, underVoltage, inventory, version), label, value, text, problem, warning (true only: needs a look, no problem; not in problemCount)}], camera: {id, name (the camera-reported name since the camera-name change; the configured camera.name until the camera was read), address, online, since, model, firmware, clockOffsetMs, error, reboot, poeSwitch: {model, port} or null, sd: {mounted, formatted, capacityMB, freeMB, overwrite, recordingEnabled, checkedAt, lastRecordingAt, stalled} or null (the SD card, #199; null before the first read)}, stream: {enabled, up, lastFrameAt}, events: {onvif, source, since, resubscribes}, ftp: {enabled, listening, cameraUpload, checkedAt, lastClipAt, clipsStored, failures, stalled, eventsWithoutClip}, proxy: {sseClients, storagePaused, lastRetentionRun, recordingsCache: {bytes, files, capBytes}, lastInventory: {kind, op, outcome, startedAt, message} or null}, disk: {sizeBytes, freeBytes, usedBytes, usedPercent} or null, host: {cpuTempC, underVoltage, memory: {totalBytes, availableBytes, usedPercent}, uptimeS, load: {m1, m5, m15}} or null }' }
         '401': { description: not a loopback caller and no token (as an unknown route) }
         '404': { description: not a loopback caller, with a token (as an unknown route) }
+  /api/moves/{id}/probe:
+    get:
+      summary: N random bytes for the target's rate probe (camera move, source side)
+      description: >
+        The source's move endpoints (camera-move spec S §8.1) sit ahead of the client
+        auth: only `Authorization: Bearer <move token>` opens them, from the target's
+        address as cams-admin gave it, while the move has not ended. No other token
+        does (the admin token neither). Cache-Control: no-store on every answer.
+      security: [{ moveToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' } }
+        - { name: bytes, in: query, required: true, schema: { type: integer, minimum: 1, maximum: 67108864 } }
+      responses:
+        '200': { description: application/octet-stream, exactly `bytes` random bytes }
+        '400': { description: "{ error: invalid, detail: bytes }" }
+        '403': { description: "{ error: move_token } (no or wrong move token, not from the target's address, the move ended or is unknown; audited as move-token-refused, at most once per move per 10 minutes)" }
+        '503': { description: "{ error: busy } (the move journal can't be read)" }
+  /api/moves/{id}/manifest:
+    get:
+      summary: "The move's chunks: { chunks: [{ id, kind, day, files, bytes, rows }] }, newest day first"
+      description: >
+        Frozen at move.go. Once the move is released, the chunks from the approval day
+        on are listed once more (what the source captured during the overlap); their
+        cached file manifests are dropped.
+      security: [{ moveToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' } }
+      responses:
+        '200': { description: "{ chunks: ChunkMeta[] }" }
+        '409': { description: "{ error: not_ready } (not frozen yet)" }
+        '403': { description: "{ error: move_token } (as for /probe)" }
+  /api/moves/{id}/chunks/{chunkId}:
+    get:
+      summary: "A chunk's file manifest: { files: [{ path, size, sha256 }], rows, expired }"
+      description: >
+        Hashed on the first request and cached in the move journal (plan P5). `expired`
+        counts files retention removed between listing and hashing; any other read
+        error is a 500 and nothing is cached.
+      security: [{ moveToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' } }
+        - { name: chunkId, in: path, required: true, schema: { type: string, pattern: '^(stills|clips|events|checks|archive):[0-9]{4}-[0-9]{2}-[0-9]{2}$' } }
+      responses:
+        '200': { description: the manifest (paths relative to the data folder) }
+        '400': { description: "{ error: invalid, detail: chunkId }" }
+        '404': { description: "{ error: unknown_chunk } (not in the manifest)" }
+        '409': { description: "{ error: not_ready } (no manifest yet)" }
+        '500': { description: "{ error: internal } (a file could not be read; ask again)" }
+        '403': { description: "{ error: move_token } (as for /probe)" }
+        '503': { description: "{ error: busy } (storage paused or the load above the core count: the target halves its rate; or the move journal can't be read)" }
+  /api/moves/{id}/chunks/{chunkId}/rows:
+    get:
+      summary: "A chunk's catalog rows: [{ table, rows }] (events before analyses; paths relative to the data folder; source ids kept)"
+      security: [{ moveToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' } }
+        - { name: chunkId, in: path, required: true, schema: { type: string, pattern: '^(stills|clips|events|checks|archive):[0-9]{4}-[0-9]{2}-[0-9]{2}$' } }
+      responses:
+        '200': { description: "TableRows[]" }
+        '400': { description: "{ error: invalid, detail: chunkId }" }
+        '404': { description: "{ error: unknown_chunk }" }
+        '409': { description: "{ error: not_ready }" }
+        '403': { description: "{ error: move_token } (as for /probe)" }
+        '503': { description: "{ error: busy } (storage paused or the load above the core count: the target halves its rate; or the move journal can't be read)" }
+  /api/moves/{id}/file:
+    get:
+      summary: A file of the moving camera (application/octet-stream), with Range requests
+      description: >
+        Only a path listed in a chunk manifest the target already asked for, inside the
+        camera's content folders (<folder>/<camera>/...), no links on the way.
+      security: [{ moveToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' } }
+        - { name: path, in: query, required: true, schema: { type: string, maxLength: 1024 } }
+      responses:
+        '200': { description: the file }
+        '206': { description: a range }
+        '400': { description: "{ error: invalid, detail: path } (not a path inside the camera's content folders)" }
+        '404': { description: "{ error: expired } (removed by retention: skip it), or { error: not_listed }" }
+        '416': { description: the range is past the end }
+        '403': { description: "{ error: move_token } (as for /probe)" }
+        '503': { description: "{ error: busy } (storage paused or the load above the core count: the target halves its rate; or the move journal can't be read)" }
+  /api/moves/{id}/secrets:
+    get:
+      summary: "The camera's proxy-user password sealed to the target's move key: { sealed }"
+      description: >
+        `v1.<ephemeralSpki>.<iv>.<ciphertext+tag>` (X25519, HKDF-SHA256 `cam-proxy move v1`,
+        AES-256-GCM; src/moves/seal.ts). Never in clear, never logged or audited.
+      security: [{ moveToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' } }
+      responses:
+        '200': { description: "{ sealed: string }" }
+        '409': { description: "{ error: not_ready } (move.go has not stored the target's key yet)" }
+        '403': { description: "{ error: move_token } (as for /probe)" }
   /api/cameras:
     get:
       summary: The camera and its state

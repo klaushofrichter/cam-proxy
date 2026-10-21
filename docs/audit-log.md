@@ -41,6 +41,7 @@ storage and activity snapshot. Design: [the spec](superpowers/specs/2026-10-01-a
 | `admin-policy` | configuration / change | the allowed commands or the pause changed on the cams-admin page or with `admin-commands` | user `admin` (or `token:<label>` for a cams-admin-managed admin token, which can only narrow), `from`, `to` (`{allow, paused, pauseReason}`), `requestedBy`. A refused widening (403 `local_admin_only`) writes nothing |
 | `admin-token` | configuration / change | a managed token blocked or unblocked on the cams-admin page or with `admin-tokens` | user as for `admin-policy`; `op` (`block`, `unblock`), `id`, `label`, `kind`. Never the hash |
 | `audit-throttled` | host / info | a day's file reached 50 MB | none |
+| `move-token-refused` | authentication / denied | a request to the source's move endpoints (`/api/moves/{id}/...`, camera moves) refused with 403 `move_token` | `moveId` (null when not a move id), `reason` (`unknown-move`: no source move with that id here, `ended`: finished, cancelled or failed, `no-token`, `wrong-token`, `wrong-address`: not from the target's address), `path`, `suppressed` (refusals not recorded since the last record); the camera; ECS `source.ip`. At most one record per move per 10 minutes; refusals for move ids this proxy doesn't have share one such limit. Never the token |
 
 Notes on what the code does today:
 

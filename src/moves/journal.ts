@@ -8,7 +8,8 @@ import type { ChunkState, MoveCameraConnection, MoveCopied, MoveKind, MovePhaseN
 // X25519 private key). Never printed, logged or served.
 export interface ChunkMeta { id: string; kind: MoveKind; day: string; files: number; bytes: number; rows: number }
 export interface ChunkFile { size: number; sha256?: string; state: string }
-export interface ChunkRecord { state: ChunkState; files?: Record<string, ChunkFile> }
+// Source: `files` + `rows` + `expired` cache the chunk's manifest (P5) once computed.
+export interface ChunkRecord { state: ChunkState; files?: Record<string, ChunkFile>; rows?: number; expired?: number }
 
 export interface MovePeer {
   proxyId: string;
@@ -30,6 +31,11 @@ export interface MoveRecord {
   // source: the contract's `sha256:<hex>` (hashMoveToken); target: the plaintext token.
   tokenHash?: string;
   token?: string;
+  // source: the target's X25519 public key (SPKI DER, base64) stored by move.go;
+  // the camera password is sealed to it (GET /api/moves/:id/secrets).
+  targetPublicSpki?: string;
+  // source: when the chunks from the approval day on were listed again (at released, P12).
+  manifestRefreshedAt?: number;
   // target only
   x25519?: { privatePkcs8: string; publicSpki: string };
   // target, stored at accept (Task 6), read at switch-over (Task 8)
@@ -48,7 +54,9 @@ export interface MoveRecord {
 }
 
 const TERMINAL: readonly MovePhaseName[] = ['finished', 'cancelled', 'failed'];
+export const moveEnded = (phase: MovePhaseName): boolean => TERMINAL.includes(phase);
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
+export const isMoveId = (id: string): boolean => ID.test(id);
 
 export class MoveJournal {
   private readonly bad: string[] = [];

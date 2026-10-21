@@ -29,6 +29,8 @@ export interface ManifestFile { path: string; size: number; sha256: string }
 export interface TableRows { table: string; rows: object[] }
 
 const FOLDERS: Record<MoveKind, string[]> = { stills: ['stills', 'previews'], clips: ['clips'], events: ['analytics'], checks: ['still-checks'], archive: ['archive'] };
+// Every folder a camera's moved content lies in (<dataDir>/<folder>/<cam>/...).
+export const CONTENT_FOLDERS: readonly string[] = Object.values(FOLDERS).flat();
 // Within a day: small and most-opened first (P11).
 const ORDER: MoveKind[] = ['clips', 'events', 'checks', 'archive', 'stills'];
 const DAY_MS = 86_400_000;
@@ -216,9 +218,10 @@ async function hashFile(path: string): Promise<{ size: number; sha256: string }>
 }
 
 // Hashes the chunk's files now, without blocking the event loop. A file that
-// vanishes (or stops being a regular file) meanwhile is left out. `hooks` is
-// for tests.
-export async function chunkManifest(d: InventoryDeps, cam: string, chunkId: string, hooks: { beforeOpen?: (abs: string) => void } = {}): Promise<{ files: ManifestFile[]; rows: number }> {
+// vanishes meanwhile (ENOENT: retention) is left out and counted `expired`;
+// any other read error (a link, a folder, EACCES, EIO, ...) rejects, so a
+// manifest silently missing a file is never cached (P5). `hooks` is for tests.
+export async function chunkManifest(d: InventoryDeps, cam: string, chunkId: string, hooks: { beforeOpen?: (abs: string) => void } = {}): Promise<{ files: ManifestFile[]; rows: number; expired: number }> {
   const c = new Cam(d, cam);
   const { kind, from, to } = parseChunkId(chunkId);
   const files = new Set<string>();
@@ -228,16 +231,19 @@ export async function chunkManifest(d: InventoryDeps, cam: string, chunkId: stri
     rows += it.rows.length;
   }
   const out: ManifestFile[] = [];
+  let expired = 0;
   for (const abs of files) {
     if (!c.valid(abs)) continue;
     try {
       hooks.beforeOpen?.(abs);
       out.push({ path: c.rel(abs), ...(await hashFile(abs)) });
-    } catch {
+    } catch (err) {
       // removed by retention between listing and hashing
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      expired++;
     }
   }
-  return { files: out.sort((x, y) => (x.path < y.path ? -1 : 1)), rows };
+  return { files: out.sort((x, y) => (x.path < y.path ? -1 : 1)), rows, expired };
 }
 
 // Rows in insert order (an event's analyses follow the events), paths made relative.

@@ -1,6 +1,6 @@
 // Inventory, chunks and manifests of one camera (camera-move plan Task 4, P5/P6/P11, B13).
 import { createHash } from 'crypto';
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { describe, expect, it } from 'vitest';
@@ -145,7 +145,7 @@ describe('move inventory', () => {
   it('an empty day has an empty manifest', async () => {
     const f = fixture();
     expect((await chunkManifest(f.deps, 'cam3', 'checks:2026-10-01')).files).toHaveLength(1);
-    expect(await chunkManifest(f.deps, 'cam3', 'checks:2026-10-05')).toEqual({ files: [], rows: 0 });
+    expect(await chunkManifest(f.deps, 'cam3', 'checks:2026-10-05')).toEqual({ files: [], rows: 0, expired: 0 });
   });
 
   it('the event loop stays responsive while a large file is hashed', async () => {
@@ -175,5 +175,40 @@ describe('move inventory', () => {
     const x = m.files.find((y) => y.path.endsWith('1200.jpg'))!;
     expect(x.size).toBe(25);
     expect(x.sha256).toBe(sha(target));
+  });
+
+  it('a file removed between listing and hashing is dropped and counted expired', async () => {
+    const f = fixture();
+    const target = join(f.dataDir, 'previews', 'cam3', '2026', '10', '01', '1200.jpg');
+    const m = await chunkManifest(f.deps, 'cam3', 'stills:2026-10-01', { beforeOpen: (abs) => abs === target && rmSync(target) });
+    expect(m.files.map((x) => x.path)).toEqual(['previews/cam3/2026/10/01/1200.json', 'stills/cam3/2026/10/01/1200.pack']);
+    expect(m.expired).toBe(1);
+  });
+
+  it('any other read error rejects the manifest (it must not be cached without the file)', async () => {
+    const f = fixture();
+    const target = join(f.dataDir, 'previews', 'cam3', '2026', '10', '01', '1200.jpg');
+    const outside = join(f.dataDir, 'outside.jpg');
+    writeFileSync(outside, 'x');
+    // replaced by a link between listing and hashing: ELOOP (O_NOFOLLOW)
+    const p = chunkManifest(f.deps, 'cam3', 'stills:2026-10-01', {
+      beforeOpen: (abs) => {
+        if (abs !== target) return;
+        rmSync(target);
+        symlinkSync(outside, target);
+      },
+    });
+    await expect(p).rejects.toThrow();
+    // replaced by a folder: not a regular file
+    rmSync(target);
+    writeFileSync(target, 'bb');
+    const q = chunkManifest(f.deps, 'cam3', 'stills:2026-10-01', {
+      beforeOpen: (abs) => {
+        if (abs !== target) return;
+        rmSync(target);
+        mkdirSync(target);
+      },
+    });
+    await expect(q).rejects.toThrow();
   });
 });
