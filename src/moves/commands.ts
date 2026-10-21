@@ -1,6 +1,8 @@
 import type { AuditLog } from '../audit/audit-log';
 import type { Handler } from '../fleet/commands';
 import { MOVE_COMMANDS } from '../fleet/policy';
+import type { MoveOfferArgs } from '../fleet/command-args';
+import { evaluate, type EvaluateDeps } from './evaluate';
 import type { MoveEvent } from './types';
 
 // cams-admin's move commands (cam-proxy plan 2026-10-21-camera-move-cam-proxy):
@@ -13,6 +15,8 @@ export interface MoveDeps {
   audit: Pick<AuditLog, 'write'>;
   // Filled in by later tasks: the move journal (Task 2), the catalog and
   // storage (Tasks 3, 9), certificates (Task 7), configuration and secrets (Tasks 6, 7).
+  // Task 6: the target's evaluation of an offer (move.offer).
+  evaluate?: EvaluateDeps;
   journal?: unknown;
   catalog?: unknown;
   storage?: unknown;
@@ -21,7 +25,19 @@ export interface MoveDeps {
   secrets?: unknown;
 }
 
-export function moveHandlers(_deps: MoveDeps): Record<string, Handler> {
+export function moveHandlers(deps: MoveDeps): Record<string, Handler> {
   const stub: Handler = () => ({ status: 'failed', code: 'internal' });
-  return Object.fromEntries(MOVE_COMMANDS.map((c) => [c, stub]));
+  const handlers: Record<string, Handler> = Object.fromEntries(MOVE_COMMANDS.map((c) => [c, stub]));
+  const ev = deps.evaluate;
+  if (ev) {
+    // The answer carries a reason, never a detail; the token stays out of every message.
+    handlers['move.offer'] = async (args) => {
+      try {
+        return { status: 'ok', result: { ...(await evaluate(ev, args as MoveOfferArgs)) } };
+      } catch {
+        return { status: 'failed', code: 'internal' };
+      }
+    };
+  }
+  return handlers;
 }

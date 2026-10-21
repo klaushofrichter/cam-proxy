@@ -1024,7 +1024,18 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     configHandlers(configCommandDeps),
     cameraHandlers({ actions: controlDeps, cameraIds: () => cams.ids(), cameraName: controlDeps.cameraName, audit, restartProcess: () => controlDeps.restartProcess() }),
     // Camera moves (plan 2026-10-21-camera-move-cam-proxy): stubs until each task fills its handler in.
-    moveHandlers({ emit: (e) => camsAdmin.emitEvent(e), audit }),
+    moveHandlers({
+      emit: (e) => camsAdmin.emitEvent(e),
+      audit,
+      evaluate: {
+        receiveAllowed: () => commandPolicy.effective().allow.includes('move.receive'),
+        journal: moveJournal,
+        loaded: () => loaded,
+        ca: () => ca,
+        usage: () => { const u = storage.usage(); return { stills: u.stills.bytes, previews: u.previews.bytes, clips: u.clips.bytes }; },
+        freeBytes: () => storage.diskSpace().free,
+      },
+    }),
   );
   // The admin UI. The files are public; every API call needs a session.
   const webDir = findWebDir();
