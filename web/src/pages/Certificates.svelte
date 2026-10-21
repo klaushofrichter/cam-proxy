@@ -5,6 +5,8 @@
   import { agoText } from '../lib/format';
   import { hostOf } from '../lib/long-value';
   import LongValue from '../components/LongValue.svelte';
+  import { lockedWhy, rights } from '../lib/rights';
+  import LockedNote from '../components/LockedNote.svelte';
 
   // The Certificates page (#203; spec 2026-10-05-multi-camera-host-design
   // §10.4): the site CA with its fingerprint to copy into cams and its
@@ -14,6 +16,7 @@
   let failed = $state(false);
   let message = $state('');
   let busy = $state<string | null>(null);
+  const locked = $derived(lockedWhy($rights, 'local')); // issue #227
   let now = $state(Date.now());
 
   const load = () =>
@@ -90,13 +93,14 @@
     </div>
 
     <h3 class="sub">Cameras</h3>
+    <LockedNote why={locked} testid="cert-locked" />
     <div class="cams">
       {#each view.cameras as c (c.id)}
         {@const name = camera(c.id)?.name ?? c.id}
         <div class="card cam" data-testid="cert-row-{c.id}">
           <div class="camhead">
             <h4 title={c.id}>{name}</h4>
-            <button onclick={() => void push(c.id)} disabled={busy !== null || c.mode === 'none' || c.mode === 'public'} data-testid="cert-push-{c.id}">{busy === c.id ? 'Pushing…' : 'Push now'}</button>
+            <button onclick={() => void push(c.id)} disabled={busy !== null || c.mode === 'none' || c.mode === 'public' || !!locked} title={locked ?? undefined} data-testid="cert-push-{c.id}">{busy === c.id ? 'Pushing…' : 'Push now'}</button>
           </div>
           <dl>
             {#if name !== c.id}<dt>Id</dt><dd class="mono">{c.id}</dd>{/if}

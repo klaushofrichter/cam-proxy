@@ -21,7 +21,9 @@ import { maskKey } from '../analytics/providers';
 import type { Storage } from '../storage';
 import type { StreamLog } from '../stream/log';
 import { AuditQueryError, type AuditLog, type Outcome } from '../audit/audit-log';
-import { actorOf, clientIp, tokenMatches, type AccessInfo } from './auth';
+import { actorOf, allowedByOf, clientIp, tokenMatches, UI_CONFIG_LOCAL, type AccessInfo } from './auth';
+import { uiConfigResetKeep } from './ui-config';
+import { narrowRules } from '../fleet/remote-settable';
 import { cameraParam, RESTART_RETRY_S } from './camera-param';
 import type { CameraRegistry } from '../cameras/registry';
 import { RefusalThrottle } from '../audit/throttle';
@@ -150,7 +152,7 @@ const actor = (req: express.Request) => actorOf(req.res?.locals.access as Access
 export const LOGIN_ATTEMPTS = 40;
 const MANAGED_RENAMES_PER_MIN = 6;
 
-export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnType<typeof createSessionSigner>; links: ReturnType<typeof createLoginLinks>; audit: AuditLog; managedAdminLive?: (tokenId: string) => { label: string } | null }): express.Router {
+export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnType<typeof createSessionSigner>; links: ReturnType<typeof createLoginLinks>; audit: AuditLog; managedAdminLive?: (tokenId: string) => { label: string } | null; managedUnlocked?: () => readonly string[] }): express.Router {
   const r = express.Router();
   const flags = (req: express.Request) => `HttpOnly; SameSite=Strict; Path=/${req.secure ? '; Secure' : ''}`;
   const startSession = (req: express.Request, res: Response, info: SessionInfo) => res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${info.origin === 'local' ? d.sessions.issue('local') : d.sessions.issue('managed', info.tokenId)}; Max-Age=${SESSION_MS / 1000}; ${flags(req)}`);
@@ -219,7 +221,19 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
     startSession(req, res, { origin: 'local' });
     res.status(204).end();
   });
-  r.get('/session', (req, res) => void res.json({ loggedIn: !!sessionOf(req) }));
+  // The session's rights (issue #227), so the admin UI disables what it would
+  // refuse: a session from a cams-admin sign-in link (managed) changes
+  // settings or restarts only when the allow-list unlocks it (ui.config, ui.restart).
+  r.get('/session', (req, res) => {
+    const s = sessionOf(req);
+    if (!s) return void res.json({ loggedIn: false });
+    const local = s.origin === 'local';
+    const unlocked = local ? [] : (d.managedUnlocked?.() ?? []);
+    const config = local || unlocked.includes('ui.config');
+    // `localSettings`: what ui.config never sets (patterns, cameras.* for every camera).
+    // `narrowSettings`: the settings ui.config changes only one way (retention up, spending caps down).
+    res.json({ loggedIn: true, origin: s.origin, rights: { localAdmin: local, config, restart: local || unlocked.includes('ui.restart'), ...(config && !local ? { localSettings: UI_CONFIG_LOCAL, narrowSettings: narrowRules() } : {}) } });
+  });
   r.post('/logout', (req, res) => {
     const valid = sessionOf(req);
     const base = { action: 'logout', category: ['authentication'], type: ['end'], outcome: 'success' as const, ...who(req) };
@@ -413,7 +427,7 @@ export function controlApi(d: ControlDeps): express.Router {
   const recordChanges = (req: express.Request, before: Loaded, all = false) => {
     // `restart`: the change waits for a restart ('restart'), or for a new process ('process').
     const changes = configChanges(before, d.loaded()).map((c) => ({ key: c.path, from: c.from, to: c.to, ...(c.restart ? { restart: c.restart } : {}) }));
-    if (changes.length) d.audit.write({ action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', user: actor(req), ...who(req), message: `${all ? 'Settings reset to defaults' : 'Settings changed'}: ${changes.map((c) => c.key).join(', ')}`, details: { changes, ...(all ? { reset: 'all' } : {}) } });
+    if (changes.length) d.audit.write({ action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', user: actor(req), ...who(req), message: `${all ? 'Settings reset to defaults' : 'Settings changed'}: ${changes.map((c) => c.key).join(', ')}`, details: { changes, ...(all ? { reset: 'all' } : {}), ...allowedByOf(req.res) } });
   };
   r.put('/config', (req, res) => {
     const before = d.loaded();
@@ -429,7 +443,9 @@ export function controlApi(d: ControlDeps): express.Router {
   r.delete('/config', (req, res) => {
     const before = d.loaded();
     try {
-      d.setLoaded(removeAllOverrides(d.loaded()));
+      // A cams-admin sign-in (ui.config) keeps the overrides only the local admin changes.
+      // ...and those whose reset would shorten retention or raise spending (src/api/ui-config.ts).
+      d.setLoaded(removeAllOverrides(d.loaded(), res.locals.allowedBy === 'ui.config' ? uiConfigResetKeep(d.loaded()) : undefined));
     } catch (err) {
       return invalid(res, err);
     }
@@ -484,7 +500,7 @@ export function controlApi(d: ControlDeps): express.Router {
         const done = res.writableFinished;
         const ok = done && res.statusCode < 400;
         const result = !done ? 'aborted' : ok ? 'ok' : String((res.locals.errorCode as string | undefined) ?? res.statusCode);
-        d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: !done ? 'unknown' : ok ? 'success' : 'failure', user: actor(req), ...who(req), message: `Control action ${name}: ${result}`, details: { action: name, result, requestedBy }, ...(target ? { camera: target } : {}) });
+        d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: !done ? 'unknown' : ok ? 'success' : 'failure', user: actor(req), ...who(req), message: `Control action ${name}: ${result}`, details: { action: name, result, requestedBy, ...allowedByOf(res) }, ...(target ? { camera: target } : {}) });
       });
     }
     const fail = (status: number, error: string, detail?: string) => send(res, { status, error, ...(detail ? { detail } : {}) });
@@ -503,7 +519,7 @@ export function controlApi(d: ControlDeps): express.Router {
     // The process restart (#71): answer first, then the normal stop and exit 0. Never in the core.
     if (name === 'restart-proxy') {
       // One record per restart: a second request before the stop is the same restart.
-      if (!restartRequested) d.audit.write({ action: 'proxy-restart', category: ['process'], type: ['change'], outcome: 'success', user: actor(req), ...who(req), message: 'Proxy process restart requested through the control API', details: { requestedBy } });
+      if (!restartRequested) d.audit.write({ action: 'proxy-restart', category: ['process'], type: ['change'], outcome: 'success', user: actor(req), ...who(req), message: 'Proxy process restart requested through the control API', details: { requestedBy, ...allowedByOf(res) } });
       restartRequested = true;
       res.once('close', () => setImmediate(() => d.restartProcess()));
       return void res.status(202).end();

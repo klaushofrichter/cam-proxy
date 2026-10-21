@@ -58,7 +58,7 @@ export interface CommandsView {
   groups?: EntryGroups;
 }
 // The allow entries by kind (migration P3): the disruptive ones apart.
-export interface EntryGroups { tokens: string[]; read: string[]; settings: string[]; camera: string[]; disruptive: string[] }
+export interface EntryGroups { tokens: string[]; read: string[]; settings: string[]; camera: string[]; disruptive: string[]; signin?: string[] }
 export interface ManagedToken { id: string; kind: string; label: string; retireAt: number | null; blocked: boolean; live: boolean; hashPrefix: string }
 export interface TokensView { revision: number; problem: string | null; items: ManagedToken[] }
 
@@ -96,6 +96,8 @@ const GROUP_TITLES: [keyof EntryGroups, string, string?][] = [
   ['settings', 'Change settings'],
   ['camera', 'Camera actions'],
   ['disruptive', 'Disruptive — off by default', 'Each of these lets cams-admin interrupt this proxy or a camera (a restart, a reboot, power off, rewritten camera settings). Allow one only while you need it.'],
+  // #227: no command, what someone signed in from cams-admin may do in this admin UI.
+  ['signin', 'cams-admin sign-in (one-time link)', 'Without these, someone who signs in here from cams-admin can look but not change settings or restart; that needs the local admin token. Each one lets a cams-admin sign-in do it.'],
 ];
 // `unconfirmed`: allowed before this version, when the command did nothing
 // yet; it counts only once the local admin ticks it again (review I3).
@@ -106,7 +108,7 @@ export function entryGroups(v: Pick<CommandsView, 'known' | 'groups' | 'allow' |
   const mark = (e: CommandEntry) => ({ ...e, allowed: v.allow.includes(e.entry), unconfirmed: (v.unconfirmed ?? []).includes(e.entry) && !v.allow.includes(e.entry) });
   if (!v.groups) return [{ key: 'all', title: 'Commands', entries: known.map(mark) }];
   return GROUP_TITLES.flatMap(([key, title, warning]) => {
-    const entries = known.filter((k) => v.groups![key].includes(k.entry)).map(mark);
+    const entries = known.filter((k) => (v.groups![key] ?? []).includes(k.entry)).map(mark);
     return entries.length ? [{ key, title, ...(warning ? { warning } : {}), entries }] : [];
   });
 }

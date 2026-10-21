@@ -10,6 +10,8 @@
   import PoeSwitchCard from '../components/PoeSwitchCard.svelte';
   import FindCameraCard from '../components/FindCameraCard.svelte';
   import { envNote, isEnvSet } from '../lib/find-camera';
+  import { lockedWhy, narrowWhy, resetKeeps, rights, settingLockedWhy, settingsNote } from '../lib/rights';
+  import LockedNote from '../components/LockedNote.svelte';
 
   import ConfirmDialog from '../components/ConfirmDialog.svelte';
   import { byText, undoErrorText } from '../lib/cams-admin';
@@ -21,6 +23,14 @@
   let view = $state<Record<string, Setting>>({});
   let drafts = $state<Record<string, string>>({});
   let message = $state('');
+  // A refused save or reset, at its row (issue #227: never silently).
+  let rowErrors = $state<Record<string, string>>({});
+  // Issue #227: a cams-admin sign-in changes settings and restarts only when
+  // the proxy's allow-list unlocks it; Undo is the local admin's.
+  const configLocked = $derived(lockedWhy($rights, 'config'));
+  const restartLocked = $derived(lockedWhy($rights, 'restart'));
+  // Undo and Remove camera (a whole camera: never through ui.config) are the local admin's.
+  const undoLocked = $derived(lockedWhy($rights, 'local'));
 
   // The host's settings by group, then the camera picked in the top bar
   // (spec 2026-10-05-multi-camera-host-design §6.3).
@@ -44,6 +54,7 @@
   const nest = (path: string, v: unknown) => path.split('.').reduceRight<unknown>((acc, k) => ({ [k]: acc }), v);
 
   async function save(path: string) {
+    delete rowErrors[path];
     try {
       view = await api('PUT', '/control/config', nest(path, parse(path, drafts[path])));
       delete drafts[path];
@@ -53,6 +64,7 @@
       void refresh();
     } catch (e) {
       message = e instanceof ApiError ? e.message : 'not saved';
+      rowErrors[path] = `Not saved: ${message}`;
     }
   }
   // A setting cams-admin set (migration P3): Undo that whole change (every
@@ -70,9 +82,15 @@
     void refresh();
   }
   async function reset(path: string) {
-    view = await api('DELETE', `/control/config/${encodeURIComponent(path)}`);
-    void refresh();
-    message = `${path} is back to its ${view[path].source} value`;
+    delete rowErrors[path];
+    try {
+      view = await api('DELETE', `/control/config/${encodeURIComponent(path)}`);
+      void refresh();
+      message = `${path} is back to its ${view[path].source} value`;
+    } catch (e) {
+      message = e instanceof ApiError ? e.message : 'not reset';
+      rowErrors[path] = `Not reset: ${message}`;
+    }
   }
   // "Reset to defaults": every override at once (one request, one audit
   // record), after a confirmation that lists what changes.
@@ -81,11 +99,17 @@
   let asking = $state<string[] | null>(null);
   let counts = $state({ changes: 0, same: 0 });
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  // A cams-admin sign-in's reset keeps the overrides it may not change (the
+  // proxy keeps them too, issue #227): the dialog plans without them and names them.
+  let keeps = $state<string[]>([]);
   function askResetAll() {
-    counts = resetCounts(view);
-    asking = resetPlan(view);
+    keeps = resetKeeps($rights, Object.keys(view).filter((p) => view[p].source === 'override'), view);
+    const resettable = Object.fromEntries(Object.entries(view).filter(([p]) => !keeps.includes(p)));
+    counts = resetCounts(resettable);
+    asking = resetPlan(resettable);
   }
-  const askMessage = $derived(counts.changes ? `${plural(counts.changes, 'setting', 'settings')} changed here go${counts.changes === 1 ? 'es' : ''} back to the value in config.json or the built-in default:` : 'Nothing changes in effect: every override equals the value in config.json or the built-in default.');
+  const keepText = $derived(keeps.length ? ` These stay as they are (only the local admin token resets them): ${keeps.join(', ')}.` : '');
+  const askMessage = $derived((counts.changes ? `${plural(counts.changes, 'setting', 'settings')} changed here go${counts.changes === 1 ? 'es' : ''} back to the value in config.json or the built-in default:` : 'Nothing changes in effect: every override equals the value in config.json or the built-in default.') + keepText);
   const askLabel = $derived(counts.changes ? `Reset ${plural(counts.changes, 'setting', 'settings')}` : `Remove ${plural(counts.same, 'override', 'overrides')}`);
   async function resetAll() {
     const n = counts.changes;
@@ -148,10 +172,11 @@
   <div class="head">
     <h2>Settings</h2>
     <div class="head-buttons">
-      {#if overrides}<button onclick={askResetAll} data-testid="reset-all">Reset to defaults</button>{/if}
-      {#if Object.values(view).some((s) => s.pending)}<button onclick={() => void restart()} data-testid="restart">Restart to apply</button>{/if}
+      {#if overrides}<button onclick={askResetAll} disabled={!!configLocked} title={configLocked ?? undefined} data-testid="reset-all">Reset to defaults</button>{/if}
+      {#if Object.values(view).some((s) => s.pending)}<button onclick={() => void restart()} disabled={!!restartLocked} title={restartLocked ?? undefined} data-testid="restart">Restart to apply</button>{/if}
     </div>
   </div>
+  <LockedNote why={settingsNote($rights) ?? (Object.values(view).some((s) => s.pending) ? restartLocked : null)} testid="settings-locked" />
   <p class="muted small">From config.json, with changes made here kept as overrides in the data folder. Settings marked "set in .env" come from the environment (CAMERA_HOST, PI_ADDRESS) and win over both; change them in the .env file. Secrets are never shown or set here.</p>
   {#if message}<p class="msg" data-testid="settings-message">{message}</p>{/if}
   <AnalyticsSettings {view} onsaved={(v) => (view = v as Record<string, Setting>)} />
@@ -159,12 +184,16 @@
   <PoeSwitchCard />
   {#each cards as card (card.key)}
     <div class="card" data-testid="settings-card-{card.key}">
-      <div class="card-head"><h3 class:camera={card.camera}>{card.title}</h3>{#if card.camera && block?.source === 'added'}<button class="danger" onclick={() => (removing = cam)} data-testid="remove-camera">Remove camera</button>{/if}</div>
+      <div class="card-head"><h3 class:camera={card.camera}>{card.title}</h3>{#if card.camera && block?.source === 'added'}<button class="danger" onclick={() => (removing = cam)} disabled={!!undoLocked} title={undoLocked ?? undefined} data-testid="remove-camera">Remove camera</button>{/if}</div>
       <table>
         <tbody>
           {#each card.paths as p (p)}
             {@const s = view[p]}
             {@const same = s.source === 'override' ? sameBadge(p, s.resetTo) : null}
+            {@const locked = settingLockedWhy($rights, p)}
+            <!-- A cams-admin sign-in: retention and size caps only up (the proxy refuses the rest). -->
+            {@const dirWhy = drafts[p] !== undefined ? narrowWhy($rights, p, s.value, parse(p, drafts[p])) : null}
+            {@const resetDirWhy = s.source === 'override' && !same ? narrowWhy($rights, p, s.value, s.resetTo?.value) : null}
             {#if /^cameras\.[^.]+\.name$/.test(p)}
             <tr data-testid="setting-camera-name">
               <td><label for="camera-name">Camera name (stored on the camera)</label></td>
@@ -182,13 +211,15 @@
             <tr data-testid="setting-{p}">
               <td class="mono">{p.slice(card.prefix.length + 1)}</td>
               <td>
-                <input value={drafts[p] ?? shown(s.value)} oninput={(e) => (drafts[p] = e.currentTarget.value)} data-testid="input-{p}" disabled={(typeof s.value === 'object' && s.value !== null) || isEnvSet(s)} readonly={isEnvSet(s)} title={isEnvSet(s) ? envNote(s) : undefined} />
+                <input value={drafts[p] ?? shown(s.value)} oninput={(e) => (drafts[p] = e.currentTarget.value)} data-testid="input-{p}" disabled={(typeof s.value === 'object' && s.value !== null) || isEnvSet(s) || !!locked} readonly={isEnvSet(s)} title={isEnvSet(s) ? envNote(s) : (locked ?? undefined)} />
                 {#if isEnvSet(s)}<div class="env-note" data-testid="env-note-{p}">{envNote(s)}</div>{/if}
+                {#if !locked && (dirWhy ?? resetDirWhy)}<div class="env-note" data-testid="dir-note-{p}">{dirWhy ?? resetDirWhy}</div>{/if}
+                {#if rowErrors[p]}<div class="field-error" data-testid="error-{p}">{rowErrors[p]}</div>{/if}
               </td>
-              <td><span class="badge {s.source}" class:same={!!same} data-testid="source-{p}" title={same?.title}>{same ? same.text : s.legacy ? 'config.json (legacy camera)' : s.source}</span>{#if s.restart}<span class="badge restart" title={s.restartScope === 'camera' ? "applies after this camera's restart (Maintenance → Restart camera side) or Restart to apply" : 'applies after Restart to apply (every camera side)'}>restart</span>{/if}{#if s.pending}<span class="badge pending">next: {shown(s.next)}</span>{/if}{#if s.by}<span class="badge by" data-testid="by-{p}">{byText(s.by)}</span> <button class="link" onclick={() => (undoing = { path: p, cmdId: s.by!.cmdId, actor: s.by!.actor })} data-testid="undo-{p}">Undo</button>{/if}</td>
+              <td><span class="badge {s.source}" class:same={!!same} data-testid="source-{p}" title={same?.title}>{same ? same.text : s.legacy ? 'config.json (legacy camera)' : s.source}</span>{#if s.restart}<span class="badge restart" title={s.restartScope === 'camera' ? "applies after this camera's restart (Maintenance → Restart camera side) or Restart to apply" : 'applies after Restart to apply (every camera side)'}>restart</span>{/if}{#if s.pending}<span class="badge pending">next: {shown(s.next)}</span>{/if}{#if s.by}<span class="badge by" data-testid="by-{p}">{byText(s.by)}</span> <button class="link" onclick={() => (undoing = { path: p, cmdId: s.by!.cmdId, actor: s.by!.actor })} disabled={!!undoLocked} title={undoLocked ?? undefined} data-testid="undo-{p}">Undo</button>{/if}</td>
               <td class="actions">
-                {#if drafts[p] !== undefined}<button onclick={() => void save(p)} data-testid="save-{p}">Save</button>{/if}
-                {#if s.source === 'override' && !same}<button onclick={() => void reset(p)} data-testid="reset-{p}">{resetLabel(p, s.resetTo && { ...s.resetTo, means: undefined })}{#if s.resetTo?.means}{' '}<span class="means">({s.resetTo.means})</span>{/if}</button>{/if}
+                {#if drafts[p] !== undefined}<button onclick={() => void save(p)} disabled={!!locked || !!dirWhy} title={locked ?? dirWhy ?? undefined} data-testid="save-{p}">Save</button>{/if}
+                {#if s.source === 'override' && !same}<button onclick={() => void reset(p)} disabled={!!locked || !!resetDirWhy} title={locked ?? resetDirWhy ?? undefined} data-testid="reset-{p}">{resetLabel(p, s.resetTo && { ...s.resetTo, means: undefined })}{#if s.resetTo?.means}{' '}<span class="means">({s.resetTo.means})</span>{/if}</button>{/if}
               </td>
             </tr>
             {/if}

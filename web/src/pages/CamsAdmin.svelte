@@ -6,6 +6,8 @@
   import ConfirmDialog from '../components/ConfirmDialog.svelte';
   import CamsAdminCommands from '../components/CamsAdminCommands.svelte';
   import LongValue from '../components/LongValue.svelte';
+  import { lockedWhy, rights } from '../lib/rights';
+  import LockedNote from '../components/LockedNote.svelte';
 
   // The cams-admin page (#203; spec 2026-10-06-cams-admin-phase1-design
   // §9.2): the connection's state, what this proxy is enrolled as, and Enroll /
@@ -16,6 +18,8 @@
   let url = $state('');
   let code = $state('');
   let busy = $state(false);
+  // Issue #227: enrolling, reconnecting and unenrolling are the local admin's.
+  const locked = $derived(lockedWhy($rights, 'local'));
   let message = $state('');
   let asking = $state(false);
   let now = $state(Date.now());
@@ -34,7 +38,8 @@
     const t = setInterval(() => void load(), 5000);
     return () => clearInterval(t);
   });
-  const errText = (e: unknown, fallback: string) => (e instanceof ApiError && typeof e.body === 'object' && e.body && 'message' in e.body ? String((e.body as { message: unknown }).message) : fallback);
+  const errText = (e: unknown, fallback: string) =>
+    e instanceof ApiError && (e.body as { error?: unknown } | null)?.error === 'local_admin_only' ? `${fallback}: ${e.message}` : e instanceof ApiError && typeof e.body === 'object' && e.body && 'message' in e.body ? String((e.body as { message: unknown }).message) : fallback;
 
   async function enroll(ev: Event) {
     ev.preventDefault();
@@ -97,13 +102,14 @@
       <form onsubmit={enroll} class="enroll">
         <label>cams-admin URL <input type="url" bind:value={url} placeholder="https://cams-admin.example" required data-testid="cams-admin-url-input" /></label>
         <label>Enrollment code <input type="password" bind:value={code} autocomplete="off" placeholder="CAE1-…" required data-testid="cams-admin-code-input" /></label>
-        <button type="submit" disabled={busy || !url || !code} data-testid="cams-admin-enroll">Enroll</button>
+        <button type="submit" disabled={busy || !url || !code || !!locked} data-testid="cams-admin-enroll">Enroll</button>
       </form>
     {/if}
     <div class="actions">
-      {#if active}<button onclick={() => void reconnect()} disabled={busy} data-testid="cams-admin-reconnect">Reconnect</button>{/if}
-      {#if view.proxyId || view.state !== 'off'}<button onclick={() => (asking = true)} disabled={busy} data-testid="cams-admin-unenroll">Unenroll</button>{/if}
+      {#if active}<button onclick={() => void reconnect()} disabled={busy || !!locked} data-testid="cams-admin-reconnect">Reconnect</button>{/if}
+      {#if view.proxyId || view.state !== 'off'}<button onclick={() => (asking = true)} disabled={busy || !!locked} data-testid="cams-admin-unenroll">Unenroll</button>{/if}
     </div>
+    <LockedNote why={locked} testid="cams-admin-locked" />
     {#if message}<p class="msg" data-testid="cams-admin-message">{message}</p>{/if}
     <p class="small">The proxy reports its health summary to cams-admin over one outbound connection; cams-admin can only send the commands allowed below.</p>
   {:else}

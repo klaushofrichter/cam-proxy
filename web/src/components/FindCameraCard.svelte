@@ -4,10 +4,14 @@
   import { api, ApiError } from '../lib/api';
   import { deviceLabel, foundText, mismatchText, handLine, notAvailableText, useAddressMessage, writtenText, type FindResult, type FoundDevice } from '../lib/find-camera';
   import { restartWatch, RESTART_GIVE_UP_MS, type Health } from '../lib/maintenance';
+  import { lockedWhy, rights } from '../lib/rights';
+  import LockedNote from './LockedNote.svelte';
 
   // Find camera (spec 2026-10-04-pi-config-design §3, §4): an ONVIF
   // WS-Discovery probe from the proxy (on the Pi: the LAN), then "Use this
   // address" writes CAMERA_HOST into the .env file and restarts the proxy.
+  // Issue #227: the probe and the .env write are the local admin's.
+  const locked = $derived(lockedWhy($rights, 'local'));
   let result = $state<FindResult | null>(null);
   let searching = $state(false);
   let message = $state('');
@@ -89,7 +93,8 @@
 <div class="card" data-testid="find-camera-card">
   <h3>Find camera</h3>
   <p class="small">Asks the LAN for ONVIF cameras (WS-Discovery, about 3 s; no login). "Use this camera" writes <span class="mono">CAMERA_HOST</span> into the proxy's .env file and restarts the proxy.</p>
-  <div><button onclick={() => void find()} disabled={searching || restarting === 'waiting'} data-testid="find-camera-button">{searching ? 'Searching…' : 'Find camera'}</button></div>
+  <div><button onclick={() => void find()} disabled={searching || restarting === 'waiting' || !!locked} data-testid="find-camera-button">{searching ? 'Searching…' : 'Find camera'}</button></div>
+  <LockedNote why={locked} testid="find-camera-locked" />
   {#if result && result.devices.length}
     <table>
       <tbody>
@@ -98,7 +103,7 @@
             <td class="mono">{d.useAddress}{#if d.mismatch}<div class="warn" data-testid="find-camera-mismatch">{mismatchText(d)}</div>{/if}</td>
             <td>{deviceLabel(d)}</td>
             <td class="actions">
-              {#if d.current}<span class="badge current" data-testid="find-camera-current">Currently used Camera</span>{:else}<button onclick={() => ask(d)} disabled={restarting === 'waiting'} data-testid="find-camera-use">Use this camera</button>{/if}
+              {#if d.current}<span class="badge current" data-testid="find-camera-current">Currently used Camera</span>{:else}<button onclick={() => ask(d)} disabled={restarting === 'waiting' || !!locked} data-testid="find-camera-use">Use this camera</button>{/if}
             </td>
           </tr>
         {/each}

@@ -73,6 +73,13 @@ describe('P3 on the card', () => {
     expect(e).toMatchObject({ allowed: false, unconfirmed: true });
     expect(unconfirmedText).toBe('allowed before this version: tick and Save to confirm');
   });
+  it('#227: the cams-admin sign-in entries last, under their own warning', () => {
+    const g = entryGroups({ known: [...known, { entry: 'ui.config', text: 'x' }, { entry: 'ui.restart', text: 'y' }], groups: { ...groups, signin: ['ui.config', 'ui.restart'] }, allow: [] });
+    const s = g.at(-1)!;
+    expect(s).toMatchObject({ key: 'signin', title: 'cams-admin sign-in (one-time link)' });
+    expect(s.warning).toMatch(/local admin token/);
+    expect(s.entries.map((e) => e.entry)).toEqual(['ui.config', 'ui.restart']);
+  });
   it('an older proxy without groups: one list', () => {
     const g = entryGroups({ known, allow: [] });
     expect(g).toHaveLength(1);

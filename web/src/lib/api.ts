@@ -1,11 +1,21 @@
 import { writable } from 'svelte/store';
+import { ALL_RIGHTS, REFUSED_TEXT, rights, rightsOf } from './rights';
 
 // null while checking, then whether the session cookie is valid.
 export const loggedIn = writable<boolean | null>(null);
 
+// An error answer in words: a local-admin-only refusal (issue #227) says so
+// plainly, else the answer's detail, else the status.
+export function errorText(status: number, body: unknown): string {
+  const b = typeof body === 'object' && body ? (body as { error?: unknown; detail?: unknown }) : null;
+  // A ui.config refusal with its reason (the direction rules) names it.
+  if (b?.error === 'local_admin_only') return typeof b.detail === 'string' && b.detail ? `Refused: ${b.detail}. Nothing was changed.` : REFUSED_TEXT;
+  return b && 'detail' in b ? String(b.detail) : `HTTP ${status}`;
+}
+
 export class ApiError extends Error {
   constructor(readonly status: number, readonly body: unknown) {
-    super(typeof body === 'object' && body && 'detail' in body ? String((body as { detail: unknown }).detail) : `HTTP ${status}`);
+    super(errorText(status, body));
   }
 }
 
@@ -23,6 +33,9 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
   }
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
+  // Refused as local-admin-only: the rights may have changed (a pause, an
+  // unticked ui.* entry); the controls follow them (issue #227).
+  if (res.status === 403 && (data as { error?: unknown } | null)?.error === 'local_admin_only') void refreshRights();
   if (!res.ok) throw new ApiError(res.status, data);
   return data as T;
 }
@@ -49,12 +62,26 @@ export async function apiLines<T>(path: string): Promise<{ records: T[]; next: s
 }
 
 export async function checkSession(): Promise<void> {
-  const r = await fetch('/control/session', { credentials: 'same-origin' }).then((x) => x.json()).catch(() => ({ loggedIn: false }));
+  const r = (await fetch('/control/session', { credentials: 'same-origin' }).then((x) => x.json()).catch(() => ({ loggedIn: false }))) as { loggedIn?: unknown };
+  rights.set(rightsOf(r));
   loggedIn.set(!!r.loggedIn);
+}
+
+// The session's rights read again (after a refusal, with every status
+// refresh); a failed read or a signed-out answer keeps the last ones.
+export async function refreshRights(): Promise<void> {
+  try {
+    const r = (await (await fetch('/control/session', { credentials: 'same-origin' })).json()) as { loggedIn?: unknown };
+    if (r.loggedIn) rights.set(rightsOf(r));
+  } catch {
+    // keep the last rights
+  }
 }
 
 export async function login(token: string): Promise<boolean> {
   const res = await fetch('/control/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ token }) });
+  // The token form is the local admin token: every right.
+  if (res.status === 204) rights.set(ALL_RIGHTS);
   loggedIn.set(res.status === 204);
   return res.status === 204;
 }

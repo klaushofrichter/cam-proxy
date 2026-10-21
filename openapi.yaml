@@ -598,10 +598,17 @@ paths:
         '204': { description: signed out }
   /control/session:
     get:
-      summary: Whether the request carries a valid session cookie
+      summary: Whether the request carries a valid session cookie, and what the session may do
+      description: >
+        Signed out: `{"loggedIn":false}`. Signed in: `origin` is `local` (the
+        admin token, or a sign-in link it minted) or `managed` (a sign-in
+        link from cams-admin, user managed-admin). A managed session changes
+        settings or restarts only when the proxy's allow-list unlocks it
+        (`ui.config`, `ui.restart`; issue #227, docs/cams-admin.md); every
+        other local-admin write answers 403 `local_admin_only`.
       security: []
       responses:
-        '200': { description: '{ loggedIn: boolean }' }
+        '200': { description: '{ loggedIn: boolean, origin?: local | managed, rights?: { localAdmin, config, restart: boolean, localSettings?: [setting pattern] (with ui.config: the settings it never sets), narrowSettings?: { <setting>: { dir: less | more, unlimited?: 0 | unset } } (with ui.config: the settings it changes one way only: retention and size caps up, spending caps down) } }' }
   /control/status:
     get:
       summary: Camera, event intake, SSE clients, retention (admin)
@@ -788,7 +795,7 @@ paths:
     get:
       summary: Commands from cams-admin (migration P2, docs/cams-admin.md); the policy, the known allow entries with what each lets cams-admin change, and the 20 most recent commands (admin)
       responses:
-        '200': { description: '{ enabled (false when CAMPROXY_ADMIN_COMMANDS is not on), envName, paused, pauseReason, allow: [entry], implemented: [entry], known: [{ entry, text }], recent: [{ cmdId, command, actor, at, status, code?, result?, changed? }], groups: { tokens, read, settings, camera, disruptive: [entry] } }' }
+        '200': { description: '{ enabled (false when CAMPROXY_ADMIN_COMMANDS is not on), envName, paused, pauseReason, allow: [entry], implemented: [entry], known: [{ entry, text }], recent: [{ cmdId, command, actor, at, status, code?, result?, changed? }], groups: { tokens, read, settings, camera, disruptive, signin: [entry] } }; implemented includes the ui.* entries (no commands: they unlock the admin UI for a cams-admin sign-in)' }
         '401': { description: not signed in }
     put:
       summary: The allowed commands ({allow}); written to data/admin/policy.json; audited (admin-policy). Adding an entry needs local admin rights (the admin token, or a session it started)

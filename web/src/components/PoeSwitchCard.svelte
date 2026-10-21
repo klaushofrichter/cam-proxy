@@ -3,6 +3,8 @@
   import { api, ApiError } from '../lib/api';
   import { refresh, status } from '../lib/state';
   import { poeLine, type PortReading } from '../lib/maintenance';
+  import { lockedWhy, rights } from '../lib/rights';
+  import LockedNote from './LockedNote.svelte';
 
   // The camera's PoE switch (#85): what is configured, the last reading, and
   // a read on request (never polled: the switch has one web session, and
@@ -10,6 +12,7 @@
   // the camera group; the password is CAMPROXY_POE_SWITCH_PASSWORD.
   const sw = $derived(blockOf($status, $selectedCamera)?.camera.poeSwitch ?? null);
   let message = $state('');
+  const locked = $derived(lockedWhy($rights, 'local')); // issue #227
   let reading = $state(false);
   async function read() {
     reading = true;
@@ -31,7 +34,8 @@
     {#if sw.last}<p class="small">Switch {sw.last.sn ?? '—'}{sw.last.firmware ? `, firmware ${sw.last.firmware}` : ''}; port {sw.last.port} is internal index {sw.last.index}.</p>{/if}
     <p class="small">Model, host and the off time are <span class="mono">poeSwitch.*</span> below, the port <span class="mono">cameras.&lt;id&gt;.poeSwitch.port</span>; they apply at once. The password is the secret <span class="mono">CAMPROXY_POE_SWITCH_PASSWORD</span> ({sw.passwordSet ? 'set' : 'not set'}). A read or a power-cycle only works while nobody is logged in to the switch's web UI.</p>
     {#if sw.configured}
-      <div><button onclick={() => void read()} disabled={reading || sw.busy} data-testid="poe-switch-read">Read the switch now</button></div>
+      <div><button onclick={() => void read()} disabled={reading || sw.busy || !!locked} data-testid="poe-switch-read">Read the switch now</button></div>
+      <LockedNote why={locked} testid="poe-switch-locked" />
     {/if}
     {#if message}<p class="msg" data-testid="poe-switch-message">{message}</p>{/if}
   </div>

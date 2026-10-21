@@ -37,9 +37,16 @@ const LOCAL_ONLY: Readonly<Record<string, string>> = {
   'ftp.stalledHours': 'local only: a health threshold decides what the proxy reports as a problem',
   'archive.warnPercent': 'local only: a health threshold decides what the proxy reports as a problem',
 };
-export const DENIED: readonly string[] = [...new Set([
-  'server', 'go2rtc', 'storage', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.publicHost', 'ftp.certFile', 'ftp.keyFile', 'tls', 'composition.font', 'ntp.server', 'poeSwitch', 'camsAdmin',
+// Addresses, ports, files, trust, users and cams-admin itself: never remote,
+// and never through a cams-admin sign-in's ui.config either (issue #227,
+// src/api/auth.ts): a changed address would send the camera's or the
+// switch's password elsewhere.
+export const NEVER_FROM_CAMS_ADMIN: readonly string[] = [
+  'server', 'go2rtc', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.publicHost', 'ftp.certFile', 'ftp.keyFile', 'tls', 'composition.font', 'ntp.server', 'poeSwitch', 'camsAdmin',
   'cameras.*.id', 'cameras.*.host', 'cameras.*.protocol', 'cameras.*.tlsName', 'cameras.*.user', 'cameras.*.onvifPort', 'cameras.*.rtspPort', 'cameras.*.baichuanPort', 'cameras.*.poeSwitch', 'cameras.*.ftp.user', 'cameras.*.webUiUrl',
+];
+export const DENIED: readonly string[] = [...new Set([
+  ...NEVER_FROM_CAMS_ADMIN, 'storage',
   ...Object.keys(LOCAL_ONLY),
 ])];
 // R3-2: toward less spending, or toward keeping data longer (retention
@@ -97,6 +104,13 @@ export function narrowingOk(path: string, from: unknown, to: unknown): boolean {
   if (typeof from === 'boolean' || typeof to === 'boolean') return dir === 'less' ? to === false || from === to : to === true || from === to;
   const n = (x: unknown) => (x === undefined && UNSET_IS_UNLIMITED.has(path) ? Infinity : typeof x !== 'number' ? 0 : ZERO_IS_UNLIMITED.has(path) && x === 0 ? Infinity : x);
   return dir === 'less' ? n(to) <= n(from) : n(to) >= n(from);
+}
+
+// NARROW for a page that checks a value before it sends it (issue #227:
+// GET /control/session's narrowSettings): the direction, and which value
+// counts as no cap at all (0, or unset).
+export function narrowRules(): Record<string, { dir: 'less' | 'more'; unlimited?: 0 | 'unset' }> {
+  return Object.fromEntries(Object.entries(NARROW).map(([p, dir]) => [p, { dir, ...(ZERO_IS_UNLIMITED.has(p) ? { unlimited: 0 as const } : UNSET_IS_UNLIMITED.has(p) ? { unlimited: 'unset' as const } : {}) }]));
 }
 
 export function settableView(): Record<string, { type: string; min?: number; max?: number; oneOf?: number[]; enum?: string[]; pattern?: string; optional?: boolean; dir?: 'less' | 'more' }> {
