@@ -12,7 +12,7 @@ import { logger } from './log';
 import type { StreamLog } from './stream/log';
 import { DAY, dayStart, HOUR } from './time-units';
 import { realStatfs } from './health/host';
-import { cameraConfig, cameraIds } from './config/cameras';
+import { activeCameraIds, cameraConfig } from './config/cameras';
 
 const GROWTH_WINDOW = 3 * DAY;
 
@@ -35,7 +35,7 @@ const unitBytes = (u: Unit) => u.files.reduce((n, f) => n + f.bytes, 0);
 // Each camera's share of the budget in bytes (spec 2026-10-05-multi-camera-host-design
 // §8.1, Ruling P2-2): its sharePercent, or an equal part of what the shares leave.
 export function shareBytes(c: Config, budget: number): Map<string, number> {
-  const ids = cameraIds(c);
+  const ids = activeCameraIds(c);
   const own = new Map(ids.flatMap((id) => {
     const p = cameraConfig(c, id)!.storage.sharePercent;
     return p === undefined ? [] : [[id, p] as const];
@@ -345,7 +345,7 @@ export class Storage extends EventEmitter {
     const used = () => KINDS.reduce((n, k) => n + bytesOf(k), 0) + catalog;
     // With shares (spec §8.1): the camera most above its share loses its
     // oldest hour first; without: the oldest hour across all cameras.
-    const shared = cameraIds(cfg).some((id) => cameraConfig(cfg, id)!.storage.sharePercent !== undefined);
+    const shared = activeCameraIds(cfg).some((id) => cameraConfig(cfg, id)!.storage.sharePercent !== undefined);
     const usedBy = (cam: string) => KINDS.reduce((n, k) => n + sim[k].filter((u) => u.cam === cam).reduce((m, u) => m + unitBytes(u), 0), 0);
     // The oldest hour of one camera's kind, never its newest keepHours.
     const dropOldestHourOf = (kind: MinuteKind, cam: string): boolean => {

@@ -13,6 +13,8 @@ export interface CameraNode {
   storage: { sharePercent?: number };
   analytics: { kinds: { person?: boolean; vehicle?: boolean; pet?: boolean } };
   events: { poll: { enabled?: boolean } };
+  // The id of the camera move that hid this camera (src/moves): set = hidden.
+  moved?: string;
 }
 
 // A new camera's defaults: its name is its id (Ruling P1-11; a legacy camera
@@ -28,6 +30,8 @@ export interface Config {
   cameraOrder: string[];
   // The cameras' PoE switch, one per host (issue #85); `none` for no switch.
   poeSwitch: HostPoeSwitch;
+  // Camera moves (src/moves): maxCameras unset = no limit.
+  moves: { maxCameras?: number };
   go2rtc: { binary?: string; url?: string; rtspPort: number; apiPort: number };
   stills: { enabled: boolean; stream: 'sub' | 'main'; intervalS: number; size: string; quality: number; maxGB?: number };
   previews: { tileSize: string; grid: string; quality: number; maxGB?: number };
@@ -75,6 +79,7 @@ export const DEFAULTS: Config = {
   cameras: {},
   cameraOrder: [],
   poeSwitch: { model: 'none', ports: 8, offSeconds: 10 },
+  moves: {},
   go2rtc: { binary: 'go2rtc', rtspPort: 18554, apiPort: 11984 },
   stills: { enabled: true, stream: 'sub', intervalS: 1, size: '896x512', quality: 5 },
   previews: { tileSize: '160x90', grid: '10x6', quality: 7 },

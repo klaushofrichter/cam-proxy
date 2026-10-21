@@ -42,7 +42,7 @@ describe('keyed collection (spec §4.1)', () => {
     expect(leafPaths(CAMERA_NODE)).toEqual([
       'id', 'name', 'host', 'protocol', 'tlsName', 'webUiUrl', 'user', 'onvifPort', 'rtspPort', 'baichuanPort', 'statusPollS',
       'poeSwitch.port', 'ftp.user', 'ftp.enabled', 'ftp.stream', 'stills.enabled', 'stills.stream', 'stills.intervalS', 'storage.sharePercent',
-      'analytics.kinds.person', 'analytics.kinds.vehicle', 'analytics.kinds.pet', 'events.poll.enabled',
+      'analytics.kinds.person', 'analytics.kinds.vehicle', 'analytics.kinds.pet', 'events.poll.enabled', 'moved',
     ]);
     expect(leafPaths(LEGACY_CAMERA)).toContain('poeSwitch.model');
   });

@@ -2,7 +2,7 @@ import { readFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { generate } from 'selfsigned';
 import { bareHost, splitHost } from '../camera/http';
-import { cameraConfig, cameraIds } from '../config/cameras';
+import { activeCameraIds, cameraConfig } from '../config/cameras';
 import type { Config } from '../config/defaults';
 import { logger } from '../log';
 import { FtpServer, type Upload } from './ftp-server';
@@ -24,7 +24,7 @@ export type FtpUsers = Map<string, { cam: string; ip?: string }>;
 // address when the camera's host is an IPv4 address (Ruling P2-4).
 export function ftpUsers(c: Config): FtpUsers {
   const m: FtpUsers = new Map();
-  for (const id of cameraIds(c)) {
+  for (const id of activeCameraIds(c)) {
     const cam = cameraConfig(c, id)!;
     if (!cam.ftp.enabled) continue;
     const host = bareHost(splitHost(cam.host).hostname);

@@ -2,7 +2,7 @@ import { join } from 'path';
 import { createInterface } from 'readline';
 import type { Readable } from 'stream';
 import { AuditLog } from '../audit/audit-log';
-import { cameraIds } from '../config/cameras';
+import { activeCameraIds } from '../config/cameras';
 import { applyOverrides, ConfigError, loadConfig, removeOverride } from '../config/load';
 import { setLogLevel } from '../log';
 import { enrollWithCode, EnrollError } from './enroll';
@@ -142,7 +142,7 @@ export async function runAdminCli(argv: string[], io: CliIo): Promise<number> {
   const keyPath = join(loaded.config.server.dataDir, loaded.config.camsAdmin.keyFile);
   const audit = new AuditLog({ dir: join(loaded.config.server.dataDir, 'audit'), version: 'cli' });
   try {
-    const key = await enrollWithCode({ url: url!, code, keyPath, version: process.env.CAMPROXY_VERSION ?? 'dev', cameraIds: cameraIds(loaded.config) });
+    const key = await enrollWithCode({ url: url!, code, keyPath, version: process.env.CAMPROXY_VERSION ?? 'dev', cameraIds: activeCameraIds(loaded.config) });
     if (loaded.config.camsAdmin.url !== key.url) applyOverrides(loaded, { camsAdmin: { url: key.url } });
     const fp = fingerprint(key.publicKey);
     audit.write({ action: 'admin-enroll', category: ['configuration'], type: ['creation'], outcome: 'success', user: 'admin', userAgent: 'cam-proxy-cli', message: `Enrolled with cams-admin ${key.url} as ${key.proxyId} (account ${key.account}; CLI, proxy not running)`, details: { url: key.url, proxyId: key.proxyId, account: key.account, fingerprint: fp } });

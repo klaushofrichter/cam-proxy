@@ -24,7 +24,7 @@ import type { StatusPoller } from './camera/status';
 import type { EventIntake } from './events/intake';
 import { CameraRegistry } from './cameras/registry';
 import { CameraWorker, cameraWebUi } from './cameras/worker';
-import { cameraConfig, cameraIds } from './config/cameras';
+import { activeCameraIds, cameraConfig, cameraIds } from './config/cameras';
 import { cameraPassword } from './config/secrets';
 import { reapOrphanGo2rtc } from './stills/orphans';
 import { Go2rtc } from './stills/go2rtc';
@@ -173,7 +173,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   }
 
   // Vision usage counted before several cameras gets its camera (spec 2026-10-05-multi-camera-host-design §5.1, Ruling P1-7).
-  adoptLegacyUsage(catalog, cameraIds(running));
+  adoptLegacyUsage(catalog, activeCameraIds(running));
   const sse = sseHandler(log, running.sse);
   // The audit log (spec 2026-10-01-audit-log-design): daily JSON-lines files.
   const audit = new AuditLog({ dir: join(running.server.dataDir, 'audit'), version: VERSION });
@@ -184,7 +184,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   const sessions = createSessionSigner(opts.sessionSecret);
   const links = createLoginLinks();
   // The camera workers (spec 2026-10-05-multi-camera-host-design §3.1), in config order.
-  const cams = new CameraRegistry(() => cameraIds(running));
+  const cams = new CameraRegistry(() => activeCameraIds(running));
   // A camera's stills; stills may be off (or not built yet), the camera gone: no still, an empty list.
   const stillAt = (cam: string, ts: number) => cams.get(cam)?.readStill(ts) ?? Promise.resolve(undefined);
   const stillsIn = (cam: string, from: number, to: number) => cams.get(cam)?.listStills(from, to) ?? [];
@@ -404,7 +404,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // changed its settings (go2rtc.*) or turned stills on for the first camera.
   const go2rtcSettings = () => JSON.stringify({ binary: running.go2rtc.binary, rtspPort: running.go2rtc.rtspPort, apiPort: running.go2rtc.apiPort });
   const makeGo2rtc = () =>
-    cameraIds(running).some((id) => cameraConfig(running, id)!.stills.enabled)
+    activeCameraIds(running).some((id) => cameraConfig(running, id)!.stills.enabled)
       ? new Go2rtc({ binary: running.go2rtc.binary, rtspPort: running.go2rtc.rtspPort, apiPort: running.go2rtc.apiPort, sources: () => cams.list().filter((w) => w.cam().stills.enabled).map((w) => w.source()) })
       : undefined;
   let go2rtc = makeGo2rtc();
@@ -437,7 +437,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         cameraSdCheckMs: opts.cameraSdCheckMs,
         tls: tlsFor,
       });
-  cameraIds(running).forEach((id) => cams.add(makeWorker(id)));
+  activeCameraIds(running).forEach((id) => cams.add(makeWorker(id)));
   const metrics = createMetrics({
     storage,
     config: () => running,
@@ -649,13 +649,20 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     // Cameras added or removed in the overrides run or stop at once (spec
     // 2026-10-05-multi-camera-host-design §6.3): a new camera's settings are
     // copied in whole, although camera settings otherwise wait for a restart.
-    const was = cameraIds(running);
-    const now = cameraIds(next.config);
-    for (const id of now.filter((x) => !was.includes(x))) running.cameras[id] = structuredClone(next.config.cameras[id]);
-    if (JSON.stringify(was) !== JSON.stringify(now)) {
-      running.cameraOrder = [...now];
-      void reconcile();
+    // A camera with `moved` set is hidden like a removed one, its node kept
+    // (camera-move plan P2): `moved` itself follows live, not at a restart.
+    const was = activeCameraIds(running);
+    const now = activeCameraIds(next.config);
+    const all = cameraIds(next.config);
+    for (const id of cameraIds(running).filter((x) => !all.includes(x) && !cams.get(x))) delete running.cameras[id];
+    for (const id of all) {
+      const node = next.config.cameras[id];
+      if (!running.cameras[id] || (now.includes(id) && !was.includes(id))) running.cameras[id] = structuredClone(node);
+      else if (node.moved === undefined) delete running.cameras[id].moved;
+      else running.cameras[id].moved = node.moved;
     }
+    if (JSON.stringify(cameraIds(running)) !== JSON.stringify(all)) running.cameraOrder = [...all];
+    if (JSON.stringify(was) !== JSON.stringify(now)) void reconcile();
     applySettings(needsRestart);
     for (const w of cams.list()) {
       const b = before.get(w.id);
@@ -1036,7 +1043,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   const reconcile = (): Promise<void> =>
     (reconciling = reconciling.then(async () => {
       if (stopPromise) return;
-      const want = cameraIds(running);
+      const want = activeCameraIds(running);
       for (const w of cams.all().filter((x) => !want.includes(x.id))) {
         cams.remove(w.id);
         await w.stopRecordings();
@@ -1070,7 +1077,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // for good before the settings change under it; a new id gets a new worker.
   const restartCameraSide = async () => {
     await clips?.stop();
-    const nextIds = cameraIds(loaded.config);
+    const nextIds = activeCameraIds(loaded.config);
     const gone = cams.list().filter((w) => !nextIds.includes(w.id));
     for (const w of gone) {
       await w.stopRecordings();
@@ -1080,7 +1087,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     }
     applySettings(needsProcessRestart);
     const kept = cams.list();
-    const added = cameraIds(running).flatMap((id) => (cams.get(id) ? [] : [makeWorker(id)]));
+    const added = activeCameraIds(running).flatMap((id) => (cams.get(id) ? [] : [makeWorker(id)]));
     for (const w of added) cams.add(w);
     // go2rtc's own settings changed, or stills went on or off everywhere: a new one.
     if (go2rtcSettings() !== go2rtcMadeWith || !go2rtc !== !makeGo2rtc()) {

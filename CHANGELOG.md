@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Camera moves, groundwork: a camera with the new local setting `cameras.<id>.moved` (the id of its move) is hidden like a removed one: its worker stops, it leaves the APIs and its FTP user is refused, while its configuration and files stay; clearing the setting starts it again, live. New local setting `moves.maxCameras` (no limit by default). cams-admin cannot set either. Internal: `purgeCamera` deletes every row and file of one camera.
+
 ## v2026.10.21.1
 
 - Admin UI: signing in through a one-time link from cams-admin (#227). Such a session (user `managed-admin`) could press **Save** on the Settings page or **Restart proxy**, and nothing happened: the proxy refused them as local-admin-only, and only the audit log said so. Now the page shows every control it may not use as off, with one line: "Needs the local admin token: you signed in from cams-admin." A refusal that still happens shows as an error at the control (also a Settings row's Reset, which used to fail without a word). Renaming a camera, sign-in links, unticking commands, pausing and blocking keep working as before.
