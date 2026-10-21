@@ -10,7 +10,7 @@
   import PoeSwitchCard from '../components/PoeSwitchCard.svelte';
   import FindCameraCard from '../components/FindCameraCard.svelte';
   import { envNote, isEnvSet } from '../lib/find-camera';
-  import { lockedWhy, resetKeeps, rights, settingLockedWhy, settingsNote } from '../lib/rights';
+  import { lockedWhy, narrowWhy, resetKeeps, rights, settingLockedWhy, settingsNote } from '../lib/rights';
   import LockedNote from '../components/LockedNote.svelte';
 
   import ConfirmDialog from '../components/ConfirmDialog.svelte';
@@ -103,7 +103,7 @@
   // proxy keeps them too, issue #227): the dialog plans without them and names them.
   let keeps = $state<string[]>([]);
   function askResetAll() {
-    keeps = resetKeeps($rights, Object.keys(view).filter((p) => view[p].source === 'override'));
+    keeps = resetKeeps($rights, Object.keys(view).filter((p) => view[p].source === 'override'), view);
     const resettable = Object.fromEntries(Object.entries(view).filter(([p]) => !keeps.includes(p)));
     counts = resetCounts(resettable);
     asking = resetPlan(resettable);
@@ -191,6 +191,9 @@
             {@const s = view[p]}
             {@const same = s.source === 'override' ? sameBadge(p, s.resetTo) : null}
             {@const locked = settingLockedWhy($rights, p)}
+            <!-- A cams-admin sign-in: retention and size caps only up (the proxy refuses the rest). -->
+            {@const dirWhy = drafts[p] !== undefined ? narrowWhy($rights, p, s.value, parse(p, drafts[p])) : null}
+            {@const resetDirWhy = s.source === 'override' && !same ? narrowWhy($rights, p, s.value, s.resetTo?.value) : null}
             {#if /^cameras\.[^.]+\.name$/.test(p)}
             <tr data-testid="setting-camera-name">
               <td><label for="camera-name">Camera name (stored on the camera)</label></td>
@@ -210,12 +213,13 @@
               <td>
                 <input value={drafts[p] ?? shown(s.value)} oninput={(e) => (drafts[p] = e.currentTarget.value)} data-testid="input-{p}" disabled={(typeof s.value === 'object' && s.value !== null) || isEnvSet(s) || !!locked} readonly={isEnvSet(s)} title={isEnvSet(s) ? envNote(s) : (locked ?? undefined)} />
                 {#if isEnvSet(s)}<div class="env-note" data-testid="env-note-{p}">{envNote(s)}</div>{/if}
+                {#if !locked && (dirWhy ?? resetDirWhy)}<div class="env-note" data-testid="dir-note-{p}">{dirWhy ?? resetDirWhy}</div>{/if}
                 {#if rowErrors[p]}<div class="field-error" data-testid="error-{p}">{rowErrors[p]}</div>{/if}
               </td>
               <td><span class="badge {s.source}" class:same={!!same} data-testid="source-{p}" title={same?.title}>{same ? same.text : s.legacy ? 'config.json (legacy camera)' : s.source}</span>{#if s.restart}<span class="badge restart" title={s.restartScope === 'camera' ? "applies after this camera's restart (Maintenance → Restart camera side) or Restart to apply" : 'applies after Restart to apply (every camera side)'}>restart</span>{/if}{#if s.pending}<span class="badge pending">next: {shown(s.next)}</span>{/if}{#if s.by}<span class="badge by" data-testid="by-{p}">{byText(s.by)}</span> <button class="link" onclick={() => (undoing = { path: p, cmdId: s.by!.cmdId, actor: s.by!.actor })} disabled={!!undoLocked} title={undoLocked ?? undefined} data-testid="undo-{p}">Undo</button>{/if}</td>
               <td class="actions">
-                {#if drafts[p] !== undefined}<button onclick={() => void save(p)} disabled={!!locked} data-testid="save-{p}">Save</button>{/if}
-                {#if s.source === 'override' && !same}<button onclick={() => void reset(p)} disabled={!!locked} title={locked ?? undefined} data-testid="reset-{p}">{resetLabel(p, s.resetTo && { ...s.resetTo, means: undefined })}{#if s.resetTo?.means}{' '}<span class="means">({s.resetTo.means})</span>{/if}</button>{/if}
+                {#if drafts[p] !== undefined}<button onclick={() => void save(p)} disabled={!!locked || !!dirWhy} title={locked ?? dirWhy ?? undefined} data-testid="save-{p}">Save</button>{/if}
+                {#if s.source === 'override' && !same}<button onclick={() => void reset(p)} disabled={!!locked || !!resetDirWhy} title={locked ?? resetDirWhy ?? undefined} data-testid="reset-{p}">{resetLabel(p, s.resetTo && { ...s.resetTo, means: undefined })}{#if s.resetTo?.means}{' '}<span class="means">({s.resetTo.means})</span>{/if}</button>{/if}
               </td>
             </tr>
             {/if}

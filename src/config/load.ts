@@ -477,13 +477,18 @@ export function removeOverride(loaded: Loaded, path: string): Loaded {
 // `keep`: overrides that stay too (a cams-admin sign-in's reset keeps the
 // settings only the local admin changes, issue #227).
 export function removeAllOverrides(loaded: Loaded, keep?: (path: string) => boolean): Loaded {
-  const baseDir = loaded.files.config ? dirname(loaded.files.config) : process.cwd();
+  const p = planRemoveAll(loaded, keep);
+  writeOverrides(loaded.files.overrides, p.overrides);
+  return p.next;
+}
+// What removeAllOverrides does, without writing (a ui.config reset checks
+// the result first, src/api/ui-config.ts).
+export function planRemoveAll(loaded: Loaded, keep?: (path: string) => boolean): Plan {
   const cams = (loaded.overrides as Obj).cameras as Obj | undefined;
   const kept: Obj = loaded.addedCameras.length ? { cameras: Object.fromEntries(loaded.addedCameras.map((id) => [id, structuredClone(cams![id])])) } : {};
-  if (keep) for (const p of setPaths(loaded.overrides as Obj)) if (keep(p)) setPath(kept, p, structuredClone(getPath(loaded.overrides, p)));
-  const next = build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, kept, baseDir, loaded.envLayer, normOf(loaded));
-  writeOverrides(loaded.files.overrides, kept);
-  return next;
+  const paths = setPaths(loaded.overrides as Obj);
+  if (keep) for (const p of paths) if (keep(p)) setPath(kept, p, structuredClone(getPath(loaded.overrides, p)));
+  return { next: rebuildWith(loaded, kept), overrides: kept, paths };
 }
 
 // The startup line `config_env`: the settings taken from the environment,

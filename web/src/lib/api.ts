@@ -8,7 +8,8 @@ export const loggedIn = writable<boolean | null>(null);
 // plainly, else the answer's detail, else the status.
 export function errorText(status: number, body: unknown): string {
   const b = typeof body === 'object' && body ? (body as { error?: unknown; detail?: unknown }) : null;
-  if (b?.error === 'local_admin_only') return REFUSED_TEXT;
+  // A ui.config refusal with its reason (the direction rules) names it.
+  if (b?.error === 'local_admin_only') return typeof b.detail === 'string' && b.detail ? `Refused: ${b.detail}. Nothing was changed.` : REFUSED_TEXT;
   return b && 'detail' in b ? String(b.detail) : `HTTP ${status}`;
 }
 

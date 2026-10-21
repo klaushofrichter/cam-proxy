@@ -106,6 +106,13 @@ export function narrowingOk(path: string, from: unknown, to: unknown): boolean {
   return dir === 'less' ? n(to) <= n(from) : n(to) >= n(from);
 }
 
+// NARROW for a page that checks a value before it sends it (issue #227:
+// GET /control/session's narrowSettings): the direction, and which value
+// counts as no cap at all (0, or unset).
+export function narrowRules(): Record<string, { dir: 'less' | 'more'; unlimited?: 0 | 'unset' }> {
+  return Object.fromEntries(Object.entries(NARROW).map(([p, dir]) => [p, { dir, ...(ZERO_IS_UNLIMITED.has(p) ? { unlimited: 0 as const } : UNSET_IS_UNLIMITED.has(p) ? { unlimited: 'unset' as const } : {}) }]));
+}
+
 export function settableView(): Record<string, { type: string; min?: number; max?: number; oneOf?: number[]; enum?: string[]; pattern?: string; optional?: boolean; dir?: 'less' | 'more' }> {
   return Object.fromEntries(REMOTE.map((pat) => {
     const leaf = leafAt(pat.replace('cameras.*.', 'cameras.x.'))!;

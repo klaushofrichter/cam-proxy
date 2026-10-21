@@ -222,15 +222,16 @@ them, like any entry (the cams-admin page's group **cams-admin sign-in**, or
 
 | entry | lets a cams-admin sign-in |
 |---|---|
-| `ui.config` | change settings on the Settings page (`PUT /control/config`) and reset them to config.json's value or the default (`DELETE /control/config/{path}`, Reset to defaults `DELETE /control/config`). Never, neither set nor reset, the settings cams-admin can never set: addresses, ports, files, trust, users and cams-admin itself (`server`, `go2rtc`, `tls`, `poeSwitch`, `camsAdmin`, the FTP ports, files and public host, `ntp.server`, a camera's address, user, ports and certificate name); a changed address would send a camera's or the switch's password elsewhere, a reset `camsAdmin.url` would undo the enrollment. Never adding or removing a camera. Reset to defaults keeps the overrides of those settings (the dialog names them); the local admin's Reset to defaults still removes them. Such a refusal is recorded as `auth-refused` with reason `local-setting` |
-| `ui.restart` | restart the proxy (`restart-proxy`) and its camera side (`restart`, also one camera's): **disruptive** |
+| `ui.config` | change settings on the Settings page (`PUT /control/config`) and reset them to config.json's value or the default (`DELETE /control/config/{path}`, Reset to defaults `DELETE /control/config`). Never, neither set nor reset, the settings cams-admin can never set: addresses, ports, files, trust, users and cams-admin itself (`server`, `go2rtc`, `tls`, `poeSwitch`, `camsAdmin`, the FTP ports, files and public host, `ntp.server`, a camera's address, user, ports and certificate name); a changed address would send a camera's or the switch's password elsewhere, a reset `camsAdmin.url` would undo the enrollment. Never adding or removing a camera. Never the storage limits (`storage.*`, a camera's `storage.sharePercent`: a lower limit deletes stills and clips) or Google Vision on/off (`analytics.googleVision.enabled`). The settings cams-admin's `config.set` may change one way only follow the same direction rules (`NARROW`, [Remote configuration](#remote-configuration-p3)): retention (`retention.*Days`) and the size caps (`stills.maxGB`, `previews.maxGB`, `ftp.maxGB`) only up, keeping data longer; Google Vision's spending caps (`monthlyLimit`, `dailyCap`, `checksPerDay`, `perCameraDailyCap`) only down. That goes for a reset too: a reset that would shorten retention or raise a cap is refused. Reset to defaults keeps the overrides of all those settings, and those whose reset would go the wrong way (the dialog names them); the local admin's Reset to defaults still removes them. Such a refusal answers 403 `local_admin_only` (with a `detail` for a direction rule, shown at the row) and is recorded as `auth-refused` with reason `local-setting`. The capture and feature switches (except Google Vision) and the health thresholds stay open to it |
+| `ui.restart` | restart the proxy (`restart-proxy`) and its camera side (`restart`, also one camera's): **disruptive**. No rate limit (Klaus, 2026-10-21): a person is at the page, and these restarts don't count against cams-admin's `proxy.restart` budget |
 
 They are no commands: cams-admin never sends them, the heartbeat never
 reports them, and a managed admin token itself (not signed in to the UI) gets
 nothing from them. A pause or `CAMPROXY_ADMIN_COMMANDS` set to anything but
 `on` locks them again at once. The proxy tells the page what the session may
-do (`GET /control/session`: `origin`, `rights`), so the page disables what it
-would refuse. A change made this way is recorded as usual, with the user
+do (`GET /control/session`: `origin`, `rights`, with `ui.config` also
+`localSettings` and the direction rules `narrowSettings`), so the page
+disables what it would refuse. A change made this way is recorded as usual, with the user
 `token:<label>` (the managed admin token whose link started the session) and
 `allowedBy: ui.config` or `ui.restart`. Everything else (actions, the
 Archive, Find camera, the Google Vision key, enrolling, Undo, unblocking,

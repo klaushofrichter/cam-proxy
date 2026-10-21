@@ -55,6 +55,9 @@ export interface AccessDeps {
   managed?: (bearer: string) => { id: string; kind: 'client' | 'admin'; label: string } | null;
   // The ui.* allow entries in effect (issue #227; src/fleet/policy.ts uiUnlocked); absent = none.
   managedUnlocked?: () => readonly string[];
+  // ui.config's direction rules (src/api/ui-config.ts uiConfigAgainst): why a
+  // PUT (the patch) or a single reset (the path) is refused, or null; absent = none.
+  uiConfigAgainst?: (req: { method: 'PUT'; body: unknown } | { method: 'DELETE'; path: string }) => string | null;
   // Every 401/403 answered here, with why (the audit log records them).
   // `user`: for managed rights, who (actorOf: token:<label>), never a token.
   onRefused?: (req: Request, info: { status: 401 | 403; reason: string; tokenKind: TokenKind; user?: string }) => void;
@@ -140,8 +143,10 @@ export const UI_UNLOCKS: readonly (readonly [string, string, RegExp])[] = [
 ];
 // Settings ui.config never sets (src/fleet/remote-settable.ts): addresses,
 // ports, files, trust, users and the cams-admin connection; a new camera
-// (it has an address) neither.
-export const UI_CONFIG_LOCAL: readonly string[] = NEVER_FROM_CAMS_ADMIN;
+// (it has an address) neither. Klaus (2026-10-21): nor storage limits (a
+// lower one deletes stills and clips) or Google Vision on/off. Retention and
+// the spending caps follow the direction rules instead (src/api/ui-config.ts).
+export const UI_CONFIG_LOCAL: readonly string[] = [...NEVER_FROM_CAMS_ADMIN, 'storage', 'cameras.*.storage', 'analytics.googleVision.enabled'];
 
 // Every leaf path in a settings patch; dotted keys count as their parts.
 function patchPaths(o: unknown, prefix = ''): string[] {
@@ -171,15 +176,21 @@ export function touchesLocal(body: unknown): boolean {
 const CONFIG_PATH = '/control/config/';
 // The ui.* entry that lets this managed request through, or why not:
 // 'local-admin-only' (no entry for it), 'local-setting' (ui.config, but a
-// setting it never changes; an undecodable path counts as one).
-function uiUnlock(req: Request, a: AccessInfo, unlocked: (() => readonly string[]) | undefined): { entry: string } | { refuse: 'local-admin-only' | 'local-setting' } {
+// setting it never changes, or a change against the direction rules, with
+// `detail`; an undecodable path counts as one).
+function uiUnlock(req: Request, a: AccessInfo, d: AccessDeps): { entry: string } | { refuse: 'local-admin-only' | 'local-setting'; detail?: string } {
   const no = { refuse: 'local-admin-only' } as const;
+  const unlocked = d.managedUnlocked;
   if (!a.viaCookie || !unlocked) return no;
   const path = withoutQuery(req.originalUrl);
   const hit = UI_UNLOCKS.find(([, m, re]) => m === req.method && re.test(path));
   if (!hit || !unlocked().includes(hit[0])) return no;
   if (hit[0] === 'ui.config') {
     if (req.method === 'PUT' && touchesLocal(req.body)) return { refuse: 'local-setting' };
+    if (req.method === 'PUT') {
+      const detail = d.uiConfigAgainst?.({ method: 'PUT', body: req.body });
+      if (detail) return { refuse: 'local-setting', detail };
+    }
     if (req.method === 'DELETE' && path.startsWith(CONFIG_PATH)) {
       let p: string;
       try {
@@ -188,6 +199,8 @@ function uiUnlock(req: Request, a: AccessInfo, unlocked: (() => readonly string[
         return { refuse: 'local-setting' };
       }
       if (isLocalSetting(p)) return { refuse: 'local-setting' };
+      const detail = d.uiConfigAgainst?.({ method: 'DELETE', path: p });
+      if (detail) return { refuse: 'local-setting', detail };
     }
   }
   return { entry: hit[0] };
@@ -202,9 +215,9 @@ export function requireAccess(need: AccessNeed, d: AccessDeps): RequestHandler {
   return (req, res, next) => {
     const a = accessOf(req, d);
     res.locals.access = a;
-    const refuse = (status: 401 | 403, reason: string, error: string) => {
+    const refuse = (status: 401 | 403, reason: string, error: string, detail?: string) => {
       d.onRefused?.(req, { status, reason, tokenKind: a.tokenKind, ...(a.origin === 'managed' ? { user: actorOf(a) } : {}) });
-      res.status(status).json({ error });
+      res.status(status).json({ error, ...(detail ? { detail } : {}) });
     };
     if (!a.access || (need === 'client' && a.access === 'audit')) {
       logger.warn({ path: maskPath(withoutQuery(req.originalUrl)) }, 'unauthorized');
@@ -212,8 +225,8 @@ export function requireAccess(need: AccessNeed, d: AccessDeps): RequestHandler {
     }
     if (!can(a, need)) return refuse(403, 'admin-only', 'admin_only');
     if (need === 'admin' && a.origin === 'managed' && !managedMay(req.method, withoutQuery(req.originalUrl))) {
-      const u = uiUnlock(req, a, d.managedUnlocked);
-      if ('refuse' in u) return refuse(403, u.refuse, 'local_admin_only');
+      const u = uiUnlock(req, a, d);
+      if ('refuse' in u) return refuse(403, u.refuse, 'local_admin_only', u.detail);
       // The audit records of the route (and Reset to defaults) know the entry (allowedBy).
       res.locals.allowedBy = u.entry;
     }
