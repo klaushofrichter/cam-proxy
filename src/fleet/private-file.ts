@@ -16,7 +16,7 @@ export class PrivateFileInvalid extends Error {}
 export type Stat = (fd: number) => { mode: number; uid: number };
 
 // The files tightenAdminFiles() sweeps at startup.
-export const ADMIN_FILES = ['key.json', 'tokens.json', 'commands.json', 'policy.json', 'replay.json', 'replay-mark.json'] as const;
+export const ADMIN_FILES = ['key.json', 'tokens.json', 'commands.json', 'policy.json', 'replay.json', 'replay-mark.json', 'camera-passwords.json'] as const;
 
 // Tests: another owner (fstat), a chmod that does not take (fchmod).
 // onTightened: the proxy logs it (the path and the old mode, never content).
@@ -128,7 +128,37 @@ export function tightenAdminFiles(dir: string): { file: string; reason: string }
       closeSync(fd);
     }
   }
+  sweepMoves(join(dir, 'moves'), refused);
   return refused;
+}
+
+// admin/moves/*.json (the move journal): same tightening as ADMIN_FILES.
+function sweepMoves(dir: string, refused: { file: string; reason: string }[]): void {
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return;
+  }
+  tightenDir(dir, process.getuid?.());
+  for (const n of names) {
+    if (!n.endsWith('.json')) continue;
+    const path = join(dir, n);
+    let fd: number;
+    try {
+      fd = openPrivate(path, PrivateFileUnsafe);
+    } catch (err) {
+      if (err instanceof PrivateFileUnsafe) refused.push({ file: path, reason: err.message });
+      continue;
+    }
+    try {
+      secureFd(fd, path, { unsafe: PrivateFileUnsafe });
+    } catch (err) {
+      refused.push({ file: path, reason: (err as Error).message });
+    } finally {
+      closeSync(fd);
+    }
+  }
 }
 
 // Folder 700, file 600, a random temp name, fsync, rename: a crash leaves the
