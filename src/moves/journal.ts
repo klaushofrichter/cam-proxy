@@ -6,6 +6,8 @@ import type { ChunkState, MoveActor, MoveAnswer, MoveCameraConnection, MoveCopie
 // The durable record of one move on this proxy: <dataDir>/admin/moves/<id>.json,
 // mode 600 (it holds the move token hash or the plain token and the target's
 // X25519 private key). Never printed, logged or served.
+export type SwitchStep = 'secrets' | 'camera' | 'cert' | 'ftp';
+export const SWITCH_STEPS: readonly SwitchStep[] = ['secrets', 'camera', 'cert', 'ftp'];
 export interface ChunkMeta { id: string; kind: MoveKind; day: string; files: number; bytes: number; rows: number }
 export interface ChunkFile { size: number; sha256?: string; state: string }
 export interface ChunkRecord { state: ChunkState; files?: Record<string, ChunkFile> }
@@ -41,6 +43,15 @@ export interface MoveRecord {
   manifestRefreshedAt?: number;
   // target only
   x25519?: { privatePkcs8: string; publicSpki: string };
+  // target (Task 8): the leaf move.start issued for the camera (pushed by the
+  // cert step); its key never leaves this record but in the push.
+  leaf?: { certPem: string; keyPem: string; fingerprint: string };
+  // target: the switch-over step running or next (secrets, camera, cert, ftp).
+  step?: SwitchStep;
+  // target: the chunks cams-admin reported done at move.start (B34), at most 512.
+  done?: string[];
+  // the code a failed move ended with (move.phase failed).
+  failure?: string;
   // target, stored at accept (Task 6), read at switch-over (Task 8)
   cameraConnection?: MoveCameraConnection;
   summary?: MoveSummary;

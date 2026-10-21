@@ -221,22 +221,41 @@ export async function probeSource(source: MoveOfferArgs['source'], moveId: strin
   }
 }
 
-async function probe(source: MoveOfferArgs['source'], moveId: string, token: string): Promise<number> {
-  let ca: string | undefined;
-  if (source.url.startsWith('https:')) {
-    const f = await get(source, '/tls/ca.pem', { keep: 64 * 1024, capMs: 3000 });
-    const text = f.status === 200 && f.body ? f.body.toString('utf8') : '';
-    // Exactly one certificate: a bundle could carry a second CA behind the pinned one.
-    if ((text.match(/BEGIN CERTIFICATE/g) ?? []).length !== 1) return 0;
-    let pem: string;
-    try {
-      pem = new X509Certificate(text).toString();
-    } catch {
-      return 0;
-    }
-    if (!source.caFingerprints.includes(fingerprintOf(pem))) return 0;
-    ca = pem;
+// The source's CA for an https source: fetched from /tls/ca.pem without
+// verification, taken only when it is exactly one certificate whose
+// fingerprint is one of the offered `caFingerprints`. undefined for http; null
+// when the pin does not hold.
+async function pinnedCa(source: MoveOfferArgs['source']): Promise<string | undefined | null> {
+  if (!source.url.startsWith('https:')) return undefined;
+  const f = await get(source, '/tls/ca.pem', { keep: 64 * 1024, capMs: 3000 });
+  const text = f.status === 200 && f.body ? f.body.toString('utf8') : '';
+  // Exactly one certificate: a bundle could carry a second CA behind the pinned one.
+  if ((text.match(/BEGIN CERTIFICATE/g) ?? []).length !== 1) return null;
+  let pem: string;
+  try {
+    pem = new X509Certificate(text).toString();
+  } catch {
+    return null;
   }
+  return source.caFingerprints.includes(fingerprintOf(pem)) ? pem : null;
+}
+
+// One small GET against the source with the move token, pinned like the
+// probe (the target's switch-over reads /secrets with it). Throws when the
+// source can't be reached or its CA is not the pinned one; never puts the
+// token in an error.
+export async function sourceGet(source: MoveOfferArgs['source'], path: string, token: string, o: { keep?: number; capMs?: number } = {}): Promise<{ status: number; body: Buffer }> {
+  const ca = await pinnedCa(source);
+  if (ca === null) throw new Error('the source CA is not the pinned one');
+  const keep = o.keep ?? 64 * 1024;
+  const r = await get(source, path, { token, ca, keep, capMs: o.capMs ?? 10_000 });
+  if (r.received > keep) throw new Error('the source answer is too large');
+  return { status: r.status, body: r.body ?? Buffer.alloc(0) };
+}
+
+async function probe(source: MoveOfferArgs['source'], moveId: string, token: string): Promise<number> {
+  const ca = await pinnedCa(source);
+  if (ca === null) return 0;
   const t0 = Date.now();
   const r = await get(source, `/api/moves/${moveId}/probe?bytes=${PROBE_BYTES}`, { token, ca, capMs: PROBE_CAP_MS });
   if (r.status !== 200 || r.received === 0) return 0;

@@ -117,6 +117,10 @@ export class CameraCerts {
   private readonly states = new Map<string, CertState>();
   private readonly extras = new Map<string, Extra>();
   private readonly leaves = new Map<string, Leaf>();
+  // A camera move's leaf for a camera taking over (camera-move plan Task 8):
+  // issued at move.start, pushed instead of a fresh one (in memory; the move
+  // journal keeps it and stages it again after a restart).
+  private readonly staged = new Map<string, Leaf>();
   private previousCa: string | null = null;
   private previousSince = 0;
   private corrupt = false;
@@ -467,6 +471,19 @@ export class CameraCerts {
     if (this.previousCa && ![...this.extras.values()].some((e) => e.onPrevious)) this.dropPrevious('Previous site CA no longer trusted (every camera serves a leaf of the new one)');
   }
 
+  // The leaf the next push to this camera takes (a camera move's), or none.
+  stageLeaf(id: string, leaf: Leaf | null): void {
+    if (leaf) this.staged.set(id, leaf);
+    else this.staged.delete(id);
+  }
+
+  // A camera move's cert step: that leaf, pushed like "Push now" (the camera
+  // already serving it answers `current`).
+  pushLeaf(id: string, leaf: Leaf, who: Requester): Promise<PushResult> {
+    this.stageLeaf(id, leaf);
+    return this.pushNow(id, who);
+  }
+
   // The "Push now" action: no window, no back-off, still never during an open event.
   pushNow(id: string, who?: Requester): Promise<PushResult> {
     return this.exclusive(async () => {
@@ -568,7 +585,12 @@ export class CameraCerts {
       if (renewal && inWindow) e.pendingRenewal = true; // never during an event: when it ends (Review Focus 1)
       return skip('an event is open: try again when it has ended', served.fingerprint);
     }
-    const r = await this.d.push(cam.id, () => issueLeaf(ca, { cn: name, dns: [name], ips: [cam.address] }), e.factory ? { factory: e.factory } : {});
+    // A staged leaf (a camera move's) when it is still right for the camera; else a fresh one.
+    const staged = this.staged.get(cam.id);
+    const usable = staged && staged.names.includes(name) && staged.ips.includes(cam.address) && issuedBy(staged, ca) && !renewalDue(staged, now) ? staged : null;
+    const issue = usable ? () => Promise.resolve(usable) : () => issueLeaf(ca, { cn: name, dns: [name], ips: [cam.address] });
+    const r = await this.d.push(cam.id, issue, e.factory ? { factory: e.factory } : {});
+    if (usable && r.leaf?.fingerprint === usable.fingerprint && (r.outcome === 'pushed' || r.outcome === 'current')) this.staged.delete(cam.id);
     e.pendingRenewal = false;
     if (r.clearedTo && !e.factory) e.factory = r.clearedTo;
     const lastPush = { at: now, outcome: r.outcome };

@@ -74,6 +74,9 @@ import { movesSourceApi, refreshManifest } from './api/moves-api';
 import { movesControlApi } from './api/moves-control-api';
 import { ManifestCache } from './moves/manifest-cache';
 import { MoveSource } from './moves/source';
+import { MoveTarget } from './moves/target';
+import { cameraPasswordStore } from './config/camera-passwords';
+import { verifyFtp } from './fleet/camera-commands';
 import { availableParallelism, loadavg } from 'os';
 import { CommandRunner, type Handler } from './fleet/commands';
 import { ReplayGuard } from './fleet/replay';
@@ -158,6 +161,8 @@ export interface ProxyOptions {
   tlsPush?: { clearWaitMs?: number; verifyMs?: number; pollMs?: number };
   // The cams-admin client's waits (tests shorten them).
   camsAdmin?: { timing?: Partial<Timing>; replaySlackMs?: number; recheckMs?: number };
+  // A camera move's switch-over retries on the target (tests shorten them).
+  moves?: { attempts?: number; retryMs?: number; retryCapMs?: number; notReadyMs?: number };
 }
 
 export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
@@ -953,6 +958,37 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     refreshManifest: (id) => void refreshManifest({ journal: moveJournal, inventory: moveInventory }, id, manifestCache),
     proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
   });
+  // The target side from move.start on (camera-move plan Task 8): the
+  // switch-over runner, resumed from the journal at start.
+  const moveTarget = new MoveTarget({
+    journal: moveJournal,
+    audit,
+    emit: (e) => camsAdmin.emitEvent(e),
+    ca: () => ca,
+    site: () => running.tls.site,
+    loaded: () => loaded,
+    // The camera added live (P1): resolved once its worker runs.
+    setLoaded: async (l) => {
+      setLoaded(l);
+      await reconciling;
+    },
+    passwords: cameraPasswordStore(running.server.dataDir),
+    stageLeaf: (cam, leaf) => certs?.stageLeaf(cam, leaf),
+    pushLeaf: (cam, leaf) => (certs && running.tls.site ? certs.pushLeaf(cam, leaf, { user: 'cams-admin' }) : Promise.resolve({ outcome: 'failed' as const, served: null, detail: caProblem ?? 'the site CA is not ready', tookMs: 0 })),
+    ftp: async (cam) => {
+      const w = cams.get(cam);
+      if (!w) throw new Error(`${cam} is not running`);
+      if (!w.cam().ftp.enabled) return 'skipped';
+      const t = ftpTargetFor(cam)();
+      const f = await setupCameraFtp(w.client, t);
+      w.ftpWatch.note(f);
+      return verifyFtp('camera-ftp-setup', { ftp: f }, { server: t.server, port: t.port, tls: t.tls, stream: t.stream });
+    },
+    // Task 9's copier.
+    startCopy: () => undefined,
+    proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
+    timing: opts.moves,
+  });
   // After every welcome: the open move's phase again (B2).
   camsAdmin.onWelcome(() => {
     try {
@@ -1071,6 +1107,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       emit: (e) => camsAdmin.emitEvent(e),
       audit,
       source: moveSource,
+      target: moveTarget,
+      proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
       evaluate: {
         receiveAllowed: () => commandPolicy.effective().allow.includes('move.receive'),
         journal: moveJournal,
@@ -1257,6 +1295,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       audit.write({ action: 'proxy-start', category: ['process'], type: ['start'], outcome: 'success', user: 'system', message: `cam-proxy ${VERSION} started`, details: { config: { camera: cams.first().id, cameras: cams.ids(), stills: running.stills.enabled, ftp: running.ftp.enabled, analytics: running.analytics.googleVision.enabled }, previousStop, uncleanStop } });
       daily.start();
       startedAt = Date.now();
+      // Camera moves this proxy takes over, from their journal phase and step (S §10.1).
+      moveTarget.resume();
       // Only with camsAdmin.url (the Pi: nothing until enrolled).
       void camsAdmin.apply();
       logger.info({ port, cameras: cams.ids(), version: VERSION }, 'cam_proxy_started');
@@ -1301,6 +1341,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         audit.write({ action: 'camera-powercycle', category: ['host'], type: ['end'], outcome: 'failure', user: 'system', message: "cam-proxy stopping: the proxy's web session on the switch may still be open: the switch's web UI may refuse logins until the switch ends it", details: { phase: 'stop', poeLeftOff: false, sessionMaybeOpen, switch: swInfo } });
       }
       await restarting;
+      // A switch-over step in flight ends first; the journal keeps the step (resumed at the next start).
+      await moveTarget.stopAll();
       clearInterval(sweeper);
       sse.closeAll();
       storage.stop();
