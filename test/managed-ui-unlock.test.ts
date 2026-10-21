@@ -217,7 +217,8 @@ describe('ui.config: storage, Google Vision and the direction rules', () => {
     sim = await startSim();
     const dir = mkdtempSync(join(tmpdir(), 'camproxy-uinarrow-'));
     writePrivateJson(join(dir, 'data', 'admin', 'tokens.json'), { v: 1, revision: 1, blocked: [], tokens: [{ id: TOKEN_ID, kind: 'admin', hash: hashOf(MANAGED_ADMIN), label: 'cams cluster', retireAt: null }] });
-    p = await startProxy(sim, { dir });
+    // ftp.maxGB from config.json: a reset of its override goes back to 10 GB, not to no cap.
+    p = await startProxy(sim, { dir, settings: { ftp: { maxGB: 10 } } });
     await request(p.base).put('/control/admin/commands').set(auth(ADMIN_TOKEN)).send({ allow: ['ui.config'] }).expect(200);
   });
   afterAll(async () => {
@@ -301,5 +302,39 @@ describe('ui.config: storage, Google Vision and the direction rules', () => {
     // The local admin's reset still takes everything.
     const all = (await request(p.base).delete('/control/config').set(auth(ADMIN_TOKEN)).expect(200)).body;
     expect(all['retention.clipsDays'].source).not.toBe('override');
+  });
+
+  // An unset size cap is no cap (UNSET_IS_UNLIMITED), 0 for the daily cap
+  // is none (ZERO_IS_UNLIMITED): as for cams-admin's config.set.
+  it('an unset stills.maxGB is no cap: setting one is lowering it; resetting one is raising it', async () => {
+    expect(p.proxy.running.stills.maxGB).toBeUndefined();
+    const m = await session();
+    const r = await request(p.base).put('/control/config').set(ui(m)).send({ stills: { maxGB: 10 } });
+    expect([r.status, r.body.error]).toEqual([403, 'local_admin_only']);
+    expect(r.body.detail).toMatch(/^stills\.maxGB: a cams-admin sign-in may only keep data longer$/);
+    expect(refusals('PUT /control/config')[0]).toMatchObject({ cam_proxy: { auth: { reason: 'local-setting' } } });
+    expect(p.proxy.running.stills.maxGB).toBeUndefined();
+    await local({ stills: { maxGB: 20 } });
+    expect((await request(p.base).delete('/control/config/stills.maxGB').set(ui(m))).status).toBe(200);
+    expect(p.proxy.running.stills.maxGB).toBeUndefined();
+  });
+
+  it('dailyCap 0 is no cap: 0 to 5 lowers spending', async () => {
+    expect(p.proxy.running.analytics.googleVision.dailyCap).toBe(0);
+    const m = await session();
+    expect((await request(p.base).put('/control/config').set(ui(m)).send({ analytics: { googleVision: { dailyCap: 5 } } })).status).toBe(200);
+    expect(p.proxy.running.analytics.googleVision.dailyCap).toBe(5);
+  });
+
+  it('Reset to defaults keeps a size cap whose reset would lower it, and resets one whose reset means no cap', async () => {
+    // ftp.maxGB 20 over config.json's 10: its reset lowers the cap. stills.maxGB 5: its reset is no cap.
+    await local({ ftp: { maxGB: 20 }, stills: { maxGB: 5 } });
+    const m = await session();
+    const view = (await request(p.base).delete('/control/config').set(ui(m)).expect(200)).body;
+    expect(view['ftp.maxGB']).toMatchObject({ value: 20, source: 'override' });
+    expect(view['stills.maxGB'].source).not.toBe('override');
+    expect(p.proxy.running.ftp.maxGB).toBe(20);
+    await request(p.base).delete('/control/config').set(auth(ADMIN_TOKEN)).expect(200);
+    expect(p.proxy.running.ftp.maxGB).toBe(10);
   });
 });
