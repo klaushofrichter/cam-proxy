@@ -4,7 +4,7 @@ import { jcs } from './jcs';
 import type { ManagedToken, TokensApplyArgs } from './token-store';
 import { ARGS_VALIDATORS, type CameraActionArgs } from './command-args';
 import type { Journal, JournalEntry } from './journal';
-import { BUDGETED_ACTIONS, DISRUPTIVE_ACTIONS, NEVER_REMOTE_ACTIONS } from './policy';
+import { BUDGETED_ACTIONS, DISRUPTIVE_ACTIONS, entryFor, isMoveCommand, MOVE_COMMANDS, MOVE_ENTRIES, NEVER_REMOTE_ACTIONS } from './policy';
 
 export type Nack = 'bad_signature' | 'wrong_target' | 'expired' | 'replayed' | 'not_allowed' | 'paused' | 'rate_limited' | 'invalid_args' | 'unsupported_version' | 'busy' | 'not_revocation_only';
 export interface CommandBody { proxyId: string; connId: string; cmdId: string; exp: number; actor: string; command: string; args: Record<string, unknown> }
@@ -53,7 +53,9 @@ export class CommandLimits {
   constructor(private readonly now: () => number) {
     // config.set, config.unset and config.rollback share one window (R3-11; dry runs count).
     const cfg = new Window(60_000, 6);
-    this.per = { 'tokens.apply': [new Window(3_600_000, 6)], 'config.set': [cfg], 'config.unset': [cfg], 'config.rollback': [cfg], 'camera.action': [new Window(60_000, 12)], 'camera.name.set': [new Window(60_000, 6)] };
+    // Every move.* command counts toward one window of 60 a minute per proxy (the contract: the same as config.get; no journal budget).
+    const moves = new Window(60_000, 60);
+    this.per = { ...Object.fromEntries(MOVE_COMMANDS.map((c) => [c, [moves]])), 'tokens.apply': [new Window(3_600_000, 6)], 'config.set': [cfg], 'config.unset': [cfg], 'config.rollback': [cfg], 'camera.action': [new Window(60_000, 12)], 'camera.name.set': [new Window(60_000, 6)] };
   }
   take(command: string): { ok: true } | { ok: false; retryAfterS: number } {
     const t = this.now();
@@ -120,8 +122,9 @@ export function checkCommand(m: Envelope, c: CheckContext): Decision {
   // once its claim holds (checked below); only the env kill switch stops it.
   const claim = command === 'tokens.apply' && b.revocationOnly === true;
   if (!c.policy.enabled || (c.policy.paused && !claim)) return nack('paused');
-  // camera.action passes with any camera.action:* entry; its own entry is step 11's.
-  const entryOk = command === 'camera.action' ? c.policy.allow.some((e) => e.startsWith('camera.action:')) : c.policy.allow.includes(command);
+  // camera.action passes with any camera.action:* entry; its own entry is step 11's. The same for
+  // move.finish and move.cancel with either move entry (their role is not checked yet).
+  const entryOk = command === 'camera.action' ? c.policy.allow.some((e) => e.startsWith('camera.action:')) : command === 'move.finish' || command === 'move.cancel' ? MOVE_ENTRIES.some((e) => c.policy.allow.includes(e)) : isMoveCommand(command) ? c.policy.allow.includes(entryFor(command, undefined)) : c.policy.allow.includes(command);
   if (!c.implemented.has(command) || (!claim && !entryOk)) return nack('not_allowed');
   const t = c.limits.take(command);
   if (!t.ok) return nack('rate_limited', t.retryAfterS);
@@ -136,6 +139,8 @@ export function checkCommand(m: Envelope, c: CheckContext): Decision {
   // Step 11 (P3): the entry the args need, and the journal budget.
   const action = command === 'camera.action' ? (v.args as CameraActionArgs).action : undefined;
   if (action !== undefined && ((NEVER_REMOTE_ACTIONS as readonly string[]).includes(action) || !c.policy.allow.includes(`camera.action:${action}`))) return nack('not_allowed');
+  // Moves: the entry of the side the args name (move.finish, move.cancel: args.role), after the args check like tokens.apply.admin.
+  if (isMoveCommand(command) && !c.policy.allow.includes(entryFor(command, v.args))) return nack('not_allowed');
   if (command === 'proxy.restart' || isDisruptive(action)) {
     const budget = c.journalBudget?.(command, action) ?? { ok: true };
     if (!budget.ok) return nack('rate_limited', budget.retryAfterS);

@@ -1,0 +1,36 @@
+{
+  "$note": "copy progress; a chunk id is <kind>:<date>, failed = copied with failures",
+  "schema": "event",
+  "message": {
+    "v": 1,
+    "type": "event",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "kind": "move.progress",
+      "moveId": "mv_0123456789ABCDEFGHJK",
+      "chunks": [
+        {
+          "id": "clips:2026-10-20",
+          "state": "verified"
+        },
+        {
+          "id": "clips:2026-10-21",
+          "state": "pending"
+        },
+        {
+          "id": "events:2026-10-20",
+          "state": "failed"
+        }
+      ],
+      "bytesDone": 10485760,
+      "bytesTotal": 52428800,
+      "rateBps": 1048576,
+      "etaS": 40
+    },
+    "sig": "JojJ327EFbgVe76kOH467QFrkhQ65wwqRg5NhfAxO7okv/1ohIH+jMV0iNBquQLoWaHyOEe5qJ+wvykQ/qwUDw=="
+  }
+}

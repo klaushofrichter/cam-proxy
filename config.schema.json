@@ -854,6 +854,8 @@
               "camera.action:camera-ftp-setup",
               "camera.action:camera-ntp-set",
               "camera.action:camera-cert-push",
+              "move.send",
+              "move.receive",
               "ui.config",
               "ui.restart"
             ]

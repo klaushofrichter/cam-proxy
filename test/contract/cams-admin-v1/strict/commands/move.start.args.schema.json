@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/strict/commands/move.start.args.schema.json",
+  "title": "move.start args v1",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "moveId": {
+      "type": "string",
+      "pattern": "^mv_[0-9A-HJKMNP-TV-Z]{20}$"
+    },
+    "plan": {
+      "type": "object",
+      "properties": {
+        "transfer": {
+          "type": "boolean"
+        },
+        "kinds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "stills",
+              "clips",
+              "events",
+              "checks",
+              "archive"
+            ]
+          },
+          "maxItems": 5,
+          "uniqueItems": true
+        },
+        "space": {
+          "type": "string",
+          "enum": [
+            "all",
+            "omit",
+            "fit",
+            "retention"
+          ]
+        },
+        "targetSettings": {
+          "anyOf": [
+            {
+              "type": "object",
+              "propertyNames": {
+                "pattern": "^[a-z][A-Za-z0-9]{0,31}(\\.[a-z0-9][A-Za-z0-9-]{0,31}){0,5}$"
+              },
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "string",
+                    "maxLength": 512
+                  }
+                ]
+              },
+              "maxProperties": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "budgetS": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "estimateS": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "transfer",
+        "kinds",
+        "space",
+        "targetSettings",
+        "budgetS",
+        "estimateS"
+      ],
+      "additionalProperties": false
+    },
+    "settings": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^(?:(?![\\p{Cc}\\p{Cf}\\p{Cs}\\p{Co}\\p{Zl}\\p{Zp}])\\P{Cn}){1,64}$"
+        },
+        "statusPollS": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ftp": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "stream": {
+              "type": "string",
+              "enum": [
+                "main",
+                "sub"
+              ]
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "stills": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "stream": {
+              "type": "string",
+              "enum": [
+                "sub",
+                "main"
+              ]
+            },
+            "intervalS": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "storage": {
+          "type": "object",
+          "properties": {
+            "sharePercent": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "analytics": {
+          "type": "object",
+          "properties": {
+            "kinds": {
+              "type": "object",
+              "properties": {
+                "person": {
+                  "type": "boolean"
+                },
+                "vehicle": {
+                  "type": "boolean"
+                },
+                "pet": {
+                  "type": "boolean"
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "events": {
+          "type": "object",
+          "properties": {
+            "poll": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "done": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^(stills|clips|events|checks|archive):[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+      },
+      "maxItems": 512
+    }
+  },
+  "required": [
+    "v",
+    "moveId",
+    "plan",
+    "settings",
+    "done"
+  ],
+  "additionalProperties": false
+}

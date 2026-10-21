@@ -1,0 +1,32 @@
+{
+  "$note": "a chunk id without a date",
+  "schema": "event",
+  "$expect": {
+    "runtime": "bad_message",
+    "strict": "invalid"
+  },
+  "message": {
+    "v": 1,
+    "type": "event",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "kind": "move.progress",
+      "moveId": "mv_0123456789ABCDEFGHJK",
+      "chunks": [
+        {
+          "id": "clips",
+          "state": "copied"
+        }
+      ],
+      "bytesDone": 0,
+      "bytesTotal": 1,
+      "rateBps": 0,
+      "etaS": 0
+    },
+    "sig": "ATHLCZm7yD/ovoGDiEz8WPoULGuHwXNq7jFeO2V6K6ule9Z8Ewmflwo9zkWTZyZ9r2eiMKSW2MgnMLN0XfuKDA=="
+  }
+}

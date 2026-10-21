@@ -5,6 +5,8 @@ import { buildEnvelope, fingerprint, parseEnvelope, readCapped, sign, signedText
 import { SeenIds } from './command-check';
 import type { CommandRunner, ConnCtx } from './commands';
 import type { ReplayGuard } from './replay';
+import { EventOutbox } from './outbox';
+import type { MoveEvent } from '../moves/types';
 
 // The outbound client to cams-admin (spec 2026-10-06-cams-admin-phase1-design
 // §8.3-§8.8, §9.1): one WebSocket (Node's global), one timer for the next
@@ -84,6 +86,10 @@ export interface ClientDeps {
   monotonic?: () => number; // ms, for cams-admin's clock between challenges (tests)
   // The signed serverTime's high-water mark (a replayed challenge is refused).
   replay?: Pick<ReplayGuard, 'challenge'> & { problem?: () => string | null };
+  // Move events (emitEvent) wait here while offline; CamsAdmin passes its own so they outlive a client.
+  outbox?: EventOutbox;
+  // After every welcome and the events that waited: re-emit what cams-admin may have missed (a move's current phase).
+  onWelcome?: () => void;
 }
 
 const PROTOCOL = 'cams-admin.v1';
@@ -139,9 +145,11 @@ export class AdminClient {
   private readonly fp: string;
   // This connection's command context (P2): set from the verified challenge.
   private conn: ConnCtx | null = null;
+  private readonly outbox: EventOutbox;
 
   constructor(private readonly d: ClientDeps) {
     this.t = { ...DEFAULT_TIMING, ...d.timing };
+    this.outbox = d.outbox ?? new EventOutbox(d.log);
     this.key = d.keyFile;
     this.fp = fingerprint(d.keyFile.publicKey);
   }
@@ -369,6 +377,20 @@ export class AdminClient {
     return m.id;
   }
 
+  // A signed event that answers no command (camera moves): sent at once while
+  // connected, else kept (the newest 256) and sent in order after the next welcome.
+  emitEvent(body: MoveEvent): void {
+    this.outbox.push(body);
+    this.flushEvents();
+  }
+
+  flushEvents(): void {
+    const ws = this.ws;
+    const conn = this.conn;
+    if (this.state !== 'connected' || !ws || !conn) return;
+    this.outbox.flush((e) => this.sendSigned(ws, 'event', { ...e, proxyId: this.key.proxyId, connId: conn.connId }));
+  }
+
   // A signed result or event (P2): false when the socket can't take it now.
   private sendSigned(ws: WebSocket, type: 'result' | 'event', body: Record<string, unknown>, re?: string): boolean {
     if (this.ws !== ws || ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > this.t.maxBufferedBytes) return false;
@@ -455,6 +477,13 @@ export class AdminClient {
         this.heartbeat();
         // Every done that could not be sent before, as events (P2).
         if (this.d.commands && this.conn) this.d.commands.afterWelcome(this.conn, (type, body, re) => this.sendSigned(ws, type, body, re));
+        // Then the move events that waited, in order, and the owner's re-emit (a move's current phase, plan B2).
+        this.flushEvents();
+        try {
+          this.d.onWelcome?.();
+        } catch (err) {
+          this.clientError('welcome', err);
+        }
         return;
       }
       case 'ack':

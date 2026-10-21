@@ -23,62 +23,870 @@
       "minimum": 0
     },
     "body": {
-      "type": "object",
-      "properties": {
-        "proxyId": {
-          "type": "string",
-          "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "proxyId": {
+              "type": "string",
+              "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+            },
+            "connId": {
+              "type": "string",
+              "pattern": "^con_[0-9A-HJKMNP-TV-Z]{20}$"
+            },
+            "cmdId": {
+              "type": "string",
+              "pattern": "^cmd_[0-9A-HJKMNP-TV-Z]{20}$"
+            },
+            "phase": {
+              "const": "done"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "ok",
+                "failed",
+                "conflict",
+                "refused"
+              ]
+            },
+            "code": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "retryAfterS": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "duplicate": {
+              "type": "boolean"
+            },
+            "result": {
+              "type": "object"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "command.done"
+              ]
+            }
+          },
+          "required": [
+            "proxyId",
+            "connId",
+            "cmdId",
+            "phase",
+            "status",
+            "kind"
+          ],
+          "additionalProperties": false
         },
-        "connId": {
-          "type": "string",
-          "pattern": "^con_[0-9A-HJKMNP-TV-Z]{20}$"
+        {
+          "type": "object",
+          "properties": {
+            "proxyId": {
+              "type": "string",
+              "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+            },
+            "connId": {
+              "type": "string",
+              "pattern": "^con_[0-9A-HJKMNP-TV-Z]{20}$"
+            },
+            "kind": {
+              "const": "move.targets"
+            },
+            "requestId": {
+              "type": "string",
+              "pattern": "^rq_[0-9A-HJKMNP-TV-Z]{20}$"
+            },
+            "camera": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+            }
+          },
+          "required": [
+            "proxyId",
+            "connId",
+            "kind",
+            "requestId",
+            "camera"
+          ],
+          "additionalProperties": false
         },
-        "cmdId": {
-          "type": "string",
-          "pattern": "^cmd_[0-9A-HJKMNP-TV-Z]{20}$"
+        {
+          "type": "object",
+          "properties": {
+            "proxyId": {
+              "type": "string",
+              "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+            },
+            "connId": {
+              "type": "string",
+              "pattern": "^con_[0-9A-HJKMNP-TV-Z]{20}$"
+            },
+            "kind": {
+              "const": "move.request"
+            },
+            "requestId": {
+              "type": "string",
+              "pattern": "^rq_[0-9A-HJKMNP-TV-Z]{20}$"
+            },
+            "camera": {
+              "type": "object",
+              "properties": {
+                "proxyCameraId": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64,
+                  "pattern": "^(?:(?![\\p{Cc}\\p{Cf}\\p{Cs}\\p{Co}\\p{Zl}\\p{Zp}])\\P{Cn}){1,64}$"
+                },
+                "host": {
+                  "type": "string",
+                  "maxLength": 255,
+                  "minLength": 1
+                },
+                "protocol": {
+                  "type": "string",
+                  "enum": [
+                    "https",
+                    "http"
+                  ]
+                },
+                "user": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "onvifPort": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535
+                },
+                "rtspPort": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535
+                },
+                "baichuanPort": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535
+                }
+              },
+              "required": [
+                "proxyCameraId",
+                "name",
+                "host",
+                "protocol",
+                "user",
+                "onvifPort",
+                "rtspPort",
+                "baichuanPort"
+              ],
+              "additionalProperties": false
+            },
+            "target": {
+              "type": "string",
+              "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+            },
+            "actor": {
+              "type": "object",
+              "properties": {
+                "origin": {
+                  "type": "string",
+                  "enum": [
+                    "local",
+                    "managed"
+                  ]
+                },
+                "label": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                }
+              },
+              "required": [
+                "origin",
+                "label"
+              ],
+              "additionalProperties": false
+            },
+            "summary": {
+              "type": "object",
+              "properties": {
+                "stills": {
+                  "type": "object",
+                  "properties": {
+                    "files": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "bytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "rows": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "oldest": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "newest": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "files",
+                    "bytes",
+                    "rows",
+                    "oldest",
+                    "newest"
+                  ],
+                  "additionalProperties": false
+                },
+                "clips": {
+                  "type": "object",
+                  "properties": {
+                    "files": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "bytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "rows": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "oldest": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "newest": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "files",
+                    "bytes",
+                    "rows",
+                    "oldest",
+                    "newest"
+                  ],
+                  "additionalProperties": false
+                },
+                "events": {
+                  "type": "object",
+                  "properties": {
+                    "files": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "bytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "rows": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "oldest": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "newest": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "files",
+                    "bytes",
+                    "rows",
+                    "oldest",
+                    "newest"
+                  ],
+                  "additionalProperties": false
+                },
+                "checks": {
+                  "type": "object",
+                  "properties": {
+                    "files": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "bytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "rows": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "oldest": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "newest": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "files",
+                    "bytes",
+                    "rows",
+                    "oldest",
+                    "newest"
+                  ],
+                  "additionalProperties": false
+                },
+                "archive": {
+                  "type": "object",
+                  "properties": {
+                    "files": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "bytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "rows": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "oldest": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "newest": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "files",
+                    "bytes",
+                    "rows",
+                    "oldest",
+                    "newest"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "stills",
+                "clips",
+                "events",
+                "checks",
+                "archive"
+              ],
+              "additionalProperties": false
+            },
+            "settings": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64,
+                  "pattern": "^(?:(?![\\p{Cc}\\p{Cf}\\p{Cs}\\p{Co}\\p{Zl}\\p{Zp}])\\P{Cn}){1,64}$"
+                },
+                "statusPollS": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "ftp": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "stream": {
+                      "type": "string",
+                      "enum": [
+                        "main",
+                        "sub"
+                      ]
+                    }
+                  },
+                  "required": [],
+                  "additionalProperties": false
+                },
+                "stills": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "stream": {
+                      "type": "string",
+                      "enum": [
+                        "sub",
+                        "main"
+                      ]
+                    },
+                    "intervalS": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    }
+                  },
+                  "required": [],
+                  "additionalProperties": false
+                },
+                "storage": {
+                  "type": "object",
+                  "properties": {
+                    "sharePercent": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 100
+                    }
+                  },
+                  "required": [],
+                  "additionalProperties": false
+                },
+                "analytics": {
+                  "type": "object",
+                  "properties": {
+                    "kinds": {
+                      "type": "object",
+                      "properties": {
+                        "person": {
+                          "type": "boolean"
+                        },
+                        "vehicle": {
+                          "type": "boolean"
+                        },
+                        "pet": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [],
+                  "additionalProperties": false
+                },
+                "events": {
+                  "type": "object",
+                  "properties": {
+                    "poll": {
+                      "type": "object",
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [],
+                  "additionalProperties": false
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "proxyId",
+            "connId",
+            "kind",
+            "requestId",
+            "camera",
+            "target",
+            "actor",
+            "summary",
+            "settings"
+          ],
+          "additionalProperties": false
         },
-        "phase": {
-          "const": "done"
+        {
+          "type": "object",
+          "properties": {
+            "proxyId": {
+              "type": "string",
+              "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+            },
+            "connId": {
+              "type": "string",
+              "pattern": "^con_[0-9A-HJKMNP-TV-Z]{20}$"
+            },
+            "kind": {
+              "const": "move.approve"
+            },
+            "moveId": {
+              "type": "string",
+              "pattern": "^mv_[0-9A-HJKMNP-TV-Z]{20}$"
+            },
+            "plan": {
+              "type": "object",
+              "properties": {
+                "transfer": {
+                  "type": "boolean"
+                },
+                "kinds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "stills",
+                      "clips",
+                      "events",
+                      "checks",
+                      "archive"
+                    ]
+                  },
+                  "maxItems": 5,
+                  "uniqueItems": true
+                },
+                "space": {
+                  "type": "string",
+                  "enum": [
+                    "all",
+                    "omit",
+                    "fit",
+                    "retention"
+                  ]
+                },
+                "targetSettings": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "propertyNames": {
+                        "pattern": "^[a-z][A-Za-z0-9]{0,31}(\\.[a-z0-9][A-Za-z0-9-]{0,31}){0,5}$"
+                      },
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          {
+                            "type": "string",
+                            "maxLength": 512
+                          }
+                        ]
+                      },
+                      "maxProperties": 64
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "budgetS": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "estimateS": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "transfer",
+                "kinds",
+                "space",
+                "targetSettings",
+                "budgetS",
+                "estimateS"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "proxyId",
+            "connId",
+            "kind",
+            "moveId",
+            "plan"
+          ],
+          "additionalProperties": false
         },
-        "status": {
-          "type": "string",
-          "enum": [
-            "ok",
-            "failed",
-            "conflict",
-            "refused"
-          ]
+        {
+          "type": "object",
+          "properties": {
+            "proxyId": {
+              "type": "string",
+              "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+            },
+            "connId": {
+              "type": "string",
+              "pattern": "^con_[0-9A-HJKMNP-TV-Z]{20}$"
+            },
+            "kind": {
+              "const": "move.cancel"
+            },
+            "moveId": {
+              "type": "string",
+              "pattern": "^mv_[0-9A-HJKMNP-TV-Z]{20}$"
+            },
+            "copied": {
+              "type": "string",
+              "enum": [
+                "delete",
+                "age-out"
+              ]
+            }
+          },
+          "required": [
+            "proxyId",
+            "connId",
+            "kind",
+            "moveId",
+            "copied"
+          ],
+          "additionalProperties": false
         },
-        "code": {
-          "type": "string",
-          "maxLength": 64
+        {
+          "type": "object",
+          "properties": {
+            "proxyId": {
+              "type": "string",
+              "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+            },
+            "connId": {
+              "type": "string",
+              "pattern": "^con_[0-9A-HJKMNP-TV-Z]{20}$"
+            },
+            "kind": {
+              "const": "move.phase"
+            },
+            "moveId": {
+              "type": "string",
+              "pattern": "^mv_[0-9A-HJKMNP-TV-Z]{20}$"
+            },
+            "role": {
+              "type": "string",
+              "enum": [
+                "source",
+                "target"
+              ]
+            },
+            "phase": {
+              "type": "string",
+              "enum": [
+                "opened",
+                "switching",
+                "switched",
+                "released",
+                "copying",
+                "copied",
+                "finished",
+                "cancelled",
+                "failed"
+              ]
+            },
+            "ok": {
+              "type": "boolean"
+            },
+            "code": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "detail": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          "required": [
+            "proxyId",
+            "connId",
+            "kind",
+            "moveId",
+            "role",
+            "phase",
+            "ok"
+          ],
+          "additionalProperties": false,
+          "if": {
+            "properties": {
+              "phase": {
+                "const": "failed"
+              }
+            },
+            "required": [
+              "phase"
+            ]
+          },
+          "then": {
+            "properties": {
+              "code": {
+                "type": "string",
+                "maxLength": 64
+              }
+            },
+            "required": [
+              "code"
+            ]
+          }
         },
-        "retryAfterS": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "duplicate": {
-          "type": "boolean"
-        },
-        "result": {
-          "type": "object"
-        },
-        "kind": {
-          "type": "string",
-          "enum": [
-            "command.done"
-          ]
+        {
+          "type": "object",
+          "properties": {
+            "proxyId": {
+              "type": "string",
+              "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+            },
+            "connId": {
+              "type": "string",
+              "pattern": "^con_[0-9A-HJKMNP-TV-Z]{20}$"
+            },
+            "kind": {
+              "const": "move.progress"
+            },
+            "moveId": {
+              "type": "string",
+              "pattern": "^mv_[0-9A-HJKMNP-TV-Z]{20}$"
+            },
+            "chunks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^(stills|clips|events|checks|archive):[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                  },
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "pending",
+                      "copied",
+                      "verified",
+                      "skipped",
+                      "failed"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "state"
+                ],
+                "additionalProperties": false
+              },
+              "maxItems": 4096
+            },
+            "bytesDone": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "bytesTotal": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "rateBps": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "etaS": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "proxyId",
+            "connId",
+            "kind",
+            "moveId",
+            "chunks",
+            "bytesDone",
+            "bytesTotal",
+            "rateBps",
+            "etaS"
+          ],
+          "additionalProperties": false
         }
-      },
-      "required": [
-        "proxyId",
-        "connId",
-        "cmdId",
-        "phase",
-        "status",
-        "kind"
-      ],
-      "additionalProperties": false
+      ]
     },
     "sig": {
       "type": "string",

@@ -68,6 +68,7 @@ import { Journal } from './fleet/journal';
 import { OverridesBackups } from './fleet/backups';
 import { configHandlers, type ConfigCommandDeps } from './fleet/config-commands';
 import { cameraHandlers } from './fleet/camera-commands';
+import { moveHandlers } from './moves/commands';
 import { CommandRunner, type Handler } from './fleet/commands';
 import { ReplayGuard } from './fleet/replay';
 import { privateFileHooks, tightenAdminFiles } from './fleet/private-file';
@@ -999,6 +1000,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     commandHandlers,
     configHandlers(configCommandDeps),
     cameraHandlers({ actions: controlDeps, cameraIds: () => cams.ids(), cameraName: controlDeps.cameraName, audit, restartProcess: () => controlDeps.restartProcess() }),
+    // Camera moves (plan 2026-10-21-camera-move-cam-proxy): stubs until each task fills its handler in.
+    moveHandlers({ emit: (e) => camsAdmin.emitEvent(e), audit }),
   );
   // The admin UI. The files are public; every API call needs a session.
   const webDir = findWebDir();

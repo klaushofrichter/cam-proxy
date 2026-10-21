@@ -9,13 +9,21 @@ import { IMPLEMENTED } from '../src/fleet/policy';
 const k = vectors.keys;
 
 describe('the P3 cross-check rule', () => {
-  it('no vendored command fixture is pending (P3 implemented)', () => {
+  it('no vendored command fixture is pending (P3 and the moves implemented)', () => {
     const p = fixtures().filter(({ f }) => pending(f, IMPLEMENTED)).map((x) => x.name);
     expect(p).toEqual([]);
     // and the rule itself: a P2 proxy would see the P3 fixtures pending, never an unknown command.
     const p2 = fixtures().filter(({ f }) => pending(f, new Set(['tokens.apply', 'tokens.apply.admin']))).map((x) => x.name);
     expect(p2).toContain('valid-command-config-set');
     expect(p2).not.toContain('invalid-command-unknown-name');
+    // per group: a proxy with no move command sees the move fixtures pending; with one, the rest of the group must pass.
+    expect(p2).toContain('valid-command-move-offer');
+    const some = fixtures().filter(({ f }) => pending(f, new Set([...IMPLEMENTED].filter((c) => c !== 'move.offer')))).map((x) => x.name);
+    expect(some).toEqual([]);
+    const oneMove = new Set(['tokens.apply', 'tokens.apply.admin', 'move.targets']);
+    const p3only = fixtures().filter(({ f }) => pending(f, oneMove)).map((x) => x.name);
+    expect(p3only).toContain('valid-command-config-set');
+    expect(p3only).not.toContain('valid-command-move-offer');
   });
 });
 
