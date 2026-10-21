@@ -204,6 +204,36 @@ describe('emitEvent', () => {
     expect(lines.filter((l) => l.m === 'admin_event_dropped').length).toBeLessThanOrEqual(2);
   });
 
+  it('a refused send (backpressure) is retried on the next heartbeat tick, without a new emit', async () => {
+    fake = await startFakeAdmin();
+    fake.welcomeHeartbeatS = 0.2;
+    fake.nextInS = 0.2;
+    const c = make();
+    c.start();
+    await until(() => fake.heartbeats().length >= 1, 5000);
+    const t = (c as unknown as { t: { maxBufferedBytes: number } }).t;
+    const limit = t.maxBufferedBytes;
+    t.maxBufferedBytes = -1;
+    c.emitEvent(phase(7));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(moves()).toHaveLength(0);
+    t.maxBufferedBytes = limit;
+    await until(() => moves().length === 1, 5000);
+    expect(moves()[0].detail).toBe('n7');
+  });
+
+  it('a failed phase event without a code is invalid on the strict schema; with one it is valid', () => {
+    const ev = (body: Record<string, unknown>) => ({ v: 1, type: 'event', id: '01K60000000000000000000003', seq: 3, ts: 1791273600003, sig: `${'A'.repeat(86)}==`, body: { proxyId: 'prx_0123456789ABCDEFGHJK', connId: 'con_0123456789ABCDEFGHJK', kind: 'move.phase', moveId: 'mv_0123456789ABCDEFGHJK', role: 'target', ok: false, ...body } });
+    const v = strict('event');
+    expect(v(ev({ phase: 'failed' }))).toBe(false);
+    expect(v(ev({ phase: 'failed', code: 'token_address' })), why(v)).toBe(true);
+    expect(v(ev({ phase: 'copying', ok: true }))).toBe(true);
+    // and the type refuses it at compile time
+    // @ts-expect-error a failed phase needs a code
+    const bad: MoveEvent = { kind: 'move.phase', moveId: 'mv_x', role: 'target', phase: 'failed', ok: false };
+    expect(bad.kind).toBe('move.phase');
+  });
+
   it('onWelcome runs after every welcome, after the buffered events (B2: re-emit the current phase)', async () => {
     fake = await startFakeAdmin();
     let n = 0;

@@ -602,7 +602,10 @@ export class AdminClient {
 
   private async sendHeartbeat(): Promise<void> {
     const ws = this.ws;
-    if (this.state !== 'connected' || !ws || this.sending) return;
+    if (this.state !== 'connected' || !ws) return;
+    // Move events a full socket refused earlier go out on the heartbeat tick too.
+    this.flushEvents();
+    if (this.sending) return;
     if (this.unacked.size >= 3) {
       this.reason = 'no ack for 3 heartbeats';
       this.d.log.debug({}, 'admin_ack_missing');

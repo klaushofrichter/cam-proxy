@@ -66,5 +66,7 @@ export type MoveEvent =
   | { kind: 'move.request'; requestId: string; camera: MoveCameraConnection; target: string; actor: { origin: 'local' | 'managed'; label: string }; summary: MoveSummary; settings: Settings }
   | { kind: 'move.approve'; moveId: string; plan: MovePlan }
   | { kind: 'move.cancel'; moveId: string; copied: MoveCopied }
-  | { kind: 'move.phase'; moveId: string; role: MoveRole; phase: MovePhaseName; ok: boolean; code?: string; detail?: string }
+  // A failed phase carries a code (the contract requires it); the others may.
+  | { kind: 'move.phase'; moveId: string; role: MoveRole; phase: 'failed'; ok: false; code: string; detail?: string }
+  | { kind: 'move.phase'; moveId: string; role: MoveRole; phase: Exclude<MovePhaseName, 'failed'>; ok: boolean; code?: string; detail?: string }
   | { kind: 'move.progress'; moveId: string; chunks: ChunkProgress[]; bytesDone: number; bytesTotal: number; rateBps: number; etaS: number };
