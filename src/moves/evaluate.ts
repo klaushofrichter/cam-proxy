@@ -150,7 +150,7 @@ export async function evaluate(deps: EvaluateDeps, args: MoveOfferArgs): Promise
   deps.journal.save({
     v: 1, id: args.moveId, role: 'target', camera: id, phase: 'opened', plan: null,
     peer: { proxyId: args.source.proxyId, name: args.source.name, url: args.source.url, caFingerprints: args.source.caFingerprints, tlsServername: args.source.tlsServername, ...(ip ? { ip } : {}) },
-    token: args.token, cameraConnection: connection, summary: args.summary, settings: args.settings,
+    token: args.token, cameraConnection: connection, summary: args.summary, settings: args.settings, space,
     chunks: {}, bytesDone: 0, startedAt: (deps.now ?? Date.now)(),
   });
   return { accept: true, space, probeBps };

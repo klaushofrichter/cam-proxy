@@ -1,7 +1,7 @@
 import { lstatSync, readdirSync, renameSync, rmSync } from 'fs';
 import { join } from 'path';
 import { PrivateFileInvalid, readPrivateJson, writePrivateJson } from '../fleet/private-file';
-import type { ChunkState, MoveActor, MoveAnswer, MoveCameraConnection, MoveCopied, MoveKind, MovePhaseName, MovePlan, MoveRole, MoveSummary, Settings } from './types';
+import type { ChunkState, MoveActor, MoveAnswer, MoveCameraConnection, MoveCopied, MoveKind, MovePhaseName, MovePlan, MoveRole, MoveSummary, Settings, Space } from './types';
 
 // The durable record of one move on this proxy: <dataDir>/admin/moves/<id>.json,
 // mode 600 (it holds the move token hash or the plain token and the target's
@@ -52,6 +52,10 @@ export interface MoveRecord {
   done?: string[];
   // the code a failed move ended with (move.phase failed).
   failure?: string;
+  // target: its own space answer at accept (Task 6); move.start's targetSettings must stay within its proposal.
+  space?: Space | null;
+  // target: the camera step wrote the camera node (a resumed step is not id_taken by its own write).
+  cameraWritten?: boolean;
   // target, stored at accept (Task 6), read at switch-over (Task 8)
   cameraConnection?: MoveCameraConnection;
   summary?: MoveSummary;

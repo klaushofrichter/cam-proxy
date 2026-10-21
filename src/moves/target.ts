@@ -11,7 +11,8 @@ import type { PushResult } from '../tls/push';
 import { sourceGet } from './evaluate';
 import { moveEnded, SWITCH_STEPS, type MoveJournal, type MoveRecord, type SwitchStep } from './journal';
 import { unseal } from './seal';
-import type { MoveEvent, MovePhaseName, MovePlan } from './types';
+import { logger } from '../log';
+import type { MoveEvent, MovePhaseName, MovePlan, Space } from './types';
 
 // The target side of a camera move from move.start on (camera-move plan Task 8,
 // S §9.1, §9.3, §10.1, P1, P12): move.start makes the move's X25519 pair and
@@ -43,18 +44,24 @@ export interface TargetDeps {
   startCopy?: (moveId: string) => void;
   // This proxy's id at cams-admin (audit records name source and target).
   proxyId?: () => string;
+  // A camera event is open: the certificate push waits for its end (it never pushes during one).
+  eventOpen?: (cam: string) => boolean;
   // GET /api/moves/<id>/secrets at the source (overridable for tests).
   fetchSecrets?: (source: MoveOfferArgs['source'], moveId: string, token: string) => Promise<{ status: number; sealed?: string }>;
   // Retries: each step `attempts` times with a backoff from retryMs up to
   // retryCapMs; the source's 409 not_ready (move.go not there yet) is waited
-  // for up to notReadyMs without using up attempts.
-  timing?: { attempts?: number; retryMs?: number; retryCapMs?: number; notReadyMs?: number };
+  // for up to notReadyMs without using up attempts, an open camera event at
+  // the cert step up to eventWaitMs.
+  timing?: { attempts?: number; retryMs?: number; retryCapMs?: number; notReadyMs?: number; eventWaitMs?: number };
 }
 
 const ATTEMPTS = 5;
 const RETRY_MS = 2000;
 const RETRY_CAP_MS = 30_000;
 const NOT_READY_MS = 30 * 60_000; // an offer not approved in 30 minutes expires (S §7)
+const EVENT_WAIT_MS = 10 * 60_000; // a camera event longer than this: the cert step gives up
+// The host limits move.start may set (plan.space retention), each at most the target's own proposal.
+const TARGET_SETTINGS: readonly string[] = ['storage.maxBytes', 'ftp.maxGB', 'stills.maxGB', 'previews.maxGB'];
 const DONE_MAX = 512;
 const CODES: Record<SwitchStep, string> = { secrets: 'secrets_failed', camera: 'camera_failed', cert: 'cert_failed', ftp: 'ftp_failed' };
 
@@ -65,8 +72,26 @@ const keyFingerprint = (spkiB64: string) => `SHA256:${createHash('sha256').updat
 const canonical = (p: MovePlan): string => JSON.stringify([p.transfer, [...p.kinds].sort(), p.space, p.targetSettings ? Object.entries(p.targetSettings).sort(([x], [y]) => (x < y ? -1 : 1)) : null, p.budgetS, p.estimateS]);
 const samePlan = (a: MovePlan | null, b: MovePlan) => a !== null && canonical(a) === canonical(b);
 
-class Stopped extends Error {}
-class NotReady extends Error {}
+// A wait that does not use up a step's attempts: the source without the key yet, an open camera event.
+class Wait extends Error {
+  constructor(message: string, readonly kind: 'source' | 'event') {
+    super(message);
+  }
+}
+// A step that can't succeed by retrying (the move fails at once), with its detail.
+class Refused extends Error {}
+
+// Target settings within the target's own proposal (a forged plan never reaches overrides.json).
+export function targetSettingsProblem(ts: MovePlan['targetSettings'], space: Space | null | undefined): string | null {
+  if (!ts || !Object.keys(ts).length) return null;
+  const proposal = space?.retentionProposal;
+  if (!proposal) return 'plan.targetSettings';
+  for (const [k, v] of Object.entries(ts)) {
+    const want = proposal[k];
+    if (!TARGET_SETTINGS.includes(k) || typeof want !== 'number' || typeof v !== 'number' || !Number.isFinite(v) || v > want) return 'plan.targetSettings';
+  }
+  return null;
+}
 
 interface Run {
   stopped: boolean;
@@ -109,17 +134,17 @@ export class MoveTarget {
     });
   }
 
-  private phase(r: MoveRecord, phase: MovePhaseName, code?: string): void {
+  private phase(r: MoveRecord, phase: MovePhaseName, code?: string, detail?: string): void {
     r.phase = phase;
     if (code) r.failure = code;
     this.d.journal.save(r);
-    if (phase === 'failed') this.d.emit({ kind: 'move.phase', moveId: r.id, role: 'target', phase: 'failed', ok: false, code: code ?? 'internal' });
+    if (phase === 'failed') this.d.emit({ kind: 'move.phase', moveId: r.id, role: 'target', phase: 'failed', ok: false, code: code ?? 'internal', ...(detail ? { detail } : {}) });
     else this.d.emit({ kind: 'move.phase', moveId: r.id, role: 'target', phase, ok: true });
     this.d.audit.write({
       action: 'move-phase', category: ['configuration'], type: ['change'], outcome: phase === 'failed' ? 'failure' : 'success',
       user: 'cams-admin', camera: r.camera,
       message: `Camera move ${r.id} (${r.camera} from ${r.peer.name || r.peer.proxyId}): ${phase}${code ? ` (${code})` : ''}`,
-      details: this.details(r, { phase, ...(code ? { code } : {}) }),
+      details: this.details(r, { phase, ...(code ? { code } : {}), ...(detail ? { detail } : {}) }),
     });
   }
 
@@ -156,6 +181,7 @@ export class MoveTarget {
       return ok({ publicKey: r.x25519.publicSpki, leafFingerprint: r.leaf.fingerprint });
     }
     if (r.phase !== 'opened') return failed('wrong_phase');
+    if (targetSettingsProblem(a.plan.targetSettings, r.space)) return failed('invalid_args');
     const ca = this.d.ca();
     const site = this.d.site();
     if (!ca || !site || !r.cameraConnection) return failed('no_site_ca');
@@ -175,6 +201,8 @@ export class MoveTarget {
     };
     fresh.leaf = { certPem: leaf.certPem, keyPem: leaf.keyPem, fingerprint: leaf.fingerprint };
     fresh.plan = a.plan;
+    // The settings at approval win over those of the offer (bounded to the camera node by the args check).
+    fresh.settings = a.settings;
     fresh.approvedAt = Date.now();
     fresh.budgetS = a.plan.budgetS;
     // B34: what cams-admin already knows as done; the newest are last.
@@ -192,11 +220,23 @@ export class MoveTarget {
     const run: Run = { stopped: false, wake: null, done: Promise.resolve() };
     run.done = new Promise<void>((resolve) => setImmediate(resolve))
       .then(() => this.loop(moveId, run))
-      .catch(() => undefined)
+      .catch(() => this.crashed(moveId))
       .finally(() => {
         if (this.runs.get(moveId) === run) this.runs.delete(moveId);
       });
     this.runs.set(moveId, run);
+  }
+
+  // An unexpected throw (a full disk under the journal, the audit log): a fixed
+  // line (no error text, it could carry anything) and the move failed if that can be recorded.
+  private crashed(moveId: string): void {
+    logger.error({ moveId }, 'move_target_runner_failed');
+    try {
+      const r = this.target(moveId);
+      if (r && !moveEnded(r.phase)) this.phase(r, 'failed', 'internal');
+    } catch {
+      logger.error({ moveId }, 'move_target_failure_not_recorded');
+    }
   }
 
   // Resolves when the move's runner is not running (a test seam, and the stop).
@@ -268,8 +308,8 @@ export class MoveTarget {
       if (run.stopped) return;
       r = this.target(moveId);
       if (!r || r.phase !== 'switching') return;
-      if (outcome === 'failed') {
-        this.phase(r, 'failed', CODES[step]);
+      if (outcome === 'failed' || (typeof outcome === 'object' && outcome)) {
+        this.phase(r, 'failed', CODES[step], typeof outcome === 'object' && outcome ? outcome.refused : undefined);
         return;
       }
       const next = SWITCH_STEPS[SWITCH_STEPS.indexOf(step) + 1];
@@ -287,12 +327,13 @@ export class MoveTarget {
     if (r.phase === 'copying') this.d.startCopy?.(r.id);
   }
 
-  // One step with its retries: 'ok', 'skipped', or 'failed' when it gave up
-  // (each audited once); nothing when the runner was stopped.
-  private async attempt(run: Run, r: MoveRecord, step: SwitchStep): Promise<'ok' | 'skipped' | 'failed' | null> {
+  // One step with its retries: 'ok', 'skipped', 'failed' when it gave up, or
+  // {refused} when retrying can't help (each audited once); null when stopped.
+  private async attempt(run: Run, r: MoveRecord, step: SwitchStep): Promise<'ok' | 'skipped' | 'failed' | { refused: string } | null> {
     const t = this.d.timing ?? {};
     const attempts = t.attempts ?? ATTEMPTS;
-    const notReadyUntil = Date.now() + (t.notReadyMs ?? NOT_READY_MS);
+    const t0 = Date.now();
+    const waitUntil = { source: t0 + (t.notReadyMs ?? NOT_READY_MS), event: t0 + (t.eventWaitMs ?? EVENT_WAIT_MS) };
     let delay = t.retryMs ?? RETRY_MS;
     let tries = 0;
     let why = '';
@@ -305,13 +346,17 @@ export class MoveTarget {
         return out.skipped ? 'skipped' : 'ok';
       } catch (err) {
         if (run.stopped) return null;
-        if (err instanceof NotReady && Date.now() < notReadyUntil) {
+        if (err instanceof Refused) {
+          this.switchAudit(r, step, 'failed', `${step} refused: ${err.message}`, { attempts: tries + 1, detail: err.message });
+          return { refused: err.message };
+        }
+        if (err instanceof Wait && Date.now() < waitUntil[err.kind]) {
           await this.sleep(run, delay);
           delay = Math.min(delay * 2, t.retryCapMs ?? RETRY_CAP_MS);
           continue;
         }
         why = (err as Error).message;
-        if (++tries >= attempts) break;
+        if (++tries >= attempts || err instanceof Wait) break;
         await this.sleep(run, delay);
         delay = Math.min(delay * 2, t.retryCapMs ?? RETRY_CAP_MS);
       }
@@ -338,7 +383,7 @@ export class MoveTarget {
     } catch {
       throw new Error('the source did not answer');
     }
-    if (res.status === 409) throw new NotReady('the source has no key for this move yet');
+    if (res.status === 409) throw new Wait('the source has no key for this move yet', 'source');
     if (res.status !== 200 || !res.sealed) throw new Error(`the source answered ${res.status}`);
     let plain: Buffer;
     try {
@@ -366,9 +411,14 @@ export class MoveTarget {
     const host = r.plan?.space === 'retention' && r.plan.targetSettings ? r.plan.targetSettings : {};
     for (const [path, v] of Object.entries(host)) setPath(patch, path, v);
     const loaded = this.d.loaded();
+    // A camera of this id added here since the offer (not a hidden leftover, not this step's own earlier write): never overwritten.
+    const existing = loaded.config.cameras[r.camera];
+    if (existing && existing.moved === undefined && !r.cameraWritten) throw new Refused('id_taken');
     let plan = planOverrides(loaded, patch);
     const leftover = plan.next.config.cameras[r.camera]?.moved !== undefined;
     if (leftover) plan = planUnset(plan.next, [`cameras.${r.camera}.moved`]);
+    r.cameraWritten = true;
+    this.d.journal.save(r);
     writeOverridesFile(loaded.files.overrides, plan.overrides);
     await this.d.setLoaded(plan.next);
     return { message: `${r.camera} added${leftover ? ' (its hidden entry shown again)' : ''}${Object.keys(host).length ? `; target settings ${Object.keys(host).join(', ')}` : ''}`, details: { leftover, targetSettings: Object.keys(host).length ? host : null } };
@@ -377,7 +427,11 @@ export class MoveTarget {
   private async cert(r: MoveRecord): Promise<{ message: string; details: Record<string, unknown> }> {
     if (!r.leaf) throw new Error('the journal lacks the leaf');
     const leaf = leafOf(r.leaf.certPem, r.leaf.keyPem);
+    const event = () => this.d.eventOpen?.(r.camera) === true;
+    if (event()) throw new Wait('a camera event is open', 'event');
     const res = await this.d.pushLeaf(r.camera, leaf);
+    // The push skips while an event is open (one began meanwhile): waited for like before it.
+    if (res.outcome === 'failed' && event()) throw new Wait('a camera event is open', 'event');
     if (!(res.outcome === 'pushed' || res.outcome === 'current') || res.served !== leaf.fingerprint) {
       throw new Error(`push ${res.outcome}${res.detail ? `: ${res.detail}` : ''}`);
     }

@@ -984,6 +984,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       w.ftpWatch.note(f);
       return verifyFtp('camera-ftp-setup', { ftp: f }, { server: t.server, port: t.port, tls: t.tls, stream: t.stream });
     },
+    eventOpen: (cam) => openEvents(catalog, cam).length > 0,
     // Task 9's copier.
     startCopy: () => undefined,
     proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',

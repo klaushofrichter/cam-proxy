@@ -221,10 +221,10 @@ describe('the switch-over runner (unit)', () => {
     expect(allText(u)).not.toContain(PASSWORD);
   }, 60_000);
 
-  it('camera: the connection fields and the offered settings in one override write, live', async () => {
+  it('camera: the connection fields and the settings of move.start in one override write, live', async () => {
     const u = unit();
     u.journal.save(offered());
-    await u.target.start(startArgs());
+    await u.target.start(startArgs({ settings: { name: 'Garden', statusPollS: 30, storage: { sharePercent: 40 } } }));
     await u.target.idle(MOVE);
     expect(u.loaded.config.cameras.cam9).toMatchObject({ name: 'Garden', host: '192.0.2.9', protocol: 'https', user: 'proxy', onvifPort: 8000, rtspPort: 554, baichuanPort: 9000, statusPollS: 30, storage: { sharePercent: 40 } });
     const file = JSON.parse(readFileSync(u.loaded.files.overrides, 'utf8'));
@@ -236,8 +236,9 @@ describe('the switch-over runner (unit)', () => {
     // Hidden by an earlier move away (the source's release writes `moved` as an override).
     const u = unit({ config: { cameras: [{ id: 'cam1', host: '' }, { id: 'cam9', host: '192.0.2.99' }] }, overrides: { cameras: { cam9: { moved: 'mv_AAAAAAAAAAAAAAAAAAAA' } } } });
     expect(u.loaded.config.cameras.cam9.moved).toBe('mv_AAAAAAAAAAAAAAAAAAAA');
-    u.journal.save(offered());
-    const plan: MovePlan = { ...PLAN, space: 'retention', targetSettings: { 'storage.maxBytes': 50 * 1024 ** 3, 'stills.maxGB': 9, 'previews.maxGB': 3 } };
+    const proposal = { 'storage.maxBytes': 50 * 1024 ** 3, 'stills.maxGB': 9, 'previews.maxGB': 3 };
+    u.journal.save(offered({ space: { needed: 10, available: 5, fits: false, perKind: {}, retentionProposal: proposal } }));
+    const plan: MovePlan = { ...PLAN, space: 'retention', targetSettings: proposal };
     await u.target.start(startArgs({ plan }));
     await u.target.idle(MOVE);
     const c = u.loaded.config;
@@ -323,6 +324,120 @@ describe('the switch-over runner (unit)', () => {
     await u.target.stop(MOVE);
     expect(u.journal.load(MOVE)).toMatchObject({ phase: 'switching', step: 'secrets' });
     expect(phases(u)).toEqual(['switching']);
+  }, 60_000);
+});
+
+describe('fix round 1', () => {
+  const PROPOSAL = { 'storage.maxBytes': 50 * 1024 ** 3, 'ftp.maxGB': 12 };
+  const shortSpace = { needed: 10, available: 5, fits: false, perKind: {}, retentionProposal: PROPOSAL };
+  const retention = (targetSettings: Record<string, number | string | boolean>): MovePlan => ({ ...PLAN, space: 'retention', targetSettings });
+
+  it('move.start refuses target settings outside the stored proposal: nothing written, no runner', async () => {
+    const forged: Record<string, number | string | boolean>[] = [{ 'camsAdmin.url': 'https://203.0.113.9' }, { 'cameras.cam1.host': '192.0.2.66' }, { 'storage.maxBytes': PROPOSAL['storage.maxBytes'] + 1 }, { 'ftp.maxGB': '12' }, { 'stills.maxGB': 3 }];
+    for (const ts of forged) {
+      const u = unit();
+      u.journal.save(offered({ space: shortSpace }));
+      expect(await u.target.start(startArgs({ plan: retention(ts) })), JSON.stringify(ts)).toMatchObject({ status: 'failed', code: 'invalid_args' });
+      await u.target.idle(MOVE);
+      const r = u.journal.load(MOVE)!;
+      expect(r.x25519).toBeUndefined();
+      expect(r.leaf).toBeUndefined();
+      expect(r.plan).toBeNull();
+      expect(u.calls).toEqual([]);
+      expect(u.events).toEqual([]);
+    }
+    // Without a stored proposal no target settings at all.
+    const n = unit();
+    n.journal.save(offered());
+    expect(await n.target.start(startArgs({ plan: retention({ 'ftp.maxGB': 12 }) }))).toMatchObject({ status: 'failed', code: 'invalid_args' });
+  }, 60_000);
+
+  it('move.start takes the proposal itself', async () => {
+    const u = unit();
+    u.journal.save(offered({ space: shortSpace }));
+    expect((await u.target.start(startArgs({ plan: retention(PROPOSAL) }))).status).toBe('ok');
+    await u.target.idle(MOVE);
+    expect(u.loaded.config.ftp.maxGB).toBe(12);
+    expect(u.loaded.config.storage.maxBytes).toBe(PROPOSAL['storage.maxBytes']);
+  }, 60_000);
+
+  it('cert: an open camera event is waited for without using up attempts', async () => {
+    const u = unit({ attempts: 2 });
+    let open = true;
+    u.deps.eventOpen = () => open;
+    u.journal.save(offered());
+    await u.target.start(startArgs());
+    // Longer than 2 attempts with their backoff (5 ms, 20 ms cap).
+    await new Promise((r) => setTimeout(r, 300));
+    expect(u.journal.load(MOVE)).toMatchObject({ phase: 'switching', step: 'cert' });
+    open = false;
+    await u.target.idle(MOVE);
+    expect(u.journal.load(MOVE)!.phase).toBe('copying');
+    expect(u.calls.filter((c) => c === 'cert')).toHaveLength(1);
+  }, 60_000);
+
+  it('cert: an event open beyond the wait gives up with cert_failed', async () => {
+    const u = unit();
+    u.deps.eventOpen = () => true;
+    u.deps.timing = { ...u.deps.timing, eventWaitMs: 100 };
+    u.journal.save(offered());
+    await u.target.start(startArgs());
+    await u.target.idle(MOVE);
+    expect(u.journal.load(MOVE)).toMatchObject({ phase: 'failed', failure: 'cert_failed' });
+  }, 60_000);
+
+  it('camera: a camera with the same id added here since the offer is refused (id_taken), nothing written', async () => {
+    const u = unit();
+    u.journal.save(offered());
+    // The local admin adds cam9 after the offer.
+    const before = JSON.stringify(u.loaded.overrides);
+    u.deps.loaded = () => ({ ...u.loaded, config: { ...u.loaded.config, cameras: { ...u.loaded.config.cameras, cam9: { ...u.loaded.config.cameras.cam1, host: '192.0.2.77' } } } });
+    await u.target.start(startArgs());
+    await u.target.idle(MOVE);
+    expect(u.calls).toEqual(['secrets']);
+    expect(u.journal.load(MOVE)).toMatchObject({ phase: 'failed', failure: 'camera_failed' });
+    expect(u.events.at(-1)).toEqual({ kind: 'move.phase', moveId: MOVE, role: 'target', phase: 'failed', ok: false, code: 'camera_failed', detail: 'id_taken' });
+    expect(JSON.stringify(u.loaded.overrides)).toBe(before);
+  }, 60_000);
+
+  it('camera: a resumed camera step after its own write is not id_taken', async () => {
+    const a = unit({ step: { camera: () => Promise.reject(new Error('process stopped')) } });
+    a.journal.save(offered());
+    await a.target.start(startArgs());
+    await until(() => a.calls.includes('camera'));
+    await a.target.stop(MOVE);
+    // The overrides were written before the stop; a new process loads them.
+    const b = unit({ dir: a.dir });
+    expect(b.loaded.config.cameras.cam9).toBeDefined();
+    b.target.resume();
+    await b.target.idle(MOVE);
+    expect(b.journal.load(MOVE)!.phase).toBe('copying');
+  }, 60_000);
+
+  it('an unexpected throw in the runner ends the move failed (internal), with an event', async () => {
+    const u = unit();
+    u.journal.save(offered());
+    const save = u.journal.save.bind(u.journal);
+    let thrown = false;
+    u.deps.journal = { load: (id) => u.journal.load(id), active: () => u.journal.active(), save: (r) => {
+      if (!thrown && r.step === 'cert') { thrown = true; throw new Error('ENOSPC'); }
+      save(r);
+    } };
+    const t = new MoveTarget(u.deps);
+    await t.start(startArgs());
+    await t.idle(MOVE);
+    expect(u.events.at(-1)).toEqual({ kind: 'move.phase', moveId: MOVE, role: 'target', phase: 'failed', ok: false, code: 'internal' });
+    expect(u.journal.load(MOVE)).toMatchObject({ phase: 'failed', failure: 'internal' });
+  }, 60_000);
+
+  it("move.start's settings win over the offer's and are kept in the record", async () => {
+    const u = unit();
+    u.journal.save(offered());
+    await u.target.start(startArgs({ settings: { name: 'Porch', statusPollS: 15 } }));
+    await u.target.idle(MOVE);
+    expect(u.journal.load(MOVE)!.settings).toEqual({ name: 'Porch', statusPollS: 15 });
+    expect(u.loaded.config.cameras.cam9).toMatchObject({ name: 'Porch', statusPollS: 15 });
+    expect(u.loaded.config.cameras.cam9.storage.sharePercent).toBeUndefined();
   }, 60_000);
 });
 

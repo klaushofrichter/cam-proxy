@@ -191,6 +191,8 @@ describe('accepting writes the target record (B4, B32)', () => {
       peer: { proxyId: o.source.proxyId, name: 'een', url: o.source.url, caFingerprints: o.source.caFingerprints, tlsServername: 'proxy.garage.internal', ip: '198.51.100.7' },
       cameraConnection: { proxyCameraId: 'cam9', name: 'Garden', host: '192.0.2.9', protocol: 'https', user: 'proxy', onvifPort: 8000, rtspPort: 554, baichuanPort: 9000 },
       summary: o.summary, settings: { statusPollS: 30 },
+      // The target's own space answer: move.start checks targetSettings against its proposal.
+      space: r.accept ? r.space : null,
     });
     expect(rec.cameraConnection).not.toHaveProperty('camsId');
     expect(statSync(join(f.dir, 'admin', 'moves', `${MOVE}.json`)).mode & 0o777).toBe(0o600);
