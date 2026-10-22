@@ -75,6 +75,7 @@ import { movesControlApi } from './api/moves-control-api';
 import { ManifestCache } from './moves/manifest-cache';
 import { MoveSource } from './moves/source';
 import { MoveTarget } from './moves/target';
+import { CopyRunner } from './moves/copier';
 import { cameraPasswordStore } from './config/camera-passwords';
 import { verifyFtp } from './fleet/camera-commands';
 import { availableParallelism, loadavg } from 'os';
@@ -985,10 +986,30 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       return verifyFtp('camera-ftp-setup', { ftp: f }, { server: t.server, port: t.port, tls: t.tls, stream: t.stream });
     },
     eventOpen: (cam) => openEvents(catalog, cam).length > 0,
-    // Task 9's copier.
-    startCopy: () => undefined,
+    // The copier (Task 9), one per move; stop() ends it too.
+    startCopy: (id) => moveCopier.start(id),
+    stopCopy: (id) => moveCopier.stop(id),
     proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
     timing: opts.moves,
+  });
+  // The target's copier (camera-move plan Task 9): the camera's old content
+  // from the source, after the switch-over; waits while storage is paused.
+  const moveCopier = new CopyRunner({
+    journal: moveJournal,
+    audit,
+    emit: (e) => camsAdmin.emitEvent(e),
+    catalog,
+    dataDir: running.server.dataDir,
+    paused: () => storage.paused(),
+    cpuBusy: () => loadavg()[0] > availableParallelism(),
+    space: {
+      loaded: () => loaded,
+      usage: () => { const u = storage.usage(); return { stills: u.stills.bytes, previews: u.previews.bytes, clips: u.clips.bytes, used: u.used, budget: u.budget }; },
+      freeBytes: () => storage.diskSpace().free,
+    },
+    noteWritten: (kind, bytes, cam) => storage.noteWritten(kind, bytes, 1, { growth: false, cam }),
+    setPhase: (r, phase, o) => moveTarget.setPhase(r, phase, o),
+    proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
   });
   // After every welcome: the open move's phase again (B2).
   camsAdmin.onWelcome(() => {

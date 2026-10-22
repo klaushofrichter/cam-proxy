@@ -1,6 +1,7 @@
 import { lstatSync, readdirSync, renameSync, rmSync } from 'fs';
 import { join } from 'path';
 import { PrivateFileInvalid, readPrivateJson, writePrivateJson } from '../fleet/private-file';
+import type { ImportMap } from './import';
 import type { ChunkState, MoveActor, MoveAnswer, MoveCameraConnection, MoveCopied, MoveKind, MovePhaseName, MovePlan, MoveRole, MoveSummary, Settings, Space } from './types';
 
 // The durable record of one move on this proxy: <dataDir>/admin/moves/<id>.json,
@@ -9,8 +10,28 @@ import type { ChunkState, MoveActor, MoveAnswer, MoveCameraConnection, MoveCopie
 export type SwitchStep = 'secrets' | 'camera' | 'cert' | 'ftp';
 export const SWITCH_STEPS: readonly SwitchStep[] = ['secrets', 'camera', 'cert', 'ftp'];
 export interface ChunkMeta { id: string; kind: MoveKind; day: string; files: number; bytes: number; rows: number }
-export interface ChunkFile { size: number; sha256?: string; state: string }
-export interface ChunkRecord { state: ChunkState; files?: Record<string, ChunkFile> }
+// A chunk on the target (Task 9), kept small: no per-file list for stills
+// (a day has 1440+ files; a resumed chunk checks its files on disk instead).
+export interface ChunkRecord {
+  state: ChunkState;
+  // Once the chunk ended: files verified, skipped (expired at the source, or a
+  // file of that name the target stored itself), failed; bytes verified; bytes handled.
+  v?: number;
+  s?: number;
+  f?: number;
+  vb?: number;
+  b?: number;
+  // Rows imported and skipped (duplicates, files not verified or expired).
+  rowsInserted?: number;
+  rowsSkipped?: number;
+  // The chunk as the source listed it when copied (P12: copied again when it changes).
+  meta?: { files: number; bytes: number; rows: number };
+  // Files of the id-named kinds verified (their staged copies are renamed by
+  // the import, so a disk check can't find them again).
+  vf?: string[];
+  // Source id -> target id per table of the rows imported (importRows' map).
+  imported?: ImportMap;
+}
 
 export interface MovePeer {
   proxyId: string;
@@ -68,6 +89,10 @@ export interface MoveRecord {
   approvedAt?: number;
   budgetS?: number;
   budgetExceeded?: boolean;
+  // target: the rate the offer's probe measured (0: none), when copying began, the last rate before halving.
+  probeBps?: number;
+  copyStartedAt?: number;
+  lastRateBps?: number;
   copied?: MoveCopied;
 }
 

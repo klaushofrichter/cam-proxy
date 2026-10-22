@@ -29,6 +29,9 @@ export interface ManifestFile { path: string; size: number; sha256: string }
 export interface TableRows { table: string; rows: object[] }
 
 const FOLDERS: Record<MoveKind, string[]> = { stills: ['stills', 'previews'], clips: ['clips'], events: ['analytics'], checks: ['still-checks'], archive: ['archive'] };
+export const KIND_FOLDERS: Readonly<Record<MoveKind, readonly string[]>> = FOLDERS;
+// A copier's temporary file (<final>.move-<id>.part, Task 9): never content.
+export const MOVE_PART = /\.move-[A-Za-z0-9_-]{1,64}\.part$/;
 // Every folder a camera's moved content lies in (<dataDir>/<folder>/<cam>/...).
 export const CONTENT_FOLDERS: readonly string[] = Object.values(FOLDERS).flat();
 // Within a day: small and most-opened first (P11).
@@ -92,7 +95,7 @@ class Cam {
       for (const e of readdirSync(d, { withFileTypes: true })) {
         const p = join(d, e.name);
         if (e.isDirectory()) go(p);
-        else if (e.isFile()) out.push(p);
+        else if (e.isFile() && !MOVE_PART.test(e.name)) out.push(p);
       }
     };
     go(dir);
@@ -201,7 +204,7 @@ export function listChunks(d: InventoryDeps, cam: string, kinds: MoveKind[]): Ch
 // Opens the file (a link is refused), checks it is a regular file and streams
 // it through the hash. The size is the number of bytes hashed, so the two
 // always describe the same bytes even if the file is replaced meanwhile.
-async function hashFile(path: string): Promise<{ size: number; sha256: string }> {
+export async function hashFile(path: string): Promise<{ size: number; sha256: string }> {
   const fh = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     if (!(await fh.stat()).isFile()) throw new Error('not a regular file');

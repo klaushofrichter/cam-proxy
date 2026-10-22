@@ -40,8 +40,10 @@ export interface TargetDeps {
   pushLeaf: (cam: string, leaf: Leaf) => Promise<PushResult>;
   // The camera's FTP pointed at this proxy and read back (verifyFtp); 'skipped' when FTP is off for it.
   ftp: (cam: string) => Promise<'skipped' | { verified: boolean; mismatch: string[] }>;
-  // Task 9's copier starts here (after switched, P12); a no-op until then.
+  // The copier (Task 9's CopyRunner) starts here, after switched (P12); one per
+  // move however often it is called. stopCopy ends it (stop(), stopAll()).
   startCopy?: (moveId: string) => void;
+  stopCopy?: (moveId: string) => Promise<void>;
   // This proxy's id at cams-admin (audit records name source and target).
   proxyId?: () => string;
   // A camera event is open: the certificate push waits for its end (it never pushes during one).
@@ -109,6 +111,8 @@ export async function fetchSecrets(source: MoveOfferArgs['source'], moveId: stri
 export class MoveTarget {
   private readonly runs = new Map<string, Run>();
   private readonly starting = new Map<string, Promise<Done>>();
+  // Moves whose copier was started here (stopAll stops them).
+  private readonly copying = new Set<string>();
 
   constructor(private readonly d: TargetDeps) {}
 
@@ -135,16 +139,23 @@ export class MoveTarget {
   }
 
   private phase(r: MoveRecord, phase: MovePhaseName, code?: string, detail?: string): void {
+    this.setPhase(r, phase, { code, detail });
+  }
+
+  // A phase change of a target move: journal, move.phase event, move-phase
+  // audit (`extra` goes into the audit details only: the copier's counts).
+  setPhase(r: MoveRecord, phase: MovePhaseName, o: { code?: string; detail?: string; extra?: Record<string, unknown> } = {}): void {
+    const { code, detail } = o;
     r.phase = phase;
     if (code) r.failure = code;
     this.d.journal.save(r);
     if (phase === 'failed') this.d.emit({ kind: 'move.phase', moveId: r.id, role: 'target', phase: 'failed', ok: false, code: code ?? 'internal', ...(detail ? { detail } : {}) });
-    else this.d.emit({ kind: 'move.phase', moveId: r.id, role: 'target', phase, ok: true });
+    else this.d.emit({ kind: 'move.phase', moveId: r.id, role: 'target', phase, ok: true, ...(detail ? { detail: detail.slice(0, 200) } : {}) });
     this.d.audit.write({
       action: 'move-phase', category: ['configuration'], type: ['change'], outcome: phase === 'failed' ? 'failure' : 'success',
       user: 'cams-admin', camera: r.camera,
-      message: `Camera move ${r.id} (${r.camera} from ${r.peer.name || r.peer.proxyId}): ${phase}${code ? ` (${code})` : ''}`,
-      details: this.details(r, { phase, ...(code ? { code } : {}), ...(detail ? { detail } : {}) }),
+      message: `Camera move ${r.id} (${r.camera} from ${r.peer.name || r.peer.proxyId}): ${phase}${code ? ` (${code})` : ''}${detail && phase !== 'failed' ? `, ${detail}` : ''}`,
+      details: this.details(r, { phase, ...(code ? { code } : {}), ...(detail ? { detail } : {}), ...(o.extra ?? {}) }),
     });
   }
 
@@ -244,20 +255,24 @@ export class MoveTarget {
     return this.runs.get(moveId)?.done ?? Promise.resolve();
   }
 
-  // Ends the runner (Task 10's cancel, the process stop): the journal keeps the
-  // step it was in. A step in flight finishes or fails first.
+  // Ends the runner and the copier (Task 10's cancel, the process stop): the
+  // journal keeps the step it was in. A step in flight finishes or fails
+  // first; the copier drops the file in flight (its temporary file).
   async stop(moveId: string): Promise<void> {
     const run = this.runs.get(moveId);
-    if (!run) return;
-    run.stopped = true;
-    run.wake?.();
-    await run.done;
+    if (run) {
+      run.stopped = true;
+      run.wake?.();
+      await run.done;
+    }
+    await this.d.stopCopy?.(moveId);
   }
 
   // The process stop: every runner told to stop; a step in flight (a push can
   // take a minute) is waited for at most `waitMs`, its result then not recorded.
   async stopAll(waitMs = 3000): Promise<void> {
-    const all = Promise.all([...this.runs.keys()].map((id) => this.stop(id)));
+    const ids = new Set([...this.runs.keys(), ...this.copying]);
+    const all = Promise.all([...ids].map((id) => this.stop(id)));
     let t: NodeJS.Timeout | undefined;
     await Promise.race([all, new Promise<void>((r) => (t = setTimeout(r, waitMs)))]);
     clearTimeout(t);
@@ -324,7 +339,10 @@ export class MoveTarget {
     if (run.stopped) return;
     // P12: copying starts right after switched, without waiting for the source's release.
     if (r.phase === 'switched') this.phase(r, 'copying');
-    if (r.phase === 'copying') this.d.startCopy?.(r.id);
+    if (r.phase === 'copying') {
+      this.copying.add(r.id);
+      this.d.startCopy?.(r.id);
+    }
   }
 
   // One step with its retries: 'ok', 'skipped', 'failed' when it gave up, or

@@ -119,7 +119,8 @@ export function movesSourceApi(d: MovesSourceDeps): express.Router {
     let r = recordOf(res);
     if (!r.manifest) return notReady(res);
     if (AFTER_RELEASE.includes(r.phase) && r.manifestRefreshedAt === undefined) r = refreshManifest(d, r.id, cache) ?? r;
-    res.json({ chunks: r.manifest });
+    // `refreshed`: the chunks from the approval day on were listed again (the target copies them once more).
+    res.json({ chunks: r.manifest, refreshed: r.manifestRefreshedAt !== undefined });
   });
 
   router.get('/moves/:id/chunks/:chunkId', busyGate, async (req, res) => {

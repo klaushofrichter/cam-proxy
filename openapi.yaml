@@ -65,16 +65,17 @@ paths:
         '503': { description: "{ error: busy } (the move journal can't be read)" }
   /api/moves/{id}/manifest:
     get:
-      summary: "The move's chunks: { chunks: [{ id, kind, day, files, bytes, rows }] }, newest day first"
+      summary: "The move's chunks: { chunks: [{ id, kind, day, files, bytes, rows }], refreshed }, newest day first"
       description: >
         Frozen at move.go. Once the move is released, the chunks from the approval day
         on are listed once more (what the source captured during the overlap); their
-        cached file manifests are dropped.
+        cached file manifests are dropped, and `refreshed` is true from then on (the
+        target's copier fetches those chunks again).
       security: [{ moveToken: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' } }
       responses:
-        '200': { description: "{ chunks: ChunkMeta[] }" }
+        '200': { description: "{ chunks: ChunkMeta[], refreshed: boolean }" }
         '409': { description: "{ error: not_ready } (not frozen yet)" }
         '403': { description: "{ error: move_token } (as for /probe)" }
   /api/moves/{id}/chunks/{chunkId}:

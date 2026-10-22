@@ -150,7 +150,7 @@ export async function evaluate(deps: EvaluateDeps, args: MoveOfferArgs): Promise
   deps.journal.save({
     v: 1, id: args.moveId, role: 'target', camera: id, phase: 'opened', plan: null,
     peer: { proxyId: args.source.proxyId, name: args.source.name, url: args.source.url, caFingerprints: args.source.caFingerprints, tlsServername: args.source.tlsServername, ...(ip ? { ip } : {}) },
-    token: args.token, cameraConnection: connection, summary: args.summary, settings: args.settings, space,
+    token: args.token, cameraConnection: connection, summary: args.summary, settings: args.settings, space, probeBps,
     chunks: {}, bytesDone: 0, startedAt: (deps.now ?? Date.now)(),
   });
   return { accept: true, space, probeBps };
@@ -260,4 +260,48 @@ async function probe(source: MoveOfferArgs['source'], moveId: string, token: str
   const r = await get(source, `/api/moves/${moveId}/probe?bytes=${PROBE_BYTES}`, { token, ca, capMs: PROBE_CAP_MS });
   if (r.status !== 200 || r.received === 0) return 0;
   return Math.round((r.received * 1000) / Math.max(1, Date.now() - t0));
+}
+
+// The copier's way to the source (camera-move plan Task 9): streaming GETs
+// with the move token, pinned like sourceGet; the pinned CA is fetched once per
+// client and again after a failure. A stalled answer (no bytes for `idleMs`)
+// ends with an error. Nothing here puts the token in an error.
+export interface SourceAnswer { status: number; body: AsyncIterable<Buffer> }
+export function moveSourceClient(source: MoveOfferArgs['source'], token: string, o: { idleMs?: number } = {}): { get: (path: string, signal: AbortSignal) => Promise<SourceAnswer> } {
+  let ca: Promise<string | undefined | null> | null = null;
+  return {
+    get: async (path, signal) => {
+      const pending = (ca ??= pinnedCa(source));
+      let pem: string | undefined | null;
+      try {
+        pem = await pending;
+      } catch {
+        ca = null;
+        throw new Error('source not reachable');
+      }
+      if (pem === null) {
+        ca = null;
+        throw new Error('the source CA is not the pinned one');
+      }
+      return streamGet(source, path, token, pem, signal, o.idleMs ?? 60_000);
+    },
+  };
+}
+
+function streamGet(source: MoveOfferArgs['source'], path: string, token: string, ca: string | undefined, signal: AbortSignal, idleMs: number): Promise<SourceAnswer> {
+  const u = new URL(source.url);
+  const https = u.protocol === 'https:';
+  return new Promise((resolve, reject) => {
+    const req = (https ? httpsRequest : httpRequest)(
+      {
+        hostname: u.hostname.replace(/^\[(.*)\]$/, '$1'), port: u.port || (https ? 443 : 80), path, method: 'GET', signal,
+        headers: { Authorization: `Bearer ${token}` },
+        ...(https ? { ca, servername: source.tlsServername, rejectUnauthorized: true } : {}),
+      },
+      (res) => resolve({ status: res.statusCode ?? 0, body: res }),
+    );
+    req.setTimeout(idleMs, () => req.destroy(new Error('source stalled')));
+    req.once('error', () => reject(new Error(signal.aborted ? 'aborted' : 'source not reachable')));
+    req.end();
+  });
 }

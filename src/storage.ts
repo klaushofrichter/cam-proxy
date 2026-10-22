@@ -109,6 +109,7 @@ export class Storage extends EventEmitter {
             for (const dd of safeDir(join(base, cam, y, m))) {
               const folder = join(base, cam, y, m, dd);
               for (const name of safeDir(folder)) {
+                if (name.endsWith('.part')) continue; // a camera move's copy being written (Task 9)
                 const hm = /^(\d{2})(\d{2})(?:-[^.]*)?\./.exec(name);
                 if (!hm) continue;
                 const ts = Date.UTC(Number(y), Number(m) - 1, Number(dd), Number(hm[1]), Number(hm[2]));
