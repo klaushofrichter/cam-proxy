@@ -1,4 +1,4 @@
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, writeFileSync, writeSync } from 'fs';
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from 'fs';
 import { join } from 'path';
 import type { AuditLog } from '../audit/audit-log';
 import { logger } from '../log';
@@ -73,7 +73,8 @@ interface Extra {
   blocked: 'unreadable' | 'cleared' | null;
   // A camera move (camera-move plan P8): the one leaf (its fingerprint) the camera
   // may serve besides ours without being unexpected: the target's on the source
-  // (set by move.go), the source's on the target (move.cancel); cleared at the end.
+  // (set by move.go, and again by a cancel until the source's own leaf is back);
+  // cleared at the end. The target never has one (B36: it lets go of the camera first).
   expected: string | null;
   // That leaf as the camera served it (only a PEM that hashes to `expected`), and
   // whether the camera served it when last read: then its client pins exactly it.
@@ -391,6 +392,33 @@ export class CameraCerts {
     this.audit(id, 'success', `Camera trust cleared (${id}): ${prev.mode} → none`, who, { from: prev.mode, fingerprint: prev.fingerprint, factory });
     this.d.onTrust?.(id);
     return this.state(id);
+  }
+
+  // A camera gone from this proxy by a move (the source's finish, the
+  // target's cancel): its leaf files (also those moved aside) and its state
+  // entry are deleted, audited once. Nothing to forget: nothing happens.
+  forget(id: string, who?: Requester): void {
+    if (!/^[a-z0-9-]+$/.test(id)) throw new Error('forget: not a camera id');
+    const dir = join(this.d.dir, 'cameras');
+    let files = 0;
+    if (existsSync(dir)) {
+      for (const f of readdirSync(dir)) {
+        if (!f.startsWith(`${id}.crt`) && !f.startsWith(`${id}.key`)) continue;
+        rmSync(join(dir, f), { force: true });
+        files++;
+      }
+    }
+    const known = this.states.has(id) || this.extras.has(id);
+    const prev = this.state(id);
+    this.states.delete(id);
+    this.extras.delete(id);
+    this.leaves.delete(id);
+    this.staged.delete(id);
+    if (!files && !known) return;
+    this.settleCorrupt();
+    this.save();
+    this.audit(id, 'success', `Camera trust ${id}: forgotten, the camera moved away (${prev.mode} → none)`, who, { from: prev.mode, fingerprint: prev.fingerprint, files });
+    this.d.onTrust?.(id);
   }
 
   private load(id: string): Leaf | null {

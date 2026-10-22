@@ -76,6 +76,7 @@ import { ManifestCache } from './moves/manifest-cache';
 import { MoveSource } from './moves/source';
 import { MoveTarget } from './moves/target';
 import { CopyRunner } from './moves/copier';
+import { purgeCamera } from './moves/purge';
 import { cameraPasswordStore } from './config/camera-passwords';
 import { verifyFtp } from './fleet/camera-commands';
 import { availableParallelism, loadavg } from 'os';
@@ -941,9 +942,27 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     busy: () => storage.paused() || loadavg()[0] > availableParallelism(),
     password: (cam) => cameraPassword(loaded.secrets, cam),
     cache: manifestCache,
-    // A valid move token from another address (B46): cams-admin hears it once.
-    onWrongAddress: (r) => camsAdmin.emitEvent({ kind: 'move.phase', moveId: r.id, role: 'source', phase: 'failed', ok: false, code: 'token_address' }),
+    // A valid move token from another address (B46): the move fails (journalled), cams-admin hears it once.
+    onWrongAddress: (r) => moveSource.wrongAddress(r),
   }));
+  // The end of a move (Task 10), both sides: the camera's content, its stored
+  // password, its leaf; the camera's FTP pointed here and read back.
+  const movePasswords = cameraPasswordStore(running.server.dataDir);
+  const moveEnd = {
+    dataDir: running.server.dataDir,
+    purge: (cam: string) => purgeCamera({ catalog, dataDir: running.server.dataDir, storage, archive }, cam),
+    deletePassword: (cam: string) => movePasswords.delete(cam),
+    forgetLeaf: (cam: string) => certs?.forget(cam, { user: 'cams-admin' }),
+  };
+  const ftpHere = async (cam: string): Promise<'skipped' | { verified: boolean; mismatch: string[] }> => {
+    const w = cams.get(cam);
+    if (!w) throw new Error(`${cam} is not running`);
+    if (!w.cam().ftp.enabled) return 'skipped';
+    const t = ftpTargetFor(cam)();
+    const f = await setupCameraFtp(w.client, t);
+    w.ftpWatch.note(f);
+    return verifyFtp('camera-ftp-setup', { ftp: f }, { server: t.server, port: t.port, tls: t.tls, stream: t.stream });
+  };
   // The source side of a camera move (camera-move plan Task 7).
   const moveSource = new MoveSource({
     journal: moveJournal,
@@ -958,6 +977,21 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     certs: () => certs,
     refreshManifest: (id) => void refreshManifest({ journal: moveJournal, inventory: moveInventory }, id, manifestCache),
     proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
+    end: {
+      ...moveEnd,
+      // The source's own stored leaf, pushed like "Push now"; then the expected
+      // leaf's check reads what the camera serves (the client trusts it again).
+      pushOwnLeaf: async (cam) => {
+        if (!certs || !running.tls.site) return { outcome: 'failed' as const, served: null, detail: caProblem ?? 'the site CA is not ready', tookMs: 0 };
+        const own = certs.leaf(cam);
+        if (own) certs.stageLeaf(cam, own);
+        const r = await certs.pushNow(cam, { user: 'cams-admin' });
+        await certs.checkExpected();
+        return r;
+      },
+      ftp: ftpHere,
+      settled: () => reconciling,
+    },
   });
   // The target side from move.start on (camera-move plan Task 8): the
   // switch-over runner, resumed from the journal at start.
@@ -973,24 +1007,17 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       setLoaded(l);
       await reconciling;
     },
-    passwords: cameraPasswordStore(running.server.dataDir),
+    passwords: movePasswords,
     stageLeaf: (cam, leaf) => certs?.stageLeaf(cam, leaf),
     pushLeaf: (cam, leaf) => (certs && running.tls.site ? certs.pushLeaf(cam, leaf, { user: 'cams-admin' }) : Promise.resolve({ outcome: 'failed' as const, served: null, detail: caProblem ?? 'the site CA is not ready', tookMs: 0 })),
-    ftp: async (cam) => {
-      const w = cams.get(cam);
-      if (!w) throw new Error(`${cam} is not running`);
-      if (!w.cam().ftp.enabled) return 'skipped';
-      const t = ftpTargetFor(cam)();
-      const f = await setupCameraFtp(w.client, t);
-      w.ftpWatch.note(f);
-      return verifyFtp('camera-ftp-setup', { ftp: f }, { server: t.server, port: t.port, tls: t.tls, stream: t.stream });
-    },
+    ftp: ftpHere,
     eventOpen: (cam) => openEvents(catalog, cam).length > 0,
     // The copier (Task 9), one per move; stop() ends it too.
     startCopy: (id) => moveCopier.start(id),
     stopCopy: (id) => moveCopier.stop(id),
     proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
     timing: opts.moves,
+    end: moveEnd,
   });
   // The target's copier (camera-move plan Task 9): the camera's old content
   // from the source, after the switch-over; waits while storage is paused.

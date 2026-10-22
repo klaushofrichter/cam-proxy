@@ -1,15 +1,15 @@
 import type { AuditLog } from '../audit/audit-log';
-import type { Handler } from '../fleet/commands';
+import type { Done, Handler } from '../fleet/commands';
 import { MOVE_COMMANDS } from '../fleet/policy';
-import type { MoveOfferArgs } from '../fleet/command-args';
+import type { MoveCancelArgs, MoveFinishArgs, MoveOfferArgs } from '../fleet/command-args';
 import { evaluate, type EvaluateDeps, type Evaluation } from './evaluate';
 import type { MoveSource } from './source';
 import type { MoveTarget } from './target';
 import type { MoveEvent } from './types';
 
 // cams-admin's move commands (cam-proxy plan 2026-10-21-camera-move-cam-proxy):
-// the nine handlers by command name. Tasks 2-12 fill them in; until a task
-// does, its handler answers failed/internal (the allow entries keep the
+// the nine handlers by command name; one this proxy can't serve (no source
+// or target side wired) answers failed/internal (the allow entries keep the
 // commands off by default).
 export interface MoveDeps {
   // Sends a signed move event (CamsAdmin.emitEvent).
@@ -52,6 +52,19 @@ export function moveHandlers(deps: MoveDeps): Record<string, Handler> {
   }
   if (deps.source) Object.assign(handlers, deps.source.handlers());
   if (deps.target) Object.assign(handlers, deps.target.handlers());
+  // Task 10: move.finish and move.cancel by the side the args name (the allow
+  // entry was checked for that side, entryFor). A side this proxy can't play answers internal.
+  const bySide = (fn: (side: MoveSource | MoveTarget, a: never) => Promise<Done>): Handler => async (args) => {
+    const side = (args as { role?: string }).role === 'target' ? deps.target : deps.source;
+    if (!side) return { status: 'failed', code: 'internal' };
+    try {
+      return await fn(side, args as never);
+    } catch {
+      return { status: 'failed', code: 'internal' };
+    }
+  };
+  handlers['move.finish'] = bySide((side, a: MoveFinishArgs) => side.finish(a));
+  handlers['move.cancel'] = bySide((side, a: MoveCancelArgs) => side.cancel(a));
   return handlers;
 }
 

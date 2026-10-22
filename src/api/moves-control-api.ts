@@ -84,7 +84,7 @@ export function movesControlApi(source: MoveSource): express.Router {
     const copied = (req.body ?? {}).copied;
     if (copied !== 'delete' && copied !== 'age-out') return void res.status(400).json({ error: 'invalid', detail: 'copied' });
     if (!isMoveId(req.params.id)) return void res.status(404).json({ error: 'unknown_move' });
-    const out = source.cancel(req.params.id, copied);
+    const out = source.requestCancel(req.params.id, copied);
     res.status(out.status).json(out.body);
   });
 

@@ -1,18 +1,21 @@
 import { createHash, generateKeyPairSync } from 'crypto';
 import type { AuditLog } from '../audit/audit-log';
 import { bareHost, splitHost } from '../camera/http';
+import { activeCameraIds } from '../config/cameras';
 import type { CameraPasswordStore } from '../config/camera-passwords';
-import { planOverrides, planUnset, writeOverridesFile, setPath, type Loaded } from '../config/load';
-import type { MoveOfferArgs, MoveStartArgs } from '../fleet/command-args';
+import { applyOverrides, planOverrides, planUnset, removeOverride, writeOverridesFile, setPath, type Loaded } from '../config/load';
+import type { MoveCancelArgs, MoveFinishArgs, MoveOfferArgs, MoveStartArgs } from '../fleet/command-args';
 import type { Done, Handler } from '../fleet/commands';
 import type { SiteCa } from '../tls/ca';
 import { issueLeaf, leafOf, type Leaf } from '../tls/leaf';
 import type { PushResult } from '../tls/push';
+import { removeMoveParts } from './copier';
 import { sourceGet } from './evaluate';
 import { moveEnded, SWITCH_STEPS, type MoveJournal, type MoveRecord, type SwitchStep } from './journal';
+import type { Purged } from './purge';
 import { unseal } from './seal';
 import { logger } from '../log';
-import type { MoveEvent, MovePhaseName, MovePlan, Space } from './types';
+import { MOVE_KINDS, type MoveCopied, type MoveEvent, type MovePhaseName, type MovePlan, type Space } from './types';
 
 // The target side of a camera move from move.start on (camera-move plan Task 8,
 // S §9.1, §9.3, §10.1, P1, P12): move.start makes the move's X25519 pair and
@@ -26,7 +29,7 @@ import type { MoveEvent, MovePhaseName, MovePlan, Space } from './types';
 // an audit record.
 
 export interface TargetDeps {
-  journal: Pick<MoveJournal, 'load' | 'save' | 'active'>;
+  journal: Pick<MoveJournal, 'load' | 'save' | 'active'> & Partial<Pick<MoveJournal, 'remove'>>;
   audit: Pick<AuditLog, 'write'>;
   emit: (e: MoveEvent) => void;
   ca: () => SiteCa | null;
@@ -55,6 +58,17 @@ export interface TargetDeps {
   // for up to notReadyMs without using up attempts, an open camera event at
   // the cert step up to eventWaitMs.
   timing?: { attempts?: number; retryMs?: number; retryCapMs?: number; notReadyMs?: number; eventWaitMs?: number };
+  // Task 10, the end of a move (move.finish, move.cancel): the data folder (the
+  // copier's temporary files), the camera's content purged (a cancel with
+  // copied delete), its stored password deleted, its leaf files and trust
+  // state forgotten (CameraCerts.forget). Without them both answer internal.
+  end?: {
+    dataDir: string;
+    purge: (cam: string) => { deleted: Purged };
+    deletePassword: (cam: string) => void;
+    forgetLeaf: (cam: string) => void;
+  };
+  now?: () => number;
 }
 
 const ATTEMPTS = 5;
@@ -69,6 +83,10 @@ const CODES: Record<SwitchStep, string> = { secrets: 'secrets_failed', camera: '
 
 const ok = (result: Record<string, unknown> = {}): Done => ({ status: 'ok', result });
 const failed = (code: string): Done => ({ status: 'failed', code });
+const zeros = (): Purged => Object.fromEntries(MOVE_KINDS.map((k) => [k, { files: 0, bytes: 0 }])) as Purged;
+// The camera taken over here: every switch-over step ran (a failure after
+// them is the copier's), so the camera node here is the move's.
+const switchedOver = (r: MoveRecord): boolean => r.cameraWritten === true && r.step === undefined && !!r.plan && r.phase !== 'opened' && r.phase !== 'switching';
 const keyFingerprint = (spkiB64: string) => `SHA256:${createHash('sha256').update(Buffer.from(spkiB64, 'base64')).digest('hex').toUpperCase()}`;
 // Two plans alike: kinds in any order, target settings in any key order (as the source compares them).
 const canonical = (p: MovePlan): string => JSON.stringify([p.transfer, [...p.kinds].sort(), p.space, p.targetSettings ? Object.entries(p.targetSettings).sort(([x], [y]) => (x < y ? -1 : 1)) : null, p.budgetS, p.estimateS]);
@@ -113,6 +131,9 @@ export class MoveTarget {
   private readonly starting = new Map<string, Promise<Done>>();
   // Moves whose copier was started here (stopAll stops them).
   private readonly copying = new Set<string>();
+  // Moves ended here since the start (their records are gone): a repeated
+  // finish or cancel answers as before, the other one wrong_phase.
+  private readonly ended = new Map<string, 'finished' | 'cancelled'>();
 
   constructor(private readonly d: TargetDeps) {}
 
@@ -204,8 +225,10 @@ export class MoveTarget {
     } catch {
       return failed('ca_does_not_cover_camera');
     }
+    // A cancel while the leaf was made (Task 8 minor): the record is gone or closed; nothing is kept.
+    const fresh = this.target(a.moveId);
+    if (!fresh || fresh.phase !== 'opened') return failed('wrong_phase');
     const pair = generateKeyPairSync('x25519');
-    const fresh = this.target(a.moveId) ?? r;
     fresh.x25519 = {
       privatePkcs8: pair.privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64'),
       publicSpki: pair.publicKey.export({ type: 'spki', format: 'der' }).toString('base64'),
@@ -223,6 +246,154 @@ export class MoveTarget {
     this.switchAudit(fresh, 'start', 'ok', `switch-over accepted; leaf ${leaf.fingerprint} issued for ${name}`, { leafFingerprint: leaf.fingerprint, publicKeyFingerprint: keyFingerprint(fresh.x25519.publicSpki), plan: a.plan, done: fresh.done.length });
     this.run(fresh.id);
     return ok({ publicKey: fresh.x25519.publicSpki, leafFingerprint: leaf.fingerprint });
+  }
+
+  // move.finish {role: target} (A5/B45, S §11): the move is done here, or
+  // cams-admin ended the transfer early (abandoned, S §10.4). The camera stays
+  // (it is this proxy's now); the copier stops, its temporary files and the
+  // staging folder go, the X25519 and leaf private keys leave the journal, the
+  // record ends `finished` (journal, event) and is removed; audited move-done.
+  // Before the switch-over it is refused. Again: the same answer, nothing more.
+  async finish(a: MoveFinishArgs): Promise<Done> {
+    const end = this.d.end;
+    if (!end) return failed('internal');
+    const past = this.ended.get(a.moveId);
+    if (past) return past === 'finished' ? ok({ deleted: zeros() }) : failed('wrong_phase');
+    const r = this.target(a.moveId);
+    if (!r) return ok({ deleted: zeros() });
+    if (r.phase === 'cancelled') return failed('wrong_phase');
+    if (r.phase !== 'finished' && (!switchedOver(r) || (r.phase !== 'copied' && !a.abandoned))) return failed('wrong_phase');
+    await this.stop(r.id);
+    removeMoveParts(end.dataDir, r.id, r.camera);
+    const fresh = this.target(r.id) ?? r;
+    this.d.stageLeaf(fresh.camera, null);
+    this.dropKeys(fresh);
+    fresh.endedAt ??= this.now();
+    const totals = this.totals(fresh);
+    // The end in the journal first (a restart in between does not resume it), then the event.
+    this.setPhase(fresh, 'finished');
+    this.d.audit.write({
+      action: 'move-done', category: ['configuration'], type: ['change'], outcome: 'success',
+      user: 'cams-admin', camera: fresh.camera,
+      message: `Camera move ${fresh.id} (${fresh.camera} from ${fresh.peer.name || fresh.peer.proxyId}) done${a.abandoned ? ', the transfer ended early' : ''}: ${totals.files.verified} files copied, ${totals.files.skipped} skipped, ${totals.files.failed} failed, ${totals.chunks.abandoned} chunks abandoned`,
+      details: this.details(fresh, { abandoned: a.abandoned, ...totals }),
+    });
+    this.d.journal.remove?.(fresh.id);
+    this.copying.delete(fresh.id);
+    this.ended.set(fresh.id, 'finished');
+    return ok({ deleted: zeros() });
+  }
+
+  // move.cancel {role: target} (S §10.3, B36): the camera goes back to the
+  // source. Not started yet (an offer that expired, a cancel before
+  // move.start): the record only closes. Else the runner and the copier stop,
+  // the end is journalled, then the camera's node written by the move leaves
+  // the configuration (live; a config.json entry is hidden again), its stored
+  // password and its leaf go, and with copied `delete` its content is purged
+  // (age-out: the target's retention removes it in time). A camera of that id
+  // this proxy had itself (the camera step refused it) is never touched. No
+  // leaf of the source is expected here: the target lets go of the camera
+  // before the source pushes its own leaf back (B36). Again: nothing more.
+  async cancel(a: MoveCancelArgs): Promise<Done> {
+    const end = this.d.end;
+    if (!end) return failed('internal');
+    const past = this.ended.get(a.moveId);
+    if (past) return past === 'cancelled' ? ok() : failed('wrong_phase');
+    const r = this.target(a.moveId);
+    if (!r) return ok();
+    if (r.phase === 'finished') return failed('wrong_phase');
+    const copied: MoveCopied = r.copied ?? a.copied ?? 'age-out';
+    // Synchronous up to here: a move.start making its leaf finds the record gone and keeps nothing.
+    if (r.phase === 'opened' && !r.plan) {
+      this.closeCancelled(r, copied, 'untouched', null);
+      return ok();
+    }
+    await this.stop(r.id);
+    let fresh = this.target(r.id) ?? r;
+    if (fresh.phase !== 'cancelled') {
+      fresh.cancelledFrom = fresh.phase;
+      fresh.switchedOver = switchedOver(fresh);
+      fresh.copied = copied;
+      fresh.phase = 'cancelled';
+      fresh.endedAt = this.now();
+      this.d.journal.save(fresh);
+    }
+    this.d.stageLeaf(fresh.camera, null);
+    removeMoveParts(end.dataDir, fresh.id, fresh.camera);
+    const cam = fresh.camera;
+    let entry: 'removed' | 'hidden' | 'untouched' = 'untouched';
+    let deleted: Purged | null = null;
+    if (fresh.cameraWritten) {
+      const l = this.d.loaded();
+      const node = l.config.cameras[cam];
+      if (node && node.moved === undefined) {
+        // The camera stops here at once (live, P1): its worker, streams and FTP user go.
+        await this.d.setLoaded(l.addedCameras.includes(cam) ? removeOverride(l, `cameras.${cam}`) : applyOverrides(l, { cameras: { [cam]: { moved: fresh.id } } }));
+      }
+      entry = this.d.loaded().config.cameras[cam] ? 'hidden' : 'removed';
+      end.forgetLeaf(cam);
+      end.deletePassword(cam);
+      if (copied === 'delete') {
+        // Never the content of a camera that still runs here.
+        if (activeCameraIds(this.d.loaded().config).includes(cam)) return failed('camera_active');
+        deleted = end.purge(cam).deleted;
+      }
+    } else if (!this.d.loaded().config.cameras[cam]) {
+      // The secrets step may have stored the password of a camera that never came here.
+      end.deletePassword(cam);
+    }
+    fresh = this.target(fresh.id) ?? fresh;
+    this.closeCancelled(fresh, copied, entry, deleted);
+    return ok();
+  }
+
+  // A cancelled move's end: no private key left in the record, the phase
+  // journalled and reported (event, move-phase), move-cancel audited, the record removed.
+  private closeCancelled(r: MoveRecord, copied: MoveCopied, entry: 'removed' | 'hidden' | 'untouched', deleted: Purged | null): void {
+    const from = r.cancelledFrom ?? r.phase;
+    this.dropKeys(r);
+    r.endedAt ??= this.now();
+    this.setPhase(r, 'cancelled');
+    this.d.audit.write({
+      action: 'move-cancel', category: ['configuration'], type: ['change'], outcome: 'success',
+      user: 'cams-admin', camera: r.camera,
+      message: `Camera move ${r.id} (${r.camera} from ${r.peer.name || r.peer.proxyId}) cancelled in ${from}: the camera ${entry === 'untouched' ? 'was not here' : entry === 'removed' ? 'removed here' : 'hidden here'}${entry === 'untouched' ? '' : `, copied content ${copied === 'delete' ? 'deleted' : 'left to age out'}`}`,
+      details: this.details(r, { phase: from, copied, cameraEntry: entry, deleted }),
+    });
+    this.d.journal.remove?.(r.id);
+    this.copying.delete(r.id);
+    this.ended.set(r.id, 'cancelled');
+  }
+
+  private dropKeys(r: MoveRecord): void {
+    delete r.x25519;
+    delete r.leaf;
+    delete r.token;
+  }
+
+  private now(): number {
+    return (this.d.now ?? Date.now)();
+  }
+
+  // What the copy did, for move-done: chunks of the manifest by state (not
+  // ended: abandoned), files and the bytes verified, the time since the start.
+  private totals(r: MoveRecord) {
+    const chunks = { total: 0, verified: 0, skipped: 0, failed: 0, abandoned: 0 };
+    for (const c of r.manifest ?? []) {
+      chunks.total++;
+      const st = r.chunks[c.id]?.state;
+      if (st === 'verified' || st === 'skipped' || st === 'failed') chunks[st]++;
+      else chunks.abandoned++;
+    }
+    const files = { verified: 0, skipped: 0, failed: 0 };
+    let bytes = 0;
+    for (const c of Object.values(r.chunks)) {
+      files.verified += c.v ?? 0;
+      files.skipped += c.s ?? 0;
+      files.failed += c.f ?? 0;
+      bytes += c.vb ?? 0;
+    }
+    return { chunks, files, bytes, durationS: Math.max(0, Math.round(((r.endedAt ?? this.now()) - r.startedAt) / 1000)) };
   }
 
   // The runner of one move, once (a second call while it runs does nothing).

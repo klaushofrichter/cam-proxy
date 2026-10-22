@@ -94,6 +94,11 @@ export interface MoveRecord {
   copyStartedAt?: number;
   lastRateBps?: number;
   copied?: MoveCopied;
+  // Task 10: the phase a cancel came in (kept while the cancel's steps run
+  // again after a failed one), and whether the camera had been switched over.
+  cancelledFrom?: MovePhaseName;
+  switchedOver?: boolean;
+  endedAt?: number;
 }
 
 const TERMINAL: readonly MovePhaseName[] = ['finished', 'cancelled', 'failed'];
