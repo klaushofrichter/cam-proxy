@@ -47,7 +47,8 @@ export interface HealthInput {
   others?: CameraHealthInput[];
   // The site CA (spec §10.5): absent or null without tls.site (the Pi: no item).
   certificates?: { proxy: { notAfter: number } | null; cameras: { id: string; state: CertState }[]; problems: string[] } | null;
-  // No camera runs here (all moved away): camera, stream, intake and ftp above are a placeholder, `cameras` is empty.
+  // No camera runs here (all moved away): camera, stream, intake and ftp above are a placeholder; the
+// items show one non-problem "Camera" item instead of theirs, and `cameras` is empty.
   noCamera?: boolean;
 }
 
@@ -191,20 +192,26 @@ function aggregate(per: { cam: string; item: HealthItem }[]): HealthItem {
   return { id: first.id, label: first.label, value, text, problem: bad.length > 0, ...(warned.length ? { warning: true as const } : {}) };
 }
 
+// The health text (and the Status page's camera error) of a proxy with no camera running.
+export const NO_CAMERA_TEXT = 'no camera runs on this proxy';
+
 export function buildHealth(i: HealthInput): HealthSummary {
   const items: HealthItem[] = [];
   const add = (id: ItemId, label: string, value: HealthItem['value'], text: string, problem: boolean) => items.push({ id, label, value, text, problem });
 
   const cams = [{ camera: i.camera, stream: i.stream, intake: i.intake, ftp: i.ftp, ...(i.sd === undefined ? {} : { sd: i.sd }) }, ...(i.others ?? [])].map((c) => ({ id: c.camera.id, h: cameraHealth(c) }));
   for (const c of cams) c.h.cert = i.certificates?.cameras.find((x) => x.id === c.id)?.state ?? null;
-  for (const id of ['camera', 'stream', 'events', 'ftp'] as const) {
+  // No camera runs here (all moved away, e.g. a retired proxy): one item, no
+  // problem, instead of the placeholder's camera, stream, events and FTP items.
+  if (i.noCamera) add('camera', 'Camera', null, NO_CAMERA_TEXT, false);
+  else for (const id of ['camera', 'stream', 'events', 'ftp'] as const) {
     let per = cams.map((c) => ({ cam: c.id, item: c.h.items.find((x) => x.id === id)! }));
     // FTP: only the cameras that upload (one FTP camera: its item, as on one camera); none: the first's "off".
     if (id === 'ftp') per = per.filter((p) => p.item.value !== 'disabled').length ? per.filter((p) => p.item.value !== 'disabled') : per.slice(0, 1);
     items.push(aggregate(per));
   }
   // The SD card (#199): the cameras read so far; none: no item.
-  const sdPer = cams.flatMap((c) => c.h.items.filter((x) => x.id === 'sd').map((item) => ({ cam: c.id, item })));
+  const sdPer = i.noCamera ? [] : cams.flatMap((c) => c.h.items.filter((x) => x.id === 'sd').map((item) => ({ cam: c.id, item })));
   if (sdPer.length) items.push(aggregate(sdPer));
 
   add('storage', 'Storage', i.storage.paused ? 'paused' : 'writing', i.storage.paused ? 'paused (low space)' : 'writing', i.storage.paused);

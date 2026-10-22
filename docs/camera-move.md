@@ -128,8 +128,10 @@ isn't listed and its FTP user is refused. Settings lists it as moved; delete
 it from `config.json` when convenient. A camera added on the Settings page
 (`overrides.json`) is removed at the end.
 
-A proxy whose last camera moved away keeps running (cams-admin, the pages and
-the health summary work; the health shows "no camera runs on this proxy").
+A proxy whose last camera moved away keeps running: cams-admin, the pages and
+the health summary work. The health has one Camera item, "no camera runs on
+this proxy", which is no problem, and no stream, events or FTP items; so a
+retired proxy still reports ok.
 
 ## In the audit log
 

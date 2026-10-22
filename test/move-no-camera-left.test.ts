@@ -24,6 +24,7 @@ beforeAll(async () => {
   sims = await startSims(1);
   fake = await startFakeAdmin();
   fake.welcomeHeartbeatS = 1;
+  fake.nextInS = 1; // every ack asks for the next heartbeat in 1 s
   const dir = mkdtempSync(join(tmpdir(), 'camproxy-nocam-'));
   writeKeyFile(join(dir, 'data', 'admin', 'key.json'), fake.keyFile());
   p = await startMultiProxy(sims, { dir, proxy: { camsAdmin: { timing: { minIntervalS: 0.2, jitterS: 0, backoffCapMs: 300, closeGraceMs: 200 } } }, settings: { camsAdmin: { url: fake.url } } });
@@ -60,6 +61,17 @@ describe('no camera left on the proxy', () => {
     expect(s.body).toMatchObject({ camera: { online: false, error: 'no camera runs on this proxy' }, intake: { onvif: 'down' }, stream: { enabled: false }, ftp: { enabled: false }, cameras: [] });
     const h = await request(p.base).get('/api/local/health').expect(200);
     expect(h.body.cameras).toEqual([]);
+  });
+
+  it('the health is ok: one camera item that is no problem, no stream, events or FTP items', async () => {
+    const h = (await request(p.base).get('/api/local/health').expect(200)).body as { ok: boolean; problemCount: number; items: { id: string; text: string; problem: boolean }[] };
+    const cameraItems = h.items.filter((i) => ['camera', 'stream', 'events', 'ftp', 'sd'].includes(i.id));
+    expect(cameraItems).toEqual([{ id: 'camera', label: 'Camera', value: null, text: 'no camera runs on this proxy', problem: false }]);
+    expect(h.items.filter((i) => i.problem)).toEqual([]);
+    expect(h).toMatchObject({ ok: true, problemCount: 0 });
+    // The same in the heartbeat cams-admin's fleet view reads (the newest one, sent after the camera was hidden).
+    const summary = (fake.heartbeats().at(-1)!.msg.body as { summary: { ok: boolean; problemCount: number } }).summary;
+    expect(summary).toMatchObject({ ok: true, problemCount: 0 });
   });
 
   it('a restart with no camera works', async () => {

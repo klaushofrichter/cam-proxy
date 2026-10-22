@@ -87,7 +87,7 @@ import { composeApi, hasAudio } from './api/compose-api';
 import { createComposer, ffmpegRunner } from './compose/jobs';
 import { clockText, defaultFont } from './compose/ffmpeg';
 import { HostMonitor, type StatFs } from './health/host';
-import { buildHealth, type CameraHealthInput, type HealthSummary, type LastInventory } from './health/summary';
+import { buildHealth, NO_CAMERA_TEXT, type CameraHealthInput, type HealthSummary, type LastInventory } from './health/summary';
 import { localApi } from './api/local-api';
 import { archiveApi } from './api/archive-api';
 import { Archive } from './archive/service';
@@ -757,7 +757,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   };
   // No camera runs here (every camera moved away, camera-move plan Task 12):
   // the status and the health show this placeholder, offline, instead of failing.
-  const NO_CAMERA = 'no camera runs on this proxy';
+  const NO_CAMERA = NO_CAMERA_TEXT;
   const noCamera = () => {
     const since = startedAt ?? Date.now();
     return {
