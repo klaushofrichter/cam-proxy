@@ -2,7 +2,7 @@ import { get } from 'svelte/store';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api, ApiError, errorText, refreshRights } from '../web/src/lib/api';
 import { powerCycleFailText } from '../web/src/lib/maintenance';
-import { ALL_RIGHTS, LOCKED_TEXT, lockedWhy, NARROW_TEXT, narrowWhy, REFUSED_TEXT, resetKeeps, rights, rightsOf, settingLockedWhy, settingsNote, SOME_SETTINGS_TEXT } from '../web/src/lib/rights';
+import { ALL_RIGHTS, LOCKED_TEXT, lockedWhy, MOVE_TEXT, NARROW_TEXT, narrowWhy, REFUSED_TEXT, resetKeeps, rights, rightsOf, settingLockedWhy, settingsNote, SOME_SETTINGS_TEXT } from '../web/src/lib/rights';
 import { restartToApply } from '../web/src/lib/camera-settings';
 
 // Issue #227: a session from a cams-admin sign-in link (managed-admin) sees
@@ -10,7 +10,7 @@ import { restartToApply } from '../web/src/lib/camera-settings';
 // still sends is shown in words at the control, never silently.
 describe('the session rights (GET /control/session)', () => {
   it('the local admin: everything', () => {
-    expect(rightsOf({ loggedIn: true, origin: 'local', rights: { localAdmin: true, config: true, restart: true } })).toEqual(ALL_RIGHTS);
+    expect(rightsOf({ loggedIn: true, origin: 'local', rights: { localAdmin: true, config: true, restart: true, move: true } })).toEqual(ALL_RIGHTS);
   });
   it('a cams-admin sign-in: what the allow-list unlocks, nothing else', () => {
     expect(rightsOf({ loggedIn: true, origin: 'managed', rights: { localAdmin: false, config: false, restart: false } })).toEqual({ localAdmin: false, config: false, restart: false, move: false, localSettings: [], narrow: {} });
@@ -18,11 +18,16 @@ describe('the session rights (GET /control/session)', () => {
     // Anything but true is false.
     expect(rightsOf({ rights: { localAdmin: 'yes', config: 1 } })).toEqual({ localAdmin: false, config: false, restart: false, move: false, localSettings: [], narrow: {} });
   });
-  it('the move right: the local admin, or a sign-in the move.send entry unlocks', () => {
+  it('the move right follows move.send for the local admin too', () => {
+    expect(rightsOf({ rights: { localAdmin: true, config: true, restart: true } }).move).toBe(false);
+    expect(rightsOf({ rights: { localAdmin: true, config: true, restart: true, move: true } }).move).toBe(true);
+  });
+  it('the move right: a sign-in the move.send entry unlocks', () => {
     expect(rightsOf({ rights: { localAdmin: false, config: false, restart: false, move: true } }).move).toBe(true);
     expect(rightsOf({ rights: { localAdmin: false, move: 'yes' } }).move).toBe(false);
     expect(lockedWhy(rightsOf({ rights: { localAdmin: false, move: true } }), 'move')).toBeNull();
-    expect(lockedWhy(rightsOf({ rights: { localAdmin: false } }), 'move')).toBe(LOCKED_TEXT);
+    expect(lockedWhy(rightsOf({ rights: { localAdmin: false } }), 'move')).toBe(MOVE_TEXT);
+    expect(lockedWhy(rightsOf({ rights: { localAdmin: true } }), 'move')).toBe(MOVE_TEXT);
   });
   it('an older proxy (no rights in the answer) or no answer: everything stays on; the proxy decides', () => {
     expect(rightsOf({ loggedIn: true })).toEqual(ALL_RIGHTS);

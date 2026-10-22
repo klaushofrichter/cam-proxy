@@ -16,7 +16,13 @@ const summary = { stills: kind(10, 4 * GB), clips: kind(5, 2 * GB), events: kind
 
 interface Mock { list: Record<string, unknown>[]; posted: { path: string; body: unknown }[] }
 
+// The e2e proxy's allow list is empty (no move.send); the session answer says what the page gets with it.
+async function mockSession(page: Page, move: boolean) {
+  await page.route('**/control/session', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ loggedIn: true, origin: 'local', rights: { localAdmin: true, config: true, restart: true, move } }) }));
+}
+
 async function mockMoves(page: Page, mock: Mock) {
+  await mockSession(page, true);
   await page.route('**/control/moves**', async (route: Route) => {
     const req = route.request();
     const path = new URL(req.url()).pathname;
@@ -31,6 +37,13 @@ async function mockMoves(page: Page, mock: Mock) {
 }
 
 const cameraId = async (request: import('@playwright/test').APIRequestContext) => ((await (await request.get('/control/status', { headers: admin })).json()) as { cameras: { id: string }[] }).cameras[0].id;
+
+test('without move.send the Move button is not there', async ({ page }) => {
+  await mockSession(page, false);
+  await page.goto('/#/settings');
+  await expect(page.getByTestId('input-camera-name')).toBeVisible({ timeout: 15000 });
+  await expect(page.getByTestId('move-open')).toHaveCount(0);
+});
 
 test('move dialog → rejected reason shown', async ({ page, request }) => {
   const cam = await cameraId(request);

@@ -232,7 +232,7 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
     const config = local || unlocked.includes('ui.config');
     // `localSettings`: what ui.config never sets (patterns, cameras.* for every camera).
     // `narrowSettings`: the settings ui.config changes only one way (retention up, spending caps down).
-    res.json({ loggedIn: true, origin: s.origin, rights: { localAdmin: local, config, restart: local || unlocked.includes('ui.restart'), ...(!local && unlocked.includes('move.send') ? { move: true } : {}), ...(config && !local ? { localSettings: UI_CONFIG_LOCAL, narrowSettings: narrowRules() } : {}) } });
+    res.json({ loggedIn: true, origin: s.origin, rights: { localAdmin: local, config, restart: local || unlocked.includes('ui.restart'), move: (d.managedUnlocked?.() ?? []).includes('move.send'), ...(config && !local ? { localSettings: UI_CONFIG_LOCAL, narrowSettings: narrowRules() } : {}) } });
   });
   r.post('/logout', (req, res) => {
     const valid = sessionOf(req);
