@@ -77,6 +77,8 @@ export interface MoveRecord {
   space?: Space | null;
   // target: the camera step wrote the camera node (a resumed step is not id_taken by its own write).
   cameraWritten?: boolean;
+  // target: the secrets step stored the camera's password (a cancel deletes only that one).
+  passwordWritten?: boolean;
   // target, stored at accept (Task 6), read at switch-over (Task 8)
   cameraConnection?: MoveCameraConnection;
   summary?: MoveSummary;

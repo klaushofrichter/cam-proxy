@@ -3,7 +3,9 @@ import type { AuditLog } from '../audit/audit-log';
 import { bareHost, splitHost } from '../camera/http';
 import { activeCameraIds } from '../config/cameras';
 import type { CameraPasswordStore } from '../config/camera-passwords';
-import { applyOverrides, planOverrides, planUnset, removeOverride, writeOverridesFile, setPath, type Loaded } from '../config/load';
+import { cameraDefaults } from '../config/defaults';
+import { applyOverrides, getPath, planOverrides, rebuildWith, removeOverride, writeOverridesFile, setPath, type Loaded } from '../config/load';
+import { cameraPasswordEnv } from '../config/password-env';
 import type { MoveCancelArgs, MoveFinishArgs, MoveOfferArgs, MoveStartArgs } from '../fleet/command-args';
 import type { Done, Handler } from '../fleet/commands';
 import type { SiteCa } from '../tls/ca';
@@ -99,8 +101,18 @@ class Wait extends Error {
     super(message);
   }
 }
-// A step that can't succeed by retrying (the move fails at once), with its detail.
-class Refused extends Error {}
+// A step that can't succeed by retrying (the move fails at once), with its
+// detail; `code` when the failure is another step's (a camera refusal found
+// early, in the secrets step, is camera_failed).
+class Refused extends Error {
+  constructor(message: string, readonly code?: string) {
+    super(message);
+  }
+}
+// The camera node's leaves whose absence means the host value: a leftover's
+// own value is replaced by the host's when the move does not set it.
+const HOST_LEAVES = ['ftp.enabled', 'ftp.stream', 'stills.enabled', 'stills.stream', 'stills.intervalS', 'analytics.kinds.person', 'analytics.kinds.vehicle', 'analytics.kinds.pet', 'events.poll.enabled'];
+type CameraPlan = { problem: string } | { next: Loaded; overrides: object; leftover: boolean; host: Record<string, unknown> };
 
 // Target settings within the target's own proposal (a forged plan never reaches overrides.json).
 export function targetSettingsProblem(ts: MovePlan['targetSettings'], space: Space | null | undefined): string | null {
@@ -335,15 +347,16 @@ export class MoveTarget {
       }
       entry = this.d.loaded().config.cameras[cam] ? 'hidden' : 'removed';
       end.forgetLeaf(cam);
-      end.deletePassword(cam);
+      if (fresh.passwordWritten) end.deletePassword(cam);
       if (copied === 'delete') {
         // Only what the move brought; the camera no longer runs here. The
         // target's own capture since the switch-over stays and ages out.
         if (activeCameraIds(this.d.loaded().config).includes(cam)) return failed('camera_active');
         deleted = end.removeImported(this.target(fresh.id) ?? fresh).deleted;
       }
-    } else if (!this.d.loaded().config.cameras[cam]) {
-      // The secrets step may have stored the password of a camera that never came here.
+    } else if (fresh.passwordWritten) {
+      // The secrets step stored the password of a camera that never came here
+      // (only one it stored: a camera of this id here keeps its own, final review 7).
       end.deletePassword(cam);
     }
     fresh = this.target(fresh.id) ?? fresh;
@@ -500,7 +513,7 @@ export class MoveTarget {
       r = this.target(moveId);
       if (!r || r.phase !== 'switching') return;
       if (outcome === 'failed' || (typeof outcome === 'object' && outcome)) {
-        this.phase(r, 'failed', CODES[step], typeof outcome === 'object' && outcome ? outcome.refused : undefined);
+        this.phase(r, 'failed', typeof outcome === 'object' && outcome?.code ? outcome.code : CODES[step], typeof outcome === 'object' && outcome ? outcome.refused : undefined);
         return;
       }
       const next = SWITCH_STEPS[SWITCH_STEPS.indexOf(step) + 1];
@@ -523,7 +536,7 @@ export class MoveTarget {
 
   // One step with its retries: 'ok', 'skipped', 'failed' when it gave up, or
   // {refused} when retrying can't help (each audited once); null when stopped.
-  private async attempt(run: Run, r: MoveRecord, step: SwitchStep): Promise<'ok' | 'skipped' | 'failed' | { refused: string } | null> {
+  private async attempt(run: Run, r: MoveRecord, step: SwitchStep): Promise<'ok' | 'skipped' | 'failed' | { refused: string; code?: string } | null> {
     const t = this.d.timing ?? {};
     const attempts = t.attempts ?? ATTEMPTS;
     const t0 = Date.now();
@@ -542,7 +555,7 @@ export class MoveTarget {
         if (run.stopped) return null;
         if (err instanceof Refused) {
           this.switchAudit(r, step, 'failed', `${step} refused: ${err.message}`, { attempts: tries + 1, detail: err.message });
-          return { refused: err.message };
+          return { refused: err.message, ...(err.code ? { code: err.code } : {}) };
         }
         if (err instanceof Wait && Date.now() < waitUntil[err.kind]) {
           await this.sleep(run, delay);
@@ -586,6 +599,15 @@ export class MoveTarget {
       throw new Error('the sealed password does not open');
     }
     try {
+      // The camera checks first (final review 7): a password is never stored
+      // for a camera this proxy can't take (another camera's would be replaced).
+      const plan = this.planCamera(r);
+      if ('problem' in plan) throw new Refused(plan.problem, CODES.camera);
+      // Noted before the write: a cancel deletes only a password this move stored.
+      if (!r.passwordWritten) {
+        r.passwordWritten = true;
+        this.d.journal.save(r);
+      }
       this.d.passwords.set(r.camera, plain.toString('utf8'));
     } finally {
       plain.fill(0);
@@ -593,29 +615,67 @@ export class MoveTarget {
     return { message: 'the camera password stored' };
   }
 
-  // The camera node (the offer's connection and settings; the approved target
-  // settings with plan.space retention), in one override write, live (P1). A
-  // hidden `moved` leftover of this camera goes in the same write (B7).
-  private async camera(r: MoveRecord): Promise<{ message: string; details: Record<string, unknown> }> {
+  // The camera node as the camera step writes it (not written here), or why
+  // not. The node is built whole: the offer's connection, every Settings field
+  // of the move; a hidden `moved` leftover of this id (B7, final review 2) is
+  // replaced in the same write, never merged: its overrides go, and a value
+  // config.json gives it that the move does not set is set to what "absent"
+  // means (the host value, the default). Refused: a camera of this id added
+  // here since the offer (id_taken; not this step's own earlier write), or a
+  // leftover whose config.json keeps what a move can't replace (tlsName, a PoE
+  // switch port, a share, `moved` itself), or a per-camera password in the
+  // environment (it would win over the moved one): stale_leftover.
+  private planCamera(r: MoveRecord): CameraPlan {
     const c = r.cameraConnection;
     if (!c) throw new Error('the journal lacks the camera');
-    const patch: Record<string, unknown> = {
-      cameras: { [r.camera]: { name: c.name, host: c.host, protocol: c.protocol, user: c.user, onvifPort: c.onvifPort, rtspPort: c.rtspPort, baichuanPort: c.baichuanPort, ...(r.settings ?? {}) } },
-    };
+    const loaded = this.d.loaded();
+    const id = r.camera;
+    const existing = loaded.config.cameras[id];
+    if (existing && existing.moved === undefined && !r.cameraWritten) return { problem: 'id_taken' };
+    if ((loaded.env[cameraPasswordEnv(id)] ?? '').trim() !== '') return { problem: 'stale_leftover' };
+    // The configuration without this camera's overrides: what config.json alone gives it.
+    const all = structuredClone(loaded.overrides) as Record<string, unknown>;
+    const cams = { ...((all.cameras ?? {}) as Record<string, unknown>) };
+    const leftover = existing?.moved !== undefined;
+    delete cams[id];
+    if (Object.keys(cams).length) all.cameras = cams;
+    else delete all.cameras;
+    const base = rebuildWith(loaded, all);
+    const file = base.config.cameras[id];
+    const node: Record<string, unknown> = { name: c.name, host: c.host, protocol: c.protocol, user: c.user, onvifPort: c.onvifPort, rtspPort: c.rtspPort, baichuanPort: c.baichuanPort, ...structuredClone(r.settings ?? {}) };
+    if (file) {
+      if (file.tlsName !== undefined || file.poeSwitch?.port !== undefined || file.moved !== undefined) return { problem: 'stale_leftover' };
+      const unset = (p: string) => getPath(node, p) === undefined;
+      const dflt = cameraDefaults(id);
+      if (unset('statusPollS') && file.statusPollS !== dflt.statusPollS) node.statusPollS = dflt.statusPollS;
+      if (file.webUiUrl !== undefined) node.webUiUrl = `https://${c.host}/`;
+      if (file.ftp.user !== undefined) setPath(node, 'ftp.user', id);
+      if (file.storage.sharePercent !== undefined && unset('storage.sharePercent')) return { problem: 'stale_leftover' };
+      for (const p of HOST_LEAVES) {
+        if (getPath(file, p) === undefined || !unset(p)) continue;
+        const v = getPath(base.config, p);
+        if (v === undefined) return { problem: 'stale_leftover' };
+        setPath(node, p, v);
+      }
+    }
+    const patch: Record<string, unknown> = { cameras: { [id]: node } };
     const host = r.plan?.space === 'retention' && r.plan.targetSettings ? r.plan.targetSettings : {};
     for (const [path, v] of Object.entries(host)) setPath(patch, path, v);
+    const plan = planOverrides(base, patch);
+    return { next: plan.next, overrides: plan.overrides, leftover, host };
+  }
+
+  // The camera node (planCamera), in one override write, live (P1).
+  private async camera(r: MoveRecord): Promise<{ message: string; details: Record<string, unknown> }> {
     const loaded = this.d.loaded();
-    // A camera of this id added here since the offer (not a hidden leftover, not this step's own earlier write): never overwritten.
-    const existing = loaded.config.cameras[r.camera];
-    if (existing && existing.moved === undefined && !r.cameraWritten) throw new Refused('id_taken');
-    let plan = planOverrides(loaded, patch);
-    const leftover = plan.next.config.cameras[r.camera]?.moved !== undefined;
-    if (leftover) plan = planUnset(plan.next, [`cameras.${r.camera}.moved`]);
+    const plan = this.planCamera(r);
+    if ('problem' in plan) throw new Refused(plan.problem);
+    const { leftover, host } = plan;
     r.cameraWritten = true;
     this.d.journal.save(r);
     writeOverridesFile(loaded.files.overrides, plan.overrides);
     await this.d.setLoaded(plan.next);
-    return { message: `${r.camera} added${leftover ? ' (its hidden entry shown again)' : ''}${Object.keys(host).length ? `; target settings ${Object.keys(host).join(', ')}` : ''}`, details: { leftover, targetSettings: Object.keys(host).length ? host : null } };
+    return { message: `${r.camera} added${leftover ? ' (its hidden entry replaced)' : ''}${Object.keys(host).length ? `; target settings ${Object.keys(host).join(', ')}` : ''}`, details: { leftover, targetSettings: Object.keys(host).length ? host : null } };
   }
 
   private async cert(r: MoveRecord): Promise<{ message: string; details: Record<string, unknown> }> {

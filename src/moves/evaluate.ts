@@ -129,8 +129,10 @@ export async function evaluate(deps: EvaluateDeps, args: MoveOfferArgs): Promise
   const cfg = loaded.config;
   const ca = deps.ca();
   if (!cfg.tls.site || !ca) return no('no_site_ca');
-  // Review Focus 4: a hidden `moved` leftover is free; anything else is taken.
-  if (cfg.cameras[id] && !(cfg.cameras[id].moved && !active.some((r) => r.camera === id))) return no('id_taken');
+  // Review Focus 4: a hidden `moved` leftover of the same camera (its host,
+  // protocol and user are the offered ones) is free; anything else is taken.
+  const left = cfg.cameras[id];
+  if (left && !(left.moved && !active.some((r) => r.camera === id) && left.host === args.camera.host && left.protocol === args.camera.protocol && left.user === args.camera.user)) return no('id_taken');
   if (cfg.moves.maxCameras !== undefined && cfg.cameraOrder.filter((c) => !cfg.cameras[c]?.moved).length >= cfg.moves.maxCameras) return no('camera_limit');
   try {
     planOverrides(loaded, { cameras: { [id]: cameraNode(args) } });

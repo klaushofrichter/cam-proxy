@@ -92,6 +92,13 @@ describe('refusals, in the plan order', () => {
     f.deps.journal = { active: () => [{ camera: 'cam9' } as MoveRecord], save: () => undefined };
     expect(await evaluate(f.deps, offer())).toEqual({ accept: false, reason: 'busy' });
   });
+  it('a leftover is free only for the same camera: host, protocol and user as offered (final review 2)', async () => {
+    const left = (extra: object) => ({ cameras: [{ id: 'cam3', host: '192.0.2.3' }, { id: 'cam9', host: '192.0.2.9', moved: 'mv_AAAAAAAAAAAAAAAAAAAA', ...extra }] });
+    expect(await evaluate(fixture({ config: left({ host: '192.0.2.10' }) }).deps, offer())).toEqual({ accept: false, reason: 'id_taken' });
+    expect(await evaluate(fixture({ config: left({ protocol: 'http' }) }).deps, offer())).toEqual({ accept: false, reason: 'id_taken' });
+    expect(await evaluate(fixture({ config: left({ user: 'admin2' }) }).deps, offer())).toEqual({ accept: false, reason: 'id_taken' });
+    expect((await evaluate(fixture({ config: left({}) }).deps, offer())).accept).toBe(true);
+  });
   it('camera_limit counts the cameras that run', async () => {
     expect(await evaluate(fixture({ config: { moves: { maxCameras: 1 } } }).deps, offer())).toEqual({ accept: false, reason: 'camera_limit' });
     expect((await evaluate(fixture({ config: { moves: { maxCameras: 2 } } }).deps, offer())).accept).toBe(true);

@@ -392,13 +392,79 @@ describe('fix round 1', () => {
     // The local admin adds cam9 after the offer.
     const before = JSON.stringify(u.loaded.overrides);
     u.deps.loaded = () => ({ ...u.loaded, config: { ...u.loaded.config, cameras: { ...u.loaded.config.cameras, cam9: { ...u.loaded.config.cameras.cam1, host: '192.0.2.77' } } } });
+    // The local camera's own stored password (final review 7).
+    u.stored.set('cam9', 'local-camera-pw');
+    const deleted: string[] = [];
+    u.deps.end = { dataDir: u.dir, removeImported: () => ({ deleted: {} as never }), deletePassword: (c) => void deleted.push(c), forgetLeaf: () => undefined };
     await u.target.start(startArgs());
     await u.target.idle(MOVE);
-    expect(u.calls).toEqual(['secrets']);
+    // Refused in the secrets step, before the password is stored (final review 7).
+    expect(u.calls).toEqual([]);
+    expect(u.stored.get('cam9')).toBe('local-camera-pw');
     expect(u.journal.load(MOVE)).toMatchObject({ phase: 'failed', failure: 'camera_failed' });
+    expect(u.journal.load(MOVE)!.passwordWritten).toBeUndefined();
     expect(u.events.at(-1)).toEqual({ kind: 'move.phase', moveId: MOVE, role: 'target', phase: 'failed', ok: false, code: 'camera_failed', detail: 'id_taken' });
     expect(JSON.stringify(u.loaded.overrides)).toBe(before);
+    // The cancel deletes only a password the move wrote: none here.
+    expect((await u.target.cancel({ v: 1, moveId: MOVE, role: 'target', copied: 'age-out' } as never)).status).toBe('ok');
+    expect(deleted).toEqual([]);
   }, 60_000);
+
+  it('cancel deletes the password the secrets step wrote (passwordWritten, final review 7)', async () => {
+    const u = unit();
+    // The secrets step stored the password, then the camera step failed before its write.
+    u.journal.save(offered({ phase: 'failed', failure: 'camera_failed', plan: PLAN, passwordWritten: true }));
+    const deleted: string[] = [];
+    u.deps.end = { dataDir: u.dir, removeImported: () => ({ deleted: {} as never }), deletePassword: (c) => void deleted.push(c), forgetLeaf: () => undefined };
+    expect((await u.target.cancel({ v: 1, moveId: MOVE, role: 'target', copied: 'age-out' } as never)).status).toBe('ok');
+    expect(deleted).toEqual(['cam9']);
+  });
+
+  describe('a hidden leftover of the same id (final review 2)', () => {
+    const LEFT = 'mv_AAAAAAAAAAAAAAAAAAAA';
+    const leftover = (extra: object) => ({ config: { cameras: [{ id: 'cam1', host: '' }, { id: 'cam9', host: '192.0.2.9', ...extra }] }, overrides: { cameras: { cam9: { moved: LEFT } } } });
+
+    it('no stale field survives: every Settings field set from the move, the rest defaulted', async () => {
+      const u = unit(leftover({ name: 'Old', statusPollS: 60, webUiUrl: 'https://192.0.2.50/', ftp: { user: 'oldftp', enabled: false, stream: 'main' }, stills: { intervalS: 10, enabled: false }, analytics: { kinds: { vehicle: true } }, events: { poll: { enabled: false } } }));
+      u.journal.save(offered());
+      await u.target.start(startArgs({ settings: { name: 'Garden', statusPollS: 30, storage: { sharePercent: 40 } } }));
+      await u.target.idle(MOVE);
+      expect(u.journal.load(MOVE)!.phase).toBe('copying');
+      const c = u.loaded.config;
+      const cam = c.cameras.cam9;
+      expect(cam.moved).toBeUndefined();
+      expect(cam).toMatchObject({ name: 'Garden', statusPollS: 30, storage: { sharePercent: 40 } });
+      expect(cam.webUiUrl === undefined || cam.webUiUrl === 'https://192.0.2.9/').toBe(true);
+      expect(cam.ftp.user === undefined || cam.ftp.user === 'cam9').toBe(true);
+      // Absent in the move: the host value, not the leftover's.
+      expect(cam.ftp.enabled ?? c.ftp.enabled).toBe(c.ftp.enabled);
+      expect(cam.ftp.stream ?? c.ftp.stream).toBe(c.ftp.stream);
+      expect(cam.stills.intervalS ?? c.stills.intervalS).toBe(c.stills.intervalS);
+      expect(cam.stills.enabled ?? c.stills.enabled).toBe(c.stills.enabled);
+      expect(cam.analytics.kinds.vehicle ?? c.analytics.kinds.vehicle).toBe(c.analytics.kinds.vehicle);
+      expect(cam.events.poll.enabled ?? c.events.poll.enabled).toBe(c.events.poll.enabled);
+    }, 60_000);
+
+    for (const [what, extra, env] of [
+      ['a tlsName', { tlsName: 'cam9.example.org' }, {}],
+      ['a PoE switch port', { poeSwitch: { port: 3 } }, {}],
+      ['a per-camera env password', {}, { CAMPROXY_CAMERA_PASSWORD_CAM9: 'env-pw' }],
+    ] as const) {
+      it(`refused (camera_failed, stale_leftover) when the leftover has ${what}; no password stored`, async () => {
+        const u = unit(leftover(extra));
+        if (Object.keys(env).length) {
+          const l = loadConfig({ ...SECRETS, ...env }, { cwd: u.dir });
+          u.deps.loaded = () => l;
+        }
+        u.journal.save(offered());
+        await u.target.start(startArgs());
+        await u.target.idle(MOVE);
+        expect(u.calls).toEqual([]);
+        expect(u.stored.has('cam9')).toBe(false);
+        expect(u.events.at(-1)).toEqual({ kind: 'move.phase', moveId: MOVE, role: 'target', phase: 'failed', ok: false, code: 'camera_failed', detail: 'stale_leftover' });
+      }, 60_000);
+    }
+  });
 
   it('camera: a resumed camera step after its own write is not id_taken', async () => {
     const a = unit({ step: { camera: () => Promise.reject(new Error('process stopped')) } });
