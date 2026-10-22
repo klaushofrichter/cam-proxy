@@ -1,0 +1,277 @@
+// A whole camera move end to end (camera-move plan Task 12, S §4–§12): two
+// real proxies, both with a site CA covering one cam-sim, and a scripted
+// cams-admin (one FakeAdmin per proxy, relayed by this test in the order of
+// the cams-admin plan, Tasks 4–6): request → move.open / move.offer →
+// move.answer → approve → move.start / move.go → switched → move.release →
+// copy → copied → move.finish (source, then target) → done.
+// Documentation addresses (RFC 5737) and made-up tokens only; never a real camera.
+import { randomBytes } from 'crypto';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { dirname, join } from 'path';
+import request from 'supertest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { cameraPasswordStore } from '../src/config/camera-passwords';
+import { writeKeyFile } from '../src/fleet/keyfile';
+import { writePrivateJson } from '../src/fleet/private-file';
+import { newId, type Envelope } from '../src/fleet/protocol';
+import { setLogLevel } from '../src/log';
+import { MoveJournal } from '../src/moves/journal';
+import { hashMoveToken } from '../src/moves/token';
+import type { MovePlan, MoveSummary, Space } from '../src/moves/types';
+import { minutePath } from '../src/stills/store';
+import { fingerprintOf } from '../src/tls/ca';
+import { servedFingerprint } from '../src/tls/served';
+import { utcDayParts, utcHhmm } from '../src/time-units';
+import { strict, why } from './helpers/contract';
+import { startFakeAdmin, type FakeAdmin } from './helpers/fake-admin';
+import { startMultiProxy, startSims, type Sim } from './helpers/multi';
+import { ADMIN_TOKEN, auth, freePort, until } from './helpers/proxy';
+
+const DAY = 86_400_000;
+const TLS = (site: string) => ({ site, cameraSubnet: '127.0.0.0/16', proxyAddresses: '127.0.0.1' });
+const bodyOf = (r: { msg: Envelope }) => r.msg.body as Record<string, any>;
+const TOKEN = randomBytes(32).toString('base64url');
+const SOURCE_FTP_PASSWORD = 'src-ftp-'.padEnd(24, 's');
+const TARGET_FTP_PASSWORD = 'tgt-ftp-'.padEnd(24, 't');
+const go2rtc = !!process.env.CAMPROXY_TEST_GO2RTC;
+
+beforeAll(() => setLogLevel('silent'));
+
+type P = Awaited<ReturnType<typeof startMultiProxy>>;
+const dataOf = (p: P) => p.proxy.loaded.config.server.dataDir;
+const put = (path: string, bytes: number) => {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, randomBytes(bytes));
+};
+// The seeded days: yesterday and the day before (UTC noon), far from the switch-over day.
+const SEED_DAYS = [1, 2].map((n) => Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()) - n * DAY + 12 * 3600_000);
+// One day's content of cam3 on the source: two still minutes, a clip with its snapshot and row, an event row.
+function seed(p: P, ts: number): void {
+  const dataDir = dataOf(p);
+  put(`${minutePath(dataDir, 'stills', 'cam3', ts)}.pack`, 2000);
+  put(`${minutePath(dataDir, 'stills', 'cam3', ts + 60_000)}.pack`, 2000);
+  const clip = join(dataDir, 'clips', 'cam3', ...utcDayParts(ts), `${utcHhmm(ts)}-1.mp4`);
+  const snap = clip.replace(/\.mp4$/, '.jpg');
+  put(clip, 5000);
+  put(snap, 500);
+  p.proxy.catalog.db.prepare("INSERT INTO clips (cam, start_ts, path, snapshot, stream, size, received_at) VALUES ('cam3', ?, ?, ?, 'sub', 5000, ?)").run(ts, clip, snap, ts);
+  p.proxy.catalog.db.prepare("INSERT INTO events (cam, source, kind, start_ts) VALUES ('cam3', 'onvif', 'person', ?)").run(ts);
+}
+// What one proxy has of cam3 on the seeded days: rows per table, still files.
+function seeded(p: P): { clips: number; events: number; stills: number } {
+  const dataDir = dataOf(p);
+  const lo = Math.min(...SEED_DAYS) - 12 * 3600_000;
+  const hi = Math.max(...SEED_DAYS) + 12 * 3600_000;
+  const n = (sql: string) => (p.proxy.catalog.db.prepare(sql).get('cam3', lo, hi) as { n: number }).n;
+  let stills = 0;
+  for (const ts of SEED_DAYS) {
+    const dir = dirname(minutePath(dataDir, 'stills', 'cam3', ts));
+    if (existsSync(dir)) stills += readdirSync(dir).length;
+  }
+  return {
+    clips: n('SELECT COUNT(*) AS n FROM clips WHERE cam = ? AND start_ts >= ? AND start_ts < ?'),
+    events: n('SELECT COUNT(*) AS n FROM events WHERE cam = ? AND start_ts >= ? AND start_ts < ?'),
+    stills,
+  };
+}
+const auditText = (p: P) => {
+  const dir = join(p.dir, 'data', 'audit');
+  return readdirSync(dir).map((f) => readFileSync(join(dir, f), 'utf8')).join('\n');
+};
+const actionsOf = (p: P) => new Set(auditText(p).split('\n').filter(Boolean).map((l) => (JSON.parse(l) as { event?: { action?: string } }).event?.action).filter((a): a is string => !!a?.startsWith('move-')));
+
+describe('a camera move end to end (two proxies, one cam-sim)', () => {
+  let sims: Sim[];
+  let fakeS: FakeAdmin;
+  let fakeT: FakeAdmin;
+  let S: P;
+  let T: P;
+  let sourceId = '';
+  let targetId = '';
+  let sourceFtp = 0;
+  let targetFtp = 0;
+
+  // cams-admin's side: a command to one proxy, its final answer (must be ok and match its result schema).
+  const run = async (fake: FakeAdmin, command: string, args: Record<string, unknown>) => {
+    const sent = fake.sendCommand(command, args, { actor: 'admin@example.org' });
+    await until(() => fake.results(sent.cmdId).some((r) => ['done', 'refused'].includes(bodyOf(r).phase)), 60_000);
+    const b = bodyOf(fake.results(sent.cmdId).at(-1)!);
+    expect(b, `${command}: ${JSON.stringify(b)}`).toMatchObject({ phase: 'done', status: 'ok' });
+    const v = strict(`commands/${command}.result`);
+    expect(v(b.result ?? {}), `${command}: ${why(v)}`).toBe(true);
+    return b.result as Record<string, any>;
+  };
+  const events = (fake: FakeAdmin, kind: string) => fake.events().map(bodyOf).filter((b) => b.kind === kind);
+  const phases = (fake: FakeAdmin, moveId: string) => events(fake, 'move.phase').filter((e) => e.moveId === moveId).map((e) => e.phase as string);
+
+  beforeAll(async () => {
+    sims = await startSims(1);
+    [fakeS, fakeT] = await Promise.all([startFakeAdmin(), startFakeAdmin()]);
+    fakeS.welcomeHeartbeatS = 1;
+    fakeT.welcomeHeartbeatS = 1;
+    const timing = { camsAdmin: { timing: { minIntervalS: 0.2, jitterS: 0, backoffCapMs: 300, closeGraceMs: 200 } }, tlsPush: { clearWaitMs: 50, verifyMs: 5000, pollMs: 100 } };
+    const ftp = async (port: number) => {
+      const passive = await freePort();
+      return { enabled: true, port, passive: `${passive}-${passive + 19}`, publicHost: '127.0.0.1', tls: true, stream: 'sub' };
+    };
+    sourceFtp = await freePort();
+    targetFtp = await freePort();
+    const sdir = mkdtempSync(join(tmpdir(), 'camproxy-e2e-src-'));
+    const sk = fakeS.keyFile();
+    sourceId = sk.proxyId;
+    writeKeyFile(join(sdir, 'data', 'admin', 'key.json'), sk);
+    writePrivateJson(join(sdir, 'data', 'admin', 'policy.json'), { v: 1, allow: ['move.send'], consent: 3, changedAt: 1, changedBy: 'local' });
+    S = await startMultiProxy(sims, { dir: sdir, https: true, env: { CAMPROXY_FTP_PASSWORD: SOURCE_FTP_PASSWORD }, proxy: timing, settings: { tls: TLS('s'), camsAdmin: { url: fakeS.url }, ftp: await ftp(sourceFtp) } });
+    // The target has a camera of its own and a default camera password that is not the sim's.
+    const tdir = mkdtempSync(join(tmpdir(), 'camproxy-e2e-tgt-'));
+    const tk = fakeT.keyFile();
+    targetId = tk.proxyId;
+    writeKeyFile(join(tdir, 'data', 'admin', 'key.json'), tk);
+    writePrivateJson(join(tdir, 'data', 'admin', 'policy.json'), { v: 1, allow: ['move.receive'], consent: 3, changedAt: 1, changedBy: 'local' });
+    T = await startMultiProxy([], {
+      dir: tdir, extra: [{ id: 'cam1', host: '' }], env: { CAMPROXY_CAMERA_PASSWORD: 'not-the-camera-pw', CAMPROXY_FTP_PASSWORD: TARGET_FTP_PASSWORD },
+      proxy: { ...timing, moves: { retryMs: 200, retryCapMs: 1000 } },
+      settings: { tls: TLS('u'), camsAdmin: { url: fakeT.url }, ftp: await ftp(targetFtp) },
+    });
+    await until(() => fakeS.open() === 1 && fakeT.open() === 1 && S.proxy.cameras.get('cam3')!.status.state().online, 30_000);
+    await S.proxy.certs!.tick();
+    expect(S.proxy.certs!.state('cam3').mode).toBe('site-ca');
+    for (const ts of SEED_DAYS) seed(S, ts);
+  }, 180_000);
+  afterAll(async () => {
+    await Promise.all([S?.proxy.stop(), T?.proxy.stop()]);
+    await Promise.all([fakeS?.close(), fakeT?.close()]);
+    await Promise.all((sims ?? []).map((s) => s.close()));
+  });
+
+  it('moves cam3 with its content from the source to the target', async () => {
+    const before = seeded(S);
+    expect(before).toEqual({ clips: 2, events: 2, stills: 4 });
+    const ownLeaf = S.proxy.certs!.state('cam3').fingerprint!;
+    const admin = auth(ADMIN_TOKEN);
+
+    // 1. The source's page: the target list, then the request.
+    const tr = await request(S.base).post('/control/moves/targets').set(admin).send({ camera: 'cam3' }).expect(202);
+    await until(() => events(fakeS, 'move.targets').some((e) => e.requestId === tr.body.requestId), 10_000);
+    await run(fakeS, 'move.targets', { v: 1, requestId: tr.body.requestId, targets: [{ proxyId: targetId, name: 'Mini PC', site: 'u' }] });
+    const rq = await request(S.base).post('/control/moves').set(admin).send({ camera: 'cam3', target: targetId }).expect(202);
+    const requestId = rq.body.requestId as string;
+    await until(() => events(fakeS, 'move.request').some((e) => e.requestId === requestId), 10_000);
+    const req = events(fakeS, 'move.request').find((e) => e.requestId === requestId)!;
+    expect(req.summary.clips).toMatchObject({ files: 4, rows: 2 });
+
+    // 2. cams-admin: the token, move.open to the source, move.offer to the target (R4: bound to the target's address).
+    const moveId = newId('mv_');
+    await run(fakeS, 'move.open', { v: 1, moveId, requestId, camera: 'cam3', tokenHash: hashMoveToken(TOKEN), targetIp: '127.0.0.1' });
+    const caPem = (await request(S.base).get('/tls/ca.pem').expect(200)).text;
+    const offer = await run(fakeT, 'move.offer', {
+      v: 1, moveId, token: TOKEN,
+      source: { proxyId: sourceId, name: 'Garage Pi', url: S.base, caFingerprints: [fingerprintOf(caPem)], tlsServername: 'proxy.s.internal' },
+      camera: { camsId: 'garden-cam', ...req.camera }, summary: req.summary, settings: req.settings,
+    });
+    expect(offer).toMatchObject({ accept: true, space: { fits: true } });
+    expect(offer.probeBps).toBeGreaterThan(0);
+
+    // 3. move.answer to the source with cams-admin's estimate.
+    const summary = req.summary as MoveSummary;
+    const kinds = (['stills', 'clips', 'events'] as const).filter((k) => summary[k].files + summary[k].rows > 0);
+    expect(kinds).toEqual(['stills', 'clips', 'events']);
+    const bytes = kinds.reduce((n, k) => n + summary[k].bytes, 0);
+    const estimateS = Math.max(1, Math.ceil(bytes / offer.probeBps));
+    await run(fakeS, 'move.answer', { v: 1, moveId, requestId, target: { proxyId: targetId, name: 'Mini PC' }, accept: true, space: offer.space as Space, estimateS });
+
+    // 4. The admin approves on the source's page: the move.approve event carries the plan. The copy
+    // fills its budget (S §8.3): 20 s for these few kB.
+    const plan: MovePlan = { transfer: true, kinds: [...kinds], space: 'all', targetSettings: null, budgetS: Math.max(estimateS, 20), estimateS };
+    await request(S.base).post(`/control/moves/${moveId}/approve`).set(admin).send({ plan }).expect(202);
+    await until(() => events(fakeS, 'move.approve').some((e) => e.moveId === moveId), 10_000);
+    const approved = events(fakeS, 'move.approve').find((e) => e.moveId === moveId)!.plan as MovePlan;
+
+    // 5. move.start to the target; its key and leaf go to the source in move.go (the plan as approved).
+    const started = await run(fakeT, 'move.start', { v: 1, moveId, plan: approved, settings: req.settings, done: [] });
+    // While the camera switches over, at every moment one of the two proxies has it online.
+    const samples: { s: boolean; t: boolean }[] = [];
+    let sampling = true;
+    const sampler = (async () => {
+      while (sampling) {
+        samples.push({ s: S.proxy.cameras.get('cam3')?.status.state().online === true, t: T.proxy.cameras.get('cam3')?.status.state().online === true });
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    })();
+    const goAt = Date.now();
+    await run(fakeS, 'move.go', { v: 1, moveId, plan: approved, targetPublicKey: started.publicKey, expectedLeaf: started.leafFingerprint });
+
+    // 6. switched on the target → move.release to the source (the target already copies, P12).
+    await until(() => phases(fakeT, moveId).includes('switched'), 120_000);
+    await until(() => T.proxy.cameras.get('cam3')?.status.state().online === true, 30_000);
+    await run(fakeS, 'move.release', { v: 1, moveId });
+    await until(() => phases(fakeS, moveId).includes('released'), 10_000);
+    const releasedAt = Date.now();
+    sampling = false;
+    await sampler;
+    expect(S.proxy.cameras.get('cam3')).toBeUndefined();
+    expect(samples.length).toBeGreaterThan(5);
+    expect(samples.filter((x) => !x.s && !x.t), 'a moment with the camera online on neither proxy').toEqual([]);
+    if (go2rtc) {
+      // Every minute of the switch-over has a still on the source or on the target.
+      await until(() => T.proxy.cameras.get('cam3')!.stills?.grabber.up() === true, 30_000);
+      await until(() => existsSync(`${minutePath(dataOf(T), 'stills', 'cam3', Math.floor(releasedAt / 60_000) * 60_000 + 60_000)}.pack`), 150_000);
+      for (let m = Math.floor(goAt / 60_000) * 60_000; m <= releasedAt; m += 60_000) {
+        const there = [S, T].some((p) => existsSync(`${minutePath(dataOf(p), 'stills', 'cam3', m)}.pack`));
+        expect(there, `a still of ${new Date(m).toISOString()}`).toBe(true);
+      }
+    }
+
+    // 7. The copy ends (copied) → move.finish to the source, then to the target (cams-admin: done).
+    await until(() => phases(fakeT, moveId).includes('copied'), 180_000);
+    const progress = events(fakeT, 'move.progress').filter((e) => e.moveId === moveId);
+    expect(progress.length).toBeGreaterThan(0);
+    for (const e of fakeT.events().filter((x) => String(bodyOf(x).kind).startsWith('move.'))) expect(strict('event')(e.msg), why(strict('event'))).toBe(true);
+    for (const e of fakeS.events().filter((x) => String(bodyOf(x).kind).startsWith('move.'))) expect(strict('event')(e.msg), why(strict('event'))).toBe(true);
+    const fs = await run(fakeS, 'move.finish', { v: 1, moveId, role: 'source', abandoned: false });
+    expect(fs.deleted.clips.files).toBe(4);
+    await run(fakeT, 'move.finish', { v: 1, moveId, role: 'target', abandoned: false });
+
+    // The target has what the source had, runs the camera with the source's password, its leaf and its FTP.
+    expect(seeded(T)).toEqual(before);
+    expect(cameraPasswordStore(join(T.dir, 'data')).get('cam3')).toBe(sims[0].password);
+    expect(await servedFingerprint('127.0.0.1', sims[0].ports.https)).toBe(started.leafFingerprint);
+    expect(sims[0].sim.engine.settings.running.Ftp).toMatchObject({ enable: 1, server: '127.0.0.1', port: targetFtp, userName: 'cam3' });
+    expect(T.proxy.cameras.get('cam3')?.status.state().online).toBe(true);
+    // The source: purged, the config.json entry hidden, its password, leaf and expected leaf gone.
+    expect(seeded(S)).toEqual({ clips: 0, events: 0, stills: 0 });
+    for (const folder of ['stills', 'previews', 'clips', 'analytics', 'still-checks', 'archive']) {
+      const dir = join(dataOf(S), folder, 'cam3');
+      expect(existsSync(dir) ? readdirSync(dir) : [], folder).toEqual([]);
+    }
+    expect(S.proxy.loaded.config.cameras.cam3.moved).toBe(moveId);
+    expect(S.proxy.cameras.get('cam3')).toBeUndefined();
+    expect(S.proxy.certs!.expected('cam3')).toBeNull();
+    expect(S.proxy.certs!.state('cam3').fingerprint).not.toBe(ownLeaf);
+    // Both journals closed, both sides reported finished.
+    expect(new MoveJournal(join(S.dir, 'data', 'admin', 'moves')).load(moveId)).toBeNull();
+    expect(new MoveJournal(join(T.dir, 'data', 'admin', 'moves')).load(moveId)).toBeNull();
+    expect(phases(fakeS, moveId)).toEqual(['opened', 'switching', 'released', 'finished']);
+    expect(phases(fakeT, moveId).slice(0, 3)).toEqual(['switching', 'switched', 'copying']);
+    expect(phases(fakeT, moveId).slice(-2)).toEqual(['copied', 'finished']);
+
+    // Every audit action on the side that writes it, nothing of a failure; never a secret.
+    const sa = actionsOf(S);
+    const ta = actionsOf(T);
+    for (const a of ['move-request', 'move-approve', 'move-switch', 'move-phase', 'move-cleanup', 'move-done']) expect(sa.has(a), `source ${a}`).toBe(true);
+    for (const a of ['move-offer', 'move-switch', 'move-phase', 'move-progress', 'move-done']) expect(ta.has(a), `target ${a}`).toBe(true);
+    for (const a of ['move-token-refused', 'move-budget-exceeded', 'move-file-failed', 'move-source-unreachable', 'move-cancel']) {
+      expect(sa.has(a), `source ${a}`).toBe(false);
+      expect(ta.has(a), `target ${a}`).toBe(false);
+    }
+    expect(ta.has('move-offer') && !sa.has('move-offer')).toBe(true);
+    expect(sa.has('move-cleanup') && !ta.has('move-cleanup')).toBe(true);
+    for (const p of [S, T]) {
+      const text = auditText(p);
+      for (const secret of [TOKEN, sims[0].password, 'PRIVATE KEY', SOURCE_FTP_PASSWORD, TARGET_FTP_PASSWORD]) expect(text.includes(secret), `${p === S ? 'source' : 'target'} audit has a secret`).toBe(false);
+    }
+    // The token is refused after the end.
+    expect((await request(S.base).get(`/api/moves/${moveId}/manifest`).set('Authorization', `Bearer ${TOKEN}`)).status).toBe(403);
+  }, 420_000);
+});

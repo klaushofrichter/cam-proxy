@@ -499,6 +499,129 @@
       },
       "text": "{\"body\":{\"actor\":\"admin@example.org\",\"args\":{\"camera\":\"cam1\",\"name\":\"evil؜name\",\"v\":1},\"cmdId\":\"cmd_8123456789ABCDEFGHJK\",\"command\":\"camera.name.set\",\"connId\":\"con_0123456789ABCDEFGHJK\",\"exp\":1791273660014,\"proxyId\":\"prx_0123456789ABCDEFGHJK\"},\"id\":\"01K60000000000000000000014\",\"seq\":14,\"ts\":1791273600014,\"type\":\"command\",\"v\":1}",
       "sig": "zxgtfRK1yEUFRJ0gLfDOhWyr5mWe/85CCOUk1ULgpDSnzpROk2D5xf4UOdnaaEXBK43zMETvqJTdQpsFBTPFDA=="
+    },
+    {
+      "kind": "command",
+      "key": "server",
+      "envelope": {
+        "v": 1,
+        "type": "command",
+        "id": "01K60000000000000000000015",
+        "seq": 15,
+        "ts": 1791273600015,
+        "body": {
+          "proxyId": "prx_0123456789ABCDEFGHJK",
+          "connId": "con_0123456789ABCDEFGHJK",
+          "cmdId": "cmd_9123456789ABCDEFGHJK",
+          "exp": 1791273660015,
+          "actor": "admin@example.org",
+          "command": "move.offer",
+          "args": {
+            "v": 1,
+            "moveId": "mv_0123456789ABCDEFGHJK",
+            "token": "example-move-token-not-a-secret",
+            "source": {
+              "proxyId": "prx_0123456789ABCDEFGHJK",
+              "name": "Garage",
+              "url": "https://192.0.2.1:8480",
+              "caFingerprints": [
+                "SHA256:ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB"
+              ],
+              "tlsServername": "garage.example.net"
+            },
+            "camera": {
+              "camsId": "cam1",
+              "proxyCameraId": "cam1",
+              "name": "Garage Süd",
+              "host": "192.0.2.10",
+              "protocol": "https",
+              "user": "cams",
+              "onvifPort": 8000,
+              "rtspPort": 554,
+              "baichuanPort": 9000
+            },
+            "summary": {
+              "stills": {
+                "files": 0,
+                "bytes": 0,
+                "rows": 0,
+                "oldest": null,
+                "newest": null
+              },
+              "clips": {
+                "files": 120,
+                "bytes": 52428800,
+                "rows": 130,
+                "oldest": 1788681600000,
+                "newest": 1791273540000
+              },
+              "events": {
+                "files": 0,
+                "bytes": 0,
+                "rows": 130,
+                "oldest": 1788681600000,
+                "newest": 1791273540000
+              },
+              "checks": {
+                "files": 0,
+                "bytes": 0,
+                "rows": 0,
+                "oldest": null,
+                "newest": null
+              },
+              "archive": {
+                "files": 0,
+                "bytes": 0,
+                "rows": 0,
+                "oldest": null,
+                "newest": null
+              }
+            },
+            "settings": {
+              "name": "Garage Süd",
+              "ftp": {
+                "enabled": true,
+                "stream": "main"
+              }
+            }
+          }
+        }
+      },
+      "text": "{\"body\":{\"actor\":\"admin@example.org\",\"args\":{\"camera\":{\"baichuanPort\":9000,\"camsId\":\"cam1\",\"host\":\"192.0.2.10\",\"name\":\"Garage Süd\",\"onvifPort\":8000,\"protocol\":\"https\",\"proxyCameraId\":\"cam1\",\"rtspPort\":554,\"user\":\"cams\"},\"moveId\":\"mv_0123456789ABCDEFGHJK\",\"settings\":{\"ftp\":{\"enabled\":true,\"stream\":\"main\"},\"name\":\"Garage Süd\"},\"source\":{\"caFingerprints\":[\"SHA256:ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB\"],\"name\":\"Garage\",\"proxyId\":\"prx_0123456789ABCDEFGHJK\",\"tlsServername\":\"garage.example.net\",\"url\":\"https://192.0.2.1:8480\"},\"summary\":{\"archive\":{\"bytes\":0,\"files\":0,\"newest\":null,\"oldest\":null,\"rows\":0},\"checks\":{\"bytes\":0,\"files\":0,\"newest\":null,\"oldest\":null,\"rows\":0},\"clips\":{\"bytes\":52428800,\"files\":120,\"newest\":1791273540000,\"oldest\":1788681600000,\"rows\":130},\"events\":{\"bytes\":0,\"files\":0,\"newest\":1791273540000,\"oldest\":1788681600000,\"rows\":130},\"stills\":{\"bytes\":0,\"files\":0,\"newest\":null,\"oldest\":null,\"rows\":0}},\"token\":\"example-move-token-not-a-secret\",\"v\":1},\"cmdId\":\"cmd_9123456789ABCDEFGHJK\",\"command\":\"move.offer\",\"connId\":\"con_0123456789ABCDEFGHJK\",\"exp\":1791273660015,\"proxyId\":\"prx_0123456789ABCDEFGHJK\"},\"id\":\"01K60000000000000000000015\",\"seq\":15,\"ts\":1791273600015,\"type\":\"command\",\"v\":1}",
+      "sig": "r6fjBLRQimGJYBBsripQU4PY0+Au/jdFJW9Rtsf6956oLJERigQK4agoDtF/hsL1Ic2ZPiHWrpz3lKorl0SfDQ=="
+    },
+    {
+      "kind": "event",
+      "key": "proxy",
+      "envelope": {
+        "v": 1,
+        "type": "event",
+        "id": "01K60000000000000000000016",
+        "seq": 16,
+        "ts": 1791273600016,
+        "body": {
+          "proxyId": "prx_0123456789ABCDEFGHJK",
+          "connId": "con_0123456789ABCDEFGHJK",
+          "kind": "move.progress",
+          "moveId": "mv_0123456789ABCDEFGHJK",
+          "chunks": [
+            {
+              "id": "clips:2026-10-20",
+              "state": "verified"
+            },
+            {
+              "id": "events:2026-10-20",
+              "state": "failed"
+            }
+          ],
+          "bytesDone": 10485760,
+          "bytesTotal": 52428800,
+          "rateBps": 1048576,
+          "etaS": 40
+        }
+      },
+      "text": "{\"body\":{\"bytesDone\":10485760,\"bytesTotal\":52428800,\"chunks\":[{\"id\":\"clips:2026-10-20\",\"state\":\"verified\"},{\"id\":\"events:2026-10-20\",\"state\":\"failed\"}],\"connId\":\"con_0123456789ABCDEFGHJK\",\"etaS\":40,\"kind\":\"move.progress\",\"moveId\":\"mv_0123456789ABCDEFGHJK\",\"proxyId\":\"prx_0123456789ABCDEFGHJK\",\"rateBps\":1048576},\"id\":\"01K60000000000000000000016\",\"seq\":16,\"ts\":1791273600016,\"type\":\"event\",\"v\":1}",
+      "sig": "pwRoBQlPYoQdpg6s4OrQuGwCOHICb9Fzh3Xyew/sWMz2/AZgqItoAzljF8NPXFCKSStTuUy+k42euG8//UTtCw=="
     }
   ]
 }

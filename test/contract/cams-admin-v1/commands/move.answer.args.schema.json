@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/commands/move.answer.args.schema.json",
+  "title": "move.answer args v1",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "moveId": {
+      "type": "string",
+      "pattern": "^mv_[0-9A-HJKMNP-TV-Z]{20}$"
+    },
+    "requestId": {
+      "type": "string",
+      "pattern": "^rq_[0-9A-HJKMNP-TV-Z]{20}$"
+    },
+    "target": {
+      "type": "object",
+      "properties": {
+        "proxyId": {
+          "type": "string",
+          "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 64,
+          "minLength": 1
+        }
+      },
+      "required": [
+        "proxyId",
+        "name"
+      ]
+    },
+    "accept": {
+      "type": "boolean"
+    },
+    "reason": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "space": {
+      "type": "object",
+      "properties": {
+        "needed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "available": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fits": {
+          "type": "boolean"
+        },
+        "perKind": {
+          "type": "object",
+          "properties": {
+            "stills": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "clips": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "events": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "checks": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "archive": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": []
+        },
+        "retentionProposal": {
+          "anyOf": [
+            {
+              "type": "object",
+              "propertyNames": {
+                "pattern": "^[a-z][A-Za-z0-9]{0,31}(\\.[a-z0-9][A-Za-z0-9-]{0,31}){0,5}$"
+              },
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "string",
+                    "maxLength": 512
+                  }
+                ]
+              },
+              "maxProperties": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "needed",
+        "available",
+        "fits",
+        "perKind",
+        "retentionProposal"
+      ]
+    },
+    "estimateS": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "v",
+    "moveId",
+    "requestId",
+    "target",
+    "accept"
+  ]
+}

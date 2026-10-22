@@ -10,9 +10,11 @@ import { connect } from 'tls';
 // connection of the proxy: CodeQL accepts this file alone.
 export interface Served { fingerprint: string; pem: string }
 
-export function servedCertificate(host: string, port: number, timeoutMs = 10_000): Promise<Served | null> {
+// `servername`: the SNI name to ask for (a moving camera's source proxy, whose
+// served leaf the target pins for its one GET of /tls/ca.pem, evaluate.ts).
+export function servedCertificate(host: string, port: number, timeoutMs = 10_000, servername?: string): Promise<Served | null> {
   return new Promise((resolve) => {
-    const s = connect({ host, port, rejectUnauthorized: false }, () => {
+    const s = connect({ host, port, rejectUnauthorized: false, ...(servername ? { servername } : {}) }, () => {
       const c = s.getPeerX509Certificate();
       s.destroy();
       resolve(c ? { fingerprint: `SHA256:${createHash('sha256').update(c.raw).digest('hex').toUpperCase()}`, pem: c.toString() } : null);

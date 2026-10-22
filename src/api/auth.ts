@@ -53,7 +53,7 @@ export interface AccessDeps {
   managedAdminLive?: (tokenId: string) => { label: string } | null;
   // The cams-admin-managed tokens (data/admin/tokens.json); absent = none.
   managed?: (bearer: string) => { id: string; kind: 'client' | 'admin'; label: string } | null;
-  // The ui.* allow entries in effect (issue #227; src/fleet/policy.ts uiUnlocked); absent = none.
+  // The ui.* allow entries in effect (issue #227; src/fleet/policy.ts uiUnlocked), and move.send (P9); absent = none.
   managedUnlocked?: () => readonly string[];
   // ui.config's direction rules (src/api/ui-config.ts uiConfigAgainst): why a
   // PUT (the patch) or a single reset (the path) is refused, or null; absent = none.
@@ -134,12 +134,19 @@ const managedMay = (method: string, path: string) => !WRITE.has(method) || MANAG
 // (CommandPolicy.setAllow). ui.config: the Settings page's writes, never a
 // setting on UI_CONFIG_LOCAL (a set, a reset or a whole camera; Reset to
 // defaults keeps those overrides, src/api/control-api.ts). ui.restart: the
-// proxy restart and the camera-side restart.
+// proxy restart and the camera-side restart. move.send (camera-move plan P9;
+// S §4, Klaus: a one-time link is enough): starting, approving and cancelling a
+// move from this proxy; the same entry lets cams-admin run the source's move
+// commands.
 export const UI_UNLOCKS: readonly (readonly [string, string, RegExp])[] = [
   ['ui.config', 'PUT', /^\/control\/config$/],
   ['ui.config', 'DELETE', /^\/control\/config(\/[^/]+)?$/],
   ['ui.restart', 'POST', /^\/control\/actions\/(restart|restart-proxy)$/],
   ['ui.restart', 'POST', /^\/control\/cameras\/[^/]+\/actions\/restart$/],
+  ['move.send', 'POST', /^\/control\/moves$/],
+  ['move.send', 'POST', /^\/control\/moves\/targets$/],
+  ['move.send', 'POST', /^\/control\/moves\/[^/]+\/approve$/],
+  ['move.send', 'POST', /^\/control\/moves\/[^/]+\/cancel$/],
 ];
 // Settings ui.config never sets (src/fleet/remote-settable.ts): addresses,
 // ports, files, trust, users and the cams-admin connection; a new camera

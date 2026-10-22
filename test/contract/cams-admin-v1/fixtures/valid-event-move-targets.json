@@ -1,0 +1,19 @@
+{
+  "$note": "the source asks for the targets of one camera",
+  "schema": "event",
+  "message": {
+    "v": 1,
+    "type": "event",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "kind": "move.targets",
+      "requestId": "rq_0123456789ABCDEFGHJK",
+      "camera": "cam1"
+    },
+    "sig": "frZl1a2FzgxhUBfVCmv5Cw3LXX94hISnCiAifxBntGrF/mUfr7grDEt13WQ36mrFKoPkpEakgl8RHJ4vQdcOAg=="
+  }
+}

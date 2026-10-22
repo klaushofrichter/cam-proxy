@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/commands/move.cancel.result.schema.json",
+  "title": "move.cancel result v1",
+  "type": "object",
+  "properties": {},
+  "required": []
+}

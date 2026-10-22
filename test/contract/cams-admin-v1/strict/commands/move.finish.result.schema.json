@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/strict/commands/move.finish.result.schema.json",
+  "title": "move.finish result v1",
+  "type": "object",
+  "properties": {
+    "deleted": {
+      "type": "object",
+      "properties": {
+        "stills": {
+          "type": "object",
+          "properties": {
+            "files": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "bytes": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "files",
+            "bytes"
+          ],
+          "additionalProperties": false
+        },
+        "clips": {
+          "type": "object",
+          "properties": {
+            "files": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "bytes": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "files",
+            "bytes"
+          ],
+          "additionalProperties": false
+        },
+        "events": {
+          "type": "object",
+          "properties": {
+            "files": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "bytes": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "files",
+            "bytes"
+          ],
+          "additionalProperties": false
+        },
+        "checks": {
+          "type": "object",
+          "properties": {
+            "files": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "bytes": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "files",
+            "bytes"
+          ],
+          "additionalProperties": false
+        },
+        "archive": {
+          "type": "object",
+          "properties": {
+            "files": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "bytes": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "files",
+            "bytes"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "deleted"
+  ],
+  "additionalProperties": false
+}

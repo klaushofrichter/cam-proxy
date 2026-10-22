@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/strict/commands/move.targets.args.schema.json",
+  "title": "move.targets args v1",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "requestId": {
+      "type": "string",
+      "pattern": "^rq_[0-9A-HJKMNP-TV-Z]{20}$"
+    },
+    "targets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "proxyId": {
+            "type": "string",
+            "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1
+          },
+          "site": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,30}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "proxyId",
+          "name",
+          "site"
+        ],
+        "additionalProperties": false
+      },
+      "maxItems": 64
+    }
+  },
+  "required": [
+    "v",
+    "requestId",
+    "targets"
+  ],
+  "additionalProperties": false
+}

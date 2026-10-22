@@ -55,7 +55,16 @@
             "config.rollback",
             "camera.action",
             "camera.name.set",
-            "proxy.restart"
+            "proxy.restart",
+            "move.targets",
+            "move.open",
+            "move.offer",
+            "move.answer",
+            "move.start",
+            "move.go",
+            "move.release",
+            "move.finish",
+            "move.cancel"
           ]
         },
         "args": {

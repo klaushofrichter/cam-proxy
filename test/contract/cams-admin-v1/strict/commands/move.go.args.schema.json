@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/strict/commands/move.go.args.schema.json",
+  "title": "move.go args v1",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "moveId": {
+      "type": "string",
+      "pattern": "^mv_[0-9A-HJKMNP-TV-Z]{20}$"
+    },
+    "plan": {
+      "type": "object",
+      "properties": {
+        "transfer": {
+          "type": "boolean"
+        },
+        "kinds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "stills",
+              "clips",
+              "events",
+              "checks",
+              "archive"
+            ]
+          },
+          "maxItems": 5,
+          "uniqueItems": true
+        },
+        "space": {
+          "type": "string",
+          "enum": [
+            "all",
+            "omit",
+            "fit",
+            "retention"
+          ]
+        },
+        "targetSettings": {
+          "anyOf": [
+            {
+              "type": "object",
+              "propertyNames": {
+                "pattern": "^[a-z][A-Za-z0-9]{0,31}(\\.[a-z0-9][A-Za-z0-9-]{0,31}){0,5}$"
+              },
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "string",
+                    "maxLength": 512
+                  }
+                ]
+              },
+              "maxProperties": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "budgetS": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "estimateS": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "transfer",
+        "kinds",
+        "space",
+        "targetSettings",
+        "budgetS",
+        "estimateS"
+      ],
+      "additionalProperties": false
+    },
+    "targetPublicKey": {
+      "type": "string",
+      "pattern": "^MCowBQYDK2VuAyEA[A-Za-z0-9+/]{43}=$"
+    },
+    "expectedLeaf": {
+      "type": "string",
+      "pattern": "^SHA256:[0-9A-F]{64}$"
+    }
+  },
+  "required": [
+    "v",
+    "moveId",
+    "plan",
+    "targetPublicKey",
+    "expectedLeaf"
+  ],
+  "additionalProperties": false
+}

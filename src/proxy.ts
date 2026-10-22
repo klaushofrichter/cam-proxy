@@ -24,7 +24,7 @@ import type { StatusPoller } from './camera/status';
 import type { EventIntake } from './events/intake';
 import { CameraRegistry } from './cameras/registry';
 import { CameraWorker, cameraWebUi } from './cameras/worker';
-import { cameraConfig, cameraIds } from './config/cameras';
+import { activeCameraIds, cameraConfig, cameraIds } from './config/cameras';
 import { cameraPassword } from './config/secrets';
 import { reapOrphanGo2rtc } from './stills/orphans';
 import { Go2rtc } from './stills/go2rtc';
@@ -62,12 +62,24 @@ import { createMetrics } from './api/metrics';
 import { createSessionSigner } from './api/session';
 import { createLoginLinks } from './api/login-links';
 import { TokenStore } from './fleet/token-store';
-import { CommandPolicy, uiUnlocked } from './fleet/policy';
+import { CommandPolicy, sessionUnlocked } from './fleet/policy';
 import { uiConfigAgainst } from './api/ui-config';
 import { Journal } from './fleet/journal';
 import { OverridesBackups } from './fleet/backups';
 import { configHandlers, type ConfigCommandDeps } from './fleet/config-commands';
 import { cameraHandlers } from './fleet/camera-commands';
+import { moveHandlers } from './moves/commands';
+import { MoveJournal } from './moves/journal';
+import { movesSourceApi, refreshManifest } from './api/moves-api';
+import { movesControlApi } from './api/moves-control-api';
+import { ManifestCache } from './moves/manifest-cache';
+import { MoveSource } from './moves/source';
+import { MoveTarget } from './moves/target';
+import { CopyRunner } from './moves/copier';
+import { purgeCamera, removeImported } from './moves/purge';
+import { cameraPasswordStore } from './config/camera-passwords';
+import { verifyFtp } from './fleet/camera-commands';
+import { availableParallelism, loadavg } from 'os';
 import { CommandRunner, type Handler } from './fleet/commands';
 import { ReplayGuard } from './fleet/replay';
 import { privateFileHooks, tightenAdminFiles } from './fleet/private-file';
@@ -75,7 +87,7 @@ import { composeApi, hasAudio } from './api/compose-api';
 import { createComposer, ffmpegRunner } from './compose/jobs';
 import { clockText, defaultFont } from './compose/ffmpeg';
 import { HostMonitor, type StatFs } from './health/host';
-import { buildHealth, type CameraHealthInput, type HealthSummary, type LastInventory } from './health/summary';
+import { buildHealth, NO_CAMERA_TEXT, type CameraHealthInput, type HealthSummary, type LastInventory } from './health/summary';
 import { localApi } from './api/local-api';
 import { archiveApi } from './api/archive-api';
 import { Archive } from './archive/service';
@@ -151,6 +163,8 @@ export interface ProxyOptions {
   tlsPush?: { clearWaitMs?: number; verifyMs?: number; pollMs?: number };
   // The cams-admin client's waits (tests shorten them).
   camsAdmin?: { timing?: Partial<Timing>; replaySlackMs?: number; recheckMs?: number };
+  // A camera move's switch-over retries on the target (tests shorten them).
+  moves?: { attempts?: number; retryMs?: number; retryCapMs?: number; notReadyMs?: number };
 }
 
 export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
@@ -172,7 +186,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   }
 
   // Vision usage counted before several cameras gets its camera (spec 2026-10-05-multi-camera-host-design §5.1, Ruling P1-7).
-  adoptLegacyUsage(catalog, cameraIds(running));
+  adoptLegacyUsage(catalog, activeCameraIds(running));
   const sse = sseHandler(log, running.sse);
   // The audit log (spec 2026-10-01-audit-log-design): daily JSON-lines files.
   const audit = new AuditLog({ dir: join(running.server.dataDir, 'audit'), version: VERSION });
@@ -183,7 +197,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   const sessions = createSessionSigner(opts.sessionSecret);
   const links = createLoginLinks();
   // The camera workers (spec 2026-10-05-multi-camera-host-design §3.1), in config order.
-  const cams = new CameraRegistry(() => cameraIds(running));
+  const cams = new CameraRegistry(() => activeCameraIds(running));
   // A camera's stills; stills may be off (or not built yet), the camera gone: no still, an empty list.
   const stillAt = (cam: string, ts: number) => cams.get(cam)?.readStill(ts) ?? Promise.resolve(undefined);
   const stillsIn = (cam: string, from: number, to: number) => cams.get(cam)?.listStills(from, to) ?? [];
@@ -209,6 +223,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   let httpsServer: https.Server | undefined;
   let certs: CameraCerts | undefined;
   let proxyLeafTimer: NodeJS.Timeout | undefined;
+  // A camera move's expected leaf (P8): what the camera serves, read every 5 s while one is set.
+  let expectedTimer: NodeJS.Timeout | undefined;
   let caPemOnly: string | null = null; // ca.pem when the CA can't be loaded with its key
   const proxyAddresses = () => (running.tls.proxyAddresses ?? '').split(',').filter(Boolean);
   const proxyName = () => `proxy.${running.tls.site}.internal`;
@@ -261,6 +277,9 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // name; pinned → the one certificate the proxy pinned; else none (a camera
   // never seen serving anything of ours, as before P5).
   const tlsFor = (id: string): CameraTrust | undefined => {
+    // A camera move's expected leaf while the camera serves it (P8): exactly that certificate, pinned.
+    const ex = certs?.expectedTrust(id);
+    if (ex) return { ca: ex.pem, fingerprint: ex.fingerprint };
     const st = certs?.state(id);
     if (st?.mode === 'site-ca') {
       // Never unverified: the CAs, else the camera's stored leaf as a pin, else nothing at all.
@@ -345,6 +364,10 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     certs.start();
     proxyLeafTimer = setInterval(() => void renewProxyLeaf().catch((err: Error) => logger.warn({ err: err.message }, 'proxy_certificate_renewal_failed')), 86400_000);
     proxyLeafTimer.unref();
+    expectedTimer = setInterval(() => {
+      if (certs?.expecting()) void certs.checkExpected().catch((err: Error) => logger.warn({ err: err.message }, 'camera_expected_leaf_check_failed'));
+    }, 5000);
+    expectedTimer.unref();
   };
   // tls-ca-rotate (Ruling P5-3): the old files kept as *.old-<time>, a new CA,
   // a new proxy leaf, every camera pushed again (from the next tick on).
@@ -403,7 +426,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // changed its settings (go2rtc.*) or turned stills on for the first camera.
   const go2rtcSettings = () => JSON.stringify({ binary: running.go2rtc.binary, rtspPort: running.go2rtc.rtspPort, apiPort: running.go2rtc.apiPort });
   const makeGo2rtc = () =>
-    cameraIds(running).some((id) => cameraConfig(running, id)!.stills.enabled)
+    activeCameraIds(running).some((id) => cameraConfig(running, id)!.stills.enabled)
       ? new Go2rtc({ binary: running.go2rtc.binary, rtspPort: running.go2rtc.rtspPort, apiPort: running.go2rtc.apiPort, sources: () => cams.list().filter((w) => w.cam().stills.enabled).map((w) => w.source()) })
       : undefined;
   let go2rtc = makeGo2rtc();
@@ -436,7 +459,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         cameraSdCheckMs: opts.cameraSdCheckMs,
         tls: tlsFor,
       });
-  cameraIds(running).forEach((id) => cams.add(makeWorker(id)));
+  activeCameraIds(running).forEach((id) => cams.add(makeWorker(id)));
   const metrics = createMetrics({
     storage,
     config: () => running,
@@ -568,7 +591,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   });
 
   // External analytics: event stills to the provider, within its limits.
-  const timeInfo = () => cams.first().timeInfo();
+  const timeInfo = () => cams.list()[0]?.timeInfo();
   const analytics = new AnalyticsService({
     catalog, log, dataDir: running.server.dataDir,
     // Read on use: restart() can change the cameras.
@@ -648,13 +671,20 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     // Cameras added or removed in the overrides run or stop at once (spec
     // 2026-10-05-multi-camera-host-design §6.3): a new camera's settings are
     // copied in whole, although camera settings otherwise wait for a restart.
-    const was = cameraIds(running);
-    const now = cameraIds(next.config);
-    for (const id of now.filter((x) => !was.includes(x))) running.cameras[id] = structuredClone(next.config.cameras[id]);
-    if (JSON.stringify(was) !== JSON.stringify(now)) {
-      running.cameraOrder = [...now];
-      void reconcile();
+    // A camera with `moved` set is hidden like a removed one, its node kept
+    // (camera-move plan P2): `moved` itself follows live, not at a restart.
+    const was = activeCameraIds(running);
+    const now = activeCameraIds(next.config);
+    const all = cameraIds(next.config);
+    for (const id of cameraIds(running).filter((x) => !all.includes(x) && !cams.get(x))) delete running.cameras[id];
+    for (const id of all) {
+      const node = next.config.cameras[id];
+      if (!running.cameras[id] || (now.includes(id) && !was.includes(id))) running.cameras[id] = structuredClone(node);
+      else if (node.moved === undefined) delete running.cameras[id].moved;
+      else running.cameras[id].moved = node.moved;
     }
+    if (JSON.stringify(cameraIds(running)) !== JSON.stringify(all)) running.cameraOrder = [...all];
+    if (JSON.stringify(was) !== JSON.stringify(now)) void reconcile();
     applySettings(needsRestart);
     for (const w of cams.list()) {
       const b = before.get(w.id);
@@ -725,8 +755,25 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       stalled: w.clipsHealth(),
     };
   };
-  const ftpStatus = () => ftpStatusOf(cams.first());
-  const streamStatus = () => cams.first().streamStatus();
+  // No camera runs here (every camera moved away, camera-move plan Task 12):
+  // the status and the health show this placeholder, offline, instead of failing.
+  const NO_CAMERA = NO_CAMERA_TEXT;
+  const noCamera = () => {
+    const since = startedAt ?? Date.now();
+    return {
+      camera: { online: false, since, error: NO_CAMERA, name: '', nameSource: 'config' as const, webUiUrl: null, reboot: null, poeSwitch: null },
+      intake: { onvif: 'down' as const, since, source: 'none' as const, resubscribes: 0 },
+      stream: { enabled: false, up: false, go2rtcUp: false, lastFrameTs: null },
+      ftp: { enabled: false, listening: false, port: running.ftp.port, tls: running.ftp.tls, publicHost: running.ftp.publicHost ?? null, passwordSet: !!loaded.secrets.ftpPassword, lastUpload: null, lastClip: null, clips: countAllClips(catalog), failures: 0, camera: null, stalled: null },
+      recordings: { last: null, cache: cachePool.usage(), camera: { bytes: 0, files: 0 } },
+    };
+  };
+  const firstCam = (): CameraWorker | undefined => cams.list()[0];
+  const ftpStatus = () => {
+    const w = firstCam();
+    return w ? ftpStatusOf(w) : noCamera().ftp;
+  };
+  const streamStatus = () => firstCam()?.streamStatus() ?? noCamera().stream;
   // One camera's block for the control API (spec 2026-10-05-multi-camera-host-design §6.3).
   const cameraStatusBlock = (w: CameraWorker) => ({
     id: w.id,
@@ -774,6 +821,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   };
   const healthNow = async (): Promise<HealthSummary> => {
     const [first, ...others] = cams.list().map(cameraHealthInput);
+    const none = first ? null : noCamera();
     // The host's one recordings cache (spec 2026-10-05-multi-camera-host-design §8.3).
     const recordingsCache = cachePool.usage();
     return buildHealth({
@@ -781,8 +829,9 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       version: VERSION,
       startedAt,
       thresholds: { diskPercent: running.health.diskPercent, tempC: running.health.tempC, ftpStalledHours: running.ftp.stalledHours, ...(running.archive.enabled ? { archiveWarnPercent: running.archive.warnPercent } : {}) },
-      ...first,
+      ...(first ?? { camera: { id: '', name: '', host: '', state: none!.camera, reboot: null, poeSwitch: null }, stream: none!.stream, intake: none!.intake, ftp: none!.ftp }),
       others,
+      ...(first ? {} : { noCamera: true }),
       storage: { paused: storage.paused(), lastRun: storage.lastRun() },
       recordingsCache,
       sseClients: sse.clients(),
@@ -799,7 +848,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // Nothing is read or written until a command arrives or the card asks.
   const commandPolicy = new CommandPolicy({ base: () => loaded.commandPolicyBase, file: join(loaded.config.server.dataDir, 'admin', 'policy.json'), env: () => loaded.envLayer, log: logger });
   // What the allow-list unlocks for a cams-admin sign-in (issue #227): read per request, so a change or a pause applies at once.
-  access.managedUnlocked = () => uiUnlocked(commandPolicy.effective());
+  // And move.send for starting a camera move from the sign-in (camera-move plan P9).
+  access.managedUnlocked = () => sessionUnlocked(commandPolicy.effective());
   // ui.config's direction rules on the configuration as it is now (Klaus, 2026-10-21).
   access.uiConfigAgainst = (req) => uiConfigAgainst(loaded, req);
   const journal = new Journal(join(loaded.config.server.dataDir, 'admin', 'commands.json'), Date.now, logger);
@@ -819,6 +869,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   let envOffLogged = false;
 
   let startedAt: number | null = null;
+  // The camera moves' offer expiry and tombstone sweep (every minute while started).
+  let moveExpiry: NodeJS.Timeout | undefined;
   // cams-admin (spec 2026-10-06-cams-admin-phase1-design §9): a leaf; it
   // reads the summary GET /api/local/health serves, at most once per heartbeat.
   // The heartbeat's P2 fields (only sent with camsAdmin.url: the client runs only then).
@@ -878,7 +930,11 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // Behind an ingress (issue #29): client addresses from X-Forwarded-For.
   if (running.server.trustProxy) app.set('trust proxy', running.server.trustProxy);
   const limiter = (limit: number, skip: (req: Request) => boolean) => rateLimit({ windowMs: 60_000, limit, skip, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } });
-  app.use(limiter(1200, isImage));
+  // Not the move endpoints either (camera-move plan Task 5): the move token
+  // bound to the one target address guards them, and they answer 503 busy
+  // under pressure; a copier fetching many small files would hit 1200/min.
+  // Their refusals have a limiter of their own (movesSourceApi, final review 9).
+  app.use(limiter(1200, (req) => isImage(req) || req.path.startsWith('/api/moves/')));
   // Images: 6000 per minute per camera (a timeline per camera loads its own sprites; spec §6.1, Ruling P1-16).
   app.use(rateLimit({ windowMs: 60_000, limit: () => 6000 * Math.max(1, cams.size), skip: (req) => !isImage(req), standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } }));
   app.use(express.json({ limit: '64kb' }));
@@ -895,6 +951,125 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // The health summary for the display on the Pi: loopback callers only, no
   // key; anyone else goes on to the access check as for an unknown route.
   app.use('/api', localApi({ health: healthNow }));
+  // The source's move endpoints (camera-move plan Task 5): ahead of the client
+  // auth; the per-move token bound to the target's address is their only guard.
+  // One journal for the moves router and the move commands (never two on the folder).
+  const moveJournal = new MoveJournal(join(loaded.config.server.dataDir, 'admin', 'moves'), (m) => logger.warn({ problem: m }, 'move_journal_problem'));
+  const moveInventory = { catalog, dataDir: running.server.dataDir };
+  const manifestCache = new ManifestCache(running.server.dataDir);
+  app.use('/api', movesSourceApi({
+    journal: moveJournal,
+    audit,
+    inventory: moveInventory,
+    busy: () => storage.paused() || loadavg()[0] > availableParallelism(),
+    password: (cam) => cameraPassword(loaded.secrets, cam),
+    cache: manifestCache,
+    // A valid move token from another address (B46): the move fails (journalled), cams-admin hears it once.
+    onWrongAddress: (r) => moveSource.wrongAddress(r),
+  }));
+  // The end of a move (Task 10), both sides: the camera's content, its stored
+  // password, its leaf; the camera's FTP pointed here and read back.
+  const movePasswords = cameraPasswordStore(running.server.dataDir);
+  const moveEnd = {
+    deletePassword: (cam: string) => movePasswords.delete(cam),
+    forgetLeaf: (cam: string) => certs?.forget(cam, { user: 'cams-admin' }),
+  };
+  const ftpHere = async (cam: string): Promise<'skipped' | { verified: boolean; mismatch: string[] }> => {
+    const w = cams.get(cam);
+    if (!w) throw new Error(`${cam} is not running`);
+    if (!w.cam().ftp.enabled) return 'skipped';
+    const t = ftpTargetFor(cam)();
+    const f = await setupCameraFtp(w.client, t);
+    w.ftpWatch.note(f);
+    return verifyFtp('camera-ftp-setup', { ftp: f }, { server: t.server, port: t.port, tls: t.tls, stream: t.stream });
+  };
+  // The source side of a camera move (camera-move plan Task 7).
+  const moveSource = new MoveSource({
+    journal: moveJournal,
+    audit,
+    emit: (e) => camsAdmin.emitEvent(e),
+    running: () => running,
+    loaded: () => loaded,
+    setLoaded: (l) => setLoaded(l),
+    sendAllowed: () => { const e = commandPolicy.effective(); return e.enabled && !e.paused && e.allow.includes('move.send'); },
+    siteReady: () => !!running.tls.site && !!ca,
+    inventory: moveInventory,
+    certs: () => certs,
+    refreshManifest: (id) => void refreshManifest({ journal: moveJournal, inventory: moveInventory }, id, manifestCache),
+    proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
+    end: {
+      ...moveEnd,
+      dropManifests: (id) => manifestCache.forget(id),
+      purge: (cam) => purgeCamera({ catalog, dataDir: running.server.dataDir, storage, archive }, cam),
+      // The source's own stored leaf, pushed like "Push now"; then the expected
+      // leaf's check reads what the camera serves (the client trusts it again).
+      pushOwnLeaf: async (cam) => {
+        if (!certs || !running.tls.site) return { outcome: 'failed' as const, served: null, detail: caProblem ?? 'the site CA is not ready', tookMs: 0 };
+        const own = certs.leaf(cam);
+        if (own) certs.stageLeaf(cam, own);
+        const r = await certs.pushNow(cam, { user: 'cams-admin' });
+        await certs.checkExpected();
+        return r;
+      },
+      ftp: ftpHere,
+      settled: () => reconciling,
+    },
+  });
+  // The target side from move.start on (camera-move plan Task 8): the
+  // switch-over runner, resumed from the journal at start.
+  const moveTarget = new MoveTarget({
+    journal: moveJournal,
+    audit,
+    emit: (e) => camsAdmin.emitEvent(e),
+    ca: () => ca,
+    site: () => running.tls.site,
+    loaded: () => loaded,
+    // The camera added live (P1): resolved once its worker runs.
+    setLoaded: async (l) => {
+      setLoaded(l);
+      await reconciling;
+    },
+    passwords: movePasswords,
+    stageLeaf: (cam, leaf) => certs?.stageLeaf(cam, leaf),
+    pushLeaf: (cam, leaf) => (certs && running.tls.site ? certs.pushLeaf(cam, leaf, { user: 'cams-admin' }) : Promise.resolve({ outcome: 'failed' as const, served: null, detail: caProblem ?? 'the site CA is not ready', tookMs: 0 })),
+    ftp: ftpHere,
+    eventOpen: (cam) => openEvents(catalog, cam).length > 0,
+    // The copier (Task 9), one per move; stop() ends it too.
+    startCopy: (id) => moveCopier.start(id),
+    stopCopy: (id) => moveCopier.stop(id),
+    proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
+    timing: opts.moves,
+    end: { ...moveEnd, dataDir: running.server.dataDir, removeImported: (r) => removeImported({ catalog, dataDir: running.server.dataDir, storage }, r) },
+  });
+  // The target's copier (camera-move plan Task 9): the camera's old content
+  // from the source, after the switch-over; waits while storage is paused.
+  const moveCopier = new CopyRunner({
+    journal: moveJournal,
+    audit,
+    emit: (e) => camsAdmin.emitEvent(e),
+    catalog,
+    dataDir: running.server.dataDir,
+    paused: () => storage.paused(),
+    cpuBusy: () => loadavg()[0] > availableParallelism(),
+    space: {
+      loaded: () => loaded,
+      usage: () => { const u = storage.usage(); return { stills: u.stills.bytes, previews: u.previews.bytes, clips: u.clips.bytes, used: u.used, budget: u.budget }; },
+      freeBytes: () => storage.diskSpace().free,
+    },
+    noteWritten: (kind, bytes, cam) => storage.noteWritten(kind, bytes, 1, { growth: false, cam }),
+    setPhase: (r, phase, o) => moveTarget.setPhase(r, phase, o),
+    proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
+  });
+  // After every welcome: the open move's phase again (B2).
+  camsAdmin.onWelcome(() => {
+    try {
+      moveSource.reemit(moveJournal.currentPhase());
+      // A failed move's failure too (its record stays until a cancel; the event may have been lost, final review 4).
+      moveSource.reemitFailed();
+    } catch (err) {
+      logger.warn({ err: (err as Error).message }, 'move_phase_reemit_failed');
+    }
+  });
   app.use('/control', sessionRoutes({ adminToken: access.adminToken, sessions, links, audit, managedAdminLive: access.managedAdminLive, managedUnlocked: access.managedUnlocked }));
   // Before clientApi: its /cameras/:cam/stills/:file would take latest.jpg.
   app.use('/api', requireAccess('client', access), latestApi({ cameras: cams }));
@@ -910,12 +1085,23 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   app.use('/control', requireAccess('admin', access), camsAdminApi({ camsAdmin, audit, commands: { policy: commandPolicy, tokens: tokenStore, runner: commandRunner, config: configCommandDeps } }));
   const controlDeps: ControlDeps = {
     changeMarks: () => overridesBackups.byPath(),
+    moveOpen: (id) => {
+      try {
+        // A record, or a move that took the camera away for good (its tombstone).
+        return moveJournal.load(id) !== null || moveJournal.ended(id, 'source')?.phase === 'finished';
+      } catch {
+        return true;
+      }
+    },
     loaded: () => loaded,
     setLoaded,
     running: () => running,
     catalog,
     log,
-    camera: () => cameraStatusBlock(cams.first()).camera,
+    camera: () => {
+      const w = firstCam();
+      return w ? cameraStatusBlock(w).camera : noCamera().camera;
+    },
     cameras: cams,
     cameraStatus: () => cams.list().map(cameraStatusBlock),
     cameraCount: () => cams.size,
@@ -927,7 +1113,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       write: (cam, name) => worker(cam).writeName(name),
     },
     checkCamera: (cam) => worker(cam).status.checkNow(),
-    intake: () => cams.first().intake.state(),
+    intake: () => firstCam()?.intake.state() ?? noCamera().intake,
     resubscribe: (cam) => worker(cam).intake.resubscribe(),
     restart: () => proxy.restart(),
     // One camera's restart applies its own pending settings (cameras.<id>.*), nothing host-wide.
@@ -974,7 +1160,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     setVisionKey: (key) => analytics.setManualKey(key),
     unmapped: { list: (limit) => listUnmapped(catalog, limit), clear: () => clearUnmapped(catalog) },
     sseClients: () => sse.clients(),
-    recordings: () => cams.first().recordings.status(),
+    recordings: () => firstCam()?.recordings.status() ?? noCamera().recordings,
     inventory,
     stream: streamStatus,
     sessions,
@@ -983,7 +1169,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     findCamera: () => discover(opts.discovery ?? {}),
     envFile: () => loaded.env.CAMPROXY_ENV_FILE || undefined,
     archive,
-    cameraId: () => cams.first().id,
+    cameraId: () => firstCam()?.id ?? '',
     cameraNtp: (cam) => worker(cam).syncNtp(true),
     tls: {
       view: tlsView,
@@ -993,12 +1179,29 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       dropPrevious: (who) => certs?.dropPreviousCa(who) ?? false,
     },
   };
+  app.use('/control', requireAccess('admin', access), movesControlApi(moveSource));
   app.use('/control', requireAccess('admin', access), controlApi(controlDeps));
   // cams-admin's P3 commands (plan P3 Task 10): each off unless allowed locally.
   Object.assign(
     commandHandlers,
     configHandlers(configCommandDeps),
     cameraHandlers({ actions: controlDeps, cameraIds: () => cams.ids(), cameraName: controlDeps.cameraName, audit, restartProcess: () => controlDeps.restartProcess() }),
+    // Camera moves (plan 2026-10-21-camera-move-cam-proxy): stubs until each task fills its handler in.
+    moveHandlers({
+      emit: (e) => camsAdmin.emitEvent(e),
+      audit,
+      source: moveSource,
+      target: moveTarget,
+      proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
+      evaluate: {
+        receiveAllowed: () => commandPolicy.effective().allow.includes('move.receive'),
+        journal: moveJournal,
+        loaded: () => loaded,
+        ca: () => ca,
+        usage: () => { const u = storage.usage(); return { stills: u.stills.bytes, previews: u.previews.bytes, clips: u.clips.bytes, used: u.used, budget: u.budget }; },
+        freeBytes: () => storage.diskSpace().free,
+      },
+    }),
   );
   // The admin UI. The files are public; every API call needs a session.
   const webDir = findWebDir();
@@ -1033,7 +1236,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   const reconcile = (): Promise<void> =>
     (reconciling = reconciling.then(async () => {
       if (stopPromise) return;
-      const want = cameraIds(running);
+      const want = activeCameraIds(running);
       for (const w of cams.all().filter((x) => !want.includes(x.id))) {
         cams.remove(w.id);
         await w.stopRecordings();
@@ -1067,7 +1270,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // for good before the settings change under it; a new id gets a new worker.
   const restartCameraSide = async () => {
     await clips?.stop();
-    const nextIds = cameraIds(loaded.config);
+    const nextIds = activeCameraIds(loaded.config);
     const gone = cams.list().filter((w) => !nextIds.includes(w.id));
     for (const w of gone) {
       await w.stopRecordings();
@@ -1077,7 +1280,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     }
     applySettings(needsProcessRestart);
     const kept = cams.list();
-    const added = cameraIds(running).flatMap((id) => (cams.get(id) ? [] : [makeWorker(id)]));
+    const added = activeCameraIds(running).flatMap((id) => (cams.get(id) ? [] : [makeWorker(id)]));
     for (const w of added) cams.add(w);
     // go2rtc's own settings changed, or stills went on or off everywhere: a new one.
     if (go2rtcSettings() !== go2rtcMadeWith || !go2rtc !== !makeGo2rtc()) {
@@ -1173,9 +1376,26 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       const prev = audit.find((r) => r.event.action === 'proxy-start' || r.event.action === 'proxy-stop', 400);
       const uncleanStop = prev?.event.action === 'proxy-start';
       const previousStop = prev && !uncleanStop ? prev['@timestamp'] : null;
-      audit.write({ action: 'proxy-start', category: ['process'], type: ['start'], outcome: 'success', user: 'system', message: `cam-proxy ${VERSION} started`, details: { config: { camera: cams.first().id, cameras: cams.ids(), stills: running.stills.enabled, ftp: running.ftp.enabled, analytics: running.analytics.googleVision.enabled }, previousStop, uncleanStop } });
+      audit.write({ action: 'proxy-start', category: ['process'], type: ['start'], outcome: 'success', user: 'system', message: `cam-proxy ${VERSION} started`, details: { config: { camera: cams.list()[0]?.id ?? null, cameras: cams.ids(), stills: running.stills.enabled, ftp: running.ftp.enabled, analytics: running.analytics.googleVision.enabled }, previousStop, uncleanStop } });
       daily.start();
       startedAt = Date.now();
+      // Camera moves this proxy takes over, from their journal phase and step (S §10.1);
+      // and a cancel still giving a camera back to this proxy.
+      moveTarget.resume();
+      moveSource.resume();
+      // Offers never approved close on their own on both sides (final review 5); old tombstones go.
+      const expireOffers = () => {
+        try {
+          moveJournal.sweep();
+          moveSource.expireOffers();
+          moveTarget.expireOffers();
+        } catch (err) {
+          logger.warn({ err: (err as Error).message }, 'move_offer_expiry_failed');
+        }
+      };
+      expireOffers();
+      moveExpiry = setInterval(expireOffers, 60_000);
+      moveExpiry.unref();
       // Only with camsAdmin.url (the Pi: nothing until enrolled).
       void camsAdmin.apply();
       logger.info({ port, cameras: cams.ids(), version: VERSION }, 'cam_proxy_started');
@@ -1220,6 +1440,10 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         audit.write({ action: 'camera-powercycle', category: ['host'], type: ['end'], outcome: 'failure', user: 'system', message: "cam-proxy stopping: the proxy's web session on the switch may still be open: the switch's web UI may refuse logins until the switch ends it", details: { phase: 'stop', poeLeftOff: false, sessionMaybeOpen, switch: swInfo } });
       }
       await restarting;
+      // A switch-over step in flight ends first; the journal keeps the step (resumed at the next start).
+      clearInterval(moveExpiry);
+      moveSource.stop();
+      await moveTarget.stopAll();
       clearInterval(sweeper);
       sse.closeAll();
       storage.stop();
@@ -1238,6 +1462,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       }
       certs?.stop();
       clearInterval(proxyLeafTimer);
+      clearInterval(expectedTimer);
       const s = server;
       if (s) {
         s.closeAllConnections();

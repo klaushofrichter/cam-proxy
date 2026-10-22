@@ -3,6 +3,7 @@
 // them against the vendored strict schemas on the fixtures.
 import { NEVER_REMOTE_ACTIONS, REMOTE_ACTIONS } from './policy';
 import { CAMERA_NAME_PATTERN } from './remote-settable';
+import { MOVE_KINDS, type MoveCopied, type MovePlan, type MoveRole, type MoveSummary, type Settings, type SettingsMap, type Space, type MoveReason } from '../moves/types';
 import type { ManagedToken, TokensApplyArgs } from './token-store';
 
 export type ArgsVerdict<T> = { ok: true; args: T } | { ok: false; code: 'unsupported_version' | 'invalid_args'; detail: string };
@@ -88,6 +89,132 @@ export const validateCameraAction = (a: unknown) => v1<CameraActionArgs>(a, ['ca
 });
 export const validateCameraName = (a: unknown) => v1<CameraNameArgs>(a, ['camera', 'name'], (o) => (typeof o.camera !== 'string' || !CAM.test(o.camera) ? 'camera' : typeof o.name !== 'string' || !CAMERA_NAME_PATTERN.test(o.name) ? 'name' : null));
 
+// ---- Camera moves (contract commands/move.*.args, strict) ----
+export interface MoveTargetsArgs { v: 1; requestId: string; targets: { proxyId: string; name: string; site: string | null }[] }
+export interface MoveOpenArgs { v: 1; moveId: string; requestId: string; camera: string; tokenHash: string; targetIp: string }
+export interface MoveOfferArgs { v: 1; moveId: string; token: string; source: { proxyId: string; name: string; url: string; caFingerprints: string[]; tlsServername: string }; camera: { camsId: string; proxyCameraId: string; name: string; host: string; protocol: 'https' | 'http'; user: string; onvifPort: number; rtspPort: number; baichuanPort: number }; summary: MoveSummary; settings: Settings }
+export interface MoveAnswerArgs { v: 1; moveId: string; requestId: string; target: { proxyId: string; name: string }; accept: boolean; reason?: MoveReason; space?: Space; estimateS?: number }
+export interface MoveStartArgs { v: 1; moveId: string; plan: MovePlan; settings: Settings; done: string[] }
+export interface MoveGoArgs { v: 1; moveId: string; plan: MovePlan; targetPublicKey: string; expectedLeaf: string }
+export interface MoveReleaseArgs { v: 1; moveId: string }
+export interface MoveFinishArgs { v: 1; moveId: string; role: MoveRole; abandoned: boolean }
+export interface MoveCancelArgs { v: 1; moveId: string; role: MoveRole; copied?: MoveCopied; expectedLeaf?: string }
+
+const MOVE_ID = /^mv_[0-9A-HJKMNP-TV-Z]{20}$/;
+const REQ_ID = /^rq_[0-9A-HJKMNP-TV-Z]{20}$/;
+const PRX_ID = /^prx_[0-9A-HJKMNP-TV-Z]{20}$/;
+const SITE = /^[a-z0-9][a-z0-9-]{0,30}$/;
+const FINGERPRINT = /^SHA256:[0-9A-F]{64}$/;
+// An X25519 public key as SPKI DER base64: the 12-byte prefix (MCowBQYDK2VuAyEA) and 32 bytes, 60 characters.
+export const X25519_SPKI = /^MCowBQYDK2VuAyEA[A-Za-z0-9+/]{43}=$/;
+const CHUNK_ID = /^(stills|clips|events|checks|archive):[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
+const TOKEN_HASH = HASH;
+// Loose on purpose (the contract's pattern): never IP validation, the move code compares addresses itself.
+const TARGET_IP = /^[0-9A-Fa-f:.]{2,45}$/;
+const MOVE_TOKEN = /^[\x21-\x7e]{8,256}$/;
+const MOVE_REASONS: readonly string[] = ['moves_not_allowed', 'camera_unreachable', 'camera_limit', 'id_taken', 'busy', 'incompatible', 'no_site_ca', 'ca_does_not_cover_camera', 'external_cert', 'other_account', 'target_offline', 'not_routed', 'host_overridden', 'target_failed', 'offer_expired'];
+const SPACE_PLANS: readonly string[] = ['all', 'omit', 'fit', 'retention'];
+const nat = (x: unknown): x is number => Number.isSafeInteger(x) && (x as number) >= 0;
+const str = (x: unknown, max: number, min = 0): x is string => typeof x === 'string' && x.length >= min && x.length <= max;
+const idLike = (x: unknown): x is string => typeof x === 'string' && CAM.test(x);
+const natOrNull = (x: unknown) => x === null || nat(x);
+
+// A flat settings map (targetSettings, retentionProposal): up to 64 paths, each a leaf value.
+export const settingsMap = (x: unknown): x is SettingsMap | null => {
+  if (x === null) return true;
+  if (!isObj(x)) return false;
+  const e = Object.entries(x);
+  return e.length <= 64 && e.every(([p, v]) => PATH_RE.test(p) && leafValue(v));
+};
+const closed = (x: unknown, keys: string[]): x is Record<string, unknown> => isObj(x) && only(x, keys);
+const optional = (o: Record<string, unknown>, k: string, ok: (x: unknown) => boolean) => o[k] === undefined || ok(o[k]);
+const bool = (x: unknown) => typeof x === 'boolean';
+const oneOf = (...l: string[]) => (x: unknown) => typeof x === 'string' && l.includes(x);
+
+// The camera node of the config: every leaf optional, never null, closed objects.
+export function settingsProblem(s: unknown): string | null {
+  if (!closed(s, ['name', 'statusPollS', 'ftp', 'stills', 'storage', 'analytics', 'events'])) return 'settings';
+  if (!optional(s, 'name', (x) => typeof x === 'string' && CAMERA_NAME_PATTERN.test(x))) return 'settings.name';
+  if (!optional(s, 'statusPollS', (x) => Number.isSafeInteger(x) && (x as number) >= 1)) return 'settings.statusPollS';
+  if (!optional(s, 'ftp', (x) => closed(x, ['enabled', 'stream']) && optional(x, 'enabled', bool) && optional(x, 'stream', oneOf('main', 'sub')))) return 'settings.ftp';
+  if (!optional(s, 'stills', (x) => closed(x, ['enabled', 'stream', 'intervalS']) && optional(x, 'enabled', bool) && optional(x, 'stream', oneOf('sub', 'main')) && optional(x, 'intervalS', (n) => typeof n === 'number' && Number.isFinite(n) && n > 0))) return 'settings.stills';
+  if (!optional(s, 'storage', (x) => closed(x, ['sharePercent']) && optional(x, 'sharePercent', (n) => typeof n === 'number' && n >= 0 && n <= 100))) return 'settings.storage';
+  if (!optional(s, 'analytics', (x) => closed(x, ['kinds']) && optional(x, 'kinds', (k) => closed(k, ['person', 'vehicle', 'pet']) && optional(k, 'person', bool) && optional(k, 'vehicle', bool) && optional(k, 'pet', bool)))) return 'settings.analytics';
+  if (!optional(s, 'events', (x) => closed(x, ['poll']) && optional(x, 'poll', (p) => closed(p, ['enabled']) && optional(p, 'enabled', bool)))) return 'settings.events';
+  return null;
+}
+
+export function summaryProblem(s: unknown): string | null {
+  if (!closed(s, [...MOVE_KINDS])) return 'summary';
+  for (const k of MOVE_KINDS) {
+    const x = s[k];
+    if (!closed(x, ['files', 'bytes', 'rows', 'oldest', 'newest']) || !nat(x.files) || !nat(x.bytes) || !nat(x.rows) || !natOrNull(x.oldest) || !natOrNull(x.newest)) return `summary.${k}`;
+  }
+  return null;
+}
+
+export const spaceProblem = (s: unknown): string | null => {
+  if (!closed(s, ['needed', 'available', 'fits', 'perKind', 'retentionProposal'])) return 'space';
+  if (!nat(s.needed) || !nat(s.available) || !bool(s.fits)) return 'space';
+  if (!closed(s.perKind, [...MOVE_KINDS]) || !Object.values(s.perKind).every(nat)) return 'space.perKind';
+  return settingsMap(s.retentionProposal) ? null : 'space.retentionProposal';
+};
+
+export const planProblem = (p: unknown): string | null => {
+  if (!closed(p, ['transfer', 'kinds', 'space', 'targetSettings', 'budgetS', 'estimateS']) || !bool(p.transfer)) return 'plan';
+  if (!Array.isArray(p.kinds) || p.kinds.length > 5 || new Set(p.kinds).size !== p.kinds.length || p.kinds.some((k) => !(MOVE_KINDS as readonly unknown[]).includes(k))) return 'plan.kinds';
+  if (typeof p.space !== 'string' || !SPACE_PLANS.includes(p.space)) return 'plan.space';
+  if (!settingsMap(p.targetSettings)) return 'plan.targetSettings';
+  return nat(p.budgetS) && nat(p.estimateS) ? null : 'plan.budget';
+};
+
+const moveId = (o: Record<string, unknown>) => (typeof o.moveId === 'string' && MOVE_ID.test(o.moveId) ? null : 'moveId');
+const role = (o: Record<string, unknown>) => (o.role === 'source' || o.role === 'target' ? null : 'role');
+const port = (x: unknown) => Number.isSafeInteger(x) && (x as number) >= 1;
+
+export const validateMoveTargets = (a: unknown) => v1<MoveTargetsArgs>(a, ['requestId', 'targets'], (o) => {
+  if (typeof o.requestId !== 'string' || !REQ_ID.test(o.requestId)) return 'requestId';
+  if (!Array.isArray(o.targets) || o.targets.length > 64) return 'targets';
+  for (const [i, t] of o.targets.entries()) if (!closed(t, ['proxyId', 'name', 'site']) || typeof t.proxyId !== 'string' || !PRX_ID.test(t.proxyId) || !str(t.name, 64, 1) || !(t.site === null || (typeof t.site === 'string' && SITE.test(t.site)))) return `targets[${i}]`;
+  return null;
+});
+export const validateMoveOpen = (a: unknown) => v1<MoveOpenArgs>(a, ['moveId', 'requestId', 'camera', 'tokenHash', 'targetIp'], (o) =>
+  moveId(o) ?? (typeof o.requestId !== 'string' || !REQ_ID.test(o.requestId) ? 'requestId' : !idLike(o.camera) ? 'camera' : typeof o.tokenHash !== 'string' || !TOKEN_HASH.test(o.tokenHash) ? 'tokenHash' : typeof o.targetIp !== 'string' || !TARGET_IP.test(o.targetIp) ? 'targetIp' : null));
+export const validateMoveOffer = (a: unknown) => v1<MoveOfferArgs>(a, ['moveId', 'token', 'source', 'camera', 'summary', 'settings'], (o) => {
+  const bad = moveId(o);
+  if (bad) return bad;
+  if (typeof o.token !== 'string' || !MOVE_TOKEN.test(o.token)) return 'token';
+  const s = o.source;
+  if (!closed(s, ['proxyId', 'name', 'url', 'caFingerprints', 'tlsServername']) || typeof s.proxyId !== 'string' || !PRX_ID.test(s.proxyId) || !str(s.name, 64, 1) || !str(s.url, 300) || !/^https?:\/\//.test(s.url)
+    || !Array.isArray(s.caFingerprints) || s.caFingerprints.length > 2 || s.caFingerprints.some((f) => typeof f !== 'string' || !FINGERPRINT.test(f)) || !str(s.tlsServername, 253, 1)) return 'source';
+  const c = o.camera;
+  if (!closed(c, ['camsId', 'proxyCameraId', 'name', 'host', 'protocol', 'user', 'onvifPort', 'rtspPort', 'baichuanPort']) || !idLike(c.camsId) || !idLike(c.proxyCameraId) || typeof c.name !== 'string' || !CAMERA_NAME_PATTERN.test(c.name)
+    || !str(c.host, 255, 1) || (c.protocol !== 'https' && c.protocol !== 'http') || !str(c.user, 64) || !port(c.onvifPort) || !port(c.rtspPort) || !port(c.baichuanPort)) return 'camera';
+  return summaryProblem(o.summary) ?? settingsProblem(o.settings);
+});
+export const validateMoveAnswer = (a: unknown) => v1<MoveAnswerArgs>(a, ['moveId', 'requestId', 'target', 'accept', 'reason', 'space', 'estimateS'], (o) => {
+  const bad = moveId(o);
+  if (bad) return bad;
+  if (typeof o.requestId !== 'string' || !REQ_ID.test(o.requestId)) return 'requestId';
+  const t = o.target;
+  if (!closed(t, ['proxyId', 'name']) || typeof t.proxyId !== 'string' || !PRX_ID.test(t.proxyId) || !str(t.name, 64, 1)) return 'target';
+  if (!bool(o.accept)) return 'accept';
+  if (!optional(o, 'reason', (x) => typeof x === 'string' && MOVE_REASONS.includes(x))) return 'reason';
+  if (o.space !== undefined) {
+    const p = spaceProblem(o.space);
+    if (p) return p;
+  }
+  return optional(o, 'estimateS', nat) ? null : 'estimateS';
+});
+export const validateMoveStart = (a: unknown) => v1<MoveStartArgs>(a, ['moveId', 'plan', 'settings', 'done'], (o) =>
+  moveId(o) ?? planProblem(o.plan) ?? settingsProblem(o.settings) ?? (!Array.isArray(o.done) || o.done.length > 512 || o.done.some((c) => typeof c !== 'string' || !CHUNK_ID.test(c)) ? 'done' : null));
+export const validateMoveGo = (a: unknown) => v1<MoveGoArgs>(a, ['moveId', 'plan', 'targetPublicKey', 'expectedLeaf'], (o) =>
+  moveId(o) ?? planProblem(o.plan) ?? (typeof o.targetPublicKey !== 'string' || !X25519_SPKI.test(o.targetPublicKey) ? 'targetPublicKey' : typeof o.expectedLeaf !== 'string' || !FINGERPRINT.test(o.expectedLeaf) ? 'expectedLeaf' : null));
+export const validateMoveRelease = (a: unknown) => v1<MoveReleaseArgs>(a, ['moveId'], moveId);
+export const validateMoveFinish = (a: unknown) => v1<MoveFinishArgs>(a, ['moveId', 'role', 'abandoned'], (o) => moveId(o) ?? role(o) ?? (bool(o.abandoned) ? null : 'abandoned'));
+// copied is required only for the target (a source cancel carries expectedLeaf instead, optional).
+export const validateMoveCancel = (a: unknown) => v1<MoveCancelArgs>(a, ['moveId', 'role', 'copied', 'expectedLeaf'], (o) =>
+  moveId(o) ?? role(o) ?? (o.role === 'target' && o.copied === undefined ? 'copied' : !optional(o, 'copied', oneOf('delete', 'age-out')) ? 'copied' : !optional(o, 'expectedLeaf', (x) => typeof x === 'string' && FINGERPRINT.test(x)) ? 'expectedLeaf' : null));
 export const ARGS_VALIDATORS: Record<string, (a: unknown) => ArgsVerdict<unknown>> = {
   'tokens.apply': validateTokensApply,
   'config.get': validateConfigGet,
@@ -97,4 +224,13 @@ export const ARGS_VALIDATORS: Record<string, (a: unknown) => ArgsVerdict<unknown
   'camera.action': validateCameraAction,
   'camera.name.set': validateCameraName,
   'proxy.restart': validateProxyRestart,
+  'move.targets': validateMoveTargets,
+  'move.open': validateMoveOpen,
+  'move.offer': validateMoveOffer,
+  'move.answer': validateMoveAnswer,
+  'move.start': validateMoveStart,
+  'move.go': validateMoveGo,
+  'move.release': validateMoveRelease,
+  'move.finish': validateMoveFinish,
+  'move.cancel': validateMoveCancel,
 };

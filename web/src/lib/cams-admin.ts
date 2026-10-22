@@ -58,7 +58,7 @@ export interface CommandsView {
   groups?: EntryGroups;
 }
 // The allow entries by kind (migration P3): the disruptive ones apart.
-export interface EntryGroups { tokens: string[]; read: string[]; settings: string[]; camera: string[]; disruptive: string[]; signin?: string[] }
+export interface EntryGroups { tokens: string[]; read: string[]; settings: string[]; camera: string[]; moves?: string[]; disruptive: string[]; signin?: string[] }
 export interface ManagedToken { id: string; kind: string; label: string; retireAt: number | null; blocked: boolean; live: boolean; hashPrefix: string }
 export interface TokensView { revision: number; problem: string | null; items: ManagedToken[] }
 
@@ -95,6 +95,7 @@ const GROUP_TITLES: [keyof EntryGroups, string, string?][] = [
   ['read', 'Read settings'],
   ['settings', 'Change settings'],
   ['camera', 'Camera actions'],
+  ['moves', 'Camera moves'],
   ['disruptive', 'Disruptive — off by default', 'Each of these lets cams-admin interrupt this proxy or a camera (a restart, a reboot, power off, rewritten camera settings). Allow one only while you need it.'],
   // #227: no command, what someone signed in from cams-admin may do in this admin UI.
   ['signin', 'cams-admin sign-in (one-time link)', 'Without these, someone who signs in here from cams-admin can look but not change settings or restart; that needs the local admin token. Each one lets a cams-admin sign-in do it.'],

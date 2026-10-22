@@ -44,6 +44,8 @@ const LOCAL_ONLY: Readonly<Record<string, string>> = {
 export const NEVER_FROM_CAMS_ADMIN: readonly string[] = [
   'server', 'go2rtc', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.publicHost', 'ftp.certFile', 'ftp.keyFile', 'tls', 'composition.font', 'ntp.server', 'poeSwitch', 'camsAdmin',
   'cameras.*.id', 'cameras.*.host', 'cameras.*.protocol', 'cameras.*.tlsName', 'cameras.*.user', 'cameras.*.onvifPort', 'cameras.*.rtspPort', 'cameras.*.baichuanPort', 'cameras.*.poeSwitch', 'cameras.*.ftp.user', 'cameras.*.webUiUrl',
+  // Camera moves: hiding a camera and the camera limit are local (src/moves).
+  'cameras.*.moved', 'moves',
 ];
 export const DENIED: readonly string[] = [...new Set([
   ...NEVER_FROM_CAMS_ADMIN, 'storage',

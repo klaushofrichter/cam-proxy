@@ -1,7 +1,7 @@
 import type { TooSoon } from '../camera/reboot';
 import { PoeSwitchError } from '../camera/poe-switch';
 import { splitHost } from '../camera/http';
-import { cameraConfig, cameraIds } from '../config/cameras';
+import { activeCameraIds, cameraConfig } from '../config/cameras';
 import { CAMERA_HOST_NAMES, validCameraHost } from '../config/env';
 import { checkEnvPath, EnvFileError, writeEnvKey } from '../config/env-file';
 import { FtpNotConfiguredError } from '../clips/camera-ftp';
@@ -154,7 +154,7 @@ export async function performAction(d: ActionDeps, name: string, cam: string | n
     // probe, the current camera marked, and whether the .env file can be written.
     case 'find-camera': {
       const r = await d.findCamera();
-      const hosts = cameraIds(d.running()).map((id) => splitHost(cameraConfig(d.running(), id)!.host).hostname.toLowerCase());
+      const hosts = activeCameraIds(d.running()).map((id) => splitHost(cameraConfig(d.running(), id)!.host).hostname.toLowerCase());
       return { status: 200, json: { devices: r.devices.map((x) => ({ ...x, current: hosts.includes(x.address.toLowerCase()) })), tookMs: r.tookMs, envFile: envFileState(d.envFile()) } };
     }
     // Use this address (pi-config spec §4): CAMERA_HOST into the .env file
@@ -163,7 +163,7 @@ export async function performAction(d: ActionDeps, name: string, cam: string | n
       const host: unknown = body.host;
       if (!validCameraHost(host)) return fail(400, 'invalid', 'host: an address or name, optional :port');
       // CAMERA_HOST is the one camera's address (spec §4.2).
-      if (cameraIds(d.running()).length > 1) return fail(409, 'not_available', 'several cameras: set cameras[].host in config.json');
+      if (activeCameraIds(d.running()).length > 1) return fail(409, 'not_available', 'several cameras: set cameras[].host in config.json');
       const line = `CAMERA_HOST=${host}`;
       const base = { action: 'camera-address', category: ['configuration'], type: ['change'], ...whoRecord(who) };
       try {

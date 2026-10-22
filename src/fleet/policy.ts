@@ -28,10 +28,29 @@ export const DISRUPTIVE_ENTRIES: ReadonlySet<string> = new Set(['proxy.restart',
 // /control/config, never UI_CONFIG_LOCAL); ui.restart: the proxy restart and
 // the camera-side restart.
 export const UI_ENTRIES = ['ui.config', 'ui.restart'] as const;
-export const ALLOW_ENTRIES: readonly string[] = ['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`), ...UI_ENTRIES];
+// Camera moves (cams-admin contract "Camera moves"): the source side and the target side, each its own entry, local, off by default.
+export const MOVE_ENTRIES = ['move.send', 'move.receive'] as const;
+export const ALLOW_ENTRIES: readonly string[] = ['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`), ...MOVE_ENTRIES, ...UI_ENTRIES];
+// The move commands by the entry they need; move.finish and move.cancel by their args.role (entryFor).
+const MOVE_SEND = ['move.targets', 'move.open', 'move.answer', 'move.go', 'move.release'];
+const MOVE_RECEIVE = ['move.offer', 'move.start'];
+export const MOVE_COMMANDS: readonly string[] = [...MOVE_SEND, ...MOVE_RECEIVE, 'move.finish', 'move.cancel'];
+export const isMoveCommand = (command: string): boolean => MOVE_COMMANDS.includes(command);
 // What this version runs (P2, P3): command names and allow entries. The
 // heartbeat reports allow ∩ IMPLEMENTED.
-export const IMPLEMENTED: ReadonlySet<string> = new Set(['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`)]);
+export const IMPLEMENTED: ReadonlySet<string> = new Set(['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`), ...MOVE_COMMANDS, ...MOVE_ENTRIES]);
+// The allow entry a command needs, from its (validated) args: the command's own name,
+// camera.action:<action>, and for the moves the side it acts on (contract step 11:
+// move.finish and move.cancel by args.role, the rest by command). An unreadable role
+// gives move.send (the check refuses such args before this matters).
+export function entryFor(command: string, args: unknown): string {
+  const a = (typeof args === 'object' && args !== null ? args : {}) as Record<string, unknown>;
+  if (command === 'camera.action') return `camera.action:${typeof a.action === 'string' ? a.action : ''}`;
+  if (MOVE_SEND.includes(command)) return 'move.send';
+  if (MOVE_RECEIVE.includes(command)) return 'move.receive';
+  if (command === 'move.finish' || command === 'move.cancel') return a.role === 'target' ? 'move.receive' : 'move.send';
+  return command;
+}
 // One sentence per allow entry: what allowing it lets cams-admin change (the
 // Status card shows them next to the boxes).
 const EFFECT: Record<string, string> = {
@@ -52,6 +71,8 @@ export const ENTRY_TEXT: Record<string, string> = {
   'config.rollback': 'cams-admin may undo its own setting changes',
   'camera.name.set': "cams-admin may rename a camera (the camera's own name)",
   'proxy.restart': 'DISRUPTIVE: cams-admin may restart this proxy (at most 2 an hour)',
+  'move.send': 'cams-admin may move a camera from this proxy to another proxy of the account, after you approve the move here or in a cams-admin sign-in',
+  'move.receive': 'cams-admin may hand this proxy a camera from another proxy of the account: it adds the camera, its password and certificate, and copies its content',
   'ui.config': "a cams-admin sign-in (one-time link) may change this proxy's settings on the Settings page and reset them to config.json's value; never addresses, ports, files, trust, users, cams-admin itself, storage limits or Google Vision on/off, and retention only longer, spending caps only lower",
   'ui.restart': 'DISRUPTIVE: a cams-admin sign-in (one-time link) may restart this proxy and its camera side',
   ...Object.fromEntries(REMOTE_ACTIONS.map((a) => [`camera.action:${a}`, actionText(a)])),
@@ -63,6 +84,11 @@ export const ENTRY_TEXT: Record<string, string> = {
 // paused (a pause or CAMPROXY_ADMIN_COMMANDS=off locks them again).
 export function uiUnlocked(p: EffectivePolicy): string[] {
   return p.enabled && !p.paused ? p.allow.filter((e) => (UI_ENTRIES as readonly string[]).includes(e)) : [];
+}
+// What a cams-admin sign-in may do on this proxy's admin routes: the ui.*
+// entries and move.send (camera-move plan P9: starting a move from the sign-in).
+export function sessionUnlocked(p: EffectivePolicy): string[] {
+  return [...uiUnlocked(p), ...(p.enabled && !p.paused && p.allow.includes('move.send') ? ['move.send'] : [])];
 }
 
 // `stored`: a list an earlier version wrote (policy.json, config.json): retired entries are dropped.

@@ -17,6 +17,8 @@
       "config.rollback",
       "camera.name.set",
       "proxy.restart",
+      "move.send",
+      "move.receive",
       "camera.action:camera-test",
       "camera.action:onvif-resubscribe",
       "camera.action:camera-ftp-test",

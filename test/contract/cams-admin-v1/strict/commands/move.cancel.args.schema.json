@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/strict/commands/move.cancel.args.schema.json",
+  "title": "move.cancel args v1",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "moveId": {
+      "type": "string",
+      "pattern": "^mv_[0-9A-HJKMNP-TV-Z]{20}$"
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "source",
+        "target"
+      ]
+    },
+    "copied": {
+      "type": "string",
+      "enum": [
+        "delete",
+        "age-out"
+      ]
+    },
+    "expectedLeaf": {
+      "type": "string",
+      "pattern": "^SHA256:[0-9A-F]{64}$"
+    }
+  },
+  "required": [
+    "v",
+    "moveId",
+    "role"
+  ],
+  "additionalProperties": false,
+  "if": {
+    "properties": {
+      "role": {
+        "const": "target"
+      }
+    },
+    "required": [
+      "role"
+    ]
+  },
+  "then": {
+    "properties": {
+      "copied": {
+        "type": "string",
+        "enum": [
+          "delete",
+          "age-out"
+        ]
+      }
+    },
+    "required": [
+      "copied"
+    ]
+  }
+}

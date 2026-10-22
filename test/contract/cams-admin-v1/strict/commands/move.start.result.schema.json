@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/strict/commands/move.start.result.schema.json",
+  "title": "move.start result v1",
+  "type": "object",
+  "properties": {
+    "publicKey": {
+      "type": "string",
+      "pattern": "^MCowBQYDK2VuAyEA[A-Za-z0-9+/]{43}=$"
+    },
+    "leafFingerprint": {
+      "type": "string",
+      "pattern": "^SHA256:[0-9A-F]{64}$"
+    }
+  },
+  "required": [
+    "publicKey",
+    "leafFingerprint"
+  ],
+  "additionalProperties": false
+}

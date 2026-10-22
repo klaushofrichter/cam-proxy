@@ -250,6 +250,11 @@
                 }
               }
             }
+          },
+          "moved": {
+            "type": "string",
+            "pattern": "^mv_[0-9A-HJKMNP-TV-Z]{20}$",
+            "description": "set while this camera is being or has been moved to another proxy (the id of the move): the camera is hidden, its worker stopped, its FTP user refused; its settings and files stay. Local only"
           }
         },
         "required": [
@@ -285,6 +290,18 @@
           "minimum": 5,
           "maximum": 60,
           "description": "seconds the PoE stays off in a power-cycle"
+        }
+      }
+    },
+    "moves": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxCameras": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64,
+          "description": "most cameras this proxy may hold: a camera move onto it is refused (camera_limit) beyond that. Local only"
         }
       }
     },
@@ -854,6 +871,8 @@
               "camera.action:camera-ftp-setup",
               "camera.action:camera-ntp-set",
               "camera.action:camera-cert-push",
+              "move.send",
+              "move.receive",
               "ui.config",
               "ui.restart"
             ]
