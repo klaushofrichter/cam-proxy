@@ -1,6 +1,14 @@
 // The copier's rate (camera-move plan Task 9, S §8.3). Pure: the copier
 // recomputes it every minute and at each file.
 
+// cams-admin counts a move's time budget from its approval, the switch-over
+// included; the copier starts after it. So the copier aims to be done at 80 %
+// of the budget, counted from approval: paceS is the seconds left to that aim
+// (0 or less once it has passed: rateFor then goes at the probe until the
+// budget itself is over, after which it never goes faster).
+export const PACE = 0.8;
+export const paceS = (budgetS: number, elapsedS: number): number => budgetS * PACE - elapsedS;
+
 // Bytes per second: the remaining bytes over the remaining budget (at least a
 // second: a floor of a minute made every copy paced to its budget end after it,
 // task 12), never above the probe (0: not measured, no cap); once the budget is
