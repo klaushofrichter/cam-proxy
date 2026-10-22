@@ -163,11 +163,13 @@ describe('compositions around a second: the request', () => {
 
   it('a dry run over the clip\'s edge: stills before it, the clip after, no job and no record', async () => {
     const before = records().length;
-    const jobs = () => readdirSync(join(p.proxy.running.server.dataDir, 'compositions')).length; // each job has its folder
+    // Each job has its folder. No new one: a count could drop meanwhile, as a job an earlier test
+    // cancelled loses its folder only once its encoder has ended.
+    const jobs = () => readdirSync(join(p.proxy.running.server.dataDir, 'compositions'));
     const jobsBefore = jobs();
     const r = await post({ at: M + 30_000, preS: 5, postS: 5, size: 'sd', badge: true, dryRun: true });
     expect(r.status).toBe(200);
-    expect(jobs()).toBe(jobsBefore);
+    expect(jobs().filter((d) => !jobsBefore.includes(d))).toEqual([]);
     expect(r.body).toEqual({ start: M + 25_000, end: M + 36_000, durationS: 11, seconds: go2rtc ? { clip: 6, still: 5, card: 0 } : { clip: 6, still: 0, card: 5 }, clips: [{ start: M + 30_000, end: M + 45_000 }] });
     expect(records().length).toBe(before);
   });
