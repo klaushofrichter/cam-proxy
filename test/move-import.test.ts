@@ -59,7 +59,9 @@ describe('importRows', () => {
     // The staged copies are gone (renamed).
     expect(existsSync(landingPath(f, 'analytics/cam9/50.jpg'))).toBe(false);
     // The map for the journal: source id -> target id.
-    expect(out.map.events).toEqual([[50, evs[0].id], [51, evs[1].id]]);
+    // ...with each row's natural key (final review 3): a cancel deletes a row only when it still matches.
+    expect(out.map.events).toEqual([[50, evs[0].id, `${T}|onvif|person`], [51, evs[1].id, `${T + 60_000}|onvif|person`]]);
+    expect(out.map.analyses).toEqual([[3, expect.any(Number), `${evs[0].id}|google-vision`], [4, expect.any(Number), `${evs[1].id}|google-vision`]]);
   });
 
   it('a clip row is not imported when its file failed', () => {

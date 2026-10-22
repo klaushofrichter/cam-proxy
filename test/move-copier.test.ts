@@ -7,7 +7,7 @@
 // Documentation addresses (RFC 5737) and made-up tokens only.
 import { createHash } from 'crypto';
 import express from 'express';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { createServer, type Server } from 'http';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -20,6 +20,7 @@ import type { Loaded } from '../src/config/load';
 import { setLogLevel } from '../src/log';
 import { Copier, CopyRunner, removeMoveParts, type CopierDeps, type SourceClient } from '../src/moves/copier';
 import { listChunks, type TableRows } from '../src/moves/inventory';
+import { chunkPartsDir, readChunkPart } from '../src/moves/chunk-parts';
 import { MoveJournal, type MoveRecord } from '../src/moves/journal';
 import { landedFiles, removeImported } from '../src/moves/purge';
 import { TokenBucket } from '../src/moves/rate';
@@ -837,6 +838,58 @@ describe('Copier against the real source endpoints', () => {
 // brought, never what the target captured itself after the switch-over.
 describe('what a move imported', () => {
   const count = (u: Unit, sql: string) => (u.catalog.db.prepare(sql).get(CAM) as { n: number }).n;
+  it("a reused rowid is the target's own row: the delete-cancel keeps it (final review 3)", async () => {
+    const { files, chunks } = threeDays();
+    const u = unit(fakeSource(files, chunks));
+    await u.run();
+    // The target's retention deletes the newest imported clip; SQLite gives its id to the target's next clip.
+    const top = u.catalog.db.prepare('SELECT id, path FROM clips WHERE cam = ? ORDER BY id DESC LIMIT 1').get(CAM) as { id: number; path: string };
+    u.catalog.db.prepare('DELETE FROM clips WHERE id = ?').run(top.id);
+    rmSync(top.path, { force: true });
+    const ownClip = join(u.dataDir, 'clips/cam9/2026/10/21/0930-1.mp4');
+    mkdirSync(dirname(ownClip), { recursive: true });
+    writeFileSync(ownClip, 'own-clip');
+    u.catalog.db.prepare("INSERT INTO clips (id, cam, start_ts, path, stream, size, received_at) VALUES (?, ?, ?, ?, 'sub', 8, 1)").run(top.id, CAM, ts(21, 9) + 30 * 60_000, ownClip);
+    removeImported({ catalog: u.catalog, dataDir: u.dataDir, storage: { recount: () => undefined } }, u.rec());
+    expect(u.catalog.db.prepare('SELECT id, start_ts FROM clips WHERE cam = ?').all(CAM)).toEqual([{ id: top.id, start_ts: ts(21, 9) + 30 * 60_000 }]);
+    expect(readFileSync(ownClip, 'utf8')).toBe('own-clip');
+  });
+
+  it('the journal record stays small as chunks complete: the import maps and verified lists live in per-chunk files (final review 6)', async () => {
+    const files: Record<string, string> = {};
+    const list: FakeChunk[] = [];
+    for (const d of [18, 19, 20]) {
+      const paths: string[] = [];
+      const rowsOf: ReturnType<typeof clipRow>[] = [];
+      for (let i = 0; i < 150; i++) {
+        const p = `clips/cam9/2026/10/${d}/${String(1000 + i).padStart(4, '0')}-1.mp4`;
+        files[p] = `clip-${d}-${i}`;
+        paths.push(p);
+        rowsOf.push(clipRow(1000 * d + i, ts(d) + i * 60_000, p));
+      }
+      list.push({ id: `clips:${day(d)}`, files: paths, rows: [{ table: 'clips', rows: rowsOf }] });
+    }
+    const u = unit(fakeSource(files, list));
+    const sizes: number[] = [];
+    const save = u.journal.save.bind(u.journal);
+    u.deps.journal = { load: (id) => u.journal.load(id), save: (r) => (save(r), sizes.push(readFileSync(join(u.dataDir, 'admin', 'moves', `${MOVE}.json`)).length)) };
+    await u.run();
+    expect(count(u, 'SELECT COUNT(*) AS n FROM clips WHERE cam = ?')).toBe(450);
+    const text = readFileSync(join(u.dataDir, 'admin', 'moves', `${MOVE}.json`), 'utf8');
+    expect(text).not.toContain('imported');
+    expect(text).not.toContain('"vf"');
+    // Compact JSON, and no larger with 450 rows than a record of a few chunks needs.
+    expect(text).not.toContain('\n  ');
+    expect(Math.max(...sizes)).toBeLessThan(4096);
+    // The maps beside it (600 in a 700 folder), per chunk.
+    const dir = chunkPartsDir(u.dataDir, MOVE);
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+    for (const f of readdirSync(dir)) expect(statSync(join(dir, f)).mode & 0o777).toBe(0o600);
+    expect(readChunkPart(u.dataDir, MOVE, `clips:${day(19)}`)!.imported!.clips).toHaveLength(150);
+    // A delete-cancel still finds every imported row.
+    removeImported({ catalog: u.catalog, dataDir: u.dataDir, storage: { recount: () => undefined } }, u.rec());
+    expect(count(u, 'SELECT COUNT(*) AS n FROM clips WHERE cam = ?')).toBe(0);
+  });
   it("a delete-cancel removes only the imported rows and files; the target's own capture stays", async () => {
     const { files, chunks } = threeDays();
     const f = fakeSource(files, chunks);

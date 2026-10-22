@@ -32,8 +32,22 @@ import { CONTENT_FOLDERS, type TableRows } from './inventory';
 export const STAGED_FOLDERS: readonly string[] = ['analytics', 'still-checks', 'archive'];
 const TABLES = ['events', 'analyses', 'clips', 'still_checks', 'archive'] as const;
 type Table = (typeof TABLES)[number];
-// Per table: [source id, target id] pairs (the journal keeps them per chunk).
-export type ImportMap = Partial<Record<Table, [number, number][]>>;
+// Per table: [source id, target id, natural key] (kept per chunk beside the
+// journal, chunk-parts.ts). The key is the row's duplicate key as stored here
+// (clips: start_ts; events: start_ts|source|kind; analyses: event_id|provider;
+// still_checks: still_ts|provider; archive: created_at|name): a delete-cancel
+// removes a row only when its key still matches, never a row of the target's
+// own that got a reused id (final review 3).
+export type ImportMap = Partial<Record<Table, [number, number, string][]>>;
+
+// The natural key of a row of the target's catalog (importKey's form).
+export function rowKey(t: Table, row: Record<string, unknown>): string {
+  if (t === 'clips') return String(row.start_ts);
+  if (t === 'events') return `${row.start_ts}|${row.source}|${row.kind}`;
+  if (t === 'analyses') return `${row.event_id}|${row.provider}`;
+  if (t === 'still_checks') return `${row.still_ts}|${row.provider}`;
+  return `${row.created_at}|${row.name}`;
+}
 export interface ImportDeps { catalog: Pick<Catalog, 'db'>; dataDir: string; staging: string }
 
 const SEGMENT = /^[^\x00-\x1f\x7f\\/]{1,255}$/;
@@ -65,8 +79,8 @@ const posInt = (v: unknown): v is number => typeof v === 'number' && Number.isSa
 export function importRows(d: ImportDeps, cam: string, rows: TableRows[], verified: Set<string>, prev: ImportMap = {}): { inserted: number; skipped: number; failed: number; map: ImportMap } {
   const db = d.catalog.db;
   const columns = new Map<Table, string[]>(TABLES.map((t) => [t, (db.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[]).map((c) => c.name).filter((c) => c !== 'id')]));
-  const map: Record<Table, Map<number, number>> = Object.fromEntries(TABLES.map((t) => [t, new Map(prev[t] ?? [])])) as Record<Table, Map<number, number>>;
-  const fresh: Record<Table, [number, number][]> = Object.fromEntries(TABLES.map((t) => [t, []])) as unknown as Record<Table, [number, number][]>;
+  const map: Record<Table, Map<number, number>> = Object.fromEntries(TABLES.map((t) => [t, new Map((prev[t] ?? []).map(([s, n]) => [s, n]))])) as Record<Table, Map<number, number>>;
+  const fresh: Record<Table, [number, number, string][]> = Object.fromEntries(TABLES.map((t) => [t, []])) as unknown as Record<Table, [number, number, string][]>;
   const moved: { from: string; to: string }[] = [];
   let inserted = 0;
   let skipped = 0;
@@ -189,7 +203,8 @@ export function importRows(d: ImportDeps, cam: string, rows: TableRows[], verifi
             continue;
           }
           map[t].set(src as number, id);
-          fresh[t].push([src as number, id]);
+          // The key as stored: an analysis names its event by the target's id.
+          fresh[t].push([src as number, id, rowKey(t, t === 'analyses' ? { ...row, event_id: map.events.get(row.event_id as number) } : row)]);
           inserted++;
         }
       }

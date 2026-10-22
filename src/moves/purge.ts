@@ -4,7 +4,8 @@ import type { Archive } from '../archive/service';
 import { CAM_ID } from '../archive/paths';
 import type { Catalog } from '../catalog/db';
 import type { Storage } from '../storage';
-import { relOk } from './import';
+import { allChunkParts } from './chunk-parts';
+import { relOk, rowKey } from './import';
 import { isMoveId, type MoveRecord } from './journal';
 import type { MoveKind } from './types';
 import { MOVE_KINDS } from './types';
@@ -111,8 +112,11 @@ export function removeLanded(dataDir: string, moveId: string): void {
   rmSync(landedLog(dataDir, moveId), { force: true });
 }
 
-// Rows by id from the import maps, files of the camera only (never a path
-// outside <dataDir>/<folder>/<cam>/). Idempotent; counts what it removed.
+// Rows by id from the import maps (the move's chunk parts, chunk-parts.ts),
+// each only while its natural key still matches the one imported (an id the
+// target's retention freed and SQLite gave to a row of its own is not the
+// move's, final review 3); files of the camera only (never a path outside
+// <dataDir>/<folder>/<cam>/). Idempotent; counts what it removed.
 export function removeImported(d: { catalog: Catalog; dataDir: string; storage: Pick<Storage, 'recount'> }, r: MoveRecord): { deleted: Purged } {
   const cam = r.camera;
   if (!CAM_ID.test(cam)) throw new Error('removeImported: not a camera id');
@@ -121,8 +125,24 @@ export function removeImported(d: { catalog: Catalog; dataDir: string; storage: 
   const files = new Map<string, MoveKind>();
   for (const rel of landedFiles(d.dataDir, r.id)) if (relOk(cam, rel, LANDED_FOLDERS)) files.set(join(d.dataDir, ...rel.split('/')), FOLDER_KIND[rel.split('/')[0]]);
   const ids: Record<'events' | 'analyses' | 'clips' | 'still_checks' | 'archive', number[]> = { events: [], analyses: [], clips: [], still_checks: [], archive: [] };
-  for (const c of Object.values(r.chunks)) for (const t of Object.keys(ids) as (keyof typeof ids)[]) for (const [, id] of c.imported?.[t] ?? []) if (Number.isSafeInteger(id)) ids[t].push(id);
   const db = d.catalog.db;
+  const KEY_SQL: Record<keyof typeof ids, string> = {
+    events: 'SELECT start_ts, source, kind FROM events WHERE id = ? AND cam = ?',
+    analyses: 'SELECT a.event_id, a.provider FROM analyses a JOIN events e ON e.id = a.event_id WHERE a.id = ? AND e.cam = ?',
+    clips: 'SELECT start_ts FROM clips WHERE id = ? AND cam = ?',
+    still_checks: 'SELECT still_ts, provider FROM still_checks WHERE id = ? AND cam = ?',
+    archive: 'SELECT created_at, name FROM archive WHERE id = ? AND cam = ?',
+  };
+  for (const part of allChunkParts(d.dataDir, r.id)) {
+    for (const t of Object.keys(ids) as (keyof typeof ids)[]) {
+      for (const pair of part.imported?.[t] ?? []) {
+        const [, id, key] = pair;
+        if (!Number.isSafeInteger(id) || typeof key !== 'string') continue;
+        const now = db.prepare(KEY_SQL[t]).get(id, cam) as Record<string, unknown> | undefined;
+        if (now && rowKey(t, now) === key) ids[t].push(id);
+      }
+    }
+  }
   const pick = <T>(sql: string, id: number) => db.prepare(sql).get(id, cam) as T | undefined;
   const folders: string[] = [];
   // The files the rows name (an imported event's analyses go with it, cascade, and are imported too).

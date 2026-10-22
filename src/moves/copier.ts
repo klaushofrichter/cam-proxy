@@ -5,6 +5,7 @@ import { dirname, join } from 'path';
 import type { AuditLog } from '../audit/audit-log';
 import type { Catalog } from '../catalog/db';
 import { logger } from '../log';
+import { readChunkPart, writeChunkPart } from './chunk-parts';
 import { moveSourceClient, spaceFor, type EvaluateDeps, type SourceAnswer } from './evaluate';
 import { importRows, isStaged, landingPath, moveStagingDir, relOk, type ImportDeps } from './import';
 import { CONTENT_FOLDERS, hashFile, KIND_FOLDERS, type ChunkMeta, type TableRows } from './inventory';
@@ -27,10 +28,13 @@ import { MOVE_KINDS } from './types';
 // are waited out with a backoff and don't count. Storage paused: it waits.
 // A file the source's retention removed meanwhile (404) is skipped.
 //
-// The journal holds per chunk its state and counts, never a per-file list for
+// The journal holds per chunk its state and counts only, never a per-file list for
 // stills (1440+ a day): a resumed chunk finds its verified files on disk by
-// size and hash. Saves are batched to at most one a second (`saveEveryMs`)
-// within a chunk, and made at every chunk end.
+// size and hash. The import map and the verified id-named files of a chunk
+// go to its part file beside the record at the chunk's end (chunk-parts.ts,
+// final review 6), so the record stays small. Saves are batched to at most
+// one a second (`saveEveryMs`) within a chunk (the progress only), and made
+// at every chunk end.
 
 export interface SourceClient { get: (path: string, signal: AbortSignal) => Promise<SourceAnswer> }
 
@@ -301,8 +305,9 @@ export class Copier {
   }
 
   private async chunk(c: ChunkMeta): Promise<void> {
-    const prev = this.r.chunks[c.id];
-    this.r.chunks[c.id] = { state: 'pending', ...(prev?.vf ? { vf: prev.vf } : {}), ...(prev?.imported ? { imported: prev.imported } : {}) };
+    // What an earlier copy of this chunk verified and imported (its part file).
+    const prev = readChunkPart(this.d.dataDir, this.r.id, c.id);
+    this.r.chunks[c.id] = { state: 'pending' };
     this.current = 0;
     this.save(true);
     await this.waitStorage();
@@ -399,14 +404,18 @@ export class Copier {
   }
 
   private endChunk(c: ChunkMeta, n: { v: number; s: number; f: number; vb: number; b: number }, failed: string[], imported: ReturnType<typeof importRows> | undefined, vf: string[] = [], importFailed = false): void {
-    const prev = this.r.chunks[c.id];
+    // The part file first (a restart in between copies the chunk again and finds it).
+    const prev = readChunkPart(this.d.dataDir, this.r.id, c.id);
+    // An earlier import's map stays known (a delete-cancel removes those rows too).
+    const map = imported?.map ?? prev?.imported;
+    const files = vf.length ? vf : importFailed ? [] : (prev?.vf ?? []);
+    const part = { ...(files.length ? { vf: files } : {}), ...(map && Object.keys(map).length ? { imported: map } : {}) };
+    if (Object.keys(part).length || prev) writeChunkPart(this.d.dataDir, this.r.id, c.id, part);
     this.r.chunks[c.id] = {
-      ...(importFailed && prev?.imported ? { imported: prev.imported } : {}),
       // "copied with failures" is `failed` (X17/B47).
       state: n.f > 0 ? 'failed' : 'verified',
       v: n.v, s: n.s, f: n.f, vb: n.vb, b: n.b, meta: metaOf(c),
-      ...(vf.length ? { vf } : {}),
-      ...(imported ? { rowsInserted: imported.inserted, rowsSkipped: imported.skipped, ...(Object.keys(imported.map).length ? { imported: imported.map } : {}) } : {}),
+      ...(imported ? { rowsInserted: imported.inserted, rowsSkipped: imported.skipped } : {}),
     };
     this.current = 0;
     this.save(true);

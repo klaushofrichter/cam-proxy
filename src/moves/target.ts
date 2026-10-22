@@ -11,6 +11,7 @@ import type { Done, Handler } from '../fleet/commands';
 import type { SiteCa } from '../tls/ca';
 import { issueLeaf, leafOf, type Leaf } from '../tls/leaf';
 import type { PushResult } from '../tls/push';
+import { removeChunkParts } from './chunk-parts';
 import { removeMoveParts } from './copier';
 import { sourceGet } from './evaluate';
 import { moveEnded, SWITCH_STEPS, type MoveJournal, type MoveRecord, type SwitchStep } from './journal';
@@ -291,7 +292,10 @@ export class MoveTarget {
       message: `Camera move ${fresh.id} (${fresh.camera} from ${fresh.peer.name || fresh.peer.proxyId}) done${a.abandoned ? ', the transfer ended early' : ''}: ${totals.files.verified} files copied, ${totals.files.skipped} skipped, ${totals.files.failed} failed, ${totals.chunks.abandoned} chunks abandoned`,
       details: this.details(fresh, { abandoned: a.abandoned, ...totals }),
     });
-    if (this.d.end) removeLanded(this.d.end.dataDir, fresh.id);
+    if (this.d.end) {
+      removeLanded(this.d.end.dataDir, fresh.id);
+      removeChunkParts(this.d.end.dataDir, fresh.id);
+    }
     this.d.journal.remove?.(fresh.id);
     this.copying.delete(fresh.id);
     this.ended.set(fresh.id, 'finished');
@@ -377,7 +381,10 @@ export class MoveTarget {
       message: `Camera move ${r.id} (${r.camera} from ${r.peer.name || r.peer.proxyId}) cancelled in ${from}: the camera ${entry === 'untouched' ? 'was not here' : entry === 'removed' ? 'removed here' : 'hidden here'}${entry === 'untouched' ? '' : `, copied content ${copied === 'delete' ? 'deleted' : 'left to age out'}`}`,
       details: this.details(r, { phase: from, copied, cameraEntry: entry, deleted }),
     });
-    if (this.d.end) removeLanded(this.d.end.dataDir, r.id);
+    if (this.d.end) {
+      removeLanded(this.d.end.dataDir, r.id);
+      removeChunkParts(this.d.end.dataDir, r.id);
+    }
     this.d.journal.remove?.(r.id);
     this.copying.delete(r.id);
     this.ended.set(r.id, 'cancelled');

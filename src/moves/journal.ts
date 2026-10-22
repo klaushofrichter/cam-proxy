@@ -1,7 +1,6 @@
 import { lstatSync, readdirSync, renameSync, rmSync } from 'fs';
 import { join } from 'path';
 import { PrivateFileInvalid, readPrivateJson, writePrivateJson } from '../fleet/private-file';
-import type { ImportMap } from './import';
 import type { ChunkState, MoveActor, MoveAnswer, MoveCameraConnection, MoveCopied, MoveKind, MovePhaseName, MovePlan, MoveRole, MoveSummary, Settings, Space } from './types';
 
 // The durable record of one move on this proxy: <dataDir>/admin/moves/<id>.json,
@@ -25,12 +24,8 @@ export interface ChunkRecord {
   rowsInserted?: number;
   rowsSkipped?: number;
   // The chunk as the source listed it when copied (P12: copied again when it changes).
+  // Its verified id-named files and import map: chunk-parts.ts (final review 6).
   meta?: { files: number; bytes: number; rows: number };
-  // Files of the id-named kinds verified (their staged copies are renamed by
-  // the import, so a disk check can't find them again).
-  vf?: string[];
-  // Source id -> target id per table of the rows imported (importRows' map).
-  imported?: ImportMap;
 }
 
 export interface MovePeer {
@@ -160,8 +155,9 @@ export class MoveJournal {
     return null;
   }
 
+  // Compact JSON: the copier saves the record up to once a second.
   save(r: MoveRecord): void {
-    writePrivateJson(this.path(r.id), r);
+    writePrivateJson(this.path(r.id), r, false);
   }
 
   remove(id: string): void {

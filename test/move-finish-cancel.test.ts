@@ -21,6 +21,7 @@ import { writePrivateJson } from '../src/fleet/private-file';
 import type { Envelope } from '../src/fleet/protocol';
 import { setLogLevel } from '../src/log';
 import { moveHandlers } from '../src/moves/commands';
+import { chunkPartsDir, writeChunkPart } from '../src/moves/chunk-parts';
 import { MoveJournal, type MoveRecord } from '../src/moves/journal';
 import { ManifestCache, manifestCacheDir } from '../src/moves/manifest-cache';
 import { landedLog, noteLanded, purgeCamera, removeImported } from '../src/moves/purge';
@@ -247,9 +248,12 @@ describe('move.cancel on the target', () => {
     noteLanded(u.dataDir, MOVE, 'clips/cam9/2026/10/18/1200-1.mp4');
     const id = (t: string) => (u.catalog.db.prepare(`SELECT id FROM ${t} WHERE cam = 'cam9' AND start_ts = ?`).get(IMPORTED) as { id: number }).id;
     const r = u.journal.load(MOVE)!;
-    r.chunks['clips:2026-10-18'] = { state: 'verified', imported: { clips: [[501, id('clips')]] } };
-    r.chunks['events:2026-10-18'] = { state: 'verified', imported: { events: [[502, id('events')]] } };
+    r.chunks['clips:2026-10-18'] = { state: 'verified' };
+    r.chunks['events:2026-10-18'] = { state: 'verified' };
     u.journal.save(r);
+    // The import maps live beside the record (final review 6), with each row's natural key (final review 3).
+    writeChunkPart(u.dataDir, MOVE, 'clips:2026-10-18', { imported: { clips: [[501, id('clips'), String(IMPORTED)]] } });
+    writeChunkPart(u.dataDir, MOVE, 'events:2026-10-18', { imported: { events: [[502, id('events'), `${IMPORTED}|onvif|person`]] } });
     expect(u.passwords.get('cam9')).toBe(PASSWORD);
     const part = join(u.dataDir, 'clips', 'cam9', '2026', '10', '19', `x.mp4.move-${MOVE}.part`);
     put(part);
@@ -273,6 +277,7 @@ describe('move.cancel on the target', () => {
     expect(u.catalog.db.prepare("SELECT start_ts FROM events WHERE cam = 'cam9'").all()).toEqual([{ start_ts: OWN }]);
     expect(rows(u.catalog, 'cam1')).toBe(2);
     expect(existsSync(landedLog(u.dataDir, MOVE))).toBe(false);
+    expect(existsSync(chunkPartsDir(u.dataDir, MOVE))).toBe(false);
     expect(u.journal.load(MOVE)).toBeNull();
     expect(u.events.at(-1)).toEqual({ kind: 'move.phase', moveId: MOVE, role: 'target', phase: 'cancelled', ok: true });
     const a = u.audits.find((x) => x.action === 'move-cancel')!;
