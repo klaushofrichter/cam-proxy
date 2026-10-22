@@ -2,12 +2,13 @@
 // Task 3, P2): worker stopped, not listed, FTP user refused; its config and
 // content stay. Clearing `moved` starts it again, live.
 import { Client } from 'basic-ftp';
-import { mkdtempSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { loadConfig } from '../src/config/load';
+import { loadConfig, planRemoveAll } from '../src/config/load';
+import { MoveJournal } from '../src/moves/journal';
 import { activeCameraIds, cameraIds } from '../src/config/cameras';
 import { classify, DENIED } from '../src/fleet/remote-settable';
 import { isLocalSetting } from '../src/api/auth';
@@ -75,6 +76,28 @@ describe('a moved camera is hidden', () => {
     await until(() => p.proxy.cameras.get('cam3')?.status.state().online === true, 20_000);
   }, 40_000);
 
+  it('"Reset to defaults" keeps moved: the camera stays hidden (final review 1)', async () => {
+    const r = await request(p.base).delete('/control/config').set(admin());
+    expect(r.status).toBe(200);
+    expect(p.proxy.running.cameras.cam4.moved).toBe(MOVE);
+    expect(JSON.parse(readFileSync(join(p.dir, 'data', 'overrides.json'), 'utf8')).cameras.cam4.moved).toBe(MOVE);
+    expect(p.proxy.cameras.get('cam4')).toBeUndefined();
+  });
+
+  it("clearing moved is refused while the move's journal record exists (final review 1)", async () => {
+    const journal = new MoveJournal(join(p.dir, 'data', 'admin', 'moves'));
+    journal.save({ v: 1, id: MOVE, role: 'source', camera: 'cam4', phase: 'released', plan: null, peer: { proxyId: 'px_t', name: 'T' }, chunks: {}, bytesDone: 0, startedAt: Date.now() });
+    try {
+      const r = await request(p.base).delete('/control/config/cameras.cam4.moved').set(admin());
+      expect(r.status).toBe(409);
+      expect(r.body).toMatchObject({ error: 'move_open' });
+      expect(r.body.detail).toMatch(/cams-admin/);
+      expect(p.proxy.running.cameras.cam4.moved).toBe(MOVE);
+    } finally {
+      journal.remove(MOVE);
+    }
+  });
+
   it('clearing moved starts it again', async () => {
     const r = await request(p.base).delete('/control/config/cameras.cam4.moved').set(admin());
     expect(r.status).toBe(200);
@@ -105,5 +128,17 @@ describe('moved and moves.maxCameras are local settings', () => {
     expect(load({}).moves.maxCameras).toBeUndefined();
     expect(load({ moves: { maxCameras: 2 } }).moves.maxCameras).toBe(2);
     expect(load({}).cameras.cam3.moved).toBe(MOVE);
+  });
+
+  it('planRemoveAll keeps cameras.*.moved of a config.json camera (final review 1)', () => {
+    const env = { CAMPROXY_TOKENS: 'a'.repeat(32), CAMPROXY_ADMIN_TOKEN: 'c'.repeat(32), CAMPROXY_CAMERA_PASSWORD: 'x' };
+    const dir = mkdtempSync(join(tmpdir(), 'camproxy-moved-'));
+    writeFileSync(join(dir, 'config.json'), JSON.stringify({ cameras: [{ id: 'cam3', host: '192.0.2.3' }, { id: 'cam4', host: '192.0.2.4' }] }));
+    mkdirSync(join(dir, 'data'), { recursive: true });
+    writeFileSync(join(dir, 'data', 'overrides.json'), JSON.stringify({ sse: { pingS: 20 }, cameras: { cam3: { moved: MOVE, statusPollS: 60 } } }));
+    const plan = planRemoveAll(loadConfig(env, { cwd: dir }));
+    expect(plan.overrides).toEqual({ cameras: { cam3: { moved: MOVE } } });
+    expect(plan.next.config.cameras.cam3.moved).toBe(MOVE);
+    expect(activeCameraIds(plan.next.config)).toEqual(['cam4']);
   });
 });

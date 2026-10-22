@@ -10,7 +10,7 @@ import { PoeSwitchError, type PoeOnResult, type PoeSwitchStatus, type PortReadin
 import type { Config } from '../config/defaults';
 import { configChanges } from '../config/changes';
 import { configView, type ChangeMarks } from '../config/view';
-import { applyOverrides, ConfigError, removeAllOverrides, removeOverride, type Loaded } from '../config/load';
+import { applyOverrides, ConfigError, removeAllOverrides, removeOverride, withoutOverride, type Loaded } from '../config/load';
 import { cameraConfig, cameraIds } from '../config/cameras';
 import { FtpNotConfiguredError, type FtpTarget } from '../clips/camera-ftp';
 import type { CameraFtpView, ClipsStall } from '../clips/ftp-health';
@@ -75,6 +75,11 @@ export interface CameraStatusBlock {
 
 export interface ControlDeps {
   loaded: () => Loaded;
+  // Camera moves (final review 1): whether the move that hid a camera
+  // (`cameras.<id>.moved`) still has a journal record here, or moved the
+  // camera away for good; clearing `moved` is then refused (only the move
+  // clears it). An unreadable journal counts as open.
+  moveOpen?: (moveId: string) => boolean;
   setLoaded: (l: Loaded) => void; // applies live settings
   running: () => Config; // what the components run with
   catalog: Catalog;
@@ -455,6 +460,15 @@ export function controlApi(d: ControlDeps): express.Router {
   r.delete('/config/:path', (req, res) => {
     const before = d.loaded();
     try {
+      // A camera's `moved` of a move not over (final review 1): never cleared by hand.
+      if (d.moveOpen && !/^cameras\.[^.]+$/.test(req.params.path)) {
+        const after = withoutOverride(before, req.params.path);
+        for (const [id, node] of Object.entries(before.config.cameras)) {
+          if (node.moved && after.config.cameras[id]?.moved !== node.moved && d.moveOpen(node.moved)) {
+            return void res.status(409).json({ error: 'move_open', detail: `cameras.${id}.moved: camera move ${node.moved} is not over here; cancel or finish it from cams-admin` });
+          }
+        }
+      }
       d.setLoaded(removeOverride(d.loaded(), req.params.path));
     } catch (err) {
       return invalid(res, err);

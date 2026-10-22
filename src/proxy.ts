@@ -1080,6 +1080,13 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   app.use('/control', requireAccess('admin', access), camsAdminApi({ camsAdmin, audit, commands: { policy: commandPolicy, tokens: tokenStore, runner: commandRunner, config: configCommandDeps } }));
   const controlDeps: ControlDeps = {
     changeMarks: () => overridesBackups.byPath(),
+    moveOpen: (id) => {
+      try {
+        return moveJournal.load(id) !== null;
+      } catch {
+        return true;
+      }
+    },
     loaded: () => loaded,
     setLoaded,
     running: () => running,

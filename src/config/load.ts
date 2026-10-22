@@ -487,7 +487,10 @@ export function planRemoveAll(loaded: Loaded, keep?: (path: string) => boolean):
   const cams = (loaded.overrides as Obj).cameras as Obj | undefined;
   const kept: Obj = loaded.addedCameras.length ? { cameras: Object.fromEntries(loaded.addedCameras.map((id) => [id, structuredClone(cams![id])])) } : {};
   const paths = setPaths(loaded.overrides as Obj);
-  if (keep) for (const p of paths) if (keep(p)) setPath(kept, p, structuredClone(getPath(loaded.overrides, p)));
+  // A camera's `moved` always stays (camera moves, final review 1): it is no
+  // setting but the state of a move; dropping it would start the camera here
+  // while it runs on the target. Only the move itself clears it.
+  for (const p of paths) if ((keep?.(p) ?? false) || /^cameras\.[^.]+\.moved$/.test(p)) setPath(kept, p, structuredClone(getPath(loaded.overrides, p)));
   return { next: rebuildWith(loaded, kept), overrides: kept, paths };
 }
 
