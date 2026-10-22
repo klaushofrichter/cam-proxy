@@ -112,7 +112,7 @@ const TOKEN_HASH = HASH;
 // Loose on purpose (the contract's pattern): never IP validation, the move code compares addresses itself.
 const TARGET_IP = /^[0-9A-Fa-f:.]{2,45}$/;
 const MOVE_TOKEN = /^[\x21-\x7e]{8,256}$/;
-const MOVE_REASONS: readonly string[] = ['moves_not_allowed', 'camera_unreachable', 'camera_limit', 'id_taken', 'busy', 'incompatible', 'no_site_ca', 'ca_does_not_cover_camera', 'external_cert', 'other_account', 'target_offline', 'not_routed', 'host_overridden', 'target_failed', 'offer_expired'];
+const MOVE_REASONS: readonly string[] = ['moves_not_allowed', 'camera_unreachable', 'camera_limit', 'id_taken', 'busy', 'incompatible', 'no_site_ca', 'ca_does_not_cover_camera', 'external_cert', 'other_account', 'target_offline', 'not_routed', 'host_overridden', 'target_failed', 'offer_expired', 'not_registered', 'internal'];
 const SPACE_PLANS: readonly string[] = ['all', 'omit', 'fit', 'retention'];
 const nat = (x: unknown): x is number => Number.isSafeInteger(x) && (x as number) >= 0;
 const str = (x: unknown, max: number, min = 0): x is string => typeof x === 'string' && x.length >= min && x.length <= max;

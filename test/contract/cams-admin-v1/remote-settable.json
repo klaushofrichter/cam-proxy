@@ -99,6 +99,8 @@
     "cameras.*.events.poll.enabled",
     "cameras.*.analytics.kinds.person",
     "cameras.*.analytics.kinds.vehicle",
-    "cameras.*.analytics.kinds.pet"
+    "cameras.*.analytics.kinds.pet",
+    "cameras.*.moved",
+    "moves"
   ]
 }

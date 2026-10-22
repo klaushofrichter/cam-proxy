@@ -64,6 +64,8 @@ describe('texts', () => {
     expect(rejectText('Shed', 'camera_limit', '192.0.2.10')).toBe("Shed can't take this camera: it already has as many cameras as it may");
     expect(rejectText('Shed', 'ca_does_not_cover_camera', '192.0.2.10')).toBe("Shed can't take this camera: its site certificate authority doesn't cover 192.0.2.10");
     expect(rejectText('Shed', undefined, '')).toBe("Shed can't take this camera: it didn't answer");
+    expect(rejectText('Shed', 'not_registered', '192.0.2.10')).toBe("Shed can't take this camera: cams-admin doesn't know this camera (register it in cams-admin first)");
+    expect(rejectText('Shed', 'internal', '192.0.2.10')).toBe("Shed can't take this camera: something went wrong in cams-admin; try again");
   });
   it('limits show their unit', () => {
     expect(limitText('stills.maxGB', 90)).toBe('stills.maxGB: 90 GB');
