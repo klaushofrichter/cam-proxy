@@ -264,8 +264,8 @@ async function probe(source: MoveOfferArgs['source'], moveId: string, token: str
 
 // The copier's way to the source (camera-move plan Task 9): streaming GETs
 // with the move token, pinned like sourceGet; the pinned CA is fetched once per
-// client and again after a failure. A stalled answer (no bytes for `idleMs`)
-// ends with an error. Nothing here puts the token in an error.
+// client and again after a failure. No answer within `idleMs` ends with an
+// error; once the answer starts, the reader watches its own idle window. Nothing here puts the token in an error.
 export interface SourceAnswer { status: number; body: AsyncIterable<Buffer> }
 export function moveSourceClient(source: MoveOfferArgs['source'], token: string, o: { idleMs?: number } = {}): { get: (path: string, signal: AbortSignal) => Promise<SourceAnswer> } {
   let ca: Promise<string | undefined | null> | null = null;
@@ -298,8 +298,13 @@ function streamGet(source: MoveOfferArgs['source'], path: string, token: string,
         headers: { Authorization: `Bearer ${token}` },
         ...(https ? { ca, servername: source.tlsServername, rejectUnauthorized: true } : {}),
       },
-      (res) => resolve({ status: res.statusCode ?? 0, body: res }),
+      (res) => {
+        // From here the reader's own idle window applies (a throttled read leaves the socket silent).
+        req.setTimeout(0);
+        resolve({ status: res.statusCode ?? 0, body: res });
+      },
     );
+    // Until the answer starts.
     req.setTimeout(idleMs, () => req.destroy(new Error('source stalled')));
     req.once('error', () => reject(new Error(signal.aborted ? 'aborted' : 'source not reachable')));
     req.end();

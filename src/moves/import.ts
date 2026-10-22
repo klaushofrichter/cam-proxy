@@ -24,8 +24,10 @@ import { CONTENT_FOLDERS, type TableRows } from './inventory';
 // (cam, start_ts), still checks by (cam, still_ts, provider), events by
 // (cam, start_ts, source, kind), analyses by (event_id, provider), Archive
 // items by (cam, created_at, name); rows in the journal's map of an earlier
-// import of the chunk are skipped too. One transaction per chunk: a failure
-// leaves no row and moves staged files back.
+// import of the chunk are skipped too. One transaction per chunk, a savepoint
+// per row: a row that can't be stored is skipped (counted in `failed` and
+// `skipped`); a failure of the whole import leaves no row and moves staged
+// files back.
 
 export const STAGED_FOLDERS: readonly string[] = ['analytics', 'still-checks', 'archive'];
 const TABLES = ['events', 'analyses', 'clips', 'still_checks', 'archive'] as const;
@@ -60,7 +62,7 @@ export function landingPath(d: Pick<ImportDeps, 'dataDir' | 'staging'>, rel: str
 const isValue = (v: unknown): v is string | number | null => v === null || typeof v === 'string' || (typeof v === 'number' && Number.isFinite(v));
 const posInt = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0;
 
-export function importRows(d: ImportDeps, cam: string, rows: TableRows[], verified: Set<string>, prev: ImportMap = {}): { inserted: number; skipped: number; map: ImportMap } {
+export function importRows(d: ImportDeps, cam: string, rows: TableRows[], verified: Set<string>, prev: ImportMap = {}): { inserted: number; skipped: number; failed: number; map: ImportMap } {
   const db = d.catalog.db;
   const columns = new Map<Table, string[]>(TABLES.map((t) => [t, (db.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[]).map((c) => c.name).filter((c) => c !== 'id')]));
   const map: Record<Table, Map<number, number>> = Object.fromEntries(TABLES.map((t) => [t, new Map(prev[t] ?? [])])) as Record<Table, Map<number, number>>;
@@ -68,6 +70,7 @@ export function importRows(d: ImportDeps, cam: string, rows: TableRows[], verifi
   const moved: { from: string; to: string }[] = [];
   let inserted = 0;
   let skipped = 0;
+  let failed = 0;
 
   // A verified file still at its landing place, or null.
   const usable = (rel: unknown, folders: readonly string[]): string | null => {
@@ -148,15 +151,39 @@ export function importRows(d: ImportDeps, cam: string, rows: TableRows[], verifi
     return id;
   };
 
+  const undo = (from: number) => {
+    for (const m of moved.splice(from).reverse()) {
+      try {
+        renameSync(m.to, m.from);
+      } catch {
+        /* left where it is: re-downloaded on the next try */
+      }
+    }
+  };
   db.exec('BEGIN');
   try {
     for (const t of TABLES) {
       for (const tr of rows.filter((x) => x.table === t)) {
         for (const raw of tr.rows) {
           const row = raw as Record<string, unknown>;
-          const src = row.id;
+          const src = row?.id;
           const known = posInt(src) && map[t].has(src);
-          const id = !known && row && typeof row === 'object' ? handle(t, row) : null;
+          let id: number | null = null;
+          if (!known && row && typeof row === 'object') {
+            // One row at a time: a row that can't be stored is skipped, the others go on.
+            const mark = moved.length;
+            db.exec('SAVEPOINT move_row');
+            try {
+              id = handle(t, row);
+              db.exec('RELEASE move_row');
+            } catch {
+              db.exec('ROLLBACK TO move_row');
+              db.exec('RELEASE move_row');
+              undo(mark);
+              failed++;
+              id = null;
+            }
+          }
           if (id === null) {
             skipped++;
             continue;
@@ -169,14 +196,12 @@ export function importRows(d: ImportDeps, cam: string, rows: TableRows[], verifi
     }
     db.exec('COMMIT');
   } catch (err) {
-    db.exec('ROLLBACK');
-    for (const m of moved.reverse()) {
-      try {
-        renameSync(m.to, m.from);
-      } catch {
-        /* left where it is: re-downloaded on the next try */
-      }
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* SQLite rolled back already (a failed COMMIT can) */
     }
+    undo(0);
     throw err;
   }
   const out: ImportMap = {};
@@ -184,5 +209,5 @@ export function importRows(d: ImportDeps, cam: string, rows: TableRows[], verifi
     const all = [...(prev[t] ?? []), ...fresh[t]];
     if (all.length) out[t] = all;
   }
-  return { inserted, skipped, map: out };
+  return { inserted, skipped, failed, map: out };
 }

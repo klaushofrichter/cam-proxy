@@ -9,7 +9,7 @@ import { moveSourceClient, spaceFor, type EvaluateDeps, type SourceAnswer } from
 import { importRows, isStaged, landingPath, moveStagingDir, relOk, type ImportDeps } from './import';
 import { CONTENT_FOLDERS, hashFile, KIND_FOLDERS, type ChunkMeta, type TableRows } from './inventory';
 import type { ChunkRecord, MoveJournal, MoveRecord } from './journal';
-import { rateFor, TokenBucket } from './rate';
+import { abortableSleep, rateFor, TokenBucket } from './rate';
 import type { ChunkState, MoveEvent, MoveKind, MoveSummary } from './types';
 import { MOVE_KINDS } from './types';
 
@@ -55,7 +55,7 @@ export interface CopierDeps {
   now?: () => number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   bucket?: TokenBucket;
-  timing?: { retryMs?: number; retryCapMs?: number; pausedPollMs?: number; refreshPollMs?: number; refreshWaitMs?: number; saveEveryMs?: number };
+  timing?: { retryMs?: number; retryCapMs?: number; pausedPollMs?: number; refreshPollMs?: number; refreshWaitMs?: number; saveEveryMs?: number; idleMs?: number };
 }
 
 const ORDER: MoveKind[] = ['clips', 'events', 'checks', 'archive', 'stills'];
@@ -74,31 +74,39 @@ const dayOf = (ts: number) => new Date(ts).toISOString().slice(0, 10);
 const sameMeta = (a: ChunkRecord['meta'], c: ChunkMeta) => !!a && a.files === c.files && a.bytes === c.bytes && a.rows === c.rows;
 const metaOf = (c: ChunkMeta) => ({ files: c.files, bytes: c.bytes, rows: c.rows });
 
-function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal?.aborted) return resolve();
-    const t = setTimeout(done, ms);
-    t.unref();
-    function done() {
+function discard(body: AsyncIterable<Buffer>, err?: Error): void {
+  (body as { destroy?: (e?: Error) => void }).destroy?.(err);
+}
+
+// The idle window of an answer: armed while waiting for the next bytes,
+// paused while the bucket holds a read back (a slow rate leaves the socket
+// silent; that is not a stall). Tripped, it ends the answer with an error.
+function idleGuard(body: AsyncIterable<Buffer>, ms: number): { arm: () => void; pause: () => void } {
+  let t: NodeJS.Timeout | undefined;
+  return {
+    arm: () => {
       clearTimeout(t);
-      signal?.removeEventListener('abort', done);
-      resolve();
-    }
-    signal?.addEventListener('abort', done, { once: true });
-  });
+      t = setTimeout(() => discard(body, new Error('source stalled')), ms);
+      t.unref();
+    },
+    pause: () => clearTimeout(t),
+  };
 }
 
-function discard(body: AsyncIterable<Buffer>): void {
-  (body as { destroy?: () => void }).destroy?.();
-}
-
-async function readAll(body: AsyncIterable<Buffer>): Promise<Buffer> {
+async function readAll(body: AsyncIterable<Buffer>, idleMs: number): Promise<Buffer> {
   const parts: Buffer[] = [];
   let n = 0;
-  for await (const b of body) {
-    n += b.length;
-    if (n > JSON_MAX) throw new Error('answer too large');
-    parts.push(b);
+  const guard = idleGuard(body, idleMs);
+  guard.arm();
+  try {
+    for await (const b of body) {
+      guard.arm();
+      n += b.length;
+      if (n > JSON_MAX) throw new Error('answer too large');
+      parts.push(b);
+    }
+  } finally {
+    guard.pause();
   }
   return Buffer.concat(parts);
 }
@@ -125,6 +133,7 @@ export function removeMoveParts(dataDir: string, moveId: string, cam: string): v
 }
 
 interface ManifestFile { path: string; size: number; sha256: string }
+type Fetched = 'ok' | 'same' | 'other' | 'expired' | 'unlisted' | 'transient' | 'paused' | 'bad';
 type FileOutcome = 'v' | 's' | 'f';
 
 export class Copier {
@@ -143,7 +152,7 @@ export class Copier {
   private lastEmit = -Infinity;
   private lastAuditAt = 0;
   private lastDecile = 0;
-  private unreachable = false;
+  private down: { since: number; failures: number; audited: number } | null = null;
   private signal!: AbortSignal;
 
   constructor(private readonly d: CopierDeps, record: MoveRecord) {
@@ -151,8 +160,9 @@ export class Copier {
     const p = record.peer;
     this.client = d.client
       ? d.client(record)
-      : moveSourceClient({ proxyId: p.proxyId, name: p.name, url: p.url ?? '', caFingerprints: p.caFingerprints ?? [], tlsServername: p.tlsServername ?? '' }, record.token ?? '');
-    this.bucket = d.bucket ?? new TokenBucket({ now: d.now, sleep: d.sleep });
+      : moveSourceClient({ proxyId: p.proxyId, name: p.name, url: p.url ?? '', caFingerprints: p.caFingerprints ?? [], tlsServername: p.tlsServername ?? '' }, record.token ?? '', { idleMs: d.timing?.idleMs });
+    // The default sleep ends early on stop (a slow take never holds up a cancel).
+    this.bucket = d.bucket ?? new TokenBucket({ now: d.now, sleep: d.sleep ?? abortableSleep });
     this.paths = { catalog: d.catalog, dataDir: d.dataDir, staging: moveStagingDir(d.dataDir, record.id) };
   }
 
@@ -177,7 +187,7 @@ export class Copier {
     return { moveId: this.r.id, camera: this.r.camera, source: this.r.peer.proxyId, target: this.d.proxyId?.() || null, role: 'target', ...extra };
   }
 
-  private audit(action: 'move-file-failed' | 'move-progress' | 'move-budget-exceeded', outcome: 'success' | 'failure', message: string, extra: Record<string, unknown>): void {
+  private audit(action: 'move-file-failed' | 'move-progress' | 'move-budget-exceeded' | 'move-source-unreachable', outcome: 'success' | 'failure', message: string, extra: Record<string, unknown>): void {
     this.d.audit.write({
       action, category: ['configuration'], type: [action === 'move-progress' ? 'info' : 'change'], outcome, user: 'cams-admin', camera: this.r.camera,
       message: `Camera move ${this.r.id} (${this.r.camera} from ${this.r.peer.name || this.r.peer.proxyId}): ${message}`,
@@ -256,7 +266,7 @@ export class Copier {
     for (const c of this.manifest) {
       this.check();
       const rec = this.r.chunks[c.id];
-      if (rec && FINAL.includes(rec.state) && (c.day < this.approvalDay() || sameMeta(rec.meta, c))) continue;
+      if (rec && FINAL.includes(rec.state) && !rec.importFailed && (c.day < this.approvalDay() || sameMeta(rec.meta, c))) continue;
       // B34: what cams-admin reported done counts as verified unless the journal knows better.
       if (!rec && this.r.done?.includes(c.id)) {
         this.r.chunks[c.id] = { state: 'verified', b: c.bytes, meta: metaOf(c) };
@@ -308,7 +318,7 @@ export class Copier {
       this.check();
       const ok = !!raw && relOk(this.r.camera, raw.path, KIND_FOLDERS[c.kind]) && Number.isSafeInteger(raw.size) && raw.size >= 0 && typeof raw.sha256 === 'string' && SHA256.test(raw.sha256);
       const size = ok ? raw.size : 0;
-      const out: FileOutcome = !ok ? 'f' : vf.has(raw.path) ? 'v' : await this.file(raw);
+      const out: FileOutcome = !ok ? 'f' : vf.has(raw.path) ? 'v' : await this.file(raw, c.id);
       if (out === 'v') {
         n.v++;
         n.vb += size;
@@ -328,25 +338,54 @@ export class Copier {
       this.progress();
     }
     // Then the rows (files first, S §8.2).
-    let rows: TableRows[] = [];
-    if (c.rows > 0 || (typeof body.rows === 'number' && body.rows > 0)) {
-      const r = await this.json(`/api/moves/${this.r.id}/chunks/${encodeURIComponent(c.id)}/rows`);
-      rows = r.status === 200 && Array.isArray(r.body) ? (r.body as TableRows[]) : [];
-    }
+    const rows = c.rows > 0 || (typeof body.rows === 'number' && body.rows > 0) ? await this.rows(c) : [];
     let imported: ReturnType<typeof importRows> | undefined;
-    try {
-      imported = importRows(this.paths, this.r.camera, rows, verified, prev?.imported);
-    } catch {
-      logger.warn({ moveId: this.r.id, chunkId: c.id }, 'move_copy_import_failed');
+    let delay = this.t('retryMs', 2000);
+    for (let i = 0; i < ATTEMPTS && !imported; i++) {
+      try {
+        imported = importRows(this.paths, this.r.camera, rows, verified, prev?.imported);
+      } catch {
+        logger.warn({ moveId: this.r.id, chunkId: c.id }, 'move_copy_import_failed');
+        if (i < ATTEMPTS - 1) {
+          await this.sleep(delay);
+          delay = Math.min(delay * 2, this.t('retryCapMs', 5 * MINUTE));
+        }
+      }
+    }
+    if (!imported) {
+      // The staged files and `vf` stay: the next pass (a resume) imports them.
       n.f++;
+      return this.endChunk(c, n, failed, undefined, [...vf], true);
     }
     // Staged files the import did not take (a duplicate, a row not imported).
     for (const rel of staged) rmSync(landingPath(this.paths, rel), { force: true });
     this.endChunk(c, n, failed, imported, [...vf]);
   }
 
-  private endChunk(c: ChunkMeta, n: { v: number; s: number; f: number; vb: number; b: number }, failed: string[], imported: ReturnType<typeof importRows> | undefined, vf: string[] = []): void {
+  // A chunk's rows: anything but a list (a 404, a body that isn't one) is
+  // asked for again; a chunk is never verified without its rows.
+  private async rows(c: ChunkMeta): Promise<TableRows[]> {
+    let delay = this.t('retryMs', 2000);
+    for (;;) {
+      const r = await this.json(`/api/moves/${this.r.id}/chunks/${encodeURIComponent(c.id)}/rows`);
+      if (r.status === 200 && Array.isArray(r.body)) return r.body as TableRows[];
+      await this.sleep(delay);
+      delay = Math.min(delay * 2, this.t('retryCapMs', 5 * MINUTE));
+    }
+  }
+
+  // The chunk's file manifest again (the source dropped its cached one, P12): path -> entry, null when gone.
+  private async relist(chunkId: string): Promise<Map<string, ManifestFile> | null> {
+    const m = await this.json(`/api/moves/${this.r.id}/chunks/${encodeURIComponent(chunkId)}`);
+    const files = m.status === 200 ? (m.body as { files?: unknown } | null)?.files : null;
+    if (!Array.isArray(files)) return null;
+    return new Map((files as ManifestFile[]).filter((x) => x && typeof x.path === 'string').map((x) => [x.path, x]));
+  }
+
+  private endChunk(c: ChunkMeta, n: { v: number; s: number; f: number; vb: number; b: number }, failed: string[], imported: ReturnType<typeof importRows> | undefined, vf: string[] = [], importFailed = false): void {
+    const prev = this.r.chunks[c.id];
     this.r.chunks[c.id] = {
+      ...(importFailed ? { importFailed: true, ...(prev?.imported ? { imported: prev.imported } : {}) } : {}),
       // "copied with failures" is `failed` (X17/B47).
       state: n.f > 0 ? 'failed' : 'verified',
       v: n.v, s: n.s, f: n.f, vb: n.vb, b: n.b, meta: metaOf(c),
@@ -363,7 +402,9 @@ export class Copier {
 
   // One file: 'v' verified (copied, or already here), 's' skipped (expired at
   // the source, or a file of that name the target stored itself), 'f' failed.
-  private async file(f: ManifestFile): Promise<FileOutcome> {
+  private async file(entry: ManifestFile, chunkId: string): Promise<FileOutcome> {
+    let f = entry;
+    let relists = 0;
     const landing = landingPath(this.paths, f.path);
     const staged = isStaged(f.path);
     if (await this.matches(landing, f)) return 'v';
@@ -374,7 +415,7 @@ export class Copier {
     while (failures < ATTEMPTS) {
       this.check();
       await this.waitStorage();
-      let out: 'ok' | 'same' | 'other' | 'expired' | 'transient' | 'paused' | 'bad';
+      let out: Fetched;
       try {
         out = await this.fetchTo(f, part, landing, staged);
       } finally {
@@ -383,6 +424,15 @@ export class Copier {
       if (out === 'ok' || out === 'same') return 'v';
       if (out === 'other' || out === 'expired') return 's';
       if (out === 'paused') continue;
+      if (out === 'unlisted' && relists++ < ATTEMPTS) {
+        // The source listed the day again (P12) and dropped this chunk's manifest: ask for it again, then the file.
+        const fresh = await this.relist(chunkId);
+        const now = fresh?.get(f.path);
+        if (!now || !Number.isSafeInteger(now.size) || now.size < 0 || typeof now.sha256 !== 'string' || !SHA256.test(now.sha256)) return 's';
+        f = { path: f.path, size: now.size, sha256: now.sha256 };
+        continue;
+      }
+      // Only a wrong size or hash counts; a cut or stalled stream is the source restarting (Review Focus 1).
       if (out === 'bad') failures++;
       if (failures < ATTEMPTS) {
         await this.sleep(delay);
@@ -402,30 +452,39 @@ export class Copier {
     }
   }
 
-  private async fetchTo(f: ManifestFile, part: string, landing: string, staged: boolean): Promise<'ok' | 'same' | 'other' | 'expired' | 'transient' | 'paused' | 'bad'> {
+  private async fetchTo(f: ManifestFile, part: string, landing: string, staged: boolean): Promise<Fetched> {
     this.updateRate();
     let res: SourceAnswer;
     try {
       res = await this.client.get(`/api/moves/${this.r.id}/file?path=${encodeURIComponent(f.path)}`, this.signal);
     } catch {
       this.check();
-      this.noteUnreachable();
+      this.noteDown('no answer');
       return 'transient';
+    }
+    if (res.status === 404) {
+      // `expired`: removed by retention (skip it); `not_listed`: the chunk's manifest is gone (ask again).
+      const error = await this.errorOf(res.body);
+      this.noteUp();
+      return error === 'not_listed' ? 'unlisted' : 'expired';
     }
     if (res.status !== 200) {
       discard(res.body);
-      if (res.status === 404) return 'expired';
+      this.noteDown(String(res.status));
       if (res.status === 503 || res.status === 429) this.sourceBusyUntil = this.now() + MINUTE;
       // 400 (a path the source refuses) counts; the rest is the source not ready or busy.
       return res.status === 400 || res.status === 416 ? 'bad' : 'transient';
     }
-    this.unreachable = false;
+    this.noteUp();
     mkdirSync(dirname(part), { recursive: true });
     const fh = await open(part, 'w', 0o644);
     const hash = createHash('sha256');
     let size = 0;
+    const guard = idleGuard(res.body, this.t('idleMs', MINUTE));
+    guard.arm();
     try {
       for await (const buf of res.body) {
+        guard.pause();
         this.check();
         if (this.d.paused()) {
           discard(res.body);
@@ -443,13 +502,15 @@ export class Copier {
         // A long file still reports every minute.
         this.inflight = size;
         if (this.now() - this.lastEmit >= MINUTE) this.progress();
+        guard.arm();
       }
     } catch (err) {
       this.check();
       if (err instanceof Stopped) throw err;
-      // A cut stream (the source restarted mid-file, Review Focus 1): the part goes, the file is fetched again.
-      return 'bad';
+      // A cut or stalled stream (the source restarted mid-file, Review Focus 1): the part goes, the file is fetched again, not counted.
+      return 'transient';
     } finally {
+      guard.pause();
       this.inflight = 0;
       await fh.close();
     }
@@ -477,10 +538,34 @@ export class Copier {
     return 'ok';
   }
 
-  private noteUnreachable(): void {
-    if (this.unreachable) return;
-    this.unreachable = true;
-    logger.warn({ moveId: this.r.id }, 'move_copy_source_unreachable');
+  // The source not answering or refusing (anything but 200 and 404): a log
+  // line and an audit record at the first failure, then every 6 hours while it lasts.
+  private noteDown(what: string): void {
+    const now = this.now();
+    if (!this.down) {
+      this.down = { since: now, failures: 0, audited: -Infinity };
+      logger.warn({ moveId: this.r.id, answer: what }, 'move_copy_source_unreachable');
+    }
+    this.down.failures++;
+    if (now - this.down.audited >= 6 * HOUR) {
+      this.down.audited = now;
+      this.audit('move-source-unreachable', 'failure', `the source has not answered as it should since ${new Date(this.down.since).toISOString()} (${this.down.failures} tries, last: ${what}); copying keeps trying`, {
+        since: this.down.since, failures: this.down.failures, answer: what,
+      });
+    }
+  }
+
+  private noteUp(): void {
+    this.down = null;
+  }
+
+  private async errorOf(body: AsyncIterable<Buffer>): Promise<string | null> {
+    try {
+      const v = JSON.parse((await readAll(body, this.t('idleMs', MINUTE))).toString('utf8')) as { error?: unknown };
+      return typeof v?.error === 'string' ? v.error : null;
+    } catch {
+      return null;
+    }
   }
 
   // A JSON answer of the source; waits out an unreachable or busy source.
@@ -491,16 +576,20 @@ export class Copier {
       try {
         const res = await this.client.get(path, this.signal);
         if (res.status === 200) {
-          const body = JSON.parse((await readAll(res.body)).toString('utf8')) as unknown;
-          this.unreachable = false;
+          const body = JSON.parse((await readAll(res.body, this.t('idleMs', MINUTE))).toString('utf8')) as unknown;
+          this.noteUp();
           return { status: 200, body };
         }
         discard(res.body);
-        if (res.status === 404) return { status: 404, body: null };
+        if (res.status === 404) {
+          this.noteUp();
+          return { status: 404, body: null };
+        }
+        this.noteDown(String(res.status));
         if (res.status === 503 || res.status === 429) this.sourceBusyUntil = this.now() + MINUTE;
       } catch {
         this.check();
-        this.noteUnreachable();
+        this.noteDown('no answer');
       }
       await this.sleep(delay);
       delay = Math.min(delay * 2, this.t('retryCapMs', 5 * MINUTE));
@@ -603,7 +692,8 @@ export class Copier {
       this.save(true);
       this.progress(true);
     }
-    rmSync(this.paths.staging, { recursive: true, force: true });
+    // Kept while a chunk's import failed: a resumed copier imports from it.
+    if (!Object.values(this.r.chunks).some((c) => c.importFailed)) rmSync(this.paths.staging, { recursive: true, force: true });
     const fresh = this.d.journal.load(this.r.id);
     if (!fresh || fresh.phase !== 'copying') return;
     this.d.setPhase(fresh, 'copied', {

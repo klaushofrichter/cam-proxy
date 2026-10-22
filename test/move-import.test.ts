@@ -140,6 +140,18 @@ describe('importRows', () => {
     expect(JSON.parse(readFileSync(join(folder, 'meta.json'), 'utf8')).item.id).toBe(arc.id);
   });
 
+  it('one bad row is skipped, the others imported', () => {
+    const f = fixture();
+    f.put('clips/cam9/2026/10/20/1200-1.mp4', 'clip');
+    f.put('clips/cam9/2026/10/20/1201-1.mp4', 'clip');
+    // stream is NOT NULL: this row's insert throws.
+    const bad = { ...clip(2, T + 60_000, 'clips/cam9/2026/10/20/1201-1.mp4', null), stream: null };
+    const rows: TableRows[] = [{ table: 'clips', rows: [bad, clip(1, T, 'clips/cam9/2026/10/20/1200-1.mp4', null)] }];
+    const out = importRows(f, CAM, rows, new Set(['clips/cam9/2026/10/20/1200-1.mp4', 'clips/cam9/2026/10/20/1201-1.mp4']));
+    expect(out).toMatchObject({ inserted: 1, skipped: 1, failed: 1 });
+    expect((f.catalog.db.prepare('SELECT start_ts FROM clips').all() as { start_ts: number }[]).map((r) => r.start_ts)).toEqual([T]);
+  });
+
   it('never takes a path outside the camera folders', () => {
     const f = fixture();
     const rows: TableRows[] = [{ table: 'clips', rows: [clip(1, T, '../secret/x.mp4', null), clip(2, T + 1, 'clips/cam4/2026/10/20/1200-1.mp4', null)] }];

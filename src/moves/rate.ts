@@ -14,6 +14,21 @@ export function rateFor(remainingBytes: number, remainingS: number, probeBps: nu
   return Number.isFinite(rate) ? Math.max(1, Math.floor(rate)) : rate;
 }
 
+// A sleep that ends early when the signal aborts (a stopped copier never waits out a take).
+export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve();
+    const t = setTimeout(done, ms);
+    t.unref();
+    function done() {
+      clearTimeout(t);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    }
+    signal?.addEventListener('abort', done, { once: true });
+  });
+}
+
 // A token bucket holding a stream to a rate: one second's worth may go at
 // once, the rest waits. Never loops on the clock: each take waits once for
 // what it overdraws.
@@ -25,7 +40,7 @@ export class TokenBucket {
 
   constructor(o: { now?: () => number; sleep?: (ms: number, signal?: AbortSignal) => Promise<void> } = {}) {
     this.now = o.now ?? Date.now;
-    this.sleep = o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms).unref()));
+    this.sleep = o.sleep ?? abortableSleep;
   }
 
   async take(n: number, rate: number, signal?: AbortSignal): Promise<void> {

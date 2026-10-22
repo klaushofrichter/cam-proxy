@@ -8,7 +8,7 @@
 import { createHash } from 'crypto';
 import express from 'express';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'fs';
-import type { Server } from 'http';
+import { createServer, type Server } from 'http';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -55,10 +55,17 @@ interface Fake {
   refreshed: boolean;
   chunks: FakeChunk[];
   onFile?: (rel: string) => void;
+  // requests left that get no answer at all (the source down), each called with onDown first
+  down: number;
+  onDown?: () => void;
+  // files answer 404 not_listed until the chunk manifest is asked for again (release dropped the cache)
+  unlisted: boolean;
+  // /rows answers left that are a 404, then one that is not a list
+  rowsFail: number;
 }
 
 function fakeSource(files: Record<string, string>, chunks: FakeChunk[]): Fake {
-  const f: Fake = { requests: [], files, cut: new Map(), corrupt: new Map(), expired: new Set(), busy: 0, refreshed: true, chunks, client: null as unknown as SourceClient };
+  const f: Fake = { requests: [], files, cut: new Map(), corrupt: new Map(), expired: new Set(), busy: 0, refreshed: true, chunks, down: 0, unlisted: false, rowsFail: 0, client: null as unknown as SourceClient };
   const json = (status: number, v: unknown) => ({ status, body: (async function* () { yield Buffer.from(JSON.stringify(v)); })() });
   const meta = (c: FakeChunk) => {
     const [kind, d] = c.id.split(':');
@@ -67,6 +74,11 @@ function fakeSource(files: Record<string, string>, chunks: FakeChunk[]): Fake {
   f.client = {
     get: async (path) => {
       f.requests.push(path);
+      if (f.down > 0) {
+        f.down--;
+        f.onDown?.();
+        throw new Error('source not reachable');
+      }
       const base = `/api/moves/${MOVE}`;
       if (!path.startsWith(base)) return json(404, { error: 'not_found' });
       const rest = path.slice(base.length);
@@ -79,7 +91,11 @@ function fakeSource(files: Record<string, string>, chunks: FakeChunk[]): Fake {
       if (m) {
         const c = f.chunks.find((x) => x.id === decodeURIComponent(m[1]));
         if (!c) return json(404, { error: 'unknown_chunk' });
-        if (m[2]) return json(200, c.rows ?? []);
+        if (m[2]) {
+          if (f.rowsFail > 0) return f.rowsFail-- > 1 ? json(404, { error: 'unknown_chunk' }) : json(200, { not: 'a list' });
+          return json(200, c.rows ?? []);
+        }
+        f.unlisted = false;
         const present = c.files.filter((p) => f.files[p] !== undefined);
         return json(200, { files: present.map((p) => ({ path: p, size: Buffer.byteLength(f.files[p]), sha256: sha(f.files[p]) })), rows: meta(c).rows, expired: c.files.length - present.length });
       }
@@ -87,6 +103,7 @@ function fakeSource(files: Record<string, string>, chunks: FakeChunk[]): Fake {
       if (q) {
         const rel = decodeURIComponent(q[1]);
         f.onFile?.(rel);
+        if (f.unlisted) return json(404, { error: 'not_listed' });
         if (f.expired.has(rel) || f.files[rel] === undefined) return json(404, { error: 'expired' });
         const content = Buffer.from(f.files[rel]);
         const cutLeft = f.cut.get(rel) ?? 0;
@@ -565,6 +582,137 @@ describe('temporary files', () => {
     expect(parts(dataDir)).toEqual([]);
     expect(existsSync(join(dataDir, 'move-staging', MOVE))).toBe(false);
     expect(existsSync(join(dataDir, 'stills/cam9/2026/10/20/1200.pack'))).toBe(true);
+  });
+});
+
+// The fake source behind a real socket (the default HTTP client).
+async function serve(fake: Fake): Promise<string> {
+  const server = createServer((req, res) => {
+    void (async () => {
+      const a = await fake.client.get(req.url ?? '', new AbortController().signal);
+      res.statusCode = a.status;
+      try {
+        for await (const b of a.body) res.write(b);
+      } catch {
+        res.destroy();
+        return;
+      }
+      res.end();
+    })();
+  });
+  servers.push(server);
+  server.listen(0, '127.0.0.1');
+  await new Promise((r) => server.once('listening', r));
+  return `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+}
+const peerAt = (url: string) => ({ proxyId: 'prx_1123456789ABCDEFGHJK', name: 'een', url, caFingerprints: [], tlsServername: 'proxy.s.internal', ip: '127.0.0.1' });
+const REAL = { timing: { retryMs: 1, retryCapMs: 2, pausedPollMs: 2, refreshPollMs: 2, refreshWaitMs: 50, saveEveryMs: 0, idleMs: 200 } };
+
+describe('Copier fix round 1', () => {
+  it('a slow rate does not trip the idle timeout (a real socket)', async () => {
+    const rel = 'stills/cam9/2026/10/20/1200.pack';
+    const content = 's'.repeat(3 * 1024 * 1024);
+    const f = fakeSource({ [rel]: content }, [{ id: `stills:${day(20)}`, files: [rel] }]);
+    // The budget is long over: the rate is the probe, 2 MB/s. The file is larger than the socket buffers, so the
+    // socket stays silent while the bucket holds a 64 kB read back (~32 ms), longer than the 20 ms idle window.
+    const u = unit(f, { peer: peerAt(await serve(f)), probeBps: 2 * 1024 * 1024, budgetS: 1, copyStartedAt: 1, budgetExceeded: true }, { deps: { client: undefined, bucket: undefined, sleep: undefined, now: undefined, timing: { ...REAL.timing, idleMs: 20 } } });
+    await u.run();
+    expect(chunkStates(u)[`stills:${day(20)}`]).toBe('verified');
+    expect(fileRequests(f)).toEqual([rel]);
+    expect(readFileSync(join(u.dataDir, rel), 'utf8')).toBe(content);
+  }, 20_000);
+
+  it('a stream cut again and again is retried, not failed (only a mismatch counts)', async () => {
+    const { files, chunks } = threeDays();
+    const f = fakeSource(files, chunks);
+    const rel = 'clips/cam9/2026/10/20/1200-1.mp4';
+    f.cut.set(rel, 5);
+    const u = unit(f);
+    await u.run();
+    expect(fileRequests(f).filter((p) => p === rel)).toHaveLength(6);
+    expect(chunkStates(u)[`clips:${day(20)}`]).toBe('verified');
+  });
+
+  it('404 not_listed (the source re-listed the day): the chunk manifest is fetched again, every file ends verified', async () => {
+    const { files, chunks } = threeDays();
+    const f = fakeSource(files, chunks);
+    let once = false;
+    f.onFile = () => void (!once && (once = true) && (f.unlisted = true));
+    const u = unit(f);
+    await u.run();
+    expect(Object.values(chunkStates(u)).every((s) => s === 'verified')).toBe(true);
+    expect(u.phases[0].extra).toMatchObject({ counts: { verified: 7, skipped: 0, failed: 0 } });
+  });
+
+  it('rows answering 404 or not a list are asked for again: never verified without its rows', async () => {
+    const { files, chunks } = threeDays();
+    const f = fakeSource(files, chunks);
+    f.rowsFail = 3;
+    const u = unit(f);
+    await u.run();
+    expect((u.catalog.db.prepare('SELECT COUNT(*) AS n FROM clips WHERE cam = ?').get(CAM) as { n: number }).n).toBe(3);
+    expect((u.catalog.db.prepare('SELECT COUNT(*) AS n FROM analyses').get() as { n: number }).n).toBe(1);
+    expect(Object.values(chunkStates(u)).every((s) => s === 'verified')).toBe(true);
+  });
+
+  it('an import error keeps the staged files and their state; a resumed copier imports them', async () => {
+    const { files, chunks } = threeDays();
+    const f = fakeSource(files, chunks);
+    const dataDir = mkdtempSync(join(tmpdir(), 'camproxy-copier-'));
+    const real = openCatalog(join(dataDir, 'catalog.db'));
+    // Every chunk's COMMIT fails (a full disk under the catalog, say).
+    const failing = new Proxy(real.db, {
+      get: (t, p) => (p === 'exec' ? (sql: string) => { if (sql === 'COMMIT') throw new Error('disk I/O error'); return t.exec(sql); } : typeof (t as any)[p] === 'function' ? (t as any)[p].bind(t) : (t as any)[p]),
+    });
+    const journal = new MoveJournal(join(dataDir, 'admin', 'moves'));
+    journal.save(record());
+    const u = unit(f, {}, { dataDir, deps: { catalog: { db: failing } } });
+    await u.run();
+    expect(chunkStates(u)[`events:${day(20)}`]).toBe('failed');
+    expect(existsSync(join(dataDir, 'move-staging', MOVE, 'analytics/cam9/77.jpg'))).toBe(true);
+    expect((real.db.prepare('SELECT COUNT(*) AS n FROM events').get() as { n: number }).n).toBe(0);
+    // A new process with a working catalog: the chunks are imported from what is there.
+    const r = journal.load(MOVE)!;
+    r.phase = 'copying';
+    journal.save(r);
+    const before = f.requests.length;
+    const again = unit(f, {}, { dataDir });
+    await again.run();
+    expect(fileRequests({ ...f, requests: f.requests.slice(before) })).toEqual([]);
+    expect(Object.values(chunkStates(again)).every((s) => s === 'verified')).toBe(true);
+    const an = again.catalog.db.prepare('SELECT image FROM analyses').get() as { image: string };
+    expect(readFileSync(an.image, 'utf8')).toBe('analysis-image');
+    expect((again.catalog.db.prepare('SELECT COUNT(*) AS n FROM clips').get() as { n: number }).n).toBe(3);
+  });
+
+  it('stop() returns promptly in the middle of a slow take', async () => {
+    const rel = 'stills/cam9/2026/10/20/1200.pack';
+    const f = fakeSource({ [rel]: 'z'.repeat(1000) }, [{ id: `stills:${day(20)}`, files: [rel] }]);
+    // 10 B/s: the bucket would hold the second half back for about 49 s.
+    const u = unit(f, { probeBps: 10, budgetS: 1, copyStartedAt: 1, budgetExceeded: true }, { deps: { bucket: undefined, sleep: undefined, now: undefined } });
+    const runner = new CopyRunner(u.deps);
+    runner.start(MOVE);
+    await new Promise((r) => setTimeout(r, 100));
+    const t0 = Date.now();
+    await runner.stop(MOVE);
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(parts(u.dataDir)).toEqual([]);
+  }, 5000);
+
+  it('audits move-source-unreachable at the first failure and every 6 h', async () => {
+    const { files, chunks } = threeDays();
+    const f = fakeSource(files, chunks);
+    const u = unit(f);
+    // The source gives no answer for 13 hours (one try an hour here).
+    f.down = 13;
+    f.onDown = () => void (u.state.now += 3_600_000);
+    await u.run();
+    const recs = u.audits.filter((a) => a.action === 'move-source-unreachable');
+    expect(recs).toHaveLength(3);
+    expect(recs[0]).toMatchObject({ outcome: 'failure', details: { moveId: MOVE, camera: CAM, failures: 1 } });
+    expect(recs[1].details).toMatchObject({ failures: 7 });
+    expect(recs[2].details).toMatchObject({ failures: 13 });
+    expect(Object.values(chunkStates(u)).every((s) => s === 'verified')).toBe(true);
   });
 });
 
