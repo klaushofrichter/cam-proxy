@@ -14,6 +14,11 @@
   import LockedNote from '../components/LockedNote.svelte';
 
   import ConfirmDialog from '../components/ConfirmDialog.svelte';
+  import MoveCameraDialog from '../components/MoveCameraDialog.svelte';
+  import MovePanel from '../components/MovePanel.svelte';
+  import { loadMoves, moves } from '../lib/move-state';
+  import { isActive, movedText } from '../lib/moves';
+  import { hostOf } from '../lib/long-value';
   import { byText, undoErrorText } from '../lib/cams-admin';
   import { parseSetting, resetCounts, resetLabel, resetPlan, sameBadge, type ResetTo, type SettingType } from '../lib/settings';
 
@@ -43,10 +48,25 @@
     ...(cam && split.camera.length ? [{ key: `camera-${cam}`, title: `Camera ${block?.camera.name ?? cam}${multi ? ` (${cam})` : ''}`, prefix: `cameras.${cam}`, paths: split.camera, camera: true }] : []),
   ]);
   const load = async () => (view = await api<Record<string, Setting>>('GET', '/control/config'));
-  onMount(() => void load());
-  $effect(() => {
-    if ($refreshTick) void load();
+  onMount(() => {
+    void load();
+    void loadMoves();
   });
+  $effect(() => {
+    if ($refreshTick) {
+      void load();
+      void loadMoves();
+    }
+  });
+
+  // Moving a camera to another proxy (camera-move plan Task 11): the button
+  // needs move.send; the confirmation panel shows for an answered offer, also
+  // after a reload. A camera hidden after its move is listed apart.
+  let moving = $state(false);
+  const movable = $derived(!!cam && $rights.move && !view[`cameras.${cam}.moved`]?.value && !$moves.some((m) => m.camera === cam && (isActive(m) || m.phase === 'offered' || m.phase === 'requested')));
+  const offer = $derived($moves.find((m) => m.camera === cam && m.phase === 'awaiting-approval' && m.id && m.summary));
+  const camName = (id: string) => $status?.cameras?.find((c) => c.id === id)?.camera.name ?? id;
+  const leftovers = $derived(Object.entries(view).flatMap(([p, s]) => { const m = /^cameras\.([^.]+)\.moved$/.exec(p); return m && typeof s.value === 'string' ? [{ id: m[1], moveId: s.value }] : []; }));
 
   // A draft's text as the setting's type (numbers and booleans stay typed,
   // also for an optional setting without a value).
@@ -179,12 +199,14 @@
   <LockedNote why={settingsNote($rights) ?? (Object.values(view).some((s) => s.pending) ? restartLocked : null)} testid="settings-locked" />
   <p class="muted small">From config.json, with changes made here kept as overrides in the data folder. Settings marked "set in .env" come from the environment (CAMERA_HOST, PI_ADDRESS) and win over both; change them in the .env file. Secrets are never shown or set here.</p>
   {#if message}<p class="msg" data-testid="settings-message">{message}</p>{/if}
+  {#if offer}<MovePanel move={offer} name={camName(offer.camera)} onclose={() => void loadMoves()} />{/if}
+  {#each leftovers as l (l.id)}<p class="muted small" data-testid="moved-{l.id}">{l.id}: {movedText($moves.find((m) => m.id === l.moveId)?.target.name ?? 'another proxy', l.moveId)}</p>{/each}
   <AnalyticsSettings {view} onsaved={(v) => (view = v as Record<string, Setting>)} />
   <FindCameraCard />
   <PoeSwitchCard />
   {#each cards as card (card.key)}
     <div class="card" data-testid="settings-card-{card.key}">
-      <div class="card-head"><h3 class:camera={card.camera}>{card.title}</h3>{#if card.camera && block?.source === 'added'}<button class="danger" onclick={() => (removing = cam)} disabled={!!undoLocked} title={undoLocked ?? undefined} data-testid="remove-camera">Remove camera</button>{/if}</div>
+      <div class="card-head"><h3 class:camera={card.camera}>{card.title}</h3>{#if card.camera && movable}<button onclick={() => (moving = true)} data-testid="move-open">Move to another proxy…</button>{/if}{#if card.camera && block?.source === 'added'}<button class="danger" onclick={() => (removing = cam)} disabled={!!undoLocked} title={undoLocked ?? undefined} data-testid="remove-camera">Remove camera</button>{/if}</div>
       <table>
         <tbody>
           {#each card.paths as p (p)}
@@ -230,6 +252,9 @@
   {/each}
   <AddCameraCard existing={cameraIds($status)} onadded={(v) => ((view = v as Record<string, Setting>), void refresh())} />
 </section>
+{#if moving && cam}
+  <MoveCameraDialog camera={cam} name={camName(cam)} address={block?.camera.webUiUrl ? hostOf(block.camera.webUiUrl) : ''} onclose={() => ((moving = false), void loadMoves())} />
+{/if}
 {#if removing}
   <ConfirmDialog title="Remove camera {removing}" message="The proxy stops this camera at once. Its stills, clips and events stay until retention removes them." confirmLabel="Remove camera" oncancel={() => (removing = null)} onconfirm={() => void removeCamera(removing!)} />
 {/if}

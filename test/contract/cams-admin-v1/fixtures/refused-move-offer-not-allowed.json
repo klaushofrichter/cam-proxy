@@ -1,0 +1,120 @@
+{
+  "$note": "move.offer needs move.receive; move.send does not cover it",
+  "schema": "command",
+  "$context": {
+    "now": 1791273600010,
+    "proxyId": "prx_0123456789ABCDEFGHJK",
+    "connId": "con_0123456789ABCDEFGHJK",
+    "serverKeys": [
+      "MCowBQYDK2VwAyEAgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q="
+    ],
+    "allow": [
+      "move.send"
+    ],
+    "paused": false,
+    "seen": []
+  },
+  "$expect": {
+    "runtime": "not_allowed",
+    "strict": "valid",
+    "receiver": "proxy"
+  },
+  "message": {
+    "v": 1,
+    "type": "command",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "exp": 1791273660003,
+      "actor": "admin@example.org",
+      "command": "move.offer",
+      "args": {
+        "v": 1,
+        "moveId": "mv_0123456789ABCDEFGHJK",
+        "token": "example-move-token-not-a-secret",
+        "source": {
+          "proxyId": "prx_0123456789ABCDEFGHJK",
+          "name": "Garage",
+          "url": "https://192.0.2.1:8480",
+          "caFingerprints": [
+            "SHA256:ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB"
+          ],
+          "tlsServername": "garage.example.net"
+        },
+        "camera": {
+          "camsId": "cam1",
+          "proxyCameraId": "cam1",
+          "name": "Garage Süd",
+          "host": "192.0.2.10",
+          "protocol": "https",
+          "user": "cams",
+          "onvifPort": 8000,
+          "rtspPort": 554,
+          "baichuanPort": 9000
+        },
+        "summary": {
+          "stills": {
+            "files": 120,
+            "bytes": 52428800,
+            "rows": 130,
+            "oldest": 1788681600000,
+            "newest": 1791273540000
+          },
+          "clips": {
+            "files": 120,
+            "bytes": 52428800,
+            "rows": 130,
+            "oldest": 1788681600000,
+            "newest": 1791273540000
+          },
+          "events": {
+            "files": 120,
+            "bytes": 52428800,
+            "rows": 130,
+            "oldest": 1788681600000,
+            "newest": 1791273540000
+          },
+          "checks": {
+            "files": 120,
+            "bytes": 52428800,
+            "rows": 130,
+            "oldest": 1788681600000,
+            "newest": 1791273540000
+          },
+          "archive": {
+            "files": 0,
+            "bytes": 0,
+            "rows": 0,
+            "oldest": null,
+            "newest": null
+          }
+        },
+        "settings": {
+          "name": "Garage Süd",
+          "statusPollS": 30,
+          "ftp": {
+            "enabled": true,
+            "stream": "main"
+          },
+          "stills": {
+            "stream": "sub",
+            "intervalS": 1
+          },
+          "storage": {
+            "sharePercent": 40
+          },
+          "events": {
+            "poll": {
+              "enabled": true
+            }
+          }
+        }
+      }
+    },
+    "sig": "RJl1A7JiBzvU/tuzSjf1kvZ7IKb0OH9O7qE83o1tYLfJxzd3tGGcip/E+xojt1Po6sir+L5Rm0XHZ+n0j+psDQ=="
+  }
+}

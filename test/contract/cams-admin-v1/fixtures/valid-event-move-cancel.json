@@ -1,0 +1,19 @@
+{
+  "$note": "cancelled from the source page",
+  "schema": "event",
+  "message": {
+    "v": 1,
+    "type": "event",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "kind": "move.cancel",
+      "moveId": "mv_0123456789ABCDEFGHJK",
+      "copied": "delete"
+    },
+    "sig": "/MlRzAAIO13Pttu9qfgppJVkqIQvI967Dn35+TF7eRyx7Dnk0qdUnkKb9nCSWKRsoupP+4wKfNin2O9OyuYfCg=="
+  }
+}

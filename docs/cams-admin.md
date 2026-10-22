@@ -149,9 +149,9 @@ proxy checks it in this order; the first refusal wins (contract "Check order"):
 | 6b | the `cmdId` was seen before (another connection, before a restart) and is not in the journal | `replayed` |
 | 7 | `CAMPROXY_ADMIN_COMMANDS` is on and commands are not paused | `paused` |
 | 8 | this version runs the command and it is allowed here (`camera.action`: any `camera.action:*` entry; its own entry is step 11's) | `not_allowed` |
-| 9 | 30 commands a minute, 300 a day, `tokens.apply` 6 an hour; `config.set`, `config.unset` and `config.rollback` together 6 a minute (dry runs count), `camera.action` 12 a minute, `camera.name.set` 6 a minute | `rate_limited` (with `retryAfterS`) |
+| 9 | 30 commands a minute, 300 a day, `tokens.apply` 6 an hour; `config.set`, `config.unset` and `config.rollback` together 6 a minute (dry runs count), `camera.action` 12 a minute, `camera.name.set` 6 a minute, every `move.*` command together 60 a minute | `rate_limited` (with `retryAfterS`) |
 | 10 | `args.v` is 1 and the args pass the command's strict check (at most 16384 bytes) | `unsupported_version`, `invalid_args` |
-| 11 | a token set with an admin token also needs `tokens.apply.admin`; a camera action needs its own `camera.action:<action>` entry and is never one of the never-remote actions; `proxy.restart` at most 2 an hour and the disruptive camera actions at most 6 an hour, counted from the journal (a restart doesn't reset it) | `not_allowed`, `rate_limited` |
+| 11 | a token set with an admin token also needs `tokens.apply.admin`; `move.finish` and `move.cancel` need the entry of the side `args.role` names (`move.send` for `source`, `move.receive` for `target`); a camera action needs its own `camera.action:<action>` entry and is never one of the never-remote actions; `proxy.restart` at most 2 an hour and the disruptive camera actions at most 6 an hour, counted from the journal (a restart doesn't reset it) | `not_allowed`, `rate_limited` |
 | 12 | no other command runs | `busy` |
 
 Then a signed `result` `received`, the command, the journal entry, and a
@@ -178,6 +178,8 @@ cams-admin card (**Commands from cams-admin**), with
 | `camera.name.set` | rename a camera (the camera's own name, re-read) |
 | `camera.action:<action>` | run that camera action: `camera-test`, `onvif-resubscribe`, `camera-ftp-test`, `poe-switch-read`, `inventory`, `inventory-cancel`, `retention-run` (always a dry run) |
 | **disruptive**: `proxy.restart`, `camera.action:restart`, `camera-reboot`, `camera-powercycle`, `camera-ftp-setup`, `camera-ntp-set`, `camera-cert-push` | restart this proxy or a camera's worker, reboot or power-cycle a camera, point its FTP upload here or set its NTP server, replace its HTTPS certificate. Grouped under **Disruptive — off by default** on the cams-admin page; allow one only while it's needed (Klaus's decision, M §16 Q3) |
+| `move.send` | move a camera from this proxy to another proxy of the account: `move.targets`, `move.open`, `move.answer`, `move.go`, `move.release`, and `move.finish`/`move.cancel` for the source. Only after you approve the move here (or in a cams-admin sign-in, which this entry also lets start and approve moves); see [docs/camera-move.md](camera-move.md) |
+| `move.receive` | hand this proxy a camera from another proxy of the account: `move.offer`, `move.start`, and `move.finish`/`move.cancel` for the target. It adds the camera live with its password and certificate and copies its content |
 
 | **cams-admin sign-in**: `ui.config`, `ui.restart` | no command: what someone signed in to this admin UI through a cams-admin one-time link (user `managed-admin`) may also do here; see [Signing in from cams-admin](#signing-in-from-cams-admin) |
 
@@ -222,7 +224,7 @@ them, like any entry (the cams-admin page's group **cams-admin sign-in**, or
 
 | entry | lets a cams-admin sign-in |
 |---|---|
-| `ui.config` | change settings on the Settings page (`PUT /control/config`) and reset them to config.json's value or the default (`DELETE /control/config/{path}`, Reset to defaults `DELETE /control/config`). Never, neither set nor reset, the settings cams-admin can never set: addresses, ports, files, trust, users and cams-admin itself (`server`, `go2rtc`, `tls`, `poeSwitch`, `camsAdmin`, the FTP ports, files and public host, `ntp.server`, a camera's address, user, ports and certificate name); a changed address would send a camera's or the switch's password elsewhere, a reset `camsAdmin.url` would undo the enrollment. Never adding or removing a camera. Never the storage limits (`storage.*`, a camera's `storage.sharePercent`: a lower limit deletes stills and clips) or Google Vision on/off (`analytics.googleVision.enabled`). The settings cams-admin's `config.set` may change one way only follow the same direction rules (`NARROW`, [Remote configuration](#remote-configuration-p3)): retention (`retention.*Days`) and the size caps (`stills.maxGB`, `previews.maxGB`, `ftp.maxGB`) only up, keeping data longer; Google Vision's spending caps (`monthlyLimit`, `dailyCap`, `checksPerDay`, `perCameraDailyCap`) only down. That goes for a reset too: a reset that would shorten retention or raise a cap is refused. Reset to defaults keeps the overrides of all those settings, and those whose reset would go the wrong way (the dialog names them); the local admin's Reset to defaults still removes them. Such a refusal answers 403 `local_admin_only` (with a `detail` for a direction rule, shown at the row) and is recorded as `auth-refused` with reason `local-setting`. The capture and feature switches (except Google Vision) and the health thresholds stay open to it |
+| `ui.config` | change settings on the Settings page (`PUT /control/config`) and reset them to config.json's value or the default (`DELETE /control/config/{path}`, Reset to defaults `DELETE /control/config`). Never, neither set nor reset, the settings cams-admin can never set: addresses, ports, files, trust, users and cams-admin itself (`server`, `go2rtc`, `tls`, `poeSwitch`, `camsAdmin`, the FTP ports, files and public host, `ntp.server`, a camera's address, user, ports and certificate name, `moved` and `moves.maxCameras`); a changed address would send a camera's or the switch's password elsewhere, a reset `camsAdmin.url` would undo the enrollment. Never adding or removing a camera. Never the storage limits (`storage.*`, a camera's `storage.sharePercent`: a lower limit deletes stills and clips) or Google Vision on/off (`analytics.googleVision.enabled`). The settings cams-admin's `config.set` may change one way only follow the same direction rules (`NARROW`, [Remote configuration](#remote-configuration-p3)): retention (`retention.*Days`) and the size caps (`stills.maxGB`, `previews.maxGB`, `ftp.maxGB`) only up, keeping data longer; Google Vision's spending caps (`monthlyLimit`, `dailyCap`, `checksPerDay`, `perCameraDailyCap`) only down. That goes for a reset too: a reset that would shorten retention or raise a cap is refused. Reset to defaults keeps the overrides of all those settings, and those whose reset would go the wrong way (the dialog names them); the local admin's Reset to defaults still removes them. Such a refusal answers 403 `local_admin_only` (with a `detail` for a direction rule, shown at the row) and is recorded as `auth-refused` with reason `local-setting`. The capture and feature switches (except Google Vision) and the health thresholds stay open to it |
 | `ui.restart` | restart the proxy (`restart-proxy`) and its camera side (`restart`, also one camera's): **disruptive**. No rate limit (Klaus, 2026-10-21): a person is at the page, and these restarts don't count against cams-admin's `proxy.restart` budget |
 
 They are no commands: cams-admin never sends them, the heartbeat never
@@ -361,6 +363,8 @@ read them or they belong to another user; never printed, logged or served.
 | `policy.json` | the allowed commands and the pause | the cams-admin page, `admin-commands` |
 | `replay.json` | the newest signed challenge time seen and the command ids seen (accepted or refused) until they expire: a recorded session replayed later (e.g. on the plain-http in-cluster path) is refused, also after a restart | each handshake and command |
 | `overrides.bak-<cmdId>.json` | the override state of each path a cams-admin settings change named, before and after (the last 20) | `config.set`, `config.unset`, `config.rollback`; marked by Undo |
+| `camera-passwords.json` | the camera passwords a move brought here, per camera (the environment's password wins) | a camera move (target), its end or cancel |
+| `moves/<moveId>.json` and `moves/<moveId>.*` | a camera move's journal (phase, plan, peer, chunk states; the move token, on the source only its hash; the target's move keys until the move ends), the source's cached chunk manifests and the target's list of what it copied; removed when the move ends | a camera move |
 | `replay-mark.json` | the same newest challenge time again: if `replay.json` is unusable this one holds; if both are unusable no handshake is answered (fail closed) until they are fixed or removed (removing both = a fresh start) | each handshake |
 
 An unusable `policy.json` pauses every command until it is fixed; an
@@ -374,7 +378,8 @@ until it is fixed or removed; an unusable `commands.json` is set aside
 `admin-command` (each command that ran; refusals at most one per code per
 10 minutes), `admin-policy` (allowed commands, pause, resume) and
 `admin-token` (block, unblock); `docs/audit-log.md`. Managed tokens appear
-by id and label, never by hash.
+by id and label, never by hash. Camera moves add the `move-*` records
+([docs/camera-move.md](camera-move.md#in-the-audit-log)).
 
 ### Cut-over (M §11.4, steps 1-2)
 

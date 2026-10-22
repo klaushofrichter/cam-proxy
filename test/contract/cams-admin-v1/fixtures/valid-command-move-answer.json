@@ -1,0 +1,54 @@
+{
+  "$note": "the target accepted",
+  "schema": "command",
+  "$context": {
+    "now": 1791273600010,
+    "proxyId": "prx_0123456789ABCDEFGHJK",
+    "connId": "con_0123456789ABCDEFGHJK",
+    "serverKeys": [
+      "MCowBQYDK2VwAyEAgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q="
+    ],
+    "allow": [
+      "move.send"
+    ],
+    "paused": false,
+    "seen": []
+  },
+  "message": {
+    "v": 1,
+    "type": "command",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "exp": 1791273660003,
+      "actor": "admin@example.org",
+      "command": "move.answer",
+      "args": {
+        "v": 1,
+        "moveId": "mv_0123456789ABCDEFGHJK",
+        "requestId": "rq_0123456789ABCDEFGHJK",
+        "target": {
+          "proxyId": "prx_1123456789ABCDEFGHJK",
+          "name": "Pi"
+        },
+        "accept": true,
+        "space": {
+          "needed": 52428800,
+          "available": 10737418240,
+          "fits": true,
+          "perKind": {
+            "clips": 50000000,
+            "events": 2428800
+          },
+          "retentionProposal": null
+        },
+        "estimateS": 1800
+      }
+    },
+    "sig": "K0jnst1bJnJjdYfyKK7Wf0GAUC7dioKoN2h1Ke9fkuaP4VRgX7N8pvg13Cp8ariy86OR1moF/PVtusYAAQzxCQ=="
+  }
+}

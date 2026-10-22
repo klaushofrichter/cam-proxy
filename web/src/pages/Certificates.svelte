@@ -7,6 +7,7 @@
   import LongValue from '../components/LongValue.svelte';
   import { lockedWhy, rights } from '../lib/rights';
   import LockedNote from '../components/LockedNote.svelte';
+  import { loadMoves, moves } from '../lib/move-state';
 
   // The Certificates page (#203; spec 2026-10-05-multi-camera-host-design
   // §10.4): the site CA with its fingerprint to copy into cams and its
@@ -29,8 +30,14 @@
       .catch(() => (failed = true));
   // With each status refresh, like the Status page's card.
   $effect(() => {
-    if ($status) load();
+    if ($status) {
+      load();
+      void loadMoves();
+    }
   });
+  // While this camera is switching over, a push would overwrite the target's leaf (camera-move plan P8).
+  const SWITCHING_NOTE = 'This camera is being moved to another proxy; pushing now would overwrite the new proxy\'s certificate.';
+  const switching = (id: string) => $moves.some((m) => m.camera === id && m.phase === 'switching');
 
   const camera = (id: string) => $status?.cameras?.find((c) => c.id === id)?.camera;
   const address = (id: string) => {
@@ -100,7 +107,8 @@
         <div class="card cam" data-testid="cert-row-{c.id}">
           <div class="camhead">
             <h4 title={c.id}>{name}</h4>
-            <button onclick={() => void push(c.id)} disabled={busy !== null || c.mode === 'none' || c.mode === 'public' || !!locked} title={locked ?? undefined} data-testid="cert-push-{c.id}">{busy === c.id ? 'Pushing…' : 'Push now'}</button>
+            <button onclick={() => void push(c.id)} disabled={busy !== null || c.mode === 'none' || c.mode === 'public' || !!locked || switching(c.id)} title={locked ?? (switching(c.id) ? SWITCHING_NOTE : undefined)} data-testid="cert-push-{c.id}">{busy === c.id ? 'Pushing…' : 'Push now'}</button>
+            {#if switching(c.id)}<span class="muted small" data-testid="cert-switching-{c.id}">{SWITCHING_NOTE}</span>{/if}
           </div>
           <dl>
             {#if name !== c.id}<dt>Id</dt><dd class="mono">{c.id}</dd>{/if}

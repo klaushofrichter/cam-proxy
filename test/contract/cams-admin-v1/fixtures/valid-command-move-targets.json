@@ -1,0 +1,49 @@
+{
+  "$note": "the proxies the source may move to (source side)",
+  "schema": "command",
+  "$context": {
+    "now": 1791273600010,
+    "proxyId": "prx_0123456789ABCDEFGHJK",
+    "connId": "con_0123456789ABCDEFGHJK",
+    "serverKeys": [
+      "MCowBQYDK2VwAyEAgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q="
+    ],
+    "allow": [
+      "move.send"
+    ],
+    "paused": false,
+    "seen": []
+  },
+  "message": {
+    "v": 1,
+    "type": "command",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "exp": 1791273660003,
+      "actor": "admin@example.org",
+      "command": "move.targets",
+      "args": {
+        "v": 1,
+        "requestId": "rq_0123456789ABCDEFGHJK",
+        "targets": [
+          {
+            "proxyId": "prx_1123456789ABCDEFGHJK",
+            "name": "Pi",
+            "site": "garage"
+          },
+          {
+            "proxyId": "prx_2123456789ABCDEFGHJK",
+            "name": "Mini PC",
+            "site": null
+          }
+        ]
+      }
+    },
+    "sig": "OLiM8o+GVRJooE8nnXXIM93/HlvrbprzWUd4US9YX7fJodl2AIoRFvlwTSma8VR+L5wjyrIdckLnFzugpdbLCw=="
+  }
+}

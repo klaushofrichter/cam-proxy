@@ -1188,6 +1188,11 @@ a sign-in do more on this proxy
 Settings, states, commands, managed tokens, what is and isn't sent, and the
 contract tests: [docs/cams-admin.md](docs/cams-admin.md).
 
+**Camera moves.** With `move.send` on one proxy and `move.receive` on
+another (both with a site CA, on the same LAN), a camera moves from one to
+the other with its settings, password, certificate and content, started and
+approved on the source's Settings page: [docs/camera-move.md](docs/camera-move.md).
+
 ## Operating the cluster
 
 - `GET /health` returns `{ok, version, startedAt}` (no auth): use it to

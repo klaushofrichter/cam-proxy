@@ -9,6 +9,7 @@ info:
 components:
   securitySchemes:
     bearer: { type: http, scheme: bearer }
+    moveToken: { type: http, scheme: bearer, description: 'the per-move token (camera moves): only /api/moves/{id}/...' }
 security:
   - bearer: []
 paths:
@@ -45,6 +46,108 @@ paths:
         '200': { description: '{ schema: 1, generatedAt, version, startedAt, ok, problemCount, thresholds: {diskPercent, tempC, ftpStalledHours}, platform: {pi, model, hostStats}, items: [{id (camera, stream, events, ftp, sd, storage, disk, cpuTemp, underVoltage, inventory, version), label, value, text, problem, warning (true only: needs a look, no problem; not in problemCount)}], camera: {id, name (the camera-reported name since the camera-name change; the configured camera.name until the camera was read), address, online, since, model, firmware, clockOffsetMs, error, reboot, poeSwitch: {model, port} or null, sd: {mounted, formatted, capacityMB, freeMB, overwrite, recordingEnabled, checkedAt, lastRecordingAt, stalled} or null (the SD card, #199; null before the first read)}, stream: {enabled, up, lastFrameAt}, events: {onvif, source, since, resubscribes}, ftp: {enabled, listening, cameraUpload, checkedAt, lastClipAt, clipsStored, failures, stalled, eventsWithoutClip}, proxy: {sseClients, storagePaused, lastRetentionRun, recordingsCache: {bytes, files, capBytes}, lastInventory: {kind, op, outcome, startedAt, message} or null}, disk: {sizeBytes, freeBytes, usedBytes, usedPercent} or null, host: {cpuTempC, underVoltage, memory: {totalBytes, availableBytes, usedPercent}, uptimeS, load: {m1, m5, m15}} or null }' }
         '401': { description: not a loopback caller and no token (as an unknown route) }
         '404': { description: not a loopback caller, with a token (as an unknown route) }
+  /api/moves/{id}/probe:
+    get:
+      summary: N random bytes for the target's rate probe (camera move, source side)
+      description: >
+        The source's move endpoints (camera-move spec S §8.1) sit ahead of the client
+        auth: only `Authorization: Bearer <move token>` opens them, from the target's
+        address as cams-admin gave it, while the move has not ended. No other token
+        does (the admin token neither). Cache-Control: no-store on every answer.
+      security: [{ moveToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' } }
+        - { name: bytes, in: query, required: true, schema: { type: integer, minimum: 1, maximum: 67108864 } }
+      responses:
+        '200': { description: application/octet-stream, exactly `bytes` random bytes }
+        '400': { description: "{ error: invalid, detail: bytes }" }
+        '403': { description: "{ error: move_token } (no or wrong move token, not from the target's address, the move ended or is unknown; audited as move-token-refused, at most once per move and reason per 10 minutes). A valid token from another address before move.go is only refused; from move.go on it also fails the move (token_address). Not under the app-wide 1200/min per-address limit" }
+        '429': { description: "{ error: rate_limited } (refused requests, per address and minute; requests that pass the guard are not counted)" }
+        '503': { description: "{ error: busy } (the move journal can't be read)" }
+  /api/moves/{id}/manifest:
+    get:
+      summary: "The move's chunks: { chunks: [{ id, kind, day, files, bytes, rows }], refreshed }, newest day first"
+      description: >
+        Frozen at move.go. Once the move is released, the chunks from the approval day
+        on are listed once more (what the source captured during the overlap); their
+        cached file manifests are dropped, and `refreshed` is true from then on (the
+        target's copier fetches those chunks again).
+      security: [{ moveToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' } }
+      responses:
+        '200': { description: "{ chunks: ChunkMeta[], refreshed: boolean }" }
+        '409': { description: "{ error: not_ready } (not frozen yet)" }
+        '403': { description: "{ error: move_token } (as for /probe)" }
+        '429': { description: "{ error: rate_limited } (as for /probe)" }
+  /api/moves/{id}/chunks/{chunkId}:
+    get:
+      summary: "A chunk's file manifest: { files: [{ path, size, sha256 }], rows, expired }"
+      description: >
+        Hashed on the first request and cached in a private file per chunk next to the move journal (plan P5). `expired`
+        counts files retention removed between listing and hashing; any other read
+        error is a 500 and nothing is cached.
+      security: [{ moveToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' } }
+        - { name: chunkId, in: path, required: true, schema: { type: string, pattern: '^(stills|clips|events|checks|archive):[0-9]{4}-[0-9]{2}-[0-9]{2}$' } }
+      responses:
+        '200': { description: the manifest (paths relative to the data folder) }
+        '400': { description: "{ error: invalid, detail: chunkId }" }
+        '404': { description: "{ error: unknown_chunk } (not in the manifest)" }
+        '409': { description: "{ error: not_ready } (no manifest yet)" }
+        '500': { description: "{ error: internal } (a file could not be read; ask again)" }
+        '403': { description: "{ error: move_token } (as for /probe)" }
+        '429': { description: "{ error: rate_limited } (as for /probe)" }
+        '503': { description: "{ error: busy } (storage paused or the load above the core count: the target halves its rate; or the move journal can't be read)" }
+  /api/moves/{id}/chunks/{chunkId}/rows:
+    get:
+      summary: "A chunk's catalog rows: [{ table, rows }] (events before analyses; paths relative to the data folder; source ids kept)"
+      security: [{ moveToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' } }
+        - { name: chunkId, in: path, required: true, schema: { type: string, pattern: '^(stills|clips|events|checks|archive):[0-9]{4}-[0-9]{2}-[0-9]{2}$' } }
+      responses:
+        '200': { description: "TableRows[]" }
+        '400': { description: "{ error: invalid, detail: chunkId }" }
+        '404': { description: "{ error: unknown_chunk }" }
+        '409': { description: "{ error: not_ready }" }
+        '403': { description: "{ error: move_token } (as for /probe)" }
+        '429': { description: "{ error: rate_limited } (as for /probe)" }
+        '503': { description: "{ error: busy } (storage paused or the load above the core count: the target halves its rate; or the move journal can't be read)" }
+  /api/moves/{id}/file:
+    get:
+      summary: A file of the moving camera (application/octet-stream), with Range requests
+      description: >
+        Only a path listed in a chunk manifest the target already asked for, inside the
+        camera's content folders (<folder>/<camera>/...), no links on the way.
+      security: [{ moveToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' } }
+        - { name: path, in: query, required: true, schema: { type: string, maxLength: 1024 } }
+      responses:
+        '200': { description: the file }
+        '206': { description: a range }
+        '400': { description: "{ error: invalid, detail: path } (not a path inside the camera's content folders)" }
+        '404': { description: "{ error: expired } (removed by retention: skip it), or { error: not_listed }" }
+        '416': { description: the range is past the end }
+        '403': { description: "{ error: move_token } (as for /probe)" }
+        '429': { description: "{ error: rate_limited } (as for /probe)" }
+        '503': { description: "{ error: busy } (storage paused or the load above the core count: the target halves its rate; or the move journal can't be read)" }
+  /api/moves/{id}/secrets:
+    get:
+      summary: "The camera's proxy-user password sealed to the target's move key: { sealed }"
+      description: >
+        `v1.<ephemeralSpki>.<iv>.<ciphertext+tag>` (X25519, HKDF-SHA256 `cam-proxy move v1`,
+        AES-256-GCM; src/moves/seal.ts). Never in clear, never logged or audited.
+      security: [{ moveToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' } }
+      responses:
+        '200': { description: "{ sealed: string }" }
+        '409': { description: "{ error: not_ready } (move.go has not stored the target's key yet)" }
+        '403': { description: "{ error: move_token } (as for /probe)" }
+        '429': { description: "{ error: rate_limited } (as for /probe)" }
   /api/cameras:
     get:
       summary: The camera and its state
@@ -860,6 +963,89 @@ paths:
         '200': { description: the view (as GET /control/admin/tokens) }
         '400': { description: '{ error: invalid }: not a token id' }
         '403': { description: '{ error: local_admin_only }' }
+  /control/moves:
+    get:
+      summary: "The camera moves of this proxy (source side; camera-move plan Task 7): { items: [{ id?, requestId, camera, target: { proxyId, name }, phase, answer?, settings, summary, plan, progress?, budgetExceeded, failure? }] }"
+      description: >
+        The requests not opened yet (phase requested, offered or rejected; kept 30 minutes in memory)
+        and the source moves of the journal. phase: requested, offered (opened, no answer), rejected,
+        awaiting-approval (the target accepted), approved, then the journal's (switching, released, ...).
+        answer: { accept, reason?, space?, estimateS? } as the target gave it. Never a password, token or key.
+      responses:
+        '200': { description: the list }
+    post:
+      summary: Start a camera move to another proxy ({camera, target}); emits move.request (the camera's connection fields and settings from the config, the per-kind summary; never a password); audited (move-request)
+      description: >
+        Admin; a cams-admin sign-in only with the move.send entry (a managed token never). Refused
+        before any event (camera-move plan P10): no_site_ca (tls.site not set, the Pi; also for an
+        unknown camera there), external_cert (the camera has tlsName), moves_not_allowed (no move.send
+        or commands paused), busy (another move is open here, or the journal is unreadable).
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [camera, target], properties: { camera: { type: string, pattern: '^[a-z0-9][a-z0-9-]{0,31}$' }, target: { type: string, pattern: '^prx_[0-9A-HJKMNP-TV-Z]{20}$' } } }
+      responses:
+        '202': { description: '{ requestId }' }
+        '400': { description: '{ error: invalid, detail: camera | target }' }
+        '403': { description: '{ error: local_admin_only } (a cams-admin sign-in without move.send, or a managed token)' }
+        '404': { description: '{ error: unknown_camera }' }
+        '409': { description: '{ error: move_refused, reason: no_site_ca | external_cert | moves_not_allowed | busy }' }
+  /control/moves/targets:
+    post:
+      summary: Ask cams-admin for the proxies this camera may move to ({camera}); emits move.targets; the list arrives with the move.targets command
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [camera], properties: { camera: { type: string, pattern: '^[a-z0-9][a-z0-9-]{0,31}$' } } }
+      responses:
+        '202': { description: '{ requestId }' }
+        '400': { description: '{ error: invalid, detail: camera }' }
+        '403': { description: '{ error: local_admin_only }' }
+        '404': { description: '{ error: unknown_camera }' }
+        '409': { description: '{ error: move_refused, reason } (as POST /control/moves)' }
+  /control/moves/targets/{requestId}:
+    get:
+      summary: "The target list of a POST /control/moves/targets: { targets: [{ proxyId, name, site }] | null } (null until cams-admin sent it)"
+      parameters:
+        - { name: requestId, in: path, required: true, schema: { type: string, pattern: '^rq_[0-9A-HJKMNP-TV-Z]{20}$' } }
+      responses:
+        '200': { description: the list, or null }
+        '404': { description: '{ error: unknown_request } (never asked here, or older than 30 minutes)' }
+  /control/moves/{id}/approve:
+    post:
+      summary: Approve the move's plan ({plan} as the panel shows it, S §7); emits move.approve; audited (move-approve)
+      description: >
+        Checked against the target's answer: estimateS is the answer's and budgetS at least that;
+        kinds only those with content; space all when it fits, else omit (the kinds left must fit),
+        fit, or retention (targetSettings: keys of the answer's retentionProposal, among them
+        storage.maxBytes in bytes, each at least the proposed value); targetSettings null otherwise.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^mv_[0-9A-HJKMNP-TV-Z]{20}$' } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [plan], properties: { plan: { type: object, required: [transfer, kinds, space, targetSettings, budgetS, estimateS] } } }
+      responses:
+        '202': { description: '{} (the same plan again: the event is sent again)' }
+        '400': { description: '{ error: invalid, detail: plan | plan.kinds | plan.space | plan.targetSettings | plan.budgetS | plan.estimateS | answer }' }
+        '403': { description: '{ error: local_admin_only }' }
+        '404': { description: '{ error: unknown_move }' }
+        '409': { description: '{ error: wrong_phase | not_ready (no accepting answer yet) | already_approved }; { error: move_refused, reason: no_site_ca | moves_not_allowed }' }
+  /control/moves/{id}/cancel:
+    post:
+      summary: Ask cams-admin to cancel the move ({copied: delete | age-out}, what happens to content already copied); emits move.cancel
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^mv_[0-9A-HJKMNP-TV-Z]{20}$' } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [copied], properties: { copied: { type: string, enum: [delete, age-out] } } }
+      responses:
+        '202': { description: '{}' }
+        '400': { description: '{ error: invalid, detail: copied }' }
+        '403': { description: '{ error: local_admin_only }' }
+        '404': { description: '{ error: unknown_move }' }
+        '409': { description: '{ error: wrong_phase } (the move ended)' }
   /control/config:
     get:
       summary: Every setting with value, source, restart flag and pending next value
@@ -875,7 +1061,7 @@ paths:
         '200': { description: the new view (as GET) }
         '400': { description: '{ error: invalid, detail: "<path>: <why>" } (also "<path>: set in .env (<VARIABLE>)" for a setting the environment sets); { error: not_a_setting, detail } for camsAdmin.allowCommands or camsAdmin.commandsPaused (config.json or /control/admin/commands only)' }
     delete:
-      summary: Removes every override at once (the Settings page's "Reset to defaults"), back to the file or default values; one config-change audit record (reset all)
+      summary: Removes every override at once (the Settings page's "Reset to defaults"), back to the file or default values; one config-change audit record (reset all). A camera's moved (camera moves) always stays
       responses:
         '200': { description: the new view (as GET) }
         '400': { description: '{ error: invalid, detail } when the file and default values alone are not a valid configuration' }
@@ -887,6 +1073,7 @@ paths:
       responses:
         '200': { description: the new view }
         '400': { description: 'unknown setting; cameras.<id> of a config.json camera: "defined in config.json; remove it there"' }
+        '409': { description: '{ error: move_open, detail } (cameras.<id>.moved of a camera move still open here, or of one that moved the camera away: only the move clears it)' }
   /control/actions/{name}:
     post:
       summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart (the camera side), camera-reboot, camera-powercycle, camera-poe-on, poe-switch-read, restart-proxy (the process), inventory ({kind, camera?}), inventory-repair ({kind, runId}), inventory-cancel, find-camera, camera-address ({host}), archive-clear ({count}), camera-cert-push, camera-ntp-set, camera-trust-clear, tls-ca-rotate ({confirm: rotate}), tls-ca-drop-previous

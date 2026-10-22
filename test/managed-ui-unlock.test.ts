@@ -78,10 +78,23 @@ describe('a managed-admin UI session and the ui.* entries', () => {
 
   it('GET /control/session tells the page its rights: everything for the local admin, nothing extra for a cams-admin sign-in', async () => {
     const local = await session(ADMIN_TOKEN);
-    expect((await request(p.base).get('/control/session').set('Cookie', local)).body).toEqual({ loggedIn: true, origin: 'local', rights: { localAdmin: true, config: true, restart: true } });
+    expect((await request(p.base).get('/control/session').set('Cookie', local)).body).toEqual({ loggedIn: true, origin: 'local', rights: { localAdmin: true, config: true, restart: true, move: false } });
     const m = await session(MANAGED_ADMIN);
-    expect((await request(p.base).get('/control/session').set('Cookie', m)).body).toEqual({ loggedIn: true, origin: 'managed', rights: { localAdmin: false, config: false, restart: false } });
+    expect((await request(p.base).get('/control/session').set('Cookie', m)).body).toEqual({ loggedIn: true, origin: 'managed', rights: { localAdmin: false, config: false, restart: false, move: false } });
     expect((await request(p.base).get('/control/session')).body).toEqual({ loggedIn: false });
+  });
+
+  it('GET /control/session names the move right only with the move.send entry', async () => {
+    const l = await session(ADMIN_TOKEN);
+    expect((await request(p.base).get('/control/session').set('Cookie', l)).body.rights.move).toBe(false);
+    expect((await allow(['move.send'])).status).toBe(200);
+    expect((await request(p.base).get('/control/session').set('Cookie', l)).body.rights.move).toBe(true);
+    expect((await allow([])).status).toBe(200);
+    const m = await session(MANAGED_ADMIN);
+    expect((await allow(['move.send'])).status).toBe(200);
+    expect((await request(p.base).get('/control/session').set('Cookie', m)).body.rights.move).toBe(true);
+    expect((await allow([])).status).toBe(200);
+    expect((await request(p.base).get('/control/session').set('Cookie', m)).body.rights.move).toBe(false);
   });
 
   it('off by default: settings and restarts answer 403 local_admin_only, recorded as auth-refused', async () => {
@@ -105,7 +118,7 @@ describe('a managed-admin UI session and the ui.* entries', () => {
   it('ui.config unlocks the Settings writes for a cams-admin sign-in; the audit names who and why', async () => {
     await allow(['ui.config']).expect(200);
     const m = await session(MANAGED_ADMIN);
-    expect((await request(p.base).get('/control/session').set('Cookie', m)).body.rights).toEqual({ localAdmin: false, config: true, restart: false, localSettings: [...UI_CONFIG_LOCAL], narrowSettings: narrowRules() });
+    expect((await request(p.base).get('/control/session').set('Cookie', m)).body.rights).toEqual({ localAdmin: false, config: true, restart: false, move: false, localSettings: [...UI_CONFIG_LOCAL], narrowSettings: narrowRules() });
     const r = await request(p.base).put('/control/config').set(ui(m)).send({ sse: { pingS: 11 } });
     expect(r.status).toBe(200);
     expect(p.proxy.audit.list({ actions: ['config-change'] }).records[0]).toMatchObject({ user: { name: 'token:cams cluster' }, cam_proxy: { allowedBy: 'ui.config' } });

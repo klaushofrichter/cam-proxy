@@ -1,8 +1,8 @@
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, writeFileSync, writeSync } from 'fs';
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from 'fs';
 import { join } from 'path';
 import type { AuditLog } from '../audit/audit-log';
 import { logger } from '../log';
-import { writeSecret, type SiteCa } from './ca';
+import { fingerprintOf, writeSecret, type SiteCa } from './ca';
 import { X509Certificate } from 'crypto';
 import { issuedBy, issueLeaf, leafOf, renewalDue, type Leaf } from './leaf';
 import type { PushOutcome, PushResult } from './push';
@@ -71,8 +71,27 @@ interface Extra {
   factory: string | null; // the certificate seen after a CertificateClear: expected after the next one
   // No automatic push until an admin pushes to (or clears) this camera: 'unreadable' (state.json was), 'cleared' (camera-trust-clear).
   blocked: 'unreadable' | 'cleared' | null;
+  // A camera move (camera-move plan P8): the one leaf (its fingerprint) the camera
+  // may serve besides ours without being unexpected: the target's on the source
+  // (set by move.go, and again by a cancel until the source's own leaf is back);
+  // cleared at the end. The target never has one (B36: it lets go of the camera first).
+  expected: string | null;
+  // That leaf as the camera served it (only a PEM that hashes to `expected`), and
+  // whether the camera served it when last read: then its client pins exactly it.
+  expectedPem: string | null;
+  expectedServing: boolean;
 }
-interface Stored extends CertState { everSiteCa?: boolean; pin?: Served | null; onPrevious?: boolean; factory?: string | null; blocked?: string | null }
+interface Stored extends CertState { everSiteCa?: boolean; pin?: Served | null; onPrevious?: boolean; factory?: string | null; blocked?: string | null; expected?: string | null; expectedPem?: string | null; expectedServing?: boolean }
+const FINGERPRINT = /^SHA256:[0-9A-F]{64}$/;
+// The PEM when it is exactly the certificate of this fingerprint, else null.
+const pemOf = (fingerprint: string, pem: unknown): string | null => {
+  if (typeof pem !== 'string') return null;
+  try {
+    return fingerprintOf(pem) === fingerprint ? pem : null;
+  } catch {
+    return null;
+  }
+};
 const BLOCKED = { unreadable: (id: string) => `${id}: no automatic push since the certificate state was unreadable: check the camera, then Push now`, cleared: (id: string) => `${id}: its trust was cleared: Push now to push its first certificate` };
 
 // Each camera's certificate from the site CA (spec 2026-10-05-multi-camera-host-design
@@ -99,6 +118,10 @@ export class CameraCerts {
   private readonly states = new Map<string, CertState>();
   private readonly extras = new Map<string, Extra>();
   private readonly leaves = new Map<string, Leaf>();
+  // A camera move's leaf for a camera taking over (camera-move plan Task 8):
+  // issued at move.start, pushed instead of a fresh one (in memory; the move
+  // journal keeps it and stages it again after a restart).
+  private readonly staged = new Map<string, Leaf>();
   private previousCa: string | null = null;
   private previousSince = 0;
   private corrupt = false;
@@ -136,7 +159,7 @@ export class CameraCerts {
   }
   private extra(id: string): Extra {
     let e = this.extras.get(id);
-    if (!e) this.extras.set(id, (e = { everSiteCa: this.hadLeaf(id), pin: null, pendingRenewal: false, onPrevious: false, factory: null, blocked: this.corrupt ? 'unreadable' : null }));
+    if (!e) this.extras.set(id, (e = { everSiteCa: this.hadLeaf(id), pin: null, pendingRenewal: false, onPrevious: false, factory: null, blocked: this.corrupt ? 'unreadable' : null, expected: null, expectedPem: null, expectedServing: false }));
     return e;
   }
 
@@ -161,6 +184,57 @@ export class CameraCerts {
   }
   factory(id: string): string | null {
     return this.extras.get(id)?.factory ?? null;
+  }
+
+  // A camera move's expected leaf (P8; src/moves): a fingerprint, or null to
+  // clear it. Audited; the camera's client follows (onTrust).
+  setExpected(id: string, fingerprint: string | null, who?: Requester): void {
+    if (fingerprint !== null && !FINGERPRINT.test(fingerprint)) throw new Error('expected leaf: not a SHA256 fingerprint');
+    const e = this.extra(id);
+    if (e.expected === fingerprint) return;
+    const was = e.expectedServing;
+    Object.assign(e, { expected: fingerprint, expectedPem: null, expectedServing: false });
+    if (!this.states.has(id)) this.states.set(id, this.blank());
+    this.save();
+    this.audit(id, 'success', fingerprint ? `Camera trust ${id}: expects the leaf ${fingerprint} (camera move)` : `Camera trust ${id}: no expected leaf any more (camera move)`, who, { expected: fingerprint });
+    if (was) this.d.onTrust?.(id);
+  }
+  expected(id: string): string | null {
+    return this.extras.get(id)?.expected ?? null;
+  }
+  // The expected leaf while the camera serves it: its client pins exactly that
+  // certificate (src/proxy.ts tlsFor); null otherwise (the normal trust).
+  expectedTrust(id: string): Served | null {
+    const e = this.extras.get(id);
+    return e?.expected && e.expectedPem && e.expectedServing ? { fingerprint: e.expected, pem: e.expectedPem } : null;
+  }
+  // What a camera with an expected leaf serves now (true: it is that leaf). An
+  // unreachable camera keeps what was seen last. Saves and tells the client on a change.
+  private noteExpected(id: string, served: Served): boolean {
+    const e = this.extra(id);
+    if (!e.expected) return false;
+    const pem = served.fingerprint === e.expected ? pemOf(e.expected, served.pem) : null;
+    const serving = pem !== null;
+    const changed = serving !== e.expectedServing || (serving && e.expectedPem !== pem);
+    if (serving) e.expectedPem = pem;
+    e.expectedServing = serving;
+    if (changed) {
+      this.save();
+      this.d.onTrust?.(id);
+    }
+    return serving;
+  }
+  // Every camera with an expected leaf, read now (a move's switch-over, src/proxy.ts runs it every few seconds while one is set).
+  async checkExpected(): Promise<void> {
+    for (const cam of this.d.cameras()) {
+      if (!this.extras.get(cam.id)?.expected) continue;
+      const served = await this.d.served(cam.id);
+      if (served) this.noteExpected(cam.id, served);
+    }
+  }
+  // Whether any camera has an expected leaf (the proxy's watch runs only then).
+  expecting(): boolean {
+    return [...this.extras.values()].some((e) => e.expected !== null);
   }
   // Host-level problems for the health item: an unreadable state, cameras on the previous CA.
   problems(): string[] {
@@ -216,14 +290,17 @@ export class CameraCerts {
       }
       this.states.set(id, st);
       const blocked = ok?.blocked === 'unreadable' || ok?.blocked === 'cleared' ? ok.blocked : this.corrupt ? 'unreadable' : null;
-      this.extras.set(id, { everSiteCa: ok?.everSiteCa === true || this.hadLeaf(id), pin, pendingRenewal: false, onPrevious, factory: typeof ok?.factory === 'string' ? ok.factory : null, blocked });
+      // The expected leaf: a fingerprint only; its PEM only when it hashes to it.
+      const expected = typeof ok?.expected === 'string' && FINGERPRINT.test(ok.expected) ? ok.expected : null;
+      const expectedPem = expected ? pemOf(expected, ok?.expectedPem) : null;
+      this.extras.set(id, { everSiteCa: ok?.everSiteCa === true || this.hadLeaf(id), pin, pendingRenewal: false, onPrevious, factory: typeof ok?.factory === 'string' ? ok.factory : null, blocked, expected, expectedPem, expectedServing: !!expectedPem && ok?.expectedServing === true });
     }
   }
   private save(): void {
     const cameras = Object.fromEntries(
       [...this.states].map(([id, s]) => {
         const e = this.extras.get(id);
-        return [id, { ...s, everSiteCa: e?.everSiteCa ?? false, pin: e?.pin ?? null, onPrevious: e?.onPrevious ?? false, factory: e?.factory ?? null, blocked: e?.blocked ?? null }];
+        return [id, { ...s, everSiteCa: e?.everSiteCa ?? false, pin: e?.pin ?? null, onPrevious: e?.onPrevious ?? false, factory: e?.factory ?? null, blocked: e?.blocked ?? null, expected: e?.expected ?? null, expectedPem: e?.expectedPem ?? null, expectedServing: e?.expectedServing ?? false }];
       }),
     );
     const file = join(this.camDir(), 'state.json');
@@ -317,6 +394,33 @@ export class CameraCerts {
     return this.state(id);
   }
 
+  // A camera gone from this proxy by a move (the source's finish, the
+  // target's cancel): its leaf files (also those moved aside) and its state
+  // entry are deleted, audited once. Nothing to forget: nothing happens.
+  forget(id: string, who?: Requester): void {
+    if (!/^[a-z0-9-]+$/.test(id)) throw new Error('forget: not a camera id');
+    const dir = join(this.d.dir, 'cameras');
+    let files = 0;
+    if (existsSync(dir)) {
+      for (const f of readdirSync(dir)) {
+        if (!f.startsWith(`${id}.crt`) && !f.startsWith(`${id}.key`)) continue;
+        rmSync(join(dir, f), { force: true });
+        files++;
+      }
+    }
+    const known = this.states.has(id) || this.extras.has(id);
+    const prev = this.state(id);
+    this.states.delete(id);
+    this.extras.delete(id);
+    this.leaves.delete(id);
+    this.staged.delete(id);
+    if (!files && !known) return;
+    this.settleCorrupt();
+    this.save();
+    this.audit(id, 'success', `Camera trust ${id}: forgotten, the camera moved away (${prev.mode} → none)`, who, { from: prev.mode, fingerprint: prev.fingerprint, files });
+    this.d.onTrust?.(id);
+  }
+
   private load(id: string): Leaf | null {
     const crt = join(this.d.dir, 'cameras', `${id}.crt`);
     const key = join(this.d.dir, 'cameras', `${id}.key`);
@@ -395,6 +499,19 @@ export class CameraCerts {
     if (this.previousCa && ![...this.extras.values()].some((e) => e.onPrevious)) this.dropPrevious('Previous site CA no longer trusted (every camera serves a leaf of the new one)');
   }
 
+  // The leaf the next push to this camera takes (a camera move's), or none.
+  stageLeaf(id: string, leaf: Leaf | null): void {
+    if (leaf) this.staged.set(id, leaf);
+    else this.staged.delete(id);
+  }
+
+  // A camera move's cert step: that leaf, pushed like "Push now" (the camera
+  // already serving it answers `current`).
+  pushLeaf(id: string, leaf: Leaf, who: Requester): Promise<PushResult> {
+    this.stageLeaf(id, leaf);
+    return this.pushNow(id, who);
+  }
+
   // The "Push now" action: no window, no back-off, still never during an open event.
   pushNow(id: string, who?: Requester): Promise<PushResult> {
     return this.exclusive(async () => {
@@ -444,6 +561,13 @@ export class CameraCerts {
     if (stored && (!stored.ips.includes(cam.address) || !stored.names.includes(name) || !issuedBy(stored, ca))) stored = null;
     const served = await this.d.served(cam.id);
     if (!served) return skip('the camera does not answer on HTTPS'); // unreachable: nothing to push to
+    // A camera move's expected leaf (P8): not unexpected, never pushed over
+    // automatically (the move owns the camera's certificate now); "Push now" still pushes.
+    if (this.noteExpected(cam.id, served) && !manual) {
+      if (this.states.get(cam.id)?.problem) this.set(cam.id, { problem: null });
+      this.save();
+      return null;
+    }
     const s = this.states.get(cam.id);
     const last = s?.lastPush;
     let renewal = false;
@@ -489,7 +613,12 @@ export class CameraCerts {
       if (renewal && inWindow) e.pendingRenewal = true; // never during an event: when it ends (Review Focus 1)
       return skip('an event is open: try again when it has ended', served.fingerprint);
     }
-    const r = await this.d.push(cam.id, () => issueLeaf(ca, { cn: name, dns: [name], ips: [cam.address] }), e.factory ? { factory: e.factory } : {});
+    // A staged leaf (a camera move's) when it is still right for the camera; else a fresh one.
+    const staged = this.staged.get(cam.id);
+    const usable = staged && staged.names.includes(name) && staged.ips.includes(cam.address) && issuedBy(staged, ca) && !renewalDue(staged, now) ? staged : null;
+    const issue = usable ? () => Promise.resolve(usable) : () => issueLeaf(ca, { cn: name, dns: [name], ips: [cam.address] });
+    const r = await this.d.push(cam.id, issue, e.factory ? { factory: e.factory } : {});
+    if (usable && r.leaf?.fingerprint === usable.fingerprint && (r.outcome === 'pushed' || r.outcome === 'current')) this.staged.delete(cam.id);
     e.pendingRenewal = false;
     if (r.clearedTo && !e.factory) e.factory = r.clearedTo;
     const lastPush = { at: now, outcome: r.outcome };

@@ -10,7 +10,7 @@ import { PoeSwitchError, type PoeOnResult, type PoeSwitchStatus, type PortReadin
 import type { Config } from '../config/defaults';
 import { configChanges } from '../config/changes';
 import { configView, type ChangeMarks } from '../config/view';
-import { applyOverrides, ConfigError, removeAllOverrides, removeOverride, type Loaded } from '../config/load';
+import { applyOverrides, ConfigError, removeAllOverrides, removeOverride, withoutOverride, type Loaded } from '../config/load';
 import { cameraConfig, cameraIds } from '../config/cameras';
 import { FtpNotConfiguredError, type FtpTarget } from '../clips/camera-ftp';
 import type { CameraFtpView, ClipsStall } from '../clips/ftp-health';
@@ -75,12 +75,17 @@ export interface CameraStatusBlock {
 
 export interface ControlDeps {
   loaded: () => Loaded;
+  // Camera moves (final review 1): whether the move that hid a camera
+  // (`cameras.<id>.moved`) still has a journal record here, or moved the
+  // camera away for good; clearing `moved` is then refused (only the move
+  // clears it). An unreadable journal counts as open.
+  moveOpen?: (moveId: string) => boolean;
   setLoaded: (l: Loaded) => void; // applies live settings
   running: () => Config; // what the components run with
   catalog: Catalog;
   log: StreamLog;
   // `name`: the camera's name (configured camera.name until first read, nameSource 'config').
-  camera: () => CameraState & { name: string; nameSource: 'camera' | 'config'; webUiUrl: string | null; reboot: RebootState | null; poeSwitch: PoeSwitchStatus };
+  camera: () => CameraState & { name: string; nameSource: 'camera' | 'config'; webUiUrl: string | null; reboot: RebootState | null; poeSwitch: PoeSwitchStatus | null };
   // The camera's name (camera-name design): `write` validates, writes, reads back.
   // Camera functions take the camera they act on (spec 2026-10-05-multi-camera-host-design §6.3).
   cameraName: { current: (cam: string) => string; write: (cam: string, name: string) => Promise<string> };
@@ -232,7 +237,7 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
     const config = local || unlocked.includes('ui.config');
     // `localSettings`: what ui.config never sets (patterns, cameras.* for every camera).
     // `narrowSettings`: the settings ui.config changes only one way (retention up, spending caps down).
-    res.json({ loggedIn: true, origin: s.origin, rights: { localAdmin: local, config, restart: local || unlocked.includes('ui.restart'), ...(config && !local ? { localSettings: UI_CONFIG_LOCAL, narrowSettings: narrowRules() } : {}) } });
+    res.json({ loggedIn: true, origin: s.origin, rights: { localAdmin: local, config, restart: local || unlocked.includes('ui.restart'), move: (d.managedUnlocked?.() ?? []).includes('move.send'), ...(config && !local ? { localSettings: UI_CONFIG_LOCAL, narrowSettings: narrowRules() } : {}) } });
   });
   r.post('/logout', (req, res) => {
     const valid = sessionOf(req);
@@ -455,6 +460,15 @@ export function controlApi(d: ControlDeps): express.Router {
   r.delete('/config/:path', (req, res) => {
     const before = d.loaded();
     try {
+      // A camera's `moved` of a move not over (final review 1): never cleared by hand.
+      if (d.moveOpen && !/^cameras\.[^.]+$/.test(req.params.path)) {
+        const after = withoutOverride(before, req.params.path);
+        for (const [id, node] of Object.entries(before.config.cameras)) {
+          if (node.moved && after.config.cameras[id]?.moved !== node.moved && d.moveOpen(node.moved)) {
+            return void res.status(409).json({ error: 'move_open', detail: `cameras.${id}.moved: camera move ${node.moved} is not over here; cancel or finish it from cams-admin` });
+          }
+        }
+      }
       d.setLoaded(removeOverride(d.loaded(), req.params.path));
     } catch (err) {
       return invalid(res, err);

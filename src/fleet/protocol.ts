@@ -70,6 +70,14 @@ export function ulid(now: number): string {
   return time + rand;
 }
 
+// An id like the contract's others: a prefix and 20 Crockford characters (rq_…, mv_…).
+export function newId(prefix: string): string {
+  const r = randomBytes(20);
+  let out = '';
+  for (let i = 0; i < 20; i++) out += CROCKFORD[r[i] & 31];
+  return prefix + out;
+}
+
 // The enrollment request (§8.2): the proof shows the sender holds the key.
 export function enrollRequest(o: { code: string; privateKey: string; publicKey: string; version: string; cameraIds: string[] }): { v: 1; code: string; publicKey: string; proof: string; proxy: { version: string; cameraIds: string[] } } {
   const code = normaliseCode(o.code);

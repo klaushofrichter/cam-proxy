@@ -101,6 +101,7 @@ export const CAMERA_NODE: Node = {
       enabled: unset({ type: 'boolean', doc: 'poll GetMdState/GetAiState while ONVIF is down' }, hostValue('events.poll.enabled')),
     },
   },
+  moved: unset({ type: 'string', pattern: '^mv_[0-9A-HJKMNP-TV-Z]{20}$', optional: true, doc: 'set while this camera is being or has been moved to another proxy (the id of the move): the camera is hidden, its worker stopped, its FTP user refused; its settings and files stay. Local only' }, 'the camera is active'),
 };
 export const HOST_POE_SWITCH: Node = {
   model: unset({ type: 'string', enum: ['none', 'sscpoe-web'], doc: "the cameras' PoE switch: none, or sscpoe-web (the STEAMEMO/SSCPOE local web protocol: GPS-208 and kin)" }, 'no PoE switch: power-cycle off', 'none'),
@@ -124,6 +125,9 @@ export const SETTINGS: Node = {
   // The PoE switch the cameras hang on (issue #85; one per host, spec §4.1).
   // Applies at once; the password is CAMPROXY_POE_SWITCH_PASSWORD.
   poeSwitch: HOST_POE_SWITCH,
+  moves: {
+    maxCameras: unset(int(1, 64, 'most cameras this proxy may hold: a camera move onto it is refused (camera_limit) beyond that. Local only', true), 'no limit'),
+  },
   go2rtc: {
     binary: unset({ type: 'string', pattern: '^.+$', optional: true, doc: 'go2rtc binary started by the proxy' }, 'no go2rtc started (go2rtc.url instead)'),
     url: unset({ type: 'string', pattern: '^https?://[^\\s]+$', optional: true, doc: 'go2rtc API when it runs as its own container' }, 'the proxy starts go2rtc itself (go2rtc.url is reserved, no effect yet)'),

@@ -7,6 +7,8 @@ import { enrollWithCode, EnrollError } from './enroll';
 import type { HeartbeatProxyInfo } from './heartbeat';
 import { deleteKeyFile, KeyFileInvalid, KeyFileUnsafe, readKeyFile, type AdminKeyFile } from './keyfile';
 import { fingerprint, trimSlashes } from './protocol';
+import { EventOutbox } from './outbox';
+import type { MoveEvent } from '../moves/types';
 
 // cams-admin for the proxy (spec 2026-10-06-cams-admin-phase1-design §9):
 // follows camsAdmin.* and the key file, holds at most one client, and gives
@@ -68,8 +70,26 @@ export class CamsAdmin {
   private warned: string | null = null;
   private enrolling = false;
   private recheck: NodeJS.Timeout | null = null;
+  // Move events that wait for a connection (the newest 256), and what runs after each welcome.
+  private readonly outbox: EventOutbox;
+  private readonly welcomeHooks: (() => void)[] = [];
 
-  constructor(private readonly d: CamsAdminDeps) {}
+  constructor(private readonly d: CamsAdminDeps) {
+    this.outbox = new EventOutbox(d.log);
+  }
+
+  // A signed event of a camera move (contract "Camera moves"): sent now when
+  // connected, else after the next welcome, in order.
+  emitEvent(body: MoveEvent): void {
+    this.outbox.push(body);
+    this.client?.flushEvents();
+  }
+
+  // After every welcome, once the buffered events went out: the hook re-emits
+  // the current phase event of each open move (cams-admin may have missed one).
+  onWelcome(hook: () => void): void {
+    this.welcomeHooks.push(hook);
+  }
 
   keyPath(): string {
     return join(this.d.dataDir(), this.d.settings().keyFile);
@@ -215,7 +235,7 @@ export class CamsAdmin {
     if (this.client && this.running === want) return;
     await this.stopClient(this.client ? 'restart' : 'shutdown');
     if (this.stopped) return;
-    this.client = new AdminClient({ keyFile: key, health: this.d.health, proxyInfo: this.d.proxyInfo, version: this.d.version, log: this.d.log, changeKey: this.d.changeKey, timing: this.d.timing, commands: this.d.commands?.() ?? undefined, replay: this.d.replay });
+    this.client = new AdminClient({ keyFile: key, health: this.d.health, proxyInfo: this.d.proxyInfo, version: this.d.version, log: this.d.log, changeKey: this.d.changeKey, timing: this.d.timing, commands: this.d.commands?.() ?? undefined, replay: this.d.replay, outbox: this.outbox, onWelcome: () => this.welcomeHooks.forEach((h) => h()) });
     this.running = want;
     this.client.start();
   }

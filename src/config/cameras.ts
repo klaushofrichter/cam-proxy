@@ -24,8 +24,15 @@ export function cameraIds(c: Config): string[] {
   return [...c.cameraOrder];
 }
 
+// The cameras that run: those without `moved` (a moved camera is hidden like a
+// removed one, its configuration and files stay; camera-move plan P2). Workers,
+// APIs, FTP and storage follow this, the configuration follows cameraIds.
+export function activeCameraIds(c: Config): string[] {
+  return c.cameraOrder.filter((id) => !c.cameras[id]?.moved);
+}
+
 export function firstCameraId(c: Config): string {
-  return cameraIds(c)[0];
+  return activeCameraIds(c)[0];
 }
 
 // Live: the tracker and the intake read maxOpenMin and poll.* on every use,
