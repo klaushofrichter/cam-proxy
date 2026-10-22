@@ -61,7 +61,8 @@ paths:
       responses:
         '200': { description: application/octet-stream, exactly `bytes` random bytes }
         '400': { description: "{ error: invalid, detail: bytes }" }
-        '403': { description: "{ error: move_token } (no or wrong move token, not from the target's address, the move ended or is unknown; audited as move-token-refused, at most once per move and reason per 10 minutes). Not under the app-wide 1200/min per-address limit" }
+        '403': { description: "{ error: move_token } (no or wrong move token, not from the target's address, the move ended or is unknown; audited as move-token-refused, at most once per move and reason per 10 minutes). A valid token from another address before move.go is only refused; from move.go on it also fails the move (token_address). Not under the app-wide 1200/min per-address limit" }
+        '429': { description: "{ error: rate_limited } (refused requests, per address and minute; requests that pass the guard are not counted)" }
         '503': { description: "{ error: busy } (the move journal can't be read)" }
   /api/moves/{id}/manifest:
     get:
@@ -78,6 +79,7 @@ paths:
         '200': { description: "{ chunks: ChunkMeta[], refreshed: boolean }" }
         '409': { description: "{ error: not_ready } (not frozen yet)" }
         '403': { description: "{ error: move_token } (as for /probe)" }
+        '429': { description: "{ error: rate_limited } (as for /probe)" }
   /api/moves/{id}/chunks/{chunkId}:
     get:
       summary: "A chunk's file manifest: { files: [{ path, size, sha256 }], rows, expired }"
@@ -96,6 +98,7 @@ paths:
         '409': { description: "{ error: not_ready } (no manifest yet)" }
         '500': { description: "{ error: internal } (a file could not be read; ask again)" }
         '403': { description: "{ error: move_token } (as for /probe)" }
+        '429': { description: "{ error: rate_limited } (as for /probe)" }
         '503': { description: "{ error: busy } (storage paused or the load above the core count: the target halves its rate; or the move journal can't be read)" }
   /api/moves/{id}/chunks/{chunkId}/rows:
     get:
@@ -110,6 +113,7 @@ paths:
         '404': { description: "{ error: unknown_chunk }" }
         '409': { description: "{ error: not_ready }" }
         '403': { description: "{ error: move_token } (as for /probe)" }
+        '429': { description: "{ error: rate_limited } (as for /probe)" }
         '503': { description: "{ error: busy } (storage paused or the load above the core count: the target halves its rate; or the move journal can't be read)" }
   /api/moves/{id}/file:
     get:
@@ -128,6 +132,7 @@ paths:
         '404': { description: "{ error: expired } (removed by retention: skip it), or { error: not_listed }" }
         '416': { description: the range is past the end }
         '403': { description: "{ error: move_token } (as for /probe)" }
+        '429': { description: "{ error: rate_limited } (as for /probe)" }
         '503': { description: "{ error: busy } (storage paused or the load above the core count: the target halves its rate; or the move journal can't be read)" }
   /api/moves/{id}/secrets:
     get:
@@ -142,6 +147,7 @@ paths:
         '200': { description: "{ sealed: string }" }
         '409': { description: "{ error: not_ready } (move.go has not stored the target's key yet)" }
         '403': { description: "{ error: move_token } (as for /probe)" }
+        '429': { description: "{ error: rate_limited } (as for /probe)" }
   /api/cameras:
     get:
       summary: The camera and its state
@@ -1055,7 +1061,7 @@ paths:
         '200': { description: the new view (as GET) }
         '400': { description: '{ error: invalid, detail: "<path>: <why>" } (also "<path>: set in .env (<VARIABLE>)" for a setting the environment sets); { error: not_a_setting, detail } for camsAdmin.allowCommands or camsAdmin.commandsPaused (config.json or /control/admin/commands only)' }
     delete:
-      summary: Removes every override at once (the Settings page's "Reset to defaults"), back to the file or default values; one config-change audit record (reset all)
+      summary: Removes every override at once (the Settings page's "Reset to defaults"), back to the file or default values; one config-change audit record (reset all). A camera's moved (camera moves) always stays
       responses:
         '200': { description: the new view (as GET) }
         '400': { description: '{ error: invalid, detail } when the file and default values alone are not a valid configuration' }
@@ -1067,6 +1073,7 @@ paths:
       responses:
         '200': { description: the new view }
         '400': { description: 'unknown setting; cameras.<id> of a config.json camera: "defined in config.json; remove it there"' }
+        '409': { description: '{ error: move_open, detail } (cameras.<id>.moved of a camera move still open here, or of one that moved the camera away: only the move clears it)' }
   /control/actions/{name}:
     post:
       summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart (the camera side), camera-reboot, camera-powercycle, camera-poe-on, poe-switch-read, restart-proxy (the process), inventory ({kind, camera?}), inventory-repair ({kind, runId}), inventory-cancel, find-camera, camera-address ({host}), archive-clear ({count}), camera-cert-push, camera-ntp-set, camera-trust-clear, tls-ca-rotate ({confirm: rotate}), tls-ca-drop-previous

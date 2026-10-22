@@ -21,14 +21,26 @@ steps; both proxies record each one in their audit log. The design:
   `move.send` on the source (cams-admin may move a camera away, after you
   approve it here), `move.receive` on the target (cams-admin may hand it a
   camera). Only the proxy's own admin token can tick them.
+- **The target trusts cams-admin** for who the source is: the source's
+  address and the fingerprint of its CA come with the offer from cams-admin,
+  and the target sends the camera's new password and takes the camera on
+  that word. Allow `move.receive` only on proxies of an account whose
+  cams-admin you trust.
 - **The proxies talk directly.** The target fetches the content from the
   source's address on the LAN, with a token for this one move. The token only
   works from the target's address as the source sees it, so put nothing
   between the two proxies that changes the address (no reverse proxy, no
-  `X-Forwarded-For`; `server.trustProxy` stays 0 on the source). A valid token
-  from another address ends the move (`token_address`).
+  `X-Forwarded-For`; `server.trustProxy` stays 0 on the source). Before the
+  switch-over a valid token from another address is refused and recorded
+  (`move-token-refused`), and the offer's speed test then shows no speed; from
+  the switch-over on it ends the move (`token_address`). Refused requests to
+  the move endpoints are rate limited per address.
 - One move at a time per proxy. `moves.maxCameras` (local only, no limit by
   default) caps how many cameras a target may run.
+- **Keep the commands on while a move runs.** Finishing and cancelling are
+  commands too: while commands are paused on a proxy, or its `move.send`
+  (source) or `move.receive` (target) is unticked, cams-admin can't finish or
+  cancel the move on that side; it waits until they are back.
 
 ## Starting one
 
@@ -56,7 +68,9 @@ When it can, one panel shows:
   copied or not. Audit records stay.
 
 **Approve move** starts it. Approving is the only approval: it covers the
-settings and limits named on the panel.
+settings and limits named on the panel. An offer not approved within 30
+minutes expires: after 35 minutes both proxies close it on their own
+(`move-cancel`, reason `offer_expired`), even when cams-admin is away.
 
 ## What happens
 
@@ -121,6 +135,22 @@ stuck needs a cancel.
   the target's retention removes it.
 
 ## Leftovers
+
+**Settings → Reset to defaults** keeps `cameras.<id>.moved`: it is the state
+of a move, not a setting. Clearing it by hand (its **Reset**) is refused
+while the move is open here or after the move took the camera away for good
+(`move_open`); a cancel brings the camera back.
+
+When a move ends, each proxy keeps a small note of it for 7 days
+(`data/admin/moves/<moveId>.<role>.ended.json`: the move's id, how it ended
+and the counts, nothing secret). With it a repeated finish or cancel from
+cams-admin, even after a restart, gets the same answer and the end is
+reported again. A camera that once moved away and comes back is taken only
+when it is the same camera (address, protocol and user); the target then
+replaces its old entry whole with the moved settings. An old entry it can't
+replace (a `tlsName`, a PoE switch port, a storage share in `config.json`,
+or a `CAMPROXY_CAMERA_PASSWORD_<ID>` in the environment) fails the move
+(`camera_failed`, `stale_leftover`): remove it first.
 
 The proxy never writes `config.json`. A camera from `config.json` stays there
 after the move, hidden (`cameras.<id>.moved` = the move's id): it doesn't run,
