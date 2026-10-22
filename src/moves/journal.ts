@@ -98,6 +98,9 @@ export interface MoveRecord {
   // again after a failed one), and whether the camera had been switched over.
   cancelledFrom?: MovePhaseName;
   switchedOver?: boolean;
+  // source: a cancel after the switch-over whose give-back steps (push, FTP)
+  // have not all succeeded yet: the move still counts as open (busy).
+  cancelPending?: boolean;
   endedAt?: number;
 }
 
@@ -187,15 +190,15 @@ export class MoveJournal {
     return out;
   }
 
-  // Records whose phase is not final.
+  // Records whose phase is not final, and a source cancel still giving the camera back.
   active(): MoveRecord[] {
-    return this.all().filter((r) => !TERMINAL.includes(r.phase));
+    return this.all().filter((r) => !TERMINAL.includes(r.phase) || r.cancelPending === true);
   }
 
   // The phase of the open move (the newest by startedAt), for the welcome
   // re-emit (B2); null when none is open.
   currentPhase(): { moveId: string; role: MoveRole; phase: MovePhaseName } | null {
-    const a = this.active().sort((x, y) => y.startedAt - x.startedAt)[0];
+    const a = this.active().filter((r) => !moveEnded(r.phase)).sort((x, y) => y.startedAt - x.startedAt)[0];
     return a ? { moveId: a.id, role: a.role, phase: a.phase } : null;
   }
 }

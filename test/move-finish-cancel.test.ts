@@ -22,8 +22,8 @@ import type { Envelope } from '../src/fleet/protocol';
 import { setLogLevel } from '../src/log';
 import { moveHandlers } from '../src/moves/commands';
 import { MoveJournal, type MoveRecord } from '../src/moves/journal';
-import { manifestCacheDir } from '../src/moves/manifest-cache';
-import { purgeCamera } from '../src/moves/purge';
+import { ManifestCache, manifestCacheDir } from '../src/moves/manifest-cache';
+import { landedLog, noteLanded, purgeCamera, removeImported } from '../src/moves/purge';
 import { seal } from '../src/moves/seal';
 import { MoveSource, type SourceDeps } from '../src/moves/source';
 import { MoveTarget, type TargetDeps } from '../src/moves/target';
@@ -132,7 +132,7 @@ function targetUnit() {
     timing: { attempts: 2, retryMs: 5, retryCapMs: 20, notReadyMs: 5000 },
     end: {
       dataDir,
-      purge: (cam) => purgeCamera({ catalog, dataDir, storage: { recount: () => undefined }, archive: { store: new ArchiveStore({ dataDir, catalog }) } }, cam),
+      removeImported: (r) => removeImported({ catalog, dataDir, storage: { recount: () => undefined } }, r),
       deletePassword: (cam) => void passwords.delete(cam),
       forgetLeaf: (cam) => void forgot.push(cam),
     },
@@ -234,11 +234,22 @@ describe('move.finish on the target (A5/B45)', () => {
 });
 
 describe('move.cancel on the target', () => {
-  it('cancel with copied delete purges the target\'s copy', async () => {
+  it("cancel with copied delete removes what the move imported; the target's own capture after the switch-over stays", async () => {
     const u = targetUnit();
     await copied(u);
-    content(u.dataDir, u.catalog, 'cam9');
+    const IMPORTED = Date.UTC(2026, 9, 18, 12, 0); // a day of the source's
+    const OWN = Date.UTC(2026, 9, 21, 12, 0); // captured here after the switch-over
+    content(u.dataDir, u.catalog, 'cam9', IMPORTED);
+    content(u.dataDir, u.catalog, 'cam9', OWN);
     content(u.dataDir, u.catalog, 'cam1');
+    // What the copier recorded: the files it landed at their own paths, the rows it imported.
+    noteLanded(u.dataDir, MOVE, 'stills/cam9/2026/10/18/1200.pack');
+    noteLanded(u.dataDir, MOVE, 'clips/cam9/2026/10/18/1200-1.mp4');
+    const id = (t: string) => (u.catalog.db.prepare(`SELECT id FROM ${t} WHERE cam = 'cam9' AND start_ts = ?`).get(IMPORTED) as { id: number }).id;
+    const r = u.journal.load(MOVE)!;
+    r.chunks['clips:2026-10-18'] = { state: 'verified', imported: { clips: [[501, id('clips')]] } };
+    r.chunks['events:2026-10-18'] = { state: 'verified', imported: { events: [[502, id('events')]] } };
+    u.journal.save(r);
     expect(u.passwords.get('cam9')).toBe(PASSWORD);
     const part = join(u.dataDir, 'clips', 'cam9', '2026', '10', '19', `x.mp4.move-${MOVE}.part`);
     put(part);
@@ -247,21 +258,26 @@ describe('move.cancel on the target', () => {
     const v = strict('commands/move.cancel.result');
     expect(v(d.result), why(v)).toBe(true);
     expect(u.stopped).toContain(MOVE);
-    // The camera removed here (live stop), its password and its leaf gone; its content purged, nothing of cam1.
+    // The camera removed here (live stop), its password and its leaf gone.
     expect(u.loaded.config.cameras.cam9).toBeUndefined();
     expect(JSON.stringify(JSON.parse(readFileSync(u.loaded.files.overrides, 'utf8')))).not.toContain('cam9');
     expect(u.passwords.has('cam9')).toBe(false);
     expect(u.forgot).toEqual(['cam9']);
-    expect(existsSync(join(u.dataDir, 'stills', 'cam9'))).toBe(false);
     expect(existsSync(part)).toBe(false);
-    expect(rows(u.catalog, 'cam9')).toBe(0);
+    // The imported rows and files gone; the target's own capture (and cam1) all there, to age out with the retention.
+    expect(existsSync(`${minutePath(u.dataDir, 'stills', 'cam9', IMPORTED)}.pack`)).toBe(false);
+    expect(existsSync(join(u.dataDir, 'clips/cam9/2026/10/18/1200-1.mp4'))).toBe(false);
+    expect(existsSync(`${minutePath(u.dataDir, 'stills', 'cam9', OWN)}.pack`)).toBe(true);
+    expect(existsSync(join(u.dataDir, 'clips/cam9/2026/10/21/1200-1.mp4'))).toBe(true);
+    expect(u.catalog.db.prepare("SELECT start_ts FROM clips WHERE cam = 'cam9'").all()).toEqual([{ start_ts: OWN }]);
+    expect(u.catalog.db.prepare("SELECT start_ts FROM events WHERE cam = 'cam9'").all()).toEqual([{ start_ts: OWN }]);
     expect(rows(u.catalog, 'cam1')).toBe(2);
-    expect(existsSync(join(u.dataDir, 'stills', 'cam1'))).toBe(true);
+    expect(existsSync(landedLog(u.dataDir, MOVE))).toBe(false);
     expect(u.journal.load(MOVE)).toBeNull();
     expect(u.events.at(-1)).toEqual({ kind: 'move.phase', moveId: MOVE, role: 'target', phase: 'cancelled', ok: true });
     const a = u.audits.find((x) => x.action === 'move-cancel')!;
     expect(a).toMatchObject({ outcome: 'success', details: { moveId: MOVE, camera: 'cam9', source: SOURCE_ID, target: TARGET_ID, role: 'target', phase: 'copied', copied: 'delete', cameraEntry: 'removed' } });
-    expect(a.details!.deleted.stills).toEqual({ files: 1, bytes: 100 });
+    expect(a.details!.deleted).toEqual({ ...ZEROS, stills: { files: 1, bytes: 100 }, clips: { files: 1, bytes: 300 } });
     // Again: nothing more happens.
     const n = [u.events.length, u.audits.length];
     expect(await u.target.cancel(cancelT('delete'))).toEqual(d);
@@ -351,6 +367,7 @@ function sourceUnit(o: { added?: boolean; released?: boolean } = {}) {
   const calls: string[] = [];
   const expected = new Map<string, string | null>([['cam3', TARGET_LEAF]]);
   let push: PushResult = { outcome: 'pushed', served: OWN_LEAF, tookMs: 1 };
+  const cache = new ManifestCache(dataDir);
   const deps: SourceDeps = {
     journal, audit, emit: (e) => events.push(e),
     running: () => loaded.config,
@@ -365,8 +382,9 @@ function sourceUnit(o: { added?: boolean; released?: boolean } = {}) {
     certs: () => ({ setExpected: (id, fp) => (calls.push(`expected ${id} ${fp}`), void expected.set(id, fp)) }),
     refreshManifest: () => undefined,
     proxyId: () => SOURCE_ID,
+    timing: { cancelRetryMs: 5, cancelRetryCapMs: 20 },
     end: {
-      dataDir,
+      dropManifests: (id) => cache.forget(id),
       purge: (cam) => purgeCamera({ catalog, dataDir, storage: { recount: () => undefined }, archive: { store: new ArchiveStore({ dataDir, catalog }) } }, cam),
       deletePassword: (cam) => void calls.push(`password ${cam}`),
       forgetLeaf: (cam) => void calls.push(`forget ${cam}`),
@@ -377,7 +395,7 @@ function sourceUnit(o: { added?: boolean; released?: boolean } = {}) {
   };
   const source = new MoveSource(deps);
   const audits = (action: string) => audit.list({ actions: [action as never], limit: 50 }).records as Record<string, any>[];
-  return { dir, dataDir, catalog, journal, audit, audits, events, calls, expected, deps, source, setPush: (p: PushResult) => (push = p), get loaded() { return loaded; } };
+  return { dir, dataDir, catalog, journal, audit, audits, events, calls, expected, deps, source, cache, setPush: (p: PushResult) => (push = p), get loaded() { return loaded; } };
 }
 
 describe('move.finish on the source (S §11)', () => {
@@ -473,7 +491,12 @@ describe('move.cancel on the source', () => {
     app.get('/api/moves/:id/manifest', moveTokenGuard({ journal: u.journal, audit: u.audit }), (_req, res) => void res.json({ ok: true }));
     await request(app).get(`/api/moves/${MOVE}/manifest`).set('Authorization', `Bearer ${TOKEN}`).expect(200);
     const before = JSON.stringify(u.loaded.config.cameras.cam3);
+    u.cache.set(MOVE, 'clips:2026-10-20', { files: [{ path: 'clips/cam3/2026/10/20/1200-1.mp4', size: 1, sha256: '0'.repeat(64) }], rows: 0, expired: 0 });
+    expect(u.cache.lists(MOVE, 'clips/cam3/2026/10/20/1200-1.mp4')).toBe(true);
     const d = await u.source.cancel({ v: 1, moveId: MOVE, role: 'source' });
+    // The move's cached manifests go, on disk and in memory.
+    expect(existsSync(manifestCacheDir(u.dataDir, MOVE))).toBe(false);
+    expect(u.cache.lists(MOVE, 'clips/cam3/2026/10/20/1200-1.mp4')).toBe(false);
     expect(d).toEqual({ status: 'ok', result: {} });
     await request(app).get(`/api/moves/${MOVE}/manifest`).set('Authorization', `Bearer ${TOKEN}`).expect(403);
     expect(u.journal.load(MOVE)).toBeNull();
@@ -495,33 +518,67 @@ describe('move.cancel on the source', () => {
     u.journal.save(sourceRecord());
     const d = await u.source.cancel({ v: 1, moveId: MOVE, role: 'source', expectedLeaf: TARGET_LEAF });
     expect(d).toEqual({ status: 'ok', result: {} });
-    expect(u.calls).toEqual([`expected cam3 ${TARGET_LEAF}`, 'setLoaded moved=-', 'settled', 'push cam3', 'ftp cam3', 'expected cam3 null']);
+    expect(u.calls).toEqual(['setLoaded moved=-', `expected cam3 ${TARGET_LEAF}`, 'settled', 'push cam3', 'ftp cam3', 'expected cam3 null']);
     expect(u.loaded.config.cameras.cam3.moved).toBeUndefined();
     expect(u.journal.load(MOVE)).toBeNull();
     expect(u.audits('move-cancel')[0].cam_proxy).toMatchObject({ phase: 'released', switchedBack: true, push: 'pushed', ftp: 'ok' });
   });
 
-  it('a failed push leaves the camera running here with the expected leaf; the cancel answers failed and can run again', async () => {
+  it('a failed give-back step: the camera is the source\'s at once; audited, busy, retried by itself until done', async () => {
     const u = sourceUnit();
     u.journal.save(sourceRecord());
     u.setPush({ outcome: 'failed', served: TARGET_LEAF, detail: 'an event is open: try again when it has ended', tookMs: 0 });
-    expect(await u.source.cancel({ v: 1, moveId: MOVE, role: 'source', expectedLeaf: TARGET_LEAF })).toMatchObject({ status: 'failed', code: 'cert_failed' });
+    expect(await u.source.cancel({ v: 1, moveId: MOVE, role: 'source', expectedLeaf: TARGET_LEAF })).toEqual({ status: 'ok', result: {} });
+    // (a) `moved` cleared first: the camera runs here, the target's leaf still accepted.
+    expect(u.calls.slice(0, 2)).toEqual(['setLoaded moved=-', `expected cam3 ${TARGET_LEAF}`]);
     expect(u.loaded.config.cameras.cam3.moved).toBeUndefined();
     expect(u.expected.get('cam3')).toBe(TARGET_LEAF);
-    // The token is revoked already; the move is no longer open.
-    expect(u.journal.load(MOVE)!.phase).toBe('cancelled');
-    expect(u.journal.active()).toEqual([]);
+    // (c) audited with the step and the code; (d) busy, no cancelled event yet, nothing re-emitted.
+    expect(u.audits('move-cancel')).toHaveLength(1);
+    expect(u.audits('move-cancel')[0]).toMatchObject({ event: { outcome: 'failure' }, cam_proxy: { moveId: MOVE, role: 'source', step: 'cert', code: 'cert_failed' } });
+    expect(u.journal.load(MOVE)).toMatchObject({ phase: 'cancelled', cancelPending: true });
+    expect(u.source.refusal('cam1')).toBe('busy');
+    expect(u.journal.currentPhase()).toBeNull();
     expect(phasesOf(u.events)).toEqual([]);
+    // (b) retried in the background; the failures audited at most hourly.
+    await until(() => u.calls.filter((c) => c === 'push cam3').length >= 3, 5000);
+    expect(u.audits('move-cancel')).toHaveLength(1);
     u.setPush({ outcome: 'pushed', served: OWN_LEAF, tookMs: 1 });
-    expect((await u.source.cancel({ v: 1, moveId: MOVE, role: 'source', expectedLeaf: TARGET_LEAF })).status).toBe('ok');
+    await until(() => u.journal.load(MOVE) === null, 5000);
     expect(u.expected.get('cam3')).toBeNull();
-    expect(u.audits('move-cancel')[0].cam_proxy).toMatchObject({ phase: 'released' });
+    expect(phasesOf(u.events)).toEqual(['cancelled']);
+    expect(u.audits('move-cancel').map((a) => a.event.outcome).sort()).toEqual(['failure', 'success']);
+    expect(u.source.refusal('cam1')).toBeNull();
+    // A cancel now: nothing more.
+    expect(await u.source.cancel({ v: 1, moveId: MOVE, role: 'source', expectedLeaf: TARGET_LEAF })).toEqual({ status: 'ok', result: {} });
+    expect(phasesOf(u.events)).toEqual(['cancelled']);
+  });
+
+  it('a restart in the middle of the retries resumes the give-back', async () => {
+    const u = sourceUnit();
+    u.journal.save(sourceRecord());
+    u.setPush({ outcome: 'failed', served: TARGET_LEAF, detail: 'push failed', tookMs: 0 });
+    await u.source.cancel({ v: 1, moveId: MOVE, role: 'source', expectedLeaf: TARGET_LEAF });
+    u.source.stop();
+    const n = u.calls.filter((c) => c === 'push cam3').length;
+    await new Promise((r) => setTimeout(r, 60));
+    expect(u.calls.filter((c) => c === 'push cam3').length).toBe(n);
+    expect(u.journal.load(MOVE)).toMatchObject({ cancelPending: true });
+    // A new process on the same data.
+    u.setPush({ outcome: 'pushed', served: OWN_LEAF, tookMs: 1 });
+    const again = new MoveSource(u.deps);
+    again.resume();
+    await until(() => u.journal.load(MOVE) === null, 5000);
+    expect(u.expected.get('cam3')).toBeNull();
+    expect(phasesOf(u.events)).toEqual(['cancelled']);
   });
 
   it('a valid token from another address: the failure is recorded in the journal, the move ends', () => {
     const u = sourceUnit({ released: false });
     u.journal.save(sourceRecord({ phase: 'switching' }));
+    put(join(manifestCacheDir(u.dataDir, MOVE), 'clips-2026-10-20.json'));
     u.source.wrongAddress(u.journal.load(MOVE)!);
+    expect(existsSync(manifestCacheDir(u.dataDir, MOVE))).toBe(false);
     expect(u.journal.load(MOVE)).toMatchObject({ phase: 'failed', failure: 'token_address' });
     expect(u.events.at(-1)).toEqual({ kind: 'move.phase', moveId: MOVE, role: 'source', phase: 'failed', ok: false, code: 'token_address' });
     expect(u.journal.currentPhase()).toBeNull();

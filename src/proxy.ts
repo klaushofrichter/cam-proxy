@@ -76,7 +76,7 @@ import { ManifestCache } from './moves/manifest-cache';
 import { MoveSource } from './moves/source';
 import { MoveTarget } from './moves/target';
 import { CopyRunner } from './moves/copier';
-import { purgeCamera } from './moves/purge';
+import { purgeCamera, removeImported } from './moves/purge';
 import { cameraPasswordStore } from './config/camera-passwords';
 import { verifyFtp } from './fleet/camera-commands';
 import { availableParallelism, loadavg } from 'os';
@@ -949,8 +949,6 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // password, its leaf; the camera's FTP pointed here and read back.
   const movePasswords = cameraPasswordStore(running.server.dataDir);
   const moveEnd = {
-    dataDir: running.server.dataDir,
-    purge: (cam: string) => purgeCamera({ catalog, dataDir: running.server.dataDir, storage, archive }, cam),
     deletePassword: (cam: string) => movePasswords.delete(cam),
     forgetLeaf: (cam: string) => certs?.forget(cam, { user: 'cams-admin' }),
   };
@@ -979,6 +977,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
     end: {
       ...moveEnd,
+      dropManifests: (id) => manifestCache.forget(id),
+      purge: (cam) => purgeCamera({ catalog, dataDir: running.server.dataDir, storage, archive }, cam),
       // The source's own stored leaf, pushed like "Push now"; then the expected
       // leaf's check reads what the camera serves (the client trusts it again).
       pushOwnLeaf: async (cam) => {
@@ -1017,7 +1017,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     stopCopy: (id) => moveCopier.stop(id),
     proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
     timing: opts.moves,
-    end: moveEnd,
+    end: { ...moveEnd, dataDir: running.server.dataDir, removeImported: (r) => removeImported({ catalog, dataDir: running.server.dataDir, storage }, r) },
   });
   // The target's copier (camera-move plan Task 9): the camera's old content
   // from the source, after the switch-over; waits while storage is paused.
@@ -1344,8 +1344,10 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       audit.write({ action: 'proxy-start', category: ['process'], type: ['start'], outcome: 'success', user: 'system', message: `cam-proxy ${VERSION} started`, details: { config: { camera: cams.first().id, cameras: cams.ids(), stills: running.stills.enabled, ftp: running.ftp.enabled, analytics: running.analytics.googleVision.enabled }, previousStop, uncleanStop } });
       daily.start();
       startedAt = Date.now();
-      // Camera moves this proxy takes over, from their journal phase and step (S §10.1).
+      // Camera moves this proxy takes over, from their journal phase and step (S §10.1);
+      // and a cancel still giving a camera back to this proxy.
       moveTarget.resume();
+      moveSource.resume();
       // Only with camsAdmin.url (the Pi: nothing until enrolled).
       void camsAdmin.apply();
       logger.info({ port, cameras: cams.ids(), version: VERSION }, 'cam_proxy_started');
@@ -1391,6 +1393,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       }
       await restarting;
       // A switch-over step in flight ends first; the journal keeps the step (resumed at the next start).
+      moveSource.stop();
       await moveTarget.stopAll();
       clearInterval(sweeper);
       sse.closeAll();

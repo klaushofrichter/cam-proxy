@@ -9,6 +9,7 @@ import { moveSourceClient, spaceFor, type EvaluateDeps, type SourceAnswer } from
 import { importRows, isStaged, landingPath, moveStagingDir, relOk, type ImportDeps } from './import';
 import { CONTENT_FOLDERS, hashFile, KIND_FOLDERS, type ChunkMeta, type TableRows } from './inventory';
 import type { ChunkRecord, MoveJournal, MoveRecord } from './journal';
+import { noteLanded } from './purge';
 import { abortableSleep, rateFor, TokenBucket } from './rate';
 import type { ChunkState, MoveEvent, MoveKind, MoveSummary } from './types';
 import { MOVE_KINDS } from './types';
@@ -437,6 +438,14 @@ export class Copier {
         out = await this.fetchTo(f, part, landing, staged);
       } finally {
         rmSync(part, { force: true });
+      }
+      if (out === 'ok' && !staged) {
+        // Listed as the move's (a cancel with copied delete removes it, never a file the target had).
+        try {
+          noteLanded(this.d.dataDir, this.r.id, f.path);
+        } catch {
+          logger.warn({ moveId: this.r.id }, 'move_copy_landed_not_noted');
+        }
       }
       if (out === 'ok' || out === 'same') return 'v';
       if (out === 'other' || out === 'expired') return 's';

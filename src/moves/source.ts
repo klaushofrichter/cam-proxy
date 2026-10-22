@@ -9,7 +9,6 @@ import { newId } from '../fleet/protocol';
 import { listChunks, summarize, type InventoryDeps } from './inventory';
 import type { PushResult } from '../tls/push';
 import { moveEnded, type MoveJournal, type MoveRecord } from './journal';
-import { removeManifestCache } from './manifest-cache';
 import type { Purged } from './purge';
 import { MOVE_KINDS, type MoveActor, type MoveAnswer, type MoveCameraConnection, type MoveCopied, type MoveEvent, type MoveKind, type MovePlan, type MoveSummary, type Settings } from './types';
 
@@ -52,7 +51,8 @@ export interface SourceDeps {
   // and the camera workers settled after a configuration change. Without
   // them both answer internal.
   end?: {
-    dataDir: string;
+    // The move's cached manifests, on disk and in memory (ManifestCache.forget).
+    dropManifests: (moveId: string) => void;
     purge: (cam: string) => { deleted: Purged };
     deletePassword: (cam: string) => void;
     forgetLeaf: (cam: string) => void;
@@ -60,6 +60,8 @@ export interface SourceDeps {
     ftp: (cam: string) => Promise<'skipped' | { verified: boolean; mismatch: string[] }>;
     settled: () => Promise<void>;
   };
+  // The give-back retries of a cancel (backoff from cancelRetryMs to cancelRetryCapMs).
+  timing?: { cancelRetryMs?: number; cancelRetryCapMs?: number };
 }
 
 // Who asked, from the request (for the audit record and the move.request event).
@@ -94,6 +96,15 @@ interface Pending {
   answer?: MoveAnswer;
 }
 
+// A give-back step that failed, with its code (cert_failed, ftp_failed, camera_failed, no_site_ca).
+class StepFailed extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message);
+  }
+}
+const RETRY_MS = 2000;
+const RETRY_CAP_MS = 5 * 60_000;
+const HOUR = 60 * 60_000;
 const KEEP_MS = 30 * 60_000; // an offer not approved within 30 minutes expires (S §7)
 const KEEP_MAX = 32;
 const SWITCHED: readonly string[] = ['switching', 'switched', 'released', 'copying', 'copied'];
@@ -170,6 +181,11 @@ export class MoveSource {
   // Moves ended here since the start (their records are gone): a repeated
   // finish or cancel answers as before, the other one wrong_phase.
   private readonly ended = new Map<string, 'finished' | 'cancelled'>();
+  // A source cancel's give-back: the pass running, the next one scheduled, the last failure audited.
+  private readonly giving = new Map<string, Promise<boolean>>();
+  private readonly retry = new Map<string, { timer: NodeJS.Timeout; delay: number; attempts: number }>();
+  private readonly failAudited = new Map<string, number>();
+  private stopped = false;
 
   constructor(private readonly d: SourceDeps) {}
 
@@ -379,7 +395,7 @@ export class MoveSource {
     end.deletePassword(cam);
     this.setExpectedLeaf(cam, null);
     end.forgetLeaf(cam);
-    removeManifestCache(end.dataDir, r.id);
+    end.dropManifests(r.id);
     this.dropPending(r.id);
     this.phaseEvent(r);
     const total = sum(deleted);
@@ -404,13 +420,14 @@ export class MoveSource {
   // move.cancel {role: source} (S §10.3). The end is journalled first (the
   // target's token is refused from then on). Before the switch-over (B48:
   // nothing switched): only an expected leaf is cleared, the camera runs here
-  // untouched. After it the camera comes back: the target's leaf it serves is
-  // the expected one, `moved` is cleared (the camera starts here, live), the
-  // source's own leaf is pushed (the expected leaf honoured), the camera's FTP
-  // points here again, and only then is the expected leaf cleared. A step that
-  // fails answers failed and leaves the camera running here; the cancel can
-  // run again. Then `cancelled` is reported and the record removed, audited
-  // move-cancel. Again: nothing more.
+  // untouched; the move closes. After it the camera comes back (giveBack):
+  // `moved` is cleared first (the camera is this proxy's again at once,
+  // whatever fails later), the target's leaf it serves is the expected one,
+  // the source's own leaf is pushed, the camera's FTP points here again, and
+  // only then is the expected leaf cleared and `cancelled` reported. A step
+  // that fails is audited (at most hourly) and the source retries by itself
+  // with a backoff, also after a restart (resume); until then the move counts
+  // as open (busy). The answer is ok once the cancel is taken on. Again: nothing more.
   async cancel(a: MoveCancelArgs): Promise<Done> {
     const end = this.d.end;
     if (!end) return failed('internal');
@@ -423,47 +440,137 @@ export class MoveSource {
     if (r.phase !== 'cancelled') {
       r.cancelledFrom = r.phase;
       r.switchedOver = r.expectedLeaf !== undefined || this.d.loaded().config.cameras[cam]?.moved === r.id;
+      if (r.switchedOver) r.cancelPending = true;
+      if (a.expectedLeaf) r.expectedLeaf = a.expectedLeaf;
       r.phase = 'cancelled';
       r.endedAt = this.now();
       this.d.journal.save(r);
     }
-    const detail: Record<string, unknown> = { phase: r.cancelledFrom ?? 'opened', switchedBack: r.switchedOver === true };
+    end.dropManifests(r.id);
     if (!r.switchedOver) {
       this.setExpectedLeaf(cam, null);
-    } else {
-      const leaf = a.expectedLeaf ?? r.expectedLeaf ?? null;
-      if (leaf && !this.setExpectedLeaf(cam, leaf)) return failed('no_site_ca');
+      this.closeCancelled(r, {});
+      return ok();
+    }
+    await this.giveBack(r.id);
+    return ok();
+  }
+
+  // Every source cancel still giving its camera back (at process start).
+  resume(): void {
+    let open: MoveRecord[] = [];
+    try {
+      open = this.d.journal.all().filter((r) => r.role === 'source' && r.cancelPending === true);
+    } catch {
+      return;
+    }
+    this.stopped = false;
+    for (const r of open) void this.giveBack(r.id);
+  }
+
+  // The process stop: no further give-back pass is started (the journal keeps the cancel).
+  stop(): void {
+    this.stopped = true;
+    for (const t of this.retry.values()) clearTimeout(t.timer);
+    this.retry.clear();
+  }
+
+  // One give-back pass at a time per move; true when the cancel completed.
+  private giveBack(id: string): Promise<boolean> {
+    const running = this.giving.get(id);
+    if (running) return running;
+    const p = this.giveBackOnce(id).catch(() => false).finally(() => this.giving.delete(id));
+    this.giving.set(id, p);
+    return p;
+  }
+
+  private async giveBackOnce(id: string): Promise<boolean> {
+    const end = this.d.end;
+    const r = this.source(id);
+    if (!end || !r || !r.cancelPending) return true;
+    clearTimeout(this.retry.get(id)?.timer);
+    const cam = r.camera;
+    const leaf = r.expectedLeaf ?? null;
+    let step: 'camera' | 'cert' | 'ftp' = 'camera';
+    const detail: Record<string, unknown> = {};
+    try {
+      // (a) `moved` first: the camera is this proxy's again from here on.
       const l = this.d.loaded();
       if (l.config.cameras[cam]?.moved === r.id) {
         const plan = planUnset(l, [`cameras.${cam}.moved`]);
         writeOverridesFile(l.files.overrides, plan.overrides);
         this.d.setLoaded(plan.next);
       }
+      step = 'cert';
+      if (leaf && !this.setExpectedLeaf(cam, leaf)) throw new StepFailed('no_site_ca', 'no site CA here');
+      step = 'camera';
       await end.settled();
-      if (!activeCameraIds(this.d.running()).includes(cam)) return failed('camera_failed');
+      if (!activeCameraIds(this.d.running()).includes(cam)) throw new StepFailed('camera_failed', `${cam} does not run here`);
+      step = 'cert';
       const push = await end.pushOwnLeaf(cam);
-      if ((push.outcome !== 'pushed' && push.outcome !== 'current') || !push.served || push.served === leaf) return failed('cert_failed');
+      if ((push.outcome !== 'pushed' && push.outcome !== 'current') || !push.served || push.served === leaf) throw new StepFailed('cert_failed', `push ${push.outcome}${push.detail ? `: ${push.detail}` : ''}`);
+      step = 'ftp';
       let ftp: 'skipped' | { verified: boolean; mismatch: string[] };
       try {
         ftp = await end.ftp(cam);
       } catch {
-        return failed('ftp_failed');
+        throw new StepFailed('ftp_failed', "the camera's FTP could not be set");
       }
-      if (ftp !== 'skipped' && !ftp.verified) return failed('ftp_failed');
-      this.setExpectedLeaf(cam, null);
+      if (ftp !== 'skipped' && !ftp.verified) throw new StepFailed('ftp_failed', `the camera's FTP does not match (${ftp.mismatch.join(', ')})`);
       Object.assign(detail, { push: push.outcome, leafFingerprint: push.served, ftp: ftp === 'skipped' ? 'skipped' : 'ok' });
+    } catch (err) {
+      const e = err instanceof StepFailed ? err : new StepFailed('internal', 'unexpected error');
+      this.giveBackFailed(r, step, e);
+      this.scheduleGiveBack(id);
+      return false;
     }
+    this.setExpectedLeaf(cam, null);
+    const fresh = this.source(id) ?? r;
+    delete fresh.cancelPending;
+    this.retry.delete(id);
+    this.failAudited.delete(id);
+    this.closeCancelled(fresh, detail);
+    return true;
+  }
+
+  // A failed give-back step: audited at most hourly per move, never silent.
+  private giveBackFailed(r: MoveRecord, step: string, e: StepFailed): void {
+    const t = this.now();
+    const last = this.failAudited.get(r.id);
+    const attempts = (this.retry.get(r.id)?.attempts ?? 0) + 1;
+    if (last !== undefined && t - last < HOUR) return;
+    this.failAudited.set(r.id, t);
+    this.d.audit.write({
+      action: 'move-cancel', category: ['configuration'], type: ['change'], outcome: 'failure',
+      user: 'cams-admin', camera: r.camera,
+      message: `Camera move ${r.id} (${r.camera} to ${r.peer.name || r.peer.proxyId}): giving the camera back is not done yet, ${step} failed (${e.code}): ${e.message}; the camera runs here, trying again`,
+      details: { moveId: r.id, camera: r.camera, source: this.self(), target: r.peer.proxyId, role: 'source', phase: r.cancelledFrom ?? 'opened', step, code: e.code, detail: e.message.slice(0, 200), attempts },
+    });
+  }
+
+  private scheduleGiveBack(id: string): void {
+    if (this.stopped) return;
+    const t = this.d.timing ?? {};
+    const prev = this.retry.get(id);
+    const delay = prev ? Math.min(prev.delay * 2, t.cancelRetryCapMs ?? RETRY_CAP_MS) : (t.cancelRetryMs ?? RETRY_MS);
+    const timer = setTimeout(() => void this.giveBack(id), delay);
+    timer.unref();
+    this.retry.set(id, { timer, delay, attempts: (prev?.attempts ?? 0) + 1 });
+  }
+
+  // A cancelled source move's end: `cancelled` reported, audited, the record removed.
+  private closeCancelled(r: MoveRecord, detail: Record<string, unknown>): void {
+    const phase = r.cancelledFrom ?? 'opened';
     this.dropPending(r.id);
     this.phaseEvent(r);
     this.d.audit.write({
       action: 'move-cancel', category: ['configuration'], type: ['change'], outcome: 'success',
-      user: 'cams-admin', camera: cam,
-      message: `Camera move ${r.id} (${cam} to ${r.peer.name || r.peer.proxyId}) cancelled in ${String(detail.phase)}: ${r.switchedOver ? 'the camera is back here with its own certificate and FTP' : 'the camera stayed here'}`,
-      details: { moveId: r.id, camera: cam, source: this.self(), target: r.peer.proxyId, role: 'source', ...detail },
+      user: 'cams-admin', camera: r.camera,
+      message: `Camera move ${r.id} (${r.camera} to ${r.peer.name || r.peer.proxyId}) cancelled in ${phase}: ${r.switchedOver ? 'the camera is back here with its own certificate and FTP' : 'the camera stayed here'}`,
+      details: { moveId: r.id, camera: r.camera, source: this.self(), target: r.peer.proxyId, role: 'source', phase, switchedBack: r.switchedOver === true, ...detail },
     });
     this.d.journal.remove(r.id);
     this.ended.set(r.id, 'cancelled');
-    return ok();
   }
 
   // A valid move token from another address (B46/X15): the move fails here,
@@ -475,6 +582,7 @@ export class MoveSource {
       fresh.failure = 'token_address';
       fresh.endedAt = this.now();
       this.d.journal.save(fresh);
+      this.d.end?.dropManifests(fresh.id);
       this.d.audit.write({
         action: 'move-phase', category: ['configuration'], type: ['change'], outcome: 'failure',
         user: 'system', camera: fresh.camera,

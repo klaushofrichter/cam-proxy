@@ -24,7 +24,7 @@ function fileName(chunkId: string): string {
 
 const FILE = /^(stills|clips|events|checks|archive)-(\d{4}-\d{2}-\d{2})\.json$/;
 
-// Task 10 removes the folder when the move finishes.
+// Removed when the move ends (ManifestCache.forget, Task 10).
 export function removeManifestCache(dataDir: string, moveId: string): void {
   rmSync(manifestCacheDir(dataDir, moveId), { recursive: true, force: true });
 }
@@ -65,6 +65,12 @@ export class ManifestCache {
     for (const id of ids) rmSync(join(manifestCacheDir(this.dataDir, moveId), fileName(id)), { force: true });
     const idx = this.index.get(moveId);
     if (idx) for (const [p, c] of idx) if (ids.has(c)) idx.delete(p);
+  }
+
+  // The move ended (finished, cancelled, failed): its cached manifests go, on disk and in memory.
+  forget(moveId: string): void {
+    removeManifestCache(this.dataDir, moveId);
+    this.index.delete(moveId);
   }
 
   // Whether a cached manifest of the move lists the path.

@@ -21,6 +21,7 @@ import { setLogLevel } from '../src/log';
 import { Copier, CopyRunner, removeMoveParts, type CopierDeps, type SourceClient } from '../src/moves/copier';
 import { listChunks, type TableRows } from '../src/moves/inventory';
 import { MoveJournal, type MoveRecord } from '../src/moves/journal';
+import { landedFiles, removeImported } from '../src/moves/purge';
 import { TokenBucket } from '../src/moves/rate';
 import { MoveTarget, type TargetDeps } from '../src/moves/target';
 import { hashMoveToken } from '../src/moves/token';
@@ -829,5 +830,58 @@ describe('Copier against the real source endpoints', () => {
     expect(u.phases).toHaveLength(1);
     expect(parts(u.dataDir)).toEqual([]);
     expect(existsSync(join(u.dataDir, 'move-staging', MOVE))).toBe(false);
+  });
+});
+
+// Task 10 fix round 1: a cancel with copied `delete` removes what the move
+// brought, never what the target captured itself after the switch-over.
+describe('what a move imported', () => {
+  const count = (u: Unit, sql: string) => (u.catalog.db.prepare(sql).get(CAM) as { n: number }).n;
+  it("a delete-cancel removes only the imported rows and files; the target's own capture stays", async () => {
+    const { files, chunks } = threeDays();
+    const f = fakeSource(files, chunks);
+    const u = unit(f);
+    // The target's own capture since the switch-over: the overlap minute's pack (same name as the source's), another minute, a clip, an event.
+    const own = (rel: string, body: string) => {
+      mkdirSync(dirname(join(u.dataDir, rel)), { recursive: true });
+      writeFileSync(join(u.dataDir, rel), body);
+      return join(u.dataDir, rel);
+    };
+    own('stills/cam9/2026/10/20/1200.pack', 'target-own');
+    own('stills/cam9/2026/10/21/0900.pack', 'target-own-2');
+    const ownClip = own('clips/cam9/2026/10/21/0900-1.mp4', 'own-clip');
+    u.catalog.db.prepare("INSERT INTO clips (cam, start_ts, path, stream, size, received_at) VALUES (?, ?, ?, 'sub', 8, 1)").run(CAM, ts(21, 9), ownClip);
+    u.catalog.db.prepare("INSERT INTO events (cam, source, kind, start_ts) VALUES (?, 'onvif', 'person', ?)").run(CAM, ts(21, 9));
+    await u.run();
+    // The files it landed at their own paths, never one the target stored itself.
+    const landed = landedFiles(u.dataDir, MOVE);
+    expect([...landed].sort()).toEqual(['clips/cam9/2026/10/18/1200-1.mp4', 'clips/cam9/2026/10/19/1200-1.mp4', 'clips/cam9/2026/10/20/1200-1.mp4', 'stills/cam9/2026/10/18/1200.pack', 'stills/cam9/2026/10/19/1200.pack']);
+    expect(count(u, 'SELECT COUNT(*) AS n FROM clips WHERE cam = ?')).toBe(4);
+    expect(count(u, 'SELECT COUNT(*) AS n FROM events WHERE cam = ?')).toBe(2);
+    const imported = u.catalog.db.prepare('SELECT a.image FROM analyses a JOIN events e ON e.id = a.event_id WHERE e.cam = ?').get(CAM) as { image: string };
+    expect(existsSync(imported.image)).toBe(true);
+
+    const r = removeImported({ catalog: u.catalog, dataDir: u.dataDir, storage: { recount: () => undefined } }, u.rec());
+    expect(r.deleted).toEqual({
+      stills: { files: 2, bytes: files['stills/cam9/2026/10/18/1200.pack'].length + files['stills/cam9/2026/10/19/1200.pack'].length },
+      clips: { files: 3, bytes: [18, 19, 20].reduce((n, d) => n + files[`clips/cam9/2026/10/${d}/1200-1.mp4`].length, 0) },
+      events: { files: 1, bytes: 'analysis-image'.length },
+      checks: { files: 0, bytes: 0 },
+      archive: { files: 0, bytes: 0 },
+    });
+    // Imported: gone.
+    for (const d of [18, 19, 20]) expect(existsSync(join(u.dataDir, `clips/cam9/2026/10/${d}/1200-1.mp4`))).toBe(false);
+    for (const d of [18, 19]) expect(existsSync(join(u.dataDir, `stills/cam9/2026/10/${d}/1200.pack`))).toBe(false);
+    expect(existsSync(imported.image)).toBe(false);
+    expect(count(u, 'SELECT COUNT(*) AS n FROM analyses a JOIN events e ON e.id = a.event_id WHERE e.cam = ?')).toBe(0);
+    // The target's own: all there.
+    expect(readFileSync(join(u.dataDir, 'stills/cam9/2026/10/20/1200.pack'), 'utf8')).toBe('target-own');
+    expect(readFileSync(join(u.dataDir, 'stills/cam9/2026/10/21/0900.pack'), 'utf8')).toBe('target-own-2');
+    expect(readFileSync(ownClip, 'utf8')).toBe('own-clip');
+    expect(u.catalog.db.prepare('SELECT start_ts FROM clips WHERE cam = ?').all(CAM)).toEqual([{ start_ts: ts(21, 9) }]);
+    expect(u.catalog.db.prepare('SELECT start_ts FROM events WHERE cam = ?').all(CAM)).toEqual([{ start_ts: ts(21, 9) }]);
+    // Twice: nothing more.
+    expect(removeImported({ catalog: u.catalog, dataDir: u.dataDir, storage: { recount: () => undefined } }, u.rec()).deleted.clips).toEqual({ files: 0, bytes: 0 });
+    expect(readFileSync(ownClip, 'utf8')).toBe('own-clip');
   });
 });

@@ -12,7 +12,7 @@ import type { PushResult } from '../tls/push';
 import { removeMoveParts } from './copier';
 import { sourceGet } from './evaluate';
 import { moveEnded, SWITCH_STEPS, type MoveJournal, type MoveRecord, type SwitchStep } from './journal';
-import type { Purged } from './purge';
+import { removeLanded, type Purged } from './purge';
 import { unseal } from './seal';
 import { logger } from '../log';
 import { MOVE_KINDS, type MoveCopied, type MoveEvent, type MovePhaseName, type MovePlan, type Space } from './types';
@@ -59,12 +59,13 @@ export interface TargetDeps {
   // the cert step up to eventWaitMs.
   timing?: { attempts?: number; retryMs?: number; retryCapMs?: number; notReadyMs?: number; eventWaitMs?: number };
   // Task 10, the end of a move (move.finish, move.cancel): the data folder (the
-  // copier's temporary files), the camera's content purged (a cancel with
-  // copied delete), its stored password deleted, its leaf files and trust
-  // state forgotten (CameraCerts.forget). Without them both answer internal.
+  // copier's temporary files), what the move imported removed (a cancel with
+  // copied delete; never the target's own capture), the camera's stored
+  // password deleted, its leaf files and trust state forgotten
+  // (CameraCerts.forget). Without them both answer internal.
   end?: {
     dataDir: string;
-    purge: (cam: string) => { deleted: Purged };
+    removeImported: (r: MoveRecord) => { deleted: Purged };
     deletePassword: (cam: string) => void;
     forgetLeaf: (cam: string) => void;
   };
@@ -278,6 +279,7 @@ export class MoveTarget {
       message: `Camera move ${fresh.id} (${fresh.camera} from ${fresh.peer.name || fresh.peer.proxyId}) done${a.abandoned ? ', the transfer ended early' : ''}: ${totals.files.verified} files copied, ${totals.files.skipped} skipped, ${totals.files.failed} failed, ${totals.chunks.abandoned} chunks abandoned`,
       details: this.details(fresh, { abandoned: a.abandoned, ...totals }),
     });
+    if (this.d.end) removeLanded(this.d.end.dataDir, fresh.id);
     this.d.journal.remove?.(fresh.id);
     this.copying.delete(fresh.id);
     this.ended.set(fresh.id, 'finished');
@@ -289,8 +291,9 @@ export class MoveTarget {
   // move.start): the record only closes. Else the runner and the copier stop,
   // the end is journalled, then the camera's node written by the move leaves
   // the configuration (live; a config.json entry is hidden again), its stored
-  // password and its leaf go, and with copied `delete` its content is purged
-  // (age-out: the target's retention removes it in time). A camera of that id
+  // password and its leaf go, and with copied `delete` what the move imported
+  // is removed (rows and files; the target's own capture since the
+  // switch-over stays and ages out, as everything does with age-out). A camera of that id
   // this proxy had itself (the camera step refused it) is never touched. No
   // leaf of the source is expected here: the target lets go of the camera
   // before the source pushes its own leaf back (B36). Again: nothing more.
@@ -334,9 +337,10 @@ export class MoveTarget {
       end.forgetLeaf(cam);
       end.deletePassword(cam);
       if (copied === 'delete') {
-        // Never the content of a camera that still runs here.
+        // Only what the move brought; the camera no longer runs here. The
+        // target's own capture since the switch-over stays and ages out.
         if (activeCameraIds(this.d.loaded().config).includes(cam)) return failed('camera_active');
-        deleted = end.purge(cam).deleted;
+        deleted = end.removeImported(this.target(fresh.id) ?? fresh).deleted;
       }
     } else if (!this.d.loaded().config.cameras[cam]) {
       // The secrets step may have stored the password of a camera that never came here.
@@ -360,6 +364,7 @@ export class MoveTarget {
       message: `Camera move ${r.id} (${r.camera} from ${r.peer.name || r.peer.proxyId}) cancelled in ${from}: the camera ${entry === 'untouched' ? 'was not here' : entry === 'removed' ? 'removed here' : 'hidden here'}${entry === 'untouched' ? '' : `, copied content ${copied === 'delete' ? 'deleted' : 'left to age out'}`}`,
       details: this.details(r, { phase: from, copied, cameraEntry: entry, deleted }),
     });
+    if (this.d.end) removeLanded(this.d.end.dataDir, r.id);
     this.d.journal.remove?.(r.id);
     this.copying.delete(r.id);
     this.ended.set(r.id, 'cancelled');
