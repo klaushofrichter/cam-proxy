@@ -5,7 +5,7 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { describe, expect, it } from 'vitest';
 import { openCatalog } from '../src/catalog/db';
-import { chunkManifest, chunkRows, listChunks, summarize } from '../src/moves/inventory';
+import { Cam, chunkManifest, chunkRows, listChunks, summarize } from '../src/moves/inventory';
 import { MOVE_KINDS } from '../src/moves/types';
 
 const D1 = Date.UTC(2026, 9, 1, 12, 0); // 2026-10-01 12:00 UTC
@@ -210,5 +210,21 @@ describe('move inventory', () => {
       },
     });
     await expect(q).rejects.toThrow();
+  });
+
+  it('size() and walk() refuse a path outside dataDir: .., absolute, encoded separators (CodeQL js/path-injection)', () => {
+    const f = fixture();
+    const outside = mkdtempSync(join(tmpdir(), 'camproxy-inv-out-'));
+    writeFileSync(join(outside, 'x.bin'), 'secret');
+    const c = new Cam(f.deps, 'cam3');
+    expect(c.size(join(f.dataDir, 'clips', 'cam3', '2026', '10', '01', '1200-1.mp4'))).toBeGreaterThan(0);
+    expect(c.walk(join(f.dataDir, 'clips', 'cam3')).length).toBeGreaterThan(0);
+    for (const p of [join(f.dataDir, '..', outside.slice(outside.lastIndexOf('/') + 1), 'x.bin'), join(outside, 'x.bin'), '/etc/hosts', `${f.dataDir}/clips/cam3/..%2F..%2F..%2Fetc%2Fhosts`, f.dataDir]) {
+      expect(c.size(p), p).toBeNull();
+    }
+    for (const d of [join(f.dataDir, '..'), outside, join(f.dataDir, 'clips', 'cam3', '..', '..', '..', outside.slice(outside.lastIndexOf('/') + 1)), '/etc', `${f.dataDir}/..%2F..`, f.dataDir]) {
+      expect(c.walk(d), d).toEqual([]);
+    }
+    expect(() => new Cam(f.deps, '../cam3')).toThrow();
   });
 });

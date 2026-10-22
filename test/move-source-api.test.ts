@@ -355,6 +355,11 @@ describe('the source endpoints', () => {
       expect(res.status, p).toBe(400);
     }
     expect((await f.get(`/api/moves/${MOVE}/file`)).status).toBe(400);
+    // Encoded separators and dots stay literal name characters: never outside the folder, never served.
+    for (const p of ['stills/cam3/..%2F..%2Fadmin%2Fmoves%2Fx.json', 'stills/cam3/%2e%2e/%2e%2e/secret/x.bin', 'stills/cam3/..%5C..%5Csecret%5Cx.bin']) {
+      const res = await f.get(`/api/moves/${MOVE}/file?path=${encodeURIComponent(p)}`);
+      expect(res.status, p).not.toBe(200);
+    }
   });
 
   it('deleted file answers 404 expired', async () => {

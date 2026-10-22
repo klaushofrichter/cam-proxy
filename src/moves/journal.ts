@@ -1,5 +1,5 @@
 import { lstatSync, readdirSync, renameSync, rmSync } from 'fs';
-import { join } from 'path';
+import { join, resolve, sep } from 'path';
 import { PrivateFileInvalid, readPrivateJson, writePrivateJson } from '../fleet/private-file';
 import type { Purged } from './purge';
 import type { ChunkState, MoveActor, MoveAnswer, MoveCameraConnection, MoveCopied, MoveKind, MovePhaseName, MovePlan, MoveRole, MoveSummary, Settings, Space } from './types';
@@ -132,9 +132,19 @@ export class MoveJournal {
     return (this.o.now ?? Date.now)();
   }
 
+  // A file directly in the journal's folder (resolved, and checked to stay
+  // there, right where the name is built): an id that passed ID always does.
+  private inDir(name: string): string {
+    const root = resolve(this.dir);
+    const p = resolve(root, name);
+    if (!p.startsWith(root + sep)) throw new Error('invalid move id');
+    if (p.slice(root.length + 1).includes(sep)) throw new Error('invalid move id');
+    return p;
+  }
+
   private stonePath(id: string, role: MoveRole): string {
     if (!ID.test(id) || (role !== 'source' && role !== 'target')) throw new Error('invalid move id');
-    return join(this.dir, `${id}.${role}.ended.json`);
+    return this.inDir(`${id}.${role}.ended.json`);
   }
 
   // The tombstone of an ended move (written before its record is removed); old ones swept.
@@ -188,7 +198,7 @@ export class MoveJournal {
 
   private path(id: string): string {
     if (!ID.test(id)) throw new Error('invalid move id');
-    return join(this.dir, `${id}.json`);
+    return this.inDir(`${id}.json`);
   }
 
   // Problems met so far (a corrupt file set aside); messages name files only.

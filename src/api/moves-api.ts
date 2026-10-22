@@ -2,7 +2,7 @@ import { randomBytes } from 'crypto';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import { lstatSync, realpathSync } from 'fs';
-import { join, sep } from 'path';
+import { join, resolve, sep } from 'path';
 import type { AuditLog } from '../audit/audit-log';
 import { logger } from '../log';
 import { chunkManifest, chunkRows, CONTENT_FOLDERS, listChunks, parseChunkId, type InventoryDeps, type ManifestFile } from '../moves/inventory';
@@ -56,7 +56,11 @@ function contentPath(dataDir: string, cam: string, p: unknown): string | null {
   const parts = p.split('/');
   if (parts.length < 3 || !CONTENT_FOLDERS.includes(parts[0]) || parts[1] !== cam) return null;
   if (!parts.every((s) => SEGMENT.test(s) && s !== '.' && s !== '..')) return null;
-  return join(dataDir, ...parts);
+  // Resolved and checked to stay in <dataDir>/<folder>/<cam>/, right here.
+  const root = resolve(dataDir, parts[0], cam);
+  const abs = resolve(dataDir, ...parts);
+  if (!abs.startsWith(root + sep)) return null;
+  return abs;
 }
 
 // The chunks from the approval day on, listed again once at released (P12):

@@ -178,4 +178,19 @@ describe('move journal', () => {
     j.save(rec('m2', { phase: 'copying' }));
     expect(j.failed()).toEqual([{ moveId: 'm1', role: 'source', code: 'token_address' }]);
   });
+
+  it('a move id that would leave the journal folder is refused by every file operation (CodeQL js/path-injection)', () => {
+    const d = dir();
+    const j = new MoveJournal(d);
+    j.save(rec('m1'));
+    for (const id of ['../x', '..', '/etc/passwd', '..%2F..%2Fx', 'a/b', 'a\\b', '%2e%2e', '']) {
+      expect(() => j.load(id), id).toThrow('invalid move id');
+      expect(() => j.save(rec(id)), id).toThrow('invalid move id');
+      expect(() => j.remove(id), id).toThrow('invalid move id');
+      expect(() => j.bury({ moveId: id, role: 'source', phase: 'finished' }), id).toThrow('invalid move id');
+      expect(j.ended(id, 'source'), id).toBeNull();
+    }
+    expect(readdirSync(join(d, '..')).sort()).toEqual(['moves']);
+    expect(readdirSync(d)).toEqual(['m1.json']);
+  });
 });

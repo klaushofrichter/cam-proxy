@@ -3,10 +3,12 @@ import { request as httpsRequest } from 'node:https';
 import { X509Certificate } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { connect, isIP } from 'node:net';
-import { splitHost } from '../camera/http';
+import { pinCheck, splitHost } from '../camera/http';
 import { ConfigError, planOverrides, type Loaded } from '../config/load';
 import type { MoveOfferArgs } from '../fleet/command-args';
 import { fingerprintOf, type SiteCa } from '../tls/ca';
+import { issuedBy } from '../tls/leaf';
+import { servedCertificate, type Served } from '../tls/served';
 import type { MoveJournal, MoveRecord } from './journal';
 import type { MoveKind, MoveReason, Space } from './types';
 import { MOVE_KINDS } from './types';
@@ -160,15 +162,18 @@ export async function evaluate(deps: EvaluateDeps, args: MoveOfferArgs): Promise
 
 interface Fetched { status: number; received: number; ms: number; body: Buffer | null }
 
-// One GET against the source. https: the source's CA is fetched from /tls/ca.pem
-// without verification, accepted only when its fingerprint is one of the offered
-// `caFingerprints`, and then the request is verified against it for
-// `tlsServername` (the way cams pins the site CA). Nothing here puts the token
-// in an error.
-function get(source: MoveOfferArgs['source'], path: string, o: { token?: string; ca?: string; keep?: number; capMs: number }): Promise<Fetched> {
+// One GET against the source. https: always verified, either against the
+// pinned source CA for `tlsServername` (`ca`), or, for the one GET of
+// /tls/ca.pem, pinned in the handshake to the leaf the source serves (`leaf`,
+// read by servedCertificate just before). Nothing here puts the token in an error.
+function get(source: MoveOfferArgs['source'], path: string, o: { token?: string; ca?: string; leaf?: Served; keep?: number; capMs: number }): Promise<Fetched> {
   const u = new URL(source.url);
   const https = u.protocol === 'https:';
   const started = Date.now();
+  if (https && !o.ca && !o.leaf) return Promise.reject(new Error('no pin for the source'));
+  const verified = o.ca
+    ? { ca: o.ca, servername: source.tlsServername, rejectUnauthorized: true }
+    : { ca: o.leaf?.pem, servername: source.tlsServername, rejectUnauthorized: true, checkServerIdentity: pinCheck(source.tlsServername, o.leaf?.fingerprint ?? ''), allowPartialTrustChain: true };
   return new Promise((resolve, reject) => {
     let finish: (() => void) | null = null;
     // A hard cap on the whole request: what arrived by then counts.
@@ -182,7 +187,7 @@ function get(source: MoveOfferArgs['source'], path: string, o: { token?: string;
       {
         hostname: u.hostname.replace(/^\[(.*)\]$/, '$1'), port: u.port || (https ? 443 : 80), path, method: 'GET',
         headers: o.token ? { Authorization: `Bearer ${o.token}` } : {},
-        ...(https ? (o.ca ? { ca: o.ca, servername: source.tlsServername, rejectUnauthorized: true } : { rejectUnauthorized: false }) : {}),
+        ...(https ? verified : {}),
       },
       (res) => {
         let received = 0;
@@ -223,13 +228,19 @@ export async function probeSource(source: MoveOfferArgs['source'], moveId: strin
   }
 }
 
-// The source's CA for an https source: fetched from /tls/ca.pem without
-// verification, taken only when it is exactly one certificate whose
-// fingerprint is one of the offered `caFingerprints`. undefined for http; null
-// when the pin does not hold.
+// The source's CA for an https source, taken only when it is exactly one
+// certificate whose fingerprint is one of the offered `caFingerprints` and
+// that issued the leaf it was fetched over. The leaf the source serves is read
+// first (servedCertificate: nothing is sent on that connection); /tls/ca.pem
+// is then fetched over TLS pinned to that leaf and to `tlsServername`, so no
+// request goes over an unverified connection. undefined for http; null when
+// the pin does not hold.
 async function pinnedCa(source: MoveOfferArgs['source']): Promise<string | undefined | null> {
   if (!source.url.startsWith('https:')) return undefined;
-  const f = await get(source, '/tls/ca.pem', { keep: 64 * 1024, capMs: 3000 });
+  const u = new URL(source.url);
+  const leaf = await servedCertificate(u.hostname.replace(/^\[(.*)\]$/, '$1'), Number(u.port || 443), 3000, source.tlsServername);
+  if (!leaf) throw new Error('source not reachable');
+  const f = await get(source, '/tls/ca.pem', { leaf, keep: 64 * 1024, capMs: 3000 });
   const text = f.status === 200 && f.body ? f.body.toString('utf8') : '';
   // Exactly one certificate: a bundle could carry a second CA behind the pinned one.
   if ((text.match(/BEGIN CERTIFICATE/g) ?? []).length !== 1) return null;
@@ -239,7 +250,7 @@ async function pinnedCa(source: MoveOfferArgs['source']): Promise<string | undef
   } catch {
     return null;
   }
-  return source.caFingerprints.includes(fingerprintOf(pem)) ? pem : null;
+  return source.caFingerprints.includes(fingerprintOf(pem)) && issuedBy({ certPem: leaf.pem }, { certPem: pem }) ? pem : null;
 }
 
 // One small GET against the source with the move token, pinned like the

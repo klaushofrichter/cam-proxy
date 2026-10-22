@@ -282,6 +282,21 @@ describe('the throughput probe', () => {
     // The right CA but a name the leaf does not carry.
     expect(await probeSource({ ...src, tlsServername: 'other.garage.internal' }, MOVE, TOKEN)).toBe(0);
     expect(seen).toEqual([]);
+    // The pinned CA served by a source whose leaf another CA issued: refused before
+    // any token goes out (ca.pem is fetched pinned to the served leaf, CodeQL
+    // js/disabling-certificate-validation).
+    const otherDir = mkdtempSync(join(tmpdir(), 'camproxy-offerca2-'));
+    const other = await siteCa(otherDir, { site: 'garage', cameraSubnet: '192.0.2.0/24', proxyAddresses: ['127.0.0.1'] });
+    const foreign = await issueLeaf(other, { cn: 'proxy.garage.internal', dns: ['proxy.garage.internal'], ips: ['127.0.0.1'] });
+    const impostor = createHttpsServer({ cert: foreign.certPem, key: foreign.keyPem }, (req, res) => {
+      if (req.url === '/tls/ca.pem') return void res.end(ca.certPem);
+      seen.push(String(req.headers.authorization));
+      res.end('x');
+    });
+    servers.push(impostor as unknown as HttpServer);
+    await new Promise<void>((r) => impostor.listen(0, '127.0.0.1', r));
+    expect(await probeSource({ ...src, url: `https://127.0.0.1:${(impostor.address() as { port: number }).port}` }, MOVE, TOKEN)).toBe(0);
+    expect(seen).toEqual([]);
   }, 60_000);
 });
 

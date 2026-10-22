@@ -52,7 +52,8 @@ export function parseChunkId(id: string): { kind: MoveKind; day: string; from: n
   return { kind: m[1] as MoveKind, day: id.slice(m[1].length + 1), from, to: from + DAY_MS };
 }
 
-class Cam {
+// Exported for the tests only.
+export class Cam {
   constructor(readonly d: InventoryDeps, readonly cam: string) {
     camCheck(cam);
   }
@@ -76,9 +77,13 @@ class Cam {
     return p ? this.rel(p) : null;
   }
 
-  // A regular file's size (links are not followed), or null.
-  size(abs: string | null): number | null {
-    if (!abs) return null;
+  // A regular file's size (links are not followed), or null; only below
+  // <dataDir> (resolved and checked right before the lstat).
+  size(path: string | null): number | null {
+    if (!path) return null;
+    const root = resolve(this.d.dataDir);
+    const abs = resolve(path);
+    if (!abs.startsWith(root + sep)) return null;
     try {
       const st = lstatSync(abs);
       return st.isFile() ? st.size : null;
@@ -87,8 +92,11 @@ class Cam {
     }
   }
 
-  // Regular files below a folder, sorted.
-  walk(dir: string): string[] {
+  // Regular files below a folder of <dataDir> (resolved and checked), sorted.
+  walk(folder: string): string[] {
+    const root = resolve(this.d.dataDir);
+    const dir = resolve(folder);
+    if (!dir.startsWith(root + sep)) return [];
     if (!existsSync(dir)) return [];
     const out: string[] = [];
     const go = (d: string) => {
