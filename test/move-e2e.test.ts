@@ -199,7 +199,17 @@ describe('a camera move end to end (two proxies, one cam-sim)', () => {
         await new Promise((r) => setTimeout(r, 100));
       }
     })();
-    const goAt = Date.now();
+    let goAt = Date.now();
+    if (go2rtc) {
+      // The source grabs until the release, but a grabber that just came up has no still yet: go
+      // only once it has one of the current minute, or that minute has a still nowhere.
+      const grabber = S.proxy.cameras.get('cam3')!.stills!.grabber;
+      await until(() => {
+        goAt = Date.now();
+        const ts = grabber.lastFrameTs();
+        return ts !== null && Math.floor(ts / 60_000) === Math.floor(goAt / 60_000);
+      }, 60_000);
+    }
     await run(fakeS, 'move.go', { v: 1, moveId, plan: approved, targetPublicKey: started.publicKey, expectedLeaf: started.leafFingerprint });
 
     // 6. switched on the target → move.release to the source (the target already copies, P12).

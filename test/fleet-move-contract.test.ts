@@ -7,7 +7,9 @@ import { newId } from '../src/fleet/protocol';
 import { moveHandlers } from '../src/moves/commands';
 import type { MoveEvent } from '../src/moves/types';
 import { buildHealth } from '../src/health/summary';
-import { fixtures, pending, strict, why, type Fixture } from './helpers/contract';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import { CONTRACT, fixtures, pending, strict, why, type Fixture } from './helpers/contract';
 import { startFakeAdmin, type FakeAdmin } from './helpers/fake-admin';
 import { input } from './helpers/health-input';
 import { until } from './helpers/proxy';
@@ -121,6 +123,16 @@ describe('the move commands against the vendored contract', () => {
     const open = argsOfFixture('valid-command-move-open');
     expect(ARGS_VALIDATORS['move.open']({ ...open, targetIp: 'ab' })).toMatchObject({ ok: true });
     expect(ARGS_VALIDATORS['move.open']({ ...open, targetIp: 'not an ip' })).toMatchObject({ ok: false });
+  });
+
+  it('move.answer takes every reason the contract lists (not_registered and internal included), nothing else', () => {
+    const a = argsOfFixture('valid-command-move-answer');
+    const schema = JSON.parse(readFileSync(join(CONTRACT, 'strict', 'commands', 'move.answer.args.schema.json'), 'utf8')) as { properties: { reason: { enum: string[] } } };
+    const reasons = schema.properties.reason.enum;
+    expect(reasons).toContain('not_registered');
+    expect(reasons).toContain('internal');
+    for (const reason of reasons) expect(ARGS_VALIDATORS['move.answer']({ ...a, accept: false, reason }), reason).toMatchObject({ ok: true });
+    expect(ARGS_VALIDATORS['move.answer']({ ...a, accept: false, reason: 'no_such_reason' })).toMatchObject({ ok: false, code: 'invalid_args' });
   });
 
   it('move.* commands are rate limited (the overall 30 a minute binds below the move window of 60) and need no journal budget', () => {

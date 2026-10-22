@@ -249,7 +249,7 @@ export class MoveTarget {
     fresh.plan = a.plan;
     // The settings at approval win over those of the offer (bounded to the camera node by the args check).
     fresh.settings = a.settings;
-    fresh.approvedAt = Date.now();
+    fresh.approvedAt = this.now();
     fresh.budgetS = a.plan.budgetS;
     // B34: what cams-admin already knows as done; the newest are last.
     fresh.done = a.done.slice(-DONE_MAX);

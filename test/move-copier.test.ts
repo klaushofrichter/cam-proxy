@@ -468,6 +468,28 @@ describe('Copier', () => {
     expect((v.state.now - t1) / 1000).toBeGreaterThanOrEqual(55);
   });
 
+  it('a move with a switch-over delay finishes within its budget: the budget counts from approval, the copier aims at 80 % of it', async () => {
+    const files: Record<string, string> = {};
+    const chunks: FakeChunk[] = [];
+    for (const d of [16, 17, 18, 19, 20]) {
+      const p = `stills/cam9/2026/10/${d}/1200.pack`;
+      files[p] = 'p'.repeat(30_000);
+      chunks.push({ id: `stills:${day(d)}`, files: [p] });
+    }
+    const f = fakeSource(files, chunks);
+    // Approved at APPROVED, the copy starts 60 s later (the switch-over); a budget of 300 s from approval, no probe.
+    const u = unit(f, { probeBps: 0, budgetS: 300 }, { deps: { bucket: undefined, sleep: async (ms) => void (u.state.now += ms) } });
+    expect(u.state.now - APPROVED).toBe(60_000);
+    await u.run();
+    expect(u.rec().phase).toBe('copied');
+    const tookS = (u.state.now - APPROVED) / 1000;
+    expect(tookS).toBeLessThanOrEqual(300);
+    // Paced, not at full speed: about 80 % of the budget (240 s from approval).
+    expect(tookS).toBeGreaterThanOrEqual(200);
+    expect(tookS).toBeLessThanOrEqual(250);
+    expect(u.audits.filter((a) => a.action === 'move-budget-exceeded')).toHaveLength(0);
+  });
+
   it('plan.kinds limits what is copied; space fit stops when the target is full', async () => {
     const { files, chunks } = threeDays();
     const f = fakeSource(files, chunks);

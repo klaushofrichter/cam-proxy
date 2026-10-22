@@ -11,7 +11,7 @@ import { importRows, isStaged, landingPath, moveStagingDir, relOk, type ImportDe
 import { CONTENT_FOLDERS, hashFile, KIND_FOLDERS, type ChunkMeta, type TableRows } from './inventory';
 import type { ChunkRecord, MoveJournal, MoveRecord } from './journal';
 import { noteLanded } from './purge';
-import { abortableSleep, rateFor, TokenBucket } from './rate';
+import { abortableSleep, paceS, rateFor, TokenBucket } from './rate';
 import type { ChunkState, MoveEvent, MoveKind, MoveSummary } from './types';
 import { MOVE_KINDS } from './types';
 
@@ -671,19 +671,24 @@ export class Copier {
     const now = this.now();
     const { done, total } = this.bytes();
     const remaining = total - done;
-    const remainingS = (this.r.budgetS ?? this.r.plan?.budgetS ?? 0) - (now - (this.r.copyStartedAt ?? now)) / 1000;
+    // The budget counts from approval (cams-admin's clock, the switch-over included); the copy start
+    // only for a record without one.
+    const budgetS = this.r.budgetS ?? this.r.plan?.budgetS ?? 0;
+    const elapsedS = (now - (this.r.approvedAt ?? this.r.copyStartedAt ?? now)) / 1000;
+    const remainingS = budgetS - elapsedS;
+    const aimS = paceS(budgetS, elapsedS);
     const over = remainingS <= 0 && remaining > 0;
     if (over && !this.r.budgetExceeded) {
       this.r.budgetExceeded = true;
       this.save(true);
       this.audit('move-budget-exceeded', 'failure', `the time budget of ${this.r.budgetS ?? this.r.plan?.budgetS}s is over with ${remaining} bytes left; copying goes on, never faster`, {
-        budgetS: this.r.budgetS ?? this.r.plan?.budgetS ?? null, elapsedS: Math.round((now - (this.r.copyStartedAt ?? now)) / 1000), bytesDone: done, bytesTotal: total,
+        budgetS: this.r.budgetS ?? this.r.plan?.budgetS ?? null, elapsedS: Math.round(elapsedS), bytesDone: done, bytesTotal: total,
       });
     }
     const probe = this.r.probeBps ?? 0;
-    const base = rateFor(remaining, remainingS, probe, false, over || this.r.budgetExceeded === true, this.r.lastRateBps ?? 0);
+    const base = rateFor(remaining, aimS, probe, false, over || this.r.budgetExceeded === true, this.r.lastRateBps ?? 0);
     if (Number.isFinite(base)) this.r.lastRateBps = base;
-    this.rate = this.pressure() ? rateFor(remaining, remainingS, probe, true, over || this.r.budgetExceeded === true, this.r.lastRateBps ?? 0) : base;
+    this.rate = this.pressure() ? rateFor(remaining, aimS, probe, true, over || this.r.budgetExceeded === true, this.r.lastRateBps ?? 0) : base;
     this.rateAt = now;
   }
 

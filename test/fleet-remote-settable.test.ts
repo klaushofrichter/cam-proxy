@@ -24,10 +24,7 @@ describe('the classification (R3-1)', () => {
   });
   it('the deny list names each prefix once, and every prefix the contract denies', () => {
     expect(new Set(DENIED).size).toBe(DENIED.length);
-    // Camera moves (src/moves) add two local-only prefixes the contract's list predates; the rest is the contract's.
-    const PROXY_ONLY = ['cameras.*.moved', 'moves'];
-    expect(DENIED.filter((d) => !PROXY_ONLY.includes(d)).sort()).toEqual([...contract.denied].sort());
-    for (const d of PROXY_ONLY) expect(DENIED).toContain(d);
+    expect([...DENIED].sort()).toEqual([...contract.denied].sort());
   });
   it('the compiled remote list is a subset of the contract (the upper bound); narrow paths agree', () => {
     for (const r of REMOTE) expect(contract.remote, r).toContain(r);

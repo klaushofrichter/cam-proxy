@@ -2,7 +2,7 @@
 // remaining budget, never above the probe, never faster once the budget is
 // over, halved under pressure; and the token bucket that holds a stream to it.
 import { describe, expect, it } from 'vitest';
-import { rateFor, TokenBucket } from '../src/moves/rate';
+import { PACE, paceS, rateFor, TokenBucket } from '../src/moves/rate';
 
 const MB = 1024 * 1024;
 
@@ -29,6 +29,25 @@ describe('rateFor', () => {
       remaining -= MB;
     }
     expect(t).toBeLessThanOrEqual(600.5);
+  });
+
+  it('paces to 80 % of the budget, counted from approval (the switch-over included)', () => {
+    expect(PACE).toBe(0.8);
+    // 300 s budget: the aim is 240 s after approval.
+    expect(paceS(300, 0)).toBe(240);
+    expect(paceS(300, 60)).toBe(180);
+    // Past the aim but inside the budget: no time left to aim at (rateFor then goes at the probe).
+    expect(paceS(300, 260)).toBe(-20);
+    // A copy paced this way, recomputed at every file, ends near the aim and inside the budget.
+    let t = 60;
+    let remaining = 100 * MB;
+    while (remaining > 0) {
+      const rate = rateFor(remaining, paceS(300, t), 50 * MB, false, t >= 300, 0);
+      t += MB / rate;
+      remaining -= MB;
+    }
+    expect(t).toBeLessThanOrEqual(241);
+    expect(t).toBeGreaterThanOrEqual(235);
   });
 
   it('rate never rises after the budget is over', () => {

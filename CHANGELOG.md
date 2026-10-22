@@ -12,6 +12,7 @@
 
 - Camera moves, the guide: [docs/camera-move.md](docs/camera-move.md) (what to allow, what moves, the panel, cancelling and ending a transfer, the leftover in config.json, the audit records); the cams-admin page lists the `move.send` and `move.receive` entries and the move files in `data/admin/`. A test runs a whole move between two proxies.
 - Camera moves, fixes found by that test: a proxy whose last camera moved away no longer stops with an error (the Archive's daily cleanup timer threw), keeps its cams-admin connection (its health summary threw, so it reconnected over and over and the move couldn't finish), and its Status page and local health answer again; they show "no camera runs on this proxy" (in the health one Camera item that is no problem, so such a proxy still reports ok). The copy no longer slows down in the last minute of its time budget, which made almost every move end over budget (`move-budget-exceeded`).
+- Camera moves, follow-up: the move dialog explains two new refusals from cams-admin, "cams-admin doesn't know this camera (register it in cams-admin first)" and "something went wrong in cams-admin; try again". The copy now counts its time budget from the approval, like cams-admin does (the switch-over included), and aims to be done at 80 % of it, so moves no longer end slightly over budget.
 
 ## v2026.10.21.1
 

@@ -62,8 +62,9 @@ When it can, one panel shows:
   `storage.maxBytes` when the disk holds more): raising them applies to every
   camera on the target, not only this one;
 - the estimated time (from a short speed test between the proxies) and the
-  time budget, not below the estimate. The copy spreads over the budget; a
-  longer budget means a gentler copy;
+  time budget, not below the estimate. The budget counts from approval,
+  the switch-over included; the copy spreads over it and aims to be done at
+  80 % of it. A longer budget means a gentler copy;
 - that the source deletes all the camera's content when the move ends,
   copied or not. Audit records stay.
 

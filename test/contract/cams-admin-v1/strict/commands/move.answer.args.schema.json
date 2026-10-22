@@ -54,7 +54,9 @@
         "not_routed",
         "host_overridden",
         "target_failed",
-        "offer_expired"
+        "offer_expired",
+        "not_registered",
+        "internal"
       ]
     },
     "space": {
