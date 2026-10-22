@@ -102,6 +102,8 @@ const REASON: Record<MoveReason, string> = {
   not_routed: "cams can't reach it the way it reaches this proxy (ask for the route in cams-admin first)",
   host_overridden: 'cams uses a different address for this camera (remove the override in cams-admin first)',
   offer_expired: 'the offer expired after 30 minutes; start again',
+  not_registered: "cams-admin doesn't know this camera (register it in cams-admin first)",
+  internal: 'something went wrong in cams-admin; try again',
 };
 export const rejectText = (target: string, reason: MoveReason | undefined, address: string): string =>
   `${target} can't take this camera: ${(reason ? REASON[reason] : undefined)?.replace('<camera address>', address || 'the camera address') ?? REASON.target_failed}`;

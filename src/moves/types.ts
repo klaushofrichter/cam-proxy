@@ -9,7 +9,7 @@ export type MoveSpacePlan = 'all' | 'omit' | 'fit' | 'retention';
 export type MoveCopied = 'delete' | 'age-out';
 export type MovePhaseName = 'opened' | 'switching' | 'switched' | 'released' | 'copying' | 'copied' | 'finished' | 'cancelled' | 'failed';
 export type ChunkState = 'pending' | 'copied' | 'verified' | 'skipped' | 'failed';
-export type MoveReason = 'moves_not_allowed' | 'camera_unreachable' | 'camera_limit' | 'id_taken' | 'busy' | 'incompatible' | 'no_site_ca' | 'ca_does_not_cover_camera' | 'external_cert' | 'other_account' | 'target_offline' | 'not_routed' | 'host_overridden' | 'target_failed' | 'offer_expired';
+export type MoveReason = 'moves_not_allowed' | 'camera_unreachable' | 'camera_limit' | 'id_taken' | 'busy' | 'incompatible' | 'no_site_ca' | 'ca_does_not_cover_camera' | 'external_cert' | 'other_account' | 'target_offline' | 'not_routed' | 'host_overridden' | 'target_failed' | 'offer_expired' | 'not_registered' | 'internal';
 
 // A flat map of settings paths to leaf values (targetSettings, retentionProposal).
 export type SettingsMap = Record<string, boolean | number | string>;
