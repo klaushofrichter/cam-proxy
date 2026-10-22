@@ -14,7 +14,8 @@ import type { PushResult } from '../tls/push';
 import { removeChunkParts } from './chunk-parts';
 import { removeMoveParts } from './copier';
 import { sourceGet } from './evaluate';
-import { moveEnded, SWITCH_STEPS, type MoveJournal, type MoveRecord, type SwitchStep } from './journal';
+import { moveEnded, SWITCH_STEPS, type MoveJournal, type MoveRecord, type MoveTombstone, type SwitchStep } from './journal';
+import { OFFER_EXPIRY_MS } from './source';
 import { removeLanded, type Purged } from './purge';
 import { unseal } from './seal';
 import { logger } from '../log';
@@ -32,7 +33,7 @@ import { MOVE_KINDS, type MoveCopied, type MoveEvent, type MovePhaseName, type M
 // an audit record.
 
 export interface TargetDeps {
-  journal: Pick<MoveJournal, 'load' | 'save' | 'active'> & Partial<Pick<MoveJournal, 'remove'>>;
+  journal: Pick<MoveJournal, 'load' | 'save' | 'active'> & Partial<Pick<MoveJournal, 'remove' | 'all' | 'bury' | 'ended'>>;
   audit: Pick<AuditLog, 'write'>;
   emit: (e: MoveEvent) => void;
   ca: () => SiteCa | null;
@@ -145,9 +146,6 @@ export class MoveTarget {
   private readonly starting = new Map<string, Promise<Done>>();
   // Moves whose copier was started here (stopAll stops them).
   private readonly copying = new Set<string>();
-  // Moves ended here since the start (their records are gone): a repeated
-  // finish or cancel answers as before, the other one wrong_phase.
-  private readonly ended = new Map<string, 'finished' | 'cancelled'>();
 
   constructor(private readonly d: TargetDeps) {}
 
@@ -271,11 +269,16 @@ export class MoveTarget {
   async finish(a: MoveFinishArgs): Promise<Done> {
     const end = this.d.end;
     if (!end) return failed('internal');
-    const past = this.ended.get(a.moveId);
-    if (past) return past === 'finished' ? ok({ deleted: zeros() }) : failed('wrong_phase');
+    // Ended here before (its tombstone, kept 7 days): the terminal phase again, the first answer.
+    const past = this.past(a.moveId);
+    if (past) return past.phase === 'finished' ? ok({ deleted: past.deleted ?? zeros() }) : failed('wrong_phase');
     const r = this.target(a.moveId);
     if (!r) return ok({ deleted: zeros() });
     if (r.phase === 'cancelled') return failed('wrong_phase');
+    if (r.phase === 'failed') {
+      this.terminalEvent(r.id, 'failed', r.failure);
+      return failed('wrong_phase');
+    }
     if (r.phase !== 'finished' && (!switchedOver(r) || (r.phase !== 'copied' && !a.abandoned))) return failed('wrong_phase');
     await this.stop(r.id);
     removeMoveParts(end.dataDir, r.id, r.camera);
@@ -296,9 +299,9 @@ export class MoveTarget {
       removeLanded(this.d.end.dataDir, fresh.id);
       removeChunkParts(this.d.end.dataDir, fresh.id);
     }
+    this.d.journal.bury?.({ moveId: fresh.id, role: 'target', phase: 'finished', deleted: zeros() });
     this.d.journal.remove?.(fresh.id);
     this.copying.delete(fresh.id);
-    this.ended.set(fresh.id, 'finished');
     return ok({ deleted: zeros() });
   }
 
@@ -316,8 +319,8 @@ export class MoveTarget {
   async cancel(a: MoveCancelArgs): Promise<Done> {
     const end = this.d.end;
     if (!end) return failed('internal');
-    const past = this.ended.get(a.moveId);
-    if (past) return past === 'cancelled' ? ok() : failed('wrong_phase');
+    const past = this.past(a.moveId);
+    if (past) return past.phase === 'cancelled' ? ok() : failed('wrong_phase');
     const r = this.target(a.moveId);
     if (!r) return ok();
     if (r.phase === 'finished') return failed('wrong_phase');
@@ -370,24 +373,53 @@ export class MoveTarget {
 
   // A cancelled move's end: no private key left in the record, the phase
   // journalled and reported (event, move-phase), move-cancel audited, the record removed.
-  private closeCancelled(r: MoveRecord, copied: MoveCopied, entry: 'removed' | 'hidden' | 'untouched', deleted: Purged | null): void {
+  private closeCancelled(r: MoveRecord, copied: MoveCopied, entry: 'removed' | 'hidden' | 'untouched', deleted: Purged | null, reason?: 'offer_expired'): void {
     const from = r.cancelledFrom ?? r.phase;
     this.dropKeys(r);
     r.endedAt ??= this.now();
     this.setPhase(r, 'cancelled');
     this.d.audit.write({
       action: 'move-cancel', category: ['configuration'], type: ['change'], outcome: 'success',
-      user: 'cams-admin', camera: r.camera,
-      message: `Camera move ${r.id} (${r.camera} from ${r.peer.name || r.peer.proxyId}) cancelled in ${from}: the camera ${entry === 'untouched' ? 'was not here' : entry === 'removed' ? 'removed here' : 'hidden here'}${entry === 'untouched' ? '' : `, copied content ${copied === 'delete' ? 'deleted' : 'left to age out'}`}`,
-      details: this.details(r, { phase: from, copied, cameraEntry: entry, deleted }),
+      user: reason ? 'system' : 'cams-admin', camera: r.camera,
+      message: `Camera move ${r.id} (${r.camera} from ${r.peer.name || r.peer.proxyId}) ${reason ? 'expired: not approved within 30 minutes' : `cancelled in ${from}`}: the camera ${entry === 'untouched' ? 'was not here' : entry === 'removed' ? 'removed here' : 'hidden here'}${entry === 'untouched' ? '' : `, copied content ${copied === 'delete' ? 'deleted' : 'left to age out'}`}`,
+      details: this.details(r, { phase: from, copied, cameraEntry: entry, deleted, ...(reason ? { reason } : {}) }),
     });
+    this.d.journal.bury?.({ moveId: r.id, role: 'target', phase: 'cancelled' });
     if (this.d.end) {
       removeLanded(this.d.end.dataDir, r.id);
       removeChunkParts(this.d.end.dataDir, r.id);
     }
     this.d.journal.remove?.(r.id);
     this.copying.delete(r.id);
-    this.ended.set(r.id, 'cancelled');
+  }
+
+  // A move ended here before (its tombstone): the terminal phase sent again;
+  // a record left behind by a crash between the tombstone and its removal goes.
+  private past(id: string): MoveTombstone | null {
+    const t = this.d.journal.ended?.(id, 'target') ?? null;
+    if (!t) return null;
+    this.terminalEvent(id, t.phase, t.code);
+    const r = this.target(id);
+    if (r && moveEnded(r.phase)) this.d.journal.remove?.(id);
+    return t;
+  }
+
+  private terminalEvent(id: string, phase: MoveTombstone['phase'], code?: string): void {
+    if (phase === 'failed') this.d.emit({ kind: 'move.phase', moveId: id, role: 'target', phase: 'failed', ok: false, code: code ?? 'internal' });
+    else this.d.emit({ kind: 'move.phase', moveId: id, role: 'target', phase, ok: true });
+  }
+
+  // Offers never approved (final review 5): an opened move with no move.start
+  // OFFER_EXPIRY_MS after the offer closes here (nothing was taken over),
+  // audited move-cancel (reason offer_expired), `cancelled` reported.
+  expireOffers(): void {
+    let open: MoveRecord[];
+    try {
+      open = (this.d.journal.all?.() ?? this.d.journal.active()).filter((r) => r.role === 'target' && r.phase === 'opened' && !r.plan && this.now() - r.startedAt > OFFER_EXPIRY_MS);
+    } catch {
+      return;
+    }
+    for (const r of open) this.closeCancelled(r, r.copied ?? 'age-out', 'untouched', null, 'offer_expired');
   }
 
   private dropKeys(r: MoveRecord): void {

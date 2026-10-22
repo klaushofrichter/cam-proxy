@@ -146,4 +146,36 @@ describe('move journal', () => {
     expect(statSync(bad).mode & 0o777).toBe(0o600);
     expect(statSync(tmp).mode & 0o777).toBe(0o600);
   });
+
+  it('tombstones: one per ended move and role, 600, not records, kept 7 days then swept with orphan chunk parts (final review 4)', () => {
+    const d = dir();
+    let now = 10 * 86_400_000;
+    const j = new MoveJournal(d, undefined, { now: () => now });
+    j.save(rec('m1'));
+    j.bury({ moveId: 'm2', role: 'source', phase: 'finished', deleted: { stills: { files: 1, bytes: 2 } } as never });
+    j.bury({ moveId: 'm3', role: 'target', phase: 'failed', code: 'token_address' });
+    expect(statSync(join(d, 'm2.source.ended.json')).mode & 0o777).toBe(0o600);
+    expect(j.all().map((r) => r.id)).toEqual(['m1']);
+    expect(j.ended('m2', 'source')).toMatchObject({ moveId: 'm2', role: 'source', phase: 'finished', deleted: { stills: { files: 1, bytes: 2 } }, endedAt: now });
+    expect(j.ended('m2', 'target')).toBeNull();
+    expect(j.ended('m3', 'target')).toMatchObject({ phase: 'failed', code: 'token_address' });
+    // Chunk parts of a move with no record go; those of a record stay.
+    mkdirSync(join(d, 'm1.chunks'));
+    mkdirSync(join(d, 'm9.chunks'));
+    j.sweep();
+    expect(existsSync(join(d, 'm1.chunks'))).toBe(true);
+    expect(existsSync(join(d, 'm9.chunks'))).toBe(false);
+    now += 7 * 86_400_000 + 1;
+    expect(j.ended('m2', 'source')).toBeNull();
+    j.sweep();
+    expect(readdirSync(d).filter((f) => f.endsWith('.ended.json'))).toEqual([]);
+    expect(j.load('m1')).not.toBeNull();
+  });
+
+  it('failed() lists the records of failed moves with their code, for the welcome re-emit (final review 4)', () => {
+    const j = new MoveJournal(dir());
+    j.save(rec('m1', { phase: 'failed', failure: 'token_address', role: 'source' }));
+    j.save(rec('m2', { phase: 'copying' }));
+    expect(j.failed()).toEqual([{ moveId: 'm1', role: 'source', code: 'token_address' }]);
+  });
 });

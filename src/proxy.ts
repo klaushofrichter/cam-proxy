@@ -869,6 +869,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   let envOffLogged = false;
 
   let startedAt: number | null = null;
+  // The camera moves' offer expiry and tombstone sweep (every minute while started).
+  let moveExpiry: NodeJS.Timeout | undefined;
   // cams-admin (spec 2026-10-06-cams-admin-phase1-design §9): a leaf; it
   // reads the summary GET /api/local/health serves, at most once per heartbeat.
   // The heartbeat's P2 fields (only sent with camsAdmin.url: the client runs only then).
@@ -1061,6 +1063,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   camsAdmin.onWelcome(() => {
     try {
       moveSource.reemit(moveJournal.currentPhase());
+      // A failed move's failure too (its record stays until a cancel; the event may have been lost, final review 4).
+      moveSource.reemitFailed();
     } catch (err) {
       logger.warn({ err: (err as Error).message }, 'move_phase_reemit_failed');
     }
@@ -1082,7 +1086,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     changeMarks: () => overridesBackups.byPath(),
     moveOpen: (id) => {
       try {
-        return moveJournal.load(id) !== null;
+        // A record, or a move that took the camera away for good (its tombstone).
+        return moveJournal.load(id) !== null || moveJournal.ended(id, 'source')?.phase === 'finished';
       } catch {
         return true;
       }
@@ -1377,6 +1382,19 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       // and a cancel still giving a camera back to this proxy.
       moveTarget.resume();
       moveSource.resume();
+      // Offers never approved close on their own on both sides (final review 5); old tombstones go.
+      const expireOffers = () => {
+        try {
+          moveJournal.sweep();
+          moveSource.expireOffers();
+          moveTarget.expireOffers();
+        } catch (err) {
+          logger.warn({ err: (err as Error).message }, 'move_offer_expiry_failed');
+        }
+      };
+      expireOffers();
+      moveExpiry = setInterval(expireOffers, 60_000);
+      moveExpiry.unref();
       // Only with camsAdmin.url (the Pi: nothing until enrolled).
       void camsAdmin.apply();
       logger.info({ port, cameras: cams.ids(), version: VERSION }, 'cam_proxy_started');
@@ -1422,6 +1440,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       }
       await restarting;
       // A switch-over step in flight ends first; the journal keeps the step (resumed at the next start).
+      clearInterval(moveExpiry);
       moveSource.stop();
       await moveTarget.stopAll();
       clearInterval(sweeper);

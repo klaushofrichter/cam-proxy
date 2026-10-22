@@ -1,6 +1,7 @@
 import { lstatSync, readdirSync, renameSync, rmSync } from 'fs';
 import { join } from 'path';
 import { PrivateFileInvalid, readPrivateJson, writePrivateJson } from '../fleet/private-file';
+import type { Purged } from './purge';
 import type { ChunkState, MoveActor, MoveAnswer, MoveCameraConnection, MoveCopied, MoveKind, MovePhaseName, MovePlan, MoveRole, MoveSummary, Settings, Space } from './types';
 
 // The durable record of one move on this proxy: <dataDir>/admin/moves/<id>.json,
@@ -101,6 +102,22 @@ export interface MoveRecord {
   endedAt?: number;
 }
 
+// What is left of an ended move (final review 4): <id>.<role>.ended.json,
+// 600, kept 7 days. A repeated move.finish or move.cancel (cams-admin missed
+// the answer or the event; a restart lost both) re-emits the terminal
+// move.phase from it, and a repeated finish answers the first one's counts.
+// No token, key or password: the move's id, role, end, code and counts.
+export interface MoveTombstone {
+  v: 1;
+  moveId: string;
+  role: MoveRole;
+  phase: 'finished' | 'cancelled' | 'failed';
+  code?: string;
+  deleted?: Purged;
+  endedAt: number;
+}
+export const TOMBSTONE_KEEP_MS = 7 * 86_400_000;
+
 const TERMINAL: readonly MovePhaseName[] = ['finished', 'cancelled', 'failed'];
 export const moveEnded = (phase: MovePhaseName): boolean => TERMINAL.includes(phase);
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -109,7 +126,65 @@ export const isMoveId = (id: string): boolean => ID.test(id);
 export class MoveJournal {
   private readonly bad: string[] = [];
 
-  constructor(private readonly dir: string, private readonly onProblem?: (message: string) => void) {}
+  constructor(private readonly dir: string, private readonly onProblem?: (message: string) => void, private readonly o: { now?: () => number } = {}) {}
+
+  private now(): number {
+    return (this.o.now ?? Date.now)();
+  }
+
+  private stonePath(id: string, role: MoveRole): string {
+    if (!ID.test(id) || (role !== 'source' && role !== 'target')) throw new Error('invalid move id');
+    return join(this.dir, `${id}.${role}.ended.json`);
+  }
+
+  // The tombstone of an ended move (written before its record is removed); old ones swept.
+  bury(t: Omit<MoveTombstone, 'v' | 'endedAt'> & { endedAt?: number }): void {
+    const stone: MoveTombstone = { v: 1, moveId: t.moveId, role: t.role, phase: t.phase, ...(t.code ? { code: t.code } : {}), ...(t.deleted ? { deleted: t.deleted } : {}), endedAt: t.endedAt ?? this.now() };
+    writePrivateJson(this.stonePath(t.moveId, t.role), stone, false);
+    try {
+      this.sweep();
+    } catch {
+      /* swept next time */
+    }
+  }
+
+  // The tombstone of this move and role within its 7 days, or null.
+  ended(id: string, role: MoveRole): MoveTombstone | null {
+    let raw: unknown;
+    try {
+      raw = readPrivateJson(this.stonePath(id, role));
+    } catch {
+      return null;
+    }
+    const t = raw as Partial<MoveTombstone> | null;
+    if (!t || t.v !== 1 || t.moveId !== id || t.role !== role || typeof t.endedAt !== 'number' || !TERMINAL.includes(t.phase as MovePhaseName)) return null;
+    return this.now() - t.endedAt > TOMBSTONE_KEEP_MS ? null : (t as MoveTombstone);
+  }
+
+  // Tombstones older than 7 days, and chunk part folders (<id>.chunks/) of no record.
+  sweep(): void {
+    let names: string[];
+    try {
+      names = readdirSync(this.dir);
+    } catch {
+      return;
+    }
+    for (const n of names) {
+      const stone = /^(.+)\.(source|target)\.ended\.json$/.exec(n);
+      if (stone && ID.test(stone[1])) {
+        let t: Partial<MoveTombstone> | null = null;
+        try {
+          t = readPrivateJson(join(this.dir, n)) as Partial<MoveTombstone> | null;
+        } catch {
+          t = null;
+        }
+        if (!t || typeof t.endedAt !== 'number' || this.now() - t.endedAt > TOMBSTONE_KEEP_MS) rmSync(join(this.dir, n), { force: true });
+        continue;
+      }
+      const parts = /^(.+)\.chunks$/.exec(n);
+      if (parts && ID.test(parts[1]) && !names.includes(`${parts[1]}.json`)) rmSync(join(this.dir, n), { recursive: true, force: true });
+    }
+  }
 
   private path(id: string): string {
     if (!ID.test(id)) throw new Error('invalid move id');
@@ -191,6 +266,12 @@ export class MoveJournal {
   // Records whose phase is not final, and a source cancel still giving the camera back.
   active(): MoveRecord[] {
     return this.all().filter((r) => !TERMINAL.includes(r.phase) || r.cancelPending === true);
+  }
+
+  // The failed moves whose records are kept (until a cancel), for the welcome
+  // re-emit of their failure (final review 4: an event lost with a restart).
+  failed(): { moveId: string; role: MoveRole; code: string }[] {
+    return this.all().filter((r) => r.phase === 'failed').map((r) => ({ moveId: r.id, role: r.role, code: r.failure ?? 'internal' }));
   }
 
   // The phase of the open move (the newest by startedAt), for the welcome

@@ -8,7 +8,7 @@ import type { Done, Handler } from '../fleet/commands';
 import { newId } from '../fleet/protocol';
 import { listChunks, summarize, type InventoryDeps } from './inventory';
 import type { PushResult } from '../tls/push';
-import { moveEnded, type MoveJournal, type MoveRecord } from './journal';
+import { moveEnded, type MoveJournal, type MoveRecord, type MoveTombstone } from './journal';
 import type { Purged } from './purge';
 import { MOVE_KINDS, type MoveActor, type MoveAnswer, type MoveCameraConnection, type MoveCopied, type MoveEvent, type MoveKind, type MovePlan, type MoveSummary, type Settings } from './types';
 
@@ -24,7 +24,7 @@ export type SourceRefusal = 'no_site_ca' | 'external_cert' | 'moves_not_allowed'
 export interface MoveTarget { proxyId: string; name: string; site: string | null }
 
 export interface SourceDeps {
-  journal: Pick<MoveJournal, 'load' | 'save' | 'remove' | 'all' | 'active'>;
+  journal: Pick<MoveJournal, 'load' | 'save' | 'remove' | 'all' | 'active' | 'bury' | 'ended' | 'failed'>;
   audit: Pick<AuditLog, 'write'>;
   emit: (e: MoveEvent) => void;
   // The settings in effect (cameras, tls.site) and the loaded configuration (release writes `moved`).
@@ -108,6 +108,8 @@ const RETRY_MS = 2000;
 const RETRY_CAP_MS = 5 * 60_000;
 const HOUR = 60 * 60_000;
 const KEEP_MS = 30 * 60_000; // an offer not approved within 30 minutes expires (S §7)
+// An opened move with no approval after that and 5 minutes slack closes here on its own (final review 5).
+export const OFFER_EXPIRY_MS = KEEP_MS + 5 * 60_000;
 const KEEP_MAX = 32;
 const SWITCHED: readonly string[] = ['switching', 'switched', 'released', 'copying', 'copied'];
 const RELEASED: readonly string[] = ['released', 'copying', 'copied'];
@@ -180,9 +182,6 @@ export function approveProblem(plan: unknown, summary: MoveSummary, answer: Move
 export class MoveSource {
   private readonly pending = new Map<string, Pending>();
   private readonly targets = new Map<string, { camera: string; at: number; targets: MoveTarget[] | null }>();
-  // Moves ended here since the start (their records are gone): a repeated
-  // finish or cancel answers as before, the other one wrong_phase.
-  private readonly ended = new Map<string, 'finished' | 'cancelled'>();
   // A source cancel's give-back: the pass running, the next one scheduled, the last failure audited.
   private readonly giving = new Map<string, Promise<boolean>>();
   private readonly retry = new Map<string, { timer: NodeJS.Timeout; delay: number; attempts: number }>();
@@ -375,10 +374,15 @@ export class MoveSource {
   async finish(a: MoveFinishArgs): Promise<Done> {
     const end = this.d.end;
     if (!end) return failed('internal');
-    const past = this.ended.get(a.moveId);
-    if (past) return past === 'finished' ? ok({ deleted: zeros() }) : failed('wrong_phase');
+    // Ended here before (its tombstone, kept 7 days): the terminal phase again, the first answer.
+    const past = this.past(a.moveId);
+    if (past) return past.phase === 'finished' ? ok({ deleted: past.deleted ?? zeros() }) : failed('wrong_phase');
     const r = this.source(a.moveId);
     if (!r) return ok({ deleted: zeros() });
+    if (r.phase === 'failed') {
+      this.terminalEvent(r.id, 'failed', r.failure);
+      return failed('wrong_phase');
+    }
     if (r.phase !== 'released' && r.phase !== 'finished') return failed('wrong_phase');
     const cam = r.camera;
     const l = this.d.loaded();
@@ -415,8 +419,8 @@ export class MoveSource {
       message: `Camera move ${r.id} (${cam} to ${r.peer.name || r.peer.proxyId}) done${a.abandoned ? ', the transfer ended early' : ''}`,
       details: { moveId: r.id, camera: cam, ...who, abandoned: a.abandoned, files: total.files, bytes: total.bytes, durationS: Math.max(0, Math.round(((r.endedAt ?? this.now()) - r.startedAt) / 1000)) },
     });
+    this.d.journal.bury({ moveId: r.id, role: 'source', phase: 'finished', deleted });
     this.d.journal.remove(r.id);
-    this.ended.set(r.id, 'finished');
     return ok({ deleted });
   }
 
@@ -434,8 +438,8 @@ export class MoveSource {
   async cancel(a: MoveCancelArgs): Promise<Done> {
     const end = this.d.end;
     if (!end) return failed('internal');
-    const past = this.ended.get(a.moveId);
-    if (past) return past === 'cancelled' ? ok() : failed('wrong_phase');
+    const past = this.past(a.moveId);
+    if (past) return past.phase === 'cancelled' ? ok() : failed('wrong_phase');
     const r = this.source(a.moveId);
     if (!r) return ok();
     if (r.phase === 'finished') return failed('wrong_phase');
@@ -561,19 +565,68 @@ export class MoveSource {
     this.retry.set(id, { timer, delay, attempts: (prev?.attempts ?? 0) + 1 });
   }
 
-  // A cancelled source move's end: `cancelled` reported, audited, the record removed.
-  private closeCancelled(r: MoveRecord, detail: Record<string, unknown>): void {
+  // A cancelled source move's end: `cancelled` reported, audited, its tombstone written, the record removed.
+  private closeCancelled(r: MoveRecord, detail: Record<string, unknown>, reason?: 'offer_expired'): void {
     const phase = r.cancelledFrom ?? 'opened';
     this.dropPending(r.id);
     this.phaseEvent(r);
     this.d.audit.write({
       action: 'move-cancel', category: ['configuration'], type: ['change'], outcome: 'success',
-      user: 'cams-admin', camera: r.camera,
-      message: `Camera move ${r.id} (${r.camera} to ${r.peer.name || r.peer.proxyId}) cancelled in ${phase}: ${r.switchedOver ? 'the camera is back here with its own certificate and FTP' : 'the camera stayed here'}`,
-      details: { moveId: r.id, camera: r.camera, source: this.self(), target: r.peer.proxyId, role: 'source', phase, switchedBack: r.switchedOver === true, ...detail },
+      user: reason ? 'system' : 'cams-admin', camera: r.camera,
+      message: `Camera move ${r.id} (${r.camera} to ${r.peer.name || r.peer.proxyId}) ${reason ? 'expired: not approved within 30 minutes' : `cancelled in ${phase}`}: ${r.switchedOver ? 'the camera is back here with its own certificate and FTP' : 'the camera stayed here'}`,
+      details: { moveId: r.id, camera: r.camera, source: this.self(), target: r.peer.proxyId, role: 'source', phase, switchedBack: r.switchedOver === true, ...(reason ? { reason } : {}), ...detail },
     });
+    this.d.journal.bury({ moveId: r.id, role: 'source', phase: 'cancelled' });
     this.d.journal.remove(r.id);
-    this.ended.set(r.id, 'cancelled');
+  }
+
+  // A move ended here before (its tombstone): the terminal phase sent again
+  // (cams-admin may have missed it, a restart may have lost it); a record
+  // left behind by a crash between the tombstone and its removal goes.
+  private past(id: string): MoveTombstone | null {
+    const t = this.d.journal.ended(id, 'source');
+    if (!t) return null;
+    this.terminalEvent(id, t.phase, t.code);
+    const r = this.d.journal.load(id);
+    if (r && r.role === 'source' && moveEnded(r.phase) && !r.cancelPending) this.d.journal.remove(id);
+    return t;
+  }
+
+  private terminalEvent(id: string, phase: MoveTombstone['phase'], code?: string): void {
+    if (phase === 'failed') this.d.emit({ kind: 'move.phase', moveId: id, role: 'source', phase: 'failed', ok: false, code: code ?? 'internal' });
+    else this.d.emit({ kind: 'move.phase', moveId: id, role: 'source', phase, ok: true });
+  }
+
+  // Offers never approved (final review 5): an opened move with no plan
+  // OFFER_EXPIRY_MS after it opened closes here (nothing was switched),
+  // audited move-cancel (reason offer_expired), `cancelled` reported.
+  expireOffers(): void {
+    let open: MoveRecord[];
+    try {
+      open = this.d.journal.all().filter((r) => r.role === 'source' && r.phase === 'opened' && !r.plan && this.now() - r.startedAt > OFFER_EXPIRY_MS);
+    } catch {
+      return;
+    }
+    for (const r of open) {
+      r.cancelledFrom = 'opened';
+      r.switchedOver = false;
+      r.phase = 'cancelled';
+      r.endedAt = this.now();
+      this.d.journal.save(r);
+      this.d.end?.dropManifests(r.id);
+      this.closeCancelled(r, {}, 'offer_expired');
+    }
+  }
+
+  // After every welcome: the failure of each failed move kept here (its record stays until a cancel).
+  reemitFailed(): void {
+    let list: { moveId: string; role: 'source' | 'target'; code: string }[];
+    try {
+      list = this.d.journal.failed();
+    } catch {
+      return;
+    }
+    for (const f of list) this.d.emit({ kind: 'move.phase', moveId: f.moveId, role: f.role, phase: 'failed', ok: false, code: f.code });
   }
 
   // A valid move token from another address (B46/X15): the move fails here,
