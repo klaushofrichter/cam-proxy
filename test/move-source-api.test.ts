@@ -35,7 +35,7 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map((s) => new Promise((r) => s.close(r))));
 });
 
-async function fixture(o: { phase?: MoveRecord['phase']; busy?: boolean; journal?: MovesSourceDeps['journal'] } = {}) {
+async function fixture(o: { phase?: MoveRecord['phase']; busy?: boolean; journal?: MovesSourceDeps['journal']; refusedPerMinute?: number } = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), 'camproxy-movesrc-'));
   const catalog = openCatalog(join(dataDir, 'catalog.db'));
   const put = (rel: string, content: string) => {
@@ -61,7 +61,7 @@ async function fixture(o: { phase?: MoveRecord['phase']; busy?: boolean; journal
   let now = 1_000_000;
   let busy = o.busy ?? false;
   const wrongAddress: string[] = [];
-  const deps: MovesSourceDeps = { journal: o.journal ?? journal, audit, inventory, busy: () => busy, password: (cam) => (cam === 'cam3' ? PASSWORD : 'wrong-camera'), now: () => now, onWrongAddress: (r) => void wrongAddress.push(r.id) };
+  const deps: MovesSourceDeps = { journal: o.journal ?? journal, audit, inventory, busy: () => busy, password: (cam) => (cam === 'cam3' ? PASSWORD : 'wrong-camera'), now: () => now, onWrongAddress: (r) => void wrongAddress.push(r.id), ...(o.refusedPerMinute ? { refusedPerMinute: o.refusedPerMinute } : {}) };
   const app = express();
   app.set('trust proxy', true);
   app.use('/api', movesSourceApi(deps));
@@ -141,8 +141,38 @@ describe('the move-token guard', () => {
     expect(recs[1].cam_proxy.suppressed).toBe(2);
   });
 
+  it('before move.go a valid token from another address is refused and audited but does not fail the move (final review 8)', async () => {
+    const f = await fixture({ phase: 'opened' });
+    const r = await f.get(`/api/moves/${MOVE}/probe?bytes=1`, { ip: OTHER_IP });
+    expect(r.status).toBe(403);
+    expect(f.wrongAddress).toEqual([]);
+    expect(f.records().filter((x) => x.event.action === 'move-token-refused').map((x) => x.cam_proxy.reason)).toEqual(['wrong-address']);
+    // From move.go on, the same request fails the move.
+    f.update((x) => {
+      x.phase = 'switching';
+    });
+    await f.get(`/api/moves/${MOVE}/probe?bytes=1`, { ip: OTHER_IP });
+    expect(f.wrongAddress).toEqual([MOVE]);
+  });
+
+  it('refused requests count toward a limiter; requests that passed the guard do not (final review 9)', async () => {
+    const f = await fixture({ refusedPerMinute: 5 });
+    for (let i = 0; i < 12; i++) expect((await f.get(`/api/moves/${MOVE}/probe?bytes=1`)).status).toBe(200);
+    const st: number[] = [];
+    for (let i = 0; i < 7; i++) st.push((await f.get(`/api/moves/${MOVE}/manifest`, { token: 'junk', ip: OTHER_IP })).status);
+    expect(st.slice(0, 5)).toEqual([403, 403, 403, 403, 403]);
+    expect(st.slice(5)).toEqual([429, 429]);
+    // Made-up move ids too.
+    const g = await fixture({ refusedPerMinute: 3 });
+    const ids: number[] = [];
+    for (let i = 0; i < 5; i++) ids.push((await g.get(`/api/moves/mv_${String(i).padStart(20, '0')}/manifest`, { ip: OTHER_IP })).status);
+    expect(ids).toEqual([403, 403, 403, 429, 429]);
+    // The target's own address is still served.
+    expect((await f.get(`/api/moves/${MOVE}/probe?bytes=1`)).status).toBe(200);
+  });
+
   it('a valid token from another address reports the move once (B46: move.phase failed token_address); a wrong token does not', async () => {
-    const f = await fixture();
+    const f = await fixture({ phase: 'switching' });
     await f.get(`/api/moves/${MOVE}/manifest`, { token: 'other-token-'.padEnd(43, 'z'), ip: OTHER_IP });
     expect(f.wrongAddress).toEqual([]);
     await f.get(`/api/moves/${MOVE}/manifest`, { ip: OTHER_IP });
@@ -150,7 +180,7 @@ describe('the move-token guard', () => {
     f.setNow(1_000_000 + 11 * 60_000);
     await f.get(`/api/moves/${MOVE}/manifest`, { ip: OTHER_IP });
     expect(f.wrongAddress).toEqual([MOVE]);
-    // From the target's address it still works.
+    // From the target's address the guard still lets it through (the failure is the proxy's to record).
     expect((await f.get(`/api/moves/${MOVE}/probe?bytes=1`)).status).toBe(200);
   });
 

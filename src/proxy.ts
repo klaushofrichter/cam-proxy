@@ -933,6 +933,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // Not the move endpoints either (camera-move plan Task 5): the move token
   // bound to the one target address guards them, and they answer 503 busy
   // under pressure; a copier fetching many small files would hit 1200/min.
+  // Their refusals have a limiter of their own (movesSourceApi, final review 9).
   app.use(limiter(1200, (req) => isImage(req) || req.path.startsWith('/api/moves/')));
   // Images: 6000 per minute per camera (a timeline per camera loads its own sprites; spec §6.1, Ruling P1-16).
   app.use(rateLimit({ windowMs: 60_000, limit: () => 6000 * Math.max(1, cams.size), skip: (req) => !isImage(req), standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } }));

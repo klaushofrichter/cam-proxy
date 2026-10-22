@@ -1,5 +1,6 @@
 import { randomBytes } from 'crypto';
 import express, { type NextFunction, type Request, type Response } from 'express';
+import { rateLimit } from 'express-rate-limit';
 import { lstatSync, realpathSync } from 'fs';
 import { join, sep } from 'path';
 import type { AuditLog } from '../audit/audit-log';
@@ -33,6 +34,10 @@ export interface MovesSourceDeps {
   cache?: ManifestCache;
   // A valid move token from another address (B46): see moveTokenGuard.
   onWrongAddress?: (r: MoveRecord) => void;
+  // Requests refused by the guard, per client address and minute (final
+  // review 9; default 300): beyond it 429. Requests that passed the guard
+  // are not counted (the app's general limiter skips /api/moves/).
+  refusedPerMinute?: number;
 }
 
 const PROBE_MAX = 67_108_864;
@@ -91,7 +96,12 @@ export function movesSourceApi(d: MovesSourceDeps): express.Router {
     return id;
   };
 
-  router.use('/moves/:id', moveTokenGuard({ journal: d.journal, audit: d.audit, now: d.now, onWrongAddress: d.onWrongAddress }), (_req, res, next) => {
+  // Counted before the guard, uncounted again when the request passed it.
+  const refusedLimit = rateLimit({
+    windowMs: 60_000, limit: d.refusedPerMinute ?? 300, standardHeaders: 'draft-8', legacyHeaders: false,
+    message: { error: 'rate_limited' }, skipSuccessfulRequests: true, requestWasSuccessful: (_req, res) => res.locals.move !== undefined,
+  });
+  router.use('/moves/:id', refusedLimit, moveTokenGuard({ journal: d.journal, audit: d.audit, now: d.now, onWrongAddress: d.onWrongAddress }), (_req, res, next) => {
     res.set('Cache-Control', 'no-store');
     next();
   });

@@ -18,8 +18,12 @@ import { moveTokenMatches } from './token';
 // ids this proxy doesn't have share one bucket, so made-up ids can't flood
 // the log. Never the token in a record or log line.
 // A valid token from another address (B46/X15): the token is out of the
-// target's hands; `onWrongAddress` reports the move once (the proxy sends
-// move.phase failed, code token_address), whatever the audit throttle does.
+// target's hands; from move.go on (the switch-over started) `onWrongAddress`
+// reports the move once (the proxy sends move.phase failed, code
+// token_address), whatever the audit throttle does. Before move.go it is
+// refused and audited like any other refusal, the move goes on (final review
+// 8): a target with more than one address would otherwise fail every move at
+// its probe (the offer then reports probeBps 0).
 export interface MoveGuardDeps {
   journal: Pick<MoveJournal, 'load'>;
   audit: Pick<AuditLog, 'write'>;
@@ -85,7 +89,7 @@ export function moveTokenGuard(d: MoveGuardDeps) {
     const why = check(req, r);
     if (why) {
       refused(req, id, r, why);
-      if (why === 'wrong-address' && r && !reported.has(r.id)) {
+      if (why === 'wrong-address' && r && r.phase !== 'opened' && !reported.has(r.id)) {
         reported.add(r.id);
         try {
           d.onWrongAddress?.(r);
