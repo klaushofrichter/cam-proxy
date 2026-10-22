@@ -62,10 +62,16 @@ interface Fake {
   unlisted: boolean;
   // /rows answers left that are a 404, then one that is not a list
   rowsFail: number;
+  // /rows answers left that are 404 unknown_chunk
+  rowsUnknown: number;
+  // files that always answer 404 not_listed
+  neverListed: Set<string>;
+  // every second request (but the manifest) answers 503 busy
+  busyEveryOther: boolean;
 }
 
 function fakeSource(files: Record<string, string>, chunks: FakeChunk[]): Fake {
-  const f: Fake = { requests: [], files, cut: new Map(), corrupt: new Map(), expired: new Set(), busy: 0, refreshed: true, chunks, down: 0, unlisted: false, rowsFail: 0, client: null as unknown as SourceClient };
+  const f: Fake = { requests: [], files, cut: new Map(), corrupt: new Map(), expired: new Set(), busy: 0, refreshed: true, chunks, down: 0, unlisted: false, rowsFail: 0, rowsUnknown: 0, neverListed: new Set(), busyEveryOther: false, client: null as unknown as SourceClient };
   const json = (status: number, v: unknown) => ({ status, body: (async function* () { yield Buffer.from(JSON.stringify(v)); })() });
   const meta = (c: FakeChunk) => {
     const [kind, d] = c.id.split(':');
@@ -83,6 +89,7 @@ function fakeSource(files: Record<string, string>, chunks: FakeChunk[]): Fake {
       if (!path.startsWith(base)) return json(404, { error: 'not_found' });
       const rest = path.slice(base.length);
       if (rest === '/manifest') return json(200, { chunks: f.chunks.map(meta), refreshed: f.refreshed });
+      if (f.busyEveryOther && rest !== '/manifest' && (f.requests.length % 2 === 0)) return json(503, { error: 'busy' });
       if (f.busy > 0 && rest !== '/manifest') {
         f.busy--;
         return json(503, { error: 'busy' });
@@ -92,6 +99,7 @@ function fakeSource(files: Record<string, string>, chunks: FakeChunk[]): Fake {
         const c = f.chunks.find((x) => x.id === decodeURIComponent(m[1]));
         if (!c) return json(404, { error: 'unknown_chunk' });
         if (m[2]) {
+          if (f.rowsUnknown > 0) return (f.rowsUnknown--, json(404, { error: 'unknown_chunk' }));
           if (f.rowsFail > 0) return f.rowsFail-- > 1 ? json(404, { error: 'unknown_chunk' }) : json(200, { not: 'a list' });
           return json(200, c.rows ?? []);
         }
@@ -103,7 +111,7 @@ function fakeSource(files: Record<string, string>, chunks: FakeChunk[]): Fake {
       if (q) {
         const rel = decodeURIComponent(q[1]);
         f.onFile?.(rel);
-        if (f.unlisted) return json(404, { error: 'not_listed' });
+        if (f.unlisted || f.neverListed.has(rel)) return json(404, { error: 'not_listed' });
         if (f.expired.has(rel) || f.files[rel] === undefined) return json(404, { error: 'expired' });
         const content = Buffer.from(f.files[rel]);
         const cutLeft = f.cut.get(rel) ?? 0;
@@ -655,34 +663,40 @@ describe('Copier fix round 1', () => {
     expect(Object.values(chunkStates(u)).every((s) => s === 'verified')).toBe(true);
   });
 
-  it('an import error keeps the staged files and their state; a resumed copier imports them', async () => {
+  it('an import error is retried in the same run; one that persists fails the chunk, audited, its staging removed', async () => {
+    const failingDb = (db: Catalog['db'], times: number) => {
+      let left = times;
+      return new Proxy(db, {
+        get: (t, p) => (p === 'exec' ? (sql: string) => { if (sql === 'COMMIT' && left-- > 0) throw new Error('disk I/O error'); return t.exec(sql); } : typeof (t as any)[p] === 'function' ? (t as any)[p].bind(t) : (t as any)[p]),
+      });
+    };
+    // Once: the retry imports it.
+    {
+      const { files, chunks } = threeDays();
+      const dataDir = mkdtempSync(join(tmpdir(), 'camproxy-copier-'));
+      const real = openCatalog(join(dataDir, 'catalog.db'));
+      new MoveJournal(join(dataDir, 'admin', 'moves')).save(record());
+      const u = unit(fakeSource(files, chunks), {}, { dataDir, deps: { catalog: { db: failingDb(real.db, 1) } } });
+      await u.run();
+      expect(Object.values(chunkStates(u)).every((st) => st === 'verified')).toBe(true);
+      expect((real.db.prepare('SELECT COUNT(*) AS n FROM clips').get() as { n: number }).n).toBe(3);
+    }
+    // Always (a full disk under the catalog, say): every chunk fails, audited, nothing left staged.
     const { files, chunks } = threeDays();
-    const f = fakeSource(files, chunks);
     const dataDir = mkdtempSync(join(tmpdir(), 'camproxy-copier-'));
     const real = openCatalog(join(dataDir, 'catalog.db'));
-    // Every chunk's COMMIT fails (a full disk under the catalog, say).
-    const failing = new Proxy(real.db, {
-      get: (t, p) => (p === 'exec' ? (sql: string) => { if (sql === 'COMMIT') throw new Error('disk I/O error'); return t.exec(sql); } : typeof (t as any)[p] === 'function' ? (t as any)[p].bind(t) : (t as any)[p]),
-    });
-    const journal = new MoveJournal(join(dataDir, 'admin', 'moves'));
-    journal.save(record());
-    const u = unit(f, {}, { dataDir, deps: { catalog: { db: failing } } });
+    new MoveJournal(join(dataDir, 'admin', 'moves')).save(record());
+    const u = unit(fakeSource(files, chunks), {}, { dataDir, deps: { catalog: { db: failingDb(real.db, 1e9) } } });
     await u.run();
     expect(chunkStates(u)[`events:${day(20)}`]).toBe('failed');
-    expect(existsSync(join(dataDir, 'move-staging', MOVE, 'analytics/cam9/77.jpg'))).toBe(true);
-    expect((real.db.prepare('SELECT COUNT(*) AS n FROM events').get() as { n: number }).n).toBe(0);
-    // A new process with a working catalog: the chunks are imported from what is there.
-    const r = journal.load(MOVE)!;
-    r.phase = 'copying';
-    journal.save(r);
-    const before = f.requests.length;
-    const again = unit(f, {}, { dataDir });
-    await again.run();
-    expect(fileRequests({ ...f, requests: f.requests.slice(before) })).toEqual([]);
-    expect(Object.values(chunkStates(again)).every((s) => s === 'verified')).toBe(true);
-    const an = again.catalog.db.prepare('SELECT image FROM analyses').get() as { image: string };
-    expect(readFileSync(an.image, 'utf8')).toBe('analysis-image');
-    expect((again.catalog.db.prepare('SELECT COUNT(*) AS n FROM clips').get() as { n: number }).n).toBe(3);
+    expect(chunkStates(u)[`clips:${day(20)}`]).toBe('failed');
+    expect(existsSync(join(dataDir, 'move-staging', MOVE))).toBe(false);
+    const rec = u.audits.find((a) => a.action === 'move-file-failed' && a.details?.chunk === `events:${day(20)}`);
+    expect(rec).toMatchObject({ outcome: 'failure', details: { import: 'failed' } });
+    expect(rec!.message).toContain('could not be imported');
+    // The phase is copied (not forced), the counts include the failed imports.
+    expect(u.phases).toHaveLength(1);
+    expect((u.phases[0].extra as { counts: { failed: number } }).counts.failed).toBe(7);
   });
 
   it('stop() returns promptly in the middle of a slow take', async () => {
@@ -713,6 +727,52 @@ describe('Copier fix round 1', () => {
     expect(recs[1].details).toMatchObject({ failures: 7 });
     expect(recs[2].details).toMatchObject({ failures: 13 });
     expect(Object.values(chunkStates(u)).every((s) => s === 'verified')).toBe(true);
+  });
+});
+
+describe('Copier fix round 2', () => {
+  it('503 busy is pressure only: no move-source-unreachable records, the rate halves', async () => {
+    const files: Record<string, string> = {};
+    const chunks: FakeChunk[] = [];
+    for (let d = 1; d <= 9; d++) {
+      const p = `stills/cam9/2026/10/0${d}/1200.pack`;
+      files[p] = 'b'.repeat(100);
+      chunks.push({ id: `stills:${day(d)}`, files: [p] });
+    }
+    const f = fakeSource(files, chunks);
+    f.busyEveryOther = true;
+    const u = unit(f, { probeBps: 1000, budgetS: 1, copyStartedAt: 1, budgetExceeded: true });
+    await u.run();
+    expect(f.requests.length).toBeGreaterThan(20);
+    expect(u.audits.filter((a) => a.action === 'move-source-unreachable')).toEqual([]);
+    expect(Object.values(chunkStates(u)).every((st) => st === 'verified')).toBe(true);
+    const rates = (u.events.filter((e) => e.kind === 'move.progress') as Extract<MoveEvent, { kind: 'move.progress' }>[]).map((p) => p.rateBps);
+    expect(rates).toContain(500);
+  });
+
+  it('rows answering unknown_chunk: the chunk is listed again, then the source is reported, and the rows still come', async () => {
+    const { files, chunks } = threeDays();
+    const f = fakeSource(files, chunks);
+    f.rowsUnknown = 6;
+    const u = unit(f);
+    await u.run();
+    const listings = f.requests.filter((r) => r === `/api/moves/${MOVE}/chunks/${encodeURIComponent(`clips:${day(20)}`)}`);
+    expect(listings).toHaveLength(4);
+    expect(u.audits.filter((a) => a.action === 'move-source-unreachable')).toHaveLength(1);
+    expect((u.catalog.db.prepare('SELECT COUNT(*) AS n FROM clips').get() as { n: number }).n).toBe(3);
+    expect(Object.values(chunkStates(u)).every((st) => st === 'verified')).toBe(true);
+  });
+
+  it('a file that stays not_listed after 3 listings counts as a failure (3 of them fail it)', async () => {
+    const { files, chunks } = threeDays();
+    const f = fakeSource(files, chunks);
+    const rel = 'clips/cam9/2026/10/19/1200-1.mp4';
+    f.neverListed.add(rel);
+    const u = unit(f);
+    await u.run();
+    expect(chunkStates(u)[`clips:${day(19)}`]).toBe('failed');
+    expect(u.rec().chunks[`clips:${day(19)}`]).toMatchObject({ f: 1 });
+    expect(fileRequests(f).filter((p) => p === rel).length).toBeLessThanOrEqual(7);
   });
 });
 

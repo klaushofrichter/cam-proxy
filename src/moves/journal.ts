@@ -31,8 +31,6 @@ export interface ChunkRecord {
   vf?: string[];
   // Source id -> target id per table of the rows imported (importRows' map).
   imported?: ImportMap;
-  // The rows could not be imported (a catalog error): the staged files stay and the next pass imports them.
-  importFailed?: boolean;
 }
 
 export interface MovePeer {
