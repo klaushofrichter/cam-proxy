@@ -12,10 +12,23 @@ describe('rateFor', () => {
     expect(rateFor(1000 * MB, 100, 5 * MB, false, false, 0)).toBe(5 * MB);
     // 100 MB in 1000 s: 100 kB/s fills the budget, below the probe.
     expect(rateFor(100 * MB, 1000, 5 * MB, false, false, 0)).toBe(Math.floor((100 * MB) / 1000));
-    // Less than a minute left counts as a minute.
-    expect(rateFor(60 * MB, 10, 5 * MB, false, false, 0)).toBe(MB);
+    // The last minute: what is left over the seconds left (the probe still caps it); less than a second counts as one.
+    expect(rateFor(10 * MB, 10, 5 * MB, false, false, 0)).toBe(MB);
+    expect(rateFor(MB, 0.2, 5 * MB, false, false, 0)).toBe(MB);
     // No probe measured (0): only the budget limits it.
     expect(rateFor(100 * MB, 1000, 0, false, false, 0)).toBe(Math.floor((100 * MB) / 1000));
+  });
+
+  it('a copy paced to its budget ends within it (the last minute is not slowed down)', () => {
+    // Recomputed at every file (S §8.3): 100 files of 1 MB in a 600 s budget, the probe far above.
+    let t = 0;
+    let remaining = 100 * MB;
+    while (remaining > 0) {
+      const rate = rateFor(remaining, 600 - t, 50 * MB, false, t >= 600, 0);
+      t += MB / rate;
+      remaining -= MB;
+    }
+    expect(t).toBeLessThanOrEqual(600.5);
   });
 
   it('rate never rises after the budget is over', () => {

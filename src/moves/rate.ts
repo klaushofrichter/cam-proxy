@@ -2,14 +2,15 @@
 // recomputes it every minute and at each file.
 
 // Bytes per second: the remaining bytes over the remaining budget (at least a
-// minute), never above the probe (0: not measured, no cap); once the budget is
+// second: a floor of a minute made every copy paced to its budget end after it,
+// task 12), never above the probe (0: not measured, no cap); once the budget is
 // over, the last rate or lower, never faster. `lastRate` is the last rate
 // before any halving, so pressure that ends doesn't lower the rate for good.
 // Halved under pressure (the target's storage paused or its load above the core
 // count, or the source answering 503). At least 1 B/s.
 export function rateFor(remainingBytes: number, remainingS: number, probeBps: number, pressure: boolean, budgetOver: boolean, lastRate: number): number {
   const probe = probeBps > 0 ? probeBps : Infinity;
-  let rate = budgetOver ? Math.min(lastRate > 0 ? lastRate : probe, probe) : Math.min(probe, Math.max(0, remainingBytes) / Math.max(remainingS, 60));
+  let rate = budgetOver ? Math.min(lastRate > 0 ? lastRate : probe, probe) : Math.min(probe, Math.max(0, remainingBytes) / Math.max(remainingS, 1));
   if (pressure) rate /= 2;
   return Number.isFinite(rate) ? Math.max(1, Math.floor(rate)) : rate;
 }
