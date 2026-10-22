@@ -80,7 +80,7 @@ export interface ControlDeps {
   catalog: Catalog;
   log: StreamLog;
   // `name`: the camera's name (configured camera.name until first read, nameSource 'config').
-  camera: () => CameraState & { name: string; nameSource: 'camera' | 'config'; webUiUrl: string | null; reboot: RebootState | null; poeSwitch: PoeSwitchStatus };
+  camera: () => CameraState & { name: string; nameSource: 'camera' | 'config'; webUiUrl: string | null; reboot: RebootState | null; poeSwitch: PoeSwitchStatus | null };
   // The camera's name (camera-name design): `write` validates, writes, reads back.
   // Camera functions take the camera they act on (spec 2026-10-05-multi-camera-host-design §6.3).
   cameraName: { current: (cam: string) => string; write: (cam: string, name: string) => Promise<string> };

@@ -591,7 +591,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   });
 
   // External analytics: event stills to the provider, within its limits.
-  const timeInfo = () => cams.first().timeInfo();
+  const timeInfo = () => cams.list()[0]?.timeInfo();
   const analytics = new AnalyticsService({
     catalog, log, dataDir: running.server.dataDir,
     // Read on use: restart() can change the cameras.
@@ -755,8 +755,25 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       stalled: w.clipsHealth(),
     };
   };
-  const ftpStatus = () => ftpStatusOf(cams.first());
-  const streamStatus = () => cams.first().streamStatus();
+  // No camera runs here (every camera moved away, camera-move plan Task 12):
+  // the status and the health show this placeholder, offline, instead of failing.
+  const NO_CAMERA = 'no camera runs on this proxy';
+  const noCamera = () => {
+    const since = startedAt ?? Date.now();
+    return {
+      camera: { online: false, since, error: NO_CAMERA, name: '', nameSource: 'config' as const, webUiUrl: null, reboot: null, poeSwitch: null },
+      intake: { onvif: 'down' as const, since, source: 'none' as const, resubscribes: 0 },
+      stream: { enabled: false, up: false, go2rtcUp: false, lastFrameTs: null },
+      ftp: { enabled: false, listening: false, port: running.ftp.port, tls: running.ftp.tls, publicHost: running.ftp.publicHost ?? null, passwordSet: !!loaded.secrets.ftpPassword, lastUpload: null, lastClip: null, clips: countAllClips(catalog), failures: 0, camera: null, stalled: null },
+      recordings: { last: null, cache: cachePool.usage(), camera: { bytes: 0, files: 0 } },
+    };
+  };
+  const firstCam = (): CameraWorker | undefined => cams.list()[0];
+  const ftpStatus = () => {
+    const w = firstCam();
+    return w ? ftpStatusOf(w) : noCamera().ftp;
+  };
+  const streamStatus = () => firstCam()?.streamStatus() ?? noCamera().stream;
   // One camera's block for the control API (spec 2026-10-05-multi-camera-host-design §6.3).
   const cameraStatusBlock = (w: CameraWorker) => ({
     id: w.id,
@@ -804,6 +821,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   };
   const healthNow = async (): Promise<HealthSummary> => {
     const [first, ...others] = cams.list().map(cameraHealthInput);
+    const none = first ? null : noCamera();
     // The host's one recordings cache (spec 2026-10-05-multi-camera-host-design §8.3).
     const recordingsCache = cachePool.usage();
     return buildHealth({
@@ -811,8 +829,9 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       version: VERSION,
       startedAt,
       thresholds: { diskPercent: running.health.diskPercent, tempC: running.health.tempC, ftpStalledHours: running.ftp.stalledHours, ...(running.archive.enabled ? { archiveWarnPercent: running.archive.warnPercent } : {}) },
-      ...first,
+      ...(first ?? { camera: { id: '', name: '', host: '', state: none!.camera, reboot: null, poeSwitch: null }, stream: none!.stream, intake: none!.intake, ftp: none!.ftp }),
       others,
+      ...(first ? {} : { noCamera: true }),
       storage: { paused: storage.paused(), lastRun: storage.lastRun() },
       recordingsCache,
       sseClients: sse.clients(),
@@ -1066,7 +1085,10 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     running: () => running,
     catalog,
     log,
-    camera: () => cameraStatusBlock(cams.first()).camera,
+    camera: () => {
+      const w = firstCam();
+      return w ? cameraStatusBlock(w).camera : noCamera().camera;
+    },
     cameras: cams,
     cameraStatus: () => cams.list().map(cameraStatusBlock),
     cameraCount: () => cams.size,
@@ -1078,7 +1100,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       write: (cam, name) => worker(cam).writeName(name),
     },
     checkCamera: (cam) => worker(cam).status.checkNow(),
-    intake: () => cams.first().intake.state(),
+    intake: () => firstCam()?.intake.state() ?? noCamera().intake,
     resubscribe: (cam) => worker(cam).intake.resubscribe(),
     restart: () => proxy.restart(),
     // One camera's restart applies its own pending settings (cameras.<id>.*), nothing host-wide.
@@ -1125,7 +1147,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     setVisionKey: (key) => analytics.setManualKey(key),
     unmapped: { list: (limit) => listUnmapped(catalog, limit), clear: () => clearUnmapped(catalog) },
     sseClients: () => sse.clients(),
-    recordings: () => cams.first().recordings.status(),
+    recordings: () => firstCam()?.recordings.status() ?? noCamera().recordings,
     inventory,
     stream: streamStatus,
     sessions,
@@ -1134,7 +1156,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     findCamera: () => discover(opts.discovery ?? {}),
     envFile: () => loaded.env.CAMPROXY_ENV_FILE || undefined,
     archive,
-    cameraId: () => cams.first().id,
+    cameraId: () => firstCam()?.id ?? '',
     cameraNtp: (cam) => worker(cam).syncNtp(true),
     tls: {
       view: tlsView,
@@ -1341,7 +1363,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       const prev = audit.find((r) => r.event.action === 'proxy-start' || r.event.action === 'proxy-stop', 400);
       const uncleanStop = prev?.event.action === 'proxy-start';
       const previousStop = prev && !uncleanStop ? prev['@timestamp'] : null;
-      audit.write({ action: 'proxy-start', category: ['process'], type: ['start'], outcome: 'success', user: 'system', message: `cam-proxy ${VERSION} started`, details: { config: { camera: cams.first().id, cameras: cams.ids(), stills: running.stills.enabled, ftp: running.ftp.enabled, analytics: running.analytics.googleVision.enabled }, previousStop, uncleanStop } });
+      audit.write({ action: 'proxy-start', category: ['process'], type: ['start'], outcome: 'success', user: 'system', message: `cam-proxy ${VERSION} started`, details: { config: { camera: cams.list()[0]?.id ?? null, cameras: cams.ids(), stills: running.stills.enabled, ftp: running.ftp.enabled, analytics: running.analytics.googleVision.enabled }, previousStop, uncleanStop } });
       daily.start();
       startedAt = Date.now();
       // Camera moves this proxy takes over, from their journal phase and step (S §10.1);

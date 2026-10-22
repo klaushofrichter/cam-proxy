@@ -47,6 +47,8 @@ export interface HealthInput {
   others?: CameraHealthInput[];
   // The site CA (spec §10.5): absent or null without tls.site (the Pi: no item).
   certificates?: { proxy: { notAfter: number } | null; cameras: { id: string; state: CertState }[]; problems: string[] } | null;
+  // No camera runs here (all moved away): camera, stream, intake and ftp above are a placeholder, `cameras` is empty.
+  noCamera?: boolean;
 }
 
 // One camera's part of the input and of the summary (spec 2026-10-05-multi-camera-host-design §6.5).
@@ -263,6 +265,6 @@ export function buildHealth(i: HealthInput): HealthSummary {
     },
     disk: disk ? { ...disk } : null,
     host: host ? structuredClone(host) : null,
-    cameras: cams.map((c) => c.h),
+    cameras: i.noCamera ? [] : cams.map((c) => c.h),
   };
 }
