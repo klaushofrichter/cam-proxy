@@ -959,7 +959,7 @@ paths:
         '403': { description: '{ error: local_admin_only }' }
   /control/moves:
     get:
-      summary: "The camera moves of this proxy (source side; camera-move plan Task 7): { items: [{ id?, requestId, camera, target: { proxyId, name }, phase, answer?, settings, summary, plan, progress?, budgetExceeded }] }"
+      summary: "The camera moves of this proxy (source side; camera-move plan Task 7): { items: [{ id?, requestId, camera, target: { proxyId, name }, phase, answer?, settings, summary, plan, progress?, budgetExceeded, failure? }] }"
       description: >
         The requests not opened yet (phase requested, offered or rejected; kept 30 minutes in memory)
         and the source moves of the journal. phase: requested, offered (opened, no answer), rejected,

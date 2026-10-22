@@ -17,6 +17,9 @@
   import { actionPath, blockOf, selectedCamera } from '../lib/cameras';
   import CertificatesSummary from '../components/CertificatesSummary.svelte';
   import CamsAdminSummary from '../components/CamsAdminSummary.svelte';
+  import MoveStatusCard from '../components/MoveStatusCard.svelte';
+  import { loadMoves, moves } from '../lib/move-state';
+  import { isActive } from '../lib/moves';
   import type { TlsView } from '../lib/tls';
 
   const gb = (b: number) => `${(b / 1024 ** 3).toFixed(1)} GB`;
@@ -43,6 +46,11 @@
   $effect(() => {
     if ($status) loadTls();
   });
+  // A move in progress, with each status refresh (camera-move plan Task 11).
+  $effect(() => {
+    if ($status) void loadMoves();
+  });
+  const activeMoves = $derived($moves.filter((m) => m.id && isActive(m)));
   let fixing = $state(false);
   let fixResult = $state('');
   const fixLocked = $derived(lockedWhy($rights, 'local')); // issue #227
@@ -79,6 +87,7 @@
           </dl>
         </div>
       {/if}
+      {#each activeMoves as m (m.id)}<MoveStatusCard move={m} name={$status.cameras?.find((c) => c.id === m.camera)?.camera.name ?? m.camera} />{/each}
       <div class="card" data-testid="card-camera">
         <h3>Camera</h3>
         <dl>

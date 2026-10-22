@@ -84,6 +84,14 @@ describe('a managed-admin UI session and the ui.* entries', () => {
     expect((await request(p.base).get('/control/session')).body).toEqual({ loggedIn: false });
   });
 
+  it('GET /control/session names the move right only with the move.send entry', async () => {
+    const m = await session(MANAGED_ADMIN);
+    expect((await allow(['move.send'])).status).toBe(200);
+    expect((await request(p.base).get('/control/session').set('Cookie', m)).body.rights.move).toBe(true);
+    expect((await allow([])).status).toBe(200);
+    expect((await request(p.base).get('/control/session').set('Cookie', m)).body.rights.move).toBeUndefined();
+  });
+
   it('off by default: settings and restarts answer 403 local_admin_only, recorded as auth-refused', async () => {
     const m = await session(MANAGED_ADMIN);
     for (const [method, path, body] of [['put', '/control/config', { sse: { pingS: 9 } }], ['delete', '/control/config/sse.pingS', {}], ['delete', '/control/config', {}], ['post', '/control/actions/restart-proxy', {}], ['post', '/control/actions/restart', {}], ['post', '/control/cameras/cam1/actions/restart', {}]] as const) {

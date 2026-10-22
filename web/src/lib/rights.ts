@@ -11,8 +11,8 @@ import { writable } from 'svelte/store';
 // changes one way only (retention and size caps up, spending caps down), with
 // the value that means no cap.
 export interface NarrowRule { dir: 'less' | 'more'; unlimited?: 0 | 'unset' }
-export interface Rights { localAdmin: boolean; config: boolean; restart: boolean; localSettings: string[]; narrow: Record<string, NarrowRule> }
-export const ALL_RIGHTS: Rights = { localAdmin: true, config: true, restart: true, localSettings: [], narrow: {} };
+export interface Rights { localAdmin: boolean; config: boolean; restart: boolean; move: boolean; localSettings: string[]; narrow: Record<string, NarrowRule> }
+export const ALL_RIGHTS: Rights = { localAdmin: true, config: true, restart: true, move: true, localSettings: [], narrow: {} };
 
 const isRule = (x: unknown): x is NarrowRule => {
   const r = x as NarrowRule | null;
@@ -28,20 +28,21 @@ export function rightsOf(session: unknown): Rights {
   const settings = Array.isArray(r.localSettings) ? r.localSettings.filter((x): x is string => typeof x === 'string') : [];
   const n = r.narrowSettings;
   const narrow = local || typeof n !== 'object' || n === null ? {} : Object.fromEntries(Object.entries(n).filter(([, v]) => isRule(v)).map(([k, v]) => [k, { dir: v.dir, ...(v.unlimited !== undefined ? { unlimited: v.unlimited } : {}) }]));
-  return { localAdmin: local, config: local || r.config === true, restart: local || r.restart === true, localSettings: local ? [] : settings, narrow };
+  return { localAdmin: local, config: local || r.config === true, restart: local || r.restart === true, move: local || r.move === true, localSettings: local ? [] : settings, narrow };
 }
 
 export const rights = writable<Rights>(ALL_RIGHTS);
 
 // What a control needs: 'config' (the Settings page's writes), 'restart'
-// (the proxy and camera-side restarts), 'local' (everything else only the
+// (the proxy and camera-side restarts), 'move' (starting a camera move: the
+// move.send allow entry), 'local' (everything else only the
 // local admin token may do).
-export type Need = 'local' | 'config' | 'restart';
+export type Need = 'local' | 'config' | 'restart' | 'move';
 export const LOCKED_TEXT = 'Needs the local admin token: you signed in from cams-admin.';
 
 // Why a control is off for this session, or null when it may be used.
 export function lockedWhy(r: Rights, need: Need): string | null {
-  if (r.localAdmin || (need === 'config' && r.config) || (need === 'restart' && r.restart)) return null;
+  if (r.localAdmin || (need === 'config' && r.config) || (need === 'restart' && r.restart) || (need === 'move' && r.move)) return null;
   return LOCKED_TEXT;
 }
 

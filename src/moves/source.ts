@@ -80,6 +80,8 @@ export interface MoveView {
   plan: MovePlan | null;
   progress?: { bytesDone: number; bytesTotal: number; rateBps: number; etaS: number };
   budgetExceeded: boolean;
+  // The code a failed move ended with.
+  failure?: string;
 }
 
 interface Pending {
@@ -309,6 +311,7 @@ export class MoveSource {
       id: r.id, requestId: r.requestId ?? '', camera: r.camera, target: { proxyId: r.peer.proxyId, name: r.peer.name },
       phase: r.phase !== 'opened' ? r.phase : r.plan ? 'approved' : r.answer?.accept ? 'awaiting-approval' : 'offered',
       ...(r.answer ? { answer: r.answer } : {}), settings: r.settings ?? {}, summary: r.summary ?? summarize(this.d.inventory, r.camera), plan: r.plan, budgetExceeded: r.budgetExceeded === true,
+      ...(r.failure ? { failure: r.failure } : {}),
     }));
     return [...moves, ...pend];
   }
