@@ -12,11 +12,12 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { writeKeyFile } from '../src/fleet/keyfile';
 import { writePrivateJson } from '../src/fleet/private-file';
+import type { Done } from '../src/fleet/commands';
 import type { Envelope } from '../src/fleet/protocol';
 import { MoveJournal } from '../src/moves/journal';
 import { approveProblem, MoveSource, type SourceDeps } from '../src/moves/source';
 import { hashMoveToken } from '../src/moves/token';
-import type { MoveBounds, MovePlan, MoveSummary, Space } from '../src/moves/types';
+import type { MoveBounds, MoveKind, MovePlan, MoveSummary, Space } from '../src/moves/types';
 import { siteCa } from '../src/tls/ca';
 import { issueLeaf, type Leaf } from '../src/tls/leaf';
 import { servedFingerprint } from '../src/tls/served';
@@ -298,6 +299,90 @@ describe('move.begin (cams-admin starts a move)', () => {
     } finally {
       journal.remove(BEGUN);
     }
+  });
+});
+
+describe('auto-approval within bounds (R2), on a source alone', () => {
+  // The fleet cases (begin, open, answer over cams-admin) are in
+  // test/move-auto-approve.test.ts: this file's proxy uses up the runner's 30 commands a minute.
+  const all5: MoveKind[] = ['stills', 'clips', 'events', 'checks', 'archive'];
+  const within: MoveBounds = { transfer: true, kinds: all5, space: 'fit', maxBudgetS: 3600 };
+  const tight: Space = { needed: 1000, available: 10, fits: false, perKind: { clips: 1000 }, retentionProposal: null };
+  const accepted = { accept: true, space: fits, estimateS: 540 };
+  const M = 'mv_6123456789ABCDEFGHJK';
+  const RQ = 'rq_0123456789ABCDEFGHJK';
+  const summary = Object.fromEntries(all5.map((k) => [k, { files: k === 'clips' ? 1 : 0, bytes: k === 'clips' ? 5 : 0, rows: 0, oldest: null, newest: null }])) as unknown as MoveSummary;
+  const unit = (o: { allowed?: boolean; bounds?: MoveBounds | null } = {}) => {
+    const j = new MoveJournal(mkdtempSync(join(tmpdir(), 'camproxy-auto-')));
+    const events: Record<string, any>[] = [];
+    const writes: Record<string, any>[] = [];
+    const s = new MoveSource({ journal: j, running: () => ({ tls: { site: 't' }, cameras: {}, cameraOrder: [] }), siteReady: () => true, sendAllowed: () => o.allowed ?? true, emit: (e: unknown) => events.push(e as Record<string, any>), audit: { write: (r: unknown) => writes.push(r as Record<string, any>) }, proxyId: () => 'prx_0123456789ABCDEFGHJK' } as unknown as SourceDeps);
+    j.save({ v: 1, id: M, role: 'source', camera: 'cam3', phase: 'opened', plan: null, peer: { proxyId: TARGET, name: '', ip: '192.0.2.20' }, requestId: RQ, bounds: o.bounds === undefined ? within : o.bounds, summary, chunks: {}, bytesDone: 0, startedAt: 1 });
+    // The handler is synchronous (a Done, not a promise).
+    const answerIt = (a: object = accepted) => s.handlers()['move.answer']({ v: 1, moveId: M, requestId: RQ, target: { proxyId: TARGET, name: 'Mini PC' }, ...a }, undefined as never) as Done;
+    const approves = () => events.filter((e) => e.kind === 'move.approve');
+    return { s, j, events, writes, answerIt, approves };
+  };
+
+  it('no move.send at answer time waits', () => {
+    const u = unit({ allowed: false });
+    expect(u.answerIt()).toEqual({ status: 'ok', result: {} });
+    expect(u.approves()).toEqual([]);
+    expect(u.writes.map((w) => w.action)).toEqual(['move-auto-approve']);
+    expect(u.writes[0]).toMatchObject({ outcome: 'failure', user: 'cams-admin', camera: 'cam3', details: { moveId: M, reason: 'not_allowed', detail: 'moves_not_allowed', bounds: within, estimateS: 540, source: 'prx_0123456789ABCDEFGHJK', target: TARGET, role: 'source' } });
+    expect(u.j.load(M)).toMatchObject({ plan: null, autoApproval: { state: 'waiting', reason: 'not_allowed' } });
+    expect(u.s.list()[0]).toMatchObject({ phase: 'awaiting-approval', autoApproval: { state: 'waiting', reason: 'not_allowed' } });
+  });
+
+  it('a space choice that is not possible waits', () => {
+    const u = unit({ bounds: { ...within, space: 'all' } });
+    u.answerIt({ ...accepted, space: tight });
+    expect(u.approves()).toEqual([]);
+    expect(u.writes.map((w) => [w.action, w.details.reason])).toEqual([['move-auto-approve', 'space']]);
+    expect(u.j.load(M)!.autoApproval).toMatchObject({ state: 'waiting', reason: 'space' });
+  });
+
+  it('retention with an empty proposal waits for space, not plan (review M2)', () => {
+    const u = unit({ bounds: { ...within, space: 'retention' } });
+    u.answerIt({ ...accepted, space: { ...tight, retentionProposal: {} } });
+    expect(u.approves()).toEqual([]);
+    expect(u.writes.map((w) => [w.action, w.details.reason])).toEqual([['move-auto-approve', 'space']]);
+  });
+
+  it('no estimate waits', () => {
+    const u = unit();
+    u.answerIt({ accept: true, space: fits });
+    expect(u.writes.map((w) => [w.action, w.details.reason, w.details.estimateS])).toEqual([['move-auto-approve', 'no_estimate', null]]);
+  });
+
+  it('a rejected answer writes no auto-approval note (B6)', () => {
+    const u = unit();
+    expect(u.answerIt({ accept: false, reason: 'busy' }).status).toBe('ok');
+    expect(u.approves()).toEqual([]);
+    expect(u.writes.map((w) => w.action)).toEqual(['move-phase']);
+  });
+
+  it('bounds null never approves', () => {
+    const u = unit({ bounds: null });
+    u.answerIt();
+    expect([u.approves(), u.writes]).toEqual([[], []]);
+    expect(u.j.load(M)!.autoApproval).toBeUndefined();
+    expect(u.s.list()[0]).not.toHaveProperty('autoApproval');
+  });
+
+  it('reemitApprovals sends the plan again while approved and not started', () => {
+    const u = unit();
+    u.answerIt();
+    expect(u.approves()).toHaveLength(1);
+    expect(u.writes.map((w) => [w.action, w.details.label])).toEqual([['move-approve', 'cams-admin auto-approval']]);
+    u.s.reemitApprovals();
+    u.s.reemitApprovals();
+    expect(u.approves()).toEqual([u.approves()[0], u.approves()[0], u.approves()[0]]);
+    expect(u.writes).toHaveLength(1);
+    // Started (switching): nothing more.
+    u.j.save({ ...u.j.load(M)!, phase: 'switching' });
+    u.s.reemitApprovals();
+    expect(u.approves()).toHaveLength(3);
   });
 });
 

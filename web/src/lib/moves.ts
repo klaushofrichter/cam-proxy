@@ -1,10 +1,10 @@
 // The camera-move UI's logic apart from the components (camera-move plan
 // Task 11, spec S §7): what the panel offers, the plan it sends, the texts.
-import type { MoveKind, MovePlan, MoveReason, MoveSummary, Settings, Space } from '../../../src/moves/types';
-import { estimateText } from '../../../src/moves/plan';
+import type { MoveBounds, MoveKind, MovePlan, MoveReason, MoveSummary, Settings, Space } from '../../../src/moves/types';
+import { estimateText, type AutoWaitReason } from '../../../src/moves/plan';
 
 // The plan rules live once, in src/moves/plan.ts (the proxy's auto-approval shares them).
-export { KINDS, budgetDefault, estimateText, hasContent, kindsWithContent, planFrom, spaceOptions, type MoveForm } from '../../../src/moves/plan';
+export { KINDS, budgetDefault, type AutoWaitReason, estimateText, hasContent, kindsWithContent, planFrom, spaceOptions, type MoveForm } from '../../../src/moves/plan';
 
 export type { MoveKind, MovePlan, MoveReason, MoveSummary, Space };
 export const KIND_LABEL: Record<MoveKind, string> = { stills: 'Stills', clips: 'Clips', events: 'Events', checks: 'Still checks', archive: 'Archive' };
@@ -20,6 +20,9 @@ export interface MoveItem {
   summary?: MoveSummary;
   settings?: Settings;
   plan?: MovePlan | null;
+  // What cams-admin let this proxy approve by itself (move.begin); null: a person approves.
+  bounds?: MoveBounds | null;
+  autoApproval?: { state: 'approved' | 'waiting'; reason?: AutoWaitReason };
   progress?: { bytesDone: number; bytesTotal: number; rateBps: number; etaS: number };
   budgetExceeded: boolean;
   failure?: string;
@@ -90,6 +93,16 @@ export function statusLine(m: Pick<MoveItem, 'target' | 'phase' | 'progress' | '
 }
 
 export const OVER_BUDGET_TEXT = 'Over the time budget; still copying';
+
+// A move cams-admin started that the source left for a person (B5), in words.
+const AUTO_WAIT: Record<AutoWaitReason, string> = {
+  over_budget: 'the estimate is over the time budget cams-admin allowed',
+  space: "the content doesn't fit the way cams-admin allowed",
+  no_estimate: 'the target gave no estimate',
+  not_allowed: "sending cameras away isn't allowed here right now",
+  plan: 'the plan did not fit the answer',
+};
+export const autoWaitText = (reason: AutoWaitReason): string => `Started from cams-admin; not approved automatically: ${AUTO_WAIT[reason]}. Approve it here or cancel.`;
 
 // This proxy refusing to start a move (409 move_refused), in words.
 const REFUSAL: Record<string, string> = {

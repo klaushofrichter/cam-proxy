@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { budgetDefault, movedText, refusalText, estimateText, failText, limitText, phaseText, planFrom, rejectText, sizeText, spaceOptions, statusLine, type MoveForm } from '../web/src/lib/moves';
+import { autoWaitText, budgetDefault, movedText, refusalText, estimateText, failText, limitText, phaseText, planFrom, rejectText, sizeText, spaceOptions, statusLine, type MoveForm } from '../web/src/lib/moves';
 import type { MoveSummary, Space } from '../src/moves/types';
 
 const kind = (files: number, bytes: number) => ({ files, bytes, rows: 0, oldest: files ? 1_700_000_000_000 : null, newest: files ? 1_700_000_900_000 : null });
@@ -66,6 +66,13 @@ describe('texts', () => {
     expect(rejectText('Shed', undefined, '')).toBe("Shed can't take this camera: it didn't answer");
     expect(rejectText('Shed', 'not_registered', '192.0.2.10')).toBe("Shed can't take this camera: cams-admin doesn't know this camera (register it in cams-admin first)");
     expect(rejectText('Shed', 'internal', '192.0.2.10')).toBe("Shed can't take this camera: something went wrong in cams-admin; try again");
+  });
+  it('an offer cams-admin started and the source left for a person says why', () => {
+    expect(autoWaitText('over_budget')).toBe('Started from cams-admin; not approved automatically: the estimate is over the time budget cams-admin allowed. Approve it here or cancel.');
+    expect(autoWaitText('space')).toBe("Started from cams-admin; not approved automatically: the content doesn't fit the way cams-admin allowed. Approve it here or cancel.");
+    expect(autoWaitText('no_estimate')).toBe('Started from cams-admin; not approved automatically: the target gave no estimate. Approve it here or cancel.');
+    expect(autoWaitText('not_allowed')).toBe("Started from cams-admin; not approved automatically: sending cameras away isn't allowed here right now. Approve it here or cancel.");
+    expect(autoWaitText('plan')).toBe('Started from cams-admin; not approved automatically: the plan did not fit the answer. Approve it here or cancel.');
   });
   it('limits show their unit', () => {
     expect(limitText('stills.maxGB', 90)).toBe('stills.maxGB: 90 GB');

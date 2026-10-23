@@ -36,6 +36,10 @@ describe('autoPlan', () => {
       .toMatchObject({ space: 'retention', targetSettings: { 'stills.maxGB': 90, 'storage.maxBytes': 200 * 1024 ** 3 } }));
   it('tight + retention without a proposal waits', () =>
     expect(autoPlan({ transfer: true, kinds: all5, space: 'retention', maxBudgetS: 3600 }, summary, { ...tightA, space: { ...tight, retentionProposal: null } })).toEqual({ reason: 'space' }));
+  it('tight + retention with an empty proposal waits for space (the panel offers no retention)', () => {
+    const a = { ...tightA, space: { ...tight, retentionProposal: {} } };
+    expect(autoPlan({ transfer: true, kinds: all5, space: 'retention', maxBudgetS: 3600 }, summary, a)).toEqual({ reason: 'space' });
+  });
   it('no transfer: no kinds, budget the estimate', () =>
     expect(autoPlan({ transfer: false, kinds: [], space: 'all', maxBudgetS: 3600 }, summary, fitsA))
       .toEqual({ plan: { transfer: false, kinds: [], space: 'all', targetSettings: null, budgetS: 540, estimateS: 540 } }));
@@ -46,7 +50,7 @@ describe('autoPlan', () => {
     for (const space of ['all', 'omit', 'retention', 'fit'] as const)
       for (const transfer of [true, false])
         for (const kinds of [all5, ['clips'], []] as MoveKind[][])
-          for (const a of [fitsA, tightA]) {
+          for (const a of [fitsA, tightA, { ...tightA, space: { ...tight, retentionProposal: {} } }]) {
             const b: MoveBounds = { transfer, kinds, space, maxBudgetS: 3600 };
             const r = autoPlan(b, summary, a);
             if ('plan' in r) { plans++; expect(approveProblem(r.plan, summary, a)).toBeNull(); }

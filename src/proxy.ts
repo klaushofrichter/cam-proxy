@@ -1060,12 +1060,14 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     setPhase: (r, phase, o) => moveTarget.setPhase(r, phase, o),
     proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
   });
-  // After every welcome: the open move's phase again (B2).
+  // After every welcome: the open move's phase again (B2), and an approval not acted on yet (B7).
   camsAdmin.onWelcome(() => {
     try {
       moveSource.reemit(moveJournal.currentPhase());
       // A failed move's failure too (its record stays until a cancel; the event may have been lost, final review 4).
       moveSource.reemitFailed();
+      // An approved move not started yet: its plan again (B7).
+      moveSource.reemitApprovals();
     } catch (err) {
       logger.warn({ err: (err as Error).message }, 'move_phase_reemit_failed');
     }

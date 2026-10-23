@@ -2,7 +2,7 @@
   import { api, ApiError } from '../lib/api';
   import { loadMoves } from '../lib/move-state';
   import { localDate } from '../lib/format';
-  import { budgetDefault, estimateText, KIND_LABEL, kindsWithContent, limitText, planFrom, sizeText, spaceOptions, type MoveItem, type MoveKind } from '../lib/moves';
+  import { autoWaitText, budgetDefault, estimateText, KIND_LABEL, kindsWithContent, limitText, planFrom, sizeText, spaceOptions, type MoveItem, type MoveKind } from '../lib/moves';
 
   // The one confirmation panel (camera-move spec §7): what moves, what does
   // not fit and how to cope, the time, and the end. Approving is the only approval.
@@ -54,6 +54,7 @@
 
 <div class="card" data-testid="move-panel">
   <h3>Move {name} to {target}</h3>
+  {#if move.autoApproval?.state === 'waiting' && move.autoApproval.reason}<p class="warn small" data-testid="move-auto-wait">{autoWaitText(move.autoApproval.reason)}</p>{/if}
   <h4>Settings that move with the camera</h4>
   <dl data-testid="move-settings">
     {#each flat as [k, v] (k)}<dt>{k}</dt><dd>{String(v)}</dd>{/each}

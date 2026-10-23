@@ -66,7 +66,8 @@ export function autoPlan(b: MoveBounds, summary: MoveSummary, answer: MoveAnswer
   if (estimateS === undefined) return { reason: 'no_estimate' };
   if (estimateS > b.maxBudgetS) return { reason: 'over_budget' };
   const fits = !answer.space || answer.space.fits;
-  if (b.transfer && !fits && b.space === 'all') return { reason: 'space' };
+  // A choice the panel would not offer for this answer (all when it doesn't fit, retention without a proposal).
+  if (b.transfer && !fits && !(spaceOptions(answer.space) as string[]).includes(b.space)) return { reason: 'space' };
   const r = planFrom({
     transfer: b.transfer,
     leaveOut: kindsWithContent(summary).filter((k) => !b.kinds.includes(k)),

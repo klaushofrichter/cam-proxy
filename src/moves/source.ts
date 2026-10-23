@@ -9,7 +9,7 @@ import { newId } from '../fleet/protocol';
 import { listChunks, summarize, type InventoryDeps } from './inventory';
 import type { PushResult } from '../tls/push';
 import { moveEnded, type MoveJournal, type MoveRecord, type MoveTombstone } from './journal';
-import type { AutoWaitReason } from './plan';
+import { autoPlan, type AutoWaitReason } from './plan';
 import type { Purged } from './purge';
 import { MOVE_KINDS, type MoveActor, type MoveAnswer, type MoveBounds, type MoveCameraConnection, type MoveCopied, type MoveEvent, type MoveKind, type MovePlan, type MoveSummary, type Settings } from './types';
 
@@ -720,6 +720,8 @@ export class MoveSource {
     this.d.journal.save(r);
     p.moveId = a.moveId;
     this.phaseEvent(r);
+    // The target answered before the open: the pending request kept it.
+    this.autoApprove(r);
     return ok();
   }
 
@@ -742,6 +744,7 @@ export class MoveSource {
       r.answer = answer;
       r.peer.name = a.target.name;
       this.d.journal.save(r);
+      this.autoApprove(r);
       return ok();
     }
     // Answered before an open (cams-admin refused it, or the target answered first): the pending request keeps it.
@@ -751,6 +754,56 @@ export class MoveSource {
     Object.assign(p, { answer, moveId: a.moveId, targetName: a.target.name });
     if (!a.accept) this.rejected(a.moveId, p.camera, a);
     return ok();
+  }
+
+  // R2: an accepted answer to a move cams-admin began with bounds. The plan
+  // the panel would build is approved by approve() itself, as a click would,
+  // with all its checks; otherwise the offer waits for a person, and why is
+  // audited and kept on the record (B5). Once per move.
+  private autoApprove(r: MoveRecord): void {
+    if (!r.bounds || r.plan || !r.answer?.accept || r.autoApproval) return;
+    try {
+      const host = this.hostRefusal();
+      if (host) return this.autoWait(r, 'not_allowed', host);
+      const built = autoPlan(r.bounds, r.summary ?? summarize(this.d.inventory, r.camera), r.answer);
+      if ('reason' in built) return this.autoWait(r, built.reason);
+      const res = this.approve(r.id, built.plan, AUTO_ASKER);
+      if (res.status !== 202) {
+        const body = res.body as { error?: string; detail?: string };
+        return this.autoWait(r, 'plan', body.detail ?? body.error);
+      }
+      const fresh = this.source(r.id);
+      if (fresh) {
+        fresh.autoApproval = { state: 'approved', at: this.now() };
+        this.d.journal.save(fresh);
+      }
+    } catch {
+      // The answer is kept regardless; without a decision the offer waits for a person.
+    }
+  }
+
+  private autoWait(r: MoveRecord, reason: AutoWaitReason, detail?: string): void {
+    const fresh = this.source(r.id) ?? r;
+    fresh.autoApproval = { state: 'waiting', reason, at: this.now() };
+    this.d.journal.save(fresh);
+    this.d.audit.write({
+      action: 'move-auto-approve', category: ['configuration'], type: ['info'], outcome: 'failure',
+      user: 'cams-admin', camera: fresh.camera,
+      message: `Camera move ${fresh.id} (${fresh.camera} to ${fresh.peer.name || fresh.peer.proxyId}): not approved automatically (${reason}); waiting for approval here`,
+      details: { moveId: fresh.id, camera: fresh.camera, source: this.self(), target: fresh.peer.proxyId, role: 'source', reason, ...(detail ? { detail } : {}), bounds: fresh.bounds ?? null, estimateS: fresh.answer?.estimateS ?? null },
+    });
+  }
+
+  // After every welcome (B7): the plan of each move approved here and not
+  // started yet, again (a lost move.approve would leave it waiting with nobody to click).
+  reemitApprovals(): void {
+    let list: MoveRecord[];
+    try {
+      list = this.d.journal.all();
+    } catch {
+      return;
+    }
+    for (const r of list) if (r.role === 'source' && r.phase === 'opened' && r.plan) this.d.emit({ kind: 'move.approve', moveId: r.id, plan: r.plan });
   }
 
   private rejected(moveId: string, cam: string, a: MoveAnswerArgs): void {
