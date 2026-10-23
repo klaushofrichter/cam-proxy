@@ -3,14 +3,15 @@ import type { AuditLog } from '../audit/audit-log';
 import { activeCameraIds } from '../config/cameras';
 import type { CameraNode, Config } from '../config/defaults';
 import { applyOverrides, planUnset, removeOverride, writeOverridesFile, type Loaded } from '../config/load';
-import { planProblem, type MoveAnswerArgs, type MoveCancelArgs, type MoveFinishArgs, type MoveGoArgs, type MoveOpenArgs, type MoveReleaseArgs, type MoveTargetsArgs } from '../fleet/command-args';
+import { planProblem, type MoveAnswerArgs, type MoveBeginArgs, type MoveCancelArgs, type MoveFinishArgs, type MoveGoArgs, type MoveOpenArgs, type MoveReleaseArgs, type MoveTargetsArgs } from '../fleet/command-args';
 import type { Done, Handler } from '../fleet/commands';
 import { newId } from '../fleet/protocol';
 import { listChunks, summarize, type InventoryDeps } from './inventory';
 import type { PushResult } from '../tls/push';
 import { moveEnded, type MoveJournal, type MoveRecord, type MoveTombstone } from './journal';
+import type { AutoWaitReason } from './plan';
 import type { Purged } from './purge';
-import { MOVE_KINDS, type MoveActor, type MoveAnswer, type MoveCameraConnection, type MoveCopied, type MoveEvent, type MoveKind, type MovePlan, type MoveSummary, type Settings } from './types';
+import { MOVE_KINDS, type MoveActor, type MoveAnswer, type MoveBounds, type MoveCameraConnection, type MoveCopied, type MoveEvent, type MoveKind, type MovePlan, type MoveSummary, type Settings } from './types';
 
 // The source side of a camera move (camera-move plan Task 7, S §4, §7, §9.1):
 // the source proxy's page starts a move (move.targets, move.request events),
@@ -66,6 +67,9 @@ export interface SourceDeps {
 
 // Who asked, from the request (for the audit record and the move.request event).
 export interface Asker { actor: MoveActor; user: string; ip?: string; userAgent?: string }
+// cams-admin starting a move (move.begin), and approving it within the bounds (R1, B10).
+export const BEGIN_ASKER: Asker = { actor: { origin: 'managed', label: 'cams-admin move' }, user: 'cams-admin' };
+export const AUTO_ASKER: Asker = { actor: { origin: 'managed', label: 'cams-admin auto-approval' }, user: 'cams-admin' };
 
 // One move as the source's page shows it (GET /control/moves).
 export interface MoveView {
@@ -78,6 +82,10 @@ export interface MoveView {
   settings: Settings;
   summary: MoveSummary;
   plan: MovePlan | null;
+  // What cams-admin lets this proxy approve by itself (move.begin); null: a person approves.
+  bounds: MoveBounds | null;
+  // The auto-approval's outcome: approved, or waiting for a person and why.
+  autoApproval?: { state: 'approved' | 'waiting'; reason?: AutoWaitReason };
   progress?: { bytesDone: number; bytesTotal: number; rateBps: number; etaS: number };
   budgetExceeded: boolean;
   // The code a failed move ended with.
@@ -96,6 +104,7 @@ interface Pending {
   moveId?: string;
   targetName?: string;
   answer?: MoveAnswer;
+  bounds: MoveBounds | null;
 }
 
 // A give-back step that failed, with its code (cert_failed, ftp_failed, camera_failed, no_site_ca).
@@ -272,20 +281,20 @@ export class MoveSource {
     return t ? { targets: t.targets } : null;
   }
 
-  // POST /control/moves (after refusal() said null).
-  request(cam: string, target: string, who: Asker): { requestId: string } {
+  // POST /control/moves and move.begin (after refusal() said null); bounds only from move.begin.
+  request(cam: string, target: string, who: Asker, bounds: MoveBounds | null = null): { requestId: string } {
     this.prune();
     const node = this.d.running().cameras[cam];
     const requestId = newId('rq_');
-    const p: Pending = { requestId, camera: cam, target, actor: who.actor, summary: summarize(this.d.inventory, cam), settings: settingsOf(node), connection: connectionOf(node), at: this.now(), targetName: this.targetName(target) };
+    const p: Pending = { requestId, camera: cam, target, actor: who.actor, summary: summarize(this.d.inventory, cam), settings: settingsOf(node), connection: connectionOf(node), at: this.now(), targetName: this.targetName(target), bounds };
     this.pending.set(requestId, p);
-    this.d.emit({ kind: 'move.request', requestId, camera: p.connection, target, actor: p.actor, summary: p.summary, settings: p.settings, bounds: null });
+    this.d.emit({ kind: 'move.request', requestId, camera: p.connection, target, actor: p.actor, summary: p.summary, settings: p.settings, bounds });
     const bytes = Object.values(p.summary).reduce((n, k) => n + k.bytes, 0);
     this.d.audit.write({
       action: 'move-request', category: ['configuration'], type: ['creation'], outcome: 'success',
       user: who.user, ip: who.ip, userAgent: who.userAgent, camera: cam,
       message: `Camera move requested: ${cam} to ${p.targetName ?? target} by ${who.actor.label}`,
-      details: { requestId, camera: cam, source: this.self(), target, targetName: p.targetName ?? null, origin: who.actor.origin, label: who.actor.label, bytes, summary: p.summary },
+      details: { requestId, camera: cam, source: this.self(), target, targetName: p.targetName ?? null, origin: who.actor.origin, label: who.actor.label, bytes, summary: p.summary, bounds, autoApprove: bounds !== null },
     });
     return { requestId };
   }
@@ -304,12 +313,13 @@ export class MoveSource {
       ...(p.moveId ? { id: p.moveId } : {}),
       requestId: p.requestId, camera: p.camera, target: { proxyId: p.target, name: p.targetName ?? '' },
       phase: p.answer && !p.answer.accept ? 'rejected' : p.moveId ? 'offered' : 'requested',
-      ...(p.answer ? { answer: p.answer } : {}), settings: p.settings, summary: p.summary, plan: null, budgetExceeded: false,
+      ...(p.answer ? { answer: p.answer } : {}), settings: p.settings, summary: p.summary, plan: null, bounds: p.bounds, budgetExceeded: false,
     }));
     const moves: MoveView[] = records.map((r) => ({
       id: r.id, requestId: r.requestId ?? '', camera: r.camera, target: { proxyId: r.peer.proxyId, name: r.peer.name },
       phase: r.phase !== 'opened' ? r.phase : r.plan ? 'approved' : r.answer?.accept ? 'awaiting-approval' : 'offered',
-      ...(r.answer ? { answer: r.answer } : {}), settings: r.settings ?? {}, summary: r.summary ?? summarize(this.d.inventory, r.camera), plan: r.plan, budgetExceeded: r.budgetExceeded === true,
+      ...(r.answer ? { answer: r.answer } : {}), settings: r.settings ?? {}, summary: r.summary ?? summarize(this.d.inventory, r.camera), plan: r.plan, bounds: r.bounds ?? null, budgetExceeded: r.budgetExceeded === true,
+      ...(r.autoApproval ? { autoApproval: { state: r.autoApproval.state, ...(r.autoApproval.reason ? { reason: r.autoApproval.reason } : {}) } } : {}),
       ...(r.failure ? { failure: r.failure } : {}),
     }));
     return [...moves, ...pend];
@@ -676,11 +686,20 @@ export class MoveSource {
         for (const p of this.pending.values()) if (!p.targetName) p.targetName = this.targetName(p.target);
         return ok();
       }),
+      'move.begin': guard((a: MoveBeginArgs) => this.begin(a)),
       'move.open': guard((a: MoveOpenArgs) => this.open(a)),
       'move.answer': guard((a: MoveAnswerArgs) => this.answer(a)),
       'move.go': guard((a: MoveGoArgs) => this.go(a)),
       'move.release': guard((a: MoveReleaseArgs) => this.release(a)),
     };
+  }
+
+  // move.begin (R1): cams-admin starts a move as the page would, with the
+  // same refusals; the move.request event (with the bounds) goes out before this result.
+  begin(a: MoveBeginArgs): Done {
+    const why = this.refusal(a.camera);
+    if (why) return failed(why);
+    return ok({ requestId: this.request(a.camera, a.target, BEGIN_ASKER, a.bounds).requestId });
   }
 
   private open(a: MoveOpenArgs): Done {
@@ -693,7 +712,7 @@ export class MoveSource {
     const r: MoveRecord = {
       v: 1, id: a.moveId, role: 'source', camera: a.camera, phase: 'opened', plan: null,
       peer: { proxyId: p.target, name: p.targetName ?? '', ip: a.targetIp },
-      tokenHash: a.tokenHash, requestId: a.requestId, actor: p.actor,
+      tokenHash: a.tokenHash, requestId: a.requestId, actor: p.actor, bounds: p.bounds,
       summary: p.summary, settings: p.settings, cameraConnection: p.connection,
       ...(p.answer ? { answer: p.answer } : {}),
       chunks: {}, bytesDone: 0, startedAt: this.now(),

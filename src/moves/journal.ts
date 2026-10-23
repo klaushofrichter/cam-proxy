@@ -1,8 +1,9 @@
 import { lstatSync, readdirSync, renameSync, rmSync } from 'fs';
 import { join, resolve, sep } from 'path';
 import { PrivateFileInvalid, readPrivateJson, writePrivateJson } from '../fleet/private-file';
+import type { AutoWaitReason } from './plan';
 import type { Purged } from './purge';
-import type { ChunkState, MoveActor, MoveAnswer, MoveCameraConnection, MoveCopied, MoveKind, MovePhaseName, MovePlan, MoveRole, MoveSummary, Settings, Space } from './types';
+import type { ChunkState, MoveActor, MoveAnswer, MoveBounds, MoveCameraConnection, MoveCopied, MoveKind, MovePhaseName, MovePlan, MoveRole, MoveSummary, Settings, Space } from './types';
 
 // The durable record of one move on this proxy: <dataDir>/admin/moves/<id>.json,
 // mode 600 (it holds the move token hash or the plain token and the target's
@@ -56,6 +57,10 @@ export interface MoveRecord {
   requestId?: string;
   actor?: MoveActor;
   answer?: MoveAnswer;
+  // source: the bounds of a move.begin (null or absent: a person approves), and
+  // the auto-approval's outcome (approved, or left for a person and why).
+  bounds?: MoveBounds | null;
+  autoApproval?: { state: 'approved' | 'waiting'; reason?: AutoWaitReason; at: number };
   // source: when the chunks from the approval day on were listed again (at released, P12).
   manifestRefreshedAt?: number;
   // target only

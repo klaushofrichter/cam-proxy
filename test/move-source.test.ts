@@ -14,9 +14,9 @@ import { writeKeyFile } from '../src/fleet/keyfile';
 import { writePrivateJson } from '../src/fleet/private-file';
 import type { Envelope } from '../src/fleet/protocol';
 import { MoveJournal } from '../src/moves/journal';
-import { approveProblem } from '../src/moves/source';
+import { approveProblem, MoveSource, type SourceDeps } from '../src/moves/source';
 import { hashMoveToken } from '../src/moves/token';
-import type { MovePlan, MoveSummary, Space } from '../src/moves/types';
+import type { MoveBounds, MovePlan, MoveSummary, Space } from '../src/moves/types';
 import { siteCa } from '../src/tls/ca';
 import { issueLeaf, type Leaf } from '../src/tls/leaf';
 import { servedFingerprint } from '../src/tls/served';
@@ -194,6 +194,110 @@ describe('starting a move (S §4, P10)', () => {
       await allow(['move.send']);
     }
     expect(moveEvents('move.request').length).toBe(n + 1);
+  });
+});
+
+describe('move.begin (cams-admin starts a move)', () => {
+  const BEGUN = 'mv_2123456789ABCDEFGHJK';
+  const bounds: MoveBounds = { transfer: true, kinds: ['clips', 'events'], space: 'fit', maxBudgetS: 7200 };
+  const begin = (o: Record<string, unknown> = {}) => done('move.begin', { v: 1, camera: 'cam3', target: TARGET, bounds, ...o });
+  const requestOf = (rid: string) => fake.events().find((e) => bodyOf(e).kind === 'move.request' && bodyOf(e).requestId === rid);
+  // The refusals and no trace of them: no move.request event, no move-request audit.
+  const refused = async (o: Record<string, unknown>, code: string) => {
+    const [n, m] = [moveEvents('move.request').length, audits('move-request').length];
+    expect(await begin(o), code).toMatchObject({ status: 'failed', code });
+    expect([moveEvents('move.request').length, audits('move-request').length]).toEqual([n, m]);
+  };
+  // A source with no proxy around it: the refusals the shared proxy can't show.
+  const unit = (running: () => object, o: { siteReady?: boolean; sendAllowed?: boolean } = {}) => {
+    const events: unknown[] = [];
+    const writes: unknown[] = [];
+    const s = new MoveSource({ running, siteReady: () => o.siteReady ?? true, sendAllowed: () => o.sendAllowed ?? true, emit: (e: unknown) => events.push(e), audit: { write: (r: unknown) => writes.push(r) }, journal: { active: () => [] } } as unknown as SourceDeps);
+    return { begin: (a: object) => s.handlers()['move.begin']({ v: 1, target: TARGET, bounds, ...a }, undefined as never), events, writes };
+  };
+
+  it('begin emits move.request with the bounds and answers the requestId', async () => {
+    const r = await begin();
+    expect(r.status).toBe('ok');
+    const rid = r.result.requestId;
+    expect(rid).toMatch(/^rq_[0-9A-HJKMNP-TV-Z]{20}$/);
+    expect(Object.keys(r.result)).toEqual(['requestId']);
+    const env = requestOf(rid)!;
+    expect(strict('event')(env.msg), why(strict('event'))).toBe(true);
+    expect(bodyOf(env)).toMatchObject({ kind: 'move.request', requestId: rid, target: TARGET, bounds, actor: { origin: 'managed', label: 'cams-admin move' } });
+    // The event goes out before the result: cams-admin knows the bounds when it reads the requestId.
+    const result = fake.results(r.cmdId).find((x) => bodyOf(x).phase === 'done')!;
+    expect(env.msg.seq).toBeLessThan(result.msg.seq);
+    expect(JSON.stringify(env.msg)).not.toContain(sims[0].password);
+    const rec = audits('move-request').find((a) => a.cam_proxy.requestId === rid)!;
+    expect(rec).toMatchObject({ user: { name: 'cams-admin' }, cam_proxy: { origin: 'managed', label: 'cams-admin move', bounds, autoApprove: true } });
+    const view = (await request(p.base).get('/control/moves').set(admin())).body.items.find((i: { requestId: string }) => i.requestId === rid);
+    expect(view).toMatchObject({ requestId: rid, phase: 'requested', bounds });
+  });
+
+  it('begin with bounds null is a plain request', async () => {
+    const r = await begin({ bounds: null });
+    expect(r.status).toBe('ok');
+    expect(bodyOf(requestOf(r.result.requestId)!)).toHaveProperty('bounds', null);
+    expect(audits('move-request').find((a) => a.cam_proxy.requestId === r.result.requestId)!.cam_proxy).toMatchObject({ bounds: null, autoApprove: false });
+  });
+
+  it('a page request sends bounds null (B9)', async () => {
+    const rid = (await request(p.base).post('/control/moves').set(admin()).send({ camera: 'cam3', target: TARGET }).expect(202)).body.requestId;
+    await until(() => !!requestOf(rid), 10_000);
+    expect(bodyOf(requestOf(rid)!)).toHaveProperty('bounds', null);
+    expect((await request(p.base).get('/control/moves').set(admin())).body.items.find((i: { requestId: string }) => i.requestId === rid)).toHaveProperty('bounds', null);
+  });
+
+  it('begin is refused like the page', async () => {
+    await refused({ camera: 'cam9' }, 'external_cert');
+    // Without move.send the runner refuses move.begin before the handler.
+    await allow([]);
+    try {
+      const n = moveEvents('move.request').length;
+      const sent = fake.sendCommand('move.begin', { v: 1, camera: 'cam3', target: TARGET, bounds }, { actor: 'admin@example.org' });
+      await until(() => fake.results(sent.cmdId).some((x) => bodyOf(x).phase === 'done'), 10_000);
+      expect(bodyOf(fake.results(sent.cmdId).find((x) => bodyOf(x).phase === 'done')!).status).toBe('refused');
+      expect(moveEvents('move.request').length).toBe(n);
+    } finally {
+      await allow(['move.send']);
+    }
+    // ...and the handler on its own answers moves_not_allowed.
+    const off = unit(() => p.proxy.running, { sendAllowed: false });
+    expect(off.begin({ camera: 'cam3' })).toEqual({ status: 'failed', code: 'moves_not_allowed' });
+    expect([off.events, off.writes]).toEqual([[], []]);
+    // One move per proxy: an open move makes it busy.
+    journal.save({ v: 1, id: BEGUN, role: 'source', camera: 'cam3', phase: 'opened', plan: null, peer: { proxyId: TARGET, name: '', ip: '192.0.2.20' }, chunks: {}, bytesDone: 0, startedAt: Date.now() });
+    try {
+      await refused({}, 'busy');
+    } finally {
+      journal.remove(BEGUN);
+    }
+    // The Pi (no tls.site): no_site_ca, whatever it names.
+    const pi = unit(() => ({ tls: { site: null }, cameras: {}, cameraOrder: [] }), { siteReady: false });
+    expect(pi.begin({ camera: 'cam1' })).toEqual({ status: 'failed', code: 'no_site_ca' });
+    expect(pi.begin({ camera: 'cam7' })).toEqual({ status: 'failed', code: 'no_site_ca' });
+    expect([pi.events, pi.writes]).toEqual([[], []]);
+  });
+
+  it('begin for an unknown or hidden camera', async () => {
+    await refused({ camera: 'cam7' }, 'unknown_camera');
+    const hidden = unit(() => ({ tls: { site: 't' }, cameras: { cam5: { moved: 'mv_ZZZZZZZZZZZZZZZZZZZZ' } }, cameraOrder: ['cam5'] }));
+    expect(hidden.begin({ camera: 'cam5' })).toEqual({ status: 'failed', code: 'unknown_camera' });
+    expect([hidden.events, hidden.writes]).toEqual([[], []]);
+  });
+
+  it('open keeps the bounds in the record; list shows them', async () => {
+    const rid = (await begin()).result.requestId;
+    try {
+      expect((await done('move.open', { v: 1, moveId: BEGUN, requestId: rid, camera: 'cam3', tokenHash: hashMoveToken(TOKEN), targetIp: '192.0.2.20' })).status).toBe('ok');
+      expect(journal.load(BEGUN)!.bounds).toEqual(bounds);
+      const view = (await request(p.base).get('/control/moves').set(admin())).body.items.find((i: { id?: string }) => i.id === BEGUN);
+      expect(view).toMatchObject({ id: BEGUN, requestId: rid, phase: 'offered', bounds });
+      expect(JSON.stringify(journal.load(BEGUN))).not.toContain(TOKEN);
+    } finally {
+      journal.remove(BEGUN);
+    }
   });
 });
 
@@ -383,6 +487,9 @@ describe('go and release (S §9.1, P8, P12)', () => {
   });
 
   it('no password, move token or public key in any event or audit record', () => {
+    // The begin path too: its move.request events (with bounds) and its records are in the lists.
+    expect(moveEvents('move.request').some((e) => e.bounds !== null)).toBe(true);
+    expect(audits('move-request').some((a) => a.cam_proxy.autoApprove === true)).toBe(true);
     const text = JSON.stringify([...fake.events().map((e) => e.msg), ...p.proxy.audit.list({ limit: 500 }).records]);
     for (const s of [sims[0].password, TOKEN, targetKey, targetLeaf.keyPem]) expect(text).not.toContain(s);
   });
