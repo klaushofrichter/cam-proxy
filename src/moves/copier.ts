@@ -197,7 +197,7 @@ export class Copier {
     return { moveId: this.r.id, camera: this.r.camera, source: this.r.peer.proxyId, target: this.d.proxyId?.() || null, role: 'target', ...extra };
   }
 
-  private audit(action: 'move-file-failed' | 'move-progress' | 'move-budget-exceeded' | 'move-source-unreachable' | 'move-check', outcome: 'success' | 'failure', message: string, extra: Record<string, unknown>): void {
+  private audit(action: 'move-file-failed' | 'move-progress' | 'move-budget-exceeded' | 'move-source-unreachable' | 'move-check' | 'move-outcome-refused', outcome: 'success' | 'failure', message: string, extra: Record<string, unknown>): void {
     this.d.audit.write({
       action, category: ['configuration'], type: [action === 'move-progress' || action === 'move-check' ? 'info' : 'change'], outcome, user: 'cams-admin', camera: this.r.camera,
       message: `Camera move ${this.r.id} (${this.r.camera} from ${this.r.peer.name || this.r.peer.proxyId}): ${message}`,
@@ -264,6 +264,25 @@ export class Copier {
     this.finish(check);
   }
 
+  // A refused report counts as none sent: the source keeps every Archive item
+  // and deletes the rest (ruling 5); audited (ids and the status only), the
+  // record holds no outcome any more.
+  private refused(status: number): void {
+    logger.warn({ moveId: this.r.id, status }, 'move_outcome_refused');
+    delete this.r.keep;
+    delete this.r.keepMissing;
+    delete this.r.keepCopied;
+    const fresh = this.d.journal.load(this.r.id);
+    if (fresh && fresh.role === 'target' && fresh.phase === 'copying') {
+      delete fresh.keep;
+      delete fresh.keepMissing;
+      delete fresh.keepCopied;
+      this.d.journal.save(fresh);
+      this.r = { ...fresh, chunks: this.r.chunks };
+    }
+    this.audit('move-outcome-refused', 'failure', `the source refused the report of what to keep (HTTP ${status}); it keeps every Archive item of the camera and deletes the rest`, { status });
+  }
+
   // The outcome (step 4 Task 6, ruling 4): what the source keeps, sent straight
   // to it before copied, kept in the journal first (the target's ended-early
   // finish sends it again with what it knows then). Retried like json() until
@@ -284,10 +303,7 @@ export class Copier {
         const res = await put(`/api/moves/${this.r.id}/outcome`, out, this.signal);
         discard(res.body);
         if (res.status === 204 || res.status === 200) return;
-        if ([400, 403, 404, 409, 413].includes(res.status)) {
-          logger.warn({ moveId: this.r.id, status: res.status }, 'move_outcome_refused');
-          return;
-        }
+        if ([400, 403, 404, 409, 413].includes(res.status)) return this.refused(res.status);
         if (res.status === 503 || res.status === 429) this.sourceBusyUntil = this.now() + MINUTE;
         else this.noteDown(String(res.status));
       } catch {

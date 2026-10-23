@@ -95,7 +95,9 @@ export function keepListOf(r: Pick<MoveRecord, 'manifest' | 'chunks'>, perChunk:
     if (keep[id] === 'all') continue;
     const rec = r.chunks[id];
     const rowsOnlyThere = rec?.state === 'failed' && rec.rowsInserted === undefined && (rec.meta?.rows ?? 0) > 0;
-    if (rowsOnlyThere || (kindOf(id) === 'archive' && rec?.state !== 'verified' && !perChunk.has(id))) keep[id] = 'all';
+    // Not verified here: a chunk cams-admin reported done (B34) has no `v` (never checked on this proxy).
+    const verifiedHere = rec?.state === 'verified' && rec.v !== undefined;
+    if (rowsOnlyThere || (kindOf(id) === 'archive' && !verifiedHere && !perChunk.has(id))) keep[id] = 'all';
   }
   return keep;
 }
@@ -108,7 +110,8 @@ export function outcomeOf(r: Pick<MoveRecord, 'manifest' | 'chunks'>, perChunk: 
   const missing = [...perChunk].filter(([id]) => kindOf(id) === 'archive').flatMap(([, k]) => k.missing);
   const copied: Record<string, ChunkListing> = {};
   for (const [id, rec] of Object.entries(r.chunks)) {
-    if (kindOf(id) === 'archive' && (rec.state === 'verified' || rec.state === 'failed') && rec.meta) copied[id] = { files: rec.meta.files, bytes: rec.meta.bytes, rows: rec.meta.rows };
+    // Only chunks copied and checked here (a done-list chunk, B34, has no `v`: never copied).
+    if (kindOf(id) === 'archive' && (rec.state === 'verified' || rec.state === 'failed') && rec.v !== undefined && rec.meta) copied[id] = { files: rec.meta.files, bytes: rec.meta.bytes, rows: rec.meta.rows };
   }
   const out: MoveOutcome = { keep, ...(missing.length ? { missing: [...new Set(missing)] } : {}), ...(Object.keys(copied).length ? { copied } : {}) };
   let size = Buffer.byteLength(JSON.stringify(out));
@@ -169,8 +172,10 @@ export function parseOutcome(cam: string, body: unknown): MoveOutcome | null {
 
 // A later report only ever keeps more: keep lists are a union ('all' wins),
 // missing paths a union, and an Archive chunk counts as copied only when every
-// report that named copied chunks named it alike.
+// report named it alike (a report without `copied` names none: from then on no
+// Archive chunk counts as copied).
 export function mergeOutcome(r: Pick<MoveRecord, 'keep' | 'keepMissing' | 'keepCopied'>, o: MoveOutcome): void {
+  const firstReport = r.keep === undefined && r.keepCopied === undefined;
   const keep: KeepList = { ...(r.keep ?? {}) };
   for (const [id, v] of Object.entries(o.keep)) {
     const was = keep[id];
@@ -182,10 +187,8 @@ export function mergeOutcome(r: Pick<MoveRecord, 'keep' | 'keepMissing' | 'keepC
   }
   r.keep = keep;
   if (o.missing?.length || r.keepMissing) r.keepMissing = [...new Set([...(r.keepMissing ?? []), ...(o.missing ?? [])])];
-  // A report without `copied` names none (conservative: fewer Archive deletes).
   const copied = o.copied ?? {};
   const same = (a: ChunkListing, b: ChunkListing | undefined) => !!b && a.files === b.files && a.bytes === b.bytes && a.rows === b.rows;
-  if (r.keepCopied === undefined) {
-    if (o.copied) r.keepCopied = { ...o.copied };
-  } else r.keepCopied = Object.fromEntries(Object.entries(r.keepCopied).filter(([id, v]) => same(v, copied[id])));
+  // The first report sets it (none named: {}); every later one can only narrow it.
+  r.keepCopied = firstReport ? { ...copied } : Object.fromEntries(Object.entries(r.keepCopied ?? {}).filter(([id, v]) => same(v, copied[id])));
 }

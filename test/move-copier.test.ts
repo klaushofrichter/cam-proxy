@@ -487,7 +487,7 @@ describe('Copier', () => {
     expect(u.rec().manifest?.map((c) => c.id)).toEqual([`archive:${day(20)}`, `clips:${day(20)}`]);
   });
 
-  it('a 409 from the source ends the outcome retries', async () => {
+  it('a 409 from the source ends the outcome retries; the refusal is audited and the record holds no outcome', async () => {
     const { files, chunks } = threeDays();
     const f = fakeSource(files, chunks);
     let n = 0;
@@ -496,6 +496,28 @@ describe('Copier', () => {
     await u.run();
     expect(n).toBe(1);
     expect(u.phases.at(-1)?.phase).toBe('copied');
+    const refused = u.audits.filter((a) => a.action === 'move-outcome-refused');
+    expect(refused).toHaveLength(1);
+    expect(refused[0]).toMatchObject({ outcome: 'failure', details: { moveId: MOVE, camera: CAM, role: 'target', status: 409 } });
+    expect(Object.keys(refused[0].details!).sort()).toEqual(['camera', 'moveId', 'role', 'source', 'status', 'target']);
+    // As if none was sent: the source keeps every Archive item, the rest goes (ruling 5).
+    expect(u.rec().keep).toBeUndefined();
+    expect(u.rec().keepCopied).toBeUndefined();
+  });
+
+  it('a done-list Archive chunk not verified here never counts as copied and stays whole at the source (I1)', async () => {
+    const a = 'archive/cam9/5/clip.mp4';
+    const f = fakeSource({ [a]: 'archive-clip' }, [{ id: `archive:${day(19)}`, files: [a] }]);
+    const puts: any[] = [];
+    f.client.put = async (_path, body) => (puts.push(body), { status: 204, body: (async function* () { /* empty */ })() });
+    // cams-admin reports the chunk done (B34); the target holds none of its files (a reset journal, say).
+    const u = unit(f, { done: [`archive:${day(19)}`] });
+    await u.run();
+    expect(fileRequests(f)).toEqual([]);
+    expect(existsSync(join(u.dataDir, 'archive'))).toBe(false);
+    expect(puts).toHaveLength(1);
+    expect(puts[0].keep).toEqual({ [`archive:${day(19)}`]: 'all' });
+    expect(puts[0].copied ?? {}).toEqual({});
   });
 
   it('a row whose file is not in the chunk manifest is skipped', async () => {

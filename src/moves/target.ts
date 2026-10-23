@@ -337,17 +337,23 @@ export class MoveTarget {
       (res.body as { destroy?: () => void }).destroy?.();
       return res.status;
     });
+    let last: number | null = null;
     for (let i = 0; i < 3; i++) {
       try {
-        const status = await send(r, body);
-        if (status === 204 || status === 200) return;
-        if ([400, 403, 404, 409, 413].includes(status)) break;
+        last = await send(r, body);
+        if (last === 204 || last === 200) return;
+        if ([400, 403, 404, 409, 413].includes(last)) break;
       } catch {
-        /* not reachable: tried again */
+        last = null; // not reachable: tried again
       }
       if (i < 2) await new Promise((res) => setTimeout(res, this.d.timing?.outcomeRetryMs ?? 10_000));
     }
-    logger.warn({ moveId: r.id }, 'move_outcome_not_reported');
+    logger.warn({ moveId: r.id, status: last }, 'move_outcome_not_reported');
+    this.d.audit.write({
+      action: 'move-outcome-refused', category: ['configuration'], type: ['change'], outcome: 'failure', user: 'cams-admin', camera: r.camera,
+      message: `Camera move ${r.id} (${r.camera} from ${r.peer.name || r.peer.proxyId}): the source did not take the report of what to keep (${last === null ? 'not reachable' : `HTTP ${last}`}); it keeps every Archive item of the camera and deletes the rest`,
+      details: this.details(r, { status: last }),
+    });
   }
 
   // move.cancel {role: target} (S §10.3, B36): the camera goes back to the

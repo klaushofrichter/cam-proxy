@@ -22,6 +22,9 @@ describe('the known audit actions', () => {
   it('includes the automatic analyses and the Archive records', () => {
     for (const a of ['event-analysis', 'still-check', 'archive-add', 'archive-update', 'archive-delete', 'archive-clear', 'archive-expire', 'camera-address', 'audit-throttled']) expect(AUDIT_ACTIONS).toContain(a);
   });
+  it('includes the move check and a refused outcome report (written through a typed helper)', () => {
+    for (const a of ['move-check', 'move-outcome-refused']) expect(AUDIT_ACTIONS).toContain(a);
+  });
   it('the Audit page offers the same list', () => {
     expect([...ACTIONS]).toEqual([...AUDIT_ACTIONS]);
   });

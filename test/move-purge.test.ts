@@ -261,8 +261,8 @@ describe('keepListOf', () => {
     const r = rec({
       manifest: [meta('archive:2026-10-19'), meta('archive:2026-10-20'), meta('archive:2026-10-21'), meta('archive:2026-10-22'), meta('stills:2026-10-20', 2, 0), meta('clips:2026-10-20'), meta('events:2026-10-20', 0, 3)],
       chunks: {
-        'archive:2026-10-19': { state: 'verified', meta: { files: 1, bytes: 10, rows: 1 } },
-        'archive:2026-10-20': { state: 'failed', f: 1, rowsInserted: 1, meta: { files: 1, bytes: 10, rows: 1 } },
+        'archive:2026-10-19': { state: 'verified', v: 1, meta: { files: 1, bytes: 10, rows: 1 } },
+        'archive:2026-10-20': { state: 'failed', v: 0, f: 1, rowsInserted: 1, meta: { files: 1, bytes: 10, rows: 1 } },
         'archive:2026-10-21': { state: 'skipped' },
         'stills:2026-10-20': { state: 'verified' },
         'clips:2026-10-20': { state: 'verified' },
@@ -285,6 +285,16 @@ describe('keepListOf', () => {
     });
   });
 
+  it('a chunk taken from the done list (B34, never checked here) is not copied; an Archive one is kept whole (I1)', () => {
+    const r = rec({
+      manifest: [meta('archive:2026-10-19'), meta('clips:2026-10-19')],
+      chunks: { 'archive:2026-10-19': { state: 'verified', b: 10, meta: { files: 1, bytes: 10, rows: 1 } }, 'clips:2026-10-19': { state: 'verified', b: 10, meta: { files: 1, bytes: 10, rows: 1 } } },
+    });
+    const out = outcomeOf(r, new Map(), false);
+    expect(out.keep).toEqual({ 'archive:2026-10-19': 'all' });
+    expect(out.copied).toBeUndefined();
+  });
+
   it('more than 1000 paths in a chunk keep the whole chunk', () => {
     const many = Array.from({ length: 1001 }, (_, i) => `stills/cam1/2026/10/20/${String(i).padStart(4, '0')}.pack`);
     expect(keepListOf(rec({}), new Map([['stills:2026-10-20', { missing: many, failed: [] }]]), false)).toEqual({ 'stills:2026-10-20': 'all' });
@@ -293,7 +303,7 @@ describe('keepListOf', () => {
   it('the outcome names missing Archive paths and the Archive chunks copied, bounded to 1 MiB', () => {
     const r = rec({
       manifest: [meta('archive:2026-10-19'), meta('archive:2026-10-20')],
-      chunks: { 'archive:2026-10-19': { state: 'verified', meta: { files: 1, bytes: 10, rows: 1 } }, 'archive:2026-10-20': { state: 'failed', meta: { files: 1, bytes: 10, rows: 1 } } },
+      chunks: { 'archive:2026-10-19': { state: 'verified', v: 1, meta: { files: 1, bytes: 10, rows: 1 } }, 'archive:2026-10-20': { state: 'failed', v: 0, f: 1, meta: { files: 1, bytes: 10, rows: 1 } } },
     });
     const out = outcomeOf(r, new Map([['archive:2026-10-20', { missing: ['archive/cam1/8/clip.mp4'], failed: [] }], ['clips:2026-10-20', { missing: ['clips/cam1/2026/10/20/1200-1.mp4'], failed: [] }]]), false);
     expect(out.missing).toEqual(['archive/cam1/8/clip.mp4']);

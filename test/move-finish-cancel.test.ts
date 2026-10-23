@@ -327,6 +327,10 @@ describe('move.finish on the target (A5/B45)', () => {
     v.journal.save(w);
     expect((await v.target.finish(finishArgs('target', true))).status).toBe('ok');
     expect(v.outcomes).toHaveLength(3);
+    // Refused (or never taken): audited with ids only, the source keeps every Archive item (ruling 5).
+    const refused = v.audits.filter((x) => x.action === 'move-outcome-refused');
+    expect(refused).toHaveLength(1);
+    expect(refused[0]).toMatchObject({ outcome: 'failure', details: { moveId: MOVE, camera: 'cam9', role: 'target', status: 503 } });
     // A finish after copied (the copier reported already) sends nothing more.
     const c = targetUnit();
     await copied(c);

@@ -505,6 +505,14 @@ describe('PUT /api/moves/:id/outcome (step 4 Task 6, Review Focus 5)', () => {
     expect((await f.putJson(OUT, { keep: {} })).status).toBe(403);
   });
 
+  it('a report without copied, then one with it: no Archive chunk counts as copied (M1)', async () => {
+    const f = await fixture({ phase: 'released' });
+    expect((await f.putJson(OUT, { keep: {} })).status).toBe(204);
+    expect(f.journal.load(MOVE)!.keepCopied).toEqual({});
+    expect((await f.putJson(OUT, { keep: {}, copied: { 'archive:2026-10-01': { files: 2, bytes: 10, rows: 1 } } })).status).toBe(204);
+    expect(f.journal.load(MOVE)!.keepCopied).toEqual({});
+  });
+
   it('PUT outcome without the move token is 401 and is rate-limited like the GETs', async () => {
     // The guard's one answer is 403 move_token (as for every move route); refusals count toward its limiter.
     const f = await fixture({ phase: 'released', refusedPerMinute: 3 });
