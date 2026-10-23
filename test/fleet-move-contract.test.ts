@@ -123,8 +123,7 @@ describe('the move commands against the vendored contract', () => {
       ['target short', { ...begin, target: 'prx_short' }, 'target'],
     ];
     for (const [name, a, detail] of mutations) {
-      // the strict schema cannot see the enum of kinds and space (the contract keeps them open), the validator can
-      if (!['kinds video', 'space some'].includes(name)) expect(bs(a), `strict ${name}`).toBe(false);
+      expect(bs(a), `strict ${name}`).toBe(false);
       expect(ARGS_VALIDATORS['move.begin'](a), name).toMatchObject({ ok: false, code: 'invalid_args', detail });
     }
     expect(ARGS_VALIDATORS['move.begin']({ ...begin, bounds: null })).toMatchObject({ ok: true });
