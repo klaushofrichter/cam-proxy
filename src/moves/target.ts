@@ -78,6 +78,8 @@ export interface TargetDeps {
   end?: {
     dataDir: string;
     removeImported: (r: MoveRecord) => { deleted: Purged };
+    // The camera's high water on this proxy (captured.ts capturedMark), kept at a cancel after the switch-over.
+    captured?: (cam: string, now: number) => NonNullable<MoveRecord['captured']>;
     deletePassword: (cam: string) => void;
     forgetLeaf: (cam: string) => void;
   };
@@ -365,12 +367,16 @@ export class MoveTarget {
   // move.start): the record only closes. Else the runner and the copier stop,
   // the end is journalled, then the camera's node written by the move leaves
   // the configuration (live; a config.json entry is hidden again), its stored
-  // password and its leaf go, and with copied `delete` what the move imported
-  // is removed (rows and files; the target's own capture since the
-  // switch-over stays and ages out, as everything does with age-out). A camera of that id
-  // this proxy had itself (the camera step refused it) is never touched. No
-  // leaf of the source is expected here: the target lets go of the camera
-  // before the source pushes its own leaf back (B36). Again: nothing more.
+  // password and its leaf go. Before the switch-over, with copied `delete`,
+  // what the move imported is removed. After the switch-over (step 4 Task 8)
+  // nothing is deleted and `copied` is ignored (ruling 18): the content is
+  // copied back to the source (a return, Task 9-11), so the record, its
+  // import log and landed log stay (`returnPending`), with the camera's high
+  // water taken before its node leaves (`captured`, ruling 7). A camera of
+  // that id this proxy had itself (the camera step refused it) is never
+  // touched. No leaf of the source is expected here: the target lets go of
+  // the camera before the source pushes its own leaf back (B36). Again:
+  // nothing more but the terminal phase.
   async cancel(a: MoveCancelArgs): Promise<Done> {
     const end = this.d.end;
     if (!end) return failed('internal');
@@ -379,6 +385,11 @@ export class MoveTarget {
     const r = this.target(a.moveId);
     if (!r) return ok();
     if (r.phase === 'finished') return failed('wrong_phase');
+    // Waiting for the copy back (its tombstone may be gone: the record never expires by itself, ruling 10).
+    if (r.phase === 'cancelled' && r.returnPending) {
+      this.terminalEvent(r.id, 'cancelled');
+      return ok();
+    }
     const copied: MoveCopied = r.copied ?? a.copied ?? 'age-out';
     // Synchronous up to here: a move.start making its leaf finds the record gone and keeps nothing.
     if (r.phase === 'opened' && !r.plan) {
@@ -390,6 +401,8 @@ export class MoveTarget {
     if (fresh.phase !== 'cancelled') {
       fresh.cancelledFrom = fresh.phase;
       fresh.switchedOver = switchedOver(fresh);
+      // The high water while the camera still runs here, journalled with the cancel (before its node leaves).
+      if (fresh.switchedOver) fresh.captured ??= end.captured?.(fresh.camera, this.now());
       fresh.copied = copied;
       fresh.phase = 'cancelled';
       fresh.endedAt = this.now();
@@ -410,7 +423,7 @@ export class MoveTarget {
       entry = this.d.loaded().config.cameras[cam] ? 'hidden' : 'removed';
       end.forgetLeaf(cam);
       if (fresh.passwordWritten) end.deletePassword(cam);
-      if (copied === 'delete') {
+      if (copied === 'delete' && !fresh.switchedOver) {
         // Only what the move brought; the camera no longer runs here. The
         // target's own capture since the switch-over stays and ages out.
         if (activeCameraIds(this.d.loaded().config).includes(cam)) return failed('camera_active');
@@ -427,41 +440,53 @@ export class MoveTarget {
   }
 
   // A cancelled move's end: no private key left in the record, the phase
-  // journalled and reported (event, move-phase), move-cancel audited, the record removed.
+  // journalled and reported (event, move-phase), move-cancel audited, the
+  // record removed. After the switch-over (Task 8) the record, its chunk
+  // parts and landed log stay for the copy back (returnPending, on the event
+  // too); the tombstone is written either way.
   private closeCancelled(r: MoveRecord, copied: MoveCopied, entry: 'removed' | 'hidden' | 'untouched', deleted: Purged | null, reason?: 'offer_expired'): void {
     const from = r.cancelledFrom ?? r.phase;
+    const keep = r.switchedOver === true && !reason;
     this.dropKeys(r);
     r.endedAt ??= this.now();
-    this.setPhase(r, 'cancelled', this.keep());
+    if (keep) r.returnPending = true;
+    this.setPhase(r, 'cancelled', { ...this.keep(), ...(keep ? { returnPending: true } : {}) });
+    const peer = r.peer.name || r.peer.proxyId;
+    const content = entry === 'untouched' ? '' : keep ? `, its content copied back to ${peer} next` : `, copied content ${copied === 'delete' ? 'deleted' : 'left to age out'}`;
     this.d.audit.write({
       action: 'move-cancel', category: ['configuration'], type: ['change'], outcome: 'success',
       user: reason ? 'system' : 'cams-admin', camera: r.camera,
-      message: `Camera move ${r.id} (${r.camera} from ${r.peer.name || r.peer.proxyId}) ${reason ? 'expired: not approved within 30 minutes' : `cancelled in ${from}`}: the camera ${entry === 'untouched' ? 'was not here' : entry === 'removed' ? 'removed here' : 'hidden here'}${entry === 'untouched' ? '' : `, copied content ${copied === 'delete' ? 'deleted' : 'left to age out'}`}`,
-      details: this.details(r, { phase: from, copied, cameraEntry: entry, deleted, ...(reason ? { reason } : {}) }),
+      message: `Camera move ${r.id} (${r.camera} from ${peer}) ${reason ? 'expired: not approved within 30 minutes' : `cancelled in ${from}`}: the camera ${entry === 'untouched' ? 'was not here' : entry === 'removed' ? 'removed here' : 'hidden here'}${content}`,
+      details: this.details(r, { phase: from, ...(keep ? { returnPending: true } : { copied }), cameraEntry: entry, deleted, ...(reason ? { reason } : {}) }),
     });
     this.d.journal.bury?.({ moveId: r.id, role: 'target', phase: 'cancelled' });
+    this.copying.delete(r.id);
+    if (keep) return;
     if (this.d.end) {
       removeLanded(this.d.end.dataDir, r.id);
       removeChunkParts(this.d.end.dataDir, r.id);
     }
     this.d.journal.remove?.(r.id);
-    this.copying.delete(r.id);
   }
 
   // A move ended here before (its tombstone): the terminal phase sent again;
-  // a record left behind by a crash between the tombstone and its removal goes.
+  // a record left behind by a crash between the tombstone and its removal
+  // goes, but not one kept for the copy back (returnPending).
   private past(id: string): MoveTombstone | null {
     const t = this.d.journal.ended?.(id, 'target') ?? null;
     if (!t) return null;
     this.terminalEvent(id, t.phase, t.code);
     const r = this.target(id);
-    if (r && moveEnded(r.phase)) this.d.journal.remove?.(id);
+    if (r && moveEnded(r.phase) && !r.returnPending) this.d.journal.remove?.(id);
     return t;
   }
 
   private terminalEvent(id: string, phase: MoveTombstone['phase'], code?: string): void {
     if (phase === 'failed') this.d.emit({ kind: 'move.phase', moveId: id, role: 'target', phase: 'failed', ok: false, code: code ?? 'internal' });
-    else this.d.emit({ kind: 'move.phase', moveId: id, role: 'target', phase, ok: true, ...this.keep() });
+    else {
+      const pending = phase === 'cancelled' && this.target(id)?.returnPending === true;
+      this.d.emit({ kind: 'move.phase', moveId: id, role: 'target', phase, ok: true, ...this.keep(), ...(pending ? { returnPending: true } : {}) });
+    }
   }
 
   private keep(): { keepDays?: number } {
@@ -575,8 +600,8 @@ export class MoveTarget {
       return;
     }
     for (const r of open) {
-      // A target move not started (no plan yet) waits for move.start.
-      if (r.role !== 'target' || !r.plan) continue;
+      // A target move not started (no plan yet) waits for move.start; an ended one (waiting for the copy back) never runs.
+      if (r.role !== 'target' || !r.plan || moveEnded(r.phase)) continue;
       if (r.leaf) this.d.stageLeaf(r.camera, leafOf(r.leaf.certPem, r.leaf.keyPem));
       this.run(r.id);
     }

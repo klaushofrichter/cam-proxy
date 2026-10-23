@@ -20,6 +20,7 @@ import { writeKeyFile } from '../src/fleet/keyfile';
 import { writePrivateJson } from '../src/fleet/private-file';
 import type { Envelope } from '../src/fleet/protocol';
 import { setLogLevel } from '../src/log';
+import { capturedMark } from '../src/moves/captured';
 import { moveHandlers } from '../src/moves/commands';
 import { chunkPartsDir, writeChunkPart } from '../src/moves/chunk-parts';
 import { MoveJournal, type MoveRecord } from '../src/moves/journal';
@@ -143,6 +144,7 @@ function targetUnit() {
     end: {
       dataDir,
       removeImported: (r) => removeImported({ catalog, dataDir, storage: { recount: () => undefined } }, r),
+      captured: (cam, now) => capturedMark(catalog, cam, now),
       deletePassword: (cam) => void passwords.delete(cam),
       forgetLeaf: (cam) => void forgot.push(cam),
     },
@@ -225,19 +227,22 @@ describe('move.finish on the target (A5/B45)', () => {
     const u = targetUnit();
     await copied(u);
     expect((await u.target.cancel(cancelT('age-out'))).status).toBe('ok');
-    expect(u.journal.load(MOVE)).toBeNull();
-    // The tombstone: 600, no secret, ignored by the journal's records.
+    // After the switch-over the record stays for the copy back (step 4 Task 8), without its keys.
+    expect(u.journal.load(MOVE)).toMatchObject({ phase: 'cancelled', returnPending: true });
+    expect(u.journal.load(MOVE)!.x25519).toBeUndefined();
+    // The tombstone: 600, no secret.
     const stone = join(u.dataDir, 'admin', 'moves', `${MOVE}.target.ended.json`);
     expect(statSync(stone).mode & 0o777).toBe(0o600);
     expect(readFileSync(stone, 'utf8')).not.toContain(TOKEN);
-    expect(u.journal.all()).toEqual([]);
-    // A new process: the memory of the end is gone, the tombstone is not.
+    // A new process: the memory of the end is gone, the tombstone and the record are not.
     const again = new MoveTarget(u.deps);
     const n = u.audits.length;
+    const want = { kind: 'move.phase', moveId: MOVE, role: 'target', phase: 'cancelled', ok: true, returnPending: true };
     expect(await again.cancel(cancelT('age-out'))).toEqual({ status: 'ok', result: {} });
-    expect(u.events.at(-1)).toEqual({ kind: 'move.phase', moveId: MOVE, role: 'target', phase: 'cancelled', ok: true });
+    expect(u.events.at(-1)).toEqual(want);
+    expect(u.journal.load(MOVE)).toMatchObject({ phase: 'cancelled', returnPending: true });
     expect(await again.finish(finishArgs('target'))).toMatchObject({ status: 'failed', code: 'wrong_phase' });
-    expect(u.events.at(-1)).toEqual({ kind: 'move.phase', moveId: MOVE, role: 'target', phase: 'cancelled', ok: true });
+    expect(u.events.at(-1)).toEqual(want);
     expect(u.audits.length).toBe(n);
   }, 60_000);
 
@@ -352,7 +357,7 @@ describe('move.finish on the target (A5/B45)', () => {
 });
 
 describe('move.cancel on the target', () => {
-  it("cancel with copied delete removes what the move imported; the target's own capture after the switch-over stays", async () => {
+  it('a cancel after the switch-over keeps the record, import log and landed log for the copy back (returnPending); nothing deleted, even with copied delete', async () => {
     const u = targetUnit();
     await copied(u);
     const IMPORTED = Date.UTC(2026, 9, 18, 12, 0); // a day of the source's
@@ -371,40 +376,73 @@ describe('move.cancel on the target', () => {
     // The import maps live beside the record (final review 6), with each row's natural key (final review 3).
     writeChunkPart(u.dataDir, MOVE, 'clips:2026-10-18', { imported: { clips: [[501, id('clips'), String(IMPORTED)]] } });
     writeChunkPart(u.dataDir, MOVE, 'events:2026-10-18', { imported: { events: [[502, id('events'), `${IMPORTED}|onvif|person`]] } });
+    // cam1's rows came last: the high water is cam9's own, not the table's.
+    const maxOf = (t: string) => (u.catalog.db.prepare(`SELECT MAX(id) AS n FROM ${t} WHERE cam = 'cam9'`).get() as { n: number }).n;
+    const clipsMax = maxOf('clips');
+    const eventsMax = maxOf('events');
+    expect(clipsMax).toBeLessThan((u.catalog.db.prepare('SELECT MAX(id) AS n FROM clips').get() as { n: number }).n);
     expect(u.passwords.get('cam9')).toBe(PASSWORD);
     const part = join(u.dataDir, 'clips', 'cam9', '2026', '10', '19', `x.mp4.move-${MOVE}.part`);
     put(part);
+    const before = Date.now();
     const d = await u.target.cancel(cancelT('delete'));
     expect(d).toEqual({ status: 'ok', result: {} });
     const v = strict('commands/move.cancel.result');
     expect(v(d.result), why(v)).toBe(true);
     expect(u.stopped).toContain(MOVE);
-    // The camera removed here (live stop), its password and its leaf gone.
+    // The camera removed here (live stop), its password and its leaf gone; the copier's temporary files too.
     expect(u.loaded.config.cameras.cam9).toBeUndefined();
     expect(JSON.stringify(JSON.parse(readFileSync(u.loaded.files.overrides, 'utf8')))).not.toContain('cam9');
     expect(u.passwords.has('cam9')).toBe(false);
     expect(u.forgot).toEqual(['cam9']);
     expect(existsSync(part)).toBe(false);
-    // The imported rows and files gone; the target's own capture (and cam1) all there, to age out with the retention.
-    expect(existsSync(`${minutePath(u.dataDir, 'stills', 'cam9', IMPORTED)}.pack`)).toBe(false);
-    expect(existsSync(join(u.dataDir, 'clips/cam9/2026/10/18/1200-1.mp4'))).toBe(false);
+    // Nothing deleted (ruling 18: the copied choice is ignored after the switch-over): imported and own capture, cam1 too.
+    expect(existsSync(`${minutePath(u.dataDir, 'stills', 'cam9', IMPORTED)}.pack`)).toBe(true);
+    expect(existsSync(join(u.dataDir, 'clips/cam9/2026/10/18/1200-1.mp4'))).toBe(true);
     expect(existsSync(`${minutePath(u.dataDir, 'stills', 'cam9', OWN)}.pack`)).toBe(true);
-    expect(existsSync(join(u.dataDir, 'clips/cam9/2026/10/21/1200-1.mp4'))).toBe(true);
-    expect(u.catalog.db.prepare("SELECT start_ts FROM clips WHERE cam = 'cam9'").all()).toEqual([{ start_ts: OWN }]);
-    expect(u.catalog.db.prepare("SELECT start_ts FROM events WHERE cam = 'cam9'").all()).toEqual([{ start_ts: OWN }]);
+    expect(rows(u.catalog, 'cam9')).toBe(4);
     expect(rows(u.catalog, 'cam1')).toBe(2);
-    expect(existsSync(landedLog(u.dataDir, MOVE))).toBe(false);
-    expect(existsSync(chunkPartsDir(u.dataDir, MOVE))).toBe(false);
-    expect(u.journal.load(MOVE)).toBeNull();
-    expect(u.events.at(-1)).toEqual({ kind: 'move.phase', moveId: MOVE, role: 'target', phase: 'cancelled', ok: true });
+    // The import log and the landed log stay with the record for the return's manifest.
+    expect(existsSync(landedLog(u.dataDir, MOVE))).toBe(true);
+    expect(existsSync(chunkPartsDir(u.dataDir, MOVE))).toBe(true);
+    u.journal.sweep();
+    expect(existsSync(chunkPartsDir(u.dataDir, MOVE))).toBe(true);
+    const kept = u.journal.load(MOVE)!;
+    expect(kept).toMatchObject({ phase: 'cancelled', returnPending: true, switchedOver: true, cancelledFrom: 'copied' });
+    expect(kept.x25519).toBeUndefined();
+    expect(kept.leaf).toBeUndefined();
+    // The high water at the cancel (ruling 7): row ids of this camera per table, and this proxy's clock.
+    expect(kept.captured!.maxIds).toEqual({ clips: clipsMax, events: eventsMax, analyses: 0, still_checks: 0, archive: 0 });
+    expect(kept.captured!.at).toBeGreaterThanOrEqual(before);
+    expect(kept.captured!.at).toBeLessThanOrEqual(Date.now());
+    // Busy until the return is checked (ruling 10).
+    expect(u.journal.active().map((x) => x.id)).toEqual([MOVE]);
+    expect(u.events.at(-1)).toEqual({ kind: 'move.phase', moveId: MOVE, role: 'target', phase: 'cancelled', ok: true, returnPending: true });
     const a = u.audits.find((x) => x.action === 'move-cancel')!;
-    expect(a).toMatchObject({ outcome: 'success', details: { moveId: MOVE, camera: 'cam9', source: SOURCE_ID, target: TARGET_ID, role: 'target', phase: 'copied', copied: 'delete', cameraEntry: 'removed' } });
-    expect(a.details!.deleted).toEqual({ ...ZEROS, stills: { files: 1, bytes: 100 }, clips: { files: 1, bytes: 300 } });
-    // Again: nothing more happens but the terminal phase again (final review 4).
+    expect(a).toMatchObject({ outcome: 'success', details: { moveId: MOVE, camera: 'cam9', source: SOURCE_ID, target: TARGET_ID, role: 'target', phase: 'copied', cameraEntry: 'removed', returnPending: true, deleted: null } });
+    expect(a.details!.copied).toBeUndefined();
+    expect(a.message).toContain('copied back to een next');
+    // Again: nothing more happens but the terminal phase again; the record stays.
     const n = [u.events.length, u.audits.length];
     expect(await u.target.cancel(cancelT('delete'))).toEqual(d);
     expect([u.events.length, u.audits.length]).toEqual([n[0] + 1, n[1]]);
-    expect(u.events.at(-1)).toEqual({ kind: 'move.phase', moveId: MOVE, role: 'target', phase: 'cancelled', ok: true });
+    expect(u.events.at(-1)).toEqual({ kind: 'move.phase', moveId: MOVE, role: 'target', phase: 'cancelled', ok: true, returnPending: true });
+    expect(u.journal.load(MOVE)).toMatchObject({ phase: 'cancelled', returnPending: true, captured: kept.captured });
+    expect(existsSync(landedLog(u.dataDir, MOVE))).toBe(true);
+    // Its tombstone gone after 7 days, the record still answers (it never expires by itself, ruling 10).
+    const later = new MoveJournal(join(u.dataDir, 'admin', 'moves'), undefined, { now: () => Date.now() + 8 * DAY });
+    const t8 = new MoveTarget({ ...u.deps, journal: later });
+    expect(await t8.cancel(cancelT('delete'))).toEqual(d);
+    expect(u.events.at(-1)).toEqual({ kind: 'move.phase', moveId: MOVE, role: 'target', phase: 'cancelled', ok: true, returnPending: true });
+    expect(u.audits.length).toBe(n[1]);
+    expect(await t8.finish(finishArgs('target'))).toMatchObject({ status: 'failed', code: 'wrong_phase' });
+    expect(later.load(MOVE)).toMatchObject({ returnPending: true });
+    // A restart does not run it again.
+    const m = u.events.length;
+    t8.resume();
+    await t8.idle(MOVE);
+    expect(u.events.length).toBe(m);
+    expect(later.load(MOVE)).toMatchObject({ phase: 'cancelled', returnPending: true });
   }, 60_000);
 
   it('cancel with age-out keeps the target\'s copy and its retention removes it later', async () => {
@@ -417,7 +455,7 @@ describe('move.cancel on the target', () => {
     expect(u.loaded.config.cameras.cam9).toBeUndefined();
     expect(existsSync(`${minutePath(u.dataDir, 'stills', 'cam9', old)}.pack`)).toBe(true);
     expect(rows(u.catalog, 'cam9')).toBe(2);
-    expect(u.audits.find((x) => x.action === 'move-cancel')!.details).toMatchObject({ copied: 'age-out', deleted: null });
+    expect(u.audits.find((x) => x.action === 'move-cancel')!.details).toMatchObject({ returnPending: true, deleted: null });
     // The retention's dry run lists the removed camera's old content (its folders are swept like any camera's).
     const config = structuredClone(u.loaded.config);
     config.retention.stillsDays = 7;
@@ -438,6 +476,22 @@ describe('move.cancel on the target', () => {
     expect(u.forgot).toEqual([]);
     expect(phasesOf(u.events)).toEqual(['cancelled']);
     expect(u.audits.find((x) => x.action === 'move-cancel')!.details).toMatchObject({ phase: 'opened', cameraEntry: 'untouched', deleted: null });
+  });
+
+  it('a cancel before the switch-over closes the record as before: no returnPending, no high water, its logs gone', async () => {
+    const u = targetUnit();
+    u.journal.save(offered({ phase: 'switching', plan: PLAN, step: 'camera' }));
+    noteLanded(u.dataDir, MOVE, 'stills/cam9/2026/10/18/1200.pack');
+    writeChunkPart(u.dataDir, MOVE, 'clips:2026-10-18', { imported: { clips: [] } });
+    expect((await u.target.cancel(cancelT('age-out'))).status).toBe('ok');
+    expect(u.journal.load(MOVE)).toBeNull();
+    expect(u.journal.active()).toEqual([]);
+    expect(existsSync(landedLog(u.dataDir, MOVE))).toBe(false);
+    expect(existsSync(chunkPartsDir(u.dataDir, MOVE))).toBe(false);
+    expect(u.events.at(-1)).toEqual({ kind: 'move.phase', moveId: MOVE, role: 'target', phase: 'cancelled', ok: true });
+    const a = u.audits.find((x) => x.action === 'move-cancel')!;
+    expect(a.details).toMatchObject({ phase: 'switching', copied: 'age-out' });
+    expect(a.details!.returnPending).toBeUndefined();
   });
 
   it('a cancel while move.start makes the leaf: the start is discarded (no key, no leaf staged)', async () => {
@@ -862,7 +916,8 @@ describe('cancel after switch-over (integration)', () => {
     await until(() => S.proxy.cameras.get('cam3')?.status.state().online === true, 30_000);
     // Both journals closed; both sides reported cancelled and audited it.
     expect(sj.load(MOVE)).toBeNull();
-    expect(new MoveJournal(join(T.dir, 'data', 'admin', 'moves')).load(MOVE)).toBeNull();
+    // The target keeps its record for the copy back (step 4 Task 8).
+    expect(new MoveJournal(join(T.dir, 'data', 'admin', 'moves')).load(MOVE)).toMatchObject({ phase: 'cancelled', returnPending: true });
     for (const fake of [fakeS, fakeT]) {
       const last = phaseEvents(fake).filter((e) => e.moveId === MOVE).at(-1)!;
       expect(last).toMatchObject({ phase: 'cancelled', ok: true });
@@ -918,8 +973,9 @@ describe('keepDays on the terminal phases (move step 4, Task 7)', () => {
     u.deps.retention = () => RET;
     await copied(u);
     await u.target.cancel(cancelT('age-out'));
-    const want = { kind: 'move.phase', moveId: MOVE, role: 'target', phase: 'cancelled', ok: true, keepDays: 30 };
+    const want = { kind: 'move.phase', moveId: MOVE, role: 'target', phase: 'cancelled', ok: true, keepDays: 30, returnPending: true };
     expect(u.events.at(-1)).toEqual(want);
+    valid(u.events.at(-1)!);
     await new MoveTarget(u.deps).cancel(cancelT('age-out'));
     expect(u.events.at(-1)).toEqual(want);
   }, 60_000);

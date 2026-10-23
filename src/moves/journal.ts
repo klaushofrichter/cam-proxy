@@ -111,6 +111,13 @@ export interface MoveRecord {
   // source: a cancel after the switch-over whose give-back steps (push, FTP)
   // have not all succeeded yet: the move still counts as open (busy).
   cancelPending?: boolean;
+  // target (step 4 Task 8): a cancel after the switch-over: the record, its
+  // import log (chunk parts) and landed log stay for the copy back (the
+  // return) until it is checked; the move still counts as open (busy, ruling
+  // 10) and never expires by itself. `captured`: the high water at the cancel
+  // (captured.ts, ruling 7), taken before the camera's node left.
+  returnPending?: boolean;
+  captured?: { at: number; maxIds: Partial<Record<'clips' | 'events' | 'analyses' | 'still_checks' | 'archive', number>> };
   endedAt?: number;
 }
 
@@ -285,9 +292,10 @@ export class MoveJournal {
     return out;
   }
 
-  // Records whose phase is not final, and a source cancel still giving the camera back.
+  // Records whose phase is not final, a source cancel still giving the camera
+  // back, and a target cancel waiting for the copy back.
   active(): MoveRecord[] {
-    return this.all().filter((r) => !TERMINAL.includes(r.phase) || r.cancelPending === true);
+    return this.all().filter((r) => !TERMINAL.includes(r.phase) || r.cancelPending === true || r.returnPending === true);
   }
 
   // The failed moves whose records are kept (until a cancel), for the welcome

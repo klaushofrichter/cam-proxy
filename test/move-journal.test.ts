@@ -172,6 +172,22 @@ describe('move journal', () => {
     expect(j.load('m1')).not.toBeNull();
   });
 
+  it('a cancelled target record waiting for the copy back (returnPending) is active and keeps its chunk parts (step 4 Task 8)', () => {
+    const d = dir();
+    const j = new MoveJournal(d);
+    const captured = { at: 5000, maxIds: { clips: 3, events: 2, analyses: 0, still_checks: 0, archive: 1 } };
+    j.save(rec('m1', { phase: 'cancelled', returnPending: true, captured }));
+    j.save(rec('m2', { phase: 'cancelled' }));
+    expect(j.load('m1')).toMatchObject({ returnPending: true, captured });
+    // Busy (one move per proxy) until the return is checked; not an open phase for the welcome re-emit.
+    expect(j.active().map((r) => r.id)).toEqual(['m1']);
+    expect(j.currentPhase()).toBeNull();
+    j.bury({ moveId: 'm1', role: 'target', phase: 'cancelled' });
+    mkdirSync(join(d, 'm1.chunks'));
+    j.sweep();
+    expect(existsSync(join(d, 'm1.chunks'))).toBe(true);
+  });
+
   it('failed() lists the records of failed moves with their code, for the welcome re-emit (final review 4)', () => {
     const j = new MoveJournal(dir());
     j.save(rec('m1', { phase: 'failed', failure: 'token_address', role: 'source' }));

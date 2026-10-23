@@ -76,6 +76,7 @@ import { ManifestCache } from './moves/manifest-cache';
 import { MoveSource } from './moves/source';
 import { MoveTarget } from './moves/target';
 import { CopyRunner } from './moves/copier';
+import { capturedMark } from './moves/captured';
 import { purgeExcept, removeImported } from './moves/purge';
 import { cameraPasswordStore } from './config/camera-passwords';
 import { verifyFtp } from './fleet/camera-commands';
@@ -1044,7 +1045,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     stopCopy: (id) => moveCopier.stop(id),
     proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
     timing: opts.moves,
-    end: { ...moveEnd, dataDir: running.server.dataDir, removeImported: (r) => removeImported({ catalog, dataDir: running.server.dataDir, storage }, r) },
+    end: { ...moveEnd, dataDir: running.server.dataDir, removeImported: (r) => removeImported({ catalog, dataDir: running.server.dataDir, storage }, r), captured: (cam, now) => capturedMark(catalog, cam, now) },
   });
   // The target's copier (camera-move plan Task 9): the camera's old content
   // from the source, after the switch-over; waits while storage is paused.
