@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- An Archive item has a new field `move` (also in its metadata): after a camera move it says why the item is here (moved from a proxy, or kept because the move could not copy it), `null` otherwise.
 - Camera moves copy Archive items first (newest first), then the rest newest day first; with "copy as much as fits" the Archive counts first.
 - Camera moves can be started by cams-admin (new command `move.begin`, under `move.send`). With bounds from cams-admin, the source approves its own offer when the target's answer fits them (estimate within the time budget, the space choice possible); otherwise the offer waits on the panel with the reason (`move-auto-approve` in the audit log).
 

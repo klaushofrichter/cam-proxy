@@ -348,7 +348,7 @@ export class Copier {
     let delay = this.t('retryMs', 2000);
     for (let i = 0; i < ATTEMPTS && !imported; i++) {
       try {
-        imported = importRows(this.paths, this.r.camera, rows, verified, prev?.imported);
+        imported = importRows(this.paths, this.r.camera, rows, verified, prev?.imported, { moveId: this.r.id, from: { proxyId: this.r.peer.proxyId, name: this.r.peer.name }, at: this.now() });
       } catch {
         logger.warn({ moveId: this.r.id, chunkId: c.id }, 'move_copy_import_failed');
         if (i < ATTEMPTS - 1) {

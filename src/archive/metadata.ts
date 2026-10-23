@@ -14,6 +14,16 @@ const AI_KINDS = new Set(['person', 'vehicle', 'pet']);
 interface SnapAnalysis { provider: string; status: string; stillTs: number | null; objects: unknown[]; summary: unknown[] }
 export interface SnapEvent { id: number; kind: string; source: string; start: number; end: number | null; recovered: boolean; analysis: SnapAnalysis | null }
 export interface SnapCheck { id: number; stillTs: number; provider: string; objects: unknown[]; summary: unknown[] }
+// Why an item is on this proxy because of a camera move: brought in by it, or
+// kept here because it could not be copied (docs/archive.md §1).
+export interface ArchiveMoveNote {
+  moveId: string;
+  from?: { proxyId: string; name: string };
+  to?: { proxyId: string; name: string };
+  at: number;
+  kept?: true;
+  reason?: 'failed' | 'missing' | 'not_copied';
+}
 export interface Snapshot {
   camera: { id: string; name: string; model: string | null };
   window: { from: number; to: number };
@@ -23,6 +33,7 @@ export interface Snapshot {
   found: string[]; // categories Vision found (analyses and checks), sorted
   proxy: { version: string };
   archivedAt: number;
+  move?: ArchiveMoveNote;
 }
 // Image copies by event id (analyses) and by check id, for the thumbnail only.
 export interface Taken { snapshot: Snapshot; images: { analyses: Map<number, string>; checks: Map<number, string> } }

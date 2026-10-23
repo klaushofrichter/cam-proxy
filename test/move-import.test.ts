@@ -142,6 +142,19 @@ describe('importRows', () => {
     expect(JSON.parse(readFileSync(join(folder, 'meta.json'), 'utf8')).item.id).toBe(arc.id);
   });
 
+  it('an Archive row gets the move note, the snapshot otherwise unchanged', () => {
+    const f = fixture();
+    f.put('archive/cam9/5/clip.mp4', 'archived-clip');
+    const archive = { id: 5, cam: 'cam1', name: 'Fox', labels: '[]', retention_days: null, created_at: T, expires_at: null, recorded_from: T - 60_000, recorded_to: T, quality: 'original', original: 1, duration_s: 60, bytes: 13, files: '{}', source: '{"type":"clip"}', thumb_from: 'clip', thumb_at: null, created_by: 'admin', metadata: '{"events":[{"id":1}]}' };
+    const note = { moveId: 'mv_A', from: { proxyId: 'prx_S', name: 'old' }, at: 7 };
+    importRows(f, CAM, [{ table: 'archive', rows: [archive] }], new Set(['archive/cam9/5/clip.mp4']), {}, note);
+    const arc = f.catalog.db.prepare('SELECT id, metadata FROM archive WHERE cam = ?').get(CAM) as { id: number; metadata: string };
+    expect(JSON.parse(arc.metadata)).toMatchObject({ events: [{ id: 1 }], move: note });
+    const meta = JSON.parse(readFileSync(join(f.dataDir, 'archive', CAM, String(arc.id), 'meta.json'), 'utf8'));
+    expect(meta.item.move.from.name).toBe('old');
+    expect(meta.events).toEqual([{ id: 1 }]);
+  });
+
   it('one bad row is skipped, the others imported', () => {
     const f = fixture();
     f.put('clips/cam9/2026/10/20/1200-1.mp4', 'clip');

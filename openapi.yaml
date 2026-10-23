@@ -509,7 +509,7 @@ paths:
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
         - { name: offset, in: query, schema: { type: integer, minimum: 0 } }
       responses:
-        '200': { description: '{ total, offset, limit, items: [ArchiveItem] } (docs/archive.md §1)' }
+        '200': { description: '{ total, offset, limit, items: [ArchiveItem] } (docs/archive.md §1; an item has move: the note of the camera move that brought or kept it, or null)' }
         '400': { description: '{error: invalid, detail}' }
         '401': { description: not signed in }
   /api/archive/status:
