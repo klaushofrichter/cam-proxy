@@ -46,6 +46,15 @@ export interface MovePlan {
   estimateS: number;
 }
 
+// What cams-admin lets the source approve by itself (move.begin): the plan
+// choices and the longest budget; null when a person approves.
+export interface MoveBounds {
+  transfer: boolean;
+  kinds: MoveKind[];
+  space: MoveSpacePlan;
+  maxBudgetS: number;
+}
+
 // Who started a move on the source (B33): the local admin, or a cams-admin
 // sign-in (a managed session, the move.send UI unlock) by its display name.
 export interface MoveActor { origin: 'local' | 'managed'; label: string }
@@ -69,7 +78,7 @@ export interface MoveCameraConnection {
 // adds both when it sends (like command.done) and never sends a cmdId.
 export type MoveEvent =
   | { kind: 'move.targets'; requestId: string; camera: string }
-  | { kind: 'move.request'; requestId: string; camera: MoveCameraConnection; target: string; actor: { origin: 'local' | 'managed'; label: string }; summary: MoveSummary; settings: Settings }
+  | { kind: 'move.request'; requestId: string; camera: MoveCameraConnection; target: string; actor: { origin: 'local' | 'managed'; label: string }; summary: MoveSummary; settings: Settings; bounds: MoveBounds | null }
   | { kind: 'move.approve'; moveId: string; plan: MovePlan }
   | { kind: 'move.cancel'; moveId: string; copied: MoveCopied }
   // A failed phase carries a code (the contract requires it); the others may.

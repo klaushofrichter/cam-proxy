@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/commands/move.begin.args.schema.json",
+  "title": "move.begin args v1",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "camera": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+    },
+    "target": {
+      "type": "string",
+      "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+    },
+    "bounds": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "transfer": {
+              "type": "boolean"
+            },
+            "kinds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "maxItems": 5,
+              "uniqueItems": true
+            },
+            "space": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "maxBudgetS": {
+              "type": "integer",
+              "minimum": 60,
+              "maximum": 604800
+            }
+          },
+          "required": [
+            "transfer",
+            "kinds",
+            "space",
+            "maxBudgetS"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "v",
+    "camera",
+    "target",
+    "bounds"
+  ]
+}

@@ -279,7 +279,7 @@ export class MoveSource {
     const requestId = newId('rq_');
     const p: Pending = { requestId, camera: cam, target, actor: who.actor, summary: summarize(this.d.inventory, cam), settings: settingsOf(node), connection: connectionOf(node), at: this.now(), targetName: this.targetName(target) };
     this.pending.set(requestId, p);
-    this.d.emit({ kind: 'move.request', requestId, camera: p.connection, target, actor: p.actor, summary: p.summary, settings: p.settings });
+    this.d.emit({ kind: 'move.request', requestId, camera: p.connection, target, actor: p.actor, summary: p.summary, settings: p.settings, bounds: null });
     const bytes = Object.values(p.summary).reduce((n, k) => n + k.bytes, 0);
     this.d.audit.write({
       action: 'move-request', category: ['configuration'], type: ['creation'], outcome: 'success',

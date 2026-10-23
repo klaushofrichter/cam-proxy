@@ -32,7 +32,7 @@ export const UI_ENTRIES = ['ui.config', 'ui.restart'] as const;
 export const MOVE_ENTRIES = ['move.send', 'move.receive'] as const;
 export const ALLOW_ENTRIES: readonly string[] = ['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`), ...MOVE_ENTRIES, ...UI_ENTRIES];
 // The move commands by the entry they need; move.finish and move.cancel by their args.role (entryFor).
-const MOVE_SEND = ['move.targets', 'move.open', 'move.answer', 'move.go', 'move.release'];
+const MOVE_SEND = ['move.targets', 'move.open', 'move.answer', 'move.go', 'move.release', 'move.begin'];
 const MOVE_RECEIVE = ['move.offer', 'move.start'];
 export const MOVE_COMMANDS: readonly string[] = [...MOVE_SEND, ...MOVE_RECEIVE, 'move.finish', 'move.cancel'];
 export const isMoveCommand = (command: string): boolean => MOVE_COMMANDS.includes(command);

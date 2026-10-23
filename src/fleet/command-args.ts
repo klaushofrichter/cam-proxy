@@ -3,7 +3,7 @@
 // them against the vendored strict schemas on the fixtures.
 import { NEVER_REMOTE_ACTIONS, REMOTE_ACTIONS } from './policy';
 import { CAMERA_NAME_PATTERN } from './remote-settable';
-import { MOVE_KINDS, type MoveCopied, type MovePlan, type MoveRole, type MoveSummary, type Settings, type SettingsMap, type Space, type MoveReason } from '../moves/types';
+import { MOVE_KINDS, type MoveBounds, type MoveCopied, type MovePlan, type MoveRole, type MoveSummary, type Settings, type SettingsMap, type Space, type MoveReason } from '../moves/types';
 import type { ManagedToken, TokensApplyArgs } from './token-store';
 
 export type ArgsVerdict<T> = { ok: true; args: T } | { ok: false; code: 'unsupported_version' | 'invalid_args'; detail: string };
@@ -96,6 +96,7 @@ export interface MoveOfferArgs { v: 1; moveId: string; token: string; source: { 
 export interface MoveAnswerArgs { v: 1; moveId: string; requestId: string; target: { proxyId: string; name: string }; accept: boolean; reason?: MoveReason; space?: Space; estimateS?: number }
 export interface MoveStartArgs { v: 1; moveId: string; plan: MovePlan; settings: Settings; done: string[] }
 export interface MoveGoArgs { v: 1; moveId: string; plan: MovePlan; targetPublicKey: string; expectedLeaf: string }
+export interface MoveBeginArgs { v: 1; camera: string; target: string; bounds: MoveBounds | null }
 export interface MoveReleaseArgs { v: 1; moveId: string }
 export interface MoveFinishArgs { v: 1; moveId: string; role: MoveRole; abandoned: boolean }
 export interface MoveCancelArgs { v: 1; moveId: string; role: MoveRole; copied?: MoveCopied; expectedLeaf?: string }
@@ -210,6 +211,16 @@ export const validateMoveStart = (a: unknown) => v1<MoveStartArgs>(a, ['moveId',
   moveId(o) ?? planProblem(o.plan) ?? settingsProblem(o.settings) ?? (!Array.isArray(o.done) || o.done.length > 512 || o.done.some((c) => typeof c !== 'string' || !CHUNK_ID.test(c)) ? 'done' : null));
 export const validateMoveGo = (a: unknown) => v1<MoveGoArgs>(a, ['moveId', 'plan', 'targetPublicKey', 'expectedLeaf'], (o) =>
   moveId(o) ?? planProblem(o.plan) ?? (typeof o.targetPublicKey !== 'string' || !X25519_SPKI.test(o.targetPublicKey) ? 'targetPublicKey' : typeof o.expectedLeaf !== 'string' || !FINGERPRINT.test(o.expectedLeaf) ? 'expectedLeaf' : null));
+// The pre-approval bounds of move.begin: a closed object or null.
+export const boundsProblem = (b: unknown): string | null => {
+  if (b === null) return null;
+  if (!closed(b, ['transfer', 'kinds', 'space', 'maxBudgetS']) || !bool(b.transfer)) return 'bounds';
+  if (!Array.isArray(b.kinds) || b.kinds.length > 5 || new Set(b.kinds).size !== b.kinds.length || b.kinds.some((k) => !(MOVE_KINDS as readonly unknown[]).includes(k))) return 'bounds';
+  if (typeof b.space !== 'string' || !SPACE_PLANS.includes(b.space)) return 'bounds';
+  return Number.isSafeInteger(b.maxBudgetS) && (b.maxBudgetS as number) >= 60 && (b.maxBudgetS as number) <= 604800 ? null : 'bounds';
+};
+export const validateMoveBegin = (a: unknown) => v1<MoveBeginArgs>(a, ['camera', 'target', 'bounds'], (o) =>
+  !idLike(o.camera) ? 'camera' : typeof o.target !== 'string' || !PRX_ID.test(o.target) ? 'target' : o.bounds === undefined ? 'bounds' : boundsProblem(o.bounds));
 export const validateMoveRelease = (a: unknown) => v1<MoveReleaseArgs>(a, ['moveId'], moveId);
 export const validateMoveFinish = (a: unknown) => v1<MoveFinishArgs>(a, ['moveId', 'role', 'abandoned'], (o) => moveId(o) ?? role(o) ?? (bool(o.abandoned) ? null : 'abandoned'));
 // copied is required only for the target (a source cancel carries expectedLeaf instead, optional).
@@ -233,4 +244,5 @@ export const ARGS_VALIDATORS: Record<string, (a: unknown) => ArgsVerdict<unknown
   'move.release': validateMoveRelease,
   'move.finish': validateMoveFinish,
   'move.cancel': validateMoveCancel,
+  'move.begin': validateMoveBegin,
 };
