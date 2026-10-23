@@ -200,6 +200,25 @@ describe('move.return.open on the new proxy (the return source)', () => {
     expect(f.events).toEqual([]);
   });
 
+  it('return.open while the cancel has not closed yet (no cancelClosed) answers wrong_phase (Task 9 review minor 1)', () => {
+    const f = fixture();
+    const c = f.journal.load(CANCELLED)!;
+    delete c.cancelClosed;
+    f.journal.save(c);
+    expect(f.returns.open(open())).toEqual({ status: 'failed', code: 'wrong_phase' });
+    expect(f.journal.load(RETURN)).toBeNull();
+  });
+
+  it('a second return of the same cancelled move under another id answers wrong_phase (Task 9 review minor 4)', () => {
+    const f = fixture();
+    expect(f.returns.open(open()).status).toBe('ok');
+    const OTHER = 'mv_2123456789ABCDEFGHJK';
+    expect(f.returns.open(open({ moveId: OTHER, tokenHash: H2 }))).toEqual({ status: 'failed', code: 'wrong_phase' });
+    expect(f.journal.load(OTHER)).toBeNull();
+    // The first return answers as before.
+    expect(f.returns.open(open()).status).toBe('ok');
+  });
+
   it('a repeated return.open with a new tokenHash re-keys; the old token is refused', async () => {
     const f = fixture();
     const first = f.returns.open(open());

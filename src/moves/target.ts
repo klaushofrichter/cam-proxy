@@ -299,6 +299,8 @@ export class MoveTarget {
     if (past) return past.phase === 'finished' ? ok({ deleted: past.deleted ?? zeros() }) : failed('wrong_phase');
     const r = this.target(a.moveId);
     if (!r) return ok({ deleted: zeros() });
+    // A return's record (step 4): only move.finish {return: true} ends it, and a return can't be cancelled (spec §1).
+    if (r.returnOf) return failed('wrong_phase');
     if (r.phase === 'cancelled') return failed('wrong_phase');
     if (r.phase === 'failed') {
       this.terminalEvent(r.id, 'failed', r.failure);
@@ -397,6 +399,8 @@ export class MoveTarget {
     if (past) return past.phase === 'cancelled' ? ok() : failed('wrong_phase');
     const r = this.target(a.moveId);
     if (!r) return ok();
+    // A return's record (step 4): only move.finish {return: true} ends it, and a return can't be cancelled (spec §1).
+    if (r.returnOf) return failed('wrong_phase');
     if (r.phase === 'finished') return failed('wrong_phase');
     // Waiting for the copy back (its tombstone may be gone: the record never
     // expires by itself, ruling 10). A record whose cancel steps did not all

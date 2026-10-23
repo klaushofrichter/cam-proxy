@@ -1033,3 +1033,32 @@ describe('keepDays on the terminal phases (move step 4, Task 7)', () => {
     expect(c.events.at(-1)).toEqual(can);
   }, 60_000);
 });
+
+describe("a return's record refuses a plain finish and cancel (step 4, Task 9 review I1)", () => {
+  const RETURN_OF = 'mv_9123456789ABCDEFGHJK';
+
+  it('source: a plain move.finish or move.cancel naming a return answers wrong_phase and deletes nothing', async () => {
+    const u = sourceUnit({ added: true, released: false });
+    content(u.dataDir, u.catalog, 'cam3');
+    const before = rows(u.catalog, 'cam3');
+    // The new proxy's return source record (the camera's node removed at the cancel).
+    u.journal.save(sourceRecord({ returnOf: RETURN_OF, plan: null, expectedLeaf: undefined }));
+    expect(await u.source.finish(finishArgs('source'))).toEqual({ status: 'failed', code: 'wrong_phase' });
+    expect(await u.source.finish(finishArgs('source', true))).toEqual({ status: 'failed', code: 'wrong_phase' });
+    expect(await u.source.cancel({ v: 1, moveId: MOVE, role: 'source' })).toEqual({ status: 'failed', code: 'wrong_phase' });
+    expect(rows(u.catalog, 'cam3')).toBe(before);
+    expect(u.journal.load(MOVE)).toMatchObject({ role: 'source', phase: 'released', returnOf: RETURN_OF });
+    expect(u.calls).toEqual([]);
+    expect(u.journal.ended(MOVE, 'source')).toBeNull();
+  });
+
+  it('target: a plain move.finish or move.cancel naming a return answers wrong_phase; the record stays', async () => {
+    const u = targetUnit();
+    u.journal.save({ ...offered({ phase: 'copying', returnOf: RETURN_OF, plan: PLAN }), cameraConnection: undefined });
+    expect(await u.target.finish(finishArgs('target'))).toEqual({ status: 'failed', code: 'wrong_phase' });
+    expect(await u.target.cancel(cancelT('delete'))).toEqual({ status: 'failed', code: 'wrong_phase' });
+    expect(u.journal.load(MOVE)).toMatchObject({ role: 'target', phase: 'copying', returnOf: RETURN_OF });
+    expect(u.stopped).toEqual([]);
+    expect(u.journal.ended(MOVE, 'target')).toBeNull();
+  });
+});

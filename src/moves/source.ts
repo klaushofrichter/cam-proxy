@@ -393,6 +393,8 @@ export class MoveSource {
     if (past) return past.phase === 'finished' ? ok({ deleted: past.deleted ?? zeros() }) : failed('wrong_phase');
     const r = this.source(a.moveId);
     if (!r) return ok({ deleted: zeros() });
+    // A return's record (step 4): only move.finish {return: true} ends it, and a return can't be cancelled (spec §1).
+    if (r.returnOf) return failed('wrong_phase');
     if (r.phase === 'failed') {
       this.terminalEvent(r.id, 'failed', r.failure);
       return failed('wrong_phase');
@@ -465,6 +467,8 @@ export class MoveSource {
     if (past) return past.phase === 'cancelled' ? ok() : failed('wrong_phase');
     const r = this.source(a.moveId);
     if (!r) return ok();
+    // A return's record (step 4): only move.finish {return: true} ends it, and a return can't be cancelled (spec §1).
+    if (r.returnOf) return failed('wrong_phase');
     if (r.phase === 'finished') return failed('wrong_phase');
     const cam = r.camera;
     if (r.phase !== 'cancelled') {

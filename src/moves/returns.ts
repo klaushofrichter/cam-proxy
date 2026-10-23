@@ -64,15 +64,16 @@ export class MoveReturns {
 
   // move.return.open (new proxy): the return's source record, from the
   // cancelled move's kept target record (returnPending, with its high water).
-  // Unknown cancelled move: unknown_move; not (yet) waiting for its copy back,
-  // or without a high water: wrong_phase. Again with the same token hash: the
+  // Unknown cancelled move: unknown_move; not (yet) waiting for its copy back
+  // (its cancel not closed), or without a high water, or another return of it
+  // open under another id: wrong_phase. Again with the same token hash: the
   // same answer, nothing changes. With a new one (cams-admin restarted and
   // lost the plaintext, ruling 20): the record takes it, the old token stops
   // working; the manifest stays as listed (the original copies the same chunks).
   open(a: MoveReturnOpenArgs): Done {
     const cancelled = this.d.journal.load(a.returnOf);
     if (!cancelled) return failed('unknown_move');
-    if (cancelled.role !== 'target' || cancelled.phase !== 'cancelled' || cancelled.returnPending !== true || !cancelled.captured) return failed('wrong_phase');
+    if (cancelled.role !== 'target' || cancelled.phase !== 'cancelled' || cancelled.returnPending !== true || cancelled.cancelClosed !== true || !cancelled.captured) return failed('wrong_phase');
     const existing = this.d.journal.load(a.moveId);
     if (existing) {
       if (existing.role !== 'source' || existing.returnOf !== a.returnOf || existing.camera !== cancelled.camera || moveEnded(existing.phase) || !existing.manifest) return failed('wrong_phase');
@@ -84,6 +85,8 @@ export class MoveReturns {
       }
       return this.opened(existing, cancelled, rekeyed);
     }
+    // One return per cancelled move: another open one under another id is refused.
+    if ((this.d.journal.all?.() ?? []).some((x) => x.id !== a.moveId && x.role === 'source' && x.returnOf === a.returnOf && !moveEnded(x.phase))) return failed('wrong_phase');
     const manifest = listChunks(this.d.inventory, cancelled.camera, [...MOVE_KINDS], capturedFilter(this.d.inventory.dataDir, cancelled));
     const now = this.now();
     const r: MoveRecord = {
