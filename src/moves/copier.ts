@@ -8,7 +8,7 @@ import { logger } from '../log';
 import { readChunkPart, writeChunkPart } from './chunk-parts';
 import { moveSourceClient, spaceFor, type EvaluateDeps, type SourceAnswer } from './evaluate';
 import { importRows, isStaged, landingPath, moveStagingDir, relOk, type ImportDeps } from './import';
-import { CONTENT_FOLDERS, hashFile, KIND_FOLDERS, type ChunkMeta, type TableRows } from './inventory';
+import { chunkOrder, CONTENT_FOLDERS, hashFile, KIND_FOLDERS, type ChunkMeta, type TableRows } from './inventory';
 import type { ChunkRecord, MoveJournal, MoveRecord } from './journal';
 import { noteLanded } from './purge';
 import { abortableSleep, paceS, rateFor, TokenBucket } from './rate';
@@ -63,7 +63,6 @@ export interface CopierDeps {
   timing?: { retryMs?: number; retryCapMs?: number; pausedPollMs?: number; refreshPollMs?: number; refreshWaitMs?: number; saveEveryMs?: number; idleMs?: number };
 }
 
-const ORDER: MoveKind[] = ['clips', 'events', 'checks', 'archive', 'stills'];
 const ATTEMPTS = 3;
 const FAILED_PATHS_MAX = 50;
 const PROGRESS_CHUNKS_MAX = 4096;
@@ -253,7 +252,7 @@ export class Copier {
     this.finish();
   }
 
-  // The chunks newest day first, then clips, events, checks, archive, stills.
+  // The chunks in chunkOrder: Archive first, then newest day first.
   private async fetchManifest(): Promise<ChunkMeta[]> {
     const m = await this.json(`/api/moves/${this.r.id}/manifest`);
     const body = (m.status === 200 ? m.body : null) as { chunks?: unknown; refreshed?: unknown } | null;
@@ -262,7 +261,7 @@ export class Copier {
     const ok = list.filter((c) => c && typeof c.id === 'string' && /^(stills|clips|events|checks|archive):\d{4}-\d{2}-\d{2}$/.test(c.id) && c.id === `${c.kind}:${c.day}`
       && [c.files, c.bytes, c.rows].every((n) => Number.isSafeInteger(n) && n >= 0));
     return [...new Map(ok.map((c) => [c.id, { id: c.id, kind: c.kind, day: c.day, ...metaOf(c) }])).values()]
-      .sort((a, b) => (a.day === b.day ? ORDER.indexOf(a.kind) - ORDER.indexOf(b.kind) : a.day < b.day ? 1 : -1));
+      .sort(chunkOrder);
   }
 
   private async pass(): Promise<void> {
@@ -283,7 +282,7 @@ export class Copier {
         continue;
       }
       if (plan.space === 'fit' && rec?.state !== 'verified' && (full || !this.fits(c))) {
-        // Newest first until the target is full; the rest is skipped.
+        // Archive first, then newest first, until the target is full; the rest is skipped.
         full = true;
         this.skipChunk(c);
         continue;

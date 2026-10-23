@@ -490,6 +490,22 @@ describe('Copier', () => {
     expect(u.audits.filter((a) => a.action === 'move-budget-exceeded')).toHaveLength(0);
   });
 
+  it('fit counts Archive first: an old Archive chunk is copied, the newest stills day skipped', async () => {
+    const { files, chunks } = threeDays();
+    files['archive/cam9/5/clip.mp4'] = 'archived-long-ago';
+    chunks.push({ id: `archive:${day(1)}`, files: ['archive/cam9/5/clip.mp4'] });
+    const f = fakeSource(files, chunks);
+    const u = unit(f, { plan: { ...PLAN, kinds: ['archive', 'clips', 'stills'] as MoveKind[], space: 'fit' } });
+    // Room for the Archive item and one clips day, nothing more.
+    const room = files['archive/cam9/5/clip.mp4'].length + files['clips/cam9/2026/10/20/1200-1.mp4'].length + 2;
+    u.deps.space.freeBytes = () => room - Object.keys(files).filter((p) => existsSync(join(u.dataDir, p))).reduce((n, p) => n + files[p].length, 0);
+    await u.run();
+    const st = chunkStates(u);
+    expect(st[`archive:${day(1)}`]).toBe('verified');
+    expect(st[`clips:${day(20)}`]).toBe('verified');
+    expect(st[`stills:${day(20)}`]).toBe('skipped');
+  });
+
   it('plan.kinds limits what is copied; space fit stops when the target is full', async () => {
     const { files, chunks } = threeDays();
     const f = fakeSource(files, chunks);

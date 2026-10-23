@@ -5,7 +5,7 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { describe, expect, it } from 'vitest';
 import { openCatalog } from '../src/catalog/db';
-import { Cam, chunkManifest, chunkRows, listChunks, summarize } from '../src/moves/inventory';
+import { Cam, chunkManifest, chunkOrder, chunkRows, listChunks, summarize } from '../src/moves/inventory';
 import { MOVE_KINDS } from '../src/moves/types';
 
 const D1 = Date.UTC(2026, 9, 1, 12, 0); // 2026-10-01 12:00 UTC
@@ -61,10 +61,13 @@ describe('move inventory', () => {
     expect(summarize(f.deps, 'cam9').clips).toEqual({ files: 0, bytes: 0, rows: 0, oldest: null, newest: null });
   });
 
-  it('chunks are newest day first, then clips, events, checks, archive, stills', () => {
+  it('Archive chunks come first, then the rest newest day first', () => {
     const f = fixture();
     const ids = listChunks(f.deps, 'cam3', [...MOVE_KINDS]).map((c) => c.id);
-    expect(ids).toEqual(['events:2026-10-02', 'archive:2026-10-02', 'stills:2026-10-02', 'clips:2026-10-01', 'checks:2026-10-01', 'stills:2026-10-01']);
+    expect(ids).toEqual(['archive:2026-10-02', 'events:2026-10-02', 'stills:2026-10-02', 'clips:2026-10-01', 'checks:2026-10-01', 'stills:2026-10-01']);
+    const mk = (kind: 'clips' | 'archive' | 'stills' | 'events' | 'checks', day: string) => ({ kind, day });
+    const sorted = [mk('stills', '2026-10-21'), mk('clips', '2026-10-21'), mk('archive', '2026-10-18'), mk('archive', '2026-10-20'), mk('events', '2026-10-21'), mk('checks', '2026-10-21')].sort(chunkOrder);
+    expect(sorted.map((c) => `${c.kind}:${c.day}`)).toEqual(['archive:2026-10-20', 'archive:2026-10-18', 'clips:2026-10-21', 'events:2026-10-21', 'checks:2026-10-21', 'stills:2026-10-21']);
     const c = listChunks(f.deps, 'cam3', ['clips'])[0];
     expect(c).toEqual({ id: 'clips:2026-10-01', kind: 'clips', day: '2026-10-01', files: 2, bytes: 12, rows: 1 });
   });

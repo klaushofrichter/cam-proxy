@@ -34,7 +34,7 @@ export const KIND_FOLDERS: Readonly<Record<MoveKind, readonly string[]>> = FOLDE
 export const MOVE_PART = /\.move-[A-Za-z0-9_-]{1,64}\.part$/;
 // Every folder a camera's moved content lies in (<dataDir>/<folder>/<cam>/...).
 export const CONTENT_FOLDERS: readonly string[] = Object.values(FOLDERS).flat();
-// Within a day: small and most-opened first (P11).
+// Within a day: small and most-opened first (P11). Archive is sorted before this.
 const ORDER: MoveKind[] = ['clips', 'events', 'checks', 'archive', 'stills'];
 const DAY_MS = 86_400_000;
 const CHUNK_ID = /^(stills|clips|events|checks|archive):(\d{4})-(\d{2})-(\d{2})$/;
@@ -191,7 +191,16 @@ export function summarize(d: InventoryDeps, cam: string): MoveSummary {
   return out;
 }
 
-// Newest day first, then clips, events, checks, archive, stills (P11).
+// Archive chunks first, newest day first (they exist nowhere else); then the
+// rest newest day first, within a day clips, events, checks, stills (P11).
+export function chunkOrder(a: Pick<ChunkMeta, 'kind' | 'day'>, b: Pick<ChunkMeta, 'kind' | 'day'>): number {
+  const aa = a.kind === 'archive';
+  if (aa !== (b.kind === 'archive')) return aa ? -1 : 1;
+  if (a.day !== b.day) return a.day < b.day ? 1 : -1;
+  return ORDER.indexOf(a.kind) - ORDER.indexOf(b.kind);
+}
+
+// Archive first, then newest day first (see chunkOrder).
 export function listChunks(d: InventoryDeps, cam: string, kinds: MoveKind[]): ChunkMeta[] {
   const c = new Cam(d, cam);
   const out: ChunkMeta[] = [];
@@ -206,7 +215,7 @@ export function listChunks(d: InventoryDeps, cam: string, kinds: MoveKind[]): Ch
     }
     for (const [day, e] of byDay) out.push({ id: `${kind}:${day}`, kind, day, files: e.files.size, bytes: [...e.files.values()].reduce((a, b) => a + b, 0), rows: e.rows });
   }
-  return out.sort((a, b) => (a.day === b.day ? ORDER.indexOf(a.kind) - ORDER.indexOf(b.kind) : a.day < b.day ? 1 : -1));
+  return out.sort(chunkOrder);
 }
 
 // Opens the file (a link is refused), checks it is a regular file and streams
