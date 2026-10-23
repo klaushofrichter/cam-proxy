@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.10.23.1
+
 - Camera moves can be started by cams-admin (new command `move.begin`, under `move.send`). With bounds from cams-admin, the source approves its own offer when the target's answer fits them (estimate within the time budget, the space choice possible); otherwise the offer waits on the panel with the reason (`move-auto-approve` in the audit log).
 
 ## v2026.10.22.1
