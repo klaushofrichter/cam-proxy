@@ -68,10 +68,43 @@ When it can, one panel shows:
 - that the source deletes all the camera's content when the move ends,
   copied or not. Audit records stay.
 
-**Approve move** starts it. Approving is the only approval: it covers the
+**Approve move** starts it. Approving here, or the auto-approval within the
+bounds cams-admin started the move with, is the only approval: it covers the
 settings and limits named on the panel. An offer not approved within 30
 minutes expires: after 35 minutes both proxies close it on their own
 (`move-cancel`, reason `offer_expired`), even when cams-admin is away.
+
+### Started from cams-admin
+
+cams-admin can start a move on the source with the command `move.begin`
+(under `move.send`, like the page). The source runs the same checks as its
+page and answers with the request, or with the reason it refuses
+(`no_site_ca`, `external_cert`, `moves_not_allowed`, `busy`,
+`unknown_camera`). The camera's password stays on the proxy; the command and
+its answer carry none.
+
+cams-admin may add bounds: whether to transfer content, which kinds, what to
+do when it doesn't fit, and the longest time budget. When the target's answer
+arrives and accepts, the source builds the plan the panel would build and
+approves it itself, as a click on **Approve move** would, if it fits the
+bounds:
+
+- the estimated time is within the bounds' time budget (also when nothing is
+  transferred);
+- the space choice is possible (when the content fits on the target, every
+  choice means copy everything);
+- the kinds are those of the bounds, limited to what exists;
+- the time budget is the panel's (whole minutes, not below the estimate),
+  capped at the bounds' budget.
+
+Otherwise the offer waits on the panel for a person, with the reason shown
+there and in the audit log. The reasons are a closed list: `over_budget`
+(the estimate is above the bounds' budget), `space` (the space choice is not
+possible), `no_estimate` (cams-admin gave no estimate), `not_allowed` (this
+proxy does not allow moves now, for example `move.send` was taken away
+meanwhile) and `plan` (the plan was refused, with its detail). A rejected
+answer is not noted. A move started without bounds, from the page, is never
+approved by the source itself.
 
 ## What happens
 
@@ -172,10 +205,10 @@ and `role`; never the password, the token or a key. The actions, each in
 
 | side | actions |
 |---|---|
-| source | `move-request` (started on its page), `move-approve`, `move-switch` (`go`), `move-phase` (`opened`, `switching`, `released`, `finished`, `cancelled`, `failed`), `move-cleanup`, `move-done`, `move-cancel`, `move-token-refused` (a refused request to its move endpoints) |
+| source | `move-request` (started on its page, or by cams-admin with `move.begin`), `move-approve` (a person, or the auto-approval, named in its label), `move-auto-approve` (the offer waits for a person, with the reason), `move-switch` (`go`), `move-phase` (`opened`, `switching`, `released`, `finished`, `cancelled`, `failed`), `move-cleanup`, `move-done`, `move-cancel`, `move-token-refused` (a refused request to its move endpoints) |
 | target | `move-offer` (its answer), `move-switch` (`start`, `secrets`, `camera`, `cert`, `ftp`), `move-phase` (`switching`, `switched`, `copying`, `copied`, `finished`, `cancelled`, `failed`), `move-progress` (every 10 %), `move-budget-exceeded`, `move-file-failed`, `move-source-unreachable`, `move-done`, `move-cancel` |
 
 A normal move shows, in this order: `move-request` and `move-approve` on the
-source, `move-offer` and the `move-switch` steps on the target, `released` on
+source (no `move-auto-approve`: that record means the offer is waiting), `move-offer` and the `move-switch` steps on the target, `released` on
 the source, `move-progress` up to `copied` on the target, then `move-cleanup`
 and `move-done` on the source and `move-done` on the target.

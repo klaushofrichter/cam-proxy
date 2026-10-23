@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Camera moves can be started by cams-admin (new command `move.begin`, under `move.send`). With bounds from cams-admin, the source approves its own offer when the target's answer fits them (estimate within the time budget, the space choice possible); otherwise the offer waits on the panel with the reason (`move-auto-approve` in the audit log).
+
 ## v2026.10.22.1
 
 - Camera moves, groundwork: a camera with the new local setting `cameras.<id>.moved` (the id of its move) is hidden like a removed one: its worker stops, it leaves the APIs and its FTP user is refused, while its configuration and files stay; clearing the setting starts it again, live. New local setting `moves.maxCameras` (no limit by default). cams-admin cannot set either. Internal: `purgeCamera` deletes every row and file of one camera.
