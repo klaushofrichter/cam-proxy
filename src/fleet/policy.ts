@@ -32,8 +32,8 @@ export const UI_ENTRIES = ['ui.config', 'ui.restart'] as const;
 export const MOVE_ENTRIES = ['move.send', 'move.receive'] as const;
 export const ALLOW_ENTRIES: readonly string[] = ['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`), ...MOVE_ENTRIES, ...UI_ENTRIES];
 // The move commands by the entry they need; move.finish and move.cancel by their args.role (entryFor).
-const MOVE_SEND = ['move.targets', 'move.open', 'move.answer', 'move.go', 'move.release', 'move.begin'];
-const MOVE_RECEIVE = ['move.offer', 'move.start'];
+const MOVE_SEND = ['move.targets', 'move.open', 'move.answer', 'move.go', 'move.release', 'move.begin', 'move.return.start'];
+const MOVE_RECEIVE = ['move.offer', 'move.start', 'move.return.open'];
 export const MOVE_COMMANDS: readonly string[] = [...MOVE_SEND, ...MOVE_RECEIVE, 'move.finish', 'move.cancel'];
 export const isMoveCommand = (command: string): boolean => MOVE_COMMANDS.includes(command);
 // What this version runs (P2, P3): command names and allow entries. The
@@ -48,6 +48,8 @@ export function entryFor(command: string, args: unknown): string {
   if (command === 'camera.action') return `camera.action:${typeof a.action === 'string' ? a.action : ''}`;
   if (MOVE_SEND.includes(command)) return 'move.send';
   if (MOVE_RECEIVE.includes(command)) return 'move.receive';
+  // move.finish with return: true ends the copy back, where the sides swap (source = the proxy that receives the copy back).
+  if (command === 'move.finish' && a.return === true) return a.role === 'target' ? 'move.send' : 'move.receive';
   if (command === 'move.finish' || command === 'move.cancel') return a.role === 'target' ? 'move.receive' : 'move.send';
   return command;
 }

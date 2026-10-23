@@ -97,8 +97,10 @@ export interface MoveAnswerArgs { v: 1; moveId: string; requestId: string; targe
 export interface MoveStartArgs { v: 1; moveId: string; plan: MovePlan; settings: Settings; done: string[] }
 export interface MoveGoArgs { v: 1; moveId: string; plan: MovePlan; targetPublicKey: string; expectedLeaf: string }
 export interface MoveBeginArgs { v: 1; camera: string; target: string; bounds: MoveBounds | null }
+export interface MoveReturnOpenArgs { v: 1; moveId: string; returnOf: string; tokenHash: string; targetIp: string }
+export interface MoveReturnStartArgs { v: 1; moveId: string; returnOf: string; token: string; source: MoveOfferArgs['source']; done: string[] }
 export interface MoveReleaseArgs { v: 1; moveId: string }
-export interface MoveFinishArgs { v: 1; moveId: string; role: MoveRole; abandoned: boolean }
+export interface MoveFinishArgs { v: 1; moveId: string; role: MoveRole; abandoned: boolean; return?: boolean }
 export interface MoveCancelArgs { v: 1; moveId: string; role: MoveRole; copied?: MoveCopied; expectedLeaf?: string }
 
 const MOVE_ID = /^mv_[0-9A-HJKMNP-TV-Z]{20}$/;
@@ -181,13 +183,20 @@ export const validateMoveTargets = (a: unknown) => v1<MoveTargetsArgs>(a, ['requ
 });
 export const validateMoveOpen = (a: unknown) => v1<MoveOpenArgs>(a, ['moveId', 'requestId', 'camera', 'tokenHash', 'targetIp'], (o) =>
   moveId(o) ?? (typeof o.requestId !== 'string' || !REQ_ID.test(o.requestId) ? 'requestId' : !idLike(o.camera) ? 'camera' : typeof o.tokenHash !== 'string' || !TOKEN_HASH.test(o.tokenHash) ? 'tokenHash' : typeof o.targetIp !== 'string' || !TARGET_IP.test(o.targetIp) ? 'targetIp' : null));
+export const validateMoveReturnOpen = (a: unknown) => v1<MoveReturnOpenArgs>(a, ['moveId', 'returnOf', 'tokenHash', 'targetIp'], (o) =>
+  moveId(o) ?? (typeof o.returnOf !== 'string' || !MOVE_ID.test(o.returnOf) ? 'returnOf' : typeof o.tokenHash !== 'string' || !TOKEN_HASH.test(o.tokenHash) ? 'tokenHash' : typeof o.targetIp !== 'string' || !TARGET_IP.test(o.targetIp) ? 'targetIp' : null));
+// The move source as the receiving side keeps it (move.offer, move.return.start).
+const sourceProblem = (s: unknown): boolean =>
+  !closed(s, ['proxyId', 'name', 'url', 'caFingerprints', 'tlsServername']) || typeof s.proxyId !== 'string' || !PRX_ID.test(s.proxyId) || !str(s.name, 64, 1) || !str(s.url, 300) || !/^https?:\/\//.test(s.url)
+    || !Array.isArray(s.caFingerprints) || s.caFingerprints.length > 2 || s.caFingerprints.some((f) => typeof f !== 'string' || !FINGERPRINT.test(f)) || !str(s.tlsServername, 253, 1);
+export const validateMoveReturnStart = (a: unknown) => v1<MoveReturnStartArgs>(a, ['moveId', 'returnOf', 'token', 'source', 'done'], (o) =>
+  moveId(o) ?? (typeof o.returnOf !== 'string' || !MOVE_ID.test(o.returnOf) ? 'returnOf' : typeof o.token !== 'string' || !MOVE_TOKEN.test(o.token) ? 'token' : sourceProblem(o.source) ? 'source'
+    : !Array.isArray(o.done) || o.done.length > 512 || o.done.some((c) => typeof c !== 'string' || !CHUNK_ID.test(c)) ? 'done' : null));
 export const validateMoveOffer = (a: unknown) => v1<MoveOfferArgs>(a, ['moveId', 'token', 'source', 'camera', 'summary', 'settings'], (o) => {
   const bad = moveId(o);
   if (bad) return bad;
   if (typeof o.token !== 'string' || !MOVE_TOKEN.test(o.token)) return 'token';
-  const s = o.source;
-  if (!closed(s, ['proxyId', 'name', 'url', 'caFingerprints', 'tlsServername']) || typeof s.proxyId !== 'string' || !PRX_ID.test(s.proxyId) || !str(s.name, 64, 1) || !str(s.url, 300) || !/^https?:\/\//.test(s.url)
-    || !Array.isArray(s.caFingerprints) || s.caFingerprints.length > 2 || s.caFingerprints.some((f) => typeof f !== 'string' || !FINGERPRINT.test(f)) || !str(s.tlsServername, 253, 1)) return 'source';
+  if (sourceProblem(o.source)) return 'source';
   const c = o.camera;
   if (!closed(c, ['camsId', 'proxyCameraId', 'name', 'host', 'protocol', 'user', 'onvifPort', 'rtspPort', 'baichuanPort']) || !idLike(c.camsId) || !idLike(c.proxyCameraId) || typeof c.name !== 'string' || !CAMERA_NAME_PATTERN.test(c.name)
     || !str(c.host, 255, 1) || (c.protocol !== 'https' && c.protocol !== 'http') || !str(c.user, 64) || !port(c.onvifPort) || !port(c.rtspPort) || !port(c.baichuanPort)) return 'camera';
@@ -222,7 +231,7 @@ export const boundsProblem = (b: unknown): string | null => {
 export const validateMoveBegin = (a: unknown) => v1<MoveBeginArgs>(a, ['camera', 'target', 'bounds'], (o) =>
   !idLike(o.camera) ? 'camera' : typeof o.target !== 'string' || !PRX_ID.test(o.target) ? 'target' : o.bounds === undefined ? 'bounds' : boundsProblem(o.bounds));
 export const validateMoveRelease = (a: unknown) => v1<MoveReleaseArgs>(a, ['moveId'], moveId);
-export const validateMoveFinish = (a: unknown) => v1<MoveFinishArgs>(a, ['moveId', 'role', 'abandoned'], (o) => moveId(o) ?? role(o) ?? (bool(o.abandoned) ? null : 'abandoned'));
+export const validateMoveFinish = (a: unknown) => v1<MoveFinishArgs>(a, ['moveId', 'role', 'abandoned', 'return'], (o) => moveId(o) ?? role(o) ?? (bool(o.abandoned) ? (optional(o, 'return', bool) ? null : 'return') : 'abandoned'));
 // copied is required only for the target (a source cancel carries expectedLeaf instead, optional).
 export const validateMoveCancel = (a: unknown) => v1<MoveCancelArgs>(a, ['moveId', 'role', 'copied', 'expectedLeaf'], (o) =>
   moveId(o) ?? role(o) ?? (o.role === 'target' && o.copied === undefined ? 'copied' : !optional(o, 'copied', oneOf('delete', 'age-out')) ? 'copied' : !optional(o, 'expectedLeaf', (x) => typeof x === 'string' && FINGERPRINT.test(x)) ? 'expectedLeaf' : null));
@@ -237,6 +246,8 @@ export const ARGS_VALIDATORS: Record<string, (a: unknown) => ArgsVerdict<unknown
   'proxy.restart': validateProxyRestart,
   'move.targets': validateMoveTargets,
   'move.open': validateMoveOpen,
+  'move.return.open': validateMoveReturnOpen,
+  'move.return.start': validateMoveReturnStart,
   'move.offer': validateMoveOffer,
   'move.answer': validateMoveAnswer,
   'move.start': validateMoveStart,

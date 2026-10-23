@@ -1,0 +1,22 @@
+{
+  "$note": "cancelled after the switch-over: the content is still to be copied back",
+  "schema": "event",
+  "message": {
+    "v": 1,
+    "type": "event",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "kind": "move.phase",
+      "moveId": "mv_0123456789ABCDEFGHJK",
+      "role": "source",
+      "phase": "cancelled",
+      "ok": true,
+      "returnPending": true
+    },
+    "sig": "sExHClUUMPJ3rLARv8D8rJHMNV88qHvPuw5AQcjLXtNB1wksb70XI6EaqW4qL2oMTMBflbQs0Py8KfQZJvmqCg=="
+  }
+}

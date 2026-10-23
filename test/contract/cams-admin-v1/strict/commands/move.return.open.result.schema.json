@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/strict/commands/move.return.open.result.schema.json",
+  "title": "move.return.open result v1",
+  "type": "object",
+  "properties": {
+    "chunks": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "bytes": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "chunks",
+    "bytes"
+  ],
+  "additionalProperties": false
+}
