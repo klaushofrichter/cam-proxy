@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/commands/move.begin.result.schema.json",
+  "title": "move.begin result v1",
+  "type": "object",
+  "properties": {
+    "requestId": {
+      "type": "string",
+      "pattern": "^rq_[0-9A-HJKMNP-TV-Z]{20}$"
+    }
+  },
+  "required": [
+    "requestId"
+  ]
+}

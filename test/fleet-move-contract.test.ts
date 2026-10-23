@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { checkCommand, CommandLimits, SeenIds, type CheckContext } from '../src/fleet/command-check';
-import { ARGS_VALIDATORS } from '../src/fleet/command-args';
+import { ARGS_VALIDATORS, boundsProblem } from '../src/fleet/command-args';
 import { AdminClient, type ClientLog, type Timing } from '../src/fleet/client';
 import { ALLOW_ENTRIES, entryFor, ENTRY_TEXT, IMPLEMENTED } from '../src/fleet/policy';
 import { newId } from '../src/fleet/protocol';
@@ -16,8 +16,8 @@ import { until } from './helpers/proxy';
 
 // The camera-move group of the cams-admin contract (cams-admin contract/README
 // "Camera moves"; cam-proxy plan 2026-10-21-camera-move-cam-proxy Task 1): the
-// nine commands, their two allow entries, the signed events.
-const MOVE = ['move.targets', 'move.open', 'move.offer', 'move.answer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel'];
+// ten commands (move.begin from cams-admin starts a move), their two allow entries, the signed events.
+const MOVE = ['move.targets', 'move.open', 'move.offer', 'move.answer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel', 'move.begin'];
 const quiet: ClientLog = { info() {}, warn() {}, debug() {} };
 const FAST: Partial<Timing> = { connectTimeoutMs: 1000, helloTimeoutMs: 500, closeGraceMs: 200, backoffCapMs: 300, minIntervalS: 0.2, jitterS: 0, byeWaitMs: 500 };
 const isMove = (f: Fixture) => f.schema === 'command' && MOVE.includes((f.message as { body: { command: string } }).body.command);
@@ -45,7 +45,7 @@ describe('the move commands against the vendored contract', () => {
       const want = name.startsWith('valid-') ? 'run' : f.$expect!.runtime;
       expect(verdict(f), name).toBe(want);
     }
-    // each of the nine has a valid fixture and a validator
+    // each of the ten has a valid fixture and a validator
     for (const c of MOVE) {
       expect(moves.some(({ name }) => name === `valid-command-${c.replace('.', '-')}`), c).toBe(true);
       expect(ARGS_VALIDATORS[c], c).toBeTypeOf('function');
@@ -77,7 +77,7 @@ describe('the move commands against the vendored contract', () => {
   });
 
   it('the entry each command needs; the other commands need themselves', () => {
-    for (const c of ['move.targets', 'move.open', 'move.answer', 'move.go', 'move.release']) expect(entryFor(c, { v: 1 }), c).toBe('move.send');
+    for (const c of ['move.targets', 'move.open', 'move.answer', 'move.go', 'move.release', 'move.begin']) expect(entryFor(c, { v: 1 }), c).toBe('move.send');
     for (const c of ['move.offer', 'move.start']) expect(entryFor(c, { v: 1 }), c).toBe('move.receive');
     expect(entryFor('move.finish', { role: 'source' })).toBe('move.send');
     expect(entryFor('move.finish', { role: 'target' })).toBe('move.receive');
@@ -110,6 +110,27 @@ describe('the move commands against the vendored contract', () => {
       if (c !== 'move.targets') expect(ARGS_VALIDATORS[c]({ ...a, moveId: 'mv_short' }), `${c} moveId`).toMatchObject({ ok: false });
       expect(ARGS_VALIDATORS[c]('x'), c).toMatchObject({ ok: false });
     }
+    const begin = argsOfFixture('valid-command-move-begin') as { bounds: Record<string, unknown> };
+    const bs = strict('commands/move.begin.args');
+    const mutations: [string, Record<string, unknown>, string][] = [
+      ['maxBudgetS 59', { ...begin, bounds: { ...begin.bounds, maxBudgetS: 59 } }, 'bounds'],
+      ['maxBudgetS 604801', { ...begin, bounds: { ...begin.bounds, maxBudgetS: 604801 } }, 'bounds'],
+      ['maxBudgetS 1.5', { ...begin, bounds: { ...begin.bounds, maxBudgetS: 1.5 } }, 'bounds'],
+      ['kinds twice', { ...begin, bounds: { ...begin.bounds, kinds: ['clips', 'clips'] } }, 'bounds'],
+      ['kinds video', { ...begin, bounds: { ...begin.bounds, kinds: ['video'] } }, 'bounds'],
+      ['space some', { ...begin, bounds: { ...begin.bounds, space: 'some' } }, 'bounds'],
+      ['extra key in bounds', { ...begin, bounds: { ...begin.bounds, extra: 1 } }, 'bounds'],
+      ['target short', { ...begin, target: 'prx_short' }, 'target'],
+    ];
+    for (const [name, a, detail] of mutations) {
+      expect(bs(a), `strict ${name}`).toBe(false);
+      expect(ARGS_VALIDATORS['move.begin'](a), name).toMatchObject({ ok: false, code: 'invalid_args', detail });
+    }
+    expect(ARGS_VALIDATORS['move.begin']({ ...begin, bounds: null })).toMatchObject({ ok: true });
+    expect(ARGS_VALIDATORS['move.begin']({ ...begin, camera: 'Cam 1' })).toMatchObject({ ok: false, detail: 'camera' });
+    expect(boundsProblem({ ...begin.bounds, maxBudgetS: 604800 })).toBeNull();
+    expect(boundsProblem({ ...begin.bounds, maxBudgetS: 60 })).toBeNull();
+    expect(boundsProblem('x')).toBe('bounds');
     const go = argsOfFixture('valid-command-move-go');
     expect(ARGS_VALIDATORS['move.go']({ ...go, targetPublicKey: 'MCowBQYDK2VuAyEA' })).toMatchObject({ ok: false });
     expect(ARGS_VALIDATORS['move.go']({ ...go, expectedLeaf: 'SHA256:abc' })).toMatchObject({ ok: false });
@@ -138,7 +159,7 @@ describe('the move commands against the vendored contract', () => {
   it('move.* commands are rate limited (the overall 30 a minute binds below the move window of 60) and need no journal budget', () => {
     let t = 1_000_000;
     const l = new CommandLimits(() => t);
-    for (let i = 0; i < 30; i++) expect(l.take(MOVE[i % 9]).ok, String(i)).toBe(true);
+    for (let i = 0; i < 30; i++) expect(l.take(MOVE[i % MOVE.length]).ok, String(i)).toBe(true);
     expect(l.take('move.go').ok).toBe(false);
     t += 60_000;
     expect(l.take('move.go').ok).toBe(true);
@@ -232,6 +253,20 @@ describe('emitEvent', () => {
     t.maxBufferedBytes = limit;
     await until(() => moves().length === 1, 5000);
     expect(moves()[0].detail).toBe('n7');
+  });
+
+  it('the move.request event with bounds null and with bounds is valid on the strict schema', () => {
+    const base = fixture('valid-event-move-request-bounds').message as { body: Record<string, unknown> };
+    const v = strict('event');
+    expect(base.body.bounds, 'the fixture carries bounds').toBeTruthy();
+    expect(v(base), why(v)).toBe(true);
+    expect(v({ ...base, body: { ...base.body, bounds: null } }), why(v)).toBe(true);
+    const { bounds: _b, ...without } = base.body;
+    expect(v({ ...base, body: without }), 'bounds stays optional for older proxies').toBe(true);
+    expect(v({ ...base, body: { ...base.body, bounds: { transfer: true } } })).toBe(false);
+    // the type carries the field
+    const ev: MoveEvent = { kind: 'move.request', requestId: 'rq_x', camera: base.body.camera as never, target: 'prx_x', actor: { origin: 'managed', label: 'cams-admin move' }, summary: base.body.summary as never, settings: {}, bounds: null };
+    expect(ev.bounds).toBeNull();
   });
 
   it('a failed phase event without a code is invalid on the strict schema; with one it is valid', () => {

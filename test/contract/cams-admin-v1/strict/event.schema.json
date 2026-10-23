@@ -570,6 +570,57 @@
               },
               "required": [],
               "additionalProperties": false
+            },
+            "bounds": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "transfer": {
+                      "type": "boolean"
+                    },
+                    "kinds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "stills",
+                          "clips",
+                          "events",
+                          "checks",
+                          "archive"
+                        ]
+                      },
+                      "maxItems": 5,
+                      "uniqueItems": true
+                    },
+                    "space": {
+                      "type": "string",
+                      "enum": [
+                        "all",
+                        "omit",
+                        "fit",
+                        "retention"
+                      ]
+                    },
+                    "maxBudgetS": {
+                      "type": "integer",
+                      "minimum": 60,
+                      "maximum": 604800
+                    }
+                  },
+                  "required": [
+                    "transfer",
+                    "kinds",
+                    "space",
+                    "maxBudgetS"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [

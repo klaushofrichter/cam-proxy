@@ -533,6 +533,45 @@
                 }
               },
               "required": []
+            },
+            "bounds": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "transfer": {
+                      "type": "boolean"
+                    },
+                    "kinds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 64
+                      },
+                      "maxItems": 5,
+                      "uniqueItems": true
+                    },
+                    "space": {
+                      "type": "string",
+                      "maxLength": 64
+                    },
+                    "maxBudgetS": {
+                      "type": "integer",
+                      "minimum": 60,
+                      "maximum": 604800
+                    }
+                  },
+                  "required": [
+                    "transfer",
+                    "kinds",
+                    "space",
+                    "maxBudgetS"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
