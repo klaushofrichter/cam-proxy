@@ -26,7 +26,7 @@ import { landedFiles, removeImported } from '../src/moves/purge';
 import { TokenBucket } from '../src/moves/rate';
 import { MoveTarget, type TargetDeps } from '../src/moves/target';
 import { hashMoveToken } from '../src/moves/token';
-import type { MoveEvent, MoveKind, MovePlan } from '../src/moves/types';
+import type { MoveCheck, MoveEvent, MoveKind, MovePlan } from '../src/moves/types';
 import { Storage } from '../src/storage';
 import type { StreamLog } from '../src/stream/log';
 import { strict, why } from './helpers/contract';
@@ -155,7 +155,7 @@ interface Unit {
   journal: MoveJournal;
   events: MoveEvent[];
   audits: { action: string; outcome: string; message: string; details?: Record<string, any> }[];
-  phases: { phase: string; detail: string; extra: Record<string, unknown> }[];
+  phases: { phase: string; detail: string; extra: Record<string, unknown>; check?: MoveCheck }[];
   state: { paused: boolean; now: number; free: number };
   run: (signal?: AbortSignal) => Promise<void>;
   rec: () => MoveRecord;
@@ -181,7 +181,7 @@ function unit(fake: Fake, over: Partial<MoveRecord> = {}, o: { dataDir?: string;
     setPhase: (r, phase, p) => {
       r.phase = phase;
       journal.save(r);
-      phases.push({ phase, detail: p.detail ?? '', extra: p.extra ?? {} });
+      phases.push({ phase, detail: p.detail ?? '', extra: p.extra ?? {}, ...(p.check ? { check: p.check } : {}) });
     },
     proxyId: () => 'prx_2123456789ABCDEFGHJK',
     now: () => state.now,
@@ -247,12 +247,15 @@ describe('Copier', () => {
     const u = unit(f);
     await u.run();
     const order = f.requests.filter((r) => /\/chunks\/[^/]+$/.test(r)).map((r) => decodeURIComponent(r.split('/chunks/')[1]));
-    expect(order).toEqual([`clips:${day(20)}`, `events:${day(20)}`, `stills:${day(20)}`, `clips:${day(19)}`, `stills:${day(19)}`, `clips:${day(18)}`, `stills:${day(18)}`]);
+    const want = [`clips:${day(20)}`, `events:${day(20)}`, `stills:${day(20)}`, `clips:${day(19)}`, `stills:${day(19)}`, `clips:${day(18)}`, `stills:${day(18)}`];
+    // The copy, then the completeness check lists each chunk once more (same order); nothing was missing.
+    expect(order).toEqual([...want, ...want]);
+    expect(fileRequests(f)).toHaveLength(Object.keys(files).length);
     expect(Object.values(chunkStates(u)).every((s) => s === 'verified')).toBe(true);
     for (const [rel, content] of Object.entries(files).filter(([p]) => !p.startsWith('analytics/'))) expect(readFileSync(join(u.dataDir, rel), 'utf8')).toBe(content);
     expect((u.catalog.db.prepare('SELECT COUNT(*) AS n FROM clips WHERE cam = ?').get(CAM) as { n: number }).n).toBe(3);
     // End: the counts, and the phase copied.
-    expect(u.phases).toEqual([{ phase: 'copied', detail: expect.stringContaining('7 chunks'), extra: expect.objectContaining({ counts: { verified: 7, skipped: 0, failed: 0, bytes: Object.values(files).reduce((n, c) => n + c.length, 0) } }) }]);
+    expect(u.phases).toEqual([{ phase: 'copied', detail: expect.stringContaining('7 chunks'), extra: expect.objectContaining({ counts: { verified: 7, skipped: 0, failed: 0, bytes: Object.values(files).reduce((n, c) => n + c.length, 0) } }), check: { complete: true, missing: {}, recovered: {}, failed: {}, expired: {} } }]);
     // move.progress matches the contract; the last one has every chunk verified.
     const progress = u.events.filter((e) => e.kind === 'move.progress');
     expect(progress.length).toBeGreaterThan(0);
@@ -285,6 +288,82 @@ describe('Copier', () => {
     expect(last.chunks.find((c) => c.id === `clips:${day(19)}`)?.state).toBe('failed');
   });
 
+  it('one recovery pass fetches only the missing files, never a failed one again', async () => {
+    const a = 'clips/cam9/2026/10/20/1200-1.mp4';
+    const b = 'clips/cam9/2026/10/20/1210-1.mp4';
+    const c = 'clips/cam9/2026/10/20/1220-1.mp4';
+    const f = fakeSource({ [a]: 'clip-a', [b]: 'clip-b', [c]: 'clip-c' }, [{ id: `clips:${day(20)}`, files: [a, b, c] }]);
+    // b always answers with a wrong hash; c is gone at the source while the pass asks for it, back for the check.
+    f.corrupt.set(b, 100);
+    let firstC = true;
+    f.onFile = (p) => {
+      if (p !== c) return;
+      if (firstC) f.expired.add(c);
+      else f.expired.delete(c);
+      firstC = false;
+    };
+    const u = unit(f);
+    await u.run();
+    const fetched = (p: string) => fileRequests(f).filter((x) => x === p).length;
+    expect(fetched(a)).toBe(1);
+    expect(fetched(b)).toBe(3);
+    expect(fetched(c)).toBe(2);
+    expect(readFileSync(join(u.dataDir, c), 'utf8')).toBe('clip-c');
+    expect(u.phases.at(-1)).toMatchObject({ phase: 'copied', check: { complete: false, missing: {}, recovered: { clips: 1 }, failed: { clips: 1 }, expired: {} } });
+    const checks = u.audits.filter((x) => x.action === 'move-check');
+    expect(checks).toHaveLength(1);
+    expect(checks[0]).toMatchObject({ outcome: 'failure', details: { moveId: MOVE, check: { complete: false, recovered: { clips: 1 }, failed: { clips: 1 } } } });
+    // The failure of b is audited once (the pass), not again in the recovery.
+    expect(u.audits.filter((x) => x.action === 'move-file-failed')).toHaveLength(1);
+    // The part keeps the full failed list.
+    expect(readChunkPart(u.dataDir, MOVE, `clips:${day(20)}`)?.ff).toEqual([b]);
+  });
+
+  it('a complete copy reports a complete check; a file expired at the source counts as expired', async () => {
+    const { files, chunks } = threeDays();
+    const f = fakeSource(files, chunks);
+    const rel = 'clips/cam9/2026/10/19/1200-1.mp4';
+    f.onFile = (p) => void (p === rel && f.expired.add(rel) && delete f.files[rel]);
+    const u = unit(f);
+    await u.run();
+    expect(fileRequests(f).filter((p) => p === rel)).toHaveLength(1);
+    expect(readChunkPart(u.dataDir, MOVE, `clips:${day(19)}`)?.xf).toEqual([rel]);
+    expect(u.phases).toMatchObject([{ phase: 'copied', check: { complete: true, missing: {}, recovered: {}, failed: {}, expired: { clips: 1 } } }]);
+    expect(u.audits.filter((x) => x.action === 'move-check')).toMatchObject([{ outcome: 'success' }]);
+  });
+
+  it('a chunk whose rows did not import counts its rows as failed', async () => {
+    const { files, chunks } = threeDays();
+    const f = fakeSource(files, chunks);
+    // The commit of a transaction that wrote an event fails, every time.
+    const dataDir = mkdtempSync(join(tmpdir(), 'camproxy-copier-'));
+    const real = openCatalog(join(dataDir, 'catalog.db'));
+    new MoveJournal(join(dataDir, 'admin', 'moves')).save(record());
+    let wroteEvent = false;
+    const db = new Proxy(real.db, {
+      get: (t, p) => {
+        if (p === 'exec') return (sql: string) => {
+          if (sql === 'BEGIN') wroteEvent = false;
+          if (sql === 'COMMIT' && wroteEvent) throw new Error('disk I/O error');
+          return t.exec(sql);
+        };
+        if (p === 'prepare') return (sql: string) => {
+          if (sql.startsWith('INSERT INTO events')) wroteEvent = true;
+          return t.prepare(sql);
+        };
+        const v = (t as any)[p];
+        return typeof v === 'function' ? v.bind(t) : v;
+      },
+    });
+    const u = unit(f, {}, { dataDir, deps: { catalog: { db } } });
+    await u.run();
+    expect(chunkStates(u)[`events:${day(20)}`]).toBe('failed');
+    // 2 rows (the event and its analysis) failed; the analysis image (staged, removed with the failed import) was
+    // fetched once more in the recovery, whose import failed again: still missing.
+    expect(fileRequests(f).filter((p) => p === 'analytics/cam9/77.jpg')).toHaveLength(2);
+    expect(u.phases.at(-1)?.check).toEqual({ complete: false, missing: { events: 1 }, recovered: {}, failed: { events: 2 }, expired: {} });
+  });
+
   it('source restart mid-file', async () => {
     const { files, chunks } = threeDays();
     const f = fakeSource(files, chunks);
@@ -307,8 +386,8 @@ describe('Copier', () => {
     const { files, chunks } = threeDays();
     const f = fakeSource(files, chunks);
     const rel = 'clips/cam9/2026/10/19/1200-1.mp4';
-    // Listed in the chunk manifest, removed by the source's retention before it was fetched.
-    f.onFile = (p) => void (p === rel && f.expired.add(rel));
+    // Listed in the chunk manifest, removed by the source's retention before it was fetched (no longer listed).
+    f.onFile = (p) => void (p === rel && f.expired.add(rel) && delete f.files[rel]);
     const u = unit(f);
     await u.run();
     expect(fileRequests(f).filter((p) => p === rel)).toHaveLength(1);
@@ -382,8 +461,8 @@ describe('Copier', () => {
     const again = unit(f, {}, { dataDir: u.dataDir });
     await again.run();
     const second = fileRequests({ ...f, requests: f.requests.slice(before) });
-    // Verified chunks are not asked for again, nor their files.
-    expect(f.requests.slice(before).some((r) => r.includes(`/chunks/${encodeURIComponent(`clips:${day(20)}`)}`) || r.includes(`/chunks/clips:${day(20)}`))).toBe(false);
+    // Verified chunks are not copied again, nor their files: listed once only, by the completeness check.
+    expect(f.requests.slice(before).filter((r) => r.includes(`/chunks/${encodeURIComponent(`clips:${day(20)}`)}`) || r.includes(`/chunks/clips:${day(20)}`))).toEqual([`/api/moves/${MOVE}/chunks/${encodeURIComponent(`clips:${day(20)}`)}`]);
     for (const p of firstFiles.filter((x) => x !== 'stills/cam9/2026/10/20/1200.pack')) expect(second).not.toContain(p);
     expect(Object.values(chunkStates(again)).every((s) => s === 'verified')).toBe(true);
     expect((again.catalog.db.prepare('SELECT COUNT(*) AS n FROM clips').get() as { n: number }).n).toBe(3);
@@ -797,7 +876,8 @@ describe('Copier fix round 2', () => {
     const u = unit(f);
     await u.run();
     const listings = f.requests.filter((r) => r === `/api/moves/${MOVE}/chunks/${encodeURIComponent(`clips:${day(20)}`)}`);
-    expect(listings).toHaveLength(4);
+    // 4 by the copy, 1 by the completeness check.
+    expect(listings).toHaveLength(5);
     expect(u.audits.filter((a) => a.action === 'move-source-unreachable')).toHaveLength(1);
     expect((u.catalog.db.prepare('SELECT COUNT(*) AS n FROM clips').get() as { n: number }).n).toBe(3);
     expect(Object.values(chunkStates(u)).every((st) => st === 'verified')).toBe(true);

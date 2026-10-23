@@ -5,6 +5,7 @@ import { dirname, join } from 'path';
 import type { AuditLog } from '../audit/audit-log';
 import type { Catalog } from '../catalog/db';
 import { logger } from '../log';
+import { compareChunk, tallyCheck, type ManifestFile } from './check';
 import { readChunkPart, writeChunkPart } from './chunk-parts';
 import { moveSourceClient, spaceFor, type EvaluateDeps, type SourceAnswer } from './evaluate';
 import { importRows, isStaged, landingPath, moveStagingDir, relOk, type ImportDeps } from './import';
@@ -12,7 +13,7 @@ import { chunkOrder, CONTENT_FOLDERS, hashFile, KIND_FOLDERS, type ChunkMeta, ty
 import type { ChunkRecord, MoveJournal, MoveRecord } from './journal';
 import { noteLanded } from './purge';
 import { abortableSleep, paceS, rateFor, TokenBucket } from './rate';
-import type { ChunkState, MoveEvent, MoveKind, MoveSummary } from './types';
+import type { ChunkState, MoveCheck, MoveEvent, MoveKind, MoveSummary } from './types';
 import { MOVE_KINDS } from './types';
 
 // The copier on the target (camera-move plan Task 9, S §8.2–8.4, §10, §12;
@@ -55,7 +56,7 @@ export interface CopierDeps {
   // A copied stills, previews or clips file (storage's usage between recounts).
   noteWritten?: (kind: 'stills' | 'previews' | 'clips', bytes: number, cam: string) => void;
   // The move's phase on the target (MoveTarget.setPhase: journal, event, audit).
-  setPhase: (r: MoveRecord, phase: 'copied' | 'failed', o: { code?: string; detail?: string; extra?: Record<string, unknown> }) => void;
+  setPhase: (r: MoveRecord, phase: 'copied' | 'failed', o: { code?: string; detail?: string; extra?: Record<string, unknown>; check?: MoveCheck }) => void;
   proxyId?: () => string;
   now?: () => number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
@@ -136,9 +137,10 @@ export function removeMoveParts(dataDir: string, moveId: string, cam: string): v
   for (const folder of CONTENT_FOLDERS) go(join(dataDir, folder, cam));
 }
 
-interface ManifestFile { path: string; size: number; sha256: string }
 type Fetched = 'ok' | 'same' | 'other' | 'expired' | 'unlisted' | 'transient' | 'paused' | 'bad';
-type FileOutcome = 'v' | 's' | 'f';
+// 'x' is skipped too: the source's retention removed the file meanwhile.
+type FileOutcome = 'v' | 's' | 'x' | 'f';
+interface Compared { missing: string[]; failed: string[]; expired: string[]; verified: Set<string>; listed: string[] }
 
 export class Copier {
   private r: MoveRecord;
@@ -191,9 +193,9 @@ export class Copier {
     return { moveId: this.r.id, camera: this.r.camera, source: this.r.peer.proxyId, target: this.d.proxyId?.() || null, role: 'target', ...extra };
   }
 
-  private audit(action: 'move-file-failed' | 'move-progress' | 'move-budget-exceeded' | 'move-source-unreachable', outcome: 'success' | 'failure', message: string, extra: Record<string, unknown>): void {
+  private audit(action: 'move-file-failed' | 'move-progress' | 'move-budget-exceeded' | 'move-source-unreachable' | 'move-check', outcome: 'success' | 'failure', message: string, extra: Record<string, unknown>): void {
     this.d.audit.write({
-      action, category: ['configuration'], type: [action === 'move-progress' ? 'info' : 'change'], outcome, user: 'cams-admin', camera: this.r.camera,
+      action, category: ['configuration'], type: [action === 'move-progress' || action === 'move-check' ? 'info' : 'change'], outcome, user: 'cams-admin', camera: this.r.camera,
       message: `Camera move ${this.r.id} (${this.r.camera} from ${this.r.peer.name || this.r.peer.proxyId}): ${message}`,
       details: this.details(extra),
     });
@@ -249,7 +251,58 @@ export class Copier {
       }
       await this.pass();
     }
-    this.finish();
+    const { check } = await this.completeness();
+    this.finish(check);
+  }
+
+  // The completeness check (step 4 spec §3): every chunk of the plan's kinds
+  // this copier copied, listed at the source once more and compared with what
+  // the target verified (check.ts). Missing files get one recovery pass that
+  // fetches only them; failed and expired files are reported, not retried. A
+  // chunk whose rows did not import counts its rows as failed. `perChunk`: the
+  // paths the source has to keep (Task 6's keep list).
+  async completeness(): Promise<{ check: MoveCheck; perChunk: Map<string, { missing: string[]; failed: string[] }> }> {
+    const plan = this.r.plan!;
+    const rows: Parameters<typeof tallyCheck>[0] = [];
+    const perChunk = new Map<string, { missing: string[]; failed: string[] }>();
+    for (const c of this.manifest) {
+      this.check();
+      const rec = this.r.chunks[c.id];
+      // Skipped chunks (not in the plan, the target full, gone at the source) and chunks
+      // cams-admin reported done (B34, never copied here) are not checked.
+      if (!plan.kinds.includes(c.kind) || !rec || (rec.state !== 'verified' && rec.state !== 'failed') || rec.v === undefined) continue;
+      const first = await this.compare(c);
+      let res = first;
+      let recovered = 0;
+      if (first.missing.length) {
+        await this.chunk(c, new Set(first.missing));
+        res = await this.compare(c);
+        recovered = first.missing.filter((p) => res.verified.has(p)).length;
+      }
+      const now = this.r.chunks[c.id];
+      const rowsFailed = !!now && now.state === 'failed' && now.rowsInserted === undefined ? (now.meta?.rows ?? c.rows) : 0;
+      rows.push({ kind: c.kind, missing: res.missing.length, recovered, failed: res.failed.length + rowsFailed, expired: res.expired.length });
+      // Rows that exist only at the source: it keeps every file of the chunk.
+      const failed = rowsFailed > 0 ? [...new Set([...res.failed, ...res.listed.filter((p) => !res.missing.includes(p))])] : res.failed;
+      if (res.missing.length || failed.length) perChunk.set(c.id, { missing: res.missing, failed });
+    }
+    return { check: tallyCheck(rows), perChunk };
+  }
+
+  // One chunk at the check: the source's listing now against the part file (`vf`, `ff`, `xf`) and the disk.
+  private async compare(c: ChunkMeta): Promise<Compared> {
+    const fresh = await this.relist(c.id);
+    const listed = fresh ? [...fresh.values()] : [];
+    const part = readChunkPart(this.d.dataDir, this.r.id, c.id);
+    const vf = new Set(part?.vf ?? []);
+    const verified = new Set<string>();
+    for (const f of listed) {
+      this.check();
+      if (vf.has(f.path)) verified.add(f.path);
+      else if (!isStaged(f.path) && relOk(this.r.camera, f.path, KIND_FOLDERS[c.kind]) && await this.matches(landingPath(this.paths, f.path), f)) verified.add(f.path);
+    }
+    const out = compareChunk({ kind: c.kind, listed, verified, failed: new Set(part?.ff ?? []), expired: new Set(part?.xf ?? []) });
+    return { ...out, verified, listed: listed.map((f) => f.path) };
   }
 
   // The chunks in chunkOrder: Archive first, then newest day first.
@@ -303,27 +356,44 @@ export class Copier {
     return spaceFor(this.d.space, summary).fits;
   }
 
-  private async chunk(c: ChunkMeta): Promise<void> {
+  // `only` (the recovery pass of the completeness check): only these files are
+  // fetched; the others count as before (failed if the part's `ff` names them,
+  // else verified: the check found them so).
+  private async chunk(c: ChunkMeta, only?: Set<string>): Promise<void> {
     // What an earlier copy of this chunk verified and imported (its part file).
     const prev = readChunkPart(this.d.dataDir, this.r.id, c.id);
+    const before = this.r.chunks[c.id];
     this.r.chunks[c.id] = { state: 'pending' };
     this.current = 0;
     this.save(true);
     await this.waitStorage();
     const m = await this.json(`/api/moves/${this.r.id}/chunks/${encodeURIComponent(c.id)}`);
-    if (m.status === 404) return this.skipChunk(c);
+    if (m.status === 404) {
+      if (!only || !before) return this.skipChunk(c);
+      // Gone at the source since the check listed it: the chunk stays as it ended.
+      this.r.chunks[c.id] = before;
+      this.save(true);
+      return;
+    }
     const body = m.body as { files?: unknown; rows?: unknown } | null;
-    if (!body || !Array.isArray(body.files)) return this.endChunk(c, { v: 0, s: 0, f: 1, vb: 0, b: c.bytes }, [], undefined);
+    if (!body || !Array.isArray(body.files)) return this.endChunk(c, { v: 0, s: 0, f: 1, vb: 0, b: c.bytes }, { failed: [], tried: [], triedCount: 0, expired: [] }, undefined);
     const n = { v: 0, s: 0, f: 0, vb: 0, b: 0 };
+    // Every failed file of the chunk (the part's `ff`), and those that failed in this run (audited, at most 50 paths).
     const failed: string[] = [];
+    const tried: string[] = [];
+    let triedCount = 0;
+    const expired: string[] = [];
     const verified = new Set<string>();
     const vf = new Set(prev?.vf ?? []);
+    const ff = new Set(prev?.ff ?? []);
     const staged: string[] = [];
     for (const raw of body.files as ManifestFile[]) {
       this.check();
       const ok = !!raw && relOk(this.r.camera, raw.path, KIND_FOLDERS[c.kind]) && Number.isSafeInteger(raw.size) && raw.size >= 0 && typeof raw.sha256 === 'string' && SHA256.test(raw.sha256);
       const size = ok ? raw.size : 0;
-      const out: FileOutcome = !ok ? 'f' : vf.has(raw.path) ? 'v' : await this.file(raw, c.id);
+      const path = ok ? raw.path : String(raw?.path ?? '').slice(0, 200);
+      const asBefore = !!only && !(ok && only.has(raw.path));
+      const out: FileOutcome = asBefore ? (ok && !ff.has(path) ? 'v' : 'f') : !ok ? 'f' : vf.has(raw.path) ? 'v' : await this.file(raw, c.id);
       if (out === 'v') {
         n.v++;
         n.vb += size;
@@ -332,10 +402,16 @@ export class Copier {
           vf.add(raw.path);
           staged.push(raw.path);
         }
-      } else if (out === 's') n.s++;
-      else {
+      } else if (out === 's' || out === 'x') {
+        n.s++;
+        if (out === 'x') expired.push(raw.path);
+      } else {
         n.f++;
-        if (failed.length < FAILED_PATHS_MAX) failed.push(ok ? raw.path : String(raw?.path ?? '').slice(0, 200));
+        failed.push(path);
+        if (!asBefore) {
+          triedCount++;
+          if (tried.length < FAILED_PATHS_MAX) tried.push(path);
+        }
       }
       n.b += size;
       this.current = n.b;
@@ -359,12 +435,13 @@ export class Copier {
     }
     // Staged files the import did not take (a duplicate, a row not imported, or the import failed).
     for (const rel of staged) rmSync(landingPath(this.paths, rel), { force: true });
+    const o = { failed, tried, triedCount, expired, verified };
     if (!imported) {
       // The rows could not be imported 3 times: the chunk fails (counted, audited).
       n.f++;
-      return this.endChunk(c, n, failed, undefined, [], true);
+      return this.endChunk(c, n, o, undefined, [], true);
     }
-    this.endChunk(c, n, failed, imported, [...vf]);
+    this.endChunk(c, n, o, imported, [...vf]);
   }
 
   // A chunk's rows: anything but a list (a 404, a body that isn't one) is
@@ -402,13 +479,20 @@ export class Copier {
     return new Map((files as ManifestFile[]).filter((x) => x && typeof x.path === 'string').map((x) => [x.path, x]));
   }
 
-  private endChunk(c: ChunkMeta, n: { v: number; s: number; f: number; vb: number; b: number }, failed: string[], imported: ReturnType<typeof importRows> | undefined, vf: string[] = [], importFailed = false): void {
+  // `o.failed`: every failed file (the part's `ff`); `o.tried`: those that failed in this run (the audit, at
+  // most 50 of `o.triedCount`); `o.expired`: removed at the source meanwhile (added to the part's `xf`).
+  private endChunk(c: ChunkMeta, n: { v: number; s: number; f: number; vb: number; b: number }, o: { failed: string[]; tried: string[]; triedCount: number; expired: string[]; verified?: Set<string> }, imported: ReturnType<typeof importRows> | undefined, vf: string[] = [], importFailed = false): void {
     // The part file first (a restart in between copies the chunk again and finds it).
     const prev = readChunkPart(this.d.dataDir, this.r.id, c.id);
     // An earlier import's map stays known (a delete-cancel removes those rows too).
     const map = imported?.map ?? prev?.imported;
     const files = vf.length ? vf : importFailed ? [] : (prev?.vf ?? []);
-    const part = { ...(files.length ? { vf: files } : {}), ...(map && Object.keys(map).length ? { imported: map } : {}) };
+    const ff = [...new Set(o.failed)];
+    const xf = [...new Set([...(prev?.xf ?? []).filter((p) => !o.verified?.has(p)), ...o.expired])];
+    const part = {
+      ...(files.length ? { vf: files } : {}), ...(map && Object.keys(map).length ? { imported: map } : {}),
+      ...(ff.length ? { ff } : {}), ...(xf.length ? { xf } : {}),
+    };
     if (Object.keys(part).length || prev) writeChunkPart(this.d.dataDir, this.r.id, c.id, part);
     this.r.chunks[c.id] = {
       // "copied with failures" is `failed` (X17/B47).
@@ -418,10 +502,10 @@ export class Copier {
     };
     this.current = 0;
     this.save(true);
-    if (failed.length || importFailed) {
-      const files = n.f - (importFailed ? 1 : 0);
+    if (o.triedCount || importFailed) {
+      const files = o.triedCount;
       const what = [...(files ? [`${files} file${files === 1 ? '' : 's'} of ${c.id} failed their checks 3 times`] : []), ...(importFailed ? [`the rows of ${c.id} could not be imported (3 tries)`] : [])];
-      this.audit('move-file-failed', 'failure', what.join('; '), { chunk: c.id, failed: n.f, paths: failed, ...(importFailed ? { import: 'failed' } : {}) });
+      this.audit('move-file-failed', 'failure', what.join('; '), { chunk: c.id, failed: n.f, paths: o.tried, ...(importFailed ? { import: 'failed' } : {}) });
     }
     this.progress();
   }
@@ -456,14 +540,16 @@ export class Copier {
         }
       }
       if (out === 'ok' || out === 'same') return 'v';
-      if (out === 'other' || out === 'expired') return 's';
+      if (out === 'other') return 's';
+      if (out === 'expired') return 'x';
       if (out === 'paused') continue;
       if (out === 'unlisted') {
         if (relists++ < ATTEMPTS) {
           // The source listed the day again (P12) and dropped this chunk's manifest: ask for it again, then the file.
           const fresh = await this.relist(chunkId);
           const now = fresh?.get(f.path);
-          if (!now || !Number.isSafeInteger(now.size) || now.size < 0 || typeof now.sha256 !== 'string' || !SHA256.test(now.sha256)) return 's';
+          if (!now) return 'x';
+          if (!Number.isSafeInteger(now.size) || now.size < 0 || typeof now.sha256 !== 'string' || !SHA256.test(now.sha256)) return 's';
           f = { path: f.path, size: now.size, sha256: now.sha256 };
           continue;
         }
@@ -725,7 +811,8 @@ export class Copier {
     }
   }
 
-  private finish(): void {
+  // `check`: the completeness check (none for a move without transfer); audited as move-check.
+  private finish(check?: MoveCheck): void {
     const counts = { verified: 0, skipped: 0, failed: 0, bytes: 0 };
     for (const c of this.manifest) {
       const rec = this.r.chunks[c.id];
@@ -742,9 +829,16 @@ export class Copier {
     rmSync(this.paths.staging, { recursive: true, force: true });
     const fresh = this.d.journal.load(this.r.id);
     if (!fresh || fresh.phase !== 'copying') return;
+    if (check) {
+      const sum = (k: 'missing' | 'recovered' | 'failed' | 'expired') => Object.values(check[k]).reduce((a, b) => a + (b ?? 0), 0);
+      this.audit('move-check', check.complete ? 'success' : 'failure',
+        `${check.complete ? 'complete' : 'not complete'}: ${sum('missing')} missing, ${sum('recovered')} recovered, ${sum('failed')} failed, ${sum('expired')} expired at the source`,
+        { check });
+    }
     this.d.setPhase(fresh, 'copied', {
       detail: `${this.manifest.length} chunks: ${counts.verified} files verified, ${counts.skipped} skipped, ${counts.failed} failed, ${counts.bytes} bytes`,
       extra: { counts },
+      ...(check ? { check } : {}),
     });
   }
 }

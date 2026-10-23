@@ -19,7 +19,7 @@ import { OFFER_EXPIRY_MS } from './source';
 import { removeLanded, type Purged } from './purge';
 import { unseal } from './seal';
 import { logger } from '../log';
-import { MOVE_KINDS, type MoveCopied, type MoveEvent, type MovePhaseName, type MovePlan, type Space } from './types';
+import { MOVE_KINDS, type MoveCheck, type MoveCopied, type MoveEvent, type MovePhaseName, type MovePlan, type Space } from './types';
 
 // The target side of a camera move from move.start on (camera-move plan Task 8,
 // S §9.1, §9.3, §10.1, P1, P12): move.start makes the move's X25519 pair and
@@ -177,13 +177,15 @@ export class MoveTarget {
 
   // A phase change of a target move: journal, move.phase event, move-phase
   // audit (`extra` goes into the audit details only: the copier's counts).
-  setPhase(r: MoveRecord, phase: MovePhaseName, o: { code?: string; detail?: string; extra?: Record<string, unknown> } = {}): void {
+  // `check`, `keepDays` and `returnPending` go on the event (contract move.phase; not on `failed`).
+  setPhase(r: MoveRecord, phase: MovePhaseName, o: { code?: string; detail?: string; extra?: Record<string, unknown>; check?: MoveCheck; keepDays?: number; returnPending?: boolean } = {}): void {
     const { code, detail } = o;
+    const more = { ...(o.check ? { check: o.check } : {}), ...(o.keepDays !== undefined ? { keepDays: o.keepDays } : {}), ...(o.returnPending !== undefined ? { returnPending: o.returnPending } : {}) };
     r.phase = phase;
     if (code) r.failure = code;
     this.d.journal.save(r);
     if (phase === 'failed') this.d.emit({ kind: 'move.phase', moveId: r.id, role: 'target', phase: 'failed', ok: false, code: code ?? 'internal', ...(detail ? { detail } : {}) });
-    else this.d.emit({ kind: 'move.phase', moveId: r.id, role: 'target', phase, ok: true, ...(detail ? { detail: detail.slice(0, 200) } : {}) });
+    else this.d.emit({ kind: 'move.phase', moveId: r.id, role: 'target', phase, ok: true, ...(detail ? { detail: detail.slice(0, 200) } : {}), ...more });
     this.d.audit.write({
       action: 'move-phase', category: ['configuration'], type: ['change'], outcome: phase === 'failed' ? 'failure' : 'success',
       user: 'cams-admin', camera: r.camera,
