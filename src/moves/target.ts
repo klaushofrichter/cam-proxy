@@ -11,9 +11,10 @@ import type { Done, Handler } from '../fleet/commands';
 import type { SiteCa } from '../tls/ca';
 import { issueLeaf, leafOf, type Leaf } from '../tls/leaf';
 import type { PushResult } from '../tls/push';
-import { removeChunkParts } from './chunk-parts';
+import { readChunkPart, removeChunkParts } from './chunk-parts';
 import { removeMoveParts } from './copier';
-import { sourceGet } from './evaluate';
+import { mergeOutcome, outcomeOf, type ChunkKeep, type MoveOutcome } from './check';
+import { moveSourceClient, sourceGet } from './evaluate';
 import { moveEnded, SWITCH_STEPS, type MoveJournal, type MoveRecord, type MoveTombstone, type SwitchStep } from './journal';
 import { OFFER_EXPIRY_MS } from './source';
 import { removeLanded, type Purged } from './purge';
@@ -61,7 +62,10 @@ export interface TargetDeps {
   // retryCapMs; the source's 409 not_ready (move.go not there yet) is waited
   // for up to notReadyMs without using up attempts, an open camera event at
   // the cert step up to eventWaitMs.
-  timing?: { attempts?: number; retryMs?: number; retryCapMs?: number; notReadyMs?: number; eventWaitMs?: number };
+  timing?: { attempts?: number; retryMs?: number; retryCapMs?: number; notReadyMs?: number; eventWaitMs?: number; outcomeRetryMs?: number };
+  // PUT /api/moves/<id>/outcome at the source (step 4 Task 6), the HTTP status;
+  // default: the move's pinned client with its token (overridable for tests).
+  reportOutcome?: (r: MoveRecord, body: MoveOutcome) => Promise<number>;
   // Task 10, the end of a move (move.finish, move.cancel): the data folder (the
   // copier's temporary files), what the move imported removed (a cancel with
   // copied delete; never the target's own capture), the camera's stored
@@ -283,6 +287,8 @@ export class MoveTarget {
     }
     if (r.phase !== 'finished' && (!switchedOver(r) || (r.phase !== 'copied' && !a.abandoned))) return failed('wrong_phase');
     await this.stop(r.id);
+    // The transfer ended early: what the source keeps goes to it first (Task 6), answered or not.
+    if (a.abandoned && r.phase !== 'finished') await this.reportAbandoned(this.target(r.id) ?? r, end.dataDir);
     removeMoveParts(end.dataDir, r.id, r.camera);
     const fresh = this.target(r.id) ?? r;
     this.d.stageLeaf(fresh.camera, null);
@@ -305,6 +311,43 @@ export class MoveTarget {
     this.d.journal.remove?.(fresh.id);
     this.copying.delete(fresh.id);
     return ok({ deleted: zeros() });
+  }
+
+  // The keep list of an ended-early move (no check ran): failed and own files
+  // from the chunk parts, every Archive chunk not verified kept whole, joined
+  // with what the copier reported before. At most 3 tries over about 30 s
+  // (each 10 s at most); the finish answers either way (without it the source
+  // keeps every Archive item, ruling 5). Without the chunk list (the copy
+  // never listed the source) nothing is sent: the source keeps every Archive item.
+  private async reportAbandoned(r: MoveRecord, dataDir: string): Promise<void> {
+    if (!r.manifest?.length || (!r.token && !this.d.reportOutcome)) return;
+    const per = new Map<string, ChunkKeep>();
+    for (const id of Object.keys(r.chunks)) {
+      const part = readChunkPart(dataDir, r.id, id);
+      if (part?.ff?.length || part?.of?.length) per.set(id, { missing: [], failed: part.ff ?? [], ...(part.of?.length ? { own: part.of } : {}) });
+    }
+    const now = outcomeOf(r, per, true);
+    const joined = { keep: r.keep, keepMissing: r.keepMissing } as Pick<MoveRecord, 'keep' | 'keepMissing' | 'keepCopied'>;
+    mergeOutcome(joined, now);
+    const body: MoveOutcome = { keep: joined.keep ?? {}, ...(joined.keepMissing?.length ? { missing: joined.keepMissing } : {}), ...(now.copied ? { copied: now.copied } : {}) };
+    const send = this.d.reportOutcome ?? (async (rec: MoveRecord, b: MoveOutcome) => {
+      const p = rec.peer;
+      const client = moveSourceClient({ proxyId: p.proxyId, name: p.name, url: p.url ?? '', caFingerprints: p.caFingerprints ?? [], tlsServername: p.tlsServername ?? '' }, rec.token ?? '');
+      const res = await client.put(`/api/moves/${rec.id}/outcome`, b, AbortSignal.timeout(10_000));
+      (res.body as { destroy?: () => void }).destroy?.();
+      return res.status;
+    });
+    for (let i = 0; i < 3; i++) {
+      try {
+        const status = await send(r, body);
+        if (status === 204 || status === 200) return;
+        if ([400, 403, 404, 409, 413].includes(status)) break;
+      } catch {
+        /* not reachable: tried again */
+      }
+      if (i < 2) await new Promise((res) => setTimeout(res, this.d.timing?.outcomeRetryMs ?? 10_000));
+    }
+    logger.warn({ moveId: r.id }, 'move_outcome_not_reported');
   }
 
   // move.cancel {role: target} (S §10.3, B36): the camera goes back to the

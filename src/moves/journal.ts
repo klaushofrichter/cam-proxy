@@ -3,7 +3,7 @@ import { join, resolve, sep } from 'path';
 import { PrivateFileInvalid, readPrivateJson, writePrivateJson } from '../fleet/private-file';
 import type { AutoWaitReason } from './plan';
 import type { Purged } from './purge';
-import type { ChunkState, MoveActor, MoveAnswer, MoveBounds, MoveCameraConnection, MoveCopied, MoveKind, MovePhaseName, MovePlan, MoveRole, MoveSummary, Settings, Space } from './types';
+import type { ChunkState, KeepList, MoveActor, MoveAnswer, MoveBounds, MoveCameraConnection, MoveCopied, MoveKind, MovePhaseName, MovePlan, MoveRole, MoveSummary, Settings, Space } from './types';
 
 // The durable record of one move on this proxy: <dataDir>/admin/moves/<id>.json,
 // mode 600 (it holds the move token hash or the plain token and the target's
@@ -97,6 +97,13 @@ export interface MoveRecord {
   copyStartedAt?: number;
   lastRateBps?: number;
   copied?: MoveCopied;
+  // What the receiving side reported to keep (step 4 Task 6, check.ts MoveOutcome):
+  // source: the union of every report (PUT /api/moves/:id/outcome); target: its
+  // last report, kept before it was sent. `keepMissing`: Archive paths still
+  // missing; `keepCopied`: the Archive chunks the receiver copied, as listed then.
+  keep?: KeepList;
+  keepMissing?: string[];
+  keepCopied?: Record<string, { files: number; bytes: number; rows: number }>;
   // Task 10: the phase a cancel came in (kept while the cancel's steps run
   // again after a failed one), and whether the camera had been switched over.
   cancelledFrom?: MovePhaseName;

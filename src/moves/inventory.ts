@@ -30,6 +30,7 @@ export interface TableRows { table: string; rows: object[] }
 
 const FOLDERS: Record<MoveKind, string[]> = { stills: ['stills', 'previews'], clips: ['clips'], events: ['analytics'], checks: ['still-checks'], archive: ['archive'] };
 export const KIND_FOLDERS: Readonly<Record<MoveKind, readonly string[]>> = FOLDERS;
+export const chunkDay = (ts: number): string => dayOf(ts);
 // A copier's temporary file (<final>.move-<id>.part, Task 9): never content.
 export const MOVE_PART = /\.move-[A-Za-z0-9_-]{1,64}\.part$/;
 // Every folder a camera's moved content lies in (<dataDir>/<folder>/<cam>/...).
@@ -159,6 +160,11 @@ function items(c: Cam, kind: MoveKind, range?: { from: number; to: number }): { 
     }
   }
   return out;
+}
+
+// One kind of one camera as items (files absolute), for the selective purge at the source.
+export function cameraItems(d: InventoryDeps, cam: string, kind: MoveKind): ReturnType<typeof items> {
+  return items(new Cam(d, cam), kind);
 }
 
 // Files of an item that exist (a file removed by retention is simply absent).

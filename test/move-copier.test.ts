@@ -443,6 +443,61 @@ describe('Copier', () => {
     expect(u.audits.filter((a) => a.action === 'move-file-failed')).toHaveLength(0);
   });
 
+  it('a 404 that is not expired is retried, never read as gone (N1)', async () => {
+    const { files, chunks } = threeDays();
+    const f = fakeSource(files, chunks);
+    const rel = 'clips/cam9/2026/10/19/1200-1.mp4';
+    const get = f.client.get;
+    let odd = 2;
+    f.client = { get: async (path, signal) => {
+      if (path.includes('/file?') && decodeURIComponent(path.split('path=')[1]) === rel && odd-- > 0) {
+        return { status: 404, body: (async function* () { yield Buffer.from(odd ? '<html>not found</html>' : '{"error":"not_found"}'); })() };
+      }
+      return get(path, signal);
+    } };
+    const u = unit(f);
+    await u.run();
+    // Two odd 404s (not counted as the source's), then the file.
+    expect(odd).toBeLessThan(0);
+    expect(fileRequests(f).filter((p) => p === rel)).toHaveLength(1);
+    expect(readFileSync(join(u.dataDir, rel), 'utf8')).toBe(files[rel]);
+    expect(u.rec().chunks[`clips:${day(19)}`]).toMatchObject({ v: 1, s: 0, f: 0 });
+  });
+
+  it('the copier reports what to keep to the source before copied; the report is kept in the journal', async () => {
+    const a = 'archive/cam9/5/clip.mp4';
+    const b = 'clips/cam9/2026/10/20/1210-1.mp4';
+    const ok = 'clips/cam9/2026/10/20/1200-1.mp4';
+    const f = fakeSource({ [a]: 'archive-clip', [b]: 'clip-b', [ok]: 'clip-ok' }, [{ id: `archive:${day(20)}`, files: [a] }, { id: `clips:${day(20)}`, files: [ok, b] }]);
+    f.corrupt.set(b, 100);
+    const puts: { path: string; body: any; phase: string }[] = [];
+    const statuses = [503, 204];
+    f.client.put = async (path, body) => {
+      puts.push({ path, body, phase: u.rec().phase });
+      return { status: statuses.shift() ?? 204, body: (async function* () { /* empty */ })() };
+    };
+    const u = unit(f);
+    await u.run();
+    // Retried after the 503; both before copied.
+    expect(puts).toHaveLength(2);
+    expect(puts.every((p) => p.path === `/api/moves/${MOVE}/outcome` && p.phase === 'copying')).toBe(true);
+    expect(puts[1].body).toEqual({ keep: { [`clips:${day(20)}`]: [b] }, copied: { [`archive:${day(20)}`]: { files: 1, bytes: Buffer.byteLength('archive-clip'), rows: 0 } } });
+    expect(u.phases.at(-1)?.phase).toBe('copied');
+    expect(u.rec().keep).toEqual({ [`clips:${day(20)}`]: [b] });
+    expect(u.rec().manifest?.map((c) => c.id)).toEqual([`archive:${day(20)}`, `clips:${day(20)}`]);
+  });
+
+  it('a 409 from the source ends the outcome retries', async () => {
+    const { files, chunks } = threeDays();
+    const f = fakeSource(files, chunks);
+    let n = 0;
+    f.client.put = async () => (n++, { status: 409, body: (async function* () { yield Buffer.from('{"error":"wrong_phase"}'); })() });
+    const u = unit(f);
+    await u.run();
+    expect(n).toBe(1);
+    expect(u.phases.at(-1)?.phase).toBe('copied');
+  });
+
   it('a row whose file is not in the chunk manifest is skipped', async () => {
     const { files, chunks } = threeDays();
     delete files['clips/cam9/2026/10/18/1200-1.mp4'];

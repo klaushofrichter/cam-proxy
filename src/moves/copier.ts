@@ -5,7 +5,7 @@ import { dirname, join } from 'path';
 import type { AuditLog } from '../audit/audit-log';
 import type { Catalog } from '../catalog/db';
 import { logger } from '../log';
-import { compareChunk, tallyCheck, type ManifestFile } from './check';
+import { compareChunk, outcomeOf, tallyCheck, type ChunkKeep, type ManifestFile, type MoveOutcome } from './check';
 import { readChunkPart, writeChunkPart } from './chunk-parts';
 import { moveSourceClient, spaceFor, type EvaluateDeps, type SourceAnswer } from './evaluate';
 import { importRows, isStaged, landingPath, moveStagingDir, relOk, type ImportDeps } from './import';
@@ -37,7 +37,8 @@ import { MOVE_KINDS } from './types';
 // one a second (`saveEveryMs`) within a chunk (the progress only), and made
 // at every chunk end.
 
-export interface SourceClient { get: (path: string, signal: AbortSignal) => Promise<SourceAnswer> }
+// `put`: the outcome report (step 4 Task 6); a client without it reports nothing.
+export interface SourceClient { get: (path: string, signal: AbortSignal) => Promise<SourceAnswer>; put?: (path: string, body: unknown, signal: AbortSignal) => Promise<SourceAnswer> }
 
 export interface CopierDeps {
   journal: Pick<MoveJournal, 'load' | 'save'>;
@@ -143,8 +144,7 @@ type Fetched = 'ok' | 'same' | 'other' | 'expired' | 'unlisted' | 'transient' | 
 type FileOutcome = 'v' | 's' | 'x' | 'o' | 'f';
 // `unlisted`: the source answered no listing for the chunk; `own`: the target's own files of those names.
 interface Compared { missing: string[]; failed: string[]; expired: string[]; own: string[]; verified: Set<string>; listed: string[]; unlisted: boolean }
-// What the source has to keep of a chunk (Task 6's keep list): `all` for the whole chunk.
-export interface ChunkKeep { missing: string[]; failed: string[]; own?: string[]; all?: true }
+export type { ChunkKeep } from './check';
 
 export class Copier {
   private r: MoveRecord;
@@ -214,7 +214,9 @@ export class Copier {
     if (!fresh || fresh.role !== 'target' || fresh.phase !== 'copying') throw new Stopped();
     fresh.chunks = this.r.chunks;
     fresh.bytesDone = this.bytes().done;
-    for (const k of ['budgetExceeded', 'copyStartedAt', 'lastRateBps'] as const) if (this.r[k] !== undefined) (fresh as unknown as Record<string, unknown>)[k] = this.r[k];
+    // The chunk list as the source gave it (an ended-early finish keeps every Archive chunk not verified, Task 6).
+    if (this.manifest.length) fresh.manifest = this.manifest.map((c) => ({ id: c.id, kind: c.kind, day: c.day, ...metaOf(c) }));
+    for (const k of ['budgetExceeded', 'copyStartedAt', 'lastRateBps', 'keep', 'keepMissing', 'keepCopied'] as const) if (this.r[k] !== undefined) (fresh as unknown as Record<string, unknown>)[k] = this.r[k];
     this.d.journal.save(fresh);
     this.r = fresh;
     this.lastSave = now;
@@ -242,6 +244,7 @@ export class Copier {
       this.save(true);
     }
     this.manifest = await this.fetchManifest();
+    this.save(true);
     const start = this.bytes();
     this.lastDecile = start.total ? Math.floor((start.done * 10) / start.total) : 0;
     this.lastAuditAt = this.now();
@@ -253,10 +256,47 @@ export class Copier {
         await this.sleep(this.t('refreshPollMs', 30_000));
         this.manifest = await this.fetchManifest();
       }
+      this.save(true);
       await this.pass();
     }
-    const { check } = await this.completeness();
+    const { check, perChunk } = await this.completeness();
+    await this.report(perChunk);
     this.finish(check);
+  }
+
+  // The outcome (step 4 Task 6, ruling 4): what the source keeps, sent straight
+  // to it before copied, kept in the journal first (the target's ended-early
+  // finish sends it again with what it knows then). Retried like json() until
+  // 204; a refusal (400, 403, 404 an older source, 409, 413) ends it: the
+  // source then keeps every Archive item and deletes the rest (ruling 5).
+  private async report(perChunk: Map<string, ChunkKeep>): Promise<void> {
+    const out: MoveOutcome = outcomeOf({ manifest: this.manifest, chunks: this.r.chunks }, perChunk, false);
+    this.r.keep = out.keep;
+    this.r.keepMissing = out.missing ?? [];
+    this.r.keepCopied = out.copied ?? {};
+    this.save(true);
+    const put = this.client.put;
+    if (!put) return;
+    let delay = this.t('retryMs', 2000);
+    for (;;) {
+      this.check();
+      try {
+        const res = await put(`/api/moves/${this.r.id}/outcome`, out, this.signal);
+        discard(res.body);
+        if (res.status === 204 || res.status === 200) return;
+        if ([400, 403, 404, 409, 413].includes(res.status)) {
+          logger.warn({ moveId: this.r.id, status: res.status }, 'move_outcome_refused');
+          return;
+        }
+        if (res.status === 503 || res.status === 429) this.sourceBusyUntil = this.now() + MINUTE;
+        else this.noteDown(String(res.status));
+      } catch {
+        this.check();
+        this.noteDown('no answer');
+      }
+      await this.sleep(delay);
+      delay = Math.min(delay * 2, this.t('retryCapMs', 5 * MINUTE));
+    }
   }
 
   // The completeness check (step 4 spec §3): every chunk of the plan's kinds
@@ -571,7 +611,12 @@ export class Copier {
         if (relists++ < ATTEMPTS) {
           // The source listed the day again (P12) and dropped this chunk's manifest: ask for it again, then the file.
           const fresh = await this.relist(chunkId);
-          const now = fresh?.get(f.path);
+          // No listing at all is not "gone": it counts as a failure (kept at the source).
+          if (!fresh) {
+            failures++;
+            continue;
+          }
+          const now = fresh.get(f.path);
           if (!now) return 'x';
           if (!Number.isSafeInteger(now.size) || now.size < 0 || typeof now.sha256 !== 'string' || !SHA256.test(now.sha256)) return 's';
           f = { path: f.path, size: now.size, sha256: now.sha256 };
@@ -612,9 +657,12 @@ export class Copier {
     }
     if (res.status === 404) {
       // `expired`: removed by retention (skip it); `not_listed`: the chunk's manifest is gone (ask again).
+      // Any other 404 is not read as gone (the source would delete the file at the end): asked again.
       const error = await this.errorOf(res.body);
-      this.noteUp();
-      return error === 'not_listed' ? 'unlisted' : 'expired';
+      if (error === 'not_listed') return (this.noteUp(), 'unlisted');
+      if (error === 'expired') return (this.noteUp(), 'expired');
+      this.noteDown(`404${error ? ` ${error}` : ''}`);
+      return 'transient';
     }
     if (res.status !== 200) {
       discard(res.body);

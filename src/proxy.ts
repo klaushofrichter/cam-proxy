@@ -76,7 +76,7 @@ import { ManifestCache } from './moves/manifest-cache';
 import { MoveSource } from './moves/source';
 import { MoveTarget } from './moves/target';
 import { CopyRunner } from './moves/copier';
-import { purgeCamera, removeImported } from './moves/purge';
+import { purgeExcept, removeImported } from './moves/purge';
 import { cameraPasswordStore } from './config/camera-passwords';
 import { verifyFtp } from './fleet/camera-commands';
 import { availableParallelism, loadavg } from 'os';
@@ -937,7 +937,10 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   app.use(limiter(1200, (req) => isImage(req) || req.path.startsWith('/api/moves/')));
   // Images: 6000 per minute per camera (a timeline per camera loads its own sprites; spec §6.1, Ruling P1-16).
   app.use(rateLimit({ windowMs: 60_000, limit: () => 6000 * Math.max(1, cams.size), skip: (req) => !isImage(req), standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } }));
-  app.use(express.json({ limit: '64kb' }));
+  // Not for the move endpoints: their one body (the outcome, 1 MiB) is read
+  // by their router, after the move-token guard (movesSourceApi).
+  const json64k = express.json({ limit: '64kb' });
+  app.use((req, res, next) => (req.path.startsWith('/api/moves/') ? next() : json64k(req, res, next)));
   // startedAt tells a new process apart (the Maintenance page's restart waits for it).
   app.get('/health', (_req, res) => void res.json({ ok: true, version: VERSION, startedAt }));
   app.get('/metrics', async (_req, res) => {
@@ -1000,7 +1003,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     end: {
       ...moveEnd,
       dropManifests: (id) => manifestCache.forget(id),
-      purge: (cam) => purgeCamera({ catalog, dataDir: running.server.dataDir, storage, archive }, cam),
+      purge: (cam, o) => purgeExcept({ catalog, dataDir: running.server.dataDir, storage, archive }, cam, o),
       // The source's own stored leaf, pushed like "Push now"; then the expected
       // leaf's check reads what the camera serves (the client trusts it again).
       pushOwnLeaf: async (cam) => {

@@ -4,6 +4,7 @@ import { rateLimit } from 'express-rate-limit';
 import { lstatSync, realpathSync } from 'fs';
 import { join, resolve, sep } from 'path';
 import type { AuditLog } from '../audit/audit-log';
+import { mergeOutcome, OUTCOME_BYTES_MAX, parseOutcome } from '../moves/check';
 import { logger } from '../log';
 import { chunkManifest, chunkRows, CONTENT_FOLDERS, listChunks, parseChunkId, type InventoryDeps, type ManifestFile } from '../moves/inventory';
 import type { MoveJournal, MoveRecord } from '../moves/journal';
@@ -221,6 +222,28 @@ export function movesSourceApi(d: MovesSourceDeps): express.Router {
     } finally {
       plain.fill(0);
     }
+  });
+
+  // The receiving side's outcome (step 4 Task 6, ruling 4): what this proxy
+  // keeps at move.finish. Only after the guard is a body read (1 MiB at
+  // most); a report can only make the source keep more (check.ts
+  // parseOutcome, mergeOutcome; Review Focus 5). Once the move ended the guard
+  // refuses the token; a record in its last phase answers 409.
+  const outcomeBody = express.json({ limit: OUTCOME_BYTES_MAX });
+  router.put('/moves/:id/outcome', (req, res, next) => outcomeBody(req, res, (err?: unknown) => {
+    if (!err) return next();
+    const status = (err as { status?: number }).status;
+    if (status === 413) return void res.status(413).json({ error: 'too_large' });
+    bad(res, 'keep');
+  }), (req, res) => {
+    const r = d.journal.load(recordOf(res).id) ?? recordOf(res);
+    if (r.phase === 'finished' || r.phase === 'cancelled' || r.phase === 'failed') return void res.status(409).json({ error: 'wrong_phase' });
+    const o = parseOutcome(r.camera, req.body);
+    if (!o) return bad(res, 'keep');
+    mergeOutcome(r, o);
+    d.journal.save(r);
+    logger.info({ moveId: r.id, chunks: Object.keys(o.keep).length }, 'move_outcome_taken');
+    res.status(204).end();
   });
 
   // Nothing under /moves reaches the client APIs.

@@ -24,7 +24,8 @@ import { moveHandlers } from '../src/moves/commands';
 import { chunkPartsDir, writeChunkPart } from '../src/moves/chunk-parts';
 import { MoveJournal, type MoveRecord } from '../src/moves/journal';
 import { ManifestCache, manifestCacheDir } from '../src/moves/manifest-cache';
-import { landedLog, noteLanded, purgeCamera, removeImported } from '../src/moves/purge';
+import { landedLog, noteLanded, purgeExcept, removeImported } from '../src/moves/purge';
+import type { MoveOutcome } from '../src/moves/check';
 import { seal } from '../src/moves/seal';
 import { MoveSource, type SourceDeps } from '../src/moves/source';
 import { MoveTarget, type TargetDeps } from '../src/moves/target';
@@ -111,6 +112,9 @@ function targetUnit() {
   const forgot: string[] = [];
   const stopped: string[] = [];
   const setLoadedCalls: Loaded[] = [];
+  // The outcome reports to the source (PUT /api/moves/:id/outcome), with the move.phase events seen before each.
+  const outcomes: { body: MoveOutcome; phasesBefore: string[] }[] = [];
+  let outcomeStatus = 204;
   const deps: TargetDeps = {
     journal,
     audit: { write: (r) => (audits.push(r as Audit), null) },
@@ -130,7 +134,11 @@ function targetUnit() {
     stopCopy: async (id) => void stopped.push(id),
     proxyId: () => TARGET_ID,
     fetchSecrets: async () => ({ status: 200, sealed: seal(journal.load(MOVE)!.x25519!.publicSpki, Buffer.from(PASSWORD)) }),
-    timing: { attempts: 2, retryMs: 5, retryCapMs: 20, notReadyMs: 5000 },
+    timing: { attempts: 2, retryMs: 5, retryCapMs: 20, notReadyMs: 5000, outcomeRetryMs: 5 },
+    reportOutcome: async (_r, body) => {
+      outcomes.push({ body, phasesBefore: phasesOf(events) });
+      return outcomeStatus;
+    },
     end: {
       dataDir,
       removeImported: (r) => removeImported({ catalog, dataDir, storage: { recount: () => undefined } }, r),
@@ -139,7 +147,7 @@ function targetUnit() {
     },
   };
   const target = new MoveTarget(deps);
-  return { dir, dataDir, catalog, journal, events, audits, passwords, staged, forgot, stopped, setLoadedCalls, deps, target, get loaded() { return loaded; } };
+  return { dir, dataDir, catalog, journal, events, audits, passwords, staged, forgot, stopped, setLoadedCalls, deps, target, outcomes, setOutcomeStatus: (n: number) => void (outcomeStatus = n), get loaded() { return loaded; } };
 }
 type TargetUnit = ReturnType<typeof targetUnit>;
 
@@ -271,6 +279,59 @@ describe('move.finish on the target (A5/B45)', () => {
     expect(await c.target.finish(finishArgs('target'))).toMatchObject({ status: 'failed', code: 'wrong_phase' });
     expect((await c.target.finish(finishArgs('target', true))).status).toBe('ok');
     expect(c.audits.find((a) => a.action === 'move-done')!.details).toMatchObject({ abandoned: true });
+  }, 60_000);
+
+  it('an abandoned target finish reports its outcome to the source before it answers', async () => {
+    const u = targetUnit();
+    u.journal.save(offered());
+    await u.target.start(startArgs());
+    await u.target.idle(MOVE);
+    const r = u.journal.load(MOVE)!;
+    r.manifest = [
+      { id: 'archive:2026-10-20', kind: 'archive', day: '2026-10-20', files: 2, bytes: 20, rows: 1 },
+      { id: 'archive:2026-10-19', kind: 'archive', day: '2026-10-19', files: 2, bytes: 20, rows: 1 },
+      { id: 'archive:2026-10-18', kind: 'archive', day: '2026-10-18', files: 2, bytes: 20, rows: 1 },
+      { id: 'clips:2026-10-20', kind: 'clips', day: '2026-10-20', files: 2, bytes: 20, rows: 2 },
+      { id: 'stills:2026-10-20', kind: 'stills', day: '2026-10-20', files: 2, bytes: 20, rows: 0 },
+    ];
+    // Archive of the 20th verified, the 19th failed (its rows imported), the 18th not reached; a clip failed its checks.
+    r.chunks = {
+      'archive:2026-10-20': { state: 'verified', v: 2, meta: { files: 2, bytes: 20, rows: 1 } },
+      'archive:2026-10-19': { state: 'failed', v: 1, f: 1, rowsInserted: 1, meta: { files: 2, bytes: 20, rows: 1 } },
+      'clips:2026-10-20': { state: 'failed', v: 1, f: 1, rowsInserted: 1, meta: { files: 2, bytes: 20, rows: 2 } },
+    };
+    // A report the copier left (persisted before its PUT) is part of it.
+    r.keep = { 'stills:2026-10-20': ['stills/cam9/2026/10/20/1200.pack'] };
+    u.journal.save(r);
+    writeChunkPart(u.dataDir, MOVE, 'clips:2026-10-20', { ff: ['clips/cam9/2026/10/20/1210-1.mp4'] });
+    const d = await u.target.finish(finishArgs('target', true));
+    expect(d.status).toBe('ok');
+    expect(u.outcomes).toHaveLength(1);
+    // Before the move ended here.
+    expect(u.outcomes[0].phasesBefore).not.toContain('finished');
+    expect(u.outcomes[0].body.keep).toEqual({
+      'archive:2026-10-19': 'all',
+      'archive:2026-10-18': 'all',
+      'clips:2026-10-20': ['clips/cam9/2026/10/20/1210-1.mp4'],
+      'stills:2026-10-20': ['stills/cam9/2026/10/20/1200.pack'],
+    });
+    expect(u.outcomes[0].body.copied).toEqual({ 'archive:2026-10-20': { files: 2, bytes: 20, rows: 1 }, 'archive:2026-10-19': { files: 2, bytes: 20, rows: 1 } });
+    // A source that never takes it: at most 3 tries, then the finish answers anyway.
+    const v = targetUnit();
+    v.setOutcomeStatus(503);
+    v.journal.save(offered());
+    await v.target.start(startArgs());
+    await v.target.idle(MOVE);
+    const w = v.journal.load(MOVE)!;
+    w.manifest = [{ id: 'archive:2026-10-20', kind: 'archive', day: '2026-10-20', files: 2, bytes: 20, rows: 1 }];
+    v.journal.save(w);
+    expect((await v.target.finish(finishArgs('target', true))).status).toBe('ok');
+    expect(v.outcomes).toHaveLength(3);
+    // A finish after copied (the copier reported already) sends nothing more.
+    const c = targetUnit();
+    await copied(c);
+    expect((await c.target.finish(finishArgs('target'))).status).toBe('ok');
+    expect(c.outcomes).toHaveLength(0);
   }, 60_000);
 
   it('cancel after finish is refused, finish after cancel too', async () => {
@@ -442,7 +503,7 @@ function sourceUnit(o: { added?: boolean; released?: boolean } = {}) {
     timing: { cancelRetryMs: 5, cancelRetryCapMs: 20 },
     end: {
       dropManifests: (id) => cache.forget(id),
-      purge: (cam) => purgeCamera({ catalog, dataDir, storage: { recount: () => undefined }, archive: { store: new ArchiveStore({ dataDir, catalog }) } }, cam),
+      purge: (cam, o) => purgeExcept({ catalog, dataDir, storage: { recount: () => undefined }, archive: { store: new ArchiveStore({ dataDir, catalog }) } }, cam, o),
       deletePassword: (cam) => void calls.push(`password ${cam}`),
       forgetLeaf: (cam) => void calls.push(`forget ${cam}`),
       pushOwnLeaf: async (cam) => (calls.push(`push ${cam}`), push),
@@ -494,6 +555,23 @@ describe('move.finish on the source (S §11)', () => {
     expect(rows(a.catalog, 'cam3')).toBe(0);
     expect(a.audits('move-cleanup')[0].cam_proxy.cameraEntry).toBe('removed');
     expect(a.audits('move-done')[0].cam_proxy.abandoned).toBe(true);
+  }, 60_000);
+
+  it('finish deletes only what arrived: the keep list stays, the cleanup names it', async () => {
+    const u = sourceUnit();
+    const t = Date.UTC(2026, 9, 20, 12, 0);
+    content(u.dataDir, u.catalog, 'cam3', t);
+    const kept = `clips/cam3/${utcDayParts(t).join('/')}/${utcHhmm(t)}-1.mp4`;
+    u.journal.save(sourceRecord({ manifest: [{ id: 'clips:2026-10-20', kind: 'clips', day: '2026-10-20', files: 1, bytes: 300, rows: 1 }], keep: { 'clips:2026-10-20': [kept] } }));
+    const d = await u.source.finish(finishArgs('source'));
+    expect(d.status).toBe('ok');
+    expect(existsSync(join(u.dataDir, kept))).toBe(true);
+    expect(existsSync(join(u.dataDir, 'stills', 'cam3'))).toBe(false);
+    // The answer counts what was deleted (the contract's shape); the cleanup record also what stayed.
+    expect(d.result).toMatchObject({ deleted: { clips: { files: 0, bytes: 0 }, stills: { files: 1, bytes: 100 } } });
+    const cleanup = u.audits('move-cleanup')[0];
+    expect(cleanup.cam_proxy.kept.clips).toEqual({ files: 1, bytes: 300 });
+    expect(cleanup.message).toContain('kept');
   }, 60_000);
 
   it('finish keeps the audit files', async () => {

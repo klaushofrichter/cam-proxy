@@ -1,21 +1,28 @@
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'fs';
-import { dirname, join, sep } from 'path';
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync } from 'fs';
+import { dirname, join, resolve, sep } from 'path';
+import { metadataJson, withMoveNote } from '../archive/json';
+import type { ArchiveMoveNote } from '../archive/metadata';
 import type { Archive } from '../archive/service';
 import { CAM_ID } from '../archive/paths';
+import { archiveById } from '../catalog/archive';
 import type { Catalog } from '../catalog/db';
+import { logger } from '../log';
 import type { Storage } from '../storage';
 import { allChunkParts } from './chunk-parts';
 import { relOk, rowKey } from './import';
+import { cameraItems, chunkDay, listChunks } from './inventory';
 import { isMoveId, type MoveRecord } from './journal';
-import type { MoveKind } from './types';
+import type { KeepList, MoveKind } from './types';
 import { MOVE_KINDS } from './types';
 
-// What a finished move deletes from the source (S §11): every row and file of
-// one camera, nothing of another. Content folders count per kind (P6): stills =
-// stills + previews, clips = clip files + snapshots, events = analysis images,
-// checks = still-check images, archive = archive folders. The recordings cache
-// goes too but is not counted, nor are the rows of stream_log, analytics_usage,
-// clip_arrivals and annotations (rebuilt or not content, B49/X13).
+// What a finished move deletes from the source (S §11; step 4 Task 6): every
+// row and file of one camera, nothing of another, except what the receiving
+// side reported to keep and every Archive item not shown copied. Content
+// folders count per kind (P6): stills = stills + previews, clips = clip files
+// + snapshots, events = analysis images, checks = still-check images, archive
+// = archive folders. The recordings cache goes whole and is not counted, nor
+// are the rows of stream_log, analytics_usage, clip_arrivals and annotations
+// (rebuilt or not content, B49/X13).
 export type Purged = Record<MoveKind, { files: number; bytes: number }>;
 export interface PurgeDeps {
   catalog: Catalog;
@@ -27,52 +34,146 @@ export interface PurgeDeps {
 const FOLDERS: Record<MoveKind, string[]> = { stills: ['stills', 'previews'], clips: ['clips'], events: ['analytics'], checks: ['still-checks'], archive: ['archive'] };
 const UNCOUNTED_FOLDERS = ['recordings'];
 
-// Files and bytes under a folder (links are not followed, counted as a file).
-function measure(dir: string): { files: number; bytes: number } {
-  const out = { files: 0, bytes: 0 };
+// Regular files below a folder (links are not followed: removed, counted as a file).
+function filesIn(dir: string): { path: string; bytes: number }[] {
+  const out: { path: string; bytes: number }[] = [];
   if (!existsSync(dir)) return out;
   const walk = (d: string) => {
     for (const e of readdirSync(d, { withFileTypes: true })) {
       const p = join(d, e.name);
       if (e.isDirectory()) walk(p);
-      else {
-        out.files++;
-        out.bytes += lstatSync(p).size;
-      }
+      else out.push({ path: p, bytes: lstatSync(p).size });
     }
   };
   walk(dir);
   return out;
 }
 
-// Idempotent: a camera already purged answers zeros. The rows go in one
-// transaction (an event's analyses with it), then the folders, then the
-// storage units are recounted.
-export function purgeCamera(d: PurgeDeps, cam: string): { deleted: Purged } {
-  if (!CAM_ID.test(cam)) throw new Error('purgeCamera: not a camera id');
-  const deleted = Object.fromEntries(MOVE_KINDS.map((k) => [k, { files: 0, bytes: 0 }])) as Purged;
-  for (const k of MOVE_KINDS) {
-    for (const folder of FOLDERS[k]) {
-      const m = measure(join(d.dataDir, folder, cam));
-      deleted[k].files += m.files;
-      deleted[k].bytes += m.bytes;
+// Empty folders below `dir` removed (bottom up), `dir` itself too when empty.
+function pruneEmpty(dir: string): void {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const e of entries) if (e.isDirectory()) pruneEmpty(join(dir, e.name));
+  try {
+    rmdirSync(dir);
+  } catch {
+    /* not empty */
+  }
+}
+
+const zeros = (): Purged => Object.fromEntries(MOVE_KINDS.map((k) => [k, { files: 0, bytes: 0 }])) as Purged;
+
+export interface PurgeExcept {
+  // The receiver's keep list (chunk id -> paths | 'all'); null: no outcome
+  // arrived (the target away at an ended-early move, ruling 5): every
+  // Archive item stays, the rest goes.
+  keep: KeepList | null;
+  // The chunk ids the source listed for the move (its manifest).
+  listed: Set<string>;
+  // For the "Kept here" note of a kept Archive item.
+  note: { moveId: string; to: { proxyId: string; name: string }; at: number };
+  // Archive paths the receiver found still missing (reason `missing`).
+  missing?: Iterable<string>;
+  // The Archive chunks the receiver copied, as listed then: an Archive item
+  // goes only when its chunk is listed, reported copied with exactly the
+  // listing the source has now, and not kept.
+  copied?: Record<string, { files: number; bytes: number; rows: number }>;
+}
+
+// The selective purge. Non-Archive: an item (a clip with its snapshot, an
+// event with its analyses, a still check, a still pack) stays with its rows
+// when its chunk is kept 'all' or a kept path is one of its files; any other
+// kept path stays as a file. Archive: an item stays whole (row, folder, a
+// "Kept here" note in its metadata and meta.json) unless it is shown copied
+// (see `copied`) and not kept; reason `missing` when a missing path is one of
+// its files, `failed` when the receiver copied its chunk but kept it,
+// `not_copied` otherwise. Idempotent; a camera already purged answers zeros.
+// The rows go in one transaction, then the files, then storage is recounted.
+export function purgeExcept(d: PurgeDeps, cam: string, o: PurgeExcept): { deleted: Purged; kept: Purged } {
+  if (!CAM_ID.test(cam)) throw new Error('purgeExcept: not a camera id');
+  const deleted = zeros();
+  const kept = zeros();
+  // Item paths are resolved (inventory.ts); so are these.
+  const root = resolve(d.dataDir);
+  const abs = (rel: string) => join(root, ...rel.split('/'));
+  const keepFiles = new Set<string>();
+  for (const v of Object.values(o.keep ?? {})) if (Array.isArray(v)) for (const p of v) if (relOk(cam, p)) keepFiles.add(abs(p));
+  const missing = new Set([...(o.missing ?? [])].filter((p) => relOk(cam, p, FOLDERS.archive)).map(abs));
+  const keepIds: Record<'clips' | 'events' | 'still_checks' | 'archive', number[]> = { clips: [], events: [], still_checks: [], archive: [] };
+  const notes: { id: number; reason: NonNullable<ArchiveMoveNote['reason']> }[] = [];
+  // The source's Archive chunks as they are now (compared with `copied`).
+  const now = new Map(listChunks(d, cam, ['archive']).map((c) => [c.id, c]));
+  for (const kind of MOVE_KINDS) {
+    for (const it of cameraItems(d, cam, kind)) {
+      const id = `${kind}:${chunkDay(it.ts)}`;
+      const entry = o.keep?.[id];
+      let stays: boolean;
+      if (kind === 'archive') {
+        const c = now.get(id);
+        const was = o.copied?.[id];
+        const copied = !!c && !!was && was.files === c.files && was.bytes === c.bytes && was.rows === c.rows;
+        const named = entry === 'all' || (Array.isArray(entry) && it.files.some((f) => keepFiles.has(f)));
+        stays = o.keep === null || !o.listed.has(id) || !copied || named;
+        const rowId = Number((it.rows[0]?.row as { id?: unknown } | undefined)?.id);
+        if (stays && Number.isSafeInteger(rowId)) notes.push({ id: rowId, reason: it.files.some((f) => missing.has(f)) ? 'missing' : copied && named ? 'failed' : 'not_copied' });
+      } else stays = entry === 'all' || (Array.isArray(entry) && it.files.some((f) => keepFiles.has(f)));
+      if (!stays) continue;
+      for (const f of it.files) keepFiles.add(f);
+      for (const { table, row } of it.rows) {
+        const rid = Number((row as { id?: unknown }).id);
+        if (table in keepIds && Number.isSafeInteger(rid)) keepIds[table as keyof typeof keepIds].push(rid);
+      }
     }
   }
   const db = d.catalog.db;
-  const archiveIds = (db.prepare('SELECT id FROM archive WHERE cam = ?').all(cam) as { id: number }[]).map((r) => r.id);
   db.exec('BEGIN');
   try {
     // analyses go with their event (ON DELETE CASCADE).
-    for (const t of ['events', 'annotations', 'clips', 'still_checks', 'archive', 'stream_log', 'analytics_usage', 'clip_arrivals']) db.prepare(`DELETE FROM ${t} WHERE cam = ?`).run(cam);
+    for (const t of ['annotations', 'stream_log', 'analytics_usage', 'clip_arrivals']) db.prepare(`DELETE FROM ${t} WHERE cam = ?`).run(cam);
+    for (const t of Object.keys(keepIds) as (keyof typeof keepIds)[]) {
+      const keepSet = new Set(keepIds[t]);
+      const st = db.prepare(`DELETE FROM ${t} WHERE id = ? AND cam = ?`);
+      for (const r of db.prepare(`SELECT id FROM ${t} WHERE cam = ?`).all(cam) as { id: number }[]) if (!keepSet.has(r.id)) st.run(r.id, cam);
+    }
+    for (const n of notes) {
+      const row = archiveById(d.catalog, n.id);
+      if (!row || row.cam !== cam) continue;
+      db.prepare('UPDATE archive SET metadata = ? WHERE id = ? AND cam = ?').run(withMoveNote(row.metadata, { moveId: o.note.moveId, to: { ...o.note.to }, at: o.note.at, kept: true, reason: n.reason }), n.id, cam);
+    }
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');
     throw err;
   }
-  for (const id of archiveIds) d.archive.store.removeFolder({ cam, id });
-  for (const folder of [...Object.values(FOLDERS).flat(), ...UNCOUNTED_FOLDERS]) rmSync(join(d.dataDir, folder, cam), { recursive: true, force: true });
+  // meta.json of a kept item follows its row (the note in the file too).
+  for (const n of notes) {
+    const row = archiveById(d.catalog, n.id);
+    if (!row || row.cam !== cam) continue;
+    try {
+      d.archive.store.writeMeta(row, JSON.stringify(metadataJson(row), null, 2));
+    } catch (err) {
+      logger.warn({ err: (err as Error).message, id: n.id }, 'archive_meta_write_failed');
+    }
+  }
+  for (const kind of MOVE_KINDS) {
+    for (const folder of FOLDERS[kind]) {
+      const dir = join(root, folder, cam);
+      for (const f of filesIn(dir)) {
+        const tally = keepFiles.has(f.path) ? kept : deleted;
+        tally[kind].files++;
+        tally[kind].bytes += f.bytes;
+        if (tally === deleted) rmSync(f.path, { force: true });
+      }
+      pruneEmpty(dir);
+    }
+  }
+  for (const folder of UNCOUNTED_FOLDERS) rmSync(join(d.dataDir, folder, cam), { recursive: true, force: true });
   d.storage.recount();
-  return { deleted };
+  return { deleted, kept };
 }
 
 // ---- What one move brought to the target (Task 10 fix round 1) ----
@@ -191,10 +292,10 @@ export function removeImported(d: { catalog: Catalog; dataDir: string; storage: 
     }
   }
   for (const f of folders) {
-    const m = measure(f);
+    const m = filesIn(f);
     rmSync(f, { recursive: true, force: true });
-    deleted.archive.files += m.files;
-    deleted.archive.bytes += m.bytes;
+    deleted.archive.files += m.length;
+    deleted.archive.bytes += m.reduce((n, x) => n + x.bytes, 0);
   }
   d.storage.recount();
   return { deleted };

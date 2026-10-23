@@ -10,7 +10,7 @@ import { listChunks, summarize, type InventoryDeps } from './inventory';
 import type { PushResult } from '../tls/push';
 import { moveEnded, type MoveJournal, type MoveRecord, type MoveTombstone } from './journal';
 import { autoPlan, type AutoWaitReason } from './plan';
-import type { Purged } from './purge';
+import type { Purged, purgeExcept } from './purge';
 import { MOVE_KINDS, type MoveActor, type MoveAnswer, type MoveBounds, type MoveCameraConnection, type MoveCopied, type MoveEvent, type MoveKind, type MovePlan, type MoveSummary, type Settings } from './types';
 
 // The source side of a camera move (camera-move plan Task 7, S §4, §7, §9.1):
@@ -54,7 +54,8 @@ export interface SourceDeps {
   end?: {
     // The move's cached manifests, on disk and in memory (ManifestCache.forget).
     dropManifests: (moveId: string) => void;
-    purge: (cam: string) => { deleted: Purged };
+    // Step 4 Task 6: everything of the camera but what the receiver reported to keep (purgeExcept).
+    purge: (cam: string, o: Parameters<typeof purgeExcept>[2]) => { deleted: Purged; kept: Purged };
     deletePassword: (cam: string) => void;
     forgetLeaf: (cam: string) => void;
     pushOwnLeaf: (cam: string) => Promise<PushResult>;
@@ -403,7 +404,15 @@ export class MoveSource {
       r.endedAt = this.now();
       this.d.journal.save(r);
     }
-    const { deleted } = end.purge(cam);
+    // Only what arrived (step 4 Task 6): the receiver's keep list stays, and
+    // every Archive item not shown copied, with a "Kept here" note.
+    const { deleted, kept } = end.purge(cam, {
+      keep: r.keep ?? null,
+      listed: new Set((r.manifest ?? []).map((c) => c.id)),
+      note: { moveId: r.id, to: { proxyId: r.peer.proxyId, name: r.peer.name }, at: this.now() },
+      ...(r.keepMissing ? { missing: r.keepMissing } : {}),
+      ...(r.keepCopied ? { copied: r.keepCopied } : {}),
+    });
     if (node && l.addedCameras.includes(cam)) {
       this.d.setLoaded(removeOverride(l, `cameras.${cam}`));
       await end.settled();
@@ -416,12 +425,13 @@ export class MoveSource {
     this.dropPending(r.id);
     this.phaseEvent(r);
     const total = sum(deleted);
+    const stayed = sum(kept);
     const who = { source: this.self(), target: r.peer.proxyId, role: 'source' };
     this.d.audit.write({
       action: 'move-cleanup', category: ['configuration'], type: ['deletion'], outcome: 'success',
       user: 'cams-admin', camera: cam,
-      message: `Camera move ${r.id}: ${cam} cleaned up after its move to ${r.peer.name || r.peer.proxyId}: ${total.files} files (${total.bytes} bytes) and the camera's catalog entries deleted; its entry ${entry === 'hidden' ? 'stays hidden in config.json (you can delete it there)' : 'removed'}`,
-      details: { moveId: r.id, camera: cam, ...who, deleted, files: total.files, bytes: total.bytes, cameraEntry: entry },
+      message: `Camera move ${r.id}: ${cam} cleaned up after its move to ${r.peer.name || r.peer.proxyId}: ${total.files} files (${total.bytes} bytes) and the camera's catalog entries deleted${stayed.files ? `, ${stayed.files} files (${stayed.bytes} bytes) kept here (not copied, they age out)` : ''}; its entry ${entry === 'hidden' ? 'stays hidden in config.json (you can delete it there)' : 'removed'}`,
+      details: { moveId: r.id, camera: cam, ...who, deleted, kept, files: total.files, bytes: total.bytes, cameraEntry: entry },
     });
     this.d.audit.write({
       action: 'move-done', category: ['configuration'], type: ['change'], outcome: 'success',
