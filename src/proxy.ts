@@ -69,6 +69,7 @@ import { OverridesBackups } from './fleet/backups';
 import { configHandlers, type ConfigCommandDeps } from './fleet/config-commands';
 import { cameraHandlers } from './fleet/camera-commands';
 import { moveHandlers } from './moves/commands';
+import { MoveReturns } from './moves/returns';
 import { MoveJournal } from './moves/journal';
 import { movesSourceApi, refreshManifest } from './api/moves-api';
 import { movesControlApi } from './api/moves-control-api';
@@ -1066,6 +1067,15 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     setPhase: (r, phase, o) => moveTarget.setPhase(r, phase, o),
     proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
   });
+  // The copy back after a cancel after the switch-over (step 4 Task 9): the
+  // return's source here (the new proxy), its target on the original (Task 10).
+  const moveReturns = new MoveReturns({
+    journal: moveJournal,
+    audit,
+    emit: (e) => camsAdmin.emitEvent(e),
+    inventory: moveInventory,
+    proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
+  });
   // After every welcome: the open move's phase again (B2), and an approval not acted on yet (B7).
   camsAdmin.onWelcome(() => {
     try {
@@ -1200,6 +1210,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       audit,
       source: moveSource,
       target: moveTarget,
+      returns: moveReturns,
       proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
       evaluate: {
         receiveAllowed: () => commandPolicy.effective().allow.includes('move.receive'),

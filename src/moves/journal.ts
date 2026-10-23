@@ -117,6 +117,12 @@ export interface MoveRecord {
   // 10) and never expires by itself. `captured`: the high water at the cancel
   // (captured.ts, ruling 7), taken before the camera's node left.
   returnPending?: boolean;
+  // target: the cancel's steps all ran (closeCancelled); until then a repeated cancel runs them again.
+  cancelClosed?: boolean;
+  // A return (step 4 Task 9): the cancelled move it copies back. On the new
+  // proxy a source record (move.return.open) whose endpoints serve only what
+  // this proxy captured itself (captured.ts capturedFilter).
+  returnOf?: string;
   captured?: { at: number; maxIds: Partial<Record<'clips' | 'events' | 'analyses' | 'still_checks' | 'archive', number>> };
   endedAt?: number;
 }

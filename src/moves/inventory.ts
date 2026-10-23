@@ -27,6 +27,13 @@ export interface InventoryDeps { catalog: Pick<Catalog, 'db'>; dataDir: string }
 export interface ChunkMeta { id: string; kind: MoveKind; day: string; files: number; bytes: number; rows: number }
 export interface ManifestFile { path: string; size: number; sha256: string }
 export interface TableRows { table: string; rows: object[] }
+// Which items a listing takes (step 4 Task 9: the copy back serves only what
+// this proxy captured itself, captured.ts capturedFilter). `row` sees a row as
+// stored here (absolute paths, this catalog's ids), per table: clips, events,
+// analyses, still_checks, archive; an item goes with its main row, an event
+// keeps only the analyses taken. `file` decides a row-less file (stills,
+// previews) by its dataDir-relative posix path.
+export interface ItemFilter { row(table: string, row: Record<string, unknown>): boolean; file(rel: string): boolean }
 
 const FOLDERS: Record<MoveKind, string[]> = { stills: ['stills', 'previews'], clips: ['clips'], events: ['analytics'], checks: ['still-checks'], archive: ['archive'] };
 export const KIND_FOLDERS: Readonly<Record<MoveKind, readonly string[]>> = FOLDERS;
@@ -118,8 +125,9 @@ export class Cam {
 
 
 // One kind of one camera as items: stills days are folders; the others are rows
-// with their files. `range` limits the rows (by their day timestamp) for a chunk.
-function items(c: Cam, kind: MoveKind, range?: { from: number; to: number }): { ts: number; files: string[]; rows: { table: string; row: Record<string, unknown> }[] }[] {
+// with their files. `range` limits the rows (by their day timestamp) for a chunk;
+// `filter` leaves items out (see ItemFilter).
+function items(c: Cam, kind: MoveKind, range?: { from: number; to: number }, filter?: ItemFilter): { ts: number; files: string[]; rows: { table: string; row: Record<string, unknown> }[] }[] {
   const lo = range?.from ?? -Infinity;
   const hi = range?.to ?? Infinity;
   const { dataDir } = c.d;
@@ -132,30 +140,34 @@ function items(c: Cam, kind: MoveKind, range?: { from: number; to: number }): { 
         const hm = /^(\d{2})(\d{2})/.exec(f.slice(f.lastIndexOf(sep) + 1));
         if (!m || !hm) continue;
         const ts = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(hm[1]), Number(hm[2]));
-        if (!Number.isNaN(ts) && ts >= lo && ts < hi) out.push({ ts, files: [f], rows: [] });
+        if (Number.isNaN(ts) || ts < lo || ts >= hi) continue;
+        if (!filter || filter.file(c.rel(f))) out.push({ ts, files: [f], rows: [] });
       }
     }
   } else if (kind === 'clips') {
     for (const r of c.rows<Record<string, unknown> & { start_ts: number }>('SELECT * FROM clips WHERE cam = ? AND start_ts >= ? AND start_ts < ? ORDER BY start_ts, id', c.cam, Math.max(lo, -1e18), Math.min(hi, 1e18))) {
       const path = c.relOrNull(r.path);
-      if (!path) continue;
+      if (!path || (filter && !filter.row('clips', r))) continue;
       const snapshot = c.relOrNull(r.snapshot);
       const files = [c.valid(r.path)!, ...(snapshot ? [c.valid(r.snapshot)!] : [])];
       out.push({ ts: r.start_ts, files, rows: [{ table: 'clips', row: { ...r, path, snapshot } }] });
     }
   } else if (kind === 'events') {
     for (const e of c.rows<Record<string, unknown> & { id: number; start_ts: number }>('SELECT * FROM events WHERE cam = ? AND start_ts >= ? AND start_ts < ? ORDER BY start_ts, id', c.cam, Math.max(lo, -1e18), Math.min(hi, 1e18))) {
-      const analyses = c.rows<Record<string, unknown>>('SELECT * FROM analyses WHERE event_id = ? ORDER BY id', e.id).map((a) => ({ ...a, image: c.relOrNull(a.image) }));
+      if (filter && !filter.row('events', e)) continue;
+      const analyses = c.rows<Record<string, unknown>>('SELECT * FROM analyses WHERE event_id = ? ORDER BY id', e.id).filter((a) => !filter || filter.row('analyses', a)).map((a) => ({ ...a, image: c.relOrNull(a.image) }));
       const files = analyses.flatMap((a) => (a.image ? [join(resolve(dataDir), a.image as string)] : []));
       out.push({ ts: e.start_ts, files, rows: [{ table: 'events', row: e }, ...analyses.map((a) => ({ table: 'analyses', row: a }))] });
     }
   } else if (kind === 'checks') {
     for (const r of c.rows<Record<string, unknown> & { still_ts: number }>('SELECT * FROM still_checks WHERE cam = ? AND still_ts >= ? AND still_ts < ? ORDER BY still_ts, id', c.cam, Math.max(lo, -1e18), Math.min(hi, 1e18))) {
+      if (filter && !filter.row('still_checks', r)) continue;
       const image = c.relOrNull(r.image);
       out.push({ ts: r.still_ts, files: image ? [join(resolve(dataDir), image)] : [], rows: [{ table: 'still_checks', row: { ...r, image } }] });
     }
   } else {
     for (const r of c.rows<Record<string, unknown> & { id: number; created_at: number }>('SELECT * FROM archive WHERE cam = ? AND created_at >= ? AND created_at < ? ORDER BY created_at, id', c.cam, Math.max(lo, -1e18), Math.min(hi, 1e18))) {
+      if (filter && !filter.row('archive', r)) continue;
       out.push({ ts: r.created_at, files: c.walk(join(dataDir, 'archive', c.cam, String(r.id))), rows: [{ table: 'archive', row: r }] });
     }
   }
@@ -207,12 +219,12 @@ export function chunkOrder(a: Pick<ChunkMeta, 'kind' | 'day'>, b: Pick<ChunkMeta
 }
 
 // Archive first, then newest day first (see chunkOrder).
-export function listChunks(d: InventoryDeps, cam: string, kinds: MoveKind[]): ChunkMeta[] {
+export function listChunks(d: InventoryDeps, cam: string, kinds: MoveKind[], filter?: ItemFilter): ChunkMeta[] {
   const c = new Cam(d, cam);
   const out: ChunkMeta[] = [];
   for (const kind of ORDER.filter((k) => kinds.includes(k))) {
     const byDay = new Map<string, { files: Map<string, number>; rows: number }>();
-    for (const it of items(c, kind)) {
+    for (const it of items(c, kind, undefined, filter)) {
       const day = dayOf(it.ts);
       const e = byDay.get(day) ?? { files: new Map(), rows: 0 };
       for (const f of existing(c, it.files)) e.files.set(f.abs, f.size);
@@ -246,13 +258,14 @@ export async function hashFile(path: string): Promise<{ size: number; sha256: st
 // Hashes the chunk's files now, without blocking the event loop. A file that
 // vanishes meanwhile (ENOENT: retention) is left out and counted `expired`;
 // any other read error (a link, a folder, EACCES, EIO, ...) rejects, so a
-// manifest silently missing a file is never cached (P5). `hooks` is for tests.
-export async function chunkManifest(d: InventoryDeps, cam: string, chunkId: string, hooks: { beforeOpen?: (abs: string) => void } = {}): Promise<{ files: ManifestFile[]; rows: number; expired: number }> {
+// manifest silently missing a file is never cached (P5). `beforeOpen` is for
+// tests; `filter`: the items a return serves (ItemFilter).
+export async function chunkManifest(d: InventoryDeps, cam: string, chunkId: string, hooks: { beforeOpen?: (abs: string) => void; filter?: ItemFilter } = {}): Promise<{ files: ManifestFile[]; rows: number; expired: number }> {
   const c = new Cam(d, cam);
   const { kind, from, to } = parseChunkId(chunkId);
   const files = new Set<string>();
   let rows = 0;
-  for (const it of items(c, kind, { from, to })) {
+  for (const it of items(c, kind, { from, to }, hooks.filter)) {
     for (const f of existing(c, it.files)) files.add(f.abs);
     rows += it.rows.length;
   }
@@ -273,11 +286,11 @@ export async function chunkManifest(d: InventoryDeps, cam: string, chunkId: stri
 }
 
 // Rows in insert order (an event's analyses follow the events), paths made relative.
-export function chunkRows(d: InventoryDeps, cam: string, chunkId: string): TableRows[] {
+export function chunkRows(d: InventoryDeps, cam: string, chunkId: string, filter?: ItemFilter): TableRows[] {
   const c = new Cam(d, cam);
   const { kind, from, to } = parseChunkId(chunkId);
   const tables = new Map<string, object[]>();
-  for (const it of items(c, kind, { from, to })) for (const r of it.rows) tables.set(r.table, [...(tables.get(r.table) ?? []), r.row]);
+  for (const it of items(c, kind, { from, to }, filter)) for (const r of it.rows) tables.set(r.table, [...(tables.get(r.table) ?? []), r.row]);
   // events first, then analyses (rows of one table keep their order).
   return ['events', 'analyses', 'clips', 'still_checks', 'archive'].flatMap((t) => (tables.has(t) ? [{ table: t, rows: tables.get(t)! }] : []));
 }

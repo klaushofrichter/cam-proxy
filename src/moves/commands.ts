@@ -3,6 +3,7 @@ import type { Done, Handler } from '../fleet/commands';
 import { MOVE_COMMANDS } from '../fleet/policy';
 import type { MoveCancelArgs, MoveFinishArgs, MoveOfferArgs } from '../fleet/command-args';
 import { evaluate, type EvaluateDeps, type Evaluation } from './evaluate';
+import type { MoveReturns } from './returns';
 import type { MoveSource } from './source';
 import type { MoveTarget } from './target';
 import type { MoveEvent } from './types';
@@ -23,6 +24,8 @@ export interface MoveDeps {
   source?: MoveSource;
   // Task 8: the target side from move.start on (the switch-over runner).
   target?: MoveTarget;
+  // Step 4 Task 9: the copy back (move.return.open/.start, move.finish {return: true}).
+  returns?: MoveReturns;
   // This proxy's id at cams-admin (the move-offer record names it as the target).
   proxyId?: () => string;
   journal?: unknown;
@@ -52,6 +55,7 @@ export function moveHandlers(deps: MoveDeps): Record<string, Handler> {
   }
   if (deps.source) Object.assign(handlers, deps.source.handlers());
   if (deps.target) Object.assign(handlers, deps.target.handlers());
+  if (deps.returns) Object.assign(handlers, deps.returns.handlers());
   // Task 10: move.finish and move.cancel by the side the args name (the allow
   // entry was checked for that side, entryFor). A side this proxy can't play answers internal.
   const bySide = (fn: (side: MoveSource | MoveTarget, a: never) => Promise<Done>): Handler => async (args) => {
@@ -63,7 +67,17 @@ export function moveHandlers(deps: MoveDeps): Record<string, Handler> {
       return { status: 'failed', code: 'internal' };
     }
   };
-  handlers['move.finish'] = bySide((side, a: MoveFinishArgs) => side.finish(a));
+  const finish = bySide((side, a: MoveFinishArgs) => side.finish(a));
+  // A return's finish (ruling 2): the returns side, whichever role it names.
+  handlers['move.finish'] = async (args, cmd) => {
+    if ((args as { return?: unknown }).return !== true) return finish(args, cmd);
+    if (!deps.returns) return { status: 'failed', code: 'internal' };
+    try {
+      return await deps.returns.finish(args as MoveFinishArgs);
+    } catch {
+      return { status: 'failed', code: 'internal' };
+    }
+  };
   handlers['move.cancel'] = bySide((side, a: MoveCancelArgs) => side.cancel(a));
   return handlers;
 }

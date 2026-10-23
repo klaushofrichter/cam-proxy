@@ -385,8 +385,10 @@ export class MoveTarget {
     const r = this.target(a.moveId);
     if (!r) return ok();
     if (r.phase === 'finished') return failed('wrong_phase');
-    // Waiting for the copy back (its tombstone may be gone: the record never expires by itself, ruling 10).
-    if (r.phase === 'cancelled' && r.returnPending) {
+    // Waiting for the copy back (its tombstone may be gone: the record never
+    // expires by itself, ruling 10). A record whose cancel steps did not all
+    // run (a crash after its first save) runs them again below.
+    if (r.phase === 'cancelled' && r.returnPending && r.cancelClosed) {
       this.terminalEvent(r.id, 'cancelled');
       return ok();
     }
@@ -402,7 +404,11 @@ export class MoveTarget {
       fresh.cancelledFrom = fresh.phase;
       fresh.switchedOver = switchedOver(fresh);
       // The high water while the camera still runs here, journalled with the cancel (before its node leaves).
-      if (fresh.switchedOver) fresh.captured ??= end.captured?.(fresh.camera, this.now());
+      // Busy from this save on (ruling 10): no offer passes while the camera stops here.
+      if (fresh.switchedOver) {
+        fresh.captured ??= end.captured?.(fresh.camera, this.now());
+        fresh.returnPending = true;
+      }
       fresh.copied = copied;
       fresh.phase = 'cancelled';
       fresh.endedAt = this.now();
@@ -449,7 +455,10 @@ export class MoveTarget {
     const keep = r.switchedOver === true && !reason;
     this.dropKeys(r);
     r.endedAt ??= this.now();
-    if (keep) r.returnPending = true;
+    if (keep) {
+      r.returnPending = true;
+      r.cancelClosed = true;
+    }
     this.setPhase(r, 'cancelled', { ...this.keep(), ...(keep ? { returnPending: true } : {}) });
     const peer = r.peer.name || r.peer.proxyId;
     const content = entry === 'untouched' ? '' : keep ? `, its content copied back to ${peer} next` : `, copied content ${copied === 'delete' ? 'deleted' : 'left to age out'}`;

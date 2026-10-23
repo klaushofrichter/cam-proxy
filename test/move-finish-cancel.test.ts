@@ -445,6 +445,34 @@ describe('move.cancel on the target', () => {
     expect(later.load(MOVE)).toMatchObject({ phase: 'cancelled', returnPending: true });
   }, 60_000);
 
+  it('a cancel after the switch-over is busy from its first save; a crash before its steps ran runs them on the repeat', async () => {
+    const u = targetUnit();
+    await copied(u);
+    const seen: { active: string[]; returnPending: unknown }[] = [];
+    const setLoaded = u.deps.setLoaded;
+    let crash = true;
+    const t = new MoveTarget({ ...u.deps, setLoaded: async (l) => {
+      seen.push({ active: u.journal.active().map((x) => x.id), returnPending: u.journal.load(MOVE)?.returnPending });
+      if (crash) throw new Error('crash while the camera stops');
+      await setLoaded(l);
+    } });
+    await expect(t.cancel(cancelT('age-out'))).rejects.toThrow(/crash/);
+    // While the camera stopped here the move was already busy (no offer slips in).
+    expect(seen).toEqual([{ active: [MOVE], returnPending: true }]);
+    expect(u.audits.some((x) => x.action === 'move-cancel')).toBe(false);
+    // The repeat (cams-admin sends it again) runs the steps the crash left, not only the terminal phase.
+    crash = false;
+    const t2 = new MoveTarget({ ...u.deps, setLoaded: async (l) => {
+      seen.push({ active: u.journal.active().map((x) => x.id), returnPending: u.journal.load(MOVE)?.returnPending });
+      await setLoaded(l);
+    } });
+    expect((await t2.cancel(cancelT('age-out'))).status).toBe('ok');
+    expect(u.loaded.config.cameras.cam9).toBeUndefined();
+    expect(u.audits.filter((x) => x.action === 'move-cancel')).toHaveLength(1);
+    expect(u.journal.load(MOVE)).toMatchObject({ phase: 'cancelled', returnPending: true });
+    expect(u.journal.active().map((x) => x.id)).toEqual([MOVE]);
+  }, 60_000);
+
   it('cancel with age-out keeps the target\'s copy and its retention removes it later', async () => {
     const u = targetUnit();
     await copied(u);

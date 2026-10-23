@@ -56,6 +56,31 @@ describe('move inventory', () => {
     expect(s.archive).toEqual({ files: 2, bytes: 8 + 2, rows: 1, oldest: D2, newest: D2 });
   });
 
+  it('a filter leaves items out of the chunk list, the manifest and the rows (step 4 Task 9)', async () => {
+    const f = fixture();
+    const clipId = (f.catalog.db.prepare("SELECT id FROM clips WHERE cam = 'cam3'").get() as { id: number }).id;
+    const seen: string[] = [];
+    const filter = {
+      row: (table: string, row: Record<string, unknown>) => (seen.push(table), !(table === 'clips' && row.id === clipId) && table !== 'analyses'),
+      file: (rel: string) => rel !== 'stills/cam3/2026/10/01/1200.pack',
+    };
+    const all = listChunks(f.deps, 'cam3', [...MOVE_KINDS]);
+    const some = listChunks(f.deps, 'cam3', [...MOVE_KINDS], filter);
+    // The clips day had only that clip: its chunk is gone; the stills day lost one pack.
+    expect(some.map((c) => c.id)).toEqual(all.map((c) => c.id).filter((id) => id !== 'clips:2026-10-01'));
+    expect(some.find((c) => c.id === 'stills:2026-10-01')).toMatchObject({ files: 2, bytes: 2 + 2 });
+    // An event stays without the analysis left out (its image too).
+    expect(some.find((c) => c.id === 'events:2026-10-02')).toMatchObject({ files: 0, rows: 1 });
+    expect(new Set(seen)).toEqual(new Set(['clips', 'events', 'analyses', 'still_checks', 'archive']));
+    const m = await chunkManifest(f.deps, 'cam3', 'stills:2026-10-01', { filter });
+    expect(m.files.map((x) => x.path)).toEqual(['previews/cam3/2026/10/01/1200.jpg', 'previews/cam3/2026/10/01/1200.json']);
+    expect((await chunkManifest(f.deps, 'cam3', 'clips:2026-10-01', { filter })).files).toEqual([]);
+    expect(chunkRows(f.deps, 'cam3', 'clips:2026-10-01', filter)).toEqual([]);
+    expect(chunkRows(f.deps, 'cam3', 'events:2026-10-02', filter).map((t) => t.table)).toEqual(['events']);
+    // Without a filter nothing changes.
+    expect(chunkRows(f.deps, 'cam3', 'events:2026-10-02').map((t) => t.table)).toEqual(['events', 'analyses']);
+  });
+
   it('summary of a camera without content is zeros', () => {
     const f = fixture();
     expect(summarize(f.deps, 'cam9').clips).toEqual({ files: 0, bytes: 0, rows: 0, oldest: null, newest: null });

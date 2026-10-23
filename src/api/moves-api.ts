@@ -4,9 +4,10 @@ import { rateLimit } from 'express-rate-limit';
 import { lstatSync, realpathSync } from 'fs';
 import { join, resolve, sep } from 'path';
 import type { AuditLog } from '../audit/audit-log';
+import { capturedFilter } from '../moves/captured';
 import { mergeOutcome, OUTCOME_BYTES_MAX, parseOutcome } from '../moves/check';
 import { logger } from '../log';
-import { chunkManifest, chunkRows, CONTENT_FOLDERS, listChunks, parseChunkId, type InventoryDeps, type ManifestFile } from '../moves/inventory';
+import { chunkManifest, chunkRows, CONTENT_FOLDERS, listChunks, parseChunkId, type InventoryDeps, type ItemFilter, type ManifestFile } from '../moves/inventory';
 import type { MoveJournal, MoveRecord } from '../moves/journal';
 import { ManifestCache } from '../moves/manifest-cache';
 import { seal } from '../moves/seal';
@@ -101,6 +102,15 @@ export function movesSourceApi(d: MovesSourceDeps): express.Router {
     return id;
   };
 
+  // A return (step 4 Task 9) serves only what this proxy captured itself: one
+  // filter per request, from the cancelled move's kept record; undefined for
+  // a move; null (409 not_ready) when that record is gone or has no high water.
+  const filterOf = (r: MoveRecord): ItemFilter | undefined | null => {
+    if (!r.returnOf) return undefined;
+    const c = d.journal.load(r.returnOf);
+    return c && c.role === 'target' && c.camera === r.camera && c.captured ? capturedFilter(d.inventory.dataDir, c) : null;
+  };
+
   // Counted before the guard, uncounted again when the request passed it.
   const refusedLimit = rateLimit({
     windowMs: 60_000, limit: d.refusedPerMinute ?? 300, standardHeaders: 'draft-8', legacyHeaders: false,
@@ -153,8 +163,10 @@ export function movesSourceApi(d: MovesSourceDeps): express.Router {
     const key = `${r.id}|${chunkId}`;
     let p = inflight.get(key);
     if (!p) {
+      const filter = filterOf(r);
+      if (filter === null) return notReady(res);
       const refreshedAt = r.manifestRefreshedAt;
-      p = chunkManifest(d.inventory, r.camera, chunkId)
+      p = chunkManifest(d.inventory, r.camera, chunkId, { filter })
         .then((m) => {
           // Cache it (P5), unless the chunk list was refreshed meanwhile.
           try {
@@ -180,7 +192,9 @@ export function movesSourceApi(d: MovesSourceDeps): express.Router {
   router.get('/moves/:id/chunks/:chunkId/rows', busyGate, (req, res) => {
     const chunkId = chunkOf(req, res);
     if (!chunkId) return;
-    res.json(chunkRows(d.inventory, recordOf(res).camera, chunkId));
+    const filter = filterOf(recordOf(res));
+    if (filter === null) return notReady(res);
+    res.json(chunkRows(d.inventory, recordOf(res).camera, chunkId, filter));
   });
 
   // A file of a chunk whose manifest the target has (Range via sendFileOr).
