@@ -1,9 +1,12 @@
 // The camera-move UI's logic apart from the components (camera-move plan
 // Task 11, spec S §7): what the panel offers, the plan it sends, the texts.
 import type { MoveKind, MovePlan, MoveReason, MoveSummary, Settings, Space } from '../../../src/moves/types';
+import { estimateText } from '../../../src/moves/plan';
+
+// The plan rules live once, in src/moves/plan.ts (the proxy's auto-approval shares them).
+export { KINDS, budgetDefault, estimateText, hasContent, kindsWithContent, planFrom, spaceOptions, type MoveForm } from '../../../src/moves/plan';
 
 export type { MoveKind, MovePlan, MoveReason, MoveSummary, Space };
-export const KINDS: readonly MoveKind[] = ['stills', 'clips', 'events', 'checks', 'archive'];
 export const KIND_LABEL: Record<MoveKind, string> = { stills: 'Stills', clips: 'Clips', events: 'Events', checks: 'Still checks', archive: 'Archive' };
 
 // One move as GET /control/moves lists it (src/moves/source.ts MoveView).
@@ -25,18 +28,6 @@ export interface MoveItem {
 const GB = 1024 ** 3;
 const MB = 1024 ** 2;
 
-export function estimateText(s: number): string {
-  const sec = Math.max(0, Math.round(s));
-  if (sec < 60) return `${sec} s`;
-  const min = Math.round(sec / 60);
-  if (min < 60) return `${min} min`;
-  const h = Math.floor(min / 60);
-  return min % 60 ? `${h} h ${min % 60} min` : `${h} h`;
-}
-
-// The time budget field is in minutes: the estimate rounded up to whole minutes (at least one).
-export const budgetDefault = (estimateS: number): number => Math.max(1, Math.ceil(estimateS / 60));
-
 export function sizeText(bytes: number): string {
   if (bytes >= GB) return `${(bytes / GB).toFixed(1)} GB`;
   if (bytes >= MB) return `${(bytes / MB).toFixed(1)} MB`;
@@ -46,45 +37,6 @@ export function sizeText(bytes: number): string {
 
 // A proposed host limit with its unit: *.maxGB are GB, storage.maxBytes is bytes.
 export const limitText = (key: string, value: number): string => `${key}: ${key.endsWith('Bytes') ? sizeText(value) : `${value} GB`}`;
-
-export const hasContent = (s: MoveSummary, k: MoveKind): boolean => s[k].files + s[k].rows > 0;
-export const kindsWithContent = (s: MoveSummary): MoveKind[] => KINDS.filter((k) => hasContent(s, k));
-
-// The options when the content does not fit the target; retention only with a proposal.
-export function spaceOptions(space: Space | undefined): ('omit' | 'retention' | 'fit')[] {
-  if (!space || space.fits) return [];
-  return space.retentionProposal && Object.keys(space.retentionProposal).length ? ['omit', 'retention', 'fit'] : ['omit', 'fit'];
-}
-
-export interface MoveForm {
-  transfer: boolean;
-  leaveOut: MoveKind[];
-  option: 'omit' | 'retention' | 'fit';
-  budgetMin: number;
-  estimateS: number;
-  summary: MoveSummary;
-  space?: Space;
-}
-
-// The plan the form means, or why not (a budget below the estimate is refused here, as by the proxy).
-export function planFrom(f: MoveForm): { plan: MovePlan | null; error: string | null } {
-  const budgetS = Math.round(f.budgetMin * 60);
-  if (!Number.isFinite(budgetS) || budgetS < f.estimateS) return { plan: null, error: `The time budget can't be below the estimate (${estimateText(f.estimateS)}).` };
-  const common = { budgetS, estimateS: f.estimateS };
-  if (!f.transfer) return { plan: { transfer: false, kinds: [], space: 'all', targetSettings: null, ...common }, error: null };
-  const all = kindsWithContent(f.summary);
-  if (!f.space || f.space.fits) return { plan: { transfer: true, kinds: all, space: 'all', targetSettings: null, ...common }, error: null };
-  if (f.option === 'omit') {
-    const kinds = all.filter((k) => !f.leaveOut.includes(k));
-    if (kinds.reduce((n, k) => n + f.summary[k].bytes, 0) > f.space.available) return { plan: null, error: "What is left still doesn't fit." };
-    return { plan: { transfer: true, kinds, space: 'omit', targetSettings: null, ...common }, error: null };
-  }
-  if (f.option === 'retention') {
-    if (!f.space.retentionProposal) return { plan: null, error: 'The target proposed no limits.' };
-    return { plan: { transfer: true, kinds: all, space: 'retention', targetSettings: f.space.retentionProposal, ...common }, error: null };
-  }
-  return { plan: { transfer: true, kinds: all, space: 'fit', targetSettings: null, ...common }, error: null };
-}
 
 const REASON: Record<MoveReason, string> = {
   moves_not_allowed: "it doesn't accept camera moves (its local admin can allow them on its Cams-Admin page)",
