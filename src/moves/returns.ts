@@ -4,7 +4,8 @@ import type { Done, Handler } from '../fleet/commands';
 import { capturedFilter } from './captured';
 import { listChunks, type InventoryDeps } from './inventory';
 import { moveEnded, type ChunkMeta, type MoveJournal, type MoveRecord } from './journal';
-import { MOVE_KINDS, type MoveEvent } from './types';
+import type { CopyRunner } from './copier';
+import { MOVE_KINDS, type MoveEvent, type MovePhaseName, type MovePlan } from './types';
 
 // The copy back after a cancel after the switch-over (step 4, spec §1,
 // rulings 1, 2, 7, 20): a return move linked to the cancelled one
@@ -17,15 +18,28 @@ import { MOVE_KINDS, type MoveEvent } from './types';
 // high water); its chunks and rows are filtered the same way per request
 // (moves-api.ts). The original proxy's side (move.return.start, Task 10) and
 // the finish with its selective delete (Task 11) live here too.
+//
+// On the original proxy (Task 10) move.return.start makes the return's target
+// record: copy only (RETURN_PLAN; no camera node, key pair, leaf, secrets or
+// FTP step: the camera is already back here), the camera named by the
+// cancelled move's tombstone, and starts the copier (CopyRunner). A chunk that
+// doesn't fit waits (copier.ts waitRoom, Decision 5).
 export interface ReturnDeps {
-  journal: Pick<MoveJournal, 'load' | 'save'>;
+  journal: Pick<MoveJournal, 'load' | 'save'> & Partial<Pick<MoveJournal, 'ended' | 'all'>>;
   audit: Pick<AuditLog, 'write'>;
   emit: (e: MoveEvent) => void;
   inventory: InventoryDeps;
   // This proxy's id at cams-admin (audit details).
   proxyId?: () => string;
   now?: () => number;
+  // The original's side (Task 10): the copier, and the target's phase change (MoveTarget.setPhase).
+  copy?: Pick<CopyRunner, 'start' | 'stop'>;
+  setPhase?: (r: MoveRecord, phase: MovePhaseName) => void;
 }
+
+// A return's plan (ruling 8): everything, all space; the budget only paces the
+// copy (no move-budget-exceeded for a return), nothing to estimate or approve.
+export const RETURN_PLAN: MovePlan = { transfer: true, kinds: [...MOVE_KINDS], space: 'all', targetSettings: null, budgetS: 3600, estimateS: 0 };
 
 const ok = (result: Record<string, unknown> = {}): Done => ({ status: 'ok', result });
 const failed = (code: string): Done => ({ status: 'failed', code });
@@ -81,9 +95,76 @@ export class MoveReturns {
     return this.opened(r, cancelled, false);
   }
 
-  // The return's target side on the original proxy: Task 10.
-  start(_a: MoveReturnStartArgs): Done {
-    return failed('internal');
+  // move.return.start (original proxy): the return's target record, copying at
+  // once. The camera is the one the cancelled move gave back here (its
+  // tombstone; none: unknown_move; a cancel before the switch-over, or one
+  // still giving the camera back: wrong_phase). Again for the same return
+  // (cams-admin missed the answer, or re-sends it after a failure or after its
+  // restart with a new token, ruling 20): copying with the same token and
+  // source, the copier only made sure of; a new token or source, or a failed
+  // return: the copier stops and starts again with the record's chunk states
+  // and the given `done`. A return already copied (or ended): ok, nothing changes.
+  async start(a: MoveReturnStartArgs): Promise<Done> {
+    const copy = this.d.copy;
+    if (!copy) return failed('internal');
+    if (a.moveId === a.returnOf) return failed('wrong_phase');
+    const s = a.source;
+    const peer = { proxyId: s.proxyId, name: s.name, url: s.url, caFingerprints: [...s.caFingerprints], tlsServername: s.tlsServername };
+    const existing = this.d.journal.load(a.moveId);
+    if (existing) {
+      if (existing.role !== 'target' || existing.returnOf !== a.returnOf) return failed('wrong_phase');
+      if (existing.phase !== 'copying' && existing.phase !== 'failed') return ok();
+      const rekeyed = existing.token !== a.token || JSON.stringify(existing.peer) !== JSON.stringify(peer);
+      if (existing.phase === 'copying' && !rekeyed) {
+        copy.start(a.moveId);
+        return ok();
+      }
+      // The copier holds the old token's client: stopped first, the record read again after it.
+      await copy.stop(a.moveId);
+      const r = this.d.journal.load(a.moveId);
+      if (!r || r.role !== 'target' || (r.phase !== 'copying' && r.phase !== 'failed')) return ok();
+      const was = r.phase;
+      r.token = a.token;
+      r.peer = peer;
+      r.done = [...a.done];
+      delete r.failure;
+      if (was === 'failed') this.phase(r, 'copying');
+      else this.d.journal.save(r);
+      this.startAudit(r, was === 'failed' ? 'started again after a failure' : 'started again with a new move token');
+      copy.start(a.moveId);
+      return ok();
+    }
+    if (this.d.journal.load(a.returnOf)) return failed('wrong_phase');
+    const stone = this.d.journal.ended?.(a.returnOf, 'source') ?? null;
+    if (!stone) return failed('unknown_move');
+    if (stone.phase !== 'cancelled' || !stone.camera) return failed('wrong_phase');
+    const now = this.now();
+    const r: MoveRecord = {
+      v: 1, id: a.moveId, role: 'target', returnOf: a.returnOf, camera: stone.camera, phase: 'copying',
+      plan: { ...RETURN_PLAN, kinds: [...RETURN_PLAN.kinds] }, peer, token: a.token, done: [...a.done],
+      chunks: {}, bytesDone: 0, startedAt: now, approvedAt: now, budgetS: RETURN_PLAN.budgetS,
+    };
+    this.phase(r, 'copying');
+    this.startAudit(r, 'started');
+    copy.start(a.moveId);
+    return ok();
+  }
+
+  private phase(r: MoveRecord, phase: MovePhaseName): void {
+    if (this.d.setPhase) return this.d.setPhase(r, phase);
+    r.phase = phase;
+    this.d.journal.save(r);
+    this.d.emit({ kind: 'move.phase', moveId: r.id, role: 'target', phase: phase as Exclude<MovePhaseName, 'failed'>, ok: true });
+  }
+
+  private startAudit(r: MoveRecord, what: string): void {
+    const peer = r.peer.name || r.peer.proxyId;
+    this.d.audit.write({
+      action: 'move-return', category: ['configuration'], type: ['change'], outcome: 'success',
+      user: 'cams-admin', camera: r.camera,
+      message: `Camera move ${r.id} (copy back of ${r.returnOf}, ${r.camera} from ${peer}): ${what}, copy only`,
+      details: { moveId: r.id, returnOf: r.returnOf, camera: r.camera, source: r.peer.proxyId, target: this.d.proxyId?.() || null, role: 'target', step: 'start', done: r.done?.length ?? 0 },
+    });
   }
 
   // The return's end on either side (move.finish {return: true}): Task 11.
@@ -91,8 +172,19 @@ export class MoveReturns {
     return failed('internal');
   }
 
-  // Return target copiers after a restart: Task 10.
-  resume(): void {}
+  // At process start: the copier of every return target here still copying
+  // (MoveTarget.resume leaves them out: no switch-over to run).
+  resume(): void {
+    const copy = this.d.copy;
+    if (!copy) return;
+    let open: MoveRecord[];
+    try {
+      open = this.d.journal.all?.() ?? [];
+    } catch {
+      return;
+    }
+    for (const r of open) if (r.role === 'target' && r.returnOf && r.phase === 'copying') copy.start(r.id);
+  }
 
   private opened(r: MoveRecord, cancelled: MoveRecord, rekeyed: boolean): Done {
     const t = totals(r.manifest ?? []);

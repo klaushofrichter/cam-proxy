@@ -751,6 +751,7 @@ describe('move.cancel on the source', () => {
     expect(rows(u.catalog, 'cam3')).toBe(2);
     expect(u.events.at(-1)).toEqual({ kind: 'move.phase', moveId: MOVE, role: 'source', phase: 'cancelled', ok: true });
     expect(u.audits('move-cancel')[0]).toMatchObject({ cam_proxy: { moveId: MOVE, camera: 'cam3', role: 'source', phase: 'opened', switchedBack: false } });
+    expect(u.journal.ended(MOVE, 'source')?.camera).toBeUndefined();
     expect(u.source.list().filter((m) => m.id === MOVE)).toEqual([]);
     // Twice: nothing more but the terminal phase again (final review 4), also after a restart.
     const n = [u.events.length, u.calls.length];
@@ -770,6 +771,8 @@ describe('move.cancel on the source', () => {
     expect(u.loaded.config.cameras.cam3.moved).toBeUndefined();
     expect(u.journal.load(MOVE)).toBeNull();
     expect(u.audits('move-cancel')[0].cam_proxy).toMatchObject({ phase: 'released', switchedBack: true, push: 'pushed', ftp: 'ok' });
+    // The tombstone names the camera back here: the copy back (step 4 Task 10) copies into it.
+    expect(u.journal.ended(MOVE, 'source')).toMatchObject({ phase: 'cancelled', camera: 'cam3' });
   });
 
   it('a failed give-back step: the camera is the source\'s at once; audited, busy, retried by itself until done', async () => {

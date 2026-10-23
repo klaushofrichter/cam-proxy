@@ -1,21 +1,24 @@
 // The copy back after a cancel after the switch-over (step 4 Task 9): the new
 // proxy is the return's source and serves only what it captured itself
 // (spec §1, rulings 1, 2, 7, 20; Review Focus 1 and 3).
-import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import express from 'express';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { openCatalog } from '../src/catalog/db';
-import type { MoveReturnOpenArgs } from '../src/fleet/command-args';
+import type { MoveReturnOpenArgs, MoveReturnStartArgs } from '../src/fleet/command-args';
+import type { Loaded } from '../src/config/load';
+import { CopyRunner, type CopierDeps, type SourceClient } from '../src/moves/copier';
 import { movesSourceApi } from '../src/api/moves-api';
 import { capturedMark } from '../src/moves/captured';
 import { writeChunkPart } from '../src/moves/chunk-parts';
 import { moveHandlers } from '../src/moves/commands';
 import { MoveJournal, type MoveRecord } from '../src/moves/journal';
 import { noteLanded } from '../src/moves/purge';
-import { MoveReturns } from '../src/moves/returns';
+import { MoveReturns, RETURN_PLAN } from '../src/moves/returns';
+import { MoveTarget, type TargetDeps } from '../src/moves/target';
 import { hashMoveToken } from '../src/moves/token';
 import type { MoveEvent } from '../src/moves/types';
 import { strict, why } from './helpers/contract';
@@ -255,5 +258,189 @@ describe('move.return.open on the new proxy (the return source)', () => {
     // Not a return: not the returns side (no source side wired here).
     expect(await g['move.finish']({ v: 1, moveId: RETURN, role: 'source', abandoned: false }, {} as never)).toEqual({ status: 'failed', code: 'internal' });
     expect(routed).toBe(1);
+  });
+});
+
+// ---- the original proxy: the return's target (step 4 Task 10) ----
+
+const SOURCE_ARG = { proxyId: SELF, name: 'New', url: 'https://new.example.org:8443', caFingerprints: [`SHA256:${'A'.repeat(64)}`], tlsServername: 'proxy.s.internal' };
+const start = (o: Partial<MoveReturnStartArgs> = {}): MoveReturnStartArgs => ({ v: 1, moveId: RETURN, returnOf: CANCELLED, token: T1, source: SOURCE_ARG, done: [], ...o });
+
+// The return source's endpoints (the new proxy's fixture) as the copier's client, with the record's token.
+function clientFor(app: express.Express, token: string): SourceClient {
+  const answer = (res: request.Response) => ({ status: res.status, body: (async function* () { yield Buffer.isBuffer(res.body) ? res.body : Buffer.from(res.text ?? ''); })() });
+  const binary = (res: NodeJS.ReadableStream, cb: (err: Error | null, body: Buffer) => void) => {
+    const parts: Buffer[] = [];
+    res.on('data', (b: Buffer) => parts.push(b));
+    res.on('end', () => cb(null, Buffer.concat(parts)));
+  };
+  return {
+    get: async (path) => answer(await request(app).get(path).set('Authorization', `Bearer ${token}`).buffer(true).parse(binary as never)),
+    put: async (path, body) => answer(await request(app).put(path).set('Authorization', `Bearer ${token}`).send(body as object)),
+  };
+}
+
+function original(f: ReturnType<typeof fixture>, o: { free?: number; tombstone?: boolean; runner?: Pick<CopyRunner, 'start' | 'stop'> } = {}) {
+  const dataDir = mkdtempSync(join(tmpdir(), 'camproxy-original-'));
+  const catalog = openCatalog(join(dataDir, 'catalog.db'));
+  const journal = new MoveJournal(join(dataDir, 'admin', 'moves'), undefined, { now: () => CANCEL_AT + 30 * MIN });
+  // The cancelled move ended here with the camera back (its tombstone names it).
+  if (o.tombstone !== false) journal.bury({ moveId: CANCELLED, role: 'source', phase: 'cancelled', camera: 'cam1', endedAt: CANCEL_AT });
+  const events: MoveEvent[] = [];
+  const audits: Audit[] = [];
+  const audit = { write: (r: unknown) => (audits.push(r as Audit), null) };
+  const emit = (e: MoveEvent) => void events.push(e);
+  const state = { free: o.free ?? 1e12, clients: [] as string[] };
+  const target = new MoveTarget({ journal, audit, emit, proxyId: () => ORIGINAL } as unknown as TargetDeps);
+  const copyDeps: CopierDeps = {
+    journal, audit, emit, catalog, dataDir,
+    client: (r) => (state.clients.push(r.token!), clientFor(f.app(), r.token!)),
+    paused: () => false,
+    space: { loaded: () => ({ config: { storage: { minFreeBytes: 0 }, stills: {}, previews: {}, ftp: {} } }) as unknown as Loaded, usage: () => ({ stills: 0, previews: 0, clips: 0, used: 0, budget: 1e15 }), freeBytes: () => state.free },
+    setPhase: (r, phase, p) => target.setPhase(r, phase, p),
+    notePaused: (r, paused) => target.notePaused(r, paused),
+    proxyId: () => ORIGINAL,
+    now: () => CANCEL_AT + 30 * MIN,
+    sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 5))),
+    timing: { retryMs: 1, retryCapMs: 2, pausedPollMs: 2, refreshPollMs: 2, refreshWaitMs: 10, saveEveryMs: 0 },
+  };
+  const runner = new CopyRunner(copyDeps);
+  const copy = o.runner ?? runner;
+  const returns = new MoveReturns({
+    journal, audit, emit, inventory: { catalog, dataDir }, proxyId: () => ORIGINAL, now: () => CANCEL_AT + 30 * MIN,
+    copy, setPhase: (r, phase) => target.setPhase(r, phase),
+  });
+  return { dataDir, catalog, journal, events, audits, state, runner, returns, rec: () => journal.load(RETURN)! };
+}
+
+const until = async (cond: () => boolean, ms = 5000) => {
+  const t0 = Date.now();
+  while (!cond()) {
+    if (Date.now() - t0 > ms) throw new Error('timed out');
+    await new Promise((r) => setTimeout(r, 5));
+  }
+};
+
+describe('move.return.start on the original proxy (the return target)', () => {
+  it('start answers ok, makes a copy-only target record and copies the new proxy\'s capture back', async () => {
+    const f = fixture();
+    f.returns.open(open());
+    const o = original(f);
+    // The switch-over minute's still pack the original holds itself (P12): never overwritten.
+    mkdirSync(dirname(join(o.dataDir, ...OWN_STILL.split('/'))), { recursive: true });
+    writeFileSync(join(o.dataDir, ...OWN_STILL.split('/')), 'the-originals-own-pack');
+    const res = await o.returns.start(start());
+    expect(res).toEqual({ status: 'ok', result: {} });
+    const v = strict('commands/move.return.start.result');
+    expect(v(res.status === 'ok' ? res.result : null), why(v)).toBe(true);
+    const r0 = o.journal.load(RETURN)!;
+    expect(r0).toMatchObject({ role: 'target', id: RETURN, returnOf: CANCELLED, camera: 'cam1', plan: RETURN_PLAN, token: T1, done: [], approvedAt: CANCEL_AT + 30 * MIN, peer: { proxyId: SELF, name: 'New', url: SOURCE_ARG.url } });
+    // Copy only: no switch-over step, no key pair, no leaf, no camera node written.
+    for (const k of ['step', 'leaf', 'x25519', 'cameraWritten', 'passwordWritten', 'expectedLeaf'] as const) expect(r0[k], k).toBeUndefined();
+    expect(RETURN_PLAN).toEqual({ transfer: true, kinds: ['stills', 'clips', 'events', 'checks', 'archive'], space: 'all', targetSettings: null, budgetS: 3600, estimateS: 0 });
+    await until(() => o.rec().phase === 'copied');
+    await o.runner.idle(RETURN);
+    expect(existsSync(join(o.dataDir, ...OWN_CLIP.split('/')))).toBe(true);
+    expect(readFileSync(join(o.dataDir, ...OWN_STILL.split('/')), 'utf8')).toBe('the-originals-own-pack');
+    expect(existsSync(join(o.dataDir, ...IMPORTED_B_CLIP.split('/')))).toBe(false);
+    // The imported Archive item carries the move note: from the new proxy.
+    const arc = o.catalog.db.prepare("SELECT metadata FROM archive WHERE cam = 'cam1'").all() as { metadata: string }[];
+    expect(arc).toHaveLength(1);
+    expect(JSON.parse(arc[0].metadata).move).toMatchObject({ moveId: RETURN, from: { proxyId: SELF, name: 'New' } });
+    const phases = o.events.filter((e) => e.kind === 'move.phase').map((e) => (e as { phase: string }).phase);
+    expect(phases).toEqual(['copying', 'copied']);
+    expect(o.events.find((e) => e.kind === 'move.phase' && e.phase === 'copied')).toMatchObject({ role: 'target', ok: true, check: { complete: true } });
+    // Never the token in an event or an audit record.
+    expect(JSON.stringify([o.events, o.audits])).not.toContain(T1);
+    // A repeated start after copied: the same answer, nothing restarts.
+    const n = o.events.length;
+    expect(await o.returns.start(start())).toEqual({ status: 'ok', result: {} });
+    expect(o.rec().phase).toBe('copied');
+    expect(o.events.length).toBe(n);
+  });
+
+  it('start without the cancelled move here (no tombstone naming the camera) answers unknown_move; another record wrong_phase', async () => {
+    const f = fixture();
+    const o = original(f, { tombstone: false });
+    expect(await o.returns.start(start())).toEqual({ status: 'failed', code: 'unknown_move' });
+    expect(o.journal.load(RETURN)).toBeNull();
+    const p = original(f);
+    p.journal.save({ v: 1, id: RETURN, role: 'source', camera: 'cam1', phase: 'released', plan: null, peer: { proxyId: SELF, name: 'New' }, chunks: {}, bytesDone: 0, startedAt: 1 });
+    expect(await p.returns.start(start())).toEqual({ status: 'failed', code: 'wrong_phase' });
+    // A cancel before the switch-over (the tombstone names no camera): nothing to copy back.
+    const q = original(f, { tombstone: false });
+    q.journal.bury({ moveId: CANCELLED, role: 'source', phase: 'cancelled' });
+    expect(await q.returns.start(start())).toEqual({ status: 'failed', code: 'wrong_phase' });
+  });
+
+  it('a repeated start with a new token replaces r.token and restarts the copier; after a failure it copies again', async () => {
+    const f = fixture();
+    const calls: string[] = [];
+    const runner = { start: (id: string) => void calls.push(`start ${id}`), stop: async (id: string) => void calls.push(`stop ${id}`) };
+    const o = original(f, { runner: runner as never });
+    expect(await o.returns.start(start())).toEqual({ status: 'ok', result: {} });
+    expect(calls).toEqual([`start ${RETURN}`]);
+    // The same start again (cams-admin missed the answer): the copier is not restarted.
+    expect(await o.returns.start(start())).toEqual({ status: 'ok', result: {} });
+    expect(calls).toEqual([`start ${RETURN}`, `start ${RETURN}`]);
+    // cams-admin restarted and re-keyed the source: the new token, the copier restarted with it.
+    expect(await o.returns.start(start({ token: T2, done: ['clips:2026-10-21'] }))).toEqual({ status: 'ok', result: {} });
+    expect(o.rec()).toMatchObject({ token: T2, done: ['clips:2026-10-21'], phase: 'copying' });
+    expect(calls.slice(2)).toEqual([`stop ${RETURN}`, `start ${RETURN}`]);
+    // A failed return (the copier crashed): start again copies on with the chunk states it has.
+    const r = o.rec();
+    r.chunks = { 'archive:2026-10-20': { state: 'verified', v: 1, s: 0, f: 0, vb: 8, b: 8 } };
+    o.journal.save(r);
+    const target = new MoveTarget({ journal: o.journal, audit: { write: () => null }, emit: () => undefined } as unknown as TargetDeps);
+    target.setPhase(o.rec(), 'failed', { code: 'copy_failed' });
+    calls.length = 0;
+    const n = o.events.length;
+    expect(await o.returns.start(start({ token: T2, done: ['archive:2026-10-20'] }))).toEqual({ status: 'ok', result: {} });
+    expect(o.rec()).toMatchObject({ phase: 'copying', token: T2, done: ['archive:2026-10-20'], chunks: { 'archive:2026-10-20': { state: 'verified' } } });
+    expect(o.rec().failure).toBeUndefined();
+    expect(calls).toEqual([`stop ${RETURN}`, `start ${RETURN}`]);
+    expect(o.events.slice(n)).toEqual([{ kind: 'move.phase', moveId: RETURN, role: 'target', phase: 'copying', ok: true }]);
+    expect(JSON.stringify(o.audits)).not.toContain(T2);
+  });
+
+  it('a 403 after the source was re-keyed waits for the new start, then the copy goes on with the new token', async () => {
+    const f = fixture();
+    f.returns.open(open());
+    // cams-admin restarted: the source has a new token before the original got it.
+    f.returns.open(open({ tokenHash: H2 }));
+    const o = original(f);
+    expect(await o.returns.start(start({ token: T1 }))).toEqual({ status: 'ok', result: {} });
+    await new Promise((r) => setTimeout(r, 80));
+    expect(o.rec().phase).toBe('copying');
+    expect(o.events.some((e) => e.kind === 'move.phase' && e.phase === 'failed')).toBe(false);
+    expect(o.audits.some((a) => a.action === 'move-source-unreachable')).toBe(true);
+    expect(await o.returns.start(start({ token: T2 }))).toEqual({ status: 'ok', result: {} });
+    await until(() => o.rec().phase === 'copied');
+    expect(o.state.clients).toEqual([T1, T2]);
+    expect(existsSync(join(o.dataDir, ...OWN_CLIP.split('/')))).toBe(true);
+  });
+
+  it('resume() restarts the copier of a return in copying after a restart (MoveTarget.resume leaves it alone)', async () => {
+    const f = fixture();
+    f.returns.open(open());
+    const calls: string[] = [];
+    const runner = { start: (id: string) => void calls.push(`start ${id}`), stop: async () => undefined };
+    const o = original(f, { runner: runner as never });
+    await o.returns.start(start());
+    calls.length = 0;
+    o.returns.resume();
+    expect(calls).toEqual([`start ${RETURN}`]);
+    // The switch-over runner does not take it (no camera, leaf or FTP steps).
+    const ran: string[] = [];
+    const t = new MoveTarget({ journal: o.journal, audit: { write: () => null }, emit: () => undefined, stageLeaf: () => undefined, startCopy: (id: string) => void ran.push(id) } as unknown as TargetDeps);
+    t.resume();
+    await t.idle(RETURN);
+    expect(ran).toEqual([]);
+    // Copied or failed: not restarted.
+    const target = new MoveTarget({ journal: o.journal, audit: { write: () => null }, emit: () => undefined } as unknown as TargetDeps);
+    target.setPhase(o.rec(), 'failed', { code: 'copy_failed' });
+    calls.length = 0;
+    o.returns.resume();
+    expect(calls).toEqual([]);
   });
 });

@@ -1065,6 +1065,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     },
     noteWritten: (kind, bytes, cam) => storage.noteWritten(kind, bytes, 1, { growth: false, cam }),
     setPhase: (r, phase, o) => moveTarget.setPhase(r, phase, o),
+    // A return waiting for room (step 4 Task 10): move.phase copying no_space.
+    notePaused: (r, paused) => moveTarget.notePaused(r, paused),
     proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
   });
   // The copy back after a cancel after the switch-over (step 4 Task 9): the
@@ -1075,6 +1077,9 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     emit: (e) => camsAdmin.emitEvent(e),
     inventory: moveInventory,
     proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
+    // The original's side (Task 10): the same copier, copy only.
+    copy: moveCopier,
+    setPhase: (r, phase) => moveTarget.setPhase(r, phase),
   });
   // After every welcome: the open move's phase again (B2), and an approval not acted on yet (B7).
   camsAdmin.onWelcome(() => {
@@ -1402,6 +1407,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       // and a cancel still giving a camera back to this proxy.
       moveTarget.resume();
       moveSource.resume();
+      // A copy back this proxy receives (step 4 Task 10).
+      moveReturns.resume();
       // Offers never approved close on their own on both sides (final review 5); old tombstones go.
       const expireOffers = () => {
         try {
@@ -1463,6 +1470,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       clearInterval(moveExpiry);
       moveSource.stop();
       await moveTarget.stopAll();
+      // The copiers of returns too (MoveTarget did not start them).
+      await moveCopier.stopAll();
       clearInterval(sweeper);
       sse.closeAll();
       storage.stop();

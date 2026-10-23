@@ -204,6 +204,19 @@ export class MoveTarget {
     });
   }
 
+  // A return waiting for room on this proxy (step 4 Task 10, ruling 9): still
+  // copying, `no_space` while paused and without a code once it goes on;
+  // audited move-paused. The phase stays as it is in the journal.
+  notePaused(r: MoveRecord, paused: boolean): void {
+    this.d.emit({ kind: 'move.phase', moveId: r.id, role: 'target', phase: 'copying', ok: true, ...(paused ? { code: 'no_space' } : {}) });
+    this.d.audit.write({
+      action: 'move-paused', category: ['configuration'], type: ['change'], outcome: paused ? 'failure' : 'success',
+      user: 'cams-admin', camera: r.camera,
+      message: `Camera move ${r.id} (${r.camera} from ${r.peer.name || r.peer.proxyId}): ${paused ? 'paused, the next chunk does not fit here; the own older content is not deleted for it' : 'room again, copying goes on'}`,
+      details: this.details(r, { paused, ...(paused ? { code: 'no_space' } : {}) }),
+    });
+  }
+
   handlers(): Record<string, Handler> {
     return {
       'move.start': async (args) => {
@@ -610,7 +623,8 @@ export class MoveTarget {
     }
     for (const r of open) {
       // A target move not started (no plan yet) waits for move.start; an ended one (waiting for the copy back) never runs.
-      if (r.role !== 'target' || !r.plan || moveEnded(r.phase)) continue;
+      // A return's target (copy only, step 4 Task 10) is MoveReturns.resume's.
+      if (r.role !== 'target' || !r.plan || moveEnded(r.phase) || r.returnOf) continue;
       if (r.leaf) this.d.stageLeaf(r.camera, leafOf(r.leaf.certPem, r.leaf.keyPem));
       this.run(r.id);
     }

@@ -10,7 +10,7 @@ export const AUDIT_ACTIONS = [
   'archive-add', 'archive-update', 'archive-delete', 'archive-clear', 'archive-expire',
   'storage-daily', 'storage-paused', 'storage-resumed', 'activity-daily',
   'inventory', 'inventory-repair', 'admin-enroll', 'admin-unenroll', 'admin-command', 'admin-policy', 'admin-token', 'audit-throttled',
-  'move-token-refused', 'move-request', 'move-offer', 'move-approve', 'move-auto-approve', 'move-switch', 'move-phase', 'move-progress', 'move-budget-exceeded', 'move-file-failed', 'move-source-unreachable', 'move-check', 'move-outcome-refused', 'move-cancel', 'move-cleanup', 'move-done', 'move-return',
+  'move-token-refused', 'move-request', 'move-offer', 'move-approve', 'move-auto-approve', 'move-switch', 'move-phase', 'move-progress', 'move-budget-exceeded', 'move-file-failed', 'move-source-unreachable', 'move-check', 'move-outcome-refused', 'move-cancel', 'move-cleanup', 'move-done', 'move-return', 'move-paused',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 const KNOWN = new Set<string>(AUDIT_ACTIONS);

@@ -599,7 +599,7 @@ export class MoveSource {
       message: `Camera move ${r.id} (${r.camera} to ${r.peer.name || r.peer.proxyId}) ${reason ? 'expired: not approved within 30 minutes' : `cancelled in ${phase}`}: ${r.switchedOver ? 'the camera is back here with its own certificate and FTP' : 'the camera stayed here'}`,
       details: { moveId: r.id, camera: r.camera, source: this.self(), target: r.peer.proxyId, role: 'source', phase, switchedBack: r.switchedOver === true, ...(reason ? { reason } : {}), ...detail },
     });
-    this.d.journal.bury({ moveId: r.id, role: 'source', phase: 'cancelled' });
+    this.d.journal.bury({ moveId: r.id, role: 'source', phase: 'cancelled', ...(r.switchedOver ? { camera: r.camera } : {}) });
     this.d.journal.remove(r.id);
   }
 

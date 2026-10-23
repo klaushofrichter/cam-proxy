@@ -1177,3 +1177,65 @@ describe('what a move imported', () => {
     expect(readFileSync(ownClip, 'utf8')).toBe('own-clip');
   });
 });
+
+describe('a return (step 4 Task 10: the original copies back)', () => {
+  const RETURN_OF = 'mv_9123456789ABCDEFGHJK';
+  const RETURN: MovePlan = { transfer: true, kinds: ['stills', 'clips', 'events', 'checks', 'archive'], space: 'all', targetSettings: null, budgetS: 3600, estimateS: 0 };
+
+  it('waits when the next chunk does not fit: no chunk skipped, nothing evicted, no_space once, on when room appears', async () => {
+    const { files, chunks } = threeDays();
+    const f = fakeSource(files, chunks);
+    const paused: boolean[] = [];
+    let polls = 0;
+    const u = unit(f, { returnOf: RETURN_OF, plan: RETURN }, {
+      deps: {
+        notePaused: (_r, p) => void paused.push(p),
+        sleep: async () => {
+          // Room appears after a few polls (the host's own retention made it, not the copy).
+          if (++polls === 5) u.state.free = 1e12;
+        },
+      },
+    });
+    u.state.free = 0;
+    await u.run();
+    expect(polls).toBeGreaterThanOrEqual(5);
+    expect(paused).toEqual([true, false]);
+    const st = chunkStates(u);
+    expect(Object.values(st).every((s) => s === 'verified')).toBe(true);
+    expect(Object.keys(st)).toHaveLength(chunks.length);
+    expect(u.phases.map((p) => p.phase)).toEqual(['copied']);
+  });
+
+  it('a return that fits never pauses', async () => {
+    const { files, chunks } = threeDays();
+    const paused: boolean[] = [];
+    const u = unit(fakeSource(files, chunks), { returnOf: RETURN_OF, plan: RETURN }, { deps: { notePaused: (_r, p) => void paused.push(p) } });
+    await u.run();
+    expect(paused).toEqual([]);
+    expect(Object.values(chunkStates(u)).every((s) => s === 'verified')).toBe(true);
+  });
+
+  it('a return over its 3600 s writes no move-budget-exceeded (and goes on, never faster)', async () => {
+    const { files, chunks } = threeDays();
+    const f = fakeSource(files, chunks);
+    const u = unit(f, { returnOf: RETURN_OF, plan: RETURN, budgetS: 3600 });
+    f.onFile = () => void (u.state.now += 1000_000);
+    await u.run();
+    expect(u.audits.filter((a) => a.action === 'move-budget-exceeded')).toHaveLength(0);
+    expect(u.rec().budgetExceeded).toBe(true);
+    expect(u.phases.map((p) => p.phase)).toEqual(['copied']);
+  });
+
+  it("a return's outcome report answered 403 (the source re-keyed) waits for the new start, never counts as refused", async () => {
+    const { files, chunks } = threeDays();
+    const f = fakeSource(files, chunks);
+    let puts = 0;
+    const empty = (async function* () {})();
+    f.client.put = async () => (++puts < 3 ? { status: 403, body: empty } : { status: 204, body: empty });
+    const u = unit(f, { returnOf: RETURN_OF, plan: RETURN });
+    await u.run();
+    expect(puts).toBe(3);
+    expect(u.audits.filter((a) => a.action === 'move-outcome-refused')).toHaveLength(0);
+    expect(u.rec().keep).toBeDefined();
+  });
+});

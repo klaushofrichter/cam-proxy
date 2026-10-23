@@ -58,6 +58,8 @@ export interface CopierDeps {
   noteWritten?: (kind: 'stills' | 'previews' | 'clips', bytes: number, cam: string) => void;
   // The move's phase on the target (MoveTarget.setPhase: journal, event, audit).
   setPhase: (r: MoveRecord, phase: 'copied' | 'failed', o: { code?: string; detail?: string; extra?: Record<string, unknown>; check?: MoveCheck }) => void;
+  // A return (step 4 Task 10) waiting for room, and on again (MoveTarget.notePaused: move.phase copying no_space).
+  notePaused?: (r: MoveRecord, paused: boolean) => void;
   proxyId?: () => string;
   now?: () => number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
@@ -303,8 +305,10 @@ export class Copier {
         const res = await put(`/api/moves/${this.r.id}/outcome`, out, this.signal);
         discard(res.body);
         if (res.status === 204 || res.status === 200) return;
-        if ([400, 403, 404, 409, 413].includes(res.status)) return this.refused(res.status);
-        if (res.status === 503 || res.status === 429) this.sourceBusyUntil = this.now() + MINUTE;
+        // A return's source re-keyed (cams-admin restarted): 403 until move.return.start brings the new token.
+        if (this.r.returnOf && (res.status === 401 || res.status === 403)) this.noteDown(String(res.status));
+        else if ([400, 403, 404, 409, 413].includes(res.status)) return this.refused(res.status);
+        else if (res.status === 503 || res.status === 429) this.sourceBusyUntil = this.now() + MINUTE;
         else this.noteDown(String(res.status));
       } catch {
         this.check();
@@ -410,7 +414,11 @@ export class Copier {
         this.skipChunk(c);
         continue;
       }
-      if (plan.space === 'fit' && rec?.state !== 'verified' && (full || !this.fits(c))) {
+      // A return (step 4 Task 10, Decision 5): the original's own camera; a
+      // chunk that doesn't fit waits for room, never skipped and never at the
+      // cost of the original's own older content (fits: room without evicting).
+      if (this.r.returnOf && rec?.state !== 'verified') await this.waitRoom(c);
+      else if (plan.space === 'fit' && rec?.state !== 'verified' && (full || !this.fits(c))) {
         // Archive first, then newest first, until the target is full; the rest is skipped.
         full = true;
         this.skipChunk(c);
@@ -424,6 +432,16 @@ export class Copier {
     this.r.chunks[c.id] = { state: 'skipped', s: c.files, b: c.bytes, meta: metaOf(c) };
     this.save(true);
     this.progress();
+  }
+
+  // A return's chunk that doesn't fit: paused (no_space, once) until it does, then on again.
+  private async waitRoom(c: ChunkMeta): Promise<void> {
+    if (this.fits(c)) return;
+    logger.info({ moveId: this.r.id, chunkId: c.id }, 'move_return_waits_for_room');
+    this.d.notePaused?.(this.r, true);
+    do await this.sleep(this.t('pausedPollMs', 10_000));
+    while (!this.fits(c));
+    this.d.notePaused?.(this.r, false);
   }
 
   // The same headroom as the offer's evaluation (spaceFor): room without evicting.
@@ -854,7 +872,8 @@ export class Copier {
     if (over && !this.r.budgetExceeded) {
       this.r.budgetExceeded = true;
       this.save(true);
-      this.audit('move-budget-exceeded', 'failure', `the time budget of ${this.r.budgetS ?? this.r.plan?.budgetS}s is over with ${remaining} bytes left; copying goes on, never faster`, {
+      // A return has no approved budget (ruling 8): the pace only, nothing to audit.
+      if (!this.r.returnOf) this.audit('move-budget-exceeded', 'failure', `the time budget of ${this.r.budgetS ?? this.r.plan?.budgetS}s is over with ${remaining} bytes left; copying goes on, never faster`, {
         budgetS: this.r.budgetS ?? this.r.plan?.budgetS ?? null, elapsedS: Math.round(elapsedS), bytesDone: done, bytesTotal: total,
       });
     }

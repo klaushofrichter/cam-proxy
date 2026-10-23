@@ -139,6 +139,9 @@ export interface MoveTombstone {
   phase: 'finished' | 'cancelled' | 'failed';
   code?: string;
   deleted?: Purged;
+  // A source cancelled after the switch-over: the camera back here (step 4
+  // Task 10: the copy back, move.return.start, copies into it).
+  camera?: string;
   endedAt: number;
 }
 export const TOMBSTONE_KEEP_MS = 7 * 86_400_000;
@@ -174,7 +177,7 @@ export class MoveJournal {
 
   // The tombstone of an ended move (written before its record is removed); old ones swept.
   bury(t: Omit<MoveTombstone, 'v' | 'endedAt'> & { endedAt?: number }): void {
-    const stone: MoveTombstone = { v: 1, moveId: t.moveId, role: t.role, phase: t.phase, ...(t.code ? { code: t.code } : {}), ...(t.deleted ? { deleted: t.deleted } : {}), endedAt: t.endedAt ?? this.now() };
+    const stone: MoveTombstone = { v: 1, moveId: t.moveId, role: t.role, phase: t.phase, ...(t.code ? { code: t.code } : {}), ...(t.deleted ? { deleted: t.deleted } : {}), ...(t.camera ? { camera: t.camera } : {}), endedAt: t.endedAt ?? this.now() };
     writePrivateJson(this.stonePath(t.moveId, t.role), stone, false);
     try {
       this.sweep();
