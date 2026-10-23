@@ -8,6 +8,7 @@ import { applyOverrides, getPath, planOverrides, rebuildWith, removeOverride, wr
 import { cameraPasswordEnv } from '../config/password-env';
 import type { MoveCancelArgs, MoveFinishArgs, MoveOfferArgs, MoveStartArgs } from '../fleet/command-args';
 import type { Done, Handler } from '../fleet/commands';
+import type { Config } from '../config/defaults';
 import type { SiteCa } from '../tls/ca';
 import { issueLeaf, leafOf, type Leaf } from '../tls/leaf';
 import type { PushResult } from '../tls/push';
@@ -17,6 +18,7 @@ import { mergeOutcome, outcomeOf, type ChunkKeep, type MoveOutcome } from './che
 import { moveSourceClient, sourceGet } from './evaluate';
 import { moveEnded, SWITCH_STEPS, type MoveJournal, type MoveRecord, type MoveTombstone, type SwitchStep } from './journal';
 import { OFFER_EXPIRY_MS } from './source';
+import { keepDaysOf } from './retention';
 import { removeLanded, type Purged } from './purge';
 import { unseal } from './seal';
 import { logger } from '../log';
@@ -37,6 +39,8 @@ export interface TargetDeps {
   journal: Pick<MoveJournal, 'load' | 'save' | 'active'> & Partial<Pick<MoveJournal, 'remove' | 'all' | 'bury' | 'ended'>>;
   audit: Pick<AuditLog, 'write'>;
   emit: (e: MoveEvent) => void;
+  // The retention in effect: finished and cancelled phases carry what ages out (keepDays); left out, they carry none.
+  retention?: () => Pick<Config['retention'], 'stillsDays' | 'previewsDays' | 'clipsDays' | 'eventsDays'>;
   ca: () => SiteCa | null;
   site: () => string | undefined;
   loaded: () => Loaded;
@@ -296,7 +300,7 @@ export class MoveTarget {
     fresh.endedAt ??= this.now();
     const totals = this.totals(fresh);
     // The end in the journal first (a restart in between does not resume it), then the event.
-    this.setPhase(fresh, 'finished');
+    this.setPhase(fresh, 'finished', this.keep());
     this.d.audit.write({
       action: 'move-done', category: ['configuration'], type: ['change'], outcome: 'success',
       user: 'cams-admin', camera: fresh.camera,
@@ -428,7 +432,7 @@ export class MoveTarget {
     const from = r.cancelledFrom ?? r.phase;
     this.dropKeys(r);
     r.endedAt ??= this.now();
-    this.setPhase(r, 'cancelled');
+    this.setPhase(r, 'cancelled', this.keep());
     this.d.audit.write({
       action: 'move-cancel', category: ['configuration'], type: ['change'], outcome: 'success',
       user: reason ? 'system' : 'cams-admin', camera: r.camera,
@@ -457,7 +461,12 @@ export class MoveTarget {
 
   private terminalEvent(id: string, phase: MoveTombstone['phase'], code?: string): void {
     if (phase === 'failed') this.d.emit({ kind: 'move.phase', moveId: id, role: 'target', phase: 'failed', ok: false, code: code ?? 'internal' });
-    else this.d.emit({ kind: 'move.phase', moveId: id, role: 'target', phase, ok: true });
+    else this.d.emit({ kind: 'move.phase', moveId: id, role: 'target', phase, ok: true, ...this.keep() });
+  }
+
+  private keep(): { keepDays?: number } {
+    const r = this.d.retention?.();
+    return r ? { keepDays: keepDaysOf(r) } : {};
   }
 
   // Offers never approved (final review 5): an opened move with no move.start

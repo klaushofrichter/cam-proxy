@@ -27,6 +27,7 @@ import { ManifestCache, manifestCacheDir } from '../src/moves/manifest-cache';
 import { landedLog, noteLanded, purgeExcept, removeImported } from '../src/moves/purge';
 import type { MoveOutcome } from '../src/moves/check';
 import { seal } from '../src/moves/seal';
+import { keepDaysOf } from '../src/moves/retention';
 import { MoveSource, type SourceDeps } from '../src/moves/source';
 import { MoveTarget, type TargetDeps } from '../src/moves/target';
 import { moveTokenGuard } from '../src/moves/token-guard';
@@ -41,7 +42,7 @@ import { fingerprintOf, siteCa, type SiteCa } from '../src/tls/ca';
 import type { Leaf } from '../src/tls/leaf';
 import type { PushResult } from '../src/tls/push';
 import { servedFingerprint } from '../src/tls/served';
-import { strict, why } from './helpers/contract';
+import { fixtures, strict, why } from './helpers/contract';
 import { startFakeAdmin, type FakeAdmin } from './helpers/fake-admin';
 import { startMultiProxy, startSims, type Sim } from './helpers/multi';
 import { freePort, until } from './helpers/proxy';
@@ -879,4 +880,69 @@ describe('cancel after switch-over (integration)', () => {
     expect(await done(fakeS, 'move.cancel', { v: 1, moveId: MOVE, role: 'source', expectedLeaf: targetLeaf })).toMatchObject({ status: 'ok' });
     expect(S.proxy.audit.list({ actions: ['move-cancel' as never], limit: 5 }).records).toHaveLength(1);
   }, 300_000);
+});
+
+describe('keepDays on the terminal phases (move step 4, Task 7)', () => {
+  const RET = { stillsDays: 3, previewsDays: 2, clipsDays: 14, eventsDays: 30 };
+  // The event as the strict contract sees it: wrapped in the vendored fixture's envelope.
+  const valid = (e: MoveEvent): void => {
+    const m = fixtures().find((x) => x.name === 'valid-event-move-phase-return-pending')!.f.message as { body: Record<string, unknown> };
+    const { kind, ...rest } = e as unknown as Record<string, unknown>;
+    const v = strict('event');
+    expect(v({ ...m, body: { proxyId: m.body.proxyId, connId: m.body.connId, kind, ...rest } }), why(v)).toBe(true);
+  };
+
+  it('keepDaysOf: the largest retention, at least 7, at most 3650', () => {
+    expect(keepDaysOf(RET)).toBe(30);
+    expect(keepDaysOf({ stillsDays: 1, previewsDays: 1, clipsDays: 1, eventsDays: 1 })).toBe(7);
+    expect(keepDaysOf({ stillsDays: 9999, previewsDays: 1, clipsDays: 1, eventsDays: 1 })).toBe(3650);
+  });
+
+  it('a target finish and its repeat carry keepDays, and the event is a valid contract event', async () => {
+    const u = targetUnit();
+    u.deps.retention = () => RET;
+    await copied(u);
+    await u.target.finish(finishArgs('target'));
+    const want = { kind: 'move.phase', moveId: MOVE, role: 'target', phase: 'finished', ok: true, keepDays: 30 };
+    expect(u.events.at(-1)).toEqual(want);
+    valid(u.events.at(-1)!);
+    await u.target.finish(finishArgs('target'));
+    expect(u.events.at(-1)).toEqual(want);
+    const again = new MoveTarget(u.deps);
+    await again.finish(finishArgs('target'));
+    expect(u.events.at(-1)).toEqual(want);
+  }, 60_000);
+
+  it('a target cancel carries keepDays, also from the tombstone', async () => {
+    const u = targetUnit();
+    u.deps.retention = () => RET;
+    await copied(u);
+    await u.target.cancel(cancelT('age-out'));
+    const want = { kind: 'move.phase', moveId: MOVE, role: 'target', phase: 'cancelled', ok: true, keepDays: 30 };
+    expect(u.events.at(-1)).toEqual(want);
+    await new MoveTarget(u.deps).cancel(cancelT('age-out'));
+    expect(u.events.at(-1)).toEqual(want);
+  }, 60_000);
+
+  it('a source finish and cancel carry keepDays, also from the tombstone', async () => {
+    const u = sourceUnit();
+    u.deps.retention = () => RET;
+    u.journal.save(sourceRecord());
+    await u.source.finish(finishArgs('source'));
+    const fin = { kind: 'move.phase', moveId: MOVE, role: 'source', phase: 'finished', ok: true, keepDays: 30 };
+    expect(u.events.at(-1)).toEqual(fin);
+    valid(u.events.at(-1)!);
+    await new MoveSource(u.deps).finish(finishArgs('source'));
+    expect(u.events.at(-1)).toEqual(fin);
+
+    const c = sourceUnit({ released: false });
+    c.deps.retention = () => RET;
+    c.journal.save(sourceRecord({ phase: 'opened', plan: null, expectedLeaf: undefined }));
+    await c.source.cancel({ v: 1, moveId: MOVE, role: 'source' });
+    const can = { kind: 'move.phase', moveId: MOVE, role: 'source', phase: 'cancelled', ok: true, keepDays: 30 };
+    expect(c.events.at(-1)).toEqual(can);
+    valid(c.events.at(-1)!);
+    await new MoveSource(c.deps).cancel({ v: 1, moveId: MOVE, role: 'source' });
+    expect(c.events.at(-1)).toEqual(can);
+  }, 60_000);
 });

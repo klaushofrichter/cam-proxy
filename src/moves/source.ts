@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import type { AuditLog } from '../audit/audit-log';
 import { activeCameraIds } from '../config/cameras';
 import type { CameraNode, Config } from '../config/defaults';
+import { keepDaysOf } from './retention';
 import { applyOverrides, planUnset, removeOverride, writeOverridesFile, type Loaded } from '../config/load';
 import { planProblem, type MoveAnswerArgs, type MoveBeginArgs, type MoveCancelArgs, type MoveFinishArgs, type MoveGoArgs, type MoveOpenArgs, type MoveReleaseArgs, type MoveTargetsArgs } from '../fleet/command-args';
 import type { Done, Handler } from '../fleet/commands';
@@ -28,6 +29,8 @@ export interface SourceDeps {
   journal: Pick<MoveJournal, 'load' | 'save' | 'remove' | 'all' | 'active' | 'bury' | 'ended' | 'failed'>;
   audit: Pick<AuditLog, 'write'>;
   emit: (e: MoveEvent) => void;
+  // The retention in effect: finished and cancelled phases carry what ages out (keepDays); left out, they carry none.
+  retention?: () => Pick<Config['retention'], 'stillsDays' | 'previewsDays' | 'clipsDays' | 'eventsDays'>;
   // The settings in effect (cameras, tls.site) and the loaded configuration (release writes `moved`).
   running: () => Config;
   loaded: () => Loaded;
@@ -259,7 +262,7 @@ export class MoveSource {
 
   private phaseEvent(r: MoveRecord, who?: Asker): void {
     if (r.phase === 'failed') return;
-    this.d.emit({ kind: 'move.phase', moveId: r.id, role: 'source', phase: r.phase, ok: true });
+    this.d.emit({ kind: 'move.phase', moveId: r.id, role: 'source', phase: r.phase, ok: true, ...(r.phase === 'finished' || r.phase === 'cancelled' ? this.keep() : {}) });
     this.d.audit.write({
       action: 'move-phase', category: ['configuration'], type: ['change'], outcome: 'success',
       user: who?.user ?? 'cams-admin', camera: r.camera,
@@ -614,7 +617,12 @@ export class MoveSource {
 
   private terminalEvent(id: string, phase: MoveTombstone['phase'], code?: string): void {
     if (phase === 'failed') this.d.emit({ kind: 'move.phase', moveId: id, role: 'source', phase: 'failed', ok: false, code: code ?? 'internal' });
-    else this.d.emit({ kind: 'move.phase', moveId: id, role: 'source', phase, ok: true });
+    else this.d.emit({ kind: 'move.phase', moveId: id, role: 'source', phase, ok: true, ...this.keep() });
+  }
+
+  private keep(): { keepDays?: number } {
+    const r = this.d.retention?.();
+    return r ? { keepDays: keepDaysOf(r) } : {};
   }
 
   // Offers never approved (final review 5): an opened move with no plan
