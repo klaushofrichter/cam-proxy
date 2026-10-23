@@ -293,16 +293,15 @@ describe('Copier', () => {
     const b = 'clips/cam9/2026/10/20/1210-1.mp4';
     const c = 'clips/cam9/2026/10/20/1220-1.mp4';
     const f = fakeSource({ [a]: 'clip-a', [b]: 'clip-b', [c]: 'clip-c' }, [{ id: `clips:${day(20)}`, files: [a, b, c] }]);
-    // b always answers with a wrong hash; c is gone at the source while the pass asks for it, back for the check.
+    // b always answers with a wrong hash; the target loses its copy of c (storage, say) before the check.
     f.corrupt.set(b, 100);
-    let firstC = true;
-    f.onFile = (p) => {
-      if (p !== c) return;
-      if (firstC) f.expired.add(c);
-      else f.expired.delete(c);
-      firstC = false;
-    };
     const u = unit(f);
+    const get = f.client.get;
+    let listings = 0;
+    f.client = { get: async (path, signal) => {
+      if (path === `/api/moves/${MOVE}/chunks/${encodeURIComponent(`clips:${day(20)}`)}` && ++listings === 2) rmSync(join(u.dataDir, c));
+      return get(path, signal);
+    } };
     await u.run();
     const fetched = (p: string) => fileRequests(f).filter((x) => x === p).length;
     expect(fetched(a)).toBe(1);
@@ -323,13 +322,58 @@ describe('Copier', () => {
     const { files, chunks } = threeDays();
     const f = fakeSource(files, chunks);
     const rel = 'clips/cam9/2026/10/19/1200-1.mp4';
-    f.onFile = (p) => void (p === rel && f.expired.add(rel) && delete f.files[rel]);
+    // The source's retention removes it; the source's manifest cache still lists it (moves-api ManifestCache).
+    f.onFile = (p) => void (p === rel && f.expired.add(rel));
     const u = unit(f);
     await u.run();
+    // Reported expired, not fetched again in a recovery.
     expect(fileRequests(f).filter((p) => p === rel)).toHaveLength(1);
     expect(readChunkPart(u.dataDir, MOVE, `clips:${day(19)}`)?.xf).toEqual([rel]);
     expect(u.phases).toMatchObject([{ phase: 'copied', check: { complete: true, missing: {}, recovered: {}, failed: {}, expired: { clips: 1 } } }]);
     expect(u.audits.filter((x) => x.action === 'move-check')).toMatchObject([{ outcome: 'success' }]);
+  });
+
+  it("the target's own still pack of the overlap minute counts as present, and the source keeps its own", async () => {
+    const own = 'stills/cam9/2026/10/20/1200.pack';
+    const other = 'stills/cam9/2026/10/20/1201.pack';
+    const f = fakeSource({ [own]: 'from-source', [other]: 'other-minute' }, [{ id: `stills:${day(20)}`, files: [own, other] }]);
+    const u = unit(f);
+    mkdirSync(join(u.dataDir, 'stills/cam9/2026/10/20'), { recursive: true });
+    writeFileSync(join(u.dataDir, own), 'target-own');
+    // The target loses its copy of the other minute before the check: the recovery runs with `only` = that file.
+    const get = f.client.get;
+    let listings = 0;
+    f.client = { get: async (path, signal) => {
+      if (path === `/api/moves/${MOVE}/chunks/${encodeURIComponent(`stills:${day(20)}`)}` && ++listings === 2) rmSync(join(u.dataDir, other));
+      return get(path, signal);
+    } };
+    const cp = new Copier(u.deps, u.journal.load(MOVE)!);
+    await cp.run(new AbortController().signal);
+    expect(readFileSync(join(u.dataDir, own), 'utf8')).toBe('target-own');
+    expect(fileRequests(f).filter((p) => p === own)).toHaveLength(0);
+    expect(u.phases.at(-1)?.check).toEqual({ complete: true, missing: {}, recovered: { stills: 1 }, failed: {}, expired: {} });
+    // Not verified (the recovery's files outside `only` stay as they were), kept at the source.
+    expect(readChunkPart(u.dataDir, MOVE, `stills:${day(20)}`)?.of).toEqual([own]);
+    expect(u.rec().chunks[`stills:${day(20)}`]).toMatchObject({ v: 1, s: 1 });
+    const { perChunk } = await cp.completeness();
+    expect(perChunk.get(`stills:${day(20)}`)).toEqual({ missing: [], failed: [], own: [own] });
+  });
+
+  it('a chunk the source no longer lists at the check is kept whole and not complete', async () => {
+    const { files, chunks } = threeDays();
+    const f = fakeSource(files, chunks);
+    const id = `clips:${day(19)}`;
+    const get = f.client.get;
+    let listings = 0;
+    f.client = { get: async (path, signal) => {
+      if (path === `/api/moves/${MOVE}/chunks/${encodeURIComponent(id)}` && ++listings >= 2) return { status: 404, body: (async function* () { yield Buffer.from('{"error":"unknown_chunk"}'); })() };
+      return get(path, signal);
+    } };
+    const u = unit(f);
+    const cp = new Copier(u.deps, u.journal.load(MOVE)!);
+    await cp.run(new AbortController().signal);
+    expect(u.phases.at(-1)?.check).toEqual({ complete: false, missing: { clips: 1 }, recovered: {}, failed: {}, expired: {} });
+    expect((await cp.completeness()).perChunk.get(id)).toEqual({ missing: [], failed: [], all: true });
   });
 
   it('a chunk whose rows did not import counts its rows as failed', async () => {
@@ -386,8 +430,8 @@ describe('Copier', () => {
     const { files, chunks } = threeDays();
     const f = fakeSource(files, chunks);
     const rel = 'clips/cam9/2026/10/19/1200-1.mp4';
-    // Listed in the chunk manifest, removed by the source's retention before it was fetched (no longer listed).
-    f.onFile = (p) => void (p === rel && f.expired.add(rel) && delete f.files[rel]);
+    // Listed in the chunk manifest, removed by the source's retention before it was fetched.
+    f.onFile = (p) => void (p === rel && f.expired.add(rel));
     const u = unit(f);
     await u.run();
     expect(fileRequests(f).filter((p) => p === rel)).toHaveLength(1);

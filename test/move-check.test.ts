@@ -20,6 +20,11 @@ describe('compareChunk', () => {
       .toEqual({ missing: [], failed: [], expired: ['y'] });
   });
 
+  it('a file still listed (the source answers from its manifest cache) but expired at the copy is expired, not missing', () => {
+    expect(compareChunk({ kind: 'clips', listed: [f('a'), f('x')], verified: new Set(['a']), failed: new Set(), expired: new Set(['x']) }))
+      .toEqual({ missing: [], failed: [], expired: ['x'] });
+  });
+
   it('a failed file no longer listed stays failed', () => {
     expect(compareChunk({ kind: 'clips', listed: [], verified: new Set(), failed: new Set(['b']), expired: new Set() }))
       .toEqual({ missing: [], failed: ['b'], expired: [] });

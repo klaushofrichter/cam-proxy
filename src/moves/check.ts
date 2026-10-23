@@ -15,9 +15,9 @@ export interface ManifestFile { path: string; size: number; sha256: string }
 // while they were copied).
 export interface ChunkTally { kind: MoveKind; listed: ManifestFile[]; verified: Set<string>; failed: Set<string>; expired: Set<string> }
 
-// Listed and neither verified nor failed → missing; failed (not verified) →
-// failed, listed or not; expired → those no longer listed (one listed again
-// is missing, a later pass may fetch it).
+// Not verified: failed → failed, listed or not; expired → expired, listed or
+// not (the source answers a relist from its manifest cache, so a file its
+// retention removed stays listed); the other listed ones → missing.
 export function compareChunk(t: ChunkTally): { missing: string[]; failed: string[]; expired: string[] } {
   const listed = new Set(t.listed.map((f) => f.path));
   const missing: string[] = [];
@@ -25,10 +25,10 @@ export function compareChunk(t: ChunkTally): { missing: string[]; failed: string
   for (const p of listed) {
     if (t.verified.has(p)) continue;
     if (t.failed.has(p)) failed.push(p);
-    else missing.push(p);
+    else if (!t.expired.has(p)) missing.push(p);
   }
   for (const p of t.failed) if (!listed.has(p) && !t.verified.has(p)) failed.push(p);
-  const expired = [...t.expired].filter((p) => !listed.has(p));
+  const expired = [...t.expired].filter((p) => !t.verified.has(p) && !t.failed.has(p));
   return { missing, failed, expired };
 }
 
