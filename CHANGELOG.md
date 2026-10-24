@@ -2,12 +2,18 @@
 
 ## Unreleased
 
+## v2026.10.23.2
+
 - Camera moves check that the copy is complete before they end: files still missing get one more try; failed files and files the source's retention removed are counted and shown (audit record `move-check`).
 - The old proxy now deletes only what the new one verified. Files that failed or went missing, Archive items that were not copied (marked "Kept here" with the reason) and the overlap minute's still stay and age out with retention; Archive items without an expiry stay until you delete them. If the report doesn't arrive, it keeps every Archive item and deletes the rest (`move-outcome-refused`).
 - Cancelling a move after the switch-over now brings the camera back at once and then copies what the new proxy recorded back to the original (`move-return`). The copy back is not cancellable, waits when the original is nearly full or just deleted content for space (`move-paused`), retries on its own, and Give up in cams-admin deletes nothing. The choice "delete what was copied" no longer applies after the switch-over.
 - A finished or cancelled move tells cams-admin how long what remains takes to age out (`keepDays`).
 - An Archive item has a new field `move` (also in its metadata): after a camera move it says why the item is here (moved from a proxy, or kept because the move could not copy it), `null` otherwise.
 - Camera moves copy Archive items first (newest first), then the rest newest day first; with "copy as much as fits" the Archive counts first, and an Archive day that doesn't fit is skipped (it stays on the source) together with every chunk after it.
+- Security update of body-parser (GHSA-27r3-jxmh-p828).
+
+## v2026.10.23.1
+
 - Camera moves can be started by cams-admin (new command `move.begin`, under `move.send`). With bounds from cams-admin, the source approves its own offer when the target's answer fits them (estimate within the time budget, the space choice possible); otherwise the offer waits on the panel with the reason (`move-auto-approve` in the audit log).
 
 ## v2026.10.22.1
