@@ -447,9 +447,20 @@ world('a cancel after the switch-over copies the target\'s capture back', () => 
     expect(events(fakeS, 'move.phase').find((e) => e.moveId === returnId && e.phase === 'copied')).toMatchObject({ role: 'target', check: { complete: true } });
 
     // 5. The finish: the original (target role) first, then the new proxy (source role).
+    // cam-sim keeps the target recording stills while it has the camera; on a slow run the switch-over and the
+    // cancel fall in different minutes, and those finished minutes go back too. So: count what the target deletes.
+    const tStills = join(dataOf(T), 'stills', 'cam3');
+    const stillFiles = () => (existsSync(tStills) ? (readdirSync(tStills, { recursive: true }) as string[]).filter((f) => f.endsWith('.pack')).map((f) => join(tStills, f)) : []);
+    const tBefore = stillFiles();
     await run(fakeS, 'move.finish', { v: 1, moveId: returnId, role: 'target', abandoned: false, return: true });
     const fin = await run(fakeT, 'move.finish', { v: 1, moveId: returnId, role: 'source', abandoned: false, return: true });
-    expect(fin.deleted.stills.files).toBe(4 + 2); // the move's 4 imported stills, the 2 captured ones
+    const tLeft = new Set(stillFiles());
+    const tDeleted = tBefore.filter((f) => !tLeft.has(f));
+    expect(fin.deleted.stills.files).toBe(tDeleted.length);
+    expect(tDeleted.length).toBeGreaterThanOrEqual(4 + 2); // the move's 4 imported stills, the 2 captured ones (and any live capture)
+    for (const p of ownStills) expect(tDeleted, p).toContain(p);
+    // Only what the original holds (verified) was deleted.
+    for (const f of tDeleted) expect(existsSync(f.replace(dataOf(T), dataOf(S))), f).toBe(true);
     expect(fin.deleted.archive.files).toBe(1);
     for (const fake of [fakeS, fakeT]) for (const e of fake.events().filter((x) => String(bodyOf(x).kind).startsWith('move.'))) expect(strict('event')(e.msg), why(strict('event'))).toBe(true);
 
