@@ -280,35 +280,38 @@ async function probe(source: MoveOfferArgs['source'], moveId: string, token: str
 // client and again after a failure. No answer within `idleMs` ends with an
 // error; once the answer starts, the reader watches its own idle window. Nothing here puts the token in an error.
 export interface SourceAnswer { status: number; body: AsyncIterable<Buffer> }
-export function moveSourceClient(source: MoveOfferArgs['source'], token: string, o: { idleMs?: number } = {}): { get: (path: string, signal: AbortSignal) => Promise<SourceAnswer> } {
+// `put` (step 4 Task 6): a JSON body (the outcome report), the same pinned CA and token.
+export function moveSourceClient(source: MoveOfferArgs['source'], token: string, o: { idleMs?: number } = {}): { get: (path: string, signal: AbortSignal) => Promise<SourceAnswer>; put: (path: string, body: unknown, signal: AbortSignal) => Promise<SourceAnswer> } {
   let ca: Promise<string | undefined | null> | null = null;
+  const pinned = async (): Promise<string | undefined> => {
+    const pending = (ca ??= pinnedCa(source));
+    let pem: string | undefined | null;
+    try {
+      pem = await pending;
+    } catch {
+      ca = null;
+      throw new Error('source not reachable');
+    }
+    if (pem === null) {
+      ca = null;
+      throw new Error('the source CA is not the pinned one');
+    }
+    return pem;
+  };
   return {
-    get: async (path, signal) => {
-      const pending = (ca ??= pinnedCa(source));
-      let pem: string | undefined | null;
-      try {
-        pem = await pending;
-      } catch {
-        ca = null;
-        throw new Error('source not reachable');
-      }
-      if (pem === null) {
-        ca = null;
-        throw new Error('the source CA is not the pinned one');
-      }
-      return streamGet(source, path, token, pem, signal, o.idleMs ?? 60_000);
-    },
+    get: async (path, signal) => streamGet(source, path, token, await pinned(), signal, o.idleMs ?? 60_000),
+    put: async (path, body, signal) => streamGet(source, path, token, await pinned(), signal, o.idleMs ?? 60_000, Buffer.from(JSON.stringify(body))),
   };
 }
 
-function streamGet(source: MoveOfferArgs['source'], path: string, token: string, ca: string | undefined, signal: AbortSignal, idleMs: number): Promise<SourceAnswer> {
+function streamGet(source: MoveOfferArgs['source'], path: string, token: string, ca: string | undefined, signal: AbortSignal, idleMs: number, json?: Buffer): Promise<SourceAnswer> {
   const u = new URL(source.url);
   const https = u.protocol === 'https:';
   return new Promise((resolve, reject) => {
     const req = (https ? httpsRequest : httpRequest)(
       {
-        hostname: u.hostname.replace(/^\[(.*)\]$/, '$1'), port: u.port || (https ? 443 : 80), path, method: 'GET', signal,
-        headers: { Authorization: `Bearer ${token}` },
+        hostname: u.hostname.replace(/^\[(.*)\]$/, '$1'), port: u.port || (https ? 443 : 80), path, method: json ? 'PUT' : 'GET', signal,
+        headers: { Authorization: `Bearer ${token}`, ...(json ? { 'Content-Type': 'application/json', 'Content-Length': String(json.length) } : {}) },
         ...(https ? { ca, servername: source.tlsServername, rejectUnauthorized: true } : {}),
       },
       (res) => {
@@ -320,6 +323,6 @@ function streamGet(source: MoveOfferArgs['source'], path: string, token: string,
     // Until the answer starts.
     req.setTimeout(idleMs, () => req.destroy(new Error('source stalled')));
     req.once('error', () => reject(new Error(signal.aborted ? 'aborted' : 'source not reachable')));
-    req.end();
+    req.end(json);
   });
 }

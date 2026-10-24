@@ -14,9 +14,17 @@ import { isMoveId } from './journal';
 // target id and the row's natural key, per table (a delete-cancel removes a
 // row only when its key still matches, purge.ts). Removed with the move
 // (finish, cancel) and by the journal's sweep when no record names it.
+// `ff`: every file of the chunk that failed its checks 3 times (the audit keeps
+// 50 of them); `xf`: the files the source's retention removed while they were
+// copied (the completeness check, check.ts, reports both and retries neither);
+// `of`: the files the target holds its own file of under the same name (the
+// P12 overlap still pack): present for the check, kept at the source.
 export interface ChunkPart {
   vf?: string[];
   imported?: ImportMap;
+  ff?: string[];
+  xf?: string[];
+  of?: string[];
 }
 
 const CHUNK = /^(stills|clips|events|checks|archive):\d{4}-\d{2}-\d{2}$/;

@@ -69,6 +69,7 @@ import { OverridesBackups } from './fleet/backups';
 import { configHandlers, type ConfigCommandDeps } from './fleet/config-commands';
 import { cameraHandlers } from './fleet/camera-commands';
 import { moveHandlers } from './moves/commands';
+import { MoveReturns } from './moves/returns';
 import { MoveJournal } from './moves/journal';
 import { movesSourceApi, refreshManifest } from './api/moves-api';
 import { movesControlApi } from './api/moves-control-api';
@@ -76,7 +77,8 @@ import { ManifestCache } from './moves/manifest-cache';
 import { MoveSource } from './moves/source';
 import { MoveTarget } from './moves/target';
 import { CopyRunner } from './moves/copier';
-import { purgeCamera, removeImported } from './moves/purge';
+import { capturedMark } from './moves/captured';
+import { purgeExcept, removeImported } from './moves/purge';
 import { cameraPasswordStore } from './config/camera-passwords';
 import { verifyFtp } from './fleet/camera-commands';
 import { availableParallelism, loadavg } from 'os';
@@ -937,7 +939,10 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   app.use(limiter(1200, (req) => isImage(req) || req.path.startsWith('/api/moves/')));
   // Images: 6000 per minute per camera (a timeline per camera loads its own sprites; spec §6.1, Ruling P1-16).
   app.use(rateLimit({ windowMs: 60_000, limit: () => 6000 * Math.max(1, cams.size), skip: (req) => !isImage(req), standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } }));
-  app.use(express.json({ limit: '64kb' }));
+  // Not for the move endpoints: their one body (the outcome, 1 MiB) is read
+  // by their router, after the move-token guard (movesSourceApi).
+  const json64k = express.json({ limit: '64kb' });
+  app.use((req, res, next) => (req.path.startsWith('/api/moves/') ? next() : json64k(req, res, next)));
   // startedAt tells a new process apart (the Maintenance page's restart waits for it).
   app.get('/health', (_req, res) => void res.json({ ok: true, version: VERSION, startedAt }));
   app.get('/metrics', async (_req, res) => {
@@ -988,6 +993,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     journal: moveJournal,
     audit,
     emit: (e) => camsAdmin.emitEvent(e),
+    retention: () => running.retention,
     running: () => running,
     loaded: () => loaded,
     setLoaded: (l) => setLoaded(l),
@@ -1000,7 +1006,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     end: {
       ...moveEnd,
       dropManifests: (id) => manifestCache.forget(id),
-      purge: (cam) => purgeCamera({ catalog, dataDir: running.server.dataDir, storage, archive }, cam),
+      purge: (cam, o) => purgeExcept({ catalog, dataDir: running.server.dataDir, storage, archive }, cam, o),
       // The source's own stored leaf, pushed like "Push now"; then the expected
       // leaf's check reads what the camera serves (the client trusts it again).
       pushOwnLeaf: async (cam) => {
@@ -1021,6 +1027,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     journal: moveJournal,
     audit,
     emit: (e) => camsAdmin.emitEvent(e),
+    retention: () => running.retention,
     ca: () => ca,
     site: () => running.tls.site,
     loaded: () => loaded,
@@ -1039,7 +1046,12 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     stopCopy: (id) => moveCopier.stop(id),
     proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
     timing: opts.moves,
-    end: { ...moveEnd, dataDir: running.server.dataDir, removeImported: (r) => removeImported({ catalog, dataDir: running.server.dataDir, storage }, r) },
+    end: { ...moveEnd, dataDir: running.server.dataDir, removeImported: (r) => removeImported({ catalog, dataDir: running.server.dataDir, storage }, r), captured: (cam, now) => capturedMark(catalog, cam, now) },
+  });
+  // When storage last deleted content for a cap or the budget: a copy back waits an hour after it (step 4 Task 10).
+  let storageEvictedAt: number | null = null;
+  storage.on('run', (run: { at: number; reason: string[] }) => {
+    if (run.reason.includes('cap') || run.reason.includes('budget') || run.reason.includes('budget_unreachable')) storageEvictedAt = run.at;
   });
   // The target's copier (camera-move plan Task 9): the camera's old content
   // from the source, after the switch-over; waits while storage is paused.
@@ -1055,10 +1067,28 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       loaded: () => loaded,
       usage: () => { const u = storage.usage(); return { stills: u.stills.bytes, previews: u.previews.bytes, clips: u.clips.bytes, used: u.used, budget: u.budget }; },
       freeBytes: () => storage.diskSpace().free,
+      evictedAt: () => storageEvictedAt,
     },
     noteWritten: (kind, bytes, cam) => storage.noteWritten(kind, bytes, 1, { growth: false, cam }),
     setPhase: (r, phase, o) => moveTarget.setPhase(r, phase, o),
+    // A return waiting for room (step 4 Task 10): move.phase copying no_space.
+    notePaused: (r, paused) => moveTarget.notePaused(r, paused),
     proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
+  });
+  // The copy back after a cancel after the switch-over (step 4 Task 9): the
+  // return's source here (the new proxy), its target on the original (Task 10).
+  const moveReturns = new MoveReturns({
+    journal: moveJournal,
+    audit,
+    emit: (e) => camsAdmin.emitEvent(e),
+    inventory: moveInventory,
+    proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
+    // The original's side (Task 10): the same copier, copy only.
+    copy: moveCopier,
+    setPhase: (r, phase, o) => moveTarget.setPhase(r, phase, o),
+    // The finish (Task 11): storage recounted after the delete, keepDays on finished.
+    storage,
+    retention: () => running.retention,
   });
   // After every welcome: the open move's phase again (B2), and an approval not acted on yet (B7).
   camsAdmin.onWelcome(() => {
@@ -1194,6 +1224,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       audit,
       source: moveSource,
       target: moveTarget,
+      returns: moveReturns,
       proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
       evaluate: {
         receiveAllowed: () => commandPolicy.effective().allow.includes('move.receive'),
@@ -1385,6 +1416,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       // and a cancel still giving a camera back to this proxy.
       moveTarget.resume();
       moveSource.resume();
+      // A copy back this proxy receives (step 4 Task 10).
+      moveReturns.resume();
       // Offers never approved close on their own on both sides (final review 5); old tombstones go.
       const expireOffers = () => {
         try {
@@ -1446,6 +1479,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       clearInterval(moveExpiry);
       moveSource.stop();
       await moveTarget.stopAll();
+      // The copiers of returns too (MoveTarget did not start them), waited for at most 3 s.
+      await moveCopier.stopAll();
       clearInterval(sweeper);
       sse.closeAll();
       storage.stop();

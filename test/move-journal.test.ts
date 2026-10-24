@@ -172,6 +172,44 @@ describe('move journal', () => {
     expect(j.load('m1')).not.toBeNull();
   });
 
+  it('a source cancel\'s tombstone naming the camera waits for its copy back, then 7 days from the return\'s end (step 4 Task 11)', () => {
+    const d = dir();
+    let now = 10 * 86_400_000;
+    const j = new MoveJournal(d, undefined, { now: () => now });
+    j.bury({ moveId: 'm1', role: 'source', phase: 'cancelled', camera: 'cam1' });
+    j.bury({ moveId: 'm2', role: 'source', phase: 'cancelled' });
+    now += 30 * 86_400_000;
+    j.sweep();
+    expect(j.ended('m1', 'source')).toMatchObject({ camera: 'cam1' });
+    expect(j.ended('m2', 'source')).toBeNull();
+    // The return finished: marked returned, 7 days from then.
+    j.bury({ moveId: 'm1', role: 'source', phase: 'cancelled', camera: 'cam1', returned: true });
+    expect(j.ended('m1', 'source')).toMatchObject({ camera: 'cam1', returned: true, endedAt: now });
+    now += 7 * 86_400_000 + 1;
+    expect(j.ended('m1', 'source')).toBeNull();
+    // Never for ever: a copy back never started is let go after RETURN_WAIT_MS.
+    j.bury({ moveId: 'm3', role: 'source', phase: 'cancelled', camera: 'cam1' });
+    now += 366 * 86_400_000;
+    j.sweep();
+    expect(readdirSync(d).filter((f) => f.endsWith('.ended.json'))).toEqual([]);
+  });
+
+  it('a cancelled target record waiting for the copy back (returnPending) is active and keeps its chunk parts (step 4 Task 8)', () => {
+    const d = dir();
+    const j = new MoveJournal(d);
+    const captured = { at: 5000, maxIds: { clips: 3, events: 2, analyses: 0, still_checks: 0, archive: 1 } };
+    j.save(rec('m1', { phase: 'cancelled', returnPending: true, captured }));
+    j.save(rec('m2', { phase: 'cancelled' }));
+    expect(j.load('m1')).toMatchObject({ returnPending: true, captured });
+    // Busy (one move per proxy) until the return is checked; not an open phase for the welcome re-emit.
+    expect(j.active().map((r) => r.id)).toEqual(['m1']);
+    expect(j.currentPhase()).toBeNull();
+    j.bury({ moveId: 'm1', role: 'target', phase: 'cancelled' });
+    mkdirSync(join(d, 'm1.chunks'));
+    j.sweep();
+    expect(existsSync(join(d, 'm1.chunks'))).toBe(true);
+  });
+
   it('failed() lists the records of failed moves with their code, for the welcome re-emit (final review 4)', () => {
     const j = new MoveJournal(dir());
     j.save(rec('m1', { phase: 'failed', failure: 'token_address', role: 'source' }));

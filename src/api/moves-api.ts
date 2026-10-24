@@ -4,8 +4,10 @@ import { rateLimit } from 'express-rate-limit';
 import { lstatSync, realpathSync } from 'fs';
 import { join, resolve, sep } from 'path';
 import type { AuditLog } from '../audit/audit-log';
+import { capturedFilter } from '../moves/captured';
+import { mergeOutcome, OUTCOME_BYTES_MAX, parseOutcome } from '../moves/check';
 import { logger } from '../log';
-import { chunkManifest, chunkRows, CONTENT_FOLDERS, listChunks, parseChunkId, type InventoryDeps, type ManifestFile } from '../moves/inventory';
+import { chunkManifest, chunkRows, CONTENT_FOLDERS, listChunks, parseChunkId, type InventoryDeps, type ItemFilter, type ManifestFile } from '../moves/inventory';
 import type { MoveJournal, MoveRecord } from '../moves/journal';
 import { ManifestCache } from '../moves/manifest-cache';
 import { seal } from '../moves/seal';
@@ -100,6 +102,28 @@ export function movesSourceApi(d: MovesSourceDeps): express.Router {
     return id;
   };
 
+  // A return (step 4 Task 9) serves only what this proxy captured itself: one
+  // filter per request, from the cancelled move's kept record; undefined for
+  // a move; null (409 not_ready) when that record is gone or has no high water.
+  const filterOf = (r: MoveRecord): ItemFilter | undefined | null => {
+    if (!r.returnOf) return undefined;
+    const c = d.journal.load(r.returnOf);
+    return c && c.role === 'target' && c.camera === r.camera && c.captured ? capturedFilter(d.inventory.dataDir, c) : null;
+  };
+
+  // A return's chunk listing the original fetched (Task 11 review M1): noted
+  // on the record once; the finish deletes only items of chunks noted here.
+  const noteServed = (id: string, chunkId: string): void => {
+    try {
+      const fresh = d.journal.load(id);
+      if (!fresh || fresh.role !== 'source' || !fresh.returnOf || fresh.served?.includes(chunkId)) return;
+      fresh.served = [...(fresh.served ?? []), chunkId];
+      d.journal.save(fresh);
+    } catch (err) {
+      logger.warn({ moveId: id, chunkId, code: (err as NodeJS.ErrnoException).code ?? 'error' }, 'move_return_served_not_noted');
+    }
+  };
+
   // Counted before the guard, uncounted again when the request passed it.
   const refusedLimit = rateLimit({
     windowMs: 60_000, limit: d.refusedPerMinute ?? 300, standardHeaders: 'draft-8', legacyHeaders: false,
@@ -141,6 +165,7 @@ export function movesSourceApi(d: MovesSourceDeps): express.Router {
     const chunkId = chunkOf(req, res);
     if (!chunkId) return;
     const r = recordOf(res);
+    if (r.returnOf) noteServed(r.id, chunkId);
     let hit;
     try {
       hit = cache.get(r.id, chunkId);
@@ -152,8 +177,10 @@ export function movesSourceApi(d: MovesSourceDeps): express.Router {
     const key = `${r.id}|${chunkId}`;
     let p = inflight.get(key);
     if (!p) {
+      const filter = filterOf(r);
+      if (filter === null) return notReady(res);
       const refreshedAt = r.manifestRefreshedAt;
-      p = chunkManifest(d.inventory, r.camera, chunkId)
+      p = chunkManifest(d.inventory, r.camera, chunkId, { filter })
         .then((m) => {
           // Cache it (P5), unless the chunk list was refreshed meanwhile.
           try {
@@ -179,7 +206,9 @@ export function movesSourceApi(d: MovesSourceDeps): express.Router {
   router.get('/moves/:id/chunks/:chunkId/rows', busyGate, (req, res) => {
     const chunkId = chunkOf(req, res);
     if (!chunkId) return;
-    res.json(chunkRows(d.inventory, recordOf(res).camera, chunkId));
+    const filter = filterOf(recordOf(res));
+    if (filter === null) return notReady(res);
+    res.json(chunkRows(d.inventory, recordOf(res).camera, chunkId, filter));
   });
 
   // A file of a chunk whose manifest the target has (Range via sendFileOr).
@@ -221,6 +250,28 @@ export function movesSourceApi(d: MovesSourceDeps): express.Router {
     } finally {
       plain.fill(0);
     }
+  });
+
+  // The receiving side's outcome (step 4 Task 6, ruling 4): what this proxy
+  // keeps at move.finish. Only after the guard is a body read (1 MiB at
+  // most); a report can only make the source keep more (check.ts
+  // parseOutcome, mergeOutcome; Review Focus 5). Once the move ended the guard
+  // refuses the token; a record in its last phase answers 409.
+  const outcomeBody = express.json({ limit: OUTCOME_BYTES_MAX });
+  router.put('/moves/:id/outcome', (req, res, next) => outcomeBody(req, res, (err?: unknown) => {
+    if (!err) return next();
+    const status = (err as { status?: number }).status;
+    if (status === 413) return void res.status(413).json({ error: 'too_large' });
+    bad(res, 'keep');
+  }), (req, res) => {
+    const r = d.journal.load(recordOf(res).id) ?? recordOf(res);
+    if (r.phase === 'finished' || r.phase === 'cancelled' || r.phase === 'failed') return void res.status(409).json({ error: 'wrong_phase' });
+    const o = parseOutcome(r.camera, req.body);
+    if (!o) return bad(res, 'keep');
+    mergeOutcome(r, o);
+    d.journal.save(r);
+    logger.info({ moveId: r.id, chunks: Object.keys(o.keep).length }, 'move_outcome_taken');
+    res.status(204).end();
   });
 
   // Nothing under /moves reaches the client APIs.

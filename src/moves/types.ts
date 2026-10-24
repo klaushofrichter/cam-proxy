@@ -7,6 +7,11 @@ export type MoveRole = 'source' | 'target';
 // `space`: what happens when the content does not fit the target's disk.
 export type MoveSpacePlan = 'all' | 'omit' | 'fit' | 'retention';
 export type MoveCopied = 'delete' | 'age-out';
+// The completeness check of a move (contract move.phase check): file counts per kind.
+export type CheckCounts = Partial<Record<MoveKind, number>>;
+export interface MoveCheck { complete: boolean; missing: CheckCounts; recovered: CheckCounts; failed: CheckCounts; expired: CheckCounts }
+// What the sending side keeps after the move: chunk id -> dataDir-relative paths, or every file of the chunk.
+export type KeepList = Record<string, string[] | 'all'>
 export type MovePhaseName = 'opened' | 'switching' | 'switched' | 'released' | 'copying' | 'copied' | 'finished' | 'cancelled' | 'failed';
 export type ChunkState = 'pending' | 'copied' | 'verified' | 'skipped' | 'failed';
 export type MoveReason = 'moves_not_allowed' | 'camera_unreachable' | 'camera_limit' | 'id_taken' | 'busy' | 'incompatible' | 'no_site_ca' | 'ca_does_not_cover_camera' | 'external_cert' | 'other_account' | 'target_offline' | 'not_routed' | 'host_overridden' | 'target_failed' | 'offer_expired' | 'not_registered' | 'internal';
@@ -83,5 +88,5 @@ export type MoveEvent =
   | { kind: 'move.cancel'; moveId: string; copied: MoveCopied }
   // A failed phase carries a code (the contract requires it); the others may.
   | { kind: 'move.phase'; moveId: string; role: MoveRole; phase: 'failed'; ok: false; code: string; detail?: string }
-  | { kind: 'move.phase'; moveId: string; role: MoveRole; phase: Exclude<MovePhaseName, 'failed'>; ok: boolean; code?: string; detail?: string }
+  | { kind: 'move.phase'; moveId: string; role: MoveRole; phase: Exclude<MovePhaseName, 'failed'>; ok: boolean; code?: string; detail?: string; check?: MoveCheck; keepDays?: number; returnPending?: boolean }
   | { kind: 'move.progress'; moveId: string; chunks: ChunkProgress[]; bytesDone: number; bytesTotal: number; rateBps: number; etaS: number };

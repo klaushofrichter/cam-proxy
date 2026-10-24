@@ -1,5 +1,5 @@
 import type { ArchiveRow } from '../catalog/archive';
-import type { Snapshot } from './metadata';
+import type { ArchiveMoveNote, Snapshot } from './metadata';
 
 // The API's shapes of a row (docs/archive.md §1, §4): the item, and the
 // metadata (the item without urls plus the snapshot taken when archived).
@@ -25,6 +25,7 @@ export interface ArchiveItem {
   found: string[];
   thumbnail: { from: string; at: number | null };
   createdBy: string;
+  move: ArchiveMoveNote | null;
   urls: { video: string; thumbnail: string; metadata: string };
 }
 
@@ -40,6 +41,31 @@ export const snapshotOf = (row: ArchiveRow): Partial<Snapshot> => {
   const v = parseJson(row.metadata);
   return v && typeof v === 'object' ? (v as Partial<Snapshot>) : {};
 };
+
+const peer = (v: unknown): { proxyId: string; name: string } | undefined => {
+  const p = v as { proxyId?: unknown; name?: unknown } | null;
+  return p && typeof p === 'object' && typeof p.proxyId === 'string' && typeof p.name === 'string' ? { proxyId: p.proxyId, name: p.name } : undefined;
+};
+const REASONS = ['failed', 'missing', 'not_copied'] as const;
+// The snapshot's move note, or null when absent or malformed.
+export function moveNoteOf(snap: Partial<Snapshot>): ArchiveMoveNote | null {
+  const m = snap.move as Partial<Record<keyof ArchiveMoveNote, unknown>> | undefined;
+  if (!m || typeof m !== 'object' || typeof m.moveId !== 'string' || !m.moveId || typeof m.at !== 'number' || !Number.isFinite(m.at)) return null;
+  const out: ArchiveMoveNote = { moveId: m.moveId, at: m.at };
+  const from = peer(m.from);
+  const to = peer(m.to);
+  if (from) out.from = from;
+  if (to) out.to = to;
+  if (m.kept === true) out.kept = true;
+  if (typeof m.reason === 'string' && (REASONS as readonly string[]).includes(m.reason)) out.reason = m.reason as ArchiveMoveNote['reason'];
+  return out;
+}
+// The metadata column with the note set; the rest of the snapshot stays.
+export function withMoveNote(metadata: string, note: ArchiveMoveNote): string {
+  const v = parseJson(metadata);
+  const base = v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+  return JSON.stringify({ ...base, move: note });
+}
 
 export function itemJson(row: ArchiveRow): ArchiveItem {
   const snap = snapshotOf(row);
@@ -64,6 +90,7 @@ export function itemJson(row: ArchiveRow): ArchiveItem {
     found: strings(snap.found),
     thumbnail: { from: row.thumb_from, at: row.thumb_at },
     createdBy: row.created_by,
+    move: moveNoteOf(snap),
     urls: { video: `${base}/video`, thumbnail: `${base}/thumbnail`, metadata: `${base}/metadata` },
   };
 }

@@ -1,0 +1,35 @@
+{
+  "$note": "the completeness check: counts of files per kind (a row that could not be imported counts as failed)",
+  "schema": "event",
+  "message": {
+    "v": 1,
+    "type": "event",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "kind": "move.phase",
+      "moveId": "mv_0123456789ABCDEFGHJK",
+      "role": "target",
+      "phase": "copied",
+      "ok": false,
+      "check": {
+        "complete": false,
+        "missing": {
+          "stills": 2
+        },
+        "recovered": {
+          "clips": 1
+        },
+        "failed": {
+          "archive": 1
+        },
+        "expired": {}
+      },
+      "keepDays": 30
+    },
+    "sig": "juQxn3CN7ggLGVgD/tskN/rJwH4OBgOwYQTLa7Sq8gGcEkv4FbsWWyKlKGjvUNqiqIQPu7LvP/QJtkTA/pJvAw=="
+  }
+}

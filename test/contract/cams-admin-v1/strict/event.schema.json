@@ -827,6 +827,138 @@
             "detail": {
               "type": "string",
               "maxLength": 200
+            },
+            "check": {
+              "type": "object",
+              "properties": {
+                "complete": {
+                  "type": "boolean"
+                },
+                "missing": {
+                  "type": "object",
+                  "properties": {
+                    "stills": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "clips": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "events": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "checks": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "archive": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [],
+                  "additionalProperties": false
+                },
+                "recovered": {
+                  "type": "object",
+                  "properties": {
+                    "stills": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "clips": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "events": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "checks": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "archive": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [],
+                  "additionalProperties": false
+                },
+                "failed": {
+                  "type": "object",
+                  "properties": {
+                    "stills": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "clips": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "events": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "checks": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "archive": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [],
+                  "additionalProperties": false
+                },
+                "expired": {
+                  "type": "object",
+                  "properties": {
+                    "stills": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "clips": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "events": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "checks": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "archive": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "complete",
+                "missing",
+                "recovered",
+                "failed",
+                "expired"
+              ],
+              "additionalProperties": false
+            },
+            "keepDays": {
+              "type": "integer",
+              "minimum": 7,
+              "maximum": 3650
+            },
+            "returnPending": {
+              "type": "boolean"
             }
           },
           "required": [
