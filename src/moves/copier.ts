@@ -742,6 +742,8 @@ export class Copier {
     let size = 0;
     const guard = idleGuard(res.body, this.t('idleMs', MINUTE));
     const t0 = this.now();
+    // A return measures its rate only from a file fetched without pressure or a limit (the bucket's waits are not the link's speed, N1).
+    const free = !this.pressure() && !Number.isFinite(this.rate);
     guard.arm();
     try {
       for await (const buf of res.body) {
@@ -776,7 +778,7 @@ export class Copier {
       await fh.close();
     }
     const tookMs = this.now() - t0;
-    if (size > 0 && tookMs > 0) this.measuredBps = (size * 1000) / tookMs;
+    if (free && !this.pressure() && size > 0 && tookMs > 0) this.measuredBps = (size * 1000) / tookMs;
     if (size !== f.size || hash.digest('hex') !== f.sha256) return 'bad';
     if (staged) {
       mkdirSync(dirname(landing), { recursive: true });
@@ -897,7 +899,8 @@ export class Copier {
       // as fast as it goes; halved under pressure (of the probe, else of the last file's rate).
       const probe = (this.r.probeBps ?? 0) > 0 ? this.r.probeBps! : Infinity;
       const busy = Number.isFinite(probe) ? probe : this.measuredBps > 0 ? this.measuredBps : RETURN_BUSY_BPS;
-      this.rate = this.pressure() ? Math.max(1, Math.floor(busy / 2)) : probe;
+      // Never below half the busy rate (a lasting pressure must not slow it to a stall, N1).
+      this.rate = this.pressure() ? Math.max(Math.floor(busy / 2), Number.isFinite(probe) ? 1 : RETURN_BUSY_BPS / 2) : probe;
       this.rateAt = now;
       return;
     }

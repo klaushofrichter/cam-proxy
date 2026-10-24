@@ -1331,3 +1331,38 @@ describe('a return never makes the original push out older content; returns are 
     expect((v.state.now - t1) / 1000).toBeGreaterThanOrEqual(55);
   });
 });
+
+describe('a return under lasting pressure (Task 10 fix round 2, N1)', () => {
+  it('never slows below half the busy rate without a probe, and finishes once the pressure ends', async () => {
+    const files: Record<string, string> = {};
+    const chunks: FakeChunk[] = [];
+    const big = 'b'.repeat(1_500_000);
+    for (let i = 0; i < 20; i++) {
+      const p = `stills/cam9/2026/10/20/${String(1000 + i)}.pack`;
+      files[p] = big;
+    }
+    chunks.push({ id: `stills:${day(20)}`, files: Object.keys(files) });
+    const f = fakeSource(files, chunks);
+    let busy = true;
+    let fetched = 0;
+    f.onFile = () => void (++fetched === 15 && (busy = false));
+    const rates: number[] = [];
+    const plan: MovePlan = { transfer: true, kinds: ['stills', 'clips', 'events', 'checks', 'archive'], space: 'all', targetSettings: null, budgetS: 3600, estimateS: 0 };
+    const u = unit(f, { returnOf: 'mv_9123456789ABCDEFGHJK', plan, probeBps: undefined }, {
+      deps: {
+        cpuBusy: () => busy,
+        sleep: async (ms) => void (u.state.now += ms),
+        bucket: undefined,
+      },
+    });
+    const real = new TokenBucket({ now: () => u.state.now, sleep: async (ms) => void (u.state.now += ms) });
+    u.deps.bucket = { take: (n: number, rate: number, s?: AbortSignal) => (rates.push(rate), real.take(n, rate, s)) } as unknown as TokenBucket;
+    const t0 = u.state.now;
+    await u.run();
+    expect(u.rec().phase).toBe('copied');
+    const floor = 1024 * 1024;
+    expect(Math.min(...rates)).toBeGreaterThanOrEqual(floor);
+    // 15 files of 1.5 MB at about 1 MiB/s, the rest at full speed.
+    expect((u.state.now - t0) / 1000).toBeLessThan(60);
+  });
+});
