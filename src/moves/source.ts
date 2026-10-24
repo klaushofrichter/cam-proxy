@@ -435,7 +435,7 @@ export class MoveSource {
     this.d.audit.write({
       action: 'move-cleanup', category: ['configuration'], type: ['deletion'], outcome: 'success',
       user: 'cams-admin', camera: cam,
-      message: `Camera move ${r.id}: ${cam} cleaned up after its move to ${r.peer.name || r.peer.proxyId}: ${total.files} files (${total.bytes} bytes) and the camera's catalog entries deleted${stayed.files ? `, ${stayed.files} files (${stayed.bytes} bytes) kept here (not copied, they age out)` : ''}; its entry ${entry === 'hidden' ? 'stays hidden in config.json (you can delete it there)' : 'removed'}`,
+      message: `Camera move ${r.id}: ${cam} cleaned up after its move to ${r.peer.name || r.peer.proxyId}: ${total.files} files (${total.bytes} bytes) and the camera's catalog entries deleted${stayed.files ? `, ${stayed.files} files (${stayed.bytes} bytes) stay on this proxy (they age out with retention; Archive items keep their own expiry)` : ''}; its entry ${entry === 'hidden' ? 'stays hidden in config.json (you can delete it there)' : 'removed'}`,
       details: { moveId: r.id, camera: cam, ...who, deleted, kept, files: total.files, bytes: total.bytes, cameraEntry: entry },
     });
     this.d.audit.write({

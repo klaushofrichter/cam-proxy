@@ -658,7 +658,7 @@ describe('move.finish on the source (S §11)', () => {
     expect(d.result).toMatchObject({ deleted: { clips: { files: 0, bytes: 0 }, stills: { files: 1, bytes: 100 } } });
     const cleanup = u.audits('move-cleanup')[0];
     expect(cleanup.cam_proxy.kept.clips).toEqual({ files: 1, bytes: 300 });
-    expect(cleanup.message).toContain('kept');
+    expect(cleanup.message).toContain('stay on this proxy (they age out with retention; Archive items keep their own expiry)');
   }, 60_000);
 
   it('finish keeps the audit files', async () => {

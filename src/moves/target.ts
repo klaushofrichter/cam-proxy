@@ -378,7 +378,7 @@ export class MoveTarget {
     logger.warn({ moveId: r.id, status: last }, 'move_outcome_not_reported');
     this.d.audit.write({
       action: 'move-outcome-refused', category: ['configuration'], type: ['change'], outcome: 'failure', user: 'cams-admin', camera: r.camera,
-      message: `Camera move ${r.id} (${r.camera} from ${r.peer.name || r.peer.proxyId}): the source did not take the report of what to keep (${last === null ? 'not reachable' : `HTTP ${last}`}); it keeps every Archive item of the camera and deletes the rest`,
+      message: `Camera move ${r.id} (${r.camera} from ${r.peer.name || r.peer.proxyId}): the source did not take the report of what to keep (${last === null ? 'not reachable' : `HTTP ${last}`}); an earlier report that reached it still applies; without one it keeps every Archive item and deletes the rest`,
       details: this.details(r, { status: last }),
     });
   }

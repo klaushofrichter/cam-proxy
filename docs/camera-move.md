@@ -4,7 +4,7 @@ A proxy can hand one of its cameras to another proxy of the same cams-admin
 account on the same LAN, for example to retire a proxy in favour of a new
 one. The camera keeps its name, settings and history: the target takes it
 over without a restart, then copies the old content, newest first. The
-source deletes the camera's content when the move ends. cams-admin runs the
+source deletes what the target verified when the move ends. cams-admin runs the
 steps; both proxies record each one in their audit log. The design:
 [the spec](superpowers/specs/2026-10-21-camera-move-design.md).
 
@@ -65,8 +65,10 @@ When it can, one panel shows:
   time budget, not below the estimate. The budget counts from approval,
   the switch-over included; the copy spreads over it and aims to be done at
   80 % of it. A longer budget means a gentler copy;
-- that the source deletes all the camera's content when the move ends,
-  copied or not. Audit records stay.
+- that the source deletes the camera's content the target verified when the
+  move ends; what could not be copied (failed or missing files, Archive items
+  not copied) stays on the source and ages out with its retention. Audit
+  records stay.
 
 **Approve move** starts it. Approving here, or the auto-approval within the
 bounds cams-admin started the move with, is the only approval: it covers the
@@ -113,17 +115,39 @@ approved by the source itself.
    certificate to the camera and points the camera's FTP upload at itself.
    The source keeps running the camera until the target has it, so no
    minute of stills is lost; then it hides the camera.
-2. **Copy.** The target pulls the content, newest day first, each file
-   checked by size and SHA-256. A file the source's retention deleted
+2. **Copy.** The target pulls the content, Archive first (newest first),
+   then the rest newest day first, each file checked by size and SHA-256.
+   With "copy as much as fits" the plan stops at the first Archive day that
+   doesn't fit: everything after it (Archive and the other kinds) waits or is
+   skipped, so an Archive item is never left out for the sake of a newer
+   still. A file the source's retention deleted
    meanwhile is skipped; a file that fails its check three times is reported
    (`move-file-failed`). The copy halves its speed while either proxy is
    busy, waits while the target's storage is paused, and resumes after a
    restart of either proxy. Over the budget it goes on, never faster
    (`move-budget-exceeded`, once).
-3. **End.** When cams-admin finishes the move, the source deletes the
-   camera's content and its stored password and certificate; the target
-   deletes its temporary files and the move's keys. The camera now belongs
-   to the target.
+3. **The check.** Before the move concludes, the target compares what the
+   source lists now with what it verified. Per kind it counts files
+   *complete*, *missing* (still on the source: one recovery pass copies them
+   again), *failed* (failed their check three times) and *expired* (the
+   source's retention removed them meanwhile). The result is the audit
+   record `move-check` and is shown in cams-admin; failed and missing files
+   after the recovery pass make the copy "not complete". The one still of
+   the overlap minute, which both proxies recorded, counts as present and
+   is kept on the source (it holds the seconds before the switch-over).
+4. **End.** The target reports to the source, file by file, what it
+   verified. When cams-admin finishes the move, the source deletes only
+   that, plus its stored password and certificate; the target deletes its
+   temporary files and the move's keys. The camera now belongs to the
+   target. What the source keeps stays under its retention and ages out
+   with it: failed and missing files, the overlap still, and every Archive
+   item that was not copied. An Archive item with no expiry stays until you
+   delete it by hand; it carries a "Kept here" note that says why
+   ([docs/archive.md](archive.md)). Without the target's report (it refused
+   it, or it did not arrive), the source keeps every Archive item and deletes
+   the rest, as `move-outcome-refused` records. Both proxies tell cams-admin
+   how long the rest ages out (`keepDays`: the longest of the retention
+   settings, at least 7 days) when a move finishes or is cancelled.
 
 The Status page shows a move in progress: phase, copied of total, time left,
 an over-budget note, or the reason a move failed.
@@ -153,20 +177,39 @@ stuck needs a cancel.
 ## Ending a transfer early, cancelling
 
 - **End transfer** (cams-admin): the camera stays on the target, the content
-  not copied yet is given up, and the source cleans up as at a normal end.
+  not copied yet is given up, and the source cleans up as at a normal end,
+  deleting only what the target had verified. cams-admin waits for the
+  Archive: it offers End transfer once the Archive is copied; an Archive item
+  not copied stays on the source.
 - **Cancel move…** (the Status page, or cams-admin) before the switch-over:
   nothing changed on the source; the move just closes.
-- **Cancel after the switch-over:** the camera goes back to the source. The
-  target drops it first; the source runs it again at once, pushes its own
-  certificate and points the camera's FTP upload back at itself. If a step of
-  that fails, the source tries again by itself, with a backoff, also after a
-  restart, and records each failure (`move-cancel`, at most once an hour); no
-  other move starts meanwhile.
-- **What was copied:** **Delete what was copied on the target** deletes only
-  the content this move copied there. What the target captured itself since
-  the switch-over stays on the target and ages out with its retention; it is
-  not sent back to the source. **Let it age out there** keeps the copy until
-  the target's retention removes it.
+- **Cancel after the switch-over:** the camera comes back at once. The
+  target drops it first; the source runs it again, pushes its own
+  certificate and points the camera's FTP upload back at itself. If a step
+  of that fails, the source tries again by itself, with a backoff, also after
+  a restart, and records each failure (`move-cancel`, at most once an hour);
+  no other move starts meanwhile.
+- **The copy back.** What the new proxy recorded itself since the switch-over
+  is then copied back to the original, which keeps its own older content.
+  There is no "delete what was copied" or "let it age out" choice any more
+  after the switch-over: the content the move copied to the new proxy is
+  removed there when the copy back ends, and so is what the original
+  verified. The copy back:
+  - is not cancellable and not paced (no time budget; it is the original's
+    own content), but halves its speed while either proxy is busy;
+  - pauses (`move-paused`) when the next chunk doesn't fit on the original
+    without deleting anything, when it would leave less than 5 % of the
+    storage budget free, or when the original's storage deleted content for a
+    size cap or budget within the last hour: it never pushes out older
+    original content, so on a full original it waits until someone frees room;
+  - retries on its own after a failure or a restart;
+  - sends its own report of what the original verified; what failed stays on
+    the new proxy and ages out with its retention.
+- **Give up** (cams-admin) on a copy back deletes nothing on either proxy:
+  what was copied back stays, the rest ages out where it is.
+- Before the switch-over, a cancel changes nothing on the source; the move
+  just closes (the choice "Delete what was copied on the target" applies
+  only there).
 
 ## Leftovers
 
@@ -205,8 +248,8 @@ and `role`; never the password, the token or a key. The actions, each in
 
 | side | actions |
 |---|---|
-| source | `move-request` (started on its page, or by cams-admin with `move.begin`), `move-approve` (a person, or the auto-approval, named in its label), `move-auto-approve` (the offer waits for a person, with the reason), `move-switch` (`go`), `move-phase` (`opened`, `switching`, `released`, `finished`, `cancelled`, `failed`), `move-cleanup`, `move-done`, `move-cancel`, `move-token-refused` (a refused request to its move endpoints) |
-| target | `move-offer` (its answer), `move-switch` (`start`, `secrets`, `camera`, `cert`, `ftp`), `move-phase` (`switching`, `switched`, `copying`, `copied`, `finished`, `cancelled`, `failed`), `move-progress` (every 10 %), `move-budget-exceeded`, `move-file-failed`, `move-source-unreachable`, `move-done`, `move-cancel` |
+| source | `move-request` (started on its page, or by cams-admin with `move.begin`), `move-approve` (a person, or the auto-approval, named in its label), `move-auto-approve` (the offer waits for a person, with the reason), `move-switch` (`go`), `move-phase` (`opened`, `switching`, `released`, `finished`, `cancelled`, `failed`), `move-cleanup`, `move-done`, `move-cancel`, `move-outcome-refused` (the report of what to keep did not arrive), `move-return` (the copy back: `open`, `finish`), `move-token-refused` (a refused request to its move endpoints) |
+| target | `move-offer` (its answer), `move-switch` (`start`, `secrets`, `camera`, `cert`, `ftp`), `move-phase` (`switching`, `switched`, `copying`, `copied`, `finished`, `cancelled`, `failed`), `move-progress` (every 10 %), `move-check` (the completeness check), `move-budget-exceeded`, `move-paused` (a copy back waits for room), `move-return` (`start`, `finish`), `move-file-failed`, `move-source-unreachable`, `move-done`, `move-cancel` |
 
 A normal move shows, in this order: `move-request` and `move-approve` on the
 source (no `move-auto-approve`: that record means the offer is waiting), `move-offer` and the `move-switch` steps on the target, `released` on
