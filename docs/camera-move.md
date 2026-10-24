@@ -178,9 +178,10 @@ stuck needs a cancel.
 
 - **End transfer** (cams-admin): the camera stays on the target, the content
   not copied yet is given up, and the source cleans up as at a normal end,
-  deleting only what the target had verified. cams-admin waits for the
-  Archive: it offers End transfer once the Archive is copied; an Archive item
-  not copied stays on the source.
+  deleting only what the target had verified. While Archive items are still
+  copying, cams-admin's button reads **End after Archive**: the move keeps
+  copying until the Archive part is done and then ends. An Archive item that
+  still couldn't be copied stays on the source.
 - **Cancel move…** (the Status page, or cams-admin) before the switch-over:
   nothing changed on the source; the move just closes.
 - **Cancel after the switch-over:** the camera comes back at once. The
