@@ -53,7 +53,8 @@ export interface CopierDeps {
   // The load average above the core count: the rate halves.
   cpuBusy?: () => boolean;
   // Room on the target (plan.space 'fit'): the evaluation's facts.
-  space: Pick<EvaluateDeps, 'loaded' | 'usage' | 'freeBytes'>;
+  // `evictedAt`: when storage.run last deleted content for a cap or the budget (a return waits an hour after it).
+  space: Pick<EvaluateDeps, 'loaded' | 'usage' | 'freeBytes'> & { evictedAt?: () => number | null };
   // A copied stills, previews or clips file (storage's usage between recounts).
   noteWritten?: (kind: 'stills' | 'previews' | 'clips', bytes: number, cam: string) => void;
   // The move's phase on the target (MoveTarget.setPhase: journal, event, audit).
@@ -75,6 +76,12 @@ const HOUR = 60 * MINUTE;
 const JSON_MAX = 256 * 1024 * 1024;
 const SHA256 = /^[0-9a-f]{64}$/;
 const FINAL: readonly ChunkState[] = ['verified', 'skipped', 'failed'];
+// A return (Decision 5): what stays free of the budget after a chunk, and how
+// long after storage evicted for a cap or the budget it waits.
+const RETURN_RESERVE = 0.05;
+const RETURN_EVICT_QUIET_MS = HOUR;
+// A return is not paced; under pressure without a probe or a measured rate it goes at half of this.
+const RETURN_BUSY_BPS = 2 * 1024 * 1024;
 
 class Stopped extends Error {}
 
@@ -165,6 +172,9 @@ export class Copier {
   private lastAuditAt = 0;
   private lastDecile = 0;
   private down: { since: number; failures: number; audited: number } | null = null;
+  // A return: the pause cams-admin was told of (the record's pausedNoSpace), and the last file's rate.
+  private pausedNow = false;
+  private measuredBps = 0;
   private signal!: AbortSignal;
 
   constructor(private readonly d: CopierDeps, record: MoveRecord) {
@@ -176,6 +186,7 @@ export class Copier {
     // The default sleep ends early on stop (a slow take never holds up a cancel).
     this.bucket = d.bucket ?? new TokenBucket({ now: d.now, sleep: d.sleep ?? abortableSleep });
     this.paths = { catalog: d.catalog, dataDir: d.dataDir, staging: moveStagingDir(d.dataDir, record.id) };
+    this.pausedNow = record.pausedNoSpace === true;
   }
 
   private now(): number {
@@ -434,14 +445,30 @@ export class Copier {
     this.progress();
   }
 
-  // A return's chunk that doesn't fit: paused (no_space, once) until it does, then on again.
+  // A return's chunk without room: paused (no_space, once) until there is, then on again.
   private async waitRoom(c: ChunkMeta): Promise<void> {
-    if (this.fits(c)) return;
-    logger.info({ moveId: this.r.id, chunkId: c.id }, 'move_return_waits_for_room');
-    this.d.notePaused?.(this.r, true);
-    do await this.sleep(this.t('pausedPollMs', 10_000));
-    while (!this.fits(c));
-    this.d.notePaused?.(this.r, false);
+    if (!this.roomFor(c)) {
+      logger.info({ moveId: this.r.id, chunkId: c.id }, 'move_return_waits_for_room');
+      if (!this.pausedNow) this.d.notePaused?.(this.r, true);
+      this.pausedNow = true;
+      do await this.sleep(this.t('pausedPollMs', 10_000));
+      while (!this.roomFor(c));
+    }
+    if (this.pausedNow) this.d.notePaused?.(this.r, false);
+    this.pausedNow = false;
+  }
+
+  // Room for a return's chunk that never makes the original push out its own
+  // older content (Decision 5): it fits now (no eviction), the budget keeps a
+  // 5 % reserve after it (the camera's own new recordings), and storage has not
+  // evicted for a cap or the budget within the hour (the host is at its limit:
+  // freed room is its own camera's).
+  private roomFor(c: ChunkMeta): boolean {
+    const at = this.d.space.evictedAt?.() ?? null;
+    if (at !== null && this.now() - at < RETURN_EVICT_QUIET_MS) return false;
+    const u = this.d.space.usage();
+    if (u.used + c.bytes > u.budget * (1 - RETURN_RESERVE)) return false;
+    return this.fits(c);
   }
 
   // The same headroom as the offer's evaluation (spaceFor): room without evicting.
@@ -712,6 +739,7 @@ export class Copier {
     const hash = createHash('sha256');
     let size = 0;
     const guard = idleGuard(res.body, this.t('idleMs', MINUTE));
+    const t0 = this.now();
     guard.arm();
     try {
       for await (const buf of res.body) {
@@ -745,6 +773,8 @@ export class Copier {
       this.inflight = 0;
       await fh.close();
     }
+    const tookMs = this.now() - t0;
+    if (size > 0 && tookMs > 0) this.measuredBps = (size * 1000) / tookMs;
     if (size !== f.size || hash.digest('hex') !== f.sha256) return 'bad';
     if (staged) {
       mkdirSync(dirname(landing), { recursive: true });
@@ -860,6 +890,15 @@ export class Copier {
   // Recomputed at every file and every minute (S §8.3).
   private updateRate(): void {
     const now = this.now();
+    if (this.r.returnOf) {
+      // A return is not paced (no budget, ruling 8 as changed in fix round 1): the probe if any, else
+      // as fast as it goes; halved under pressure (of the probe, else of the last file's rate).
+      const probe = (this.r.probeBps ?? 0) > 0 ? this.r.probeBps! : Infinity;
+      const busy = Number.isFinite(probe) ? probe : this.measuredBps > 0 ? this.measuredBps : RETURN_BUSY_BPS;
+      this.rate = this.pressure() ? Math.max(1, Math.floor(busy / 2)) : probe;
+      this.rateAt = now;
+      return;
+    }
     const { done, total } = this.bytes();
     const remaining = total - done;
     // The budget counts from approval (cams-admin's clock, the switch-over included); the copy start

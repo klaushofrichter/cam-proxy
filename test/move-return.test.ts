@@ -19,6 +19,7 @@ import { MoveJournal, type MoveRecord } from '../src/moves/journal';
 import { noteLanded } from '../src/moves/purge';
 import { MoveReturns, RETURN_PLAN } from '../src/moves/returns';
 import { MoveTarget, type TargetDeps } from '../src/moves/target';
+import { MoveSource, type SourceDeps } from '../src/moves/source';
 import { hashMoveToken } from '../src/moves/token';
 import type { MoveEvent } from '../src/moves/types';
 import { strict, why } from './helpers/contract';
@@ -346,6 +347,22 @@ const until = async (cond: () => boolean, ms = 5000) => {
 };
 
 describe('move.return.start on the original proxy (the return target)', () => {
+  it('a welcome re-emit while paused keeps code no_space (cams-admin stays paused), and drops it once resumed', async () => {
+    const f = fixture();
+    const runner = { start: () => undefined, stop: async () => undefined };
+    const o = original(f, { runner: runner as never });
+    await o.returns.start(start());
+    const target = new MoveTarget({ journal: o.journal, audit: { write: () => null }, emit: () => undefined } as unknown as TargetDeps);
+    const sent: MoveEvent[] = [];
+    const source = new MoveSource({ emit: (e: MoveEvent) => void sent.push(e) } as unknown as SourceDeps);
+    target.notePaused(o.rec(), true);
+    source.reemit(o.journal.currentPhase());
+    expect(sent.at(-1)).toEqual({ kind: 'move.phase', moveId: RETURN, role: 'target', phase: 'copying', ok: true, code: 'no_space' });
+    target.notePaused(o.rec(), false);
+    source.reemit(o.journal.currentPhase());
+    expect(sent.at(-1)).toEqual({ kind: 'move.phase', moveId: RETURN, role: 'target', phase: 'copying', ok: true });
+  });
+
   it('start answers ok, makes a copy-only target record and copies the new proxy\'s capture back', async () => {
     const f = fixture();
     f.returns.open(open());

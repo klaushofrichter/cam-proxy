@@ -1230,14 +1230,14 @@ describe('a return (step 4 Task 10: the original copies back)', () => {
     expect(Object.values(chunkStates(u)).every((s) => s === 'verified')).toBe(true);
   });
 
-  it('a return over its 3600 s writes no move-budget-exceeded (and goes on, never faster)', async () => {
+  it('a return over its 3600 s writes no move-budget-exceeded (it has no budget, only goes on)', async () => {
     const { files, chunks } = threeDays();
     const f = fakeSource(files, chunks);
     const u = unit(f, { returnOf: RETURN_OF, plan: RETURN, budgetS: 3600 });
     f.onFile = () => void (u.state.now += 1000_000);
     await u.run();
     expect(u.audits.filter((a) => a.action === 'move-budget-exceeded')).toHaveLength(0);
-    expect(u.rec().budgetExceeded).toBe(true);
+    expect(u.rec().budgetExceeded).toBeUndefined();
     expect(u.phases.map((p) => p.phase)).toEqual(['copied']);
   });
 
@@ -1252,5 +1252,82 @@ describe('a return (step 4 Task 10: the original copies back)', () => {
     expect(puts).toBe(3);
     expect(u.audits.filter((a) => a.action === 'move-outcome-refused')).toHaveLength(0);
     expect(u.rec().keep).toBeDefined();
+  });
+});
+
+describe('a return never makes the original push out older content; returns are not paced (Task 10 fix round 1)', () => {
+  const RETURN_OF = 'mv_9123456789ABCDEFGHJK';
+  const RETURN: MovePlan = { transfer: true, kinds: ['stills', 'clips', 'events', 'checks', 'archive'], space: 'all', targetSettings: null, budgetS: 3600, estimateS: 0 };
+  const HOUR_MS = 3_600_000;
+
+  it('waits while the last storage run evicted for cap or budget within the hour', async () => {
+    const { files, chunks } = threeDays();
+    const paused: boolean[] = [];
+    let polls = 0;
+    const evicted = { at: null as number | null };
+    const u = unit(fakeSource(files, chunks), { returnOf: RETURN_OF, plan: RETURN }, {
+      deps: {
+        notePaused: (_r, p) => void paused.push(p),
+        sleep: async () => {
+          // An hour after that run, with no other since, the return goes on.
+          if (++polls === 4) u.state.now = evicted.at! + HOUR_MS + 1;
+        },
+      },
+    });
+    evicted.at = u.state.now - 10 * 60_000;
+    u.deps.space.evictedAt = () => evicted.at;
+    await u.run();
+    expect(polls).toBeGreaterThanOrEqual(4);
+    expect(paused).toEqual([true, false]);
+    expect(Object.values(chunkStates(u)).every((s) => s === 'verified')).toBe(true);
+    // A move (not a return) is not held by that.
+    const v = unit(fakeSource(files, chunks), {}, { deps: { notePaused: () => { throw new Error('paused'); } } });
+    v.deps.space.evictedAt = () => v.state.now - 60_000;
+    await v.run();
+    expect(v.rec().phase).toBe('copied');
+  });
+
+  it('keeps a reserve: a chunk is copied only if the usage stays within the budget minus 5 % after it', async () => {
+    const { files, chunks } = threeDays();
+    const paused: boolean[] = [];
+    let polls = 0;
+    const use = { used: 940 };
+    const u = unit(fakeSource(files, chunks), { returnOf: RETURN_OF, plan: RETURN }, {
+      deps: {
+        notePaused: (_r, p) => void paused.push(p),
+        sleep: async () => void (++polls === 3 && (use.used = 0)),
+      },
+    });
+    // 1000 bytes of budget, 940 used: room under the budget itself (60) but not under the reserve (950).
+    u.deps.space.usage = () => ({ stills: 0, previews: 0, clips: 0, used: use.used, budget: 1000 });
+    await u.run();
+    expect(paused).toEqual([true, false]);
+    expect(polls).toBeGreaterThanOrEqual(3);
+    expect(Object.values(chunkStates(u)).every((s) => s === 'verified')).toBe(true);
+  });
+
+  it('a small return copies promptly: no pacing to its 3600 s', async () => {
+    const files: Record<string, string> = {};
+    const chunks: FakeChunk[] = [];
+    for (const d of [16, 17, 18, 19, 20]) {
+      const p = `stills/cam9/2026/10/${d}/1200.pack`;
+      files[p] = 'p'.repeat(30_000);
+      chunks.push({ id: `stills:${day(d)}`, files: [p] });
+    }
+    const u = unit(fakeSource(files, chunks), { returnOf: RETURN_OF, plan: RETURN, probeBps: 0, budgetS: 3600 }, { deps: { bucket: undefined, sleep: async (ms) => void (u.state.now += ms) } });
+    const t0 = u.state.now;
+    await u.run();
+    expect(u.rec().phase).toBe('copied');
+    expect((u.state.now - t0) / 1000).toBeLessThan(5);
+  });
+
+  it('a return still halves its rate while the source is busy', async () => {
+    const g = fakeSource({ 'stills/cam9/2026/10/20/1200.pack': 'q'.repeat(30_000) }, [{ id: `stills:${day(20)}`, files: ['stills/cam9/2026/10/20/1200.pack'] }]);
+    g.busy = 1;
+    const v = unit(g, { returnOf: RETURN_OF, plan: RETURN, probeBps: 1000, budgetS: 3600 }, { deps: { bucket: undefined, sleep: async (ms) => void (v.state.now += ms) } });
+    const t1 = v.state.now;
+    await v.run();
+    // 30 kB at the probe's 1000 B/s halved for the minute after the 503.
+    expect((v.state.now - t1) / 1000).toBeGreaterThanOrEqual(55);
   });
 });

@@ -687,9 +687,9 @@ export class MoveSource {
   }
 
   // After every welcome (B2): the open move's phase again.
-  reemit(current: { moveId: string; role: 'source' | 'target'; phase: string } | null): void {
+  reemit(current: { moveId: string; role: 'source' | 'target'; phase: string; code?: string } | null): void {
     if (!current || current.phase === 'failed') return;
-    this.d.emit({ kind: 'move.phase', moveId: current.moveId, role: current.role, phase: current.phase as Exclude<MoveRecord['phase'], 'failed'>, ok: true });
+    this.d.emit({ kind: 'move.phase', moveId: current.moveId, role: current.role, phase: current.phase as Exclude<MoveRecord['phase'], 'failed'>, ok: true, ...(current.code ? { code: current.code } : {}) });
   }
 
   handlers(): Record<string, Handler> {

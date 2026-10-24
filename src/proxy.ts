@@ -1048,6 +1048,11 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     timing: opts.moves,
     end: { ...moveEnd, dataDir: running.server.dataDir, removeImported: (r) => removeImported({ catalog, dataDir: running.server.dataDir, storage }, r), captured: (cam, now) => capturedMark(catalog, cam, now) },
   });
+  // When storage last deleted content for a cap or the budget: a copy back waits an hour after it (step 4 Task 10).
+  let storageEvictedAt: number | null = null;
+  storage.on('run', (run: { at: number; reason: string[] }) => {
+    if (run.reason.includes('cap') || run.reason.includes('budget') || run.reason.includes('budget_unreachable')) storageEvictedAt = run.at;
+  });
   // The target's copier (camera-move plan Task 9): the camera's old content
   // from the source, after the switch-over; waits while storage is paused.
   const moveCopier = new CopyRunner({
@@ -1062,6 +1067,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       loaded: () => loaded,
       usage: () => { const u = storage.usage(); return { stills: u.stills.bytes, previews: u.previews.bytes, clips: u.clips.bytes, used: u.used, budget: u.budget }; },
       freeBytes: () => storage.diskSpace().free,
+      evictedAt: () => storageEvictedAt,
     },
     noteWritten: (kind, bytes, cam) => storage.noteWritten(kind, bytes, 1, { growth: false, cam }),
     setPhase: (r, phase, o) => moveTarget.setPhase(r, phase, o),

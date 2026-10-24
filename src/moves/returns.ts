@@ -54,8 +54,9 @@ export interface ReturnDeps {
   retention?: () => Pick<Config['retention'], 'stillsDays' | 'previewsDays' | 'clipsDays' | 'eventsDays'>;
 }
 
-// A return's plan (ruling 8): everything, all space; the budget only paces the
-// copy (no move-budget-exceeded for a return), nothing to estimate or approve.
+// A return's plan (ruling 8): everything, all space; nothing to estimate or
+// approve. A return is not paced and has no budget (fix round 1): its budgetS
+// is unused (no move-budget-exceeded), only pressure halves its rate.
 export const RETURN_PLAN: MovePlan = { transfer: true, kinds: [...MOVE_KINDS], space: 'all', targetSettings: null, budgetS: 3600, estimateS: 0 };
 
 const ok = (result: Record<string, unknown> = {}): Done => ({ status: 'ok', result });

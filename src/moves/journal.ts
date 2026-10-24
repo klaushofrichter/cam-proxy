@@ -126,6 +126,8 @@ export interface MoveRecord {
   // proxy a source record (move.return.open) whose endpoints serve only what
   // this proxy captured itself (captured.ts capturedFilter).
   returnOf?: string;
+  // A return's target waiting for room (step 4 Task 10): the welcome re-emit keeps code no_space.
+  pausedNoSpace?: boolean;
   captured?: { at: number; maxIds: Partial<Record<'clips' | 'events' | 'analyses' | 'still_checks' | 'archive', number>> };
   endedAt?: number;
 }
@@ -333,8 +335,9 @@ export class MoveJournal {
 
   // The phase of the open move (the newest by startedAt), for the welcome
   // re-emit (B2); null when none is open.
-  currentPhase(): { moveId: string; role: MoveRole; phase: MovePhaseName } | null {
+  // A return paused for room carries code no_space (cams-admin stays paused).
+  currentPhase(): { moveId: string; role: MoveRole; phase: MovePhaseName; code?: string } | null {
     const a = this.active().filter((r) => !moveEnded(r.phase)).sort((x, y) => y.startedAt - x.startedAt)[0];
-    return a ? { moveId: a.id, role: a.role, phase: a.phase } : null;
+    return a ? { moveId: a.id, role: a.role, phase: a.phase, ...(a.phase === 'copying' && a.pausedNoSpace ? { code: 'no_space' } : {}) } : null;
   }
 }

@@ -437,14 +437,9 @@ world('a cancel after the switch-over copies the target\'s capture back', () => 
     const targetCa = (await request(T.base).get('/tls/ca.pem').expect(200)).text;
     const returnSource = { proxyId: targetId, name: 'Mini PC', url: T.base, caFingerprints: [fingerprintOf(targetCa)], tlsServername: 'proxy.u.internal' };
     await run(fakeS, 'move.return.start', { v: 1, moveId: returnId, returnOf: moveId, token: RETURN_TOKEN, done: [], source: returnSource });
-    // A return paces its copy to 80 % of an hour from its start (RETURN_PLAN, ruling 8): these
-    // few kB would take 48 minutes. The test moves the start back 50 minutes, then cams-admin
-    // "restarts" (ruling 20): a new token at the new proxy (return.open again) and at the
-    // original (return.start again), whose copier starts over from the record, now at full speed.
-    const sj0 = new MoveJournal(join(S.dir, 'data', 'admin', 'moves'));
-    const rec = sj0.load(returnId)!;
-    rec.approvedAt = Date.now() - 50 * 60_000;
-    sj0.save(rec);
+    // cams-admin "restarts" (ruling 20): a new token at the new proxy (return.open again) and at
+    // the original (return.start again), whose copier starts over from the record. A return is
+    // not paced, so it copies at once.
     const RETURN_TOKEN_2 = randomBytes(32).toString('base64url');
     await run(fakeT, 'move.return.open', { v: 1, moveId: returnId, returnOf: moveId, tokenHash: hashMoveToken(RETURN_TOKEN_2), targetIp: '127.0.0.1' });
     await run(fakeS, 'move.return.start', { v: 1, moveId: returnId, returnOf: moveId, token: RETURN_TOKEN_2, done: [], source: returnSource });

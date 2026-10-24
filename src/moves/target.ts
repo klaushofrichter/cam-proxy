@@ -208,6 +208,12 @@ export class MoveTarget {
   // copying, `no_space` while paused and without a code once it goes on;
   // audited move-paused. The phase stays as it is in the journal.
   notePaused(r: MoveRecord, paused: boolean): void {
+    const fresh = this.d.journal.load(r.id);
+    if (fresh && fresh.role === 'target' && fresh.phase === 'copying') {
+      if (paused) fresh.pausedNoSpace = true;
+      else delete fresh.pausedNoSpace;
+      this.d.journal.save(fresh);
+    }
     this.d.emit({ kind: 'move.phase', moveId: r.id, role: 'target', phase: 'copying', ok: true, ...(paused ? { code: 'no_space' } : {}) });
     this.d.audit.write({
       action: 'move-paused', category: ['configuration'], type: ['change'], outcome: paused ? 'failure' : 'success',
