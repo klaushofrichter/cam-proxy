@@ -65,7 +65,9 @@
             "move.go",
             "move.release",
             "move.finish",
-            "move.cancel"
+            "move.cancel",
+            "move.return.open",
+            "move.return.start"
           ]
         },
         "args": {

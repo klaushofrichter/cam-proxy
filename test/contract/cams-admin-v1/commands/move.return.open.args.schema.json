@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/commands/move.return.open.args.schema.json",
+  "title": "move.return.open args v1",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "moveId": {
+      "type": "string",
+      "pattern": "^mv_[0-9A-HJKMNP-TV-Z]{20}$"
+    },
+    "returnOf": {
+      "type": "string",
+      "pattern": "^mv_[0-9A-HJKMNP-TV-Z]{20}$"
+    },
+    "tokenHash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "targetIp": {
+      "type": "string",
+      "maxLength": 45,
+      "pattern": "^[0-9A-Fa-f:.]{2,45}$"
+    }
+  },
+  "required": [
+    "v",
+    "moveId",
+    "returnOf",
+    "tokenHash",
+    "targetIp"
+  ]
+}

@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/strict/commands/move.return.start.args.schema.json",
+  "title": "move.return.start args v1",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "moveId": {
+      "type": "string",
+      "pattern": "^mv_[0-9A-HJKMNP-TV-Z]{20}$"
+    },
+    "returnOf": {
+      "type": "string",
+      "pattern": "^mv_[0-9A-HJKMNP-TV-Z]{20}$"
+    },
+    "token": {
+      "type": "string",
+      "maxLength": 256,
+      "minLength": 8,
+      "pattern": "^[\\x21-\\x7e]+$"
+    },
+    "source": {
+      "type": "object",
+      "properties": {
+        "proxyId": {
+          "type": "string",
+          "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 64,
+          "minLength": 1
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 300,
+          "pattern": "^https?://"
+        },
+        "caFingerprints": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^SHA256:[0-9A-F]{64}$"
+          },
+          "maxItems": 2
+        },
+        "tlsServername": {
+          "type": "string",
+          "maxLength": 253,
+          "minLength": 1
+        }
+      },
+      "required": [
+        "proxyId",
+        "name",
+        "url",
+        "caFingerprints",
+        "tlsServername"
+      ],
+      "additionalProperties": false
+    },
+    "done": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^(stills|clips|events|checks|archive):[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+      },
+      "maxItems": 512
+    }
+  },
+  "required": [
+    "v",
+    "moveId",
+    "returnOf",
+    "token",
+    "source",
+    "done"
+  ],
+  "additionalProperties": false
+}

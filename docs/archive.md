@@ -94,6 +94,7 @@ Design and rulings: [the spec](superpowers/specs/2026-10-05-archive-design.md).
   "found": ["person"],            // categories Vision found (analyses + still checks)
   "thumbnail": { "from": "analysis", "at": 1759689008000 }, // from: analysis | check | still | frame | none
   "createdBy": "client",          // client | admin
+  "move": null,                   // why the item is here: see below; null = made here
   "urls": {
     "video": "/api/archive/12/video",
     "thumbnail": "/api/archive/12/thumbnail",
@@ -101,6 +102,14 @@ Design and rulings: [the spec](superpowers/specs/2026-10-05-archive-design.md).
   }
 }
 ```
+
+`move` is `null` for an item made on this proxy. After a camera move it says
+why the item is here: `{ "moveId", "from"?: {"proxyId","name"}, "to"?: {"proxyId","name"}, "at", "kept"?: true, "reason"?: "failed"|"missing"|"not_copied" }`
+(`at` in unix ms). `from` without `kept`: the move brought the item here
+("Moved here from <proxy> by move <id> on <date>"); `kept: true` with `to` and a
+`reason`: the move to that proxy could not copy it, so it stayed here
+("Kept here: the move to <proxy> on <date> couldn't copy it (<reason>)"). A
+copy back marks items the same way. Also in the item of `/metadata`.
 
 `source` in the item:
 - composition: `{"type":"composition","jobId":"…","anchor":"clip","clipId":345,"span":{"start":…,"end":…}|null,"preS":-2,"postS":5,"size":"720p","badge":true}`

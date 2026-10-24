@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import type { AuditLog } from '../audit/audit-log';
 import { activeCameraIds } from '../config/cameras';
 import type { CameraNode, Config } from '../config/defaults';
+import { keepDaysOf } from './retention';
 import { applyOverrides, planUnset, removeOverride, writeOverridesFile, type Loaded } from '../config/load';
 import { planProblem, type MoveAnswerArgs, type MoveBeginArgs, type MoveCancelArgs, type MoveFinishArgs, type MoveGoArgs, type MoveOpenArgs, type MoveReleaseArgs, type MoveTargetsArgs } from '../fleet/command-args';
 import type { Done, Handler } from '../fleet/commands';
@@ -10,7 +11,7 @@ import { listChunks, summarize, type InventoryDeps } from './inventory';
 import type { PushResult } from '../tls/push';
 import { moveEnded, type MoveJournal, type MoveRecord, type MoveTombstone } from './journal';
 import { autoPlan, type AutoWaitReason } from './plan';
-import type { Purged } from './purge';
+import type { Purged, purgeExcept } from './purge';
 import { MOVE_KINDS, type MoveActor, type MoveAnswer, type MoveBounds, type MoveCameraConnection, type MoveCopied, type MoveEvent, type MoveKind, type MovePlan, type MoveSummary, type Settings } from './types';
 
 // The source side of a camera move (camera-move plan Task 7, S §4, §7, §9.1):
@@ -28,6 +29,8 @@ export interface SourceDeps {
   journal: Pick<MoveJournal, 'load' | 'save' | 'remove' | 'all' | 'active' | 'bury' | 'ended' | 'failed'>;
   audit: Pick<AuditLog, 'write'>;
   emit: (e: MoveEvent) => void;
+  // The retention in effect: finished and cancelled phases carry what ages out (keepDays); left out, they carry none.
+  retention?: () => Pick<Config['retention'], 'stillsDays' | 'previewsDays' | 'clipsDays' | 'eventsDays'>;
   // The settings in effect (cameras, tls.site) and the loaded configuration (release writes `moved`).
   running: () => Config;
   loaded: () => Loaded;
@@ -54,7 +57,8 @@ export interface SourceDeps {
   end?: {
     // The move's cached manifests, on disk and in memory (ManifestCache.forget).
     dropManifests: (moveId: string) => void;
-    purge: (cam: string) => { deleted: Purged };
+    // Step 4 Task 6: everything of the camera but what the receiver reported to keep (purgeExcept).
+    purge: (cam: string, o: Parameters<typeof purgeExcept>[2]) => { deleted: Purged; kept: Purged };
     deletePassword: (cam: string) => void;
     forgetLeaf: (cam: string) => void;
     pushOwnLeaf: (cam: string) => Promise<PushResult>;
@@ -258,7 +262,7 @@ export class MoveSource {
 
   private phaseEvent(r: MoveRecord, who?: Asker): void {
     if (r.phase === 'failed') return;
-    this.d.emit({ kind: 'move.phase', moveId: r.id, role: 'source', phase: r.phase, ok: true });
+    this.d.emit({ kind: 'move.phase', moveId: r.id, role: 'source', phase: r.phase, ok: true, ...(r.phase === 'finished' || r.phase === 'cancelled' ? this.keep() : {}) });
     this.d.audit.write({
       action: 'move-phase', category: ['configuration'], type: ['change'], outcome: 'success',
       user: who?.user ?? 'cams-admin', camera: r.camera,
@@ -389,6 +393,8 @@ export class MoveSource {
     if (past) return past.phase === 'finished' ? ok({ deleted: past.deleted ?? zeros() }) : failed('wrong_phase');
     const r = this.source(a.moveId);
     if (!r) return ok({ deleted: zeros() });
+    // A return's record (step 4): only move.finish {return: true} ends it, and a return can't be cancelled (spec §1).
+    if (r.returnOf) return failed('wrong_phase');
     if (r.phase === 'failed') {
       this.terminalEvent(r.id, 'failed', r.failure);
       return failed('wrong_phase');
@@ -403,7 +409,15 @@ export class MoveSource {
       r.endedAt = this.now();
       this.d.journal.save(r);
     }
-    const { deleted } = end.purge(cam);
+    // Only what arrived (step 4 Task 6): the receiver's keep list stays, and
+    // every Archive item not shown copied, with a "Kept here" note.
+    const { deleted, kept } = end.purge(cam, {
+      keep: r.keep ?? null,
+      listed: new Set((r.manifest ?? []).map((c) => c.id)),
+      note: { moveId: r.id, to: { proxyId: r.peer.proxyId, name: r.peer.name }, at: this.now() },
+      ...(r.keepMissing ? { missing: r.keepMissing } : {}),
+      ...(r.keepCopied ? { copied: r.keepCopied } : {}),
+    });
     if (node && l.addedCameras.includes(cam)) {
       this.d.setLoaded(removeOverride(l, `cameras.${cam}`));
       await end.settled();
@@ -416,12 +430,13 @@ export class MoveSource {
     this.dropPending(r.id);
     this.phaseEvent(r);
     const total = sum(deleted);
+    const stayed = sum(kept);
     const who = { source: this.self(), target: r.peer.proxyId, role: 'source' };
     this.d.audit.write({
       action: 'move-cleanup', category: ['configuration'], type: ['deletion'], outcome: 'success',
       user: 'cams-admin', camera: cam,
-      message: `Camera move ${r.id}: ${cam} cleaned up after its move to ${r.peer.name || r.peer.proxyId}: ${total.files} files (${total.bytes} bytes) and the camera's catalog entries deleted; its entry ${entry === 'hidden' ? 'stays hidden in config.json (you can delete it there)' : 'removed'}`,
-      details: { moveId: r.id, camera: cam, ...who, deleted, files: total.files, bytes: total.bytes, cameraEntry: entry },
+      message: `Camera move ${r.id}: ${cam} cleaned up after its move to ${r.peer.name || r.peer.proxyId}: ${total.files} files (${total.bytes} bytes) and the camera's catalog entries deleted${stayed.files ? `, ${stayed.files} files (${stayed.bytes} bytes) stay on this proxy (they age out with retention; Archive items keep their own expiry)` : ''}; its entry ${entry === 'hidden' ? 'stays hidden in config.json (you can delete it there)' : 'removed'}`,
+      details: { moveId: r.id, camera: cam, ...who, deleted, kept, files: total.files, bytes: total.bytes, cameraEntry: entry },
     });
     this.d.audit.write({
       action: 'move-done', category: ['configuration'], type: ['change'], outcome: 'success',
@@ -452,6 +467,8 @@ export class MoveSource {
     if (past) return past.phase === 'cancelled' ? ok() : failed('wrong_phase');
     const r = this.source(a.moveId);
     if (!r) return ok();
+    // A return's record (step 4): only move.finish {return: true} ends it, and a return can't be cancelled (spec §1).
+    if (r.returnOf) return failed('wrong_phase');
     if (r.phase === 'finished') return failed('wrong_phase');
     const cam = r.camera;
     if (r.phase !== 'cancelled') {
@@ -586,7 +603,7 @@ export class MoveSource {
       message: `Camera move ${r.id} (${r.camera} to ${r.peer.name || r.peer.proxyId}) ${reason ? 'expired: not approved within 30 minutes' : `cancelled in ${phase}`}: ${r.switchedOver ? 'the camera is back here with its own certificate and FTP' : 'the camera stayed here'}`,
       details: { moveId: r.id, camera: r.camera, source: this.self(), target: r.peer.proxyId, role: 'source', phase, switchedBack: r.switchedOver === true, ...(reason ? { reason } : {}), ...detail },
     });
-    this.d.journal.bury({ moveId: r.id, role: 'source', phase: 'cancelled' });
+    this.d.journal.bury({ moveId: r.id, role: 'source', phase: 'cancelled', ...(r.switchedOver ? { camera: r.camera } : {}) });
     this.d.journal.remove(r.id);
   }
 
@@ -604,7 +621,12 @@ export class MoveSource {
 
   private terminalEvent(id: string, phase: MoveTombstone['phase'], code?: string): void {
     if (phase === 'failed') this.d.emit({ kind: 'move.phase', moveId: id, role: 'source', phase: 'failed', ok: false, code: code ?? 'internal' });
-    else this.d.emit({ kind: 'move.phase', moveId: id, role: 'source', phase, ok: true });
+    else this.d.emit({ kind: 'move.phase', moveId: id, role: 'source', phase, ok: true, ...this.keep() });
+  }
+
+  private keep(): { keepDays?: number } {
+    const r = this.d.retention?.();
+    return r ? { keepDays: keepDaysOf(r) } : {};
   }
 
   // Offers never approved (final review 5): an opened move with no plan
@@ -665,9 +687,9 @@ export class MoveSource {
   }
 
   // After every welcome (B2): the open move's phase again.
-  reemit(current: { moveId: string; role: 'source' | 'target'; phase: string } | null): void {
+  reemit(current: { moveId: string; role: 'source' | 'target'; phase: string; code?: string } | null): void {
     if (!current || current.phase === 'failed') return;
-    this.d.emit({ kind: 'move.phase', moveId: current.moveId, role: current.role, phase: current.phase as Exclude<MoveRecord['phase'], 'failed'>, ok: true });
+    this.d.emit({ kind: 'move.phase', moveId: current.moveId, role: current.role, phase: current.phase as Exclude<MoveRecord['phase'], 'failed'>, ok: true, ...(current.code ? { code: current.code } : {}) });
   }
 
   handlers(): Record<string, Handler> {

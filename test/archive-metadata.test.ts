@@ -10,7 +10,7 @@ import { saveAnalysis } from '../src/catalog/analyses';
 import { insertCheck, setCheckImage } from '../src/catalog/still-checks';
 import { insertArchive } from '../src/catalog/archive';
 import { chooseThumbnail, takeSnapshot, type ThumbDeps } from '../src/archive/metadata';
-import { itemJson, metadataJson } from '../src/archive/json';
+import { itemJson, metadataJson, withMoveNote } from '../src/archive/json';
 
 const fresh = () => openCatalog(join(mkdtempSync(join(tmpdir(), 'camproxy-am-')), 'catalog.sqlite'));
 const T = 1_759_689_000_000; // a whole second
@@ -120,7 +120,7 @@ describe('the JSON', () => {
     expect(item).toEqual({
       id: row.id, cam: 'cam1', cameraName: 'Den', name: 'Fox', labels: ['Pet', 'SD'], retentionDays: 10, createdAt: T + 100_000, expiresAt: T + 100_000 + 10 * 86_400_000,
       recordedFrom: T, recordedTo: T + 30_000, durationS: 30, quality: 'sd', original: false, bytes: 1234, source: { type: 'clip', clipId: 4, stream: 'sub' },
-      eventKinds: ['motion', 'person', 'pet'], found: ['pet', 'vehicle'], thumbnail: { from: 'still', at: T + 4000 }, createdBy: 'client',
+      eventKinds: ['motion', 'person', 'pet'], found: ['pet', 'vehicle'], thumbnail: { from: 'still', at: T + 4000 }, createdBy: 'client', move: null,
       urls: { video: `/api/archive/${row.id}/video`, thumbnail: `/api/archive/${row.id}/thumbnail`, metadata: `/api/archive/${row.id}/metadata` },
     });
     const meta = metadataJson(row);
@@ -134,5 +134,23 @@ describe('the JSON', () => {
     const c = fresh();
     const row = insertArchive(c, { cam: 'cam1', name: 'x', labels: [], retention_days: null, created_at: 1, recorded_from: 1, recorded_to: 2, quality: '4k', original: 1, duration_s: 1, bytes: 1, files: '{', source: '{', thumb_from: 'none', thumb_at: null, created_by: 'admin', metadata: 'nope' });
     expect(itemJson(row)).toMatchObject({ cameraName: null, source: null, eventKinds: [], found: [], original: true, expiresAt: null, retentionDays: null });
+  });
+});
+
+describe('the move note', () => {
+  const rowWith = (metadata: string) => ({ ...insertArchive(fresh(), { cam: 'cam1', name: 'x', labels: [], retention_days: null, created_at: T, recorded_from: T, recorded_to: T + 1000, quality: 'sd', original: 0, duration_s: 1, bytes: 1, files: '{}', source: '{}', thumb_from: 'none', thumb_at: null, created_by: 'admin', metadata }) });
+  it('is read from the snapshot, shape-checked', () => {
+    const note = { moveId: 'mv_A', from: { proxyId: 'prx_S', name: 'old' }, at: 1 };
+    expect(itemJson(rowWith(JSON.stringify({ move: note }))).move).toEqual(note);
+    expect(itemJson(rowWith('{}')).move).toBeNull();
+    expect(itemJson(rowWith(JSON.stringify({ move: { from: { proxyId: 'p', name: 'n' }, at: 1 } }))).move).toBeNull();
+    expect(itemJson(rowWith(JSON.stringify({ move: 'x' }))).move).toBeNull();
+    expect(metadataJson(rowWith(JSON.stringify({ move: note }))).item.move).toEqual(note);
+  });
+  it('withMoveNote keeps the rest of the snapshot', () => {
+    const out = JSON.parse(withMoveNote('{"events":[1],"archivedAt":5}', { moveId: 'mv_A', at: 2, kept: true, reason: 'failed', to: { proxyId: 'prx_T', name: 'new' } }));
+    expect(out.events).toEqual([1]);
+    expect(out.move).toMatchObject({ moveId: 'mv_A', kept: true, reason: 'failed', to: { name: 'new' } });
+    expect(JSON.parse(withMoveNote('not json', { moveId: 'mv_A', at: 2 })).move.moveId).toBe('mv_A');
   });
 });

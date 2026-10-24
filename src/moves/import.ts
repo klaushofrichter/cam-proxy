@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
-import { metadataJson } from '../archive/json';
+import { metadataJson, withMoveNote } from '../archive/json';
+import type { ArchiveMoveNote } from '../archive/metadata';
 import { CAM_ID } from '../archive/paths';
 import type { ArchiveRow } from '../catalog/archive';
 import type { Catalog } from '../catalog/db';
@@ -76,7 +77,7 @@ export function landingPath(d: Pick<ImportDeps, 'dataDir' | 'staging'>, rel: str
 const isValue = (v: unknown): v is string | number | null => v === null || typeof v === 'string' || (typeof v === 'number' && Number.isFinite(v));
 const posInt = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0;
 
-export function importRows(d: ImportDeps, cam: string, rows: TableRows[], verified: Set<string>, prev: ImportMap = {}): { inserted: number; skipped: number; failed: number; map: ImportMap } {
+export function importRows(d: ImportDeps, cam: string, rows: TableRows[], verified: Set<string>, prev: ImportMap = {}, note?: Omit<ArchiveMoveNote, 'kept' | 'reason'>): { inserted: number; skipped: number; failed: number; map: ImportMap } {
   const db = d.catalog.db;
   const columns = new Map<Table, string[]>(TABLES.map((t) => [t, (db.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[]).map((c) => c.name).filter((c) => c !== 'id')]));
   const map: Record<Table, Map<number, number>> = Object.fromEntries(TABLES.map((t) => [t, new Map((prev[t] ?? []).map(([s, n]) => [s, n]))])) as Record<Table, Map<number, number>>;
@@ -153,7 +154,7 @@ export function importRows(d: ImportDeps, cam: string, rows: TableRows[], verifi
     const base = `archive/${cam}/${src}`;
     const clip = usable(`${base}/clip.mp4`, ['archive']);
     if (!clip) return null;
-    const id = insert(t, row, { cam });
+    const id = insert(t, row, note && typeof row.metadata === 'string' ? { cam, metadata: withMoveNote(row.metadata, { ...note }) } : { cam });
     if (id === null) return null;
     const folder = join(d.dataDir, 'archive', cam, String(id));
     rmSync(folder, { recursive: true, force: true }); // a leftover of an id rolled back before

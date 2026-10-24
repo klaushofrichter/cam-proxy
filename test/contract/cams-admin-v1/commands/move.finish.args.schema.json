@@ -17,6 +17,9 @@
     },
     "abandoned": {
       "type": "boolean"
+    },
+    "return": {
+      "type": "boolean"
     }
   },
   "required": [

@@ -5,7 +5,7 @@ import { AdminClient, type ClientLog, type Timing } from '../src/fleet/client';
 import { ALLOW_ENTRIES, entryFor, ENTRY_TEXT, IMPLEMENTED } from '../src/fleet/policy';
 import { newId } from '../src/fleet/protocol';
 import { moveHandlers } from '../src/moves/commands';
-import type { MoveEvent } from '../src/moves/types';
+import type { KeepList, MoveCheck, MoveEvent } from '../src/moves/types';
 import { buildHealth } from '../src/health/summary';
 import { readFileSync } from 'fs';
 import { join } from 'path';
@@ -16,8 +16,8 @@ import { until } from './helpers/proxy';
 
 // The camera-move group of the cams-admin contract (cams-admin contract/README
 // "Camera moves"; cam-proxy plan 2026-10-21-camera-move-cam-proxy Task 1): the
-// ten commands (move.begin from cams-admin starts a move), their two allow entries, the signed events.
-const MOVE = ['move.targets', 'move.open', 'move.offer', 'move.answer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel', 'move.begin'];
+// twelve commands (move.begin from cams-admin starts a move), their two allow entries, the signed events.
+const MOVE = ['move.targets', 'move.open', 'move.offer', 'move.answer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel', 'move.begin', 'move.return.open', 'move.return.start'];
 const quiet: ClientLog = { info() {}, warn() {}, debug() {} };
 const FAST: Partial<Timing> = { connectTimeoutMs: 1000, helloTimeoutMs: 500, closeGraceMs: 200, backoffCapMs: 300, minIntervalS: 0.2, jitterS: 0, byeWaitMs: 500 };
 const isMove = (f: Fixture) => f.schema === 'command' && MOVE.includes((f.message as { body: { command: string } }).body.command);
@@ -39,15 +39,15 @@ const argsOfFixture = (name: string) => ((fixture(name).message as { body: { arg
 describe('the move commands against the vendored contract', () => {
   it('every move fixture validates against IMPLEMENTED (no pending fixtures)', () => {
     const moves = fixtures().filter(({ f }) => isMove(f));
-    expect(moves.length).toBeGreaterThanOrEqual(11);
+    expect(moves.length).toBeGreaterThanOrEqual(14);
     expect(moves.filter(({ f }) => pending(f, IMPLEMENTED)).map((x) => x.name)).toEqual([]);
     for (const { name, f } of moves) {
       const want = name.startsWith('valid-') ? 'run' : f.$expect!.runtime;
       expect(verdict(f), name).toBe(want);
     }
-    // each of the ten has a valid fixture and a validator
+    // each of the twelve has a valid fixture and a validator
     for (const c of MOVE) {
-      expect(moves.some(({ name }) => name === `valid-command-${c.replace('.', '-')}`), c).toBe(true);
+      expect(moves.some(({ name }) => name === `valid-command-${c.replace(/\./g, '-')}`), c).toBe(true);
       expect(ARGS_VALIDATORS[c], c).toBeTypeOf('function');
       expect(IMPLEMENTED.has(c), c).toBe(true);
     }
@@ -81,6 +81,12 @@ describe('the move commands against the vendored contract', () => {
     for (const c of ['move.offer', 'move.start']) expect(entryFor(c, { v: 1 }), c).toBe('move.receive');
     expect(entryFor('move.finish', { role: 'source' })).toBe('move.send');
     expect(entryFor('move.finish', { role: 'target' })).toBe('move.receive');
+    // the copy back: finish with return flips the entry, the two return commands have their own side
+    expect(entryFor('move.finish', { role: 'source', return: true })).toBe('move.receive');
+    expect(entryFor('move.finish', { role: 'target', return: true })).toBe('move.send');
+    expect(entryFor('move.finish', { role: 'source', return: false })).toBe('move.send');
+    expect(entryFor('move.return.open', {})).toBe('move.receive');
+    expect(entryFor('move.return.start', {})).toBe('move.send');
     expect(entryFor('config.get', { v: 1 })).toBe('config.get');
     expect(entryFor('camera.action', { action: 'camera-test' })).toBe('camera.action:camera-test');
     for (const e of ['move.send', 'move.receive']) {
@@ -100,9 +106,44 @@ describe('the move commands against the vendored contract', () => {
     expect(ARGS_VALIDATORS['move.finish']({ ...a, v: 2 })).toMatchObject({ ok: false, code: 'unsupported_version' });
   });
 
+  it('move.finish takes an optional boolean return; the return commands are checked like the others', () => {
+    const a = argsOfFixture('valid-command-move-finish');
+    expect(ARGS_VALIDATORS['move.finish']({ ...a, return: true })).toMatchObject({ ok: true });
+    expect(ARGS_VALIDATORS['move.finish']({ ...a, return: false })).toMatchObject({ ok: true });
+    expect(ARGS_VALIDATORS['move.finish']({ ...a, return: 'yes' })).toMatchObject({ ok: false, code: 'invalid_args', detail: 'return' });
+    const fin = fixture('valid-command-move-finish-return');
+    expect(verdict(fin, ['move.receive'])).toBe('run');
+    expect(verdict(fin, ['move.send'])).toBe('not_allowed');
+    expect(verdict(fixture('valid-command-move-return-open'))).toBe('run');
+    expect(verdict(fixture('valid-command-move-return-open'), ['move.send'])).toBe('not_allowed');
+    expect(verdict(fixture('valid-command-move-return-start'), ['move.receive'])).toBe('not_allowed');
+    const open = argsOfFixture('valid-command-move-return-open');
+    const start = argsOfFixture('valid-command-move-return-start');
+    expect(ARGS_VALIDATORS['move.return.open']({ ...open, returnOf: 'mv_short' })).toMatchObject({ ok: false, detail: 'returnOf' });
+    expect(ARGS_VALIDATORS['move.return.open']({ ...open, tokenHash: 'x' })).toMatchObject({ ok: false, detail: 'tokenHash' });
+    expect(ARGS_VALIDATORS['move.return.start']({ ...start, token: 'short' })).toMatchObject({ ok: false, detail: 'token' });
+    expect(ARGS_VALIDATORS['move.return.start']({ ...start, returnOf: 5 })).toMatchObject({ ok: false, detail: 'returnOf' });
+    expect(ARGS_VALIDATORS['move.return.start']({ ...start, done: ['stills:today'] })).toMatchObject({ ok: false, detail: 'done' });
+    expect(ARGS_VALIDATORS['move.return.start']({ ...start, source: { ...(start.source as object), url: 'ftp://x' } })).toMatchObject({ ok: false, detail: 'source' });
+  });
+
+  it('a move.phase with check, keepDays and returnPending validates on the strict schema and the type carries them', () => {
+    const v = strict('event');
+    for (const n of ['valid-event-move-phase-check', 'valid-event-move-phase-return-pending']) {
+      const m = fixture(n).message;
+      expect(v(m), `${n}: ${why(v)}`).toBe(true);
+    }
+    const body = (fixture('valid-event-move-phase-check').message as { body: Record<string, unknown> }).body;
+    const ev: MoveEvent = { kind: 'move.phase', moveId: body.moveId as string, role: 'target', phase: 'copied', ok: false, check: body.check as MoveCheck, keepDays: 30, returnPending: true };
+    expect(ev.kind).toBe('move.phase');
+    const keep: KeepList = { 'clips:2026-10-20': ['clips/a.mp4'], 'archive:2026-10-20': 'all' };
+    expect(Object.keys(keep)).toHaveLength(2);
+    expect(fixture('invalid-event-move-phase-keepdays-low').$expect).toBeTruthy();
+  });
+
   it('the validators agree with the strict schemas on the fixtures and refuse their mutations', () => {
     for (const c of MOVE) {
-      const a = argsOfFixture(`valid-command-${c.replace('.', '-')}`);
+      const a = argsOfFixture(`valid-command-${c.replace(/\./g, '-')}`);
       expect(ARGS_VALIDATORS[c](a), c).toMatchObject({ ok: true });
       const v = strict(`commands/${c}.args`);
       expect(v(a), `${c}: ${why(v)}`).toBe(true);

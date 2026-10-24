@@ -99,6 +99,11 @@ async function fixture(o: { phase?: MoveRecord['phase']; busy?: boolean; journal
       const r = request(base()).get(path).set('X-Forwarded-For', o2.ip ?? TARGET_IP);
       return o2.token === null ? r : r.set('Authorization', `Bearer ${o2.token ?? TOKEN}`);
     },
+    putJson: (path: string, body: unknown, o2: { ip?: string; token?: string | null; raw?: string } = {}) => {
+      const r = request(base()).put(path).set('X-Forwarded-For', o2.ip ?? TARGET_IP).set('Content-Type', 'application/json');
+      const authed = o2.token === null ? r : r.set('Authorization', `Bearer ${o2.token ?? TOKEN}`);
+      return authed.send(o2.raw ?? JSON.stringify(body));
+    },
   };
 }
 
@@ -460,3 +465,71 @@ describe('in the proxy', () => {
     expect(statuses.every((x) => x === 200)).toBe(true);
   }, 60_000);
 });
+
+describe('PUT /api/moves/:id/outcome (step 4 Task 6, Review Focus 5)', () => {
+  const OUT = `/api/moves/${MOVE}/outcome`;
+  it('PUT outcome stores the keep list; a path outside the camera folders is dropped; 1 MiB+ is 413', async () => {
+    const f = await fixture({ phase: 'released' });
+    const a = 'clips/cam3/2026/10/01/1200-1.mp4';
+    const res = await f.putJson(OUT, {
+      keep: { 'clips:2026-10-01': [a, 'clips/cam4/2026/10/01/1200-1.mp4', 'secret/x.bin', 'clips/cam3/../cam4/x.mp4', 'stills/cam3/2026/10/01/1200.pack'], 'archive:2026-10-01': 'all' },
+      missing: ['archive/cam3/5/clip.mp4', 'archive/cam4/5/clip.mp4'],
+      copied: { 'archive:2026-10-01': { files: 2, bytes: 10, rows: 1 }, 'archive:2026-10-02': { files: 1, bytes: 5, rows: 1 } },
+    });
+    expect(res.status).toBe(204);
+    let r = f.journal.load(MOVE)!;
+    // Only the camera's own paths in the chunk kind's folders.
+    expect(r.keep).toEqual({ 'clips:2026-10-01': [a], 'archive:2026-10-01': 'all' });
+    expect(r.keepMissing).toEqual(['archive/cam3/5/clip.mp4']);
+    expect(r.keepCopied).toEqual({ 'archive:2026-10-01': { files: 2, bytes: 10, rows: 1 }, 'archive:2026-10-02': { files: 1, bytes: 5, rows: 1 } });
+    // A later report can only keep more: lists are a union, 'all' stays, copied only what both said alike.
+    expect((await f.putJson(OUT, { keep: { 'clips:2026-10-01': ['clips/cam3/2026/10/01/1300-1.mp4'], 'archive:2026-10-01': [], 'stills:2026-10-01': 'all' }, copied: { 'archive:2026-10-01': { files: 2, bytes: 10, rows: 1 }, 'archive:2026-10-02': { files: 1, bytes: 6, rows: 1 } } })).status).toBe(204);
+    r = f.journal.load(MOVE)!;
+    expect(r.keep).toEqual({ 'clips:2026-10-01': [a, 'clips/cam3/2026/10/01/1300-1.mp4'], 'archive:2026-10-01': 'all', 'stills:2026-10-01': 'all' });
+    expect(r.keepCopied).toEqual({ 'archive:2026-10-01': { files: 2, bytes: 10, rows: 1 } });
+    // Shapes: 400 keep.
+    for (const body of [{}, { keep: [] }, { keep: { 'nope:2026-10-01': 'all' } }, { keep: { 'clips:2026-10-01': 'some' } }, { keep: { 'clips:2026-10-01': [5] } }, { keep: {}, copied: { 'archive:2026-10-01': { files: -1, bytes: 0, rows: 0 } } }, { keep: {}, missing: 'x' }]) {
+      const b = await f.putJson(OUT, body);
+      expect(b.status, JSON.stringify(body)).toBe(400);
+      expect(b.body).toEqual({ error: 'invalid', detail: 'keep' });
+    }
+    expect((await f.putJson(OUT, null, { raw: '{not json' })).status).toBe(400);
+    // Over 1 MiB: refused, nothing changed.
+    const big = await f.putJson(OUT, { keep: { 'clips:2026-10-01': Array.from({ length: 20_000 }, (_, i) => `clips/cam3/2026/10/01/${'y'.repeat(40)}${i}.mp4`) } });
+    expect(big.status).toBe(413);
+    expect(f.journal.load(MOVE)!.keep).toEqual(r.keep);
+    // A record that ended no longer takes one (the guard: the token is refused).
+    f.update((x) => {
+      x.phase = 'finished';
+    });
+    expect((await f.putJson(OUT, { keep: {} })).status).toBe(403);
+  });
+
+  it('a report without copied, then one with it: no Archive chunk counts as copied (M1)', async () => {
+    const f = await fixture({ phase: 'released' });
+    expect((await f.putJson(OUT, { keep: {} })).status).toBe(204);
+    expect(f.journal.load(MOVE)!.keepCopied).toEqual({});
+    expect((await f.putJson(OUT, { keep: {}, copied: { 'archive:2026-10-01': { files: 2, bytes: 10, rows: 1 } } })).status).toBe(204);
+    expect(f.journal.load(MOVE)!.keepCopied).toEqual({});
+  });
+
+  it('PUT outcome without the move token is 401 and is rate-limited like the GETs', async () => {
+    // The guard's one answer is 403 move_token (as for every move route); refusals count toward its limiter.
+    const f = await fixture({ phase: 'released', refusedPerMinute: 3 });
+    const st: number[] = [];
+    for (let i = 0; i < 5; i++) st.push((await f.putJson(OUT, { keep: { 'archive:2026-10-01': 'all' } }, { token: i % 2 ? 'junk' : null })).status);
+    expect(st).toEqual([403, 403, 403, 429, 429]);
+    expect(f.journal.load(MOVE)!.keep).toBeUndefined();
+    // A body is never read before the guard: an oversized one without a token is refused by the guard, not parsed.
+    // (The guard answers before the upload ends: the client may see the reset instead of the 403.)
+    const g = await fixture({ phase: 'released' });
+    try {
+      const res = await g.putJson(OUT, { keep: { 'clips:2026-10-01': Array.from({ length: 20_000 }, (_, i) => `clips/cam3/${'z'.repeat(40)}${i}`) } }, { token: null });
+      expect(res.status).toBe(403);
+    } catch (err) {
+      expect((err as NodeJS.ErrnoException).code).toMatch(/ECONNRESET|EPIPE/);
+    }
+    expect(g.journal.load(MOVE)!.keep).toBeUndefined();
+  });
+});
+

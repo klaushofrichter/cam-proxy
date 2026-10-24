@@ -148,6 +148,28 @@ paths:
         '409': { description: "{ error: not_ready } (move.go has not stored the target's key yet)" }
         '403': { description: "{ error: move_token } (as for /probe)" }
         '429': { description: "{ error: rate_limited } (as for /probe)" }
+  /api/moves/{id}/outcome:
+    put:
+      summary: "The receiving proxy's outcome: what this (sending) proxy keeps at move.finish"
+      description: >
+        Body `{ keep: { <chunkId>: [paths] | 'all' }, missing?: [Archive paths], copied?: { <archive chunkId>: { files, bytes, rows } } }`
+        (src/moves/check.ts parseOutcome), 1 MiB at most, read only after the move token passed. Paths outside the camera's
+        folders of the chunk's kind are dropped. Reports join: keep lists are a union ('all' wins), an Archive chunk counts
+        as copied only when every report names it alike. For a move's source, a report can only make this proxy keep more:
+        without any report every Archive item of the camera stays, and an Archive item is deleted only when its chunk is
+        reported copied with the listing this proxy still has. For the source record of a copy back (a return), it is the
+        other way round: without any report nothing captured is deleted, and the first report enables deletes in the chunks
+        this proxy served; a return's `/chunks` and `/rows` are filtered to what was captured since the switch-over. Kept Archive items get a "Kept here" note (ArchiveItem.move).
+      security: [{ moveToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' } }
+      responses:
+        '204': { description: stored }
+        '400': { description: "{ error: invalid, detail: keep } (not of the shape, or not JSON)" }
+        '403': { description: "{ error: move_token } (as for /probe; also once the move ended)" }
+        '409': { description: "{ error: wrong_phase } (the record is in its last phase)" }
+        '413': { description: "{ error: too_large } (over 1 MiB)" }
+        '429': { description: "{ error: rate_limited } (as for /probe)" }
   /api/cameras:
     get:
       summary: The camera and its state
@@ -509,7 +531,7 @@ paths:
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
         - { name: offset, in: query, schema: { type: integer, minimum: 0 } }
       responses:
-        '200': { description: '{ total, offset, limit, items: [ArchiveItem] } (docs/archive.md §1)' }
+        '200': { description: '{ total, offset, limit, items: [ArchiveItem] } (docs/archive.md §1; an item has move: the note of the camera move that brought or kept it, or null)' }
         '400': { description: '{error: invalid, detail}' }
         '401': { description: not signed in }
   /api/archive/status:

@@ -367,3 +367,127 @@ world('a camera move started by cams-admin is approved by the source within its 
     }
   }, 420_000);
 });
+
+// A cancel after the switch-over (step 4 Task 11, spec §1): the camera goes back,
+// then the return (copy back) brings what the target captured itself to the
+// original; the target then deletes what the original verified and what the
+// move had imported. cams-admin's relay is this test (return.open, return.start, finish).
+world('a cancel after the switch-over copies the target\'s capture back', () => {
+  it('cancel after the switch-over copies the target\'s capture back', async () => {
+    const before = seeded(S);
+    expect(before).toEqual({ clips: 2, events: 2, stills: 4 });
+    const admin = auth(ADMIN_TOKEN);
+
+    // 1. The move, as above, up to copied (its imports are on the target).
+    const tr = await request(S.base).post('/control/moves/targets').set(admin).send({ camera: 'cam3' }).expect(202);
+    await until(() => events(fakeS, 'move.targets').some((e) => e.requestId === tr.body.requestId), 10_000);
+    await run(fakeS, 'move.targets', { v: 1, requestId: tr.body.requestId, targets: [{ proxyId: targetId, name: 'Mini PC', site: 'u' }] });
+    const rq = await request(S.base).post('/control/moves').set(admin).send({ camera: 'cam3', target: targetId }).expect(202);
+    const requestId = rq.body.requestId as string;
+    await until(() => events(fakeS, 'move.request').some((e) => e.requestId === requestId), 10_000);
+    const req = events(fakeS, 'move.request').find((e) => e.requestId === requestId)!;
+    const moveId = newId('mv_');
+    await run(fakeS, 'move.open', { v: 1, moveId, requestId, camera: 'cam3', tokenHash: hashMoveToken(TOKEN), targetIp: '127.0.0.1' });
+    const sourceCa = (await request(S.base).get('/tls/ca.pem').expect(200)).text;
+    const offer = await run(fakeT, 'move.offer', {
+      v: 1, moveId, token: TOKEN,
+      source: { proxyId: sourceId, name: 'Garage Pi', url: S.base, caFingerprints: [fingerprintOf(sourceCa)], tlsServername: 'proxy.s.internal' },
+      camera: { camsId: 'garden-cam', ...req.camera }, summary: req.summary, settings: req.settings,
+    });
+    const summary = req.summary as MoveSummary;
+    const kinds = (['stills', 'clips', 'events'] as const).filter((k) => summary[k].files + summary[k].rows > 0);
+    const estimateS = Math.max(1, Math.ceil(kinds.reduce((n, k) => n + summary[k].bytes, 0) / offer.probeBps));
+    await run(fakeS, 'move.answer', { v: 1, moveId, requestId, target: { proxyId: targetId, name: 'Mini PC' }, accept: true, space: offer.space as Space, estimateS });
+    const plan: MovePlan = { transfer: true, kinds: [...kinds], space: 'all', targetSettings: null, budgetS: Math.max(estimateS, 20), estimateS };
+    await request(S.base).post(`/control/moves/${moveId}/approve`).set(admin).send({ plan }).expect(202);
+    await until(() => events(fakeS, 'move.approve').some((e) => e.moveId === moveId), 10_000);
+    const approved = events(fakeS, 'move.approve').find((e) => e.moveId === moveId)!.plan as MovePlan;
+    const started = await run(fakeT, 'move.start', { v: 1, moveId, plan: approved, settings: req.settings, done: [] });
+    await run(fakeS, 'move.go', { v: 1, moveId, plan: approved, targetPublicKey: started.publicKey, expectedLeaf: started.leafFingerprint });
+    await until(() => phases(fakeT, moveId).includes('switched'), 120_000);
+    await until(() => T.proxy.cameras.get('cam3')?.status.state().online === true, 30_000);
+    await run(fakeS, 'move.release', { v: 1, moveId });
+    await until(() => phases(fakeT, moveId).includes('copied'), 180_000);
+    expect(seeded(T)).toEqual(before);
+
+    // 2. The target's own capture while it had the camera: two still minutes and an Archive item.
+    // Today (UTC): never one of the seeded days, whatever the time of day.
+    const minute = Math.floor(Date.now() / DAY) * DAY;
+    const ownStills = [minute, minute + 60_000].map((m) => `${minutePath(dataOf(T), 'stills', 'cam3', m)}.pack`);
+    for (const p of ownStills) put(p, 1500);
+    const created = Date.now() - 1000;
+    const arcId = Number(T.proxy.catalog.db.prepare("INSERT INTO archive (cam, name, labels, created_at, recorded_from, recorded_to, quality, original, duration_s, bytes, files, source, thumb_from, created_by, metadata) VALUES ('cam3', 'Fox at the gate', '[]', ?, ?, ?, 'sub', 1, 10, 3000, '[\"clip.mp4\"]', 'clips', 'first', 'admin', '{}')").run(created, created - 20_000, created - 10_000).lastInsertRowid);
+    put(join(dataOf(T), 'archive', 'cam3', String(arcId), 'clip.mp4'), 3000);
+    await new Promise((r) => setTimeout(r, 20));
+
+    // 3. Cancel after the switch-over: the target lets go first, then the source runs the camera again.
+    await run(fakeT, 'move.cancel', { v: 1, moveId, role: 'target', copied: 'delete' });
+    expect(events(fakeT, 'move.phase').filter((e) => e.moveId === moveId).at(-1)).toMatchObject({ phase: 'cancelled', returnPending: true });
+    await run(fakeS, 'move.cancel', { v: 1, moveId, role: 'source', expectedLeaf: started.leafFingerprint });
+    await until(() => new MoveJournal(join(S.dir, 'data', 'admin', 'moves')).ended(moveId, 'source')?.camera === 'cam3', 60_000);
+    await until(() => S.proxy.cameras.get('cam3')?.status.state().online === true, 30_000);
+    // Nothing deleted on the target by the cancel (the copy back decides).
+    expect(seeded(T)).toEqual(before);
+
+    // 4. The return: open on the target (the return's source), start on the original (its target).
+    const returnId = newId('mv_');
+    const RETURN_TOKEN = randomBytes(32).toString('base64url');
+    const opened = await run(fakeT, 'move.return.open', { v: 1, moveId: returnId, returnOf: moveId, tokenHash: hashMoveToken(RETURN_TOKEN), targetIp: '127.0.0.1' });
+    expect(opened.chunks).toBeGreaterThanOrEqual(2);
+    const targetCa = (await request(T.base).get('/tls/ca.pem').expect(200)).text;
+    const returnSource = { proxyId: targetId, name: 'Mini PC', url: T.base, caFingerprints: [fingerprintOf(targetCa)], tlsServername: 'proxy.u.internal' };
+    await run(fakeS, 'move.return.start', { v: 1, moveId: returnId, returnOf: moveId, token: RETURN_TOKEN, done: [], source: returnSource });
+    // cams-admin "restarts" (ruling 20): a new token at the new proxy (return.open again) and at
+    // the original (return.start again), whose copier starts over from the record. A return is
+    // not paced, so it copies at once.
+    const RETURN_TOKEN_2 = randomBytes(32).toString('base64url');
+    await run(fakeT, 'move.return.open', { v: 1, moveId: returnId, returnOf: moveId, tokenHash: hashMoveToken(RETURN_TOKEN_2), targetIp: '127.0.0.1' });
+    await run(fakeS, 'move.return.start', { v: 1, moveId: returnId, returnOf: moveId, token: RETURN_TOKEN_2, done: [], source: returnSource });
+    await until(() => phases(fakeS, returnId).includes('copied'), 180_000);
+    expect(events(fakeS, 'move.phase').find((e) => e.moveId === returnId && e.phase === 'copied')).toMatchObject({ role: 'target', check: { complete: true } });
+
+    // 5. The finish: the original (target role) first, then the new proxy (source role).
+    // cam-sim keeps the target recording stills while it has the camera; on a slow run the switch-over and the
+    // cancel fall in different minutes, and those finished minutes go back too. So: count what the target deletes.
+    const tStills = join(dataOf(T), 'stills', 'cam3');
+    const stillFiles = () => (existsSync(tStills) ? (readdirSync(tStills, { recursive: true }) as string[]).filter((f) => f.endsWith('.pack')).map((f) => join(tStills, f)) : []);
+    const tBefore = stillFiles();
+    await run(fakeS, 'move.finish', { v: 1, moveId: returnId, role: 'target', abandoned: false, return: true });
+    const fin = await run(fakeT, 'move.finish', { v: 1, moveId: returnId, role: 'source', abandoned: false, return: true });
+    const tLeft = new Set(stillFiles());
+    const tDeleted = tBefore.filter((f) => !tLeft.has(f));
+    expect(fin.deleted.stills.files).toBe(tDeleted.length);
+    expect(tDeleted.length).toBeGreaterThanOrEqual(4 + 2); // the move's 4 imported stills, the 2 captured ones (and any live capture)
+    for (const p of ownStills) expect(tDeleted, p).toContain(p);
+    // Only what the original holds (verified) was deleted.
+    for (const f of tDeleted) expect(existsSync(f.replace(dataOf(T), dataOf(S))), f).toBe(true);
+    expect(fin.deleted.archive.files).toBe(1);
+    for (const fake of [fakeS, fakeT]) for (const e of fake.events().filter((x) => String(bodyOf(x).kind).startsWith('move.'))) expect(strict('event')(e.msg), why(strict('event'))).toBe(true);
+
+    // The original has its own content, the target's captured stills and the Archive item with move.from.
+    expect(seeded(S)).toEqual(before);
+    for (const p of ownStills) expect(existsSync(p.replace(dataOf(T), dataOf(S))), p).toBe(true);
+    const arc = S.proxy.catalog.db.prepare("SELECT id, name, metadata FROM archive WHERE cam = 'cam3'").all() as { id: number; name: string; metadata: string }[];
+    expect(arc.map((a) => a.name)).toEqual(['Fox at the gate']);
+    expect(JSON.parse(arc[0].metadata).move).toMatchObject({ moveId: returnId, from: { proxyId: targetId, name: 'Mini PC' } });
+    expect(existsSync(join(dataOf(S), 'archive', 'cam3', String(arc[0].id), 'clip.mp4'))).toBe(true);
+    // The new proxy has none of it: neither the imports nor its own capture; no move open any more.
+    expect(seeded(T)).toEqual({ clips: 0, events: 0, stills: 0 });
+    for (const p of ownStills) expect(existsSync(p), p).toBe(false);
+    expect(T.proxy.catalog.db.prepare("SELECT COUNT(*) AS n FROM archive WHERE cam = 'cam3'").get()).toEqual({ n: 0 });
+    const tj = new MoveJournal(join(T.dir, 'data', 'admin', 'moves'));
+    const sj = new MoveJournal(join(S.dir, 'data', 'admin', 'moves'));
+    expect(tj.active()).toEqual([]);
+    expect(sj.active()).toEqual([]);
+    expect(phases(fakeT, returnId)).toEqual(['released', 'released', 'finished']); // opened, re-keyed, finished
+    expect(phases(fakeS, returnId).slice(-2)).toEqual(['copied', 'finished']);
+    expect(sj.ended(moveId, 'source')).toMatchObject({ returned: true });
+    expect(actionsOf(T).has('move-return') && actionsOf(S).has('move-return')).toBe(true);
+    // The return's token is refused after the end; never a secret in an audit.
+    expect((await request(T.base).get(`/api/moves/${returnId}/manifest`).set('Authorization', `Bearer ${RETURN_TOKEN_2}`)).status).toBe(403);
+    for (const p of [S, T]) {
+      const text = auditText(p);
+      for (const secret of [TOKEN, RETURN_TOKEN, RETURN_TOKEN_2, sims[0].password, 'PRIVATE KEY']) expect(text.includes(secret), 'an audit has a secret').toBe(false);
+    }
+  }, 420_000);
+});
