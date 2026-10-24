@@ -941,6 +941,8 @@ export class Copier {
       this.audit('move-check', check.complete ? 'success' : 'failure',
         `${check.complete ? 'complete' : 'not complete'}: ${sum('missing')} missing, ${sum('recovered')} recovered, ${sum('failed')} failed, ${sum('expired')} expired at the source`,
         { check });
+      // Kept with the record: a repeated move.return.start sends copied again with it (Task 11).
+      fresh.check = check;
     }
     this.d.setPhase(fresh, 'copied', {
       detail: `${this.manifest.length} chunks: ${counts.verified} files verified, ${counts.skipped} skipped, ${counts.failed} failed, ${counts.bytes} bytes`,
@@ -992,8 +994,14 @@ export class CopyRunner {
     await run.done;
   }
 
-  async stopAll(): Promise<void> {
-    await Promise.all([...this.runs.keys()].map((id) => this.stop(id)));
+  // The process stop: every copier aborted; waited for at most `waitMs` (a
+  // file in flight that ignores the abort must not hold up the stop, as
+  // MoveTarget.stopAll).
+  async stopAll(waitMs = 3000): Promise<void> {
+    const all = Promise.all([...this.runs.keys()].map((id) => this.stop(id)));
+    let t: NodeJS.Timeout | undefined;
+    await Promise.race([all, new Promise<void>((r) => (t = setTimeout(r, waitMs)))]);
+    clearTimeout(t);
   }
 
   // An unexpected throw (the journal or the catalog unwritable): a fixed line, the move failed.

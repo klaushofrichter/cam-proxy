@@ -10,7 +10,7 @@ import { logger } from '../log';
 import type { Storage } from '../storage';
 import { allChunkParts } from './chunk-parts';
 import { relOk, rowKey } from './import';
-import { cameraItems, chunkDay, listChunks } from './inventory';
+import { cameraItems, chunkDay, CONTENT_FOLDERS, listChunks, type ItemFilter } from './inventory';
 import { isMoveId, type MoveRecord } from './journal';
 import type { KeepList, MoveKind } from './types';
 import { MOVE_KINDS } from './types';
@@ -218,10 +218,18 @@ export function removeLanded(dataDir: string, moveId: string): void {
 // target's retention freed and SQLite gave to a row of its own is not the
 // move's, final review 3); files of the camera only (never a path outside
 // <dataDir>/<folder>/<cam>/). Idempotent; counts what it removed.
-export function removeImported(d: { catalog: Catalog; dataDir: string; storage: Pick<Storage, 'recount'> }, r: MoveRecord): { deleted: Purged } {
+//
+// An imported event that has an analysis made here (not in the import maps:
+// asked for on this proxy after the switch-over) stays whole with its
+// analyses (step 4 Task 11): deleting the event would take that analysis with
+// it (ON DELETE CASCADE), and it exists nowhere else; the copy back leaves it
+// out (an imported event is not this proxy's capture). It ages out with the
+// retention here; `kept` counts its analysis images.
+export function removeImported(d: { catalog: Pick<Catalog, 'db'>; dataDir: string; storage: Pick<Storage, 'recount'> }, r: MoveRecord): { deleted: Purged; kept: Purged } {
   const cam = r.camera;
   if (!CAM_ID.test(cam)) throw new Error('removeImported: not a camera id');
-  const deleted = Object.fromEntries(MOVE_KINDS.map((k) => [k, { files: 0, bytes: 0 }])) as Purged;
+  const deleted = zeros();
+  const kept = zeros();
   const inside = (p: unknown, folder: string): p is string => typeof p === 'string' && p.startsWith(join(d.dataDir, folder, cam) + sep) && !p.split(sep).includes('..');
   const files = new Map<string, MoveKind>();
   for (const rel of landedFiles(d.dataDir, r.id)) if (relOk(cam, rel, LANDED_FOLDERS)) files.set(join(d.dataDir, ...rel.split('/')), FOLDER_KIND[rel.split('/')[0]]);
@@ -244,6 +252,29 @@ export function removeImported(d: { catalog: Catalog; dataDir: string; storage: 
       }
     }
   }
+  // An imported event with an analysis of this proxy's own: it stays, with every analysis of it.
+  const importedAnalyses = new Set(ids.analyses);
+  const keptEvents = new Set<number>();
+  for (const id of ids.events) {
+    const all = db.prepare('SELECT a.id, a.image FROM analyses a JOIN events e ON e.id = a.event_id WHERE e.id = ? AND e.cam = ?').all(id, cam) as { id: number; image: string | null }[];
+    if (!all.some((a) => !importedAnalyses.has(a.id))) continue;
+    keptEvents.add(id);
+    for (const a of all) {
+      importedAnalyses.delete(a.id);
+      if (!inside(a.image, 'analytics')) continue;
+      try {
+        const st = lstatSync(a.image);
+        if (st.isFile()) {
+          kept.events.files++;
+          kept.events.bytes += st.size;
+        }
+      } catch {
+        /* gone */
+      }
+    }
+  }
+  ids.events = ids.events.filter((id) => !keptEvents.has(id));
+  ids.analyses = ids.analyses.filter((id) => importedAnalyses.has(id));
   const pick = <T>(sql: string, id: number) => db.prepare(sql).get(id, cam) as T | undefined;
   const folders: string[] = [];
   // The files the rows name (an imported event's analyses go with it, cascade, and are imported too).
@@ -298,5 +329,98 @@ export function removeImported(d: { catalog: Catalog; dataDir: string; storage: 
     deleted.archive.bytes += m.reduce((n, x) => n + x.bytes, 0);
   }
   d.storage.recount();
-  return { deleted };
+  return { deleted, kept };
+}
+
+// ---- What a finished copy back deletes on the new proxy (step 4 Task 11) ----
+//
+// The return's items (the camera's content this proxy captured itself, as
+// `filter` picks it: captured.ts capturedFilter, by natural key and the
+// cancel's high water, never by camera id alone) of the chunks the return
+// listed (`r.manifest`), minus what the original reported to keep (`r.keep`,
+// the outcome route). Never without that report: a return whose original
+// never reported (no keep list) deletes none of them, everything is `kept`.
+// An item stays whole (rows and files) when its chunk is kept 'all' or a kept
+// path is one of its files; an Archive item also unless the original reported
+// its chunk copied with exactly the listing this proxy serves now (as
+// purgeExcept: Archive is never deleted un-copied); an event also when it has
+// an analysis the return did not list (asked for after the cancel: the cascade
+// would take it). Rows go by id and camera in one transaction, then the files;
+// storage recounted. Idempotent (a deleted item is no longer listed).
+export function removeReturned(d: { catalog: Pick<Catalog, 'db'>; dataDir: string; storage: Pick<Storage, 'recount'> }, r: MoveRecord, filter: ItemFilter): { deleted: Purged; kept: Purged } {
+  const cam = r.camera;
+  if (!CAM_ID.test(cam)) throw new Error('removeReturned: not a camera id');
+  const deleted = zeros();
+  const kept = zeros();
+  const root = resolve(d.dataDir);
+  const abs = (rel: string) => join(root, ...rel.split('/'));
+  const keepFiles = new Set<string>();
+  for (const v of Object.values(r.keep ?? {})) if (Array.isArray(v)) for (const p of v) if (relOk(cam, p)) keepFiles.add(abs(p));
+  const listed = new Set((r.manifest ?? []).map((c) => c.id));
+  const nowArchive = new Map(listChunks(d, cam, ['archive'], filter).map((c) => [c.id, c]));
+  const copiedSame = (id: string) => {
+    const c = nowArchive.get(id);
+    const was = r.keepCopied?.[id];
+    return !!c && !!was && was.files === c.files && was.bytes === c.bytes && was.rows === c.rows;
+  };
+  const db = d.catalog.db;
+  const rows: Record<'clips' | 'events' | 'analyses' | 'still_checks' | 'archive', number[]> = { clips: [], events: [], analyses: [], still_checks: [], archive: [] };
+  const files: { path: string; kind: MoveKind }[] = [];
+  const folders: string[] = [];
+  const tally = (t: Purged, kind: MoveKind, path: string) => {
+    try {
+      const st = lstatSync(path);
+      if (!st.isFile()) return false;
+      t[kind].files++;
+      t[kind].bytes += st.size;
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  for (const kind of MOVE_KINDS) {
+    for (const it of cameraItems(d, cam, kind, filter)) {
+      const id = `${kind}:${chunkDay(it.ts)}`;
+      const entry = r.keep?.[id];
+      let stays = !r.keep || !listed.has(id) || entry === 'all' || (Array.isArray(entry) && it.files.some((f) => keepFiles.has(f)));
+      if (!stays && kind === 'archive') stays = !copiedSame(id);
+      if (!stays && kind === 'events') {
+        const evId = Number((it.rows[0]?.row as { id?: unknown }).id);
+        const listedAnalyses = new Set(it.rows.filter((x) => x.table === 'analyses').map((x) => Number((x.row as { id?: unknown }).id)));
+        const all = db.prepare('SELECT a.id FROM analyses a JOIN events e ON e.id = a.event_id WHERE e.id = ? AND e.cam = ?').all(evId, cam) as { id: number }[];
+        stays = all.some((a) => !listedAnalyses.has(a.id));
+      }
+      if (stays) {
+        for (const f of it.files) tally(kept, kind, f);
+        continue;
+      }
+      for (const { table, row } of it.rows) {
+        const rid = Number((row as { id?: unknown }).id);
+        if (table in rows && Number.isSafeInteger(rid)) rows[table as keyof typeof rows].push(rid);
+      }
+      if (kind === 'archive') {
+        const rid = Number((it.rows[0]?.row as { id?: unknown }).id);
+        if (Number.isSafeInteger(rid)) folders.push(join(root, 'archive', cam, String(rid)));
+      }
+      for (const f of it.files) files.push({ path: f, kind });
+    }
+  }
+  db.exec('BEGIN');
+  try {
+    const an = db.prepare('DELETE FROM analyses WHERE id = ? AND event_id IN (SELECT id FROM events WHERE cam = ?)');
+    for (const id of rows.analyses) an.run(id, cam);
+    for (const t of ['events', 'clips', 'still_checks', 'archive'] as const) {
+      const st = db.prepare(`DELETE FROM ${t} WHERE id = ? AND cam = ?`);
+      for (const id of rows[t]) st.run(id, cam);
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  for (const f of files) if (tally(deleted, f.kind, f.path)) rmSync(f.path, { force: true });
+  for (const f of folders) rmSync(f, { recursive: true, force: true });
+  for (const folder of CONTENT_FOLDERS) pruneEmpty(join(root, folder, cam));
+  d.storage.recount();
+  return { deleted, kept };
 }

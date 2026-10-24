@@ -1079,7 +1079,10 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
     // The original's side (Task 10): the same copier, copy only.
     copy: moveCopier,
-    setPhase: (r, phase) => moveTarget.setPhase(r, phase),
+    setPhase: (r, phase, o) => moveTarget.setPhase(r, phase, o),
+    // The finish (Task 11): storage recounted after the delete, keepDays on finished.
+    storage,
+    retention: () => running.retention,
   });
   // After every welcome: the open move's phase again (B2), and an approval not acted on yet (B7).
   camsAdmin.onWelcome(() => {
@@ -1470,7 +1473,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       clearInterval(moveExpiry);
       moveSource.stop();
       await moveTarget.stopAll();
-      // The copiers of returns too (MoveTarget did not start them).
+      // The copiers of returns too (MoveTarget did not start them), waited for at most 3 s.
       await moveCopier.stopAll();
       clearInterval(sweeper);
       sse.closeAll();

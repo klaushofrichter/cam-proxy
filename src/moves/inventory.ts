@@ -174,9 +174,10 @@ function items(c: Cam, kind: MoveKind, range?: { from: number; to: number }, fil
   return out;
 }
 
-// One kind of one camera as items (files absolute), for the selective purge at the source.
-export function cameraItems(d: InventoryDeps, cam: string, kind: MoveKind): ReturnType<typeof items> {
-  return items(new Cam(d, cam), kind);
+// One kind of one camera as items (files absolute), for the selective purge at
+// the source; `filter` as in a listing (the return's finish, purge.ts removeReturned).
+export function cameraItems(d: InventoryDeps, cam: string, kind: MoveKind, filter?: ItemFilter): ReturnType<typeof items> {
+  return items(new Cam(d, cam), kind, undefined, filter);
 }
 
 // Files of an item that exist (a file removed by retention is simply absent).

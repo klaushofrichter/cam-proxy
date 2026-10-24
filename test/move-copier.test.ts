@@ -801,6 +801,21 @@ describe('CopyRunner and MoveTarget.stop', () => {
     expect(runner.running(MOVE)).toBe(false);
   });
 
+  it('stopAll waits at most its cap for a copier that ignores the abort (step 4 Task 11)', async () => {
+    const { files, chunks } = threeDays();
+    const f = fakeSource(files, chunks);
+    // A request in flight that never ends and does not listen to the abort.
+    const hang = { get: () => new Promise<never>(() => undefined) };
+    const u = unit(f, {}, { deps: { client: () => hang as never } });
+    const runner = new CopyRunner(u.deps);
+    runner.start(MOVE);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(runner.running(MOVE)).toBe(true);
+    const t0 = Date.now();
+    await runner.stopAll(50);
+    expect(Date.now() - t0).toBeLessThan(1000);
+  });
+
   it('MoveTarget.stop stops the copier too', async () => {
     const stopped: string[] = [];
     const t = new MoveTarget({ journal: { load: () => null, save: () => undefined, active: () => [] }, stopCopy: async (id: string) => void stopped.push(id) } as unknown as TargetDeps);

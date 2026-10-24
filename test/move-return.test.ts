@@ -102,7 +102,11 @@ function fixture(o: { captured?: boolean; phase?: MoveRecord['phase']; returnPen
   const events: MoveEvent[] = [];
   const audits: Audit[] = [];
   const inventory = { catalog, dataDir };
-  const deps = { journal, audit: { write: (r: unknown) => (audits.push(r as Audit), null) }, emit: (e: MoveEvent) => void events.push(e), inventory, proxyId: () => SELF, now: () => CANCEL_AT + 30 * MIN };
+  const recounts: number[] = [];
+  const deps = {
+    journal, audit: { write: (r: unknown) => (audits.push(r as Audit), null) }, emit: (e: MoveEvent) => void events.push(e), inventory, proxyId: () => SELF, now: () => CANCEL_AT + 30 * MIN,
+    storage: { recount: () => void recounts.push(1) }, retention: () => RETENTION,
+  };
   const returns = new MoveReturns(deps);
   const manifestPaths = async (id: string) => {
     const r = journal.load(id)!;
@@ -121,9 +125,10 @@ function fixture(o: { captured?: boolean; phase?: MoveRecord['phase']; returnPen
     }
     return router;
   };
-  return { dataDir, catalog, db, journal, events, audits, returns, deps, late, own, ev, ar, abs, put, clip, app, manifestPaths, captured };
+  return { dataDir, catalog, db, journal, events, audits, returns, deps, late, own, ev, ar, abs, put, clip, app, manifestPaths, captured, recounts };
 }
 const DAY = 86_400_000;
+const RETENTION = { stillsDays: 3, previewsDays: 2, clipsDays: 14, eventsDays: 30 };
 const open = (o: Partial<MoveReturnOpenArgs> = {}): MoveReturnOpenArgs => ({ v: 1, moveId: RETURN, returnOf: CANCELLED, tokenHash: H1, targetIp: '127.0.0.1', ...o });
 const size = (s: string) => Buffer.byteLength(s);
 // archive clip, own clip, analysis image, own still
@@ -299,18 +304,18 @@ function clientFor(app: express.Express, token: string): SourceClient {
   };
 }
 
-function original(f: ReturnType<typeof fixture>, o: { free?: number; tombstone?: boolean; runner?: Pick<CopyRunner, 'start' | 'stop'> } = {}) {
+function original(f: ReturnType<typeof fixture>, o: { free?: number; tombstone?: boolean; stoneAt?: number; runner?: Pick<CopyRunner, 'start' | 'stop'> } = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), 'camproxy-original-'));
   const catalog = openCatalog(join(dataDir, 'catalog.db'));
   const journal = new MoveJournal(join(dataDir, 'admin', 'moves'), undefined, { now: () => CANCEL_AT + 30 * MIN });
   // The cancelled move ended here with the camera back (its tombstone names it).
-  if (o.tombstone !== false) journal.bury({ moveId: CANCELLED, role: 'source', phase: 'cancelled', camera: 'cam1', endedAt: CANCEL_AT });
+  if (o.tombstone !== false) journal.bury({ moveId: CANCELLED, role: 'source', phase: 'cancelled', camera: 'cam1', endedAt: o.stoneAt ?? CANCEL_AT });
   const events: MoveEvent[] = [];
   const audits: Audit[] = [];
   const audit = { write: (r: unknown) => (audits.push(r as Audit), null) };
   const emit = (e: MoveEvent) => void events.push(e);
   const state = { free: o.free ?? 1e12, clients: [] as string[] };
-  const target = new MoveTarget({ journal, audit, emit, proxyId: () => ORIGINAL } as unknown as TargetDeps);
+  const target = new MoveTarget({ journal, audit, emit, proxyId: () => ORIGINAL, retention: () => RETENTION } as unknown as TargetDeps);
   const copyDeps: CopierDeps = {
     journal, audit, emit, catalog, dataDir,
     client: (r) => (state.clients.push(r.token!), clientFor(f.app(), r.token!)),
@@ -327,7 +332,7 @@ function original(f: ReturnType<typeof fixture>, o: { free?: number; tombstone?:
   const copy = o.runner ?? runner;
   const returns = new MoveReturns({
     journal, audit, emit, inventory: { catalog, dataDir }, proxyId: () => ORIGINAL, now: () => CANCEL_AT + 30 * MIN,
-    copy, setPhase: (r, phase) => target.setPhase(r, phase),
+    copy, setPhase: (r, phase, p) => target.setPhase(r, phase, p), retention: () => RETENTION,
   });
   return { dataDir, catalog, journal, events, audits, state, runner, returns, rec: () => journal.load(RETURN)! };
 }
@@ -371,11 +376,14 @@ describe('move.return.start on the original proxy (the return target)', () => {
     expect(o.events.find((e) => e.kind === 'move.phase' && e.phase === 'copied')).toMatchObject({ role: 'target', ok: true, check: { complete: true } });
     // Never the token in an event or an audit record.
     expect(JSON.stringify([o.events, o.audits])).not.toContain(T1);
-    // A repeated start after copied: the same answer, nothing restarts.
+    // A repeated start after copied: the same answer, nothing restarts; `copied`
+    // goes out again with its check (cams-admin may have missed it, Task 11).
     const n = o.events.length;
+    const copiedEvent = o.events.find((e) => e.kind === 'move.phase' && e.phase === 'copied');
     expect(await o.returns.start(start())).toEqual({ status: 'ok', result: {} });
     expect(o.rec().phase).toBe('copied');
-    expect(o.events.length).toBe(n);
+    expect(o.events.length).toBe(n + 1);
+    expect(o.events.at(-1)).toEqual({ kind: 'move.phase', moveId: RETURN, role: 'target', phase: 'copied', ok: true, check: (copiedEvent as { check: unknown }).check });
   });
 
   it('start without the cancelled move here (no tombstone naming the camera) answers unknown_move; another record wrong_phase', async () => {
@@ -461,5 +469,209 @@ describe('move.return.start on the original proxy (the return target)', () => {
     calls.length = 0;
     o.returns.resume();
     expect(calls).toEqual([]);
+  });
+});
+
+// ---- the return's end (step 4 Task 11) ----
+
+const finishArgs = (role: 'source' | 'target', abandoned = false) => ({ v: 1 as const, moveId: RETURN, role, abandoned, return: true });
+const has = (f: { dataDir: string }, rel: string) => existsSync(join(f.dataDir, ...rel.split('/')));
+const count = (db: ReturnType<typeof openCatalog>["db"], sql: string, ...a: (string | number)[]) => (db.prepare(sql).get(...a) as { n: number }).n;
+
+// The new proxy opened, the original copied it back (real copier, the new proxy's endpoints).
+async function copiedBack(f: ReturnType<typeof fixture>) {
+  expect(f.returns.open(open()).status).toBe('ok');
+  const o = original(f);
+  expect(await o.returns.start(start())).toEqual({ status: 'ok', result: {} });
+  await until(() => o.rec().phase === 'copied');
+  await o.runner.idle(RETURN);
+  return o;
+}
+
+describe('the return\'s finish (step 4 Task 11)', () => {
+  it('return finish deletes what the return verified and what the move imported', async () => {
+    const f = fixture();
+    const o = await copiedBack(f);
+    // The original verified it all; one clip failed its checks there (the check names it: the new proxy keeps it).
+    const rep = await request(f.app()).put(`/api/moves/${RETURN}/outcome`).set('Authorization', `Bearer ${T1}`).send({ keep: { 'clips:2026-10-21': [OWN_CLIP] }, copied: f.journal.load(RETURN)!.keepCopied });
+    expect(rep.status).toBe(204);
+    const d = await f.returns.finish(finishArgs('source'));
+    expect(d.status).toBe('ok');
+    expect(strict('commands/move.finish.result')(d.status === 'ok' ? d.result : null), why(strict('commands/move.finish.result'))).toBe(true);
+    const res = { deleted: (d as unknown as { result: { deleted: Record<string, { files: number }> } }).result.deleted, kept: f.journal.ended(RETURN, 'source')!.kept! };
+    // Captured and verified on the original: gone here.
+    expect(has(f, OWN_STILL)).toBe(false);
+    expect(has(f, `analytics/cam1/${f.ev}.jpg`)).toBe(false);
+    expect(has(f, RENAMED_ARCHIVE_ITEM)).toBe(false);
+    expect(count(f.db, 'SELECT COUNT(*) AS n FROM events WHERE id = ?', f.ev)).toBe(0);
+    expect(count(f.db, 'SELECT COUNT(*) AS n FROM archive WHERE id = ?', f.ar)).toBe(0);
+    // Imported by the move: gone (rows and landed files).
+    for (const p of [IMPORTED_CLIP, IMPORTED_B_CLIP, LANDED_STILL]) expect(has(f, p), p).toBe(false);
+    expect(count(f.db, "SELECT COUNT(*) AS n FROM clips WHERE cam = 'cam1' AND path <> ?", f.abs(OWN_CLIP))).toBe(0);
+    // The failed one stays, with its row, and is named in `kept`.
+    expect(has(f, OWN_CLIP)).toBe(true);
+    expect(count(f.db, 'SELECT COUNT(*) AS n FROM clips WHERE id = ?', f.own)).toBe(1);
+    expect(res.kept.clips.files).toBe(1);
+    expect(res.deleted.stills.files).toBe(2); // own still (verified) + the landed one (imported)
+    expect(res.deleted.clips.files).toBe(2); // the two imported clips
+    expect(res.deleted.events.files).toBe(1);
+    expect(res.deleted.archive.files).toBe(1);
+    // Both records end, the proxy is no longer busy, the import log goes.
+    expect(f.journal.load(RETURN)).toBeNull();
+    expect(f.journal.load(CANCELLED)).toBeNull();
+    expect(f.journal.active()).toEqual([]);
+    expect(f.journal.ended(RETURN, 'source')).toMatchObject({ phase: 'finished', deleted: res.deleted, kept: res.kept });
+    expect(f.journal.ended(CANCELLED, 'target')).toMatchObject({ phase: 'cancelled' });
+    expect(existsSync(join(f.dataDir, 'admin', 'moves', `${CANCELLED}.chunks`))).toBe(false);
+    expect(existsSync(join(f.dataDir, 'admin', 'moves', `${CANCELLED}.landed`))).toBe(false);
+    expect(f.events.at(-1)).toEqual({ kind: 'move.phase', moveId: RETURN, role: 'source', phase: 'finished', ok: true, keepDays: 30 });
+    const a = f.audits.filter((x) => x.action === 'move-return').at(-1)!;
+    expect(a.details).toMatchObject({ moveId: RETURN, returnOf: CANCELLED, role: 'source', step: 'finish', abandoned: false, deleted: res.deleted, kept: res.kept });
+    expect(f.recounts.length).toBeGreaterThan(0);
+    // The token is refused once the return ended.
+    expect((await request(f.app()).get(`/api/moves/${RETURN}/manifest`).set('Authorization', `Bearer ${T1}`)).status).toBe(403);
+    // Again (cams-admin missed the answer): the same answer from the tombstone, the end reported again.
+    const n = f.events.length;
+    expect(await f.returns.finish(finishArgs('source'))).toEqual(d);
+    expect(f.events.length).toBe(n + 1);
+    expect(f.events.at(-1)).toMatchObject({ moveId: RETURN, role: 'source', phase: 'finished' });
+    expect(await new MoveReturns(f.deps).finish(finishArgs('source'))).toEqual(d);
+
+    // The original's side: its temporary files, landed log and parts go; finished with keepDays.
+    const t = await o.returns.finish(finishArgs('target'));
+    expect(t).toEqual({ status: 'ok', result: { deleted: expect.any(Object) } });
+    expect(o.journal.load(RETURN)).toBeNull();
+    expect(existsSync(join(o.dataDir, 'admin', 'moves', `${RETURN}.chunks`))).toBe(false);
+    expect(existsSync(join(o.dataDir, 'admin', 'moves', `${RETURN}.landed`))).toBe(false);
+    expect(existsSync(join(o.dataDir, ...OWN_STILL.split('/')))).toBe(true); // what it copied back stays
+    expect(o.events.at(-1)).toEqual({ kind: 'move.phase', moveId: RETURN, role: 'target', phase: 'finished', ok: true, keepDays: 30 });
+    expect(o.journal.ended(RETURN, 'target')).toMatchObject({ phase: 'finished' });
+    // The cancelled move's tombstone records the copy back as done: no second return of it.
+    expect(o.journal.ended(CANCELLED, 'source')).toMatchObject({ phase: 'cancelled', camera: 'cam1', returned: true });
+    const m = o.events.length;
+    expect(await o.returns.finish(finishArgs('target'))).toEqual(t);
+    expect(o.events.length).toBe(m + 1);
+    expect(await o.returns.start(start())).toEqual({ status: 'ok', result: {} });
+    expect(o.journal.load(RETURN)).toBeNull();
+    expect(await o.returns.start(start({ moveId: 'mv_3123456789ABCDEFGHJK' }))).toEqual({ status: 'failed', code: 'wrong_phase' });
+    expect(o.audits.filter((x) => x.action === 'move-return').at(-1)!.details).toMatchObject({ role: 'target', step: 'finish', abandoned: false });
+  });
+
+  it('return finish keeps a re-added camera\'s capture', async () => {
+    // Review Focus 1: a camera re-added under the same id after the cancel; its clip (id above the high water) and still stay.
+    const f = fixture();
+    await copiedBack(f);
+    f.late();
+    const lateId = Number((f.db.prepare("SELECT id FROM clips WHERE path = ?").get(f.abs(LATE_CLIP)) as { id: number }).id);
+    expect(lateId).toBeGreaterThan(f.captured.maxIds.clips!);
+    expect((await f.returns.finish(finishArgs('source'))).status).toBe('ok');
+    expect(has(f, LATE_CLIP)).toBe(true);
+    expect(has(f, LATE_STILL)).toBe(true);
+    expect(count(f.db, 'SELECT COUNT(*) AS n FROM clips WHERE id = ?', lateId)).toBe(1);
+    expect(has(f, OWN_CLIP)).toBe(false);
+  });
+
+  it('an abandoned return finish deletes nothing on either side', async () => {
+    const f = fixture();
+    const o = await copiedBack(f);
+    const before = [OWN_CLIP, OWN_STILL, IMPORTED_CLIP, IMPORTED_B_CLIP, LANDED_STILL, RENAMED_ARCHIVE_ITEM, `analytics/cam1/${f.ev}.jpg`];
+    const rows = count(f.db, "SELECT COUNT(*) AS n FROM clips WHERE cam = 'cam1'");
+    const d = await f.returns.finish(finishArgs('source', true));
+    expect(d.status).toBe('ok');
+    const res = (d as unknown as { result: { deleted: Record<string, { files: number }> } }).result;
+    expect(Object.values(res.deleted).every((k) => k.files === 0)).toBe(true);
+    for (const p of before) expect(has(f, p), p).toBe(true);
+    expect(count(f.db, "SELECT COUNT(*) AS n FROM clips WHERE cam = 'cam1'")).toBe(rows);
+    expect(count(f.db, 'SELECT COUNT(*) AS n FROM events WHERE id = ?', f.ev)).toBe(1);
+    // The records close: not busy any more (Give up is the exit, ruling 10/11).
+    expect(f.journal.load(RETURN)).toBeNull();
+    expect(f.journal.load(CANCELLED)).toBeNull();
+    expect(f.journal.active()).toEqual([]);
+    expect(f.audits.filter((x) => x.action === 'move-return').at(-1)!.details).toMatchObject({ step: 'finish', abandoned: true });
+    // The original: what it copied stays, the record closes.
+    expect((await o.returns.finish(finishArgs('target', true))).status).toBe('ok');
+    expect(existsSync(join(o.dataDir, ...OWN_CLIP.split('/')))).toBe(true);
+    expect(o.journal.load(RETURN)).toBeNull();
+    expect(o.journal.active()).toEqual([]);
+  });
+
+  it('an abandoned return still copying on the original: the copier stops, nothing is deleted, the record closes', async () => {
+    const f = fixture();
+    f.returns.open(open());
+    const calls: string[] = [];
+    const runner = { start: (id: string) => void calls.push(`start ${id}`), stop: async (id: string) => void calls.push(`stop ${id}`) };
+    const o = original(f, { runner: runner as never });
+    await o.returns.start(start());
+    // Not abandoned while still copying: refused.
+    expect(await o.returns.finish(finishArgs('target'))).toEqual({ status: 'failed', code: 'wrong_phase' });
+    expect((await o.returns.finish(finishArgs('target', true))).status).toBe('ok');
+    expect(calls).toContain(`stop ${RETURN}`);
+    expect(o.journal.load(RETURN)).toBeNull();
+    expect(o.journal.ended(CANCELLED, 'source')).toMatchObject({ returned: true });
+  });
+
+  it('a finish without the original\'s report (no keep list) deletes none of the capture, only what the move imported', async () => {
+    const f = fixture();
+    f.returns.open(open());
+    expect(f.journal.load(RETURN)!.keep).toBeUndefined();
+    expect((await f.returns.finish(finishArgs('source'))).status).toBe('ok');
+    for (const p of [OWN_CLIP, OWN_STILL, RENAMED_ARCHIVE_ITEM, `analytics/cam1/${f.ev}.jpg`]) expect(has(f, p), p).toBe(true);
+    for (const p of [IMPORTED_CLIP, IMPORTED_B_CLIP, LANDED_STILL]) expect(has(f, p), p).toBe(false);
+    expect(f.journal.active()).toEqual([]);
+  });
+
+  it('an imported event with an analysis made here stays with its analyses (exists nowhere else)', async () => {
+    const f = fixture();
+    // An event the move imported (its analysis too), and an analysis asked for here after the switch-over.
+    const E = Date.UTC(2026, 9, 20, 13, 0);
+    const iev = Number(f.db.prepare("INSERT INTO events (cam, source, kind, start_ts) VALUES ('cam1', 'onvif', 'person', ?)").run(E).lastInsertRowid);
+    const ia = Number(f.db.prepare("INSERT INTO analyses (event_id, provider, status, requested_at, image) VALUES (?, 'vision', 'done', ?, ?)").run(iev, E, f.abs(`analytics/cam1/${iev}.jpg`)).lastInsertRowid);
+    f.put(`analytics/cam1/${iev}.jpg`, 'imported-analysis');
+    writeChunkPart(f.dataDir, CANCELLED, 'events:2026-10-20', { imported: { events: [[601, iev, `${E}|onvif|person`]], analyses: [[602, ia, `${iev}|vision`]] } });
+    const own = Number(f.db.prepare("INSERT INTO analyses (event_id, provider, status, requested_at) VALUES (?, 'gemini', 'done', ?)").run(iev, B9).lastInsertRowid);
+    await copiedBack(f);
+    const d = await f.returns.finish(finishArgs('source'));
+    expect(d.status).toBe('ok');
+    expect(count(f.db, 'SELECT COUNT(*) AS n FROM events WHERE id = ?', iev)).toBe(1);
+    expect(count(f.db, 'SELECT COUNT(*) AS n FROM analyses WHERE id IN (?, ?)', ia, own)).toBe(2);
+    expect(has(f, `analytics/cam1/${iev}.jpg`)).toBe(true);
+    expect(f.journal.ended(RETURN, 'source')!.kept!.events.files).toBe(1);
+    // Other imported content still goes.
+    expect(has(f, IMPORTED_CLIP)).toBe(false);
+    // Without an analysis of its own, an imported event goes with its analyses.
+    const g = fixture();
+    const gev = Number(g.db.prepare("INSERT INTO events (cam, source, kind, start_ts) VALUES ('cam1', 'onvif', 'person', ?)").run(E).lastInsertRowid);
+    const ga = Number(g.db.prepare("INSERT INTO analyses (event_id, provider, status, requested_at, image) VALUES (?, 'vision', 'done', ?, ?)").run(gev, E, g.abs(`analytics/cam1/${gev}.jpg`)).lastInsertRowid);
+    g.put(`analytics/cam1/${gev}.jpg`, 'imported-analysis');
+    writeChunkPart(g.dataDir, CANCELLED, 'events:2026-10-20', { imported: { events: [[601, gev, `${E}|onvif|person`]], analyses: [[602, ga, `${gev}|vision`]] } });
+    await copiedBack(g);
+    expect((await g.returns.finish(finishArgs('source'))).status).toBe('ok');
+    expect(count(g.db, 'SELECT COUNT(*) AS n FROM events WHERE id = ?', gev)).toBe(0);
+    expect(has(g, `analytics/cam1/${gev}.jpg`)).toBe(false);
+  });
+
+  it('a return.start more than 7 days after the cancel still finds the camera (the tombstone waits for the return)', async () => {
+    const f = fixture();
+    f.returns.open(open());
+    const calls: string[] = [];
+    const o = original(f, { stoneAt: CANCEL_AT - 9 * DAY, runner: { start: (id: string) => void calls.push(id), stop: async () => undefined } as never });
+    o.journal.sweep();
+    expect(o.journal.ended(CANCELLED, 'source')).toMatchObject({ camera: 'cam1' });
+    expect(await o.returns.start(start())).toEqual({ status: 'ok', result: {} });
+    expect(calls).toEqual([RETURN]);
+  });
+
+  it('a finish on a proxy that knows nothing of the return answers ok with nothing deleted', async () => {
+    const f = fixture();
+    expect(await f.returns.finish(finishArgs('source', true))).toMatchObject({ status: 'ok' });
+    expect(await f.returns.finish(finishArgs('source'))).toEqual({ status: 'failed', code: 'unknown_move' });
+    // The cancelled move still waits for its copy back.
+    expect(f.journal.load(CANCELLED)).toMatchObject({ returnPending: true });
+    const o = original(f);
+    expect(await o.returns.finish(finishArgs('target', true))).toMatchObject({ status: 'ok' });
+    // The roles crossed (the return's source record named as target): refused.
+    f.returns.open(open());
+    expect(await f.returns.finish(finishArgs('target'))).toEqual({ status: 'failed', code: 'wrong_phase' });
+    expect(f.journal.load(RETURN)).not.toBeNull();
   });
 });

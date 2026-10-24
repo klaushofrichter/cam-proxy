@@ -1,10 +1,15 @@
 import type { AuditLog } from '../audit/audit-log';
 import type { MoveFinishArgs, MoveReturnOpenArgs, MoveReturnStartArgs } from '../fleet/command-args';
 import type { Done, Handler } from '../fleet/commands';
+import type { Config } from '../config/defaults';
+import type { Storage } from '../storage';
 import { capturedFilter } from './captured';
+import { removeChunkParts } from './chunk-parts';
+import { removeMoveParts, type CopyRunner } from './copier';
 import { listChunks, type InventoryDeps } from './inventory';
-import { moveEnded, type ChunkMeta, type MoveJournal, type MoveRecord } from './journal';
-import type { CopyRunner } from './copier';
+import { moveEnded, type ChunkMeta, type MoveJournal, type MoveRecord, type MoveTombstone } from './journal';
+import { removeImported, removeLanded, removeReturned, type Purged } from './purge';
+import { keepDaysOf } from './retention';
 import { MOVE_KINDS, type MoveEvent, type MovePhaseName, type MovePlan } from './types';
 
 // The copy back after a cancel after the switch-over (step 4, spec §1,
@@ -24,8 +29,16 @@ import { MOVE_KINDS, type MoveEvent, type MovePhaseName, type MovePlan } from '.
 // FTP step: the camera is already back here), the camera named by the
 // cancelled move's tombstone, and starts the copier (CopyRunner). A chunk that
 // doesn't fit waits (copier.ts waitRoom, Decision 5).
+//
+// The finish (Task 11, move.finish {return: true}). The original's copier
+// reports what it could not verify to the new proxy like any target
+// (PUT /api/moves/:id/outcome, accepted for the return's source record: it
+// can only make the new proxy keep more). The new proxy then deletes what the
+// original verified (purge.ts removeReturned, never without that report) and
+// what the move had imported (removeImported); Give up (abandoned) deletes
+// nothing on either side. Both records close, so neither proxy is busy any more.
 export interface ReturnDeps {
-  journal: Pick<MoveJournal, 'load' | 'save'> & Partial<Pick<MoveJournal, 'ended' | 'all'>>;
+  journal: Pick<MoveJournal, 'load' | 'save'> & Partial<Pick<MoveJournal, 'ended' | 'all' | 'bury' | 'remove'>>;
   audit: Pick<AuditLog, 'write'>;
   emit: (e: MoveEvent) => void;
   inventory: InventoryDeps;
@@ -34,7 +47,11 @@ export interface ReturnDeps {
   now?: () => number;
   // The original's side (Task 10): the copier, and the target's phase change (MoveTarget.setPhase).
   copy?: Pick<CopyRunner, 'start' | 'stop'>;
-  setPhase?: (r: MoveRecord, phase: MovePhaseName) => void;
+  setPhase?: (r: MoveRecord, phase: MovePhaseName, o?: { keepDays?: number }) => void;
+  // The finish (Task 11): storage recounted after the new proxy's delete; the
+  // retention in effect for keepDays on finished (left out: none).
+  storage?: Pick<Storage, 'recount'>;
+  retention?: () => Pick<Config['retention'], 'stillsDays' | 'previewsDays' | 'clipsDays' | 'eventsDays'>;
 }
 
 // A return's plan (ruling 8): everything, all space; the budget only paces the
@@ -44,6 +61,8 @@ export const RETURN_PLAN: MovePlan = { transfer: true, kinds: [...MOVE_KINDS], s
 const ok = (result: Record<string, unknown> = {}): Done => ({ status: 'ok', result });
 const failed = (code: string): Done => ({ status: 'failed', code });
 const totals = (m: ChunkMeta[]) => ({ chunks: m.length, bytes: m.reduce((n, c) => n + c.bytes, 0) });
+const zeros = (): Purged => Object.fromEntries(MOVE_KINDS.map((k) => [k, { files: 0, bytes: 0 }])) as Purged;
+const add = (x: Purged, y: Purged): Purged => Object.fromEntries(MOVE_KINDS.map((k) => [k, { files: x[k].files + y[k].files, bytes: x[k].bytes + y[k].bytes }])) as Purged;
 
 export class MoveReturns {
   constructor(private readonly d: ReturnDeps) {}
@@ -116,6 +135,8 @@ export class MoveReturns {
     const existing = this.d.journal.load(a.moveId);
     if (existing) {
       if (existing.role !== 'target' || existing.returnOf !== a.returnOf) return failed('wrong_phase');
+      // Copied already: copied again with its check (cams-admin may have missed the event).
+      if (existing.phase === 'copied') this.d.emit({ kind: 'move.phase', moveId: existing.id, role: 'target', phase: 'copied', ok: true, ...(existing.check ? { check: existing.check } : {}) });
       if (existing.phase !== 'copying' && existing.phase !== 'failed') return ok();
       const rekeyed = existing.token !== a.token || JSON.stringify(existing.peer) !== JSON.stringify(peer);
       if (existing.phase === 'copying' && !rekeyed) {
@@ -137,10 +158,14 @@ export class MoveReturns {
       copy.start(a.moveId);
       return ok();
     }
+    // This return ended here before (its tombstone): nothing starts again.
+    const done = this.d.journal.ended?.(a.moveId, 'target') ?? null;
+    if (done) return done.phase === 'finished' ? ok() : failed('wrong_phase');
     if (this.d.journal.load(a.returnOf)) return failed('wrong_phase');
     const stone = this.d.journal.ended?.(a.returnOf, 'source') ?? null;
     if (!stone) return failed('unknown_move');
-    if (stone.phase !== 'cancelled' || !stone.camera) return failed('wrong_phase');
+    // A cancel before the switch-over (no camera named), or one copied back already (another return of it).
+    if (stone.phase !== 'cancelled' || !stone.camera || stone.returned) return failed('wrong_phase');
     const now = this.now();
     const r: MoveRecord = {
       v: 1, id: a.moveId, role: 'target', returnOf: a.returnOf, camera: stone.camera, phase: 'copying',
@@ -153,11 +178,11 @@ export class MoveReturns {
     return ok();
   }
 
-  private phase(r: MoveRecord, phase: MovePhaseName): void {
-    if (this.d.setPhase) return this.d.setPhase(r, phase);
+  private phase(r: MoveRecord, phase: MovePhaseName, o: { keepDays?: number } = {}): void {
+    if (this.d.setPhase) return this.d.setPhase(r, phase, o);
     r.phase = phase;
     this.d.journal.save(r);
-    this.d.emit({ kind: 'move.phase', moveId: r.id, role: 'target', phase: phase as Exclude<MovePhaseName, 'failed'>, ok: true });
+    this.d.emit({ kind: 'move.phase', moveId: r.id, role: 'target', phase: phase as Exclude<MovePhaseName, 'failed'>, ok: true, ...o });
   }
 
   private startAudit(r: MoveRecord, what: string): void {
@@ -170,9 +195,111 @@ export class MoveReturns {
     });
   }
 
-  // The return's end on either side (move.finish {return: true}): Task 11.
-  async finish(_a: MoveFinishArgs): Promise<Done> {
-    return failed('internal');
+  // The return's end (move.finish {return: true}, Task 11; ruling 11), by the
+  // role the args name. Again (cams-admin missed the answer): the first
+  // answer from the tombstone, the end reported again. A return this proxy
+  // knows nothing of: abandoned (Give up before it reached here) ok with
+  // nothing deleted, else unknown_move.
+  async finish(a: MoveFinishArgs): Promise<Done> {
+    const stone = this.d.journal.ended?.(a.moveId, a.role) ?? null;
+    if (stone) {
+      if (stone.phase !== 'finished') return failed('wrong_phase');
+      this.d.emit({ kind: 'move.phase', moveId: a.moveId, role: a.role, phase: 'finished', ok: true, ...this.keep() });
+      return ok({ deleted: stone.deleted ?? zeros() });
+    }
+    const r = this.d.journal.load(a.moveId);
+    if (!r) return a.abandoned ? ok({ deleted: zeros() }) : failed('unknown_move');
+    if (r.role !== a.role || !r.returnOf) return failed('wrong_phase');
+    return a.role === 'source' ? this.finishSource(r, a.abandoned) : this.finishTarget(r, a.abandoned);
+  }
+
+  // The new proxy (the return's source). Not abandoned: what the original
+  // verified goes (purge.ts removeReturned: the return's items minus its keep
+  // list, nothing of it without one), then what the move had imported
+  // (removeImported). Abandoned (Give up, design decision 3): nothing is
+  // deleted. Either way the cancelled record's import log (chunk parts) and
+  // landed log go and both records end: the return `finished` (tombstone with
+  // the counts), the cancelled move no longer waiting (returnPending gone,
+  // its tombstone written again): the proxy is not busy any more.
+  private finishSource(r: MoveRecord, abandoned: boolean): Done {
+    const storage = this.d.storage;
+    if (!storage) return failed('internal');
+    const dataDir = this.d.inventory.dataDir;
+    const cancelled = this.d.journal.load(r.returnOf!);
+    const c = cancelled && cancelled.role === 'target' && cancelled.camera === r.camera ? cancelled : null;
+    let deleted = zeros();
+    let kept = zeros();
+    if (!abandoned && c?.captured) {
+      const purge = { catalog: this.d.inventory.catalog, dataDir, storage };
+      // The filter reads the import log: built before anything of it goes.
+      const back = removeReturned(purge, r, capturedFilter(dataDir, c));
+      const imported = removeImported(purge, c);
+      deleted = add(back.deleted, imported.deleted);
+      kept = add(back.kept, imported.kept);
+    }
+    const now = this.now();
+    r.phase = 'finished';
+    r.endedAt ??= now;
+    this.d.journal.save(r);
+    this.d.emit({ kind: 'move.phase', moveId: r.id, role: 'source', phase: 'finished', ok: true, ...this.keep() });
+    this.finishAudit(r, 'source', abandoned, deleted, kept);
+    this.d.journal.bury?.({ moveId: r.id, role: 'source', phase: 'finished', deleted, kept });
+    if (c) {
+      removeLanded(dataDir, c.id);
+      removeChunkParts(dataDir, c.id);
+      this.d.journal.bury?.({ moveId: c.id, role: 'target', phase: 'cancelled' });
+      this.d.journal.remove?.(c.id);
+    }
+    this.d.journal.remove?.(r.id);
+    // The contract's answer is the counts deleted; what stayed is in the audit record and the tombstone.
+    return ok({ deleted });
+  }
+
+  // The original proxy (the return's target): copied, or abandoned in any
+  // phase (the copier stops first). Its temporary files, landed log and chunk
+  // parts go; what it copied back stays (it is this proxy's camera). The
+  // record ends `finished` with keepDays and is removed; the cancelled
+  // move's tombstone is marked `returned` (no second return of it).
+  private async finishTarget(r: MoveRecord, abandoned: boolean): Promise<Done> {
+    if (!abandoned && r.phase !== 'copied') return failed('wrong_phase');
+    await this.d.copy?.stop(r.id);
+    const fresh = this.d.journal.load(r.id) ?? r;
+    const dataDir = this.d.inventory.dataDir;
+    removeMoveParts(dataDir, fresh.id, fresh.camera);
+    delete fresh.token;
+    fresh.endedAt ??= this.now();
+    this.phase(fresh, 'finished', this.keep());
+    this.finishAudit(fresh, 'target', abandoned, zeros(), zeros());
+    removeLanded(dataDir, fresh.id);
+    removeChunkParts(dataDir, fresh.id);
+    this.d.journal.bury?.({ moveId: fresh.id, role: 'target', phase: 'finished', deleted: zeros() });
+    const stone: MoveTombstone | null = this.d.journal.ended?.(fresh.returnOf!, 'source') ?? null;
+    if (stone && stone.phase === 'cancelled') this.d.journal.bury?.({ moveId: stone.moveId, role: 'source', phase: 'cancelled', ...(stone.camera ? { camera: stone.camera } : {}), returned: true });
+    this.d.journal.remove?.(fresh.id);
+    return ok({ deleted: zeros() });
+  }
+
+  private finishAudit(r: MoveRecord, role: 'source' | 'target', abandoned: boolean, deleted: Purged, kept: Purged): void {
+    const peer = r.peer.name || r.peer.proxyId;
+    const n = (p: Purged) => Object.values(p).reduce((x, k) => x + k.files, 0);
+    const what = role === 'source'
+      ? abandoned ? 'given up, nothing deleted here' : `done: ${n(deleted)} files deleted here (copied back or imported by the move), ${n(kept)} kept`
+      : abandoned ? 'given up, what was copied back stays' : 'done, copied back';
+    this.d.audit.write({
+      action: 'move-return', category: ['configuration'], type: ['change'], outcome: 'success',
+      user: 'cams-admin', camera: r.camera,
+      message: `Camera move ${r.id} (copy back of ${r.returnOf}, ${r.camera} ${role === 'source' ? 'to' : 'from'} ${peer}): ${what}`,
+      details: {
+        moveId: r.id, returnOf: r.returnOf, camera: r.camera, role, step: 'finish', abandoned,
+        source: role === 'source' ? this.d.proxyId?.() || null : r.peer.proxyId, target: role === 'source' ? r.peer.proxyId : this.d.proxyId?.() || null,
+        deleted, kept,
+      },
+    });
+  }
+
+  private keep(): { keepDays?: number } {
+    const r = this.d.retention?.();
+    return r ? { keepDays: keepDaysOf(r) } : {};
   }
 
   // At process start: the copier of every return target here still copying

@@ -3,7 +3,7 @@ import { join, resolve, sep } from 'path';
 import { PrivateFileInvalid, readPrivateJson, writePrivateJson } from '../fleet/private-file';
 import type { AutoWaitReason } from './plan';
 import type { Purged } from './purge';
-import type { ChunkState, KeepList, MoveActor, MoveAnswer, MoveBounds, MoveCameraConnection, MoveCopied, MoveKind, MovePhaseName, MovePlan, MoveRole, MoveSummary, Settings, Space } from './types';
+import type { ChunkState, KeepList, MoveActor, MoveCheck, MoveAnswer, MoveBounds, MoveCameraConnection, MoveCopied, MoveKind, MovePhaseName, MovePlan, MoveRole, MoveSummary, Settings, Space } from './types';
 
 // The durable record of one move on this proxy: <dataDir>/admin/moves/<id>.json,
 // mode 600 (it holds the move token hash or the plain token and the target's
@@ -97,6 +97,9 @@ export interface MoveRecord {
   copyStartedAt?: number;
   lastRateBps?: number;
   copied?: MoveCopied;
+  // target: the completeness check of its copied phase (step 4 Task 11: a
+  // repeated move.return.start after copied sends copied again with it).
+  check?: MoveCheck;
   // What the receiving side reported to keep (step 4 Task 6, check.ts MoveOutcome):
   // source: the union of every report (PUT /api/moves/:id/outcome); target: its
   // last report, kept before it was sent. `keepMissing`: Archive paths still
@@ -139,12 +142,23 @@ export interface MoveTombstone {
   phase: 'finished' | 'cancelled' | 'failed';
   code?: string;
   deleted?: Purged;
+  // A return's source (step 4 Task 11): what its finish kept here.
+  kept?: Purged;
   // A source cancelled after the switch-over: the camera back here (step 4
-  // Task 10: the copy back, move.return.start, copies into it).
+  // Task 10: the copy back, move.return.start, copies into it). Such a
+  // tombstone waits for the copy back (Task 11): kept up to RETURN_WAIT_MS
+  // until the return's finish marks it `returned`, then 7 days from then.
   camera?: string;
+  returned?: boolean;
   endedAt: number;
 }
 export const TOMBSTONE_KEEP_MS = 7 * 86_400_000;
+// How long a cancel's tombstone waits for its copy back: the return has no
+// deadline (ruling 10: a proxy offline for a long time just delays it), but a
+// return never started that cams-admin gave up (move.finish names the return,
+// not the cancelled move) must not leave the note here for ever.
+export const RETURN_WAIT_MS = 365 * 86_400_000;
+const keepMs = (t: Partial<MoveTombstone>): number => (t.camera && t.returned !== true ? RETURN_WAIT_MS : TOMBSTONE_KEEP_MS);
 
 const TERMINAL: readonly MovePhaseName[] = ['finished', 'cancelled', 'failed'];
 export const moveEnded = (phase: MovePhaseName): boolean => TERMINAL.includes(phase);
@@ -177,7 +191,10 @@ export class MoveJournal {
 
   // The tombstone of an ended move (written before its record is removed); old ones swept.
   bury(t: Omit<MoveTombstone, 'v' | 'endedAt'> & { endedAt?: number }): void {
-    const stone: MoveTombstone = { v: 1, moveId: t.moveId, role: t.role, phase: t.phase, ...(t.code ? { code: t.code } : {}), ...(t.deleted ? { deleted: t.deleted } : {}), ...(t.camera ? { camera: t.camera } : {}), endedAt: t.endedAt ?? this.now() };
+    const stone: MoveTombstone = {
+      v: 1, moveId: t.moveId, role: t.role, phase: t.phase, ...(t.code ? { code: t.code } : {}), ...(t.deleted ? { deleted: t.deleted } : {}), ...(t.kept ? { kept: t.kept } : {}),
+      ...(t.camera ? { camera: t.camera } : {}), ...(t.returned ? { returned: true } : {}), endedAt: t.endedAt ?? this.now(),
+    };
     writePrivateJson(this.stonePath(t.moveId, t.role), stone, false);
     try {
       this.sweep();
@@ -186,7 +203,8 @@ export class MoveJournal {
     }
   }
 
-  // The tombstone of this move and role within its 7 days, or null.
+  // The tombstone of this move and role within its 7 days (a cancel's waiting
+  // for its copy back: RETURN_WAIT_MS), or null.
   ended(id: string, role: MoveRole): MoveTombstone | null {
     let raw: unknown;
     try {
@@ -196,10 +214,10 @@ export class MoveJournal {
     }
     const t = raw as Partial<MoveTombstone> | null;
     if (!t || t.v !== 1 || t.moveId !== id || t.role !== role || typeof t.endedAt !== 'number' || !TERMINAL.includes(t.phase as MovePhaseName)) return null;
-    return this.now() - t.endedAt > TOMBSTONE_KEEP_MS ? null : (t as MoveTombstone);
+    return this.now() - t.endedAt > keepMs(t) ? null : (t as MoveTombstone);
   }
 
-  // Tombstones older than 7 days, and chunk part folders (<id>.chunks/) of no record.
+  // Tombstones older than their keep (7 days; RETURN_WAIT_MS), and chunk part folders (<id>.chunks/) of no record.
   sweep(): void {
     let names: string[];
     try {
@@ -216,7 +234,7 @@ export class MoveJournal {
         } catch {
           t = null;
         }
-        if (!t || typeof t.endedAt !== 'number' || this.now() - t.endedAt > TOMBSTONE_KEEP_MS) rmSync(join(this.dir, n), { force: true });
+        if (!t || typeof t.endedAt !== 'number' || this.now() - t.endedAt > keepMs(t)) rmSync(join(this.dir, n), { force: true });
         continue;
       }
       const parts = /^(.+)\.chunks$/.exec(n);
