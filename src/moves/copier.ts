@@ -343,6 +343,14 @@ export class Copier {
     for (const c of this.manifest) {
       this.check();
       const rec = this.r.chunks[c.id];
+      // A return skips a chunk only when the source answered 404 for one its
+      // manifest lists (its plan takes every kind and all space): never present.
+      // Reported missing and kept whole there (the new proxy deletes none of it).
+      if (this.r.returnOf && rec?.state === 'skipped' && c.files > 0) {
+        rows.push({ kind: c.kind, missing: c.files, recovered: 0, failed: 0, expired: 0 });
+        perChunk.set(c.id, { missing: [], failed: [], all: true });
+        continue;
+      }
       // Skipped chunks (not in the plan, the target full, gone at the source) and chunks
       // cams-admin reported done (B34, never copied here) are not checked.
       if (!plan.kinds.includes(c.kind) || !rec || (rec.state !== 'verified' && rec.state !== 'failed') || rec.v === undefined) continue;

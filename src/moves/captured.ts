@@ -1,6 +1,8 @@
 import { lstatSync } from 'fs';
 import { join } from 'path';
+import { CAM_ID } from '../archive/paths';
 import type { Catalog } from '../catalog/db';
+import { MINUTE, utcDayParts, utcHhmm } from '../time-units';
 import { allChunkParts } from './chunk-parts';
 import { rowKey } from './import';
 import type { ItemFilter } from './inventory';
@@ -40,13 +42,29 @@ export function capturedMark(catalog: Pick<Catalog, 'db'>, cam: string, now: num
 // an analysis or a still check was asked for, an Archive item was made.
 const TIME_COLUMN: Record<CapturedTable, string> = { clips: 'received_at', events: 'start_ts', analyses: 'requested_at', still_checks: 'requested_at', archive: 'created_at' };
 
+// A still minute's file (stills/<cam>/YYYY/MM/DD/HHMM.pack, previews/<cam>/
+// .../HHMM.jpg|.json; stills/store.ts minutePath, UTC): the minute's start
+// (ms), or null for any other path.
+const MINUTE_FILE = /^(?:stills|previews)\/[^/]+\/(\d{4})\/(\d{2})\/(\d{2})\/(\d{2})(\d{2})\.(?:pack|jpg|json)$/;
+export function minuteOf(rel: string): number | null {
+  const m = MINUTE_FILE.exec(rel);
+  if (!m) return null;
+  const t = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
+  return Number.isFinite(t) ? t : null;
+}
+
 // What the copy back serves (step 4 Task 9, spec §1): the camera's content
 // this proxy captured itself, i.e. not what the cancelled move imported. A row
 // is in when its id is not in an import map of the move's chunk parts with a
 // natural key that still matches (an imported Archive item renamed here goes
 // back), its id is at most the high water and its own time at most `at`. A
-// row-less file is in when the move did not land it (the landed log) and it
-// was last written at or before `at`. Read once: build one per request.
+// row-less file is in when the move did not land it (the landed log) and its
+// still minute ended by `at` (the cancel minute is not: it is captured by
+// both proxies and stays here, cancelMinuteFiles). Not by the file's mtime:
+// a minute is written when it is flushed, after it ended (the next minute's
+// first frame, the camera's stop), so the last whole minute before the cancel
+// can be written a moment after `at` (localstack scenario 5: 16 ms). Any other
+// row-less file: last written at or before `at`. Read once: build one per request.
 export function capturedFilter(dataDir: string, cancelled: MoveRecord): ItemFilter {
   const cap = cancelled.captured;
   if (!cap) throw new Error('capturedFilter: no high water');
@@ -72,6 +90,8 @@ export function capturedFilter(dataDir: string, cancelled: MoveRecord): ItemFilt
     },
     file(rel) {
       if (landed.has(rel)) return false;
+      const minute = minuteOf(rel);
+      if (minute !== null) return minute + MINUTE <= cap.at && isFile(join(dataDir, ...rel.split('/')));
       try {
         const st = lstatSync(join(dataDir, ...rel.split('/')));
         return st.isFile() && Math.floor(st.mtimeMs) <= cap.at;
@@ -80,4 +100,30 @@ export function capturedFilter(dataDir: string, cancelled: MoveRecord): ItemFilt
       }
     },
   };
+}
+
+const isFile = (abs: string): boolean => {
+  try {
+    return lstatSync(abs).isFile();
+  } catch {
+    return false;
+  }
+};
+
+// The cancel minute's still files of the camera on this proxy (the minute
+// holding the high water's `at`, not landed by the move): never copied back
+// (capturedFilter), they stay here and age out; the return's finish counts
+// them kept (concern 2 of the localstack run). dataDir-relative posix paths.
+export function cancelMinuteFiles(dataDir: string, cancelled: MoveRecord): string[] {
+  const cap = cancelled.captured;
+  if (!cap || !CAM_ID.test(cancelled.camera)) return [];
+  const minute = Math.floor(cap.at / MINUTE) * MINUTE;
+  const day = utcDayParts(minute).join('/');
+  const hhmm = utcHhmm(minute);
+  const landed = landedFiles(dataDir, cancelled.id);
+  const out: string[] = [];
+  for (const rel of [`stills/${cancelled.camera}/${day}/${hhmm}.pack`, `previews/${cancelled.camera}/${day}/${hhmm}.jpg`, `previews/${cancelled.camera}/${day}/${hhmm}.json`]) {
+    if (!landed.has(rel) && isFile(join(dataDir, ...rel.split('/')))) out.push(rel);
+  }
+  return out;
 }

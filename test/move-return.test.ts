@@ -305,7 +305,7 @@ function clientFor(app: express.Express, token: string): SourceClient {
   };
 }
 
-function original(f: ReturnType<typeof fixture>, o: { free?: number; tombstone?: boolean; stoneAt?: number; runner?: Pick<CopyRunner, 'start' | 'stop'> } = {}) {
+function original(f: ReturnType<typeof fixture>, o: { free?: number; tombstone?: boolean; stoneAt?: number; runner?: Pick<CopyRunner, 'start' | 'stop'>; wrap?: (c: SourceClient) => SourceClient } = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), 'camproxy-original-'));
   const catalog = openCatalog(join(dataDir, 'catalog.db'));
   const journal = new MoveJournal(join(dataDir, 'admin', 'moves'), undefined, { now: () => CANCEL_AT + 30 * MIN });
@@ -319,7 +319,7 @@ function original(f: ReturnType<typeof fixture>, o: { free?: number; tombstone?:
   const target = new MoveTarget({ journal, audit, emit, proxyId: () => ORIGINAL, retention: () => RETENTION } as unknown as TargetDeps);
   const copyDeps: CopierDeps = {
     journal, audit, emit, catalog, dataDir,
-    client: (r) => (state.clients.push(r.token!), clientFor(f.app(), r.token!)),
+    client: (r) => (state.clients.push(r.token!), (o.wrap ?? ((c) => c))(clientFor(f.app(), r.token!))),
     paused: () => false,
     space: { loaded: () => ({ config: { storage: { minFreeBytes: 0 }, stills: {}, previews: {}, ftp: {} } }) as unknown as Loaded, usage: () => ({ stills: 0, previews: 0, clips: 0, used: 0, budget: 1e15 }), freeBytes: () => state.free },
     setPhase: (r, phase, p) => target.setPhase(r, phase, p),
@@ -767,5 +767,70 @@ describe('the return\'s finish, fix round 1 (Task 11 review)', () => {
     expect((await f.returns.finish(finishArgs('source'))).status).toBe('ok');
     expect(has(f, LATE_CLIP)).toBe(true);
     expect(count(f.db, 'SELECT COUNT(*) AS n FROM clips WHERE id = ?', reused)).toBe(1);
+  });
+});
+
+// The localstack scenario 5 (cams-admin move-check): a still minute is written
+// when it is flushed, i.e. after it ended (the first frame of the next minute,
+// or the camera's stop). The last whole minute before the cancel can so be
+// written a moment after the cancel's high water; the cancel minute itself is
+// written when the camera stops here.
+describe('the copy back of the still minutes around the cancel (localstack scenario 5)', () => {
+  // 17:59 is the last whole minute before the cancel (18:00:00.500); 18:00 is the cancel minute.
+  const MARK = CANCEL_AT + 500;
+  const WHOLE = ['stills/cam1/2026/10/21/1759.pack', 'previews/cam1/2026/10/21/1759.jpg', 'previews/cam1/2026/10/21/1759.json'];
+  const CANCEL_MINUTE = ['stills/cam1/2026/10/21/1800.pack', 'previews/cam1/2026/10/21/1800.jpg', 'previews/cam1/2026/10/21/1800.json'];
+  const withMinutes = () => {
+    const f = fixture();
+    const c = f.journal.load(CANCELLED)!;
+    c.captured = { ...c.captured!, at: MARK };
+    f.journal.save(c);
+    // Flushed 16 ms after the mark (the next minute's first frame), and at the camera's stop 3 s later.
+    for (const p of WHOLE) f.put(p, `whole-${p}`, MARK + 16);
+    for (const p of CANCEL_MINUTE) f.put(p, `cancel-${p}`, MARK + 3000);
+    return f;
+  };
+
+  it('a whole minute captured before the cancel but written after its mark is copied back, then deleted on the new proxy', async () => {
+    const f = withMinutes();
+    const o = await copiedBack(f);
+    const listed = await f.manifestPaths(RETURN);
+    for (const p of WHOLE) expect(listed, p).toContain(p);
+    for (const p of WHOLE) expect(readFileSync(join(o.dataDir, ...p.split('/')), 'utf8'), p).toBe(`whole-${p}`);
+    expect(o.events.find((e) => e.kind === 'move.phase' && e.phase === 'copied')).toMatchObject({ check: { complete: true } });
+    expect((await f.returns.finish(finishArgs('source'))).status).toBe('ok');
+    for (const p of WHOLE) expect(has(f, p), p).toBe(false);
+  });
+
+  it('the cancel minute is not copied back; it stays on the new proxy and is counted kept in the finish', async () => {
+    const f = withMinutes();
+    const o = await copiedBack(f);
+    expect(await f.manifestPaths(RETURN)).not.toEqual(expect.arrayContaining([CANCEL_MINUTE[0]]));
+    for (const p of CANCEL_MINUTE) expect(existsSync(join(o.dataDir, ...p.split('/'))), p).toBe(false);
+    expect((await f.returns.finish(finishArgs('source'))).status).toBe('ok');
+    for (const p of CANCEL_MINUTE) expect(has(f, p), p).toBe(true);
+    const kept = f.journal.ended(RETURN, 'source')!.kept!;
+    expect(kept.stills).toEqual({ files: 3, bytes: CANCEL_MINUTE.reduce((n, p) => n + size(`cancel-${p}`), 0) });
+    const a = f.audits.filter((x) => x.action === 'move-return').at(-1)!;
+    expect(a.details).toMatchObject({ step: 'finish', kept: { stills: { files: 3 } } });
+    expect(a.message).toContain('3 kept');
+  });
+
+  it('a listed chunk the return source answers 404 for is reported missing, never counted present, and nothing of it is deleted', async () => {
+    const f = withMinutes();
+    expect(f.returns.open(open()).status).toBe('ok');
+    const gone = (c: SourceClient): SourceClient => ({
+      ...c,
+      get: async (path, signal) => (path.startsWith(`/api/moves/${RETURN}/chunks/stills%3A2026-10-21`) ? { status: 404, body: (async function* () { yield Buffer.from('{"error":"unknown_chunk"}'); })() } : c.get(path, signal)),
+    });
+    const o = original(f, { wrap: gone });
+    expect(await o.returns.start(start())).toEqual({ status: 'ok', result: {} });
+    await until(() => o.rec().phase === 'copied');
+    await o.runner.idle(RETURN);
+    const copied = o.events.find((e) => e.kind === 'move.phase' && e.phase === 'copied') as { check: { complete: boolean; missing: Record<string, number> } };
+    expect(copied.check.complete).toBe(false);
+    expect(copied.check.missing.stills).toBeGreaterThan(0);
+    expect((await f.returns.finish(finishArgs('source'))).status).toBe('ok');
+    for (const p of [OWN_STILL, ...WHOLE]) expect(has(f, p), p).toBe(true);
   });
 });

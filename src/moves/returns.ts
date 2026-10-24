@@ -1,9 +1,11 @@
+import { lstatSync } from 'fs';
+import { join } from 'path';
 import type { AuditLog } from '../audit/audit-log';
 import type { MoveFinishArgs, MoveReturnOpenArgs, MoveReturnStartArgs } from '../fleet/command-args';
 import type { Done, Handler } from '../fleet/commands';
 import type { Config } from '../config/defaults';
 import type { Storage } from '../storage';
-import { capturedFilter } from './captured';
+import { cancelMinuteFiles, capturedFilter } from './captured';
 import { removeChunkParts } from './chunk-parts';
 import { removeMoveParts, type CopyRunner } from './copier';
 import { listChunks, type InventoryDeps } from './inventory';
@@ -66,6 +68,22 @@ const ok = (result: Record<string, unknown> = {}): Done => ({ status: 'ok', resu
 const failed = (code: string): Done => ({ status: 'failed', code });
 const totals = (m: ChunkMeta[]) => ({ chunks: m.length, bytes: m.reduce((n, c) => n + c.bytes, 0) });
 const zeros = (): Purged => Object.fromEntries(MOVE_KINDS.map((k) => [k, { files: 0, bytes: 0 }])) as Purged;
+// The cancel minute's still files (captured.ts cancelMinuteFiles): never
+// copied back, they stay here; counted kept so the finish names them.
+const cancelMinute = (dataDir: string, c: MoveRecord): Purged => {
+  const t = zeros();
+  for (const rel of cancelMinuteFiles(dataDir, c)) {
+    try {
+      const st = lstatSync(join(dataDir, ...rel.split('/')));
+      if (!st.isFile()) continue;
+      t.stills.files++;
+      t.stills.bytes += st.size;
+    } catch {
+      /* gone meanwhile */
+    }
+  }
+  return t;
+};
 const add = (x: Purged, y: Purged): Purged => Object.fromEntries(MOVE_KINDS.map((k) => [k, { files: x[k].files + y[k].files, bytes: x[k].bytes + y[k].bytes }])) as Purged;
 
 export class MoveReturns {
@@ -239,7 +257,7 @@ export class MoveReturns {
       const back = removeReturned(purge, r, capturedFilter(dataDir, c));
       const imported = removeImported(purge, c);
       deleted = add(back.deleted, imported.deleted);
-      kept = add(back.kept, imported.kept);
+      kept = add(add(back.kept, imported.kept), cancelMinute(dataDir, c));
     }
     // The cancelled record closes first (review M2): a crash before the
     // return's tombstone can't leave it waiting (busy) for ever; a retry finds
