@@ -155,9 +155,11 @@ paths:
         Body `{ keep: { <chunkId>: [paths] | 'all' }, missing?: [Archive paths], copied?: { <archive chunkId>: { files, bytes, rows } } }`
         (src/moves/check.ts parseOutcome), 1 MiB at most, read only after the move token passed. Paths outside the camera's
         folders of the chunk's kind are dropped. Reports join: keep lists are a union ('all' wins), an Archive chunk counts
-        as copied only when every report names it alike; a report can only make this proxy keep more. Without any report
-        every Archive item of the camera stays; an Archive item is deleted only when its chunk is reported copied with the
-        listing this proxy still has. Kept Archive items get a "Kept here" note (ArchiveItem.move).
+        as copied only when every report names it alike. For a move's source, a report can only make this proxy keep more:
+        without any report every Archive item of the camera stays, and an Archive item is deleted only when its chunk is
+        reported copied with the listing this proxy still has. For the source record of a copy back (a return), it is the
+        other way round: without any report nothing captured is deleted, and the first report enables deletes in the chunks
+        this proxy served; a return's `/chunks` and `/rows` are filtered to what was captured since the switch-over. Kept Archive items get a "Kept here" note (ArchiveItem.move).
       security: [{ moveToken: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' } }

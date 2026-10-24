@@ -135,8 +135,8 @@ approved by the source itself.
    after the recovery pass make the copy "not complete". The one still of
    the overlap minute, which both proxies recorded, counts as present and
    is kept on the source (it holds the seconds before the switch-over).
-4. **End.** The target reports to the source, file by file, what it
-   verified. When cams-admin finishes the move, the source deletes only
+4. **End.** The target reports to the source, file by file, what to
+   keep (failed, missing, its own and whole chunks). When cams-admin finishes the move, the source deletes only
    that, plus its stored password and certificate; the target deletes its
    temporary files and the move's keys. The camera now belongs to the
    target. What the source keeps stays under its retention and ages out
