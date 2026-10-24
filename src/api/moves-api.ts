@@ -111,6 +111,19 @@ export function movesSourceApi(d: MovesSourceDeps): express.Router {
     return c && c.role === 'target' && c.camera === r.camera && c.captured ? capturedFilter(d.inventory.dataDir, c) : null;
   };
 
+  // A return's chunk listing the original fetched (Task 11 review M1): noted
+  // on the record once; the finish deletes only items of chunks noted here.
+  const noteServed = (id: string, chunkId: string): void => {
+    try {
+      const fresh = d.journal.load(id);
+      if (!fresh || fresh.role !== 'source' || !fresh.returnOf || fresh.served?.includes(chunkId)) return;
+      fresh.served = [...(fresh.served ?? []), chunkId];
+      d.journal.save(fresh);
+    } catch (err) {
+      logger.warn({ moveId: id, chunkId, code: (err as NodeJS.ErrnoException).code ?? 'error' }, 'move_return_served_not_noted');
+    }
+  };
+
   // Counted before the guard, uncounted again when the request passed it.
   const refusedLimit = rateLimit({
     windowMs: 60_000, limit: d.refusedPerMinute ?? 300, standardHeaders: 'draft-8', legacyHeaders: false,
@@ -152,6 +165,7 @@ export function movesSourceApi(d: MovesSourceDeps): express.Router {
     const chunkId = chunkOf(req, res);
     if (!chunkId) return;
     const r = recordOf(res);
+    if (r.returnOf) noteServed(r.id, chunkId);
     let hit;
     try {
       hit = cache.get(r.id, chunkId);

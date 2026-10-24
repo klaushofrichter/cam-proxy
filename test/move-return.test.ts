@@ -692,3 +692,80 @@ describe('the return\'s finish (step 4 Task 11)', () => {
     expect(f.journal.load(RETURN)).not.toBeNull();
   });
 });
+
+describe('the return\'s finish, fix round 1 (Task 11 review)', () => {
+  it('M3: a chunk cams-admin reports done is still copied and checked on a return (never counted verified unchecked)', async () => {
+    const f = fixture();
+    expect(f.returns.open(open()).status).toBe('ok');
+    const o = original(f);
+    expect(await o.returns.start(start({ done: ['clips:2026-10-21', 'stills:2026-10-21'] }))).toEqual({ status: 'ok', result: {} });
+    await until(() => o.rec().phase === 'copied');
+    await o.runner.idle(RETURN);
+    expect(existsSync(join(o.dataDir, ...OWN_CLIP.split('/')))).toBe(true);
+    expect(existsSync(join(o.dataDir, ...OWN_STILL.split('/')))).toBe(true);
+    expect(o.rec().chunks['clips:2026-10-21']).toMatchObject({ state: 'verified', v: 1 });
+    expect(o.rec().chunks['stills:2026-10-21']).toMatchObject({ state: 'verified', v: 1 });
+  });
+
+  it('M1: an outcome for chunks the original never fetched deletes none of them', async () => {
+    const f = fixture();
+    expect(f.returns.open(open()).status).toBe('ok');
+    // A report before (or without) any copy: an empty keep list.
+    expect((await request(f.app()).put(`/api/moves/${RETURN}/outcome`).set('Authorization', `Bearer ${T1}`).send({ keep: {} })).status).toBe(204);
+    expect((await f.returns.finish(finishArgs('source'))).status).toBe('ok');
+    for (const p of [OWN_CLIP, OWN_STILL, RENAMED_ARCHIVE_ITEM, `analytics/cam1/${f.ev}.jpg`]) expect(has(f, p), p).toBe(true);
+    expect(count(f.db, 'SELECT COUNT(*) AS n FROM clips WHERE id = ?', f.own)).toBe(1);
+  });
+
+  it('M2: a crash before the return\'s tombstone leaves the cancelled record closed (not busy); the retry ends it', async () => {
+    const f = fixture();
+    await copiedBack(f);
+    let fail = true;
+    const bury = f.journal.bury.bind(f.journal);
+    const journal = Object.assign(Object.create(f.journal), {
+      bury: (t: Parameters<typeof bury>[0]) => {
+        if (fail && t.moveId === RETURN && t.role === 'source') throw new Error('crash');
+        bury(t);
+      },
+    });
+    const crashing = new MoveReturns({ ...f.deps, journal });
+    await expect(crashing.finish(finishArgs('source'))).rejects.toThrow('crash');
+    expect(f.journal.load(CANCELLED)).toBeNull();
+    expect(f.journal.active().map((r) => r.id)).not.toContain(CANCELLED);
+    fail = false;
+    expect((await crashing.finish(finishArgs('source'))).status).toBe('ok');
+    expect(f.journal.active()).toEqual([]);
+    expect(f.journal.ended(RETURN, 'source')).toMatchObject({ phase: 'finished' });
+  });
+
+  it('M4: an Archive item stays when the original reported no copied listing, or one that no longer matches', async () => {
+    const f = fixture();
+    await copiedBack(f);
+    // A later report without `copied`: from then on no Archive chunk counts as copied.
+    expect((await request(f.app()).put(`/api/moves/${RETURN}/outcome`).set('Authorization', `Bearer ${T1}`).send({ keep: {} })).status).toBe(204);
+    expect((await f.returns.finish(finishArgs('source'))).status).toBe('ok');
+    expect(has(f, RENAMED_ARCHIVE_ITEM)).toBe(true);
+    expect(count(f.db, 'SELECT COUNT(*) AS n FROM archive WHERE id = ?', f.ar)).toBe(1);
+    expect(has(f, OWN_CLIP)).toBe(false);
+    // A listing that differs from what this proxy serves now (counts changed).
+    const g = fixture();
+    await copiedBack(g);
+    const r = g.journal.load(RETURN)!;
+    r.keepCopied = { 'archive:2026-10-20': { ...r.keepCopied!['archive:2026-10-20'], bytes: r.keepCopied!['archive:2026-10-20'].bytes + 1 } };
+    g.journal.save(r);
+    expect((await g.returns.finish(finishArgs('source'))).status).toBe('ok');
+    expect(has(g, RENAMED_ARCHIVE_ITEM)).toBe(true);
+  });
+
+  it('M5: a re-added camera\'s clip that reused a low id but arrived after the cancel stays', async () => {
+    const f = fixture();
+    await copiedBack(f);
+    // The own clip's row aged out; the re-added camera's clip gets its id back (no AUTOINCREMENT).
+    f.db.prepare('DELETE FROM clips WHERE id = ?').run(f.own);
+    const reused = f.clip(C, LATE_CLIP, 'late-clip', C);
+    expect(reused).toBeLessThanOrEqual(f.captured.maxIds.clips!);
+    expect((await f.returns.finish(finishArgs('source'))).status).toBe('ok');
+    expect(has(f, LATE_CLIP)).toBe(true);
+    expect(count(f.db, 'SELECT COUNT(*) AS n FROM clips WHERE id = ?', reused)).toBe(1);
+  });
+});

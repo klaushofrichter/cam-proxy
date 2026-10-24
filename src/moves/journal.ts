@@ -126,6 +126,10 @@ export interface MoveRecord {
   // proxy a source record (move.return.open) whose endpoints serve only what
   // this proxy captured itself (captured.ts capturedFilter).
   returnOf?: string;
+  // A return's source record (Task 11 review M1): the chunks whose listing the
+  // original fetched (GET /api/moves/:id/chunks/:chunkId). The finish deletes
+  // only items of these chunks.
+  served?: string[];
   // A return's target waiting for room (step 4 Task 10): the welcome re-emit keeps code no_space.
   pausedNoSpace?: boolean;
   captured?: { at: number; maxIds: Partial<Record<'clips' | 'events' | 'analyses' | 'still_checks' | 'archive', number>> };

@@ -32,9 +32,12 @@ import { MOVE_KINDS, type MoveEvent, type MovePhaseName, type MovePlan } from '.
 //
 // The finish (Task 11, move.finish {return: true}). The original's copier
 // reports what it could not verify to the new proxy like any target
-// (PUT /api/moves/:id/outcome, accepted for the return's source record: it
-// can only make the new proxy keep more). The new proxy then deletes what the
-// original verified (purge.ts removeReturned, never without that report) and
+// (PUT /api/moves/:id/outcome, accepted for the return's source record). For
+// a return that report is the proof of verification: without one nothing of
+// the capture is deleted, with one what it doesn't keep is deleted, but only
+// in chunks whose listing the original fetched (record.served; review M1).
+// The new proxy then deletes what the original verified (purge.ts
+// removeReturned) and
 // what the move had imported (removeImported); Give up (abandoned) deletes
 // nothing on either side. Both records close, so neither proxy is busy any more.
 export interface ReturnDeps {
@@ -238,6 +241,15 @@ export class MoveReturns {
       deleted = add(back.deleted, imported.deleted);
       kept = add(back.kept, imported.kept);
     }
+    // The cancelled record closes first (review M2): a crash before the
+    // return's tombstone can't leave it waiting (busy) for ever; a retry finds
+    // the return's record still open and ends it.
+    if (c) {
+      removeLanded(dataDir, c.id);
+      removeChunkParts(dataDir, c.id);
+      this.d.journal.bury?.({ moveId: c.id, role: 'target', phase: 'cancelled' });
+      this.d.journal.remove?.(c.id);
+    }
     const now = this.now();
     r.phase = 'finished';
     r.endedAt ??= now;
@@ -245,12 +257,6 @@ export class MoveReturns {
     this.d.emit({ kind: 'move.phase', moveId: r.id, role: 'source', phase: 'finished', ok: true, ...this.keep() });
     this.finishAudit(r, 'source', abandoned, deleted, kept);
     this.d.journal.bury?.({ moveId: r.id, role: 'source', phase: 'finished', deleted, kept });
-    if (c) {
-      removeLanded(dataDir, c.id);
-      removeChunkParts(dataDir, c.id);
-      this.d.journal.bury?.({ moveId: c.id, role: 'target', phase: 'cancelled' });
-      this.d.journal.remove?.(c.id);
-    }
     this.d.journal.remove?.(r.id);
     // The contract's answer is the counts deleted; what stayed is in the audit record and the tombstone.
     return ok({ deleted });

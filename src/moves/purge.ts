@@ -337,7 +337,8 @@ export function removeImported(d: { catalog: Pick<Catalog, 'db'>; dataDir: strin
 // The return's items (the camera's content this proxy captured itself, as
 // `filter` picks it: captured.ts capturedFilter, by natural key and the
 // cancel's high water, never by camera id alone) of the chunks the return
-// listed (`r.manifest`), minus what the original reported to keep (`r.keep`,
+// listed (`r.manifest`) and the original fetched (`r.served`, the chunk
+// listings served to it), minus what the original reported to keep (`r.keep`,
 // the outcome route). Never without that report: a return whose original
 // never reported (no keep list) deletes none of them, everything is `kept`.
 // An item stays whole (rows and files) when its chunk is kept 'all' or a kept
@@ -357,6 +358,9 @@ export function removeReturned(d: { catalog: Pick<Catalog, 'db'>; dataDir: strin
   const keepFiles = new Set<string>();
   for (const v of Object.values(r.keep ?? {})) if (Array.isArray(v)) for (const p of v) if (relOk(cam, p)) keepFiles.add(abs(p));
   const listed = new Set((r.manifest ?? []).map((c) => c.id));
+  // Only chunks the original fetched (review M1): a report (or a forged one)
+  // never deletes items of a chunk the original did not even list.
+  const served = new Set(r.served ?? []);
   const nowArchive = new Map(listChunks(d, cam, ['archive'], filter).map((c) => [c.id, c]));
   const copiedSame = (id: string) => {
     const c = nowArchive.get(id);
@@ -382,7 +386,7 @@ export function removeReturned(d: { catalog: Pick<Catalog, 'db'>; dataDir: strin
     for (const it of cameraItems(d, cam, kind, filter)) {
       const id = `${kind}:${chunkDay(it.ts)}`;
       const entry = r.keep?.[id];
-      let stays = !r.keep || !listed.has(id) || entry === 'all' || (Array.isArray(entry) && it.files.some((f) => keepFiles.has(f)));
+      let stays = !r.keep || !listed.has(id) || !served.has(id) || entry === 'all' || (Array.isArray(entry) && it.files.some((f) => keepFiles.has(f)));
       if (!stays && kind === 'archive') stays = !copiedSame(id);
       if (!stays && kind === 'events') {
         const evId = Number((it.rows[0]?.row as { id?: unknown }).id);

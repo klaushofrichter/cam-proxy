@@ -416,7 +416,9 @@ export class Copier {
       const rec = this.r.chunks[c.id];
       if (rec && FINAL.includes(rec.state) && (c.day < this.approvalDay() || sameMeta(rec.meta, c))) continue;
       // B34: what cams-admin reported done counts as verified unless the journal knows better.
-      if (!rec && this.r.done?.includes(c.id)) {
+      // Not for a return (Task 11 review M3): the new proxy deletes what this
+      // proxy reports verified, so every chunk is copied and checked here.
+      if (!rec && !this.r.returnOf && this.r.done?.includes(c.id)) {
         this.r.chunks[c.id] = { state: 'verified', b: c.bytes, meta: metaOf(c) };
         this.save(true);
         continue;
