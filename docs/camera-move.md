@@ -36,8 +36,8 @@ steps; both proxies record each one in their audit log. The design:
   the switch-over on it ends the move (`token_address`). Refused requests to
   the move endpoints are rate limited per address.
 - One move at a time per proxy. `moves.maxCameras` (local only, no limit by
-  default) caps how many cameras a target may run. With it set, the FTP
-  passive range needs 10 ports per camera it may hold: left unset,
+  default) caps how many cameras a target may run. With it set and FTP on,
+  the FTP passive range needs 10 ports per camera it may hold: left unset,
   `ftp.passive` becomes 30000 up, 10 ports per camera (`maxCameras` 4:
   `30000-30039`; at most 10 cameras, the range holds at most 100 ports); a
   range set by hand that is smaller does not load. Open those ports in the

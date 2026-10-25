@@ -126,7 +126,7 @@ export const SETTINGS: Node = {
   // Applies at once; the password is CAMPROXY_POE_SWITCH_PASSWORD.
   poeSwitch: HOST_POE_SWITCH,
   moves: {
-    maxCameras: unset(int(1, 64, 'most cameras this proxy may hold: a camera move onto it is refused (camera_limit) beyond that; ftp.passive needs 10 ports per camera (unset, its default follows). Local only', true), 'no limit'),
+    maxCameras: unset(int(1, 64, 'most cameras this proxy may hold: a camera move onto it is refused (camera_limit) beyond that; with FTP on, ftp.passive needs 10 ports per camera (unset, its default follows; at most 10 cameras then). Local only', true), 'no limit'),
   },
   go2rtc: {
     binary: unset({ type: 'string', pattern: '^.+$', optional: true, doc: 'go2rtc binary started by the proxy' }, 'no go2rtc started (go2rtc.url instead)'),
@@ -194,7 +194,7 @@ export const SETTINGS: Node = {
   ftp: {
     enabled: unset({ type: 'boolean', doc: 'accept clip uploads from the camera' }, 'no clip uploads from the camera', false),
     port: port('FTP control port'),
-    passive: { type: 'string', pattern: '^[1-9][0-9]{0,4}-[1-9][0-9]{0,4}$', doc: 'passive port range, A-B, at most 100 ports; at least 10 per camera with FTP and, with moves.maxCameras, 10 per camera it may hold. Unset with moves.maxCameras: 30000 up, 10 ports per camera (else 30000-30009)' },
+    passive: { type: 'string', pattern: '^[1-9][0-9]{0,4}-[1-9][0-9]{0,4}$', doc: 'passive port range, A-B, at most 100 ports; at least 10 per camera with FTP and, with moves.maxCameras and FTP on, 10 per camera it may hold. Unset with moves.maxCameras and FTP on: 30000 up, 10 ports per camera (else 30000-30009)' },
     tls: { type: 'boolean', doc: 'require FTPS' },
     stream: { type: 'string', enum: ['main', 'sub'], doc: 'the stream the camera uploads' },
     stalledHours: int(1, 72, 'warn on the Status page when no clip arrived for this many hours while the camera recorded events'),

@@ -301,7 +301,7 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 64,
-          "description": "most cameras this proxy may hold: a camera move onto it is refused (camera_limit) beyond that; ftp.passive needs 10 ports per camera (unset, its default follows). Local only"
+          "description": "most cameras this proxy may hold: a camera move onto it is refused (camera_limit) beyond that; with FTP on, ftp.passive needs 10 ports per camera (unset, its default follows; at most 10 cameras then). Local only"
         }
       }
     },
@@ -634,7 +634,7 @@
         "passive": {
           "type": "string",
           "pattern": "^[1-9][0-9]{0,4}-[1-9][0-9]{0,4}$",
-          "description": "passive port range, A-B, at most 100 ports; at least 10 per camera with FTP and, with moves.maxCameras, 10 per camera it may hold. Unset with moves.maxCameras: 30000 up, 10 ports per camera (else 30000-30009)"
+          "description": "passive port range, A-B, at most 100 ports; at least 10 per camera with FTP and, with moves.maxCameras and FTP on, 10 per camera it may hold. Unset with moves.maxCameras and FTP on: 30000 up, 10 ports per camera (else 30000-30009)"
         },
         "tls": {
           "type": "boolean",

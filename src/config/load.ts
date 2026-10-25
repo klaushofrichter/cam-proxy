@@ -135,9 +135,9 @@ function crossCheck(c: Config): void {
     seen.set(user, id);
   }
   if (ftpCams.length > 1 && b - a + 1 < 10 * ftpCams.length) throw new ConfigError(`ftp.passive: ${b - a + 1} ports for ${ftpCams.length} cameras with FTP; at least 10 per camera`);
-  // Room for every camera this proxy may hold (moves.maxCameras): a camera moved here can bring FTP.
+  // Room for every camera this proxy may hold (moves.maxCameras), while FTP is on here.
   const most = c.moves.maxCameras;
-  if (most !== undefined && b - a + 1 < 10 * most) throw new ConfigError(`ftp.passive: ${b - a + 1} ports for moves.maxCameras ${most}; at least 10 per camera`);
+  if (ftpCams.length && most !== undefined && b - a + 1 < 10 * most) throw new ConfigError(`ftp.passive: ${b - a + 1} ports for moves.maxCameras ${most}; at least 10 per camera`);
   if (c.storage.maxPercent !== undefined && c.storage.maxBytes !== undefined) {
     throw new ConfigError('storage.maxBytes: set either storage.maxPercent or storage.maxBytes, not both');
   }
@@ -232,10 +232,11 @@ function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSetti
   }
   const config = merge(merged, structuredClone(overrides)) as unknown as Config;
   config.cameraOrder = order;
-  // ftp.passive unset (neither file nor override) with moves.maxCameras: the
-  // default range holds 10 ports per camera this proxy may hold, from 30000.
+  // ftp.passive unset (neither file nor override) with moves.maxCameras and
+  // FTP on (any camera, as crossCheck counts them): the default range holds
+  // 10 ports per camera this proxy may hold, from 30000. FTP off: the plain default.
   const most = config.moves.maxCameras;
-  if (most !== undefined && getPath(fileSettings, 'ftp.passive') === undefined && getPath(overrides, 'ftp.passive') === undefined) {
+  if (most !== undefined && order.some((id) => cameraConfig(config, id)!.ftp.enabled) && getPath(fileSettings, 'ftp.passive') === undefined && getPath(overrides, 'ftp.passive') === undefined) {
     if (10 * most > PASSIVE_MAX) throw new ConfigError(`moves.maxCameras: ${most} cameras need ${10 * most} FTP passive ports (10 per camera); ftp.passive holds at most ${PASSIVE_MAX}`);
     config.ftp.passive = `${PASSIVE_FROM}-${PASSIVE_FROM + 10 * most - 1}`;
   }
