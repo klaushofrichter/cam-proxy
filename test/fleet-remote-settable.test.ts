@@ -22,14 +22,9 @@ describe('the classification (R3-1)', () => {
   it('this version lets cams-admin set exactly the contract\'s remote list', () => {
     expect([...REMOTE].sort()).toEqual([...contract.remote].sort());
   });
-  // Denied here before the contract lists it (deny wins, so this is safe):
-  // the proxy profile (cams-admin spec 2026-10-25-proxy-profile-design §0).
-  // cams-admin's remote-settable.json adds it next; then this list is empty again.
-  const AHEAD_OF_CONTRACT = ['profile'];
   it('the deny list names each prefix once, and every prefix the contract denies', () => {
     expect(new Set(DENIED).size).toBe(DENIED.length);
-    expect([...DENIED].sort()).toEqual([...new Set([...contract.denied, ...AHEAD_OF_CONTRACT])].sort());
-    for (const p of AHEAD_OF_CONTRACT) expect(contract.remote.some((r) => r === p || r.startsWith(`${p}.`)), p).toBe(false);
+    expect([...DENIED].sort()).toEqual([...contract.denied].sort());
   });
   it('the compiled remote list is a subset of the contract (the upper bound); narrow paths agree', () => {
     for (const r of REMOTE) expect(contract.remote, r).toContain(r);
