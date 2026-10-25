@@ -158,6 +158,9 @@ describe('the wired client (four cameras, every secret set)', () => {
     const body = hb.body as { summary: { cameras: { camera: { id: string } }[]; schema: number }; proxy: { configSchema: number; publicUrl: string | null } };
     expect(body.summary.cameras.map((c) => c.camera.id)).toEqual(local.cameras.map((c) => c.camera.id));
     expect(body.proxy).toMatchObject({ configSchema: CONFIG_SCHEMA, publicUrl: 'https://proxy.example', tls: { site: 'garage', caFingerprint: [expect.stringMatching(/^SHA256:[0-9A-F]{64}$/)] } });
+    // The proxy profile (cams-admin spec 2026-10-25-proxy-profile-design §2): as GET /control/profile has it.
+    const profile = (await request(base).get('/control/profile').set('Authorization', `Bearer ${MARKERS.CAMPROXY_ADMIN_TOKEN}`).expect(200)).body as Record<string, unknown>;
+    expect((hb.body as { profile: Record<string, unknown> }).profile).toMatchObject({ set: profile.set, cameras: profile.cameras, held: profile.held, ftp: profile.ftp, firewall: profile.firewall });
     expect(proxy.camsAdmin.view().state).toBe('connected');
   });
 

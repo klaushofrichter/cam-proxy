@@ -205,55 +205,7 @@ describe('cameras (spec §4.1)', () => {
     expect(cameraConfig(load({ CAMPROXY_FTP_PASSWORD: 'f' }).config, 'cam3')!.ftp.enabled).toBe(true);
   });
 
-  it('ftp.passive from moves.maxCameras (FTP on): unset, the default range holds 10 ports per camera', () => {
-    const F = { CAMPROXY_FTP_PASSWORD: 'f' };
-    const ftp = { enabled: true };
-    write('config.json', { cameras: [{ id: 'cam3' }], moves: { maxCameras: 4 }, ftp });
-    let l = load(F);
-    expect(l.config.ftp.passive).toBe('30000-30039');
-    expect(l.sources['ftp.passive']).toBe('default');
-    // Without moves.maxCameras: the old default.
-    write('config.json', { cameras: [{ id: 'cam3' }], ftp });
-    expect(load(F).config.ftp.passive).toBe('30000-30009');
-    // FTP on for one camera only counts too.
-    write('config.json', { cameras: [{ id: 'cam3', ftp: { enabled: true } }], moves: { maxCameras: 2 } });
-    expect(load(F).config.ftp.passive).toBe('30000-30019');
-    // An override of moves.maxCameras moves the default with it.
-    write('config.json', { cameras: [{ id: 'cam3' }], moves: { maxCameras: 2 }, ftp });
-    l = applyOverrides(load(F), { moves: { maxCameras: 3 } });
-    expect(l.config.ftp.passive).toBe('30000-30029');
-    dir = mkdtempSync(join(tmpdir(), 'camproxy-legacy-'));
-    // 10 cameras fill the largest range (100 ports); more can't be served with FTP on.
-    write('config.json', { cameras: [{ id: 'cam3' }], moves: { maxCameras: 10 }, ftp });
-    expect(load(F).config.ftp.passive).toBe('30000-30099');
-    write('config.json', { cameras: [{ id: 'cam3' }], moves: { maxCameras: 11 }, ftp });
-    expect(err(() => load(F))).toBe('moves.maxCameras: 11 cameras need 110 FTP passive ports (10 per camera); ftp.passive holds at most 100');
-  });
-
-  it('FTP off: moves.maxCameras up to 64 loads, ftp.passive keeps its plain default and no capacity rule', () => {
-    write('config.json', { cameras: [{ id: 'cam3' }], moves: { maxCameras: 11 } });
-    expect(load().config.ftp.passive).toBe('30000-30009');
-    write('config.json', { cameras: [{ id: 'cam3' }], moves: { maxCameras: 64 } });
-    expect(load().config.ftp.passive).toBe('30000-30009');
-    write('config.json', { cameras: [{ id: 'cam3' }], moves: { maxCameras: 3 }, ftp: { passive: '40000-40004' } });
-    expect(load().config.ftp.passive).toBe('40000-40004');
-  });
-
-  it('ftp.passive set with moves.maxCameras (FTP on): at least 10 ports per camera it may hold', () => {
-    const F = { CAMPROXY_FTP_PASSWORD: 'f' };
-    const ftp = { enabled: true };
-    write('config.json', { cameras: [{ id: 'cam3' }], moves: { maxCameras: 3 }, ftp: { ...ftp, passive: '40000-40029' } });
-    expect(load(F).config.ftp.passive).toBe('40000-40029');
-    write('config.json', { cameras: [{ id: 'cam3' }], moves: { maxCameras: 3 }, ftp: { ...ftp, passive: '40000-40019' } });
-    expect(err(() => load(F))).toBe('ftp.passive: 20 ports for moves.maxCameras 3; at least 10 per camera');
-    // Set as an override: the same rule.
-    write('config.json', { cameras: [{ id: 'cam3' }], moves: { maxCameras: 3 }, ftp });
-    expect(err(() => applyOverrides(load(F), { ftp: { passive: '40000-40009' } }))).toBe('ftp.passive: 10 ports for moves.maxCameras 3; at least 10 per camera');
-    dir = mkdtempSync(join(tmpdir(), 'camproxy-legacy-'));
-    // Without moves.maxCameras a set range keeps the old rules (one camera: any size).
-    write('config.json', { cameras: [{ id: 'cam3' }], ftp: { ...ftp, passive: '40000-40004' } });
-    expect(load(F).config.ftp.passive).toBe('40000-40004');
-  });
+  // moves.maxCameras and the passive range: test/config-profile.test.ts (it is profile.cameras now).
 
   it('per-camera restart and live rules', async () => {
 

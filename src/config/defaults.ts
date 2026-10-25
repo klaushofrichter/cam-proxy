@@ -30,8 +30,11 @@ export interface Config {
   cameraOrder: string[];
   // The cameras' PoE switch, one per host (issue #85); `none` for no switch.
   poeSwitch: HostPoeSwitch;
-  // Camera moves (src/moves): maxCameras unset = no limit.
-  moves: { maxCameras?: number };
+  // The proxy profile (cams-admin spec 2026-10-25-proxy-profile-design §1):
+  // what this proxy holds. cameras unset = the cameras held (at least 1);
+  // storageGB unset = the storage.* budget. moves.maxCameras is the old name
+  // of cameras (src/config/legacy.ts).
+  profile: { name?: string; cameras?: number; storageGB?: number; firewall: 'ufw' | 'nft' };
   go2rtc: { binary?: string; url?: string; rtspPort: number; apiPort: number };
   stills: { enabled: boolean; stream: 'sub' | 'main'; intervalS: number; size: string; quality: number; maxGB?: number };
   previews: { tileSize: string; grid: string; quality: number; maxGB?: number };
@@ -79,7 +82,7 @@ export const DEFAULTS: Config = {
   cameras: {},
   cameraOrder: [],
   poeSwitch: { model: 'none', ports: 8, offSeconds: 10 },
-  moves: {},
+  profile: { firewall: 'ufw' },
   go2rtc: { binary: 'go2rtc', rtspPort: 18554, apiPort: 11984 },
   stills: { enabled: true, stream: 'sub', intervalS: 1, size: '896x512', quality: 5 },
   previews: { tileSize: '160x90', grid: '10x6', quality: 7 },

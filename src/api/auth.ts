@@ -153,7 +153,9 @@ export const UI_UNLOCKS: readonly (readonly [string, string, RegExp])[] = [
 // (it has an address) neither. Klaus (2026-10-21): nor storage limits (a
 // lower one deletes stills and clips) or Google Vision on/off. Retention and
 // the spending caps follow the direction rules instead (src/api/ui-config.ts).
-export const UI_CONFIG_LOCAL: readonly string[] = [...NEVER_FROM_CAMS_ADMIN, 'storage', 'cameras.*.storage', 'analytics.googleVision.enabled'];
+// Nor the proxy profile (cams-admin spec 2026-10-25-proxy-profile-design §0:
+// it holds the camera limit and the storage budget; local admin token only).
+export const UI_CONFIG_LOCAL: readonly string[] = [...NEVER_FROM_CAMS_ADMIN, 'storage', 'cameras.*.storage', 'analytics.googleVision.enabled', 'profile'];
 
 // Every leaf path in a settings patch; dotted keys count as their parts.
 function patchPaths(o: unknown, prefix = ''): string[] {

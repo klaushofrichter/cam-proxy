@@ -36,6 +36,8 @@ const LOCAL_ONLY: Readonly<Record<string, string>> = {
   'host.stats': 'local only: turns reading the host figures on or off',
   'ftp.stalledHours': 'local only: a health threshold decides what the proxy reports as a problem',
   'archive.warnPercent': 'local only: a health threshold decides what the proxy reports as a problem',
+  // The proxy profile (cams-admin spec 2026-10-25-proxy-profile-design §0).
+  profile: 'local only: the proxy profile holds the camera limit and the storage budget; it is set at the proxy',
 };
 // Addresses, ports, files, trust, users and cams-admin itself: never remote,
 // and never through a cams-admin sign-in's ui.config either (issue #227,
@@ -44,7 +46,8 @@ const LOCAL_ONLY: Readonly<Record<string, string>> = {
 export const NEVER_FROM_CAMS_ADMIN: readonly string[] = [
   'server', 'go2rtc', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.publicHost', 'ftp.certFile', 'ftp.keyFile', 'tls', 'composition.font', 'ntp.server', 'poeSwitch', 'camsAdmin',
   'cameras.*.id', 'cameras.*.host', 'cameras.*.protocol', 'cameras.*.tlsName', 'cameras.*.user', 'cameras.*.onvifPort', 'cameras.*.rtspPort', 'cameras.*.baichuanPort', 'cameras.*.poeSwitch', 'cameras.*.ftp.user', 'cameras.*.webUiUrl',
-  // Camera moves: hiding a camera and the camera limit are local (src/moves).
+  // Camera moves: hiding a camera and the camera limit are local (src/moves;
+  // moves is only the old name of profile.cameras now, src/config/legacy.ts).
   'cameras.*.moved', 'moves',
 ];
 export const DENIED: readonly string[] = [...new Set([

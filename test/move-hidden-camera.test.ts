@@ -108,25 +108,25 @@ describe('a moved camera is hidden', () => {
   }, 40_000);
 });
 
-describe('moved and moves.maxCameras are local settings', () => {
+describe('moved and profile.cameras (moves.maxCameras) are local settings', () => {
   it('are refused from cams-admin (not_remote_settable) and by a managed ui.config session', () => {
     expect(classify('cameras.cam3.moved', ['cam3'])).toBe('denied');
-    expect(classify('moves.maxCameras', ['cam3'])).toBe('denied');
+    expect(classify('profile.cameras', ['cam3'])).toBe('denied');
     expect(DENIED).toContain('cameras.*.moved');
     expect(DENIED).toContain('moves');
     expect(isLocalSetting('cameras.cam3.moved')).toBe(true);
     expect(isLocalSetting('moves.maxCameras')).toBe(true);
   });
 
-  it('moves.maxCameras defaults to no limit; a camera node takes moved', () => {
+  it('profile.cameras is unset by default (moves.maxCameras reads as it); a camera node takes moved', () => {
     const env = { CAMPROXY_TOKENS: 'a'.repeat(32), CAMPROXY_ADMIN_TOKEN: 'c'.repeat(32), CAMPROXY_CAMERA_PASSWORD: 'x' };
     const load = (extra: object) => {
       const dir = mkdtempSync(join(tmpdir(), 'camproxy-moved-'));
       writeFileSync(join(dir, 'config.json'), JSON.stringify({ cameras: [{ id: 'cam3', host: '192.0.2.3', moved: MOVE }], ...extra }));
       return loadConfig(env, { cwd: dir }).config;
     };
-    expect(load({}).moves.maxCameras).toBeUndefined();
-    expect(load({ moves: { maxCameras: 2 } }).moves.maxCameras).toBe(2);
+    expect(load({}).profile.cameras).toBeUndefined();
+    expect(load({ moves: { maxCameras: 2 } }).profile.cameras).toBe(2);
     expect(load({}).cameras.cam3.moved).toBe(MOVE);
   });
 

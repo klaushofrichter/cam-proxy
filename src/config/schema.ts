@@ -20,6 +20,8 @@ export type Node = { [key: string]: Node | Leaf | Collection };
 // takes it. Nothing else: the host goes into go2rtc's config, which expands
 // ${VAR} anywhere (review of #173), and into URLs.
 export const CAMERA_HOST = '^([A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?)?$';
+// profile.name: 1-60 characters, no control characters.
+export const PROFILE_NAME = '^[^\\u0000-\\u001f\\u007f]{1,60}$';
 export const CAMERA_ID = '^(?!file$)(?!.*-file$)[a-z0-9][a-z0-9-]{0,31}$';
 export const collection = (of: Node, doc: string): Collection => ({ collection: of, doc });
 const isCollection = (n: Node | Leaf | Collection): n is Collection => typeof (n as Collection).collection === 'object' && typeof (n as Collection).doc === 'string';
@@ -125,8 +127,14 @@ export const SETTINGS: Node = {
   // The PoE switch the cameras hang on (issue #85; one per host, spec §4.1).
   // Applies at once; the password is CAMPROXY_POE_SWITCH_PASSWORD.
   poeSwitch: HOST_POE_SWITCH,
-  moves: {
-    maxCameras: unset(int(1, 64, 'most cameras this proxy may hold: a camera move onto it is refused (camera_limit) beyond that; with FTP on, ftp.passive needs 10 ports per camera (unset, its default follows; at most 10 cameras then). Local only', true), 'no limit'),
+  // The proxy profile (cams-admin spec 2026-10-25-proxy-profile-design §1):
+  // local only, never from cams-admin. moves.maxCameras is read as
+  // profile.cameras (its old name, src/config/legacy.ts).
+  profile: {
+    name: unset({ type: 'string', pattern: PROFILE_NAME, optional: true, doc: 'the hardware as people call it, up to 60 characters (shown in cams-admin)' }, 'no name'),
+    cameras: unset(int(1, 64, "the most cameras this proxy holds (1 to 10 while FTP is on): a camera move onto it is refused (camera_limit) beyond that; with FTP on and ftp.passive unset, 30000 up with 10 ports per camera. Local only", true), 'the cameras it holds now (at least 1): no profile set'),
+    storageGB: unset(int(1, 100000, 'the storage this proxy may use, GB (10^9 bytes): the size budget in place of storage.maxBytes; storage.maxPercent and storage.minFreeBytes still limit it. Local only', true), 'no profile budget: storage.maxPercent or storage.maxBytes applies'),
+    firewall: { type: 'string', enum: ['ufw', 'nft'], doc: "the host's firewall tool: which firewall lines the profile shows for the cameras with FTP (nothing runs them)" },
   },
   go2rtc: {
     binary: unset({ type: 'string', pattern: '^.+$', optional: true, doc: 'go2rtc binary started by the proxy' }, 'no go2rtc started (go2rtc.url instead)'),
@@ -258,7 +266,8 @@ export const SETTINGS: Node = {
 // heartbeat (proxy.configSchema): raise it when a setting is added, renamed
 // or changes meaning. 1: the first versioned schema (with camsAdmin). 2:
 // camsAdmin.allowCommands takes entries, camsAdmin.commandsPaused is known.
-export const CONFIG_SCHEMA = 2;
+// 3: the profile block (moves.maxCameras is profile.cameras).
+export const CONFIG_SCHEMA = 3;
 
 
 export class SettingError extends Error {}
@@ -362,6 +371,8 @@ export function configJsonSchema(): object {
   js.properties.ftp.properties.user = { ...(jsonSchemaOf({ user: LEGACY_FTP_USER }) as { properties: { user: object } }).properties.user, description: 'legacy (with camera): the FTP user the camera logs in as; use cameras[].ftp.user' };
   // The command policy's base (migration P2, R2-1): config.json only, not a setting.
   js.properties.camsAdmin.properties.allowCommands = { type: 'array', maxItems: 32, uniqueItems: true, items: { type: 'string', enum: [...ALLOW_ENTRIES] }, description: 'commands cams-admin may send this proxy (default none); data/admin/policy.json (the Status card, admin-commands) replaces this list. config.json only' };
+  // The old name of profile.cameras (read for one release, src/config/legacy.ts).
+  (js.properties as Record<string, object>).moves = { type: 'object', additionalProperties: false, description: 'deprecated: use profile', properties: { maxCameras: { type: 'integer', minimum: 1, maximum: 64, description: 'deprecated: the old name of profile.cameras (both set must be equal)' } } };
   js.properties.camsAdmin.properties.commandsPaused = { type: 'boolean', description: 'refuse every cams-admin command (paused); config.json only' };
   return js;
 }
