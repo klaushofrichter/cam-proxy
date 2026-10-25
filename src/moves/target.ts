@@ -758,7 +758,8 @@ export class MoveTarget {
     try {
       // The camera checks first (final review 7): a password is never stored
       // for a camera this proxy can't take (another camera's would be replaced).
-      const plan = this.planCamera(r);
+      // The password itself is stored just below: not needed for this check.
+      const plan = this.planCamera(r, { passwordPending: true });
       if ('problem' in plan) throw new Refused(plan.problem, CODES.camera);
       // Noted before the write: a cancel deletes only a password this move stored.
       if (!r.passwordWritten) {
@@ -782,7 +783,10 @@ export class MoveTarget {
   // leftover whose config.json keeps what a move can't replace (tlsName, a PoE
   // switch port, a share, `moved` itself), or a per-camera password in the
   // environment (it would win over the moved one): stale_leftover.
-  private planCamera(r: MoveRecord): CameraPlan {
+  // passwordPending (the secrets step's check before it stores the password):
+  // the camera's own password is not required yet; the plan is a check only.
+  // The camera step plans without it: it needs the stored password.
+  private planCamera(r: MoveRecord, o: { passwordPending?: boolean } = {}): CameraPlan {
     const c = r.cameraConnection;
     if (!c) throw new Error('the journal lacks the camera');
     const loaded = this.d.loaded();
@@ -818,7 +822,7 @@ export class MoveTarget {
     const patch: Record<string, unknown> = { cameras: { [id]: node } };
     const host = r.plan?.space === 'retention' && r.plan.targetSettings ? r.plan.targetSettings : {};
     for (const [path, v] of Object.entries(host)) setPath(patch, path, v);
-    const plan = planOverrides(base, patch);
+    const plan = planOverrides(base, patch, o.passwordPending ? { passwordFromMove: [id] } : {});
     return { next: plan.next, overrides: plan.overrides, leftover, host };
   }
 

@@ -31,7 +31,11 @@ export function cameraPassword(s: Secrets, id: string): string {
 // tokensOptional (migration P2, M §10.2): CAMPROXY_TOKENS may be unset while
 // a cams-admin-managed client token is live; the start checks that
 // (checkClientTokens), the CLI keeps the strict default.
-export function loadSecrets(env: NodeJS.ProcessEnv, ftpEnabled: boolean, cameraIds: string[] = [], o: { tokensOptional?: boolean; dataDir?: string } = {}): Secrets {
+// passwordFromMove: cameras whose password a camera move brings later (the
+// target's offer check and its secrets step validate the camera node before
+// the password is there): their missing password is not an error. Nothing is
+// put in its place; such a result is for validation only, never for a worker.
+export function loadSecrets(env: NodeJS.ProcessEnv, ftpEnabled: boolean, cameraIds: string[] = [], o: { tokensOptional?: boolean; dataDir?: string; passwordFromMove?: readonly string[] } = {}): Secrets {
   const tokensRaw = read(env, 'CAMPROXY_TOKENS');
   const tokens = (tokensRaw ?? '').split(',').map((t) => t.trim()).filter(Boolean);
   if (!tokens.length && !(o.tokensOptional && !tokensRaw)) throw new SettingError('CAMPROXY_TOKENS: required');
@@ -57,7 +61,7 @@ export function loadSecrets(env: NodeJS.ProcessEnv, ftpEnabled: boolean, cameraI
     if (own) cameraPasswords[id] = own;
   }
   const cameraPassword = read(env, 'CAMPROXY_CAMERA_PASSWORD') ?? '';
-  const without = cameraIds.find((id) => !cameraPasswords[id]);
+  const without = cameraIds.find((id) => !cameraPasswords[id] && !o.passwordFromMove?.includes(id));
   if (!cameraPassword && (without !== undefined || !cameraIds.length)) {
     throw new SettingError(without !== undefined ? `CAMPROXY_CAMERA_PASSWORD: required (${without} has no ${cameraPasswordEnv(without)})` : 'CAMPROXY_CAMERA_PASSWORD: required');
   }

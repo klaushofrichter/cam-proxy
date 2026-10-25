@@ -41,7 +41,8 @@ export function moveHandlers(deps: MoveDeps): Record<string, Handler> {
   const handlers: Record<string, Handler> = Object.fromEntries(MOVE_COMMANDS.map((c) => [c, stub]));
   const ev = deps.evaluate;
   if (ev) {
-    // The answer carries a reason, never a detail; the token stays out of every message.
+    // A refusal carries its reason and a detail (what failed, in plain terms:
+    // settings, ids, addresses; evaluate()); the token stays out of every message.
     handlers['move.offer'] = async (args) => {
       const a = args as MoveOfferArgs;
       try {
@@ -83,16 +84,16 @@ export function moveHandlers(deps: MoveDeps): Record<string, Handler> {
 }
 
 // The target's answer to an offer (S §12 move-offer): accept with the space
-// result, or the reason. Never the token.
+// result, or the reason and its detail. Never the token.
 function offerAudit(deps: MoveDeps, a: MoveOfferArgs, e: Evaluation): void {
   const cam = a.camera.proxyCameraId;
   deps.audit.write({
     action: 'move-offer', category: ['configuration'], type: ['change'], outcome: e.accept ? 'success' : 'failure',
     user: 'cams-admin', camera: cam,
-    message: `Camera move ${a.moveId} offered: ${cam} from ${a.source.name}: ${e.accept ? `accepted (${e.space.fits ? 'fits' : 'does not fit'})` : `rejected (${e.reason})`}`,
+    message: `Camera move ${a.moveId} offered: ${cam} from ${a.source.name}: ${e.accept ? `accepted (${e.space.fits ? 'fits' : 'does not fit'})` : `rejected (${e.reason}${e.detail ? `: ${e.detail}` : ''})`}`,
     details: {
       moveId: a.moveId, camera: cam, source: a.source.proxyId, sourceName: a.source.name, target: deps.proxyId?.() || null, role: 'target', accept: e.accept,
-      ...(e.accept ? { space: e.space, probeBps: e.probeBps } : { reason: e.reason }),
+      ...(e.accept ? { space: e.space, probeBps: e.probeBps } : { reason: e.reason, ...(e.detail ? { detail: e.detail } : {}) }),
       bytes: Object.values(a.summary).reduce((n, k) => n + k.bytes, 0),
     },
   });

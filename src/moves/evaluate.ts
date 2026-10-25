@@ -9,6 +9,7 @@ import type { MoveOfferArgs } from '../fleet/command-args';
 import { fingerprintOf, type SiteCa } from '../tls/ca';
 import { issuedBy } from '../tls/leaf';
 import { servedCertificate, type Served } from '../tls/served';
+import { moveDetail } from './detail';
 import type { MoveJournal, MoveRecord } from './journal';
 import type { MoveKind, MoveReason, Space } from './types';
 import { MOVE_KINDS } from './types';
@@ -22,7 +23,7 @@ const PROBE_CAP_MS = 5000;
 const CONNECT_MS = 3000;
 const GB = 1024 ** 3;
 
-export type Evaluation = { accept: true; space: Space; probeBps: number } | { accept: false; reason: MoveReason };
+export type Evaluation = { accept: true; space: Space; probeBps: number } | { accept: false; reason: MoveReason; detail?: string };
 
 export interface EvaluateDeps {
   // The allow entry `move.receive` is in effect.
@@ -116,36 +117,48 @@ function cameraNode(a: MoveOfferArgs): object {
 }
 
 export async function evaluate(deps: EvaluateDeps, args: MoveOfferArgs): Promise<Evaluation> {
-  const no = (reason: MoveReason): Evaluation => ({ accept: false, reason });
+  // A refusal names what failed (moveDetail: one line, at most 300
+  // characters): settings, ids and addresses, never a token or a password.
+  const no = (reason: MoveReason, detail: string): Evaluation => {
+    const d = moveDetail(detail);
+    return { accept: false, reason, ...(d ? { detail: d } : {}) };
+  };
   const id = args.camera.proxyCameraId;
-  if (!deps.receiveAllowed()) return no('moves_not_allowed');
+  if (!deps.receiveAllowed()) return no('moves_not_allowed', 'move.receive is not allowed');
   // An unreadable journal is not known to be idle.
   let active: MoveRecord[];
   try {
     active = deps.journal.active();
   } catch {
-    return no('busy');
+    return no('busy', 'move journal unreadable');
   }
-  if (active.length > 0) return no('busy');
+  if (active.length > 0) return no('busy', `move ${active[0].id} is open here`);
   const loaded = deps.loaded();
   const cfg = loaded.config;
   const ca = deps.ca();
-  if (!cfg.tls.site || !ca) return no('no_site_ca');
+  if (!cfg.tls.site) return no('no_site_ca', 'tls.site is not set');
+  if (!ca) return no('no_site_ca', 'the site CA is missing');
   // Review Focus 4: a hidden `moved` leftover of the same camera (its host,
   // protocol and user are the offered ones) is free; anything else is taken.
   const left = cfg.cameras[id];
-  if (left && !(left.moved && !active.some((r) => r.camera === id) && left.host === args.camera.host && left.protocol === args.camera.protocol && left.user === args.camera.user)) return no('id_taken');
-  if (cfg.moves.maxCameras !== undefined && cfg.cameraOrder.filter((c) => !cfg.cameras[c]?.moved).length >= cfg.moves.maxCameras) return no('camera_limit');
+  if (left && !(left.moved && !active.some((r) => r.camera === id) && left.host === args.camera.host && left.protocol === args.camera.protocol && left.user === args.camera.user)) return no('id_taken', `camera id ${id} is in use here`);
+  const running = cfg.cameraOrder.filter((c) => !cfg.cameras[c]?.moved).length;
+  if (cfg.moves.maxCameras !== undefined && running >= cfg.moves.maxCameras) return no('camera_limit', `${running} of ${cfg.moves.maxCameras} cameras (moves.maxCameras)`);
   try {
-    planOverrides(loaded, { cameras: { [id]: cameraNode(args) } });
+    // The camera's password comes with the move (the secrets step): not needed here yet.
+    planOverrides(loaded, { cameras: { [id]: cameraNode(args) } }, { passwordFromMove: [id] });
   } catch (err) {
-    if (err instanceof ConfigError) return no('incompatible');
+    // ConfigError messages name settings and variables, never a secret's value.
+    if (err instanceof ConfigError) return no('incompatible', err.message);
     throw err;
   }
   const { hostname, port } = splitHost(args.camera.host);
-  if (!ca.covers(hostname) || !ca.coversName(`${id}.${cfg.tls.site}.internal`)) return no('ca_does_not_cover_camera');
-  const reachable = await (deps.connect ?? tcpConnect)(hostname, port ?? (args.camera.protocol === 'https' ? 443 : 80), CONNECT_MS);
-  if (!reachable) return no('camera_unreachable');
+  const name = `${id}.${cfg.tls.site}.internal`;
+  if (!ca.covers(hostname)) return no('ca_does_not_cover_camera', `the site CA does not cover the address ${hostname}`);
+  if (!ca.coversName(name)) return no('ca_does_not_cover_camera', `the site CA does not cover the name ${name}`);
+  const cameraPort = port ?? (args.camera.protocol === 'https' ? 443 : 80);
+  const reachable = await (deps.connect ?? tcpConnect)(hostname, cameraPort, CONNECT_MS);
+  if (!reachable) return no('camera_unreachable', `${hostname.includes(':') ? `[${hostname}]` : hostname}:${cameraPort} not reachable within ${CONNECT_MS / 1000} s`);
   const space = spaceFor(deps, args.summary);
   const probeBps = await (deps.probe ?? probeSource)(args.source, args.moveId, args.token).catch(() => 0);
   const ip = await (deps.resolve ?? resolveHost)(new URL(args.source.url).hostname.replace(/^\[(.*)\]$/, '$1'));

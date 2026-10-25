@@ -7,7 +7,8 @@
   // Step 1 of moving a camera (camera-move plan Task 11): pick the target
   // among the account's online proxies (asked of cams-admin), then wait for
   // its answer. An accepted offer closes the dialog: the Settings page shows
-  // the confirmation panel for it. A rejection stays here, with its reason.
+  // the confirmation panel for it. A rejection stays here, with its reason and
+  // the target's detail.
   let { camera, name, address, onclose }: { camera: string; name: string; address: string; onclose: () => void } = $props();
   type Target = { proxyId: string; name: string };
   let targets = $state<Target[] | null>(null);
@@ -60,7 +61,7 @@
         if (stopped) return;
         const m: MoveItem | undefined = (await loadMoves()).find((x) => x.requestId === requestId);
         if (m?.answer && !m.answer.accept) {
-          rejected = rejectText(targetName, m.answer.reason, address);
+          rejected = rejectText(targetName, m.answer.reason, address, m.answer.detail);
           step = 'rejected';
           return;
         }
