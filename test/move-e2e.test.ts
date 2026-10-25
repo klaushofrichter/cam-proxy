@@ -415,6 +415,13 @@ world('a cancel after the switch-over copies the target\'s capture back', () => 
     const minute = Math.floor(Date.now() / DAY) * DAY;
     const ownStills = [minute, minute + 60_000].map((m) => `${minutePath(dataOf(T), 'stills', 'cam3', m)}.pack`);
     for (const p of ownStills) put(p, 1500);
+    // A finished minute of live capture is its pack plus the preview sprite and its sidecar (src/stills/store.ts).
+    const ownPreviews = [minute, minute + 60_000].flatMap((m) => {
+      const base = minutePath(dataOf(T), 'previews', 'cam3', m);
+      put(`${base}.jpg`, 800);
+      writeFileSync(`${base}.json`, JSON.stringify({ v: 1, minute: m, cols: 10, rows: 6, tileW: 160, tileH: 90, intervalS: 1, present: [] }));
+      return [`${base}.jpg`, `${base}.json`];
+    });
     const created = Date.now() - 1000;
     const arcId = Number(T.proxy.catalog.db.prepare("INSERT INTO archive (cam, name, labels, created_at, recorded_from, recorded_to, quality, original, duration_s, bytes, files, source, thumb_from, created_by, metadata) VALUES ('cam3', 'Fox at the gate', '[]', ?, ?, ?, 'sub', 1, 10, 3000, '[\"clip.mp4\"]', 'clips', 'first', 'admin', '{}')").run(created, created - 20_000, created - 10_000).lastInsertRowid);
     put(join(dataOf(T), 'archive', 'cam3', String(arcId), 'clip.mp4'), 3000);
@@ -449,16 +456,18 @@ world('a cancel after the switch-over copies the target\'s capture back', () => 
     // 5. The finish: the original (target role) first, then the new proxy (source role).
     // cam-sim keeps the target recording stills while it has the camera; on a slow run the switch-over and the
     // cancel fall in different minutes, and those finished minutes go back too. So: count what the target deletes.
-    const tStills = join(dataOf(T), 'stills', 'cam3');
-    const stillFiles = () => (existsSync(tStills) ? (readdirSync(tStills, { recursive: true }) as string[]).filter((f) => f.endsWith('.pack')).map((f) => join(tStills, f)) : []);
+    // The move's kind `stills` is the stills and the previews folders (src/moves/purge.ts): a finished
+    // minute is a pack, a sprite and its sidecar (#252: CI counted 2 preview files the snapshot left out).
+    const tFolders = ['stills', 'previews'].map((k) => join(dataOf(T), k, 'cam3'));
+    const stillFiles = () => tFolders.flatMap((d) => (existsSync(d) ? (readdirSync(d, { recursive: true, withFileTypes: true })).filter((e) => e.isFile()).map((e) => join(e.parentPath, e.name)) : []));
     const tBefore = stillFiles();
     await run(fakeS, 'move.finish', { v: 1, moveId: returnId, role: 'target', abandoned: false, return: true });
     const fin = await run(fakeT, 'move.finish', { v: 1, moveId: returnId, role: 'source', abandoned: false, return: true });
     const tLeft = new Set(stillFiles());
     const tDeleted = tBefore.filter((f) => !tLeft.has(f));
     expect(fin.deleted.stills.files).toBe(tDeleted.length);
-    expect(tDeleted.length).toBeGreaterThanOrEqual(4 + 2); // the move's 4 imported stills, the 2 captured ones (and any live capture)
-    for (const p of ownStills) expect(tDeleted, p).toContain(p);
+    expect(tDeleted.length).toBeGreaterThanOrEqual(4 + 2 + 4); // the move's 4 imported stills, the 2 captured minutes (pack, sprite, sidecar each; and any live capture)
+    for (const p of [...ownStills, ...ownPreviews]) expect(tDeleted, p).toContain(p);
     // Only what the original holds (verified) was deleted.
     for (const f of tDeleted) expect(existsSync(f.replace(dataOf(T), dataOf(S))), f).toBe(true);
     expect(fin.deleted.archive.files).toBe(1);
@@ -466,14 +475,14 @@ world('a cancel after the switch-over copies the target\'s capture back', () => 
 
     // The original has its own content, the target's captured stills and the Archive item with move.from.
     expect(seeded(S)).toEqual(before);
-    for (const p of ownStills) expect(existsSync(p.replace(dataOf(T), dataOf(S))), p).toBe(true);
+    for (const p of [...ownStills, ...ownPreviews]) expect(existsSync(p.replace(dataOf(T), dataOf(S))), p).toBe(true);
     const arc = S.proxy.catalog.db.prepare("SELECT id, name, metadata FROM archive WHERE cam = 'cam3'").all() as { id: number; name: string; metadata: string }[];
     expect(arc.map((a) => a.name)).toEqual(['Fox at the gate']);
     expect(JSON.parse(arc[0].metadata).move).toMatchObject({ moveId: returnId, from: { proxyId: targetId, name: 'Mini PC' } });
     expect(existsSync(join(dataOf(S), 'archive', 'cam3', String(arc[0].id), 'clip.mp4'))).toBe(true);
     // The new proxy has none of it: neither the imports nor its own capture; no move open any more.
     expect(seeded(T)).toEqual({ clips: 0, events: 0, stills: 0 });
-    for (const p of ownStills) expect(existsSync(p), p).toBe(false);
+    for (const p of [...ownStills, ...ownPreviews]) expect(existsSync(p), p).toBe(false);
     expect(T.proxy.catalog.db.prepare("SELECT COUNT(*) AS n FROM archive WHERE cam = 'cam3'").get()).toEqual({ n: 0 });
     const tj = new MoveJournal(join(T.dir, 'data', 'admin', 'moves'));
     const sj = new MoveJournal(join(S.dir, 'data', 'admin', 'moves'));
