@@ -1,0 +1,26 @@
+{
+  "$note": "the target refuses the offer; detail (optional) says why in words, older proxies send none",
+  "$command": "move.offer",
+  "schema": "result",
+  "message": {
+    "v": 1,
+    "type": "result",
+    "id": "01K60000000000000000000005",
+    "seq": 5,
+    "ts": 1791273600005,
+    "re": "01K60000000000000000000003",
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "phase": "done",
+      "status": "ok",
+      "result": {
+        "accept": false,
+        "reason": "incompatible",
+        "detail": "cameras.cam1.protocol is http here; the target needs https"
+      }
+    },
+    "sig": "XhiHO4sozXK7Z1XzIxv7MThmJTXsVIYc/aUZ9EtiQYf/25/dasvD4nWcsGYBzszDOnfmN63yjKAz4zBRSCc5Dg=="
+  }
+}

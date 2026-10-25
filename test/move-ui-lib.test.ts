@@ -66,6 +66,8 @@ describe('texts', () => {
     expect(rejectText('Shed', undefined, '')).toBe("Shed can't take this camera: it didn't answer");
     expect(rejectText('Shed', 'not_registered', '192.0.2.10')).toBe("Shed can't take this camera: cams-admin doesn't know this camera (register it in cams-admin first)");
     expect(rejectText('Shed', 'internal', '192.0.2.10')).toBe("Shed can't take this camera: something went wrong in cams-admin; try again");
+    // The target's detail follows the reason.
+    expect(rejectText('Shed', 'incompatible', '192.0.2.10', 'ftp.passive: 10 ports for 2 cameras with FTP; at least 10 per camera')).toBe("Shed can't take this camera: it can't use this camera's settings (update it first). Shed says: ftp.passive: 10 ports for 2 cameras with FTP; at least 10 per camera");
   });
   it('an offer cams-admin started and the source left for a person says why', () => {
     expect(autoWaitText('over_budget')).toBe('Started from cams-admin; not approved automatically: the estimate is over the time budget cams-admin allowed. Approve it here or cancel.');

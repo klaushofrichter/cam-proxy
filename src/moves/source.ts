@@ -12,6 +12,7 @@ import type { PushResult } from '../tls/push';
 import { moveEnded, type MoveJournal, type MoveRecord, type MoveTombstone } from './journal';
 import { autoPlan, type AutoWaitReason } from './plan';
 import type { Purged, purgeExcept } from './purge';
+import { moveDetail } from './detail';
 import { MOVE_KINDS, type MoveActor, type MoveAnswer, type MoveBounds, type MoveCameraConnection, type MoveCopied, type MoveEvent, type MoveKind, type MovePlan, type MoveSummary, type Settings } from './types';
 
 // The source side of a camera move (camera-move plan Task 7, S §4, §7, §9.1):
@@ -748,7 +749,9 @@ export class MoveSource {
   }
 
   private answer(a: MoveAnswerArgs): Done {
-    const answer: MoveAnswer = { accept: a.accept, ...(a.reason !== undefined ? { reason: a.reason } : {}), ...(a.space !== undefined ? { space: a.space } : {}), ...(a.estimateS !== undefined ? { estimateS: a.estimateS } : {}) };
+    // The detail is kept as one line (moveDetail): the page and the audit show it next to the reason.
+    const detail = a.detail !== undefined ? moveDetail(a.detail) : undefined;
+    const answer: MoveAnswer = { accept: a.accept, ...(a.reason !== undefined ? { reason: a.reason } : {}), ...(detail ? { detail } : {}), ...(a.space !== undefined ? { space: a.space } : {}), ...(a.estimateS !== undefined ? { estimateS: a.estimateS } : {}) };
     const same = (x?: MoveAnswer) => JSON.stringify(x) === JSON.stringify(answer);
     const r = this.d.journal.load(a.moveId);
     if (r) {
@@ -760,7 +763,7 @@ export class MoveSource {
         this.d.journal.remove(r.id);
         const p = this.pending.get(a.requestId);
         if (p) Object.assign(p, { answer, moveId: r.id, targetName: a.target.name });
-        this.rejected(r.id, r.camera, a);
+        this.rejected(r.id, r.camera, a, detail);
         return ok();
       }
       r.answer = answer;
@@ -774,7 +777,7 @@ export class MoveSource {
     if (!p || p.target !== a.target.proxyId || (p.moveId && p.moveId !== a.moveId)) return failed(p ? 'mismatch' : 'unknown_request');
     if (same(p.answer)) return ok();
     Object.assign(p, { answer, moveId: a.moveId, targetName: a.target.name });
-    if (!a.accept) this.rejected(a.moveId, p.camera, a);
+    if (!a.accept) this.rejected(a.moveId, p.camera, a, detail);
     return ok();
   }
 
@@ -828,12 +831,12 @@ export class MoveSource {
     for (const r of list) if (r.role === 'source' && r.phase === 'opened' && r.plan) this.d.emit({ kind: 'move.approve', moveId: r.id, plan: r.plan });
   }
 
-  private rejected(moveId: string, cam: string, a: MoveAnswerArgs): void {
+  private rejected(moveId: string, cam: string, a: MoveAnswerArgs, detail: string | undefined): void {
     this.d.audit.write({
       action: 'move-phase', category: ['configuration'], type: ['change'], outcome: 'failure',
       user: 'cams-admin', camera: cam,
-      message: `Camera move ${moveId} (${cam} to ${a.target.name || a.target.proxyId}): rejected (${a.reason ?? 'no reason'})`,
-      details: { moveId, camera: cam, source: this.self(), target: a.target.proxyId, role: 'source', phase: 'rejected', reason: a.reason ?? null },
+      message: `Camera move ${moveId} (${cam} to ${a.target.name || a.target.proxyId}): rejected (${a.reason ?? 'no reason'}${detail ? `: ${detail}` : ''})`,
+      details: { moveId, camera: cam, source: this.self(), target: a.target.proxyId, role: 'source', phase: 'rejected', reason: a.reason ?? null, ...(detail ? { detail } : {}) },
     });
   }
 

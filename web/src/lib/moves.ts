@@ -16,7 +16,7 @@ export interface MoveItem {
   camera: string;
   target: { proxyId: string; name: string };
   phase: string;
-  answer?: { accept: boolean; reason?: MoveReason; space?: Space; estimateS?: number };
+  answer?: { accept: boolean; reason?: MoveReason; detail?: string; space?: Space; estimateS?: number };
   summary?: MoveSummary;
   settings?: Settings;
   plan?: MovePlan | null;
@@ -60,8 +60,9 @@ const REASON: Record<MoveReason, string> = {
   not_registered: "cams-admin doesn't know this camera (register it in cams-admin first)",
   internal: 'something went wrong in cams-admin; try again',
 };
-export const rejectText = (target: string, reason: MoveReason | undefined, address: string): string =>
-  `${target} can't take this camera: ${(reason ? REASON[reason] : undefined)?.replace('<camera address>', address || 'the camera address') ?? REASON.target_failed}`;
+// `detail`: the target's own words for what failed (move.offer's detail), after the reason.
+export const rejectText = (target: string, reason: MoveReason | undefined, address: string, detail?: string): string =>
+  `${target} can't take this camera: ${(reason ? REASON[reason] : undefined)?.replace('<camera address>', address || 'the camera address') ?? REASON.target_failed}${detail ? `. ${target} says: ${detail}` : ''}`;
 
 const PHASE: Record<string, string> = {
   opened: 'waiting for approval', 'awaiting-approval': 'waiting for approval', approved: 'approved', switching: 'switching over', switched: 'switched over',

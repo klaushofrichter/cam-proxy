@@ -64,7 +64,8 @@ export interface MoveBounds {
 // sign-in (a managed session, the move.send UI unlock) by its display name.
 export interface MoveActor { origin: 'local' | 'managed'; label: string }
 // The target's answer as cams-admin relays it (move.answer).
-export interface MoveAnswer { accept: boolean; reason?: MoveReason; space?: Space; estimateS?: number }
+// `detail`: what failed, one line (a refusal's, moveDetail).
+export interface MoveAnswer { accept: boolean; reason?: MoveReason; detail?: string; space?: Space; estimateS?: number }
 
 export interface ChunkProgress { id: string; state: ChunkState }
 

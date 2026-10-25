@@ -121,6 +121,11 @@
             "ca_does_not_cover_camera",
             "external_cert"
           ]
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 300,
+          "minLength": 1
         }
       },
       "required": [

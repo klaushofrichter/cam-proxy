@@ -93,7 +93,7 @@ export const validateCameraName = (a: unknown) => v1<CameraNameArgs>(a, ['camera
 export interface MoveTargetsArgs { v: 1; requestId: string; targets: { proxyId: string; name: string; site: string | null }[] }
 export interface MoveOpenArgs { v: 1; moveId: string; requestId: string; camera: string; tokenHash: string; targetIp: string }
 export interface MoveOfferArgs { v: 1; moveId: string; token: string; source: { proxyId: string; name: string; url: string; caFingerprints: string[]; tlsServername: string }; camera: { camsId: string; proxyCameraId: string; name: string; host: string; protocol: 'https' | 'http'; user: string; onvifPort: number; rtspPort: number; baichuanPort: number }; summary: MoveSummary; settings: Settings }
-export interface MoveAnswerArgs { v: 1; moveId: string; requestId: string; target: { proxyId: string; name: string }; accept: boolean; reason?: MoveReason; space?: Space; estimateS?: number }
+export interface MoveAnswerArgs { v: 1; moveId: string; requestId: string; target: { proxyId: string; name: string }; accept: boolean; reason?: MoveReason; detail?: string; space?: Space; estimateS?: number }
 export interface MoveStartArgs { v: 1; moveId: string; plan: MovePlan; settings: Settings; done: string[] }
 export interface MoveGoArgs { v: 1; moveId: string; plan: MovePlan; targetPublicKey: string; expectedLeaf: string }
 export interface MoveBeginArgs { v: 1; camera: string; target: string; bounds: MoveBounds | null }
@@ -202,7 +202,9 @@ export const validateMoveOffer = (a: unknown) => v1<MoveOfferArgs>(a, ['moveId',
     || !str(c.host, 255, 1) || (c.protocol !== 'https' && c.protocol !== 'http') || !str(c.user, 64) || !port(c.onvifPort) || !port(c.rtspPort) || !port(c.baichuanPort)) return 'camera';
   return summaryProblem(o.summary) ?? settingsProblem(o.settings);
 });
-export const validateMoveAnswer = (a: unknown) => v1<MoveAnswerArgs>(a, ['moveId', 'requestId', 'target', 'accept', 'reason', 'space', 'estimateS'], (o) => {
+// A refusal's detail (contract: a string of 1 to 300 characters, counted in code points).
+const detailOk = (x: unknown) => typeof x === 'string' && x.length > 0 && [...x].length <= 300;
+export const validateMoveAnswer = (a: unknown) => v1<MoveAnswerArgs>(a, ['moveId', 'requestId', 'target', 'accept', 'reason', 'detail', 'space', 'estimateS'], (o) => {
   const bad = moveId(o);
   if (bad) return bad;
   if (typeof o.requestId !== 'string' || !REQ_ID.test(o.requestId)) return 'requestId';
@@ -210,6 +212,7 @@ export const validateMoveAnswer = (a: unknown) => v1<MoveAnswerArgs>(a, ['moveId
   if (!closed(t, ['proxyId', 'name']) || typeof t.proxyId !== 'string' || !PRX_ID.test(t.proxyId) || !str(t.name, 64, 1)) return 'target';
   if (!bool(o.accept)) return 'accept';
   if (!optional(o, 'reason', (x) => typeof x === 'string' && MOVE_REASONS.includes(x))) return 'reason';
+  if (!optional(o, 'detail', detailOk)) return 'detail';
   if (o.space !== undefined) {
     const p = spaceProblem(o.space);
     if (p) return p;

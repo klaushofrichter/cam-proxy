@@ -362,6 +362,20 @@ describe('auto-approval within bounds (R2), on a source alone', () => {
     expect(u.writes.map((w) => w.action)).toEqual(['move-phase']);
   });
 
+  it("a rejected answer's detail is kept next to its reason: audit, the pending request, the page's list (one line)", () => {
+    const u = unit();
+    expect(u.answerIt({ accept: false, reason: 'camera_limit', detail: '3 of 3 cameras\n(moves.maxCameras)' }).status).toBe('ok');
+    expect(u.writes[0].message).toContain('rejected (camera_limit: 3 of 3 cameras (moves.maxCameras))');
+    expect(u.writes[0].details).toMatchObject({ reason: 'camera_limit', detail: '3 of 3 cameras (moves.maxCameras)' });
+    // Answered before an open: the pending request keeps the answer with its detail.
+    const other = 'mv_7123456789ABCDEFGHJK';
+    const rq = 'rq_1123456789ABCDEFGHJK';
+    (u.s as unknown as { pending: Map<string, object> }).pending.set(rq, { requestId: rq, camera: 'cam3', target: TARGET, actor: { origin: 'local', label: 'admin' }, summary, settings: {}, connection: {}, at: Date.now(), bounds: null });
+    const d = u.s.handlers()['move.answer']({ v: 1, moveId: other, requestId: rq, target: { proxyId: TARGET, name: 'Mini PC' }, accept: false, reason: 'incompatible', detail: 'ftp.passive: 10 ports for 2 cameras with FTP; at least 10 per camera' }, undefined as never) as Done;
+    expect(d.status).toBe('ok');
+    expect(u.s.list().find((m) => m.requestId === rq)).toMatchObject({ phase: 'rejected', answer: { accept: false, reason: 'incompatible', detail: 'ftp.passive: 10 ports for 2 cameras with FTP; at least 10 per camera' } });
+  });
+
   it('bounds null never approves', () => {
     const u = unit({ bounds: null });
     u.answerIt();
