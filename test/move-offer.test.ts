@@ -226,6 +226,10 @@ describe('the storage budget (ruling: budget headroom caps available)', () => {
     const f = fixture({ usage: { stills: 0, previews: 0, clips: 0, used: 90 * GB, budget: 92 * GB } });
     expect(spaceFor(f.deps, summary({ clips: 5 * GB })).retentionProposal).toEqual({ 'storage.maxBytes': 95 * GB });
   });
+  it('with profile.storageGB the proposal raises it (GB = 10^9 bytes, rounded up) instead of storage.maxBytes', () => {
+    const f = fixture({ config: { profile: { cameras: 4, storageGB: 99 } }, usage: { stills: 0, previews: 0, clips: 0, used: 90 * GB, budget: 92 * GB } });
+    expect(spaceFor(f.deps, summary({ clips: 5 * GB })).retentionProposal).toEqual({ 'profile.storageGB': Math.ceil((95 * GB) / 1e9) });
+  });
   it('no maxBytes proposal when the disk is short', () => {
     const f = fixture({ free: 3 * GB, usage: { stills: 0, previews: 0, clips: 0, used: 90 * GB, budget: 90 * GB } });
     expect(spaceFor(f.deps, summary({ clips: 5 * GB })).retentionProposal).toBeNull();

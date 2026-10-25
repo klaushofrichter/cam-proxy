@@ -6,6 +6,7 @@ import { connect, isIP } from 'node:net';
 import { pinCheck, splitHost } from '../camera/http';
 import { ConfigError, planOverrides, type Loaded } from '../config/load';
 import { cameraConfig } from '../config/cameras';
+import { PROFILE_GB } from '../storage';
 import { heldCameras, passivePorts, PORTS_PER_CAMERA, profileCameras, profileSet } from '../config/profile';
 import type { MoveOfferArgs } from '../fleet/command-args';
 import { fingerprintOf, type SiteCa } from '../tls/ca';
@@ -98,7 +99,12 @@ export function spaceFor(deps: Pick<EvaluateDeps, 'loaded' | 'usage' | 'freeByte
   const budgetShort = needed > budgetRoom;
   if (!fits && (capShort || budgetShort) && needed <= disk) {
     const p: Record<string, number> = {};
-    if (budgetShort) p['storage.maxBytes'] = use.used + needed;
+    // The budget: profile.storageGB when the profile sets it (GB = 10^9 bytes,
+    // rounded up), else storage.maxBytes.
+    if (budgetShort) {
+      if (cfg.profile.storageGB !== undefined) p['profile.storageGB'] = Math.ceil((use.used + needed) / PROFILE_GB);
+      else p['storage.maxBytes'] = use.used + needed;
+    }
     if (need('clips') > (headroom.clips ?? Infinity)) p['ftp.maxGB'] = Math.ceil((use.clips + need('clips')) / GB);
     if (need('stills') > (headroom.stills ?? Infinity)) {
       const total = Math.ceil((use.stills + use.previews + need('stills')) / GB);

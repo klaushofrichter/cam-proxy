@@ -253,6 +253,25 @@ describe('the switch-over runner (unit)', () => {
     expect(file.storage.maxBytes).toBe(50 * 1024 ** 3);
   }, 60_000);
 
+  it('retention target settings with the profile budget: profile.storageGB applies over a config.json storage.maxBytes', async () => {
+    // een after PUT /control/profile: storage.maxBytes in config.json (ignored), profile.storageGB here.
+    const u = unit({ config: { cameras: [{ id: 'cam1', host: '' }], storage: { maxBytes: 5 * 10 ** 9 } }, overrides: { profile: { cameras: 2, storageGB: 50 } } });
+    expect(u.loaded.ignored).toEqual({ 'storage.maxBytes': 'ignored: profile.storageGB (overrides.json) is the storage budget' });
+    const proposal = { 'profile.storageGB': 103, 'ftp.maxGB': 12 };
+    u.journal.save(offered({ space: { needed: 10, available: 5, fits: false, perKind: {}, retentionProposal: proposal } }));
+    expect((await u.target.start(startArgs({ plan: { ...PLAN, space: 'retention', targetSettings: proposal } }))).status).toBe('ok');
+    await u.target.idle(MOVE);
+    expect(u.loaded.config.profile.storageGB).toBe(103);
+    expect(u.loaded.config.storage.maxBytes).toBeUndefined();
+    expect(u.loaded.config.cameras.cam9.host).toBe('192.0.2.9');
+    const file = JSON.parse(readFileSync(u.loaded.files.overrides, 'utf8'));
+    expect(file.profile).toEqual({ cameras: 2, storageGB: 103 });
+    // More than proposed is refused.
+    const v = unit({ overrides: { profile: { cameras: 2, storageGB: 50 } } });
+    v.journal.save(offered({ space: { needed: 10, available: 5, fits: false, perKind: {}, retentionProposal: proposal } }));
+    expect(await v.target.start(startArgs({ plan: { ...PLAN, space: 'retention', targetSettings: { 'profile.storageGB': 104 } } }))).toMatchObject({ status: 'failed', code: 'invalid_args' });
+  }, 60_000);
+
   it('a target restart during switch-over resumes at the failed step', async () => {
     let first = true;
     const a = unit({ step: { cert: () => (first ? new Promise((_r, rej) => setTimeout(() => rej(new Error('process stopped')), 30)) : Promise.resolve()) } });

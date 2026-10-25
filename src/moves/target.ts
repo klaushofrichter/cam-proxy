@@ -92,7 +92,7 @@ const RETRY_CAP_MS = 30_000;
 const NOT_READY_MS = 30 * 60_000; // an offer not approved in 30 minutes expires (S §7)
 const EVENT_WAIT_MS = 10 * 60_000; // a camera event longer than this: the cert step gives up
 // The host limits move.start may set (plan.space retention), each at most the target's own proposal.
-const TARGET_SETTINGS: readonly string[] = ['storage.maxBytes', 'ftp.maxGB', 'stills.maxGB', 'previews.maxGB'];
+const TARGET_SETTINGS: readonly string[] = ['storage.maxBytes', 'profile.storageGB', 'ftp.maxGB', 'stills.maxGB', 'previews.maxGB'];
 const DONE_MAX = 512;
 const CODES: Record<SwitchStep, string> = { secrets: 'secrets_failed', camera: 'camera_failed', cert: 'cert_failed', ftp: 'ftp_failed' };
 
