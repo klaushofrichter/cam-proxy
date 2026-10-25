@@ -35,13 +35,22 @@ steps; both proxies record each one in their audit log. The design:
   (`move-token-refused`), and the offer's speed test then shows no speed; from
   the switch-over on it ends the move (`token_address`). Refused requests to
   the move endpoints are rate limited per address.
-- One move at a time per proxy. `moves.maxCameras` (local only, no limit by
-  default) caps how many cameras a target may run. With it set and FTP on,
-  the FTP passive range needs 10 ports per camera it may hold: left unset,
-  `ftp.passive` becomes 30000 up, 10 ports per camera (`maxCameras` 4:
-  `30000-30039`; at most 10 cameras, the range holds at most 100 ports); a
-  range set by hand that is smaller does not load. Open those ports in the
-  host's firewall too.
+- One move at a time per proxy. The target's **profile** says how many
+  cameras it may hold (`profile.cameras`, local only; `moves.maxCameras` is
+  its old name, still read for one release): a move onto a target that holds
+  that many is refused (`camera_limit`). **Without a profile** the target may
+  hold only the cameras it has (at least 1), so set it first: the target's
+  Status page asks for it ("Set this proxy's profile"), the Settings page
+  edits it, `PUT /control/profile` sets it. With FTP on, the passive range
+  needs 10 ports per camera: left unset, `ftp.passive` is 30000 up with 10
+  ports per camera for `profile.cameras` or the cameras held, whichever is
+  more (`cameras` 4: `30000-30039`; at most 10 cameras with FTP on, 100
+  ports). A range set by hand that is smaller loads with the warning
+  `profile_ftp_ports`, and a move that would need the missing ports is
+  refused (`incompatible`, below). Open the ports in the host's firewall
+  too: the profile shows the lines for each camera with FTP
+  (`profile.firewall`: `ufw` or `nft`); on the multi-camera host change
+  `host.json` and render instead (its ruleset is the only one).
 - **No shared camera password needed.** A target without
   `CAMPROXY_CAMERA_PASSWORD` takes a new camera all the same: its password
   comes with the move (the switch-over's `secrets` step) and is stored for it.
@@ -65,8 +74,8 @@ detail: what failed, in one line. For example:
 | `busy` | `move mv_… is open here`, or `move journal unreadable` |
 | `no_site_ca` | `tls.site is not set`, or `the site CA is missing` |
 | `id_taken` | `camera id cam3 is in use here` |
-| `camera_limit` | `3 of 3 cameras (moves.maxCameras)` |
-| `incompatible` | the configuration error the camera would cause, e.g. `ftp.passive: 10 ports for 2 cameras with FTP; at least 10 per camera` |
+| `camera_limit` | `3 of 3 cameras (profile.cameras)`, or `1 of 1 cameras (no profile set: set this proxy's profile)` |
+| `incompatible` | too few FTP passive ports for one more camera, `ftp.passive: 10 ports (30000-30009) for 2 cameras; at least 10 per camera (profile_ftp_ports)`, or the configuration error the camera would cause, e.g. `cameras: cam3 and cam9 both use the FTP user cam9` |
 | `ca_does_not_cover_camera` | `the site CA does not cover the address 192.0.2.10`, or `… the name cam3.garage.internal` |
 | `camera_unreachable` | `192.0.2.10:443 not reachable within 3 s` |
 

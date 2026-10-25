@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- New: the proxy **profile**, what this proxy can hold: `profile.cameras` (how many cameras), `profile.name` (the hardware as you call it), `profile.storageGB` (how much storage it may use, in place of `storage.maxBytes`) and `profile.firewall` (`ufw` or `nft`). Until it is set, the Status page shows a "Set this proxy's profile" card; the Settings page edits it later. Only the local admin token sets it (`GET`/`PUT /control/profile`, recorded as a settings change); cams-admin only reads it. The values are not checked against the hardware: getting them right is yours.
+- `moves.maxCameras` is now `profile.cameras`. The old name is still read (een's 3 stays 3); both set to different values does not load.
+- Camera moves: the target refuses a move beyond its profile's cameras (`camera_limit`). **A proxy without a profile takes no more cameras than it holds** (one, if it holds none): set the profile on a proxy that should receive cameras. A move that would need FTP passive ports the target doesn't have is refused too (`incompatible`, with the ports in the detail).
+- FTP passive ports follow the profile while FTP is on and `ftp.passive` is unset: 10 ports per camera from 30000, for the profile's cameras or the cameras held, whichever is more (a lower profile never takes ports from a camera it holds). A range set by hand that is smaller than the profile needs now loads, with the warning `profile_ftp_ports`, instead of failing; at least 10 ports per camera with FTP is still required. Proxies with `ftp.passive` set (een, the mini PC, the Pi, the cluster) keep their ranges.
+- The profile shows, for each camera with FTP, the firewall lines its host needs (FTP port and passive range, for ufw or nft), with a copy button. Nothing runs them.
+- cams-admin's heartbeat now carries the profile: capacity and cameras held, storage budget against the disk, hardware as cam-proxy sees it (CPU cores and model, memory, 5-minute load; temperature on a Pi or with `host.stats: on`), the warnings and the firewall lines.
+
 ## v2026.10.25.1
 
 - Camera moves: a proxy without a shared camera password (`CAMPROXY_CAMERA_PASSWORD`) now takes a new camera. Before, every first move of a camera onto such a proxy was refused as `incompatible`, although the camera's password comes with the move.
