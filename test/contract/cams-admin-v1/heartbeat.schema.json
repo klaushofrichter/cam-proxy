@@ -185,6 +185,9 @@
         },
         "truncated": {
           "type": "boolean"
+        },
+        "profile": {
+          "type": "object"
         }
       },
       "required": [
