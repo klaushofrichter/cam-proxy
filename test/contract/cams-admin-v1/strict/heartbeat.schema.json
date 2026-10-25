@@ -226,257 +226,264 @@
           "type": "boolean"
         },
         "profile": {
-          "type": "object",
-          "properties": {
-            "set": {
-              "type": "boolean"
-            },
-            "name": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "maxLength": 60,
-                  "minLength": 1
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "cameras": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 64
-            },
-            "storageGB": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 100000
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "held": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 64
-            },
-            "ftp": {
+          "anyOf": [
+            {
               "type": "object",
               "properties": {
-                "enabled": {
+                "set": {
                   "type": "boolean"
                 },
-                "port": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 65535
-                },
-                "passive": {
+                "name": {
                   "anyOf": [
                     {
-                      "type": "object",
-                      "properties": {
-                        "from": {
-                          "type": "integer",
-                          "minimum": 1,
-                          "maximum": 65535
+                      "type": "string",
+                      "maxLength": 60,
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "cameras": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 64
+                },
+                "storageGB": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 100000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "held": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                },
+                "ftp": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "port": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 65535
+                    },
+                    "passive": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "from": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 65535
+                            },
+                            "to": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 65535
+                            }
+                          },
+                          "required": [
+                            "from",
+                            "to"
+                          ],
+                          "additionalProperties": false
                         },
-                        "to": {
-                          "type": "integer",
-                          "minimum": 1,
-                          "maximum": 65535
+                        {
+                          "type": "null"
                         }
-                      },
-                      "required": [
-                        "from",
-                        "to"
-                      ],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "null"
+                      ]
                     }
-                  ]
-                }
-              },
-              "required": [
-                "enabled",
-                "port",
-                "passive"
-              ],
-              "additionalProperties": false
-            },
-            "storage": {
-              "type": "object",
-              "properties": {
-                "budgetBytes": {
-                  "anyOf": [
-                    {
+                  },
+                  "required": [
+                    "enabled",
+                    "port",
+                    "passive"
+                  ],
+                  "additionalProperties": false
+                },
+                "storage": {
+                  "type": "object",
+                  "properties": {
+                    "budgetBytes": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "usedBytes": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "diskBytes": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "freeBytes": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "budgetBytes",
+                    "usedBytes",
+                    "diskBytes",
+                    "freeBytes"
+                  ],
+                  "additionalProperties": false
+                },
+                "hardware": {
+                  "type": "object",
+                  "properties": {
+                    "pi": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 200
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "cpuCores": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 1024
+                    },
+                    "cpuModel": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 100
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "memoryBytes": {
                       "type": "integer",
                       "minimum": 0
                     },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "usedBytes": {
-                  "anyOf": [
-                    {
-                      "type": "integer",
+                    "load5": {
+                      "type": "number",
                       "minimum": 0
                     },
-                    {
-                      "type": "null"
+                    "cpuTempC": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
-                  ]
+                  },
+                  "required": [
+                    "pi",
+                    "cpuCores",
+                    "cpuModel",
+                    "memoryBytes",
+                    "load5",
+                    "cpuTempC"
+                  ],
+                  "additionalProperties": false
                 },
-                "diskBytes": {
-                  "anyOf": [
-                    {
-                      "type": "integer",
-                      "minimum": 0
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "freeBytes": {
-                  "anyOf": [
-                    {
-                      "type": "integer",
-                      "minimum": 0
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "budgetBytes",
-                "usedBytes",
-                "diskBytes",
-                "freeBytes"
-              ],
-              "additionalProperties": false
-            },
-            "hardware": {
-              "type": "object",
-              "properties": {
-                "pi": {
-                  "anyOf": [
-                    {
-                      "type": "string",
-                      "maxLength": 200
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "cpuCores": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 1024
-                },
-                "cpuModel": {
-                  "anyOf": [
-                    {
-                      "type": "string",
-                      "maxLength": 100
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "memoryBytes": {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                "load5": {
-                  "type": "number",
-                  "minimum": 0
-                },
-                "cpuTempC": {
-                  "anyOf": [
-                    {
-                      "type": "number"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "pi",
-                "cpuCores",
-                "cpuModel",
-                "memoryBytes",
-                "load5",
-                "cpuTempC"
-              ],
-              "additionalProperties": false
-            },
-            "warnings": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "enum": [
-                  "profile_ftp_ports",
-                  "profile_cameras_exceeded"
-                ]
-              },
-              "maxItems": 2,
-              "uniqueItems": true
-            },
-            "firewall": {
-              "type": "object",
-              "properties": {
-                "tool": {
-                  "type": "string",
-                  "enum": [
-                    "ufw",
-                    "nft"
-                  ]
-                },
-                "lines": {
+                "warnings": {
                   "type": "array",
                   "items": {
                     "type": "string",
-                    "maxLength": 200
+                    "enum": [
+                      "profile_ftp_ports",
+                      "profile_cameras_exceeded"
+                    ]
                   },
-                  "maxItems": 64
+                  "maxItems": 2,
+                  "uniqueItems": true
+                },
+                "firewall": {
+                  "type": "object",
+                  "properties": {
+                    "tool": {
+                      "type": "string",
+                      "enum": [
+                        "ufw",
+                        "nft"
+                      ]
+                    },
+                    "lines": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 200
+                      },
+                      "maxItems": 64
+                    }
+                  },
+                  "required": [
+                    "tool",
+                    "lines"
+                  ],
+                  "additionalProperties": false
                 }
               },
               "required": [
-                "tool",
-                "lines"
+                "set",
+                "name",
+                "cameras",
+                "storageGB",
+                "held",
+                "ftp",
+                "storage",
+                "hardware",
+                "warnings",
+                "firewall"
               ],
               "additionalProperties": false
+            },
+            {
+              "type": "null"
             }
-          },
-          "required": [
-            "set",
-            "name",
-            "cameras",
-            "storageGB",
-            "held",
-            "ftp",
-            "storage",
-            "hardware",
-            "warnings",
-            "firewall"
-          ],
-          "additionalProperties": false
+          ]
         }
       },
       "required": [

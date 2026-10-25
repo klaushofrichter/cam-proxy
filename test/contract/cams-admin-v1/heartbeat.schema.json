@@ -187,7 +187,10 @@
           "type": "boolean"
         },
         "profile": {
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         }
       },
       "required": [
