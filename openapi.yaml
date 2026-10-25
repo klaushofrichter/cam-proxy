@@ -1090,6 +1090,44 @@ paths:
       responses:
         '200': { description: the new view (as GET) }
         '400': { description: '{ error: invalid, detail } when the file and default values alone are not a valid configuration' }
+  /control/profile:
+    get:
+      summary: "The proxy profile (what this proxy holds): the cameras it may hold and holds, its storage budget against the disk, the hardware as cam-proxy sees it, the warnings and the firewall lines for its cameras with FTP; the heartbeat's profile, plus perCameraBytes"
+      description: |
+        The shape of the heartbeat's `profile` (cams-admin contract v1): set (false until a person sets the profile:
+        the defaults apply), name (or null), cameras (profile.cameras, else the cameras held, at least 1), storageGB
+        (or null: storage.maxPercent / maxBytes apply), held, ftp { enabled, port, passive { from, to } or null with FTP
+        off }, storage { budgetBytes, usedBytes, diskBytes, freeBytes } (null when unreadable), hardware { pi (the Pi
+        model or null), cpuCores, cpuModel, memoryBytes, load5 (from Node's os module: in a pod they describe the node),
+        cpuTempC (a Pi, or host.stats on; else null) }, warnings (profile_ftp_ports: ftp.passive set by hand is smaller
+        than 10 ports per camera the profile holds; profile_cameras_exceeded: it holds more cameras than
+        profile.cameras), firewall { tool (ufw or nft, profile.firewall), lines (for a person to run on the host;
+        nothing runs them) }. perCameraBytes: budgetBytes / cameras, what each camera can expect when the proxy is
+        full (storage.sharePercent still wins).
+      responses:
+        '200': { description: the profile view }
+    put:
+      summary: Sets the proxy profile (local admin token only; a cams-admin token or sign-in is refused); one config-change audit record
+      description: |
+        Profile fields as overrides (overrides.json): name (1-60 characters), cameras (1-64; 1-10 while FTP is on),
+        storageGB (1-100000, GB = 10^9 bytes: the size budget in place of storage.maxBytes, within
+        storage.maxPercent), firewall (ufw or nft). null removes a field's override (back to config.json's value or
+        none); a field left out stays. A profile is set with its camera count: the result must have cameras.
+        moves.maxCameras (the old name of profile.cameras) is read as it.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name: { type: [string, 'null'], maxLength: 60 }
+                cameras: { type: [integer, 'null'], minimum: 1, maximum: 64 }
+                storageGB: { type: [integer, 'null'], minimum: 1, maximum: 100000 }
+                firewall: { type: [string, 'null'], enum: [ufw, nft, null] }
+      responses:
+        '200': { description: the new profile view (as GET) }
+        '400': { description: '{ error: invalid, detail } (a value that does not load, e.g. "profile.storageGB: set either profile.storageGB or storage.maxBytes, not both"; an unknown field; no cameras)' }
   /control/config/{path}:
     delete:
       summary: Removes one override (back to the file or default value)

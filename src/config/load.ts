@@ -432,6 +432,28 @@ export function applyOverrides(loaded: Loaded, given: object): Loaded {
   return p.next;
 }
 
+// PUT /control/profile (cams-admin spec 2026-10-25-proxy-profile-design §0):
+// the given profile fields as overrides; null removes a field's override
+// (back to config.json's value or none), an absent field stays. The result
+// must have profile.cameras (a set profile has its camera count). Validated
+// like any override; nothing is written if it does not load.
+export const PROFILE_FIELDS = ['name', 'cameras', 'storageGB', 'firewall'] as const;
+export function planProfile(loaded: Loaded, body: unknown): Plan {
+  if (!isObj(body)) throw new ConfigError('the profile must be an object');
+  for (const k of Object.keys(body)) if (!(PROFILE_FIELDS as readonly string[]).includes(k)) throw new ConfigError(`${k}: not a profile field (${PROFILE_FIELDS.join(', ')})`);
+  const cleared = PROFILE_FIELDS.filter((k) => body[k] === null).map((k) => `profile.${k}`);
+  const set = Object.fromEntries(PROFILE_FIELDS.filter((k) => body[k] !== null && body[k] !== undefined).map((k) => [k, body[k]]));
+  const unset = planUnset(loaded, cleared);
+  const plan = Object.keys(set).length ? planOverrides(unset.next, { profile: set }) : unset;
+  if (plan.next.config.profile.cameras === undefined) throw new ConfigError('cameras: required (the profile is set with its camera count)');
+  return { next: plan.next, overrides: plan.overrides, paths: [...cleared, ...Object.keys(set).map((k) => `profile.${k}`)] };
+}
+export function applyProfile(loaded: Loaded, body: unknown): Loaded {
+  const p = planProfile(loaded, body);
+  writeOverrides(loaded.files.overrides, p.overrides);
+  return p.next;
+}
+
 // The configuration without one override, not written: what Reset goes back
 // to (the Settings page shows it on the button).
 export function withoutOverride(loaded: Loaded, path: string): Loaded {

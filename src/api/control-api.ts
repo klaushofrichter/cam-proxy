@@ -10,7 +10,8 @@ import { PoeSwitchError, type PoeOnResult, type PoeSwitchStatus, type PortReadin
 import type { Config } from '../config/defaults';
 import { configChanges } from '../config/changes';
 import { configView, type ChangeMarks } from '../config/view';
-import { applyOverrides, ConfigError, removeAllOverrides, removeOverride, withoutOverride, type Loaded } from '../config/load';
+import { applyOverrides, applyProfile, ConfigError, removeAllOverrides, removeOverride, withoutOverride, type Loaded } from '../config/load';
+import type { ProfileReport } from '../health/profile';
 import { cameraConfig, cameraIds } from '../config/cameras';
 import { FtpNotConfiguredError, type FtpTarget } from '../clips/camera-ftp';
 import type { CameraFtpView, ClipsStall } from '../clips/ftp-health';
@@ -75,6 +76,8 @@ export interface CameraStatusBlock {
 
 export interface ControlDeps {
   loaded: () => Loaded;
+  // The proxy profile report (cams-admin spec 2026-10-25-proxy-profile-design §2).
+  profile: () => ProfileReport;
   // Camera moves (final review 1): whether the move that hid a camera
   // (`cameras.<id>.moved`) still has a journal record here, or moved the
   // camera away for good; clearing `moved` is then refused (only the move
@@ -443,6 +446,26 @@ export function controlApi(d: ControlDeps): express.Router {
     }
     recordChanges(req, before);
     res.json(configView(d.loaded(), d.running(), d.changeMarks?.()));
+  });
+  // The proxy profile (cams-admin spec 2026-10-25-proxy-profile-design §0):
+  // its report, plus what each camera can expect of the budget when the proxy
+  // is full (shares still win). Set with the local admin token only (a
+  // managed token or sign-in is refused: not on MANAGED_ALLOWED or
+  // UI_UNLOCKS), audited as config-change.
+  const profileView = () => {
+    const v = d.profile();
+    return { ...v, perCameraBytes: v.storage.budgetBytes === null ? null : Math.floor(v.storage.budgetBytes / v.cameras) };
+  };
+  r.get('/profile', (_req, res) => void res.json(profileView()));
+  r.put('/profile', (req, res) => {
+    const before = d.loaded();
+    try {
+      d.setLoaded(applyProfile(before, req.body));
+    } catch (err) {
+      return invalid(res, err);
+    }
+    recordChanges(req, before);
+    res.json(profileView());
   });
   // "Reset to defaults" (the Settings page): every override at once, one record.
   r.delete('/config', (req, res) => {

@@ -98,6 +98,7 @@ import { CamsAdmin } from './fleet/service';
 import { camsAdminApi } from './api/cams-admin-api';
 import type { Timing } from './fleet/client';
 import { CONFIG_SCHEMA } from './config/schema';
+import { profileReport, type ProfileFacts, type ProfileReport } from './health/profile';
 
 export const VERSION = process.env.CAMPROXY_VERSION ?? 'dev';
 
@@ -797,6 +798,20 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     statfs: opts.host?.statfs,
     everyMs: opts.host?.everyMs,
   });
+  // The proxy profile report (cams-admin spec 2026-10-25-proxy-profile-design
+  // §2): GET /control/profile and the heartbeat. Storage figures that can't
+  // be read are null.
+  const profileNow = (): ProfileReport => {
+    const reading = hostMonitor.reading();
+    let figures: ProfileFacts['storage'] = { budgetBytes: null, usedBytes: null, diskBytes: null, freeBytes: null };
+    try {
+      const u = storage.usage();
+      figures = { budgetBytes: u.budget, usedBytes: u.used, diskBytes: u.size, freeBytes: u.free };
+    } catch {
+      // The data folder can't be read: the figures stay unknown.
+    }
+    return profileReport(loaded.config, { storage: figures, platform: reading.platform, cpuTempC: reading.host?.cpuTempC ?? null });
+  };
   // The newest finished inventory, a check or a repair of any kind.
   const lastInventory = async (): Promise<LastInventory | null> => {
     let last: LastInventory | null = null;
@@ -890,6 +905,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     version: VERSION,
     cameraIds: () => cams.ids(),
     health: healthNow,
+    profile: profileNow,
     proxyInfo: () => ({
       startedAt,
       uptimeS: startedAt ? Math.round((Date.now() - startedAt) / 1000) : null,
@@ -1126,6 +1142,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       }
     },
     loaded: () => loaded,
+    profile: profileNow,
     setLoaded,
     running: () => running,
     catalog,
