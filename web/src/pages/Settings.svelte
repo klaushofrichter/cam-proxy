@@ -8,6 +8,7 @@
   import { api, ApiError } from '../lib/api';
   import AnalyticsSettings from '../components/AnalyticsSettings.svelte';
   import PoeSwitchCard from '../components/PoeSwitchCard.svelte';
+  import ProfileCard from '../components/ProfileCard.svelte';
   import FindCameraCard from '../components/FindCameraCard.svelte';
   import { envNote, isEnvSet } from '../lib/find-camera';
   import { lockedWhy, narrowWhy, resetKeeps, rights, settingLockedWhy, settingsNote } from '../lib/rights';
@@ -42,7 +43,7 @@
   const multi = $derived(multiCamera($status));
   const cam = $derived(pickCamera(cameraIds($status), $selectedCamera));
   const block = $derived(blockOf($status, $selectedCamera));
-  const split = $derived(settingGroups(Object.keys(view).filter((p) => !p.startsWith('analytics.')), cam));
+  const split = $derived(settingGroups(Object.keys(view).filter((p) => !p.startsWith('analytics.') && !p.startsWith('profile.')), cam));
   const cards = $derived([
     ...Object.entries(split.host).map(([group, paths]) => ({ key: group, title: group, prefix: group, paths, camera: false })),
     ...(cam && split.camera.length ? [{ key: `camera-${cam}`, title: `Camera ${block?.camera.name ?? cam}${multi ? ` (${cam})` : ''}`, prefix: `cameras.${cam}`, paths: split.camera, camera: true }] : []),
@@ -201,6 +202,7 @@
   {#if message}<p class="msg" data-testid="settings-message">{message}</p>{/if}
   {#if offer}<MovePanel move={offer} name={camName(offer.camera)} onclose={() => void loadMoves()} />{/if}
   {#each leftovers as l (l.id)}<p class="muted small" data-testid="moved-{l.id}">{l.id}: {movedText($moves.find((m) => m.id === l.moveId)?.target.name ?? 'another proxy', l.moveId)}</p>{/each}
+  <ProfileCard />
   <AnalyticsSettings {view} onsaved={(v) => (view = v as Record<string, Setting>)} />
   <FindCameraCard />
   <PoeSwitchCard />

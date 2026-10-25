@@ -57,7 +57,10 @@ export function profileWarnings(c: Config): ProfileWarning[] {
 // The lines each camera with FTP needs on its host's firewall: the FTP port
 // and the passive range from the camera's address. Plain text for a person to
 // run; nothing here runs them. A camera without an IPv4 address gets none.
-// They hold camera addresses: never logged.
+// They hold camera addresses: never logged. nft: the table and chain the
+// multi-camera host's rendered ruleset has (`table inet filter`, `chain
+// input`, scripts/host/render.ts); a lasting change there goes through
+// host.json and the render, as an added rule is gone at the next reload.
 export const FIREWALL_LINES_MAX = 64;
 export function firewallLines(c: Config): string[] {
   const { from, to } = passiveRange(c.ftp.passive);
