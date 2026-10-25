@@ -75,7 +75,7 @@ detail: what failed, in one line. For example:
 | `no_site_ca` | `tls.site is not set`, or `the site CA is missing` |
 | `id_taken` | `camera id cam3 is in use here` |
 | `camera_limit` | `3 of 3 cameras (profile.cameras)`, or `1 of 1 cameras (no profile set: set this proxy's profile)` |
-| `incompatible` | too few FTP passive ports for one more camera, `ftp.passive: 10 ports (30000-30009) for 2 cameras; at least 10 per camera (profile_ftp_ports)`, or the configuration error the camera would cause, e.g. `cameras: cam3 and cam9 both use the FTP user cam9` |
+| `incompatible` | too few FTP passive ports for one more camera with FTP, `ftp.passive: 10 ports (30000-30009) for 2 cameras with FTP; at least 10 per camera (profile_ftp_ports)`, or the configuration error the camera would cause, e.g. `cameras: cam3 and cam9 both use the FTP user cam9` |
 | `ca_does_not_cover_camera` | `the site CA does not cover the address 192.0.2.10`, or `… the name cam3.garage.internal` |
 | `camera_unreachable` | `192.0.2.10:443 not reachable within 3 s` |
 

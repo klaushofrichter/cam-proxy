@@ -116,16 +116,22 @@ describe('refusals, in the plan order', () => {
     const empty = { profile: undefined, cameras: [{ id: 'cam3', host: '192.0.2.3', moved: 'mv_AAAAAAAAAAAAAAAAAAAA' }] };
     expect((await evaluate(fixture({ config: empty }).deps, offer())).accept).toBe(true);
   });
-  it('the FTP passive ports: with FTP on here, 10 per camera after the move, else refused', async () => {
+  it('the FTP passive ports: 10 per camera with FTP after the move (as the load check counts them), else refused', async () => {
     const env = { ...SECRETS, CAMPROXY_FTP_PASSWORD: 'f' };
     const cams = [{ id: 'cam3', host: '192.0.2.3', ftp: { enabled: true } }];
+    const withFtp = offer({ settings: { statusPollS: 30, ftp: { enabled: true } } });
     // een on 2026-10-25: room for 3 cameras, 10 ports set by hand.
-    expect(await evaluate(fixture({ env, config: { cameras: cams, profile: { cameras: 3 }, ftp: { passive: '30000-30009' } } }).deps, offer())).toEqual({ accept: false, reason: 'incompatible', detail: 'ftp.passive: 10 ports (30000-30009) for 2 cameras; at least 10 per camera (profile_ftp_ports)' });
-    expect((await evaluate(fixture({ env, config: { cameras: cams, profile: { cameras: 3 }, ftp: { passive: '30000-30019' } } }).deps, offer())).accept).toBe(true);
+    expect(await evaluate(fixture({ env, config: { cameras: cams, profile: { cameras: 3 }, ftp: { passive: '30000-30009' } } }).deps, withFtp)).toEqual({ accept: false, reason: 'incompatible', detail: 'ftp.passive: 10 ports (30000-30009) for 2 cameras with FTP; at least 10 per camera (profile_ftp_ports)' });
+    expect((await evaluate(fixture({ env, config: { cameras: cams, profile: { cameras: 3 }, ftp: { passive: '30000-30019' } } }).deps, withFtp)).accept).toBe(true);
+    // The incoming camera without FTP needs no ports.
+    expect((await evaluate(fixture({ env, config: { cameras: cams, profile: { cameras: 3 }, ftp: { passive: '30000-30009' } } }).deps, offer())).accept).toBe(true);
+    // FTP on for the host: the incoming camera takes it (the host value) and counts.
+    expect(await evaluate(fixture({ env, config: { profile: { cameras: 3 }, ftp: { enabled: true, passive: '30000-30009' } } }).deps, offer())).toMatchObject({ accept: false, reason: 'incompatible' });
     // Derived from the profile: always room.
-    expect((await evaluate(fixture({ env, config: { cameras: cams, profile: { cameras: 2 } } }).deps, offer())).accept).toBe(true);
-    // FTP off here: no port needs.
-    expect((await evaluate(fixture({ config: { profile: { cameras: 3 }, ftp: { passive: '30000-30009' } } }).deps, offer())).accept).toBe(true);
+    expect((await evaluate(fixture({ env, config: { cameras: cams, profile: { cameras: 2 } } }).deps, withFtp)).accept).toBe(true);
+    // A hidden leftover of the same camera is replaced, not counted twice.
+    const leftover = [...cams, { id: 'cam9', host: '192.0.2.9', moved: 'mv_AAAAAAAAAAAAAAAAAAAA', ftp: { enabled: true, user: 'c9' } }];
+    expect((await evaluate(fixture({ env, config: { cameras: leftover, profile: { cameras: 3 }, ftp: { passive: '30000-30019' } } }).deps, withFtp)).accept).toBe(true);
   });
   it('incompatible when the settings do not make a valid camera node', async () => {
     const o = offer({ settings: { stills: { intervalS: 7 } } });

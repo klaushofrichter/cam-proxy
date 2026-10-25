@@ -5,7 +5,8 @@ import { lookup } from 'node:dns/promises';
 import { connect, isIP } from 'node:net';
 import { pinCheck, splitHost } from '../camera/http';
 import { ConfigError, planOverrides, type Loaded } from '../config/load';
-import { ftpOn, heldCameras, passivePorts, PORTS_PER_CAMERA, profileCameras, profileSet } from '../config/profile';
+import { cameraConfig } from '../config/cameras';
+import { heldCameras, passivePorts, PORTS_PER_CAMERA, profileCameras, profileSet } from '../config/profile';
 import type { MoveOfferArgs } from '../fleet/command-args';
 import { fingerprintOf, type SiteCa } from '../tls/ca';
 import { issuedBy } from '../tls/leaf';
@@ -149,10 +150,15 @@ export async function evaluate(deps: EvaluateDeps, args: MoveOfferArgs): Promise
   const held = heldCameras(cfg);
   const most = profileCameras(cfg);
   if (held >= most) return no('camera_limit', `${held} of ${most} cameras (${profileSet(cfg) ? 'profile.cameras' : "no profile set: set this proxy's profile"})`);
-  // With FTP on here, 10 passive ports per camera after the move (a range set
-  // by hand may be smaller than the profile needs: profile_ftp_ports).
+  // 10 passive ports per camera with FTP after the move, counted as the load
+  // check counts them (src/config/load.ts crossCheck): the cameras here with
+  // FTP (a hidden leftover of this camera is replaced), plus this one if it
+  // uses FTP (its own setting, else the host's). A range set by hand may be
+  // smaller than the profile needs (profile_ftp_ports).
   const ports = passivePorts(cfg.ftp.passive);
-  if (ftpOn(cfg) && ports < PORTS_PER_CAMERA * (held + 1)) return no('incompatible', `ftp.passive: ${ports} ports (${cfg.ftp.passive}) for ${held + 1} cameras; at least ${PORTS_PER_CAMERA} per camera (profile_ftp_ports)`);
+  const incomingFtp = args.settings.ftp?.enabled ?? cfg.ftp.enabled;
+  const withFtp = cfg.cameraOrder.filter((c) => c !== id && cameraConfig(cfg, c)!.ftp.enabled).length + (incomingFtp ? 1 : 0);
+  if (withFtp > 1 && ports < PORTS_PER_CAMERA * withFtp) return no('incompatible', `ftp.passive: ${ports} ports (${cfg.ftp.passive}) for ${withFtp} cameras with FTP; at least ${PORTS_PER_CAMERA} per camera (profile_ftp_ports)`);
   try {
     // The camera's password comes with the move (the secrets step): not needed here yet.
     planOverrides(loaded, { cameras: { [id]: cameraNode(args) } }, { passwordFromMove: [id] });
