@@ -1,5 +1,6 @@
 import type { HealthSummary } from '../health/summary';
 import { buildHeartbeat, type HeartbeatProxyInfo } from './heartbeat';
+import type { ProfileReport } from '../health/profile';
 import type { AdminKeyFile } from './keyfile';
 import { buildEnvelope, fingerprint, parseEnvelope, readCapped, sign, signedText, signEnvelope, verify, type Envelope } from './protocol';
 import { SeenIds } from './command-check';
@@ -71,6 +72,8 @@ export interface ClientDeps {
   keyFile: AdminKeyFile;
   health: () => Promise<HealthSummary>;
   proxyInfo: () => HeartbeatProxyInfo;
+  // The proxy profile report (cams-admin spec 2026-10-25-proxy-profile-design §2); none = not sent.
+  profile?: () => ProfileReport | null;
   version: string;
   log: ClientLog;
   // Cheap, read every changeCheckMs: a change sends an early heartbeat (§8.5).
@@ -152,6 +155,16 @@ export class AdminClient {
     this.outbox = d.outbox ?? new EventOutbox(d.log);
     this.key = d.keyFile;
     this.fp = fingerprint(d.keyFile.publicKey);
+  }
+
+  // The profile report for a heartbeat: one that fails is left out, never the heartbeat.
+  private profileNow(): ProfileReport | null {
+    try {
+      return this.d.profile?.() ?? null;
+    } catch (err) {
+      this.d.log.debug({ err: (err as Error).message }, 'admin_profile_failed');
+      return null;
+    }
   }
 
   view(): ClientView {
@@ -629,7 +642,7 @@ export class AdminClient {
         this.unacked.add(`skipped-${Date.now()}`);
         this.d.log.debug({ buffered: ws.bufferedAmount }, 'admin_heartbeat_skipped');
       } else {
-        const hb = buildHeartbeat(summary, this.d.proxyInfo());
+        const hb = buildHeartbeat(summary, this.d.proxyInfo(), undefined, this.profileNow());
         this.truncated = hb.truncated;
         const id = this.trySend(ws, 'heartbeat', hb.body);
         if (id) {

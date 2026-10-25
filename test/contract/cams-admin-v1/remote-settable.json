@@ -101,6 +101,7 @@
     "cameras.*.analytics.kinds.vehicle",
     "cameras.*.analytics.kinds.pet",
     "cameras.*.moved",
-    "moves"
+    "moves",
+    "profile"
   ]
 }

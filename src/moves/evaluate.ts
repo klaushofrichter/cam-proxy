@@ -5,6 +5,9 @@ import { lookup } from 'node:dns/promises';
 import { connect, isIP } from 'node:net';
 import { pinCheck, splitHost } from '../camera/http';
 import { ConfigError, planOverrides, type Loaded } from '../config/load';
+import { cameraConfig } from '../config/cameras';
+import { PROFILE_GB } from '../storage';
+import { heldCameras, passivePorts, PORTS_PER_CAMERA, profileCameras, profileSet } from '../config/profile';
 import type { MoveOfferArgs } from '../fleet/command-args';
 import { fingerprintOf, type SiteCa } from '../tls/ca';
 import { issuedBy } from '../tls/leaf';
@@ -96,7 +99,12 @@ export function spaceFor(deps: Pick<EvaluateDeps, 'loaded' | 'usage' | 'freeByte
   const budgetShort = needed > budgetRoom;
   if (!fits && (capShort || budgetShort) && needed <= disk) {
     const p: Record<string, number> = {};
-    if (budgetShort) p['storage.maxBytes'] = use.used + needed;
+    // The budget: profile.storageGB when the profile sets it (GB = 10^9 bytes,
+    // rounded up), else storage.maxBytes.
+    if (budgetShort) {
+      if (cfg.profile.storageGB !== undefined) p['profile.storageGB'] = Math.ceil((use.used + needed) / PROFILE_GB);
+      else p['storage.maxBytes'] = use.used + needed;
+    }
     if (need('clips') > (headroom.clips ?? Infinity)) p['ftp.maxGB'] = Math.ceil((use.clips + need('clips')) / GB);
     if (need('stills') > (headroom.stills ?? Infinity)) {
       const total = Math.ceil((use.stills + use.previews + need('stills')) / GB);
@@ -142,8 +150,21 @@ export async function evaluate(deps: EvaluateDeps, args: MoveOfferArgs): Promise
   // protocol and user are the offered ones) is free; anything else is taken.
   const left = cfg.cameras[id];
   if (left && !(left.moved && !active.some((r) => r.camera === id) && left.host === args.camera.host && left.protocol === args.camera.protocol && left.user === args.camera.user)) return no('id_taken', `camera id ${id} is in use here`);
-  const running = cfg.cameraOrder.filter((c) => !cfg.cameras[c]?.moved).length;
-  if (cfg.moves.maxCameras !== undefined && running >= cfg.moves.maxCameras) return no('camera_limit', `${running} of ${cfg.moves.maxCameras} cameras (moves.maxCameras)`);
+  // The profile (cams-admin spec 2026-10-25-proxy-profile-design §1): the
+  // cameras it holds (a hidden moved one does not count) against its
+  // capacity; without a profile that is what it holds (at least 1).
+  const held = heldCameras(cfg);
+  const most = profileCameras(cfg);
+  if (held >= most) return no('camera_limit', `${held} of ${most} cameras (${profileSet(cfg) ? 'profile.cameras' : "no profile set: set this proxy's profile"})`);
+  // 10 passive ports per camera with FTP after the move, counted as the load
+  // check counts them (src/config/load.ts crossCheck): the cameras here with
+  // FTP (a hidden leftover of this camera is replaced), plus this one if it
+  // uses FTP (its own setting, else the host's). A range set by hand may be
+  // smaller than the profile needs (profile_ftp_ports).
+  const ports = passivePorts(cfg.ftp.passive);
+  const incomingFtp = args.settings.ftp?.enabled ?? cfg.ftp.enabled;
+  const withFtp = cfg.cameraOrder.filter((c) => c !== id && cameraConfig(cfg, c)!.ftp.enabled).length + (incomingFtp ? 1 : 0);
+  if (withFtp > 1 && ports < PORTS_PER_CAMERA * withFtp) return no('incompatible', `ftp.passive: ${ports} ports (${cfg.ftp.passive}) for ${withFtp} cameras with FTP; at least ${PORTS_PER_CAMERA} per camera (profile_ftp_ports)`);
   try {
     // The camera's password comes with the move (the secrets step): not needed here yet.
     planOverrides(loaded, { cameras: { [id]: cameraNode(args) } }, { passwordFromMove: [id] });

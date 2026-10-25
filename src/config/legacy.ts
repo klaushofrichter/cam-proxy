@@ -18,6 +18,26 @@ const settingError = <T>(f: () => T): T => {
   }
 };
 
+// moves.maxCameras is the old name of profile.cameras (cams-admin spec
+// 2026-10-25-proxy-profile-design §1, read for one release): taken out of
+// `o` (config.json, overrides.json or a PUT body) and set as profile.cameras.
+// Both set: equal is fine, different an error. Other moves.* keys stay (and
+// fail as unknown settings).
+const MAX_CAMERAS: Parameters<typeof checkValue>[1] = { type: 'integer', min: 1, max: 64, doc: 'moves.maxCameras' };
+function aliasMaxCameras(o: Obj): void {
+  if (!isObj(o.moves) || !Object.hasOwn(o.moves, 'maxCameras')) return;
+  const moves = { ...(o.moves as Obj) };
+  const n = moves.maxCameras;
+  settingError(() => checkValue('moves.maxCameras', MAX_CAMERAS, n));
+  const profile = isObj(o.profile) ? { ...(o.profile as Obj) } : {};
+  if (profile.cameras !== undefined && profile.cameras !== n) throw new ConfigError(`moves.maxCameras: ${String(n)}, profile.cameras: ${String(profile.cameras)}; set profile.cameras only (moves.maxCameras is its old name)`);
+  profile.cameras = n;
+  o.profile = profile;
+  delete moves.maxCameras;
+  if (Object.keys(moves).length) o.moves = moves;
+  else delete o.moves;
+}
+
 // A legacy camera object → [id, the camera node, the host switch keys].
 function fromLegacyCamera(cam: Obj, ftpUser: unknown): [string, Obj, Obj] {
   const { poeSwitch, ...rest } = cam;
@@ -39,6 +59,7 @@ export function normalizeFile(file: unknown): { settings: Obj; order: string[]; 
   const ftpUser = ftp?.user;
   if (ftp) delete ftp.user;
   const settings: Obj = { ...rest, ...(ftp ? { ftp } : {}) };
+  aliasMaxCameras(settings);
   if (cameras === undefined) {
     // Legacy: `camera`, or nothing at all (one default camera, Ruling P1-10).
     if (camera !== undefined) settingError(() => checkPartial(camera, LEGACY_CAMERA, 'camera'));
@@ -66,8 +87,10 @@ export function normalizeFile(file: unknown): { settings: Obj; order: string[]; 
 
 // One legacy path → the new one (Ruling P1-8): camera.poeSwitch.{model,host,
 // ports,offSeconds} → poeSwitch.*, camera.X → cameras.<id>.X, ftp.user →
-// cameras.<id>.ftp.user. Other paths stay. Several cameras: an error.
+// cameras.<id>.ftp.user; moves.maxCameras → profile.cameras. Other paths
+// stay. Several cameras: an error.
 export function translatePath(path: string, ids: string[]): string {
+  if (path === 'moves.maxCameras') return 'profile.cameras';
   const legacy = path === 'ftp.user' || path.startsWith('camera.');
   if (!legacy) return path;
   if (ids.length !== 1) {
@@ -95,6 +118,7 @@ export function normalizeOverrides(over: unknown, ids: string[], added: string[]
   if (!isObj(over)) return over as Obj;
   const { camera, ...rest } = over;
   const out: Obj = structuredClone(rest);
+  aliasMaxCameras(out);
   const ftp = isObj(out.ftp) ? (out.ftp as Obj) : undefined;
   const legacy: [string, unknown][] = [];
   if (ftp && ftp.user !== undefined) {
