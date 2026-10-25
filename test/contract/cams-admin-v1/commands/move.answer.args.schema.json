@@ -40,6 +40,11 @@
       "type": "string",
       "maxLength": 64
     },
+    "detail": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300
+    },
     "space": {
       "type": "object",
       "properties": {

@@ -106,6 +106,11 @@ function asConfigError<T>(fn: () => T): T {
   }
 }
 
+// ftp.passive: the start of the default range, and the most ports a range may
+// span (the check below allows B - A <= 100, as it always has).
+const PASSIVE_FROM = 30000;
+const PASSIVE_MAX = 100;
+
 function crossCheck(c: Config): void {
   const [cols, rows] = c.previews.grid.split('x').map(Number);
   for (const id of c.cameraOrder) {
@@ -119,7 +124,7 @@ function crossCheck(c: Config): void {
   const unshared = c.cameraOrder.filter((id) => c.cameras[id].storage?.sharePercent === undefined);
   if (shared.length && sum === 100 && unshared.length) throw new ConfigError(`cameras: storage.sharePercent adds up to 100 % (${shared.map(([id, p]) => `${id} ${p}`).join(', ')}); ${unshared.join(', ')} ${unshared.length === 1 ? 'has' : 'have'} no share and would get nothing: give it one, or lower the others`);
   const [a, b] = c.ftp.passive.split('-').map(Number);
-  if (a > 65535 || b > 65535 || a > b || b - a > 100) throw new ConfigError('ftp.passive: must be A-B with A <= B, at most 100 ports');
+  if (a > 65535 || b > 65535 || a > b || b - a > PASSIVE_MAX) throw new ConfigError(`ftp.passive: must be A-B with A <= B, at most ${PASSIVE_MAX} ports`);
   // One FTP server for every camera (spec 2026-10-05-multi-camera-host-design §7):
   // a user each, and at least 10 passive ports per camera (one camera keeps today's rules).
   const ftpCams = c.cameraOrder.filter((id) => cameraConfig(c, id)!.ftp.enabled);
@@ -130,6 +135,9 @@ function crossCheck(c: Config): void {
     seen.set(user, id);
   }
   if (ftpCams.length > 1 && b - a + 1 < 10 * ftpCams.length) throw new ConfigError(`ftp.passive: ${b - a + 1} ports for ${ftpCams.length} cameras with FTP; at least 10 per camera`);
+  // Room for every camera this proxy may hold (moves.maxCameras): a camera moved here can bring FTP.
+  const most = c.moves.maxCameras;
+  if (most !== undefined && b - a + 1 < 10 * most) throw new ConfigError(`ftp.passive: ${b - a + 1} ports for moves.maxCameras ${most}; at least 10 per camera`);
   if (c.storage.maxPercent !== undefined && c.storage.maxBytes !== undefined) {
     throw new ConfigError('storage.maxBytes: set either storage.maxPercent or storage.maxBytes, not both');
   }
@@ -203,7 +211,9 @@ type Norm = { order: string[]; legacy: boolean; policy: CommandPolicyBase; token
 const addedIds = (overrides: Obj, fileIds: string[]): string[] => Object.keys(isObj(overrides.cameras) ? (overrides.cameras as Obj) : {}).filter((id) => !fileIds.includes(id)).sort();
 const normOf = (l: Loaded): Norm => ({ order: l.order, legacy: l.legacyCamera, policy: l.commandPolicyBase, tokensOptional: l.tokensOptional });
 
-function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSettings: Obj, overrides: Obj, baseDir: string, layer: EnvLayer, norm: Norm): Loaded {
+// passwordFromMove: see loadSecrets (validation only, never the configuration in effect).
+type BuildOptions = { passwordFromMove?: readonly string[] };
+function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSettings: Obj, overrides: Obj, baseDir: string, layer: EnvLayer, norm: Norm, bo: BuildOptions = {}): Loaded {
   // A copy: the result is changed below (dataDir), DEFAULTS never is.
   let merged = merge(structuredClone(DEFAULTS) as unknown as Obj, structuredClone(fileSettings));
   // Cameras added in overrides.json follow config.json's, sorted by id (Ruling P2-5).
@@ -222,6 +232,13 @@ function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSetti
   }
   const config = merge(merged, structuredClone(overrides)) as unknown as Config;
   config.cameraOrder = order;
+  // ftp.passive unset (neither file nor override) with moves.maxCameras: the
+  // default range holds 10 ports per camera this proxy may hold, from 30000.
+  const most = config.moves.maxCameras;
+  if (most !== undefined && getPath(fileSettings, 'ftp.passive') === undefined && getPath(overrides, 'ftp.passive') === undefined) {
+    if (10 * most > PASSIVE_MAX) throw new ConfigError(`moves.maxCameras: ${most} cameras need ${10 * most} FTP passive ports (10 per camera); ftp.passive holds at most ${PASSIVE_MAX}`);
+    config.ftp.passive = `${PASSIVE_FROM}-${PASSIVE_FROM + 10 * most - 1}`;
+  }
   // The environment last: it wins over the overrides and the file. CAMERA_HOST
   // means the one camera's address (spec §4.2).
   const envNames: Record<string, string> = {};
@@ -244,7 +261,7 @@ function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSetti
   for (const p of settingPaths(config)) {
     sources[p] = envNames[p] ? 'env' : getPath(overrides, p) !== undefined ? 'override' : getPath(fileSettings, p) !== undefined ? 'file' : 'default';
   }
-  const secrets = asConfigError(() => loadSecrets(env, config.cameraOrder.some((id) => cameraConfig(config, id)!.ftp.enabled), config.cameraOrder, { tokensOptional: norm.tokensOptional, dataDir }));
+  const secrets = asConfigError(() => loadSecrets(env, config.cameraOrder.some((id) => cameraConfig(config, id)!.ftp.enabled), config.cameraOrder, { tokensOptional: norm.tokensOptional, dataDir, ...(bo.passwordFromMove ? { passwordFromMove: bo.passwordFromMove } : {}) }));
   return { config, secrets, sources, files: { config: configFile, overrides: join(dataDir, 'overrides.json') }, env, fileSettings, overrides, envLayer: layer, envNames, ...(layer.file ? { envFile: layer.file } : {}), order: norm.order, addedCameras: added, legacyCamera: norm.legacy, commandPolicyBase: norm.policy, tokensOptional: norm.tokensOptional };
 }
 
@@ -355,7 +372,10 @@ const baseDirOf = (l: Loaded) => (l.files.config ? dirname(l.files.config) : pro
 // A value equal to what Reset would restore (config.json's, else the
 // default) is not stored: it removes the override instead (Klaus
 // 2026-10-05, overrides that only repeated the default).
-export function planOverrides(loaded: Loaded, given: object): Plan {
+// `o.passwordFromMove`: camera ids whose password a camera move brings later
+// (the target's offer check, its secrets step): their missing password is no
+// error. Such a plan is a check only: its `next` is never put in effect.
+export function planOverrides(loaded: Loaded, given: object, o: BuildOptions = {}): Plan {
   // Legacy camera.* and ftp.user paths on one camera (Ruling P1-8).
   const patch = normalizeOverrides(given, loaded.order, loaded.addedCameras);
   takeCommandPolicy(patch, 'patch');
@@ -367,19 +387,19 @@ export function planOverrides(loaded: Loaded, given: object): Plan {
   }
   let overrides = merge(loaded.overrides as Obj, patch as Obj);
   const baseDir = baseDirOf(loaded);
-  const next = build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides, baseDir, loaded.envLayer, normOf(loaded));
+  const next = build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides, baseDir, loaded.envLayer, normOf(loaded), o);
   // The checks ran on the whole result above; a path is dropped only when the
   // configuration without it is valid and holds the same value.
   const paths = setPaths(patch as Obj);
   for (const p of paths) {
     const without = dropPath(overrides, p);
     try {
-      if (same(getPath(build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, without, baseDir, loaded.envLayer, normOf(loaded)).config, p), getPath(next.config, p))) overrides = without;
+      if (same(getPath(build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, without, baseDir, loaded.envLayer, normOf(loaded), o).config, p), getPath(next.config, p))) overrides = without;
     } catch {
       // Not valid without it: the override stays.
     }
   }
-  const result = overrides === next.overrides ? next : build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides, baseDir, loaded.envLayer, normOf(loaded));
+  const result = overrides === next.overrides ? next : build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides, baseDir, loaded.envLayer, normOf(loaded), o);
   return { next: result, overrides, paths };
 }
 

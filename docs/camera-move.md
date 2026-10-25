@@ -36,7 +36,15 @@ steps; both proxies record each one in their audit log. The design:
   the switch-over on it ends the move (`token_address`). Refused requests to
   the move endpoints are rate limited per address.
 - One move at a time per proxy. `moves.maxCameras` (local only, no limit by
-  default) caps how many cameras a target may run.
+  default) caps how many cameras a target may run. With it set, the FTP
+  passive range needs 10 ports per camera it may hold: left unset,
+  `ftp.passive` becomes 30000 up, 10 ports per camera (`maxCameras` 4:
+  `30000-30039`; at most 10 cameras, the range holds at most 100 ports); a
+  range set by hand that is smaller does not load. Open those ports in the
+  host's firewall too.
+- **No shared camera password needed.** A target without
+  `CAMPROXY_CAMERA_PASSWORD` takes a new camera all the same: its password
+  comes with the move (the switch-over's `secrets` step) and is stored for it.
 - **Keep the commands on while a move runs.** Finishing and cancelling are
   commands too: while commands are paused on a proxy, or its `move.send`
   (source) or `move.receive` (target) is unticked, cams-admin can't finish or
@@ -48,7 +56,23 @@ On the source, **Settings → Move to another proxy…** next to the camera (the
 local admin, or a cams-admin sign-in while `move.send` is allowed). Pick the
 target; it checks the offer and answers. When it can't take the camera, the
 dialog shows why (no `move.receive`, it can't reach the camera, the camera id
-is taken there, it is in another move, ...).
+is taken there, it is in another move, ...), followed by the target's own
+detail: what failed, in one line. For example:
+
+| reason | detail |
+|---|---|
+| `moves_not_allowed` | `move.receive is not allowed` |
+| `busy` | `move mv_… is open here`, or `move journal unreadable` |
+| `no_site_ca` | `tls.site is not set`, or `the site CA is missing` |
+| `id_taken` | `camera id cam3 is in use here` |
+| `camera_limit` | `3 of 3 cameras (moves.maxCameras)` |
+| `incompatible` | the configuration error the camera would cause, e.g. `ftp.passive: 10 ports for 2 cameras with FTP; at least 10 per camera` |
+| `ca_does_not_cover_camera` | `the site CA does not cover the address 192.0.2.10`, or `… the name cam3.garage.internal` |
+| `camera_unreachable` | `192.0.2.10:443 not reachable within 3 s` |
+
+The detail names settings, variables, ids and addresses, never a token, a
+password or another secret's value. The target's `move-offer` audit record
+and the source's `move-phase` `rejected` record carry it too.
 
 When it can, one panel shows:
 

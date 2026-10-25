@@ -75,15 +75,17 @@ interface Unit {
   get loaded(): Loaded;
 }
 
-function unit(o: { config?: object; overrides?: object; secrets?: () => Promise<{ status: number; sealed?: string }>; step?: Partial<Record<'camera' | 'cert' | 'ftp', () => Promise<unknown>>>; dir?: string; attempts?: number } = {}): Unit {
+function unit(o: { config?: object; overrides?: object; env?: Record<string, string>; store?: boolean; secrets?: () => Promise<{ status: number; sealed?: string }>; step?: Partial<Record<'camera' | 'cert' | 'ftp', () => Promise<unknown>>>; dir?: string; attempts?: number } = {}): Unit {
   const dir = o.dir ?? mkdtempSync(join(tmpdir(), 'camproxy-switch-'));
   if (!o.dir) writeFileSync(join(dir, 'config.json'), JSON.stringify({ cameras: [{ id: 'cam1', host: '' }], tls: { site: 'u', cameraSubnet: '192.0.2.0/24', proxyAddresses: '198.51.100.1' }, ...(o.config ?? {}) }));
   if (o.overrides) {
-    const file = loadConfig(SECRETS, { cwd: dir }).files.overrides;
+    const file = loadConfig(o.env ?? SECRETS, { cwd: dir }).files.overrides;
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, JSON.stringify(o.overrides));
   }
-  let loaded = loadConfig(SECRETS, { cwd: dir });
+  let loaded = loadConfig(o.env ?? SECRETS, { cwd: dir });
+  // The real password file (what the camera step's configuration load reads), else a map only.
+  const real = o.store ? cameraPasswordStore(loaded.config.server.dataDir) : undefined;
   const journal = new MoveJournal(join(dir, 'admin', 'moves'));
   const calls: string[] = [];
   const events: MoveEvent[] = [];
@@ -103,7 +105,7 @@ function unit(o: { config?: object; overrides?: object; secrets?: () => Promise<
       await o.step?.camera?.();
       loaded = l;
     },
-    passwords: { set: (id, pw) => (calls.push('secrets'), stored.set(id, pw)) },
+    passwords: { set: (id, pw) => (calls.push('secrets'), stored.set(id, pw), real?.set(id, pw)) },
     stageLeaf: (_cam, l) => void staged.push(l),
     pushLeaf: async (_cam, l): Promise<PushResult> => {
       calls.push('cert');
@@ -465,6 +467,19 @@ describe('fix round 1', () => {
       }, 60_000);
     }
   });
+
+  it('no shared camera password on the target: the secrets step stores the moved password, the camera step loads it', async () => {
+    // Only cam1's own password, no CAMPROXY_CAMERA_PASSWORD: cam9's comes with the move.
+    const env = { CAMPROXY_TOKENS: SECRETS.CAMPROXY_TOKENS, CAMPROXY_ADMIN_TOKEN: SECRETS.CAMPROXY_ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD_CAM1: 'own' };
+    const u = unit({ env, store: true });
+    u.journal.save(offered());
+    await u.target.start(startArgs());
+    await u.target.idle(MOVE);
+    expect(u.calls).toEqual(STEPS);
+    expect(phases(u)).toEqual(['switching', 'switched', 'copying']);
+    expect(u.loaded.secrets.cameraPasswords).toEqual({ cam1: 'own', cam9: PASSWORD });
+    expect(u.loaded.config.cameras.cam9).toMatchObject({ host: '192.0.2.9' });
+  }, 60_000);
 
   it('camera: a resumed camera step after its own write is not id_taken', async () => {
     const a = unit({ step: { camera: () => Promise.reject(new Error('process stopped')) } });

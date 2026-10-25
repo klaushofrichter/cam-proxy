@@ -59,6 +59,11 @@
         "internal"
       ]
     },
+    "detail": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300
+    },
     "space": {
       "type": "object",
       "properties": {

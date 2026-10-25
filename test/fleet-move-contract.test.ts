@@ -197,6 +197,18 @@ describe('the move commands against the vendored contract', () => {
     expect(ARGS_VALIDATORS['move.answer']({ ...a, accept: false, reason: 'no_such_reason' })).toMatchObject({ ok: false, code: 'invalid_args' });
   });
 
+  it('move.answer takes an optional detail of 1..300 characters, like the strict contract', () => {
+    const a = argsOfFixture('valid-command-move-answer');
+    const v = strict('commands/move.answer.args');
+    const cases: [unknown, boolean][] = [['x', true], ['x'.repeat(300), true], ['\u{1F600}'.repeat(300), true], ['', false], ['x'.repeat(301), false], [7, false], [null, false]];
+    for (const [detail, ok] of cases) {
+      const args = { ...a, accept: false, reason: 'camera_limit', detail };
+      expect(v(args), `${String(detail).slice(0, 8)} ${why(v)}`).toBe(ok);
+      expect(ARGS_VALIDATORS['move.answer'](args).ok, String(detail).slice(0, 8)).toBe(ok);
+    }
+    expect(ARGS_VALIDATORS['move.answer']({ ...a, accept: false, reason: 'busy' })).toMatchObject({ ok: true });
+  });
+
   it('move.* commands are rate limited (the overall 30 a minute binds below the move window of 60) and need no journal budget', () => {
     let t = 1_000_000;
     const l = new CommandLimits(() => t);

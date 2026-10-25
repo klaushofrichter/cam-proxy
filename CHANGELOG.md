@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Camera moves: a proxy without a shared camera password (`CAMPROXY_CAMERA_PASSWORD`) now takes a new camera. Before, every first move of a camera onto such a proxy was refused as `incompatible`, although the camera's password comes with the move.
+- Camera moves: a refused offer now says what failed, next to the reason (for example `3 of 3 cameras (moves.maxCameras)`, `ftp.passive: 10 ports for 2 cameras with FTP; at least 10 per camera`, `192.0.2.10:443 not reachable within 3 s`). The move dialog shows it, and the `move-offer` and `move-phase` `rejected` audit records carry it. The detail names settings, ids and addresses, never a password or token. `move.offer` results and `move.answer` take an optional `detail` (up to 300 characters).
+- FTP passive ports follow `moves.maxCameras`: with it set and `ftp.passive` unset, the default range is 30000 up, 10 ports per camera the proxy may hold (`maxCameras` 4: `30000-30039`; at most 10). A range set by hand that is smaller than 10 ports per camera it may hold no longer loads (`ftp.passive: N ports for moves.maxCameras M; at least 10 per camera`). Without `moves.maxCameras` nothing changes.
+
 ## v2026.10.23.2
 
 - Camera moves check that the copy is complete before they end: files still missing get one more try; failed files and files the source's retention removed are counted and shown (audit record `move-check`).

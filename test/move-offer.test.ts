@@ -3,7 +3,7 @@
 import express from 'express';
 import { createServer as createHttpsServer } from 'https';
 import { createServer, type Server } from 'net';
-import { mkdtempSync, statSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, statSync, writeFileSync } from 'fs';
 import type { Server as HttpServer } from 'http';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -11,7 +11,7 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { movesSourceApi } from '../src/api/moves-api';
 import { AuditLog } from '../src/audit/audit-log';
 import { openCatalog } from '../src/catalog/db';
-import { loadConfig } from '../src/config/load';
+import { loadConfig, planOverrides } from '../src/config/load';
 import type { MoveOfferArgs } from '../src/fleet/command-args';
 import { setLogLevel } from '../src/log';
 import { evaluate, probeSource, spaceFor, tcpConnect, type EvaluateDeps } from '../src/moves/evaluate';
@@ -20,6 +20,8 @@ import { MoveJournal, type MoveRecord } from '../src/moves/journal';
 import { hashMoveToken } from '../src/moves/token';
 import { siteCa, type SiteCa } from '../src/tls/ca';
 import { issueLeaf } from '../src/tls/leaf';
+import { moveDetail } from '../src/moves/detail';
+import { strict, why } from './helpers/contract';
 
 const MOVE = 'mv_0123456789ABCDEFGHJK';
 const TOKEN = 'offer-token-'.padEnd(43, 'q');
@@ -39,10 +41,10 @@ const offer = (over: Partial<MoveOfferArgs> = {}): MoveOfferArgs => ({
 
 const fakeCa: SiteCa = { certPem: '', keyPem: '', fingerprint: '', notAfter: 0, covers: (ip) => ip.startsWith('192.0.2.'), coversName: (n) => n.endsWith('.garage.internal') };
 
-function fixture(o: { config?: object; allowed?: boolean; ca?: SiteCa | null; free?: number; usage?: { stills: number; previews: number; clips: number; used?: number; budget?: number }; connect?: boolean; probe?: number; journal?: Pick<MoveJournal, 'active' | 'save'> } = {}) {
+function fixture(o: { config?: object; env?: Record<string, string>; allowed?: boolean; ca?: SiteCa | null; free?: number; usage?: { stills: number; previews: number; clips: number; used?: number; budget?: number }; connect?: boolean; probe?: number; journal?: Pick<MoveJournal, 'active' | 'save'> } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'camproxy-offer-'));
   writeFileSync(join(dir, 'config.json'), JSON.stringify({ cameras: [{ id: 'cam3', host: '192.0.2.3' }], tls: SITE, storage: { minFreeBytes: 1 * GB }, ...(o.config ?? {}) }));
-  const loaded = loadConfig(SECRETS, { cwd: dir });
+  const loaded = loadConfig(o.env ?? SECRETS, { cwd: dir });
   const journal = new MoveJournal(join(dir, 'admin', 'moves'));
   const connects: [string, number][] = [];
   const deps: EvaluateDeps = {
@@ -62,45 +64,45 @@ function fixture(o: { config?: object; allowed?: boolean; ca?: SiteCa | null; fr
 
 describe('refusals, in the plan order', () => {
   it('moves_not_allowed without move.receive', async () => {
-    expect(await evaluate(fixture({ allowed: false }).deps, offer())).toEqual({ accept: false, reason: 'moves_not_allowed' });
+    expect(await evaluate(fixture({ allowed: false }).deps, offer())).toEqual({ accept: false, reason: 'moves_not_allowed', detail: 'move.receive is not allowed' });
   });
   it('a busy target answers busy', async () => {
     const f = fixture();
     f.journal.save({ v: 1, id: 'mv_other', role: 'source', camera: 'cam3', phase: 'copying', plan: null, peer: { proxyId: 'p', name: 'n' }, chunks: {}, bytesDone: 0, startedAt: 1 });
-    expect(await evaluate(f.deps, offer())).toEqual({ accept: false, reason: 'busy' });
+    expect(await evaluate(f.deps, offer())).toEqual({ accept: false, reason: 'busy', detail: 'move mv_other is open here' });
   });
   it('an unreadable journal answers busy', async () => {
     const journal = { active: () => { throw new Error('EACCES'); }, save: () => undefined };
-    expect(await evaluate(fixture({ journal }).deps, offer())).toEqual({ accept: false, reason: 'busy' });
+    expect(await evaluate(fixture({ journal }).deps, offer())).toEqual({ accept: false, reason: 'busy', detail: 'move journal unreadable' });
   });
   it('no_site_ca without tls.site (the Pi) or without a loaded CA', async () => {
-    expect(await evaluate(fixture({ config: { tls: undefined } }).deps, offer())).toEqual({ accept: false, reason: 'no_site_ca' });
-    expect(await evaluate(fixture({ ca: null }).deps, offer())).toEqual({ accept: false, reason: 'no_site_ca' });
+    expect(await evaluate(fixture({ config: { tls: undefined } }).deps, offer())).toEqual({ accept: false, reason: 'no_site_ca', detail: 'tls.site is not set' });
+    expect(await evaluate(fixture({ ca: null }).deps, offer())).toEqual({ accept: false, reason: 'no_site_ca', detail: 'the site CA is missing' });
   });
   it('id_taken when the camera id is configured', async () => {
     const o = offer();
     o.camera.proxyCameraId = 'cam3';
-    expect(await evaluate(fixture().deps, o)).toEqual({ accept: false, reason: 'id_taken' });
+    expect(await evaluate(fixture().deps, o)).toEqual({ accept: false, reason: 'id_taken', detail: 'camera id cam3 is in use here' });
   });
   it('leftover moved entry: free when hidden and no active move names it, taken otherwise (Review Focus 4)', async () => {
     const cfg = { cameras: [{ id: 'cam3', host: '192.0.2.3' }, { id: 'cam9', host: '192.0.2.9', moved: 'mv_AAAAAAAAAAAAAAAAAAAA' }] };
     expect((await evaluate(fixture({ config: cfg }).deps, offer())).accept).toBe(true);
     // Not hidden: taken.
-    expect(await evaluate(fixture({ config: { cameras: [{ id: 'cam9', host: '192.0.2.9' }] } }).deps, offer())).toEqual({ accept: false, reason: 'id_taken' });
+    expect(await evaluate(fixture({ config: { cameras: [{ id: 'cam9', host: '192.0.2.9' }] } }).deps, offer())).toEqual({ accept: false, reason: 'id_taken', detail: 'camera id cam9 is in use here' });
     // Hidden, but an active record names the camera: taken (the journal sees it first as busy in practice; the camera check alone must also hold).
     const f = fixture({ config: cfg });
-    f.deps.journal = { active: () => [{ camera: 'cam9' } as MoveRecord], save: () => undefined };
-    expect(await evaluate(f.deps, offer())).toEqual({ accept: false, reason: 'busy' });
+    f.deps.journal = { active: () => [{ id: 'mv_BBBBBBBBBBBBBBBBBBBB', camera: 'cam9' } as MoveRecord], save: () => undefined };
+    expect(await evaluate(f.deps, offer())).toEqual({ accept: false, reason: 'busy', detail: 'move mv_BBBBBBBBBBBBBBBBBBBB is open here' });
   });
   it('a leftover is free only for the same camera: host, protocol and user as offered (final review 2)', async () => {
     const left = (extra: object) => ({ cameras: [{ id: 'cam3', host: '192.0.2.3' }, { id: 'cam9', host: '192.0.2.9', moved: 'mv_AAAAAAAAAAAAAAAAAAAA', ...extra }] });
-    expect(await evaluate(fixture({ config: left({ host: '192.0.2.10' }) }).deps, offer())).toEqual({ accept: false, reason: 'id_taken' });
-    expect(await evaluate(fixture({ config: left({ protocol: 'http' }) }).deps, offer())).toEqual({ accept: false, reason: 'id_taken' });
-    expect(await evaluate(fixture({ config: left({ user: 'admin2' }) }).deps, offer())).toEqual({ accept: false, reason: 'id_taken' });
+    expect(await evaluate(fixture({ config: left({ host: '192.0.2.10' }) }).deps, offer())).toEqual({ accept: false, reason: 'id_taken', detail: 'camera id cam9 is in use here' });
+    expect(await evaluate(fixture({ config: left({ protocol: 'http' }) }).deps, offer())).toEqual({ accept: false, reason: 'id_taken', detail: 'camera id cam9 is in use here' });
+    expect(await evaluate(fixture({ config: left({ user: 'admin2' }) }).deps, offer())).toEqual({ accept: false, reason: 'id_taken', detail: 'camera id cam9 is in use here' });
     expect((await evaluate(fixture({ config: left({}) }).deps, offer())).accept).toBe(true);
   });
   it('camera_limit counts the cameras that run', async () => {
-    expect(await evaluate(fixture({ config: { moves: { maxCameras: 1 } } }).deps, offer())).toEqual({ accept: false, reason: 'camera_limit' });
+    expect(await evaluate(fixture({ config: { moves: { maxCameras: 1 } } }).deps, offer())).toEqual({ accept: false, reason: 'camera_limit', detail: '1 of 1 cameras (moves.maxCameras)' });
     expect((await evaluate(fixture({ config: { moves: { maxCameras: 2 } } }).deps, offer())).accept).toBe(true);
     // A hidden moved camera does not count.
     const cfg = { moves: { maxCameras: 1 }, cameras: [{ id: 'cam3', host: '192.0.2.3', moved: 'mv_AAAAAAAAAAAAAAAAAAAA' }] };
@@ -108,21 +110,40 @@ describe('refusals, in the plan order', () => {
   });
   it('incompatible when the settings do not make a valid camera node', async () => {
     const o = offer({ settings: { stills: { intervalS: 7 } } });
-    expect(await evaluate(fixture().deps, o)).toEqual({ accept: false, reason: 'incompatible' });
+    expect(await evaluate(fixture().deps, o)).toEqual({ accept: false, reason: 'incompatible', detail: 'cameras.cam9.stills.intervalS: must be one of 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60' });
+  });
+  it('incompatible names the configuration problem: too few FTP passive ports', async () => {
+    const config = { cameras: [{ id: 'cam3', host: '192.0.2.3', ftp: { enabled: true } }], ftp: { passive: '30000-30009' } };
+    const env = { ...SECRETS, CAMPROXY_FTP_PASSWORD: 'f' };
+    const o = offer({ settings: { ftp: { enabled: true } } });
+    expect(await evaluate(fixture({ config, env }).deps, o)).toEqual({ accept: false, reason: 'incompatible', detail: 'ftp.passive: 10 ports for 2 cameras with FTP; at least 10 per camera' });
+  });
+  it('a new camera onto a target without a shared camera password: its password comes with the move', async () => {
+    // Only cam3's own password and no CAMPROXY_CAMERA_PASSWORD: cam9's arrives later (the secrets step).
+    const env = { CAMPROXY_TOKENS: SECRETS.CAMPROXY_TOKENS, CAMPROXY_ADMIN_TOKEN: SECRETS.CAMPROXY_ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD_CAM3: 'own' };
+    const f = fixture({ env });
+    expect(await evaluate(f.deps, offer())).toMatchObject({ accept: true });
+    // Validation only: nothing stored for cam9, the real load still needs its password.
+    expect(existsSync(join(f.dir, 'data', 'admin', 'camera-passwords.json'))).toBe(false);
+    expect(f.loaded.secrets.cameraPasswords).toEqual({ cam3: 'own' });
+    expect(() => planOverrides(f.loaded, { cameras: { cam9: { host: '192.0.2.9' } } })).toThrow('CAMPROXY_CAMERA_PASSWORD: required (cam9 has no CAMPROXY_CAMERA_PASSWORD_CAM9)');
   });
   it('ca_does_not_cover_camera for an address or a name outside the CA', async () => {
     const o = offer();
     o.camera.host = '192.0.2.200:8443';
     expect((await evaluate(fixture().deps, o)).accept).toBe(true);
     o.camera.host = '203.0.113.9';
-    expect(await evaluate(fixture().deps, o)).toEqual({ accept: false, reason: 'ca_does_not_cover_camera' });
+    expect(await evaluate(fixture().deps, o)).toEqual({ accept: false, reason: 'ca_does_not_cover_camera', detail: 'the site CA does not cover the address 203.0.113.9' });
     const other = fixture({ ca: { ...fakeCa, coversName: () => false } });
-    expect(await evaluate(other.deps, offer())).toEqual({ accept: false, reason: 'ca_does_not_cover_camera' });
+    expect(await evaluate(other.deps, offer())).toEqual({ accept: false, reason: 'ca_does_not_cover_camera', detail: 'the site CA does not cover the name cam9.garage.internal' });
   });
   it('camera_unreachable when the HTTPS port does not accept a connection', async () => {
     const f = fixture({ connect: false });
-    expect(await evaluate(f.deps, offer())).toEqual({ accept: false, reason: 'camera_unreachable' });
+    expect(await evaluate(f.deps, offer())).toEqual({ accept: false, reason: 'camera_unreachable', detail: '192.0.2.9:443 not reachable within 3 s' });
     expect(f.connects).toEqual([['192.0.2.9', 443]]);
+    const o = offer();
+    o.camera.host = '192.0.2.9:8443';
+    expect(await evaluate(f.deps, o)).toMatchObject({ detail: '192.0.2.9:8443 not reachable within 3 s' });
   });
   it('a refusal writes nothing', async () => {
     const f = fixture({ connect: false });
@@ -219,6 +240,30 @@ describe('accepting writes the target record (B4, B32)', () => {
     const bad = moveHandlers({ emit: () => undefined, audit: { write: () => undefined } as never, evaluate: { ...fixture().deps, loaded: () => { throw new Error(`boom ${TOKEN}`); } } })['move.offer'];
     const failed = await bad(offer(), {} as never);
     expect(failed).toEqual({ status: 'failed', code: 'internal' });
+  });
+  it('a refusal answers its reason and detail (strict contract) and audits both', async () => {
+    const audits: { message: string; details: Record<string, unknown> }[] = [];
+    const h = moveHandlers({ emit: () => undefined, audit: { write: (r: never) => void audits.push(r) } as never, evaluate: fixture({ config: { moves: { maxCameras: 1 } } }).deps })['move.offer'];
+    const done = await h(offer(), {} as never);
+    expect(done).toEqual({ status: 'ok', result: { accept: false, reason: 'camera_limit', detail: '1 of 1 cameras (moves.maxCameras)' } });
+    const v = strict('commands/move.offer.result');
+    expect(v(done.result), why(v)).toBe(true);
+    expect(audits[0].details).toMatchObject({ accept: false, reason: 'camera_limit', detail: '1 of 1 cameras (moves.maxCameras)' });
+    expect(audits[0].message).toContain('rejected (camera_limit: 1 of 1 cameras (moves.maxCameras))');
+    expect(JSON.stringify([done, audits])).not.toContain(TOKEN);
+  });
+  it('the strict contract: detail 1..300 characters on a refusal only', () => {
+    const v = strict('commands/move.offer.result');
+    expect(v({ accept: false, reason: 'busy' })).toBe(true);
+    expect(v({ accept: false, reason: 'busy', detail: 'x'.repeat(300) })).toBe(true);
+    expect(v({ accept: false, reason: 'busy', detail: 'x'.repeat(301) })).toBe(false);
+    expect(v({ accept: false, reason: 'busy', detail: '' })).toBe(false);
+  });
+  it('a detail is one line of at most 300 characters, control characters stripped', () => {
+    expect(moveDetail('a\nb\u0000c\td  e')).toBe('a b c d e');
+    expect(moveDetail(`${'é'.repeat(299)}\u{1F600}xyz`)).toBe(`${'é'.repeat(299)}\u{1F600}`);
+    expect([...moveDetail('x'.repeat(400))!].length).toBe(300);
+    expect(moveDetail(' \n ')).toBeUndefined();
   });
 });
 
