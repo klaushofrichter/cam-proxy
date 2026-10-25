@@ -1,7 +1,7 @@
 // The admin UI's proxy profile card (cams-admin spec 2026-10-25-proxy-profile-design
 // §0): the home page asks for it until it is set; the Settings page edits it.
 import { describe, expect, it } from 'vitest';
-import { draftOf, profileBody, profileProblem, profileRows, showOnHome, warningText, type ProfileView } from '../web/src/lib/profile';
+import { draftOf, ignoredNotes, profileBody, profileProblem, profileRows, showOnHome, warningText, type ProfileView } from '../web/src/lib/profile';
 
 const view = (over: Partial<ProfileView> = {}): ProfileView => ({
   set: true, name: 'een (N100, 1 TB)', cameras: 3, storageGB: 600, held: 1,
@@ -9,7 +9,7 @@ const view = (over: Partial<ProfileView> = {}): ProfileView => ({
   storage: { budgetBytes: 600e9, usedBytes: 41e9, diskBytes: 1e12, freeBytes: 880e9 },
   hardware: { pi: null, cpuCores: 4, cpuModel: 'Intel N100', memoryBytes: 16e9, load5: 0.7, cpuTempC: 48.5 },
   warnings: [], firewall: { tool: 'ufw', lines: ['sudo ufw allow from 192.0.2.85 to any port 2121 proto tcp'] },
-  perCameraBytes: 200e9, ...over,
+  perCameraBytes: 200e9, ignored: {}, ...over,
 });
 
 describe('the profile card', () => {
@@ -35,6 +35,12 @@ describe('the profile card', () => {
     expect(unset.find((r) => r.key === 'budget')!.text).toBe('—');
     expect(unset.find((r) => r.key === 'hardware')!.text).toBe('Raspberry Pi 4 Model B, 4 cores, 4.0 GB memory');
     expect(unset.some((r) => r.key === 'temp')).toBe(false);
+  });
+  it('a budget setting a higher layer replaces is named', () => {
+    expect(ignoredNotes(view())).toEqual([]);
+    expect(ignoredNotes(view({ ignored: { 'storage.maxBytes': 'ignored: profile.storageGB (overrides.json) is the storage budget' } }))).toEqual(['storage.maxBytes (config.json) is ignored: profile.storageGB (overrides.json) is the storage budget']);
+    // An older proxy sends none.
+    expect(ignoredNotes({ ...view(), ignored: undefined } as unknown as ProfileView)).toEqual([]);
   });
   it('warnings in words', () => {
     expect(warningText('profile_ftp_ports', view({ cameras: 3, ftp: { enabled: true, port: 2121, passive: { from: 30000, to: 30019 } } }))).toBe('ftp.passive has 20 ports; 3 cameras need 30 (10 per camera). A camera move that needs the missing ports is refused.');

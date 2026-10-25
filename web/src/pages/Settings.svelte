@@ -25,7 +25,7 @@
 
   // `env`: the variable that sets it (source env: read-only here).
   // `legacy`: read from a legacy `camera` object in config.json.
-  interface Setting { value: unknown; source: 'default' | 'file' | 'override' | 'env'; env?: string; restart: boolean; restartScope?: 'camera' | 'host'; pending: boolean; next?: unknown; type?: SettingType; resetTo?: ResetTo; legacy?: true; by?: { cmdId: string; actor: string; at: number } }
+  interface Setting { value: unknown; source: 'default' | 'file' | 'override' | 'env'; env?: string; restart: boolean; restartScope?: 'camera' | 'host'; pending: boolean; next?: unknown; type?: SettingType; resetTo?: ResetTo; legacy?: true; by?: { cmdId: string; actor: string; at: number }; ignored?: string }
   let view = $state<Record<string, Setting>>({});
   let drafts = $state<Record<string, string>>({});
   let message = $state('');
@@ -237,6 +237,7 @@
               <td>
                 <input value={drafts[p] ?? shown(s.value)} oninput={(e) => (drafts[p] = e.currentTarget.value)} data-testid="input-{p}" disabled={(typeof s.value === 'object' && s.value !== null) || isEnvSet(s) || !!locked} readonly={isEnvSet(s)} title={isEnvSet(s) ? envNote(s) : (locked ?? undefined)} />
                 {#if isEnvSet(s)}<div class="env-note" data-testid="env-note-{p}">{envNote(s)}</div>{/if}
+                {#if s.ignored}<div class="env-note" data-testid="ignored-{p}">{s.ignored}</div>{/if}
                 {#if !locked && (dirWhy ?? resetDirWhy)}<div class="env-note" data-testid="dir-note-{p}">{dirWhy ?? resetDirWhy}</div>{/if}
                 {#if rowErrors[p]}<div class="field-error" data-testid="error-{p}">{rowErrors[p]}</div>{/if}
               </td>

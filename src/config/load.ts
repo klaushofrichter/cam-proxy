@@ -24,6 +24,10 @@ export interface Loaded {
   env: NodeJS.ProcessEnv;
   fileSettings: object;
   overrides: object;
+  // Settings set in a lower layer that a higher one replaces, with why (the
+  // Settings page and GET /control/profile show it): profile.storageGB or
+  // storage.maxBytes (budgetLayers).
+  ignored: Record<string, string>;
   // Settings set from the environment (spec 2026-10-04-pi-config-design):
   // the variable that set each path, and the .env file if one is configured.
   envLayer: EnvLayer;
@@ -135,7 +139,6 @@ function crossCheck(c: Config): void {
   // FTP on, at most 10 cameras (100 ports). A range smaller than the profile
   // needs is a warning (profileWarnings), never a load error.
   checkProfileCameras(c);
-  if (c.profile.storageGB !== undefined && c.storage.maxBytes !== undefined) throw new ConfigError('profile.storageGB: set either profile.storageGB or storage.maxBytes, not both');
   if (c.storage.maxPercent !== undefined && c.storage.maxBytes !== undefined) {
     throw new ConfigError('storage.maxBytes: set either storage.maxPercent or storage.maxBytes, not both');
   }
@@ -167,6 +170,23 @@ function crossCheck(c: Config): void {
     const p = /^https?:\/\//.test(c.camsAdmin.url) ? adminUrlProblem(c.camsAdmin.url) : 'must be https://';
     if (p) throw new ConfigError(`camsAdmin.url: ${p}`);
   }
+}
+
+// Where profile.storageGB and storage.maxBytes are set, and which one is
+// ignored: both in config.json or both in overrides.json is an error naming
+// the file; in different files the override wins.
+function budgetLayers(fileSettings: Obj, overrides: Obj): { maxBytes: boolean; ignored: Record<string, string> } {
+  const layer = (p: string) => (getPath(overrides, p) !== undefined ? 'overrides.json' : getPath(fileSettings, p) !== undefined ? 'config.json' : undefined);
+  const gb = layer('profile.storageGB');
+  const bytes = layer('storage.maxBytes');
+  for (const [f, o] of [['config.json', fileSettings], ['overrides.json', overrides]] as const) {
+    if (getPath(o, 'profile.storageGB') !== undefined && getPath(o, 'storage.maxBytes') !== undefined) throw new ConfigError(`profile.storageGB: ${f} sets both profile.storageGB and storage.maxBytes; keep one in ${f} (profile.storageGB is the budget, storage.maxBytes the older way to set it)`);
+  }
+  if (!gb || !bytes) return { maxBytes: !!bytes, ignored: {} };
+  // Different files: the one in overrides.json wins.
+  return gb === 'overrides.json'
+    ? { maxBytes: false, ignored: { 'storage.maxBytes': 'ignored: profile.storageGB (overrides.json) is the storage budget' } }
+    : { maxBytes: true, ignored: { 'profile.storageGB': 'ignored: storage.maxBytes (overrides.json) is the storage budget' } };
 }
 
 function checkProfileCameras(c: Config): void {
@@ -224,8 +244,12 @@ function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSetti
   const order = [...norm.order, ...added];
   // Each camera: its defaults, then its config.json node (spec 2026-10-05-multi-camera-host-design §4.1).
   merged.cameras = Object.fromEntries(order.map((id) => [id, merge(cameraDefaults(id) as unknown as Obj, structuredClone(((fileSettings.cameras as Obj | undefined)?.[id] ?? {}) as Obj))]));
+  // The size budget (cams-admin spec 2026-10-25-proxy-profile-design §0, ruling
+  // 2026-10-25): profile.storageGB and storage.maxBytes in one file is an
+  // error; in two, the higher layer (overrides.json) wins and the other is ignored.
+  const budget = budgetLayers(fileSettings, overrides);
   // storage.maxBytes replaces the default maxPercent budget.
-  if (getPath(fileSettings, 'storage.maxBytes') !== undefined || getPath(overrides, 'storage.maxBytes') !== undefined) {
+  if (budget.maxBytes) {
     merged = merge(merged, { storage: { ...(merged.storage as Obj), maxPercent: undefined } });
     delete (merged.storage as Obj).maxPercent;
   }
@@ -235,6 +259,7 @@ function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSetti
   }
   const config = merge(merged, structuredClone(overrides)) as unknown as Config;
   config.cameraOrder = order;
+  for (const p of Object.keys(budget.ignored)) setPath(config as unknown as Obj, p, undefined);
   // ftp.passive unset (neither file nor override) and FTP on (any camera, as
   // crossCheck counts them): 30000 up, 10 ports per camera for
   // max(profile.cameras, cameras held) (src/config/profile.ts). FTP off: the plain default.
@@ -265,7 +290,7 @@ function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSetti
     sources[p] = envNames[p] ? 'env' : getPath(overrides, p) !== undefined ? 'override' : getPath(fileSettings, p) !== undefined ? 'file' : 'default';
   }
   const secrets = asConfigError(() => loadSecrets(env, config.cameraOrder.some((id) => cameraConfig(config, id)!.ftp.enabled), config.cameraOrder, { tokensOptional: norm.tokensOptional, dataDir, ...(bo.passwordFromMove ? { passwordFromMove: bo.passwordFromMove } : {}) }));
-  return { config, secrets, sources, files: { config: configFile, overrides: join(dataDir, 'overrides.json') }, env, fileSettings, overrides, envLayer: layer, envNames, ...(layer.file ? { envFile: layer.file } : {}), order: norm.order, addedCameras: added, legacyCamera: norm.legacy, commandPolicyBase: norm.policy, tokensOptional: norm.tokensOptional };
+  return { config, secrets, sources, ignored: budget.ignored, files: { config: configFile, overrides: join(dataDir, 'overrides.json') }, env, fileSettings, overrides, envLayer: layer, envNames, ...(layer.file ? { envFile: layer.file } : {}), order: norm.order, addedCameras: added, legacyCamera: norm.legacy, commandPolicyBase: norm.policy, tokensOptional: norm.tokensOptional };
 }
 
 // Defaults, then config.json (CAMPROXY_CONFIG or ./config.json), then
@@ -434,7 +459,8 @@ export function applyOverrides(loaded: Loaded, given: object): Loaded {
 
 // PUT /control/profile (cams-admin spec 2026-10-25-proxy-profile-design §0):
 // the given profile fields as overrides; null removes a field's override
-// (back to config.json's value or none), an absent field stays. The result
+// (back to config.json's value or none), an absent field stays; storageGB
+// replaces an override of storage.maxBytes. The result
 // must have profile.cameras (a set profile has its camera count). Validated
 // like any override; nothing is written if it does not load.
 export const PROFILE_FIELDS = ['name', 'cameras', 'storageGB', 'firewall'] as const;
@@ -442,6 +468,8 @@ export function planProfile(loaded: Loaded, body: unknown): Plan {
   if (!isObj(body)) throw new ConfigError('the profile must be an object');
   for (const k of Object.keys(body)) if (!(PROFILE_FIELDS as readonly string[]).includes(k)) throw new ConfigError(`${k}: not a profile field (${PROFILE_FIELDS.join(', ')})`);
   const cleared = PROFILE_FIELDS.filter((k) => body[k] === null).map((k) => `profile.${k}`);
+  // A storage budget set here replaces storage.maxBytes set here (one file may not hold both).
+  if (body.storageGB !== null && body.storageGB !== undefined && getPath(loaded.overrides, 'storage.maxBytes') !== undefined) cleared.push('storage.maxBytes');
   const set = Object.fromEntries(PROFILE_FIELDS.filter((k) => body[k] !== null && body[k] !== undefined).map((k) => [k, body[k]]));
   const unset = planUnset(loaded, cleared);
   const plan = Object.keys(set).length ? planOverrides(unset.next, { profile: set }) : unset;

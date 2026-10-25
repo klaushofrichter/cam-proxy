@@ -449,12 +449,13 @@ export function controlApi(d: ControlDeps): express.Router {
   });
   // The proxy profile (cams-admin spec 2026-10-25-proxy-profile-design §0):
   // its report, plus what each camera can expect of the budget when the proxy
-  // is full (shares still win). Set with the local admin token only (a
+  // is full (shares still win), and which budget setting a higher layer
+  // replaces (`ignored`: profile.storageGB or storage.maxBytes). Set with the local admin token only (a
   // managed token or sign-in is refused: not on MANAGED_ALLOWED or
   // UI_UNLOCKS), audited as config-change.
   const profileView = () => {
     const v = d.profile();
-    return { ...v, perCameraBytes: v.storage.budgetBytes === null ? null : Math.floor(v.storage.budgetBytes / v.cameras) };
+    return { ...v, perCameraBytes: v.storage.budgetBytes === null ? null : Math.floor(v.storage.budgetBytes / v.cameras), ignored: d.loaded().ignored };
   };
   r.get('/profile', (_req, res) => void res.json(profileView()));
   r.put('/profile', (req, res) => {

@@ -8,7 +8,8 @@ import type { Config } from './defaults';
 // `legacy`: a config.json value read from a legacy `camera` object (spec
 // 2026-10-05-multi-camera-host-design §4.2: "config.json (legacy camera)").
 // `by` (plan P3 R3-14): the override holds the value a cams-admin command set
-// (marks: OverridesBackups.byPath()).
+// (marks: OverridesBackups.byPath()). `ignored`: a value a higher layer
+// replaces (profile.storageGB against storage.maxBytes), and why.
 export type ChangeMarks = Map<string, { cmdId: string; actor: string; at: number; value: unknown }>;
 export function configView(loaded: Loaded, running: Config, marks?: ChangeMarks) {
   return Object.fromEntries(
@@ -22,7 +23,7 @@ export function configView(loaded: Loaded, running: Config, marks?: ChangeMarks)
       // default; `same` when that changes nothing, `means` for an unset state.
       const mark = marks?.get(p);
       const by = mark && loaded.sources[p] === 'override' && JSON.stringify(getPath(loaded.overrides, p)) === JSON.stringify(mark.value) ? { cmdId: mark.cmdId, actor: mark.actor, at: mark.at } : null;
-      return [p, { value, source: loaded.sources[p], ...(loaded.envNames[p] ? { env: loaded.envNames[p] } : {}), restart, ...(restart ? { restartScope: /^cameras\.[^.]+\./.test(p) ? 'camera' : 'host' } : {}), pending, ...(pending ? { next } : {}), type: leafAt(p)?.type, ...(loaded.sources[p] === 'override' ? { resetTo: resetTarget(loaded, p) } : {}), ...(loaded.legacyCamera && loaded.sources[p] === 'file' && (p.startsWith('cameras.') || p.startsWith('poeSwitch.')) ? { legacy: true } : {}), ...(by ? { by } : {}) }];
+      return [p, { value, source: loaded.sources[p], ...(loaded.envNames[p] ? { env: loaded.envNames[p] } : {}), restart, ...(restart ? { restartScope: /^cameras\.[^.]+\./.test(p) ? 'camera' : 'host' } : {}), pending, ...(pending ? { next } : {}), type: leafAt(p)?.type, ...(loaded.sources[p] === 'override' ? { resetTo: resetTarget(loaded, p) } : {}), ...(loaded.legacyCamera && loaded.sources[p] === 'file' && (p.startsWith('cameras.') || p.startsWith('poeSwitch.')) ? { legacy: true } : {}), ...(by ? { by } : {}), ...(loaded.ignored[p] ? { ignored: loaded.ignored[p] } : {}) }];
     }),
   );
 }

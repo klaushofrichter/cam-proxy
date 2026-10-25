@@ -15,6 +15,8 @@ export interface ProfileView {
   warnings: ProfileWarning[];
   firewall: { tool: 'ufw' | 'nft'; lines: string[] };
   perCameraBytes: number | null;
+  // A budget setting a higher layer replaces (profile.storageGB or storage.maxBytes), and why.
+  ignored?: Record<string, string>;
 }
 export interface ProfileDraft { name: string; cameras: string; storageGB: string; firewall: 'ufw' | 'nft' }
 
@@ -38,6 +40,8 @@ export function profileRows(v: ProfileView): { key: string; label: string; text:
   if (hw.cpuTempC !== null) rows.push({ key: 'temp', label: 'CPU temperature', text: `${hw.cpuTempC.toFixed(1)} °C` });
   return rows;
 }
+
+export const ignoredNotes = (v: ProfileView): string[] => Object.entries(v.ignored ?? {}).map(([p, why]) => `${p} (config.json) is ${why}`);
 
 export function warningText(w: ProfileWarning, v: ProfileView): string {
   if (w === 'profile_ftp_ports') {

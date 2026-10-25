@@ -3,7 +3,7 @@
   import { api, ApiError } from '../lib/api';
   import { refreshTick } from '../lib/state';
   import { lockedWhy, rights } from '../lib/rights';
-  import { draftOf, profileBody, profileProblem, profileRows, showOnHome, warningText, type ProfileDraft, type ProfileView } from '../lib/profile';
+  import { draftOf, ignoredNotes, profileBody, profileProblem, profileRows, showOnHome, warningText, type ProfileDraft, type ProfileView } from '../lib/profile';
   import LockedNote from './LockedNote.svelte';
 
   // The proxy profile (cams-admin spec 2026-10-25-proxy-profile-design §0).
@@ -58,6 +58,7 @@
     <h3>{home && !view.set ? "Set this proxy's profile" : `Profile${view.name ? ` · ${view.name}` : ''}`}</h3>
     {#if !view.set}<p class="muted small" data-testid="profile-unset">How many cameras this proxy can hold, and how much storage it may use. Until it is set, it takes no camera from a move beyond the cameras it holds. Nothing checks the values against the hardware: that is your call.</p>{/if}
     {#each view.warnings as w (w)}<p class="warn small" role="alert" data-testid="profile-warning" data-kind={w}>{warningText(w, view)}</p>{/each}
+    {#each ignoredNotes(view) as n (n)}<p class="muted small" data-testid="profile-ignored">{n}</p>{/each}
     <dl>
       {#each profileRows(view) as r (r.key)}<dt>{r.label}</dt><dd data-testid="profile-row-{r.key}">{r.text}</dd>{/each}
     </dl>

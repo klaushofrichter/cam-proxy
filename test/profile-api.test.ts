@@ -72,12 +72,39 @@ describe('PUT /control/profile', () => {
     await bad({ cameras: null }, 'cameras: required (the profile is set with its camera count)');
     expect(JSON.stringify(overrides())).toBe(before);
   });
-  it('storageGB and storage.maxBytes: one of them', async () => {
-    expect((await request(p.base).put('/control/config').set(admin()).send({ storage: { maxBytes: 10 ** 10 } })).status).toBe(400);
-    const r = await request(p.base).put('/control/profile').set(admin()).send({ storageGB: null });
-    expect(r.status).toBe(200);
+  it('storageGB replaces a storage.maxBytes override (one change, one record); the profile view names what it ignores', async () => {
+    expect((await request(p.base).put('/control/profile').set(admin()).send({ storageGB: null })).status).toBe(200);
     expect((await request(p.base).put('/control/config').set(admin()).send({ storage: { maxBytes: 10 ** 10 } })).status).toBe(200);
-    const again = await request(p.base).put('/control/profile').set(admin()).send({ storageGB: 50 });
-    expect(again.body).toEqual({ error: 'invalid', detail: 'profile.storageGB: set either profile.storageGB or storage.maxBytes, not both' });
+    const n = p.proxy.audit.list({ actions: ['config-change'], limit: 500 }).records.length;
+    const r = await request(p.base).put('/control/profile').set(admin()).send({ storageGB: 50 });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ storageGB: 50, ignored: {} });
+    expect(overrides().storage?.maxBytes).toBeUndefined();
+    const recs = p.proxy.audit.list({ actions: ['config-change'], limit: 500 }).records;
+    expect(recs.length).toBe(n + 1);
+    expect((recs[0].cam_proxy as { changes: { key: string }[] }).changes.map((c) => c.key).sort()).toEqual(['profile.storageGB', 'storage.maxBytes', 'storage.maxPercent']);
+    // The Settings view says what is ignored (here: nothing).
+    const v = (await request(p.base).get('/control/config').set(admin())).body as Record<string, { ignored?: string }>;
+    expect(v['storage.maxBytes'].ignored).toBeUndefined();
+  });
+});
+
+// een, the mini PC and the Pi as they are: storage.maxBytes in config.json, the profile set here.
+describe('PUT /control/profile over a storage.maxBytes from config.json', () => {
+  let q: Awaited<ReturnType<typeof startProxy>>;
+  beforeAll(async () => {
+    q = await startProxy(sim, { settings: { storage: { maxBytes: 5 * 10 ** 9 } } });
+  });
+  afterAll(async () => {
+    await q?.proxy.stop();
+  });
+  it('storageGB becomes the budget; config.json storage.maxBytes is ignored, and both views say so', async () => {
+    const r = await request(q.base).put('/control/profile').set(admin()).send({ cameras: 1, storageGB: 7 });
+    expect(r.status).toBe(200);
+    expect(r.body.storageGB).toBe(7);
+    expect(r.body.ignored).toEqual({ 'storage.maxBytes': 'ignored: profile.storageGB (overrides.json) is the storage budget' });
+    expect(q.proxy.storage.budget()).toBe(Math.min(7e9, Math.floor((r.body.storage.diskBytes * 85) / 100)));
+    const v = (await request(q.base).get('/control/config').set(admin())).body as Record<string, { ignored?: string; source: string }>;
+    expect(v['storage.maxBytes']).toMatchObject({ source: 'file', ignored: 'ignored: profile.storageGB (overrides.json) is the storage budget' });
   });
 });

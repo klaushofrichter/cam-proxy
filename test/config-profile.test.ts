@@ -167,9 +167,13 @@ describe('the FTP passive range from the profile', () => {
 });
 
 describe('profile.storageGB: the size budget', () => {
-  it('replaces storage.maxBytes; both set is a config error; maxPercent still limits', () => {
+  it('replaces storage.maxBytes; both in one file is a config error naming it; maxPercent still limits', () => {
     write('config.json', { cameras: cams(1), profile: { storageGB: 600 }, storage: { maxBytes: 10 ** 12 } });
-    expect(err(load)).toBe('profile.storageGB: set either profile.storageGB or storage.maxBytes, not both');
+    expect(err(load)).toBe('profile.storageGB: config.json sets both profile.storageGB and storage.maxBytes; keep one in config.json (profile.storageGB is the budget, storage.maxBytes the older way to set it)');
+    write('config.json', { cameras: cams(1) });
+    write('data/overrides.json', { profile: { storageGB: 600 }, storage: { maxBytes: 10 ** 12 } });
+    expect(err(load)).toBe('profile.storageGB: overrides.json sets both profile.storageGB and storage.maxBytes; keep one in overrides.json (profile.storageGB is the budget, storage.maxBytes the older way to set it)');
+    write('data/overrides.json', {});
     write('config.json', { cameras: cams(1), profile: { storageGB: 600 } });
     const c = load().config;
     expect(c.storage.maxPercent).toBe(85);
@@ -181,6 +185,26 @@ describe('profile.storageGB: the size budget', () => {
     expect(budgetOf(load().config, 10 ** 12)).toBe(850 * 10 ** 9);
     write('config.json', { cameras: cams(1), storage: { maxBytes: 5 * 10 ** 9 } });
     expect(budgetOf(load().config, 10 ** 12)).toBe(5 * 10 ** 9);
+  });
+
+  it('the higher layer wins: profile.storageGB in overrides.json replaces storage.maxBytes from config.json, which is ignored', () => {
+    write('config.json', { cameras: cams(1), storage: { maxBytes: 5 * 10 ** 9 } });
+    write('data/overrides.json', { profile: { storageGB: 600 } });
+    const l = load();
+    expect(l.config.storage.maxBytes).toBeUndefined();
+    expect(l.config.storage.maxPercent).toBe(85);
+    expect(budgetOf(l.config, 10 ** 12)).toBe(600 * 10 ** 9);
+    expect(l.ignored).toEqual({ 'storage.maxBytes': 'ignored: profile.storageGB (overrides.json) is the storage budget' });
+    // And the other way round: storage.maxBytes set here wins over config.json's profile.storageGB.
+    write('config.json', { cameras: cams(1), profile: { storageGB: 600 } });
+    write('data/overrides.json', { storage: { maxBytes: 5 * 10 ** 9 } });
+    const m = load();
+    expect(m.config.profile.storageGB).toBeUndefined();
+    expect(budgetOf(m.config, 10 ** 12)).toBe(5 * 10 ** 9);
+    expect(m.ignored).toEqual({ 'profile.storageGB': 'ignored: storage.maxBytes (overrides.json) is the storage budget' });
+    // Neither twice: nothing ignored.
+    write('data/overrides.json', {});
+    expect(load().ignored).toEqual({});
   });
 });
 
