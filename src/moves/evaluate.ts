@@ -5,6 +5,7 @@ import { lookup } from 'node:dns/promises';
 import { connect, isIP } from 'node:net';
 import { pinCheck, splitHost } from '../camera/http';
 import { ConfigError, planOverrides, type Loaded } from '../config/load';
+import { ftpOn, heldCameras, passivePorts, PORTS_PER_CAMERA, profileCameras, profileSet } from '../config/profile';
 import type { MoveOfferArgs } from '../fleet/command-args';
 import { fingerprintOf, type SiteCa } from '../tls/ca';
 import { issuedBy } from '../tls/leaf';
@@ -142,8 +143,16 @@ export async function evaluate(deps: EvaluateDeps, args: MoveOfferArgs): Promise
   // protocol and user are the offered ones) is free; anything else is taken.
   const left = cfg.cameras[id];
   if (left && !(left.moved && !active.some((r) => r.camera === id) && left.host === args.camera.host && left.protocol === args.camera.protocol && left.user === args.camera.user)) return no('id_taken', `camera id ${id} is in use here`);
-  const running = cfg.cameraOrder.filter((c) => !cfg.cameras[c]?.moved).length;
-  if (cfg.moves.maxCameras !== undefined && running >= cfg.moves.maxCameras) return no('camera_limit', `${running} of ${cfg.moves.maxCameras} cameras (moves.maxCameras)`);
+  // The profile (cams-admin spec 2026-10-25-proxy-profile-design §1): the
+  // cameras it holds (a hidden moved one does not count) against its
+  // capacity; without a profile that is what it holds (at least 1).
+  const held = heldCameras(cfg);
+  const most = profileCameras(cfg);
+  if (held >= most) return no('camera_limit', `${held} of ${most} cameras (${profileSet(cfg) ? 'profile.cameras' : "no profile set: set this proxy's profile"})`);
+  // With FTP on here, 10 passive ports per camera after the move (a range set
+  // by hand may be smaller than the profile needs: profile_ftp_ports).
+  const ports = passivePorts(cfg.ftp.passive);
+  if (ftpOn(cfg) && ports < PORTS_PER_CAMERA * (held + 1)) return no('incompatible', `ftp.passive: ${ports} ports (${cfg.ftp.passive}) for ${held + 1} cameras; at least ${PORTS_PER_CAMERA} per camera (profile_ftp_ports)`);
   try {
     // The camera's password comes with the move (the secrets step): not needed here yet.
     planOverrides(loaded, { cameras: { [id]: cameraNode(args) } }, { passwordFromMove: [id] });

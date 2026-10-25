@@ -257,7 +257,9 @@ describe('a hostile cams-admin with every P3 entry allowed', () => {
     const f0 = failures();
     const leaves = leafPaths(SETTINGS, '', ['cam1']);
     const set = Object.fromEntries(DENIED.map((d) => d.replace('cameras.*.', 'cameras.cam1.')).map((d) => [leaves.find((l) => l === d || l.startsWith(`${d}.`))!, 1]).filter(([l]) => l));
-    expect(Object.keys(set).length).toBe(DENIED.length);
+    // `moves` has no setting of its own any more (moves.maxCameras is read as profile.cameras).
+    expect(Object.keys(set).length).toBe(DENIED.length - 1);
+    expect(Object.keys(set).some((k) => k.startsWith('profile.'))).toBe(true);
     const r = await done('config.set', { v: 1, dryRun: false, baseRevision: rev(), set });
     expect(r).toMatchObject({ status: 'failed', code: 'not_remote_settable' });
     expect((r.result.paths as { code: string }[]).length).toBe(Object.keys(set).length);

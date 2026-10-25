@@ -32,6 +32,18 @@ interface Unit { ts: number; cam: string; files: { path: string; bytes: number }
 
 const unitBytes = (u: Unit) => u.files.reduce((n, f) => n + f.bytes, 0);
 
+// The size budget on a disk of `diskSize` bytes: storage.maxBytes, else
+// profile.storageGB (GB = 10^9 bytes, cams-admin spec
+// 2026-10-25-proxy-profile-design §0) within storage.maxPercent of the disk,
+// else storage.maxPercent of the disk.
+export const PROFILE_GB = 1e9;
+export function budgetOf(c: Config, diskSize: number): number {
+  const s = c.storage;
+  if (s.maxBytes !== undefined) return s.maxBytes;
+  const percent = Math.floor((diskSize * (s.maxPercent ?? 85)) / 100);
+  return c.profile.storageGB !== undefined ? Math.min(c.profile.storageGB * PROFILE_GB, percent) : percent;
+}
+
 // Each camera's share of the budget in bytes (spec 2026-10-05-multi-camera-host-design
 // §8.1, Ruling P2-2): its sharePercent, or an equal part of what the shares leave.
 export function shareBytes(c: Config, budget: number): Map<string, number> {
@@ -89,8 +101,7 @@ export class Storage extends EventEmitter {
   }
 
   budget(): number {
-    const s = this.d.config().storage;
-    return s.maxBytes ?? Math.floor((this.disk().size * (s.maxPercent ?? 85)) / 100);
+    return budgetOf(this.d.config(), this.disk().size);
   }
 
   // Walks <dataDir>/<kind>/<cam>/YYYY/MM/DD once (start, and when asked).

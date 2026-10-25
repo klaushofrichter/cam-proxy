@@ -43,7 +43,7 @@ const fakeCa: SiteCa = { certPem: '', keyPem: '', fingerprint: '', notAfter: 0, 
 
 function fixture(o: { config?: object; env?: Record<string, string>; allowed?: boolean; ca?: SiteCa | null; free?: number; usage?: { stills: number; previews: number; clips: number; used?: number; budget?: number }; connect?: boolean; probe?: number; journal?: Pick<MoveJournal, 'active' | 'save'> } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'camproxy-offer-'));
-  writeFileSync(join(dir, 'config.json'), JSON.stringify({ cameras: [{ id: 'cam3', host: '192.0.2.3' }], tls: SITE, storage: { minFreeBytes: 1 * GB }, ...(o.config ?? {}) }));
+  writeFileSync(join(dir, 'config.json'), JSON.stringify({ cameras: [{ id: 'cam3', host: '192.0.2.3' }], tls: SITE, storage: { minFreeBytes: 1 * GB }, profile: { cameras: 4 }, ...(o.config ?? {}) }));
   const loaded = loadConfig(o.env ?? SECRETS, { cwd: dir });
   const journal = new MoveJournal(join(dir, 'admin', 'moves'));
   const connects: [string, number][] = [];
@@ -101,22 +101,41 @@ describe('refusals, in the plan order', () => {
     expect(await evaluate(fixture({ config: left({ user: 'admin2' }) }).deps, offer())).toEqual({ accept: false, reason: 'id_taken', detail: 'camera id cam9 is in use here' });
     expect((await evaluate(fixture({ config: left({}) }).deps, offer())).accept).toBe(true);
   });
-  it('camera_limit counts the cameras that run', async () => {
-    expect(await evaluate(fixture({ config: { moves: { maxCameras: 1 } } }).deps, offer())).toEqual({ accept: false, reason: 'camera_limit', detail: '1 of 1 cameras (moves.maxCameras)' });
-    expect((await evaluate(fixture({ config: { moves: { maxCameras: 2 } } }).deps, offer())).accept).toBe(true);
+  it('camera_limit: the capacity from the profile, counting the cameras that run', async () => {
+    expect(await evaluate(fixture({ config: { profile: { cameras: 1 } } }).deps, offer())).toEqual({ accept: false, reason: 'camera_limit', detail: '1 of 1 cameras (profile.cameras)' });
+    expect((await evaluate(fixture({ config: { profile: { cameras: 2 } } }).deps, offer())).accept).toBe(true);
+    // The old name reads the same.
+    expect(await evaluate(fixture({ config: { profile: undefined, moves: { maxCameras: 1 } } }).deps, offer())).toEqual({ accept: false, reason: 'camera_limit', detail: '1 of 1 cameras (profile.cameras)' });
     // A hidden moved camera does not count.
-    const cfg = { moves: { maxCameras: 1 }, cameras: [{ id: 'cam3', host: '192.0.2.3', moved: 'mv_AAAAAAAAAAAAAAAAAAAA' }] };
+    const cfg = { profile: { cameras: 1 }, cameras: [{ id: 'cam3', host: '192.0.2.3', moved: 'mv_AAAAAAAAAAAAAAAAAAAA' }] };
     expect((await evaluate(fixture({ config: cfg }).deps, offer())).accept).toBe(true);
+  });
+  it('camera_limit without a profile: the default is the cameras held (at least 1)', async () => {
+    expect(await evaluate(fixture({ config: { profile: undefined } }).deps, offer())).toEqual({ accept: false, reason: 'camera_limit', detail: "1 of 1 cameras (no profile set: set this proxy's profile)" });
+    // A proxy that holds none takes its first camera.
+    const empty = { profile: undefined, cameras: [{ id: 'cam3', host: '192.0.2.3', moved: 'mv_AAAAAAAAAAAAAAAAAAAA' }] };
+    expect((await evaluate(fixture({ config: empty }).deps, offer())).accept).toBe(true);
+  });
+  it('the FTP passive ports: with FTP on here, 10 per camera after the move, else refused', async () => {
+    const env = { ...SECRETS, CAMPROXY_FTP_PASSWORD: 'f' };
+    const cams = [{ id: 'cam3', host: '192.0.2.3', ftp: { enabled: true } }];
+    // een on 2026-10-25: room for 3 cameras, 10 ports set by hand.
+    expect(await evaluate(fixture({ env, config: { cameras: cams, profile: { cameras: 3 }, ftp: { passive: '30000-30009' } } }).deps, offer())).toEqual({ accept: false, reason: 'incompatible', detail: 'ftp.passive: 10 ports (30000-30009) for 2 cameras; at least 10 per camera (profile_ftp_ports)' });
+    expect((await evaluate(fixture({ env, config: { cameras: cams, profile: { cameras: 3 }, ftp: { passive: '30000-30019' } } }).deps, offer())).accept).toBe(true);
+    // Derived from the profile: always room.
+    expect((await evaluate(fixture({ env, config: { cameras: cams, profile: { cameras: 2 } } }).deps, offer())).accept).toBe(true);
+    // FTP off here: no port needs.
+    expect((await evaluate(fixture({ config: { profile: { cameras: 3 }, ftp: { passive: '30000-30009' } } }).deps, offer())).accept).toBe(true);
   });
   it('incompatible when the settings do not make a valid camera node', async () => {
     const o = offer({ settings: { stills: { intervalS: 7 } } });
     expect(await evaluate(fixture().deps, o)).toEqual({ accept: false, reason: 'incompatible', detail: 'cameras.cam9.stills.intervalS: must be one of 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60' });
   });
-  it('incompatible names the configuration problem: too few FTP passive ports', async () => {
-    const config = { cameras: [{ id: 'cam3', host: '192.0.2.3', ftp: { enabled: true } }], ftp: { passive: '30000-30009' } };
+  it('incompatible names the configuration problem: two cameras with one FTP user', async () => {
+    const config = { cameras: [{ id: 'cam3', host: '192.0.2.3', ftp: { enabled: true, user: 'cam9' } }] };
     const env = { ...SECRETS, CAMPROXY_FTP_PASSWORD: 'f' };
     const o = offer({ settings: { ftp: { enabled: true } } });
-    expect(await evaluate(fixture({ config, env }).deps, o)).toEqual({ accept: false, reason: 'incompatible', detail: 'ftp.passive: 10 ports for 2 cameras with FTP; at least 10 per camera' });
+    expect(await evaluate(fixture({ config, env }).deps, o)).toEqual({ accept: false, reason: 'incompatible', detail: 'cameras: cam3 and cam9 both use the FTP user cam9' });
   });
   it('a new camera onto a target without a shared camera password: its password comes with the move', async () => {
     // Only cam3's own password and no CAMPROXY_CAMERA_PASSWORD: cam9's arrives later (the secrets step).
@@ -243,13 +262,13 @@ describe('accepting writes the target record (B4, B32)', () => {
   });
   it('a refusal answers its reason and detail (strict contract) and audits both', async () => {
     const audits: { message: string; details: Record<string, unknown> }[] = [];
-    const h = moveHandlers({ emit: () => undefined, audit: { write: (r: never) => void audits.push(r) } as never, evaluate: fixture({ config: { moves: { maxCameras: 1 } } }).deps })['move.offer'];
+    const h = moveHandlers({ emit: () => undefined, audit: { write: (r: never) => void audits.push(r) } as never, evaluate: fixture({ config: { profile: { cameras: 1 } } }).deps })['move.offer'];
     const done = await h(offer(), {} as never);
-    expect(done).toEqual({ status: 'ok', result: { accept: false, reason: 'camera_limit', detail: '1 of 1 cameras (moves.maxCameras)' } });
+    expect(done).toEqual({ status: 'ok', result: { accept: false, reason: 'camera_limit', detail: '1 of 1 cameras (profile.cameras)' } });
     const v = strict('commands/move.offer.result');
     expect(v(done.result), why(v)).toBe(true);
-    expect(audits[0].details).toMatchObject({ accept: false, reason: 'camera_limit', detail: '1 of 1 cameras (moves.maxCameras)' });
-    expect(audits[0].message).toContain('rejected (camera_limit: 1 of 1 cameras (moves.maxCameras))');
+    expect(audits[0].details).toMatchObject({ accept: false, reason: 'camera_limit', detail: '1 of 1 cameras (profile.cameras)' });
+    expect(audits[0].message).toContain('rejected (camera_limit: 1 of 1 cameras (profile.cameras))');
     expect(JSON.stringify([done, audits])).not.toContain(TOKEN);
   });
   it('the strict contract: detail 1..300 characters on a refusal only', () => {

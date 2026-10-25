@@ -116,7 +116,9 @@
   "tls": {
     "cameraCerts": true
   },
-  "moves": {},
+  "profile": {
+    "firewall": "ufw"
+  },
   "ntp": {},
   "camsAdmin": {
     "keyFile": "admin/key.json",

@@ -293,15 +293,34 @@
         }
       }
     },
-    "moves": {
+    "profile": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "maxCameras": {
+        "name": {
+          "type": "string",
+          "pattern": "^[^\\u0000-\\u001f\\u007f]{1,60}$",
+          "description": "the hardware as people call it, up to 60 characters (shown in cams-admin)"
+        },
+        "cameras": {
           "type": "integer",
           "minimum": 1,
           "maximum": 64,
-          "description": "most cameras this proxy may hold: a camera move onto it is refused (camera_limit) beyond that; with FTP on, ftp.passive needs 10 ports per camera (unset, its default follows; at most 10 cameras then). Local only"
+          "description": "the most cameras this proxy holds (1 to 10 while FTP is on): a camera move onto it is refused (camera_limit) beyond that; with FTP on and ftp.passive unset, 30000 up with 10 ports per camera. Local only"
+        },
+        "storageGB": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000,
+          "description": "the storage this proxy may use, GB (10^9 bytes): the size budget in place of storage.maxBytes; storage.maxPercent and storage.minFreeBytes still limit it. Local only"
+        },
+        "firewall": {
+          "type": "string",
+          "enum": [
+            "ufw",
+            "nft"
+          ],
+          "description": "the host's firewall tool: which firewall lines the profile shows for the cameras with FTP (nothing runs them)"
         }
       }
     },
@@ -990,6 +1009,19 @@
         }
       },
       "description": "legacy: one camera (read as cameras: [camera]); use cameras"
+    },
+    "moves": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "deprecated: use profile",
+      "properties": {
+        "maxCameras": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64,
+          "description": "deprecated: the old name of profile.cameras (both set must be equal)"
+        }
+      }
     }
   }
 }

@@ -135,7 +135,7 @@ function world(title: string, tests: () => void): void {
       T = await startMultiProxy([], {
         dir: tdir, extra: [{ id: 'cam1', host: '' }], env: { CAMPROXY_CAMERA_PASSWORD: 'not-the-camera-pw', CAMPROXY_FTP_PASSWORD: TARGET_FTP_PASSWORD },
         proxy: { ...timing, moves: { retryMs: 200, retryCapMs: 1000 } },
-        settings: { tls: TLS('u'), camsAdmin: { url: fakeT.url }, ftp: await ftp(targetFtp) },
+        settings: { tls: TLS('u'), camsAdmin: { url: fakeT.url }, profile: { cameras: 2 }, ftp: await ftp(targetFtp) },
       });
       await until(() => fakeS.open() === 1 && fakeT.open() === 1 && S.proxy.cameras.get('cam3')!.status.state().online, 30_000);
       await S.proxy.certs!.tick();

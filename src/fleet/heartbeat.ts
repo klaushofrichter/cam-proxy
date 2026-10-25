@@ -1,4 +1,5 @@
 import type { HealthSummary } from '../health/summary';
+import type { ProfileReport } from '../health/profile';
 
 // The heartbeat body (spec 2026-10-06-cams-admin-phase1-design §8.5, §9.3):
 // the health summary exactly as GET /api/local/health has it, the proxy
@@ -45,17 +46,22 @@ function info(i: HeartbeatProxyInfo): HeartbeatProxyInfo {
   };
 }
 
-export function buildHeartbeat(summary: HealthSummary, proxy: HeartbeatProxyInfo, maxBytes = HEARTBEAT_MAX_BYTES): { body: Record<string, unknown>; truncated: boolean; bytes: number } {
+// `profile` (cams-admin spec 2026-10-25-proxy-profile-design §2, optional):
+// the proxy profile report, already within the contract's bounds; kept when
+// the body is truncated (it is small).
+export function buildHeartbeat(summary: HealthSummary, proxy: HeartbeatProxyInfo, maxBytes = HEARTBEAT_MAX_BYTES, profile?: ProfileReport | null): { body: Record<string, unknown>; truncated: boolean; bytes: number } {
   const s = clamp(summary);
   s.version = s.version.slice(0, VERSION_MAX);
   const p = info(proxy);
-  const full = { summary: s, proxy: p, truncated: false };
+  const extra = profile ? { profile } : {};
+  const full = { summary: s, proxy: p, truncated: false, ...extra };
   const text = JSON.stringify(full);
   if (Buffer.byteLength(text) <= maxBytes) return { body: full, truncated: false, bytes: Buffer.byteLength(text) };
   const short = {
     summary: { schema: s.schema, generatedAt: s.generatedAt, version: s.version, ok: s.ok, problemCount: s.problemCount, items: s.items, cameras: s.cameras.map((c) => ({ camera: c.camera, items: c.items })) },
     proxy: p,
     truncated: true,
+    ...extra,
   };
   return { body: short, truncated: true, bytes: Buffer.byteLength(JSON.stringify(short)) };
 }
