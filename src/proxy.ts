@@ -16,7 +16,7 @@ import { tlsApi } from './api/tls-api';
 import { CaError, siteCa, writeSecret, type SiteCa } from './tls/ca';
 import { CameraCerts, RotateBusyError, type TlsView } from './tls/camera-certs';
 import { issuedBy, issueLeaf, leafOf, renewalDue, type Leaf } from './tls/leaf';
-import { pushCertificate } from './tls/push';
+import { pushCertificate, type PushResult } from './tls/push';
 import { servedCertificate, type Served } from './tls/served';
 import type { CameraTrust } from './camera/client';
 import type { StatusPoller } from './camera/status';
@@ -78,6 +78,7 @@ import { MoveTarget } from './moves/target';
 import { CopyRunner } from './moves/copier';
 import { capturedMark } from './moves/captured';
 import { purgeExcept, removeImported } from './moves/purge';
+import type { MoveEvent } from './moves/types';
 import { cameraPasswordStore } from './config/camera-passwords';
 import { verifyFtp } from './fleet/camera-commands';
 import { availableParallelism, loadavg } from 'os';
@@ -409,13 +410,17 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     logger.warn({ from, to: ca.fingerprint }, 'site_ca_rotated');
     return { from, to: ca.fingerprint };
   };
+  // The Certificates card and the health item: shown with tls.site, or with
+  // camera trust kept from one; a camera without a state is 'none'.
+  const tlsInPlay = () => !!running.tls.site || !!certs;
+  const certStateOf = (id: string) => certs?.state(id) ?? { mode: 'none' as const, servername: null, fingerprint: null, notAfter: null, lastPush: null, problem: null };
   const tlsView = (): TlsView => ({
     site: running.tls.site ?? null,
     caFingerprint: ca?.fingerprint ?? null,
     caNotAfter: ca?.notAfter ?? null,
     proxy: proxyLeaf ? { servername: proxyName(), fingerprint: proxyLeaf.fingerprint, notAfter: proxyLeaf.notAfter } : null,
-    cameras: running.tls.site || certs ? cams.list().map((w) => ({ id: w.id, ...(certs?.state(w.id) ?? { mode: 'none' as const, servername: null, fingerprint: null, notAfter: null, lastPush: null, problem: null }) })) : [],
-    problems: running.tls.site || certs ? tlsProblems() : [],
+    cameras: tlsInPlay() ? cams.list().map((w) => ({ id: w.id, ...certStateOf(w.id) })) : [],
+    problems: tlsInPlay() ? tlsProblems() : [],
   });
 
 
@@ -856,7 +861,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       reading: hostMonitor.reading(),
       archive: archive.health(),
       // The site CA (spec §10.5): only with tls.site (the Pi has no item).
-      certificates: running.tls.site || certs ? { proxy: proxyLeaf ? { notAfter: proxyLeaf.notAfter } : null, cameras: cams.ids().map((id) => ({ id, state: certs?.state(id) ?? { mode: 'none' as const, servername: null, fingerprint: null, notAfter: null, lastPush: null, problem: null } })), problems: tlsProblems() } : null,
+      certificates: tlsInPlay() ? { proxy: proxyLeaf ? { notAfter: proxyLeaf.notAfter } : null, cameras: cams.ids().map((id) => ({ id, state: certStateOf(id) })), problems: tlsProblems() } : null,
     });
   };
 
@@ -871,12 +876,24 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   access.uiConfigAgainst = (req) => uiConfigAgainst(loaded, req);
   const journal = new Journal(join(loaded.config.server.dataDir, 'admin', 'commands.json'), Date.now, logger);
   const replayGuard = new ReplayGuard({ file: join(loaded.config.server.dataDir, 'admin', 'replay.json'), log: logger, slackMs: opts.camsAdmin?.replaySlackMs });
+  // Shared by the command and move wiring below (camsAdmin is made further down;
+  // these read it only when called): the proxy's id once enrolled ('' before),
+  // an event to cams-admin, the CPU over its core count, the storage figures a
+  // move weighs, and the push answer while the site CA can't push.
+  const proxyIdNow = () => camsAdmin.keyInfo()?.proxyId ?? '';
+  const emitToAdmin = (e: MoveEvent) => camsAdmin.emitEvent(e);
+  const cpuBusy = () => loadavg()[0] > availableParallelism();
+  const moveUsage = () => {
+    const u = storage.usage();
+    return { stills: u.stills.bytes, previews: u.previews.bytes, clips: u.clips.bytes, used: u.used, budget: u.budget };
+  };
+  const caNotReady = (detail = caProblem ?? 'the site CA is not ready'): PushResult => ({ outcome: 'failed', served: null, detail, tookMs: 0 });
   // The P3 handlers join once the control API's dependencies exist (below).
   const commandHandlers: Record<string, Handler> = {};
   const commandRunner = new CommandRunner({
     handlers: commandHandlers,
     replay: replayGuard,
-    proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
+    proxyId: proxyIdNow,
     serverKeys: () => camsAdmin.keyInfo()?.serverKeys ?? [],
     policy: commandPolicy, journal, tokens: tokenStore, audit, log: logger,
   });
@@ -981,7 +998,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     journal: moveJournal,
     audit,
     inventory: moveInventory,
-    busy: () => storage.paused() || loadavg()[0] > availableParallelism(),
+    busy: () => storage.paused() || cpuBusy(),
     password: (cam) => cameraPassword(loaded.secrets, cam),
     cache: manifestCache,
     // A valid move token from another address (B46): the move fails (journalled), cams-admin hears it once.
@@ -1007,7 +1024,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   const moveSource = new MoveSource({
     journal: moveJournal,
     audit,
-    emit: (e) => camsAdmin.emitEvent(e),
+    emit: emitToAdmin,
     retention: () => running.retention,
     running: () => running,
     loaded: () => loaded,
@@ -1017,7 +1034,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     inventory: moveInventory,
     certs: () => certs,
     refreshManifest: (id) => void refreshManifest({ journal: moveJournal, inventory: moveInventory }, id, manifestCache),
-    proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
+    proxyId: proxyIdNow,
     end: {
       ...moveEnd,
       dropManifests: (id) => manifestCache.forget(id),
@@ -1025,7 +1042,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       // The source's own stored leaf, pushed like "Push now"; then the expected
       // leaf's check reads what the camera serves (the client trusts it again).
       pushOwnLeaf: async (cam) => {
-        if (!certs || !running.tls.site) return { outcome: 'failed' as const, served: null, detail: caProblem ?? 'the site CA is not ready', tookMs: 0 };
+        if (!certs || !running.tls.site) return caNotReady();
         const own = certs.leaf(cam);
         if (own) certs.stageLeaf(cam, own);
         const r = await certs.pushNow(cam, { user: 'cams-admin' });
@@ -1041,7 +1058,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   const moveTarget = new MoveTarget({
     journal: moveJournal,
     audit,
-    emit: (e) => camsAdmin.emitEvent(e),
+    emit: emitToAdmin,
     retention: () => running.retention,
     ca: () => ca,
     site: () => running.tls.site,
@@ -1053,13 +1070,13 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     },
     passwords: movePasswords,
     stageLeaf: (cam, leaf) => certs?.stageLeaf(cam, leaf),
-    pushLeaf: (cam, leaf) => (certs && running.tls.site ? certs.pushLeaf(cam, leaf, { user: 'cams-admin' }) : Promise.resolve({ outcome: 'failed' as const, served: null, detail: caProblem ?? 'the site CA is not ready', tookMs: 0 })),
+    pushLeaf: (cam, leaf) => (certs && running.tls.site ? certs.pushLeaf(cam, leaf, { user: 'cams-admin' }) : Promise.resolve(caNotReady())),
     ftp: ftpHere,
     eventOpen: (cam) => openEvents(catalog, cam).length > 0,
     // The copier (Task 9), one per move; stop() ends it too.
     startCopy: (id) => moveCopier.start(id),
     stopCopy: (id) => moveCopier.stop(id),
-    proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
+    proxyId: proxyIdNow,
     timing: opts.moves,
     end: { ...moveEnd, dataDir: running.server.dataDir, removeImported: (r) => removeImported({ catalog, dataDir: running.server.dataDir, storage }, r), captured: (cam, now) => capturedMark(catalog, cam, now) },
   });
@@ -1073,14 +1090,14 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   const moveCopier = new CopyRunner({
     journal: moveJournal,
     audit,
-    emit: (e) => camsAdmin.emitEvent(e),
+    emit: emitToAdmin,
     catalog,
     dataDir: running.server.dataDir,
     paused: () => storage.paused(),
-    cpuBusy: () => loadavg()[0] > availableParallelism(),
+    cpuBusy,
     space: {
       loaded: () => loaded,
-      usage: () => { const u = storage.usage(); return { stills: u.stills.bytes, previews: u.previews.bytes, clips: u.clips.bytes, used: u.used, budget: u.budget }; },
+      usage: moveUsage,
       freeBytes: () => storage.diskSpace().free,
       evictedAt: () => storageEvictedAt,
     },
@@ -1088,16 +1105,16 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     setPhase: (r, phase, o) => moveTarget.setPhase(r, phase, o),
     // A return waiting for room (step 4 Task 10): move.phase copying no_space.
     notePaused: (r, paused) => moveTarget.notePaused(r, paused),
-    proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
+    proxyId: proxyIdNow,
   });
   // The copy back after a cancel after the switch-over (step 4 Task 9): the
   // return's source here (the new proxy), its target on the original (Task 10).
   const moveReturns = new MoveReturns({
     journal: moveJournal,
     audit,
-    emit: (e) => camsAdmin.emitEvent(e),
+    emit: emitToAdmin,
     inventory: moveInventory,
-    proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
+    proxyId: proxyIdNow,
     // The original's side (Task 10): the same copier, copy only.
     copy: moveCopier,
     setPhase: (r, phase, o) => moveTarget.setPhase(r, phase, o),
@@ -1167,7 +1184,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     // One camera's restart applies its own pending settings (cameras.<id>.*), nothing host-wide.
     restartCamera: (cam) => {
       const prefix = `cameras.${cam}.`;
-      for (const p of settingPaths(loaded.config)) if (p.startsWith(prefix) && needsRestart(p)) setPath(running as unknown as Record<string, unknown>, p, structuredClone(getPath(loaded.config, p)));
+      applySettings((p) => !(p.startsWith(prefix) && needsRestart(p)));
       return worker(cam).restart();
     },
     cameraReboot: (who, cam) => worker(cam).reboot.request(who),
@@ -1221,7 +1238,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     cameraNtp: (cam) => worker(cam).syncNtp(true),
     tls: {
       view: tlsView,
-      pushNow: (cam, who) => (certs && running.tls.site ? certs.pushNow(cam, who) : Promise.resolve({ outcome: 'failed' as const, served: null, detail: running.tls.site ? (caProblem ?? 'the site CA is not ready') : 'no site CA: tls.site is not set', tookMs: 0 })),
+      pushNow: (cam, who) => (certs && running.tls.site ? certs.pushNow(cam, who) : Promise.resolve(caNotReady(running.tls.site ? undefined : 'no site CA: tls.site is not set'))),
       rotate: () => (running.tls.site ? rotateCa() : null),
       clearTrust: (cam, who) => certs?.clearTrust(cam, who) ?? null,
       dropPrevious: (who) => certs?.dropPreviousCa(who) ?? false,
@@ -1236,18 +1253,18 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     cameraHandlers({ actions: controlDeps, cameraIds: () => cams.ids(), cameraName: controlDeps.cameraName, audit, restartProcess: () => controlDeps.restartProcess() }),
     // Camera moves (plan 2026-10-21-camera-move-cam-proxy): stubs until each task fills its handler in.
     moveHandlers({
-      emit: (e) => camsAdmin.emitEvent(e),
+      emit: emitToAdmin,
       audit,
       source: moveSource,
       target: moveTarget,
       returns: moveReturns,
-      proxyId: () => camsAdmin.keyInfo()?.proxyId ?? '',
+      proxyId: proxyIdNow,
       evaluate: {
         receiveAllowed: () => commandPolicy.effective().allow.includes('move.receive'),
         journal: moveJournal,
         loaded: () => loaded,
         ca: () => ca,
-        usage: () => { const u = storage.usage(); return { stills: u.stills.bytes, previews: u.previews.bytes, clips: u.clips.bytes, used: u.used, budget: u.budget }; },
+        usage: moveUsage,
         freeBytes: () => storage.diskSpace().free,
       },
     }),
@@ -1282,6 +1299,13 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // files stay, Ruling P2-6); an added camera gets a worker, its streams in
   // the running go2rtc (never a go2rtc restart) and FTP when it has it on.
   let reconciling: Promise<void> = Promise.resolve();
+  // A go2rtc made from the settings in effect, started; a camera's stream added to it (a failure logged).
+  const renewGo2rtc = () => {
+    go2rtc = makeGo2rtc();
+    go2rtcMadeWith = go2rtcSettings();
+    startGo2rtc();
+  };
+  const addStream = (w: CameraWorker) => go2rtc?.setStream(w.source()).catch((err: Error) => logger.warn({ cameraId: w.id, err: err.message }, 'go2rtc_add_failed'));
   const reconcile = (): Promise<void> =>
     (reconciling = reconciling.then(async () => {
       if (stopPromise) return;
@@ -1295,14 +1319,10 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         logger.info({ cameraId: w.id }, 'camera_removed');
       }
       for (const id of want.filter((x) => !cams.get(x))) {
-        if (!go2rtc && cameraConfig(running, id)?.stills.enabled) {
-          go2rtc = makeGo2rtc();
-          go2rtcMadeWith = go2rtcSettings();
-          startGo2rtc();
-        }
+        if (!go2rtc && cameraConfig(running, id)?.stills.enabled) renewGo2rtc();
         const w = makeWorker(id);
         cams.add(w);
-        if (w.cam().stills.enabled) await go2rtc?.setStream(w.source()).catch((err: Error) => logger.warn({ cameraId: id, err: err.message }, 'go2rtc_add_failed'));
+        if (w.cam().stills.enabled) await addStream(w);
         await w.start();
         logger.info({ cameraId: id }, 'camera_added');
       }
@@ -1334,11 +1354,9 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     // go2rtc's own settings changed, or stills went on or off everywhere: a new one.
     if (go2rtcSettings() !== go2rtcMadeWith || !go2rtc !== !makeGo2rtc()) {
       await go2rtc?.stop();
-      go2rtc = makeGo2rtc();
-      go2rtcMadeWith = go2rtcSettings();
-      startGo2rtc();
+      renewGo2rtc();
     } else {
-      for (const w of added) if (w.cam().stills.enabled) await go2rtc?.setStream(w.source()).catch((err: Error) => logger.warn({ cameraId: w.id, err: err.message }, 'go2rtc_add_failed'));
+      for (const w of added) if (w.cam().stills.enabled) await addStream(w);
     }
     await Promise.all([...kept.map((w) => w.restart()), ...added.map((w) => w.start())]);
     buildClips();
