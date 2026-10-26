@@ -1,5 +1,4 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
-import { rateLimit } from 'express-rate-limit';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { clipById, listClips } from '../catalog/clips';
@@ -13,6 +12,7 @@ import { DAY, dayStart } from '../time-units';
 import { clientIp } from './auth';
 import { cameraParam, workerOf } from './camera-param';
 import type { CameraRegistry } from '../cameras/registry';
+import { notFound, perMinute } from './respond';
 
 const run = promisify(execFile);
 export const COMPOSITIONS_PER_MINUTE = 10;
@@ -74,7 +74,7 @@ export function composeApi(d: {
       const chosen = b.span === undefined ? undefined : spanOf(b.span);
       if (chosen === null) return bad(res, 'span is {start, end} in unix ms, start before end, at most a day apart');
       const row = clipById(d.catalog, b.clipId as number);
-      if (!row || row.cam !== cam(res) || row.end_ts === null) return void res.status(404).json({ error: 'not_found' });
+      if (!row || row.cam !== cam(res) || row.end_ts === null) return notFound(res);
       clip = toSpan(row);
       // The span is the recording this clip is a copy of: it must overlap the
       // clip by at least 1 s (the same 1 s as "at least 1 s must remain"), so
@@ -92,10 +92,7 @@ export function composeApi(d: {
   };
   // Real requests past the input check, per client (ruling 45); dry runs
   // only count in the general limiter.
-  const limiter = rateLimit({
-    windowMs: 60_000, limit: COMPOSITIONS_PER_MINUTE, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' },
-    skip: (_req, res) => (res.locals.compose as Checked | undefined)?.b.dryRun === true,
-  });
+  const limiter = perMinute(COMPOSITIONS_PER_MINUTE, { skip: (_req, res) => (res.locals.compose as Checked | undefined)?.b.dryRun === true });
 
   r.post('/cameras/:cam/compositions', validate, limiter, (req, res) => {
     const { b, clip, span, maxS, w } = res.locals.compose as Checked;
@@ -160,9 +157,9 @@ export function composeApi(d: {
 
   r.get('/cameras/:cam/compositions/:file', (req, res) => {
     const m = /^([A-Za-z0-9_-]{22})(\.mp4)?$/.exec(String(req.params.file));
-    if (!m) return void res.status(404).json({ error: 'not_found' });
+    if (!m) return notFound(res);
     const job = d.composer.get(cam(res), m[1]);
-    if (!job) return void res.status(404).json({ error: 'not_found' });
+    if (!job) return notFound(res);
     if (!m[2]) return void res.json(job);
     const file = d.composer.file(cam(res), m[1]);
     if (!file) return void res.status(409).json({ error: 'not_ready' });
@@ -171,7 +168,7 @@ export function composeApi(d: {
   });
 
   r.delete('/cameras/:cam/compositions/:id', (req, res) => {
-    if (!d.composer.cancel(cam(res), String(req.params.id))) return void res.status(404).json({ error: 'not_found' });
+    if (!d.composer.cancel(cam(res), String(req.params.id))) return notFound(res);
     res.status(204).end();
   });
   return r;

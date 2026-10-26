@@ -1,5 +1,6 @@
 import type { ArchiveRow } from '../catalog/archive';
 import type { ArchiveMoveNote, Snapshot } from './metadata';
+import { parseStored } from '../catalog/json';
 
 // The API's shapes of a row (docs/archive.md §1, §4): the item, and the
 // metadata (the item without urls plus the snapshot taken when archived).
@@ -29,16 +30,9 @@ export interface ArchiveItem {
   urls: { video: string; thumbnail: string; metadata: string };
 }
 
-export function parseJson(s: string): unknown {
-  try {
-    return JSON.parse(s);
-  } catch {
-    return null;
-  }
-}
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
 export const snapshotOf = (row: ArchiveRow): Partial<Snapshot> => {
-  const v = parseJson(row.metadata);
+  const v = parseStored(row.metadata);
   return v && typeof v === 'object' ? (v as Partial<Snapshot>) : {};
 };
 
@@ -62,7 +56,7 @@ export function moveNoteOf(snap: Partial<Snapshot>): ArchiveMoveNote | null {
 }
 // The metadata column with the note set; the rest of the snapshot stays.
 export function withMoveNote(metadata: string, note: ArchiveMoveNote): string {
-  const v = parseJson(metadata);
+  const v = parseStored(metadata);
   const base = v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
   return JSON.stringify({ ...base, move: note });
 }
@@ -75,7 +69,7 @@ export function itemJson(row: ArchiveRow): ArchiveItem {
     cam: row.cam,
     cameraName: typeof snap.camera?.name === 'string' ? snap.camera.name : null,
     name: row.name,
-    labels: strings(parseJson(row.labels)),
+    labels: strings(parseStored(row.labels)),
     retentionDays: row.retention_days,
     createdAt: row.created_at,
     expiresAt: row.expires_at,
@@ -85,7 +79,7 @@ export function itemJson(row: ArchiveRow): ArchiveItem {
     quality: row.quality,
     original: row.original === 1,
     bytes: row.bytes,
-    source: parseJson(row.source),
+    source: parseStored(row.source),
     eventKinds: strings(snap.eventKinds),
     found: strings(snap.found),
     thumbnail: { from: row.thumb_from, at: row.thumb_at },
@@ -113,7 +107,7 @@ export function metadataJson(row: ArchiveRow) {
 // The files column: the clip's and the thumbnail's size and CRC-32.
 export interface ArchiveFiles { clip: { bytes: number; crc32: number }; thumb: { bytes: number; crc32: number } | null }
 export function filesOf(row: ArchiveRow): ArchiveFiles | null {
-  const v = parseJson(row.files) as Partial<ArchiveFiles> | null;
+  const v = parseStored(row.files) as Partial<ArchiveFiles> | null;
   if (!v || typeof v !== 'object' || !v.clip || !Number.isSafeInteger(v.clip.bytes) || !Number.isInteger(v.clip.crc32)) return null;
   return { clip: v.clip, thumb: v.thumb && Number.isSafeInteger(v.thumb.bytes) && Number.isInteger(v.thumb.crc32) ? v.thumb : null };
 }

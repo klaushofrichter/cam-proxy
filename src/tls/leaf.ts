@@ -1,9 +1,10 @@
 import { createPrivateKey, randomBytes, webcrypto, X509Certificate } from 'crypto';
 import { fingerprintOf, RSA, type SiteCa } from './ca';
 import { x509 } from './x509';
+import { DAY } from '../time-units';
 
 export interface Leaf { certPem: string; keyPem: string; fingerprint: string; notAfter: number; names: string[]; ips: string[] }
-export const RENEW_BEFORE_MS = 30 * 86400_000;
+export const RENEW_BEFORE_MS = 30 * DAY;
 export const renewalDue = (leaf: { notAfter: number }, now: number): boolean => leaf.notAfter - now <= RENEW_BEFORE_MS;
 
 const sans = (x: X509Certificate) => {
@@ -36,7 +37,7 @@ export async function issueLeaf(ca: SiteCa, o: { cn: string; dns: string[]; ips:
     subject: `CN=${o.cn}`,
     issuer: caCert.subject,
     notBefore,
-    notAfter: new Date(notBefore.getTime() + (o.days ?? 397) * 86400_000),
+    notAfter: new Date(notBefore.getTime() + (o.days ?? 397) * DAY),
     signingKey: caKey,
     publicKey: keys.publicKey,
     signingAlgorithm: alg,

@@ -1,4 +1,4 @@
-import { statSync } from 'fs';
+import { readdirSync, statSync } from 'fs';
 import { mkdir, readdir, rename, writeFile } from 'fs/promises';
 import { dirname } from 'path';
 
@@ -14,6 +14,13 @@ export async function writeFileAtomic(file: string, data: Buffer | string): Prom
 export async function listDir(dir: string): Promise<string[]> {
   try {
     return await readdir(dir);
+  } catch {
+    return [];
+  }
+}
+export function listDirSync(dir: string): string[] {
+  try {
+    return readdirSync(dir);
   } catch {
     return [];
   }

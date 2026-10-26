@@ -1,5 +1,5 @@
 import { readFileSync } from 'fs';
-import { cameraPasswordStore } from './camera-passwords';
+import { cameraPasswordsNow } from './camera-passwords';
 import type { Secrets } from './defaults';
 import { SettingError } from './schema';
 
@@ -48,12 +48,13 @@ export function loadSecrets(env: NodeJS.ProcessEnv, ftpEnabled: boolean, cameraI
   if (tokens.includes(adminToken)) throw new SettingError('CAMPROXY_ADMIN_TOKEN: must differ from every client token');
   const cameraPasswords: Record<string, string> = {};
   // The environment wins over the stored password of a moved camera (S §9.3).
-  const store = o.dataDir ? cameraPasswordStore(o.dataDir) : undefined;
+  // The file is read once, at the first camera without one in the environment.
+  let stored: ((id: string) => string | undefined) | undefined;
   for (const id of cameraIds) {
     let own = read(env, cameraPasswordEnv(id));
-    if (!own && store) {
+    if (!own && o.dataDir) {
       try {
-        own = store.get(id);
+        own = (stored ??= cameraPasswordsNow(o.dataDir))(id);
       } catch (err) {
         throw new SettingError(`camera-passwords.json: ${(err as Error).message}`);
       }

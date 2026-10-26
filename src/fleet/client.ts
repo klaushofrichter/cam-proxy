@@ -8,6 +8,7 @@ import type { CommandRunner, ConnCtx } from './commands';
 import type { ReplayGuard } from './replay';
 import { EventOutbox } from './outbox';
 import type { MoveEvent } from '../moves/types';
+import { TIMED_OUT, within } from '../async';
 
 // The outbound client to cams-admin (spec 2026-10-06-cams-admin-phase1-design
 // §8.3-§8.8, §9.1): one WebSocket (Node's global), one timer for the next
@@ -627,14 +628,8 @@ export class AdminClient {
     }
     this.sending = true;
     try {
-      let timeout: NodeJS.Timeout | undefined;
-      const summary = await Promise.race([
-        this.d.health(),
-        new Promise<never>((_, reject) => {
-          timeout = setTimeout(() => reject(new Error('the health summary took too long')), this.t.healthTimeoutMs);
-          timeout.unref();
-        }),
-      ]).finally(() => clearTimeout(timeout));
+      const summary = await within(this.d.health(), this.t.healthTimeoutMs, { unref: true });
+      if (summary === TIMED_OUT) throw new Error('the health summary took too long');
       if (this.ws !== ws || this.state !== 'connected') return;
       this.lastChangeKey = this.d.changeKey ? this.d.changeKey() : null;
       if (ws.bufferedAmount > this.t.maxBufferedBytes) {

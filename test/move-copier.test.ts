@@ -487,6 +487,21 @@ describe('Copier', () => {
     expect(u.rec().manifest?.map((c) => c.id)).toEqual([`archive:${day(20)}`, `clips:${day(20)}`]);
   });
 
+  it('the outcome retries back off: retryMs, doubled after each wait, up to retryCapMs', async () => {
+    const ok = 'clips/cam9/2026/10/20/1200-1.mp4';
+    const f = fakeSource({ [ok]: 'clip-ok' }, [{ id: `clips:${day(20)}`, files: [ok] }]);
+    const seen: string[] = [];
+    const statuses = [503, 500, 500, 500, 204];
+    f.client.put = async () => {
+      seen.push('put');
+      return { status: statuses.shift() ?? 204, body: (async function* () { /* empty */ })() };
+    };
+    const u = unit(f, {}, { deps: { sleep: async (ms: number) => void seen.push(`sleep ${ms}`), timing: { retryMs: 1, retryCapMs: 4, pausedPollMs: 2, refreshPollMs: 2, refreshWaitMs: 50, saveEveryMs: 0 } } });
+    await u.run();
+    expect(seen.slice(seen.indexOf('put'), seen.lastIndexOf('put') + 1)).toEqual(['put', 'sleep 1', 'put', 'sleep 2', 'put', 'sleep 4', 'put', 'sleep 4', 'put']);
+    expect(u.phases.at(-1)?.phase).toBe('copied');
+  });
+
   it('a 409 from the source ends the outcome retries; the refusal is audited and the record holds no outcome', async () => {
     const { files, chunks } = threeDays();
     const f = fakeSource(files, chunks);
@@ -813,6 +828,14 @@ describe('CopyRunner and MoveTarget.stop', () => {
     expect(runner.running(MOVE)).toBe(true);
     const t0 = Date.now();
     await runner.stopAll(50);
+    expect(Date.now() - t0).toBeLessThan(1000);
+  });
+
+  it('MoveTarget.stopAll waits at most its cap for a copier stop that never ends', async () => {
+    const t = new MoveTarget({ journal: { load: () => null, save: () => undefined, active: () => [] }, stopCopy: () => new Promise<never>(() => undefined) } as unknown as TargetDeps);
+    (t as unknown as { copying: Set<string> }).copying.add(MOVE);
+    const t0 = Date.now();
+    await t.stopAll(50);
     expect(Date.now() - t0).toBeLessThan(1000);
   });
 

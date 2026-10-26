@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { cameraStateText, isNewStart, poeAlert, poeLine, poeOnText, powerCycleMessage, powerCycleFailText, restartWatch, RESTART_GIVE_UP_MS } from '../web/src/lib/maintenance';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cameraStateText, isNewStart, poeAlert, poeLine, poeOnText, powerCycleMessage, powerCycleFailText, readHealth, restartWatch, waitForNewProxy, RESTART_GIVE_UP_MS } from '../web/src/lib/maintenance';
 
 describe('Maintenance page helpers (#71, #83)', () => {
   it('tells a new proxy start by its version or start time', () => {
@@ -89,5 +89,55 @@ describe('Maintenance page helpers (#71, #83)', () => {
     expect(w({ version: 'v1', startedAt: 6000 })).toBe(true);
     // With a read before the POST, that one decides.
     expect(restartWatch({ version: 'v1', startedAt: 1000 }, postedAt)({ version: 'v1', startedAt: 1000 })).toBe(false);
+  });
+});
+
+describe('the restart wait (Maintenance, Find camera)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+  const answers = (list: ({ version: string; startedAt: number } | null)[]) => {
+    vi.stubGlobal('fetch', async () => {
+      const h = list.length > 1 ? list.shift() : list[0];
+      if (h === null) throw new Error('down');
+      return { ok: true, json: async () => h };
+    });
+  };
+
+  it('readHealth: the answer, null when the proxy does not answer', async () => {
+    answers([{ version: 'v1', startedAt: 1 }]);
+    expect(await readHealth()).toEqual({ version: 'v1', startedAt: 1 });
+    answers([null]);
+    expect(await readHealth()).toBeNull();
+  });
+
+  it('polls every second and calls back once a new process answers', async () => {
+    vi.useFakeTimers();
+    const reload = vi.fn();
+    answers([{ version: 'v1', startedAt: 1 }, null, { version: 'v1', startedAt: 9 }]);
+    const gone = vi.fn();
+    waitForNewProxy({ version: 'v1', startedAt: 1 }, 5, reload, gone);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(reload).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(reload).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(gone).not.toHaveBeenCalled();
+  });
+
+  it('gives up after RESTART_GIVE_UP_MS; the stop ends the wait', async () => {
+    vi.useFakeTimers();
+    answers([{ version: 'v1', startedAt: 1 }]);
+    const gone = vi.fn();
+    waitForNewProxy({ version: 'v1', startedAt: 1 }, 5, () => undefined, gone);
+    await vi.advanceTimersByTimeAsync(RESTART_GIVE_UP_MS + 2000);
+    expect(gone).toHaveBeenCalledTimes(1);
+    const gone2 = vi.fn();
+    const stop = waitForNewProxy({ version: 'v1', startedAt: 1 }, 5, () => undefined, gone2);
+    stop();
+    await vi.advanceTimersByTimeAsync(RESTART_GIVE_UP_MS + 2000);
+    expect(gone2).not.toHaveBeenCalled();
   });
 });

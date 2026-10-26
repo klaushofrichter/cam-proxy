@@ -29,13 +29,19 @@ function readFile(path: string): File {
   return f as File;
 }
 
+const passwordIn = (cameras: File['cameras'], id: string): string | undefined => (Object.hasOwn(cameras, id) ? cameras[id].password : '') || undefined;
+
+// The stored passwords as they are now, read once: get() for many cameras
+// without a read each (loadSecrets). Throws as get() does.
+export function cameraPasswordsNow(dataDir: string): (id: string) => string | undefined {
+  const cameras = readFile(cameraPasswordsFile(dataDir)).cameras;
+  return (id) => passwordIn(cameras, id);
+}
+
 export function cameraPasswordStore(dataDir: string): CameraPasswordStore {
   const path = cameraPasswordsFile(dataDir);
   return {
-    get: (id) => {
-      const cameras = readFile(path).cameras;
-      return (Object.hasOwn(cameras, id) ? cameras[id].password : '') || undefined;
-    },
+    get: (id) => passwordIn(readFile(path).cameras, id),
     set: (id, password) => {
       const f = readFile(path);
       f.cameras[id] = { password };

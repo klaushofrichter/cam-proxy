@@ -3,7 +3,7 @@
   import ConfirmDialog from './ConfirmDialog.svelte';
   import { api, ApiError } from '../lib/api';
   import { deviceLabel, foundText, mismatchText, handLine, notAvailableText, useAddressMessage, writtenText, type FindResult, type FoundDevice } from '../lib/find-camera';
-  import { restartWatch, RESTART_GIVE_UP_MS, type Health } from '../lib/maintenance';
+  import { readHealth, waitForNewProxy } from '../lib/maintenance';
   import { lockedWhy, rights } from '../lib/rights';
   import LockedNote from './LockedNote.svelte';
 
@@ -18,8 +18,8 @@
   let line = $state(''); // the .env line to add by hand
   let asking = $state<FoundDevice | null>(null);
   let restarting = $state<'waiting' | 'gone' | null>(null);
-  let timer: ReturnType<typeof setInterval> | undefined;
-  onMount(() => () => clearInterval(timer));
+  let stopWait: (() => void) | undefined;
+  onMount(() => () => stopWait?.());
 
   async function find() {
     searching = true;
@@ -43,18 +43,9 @@
     asking = d;
   }
 
-  const health = async (): Promise<Health | null> => {
-    try {
-      const r = await fetch('/health', { cache: 'no-store' });
-      return r.ok ? ((await r.json()) as Health) : null;
-    } catch {
-      return null;
-    }
-  };
-
   async function use(d: FoundDevice) {
     asking = null;
-    const before = await health();
+    const before = await readHealth();
     try {
       const r = await api<{ host: string; previous: string | null; backup: string }>('POST', '/control/actions/camera-address', { host: d.useAddress });
       message = writtenText(r);
@@ -76,17 +67,7 @@
       message += ` The restart failed (${e instanceof ApiError ? e.message : 'failed'}): use "Restart proxy" on the Maintenance page.`;
       return;
     }
-    const isNew = restartWatch(before, postedAt);
-    const t0 = Date.now();
-    timer = setInterval(async () => {
-      if (isNew(await health())) {
-        clearInterval(timer);
-        location.reload();
-      } else if (Date.now() - t0 > RESTART_GIVE_UP_MS) {
-        clearInterval(timer);
-        restarting = 'gone';
-      }
-    }, 1000);
+    stopWait = waitForNewProxy(before, postedAt, () => location.reload(), () => (restarting = 'gone'));
   }
 </script>
 

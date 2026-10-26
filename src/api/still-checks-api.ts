@@ -12,7 +12,7 @@ import { DAY, dayStart } from '../time-units';
 import { clientIp } from './auth';
 import { cameraParam, workerOf } from './camera-param';
 import type { CameraRegistry } from '../cameras/registry';
-import { bad, IMMUTABLE, intParam, perMinute } from './respond';
+import { bad, IMMUTABLE, intParam, notFound, perMinute } from './respond';
 
 // Still checks (cams #179, spec 2026-10-04-still-checks-design §5.1, §6):
 // Vision on a second picked by hand, stored apart from events. Auth (client
@@ -100,18 +100,18 @@ export function stillChecksApi(d: { config: () => Config; catalog: Catalog; came
     const m = /^(\d{1,12})(\.jpg)?$/.exec(req.params.file);
     if (!m) return bad(res, 'a check is <id>, its image <id>.jpg');
     const row = checkById(d.catalog, Number(m[1]));
-    if (!row || row.cam !== cam(res)) return void res.status(404).json({ error: 'not_found' });
+    if (!row || row.cam !== cam(res)) return notFound(res);
     if (!m[2]) return void res.json(checkFullJson(d.catalog, row, maxOpenMs()));
     // The file name comes from the row (written by the service), never from
     // the request; still, only a file inside this camera's still-checks folder.
     const root = resolve(d.config().server.dataDir, 'still-checks', cam(res));
     const path = row.image ? resolve(row.image) : null;
-    if (!path || !path.startsWith(root + sep)) return void res.status(404).json({ error: 'not_found' });
+    if (!path || !path.startsWith(root + sep)) return notFound(res);
     let jpeg: Buffer;
     try {
       jpeg = await readFile(path);
     } catch {
-      return void res.status(404).json({ error: 'not_found' });
+      return notFound(res);
     }
     res.type('image/jpeg').setHeader('Cache-Control', IMMUTABLE);
     res.send(jpeg);

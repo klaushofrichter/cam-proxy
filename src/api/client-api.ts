@@ -24,7 +24,8 @@ import type { Go2rtc } from '../stills/go2rtc';
 import { latestUrls } from './latest-api';
 import type { MinuteStore } from '../stills/store';
 import { DAY } from '../time-units';
-import { bad, IMMUTABLE, intParam, sendFileOr } from './respond';
+import { bad, IMMUTABLE, intParam, leftSignal, notFound, sendFileOr } from './respond';
+import { parseStored, parseStoredList } from '../catalog/json';
 
 export interface StillsSide { go2rtc: Go2rtc; grabber: FrameGrabber; store: MinuteStore }
 
@@ -34,24 +35,11 @@ const validDate = (v: string): boolean => /^20\d{2}-\d{2}-\d{2}$/.test(v) && !Nu
 
 const eventJson = (e: EventRow) => ({ id: e.id, kind: e.kind, source: e.source, start: e.start_ts, end: e.end_ts, endReason: e.end_reason });
 
-// Stored JSON; null when missing or corrupt (one bad row must not fail a list).
-const parse = (s: string | null): unknown => {
-  if (s === null) return null;
-  try {
-    return JSON.parse(s);
-  } catch {
-    return null;
-  }
-};
-const parseList = (s: string | null): unknown[] => {
-  const v = parse(s);
-  return Array.isArray(v) ? v : [];
-};
 // The summary to serve: the stored one; an ok row not yet backfilled is
 // summarised from its objects (never served as "nothing found"); else [].
 const summaryOf = (a: Pick<AnalysisRow, 'status' | 'objects' | 'summary'>): unknown[] => {
   try {
-    if (a.summary !== null && a.summary !== undefined) return parseList(a.summary);
+    if (a.summary !== null && a.summary !== undefined) return parseStoredList(a.summary);
     if (a.status !== 'ok' || a.objects === null) return [];
     const objects: unknown = JSON.parse(a.objects);
     return Array.isArray(objects) ? summarize(objects as Found[]).summary : [];
@@ -60,7 +48,7 @@ const summaryOf = (a: Pick<AnalysisRow, 'status' | 'objects' | 'summary'>): unkn
   }
 };
 const analysisSummary = (a: AnalysisRow | undefined) =>
-  a ? { provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, objects: parseList(a.objects), summary: summaryOf(a) } : null;
+  a ? { provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, objects: parseStoredList(a.objects), summary: summaryOf(a) } : null;
 
 // The client API (spec §10); auth is applied by the caller.
 // `tls`: a camera's certificate state from the site CA (spec 2026-10-05-multi-camera-host-design
@@ -97,7 +85,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: 
   r.get('/cameras/:cam', (_req, res) => void res.json(info(workerOf(res))));
 
   const sendJpeg = (res: Response, jpeg: Buffer | undefined, final: boolean) => {
-    if (!jpeg) return void res.status(404).json({ error: 'not_found' });
+    if (!jpeg) return notFound(res);
     res.type('image/jpeg').setHeader('Cache-Control', final ? IMMUTABLE : 'no-store');
     res.send(jpeg);
   };
@@ -126,8 +114,8 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: 
   };
   r.get('/cameras/:cam/events/:id/analysis', (req, res) => {
     const a = analysisOf(req, res);
-    if (!a) return void res.status(404).json({ error: 'not_found' });
-    res.json({ eventId: a.event_id, provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, requestedAt: a.requested_at, tookMs: a.took_ms, objects: parseList(a.objects), summary: summaryOf(a), raw: parse(a.raw) });
+    if (!a) return notFound(res);
+    res.json({ eventId: a.event_id, provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, requestedAt: a.requested_at, tookMs: a.took_ms, objects: parseStoredList(a.objects), summary: summaryOf(a), raw: parseStored(a.raw) });
   });
   // A day of analyses in the stream message's shape (spec
   // 2026-09-30-analytics-in-cams-design), for cams when it loads a day.
@@ -183,7 +171,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: 
   });
   r.get('/cameras/:cam/previews/:file', async (req, res) => {
     const minute = jpegTs(req.params.file);
-    if (minute === null || minute % 60_000 !== 0) return minute === null ? bad(res, 'a sprite is <minute unix ms>.jpg') : void res.status(404).json({ error: 'not_found' });
+    if (minute === null || minute % 60_000 !== 0) return minute === null ? bad(res, 'a sprite is <minute unix ms>.jpg') : notFound(res);
     const st = store(req, res);
     if (st) sendJpeg(res, await st.readSprite(minute), !st.isCurrent(minute));
   });
@@ -214,7 +202,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: 
     if (!m) return bad(res, 'a clip is <id>.mp4, its snapshot <id>.jpg');
     const clip = clipById(d.catalog, Number(m[1]));
     const file = clip?.cam === workerOf(res).id ? (m[2] === 'mp4' ? clip.path : clip.snapshot) : null;
-    if (!file) return void res.status(404).json({ error: 'not_found' });
+    if (!file) return notFound(res);
     res.setHeader('Cache-Control', IMMUTABLE);
     sendFileOr(res, resolve(file), { headers: { 'Content-Type': m[2] === 'mp4' ? 'video/mp4' : 'image/jpeg' } }, 'not_found');
   });
@@ -279,12 +267,6 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: 
     return true;
   };
   const gone = (res: Response) => res.destroyed || res.writableEnded;
-  // Aborted when the response closes (the client left, or it was answered).
-  const leftSignal = (res: Response): AbortSignal => {
-    const ac = new AbortController();
-    res.once('close', () => ac.abort());
-    return ac.signal;
-  };
 
   // Either a window (from/to, unix ms, at most 48 h) or one camera-local day
   // (date=YYYY-MM-DD); both include a recording that starts the day before
