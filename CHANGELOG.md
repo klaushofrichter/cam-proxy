@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.10.25.4
+
 ## v2026.10.25.3
 
 - Camera moves: cams-admin can ask what a move of a camera would carry before it starts one (new read-only command `move.summary`, under `move.send`): files, bytes and the time span per kind, the same numbers the move request shows. The answer is kept for 30 seconds, so asking often doesn't count the camera's stills each time.
