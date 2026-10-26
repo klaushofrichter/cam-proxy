@@ -266,6 +266,8 @@ describe('deploy/cluster/config.json', () => {
     expect(cameraConfig(c, "cam2")!.tlsName).toBeUndefined();
     expect(cameraConfig(c, "cam2")!.webUiUrl).toBeUndefined();
     expect(c.tls).toMatchObject({ site: 'cluster', cameraSubnet: '10.43.61.52/32', proxyAddresses: '10.43.253.190' });
+    // cam2 uploads from its pod address (10.42.x, new on every restart), not its Service address.
+    expect(c.ftp.sourceSubnet).toBe('10.42.0.0/16');
     // cams plays these clips: the sub stream (H.264) plays in every browser.
     expect(c.ftp).toMatchObject({ enabled: true, publicHost: 'cam-proxy.cam-proxy.svc.cluster.local', tls: true, stream: 'sub' });
     expect(c.stills.enabled).toBe(true);
