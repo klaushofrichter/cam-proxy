@@ -14,6 +14,7 @@ export interface ProfileView {
   hardware: { pi: string | null; cpuCores: number; cpuModel: string | null; memoryBytes: number; load5: number; cpuTempC: number | null };
   warnings: ProfileWarning[];
   firewall: { tool: 'ufw' | 'nft'; lines: string[] };
+  tls: { site: string | null; cameraSubnet: string | null };
   perCameraBytes: number | null;
   // A budget setting a higher layer replaces (profile.storageGB or storage.maxBytes), and why.
   ignored?: Record<string, string>;

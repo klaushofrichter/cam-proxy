@@ -259,11 +259,12 @@ describe('the production configs keep loading', () => {
     expect(profileCameras(c)).toBe(1);
     expect(profileWarnings(c)).toEqual([]);
   });
-  it('the cluster: deploy/cluster/config.json as it is', () => {
+  it('the cluster: deploy/cluster/config.json holds its profile (one simulated camera)', () => {
     const file = join(__dirname, '..', 'deploy', 'cluster', 'config.json');
     const l = loadConfig({ ...SECRETS, CAMPROXY_CONFIG: file }, { cwd: dir });
     expect(l.config.ftp.passive).toBe('30000-30009');
-    expect(l.config.profile).toEqual({ firewall: 'ufw' });
+    expect(l.config.profile).toEqual({ name: 'Cluster (cam2 simulator)', cameras: 1, firewall: 'ufw' });
+    expect(profileCameras(l.config)).toBe(1);
     expect(profileWarnings(l.config)).toEqual([]);
   });
 });

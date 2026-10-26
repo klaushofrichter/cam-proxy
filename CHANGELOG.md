@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Camera moves: cams-admin can ask what a move of a camera would carry before it starts one (new read-only command `move.summary`, under `move.send`): files, bytes and the time span per kind, the same numbers the move request shows. The answer is kept for 30 seconds, so asking often doesn't count the camera's stills each time.
+- cams-admin's heartbeat profile now also says whether this proxy has a site CA and which camera network it covers (`tls.site`, `tls.cameraSubnet`; empty on the Pi).
+
+## v2026.10.25.2
+
 - New: the proxy **profile**, what this proxy can hold: `profile.cameras` (how many cameras), `profile.name` (the hardware as you call it), `profile.storageGB` (how much storage it may use, in place of `storage.maxBytes`) and `profile.firewall` (`ufw` or `nft`). Until it is set, the Status page shows a "Set this proxy's profile" card; the Settings page edits it later. Only the local admin token sets it (`GET`/`PUT /control/profile`, recorded as a settings change); cams-admin only reads it. The values are not checked against the hardware: getting them right is yours. `profile.storageGB` counts GB as 10^9 bytes (the `*.maxGB` caps count 1024³), and the budget it sets is still capped by `storage.maxPercent` of the disk. Set on the Settings page over a `storage.maxBytes` in config.json, it wins and `storage.maxBytes` shows as ignored; both in the same file does not load. A camera move that needs more room on such a proxy proposes a higher `profile.storageGB`.
 - Going back to v2026.10.25.1 or older: first, in the data folder's `overrides.json`, rename `profile.cameras` to `moves.maxCameras` (`"moves": { "maxCameras": 3 }`) and remove every other `profile.*` setting (`name`, `storageGB`, `firewall`), and the same in config.json if you put the profile there; the older version does not load a file with `profile`.
 - `moves.maxCameras` is now `profile.cameras`. The old name is still read (een's 3 stays 3); both set to different values does not load.

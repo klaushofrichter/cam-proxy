@@ -97,6 +97,8 @@ export interface MoveAnswerArgs { v: 1; moveId: string; requestId: string; targe
 export interface MoveStartArgs { v: 1; moveId: string; plan: MovePlan; settings: Settings; done: string[] }
 export interface MoveGoArgs { v: 1; moveId: string; plan: MovePlan; targetPublicKey: string; expectedLeaf: string }
 export interface MoveBeginArgs { v: 1; camera: string; target: string; bounds: MoveBounds | null }
+// move.summary: what a move of this camera would carry (read only).
+export interface MoveSummaryArgs { v: 1; camera: string }
 export interface MoveReturnOpenArgs { v: 1; moveId: string; returnOf: string; tokenHash: string; targetIp: string }
 export interface MoveReturnStartArgs { v: 1; moveId: string; returnOf: string; token: string; source: MoveOfferArgs['source']; done: string[] }
 export interface MoveReleaseArgs { v: 1; moveId: string }
@@ -233,6 +235,7 @@ export const boundsProblem = (b: unknown): string | null => {
 };
 export const validateMoveBegin = (a: unknown) => v1<MoveBeginArgs>(a, ['camera', 'target', 'bounds'], (o) =>
   !idLike(o.camera) ? 'camera' : typeof o.target !== 'string' || !PRX_ID.test(o.target) ? 'target' : o.bounds === undefined ? 'bounds' : boundsProblem(o.bounds));
+export const validateMoveSummary = (a: unknown) => v1<MoveSummaryArgs>(a, ['camera'], (o) => (idLike(o.camera) ? null : 'camera'));
 export const validateMoveRelease = (a: unknown) => v1<MoveReleaseArgs>(a, ['moveId'], moveId);
 export const validateMoveFinish = (a: unknown) => v1<MoveFinishArgs>(a, ['moveId', 'role', 'abandoned', 'return'], (o) => moveId(o) ?? role(o) ?? (bool(o.abandoned) ? (optional(o, 'return', bool) ? null : 'return') : 'abandoned'));
 // copied is required only for the target (a source cancel carries expectedLeaf instead, optional).
@@ -259,4 +262,5 @@ export const ARGS_VALIDATORS: Record<string, (a: unknown) => ArgsVerdict<unknown
   'move.finish': validateMoveFinish,
   'move.cancel': validateMoveCancel,
   'move.begin': validateMoveBegin,
+  'move.summary': validateMoveSummary,
 };

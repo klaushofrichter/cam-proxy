@@ -8,7 +8,7 @@ const view = (over: Partial<ProfileView> = {}): ProfileView => ({
   ftp: { enabled: true, port: 2121, passive: { from: 30000, to: 30029 } },
   storage: { budgetBytes: 600e9, usedBytes: 41e9, diskBytes: 1e12, freeBytes: 880e9 },
   hardware: { pi: null, cpuCores: 4, cpuModel: 'Intel N100', memoryBytes: 16e9, load5: 0.7, cpuTempC: 48.5 },
-  warnings: [], firewall: { tool: 'ufw', lines: ['sudo ufw allow from 192.0.2.85 to any port 2121 proto tcp'] },
+  warnings: [], firewall: { tool: 'ufw', lines: ['sudo ufw allow from 192.0.2.85 to any port 2121 proto tcp'] }, tls: { site: null, cameraSubnet: null },
   perCameraBytes: 200e9, ignored: {}, ...over,
 });
 
