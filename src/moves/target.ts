@@ -1,4 +1,4 @@
-import { createHash, generateKeyPairSync } from 'crypto';
+import { generateKeyPairSync } from 'crypto';
 import type { AuditLog } from '../audit/audit-log';
 import { bareHost, splitHost } from '../camera/http';
 import { activeCameraIds } from '../config/cameras';
@@ -8,6 +8,7 @@ import { applyOverrides, getPath, planOverrides, rebuildWith, removeOverride, wr
 import { cameraPasswordEnv } from '../config/password-env';
 import type { MoveCancelArgs, MoveFinishArgs, MoveOfferArgs, MoveStartArgs } from '../fleet/command-args';
 import type { Done, Handler } from '../fleet/commands';
+import { fingerprint } from '../fleet/protocol';
 import type { Config } from '../config/defaults';
 import type { SiteCa } from '../tls/ca';
 import { issueLeaf, leafOf, type Leaf } from '../tls/leaf';
@@ -102,7 +103,6 @@ const zeros = (): Purged => Object.fromEntries(MOVE_KINDS.map((k) => [k, { files
 // The camera taken over here: every switch-over step ran (a failure after
 // them is the copier's), so the camera node here is the move's.
 const switchedOver = (r: MoveRecord): boolean => r.cameraWritten === true && r.step === undefined && !!r.plan && r.phase !== 'opened' && r.phase !== 'switching';
-const keyFingerprint = (spkiB64: string) => `SHA256:${createHash('sha256').update(Buffer.from(spkiB64, 'base64')).digest('hex').toUpperCase()}`;
 // Two plans alike: kinds in any order, target settings in any key order (as the source compares them).
 const canonical = (p: MovePlan): string => JSON.stringify([p.transfer, [...p.kinds].sort(), p.space, p.targetSettings ? Object.entries(p.targetSettings).sort(([x], [y]) => (x < y ? -1 : 1)) : null, p.budgetS, p.estimateS]);
 const samePlan = (a: MovePlan | null, b: MovePlan) => a !== null && canonical(a) === canonical(b);
@@ -286,7 +286,7 @@ export class MoveTarget {
     fresh.done = a.done.slice(-DONE_MAX);
     this.d.journal.save(fresh);
     this.d.stageLeaf(fresh.camera, leaf);
-    this.switchAudit(fresh, 'start', 'ok', `switch-over accepted; leaf ${leaf.fingerprint} issued for ${name}`, { leafFingerprint: leaf.fingerprint, publicKeyFingerprint: keyFingerprint(fresh.x25519.publicSpki), plan: a.plan, done: fresh.done.length });
+    this.switchAudit(fresh, 'start', 'ok', `switch-over accepted; leaf ${leaf.fingerprint} issued for ${name}`, { leafFingerprint: leaf.fingerprint, publicKeyFingerprint: fingerprint(fresh.x25519.publicSpki), plan: a.plan, done: fresh.done.length });
     this.run(fresh.id);
     return ok({ publicKey: fresh.x25519.publicSpki, leafFingerprint: leaf.fingerprint });
   }

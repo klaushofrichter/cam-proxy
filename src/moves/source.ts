@@ -1,4 +1,3 @@
-import { createHash } from 'crypto';
 import type { AuditLog } from '../audit/audit-log';
 import { activeCameraIds } from '../config/cameras';
 import type { CameraNode, Config } from '../config/defaults';
@@ -6,7 +5,7 @@ import { keepDaysOf } from './retention';
 import { applyOverrides, planUnset, removeOverride, writeOverridesFile, type Loaded } from '../config/load';
 import { planProblem, type MoveAnswerArgs, type MoveBeginArgs, type MoveCancelArgs, type MoveFinishArgs, type MoveGoArgs, type MoveOpenArgs, type MoveReleaseArgs, type MoveSummaryArgs, type MoveTargetsArgs } from '../fleet/command-args';
 import type { Done, Handler } from '../fleet/commands';
-import { newId } from '../fleet/protocol';
+import { fingerprint, newId } from '../fleet/protocol';
 import { listChunks, summarize, type InventoryDeps } from './inventory';
 import type { PushResult } from '../tls/push';
 import { moveEnded, type MoveJournal, type MoveRecord, type MoveTombstone } from './journal';
@@ -138,8 +137,6 @@ const has = (s: MoveSummary, k: MoveKind) => s[k].files + s[k].rows > 0;
 // Two plans alike: kinds in any order, target settings in any key order.
 const canonical = (p: MovePlan): string => JSON.stringify([p.transfer, [...p.kinds].sort(), p.space, p.targetSettings ? Object.entries(p.targetSettings).sort(([a], [b]) => (a < b ? -1 : 1)) : null, p.budgetS, p.estimateS]);
 const samePlan = (a: MovePlan, b: MovePlan) => canonical(a) === canonical(b);
-// The fingerprint of the target's public key: audited, never the key.
-const keyFingerprint = (spkiB64: string) => `SHA256:${createHash('sha256').update(Buffer.from(spkiB64, 'base64')).digest('hex').toUpperCase()}`;
 
 // The camera node's settings as they move (the contract's Settings): never the
 // address, the user's password or the FTP user (the target uses its own).
@@ -886,7 +883,7 @@ export class MoveSource {
       action: 'move-switch', category: ['configuration'], type: ['change'], outcome: 'success',
       user: 'cams-admin', camera: r.camera,
       message: `Camera move ${r.id}: switch-over to ${r.peer.name || r.peer.proxyId} started; ${r.camera} may serve the leaf ${a.expectedLeaf}; ${r.manifest.length} chunks listed`,
-      details: { moveId: r.id, camera: r.camera, source: this.self(), target: r.peer.proxyId, step: 'go', outcome: 'ok', leafFingerprint: a.expectedLeaf, publicKeyFingerprint: keyFingerprint(a.targetPublicKey), chunks: r.manifest.length },
+      details: { moveId: r.id, camera: r.camera, source: this.self(), target: r.peer.proxyId, step: 'go', outcome: 'ok', leafFingerprint: a.expectedLeaf, publicKeyFingerprint: fingerprint(a.targetPublicKey), chunks: r.manifest.length },
     });
     this.phaseEvent(r);
     return ok();
