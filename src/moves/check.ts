@@ -64,6 +64,8 @@ export type ChunkListing = { files: number; bytes: number; rows: number };
 // The report's body: the keep list, the Archive paths of it still missing (the
 // "Kept here" note's reason), the Archive chunks copied as they were listed.
 export interface MoveOutcome { keep: KeepList; missing?: string[]; copied?: Record<string, ChunkListing> }
+// The source's answers to the outcome report that sending again cannot change.
+export const OUTCOME_REFUSED: readonly number[] = [400, 403, 404, 409, 413];
 
 export const KEEP_PATHS_MAX = 1000;
 export const OUTCOME_BYTES_MAX = 1024 * 1024;

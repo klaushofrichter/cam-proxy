@@ -12,7 +12,8 @@ import { moveEnded, type MoveJournal, type MoveRecord, type MoveTombstone } from
 import { autoPlan, type AutoWaitReason } from './plan';
 import type { Purged, purgeExcept } from './purge';
 import { moveDetail } from './detail';
-import { MOVE_KINDS, type MoveActor, type MoveAnswer, type MoveBounds, type MoveCameraConnection, type MoveCopied, type MoveEvent, type MoveKind, type MovePlan, type MoveSummary, type Settings } from './types';
+import { failed, ok, samePlan, zeros } from './done';
+import type { MoveActor, MoveAnswer, MoveBounds, MoveCameraConnection, MoveCopied, MoveEvent, MoveKind, MovePlan, MoveSummary, Settings } from './types';
 
 // The source side of a camera move (camera-move plan Task 7, S §4, §7, §9.1):
 // the source proxy's page starts a move (move.targets, move.request events),
@@ -129,14 +130,8 @@ export const SUMMARY_CACHE_MS = 30_000;
 const SWITCHED: readonly string[] = ['switching', 'switched', 'released', 'copying', 'copied'];
 const RELEASED: readonly string[] = ['released', 'copying', 'copied'];
 
-const ok = (result: Record<string, unknown> = {}): Done => ({ status: 'ok', result });
-const zeros = (): Purged => Object.fromEntries(MOVE_KINDS.map((k) => [k, { files: 0, bytes: 0 }])) as Purged;
 const sum = (d: Purged) => Object.values(d).reduce((n, k) => ({ files: n.files + k.files, bytes: n.bytes + k.bytes }), { files: 0, bytes: 0 });
-const failed = (code: string): Done => ({ status: 'failed', code });
 const has = (s: MoveSummary, k: MoveKind) => s[k].files + s[k].rows > 0;
-// Two plans alike: kinds in any order, target settings in any key order.
-const canonical = (p: MovePlan): string => JSON.stringify([p.transfer, [...p.kinds].sort(), p.space, p.targetSettings ? Object.entries(p.targetSettings).sort(([a], [b]) => (a < b ? -1 : 1)) : null, p.budgetS, p.estimateS]);
-const samePlan = (a: MovePlan, b: MovePlan) => canonical(a) === canonical(b);
 
 // The camera node's settings as they move (the contract's Settings): never the
 // address, the user's password or the FTP user (the target uses its own).

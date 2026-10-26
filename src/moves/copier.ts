@@ -5,9 +5,9 @@ import { dirname, join } from 'path';
 import type { AuditLog } from '../audit/audit-log';
 import type { Catalog } from '../catalog/db';
 import { logger } from '../log';
-import { compareChunk, outcomeOf, tallyCheck, type ChunkKeep, type ManifestFile, type MoveOutcome } from './check';
+import { compareChunk, OUTCOME_REFUSED, outcomeOf, tallyCheck, type ChunkKeep, type ManifestFile, type MoveOutcome } from './check';
 import { readChunkPart, writeChunkPart } from './chunk-parts';
-import { moveSourceClient, spaceFor, type EvaluateDeps, type SourceAnswer } from './evaluate';
+import { moveSourceClient, sourceOf, spaceFor, type EvaluateDeps, type SourceAnswer } from './evaluate';
 import { importRows, isStaged, landingPath, moveStagingDir, relOk, type ImportDeps } from './import';
 import { chunkOrder, CONTENT_FOLDERS, hashFile, KIND_FOLDERS, type ChunkMeta, type TableRows } from './inventory';
 import type { ChunkRecord, MoveJournal, MoveRecord } from './journal';
@@ -179,10 +179,9 @@ export class Copier {
 
   constructor(private readonly d: CopierDeps, record: MoveRecord) {
     this.r = record;
-    const p = record.peer;
     this.client = d.client
       ? d.client(record)
-      : moveSourceClient({ proxyId: p.proxyId, name: p.name, url: p.url ?? '', caFingerprints: p.caFingerprints ?? [], tlsServername: p.tlsServername ?? '' }, record.token ?? '', { idleMs: d.timing?.idleMs });
+      : moveSourceClient(sourceOf(record.peer), record.token ?? '', { idleMs: d.timing?.idleMs });
     // The default sleep ends early on stop (a slow take never holds up a cancel).
     this.bucket = d.bucket ?? new TokenBucket({ now: d.now, sleep: d.sleep ?? abortableSleep });
     this.paths = { catalog: d.catalog, dataDir: d.dataDir, staging: moveStagingDir(d.dataDir, record.id) };
@@ -318,7 +317,7 @@ export class Copier {
         if (res.status === 204 || res.status === 200) return;
         // A return's source re-keyed (cams-admin restarted): 403 until move.return.start brings the new token.
         if (this.r.returnOf && (res.status === 401 || res.status === 403)) this.noteDown(String(res.status));
-        else if ([400, 403, 404, 409, 413].includes(res.status)) return this.refused(res.status);
+        else if (OUTCOME_REFUSED.includes(res.status)) return this.refused(res.status);
         else if (res.status === 503 || res.status === 429) this.sourceBusyUntil = this.now() + MINUTE;
         else this.noteDown(String(res.status));
       } catch {

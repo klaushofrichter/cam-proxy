@@ -9,6 +9,7 @@ import type { Catalog } from '../catalog/db';
 import { logger } from '../log';
 import type { Storage } from '../storage';
 import { allChunkParts } from './chunk-parts';
+import { zeros } from './done';
 import { relOk, rowKey } from './import';
 import { cameraItems, chunkDay, CONTENT_FOLDERS, listChunks, type ItemFilter } from './inventory';
 import { isMoveId, type MoveRecord } from './journal';
@@ -64,8 +65,6 @@ function pruneEmpty(dir: string): void {
     /* not empty */
   }
 }
-
-const zeros = (): Purged => Object.fromEntries(MOVE_KINDS.map((k) => [k, { files: 0, bytes: 0 }])) as Purged;
 
 export interface PurgeExcept {
   // The receiver's keep list (chunk id -> paths | 'all'); null: no outcome
