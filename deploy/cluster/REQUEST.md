@@ -6,6 +6,10 @@ entry in `cams-cameras`).
 
 2026-10-02: cam-proxy reaches `cam2.cam-sim.svc.cluster.local:9000` (TCP, Baichuan) for recordings. cam-sim asked kube-setup for the cluster-internal Service port 9000 on cam2 (no ingress, LoadBalancer or NodePort) and cam-proxy's egress to it; both are applied (kube-setup 478c0f8 and f9d1e8d). The Pi reaches the real camera's port 9000 on the LAN.
 
+2026-10-26: cam2's public name `cam2.skylar.technology` is retired (Klaus). cam-proxy's site CA issues cam2's certificate (`cam2.cluster.internal`), so the camera host is cam2's ClusterIP `10.43.61.52:443` (pinned in cam2-service.yaml); `proxyAddresses` is cam-proxy's ClusterIP `10.43.253.190`. Regenerate the ConfigMap and restart cam-proxy; once cam2 serves the site-CA certificate, kube-setup removes cam2's Certificate, the `cam2-cert-push` CronJob and its ConfigMap, and the `cam2-ui` IngressRoute (with Klaus's OK in kube-setup). The NetworkPolicy already allows the ClusterIP path.
+
+2026-10-26 (later): with the camera host on cam2's ClusterIP, cam2's FTP logins from its pod address (10.42.x) were refused. `ftp.sourceSubnet` `10.42.0.0/16` (cam-proxy with ftp.sourceSubnet, released after v2026.10.26.1) accepts them; the NetworkPolicy keeps FTP ingress to the cam2 pod. Regenerate the ConfigMap once the cluster runs that release.
+
 cam-proxy (github.com/klaushofrichter/cam-proxy) is the camera gateway: it
 keeps one connection to a camera, stores a still per second, records events,
 receives the camera's clips by FTP(S) and serves it all over HTTP/SSE. In the

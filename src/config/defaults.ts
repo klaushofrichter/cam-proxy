@@ -54,7 +54,7 @@ export interface Config {
   sse: { maxClients: number; queuePerClient: number; pingS: number };
   // Composed clips (spec 2026-09-28): the font for the badge and card text.
   composition: { font?: string; concurrent: number };
-  ftp: { enabled: boolean; port: number; passive: string; tls: boolean; stream: 'main' | 'sub'; stalledHours: number; maxGB?: number; publicHost?: string; certFile?: string; keyFile?: string };
+  ftp: { enabled: boolean; port: number; passive: string; tls: boolean; stream: 'main' | 'sub'; stalledHours: number; maxGB?: number; sourceSubnet?: string; publicHost?: string; certFile?: string; keyFile?: string };
   recordings: { cacheMB: number };
   // The health summary's thresholds and the host figures (spec 2026-10-03-health-summary-design).
   health: { diskPercent: number; tempC: number };

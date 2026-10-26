@@ -3,17 +3,16 @@
   "camera": {
     "id": "cam2",
     "name": "cam2",
-    "host": "cam2.cam-sim.svc.cluster.local:443",
+    "host": "10.43.61.52:443",
     "protocol": "https",
-    "tlsName": "cam2.skylar.technology",
-    "webUiUrl": "https://cam2.skylar.technology/",
     "user": "proxy",
     "onvifPort": 8000,
     "rtspPort": 554,
     "statusPollS": 30
   },
+  "tls": { "site": "cluster", "cameraSubnet": "10.43.61.52/32", "proxyAddresses": "10.43.253.190" },
   "stills": { "enabled": true, "stream": "sub" },
   "profile": { "name": "Cluster (cam2 simulator)", "cameras": 1 },
   "storage": { "maxBytes": 18253611008 },
-  "ftp": { "enabled": true, "port": 2121, "passive": "30000-30009", "publicHost": "cam-proxy.cam-proxy.svc.cluster.local", "tls": true, "stream": "sub" }
+  "ftp": { "enabled": true, "port": 2121, "passive": "30000-30009", "sourceSubnet": "10.42.0.0/16", "publicHost": "cam-proxy.cam-proxy.svc.cluster.local", "tls": true, "stream": "sub" }
 }

@@ -260,7 +260,14 @@ describe('deploy/cluster/config.json', () => {
     const file = join(__dirname, '..', 'deploy', 'cluster', 'config.json');
     const c = loadConfig({ ...SECRETS, CAMPROXY_FTP_PASSWORD: 'f'.repeat(24), CAMPROXY_CONFIG: file }, { cwd: dir }).config;
     expect(c.server.dataDir).toBe('/data');
-    expect(cameraConfig(c, "cam2")).toMatchObject({ id: "cam2", host: 'cam2.cam-sim.svc.cluster.local:443', protocol: 'https', tlsName: 'cam2.skylar.technology', user: 'proxy', webUiUrl: 'https://cam2.skylar.technology/' });
+    // cam2 by its pinned ClusterIP: the site CA vouches for addresses, not
+    // service names, and issues cam2.cluster.internal (no public name since 2026-10-26).
+    expect(cameraConfig(c, "cam2")).toMatchObject({ id: "cam2", host: '10.43.61.52:443', protocol: 'https', user: 'proxy' });
+    expect(cameraConfig(c, "cam2")!.tlsName).toBeUndefined();
+    expect(cameraConfig(c, "cam2")!.webUiUrl).toBeUndefined();
+    expect(c.tls).toMatchObject({ site: 'cluster', cameraSubnet: '10.43.61.52/32', proxyAddresses: '10.43.253.190' });
+    // cam2 uploads from its pod address (10.42.x, new on every restart), not its Service address.
+    expect(c.ftp.sourceSubnet).toBe('10.42.0.0/16');
     // cams plays these clips: the sub stream (H.264) plays in every browser.
     expect(c.ftp).toMatchObject({ enabled: true, publicHost: 'cam-proxy.cam-proxy.svc.cluster.local', tls: true, stream: 'sub' });
     expect(c.stills.enabled).toBe(true);

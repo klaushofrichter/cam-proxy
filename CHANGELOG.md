@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- FTP: `ftp.sourceSubnet` (config.json only) lets camera FTP logins come from a network instead of each camera's own address. The cluster sets `10.42.0.0/16`: since its camera host became cam2's Service address (site CA, below), cam2's uploads from its pod address were refused (`ftp_login_refused`).
+- Cluster proxy (`deploy/cluster/config.json`): its own site CA (`tls.site` `cluster`) issues cam2's certificate (`cam2.cluster.internal`), replacing the Let's Encrypt one for the public name `cam2.skylar.technology`, which is retired like cam1's. The proxy reaches cam2 by its pinned ClusterIP `10.43.61.52` (the CA vouches for that one address and the proxy's ClusterIP); cam2's web UI link is gone with the public name.
+
+## v2026.10.26.1
+
 - Camera moves: the Raspberry Pi (no site CA) and a camera whose certificate is managed elsewhere (`tlsName`, such as cam1's Let's Encrypt certificate) can now be moved away. They were refused before (`no_site_ca`, `external_cert`). The target still needs a site CA that covers the camera, and gives the camera its own certificate. Such a source never touches the camera's certificate, so cancelling after the switch-over leaves the target's certificate on the camera: restore its own where it is managed (for cam1, the `cam1-cert-push` job). The `move-cancel` record says so (`cert`: `not_managed`).
 
 ## v2026.10.25.4

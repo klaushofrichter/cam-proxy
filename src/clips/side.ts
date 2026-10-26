@@ -18,7 +18,7 @@ export interface ClipsSide {
   uploadFailures: (cam?: string) => number;
 }
 
-export type FtpUsers = Map<string, { cam: string; ip?: string }>;
+export type FtpUsers = Map<string, { cam: string; ip?: string; subnet?: string }>;
 
 // The FTP users (spec §7): every camera with FTP on, by its user; the source
 // address when the camera's host is an IPv4 address (Ruling P2-4).
@@ -28,7 +28,8 @@ export function ftpUsers(c: Config): FtpUsers {
     const cam = cameraConfig(c, id)!;
     if (!cam.ftp.enabled) continue;
     const host = bareHost(splitHost(cam.host).hostname);
-    m.set(cam.ftp.user, { cam: id, ...(/^\d{1,3}(\.\d{1,3}){3}$/.test(host) ? { ip: host } : {}) });
+    const from = c.ftp.sourceSubnet ? { subnet: c.ftp.sourceSubnet } : /^\d{1,3}(\.\d{1,3}){3}$/.test(host) ? { ip: host } : {};
+    m.set(cam.ftp.user, { cam: id, ...from });
   }
   return m;
 }

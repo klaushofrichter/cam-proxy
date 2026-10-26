@@ -401,7 +401,11 @@ Copy the secrets without printing them (as for the Pi, docs/raspberry-pi.md
 - `CAMPROXY_CAMERA_PASSWORD`: the cameras' `proxy` user; a camera with its
   own password gets `CAMPROXY_CAMERA_PASSWORD_<ID>` (`CAM3` for `cam3`).
 - `CAMPROXY_FTP_PASSWORD`: one password; each camera logs in as its own FTP
-  user (its id), and only from its own address.
+  user (its id), and only from its own address. Where a camera's uploads
+  come from another address than its host (behind NAT, or the cluster, where
+  cam2 uploads from its pod address), `ftp.sourceSubnet` (a CIDR, /16 or
+  narrower, config.json only, never from cams-admin) takes the place of that
+  match for every camera.
 - There is no `CAMERA_HOST` or `PI_ADDRESS` here: the cameras' addresses and
   `ftp.publicHost` (`192.168.60.1`) are in `config.json`.
 
