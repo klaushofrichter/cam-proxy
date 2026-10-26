@@ -33,6 +33,35 @@ export function restartWatch(before: Health | null, postedAt?: number): (now: He
   };
 }
 
+// /health as the page reads it; null when the proxy does not answer.
+export async function readHealth(): Promise<Health | null> {
+  try {
+    const r = await fetch('/health', { cache: 'no-store' });
+    return r.ok ? ((await r.json()) as Health) : null;
+  } catch {
+    return null;
+  }
+}
+
+// After a restart request (posted at `postedAt`): /health every second
+// until a new process answers (restartWatch), then `back` (the page
+// reloads); after RESTART_GIVE_UP_MS without one, `gone`. Returns what
+// stops the wait.
+export function waitForNewProxy(before: Health | null, postedAt: number, back: () => void, gone: () => void): () => void {
+  const isNew = restartWatch(before, postedAt);
+  const t0 = Date.now();
+  const timer = setInterval(async () => {
+    if (isNew(await readHealth())) {
+      clearInterval(timer);
+      back();
+    } else if (Date.now() - t0 > RESTART_GIVE_UP_MS) {
+      clearInterval(timer);
+      gone();
+    }
+  }, 1000);
+  return () => clearInterval(timer);
+}
+
 export interface CameraReboot { kind?: 'reboot' | 'powercycle'; phase: 'power-cycling' | 'rebooting' | 'back' | 'not-back'; requestedAt: number; offAt?: number | null; downSec?: number | null }
 
 // The camera's state line: "power-cycling" while its PoE is off (#85), then
