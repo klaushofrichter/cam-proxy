@@ -363,7 +363,8 @@ describe('the cluster proxy (deploy/cluster/config.json, camera cam2)', () => {
     writeFileSync(join(cwd, 'config.json'), readFileSync(join(__dirname, '..', 'deploy', 'cluster', 'config.json')));
     const loaded = loadConfig({ CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: 'p'.repeat(12), CAMPROXY_FTP_PASSWORD: 'f'.repeat(24) }, { cwd });
     const c = cameraConfig(loaded.config, 'cam2')!;
-    expect(c).toMatchObject({ id: 'cam2', name: 'cam2', host: 'cam2.cam-sim.svc.cluster.local:443', protocol: 'https', tlsName: 'cam2.skylar.technology' });
+    expect(c).toMatchObject({ id: 'cam2', name: 'cam2', host: '10.43.61.52:443', protocol: 'https' });
+    expect(c.tlsName).toBeUndefined();
     expect(c.ftp).toEqual({ user: 'camera', enabled: true, stream: 'sub' });
     expect(c.stills.stream).toBe('sub');
   });
