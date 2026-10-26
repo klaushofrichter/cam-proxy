@@ -57,6 +57,7 @@
             "camera.name.set",
             "proxy.restart",
             "move.begin",
+            "move.summary",
             "move.targets",
             "move.open",
             "move.offer",
