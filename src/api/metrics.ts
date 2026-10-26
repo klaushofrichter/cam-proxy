@@ -49,6 +49,13 @@ export function createMetrics(s: MetricsSources) {
   // usage() scans the data folders: one scrape (render) measures once for all gauges.
   let scrape: ReturnType<Storage['usage']> | undefined;
   const usage = () => scrape ?? s.storage.usage();
+  // The per-camera figures and the per-camera usage the same way: read once
+  // per scrape (at the first gauge that asks), for every gauge.
+  let rendering = false;
+  let camerasNow: CameraMetrics[] | undefined;
+  let byCameraNow: ReturnType<Storage['usageByCamera']> | undefined;
+  const cameras = () => (rendering ? (camerasNow ??= s.cameras()) : s.cameras());
+  const usageByCamera = () => (rendering ? (byCameraNow ??= s.storage.usageByCamera()) : s.storage.usageByCamera());
   const g = (name: string, help: string, labelNames: string[], collect: (this: Gauge) => void) =>
     new Gauge({ name: `camproxy_${name}`, help, labelNames, registers: [registry], collect });
 
@@ -89,21 +96,21 @@ export function createMetrics(s: MetricsSources) {
   // Per camera (spec 2026-10-05-multi-camera-host-design §8.1).
   g('stills_minutes_stored', 'Minute packs of stills on disk', ['cam'], function () {
     this.reset();
-    const by = s.storage.usageByCamera();
-    for (const c of s.cameras()) this.set({ cam: c.id }, by[c.id]?.stills.files ?? 0);
+    const by = usageByCamera();
+    for (const c of cameras()) this.set({ cam: c.id }, by[c.id]?.stills.files ?? 0);
   });
   g('previews_stored', 'Preview sprite sheets on disk', ['cam'], function () {
     this.reset();
-    const by = s.storage.usageByCamera();
-    for (const c of s.cameras()) this.set({ cam: c.id }, Math.round((by[c.id]?.previews.files ?? 0) / 2));
+    const by = usageByCamera();
+    for (const c of cameras()) this.set({ cam: c.id }, Math.round((by[c.id]?.previews.files ?? 0) / 2));
   });
   g('frame_grabber_up', '1 while stills arrive', ['cam'], function () {
     this.reset();
-    for (const c of s.cameras()) this.set({ cam: c.id }, c.stills?.grabber.up() ? 1 : 0);
+    for (const c of cameras()) this.set({ cam: c.id }, c.stills?.grabber.up() ? 1 : 0);
   });
   g('go2rtc_up', '1 while go2rtc runs', ['cam'], function () {
     this.reset();
-    for (const c of s.cameras()) this.set({ cam: c.id }, c.stills?.go2rtc.up() ? 1 : 0);
+    for (const c of cameras()) this.set({ cam: c.id }, c.stills?.go2rtc.up() ? 1 : 0);
   });
   g('events_stored', 'Events in the catalog', ['cam', 'kind'], function () {
     this.reset();
@@ -111,37 +118,37 @@ export function createMetrics(s: MetricsSources) {
   });
   g('onvif_subscribed', '1 while the ONVIF subscription is active', ['cam'], function () {
     this.reset();
-    for (const c of s.cameras()) this.set({ cam: c.id }, c.onvifSubscribed ? 1 : 0);
+    for (const c of cameras()) this.set({ cam: c.id }, c.onvifSubscribed ? 1 : 0);
   });
   g('camera_up', '1 while the camera answers', ['cam'], function () {
     this.reset();
-    for (const c of s.cameras()) this.set({ cam: c.id }, c.up ? 1 : 0);
+    for (const c of cameras()) this.set({ cam: c.id }, c.up ? 1 : 0);
   });
   g('camera_ftp_enabled', "1 while the camera's FTP upload is on (no sample before the first read)", ['cam'], function () {
     this.reset();
-    for (const c of s.cameras()) if (c.ftpEnabled !== null) this.set({ cam: c.id }, c.ftpEnabled ? 1 : 0);
+    for (const c of cameras()) if (c.ftpEnabled !== null) this.set({ cam: c.id }, c.ftpEnabled ? 1 : 0);
   });
   g('clips_last_received_timestamp_seconds', 'When the newest clip arrived (0: none)', ['cam'], function () {
     this.reset();
-    for (const c of s.cameras()) if (c.clips) this.set({ cam: c.id }, (c.clips.lastClip ?? 0) / 1000);
+    for (const c of cameras()) if (c.clips) this.set({ cam: c.id }, (c.clips.lastClip ?? 0) / 1000);
   });
   g('clips_stalled', '1 while no clip arrived for ftp.stalledHours although the camera recorded events', ['cam'], function () {
     this.reset();
-    for (const c of s.cameras()) if (c.clips) this.set({ cam: c.id }, c.clips.stalled ? 1 : 0);
+    for (const c of cameras()) if (c.clips) this.set({ cam: c.id }, c.clips.stalled ? 1 : 0);
   });
   // The camera's SD card (#199): no sample before the first read or for a figure the camera didn't give.
   const MB = 2 ** 20;
   g('camera_sd_free_bytes', "Free bytes on the camera's SD card", ['cam'], function () {
     this.reset();
-    for (const c of s.cameras()) if (c.sd?.freeMB != null) this.set({ cam: c.id }, c.sd.freeMB * MB);
+    for (const c of cameras()) if (c.sd?.freeMB != null) this.set({ cam: c.id }, c.sd.freeMB * MB);
   });
   g('camera_sd_capacity_bytes', "Size of the camera's SD card", ['cam'], function () {
     this.reset();
-    for (const c of s.cameras()) if (c.sd?.capacityMB != null) this.set({ cam: c.id }, c.sd.capacityMB * MB);
+    for (const c of cameras()) if (c.sd?.capacityMB != null) this.set({ cam: c.id }, c.sd.capacityMB * MB);
   });
   g('camera_sd_overwrite', "1 while the camera overwrites its oldest recordings when the SD card is full (0: it stops recording)", ['cam'], function () {
     this.reset();
-    for (const c of s.cameras()) if (c.sd?.overwrite != null) this.set({ cam: c.id }, c.sd.overwrite ? 1 : 0);
+    for (const c of cameras()) if (c.sd?.overwrite != null) this.set({ cam: c.id }, c.sd.overwrite ? 1 : 0);
   });
   g('sse_clients', 'Connected SSE clients', [], function () {
     this.set(s.sseClients());
@@ -191,10 +198,14 @@ export function createMetrics(s: MetricsSources) {
     // The Prometheus text, with one storage measurement for the whole scrape.
     render: async (): Promise<string> => {
       scrape = s.storage.usage();
+      rendering = true;
       try {
         return await registry.metrics();
       } finally {
         scrape = undefined;
+        rendering = false;
+        camerasNow = undefined;
+        byCameraNow = undefined;
       }
     },
     // Each hook names the camera it came from.
