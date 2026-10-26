@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Cluster proxy (`deploy/cluster/config.json`): HTTPS on 8443 with the site CA's proxy certificate (`proxy.cluster.internal`). The cluster cams reached it over plain http, and cams refuses a CA pin over http, so after the pin was set cams refused the proxy entry and cam2 showed a certificate error.
+
 ## v2026.10.26.2
 
 - FTP: `ftp.sourceSubnet` (config.json only) lets camera FTP logins come from a network instead of each camera's own address. The cluster sets `10.42.0.0/16`: since its camera host became cam2's Service address (site CA, below), cam2's uploads from its pod address were refused (`ftp_login_refused`).
