@@ -816,6 +816,14 @@ describe('CopyRunner and MoveTarget.stop', () => {
     expect(Date.now() - t0).toBeLessThan(1000);
   });
 
+  it('MoveTarget.stopAll waits at most its cap for a copier stop that never ends', async () => {
+    const t = new MoveTarget({ journal: { load: () => null, save: () => undefined, active: () => [] }, stopCopy: () => new Promise<never>(() => undefined) } as unknown as TargetDeps);
+    (t as unknown as { copying: Set<string> }).copying.add(MOVE);
+    const t0 = Date.now();
+    await t.stopAll(50);
+    expect(Date.now() - t0).toBeLessThan(1000);
+  });
+
   it('MoveTarget.stop stops the copier too', async () => {
     const stopped: string[] = [];
     const t = new MoveTarget({ journal: { load: () => null, save: () => undefined, active: () => [] }, stopCopy: async (id: string) => void stopped.push(id) } as unknown as TargetDeps);
