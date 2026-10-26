@@ -24,7 +24,7 @@ import { clientIp } from './auth';
 import { cameraParam, workerOf } from './camera-param';
 import type { CameraRegistry } from '../cameras/registry';
 import type { CameraWorker } from '../cameras/worker';
-import { bad, IMMUTABLE, intParam, perMinute, sendFileOr } from './respond';
+import { bad, IMMUTABLE, intParam, leftSignal, perMinute, sendFileOr } from './respond';
 
 // The Archive's client API (docs/archive.md, spec 2026-10-05-archive-design
 // §2–4). Auth (client token or admin; CSRF for sessions) is applied by the
@@ -115,10 +115,8 @@ export function archiveApi(d: ArchiveApiDeps): express.Router {
       // evicted since has(): ask the camera's list as for one not cached
     }
     if (!cw.status.state().online) return void res.status(503).json({ error: 'camera_offline' }), undefined;
-    const ac = new AbortController();
-    res.once('close', () => ac.abort());
     try {
-      const e = await side.list.find(id, ac.signal);
+      const e = await side.list.find(id, leftSignal(res));
       if (!e) return void res.status(404).json({ error: 'unknown_recording' }), undefined;
       return e;
     } catch (err) {

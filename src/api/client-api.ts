@@ -24,7 +24,7 @@ import type { Go2rtc } from '../stills/go2rtc';
 import { latestUrls } from './latest-api';
 import type { MinuteStore } from '../stills/store';
 import { DAY } from '../time-units';
-import { bad, IMMUTABLE, intParam, sendFileOr } from './respond';
+import { bad, IMMUTABLE, intParam, leftSignal, sendFileOr } from './respond';
 
 export interface StillsSide { go2rtc: Go2rtc; grabber: FrameGrabber; store: MinuteStore }
 
@@ -279,12 +279,6 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: 
     return true;
   };
   const gone = (res: Response) => res.destroyed || res.writableEnded;
-  // Aborted when the response closes (the client left, or it was answered).
-  const leftSignal = (res: Response): AbortSignal => {
-    const ac = new AbortController();
-    res.once('close', () => ac.abort());
-    return ac.signal;
-  };
 
   // Either a window (from/to, unix ms, at most 48 h) or one camera-local day
   // (date=YYYY-MM-DD); both include a recording that starts the day before
