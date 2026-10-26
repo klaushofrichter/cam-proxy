@@ -25,6 +25,7 @@ import { latestUrls } from './latest-api';
 import type { MinuteStore } from '../stills/store';
 import { DAY } from '../time-units';
 import { bad, IMMUTABLE, intParam, leftSignal, sendFileOr } from './respond';
+import { parseStored, parseStoredList } from '../catalog/json';
 
 export interface StillsSide { go2rtc: Go2rtc; grabber: FrameGrabber; store: MinuteStore }
 
@@ -34,24 +35,11 @@ const validDate = (v: string): boolean => /^20\d{2}-\d{2}-\d{2}$/.test(v) && !Nu
 
 const eventJson = (e: EventRow) => ({ id: e.id, kind: e.kind, source: e.source, start: e.start_ts, end: e.end_ts, endReason: e.end_reason });
 
-// Stored JSON; null when missing or corrupt (one bad row must not fail a list).
-const parse = (s: string | null): unknown => {
-  if (s === null) return null;
-  try {
-    return JSON.parse(s);
-  } catch {
-    return null;
-  }
-};
-const parseList = (s: string | null): unknown[] => {
-  const v = parse(s);
-  return Array.isArray(v) ? v : [];
-};
 // The summary to serve: the stored one; an ok row not yet backfilled is
 // summarised from its objects (never served as "nothing found"); else [].
 const summaryOf = (a: Pick<AnalysisRow, 'status' | 'objects' | 'summary'>): unknown[] => {
   try {
-    if (a.summary !== null && a.summary !== undefined) return parseList(a.summary);
+    if (a.summary !== null && a.summary !== undefined) return parseStoredList(a.summary);
     if (a.status !== 'ok' || a.objects === null) return [];
     const objects: unknown = JSON.parse(a.objects);
     return Array.isArray(objects) ? summarize(objects as Found[]).summary : [];
@@ -60,7 +48,7 @@ const summaryOf = (a: Pick<AnalysisRow, 'status' | 'objects' | 'summary'>): unkn
   }
 };
 const analysisSummary = (a: AnalysisRow | undefined) =>
-  a ? { provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, objects: parseList(a.objects), summary: summaryOf(a) } : null;
+  a ? { provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, objects: parseStoredList(a.objects), summary: summaryOf(a) } : null;
 
 // The client API (spec §10); auth is applied by the caller.
 // `tls`: a camera's certificate state from the site CA (spec 2026-10-05-multi-camera-host-design
@@ -127,7 +115,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: 
   r.get('/cameras/:cam/events/:id/analysis', (req, res) => {
     const a = analysisOf(req, res);
     if (!a) return void res.status(404).json({ error: 'not_found' });
-    res.json({ eventId: a.event_id, provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, requestedAt: a.requested_at, tookMs: a.took_ms, objects: parseList(a.objects), summary: summaryOf(a), raw: parse(a.raw) });
+    res.json({ eventId: a.event_id, provider: a.provider, status: a.status, reason: a.reason, stillTs: a.still_ts, requestedAt: a.requested_at, tookMs: a.took_ms, objects: parseStoredList(a.objects), summary: summaryOf(a), raw: parseStored(a.raw) });
   });
   // A day of analyses in the stream message's shape (spec
   // 2026-09-30-analytics-in-cams-design), for cams when it loads a day.
