@@ -6,6 +6,7 @@ import { CAM_ID } from '../archive/paths';
 import type { Catalog } from '../catalog/db';
 import type { KindSummary, MoveKind, MoveSummary } from './types';
 import { MOVE_KINDS } from './types';
+import { DAY } from '../time-units';
 
 // What one camera has to move, as chunks of one kind and one UTC day (plan P6,
 // chunk id `<kind>:<YYYY-MM-DD>`), their file manifests and their catalog rows.
@@ -44,7 +45,6 @@ export const MOVE_PART = /\.move-[A-Za-z0-9_-]{1,64}\.part$/;
 export const CONTENT_FOLDERS: readonly string[] = Object.values(FOLDERS).flat();
 // Within a day: small and most-opened first (P11). Archive is sorted before this.
 const ORDER: MoveKind[] = ['clips', 'events', 'checks', 'archive', 'stills'];
-const DAY_MS = 86_400_000;
 const CHUNK_ID = /^(stills|clips|events|checks|archive):(\d{4})-(\d{2})-(\d{2})$/;
 
 const dayOf = (ts: number) => new Date(ts).toISOString().slice(0, 10);
@@ -57,7 +57,7 @@ export function parseChunkId(id: string): { kind: MoveKind; day: string; from: n
   const m = CHUNK_ID.exec(id);
   const from = m ? Date.UTC(Number(m[2]), Number(m[3]) - 1, Number(m[4])) : NaN;
   if (!m || Number.isNaN(from) || dayOf(from) !== id.slice(m[1].length + 1)) throw new Error('not a chunk id');
-  return { kind: m[1] as MoveKind, day: id.slice(m[1].length + 1), from, to: from + DAY_MS };
+  return { kind: m[1] as MoveKind, day: id.slice(m[1].length + 1), from, to: from + DAY };
 }
 
 // Exported for the tests only.

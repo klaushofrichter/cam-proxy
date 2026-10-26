@@ -4,6 +4,7 @@ import { PrivateFileInvalid, readPrivateJson, writePrivateJson } from '../fleet/
 import type { AutoWaitReason } from './plan';
 import type { Purged } from './purge';
 import type { ChunkState, KeepList, MoveActor, MoveCheck, MoveAnswer, MoveBounds, MoveCameraConnection, MoveCopied, MoveKind, MovePhaseName, MovePlan, MoveRole, MoveSummary, Settings, Space } from './types';
+import { DAY } from '../time-units';
 
 // The durable record of one move on this proxy: <dataDir>/admin/moves/<id>.json,
 // mode 600 (it holds the move token hash or the plain token and the target's
@@ -158,12 +159,12 @@ export interface MoveTombstone {
   returned?: boolean;
   endedAt: number;
 }
-export const TOMBSTONE_KEEP_MS = 7 * 86_400_000;
+export const TOMBSTONE_KEEP_MS = 7 * DAY;
 // How long a cancel's tombstone waits for its copy back: the return has no
 // deadline (ruling 10: a proxy offline for a long time just delays it), but a
 // return never started that cams-admin gave up (move.finish names the return,
 // not the cancelled move) must not leave the note here for ever.
-export const RETURN_WAIT_MS = 365 * 86_400_000;
+export const RETURN_WAIT_MS = 365 * DAY;
 const keepMs = (t: Partial<MoveTombstone>): number => (t.camera && t.returned !== true ? RETURN_WAIT_MS : TOMBSTONE_KEEP_MS);
 
 const TERMINAL: readonly MovePhaseName[] = ['finished', 'cancelled', 'failed'];

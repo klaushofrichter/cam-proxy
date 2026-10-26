@@ -9,12 +9,13 @@ import { compareChunk, OUTCOME_REFUSED, outcomeOf, tallyCheck, type ChunkKeep, t
 import { readChunkPart, writeChunkPart } from './chunk-parts';
 import { moveSourceClient, sourceOf, spaceFor, type EvaluateDeps, type SourceAnswer } from './evaluate';
 import { importRows, isStaged, landingPath, moveStagingDir, relOk, type ImportDeps } from './import';
-import { chunkOrder, CONTENT_FOLDERS, hashFile, KIND_FOLDERS, type ChunkMeta, type TableRows } from './inventory';
+import { chunkDay, chunkOrder, CONTENT_FOLDERS, hashFile, KIND_FOLDERS, type ChunkMeta, type TableRows } from './inventory';
 import type { ChunkRecord, MoveJournal, MoveRecord } from './journal';
 import { noteLanded } from './purge';
 import { abortableSleep, paceS, rateFor, TokenBucket } from './rate';
 import type { ChunkState, MoveCheck, MoveEvent, MoveKind, MoveSummary } from './types';
 import { MOVE_KINDS } from './types';
+import { HOUR, MINUTE } from '../time-units';
 
 // The copier on the target (camera-move plan Task 9, S §8.2–8.4, §10, §12;
 // Review Focus 1–3). It runs once the camera is switched over and pulls the
@@ -71,8 +72,6 @@ export interface CopierDeps {
 const ATTEMPTS = 3;
 const FAILED_PATHS_MAX = 50;
 const PROGRESS_CHUNKS_MAX = 4096;
-const MINUTE = 60_000;
-const HOUR = 60 * MINUTE;
 const JSON_MAX = 256 * 1024 * 1024;
 const SHA256 = /^[0-9a-f]{64}$/;
 const FINAL: readonly ChunkState[] = ['verified', 'skipped', 'failed'];
@@ -85,7 +84,6 @@ const RETURN_BUSY_BPS = 2 * 1024 * 1024;
 
 class Stopped extends Error {}
 
-const dayOf = (ts: number) => new Date(ts).toISOString().slice(0, 10);
 const sameMeta = (a: ChunkRecord['meta'], c: ChunkMeta) => !!a && a.files === c.files && a.bytes === c.bytes && a.rows === c.rows;
 const metaOf = (c: ChunkMeta) => ({ files: c.files, bytes: c.bytes, rows: c.rows });
 
@@ -245,7 +243,7 @@ export class Copier {
   }
 
   private approvalDay(): string {
-    return dayOf(this.r.approvedAt ?? this.r.startedAt);
+    return chunkDay(this.r.approvedAt ?? this.r.startedAt);
   }
 
   private async copy(): Promise<void> {

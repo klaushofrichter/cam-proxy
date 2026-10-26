@@ -14,6 +14,7 @@ import type { Purged, purgeExcept } from './purge';
 import { moveDetail } from './detail';
 import { failed, ok, samePlan, zeros } from './done';
 import type { MoveActor, MoveAnswer, MoveBounds, MoveCameraConnection, MoveCopied, MoveEvent, MoveKind, MovePlan, MoveSummary, Settings } from './types';
+import { HOUR } from '../time-units';
 
 // The source side of a camera move (camera-move plan Task 7, S §4, §7, §9.1):
 // the source proxy's page starts a move (move.targets, move.request events),
@@ -120,7 +121,6 @@ class StepFailed extends Error {
 }
 const RETRY_MS = 2000;
 const RETRY_CAP_MS = 5 * 60_000;
-const HOUR = 60 * 60_000;
 const KEEP_MS = 30 * 60_000; // an offer not approved within 30 minutes expires (S §7)
 // An opened move with no approval after that and 5 minutes slack closes here on its own (final review 5).
 export const OFFER_EXPIRY_MS = KEEP_MS + 5 * 60_000;

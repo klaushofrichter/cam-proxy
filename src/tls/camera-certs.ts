@@ -7,6 +7,7 @@ import { X509Certificate } from 'crypto';
 import { issuedBy, issueLeaf, leafOf, renewalDue, type Leaf } from './leaf';
 import type { PushOutcome, PushResult } from './push';
 import type { Served } from './served';
+import { DAY, HOUR } from '../time-units';
 
 export type CertMode = 'site-ca' | 'pinned' | 'public' | 'none';
 export interface CertState {
@@ -54,8 +55,6 @@ export interface CameraCertsDeps {
 }
 
 const WINDOW_HOUR = 4; // renewals and retries after a refusal: 04:00 camera time
-const HOUR = 3600_000;
-const DAY = 86400_000;
 const FAILED_RETRY_MS = HOUR; // a failed first push is tried again after an hour
 const PREVIOUS_CA_DAYS = 30; // the previous CA after a rotation: trusted at most this long
 const OUTCOMES = ['pushed', 'current', 'refused', 'failed'];

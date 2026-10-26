@@ -3,9 +3,10 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, wri
 import { join } from 'path';
 import { nameConstraintsDer, parseNameConstraints } from './der';
 import { x509 } from './x509';
+import { DAY } from '../time-units';
 
 export const RSA = (bits: number) => ({ name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256', publicExponent: new Uint8Array([1, 0, 1]), modulusLength: bits }) as const;
-const YEAR = 365 * 86400_000;
+const YEAR = 365 * DAY;
 const NAME_CONSTRAINTS = '2.5.29.30';
 
 export class CaError extends Error {}
