@@ -45,7 +45,7 @@ import { RotateBusyError, type CertState, type Requester, type TlsView } from '.
 import type { PushResult } from '../tls/push';
 import { OWN_AUDIT, performAction, type ActionOutcome } from './actions';
 import type { NtpOutcome } from '../cameras/ntp';
-import { perMinute } from './respond';
+import { intParam, perMinute } from './respond';
 
 interface FtpStatus {
   enabled: boolean;
@@ -424,7 +424,8 @@ export function controlApi(d: ControlDeps): express.Router {
     res.json(run);
   });
 
-  r.get('/config', (_req, res) => void res.json(configView(d.loaded(), d.running(), d.changeMarks?.())));
+  const settingsView = () => configView(d.loaded(), d.running(), d.changeMarks?.());
+  r.get('/config', (_req, res) => void res.json(settingsView()));
   r.get('/tls', (_req, res) => void res.json(d.tls.view()));
   // A `config-change` record: the changed leaf settings, old → new. Secret
   // values are redacted by AuditLog by the setting's name. A refused change
@@ -434,16 +435,23 @@ export function controlApi(d: ControlDeps): express.Router {
     const changes = configChanges(before, d.loaded()).map((c) => ({ key: c.path, from: c.from, to: c.to, ...(c.restart ? { restart: c.restart } : {}) }));
     if (changes.length) d.audit.write({ action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', user: actor(req), ...who(req), message: `${all ? 'Settings reset to defaults' : 'Settings changed'}: ${changes.map((c) => c.key).join(', ')}`, details: { changes, ...(all ? { reset: 'all' } : {}), ...allowedByOf(req.res) } });
   };
-  r.put('/config', (req, res) => {
+  // An audited configuration write: `next` makes the new configuration from
+  // the loaded one (a ConfigError answers 400; undefined: it answered
+  // itself), then the config-change record and the `view` answer (the
+  // settings by default). A new config route must also be checked in src/api/ui-config.ts.
+  const change = (req: express.Request, res: Response, next: (l: Loaded) => Loaded | undefined, o: { all?: boolean; view?: () => unknown } = {}) => {
     const before = d.loaded();
     try {
-      d.setLoaded(applyOverrides(d.loaded(), req.body ?? {}));
+      const l = next(before);
+      if (!l) return;
+      d.setLoaded(l);
     } catch (err) {
       return invalid(res, err);
     }
-    recordChanges(req, before);
-    res.json(configView(d.loaded(), d.running(), d.changeMarks?.()));
-  });
+    recordChanges(req, before, o.all);
+    res.json((o.view ?? settingsView)());
+  };
+  r.put('/config', (req, res) => change(req, res, (l) => applyOverrides(l, req.body ?? {})));
   // The proxy profile (cams-admin spec 2026-10-25-proxy-profile-design §0):
   // its report, plus what each camera can expect of the budget when the proxy
   // is full (shares still win), and which budget setting a higher layer
@@ -455,32 +463,19 @@ export function controlApi(d: ControlDeps): express.Router {
     return { ...v, perCameraBytes: v.storage.budgetBytes === null ? null : Math.floor(v.storage.budgetBytes / v.cameras), ignored: d.loaded().ignored };
   };
   r.get('/profile', (_req, res) => void res.json(profileView()));
-  r.put('/profile', (req, res) => {
-    const before = d.loaded();
-    try {
-      d.setLoaded(applyProfile(before, req.body));
-    } catch (err) {
-      return invalid(res, err);
-    }
-    recordChanges(req, before);
-    res.json(profileView());
-  });
+  r.put('/profile', (req, res) => change(req, res, (l) => applyProfile(l, req.body), { view: profileView }));
   // "Reset to defaults" (the Settings page): every override at once, one record.
-  r.delete('/config', (req, res) => {
-    const before = d.loaded();
-    try {
+  r.delete('/config', (req, res) =>
+    change(
+      req,
+      res,
       // A cams-admin sign-in (ui.config) keeps the overrides only the local admin changes.
       // ...and those whose reset would shorten retention or raise spending (src/api/ui-config.ts).
-      d.setLoaded(removeAllOverrides(d.loaded(), res.locals.allowedBy === 'ui.config' ? uiConfigResetKeep(d.loaded()) : undefined));
-    } catch (err) {
-      return invalid(res, err);
-    }
-    recordChanges(req, before, true);
-    res.json(configView(d.loaded(), d.running(), d.changeMarks?.()));
-  });
-  r.delete('/config/:path', (req, res) => {
-    const before = d.loaded();
-    try {
+      (l) => removeAllOverrides(l, res.locals.allowedBy === 'ui.config' ? uiConfigResetKeep(l) : undefined),
+      { all: true },
+    ));
+  r.delete('/config/:path', (req, res) =>
+    change(req, res, (before) => {
       // A camera's `moved` of a move not over (final review 1): never cleared by hand.
       if (d.moveOpen && !/^cameras\.[^.]+$/.test(req.params.path)) {
         const after = withoutOverride(before, req.params.path);
@@ -490,13 +485,8 @@ export function controlApi(d: ControlDeps): express.Router {
           }
         }
       }
-      d.setLoaded(removeOverride(d.loaded(), req.params.path));
-    } catch (err) {
-      return invalid(res, err);
-    }
-    recordChanges(req, before);
-    res.json(configView(d.loaded(), d.running(), d.changeMarks?.()));
-  });
+      return removeOverride(before, req.params.path);
+    }));
 
   // Find camera and Use this address share a rate limit (the other actions have none).
   const findLimit = perMinute(FIND_CAMERA_PER_MINUTE);
@@ -540,8 +530,9 @@ export function controlApi(d: ControlDeps): express.Router {
     }
     const fail = (status: number, error: string, detail?: string) => send(res, { status, error, ...(detail ? { detail } : {}) });
     // `restart` without a camera is the host-wide restart: every camera side,
-    // every pending setting (as on one camera; live test of #173).
-    if (name === 'restart' && target === null) {
+    // every pending setting (as on one camera; live test of #173). The same on
+    // the old route without a camera named (?cam), also with one camera.
+    if (name === 'restart' && (target === null || (!routed && typeof req.query.cam !== 'string'))) {
       d.restart().catch((err: Error) => logger.error({ err: err.message }, 'restart_failed'));
       return void res.status(202).end();
     }
@@ -557,11 +548,6 @@ export function controlApi(d: ControlDeps): express.Router {
       if (!restartRequested) d.audit.write({ action: 'proxy-restart', category: ['process'], type: ['change'], outcome: 'success', user: actor(req), ...who(req), message: 'Proxy process restart requested through the control API', details: { requestedBy, ...allowedByOf(res) } });
       restartRequested = true;
       res.once('close', () => setImmediate(() => d.restartProcess()));
-      return void res.status(202).end();
-    }
-    // `restart` on the old route without a camera named: every camera side and the settings.
-    if (name === 'restart' && !routed && typeof req.query.cam !== 'string') {
-      d.restart().catch((err: Error) => logger.error({ err: err.message }, 'restart_failed'));
       return void res.status(202).end();
     }
     send(res, await performAction(d, name, target, typeof req.body === 'object' && req.body !== null ? req.body : {}, { user: actor(req), requestedBy, ...who(req) }));
@@ -594,11 +580,10 @@ export function auditApi(d: { audit: AuditLog; guard: express.RequestHandler; re
   });
   r.get('/audit', d.guard, (req, res) => {
     const q = req.query;
-    const num = (v: unknown) => (v === undefined ? undefined : /^\d{1,15}$/.test(String(v)) ? Number(v) : NaN);
     const outcome = q.outcome === undefined ? undefined : String(q.outcome);
     if (outcome !== undefined && !['success', 'failure', 'unknown'].includes(outcome)) return void res.status(400).json({ error: 'invalid', detail: 'outcome is success, failure or unknown' });
-    const from = num(q.from), to = num(q.to), limit = num(q.limit);
-    if ([from, to, limit].some((v) => Number.isNaN(v))) return void res.status(400).json({ error: 'invalid', detail: 'from, to and limit are numbers' });
+    const from = intParam(q.from), to = intParam(q.to), limit = intParam(q.limit);
+    if (from === null || to === null || limit === null) return void res.status(400).json({ error: 'invalid', detail: 'from, to and limit are numbers' });
     const actions = q.action === undefined ? undefined : String(q.action).split(',').map((s) => s.trim()).filter(Boolean);
     const unknown = actions?.find((a) => !isAuditAction(a));
     if (unknown !== undefined) return void res.status(400).json({ error: 'invalid', detail: `unknown action: ${unknown.slice(0, 40)}` });
