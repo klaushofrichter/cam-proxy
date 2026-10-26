@@ -142,9 +142,9 @@ export interface ControlDeps {
     clearTrust: (cam: string, who: Requester) => CertState | null; // null: no camera trust kept here
     dropPrevious: (who: Requester) => boolean; // false: no previous CA
   };
-  // Every camera's status block, config order; the number of cameras (spec 2026-10-05-multi-camera-host-design §6.3).
+  // Every camera's status block, config order (only the one `id` names when given); the number of cameras (spec 2026-10-05-multi-camera-host-design §6.3).
   cameras: CameraRegistry;
-  cameraStatus: () => CameraStatusBlock[];
+  cameraStatus: (id?: string) => CameraStatusBlock[];
   cameraCount: () => number;
   // The overrides a cams-admin command set (plan P3 R3-14): GET /control/config's `by`.
   changeMarks?: () => ChangeMarks;
@@ -296,28 +296,31 @@ export function controlApi(d: ControlDeps): express.Router {
 
   r.get('/status', async (_req, res) => {
     const health = await d.health();
+    // The first camera's parts are its block's (built once); without a camera, the placeholders.
+    const cameras = d.cameraStatus();
+    const first = cameras[0];
     res.json({
       version: d.version,
-      camera: d.camera(),
-      intake: d.intake(),
+      camera: first ? first.camera : d.camera(),
+      intake: first ? first.intake : d.intake(),
       sse: { clients: d.sseClients() },
-      stream: d.stream(),
+      stream: first ? first.stream : d.stream(),
       retention: { lastRun: d.storage.lastRun(), totals: d.storage.totals() },
       storage: { paused: d.storage.paused() },
-      ftp: d.ftp(),
-      recordings: d.recordings(),
+      ftp: first ? first.ftp : d.ftp(),
+      recordings: first ? first.recordings : d.recordings(),
       analytics: d.analytics(),
       analyticsUnmapped: d.unmapped.list(20),
       health,
       archive: d.archive.status(),
-      cameras: d.cameraStatus(),
+      cameras,
     });
   });
 
   // Every camera's status block (spec §6.3); one camera's.
   r.get('/cameras', (_req, res) => void res.json(d.cameraStatus()));
   r.get('/cameras/:cam/status', (req, res) => {
-    const b = d.cameraStatus().find((x) => x.id === req.params.cam);
+    const [b] = d.cameraStatus(req.params.cam);
     if (!b) return void res.status(404).json({ error: 'not_found' });
     res.json(b);
   });

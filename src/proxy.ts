@@ -1152,7 +1152,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       return w ? cameraStatusBlock(w).camera : noCamera().camera;
     },
     cameras: cams,
-    cameraStatus: () => cams.list().map(cameraStatusBlock),
+    cameraStatus: (id) => (id === undefined ? cams.list() : cams.list().filter((w) => w.id === id)).map(cameraStatusBlock),
     cameraCount: () => cams.size,
     // Writes through to the camera and reads back; the poller (and so the
     // stream message) knows the new name at once.
