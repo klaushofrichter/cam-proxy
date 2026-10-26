@@ -16,8 +16,8 @@ import { until } from './helpers/proxy';
 
 // The camera-move group of the cams-admin contract (cams-admin contract/README
 // "Camera moves"; cam-proxy plan 2026-10-21-camera-move-cam-proxy Task 1): the
-// twelve commands (move.begin from cams-admin starts a move), their two allow entries, the signed events.
-const MOVE = ['move.targets', 'move.open', 'move.offer', 'move.answer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel', 'move.begin', 'move.return.open', 'move.return.start'];
+// thirteen commands (move.begin from cams-admin starts a move, move.summary reads what it would carry), their two allow entries, the signed events.
+const MOVE = ['move.targets', 'move.open', 'move.offer', 'move.answer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel', 'move.begin', 'move.return.open', 'move.return.start', 'move.summary'];
 const quiet: ClientLog = { info() {}, warn() {}, debug() {} };
 const FAST: Partial<Timing> = { connectTimeoutMs: 1000, helloTimeoutMs: 500, closeGraceMs: 200, backoffCapMs: 300, minIntervalS: 0.2, jitterS: 0, byeWaitMs: 500 };
 const isMove = (f: Fixture) => f.schema === 'command' && MOVE.includes((f.message as { body: { command: string } }).body.command);
@@ -45,7 +45,7 @@ describe('the move commands against the vendored contract', () => {
       const want = name.startsWith('valid-') ? 'run' : f.$expect!.runtime;
       expect(verdict(f), name).toBe(want);
     }
-    // each of the twelve has a valid fixture and a validator
+    // each of the thirteen has a valid fixture and a validator
     for (const c of MOVE) {
       expect(moves.some(({ name }) => name === `valid-command-${c.replace(/\./g, '-')}`), c).toBe(true);
       expect(ARGS_VALIDATORS[c], c).toBeTypeOf('function');
@@ -77,7 +77,7 @@ describe('the move commands against the vendored contract', () => {
   });
 
   it('the entry each command needs; the other commands need themselves', () => {
-    for (const c of ['move.targets', 'move.open', 'move.answer', 'move.go', 'move.release', 'move.begin']) expect(entryFor(c, { v: 1 }), c).toBe('move.send');
+    for (const c of ['move.targets', 'move.open', 'move.answer', 'move.go', 'move.release', 'move.begin', 'move.summary']) expect(entryFor(c, { v: 1 }), c).toBe('move.send');
     for (const c of ['move.offer', 'move.start']) expect(entryFor(c, { v: 1 }), c).toBe('move.receive');
     expect(entryFor('move.finish', { role: 'source' })).toBe('move.send');
     expect(entryFor('move.finish', { role: 'target' })).toBe('move.receive');

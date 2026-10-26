@@ -17,6 +17,8 @@ export interface ProfileReport {
   hardware: { pi: string | null; cpuCores: number; cpuModel: string | null; memoryBytes: number; load5: number; cpuTempC: number | null };
   warnings: ProfileWarning[];
   firewall: { tool: 'ufw' | 'nft'; lines: string[] };
+  // The site CA's settings (tls.site, tls.cameraSubnet); null when unset (the Pi).
+  tls: { site: string | null; cameraSubnet: string | null };
 }
 
 // What the proxy reads elsewhere: the storage figures (storage.usage()), the
@@ -59,5 +61,6 @@ export function profileReport(c: Config, facts: ProfileFacts, hw: Hardware = osH
     },
     warnings: profileWarnings(c),
     firewall: { tool: c.profile.firewall, lines: firewallLines(c).map((l) => l.slice(0, 200)) },
+    tls: { site: c.tls.site || null, cameraSubnet: c.tls.cameraSubnet || null },
   };
 }
