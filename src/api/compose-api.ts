@@ -12,7 +12,7 @@ import { DAY, dayStart } from '../time-units';
 import { clientIp } from './auth';
 import { cameraParam, workerOf } from './camera-param';
 import type { CameraRegistry } from '../cameras/registry';
-import { perMinute } from './respond';
+import { notFound, perMinute } from './respond';
 
 const run = promisify(execFile);
 export const COMPOSITIONS_PER_MINUTE = 10;
@@ -74,7 +74,7 @@ export function composeApi(d: {
       const chosen = b.span === undefined ? undefined : spanOf(b.span);
       if (chosen === null) return bad(res, 'span is {start, end} in unix ms, start before end, at most a day apart');
       const row = clipById(d.catalog, b.clipId as number);
-      if (!row || row.cam !== cam(res) || row.end_ts === null) return void res.status(404).json({ error: 'not_found' });
+      if (!row || row.cam !== cam(res) || row.end_ts === null) return notFound(res);
       clip = toSpan(row);
       // The span is the recording this clip is a copy of: it must overlap the
       // clip by at least 1 s (the same 1 s as "at least 1 s must remain"), so
@@ -157,9 +157,9 @@ export function composeApi(d: {
 
   r.get('/cameras/:cam/compositions/:file', (req, res) => {
     const m = /^([A-Za-z0-9_-]{22})(\.mp4)?$/.exec(String(req.params.file));
-    if (!m) return void res.status(404).json({ error: 'not_found' });
+    if (!m) return notFound(res);
     const job = d.composer.get(cam(res), m[1]);
-    if (!job) return void res.status(404).json({ error: 'not_found' });
+    if (!job) return notFound(res);
     if (!m[2]) return void res.json(job);
     const file = d.composer.file(cam(res), m[1]);
     if (!file) return void res.status(409).json({ error: 'not_ready' });
@@ -168,7 +168,7 @@ export function composeApi(d: {
   });
 
   r.delete('/cameras/:cam/compositions/:id', (req, res) => {
-    if (!d.composer.cancel(cam(res), String(req.params.id))) return void res.status(404).json({ error: 'not_found' });
+    if (!d.composer.cancel(cam(res), String(req.params.id))) return notFound(res);
     res.status(204).end();
   });
   return r;

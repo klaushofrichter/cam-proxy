@@ -7,6 +7,7 @@ import { rateLimit, type Options } from 'express-rate-limit';
 export const IMMUTABLE = 'private, max-age=604800, immutable';
 
 export const bad = (res: Response, detail: string) => void res.status(400).json({ error: 'invalid', detail });
+export const notFound = (res: Response) => void res.status(404).json({ error: 'not_found' });
 
 // A whole-number query parameter: undefined when absent, null when not one.
 export const intParam = (v: unknown): number | undefined | null => (v === undefined ? undefined : typeof v === 'string' && /^\d{1,15}$/.test(v) ? Number(v) : null);

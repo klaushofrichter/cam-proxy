@@ -24,7 +24,7 @@ import { clientIp } from './auth';
 import { cameraParam, workerOf } from './camera-param';
 import type { CameraRegistry } from '../cameras/registry';
 import type { CameraWorker } from '../cameras/worker';
-import { bad, IMMUTABLE, intParam, leftSignal, perMinute, sendFileOr } from './respond';
+import { bad, IMMUTABLE, intParam, leftSignal, notFound, perMinute, sendFileOr } from './respond';
 
 // The Archive's client API (docs/archive.md, spec 2026-10-05-archive-design
 // §2–4). Auth (client token or admin; CSRF for sessions) is applied by the
@@ -39,7 +39,6 @@ const JOB_ID = /^[A-Za-z0-9_-]{22}$/;
 const QUALITIES = ['sd', '360p', '720p', '1080p', '4k'];
 
 class Bad extends Error {}
-const notFound = (res: Response) => void res.status(404).json({ error: 'not_found' });
 const ID = /^\d{1,15}$/; // an archive id in a path or a list
 const listParam = (v: unknown): string[] | undefined | null => (v === undefined ? undefined : typeof v === 'string' ? v.split(',').map((s) => s.trim()).filter(Boolean) : null);
 

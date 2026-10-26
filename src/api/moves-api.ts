@@ -12,7 +12,7 @@ import { ManifestCache } from '../moves/manifest-cache';
 import { seal } from '../moves/seal';
 import { moveTokenGuard } from '../moves/token-guard';
 import type { MovePhaseName } from '../moves/types';
-import { bad, intParam, perMinute, sendFileOr } from './respond';
+import { bad, intParam, notFound, perMinute, sendFileOr } from './respond';
 
 // The source's side of a camera move (camera-move plan Task 5, S §8.1, §9.3):
 // the target pulls the camera's content and its sealed password from
@@ -271,6 +271,6 @@ export function movesSourceApi(d: MovesSourceDeps): express.Router {
   });
 
   // Nothing under /moves reaches the client APIs.
-  router.use('/moves', (_req, res) => void res.status(404).json({ error: 'not_found' }));
+  router.use('/moves', (_req, res) => notFound(res));
   return router;
 }

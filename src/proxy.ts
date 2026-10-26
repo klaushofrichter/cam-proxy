@@ -99,7 +99,7 @@ import { camsAdminApi } from './api/cams-admin-api';
 import type { Timing } from './fleet/client';
 import { CONFIG_SCHEMA } from './config/schema';
 import { profileReport, type ProfileFacts, type ProfileReport } from './health/profile';
-import { perMinute } from './api/respond';
+import { notFound, perMinute } from './api/respond';
 
 export const VERSION = process.env.CAMPROXY_VERSION ?? 'dev';
 
@@ -1285,9 +1285,9 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       res.sendFile(join(webDir, 'index.html'));
     });
   }
-  app.use((_req, res) => void res.status(404).json({ error: 'not_found' }));
+  app.use((_req, res) => notFound(res));
   app.use((err: Error & { status?: number; type?: string }, _req: Request, res: Response, _next: NextFunction) => {
-    if (err.status === 404) return void res.status(404).json({ error: 'not_found' });
+    if (err.status === 404) return notFound(res);
     if (err.type === 'entity.parse.failed') return void res.status(400).json({ error: 'invalid', detail: 'body is not JSON' });
     if (err.status && err.status < 500) return void res.status(err.status).json({ error: err.type === 'entity.too.large' ? 'too_large' : 'bad_request' });
     logger.error({ err: err.message }, 'request_failed');

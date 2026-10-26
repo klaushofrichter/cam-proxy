@@ -45,7 +45,7 @@ import { RotateBusyError, type CertState, type Requester, type TlsView } from '.
 import type { PushResult } from '../tls/push';
 import { OWN_AUDIT, performAction, type ActionOutcome } from './actions';
 import type { NtpOutcome } from '../cameras/ntp';
-import { intParam, perMinute } from './respond';
+import { intParam, notFound, perMinute } from './respond';
 
 interface FtpStatus {
   enabled: boolean;
@@ -322,7 +322,7 @@ export function controlApi(d: ControlDeps): express.Router {
   r.get('/cameras', (_req, res) => void res.json(d.cameraStatus()));
   r.get('/cameras/:cam/status', (req, res) => {
     const [b] = d.cameraStatus(req.params.cam);
-    if (!b) return void res.status(404).json({ error: 'not_found' });
+    if (!b) return notFound(res);
     res.json(b);
   });
 
@@ -420,7 +420,7 @@ export function controlApi(d: ControlDeps): express.Router {
   r.get('/inventory/runs/:id', async (req, res) => {
     if (!RUN_ID.test(req.params.id)) return void res.status(400).json({ error: 'invalid', detail: 'not a run id' });
     const run = await d.inventory.get(req.params.id);
-    if (!run) return void res.status(404).json({ error: 'not_found' });
+    if (!run) return notFound(res);
     res.json(run);
   });
 
@@ -509,7 +509,7 @@ export function controlApi(d: ControlDeps): express.Router {
     const name = String(req.params.name);
     const routed = typeof req.params.cam === 'string';
     // Host actions have no camera route.
-    if (routed && !CAMERA_ACTIONS.has(name)) return void res.status(404).json({ error: 'not_found' });
+    if (routed && !CAMERA_ACTIONS.has(name)) return notFound(res);
     const target = CAMERA_ACTIONS.has(name) ? targetCamera(req, res) : null;
     if (target === undefined) return;
     const requestedBy = res.locals.access?.viaCookie ? 'session' : 'token';
