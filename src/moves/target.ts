@@ -18,7 +18,7 @@ import { removeMoveParts } from './copier';
 import { failed, ok, samePlan, zeros } from './done';
 import { mergeOutcome, OUTCOME_REFUSED, outcomeOf, type ChunkKeep, type MoveOutcome } from './check';
 import { moveSourceClient, sourceGet, sourceOf } from './evaluate';
-import { moveEnded, SWITCH_STEPS, type MoveJournal, type MoveRecord, type MoveTombstone, type SwitchStep } from './journal';
+import { chunkTotals, moveEnded, SWITCH_STEPS, type MoveJournal, type MoveRecord, type MoveTombstone, type SwitchStep } from './journal';
 import { OFFER_EXPIRY_MS } from './source';
 import { keepDaysOf } from './retention';
 import { removeLanded, type Purged } from './purge';
@@ -552,14 +552,7 @@ export class MoveTarget {
       if (st === 'verified' || st === 'skipped' || st === 'failed') chunks[st]++;
       else chunks.abandoned++;
     }
-    const files = { verified: 0, skipped: 0, failed: 0 };
-    let bytes = 0;
-    for (const c of Object.values(r.chunks)) {
-      files.verified += c.v ?? 0;
-      files.skipped += c.s ?? 0;
-      files.failed += c.f ?? 0;
-      bytes += c.vb ?? 0;
-    }
+    const { bytes, ...files } = chunkTotals(Object.values(r.chunks));
     return { chunks, files, bytes, durationS: Math.max(0, Math.round(((r.endedAt ?? this.now()) - r.startedAt) / 1000)) };
   }
 

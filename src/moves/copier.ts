@@ -10,7 +10,7 @@ import { readChunkPart, writeChunkPart } from './chunk-parts';
 import { moveSourceClient, sourceOf, spaceFor, type EvaluateDeps, type SourceAnswer } from './evaluate';
 import { importRows, isStaged, landingPath, moveStagingDir, relOk, type ImportDeps } from './import';
 import { chunkDay, chunkOrder, CONTENT_FOLDERS, hashFile, KIND_FOLDERS, type ChunkMeta, type TableRows } from './inventory';
-import type { ChunkRecord, MoveJournal, MoveRecord } from './journal';
+import { chunkTotals, type ChunkRecord, type MoveJournal, type MoveRecord } from './journal';
 import { noteLanded } from './purge';
 import { abortableSleep, paceS, rateFor, TokenBucket } from './rate';
 import type { ChunkState, MoveCheck, MoveEvent, MoveKind, MoveSummary } from './types';
@@ -977,15 +977,7 @@ export class Copier {
 
   // `check`: the completeness check (none for a move without transfer); audited as move-check.
   private finish(check?: MoveCheck): void {
-    const counts = { verified: 0, skipped: 0, failed: 0, bytes: 0 };
-    for (const c of this.manifest) {
-      const rec = this.r.chunks[c.id];
-      if (!rec) continue;
-      counts.verified += rec.v ?? 0;
-      counts.skipped += rec.s ?? 0;
-      counts.failed += rec.f ?? 0;
-      counts.bytes += rec.vb ?? 0;
-    }
+    const counts = chunkTotals(this.manifest.flatMap((c) => this.r.chunks[c.id] ?? []));
     if (this.manifest.length) {
       this.save(true);
       this.progress(true);

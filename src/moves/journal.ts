@@ -31,6 +31,18 @@ export interface ChunkRecord {
   meta?: { files: number; bytes: number; rows: number };
 }
 
+// The files verified, skipped and failed and the bytes verified of these chunks (move-done, the copied phase).
+export function chunkTotals(chunks: Iterable<ChunkRecord>): { verified: number; skipped: number; failed: number; bytes: number } {
+  const t = { verified: 0, skipped: 0, failed: 0, bytes: 0 };
+  for (const c of chunks) {
+    t.verified += c.v ?? 0;
+    t.skipped += c.s ?? 0;
+    t.failed += c.f ?? 0;
+    t.bytes += c.vb ?? 0;
+  }
+  return t;
+}
+
 export interface MovePeer {
   proxyId: string;
   name: string;
