@@ -1,5 +1,5 @@
-import { createHash } from 'crypto';
 import { connect } from 'tls';
+import { sha256Pin } from './pin';
 
 // The certificate a camera serves, read without validation (spec
 // 2026-10-05-multi-camera-host-design §10.1.3): its factory certificate is
@@ -17,7 +17,7 @@ export function servedCertificate(host: string, port: number, timeoutMs = 10_000
     const s = connect({ host, port, rejectUnauthorized: false, ...(servername ? { servername } : {}) }, () => {
       const c = s.getPeerX509Certificate();
       s.destroy();
-      resolve(c ? { fingerprint: `SHA256:${createHash('sha256').update(c.raw).digest('hex').toUpperCase()}`, pem: c.toString() } : null);
+      resolve(c ? { fingerprint: sha256Pin(c.raw), pem: c.toString() } : null);
     });
     s.setTimeout(timeoutMs, () => (s.destroy(), resolve(null)));
     s.on('error', () => resolve(null));

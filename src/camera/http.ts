@@ -1,7 +1,7 @@
 import http, { IncomingMessage } from 'node:http';
 import https from 'node:https';
-import { createHash } from 'node:crypto';
 import { checkServerIdentity, type PeerCertificate } from 'node:tls';
+import { sha256Pin } from '../tls/pin';
 
 export interface CameraTarget {
   protocol: 'https' | 'http';
@@ -15,8 +15,6 @@ export interface CameraTarget {
   pin?: string;
 }
 
-const fingerprint = (raw: Buffer) => `SHA256:${createHash('sha256').update(raw).digest('hex').toUpperCase()}`;
-
 // The handshake's identity check: the name (when there is one), then the pin.
 export function pinCheck(servername: string | undefined, pin: string): (host: string, cert: PeerCertificate) => Error | undefined {
   return (host, cert) => {
@@ -24,7 +22,7 @@ export function pinCheck(servername: string | undefined, pin: string): (host: st
       const e = checkServerIdentity(servername, cert);
       if (e) return e;
     }
-    return fingerprint(cert.raw) === pin ? undefined : new Error('the camera certificate does not match its pin');
+    return sha256Pin(cert.raw) === pin ? undefined : new Error('the camera certificate does not match its pin');
   };
 }
 

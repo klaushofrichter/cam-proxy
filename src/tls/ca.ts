@@ -1,7 +1,8 @@
-import { createHash, createPrivateKey, createPublicKey, randomBytes, webcrypto, X509Certificate } from 'crypto';
+import { createPrivateKey, createPublicKey, randomBytes, webcrypto, X509Certificate } from 'crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { nameConstraintsDer, parseNameConstraints } from './der';
+import { sha256Pin } from './pin';
 import { x509 } from './x509';
 import { DAY } from '../time-units';
 
@@ -19,9 +20,9 @@ export interface SiteCa {
   coversName(name: string): boolean;
 }
 
-// The pin cams compares: SHA256: + the upper-case hex SHA-256 of the DER (Ruling P5-8).
+// The pin cams compares (Ruling P5-8) of a PEM certificate.
 export function fingerprintOf(pem: string): string {
-  return `SHA256:${createHash('sha256').update(new X509Certificate(pem).raw).digest('hex').toUpperCase()}`;
+  return sha256Pin(new X509Certificate(pem).raw);
 }
 
 const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
