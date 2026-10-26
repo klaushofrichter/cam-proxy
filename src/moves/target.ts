@@ -4,7 +4,7 @@ import { bareHost, splitHost } from '../camera/http';
 import { activeCameraIds } from '../config/cameras';
 import type { CameraPasswordStore } from '../config/camera-passwords';
 import { cameraDefaults } from '../config/defaults';
-import { applyOverrides, getPath, planOverrides, rebuildWith, removeOverride, writeOverridesFile, setPath, type Loaded } from '../config/load';
+import { applyOverrides, getPath, planOverrides, rebuildWith, removeOverride, writeOverridesFile, setPath, withoutCamera, type Loaded } from '../config/load';
 import { cameraPasswordEnv } from '../config/password-env';
 import type { MoveCancelArgs, MoveFinishArgs, MoveOfferArgs, MoveStartArgs } from '../fleet/command-args';
 import type { Done, Handler } from '../fleet/commands';
@@ -779,13 +779,8 @@ export class MoveTarget {
     if (existing && existing.moved === undefined && !r.cameraWritten) return { problem: 'id_taken' };
     if ((loaded.env[cameraPasswordEnv(id)] ?? '').trim() !== '') return { problem: 'stale_leftover' };
     // The configuration without this camera's overrides: what config.json alone gives it.
-    const all = structuredClone(loaded.overrides) as Record<string, unknown>;
-    const cams = { ...((all.cameras ?? {}) as Record<string, unknown>) };
     const leftover = existing?.moved !== undefined;
-    delete cams[id];
-    if (Object.keys(cams).length) all.cameras = cams;
-    else delete all.cameras;
-    const base = rebuildWith(loaded, all);
+    const base = rebuildWith(loaded, withoutCamera(loaded.overrides, id));
     const file = base.config.cameras[id];
     const node: Record<string, unknown> = { name: c.name, host: c.host, protocol: c.protocol, user: c.user, onvifPort: c.onvifPort, rtspPort: c.rtspPort, baichuanPort: c.baichuanPort, ...structuredClone(r.settings ?? {}) };
     if (file) {

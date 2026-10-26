@@ -2,7 +2,7 @@ import type { AuditLog } from '../audit/audit-log';
 import { configChanges, overrideState, type Change } from '../config/changes';
 import type { Config } from '../config/defaults';
 import { translatePath } from '../config/legacy';
-import { ConfigError, configRevision, getPath, needsProcessRestart, needsRestart, planOverrides, planUnset, rebuildWith, setPath, writeOverridesFile, type Loaded, type Plan } from '../config/load';
+import { ConfigError, configRevision, getPath, needsProcessRestart, needsRestart, planOverrides, planUnset, pruneEmpty, rebuildWith, setPath, writeOverridesFile, type Loaded, type Plan } from '../config/load';
 import { CONFIG_SCHEMA } from '../config/schema';
 import { configView } from '../config/view';
 import type { OverridesBackups, Backup, PathState } from './backups';
@@ -28,7 +28,6 @@ export interface ConfigCommandDeps {
 
 type Failure = { path: string; code: string; detail?: string };
 type Obj = Record<string, unknown>;
-const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const failed = (code: string, paths: Failure[]): Done => ({ status: 'failed', code, result: { paths } });
 const MAX_CAMERAS = 24;
@@ -134,11 +133,7 @@ function write(d: ConfigCommandDeps, cmd: CommandBody, args: { dryRun: boolean; 
 function withStates(overrides: object, states: { path: string; state: PathState }[]): Obj {
   const out = structuredClone(overrides) as Obj;
   for (const { path, state } of states) setPath(out, path, state.set ? state.value : undefined);
-  const prune = (x: Obj) => {
-    for (const [k, v] of Object.entries(x)) if (isObj(v)) (prune(v), Object.keys(v).length === 0 && delete x[k]);
-  };
-  prune(out);
-  return out;
+  return pruneEmpty(out);
 }
 
 type Undoer = { by: 'cams-admin'; cmd: CommandBody } | { by: 'local'; who: { user: string; ip?: string; userAgent?: string } };
