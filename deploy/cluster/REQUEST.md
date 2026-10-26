@@ -10,6 +10,8 @@ entry in `cams-cameras`).
 
 2026-10-26 (later): with the camera host on cam2's ClusterIP, cam2's FTP logins from its pod address (10.42.x) were refused. `ftp.sourceSubnet` `10.42.0.0/16` (cam-proxy with ftp.sourceSubnet, released after v2026.10.26.1) accepts them; the NetworkPolicy keeps FTP ingress to the cam2 pod. Regenerate the ConfigMap once the cluster runs that release.
 
+2026-10-26 (evening): HTTPS for the cluster proxy. `server.tls.port` 8443 (the site CA's certificate for `proxy.cluster.internal` and 10.43.253.190). kube-setup: add port 8443 to the cam-proxy Service, allow the cams pods to reach it (like 8480), regenerate the ConfigMap and restart. Then the cluster cams route goes to `https://cam-proxy.cam-proxy.svc.cluster.local:8443` with the TLS name `proxy.cluster.internal`.
+
 cam-proxy (github.com/klaushofrichter/cam-proxy) is the camera gateway: it
 keeps one connection to a camera, stores a still per second, records events,
 receives the camera's clips by FTP(S) and serves it all over HTTP/SSE. In the
