@@ -25,7 +25,7 @@ import { AuditQueryError, type AuditLog, type Outcome } from '../audit/audit-log
 import { actorOf, allowedByOf, clientIp, tokenMatches, UI_CONFIG_LOCAL, type AccessInfo } from './auth';
 import { uiConfigResetKeep } from './ui-config';
 import { narrowRules } from '../fleet/remote-settable';
-import { cameraParam, RESTART_RETRY_S } from './camera-param';
+import { cameraParam, resolveCamera } from './camera-param';
 import type { CameraRegistry } from '../cameras/registry';
 import { RefusalThrottle } from '../audit/throttle';
 import { isAuditAction } from '../audit/actions';
@@ -337,15 +337,8 @@ export function controlApi(d: ControlDeps): express.Router {
   const targetCamera = (req: express.Request, res: Response): string | null | undefined => {
     if (typeof req.params.cam === 'string') return req.params.cam;
     const q = req.query.cam;
-    if (typeof q === 'string' && q) {
-      const w = d.cameras.get(q);
-      if (!w) return void res.status(404).json({ error: 'not_found' }), undefined;
-      if (w.phase() === 'restarting') {
-        res.setHeader('Retry-After', String(RESTART_RETRY_S));
-        return void res.status(503).json({ error: 'camera_restarting' }), undefined;
-      }
-      return w.id;
-    }
+    // No per-camera rights check here: requireAccess('admin') guards the router.
+    if (typeof q === 'string' && q) return resolveCamera(d.cameras, q, res, null)?.id;
     return d.cameraCount() === 1 ? d.cameraId() : null;
   };
 

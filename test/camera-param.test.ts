@@ -2,7 +2,7 @@ import express from 'express';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { can, type AccessInfo } from '../src/api/auth';
-import { cameraParam, workerOf } from '../src/api/camera-param';
+import { cameraParam, resolveCamera, workerOf } from '../src/api/camera-param';
 import { CameraRegistry } from '../src/cameras/registry';
 import type { CameraWorker, WorkerPhase } from '../src/cameras/worker';
 
@@ -43,6 +43,29 @@ describe('cameraParam (spec §6.1, §3.3)', () => {
   });
   it('an idle camera (no address) is still served: its stored data stays readable', async () => {
     expect((await request(app({ cam3: 'idle' })).get('/cameras/cam3/x')).status).toBe(200);
+  });
+});
+
+describe('resolveCamera (control-api ?cam=)', () => {
+  // need null: no rights check (the control router checked admin access); the same 404 and 503 as cameraParam.
+  const resolver = (phases: Record<string, WorkerPhase>) => {
+    const cams = new CameraRegistry(() => Object.keys(phases));
+    for (const [id, p] of Object.entries(phases)) cams.add(worker(id, p));
+    const a = express();
+    a.use((_req, res, next) => ((res.locals.access = { access: 'client', viaCookie: false, tokenKind: 'client' }), next()));
+    a.get('/x', (req, res) => {
+      const w = resolveCamera(cams, String(req.query.cam), res, null);
+      if (w) res.json({ id: w.id });
+    });
+    return a;
+  };
+  it('the worker without a rights check; unknown 404; restarting 503 with Retry-After', async () => {
+    const a = resolver({ cam3: 'ready', cam4: 'restarting' });
+    expect((await request(a).get('/x?cam=cam3')).body).toEqual({ id: 'cam3' });
+    const unknown = await request(a).get('/x?cam=cam9');
+    expect([unknown.status, unknown.body]).toEqual([404, { error: 'not_found' }]);
+    const restarting = await request(a).get('/x?cam=cam4');
+    expect([restarting.status, restarting.body, restarting.headers['retry-after']]).toEqual([503, { error: 'camera_restarting' }, '5']);
   });
 });
 
