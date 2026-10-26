@@ -1,5 +1,5 @@
 import type { Response } from 'express';
-import { rateLimit } from 'express-rate-limit';
+import { rateLimit, type Options } from 'express-rate-limit';
 
 // Answers and parameters the client APIs share.
 
@@ -7,12 +7,21 @@ import { rateLimit } from 'express-rate-limit';
 export const IMMUTABLE = 'private, max-age=604800, immutable';
 
 export const bad = (res: Response, detail: string) => void res.status(400).json({ error: 'invalid', detail });
+export const notFound = (res: Response) => void res.status(404).json({ error: 'not_found' });
 
 // A whole-number query parameter: undefined when absent, null when not one.
 export const intParam = (v: unknown): number | undefined | null => (v === undefined ? undefined : typeof v === 'string' && /^\d{1,15}$/.test(v) ? Number(v) : null);
 
+// Aborted when the response closes (the client left, or it was answered).
+export const leftSignal = (res: Response): AbortSignal => {
+  const ac = new AbortController();
+  res.once('close', () => ac.abort());
+  return ac.signal;
+};
+
 // At most `limit` requests per client and minute; 429 {error: rate_limited}.
-export const perMinute = (limit: number) => rateLimit({ windowMs: 60_000, limit, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } });
+// `extra`: further options (skip, skipSuccessfulRequests, ...).
+export const perMinute = (limit: Options['limit'], extra: Partial<Options> = {}) => rateLimit({ windowMs: 60_000, limit, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' }, ...extra });
 
 // sendFile with Range; a failure before any byte is 416 (it carries its
 // Content-Range, bytes */size), 404 `notFound`, or 500 (without a

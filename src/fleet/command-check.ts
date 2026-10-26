@@ -135,7 +135,7 @@ export function checkCommand(m: Envelope, c: CheckContext): Decision {
   // The claim, checked (contract step 10): every entry is one of the stored set, unchanged.
   if (claim && !isRevocation(v.args as TokensApplyArgs, c.currentTokens)) return nack('invalid_args');
   if (!claim && command === 'tokens.apply' && (v.args as { tokens: { kind: string }[] }).tokens.some((x) => x.kind === 'admin') && !c.policy.allow.includes('tokens.apply.admin')) return nack('not_allowed');
-  if (typeof b.actor !== 'string' || !isObj(b.args)) return nack('invalid_args');
+  if (typeof b.actor !== 'string') return nack('invalid_args');
   // Step 11 (P3): the entry the args need, and the journal budget.
   const action = command === 'camera.action' ? (v.args as CameraActionArgs).action : undefined;
   if (action !== undefined && ((NEVER_REMOTE_ACTIONS as readonly string[]).includes(action) || !c.policy.allow.includes(`camera.action:${action}`))) return nack('not_allowed');

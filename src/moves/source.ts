@@ -1,4 +1,3 @@
-import { createHash } from 'crypto';
 import type { AuditLog } from '../audit/audit-log';
 import { activeCameraIds } from '../config/cameras';
 import type { CameraNode, Config } from '../config/defaults';
@@ -6,14 +5,16 @@ import { keepDaysOf } from './retention';
 import { applyOverrides, planUnset, removeOverride, writeOverridesFile, type Loaded } from '../config/load';
 import { planProblem, type MoveAnswerArgs, type MoveBeginArgs, type MoveCancelArgs, type MoveFinishArgs, type MoveGoArgs, type MoveOpenArgs, type MoveReleaseArgs, type MoveSummaryArgs, type MoveTargetsArgs } from '../fleet/command-args';
 import type { Done, Handler } from '../fleet/commands';
-import { newId } from '../fleet/protocol';
+import { fingerprint, newId } from '../fleet/protocol';
 import { listChunks, summarize, type InventoryDeps } from './inventory';
 import type { PushResult } from '../tls/push';
 import { moveEnded, type MoveJournal, type MoveRecord, type MoveTombstone } from './journal';
 import { autoPlan, type AutoWaitReason } from './plan';
 import type { Purged, purgeExcept } from './purge';
 import { moveDetail } from './detail';
-import { MOVE_KINDS, type MoveActor, type MoveAnswer, type MoveBounds, type MoveCameraConnection, type MoveCopied, type MoveEvent, type MoveKind, type MovePlan, type MoveSummary, type Settings } from './types';
+import { failed, ok, samePlan, zeros } from './done';
+import type { MoveActor, MoveAnswer, MoveBounds, MoveCameraConnection, MoveCopied, MoveEvent, MoveKind, MovePlan, MoveSummary, Settings } from './types';
+import { HOUR } from '../time-units';
 
 // The source side of a camera move (camera-move plan Task 7, S §4, §7, §9.1):
 // the source proxy's page starts a move (move.targets, move.request events),
@@ -120,7 +121,6 @@ class StepFailed extends Error {
 }
 const RETRY_MS = 2000;
 const RETRY_CAP_MS = 5 * 60_000;
-const HOUR = 60 * 60_000;
 const KEEP_MS = 30 * 60_000; // an offer not approved within 30 minutes expires (S §7)
 // An opened move with no approval after that and 5 minutes slack closes here on its own (final review 5).
 export const OFFER_EXPIRY_MS = KEEP_MS + 5 * 60_000;
@@ -130,16 +130,8 @@ export const SUMMARY_CACHE_MS = 30_000;
 const SWITCHED: readonly string[] = ['switching', 'switched', 'released', 'copying', 'copied'];
 const RELEASED: readonly string[] = ['released', 'copying', 'copied'];
 
-const ok = (result: Record<string, unknown> = {}): Done => ({ status: 'ok', result });
-const zeros = (): Purged => Object.fromEntries(MOVE_KINDS.map((k) => [k, { files: 0, bytes: 0 }])) as Purged;
 const sum = (d: Purged) => Object.values(d).reduce((n, k) => ({ files: n.files + k.files, bytes: n.bytes + k.bytes }), { files: 0, bytes: 0 });
-const failed = (code: string): Done => ({ status: 'failed', code });
 const has = (s: MoveSummary, k: MoveKind) => s[k].files + s[k].rows > 0;
-// Two plans alike: kinds in any order, target settings in any key order.
-const canonical = (p: MovePlan): string => JSON.stringify([p.transfer, [...p.kinds].sort(), p.space, p.targetSettings ? Object.entries(p.targetSettings).sort(([a], [b]) => (a < b ? -1 : 1)) : null, p.budgetS, p.estimateS]);
-const samePlan = (a: MovePlan, b: MovePlan) => canonical(a) === canonical(b);
-// The fingerprint of the target's public key: audited, never the key.
-const keyFingerprint = (spkiB64: string) => `SHA256:${createHash('sha256').update(Buffer.from(spkiB64, 'base64')).digest('hex').toUpperCase()}`;
 
 // The camera node's settings as they move (the contract's Settings): never the
 // address, the user's password or the FTP user (the target uses its own).
@@ -886,7 +878,7 @@ export class MoveSource {
       action: 'move-switch', category: ['configuration'], type: ['change'], outcome: 'success',
       user: 'cams-admin', camera: r.camera,
       message: `Camera move ${r.id}: switch-over to ${r.peer.name || r.peer.proxyId} started; ${r.camera} may serve the leaf ${a.expectedLeaf}; ${r.manifest.length} chunks listed`,
-      details: { moveId: r.id, camera: r.camera, source: this.self(), target: r.peer.proxyId, step: 'go', outcome: 'ok', leafFingerprint: a.expectedLeaf, publicKeyFingerprint: keyFingerprint(a.targetPublicKey), chunks: r.manifest.length },
+      details: { moveId: r.id, camera: r.camera, source: this.self(), target: r.peer.proxyId, step: 'go', outcome: 'ok', leafFingerprint: a.expectedLeaf, publicKeyFingerprint: fingerprint(a.targetPublicKey), chunks: r.manifest.length },
     });
     this.phaseEvent(r);
     return ok();

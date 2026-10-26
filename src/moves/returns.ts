@@ -8,6 +8,7 @@ import type { Storage } from '../storage';
 import { cancelMinuteFiles, capturedFilter } from './captured';
 import { removeChunkParts } from './chunk-parts';
 import { removeMoveParts, type CopyRunner } from './copier';
+import { failed, ok, zeros } from './done';
 import { listChunks, type InventoryDeps } from './inventory';
 import { moveEnded, type ChunkMeta, type MoveJournal, type MoveRecord, type MoveTombstone } from './journal';
 import { removeImported, removeLanded, removeReturned, type Purged } from './purge';
@@ -64,10 +65,7 @@ export interface ReturnDeps {
 // is unused (no move-budget-exceeded), only pressure halves its rate.
 export const RETURN_PLAN: MovePlan = { transfer: true, kinds: [...MOVE_KINDS], space: 'all', targetSettings: null, budgetS: 3600, estimateS: 0 };
 
-const ok = (result: Record<string, unknown> = {}): Done => ({ status: 'ok', result });
-const failed = (code: string): Done => ({ status: 'failed', code });
 const totals = (m: ChunkMeta[]) => ({ chunks: m.length, bytes: m.reduce((n, c) => n + c.bytes, 0) });
-const zeros = (): Purged => Object.fromEntries(MOVE_KINDS.map((k) => [k, { files: 0, bytes: 0 }])) as Purged;
 // The cancel minute's still files (captured.ts cancelMinuteFiles): never
 // copied back, they stay here; counted kept so the finish names them.
 const cancelMinute = (dataDir: string, c: MoveRecord): Purged => {

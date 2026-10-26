@@ -50,6 +50,16 @@ afterEach(async () => {
   await fake.close();
 });
 
+describe('the health summary', () => {
+  it('one that takes longer than healthTimeoutMs is a heartbeat error', async () => {
+    const c = make({ health: () => new Promise<never>(() => undefined), timing: { healthTimeoutMs: 100 } });
+    c.start();
+    await until(() => named('admin_client_error').length >= 1);
+    expect(named('admin_client_error')[0].o).toEqual({ where: 'heartbeat', err: 'the health summary took too long' });
+    expect(fake.heartbeats()).toHaveLength(0);
+  });
+});
+
 describe('the handshake', () => {
   it('challenge checked, hello signed, welcome, a heartbeat at once; all on the strict schemas', async () => {
     const c = make();

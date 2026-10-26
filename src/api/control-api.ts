@@ -25,7 +25,7 @@ import { AuditQueryError, type AuditLog, type Outcome } from '../audit/audit-log
 import { actorOf, allowedByOf, clientIp, tokenMatches, UI_CONFIG_LOCAL, type AccessInfo } from './auth';
 import { uiConfigResetKeep } from './ui-config';
 import { narrowRules } from '../fleet/remote-settable';
-import { cameraParam, RESTART_RETRY_S } from './camera-param';
+import { cameraParam, resolveCamera } from './camera-param';
 import type { CameraRegistry } from '../cameras/registry';
 import { RefusalThrottle } from '../audit/throttle';
 import { isAuditAction } from '../audit/actions';
@@ -45,6 +45,7 @@ import { RotateBusyError, type CertState, type Requester, type TlsView } from '.
 import type { PushResult } from '../tls/push';
 import { OWN_AUDIT, performAction, type ActionOutcome } from './actions';
 import type { NtpOutcome } from '../cameras/ntp';
+import { intParam, notFound, perMinute } from './respond';
 
 interface FtpStatus {
   enabled: boolean;
@@ -142,9 +143,9 @@ export interface ControlDeps {
     clearTrust: (cam: string, who: Requester) => CertState | null; // null: no camera trust kept here
     dropPrevious: (who: Requester) => boolean; // false: no previous CA
   };
-  // Every camera's status block, config order; the number of cameras (spec 2026-10-05-multi-camera-host-design §6.3).
+  // Every camera's status block, config order (only the one `id` names when given); the number of cameras (spec 2026-10-05-multi-camera-host-design §6.3).
   cameras: CameraRegistry;
-  cameraStatus: () => CameraStatusBlock[];
+  cameraStatus: (id?: string) => CameraStatusBlock[];
   cameraCount: () => number;
   // The overrides a cams-admin command set (plan P3 R3-14): GET /control/config's `by`.
   changeMarks?: () => ChangeMarks;
@@ -296,29 +297,32 @@ export function controlApi(d: ControlDeps): express.Router {
 
   r.get('/status', async (_req, res) => {
     const health = await d.health();
+    // The first camera's parts are its block's (built once); without a camera, the placeholders.
+    const cameras = d.cameraStatus();
+    const first = cameras[0];
     res.json({
       version: d.version,
-      camera: d.camera(),
-      intake: d.intake(),
+      camera: first ? first.camera : d.camera(),
+      intake: first ? first.intake : d.intake(),
       sse: { clients: d.sseClients() },
-      stream: d.stream(),
+      stream: first ? first.stream : d.stream(),
       retention: { lastRun: d.storage.lastRun(), totals: d.storage.totals() },
       storage: { paused: d.storage.paused() },
-      ftp: d.ftp(),
-      recordings: d.recordings(),
+      ftp: first ? first.ftp : d.ftp(),
+      recordings: first ? first.recordings : d.recordings(),
       analytics: d.analytics(),
       analyticsUnmapped: d.unmapped.list(20),
       health,
       archive: d.archive.status(),
-      cameras: d.cameraStatus(),
+      cameras,
     });
   });
 
   // Every camera's status block (spec §6.3); one camera's.
   r.get('/cameras', (_req, res) => void res.json(d.cameraStatus()));
   r.get('/cameras/:cam/status', (req, res) => {
-    const b = d.cameraStatus().find((x) => x.id === req.params.cam);
-    if (!b) return void res.status(404).json({ error: 'not_found' });
+    const [b] = d.cameraStatus(req.params.cam);
+    if (!b) return notFound(res);
     res.json(b);
   });
 
@@ -333,15 +337,8 @@ export function controlApi(d: ControlDeps): express.Router {
   const targetCamera = (req: express.Request, res: Response): string | null | undefined => {
     if (typeof req.params.cam === 'string') return req.params.cam;
     const q = req.query.cam;
-    if (typeof q === 'string' && q) {
-      const w = d.cameras.get(q);
-      if (!w) return void res.status(404).json({ error: 'not_found' }), undefined;
-      if (w.phase() === 'restarting') {
-        res.setHeader('Retry-After', String(RESTART_RETRY_S));
-        return void res.status(503).json({ error: 'camera_restarting' }), undefined;
-      }
-      return w.id;
-    }
+    // No per-camera rights check here: requireAccess('admin') guards the router.
+    if (typeof q === 'string' && q) return resolveCamera(d.cameras, q, res, null)?.id;
     return d.cameraCount() === 1 ? d.cameraId() : null;
   };
 
@@ -423,11 +420,12 @@ export function controlApi(d: ControlDeps): express.Router {
   r.get('/inventory/runs/:id', async (req, res) => {
     if (!RUN_ID.test(req.params.id)) return void res.status(400).json({ error: 'invalid', detail: 'not a run id' });
     const run = await d.inventory.get(req.params.id);
-    if (!run) return void res.status(404).json({ error: 'not_found' });
+    if (!run) return notFound(res);
     res.json(run);
   });
 
-  r.get('/config', (_req, res) => void res.json(configView(d.loaded(), d.running(), d.changeMarks?.())));
+  const settingsView = () => configView(d.loaded(), d.running(), d.changeMarks?.());
+  r.get('/config', (_req, res) => void res.json(settingsView()));
   r.get('/tls', (_req, res) => void res.json(d.tls.view()));
   // A `config-change` record: the changed leaf settings, old → new. Secret
   // values are redacted by AuditLog by the setting's name. A refused change
@@ -437,16 +435,23 @@ export function controlApi(d: ControlDeps): express.Router {
     const changes = configChanges(before, d.loaded()).map((c) => ({ key: c.path, from: c.from, to: c.to, ...(c.restart ? { restart: c.restart } : {}) }));
     if (changes.length) d.audit.write({ action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', user: actor(req), ...who(req), message: `${all ? 'Settings reset to defaults' : 'Settings changed'}: ${changes.map((c) => c.key).join(', ')}`, details: { changes, ...(all ? { reset: 'all' } : {}), ...allowedByOf(req.res) } });
   };
-  r.put('/config', (req, res) => {
+  // An audited configuration write: `next` makes the new configuration from
+  // the loaded one (a ConfigError answers 400; undefined: it answered
+  // itself), then the config-change record and the `view` answer (the
+  // settings by default). A new config route must also be checked in src/api/ui-config.ts.
+  const change = (req: express.Request, res: Response, next: (l: Loaded) => Loaded | undefined, o: { all?: boolean; view?: () => unknown } = {}) => {
     const before = d.loaded();
     try {
-      d.setLoaded(applyOverrides(d.loaded(), req.body ?? {}));
+      const l = next(before);
+      if (!l) return;
+      d.setLoaded(l);
     } catch (err) {
       return invalid(res, err);
     }
-    recordChanges(req, before);
-    res.json(configView(d.loaded(), d.running(), d.changeMarks?.()));
-  });
+    recordChanges(req, before, o.all);
+    res.json((o.view ?? settingsView)());
+  };
+  r.put('/config', (req, res) => change(req, res, (l) => applyOverrides(l, req.body ?? {})));
   // The proxy profile (cams-admin spec 2026-10-25-proxy-profile-design §0):
   // its report, plus what each camera can expect of the budget when the proxy
   // is full (shares still win), and which budget setting a higher layer
@@ -458,32 +463,19 @@ export function controlApi(d: ControlDeps): express.Router {
     return { ...v, perCameraBytes: v.storage.budgetBytes === null ? null : Math.floor(v.storage.budgetBytes / v.cameras), ignored: d.loaded().ignored };
   };
   r.get('/profile', (_req, res) => void res.json(profileView()));
-  r.put('/profile', (req, res) => {
-    const before = d.loaded();
-    try {
-      d.setLoaded(applyProfile(before, req.body));
-    } catch (err) {
-      return invalid(res, err);
-    }
-    recordChanges(req, before);
-    res.json(profileView());
-  });
+  r.put('/profile', (req, res) => change(req, res, (l) => applyProfile(l, req.body), { view: profileView }));
   // "Reset to defaults" (the Settings page): every override at once, one record.
-  r.delete('/config', (req, res) => {
-    const before = d.loaded();
-    try {
+  r.delete('/config', (req, res) =>
+    change(
+      req,
+      res,
       // A cams-admin sign-in (ui.config) keeps the overrides only the local admin changes.
       // ...and those whose reset would shorten retention or raise spending (src/api/ui-config.ts).
-      d.setLoaded(removeAllOverrides(d.loaded(), res.locals.allowedBy === 'ui.config' ? uiConfigResetKeep(d.loaded()) : undefined));
-    } catch (err) {
-      return invalid(res, err);
-    }
-    recordChanges(req, before, true);
-    res.json(configView(d.loaded(), d.running(), d.changeMarks?.()));
-  });
-  r.delete('/config/:path', (req, res) => {
-    const before = d.loaded();
-    try {
+      (l) => removeAllOverrides(l, res.locals.allowedBy === 'ui.config' ? uiConfigResetKeep(l) : undefined),
+      { all: true },
+    ));
+  r.delete('/config/:path', (req, res) =>
+    change(req, res, (before) => {
       // A camera's `moved` of a move not over (final review 1): never cleared by hand.
       if (d.moveOpen && !/^cameras\.[^.]+$/.test(req.params.path)) {
         const after = withoutOverride(before, req.params.path);
@@ -493,18 +485,13 @@ export function controlApi(d: ControlDeps): express.Router {
           }
         }
       }
-      d.setLoaded(removeOverride(d.loaded(), req.params.path));
-    } catch (err) {
-      return invalid(res, err);
-    }
-    recordChanges(req, before);
-    res.json(configView(d.loaded(), d.running(), d.changeMarks?.()));
-  });
+      return removeOverride(before, req.params.path);
+    }));
 
   // Find camera and Use this address share a rate limit (the other actions have none).
-  const findLimit = rateLimit({ windowMs: 60_000, limit: FIND_CAMERA_PER_MINUTE, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } });
+  const findLimit = perMinute(FIND_CAMERA_PER_MINUTE);
   // The site CA's trust actions (rotate, drop the previous CA, clear a camera): their own limit.
-  const trustLimit = rateLimit({ windowMs: 60_000, limit: TRUST_ACTIONS_PER_MINUTE, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } });
+  const trustLimit = perMinute(TRUST_ACTIONS_PER_MINUTE);
   const TRUST = new Set(['tls-ca-rotate', 'tls-ca-drop-previous', 'camera-trust-clear']);
   const actionLimit: express.RequestHandler = (req, res, next) =>
     req.params.name === 'find-camera' || req.params.name === 'camera-address' ? findLimit(req, res, next) : TRUST.has(String(req.params.name)) ? trustLimit(req, res, next) : next();
@@ -522,7 +509,7 @@ export function controlApi(d: ControlDeps): express.Router {
     const name = String(req.params.name);
     const routed = typeof req.params.cam === 'string';
     // Host actions have no camera route.
-    if (routed && !CAMERA_ACTIONS.has(name)) return void res.status(404).json({ error: 'not_found' });
+    if (routed && !CAMERA_ACTIONS.has(name)) return notFound(res);
     const target = CAMERA_ACTIONS.has(name) ? targetCamera(req, res) : null;
     if (target === undefined) return;
     const requestedBy = res.locals.access?.viaCookie ? 'session' : 'token';
@@ -543,8 +530,9 @@ export function controlApi(d: ControlDeps): express.Router {
     }
     const fail = (status: number, error: string, detail?: string) => send(res, { status, error, ...(detail ? { detail } : {}) });
     // `restart` without a camera is the host-wide restart: every camera side,
-    // every pending setting (as on one camera; live test of #173).
-    if (name === 'restart' && target === null) {
+    // every pending setting (as on one camera; live test of #173). The same on
+    // the old route without a camera named (?cam), also with one camera.
+    if (name === 'restart' && (target === null || (!routed && typeof req.query.cam !== 'string'))) {
       d.restart().catch((err: Error) => logger.error({ err: err.message }, 'restart_failed'));
       return void res.status(202).end();
     }
@@ -560,11 +548,6 @@ export function controlApi(d: ControlDeps): express.Router {
       if (!restartRequested) d.audit.write({ action: 'proxy-restart', category: ['process'], type: ['change'], outcome: 'success', user: actor(req), ...who(req), message: 'Proxy process restart requested through the control API', details: { requestedBy, ...allowedByOf(res) } });
       restartRequested = true;
       res.once('close', () => setImmediate(() => d.restartProcess()));
-      return void res.status(202).end();
-    }
-    // `restart` on the old route without a camera named: every camera side and the settings.
-    if (name === 'restart' && !routed && typeof req.query.cam !== 'string') {
-      d.restart().catch((err: Error) => logger.error({ err: err.message }, 'restart_failed'));
       return void res.status(202).end();
     }
     send(res, await performAction(d, name, target, typeof req.body === 'object' && req.body !== null ? req.body : {}, { user: actor(req), requestedBy, ...who(req) }));
@@ -597,11 +580,10 @@ export function auditApi(d: { audit: AuditLog; guard: express.RequestHandler; re
   });
   r.get('/audit', d.guard, (req, res) => {
     const q = req.query;
-    const num = (v: unknown) => (v === undefined ? undefined : /^\d{1,15}$/.test(String(v)) ? Number(v) : NaN);
     const outcome = q.outcome === undefined ? undefined : String(q.outcome);
     if (outcome !== undefined && !['success', 'failure', 'unknown'].includes(outcome)) return void res.status(400).json({ error: 'invalid', detail: 'outcome is success, failure or unknown' });
-    const from = num(q.from), to = num(q.to), limit = num(q.limit);
-    if ([from, to, limit].some((v) => Number.isNaN(v))) return void res.status(400).json({ error: 'invalid', detail: 'from, to and limit are numbers' });
+    const from = intParam(q.from), to = intParam(q.to), limit = intParam(q.limit);
+    if (from === null || to === null || limit === null) return void res.status(400).json({ error: 'invalid', detail: 'from, to and limit are numbers' });
     const actions = q.action === undefined ? undefined : String(q.action).split(',').map((s) => s.trim()).filter(Boolean);
     const unknown = actions?.find((a) => !isAuditAction(a));
     if (unknown !== undefined) return void res.status(400).json({ error: 'invalid', detail: `unknown action: ${unknown.slice(0, 40)}` });

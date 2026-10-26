@@ -4,6 +4,7 @@ import { PrivateFileInvalid, readPrivateJson, writePrivateJson } from '../fleet/
 import type { AutoWaitReason } from './plan';
 import type { Purged } from './purge';
 import type { ChunkState, KeepList, MoveActor, MoveCheck, MoveAnswer, MoveBounds, MoveCameraConnection, MoveCopied, MoveKind, MovePhaseName, MovePlan, MoveRole, MoveSummary, Settings, Space } from './types';
+import { DAY } from '../time-units';
 
 // The durable record of one move on this proxy: <dataDir>/admin/moves/<id>.json,
 // mode 600 (it holds the move token hash or the plain token and the target's
@@ -28,6 +29,18 @@ export interface ChunkRecord {
   // The chunk as the source listed it when copied (P12: copied again when it changes).
   // Its verified id-named files and import map: chunk-parts.ts (final review 6).
   meta?: { files: number; bytes: number; rows: number };
+}
+
+// The files verified, skipped and failed and the bytes verified of these chunks (move-done, the copied phase).
+export function chunkTotals(chunks: Iterable<ChunkRecord>): { verified: number; skipped: number; failed: number; bytes: number } {
+  const t = { verified: 0, skipped: 0, failed: 0, bytes: 0 };
+  for (const c of chunks) {
+    t.verified += c.v ?? 0;
+    t.skipped += c.s ?? 0;
+    t.failed += c.f ?? 0;
+    t.bytes += c.vb ?? 0;
+  }
+  return t;
 }
 
 export interface MovePeer {
@@ -158,12 +171,12 @@ export interface MoveTombstone {
   returned?: boolean;
   endedAt: number;
 }
-export const TOMBSTONE_KEEP_MS = 7 * 86_400_000;
+export const TOMBSTONE_KEEP_MS = 7 * DAY;
 // How long a cancel's tombstone waits for its copy back: the return has no
 // deadline (ruling 10: a proxy offline for a long time just delays it), but a
 // return never started that cams-admin gave up (move.finish names the return,
 // not the cancelled move) must not leave the note here for ever.
-export const RETURN_WAIT_MS = 365 * 86_400_000;
+export const RETURN_WAIT_MS = 365 * DAY;
 const keepMs = (t: Partial<MoveTombstone>): number => (t.camera && t.returned !== true ? RETURN_WAIT_MS : TOMBSTONE_KEEP_MS);
 
 const TERMINAL: readonly MovePhaseName[] = ['finished', 'cancelled', 'failed'];

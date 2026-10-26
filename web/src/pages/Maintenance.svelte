@@ -5,7 +5,7 @@
   import { api, ApiError } from '../lib/api';
   import { MB, mbText } from '../lib/format';
   import { REPAIR_MAX_BYTES, REPAIR_MAX_CLIPS } from '../lib/inventory';
-  import { poeAlert, poeOnText, powerCycleFailText, powerCycleMessage, restartWatch, RESTART_GIVE_UP_MS, type Health } from '../lib/maintenance';
+  import { poeAlert, poeOnText, powerCycleFailText, powerCycleMessage, readHealth, waitForNewProxy } from '../lib/maintenance';
   import { refresh, refreshTick, status } from '../lib/state';
   import { clearMatches, clearMessage } from '../lib/archive';
   import { actionPath, blockOf, selectedCamera } from '../lib/cameras';
@@ -173,22 +173,14 @@
   // The proxy restart: "Restarting…", then /health until a new process
   // answers (another start time or version), then a reload.
   let restarting = $state<'waiting' | 'gone' | null>(null);
-  let restartTimer: ReturnType<typeof setInterval> | undefined;
-  const health = async (): Promise<Health | null> => {
-    try {
-      const r = await fetch('/health', { cache: 'no-store' });
-      return r.ok ? ((await r.json()) as Health) : null;
-    } catch {
-      return null;
-    }
-  };
+  let stopRestartWait: (() => void) | undefined;
   async function restartProxy() {
     asking = null;
     // Busy before the first await: the dialog can't be confirmed twice (#78 review).
     if (restarting === 'waiting') return;
     restarting = 'waiting';
     // The start time to compare with: one more try if the first read fails.
-    const before = (await health()) ?? (await health());
+    const before = (await readHealth()) ?? (await readHealth());
     const postedAt = Date.now();
     try {
       await api('POST', '/control/actions/restart-proxy');
@@ -197,20 +189,9 @@
       result = `Restart proxy: ${e instanceof ApiError ? e.message : 'failed'}`;
       return;
     }
-    const isNew = restartWatch(before, postedAt);
-    const t0 = Date.now();
-    restartTimer = setInterval(async () => {
-      const h = await health();
-      if (isNew(h)) {
-        clearInterval(restartTimer);
-        location.reload();
-      } else if (Date.now() - t0 > RESTART_GIVE_UP_MS) {
-        clearInterval(restartTimer);
-        restarting = 'gone';
-      }
-    }, 1000);
+    stopRestartWait = waitForNewProxy(before, postedAt, () => location.reload(), () => (restarting = 'gone'));
   }
-  onMount(() => () => clearInterval(restartTimer));
+  onMount(() => () => stopRestartWait?.());
 </script>
 
 <section>

@@ -309,6 +309,9 @@ async function probe(source: MoveOfferArgs['source'], moveId: string, token: str
   return Math.round((r.received * 1000) / Math.max(1, Date.now() - t0));
 }
 
+// The source a move record names, as sourceGet and moveSourceClient take it.
+export const sourceOf = (p: MoveRecord['peer']): MoveOfferArgs['source'] => ({ proxyId: p.proxyId, name: p.name, url: p.url ?? '', caFingerprints: p.caFingerprints ?? [], tlsServername: p.tlsServername ?? '' });
+
 // The copier's way to the source (camera-move plan Task 9): streaming GETs
 // with the move token, pinned like sourceGet; the pinned CA is fetched once per
 // client and again after a failure. No answer within `idleMs` ends with an

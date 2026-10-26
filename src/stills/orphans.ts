@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import { basename, dirname, join } from 'path';
 import { logger } from '../log';
 import { trackedPids } from '../children';
+import { listDirSync } from '../fs-util';
 
 // go2rtc that an earlier cam-proxy process left behind (a SIGKILL of node:
 // review 2026-10-05) keeps its ports, and every later start would be
@@ -98,7 +99,7 @@ export async function reapOrphanGo2rtc(o: ReapOptions = {}): Promise<{ killed: n
   // Give the killed ones a moment to let go of their ports.
   if (o.sweep === false) return { killed, removed };
   for (let i = 0; i < 20 && killed.some((pid) => alive(pid)); i++) await new Promise((r) => setTimeout(r, 50));
-  for (const name of safeDir(tmpdir())) {
+  for (const name of listDirSync(tmpdir())) {
     if (!name.startsWith(PREFIX)) continue;
     const dir = join(tmpdir(), name);
     if (inUse.has(dir)) continue;
@@ -122,10 +123,3 @@ function alive(pid: number): boolean {
   }
 }
 
-function safeDir(dir: string): string[] {
-  try {
-    return readdirSync(dir);
-  } catch {
-    return [];
-  }
-}

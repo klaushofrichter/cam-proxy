@@ -5,16 +5,18 @@ import { dirname, join } from 'path';
 import type { AuditLog } from '../audit/audit-log';
 import type { Catalog } from '../catalog/db';
 import { logger } from '../log';
-import { compareChunk, outcomeOf, tallyCheck, type ChunkKeep, type ManifestFile, type MoveOutcome } from './check';
+import { compareChunk, OUTCOME_REFUSED, outcomeOf, tallyCheck, type ChunkKeep, type ManifestFile, type MoveOutcome } from './check';
 import { readChunkPart, writeChunkPart } from './chunk-parts';
-import { moveSourceClient, spaceFor, type EvaluateDeps, type SourceAnswer } from './evaluate';
+import { moveSourceClient, sourceOf, spaceFor, type EvaluateDeps, type SourceAnswer } from './evaluate';
 import { importRows, isStaged, landingPath, moveStagingDir, relOk, type ImportDeps } from './import';
-import { chunkOrder, CONTENT_FOLDERS, hashFile, KIND_FOLDERS, type ChunkMeta, type TableRows } from './inventory';
-import type { ChunkRecord, MoveJournal, MoveRecord } from './journal';
+import { chunkDay, chunkOrder, CONTENT_FOLDERS, hashFile, KIND_FOLDERS, type ChunkMeta, type TableRows } from './inventory';
+import { chunkTotals, type ChunkRecord, type MoveJournal, type MoveRecord } from './journal';
 import { noteLanded } from './purge';
 import { abortableSleep, paceS, rateFor, TokenBucket } from './rate';
 import type { ChunkState, MoveCheck, MoveEvent, MoveKind, MoveSummary } from './types';
 import { MOVE_KINDS } from './types';
+import { HOUR, MINUTE } from '../time-units';
+import { within } from '../async';
 
 // The copier on the target (camera-move plan Task 9, S §8.2–8.4, §10, §12;
 // Review Focus 1–3). It runs once the camera is switched over and pulls the
@@ -71,8 +73,6 @@ export interface CopierDeps {
 const ATTEMPTS = 3;
 const FAILED_PATHS_MAX = 50;
 const PROGRESS_CHUNKS_MAX = 4096;
-const MINUTE = 60_000;
-const HOUR = 60 * MINUTE;
 const JSON_MAX = 256 * 1024 * 1024;
 const SHA256 = /^[0-9a-f]{64}$/;
 const FINAL: readonly ChunkState[] = ['verified', 'skipped', 'failed'];
@@ -85,7 +85,6 @@ const RETURN_BUSY_BPS = 2 * 1024 * 1024;
 
 class Stopped extends Error {}
 
-const dayOf = (ts: number) => new Date(ts).toISOString().slice(0, 10);
 const sameMeta = (a: ChunkRecord['meta'], c: ChunkMeta) => !!a && a.files === c.files && a.bytes === c.bytes && a.rows === c.rows;
 const metaOf = (c: ChunkMeta) => ({ files: c.files, bytes: c.bytes, rows: c.rows });
 
@@ -179,10 +178,9 @@ export class Copier {
 
   constructor(private readonly d: CopierDeps, record: MoveRecord) {
     this.r = record;
-    const p = record.peer;
     this.client = d.client
       ? d.client(record)
-      : moveSourceClient({ proxyId: p.proxyId, name: p.name, url: p.url ?? '', caFingerprints: p.caFingerprints ?? [], tlsServername: p.tlsServername ?? '' }, record.token ?? '', { idleMs: d.timing?.idleMs });
+      : moveSourceClient(sourceOf(record.peer), record.token ?? '', { idleMs: d.timing?.idleMs });
     // The default sleep ends early on stop (a slow take never holds up a cancel).
     this.bucket = d.bucket ?? new TokenBucket({ now: d.now, sleep: d.sleep ?? abortableSleep });
     this.paths = { catalog: d.catalog, dataDir: d.dataDir, staging: moveStagingDir(d.dataDir, record.id) };
@@ -246,7 +244,7 @@ export class Copier {
   }
 
   private approvalDay(): string {
-    return dayOf(this.r.approvedAt ?? this.r.startedAt);
+    return chunkDay(this.r.approvedAt ?? this.r.startedAt);
   }
 
   private async copy(): Promise<void> {
@@ -309,7 +307,7 @@ export class Copier {
     this.save(true);
     const put = this.client.put;
     if (!put) return;
-    let delay = this.t('retryMs', 2000);
+    const wait = this.backoff();
     for (;;) {
       this.check();
       try {
@@ -318,15 +316,13 @@ export class Copier {
         if (res.status === 204 || res.status === 200) return;
         // A return's source re-keyed (cams-admin restarted): 403 until move.return.start brings the new token.
         if (this.r.returnOf && (res.status === 401 || res.status === 403)) this.noteDown(String(res.status));
-        else if ([400, 403, 404, 409, 413].includes(res.status)) return this.refused(res.status);
-        else if (res.status === 503 || res.status === 429) this.sourceBusyUntil = this.now() + MINUTE;
-        else this.noteDown(String(res.status));
+        else if (OUTCOME_REFUSED.includes(res.status)) return this.refused(res.status);
+        else this.noteStatus(res.status);
       } catch {
         this.check();
         this.noteDown('no answer');
       }
-      await this.sleep(delay);
-      delay = Math.min(delay * 2, this.t('retryCapMs', 5 * MINUTE));
+      await wait();
     }
   }
 
@@ -555,15 +551,14 @@ export class Copier {
     // Then the rows (files first, S §8.2).
     const rows = c.rows > 0 || (typeof body.rows === 'number' && body.rows > 0) ? await this.rows(c) : [];
     let imported: ReturnType<typeof importRows> | undefined;
-    let delay = this.t('retryMs', 2000);
+    const wait = this.backoff();
     for (let i = 0; i < ATTEMPTS && !imported; i++) {
       try {
         imported = importRows(this.paths, this.r.camera, rows, verified, prev?.imported, { moveId: this.r.id, from: { proxyId: this.r.peer.proxyId, name: this.r.peer.name }, at: this.now() });
       } catch {
         logger.warn({ moveId: this.r.id, chunkId: c.id }, 'move_copy_import_failed');
         if (i < ATTEMPTS - 1) {
-          await this.sleep(delay);
-          delay = Math.min(delay * 2, this.t('retryCapMs', 5 * MINUTE));
+          await wait();
         }
       }
     }
@@ -584,7 +579,7 @@ export class Copier {
   // to 3 times; after that, and for an answer that keeps not being a list, the
   // source counts as refusing (move-source-unreachable, the 6 h rule).
   private async rows(c: ChunkMeta): Promise<TableRows[]> {
-    let delay = this.t('retryMs', 2000);
+    const wait = this.backoff();
     let relists = 0;
     let odd = 0;
     for (;;) {
@@ -600,8 +595,7 @@ export class Copier {
       }
       if (r.status === 404) this.noteDown(`rows 404${r.error ? ` ${r.error}` : ''}`);
       else if (r.status === 200 && ++odd >= ATTEMPTS) this.noteDown('rows not a list');
-      await this.sleep(delay);
-      delay = Math.min(delay * 2, this.t('retryCapMs', 5 * MINUTE));
+      await wait();
     }
   }
 
@@ -656,7 +650,7 @@ export class Copier {
     if (!staged && existsSync(landing)) return 'o';
     const part = `${landing}.move-${this.r.id}.part`;
     let failures = 0;
-    let delay = this.t('retryMs', 2000);
+    const wait = this.backoff();
     while (failures < ATTEMPTS) {
       this.check();
       await this.waitStorage();
@@ -699,8 +693,7 @@ export class Copier {
       // Only a wrong size or hash counts; a cut or stalled stream is the source restarting (Review Focus 1).
       if (out === 'bad') failures++;
       if (failures < ATTEMPTS) {
-        await this.sleep(delay);
-        delay = Math.min(delay * 2, this.t('retryCapMs', 5 * MINUTE));
+        await wait();
       }
     }
     return 'f';
@@ -737,9 +730,7 @@ export class Copier {
     }
     if (res.status !== 200) {
       discard(res.body);
-      // 503 and 429 are pressure (the rate halves for a minute), never the source down.
-      if (res.status === 503 || res.status === 429) this.sourceBusyUntil = this.now() + MINUTE;
-      else this.noteDown(String(res.status));
+      this.noteStatus(res.status);
       // 400 (a path the source refuses) counts; the rest is the source not ready or busy.
       return res.status === 400 || res.status === 416 ? 'bad' : 'transient';
     }
@@ -811,6 +802,22 @@ export class Copier {
     return 'ok';
   }
 
+  // A retry loop's wait: retryMs, doubled after each wait up to retryCapMs.
+  private backoff(): () => Promise<void> {
+    let delay = this.t('retryMs', 2000);
+    return async () => {
+      await this.sleep(delay);
+      delay = Math.min(delay * 2, this.t('retryCapMs', 5 * MINUTE));
+    };
+  }
+
+  // A source answer that is neither 200 nor 404: 503 and 429 are pressure (the
+  // rate halves for a minute), never the source down; anything else is.
+  private noteStatus(status: number): void {
+    if (status === 503 || status === 429) this.sourceBusyUntil = this.now() + MINUTE;
+    else this.noteDown(String(status));
+  }
+
   // The source not answering or refusing (anything but 200 and 404): a log
   // line and an audit record at the first failure, then every 6 hours while it lasts.
   private noteDown(what: string): void {
@@ -845,7 +852,7 @@ export class Copier {
   // `up: false`: the caller decides whether the answer means the source is back.
   private async json(path: string, o: { up?: boolean } = {}): Promise<{ status: number; body: unknown; error?: string | null }> {
     const up = () => o.up !== false && this.noteUp();
-    let delay = this.t('retryMs', 2000);
+    const wait = this.backoff();
     for (;;) {
       this.check();
       try {
@@ -861,14 +868,12 @@ export class Copier {
           return { status: 404, body: null, error };
         }
         discard(res.body);
-        if (res.status === 503 || res.status === 429) this.sourceBusyUntil = this.now() + MINUTE;
-        else this.noteDown(String(res.status));
+        this.noteStatus(res.status);
       } catch {
         this.check();
         this.noteDown('no answer');
       }
-      await this.sleep(delay);
-      delay = Math.min(delay * 2, this.t('retryCapMs', 5 * MINUTE));
+      await wait();
     }
   }
 
@@ -924,8 +929,8 @@ export class Copier {
     if (over && !this.r.budgetExceeded) {
       this.r.budgetExceeded = true;
       this.save(true);
-      // A return has no approved budget (ruling 8): the pace only, nothing to audit.
-      if (!this.r.returnOf) this.audit('move-budget-exceeded', 'failure', `the time budget of ${this.r.budgetS ?? this.r.plan?.budgetS}s is over with ${remaining} bytes left; copying goes on, never faster`, {
+      // A return never gets here (it left above): it has no approved budget to audit (ruling 8).
+      this.audit('move-budget-exceeded', 'failure', `the time budget of ${this.r.budgetS ?? this.r.plan?.budgetS}s is over with ${remaining} bytes left; copying goes on, never faster`, {
         budgetS: this.r.budgetS ?? this.r.plan?.budgetS ?? null, elapsedS: Math.round(elapsedS), bytesDone: done, bytesTotal: total,
       });
     }
@@ -972,15 +977,7 @@ export class Copier {
 
   // `check`: the completeness check (none for a move without transfer); audited as move-check.
   private finish(check?: MoveCheck): void {
-    const counts = { verified: 0, skipped: 0, failed: 0, bytes: 0 };
-    for (const c of this.manifest) {
-      const rec = this.r.chunks[c.id];
-      if (!rec) continue;
-      counts.verified += rec.v ?? 0;
-      counts.skipped += rec.s ?? 0;
-      counts.failed += rec.f ?? 0;
-      counts.bytes += rec.vb ?? 0;
-    }
+    const counts = chunkTotals(this.manifest.flatMap((c) => this.r.chunks[c.id] ?? []));
     if (this.manifest.length) {
       this.save(true);
       this.progress(true);
@@ -1051,9 +1048,7 @@ export class CopyRunner {
   // MoveTarget.stopAll).
   async stopAll(waitMs = 3000): Promise<void> {
     const all = Promise.all([...this.runs.keys()].map((id) => this.stop(id)));
-    let t: NodeJS.Timeout | undefined;
-    await Promise.race([all, new Promise<void>((r) => (t = setTimeout(r, waitMs)))]);
-    clearTimeout(t);
+    await within(all, waitMs);
   }
 
   // An unexpected throw (the journal or the catalog unwritable): a fixed line, the move failed.

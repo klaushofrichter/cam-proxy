@@ -1,5 +1,6 @@
-import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign as nodeSign, verify as nodeVerify } from 'crypto';
+import { createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign as nodeSign, verify as nodeVerify } from 'crypto';
 import { jcs } from './jcs';
+import { sha256Pin } from '../tls/pin';
 import { isIP } from 'net';
 
 // The cams-admin proxy protocol v1 (cams-admin contract/v1, spec
@@ -54,7 +55,7 @@ export function verify(publicKeyB64: string, text: string, sig: unknown): boolea
 }
 
 // What cams-admin shows for a key: SHA256: + upper-case hex of the SPKI DER.
-export const fingerprint = (publicKeyB64: string): string => `SHA256:${createHash('sha256').update(Buffer.from(publicKeyB64, 'base64')).digest('hex').toUpperCase()}`;
+export const fingerprint = (publicKeyB64: string): string => sha256Pin(Buffer.from(publicKeyB64, 'base64'));
 
 // A ULID-shaped id: 10 time characters (ms) and 16 random.
 export function ulid(now: number): string {

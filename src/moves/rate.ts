@@ -1,3 +1,5 @@
+import { sleep } from '../async';
+
 // The copier's rate (camera-move plan Task 9, S §8.3). Pure: the copier
 // recomputes it every minute and at each file.
 
@@ -24,19 +26,7 @@ export function rateFor(remainingBytes: number, remainingS: number, probeBps: nu
 }
 
 // A sleep that ends early when the signal aborts (a stopped copier never waits out a take).
-export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal?.aborted) return resolve();
-    const t = setTimeout(done, ms);
-    t.unref();
-    function done() {
-      clearTimeout(t);
-      signal?.removeEventListener('abort', done);
-      resolve();
-    }
-    signal?.addEventListener('abort', done, { once: true });
-  });
-}
+export const abortableSleep = (ms: number, signal?: AbortSignal): Promise<void> => sleep(ms, signal, { unref: true });
 
 // A token bucket holding a stream to a rate: one second's worth may go at
 // once, the rest waits. Never loops on the clock: each take waits once for

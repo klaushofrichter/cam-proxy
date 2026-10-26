@@ -1,28 +1,31 @@
-import { createHash, generateKeyPairSync } from 'crypto';
+import { generateKeyPairSync } from 'crypto';
 import type { AuditLog } from '../audit/audit-log';
 import { bareHost, splitHost } from '../camera/http';
 import { activeCameraIds } from '../config/cameras';
 import type { CameraPasswordStore } from '../config/camera-passwords';
 import { cameraDefaults } from '../config/defaults';
-import { applyOverrides, getPath, planOverrides, rebuildWith, removeOverride, writeOverridesFile, setPath, type Loaded } from '../config/load';
+import { applyOverrides, getPath, planOverrides, rebuildWith, removeOverride, writeOverridesFile, setPath, withoutCamera, type Loaded } from '../config/load';
 import { cameraPasswordEnv } from '../config/password-env';
 import type { MoveCancelArgs, MoveFinishArgs, MoveOfferArgs, MoveStartArgs } from '../fleet/command-args';
 import type { Done, Handler } from '../fleet/commands';
+import { fingerprint } from '../fleet/protocol';
 import type { Config } from '../config/defaults';
 import type { SiteCa } from '../tls/ca';
 import { issueLeaf, leafOf, type Leaf } from '../tls/leaf';
 import type { PushResult } from '../tls/push';
 import { readChunkPart, removeChunkParts } from './chunk-parts';
 import { removeMoveParts } from './copier';
-import { mergeOutcome, outcomeOf, type ChunkKeep, type MoveOutcome } from './check';
-import { moveSourceClient, sourceGet } from './evaluate';
-import { moveEnded, SWITCH_STEPS, type MoveJournal, type MoveRecord, type MoveTombstone, type SwitchStep } from './journal';
+import { failed, ok, samePlan, zeros } from './done';
+import { mergeOutcome, OUTCOME_REFUSED, outcomeOf, type ChunkKeep, type MoveOutcome } from './check';
+import { moveSourceClient, sourceGet, sourceOf } from './evaluate';
+import { chunkTotals, moveEnded, SWITCH_STEPS, type MoveJournal, type MoveRecord, type MoveTombstone, type SwitchStep } from './journal';
 import { OFFER_EXPIRY_MS } from './source';
 import { keepDaysOf } from './retention';
 import { removeLanded, type Purged } from './purge';
 import { unseal } from './seal';
 import { logger } from '../log';
-import { MOVE_KINDS, type MoveCheck, type MoveCopied, type MoveEvent, type MovePhaseName, type MovePlan, type Space } from './types';
+import type { MoveCheck, MoveCopied, MoveEvent, MovePhaseName, MovePlan, Space } from './types';
+import { sleep, within } from '../async';
 
 // The target side of a camera move from move.start on (camera-move plan Task 8,
 // S §9.1, §9.3, §10.1, P1, P12): move.start makes the move's X25519 pair and
@@ -96,16 +99,9 @@ const TARGET_SETTINGS: readonly string[] = ['storage.maxBytes', 'profile.storage
 const DONE_MAX = 512;
 const CODES: Record<SwitchStep, string> = { secrets: 'secrets_failed', camera: 'camera_failed', cert: 'cert_failed', ftp: 'ftp_failed' };
 
-const ok = (result: Record<string, unknown> = {}): Done => ({ status: 'ok', result });
-const failed = (code: string): Done => ({ status: 'failed', code });
-const zeros = (): Purged => Object.fromEntries(MOVE_KINDS.map((k) => [k, { files: 0, bytes: 0 }])) as Purged;
 // The camera taken over here: every switch-over step ran (a failure after
 // them is the copier's), so the camera node here is the move's.
 const switchedOver = (r: MoveRecord): boolean => r.cameraWritten === true && r.step === undefined && !!r.plan && r.phase !== 'opened' && r.phase !== 'switching';
-const keyFingerprint = (spkiB64: string) => `SHA256:${createHash('sha256').update(Buffer.from(spkiB64, 'base64')).digest('hex').toUpperCase()}`;
-// Two plans alike: kinds in any order, target settings in any key order (as the source compares them).
-const canonical = (p: MovePlan): string => JSON.stringify([p.transfer, [...p.kinds].sort(), p.space, p.targetSettings ? Object.entries(p.targetSettings).sort(([x], [y]) => (x < y ? -1 : 1)) : null, p.budgetS, p.estimateS]);
-const samePlan = (a: MovePlan | null, b: MovePlan) => a !== null && canonical(a) === canonical(b);
 
 // A wait that does not use up a step's attempts: the source without the key yet, an open camera event.
 class Wait extends Error {
@@ -286,7 +282,7 @@ export class MoveTarget {
     fresh.done = a.done.slice(-DONE_MAX);
     this.d.journal.save(fresh);
     this.d.stageLeaf(fresh.camera, leaf);
-    this.switchAudit(fresh, 'start', 'ok', `switch-over accepted; leaf ${leaf.fingerprint} issued for ${name}`, { leafFingerprint: leaf.fingerprint, publicKeyFingerprint: keyFingerprint(fresh.x25519.publicSpki), plan: a.plan, done: fresh.done.length });
+    this.switchAudit(fresh, 'start', 'ok', `switch-over accepted; leaf ${leaf.fingerprint} issued for ${name}`, { leafFingerprint: leaf.fingerprint, publicKeyFingerprint: fingerprint(fresh.x25519.publicSpki), plan: a.plan, done: fresh.done.length });
     this.run(fresh.id);
     return ok({ publicKey: fresh.x25519.publicSpki, leafFingerprint: leaf.fingerprint });
   }
@@ -330,10 +326,8 @@ export class MoveTarget {
       message: `Camera move ${fresh.id} (${fresh.camera} from ${fresh.peer.name || fresh.peer.proxyId}) done${a.abandoned ? ', the transfer ended early' : ''}: ${totals.files.verified} files copied, ${totals.files.skipped} skipped, ${totals.files.failed} failed, ${totals.chunks.abandoned} chunks abandoned`,
       details: this.details(fresh, { abandoned: a.abandoned, ...totals }),
     });
-    if (this.d.end) {
-      removeLanded(this.d.end.dataDir, fresh.id);
-      removeChunkParts(this.d.end.dataDir, fresh.id);
-    }
+    removeLanded(end.dataDir, fresh.id);
+    removeChunkParts(end.dataDir, fresh.id);
     this.d.journal.bury?.({ moveId: fresh.id, role: 'target', phase: 'finished', deleted: zeros() });
     this.d.journal.remove?.(fresh.id);
     this.copying.delete(fresh.id);
@@ -358,8 +352,7 @@ export class MoveTarget {
     mergeOutcome(joined, now);
     const body: MoveOutcome = { keep: joined.keep ?? {}, ...(joined.keepMissing?.length ? { missing: joined.keepMissing } : {}), ...(now.copied ? { copied: now.copied } : {}) };
     const send = this.d.reportOutcome ?? (async (rec: MoveRecord, b: MoveOutcome) => {
-      const p = rec.peer;
-      const client = moveSourceClient({ proxyId: p.proxyId, name: p.name, url: p.url ?? '', caFingerprints: p.caFingerprints ?? [], tlsServername: p.tlsServername ?? '' }, rec.token ?? '');
+      const client = moveSourceClient(sourceOf(rec.peer), rec.token ?? '');
       const res = await client.put(`/api/moves/${rec.id}/outcome`, b, AbortSignal.timeout(10_000));
       (res.body as { destroy?: () => void }).destroy?.();
       return res.status;
@@ -369,11 +362,11 @@ export class MoveTarget {
       try {
         last = await send(r, body);
         if (last === 204 || last === 200) return;
-        if ([400, 403, 404, 409, 413].includes(last)) break;
+        if (OUTCOME_REFUSED.includes(last)) break;
       } catch {
         last = null; // not reachable: tried again
       }
-      if (i < 2) await new Promise((res) => setTimeout(res, this.d.timing?.outcomeRetryMs ?? 10_000));
+      if (i < 2) await sleep(this.d.timing?.outcomeRetryMs ?? 10_000);
     }
     logger.warn({ moveId: r.id, status: last }, 'move_outcome_not_reported');
     this.d.audit.write({
@@ -559,14 +552,7 @@ export class MoveTarget {
       if (st === 'verified' || st === 'skipped' || st === 'failed') chunks[st]++;
       else chunks.abandoned++;
     }
-    const files = { verified: 0, skipped: 0, failed: 0 };
-    let bytes = 0;
-    for (const c of Object.values(r.chunks)) {
-      files.verified += c.v ?? 0;
-      files.skipped += c.s ?? 0;
-      files.failed += c.f ?? 0;
-      bytes += c.vb ?? 0;
-    }
+    const { bytes, ...files } = chunkTotals(Object.values(r.chunks));
     return { chunks, files, bytes, durationS: Math.max(0, Math.round(((r.endedAt ?? this.now()) - r.startedAt) / 1000)) };
   }
 
@@ -618,9 +604,7 @@ export class MoveTarget {
   async stopAll(waitMs = 3000): Promise<void> {
     const ids = new Set([...this.runs.keys(), ...this.copying]);
     const all = Promise.all([...ids].map((id) => this.stop(id)));
-    let t: NodeJS.Timeout | undefined;
-    await Promise.race([all, new Promise<void>((r) => (t = setTimeout(r, waitMs)))]);
-    clearTimeout(t);
+    await within(all, waitMs);
   }
 
   // At process start: every target move the journal has open, from its phase and step.
@@ -740,7 +724,7 @@ export class MoveTarget {
   private async secrets(r: MoveRecord): Promise<{ message: string }> {
     const p = r.peer;
     if (!p.url || !p.caFingerprints || !p.tlsServername || !r.token || !r.x25519) throw new Error('the journal lacks the source or the key');
-    const source: MoveOfferArgs['source'] = { proxyId: p.proxyId, name: p.name, url: p.url, caFingerprints: p.caFingerprints, tlsServername: p.tlsServername };
+    const source = sourceOf(p);
     let res: { status: number; sealed?: string };
     try {
       res = await (this.d.fetchSecrets ?? fetchSecrets)(source, r.id, r.token);
@@ -795,13 +779,8 @@ export class MoveTarget {
     if (existing && existing.moved === undefined && !r.cameraWritten) return { problem: 'id_taken' };
     if ((loaded.env[cameraPasswordEnv(id)] ?? '').trim() !== '') return { problem: 'stale_leftover' };
     // The configuration without this camera's overrides: what config.json alone gives it.
-    const all = structuredClone(loaded.overrides) as Record<string, unknown>;
-    const cams = { ...((all.cameras ?? {}) as Record<string, unknown>) };
     const leftover = existing?.moved !== undefined;
-    delete cams[id];
-    if (Object.keys(cams).length) all.cameras = cams;
-    else delete all.cameras;
-    const base = rebuildWith(loaded, all);
+    const base = rebuildWith(loaded, withoutCamera(loaded.overrides, id));
     const file = base.config.cameras[id];
     const node: Record<string, unknown> = { name: c.name, host: c.host, protocol: c.protocol, user: c.user, onvifPort: c.onvifPort, rtspPort: c.rtspPort, baichuanPort: c.baichuanPort, ...structuredClone(r.settings ?? {}) };
     if (file) {

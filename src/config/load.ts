@@ -380,10 +380,23 @@ function dropPath(overrides: Obj, path: string): Obj {
     o = o[k] as Obj;
   }
   delete o[keys[keys.length - 1]];
-  const prune = (x: Obj) => {
-    for (const [k, v] of Object.entries(x)) if (isObj(v)) (prune(v), Object.keys(v).length === 0 && delete x[k]);
-  };
-  prune(out);
+  return pruneEmpty(out);
+}
+
+// Drops the groups left empty, in place (how the overrides tree is kept tidy:
+// configRevision hashes it).
+export function pruneEmpty(x: Obj): Obj {
+  for (const [k, v] of Object.entries(x)) if (isObj(v)) (pruneEmpty(v), Object.keys(v).length === 0 && delete x[k]);
+  return x;
+}
+
+// A copy of the overrides without one camera's node; `cameras` dropped when it is left empty.
+export function withoutCamera(overrides: object, id: string): Obj {
+  const out = structuredClone(overrides) as Obj;
+  const cams = { ...(out.cameras as Obj) };
+  delete cams[id];
+  if (Object.keys(cams).length) out.cameras = cams;
+  else delete out.cameras;
   return out;
 }
 
@@ -414,20 +427,19 @@ export function planOverrides(loaded: Loaded, given: object, o: BuildOptions = {
     if (getPath(patch, p) !== undefined) throw new ConfigError(`${p}: set in .env (${name})`);
   }
   let overrides = merge(loaded.overrides as Obj, patch as Obj);
-  const baseDir = baseDirOf(loaded);
-  const next = build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides, baseDir, loaded.envLayer, normOf(loaded), o);
+  const next = rebuildWith(loaded, overrides, o);
   // The checks ran on the whole result above; a path is dropped only when the
   // configuration without it is valid and holds the same value.
   const paths = setPaths(patch as Obj);
   for (const p of paths) {
     const without = dropPath(overrides, p);
     try {
-      if (same(getPath(build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, without, baseDir, loaded.envLayer, normOf(loaded), o).config, p), getPath(next.config, p))) overrides = without;
+      if (same(getPath(rebuildWith(loaded, without, o).config, p), getPath(next.config, p))) overrides = without;
     } catch {
       // Not valid without it: the override stays.
     }
   }
-  const result = overrides === next.overrides ? next : build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides, baseDir, loaded.envLayer, normOf(loaded), o);
+  const result = overrides === next.overrides ? next : rebuildWith(loaded, overrides, o);
   return { next: result, overrides, paths };
 }
 
@@ -445,8 +457,8 @@ export function planUnset(loaded: Loaded, paths: string[]): Plan {
 }
 
 // The configuration with these overrides (validated), not written.
-export function rebuildWith(loaded: Loaded, overrides: object): Loaded {
-  return build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides as Obj, baseDirOf(loaded), loaded.envLayer, normOf(loaded));
+export function rebuildWith(loaded: Loaded, overrides: object, o: BuildOptions = {}): Loaded {
+  return build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides as Obj, baseDirOf(loaded), loaded.envLayer, normOf(loaded), o);
 }
 
 // Adds overrides (validated like the file); nothing is written if the result
@@ -488,8 +500,7 @@ export function withoutOverride(loaded: Loaded, path: string): Loaded {
   path = translatePath(path, loaded.order);
   if (!settingPaths(loaded.config).includes(path)) throw new ConfigError(`${path}: unknown setting`);
   if (getPath(loaded.overrides, path) === undefined) return loaded;
-  const baseDir = loaded.files.config ? dirname(loaded.files.config) : process.cwd();
-  return build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, dropPath(loaded.overrides as Obj, path), baseDir, loaded.envLayer, normOf(loaded));
+  return rebuildWith(loaded, dropPath(loaded.overrides as Obj, path));
 }
 
 // What an override's Reset goes back to (GET /control/config shows it):
@@ -529,13 +540,8 @@ export function removeOverride(loaded: Loaded, path: string): Loaded {
       if (loaded.order.includes(m[1])) throw new ConfigError(`cameras.${m[1]}: defined in config.json; remove it there`);
       throw new ConfigError(`cameras.${m[1]}: unknown camera`);
     }
-    const baseDir = loaded.files.config ? dirname(loaded.files.config) : process.cwd();
-    const overrides = structuredClone(loaded.overrides as Obj);
-    const cams = { ...(overrides.cameras as Obj) };
-    delete cams[m[1]];
-    if (Object.keys(cams).length) overrides.cameras = cams;
-    else delete overrides.cameras;
-    const next = build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides, baseDir, loaded.envLayer, normOf(loaded));
+    const overrides = withoutCamera(loaded.overrides, m[1]);
+    const next = rebuildWith(loaded, overrides);
     writeOverrides(loaded.files.overrides, overrides);
     return next;
   }
