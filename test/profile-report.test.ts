@@ -43,6 +43,7 @@ describe('the profile report', () => {
       hardware: { pi: null, cpuCores: 4, cpuModel: 'Intel N100', memoryBytes: 16e9, load5: 0.7, cpuTempC: 48.5 },
       warnings: [],
       firewall: { tool: 'ufw', lines: ['sudo ufw allow from 192.0.2.85 to any port 2121 proto tcp', 'sudo ufw allow from 192.0.2.85 to any port 30000:30029 proto tcp'] },
+      tls: { site: null, cameraSubnet: null },
     });
     const hb = buildHeartbeat(buildHealth(input()), PI_INFO, undefined, p);
     expect(hb.body.profile).toEqual(p);
@@ -69,6 +70,16 @@ describe('the profile report', () => {
     expect(p.hardware.load5).toBe(0);
     const r = valid(buildHeartbeat(buildHealth(input()), PI_INFO, undefined, p).body);
     expect(r.ok, r.why).toBe(true);
+  });
+
+  it('the site CA settings: tls.site and tls.cameraSubnet', () => {
+    const c = config({ cameras: [{ id: 'cam4', host: '192.0.2.85' }], tls: { site: 'een', cameraSubnet: '192.0.2.0/24', proxyAddresses: '192.0.2.10' } });
+    const p = profileReport(c, FACTS, HW);
+    expect(p.tls).toEqual({ site: 'een', cameraSubnet: '192.0.2.0/24' });
+    const r = valid(buildHeartbeat(buildHealth(input()), PI_INFO, undefined, p).body);
+    expect(r.ok, r.why).toBe(true);
+    // A subnet without a site (allowed: the site comes later) is still reported.
+    expect(profileReport(config({ camera: { id: 'cam1', host: '192.0.2.103' }, tls: { cameraSubnet: '192.0.2.0/24' } }), FACTS, HW).tls).toEqual({ site: null, cameraSubnet: '192.0.2.0/24' });
   });
 
   it("the host's figures from Node's os module", () => {
