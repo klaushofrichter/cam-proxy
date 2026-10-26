@@ -62,6 +62,7 @@
     "ftp.passive",
     "ftp.tls",
     "ftp.publicHost",
+    "ftp.sourceSubnet",
     "ftp.certFile",
     "ftp.keyFile",
     "tls",

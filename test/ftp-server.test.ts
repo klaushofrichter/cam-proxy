@@ -451,6 +451,18 @@ describe('a user per camera (spec 2026-10-05-multi-camera-host-design §7)', () 
     expect(uploads).toEqual([]);
   });
 
+  // ftp.sourceSubnet (the cluster: cam2 uploads from its pod address, not its Service address).
+  it('with a source subnet, a login from inside it is accepted and one from outside refused', async () => {
+    const inside = await setup({ users: () => new Map([['cam2', { cam: 'cam2', subnet: '127.0.0.0/8' }]]) });
+    const c = await inside.client('ftp-pw', 'cam2');
+    c.close();
+    const outside = await setup({ users: () => new Map([['cam2', { cam: 'cam2', subnet: '10.42.0.0/16' }]]) });
+    const refused: unknown[] = [];
+    outside.server.on('refused', (r: unknown) => refused.push(r));
+    await expect(outside.client('ftp-pw', 'cam2')).rejects.toThrow(/530/);
+    expect(refused).toEqual([{ user: 'cam2', ip: '127.0.0.1', expected: '10.42.0.0/16' }]);
+  });
+
   it('an unknown user is refused like a wrong password', async () => {
     const { client } = await setup({ users: () => new Map([['cam3', { cam: 'cam3' }]]) });
     await expect(client('ftp-pw', 'cam9')).rejects.toThrow(/530/);

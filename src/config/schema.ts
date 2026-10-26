@@ -207,6 +207,7 @@ export const SETTINGS: Node = {
     stream: { type: 'string', enum: ['main', 'sub'], doc: 'the stream the camera uploads' },
     stalledHours: int(1, 72, 'warn on the Status page when no clip arrived for this many hours while the camera recorded events'),
     maxGB: unset(int(1, 100000, 'size cap for clips', true), 'no size cap for clips (the storage budget still applies)'),
+    sourceSubnet: unset({ type: 'string', pattern: '^\\d{1,3}(\\.\\d{1,3}){3}/\\d{1,2}$', optional: true, doc: "the network camera FTP logins come from (CIDR, /16 or narrower), instead of each camera's own address: for cameras behind NAT or in a cluster, e.g. 10.42.0.0/16" }, "a camera with an IP address logs in from that address only"),
     publicHost: unset({ type: 'string', pattern: '^[A-Za-z0-9.:-]{1,253}$', optional: true, doc: 'the address the camera connects to (PASV replies and the camera FTP setup)' }, "PASV answers the connection's own address; the camera's FTP setup can't be set from here"),
     certFile: unset({ type: 'string', pattern: '^.+$', optional: true, doc: 'FTPS certificate (PEM); a self-signed one otherwise' }, 'a self-signed FTPS certificate'),
     keyFile: unset({ type: 'string', pattern: '^.+$', optional: true, doc: 'FTPS key (PEM)' }, 'the key of the self-signed FTPS certificate'),

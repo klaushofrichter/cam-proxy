@@ -6,6 +6,7 @@ import { checkPartial, leafAt, leafPaths, SETTINGS, SettingError } from './schem
 import { cameraConfig } from './cameras';
 import { derivedPassive, ftpOn, MAX_FTP_CAMERAS, PASSIVE_MAX, PORTS_PER_CAMERA } from './profile';
 import { normalizeFile, normalizeOverrides, translatePath } from './legacy';
+import { ipv4Int } from '../util/cidr';
 import { loadSecrets } from './secrets';
 import { EnvSettingError, readEnvLayer, type EnvLayer } from './env';
 import { adminUrlProblem } from '../fleet/protocol';
@@ -149,13 +150,9 @@ function crossCheck(c: Config): void {
     if (!c.tls.cameraSubnet) throw new ConfigError('tls.cameraSubnet: required with tls.site');
     if (!c.tls.proxyAddresses) throw new ConfigError('tls.proxyAddresses: required with tls.site');
   }
-  if (c.tls.cameraSubnet) {
-    const [ip, bits] = c.tls.cameraSubnet.split('/');
-    const n = ipv4Int(ip);
-    const prefix = Number(bits);
-    if (n === null || prefix > 32 || (prefix < 32 && (n & (2 ** (32 - prefix) - 1)) !== 0)) throw new ConfigError(`tls.cameraSubnet: ${c.tls.cameraSubnet} is not an IPv4 network`);
-    if (prefix < 16) throw new ConfigError(`tls.cameraSubnet: ${c.tls.cameraSubnet} is wider than /16`);
-  }
+  if (c.tls.cameraSubnet) checkSubnet('tls.cameraSubnet', c.tls.cameraSubnet);
+  // Camera FTP logins from this network instead of each camera's own address.
+  if (c.ftp.sourceSubnet) checkSubnet('ftp.sourceSubnet', c.ftp.sourceSubnet);
   for (const a of c.tls.proxyAddresses?.split(',') ?? []) {
     if (ipv4Int(a) === null) throw new ConfigError(`tls.proxyAddresses: ${a} is not an IPv4 address`);
   }
@@ -224,10 +221,15 @@ function takeCommandPolicy(o: unknown, where: 'config.json' | 'overrides.json' |
 // their canonical JSON ({} when there are none).
 export const configRevision = (l: Loaded): string => `sha256:${createHash('sha256').update(jcs(l.overrides)).digest('hex')}`;
 
-const ipv4Int = (ip: string): number | null => {
-  const parts = ip.split('.').map(Number);
-  return parts.length === 4 && parts.every((x) => Number.isInteger(x) && x >= 0 && x <= 255) ? parts.reduce((n, x) => n * 256 + x, 0) : null;
-};
+
+// An IPv4 network a.b.c.d/n, /16 or narrower.
+function checkSubnet(key: string, v: string): void {
+  const [ip, bits] = v.split('/');
+  const n = ipv4Int(ip);
+  const prefix = Number(bits);
+  if (n === null || prefix > 32 || (prefix < 32 && (n & (2 ** (32 - prefix) - 1)) !== 0)) throw new ConfigError(`${key}: ${v} is not an IPv4 network`);
+  if (prefix < 16) throw new ConfigError(`${key}: ${v} is wider than /16`);
+}
 
 type Norm = { order: string[]; legacy: boolean; policy: CommandPolicyBase; tokensOptional: boolean };
 // The camera ids overrides.json adds to config.json's, sorted.

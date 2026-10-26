@@ -5,6 +5,7 @@ import { createWriteStream, mkdirSync, unlinkSync } from 'fs';
 import net from 'net';
 import { join, posix } from 'path';
 import tls from 'tls';
+import { inCidr } from '../util/cidr';
 
 // A small upload-only FTP(S) server for the camera's clip uploads. It speaks
 // what an uploader needs (login, explicit TLS, passive mode, folders, STOR)
@@ -27,7 +28,7 @@ export interface FtpServerOptions {
   publicHost?: string; // the address in PASV replies
   // The FTP users (spec 2026-10-05-multi-camera-host-design §7): one per
   // camera; with `ip`, a login from another address is refused.
-  users: () => Map<string, { cam: string; ip?: string }>;
+  users: () => Map<string, { cam: string; ip?: string; subnet?: string }>;
   password: string;
   tls?: { cert: string; key: string }; // then TLS is required (AUTH TLS, PROT P)
   root: string; // uploads land in <root>/.incoming
@@ -332,11 +333,12 @@ export class FtpServer extends EventEmitter {
         const entry = s.user !== undefined ? this.o.users().get(s.user) : undefined;
         if (entry && same(arg, this.o.password)) {
           // Defence in depth (spec §7, Ruling P2-4): a camera with an IP
-          // address logs in from that address only.
-          if (entry.ip && entry.ip !== ip) {
+          // address logs in from that address only; with ftp.sourceSubnet, from that network.
+          const expected = entry.subnet ?? entry.ip;
+          if (entry.subnet ? !inCidr(ip, entry.subnet) : entry.ip && entry.ip !== ip) {
             this.failures.set(ip, [...this.recentFailures(ip), this.now()]);
-            this.log(`login for ${s.user} from ${ip} refused (camera address ${entry.ip})`);
-            this.emit('refused', { user: s.user, ip, expected: entry.ip });
+            this.log(`login for ${s.user} from ${ip} refused (camera address ${expected})`);
+            this.emit('refused', { user: s.user, ip, expected });
             return reply('530 Login incorrect');
           }
           // Each camera holds up to two sessions (MP4 and JPEG): the default cap scales with the users.
