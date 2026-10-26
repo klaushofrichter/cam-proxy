@@ -7,21 +7,14 @@
 // (it uses the disk) but is never listed or evicted.
 // Callers validate ids with validId (names.ts); path() also refuses anything
 // that could leave the folder.
-import { lstatSync, mkdirSync, readdirSync, renameSync, unlinkSync, utimesSync } from 'fs';
+import { lstatSync, mkdirSync, renameSync, unlinkSync, utimesSync } from 'fs';
 import { join, resolve, sep } from 'path';
 import type { CachePool } from './pool';
+import { listDirSync } from '../fs-util';
 
 const TOUCH_EVERY_MS = 60_000;
 
 interface CachedFile { id: string; path: string; bytes: number; used: number }
-
-function safeDir(dir: string): string[] {
-  try {
-    return readdirSync(dir);
-  } catch {
-    return [];
-  }
-}
 
 export class RecordingCache {
   private readonly pins = new Map<string, number>();
@@ -53,7 +46,7 @@ export class RecordingCache {
   init(): void {
     const dir = this.d.dir();
     mkdirSync(dir, { recursive: true });
-    for (const name of safeDir(dir)) {
+    for (const name of listDirSync(dir)) {
       if (!name.endsWith('.part')) continue;
       try {
         unlinkSync(join(dir, name));
@@ -115,7 +108,7 @@ export class RecordingCache {
   files(): CachedFile[] {
     const dir = this.d.dir();
     const out: CachedFile[] = [];
-    for (const id of safeDir(dir)) {
+    for (const id of listDirSync(dir)) {
       if (id.endsWith('.part')) continue;
       const path = join(dir, id);
       try {
@@ -136,7 +129,7 @@ export class RecordingCache {
   partBytes(): number {
     const dir = this.d.dir();
     let n = 0;
-    for (const name of safeDir(dir)) {
+    for (const name of listDirSync(dir)) {
       if (!name.endsWith('.part')) continue;
       try {
         const s = lstatSync(join(dir, name));

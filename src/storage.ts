@@ -13,6 +13,7 @@ import type { StreamLog } from './stream/log';
 import { DAY, dayStart, HOUR } from './time-units';
 import { realStatfs } from './health/host';
 import { activeCameraIds, cameraConfig } from './config/cameras';
+import { listDirSync } from './fs-util';
 
 const GROWTH_WINDOW = 3 * DAY;
 
@@ -115,11 +116,11 @@ export class Storage extends EventEmitter {
         continue;
       }
       for (const cam of readdirSync(base)) {
-        for (const y of safeDir(join(base, cam))) {
-          for (const m of safeDir(join(base, cam, y))) {
-            for (const dd of safeDir(join(base, cam, y, m))) {
+        for (const y of listDirSync(join(base, cam))) {
+          for (const m of listDirSync(join(base, cam, y))) {
+            for (const dd of listDirSync(join(base, cam, y, m))) {
               const folder = join(base, cam, y, m, dd);
-              for (const name of safeDir(folder)) {
+              for (const name of listDirSync(folder)) {
                 if (name.endsWith('.part')) continue; // a camera move's copy being written (Task 9)
                 const hm = /^(\d{2})(\d{2})(?:-[^.]*)?\./.exec(name);
                 if (!hm) continue;
@@ -152,8 +153,8 @@ export class Storage extends EventEmitter {
   private recountRecordings(): void {
     const recs: Unit[] = [];
     const recDir = join(this.d.config().server.dataDir, 'recordings');
-    for (const cam of safeDir(recDir)) {
-      for (const name of safeDir(join(recDir, cam))) {
+    for (const cam of listDirSync(recDir)) {
+      for (const name of listDirSync(join(recDir, cam))) {
         if (name.endsWith('.part')) continue; // being written
         const path = join(recDir, cam, name);
         try {
@@ -308,9 +309,9 @@ export class Storage extends EventEmitter {
       // every camera's folder, also a camera removed from the config.
       const sweep = (folder: string, keep: Set<string>) => {
         const base = join(cfg.server.dataDir, folder);
-        for (const cam of safeDir(base)) {
+        for (const cam of listDirSync(base)) {
           const dir = join(base, cam);
-          for (const f of safeDir(dir)) {
+          for (const f of listDirSync(dir)) {
             const path = join(dir, f);
             if (!keep.has(path)) try { unlinkSync(path); } catch { /* gone, or a folder */ }
           }
@@ -440,18 +441,10 @@ export class Storage extends EventEmitter {
   }
 }
 
-function safeDir(dir: string): string[] {
-  try {
-    return readdirSync(dir);
-  } catch {
-    return [];
-  }
-}
-
 // Uploads cut off without the FTP server noticing (a crash) stay in
 // .incoming; they go after a day. Uploads in progress are never counted.
 function removeStaleUploads(dir: string, before: number): void {
-  for (const name of safeDir(dir)) {
+  for (const name of listDirSync(dir)) {
     try {
       const path = join(dir, name);
       if (statSync(path).mtimeMs < before) unlinkSync(path);

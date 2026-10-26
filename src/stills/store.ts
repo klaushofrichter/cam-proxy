@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from 'fs';
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from 'fs';
 import { open, readFile, stat, type FileHandle } from 'fs/promises';
 import { join } from 'path';
 import sharp from 'sharp';
@@ -7,6 +7,7 @@ import { logger } from '../log';
 import type { Frame } from './grabber';
 import { MINUTE, utcDayParts, utcHhmm } from '../time-units';
 import { writeFileAtomic } from '../fs-util';
+import { listDirSync } from '../fs-util';
 
 // One minute of stills is one pack: the JPEGs back to back, a JSON footer
 // (interval, size, quality and one [offset, length] per slot; length 0 means
@@ -263,13 +264,7 @@ export class MinuteStore extends EventEmitter {
   oldest(kind: 'stills' | 'previews'): number | null {
     const minuteFile = kind === 'stills' ? /^\d{4}\.pack$/ : /^\d{4}\.json$/;
     const base = join(this.o.dataDir, kind, this.o.cam);
-    const sorted = (dir: string, re: RegExp) => {
-      try {
-        return readdirSync(dir).filter((n) => re.test(n)).sort();
-      } catch {
-        return [];
-      }
-    };
+    const sorted = (dir: string, re: RegExp) => listDirSync(dir).filter((n) => re.test(n)).sort();
     for (const y of sorted(base, /^\d{4}$/)) {
       for (const mo of sorted(join(base, y), /^\d{2}$/)) {
         for (const d of sorted(join(base, y, mo), /^\d{2}$/)) {
