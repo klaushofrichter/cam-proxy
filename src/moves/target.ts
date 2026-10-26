@@ -25,6 +25,7 @@ import { removeLanded, type Purged } from './purge';
 import { unseal } from './seal';
 import { logger } from '../log';
 import type { MoveCheck, MoveCopied, MoveEvent, MovePhaseName, MovePlan, Space } from './types';
+import { sleep, within } from '../async';
 
 // The target side of a camera move from move.start on (camera-move plan Task 8,
 // S §9.1, §9.3, §10.1, P1, P12): move.start makes the move's X25519 pair and
@@ -365,7 +366,7 @@ export class MoveTarget {
       } catch {
         last = null; // not reachable: tried again
       }
-      if (i < 2) await new Promise((res) => setTimeout(res, this.d.timing?.outcomeRetryMs ?? 10_000));
+      if (i < 2) await sleep(this.d.timing?.outcomeRetryMs ?? 10_000);
     }
     logger.warn({ moveId: r.id, status: last }, 'move_outcome_not_reported');
     this.d.audit.write({
@@ -610,9 +611,7 @@ export class MoveTarget {
   async stopAll(waitMs = 3000): Promise<void> {
     const ids = new Set([...this.runs.keys(), ...this.copying]);
     const all = Promise.all([...ids].map((id) => this.stop(id)));
-    let t: NodeJS.Timeout | undefined;
-    await Promise.race([all, new Promise<void>((r) => (t = setTimeout(r, waitMs)))]);
-    clearTimeout(t);
+    await within(all, waitMs);
   }
 
   // At process start: every target move the journal has open, from its phase and step.

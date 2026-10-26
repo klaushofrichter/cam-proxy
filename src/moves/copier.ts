@@ -16,6 +16,7 @@ import { abortableSleep, paceS, rateFor, TokenBucket } from './rate';
 import type { ChunkState, MoveCheck, MoveEvent, MoveKind, MoveSummary } from './types';
 import { MOVE_KINDS } from './types';
 import { HOUR, MINUTE } from '../time-units';
+import { within } from '../async';
 
 // The copier on the target (camera-move plan Task 9, S §8.2–8.4, §10, §12;
 // Review Focus 1–3). It runs once the camera is switched over and pulls the
@@ -1048,9 +1049,7 @@ export class CopyRunner {
   // MoveTarget.stopAll).
   async stopAll(waitMs = 3000): Promise<void> {
     const all = Promise.all([...this.runs.keys()].map((id) => this.stop(id)));
-    let t: NodeJS.Timeout | undefined;
-    await Promise.race([all, new Promise<void>((r) => (t = setTimeout(r, waitMs)))]);
-    clearTimeout(t);
+    await within(all, waitMs);
   }
 
   // An unexpected throw (the journal or the catalog unwritable): a fixed line, the move failed.
