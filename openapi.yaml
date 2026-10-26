@@ -1002,9 +1002,10 @@ paths:
       summary: Start a camera move to another proxy ({camera, target}); emits move.request (the camera's connection fields and settings from the config, the per-kind summary; never a password); audited (move-request)
       description: >
         Admin; a cams-admin sign-in only with the move.send entry (a managed token never). Refused
-        before any event (camera-move plan P10): no_site_ca (tls.site not set, the Pi; also for an
-        unknown camera there), external_cert (the camera has tlsName), moves_not_allowed (no move.send
-        or commands paused), busy (another move is open here, or the journal is unreadable).
+        before any event (camera-move plan P10): moves_not_allowed (no move.send or commands paused),
+        busy (another move is open here, or the journal is unreadable). Since 2026-10-26 a proxy
+        without tls.site (the Pi) and a camera with tlsName may be moved (no_site_ca and
+        external_cert are no longer source refusals).
       requestBody:
         content:
           application/json:
@@ -1014,7 +1015,7 @@ paths:
         '400': { description: '{ error: invalid, detail: camera | target }' }
         '403': { description: '{ error: local_admin_only } (a cams-admin sign-in without move.send, or a managed token)' }
         '404': { description: '{ error: unknown_camera }' }
-        '409': { description: '{ error: move_refused, reason: no_site_ca | external_cert | moves_not_allowed | busy }' }
+        '409': { description: '{ error: move_refused, reason: moves_not_allowed | busy }' }
   /control/moves/targets:
     post:
       summary: Ask cams-admin for the proxies this camera may move to ({camera}); emits move.targets; the list arrives with the move.targets command
@@ -1055,7 +1056,7 @@ paths:
         '400': { description: '{ error: invalid, detail: plan | plan.kinds | plan.space | plan.targetSettings | plan.budgetS | plan.estimateS | answer }' }
         '403': { description: '{ error: local_admin_only }' }
         '404': { description: '{ error: unknown_move }' }
-        '409': { description: '{ error: wrong_phase | not_ready (no accepting answer yet) | already_approved }; { error: move_refused, reason: no_site_ca | moves_not_allowed }' }
+        '409': { description: '{ error: wrong_phase | not_ready (no accepting answer yet) | already_approved }; { error: move_refused, reason: moves_not_allowed }' }
   /control/moves/{id}/cancel:
     post:
       summary: Ask cams-admin to cancel the move ({copied: delete | age-out}, what happens to content already copied); emits move.cancel
