@@ -4,7 +4,7 @@ import { activeCameraIds } from '../config/cameras';
 import type { CameraNode, Config } from '../config/defaults';
 import { keepDaysOf } from './retention';
 import { applyOverrides, planUnset, removeOverride, writeOverridesFile, type Loaded } from '../config/load';
-import { planProblem, type MoveAnswerArgs, type MoveBeginArgs, type MoveCancelArgs, type MoveFinishArgs, type MoveGoArgs, type MoveOpenArgs, type MoveReleaseArgs, type MoveTargetsArgs } from '../fleet/command-args';
+import { planProblem, type MoveAnswerArgs, type MoveBeginArgs, type MoveCancelArgs, type MoveFinishArgs, type MoveGoArgs, type MoveOpenArgs, type MoveReleaseArgs, type MoveSummaryArgs, type MoveTargetsArgs } from '../fleet/command-args';
 import type { Done, Handler } from '../fleet/commands';
 import { newId } from '../fleet/protocol';
 import { listChunks, summarize, type InventoryDeps } from './inventory';
@@ -125,6 +125,8 @@ const KEEP_MS = 30 * 60_000; // an offer not approved within 30 minutes expires 
 // An opened move with no approval after that and 5 minutes slack closes here on its own (final review 5).
 export const OFFER_EXPIRY_MS = KEEP_MS + 5 * 60_000;
 const KEEP_MAX = 32;
+// move.summary's answer is kept that long: summarize walks every still of the camera (~55k on the mini PC).
+export const SUMMARY_CACHE_MS = 30_000;
 const SWITCHED: readonly string[] = ['switching', 'switched', 'released', 'copying', 'copied'];
 const RELEASED: readonly string[] = ['released', 'copying', 'copied'];
 
@@ -200,6 +202,8 @@ export class MoveSource {
   private readonly giving = new Map<string, Promise<boolean>>();
   private readonly retry = new Map<string, { timer: NodeJS.Timeout; delay: number; attempts: number }>();
   private readonly failAudited = new Map<string, number>();
+  // The last summary per camera (move.summary, refreshed by every request).
+  private readonly summaries = new Map<string, { at: number; summary: MoveSummary }>();
   private stopped = false;
 
   constructor(private readonly d: SourceDeps) {}
@@ -291,7 +295,7 @@ export class MoveSource {
     this.prune();
     const node = this.d.running().cameras[cam];
     const requestId = newId('rq_');
-    const p: Pending = { requestId, camera: cam, target, actor: who.actor, summary: summarize(this.d.inventory, cam), settings: settingsOf(node), connection: connectionOf(node), at: this.now(), targetName: this.targetName(target), bounds };
+    const p: Pending = { requestId, camera: cam, target, actor: who.actor, summary: this.summaryOf(cam, true), settings: settingsOf(node), connection: connectionOf(node), at: this.now(), targetName: this.targetName(target), bounds };
     this.pending.set(requestId, p);
     this.d.emit({ kind: 'move.request', requestId, camera: p.connection, target, actor: p.actor, summary: p.summary, settings: p.settings, bounds });
     const bytes = Object.values(p.summary).reduce((n, k) => n + k.bytes, 0);
@@ -710,6 +714,7 @@ export class MoveSource {
         return ok();
       }),
       'move.begin': guard((a: MoveBeginArgs) => this.begin(a)),
+      'move.summary': guard((a: MoveSummaryArgs) => this.preSummary(a)),
       'move.open': guard((a: MoveOpenArgs) => this.open(a)),
       'move.answer': guard((a: MoveAnswerArgs) => this.answer(a)),
       'move.go': guard((a: MoveGoArgs) => this.go(a)),
@@ -723,6 +728,23 @@ export class MoveSource {
     const why = this.refusal(a.camera);
     if (why) return failed(why);
     return ok({ requestId: this.request(a.camera, a.target, BEGIN_ASKER, a.bounds).requestId });
+  }
+
+  // move.summary: the summary a move.request for this camera would carry, before
+  // cams-admin starts the move. Read only: no event, no move record, no audit
+  // of its own (the runner journals and audits it like config.get).
+  preSummary(a: MoveSummaryArgs): Done {
+    if (!activeCameraIds(this.d.running()).includes(a.camera)) return failed('unknown_camera');
+    return ok({ summary: this.summaryOf(a.camera) });
+  }
+
+  // summarize() for the camera; `fresh` (a request) always reads, the rest take a summary younger than SUMMARY_CACHE_MS.
+  private summaryOf(cam: string, fresh = false): MoveSummary {
+    const hit = this.summaries.get(cam);
+    if (!fresh && hit && this.now() - hit.at < SUMMARY_CACHE_MS) return hit.summary;
+    const summary = summarize(this.d.inventory, cam);
+    this.summaries.set(cam, { at: this.now(), summary });
+    return summary;
   }
 
   private open(a: MoveOpenArgs): Done {

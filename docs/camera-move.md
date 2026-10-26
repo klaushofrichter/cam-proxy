@@ -118,6 +118,16 @@ page and answers with the request, or with the reason it refuses
 `unknown_camera`). The camera's password stays on the proxy; the command and
 its answer carry none.
 
+Before that, cams-admin can ask what a move of a camera would carry with
+`move.summary` (`{v: 1, camera}`, also under `move.send`). It answers
+`{summary}`: per kind (stills, clips, events, checks, archive) the files,
+bytes, rows and the oldest and newest time, the same summary a request puts
+into its `move.request` event, or `unknown_camera`. It only reads: no event,
+no move record, no audit record of its own (the command shows in the command
+journal and as an `admin-command` record like every command). Counting a
+camera's stills takes a while on a large disk, so the answer is kept for 30
+seconds; a request always counts afresh.
+
 cams-admin may add bounds: whether to transfer content, which kinds, what to
 do when it doesn't fit, and the longest time budget. When the target's answer
 arrives and accepts, the source builds the plan the panel would build and

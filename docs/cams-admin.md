@@ -99,8 +99,10 @@ Losing it means enrolling again.
   passive range, the storage budget against the disk, the hardware as cam-proxy
   sees it (cores, CPU model, memory, 5-minute load from Node's `os`; the CPU
   temperature on a Pi or with `host.stats: on`), the warnings
-  (`profile_ftp_ports`, `profile_cameras_exceeded`) and the firewall lines for
-  its cameras with FTP. They hold camera LAN addresses, which cams-admin holds
+  (`profile_ftp_ports`, `profile_cameras_exceeded`), the firewall lines for
+  its cameras with FTP, and the site CA's settings (`tls`: `site` and
+  `cameraSubnet`, from `tls.site` and `tls.cameraSubnet`; null when unset, as
+  on the Pi). They hold camera LAN addresses, which cams-admin holds
   already; they are never logged. cams-admin never sets the profile: it holds
   the camera limit and the storage budget (local only, `PUT /control/profile`
   with the local admin token).
@@ -189,7 +191,7 @@ cams-admin card (**Commands from cams-admin**), with
 | `camera.name.set` | rename a camera (the camera's own name, re-read) |
 | `camera.action:<action>` | run that camera action: `camera-test`, `onvif-resubscribe`, `camera-ftp-test`, `poe-switch-read`, `inventory`, `inventory-cancel`, `retention-run` (always a dry run) |
 | **disruptive**: `proxy.restart`, `camera.action:restart`, `camera-reboot`, `camera-powercycle`, `camera-ftp-setup`, `camera-ntp-set`, `camera-cert-push` | restart this proxy or a camera's worker, reboot or power-cycle a camera, point its FTP upload here or set its NTP server, replace its HTTPS certificate. Grouped under **Disruptive — off by default** on the cams-admin page; allow one only while it's needed (Klaus's decision, M §16 Q3) |
-| `move.send` | move a camera from this proxy to another proxy of the account: `move.targets`, `move.open`, `move.answer`, `move.go`, `move.release`, and `move.finish`/`move.cancel` for the source. Only after you approve the move here (or in a cams-admin sign-in, which this entry also lets start and approve moves). `move.answer` relays the target's answer; a refusal carries its `reason` and an optional `detail` (1 to 300 characters), kept with the request and shown in the dialog and the `move-phase` `rejected` audit record; see [docs/camera-move.md](camera-move.md) |
+| `move.send` | move a camera from this proxy to another proxy of the account: `move.targets`, `move.open`, `move.answer`, `move.go`, `move.release`, `move.begin`, `move.summary`, and `move.finish`/`move.cancel` for the source. Only after you approve the move here (or in a cams-admin sign-in, which this entry also lets start and approve moves). `move.answer` relays the target's answer; a refusal carries its `reason` and an optional `detail` (1 to 300 characters), kept with the request and shown in the dialog and the `move-phase` `rejected` audit record. `move.summary` (`{v: 1, camera}`) only reads: it answers `{summary}`, what a move of that camera would carry (files, bytes, rows, oldest and newest per kind, exactly as in the `move.request` event), or `unknown_camera`; see [docs/camera-move.md](camera-move.md) |
 | `move.receive` | hand this proxy a camera from another proxy of the account: `move.offer`, `move.start`, and `move.finish`/`move.cancel` for the target. It adds the camera live with its password and certificate and copies its content. A refused `move.offer` answers `{accept: false, reason, detail?}`: `detail` is one line of at most 300 characters naming what failed (a setting, an id, an address; never a token, password or other secret's value), also in the `move-offer` audit record ([docs/camera-move.md](camera-move.md#starting-one)) |
 
 | **cams-admin sign-in**: `ui.config`, `ui.restart` | no command: what someone signed in to this admin UI through a cams-admin one-time link (user `managed-admin`) may also do here; see [Signing in from cams-admin](#signing-in-from-cams-admin) |
