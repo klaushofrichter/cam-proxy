@@ -1,6 +1,5 @@
 import { randomBytes } from 'crypto';
 import express, { type NextFunction, type Request, type Response } from 'express';
-import { rateLimit } from 'express-rate-limit';
 import { lstatSync, realpathSync } from 'fs';
 import { join, resolve, sep } from 'path';
 import type { AuditLog } from '../audit/audit-log';
@@ -13,7 +12,7 @@ import { ManifestCache } from '../moves/manifest-cache';
 import { seal } from '../moves/seal';
 import { moveTokenGuard } from '../moves/token-guard';
 import type { MovePhaseName } from '../moves/types';
-import { bad, intParam, sendFileOr } from './respond';
+import { bad, intParam, perMinute, sendFileOr } from './respond';
 
 // The source's side of a camera move (camera-move plan Task 5, S §8.1, §9.3):
 // the target pulls the camera's content and its sealed password from
@@ -125,10 +124,7 @@ export function movesSourceApi(d: MovesSourceDeps): express.Router {
   };
 
   // Counted before the guard, uncounted again when the request passed it.
-  const refusedLimit = rateLimit({
-    windowMs: 60_000, limit: d.refusedPerMinute ?? 300, standardHeaders: 'draft-8', legacyHeaders: false,
-    message: { error: 'rate_limited' }, skipSuccessfulRequests: true, requestWasSuccessful: (_req, res) => res.locals.move !== undefined,
-  });
+  const refusedLimit = perMinute(d.refusedPerMinute ?? 300, { skipSuccessfulRequests: true, requestWasSuccessful: (_req, res) => res.locals.move !== undefined });
   router.use('/moves/:id', refusedLimit, moveTokenGuard({ journal: d.journal, audit: d.audit, now: d.now, onWrongAddress: d.onWrongAddress }), (_req, res, next) => {
     res.set('Cache-Control', 'no-store');
     next();

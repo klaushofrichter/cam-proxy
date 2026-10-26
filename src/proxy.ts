@@ -1,5 +1,4 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
-import { rateLimit } from 'express-rate-limit';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
 import http from 'http';
 import https from 'https';
@@ -99,6 +98,7 @@ import { camsAdminApi } from './api/cams-admin-api';
 import type { Timing } from './fleet/client';
 import { CONFIG_SCHEMA } from './config/schema';
 import { profileReport, type ProfileFacts, type ProfileReport } from './health/profile';
+import { perMinute } from './api/respond';
 
 export const VERSION = process.env.CAMPROXY_VERSION ?? 'dev';
 
@@ -947,14 +947,13 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   };
   // Behind an ingress (issue #29): client addresses from X-Forwarded-For.
   if (running.server.trustProxy) app.set('trust proxy', running.server.trustProxy);
-  const limiter = (limit: number, skip: (req: Request) => boolean) => rateLimit({ windowMs: 60_000, limit, skip, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } });
   // Not the move endpoints either (camera-move plan Task 5): the move token
   // bound to the one target address guards them, and they answer 503 busy
   // under pressure; a copier fetching many small files would hit 1200/min.
   // Their refusals have a limiter of their own (movesSourceApi, final review 9).
-  app.use(limiter(1200, (req) => isImage(req) || req.path.startsWith('/api/moves/')));
+  app.use(perMinute(1200, { skip: (req) => isImage(req) || req.path.startsWith('/api/moves/') }));
   // Images: 6000 per minute per camera (a timeline per camera loads its own sprites; spec §6.1, Ruling P1-16).
-  app.use(rateLimit({ windowMs: 60_000, limit: () => 6000 * Math.max(1, cams.size), skip: (req) => !isImage(req), standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } }));
+  app.use(perMinute(() => 6000 * Math.max(1, cams.size), { skip: (req) => !isImage(req) }));
   // Not for the move endpoints: their one body (the outcome, 1 MiB) is read
   // by their router, after the move-token guard (movesSourceApi).
   const json64k = express.json({ limit: '64kb' });

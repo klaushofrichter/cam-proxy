@@ -45,6 +45,7 @@ import { RotateBusyError, type CertState, type Requester, type TlsView } from '.
 import type { PushResult } from '../tls/push';
 import { OWN_AUDIT, performAction, type ActionOutcome } from './actions';
 import type { NtpOutcome } from '../cameras/ntp';
+import { perMinute } from './respond';
 
 interface FtpStatus {
   enabled: boolean;
@@ -505,9 +506,9 @@ export function controlApi(d: ControlDeps): express.Router {
   });
 
   // Find camera and Use this address share a rate limit (the other actions have none).
-  const findLimit = rateLimit({ windowMs: 60_000, limit: FIND_CAMERA_PER_MINUTE, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } });
+  const findLimit = perMinute(FIND_CAMERA_PER_MINUTE);
   // The site CA's trust actions (rotate, drop the previous CA, clear a camera): their own limit.
-  const trustLimit = rateLimit({ windowMs: 60_000, limit: TRUST_ACTIONS_PER_MINUTE, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' } });
+  const trustLimit = perMinute(TRUST_ACTIONS_PER_MINUTE);
   const TRUST = new Set(['tls-ca-rotate', 'tls-ca-drop-previous', 'camera-trust-clear']);
   const actionLimit: express.RequestHandler = (req, res, next) =>
     req.params.name === 'find-camera' || req.params.name === 'camera-address' ? findLimit(req, res, next) : TRUST.has(String(req.params.name)) ? trustLimit(req, res, next) : next();

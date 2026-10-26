@@ -1,5 +1,4 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
-import { rateLimit } from 'express-rate-limit';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { clipById, listClips } from '../catalog/clips';
@@ -13,6 +12,7 @@ import { DAY, dayStart } from '../time-units';
 import { clientIp } from './auth';
 import { cameraParam, workerOf } from './camera-param';
 import type { CameraRegistry } from '../cameras/registry';
+import { perMinute } from './respond';
 
 const run = promisify(execFile);
 export const COMPOSITIONS_PER_MINUTE = 10;
@@ -92,10 +92,7 @@ export function composeApi(d: {
   };
   // Real requests past the input check, per client (ruling 45); dry runs
   // only count in the general limiter.
-  const limiter = rateLimit({
-    windowMs: 60_000, limit: COMPOSITIONS_PER_MINUTE, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'rate_limited' },
-    skip: (_req, res) => (res.locals.compose as Checked | undefined)?.b.dryRun === true,
-  });
+  const limiter = perMinute(COMPOSITIONS_PER_MINUTE, { skip: (_req, res) => (res.locals.compose as Checked | undefined)?.b.dryRun === true });
 
   r.post('/cameras/:cam/compositions', validate, limiter, (req, res) => {
     const { b, clip, span, maxS, w } = res.locals.compose as Checked;
