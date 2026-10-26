@@ -226,33 +226,58 @@ export class AnalyticsService {
     const cap = this.settings().googleVision.perCameraDailyCap;
     return cap > 0 && this.dayUsage('google-vision', day, cam) >= cap;
   }
+  // The Vision limit a call for `cam` would pass now, in this order; null: none.
+  private limitReached(cam: string, day: string): 'month' | 'day' | 'camera' | null {
+    const g = this.settings().googleVision;
+    if (this.monthUsage(day) >= g.monthlyLimit) return 'month';
+    if (g.dailyCap > 0 && this.dayUsage('google-vision', day) >= g.dailyCap) return 'day';
+    if (this.cameraCapReached(cam, day)) return 'camera';
+    return null;
+  }
+  // The Vision client for this key (a test's provider when given).
+  private provider(key: string): AnalyticsProvider {
+    return (this.d.provider ?? ((_id, k, url) => googleVision({ key: k, baseUrl: url })))('google-vision', key, this.d.secrets().googleVisionUrl);
+  }
+
+  // A provider's calls this month and today against their limits.
+  private calls(provider: ProviderId, day: string): Pick<ProviderState, 'month' | 'today'> {
+    const g = this.settings().googleVision;
+    return { month: { calls: this.monthUsage(day), limit: g.monthlyLimit }, today: { calls: this.dayUsage(provider, day), cap: g.dailyCap } };
+  }
+  // Every camera's still checks today against checksPerDay per camera.
+  private checksAll(day: string): ProviderState['checks'] {
+    return { today: this.dayUsage(CHECK_USAGE.calls, day), cap: this.settings().googleVision.checksPerDay * Math.max(1, this.d.cams().length) };
+  }
 
   state(): ProviderState[] {
     const g = this.settings().googleVision;
     const day = localDay(this.now(), this.d.timeInfo());
-    return PROVIDERS.map((p) => ({
-      id: p.id,
-      name: p.name,
-      enabled: g.enabled,
-      keyMasked: maskKey(this.key()),
-      keySource: this.keySource(),
-      month: { calls: this.monthUsage(day), limit: g.monthlyLimit },
-      today: { calls: this.dayUsage(p.id, day), cap: g.dailyCap },
-      paused: this.pause(),
-      lastCall: this.lastCall,
-      lastError: this.lastError,
-      // Every camera's still checks today against checksPerDay per camera.
-      checks: { today: this.dayUsage(CHECK_USAGE.calls, day), cap: g.checksPerDay * Math.max(1, this.d.cams().length) },
-      // This key's calls per camera (spec §8.2).
-      cameras: this.d.cams().map((id) => ({ id, today: this.dayUsage('google-vision', day, id), month: this.monthUsage(day, id) })),
-    }));
+    return PROVIDERS.map((p) => {
+      const { month, today } = this.calls(p.id, day);
+      return {
+        id: p.id,
+        name: p.name,
+        enabled: g.enabled,
+        keyMasked: maskKey(this.key()),
+        keySource: this.keySource(),
+        month,
+        today,
+        paused: this.pause(),
+        lastCall: this.lastCall,
+        lastError: this.lastError,
+        checks: this.checksAll(day),
+        // This key's calls per camera (spec §8.2).
+        cameras: this.d.cams().map((id) => ({ id, today: this.dayUsage('google-vision', day, id), month: this.monthUsage(day, id) })),
+      };
+    });
   }
 
-  // The budget as one camera's client sees it: its still checks today.
+  // The budget as one camera's client sees it: its still checks today. The
+  // figures of state()'s provider, without the rest of it.
   usage(cam?: string): AnalyticsUsage {
-    const { month, today, paused, checks } = this.state()[0];
     const day = localDay(this.now(), this.d.timeInfo());
-    return { enabled: this.active(), paused, month, today, checks: cam ? { today: this.dayUsage(CHECK_USAGE.calls, day, cam), cap: this.settings().googleVision.checksPerDay } : checks };
+    const { month, today } = this.calls(PROVIDERS[0].id, day);
+    return { enabled: this.active(), paused: this.pause(), month, today, checks: cam ? { today: this.dayUsage(CHECK_USAGE.calls, day, cam), cap: this.settings().googleVision.checksPerDay } : this.checksAll(day) };
   }
 
   private maxOpenMs(): number {
@@ -298,9 +323,8 @@ export class AnalyticsService {
     this.paused = this.pause();
     if (this.paused) return refuse(503, 'analytics_paused', { reason: this.paused.reason, until: this.paused.until });
     const day = localDay(this.now(), this.d.timeInfo());
-    if (this.monthUsage(day) >= g.monthlyLimit) return refuse(429, 'limit', { reason: 'month' });
-    if (g.dailyCap > 0 && this.dayUsage('google-vision', day) >= g.dailyCap) return refuse(429, 'limit', { reason: 'day' });
-    if (this.cameraCapReached(cam, day)) return refuse(429, 'limit', { reason: 'camera' });
+    const limit = this.limitReached(cam, day);
+    if (limit) return refuse(429, 'limit', { reason: limit });
     // Still checks: checksPerDay per camera and day.
     if (this.dayUsage(CHECK_USAGE.calls, day, cam) >= g.checksPerDay) return refuse(429, 'limit', { reason: 'checks' });
     // The call is reserved in the same synchronous step as the limit checks:
@@ -339,8 +363,7 @@ export class AnalyticsService {
     }
     if (!jpeg) return release(), { outcome: 'refused', status: 404, error: 'no_still' }; // deleted meanwhile
     const key = this.key()!;
-    const make = this.d.provider ?? ((id, k, url) => googleVision({ key: k, baseUrl: url }));
-    const provider = make('google-vision', key, this.d.secrets().googleVisionUrl);
+    const provider = this.provider(key);
     const t0 = this.now();
     let res: { objects: unknown; raw: unknown };
     try {
@@ -532,8 +555,6 @@ export class AnalyticsService {
     if (this.paused) return this.skip(job, 'paused', stillTs);
     const jpeg = await this.d.readStill(job.cam, stillTs);
     if (!jpeg) return this.skip(job, 'no_still');
-    const make = this.d.provider ?? ((id, k, url) => googleVision({ key: k, baseUrl: url }));
-
     let failed: AnalyticsError | undefined; // the previous attempt's error
     let t0 = 0;
     // For the audit record: the calls made, the last one's time, what it came to.
@@ -550,12 +571,9 @@ export class AnalyticsService {
         if (!eventById(this.d.catalog, job.id)) return;
         // The key as it is now: a key set during the retry wait is the one used.
         const key = this.key()!;
-        const provider = make('google-vision', key, this.d.secrets().googleVisionUrl);
-        const g = this.settings().googleVision;
+        const provider = this.provider(key);
         const day = localDay(this.now(), this.d.timeInfo());
-        if (this.monthUsage(day) >= g.monthlyLimit || (g.dailyCap > 0 && this.dayUsage('google-vision', day) >= g.dailyCap) || this.cameraCapReached(job.cam, day)) {
-          return this.skip(job, 'limit', stillTs);
-        }
+        if (this.limitReached(job.cam, day)) return this.skip(job, 'limit', stillTs);
         addUsage(this.d.catalog, this.usageKey('google-vision', job.cam, key), day);
         made.calls++;
         t0 = this.now();
