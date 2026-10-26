@@ -923,8 +923,8 @@ export class Copier {
     if (over && !this.r.budgetExceeded) {
       this.r.budgetExceeded = true;
       this.save(true);
-      // A return has no approved budget (ruling 8): the pace only, nothing to audit.
-      if (!this.r.returnOf) this.audit('move-budget-exceeded', 'failure', `the time budget of ${this.r.budgetS ?? this.r.plan?.budgetS}s is over with ${remaining} bytes left; copying goes on, never faster`, {
+      // A return never gets here (it left above): it has no approved budget to audit (ruling 8).
+      this.audit('move-budget-exceeded', 'failure', `the time budget of ${this.r.budgetS ?? this.r.plan?.budgetS}s is over with ${remaining} bytes left; copying goes on, never faster`, {
         budgetS: this.r.budgetS ?? this.r.plan?.budgetS ?? null, elapsedS: Math.round(elapsedS), bytesDone: done, bytesTotal: total,
       });
     }

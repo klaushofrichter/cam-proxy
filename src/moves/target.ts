@@ -325,10 +325,8 @@ export class MoveTarget {
       message: `Camera move ${fresh.id} (${fresh.camera} from ${fresh.peer.name || fresh.peer.proxyId}) done${a.abandoned ? ', the transfer ended early' : ''}: ${totals.files.verified} files copied, ${totals.files.skipped} skipped, ${totals.files.failed} failed, ${totals.chunks.abandoned} chunks abandoned`,
       details: this.details(fresh, { abandoned: a.abandoned, ...totals }),
     });
-    if (this.d.end) {
-      removeLanded(this.d.end.dataDir, fresh.id);
-      removeChunkParts(this.d.end.dataDir, fresh.id);
-    }
+    removeLanded(end.dataDir, fresh.id);
+    removeChunkParts(end.dataDir, fresh.id);
     this.d.journal.bury?.({ moveId: fresh.id, role: 'target', phase: 'finished', deleted: zeros() });
     this.d.journal.remove?.(fresh.id);
     this.copying.delete(fresh.id);

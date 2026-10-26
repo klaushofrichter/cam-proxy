@@ -122,13 +122,11 @@ function write(d: ConfigCommandDeps, cmd: CommandBody, args: { dryRun: boolean; 
     paths: paths.map((x) => ({ path: x, before: overrideState(l.overrides, x), after: overrideState(p.overrides, x) })),
   };
   if (!commit(d, l, p.next, p.overrides, backup)) return { status: 'failed', code: 'store_error', result: { paths: [] } };
-  if (changes.length) {
-    d.audit.write({
-      action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', user: 'cams-admin',
-      message: `Settings changed by cams-admin (on behalf of ${cmd.actor}): ${changes.map((c) => c.path).join(', ')}`,
-      details: { cmdId: cmd.cmdId, actor: cmd.actor, changes: changeRecord(changes) },
-    });
-  }
+  d.audit.write({
+    action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', user: 'cams-admin',
+    message: `Settings changed by cams-admin (on behalf of ${cmd.actor}): ${changes.map((c) => c.path).join(', ')}`,
+    details: { cmdId: cmd.cmdId, actor: cmd.actor, changes: changeRecord(changes) },
+  });
   return { status: 'ok', result: { dryRun: false, baseRevision: revision, revision: after, changes, unchanged }, changed: changes.map((c) => c.path) };
 }
 
