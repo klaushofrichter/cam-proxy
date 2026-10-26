@@ -37,11 +37,7 @@ export function movesControlApi(source: MoveSource): express.Router {
   };
   const cameraOf = (req: express.Request, res: express.Response): string | null => {
     const cam = (req.body ?? {}).camera;
-    if (typeof cam !== 'string' || !CAMERA.test(cam)) {
-      // Unless no move can start here at all (the Pi): then that is the answer.
-      if (source.noSite()) return void res.status(409).json({ error: 'move_refused', reason: 'no_site_ca' }), null;
-      return void res.status(400).json({ error: 'invalid', detail: 'camera' }), null;
-    }
+    if (typeof cam !== 'string' || !CAMERA.test(cam)) return void res.status(400).json({ error: 'invalid', detail: 'camera' }), null;
     return cam;
   };
 
@@ -63,17 +59,14 @@ export function movesControlApi(source: MoveSource): express.Router {
     const cam = cameraOf(req, res);
     if (cam === null) return;
     const target = (req.body ?? {}).target;
-    if (typeof target !== 'string' || !PROXY_ID.test(target)) {
-      if (source.noSite()) return void res.status(409).json({ error: 'move_refused', reason: 'no_site_ca' });
-      return void res.status(400).json({ error: 'invalid', detail: 'target' });
-    }
+    if (typeof target !== 'string' || !PROXY_ID.test(target)) return void res.status(400).json({ error: 'invalid', detail: 'target' });
     if (refuse(res, cam)) return;
     res.status(202).json(source.request(cam, target, askerOf(req)));
   });
 
   r.post('/moves/:id/approve', (req, res) => {
     if (!isMoveId(req.params.id)) return void res.status(404).json({ error: 'unknown_move' });
-    // Not where no move can start (the Pi), and not without move.send.
+    // Not without move.send.
     const why = source.hostRefusal();
     if (why) return void res.status(409).json({ error: 'move_refused', reason: why });
     const out = source.approve(req.params.id, (req.body ?? {}).plan, askerOf(req));

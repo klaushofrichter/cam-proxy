@@ -14,7 +14,7 @@ import { openCatalog } from '../src/catalog/db';
 import { loadConfig, planOverrides } from '../src/config/load';
 import type { MoveOfferArgs } from '../src/fleet/command-args';
 import { setLogLevel } from '../src/log';
-import { evaluate, probeSource, spaceFor, tcpConnect, type EvaluateDeps } from '../src/moves/evaluate';
+import { evaluate, probeSource, sourceGet, spaceFor, tcpConnect, type EvaluateDeps } from '../src/moves/evaluate';
 import { moveHandlers } from '../src/moves/commands';
 import { MoveJournal, type MoveRecord } from '../src/moves/journal';
 import { hashMoveToken } from '../src/moves/token';
@@ -322,6 +322,37 @@ describe('the throughput probe', () => {
   it('a source that is down measures 0 and does not throw', async () => {
     expect(await probeSource({ ...offer().source, url: 'http://127.0.0.1:1' }, MOVE, TOKEN)).toBe(0);
   });
+
+  // 2026-10-26: a source without a site CA (the Pi) is registered with a plain
+  // http URL and no caFingerprints. The target talks to it over http (no pin to
+  // hold); an https URL without a fingerprint is never trusted.
+  it('an http source with no caFingerprints (the Pi): probe and sourceGet work; https without one sends nothing', async () => {
+    const seen: string[] = [];
+    const handler = (req: { url?: string; headers: Record<string, unknown> }, res: { end: (b: Buffer | string) => void }) => {
+      seen.push(`${req.url} ${String(req.headers.authorization)}`);
+      res.end(req.url?.includes('/probe') ? Buffer.alloc(1_000_000, 1) : '{"ok":true}');
+    };
+    const plain = express().use((req, res) => handler(req, res)).listen(0, '127.0.0.1');
+    servers.push(plain);
+    await new Promise((r) => plain.once('listening', r));
+    const src = { ...offer().source, url: `http://127.0.0.1:${(plain.address() as { port: number }).port}`, caFingerprints: [] };
+    expect(await probeSource(src, MOVE, TOKEN)).toBeGreaterThan(0);
+    const got = await sourceGet(src, `/api/moves/${MOVE}/secrets`, TOKEN);
+    expect([got.status, got.body.toString('utf8')]).toEqual([200, '{"ok":true}']);
+    expect(seen.map((x) => x.replace(/\?\S*/, ''))).toEqual([`/api/moves/${MOVE}/probe Bearer ${TOKEN}`, `/api/moves/${MOVE}/secrets Bearer ${TOKEN}`]);
+    // https with no fingerprint to pin: refused before the token goes out.
+    const dir = mkdtempSync(join(tmpdir(), 'camproxy-offerca0-'));
+    const ca = await siteCa(dir, { site: 'garage', cameraSubnet: '192.0.2.0/24', proxyAddresses: ['127.0.0.1'] });
+    const leaf = await issueLeaf(ca, { cn: 'proxy.garage.internal', dns: ['proxy.garage.internal'], ips: ['127.0.0.1'] });
+    seen.length = 0;
+    const tls = createHttpsServer({ cert: leaf.certPem, key: leaf.keyPem }, (req, res) => (req.url === '/tls/ca.pem' ? void res.end(ca.certPem) : handler(req, res)));
+    servers.push(tls as unknown as HttpServer);
+    await new Promise<void>((r) => tls.listen(0, '127.0.0.1', r));
+    const pinless = { ...src, url: `https://127.0.0.1:${(tls.address() as { port: number }).port}`, tlsServername: 'proxy.garage.internal' };
+    await expect(sourceGet(pinless, `/api/moves/${MOVE}/secrets`, TOKEN)).rejects.toThrow('the source CA is not the pinned one');
+    expect(await probeSource(pinless, MOVE, TOKEN)).toBe(0);
+    expect(seen).toEqual([]);
+  }, 30_000);
 
   it('https: pinned to the offered CA fingerprint and the offered name', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'camproxy-offerca-'));

@@ -557,10 +557,14 @@ const sourceRecord = (over: Partial<MoveRecord> = {}): MoveRecord => ({
   chunks: {}, bytesDone: 0, startedAt: Date.now() - 120_000, ...over,
 });
 
-function sourceUnit(o: { added?: boolean; released?: boolean } = {}) {
+// noSite: the Pi (no tls.site, no camera certificates at all); tlsName: a
+// camera whose certificate is managed elsewhere (cam1's Let's Encrypt name);
+// http, cameraCerts false: certificates this proxy never pushes either.
+function sourceUnit(o: { added?: boolean; released?: boolean; noSite?: boolean; tlsName?: string; http?: boolean; cameraCerts?: false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'camproxy-end-src-'));
-  const cam3 = { id: 'cam3', host: '192.0.2.3', protocol: 'https', user: 'proxy' };
-  writeFileSync(join(dir, 'config.json'), JSON.stringify({ cameras: [{ id: 'cam1', host: '' }, ...(o.added ? [] : [cam3])], tls: { site: 's', cameraSubnet: '192.0.2.0/24', proxyAddresses: '198.51.100.1' } }));
+  const cam3 = { id: 'cam3', host: '192.0.2.3', protocol: o.http ? 'http' : 'https', user: 'proxy', ...(o.tlsName ? { tlsName: o.tlsName } : {}) };
+  const tls = o.noSite ? {} : { site: 's', cameraSubnet: '192.0.2.0/24', proxyAddresses: '198.51.100.1', ...(o.cameraCerts === false ? { cameraCerts: false } : {}) };
+  writeFileSync(join(dir, 'config.json'), JSON.stringify({ cameras: [{ id: 'cam1', host: '' }, ...(o.added ? [] : [cam3])], tls }));
   let loaded = loadConfig(SECRETS, { cwd: dir });
   if (o.added) loaded = applyOverrides(loaded, { cameras: { cam3: { host: '192.0.2.3', protocol: 'https', user: 'proxy' } } });
   if (o.released !== false) loaded = applyOverrides(loaded, { cameras: { cam3: { moved: MOVE } } });
@@ -582,9 +586,9 @@ function sourceUnit(o: { added?: boolean; released?: boolean } = {}) {
       loaded = l;
     },
     sendAllowed: () => true,
-    siteReady: () => true,
+    siteReady: () => !o.noSite,
     inventory: { catalog, dataDir },
-    certs: () => ({ setExpected: (id, fp) => (calls.push(`expected ${id} ${fp}`), void expected.set(id, fp)) }),
+    certs: () => (o.noSite ? undefined : { setExpected: (id, fp) => (calls.push(`expected ${id} ${fp}`), void expected.set(id, fp)) }),
     refreshManifest: () => undefined,
     proxyId: () => SOURCE_ID,
     timing: { cancelRetryMs: 5, cancelRetryCapMs: 20 },
@@ -822,6 +826,77 @@ describe('move.cancel on the source', () => {
     await until(() => u.journal.load(MOVE) === null, 5000);
     expect(u.expected.get('cam3')).toBeNull();
     expect(phasesOf(u.events)).toEqual(['cancelled']);
+  });
+
+  // 2026-10-26 (Klaus): the Pi (no site CA) and a camera whose certificate is
+  // managed elsewhere (tlsName, e.g. cam1's Let's Encrypt certificate) may be a
+  // move source. The source never expects, checks or pushes such a camera's
+  // leaf: a cancel gives the camera back without the certificate step and says
+  // that the camera keeps the target's certificate.
+  for (const [what, o] of [
+    ['the Pi (no tls.site)', { noSite: true }],
+    ['a camera with tlsName', { tlsName: 'cam3.example.org' }],
+    ['an http camera', { http: true }],
+    ['tls.cameraCerts off', { cameraCerts: false }],
+  ] as const) {
+    it(`${what}: go expects no leaf; a cancel after it gives the camera back without the certificate step`, async () => {
+      const u = sourceUnit({ released: false, ...o });
+      u.journal.save(sourceRecord({ phase: 'opened', expectedLeaf: undefined, manifest: undefined }));
+      expect(u.source.setExpectedLeaf('cam3', TARGET_LEAF)).toBe(true);
+      const go = { v: 1, moveId: MOVE, plan: PLAN, targetPublicKey: 'MCowBQYDK2VuAyEAmP0gq8Yx4JbJ1TfKqSx1n0lW7f9H3cQm6y2xZ0aB1cA=', expectedLeaf: TARGET_LEAF };
+      expect(await u.source.handlers()['move.go'](go, undefined as never)).toEqual({ status: 'ok', result: {} });
+      expect(u.journal.load(MOVE)).toMatchObject({ phase: 'switching', expectedLeaf: TARGET_LEAF });
+      // Again (a new cmdId): the same state, still nothing expected.
+      expect(await u.source.handlers()['move.go'](go, undefined as never)).toEqual({ status: 'ok', result: {} });
+      expect(u.calls).toEqual([]);
+      expect(u.expected.get('cam3')).toBe(TARGET_LEAF); // the fake's initial value, never touched
+      // Released, then cancelled: `moved` cleared, the camera settled, its FTP back; no expected leaf, no push.
+      expect(await u.source.handlers()['move.release']({ v: 1, moveId: MOVE }, undefined as never)).toEqual({ status: 'ok', result: {} });
+      u.calls.length = 0;
+      expect(await u.source.cancel({ v: 1, moveId: MOVE, role: 'source', expectedLeaf: TARGET_LEAF })).toEqual({ status: 'ok', result: {} });
+      expect(u.calls).toEqual(['setLoaded moved=-', 'settled', 'ftp cam3']);
+      expect(u.loaded.config.cameras.cam3.moved).toBeUndefined();
+      expect(u.journal.load(MOVE)).toBeNull();
+      expect(phasesOf(u.events).at(-1)).toBe('cancelled');
+      const rec = u.audits('move-cancel');
+      expect(rec).toHaveLength(1);
+      expect(rec[0]).toMatchObject({ event: { outcome: 'success' }, cam_proxy: { phase: 'released', switchedBack: true, cert: 'not_managed', ftp: 'ok' } });
+      expect(rec[0].cam_proxy.push).toBeUndefined();
+      expect(rec[0].message).toContain("the camera keeps the target's certificate");
+      expect(rec[0].message).toContain('cam1-cert-push');
+      expect(u.journal.ended(MOVE, 'source')).toMatchObject({ phase: 'cancelled', camera: 'cam3' });
+    });
+  }
+
+  it("a camera with tlsName: while it serves the target's leaf the FTP step fails; the failure says to restore its certificate, and it retries until done", async () => {
+    const u = sourceUnit({ tlsName: 'cam3.example.org' });
+    u.journal.save(sourceRecord());
+    let reachable = false;
+    u.deps.end!.ftp = async (cam) => {
+      u.calls.push(`ftp ${cam}`);
+      if (!reachable) throw new Error('certificate verification failed');
+      return { verified: true, mismatch: [] };
+    };
+    expect(await u.source.cancel({ v: 1, moveId: MOVE, role: 'source', expectedLeaf: TARGET_LEAF })).toEqual({ status: 'ok', result: {} });
+    const fail = u.audits('move-cancel');
+    expect(fail).toHaveLength(1);
+    expect(fail[0]).toMatchObject({ event: { outcome: 'failure' }, cam_proxy: { step: 'ftp', code: 'ftp_failed' } });
+    expect(fail[0].message).toContain("restore the camera's own certificate where it is managed");
+    expect(u.journal.load(MOVE)).toMatchObject({ cancelPending: true });
+    await until(() => u.calls.filter((c) => c === 'ftp cam3').length >= 2, 5000);
+    reachable = true;
+    await until(() => u.journal.load(MOVE) === null, 5000);
+    expect(u.calls.filter((c) => c.startsWith('push') || c.startsWith('expected'))).toEqual([]);
+    expect(phasesOf(u.events)).toEqual(['cancelled']);
+  });
+
+  it('a camera with tlsName: a cancel before the switch-over expects nothing and closes the move', async () => {
+    const u = sourceUnit({ released: false, tlsName: 'cam3.example.org' });
+    u.journal.save(sourceRecord({ phase: 'opened', expectedLeaf: undefined, manifest: undefined }));
+    expect(await u.source.cancel({ v: 1, moveId: MOVE, role: 'source' })).toEqual({ status: 'ok', result: {} });
+    expect(u.calls).toEqual([]);
+    expect(u.journal.load(MOVE)).toBeNull();
+    expect(u.audits('move-cancel')[0]).toMatchObject({ cam_proxy: { phase: 'opened', switchedBack: false } });
   });
 
   it('a valid token from another address: the failure is recorded in the journal, the move ends', async () => {
