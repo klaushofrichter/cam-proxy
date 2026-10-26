@@ -307,7 +307,7 @@ export class Copier {
     this.save(true);
     const put = this.client.put;
     if (!put) return;
-    let delay = this.t('retryMs', 2000);
+    const wait = this.backoff();
     for (;;) {
       this.check();
       try {
@@ -317,14 +317,12 @@ export class Copier {
         // A return's source re-keyed (cams-admin restarted): 403 until move.return.start brings the new token.
         if (this.r.returnOf && (res.status === 401 || res.status === 403)) this.noteDown(String(res.status));
         else if (OUTCOME_REFUSED.includes(res.status)) return this.refused(res.status);
-        else if (res.status === 503 || res.status === 429) this.sourceBusyUntil = this.now() + MINUTE;
-        else this.noteDown(String(res.status));
+        else this.noteStatus(res.status);
       } catch {
         this.check();
         this.noteDown('no answer');
       }
-      await this.sleep(delay);
-      delay = Math.min(delay * 2, this.t('retryCapMs', 5 * MINUTE));
+      await wait();
     }
   }
 
@@ -553,15 +551,14 @@ export class Copier {
     // Then the rows (files first, S §8.2).
     const rows = c.rows > 0 || (typeof body.rows === 'number' && body.rows > 0) ? await this.rows(c) : [];
     let imported: ReturnType<typeof importRows> | undefined;
-    let delay = this.t('retryMs', 2000);
+    const wait = this.backoff();
     for (let i = 0; i < ATTEMPTS && !imported; i++) {
       try {
         imported = importRows(this.paths, this.r.camera, rows, verified, prev?.imported, { moveId: this.r.id, from: { proxyId: this.r.peer.proxyId, name: this.r.peer.name }, at: this.now() });
       } catch {
         logger.warn({ moveId: this.r.id, chunkId: c.id }, 'move_copy_import_failed');
         if (i < ATTEMPTS - 1) {
-          await this.sleep(delay);
-          delay = Math.min(delay * 2, this.t('retryCapMs', 5 * MINUTE));
+          await wait();
         }
       }
     }
@@ -582,7 +579,7 @@ export class Copier {
   // to 3 times; after that, and for an answer that keeps not being a list, the
   // source counts as refusing (move-source-unreachable, the 6 h rule).
   private async rows(c: ChunkMeta): Promise<TableRows[]> {
-    let delay = this.t('retryMs', 2000);
+    const wait = this.backoff();
     let relists = 0;
     let odd = 0;
     for (;;) {
@@ -598,8 +595,7 @@ export class Copier {
       }
       if (r.status === 404) this.noteDown(`rows 404${r.error ? ` ${r.error}` : ''}`);
       else if (r.status === 200 && ++odd >= ATTEMPTS) this.noteDown('rows not a list');
-      await this.sleep(delay);
-      delay = Math.min(delay * 2, this.t('retryCapMs', 5 * MINUTE));
+      await wait();
     }
   }
 
@@ -654,7 +650,7 @@ export class Copier {
     if (!staged && existsSync(landing)) return 'o';
     const part = `${landing}.move-${this.r.id}.part`;
     let failures = 0;
-    let delay = this.t('retryMs', 2000);
+    const wait = this.backoff();
     while (failures < ATTEMPTS) {
       this.check();
       await this.waitStorage();
@@ -697,8 +693,7 @@ export class Copier {
       // Only a wrong size or hash counts; a cut or stalled stream is the source restarting (Review Focus 1).
       if (out === 'bad') failures++;
       if (failures < ATTEMPTS) {
-        await this.sleep(delay);
-        delay = Math.min(delay * 2, this.t('retryCapMs', 5 * MINUTE));
+        await wait();
       }
     }
     return 'f';
@@ -735,9 +730,7 @@ export class Copier {
     }
     if (res.status !== 200) {
       discard(res.body);
-      // 503 and 429 are pressure (the rate halves for a minute), never the source down.
-      if (res.status === 503 || res.status === 429) this.sourceBusyUntil = this.now() + MINUTE;
-      else this.noteDown(String(res.status));
+      this.noteStatus(res.status);
       // 400 (a path the source refuses) counts; the rest is the source not ready or busy.
       return res.status === 400 || res.status === 416 ? 'bad' : 'transient';
     }
@@ -809,6 +802,22 @@ export class Copier {
     return 'ok';
   }
 
+  // A retry loop's wait: retryMs, doubled after each wait up to retryCapMs.
+  private backoff(): () => Promise<void> {
+    let delay = this.t('retryMs', 2000);
+    return async () => {
+      await this.sleep(delay);
+      delay = Math.min(delay * 2, this.t('retryCapMs', 5 * MINUTE));
+    };
+  }
+
+  // A source answer that is neither 200 nor 404: 503 and 429 are pressure (the
+  // rate halves for a minute), never the source down; anything else is.
+  private noteStatus(status: number): void {
+    if (status === 503 || status === 429) this.sourceBusyUntil = this.now() + MINUTE;
+    else this.noteDown(String(status));
+  }
+
   // The source not answering or refusing (anything but 200 and 404): a log
   // line and an audit record at the first failure, then every 6 hours while it lasts.
   private noteDown(what: string): void {
@@ -843,7 +852,7 @@ export class Copier {
   // `up: false`: the caller decides whether the answer means the source is back.
   private async json(path: string, o: { up?: boolean } = {}): Promise<{ status: number; body: unknown; error?: string | null }> {
     const up = () => o.up !== false && this.noteUp();
-    let delay = this.t('retryMs', 2000);
+    const wait = this.backoff();
     for (;;) {
       this.check();
       try {
@@ -859,14 +868,12 @@ export class Copier {
           return { status: 404, body: null, error };
         }
         discard(res.body);
-        if (res.status === 503 || res.status === 429) this.sourceBusyUntil = this.now() + MINUTE;
-        else this.noteDown(String(res.status));
+        this.noteStatus(res.status);
       } catch {
         this.check();
         this.noteDown('no answer');
       }
-      await this.sleep(delay);
-      delay = Math.min(delay * 2, this.t('retryCapMs', 5 * MINUTE));
+      await wait();
     }
   }
 
