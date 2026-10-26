@@ -93,26 +93,37 @@ const plan: MovePlan = { transfer: true, kinds: [], space: 'all', targetSettings
 const fits: Space = { needed: 10, available: 1000, fits: true, perKind: { clips: 10 }, retentionProposal: null };
 
 describe('starting a move (S §4, P10)', () => {
-  it('request on a proxy without tls.site is refused no_site_ca (the Pi), before any event', async () => {
+  // 2026-10-26 (Klaus): a proxy without tls.site (the Pi) may be a move source;
+  // no_site_ca is no longer its answer. Without move.send it is moves_not_allowed.
+  it('a proxy without tls.site (the Pi) is not refused no_site_ca: the usual answers', async () => {
     const q = await startProxy(sims[0]);
     try {
       for (const [path, body] of [['/control/moves/targets', { camera: 'cam1' }], ['/control/moves', { camera: 'cam1', target: TARGET }]] as const) {
         const r = await request(q.base).post(path).set(admin()).send(body);
-        expect([r.status, r.body], path).toEqual([409, { error: 'move_refused', reason: 'no_site_ca' }]);
+        expect([r.status, r.body], path).toEqual([409, { error: 'move_refused', reason: 'moves_not_allowed' }]);
       }
-      // Also for an unknown camera: nothing says what exists.
-      expect((await request(q.base).post('/control/moves').set(admin()).send({ camera: 'cam7', target: TARGET })).body.reason).toBe('no_site_ca');
+      expect((await request(q.base).post('/control/moves').set(admin()).send({ camera: 'cam7', target: TARGET })).status).toBe(404);
+      expect((await request(q.base).post('/control/moves').set(admin()).send({ camera: 'cam1', target: 'elsewhere' })).status).toBe(400);
+      expect((await request(q.base).post('/control/moves/targets').set(admin()).send({})).status).toBe(400);
+      expect((await request(q.base).post(`/control/moves/${MOVE}/approve`).set(admin()).send({})).body).toEqual({ error: 'move_refused', reason: 'moves_not_allowed' });
     } finally {
       await q.proxy.stop();
     }
   }, 60_000);
 
-  it('request for a camera with tlsName is refused external_cert', async () => {
-    const n = moveEvents().length;
+  // 2026-10-26 (Klaus): a camera whose certificate is managed elsewhere may be
+  // moved; its tlsName never goes with it (the target issues its own leaf).
+  it('a camera with tlsName may be moved: the request goes out, without its tlsName', async () => {
     const r = await request(p.base).post('/control/moves').set(admin()).send({ camera: 'cam9', target: TARGET });
-    expect([r.status, r.body]).toEqual([409, { error: 'move_refused', reason: 'external_cert' }]);
-    expect((await request(p.base).post('/control/moves/targets').set(admin()).send({ camera: 'cam9' })).body.reason).toBe('external_cert');
-    expect(moveEvents().length).toBe(n);
+    expect(r.status).toBe(202);
+    const find = () => fake.events().find((e) => bodyOf(e).kind === 'move.request' && bodyOf(e).requestId === r.body.requestId);
+    await until(() => !!find(), 10_000);
+    const env = find()!;
+    expect(strict('event')(env.msg), why(strict('event'))).toBe(true);
+    expect(bodyOf(env).camera).toMatchObject({ proxyCameraId: 'cam9', protocol: 'https' });
+    expect(JSON.stringify(env.msg)).not.toContain('tlsName');
+    expect(JSON.stringify(env.msg)).not.toContain('cam9.example.org');
+    expect((await request(p.base).post('/control/moves/targets').set(admin()).send({ camera: 'cam9' })).status).toBe(202);
   });
 
   it('without move.send: moves_not_allowed; bad input is 400, an unknown camera 404', async () => {
@@ -214,7 +225,7 @@ describe('move.begin (cams-admin starts a move)', () => {
     const events: unknown[] = [];
     const writes: unknown[] = [];
     const s = new MoveSource({ running, siteReady: () => o.siteReady ?? true, sendAllowed: () => o.sendAllowed ?? true, emit: (e: unknown) => events.push(e), audit: { write: (r: unknown) => writes.push(r) }, journal: { active: () => [] } } as unknown as SourceDeps);
-    return { begin: (a: object) => s.handlers()['move.begin']({ v: 1, target: TARGET, bounds, ...a }, undefined as never), events, writes };
+    return { s, begin: (a: object) => s.handlers()['move.begin']({ v: 1, target: TARGET, bounds, ...a }, undefined as never), events, writes };
   };
 
   it('begin emits move.request with the bounds and answers the requestId', async () => {
@@ -251,7 +262,6 @@ describe('move.begin (cams-admin starts a move)', () => {
   });
 
   it('begin is refused like the page', async () => {
-    await refused({ camera: 'cam9' }, 'external_cert');
     // Without move.send the runner refuses move.begin before the handler.
     await allow([]);
     try {
@@ -274,11 +284,21 @@ describe('move.begin (cams-admin starts a move)', () => {
     } finally {
       journal.remove(BEGUN);
     }
-    // The Pi (no tls.site): no_site_ca, whatever it names.
-    const pi = unit(() => ({ tls: { site: null }, cameras: {}, cameraOrder: [] }), { siteReady: false });
-    expect(pi.begin({ camera: 'cam1' })).toEqual({ status: 'failed', code: 'no_site_ca' });
-    expect(pi.begin({ camera: 'cam7' })).toEqual({ status: 'failed', code: 'no_site_ca' });
+    // The Pi (no tls.site) is a source like any other since 2026-10-26: its
+    // camera is not refused, an unknown one is unknown_camera; its certificate is not managed here.
+    const cam1 = { id: 'cam1', host: '192.0.2.1', protocol: 'https', tlsName: 'cam1.example.org' };
+    const pi = unit(() => ({ tls: { site: null }, cameras: { cam1 }, cameraOrder: ['cam1'] }), { siteReady: false });
+    expect(pi.s.refusal('cam1')).toBeNull();
+    expect(pi.s.hostRefusal()).toBeNull();
+    expect(pi.s.managesCert('cam1')).toBe(false);
+    expect(pi.begin({ camera: 'cam7' })).toEqual({ status: 'failed', code: 'unknown_camera' });
     expect([pi.events, pi.writes]).toEqual([[], []]);
+    // With a site CA: managed only for an https camera without tlsName and with tls.cameraCerts on.
+    const site = (cameraCerts: boolean, c: object) => unit(() => ({ tls: { site: 't', cameraCerts }, cameras: { cam1: { ...cam1, tlsName: undefined, ...c } }, cameraOrder: ['cam1'] })).s.managesCert('cam1');
+    expect(site(true, {})).toBe(true);
+    expect(site(true, { tlsName: 'cam1.example.org' })).toBe(false);
+    expect(site(true, { protocol: 'http' })).toBe(false);
+    expect(site(false, {})).toBe(false);
   });
 
   it('begin for an unknown or hidden camera', async () => {

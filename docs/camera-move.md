@@ -10,12 +10,23 @@ steps; both proxies record each one in their audit log. The design:
 
 ## Before a move
 
-- **Both proxies need a site CA** (`tls.site`, [TLS: the site
-  CA](../README.md#tls-the-site-ca)), and the target's CA must cover the
-  camera's address. The Raspberry Pi has none, so it never takes part: every
-  move to or from it is refused (`no_site_ca`). A camera whose certificate is
-  managed elsewhere (`tlsName`, a public name) can't be moved
-  (`external_cert`).
+- **The target needs a site CA** (`tls.site`, [TLS: the site
+  CA](../README.md#tls-the-site-ca)) that covers the camera's address: it
+  issues the camera its own certificate (`<camera>.<site>.internal`). A move
+  to a proxy without one is refused (`no_site_ca`).
+- **The source needs none** (since 2026-10-26). The Raspberry Pi (no
+  `tls.site`) can hand a camera over, and so can any proxy for a camera whose
+  certificate is managed elsewhere (`tlsName`, a public name such as cam1's
+  Let's Encrypt certificate from the cluster's `cam1-cert-push` job). Such a
+  camera moves without its `tlsName`; the target pushes its own certificate.
+  The source never checks or pushes that camera's certificate, so **a cancel
+  after the switch-over leaves the target's certificate on the camera**:
+  restore its own where it is managed (for cam1, run the `cam1-cert-push`
+  job). Until then the source may not reach the camera over HTTPS; it keeps
+  trying to point the camera's FTP back at itself and records each failure
+  (`move-cancel`, at most once an hour). A source without a site CA is
+  reached over plain `http` (its address at cams-admin, with no CA
+  fingerprint); the move token still guards every request.
 - **The allow entries**, on each proxy's cams-admin card
   ([docs/cams-admin.md](cams-admin.md#allowed-commands)), off by default:
   `move.send` on the source (cams-admin may move a camera away, after you
@@ -114,8 +125,8 @@ minutes expires: after 35 minutes both proxies close it on their own
 cams-admin can start a move on the source with the command `move.begin`
 (under `move.send`, like the page). The source runs the same checks as its
 page and answers with the request, or with the reason it refuses
-(`no_site_ca`, `external_cert`, `moves_not_allowed`, `busy`,
-`unknown_camera`). The camera's password stays on the proxy; the command and
+(`moves_not_allowed`, `busy`, `unknown_camera`; before 2026-10-26 also
+`no_site_ca` and `external_cert`). The camera's password stays on the proxy; the command and
 its answer carry none.
 
 Before that, cams-admin can ask what a move of a camera would carry with
@@ -229,7 +240,11 @@ stuck needs a cancel.
   nothing changed on the source; the move just closes.
 - **Cancel after the switch-over:** the camera comes back at once. The
   target drops it first; the source runs it again, pushes its own
-  certificate and points the camera's FTP upload back at itself. If a step
+  certificate and points the camera's FTP upload back at itself. A source
+  that doesn't manage the camera's certificate (no site CA, `tlsName`, an
+  http camera, `tls.cameraCerts` off) skips the certificate: the camera keeps
+  the target's, and the `move-cancel` record says so (`cert`:
+  `not_managed`). If a step
   of that fails, the source tries again by itself, with a backoff, also after
   a restart, and records each failure (`move-cancel`, at most once an hour);
   no other move starts meanwhile.

@@ -181,6 +181,12 @@ describe('the move commands against the vendored contract', () => {
     expect(ARGS_VALIDATORS['move.start']({ ...start, done: ['stills:today'] })).toMatchObject({ ok: false });
     const offer = argsOfFixture('valid-command-move-offer');
     expect(ARGS_VALIDATORS['move.offer']({ ...offer, token: 'short' })).toMatchObject({ ok: false });
+    // A camera whose certificate the source has managed elsewhere (tlsName) moves
+    // without it: the target never takes a tlsName and issues its own leaf (2026-10-26).
+    const o = offer as { camera: object; settings: object };
+    expect(ARGS_VALIDATORS['move.offer']({ ...offer, camera: { ...o.camera, tlsName: 'cam1.example.org' } })).toMatchObject({ ok: false });
+    expect(ARGS_VALIDATORS['move.offer']({ ...offer, settings: { ...o.settings, tlsName: 'cam1.example.org' } })).toMatchObject({ ok: false });
+    expect(ARGS_VALIDATORS['move.start']({ ...start, settings: { tlsName: 'cam1.example.org' } })).toMatchObject({ ok: false });
     // targetIp is loose in the contract: the validator keeps its pattern, it is not IP validation
     const open = argsOfFixture('valid-command-move-open');
     expect(ARGS_VALIDATORS['move.open']({ ...open, targetIp: 'ab' })).toMatchObject({ ok: true });

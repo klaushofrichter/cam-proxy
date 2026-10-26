@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Camera moves: the Raspberry Pi (no site CA) and a camera whose certificate is managed elsewhere (`tlsName`, such as cam1's Let's Encrypt certificate) can now be moved away. They were refused before (`no_site_ca`, `external_cert`). The target still needs a site CA that covers the camera, and gives the camera its own certificate. Such a source never touches the camera's certificate, so cancelling after the switch-over leaves the target's certificate on the camera: restore its own where it is managed (for cam1, the `cam1-cert-push` job). The `move-cancel` record says so (`cert`: `not_managed`).
+
+## v2026.10.25.4
+
 ## v2026.10.25.3
 
 - Camera moves: cams-admin can ask what a move of a camera would carry before it starts one (new read-only command `move.summary`, under `move.send`): files, bytes and the time span per kind, the same numbers the move request shows. The answer is kept for 30 seconds, so asking often doesn't count the camera's stills each time.

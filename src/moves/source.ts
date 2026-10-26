@@ -215,24 +215,33 @@ export class MoveSource {
     }
   }
 
-  // P10: the source's refusals before any event. The Pi (no tls.site) refuses
-  // every move as no_site_ca, whatever it names. undefined: no such camera.
+  // P10: the source's refusals before any event. undefined: no such camera.
+  // Since 2026-10-26 (Klaus) a proxy without a site CA (the Pi) and a camera
+  // whose certificate is managed elsewhere (tlsName) may be a move source:
+  // no_site_ca and external_cert are no longer refusals here (managesCert).
   refusal(cam: string): SourceRefusal | 'unknown_camera' | null {
     const c = this.d.running();
-    if (this.noSite()) return 'no_site_ca';
     if (!activeCameraIds(c).includes(cam)) return 'unknown_camera';
-    if (c.cameras[cam].tlsName) return 'external_cert';
     if (!this.d.sendAllowed()) return 'moves_not_allowed';
     return this.busy() ? 'busy' : null;
   }
 
-  // No site CA here (tls.site unset, the Pi; or its CA not loaded): no move at all.
+  // No site CA here (tls.site unset, the Pi; or its CA not loaded).
   noSite(): boolean {
     return !this.d.running().tls.site || !this.d.siteReady();
   }
+  // Whether this proxy manages the camera's certificate, as CameraCerts
+  // decides it: a site CA loaded, tls.cameraCerts on, an https camera without
+  // tlsName. Otherwise the source never expects, checks or pushes its leaf
+  // (move.go sets no expected leaf; a cancel skips the certificate step).
+  managesCert(cam: string): boolean {
+    const c = this.d.running();
+    const n = c.cameras[cam];
+    return !this.noSite() && c.tls.cameraCerts !== false && !!n && n.protocol !== 'http' && !n.tlsName;
+  }
   // Host-level refusals for a step of a move already started (approve).
-  hostRefusal(): 'no_site_ca' | 'moves_not_allowed' | null {
-    return this.noSite() ? 'no_site_ca' : this.d.sendAllowed() ? null : 'moves_not_allowed';
+  hostRefusal(): 'moves_not_allowed' | null {
+    return this.d.sendAllowed() ? null : 'moves_not_allowed';
   }
 
   // One move per proxy at a time; an unreadable journal counts as busy.
@@ -365,8 +374,10 @@ export class MoveSource {
   }
 
   // The expected leaf on this camera (P8), set by move.go, cleared by Task 10
-  // (a cancel before the switch-over (B48), the end of the move).
+  // (a cancel before the switch-over (B48), the end of the move). A camera
+  // whose certificate this proxy does not manage: nothing to expect (true).
   setExpectedLeaf(cam: string, fingerprint: string | null): boolean {
+    if (!this.managesCert(cam)) return true;
     const c = this.d.certs();
     if (!c) return false;
     c.setExpected(cam, fingerprint, { user: 'cams-admin' });
@@ -524,6 +535,8 @@ export class MoveSource {
     const leaf = r.expectedLeaf ?? null;
     let step: 'camera' | 'cert' | 'ftp' = 'camera';
     const detail: Record<string, unknown> = {};
+    // Decided once per pass: the certificate step only where this proxy manages the camera's certificate.
+    const managed = this.managesCert(cam);
     try {
       // (a) `moved` first: the camera is this proxy's again from here on.
       const l = this.d.loaded();
@@ -537,18 +550,25 @@ export class MoveSource {
       step = 'camera';
       await end.settled();
       if (!activeCameraIds(this.d.running()).includes(cam)) throw new StepFailed('camera_failed', `${cam} does not run here`);
-      step = 'cert';
-      const push = await end.pushOwnLeaf(cam);
-      if ((push.outcome !== 'pushed' && push.outcome !== 'current') || !push.served || push.served === leaf) throw new StepFailed('cert_failed', `push ${push.outcome}${push.detail ? `: ${push.detail}` : ''}`);
+      if (managed) {
+        step = 'cert';
+        const push = await end.pushOwnLeaf(cam);
+        if ((push.outcome !== 'pushed' && push.outcome !== 'current') || !push.served || push.served === leaf) throw new StepFailed('cert_failed', `push ${push.outcome}${push.detail ? `: ${push.detail}` : ''}`);
+        Object.assign(detail, { push: push.outcome, leafFingerprint: push.served });
+      } else {
+        // Not this proxy's certificate (no site CA, tlsName, http, cameraCerts off): the camera keeps the target's leaf.
+        detail.cert = 'not_managed';
+      }
       step = 'ftp';
       let ftp: 'skipped' | { verified: boolean; mismatch: string[] };
       try {
         ftp = await end.ftp(cam);
       } catch {
-        throw new StepFailed('ftp_failed', "the camera's FTP could not be set");
+        // An unmanaged camera may still serve the target's leaf, which this proxy's client does not trust.
+        throw new StepFailed('ftp_failed', `the camera's FTP could not be set${managed ? '' : " (if the camera still serves the target's certificate, restore the camera's own certificate where it is managed, e.g. the cam1-cert-push job)"}`);
       }
       if (ftp !== 'skipped' && !ftp.verified) throw new StepFailed('ftp_failed', `the camera's FTP does not match (${ftp.mismatch.join(', ')})`);
-      Object.assign(detail, { push: push.outcome, leafFingerprint: push.served, ftp: ftp === 'skipped' ? 'skipped' : 'ok' });
+      detail.ftp = ftp === 'skipped' ? 'skipped' : 'ok';
     } catch (err) {
       const e = err instanceof StepFailed ? err : new StepFailed('internal', 'unexpected error');
       this.giveBackFailed(r, step, e);
@@ -597,7 +617,7 @@ export class MoveSource {
     this.d.audit.write({
       action: 'move-cancel', category: ['configuration'], type: ['change'], outcome: 'success',
       user: reason ? 'system' : 'cams-admin', camera: r.camera,
-      message: `Camera move ${r.id} (${r.camera} to ${r.peer.name || r.peer.proxyId}) ${reason ? 'expired: not approved within 30 minutes' : `cancelled in ${phase}`}: ${r.switchedOver ? 'the camera is back here with its own certificate and FTP' : 'the camera stayed here'}`,
+      message: `Camera move ${r.id} (${r.camera} to ${r.peer.name || r.peer.proxyId}) ${reason ? 'expired: not approved within 30 minutes' : `cancelled in ${phase}`}: ${!r.switchedOver ? 'the camera stayed here' : detail.cert === 'not_managed' ? "the camera is back here with its FTP; its certificate was not restored because this proxy does not manage it: the camera keeps the target's certificate; restore it where it is managed (e.g. the cam1-cert-push job)" : 'the camera is back here with its own certificate and FTP'}`,
       details: { moveId: r.id, camera: r.camera, source: this.self(), target: r.peer.proxyId, role: 'source', phase, switchedBack: r.switchedOver === true, ...(reason ? { reason } : {}), ...detail },
     });
     this.d.journal.bury({ moveId: r.id, role: 'source', phase: 'cancelled', ...(r.switchedOver ? { camera: r.camera } : {}) });
@@ -867,7 +887,7 @@ export class MoveSource {
     if (!r.plan) return failed('not_approved');
     // Only what the admin approved here (S §7: approving is the only approval).
     if (!samePlan(r.plan, a.plan)) return failed('plan_mismatch');
-    if (!this.d.certs()) return failed('no_site_ca');
+    if (this.managesCert(r.camera) && !this.d.certs()) return failed('no_site_ca');
     r.targetPublicSpki = a.targetPublicKey;
     r.expectedLeaf = a.expectedLeaf;
     r.manifest = r.plan.transfer ? listChunks(this.d.inventory, r.camera, r.plan.kinds) : [];

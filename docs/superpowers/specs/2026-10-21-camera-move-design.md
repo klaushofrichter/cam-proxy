@@ -43,7 +43,8 @@ Non-goals (now)
 - Proxies without a site CA (the Pi), cameras whose certificate comes from
   elsewhere (cam1's cluster `cam1-cert-push` CronJob), and targets whose site
   CA doesn't cover the camera's address (**Klaus**: rejected with a reason in
-  the first version, §6).
+  the first version, §6). As a source, the first two may move a camera since
+  2026-10-26 (§18).
 
 Anti-goals (a move that does these has failed even if it "worked")
 - The camera ends up served by both proxies, or by neither, for longer than
@@ -136,9 +137,9 @@ The target rejects with a reason the user sees on the panel:
 | `id_taken` | the target already has a camera with this id |
 | `busy` | the target is already in another move (one move per proxy at a time, **my call**) |
 | `incompatible` | the target's version doesn't support a feature the camera's settings use |
-| `no_site_ca` | the source or the target has no site CA (`tls.site` unset, e.g. the Pi) |
+| `no_site_ca` | the source or the target has no site CA (`tls.site` unset, e.g. the Pi); since 2026-10-26 only the target (§18) |
 | `ca_does_not_cover_camera` | the target's site CA's `cameraSubnet` doesn't include the camera's address; the message names both ("een can't vouch for 192.168.1.90"). Widening it is a one-time local setup on the target, outside the move |
-| `external_cert` | the camera's certificate is managed elsewhere (a camera with `tls.cameraCerts` off for it, such as cam1) |
+| `external_cert` | the camera's certificate is managed elsewhere (a camera with `tls.cameraCerts` off for it, such as cam1); no longer a refusal since 2026-10-26 (§18) |
 
 Space is **not** a reason to reject (**Klaus**). The target computes, from the
 source's per-kind summary (bytes, files, oldest, newest per kind) and its own
@@ -485,3 +486,30 @@ blob in a record.
 15. `move.receive` and `move.send` allow-list entries, off by default.
 16. Received passwords go to `data/admin/camera-passwords.json`; the environment wins.
 17. The certificate guard stays on; expected fingerprints are handed over in the move commands.
+
+## 18. Addendum 2026-10-26: sources without a site CA, cameras with an external certificate
+
+**Klaus**, 2026-10-26: the Pi (no `tls.site`) and a camera whose certificate
+is managed elsewhere (`tlsName`, e.g. cam1 with its Let's Encrypt certificate
+from the cluster's `cam1-cert-push` CronJob) may be a move **source**. This
+reverses the first-version rule in §2 (non-goals) and the `no_site_ca` /
+`external_cert` rows of the refusal table in §6 for the source; the target
+still needs a site CA that covers the camera (`no_site_ca`,
+`ca_does_not_cover_camera` stay target refusals).
+
+- The source manages a camera's certificate only with its site CA loaded,
+  `tls.cameraCerts` on, an https camera and no `tlsName`. Otherwise `move.go`
+  sets no expected leaf (nothing to expect: the source never checks or pushes
+  that camera's leaf).
+- A cancel after the switch-over then skips the certificate step: **the camera
+  keeps the target's leaf**. The `move-cancel` record says so (`cert`:
+  `not_managed`) and names where to restore it (e.g. the `cam1-cert-push`
+  job). Until it is restored the source may not reach the camera over HTTPS;
+  the FTP step retries with the usual backoff and its failure record says to
+  restore the certificate.
+- `tlsName` never moves (neither the camera connection nor the settings carry
+  it); the target issues its own `<cam>.<site>.internal` leaf.
+- A source without a site CA is registered with a plain `http` URL and no
+  `caFingerprints`; the target fetches from it unpinned over http (the move
+  token still guards every request). An `https` URL without a fingerprint is
+  never trusted.
