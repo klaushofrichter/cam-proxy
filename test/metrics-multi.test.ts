@@ -31,6 +31,30 @@ describe('metrics with several cameras', () => {
     expect(text).toMatch(/camproxy_stills_total\{cam="cam4"\} 1/);
   });
 
+  it('every per-camera gauge reads the cameras as they are at each scrape', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'camproxy-metrics-'));
+    const catalog = openCatalog(join(dir, 'catalog.sqlite'));
+    const log = new StreamLog(catalog);
+    const config = structuredClone(DEFAULTS);
+    config.server.dataDir = dir;
+    const storage = new Storage({ catalog, log, config: () => config, statfs: () => ({ free: 1e12, size: 2e12 }) });
+    let up = true;
+    const m = createMetrics({
+      storage, config: () => config, catalog, log, sseClients: () => 0, version: 'test', target: 'test',
+      cameras: () => [
+        { id: 'cam3', up, ftpEnabled: true, clips: { lastClip: 5000, stalled: up }, onvifSubscribed: up, stills: undefined, sd: { capacityMB: 2, freeMB: 1, overwrite: up } },
+        { id: 'cam4', up: false, ftpEnabled: false, clips: null, onvifSubscribed: false, stills: undefined, sd: null },
+      ],
+    });
+    const first = await m.render();
+    for (const line of ['camproxy_camera_up{cam="cam3"} 1', 'camproxy_onvif_subscribed{cam="cam3"} 1', 'camproxy_camera_ftp_enabled{cam="cam3"} 1', 'camproxy_camera_ftp_enabled{cam="cam4"} 0', 'camproxy_clips_last_received_timestamp_seconds{cam="cam3"} 5', 'camproxy_clips_stalled{cam="cam3"} 1', 'camproxy_camera_sd_free_bytes{cam="cam3"} 1048576', 'camproxy_camera_sd_capacity_bytes{cam="cam3"} 2097152', 'camproxy_camera_sd_overwrite{cam="cam3"} 1', 'camproxy_stills_minutes_stored{cam="cam4"} 0', 'camproxy_previews_stored{cam="cam3"} 0']) expect(first).toContain(line);
+    expect(first).not.toContain('camproxy_clips_stalled{cam="cam4"}');
+    expect(first).not.toContain('camproxy_camera_sd_free_bytes{cam="cam4"}');
+    up = false;
+    const second = await m.render();
+    for (const line of ['camproxy_camera_up{cam="cam3"} 0', 'camproxy_onvif_subscribed{cam="cam3"} 0', 'camproxy_clips_stalled{cam="cam3"} 0', 'camproxy_camera_sd_overwrite{cam="cam3"} 0']) expect(second).toContain(line);
+  });
+
   it('stills, previews and events per camera (spec §8.1)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'camproxy-metrics-'));
     const catalog = openCatalog(join(dir, 'catalog.sqlite'));
