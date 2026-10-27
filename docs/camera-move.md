@@ -55,7 +55,7 @@ steps; both proxies record each one in their audit log. The design:
   edits it, `PUT /control/profile` sets it. With FTP on, the passive range
   needs 10 ports per camera: left unset, `ftp.passive` is 30000 up with 10
   ports per camera for `profile.cameras` or the cameras held, whichever is
-  more (`cameras` 4: `30000-30039`; at most 10 cameras with FTP on, 100
+  more (`cameras` 4: `30000-30039`; at most 64 cameras with FTP on, 640
   ports). A range set by hand that is smaller loads with the warning
   `profile_ftp_ports`, and a move that would need the missing ports is
   refused (`incompatible`, below). Open the ports in the host's firewall

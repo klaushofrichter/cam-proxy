@@ -125,7 +125,7 @@ function crossCheck(c: Config): void {
   const unshared = c.cameraOrder.filter((id) => c.cameras[id].storage?.sharePercent === undefined);
   if (shared.length && sum === 100 && unshared.length) throw new ConfigError(`cameras: storage.sharePercent adds up to 100 % (${shared.map(([id, p]) => `${id} ${p}`).join(', ')}); ${unshared.join(', ')} ${unshared.length === 1 ? 'has' : 'have'} no share and would get nothing: give it one, or lower the others`);
   const [a, b] = c.ftp.passive.split('-').map(Number);
-  if (a > 65535 || b > 65535 || a > b || b - a > PASSIVE_MAX) throw new ConfigError(`ftp.passive: must be A-B with A <= B, at most ${PASSIVE_MAX} ports`);
+  if (a > 65535 || b > 65535 || a > b || b - a + 1 > PASSIVE_MAX) throw new ConfigError(`ftp.passive: must be A-B with A <= B, at most ${PASSIVE_MAX} ports`);
   // One FTP server for every camera (spec 2026-10-05-multi-camera-host-design §7):
   // a user each, and at least 10 passive ports per camera (one camera keeps today's rules).
   const ftpCams = c.cameraOrder.filter((id) => cameraConfig(c, id)!.ftp.enabled);
@@ -137,7 +137,7 @@ function crossCheck(c: Config): void {
   }
   if (ftpCams.length > 1 && b - a + 1 < 10 * ftpCams.length) throw new ConfigError(`ftp.passive: ${b - a + 1} ports for ${ftpCams.length} cameras with FTP; at least 10 per camera`);
   // The profile (cams-admin spec 2026-10-25-proxy-profile-design §1): with
-  // FTP on, at most 10 cameras (100 ports). A range smaller than the profile
+  // FTP on, at most 64 cameras (640 ports). A range smaller than the profile
   // needs is a warning (profileWarnings), never a load error.
   checkProfileCameras(c);
   if (c.storage.maxPercent !== undefined && c.storage.maxBytes !== undefined) {

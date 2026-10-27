@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Proxy profile: with FTP on, `profile.cameras` now goes up to 64, as it already did with FTP off. It was capped at 10 because `ftp.passive` could span at most 100 ports; it now spans up to 640 (10 per camera). The derived range grows with it (for 20 cameras `30000-30199`); open those ports on the host's firewall when you raise the count. The firewall lines in the profile report stay at most 64, so they cover the first 32 cameras with FTP.
 - Cluster proxy (`deploy/cluster/config.json`): HTTPS on 8443 with the site CA's proxy certificate (`proxy.cluster.internal`). The cluster cams reached it over plain http, and cams refuses a CA pin over http, so after the pin was set cams refused the proxy entry and cam2 showed a certificate error.
 
 ## v2026.10.26.2

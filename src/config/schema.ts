@@ -132,7 +132,7 @@ export const SETTINGS: Node = {
   // profile.cameras (its old name, src/config/legacy.ts).
   profile: {
     name: unset({ type: 'string', pattern: PROFILE_NAME, optional: true, doc: 'the hardware as people call it, up to 60 characters (shown in cams-admin)' }, 'no name'),
-    cameras: unset(int(1, 64, "the most cameras this proxy holds (1 to 10 while FTP is on): a camera move onto it is refused (camera_limit) beyond that; with FTP on and ftp.passive unset, 30000 up with 10 ports per camera. Local only", true), 'the cameras it holds now (at least 1): no profile set'),
+    cameras: unset(int(1, 64, "the most cameras this proxy holds (1 to 64): a camera move onto it is refused (camera_limit) beyond that; with FTP on and ftp.passive unset, 30000 up with 10 ports per camera. Local only", true), 'the cameras it holds now (at least 1): no profile set'),
     storageGB: unset(int(1, 100000, 'the storage this proxy may use, GB (10^9 bytes): the size budget in place of storage.maxBytes; storage.maxPercent and storage.minFreeBytes still limit it. Local only', true), 'no profile budget: storage.maxPercent or storage.maxBytes applies'),
     firewall: { type: 'string', enum: ['ufw', 'nft'], doc: "the host's firewall tool: which firewall lines the profile shows for the cameras with FTP (nothing runs them)" },
   },
@@ -202,7 +202,7 @@ export const SETTINGS: Node = {
   ftp: {
     enabled: unset({ type: 'boolean', doc: 'accept clip uploads from the camera' }, 'no clip uploads from the camera', false),
     port: port('FTP control port'),
-    passive: { type: 'string', pattern: '^[1-9][0-9]{0,4}-[1-9][0-9]{0,4}$', doc: 'passive port range, A-B, at most 100 ports; at least 10 per camera with FTP and, with moves.maxCameras and FTP on, 10 per camera it may hold. Unset with moves.maxCameras and FTP on: 30000 up, 10 ports per camera (else 30000-30009)' },
+    passive: { type: 'string', pattern: '^[1-9][0-9]{0,4}-[1-9][0-9]{0,4}$', doc: 'passive port range, A-B, at most 640 ports; at least 10 per camera with FTP and, with moves.maxCameras and FTP on, 10 per camera it may hold. Unset with moves.maxCameras and FTP on: 30000 up, 10 ports per camera (else 30000-30009)' },
     tls: { type: 'boolean', doc: 'require FTPS' },
     stream: { type: 'string', enum: ['main', 'sub'], doc: 'the stream the camera uploads' },
     stalledHours: int(1, 72, 'warn on the Status page when no clip arrived for this many hours while the camera recorded events'),
