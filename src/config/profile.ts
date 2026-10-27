@@ -8,9 +8,9 @@ import type { Config } from './defaults';
 // passive range, the warnings, the firewall lines for its cameras.
 
 // ftp.passive: the start of the derived range, the most ports a range may
-// span (the check allows B - A <= 100, as it always has) and the ports per camera.
+// span (10 per camera for profile.cameras' 64) and the ports per camera.
 export const PASSIVE_FROM = 30000;
-export const PASSIVE_MAX = 100;
+export const PASSIVE_MAX = 640;
 export const PORTS_PER_CAMERA = 10;
 export const MAX_FTP_CAMERAS = PASSIVE_MAX / PORTS_PER_CAMERA;
 
