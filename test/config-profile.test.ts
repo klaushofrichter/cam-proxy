@@ -123,17 +123,26 @@ describe('the FTP passive range from the profile', () => {
     expect(applyOverrides(load(), { profile: { cameras: 3 } }).config.ftp.passive).toBe('30000-30029');
   });
 
-  it('with FTP on, profile.cameras goes up to 10 (100 ports); FTP off, up to 64 with the plain default', () => {
+  it('with FTP on, profile.cameras goes up to 64 (640 ports), the same as with FTP off', () => {
     write('config.json', { cameras: cams(1), profile: { cameras: 10 }, ftp: { enabled: true } });
     expect(load().config.ftp.passive).toBe('30000-30099');
     write('config.json', { cameras: cams(1), profile: { cameras: 11 }, ftp: { enabled: true } });
-    expect(err(load)).toBe('profile.cameras: 11 cameras need 110 FTP passive ports (10 per camera); ftp.passive holds at most 100');
-    write('config.json', { cameras: cams(1), profile: { cameras: 11 }, ftp: { enabled: true, passive: '40000-40099' } });
-    expect(err(load)).toBe('profile.cameras: 11 cameras need 110 FTP passive ports (10 per camera); ftp.passive holds at most 100');
+    expect(load().config.ftp.passive).toBe('30000-30109');
+    write('config.json', { cameras: cams(1), profile: { cameras: 64 }, ftp: { enabled: true } });
+    expect(load().config.ftp.passive).toBe('30000-30639');
+    write('config.json', { cameras: cams(1), profile: { cameras: 20 }, ftp: { enabled: true, passive: '40000-40199' } });
+    expect(profileWarnings(load().config)).toEqual([]);
     write('config.json', { cameras: cams(1), profile: { cameras: 64 } });
     const l = load();
     expect(l.config.ftp.passive).toBe('30000-30009');
     expect(profileWarnings(l.config)).toEqual([]);
+  });
+
+  it('ftp.passive spans at most 640 ports', () => {
+    write('config.json', { cameras: cams(1), ftp: { enabled: true, passive: '40000-40639' } });
+    expect(load().config.ftp.passive).toBe('40000-40639');
+    write('config.json', { cameras: cams(1), ftp: { enabled: true, passive: '40000-40640' } });
+    expect(err(load)).toBe('ftp.passive: must be A-B with A <= B, at most 640 ports');
   });
 
   it('a range set by hand smaller than the profile needs loads, with the warning profile_ftp_ports', () => {
