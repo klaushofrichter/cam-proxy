@@ -13,8 +13,8 @@ import { zeros } from './done';
 import { relOk, rowKey } from './import';
 import { cameraItems, chunkDay, CONTENT_FOLDERS, listChunks, type ItemFilter } from './inventory';
 import { isMoveId, type MoveRecord } from './journal';
-import type { KeepList, MoveKind } from './types';
-import { MOVE_KINDS } from './types';
+import type { FileKind, KeepList } from './types';
+import { FILE_KINDS } from './types';
 
 // What a finished move deletes from the source (S §11; step 4 Task 6): every
 // row and file of one camera, nothing of another, except what the receiving
@@ -24,7 +24,7 @@ import { MOVE_KINDS } from './types';
 // = archive folders. The recordings cache goes whole and is not counted, nor
 // are the rows of stream_log, analytics_usage, clip_arrivals and annotations
 // (rebuilt or not content, B49/X13).
-export type Purged = Record<MoveKind, { files: number; bytes: number }>;
+export type Purged = Record<FileKind, { files: number; bytes: number }>;
 export interface PurgeDeps {
   catalog: Catalog;
   dataDir: string;
@@ -32,7 +32,7 @@ export interface PurgeDeps {
   archive: Pick<Archive, 'store'>;
 }
 
-const FOLDERS: Record<MoveKind, string[]> = { stills: ['stills', 'previews'], clips: ['clips'], events: ['analytics'], checks: ['still-checks'], archive: ['archive'] };
+const FOLDERS: Record<FileKind, string[]> = { stills: ['stills', 'previews'], clips: ['clips'], events: ['analytics'], checks: ['still-checks'], archive: ['archive'] };
 const UNCOUNTED_FOLDERS = ['recordings'];
 
 // Regular files below a folder (links are not followed: removed, counted as a file).
@@ -106,7 +106,7 @@ export function purgeExcept(d: PurgeDeps, cam: string, o: PurgeExcept): { delete
   const notes: { id: number; reason: NonNullable<ArchiveMoveNote['reason']> }[] = [];
   // The source's Archive chunks as they are now (compared with `copied`).
   const now = new Map(listChunks(d, cam, ['archive']).map((c) => [c.id, c]));
-  for (const kind of MOVE_KINDS) {
+  for (const kind of FILE_KINDS) {
     for (const it of cameraItems(d, cam, kind)) {
       const id = `${kind}:${chunkDay(it.ts)}`;
       const entry = o.keep?.[id];
@@ -158,7 +158,7 @@ export function purgeExcept(d: PurgeDeps, cam: string, o: PurgeExcept): { delete
       logger.warn({ err: (err as Error).message, id: n.id }, 'archive_meta_write_failed');
     }
   }
-  for (const kind of MOVE_KINDS) {
+  for (const kind of FILE_KINDS) {
     for (const folder of FOLDERS[kind]) {
       const dir = join(root, folder, cam);
       for (const f of filesIn(dir)) {
@@ -187,7 +187,7 @@ export function purgeExcept(d: PurgeDeps, cam: string, o: PurgeExcept): { delete
 // landed but not yet listed (a crash in between) stays and ages out.
 
 const LANDED_FOLDERS = ['stills', 'previews', 'clips'];
-const FOLDER_KIND: Record<string, MoveKind> = { stills: 'stills', previews: 'stills', clips: 'clips' };
+const FOLDER_KIND: Record<string, FileKind> = { stills: 'stills', previews: 'stills', clips: 'clips' };
 
 export function landedLog(dataDir: string, moveId: string): string {
   if (!isMoveId(moveId)) throw new Error('invalid move id');
@@ -230,7 +230,7 @@ export function removeImported(d: { catalog: Pick<Catalog, 'db'>; dataDir: strin
   const deleted = zeros();
   const kept = zeros();
   const inside = (p: unknown, folder: string): p is string => typeof p === 'string' && p.startsWith(join(d.dataDir, folder, cam) + sep) && !p.split(sep).includes('..');
-  const files = new Map<string, MoveKind>();
+  const files = new Map<string, FileKind>();
   for (const rel of landedFiles(d.dataDir, r.id)) if (relOk(cam, rel, LANDED_FOLDERS)) files.set(join(d.dataDir, ...rel.split('/')), FOLDER_KIND[rel.split('/')[0]]);
   const ids: Record<'events' | 'analyses' | 'clips' | 'still_checks' | 'archive', number[]> = { events: [], analyses: [], clips: [], still_checks: [], archive: [] };
   const db = d.catalog.db;
@@ -368,9 +368,9 @@ export function removeReturned(d: { catalog: Pick<Catalog, 'db'>; dataDir: strin
   };
   const db = d.catalog.db;
   const rows: Record<'clips' | 'events' | 'analyses' | 'still_checks' | 'archive', number[]> = { clips: [], events: [], analyses: [], still_checks: [], archive: [] };
-  const files: { path: string; kind: MoveKind }[] = [];
+  const files: { path: string; kind: FileKind }[] = [];
   const folders: string[] = [];
-  const tally = (t: Purged, kind: MoveKind, path: string) => {
+  const tally = (t: Purged, kind: FileKind, path: string) => {
     try {
       const st = lstatSync(path);
       if (!st.isFile()) return false;
@@ -381,7 +381,7 @@ export function removeReturned(d: { catalog: Pick<Catalog, 'db'>; dataDir: strin
       return false;
     }
   };
-  for (const kind of MOVE_KINDS) {
+  for (const kind of FILE_KINDS) {
     for (const it of cameraItems(d, cam, kind, filter)) {
       const id = `${kind}:${chunkDay(it.ts)}`;
       const entry = r.keep?.[id];

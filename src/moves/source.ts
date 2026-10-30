@@ -131,7 +131,8 @@ const SWITCHED: readonly string[] = ['switching', 'switched', 'released', 'copyi
 const RELEASED: readonly string[] = ['released', 'copying', 'copied'];
 
 const sum = (d: Purged) => Object.values(d).reduce((n, k) => ({ files: n.files + k.files, bytes: n.bytes + k.bytes }), { files: 0, bytes: 0 });
-const has = (s: MoveSummary, k: MoveKind) => s[k].files + s[k].rows > 0;
+// ptz has no summary entry: a plan naming it is not the panel's to send.
+const has = (s: MoveSummary, k: MoveKind) => k !== 'ptz' && s[k].files + s[k].rows > 0;
 
 // The camera node's settings as they move (the contract's Settings): never the
 // address, the user's password or the FTP user (the target uses its own).
@@ -174,7 +175,7 @@ export function approveProblem(plan: unknown, summary: MoveSummary, answer: Move
     return p.targetSettings === null ? null : 'plan.targetSettings';
   }
   if (p.space === 'all') return 'plan.space';
-  if (p.space === 'omit' && p.kinds.reduce((n, k) => n + summary[k].bytes, 0) > space.available) return 'plan.kinds';
+  if (p.space === 'omit' && p.kinds.reduce((n, k) => n + (k === 'ptz' ? 0 : summary[k].bytes), 0) > space.available) return 'plan.kinds';
   if (p.space !== 'retention') return p.targetSettings === null ? null : 'plan.targetSettings';
   const proposal = space.retentionProposal;
   if (!proposal) return 'plan.space';

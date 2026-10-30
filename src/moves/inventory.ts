@@ -5,7 +5,7 @@ import { join, relative, resolve, sep } from 'path';
 import { CAM_ID } from '../archive/paths';
 import type { Catalog } from '../catalog/db';
 import type { KindSummary, MoveKind, MoveSummary } from './types';
-import { MOVE_KINDS } from './types';
+import { FILE_KINDS } from './types';
 import { DAY } from '../time-units';
 
 // What one camera has to move, as chunks of one kind and one UTC day (plan P6,
@@ -36,7 +36,7 @@ export interface TableRows { table: string; rows: object[] }
 // previews) by its dataDir-relative posix path.
 export interface ItemFilter { row(table: string, row: Record<string, unknown>): boolean; file(rel: string): boolean }
 
-const FOLDERS: Record<MoveKind, string[]> = { stills: ['stills', 'previews'], clips: ['clips'], events: ['analytics'], checks: ['still-checks'], archive: ['archive'] };
+const FOLDERS: Record<MoveKind, string[]> = { stills: ['stills', 'previews'], clips: ['clips'], events: ['analytics'], checks: ['still-checks'], archive: ['archive'], ptz: [] };
 export const KIND_FOLDERS: Readonly<Record<MoveKind, readonly string[]>> = FOLDERS;
 export const chunkDay = (ts: number): string => dayOf(ts);
 // A copier's temporary file (<final>.move-<id>.part, Task 9): never content.
@@ -191,7 +191,7 @@ function existing(c: Cam, files: string[]): { abs: string; size: number }[] {
 export function summarize(d: InventoryDeps, cam: string): MoveSummary {
   const c = new Cam(d, cam);
   const out = {} as MoveSummary;
-  for (const kind of MOVE_KINDS) {
+  for (const kind of FILE_KINDS) {
     const s: KindSummary = { files: 0, bytes: 0, rows: 0, oldest: null, newest: null };
     const seen = new Set<string>();
     for (const it of items(c, kind)) {

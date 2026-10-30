@@ -14,8 +14,8 @@ import { issuedBy } from '../tls/leaf';
 import { servedCertificate, type Served } from '../tls/served';
 import { moveDetail } from './detail';
 import type { MoveJournal, MoveRecord } from './journal';
-import type { MoveKind, MoveReason, Space } from './types';
-import { MOVE_KINDS } from './types';
+import type { FileKind, MoveReason, Space } from './types';
+import { FILE_KINDS } from './types';
 
 // The target's evaluation of an offered move (camera-move plan Task 6, S §6, §7,
 // P4, Review Focus 4). Pure decisions over injected facts; the one effect is the
@@ -73,17 +73,17 @@ export function spaceFor(deps: Pick<EvaluateDeps, 'loaded' | 'usage' | 'freeByte
   const cfg = deps.loaded().config;
   const use = deps.usage();
   const disk = Math.max(0, deps.freeBytes() - cfg.storage.minFreeBytes);
-  const need = (k: MoveKind) => summary[k].bytes;
+  const need = (k: FileKind) => summary[k].bytes;
   // Headroom under the *.maxGB size caps; a kind without a cap has none (the disk limits it).
   const stillsCap = cfg.stills.maxGB !== undefined && cfg.previews.maxGB !== undefined ? (cfg.stills.maxGB + cfg.previews.maxGB) * GB : undefined;
   const clipsCap = cfg.ftp.maxGB !== undefined ? cfg.ftp.maxGB * GB : undefined;
   const room = (cap: number | undefined, used: number) => (cap === undefined ? Infinity : Math.max(0, cap - used));
-  const headroom: Partial<Record<MoveKind, number>> = { stills: room(stillsCap, use.stills + use.previews), clips: room(clipsCap, use.clips) };
+  const headroom: Partial<Record<FileKind, number>> = { stills: room(stillsCap, use.stills + use.previews), clips: room(clipsCap, use.clips) };
   const perKind: Space['perKind'] = {};
   let needed = 0;
   let takeable = 0;
   let capShort = false;
-  for (const k of MOVE_KINDS) {
+  for (const k of FILE_KINDS) {
     const n = need(k);
     if (n > 0) perKind[k] = n;
     needed += n;

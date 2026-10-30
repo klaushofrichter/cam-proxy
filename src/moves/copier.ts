@@ -14,7 +14,7 @@ import { chunkTotals, type ChunkRecord, type MoveJournal, type MoveRecord } from
 import { noteLanded } from './purge';
 import { abortableSleep, paceS, rateFor, TokenBucket } from './rate';
 import type { ChunkState, MoveCheck, MoveEvent, MoveKind, MoveSummary } from './types';
-import { MOVE_KINDS } from './types';
+import { FILE_KINDS } from './types';
 import { HOUR, MINUTE } from '../time-units';
 import { within } from '../async';
 
@@ -479,7 +479,7 @@ export class Copier {
 
   // The same headroom as the offer's evaluation (spaceFor): room without evicting.
   private fits(c: ChunkMeta): boolean {
-    const summary = Object.fromEntries(MOVE_KINDS.map((k) => [k, { files: 0, bytes: k === c.kind ? c.bytes : 0, rows: 0, oldest: null, newest: null }])) as MoveSummary;
+    const summary = Object.fromEntries(FILE_KINDS.map((k) => [k, { files: 0, bytes: k === c.kind ? c.bytes : 0, rows: 0, oldest: null, newest: null }])) as MoveSummary;
     return spaceFor(this.d.space, summary).fits;
   }
 

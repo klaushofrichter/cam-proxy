@@ -7,7 +7,7 @@ import { estimateText, type AutoWaitReason } from '../../../src/moves/plan';
 export { KINDS, budgetDefault, type AutoWaitReason, estimateText, hasContent, kindsWithContent, planFrom, spaceOptions, type MoveForm } from '../../../src/moves/plan';
 
 export type { MoveKind, MovePlan, MoveReason, MoveSummary, Space };
-export const KIND_LABEL: Record<MoveKind, string> = { stills: 'Stills', clips: 'Clips', events: 'Events', checks: 'Still checks', archive: 'Archive' };
+export const KIND_LABEL: Record<MoveKind, string> = { stills: 'Stills', clips: 'Clips', events: 'Events', checks: 'Still checks', archive: 'Archive', ptz: 'PTZ positions' };
 
 // One move as GET /control/moves lists it (src/moves/source.ts MoveView).
 export interface MoveItem {

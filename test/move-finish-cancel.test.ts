@@ -34,7 +34,7 @@ import { MoveTarget, type TargetDeps } from '../src/moves/target';
 import { moveTokenGuard } from '../src/moves/token-guard';
 import { hashMoveToken } from '../src/moves/token';
 import type { MoveEvent, MovePlan, MoveSummary } from '../src/moves/types';
-import { MOVE_KINDS } from '../src/moves/types';
+import { FILE_KINDS } from '../src/moves/types';
 import { minutePath } from '../src/stills/store';
 import { utcDayParts, utcHhmm } from '../src/time-units';
 import { Storage } from '../src/storage';
@@ -59,7 +59,7 @@ const SECRETS = { CAMPROXY_TOKENS: 'a'.repeat(32), CAMPROXY_ADMIN_TOKEN: 'c'.rep
 const kind = () => ({ files: 0, bytes: 0, rows: 0, oldest: null, newest: null });
 const SUMMARY: MoveSummary = { stills: kind(), clips: kind(), events: kind(), checks: kind(), archive: kind() };
 const PLAN: MovePlan = { transfer: true, kinds: [], space: 'all', targetSettings: null, budgetS: 3600, estimateS: 60 };
-const ZEROS = Object.fromEntries(MOVE_KINDS.map((k) => [k, { files: 0, bytes: 0 }]));
+const ZEROS = Object.fromEntries(FILE_KINDS.map((k) => [k, { files: 0, bytes: 0 }]));
 const startArgs = (): MoveStartArgs => ({ v: 1, moveId: MOVE, plan: PLAN, settings: { name: 'Garden', statusPollS: 30 }, done: [] });
 const finishArgs = (role: 'source' | 'target', abandoned = false): MoveFinishArgs => ({ v: 1, moveId: MOVE, role, abandoned });
 const DAY = 86_400_000;
@@ -621,7 +621,7 @@ describe('move.finish on the source (S §11)', () => {
     const v = strict('commands/move.finish.result');
     expect(v(d.result), why(v)).toBe(true);
     // Exactly the five kinds (B49/X13).
-    expect(Object.keys((d.result as { deleted: object }).deleted).sort()).toEqual([...MOVE_KINDS].sort());
+    expect(Object.keys((d.result as { deleted: object }).deleted).sort()).toEqual([...FILE_KINDS].sort());
     expect(d.result).toMatchObject({ deleted: { stills: { files: 1, bytes: 100 }, clips: { files: 1, bytes: 300 } } });
     expect(rows(u.catalog, 'cam3')).toBe(0);
     expect(rows(u.catalog, 'cam1')).toBe(2);

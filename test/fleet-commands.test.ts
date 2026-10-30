@@ -14,6 +14,7 @@ import { TokenStore } from '../src/fleet/token-store';
 import { writeKeyFile } from '../src/fleet/keyfile';
 import { readEnvLayer } from '../src/config/env';
 import { buildHealth } from '../src/health/summary';
+import { spaceProblem, summaryProblem, validateMoveStart } from '../src/fleet/command-args';
 import { signEnvelope, type Envelope } from '../src/fleet/protocol';
 import { input } from './helpers/health-input';
 import { startFakeAdmin, type FakeAdmin } from './helpers/fake-admin';
@@ -457,5 +458,34 @@ describe('CAMPROXY_ADMIN_COMMANDS=off', () => {
     const { cmdId } = fake.sendCommand('tokens.apply', argsOf(1));
     await until(() => fake.results(cmdId).length === 1);
     expect(bodyOf(fake.results(cmdId)[0])).toMatchObject({ code: 'paused' });
+  });
+});
+
+describe('the ptz move kind in the command arguments', () => {
+  const plan = { transfer: true, kinds: ['clips'], space: 'all', targetSettings: null, budgetS: 600, estimateS: 60 };
+  const start = (kinds: unknown[]) => validateMoveStart({ v: 1, moveId: 'mv_0123456789ABCDEFGHJK', plan: { ...plan, kinds }, settings: {}, done: [] });
+  const zero = { files: 0, bytes: 0, rows: 0, oldest: null, newest: null };
+  const five = { stills: zero, clips: zero, events: zero, checks: zero, archive: zero };
+
+  it('move.start accepts a plan with ptz', () => {
+    expect(start(['clips', 'ptz']).ok).toBe(true);
+    expect(start(['stills', 'clips', 'events', 'checks', 'archive', 'ptz']).ok).toBe(true);
+    const seven = start(['stills', 'clips', 'events', 'checks', 'archive', 'ptz', 'ptz']);
+    expect(seven.ok ? '' : seven.detail).toContain('plan.kinds');
+    const twice = start(['ptz', 'ptz']);
+    expect(twice.ok ? '' : twice.detail).toContain('plan.kinds');
+  });
+
+  it('move.start accepts a done ptz chunk', () => {
+    expect(validateMoveStart({ v: 1, moveId: 'mv_0123456789ABCDEFGHJK', plan: { ...plan, kinds: ['ptz'] }, settings: {}, done: ['ptz:2026-10-30'] }).ok).toBe(true);
+  });
+
+  it('a summary with a ptz key is refused', () => {
+    expect(summaryProblem(five)).toBeNull();
+    expect(summaryProblem({ ...five, ptz: { files: 0, bytes: 0, rows: 1, oldest: null, newest: null } })).toBe('summary');
+  });
+
+  it('a space with a ptz perKind is refused', () => {
+    expect(spaceProblem({ needed: 0, available: 0, fits: true, perKind: { ptz: 0 }, retentionProposal: null })).toBe('space.perKind');
   });
 });

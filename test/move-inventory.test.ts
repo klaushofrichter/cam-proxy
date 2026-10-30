@@ -6,7 +6,7 @@ import { dirname, join } from 'path';
 import { describe, expect, it } from 'vitest';
 import { openCatalog } from '../src/catalog/db';
 import { Cam, chunkManifest, chunkOrder, chunkRows, listChunks, summarize } from '../src/moves/inventory';
-import { MOVE_KINDS } from '../src/moves/types';
+import { FILE_KINDS, MOVE_KINDS } from '../src/moves/types';
 
 const D1 = Date.UTC(2026, 9, 1, 12, 0); // 2026-10-01 12:00 UTC
 const D2 = Date.UTC(2026, 9, 2, 0, 5); // 2026-10-02 00:05 UTC (a local day could differ)
@@ -48,7 +48,7 @@ describe('move inventory', () => {
   it('summary counts per kind match the fixture', async () => {
     const f = fixture();
     const s = summarize(f.deps, 'cam3');
-    expect(Object.keys(s).sort()).toEqual([...MOVE_KINDS].sort());
+    expect(Object.keys(s).sort()).toEqual([...FILE_KINDS].sort());
     expect(s.stills).toEqual({ files: 4, bytes: 4 + 2 + 2 + 6, rows: 0, oldest: D1, newest: D2 });
     expect(s.clips).toEqual({ files: 2, bytes: 8 + 4, rows: 1, oldest: D1, newest: D1 });
     expect(s.events).toEqual({ files: 1, bytes: 8, rows: 2, oldest: D2, newest: D2 });

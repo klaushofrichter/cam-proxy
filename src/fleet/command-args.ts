@@ -3,7 +3,7 @@
 // them against the vendored strict schemas on the fixtures.
 import { NEVER_REMOTE_ACTIONS, REMOTE_ACTIONS } from './policy';
 import { CAMERA_NAME_PATTERN } from './remote-settable';
-import { MOVE_KINDS, type MoveBounds, type MoveCopied, type MovePlan, type MoveRole, type MoveSummary, type Settings, type SettingsMap, type Space, type MoveReason } from '../moves/types';
+import { FILE_KINDS, MOVE_KINDS, type MoveBounds, type MoveCopied, type MovePlan, type MoveRole, type MoveSummary, type Settings, type SettingsMap, type Space, type MoveReason } from '../moves/types';
 import type { ManagedToken, TokensApplyArgs } from './token-store';
 
 export type ArgsVerdict<T> = { ok: true; args: T } | { ok: false; code: 'unsupported_version' | 'invalid_args'; detail: string };
@@ -112,7 +112,7 @@ const SITE = /^[a-z0-9][a-z0-9-]{0,30}$/;
 const FINGERPRINT = /^SHA256:[0-9A-F]{64}$/;
 // An X25519 public key as SPKI DER base64: the 12-byte prefix (MCowBQYDK2VuAyEA) and 32 bytes, 60 characters.
 export const X25519_SPKI = /^MCowBQYDK2VuAyEA[A-Za-z0-9+/]{43}=$/;
-const CHUNK_ID = /^(stills|clips|events|checks|archive):[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
+const CHUNK_ID = /^(stills|clips|events|checks|archive|ptz):[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
 const TOKEN_HASH = HASH;
 // Loose on purpose (the contract's pattern): never IP validation, the move code compares addresses itself.
 const TARGET_IP = /^[0-9A-Fa-f:.]{2,45}$/;
@@ -150,8 +150,8 @@ export function settingsProblem(s: unknown): string | null {
 }
 
 export function summaryProblem(s: unknown): string | null {
-  if (!closed(s, [...MOVE_KINDS])) return 'summary';
-  for (const k of MOVE_KINDS) {
+  if (!closed(s, [...FILE_KINDS])) return 'summary';
+  for (const k of FILE_KINDS) {
     const x = s[k];
     if (!closed(x, ['files', 'bytes', 'rows', 'oldest', 'newest']) || !nat(x.files) || !nat(x.bytes) || !nat(x.rows) || !natOrNull(x.oldest) || !natOrNull(x.newest)) return `summary.${k}`;
   }
@@ -161,13 +161,13 @@ export function summaryProblem(s: unknown): string | null {
 export const spaceProblem = (s: unknown): string | null => {
   if (!closed(s, ['needed', 'available', 'fits', 'perKind', 'retentionProposal'])) return 'space';
   if (!nat(s.needed) || !nat(s.available) || !bool(s.fits)) return 'space';
-  if (!closed(s.perKind, [...MOVE_KINDS]) || !Object.values(s.perKind).every(nat)) return 'space.perKind';
+  if (!closed(s.perKind, [...FILE_KINDS]) || !Object.values(s.perKind).every(nat)) return 'space.perKind';
   return settingsMap(s.retentionProposal) ? null : 'space.retentionProposal';
 };
 
 export const planProblem = (p: unknown): string | null => {
   if (!closed(p, ['transfer', 'kinds', 'space', 'targetSettings', 'budgetS', 'estimateS']) || !bool(p.transfer)) return 'plan';
-  if (!Array.isArray(p.kinds) || p.kinds.length > 5 || new Set(p.kinds).size !== p.kinds.length || p.kinds.some((k) => !(MOVE_KINDS as readonly unknown[]).includes(k))) return 'plan.kinds';
+  if (!Array.isArray(p.kinds) || p.kinds.length > MOVE_KINDS.length || new Set(p.kinds).size !== p.kinds.length || p.kinds.some((k) => !(MOVE_KINDS as readonly unknown[]).includes(k))) return 'plan.kinds';
   if (typeof p.space !== 'string' || !SPACE_PLANS.includes(p.space)) return 'plan.space';
   if (!settingsMap(p.targetSettings)) return 'plan.targetSettings';
   return nat(p.budgetS) && nat(p.estimateS) ? null : 'plan.budget';
@@ -229,7 +229,7 @@ export const validateMoveGo = (a: unknown) => v1<MoveGoArgs>(a, ['moveId', 'plan
 export const boundsProblem = (b: unknown): string | null => {
   if (b === null) return null;
   if (!closed(b, ['transfer', 'kinds', 'space', 'maxBudgetS']) || !bool(b.transfer)) return 'bounds';
-  if (!Array.isArray(b.kinds) || b.kinds.length > 5 || new Set(b.kinds).size !== b.kinds.length || b.kinds.some((k) => !(MOVE_KINDS as readonly unknown[]).includes(k))) return 'bounds';
+  if (!Array.isArray(b.kinds) || b.kinds.length > MOVE_KINDS.length || new Set(b.kinds).size !== b.kinds.length || b.kinds.some((k) => !(MOVE_KINDS as readonly unknown[]).includes(k))) return 'bounds';
   if (typeof b.space !== 'string' || !SPACE_PLANS.includes(b.space)) return 'bounds';
   return Number.isSafeInteger(b.maxBudgetS) && (b.maxBudgetS as number) >= 60 && (b.maxBudgetS as number) <= 604800 ? null : 'bounds';
 };
