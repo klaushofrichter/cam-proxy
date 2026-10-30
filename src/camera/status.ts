@@ -10,6 +10,7 @@ export interface CameraState {
   name?: string; // the camera's name as last read (GetDevInfo.name); kept while offline
   clockOffsetMs?: number; // camera clock minus proxy clock
   error?: string; // why the last check failed (never contains credentials)
+  checkedAt?: number; // when the last check ended, success or failure
 }
 
 interface GetTime {
@@ -88,13 +89,13 @@ export class StatusPoller extends EventEmitter {
       const status = await this.client.status();
       const time = await this.client.command<GetTime>('GetTime');
       this.failures = 0;
-      this.set({ online: true, model: status.model, firmware: status.firmware, serial: status.serial, name: epoch === this.nameEpoch ? (status.name ?? this.current.name) : this.current.name, clockOffsetMs: clockOffset(time, this.now()), error: undefined });
+      this.set({ online: true, model: status.model, firmware: status.firmware, serial: status.serial, name: epoch === this.nameEpoch ? (status.name ?? this.current.name) : this.current.name, clockOffsetMs: clockOffset(time, this.now()), error: undefined, checkedAt: this.now() });
       this.emit('check', { ok: true, ms: this.now() - t0 });
     } catch (err) {
       this.failures++;
       const error = err instanceof CameraError ? err.code : 'camera_error';
-      if (this.failures >= 2 || !this.current.online) this.set({ ...this.current, online: false, error });
-      else this.current = { ...this.current, error };
+      if (this.failures >= 2 || !this.current.online) this.set({ ...this.current, online: false, error, checkedAt: this.now() });
+      else this.current = { ...this.current, error, checkedAt: this.now() };
       this.emit('check', { ok: false, ms: this.now() - t0, error });
     }
     return this.state();

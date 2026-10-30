@@ -83,6 +83,7 @@ import { capturedMark } from './moves/captured';
 import { purgeExcept, removeImported } from './moves/purge';
 import type { MoveEvent } from './moves/types';
 import { cameraPasswordStore } from './config/camera-passwords';
+import { credentialsOf, passwordSource } from './onboarding/credentials';
 import { verifyFtp } from './fleet/camera-commands';
 import { availableParallelism, loadavg } from 'os';
 import { CommandRunner, type Handler } from './fleet/commands';
@@ -795,6 +796,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     recordings: w.recordings.status(),
     // Where the camera is defined: config.json, or added in the Settings page (overrides.json).
     source: loaded.addedCameras.includes(w.id) ? ('added' as const) : ('config' as const),
+    credentials: credentialsOf(passwordSource(loaded, w.id), w.status.state()),
   });
 
   // The health summary (spec 2026-10-03-health-summary-design): the host
@@ -1162,7 +1164,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   app.use('/api', requireAccess('client', access), archiveApi({ config: () => running, catalog, archive, composer, cameras: cams }));
   // Pan/tilt/zoom and positions (spec 2026-10-30-ptz-capabilities-design §5).
   app.use('/api', requireAccess('client', access), ptzApi({ cameras: cams, audit }));
-  app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, cameras: cams, sse, tls: (id) => certs?.state(id) }));
+  app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, cameras: cams, sse, tls: (id) => certs?.state(id), credentials: (id) => credentialsOf(passwordSource(loaded, id), cams.get(id)?.status.state() ?? { online: false, since: 0 }) }));
   // The audit log: admins and the audit token, GET (and HEAD) only. The access check is
   // on the route inside the router; other /control paths pass on untouched
   // to the admin-only routes below.

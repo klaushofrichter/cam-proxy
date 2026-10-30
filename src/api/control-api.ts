@@ -3,6 +3,7 @@ import type { MoveLeftover } from '../moves/leftovers';
 import { rateLimit } from 'express-rate-limit';
 import type { Catalog } from '../catalog/db';
 import type { CameraState } from '../camera/status';
+import type { Credentials } from '../onboarding/credentials';
 import { CameraError } from '../camera/client';
 import { CameraNameRefused } from '../camera/name';
 import { cameraNameProblem } from '../camera/name-rules';
@@ -74,6 +75,7 @@ export interface CameraStatusBlock {
   ftp: FtpStatus;
   recordings: RecordingsStatus;
   source: 'config' | 'added'; // config.json, or added in the Settings page (overrides.json)
+  credentials: Credentials; // where the camera's password comes from and whether it works (never a value)
 }
 
 export interface ControlDeps {
