@@ -84,6 +84,9 @@ import { purgeExcept, removeImported } from './moves/purge';
 import type { MoveEvent } from './moves/types';
 import { cameraPasswordStore } from './config/camera-passwords';
 import { credentialsOf, passwordSource } from './onboarding/credentials';
+import { OnboardingService } from './onboarding/service';
+import { PasswordAttempts } from './onboarding/attempts';
+import { onboardingApi } from './api/onboarding-api';
 import { verifyFtp } from './fleet/camera-commands';
 import { availableParallelism, loadavg } from 'os';
 import { CommandRunner, type Handler } from './fleet/commands';
@@ -1269,6 +1272,20 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       dropPrevious: (who) => certs?.dropPreviousCa(who) ?? false,
     },
   };
+  // Camera onboarding (spec 2026-10-30-camera-onboarding-design §4).
+  const onboarding = new OnboardingService({
+    loaded: () => loaded,
+    setLoaded,
+    running: () => running,
+    cameras: cams,
+    restartCamera: (cam) => controlDeps.restartCamera(cam),
+    passwords: movePasswords,
+    trustFor: tlsFor,
+    certState: (cam) => certs?.state(cam) ?? null,
+    audit,
+    attempts: new PasswordAttempts(),
+  });
+  app.use('/control', requireAccess('admin', access), onboardingApi(onboarding));
   app.use('/control', requireAccess('admin', access), movesControlApi(moveSource));
   app.use('/control', requireAccess('admin', access), controlApi(controlDeps));
   // cams-admin's P3 commands (plan P3 Task 10): each off unless allowed locally.

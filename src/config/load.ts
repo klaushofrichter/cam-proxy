@@ -463,6 +463,15 @@ export function rebuildWith(loaded: Loaded, overrides: object, o: BuildOptions =
   return build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides as Obj, baseDirOf(loaded), loaded.envLayer, normOf(loaded), o);
 }
 
+// The configuration rebuilt without these environment variables (a camera's
+// own password line removed from the env file: the store's password applies
+// at once). The process environment is untouched.
+export function withoutEnv(l: Loaded, names: string[]): Loaded {
+  const env = { ...l.env };
+  for (const n of names) delete env[n];
+  return build(env, l.files.config, l.fileSettings as Obj, l.overrides as Obj, baseDirOf(l), l.envLayer, normOf(l));
+}
+
 // Adds overrides (validated like the file); nothing is written if the result
 // is invalid (see planOverrides).
 export function applyOverrides(loaded: Loaded, given: object): Loaded {

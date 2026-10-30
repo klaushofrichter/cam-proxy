@@ -125,6 +125,8 @@ export const MANAGED_ALLOWED: readonly (readonly [string, RegExp])[] = [
   ['PUT', /^\/control\/admin\/commands$/], // narrowing only (CommandPolicy.setAllow)
   ['POST', /^\/control\/admin\/commands\/pause$/],
   ['POST', /^\/control\/admin\/tokens\/[^/]+\/block$/],
+  // Spec 2026-10-30-camera-onboarding-design §10.1: set a camera password (write-only, saved only once the camera accepts it).
+  ['PUT', /^\/control\/cameras\/[^/]+\/password$/],
 ];
 const managedMay = (method: string, path: string) => !WRITE.has(method) || MANAGED_ALLOWED.some(([m, re]) => m === method && re.test(path));
 

@@ -993,6 +993,37 @@ paths:
         '401': { description: not signed in }
         '404': { description: not_found (unknown camera, or not a camera action) }
         '503': { description: camera_restarting (Retry-After) }
+  /control/cameras/{cam}/password:
+    put:
+      summary: Save the camera's password on this proxy, checked with the camera first (admin; also managed admin) (spec 2026-10-30-camera-onboarding-design §4.1)
+      description: >
+        Write-only: the password is never returned, logged or audited. The
+        proxy logs in to the camera with it on a session of its own (an https
+        camera only over its trusted certificate: site CA, pin or public name)
+        and stores it in data/admin/camera-passwords.json (mode 600) only when
+        the camera accepts; the camera's side restarts with it, no process
+        restart. The camera's own CAMPROXY_CAMERA_PASSWORD_<ID> line is removed
+        from the env file this proxy manages (and its backups); one it can't
+        remove (compose's environment, a _FILE secret) refuses the save.
+        At most 5 attempts per camera address in 10 minutes (shared with
+        camera-probe and POST /control/cameras). One camera-password audit
+        record per attempt (a rate-limited one once per window).
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [password], properties: { password: { type: string, minLength: 1, maxLength: 64, description: no control characters } } }
+      responses:
+        '200': { description: '{ credentials: Credentials } (source store)' }
+        '400': { description: invalid (not a string of 1 to 64 characters without control characters; nothing audited) }
+        '401': { description: not signed in }
+        '403': { description: admin_only (a client token) }
+        '404': { description: not_found }
+        '409': { description: "env_password (detail names the variable to remove), not_trusted (an https camera whose certificate is not trusted: camera-trust-pin first)" }
+        '422': { description: camera_refused (the camera refused the login; nothing stored) }
+        '429': { description: too_many_attempts (Retry-After) }
+        '503': { description: camera_offline (the camera did not answer; nothing stored), or camera_restarting (Retry-After) }
   /control/cameras/{cam}/name:
     put:
       summary: Rename one camera (stored on the camera), as PUT /control/camera/name (admin)
