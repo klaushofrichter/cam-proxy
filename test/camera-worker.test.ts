@@ -264,3 +264,34 @@ describe('capabilities (spec 2026-10-30-ptz-capabilities-design §4)', () => {
     catalog.close();
   });
 });
+
+describe('PTZ side (spec 2026-10-30-ptz-capabilities-design §5.1)', () => {
+  it('stopParts sends Stop while a move is leased', async () => {
+    const { w, catalog } = worker();
+    await w.start();
+    await until(() => w.status.state().online);
+    const real = w.client.command.bind(w.client);
+    const sent: unknown[] = [];
+    vi.spyOn(w.client, 'command').mockImplementation(((cmd: string, param?: object) => (sent.push([cmd, param]), real(cmd, param))) as typeof w.client.command);
+    await w.ptz.lease.move(async () => undefined, 2000);
+    await w.stopRecordings();
+    await w.stop();
+    // The RLC-1224A sim refuses PtzCtrl; halt swallows that.
+    expect(sent).toContainEqual(['PtzCtrl', { channel: 0, op: 'Stop' }]);
+    expect(w.ptz.lease.active()).toBe(false);
+    vi.restoreAllMocks();
+    catalog.close();
+  });
+
+  it('coming online drops the cached preset read', async () => {
+    const { w, catalog } = worker();
+    const inv = vi.spyOn(w.ptz.positions, 'invalidate');
+    await w.start();
+    await until(() => w.status.state().online);
+    await until(() => inv.mock.calls.length > 0);
+    vi.restoreAllMocks();
+    await w.stopRecordings();
+    await w.stop();
+    catalog.close();
+  });
+});

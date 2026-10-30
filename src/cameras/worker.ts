@@ -6,6 +6,7 @@ import { Backoff } from './backoff';
 import { lastClipReceived } from '../catalog/clips';
 import { ReolinkClient, type CameraTrust } from '../camera/client';
 import { readCapabilities, type Capabilities } from '../camera/capabilities';
+import { CameraPtz } from '../ptz/camera-ptz';
 import { bareHost, splitHost } from '../camera/http';
 import { CameraNameAnnouncer, writeCameraName } from '../camera/name';
 import { CameraReboot } from '../camera/reboot';
@@ -94,6 +95,8 @@ export class CameraWorker extends EventEmitter {
   readonly ftpWatch: CameraFtpWatch;
   readonly sdWatch: SdWatch;
   readonly timeInfo: () => TimeInfo | undefined;
+  // Pan/tilt/zoom and saved positions (spec 2026-10-30-ptz-capabilities-design §5).
+  readonly ptz: CameraPtz;
   private phaseNow: WorkerPhase = 'idle';
   private errorNow: string | null = null;
   // The camera's name as last read (camera-name design); the configured name
@@ -155,6 +158,15 @@ export class CameraWorker extends EventEmitter {
       lastClip: () => lastClipReceived(d.catalog, this.id),
       recordings: (from, to) => this.recordings.list.range(from, to, 'main'),
       everyMs: d.cameraSdCheckMs,
+    });
+    // Made before build() (its status listener uses it); the client is read at use.
+    this.ptz = new CameraPtz({
+      cam: d.id,
+      command: (cmd, param) => this.client.command(cmd, param),
+      capabilities: () => this.caps,
+      online: () => this.status.state().online,
+      catalog: d.catalog,
+      log: d.log,
     });
     this.build();
     this.registered = this.source();
@@ -375,6 +387,7 @@ export class CameraWorker extends EventEmitter {
       if (s.online) void this.ftpWatch.checkNow();
       if (s.online) void this.sdWatch.checkNow();
       // The camera's NTP server on the host (spec §14.2, Ruling P5-7): at most once an hour.
+      if (s.online) this.ptz.positions.invalidate();
       if (s.online) void this.refreshCapabilities();
       if (s.online) void this.syncNtp().catch((err: Error) => logger.warn({ cameraId: this.id, err: err.message }, 'camera_ntp_failed'));
       // Online for 10 minutes: the next failure starts the backoff at 5 s again.
@@ -499,6 +512,8 @@ export class CameraWorker extends EventEmitter {
     await this.intake.stop();
     this.status.stop();
     await this.stopStills();
+    // A leased move is stopped before the session ends (spec §5.1).
+    await this.ptz.halt();
     await this.client.logout();
   }
 
