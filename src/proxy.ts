@@ -1,4 +1,5 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
+import { deleteCameraPositions } from './catalog/ptz-positions';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
 import http from 'http';
 import https from 'https';
@@ -1011,6 +1012,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   const moveEnd = {
     deletePassword: (cam: string) => movePasswords.delete(cam),
     forgetLeaf: (cam: string) => certs?.forget(cam, { user: 'cams-admin' }),
+    // The camera's PTZ positions (plan D): gone with the camera.
+    deletePositions: (cam: string) => deleteCameraPositions(catalog, cam),
   };
   const ftpHere = async (cam: string): Promise<'skipped' | { verified: boolean; mismatch: string[] }> => {
     const w = cams.get(cam);
@@ -1106,6 +1109,12 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     setPhase: (r, phase, o) => moveTarget.setPhase(r, phase, o),
     // A return waiting for room (step 4 Task 10): move.phase copying no_space.
     notePaused: (r, paused) => moveTarget.notePaused(r, paused),
+    // A moved camera's PTZ positions replaced (plan D): its worker reads the
+    // camera's slots again, and the positions' stream message goes out.
+    ptzImported: (cam) => {
+      cams.get(cam)?.ptz.positions.invalidate();
+      log.append(cam, 'ptz-positions', {});
+    },
     proxyId: proxyIdNow,
   });
   // The copy back after a cancel after the switch-over (step 4 Task 9): the

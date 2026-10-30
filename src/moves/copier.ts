@@ -14,7 +14,8 @@ import { chunkTotals, type ChunkRecord, type MoveJournal, type MoveRecord } from
 import { noteLanded } from './purge';
 import { abortableSleep, paceS, rateFor, TokenBucket } from './rate';
 import type { ChunkState, MoveCheck, MoveEvent, MoveKind, MoveSummary } from './types';
-import { FILE_KINDS } from './types';
+import { FILE_KINDS, MOVE_KINDS } from './types';
+import { importPtz } from './ptz';
 import { HOUR, MINUTE } from '../time-units';
 import { within } from '../async';
 
@@ -67,10 +68,13 @@ export interface CopierDeps {
   now?: () => number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   bucket?: TokenBucket;
+  // A moved camera's PTZ positions were replaced (plan D): its worker reads them again.
+  ptzImported?: (cam: string) => void;
   timing?: { retryMs?: number; retryCapMs?: number; pausedPollMs?: number; refreshPollMs?: number; refreshWaitMs?: number; saveEveryMs?: number; idleMs?: number };
 }
 
 const ATTEMPTS = 3;
+const CHUNK_ID = new RegExp(`^(${MOVE_KINDS.join('|')}):\\d{4}-\\d{2}-\\d{2}$`);
 const FAILED_PATHS_MAX = 50;
 const PROGRESS_CHUNKS_MAX = 4096;
 const JSON_MAX = 256 * 1024 * 1024;
@@ -249,7 +253,8 @@ export class Copier {
 
   private async copy(): Promise<void> {
     if (this.r.phase !== 'copying' || !this.r.plan) return;
-    if (!this.r.plan.transfer) return this.finish();
+    // Without content the camera's PTZ positions still come (plan D).
+    if (!this.r.plan.transfer && !this.r.plan.kinds.includes('ptz')) return this.finish();
     if (this.r.copyStartedAt === undefined) {
       this.r.copyStartedAt = this.now();
       this.save(true);
@@ -370,7 +375,7 @@ export class Copier {
         }
       }
       const now = this.r.chunks[c.id];
-      const rowsFailed = !!now && now.state === 'failed' && now.rowsInserted === undefined ? (now.meta?.rows ?? c.rows) : 0;
+      const rowsFailed = !!now && now.state === 'failed' && now.rowsInserted === undefined ? (c.kind === 'ptz' ? 1 : (now.meta?.rows ?? c.rows)) : 0;
       rows.push({ kind: c.kind, missing: res.missing.length, recovered, failed: res.failed.length + rowsFailed, expired: res.expired.length });
       // Rows that exist only at the source: it keeps every file of the chunk.
       const failed = rowsFailed > 0 ? [...new Set([...res.failed, ...res.listed.filter((p) => !res.missing.includes(p))])] : res.failed;
@@ -406,7 +411,7 @@ export class Copier {
     const body = (m.status === 200 ? m.body : null) as { chunks?: unknown; refreshed?: unknown } | null;
     const list = Array.isArray(body?.chunks) ? (body.chunks as ChunkMeta[]) : [];
     this.refreshed = body?.refreshed === true;
-    const ok = list.filter((c) => c && typeof c.id === 'string' && /^(stills|clips|events|checks|archive):\d{4}-\d{2}-\d{2}$/.test(c.id) && c.id === `${c.kind}:${c.day}`
+    const ok = list.filter((c) => c && typeof c.id === 'string' && CHUNK_ID.test(c.id) && c.id === `${c.kind}:${c.day}`
       && [c.files, c.bytes, c.rows].every((n) => Number.isSafeInteger(n) && n >= 0));
     return [...new Map(ok.map((c) => [c.id, { id: c.id, kind: c.kind, day: c.day, ...metaOf(c) }])).values()]
       .sort(chunkOrder);
@@ -554,7 +559,10 @@ export class Copier {
     const wait = this.backoff();
     for (let i = 0; i < ATTEMPTS && !imported; i++) {
       try {
-        imported = importRows(this.paths, this.r.camera, rows, verified, prev?.imported, { moveId: this.r.id, from: { proxyId: this.r.peer.proxyId, name: this.r.peer.name }, at: this.now() });
+        // The PTZ positions replace the camera's (checked first: invalid rows fail the chunk).
+        imported = c.kind === 'ptz'
+          ? { ...importPtz(this.d.catalog, this.r.camera, rows), skipped: 0, failed: 0, map: {} }
+          : importRows(this.paths, this.r.camera, rows, verified, prev?.imported, { moveId: this.r.id, from: { proxyId: this.r.peer.proxyId, name: this.r.peer.name }, at: this.now() });
       } catch {
         logger.warn({ moveId: this.r.id, chunkId: c.id }, 'move_copy_import_failed');
         if (i < ATTEMPTS - 1) {
@@ -569,6 +577,13 @@ export class Copier {
       // The rows could not be imported 3 times: the chunk fails (counted, audited).
       n.f++;
       return this.endChunk(c, n, o, undefined, [], true);
+    }
+    if (c.kind === 'ptz') {
+      try {
+        this.d.ptzImported?.(this.r.camera);
+      } catch {
+        // the positions are stored; the worker reads them at its next use
+      }
     }
     this.endChunk(c, n, o, imported, [...vf]);
   }

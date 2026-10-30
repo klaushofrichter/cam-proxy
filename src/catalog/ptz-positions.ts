@@ -16,7 +16,7 @@ export interface PtzPositionRow {
 }
 
 // One transaction; ROLLBACK on a throw.
-function tx(c: Catalog, fn: () => void): void {
+function tx(c: Pick<Catalog, 'db'>, fn: () => void): void {
   c.db.exec('BEGIN');
   try {
     fn();
@@ -36,7 +36,7 @@ export function positionById(c: Catalog, cam: string, id: string): PtzPositionRo
 }
 
 // Throws on a slot this camera already uses (UNIQUE).
-export function insertPosition(c: Catalog, r: PtzPositionRow): void {
+export function insertPosition(c: Pick<Catalog, 'db'>, r: PtzPositionRow): void {
   c.db
     .prepare('INSERT INTO ptz_positions (id, cam, name, sort_order, home, slot, preset_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
     .run(r.id, r.cam, r.name, r.sort_order, r.home, r.slot, r.preset_name, r.created_at, r.updated_at);
@@ -79,7 +79,7 @@ export function deleteCameraPositions(c: Pick<Catalog, 'db'>, cam: string): numb
 
 // A camera that moved here: its rows become exactly these (one transaction; a
 // throw leaves the old rows). The caller checks the rows (src/moves/ptz.ts).
-export function replaceCameraPositions(c: Catalog, cam: string, rows: PtzPositionRow[]): void {
+export function replaceCameraPositions(c: Pick<Catalog, 'db'>, cam: string, rows: PtzPositionRow[]): void {
   tx(c, () => {
     c.db.prepare('DELETE FROM ptz_positions WHERE cam = ?').run(cam);
     for (const r of rows) insertPosition(c, { ...r, cam });

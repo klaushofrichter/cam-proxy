@@ -14,6 +14,7 @@ import { ArchiveStore } from '../src/archive/store';
 import { AuditLog } from '../src/audit/audit-log';
 import { openCatalog, type Catalog } from '../src/catalog/db';
 import { cameraPasswordStore } from '../src/config/camera-passwords';
+import { deleteCameraPositions, insertPosition, listPositions } from '../src/catalog/ptz-positions';
 import { applyOverrides, loadConfig, type Loaded } from '../src/config/load';
 import type { MoveCancelArgs, MoveFinishArgs, MoveStartArgs } from '../src/fleet/command-args';
 import { writeKeyFile } from '../src/fleet/keyfile';
@@ -147,6 +148,7 @@ function targetUnit() {
       captured: (cam, now) => capturedMark(catalog, cam, now),
       deletePassword: (cam) => void passwords.delete(cam),
       forgetLeaf: (cam) => void forgot.push(cam),
+      deletePositions: (cam) => deleteCameraPositions(catalog, cam),
     },
   };
   const target = new MoveTarget(deps);
@@ -504,6 +506,17 @@ describe('move.cancel on the target', () => {
     expect(u.forgot).toEqual([]);
     expect(phasesOf(u.events)).toEqual(['cancelled']);
     expect(u.audits.find((x) => x.action === 'move-cancel')!.details).toMatchObject({ phase: 'opened', cameraEntry: 'untouched', deleted: null });
+  });
+
+  it("a cancel after the camera step deletes the camera's positions on the target", async () => {
+    const u = targetUnit();
+    await copied(u);
+    const p = (id: string, cam: string) => insertPosition(u.catalog, { id, cam, name: 'Gate', sort_order: 0, home: 1, slot: 1, preset_name: 'gate', created_at: 1, updated_at: 1 });
+    p('pos_0000000000000009', 'cam9');
+    p('pos_0000000000000001', 'cam1');
+    expect((await u.target.cancel(cancelT('age-out'))).status).toBe('ok');
+    expect(listPositions(u.catalog, 'cam9')).toEqual([]);
+    expect(listPositions(u.catalog, 'cam1')).toHaveLength(1);
   });
 
   it('a cancel before the switch-over closes the record as before: no returnPending, no high water, its logs gone', async () => {

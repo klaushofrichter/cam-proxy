@@ -55,7 +55,7 @@ export function ptzRowsProblem(rows: unknown): string | null {
 }
 
 // The rows of the PTZ_TABLE entry (none: zero rows) replace the camera's; other tables are ignored.
-export function importPtz(c: Catalog, cam: string, tables: TableRows[]): { inserted: number } {
+export function importPtz(c: Pick<Catalog, 'db'>, cam: string, tables: TableRows[]): { inserted: number } {
   const rows = tables.find((t) => t.table === PTZ_TABLE)?.rows ?? [];
   const bad = ptzRowsProblem(rows);
   if (bad) throw new Error(`ptz rows: ${bad}`);
