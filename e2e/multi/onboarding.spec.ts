@@ -33,3 +33,18 @@ test('trust a camera certificate from the onboarding card; a wrong password is r
     await page.request.delete('/control/cameras/cam8', { headers: UI });
   }
 });
+
+test('Settings: "Set camera time" sets the zone of time.zone on the selected camera', async ({ page }) => {
+  expect((await page.request.put('/control/config', { headers: UI, data: { time: { zone: 'Europe/Berlin' } } })).status()).toBe(200);
+  try {
+    await page.goto('/#/settings');
+    await page.getByTestId('camera-picker').selectOption('cam4');
+    const card = page.getByTestId('camera-time-card');
+    await card.getByTestId('camera-time-set').click();
+    await expect(card.getByTestId('camera-time-message')).toHaveText(/^(Camera time zone set to|The camera already runs in) Europe\/Berlin\.$/, { timeout: 15_000 });
+    await card.getByTestId('camera-time-set').click();
+    await expect(card.getByTestId('camera-time-message')).toHaveText('The camera already runs in Europe/Berlin.', { timeout: 15_000 });
+  } finally {
+    await page.request.delete('/control/config/time.zone', { headers: UI });
+  }
+});

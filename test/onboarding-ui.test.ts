@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addCameraBody, passwordConfirmText, passwordError, retryMinutes, stepLine, trustConfirmText, trustNeeded, STEP_LABELS } from '../web/src/lib/onboarding';
+import { timeSetText, addCameraBody, passwordConfirmText, passwordError, retryMinutes, stepLine, trustConfirmText, trustNeeded, STEP_LABELS } from '../web/src/lib/onboarding';
 
 // The admin UI's onboarding texts (spec 2026-10-30-camera-onboarding-design §4.1, §4.4, §4.5).
 const FP = `SHA256:${'A'.repeat(64)}`;
@@ -31,6 +31,12 @@ describe('the onboarding dialogs and card', () => {
     expect(trustNeeded(st)).toBe(FP);
     expect(trustNeeded({ ...st, trust: { ...st.trust, served: null } })).toBeNull();
     expect(trustNeeded({ ...st, steps: { trust: { ok: true, detail: '' } } })).toBeNull();
+  });
+  it('the camera time answer in words', () => {
+    expect(timeSetText({ outcome: 'set', zone: 'Europe/Berlin', ntp: 'already' })).toBe('Camera time zone set to Europe/Berlin.');
+    expect(timeSetText({ outcome: 'already', zone: 'Europe/Berlin', ntp: null })).toBe('The camera already runs in Europe/Berlin.');
+    expect(timeSetText({ outcome: 'failed', zone: 'Asia/Tokyo', ntp: null, detail: 'x' })).toBe('Not set (Asia/Tokyo): x');
+    expect(timeSetText({ outcome: 'unsupported', zone: 'Asia/Tokyo', ntp: null })).toBe("This camera can't set its time zone.");
   });
   it('the add body: trimmed, id optional, the fingerprint only over https', () => {
     expect(addCameraBody({ id: ' cam6 ', name: '', host: ' 192.0.2.16 ', protocol: 'https', user: '', password: 'pw', fingerprint: FP })).toEqual({ id: 'cam6', host: '192.0.2.16', protocol: 'https', user: 'admin', password: 'pw', trust: { fingerprint: FP } });

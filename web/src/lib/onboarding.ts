@@ -77,3 +77,11 @@ export function addCameraBody(f: AddForm): Record<string, unknown> {
     ...(f.ftp ? { ftp: true } : {}),
   };
 }
+
+// camera-time-set's answer (spec §4.7) in words.
+export function timeSetText(a: { outcome: string; zone: string; ntp: string | null; detail?: string }): string {
+  if (a.outcome === 'set') return `Camera time zone set to ${a.zone}.`;
+  if (a.outcome === 'already') return `The camera already runs in ${a.zone}.`;
+  if (a.outcome === 'unsupported') return "This camera can't set its time zone.";
+  return `Not set (${a.zone}): ${a.detail ?? a.outcome}`;
+}
