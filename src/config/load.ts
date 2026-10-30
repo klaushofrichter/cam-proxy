@@ -291,7 +291,7 @@ function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSetti
   for (const p of settingPaths(config)) {
     sources[p] = envNames[p] ? 'env' : getPath(overrides, p) !== undefined ? 'override' : getPath(fileSettings, p) !== undefined ? 'file' : 'default';
   }
-  const secrets = asConfigError(() => loadSecrets(env, config.cameraOrder.some((id) => cameraConfig(config, id)!.ftp.enabled), config.cameraOrder, { tokensOptional: norm.tokensOptional, dataDir, ...(bo.passwordFromMove ? { passwordFromMove: bo.passwordFromMove } : {}) }));
+  const secrets = asConfigError(() => loadSecrets(env, config.cameraOrder.some((id) => cameraConfig(config, id)!.ftp.enabled), config.cameraOrder, { tokensOptional: norm.tokensOptional, dataDir, moved: config.cameraOrder.filter((id) => !!config.cameras[id]?.moved), ...(bo.passwordFromMove ? { passwordFromMove: bo.passwordFromMove } : {}) }));
   return { config, secrets, sources, ignored: budget.ignored, files: { config: configFile, overrides: join(dataDir, 'overrides.json') }, env, fileSettings, overrides, envLayer: layer, envNames, ...(layer.file ? { envFile: layer.file } : {}), order: norm.order, addedCameras: added, legacyCamera: norm.legacy, commandPolicyBase: norm.policy, tokensOptional: norm.tokensOptional };
 }
 
