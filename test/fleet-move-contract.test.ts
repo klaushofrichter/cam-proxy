@@ -141,6 +141,24 @@ describe('the move commands against the vendored contract', () => {
     expect(fixture('invalid-event-move-phase-keepdays-low').$expect).toBeTruthy();
   });
 
+  it('plan D shapes validate on the strict schemas: offer result kinds, move.answer kinds, a ptz plan, a ptz progress', () => {
+    const offer = strict('commands/move.offer.result');
+    const result = { accept: true, space: { needed: 0, available: 10, fits: true, perKind: {}, retentionProposal: null }, probeBps: 1, kinds: ['stills', 'clips', 'events', 'checks', 'archive', 'ptz'] };
+    expect(offer(result), why(offer)).toBe(true);
+    const a = argsOfFixture('valid-command-move-answer');
+    expect(ARGS_VALIDATORS['move.answer']({ ...a, kinds: result.kinds })).toMatchObject({ ok: true });
+    const answer = strict('commands/move.answer.args');
+    expect(answer({ ...a, kinds: result.kinds }), why(answer)).toBe(true);
+    const v = strict('event');
+    const base = fixture('valid-event-move-approve-ptz').message as { body: Record<string, unknown> };
+    const ev = (body: Record<string, unknown>) => ({ ...base, body: { proxyId: base.body.proxyId, connId: base.body.connId, ...body } });
+    const plan = { transfer: true, kinds: ['clips', 'ptz'], space: 'all', targetSettings: null, budgetS: 600, estimateS: 60 };
+    // The signature is not checked by the schema; the body shapes are.
+    expect(v(ev({ kind: 'move.approve', moveId: base.body.moveId, plan })), why(v)).toBe(true);
+    expect(v(ev({ kind: 'move.approve', moveId: base.body.moveId, plan: { ...plan, transfer: false, kinds: ['ptz'] } })), why(v)).toBe(true);
+    expect(v(ev({ kind: 'move.progress', moveId: base.body.moveId, chunks: [{ id: 'ptz:2026-10-30', state: 'verified' }], bytesDone: 0, bytesTotal: 0, rateBps: 0, etaS: 0 })), why(v)).toBe(true);
+  });
+
   it('the validators agree with the strict schemas on the fixtures and refuse their mutations', () => {
     for (const c of MOVE) {
       const a = argsOfFixture(`valid-command-${c.replace(/\./g, '-')}`);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { positionsText, autoWaitText, budgetDefault, movedText, refusalText, estimateText, failText, limitText, phaseText, planFrom, rejectText, sizeText, spaceOptions, statusLine, type MoveForm } from '../web/src/lib/moves';
 import type { MoveSummary, Space } from '../src/moves/types';
+import { leftoverAdvice } from '../web/src/lib/move-leftovers';
 
 const kind = (files: number, bytes: number) => ({ files, bytes, rows: 0, oldest: files ? 1_700_000_000_000 : null, newest: files ? 1_700_000_900_000 : null });
 const summary: MoveSummary = { stills: kind(10, 4 * 1024 ** 3), clips: kind(5, 2 * 1024 ** 3), events: kind(0, 0), checks: kind(0, 0), archive: kind(1, 1024 ** 3) };
@@ -113,5 +114,14 @@ describe('positionsText', () => {
     expect(positionsText({ count: 0, travel: 'none' })).toBe('');
     expect(positionsText(null)).toBe('');
     expect(positionsText(undefined)).toBe('');
+  });
+});
+
+describe('leftoverAdvice', () => {
+  it('config.json entry, env NAME, env NAME_FILE', () => {
+    expect(leftoverAdvice('cam4', 'config.json entry')).toBe('Delete cameras.cam4 from config.json, then restart the proxy.');
+    expect(leftoverAdvice('cam4', 'env CAMPROXY_CAMERA_PASSWORD_CAM4')).toBe("Remove CAMPROXY_CAMERA_PASSWORD_CAM4 from the proxy's environment (compose file or .env), then recreate the container (docker compose up -d). If this proxy already removed it from its .env (see the audit log), recreating is enough.");
+    expect(leftoverAdvice('cam4', 'env CAMPROXY_CAMERA_PASSWORD_CAM4_FILE')).toBe('Remove CAMPROXY_CAMERA_PASSWORD_CAM4_FILE and its secret from the compose file, then recreate the container (docker compose up -d).');
+    expect(leftoverAdvice('cam4', 'something else')).toBe('something else');
   });
 });

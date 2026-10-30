@@ -919,6 +919,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     }
     return { commands: status, tokens: tokenStore.counts(), configRevision: configRevision(loaded) };
   };
+  // What a camera that moved away left here that this proxy can't remove (plan D).
+  const moveLeftovers = new MoveLeftovers(running.server.dataDir);
   const camsAdmin = new CamsAdmin({
     settings: () => running.camsAdmin,
     dataDir: () => running.server.dataDir,
@@ -926,6 +928,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     cameraIds: () => cams.ids(),
     health: healthNow,
     profile: profileNow,
+    moveLeftovers: () => moveLeftovers.current(loaded),
     proxyInfo: () => ({
       startedAt,
       uptimeS: startedAt ? Math.round((Date.now() - startedAt) / 1000) : null,
@@ -1025,8 +1028,6 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     w.ftpWatch.note(f);
     return verifyFtp('camera-ftp-setup', { ftp: f }, { server: t.server, port: t.port, tls: t.tls, stream: t.stream });
   };
-  // What a camera that moved away left here that this proxy can't remove (plan D).
-  const moveLeftovers = new MoveLeftovers(running.server.dataDir);
   // The source side of a camera move (camera-move plan Task 7).
   const moveSource = new MoveSource({
     journal: moveJournal,
@@ -1176,6 +1177,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     },
     loaded: () => loaded,
     profile: profileNow,
+    moveLeftovers: () => moveLeftovers.current(loaded),
     setLoaded,
     running: () => running,
     catalog,
