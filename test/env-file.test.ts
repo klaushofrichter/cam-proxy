@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, it } from 'vitest';
-import { checkEnvPath, EnvFileError, readEnvValue, setEnvLine, writeEnvKey } from '../src/config/env-file';
+import { checkEnvPath, EnvFileError, readEnvValue, removeEnvKey, setEnvLine, withoutEnvKey, writeEnvKey } from '../src/config/env-file';
 
 const SECRETS = 'CAMPROXY_TOKENS=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nCAMPROXY_ADMIN_TOKEN="bbb # not a comment"\n';
 
@@ -174,5 +174,69 @@ describe('writeEnvKey', () => {
     expect(readFileSync(f, 'utf8')).toBe('CAMERA_HOST=a\n');
     expect(readdirSync(d)).toEqual(['.env']);
     expect(existsSync(join(d, '.env.tmp'))).toBe(false);
+  });
+});
+
+describe('withoutEnvKey', () => {
+  const K = 'CAMPROXY_CAMERA_PASSWORD_CAM4';
+  it.each<[string, string, string]>([
+    ['plain', `A=1\n${K}=secret\nB=2\n`, 'A=1\nB=2\n'],
+    ['export', `A=1\nexport ${K}=secret\nB=2\n`, 'A=1\nB=2\n'],
+    ['spaces and an inline comment', `A=1\n  ${K} = secret # note\nB=2\n`, 'A=1\nB=2\n'],
+    ['quoted', `A=1\n${K}="se cret # x"\n`, 'A=1\n'],
+    ['twice', `${K}=a\nA=1\n${K}=b\nB=2\n`, 'A=1\nB=2\n'],
+    ['CRLF', `A=1\r\n${K}=secret\r\nB=2\r\n`, 'A=1\r\nB=2\r\n'],
+    ['the last line without newline', `A=1\n${K}=secret`, 'A=1\n'],
+    ['a commented-out line stays', `# ${K}=old\n${K}=secret\n`, `# ${K}=old\n`],
+    ['a key that only starts the same stays', `${K}0=other\n${K}=secret\n`, `${K}0=other\n`],
+    ['not set', 'A=1\nB=2', 'A=1\nB=2'],
+  ])('removes every assignment, keeps every other byte: %s', (_n, before, after) => {
+    expect(withoutEnvKey(before, K)).toBe(after);
+  });
+});
+
+describe('removeEnvKey', () => {
+  const at = new Date(Date.UTC(2026, 9, 30, 9, 1, 2));
+  const K = 'CAMPROXY_CAMERA_PASSWORD_CAM4';
+  it('writes a backup and keeps the mode', () => {
+    const d = dir();
+    const f = join(d, '.env');
+    const before = `${SECRETS}${K}=test-only\nCAMERA_HOST=192.0.2.4\n`;
+    writeFileSync(f, before);
+    chmodSync(f, 0o640);
+    expect(removeEnvKey(f, K, at)).toEqual({ removed: 1, backup: '.env.bak-20261030-090102' });
+    expect(readFileSync(f, 'utf8')).toBe(`${SECRETS}CAMERA_HOST=192.0.2.4\n`);
+    expect(statSync(f).mode & 0o777).toBe(0o640);
+    expect(readFileSync(join(d, '.env.bak-20261030-090102'), 'utf8')).toBe(before);
+  });
+  it('a file without the key: null, no backup', () => {
+    const d = dir();
+    const f = join(d, '.env');
+    writeFileSync(f, `# ${K}=x\nA=1\n`);
+    expect(removeEnvKey(f, K, at)).toBeNull();
+    expect(readdirSync(d)).toEqual(['.env']);
+  });
+  it('not set / bad path / not writable -> EnvFileError with that code', () => {
+    const code = (fn: () => unknown) => {
+      try {
+        fn();
+      } catch (e) {
+        return e instanceof EnvFileError ? e.code : 'other';
+      }
+      return 'none';
+    };
+    expect(code(() => removeEnvKey('', K))).toBe('not_set');
+    expect(code(() => removeEnvKey('relative/.env', K))).toBe('bad_path');
+    if (process.getuid?.() === 0) return;
+    const d = dir();
+    const f = join(d, '.env');
+    writeFileSync(f, `${K}=x\n`);
+    chmodSync(d, 0o500);
+    try {
+      expect(code(() => removeEnvKey(f, K, at))).toBe('not_writable');
+    } finally {
+      chmodSync(d, 0o700);
+    }
+    expect(readFileSync(f, 'utf8')).toBe(`${K}=x\n`);
   });
 });
