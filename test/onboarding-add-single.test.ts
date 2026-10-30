@@ -13,6 +13,7 @@ import { startSim } from './helpers/sim';
 import { lastAudit } from './helpers/onboarding';
 import { OnboardingService } from '../src/onboarding/service';
 import { PasswordAttempts } from '../src/onboarding/attempts';
+import { RemoveLeftovers } from '../src/onboarding/remove-leftovers';
 
 // POST /control/cameras on a single-camera proxy (the Pi: config.json `camera`
 // + CAMERA_HOST; spec 2026-10-30-camera-onboarding-design §4.3).
@@ -116,6 +117,7 @@ describe('a move still open on the Pi', () => {
       trustFor: () => undefined, certState: () => null, audit: { write: (r: unknown) => (writes.push(r), null) }, attempts: new PasswordAttempts(),
       served: async () => (asked.push('served'), null), pinServed: () => { throw new Error('no pin'); }, statusInput: () => null, zone: () => null,
       moveOpen: (id) => id === MOVE, envFile: () => join(dir, '.env'),
+      positions: { count: () => 0, remove: () => 0 }, trust: { known: () => false, forget: () => undefined }, cameraFtp: { pointsHere: async () => false, off: async () => undefined }, removeLeftovers: new RemoveLeftovers(join(dir, 'data')),
     });
     const r = await s.add({ host: '192.0.2.10', protocol: 'http', password: 'p' }, { user: 'admin', requestedBy: 'token' });
     expect([r.status, 'error' in r && r.error]).toEqual([409, 'move_open']);

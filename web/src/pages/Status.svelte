@@ -92,7 +92,7 @@
       <!-- Until the proxy profile is set, or while it warns (cams-admin spec 2026-10-25-proxy-profile-design §0). -->
       <ProfileCard home />
       {#each activeMoves as m (m.id)}<MoveStatusCard move={m} name={$status.cameras?.find((c) => c.id === m.camera)?.camera.name ?? m.camera} />{/each}
-      {#if $status.moveLeftovers?.length}<MoveLeftoversCard leftovers={$status.moveLeftovers} />{/if}
+      {#if $status.moveLeftovers?.length || $status.removeLeftovers?.length}<MoveLeftoversCard leftovers={$status.moveLeftovers ?? []} removed={$status.removeLeftovers ?? []} />{/if}
       <div class="card" data-testid="card-camera">
         <h3>Camera</h3>
         <dl>

@@ -88,6 +88,9 @@ import { OnboardingService } from './onboarding/service';
 import { PasswordAttempts } from './onboarding/attempts';
 import { onboardingApi } from './api/onboarding-api';
 import { proxyZone } from './onboarding/zone';
+import { RemoveLeftovers } from './onboarding/remove-leftovers';
+import { listPositions } from './catalog/ptz-positions';
+import { readCameraFtp } from './clips/camera-ftp';
 import { profileWarnings } from './config/profile';
 import { verifyFtp } from './fleet/camera-commands';
 import { availableParallelism, loadavg } from 'os';
@@ -1190,6 +1193,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // The cams-admin card (spec 2026-10-06-cams-admin-phase1-design §9.2).
   app.use('/control', requireAccess('admin', access), camsAdminApi({ camsAdmin, audit, commands: { policy: commandPolicy, tokens: tokenStore, runner: commandRunner, config: configCommandDeps } }));
   // Camera onboarding (spec 2026-10-30-camera-onboarding-design §4).
+  const removeLeftovers = new RemoveLeftovers(running.server.dataDir);
   const onboarding = new OnboardingService({
     loaded: () => loaded,
     setLoaded,
@@ -1212,6 +1216,22 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       }
     },
     envFile: () => loaded.env.CAMPROXY_ENV_FILE || undefined,
+    positions: { count: (cam) => listPositions(catalog, cam).length, remove: (cam) => deleteCameraPositions(catalog, cam) },
+    trust: {
+      known: (cam) => (certs ? certs.state(cam).mode !== 'none' || certs.pin(cam) !== null || (existsSync(join(tlsDir, 'cameras')) && readdirSync(join(tlsDir, 'cameras')).some((f) => f.startsWith(`${cam}.`))) : false),
+      forget: (cam, who) => certs?.forget(cam, who, 'removed'),
+    },
+    cameraFtp: {
+      pointsHere: async (cam) => {
+        const here = running.ftp.publicHost;
+        return !!here && (await readCameraFtp(worker(cam).client)).server === here;
+      },
+      off: async (cam) => {
+        const w = worker(cam);
+        w.ftpWatch.note(await cameraFtpOff(w.client, ftpTargetFor(cam)()));
+      },
+    },
+    removeLeftovers,
     zone: () => (opts.hostZone ? proxyZone(running, opts.hostZone.tz ? { TZ: opts.hostZone.tz } : {}, opts.hostZone.intl) : proxyZone(running)),
     statusInput: (cam) => {
       const w = cams.get(cam);
@@ -1249,6 +1269,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     loaded: () => loaded,
     profile: profileNow,
     moveLeftovers: () => moveLeftovers.current(loaded),
+    removeLeftovers: () => removeLeftovers.current(loaded),
     setLoaded,
     running: () => running,
     catalog,

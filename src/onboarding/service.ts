@@ -24,12 +24,14 @@ import { checkLogin } from './login-check';
 import { PASSWORD_RULE, validPassword } from './password-rule';
 import { FINGERPRINT, probeCamera, probeInput, probeServed, withPort, DEFAULT_PORTS, type ProbeInput } from './probe';
 import { applyOverrides, ConfigError, planOverrides, removeOverride, withCameraHost } from '../config/load';
+import { removeEnvKey } from '../config/env-file';
 import { CAMERA_HOST_NAMES } from '../config/env';
 import { configChanges } from '../config/changes';
 import { atCameraLimit } from '../config/profile';
 import { cameraIds } from '../config/cameras';
 import { CAMERA_ID } from '../config/schema';
 import { onboardingStatus, type OnboardingInput, type OnboardingStatus } from './status';
+import { removeLeftoverItems, type RemoveLeftovers } from './remove-leftovers';
 import type { ActionOutcome } from '../api/actions';
 
 export type Who = ActionWho;
@@ -56,6 +58,12 @@ export interface OnboardingDeps {
   // still open here (a journal record), and the env file CAMERA_HOST goes into.
   moveOpen?: (moveId: string) => boolean;
   envFile: () => string | undefined;
+  // Removing a camera (Task 9): its PTZ rows, its certificate trust (files and
+  // state), its camera's FTP upload when it points here, what is left.
+  positions: { count: (cam: string) => number; remove: (cam: string) => number };
+  trust: { known: (cam: string) => boolean; forget: (cam: string, who: Requester) => void };
+  cameraFtp: { pointsHere: (cam: string) => Promise<boolean>; off: (cam: string) => Promise<void> };
+  removeLeftovers: RemoveLeftovers;
   now?: () => number;
 }
 
@@ -376,5 +384,80 @@ export class OnboardingService {
   private placeholder(id: string): OnboardingStatus {
     const steps = Object.fromEntries(['reachable', 'login', 'trust', 'capabilities', 'stream', 'events', 'ftp', 'time', 'name', 'poe', 'profile'].map((n) => [n, { ok: null, detail: 'the camera is starting' }])) as OnboardingStatus['steps'];
     return { camera: id, ready: false, checkedAt: this.now(), steps, trust: { mode: 'none', fingerprint: null, served: null }, time: { clockOffsetMs: null, zone: this.d.zone(), cameraStdOffsetMinutes: null, cameraDst: null } };
+  }
+
+  // DELETE /control/cameras/:id (§4.3; local admin only): offboards a camera
+  // by id, also one already gone from config.json after a restart. Each step's
+  // result is in `removed` or `leftovers`; files follow retention.
+  async remove(id: string, who: Who): Promise<{ status: 200; removed: string[]; leftovers: string[] } | Refusal> {
+    if (!new RegExp(CAMERA_ID).test(id)) return { status: 400, error: 'invalid', detail: 'not a camera id' };
+    const l = this.d.loaded();
+    if (!l.legacyCamera && l.order.includes(id)) return { status: 409, error: 'config_json', detail: `cameras.${id} is defined in config.json: remove it there, restart the proxy, then call again to clean up` };
+    const own = cameraPasswordEnv(id);
+    const legacy = l.legacyCamera && l.order[0] === id;
+    const configured = l.addedCameras.includes(id) || (legacy && !!l.envLayer.cameraHost);
+    const known = configured || legacy || this.d.passwords.get(id) !== undefined || envFileSets(l, own) || this.d.trust.known(id) || this.d.positions.count(id) > 0 || removeLeftoverItems(l, id).length > 0;
+    if (!known) return { status: 404, error: 'not_found' };
+    const removed: string[] = [];
+    const leftovers: string[] = [];
+    // The camera's FTP upload, while it still runs here.
+    if (this.d.cameras.get(id)) {
+      try {
+        if (await this.d.cameraFtp.pointsHere(id)) {
+          await this.d.cameraFtp.off(id);
+          removed.push('camera FTP upload off');
+        }
+      } catch {
+        leftovers.push('camera FTP upload not checked or not turned off (the camera did not answer)');
+      }
+    }
+    // The configuration: an added camera's node; on the Pi, CAMERA_HOST.
+    let next = l;
+    const before = l;
+    if (l.addedCameras.includes(id)) {
+      next = removeOverride(next, `cameras.${id}`);
+      removed.push('configuration');
+    } else if (legacy && l.envLayer.cameraHost) {
+      const key = l.envLayer.cameraHost.name;
+      let gone = false;
+      try {
+        const path = checkEnvPath(this.d.envFile());
+        gone = removeEnvKey(path, key) !== null;
+      } catch {
+        gone = false;
+      }
+      if (gone) {
+        next = withCameraHost(next, undefined);
+        removed.push(key);
+      } else leftovers.push(`env ${key}`);
+    }
+    if (next !== l) {
+      this.d.setLoaded(next);
+      this.auditConfig(who, before, next);
+      if (legacy && this.d.cameras.get(id)) await this.d.restartCamera(id);
+    }
+    // The password: the store, the managed env line.
+    if (this.d.passwords.get(id) !== undefined) {
+      this.d.passwords.delete(id);
+      removed.push('stored password');
+    }
+    const e = removePasswordLine(l, id);
+    if (e.outcome === 'removed') removed.push(`env ${own} line`);
+    else if (e.outcome === 'failed') leftovers.push(`env ${own} line (the env file could not be written: ${e.code})`);
+    // The certificate trust, the PTZ positions.
+    if (this.d.trust.known(id)) {
+      const mode = this.d.certState(id)?.mode;
+      this.d.trust.forget(id, this.requester(who));
+      removed.push(mode === 'pinned' ? 'certificate pin' : 'certificate trust');
+    }
+    this.servedCache.delete(id);
+    const n = this.d.positions.remove(id);
+    if (n > 0) removed.push(`PTZ positions (${n})`);
+    // What only a person can remove: kept and shown until it is gone.
+    const left = removeLeftoverItems(this.d.loaded(), id);
+    leftovers.push(...left);
+    if (left.length) this.d.removeLeftovers.add({ camera: id, at: this.now(), items: left });
+    this.d.audit.write({ action: 'camera-remove', category: ['configuration'], type: ['deletion'], outcome: 'success', ...whoRecord(who), camera: id, message: `Camera ${id} removed: ${removed.join(', ') || 'nothing to remove'}${leftovers.length ? `; left: ${leftovers.join(', ')}` : ''}`, details: { removed, leftovers, requestedBy: who.requestedBy, ...cmdOf(who) } });
+    return { status: 200, removed, leftovers };
   }
 }

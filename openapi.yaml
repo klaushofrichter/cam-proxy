@@ -964,7 +964,7 @@ paths:
         Admin token or admin session. Writes with the session cookie need
         `X-CamProxy-UI: 1`. A client token answers 403 `{"error":"admin_only"}`.
       responses:
-        '200': { description: '{ version, camera (incl. name (the camera''s name; the configured camera.name until the camera was read), nameSource (camera or config), webUiUrl, reboot {kind, requestedAt, confirmed, phase, offAt, endedAt, downSec} or null, poeSwitch {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state (on, off, elsewhere, server_differs, not_set_up, unknown), checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result (ok, offline, refused, auth, timeout, protocol, not_found), stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null, cache: {bytes, files, capBytes} (the host's one cache, every camera), camera: {bytes, files} (this camera's part)}, analytics: [provider state], analyticsUnmapped: top 20 unmapped objects [{mid, name, count, lastSeen}], health: the health summary, as GET /api/local/health, archive: as GET /api/archive/status, cameras: every camera''s block {id, camera, intake, stream, ftp, recordings} in config order (the top-level camera, intake, stream, ftp and recordings are the first camera''s) }' }
+        '200': { description: '{ version, camera (incl. name (the camera''s name; the configured camera.name until the camera was read), nameSource (camera or config), webUiUrl, reboot {kind, requestedAt, confirmed, phase, offAt, endedAt, downSec} or null, poeSwitch {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state (on, off, elsewhere, server_differs, not_set_up, unknown), checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result (ok, offline, refused, auth, timeout, protocol, not_found), stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null, cache: {bytes, files, capBytes} (the host's one cache, every camera), camera: {bytes, files} (this camera's part)}, analytics: [provider state], analyticsUnmapped: top 20 unmapped objects [{mid, name, count, lastSeen}], health: the health summary, as GET /api/local/health, archive: as GET /api/archive/status, cameras: every camera''s block {id, camera, intake, stream, ftp, recordings} in config order (the top-level camera, intake, stream, ftp and recordings are the first camera''s), moveLeftovers, removeLeftovers: [{camera, at, items}] (what removed cameras left that the proxy can''t remove) }' }
         '401': { description: not signed in }
         '403': { description: admin_only, or csrf }
   /control/cameras:
@@ -1034,6 +1034,27 @@ paths:
         '401': { description: not signed in }
         '404': { description: not_found (unknown camera, or not a camera action) }
         '503': { description: camera_restarting (Retry-After) }
+  /control/cameras/{id}:
+    delete:
+      summary: Remove (offboard) a camera and its credentials (local admin only) (spec 2026-10-30-camera-onboarding-design §4.3)
+      description: >
+        By id, also for a camera gone from config.json after a restart. Turns the camera's FTP upload off when it points
+        here (re-read), removes its configuration (an added camera's node in overrides.json; on a single-camera proxy
+        CAMERA_HOST in the env file: the camera stays idle, config.json is never changed), its stored password, its own
+        CAMPROXY_CAMERA_PASSWORD_<ID> line in the env file this proxy manages (and its backups), its certificate trust
+        (files and state) and its PTZ positions. Files follow retention. What it can't remove (a password in compose's
+        environment or a _FILE secret, a camera.host in config.json) is listed in leftovers and on GET /control/status
+        (removeLeftovers) until it is gone. A camera-remove audit record. A managed token or sign-in answers 403
+        local_admin_only.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: '{ removed: string[], leftovers: string[] }' }
+        '400': { description: invalid (not a camera id) }
+        '401': { description: not signed in }
+        '403': { description: admin_only, local_admin_only }
+        '404': { description: not_found (nothing known about that id) }
+        '409': { description: config_json (a config.json camera on a several-camera proxy: remove it there, restart, call again) }
   /control/cameras/{cam}/onboarding:
     get:
       summary: One camera's onboarding status (admin) (spec 2026-10-30-camera-onboarding-design §4.5)

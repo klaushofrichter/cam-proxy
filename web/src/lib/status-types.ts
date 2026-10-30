@@ -7,7 +7,7 @@ import type { CameraFtp, ClipsStall } from './ftp';
 import type { UiHealth } from './health';
 import type { UiArchive } from './archive';
 import type { CameraBlock } from './cameras';
-import type { MoveLeftover } from './move-leftovers';
+import type { MoveLeftover, RemoveLeftover } from './move-leftovers';
 
 export interface Status {
   version: string;
@@ -24,5 +24,6 @@ export interface Status {
   health?: UiHealth; // the health summary (spec 2026-10-03-health-summary-design)
   archive?: UiArchive; // spec 2026-10-05-archive-design §6
   moveLeftovers?: MoveLeftover[]; // plan D: what cameras that moved away left here; absent from an older proxy
+  removeLeftovers?: RemoveLeftover[]; // what removed cameras left here (onboarding §4.3); absent from an older proxy
   cameras?: CameraBlock[]; // every camera, config order (spec 2026-10-05-multi-camera-host-design §6.3); absent from an older proxy
 }

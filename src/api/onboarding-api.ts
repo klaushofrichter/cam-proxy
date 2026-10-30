@@ -37,6 +37,8 @@ export function onboardingApi(s: OnboardingService): express.Router {
   });
   // Add a camera (§4.3): local admin only, never a managed token or sign-in; 201 {onboarding}.
   r.post('/cameras', requireLocalAdmin(), async (req, res) => sendOutcome(res, await s.add(req.body, whoOf(req, res))));
+  // Remove (offboard) a camera by id (§4.3): local admin only; not :cam (it may run no more).
+  r.delete('/cameras/:id', requireLocalAdmin(), async (req, res) => sendOutcome(res, await s.remove(String(req.params.id), whoOf(req, res))));
   r.put('/cameras/:cam/password', async (req, res) => sendOutcome(res, await s.savePassword(String(req.params.cam), req.body?.password, whoOf(req, res))));
   return r;
 }
