@@ -278,6 +278,24 @@ describe('PtzPositions', () => {
     expect(cam.calls.filter((c) => c.startsWith('goto'))).toEqual([]);
   });
 
+  // Final review 3: go checks the camera fresh, under the positions lock.
+  it('goTo: a slot cleared on the camera within the cache window → 409, no ToPos', async () => {
+    const a = await svc.save('Gate');
+    await svc.list();
+    cam.clear(0);
+    await rejects(svc.goTo(a.id), 409, 'position_missing');
+    expect(cam.calls.filter((c) => c.startsWith('goto'))).toEqual([]);
+  });
+
+  it('goTo racing a delete: no ToPos to the cleared slot', async () => {
+    const a = await svc.save('Gate');
+    const del = svc.remove(a.id);
+    const go = svc.goTo(a.id);
+    await del;
+    await rejects(go, 404, 'not_found');
+    expect(cam.calls.filter((c) => c.startsWith('goto'))).toEqual([]);
+  });
+
   it('goTo offline → 503', async () => {
     const a = await svc.save('Gate');
     online = false;

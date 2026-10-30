@@ -77,7 +77,8 @@ export class PtzPositions {
     this.now = d.now ?? Date.now;
   }
 
-  // Changes one at a time (two viewers saving at once get distinct slots).
+  // Changes and go one at a time (two viewers saving at once get distinct
+  // slots; a go never races a delete).
   private lock<T>(fn: () => Promise<T>): Promise<T> {
     const p = this.chain.then(fn);
     this.chain = p.then(noop, noop);
@@ -232,11 +233,15 @@ export class PtzPositions {
     });
   }
 
-  // Through the lease: a running move is stopped first, and no Stop cuts the travel short.
-  async goTo(id: string): Promise<void> {
-    const row = this.row(id);
-    if (!this.d.online()) throw OFFLINE();
-    if (positionState(row, await this.slots(false)) === 'missing') throw new PtzError(409, 'position_missing');
-    await this.d.lease.then(() => this.d.ptz.goTo(row.slot));
+  // Under the lock and against a fresh read: never a travel to a slot that was
+  // just cleared or taken over. Through the lease: a running move is stopped
+  // first, and no Stop cuts the travel short.
+  goTo(id: string): Promise<void> {
+    return this.lock(async () => {
+      const row = this.row(id);
+      if (!this.d.online()) throw OFFLINE();
+      if (positionState(row, await this.slots(true)) === 'missing') throw new PtzError(409, 'position_missing');
+      await this.d.lease.then(() => this.d.ptz.goTo(row.slot));
+    });
   }
 }
