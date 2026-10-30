@@ -198,6 +198,51 @@ describe('MoveLease', () => {
     expect(lease.needsStop()).toBe(false);
   });
 
+  it('a zoom in the same direction while zooming sends nothing and re-arms the timer (at most 2000 ms)', async () => {
+    await lease.move(cmd('ZoomInc'), 400, { zoom: 'in' });
+    await lease.move(cmd('ZoomInc'), 60_000, { zoom: 'in' });
+    expect(log).toEqual(['ZoomInc']);
+    expect(timers.map((t) => [t.ms, t.cancelled])).toEqual([[400, true], [2000, false]]);
+    fire(2000);
+    await idle();
+    expect(log).toEqual(['ZoomInc', 'Stop']);
+  });
+
+  it('a zoom in the other direction while zooming: Stop, then the new zoom', async () => {
+    await lease.move(cmd('ZoomInc'), 400, { zoom: 'in' });
+    await lease.move(cmd('ZoomDec'), 400, { zoom: 'out' });
+    expect(log).toEqual(['ZoomInc', 'Stop', 'ZoomDec']);
+    fire(400);
+    await idle();
+    expect(log).toEqual(['ZoomInc', 'Stop', 'ZoomDec', 'Stop']);
+  });
+
+  it('a held zoom waits for its slow first ZoomInc and shares its failure', async () => {
+    const slow = deferred();
+    const a = lease.move(() => (log.push('ZoomInc'), slow.promise), 400, { zoom: 'in' });
+    let done = false;
+    const b = lease.move(cmd('ZoomInc'), 400, { zoom: 'in' }).then(() => void (done = true));
+    await idle();
+    expect(done).toBe(false);
+    slow.resolve();
+    await Promise.all([a, b]);
+    expect(log).toEqual(['ZoomInc']);
+  });
+
+  it('after a move, a timer Stop, stop() or then() the next zoom is sent again', async () => {
+    await lease.move(cmd('ZoomInc'), 400, { zoom: 'in' });
+    await lease.move(cmd('Left'), 400);
+    await lease.move(cmd('ZoomInc'), 400, { zoom: 'in' });
+    fire(400);
+    await idle();
+    await lease.move(cmd('ZoomInc'), 400, { zoom: 'in' });
+    await lease.stop();
+    await lease.move(cmd('ZoomInc'), 400, { zoom: 'in' });
+    await lease.then(cmd('ToPos'));
+    await lease.move(cmd('ZoomInc'), 400, { zoom: 'in' });
+    expect(log).toEqual(['ZoomInc', 'Left', 'ZoomInc', 'Stop', 'ZoomInc', 'Stop', 'ZoomInc', 'Stop', 'ToPos', 'ZoomInc']);
+  });
+
   it('the default scheduler stops by itself', async () => {
     const l: string[] = [];
     const real = new MoveLease({ stop: async () => void l.push('Stop') });
