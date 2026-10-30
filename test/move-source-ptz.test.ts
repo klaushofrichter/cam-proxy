@@ -7,7 +7,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, it } from 'vitest';
 import { openCatalog } from '../src/catalog/db';
-import { insertPosition } from '../src/catalog/ptz-positions';
+import { deleteCameraPositions, insertPosition } from '../src/catalog/ptz-positions';
 import type { Done } from '../src/fleet/commands';
 import { MoveJournal } from '../src/moves/journal';
 import { MoveSource, withPositions, type Asker, type SourceDeps } from '../src/moves/source';
@@ -38,7 +38,7 @@ function unit(o: { positions?: number; bounds?: MoveBounds | null } = {}) {
   j.save({ v: 1, id: M, role: 'source', camera: 'cam3', phase: 'opened', plan: null, peer: { proxyId: TARGET, name: '', ip: '192.0.2.20' }, requestId: RQ, bounds: o.bounds ?? null, summary, chunks: {}, bytesDone: 0, startedAt: 1 });
   const answerIt = (a: object) => s.handlers()['move.answer']({ v: 1, moveId: M, requestId: RQ, target: { proxyId: TARGET, name: 'Mini PC' }, accept: true, space: fits, estimateS: 540, ...a }, undefined as never) as Done;
   const approves = () => events.filter((e) => e.kind === 'move.approve');
-  return { s, j, events, writes, answerIt, approves };
+  return { s, j, events, writes, answerIt, approves, catalog };
 }
 
 describe('withPositions', () => {
@@ -95,6 +95,15 @@ describe('the source and the ptz kind', () => {
     expect(u.approves()).toHaveLength(2);
     expect(u.approves()[1].plan.kinds).toEqual(['clips', 'ptz']);
     expect(u.s.approve(M, { ...panel, budgetS: 900 }, ADMIN).status).toBe(409);
+  });
+
+  it('the same panel plan again after the positions went: re-sent as approved, not already_approved (final review 4)', () => {
+    const u = unit();
+    u.answerIt({ kinds: [...MOVE_KINDS] });
+    expect(u.s.approve(M, panel, ADMIN).status).toBe(202);
+    deleteCameraPositions(u.catalog, 'cam3');
+    expect(u.s.approve(M, panel, ADMIN).status).toBe(202);
+    expect(u.approves().map((e) => e.plan.kinds)).toEqual([['clips', 'ptz'], ['clips', 'ptz']]);
   });
 
   it('transfer false with positions: plan kinds [ptz], the manifest lists only the ptz chunk', () => {

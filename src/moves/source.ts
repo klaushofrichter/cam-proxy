@@ -387,7 +387,9 @@ export class MoveSource {
     const p = withP.plan;
     if (r.plan) {
       // Approved once: the same plan again only re-sends the event (cams-admin may have missed it).
-      if (!samePlan(r.plan, p)) return { status: 409, body: { error: 'already_approved' } };
+      // ptz is the source's addition, not the panel's: compared without it (the positions may have changed since).
+      const panelOnly = (x: MovePlan): MovePlan => ({ ...x, kinds: x.kinds.filter((k) => k !== 'ptz') });
+      if (!samePlan(panelOnly(r.plan), panelOnly(p))) return { status: 409, body: { error: 'already_approved' } };
       this.d.emit({ kind: 'move.approve', moveId: id, plan: r.plan });
       return { status: 202, body: {} };
     }
