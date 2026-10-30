@@ -157,7 +157,7 @@ export interface ControlDeps {
   cameraStatus: (id?: string) => CameraStatusBlock[];
   cameraCount: () => number;
   // Camera onboarding (spec 2026-10-30-camera-onboarding-design §4): the probe and the trust pin go through performAction.
-  onboarding: Pick<OnboardingService, 'probe' | 'pin'>;
+  onboarding: Pick<OnboardingService, 'probe' | 'pin' | 'setTime'>;
   // The overrides a cams-admin command set (plan P3 R3-14): GET /control/config's `by`.
   changeMarks?: () => ChangeMarks;
 }
@@ -271,7 +271,7 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
 // The camera actions (spec 2026-10-05-multi-camera-host-design §6.3): their
 // control-action record names the camera; on a proxy with several cameras
 // they need a camera (the routes of phase 2). The host actions work as before.
-export const CAMERA_ACTIONS = new Set(['camera-test', 'onvif-resubscribe', 'camera-ftp-setup', 'camera-ftp-test', 'camera-ftp-off', 'restart', 'camera-reboot', 'camera-powercycle', 'camera-poe-on', 'poe-switch-read', 'inventory', 'inventory-repair', 'inventory-cancel', 'camera-cert-push', 'camera-ntp-set', 'camera-trust-clear', 'camera-trust-pin']);
+export const CAMERA_ACTIONS = new Set(['camera-test', 'onvif-resubscribe', 'camera-ftp-setup', 'camera-ftp-test', 'camera-ftp-off', 'restart', 'camera-reboot', 'camera-powercycle', 'camera-poe-on', 'poe-switch-read', 'inventory', 'inventory-repair', 'inventory-cancel', 'camera-cert-push', 'camera-ntp-set', 'camera-trust-clear', 'camera-trust-pin', 'camera-time-set']);
 
 // What a camera action answers on a proxy with several cameras (spec §6.3; the camera routes are phase 2).
 const cameraRequired = (path: string) => `several cameras: name the camera, ${path} (or ?cam=<id>); GET /control/cameras lists them`;

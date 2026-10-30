@@ -1012,7 +1012,7 @@ paths:
         onvif-resubscribe, camera-ftp-setup, camera-ftp-test, camera-ftp-off,
         restart (that camera's side only; the old route without a camera restarts every camera side and applies pending restart settings), camera-reboot,
         camera-powercycle, camera-poe-on, poe-switch-read, inventory,
-        inventory-repair, inventory-cancel, camera-cert-push, camera-ntp-set, camera-trust-clear, camera-trust-pin) on the named camera, with the same
+        inventory-repair, inventory-cancel, camera-cert-push, camera-ntp-set, camera-trust-clear, camera-trust-pin, camera-time-set) on the named camera, with the same
         bodies and answers; inventory-cancel and inventory-repair answer 409
         camera_mismatch for another camera's run.
         camera-trust-pin ({"fingerprint":"SHA256:<64 hex>"}, spec 2026-10-30-camera-onboarding-design §4.4; admin, also a
@@ -1022,6 +1022,12 @@ paths:
         pinned); 400 invalid; 409 not_available (http, a tlsName camera, site-ca: camera-trust-clear first),
         fingerprint_mismatch {served} (nothing pinned); 503 camera_offline. A camera-trust audit record (op pin); with the
         other trust actions at most 6 a minute per client.
+        camera-time-set (spec 2026-10-30-camera-onboarding-design §4.7; admin; for cams-admin the disruptive
+        camera.action:camera-time-set, off by default): sets the camera's time zone and DST rule from time.zone (else
+        the host's zone when known) and its clock to now in that zone: GetTime, one whole-object SetTime, GetTime
+        again; then the NTP server as camera-ntp-set (with ntp.server). Answers { outcome (set, already, unsupported,
+        failed), zone, ntp (set, already, unsupported, failed, or null), detail? }; 409 zone_unknown, zone_unsupported
+        (a zone the camera's DST rule can't express); a camera-time audit record.
         The old route takes ?cam=<id> as well; without it
         it acts on the only camera, and answers 400 camera_required when there
         are several. Host actions have no camera route (404).

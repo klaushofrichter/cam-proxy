@@ -1236,6 +1236,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       },
     },
     removeLeftovers,
+    cameraClient: (cam) => cams.get(cam)?.client ?? null,
+    cameraNtp: (cam) => worker(cam).syncNtp(true),
     zone: () => (opts.hostZone ? proxyZone(running, opts.hostZone.tz ? { TZ: opts.hostZone.tz } : {}, opts.hostZone.intl) : proxyZone(running)),
     statusInput: (cam) => {
       const w = cams.get(cam);

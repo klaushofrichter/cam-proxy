@@ -7,7 +7,10 @@ import { readFileSync } from 'fs';
 import type { ActionWho } from '../api/actions';
 import type { AuditLog } from '../audit/audit-log';
 import { RefusalThrottle } from '../audit/throttle';
-import type { CameraTrust } from '../camera/client';
+import type { CameraTrust, ReolinkClient } from '../camera/client';
+import type { NtpOutcome } from '../cameras/ntp';
+import { setCameraZone } from '../camera/time-set';
+import { zoneRule } from './zone';
 import type { CameraPasswordStore } from '../config/camera-passwords';
 import { cameraConfig } from '../config/cameras';
 import type { Config } from '../config/defaults';
@@ -64,6 +67,9 @@ export interface OnboardingDeps {
   trust: { known: (cam: string) => boolean; forget: (cam: string, who: Requester) => void };
   cameraFtp: { pointsHere: (cam: string) => Promise<boolean>; off: (cam: string) => Promise<void> };
   removeLeftovers: RemoveLeftovers;
+  // camera-time-set (§4.7): the camera's running client, and its NTP sync (null without ntp.server).
+  cameraClient: (cam: string) => (Pick<ReolinkClient, 'command' | 'logout' | 'forgetTime'>) | null;
+  cameraNtp: (cam: string) => Promise<NtpOutcome | null>;
   now?: () => number;
 }
 
@@ -461,5 +467,40 @@ export class OnboardingService {
     if (left.length) this.d.removeLeftovers.add({ camera: id, at: this.now(), items: left });
     this.d.audit.write({ action: 'camera-remove', category: ['configuration'], type: ['deletion'], outcome: 'success', ...whoRecord(who), camera: id, message: `Camera ${id} removed: ${removed.join(', ') || 'nothing to remove'}${leftovers.length ? `; left: ${leftovers.join(', ')}` : ''}`, details: { removed, leftovers, requestedBy: who.requestedBy, ...cmdOf(who) } });
     return { status: 200, removed, leftovers };
+  }
+
+  // camera-time-set (§4.7): the camera's zone and DST rule from time.zone (or
+  // the host's known zone), one whole-object SetTime, re-read; then its NTP
+  // server as camera-ntp-set does. One camera-time record.
+  async setTime(cam: string, who: Who): Promise<ActionOutcome> {
+    const zone = this.d.zone();
+    if (zone === null) return { status: 409, error: 'zone_unknown', detail: "no time zone known: set time.zone (the host's zone is UTC or unknown)" };
+    const rule = zoneRule(zone, new Date(this.now()).getUTCFullYear());
+    if (rule === 'unsupported') return { status: 409, error: 'zone_unsupported', detail: `${zone}: the camera's DST rule can't express this zone` };
+    const client = this.d.cameraClient(cam);
+    if (!client) return { status: 404, error: 'not_found' };
+    const base = { action: 'camera-time', category: ['configuration'], type: ['change'], ...whoRecord(who), camera: cam };
+    let r: Awaited<ReturnType<typeof setCameraZone>>;
+    try {
+      r = await setCameraZone(client, rule, zone, () => this.now());
+    } catch (err) {
+      const code = (err as { code?: string }).code ?? 'camera_error';
+      this.d.audit.write({ ...base, outcome: 'failure', error: code, message: `Camera time zone ${zone} not set on ${cam}: ${code}`, details: { zone, requestedBy: who.requestedBy, ...cmdOf(who) } });
+      return { status: code === 'camera_offline' ? 503 : 502, error: code };
+    }
+    client.forgetTime();
+    let ntp: NtpOutcome | null = null;
+    try {
+      ntp = await this.d.cameraNtp(cam);
+    } catch {
+      ntp = 'failed';
+    }
+    const view = (v: unknown) => {
+      const x = v as { timeZone: number | null; dst: Record<string, number | null> | null } | undefined;
+      return x ? { stdOffsetMinutes: x.timeZone === null ? null : -Number(x.timeZone) / 60, dst: x.dst } : null;
+    };
+    const ok = r.outcome === 'set' || r.outcome === 'already';
+    this.d.audit.write({ ...base, outcome: ok ? 'success' : 'failure', ...(ok ? {} : { error: r.outcome }), message: `Camera time zone ${zone} on ${cam}: ${r.outcome}${r.detail ? ` (${r.detail})` : ''}`, details: { zone, outcome: r.outcome, before: view(r.before), after: view(r.after), ntp, requestedBy: who.requestedBy, ...cmdOf(who) } });
+    return { status: 200, json: { outcome: r.outcome, zone, ntp, ...(r.detail ? { detail: r.detail } : {}) } };
   }
 }

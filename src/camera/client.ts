@@ -366,6 +366,11 @@ export class ReolinkClient {
     await this.post('Logout', {}, t.value).catch(() => undefined);
   }
 
+  // Drops the cached zone (after camera-time-set): the next timeInfo() reads GetTime again.
+  forgetTime(): void {
+    this.time = null;
+  }
+
   async timeInfo(): Promise<TimeInfo> {
     if (this.time && this.now() - this.time.at < 3600_000) return this.time.value;
     let value: TimeInfo;
