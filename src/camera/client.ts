@@ -97,15 +97,23 @@ export class ReolinkClient {
   constructor(
     private readonly cam: CameraConfig,
     // `tlsCa` is a test seam: extra trusted CA certificates for cameraCertificate().
-    private readonly opts: { timeoutMs?: number; maxConcurrent?: number; now?: () => number; tlsCa?: string | Buffer } = {},
+    // `quiet`: a one-off session (the onboarding login check) that never warns about an unverified certificate.
+    private readonly opts: { timeoutMs?: number; maxConcurrent?: number; now?: () => number; tlsCa?: string | Buffer; quiet?: boolean } = {},
   ) {
     this.gate = new Semaphore(opts.maxConcurrent ?? 2);
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.target = { protocol: cam.protocol, host: cam.host, tlsServername: cam.tlsServername, ...(cam.tlsCa ? { ca: cam.tlsCa } : {}) };
     if (cam.tlsCa && cam.tlsServername) this.trust = { ca: cam.tlsCa, servername: cam.tlsServername };
-    if (cam.protocol === 'https' && !cam.tlsServername && !cam.tlsCa) {
-      logger.warn({ cameraId: cam.id }, 'camera TLS certificate is not verified (no tlsServername configured)');
-    }
+    this.warned = opts.quiet === true;
+  }
+
+  // The "not verified" warning: once, at the first request that goes out
+  // unverified (a trust set before it, a pin or the site CA, needs none).
+  private warned: boolean;
+  private warnUnverified(): void {
+    if (this.warned || this.cam.protocol !== 'https' || this.trusted()) return;
+    this.warned = true;
+    logger.warn({ cameraId: this.cam.id }, 'camera TLS certificate is not verified (no tlsServername configured)');
   }
 
   // Verify the camera against the site CA by this name from the next request
@@ -134,6 +142,7 @@ export class ReolinkClient {
     const path = `/cgi-bin/api.cgi?cmd=${encodeURIComponent(cmd)}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
     const body = JSON.stringify([{ cmd, action: 0, param }]);
     if (this.refusal) throw new CameraError('camera_error', `no trusted certificate for this camera: ${this.refusal}`);
+    this.warnUnverified();
     return this.gate.run(async () => {
       let res: IncomingMessage;
       try {
@@ -304,6 +313,7 @@ export class ReolinkClient {
   // holding can't be re-acquired - that deadlocked permanently.
   private async snapshotAttempt(token: string): Promise<{ ok: true; body: Buffer } | { ok: false }> {
     if (this.refusal) throw new CameraError('camera_error', `no trusted certificate for this camera: ${this.refusal}`);
+    this.warnUnverified();
     return this.gate.run(async () => {
       const path = `/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=${randomBytes(6).toString('hex')}&token=${encodeURIComponent(token)}`;
       let res: IncomingMessage;
