@@ -20,6 +20,19 @@ components:
         envName: { type: string, description: 'the variable that sets it (source env only)' }
         authOk: { type: [boolean, 'null'], description: 'true while the camera answers, false when it refused the login, null when not known (offline, not checked yet)' }
         checkedAt: { type: [integer, 'null'], description: 'when the camera was last checked' }
+    OnboardingStatus:
+      description: 'One camera''s onboarding status (spec 2026-10-30-camera-onboarding-design §4.5). Never a secret.'
+      type: object
+      required: [camera, ready, checkedAt, steps, trust, time]
+      properties:
+        camera: { type: string }
+        ready: { type: boolean, description: 'every required step (reachable, login, trust, capabilities, stream, events) ok' }
+        checkedAt: { type: integer }
+        steps:
+          description: 'reachable, login, trust, capabilities, stream, events, ftp, time, name, poe, profile (in that order), each { ok: true | false | null (not known yet), detail (at most 200 characters), action? (what fixes it: password, camera-trust-pin, camera-ftp-setup, camera-time-set, camera-ntp-set) }. FTP or stills off by choice is ok with detail off; an http camera''s trust is never ok (plain http).'
+          type: object
+        trust: { type: object, description: '{ mode (site-ca, pinned, public, none), fingerprint (the trusted one) | null, served (what the camera served when last measured, at most once a minute) | null }' }
+        time: { type: object, description: '{ clockOffsetMs | null, zone (time.zone, else the host''s known zone) | null, cameraStdOffsetMinutes | null, cameraDst | null }' }
     Capabilities:
       description: 'What a camera can do (spec 2026-10-30-ptz-capabilities-design §4); null while the camera was never read. Clients use it only when the item''s features list ptz.'
       type: [object, 'null']
@@ -1001,6 +1014,24 @@ paths:
         '401': { description: not signed in }
         '404': { description: not_found (unknown camera, or not a camera action) }
         '503': { description: camera_restarting (Retry-After) }
+  /control/cameras/{cam}/onboarding:
+    get:
+      summary: One camera's onboarding status (admin) (spec 2026-10-30-camera-onboarding-design §4.5)
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: OnboardingStatus }
+        '401': { description: not signed in }
+        '403': { description: admin_only }
+        '404': { description: not_found }
+        '503': { description: camera_restarting (Retry-After) }
+  /control/onboarding:
+    get:
+      summary: Every camera's onboarding status, config order (admin)
+      responses:
+        '200': { description: '{ cameras: OnboardingStatus[] }' }
+        '401': { description: not signed in }
+        '403': { description: admin_only }
   /control/cameras/{cam}/password:
     put:
       summary: Save the camera's password on this proxy, checked with the camera first (admin; also managed admin) (spec 2026-10-30-camera-onboarding-design §4.1)

@@ -12,6 +12,7 @@ import { EnvSettingError, readEnvLayer, type EnvLayer } from './env';
 import { adminUrlProblem } from '../fleet/protocol';
 import { jcs } from '../fleet/jcs';
 import { validateAllowList } from '../fleet/policy';
+import { knownZone } from '../onboarding/zone';
 
 export { ConfigError } from './load-error';
 import { ConfigError } from './load-error';
@@ -113,6 +114,8 @@ function asConfigError<T>(fn: () => T): T {
 }
 
 function crossCheck(c: Config): void {
+  // An IANA zone the runtime knows (spec 2026-10-30-camera-onboarding-design §4.7).
+  if (c.time?.zone !== undefined && !knownZone(c.time.zone)) throw new ConfigError(`time.zone: ${c.time.zone} is not a time zone this proxy knows (an IANA name, e.g. Europe/Berlin)`);
   const [cols, rows] = c.previews.grid.split('x').map(Number);
   for (const id of c.cameraOrder) {
     const iv = cameraConfig(c, id)!.stills.intervalS;

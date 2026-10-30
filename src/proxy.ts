@@ -87,6 +87,8 @@ import { credentialsOf, passwordSource } from './onboarding/credentials';
 import { OnboardingService } from './onboarding/service';
 import { PasswordAttempts } from './onboarding/attempts';
 import { onboardingApi } from './api/onboarding-api';
+import { proxyZone } from './onboarding/zone';
+import { profileWarnings } from './config/profile';
 import { verifyFtp } from './fleet/camera-commands';
 import { availableParallelism, loadavg } from 'os';
 import { CommandRunner, type Handler } from './fleet/commands';
@@ -176,6 +178,8 @@ export interface ProxyOptions {
   camsAdmin?: { timing?: Partial<Timing>; replaySlackMs?: number; recheckMs?: number };
   // A camera move's switch-over retries on the target (tests shorten them).
   moves?: { attempts?: number; retryMs?: number; retryCapMs?: number; notReadyMs?: number };
+  // The host's zone as the proxy reads it: TZ and what Intl reports (tests pin both: a UTC host has no known zone).
+  hostZone?: { tz?: string; intl: () => string };
 }
 
 export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
@@ -1199,6 +1203,28 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     attempts: new PasswordAttempts(),
     served: servedOf,
     pinServed: (cam, sv, who) => ensureCerts().pinServed(cam, sv, who),
+    zone: () => (opts.hostZone ? proxyZone(running, opts.hostZone.tz ? { TZ: opts.hostZone.tz } : {}, opts.hostZone.intl) : proxyZone(running)),
+    statusInput: (cam) => {
+      const w = cams.get(cam);
+      if (!w) return null;
+      const c = w.cam();
+      const ftp = ftpStatusOf(w);
+      return {
+        camera: cam,
+        protocol: c.protocol,
+        state: w.status.state(),
+        credentials: credentialsOf(passwordSource(loaded, cam), w.status.state()),
+        cert: c.protocol === 'https' ? (c.tlsName ? { ...certStateOf(cam), mode: 'public' as const, servername: c.tlsName } : certStateOf(cam)) : null,
+        capabilities: w.capabilities(),
+        stills: { enabled: c.stills.enabled, up: w.streamStatus().up },
+        intake: w.intake.state(),
+        ftp: { enabled: c.ftp.enabled, view: ftp.camera, lastUpload: ftp.lastUpload },
+        timeInfo: w.timeInfo(),
+        name: { name: w.name(), nameSource: w.nameSource() },
+        poePort: w.poeSwitch.notConfigured() === null && c.poeSwitch.port ? c.poeSwitch.port : null,
+        profile: profileWarnings(running),
+      };
+    },
   });
   const controlDeps: ControlDeps = {
     onboarding,

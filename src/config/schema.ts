@@ -251,6 +251,10 @@ export const SETTINGS: Node = {
   ntp: {
     server: unset({ type: 'string', pattern: '^[A-Za-z0-9.-]{1,253}$', optional: true, doc: "the NTP server the proxy sets on its cameras (the host's camera-side address)" }, "the cameras' NTP setting is left alone"),
   },
+  // Spec 2026-10-30-camera-onboarding-design §4.7: the zone the cameras run in (local only).
+  time: {
+    zone: unset({ type: 'string', pattern: '^[A-Za-z][A-Za-z0-9_+/-]{0,63}$', optional: true, doc: 'the IANA time zone of the cameras (e.g. Europe/Berlin); the onboarding status compares each camera with it, camera-time-set sets it' }, "the host's zone when it is known (TZ, or a zone other than UTC), else unknown"),
+  },
   // cams-admin (spec 2026-10-06-cams-admin-phase1-design §9.2): the outbound
   // status client; unset url = off (the default). Applies at once (restarts
   // the client only). camsAdmin.allowCommands and camsAdmin.commandsPaused are

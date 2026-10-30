@@ -28,6 +28,13 @@ export function onboardingApi(s: OnboardingService): express.Router {
   const r = express.Router();
   r.param('cam', cameraParam(s.d.cameras, 'admin'));
   // Write-only: 200 {credentials}; the value is never returned.
+  // The onboarding status (§4.5): one camera's, or every camera's in config order.
+  r.get('/onboarding', async (_req, res) => void res.json({ cameras: await s.status() }));
+  r.get('/cameras/:cam/onboarding', async (req, res) => {
+    const [one] = await s.status(String(req.params.cam));
+    if (!one) return void res.status(404).json({ error: 'not_found' });
+    res.json(one);
+  });
   r.put('/cameras/:cam/password', async (req, res) => sendOutcome(res, await s.savePassword(String(req.params.cam), req.body?.password, whoOf(req, res))));
   return r;
 }

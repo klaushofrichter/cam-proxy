@@ -23,6 +23,7 @@ import { passwordSource, type Credentials } from './credentials';
 import { checkLogin } from './login-check';
 import { PASSWORD_RULE, validPassword } from './password-rule';
 import { FINGERPRINT, probeCamera, probeInput } from './probe';
+import { onboardingStatus, type OnboardingInput, type OnboardingStatus } from './status';
 import type { ActionOutcome } from '../api/actions';
 
 export type Who = ActionWho;
@@ -42,8 +43,14 @@ export interface OnboardingDeps {
   // admin's pin of it (CameraCerts.pinServed; made on first use without a site CA).
   served: (cam: string) => Promise<Served | null>;
   pinServed: (cam: string, s: Served, who: Requester) => CertState;
+  // The onboarding status' input from the camera's worker (null: not running here), and the proxy's zone.
+  statusInput: (cam: string) => Omit<OnboardingInput, 'served' | 'zone' | 'now'> | null;
+  zone: () => string | null;
   now?: () => number;
 }
+
+// The served certificate is measured at most this often per camera (the heartbeat only reads the cache).
+export const SERVED_CACHE_MS = 60_000;
 
 export type Refusal = { status: number; error: string; detail?: string; retryAfterS?: number; extra?: Record<string, unknown> };
 
@@ -64,6 +71,8 @@ function envFileSets(l: Loaded, key: string): boolean {
 export class OnboardingService {
   // A rate-limited refusal: one record per address and window.
   private readonly limited = new RefusalThrottle(PASSWORD_WINDOW_MS);
+  // The fingerprint each https camera served when last measured.
+  private readonly servedCache = new Map<string, { at: number; fingerprint: string | null }>();
   constructor(readonly d: OnboardingDeps) {}
 
   private now(): number {
@@ -162,6 +171,40 @@ export class OnboardingService {
       this.d.audit.write({ action: 'camera-trust', category: ['configuration'], type: ['change'], outcome: 'failure', error: 'fingerprint_mismatch', ...whoRecord(who), camera: cam, message: `Camera trust ${cam}: pin refused, the camera serves ${served.fingerprint}, not ${fingerprint}`, details: { op: 'pin', fingerprint, served: served.fingerprint, requestedBy: who.requestedBy, ...cmdOf(who) } });
       return { status: 409, error: 'fingerprint_mismatch', detail: 'the camera serves another certificate than the one confirmed', extra: { served: served.fingerprint } };
     }
+    this.servedCache.set(cam, { at: this.now(), fingerprint: served.fingerprint });
     return { status: 200, json: this.d.pinServed(cam, served, requester) };
+  }
+
+  // GET /control/onboarding, GET /control/cameras/:cam/onboarding (§4.5): the
+  // served certificate of an https camera measured at most once a minute.
+  async status(cam?: string): Promise<OnboardingStatus[]> {
+    const ids = cam === undefined ? this.d.cameras.ids() : [cam];
+    await Promise.all(ids.map((id) => this.measureServed(id)));
+    return this.statusNow(cam);
+  }
+
+  // The same from the cache only: no camera connection (the heartbeat).
+  statusNow(cam?: string): OnboardingStatus[] {
+    const ids = cam === undefined ? this.d.cameras.ids() : [cam];
+    const zone = this.d.zone();
+    const now = this.now();
+    return ids.flatMap((id) => {
+      const i = this.d.statusInput(id);
+      return i ? [onboardingStatus({ ...i, served: i.protocol === 'https' ? (this.servedCache.get(id)?.fingerprint ?? null) : null, zone, now })] : [];
+    });
+  }
+
+  private async measureServed(id: string): Promise<void> {
+    const c = cameraConfig(this.d.running(), id);
+    if (!c || c.protocol !== 'https') return void this.servedCache.delete(id);
+    const hit = this.servedCache.get(id);
+    if (hit && this.now() - hit.at < SERVED_CACHE_MS) return;
+    const s = await this.d.served(id);
+    this.servedCache.set(id, { at: this.now(), fingerprint: s?.fingerprint ?? null });
+  }
+
+  // A pin changes what the status compares with: measured again at the next read.
+  forgetServed(id: string): void {
+    this.servedCache.delete(id);
   }
 }
