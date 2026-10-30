@@ -313,6 +313,20 @@ the new form:
   /control/config/cameras.<id>`; its files stay until retention removes them).
   A camera in config.json is changed there. `GET /control/cameras` says where
   each camera is defined (`source`: `config` or `added`).
+- **Onboarding a camera** (spec
+  `docs/superpowers/specs/2026-10-30-camera-onboarding-design.md`), API only,
+  no file edits, no restart, also on the Pi:
+  `POST /control/actions/camera-probe` (ports and the certificate it serves;
+  read-only), `POST /control/cameras` (add it with its password and that
+  certificate; local admin only; refused at `profile.cameras`),
+  `PUT /control/cameras/<id>/password` (write-only, checked with the camera),
+  `POST /control/cameras/<id>/actions/camera-trust-pin` (trust its certificate
+  without a site CA), `POST /control/cameras/<id>/actions/camera-time-set`
+  (its zone and DST rule from `time.zone`), `GET /control/onboarding` and
+  `GET /control/cameras/<id>/onboarding` (each step, why, and the fix), and
+  `DELETE /control/cameras/<id>` (offboard, with what is left over). At most 5
+  password tries per camera in 10 minutes; a camera password is never logged,
+  audited or returned.
 - **Latest stills:** `GET /api/cameras/<id>/stills/latest.jpg` and
   `…/previews/latest.jpg` serve the newest still and tile from memory, with
   `ETag: "<id>-<ts>"`, `X-Still-Ts` and `Cache-Control: no-cache`; a poll with

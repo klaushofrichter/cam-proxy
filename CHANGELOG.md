@@ -11,8 +11,9 @@
   - `GET /control/onboarding` and `GET /control/cameras/{cam}/onboarding`: one status per camera with each step (reachable, login, trust, capabilities, stream, events, FTP, time, name, PoE, profile), why it isn't done and what fixes it. A camera over plain http is never "ready".
   - The camera views (`GET /control/cameras`, `GET /api/cameras`) say where a camera's password comes from and whether it works (`credentials`), never the password.
   - New setting `time.zone` (local only): the cameras' time zone, compared in the onboarding status; without it the host's zone when known.
+  - `POST /control/cameras/{cam}/actions/camera-time-set` and the Settings page's "Set camera time" set a camera's time zone and DST rule from `time.zone` (else the host's zone), its clock, and its NTP server when `ntp.server` is set.
   - Admin page: "Add a camera" checks the camera, shows its certificate to confirm, and adds it with its password (Find camera's "Add this camera" fills in the address); the Status page has an Onboarding card per camera with "Camera password" and "Trust this camera's certificate" (both also open to a cams-admin sign-in).
-  - cams-admin can read each camera's onboarding status (`camera.onboarding.get`, on by default; switch it off on the cams-admin page) and the heartbeat carries each camera's ready flag and missing steps. `camera.action:camera-time-set` is known (off by default) for the time-zone setting that follows. Needs cams-admin 2026.10.30.3 or later.
+  - cams-admin can read each camera's onboarding status (`camera.onboarding.get`, on by default; switch it off on the cams-admin page) and the heartbeat carries each camera's ready flag and missing steps. cams-admin can also set a camera's time zone (`camera.action:camera-time-set`, off by default). Needs cams-admin 2026.10.30.3 or later.
 
 ## v2026.10.30.2
 
