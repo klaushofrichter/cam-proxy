@@ -17,7 +17,8 @@ const setDevNameCalls = () => sim.sim.engine.counters.setCalls.filter((c) => c =
 // The next SetDevName fails with this rspCode (a refused write leaves the old name).
 const refuseNext = (rspCode: number) => sim.sim.engine.faults.set({ name: 'settings.fail', cmds: ['SetDevName'], rspCode, count: 1 });
 const addr = () => sim.camera.host;
-const cameraMessages = () => p.proxy.log.since(0, { types: ['camera'] }, 100).map((m) => ({ cam: m.cam, ...m.data }));
+// Name and address messages; the capabilities message (PTZ spec §4) is told on its own.
+const cameraMessages = () => p.proxy.log.since(0, { types: ['camera'] }, 100).filter((m) => !('capabilities' in m.data)).map((m) => ({ cam: m.cam, ...m.data }));
 const auditOf = async (action: string) => (await request(p.base).get(`/control/audit?action=${action}&after=&limit=50`).set(admin())).text.split('\n').filter(Boolean).map((l) => JSON.parse(l));
 
 beforeAll(async () => {
@@ -83,8 +84,10 @@ describe('reading the name', () => {
   it('the default stream (no types) includes camera messages, and a resume replays them', async () => {
     const sse = sseConnect(`${p.base}/api/stream?since=0`, auth(CLIENT_TOKEN));
     try {
-      await sse.until(() => sse.events.filter((e) => e.event === 'camera').length >= 3);
-      expect(sse.events.filter((e) => e.event === 'camera').map((e) => e.data)).toEqual([{ cam: 'cam1', address: addr() }, { cam: 'cam1', name: 'Den', address: addr() }, { cam: 'cam1', name: 'Backyard Left', address: addr() }]);
+      const named = () => sse.events.filter((e) => e.event === 'camera' && !('capabilities' in (e.data as object)));
+      await sse.until(() => named().length >= 3);
+      expect(sse.events.some((e) => e.event === 'camera' && 'capabilities' in (e.data as object))).toBe(true);
+      expect(named().map((e) => e.data)).toEqual([{ cam: 'cam1', address: addr() }, { cam: 'cam1', name: 'Den', address: addr() }, { cam: 'cam1', name: 'Backyard Left', address: addr() }]);
     } finally {
       sse.close();
     }

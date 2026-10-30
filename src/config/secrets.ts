@@ -35,7 +35,10 @@ export function cameraPassword(s: Secrets, id: string): string {
 // target's offer check and its secrets step validate the camera node before
 // the password is there): their missing password is not an error. Nothing is
 // put in its place; such a result is for validation only, never for a worker.
-export function loadSecrets(env: NodeJS.ProcessEnv, ftpEnabled: boolean, cameraIds: string[] = [], o: { tokensOptional?: boolean; dataDir?: string; passwordFromMove?: readonly string[] } = {}): Secrets {
+// moved: cameras that moved away (hidden, `cameras.<id>.moved`): they run
+// nothing here, and the move's cleanup removed their password, so none is
+// required for them (a restart after the move must not fail).
+export function loadSecrets(env: NodeJS.ProcessEnv, ftpEnabled: boolean, cameraIds: string[] = [], o: { tokensOptional?: boolean; dataDir?: string; passwordFromMove?: readonly string[]; moved?: readonly string[] } = {}): Secrets {
   const tokensRaw = read(env, 'CAMPROXY_TOKENS');
   const tokens = (tokensRaw ?? '').split(',').map((t) => t.trim()).filter(Boolean);
   if (!tokens.length && !(o.tokensOptional && !tokensRaw)) throw new SettingError('CAMPROXY_TOKENS: required');
@@ -62,7 +65,7 @@ export function loadSecrets(env: NodeJS.ProcessEnv, ftpEnabled: boolean, cameraI
     if (own) cameraPasswords[id] = own;
   }
   const cameraPassword = read(env, 'CAMPROXY_CAMERA_PASSWORD') ?? '';
-  const without = cameraIds.find((id) => !cameraPasswords[id] && !o.passwordFromMove?.includes(id));
+  const without = cameraIds.find((id) => !cameraPasswords[id] && !o.passwordFromMove?.includes(id) && !o.moved?.includes(id));
   if (!cameraPassword && (without !== undefined || !cameraIds.length)) {
     throw new SettingError(without !== undefined ? `CAMPROXY_CAMERA_PASSWORD: required (${without} has no ${cameraPasswordEnv(without)})` : 'CAMPROXY_CAMERA_PASSWORD: required');
   }

@@ -1,6 +1,7 @@
 import type { HealthSummary } from '../health/summary';
 import { buildHeartbeat, type HeartbeatProxyInfo } from './heartbeat';
 import type { ProfileReport } from '../health/profile';
+import type { MoveLeftover } from '../moves/leftovers';
 import type { AdminKeyFile } from './keyfile';
 import { buildEnvelope, fingerprint, parseEnvelope, readCapped, sign, signedText, signEnvelope, verify, type Envelope } from './protocol';
 import { SeenIds } from './command-check';
@@ -75,6 +76,8 @@ export interface ClientDeps {
   proxyInfo: () => HeartbeatProxyInfo;
   // The proxy profile report (cams-admin spec 2026-10-25-proxy-profile-design §2); none = not sent.
   profile?: () => ProfileReport | null;
+  // What cameras that moved away left here (plan D); none = not sent.
+  moveLeftovers?: () => MoveLeftover[];
   version: string;
   log: ClientLog;
   // Cheap, read every changeCheckMs: a change sends an early heartbeat (§8.5).
@@ -156,6 +159,15 @@ export class AdminClient {
     this.outbox = d.outbox ?? new EventOutbox(d.log);
     this.key = d.keyFile;
     this.fp = fingerprint(d.keyFile.publicKey);
+  }
+
+  // The move leftovers for a heartbeat: a read that fails is left out, never the heartbeat.
+  private leftoversNow(): MoveLeftover[] {
+    try {
+      return this.d.moveLeftovers?.() ?? [];
+    } catch {
+      return [];
+    }
   }
 
   // The profile report for a heartbeat: one that fails is left out, never the heartbeat.
@@ -477,7 +489,7 @@ export class AdminClient {
         const mono = this.d.monotonic ?? (() => performance.now());
         const at = mono();
         this.conn = { connId, serverNow: () => serverTime + (mono() - at), seen: new SeenIds() };
-        this.trySend(ws, 'hello', { proxyId: k.proxyId, keyId: k.keyId, connId, nonce, ts, version: this.d.version.slice(0, 64), capabilities: this.d.commands && this.d.commands.status().enabled ? ['status', 'commands'] : ['status'] }, { sig: sign(k.privateKey, signedText.hello(connId, nonce, k.proxyId, k.keyId, ts)) });
+        this.trySend(ws, 'hello', { proxyId: k.proxyId, keyId: k.keyId, connId, nonce, ts, version: this.d.version.slice(0, 64), capabilities: this.d.commands && this.d.commands.status().enabled ? ['status', 'commands', 'move-ptz'] : ['status', 'move-ptz'] }, { sig: sign(k.privateKey, signedText.hello(connId, nonce, k.proxyId, k.keyId, ts)) });
         return;
       }
       case 'welcome': {
@@ -637,7 +649,7 @@ export class AdminClient {
         this.unacked.add(`skipped-${Date.now()}`);
         this.d.log.debug({ buffered: ws.bufferedAmount }, 'admin_heartbeat_skipped');
       } else {
-        const hb = buildHeartbeat(summary, this.d.proxyInfo(), undefined, this.profileNow());
+        const hb = buildHeartbeat(summary, this.d.proxyInfo(), undefined, this.profileNow(), this.leftoversNow());
         this.truncated = hb.truncated;
         const id = this.trySend(ws, 'heartbeat', hb.body);
         if (id) {

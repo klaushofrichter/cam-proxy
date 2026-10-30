@@ -70,7 +70,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: 
     // The newest still in memory (spec 2026-10-05-multi-camera-host-design §6.4), for an overview grid.
     const f = w.latestFrame();
     const latestStill = f ? { ts: f.ts, ...latestUrls(w.id) } : null;
-    return { id: w.id, name: w.name(), online: w.status.state().online, lastEventTs: lastLiveEventTs(d.catalog, w.id), stream, publicUrl: d.config().server.publicUrl ?? null, address: w.cam().host, error: w.error(), features: [...FEATURES], latestStill, tls: tlsOf(w) };
+    return { id: w.id, name: w.name(), online: w.status.state().online, lastEventTs: lastLiveEventTs(d.catalog, w.id), stream, publicUrl: d.config().server.publicUrl ?? null, address: w.cam().host, error: w.error(), features: [...FEATURES], capabilities: w.capabilities(), latestStill, tls: tlsOf(w) };
   };
   // The interface cams consumes (the cams P5 plan): mode, servername, the served
   // leaf's SHA256: fingerprint, notAfter, lastPush. Never a key.

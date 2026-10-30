@@ -186,4 +186,22 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE analytics_usage_v9 RENAME TO analytics_usage;
   CREATE INDEX stream_log_cam_ts ON stream_log (cam, ts);
   `,
+  // 10: saved PTZ positions (spec 2026-10-30-ptz-capabilities-design §6): each
+  // in a camera preset slot; preset_name is the name written to the camera at
+  // the last save, so a slot holding another name is not ours (missing).
+  `
+  CREATE TABLE ptz_positions (
+    id TEXT PRIMARY KEY,
+    cam TEXT NOT NULL,
+    name TEXT NOT NULL,
+    sort_order INTEGER NOT NULL,
+    home INTEGER NOT NULL,
+    slot INTEGER NOT NULL,
+    preset_name TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE (cam, slot)
+  );
+  CREATE INDEX ptz_positions_cam ON ptz_positions (cam, sort_order);
+  `,
 ];

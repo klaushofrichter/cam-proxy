@@ -27,7 +27,7 @@ export interface ChunkPart {
   of?: string[];
 }
 
-const CHUNK = /^(stills|clips|events|checks|archive):\d{4}-\d{2}-\d{2}$/;
+const CHUNK = /^(stills|clips|events|checks|archive|ptz):\d{4}-\d{2}-\d{2}$/;
 
 export function chunkPartsDir(dataDir: string, moveId: string): string {
   if (!isMoveId(moveId)) throw new Error('invalid move id');
@@ -64,7 +64,7 @@ export function allChunkParts(dataDir: string, moveId: string): ChunkPart[] {
   }
   const out: ChunkPart[] = [];
   for (const n of names.sort()) {
-    const m = /^(stills|clips|events|checks|archive)_(\d{4}-\d{2}-\d{2})\.json$/.exec(n);
+    const m = /^(stills|clips|events|checks|archive|ptz)_(\d{4}-\d{2}-\d{2})\.json$/.exec(n);
     if (!m) continue;
     const p = readChunkPart(dataDir, moveId, `${m[1]}:${m[2]}`);
     if (p) out.push(p);

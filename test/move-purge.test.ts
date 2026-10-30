@@ -14,7 +14,7 @@ import { DEFAULTS } from '../src/config/defaults';
 import { keepListOf, outcomeOf, type ChunkKeep } from '../src/moves/check';
 import { listChunks } from '../src/moves/inventory';
 import type { MoveRecord } from '../src/moves/journal';
-import { MOVE_KINDS } from '../src/moves/types';
+import { FILE_KINDS } from '../src/moves/types';
 import { purgeExcept, type PurgeDeps } from '../src/moves/purge';
 import { Storage } from '../src/storage';
 import { StreamLog } from '../src/stream/log';
@@ -22,7 +22,7 @@ import { StreamLog } from '../src/stream/log';
 // purgeExcept with nothing to keep: every chunk listed and every Archive chunk reported copied as it is now.
 const NOTE = { moveId: 'mv_0123456789ABCDEFGHJK', to: { proxyId: 'prx_0123456789ABCDEFGHJK', name: 'new proxy' }, at: Date.UTC(2026, 9, 23) };
 function purgeAll(d: PurgeDeps, cam: string) {
-  const chunks = listChunks(d, cam, [...MOVE_KINDS]);
+  const chunks = listChunks(d, cam, [...FILE_KINDS]);
   return purgeExcept(d, cam, { keep: {}, listed: new Set(chunks.map((c) => c.id)), note: NOTE, copied: Object.fromEntries(chunks.filter((c) => c.kind === 'archive').map((c) => [c.id, { files: c.files, bytes: c.bytes, rows: c.rows }])) });
 }
 
@@ -78,7 +78,7 @@ describe('purgeExcept with nothing to keep', () => {
       expect(existsSync(join(f.dataDir, folder, 'cam4')), `${folder} cam4`).toBe(true);
     }
     // Five content kinds only (B49/X13); recordings are deleted but not counted.
-    expect(Object.keys(r.deleted).sort()).toEqual([...MOVE_KINDS].sort());
+    expect(Object.keys(r.deleted).sort()).toEqual([...FILE_KINDS].sort());
     expect(r.deleted).toEqual({
       stills: { files: 2, bytes: 30 },
       clips: { files: 2, bytes: 35 },
@@ -142,7 +142,7 @@ function moved() {
   clip('cam2', ts(20, 12), 'clips/cam2/2026/10/20/1200-1.mp4');
   archive('cam2', 20, ts(20));
   const deps: PurgeDeps = { catalog, dataDir, storage: { recount: vi.fn() }, archive: { store: new ArchiveStore({ dataDir, catalog }) } };
-  const chunks = listChunks(deps, 'cam1', [...MOVE_KINDS]);
+  const chunks = listChunks(deps, 'cam1', [...FILE_KINDS]);
   const listed = new Set(chunks.map((c) => c.id));
   const copied = Object.fromEntries(chunks.filter((c) => c.kind === 'archive').map((c) => [c.id, { files: c.files, bytes: c.bytes, rows: c.rows }]));
   const exists = (rel: string) => existsSync(join(dataDir, rel));

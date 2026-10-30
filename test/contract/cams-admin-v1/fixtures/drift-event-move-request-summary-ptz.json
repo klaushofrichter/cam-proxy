@@ -1,0 +1,101 @@
+{
+  "$note": "the summary keeps the five file kinds: lenient takes a sixth key, strict refuses it (cam-proxy never sends one)",
+  "schema": "event",
+  "$expect": {
+    "runtime": "accepted",
+    "strict": "invalid"
+  },
+  "message": {
+    "v": 1,
+    "type": "event",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "kind": "move.request",
+      "requestId": "rq_0123456789ABCDEFGHJK",
+      "camera": {
+        "proxyCameraId": "cam1",
+        "name": "Garage Süd",
+        "host": "192.0.2.10",
+        "protocol": "https",
+        "user": "cams",
+        "onvifPort": 8000,
+        "rtspPort": 554,
+        "baichuanPort": 9000
+      },
+      "target": "prx_1123456789ABCDEFGHJK",
+      "actor": {
+        "origin": "local",
+        "label": "admin"
+      },
+      "summary": {
+        "stills": {
+          "files": 120,
+          "bytes": 52428800,
+          "rows": 130,
+          "oldest": 1788681600000,
+          "newest": 1791273540000
+        },
+        "clips": {
+          "files": 120,
+          "bytes": 52428800,
+          "rows": 130,
+          "oldest": 1788681600000,
+          "newest": 1791273540000
+        },
+        "events": {
+          "files": 120,
+          "bytes": 52428800,
+          "rows": 130,
+          "oldest": 1788681600000,
+          "newest": 1791273540000
+        },
+        "checks": {
+          "files": 120,
+          "bytes": 52428800,
+          "rows": 130,
+          "oldest": 1788681600000,
+          "newest": 1791273540000
+        },
+        "archive": {
+          "files": 0,
+          "bytes": 0,
+          "rows": 0,
+          "oldest": null,
+          "newest": null
+        },
+        "ptz": {
+          "files": 0,
+          "bytes": 0,
+          "rows": 3,
+          "oldest": null,
+          "newest": null
+        }
+      },
+      "settings": {
+        "name": "Garage Süd",
+        "statusPollS": 30,
+        "ftp": {
+          "enabled": true,
+          "stream": "main"
+        },
+        "stills": {
+          "stream": "sub",
+          "intervalS": 1
+        },
+        "storage": {
+          "sharePercent": 40
+        },
+        "events": {
+          "poll": {
+            "enabled": true
+          }
+        }
+      }
+    },
+    "sig": "k5vv3tv/GhpV/sY6otL1/9RPXmy6kwDYOzGRj4RVbp9j/i3aenttMf2Tn87dAO4xqPfGnoX8G3rX52TTDIxMAQ=="
+  }
+}

@@ -10,6 +10,39 @@ components:
   securitySchemes:
     bearer: { type: http, scheme: bearer }
     moveToken: { type: http, scheme: bearer, description: 'the per-move token (camera moves): only /api/moves/{id}/...' }
+  schemas:
+    Capabilities:
+      description: 'What a camera can do (spec 2026-10-30-ptz-capabilities-design §4); null while the camera was never read. Clients use it only when the item''s features list ptz.'
+      type: [object, 'null']
+      required: [schema, ptz]
+      properties:
+        schema: { const: 1 }
+        ptz:
+          description: 'pan/tilt control (/api/cameras/{cam}/ptz/...); null for a camera that can''t move'
+          type: [object, 'null']
+          required: [move, zoom, focus, speed]
+          properties:
+            move: { const: true }
+            zoom: { type: boolean }
+            focus: { type: boolean }
+            speed: { type: boolean, description: 'the camera takes a move speed' }
+            positions: { type: object, description: 'present when the camera can store positions', properties: { max: { type: integer, description: 'at most this many positions (20)' } } }
+    PtzPosition:
+      description: 'A saved position (spec 2026-10-30-ptz-capabilities-design §5.2). state missing: the camera no longer holds it (reset, replaced, or changed in the camera''s own app); save it again to fix it.'
+      type: object
+      required: [id, name, order, home, state]
+      properties:
+        id: { type: string, pattern: '^pos_[0-9a-f]{16}$' }
+        name: { type: string, minLength: 1, maxLength: 40 }
+        order: { type: integer, minimum: 0 }
+        home: { type: boolean, description: 'exactly one position is Home while any exist' }
+        state: { type: string, enum: [ok, missing] }
+    PtzPositionList:
+      type: object
+      required: [max, positions]
+      properties:
+        max: { type: integer, description: 'at most this many positions (20)' }
+        positions: { type: array, items: { $ref: '#/components/schemas/PtzPosition' }, description: 'by order' }
 security:
   - bearer: []
 paths:
@@ -174,7 +207,7 @@ paths:
     get:
       summary: The camera and its state
       responses:
-        '200': { description: '[{ id, name, online, lastEventTs (the newest live (non-recovered) event''s start, or null), stream: { up, lastFrameTs } | null, publicUrl, address }] (address: the camera''s camera.host as it runs, host and optional port, for clients that reach the camera directly; name: the camera''s own name as read from it, the configured camera.name until the camera was first read; stream is null when stills are off; publicUrl is server.publicUrl or null). Every configured camera in config order; each item also has error (the camera worker''s or its last check''s error, null when fine) and features (string[], the same on every item: what this proxy supports beyond the pre-multi-camera API, e.g. sse-cam-list for /api/stream?cam=a,b; clients test for a name) and latestStill ({ts, url, tileUrl} of the newest still in memory, or null: GET /api/cameras/{cam}/stills/latest.jpg)' }
+        '200': { description: '[{ id, name, online, lastEventTs (the newest live (non-recovered) event''s start, or null), stream: { up, lastFrameTs } | null, publicUrl, address }] (address: the camera''s camera.host as it runs, host and optional port, for clients that reach the camera directly; name: the camera''s own name as read from it, the configured camera.name until the camera was first read; stream is null when stills are off; publicUrl is server.publicUrl or null). Every configured camera in config order; each item also has error (the camera worker''s or its last check''s error, null when fine) and features (string[], the same on every item: what this proxy supports beyond the pre-multi-camera API, e.g. sse-cam-list for /api/stream?cam=a,b, ptz for the PTZ API; clients test for a name), capabilities (Capabilities: what this camera can do, null until first read; a change is sent as a camera stream message) and latestStill ({ts, url, tileUrl} of the newest still in memory, or null: GET /api/cameras/{cam}/stills/latest.jpg)' }
         '401': { description: missing or wrong token }
   /api/cameras/{cam}:
     get:
@@ -182,10 +215,174 @@ paths:
       parameters:
         - { name: cam, in: path, required: true, schema: { type: string } }
       responses:
-        '200': { description: '{ id, name, online, lastEventTs, stream, publicUrl, address, error, features, latestStill }, as in GET /api/cameras' }
+        '200': { description: '{ id, name, online, lastEventTs, stream, publicUrl, address, error, features, capabilities, latestStill }, as in GET /api/cameras' }
         '401': { description: missing or wrong token }
         '404': { description: unknown camera }
         '503': { description: camera_restarting (Retry-After) while the camera restarts }
+  /api/cameras/{cam}/ptz/move:
+    post:
+      summary: Pan and tilt for a moment (spec 2026-10-30-ptz-capabilities-design §5.1)
+      description: 'The move runs for durationMs and is then stopped, unless another move, zoom or focus for this camera arrives first and replaces it (the last caller wins). A tap is one call; press-and-hold is a call every ~250 ms with durationMs 600 while held, then POST .../ptz/stop, so a client that goes away leaves the camera stopped within 2 s. Not audited.'
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [direction], properties: { direction: { type: string, enum: [left, right, up, down, left-up, left-down, right-up, right-down] }, speed: { type: integer, minimum: 1, maximum: 10, default: 5 }, durationMs: { type: integer, minimum: 100, maximum: 2000, default: 400 } } }
+      responses:
+        '204': { description: the move started }
+        '400': { description: '{ error: invalid, detail }: unknown direction, speed or durationMs not a whole number in range' }
+        '502': { description: '{ error: camera_error }: the camera refused' }
+        '401': { description: missing or wrong token }
+        '404': { description: 'unknown camera; { error: not_supported } for a camera without this capability' }
+        '503': { description: '{ error: camera_offline } (capabilities not read yet, or the camera is offline), or camera_restarting (Retry-After)' }
+  /api/cameras/{cam}/ptz/zoom:
+    post:
+      summary: Zoom in or out for a moment (capabilities.ptz.zoom)
+      description: 'Same lease as POST .../ptz/move.'
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [direction], properties: { direction: { type: string, enum: [in, out] }, durationMs: { type: integer, minimum: 100, maximum: 2000, default: 400 } } }
+      responses:
+        '204': { description: the zoom started }
+        '400': { description: '{ error: invalid, detail }' }
+        '502': { description: '{ error: camera_error }' }
+        '401': { description: missing or wrong token }
+        '404': { description: 'unknown camera; { error: not_supported } for a camera without this capability' }
+        '503': { description: '{ error: camera_offline } (capabilities not read yet, or the camera is offline), or camera_restarting (Retry-After)' }
+  /api/cameras/{cam}/ptz/focus:
+    post:
+      summary: Focus nearer or farther for a moment (capabilities.ptz.focus)
+      description: 'Same lease as POST .../ptz/move.'
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [direction], properties: { direction: { type: string, enum: [near, far] }, durationMs: { type: integer, minimum: 100, maximum: 2000, default: 400 } } }
+      responses:
+        '204': { description: the focus change started }
+        '400': { description: '{ error: invalid, detail }' }
+        '502': { description: '{ error: camera_error }' }
+        '401': { description: missing or wrong token }
+        '404': { description: 'unknown camera; { error: not_supported } for a camera without this capability' }
+        '503': { description: '{ error: camera_offline } (capabilities not read yet, or the camera is offline), or camera_restarting (Retry-After)' }
+  /api/cameras/{cam}/ptz/stop:
+    post:
+      summary: Stop moving at once
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      responses:
+        '204': { description: stopped }
+        '502': { description: '{ error: camera_error }' }
+        '401': { description: missing or wrong token }
+        '404': { description: 'unknown camera; { error: not_supported } for a camera without this capability' }
+        '503': { description: '{ error: camera_offline } (capabilities not read yet, or the camera is offline), or camera_restarting (Retry-After)' }
+  /api/cameras/{cam}/ptz/positions:
+    get:
+      summary: The saved positions (capabilities.ptz.positions)
+      description: 'Each position''s state is checked against the camera (a read at most 30 s old; while the camera is offline the last read).'
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: PtzPositionList, content: { application/json: { schema: { $ref: '#/components/schemas/PtzPositionList' } } } }
+        '502': { description: '{ error: camera_error }' }
+        '401': { description: missing or wrong token }
+        '404': { description: 'unknown camera or position ({ error: not_found }); { error: not_supported } for a camera that can''t store positions' }
+        '503': { description: '{ error: camera_offline } (the camera is offline, or was never read), or camera_restarting (Retry-After)' }
+    post:
+      summary: Save where the camera points now as a new position
+      description: 'The first position of a camera becomes Home. Names are trimmed, 1 to 40 characters, unique per camera ignoring case, no control characters. Audited (ptz-position, op save); sends a ptz-positions stream message.'
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [name], properties: { name: { type: string } } }
+      responses:
+        '201': { description: PtzPosition, content: { application/json: { schema: { $ref: '#/components/schemas/PtzPosition' } } } }
+        '400': { description: '{ error: invalid, detail }: the name' }
+        '409': { description: '{ error: name_taken }, { error: limit_reached } (20 positions) or { error: no_free_slot } (the camera has no room the proxy may use)' }
+        '502': { description: '{ error: camera_error }: the camera refused or did not keep it; nothing stored' }
+        '401': { description: missing or wrong token }
+        '404': { description: 'unknown camera or position ({ error: not_found }); { error: not_supported } for a camera that can''t store positions' }
+        '503': { description: '{ error: camera_offline } (the camera is offline, or was never read), or camera_restarting (Retry-After)' }
+  /api/cameras/{cam}/ptz/positions/order:
+    put:
+      summary: Put the positions in a new order
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [ids], properties: { ids: { type: array, items: { type: string }, description: 'every position id of the camera, each once, in the new order' } } }
+      responses:
+        '200': { description: PtzPositionList, content: { application/json: { schema: { $ref: '#/components/schemas/PtzPositionList' } } } }
+        '400': { description: '{ error: invalid, detail }: not every id once' }
+        '401': { description: missing or wrong token }
+        '404': { description: 'unknown camera or position ({ error: not_found }); { error: not_supported } for a camera that can''t store positions' }
+        '503': { description: '{ error: camera_offline } (the camera is offline, or was never read), or camera_restarting (Retry-After)' }
+  /api/cameras/{cam}/ptz/positions/{id}:
+    patch:
+      summary: Rename a position, or make it Home
+      description: 'Rename changes the proxy''s name only. home true moves the Home mark here; there is no home false.'
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { name: { type: string }, home: { const: true } } }
+      responses:
+        '200': { description: PtzPosition, content: { application/json: { schema: { $ref: '#/components/schemas/PtzPosition' } } } }
+        '400': { description: '{ error: invalid, detail }: neither field, home other than true, or the name' }
+        '409': { description: '{ error: name_taken }' }
+        '401': { description: missing or wrong token }
+        '404': { description: 'unknown camera or position ({ error: not_found }); { error: not_supported } for a camera that can''t store positions' }
+        '503': { description: '{ error: camera_offline } (the camera is offline, or was never read), or camera_restarting (Retry-After)' }
+    delete:
+      summary: Delete a position
+      description: 'Home can only go last: set another Home first. What the proxy saved on the camera for it is removed; anything else on the camera is left alone.'
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '204': { description: deleted }
+        '409': { description: '{ error: home_position }: Home while others exist' }
+        '502': { description: '{ error: camera_error }: the camera kept it; the position stays' }
+        '401': { description: missing or wrong token }
+        '404': { description: 'unknown camera or position ({ error: not_found }); { error: not_supported } for a camera that can''t store positions' }
+        '503': { description: '{ error: camera_offline } (the camera is offline, or was never read), or camera_restarting (Retry-After)' }
+  /api/cameras/{cam}/ptz/positions/{id}/save:
+    post:
+      summary: Overwrite a position with where the camera points now (also the fix for a missing one)
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: PtzPosition, content: { application/json: { schema: { $ref: '#/components/schemas/PtzPosition' } } } }
+        '409': { description: '{ error: no_free_slot }' }
+        '502': { description: '{ error: camera_error }' }
+        '401': { description: missing or wrong token }
+        '404': { description: 'unknown camera or position ({ error: not_found }); { error: not_supported } for a camera that can''t store positions' }
+        '503': { description: '{ error: camera_offline } (the camera is offline, or was never read), or camera_restarting (Retry-After)' }
+  /api/cameras/{cam}/ptz/positions/{id}/go:
+    post:
+      summary: Move the camera to a position
+      description: 'A running move is stopped first. Not audited.'
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '204': { description: the camera is on its way }
+        '409': { description: '{ error: position_missing }: the camera no longer holds it; save it again' }
+        '502': { description: '{ error: camera_error }' }
+        '401': { description: missing or wrong token }
+        '404': { description: 'unknown camera or position ({ error: not_found }); { error: not_supported } for a camera that can''t store positions' }
+        '503': { description: '{ error: camera_offline } (the camera is offline, or was never read), or camera_restarting (Retry-After)' }
   /api/cameras/{cam}/extent:
     get:
       summary: How far back the proxy has content (for a timeline's left edge)
@@ -665,11 +862,15 @@ paths:
         of the camera's address, camera.host as it runs, when the camera side
         starts with another one: then `name` is the name last told, left out
         while none was told yet; messages stored before this version have no
-        `address`); still-check (a new
+        `address`; and once per change of the camera's capabilities, read when
+        it comes online or its model or firmware changes: then the message
+        also has `capabilities`, the Capabilities of GET /api/cameras); still-check (a new
         still check, cams #179) `{cam, id, stillTs, provider, summary, objects,
         events: [{id, kind, confirmed}], imageUrl, requestedAt, tookMs}`; archive (a change
         to the Archive, docs/archive.md §7) `{cam, action (add, update, delete, clear,
-        expire), ids, items (add and update: ArchiveItem)}`; annotation
+        expire), ids, items (add and update: ArchiveItem)}`; ptz-positions
+        `{cam}` (a camera's saved positions changed: reload GET
+        /api/cameras/{cam}/ptz/positions); annotation
         (reserved, not sent yet); still
         `{cam, ts, url, sprite, tile}` (only when named in `types`; live
         only, without an id, and not replayed).

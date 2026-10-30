@@ -1,9 +1,10 @@
 // The camera-move plan rules, shared by the admin UI (web/src/lib/moves.ts
 // re-exports them) and the proxy's auto-approval. No Node imports: the web
 // bundle imports this file.
-import type { MoveAnswer, MoveBounds, MoveKind, MovePlan, MoveSummary, Space } from './types';
+import type { FileKind, MoveAnswer, MoveBounds, MoveKind, MovePlan, MoveSummary, Space } from './types';
 
-export const KINDS: readonly MoveKind[] = ['stills', 'clips', 'events', 'checks', 'archive'];
+// The kinds the panel and the bounds offer: the file kinds (ptz is never a choice).
+export const KINDS: readonly FileKind[] = ['stills', 'clips', 'events', 'checks', 'archive'];
 
 export function estimateText(s: number): string {
   const sec = Math.max(0, Math.round(s));
@@ -17,8 +18,8 @@ export function estimateText(s: number): string {
 // The time budget field is in minutes: the estimate rounded up to whole minutes (at least one).
 export const budgetDefault = (estimateS: number): number => Math.max(1, Math.ceil(estimateS / 60));
 
-export const hasContent = (s: MoveSummary, k: MoveKind): boolean => s[k].files + s[k].rows > 0;
-export const kindsWithContent = (s: MoveSummary): MoveKind[] => KINDS.filter((k) => hasContent(s, k));
+export const hasContent = (s: MoveSummary, k: FileKind): boolean => s[k].files + s[k].rows > 0;
+export const kindsWithContent = (s: MoveSummary): FileKind[] => KINDS.filter((k) => hasContent(s, k));
 
 // The options when the content does not fit the target; retention only with a proposal.
 export function spaceOptions(space: Space | undefined): ('omit' | 'retention' | 'fit')[] {
@@ -28,7 +29,7 @@ export function spaceOptions(space: Space | undefined): ('omit' | 'retention' | 
 
 export interface MoveForm {
   transfer: boolean;
-  leaveOut: MoveKind[];
+  leaveOut: FileKind[];
   option: 'omit' | 'retention' | 'fit';
   budgetMin: number;
   estimateS: number;

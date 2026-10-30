@@ -72,12 +72,25 @@ names up to 31 characters, none enabled. `GetZoomFocus`: zoom 0–27, focus
 0–97. `GetPtzGuard` present (timeout 60 s). `GetPtzCurPos`: "not exist".
 RLC-1224A and CX820 (our other models): `ptzCtrl`/`ptzPreset` permit 0.
 
-**Not yet measured** (first step of the real-camera work, §8.3, before the
-simulator copies it — cam-sim mirrors the real camera, measure first):
-`PtzCtrl` op names and the speed range the E1 accepts, its answer to an
-unsupported op, `SetPtzPreset` (save current position, delete with
-`enable: 0`), `ToPos`, how long a move runs without `Stop`, and whether
-`GetZoomFocus` changes after a zoom.
+**Measured 2026-10-30** (Klaus's OK; captures sanitized for cam-sim):
+
+- `PtzCtrl` (action 0, `{channel: 0, op, speed}`): ops `Left`, `Right`,
+  `Up`, `Down`, `LeftUp`, `LeftDown`, `RightUp`, `RightDown`, `Stop`,
+  `ZoomInc`, `ZoomDec`, `FocusInc`, `FocusDec`, `ToPos` (with `id`) answer
+  `{rspCode: 200}`. **Speed 1–64**; 0 or above 64 → error `rspCode -4`
+  "param error"; `speed` may be left out. An unknown op → `-4`.
+- `ZoomInc` for 1.5 s took zoom 7 → 26 (of 0–27); `GetZoomFocus` follows.
+  Absolute zoom: `StartZoomFocus {ZoomFocus: {channel, op: "ZoomPos", pos}}`.
+- **Preset slots are ids 0–63**, although `GetPtzPreset`'s `range` says
+  1–64; id 64 → `-4`. `SetPtzPreset {PtzPreset: {channel, enable: 1, id,
+  name}}` saves the current position **including zoom**; delete with
+  `enable: 0, name: ""`.
+- A name longer than 31 characters is accepted but stored as the camera's
+  default `pos<id+1>`: the proxy cuts names to 31 before sending.
+- `ToPos` to an empty slot answers 200 without moving: the proxy checks the
+  slot (`missing`) before going.
+- How long a move runs without `Stop` was not measured; the lease (§5.1)
+  makes it irrelevant.
 
 ## 4. Capabilities (cam-proxy)
 
@@ -174,12 +187,13 @@ A position: `{ "id": "pos_…", "name": "Gate", "order": 0, "home": true, "state
 - `state: missing`: on each login and on `GET positions` (camera read cached
   ≤ 30 s), a position whose slot is not enabled on the camera is `missing`.
   Nothing is re-created automatically.
-- **Replaced or reset camera** (my call): each row stores the camera's serial
-  (from `GetDevInfo`) at save time. When the camera under that id reports a
-  different serial, all its positions are `missing` regardless of the slots,
-  until saved again (a re-save writes the new serial). A factory reset keeps
-  the serial; the slots are then empty and the rows `missing` by the rule
-  above. The serial is stored but never returned by the client API.
+- **Replaced or reset camera** (my call, corrected 2026-10-30): each row
+  stores the exact name the proxy wrote into the slot (`preset_name`, the name
+  cut to 31). A position is `ok` only while its slot is enabled **with that
+  name**; otherwise `missing` until saved again. (A first draft compared the
+  camera's serial, but `GetDevInfo.serial` changes at every reboot — the
+  proxy's reboot detection relies on that — so it would have marked every
+  position missing after each reboot.)
 - **Lost catalog** (my call): presets the proxy made but no longer knows
   about look foreign and stay untouched. With 64 slots and 20 positions that
   leak is accepted; preset names on the camera stay the plain position names

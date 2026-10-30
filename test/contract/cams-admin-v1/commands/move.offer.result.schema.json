@@ -91,6 +91,15 @@
         "probeBps": {
           "type": "integer",
           "minimum": 0
+        },
+        "kinds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "maxItems": 6,
+          "uniqueItems": true
         }
       },
       "required": [

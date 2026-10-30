@@ -5,8 +5,9 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { describe, expect, it } from 'vitest';
 import { openCatalog } from '../src/catalog/db';
+import { insertPosition } from '../src/catalog/ptz-positions';
 import { Cam, chunkManifest, chunkOrder, chunkRows, listChunks, summarize } from '../src/moves/inventory';
-import { MOVE_KINDS } from '../src/moves/types';
+import { FILE_KINDS, MOVE_KINDS } from '../src/moves/types';
 
 const D1 = Date.UTC(2026, 9, 1, 12, 0); // 2026-10-01 12:00 UTC
 const D2 = Date.UTC(2026, 9, 2, 0, 5); // 2026-10-02 00:05 UTC (a local day could differ)
@@ -48,7 +49,7 @@ describe('move inventory', () => {
   it('summary counts per kind match the fixture', async () => {
     const f = fixture();
     const s = summarize(f.deps, 'cam3');
-    expect(Object.keys(s).sort()).toEqual([...MOVE_KINDS].sort());
+    expect(Object.keys(s).sort()).toEqual([...FILE_KINDS].sort());
     expect(s.stills).toEqual({ files: 4, bytes: 4 + 2 + 2 + 6, rows: 0, oldest: D1, newest: D2 });
     expect(s.clips).toEqual({ files: 2, bytes: 8 + 4, rows: 1, oldest: D1, newest: D1 });
     expect(s.events).toEqual({ files: 1, bytes: 8, rows: 2, oldest: D2, newest: D2 });
@@ -254,5 +255,61 @@ describe('move inventory', () => {
       expect(c.walk(d), d).toEqual([]);
     }
     expect(() => new Cam(f.deps, '../cam3')).toThrow();
+  });
+});
+
+describe('the ptz chunk', () => {
+  const T29 = Date.UTC(2026, 9, 29, 22);
+  const T30 = Date.UTC(2026, 9, 30, 1);
+  const withPositions = () => {
+    const f = fixture();
+    const pos = (n: number, o: { sort_order: number; home: 0 | 1; updated_at: number }) => insertPosition(f.catalog, { id: `pos_000000000000000${n}`, cam: 'cam3', name: `P${n}`, slot: n, preset_name: `p${n}`, created_at: T29, ...o });
+    pos(1, { sort_order: 2, home: 0, updated_at: T29 });
+    pos(2, { sort_order: 0, home: 1, updated_at: T30 });
+    pos(3, { sort_order: 1, home: 0, updated_at: T29 });
+    insertPosition(f.catalog, { id: 'pos_00000000000000f4', cam: 'cam4', name: 'Other', slot: 1, preset_name: 'o', sort_order: 0, home: 1, created_at: T29, updated_at: T29 });
+    return f;
+  };
+
+  it('a camera with positions has one ptz chunk on the day of its newest change', () => {
+    const f = withPositions();
+    const chunks = listChunks(f.deps, 'cam3', ['ptz']);
+    expect(chunks).toEqual([{ id: 'ptz:2026-10-30', kind: 'ptz', day: '2026-10-30', files: 0, bytes: 0, rows: 3 }]);
+  });
+
+  it('no rows -> no ptz chunk', () => {
+    const f = fixture();
+    expect(listChunks(f.deps, 'cam3', ['ptz'])).toEqual([]);
+    expect(listChunks(f.deps, 'cam3', [...MOVE_KINDS]).some((c) => c.kind === 'ptz')).toBe(false);
+  });
+
+  it('chunkRows of the ptz chunk: the rows without cam, by sort_order', async () => {
+    const f = withPositions();
+    const rows = chunkRows(f.deps, 'cam3', 'ptz:2026-10-30');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].table).toBe('ptz_positions');
+    expect((rows[0].rows as Record<string, unknown>[]).map((r) => r.id)).toEqual(['pos_0000000000000002', 'pos_0000000000000003', 'pos_0000000000000001']);
+    expect(rows[0].rows.every((r) => !('cam' in r))).toBe(true);
+    expect(await chunkManifest(f.deps, 'cam3', 'ptz:2026-10-30')).toEqual({ files: [], rows: 3, expired: 0 });
+  });
+
+  it('chunkOrder: ptz first, then Archive, then the rest', () => {
+    const f = withPositions();
+    const kinds = listChunks(f.deps, 'cam3', [...MOVE_KINDS]).map((c) => c.kind);
+    expect(kinds[0]).toBe('ptz');
+    expect(kinds[1]).toBe('archive');
+    expect(kinds.filter((k) => k === 'ptz')).toHaveLength(1);
+    expect(chunkOrder({ kind: 'ptz', day: '2026-01-01' }, { kind: 'archive', day: '2026-12-01' })).toBeLessThan(0);
+  });
+
+  it('a ptz chunk listed on another day still serves all the rows (a position changed after the listing)', async () => {
+    const f = withPositions();
+    expect(chunkRows(f.deps, 'cam3', 'ptz:2026-10-01')[0].rows).toHaveLength(3);
+    expect((await chunkManifest(f.deps, 'cam3', 'ptz:2026-10-01')).rows).toBe(3);
+  });
+
+  it('summarize never lists ptz', () => {
+    const f = withPositions();
+    expect(Object.keys(summarize(f.deps, 'cam3'))).toEqual(['stills', 'clips', 'events', 'checks', 'archive']);
   });
 });

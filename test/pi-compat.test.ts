@@ -307,7 +307,7 @@ describe('the Pi enrolled with cams-admin, after the P2 update (commands off)', 
     const { port } = await q.start({ port: 0, host: '127.0.0.1' });
     try {
       await until(() => fake.heartbeats().length >= 1 && q.camsAdmin.view().state === 'connected', 10_000);
-      expect(fake.received.find((r) => r.msg.type === 'hello')!.msg.body).toMatchObject({ capabilities: ['status', 'commands'] });
+      expect(fake.received.find((r) => r.msg.type === 'hello')!.msg.body).toMatchObject({ capabilities: ['status', 'commands', 'move-ptz'] });
       expect((fake.heartbeats()[0].msg.body as { proxy: unknown }).proxy).toMatchObject({ commands: { enabled: true, paused: false, allow: [] }, tokens: { revision: 0, client: 0, admin: 0, blocked: [] } });
       const { cmdId } = fake.sendCommand('tokens.apply', { v: 1, revision: 1, tokens: [] });
       await until(() => fake.results(cmdId).length === 1);

@@ -22,7 +22,7 @@ function fileName(chunkId: string): string {
   return `${kind}-${day}.json`;
 }
 
-const FILE = /^(stills|clips|events|checks|archive)-(\d{4}-\d{2}-\d{2})\.json$/;
+const FILE = /^(stills|clips|events|checks|archive|ptz)-(\d{4}-\d{2}-\d{2})\.json$/;
 
 // Removed when the move ends (ManifestCache.forget, Task 10).
 export function removeManifestCache(dataDir: string, moveId: string): void {

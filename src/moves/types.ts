@@ -1,8 +1,12 @@
 // The camera-move wire types (cams-admin contract v1 "Camera moves", the strict
 // schemas in test/contract/cams-admin-v1/strict). Plain data: no behaviour.
 
-export type MoveKind = 'stills' | 'clips' | 'events' | 'checks' | 'archive';
-export const MOVE_KINDS: readonly MoveKind[] = ['stills', 'clips', 'events', 'checks', 'archive'];
+// The five kinds of content files; summaries, space, purges and the copy back cover only these.
+export type FileKind = 'stills' | 'clips' | 'events' | 'checks' | 'archive';
+export const FILE_KINDS: readonly FileKind[] = ['stills', 'clips', 'events', 'checks', 'archive'];
+// Every kind a move plan can name: the file kinds and the camera's PTZ positions (rows only).
+export type MoveKind = FileKind | 'ptz';
+export const MOVE_KINDS: readonly MoveKind[] = [...FILE_KINDS, 'ptz'];
 export type MoveRole = 'source' | 'target';
 // `space`: what happens when the content does not fit the target's disk.
 export type MoveSpacePlan = 'all' | 'omit' | 'fit' | 'retention';
@@ -31,13 +35,13 @@ export interface Settings {
 }
 
 export interface KindSummary { files: number; bytes: number; rows: number; oldest: number | null; newest: number | null }
-export type MoveSummary = Record<MoveKind, KindSummary>;
+export type MoveSummary = Record<FileKind, KindSummary>;
 
 export interface Space {
   needed: number;
   available: number;
   fits: boolean;
-  perKind: Partial<Record<MoveKind, number>>;
+  perKind: Partial<Record<FileKind, number>>;
   retentionProposal: SettingsMap | null;
 }
 
@@ -65,7 +69,8 @@ export interface MoveBounds {
 export interface MoveActor { origin: 'local' | 'managed'; label: string }
 // The target's answer as cams-admin relays it (move.answer).
 // `detail`: what failed, one line (a refusal's, moveDetail).
-export interface MoveAnswer { accept: boolean; reason?: MoveReason; detail?: string; space?: Space; estimateS?: number }
+// `kinds`: what the target takes (absent: the five file kinds).
+export interface MoveAnswer { accept: boolean; reason?: MoveReason; detail?: string; space?: Space; estimateS?: number; kinds?: MoveKind[] }
 
 export interface ChunkProgress { id: string; state: ChunkState }
 

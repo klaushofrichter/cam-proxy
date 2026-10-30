@@ -7,7 +7,7 @@ interface SseStats { messages: Record<string, number>; replayed: number; dropped
 // What this proxy supports beyond the pre-multi-camera API, listed on every
 // GET /api/cameras item (spec 2026-10-05-multi-camera-host-design §6.1).
 // Clients test for a name, never a version; names are only ever appended.
-export const FEATURES: readonly string[] = ['sse-cam-list'];
+export const FEATURES: readonly string[] = ['sse-cam-list', 'ptz'];
 
 const PAGE = 500;
 const BLOCKED_MS = 5000; // a client whose socket stays full this long is dropped

@@ -8,6 +8,7 @@ import type { Server as HttpServer } from 'http';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { MOVE_KINDS } from '../src/moves/types';
 import { movesSourceApi } from '../src/api/moves-api';
 import { AuditLog } from '../src/audit/audit-log';
 import { openCatalog } from '../src/catalog/db';
@@ -241,7 +242,7 @@ describe('accepting writes the target record (B4, B32)', () => {
     const f = fixture({ probe: 777 });
     const o = offer();
     const r = await evaluate(f.deps, o);
-    expect(r).toEqual({ accept: true, space: { needed: 1000, available: 1000, fits: true, perKind: { clips: 1000 }, retentionProposal: null }, probeBps: 777 });
+    expect(r).toEqual({ accept: true, space: { needed: 1000, available: 1000, fits: true, perKind: { clips: 1000 }, retentionProposal: null }, probeBps: 777, kinds: ['stills', 'clips', 'events', 'checks', 'archive', 'ptz'] });
     const rec = f.journal.load(MOVE)!;
     expect(rec).toMatchObject({
       v: 1, id: MOVE, role: 'target', camera: 'cam9', phase: 'opened', plan: null, token: TOKEN, startedAt: 5000, chunks: {}, bytesDone: 0,
@@ -265,6 +266,8 @@ describe('accepting writes the target record (B4, B32)', () => {
     const done = await h(offer(), {} as never);
     expect(done.status).toBe('ok');
     expect(done.result).toMatchObject({ accept: true, probeBps: 123456 });
+    // An accepted offer lists all six kinds it takes (plan D: ptz).
+    expect((done.result as { kinds: string[] }).kinds).toEqual([...MOVE_KINDS]);
     expect(JSON.stringify(done)).not.toContain(TOKEN);
     const bad = moveHandlers({ emit: () => undefined, audit: { write: () => undefined } as never, evaluate: { ...fixture().deps, loaded: () => { throw new Error(`boom ${TOKEN}`); } } })['move.offer'];
     const failed = await bad(offer(), {} as never);

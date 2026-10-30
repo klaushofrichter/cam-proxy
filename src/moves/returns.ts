@@ -13,7 +13,7 @@ import { listChunks, type InventoryDeps } from './inventory';
 import { moveEnded, type ChunkMeta, type MoveJournal, type MoveRecord, type MoveTombstone } from './journal';
 import { removeImported, removeLanded, removeReturned, type Purged } from './purge';
 import { keepDaysOf } from './retention';
-import { MOVE_KINDS, type MoveEvent, type MovePhaseName, type MovePlan } from './types';
+import { FILE_KINDS, type MoveEvent, type MovePhaseName, type MovePlan } from './types';
 
 // The copy back after a cancel after the switch-over (step 4, spec §1,
 // rulings 1, 2, 7, 20): a return move linked to the cancelled one
@@ -63,7 +63,7 @@ export interface ReturnDeps {
 // A return's plan (ruling 8): everything, all space; nothing to estimate or
 // approve. A return is not paced and has no budget (fix round 1): its budgetS
 // is unused (no move-budget-exceeded), only pressure halves its rate.
-export const RETURN_PLAN: MovePlan = { transfer: true, kinds: [...MOVE_KINDS], space: 'all', targetSettings: null, budgetS: 3600, estimateS: 0 };
+export const RETURN_PLAN: MovePlan = { transfer: true, kinds: [...FILE_KINDS], space: 'all', targetSettings: null, budgetS: 3600, estimateS: 0 };
 
 const totals = (m: ChunkMeta[]) => ({ chunks: m.length, bytes: m.reduce((n, c) => n + c.bytes, 0) });
 // The cancel minute's still files (captured.ts cancelMinuteFiles): never
@@ -82,7 +82,7 @@ const cancelMinute = (dataDir: string, c: MoveRecord): Purged => {
   }
   return t;
 };
-const add = (x: Purged, y: Purged): Purged => Object.fromEntries(MOVE_KINDS.map((k) => [k, { files: x[k].files + y[k].files, bytes: x[k].bytes + y[k].bytes }])) as Purged;
+const add = (x: Purged, y: Purged): Purged => Object.fromEntries(FILE_KINDS.map((k) => [k, { files: x[k].files + y[k].files, bytes: x[k].bytes + y[k].bytes }])) as Purged;
 
 export class MoveReturns {
   constructor(private readonly d: ReturnDeps) {}
@@ -126,7 +126,7 @@ export class MoveReturns {
     }
     // One return per cancelled move: another open one under another id is refused.
     if ((this.d.journal.all?.() ?? []).some((x) => x.id !== a.moveId && x.role === 'source' && x.returnOf === a.returnOf && !moveEnded(x.phase))) return failed('wrong_phase');
-    const manifest = listChunks(this.d.inventory, cancelled.camera, [...MOVE_KINDS], capturedFilter(this.d.inventory.dataDir, cancelled));
+    const manifest = listChunks(this.d.inventory, cancelled.camera, [...FILE_KINDS], capturedFilter(this.d.inventory.dataDir, cancelled));
     const now = this.now();
     const r: MoveRecord = {
       v: 1, id: a.moveId, role: 'source', returnOf: a.returnOf, camera: cancelled.camera, phase: 'released', plan: null,

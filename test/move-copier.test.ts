@@ -28,6 +28,7 @@ import { MoveTarget, type TargetDeps } from '../src/moves/target';
 import { hashMoveToken } from '../src/moves/token';
 import type { MoveCheck, MoveEvent, MoveKind, MovePlan } from '../src/moves/types';
 import { Storage } from '../src/storage';
+import { insertPosition, listPositions } from '../src/catalog/ptz-positions';
 import type { StreamLog } from '../src/stream/log';
 import { strict, why } from './helpers/contract';
 
@@ -787,6 +788,77 @@ describe('Copier', () => {
     await u.run();
     expect(f.requests).toEqual([]);
     expect(u.phases).toMatchObject([{ phase: 'copied', extra: { counts: { verified: 0, skipped: 0, failed: 0, bytes: 0 } } }]);
+  });
+});
+
+describe('the ptz chunk (plan D Task 5)', () => {
+  const T = Date.UTC(2026, 9, 21, 7);
+  const pos = (n: number, o: Record<string, unknown> = {}) => ({ id: `pos_00000000000000a${n}`, name: `Spot ${n}`, sort_order: n, home: n === 0 ? 1 : 0, slot: n + 4, preset_name: `spot${n}`, created_at: T, updated_at: T, ...o });
+  const ptzChunk = (rows: object[]): FakeChunk => ({ id: `ptz:${day(21)}`, files: [], rows: [{ table: 'ptz_positions', rows }] });
+  const seedOld = (u: Unit) => {
+    insertPosition(u.catalog, { ...pos(0, { id: 'pos_00000000000000f0', slot: 1 }), cam: CAM } as never);
+    insertPosition(u.catalog, { ...pos(1, { id: 'pos_00000000000000f1', slot: 2 }), cam: CAM } as never);
+    insertPosition(u.catalog, { ...pos(0, { id: 'pos_00000000000000e0', slot: 1 }), cam: 'cam8' } as never);
+  };
+
+  it("a ptz chunk replaces the camera's rows and imports under the camera lock once; other cameras' rows stay", async () => {
+    const { files, chunks } = threeDays();
+    const f = fakeSource(files, [ptzChunk([pos(0), pos(1), pos(2)]), ...chunks]);
+    const imported: string[] = [];
+    const u = unit(f, { plan: { ...PLAN, kinds: [...PLAN.kinds, 'ptz'] } }, { deps: { ptzLocked: async (cam, fn) => (imported.push(cam), fn()) } });
+    seedOld(u);
+    await u.run();
+    expect(chunkStates(u)[`ptz:${day(21)}`]).toBe('verified');
+    expect(listPositions(u.catalog, CAM).map((r) => r.id)).toEqual(['pos_00000000000000a0', 'pos_00000000000000a1', 'pos_00000000000000a2']);
+    expect(listPositions(u.catalog, CAM)[0]).toMatchObject({ cam: CAM, name: 'Spot 0', home: 1, slot: 4, preset_name: 'spot0' });
+    expect(listPositions(u.catalog, 'cam8')).toHaveLength(1);
+    expect(imported).toEqual([CAM]);
+    expect(u.phases.at(-1)?.check).toEqual({ complete: true, missing: {}, recovered: {}, failed: {}, expired: {} });
+  });
+
+  it('a position saved on the target since the move began stays after the moved ones (under the camera lock)', async () => {
+    const f = fakeSource({}, [ptzChunk([pos(0), pos(1)])]);
+    const locked: string[] = [];
+    const u = unit(f, { plan: { ...PLAN, kinds: ['ptz'] }, startedAt: T - 1000 }, { deps: { ptzLocked: async (cam, fn) => (locked.push(cam), fn()) } });
+    insertPosition(u.catalog, { id: 'pos_00000000000000d0', cam: CAM, name: 'Saved here', sort_order: 0, home: 1, slot: 30, preset_name: 'savedhere', created_at: T, updated_at: T });
+    insertPosition(u.catalog, { id: 'pos_00000000000000d1', cam: CAM, name: 'Old stay', sort_order: 1, home: 0, slot: 31, preset_name: 'oldstay', created_at: 1, updated_at: 1 });
+    await u.run();
+    expect(locked).toEqual([CAM]);
+    expect(listPositions(u.catalog, CAM).map((r) => [r.id, r.sort_order, r.home])).toEqual([['pos_00000000000000a0', 0, 1], ['pos_00000000000000a1', 1, 0], ['pos_00000000000000d0', 2, 0]]);
+  });
+
+  it('invalid rows: chunk failed, rows unchanged', async () => {
+    const f = fakeSource({}, [ptzChunk([pos(0), pos(1, { home: 1 })])]);
+    const imported: string[] = [];
+    const u = unit(f, { plan: { ...PLAN, kinds: ['ptz'] } }, { deps: { ptzLocked: async (cam, fn) => (imported.push(cam), fn()) } });
+    seedOld(u);
+    await u.run();
+    expect(chunkStates(u)[`ptz:${day(21)}`]).toBe('failed');
+    expect(listPositions(u.catalog, CAM).map((r) => r.id)).toEqual(['pos_00000000000000f0', 'pos_00000000000000f1']);
+    // Each of the 3 tries ran under the lock; none changed anything.
+    expect(imported).toEqual([CAM, CAM, CAM]);
+    expect(u.phases.at(-1)?.check).toEqual({ complete: false, missing: {}, recovered: {}, failed: { ptz: 1 }, expired: {} });
+    expect(u.audits.some((a) => a.action === 'move-file-failed' && a.details?.import === 'failed')).toBe(true);
+  });
+
+  it('transfer false with ptz: only the ptz chunk is copied', async () => {
+    const { files, chunks } = threeDays();
+    const f = fakeSource(files, [ptzChunk([pos(0)]), ...chunks]);
+    const u = unit(f, { plan: { ...PLAN, transfer: false, kinds: ['ptz'] } });
+    await u.run();
+    expect(fileRequests(f)).toEqual([]);
+    expect(chunkStates(u)).toMatchObject({ [`ptz:${day(21)}`]: 'verified', [`clips:${day(20)}`]: 'skipped' });
+    expect(listPositions(u.catalog, CAM)).toHaveLength(1);
+    expect(u.phases.at(-1)?.phase).toBe('copied');
+  });
+
+  it('a target plan without ptz skips a listed ptz chunk', async () => {
+    const f = fakeSource({}, [ptzChunk([pos(0)])]);
+    const u = unit(f, { plan: { ...PLAN, kinds: ['clips'] } });
+    seedOld(u);
+    await u.run();
+    expect(chunkStates(u)[`ptz:${day(21)}`]).toBe('skipped');
+    expect(listPositions(u.catalog, CAM)).toHaveLength(2);
   });
 });
 

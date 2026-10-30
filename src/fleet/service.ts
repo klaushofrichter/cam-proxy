@@ -6,6 +6,7 @@ import type { ReplayGuard } from './replay';
 import { enrollWithCode, EnrollError } from './enroll';
 import type { HeartbeatProxyInfo } from './heartbeat';
 import type { ProfileReport } from '../health/profile';
+import type { MoveLeftover } from '../moves/leftovers';
 import { deleteKeyFile, KeyFileInvalid, KeyFileUnsafe, readKeyFile, type AdminKeyFile } from './keyfile';
 import { fingerprint, trimSlashes } from './protocol';
 import { EventOutbox } from './outbox';
@@ -45,6 +46,8 @@ export interface CamsAdminDeps {
   proxyInfo: () => HeartbeatProxyInfo;
   // The proxy profile report (cams-admin spec 2026-10-25-proxy-profile-design §2).
   profile?: () => ProfileReport | null;
+  // What cameras that moved away left here (plan D).
+  moveLeftovers?: () => MoveLeftover[];
   changeKey?: () => string;
   log: ClientLog;
   timing?: Partial<Timing>;
@@ -238,7 +241,7 @@ export class CamsAdmin {
     if (this.client && this.running === want) return;
     await this.stopClient(this.client ? 'restart' : 'shutdown');
     if (this.stopped) return;
-    this.client = new AdminClient({ keyFile: key, health: this.d.health, proxyInfo: this.d.proxyInfo, profile: this.d.profile, version: this.d.version, log: this.d.log, changeKey: this.d.changeKey, timing: this.d.timing, commands: this.d.commands?.() ?? undefined, replay: this.d.replay, outbox: this.outbox, onWelcome: () => this.welcomeHooks.forEach((h) => h()) });
+    this.client = new AdminClient({ keyFile: key, health: this.d.health, proxyInfo: this.d.proxyInfo, profile: this.d.profile, moveLeftovers: this.d.moveLeftovers, version: this.d.version, log: this.d.log, changeKey: this.d.changeKey, timing: this.d.timing, commands: this.d.commands?.() ?? undefined, replay: this.d.replay, outbox: this.outbox, onWelcome: () => this.welcomeHooks.forEach((h) => h()) });
     this.running = want;
     this.client.start();
   }

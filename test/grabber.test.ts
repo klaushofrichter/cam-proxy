@@ -117,11 +117,13 @@ describe.skipIf(!binary)('FrameGrabber against go2rtc and cam-sim', () => {
 
   it('stamps consecutive seconds without gaps on a steady stream', async () => {
     const { frames } = await setup();
-    await until(() => frames.length >= 12, 30000);
+    // 23 frames: 20 gaps after the start-up frames, so 90 % allows two late frames (with 9 gaps it
+    // allowed none, and one late frame on a loaded CI runner failed the test).
+    await until(() => frames.length >= 23, 45000);
     const gaps = frames.slice(3).map((x, i) => x.ts - frames[i + 2].ts); // skip the start-up frames
     const oneSecond = gaps.filter((g) => g === 1000).length;
     expect(oneSecond / gaps.length).toBeGreaterThanOrEqual(0.9);
-  }, 40000);
+  }, 60000);
 
   it('reports the stream down when the camera cuts it, and recovers', async () => {
     const { sim, grabber, frames } = await setup();

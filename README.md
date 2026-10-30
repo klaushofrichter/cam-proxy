@@ -66,6 +66,7 @@ A Mac runs it for development on `localhost:8480`.
 - [Quick start (Mac, against cam-sim)](#quick-start-mac-against-cam-sim)
 - [Configuration](#configuration)
 - [Client API](#client-api)
+- [PTZ (pan, tilt, zoom)](#ptz-pan-tilt-zoom)
 - [Stills and previews](#stills-and-previews)
 - [Clips (FTP)](#clips-ftp)
 - [Recordings (SD card)](#recordings-sd-card)
@@ -344,9 +345,10 @@ while one not yet cached counts as a normal request); more answer 429
 ```sh
 api() { curl -s -H "Authorization: Bearer $CAMPROXY_TOKEN" "http://localhost:8480/api$1"; }
 api /cameras
-# [{"id":"cam1","name":"Backyard Left","online":true,"lastEventTs":1790000000000,"stream":{"up":true,"lastFrameTs":1790000000000},"publicUrl":null,"address":"192.168.1.20","error":null,"features":["sse-cam-list"]}]
+# [{"id":"cam1","name":"Backyard Left","online":true,"lastEventTs":1790000000000,"stream":{"up":true,"lastFrameTs":1790000000000},"publicUrl":null,"address":"192.168.1.20","error":null,"features":["sse-cam-list","ptz"],"capabilities":{"schema":1,"ptz":null}}]
 # address: the camera's host as the proxy runs it (cams reaches the camera there)
-# every camera of this proxy, config order; error: null when fine; features: what this proxy supports (sse-cam-list: ?cam=a,b)
+# every camera of this proxy, config order; error: null when fine; features: what this proxy supports (sse-cam-list: ?cam=a,b; ptz: the PTZ API)
+# capabilities: what this camera can do (see PTZ below); null until the camera was first read
 api /cameras/cam1   # the same entry for one camera (404 for another id)
 api '/cameras/cam1/events?kind=person&limit=10'
 # [{"id":12,"kind":"person","source":"onvif","start":1790000000000,"end":1790000004000,"endReason":"state"}]
@@ -378,6 +380,72 @@ api '/cameras/cam1/events?kind=person&limit=10'
 - `GET|HEAD /api/cameras/{cam}/recordings/{id}`: one recording as MP4, with
   `Range`; `HEAD` never downloads from the camera.
 - `GET /health`: the process is up (no auth).
+
+## PTZ (pan, tilt, zoom)
+
+Each camera item of `GET /api/cameras` carries `capabilities`, what that
+camera can do, in the proxy's own terms (no camera maker's commands):
+
+```json
+"capabilities": { "schema": 1, "ptz": { "move": true, "zoom": true, "focus": true, "speed": true, "positions": { "max": 20 } } }
+```
+
+`ptz` is `null` for a camera that can't move; `positions` is there when the
+camera can store positions; `capabilities` is `null` until the camera was
+first read. The proxy reads it whenever the camera comes online and when its
+model or firmware changes; a change is sent as a `camera` stream message with
+`capabilities`. Use it only when the item's `features` list `ptz`. The first
+supported camera is the Reolink E1 Outdoor Pro.
+
+All under `/api/cameras/{cam}/ptz`, with a client or admin token:
+
+| Route | Body | Answer |
+|---|---|---|
+| `POST …/move` | `{direction, speed?, durationMs?}`: `left right up down left-up left-down right-up right-down`, speed 1–10 (5), 100–2000 ms (400) | 204 |
+| `POST …/zoom` | `{direction: in\|out, durationMs?}` (with `ptz.zoom`) | 204 |
+| `POST …/focus` | `{direction: near\|far, durationMs?}` (with `ptz.focus`) | 204 |
+| `POST …/stop` | — | 204 |
+| `GET …/positions` | — | `{max, positions: [{id, name, order, home, state}]}` |
+| `POST …/positions` | `{name}`: save where the camera points now | 201 position |
+| `PUT …/positions/order` | `{ids}`: every id once, in the new order | 200 list |
+| `PATCH …/positions/{id}` | `{name?, home?: true}` | 200 position |
+| `POST …/positions/{id}/save` | —: overwrite with where the camera points now | 200 position |
+| `POST …/positions/{id}/go` | — | 204 |
+| `DELETE …/positions/{id}` | — | 204 |
+
+- **Moves have a lease.** A move runs for `durationMs` and is then stopped,
+  unless another move (or zoom, focus) for that camera comes first and
+  replaces it; the last caller wins. A tap is one call. Press-and-hold is a
+  call every ~250 ms with `durationMs` 600 while held, then `stop`: a client
+  that goes away leaves the camera stopped within 2 s. Moves are not audited.
+- **Positions:** at most 20 per camera, stored on the proxy and on the
+  camera. Names are trimmed, 1–40 characters, unique per camera ignoring case.
+  The first position is Home; `home: true` moves the mark (there is always
+  exactly one Home while any position exists), and Home can only be deleted
+  last. A position whose camera copy is gone (camera reset or replaced, or
+  changed in the camera's own app) shows `state: missing`; `go` answers 409
+  `position_missing` and `…/save` fixes it. Presets someone saved on the camera
+  with the camera's own app are never touched. Changes are audited
+  (`ptz-position`) and sent as a `ptz-positions` stream message.
+- **Errors:** 404 `not_supported` (the camera can't do it) or `not_found`;
+  400 `invalid` (with `detail`); 409 `limit_reached`, `no_free_slot` (the
+  camera has no room the proxy may use), `name_taken`, `position_missing`,
+  `home_position`; 502 `camera_error` (the camera refused); 503
+  `camera_offline`.
+
+`scripts/ptz-real-check.sh` checks a real PTZ camera through a proxy.
+**The camera moves while it runs.** It saves a start position, moves each
+direction briefly, zooms and focuses, saves, leaves and returns to a test
+position, renames and deletes it, checks a position can be saved again, then
+returns to the start position and removes everything it created (also when a
+step fails). It needs two free positions, bash, curl and node:
+
+```sh
+CAMPROXY_URL=http://<proxy>:8480 CAMPROXY_TOKEN=<client token> scripts/ptz-real-check.sh e1
+```
+
+The token goes to curl only through a temporary header file and is never
+printed.
 
 ## Stills and previews
 
@@ -771,7 +839,11 @@ never loses anything within the retention (default 7 days).
   - `camera`: `{cam, name}` once per change of the camera's name (a rename
     through `PUT /control/camera/name` or one made in the Reolink app or the
     camera's web UI, seen by the status poll; also the first read after a
-    start when it differs from the name clients were last told);
+    start when it differs from the name clients were last told); with
+    `capabilities` when the camera's [capabilities](#ptz-pan-tilt-zoom)
+    change (the first read after a start included);
+  - `ptz-positions`: `{cam}` when the camera's saved positions changed:
+    reload `GET /api/cameras/{cam}/ptz/positions`;
   - `archive`: `{cam, action: add|update|delete|clear|expire, ids, items}`
     for every change to the [Archive](#archive) (`items` with add and update);
   - `annotation`: reserved, not sent yet;
@@ -826,7 +898,7 @@ in the Reolink app, reaches stream clients once as a `camera` message.
 
 | Route | |
 |---|---|
-| `GET /control/status` | `{version, camera (incl. name (the camera's name; the configured `camera.name` until the camera was read), nameSource: camera\|config, webUiUrl, serial, reboot: {kind: reboot\|powercycle, requestedAt, confirmed, phase: power-cycling\|rebooting\|back\|not-back, offAt, endedAt, downSec} or null, and poeSwitch: {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state: on\|off\|elsewhere\|unknown, checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result, stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null (the last recording download over Baichuan), cache: {bytes, files, capBytes}}, analytics: [{…, keyMasked, keySource}], analyticsUnmapped, health, archive (as `GET /api/archive/status`)}` |
+| `GET /control/status` | `{version, camera (incl. name (the camera's name; the configured `camera.name` until the camera was read), nameSource: camera\|config, webUiUrl, serial, reboot: {kind: reboot\|powercycle, requestedAt, confirmed, phase: power-cycling\|rebooting\|back\|not-back, offAt, endedAt, downSec} or null, and poeSwitch: {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state: on\|off\|elsewhere\|unknown, checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result, stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null (the last recording download over Baichuan), cache: {bytes, files, capBytes}}, analytics: [{…, keyMasked, keySource}], analyticsUnmapped, health, archive (as `GET /api/archive/status`), moveLeftovers: [{camera, moveId, items}] (what cameras that moved away left here that the proxy can't remove; `[]` when none)}` |
 | `PUT /control/camera/name` | `{"name":"Backyard Left"}`: renames the camera on the camera itself ([Camera name](#camera-name)). 200 `{name}` (the name read back from the camera); 400 `{"error":"invalid_name","reason":…}` by the camera's rules (the camera is not asked) or refused by the camera (rspCode -54, -56); 503 `{"error":"camera_offline"}`; 502 `camera_error`. Admin token, or an admin session with `X-CamProxy-UI: 1`. Audited as `camera-name` |
 | `GET /control/stats` | `{disk: {catalog, audit, stills, previews, clips, recordings}` (each `{bytes, files, oldest, newest, growthPerDay}`), `events, stream, sse, storage}` |
 | `GET /control/config` | every setting: `{value, source, env?, restart, pending, next?, type, resetTo?}` (`source`: `default`, `file`, `override` or `env`; `env`: the variable that sets it; `type`: `integer`, `boolean` or `string`; `resetTo`, on an override: `{value, source: file\|default, same?, means?}`, what removing it goes back to; `same: true` when that is the override's own value, `means` what an unset target (not set, none, off, 0 = none) does); secrets never appear |

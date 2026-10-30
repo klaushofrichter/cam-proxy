@@ -1,0 +1,32 @@
+{
+  "$note": "a ptz chunk: the positions as one chunk (no files)",
+  "schema": "event",
+  "message": {
+    "v": 1,
+    "type": "event",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "kind": "move.progress",
+      "moveId": "mv_0123456789ABCDEFGHJK",
+      "chunks": [
+        {
+          "id": "clips:2026-10-30",
+          "state": "verified"
+        },
+        {
+          "id": "ptz:2026-10-30",
+          "state": "verified"
+        }
+      ],
+      "bytesDone": 1048576,
+      "bytesTotal": 1048576,
+      "rateBps": 1048576,
+      "etaS": 0
+    },
+    "sig": "/dfWpIWVToazg8dlJFKpL5GHHTx1clldsdmKykBfYf1b2z1d7DTKQOMYeX37F7e4RsE8hPBAk2yb/Db+Sm4rDg=="
+  }
+}
