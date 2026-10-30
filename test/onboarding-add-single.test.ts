@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import request from 'supertest';
 import { afterAll, describe, expect, it } from 'vitest';
-import { cameraPasswordsFile } from '../src/config/camera-passwords';
+import { cameraPasswordsFile, cameraPasswordStore } from '../src/config/camera-passwords';
 import { readEnvValue } from '../src/config/env-file';
 import { loadConfig } from '../src/config/load';
 import { createProxy, type Proxy } from '../src/proxy';
@@ -98,6 +98,22 @@ describe('adding a camera on the Pi', () => {
     expect([r.status, r.body.error, r.body.line]).toEqual([409, 'not_available', `CAMERA_HOST=${t.body.host}`]);
     expect(t.stored()).toEqual({});
     expect(t.sim.sim.engine.counters.loginAttempts).toBe(before); // the camera was not asked
+  }, 30_000);
+});
+
+describe('a failed add on the Pi (review 6)', () => {
+  it('keeps a password stored for that camera before the add', async () => {
+    const t = await pi();
+    cameraPasswordStore(join(t.dir, 'data')).set('cam1', 'earlier-pw');
+    // The .env file's folder can't be written: CAMERA_HOST fails after the login.
+    chmodSync(join(t.dir), 0o500);
+    try {
+      const r = await t.add();
+      expect([r.status, r.body.error]).toEqual([409, 'not_available']);
+    } finally {
+      chmodSync(join(t.dir), 0o700);
+    }
+    expect(t.stored().cam1.password).toBe('earlier-pw');
   }, 30_000);
 });
 

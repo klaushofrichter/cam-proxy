@@ -980,11 +980,11 @@ paths:
         proxy's own admin token or a session it started: a managed token or sign-in answers 403 local_admin_only. At
         most 5 password attempts per camera address in 10 minutes (shared with the password API and camera-probe).
       responses:
-        '201': { description: '{ onboarding: OnboardingStatus }' }
+        '201': { description: '{ onboarding: OnboardingStatus, plaintext: true (an http camera: its password crossed the network unencrypted) }' }
         '400': { description: invalid }
         '401': { description: not signed in }
         '403': { description: admin_only, local_admin_only }
-        '409': { description: "camera_exists, camera_limit (detail: profile.cameras is <n>; a proxy already over it keeps running), fingerprint_mismatch {served}, camera_id, move_open, not_available {line} (a single-camera proxy without a writable .env)" }
+        '409': { description: "camera_exists, camera_limit (detail: profile.cameras is <n>; a proxy already over it keeps running), fingerprint_mismatch {served}, camera_id, move_open, not_available {line} (a single-camera proxy without a writable .env), env_password (the camera's own CAMPROXY_CAMERA_PASSWORD_<ID> in compose's environment or a _FILE secret: remove it first; one in the managed env file is removed). One add or remove at a time." }
         '422': { description: camera_refused (nothing stored) }
         '429': { description: too_many_attempts (Retry-After) }
         '503': { description: camera_offline (nothing stored) }
@@ -1101,12 +1101,12 @@ paths:
           application/json:
             schema: { type: object, required: [password], properties: { password: { type: string, minLength: 1, maxLength: 64, description: no control characters } } }
       responses:
-        '200': { description: '{ credentials: Credentials } (source store)' }
+        '200': { description: '{ credentials: Credentials (source store), plaintext: true for an http camera (the password crossed the network unencrypted) }' }
         '400': { description: invalid (not a string of 1 to 64 characters without control characters; nothing audited) }
         '401': { description: not signed in }
         '403': { description: admin_only (a client token) }
         '404': { description: not_found }
-        '409': { description: "env_password (detail names the variable to remove), not_trusted (an https camera whose certificate is not trusted: camera-trust-pin first)" }
+        '409': { description: "env_password (detail names the variable to remove), not_trusted (an https camera whose certificate is not trusted: camera-trust-pin first), fingerprint_mismatch {served} (a pinned camera serving another certificate; no password sent)" }
         '422': { description: camera_refused (the camera refused the login; nothing stored) }
         '429': { description: too_many_attempts (Retry-After) }
         '503': { description: camera_offline (the camera did not answer; nothing stored), or camera_restarting (Retry-After) }
@@ -1476,7 +1476,8 @@ paths:
         the certificate the camera serves; with one: Login (over https only to the confirmed fingerprint), GetDevInfo,
         GetAbility, Logout. Answers { host, ports: {http, https, rtsp, onvif, baichuan: boolean}, certificate: {fingerprint,
         subject, issuer, notAfter, selfSigned} | null, login (ok, refused, offline, not_tried), device: {model, firmware, name}
-        | null, capabilities (Capabilities) | null, tookMs }; 400 invalid; 409 fingerprint_mismatch {served} (no login);
+        | null, capabilities (Capabilities) | null, tookMs, plaintext: true (http: a password went unencrypted) }; 400 invalid
+        (also a host in another numeric spelling than a dotted quad in decimal: 3232235781, 0xc0a80105, 192.168.001.005); 409 fingerprint_mismatch {served} (no login);
         429 too_many_attempts (a password: at most 5 per camera address in 10 minutes, shared with the password API and
         POST /control/cameras); with find-camera and camera-address at most 6 per minute per client. Nothing is stored;
         a camera-probe audit record (host, outcome, model, login), never the password.

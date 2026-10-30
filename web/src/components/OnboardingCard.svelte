@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api, ApiError } from '../lib/api';
-  import { STEP_LABELS, stepLine, trustNeeded, type OnboardingStatus, type StepName } from '../lib/onboarding';
+  import { isPlaintext, STEP_LABELS, stepLine, trustNeeded, type OnboardingStatus, type StepName } from '../lib/onboarding';
   import CameraPasswordDialog from './CameraPasswordDialog.svelte';
   import TrustCertificateDialog from './TrustCertificateDialog.svelte';
 
@@ -54,7 +54,7 @@
   {#if message}<p class="msg" role="status" data-testid="onboarding-message">{message}</p>{/if}
 </div>
 
-{#if pwOpen}<CameraPasswordDialog {cam} {name} {host} onclose={() => (pwOpen = false)} onsaved={() => void load()} />{/if}
+{#if pwOpen}<CameraPasswordDialog {cam} {name} {host} plaintext={!!st && isPlaintext(st)} onclose={() => (pwOpen = false)} onsaved={() => void load()} />{/if}
 {#if trustFp}
   {@const fp = trustFp}
   <TrustCertificateDialog {cam} {name} fingerprint={fp} onclose={() => (trustFp = null)} ondone={(m) => ((message = m), void load())} />

@@ -108,3 +108,25 @@ describe('probe refusals and audit', () => {
     expect(auditText(p.dir) + logText() + JSON.stringify(r.body)).not.toContain(SENTINEL);
   }, 30_000);
 });
+
+describe('numeric host spellings (security review 1)', () => {
+  it('only a dotted quad in decimal, or a name with a letter', () => {
+    for (const h of ['3232235781', '0xc0a80105', '192.168.001.005', '192.168.261', '192.168.1.5.', '0x7f.1', '017.0.0.1']) expect(typeof probeInput({ host: h }), h).toBe('string');
+    for (const h of ['192.0.2.5', '192.0.2.5:8443', 'cam.example', 'cam-1.local', '0xcam.example']) expect(typeof probeInput({ host: h }), h).toBe('object');
+  });
+  it('spellings of one address share the 5 attempts (keyed by the resolved address)', async () => {
+    const q = await proxy();
+    const s = await sim();
+    const post = (host: string) => request(q.base).post('/control/actions/camera-probe').set(auth(ADMIN_TOKEN)).send({ host, protocol: 'http', ports: portsOf(s), user: 'proxy', password: 'wrong-pw' });
+    for (let i = 0; i < 5; i++) expect((await post(`localhost:${s.ports.http}`)).body.login).toBe('refused');
+    expect((await post(`127.0.0.1:${s.ports.http}`)).status).toBe(429);
+  }, 30_000);
+  it('an http answer says plaintext; https says nothing', async () => {
+    const q = await proxy();
+    const s = await sim();
+    const http = await request(q.base).post('/control/actions/camera-probe').set(auth(ADMIN_TOKEN)).send({ host: s.camera.host, protocol: 'http', ports: portsOf(s) });
+    expect(http.body.plaintext).toBe(true);
+    const https = await request(q.base).post('/control/actions/camera-probe').set(auth(ADMIN_TOKEN)).send({ host: `127.0.0.1:${s.ports.https}`, ports: portsOf(s) });
+    expect(https.body.plaintext).toBeUndefined();
+  }, 30_000);
+});

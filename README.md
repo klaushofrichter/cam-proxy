@@ -325,8 +325,11 @@ the new form:
   (its zone and DST rule from `time.zone`), `GET /control/onboarding` and
   `GET /control/cameras/<id>/onboarding` (each step, why, and the fix), and
   `DELETE /control/cameras/<id>` (offboard, with what is left over). At most 5
-  password tries per camera in 10 minutes; a camera password is never logged,
-  audited or returned.
+  password tries per camera address in 10 minutes (every spelling of one address
+  counts together); a camera password is never logged, audited or returned.
+  Over plain http the password crosses the network unencrypted: the answers
+  say `plaintext: true` and the admin page warns; prefer https with a pinned
+  certificate.
 - **Latest stills:** `GET /api/cameras/<id>/stills/latest.jpg` and
   `…/previews/latest.jpg` serve the newest still and tile from memory, with
   `ETag: "<id>-<ts>"`, `X-Still-Ts` and `Cache-Control: no-cache`; a poll with

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { timeSetText, addCameraBody, passwordConfirmText, passwordError, retryMinutes, stepLine, trustConfirmText, trustNeeded, STEP_LABELS } from '../web/src/lib/onboarding';
+import { isPlaintext, PLAINTEXT_WARNING, timeSetText, addCameraBody, passwordConfirmText, passwordError, retryMinutes, stepLine, trustConfirmText, trustNeeded, STEP_LABELS } from '../web/src/lib/onboarding';
 
 // The admin UI's onboarding texts (spec 2026-10-30-camera-onboarding-design §4.1, §4.4, §4.5).
 const FP = `SHA256:${'A'.repeat(64)}`;
@@ -31,6 +31,11 @@ describe('the onboarding dialogs and card', () => {
     expect(trustNeeded(st)).toBe(FP);
     expect(trustNeeded({ ...st, trust: { ...st.trust, served: null } })).toBeNull();
     expect(trustNeeded({ ...st, steps: { trust: { ok: true, detail: '' } } })).toBeNull();
+  });
+  it('plain http is said plainly (security review 5)', () => {
+    expect(PLAINTEXT_WARNING).toBe('This camera uses plain HTTP: the password travels unencrypted on your network.');
+    expect(isPlaintext({ steps: { trust: { ok: false, detail: 'plain http: no certificate' } } })).toBe(true);
+    expect(isPlaintext({ steps: { trust: { ok: false, detail: 'certificate not trusted', action: 'camera-trust-pin' } } })).toBe(false);
   });
   it('the camera time answer in words', () => {
     expect(timeSetText({ outcome: 'set', zone: 'Europe/Berlin', ntp: 'already' })).toBe('Camera time zone set to Europe/Berlin.');

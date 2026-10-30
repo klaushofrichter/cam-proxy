@@ -27,10 +27,21 @@ export interface ProbeResult {
   device: { model: string; firmware: string; name: string | null } | null;
   capabilities: Capabilities | null;
   tookMs: number;
+  plaintext?: true; // http: the password (if any) travelled unencrypted
 }
 
 const validPort = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 65535;
 export const validUser = (v: unknown): v is string => typeof v === 'string' && /^[\x21-\x7e]{1,32}$/.test(v);
+
+// Security review 1: a host the resolver would read as a number in another
+// spelling (3232235781, 0xc0a80105, 192.168.001.005, 192.168.261, a trailing
+// dot) is refused: only the dotted quad in decimal, or a name with a letter.
+export function canonicalHost(hostname: string): boolean {
+  const labels = hostname.replace(/\.$/, '').split('.');
+  const numeric = labels.every((l) => /^(0x[0-9a-f]*|[0-9]+)$/i.test(l));
+  if (!numeric) return !hostname.endsWith('.') || /[a-z]/i.test(hostname.replace(/\.$/, '').split('.').pop() ?? '');
+  return !hostname.endsWith('.') && labels.length === 4 && labels.every((l) => /^(0|[1-9][0-9]{0,2})$/.test(l) && Number(l) <= 255);
+}
 
 // The probe's body, checked; a string is the 400 detail. `host` is kept bare
 // (its :port becomes the protocol's port).
@@ -52,6 +63,7 @@ export function probeInput(body: Record<string, unknown>): ProbeInput | string {
     }
   }
   const { hostname, port } = splitHost(host);
+  if (!canonicalHost(hostname)) return 'host: an IPv4 address as four decimal numbers (no leading zeros), or a name with a letter';
   if (port !== undefined) ports[protocol] = port;
   return { host: hostname, protocol, user, ...(body.password !== undefined ? { password: body.password as string } : {}), ...(body.fingerprint !== undefined ? { fingerprint: body.fingerprint as string } : {}), ports };
 }
@@ -98,7 +110,7 @@ export async function probeServed(i: ProbeInput, o: { connectTimeoutMs?: number;
   const ports = Object.fromEntries(PORT_NAMES.map((n, k) => [n, open[k]])) as Record<PortName, boolean>;
   const served = i.protocol === 'https' && ports.https ? await servedCertificate(bare, i.ports.https, o.tlsTimeoutMs ?? 3000) : null;
   const certificate = served ? certificateOf(served.pem, served.fingerprint) : null;
-  const result: ProbeResult = { host: i.host, ports, certificate, login: 'not_tried', device: null, capabilities: null, tookMs: 0 };
+  const result: ProbeResult = { host: i.host, ports, certificate, login: 'not_tried', device: null, capabilities: null, tookMs: 0, ...(i.protocol === 'http' ? { plaintext: true as const } : {}) };
   if (i.password !== undefined) {
     if (i.protocol === 'https' && (!served || served.fingerprint !== i.fingerprint)) return { error: 'fingerprint_mismatch', served: served?.fingerprint ?? null };
     const r = await checkLogin({ id: 'probe', host: withPort(i.host, i.ports[i.protocol]), protocol: i.protocol, user: i.user, password: i.password, ...(served ? { trust: { ca: served.pem, fingerprint: served.fingerprint } } : {}) });

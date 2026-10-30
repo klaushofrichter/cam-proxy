@@ -62,3 +62,16 @@ describe('the login check', () => {
     expect((await checkLogin({ id: 'x', host: `127.0.0.1:${await freePort()}`, protocol: 'http', user: 'proxy', password: 'p' }, { timeoutMs: 2000 })).outcome).toBe('offline');
   });
 });
+
+describe('the attempt keys (security review 1)', () => {
+  it('a full table refuses new addresses instead of evicting a live one; expired keys go first', () => {
+    let t = 0;
+    const a = new PasswordAttempts(() => t, 2);
+    for (let i = 0; i < 5; i++) expect(a.take('192.0.2.10').ok).toBe(true);
+    expect(a.take('192.0.2.11').ok).toBe(true);
+    expect(a.take('192.0.2.12').ok).toBe(false); // full, every key live: refused, nothing evicted
+    expect(a.take('192.0.2.10').ok).toBe(false); // the limited address stays limited
+    t = 600_001;
+    expect(a.take('192.0.2.12').ok).toBe(true); // expired keys make room
+  });
+});

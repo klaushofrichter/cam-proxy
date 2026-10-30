@@ -85,3 +85,7 @@ export function timeSetText(a: { outcome: string; zone: string; ntp: string | nu
   if (a.outcome === 'unsupported') return "This camera can't set its time zone.";
   return `Not set (${a.zone}): ${a.detail ?? a.outcome}`;
 }
+
+// Plain http (security review 5): the password crosses the network unencrypted.
+export const PLAINTEXT_WARNING = 'This camera uses plain HTTP: the password travels unencrypted on your network.';
+export const isPlaintext = (s: { steps: { trust: Step } }): boolean => s.steps.trust.detail === 'plain http: no certificate';

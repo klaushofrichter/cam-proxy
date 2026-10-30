@@ -1,12 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api, ApiError } from '../lib/api';
-  import { envNameOf, passwordConfirmText, passwordError, retryMinutes } from '../lib/onboarding';
+  import { envNameOf, passwordConfirmText, passwordError, PLAINTEXT_WARNING, retryMinutes } from '../lib/onboarding';
 
   // The camera's password (spec 2026-10-30-camera-onboarding-design §4.1):
   // write-only, checked with the camera before it is saved. The field is
   // cleared after every answer; the value goes nowhere else (no store, no URL).
-  let { cam, name, host, onclose, onsaved }: { cam: string; name: string; host: string; onclose: () => void; onsaved?: () => void } = $props();
+  let { cam, name, host, plaintext = false, onclose, onsaved }: { cam: string; name: string; host: string; plaintext?: boolean; onclose: () => void; onsaved?: () => void } = $props();
   let password = $state('');
   let busy = $state(false);
   let message = $state('');
@@ -43,6 +43,7 @@
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pw-title" tabindex="-1" data-testid="camera-password-dialog">
     <h3 id="pw-title">Camera password</h3>
     <p data-testid="camera-password-confirm">{passwordConfirmText(name, host)}</p>
+    {#if plaintext}<p class="bad" data-testid="camera-password-plaintext">{PLAINTEXT_WARNING}</p>{/if}
     <p class="muted">The proxy logs in to the camera with it first; it is saved only on this proxy, and never shown again.</p>
     <form onsubmit={(e) => { e.preventDefault(); void save(); }}>
       <label>Password <input bind:this={input} type="password" autocomplete="off" bind:value={password} disabled={busy} data-testid="camera-password-input" /></label>

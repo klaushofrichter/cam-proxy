@@ -1,7 +1,7 @@
 <script lang="ts">
   import { api, ApiError } from '../lib/api';
   import { newCameraProblem } from '../lib/camera-settings';
-  import { addCameraBody, passwordError, retryMinutes, trustConfirmText } from '../lib/onboarding';
+  import { addCameraBody, passwordError, PLAINTEXT_WARNING, retryMinutes, trustConfirmText } from '../lib/onboarding';
   import { lockedWhy, rights } from '../lib/rights';
   import ConfirmDialog from './ConfirmDialog.svelte';
   import LockedNote from './LockedNote.svelte';
@@ -100,6 +100,7 @@
       <button type="submit" disabled={!!locked || busy || !password || needsTrust} title={locked ?? (needsTrust ? 'Check the camera and confirm its certificate first' : undefined)} data-testid="add-camera-save">Add</button>
     </div>
   </form>
+  {#if protocol === 'http'}<p class="field-error" data-testid="add-camera-plaintext">{PLAINTEXT_WARNING}</p>{/if}
   {#if fingerprint}<p class="small" data-testid="add-camera-fingerprint">Certificate confirmed: <span class="mono">{fingerprint}</span></p>{/if}
   <LockedNote why={locked} testid="add-camera-locked" />
   {#if touched && problem}<p class="field-error" data-testid="add-camera-problem">{problem}</p>{/if}

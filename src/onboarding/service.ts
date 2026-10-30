@@ -21,7 +21,7 @@ import type { CameraRegistry } from '../cameras/registry';
 import { removePasswordLine } from '../moves/leftovers';
 import type { CertState, Requester } from '../tls/camera-certs';
 import type { Served } from '../tls/served';
-import { attemptKey, PASSWORD_WINDOW_MS, type PasswordAttempts } from './attempts';
+import { PASSWORD_WINDOW_MS, resolveAttemptKey, type PasswordAttempts } from './attempts';
 import { passwordSource, type Credentials } from './credentials';
 import { checkLogin } from './login-check';
 import { PASSWORD_RULE, validPassword } from './password-rule';
@@ -110,11 +110,13 @@ export class OnboardingService {
   }
 
   // The rate limit for a password sent to `host`; a refusal audited at most once per address and window.
-  private attempt(host: string, record: (r: Refusal, suppressed: number) => void): Refusal | null {
-    const t = this.d.attempts.take(host);
+  // Keyed by the resolved address (security review 1): every spelling of one camera shares the limit.
+  private async attempt(host: string, record: (r: Refusal, suppressed: number) => void): Promise<Refusal | null> {
+    const key = await resolveAttemptKey(host);
+    const t = this.d.attempts.take(key);
     if (t.ok) return null;
     const r: Refusal = { status: 429, error: 'too_many_attempts', detail: `at most 5 password attempts per camera address in 10 minutes; try again in ${t.retryAfterS} s`, retryAfterS: t.retryAfterS };
-    const th = this.limited.take(attemptKey(host), 'password');
+    const th = this.limited.take(key, 'password');
     if (th.record) record(r, th.suppressed);
     return r;
   }
@@ -122,7 +124,7 @@ export class OnboardingService {
   // PUT /control/cameras/:cam/password (§4.1): checked with the camera first,
   // stored only when it accepts; the camera's own env line removed when this
   // proxy manages the file, refused (409 env_password) when it can't.
-  async savePassword(cam: string, password: unknown, who: Who): Promise<{ status: 200; credentials: Credentials } | Refusal> {
+  async savePassword(cam: string, password: unknown, who: Who): Promise<{ status: 200; credentials: Credentials; plaintext?: true } | Refusal> {
     if (!validPassword(password)) return { status: 400, error: 'invalid', detail: PASSWORD_RULE };
     const l = this.d.loaded();
     const c = cameraConfig(this.d.running(), cam);
@@ -142,7 +144,13 @@ export class OnboardingService {
     if (c.protocol === 'https' && !c.tlsName && (this.d.certState(cam)?.mode ?? 'none') === 'none') {
       return fail({ status: 409, error: 'not_trusted', detail: "the camera's certificate is not trusted: pin it first (camera-trust-pin)" });
     }
-    const limited = this.attempt(c.host, (r, suppressed) => void fail(r, suppressed ? { suppressed } : {}));
+    // A pinned camera serving another certificate (security review 4): said so, and no password sent.
+    const cert = this.d.certState(cam);
+    if (c.protocol === 'https' && !c.tlsName && cert?.mode === 'pinned') {
+      const served = await this.d.served(cam);
+      if (served && served.fingerprint !== cert.fingerprint) return fail({ status: 409, error: 'fingerprint_mismatch', detail: 'the camera serves another certificate than the pinned one: check it, then pin again (camera-trust-pin)', extra: { served: served.fingerprint } }, { served: served.fingerprint });
+    }
+    const limited = await this.attempt(c.host, (r, suppressed) => void fail(r, suppressed ? { suppressed } : {}));
     if (limited) return limited;
     const r = await checkLogin({ id: cam, host: c.host, protocol: c.protocol, user: c.user, password, trust: this.d.trustFor(cam), ...(c.tlsName ? { tlsName: c.tlsName } : {}) });
     if (r.outcome === 'refused') return fail({ status: 422, error: 'camera_refused', detail: 'the camera refused this password' });
@@ -158,7 +166,7 @@ export class OnboardingService {
     this.d.setLoaded(withoutEnv(l, removeLine ? [own] : []));
     await this.d.restartCamera(cam);
     this.d.audit.write({ ...base, outcome: 'success', message: `Camera password for ${cam} saved on this proxy (checked with the camera)${removeLine ? `; ${own} removed from the env file` : ''}`, details: { ...(removeLine ? { envLine: 'removed' } : {}), requestedBy: who.requestedBy, ...cmdOf(who) } });
-    return { status: 200, credentials: { source: 'store', authOk: true, checkedAt: this.now() } };
+    return { status: 200, credentials: { source: 'store', authOk: true, checkedAt: this.now() }, ...(c.protocol === 'http' ? { plaintext: true as const } : {}) };
   }
 
   // POST /control/actions/camera-probe (§4.2): local only, read-only on the
@@ -171,7 +179,7 @@ export class OnboardingService {
     const rec = (outcome: 'success' | 'failure', details: Record<string, unknown>, error?: string) =>
       this.d.audit.write({ ...base, outcome, ...(error ? { error } : {}), message: `Camera probe of ${i.host}: ${error ?? (details.login === 'ok' ? `model ${String(details.model)}` : `login ${String(details.login)}`)}`, details: { host: i.host, ...details, requestedBy: who.requestedBy, ...cmdOf(who) } });
     if (i.password !== undefined) {
-      const limited = this.attempt(i.host, (r, suppressed) => rec('failure', { login: 'not_tried', ...(suppressed ? { suppressed } : {}) }, r.error));
+      const limited = await this.attempt(i.host, (r, suppressed) => rec('failure', { login: 'not_tried', ...(suppressed ? { suppressed } : {}) }, r.error));
       if (limited) return limited;
     }
     const r = await probeCamera(i);
@@ -244,7 +252,7 @@ export class OnboardingService {
   // certificate pinned (before the camera's worker logs in), the camera added
   // in overrides.json (live, no restart). The profile's camera count refuses
   // an addition beyond it.
-  async add(body: unknown, who: Who): Promise<{ status: 201; onboarding: OnboardingStatus } | Refusal> {
+  async add(body: unknown, who: Who): Promise<{ status: 201; onboarding: OnboardingStatus; plaintext?: true } | Refusal> {
     const b = (typeof body === 'object' && body !== null && !Array.isArray(body) ? body : {}) as Record<string, unknown>;
     const bad = (detail: string): Refusal => ({ status: 400, error: 'invalid', detail });
     if (b.id !== undefined && (typeof b.id !== 'string' || !new RegExp(CAMERA_ID).test(b.id))) return bad('id: a camera id (a-z, 0-9, -; at most 32)');
@@ -257,9 +265,42 @@ export class OnboardingService {
     if (typeof i === 'string') return bad(i);
     if (i.protocol === 'https' && i.fingerprint === undefined) return bad("trust.fingerprint: required for an https camera (the certificate it serves, from camera-probe)");
     const l = this.d.loaded();
-    if (l.legacyCamera) return this.addLegacy(b, i, who);
-    if (b.id === undefined) return bad('id: required on a proxy with several cameras');
-    return this.addCamera(b.id as string, b.name as string | undefined, i, who, b.ftp === true);
+    if (!l.legacyCamera && b.id === undefined) return bad('id: required on a proxy with several cameras');
+    // One add or remove at a time (security review 3): the checks and the writes see each other.
+    const r = await this.serial(() => (this.d.loaded().legacyCamera ? this.addLegacy(b, i, who) : this.addCamera(b.id as string, b.name as string | undefined, i, who, b.ftp === true)));
+    return 'onboarding' in r && i.protocol === 'http' ? { ...r, plaintext: true as const } : r;
+  }
+
+  private lock: Promise<unknown> = Promise.resolve();
+  private serial<T>(fn: () => Promise<T>): Promise<T> {
+    const p = this.lock.then(fn, fn);
+    this.lock = p.catch(() => undefined);
+    return p;
+  }
+
+  // The camera's own password variable on an add (security review 2), as the
+  // password API treats it: a line in the env file this proxy manages is
+  // removed after the login; any other (compose's environment, a _FILE
+  // secret) refuses the add before the camera is asked.
+  private envRule(l: Loaded, id: string): { removeLine: boolean } | Refusal {
+    const src = passwordSource(l, id);
+    if (!src.ownEnv) return { removeLine: false };
+    if (src.envName === cameraPasswordEnv(id) && envFileSets(l, src.envName)) return { removeLine: true };
+    return { status: 409, error: 'env_password', detail: `${src.envName} sets this camera's password (compose's environment or a _FILE secret): remove it there first, then add the camera` };
+  }
+
+  // The stored password as it was before an add: put back on a failure (security review 6).
+  private keepPassword(id: string): () => void {
+    const prev = this.d.passwords.get(id);
+    return () => (prev !== undefined ? this.d.passwords.set(id, prev) : this.d.passwords.delete(id));
+  }
+
+  // The camera's own env line removed after the login; a failure puts the stored password back.
+  private removeLineAfterLogin(l: Loaded, id: string, restore: () => void, fail: (r: Refusal) => Refusal): Refusal | null {
+    const e = removePasswordLine(l, id);
+    if (e.outcome !== 'failed') return null;
+    restore();
+    return fail({ status: 409, error: 'env_password', detail: `${cameraPasswordEnv(id)} is set in ${l.envFile?.path ?? 'the env file'}, which could not be written (${e.code}): remove the line there first` });
   }
 
   // A single-camera proxy (config.json `camera` + CAMERA_HOST, the Pi): the
@@ -279,6 +320,8 @@ export class OnboardingService {
     const configured = cameraConfig(l.config, cam)?.host;
     if (!moved && configured) return fail({ status: 409, error: 'camera_limit', detail: `this proxy has one camera, ${cam}, and it is configured (${configured})` });
     if (moved && (this.d.moveOpen?.(moved) ?? true)) return fail({ status: 409, error: 'move_open', detail: `camera move ${moved} is not over here; cancel or finish it from cams-admin` });
+    const env = this.envRule(l, cam);
+    if ('error' in env) return fail(env);
     const line = `CAMERA_HOST=${host}`;
     let envPath: string;
     try {
@@ -291,6 +334,7 @@ export class OnboardingService {
     if ('error' in p) return p;
     const given = (b.ports ?? {}) as Record<string, unknown>;
     const patch = { cameras: { [cam]: { protocol: i.protocol, user: i.user, ...(typeof b.name === 'string' ? { name: b.name } : {}), ...(given.onvif !== undefined ? { onvifPort: i.ports.onvif } : {}), ...(given.rtsp !== undefined ? { rtspPort: i.ports.rtsp } : {}), ...(given.baichuan !== undefined ? { baichuanPort: i.ports.baichuan } : {}) } } };
+    const restore = this.keepPassword(cam);
     this.d.passwords.set(cam, i.password!);
     let w: { key: string; previous: string | null; backup: string };
     const before = this.d.loaded();
@@ -298,7 +342,7 @@ export class OnboardingService {
       planOverrides(before, patch);
       w = writeEnvKey(envPath, CAMERA_HOST_NAMES as unknown as string[], host);
     } catch (err) {
-      this.d.passwords.delete(cam);
+      restore();
       if (err instanceof ConfigError) return fail({ status: 400, error: 'invalid', detail: err.message });
       if (err instanceof EnvFileError) return fail({ status: 409, error: 'not_available', detail: `${err.message}: add ${line} to the .env file by hand`, extra: { line } });
       throw err;
@@ -307,6 +351,11 @@ export class OnboardingService {
     let next = applyOverrides(before, patch);
     if (moved) next = removeOverride(next, `cameras.${cam}.moved`);
     next = withCameraHost(next, { value: host, name: w.key });
+    if (env.removeLine) {
+      const refused = this.removeLineAfterLogin(before, cam, restore, fail);
+      if (refused) return refused;
+      next = withoutEnv(next, [cameraPasswordEnv(cam)]);
+    }
     const wasRunning = !!this.d.cameras.get(cam);
     this.d.setLoaded(next);
     this.auditConfig(who, before, next);
@@ -329,7 +378,7 @@ export class OnboardingService {
 
   // Probe with the password (rate-limited); a refusal names the error. Audited by the caller.
   private async probeForAdd(i: ProbeInput, fail: (r: Refusal, extra?: Record<string, unknown>) => Refusal): Promise<{ model: string | null; served: Served | null } | Refusal> {
-    const limited = this.attempt(i.host, (r, suppressed) => void fail(r, suppressed ? { suppressed } : {}));
+    const limited = await this.attempt(i.host, (r, suppressed) => void fail(r, suppressed ? { suppressed } : {}));
     if (limited) return limited;
     const p = await probeServed(i);
     if ('error' in p) return fail({ status: 409, error: 'fingerprint_mismatch', detail: 'the camera serves another certificate than the one confirmed', extra: { served: p.served } }, { served: p.served });
@@ -349,18 +398,30 @@ export class OnboardingService {
     if (cameraIds(l.config).includes(id) || l.order.includes(id)) return fail({ status: 409, error: 'camera_exists', detail: `${id} is configured here already${l.config.cameras[id]?.moved ? ' (moved away; finish or clean up that move first)' : ''}` });
     const running = this.d.running();
     if (atCameraLimit(running)) return fail({ status: 409, error: 'camera_limit', detail: `profile.cameras is ${running.profile.cameras}` });
+    const env = this.envRule(l, id);
+    if ('error' in env) return fail(env);
     const p = await this.probeForAdd(i, fail);
     if ('error' in p) return p;
+    // Again after the probe (security review 3; the lock makes this a guard).
+    const now = this.d.loaded();
+    if (cameraIds(now.config).includes(id) || now.order.includes(id)) return fail({ status: 409, error: 'camera_exists', detail: `${id} is configured here already` });
+    if (atCameraLimit(this.d.running())) return fail({ status: 409, error: 'camera_limit', detail: `profile.cameras is ${this.d.running().profile.cameras}` });
     const node = { host, protocol: i.protocol, user: i.user, ...(name ? { name } : {}), onvifPort: i.ports.onvif, rtspPort: i.ports.rtsp, baichuanPort: i.ports.baichuan, ftp: { enabled: ftp } };
     const patch = { cameras: { [id]: node } };
+    const restore = this.keepPassword(id);
     this.d.passwords.set(id, i.password!);
     let next: Loaded;
     try {
       planOverrides(this.d.loaded(), patch); // checked before anything else is written
+      if (env.removeLine) {
+        const refused = this.removeLineAfterLogin(this.d.loaded(), id, restore, fail);
+        if (refused) return refused;
+      }
       if (p.served) this.d.pinServed(id, p.served, this.requester(who));
       next = applyOverrides(this.d.loaded(), patch);
+      if (env.removeLine) next = withoutEnv(next, [cameraPasswordEnv(id)]);
     } catch (err) {
-      this.d.passwords.delete(id);
+      restore();
       if (err instanceof ConfigError) return fail({ status: 400, error: 'invalid', detail: err.message });
       throw err;
     }
@@ -383,6 +444,11 @@ export class OnboardingService {
     if (changes.length) this.d.audit.write({ action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', ...whoRecord(who), message: `Settings changed: ${changes.map((c) => c.key).join(', ')}`, details: { changes, requestedBy: who.requestedBy } });
   }
 
+  protected async waitForWorkerGone(id: string): Promise<void> {
+    const t0 = this.now();
+    while (this.d.cameras.get(id) && this.now() - t0 < WORKER_WAIT_MS) await new Promise((r) => setTimeout(r, 50));
+  }
+
   protected async waitForWorker(id: string): Promise<void> {
     const t0 = this.now();
     while (!this.d.cameras.get(id) && this.now() - t0 < WORKER_WAIT_MS) await new Promise((r) => setTimeout(r, 50));
@@ -398,6 +464,10 @@ export class OnboardingService {
   // by id, also one already gone from config.json after a restart. Each step's
   // result is in `removed` or `leftovers`; files follow retention.
   async remove(id: string, who: Who): Promise<{ status: 200; removed: string[]; leftovers: string[] } | Refusal> {
+    return this.serial(() => this.removeNow(id, who));
+  }
+
+  private async removeNow(id: string, who: Who): Promise<{ status: 200; removed: string[]; leftovers: string[] } | Refusal> {
     if (!new RegExp(CAMERA_ID).test(id)) return { status: 400, error: 'invalid', detail: 'not a camera id' };
     const l = this.d.loaded();
     if (!l.legacyCamera && l.order.includes(id)) return { status: 409, error: 'config_json', detail: `cameras.${id} is defined in config.json: remove it there, restart the proxy, then call again to clean up` };
@@ -443,15 +513,21 @@ export class OnboardingService {
       this.d.setLoaded(next);
       this.auditConfig(who, before, next);
       if (legacy && this.d.cameras.get(id)) await this.d.restartCamera(id);
+      // An added camera's worker is gone before the answer: an add of the same id right after starts a new one (with the new password).
+      else if (!legacy) await this.waitForWorkerGone(id);
     }
     // The password: the store, the managed env line.
     if (this.d.passwords.get(id) !== undefined) {
       this.d.passwords.delete(id);
       removed.push('stored password');
     }
+    // The managed line goes, and with it the variable in effect (security review 2: a later add uses its own password).
+    // A line that can't be removed stays a leftover (env <NAME>, below).
     const e = removePasswordLine(l, id);
-    if (e.outcome === 'removed') removed.push(`env ${own} line`);
-    else if (e.outcome === 'failed') leftovers.push(`env ${own} line (the env file could not be written: ${e.code})`);
+    if (e.outcome === 'removed') {
+      removed.push(`env ${own} line`);
+      this.d.setLoaded(withoutEnv(this.d.loaded(), [own]));
+    }
     // The certificate trust, the PTZ positions.
     if (this.d.trust.known(id)) {
       const mode = this.d.certState(id)?.mode;
