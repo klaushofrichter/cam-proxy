@@ -1,0 +1,28 @@
+{
+  "$note": "no content transfer: the PTZ positions still travel",
+  "schema": "event",
+  "message": {
+    "v": 1,
+    "type": "event",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "kind": "move.approve",
+      "moveId": "mv_0123456789ABCDEFGHJK",
+      "plan": {
+        "transfer": false,
+        "kinds": [
+          "ptz"
+        ],
+        "space": "all",
+        "targetSettings": null,
+        "budgetS": 7200,
+        "estimateS": 1800
+      }
+    },
+    "sig": "83GaxPgD6CPT9wPK2Cnvf/okshAlwUX0HdgT1XfYdB2/7//2FaWf3xtwN4xZ2scqGy+rsQilQ91SxbfX83h+DQ=="
+  }
+}

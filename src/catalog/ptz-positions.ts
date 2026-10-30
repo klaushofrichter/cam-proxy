@@ -27,7 +27,7 @@ function tx(c: Catalog, fn: () => void): void {
   }
 }
 
-export function listPositions(c: Catalog, cam: string): PtzPositionRow[] {
+export function listPositions(c: Pick<Catalog, 'db'>, cam: string): PtzPositionRow[] {
   return c.db.prepare('SELECT * FROM ptz_positions WHERE cam = ? ORDER BY sort_order, created_at').all(cam) as unknown as PtzPositionRow[];
 }
 
@@ -73,7 +73,7 @@ export function deletePosition(c: Catalog, cam: string, id: string): void {
 }
 
 // A camera that moved away: all its rows (the count deleted).
-export function deleteCameraPositions(c: Catalog, cam: string): number {
+export function deleteCameraPositions(c: Pick<Catalog, 'db'>, cam: string): number {
   return Number(c.db.prepare('DELETE FROM ptz_positions WHERE cam = ?').run(cam).changes);
 }
 

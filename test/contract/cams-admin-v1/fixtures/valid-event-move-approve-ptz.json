@@ -1,0 +1,29 @@
+{
+  "$note": "a plan with the camera's PTZ positions",
+  "schema": "event",
+  "message": {
+    "v": 1,
+    "type": "event",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "kind": "move.approve",
+      "moveId": "mv_0123456789ABCDEFGHJK",
+      "plan": {
+        "transfer": true,
+        "kinds": [
+          "clips",
+          "ptz"
+        ],
+        "space": "all",
+        "targetSettings": null,
+        "budgetS": 7200,
+        "estimateS": 1800
+      }
+    },
+    "sig": "tlpINgLq8pWhRfOoA4EgbtNX64TTBlaULfnx6q/+u9RQCMH+1R3EY8a6BuE0QLq4/vEDvIki7lSd6fyNx1S+CA=="
+  }
+}

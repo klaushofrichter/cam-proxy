@@ -15,6 +15,7 @@ import { moveDetail } from './detail';
 import { failed, ok, samePlan, zeros } from './done';
 import type { MoveActor, MoveAnswer, MoveBounds, MoveCameraConnection, MoveCopied, MoveEvent, MoveKind, MovePlan, MoveSummary, Settings } from './types';
 import { HOUR } from '../time-units';
+import { listPositions } from '../catalog/ptz-positions';
 
 // The source side of a camera move (camera-move plan Task 7, S §4, §7, §9.1):
 // the source proxy's page starts a move (move.targets, move.request events),
@@ -96,6 +97,18 @@ export interface MoveView {
   budgetExceeded: boolean;
   // The code a failed move ended with.
   failure?: string;
+  // The camera's PTZ positions and whether they go with it (null before an accepted answer).
+  positions?: { count: number; travel: PositionsTravel } | null;
+}
+
+// Whether the camera's PTZ positions go with it (plan D): carried when the
+// target takes ptz, not_taken when it doesn't (an older cam-proxy), none
+// without positions.
+export type PositionsTravel = 'carried' | 'not_taken' | 'none';
+export function withPositions(plan: MovePlan, answer: MoveAnswer, positions: number): { plan: MovePlan; positions: PositionsTravel } {
+  if (positions === 0) return { plan, positions: 'none' };
+  if (answer.kinds?.includes('ptz')) return { plan: { ...plan, kinds: [...plan.kinds.filter((k) => k !== 'ptz'), 'ptz'] }, positions: 'carried' };
+  return { plan, positions: 'not_taken' };
 }
 
 interface Pending {
@@ -332,8 +345,27 @@ export class MoveSource {
       ...(r.answer ? { answer: r.answer } : {}), settings: r.settings ?? {}, summary: r.summary ?? summarize(this.d.inventory, r.camera), plan: r.plan, bounds: r.bounds ?? null, budgetExceeded: r.budgetExceeded === true,
       ...(r.autoApproval ? { autoApproval: { state: r.autoApproval.state, ...(r.autoApproval.reason ? { reason: r.autoApproval.reason } : {}) } } : {}),
       ...(r.failure ? { failure: r.failure } : {}),
+      positions: this.positionsView(r),
     }));
     return [...moves, ...pend];
+  }
+
+  // The camera's saved PTZ positions (none without a catalog: a source unit test).
+  private positionCount(cam: string): number {
+    const c = this.d.inventory?.catalog;
+    return c ? listPositions(c, cam).length : 0;
+  }
+
+  // The positions line of the panel: as approved, or as an approval would take them now.
+  private positionsView(r: MoveRecord): MoveView['positions'] {
+    if (r.plan && r.positions) return { ...r.positions };
+    if (!r.answer?.accept) return null;
+    try {
+      const count = this.positionCount(r.camera);
+      return { count, travel: withPositions({ transfer: false, kinds: [], space: 'all', targetSettings: null, budgetS: 0, estimateS: 0 }, r.answer, count).positions };
+    } catch {
+      return null;
+    }
   }
 
   // POST /control/moves/:id/approve. 404 unknown, 409 not now, 400 the plan.
@@ -344,7 +376,9 @@ export class MoveSource {
     if (!r.answer?.accept) return { status: 409, body: { error: 'not_ready' } };
     const bad = approveProblem(plan, r.summary ?? summarize(this.d.inventory, r.camera), r.answer);
     if (bad) return { status: 400, body: { error: 'invalid', detail: bad } };
-    const p = plan as MovePlan;
+    const count = this.positionCount(r.camera);
+    const withP = withPositions(plan as MovePlan, r.answer, count);
+    const p = withP.plan;
     if (r.plan) {
       // Approved once: the same plan again only re-sends the event (cams-admin may have missed it).
       if (!samePlan(r.plan, p)) return { status: 409, body: { error: 'already_approved' } };
@@ -352,6 +386,7 @@ export class MoveSource {
       return { status: 202, body: {} };
     }
     r.plan = p;
+    r.positions = { count, travel: withP.positions };
     r.approvedAt = this.now();
     r.budgetS = p.budgetS;
     this.d.journal.save(r);
@@ -359,8 +394,8 @@ export class MoveSource {
     this.d.audit.write({
       action: 'move-approve', category: ['configuration'], type: ['change'], outcome: 'success',
       user: who.user, ip: who.ip, userAgent: who.userAgent, camera: r.camera,
-      message: `Camera move ${id} approved: ${r.camera} to ${r.peer.name || r.peer.proxyId}, ${p.transfer ? `content ${p.kinds.join(', ') || 'none'} (${p.space})` : 'no content'}, budget ${p.budgetS} s for an estimate of ${p.estimateS} s`,
-      details: { moveId: id, camera: r.camera, source: this.self(), target: r.peer.proxyId, origin: who.actor.origin, label: who.actor.label, plan: p, kinds: p.kinds, space: p.space, settings: r.settings ?? null, budgetS: p.budgetS, estimateS: p.estimateS },
+      message: `Camera move ${id} approved: ${r.camera} to ${r.peer.name || r.peer.proxyId}, ${p.transfer ? `content ${p.kinds.join(', ') || 'none'} (${p.space})` : 'no content'}, budget ${p.budgetS} s for an estimate of ${p.estimateS} s${withP.positions === 'carried' ? `; positions: ${count} go with the camera` : withP.positions === 'not_taken' ? `; positions stay behind: the target does not take them (${count})` : ''}`,
+      details: { positions: withP.positions, moveId: id, camera: r.camera, source: this.self(), target: r.peer.proxyId, origin: who.actor.origin, label: who.actor.label, plan: p, kinds: p.kinds, space: p.space, settings: r.settings ?? null, budgetS: p.budgetS, estimateS: p.estimateS },
     });
     return { status: 202, body: {} };
   }
@@ -786,7 +821,7 @@ export class MoveSource {
   private answer(a: MoveAnswerArgs): Done {
     // The detail is kept as one line (moveDetail): the page and the audit show it next to the reason.
     const detail = a.detail !== undefined ? moveDetail(a.detail) : undefined;
-    const answer: MoveAnswer = { accept: a.accept, ...(a.reason !== undefined ? { reason: a.reason } : {}), ...(detail ? { detail } : {}), ...(a.space !== undefined ? { space: a.space } : {}), ...(a.estimateS !== undefined ? { estimateS: a.estimateS } : {}) };
+    const answer: MoveAnswer = { accept: a.accept, ...(a.reason !== undefined ? { reason: a.reason } : {}), ...(detail ? { detail } : {}), ...(a.space !== undefined ? { space: a.space } : {}), ...(a.estimateS !== undefined ? { estimateS: a.estimateS } : {}), ...(a.kinds !== undefined ? { kinds: [...a.kinds] } : {}) };
     const same = (x?: MoveAnswer) => JSON.stringify(x) === JSON.stringify(answer);
     const r = this.d.journal.load(a.moveId);
     if (r) {
@@ -891,7 +926,8 @@ export class MoveSource {
     if (this.managesCert(r.camera) && !this.d.certs()) return failed('no_site_ca');
     r.targetPublicSpki = a.targetPublicKey;
     r.expectedLeaf = a.expectedLeaf;
-    r.manifest = r.plan.transfer ? listChunks(this.d.inventory, r.camera, r.plan.kinds) : [];
+    // Without content the PTZ positions still go (they belong to the camera).
+    r.manifest = listChunks(this.d.inventory, r.camera, r.plan.transfer ? r.plan.kinds : r.plan.kinds.filter((k) => k === 'ptz'));
     r.phase = 'switching';
     this.d.journal.save(r);
     this.setExpectedLeaf(r.camera, a.expectedLeaf);

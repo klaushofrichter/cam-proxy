@@ -148,6 +148,22 @@
     "estimateS": {
       "type": "integer",
       "minimum": 0
+    },
+    "kinds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "stills",
+          "clips",
+          "events",
+          "checks",
+          "archive",
+          "ptz"
+        ]
+      },
+      "maxItems": 6,
+      "uniqueItems": true
     }
   },
   "required": [

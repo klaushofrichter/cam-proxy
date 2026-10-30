@@ -477,7 +477,7 @@ export class AdminClient {
         const mono = this.d.monotonic ?? (() => performance.now());
         const at = mono();
         this.conn = { connId, serverNow: () => serverTime + (mono() - at), seen: new SeenIds() };
-        this.trySend(ws, 'hello', { proxyId: k.proxyId, keyId: k.keyId, connId, nonce, ts, version: this.d.version.slice(0, 64), capabilities: this.d.commands && this.d.commands.status().enabled ? ['status', 'commands'] : ['status'] }, { sig: sign(k.privateKey, signedText.hello(connId, nonce, k.proxyId, k.keyId, ts)) });
+        this.trySend(ws, 'hello', { proxyId: k.proxyId, keyId: k.keyId, connId, nonce, ts, version: this.d.version.slice(0, 64), capabilities: this.d.commands && this.d.commands.status().enabled ? ['status', 'commands', 'move-ptz'] : ['status', 'move-ptz'] }, { sig: sign(k.privateKey, signedText.hello(connId, nonce, k.proxyId, k.keyId, ts)) });
         return;
       }
       case 'welcome': {

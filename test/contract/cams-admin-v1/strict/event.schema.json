@@ -588,10 +588,11 @@
                           "clips",
                           "events",
                           "checks",
-                          "archive"
+                          "archive",
+                          "ptz"
                         ]
                       },
-                      "maxItems": 5,
+                      "maxItems": 6,
                       "uniqueItems": true
                     },
                     "space": {
@@ -669,10 +670,11 @@
                       "clips",
                       "events",
                       "checks",
-                      "archive"
+                      "archive",
+                      "ptz"
                     ]
                   },
-                  "maxItems": 5,
+                  "maxItems": 6,
                   "uniqueItems": true
                 },
                 "space": {
@@ -856,6 +858,10 @@
                     "archive": {
                       "type": "integer",
                       "minimum": 0
+                    },
+                    "ptz": {
+                      "type": "integer",
+                      "minimum": 0
                     }
                   },
                   "required": [],
@@ -881,6 +887,10 @@
                       "minimum": 0
                     },
                     "archive": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "ptz": {
                       "type": "integer",
                       "minimum": 0
                     }
@@ -910,6 +920,10 @@
                     "archive": {
                       "type": "integer",
                       "minimum": 0
+                    },
+                    "ptz": {
+                      "type": "integer",
+                      "minimum": 0
                     }
                   },
                   "required": [],
@@ -935,6 +949,10 @@
                       "minimum": 0
                     },
                     "archive": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "ptz": {
                       "type": "integer",
                       "minimum": 0
                     }
@@ -1018,7 +1036,7 @@
                 "properties": {
                   "id": {
                     "type": "string",
-                    "pattern": "^(stills|clips|events|checks|archive):[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                    "pattern": "^(stills|clips|events|checks|archive|ptz):[0-9]{4}-[0-9]{2}-[0-9]{2}$"
                   },
                   "state": {
                     "type": "string",

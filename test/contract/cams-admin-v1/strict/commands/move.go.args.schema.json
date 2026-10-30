@@ -26,10 +26,11 @@
               "clips",
               "events",
               "checks",
-              "archive"
+              "archive",
+              "ptz"
             ]
           },
-          "maxItems": 5,
+          "maxItems": 6,
           "uniqueItems": true
         },
         "space": {

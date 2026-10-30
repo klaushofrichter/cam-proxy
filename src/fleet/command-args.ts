@@ -3,7 +3,7 @@
 // them against the vendored strict schemas on the fixtures.
 import { NEVER_REMOTE_ACTIONS, REMOTE_ACTIONS } from './policy';
 import { CAMERA_NAME_PATTERN } from './remote-settable';
-import { FILE_KINDS, MOVE_KINDS, type MoveBounds, type MoveCopied, type MovePlan, type MoveRole, type MoveSummary, type Settings, type SettingsMap, type Space, type MoveReason } from '../moves/types';
+import { FILE_KINDS, MOVE_KINDS, type MoveKind, type MoveBounds, type MoveCopied, type MovePlan, type MoveRole, type MoveSummary, type Settings, type SettingsMap, type Space, type MoveReason } from '../moves/types';
 import type { ManagedToken, TokensApplyArgs } from './token-store';
 
 export type ArgsVerdict<T> = { ok: true; args: T } | { ok: false; code: 'unsupported_version' | 'invalid_args'; detail: string };
@@ -93,7 +93,7 @@ export const validateCameraName = (a: unknown) => v1<CameraNameArgs>(a, ['camera
 export interface MoveTargetsArgs { v: 1; requestId: string; targets: { proxyId: string; name: string; site: string | null }[] }
 export interface MoveOpenArgs { v: 1; moveId: string; requestId: string; camera: string; tokenHash: string; targetIp: string }
 export interface MoveOfferArgs { v: 1; moveId: string; token: string; source: { proxyId: string; name: string; url: string; caFingerprints: string[]; tlsServername: string }; camera: { camsId: string; proxyCameraId: string; name: string; host: string; protocol: 'https' | 'http'; user: string; onvifPort: number; rtspPort: number; baichuanPort: number }; summary: MoveSummary; settings: Settings }
-export interface MoveAnswerArgs { v: 1; moveId: string; requestId: string; target: { proxyId: string; name: string }; accept: boolean; reason?: MoveReason; detail?: string; space?: Space; estimateS?: number }
+export interface MoveAnswerArgs { v: 1; moveId: string; requestId: string; target: { proxyId: string; name: string }; accept: boolean; reason?: MoveReason; detail?: string; space?: Space; estimateS?: number; kinds?: MoveKind[] }
 export interface MoveStartArgs { v: 1; moveId: string; plan: MovePlan; settings: Settings; done: string[] }
 export interface MoveGoArgs { v: 1; moveId: string; plan: MovePlan; targetPublicKey: string; expectedLeaf: string }
 export interface MoveBeginArgs { v: 1; camera: string; target: string; bounds: MoveBounds | null }
@@ -206,7 +206,9 @@ export const validateMoveOffer = (a: unknown) => v1<MoveOfferArgs>(a, ['moveId',
 });
 // A refusal's detail (contract: a string of 1 to 300 characters, counted in code points).
 const detailOk = (x: unknown) => typeof x === 'string' && x.length > 0 && [...x].length <= 300;
-export const validateMoveAnswer = (a: unknown) => v1<MoveAnswerArgs>(a, ['moveId', 'requestId', 'target', 'accept', 'reason', 'detail', 'space', 'estimateS'], (o) => {
+// The kinds a target takes (plan D): unique, each a move kind.
+const kindsOk = (k: unknown) => Array.isArray(k) && k.length <= MOVE_KINDS.length && new Set(k).size === k.length && k.every((x) => (MOVE_KINDS as readonly unknown[]).includes(x));
+export const validateMoveAnswer = (a: unknown) => v1<MoveAnswerArgs>(a, ['moveId', 'requestId', 'target', 'accept', 'reason', 'detail', 'space', 'estimateS', 'kinds'], (o) => {
   const bad = moveId(o);
   if (bad) return bad;
   if (typeof o.requestId !== 'string' || !REQ_ID.test(o.requestId)) return 'requestId';
@@ -219,7 +221,8 @@ export const validateMoveAnswer = (a: unknown) => v1<MoveAnswerArgs>(a, ['moveId
     const p = spaceProblem(o.space);
     if (p) return p;
   }
-  return optional(o, 'estimateS', nat) ? null : 'estimateS';
+  if (!optional(o, 'estimateS', nat)) return 'estimateS';
+  return optional(o, 'kinds', kindsOk) ? null : 'kinds';
 });
 export const validateMoveStart = (a: unknown) => v1<MoveStartArgs>(a, ['moveId', 'plan', 'settings', 'done'], (o) =>
   moveId(o) ?? planProblem(o.plan) ?? settingsProblem(o.settings) ?? (!Array.isArray(o.done) || o.done.length > 512 || o.done.some((c) => typeof c !== 'string' || !CHUNK_ID.test(c)) ? 'done' : null));

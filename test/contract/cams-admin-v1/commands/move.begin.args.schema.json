@@ -29,7 +29,7 @@
                 "type": "string",
                 "maxLength": 64
               },
-              "maxItems": 5,
+              "maxItems": 6,
               "uniqueItems": true
             },
             "space": {

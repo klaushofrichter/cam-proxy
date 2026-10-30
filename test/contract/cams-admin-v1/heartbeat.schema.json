@@ -191,7 +191,8 @@
             "object",
             "null"
           ]
-        }
+        },
+        "moveLeftovers": {}
       },
       "required": [
         "summary"

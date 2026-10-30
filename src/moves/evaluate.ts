@@ -14,8 +14,8 @@ import { issuedBy } from '../tls/leaf';
 import { servedCertificate, type Served } from '../tls/served';
 import { moveDetail } from './detail';
 import type { MoveJournal, MoveRecord } from './journal';
-import type { FileKind, MoveReason, Space } from './types';
-import { FILE_KINDS } from './types';
+import type { FileKind, MoveKind, MoveReason, Space } from './types';
+import { FILE_KINDS, MOVE_KINDS } from './types';
 
 // The target's evaluation of an offered move (camera-move plan Task 6, S §6, §7,
 // P4, Review Focus 4). Pure decisions over injected facts; the one effect is the
@@ -26,7 +26,8 @@ const PROBE_CAP_MS = 5000;
 const CONNECT_MS = 3000;
 const GB = 1024 ** 3;
 
-export type Evaluation = { accept: true; space: Space; probeBps: number } | { accept: false; reason: MoveReason; detail?: string };
+// `kinds`: what this proxy takes in a move (plan D: the file kinds and ptz).
+export type Evaluation = { accept: true; space: Space; probeBps: number; kinds: MoveKind[] } | { accept: false; reason: MoveReason; detail?: string };
 
 export interface EvaluateDeps {
   // The allow entry `move.receive` is in effect.
@@ -191,7 +192,7 @@ export async function evaluate(deps: EvaluateDeps, args: MoveOfferArgs): Promise
     token: args.token, cameraConnection: connection, summary: args.summary, settings: args.settings, space, probeBps,
     chunks: {}, bytesDone: 0, startedAt: (deps.now ?? Date.now)(),
   });
-  return { accept: true, space, probeBps };
+  return { accept: true, space, probeBps, kinds: [...MOVE_KINDS] };
 }
 
 interface Fetched { status: number; received: number; ms: number; body: Buffer | null }

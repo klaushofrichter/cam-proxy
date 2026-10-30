@@ -14,7 +14,7 @@ import { TokenStore } from '../src/fleet/token-store';
 import { writeKeyFile } from '../src/fleet/keyfile';
 import { readEnvLayer } from '../src/config/env';
 import { buildHealth } from '../src/health/summary';
-import { spaceProblem, summaryProblem, validateMoveStart } from '../src/fleet/command-args';
+import { spaceProblem, summaryProblem, validateMoveAnswer, validateMoveStart } from '../src/fleet/command-args';
 import { signEnvelope, type Envelope } from '../src/fleet/protocol';
 import { input } from './helpers/health-input';
 import { startFakeAdmin, type FakeAdmin } from './helpers/fake-admin';
@@ -260,7 +260,7 @@ describe('the client with commands', () => {
     const f = runnerFixture();
     make(f, { now: () => Date.now() + 3 * 365 * 86_400_000 });
     await until(() => client!.view().state === 'connected');
-    expect(fake.received.find((r) => r.msg.type === 'hello')!.msg.body).toMatchObject({ capabilities: ['status', 'commands'] });
+    expect(fake.received.find((r) => r.msg.type === 'hello')!.msg.body).toMatchObject({ capabilities: ['status', 'commands', 'move-ptz'] });
     const { cmdId } = fake.sendCommand('tokens.apply', argsOf(1));
     await until(() => fake.results(cmdId).length === 2);
     expect(fake.results(cmdId).map(bodyOf).map((b) => b.phase)).toEqual(['received', 'done']);
@@ -451,7 +451,7 @@ describe('CAMPROXY_ADMIN_COMMANDS=off', () => {
     await sim?.close();
   });
   it('the hello does not announce commands (cams-admin sends none)', () => {
-    expect(fake.received.find((r) => r.msg.type === 'hello')!.msg.body).toMatchObject({ capabilities: ['status'] });
+    expect(fake.received.find((r) => r.msg.type === 'hello')!.msg.body).toMatchObject({ capabilities: ['status', 'move-ptz'] });
   });
   it('enabled false in the heartbeat; every command paused', async () => {
     expect((fake.heartbeats()[0].msg.body as Record<string, any>).proxy.commands).toMatchObject({ enabled: false, allow: ['tokens.apply'] });
@@ -483,6 +483,21 @@ describe('the ptz move kind in the command arguments', () => {
   it('a summary with a ptz key is refused', () => {
     expect(summaryProblem(five)).toBeNull();
     expect(summaryProblem({ ...five, ptz: { files: 0, bytes: 0, rows: 1, oldest: null, newest: null } })).toBe('summary');
+  });
+
+  const answer = (o: object = {}) => validateMoveAnswer({ v: 1, moveId: 'mv_0123456789ABCDEFGHJK', requestId: 'rq_0123456789ABCDEFGHJK', target: { proxyId: 'prx_0123456789ABCDEFGHJK', name: 'Mini PC' }, accept: true, ...o });
+  it('move.answer takes kinds', () => {
+    expect(answer({ kinds: ['stills', 'clips', 'events', 'checks', 'archive', 'ptz'] }).ok).toBe(true);
+    expect(answer({ kinds: [] }).ok).toBe(true);
+  });
+  it("kinds ['ptz','ptz'] or ['video'] -> 'kinds'", () => {
+    for (const kinds of [['ptz', 'ptz'], ['video'], 'ptz', ['stills', 'clips', 'events', 'checks', 'archive', 'ptz', 'stills']]) {
+      const v = answer({ kinds });
+      expect(v.ok ? '' : v.detail, JSON.stringify(kinds)).toBe('kinds');
+    }
+  });
+  it('an answer without kinds still passes', () => {
+    expect(answer().ok).toBe(true);
   });
 
   it('a space with a ptz perKind is refused', () => {

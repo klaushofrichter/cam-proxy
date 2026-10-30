@@ -517,6 +517,46 @@
               "type": "null"
             }
           ]
+        },
+        "moveLeftovers": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "camera": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+                  },
+                  "moveId": {
+                    "type": "string",
+                    "pattern": "^mv_[0-9A-HJKMNP-TV-Z]{20}$"
+                  },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 80,
+                      "minLength": 1
+                    },
+                    "maxItems": 4,
+                    "minItems": 1
+                  }
+                },
+                "required": [
+                  "camera",
+                  "moveId",
+                  "items"
+                ],
+                "additionalProperties": false
+              },
+              "maxItems": 16
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [

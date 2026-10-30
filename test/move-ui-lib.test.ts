@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { autoWaitText, budgetDefault, movedText, refusalText, estimateText, failText, limitText, phaseText, planFrom, rejectText, sizeText, spaceOptions, statusLine, type MoveForm } from '../web/src/lib/moves';
+import { positionsText, autoWaitText, budgetDefault, movedText, refusalText, estimateText, failText, limitText, phaseText, planFrom, rejectText, sizeText, spaceOptions, statusLine, type MoveForm } from '../web/src/lib/moves';
 import type { MoveSummary, Space } from '../src/moves/types';
 
 const kind = (files: number, bytes: number) => ({ files, bytes, rows: 0, oldest: files ? 1_700_000_000_000 : null, newest: files ? 1_700_000_900_000 : null });
@@ -102,5 +102,16 @@ describe('texts', () => {
     expect(statusLine(v, 'Garden')).toBe('Moving Garden to Shed: copying, 1.0 GB of 4.0 GB (25%), about 10 min left');
     expect(statusLine({ ...v, phase: 'switching', progress: undefined }, 'Garden')).toBe('Moving Garden to Shed: switching over');
     expect(statusLine({ ...v, phase: 'failed', failure: 'camera_failed' }, 'Garden')).toBe('Moving Garden to Shed: failed, the camera did not take the new settings');
+  });
+});
+
+describe('positionsText', () => {
+  it('carried, not taken, none', () => {
+    expect(positionsText({ count: 3, travel: 'carried' })).toBe('3 PTZ positions go with the camera.');
+    expect(positionsText({ count: 1, travel: 'carried' })).toBe('1 PTZ position goes with the camera.');
+    expect(positionsText({ count: 3, travel: 'not_taken' })).toBe("3 PTZ positions stay behind: the target's cam-proxy is older. They stay saved on the camera.");
+    expect(positionsText({ count: 0, travel: 'none' })).toBe('');
+    expect(positionsText(null)).toBe('');
+    expect(positionsText(undefined)).toBe('');
   });
 });
