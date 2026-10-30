@@ -53,6 +53,7 @@ import { StreamLog, type StreamMessage } from './stream/log';
 import { AnalyticsService, CHECK_USAGE } from './analytics/service';
 import { sseHandler } from './stream/sse';
 import { clientIp, refuseTokenInUrl, requireAccess, type AccessDeps } from './api/auth';
+import { ptzApi } from './api/ptz-api';
 import { clientApi } from './api/client-api';
 import { stillChecksApi } from './api/still-checks-api';
 import { auditApi, controlApi, sessionRoutes, type ControlDeps } from './api/control-api';
@@ -1140,6 +1141,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   app.use('/api', requireAccess('client', access), composeApi({ config: () => running, catalog, composer, cameras: cams, paused: () => storage.paused(), font, audit }));
   app.use('/api', requireAccess('client', access), stillChecksApi({ config: () => running, catalog, cameras: cams, analytics, audit }));
   app.use('/api', requireAccess('client', access), archiveApi({ config: () => running, catalog, archive, composer, cameras: cams }));
+  // Pan/tilt/zoom and positions (spec 2026-10-30-ptz-capabilities-design §5).
+  app.use('/api', requireAccess('client', access), ptzApi({ cameras: cams, audit }));
   app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, cameras: cams, sse, tls: (id) => certs?.state(id) }));
   // The audit log: admins and the audit token, GET (and HEAD) only. The access check is
   // on the route inside the router; other /control paths pass on untouched

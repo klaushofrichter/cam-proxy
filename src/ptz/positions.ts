@@ -128,6 +128,11 @@ export class PtzPositions {
     return slots;
   }
 
+  // A position's stored name (for audit records); no camera read.
+  name(id: string): string | undefined {
+    return positionById(this.d.catalog, this.d.cam, id)?.name;
+  }
+
   async list(): Promise<{ max: number; positions: PtzPositionJson[] }> {
     const rows = this.rows();
     if (rows.length === 0) return { max: POSITIONS_MAX, positions: [] };

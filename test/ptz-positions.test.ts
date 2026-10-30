@@ -257,6 +257,15 @@ describe('PtzPositions', () => {
     expect(listPositions(catalog, 'e1')[0].name).toBe('Gate 2');
   });
 
+  it('name(id): the stored name, no camera read', async () => {
+    const a = await svc.save('Gate');
+    const reads = cam.reads;
+    online = false;
+    expect(svc.name(a.id)).toBe('Gate');
+    expect(svc.name('pos_x')).toBeUndefined();
+    expect(cam.reads).toBe(reads);
+  });
+
   it('unknown id → 404 not_found', async () => {
     for (const p of [svc.resave('pos_x'), svc.rename('pos_x', 'A'), svc.makeHome('pos_x'), svc.remove('pos_x'), svc.goTo('pos_x')]) await rejects(p, 404, 'not_found');
   });
