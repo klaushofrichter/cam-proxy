@@ -266,7 +266,7 @@ describe('the Pi: no cams-admin', () => {
     expect((await request(base).get('/metrics')).text).not.toMatch(/^camproxy_cams_admin_state\{/m);
   });
   it('migration P2: commands off, no managed tokens; the card reads without writing; an unknown bearer is 401 as before', async () => {
-    expect((await request(base).get('/control/admin/commands').set(auth(ADMIN_TOKEN))).body).toMatchObject({ enabled: true, paused: false, allow: [], recent: [] });
+    expect((await request(base).get('/control/admin/commands').set(auth(ADMIN_TOKEN))).body).toMatchObject({ enabled: true, paused: false, allow: ['camera.onboarding.get'], recent: [] });
     expect((await request(base).get('/control/admin/tokens').set(auth(ADMIN_TOKEN))).body).toEqual({ revision: 0, problem: null, items: [] });
     expect((await request(base).get('/api/cameras').set(auth('x'.repeat(43)))).status).toBe(401);
     expect((await request(base).get('/api/cameras').set(auth(CLIENT_TOKEN))).status).toBe(200);
@@ -282,7 +282,7 @@ describe('the Pi: no cams-admin', () => {
     expect(after['sse.maxClients'].by).toBeUndefined();
     expect(existsSync(join(dir, 'data', 'admin'))).toBe(false);
     // Every P3 allow entry is off; nothing that ships allows one.
-    expect((await request(base).get('/control/admin/commands').set(auth(ADMIN_TOKEN))).body.allow).toEqual([]);
+    expect((await request(base).get('/control/admin/commands').set(auth(ADMIN_TOKEN))).body.allow).toEqual(['camera.onboarding.get']);
     await request(base).delete('/control/config/sse.maxClients').set(auth(ADMIN_TOKEN)).expect(200);
   });
 });
@@ -308,7 +308,7 @@ describe('the Pi enrolled with cams-admin, after the P2 update (commands off)', 
     try {
       await until(() => fake.heartbeats().length >= 1 && q.camsAdmin.view().state === 'connected', 10_000);
       expect(fake.received.find((r) => r.msg.type === 'hello')!.msg.body).toMatchObject({ capabilities: ['status', 'commands', 'move-ptz'] });
-      expect((fake.heartbeats()[0].msg.body as { proxy: unknown }).proxy).toMatchObject({ commands: { enabled: true, paused: false, allow: [] }, tokens: { revision: 0, client: 0, admin: 0, blocked: [] } });
+      expect((fake.heartbeats()[0].msg.body as { proxy: unknown }).proxy).toMatchObject({ commands: { enabled: true, paused: false, allow: ['camera.onboarding.get'] }, tokens: { revision: 0, client: 0, admin: 0, blocked: [] } });
       const { cmdId } = fake.sendCommand('tokens.apply', { v: 1, revision: 1, tokens: [] });
       await until(() => fake.results(cmdId).length === 1);
       expect(fake.results(cmdId)[0].msg.body).toMatchObject({ phase: 'done', status: 'refused', code: 'not_allowed' });

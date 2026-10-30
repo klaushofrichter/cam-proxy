@@ -906,10 +906,12 @@
               "camera.action:camera-ftp-setup",
               "camera.action:camera-ntp-set",
               "camera.action:camera-cert-push",
+              "camera.action:camera-time-set",
               "move.send",
               "move.receive",
               "ui.config",
-              "ui.restart"
+              "ui.restart",
+              "camera.onboarding.get"
             ]
           },
           "description": "commands cams-admin may send this proxy (default none); data/admin/policy.json (the Status card, admin-commands) replaces this list. config.json only"

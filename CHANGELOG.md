@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- New: camera onboarding through the API, no file edits and no restart (the admin page follows in a later release):
+- New: camera onboarding from the admin page or the API, no file edits and no restart:
   - `POST /control/actions/camera-probe` shows which of a camera's ports answer and the certificate it serves; with the camera's password, its model and what it can do. It only reads from the camera.
   - `POST /control/cameras` adds a camera with its password and certificate in one call, also on the Pi (it writes `CAMERA_HOST` into `.env` as "Use this address" does). The proxy logs in first, over exactly the certificate you confirmed; nothing is stored when the camera refuses. A proxy at its `profile.cameras` count refuses the addition (a proxy already over it keeps running). Only the proxy's own admin token or sign-in may add a camera.
   - `DELETE /control/cameras/{id}` removes a camera with its password, certificate trust, PTZ positions and (when it points here) the camera's FTP upload. What only a person can remove is listed under "Left over from removed cameras" on the Status page.
@@ -11,6 +11,8 @@
   - `GET /control/onboarding` and `GET /control/cameras/{cam}/onboarding`: one status per camera with each step (reachable, login, trust, capabilities, stream, events, FTP, time, name, PoE, profile), why it isn't done and what fixes it. A camera over plain http is never "ready".
   - The camera views (`GET /control/cameras`, `GET /api/cameras`) say where a camera's password comes from and whether it works (`credentials`), never the password.
   - New setting `time.zone` (local only): the cameras' time zone, compared in the onboarding status; without it the host's zone when known.
+  - Admin page: "Add a camera" checks the camera, shows its certificate to confirm, and adds it with its password (Find camera's "Add this camera" fills in the address); the Status page has an Onboarding card per camera with "Camera password" and "Trust this camera's certificate" (both also open to a cams-admin sign-in).
+  - cams-admin can read each camera's onboarding status (`camera.onboarding.get`, on by default; switch it off on the cams-admin page) and the heartbeat carries each camera's ready flag and missing steps. `camera.action:camera-time-set` is known (off by default) for the time-zone setting that follows. Needs cams-admin 2026.10.30.3 or later.
 
 ## v2026.10.30.2
 
