@@ -211,8 +211,18 @@ an over-budget note, or the reason a move failed.
 - **Password:** only the camera password the proxy itself uses (stored per
   camera in `data/admin/camera-passwords.json`) travels, sealed to a key the
   target makes for this move. A password from the environment
-  (`CAMPROXY_CAMERA_PASSWORD`, `.env`) wins on either proxy; the source's
-  `.env` value is not deleted at the end.
+  (`CAMPROXY_CAMERA_PASSWORD`, `.env`) wins on either proxy. At the end the
+  source removes the camera's `CAMPROXY_CAMERA_PASSWORD_<ID>` line from the
+  `.env` file it manages (`CAMPROXY_ENV_FILE`, as on the Pi; a backup
+  `.env.bak-…` is kept); what it can't remove is listed (see Leftovers).
+- **PTZ positions:** a camera's saved positions go with it when both proxies
+  run this version: the target's offer lists the kinds it takes (`ptz`
+  among them) and the source adds `ptz` to the approved plan, also when no
+  content is transferred. The target **replaces** the camera's positions
+  with the source's (a camera coming back gets its current ones). With an
+  older target they stay behind; the `move-approve` record and the move
+  panel say so, and the presets themselves stay saved on the camera. At the
+  end the source deletes its positions either way.
 - **FTP:** the camera uploads to the target's own FTP user and password.
 - **Retention:** retention and size limits are host settings and don't
   move; the target's apply from the switch-over. Content older than the
@@ -293,6 +303,17 @@ after the move, hidden (`cameras.<id>.moved` = the move's id): it doesn't run,
 isn't listed and its FTP user is refused. Settings lists it as moved; delete
 it from `config.json` when convenient. A camera added on the Settings page
 (`overrides.json`) is removed at the end.
+
+What the source can't remove itself is listed under **Left over from camera
+moves** on its Status page, in `GET /control/status` (`moveLeftovers:
+[{camera, moveId, items}]`) and in cams-admin's diagnostics (the heartbeat
+carries it): `config.json entry` (the hidden entry above),
+`env CAMPROXY_CAMERA_PASSWORD_<ID>` (a password in the process environment,
+from compose's `environment` or `env_file`; one the proxy removed from its
+`.env` stays listed until the container is recreated) and
+`env CAMPROXY_CAMERA_PASSWORD_<ID>_FILE` (a compose secret). Each item says
+what to do; it drops off the list once done, and the whole entry when the
+camera runs on this proxy again.
 
 A proxy whose last camera moved away keeps running: cams-admin, the pages and
 the health summary work. The health has one Camera item, "no camera runs on

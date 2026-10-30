@@ -3,6 +3,7 @@
 ## Unreleased
 
 - New: pan, tilt and zoom. Each camera in the camera list now says what it can do (`capabilities`; for now whether and how it can move), and the proxy offers a PTZ API under `/api/cameras/{cam}/ptz`: moves that stop by themselves (a closed browser tab leaves the camera stopped within 2 s), zoom, focus, and up to 20 saved positions per camera with a Home position, kept on the proxy and on the camera. Works with the Reolink E1 Outdoor Pro; presets saved with the camera's own app are left alone, and a position the camera lost shows as missing until saved again. Position changes are audited (`ptz-position`) and sent to stream clients (`ptz-positions`). `scripts/ptz-real-check.sh` checks a real PTZ camera through a proxy (the camera moves while it runs).
+- Camera moves: a camera's saved PTZ positions now move with it, when the other proxy runs this version too (needs the cams-admin release that knows them); otherwise the move says they stay behind, and they stay saved on the camera. At the end the proxy the camera left also deletes its positions and removes the camera's password line from its `.env` (on the Pi; a backup is kept). What it can't remove itself (a `config.json` entry, a password in compose's environment) is listed under "Left over from camera moves" on the Status page, with what to do, and shown in cams-admin.
 
 ## v2026.10.27.1
 
