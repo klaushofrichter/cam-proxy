@@ -488,7 +488,7 @@ export class MoveSource {
         // not kept: the audit record below still names them
       }
     }
-    const envText = env.outcome === 'removed' ? `; ${env.key} removed from the env file (backup ${env.backup})` : env.outcome === 'failed' ? `; ${env.key} could not be removed from the env file (${env.code})` : '';
+    const envText = env.outcome === 'removed' ? `; ${env.key} removed from the env file` : env.outcome === 'failed' ? `; ${env.key} could not be removed from the env file (${env.code})` : '';
     this.dropPending(r.id);
     this.phaseEvent(r);
     const total = sum(deleted);

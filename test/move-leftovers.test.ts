@@ -81,7 +81,7 @@ describe('removePasswordLine', () => {
   it('removed / not_in_file', () => {
     const { f } = envDir();
     const { loaded } = loadedWith({ envFile: f });
-    expect(removePasswordLine(loaded, 'cam4', at)).toEqual({ outcome: 'removed', key: PW, backup: '.env.bak-20261030-090000' });
+    expect(removePasswordLine(loaded, 'cam4', at)).toEqual({ outcome: 'removed', key: PW });
     expect(readFileSync(f, 'utf8')).toBe('A=1\nB=2\n');
     expect(removePasswordLine(loaded, 'cam4', at)).toEqual({ outcome: 'not_in_file', key: PW });
   });

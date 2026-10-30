@@ -13,7 +13,7 @@ import { writePrivateJson } from '../fleet/private-file';
 
 export interface MoveLeftover { camera: string; moveId: string; items: string[] }
 export const LEFTOVERS_MAX = 16;
-export type EnvCleanup = { outcome: 'removed'; key: string; backup: string } | { outcome: 'not_in_file' | 'not_managed'; key: string } | { outcome: 'failed'; key: string; code: string };
+export type EnvCleanup = { outcome: 'removed' | 'not_in_file' | 'not_managed'; key: string } | { outcome: 'failed'; key: string; code: string };
 
 // The camera's password line removed from the env file this proxy manages
 // (CAMPROXY_ENV_FILE, read at start); not_managed without one.
@@ -23,7 +23,7 @@ export function removePasswordLine(loaded: Loaded, cam: string, now = new Date()
   if (!file?.read) return { outcome: 'not_managed', key };
   try {
     const r = removeEnvKey(file.path, key, now);
-    return r ? { outcome: 'removed', key, backup: r.backup } : { outcome: 'not_in_file', key };
+    return r ? { outcome: 'removed', key } : { outcome: 'not_in_file', key };
   } catch (err) {
     return { outcome: 'failed', key, code: err instanceof EnvFileError ? err.code : 'write_failed' };
   }

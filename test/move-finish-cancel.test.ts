@@ -782,10 +782,12 @@ describe('the cleanup of plan D on the source (PTZ positions, the env password, 
     u.journal.save(sourceRecord());
     expect((await u.source.finish(finishArgs('source'))).status).toBe('ok');
     expect(readFileSync(f, 'utf8')).toBe('# cams\r\nCOMPOSE_PROJECT_NAME=cams\r\nexport OTHER=1');
-    expect(readdirSync(d)).toContain('.env.bak-20261030-090000');
+    // No backup holds the password (final review 3).
+    for (const n of readdirSync(d)) expect(readFileSync(join(d, n), 'utf8'), n).not.toContain(VALUE);
     const c = u.audits('move-cleanup')[0];
-    expect(c.cam_proxy.env).toEqual({ outcome: 'removed', key: PW, backup: '.env.bak-20261030-090000' });
-    expect(c.message).toContain(`${PW} removed from the env file (backup .env.bak-20261030-090000)`);
+    expect(c.cam_proxy.env).toEqual({ outcome: 'removed', key: PW });
+    expect(c.message).toContain(`${PW} removed from the env file`);
+    expect(c.message).not.toContain('.env.bak');
     // config.json still has the hidden entry: listed, with the move id.
     expect(c.cam_proxy.leftovers).toEqual(['config.json entry']);
     expect(c.message).toContain('still to remove by hand: config.json entry');

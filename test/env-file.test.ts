@@ -198,16 +198,21 @@ describe('withoutEnvKey', () => {
 describe('removeEnvKey', () => {
   const at = new Date(Date.UTC(2026, 9, 30, 9, 1, 2));
   const K = 'CAMPROXY_CAMERA_PASSWORD_CAM4';
-  it('writes a backup and keeps the mode', () => {
+  it('keeps the mode and leaves no file in the directory with the removed line (no backup of it; older backups cleaned)', () => {
     const d = dir();
     const f = join(d, '.env');
     const before = `${SECRETS}${K}=test-only\nCAMERA_HOST=192.0.2.4\n`;
     writeFileSync(f, before);
     chmodSync(f, 0o640);
-    expect(removeEnvKey(f, K, at)).toEqual({ removed: 1, backup: '.env.bak-20261030-090102' });
-    expect(readFileSync(f, 'utf8')).toBe(`${SECRETS}CAMERA_HOST=192.0.2.4\n`);
+    // An older backup (a CAMERA_HOST write) holds the password too.
+    writeEnvKey(f, 'CAMERA_HOST', '192.0.2.5', new Date(Date.UTC(2026, 9, 29)));
+    expect(removeEnvKey(f, K, at)).toEqual({ removed: 1 });
+    expect(readFileSync(f, 'utf8')).toBe(`${SECRETS}CAMERA_HOST=192.0.2.5\n`);
     expect(statSync(f).mode & 0o777).toBe(0o640);
-    expect(readFileSync(join(d, '.env.bak-20261030-090102'), 'utf8')).toBe(before);
+    for (const n of readdirSync(d)) expect(readFileSync(join(d, n), 'utf8'), n).not.toContain('test-only');
+    // The older backup stays otherwise as it was.
+    expect(readFileSync(join(d, '.env.bak-20261029-000000'), 'utf8')).toBe(`${SECRETS}CAMERA_HOST=192.0.2.4\n`);
+    expect(statSync(join(d, '.env.bak-20261029-000000')).mode & 0o777).toBe(0o640);
   });
   it('a file without the key: null, no backup', () => {
     const d = dir();

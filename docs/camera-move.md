@@ -213,8 +213,9 @@ an over-budget note, or the reason a move failed.
   target makes for this move. A password from the environment
   (`CAMPROXY_CAMERA_PASSWORD`, `.env`) wins on either proxy. At the end the
   source removes the camera's `CAMPROXY_CAMERA_PASSWORD_<ID>` line from the
-  `.env` file it manages (`CAMPROXY_ENV_FILE`, as on the Pi; a backup
-  `.env.bak-…` is kept); what it can't remove is listed (see Leftovers).
+  `.env` file it manages (`CAMPROXY_ENV_FILE`, as on the Pi), also from the
+  `.env.bak-…` backups, and keeps no backup of it, so no file there holds
+  the password any more; what it can't remove is listed (see Leftovers).
 - **PTZ positions:** a camera's saved positions go with it when both proxies
   run this version: the target's offer lists the kinds it takes (`ptz`
   among them) and the source adds `ptz` to the approved plan, also when no
