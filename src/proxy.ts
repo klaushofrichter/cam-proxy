@@ -88,6 +88,7 @@ import { OnboardingService } from './onboarding/service';
 import { PasswordAttempts } from './onboarding/attempts';
 import { onboardingApi } from './api/onboarding-api';
 import { proxyZone } from './onboarding/zone';
+import { compactOf } from './onboarding/status';
 import { RemoveLeftovers } from './onboarding/remove-leftovers';
 import { listPositions } from './catalog/ptz-positions';
 import { readCameraFtp } from './clips/camera-ftp';
@@ -144,6 +145,8 @@ export interface Proxy {
   readonly audit: AuditLog;
   readonly inventory: InventoryRunner;
   readonly archive: Archive;
+  // Camera onboarding (spec 2026-10-30-camera-onboarding-design §4).
+  readonly onboarding: OnboardingService;
   // The camera certificates of the site CA (spec §10.1.3); undefined without tls.site (the Pi). Test seam: tick().
   readonly certs: CameraCerts | undefined;
   // cams-admin (spec 2026-10-06-cams-admin-phase1-design §9): off unless camsAdmin.url is set.
@@ -952,6 +955,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     health: healthNow,
     profile: profileNow,
     moveLeftovers: () => moveLeftovers.current(loaded),
+    onboardingNow: () => Object.fromEntries(onboarding.statusNow().map((s) => [s.camera, compactOf(s)])),
     proxyInfo: () => ({
       startedAt,
       uptimeS: startedAt ? Math.round((Date.now() - startedAt) / 1000) : null,
@@ -1362,7 +1366,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   Object.assign(
     commandHandlers,
     configHandlers(configCommandDeps),
-    cameraHandlers({ actions: controlDeps, cameraIds: () => cams.ids(), cameraName: controlDeps.cameraName, audit, restartProcess: () => controlDeps.restartProcess() }),
+    cameraHandlers({ actions: controlDeps, cameraIds: () => cams.ids(), cameraName: controlDeps.cameraName, audit, restartProcess: () => controlDeps.restartProcess(), onboarding: (cam) => onboarding.status(cam) }),
     // Camera moves (plan 2026-10-21-camera-move-cam-proxy): stubs until each task fills its handler in.
     moveHandlers({
       emit: emitToAdmin,
@@ -1515,6 +1519,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     },
     camsAdmin,
     actions: controlDeps,
+    onboarding,
     // Test seam: the host go2rtc's process id (adding a camera never restarts it).
     go2rtcPid: () => go2rtc?.pid(),
     async start(opts = {}) {

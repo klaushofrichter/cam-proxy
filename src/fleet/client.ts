@@ -78,6 +78,8 @@ export interface ClientDeps {
   profile?: () => ProfileReport | null;
   // What cameras that moved away left here (plan D); none = not sent.
   moveLeftovers?: () => MoveLeftover[];
+  // Each camera's onboarding {ready, missing} from the cache (no camera connection).
+  onboardingNow?: () => Record<string, { ready: boolean; missing: string[] }>;
   version: string;
   log: ClientLog;
   // Cheap, read every changeCheckMs: a change sends an early heartbeat (§8.5).
@@ -167,6 +169,15 @@ export class AdminClient {
       return this.d.moveLeftovers?.() ?? [];
     } catch {
       return [];
+    }
+  }
+
+  // The onboarding field for a heartbeat: a read that fails is left out, never the heartbeat.
+  private onboardingNow(): Record<string, { ready: boolean; missing: string[] }> {
+    try {
+      return this.d.onboardingNow?.() ?? {};
+    } catch {
+      return {};
     }
   }
 
@@ -649,7 +660,7 @@ export class AdminClient {
         this.unacked.add(`skipped-${Date.now()}`);
         this.d.log.debug({ buffered: ws.bufferedAmount }, 'admin_heartbeat_skipped');
       } else {
-        const hb = buildHeartbeat(summary, this.d.proxyInfo(), undefined, this.profileNow(), this.leftoversNow());
+        const hb = buildHeartbeat(summary, this.d.proxyInfo(), undefined, this.profileNow(), this.leftoversNow(), this.onboardingNow());
         this.truncated = hb.truncated;
         const id = this.trySend(ws, 'heartbeat', hb.body);
         if (id) {

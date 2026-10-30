@@ -403,7 +403,7 @@ describe('tokens.apply through the proxy', () => {
     await until(() => fake.heartbeats().length > n + 1, 10_000);
     const hb = fake.heartbeats().at(-1)!.msg;
     expect(strict('heartbeat')(hb), why(strict('heartbeat'))).toBe(true);
-    expect((hb.body as Record<string, any>).proxy).toMatchObject({ commands: { enabled: true, paused: false, pauseReason: null, allow: ['tokens.apply'], seenWindow: 1000 }, tokens: { revision: 1, client: 1, admin: 0, blocked: [] }, configRevision: expect.stringMatching(/^sha256:[0-9a-f]{64}$/) });
+    expect((hb.body as Record<string, any>).proxy).toMatchObject({ commands: { enabled: true, paused: false, pauseReason: null, allow: ['tokens.apply', 'camera.onboarding.get'], seenWindow: 1000 }, tokens: { revision: 1, client: 1, admin: 0, blocked: [] }, configRevision: expect.stringMatching(/^sha256:[0-9a-f]{64}$/) });
   });
   it('paused locally: paused, and the heartbeat says so', async () => {
     setPolicy({ allow: ['tokens.apply'], paused: true, pauseReason: 'incident' });
@@ -454,7 +454,7 @@ describe('CAMPROXY_ADMIN_COMMANDS=off', () => {
     expect(fake.received.find((r) => r.msg.type === 'hello')!.msg.body).toMatchObject({ capabilities: ['status', 'move-ptz'] });
   });
   it('enabled false in the heartbeat; every command paused', async () => {
-    expect((fake.heartbeats()[0].msg.body as Record<string, any>).proxy.commands).toMatchObject({ enabled: false, allow: ['tokens.apply'] });
+    expect((fake.heartbeats()[0].msg.body as Record<string, any>).proxy.commands).toMatchObject({ enabled: false, allow: ['tokens.apply', 'camera.onboarding.get'] });
     const { cmdId } = fake.sendCommand('tokens.apply', argsOf(1));
     await until(() => fake.results(cmdId).length === 1);
     expect(bodyOf(fake.results(cmdId)[0])).toMatchObject({ code: 'paused' });

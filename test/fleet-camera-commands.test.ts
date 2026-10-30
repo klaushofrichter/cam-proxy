@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { cameraHandlers, scrub, verifyFtp, verifyNtp, verifyPush, type CameraCommandDeps } from '../src/fleet/camera-commands';
+import { cameraHandlers, scrub, verifyFtp, verifyNtp, verifyPush, verifyTime, type CameraCommandDeps } from '../src/fleet/camera-commands';
 import type { CommandBody } from '../src/fleet/command-check';
 import type { Done, Handler } from '../src/fleet/commands';
 import { NEVER_REMOTE_ACTIONS } from '../src/fleet/policy';
@@ -39,6 +39,7 @@ beforeAll(async () => {
     cameraName: { current: (c) => p.proxy.cameras.get(c)!.name(), write: (c, n) => p.proxy.cameras.get(c)!.writeName(n) },
     audit: p.proxy.audit,
     restartProcess,
+    onboarding: (cam) => p.proxy.onboarding.status(cam),
     now: () => 1_000,
   };
   h = cameraHandlers(deps);
@@ -171,5 +172,25 @@ describe('proxy.restart', () => {
     expect(restartProcess).not.toHaveBeenCalled();
     r.after!();
     expect(restartProcess).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('camera.onboarding.get (spec 2026-10-30-camera-onboarding-design §4.6)', () => {
+  const get = async (camera: string | null) => (await h['camera.onboarding.get']({ v: 1, camera }, body('camera.onboarding.get'))) as Done;
+  it('camera.onboarding.get answers the strict result schema', async () => {
+    const r = await get(null);
+    expect(r.status).toBe('ok');
+    const result = r.result as { cameras: Record<string, { camera: string; steps: Record<string, unknown> }> };
+    expect(Object.keys(result.cameras)).toEqual(['cam1']);
+    expect(Object.keys(result.cameras.cam1.steps)).toHaveLength(11);
+    resultOk(r, 'camera.onboarding.get');
+    expect(((await get('cam1')).result as { cameras: object }).cameras).toHaveProperty('cam1');
+    expect(await get('nope')).toMatchObject({ status: 'failed', code: 'unknown_camera' });
+  });
+  it('camera.action:camera-time-set is verified by its re-read', () => {
+    expect(verifyTime({ outcome: 'set' })).toEqual({ verified: true, mismatch: [] });
+    expect(verifyTime({ outcome: 'already' })).toEqual({ verified: true, mismatch: [] });
+    expect(verifyTime({ outcome: 'failed' })).toEqual({ verified: false, mismatch: ['zone'] });
+    expect(verifyTime({ outcome: 'unsupported' }).verified).toBe(false);
   });
 });

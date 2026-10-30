@@ -5,8 +5,6 @@ import { leafPaths, SETTINGS } from '../src/config/schema';
 import { classify, DENIED, denyReason, NARROW, narrowingOk, patternOf, REMOTE, settableView } from '../src/fleet/remote-settable';
 import { CONTRACT } from './helpers/contract';
 
-// Denied here before the cams-admin contract lists them (onboarding plan Task 6; Task 11 vendors the contract and removes this).
-const PENDING_CONTRACT = ['time.zone'];
 const contract = JSON.parse(readFileSync(join(CONTRACT, 'remote-settable.json'), 'utf8')) as { remote: string[]; narrow: Record<string, string>; denied: string[] };
 const IDS = ['cam1', 'cam-2'];
 
@@ -26,8 +24,7 @@ describe('the classification (R3-1)', () => {
   });
   it('the deny list names each prefix once, and every prefix the contract denies', () => {
     expect(new Set(DENIED).size).toBe(DENIED.length);
-    expect([...DENIED].filter((d) => !PENDING_CONTRACT.includes(d)).sort()).toEqual([...contract.denied].sort());
-    for (const d of PENDING_CONTRACT) expect(DENIED).toContain(d);
+    expect([...DENIED].sort()).toEqual([...contract.denied].sort());
   });
   it('the compiled remote list is a subset of the contract (the upper bound); narrow paths agree', () => {
     for (const r of REMOTE) expect(contract.remote, r).toContain(r);

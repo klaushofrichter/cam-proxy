@@ -1,0 +1,45 @@
+{
+  "$note": "camera-time-set needs its own entry camera.action:camera-time-set",
+  "schema": "command",
+  "$context": {
+    "now": 1791273600010,
+    "proxyId": "prx_0123456789ABCDEFGHJK",
+    "connId": "con_0123456789ABCDEFGHJK",
+    "serverKeys": [
+      "MCowBQYDK2VwAyEAgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q="
+    ],
+    "allow": [
+      "camera.onboarding.get",
+      "camera.action:camera-ftp-setup"
+    ],
+    "paused": false,
+    "seen": [],
+    "feature": "onboarding"
+  },
+  "$expect": {
+    "runtime": "not_allowed",
+    "strict": "valid",
+    "receiver": "proxy"
+  },
+  "message": {
+    "v": 1,
+    "type": "command",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "exp": 1791273660003,
+      "actor": "admin@example.org",
+      "command": "camera.action",
+      "args": {
+        "v": 1,
+        "camera": "cam1",
+        "action": "camera-time-set"
+      }
+    },
+    "sig": "VoX0x6LcG4YGglsoigXXvOaz3L/Eb1e8AYoHGbJJTmyQxVVM4i2hv5WBTV0qgkXpFZqr5H3sRhBYtjtlyfZoCQ=="
+  }
+}
