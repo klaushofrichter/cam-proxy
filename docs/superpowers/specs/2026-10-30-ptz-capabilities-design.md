@@ -187,12 +187,13 @@ A position: `{ "id": "pos_…", "name": "Gate", "order": 0, "home": true, "state
 - `state: missing`: on each login and on `GET positions` (camera read cached
   ≤ 30 s), a position whose slot is not enabled on the camera is `missing`.
   Nothing is re-created automatically.
-- **Replaced or reset camera** (my call): each row stores the camera's serial
-  (from `GetDevInfo`) at save time. When the camera under that id reports a
-  different serial, all its positions are `missing` regardless of the slots,
-  until saved again (a re-save writes the new serial). A factory reset keeps
-  the serial; the slots are then empty and the rows `missing` by the rule
-  above. The serial is stored but never returned by the client API.
+- **Replaced or reset camera** (my call, corrected 2026-10-30): each row
+  stores the exact name the proxy wrote into the slot (`preset_name`, the name
+  cut to 31). A position is `ok` only while its slot is enabled **with that
+  name**; otherwise `missing` until saved again. (A first draft compared the
+  camera's serial, but `GetDevInfo.serial` changes at every reboot — the
+  proxy's reboot detection relies on that — so it would have marked every
+  position missing after each reboot.)
 - **Lost catalog** (my call): presets the proxy made but no longer knows
   about look foreign and stay untouched. With 64 slots and 20 positions that
   leak is accepted; preset names on the camera stay the plain position names
