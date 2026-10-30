@@ -417,7 +417,10 @@ All under `/api/cameras/{cam}/ptz`, with a client or admin token:
   unless another move (or zoom, focus) for that camera comes first and
   replaces it; the last caller wins. A tap is one call. Press-and-hold is a
   call every ~250 ms with `durationMs` 600 while held, then `stop`: a client
-  that goes away leaves the camera stopped within 2 s. Moves are not audited.
+  that goes away leaves the camera stopped within 2 s. A held zoom is sent to
+  the camera once: a zoom call in the running zoom's direction only extends
+  the lease (the E1 refuses a zoom while one runs), and one in the other
+  direction stops the first. Moves are not audited.
 - **Positions:** at most 20 per camera, stored on the proxy and on the
   camera. Names are trimmed, 1–40 characters, unique per camera ignoring case.
   The first position is Home; `home: true` moves the mark (there is always
