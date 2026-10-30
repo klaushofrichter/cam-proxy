@@ -71,3 +71,17 @@ export function deletePosition(c: Catalog, cam: string, id: string): void {
     listPositions(c, cam).forEach((r, i) => st.run(i, cam, r.id));
   });
 }
+
+// A camera that moved away: all its rows (the count deleted).
+export function deleteCameraPositions(c: Catalog, cam: string): number {
+  return Number(c.db.prepare('DELETE FROM ptz_positions WHERE cam = ?').run(cam).changes);
+}
+
+// A camera that moved here: its rows become exactly these (one transaction; a
+// throw leaves the old rows). The caller checks the rows (src/moves/ptz.ts).
+export function replaceCameraPositions(c: Catalog, cam: string, rows: PtzPositionRow[]): void {
+  tx(c, () => {
+    c.db.prepare('DELETE FROM ptz_positions WHERE cam = ?').run(cam);
+    for (const r of rows) insertPosition(c, { ...r, cam });
+  });
+}

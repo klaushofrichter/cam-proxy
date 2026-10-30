@@ -5,7 +5,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { openCatalog, type Catalog } from '../src/catalog/db';
 import { MIGRATIONS } from '../src/catalog/migrations';
-import { deletePosition, insertPosition, listPositions, positionById, setHomePosition, setPositionOrder, updatePosition, type PtzPositionRow } from '../src/catalog/ptz-positions';
+import { deleteCameraPositions, deletePosition, insertPosition, replaceCameraPositions, listPositions, positionById, setHomePosition, setPositionOrder, updatePosition, type PtzPositionRow } from '../src/catalog/ptz-positions';
 
 const fresh = (): Catalog => openCatalog(join(mkdtempSync(join(tmpdir(), 'camproxy-ptz-')), 'catalog.sqlite'));
 const row = (id: string, o: Partial<PtzPositionRow> = {}): PtzPositionRow => ({ id, cam: 'e1', name: id, sort_order: 0, home: 0, slot: 0, preset_name: id, created_at: 1, updated_at: 1, ...o });
@@ -78,6 +78,44 @@ describe('ptz_positions (migration 10)', () => {
     expect(positionById(c, 'e1', 'pos_a')).toMatchObject({ name: 'Gate', slot: 4, preset_name: 'pos_a', updated_at: 7 });
     updatePosition(c, 'e1', 'pos_a', { slot: 5, preset_name: 'Gate' });
     expect(positionById(c, 'e1', 'pos_a')).toMatchObject({ name: 'Gate', slot: 5, preset_name: 'Gate', updated_at: 7 });
+    c.close();
+  });
+});
+
+describe('ptz_positions for moves', () => {
+  const three = (c: Catalog) => {
+    insertPosition(c, row('pos_0000000000000001', { slot: 1, sort_order: 0, home: 1 }));
+    insertPosition(c, row('pos_0000000000000002', { slot: 2, sort_order: 1 }));
+    insertPosition(c, row('pos_0000000000000003', { slot: 3, sort_order: 2 }));
+    insertPosition(c, row('pos_0000000000000009', { cam: 'cam2', slot: 1, home: 1 }));
+  };
+
+  it("deleteCameraPositions deletes that camera's rows only and counts them", () => {
+    const c = fresh();
+    three(c);
+    expect(deleteCameraPositions(c, 'e1')).toBe(3);
+    expect(listPositions(c, 'e1')).toEqual([]);
+    expect(listPositions(c, 'cam2')).toHaveLength(1);
+    expect(deleteCameraPositions(c, 'e1')).toBe(0);
+    c.close();
+  });
+
+  it('replaceCameraPositions drops the old rows of that camera only', () => {
+    const c = fresh();
+    three(c);
+    const next = [row('pos_00000000000000a1', { slot: 7, sort_order: 0, home: 1 }), row('pos_00000000000000a2', { slot: 8, sort_order: 1 })];
+    replaceCameraPositions(c, 'e1', next);
+    expect(listPositions(c, 'e1')).toEqual(next);
+    expect(listPositions(c, 'cam2').map((r) => r.id)).toEqual(['pos_0000000000000009']);
+    c.close();
+  });
+
+  it('a failing insert leaves the old rows', () => {
+    const c = fresh();
+    three(c);
+    const bad = [row('pos_00000000000000a1', { slot: 7, sort_order: 0, home: 1 }), row('pos_00000000000000a2', { slot: 7, sort_order: 1 })];
+    expect(() => replaceCameraPositions(c, 'e1', bad)).toThrow();
+    expect(listPositions(c, 'e1').map((r) => r.id)).toEqual(['pos_0000000000000001', 'pos_0000000000000002', 'pos_0000000000000003']);
     c.close();
   });
 });
