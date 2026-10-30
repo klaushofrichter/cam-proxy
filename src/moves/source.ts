@@ -16,6 +16,7 @@ import { failed, ok, samePlan, zeros } from './done';
 import type { MoveActor, MoveAnswer, MoveBounds, MoveCameraConnection, MoveCopied, MoveEvent, MoveKind, MovePlan, MoveSummary, Settings } from './types';
 import { HOUR } from '../time-units';
 import { listPositions } from '../catalog/ptz-positions';
+import { leftoverItems, type EnvCleanup, type MoveLeftovers } from './leftovers';
 
 // The source side of a camera move (camera-move plan Task 7, S §4, §7, §9.1):
 // the source proxy's page starts a move (move.targets, move.request events),
@@ -67,6 +68,11 @@ export interface SourceDeps {
     pushOwnLeaf: (cam: string) => Promise<PushResult>;
     ftp: (cam: string) => Promise<'skipped' | { verified: boolean; mismatch: string[] }>;
     settled: () => Promise<void>;
+    // Plan D: the camera's PTZ positions (the count deleted), its password
+    // line in the env file this proxy manages, and what is left to remove by hand.
+    deletePositions: (cam: string) => number;
+    envCleanup: (cam: string) => EnvCleanup;
+    leftovers: Pick<MoveLeftovers, 'add'>;
   };
   // The give-back retries of a cancel (backoff from cancelRetryMs to cancelRetryCapMs).
   timing?: { cancelRetryMs?: number; cancelRetryCapMs?: number };
@@ -471,6 +477,18 @@ export class MoveSource {
     this.setExpectedLeaf(cam, null);
     end.forgetLeaf(cam);
     end.dropManifests(r.id);
+    // Plan D: the positions, the env file's password line, what is left by hand.
+    const ptzPositions = end.deletePositions(cam);
+    const env = end.envCleanup(cam);
+    const leftovers = leftoverItems(this.d.loaded(), cam, r.id);
+    if (leftovers.length) {
+      try {
+        end.leftovers.add({ camera: cam, moveId: r.id, items: leftovers });
+      } catch {
+        // not kept: the audit record below still names them
+      }
+    }
+    const envText = env.outcome === 'removed' ? `; ${env.key} removed from the env file (backup ${env.backup})` : env.outcome === 'failed' ? `; ${env.key} could not be removed from the env file (${env.code})` : '';
     this.dropPending(r.id);
     this.phaseEvent(r);
     const total = sum(deleted);
@@ -479,8 +497,8 @@ export class MoveSource {
     this.d.audit.write({
       action: 'move-cleanup', category: ['configuration'], type: ['deletion'], outcome: 'success',
       user: 'cams-admin', camera: cam,
-      message: `Camera move ${r.id}: ${cam} cleaned up after its move to ${r.peer.name || r.peer.proxyId}: ${total.files} files (${total.bytes} bytes) and the camera's catalog entries deleted${stayed.files ? `, ${stayed.files} files (${stayed.bytes} bytes) stay on this proxy (they age out with retention; Archive items keep their own expiry)` : ''}; its entry ${entry === 'hidden' ? 'stays hidden in config.json (you can delete it there)' : 'removed'}`,
-      details: { moveId: r.id, camera: cam, ...who, deleted, kept, files: total.files, bytes: total.bytes, cameraEntry: entry },
+      message: `Camera move ${r.id}: ${cam} cleaned up after its move to ${r.peer.name || r.peer.proxyId}: ${total.files} files (${total.bytes} bytes) and the camera's catalog entries deleted${stayed.files ? `, ${stayed.files} files (${stayed.bytes} bytes) stay on this proxy (they age out with retention; Archive items keep their own expiry)` : ''}; its entry ${entry === 'hidden' ? 'stays hidden in config.json (you can delete it there)' : 'removed'}${ptzPositions ? `; ${ptzPositions} PTZ position${ptzPositions === 1 ? '' : 's'} deleted` : ''}${envText}${leftovers.length ? `; still to remove by hand: ${leftovers.join(', ')}` : ''}`,
+      details: { moveId: r.id, camera: cam, ...who, deleted, kept, files: total.files, bytes: total.bytes, cameraEntry: entry, ptzPositions, env, leftovers },
     });
     this.d.audit.write({
       action: 'move-done', category: ['configuration'], type: ['change'], outcome: 'success',

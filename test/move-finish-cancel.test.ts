@@ -15,7 +15,8 @@ import { AuditLog } from '../src/audit/audit-log';
 import { openCatalog, type Catalog } from '../src/catalog/db';
 import { cameraPasswordStore } from '../src/config/camera-passwords';
 import { deleteCameraPositions, insertPosition, listPositions } from '../src/catalog/ptz-positions';
-import { applyOverrides, loadConfig, type Loaded } from '../src/config/load';
+import { chmodSync } from 'fs';
+import { applyOverrides, loadConfig, planUnset, type Loaded } from '../src/config/load';
 import type { MoveCancelArgs, MoveFinishArgs, MoveStartArgs } from '../src/fleet/command-args';
 import { writeKeyFile } from '../src/fleet/keyfile';
 import { writePrivateJson } from '../src/fleet/private-file';
@@ -31,6 +32,7 @@ import type { MoveOutcome } from '../src/moves/check';
 import { seal } from '../src/moves/seal';
 import { keepDaysOf } from '../src/moves/retention';
 import { MoveSource, type SourceDeps } from '../src/moves/source';
+import { MoveLeftovers, removePasswordLine } from '../src/moves/leftovers';
 import { MoveTarget, type TargetDeps } from '../src/moves/target';
 import { moveTokenGuard } from '../src/moves/token-guard';
 import { hashMoveToken } from '../src/moves/token';
@@ -573,12 +575,12 @@ const sourceRecord = (over: Partial<MoveRecord> = {}): MoveRecord => ({
 // noSite: the Pi (no tls.site, no camera certificates at all); tlsName: a
 // camera whose certificate is managed elsewhere (cam1's Let's Encrypt name);
 // http, cameraCerts false: certificates this proxy never pushes either.
-function sourceUnit(o: { added?: boolean; released?: boolean; noSite?: boolean; tlsName?: string; http?: boolean; cameraCerts?: false } = {}) {
+function sourceUnit(o: { added?: boolean; released?: boolean; noSite?: boolean; tlsName?: string; http?: boolean; cameraCerts?: false; env?: Record<string, string> } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'camproxy-end-src-'));
   const cam3 = { id: 'cam3', host: '192.0.2.3', protocol: o.http ? 'http' : 'https', user: 'proxy', ...(o.tlsName ? { tlsName: o.tlsName } : {}) };
   const tls = o.noSite ? {} : { site: 's', cameraSubnet: '192.0.2.0/24', proxyAddresses: '198.51.100.1', ...(o.cameraCerts === false ? { cameraCerts: false } : {}) };
   writeFileSync(join(dir, 'config.json'), JSON.stringify({ cameras: [{ id: 'cam1', host: '' }, ...(o.added ? [] : [cam3])], tls }));
-  let loaded = loadConfig(SECRETS, { cwd: dir });
+  let loaded = loadConfig({ ...SECRETS, ...(o.env ?? {}) }, { cwd: dir });
   if (o.added) loaded = applyOverrides(loaded, { cameras: { cam3: { host: '192.0.2.3', protocol: 'https', user: 'proxy' } } });
   if (o.released !== false) loaded = applyOverrides(loaded, { cameras: { cam3: { moved: MOVE } } });
   const dataDir = loaded.config.server.dataDir;
@@ -590,6 +592,7 @@ function sourceUnit(o: { added?: boolean; released?: boolean; noSite?: boolean; 
   const expected = new Map<string, string | null>([['cam3', TARGET_LEAF]]);
   let push: PushResult = { outcome: 'pushed', served: OWN_LEAF, tookMs: 1 };
   const cache = new ManifestCache(dataDir);
+  const leftovers = new MoveLeftovers(dataDir);
   const deps: SourceDeps = {
     journal, audit, emit: (e) => events.push(e),
     running: () => loaded.config,
@@ -613,11 +616,14 @@ function sourceUnit(o: { added?: boolean; released?: boolean; noSite?: boolean; 
       pushOwnLeaf: async (cam) => (calls.push(`push ${cam}`), push),
       ftp: async (cam) => (calls.push(`ftp ${cam}`), { verified: true, mismatch: [] }),
       settled: async () => void calls.push('settled'),
+      deletePositions: (cam) => deleteCameraPositions(catalog, cam),
+      envCleanup: (cam) => (calls.push(`env ${cam}`), removePasswordLine(loaded, cam, new Date(Date.UTC(2026, 9, 30, 9, 0, 0)))),
+      leftovers,
     },
   };
   const source = new MoveSource(deps);
   const audits = (action: string) => audit.list({ actions: [action as never], limit: 50 }).records as Record<string, any>[];
-  return { dir, dataDir, catalog, journal, audit, audits, events, calls, expected, deps, source, cache, setPush: (p: PushResult) => (push = p), get loaded() { return loaded; } };
+  return { dir, dataDir, catalog, journal, audit, audits, events, calls, expected, deps, source, cache, leftovers, setPush: (p: PushResult) => (push = p), get loaded() { return loaded; } };
 }
 
 describe('move.finish on the source (S §11)', () => {
@@ -741,6 +747,106 @@ describe('move.finish on the source (S §11)', () => {
     expect(existsSync(join(u.dataDir, 'stills', 'cam3'))).toBe(true);
     expect(u.journal.load(MOVE)!.phase).toBe('released');
     expect(u.calls).toEqual([]);
+  }, 60_000);
+});
+
+describe('the cleanup of plan D on the source (PTZ positions, the env password, leftovers)', () => {
+  const PW = 'CAMPROXY_CAMERA_PASSWORD_CAM3';
+  const VALUE = 'test-only-pw-value';
+  const envFile = () => {
+    const d = mkdtempSync(join(tmpdir(), 'camproxy-end-env-'));
+    const f = join(d, '.env');
+    writeFileSync(f, `# cams\r\nCOMPOSE_PROJECT_NAME=cams\r\n${PW}=${VALUE} # moved\r\nexport OTHER=1`);
+    return { d, f };
+  };
+  const pos = (u: ReturnType<typeof sourceUnit>, id: string, cam: string, slot: number) => insertPosition(u.catalog, { id, cam, name: id.slice(-4), sort_order: slot, home: slot === 0 ? 1 : 0, slot, preset_name: 'p', created_at: 1, updated_at: 1 });
+
+  it("finish deletes the camera's PTZ positions and audits the count", async () => {
+    const u = sourceUnit();
+    u.journal.save(sourceRecord());
+    pos(u, 'pos_0000000000000001', 'cam3', 0);
+    pos(u, 'pos_0000000000000002', 'cam3', 1);
+    pos(u, 'pos_0000000000000003', 'cam1', 0);
+    expect((await u.source.finish(finishArgs('source'))).status).toBe('ok');
+    expect(listPositions(u.catalog, 'cam3')).toEqual([]);
+    expect(listPositions(u.catalog, 'cam1')).toHaveLength(1);
+    const c = u.audits('move-cleanup')[0];
+    expect(c.cam_proxy.ptzPositions).toBe(2);
+    expect(c.message).toContain('2 PTZ positions deleted');
+    expect(c.event.outcome).toBe('success');
+  }, 60_000);
+
+  it('finish removes the password line from a managed env file, other lines byte for byte', async () => {
+    const { d, f } = envFile();
+    const u = sourceUnit({ env: { CAMPROXY_ENV_FILE: f } });
+    u.journal.save(sourceRecord());
+    expect((await u.source.finish(finishArgs('source'))).status).toBe('ok');
+    expect(readFileSync(f, 'utf8')).toBe('# cams\r\nCOMPOSE_PROJECT_NAME=cams\r\nexport OTHER=1');
+    expect(readdirSync(d)).toContain('.env.bak-20261030-090000');
+    const c = u.audits('move-cleanup')[0];
+    expect(c.cam_proxy.env).toEqual({ outcome: 'removed', key: PW, backup: '.env.bak-20261030-090000' });
+    expect(c.message).toContain(`${PW} removed from the env file (backup .env.bak-20261030-090000)`);
+    // config.json still has the hidden entry: listed, with the move id.
+    expect(c.cam_proxy.leftovers).toEqual(['config.json entry']);
+    expect(c.message).toContain('still to remove by hand: config.json entry');
+    expect(u.leftovers.current(u.loaded)).toEqual([{ camera: 'cam3', moveId: MOVE, items: ['config.json entry'] }]);
+  }, 60_000);
+
+  it('an unwritable env file: finish ok, leftover listed, audit says failed', async () => {
+    if (process.getuid?.() === 0) return;
+    const { d, f } = envFile();
+    // As compose's env_file sets it, the process has the value too.
+    const u = sourceUnit({ added: true, env: { CAMPROXY_ENV_FILE: f, [PW]: VALUE } });
+    u.journal.save(sourceRecord());
+    chmodSync(d, 0o500);
+    let res;
+    try {
+      res = await u.source.finish(finishArgs('source'));
+    } finally {
+      chmodSync(d, 0o700);
+    }
+    expect(res.status).toBe('ok');
+    expect(readFileSync(f, 'utf8')).toContain(`${PW}=${VALUE}`);
+    const c = u.audits('move-cleanup')[0];
+    expect(c.event.outcome).toBe('success');
+    expect(c.cam_proxy.env).toEqual({ outcome: 'failed', key: PW, code: 'not_writable' });
+    expect(c.message).toContain(`${PW} could not be removed from the env file (not_writable)`);
+    expect(c.cam_proxy.leftovers).toEqual([`env ${PW}`]);
+    expect(u.leftovers.current(u.loaded)).toEqual([{ camera: 'cam3', moveId: MOVE, items: [`env ${PW}`] }]);
+    // No env value in any audit record.
+    expect(JSON.stringify(u.audit.list({ limit: 200 }).records)).not.toContain(VALUE);
+  }, 60_000);
+
+  it('a config.json camera without an env file: leftover "config.json entry", env not_managed', async () => {
+    const u = sourceUnit();
+    u.journal.save(sourceRecord());
+    expect((await u.source.finish(finishArgs('source'))).status).toBe('ok');
+    const c = u.audits('move-cleanup')[0];
+    expect(c.cam_proxy.env).toEqual({ outcome: 'not_managed', key: PW });
+    expect(c.cam_proxy.leftovers).toEqual(['config.json entry']);
+  }, 60_000);
+
+  it('a repeated finish does not touch the env file again', async () => {
+    const { f } = envFile();
+    const u = sourceUnit({ env: { CAMPROXY_ENV_FILE: f } });
+    u.journal.save(sourceRecord());
+    await u.source.finish(finishArgs('source'));
+    writeFileSync(f, `${PW}=again\n`);
+    await u.source.finish(finishArgs('source'));
+    expect(readFileSync(f, 'utf8')).toBe(`${PW}=again\n`);
+    expect(u.calls.filter((c) => c === 'env cam3')).toHaveLength(1);
+    expect(u.audits('move-cleanup')).toHaveLength(1);
+  }, 60_000);
+
+  it('a camera running here again has no leftover', async () => {
+    const u = sourceUnit();
+    u.journal.save(sourceRecord());
+    await u.source.finish(finishArgs('source'));
+    expect(u.leftovers.current(u.loaded)).toHaveLength(1);
+    // A later move brings it back: moved cleared, the camera runs here.
+    const back = planUnset(u.loaded, ['cameras.cam3.moved']).next;
+    expect(back.config.cameras.cam3.moved).toBeUndefined();
+    expect(u.leftovers.current(back)).toEqual([]);
   }, 60_000);
 });
 

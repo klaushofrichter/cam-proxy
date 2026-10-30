@@ -1,5 +1,6 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { deleteCameraPositions } from './catalog/ptz-positions';
+import { MoveLeftovers, removePasswordLine } from './moves/leftovers';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
 import http from 'http';
 import https from 'https';
@@ -1024,6 +1025,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     w.ftpWatch.note(f);
     return verifyFtp('camera-ftp-setup', { ftp: f }, { server: t.server, port: t.port, tls: t.tls, stream: t.stream });
   };
+  // What a camera that moved away left here that this proxy can't remove (plan D).
+  const moveLeftovers = new MoveLeftovers(running.server.dataDir);
   // The source side of a camera move (camera-move plan Task 7).
   const moveSource = new MoveSource({
     journal: moveJournal,
@@ -1055,6 +1058,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       },
       ftp: ftpHere,
       settled: () => reconciling,
+      envCleanup: (cam) => removePasswordLine(loaded, cam),
+      leftovers: moveLeftovers,
     },
   });
   // The target side from move.start on (camera-move plan Task 8): the
