@@ -11,7 +11,7 @@ import type { CameraTrust } from '../camera/client';
 import type { CameraPasswordStore } from '../config/camera-passwords';
 import { cameraConfig } from '../config/cameras';
 import type { Config } from '../config/defaults';
-import { readEnvValue } from '../config/env-file';
+import { checkEnvPath, EnvFileError, readEnvValue, writeEnvKey } from '../config/env-file';
 import { withoutEnv, type Loaded } from '../config/load';
 import { cameraPasswordEnv } from '../config/password-env';
 import type { CameraRegistry } from '../cameras/registry';
@@ -23,7 +23,8 @@ import { passwordSource, type Credentials } from './credentials';
 import { checkLogin } from './login-check';
 import { PASSWORD_RULE, validPassword } from './password-rule';
 import { FINGERPRINT, probeCamera, probeInput, probeServed, withPort, DEFAULT_PORTS, type ProbeInput } from './probe';
-import { applyOverrides, ConfigError, planOverrides } from '../config/load';
+import { applyOverrides, ConfigError, planOverrides, removeOverride, withCameraHost } from '../config/load';
+import { CAMERA_HOST_NAMES } from '../config/env';
 import { configChanges } from '../config/changes';
 import { atCameraLimit } from '../config/profile';
 import { cameraIds } from '../config/cameras';
@@ -51,6 +52,10 @@ export interface OnboardingDeps {
   // The onboarding status' input from the camera's worker (null: not running here), and the proxy's zone.
   statusInput: (cam: string) => Omit<OnboardingInput, 'served' | 'zone' | 'now'> | null;
   zone: () => string | null;
+  // A single-camera proxy (Task 8): whether the move that hid its camera is
+  // still open here (a journal record), and the env file CAMERA_HOST goes into.
+  moveOpen?: (moveId: string) => boolean;
+  envFile: () => string | undefined;
   now?: () => number;
 }
 
@@ -242,9 +247,59 @@ export class OnboardingService {
     return this.addCamera(b.id as string, b.name as string | undefined, i, who);
   }
 
-  // The single-camera proxy (the Pi): Task 8.
-  protected async addLegacy(_b: Record<string, unknown>, _i: ProbeInput, _who: Who): Promise<Refusal> {
-    return { status: 409, error: 'not_available', detail: 'this proxy has one camera (config.json camera): adding is not available here yet' };
+  // A single-camera proxy (config.json `camera` + CAMERA_HOST, the Pi): the
+  // new camera takes the configured camera's id and replaces it only when it
+  // has no address or moved away; CAMERA_HOST goes into the env file (backup,
+  // atomic), the rest into overrides.json; the camera's side restarts with it.
+  private async addLegacy(b: Record<string, unknown>, i: ProbeInput, who: Who): Promise<{ status: 201; onboarding: OnboardingStatus } | Refusal> {
+    const l = this.d.loaded();
+    const cam = l.order[0];
+    const host = OnboardingService.hostOf(i);
+    const fail = (r: Refusal, extra: Record<string, unknown> = {}): Refusal => {
+      this.auditAdd(who, cam, 'failure', `Camera ${cam} (${host}) not added: ${r.error}`, { host, ...extra }, r.error);
+      return r;
+    };
+    if (b.id !== undefined && b.id !== cam) return fail({ status: 409, error: 'camera_id', detail: `this proxy has one camera, ${cam}` });
+    const moved = l.config.cameras[cam]?.moved;
+    const configured = cameraConfig(l.config, cam)?.host;
+    if (!moved && configured) return fail({ status: 409, error: 'camera_limit', detail: `this proxy has one camera, ${cam}, and it is configured (${configured})` });
+    if (moved && (this.d.moveOpen?.(moved) ?? true)) return fail({ status: 409, error: 'move_open', detail: `camera move ${moved} is not over here; cancel or finish it from cams-admin` });
+    const line = `CAMERA_HOST=${host}`;
+    let envPath: string;
+    try {
+      envPath = checkEnvPath(this.d.envFile());
+    } catch (err) {
+      if (!(err instanceof EnvFileError)) throw err;
+      return fail({ status: 409, error: 'not_available', detail: `${err.message}: add ${line} to the .env file by hand`, extra: { line } });
+    }
+    const p = await this.probeForAdd(i, fail);
+    if ('error' in p) return p;
+    const given = (b.ports ?? {}) as Record<string, unknown>;
+    const patch = { cameras: { [cam]: { protocol: i.protocol, user: i.user, ...(typeof b.name === 'string' ? { name: b.name } : {}), ...(given.onvif !== undefined ? { onvifPort: i.ports.onvif } : {}), ...(given.rtsp !== undefined ? { rtspPort: i.ports.rtsp } : {}), ...(given.baichuan !== undefined ? { baichuanPort: i.ports.baichuan } : {}) } } };
+    this.d.passwords.set(cam, i.password!);
+    let w: { key: string; previous: string | null; backup: string };
+    const before = this.d.loaded();
+    try {
+      planOverrides(before, patch);
+      w = writeEnvKey(envPath, CAMERA_HOST_NAMES as unknown as string[], host);
+    } catch (err) {
+      this.d.passwords.delete(cam);
+      if (err instanceof ConfigError) return fail({ status: 400, error: 'invalid', detail: err.message });
+      if (err instanceof EnvFileError) return fail({ status: 409, error: 'not_available', detail: `${err.message}: add ${line} to the .env file by hand`, extra: { line } });
+      throw err;
+    }
+    if (p.served) this.d.pinServed(cam, p.served, this.requester(who));
+    let next = applyOverrides(before, patch);
+    if (moved) next = removeOverride(next, `cameras.${cam}.moved`);
+    next = withCameraHost(next, { value: host, name: w.key });
+    const wasRunning = !!this.d.cameras.get(cam);
+    this.d.setLoaded(next);
+    this.auditConfig(who, before, next);
+    if (wasRunning) await this.d.restartCamera(cam);
+    else await this.waitForWorker(cam);
+    this.auditAdd(who, cam, 'success', `Camera ${cam} added (${host}, ${p.model ?? 'unknown model'}): ${w.key} written to .env${p.served ? `, certificate pinned (${p.served.fingerprint})` : ''}`, { host, model: p.model, pinned: p.served?.fingerprint ?? null, envName: w.key, from: w.previous, backup: w.backup });
+    const [onboarding] = await this.status(cam);
+    return { status: 201, onboarding: onboarding ?? this.placeholder(cam) };
   }
 
   private auditAdd(who: Who, cam: string, outcome: 'success' | 'failure', message: string, details: Record<string, unknown>, error?: string): void {

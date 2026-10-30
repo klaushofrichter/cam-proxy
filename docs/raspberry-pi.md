@@ -220,6 +220,32 @@ This keeps the history: stills, previews, clips and the catalog.
    ```
 5. **Start the Pi** (`docker compose up -d`), and download an old clip to check.
 
+## Add a camera (API, no file edits)
+
+A Pi that has no camera yet (no `CAMERA_HOST`, or its camera moved away) takes
+one with two calls and no restart (spec 2026-10-30-camera-onboarding-design
+§4.3). Use the proxy's own admin token (a cams-admin token or sign-in is
+refused):
+
+1. `POST /control/actions/camera-probe` `{"host": "192.0.2.20"}`: the ports
+   that answer and `certificate.fingerprint`, the certificate the camera
+   serves.
+2. `POST /control/cameras` `{"host": "192.0.2.20", "user": "admin",
+   "password": "<the camera's password>", "trust": {"fingerprint":
+   "SHA256:…"}}`: the proxy logs in over exactly that certificate, then
+   writes `CAMERA_HOST=192.0.2.20` into `config/.env` (a backup first, as
+   Find camera's "Use this address" does), stores the password in
+   `data/admin/camera-passwords.json`, pins the certificate and starts the
+   camera. The answer (201) is the camera's onboarding status; `GET
+   /control/cameras/cam1/onboarding` shows each step until `ready`.
+
+It takes the configured camera's id (`cam1`); another `id` is 409
+`camera_id`, a camera already configured 409 `camera_limit`, an open camera
+move 409 `move_open`. Without a writable `.env` (`CAMPROXY_ENV_FILE`) it is
+409 `not_available` with the `line` to add by hand; nothing is stored then.
+A wrong password is 422 `camera_refused` (at most 5 tries per camera in 10
+minutes). `config.json` is never changed.
+
 ## 5. Point the camera and cams at the Pi
 
 - **Camera FTP:** the Maintenance page's "Point the camera's FTP here" sets the

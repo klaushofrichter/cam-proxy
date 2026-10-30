@@ -8,7 +8,7 @@ import { derivedPassive, ftpOn, MAX_FTP_CAMERAS, PASSIVE_MAX, PORTS_PER_CAMERA }
 import { normalizeFile, normalizeOverrides, translatePath } from './legacy';
 import { ipv4Int } from '../util/cidr';
 import { loadSecrets } from './secrets';
-import { EnvSettingError, readEnvLayer, type EnvLayer } from './env';
+import { EnvSettingError, readEnvLayer, type EnvLayer, type EnvValue } from './env';
 import { adminUrlProblem } from '../fleet/protocol';
 import { jcs } from '../fleet/jcs';
 import { validateAllowList } from '../fleet/policy';
@@ -473,6 +473,16 @@ export function withoutEnv(l: Loaded, names: string[]): Loaded {
   const env = { ...l.env };
   for (const n of names) delete env[n];
   return build(env, l.files.config, l.fileSettings as Obj, l.overrides as Obj, baseDirOf(l), l.envLayer, normOf(l));
+}
+
+// The configuration rebuilt with the one camera's address from the
+// environment replaced (POST /control/cameras on a single-camera proxy wrote
+// CAMERA_HOST into the env file); undefined removes it (the camera removed).
+export function withCameraHost(l: Loaded, v: EnvValue | undefined): Loaded {
+  const layer: EnvLayer = { ...l.envLayer };
+  if (v) layer.cameraHost = v;
+  else delete layer.cameraHost;
+  return build(l.env, l.files.config, l.fileSettings as Obj, l.overrides as Obj, baseDirOf(l), layer, normOf(l));
 }
 
 // Adds overrides (validated like the file); nothing is written if the result

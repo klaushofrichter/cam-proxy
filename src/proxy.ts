@@ -1203,6 +1203,15 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     attempts: new PasswordAttempts(),
     served: servedOf,
     pinServed: (cam, sv, who) => ensureCerts().pinServed(cam, sv, who),
+    // Open: a journal record here (a finished move's tombstone is not: its camera may be replaced).
+    moveOpen: (id) => {
+      try {
+        return moveJournal.load(id) !== null;
+      } catch {
+        return true;
+      }
+    },
+    envFile: () => loaded.env.CAMPROXY_ENV_FILE || undefined,
     zone: () => (opts.hostZone ? proxyZone(running, opts.hostZone.tz ? { TZ: opts.hostZone.tz } : {}, opts.hostZone.intl) : proxyZone(running)),
     statusInput: (cam) => {
       const w = cams.get(cam);
