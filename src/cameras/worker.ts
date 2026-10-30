@@ -5,6 +5,7 @@ import type { Catalog } from '../catalog/db';
 import { Backoff } from './backoff';
 import { lastClipReceived } from '../catalog/clips';
 import { ReolinkClient, type CameraTrust } from '../camera/client';
+import { readCapabilities, type Capabilities } from '../camera/capabilities';
 import { bareHost, splitHost } from '../camera/http';
 import { CameraNameAnnouncer, writeCameraName } from '../camera/name';
 import { CameraReboot } from '../camera/reboot';
@@ -119,6 +120,9 @@ export class CameraWorker extends EventEmitter {
   private onlineSince: number | null = null;
   // Every record this camera's code writes names the camera (spec §5.2).
   private readonly audit: Pick<AuditLog, 'write'>;
+  // What the camera can do (spec 2026-10-30-ptz-capabilities-design §4); null until first read.
+  private caps: Capabilities | null = null;
+  private capsReading: Promise<void> | undefined;
 
   constructor(private readonly d: WorkerDeps) {
     super();
@@ -236,6 +240,36 @@ export class CameraWorker extends EventEmitter {
     return read;
   }
 
+  capabilities(): Capabilities | null {
+    return this.caps;
+  }
+
+  // Reads the camera's abilities (when it comes online, or its model or
+  // firmware changed); a change goes to stream clients as a `camera` message.
+  // A failed read keeps what was known. Concurrent callers share one read.
+  refreshCapabilities(): Promise<void> {
+    this.capsReading ??= this.readCaps().finally(() => {
+      this.capsReading = undefined;
+    });
+    return this.capsReading;
+  }
+
+  private async readCaps(): Promise<void> {
+    let next: Capabilities;
+    try {
+      next = await readCapabilities((cmd, param) => this.client.command(cmd, param), this.cam().user);
+    } catch (err) {
+      logger.warn({ cameraId: this.id, err: (err as Error).message }, 'capabilities_read_failed');
+      return;
+    }
+    // Stopped meanwhile: the catalog may be closed already.
+    if (this.phaseNow === 'stopped' || JSON.stringify(next) === JSON.stringify(this.caps)) return;
+    this.caps = next;
+    const address = this.cam().host;
+    this.toldAddress = address;
+    this.d.log.append(this.id, 'camera', { ...(this.toldName !== undefined ? { name: this.toldName } : {}), address, capabilities: next });
+  }
+
   readStill(ts: number): Promise<Buffer | undefined> {
     return this.stills?.store.readStill(ts) ?? Promise.resolve(undefined);
   }
@@ -330,6 +364,8 @@ export class CameraWorker extends EventEmitter {
     this.status = new StatusPoller(this.client, c.statusPollS);
     this.status.on('change', (s: CameraState) => d.log.append(c.id, 'camera-status', { online: s.online, reason: s.error ?? null, clockOffsetMs: s.clockOffsetMs ?? null }));
     this.status.on('check', (x: { ok: boolean; ms: number; error?: string }) => d.hooks.onCameraCheck(x));
+    // Another model or firmware may do other things (spec 2026-10-30-ptz-capabilities-design §4).
+    this.status.on('device', () => void this.refreshCapabilities());
     this.status.on('name', (name: string) => {
       this.nameRead = name;
       this.announcer.seen(name);
@@ -339,6 +375,7 @@ export class CameraWorker extends EventEmitter {
       if (s.online) void this.ftpWatch.checkNow();
       if (s.online) void this.sdWatch.checkNow();
       // The camera's NTP server on the host (spec §14.2, Ruling P5-7): at most once an hour.
+      if (s.online) void this.refreshCapabilities();
       if (s.online) void this.syncNtp().catch((err: Error) => logger.warn({ cameraId: this.id, err: err.message }, 'camera_ntp_failed'));
       // Online for 10 minutes: the next failure starts the backoff at 5 s again.
       this.onlineSince = s.online ? (this.onlineSince ?? Date.now()) : null;
