@@ -25,6 +25,7 @@ for tool in curl node; do
 done
 
 URL=${CAMPROXY_URL%/}
+CAMQ=$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$CAM")
 PAUSE=${PTZ_CHECK_PAUSE_S:-0.7}
 SETTLE=${PTZ_CHECK_SETTLE_S:-3}
 RUN=$(date +%s)
@@ -47,7 +48,7 @@ cannot() { echo "FAIL $*"; exit 2; }
 api() {
   local args=(-sS -o "$TMP/body" -w '%{http_code}' --max-time 30 -X "$1" -H "@$HDR")
   if [ $# -ge 3 ]; then args+=(-H 'Content-Type: application/json' --data-binary "$3"); fi
-  STATUS=$(curl "${args[@]}" "$URL/api/cameras/$CAM$2" 2>/dev/null) || STATUS=000
+  STATUS=$(curl "${args[@]}" "$URL/api/cameras/$CAMQ$2" 2>/dev/null) || STATUS=000
 }
 
 # js EXPR: EXPR over the last body as `j` (null when empty); strings printed bare.

@@ -251,6 +251,17 @@ describe('PTZ API', () => {
     expect(audits.at(-1)).toMatchObject({ outcome: 'failure', error: 'camera_error', details: { op: 'delete', id, name: 'Gate' } });
   });
 
+  it('audit: a managed client token is named by its label', async () => {
+    const managed = express();
+    managed.use(express.json());
+    managed.use((_req, res, next) => ((res.locals.access = { access: 'client', viaCookie: false, tokenKind: 'client', origin: 'managed', tokenLabel: 'cams client' }), next()));
+    const cams = new CameraRegistry(() => ['e1']);
+    cams.add(fakeWorker());
+    managed.use('/api', ptzApi({ cameras: cams, audit: { write: (i) => (audits.push(i), null) } }));
+    await request(managed).post(`${base}/positions`).send({ name: 'Gate' });
+    expect(audits.at(-1)?.user).toBe('token:cams client');
+  });
+
   it('moves are not audited', async () => {
     await request(app).post(`${base}/move`).send({ direction: 'left' });
     await request(app).post(`${base}/stop`);

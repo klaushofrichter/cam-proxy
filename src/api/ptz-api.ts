@@ -12,7 +12,7 @@ import type { CameraRegistry } from '../cameras/registry';
 import type { CameraWorker } from '../cameras/worker';
 import { errorMessage, logger } from '../log';
 import { PtzError, type PtzPositionJson } from '../ptz/positions';
-import { clientIp } from './auth';
+import { actorOf, clientIp, type AccessInfo } from './auth';
 import { cameraParam, workerOf } from './camera-param';
 import { bad } from './respond';
 
@@ -108,13 +108,15 @@ export function ptzApi(d: { cameras: CameraRegistry; audit: Pick<AuditLog, 'writ
 
   // --- positions -------------------------------------------------------------
   const audit = (req: Request, res: Response, w: CameraWorker, op: Op, outcome: 'success' | 'failure', x: { id?: string; name?: string; from?: string; ids?: string[] }) => {
-    const a = res.locals.access as { access?: string; viaCookie?: boolean } | undefined;
+    const a = res.locals.access as AccessInfo | undefined;
+    // A managed token is named by its label (as admin records do); otherwise admin or client.
+    const user = a?.origin === 'managed' && a.tokenLabel ? actorOf(a) : a?.access === 'admin' ? 'admin' : 'client';
     const what = op === 'order' ? 'PTZ positions reordered'
       : op === 'rename' ? `PTZ position "${x.from ?? x.id}" renamed to "${x.name}"`
       : `PTZ position "${x.name ?? x.id}" ${{ save: 'saved', resave: 'saved again', home: 'made Home', delete: 'deleted' }[op]}`;
     withCamera(d.audit, w.id).write({
       action: 'ptz-position', category: ['configuration'], type: [op === 'save' ? 'creation' : op === 'delete' ? 'deletion' : 'change'], outcome,
-      user: a?.access === 'admin' ? 'admin' : 'client', ip: clientIp(req), userAgent: req.get('user-agent'),
+      user, ip: clientIp(req), userAgent: req.get('user-agent'),
       message: outcome === 'success' ? what : `${what}: failed (camera_error)`,
       ...(outcome === 'failure' ? { error: 'camera_error' } : {}),
       details: { op, ...(x.id !== undefined ? { id: x.id } : {}), ...(x.name !== undefined ? { name: x.name } : {}), ...(x.from !== undefined ? { from: x.from } : {}), ...(x.ids ? { ids: x.ids } : {}), requestedBy: a?.viaCookie ? 'session' : 'token' },

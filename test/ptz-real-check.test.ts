@@ -103,6 +103,12 @@ describe('scripts/ptz-real-check.sh', () => {
     expect(r.out).not.toContain(CLIENT_TOKEN);
   });
 
+  it('the camera id is URL-encoded', async () => {
+    const r = await run('e1/../fixed', { CAMPROXY_URL: base, CAMPROXY_TOKEN: CLIENT_TOKEN });
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/HTTP 404/);
+  });
+
   it('a wrong token: fails without printing it', async () => {
     const r = await run('e1', { CAMPROXY_URL: base, CAMPROXY_TOKEN: 'w'.repeat(40) });
     expect(r.code).not.toBe(0);
