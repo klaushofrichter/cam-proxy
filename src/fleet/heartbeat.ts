@@ -59,12 +59,15 @@ const leftoversOf = (l: MoveLeftover[]): MoveLeftover[] =>
   l.slice(0, LEFTOVER_ENTRIES).map((e) => ({ camera: e.camera, moveId: e.moveId, items: e.items.slice(0, LEFTOVER_ITEMS).map((i) => i.slice(0, LEFTOVER_TEXT)) })).filter((e) => e.items.length > 0);
 
 // `moveLeftovers`: in the body only when there are some (also when truncated).
-export function buildHeartbeat(summary: HealthSummary, proxy: HeartbeatProxyInfo, maxBytes = HEARTBEAT_MAX_BYTES, profile?: ProfileReport | null, moveLeftovers?: MoveLeftover[]): { body: Record<string, unknown>; truncated: boolean; bytes: number } {
+// `onboarding` (spec 2026-10-30-camera-onboarding-design §4.5): each camera's {ready, missing}, at most 64 cameras; omitted when empty, kept when truncated.
+export const ONBOARDING_CAMERAS = 64;
+export function buildHeartbeat(summary: HealthSummary, proxy: HeartbeatProxyInfo, maxBytes = HEARTBEAT_MAX_BYTES, profile?: ProfileReport | null, moveLeftovers?: MoveLeftover[], onboarding?: Record<string, { ready: boolean; missing: string[] }>): { body: Record<string, unknown>; truncated: boolean; bytes: number } {
   const s = clamp(summary);
   s.version = s.version.slice(0, VERSION_MAX);
   const p = info(proxy);
   const left = leftoversOf(moveLeftovers ?? []);
-  const extra = { ...(profile ? { profile } : {}), ...(left.length ? { moveLeftovers: left } : {}) };
+  const ob = Object.entries(onboarding ?? {}).slice(0, ONBOARDING_CAMERAS).map(([k, v]) => [k, { ready: v.ready, missing: [...v.missing] }] as const);
+  const extra = { ...(profile ? { profile } : {}), ...(left.length ? { moveLeftovers: left } : {}), ...(ob.length ? { onboarding: Object.fromEntries(ob) } : {}) };
   const full = { summary: s, proxy: p, truncated: false, ...extra };
   const text = JSON.stringify(full);
   if (Buffer.byteLength(text) <= maxBytes) return { body: full, truncated: false, bytes: Buffer.byteLength(text) };

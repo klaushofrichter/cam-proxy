@@ -22,7 +22,9 @@ test('Find camera lists the devices, marks the current camera, and offers the .e
   await expect(reolink.getByTestId('find-camera-use')).toHaveText('Use this camera');
   // Klaus 2026-10-05: the badge sits right-aligned in the button's column.
   const badgeBox = await current.getByTestId('find-camera-current').boundingBox();
-  const btnBox = await reolink.getByTestId('find-camera-use').boundingBox();
+  // The row's last button: "Add this camera" (spec 2026-10-30-camera-onboarding-design §4.3).
+  await expect(reolink.getByTestId('find-camera-add')).toHaveText('Add this camera');
+  const btnBox = await reolink.getByTestId('find-camera-add').boundingBox();
   expect(Math.abs((badgeBox!.x + badgeBox!.width) - (btnBox!.x + btnBox!.width))).toBeLessThan(3);
   await reolink.getByTestId('find-camera-use').click();
   await expect(page.getByTestId('confirm-dialog')).toHaveCount(0);

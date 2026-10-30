@@ -63,7 +63,7 @@ describe('cams-admin changes on the proxy', () => {
   });
   it('the allow entries in groups; the disruptive ones say so', async () => {
     const r = (await request(p.base).get('/control/admin/commands').set(admin).expect(200)).body;
-    expect(r.groups.read).toEqual(['config.get']);
+    expect(r.groups.read).toEqual(['config.get', 'camera.onboarding.get']);
     expect(r.groups.settings).toEqual(['config.set', 'config.unset', 'config.rollback']);
     expect([...r.groups.disruptive].sort()).toEqual([...DISRUPTIVE_ENTRIES].sort());
     expect(r.groups.camera).toContain('camera.action:camera-test');
@@ -73,7 +73,7 @@ describe('cams-admin changes on the proxy', () => {
     expect(r.groups.signin).toEqual(['ui.config', 'ui.restart']);
     expect(r.implemented).toEqual(expect.arrayContaining(['ui.config', 'ui.restart']));
     for (const e of r.groups.disruptive) expect(r.known.find((k: { entry: string }) => k.entry === e).text, e).toMatch(/^DISRUPTIVE: /);
-    expect(r.allow).toEqual(['tokens.apply']);
+    expect(r.allow).toEqual(['tokens.apply', 'camera.onboarding.get']);
     // I3: the P3 entries a P2 version stored wait for a fresh local tick.
     expect(r.unconfirmed).toEqual(['config.set', 'proxy.restart']);
   });

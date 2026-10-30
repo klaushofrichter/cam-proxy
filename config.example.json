@@ -120,6 +120,7 @@
     "firewall": "ufw"
   },
   "ntp": {},
+  "time": {},
   "camsAdmin": {
     "keyFile": "admin/key.json",
     "enabled": true

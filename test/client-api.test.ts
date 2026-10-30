@@ -38,14 +38,14 @@ describe('client API', () => {
   // name: the camera's own (cam-sim's "Cam"), not the configured "Den" (camera-name design).
   it('lists the camera with its state', async () => {
     const r = await request(p.base).get('/api/cameras').set(auth());
-    expect(r.body).toEqual([{ id: 'cam1', name: 'Cam', online: true, lastEventTs: 3000, stream: process.env.CAMPROXY_TEST_GO2RTC ? expect.objectContaining({ up: expect.any(Boolean) }) : null, publicUrl: null, address: sim.camera.host, error: null, features: ['sse-cam-list', 'ptz'], capabilities: { schema: 1, ptz: null }, latestStill: r.body[0].latestStill === null ? null : expect.objectContaining({ url: '/api/cameras/cam1/stills/latest.jpg' }), tls: { mode: 'none', servername: null, fingerprint: null, notAfter: null, lastPush: null } }]);
+    expect(r.body).toEqual([{ id: 'cam1', name: 'Cam', online: true, lastEventTs: 3000, stream: process.env.CAMPROXY_TEST_GO2RTC ? expect.objectContaining({ up: expect.any(Boolean) }) : null, publicUrl: null, address: sim.camera.host, error: null, features: ['sse-cam-list', 'ptz'], capabilities: { schema: 1, ptz: null }, latestStill: r.body[0].latestStill === null ? null : expect.objectContaining({ url: '/api/cameras/cam1/stills/latest.jpg' }), tls: { mode: 'none', servername: null, fingerprint: null, notAfter: null, lastPush: null }, credentials: { source: 'env', envName: 'CAMPROXY_CAMERA_PASSWORD', authOk: true, checkedAt: expect.any(Number) } }]);
   });
 
   it('GET /api/cameras: one camera, today\'s fields plus error (spec §6.1)', async () => {
     const r = await request(p.base).get('/api/cameras').set(auth());
     expect(r.status).toBe(200);
     expect(r.body).toHaveLength(1);
-    expect(Object.keys(r.body[0]).sort()).toEqual(['address', 'capabilities', 'error', 'features', 'id', 'lastEventTs', 'latestStill', 'name', 'online', 'publicUrl', 'stream', 'tls']);
+    expect(Object.keys(r.body[0]).sort()).toEqual(['address', 'capabilities', 'error', 'features', 'id', 'lastEventTs', 'latestStill', 'name', 'online', 'publicUrl', 'stream', 'tls', 'credentials'].sort());
     expect(r.body[0].id).toBe('cam1');
     expect((await request(p.base).get('/api/cameras/cam9').set(auth())).status).toBe(404);
   });

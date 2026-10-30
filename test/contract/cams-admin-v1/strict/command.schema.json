@@ -68,7 +68,8 @@
             "move.finish",
             "move.cancel",
             "move.return.open",
-            "move.return.start"
+            "move.return.start",
+            "camera.onboarding.get"
           ]
         },
         "args": {

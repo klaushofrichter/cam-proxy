@@ -1,0 +1,88 @@
+{
+  "$note": "one camera, all eleven steps: FTP off (not required), time unknown (no zone), ready",
+  "$command": "camera.onboarding.get",
+  "schema": "result",
+  "message": {
+    "v": 1,
+    "type": "result",
+    "id": "01K60000000000000000000005",
+    "seq": 5,
+    "ts": 1791273600005,
+    "re": "01K60000000000000000000003",
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "phase": "done",
+      "status": "ok",
+      "result": {
+        "cameras": {
+          "cam1": {
+            "camera": "cam1",
+            "ready": true,
+            "checkedAt": 1791273599000,
+            "steps": {
+              "reachable": {
+                "ok": true,
+                "detail": ""
+              },
+              "login": {
+                "ok": true,
+                "detail": ""
+              },
+              "trust": {
+                "ok": true,
+                "detail": ""
+              },
+              "capabilities": {
+                "ok": true,
+                "detail": ""
+              },
+              "stream": {
+                "ok": true,
+                "detail": ""
+              },
+              "events": {
+                "ok": true,
+                "detail": ""
+              },
+              "ftp": {
+                "ok": false,
+                "detail": "camera upload off",
+                "action": "camera-ftp-setup"
+              },
+              "time": {
+                "ok": null,
+                "detail": "zone unknown: set time.zone"
+              },
+              "name": {
+                "ok": true,
+                "detail": ""
+              },
+              "poe": {
+                "ok": true,
+                "detail": "none"
+              },
+              "profile": {
+                "ok": true,
+                "detail": ""
+              }
+            },
+            "trust": {
+              "mode": "pinned",
+              "fingerprint": "SHA256:ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB",
+              "served": "SHA256:ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB"
+            },
+            "time": {
+              "clockOffsetMs": -1200,
+              "zone": null,
+              "cameraStdOffsetMinutes": 60,
+              "cameraDst": true
+            }
+          }
+        }
+      }
+    },
+    "sig": "4olrP+rtVQ9DcHVRkGqnEfkGK1oTEmATd1klkKBSsE2sfgjs1LNkW2msv0PjGJ5cZY4aByq5znRQpiRapmB0CQ=="
+  }
+}

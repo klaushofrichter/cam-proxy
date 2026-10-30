@@ -8,10 +8,11 @@ import { derivedPassive, ftpOn, MAX_FTP_CAMERAS, PASSIVE_MAX, PORTS_PER_CAMERA }
 import { normalizeFile, normalizeOverrides, translatePath } from './legacy';
 import { ipv4Int } from '../util/cidr';
 import { loadSecrets } from './secrets';
-import { EnvSettingError, readEnvLayer, type EnvLayer } from './env';
+import { EnvSettingError, readEnvLayer, type EnvLayer, type EnvValue } from './env';
 import { adminUrlProblem } from '../fleet/protocol';
 import { jcs } from '../fleet/jcs';
 import { validateAllowList } from '../fleet/policy';
+import { knownZone } from '../onboarding/zone';
 
 export { ConfigError } from './load-error';
 import { ConfigError } from './load-error';
@@ -113,6 +114,8 @@ function asConfigError<T>(fn: () => T): T {
 }
 
 function crossCheck(c: Config): void {
+  // An IANA zone the runtime knows (spec 2026-10-30-camera-onboarding-design §4.7).
+  if (c.time?.zone !== undefined && !knownZone(c.time.zone)) throw new ConfigError(`time.zone: ${c.time.zone} is not a time zone this proxy knows (an IANA name, e.g. Europe/Berlin)`);
   const [cols, rows] = c.previews.grid.split('x').map(Number);
   for (const id of c.cameraOrder) {
     const iv = cameraConfig(c, id)!.stills.intervalS;
@@ -461,6 +464,25 @@ export function planUnset(loaded: Loaded, paths: string[]): Plan {
 // The configuration with these overrides (validated), not written.
 export function rebuildWith(loaded: Loaded, overrides: object, o: BuildOptions = {}): Loaded {
   return build(loaded.env, loaded.files.config, loaded.fileSettings as Obj, overrides as Obj, baseDirOf(loaded), loaded.envLayer, normOf(loaded), o);
+}
+
+// The configuration rebuilt without these environment variables (a camera's
+// own password line removed from the env file: the store's password applies
+// at once). The process environment is untouched.
+export function withoutEnv(l: Loaded, names: string[]): Loaded {
+  const env = { ...l.env };
+  for (const n of names) delete env[n];
+  return build(env, l.files.config, l.fileSettings as Obj, l.overrides as Obj, baseDirOf(l), l.envLayer, normOf(l));
+}
+
+// The configuration rebuilt with the one camera's address from the
+// environment replaced (POST /control/cameras on a single-camera proxy wrote
+// CAMERA_HOST into the env file); undefined removes it (the camera removed).
+export function withCameraHost(l: Loaded, v: EnvValue | undefined): Loaded {
+  const layer: EnvLayer = { ...l.envLayer };
+  if (v) layer.cameraHost = v;
+  else delete layer.cameraHost;
+  return build(l.env, l.files.config, l.fileSettings as Obj, l.overrides as Obj, baseDirOf(l), layer, normOf(l));
 }
 
 // Adds overrides (validated like the file); nothing is written if the result

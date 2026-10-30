@@ -19,6 +19,11 @@ export type ProfileWarning = 'profile_ftp_ports' | 'profile_cameras_exceeded';
 // The cameras this proxy holds: every camera not hidden after a move.
 export const heldCameras = (c: Config): number => c.cameraOrder.filter((id) => !c.cameras[id]?.moved).length;
 
+// Adding a camera is refused at the profile's camera count (spec
+// 2026-10-30-camera-onboarding-design §4.3); a proxy already over it keeps
+// running with its warning (profile_cameras_exceeded).
+export const atCameraLimit = (c: Config): boolean => c.profile.cameras !== undefined && heldCameras(c) >= c.profile.cameras;
+
 // FTP is on here: any camera takes clip uploads (as the passive checks count them).
 export const ftpOn = (c: Config): boolean => c.cameraOrder.some((id) => cameraConfig(c, id)!.ftp.enabled);
 

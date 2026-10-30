@@ -83,6 +83,16 @@ import { capturedMark } from './moves/captured';
 import { purgeExcept, removeImported } from './moves/purge';
 import type { MoveEvent } from './moves/types';
 import { cameraPasswordStore } from './config/camera-passwords';
+import { credentialsOf, passwordSource } from './onboarding/credentials';
+import { OnboardingService } from './onboarding/service';
+import { PasswordAttempts } from './onboarding/attempts';
+import { onboardingApi } from './api/onboarding-api';
+import { proxyZone } from './onboarding/zone';
+import { compactOf } from './onboarding/status';
+import { RemoveLeftovers } from './onboarding/remove-leftovers';
+import { listPositions } from './catalog/ptz-positions';
+import { readCameraFtp } from './clips/camera-ftp';
+import { profileWarnings } from './config/profile';
 import { verifyFtp } from './fleet/camera-commands';
 import { availableParallelism, loadavg } from 'os';
 import { CommandRunner, type Handler } from './fleet/commands';
@@ -135,6 +145,8 @@ export interface Proxy {
   readonly audit: AuditLog;
   readonly inventory: InventoryRunner;
   readonly archive: Archive;
+  // Camera onboarding (spec 2026-10-30-camera-onboarding-design §4).
+  readonly onboarding: OnboardingService;
   // The camera certificates of the site CA (spec §10.1.3); undefined without tls.site (the Pi). Test seam: tick().
   readonly certs: CameraCerts | undefined;
   // cams-admin (spec 2026-10-06-cams-admin-phase1-design §9): off unless camsAdmin.url is set.
@@ -172,6 +184,8 @@ export interface ProxyOptions {
   camsAdmin?: { timing?: Partial<Timing>; replaySlackMs?: number; recheckMs?: number };
   // A camera move's switch-over retries on the target (tests shorten them).
   moves?: { attempts?: number; retryMs?: number; retryCapMs?: number; notReadyMs?: number };
+  // The host's zone as the proxy reads it: TZ and what Intl reports (tests pin both: a UTC host has no known zone).
+  hostZone?: { tz?: string; intl: () => string };
 }
 
 export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
@@ -239,7 +253,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // What the CA doesn't cover of the proxy's own names (Review Focus 2): named, never a silent bad leaf.
   const tlsProblems = (): string[] => [
     ...(caProblem ? [caProblem] : []),
-    ...(!running.tls.site && certs ? ['tls.site is not set: the cameras keep their site-CA trust (camera-trust-clear drops it)'] : []),
+    // Only for site-CA trust kept from one (a pin made without a site CA is no problem).
+    ...(!running.tls.site && certs && cams.ids().some((id) => certs!.state(id).mode === 'site-ca') ? ['tls.site is not set: the cameras keep their site-CA trust (camera-trust-clear drops it)'] : []),
     ...(certs ? certs.problems() : []),
     ...(ca ? [...proxyAddresses().filter((a) => !ca!.covers(a)), ...(ca.coversName(proxyName()) ? [] : [proxyName()])].map(outside) : []),
     // A camera's own (an address outside the CA, a failed push), named.
@@ -375,6 +390,16 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       if (certs?.expecting()) void certs.checkExpected().catch((err: Error) => logger.warn({ err: err.message }, 'camera_expected_leaf_check_failed'));
     }, 5000);
     expectedTimer.unref();
+  };
+  // The camera certificates on first use without a site CA (spec
+  // 2026-10-30-camera-onboarding-design §4.4: an admin's pin): trust only, no
+  // scheduler, no pushes (as startSiteCa does for trust kept from a site CA).
+  const ensureCerts = (): CameraCerts => {
+    if (!certs) {
+      certs = makeCerts();
+      for (const w of cams.list()) w.applyTrust();
+    }
+    return certs;
   };
   // tls-ca-rotate (Ruling P5-3): the old files kept as *.old-<time>, a new CA,
   // a new proxy leaf, every camera pushed again (from the next tick on).
@@ -795,6 +820,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     recordings: w.recordings.status(),
     // Where the camera is defined: config.json, or added in the Settings page (overrides.json).
     source: loaded.addedCameras.includes(w.id) ? ('added' as const) : ('config' as const),
+    credentials: credentialsOf(passwordSource(loaded, w.id), w.status.state()),
   });
 
   // The health summary (spec 2026-10-03-health-summary-design): the host
@@ -929,6 +955,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     health: healthNow,
     profile: profileNow,
     moveLeftovers: () => moveLeftovers.current(loaded),
+    onboardingNow: () => Object.fromEntries(onboarding.statusNow().map((s) => [s.camera, compactOf(s)])),
     proxyInfo: () => ({
       startedAt,
       uptimeS: startedAt ? Math.round((Date.now() - startedAt) / 1000) : null,
@@ -1162,14 +1189,80 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   app.use('/api', requireAccess('client', access), archiveApi({ config: () => running, catalog, archive, composer, cameras: cams }));
   // Pan/tilt/zoom and positions (spec 2026-10-30-ptz-capabilities-design §5).
   app.use('/api', requireAccess('client', access), ptzApi({ cameras: cams, audit }));
-  app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, cameras: cams, sse, tls: (id) => certs?.state(id) }));
+  app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, cameras: cams, sse, tls: (id) => certs?.state(id), credentials: (id) => credentialsOf(passwordSource(loaded, id), cams.get(id)?.status.state() ?? { online: false, since: 0 }) }));
   // The audit log: admins and the audit token, GET (and HEAD) only. The access check is
   // on the route inside the router; other /control paths pass on untouched
   // to the admin-only routes below.
   app.use('/control', auditApi({ audit, guard: requireAccess('audit-read', access), retentionDays: () => running.retention.auditDays }));
   // The cams-admin card (spec 2026-10-06-cams-admin-phase1-design §9.2).
   app.use('/control', requireAccess('admin', access), camsAdminApi({ camsAdmin, audit, commands: { policy: commandPolicy, tokens: tokenStore, runner: commandRunner, config: configCommandDeps } }));
+  // Camera onboarding (spec 2026-10-30-camera-onboarding-design §4).
+  const removeLeftovers = new RemoveLeftovers(running.server.dataDir);
+  const onboarding = new OnboardingService({
+    loaded: () => loaded,
+    setLoaded,
+    running: () => running,
+    cameras: cams,
+    restartCamera: (cam) => controlDeps.restartCamera(cam),
+    passwords: movePasswords,
+    trustFor: tlsFor,
+    certState: (cam) => certs?.state(cam) ?? null,
+    audit,
+    attempts: new PasswordAttempts(),
+    served: servedOf,
+    pinServed: (cam, sv, who) => ensureCerts().pinServed(cam, sv, who),
+    // Open: a journal record here (a finished move's tombstone is not: its camera may be replaced).
+    moveOpen: (id) => {
+      try {
+        return moveJournal.load(id) !== null;
+      } catch {
+        return true;
+      }
+    },
+    envFile: () => loaded.env.CAMPROXY_ENV_FILE || undefined,
+    positions: { count: (cam) => listPositions(catalog, cam).length, remove: (cam) => deleteCameraPositions(catalog, cam) },
+    trust: {
+      known: (cam) => (certs ? certs.state(cam).mode !== 'none' || certs.pin(cam) !== null || (existsSync(join(tlsDir, 'cameras')) && readdirSync(join(tlsDir, 'cameras')).some((f) => f.startsWith(`${cam}.`))) : false),
+      forget: (cam, who) => certs?.forget(cam, who, 'removed'),
+    },
+    cameraFtp: {
+      pointsHere: async (cam) => {
+        const here = running.ftp.publicHost;
+        return !!here && (await readCameraFtp(worker(cam).client)).server === here;
+      },
+      off: async (cam) => {
+        const w = worker(cam);
+        w.ftpWatch.note(await cameraFtpOff(w.client, ftpTargetFor(cam)()));
+      },
+    },
+    removeLeftovers,
+    cameraClient: (cam) => cams.get(cam)?.client ?? null,
+    cameraNtp: (cam) => worker(cam).syncNtp(true),
+    zone: () => (opts.hostZone ? proxyZone(running, opts.hostZone.tz ? { TZ: opts.hostZone.tz } : {}, opts.hostZone.intl) : proxyZone(running)),
+    statusInput: (cam) => {
+      const w = cams.get(cam);
+      if (!w) return null;
+      const c = w.cam();
+      const ftp = ftpStatusOf(w);
+      return {
+        camera: cam,
+        protocol: c.protocol,
+        state: w.status.state(),
+        credentials: credentialsOf(passwordSource(loaded, cam), w.status.state()),
+        cert: c.protocol === 'https' ? (c.tlsName ? { ...certStateOf(cam), mode: 'public' as const, servername: c.tlsName } : certStateOf(cam)) : null,
+        capabilities: w.capabilities(),
+        stills: { enabled: c.stills.enabled, up: w.streamStatus().up },
+        intake: w.intake.state(),
+        ftp: { enabled: c.ftp.enabled, view: ftp.camera, lastUpload: ftp.lastUpload },
+        timeInfo: w.timeInfo(),
+        name: { name: w.name(), nameSource: w.nameSource() },
+        poePort: w.poeSwitch.notConfigured() === null && c.poeSwitch.port ? c.poeSwitch.port : null,
+        profile: profileWarnings(running),
+      };
+    },
+  });
   const controlDeps: ControlDeps = {
+    onboarding,
     changeMarks: () => overridesBackups.byPath(),
     moveOpen: (id) => {
       try {
@@ -1182,6 +1275,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     loaded: () => loaded,
     profile: profileNow,
     moveLeftovers: () => moveLeftovers.current(loaded),
+    removeLeftovers: () => removeLeftovers.current(loaded),
     setLoaded,
     running: () => running,
     catalog,
@@ -1267,13 +1361,14 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       dropPrevious: (who) => certs?.dropPreviousCa(who) ?? false,
     },
   };
+  app.use('/control', requireAccess('admin', access), onboardingApi(onboarding));
   app.use('/control', requireAccess('admin', access), movesControlApi(moveSource));
   app.use('/control', requireAccess('admin', access), controlApi(controlDeps));
   // cams-admin's P3 commands (plan P3 Task 10): each off unless allowed locally.
   Object.assign(
     commandHandlers,
     configHandlers(configCommandDeps),
-    cameraHandlers({ actions: controlDeps, cameraIds: () => cams.ids(), cameraName: controlDeps.cameraName, audit, restartProcess: () => controlDeps.restartProcess() }),
+    cameraHandlers({ actions: controlDeps, cameraIds: () => cams.ids(), cameraName: controlDeps.cameraName, audit, restartProcess: () => controlDeps.restartProcess(), onboarding: (cam) => onboarding.status(cam) }),
     // Camera moves (plan 2026-10-21-camera-move-cam-proxy): stubs until each task fills its handler in.
     moveHandlers({
       emit: emitToAdmin,
@@ -1426,6 +1521,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     },
     camsAdmin,
     actions: controlDeps,
+    onboarding,
     // Test seam: the host go2rtc's process id (adding a camera never restarts it).
     go2rtcPid: () => go2rtc?.pid(),
     async start(opts = {}) {

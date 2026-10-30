@@ -53,8 +53,13 @@ const send = (method: string, path: string, h: Record<string, string>, body: obj
 };
 
 describe('a managed admin token on the admin API', () => {
-  it('the allow-list is short: sign-in links, camera rename, pause, narrowing the allow-list, block', () => {
-    expect(MANAGED_ALLOWED.map(([m, re]) => `${m} ${re.source}`)).toHaveLength(6);
+  it('the allow-list is short: sign-in links, camera rename, pause, narrowing the allow-list, block, a camera password, a camera certificate pin', () => {
+    expect(MANAGED_ALLOWED.map(([m, re]) => `${m} ${re.source}`)).toHaveLength(8);
+    expect(MANAGED_ALLOWED.some(([m, re]) => m === 'POST' && re.test('/control/cameras/cam1/actions/camera-trust-pin'))).toBe(true);
+    expect(MANAGED_ALLOWED.some(([, re]) => re.test('/control/cameras/cam1/actions/camera-trust-clear'))).toBe(false);
+    // A camera password (spec 2026-10-30-camera-onboarding-design §10.1): write-only, checked with the camera.
+    expect(MANAGED_ALLOWED.some(([m, re]) => m === 'PUT' && re.test('/control/cameras/cam1/password'))).toBe(true);
+    expect(MANAGED_ALLOWED.some(([, re]) => re.test('/control/cameras/cam1/password/x'))).toBe(false);
   });
   it('every other mutating admin route: 403 local_admin_only (the probes: archive-clear, camsAdmin.url, enroll, camera-address, secret-override, …)', async () => {
     const ops = mutating();

@@ -467,8 +467,23 @@ the expected answer:
   `.11`–`.29`, its id and switch port), render on the Mac,
   `scripts/host/validate-rendered.sh`, copy, `sudo bash prepare-host.sh
   --rendered /tmp/rendered` (dnsmasq restarts with the new lease; the existing
-  `config.json` is kept), then add the camera in the Settings page or in
-  `config.json`, and its `proxy` user and FTP (§8).
+  `config.json` is kept), then add the camera with its password and
+  certificate in one call (no restart, nothing typed into a file), and its
+  `proxy` user and FTP (§8):
+  1. `POST /control/actions/camera-probe` `{"host": "192.0.2.11"}` (admin
+     token): the ports that answer and the certificate the camera serves
+     (`certificate.fingerprint`). Check it against the camera if you can.
+  2. `POST /control/cameras` `{"id": "cam6", "host": "192.0.2.11", "user":
+     "admin", "password": "<the camera's password>", "trust": {"fingerprint":
+     "SHA256:…"}}` with the proxy's own admin token (a cams-admin token or
+     sign-in is refused): the proxy logs in over exactly that certificate,
+     then stores the password (`data/admin/camera-passwords.json`), pins the
+     certificate and adds the camera to `overrides.json`. 201 with its
+     onboarding status; 409 `camera_limit` at `profile.cameras`, 422
+     `camera_refused` for a wrong password (nothing stored), at most 5
+     password tries per camera in 10 minutes.
+  3. `GET /control/cameras/cam6/onboarding` until `ready`.
+  A camera in `config.json` still works as before.
 - **NTP:** the cameras get the PC as their NTP server by DHCP (option 42). A
   firmware that ignores it gets it by a whole-object `SetNtp` (P5; §12).
 

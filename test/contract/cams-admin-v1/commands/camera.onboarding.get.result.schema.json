@@ -1,0 +1,414 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/commands/camera.onboarding.get.result.schema.json",
+  "title": "camera.onboarding.get result v1",
+  "type": "object",
+  "properties": {
+    "cameras": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+      },
+      "maxProperties": 64,
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "camera": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "checkedAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "steps": {
+            "type": "object",
+            "properties": {
+              "reachable": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "action": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              "login": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "action": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              "trust": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "action": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              "capabilities": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "action": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              "stream": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "action": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              "events": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "action": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              "ftp": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "action": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              "time": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "action": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              "name": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "action": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              "poe": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "action": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              "profile": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "action": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              }
+            },
+            "required": []
+          },
+          "trust": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "fingerprint": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^SHA256:[0-9A-F]{64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "served": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^SHA256:[0-9A-F]{64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": []
+          },
+          "time": {
+            "type": "object",
+            "properties": {
+              "clockOffsetMs": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "zone": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "cameraStdOffsetMinutes": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "cameraDst": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": []
+          }
+        },
+        "required": [
+          "camera",
+          "ready",
+          "checkedAt",
+          "steps"
+        ]
+      }
+    },
+    "clamped": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "cameras"
+  ]
+}

@@ -55,7 +55,7 @@ export class CommandLimits {
     const cfg = new Window(60_000, 6);
     // Every move.* command counts toward one window of 60 a minute per proxy (the contract: the same as config.get; no journal budget).
     const moves = new Window(60_000, 60);
-    this.per = { ...Object.fromEntries(MOVE_COMMANDS.map((c) => [c, [moves]])), 'tokens.apply': [new Window(3_600_000, 6)], 'config.set': [cfg], 'config.unset': [cfg], 'config.rollback': [cfg], 'camera.action': [new Window(60_000, 12)], 'camera.name.set': [new Window(60_000, 6)] };
+    this.per = { ...Object.fromEntries(MOVE_COMMANDS.map((c) => [c, [moves]])), 'tokens.apply': [new Window(3_600_000, 6)], 'config.set': [cfg], 'config.unset': [cfg], 'config.rollback': [cfg], 'camera.action': [new Window(60_000, 12)], 'camera.name.set': [new Window(60_000, 6)], 'camera.onboarding.get': [new Window(60_000, 12)] };
   }
   take(command: string): { ok: true } | { ok: false; retryAfterS: number } {
     const t = this.now();

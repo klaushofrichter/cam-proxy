@@ -19,6 +19,7 @@
       "proxy.restart",
       "move.send",
       "move.receive",
+      "camera.onboarding.get",
       "camera.action:camera-test",
       "camera.action:onvif-resubscribe",
       "camera.action:camera-ftp-test",
@@ -31,7 +32,8 @@
       "camera.action:camera-powercycle",
       "camera.action:camera-ftp-setup",
       "camera.action:camera-ntp-set",
-      "camera.action:camera-cert-push"
+      "camera.action:camera-cert-push",
+      "camera.action:camera-time-set"
     ],
     "paused": false,
     "seen": []

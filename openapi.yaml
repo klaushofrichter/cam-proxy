@@ -11,6 +11,28 @@ components:
     bearer: { type: http, scheme: bearer }
     moveToken: { type: http, scheme: bearer, description: 'the per-move token (camera moves): only /api/moves/{id}/...' }
   schemas:
+    Credentials:
+      description: 'Where a camera''s password comes from and whether it works (spec 2026-10-30-camera-onboarding-design §4.1). Never a password.'
+      type: object
+      required: [source, authOk, checkedAt]
+      properties:
+        source: { enum: [env, store, none], description: 'env: the camera''s own CAMPROXY_CAMERA_PASSWORD_<ID> (or its _FILE), or the shared CAMPROXY_CAMERA_PASSWORD (envName says which); store: saved through PUT /control/cameras/{cam}/password; none: no password' }
+        envName: { type: string, description: 'the variable that sets it (source env only)' }
+        authOk: { type: [boolean, 'null'], description: 'true while the camera answers, false when it refused the login, null when not known (offline, not checked yet)' }
+        checkedAt: { type: [integer, 'null'], description: 'when the camera was last checked' }
+    OnboardingStatus:
+      description: 'One camera''s onboarding status (spec 2026-10-30-camera-onboarding-design §4.5). Never a secret.'
+      type: object
+      required: [camera, ready, checkedAt, steps, trust, time]
+      properties:
+        camera: { type: string }
+        ready: { type: boolean, description: 'every required step (reachable, login, trust, capabilities, stream, events) ok' }
+        checkedAt: { type: integer }
+        steps:
+          description: 'reachable, login, trust, capabilities, stream, events, ftp, time, name, poe, profile (in that order), each { ok: true | false | null (not known yet), detail (at most 200 characters), action? (what fixes it: password, camera-trust-pin, camera-ftp-setup, camera-time-set, camera-ntp-set) }. FTP or stills off by choice is ok with detail off; an http camera''s trust is never ok (plain http).'
+          type: object
+        trust: { type: object, description: '{ mode (site-ca, pinned, public, none), fingerprint (the trusted one) | null, served (what the camera served when last measured, at most once a minute) | null }' }
+        time: { type: object, description: '{ clockOffsetMs | null, zone (time.zone, else the host''s known zone) | null, cameraStdOffsetMinutes | null, cameraDst | null }' }
     Capabilities:
       description: 'What a camera can do (spec 2026-10-30-ptz-capabilities-design §4); null while the camera was never read. Clients use it only when the item''s features list ptz.'
       type: [object, 'null']
@@ -207,7 +229,7 @@ paths:
     get:
       summary: The camera and its state
       responses:
-        '200': { description: '[{ id, name, online, lastEventTs (the newest live (non-recovered) event''s start, or null), stream: { up, lastFrameTs } | null, publicUrl, address }] (address: the camera''s camera.host as it runs, host and optional port, for clients that reach the camera directly; name: the camera''s own name as read from it, the configured camera.name until the camera was first read; stream is null when stills are off; publicUrl is server.publicUrl or null). Every configured camera in config order; each item also has error (the camera worker''s or its last check''s error, null when fine) and features (string[], the same on every item: what this proxy supports beyond the pre-multi-camera API, e.g. sse-cam-list for /api/stream?cam=a,b, ptz for the PTZ API; clients test for a name), capabilities (Capabilities: what this camera can do, null until first read; a change is sent as a camera stream message) and latestStill ({ts, url, tileUrl} of the newest still in memory, or null: GET /api/cameras/{cam}/stills/latest.jpg)' }
+        '200': { description: '[{ id, name, online, lastEventTs (the newest live (non-recovered) event''s start, or null), stream: { up, lastFrameTs } | null, publicUrl, address }] (address: the camera''s camera.host as it runs, host and optional port, for clients that reach the camera directly; name: the camera''s own name as read from it, the configured camera.name until the camera was first read; stream is null when stills are off; publicUrl is server.publicUrl or null). Every configured camera in config order; each item also has error (the camera worker''s or its last check''s error, null when fine) and features (string[], the same on every item: what this proxy supports beyond the pre-multi-camera API, e.g. sse-cam-list for /api/stream?cam=a,b, ptz for the PTZ API; clients test for a name), capabilities (Capabilities: what this camera can do, null until first read; a change is sent as a camera stream message) and latestStill ({ts, url, tileUrl} of the newest still in memory, or null: GET /api/cameras/{cam}/stills/latest.jpg), credentials (Credentials: where the password comes from and whether it works; never a value)' }
         '401': { description: missing or wrong token }
   /api/cameras/{cam}:
     get:
@@ -215,7 +237,7 @@ paths:
       parameters:
         - { name: cam, in: path, required: true, schema: { type: string } }
       responses:
-        '200': { description: '{ id, name, online, lastEventTs, stream, publicUrl, address, error, features, capabilities, latestStill }, as in GET /api/cameras' }
+        '200': { description: '{ id, name, online, lastEventTs, stream, publicUrl, address, error, features, capabilities, latestStill, tls, credentials }, as in GET /api/cameras' }
         '401': { description: missing or wrong token }
         '404': { description: unknown camera }
         '503': { description: camera_restarting (Retry-After) while the camera restarts }
@@ -942,14 +964,34 @@ paths:
         Admin token or admin session. Writes with the session cookie need
         `X-CamProxy-UI: 1`. A client token answers 403 `{"error":"admin_only"}`.
       responses:
-        '200': { description: '{ version, camera (incl. name (the camera''s name; the configured camera.name until the camera was read), nameSource (camera or config), webUiUrl, reboot {kind, requestedAt, confirmed, phase, offAt, endedAt, downSec} or null, poeSwitch {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state (on, off, elsewhere, server_differs, not_set_up, unknown), checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result (ok, offline, refused, auth, timeout, protocol, not_found), stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null, cache: {bytes, files, capBytes} (the host's one cache, every camera), camera: {bytes, files} (this camera's part)}, analytics: [provider state], analyticsUnmapped: top 20 unmapped objects [{mid, name, count, lastSeen}], health: the health summary, as GET /api/local/health, archive: as GET /api/archive/status, cameras: every camera''s block {id, camera, intake, stream, ftp, recordings} in config order (the top-level camera, intake, stream, ftp and recordings are the first camera''s) }' }
+        '200': { description: '{ version, camera (incl. name (the camera''s name; the configured camera.name until the camera was read), nameSource (camera or config), webUiUrl, reboot {kind, requestedAt, confirmed, phase, offAt, endedAt, downSec} or null, poeSwitch {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse: {clients}, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state (on, off, elsewhere, server_differs, not_set_up, unknown), checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result (ok, offline, refused, auth, timeout, protocol, not_found), stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null, cache: {bytes, files, capBytes} (the host's one cache, every camera), camera: {bytes, files} (this camera's part)}, analytics: [provider state], analyticsUnmapped: top 20 unmapped objects [{mid, name, count, lastSeen}], health: the health summary, as GET /api/local/health, archive: as GET /api/archive/status, cameras: every camera''s block {id, camera, intake, stream, ftp, recordings} in config order (the top-level camera, intake, stream, ftp and recordings are the first camera''s), moveLeftovers, removeLeftovers: [{camera, at, items}] (what removed cameras left that the proxy can''t remove) }' }
         '401': { description: not signed in }
         '403': { description: admin_only, or csrf }
   /control/cameras:
+    post:
+      summary: Add a camera with its password and certificate pin (local admin only) (spec 2026-10-30-camera-onboarding-design §4.3)
+      description: >
+        Body {id (a camera id; on a single-camera proxy optional: the camera's own id), name?, host (address or name,
+        optional :port), protocol (https, default; or http), user (default admin), password, trust: {fingerprint}
+        (required for https: the certificate the camera serves, from camera-probe), ports? ({https, http, rtsp, onvif,
+        baichuan}), ftp? (clip uploads for the camera; false by default)}. Nothing is stored or written until the camera accepted the login, over https only to that
+        certificate. Then the password is stored (data/admin/camera-passwords.json), the certificate pinned, and the
+        camera added in overrides.json (live, no restart; a config-change and a camera-add audit record). Only the
+        proxy's own admin token or a session it started: a managed token or sign-in answers 403 local_admin_only. At
+        most 5 password attempts per camera address in 10 minutes (shared with the password API and camera-probe).
+      responses:
+        '201': { description: '{ onboarding: OnboardingStatus, plaintext: true (an http camera: its password crossed the network unencrypted) }' }
+        '400': { description: invalid }
+        '401': { description: not signed in }
+        '403': { description: admin_only, local_admin_only }
+        '409': { description: "camera_exists, camera_limit (detail: profile.cameras is <n>; a proxy already over it keeps running), fingerprint_mismatch {served}, camera_id, move_open, not_available {line} (a single-camera proxy without a writable .env), env_password (the camera's own CAMPROXY_CAMERA_PASSWORD_<ID> in compose's environment or a _FILE secret: remove it first; one in the managed env file is removed). One add or remove at a time." }
+        '422': { description: camera_refused (nothing stored) }
+        '429': { description: too_many_attempts (Retry-After) }
+        '503': { description: camera_offline (nothing stored) }
     get:
       summary: Every camera's status block, in config order (spec 2026-10-05-multi-camera-host-design §6.3) (admin)
       responses:
-        '200': { description: 'A list of {id, camera, intake, stream, ftp, recordings, source (config: config.json; added: added in the Settings page)}, each as in GET /control/status' }
+        '200': { description: 'A list of {id, camera, intake, stream, ftp, recordings, source (config: config.json; added: added in the Settings page), credentials (Credentials)}, each as in GET /control/status' }
         '401': { description: not signed in }
         '403': { description: admin_only }
   /control/cameras/{cam}/status:
@@ -958,7 +1000,7 @@ paths:
       parameters:
         - { name: cam, in: path, required: true, schema: { type: string } }
       responses:
-        '200': { description: '{id, camera, intake, stream, ftp, recordings}' }
+        '200': { description: '{id, camera, intake, stream, ftp, recordings, source, credentials}, as an item of GET /control/cameras' }
         '401': { description: not signed in }
         '404': { description: not_found }
         '503': { description: camera_restarting (Retry-After) }
@@ -970,9 +1012,23 @@ paths:
         onvif-resubscribe, camera-ftp-setup, camera-ftp-test, camera-ftp-off,
         restart (that camera's side only; the old route without a camera restarts every camera side and applies pending restart settings), camera-reboot,
         camera-powercycle, camera-poe-on, poe-switch-read, inventory,
-        inventory-repair, inventory-cancel, camera-cert-push, camera-ntp-set, camera-trust-clear) on the named camera, with the same
+        inventory-repair, inventory-cancel, camera-cert-push, camera-ntp-set, camera-trust-clear, camera-trust-pin, camera-time-set) on the named camera, with the same
         bodies and answers; inventory-cancel and inventory-repair answer 409
-        camera_mismatch for another camera's run. The old route takes ?cam=<id> as well; without it
+        camera_mismatch for another camera's run.
+        camera-trust-pin ({"fingerprint":"SHA256:<64 hex>"}, spec 2026-10-30-camera-onboarding-design §4.4; admin, also a
+        managed admin token, never a cams-admin command): pins the certificate the camera serves now, also without
+        tls.site, when it is the given one (the fingerprint the caller confirmed, e.g. from camera-probe); from trust
+        none, or pinned again after the camera's certificate changed. Answers the camera's certificate state (mode
+        pinned); 400 invalid; 409 not_available (http, a tlsName camera, site-ca: camera-trust-clear first),
+        fingerprint_mismatch {served} (nothing pinned); 503 camera_offline. A camera-trust audit record (op pin); with the
+        other trust actions at most 6 a minute per client.
+        camera-time-set (spec 2026-10-30-camera-onboarding-design §4.7; admin; for cams-admin the disruptive
+        camera.action:camera-time-set, off by default): sets the camera's time zone and DST rule from time.zone (else
+        the host's zone when known) and its clock to now in that zone: GetTime, one whole-object SetTime, GetTime
+        again; then the NTP server as camera-ntp-set (with ntp.server). Answers { outcome (set, already, unsupported,
+        failed), zone, ntp (set, already, unsupported, failed, or null), detail? }; 409 zone_unknown, zone_unsupported
+        (a zone the camera's DST rule can't express); a camera-time audit record.
+        The old route takes ?cam=<id> as well; without it
         it acts on the only camera, and answers 400 camera_required when there
         are several. Host actions have no camera route (404).
       parameters:
@@ -984,6 +1040,76 @@ paths:
         '401': { description: not signed in }
         '404': { description: not_found (unknown camera, or not a camera action) }
         '503': { description: camera_restarting (Retry-After) }
+  /control/cameras/{id}:
+    delete:
+      summary: Remove (offboard) a camera and its credentials (local admin only) (spec 2026-10-30-camera-onboarding-design §4.3)
+      description: >
+        By id, also for a camera gone from config.json after a restart. Turns the camera's FTP upload off when it points
+        here (re-read), removes its configuration (an added camera's node in overrides.json; on a single-camera proxy
+        CAMERA_HOST in the env file: the camera stays idle, config.json is never changed), its stored password, its own
+        CAMPROXY_CAMERA_PASSWORD_<ID> line in the env file this proxy manages (and its backups), its certificate trust
+        (files and state) and its PTZ positions. Files follow retention. What it can't remove (a password in compose's
+        environment or a _FILE secret, a camera.host in config.json) is listed in leftovers and on GET /control/status
+        (removeLeftovers) until it is gone. A camera-remove audit record. A managed token or sign-in answers 403
+        local_admin_only.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: '{ removed: string[], leftovers: string[] }' }
+        '400': { description: invalid (not a camera id) }
+        '401': { description: not signed in }
+        '403': { description: admin_only, local_admin_only }
+        '404': { description: not_found (nothing known about that id) }
+        '409': { description: config_json (a config.json camera on a several-camera proxy: remove it there, restart, call again) }
+  /control/cameras/{cam}/onboarding:
+    get:
+      summary: One camera's onboarding status (admin) (spec 2026-10-30-camera-onboarding-design §4.5)
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: OnboardingStatus }
+        '401': { description: not signed in }
+        '403': { description: admin_only }
+        '404': { description: not_found }
+        '503': { description: camera_restarting (Retry-After) }
+  /control/onboarding:
+    get:
+      summary: Every camera's onboarding status, config order (admin)
+      responses:
+        '200': { description: '{ cameras: OnboardingStatus[] }' }
+        '401': { description: not signed in }
+        '403': { description: admin_only }
+  /control/cameras/{cam}/password:
+    put:
+      summary: Save the camera's password on this proxy, checked with the camera first (admin; also managed admin) (spec 2026-10-30-camera-onboarding-design §4.1)
+      description: >
+        Write-only: the password is never returned, logged or audited. The
+        proxy logs in to the camera with it on a session of its own (an https
+        camera only over its trusted certificate: site CA, pin or public name)
+        and stores it in data/admin/camera-passwords.json (mode 600) only when
+        the camera accepts; the camera's side restarts with it, no process
+        restart. The camera's own CAMPROXY_CAMERA_PASSWORD_<ID> line is removed
+        from the env file this proxy manages (and its backups); one it can't
+        remove (compose's environment, a _FILE secret) refuses the save.
+        At most 5 attempts per camera address in 10 minutes (shared with
+        camera-probe and POST /control/cameras). One camera-password audit
+        record per attempt (a rate-limited one once per window).
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [password], properties: { password: { type: string, minLength: 1, maxLength: 64, description: no control characters } } }
+      responses:
+        '200': { description: '{ credentials: Credentials (source store), plaintext: true for an http camera (the password crossed the network unencrypted) }' }
+        '400': { description: invalid (not a string of 1 to 64 characters without control characters; nothing audited) }
+        '401': { description: not signed in }
+        '403': { description: admin_only (a client token) }
+        '404': { description: not_found }
+        '409': { description: "env_password (detail names the variable to remove), not_trusted (an https camera whose certificate is not trusted: camera-trust-pin first), fingerprint_mismatch {served} (a pinned camera serving another certificate; no password sent)" }
+        '422': { description: camera_refused (the camera refused the login; nothing stored) }
+        '429': { description: too_many_attempts (Retry-After) }
+        '503': { description: camera_offline (the camera did not answer; nothing stored), or camera_restarting (Retry-After) }
   /control/cameras/{cam}/name:
     put:
       summary: Rename one camera (stored on the camera), as PUT /control/camera/name (admin)
@@ -1341,8 +1467,20 @@ paths:
         '409': { description: '{ error: move_open, detail } (cameras.<id>.moved of a camera move still open here, or of one that moved the camera away: only the move clears it)' }
   /control/actions/{name}:
     post:
-      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart (the camera side), camera-reboot, camera-powercycle, camera-poe-on, poe-switch-read, restart-proxy (the process), inventory ({kind, camera?}), inventory-repair ({kind, runId}), inventory-cancel, find-camera, camera-address ({host}), archive-clear ({count}), camera-cert-push, camera-ntp-set, camera-trust-clear, tls-ca-rotate ({confirm: rotate}), tls-ca-drop-previous
+      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart (the camera side), camera-reboot, camera-powercycle, camera-poe-on, poe-switch-read, restart-proxy (the process), inventory ({kind, camera?}), inventory-repair ({kind, runId}), inventory-cancel, find-camera, camera-address ({host}), archive-clear ({count}), camera-cert-push, camera-ntp-set, camera-trust-clear, tls-ca-rotate ({confirm: rotate}), tls-ca-drop-previous, camera-probe ({host, protocol?, user?, password?, fingerprint?, ports?})
       description: |
+        camera-probe (spec 2026-10-30-camera-onboarding-design §4.2; local admin only, never a cams-admin command): read-only on
+        the camera. Body {host (address or name, optional :port: the protocol's port), protocol (https, default; or http), user
+        (default admin), password (optional), fingerprint (SHA256:<64 hex>, required with a password over https), ports
+        ({http, https, rtsp, onvif, baichuan}, defaults 80, 443, 554, 8000, 9000)}. Without a password: which ports answer and
+        the certificate the camera serves; with one: Login (over https only to the confirmed fingerprint), GetDevInfo,
+        GetAbility, Logout. Answers { host, ports: {http, https, rtsp, onvif, baichuan: boolean}, certificate: {fingerprint,
+        subject, issuer, notAfter, selfSigned} | null, login (ok, refused, offline, not_tried), device: {model, firmware, name}
+        | null, capabilities (Capabilities) | null, tookMs, plaintext: true (http: a password went unencrypted) }; 400 invalid
+        (also a host in another numeric spelling than a dotted quad in decimal: 3232235781, 0xc0a80105, 192.168.001.005); 409 fingerprint_mismatch {served} (no login);
+        429 too_many_attempts (a password: at most 5 per camera address in 10 minutes, shared with the password API and
+        POST /control/cameras); with find-camera and camera-address at most 6 per minute per client. Nothing is stored;
+        a camera-probe audit record (host, outcome, model, login), never the password.
         camera-trust-clear ({"confirm":"clear"}) drops a camera's site-CA trust or pin (its leaf moved aside, its factory
         certificate forgotten; its next push is an admin's camera-cert-push, which trusts what it serves then): answers the
         camera's certificate state; 400 invalid without the confirm; 409 not_available when no camera trust is kept here; a

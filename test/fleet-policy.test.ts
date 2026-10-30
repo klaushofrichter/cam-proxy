@@ -1,8 +1,8 @@
-import { mkdtempSync, statSync, writeFileSync, chmodSync } from 'fs';
+import { mkdtempSync, readFileSync, statSync, writeFileSync, chmodSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, it } from 'vitest';
-import { ALLOW_ENTRIES, CommandPolicy, ENTRY_TEXT, IMPLEMENTED, NEVER_REMOTE_ACTIONS, UI_ENTRIES, validateAllowList, WideningRefused } from '../src/fleet/policy';
+import { ALLOW_ENTRIES, CommandPolicy, DEFAULT_ON, DISRUPTIVE_ENTRIES, ENTRY_TEXT, IMPLEMENTED, NEVER_REMOTE_ACTIONS, UI_ENTRIES, validateAllowList, WideningRefused } from '../src/fleet/policy';
 import { readEnvLayer } from '../src/config/env';
 import { privateFileHooks, writePrivateJson } from '../src/fleet/private-file';
 import { settingPaths } from '../src/config/load';
@@ -40,15 +40,15 @@ describe('entry texts', () => {
 });
 
 describe('CommandPolicy', () => {
-  it('defaults: enabled, not paused, nothing allowed; no file written by reading', () => {
+  it('defaults: enabled, not paused, only the default-on read allowed; no file written by reading', () => {
     const d = dir();
-    expect(make(d).effective()).toEqual({ enabled: true, paused: false, pauseReason: null, allow: [], unconfirmed: [], envName: null });
+    expect(make(d).effective()).toEqual({ enabled: true, paused: false, pauseReason: null, allow: ['camera.onboarding.get'], unconfirmed: [], envName: null });
     expect(() => statSync(join(d, 'admin'))).toThrow();
   });
   it('policy.json wins over config.json for allow; paused if either says so', () => {
     const d = dir();
     const p = make(d, { allow: ['tokens.apply'], paused: true });
-    expect(p.effective()).toMatchObject({ allow: ['tokens.apply'], paused: true });
+    expect(p.effective()).toMatchObject({ allow: ['tokens.apply', 'camera.onboarding.get'], paused: true });
     p.setAllow(['tokens.apply', 'tokens.apply.admin'], 'local');
     expect(p.effective().allow).toEqual(['tokens.apply', 'tokens.apply.admin']);
     expect(statSync(join(d, 'admin', 'policy.json')).mode & 0o777).toBe(0o600);
@@ -95,12 +95,13 @@ describe('CommandPolicy', () => {
     const d = dir();
     writePrivateJson(join(d, 'admin', 'policy.json'), { v: 1, allow: ['tokens.apply', 'config.set', 'camera.action:camera-reboot'], changedAt: 1, changedBy: 'local' });
     const p = make(d);
-    expect(p.effective()).toMatchObject({ allow: ['tokens.apply'], unconfirmed: ['config.set', 'camera.action:camera-reboot'] });
+    expect(p.effective()).toMatchObject({ allow: ['tokens.apply', 'camera.onboarding.get'], unconfirmed: ['config.set', 'camera.action:camera-reboot'] });
     // config.json's base the same way (a P2 deployment may list them).
-    expect(make(dir(), { allow: ['tokens.apply.admin', 'proxy.restart'], paused: false }).effective()).toMatchObject({ allow: ['tokens.apply.admin'], unconfirmed: ['proxy.restart'] });
+    expect(make(dir(), { allow: ['tokens.apply.admin', 'proxy.restart'], paused: false }).effective()).toMatchObject({ allow: ['tokens.apply.admin', 'camera.onboarding.get'], unconfirmed: ['proxy.restart'] });
     // A managed admin can't confirm (that widens); the local admin can.
     expect(() => p.setAllow(['tokens.apply', 'config.set'], 'managed')).toThrow(WideningRefused);
     p.setAllow(['tokens.apply', 'config.set'], 'local');
+    // Not listed: the default-on read is switched off.
     expect(p.effective()).toMatchObject({ allow: ['tokens.apply', 'config.set'], unconfirmed: [] });
     expect(make(d).effective()).toMatchObject({ allow: ['tokens.apply', 'config.set'], unconfirmed: [] });
     // A pause keeps the consent.
@@ -110,9 +111,35 @@ describe('CommandPolicy', () => {
   it('M5: a stored camera.action:camera-ftp-off (allowed before) is dropped, never makes the file unusable', () => {
     const d = dir();
     writePrivateJson(join(d, 'admin', 'policy.json'), { v: 1, allow: ['tokens.apply', 'camera.action:camera-ftp-off'], changedAt: 1, changedBy: 'local' });
-    expect(make(d).effective()).toMatchObject({ paused: false, allow: ['tokens.apply'], unconfirmed: [] });
+    expect(make(d).effective()).toMatchObject({ paused: false, allow: ['tokens.apply', 'camera.onboarding.get'], unconfirmed: [] });
     expect(validateAllowList(['tokens.apply', 'camera.action:camera-ftp-off'], 'x', true)).toEqual(['tokens.apply']);
     expect(() => validateAllowList(['camera.action:camera-ftp-off'], 'x')).toThrow();
   });
 });
 
+
+describe('the onboarding entries (spec 2026-10-30-camera-onboarding-design §4.6)', () => {
+  it('camera.onboarding.get is allowed by default and can be switched off locally; managed rights only narrow', () => {
+    const d = dir();
+    const p = make(d);
+    expect(DEFAULT_ON).toEqual(['camera.onboarding.get']);
+    expect(p.effective().allow).toContain('camera.onboarding.get');
+    expect(IMPLEMENTED.has('camera.onboarding.get')).toBe(true);
+    expect(ENTRY_TEXT['camera.onboarding.get']).toBe("cams-admin may read each camera's onboarding status (no secrets)");
+    p.setAllow([], 'managed');
+    expect(p.effective().allow).not.toContain('camera.onboarding.get');
+    expect((JSON.parse(readFileSync(join(d, 'admin', 'policy.json'), 'utf8')) as { off: string[] }).off).toEqual(['camera.onboarding.get']);
+    expect(() => p.setAllow(['camera.onboarding.get'], 'managed')).toThrow(WideningRefused);
+    p.setAllow(['camera.onboarding.get', 'config.get'], 'local');
+    expect(p.effective().allow).toEqual(expect.arrayContaining(['camera.onboarding.get', 'config.get']));
+    const f = JSON.parse(readFileSync(join(d, 'admin', 'policy.json'), 'utf8')) as { allow: string[]; off: string[] };
+    expect([f.allow, f.off]).toEqual([['config.get'], []]);
+  });
+
+  it('camera.action:camera-time-set is disruptive, off by default', () => {
+    expect(ALLOW_ENTRIES).toContain('camera.action:camera-time-set');
+    expect(DISRUPTIVE_ENTRIES.has('camera.action:camera-time-set')).toBe(true);
+    expect(make(dir()).effective().allow).not.toContain('camera.action:camera-time-set');
+    expect(ENTRY_TEXT['camera.action:camera-time-set']).toBe("DISRUPTIVE: cams-admin may run camera-time-set on a camera: rewrites the camera's time zone and DST rule");
+  });
+});

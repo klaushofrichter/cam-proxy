@@ -164,7 +164,7 @@ describe('admin-commands and admin-tokens, proxy stopped', () => {
     const dir = workDir();
     let r = await run(['admin-commands', 'status'], { cwd: dir });
     expect(r.code, r.err).toBe(0);
-    expect(r.out).toMatch(/allowed: none/);
+    expect(r.out).toMatch(/allowed: camera\.onboarding\.get/); // on by default (onboarding §4.6)
     expect(existsSync(join(dir, 'data', 'admin'))).toBe(false);
     r = await run(['admin-commands', 'allow', 'tokens.apply', 'tokens.apply.admin'], { cwd: dir });
     expect(r.code, r.err).toBe(0);
@@ -174,7 +174,7 @@ describe('admin-commands and admin-tokens, proxy stopped', () => {
     r = await run(['admin-commands', 'pause', 'maintenance', 'window'], { cwd: dir });
     expect(r.code, r.err).toBe(0);
     r = await run(['admin-commands', 'status'], { cwd: dir });
-    expect(r.out).toMatch(/allowed: tokens\.apply\n/);
+    expect(r.out).toMatch(/allowed: tokens\.apply, camera\.onboarding\.get\n/);
     expect(r.out).toMatch(/paused: maintenance window/);
     r = await run(['admin-commands', 'resume'], { cwd: dir });
     expect(r.code, r.err).toBe(0);

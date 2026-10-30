@@ -10,6 +10,7 @@
   import PoeSwitchCard from '../components/PoeSwitchCard.svelte';
   import ProfileCard from '../components/ProfileCard.svelte';
   import FindCameraCard from '../components/FindCameraCard.svelte';
+  import { timeSetText } from '../lib/onboarding';
   import { envNote, isEnvSet } from '../lib/find-camera';
   import { lockedWhy, narrowWhy, resetKeeps, rights, settingLockedWhy, settingsNote } from '../lib/rights';
   import LockedNote from '../components/LockedNote.svelte';
@@ -27,6 +28,23 @@
   // `legacy`: read from a legacy `camera` object in config.json.
   interface Setting { value: unknown; source: 'default' | 'file' | 'override' | 'env'; env?: string; restart: boolean; restartScope?: 'camera' | 'host'; pending: boolean; next?: unknown; type?: SettingType; resetTo?: ResetTo; legacy?: true; by?: { cmdId: string; actor: string; at: number }; ignored?: string }
   let view = $state<Record<string, Setting>>({});
+  // Find camera's "Add this camera": the address for Add a camera.
+  let addHost = $state('');
+  // Set camera time (spec 2026-10-30-camera-onboarding-design §4.7).
+  let timeBusy = $state(false);
+  let timeMessage = $state('');
+  async function setTime() {
+    if (!cam) return;
+    timeBusy = true;
+    timeMessage = '';
+    try {
+      timeMessage = timeSetText(await api<{ outcome: string; zone: string; ntp: string | null; detail?: string }>('POST', `/control/cameras/${encodeURIComponent(cam)}/actions/camera-time-set`, {}));
+    } catch (e) {
+      const b = e instanceof ApiError ? (e.body as { error?: string } | null) : null;
+      timeMessage = b?.error === 'zone_unknown' ? 'No time zone known: set time.zone first.' : `Not set: ${e instanceof ApiError ? e.message : 'failed'}`;
+    }
+    timeBusy = false;
+  }
   let drafts = $state<Record<string, string>>({});
   let message = $state('');
   // A refused save or reset, at its row (issue #227: never silently).
@@ -204,7 +222,15 @@
   {#each leftovers as l (l.id)}<p class="muted small" data-testid="moved-{l.id}">{l.id}: {movedText($moves.find((m) => m.id === l.moveId)?.target.name ?? 'another proxy', l.moveId)}</p>{/each}
   <ProfileCard />
   <AnalyticsSettings {view} onsaved={(v) => (view = v as Record<string, Setting>)} />
-  <FindCameraCard />
+  {#if cam}
+    <div class="card" data-testid="camera-time-card">
+      <h3>Camera time</h3>
+      <p class="muted small">Sets {cam}'s time zone and DST rule from <span class="mono">time.zone</span> (else the host's zone when known), its clock to now, and its NTP server when <span class="mono">ntp.server</span> is set.</p>
+      <div><button onclick={() => void setTime()} disabled={timeBusy || !!lockedWhy($rights, 'local')} title={lockedWhy($rights, 'local') ?? undefined} data-testid="camera-time-set">Set camera time</button></div>
+      {#if timeMessage}<p class="msg" role="status" data-testid="camera-time-message">{timeMessage}</p>{/if}
+    </div>
+  {/if}
+  <FindCameraCard onadd={(h) => { addHost = h; document.querySelector('[data-testid="add-camera"]')?.scrollIntoView({ behavior: 'smooth' }); }} />
   <PoeSwitchCard />
   {#each cards as card (card.key)}
     <div class="card" data-testid="settings-card-{card.key}">
@@ -253,7 +279,7 @@
       </table>
     </div>
   {/each}
-  <AddCameraCard existing={cameraIds($status)} onadded={(v) => ((view = v as Record<string, Setting>), void refresh())} />
+  <AddCameraCard existing={cameraIds($status)} prefill={addHost} onadded={() => void load().then(() => refresh())} />
 </section>
 {#if moving && cam}
   <MoveCameraDialog camera={cam} name={camName(cam)} address={block?.camera.webUiUrl ? hostOf(block.camera.webUiUrl) : ''} onclose={() => ((moving = false), void loadMoves())} />
