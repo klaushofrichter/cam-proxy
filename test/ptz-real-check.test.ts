@@ -14,11 +14,13 @@ import type { Capabilities } from '../src/camera/capabilities';
 import { openCatalog, type Catalog } from '../src/catalog/db';
 import { StreamLog } from '../src/stream/log';
 import { CameraPtz } from '../src/ptz/camera-ptz';
-import { CLIENT_TOKEN } from './helpers/proxy';
+import { CLIENT_TOKEN, startProxy, until } from './helpers/proxy';
+import { E1_MODEL, startSim } from './helpers/sim';
 
 // scripts/ptz-real-check.sh is meant for the real E1 through a proxy, by hand.
 // Here it runs against the real PTZ router and positions service over a
-// camera of 64 preset slots in memory (cam-sim's E1 profile: Task 9).
+// camera of 64 preset slots in memory, and through a real proxy against
+// cam-sim's E1 Outdoor Pro.
 const SCRIPT = join(__dirname, '..', 'scripts', 'ptz-real-check.sh');
 const E1: Capabilities = { schema: 1, ptz: { move: true, zoom: true, focus: true, speed: true, positions: { max: 20 } } };
 
@@ -158,5 +160,29 @@ describe('scripts/ptz-real-check.sh', () => {
     }
   }, 60_000);
 
-  it.skip('against cam-sim E1-Outdoor-Pro through a real proxy (Task 9: waits for the cam-sim release with that profile)', () => undefined);
+});
+
+describe('scripts/ptz-real-check.sh against cam-sim E1-Outdoor-Pro through a proxy', () => {
+  let sim: Awaited<ReturnType<typeof startSim>>;
+  let px: Awaited<ReturnType<typeof startProxy>>;
+  beforeAll(async () => {
+    sim = await startSim({ model: E1_MODEL });
+    px = await startProxy(sim);
+    await until(async () => (await request(px.base).get('/api/cameras/cam1').set(auth)).body.capabilities != null, 15_000);
+  }, 60_000);
+  afterAll(async () => {
+    await px.proxy.stop();
+    await sim.close();
+  });
+
+  it('exit 0, every line ok, no token, the positions and presets as before', async () => {
+    const list = async () => (await request(px.base).get('/api/cameras/cam1/ptz/positions').set(auth)).body;
+    const before = await list();
+    const r = await run('cam1', { CAMPROXY_URL: px.base, CAMPROXY_TOKEN: CLIENT_TOKEN });
+    expect(r.code, r.out).toBe(0);
+    expect(r.out.trim().split('\n').filter((l) => !l.startsWith('ok '))).toEqual([]);
+    expect(r.out).not.toContain(CLIENT_TOKEN);
+    expect(await list()).toEqual(before);
+    expect(sim.sim.engine.ptz!.view().presets).toEqual([]);
+  }, 60_000);
 });
