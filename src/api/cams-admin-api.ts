@@ -26,7 +26,7 @@ export interface CommandsApiDeps {
 // ones (Klaus's decision 3) under their own warning.
 const GROUPS = {
   tokens: ALLOW_ENTRIES.filter((e) => e.startsWith('tokens.')),
-  read: ['config.get'],
+  read: ['config.get', 'camera.onboarding.get'],
   settings: ['config.set', 'config.unset', 'config.rollback'],
   camera: ALLOW_ENTRIES.filter((e) => (e.startsWith('camera.action:') || e === 'camera.name.set') && !DISRUPTIVE_ENTRIES.has(e)),
   // Camera moves: the source side and the target side.

@@ -27,6 +27,7 @@ const LOCAL_ONLY: Readonly<Record<string, string>> = {
   'ftp.enabled': 'local only: turns clip intake on or off',
   'cameras.*.ftp.enabled': 'local only: turns clip intake on or off',
   'archive.enabled': 'local only: turns the Archive on or off',
+  'time.zone': "local only: the cameras' time zone, where the proxy stands",
   'events.poll.enabled': 'local only: turns event polling on or off',
   'cameras.*.events.poll.enabled': 'local only: turns event polling on or off',
   ...Object.fromEntries(['person', 'vehicle', 'pet'].flatMap((k) => [[`analytics.kinds.${k}`, 'local only: turns analysis on or off'], [`cameras.*.analytics.kinds.${k}`, 'local only: turns analysis on or off']])),

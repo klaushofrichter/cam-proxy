@@ -7,15 +7,15 @@ import { PrivateFileInvalid, PrivateFileUnsafe, readPrivateJson, writePrivateJso
 // someone at the hardware. Compiled in: no setting widens them.
 // camera-ftp-off is never remote (coordinator ruling after the P3 security
 // review, M5): it stops clip intake, like ftp.enabled (I4, local only).
-export const REMOTE_ACTIONS = ['camera-test', 'onvif-resubscribe', 'camera-ftp-test', 'poe-switch-read', 'inventory', 'inventory-cancel', 'retention-run', 'restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push'] as const;
-export const NEVER_REMOTE_ACTIONS = ['find-camera', 'camera-address', 'camera-trust-clear', 'tls-ca-rotate', 'tls-ca-drop-previous', 'archive-clear', 'inventory-repair', 'camera-poe-on', 'restart-proxy', 'camera-ftp-off'] as const;
+export const REMOTE_ACTIONS = ['camera-test', 'onvif-resubscribe', 'camera-ftp-test', 'poe-switch-read', 'inventory', 'inventory-cancel', 'retention-run', 'restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push', 'camera-time-set'] as const;
+export const NEVER_REMOTE_ACTIONS = ['find-camera', 'camera-address', 'camera-trust-clear', 'tls-ca-rotate', 'tls-ca-drop-previous', 'archive-clear', 'inventory-repair', 'camera-poe-on', 'restart-proxy', 'camera-ftp-off', 'camera-probe', 'camera-trust-pin'] as const;
 // Entries an earlier version accepted that this one no longer knows: dropped
 // on read (policy.json, config.json), never an error (a stored policy must not
 // pause everything after an upgrade).
 export const RETIRED_ENTRIES: ReadonlySet<string> = new Set(['camera.action:camera-ftp-off']);
 // The remote actions that disrupt service (Klaus's decision 3): each its own
 // allow entry, off by default; with proxy.restart, under the journal budget.
-export const DISRUPTIVE_ACTIONS = ['restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push'] as const;
+export const DISRUPTIVE_ACTIONS = ['restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push', 'camera-time-set'] as const;
 // What the journal budget counts: the disruptive actions, and camera-ftp-off
 // (disruptive in the contract; journaled by a version that ran it).
 export const BUDGETED_ACTIONS: ReadonlySet<string> = new Set([...DISRUPTIVE_ACTIONS, 'camera-ftp-off']);
@@ -30,7 +30,9 @@ export const DISRUPTIVE_ENTRIES: ReadonlySet<string> = new Set(['proxy.restart',
 export const UI_ENTRIES = ['ui.config', 'ui.restart'] as const;
 // Camera moves (cams-admin contract "Camera moves"): the source side and the target side, each its own entry, local, off by default.
 export const MOVE_ENTRIES = ['move.send', 'move.receive'] as const;
-export const ALLOW_ENTRIES: readonly string[] = ['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`), ...MOVE_ENTRIES, ...UI_ENTRIES];
+// Spec 2026-10-30-camera-onboarding-design §4.6: entries on unless the local admin switches them off (policy.json `off`); a read without secrets.
+export const DEFAULT_ON: readonly string[] = ['camera.onboarding.get'];
+export const ALLOW_ENTRIES: readonly string[] = ['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`), ...MOVE_ENTRIES, ...UI_ENTRIES, ...DEFAULT_ON];
 // The move commands by the entry they need; move.finish and move.cancel by their args.role (entryFor).
 const MOVE_SEND = ['move.targets', 'move.open', 'move.answer', 'move.go', 'move.release', 'move.begin', 'move.summary', 'move.return.start'];
 const MOVE_RECEIVE = ['move.offer', 'move.start', 'move.return.open'];
@@ -38,7 +40,7 @@ export const MOVE_COMMANDS: readonly string[] = [...MOVE_SEND, ...MOVE_RECEIVE, 
 export const isMoveCommand = (command: string): boolean => MOVE_COMMANDS.includes(command);
 // What this version runs (P2, P3): command names and allow entries. The
 // heartbeat reports allow ∩ IMPLEMENTED.
-export const IMPLEMENTED: ReadonlySet<string> = new Set(['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`), ...MOVE_COMMANDS, ...MOVE_ENTRIES]);
+export const IMPLEMENTED: ReadonlySet<string> = new Set(['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`), ...MOVE_COMMANDS, ...MOVE_ENTRIES, ...DEFAULT_ON]);
 // The allow entry a command needs, from its (validated) args: the command's own name,
 // camera.action:<action>, and for the moves the side it acts on (contract step 11:
 // move.finish and move.cancel by args.role, the rest by command). An unreadable role
@@ -62,6 +64,7 @@ const EFFECT: Record<string, string> = {
   'camera-ftp-setup': "rewrites the camera's FTP upload settings",
   'camera-ntp-set': "rewrites the camera's NTP settings",
   'camera-cert-push': "replaces the camera's HTTPS certificate",
+  'camera-time-set': "rewrites the camera's time zone and DST rule",
 };
 const actionText = (a: string) => ((DISRUPTIVE_ACTIONS as readonly string[]).includes(a) ? `DISRUPTIVE: cams-admin may run ${a} on a camera: ${EFFECT[a]}` : `cams-admin may run ${a} on a camera`);
 export const ENTRY_TEXT: Record<string, string> = {
@@ -77,6 +80,7 @@ export const ENTRY_TEXT: Record<string, string> = {
   'move.receive': 'cams-admin may hand this proxy a camera from another proxy of the account: it adds the camera, its password and certificate, and copies its content',
   'ui.config': "a cams-admin sign-in (one-time link) may change this proxy's settings on the Settings page and reset them to config.json's value; never addresses, ports, files, trust, users, cams-admin itself, storage limits or Google Vision on/off, and retention only longer, spending caps only lower",
   'ui.restart': 'DISRUPTIVE: a cams-admin sign-in (one-time link) may restart this proxy and its camera side',
+  'camera.onboarding.get': "cams-admin may read each camera's onboarding status (no secrets)",
   ...Object.fromEntries(REMOTE_ACTIONS.map((a) => [`camera.action:${a}`, actionText(a)])),
 };
 
@@ -111,7 +115,8 @@ const P2_ENTRIES: ReadonlySet<string> = new Set(['tokens.apply', 'tokens.apply.a
 
 export class WideningRefused extends Error {}
 
-export interface PolicyFile { v: 1; allow?: string[]; consent?: number; paused?: boolean; pauseReason?: string | null; changedAt: number; changedBy: 'local' | 'managed' }
+// `off`: DEFAULT_ON entries the admin switched off.
+export interface PolicyFile { v: 1; allow?: string[]; off?: string[]; consent?: number; paused?: boolean; pauseReason?: string | null; changedAt: number; changedBy: 'local' | 'managed' }
 export interface EffectivePolicy { enabled: boolean; paused: boolean; pauseReason: string | null; allow: string[]; unconfirmed: string[]; envName: string | null }
 
 export class CommandPolicy {
@@ -122,6 +127,7 @@ export class CommandPolicy {
       const f = readPrivateJson(this.d.file) as PolicyFile;
       if (f?.v !== 1) return { unusable: `${this.d.file} is not version 1` };
       if (f.allow !== undefined) f.allow = validateAllowList(f.allow, 'policy.json allow', true);
+      if (f.off !== undefined) f.off = validateAllowList(f.off, 'policy.json off', true).filter((e) => DEFAULT_ON.includes(e));
       return f;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
@@ -139,12 +145,15 @@ export class CommandPolicy {
     const base = this.d.base();
     const listed = f?.allow ?? base.allow;
     const consented = f?.allow !== undefined && (f.consent ?? 0) >= CONSENT_VERSION;
+    const kept = consented ? listed : listed.filter((e) => P2_ENTRIES.has(e));
+    // The default-on entries, without consent, unless switched off.
+    const on = DEFAULT_ON.filter((e) => !(f?.off ?? []).includes(e) && !kept.includes(e));
     return {
       enabled,
       paused: base.paused || !!f?.paused,
       pauseReason: f?.paused ? (f.pauseReason ?? null) : base.paused ? 'config.json: camsAdmin.commandsPaused' : null,
-      allow: consented ? listed : listed.filter((e) => P2_ENTRIES.has(e)),
-      unconfirmed: consented ? [] : listed.filter((e) => !P2_ENTRIES.has(e)),
+      allow: [...kept, ...on],
+      unconfirmed: consented ? [] : listed.filter((e) => !P2_ENTRIES.has(e) && !DEFAULT_ON.includes(e)),
       envName: enabled ? null : env!.name,
     };
   }
@@ -159,7 +168,8 @@ export class CommandPolicy {
     const next = validateAllowList(list, 'allowed commands');
     const now = this.effective().allow;
     if (by !== 'local' && next.some((e) => !now.includes(e))) throw new WideningRefused('adding an allowed command needs the local admin token');
-    this.write({ allow: next, consent: CONSENT_VERSION }, by);
+    // A default-on entry is stored as on (absent from `off`), the others in `allow`.
+    this.write({ allow: next.filter((e) => !DEFAULT_ON.includes(e)), off: DEFAULT_ON.filter((e) => !next.includes(e)), consent: CONSENT_VERSION }, by);
   }
 
   pause(reason: string | null, by: 'local' | 'managed'): void {

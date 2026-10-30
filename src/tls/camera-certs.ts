@@ -393,10 +393,34 @@ export class CameraCerts {
     return this.state(id);
   }
 
-  // A camera gone from this proxy by a move (the source's finish, the
-  // target's cancel): its leaf files (also those moved aside) and its state
-  // entry are deleted, audited once. Nothing to forget: nothing happens.
-  forget(id: string, who?: Requester): void {
+  // The admin's pin of the certificate the camera serves now (spec
+  // 2026-10-30-camera-onboarding-design §4.4: camera-trust-pin, after the
+  // caller confirmed its fingerprint), also without a site CA: mode pinned,
+  // no automatic push blocked any more, saved, audited (op pin).
+  pinServed(id: string, served: Served, who: Requester): CertState {
+    if (!FINGERPRINT.test(served.fingerprint) || pemOf(served.fingerprint, served.pem) === null) throw new Error('pinServed: the PEM is not the certificate of that fingerprint');
+    const prev = this.state(id);
+    const e = this.extra(id);
+    Object.assign(e, { pin: { fingerprint: served.fingerprint, pem: served.pem }, blocked: null });
+    let notAfter: number | null = null;
+    try {
+      notAfter = Date.parse(new X509Certificate(served.pem).validTo);
+    } catch {
+      notAfter = null;
+    }
+    this.states.set(id, { ...this.blank(), mode: 'pinned', fingerprint: served.fingerprint, notAfter, lastPush: prev.lastPush });
+    this.settleCorrupt();
+    this.save();
+    this.audit(id, 'success', `Camera trust ${id}: ${prev.mode} → pinned (${served.fingerprint}), confirmed by the admin`, who, { op: 'pin', from: prev.mode, fingerprint: served.fingerprint });
+    this.d.onTrust?.(id);
+    return this.state(id);
+  }
+
+  // A camera gone from this proxy, by a move (the source's finish, the
+  // target's cancel) or removed (DELETE /control/cameras/:id): its leaf files
+  // (also those moved aside) and its state entry are deleted, audited once.
+  // Nothing to forget: nothing happens.
+  forget(id: string, who?: Requester, reason: 'moved' | 'removed' = 'moved'): void {
     if (!/^[a-z0-9-]+$/.test(id)) throw new Error('forget: not a camera id');
     const dir = join(this.d.dir, 'cameras');
     let files = 0;
@@ -416,7 +440,7 @@ export class CameraCerts {
     if (!files && !known) return;
     this.settleCorrupt();
     this.save();
-    this.audit(id, 'success', `Camera trust ${id}: forgotten, the camera moved away (${prev.mode} → none)`, who, { from: prev.mode, fingerprint: prev.fingerprint, files });
+    this.audit(id, 'success', `Camera trust ${id}: forgotten, ${reason === 'removed' ? 'the camera was removed' : 'the camera moved away'} (${prev.mode} → none)`, who, { from: prev.mode, fingerprint: prev.fingerprint, files, ...(reason === 'removed' ? { reason } : {}) });
     this.d.onTrust?.(id);
   }
 

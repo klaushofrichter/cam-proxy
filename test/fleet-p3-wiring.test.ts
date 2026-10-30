@@ -52,7 +52,7 @@ describe('P3 through the proxy', () => {
       expect(await done(c, a as Record<string, unknown>), c).toMatchObject({ status: 'refused', code: 'not_allowed' });
     }
     expect(configRevision(p.proxy.loaded)).toBe(before);
-    expect((fake.heartbeats().at(-1)!.msg.body as Record<string, any>).proxy.commands.allow).toEqual([]);
+    expect((fake.heartbeats().at(-1)!.msg.body as Record<string, any>).proxy.commands.allow).toEqual(['camera.onboarding.get']); // on by default (onboarding §4.6)
     expect(exit).not.toHaveBeenCalled();
   });
   it('allowed locally: config.get, then config.set dry run and apply change the setting live; admin-command and config-change records', async () => {
@@ -79,7 +79,7 @@ describe('P3 through the proxy', () => {
     const n = fake.heartbeats().length;
     await request(p.base).put('/control/config').set(auth(ADMIN_TOKEN)).send({ sse: { maxClients: 41 } }).expect(200);
     await until(() => fake.heartbeats().length > n, 5_000);
-    expect((fake.heartbeats().at(-1)!.msg.body as Record<string, any>).proxy.commands.allow).toEqual(['config.get', 'config.set', 'config.rollback', 'camera.action:camera-test']);
+    expect((fake.heartbeats().at(-1)!.msg.body as Record<string, any>).proxy.commands.allow).toEqual(['config.get', 'config.set', 'config.rollback', 'camera.action:camera-test', 'camera.onboarding.get']);
   });
   it('R3-12: a local settings edit sends an early heartbeat with the new configRevision', async () => {
     const n = fake.heartbeats().length;

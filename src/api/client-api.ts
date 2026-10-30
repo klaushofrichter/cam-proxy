@@ -1,4 +1,5 @@
 import type { CertState } from '../tls/camera-certs';
+import type { Credentials } from '../onboarding/credentials';
 import express, { type Request, type Response } from 'express';
 import { readFileSync, statSync } from 'fs';
 import { resolve } from 'path';
@@ -53,7 +54,8 @@ const analysisSummary = (a: AnalysisRow | undefined) =>
 // The client API (spec §10); auth is applied by the caller.
 // `tls`: a camera's certificate state from the site CA (spec 2026-10-05-multi-camera-host-design
 // §10.4); undefined without one (then mode public for a tlsName camera, none otherwise).
-export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: CameraRegistry; sse: SseHandler; tls?: (id: string) => CertState | undefined }): express.Router {
+// `credentials`: where a camera's password comes from and whether it works (spec 2026-10-30-camera-onboarding-design §4.1; never a value).
+export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: CameraRegistry; sse: SseHandler; tls?: (id: string) => CertState | undefined; credentials: (id: string) => Credentials }): express.Router {
   const r = express.Router();
   // Every /cameras/:cam route: the camera's worker, 404 or 503 (spec 2026-10-05-multi-camera-host-design §6.1).
   r.param('cam', cameraParam(d.cameras));
@@ -70,7 +72,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: 
     // The newest still in memory (spec 2026-10-05-multi-camera-host-design §6.4), for an overview grid.
     const f = w.latestFrame();
     const latestStill = f ? { ts: f.ts, ...latestUrls(w.id) } : null;
-    return { id: w.id, name: w.name(), online: w.status.state().online, lastEventTs: lastLiveEventTs(d.catalog, w.id), stream, publicUrl: d.config().server.publicUrl ?? null, address: w.cam().host, error: w.error(), features: [...FEATURES], capabilities: w.capabilities(), latestStill, tls: tlsOf(w) };
+    return { id: w.id, name: w.name(), online: w.status.state().online, lastEventTs: lastLiveEventTs(d.catalog, w.id), stream, publicUrl: d.config().server.publicUrl ?? null, address: w.cam().host, error: w.error(), features: [...FEATURES], capabilities: w.capabilities(), latestStill, tls: tlsOf(w), credentials: d.credentials(w.id) };
   };
   // The interface cams consumes (the cams P5 plan): mode, servername, the served
   // leaf's SHA256: fingerprint, notAfter, lastPush. Never a key.

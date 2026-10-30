@@ -7,7 +7,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { applyOverrides, ConfigError, loadConfig, removeOverride } from '../src/config/load';
-import { firewallLines, heldCameras, profileCameras, profileWarnings } from '../src/config/profile';
+import { atCameraLimit, firewallLines, heldCameras, profileCameras, profileWarnings } from '../src/config/profile';
 import { budgetOf } from '../src/storage';
 import { classify } from '../src/fleet/remote-settable';
 import { isLocalSetting } from '../src/api/auth';
@@ -275,5 +275,19 @@ describe('the production configs keep loading', () => {
     expect(l.config.profile).toEqual({ name: 'Cluster (cam2 simulator)', cameras: 1, firewall: 'ufw' });
     expect(profileCameras(l.config)).toBe(1);
     expect(profileWarnings(l.config)).toEqual([]);
+  });
+});
+
+describe('the camera limit (spec 2026-10-30-camera-onboarding-design §4.3)', () => {
+  it('atCameraLimit counts held cameras only (moved ones are not held)', () => {
+    write('config.json', { cameras: cams(2) });
+    expect(atCameraLimit(load().config)).toBe(false); // no profile: no limit
+    write('config.json', { cameras: cams(2), profile: { cameras: 2 } });
+    expect(atCameraLimit(load().config)).toBe(true);
+    write('config.json', { cameras: cams(2), profile: { cameras: 3 } });
+    expect(atCameraLimit(load().config)).toBe(false);
+    write('config.json', { cameras: cams(2), profile: { cameras: 2 } });
+    write('data/overrides.json', { cameras: { cam4: { moved: 'mv_' + '1'.repeat(20) } } });
+    expect(atCameraLimit(load().config)).toBe(false);
   });
 });

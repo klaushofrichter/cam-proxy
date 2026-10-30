@@ -87,6 +87,9 @@ export const validateCameraAction = (a: unknown) => v1<CameraActionArgs>(a, ['ca
   }
   return null;
 });
+// camera.onboarding.get (spec 2026-10-30-camera-onboarding-design §4.6): one camera, or every camera (null).
+export interface OnboardingGetArgs { v: 1; camera: string | null }
+export const validateOnboardingGet = (a: unknown) => v1<OnboardingGetArgs>(a, ['camera'], (o) => (!('camera' in o) || (o.camera !== null && (typeof o.camera !== 'string' || !CAM.test(o.camera))) ? 'camera' : null));
 export const validateCameraName = (a: unknown) => v1<CameraNameArgs>(a, ['camera', 'name'], (o) => (typeof o.camera !== 'string' || !CAM.test(o.camera) ? 'camera' : typeof o.name !== 'string' || !CAMERA_NAME_PATTERN.test(o.name) ? 'name' : null));
 
 // ---- Camera moves (contract commands/move.*.args, strict) ----
@@ -252,6 +255,7 @@ export const ARGS_VALIDATORS: Record<string, (a: unknown) => ArgsVerdict<unknown
   'config.rollback': validateConfigRollback,
   'camera.action': validateCameraAction,
   'camera.name.set': validateCameraName,
+  'camera.onboarding.get': validateOnboardingGet,
   'proxy.restart': validateProxyRestart,
   'move.targets': validateMoveTargets,
   'move.open': validateMoveOpen,

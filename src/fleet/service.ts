@@ -48,6 +48,7 @@ export interface CamsAdminDeps {
   profile?: () => ProfileReport | null;
   // What cameras that moved away left here (plan D).
   moveLeftovers?: () => MoveLeftover[];
+  onboardingNow?: () => Record<string, { ready: boolean; missing: string[] }>;
   changeKey?: () => string;
   log: ClientLog;
   timing?: Partial<Timing>;
@@ -241,7 +242,7 @@ export class CamsAdmin {
     if (this.client && this.running === want) return;
     await this.stopClient(this.client ? 'restart' : 'shutdown');
     if (this.stopped) return;
-    this.client = new AdminClient({ keyFile: key, health: this.d.health, proxyInfo: this.d.proxyInfo, profile: this.d.profile, moveLeftovers: this.d.moveLeftovers, version: this.d.version, log: this.d.log, changeKey: this.d.changeKey, timing: this.d.timing, commands: this.d.commands?.() ?? undefined, replay: this.d.replay, outbox: this.outbox, onWelcome: () => this.welcomeHooks.forEach((h) => h()) });
+    this.client = new AdminClient({ keyFile: key, health: this.d.health, proxyInfo: this.d.proxyInfo, profile: this.d.profile, moveLeftovers: this.d.moveLeftovers, onboardingNow: this.d.onboardingNow, version: this.d.version, log: this.d.log, changeKey: this.d.changeKey, timing: this.d.timing, commands: this.d.commands?.() ?? undefined, replay: this.d.replay, outbox: this.outbox, onWelcome: () => this.welcomeHooks.forEach((h) => h()) });
     this.running = want;
     this.client.start();
   }

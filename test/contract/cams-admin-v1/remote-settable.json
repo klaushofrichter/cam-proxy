@@ -103,6 +103,7 @@
     "cameras.*.analytics.kinds.pet",
     "cameras.*.moved",
     "moves",
-    "profile"
+    "profile",
+    "time.zone"
   ]
 }

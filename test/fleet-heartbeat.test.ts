@@ -137,3 +137,18 @@ describe('moveLeftovers in the heartbeat (plan D)', () => {
     expect(short.body.moveLeftovers).toEqual(one);
   });
 });
+
+describe('the onboarding field (spec 2026-10-30-camera-onboarding-design §4.5)', () => {
+  it('the heartbeat carries onboarding {cam: {ready, missing}} and passes the strict schema, also truncated', () => {
+    const hb = buildHeartbeat(fourCams(), PI_INFO, 2_000, null, [], { cam1: { ready: false, missing: ['trust'] } });
+    expect(hb.truncated).toBe(true);
+    expect(hb.body.onboarding).toEqual({ cam1: { ready: false, missing: ['trust'] } });
+    expect(valid(hb.body).ok, valid(hb.body).why).toBe(true);
+    const full = buildHeartbeat(buildHealth(input()), PI_INFO, undefined, null, [], { cam1: { ready: true, missing: ['ftp'] } });
+    expect([full.truncated, full.body.onboarding]).toEqual([false, { cam1: { ready: true, missing: ['ftp'] } }]);
+    expect(valid(full.body).ok).toBe(true);
+    expect(buildHeartbeat(buildHealth(input()), PI_INFO, undefined, null, [], {}).body).not.toHaveProperty('onboarding');
+    const many = Object.fromEntries(Array.from({ length: 70 }, (_, i) => [`cam${i}`, { ready: true, missing: [] as never[] }]));
+    expect(Object.keys(buildHeartbeat(buildHealth(input()), PI_INFO, undefined, null, [], many).body.onboarding as object)).toHaveLength(64);
+  });
+});

@@ -20,10 +20,10 @@ export interface ActionWho { user: string; requestedBy: 'session' | 'token' | 'c
 export type ActionOutcome =
   | { status: number; json?: unknown; retryAfterS?: number }
   | { status: number; error: string; detail?: string; extra?: Record<string, unknown>; retryAfterS?: number };
-export type ActionDeps = Pick<ControlDeps, 'cameras' | 'cameraCount' | 'cameraId' | 'running' | 'resubscribe' | 'checkCamera' | 'storage' | 'cameraFtp' | 'restart' | 'restartCamera' | 'cameraReboot' | 'cameraPowerCycle' | 'poeSwitch' | 'findCamera' | 'envFile' | 'restartProcess' | 'inventory' | 'archive' | 'tls' | 'cameraNtp' | 'audit'>;
+export type ActionDeps = Pick<ControlDeps, 'onboarding' | 'cameras' | 'cameraCount' | 'cameraId' | 'running' | 'resubscribe' | 'checkCamera' | 'storage' | 'cameraFtp' | 'restart' | 'restartCamera' | 'cameraReboot' | 'cameraPowerCycle' | 'poeSwitch' | 'findCamera' | 'envFile' | 'restartProcess' | 'inventory' | 'archive' | 'tls' | 'cameraNtp' | 'audit'>;
 
 // Actions with their own audit records (the route writes no control-action record for them).
-export const OWN_AUDIT: ReadonlySet<string> = new Set(['camera-reboot', 'camera-powercycle', 'camera-poe-on', 'restart-proxy', 'inventory', 'inventory-repair', 'camera-address', 'archive-clear', 'tls-ca-rotate', 'camera-trust-clear', 'tls-ca-drop-previous']);
+export const OWN_AUDIT: ReadonlySet<string> = new Set(['camera-reboot', 'camera-powercycle', 'camera-poe-on', 'restart-proxy', 'inventory', 'inventory-repair', 'camera-address', 'archive-clear', 'tls-ca-rotate', 'camera-trust-clear', 'tls-ca-drop-previous', 'camera-probe', 'camera-trust-pin', 'camera-time-set']);
 
 const fail = (status: number, error: string, detail?: string, extra?: Record<string, unknown>): ActionOutcome => ({ status, error, ...(detail ? { detail } : {}), ...(extra && Object.keys(extra).length ? { extra } : {}) });
 // A command's cmdId and actor in a record's details.
@@ -157,6 +157,15 @@ export async function performAction(d: ActionDeps, name: string, cam: string | n
       const hosts = activeCameraIds(d.running()).map((id) => splitHost(cameraConfig(d.running(), id)!.host).hostname.toLowerCase());
       return { status: 200, json: { devices: r.devices.map((x) => ({ ...x, current: hosts.includes(x.address.toLowerCase()) })), tookMs: r.tookMs, envFile: envFileState(d.envFile()) } };
     }
+    // Probe a camera before adding it (spec 2026-10-30-camera-onboarding-design §4.2): local only, read-only; its own camera-probe record.
+    case 'camera-probe':
+      return d.onboarding.probe(body, who);
+    // The admin's pin of the certificate the camera serves (spec §4.4), also without a site CA; its own camera-trust record.
+    case 'camera-trust-pin':
+      return d.onboarding.pin(camera(), body.fingerprint, who);
+    // The camera's zone and DST rule (spec §4.7): its own camera-time record.
+    case 'camera-time-set':
+      return d.onboarding.setTime(camera(), who);
     // Use this address (pi-config spec §4): CAMERA_HOST into the .env file
     // (backup, atomic), audited; the UI restarts the proxy next.
     case 'camera-address': {

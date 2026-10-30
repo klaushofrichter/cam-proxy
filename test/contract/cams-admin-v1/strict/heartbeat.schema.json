@@ -138,6 +138,7 @@
                       "proxy.restart",
                       "move.send",
                       "move.receive",
+                      "camera.onboarding.get",
                       "camera.action:camera-test",
                       "camera.action:onvif-resubscribe",
                       "camera.action:camera-ftp-test",
@@ -150,7 +151,8 @@
                       "camera.action:camera-powercycle",
                       "camera.action:camera-ftp-setup",
                       "camera.action:camera-ntp-set",
-                      "camera.action:camera-cert-push"
+                      "camera.action:camera-cert-push",
+                      "camera.action:camera-time-set"
                     ]
                   },
                   "maxItems": 32
@@ -552,6 +554,83 @@
                 "additionalProperties": false
               },
               "maxItems": 16
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "onboarding": {
+          "anyOf": [
+            {
+              "type": "object",
+              "propertyNames": {
+                "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+              },
+              "maxProperties": 64,
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "ready": {
+                    "type": "boolean"
+                  },
+                  "missing": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "reachable",
+                        "login",
+                        "trust",
+                        "capabilities",
+                        "stream",
+                        "events",
+                        "ftp",
+                        "time",
+                        "name",
+                        "poe",
+                        "profile"
+                      ]
+                    },
+                    "maxItems": 11,
+                    "uniqueItems": true
+                  }
+                },
+                "required": [
+                  "ready",
+                  "missing"
+                ],
+                "additionalProperties": false,
+                "if": {
+                  "properties": {
+                    "ready": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "ready"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "missing": {
+                      "type": "array",
+                      "items": {
+                        "not": {
+                          "enum": [
+                            "reachable",
+                            "login",
+                            "trust",
+                            "capabilities",
+                            "stream",
+                            "events"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
             },
             {
               "type": "null"

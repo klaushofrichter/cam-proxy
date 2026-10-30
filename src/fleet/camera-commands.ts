@@ -3,7 +3,8 @@ import { CameraError } from '../camera/client';
 import { CameraNameRefused } from '../camera/name';
 import { cameraNameProblem } from '../camera/name-rules';
 import { OWN_AUDIT, performAction, type ActionDeps, type ActionWho } from '../api/actions';
-import type { CameraActionArgs, CameraNameArgs } from './command-args';
+import type { CameraActionArgs, CameraNameArgs, OnboardingGetArgs } from './command-args';
+import type { OnboardingStatus } from '../onboarding/status';
 import type { CommandBody } from './command-check';
 import type { Done, Handler } from './commands';
 import { NEVER_REMOTE_ACTIONS, REMOTE_ACTIONS } from './policy';
@@ -21,6 +22,8 @@ export interface CameraCommandDeps {
   cameraName: { current: (cam: string) => string; write: (cam: string, name: string) => Promise<string> };
   audit: Pick<AuditLog, 'write'>;
   restartProcess: () => void;
+  // The onboarding status (one camera, or all): camera.onboarding.get.
+  onboarding?: (cam?: string) => Promise<OnboardingStatus[]>;
   now?: () => number;
 }
 
@@ -67,10 +70,16 @@ export function verifyPush(answer: { outcome: string; served: string | null; lea
   return answer.served && answer.served === answer.leaf?.fingerprint ? { verified: true, mismatch: [] } : { verified: false, mismatch: ['served'] };
 }
 
-const CAMERA_WRITES = new Set(['camera-ftp-setup', 'camera-ftp-off', 'camera-ntp-set', 'camera-cert-push']);
+// camera-time-set re-reads the camera's GetTime: set or already = it holds the zone and DST rule.
+export function verifyTime(answer: { outcome: string }): Verdict {
+  if (answer?.outcome === 'set' || answer?.outcome === 'already') return { verified: true, mismatch: [] };
+  return { verified: false, mismatch: answer?.outcome === 'failed' ? ['zone'] : [] };
+}
+
+const CAMERA_WRITES = new Set(['camera-ftp-setup', 'camera-ftp-off', 'camera-ntp-set', 'camera-cert-push', 'camera-time-set']);
 const isRemote = (a: string) => (REMOTE_ACTIONS as readonly string[]).includes(a) && !(NEVER_REMOTE_ACTIONS as readonly string[]).includes(a);
 
-export function cameraHandlers(d: CameraCommandDeps): Record<'camera.action' | 'camera.name.set' | 'proxy.restart', Handler> {
+export function cameraHandlers(d: CameraCommandDeps): Record<'camera.action' | 'camera.name.set' | 'proxy.restart' | 'camera.onboarding.get', Handler> {
   const who = (cmd: CommandBody): ActionWho => ({ user: 'cams-admin', requestedBy: 'cams-admin', cmdId: cmd.cmdId, actor: cmd.actor });
   const verifyOf = (action: string, cam: string, json: unknown): Verdict => {
     const a = (json ?? {}) as Record<string, unknown>;
@@ -80,6 +89,7 @@ export function cameraHandlers(d: CameraCommandDeps): Record<'camera.action' | '
     }
     if (action === 'camera-ftp-off') return verifyFtp('camera-ftp-off', a);
     if (action === 'camera-ntp-set') return verifyNtp(a as { outcome: string });
+    if (action === 'camera-time-set') return verifyTime(a as { outcome: string });
     return verifyPush(a as { outcome: string; served: string | null });
   };
   return {
@@ -129,6 +139,15 @@ export function cameraHandlers(d: CameraCommandDeps): Record<'camera.action' | '
         d.audit.write({ ...base, outcome: 'failure', error: code, message: `Camera name change by cams-admin "${from}" → "${a.name}" failed: ${code}`, details: { from, requested: a.name, ...by } });
         return { status: 'failed', code };
       }
+    },
+    // Spec 2026-10-30-camera-onboarding-design §4.6: a read, no secrets; written only as the admin-command record.
+    'camera.onboarding.get': async (args) => {
+      const a = args as OnboardingGetArgs;
+      if (a.camera !== null && !d.cameraIds().includes(a.camera)) return { status: 'failed', code: 'unknown_camera' };
+      const all = (await d.onboarding?.(a.camera ?? undefined)) ?? [];
+      const cameras = Object.fromEntries(all.slice(0, 64).map((s) => [s.camera, scrub(s)]));
+      const clamped = Buffer.byteLength(JSON.stringify({ cameras })) > MAX_ANSWER;
+      return { status: 'ok', result: clamped ? { cameras: {}, clamped: true } : { cameras } };
     },
     // R3-10: the result first (journaled, sent), then the existing stop-and-exit path.
     'proxy.restart': () => {

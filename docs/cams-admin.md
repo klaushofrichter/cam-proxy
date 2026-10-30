@@ -106,6 +106,12 @@ Losing it means enrolling again.
   already; they are never logged. cams-admin never sets the profile: it holds
   the camera limit and the storage budget (local only, `PUT /control/profile`
   with the local admin token).
+- And each camera's onboarding in short (`onboarding`: `{<camera>: {ready,
+  missing}}`, spec 2026-10-30-camera-onboarding-design §4.5): whether the
+  required steps are done, and the steps not ok (plus the required ones not
+  known yet), from the last status the proxy computed (the heartbeat never
+  connects to a camera). At most 64 cameras; kept when truncated; left out
+  without cameras.
 - Never: tokens, passwords (camera, FTP, PoE switch), private keys, the
   Vision key, overrides, clips, stills or event payloads. `test/fleet-config.test.ts`
   sets every secret to a marker and checks nothing marked leaves.
@@ -176,7 +182,10 @@ unsigned or malformed commands is closed.
 
 ### Allowed commands
 
-Nothing is allowed until someone allows it **here**: on the Status page's
+Nothing is allowed until someone allows it **here**, except
+`camera.onboarding.get` (a read without secrets, on by default; switching it
+off here is kept in `policy.json` as `off`, and only the local admin turns it
+on again). Allowing happens on the Status page's
 cams-admin card (**Commands from cams-admin**), with
 `cam-proxy admin-commands allow <entry…>`, or in `config.json`
 (`camsAdmin.allowCommands`). The entries:
@@ -186,11 +195,12 @@ cams-admin card (**Commands from cams-admin**), with
 | `tokens.apply` | add, rotate and revoke managed **client** tokens for cams (`CAMPROXY_TOKENS` keeps working) |
 | `tokens.apply.admin` | also manage **admin** tokens (sign-in links, camera rename); the local admin token is never affected |
 | `config.get` | read this proxy's settings: values, sources, restart needs (no secrets) |
+| `camera.onboarding.get` (**on by default**) | read each camera's onboarding status (`{v: 1, camera: <id> or null}` → `{cameras: {<id>: status}}`, as `GET /control/cameras/{cam}/onboarding`; `clamped: true` with no cameras over 16 KiB); at most 12 a minute; only the `admin-command` record |
 | `config.set`, `config.unset` | change or reset the **remote-settable** settings (below); local edits win |
 | `config.rollback` | undo its own settings change |
 | `camera.name.set` | rename a camera (the camera's own name, re-read) |
 | `camera.action:<action>` | run that camera action: `camera-test`, `onvif-resubscribe`, `camera-ftp-test`, `poe-switch-read`, `inventory`, `inventory-cancel`, `retention-run` (always a dry run) |
-| **disruptive**: `proxy.restart`, `camera.action:restart`, `camera-reboot`, `camera-powercycle`, `camera-ftp-setup`, `camera-ntp-set`, `camera-cert-push` | restart this proxy or a camera's worker, reboot or power-cycle a camera, point its FTP upload here or set its NTP server, replace its HTTPS certificate. Grouped under **Disruptive — off by default** on the cams-admin page; allow one only while it's needed (Klaus's decision, M §16 Q3) |
+| **disruptive**: `proxy.restart`, `camera.action:restart`, `camera-reboot`, `camera-powercycle`, `camera-ftp-setup`, `camera-ntp-set`, `camera-cert-push`, `camera-time-set` | restart this proxy or a camera's worker, reboot or power-cycle a camera, point its FTP upload here or set its NTP server, replace its HTTPS certificate, set its time zone and DST rule (from `time.zone`, verified by the re-read). Grouped under **Disruptive — off by default** on the cams-admin page; allow one only while it's needed (Klaus's decision, M §16 Q3) |
 | `move.send` | move a camera from this proxy to another proxy of the account: `move.targets`, `move.open`, `move.answer`, `move.go`, `move.release`, `move.begin`, `move.summary`, and `move.finish`/`move.cancel` for the source. Only after you approve the move here (or in a cams-admin sign-in, which this entry also lets start and approve moves). `move.answer` relays the target's answer; a refusal carries its `reason` and an optional `detail` (1 to 300 characters), kept with the request and shown in the dialog and the `move-phase` `rejected` audit record. `move.summary` (`{v: 1, camera}`) only reads: it answers `{summary}`, what a move of that camera would carry (files, bytes, rows, oldest and newest per kind, exactly as in the `move.request` event), or `unknown_camera`; see [docs/camera-move.md](camera-move.md) |
 | `move.receive` | hand this proxy a camera from another proxy of the account: `move.offer`, `move.start`, and `move.finish`/`move.cancel` for the target. It adds the camera live with its password and certificate and copies its content. A refused `move.offer` answers `{accept: false, reason, detail?}`: `detail` is one line of at most 300 characters naming what failed (a setting, an id, an address; never a token, password or other secret's value), also in the `move-offer` audit record ([docs/camera-move.md](camera-move.md#starting-one)) |
 

@@ -849,6 +849,17 @@
         }
       }
     },
+    "time": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "zone": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_+/-]{0,63}$",
+          "description": "the IANA time zone of the cameras (e.g. Europe/Berlin); the onboarding status compares each camera with it, camera-time-set sets it"
+        }
+      }
+    },
     "camsAdmin": {
       "type": "object",
       "additionalProperties": false,
@@ -895,10 +906,12 @@
               "camera.action:camera-ftp-setup",
               "camera.action:camera-ntp-set",
               "camera.action:camera-cert-push",
+              "camera.action:camera-time-set",
               "move.send",
               "move.receive",
               "ui.config",
-              "ui.restart"
+              "ui.restart",
+              "camera.onboarding.get"
             ]
           },
           "description": "commands cams-admin may send this proxy (default none); data/admin/policy.json (the Status card, admin-commands) replaces this list. config.json only"

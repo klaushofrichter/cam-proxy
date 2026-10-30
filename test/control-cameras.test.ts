@@ -35,9 +35,9 @@ describe('control: cameras (spec §6.3)', () => {
     expect(Object.keys(st.stream)).toEqual(Object.keys(b.stream));
     expect(st.ftp).toEqual(b.ftp);
     expect(st.recordings).toEqual(b.recordings);
-    expect(Object.keys(st)).toEqual(['version', 'camera', 'intake', 'sse', 'stream', 'retention', 'storage', 'ftp', 'recordings', 'analytics', 'analyticsUnmapped', 'health', 'archive', 'cameras', 'moveLeftovers']);
+    expect(Object.keys(st)).toEqual(['version', 'camera', 'intake', 'sse', 'stream', 'retention', 'storage', 'ftp', 'recordings', 'analytics', 'analyticsUnmapped', 'health', 'archive', 'cameras', 'moveLeftovers', 'removeLeftovers']);
     const one = (await request(p.base).get('/control/cameras/cam1/status').set(admin())).body;
-    expect(Object.keys(one)).toEqual(['id', 'camera', 'intake', 'stream', 'ftp', 'recordings', 'source']);
+    expect(Object.keys(one)).toEqual(['id', 'camera', 'intake', 'stream', 'ftp', 'recordings', 'source', 'credentials']);
     expect(one.ftp).toEqual(b.ftp);
   });
   it('one camera: the old camera actions act on it', async () => {

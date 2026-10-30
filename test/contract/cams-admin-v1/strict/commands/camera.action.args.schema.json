@@ -33,7 +33,8 @@
         "camera-powercycle",
         "camera-ftp-setup",
         "camera-ntp-set",
-        "camera-cert-push"
+        "camera-cert-push",
+        "camera-time-set"
       ]
     },
     "input": {

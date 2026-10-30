@@ -1,0 +1,469 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/strict/commands/camera.onboarding.get.result.schema.json",
+  "title": "camera.onboarding.get result v1",
+  "type": "object",
+  "properties": {
+    "cameras": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+      },
+      "maxProperties": 64,
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "camera": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "checkedAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "steps": {
+            "type": "object",
+            "properties": {
+              "reachable": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "action": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "ok",
+                  "detail"
+                ],
+                "additionalProperties": false
+              },
+              "login": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "action": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "ok",
+                  "detail"
+                ],
+                "additionalProperties": false
+              },
+              "trust": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "action": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "ok",
+                  "detail"
+                ],
+                "additionalProperties": false
+              },
+              "capabilities": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "action": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "ok",
+                  "detail"
+                ],
+                "additionalProperties": false
+              },
+              "stream": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "action": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "ok",
+                  "detail"
+                ],
+                "additionalProperties": false
+              },
+              "events": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "action": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "ok",
+                  "detail"
+                ],
+                "additionalProperties": false
+              },
+              "ftp": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "action": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "ok",
+                  "detail"
+                ],
+                "additionalProperties": false
+              },
+              "time": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "action": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "ok",
+                  "detail"
+                ],
+                "additionalProperties": false
+              },
+              "name": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "action": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "ok",
+                  "detail"
+                ],
+                "additionalProperties": false
+              },
+              "poe": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "action": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "ok",
+                  "detail"
+                ],
+                "additionalProperties": false
+              },
+              "profile": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "action": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "ok",
+                  "detail"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "reachable",
+              "login",
+              "trust",
+              "capabilities",
+              "stream",
+              "events",
+              "ftp",
+              "time",
+              "name",
+              "poe",
+              "profile"
+            ],
+            "additionalProperties": false
+          },
+          "trust": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "site-ca",
+                  "pinned",
+                  "public",
+                  "none"
+                ]
+              },
+              "fingerprint": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^SHA256:[0-9A-F]{64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "served": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^SHA256:[0-9A-F]{64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "mode",
+              "fingerprint",
+              "served"
+            ],
+            "additionalProperties": false
+          },
+          "time": {
+            "type": "object",
+            "properties": {
+              "clockOffsetMs": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "zone": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "cameraStdOffsetMinutes": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "cameraDst": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "clockOffsetMs",
+              "zone",
+              "cameraStdOffsetMinutes",
+              "cameraDst"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "camera",
+          "ready",
+          "checkedAt",
+          "steps",
+          "trust",
+          "time"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "clamped": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "cameras"
+  ],
+  "additionalProperties": false
+}
