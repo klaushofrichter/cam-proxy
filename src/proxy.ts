@@ -1174,7 +1174,21 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   app.use('/control', auditApi({ audit, guard: requireAccess('audit-read', access), retentionDays: () => running.retention.auditDays }));
   // The cams-admin card (spec 2026-10-06-cams-admin-phase1-design §9.2).
   app.use('/control', requireAccess('admin', access), camsAdminApi({ camsAdmin, audit, commands: { policy: commandPolicy, tokens: tokenStore, runner: commandRunner, config: configCommandDeps } }));
+  // Camera onboarding (spec 2026-10-30-camera-onboarding-design §4).
+  const onboarding = new OnboardingService({
+    loaded: () => loaded,
+    setLoaded,
+    running: () => running,
+    cameras: cams,
+    restartCamera: (cam) => controlDeps.restartCamera(cam),
+    passwords: movePasswords,
+    trustFor: tlsFor,
+    certState: (cam) => certs?.state(cam) ?? null,
+    audit,
+    attempts: new PasswordAttempts(),
+  });
   const controlDeps: ControlDeps = {
+    onboarding,
     changeMarks: () => overridesBackups.byPath(),
     moveOpen: (id) => {
       try {
@@ -1272,19 +1286,6 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       dropPrevious: (who) => certs?.dropPreviousCa(who) ?? false,
     },
   };
-  // Camera onboarding (spec 2026-10-30-camera-onboarding-design §4).
-  const onboarding = new OnboardingService({
-    loaded: () => loaded,
-    setLoaded,
-    running: () => running,
-    cameras: cams,
-    restartCamera: (cam) => controlDeps.restartCamera(cam),
-    passwords: movePasswords,
-    trustFor: tlsFor,
-    certState: (cam) => certs?.state(cam) ?? null,
-    audit,
-    attempts: new PasswordAttempts(),
-  });
   app.use('/control', requireAccess('admin', access), onboardingApi(onboarding));
   app.use('/control', requireAccess('admin', access), movesControlApi(moveSource));
   app.use('/control', requireAccess('admin', access), controlApi(controlDeps));

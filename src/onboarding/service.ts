@@ -20,6 +20,9 @@ import type { CertState } from '../tls/camera-certs';
 import { attemptKey, PASSWORD_WINDOW_MS, type PasswordAttempts } from './attempts';
 import { passwordSource, type Credentials } from './credentials';
 import { checkLogin } from './login-check';
+import { PASSWORD_RULE, validPassword } from './password-rule';
+import { probeCamera, probeInput } from './probe';
+import type { ActionOutcome } from '../api/actions';
 
 export type Who = ActionWho;
 
@@ -39,10 +42,6 @@ export interface OnboardingDeps {
 
 export type Refusal = { status: number; error: string; detail?: string; retryAfterS?: number; extra?: Record<string, unknown> };
 
-// 1 to 64 characters, no control characters (the camera's own limit is lower; it says so by refusing).
-// eslint-disable-next-line no-control-regex
-export const validPassword = (v: unknown): v is string => typeof v === 'string' && v.length >= 1 && v.length <= 64 && !/[\u0000-\u001f\u007f]/.test(v);
-export const PASSWORD_RULE = 'password: 1 to 64 characters, no control characters';
 
 const whoRecord = (who: Who) => ({ user: who.user, ...(who.ip ? { ip: who.ip } : {}), ...(who.userAgent ? { userAgent: who.userAgent } : {}) });
 const cmdOf = (who: Who) => ({ ...(who.cmdId ? { cmdId: who.cmdId } : {}), ...(who.actor ? { actor: who.actor } : {}) });
@@ -116,5 +115,27 @@ export class OnboardingService {
     await this.d.restartCamera(cam);
     this.d.audit.write({ ...base, outcome: 'success', message: `Camera password for ${cam} saved on this proxy (checked with the camera)${removeLine ? `; ${own} removed from the env file` : ''}`, details: { ...(removeLine ? { envLine: 'removed' } : {}), requestedBy: who.requestedBy, ...cmdOf(who) } });
     return { status: 200, credentials: { source: 'store', authOk: true, checkedAt: this.now() } };
+  }
+
+  // POST /control/actions/camera-probe (§4.2): local only, read-only on the
+  // camera; the password (optional) only for the login, dropped after it.
+  async probe(body: Record<string, unknown>, who: Who): Promise<ActionOutcome> {
+    const i = probeInput(body);
+    if (typeof i === 'string') return { status: 400, error: 'invalid', detail: i };
+    if (i.password !== undefined && i.protocol === 'https' && i.fingerprint === undefined) return { status: 400, error: 'invalid', detail: 'fingerprint: required with a password over https' };
+    const base = { action: 'camera-probe', category: ['configuration'], type: ['access'], ...whoRecord(who) };
+    const rec = (outcome: 'success' | 'failure', details: Record<string, unknown>, error?: string) =>
+      this.d.audit.write({ ...base, outcome, ...(error ? { error } : {}), message: `Camera probe of ${i.host}: ${error ?? (details.login === 'ok' ? `model ${String(details.model)}` : `login ${String(details.login)}`)}`, details: { host: i.host, ...details, requestedBy: who.requestedBy, ...cmdOf(who) } });
+    if (i.password !== undefined) {
+      const limited = this.attempt(i.host, (r, suppressed) => rec('failure', { login: 'not_tried', ...(suppressed ? { suppressed } : {}) }, r.error));
+      if (limited) return limited;
+    }
+    const r = await probeCamera(i);
+    if ('error' in r) {
+      rec('failure', { login: 'not_tried', served: r.served }, 'fingerprint_mismatch');
+      return { status: 409, error: 'fingerprint_mismatch', detail: 'the camera serves another certificate than the one confirmed: probe again without the password and check it', extra: { served: r.served } };
+    }
+    rec(r.login === 'refused' || r.login === 'offline' ? 'failure' : 'success', { login: r.login, model: r.device?.model ?? null, ports: r.ports, ...(r.certificate ? { fingerprint: r.certificate.fingerprint } : {}) }, r.login === 'refused' ? 'camera_refused' : r.login === 'offline' ? 'camera_offline' : undefined);
+    return { status: 200, json: r };
   }
 }

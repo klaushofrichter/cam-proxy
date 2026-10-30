@@ -1381,8 +1381,19 @@ paths:
         '409': { description: '{ error: move_open, detail } (cameras.<id>.moved of a camera move still open here, or of one that moved the camera away: only the move clears it)' }
   /control/actions/{name}:
     post:
-      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart (the camera side), camera-reboot, camera-powercycle, camera-poe-on, poe-switch-read, restart-proxy (the process), inventory ({kind, camera?}), inventory-repair ({kind, runId}), inventory-cancel, find-camera, camera-address ({host}), archive-clear ({count}), camera-cert-push, camera-ntp-set, camera-trust-clear, tls-ca-rotate ({confirm: rotate}), tls-ca-drop-previous
+      summary: onvif-resubscribe, camera-test, retention-run ({dryRun}), camera-ftp-setup, camera-ftp-test, camera-ftp-off, restart (the camera side), camera-reboot, camera-powercycle, camera-poe-on, poe-switch-read, restart-proxy (the process), inventory ({kind, camera?}), inventory-repair ({kind, runId}), inventory-cancel, find-camera, camera-address ({host}), archive-clear ({count}), camera-cert-push, camera-ntp-set, camera-trust-clear, tls-ca-rotate ({confirm: rotate}), tls-ca-drop-previous, camera-probe ({host, protocol?, user?, password?, fingerprint?, ports?})
       description: |
+        camera-probe (spec 2026-10-30-camera-onboarding-design §4.2; local admin only, never a cams-admin command): read-only on
+        the camera. Body {host (address or name, optional :port: the protocol's port), protocol (https, default; or http), user
+        (default admin), password (optional), fingerprint (SHA256:<64 hex>, required with a password over https), ports
+        ({http, https, rtsp, onvif, baichuan}, defaults 80, 443, 554, 8000, 9000)}. Without a password: which ports answer and
+        the certificate the camera serves; with one: Login (over https only to the confirmed fingerprint), GetDevInfo,
+        GetAbility, Logout. Answers { host, ports: {http, https, rtsp, onvif, baichuan: boolean}, certificate: {fingerprint,
+        subject, issuer, notAfter, selfSigned} | null, login (ok, refused, offline, not_tried), device: {model, firmware, name}
+        | null, capabilities (Capabilities) | null, tookMs }; 400 invalid; 409 fingerprint_mismatch {served} (no login);
+        429 too_many_attempts (a password: at most 5 per camera address in 10 minutes, shared with the password API and
+        POST /control/cameras); with find-camera and camera-address at most 6 per minute per client. Nothing is stored;
+        a camera-probe audit record (host, outcome, model, login), never the password.
         camera-trust-clear ({"confirm":"clear"}) drops a camera's site-CA trust or pin (its leaf moved aside, its factory
         certificate forgotten; its next push is an admin's camera-cert-push, which trusts what it serves then): answers the
         camera's certificate state; 400 invalid without the confirm; 409 not_available when no camera trust is kept here; a
