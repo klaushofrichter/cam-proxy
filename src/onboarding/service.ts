@@ -22,7 +22,12 @@ import { attemptKey, PASSWORD_WINDOW_MS, type PasswordAttempts } from './attempt
 import { passwordSource, type Credentials } from './credentials';
 import { checkLogin } from './login-check';
 import { PASSWORD_RULE, validPassword } from './password-rule';
-import { FINGERPRINT, probeCamera, probeInput } from './probe';
+import { FINGERPRINT, probeCamera, probeInput, probeServed, withPort, DEFAULT_PORTS, type ProbeInput } from './probe';
+import { applyOverrides, ConfigError, planOverrides } from '../config/load';
+import { configChanges } from '../config/changes';
+import { atCameraLimit } from '../config/profile';
+import { cameraIds } from '../config/cameras';
+import { CAMERA_ID } from '../config/schema';
 import { onboardingStatus, type OnboardingInput, type OnboardingStatus } from './status';
 import type { ActionOutcome } from '../api/actions';
 
@@ -48,6 +53,12 @@ export interface OnboardingDeps {
   zone: () => string | null;
   now?: () => number;
 }
+
+export interface AddBody { id?: string; name?: string; host: string; protocol?: 'https' | 'http'; user?: string; password: string; trust?: { fingerprint: string }; ports?: Partial<ProbeInput['ports']> }
+// How long an added camera's worker may take to start.
+const WORKER_WAIT_MS = 10_000;
+// eslint-disable-next-line no-control-regex
+const validName = (v: unknown): v is string => typeof v === 'string' && v.length >= 1 && v.length <= 64 && !/[\u0000-\u001f\u007f]/.test(v);
 
 // The served certificate is measured at most this often per camera (the heartbeat only reads the cache).
 export const SERVED_CACHE_MS = 60_000;
@@ -166,7 +177,7 @@ export class OnboardingService {
     if (mode === 'site-ca' || mode === 'public') return { status: 409, error: 'not_available', detail: `the camera's trust is ${mode}: clear the trust first (camera-trust-clear)` };
     const served = await this.d.served(cam);
     if (!served) return { status: 503, error: 'camera_offline', detail: 'the camera did not answer on HTTPS' };
-    const requester: Requester = { user: who.user, requestedBy: who.requestedBy, ...(who.ip ? { ip: who.ip } : {}), ...(who.userAgent ? { userAgent: who.userAgent } : {}), ...cmdOf(who) };
+    const requester = this.requester(who);
     if (served.fingerprint !== fingerprint) {
       this.d.audit.write({ action: 'camera-trust', category: ['configuration'], type: ['change'], outcome: 'failure', error: 'fingerprint_mismatch', ...whoRecord(who), camera: cam, message: `Camera trust ${cam}: pin refused, the camera serves ${served.fingerprint}, not ${fingerprint}`, details: { op: 'pin', fingerprint, served: served.fingerprint, requestedBy: who.requestedBy, ...cmdOf(who) } });
       return { status: 409, error: 'fingerprint_mismatch', detail: 'the camera serves another certificate than the one confirmed', extra: { served: served.fingerprint } };
@@ -206,5 +217,109 @@ export class OnboardingService {
   // A pin changes what the status compares with: measured again at the next read.
   forgetServed(id: string): void {
     this.servedCache.delete(id);
+  }
+
+  // POST /control/cameras (§4.3; local admin only): the camera is probed with
+  // the password (over https only to the confirmed certificate) before
+  // anything is stored or written; then the password is stored, the
+  // certificate pinned (before the camera's worker logs in), the camera added
+  // in overrides.json (live, no restart). The profile's camera count refuses
+  // an addition beyond it.
+  async add(body: unknown, who: Who): Promise<{ status: 201; onboarding: OnboardingStatus } | Refusal> {
+    const b = (typeof body === 'object' && body !== null && !Array.isArray(body) ? body : {}) as Record<string, unknown>;
+    const bad = (detail: string): Refusal => ({ status: 400, error: 'invalid', detail });
+    if (b.id !== undefined && (typeof b.id !== 'string' || !new RegExp(CAMERA_ID).test(b.id))) return bad('id: a camera id (a-z, 0-9, -; at most 32)');
+    if (b.name !== undefined && !validName(b.name)) return bad('name: 1 to 64 characters, no control characters');
+    if (!validPassword(b.password)) return bad(PASSWORD_RULE);
+    const trust = b.trust as { fingerprint?: unknown } | undefined;
+    if (trust !== undefined && (typeof trust !== 'object' || trust === null)) return bad('trust: {fingerprint}');
+    const i = probeInput({ host: b.host, ...(b.protocol !== undefined ? { protocol: b.protocol } : {}), ...(b.user !== undefined ? { user: b.user } : {}), password: b.password, ...(trust?.fingerprint !== undefined ? { fingerprint: trust.fingerprint } : {}), ...(b.ports !== undefined ? { ports: b.ports } : {}) });
+    if (typeof i === 'string') return bad(i);
+    if (i.protocol === 'https' && i.fingerprint === undefined) return bad("trust.fingerprint: required for an https camera (the certificate it serves, from camera-probe)");
+    const l = this.d.loaded();
+    if (l.legacyCamera) return this.addLegacy(b, i, who);
+    if (b.id === undefined) return bad('id: required on a proxy with several cameras');
+    return this.addCamera(b.id as string, b.name as string | undefined, i, who);
+  }
+
+  // The single-camera proxy (the Pi): Task 8.
+  protected async addLegacy(_b: Record<string, unknown>, _i: ProbeInput, _who: Who): Promise<Refusal> {
+    return { status: 409, error: 'not_available', detail: 'this proxy has one camera (config.json camera): adding is not available here yet' };
+  }
+
+  private auditAdd(who: Who, cam: string, outcome: 'success' | 'failure', message: string, details: Record<string, unknown>, error?: string): void {
+    this.d.audit.write({ action: 'camera-add', category: ['configuration'], type: ['creation'], outcome, ...(error ? { error } : {}), ...whoRecord(who), camera: cam, message, details: { ...details, requestedBy: who.requestedBy, ...cmdOf(who) } });
+  }
+
+  // The camera's host as configured: the address, with the API port when it is not the protocol's default.
+  private static hostOf(i: ProbeInput): string {
+    const port = i.ports[i.protocol];
+    return port === DEFAULT_PORTS[i.protocol] ? i.host : withPort(i.host, port);
+  }
+
+  // Probe with the password (rate-limited); a refusal names the error. Audited by the caller.
+  private async probeForAdd(i: ProbeInput, fail: (r: Refusal, extra?: Record<string, unknown>) => Refusal): Promise<{ model: string | null; served: Served | null } | Refusal> {
+    const limited = this.attempt(i.host, (r, suppressed) => void fail(r, suppressed ? { suppressed } : {}));
+    if (limited) return limited;
+    const p = await probeServed(i);
+    if ('error' in p) return fail({ status: 409, error: 'fingerprint_mismatch', detail: 'the camera serves another certificate than the one confirmed', extra: { served: p.served } }, { served: p.served });
+    if (p.result.login === 'refused') return fail({ status: 422, error: 'camera_refused', detail: 'the camera refused this password' });
+    if (p.result.login !== 'ok') return fail({ status: 503, error: 'camera_offline', detail: 'the camera did not answer the login' });
+    return { model: p.result.device?.model ?? null, served: p.served };
+  }
+
+  private async addCamera(id: string, name: string | undefined, i: ProbeInput, who: Who): Promise<{ status: 201; onboarding: OnboardingStatus } | Refusal> {
+    const host = OnboardingService.hostOf(i);
+    const fail = (r: Refusal, extra: Record<string, unknown> = {}): Refusal => {
+      this.auditAdd(who, id, 'failure', `Camera ${id} (${host}) not added: ${r.error}`, { host, ...extra }, r.error);
+      return r;
+    };
+    const l = this.d.loaded();
+    if (cameraIds(l.config).includes(id) || l.order.includes(id)) return fail({ status: 409, error: 'camera_exists', detail: `${id} is configured here already${l.config.cameras[id]?.moved ? ' (moved away; finish or clean up that move first)' : ''}` });
+    const running = this.d.running();
+    if (atCameraLimit(running)) return fail({ status: 409, error: 'camera_limit', detail: `profile.cameras is ${running.profile.cameras}` });
+    const p = await this.probeForAdd(i, fail);
+    if ('error' in p) return p;
+    const node = { host, protocol: i.protocol, user: i.user, ...(name ? { name } : {}), onvifPort: i.ports.onvif, rtspPort: i.ports.rtsp, baichuanPort: i.ports.baichuan };
+    const patch = { cameras: { [id]: node } };
+    this.d.passwords.set(id, i.password!);
+    let next: Loaded;
+    try {
+      planOverrides(this.d.loaded(), patch); // checked before anything else is written
+      if (p.served) this.d.pinServed(id, p.served, this.requester(who));
+      next = applyOverrides(this.d.loaded(), patch);
+    } catch (err) {
+      this.d.passwords.delete(id);
+      if (err instanceof ConfigError) return fail({ status: 400, error: 'invalid', detail: err.message });
+      throw err;
+    }
+    const before = this.d.loaded();
+    this.d.setLoaded(next);
+    this.auditConfig(who, before, next);
+    await this.waitForWorker(id);
+    this.auditAdd(who, id, 'success', `Camera ${id} added (${host}, ${p.model ?? 'unknown model'})${p.served ? `, certificate pinned (${p.served.fingerprint})` : ''}`, { host, model: p.model, pinned: p.served?.fingerprint ?? null });
+    const [onboarding] = await this.status(id);
+    return { status: 201, onboarding: onboarding ?? this.placeholder(id) };
+  }
+
+  protected requester(who: Who): Requester {
+    return { user: who.user, requestedBy: who.requestedBy, ...(who.ip ? { ip: who.ip } : {}), ...(who.userAgent ? { userAgent: who.userAgent } : {}), ...cmdOf(who) };
+  }
+
+  // The config-change record of an override write, as PUT /control/config writes it.
+  protected auditConfig(who: Who, before: Loaded, after: Loaded): void {
+    const changes = configChanges(before, after).map((c) => ({ key: c.path, from: c.from, to: c.to, ...(c.restart ? { restart: c.restart } : {}) }));
+    if (changes.length) this.d.audit.write({ action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', ...whoRecord(who), message: `Settings changed: ${changes.map((c) => c.key).join(', ')}`, details: { changes, requestedBy: who.requestedBy } });
+  }
+
+  protected async waitForWorker(id: string): Promise<void> {
+    const t0 = this.now();
+    while (!this.d.cameras.get(id) && this.now() - t0 < WORKER_WAIT_MS) await new Promise((r) => setTimeout(r, 50));
+  }
+
+  // A camera whose worker did not start in time: nothing known yet.
+  private placeholder(id: string): OnboardingStatus {
+    const steps = Object.fromEntries(['reachable', 'login', 'trust', 'capabilities', 'stream', 'events', 'ftp', 'time', 'name', 'poe', 'profile'].map((n) => [n, { ok: null, detail: 'the camera is starting' }])) as OnboardingStatus['steps'];
+    return { camera: id, ready: false, checkedAt: this.now(), steps, trust: { mode: 'none', fingerprint: null, served: null }, time: { clockOffsetMs: null, zone: this.d.zone(), cameraStdOffsetMinutes: null, cameraDst: null } };
   }
 }

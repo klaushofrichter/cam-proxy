@@ -968,6 +968,26 @@ paths:
         '401': { description: not signed in }
         '403': { description: admin_only, or csrf }
   /control/cameras:
+    post:
+      summary: Add a camera with its password and certificate pin (local admin only) (spec 2026-10-30-camera-onboarding-design §4.3)
+      description: >
+        Body {id (a camera id; on a single-camera proxy optional: the camera's own id), name?, host (address or name,
+        optional :port), protocol (https, default; or http), user (default admin), password, trust: {fingerprint}
+        (required for https: the certificate the camera serves, from camera-probe), ports? ({https, http, rtsp, onvif,
+        baichuan})}. Nothing is stored or written until the camera accepted the login, over https only to that
+        certificate. Then the password is stored (data/admin/camera-passwords.json), the certificate pinned, and the
+        camera added in overrides.json (live, no restart; a config-change and a camera-add audit record). Only the
+        proxy's own admin token or a session it started: a managed token or sign-in answers 403 local_admin_only. At
+        most 5 password attempts per camera address in 10 minutes (shared with the password API and camera-probe).
+      responses:
+        '201': { description: '{ onboarding: OnboardingStatus }' }
+        '400': { description: invalid }
+        '401': { description: not signed in }
+        '403': { description: admin_only, local_admin_only }
+        '409': { description: "camera_exists, camera_limit (detail: profile.cameras is <n>; a proxy already over it keeps running), fingerprint_mismatch {served}, camera_id, move_open, not_available {line} (a single-camera proxy without a writable .env)" }
+        '422': { description: camera_refused (nothing stored) }
+        '429': { description: too_many_attempts (Retry-After) }
+        '503': { description: camera_offline (nothing stored) }
     get:
       summary: Every camera's status block, in config order (spec 2026-10-05-multi-camera-host-design §6.3) (admin)
       responses:

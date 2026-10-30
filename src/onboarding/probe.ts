@@ -8,7 +8,7 @@ import net from 'net';
 import { bareHost, splitHost } from '../camera/http';
 import { deriveCapabilities, type Capabilities } from '../camera/capabilities';
 import { validCameraHost } from '../config/env';
-import { servedCertificate } from '../tls/served';
+import { servedCertificate, type Served } from '../tls/served';
 import { checkLogin } from './login-check';
 import { PASSWORD_RULE, validPassword } from './password-rule';
 
@@ -86,6 +86,12 @@ function certificateOf(pem: string, fingerprint: string): ProbeCertificate {
 export const withPort = (host: string, port: number) => (host.includes(':') ? `[${bareHost(host)}]:${port}` : `${host}:${port}`);
 
 export async function probeCamera(i: ProbeInput, o: { connectTimeoutMs?: number; tlsTimeoutMs?: number } = {}): Promise<ProbeResult | { error: 'fingerprint_mismatch'; served: string | null }> {
+  const r = await probeServed(i, o);
+  return 'error' in r ? r : r.result;
+}
+
+// The probe, and the certificate it logged in to (the add pins exactly that one).
+export async function probeServed(i: ProbeInput, o: { connectTimeoutMs?: number; tlsTimeoutMs?: number } = {}): Promise<{ result: ProbeResult; served: Served | null } | { error: 'fingerprint_mismatch'; served: string | null }> {
   const t0 = Date.now();
   const bare = bareHost(i.host);
   const open = await Promise.all(PORT_NAMES.map((n) => portOpen(bare, i.ports[n], o.connectTimeoutMs ?? 1500)));
@@ -103,5 +109,5 @@ export async function probeCamera(i: ProbeInput, o: { connectTimeoutMs?: number;
     }
   }
   result.tookMs = Date.now() - t0;
-  return result;
+  return { result, served };
 }

@@ -1,6 +1,6 @@
 import express, { type Request, type Response } from 'express';
 import type { OnboardingService, Refusal, Who } from '../onboarding/service';
-import { actorOf, clientIp, type AccessInfo } from './auth';
+import { actorOf, clientIp, requireLocalAdmin, type AccessInfo } from './auth';
 import { cameraParam } from './camera-param';
 
 // The onboarding routes (spec 2026-10-30-camera-onboarding-design §4), mounted
@@ -35,6 +35,8 @@ export function onboardingApi(s: OnboardingService): express.Router {
     if (!one) return void res.status(404).json({ error: 'not_found' });
     res.json(one);
   });
+  // Add a camera (§4.3): local admin only, never a managed token or sign-in; 201 {onboarding}.
+  r.post('/cameras', requireLocalAdmin(), async (req, res) => sendOutcome(res, await s.add(req.body, whoOf(req, res))));
   r.put('/cameras/:cam/password', async (req, res) => sendOutcome(res, await s.savePassword(String(req.params.cam), req.body?.password, whoOf(req, res))));
   return r;
 }
