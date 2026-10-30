@@ -86,7 +86,8 @@ export function ptzApi(d: { cameras: CameraRegistry; audit: Pick<AuditLog, 'writ
     const ms = intIn(res, b.durationMs, 'durationMs', DURATION);
     if (ms === undefined) return;
     try {
-      await g.w.ptz.lease.move(() => run(g.w, b.direction as string), ms);
+      // A zoom names its direction: the lease does not re-send a held zoom.
+      await g.w.ptz.lease.move(() => run(g.w, b.direction as string), ms, need === 'zoom' ? { zoom: b.direction as string } : {});
       res.status(204).end();
     } catch (err) {
       fail(res, err);
