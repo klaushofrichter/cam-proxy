@@ -974,7 +974,7 @@ paths:
         Body {id (a camera id; on a single-camera proxy optional: the camera's own id), name?, host (address or name,
         optional :port), protocol (https, default; or http), user (default admin), password, trust: {fingerprint}
         (required for https: the certificate the camera serves, from camera-probe), ports? ({https, http, rtsp, onvif,
-        baichuan})}. Nothing is stored or written until the camera accepted the login, over https only to that
+        baichuan}), ftp? (clip uploads for the camera; false by default)}. Nothing is stored or written until the camera accepted the login, over https only to that
         certificate. Then the password is stored (data/admin/camera-passwords.json), the certificate pinned, and the
         camera added in overrides.json (live, no restart; a config-change and a camera-add audit record). Only the
         proxy's own admin token or a session it started: a managed token or sign-in answers 403 local_admin_only. At

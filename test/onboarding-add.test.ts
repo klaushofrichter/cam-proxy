@@ -42,6 +42,8 @@ describe('adding a camera', () => {
     await until(async () => (await request(p.base).get('/control/cameras/cam6/onboarding').set(admin())).body.ready === true, 30_000);
     expect(JSON.parse(readFileSync(join(p.dir, 'data', 'overrides.json'), 'utf8')).cameras.cam6).toMatchObject({ host: `127.0.0.1:${s.ports.https}`, onvifPort: s.ports.onvif, rtspPort: s.ports.rtsp, baichuanPort: s.ports.baichuan });
     expect(p.proxy.running.cameras.cam6).toMatchObject({ protocol: 'https', user: 'proxy' }); // the defaults: not stored as overrides
+    // FTP uploads off until asked for (the passive range needs 10 ports per camera with FTP).
+    expect(JSON.parse(readFileSync(join(p.dir, 'data', 'overrides.json'), 'utf8')).cameras.cam6.ftp).toEqual({ enabled: false });
     const view = (await request(p.base).get('/api/cameras/cam6').set(auth())).body;
     expect([view.credentials.source, view.tls.mode, view.tls.fingerprint]).toEqual(['store', 'pinned', fingerprint]);
     expect(stored().cam6.password).toBe(s.password);

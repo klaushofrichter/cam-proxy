@@ -27,6 +27,8 @@
   // `legacy`: read from a legacy `camera` object in config.json.
   interface Setting { value: unknown; source: 'default' | 'file' | 'override' | 'env'; env?: string; restart: boolean; restartScope?: 'camera' | 'host'; pending: boolean; next?: unknown; type?: SettingType; resetTo?: ResetTo; legacy?: true; by?: { cmdId: string; actor: string; at: number }; ignored?: string }
   let view = $state<Record<string, Setting>>({});
+  // Find camera's "Add this camera": the address for Add a camera.
+  let addHost = $state('');
   let drafts = $state<Record<string, string>>({});
   let message = $state('');
   // A refused save or reset, at its row (issue #227: never silently).
@@ -204,7 +206,7 @@
   {#each leftovers as l (l.id)}<p class="muted small" data-testid="moved-{l.id}">{l.id}: {movedText($moves.find((m) => m.id === l.moveId)?.target.name ?? 'another proxy', l.moveId)}</p>{/each}
   <ProfileCard />
   <AnalyticsSettings {view} onsaved={(v) => (view = v as Record<string, Setting>)} />
-  <FindCameraCard />
+  <FindCameraCard onadd={(h) => { addHost = h; document.querySelector('[data-testid="add-camera"]')?.scrollIntoView({ behavior: 'smooth' }); }} />
   <PoeSwitchCard />
   {#each cards as card (card.key)}
     <div class="card" data-testid="settings-card-{card.key}">
@@ -253,7 +255,7 @@
       </table>
     </div>
   {/each}
-  <AddCameraCard existing={cameraIds($status)} onadded={(v) => ((view = v as Record<string, Setting>), void refresh())} />
+  <AddCameraCard existing={cameraIds($status)} prefill={addHost} onadded={() => void load().then(() => refresh())} />
 </section>
 {#if moving && cam}
   <MoveCameraDialog camera={cam} name={camName(cam)} address={block?.camera.webUiUrl ? hostOf(block.camera.webUiUrl) : ''} onclose={() => ((moving = false), void loadMoves())} />

@@ -31,11 +31,15 @@ test('Status: storage per camera', async ({ page }) => {
 
 test('a camera added in the Settings page starts, and can be removed again', async ({ page, request }) => {
   await page.goto('/#/settings');
+  // Spec 2026-10-30-camera-onboarding-design §4.3: added with its password, checked with the camera (Garden's sim over http).
   await page.getByTestId('add-camera-id').fill('cam9');
-  await page.getByTestId('add-camera-host').fill('127.0.0.1:9');
+  await page.getByTestId('add-camera-host').fill('127.0.0.1:18720');
   await page.getByTestId('add-camera-protocol').selectOption('http');
+  await page.getByTestId('add-camera-user').fill('proxy');
+  await page.getByTestId('add-camera-password').fill('e2e-proxy-pw');
   await page.getByTestId('add-camera-save').click();
-  await expect(page.getByTestId('add-camera-message')).toHaveText('Camera cam9 added; it starts now');
+  await expect(page.getByTestId('add-camera-message')).toHaveText('Camera cam9 added; it starts now.', { timeout: 15_000 });
+  await expect(page.getByTestId('add-camera-password')).toHaveValue('');
   await expect(page.getByTestId('camera-picker').locator('option')).toHaveCount(4, { timeout: 15_000 });
   await page.getByTestId('camera-picker').selectOption('cam9');
   await page.getByTestId('remove-camera').click();

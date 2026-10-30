@@ -20,6 +20,7 @@
   import MoveStatusCard from '../components/MoveStatusCard.svelte';
   import MoveLeftoversCard from '../components/MoveLeftoversCard.svelte';
   import ProfileCard from '../components/ProfileCard.svelte';
+  import OnboardingCard from '../components/OnboardingCard.svelte';
   import { loadMoves, moves } from '../lib/move-state';
   import { isActive } from '../lib/moves';
   import type { TlsView } from '../lib/tls';
@@ -93,6 +94,7 @@
       <ProfileCard home />
       {#each activeMoves as m (m.id)}<MoveStatusCard move={m} name={$status.cameras?.find((c) => c.id === m.camera)?.camera.name ?? m.camera} />{/each}
       {#if $status.moveLeftovers?.length || $status.removeLeftovers?.length}<MoveLeftoversCard leftovers={$status.moveLeftovers ?? []} removed={$status.removeLeftovers ?? []} />{/if}
+      {#if cs.id}<OnboardingCard cam={cs.id} name={cs.camera.name ?? cs.id} refreshKey={$status} />{/if}
       <div class="card" data-testid="card-camera">
         <h3>Camera</h3>
         <dl>

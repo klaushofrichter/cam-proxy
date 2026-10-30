@@ -67,7 +67,7 @@ export interface OnboardingDeps {
   now?: () => number;
 }
 
-export interface AddBody { id?: string; name?: string; host: string; protocol?: 'https' | 'http'; user?: string; password: string; trust?: { fingerprint: string }; ports?: Partial<ProbeInput['ports']> }
+export interface AddBody { id?: string; name?: string; host: string; protocol?: 'https' | 'http'; user?: string; password: string; trust?: { fingerprint: string }; ports?: Partial<ProbeInput['ports']>; ftp?: boolean }
 // How long an added camera's worker may take to start.
 const WORKER_WAIT_MS = 10_000;
 // eslint-disable-next-line no-control-regex
@@ -243,6 +243,7 @@ export class OnboardingService {
     const bad = (detail: string): Refusal => ({ status: 400, error: 'invalid', detail });
     if (b.id !== undefined && (typeof b.id !== 'string' || !new RegExp(CAMERA_ID).test(b.id))) return bad('id: a camera id (a-z, 0-9, -; at most 32)');
     if (b.name !== undefined && !validName(b.name)) return bad('name: 1 to 64 characters, no control characters');
+    if (b.ftp !== undefined && typeof b.ftp !== 'boolean') return bad('ftp: true or false');
     if (!validPassword(b.password)) return bad(PASSWORD_RULE);
     const trust = b.trust as { fingerprint?: unknown } | undefined;
     if (trust !== undefined && (typeof trust !== 'object' || trust === null)) return bad('trust: {fingerprint}');
@@ -252,7 +253,7 @@ export class OnboardingService {
     const l = this.d.loaded();
     if (l.legacyCamera) return this.addLegacy(b, i, who);
     if (b.id === undefined) return bad('id: required on a proxy with several cameras');
-    return this.addCamera(b.id as string, b.name as string | undefined, i, who);
+    return this.addCamera(b.id as string, b.name as string | undefined, i, who, b.ftp === true);
   }
 
   // A single-camera proxy (config.json `camera` + CAMERA_HOST, the Pi): the
@@ -331,7 +332,8 @@ export class OnboardingService {
     return { model: p.result.device?.model ?? null, served: p.served };
   }
 
-  private async addCamera(id: string, name: string | undefined, i: ProbeInput, who: Who): Promise<{ status: 201; onboarding: OnboardingStatus } | Refusal> {
+  // `ftp`: clip uploads on for the camera; off unless asked for (the passive range needs 10 ports per camera with FTP).
+  private async addCamera(id: string, name: string | undefined, i: ProbeInput, who: Who, ftp = false): Promise<{ status: 201; onboarding: OnboardingStatus } | Refusal> {
     const host = OnboardingService.hostOf(i);
     const fail = (r: Refusal, extra: Record<string, unknown> = {}): Refusal => {
       this.auditAdd(who, id, 'failure', `Camera ${id} (${host}) not added: ${r.error}`, { host, ...extra }, r.error);
@@ -343,7 +345,7 @@ export class OnboardingService {
     if (atCameraLimit(running)) return fail({ status: 409, error: 'camera_limit', detail: `profile.cameras is ${running.profile.cameras}` });
     const p = await this.probeForAdd(i, fail);
     if ('error' in p) return p;
-    const node = { host, protocol: i.protocol, user: i.user, ...(name ? { name } : {}), onvifPort: i.ports.onvif, rtspPort: i.ports.rtsp, baichuanPort: i.ports.baichuan };
+    const node = { host, protocol: i.protocol, user: i.user, ...(name ? { name } : {}), onvifPort: i.ports.onvif, rtspPort: i.ports.rtsp, baichuanPort: i.ports.baichuan, ftp: { enabled: ftp } };
     const patch = { cameras: { [id]: node } };
     this.d.passwords.set(id, i.password!);
     let next: Loaded;
