@@ -157,6 +157,47 @@ describe('MoveLease', () => {
     expect(timers.map((t) => t.ms)).toEqual([2000, 2000]);
   });
 
+  // Final review 1: a hold over a slow camera must not pile up moves.
+  it('superseded moves queued behind a slow one never reach the camera', async () => {
+    const slow = deferred();
+    const a = lease.move(() => (log.push('A'), slow.promise), 600);
+    const b = lease.move(cmd('B'), 600);
+    const c = lease.move(cmd('C'), 600);
+    slow.resolve();
+    await Promise.all([a, b, c]);
+    expect(log).toEqual(['A', 'C']);
+    fire(600);
+    await idle();
+    expect(log).toEqual(['A', 'C', 'Stop']);
+  });
+
+  it('a Stop after the lease ends is not delayed behind superseded moves', async () => {
+    const slow = deferred();
+    void lease.move(() => (log.push('A'), slow.promise), 600);
+    void lease.move(cmd('B'), 600);
+    void lease.move(cmd('C'), 600);
+    const s = lease.stop();
+    slow.resolve();
+    await s;
+    expect(log).toEqual(['A', 'Stop']);
+  });
+
+  // Final review 2: a failed timer Stop leaves a retry pending while active() is false.
+  it('needsStop: true from a move until a Stop succeeded', async () => {
+    expect(lease.needsStop()).toBe(false);
+    stopFails = 1;
+    await lease.move(cmd('Left'), 400);
+    expect(lease.needsStop()).toBe(true);
+    fire(400);
+    await idle();
+    expect(lease.active()).toBe(false);
+    expect(lease.needsStop()).toBe(true);
+    await lease.stop();
+    expect(lease.needsStop()).toBe(false);
+    await lease.then(cmd('ToPos'));
+    expect(lease.needsStop()).toBe(false);
+  });
+
   it('the default scheduler stops by itself', async () => {
     const l: string[] = [];
     const real = new MoveLease({ stop: async () => void l.push('Stop') });

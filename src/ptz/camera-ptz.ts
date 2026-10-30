@@ -36,9 +36,10 @@ export class CameraPtz {
     });
   }
 
-  // Before the camera session ends (restart, stop): a leased move is stopped.
+  // Before the camera session ends (restart, stop): a leased move, or one whose
+  // Stop failed and waits for its retry, is stopped.
   async halt(): Promise<void> {
-    if (!this.lease.active()) return;
+    if (!this.lease.needsStop()) return;
     try {
       await this.lease.stop();
     } catch (err) {

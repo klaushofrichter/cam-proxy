@@ -30,15 +30,30 @@ export class MoveLease {
   // Bumped by every move, stop and then: a late failure or retry of an older
   // one never stops a newer move.
   private gen = 0;
+  // A move was sent and no Stop has succeeded since (a failed Stop's retry may
+  // still be pending while `moving` is already false).
+  private unstopped = false;
   private readonly schedule: (ms: number, fn: () => void) => () => void;
+  // The camera's Stop; a success means nothing is moving any more.
+  private readonly stopCmd: () => Promise<void>;
 
   constructor(private readonly d: LeaseDeps) {
     this.schedule = d.schedule ?? defaultSchedule;
+    this.stopCmd = async () => {
+      await d.stop();
+      this.unstopped = false;
+    };
   }
 
+  // Commands waiting or running; none: the next one starts at once (in this
+  // tick), so a later move can only supersede one that has not started yet.
+  private pending = 0;
+
   private queue(fn: () => Promise<void>): Promise<void> {
-    const p = this.chain.then(fn);
-    this.chain = p.then(noop, noop);
+    this.pending++;
+    const p = this.pending === 1 ? (async () => fn())() : this.chain.then(fn);
+    const settled = p.then(noop, noop).then(() => void this.pending--);
+    this.chain = settled;
     return p;
   }
 
@@ -52,7 +67,13 @@ export class MoveLease {
     this.clearTimer();
     const gen = ++this.gen;
     this.moving = true;
-    const p = this.queue(start);
+    // A move superseded while it waited in the queue is dropped: a hold over a
+    // slow camera must not pile up moves that run on after it ended.
+    const p = this.queue(async () => {
+      if (gen !== this.gen) return;
+      this.unstopped = true;
+      await start();
+    });
     this.cancelTimer = this.schedule(Math.min(durationMs, MAX_LEASE_MS), () => {
       this.cancelTimer = undefined;
       if (gen === this.gen) this.timerStop(gen);
@@ -62,19 +83,19 @@ export class MoveLease {
       // The move may have started anyway: one best-effort Stop, and the lease ends.
       this.clearTimer();
       this.moving = false;
-      this.queue(this.d.stop).catch(noop);
+      this.queue(this.stopCmd).catch(noop);
     });
     return p;
   }
 
   private timerStop(gen: number): void {
     this.moving = false;
-    this.queue(this.d.stop).catch(() => {
+    this.queue(this.stopCmd).catch(() => {
       if (gen !== this.gen) return;
       this.cancelTimer = this.schedule(this.d.retryMs ?? 250, () => {
         this.cancelTimer = undefined;
         if (gen !== this.gen) return;
-        this.queue(this.d.stop).catch((err) => logger.warn({ err: errorMessage(err) }, 'ptz_stop_failed'));
+        this.queue(this.stopCmd).catch((err) => logger.warn({ err: errorMessage(err) }, 'ptz_stop_failed'));
       });
     });
   }
@@ -84,7 +105,7 @@ export class MoveLease {
     this.clearTimer();
     this.gen++;
     this.moving = false;
-    return this.queue(this.d.stop);
+    return this.queue(this.stopCmd);
   }
 
   // Runs cmd after stopping a running move, with no Stop after it (a travel
@@ -92,12 +113,18 @@ export class MoveLease {
   then(cmd: () => Promise<void>): Promise<void> {
     this.clearTimer();
     this.gen++;
-    if (this.moving) this.queue(this.d.stop).catch(noop);
+    if (this.moving) this.queue(this.stopCmd).catch(noop);
     this.moving = false;
     return this.queue(cmd);
   }
 
   active(): boolean {
     return this.moving;
+  }
+
+  // Whether the camera may still be moving: a move was sent and no Stop has
+  // succeeded since (also while a failed Stop waits for its retry).
+  needsStop(): boolean {
+    return this.moving || this.unstopped;
   }
 }

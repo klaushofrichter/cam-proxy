@@ -13,7 +13,7 @@ let catalog: Catalog | undefined;
 afterEach(() => catalog?.close());
 
 // A camera that answers the preset commands from 64 slots in memory.
-function setup(caps: Capabilities | null = E1, failStop = false) {
+function setup(caps: Capabilities | null = E1, failStops = 0) {
   catalog = openCatalog(join(mkdtempSync(join(tmpdir(), 'camproxy-ptzcam-')), 'catalog.sqlite'));
   const log = new StreamLog(catalog);
   const slots = Array.from({ length: 64 }, (_, id) => ({ channel: 0, id, enable: 0, name: `pos${id + 1}` }));
@@ -26,7 +26,10 @@ function setup(caps: Capabilities | null = E1, failStop = false) {
       const x = (p as { PtzPreset: { id: number; enable: number; name: string } }).PtzPreset;
       slots[x.id] = { channel: 0, id: x.id, enable: x.enable, name: x.name };
     }
-    if (cmd === 'PtzCtrl' && (p as { op: string }).op === 'Stop' && failStop) throw new Error('refused');
+    if (cmd === 'PtzCtrl' && (p as { op: string }).op === 'Stop' && failStops > 0) {
+      failStops--;
+      throw new Error('refused');
+    }
     return { rspCode: 200 };
   };
   const ptz = new CameraPtz({ cam: 'e1', command, capabilities: () => caps, online: () => true, catalog, log });
@@ -71,8 +74,20 @@ describe('CameraPtz', () => {
     expect(ptz.lease.active()).toBe(false);
   });
 
+  it('halt sends Stop while a failed timer Stop waits for its retry', async () => {
+    const { ptz, sent } = setup(E1, 1);
+    await ptz.lease.move(() => ptz.camera.move('up', 5), 100);
+    const stops = () => sent.filter(([, p]) => (p as { op?: string }).op === 'Stop').length;
+    const t0 = Date.now();
+    while (stops() < 1 && Date.now() - t0 < 2000) await new Promise((r) => setTimeout(r, 5));
+    await new Promise((r) => setImmediate(r));
+    expect(ptz.lease.active()).toBe(false);
+    await ptz.halt();
+    expect(stops()).toBe(2);
+  });
+
   it('halt swallows a refused Stop', async () => {
-    const { ptz } = setup(E1, true);
+    const { ptz } = setup(E1, 99);
     await ptz.lease.move(async () => undefined, 2000);
     await expect(ptz.halt()).resolves.toBeUndefined();
   });
