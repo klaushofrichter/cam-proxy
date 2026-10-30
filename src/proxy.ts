@@ -1115,11 +1115,15 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     setPhase: (r, phase, o) => moveTarget.setPhase(r, phase, o),
     // A return waiting for room (step 4 Task 10): move.phase copying no_space.
     notePaused: (r, paused) => moveTarget.notePaused(r, paused),
-    // A moved camera's PTZ positions replaced (plan D): its worker reads the
-    // camera's slots again, and the positions' stream message goes out.
-    ptzImported: (cam) => {
-      cams.get(cam)?.ptz.positions.invalidate();
+    // A moved camera's PTZ positions (plan D): imported under the camera's
+    // positions lock when it runs here (no save races the import), then its
+    // slots are read again and the positions' stream message goes out.
+    ptzLocked: async (cam, fn) => {
+      const w = cams.get(cam);
+      if (w) return w.ptz.positions.locked(fn);
+      const r = fn();
       log.append(cam, 'ptz-positions', {});
+      return r;
     },
     proxyId: proxyIdNow,
   });

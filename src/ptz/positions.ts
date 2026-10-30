@@ -102,6 +102,21 @@ export class PtzPositions {
     this.cache = undefined;
   }
 
+  // Runs fn one at a time with the changes (a moved camera's positions
+  // imported, plan D), then the camera's slots are read again and the
+  // positions' stream message goes out.
+  locked<T>(fn: () => T): Promise<T> {
+    return this.lock(async () => {
+      try {
+        const r = fn();
+        this.d.changed();
+        return r;
+      } finally {
+        this.invalidate();
+      }
+    });
+  }
+
   private rows(): PtzPositionRow[] {
     return listPositions(this.d.catalog, this.d.cam);
   }

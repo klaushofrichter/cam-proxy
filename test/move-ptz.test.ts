@@ -64,3 +64,30 @@ describe('PTZ positions on the move wire', () => {
     c.close();
   });
 });
+
+describe('importPtz with the move start (final review 2): the moved set wins, positions saved here since stay', () => {
+  const START = 5000;
+  const local = (n: number, o: Partial<PtzPositionRow> = {}): PtzPositionRow => ({ ...wire(n), id: id(100 + n), cam: 'cam4', name: `Here ${n}`, slot: 40 + n, preset_name: `here${n}`, created_at: START + 10, updated_at: START + 10, ...o });
+  it('imported rows first in their order, then the rows saved here since the move began; one home (the imported one); stale rows dropped', () => {
+    const c = fresh();
+    insertPosition(c, local(0, { home: 1, sort_order: 0, created_at: 1, updated_at: 1, name: 'Stale' }));
+    insertPosition(c, local(1, { home: 0, sort_order: 1 }));
+    insertPosition(c, local(2, { home: 0, sort_order: 2, slot: 1, name: 'Slot clash' }));
+    insertPosition(c, local(3, { home: 0, sort_order: 3, name: 'spot 0' }));
+    expect(importPtz(c, 'cam4', [{ table: PTZ_TABLE, rows: set(2) }], START)).toEqual({ inserted: 2 });
+    const rows = listPositions(c, 'cam4');
+    expect(rows.map((r) => r.id)).toEqual([id(0), id(1), id(101)]);
+    expect(rows.map((r) => r.sort_order)).toEqual([0, 1, 2]);
+    expect(rows.filter((r) => r.home === 1).map((r) => r.id)).toEqual([id(0)]);
+    c.close();
+  });
+  it('no imported rows: the rows saved here stay, with one home', () => {
+    const c = fresh();
+    insertPosition(c, local(1, { home: 0, sort_order: 0 }));
+    insertPosition(c, local(2, { home: 0, sort_order: 1 }));
+    importPtz(c, 'cam4', [], START);
+    const rows = listPositions(c, 'cam4');
+    expect(rows.map((r) => [r.id, r.sort_order, r.home])).toEqual([[id(101), 0, 1], [id(102), 1, 0]]);
+    c.close();
+  });
+});

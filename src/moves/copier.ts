@@ -68,8 +68,10 @@ export interface CopierDeps {
   now?: () => number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   bucket?: TokenBucket;
-  // A moved camera's PTZ positions were replaced (plan D): its worker reads them again.
-  ptzImported?: (cam: string) => void;
+  // A moved camera's PTZ positions are imported under that camera's positions
+  // lock when it runs here (PtzPositions.locked: its slots read again, the
+  // stream message sent); without it fn runs as is.
+  ptzLocked?: <T>(cam: string, fn: () => T) => Promise<T>;
   timing?: { retryMs?: number; retryCapMs?: number; pausedPollMs?: number; refreshPollMs?: number; refreshWaitMs?: number; saveEveryMs?: number; idleMs?: number };
 }
 
@@ -560,8 +562,9 @@ export class Copier {
     for (let i = 0; i < ATTEMPTS && !imported; i++) {
       try {
         // The PTZ positions replace the camera's (checked first: invalid rows fail the chunk).
+        const ptz = () => ({ ...importPtz(this.d.catalog, this.r.camera, rows, this.r.startedAt), skipped: 0, failed: 0, map: {} });
         imported = c.kind === 'ptz'
-          ? { ...importPtz(this.d.catalog, this.r.camera, rows), skipped: 0, failed: 0, map: {} }
+          ? await (this.d.ptzLocked ? this.d.ptzLocked(this.r.camera, ptz) : ptz())
           : importRows(this.paths, this.r.camera, rows, verified, prev?.imported, { moveId: this.r.id, from: { proxyId: this.r.peer.proxyId, name: this.r.peer.name }, at: this.now() });
       } catch {
         logger.warn({ moveId: this.r.id, chunkId: c.id }, 'move_copy_import_failed');
@@ -577,13 +580,6 @@ export class Copier {
       // The rows could not be imported 3 times: the chunk fails (counted, audited).
       n.f++;
       return this.endChunk(c, n, o, undefined, [], true);
-    }
-    if (c.kind === 'ptz') {
-      try {
-        this.d.ptzImported?.(this.r.camera);
-      } catch {
-        // the positions are stored; the worker reads them at its next use
-      }
     }
     this.endChunk(c, n, o, imported, [...vf]);
   }

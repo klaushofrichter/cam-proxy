@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { openCatalog, type Catalog } from '../src/catalog/db';
 import { listPositions } from '../src/catalog/ptz-positions';
+import { importPtz, PTZ_TABLE } from '../src/moves/ptz';
 import { presetName, PRESET_SLOTS, type PresetSlot, type ReolinkPtz } from '../src/camera/ptz';
 import { MoveLease } from '../src/ptz/lease';
 import { checkName, freeSlot, positionState, PtzError, PtzPositions } from '../src/ptz/positions';
@@ -325,5 +326,37 @@ describe('PtzPositions', () => {
     await svc.remove(a.id);
     await svc.goTo(b.id);
     expect(changes).toBe(7);
+  });
+});
+
+describe('a moved camera\'s positions imported under the lock (final review 2)', () => {
+  it('a save racing the import: the import waits for it; one home, order 0..n-1, nothing lost; the cache is read again', async () => {
+    const start = now - 1;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const orig = cam.savePreset.bind(cam);
+    cam.savePreset = async (slot: number, name: string) => {
+      await gate;
+      return orig(slot, name);
+    };
+    const saving = svc.save('Porch');
+    const imported = [0, 1].map((i) => ({ id: `pos_00000000000000b${i}`, name: `Moved ${i}`, sort_order: i, home: (i === 0 ? 1 : 0) as 0 | 1, slot: 10 + i, preset_name: `moved${i}`, created_at: 1, updated_at: 1 }));
+    let ran = false;
+    const importing = svc.locked(() => {
+      ran = true;
+      return importPtz(catalog, 'e1', [{ table: PTZ_TABLE, rows: imported }], start);
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(ran).toBe(false);
+    release();
+    const porch = await saving;
+    await importing;
+    const rows = listPositions(catalog, 'e1');
+    expect(rows.map((r) => r.id)).toEqual(['pos_00000000000000b0', 'pos_00000000000000b1', porch.id]);
+    expect(rows.map((r) => r.sort_order)).toEqual([0, 1, 2]);
+    expect(rows.filter((r) => r.home === 1)).toHaveLength(1);
+    const reads = cam.reads;
+    await svc.list();
+    expect(cam.reads).toBe(reads + 1);
   });
 });
