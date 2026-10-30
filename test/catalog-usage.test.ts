@@ -50,7 +50,7 @@ describe('analytics_usage per key and camera (spec §5.1)', () => {
 
   it('migration 9 keeps the Pi month: legacy rows get key "" and the one camera', () => {
     const c = openCatalog(version8([['google-vision', '2026-10-04', 14], ['google-vision:check', '2026-10-04', 2]]));
-    expect(c.schemaVersion()).toBe(9);
+    expect(c.schemaVersion()).toBe(10);
     expect(usageBetween(c, 'google-vision', '2026-10-01', '2026-10-31')).toBe(14);
     expect(adoptLegacyUsage(c, ['cam1'])).toBe(2);
     expect(usageByCamera(c, 'google-vision', '2026-10-04', '2026-10-04')).toEqual({ cam1: 14 });
