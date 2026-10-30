@@ -12,6 +12,7 @@ import { dirname, join } from 'path';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { cameraPasswordStore } from '../src/config/camera-passwords';
+import { listPositions, replaceCameraPositions } from '../src/catalog/ptz-positions';
 import { writeKeyFile } from '../src/fleet/keyfile';
 import { writePrivateJson } from '../src/fleet/private-file';
 import { newId, type Envelope } from '../src/fleet/protocol';
@@ -90,6 +91,10 @@ let sourceId = '';
 let targetId = '';
 let sourceFtp = 0;
 let targetFtp = 0;
+// The source's managed env file (CAMPROXY_ENV_FILE, plan D): the moved camera's password line goes at the end.
+let sourceEnvFile = '';
+const ENV_OTHER = '# the proxy\nCOMPOSE_PROJECT_NAME=cams\n';
+const ENV_TAIL = 'export OTHER_SETTING=1\n';
 
 // cams-admin's side: a command to one proxy, its final answer (must be ok and match its result schema).
 const run = async (fake: FakeAdmin, command: string, args: Record<string, unknown>) => {
@@ -125,7 +130,10 @@ function world(title: string, tests: () => void): void {
       sourceId = sk.proxyId;
       writeKeyFile(join(sdir, 'data', 'admin', 'key.json'), sk);
       writePrivateJson(join(sdir, 'data', 'admin', 'policy.json'), { v: 1, allow: ['move.send'], consent: 3, changedAt: 1, changedBy: 'local' });
-      S = await startMultiProxy(sims, { dir: sdir, https: true, env: { CAMPROXY_FTP_PASSWORD: SOURCE_FTP_PASSWORD }, proxy: timing, settings: { tls: TLS('s'), camsAdmin: { url: fakeS.url }, ftp: await ftp(sourceFtp) } });
+      sourceEnvFile = join(sdir, '.env');
+      writeFileSync(sourceEnvFile, `${ENV_OTHER}CAMPROXY_CAMERA_PASSWORD_CAM3=test-only\n${ENV_TAIL}`);
+      // As compose's env_file would: the process environment has the camera's password too.
+      S = await startMultiProxy(sims, { dir: sdir, https: true, env: { CAMPROXY_FTP_PASSWORD: SOURCE_FTP_PASSWORD, CAMPROXY_ENV_FILE: sourceEnvFile, CAMPROXY_CAMERA_PASSWORD_CAM3: sims[0].password }, proxy: timing, settings: { tls: TLS('s'), camsAdmin: { url: fakeS.url }, ftp: await ftp(sourceFtp) } });
       // The target has a camera of its own and a default camera password that is not the sim's.
       const tdir = mkdtempSync(join(tmpdir(), 'camproxy-e2e-tgt-'));
       const tk = fakeT.keyFile();
@@ -156,6 +164,12 @@ world('a camera move end to end (two proxies, one cam-sim)', () => {
   it('moves cam3 with its content from the source to the target', async () => {
     const before = seeded(S);
     expect(before).toEqual({ clips: 2, events: 2, stills: 4 });
+    // Plan D: cam3's PTZ positions travel with it.
+    const T0 = Date.UTC(2026, 9, 29, 8);
+    const positions = [0, 1, 2].map((i) => ({ id: `pos_00000000000000c${i}`, cam: 'cam3', name: ['Gate', 'Drive', 'Porch'][i], sort_order: [1, 0, 2][i], home: (i === 1 ? 1 : 0) as 0 | 1, slot: i + 2, preset_name: ['gate', 'drive', 'porch'][i], created_at: T0, updated_at: T0 + i }));
+    replaceCameraPositions(S.proxy.catalog, 'cam3', positions);
+    const sourcePositions = listPositions(S.proxy.catalog, 'cam3');
+    expect(sourcePositions).toHaveLength(3);
     const ownLeaf = S.proxy.certs!.state('cam3').fingerprint!;
     const admin = auth(ADMIN_TOKEN);
 
@@ -180,14 +194,15 @@ world('a camera move end to end (two proxies, one cam-sim)', () => {
     });
     expect(offer).toMatchObject({ accept: true, space: { fits: true } });
     expect(offer.probeBps).toBeGreaterThan(0);
+    expect(offer.kinds).toContain('ptz');
 
-    // 3. move.answer to the source with cams-admin's estimate.
+    // 3. move.answer to the source with cams-admin's estimate (and the kinds the target takes, relayed).
     const summary = req.summary as MoveSummary;
     const kinds = (['stills', 'clips', 'events'] as const).filter((k) => summary[k].files + summary[k].rows > 0);
     expect(kinds).toEqual(['stills', 'clips', 'events']);
     const bytes = kinds.reduce((n, k) => n + summary[k].bytes, 0);
     const estimateS = Math.max(1, Math.ceil(bytes / offer.probeBps));
-    await run(fakeS, 'move.answer', { v: 1, moveId, requestId, target: { proxyId: targetId, name: 'Mini PC' }, accept: true, space: offer.space as Space, estimateS });
+    await run(fakeS, 'move.answer', { v: 1, moveId, requestId, target: { proxyId: targetId, name: 'Mini PC' }, accept: true, space: offer.space as Space, estimateS, kinds: offer.kinds });
 
     // 4. The admin approves on the source's page: the move.approve event carries the plan. The copy
     // fills its budget (S §8.3): 20 s for these few kB.
@@ -195,6 +210,7 @@ world('a camera move end to end (two proxies, one cam-sim)', () => {
     await request(S.base).post(`/control/moves/${moveId}/approve`).set(admin).send({ plan }).expect(202);
     await until(() => events(fakeS, 'move.approve').some((e) => e.moveId === moveId), 10_000);
     const approved = events(fakeS, 'move.approve').find((e) => e.moveId === moveId)!.plan as MovePlan;
+    expect(approved.kinds).toEqual([...kinds, 'ptz']);
 
     // 5. move.start to the target; its key and leaf go to the source in move.go (the plan as approved).
     const started = await run(fakeT, 'move.start', { v: 1, moveId, plan: approved, settings: req.settings, done: [] });
@@ -267,6 +283,16 @@ world('a camera move end to end (two proxies, one cam-sim)', () => {
     expect(S.proxy.cameras.get('cam3')).toBeUndefined();
     expect(S.proxy.certs!.expected('cam3')).toBeNull();
     expect(S.proxy.certs!.state('cam3').fingerprint).not.toBe(ownLeaf);
+    // Plan D: the positions moved (replaced on the target), the source has none and cleaned its env file.
+    const strip = (rows: typeof sourcePositions) => rows.map(({ id, name, sort_order, home, slot, preset_name }) => ({ id, name, sort_order, home, slot, preset_name }));
+    expect(strip(listPositions(T.proxy.catalog, 'cam3'))).toEqual(strip(sourcePositions));
+    expect(listPositions(S.proxy.catalog, 'cam3')).toEqual([]);
+    expect(readFileSync(sourceEnvFile, 'utf8')).toBe(`${ENV_OTHER}${ENV_TAIL}`);
+    const cleanup = auditText(S).split('\n').filter(Boolean).map((l) => JSON.parse(l) as { event?: { action?: string }; cam_proxy?: Record<string, any> }).find((r) => r.event?.action === 'move-cleanup')!;
+    expect(cleanup.cam_proxy).toMatchObject({ ptzPositions: 3, env: { outcome: 'removed', key: 'CAMPROXY_CAMERA_PASSWORD_CAM3' } });
+    // What is left: the hidden config.json entry, and the password the process still has until the container is recreated.
+    const status = (await request(S.base).get('/control/status').set(admin).expect(200)).body;
+    expect(status.moveLeftovers).toEqual([{ camera: 'cam3', moveId, items: ['config.json entry', 'env CAMPROXY_CAMERA_PASSWORD_CAM3'] }]);
     // Both journals closed, both sides reported finished.
     expect(new MoveJournal(join(S.dir, 'data', 'admin', 'moves')).load(moveId)).toBeNull();
     expect(new MoveJournal(join(T.dir, 'data', 'admin', 'moves')).load(moveId)).toBeNull();

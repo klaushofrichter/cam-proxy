@@ -1,4 +1,5 @@
 import express, { type Response } from 'express';
+import type { MoveLeftover } from '../moves/leftovers';
 import { rateLimit } from 'express-rate-limit';
 import type { Catalog } from '../catalog/db';
 import type { CameraState } from '../camera/status';
@@ -79,6 +80,8 @@ export interface ControlDeps {
   loaded: () => Loaded;
   // The proxy profile report (cams-admin spec 2026-10-25-proxy-profile-design §2).
   profile: () => ProfileReport;
+  // What cameras that moved away left here that this proxy can't remove (plan D).
+  moveLeftovers?: () => MoveLeftover[];
   // Camera moves (final review 1): whether the move that hid a camera
   // (`cameras.<id>.moved`) still has a journal record here, or moved the
   // camera away for good; clearing `moved` is then refused (only the move
@@ -295,6 +298,13 @@ export function controlApi(d: ControlDeps): express.Router {
     res.status(201).json(link);
   });
 
+  const leftoversNow = (): MoveLeftover[] => {
+    try {
+      return d.moveLeftovers?.() ?? [];
+    } catch {
+      return [];
+    }
+  };
   r.get('/status', async (_req, res) => {
     const health = await d.health();
     // The first camera's parts are its block's (built once); without a camera, the placeholders.
@@ -315,6 +325,7 @@ export function controlApi(d: ControlDeps): express.Router {
       health,
       archive: d.archive.status(),
       cameras,
+      moveLeftovers: leftoversNow(),
     });
   });
 

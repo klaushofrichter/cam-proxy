@@ -136,11 +136,52 @@ const stamp = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace('T', '-'
 export function writeEnvKey(path: string, keys: string | string[], value: string, now = new Date()): { key: string; previous: string | null; backup: string } {
   const names = Array.isArray(keys) ? keys : [keys];
   checkEnvPath(path);
-  const dir = dirname(path);
   const text = readFileSync(path, 'utf8');
   const key = names.find((k) => readEnvValue(text, k) !== undefined) ?? names[names.length - 1];
   const previous = readEnvValue(text, key) ?? null;
   const next = setEnvLine(text, key, value);
+  return { key, previous, backup: replaceEnvFile(path, next, now) };
+}
+
+// The text without `key`'s assignment lines (each with its line end); every
+// other byte stays, comments that mention the key too.
+export function withoutEnvKey(text: string, key: string): string {
+  let out = '';
+  let at = 0;
+  for (const a of assignments(text, key)) {
+    out += text.slice(at, a.start);
+    at = a.end + a.eol.length;
+  }
+  return out + text.slice(at);
+}
+
+// Removes every assignment of `key` from the env file (a moved camera's
+// password, plan D): the new text to a temp file and a rename over the file,
+// without a backup (that would keep the credential), and the key's lines
+// removed from the older backups too, so no file here holds it any more.
+// null when the file sets none (nothing written).
+export function removeEnvKey(path: string, key: string, _now = new Date()): { removed: number } | null {
+  checkEnvPath(path);
+  const text = readFileSync(path, 'utf8');
+  const removed = assignments(text, key).length;
+  if (removed === 0) return null;
+  writeAtomic(path, withoutEnvKey(text, key));
+  const dir = dirname(path);
+  for (const name of readdirSync(dir)) {
+    if (!backupKey(name, basename(path))) continue;
+    const b = join(dir, name);
+    const t = readFileSync(b, 'utf8');
+    if (assignments(t, key).length) writeAtomic(b, withoutEnvKey(t, key));
+  }
+  return { removed };
+}
+
+// A backup of the file first (.env.bak-YYYYMMDD-HHMMSS, UTC, the file's
+// mode), then `next` to a temp file in the same directory and a rename over
+// the file; then only the newest KEEP_BACKUPS backups stay. Answers the
+// backup's file name.
+function replaceEnvFile(path: string, next: string, now: Date): string {
+  const dir = dirname(path);
   const mode = lstatSync(path).mode & 0o777;
   // The backup: never over an older one; in the same second, numbered after
   // the highest existing one (pruning leaves gaps that must not be reused).
@@ -171,6 +212,15 @@ export function writeEnvKey(path: string, keys: string | string[], value: string
     }
   }
   chmodSync(join(dir, backup), mode);
+  writeAtomic(path, next);
+  pruneBackups(dir, basename(path));
+  return backup;
+}
+
+// `next` to a temp file in the file's directory (the file's mode) and a rename over it.
+function writeAtomic(path: string, next: string): void {
+  const dir = dirname(path);
+  const mode = lstatSync(path).mode & 0o777;
   const tmp = join(dir, `${basename(path)}.tmp-${process.pid}`);
   try {
     const fd = openSync(tmp, 'wx', mode);
@@ -190,8 +240,7 @@ export function writeEnvKey(path: string, keys: string | string[], value: string
     }
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'EBUSY' || code === 'EXDEV') throw new EnvFileError('is_a_mount', 'the env file is mounted on its own; mount its directory instead');
+    if (code === 'EACCES' || code === 'EROFS' || code === 'EPERM') throw new EnvFileError('not_writable', `the env file's directory is not writable (${code}); mount the directory, not the file`);
     throw new EnvFileError('write_failed', `the env file could not be written (${code ?? 'error'})`);
   }
-  pruneBackups(dir, basename(path));
-  return { key, previous, backup };
 }

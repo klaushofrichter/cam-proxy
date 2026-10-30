@@ -1,0 +1,31 @@
+{
+  "$note": "the completeness check counts ptz too",
+  "schema": "event",
+  "message": {
+    "v": 1,
+    "type": "event",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "kind": "move.phase",
+      "moveId": "mv_0123456789ABCDEFGHJK",
+      "role": "target",
+      "phase": "copied",
+      "ok": false,
+      "check": {
+        "complete": false,
+        "missing": {},
+        "recovered": {},
+        "failed": {
+          "ptz": 1
+        },
+        "expired": {}
+      },
+      "keepDays": 30
+    },
+    "sig": "d4Bn0ipF8RpyROP2bRaLpDzTDTd26ePB5D2xTOumZQzFtoS5rq4t+exho8uucKca5ZoU5yqKpkihuK8W2CEYCQ=="
+  }
+}

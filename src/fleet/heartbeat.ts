@@ -1,5 +1,6 @@
 import type { HealthSummary } from '../health/summary';
 import type { ProfileReport } from '../health/profile';
+import type { MoveLeftover } from '../moves/leftovers';
 
 // The heartbeat body (spec 2026-10-06-cams-admin-phase1-design §8.5, §9.3):
 // the health summary exactly as GET /api/local/health has it, the proxy
@@ -49,11 +50,21 @@ function info(i: HeartbeatProxyInfo): HeartbeatProxyInfo {
 // `profile` (cams-admin spec 2026-10-25-proxy-profile-design §2, optional):
 // the proxy profile report, already within the contract's bounds; kept when
 // the body is truncated (it is small).
-export function buildHeartbeat(summary: HealthSummary, proxy: HeartbeatProxyInfo, maxBytes = HEARTBEAT_MAX_BYTES, profile?: ProfileReport | null): { body: Record<string, unknown>; truncated: boolean; bytes: number } {
+// What a camera that moved away left behind (plan D), as the contract takes
+// it: at most 16 entries of at most 4 items, each at most 80 characters.
+const LEFTOVER_ENTRIES = 16;
+const LEFTOVER_ITEMS = 4;
+const LEFTOVER_TEXT = 80;
+const leftoversOf = (l: MoveLeftover[]): MoveLeftover[] =>
+  l.slice(0, LEFTOVER_ENTRIES).map((e) => ({ camera: e.camera, moveId: e.moveId, items: e.items.slice(0, LEFTOVER_ITEMS).map((i) => i.slice(0, LEFTOVER_TEXT)) })).filter((e) => e.items.length > 0);
+
+// `moveLeftovers`: in the body only when there are some (also when truncated).
+export function buildHeartbeat(summary: HealthSummary, proxy: HeartbeatProxyInfo, maxBytes = HEARTBEAT_MAX_BYTES, profile?: ProfileReport | null, moveLeftovers?: MoveLeftover[]): { body: Record<string, unknown>; truncated: boolean; bytes: number } {
   const s = clamp(summary);
   s.version = s.version.slice(0, VERSION_MAX);
   const p = info(proxy);
-  const extra = profile ? { profile } : {};
+  const left = leftoversOf(moveLeftovers ?? []);
+  const extra = { ...(profile ? { profile } : {}), ...(left.length ? { moveLeftovers: left } : {}) };
   const full = { summary: s, proxy: p, truncated: false, ...extra };
   const text = JSON.stringify(full);
   if (Buffer.byteLength(text) <= maxBytes) return { body: full, truncated: false, bytes: Buffer.byteLength(text) };

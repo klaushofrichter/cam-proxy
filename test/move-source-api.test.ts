@@ -13,6 +13,7 @@ import { movesSourceApi, type MovesSourceDeps } from '../src/api/moves-api';
 import { AuditLog } from '../src/audit/audit-log';
 import { openCatalog } from '../src/catalog/db';
 import { MoveJournal, type MoveRecord } from '../src/moves/journal';
+import { insertPosition } from '../src/catalog/ptz-positions';
 import { listChunks } from '../src/moves/inventory';
 import { removeManifestCache } from '../src/moves/manifest-cache';
 import { unseal } from '../src/moves/seal';
@@ -92,7 +93,7 @@ async function fixture(o: { phase?: MoveRecord['phase']; busy?: boolean; journal
     r.approvedAt = D2;
   });
   return {
-    dataDir, journal, put, base, records, update, freeze, audit, wrongAddress,
+    dataDir, catalog, inventory, journal, put, base, records, update, freeze, audit, wrongAddress,
     setNow: (t: number) => void (now = t),
     setBusy: (b: boolean) => void (busy = b),
     get: (path: string, o2: { ip?: string; token?: string | null } = {}) => {
@@ -334,6 +335,20 @@ describe('the source endpoints', () => {
     const res = await f.get(`/api/moves/${MOVE}/chunks/clips:2026-10-01/rows`);
     expect(res.status).toBe(200);
     expect(res.body).toEqual([{ table: 'clips', rows: [expect.objectContaining({ path: 'clips/cam3/2026/10/01/1200-1.mp4', cam: 'cam3' })] }]);
+  });
+
+  it('the manifest route serves a ptz chunk with no files', async () => {
+    const f = await fixture();
+    const D = Date.UTC(2026, 9, 30, 8);
+    insertPosition(f.catalog, { id: 'pos_0123456789abcdef', cam: 'cam3', name: 'Gate', sort_order: 0, home: 1, slot: 0, preset_name: 'gate', created_at: D, updated_at: D });
+    f.update((r) => {
+      r.plan = { transfer: false, kinds: ['ptz'], space: 'all', targetSettings: null, budgetS: 3600, estimateS: 0 };
+      r.manifest = listChunks(f.inventory, 'cam3', ['ptz']);
+      r.approvedAt = D2;
+    });
+    expect((await f.get(`/api/moves/${MOVE}/manifest`)).body.chunks).toEqual([{ id: 'ptz:2026-10-30', kind: 'ptz', day: '2026-10-30', files: 0, bytes: 0, rows: 1 }]);
+    expect((await f.get(`/api/moves/${MOVE}/chunks/ptz:2026-10-30`)).body).toEqual({ files: [], rows: 1, expired: 0 });
+    expect((await f.get(`/api/moves/${MOVE}/chunks/ptz:2026-10-30/rows`)).body).toEqual([{ table: 'ptz_positions', rows: [{ id: 'pos_0123456789abcdef', name: 'Gate', sort_order: 0, home: 1, slot: 0, preset_name: 'gate', created_at: D, updated_at: D }] }]);
   });
 
   it('file serves a listed file, with ranges', async () => {

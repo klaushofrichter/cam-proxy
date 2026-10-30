@@ -105,6 +105,8 @@ export interface MoveRecord {
   approvedAt?: number;
   budgetS?: number;
   budgetExceeded?: boolean;
+  // Source: the camera's PTZ positions at the approval and whether they go with it (plan D).
+  positions?: { count: number; travel: 'carried' | 'not_taken' | 'none' };
   // target: the rate the offer's probe measured (0: none), when copying began, the last rate before halving.
   probeBps?: number;
   copyStartedAt?: number;

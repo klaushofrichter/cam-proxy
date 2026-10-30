@@ -25,6 +25,9 @@ describe('the known audit actions', () => {
   it('includes the move check and a refused outcome report (written through a typed helper)', () => {
     for (const a of ['move-check', 'move-outcome-refused']) expect(AUDIT_ACTIONS).toContain(a);
   });
+  it('includes the PTZ position changes (spec 2026-10-30-ptz-capabilities-design §5.2)', () => {
+    expect(AUDIT_ACTIONS).toContain('ptz-position');
+  });
   it('the Audit page offers the same list', () => {
     expect([...ACTIONS]).toEqual([...AUDIT_ACTIONS]);
   });

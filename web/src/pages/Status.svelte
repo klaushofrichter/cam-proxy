@@ -18,6 +18,7 @@
   import CertificatesSummary from '../components/CertificatesSummary.svelte';
   import CamsAdminSummary from '../components/CamsAdminSummary.svelte';
   import MoveStatusCard from '../components/MoveStatusCard.svelte';
+  import MoveLeftoversCard from '../components/MoveLeftoversCard.svelte';
   import ProfileCard from '../components/ProfileCard.svelte';
   import { loadMoves, moves } from '../lib/move-state';
   import { isActive } from '../lib/moves';
@@ -91,6 +92,7 @@
       <!-- Until the proxy profile is set, or while it warns (cams-admin spec 2026-10-25-proxy-profile-design §0). -->
       <ProfileCard home />
       {#each activeMoves as m (m.id)}<MoveStatusCard move={m} name={$status.cameras?.find((c) => c.id === m.camera)?.camera.name ?? m.camera} />{/each}
+      {#if $status.moveLeftovers?.length}<MoveLeftoversCard leftovers={$status.moveLeftovers} />{/if}
       <div class="card" data-testid="card-camera">
         <h3>Camera</h3>
         <dl>

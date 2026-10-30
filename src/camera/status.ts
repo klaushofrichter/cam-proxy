@@ -32,7 +32,9 @@ function clockOffset(t: GetTime, now: number): number | undefined {
 
 // Checks the camera every `intervalS`. Two failures in a row mean offline, one
 // success means online; 'change' fires only when `online` flips, 'name'
-// (the new name) only when the camera's name changes, the first read included.
+// (the new name) only when the camera's name changes, the first read included;
+// 'device' ({model, firmware}) when a check reads another model or firmware
+// than the last known one (not on the first read).
 export class StatusPoller extends EventEmitter {
   private current: CameraState;
   private failures = 0;
@@ -110,8 +112,10 @@ export class StatusPoller extends EventEmitter {
     const flipped = next.online !== this.current.online;
     const renamed = next.name !== undefined && next.name !== this.current.name;
     const since = flipped ? this.now() : this.current.since;
+    const device = next.online && this.current.model !== undefined && (next.model !== this.current.model || next.firmware !== this.current.firmware);
     this.current = { ...next, since };
     if (flipped) this.emit('change', this.state());
     if (renamed) this.emit('name', next.name);
+    if (device) this.emit('device', { model: next.model ?? '', firmware: next.firmware ?? '' });
   }
 }

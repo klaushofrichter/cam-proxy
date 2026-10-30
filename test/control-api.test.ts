@@ -38,6 +38,10 @@ describe('control API: auth', () => {
     expect((await request(p.base).get('/control/status').set(admin())).status).toBe(200);
   });
 
+  it('status lists moveLeftovers ([] when none)', async () => {
+    expect((await request(p.base).get('/control/status').set(admin())).body.moveLeftovers).toEqual([]);
+  });
+
   it('lets the admin token and an admin session read the client API', async () => {
     expect((await request(p.base).get('/api/cameras').set(admin())).status).toBe(200);
     const cookie = await login();

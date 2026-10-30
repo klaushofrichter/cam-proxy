@@ -1,7 +1,8 @@
 import { mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'fs';
 import { openCatalog } from '../src/catalog/db';
 import { loadConfig } from '../src/config/load';
 import { StreamLog } from '../src/stream/log';
@@ -196,4 +197,101 @@ describe('supervision (spec §3.3)', () => {
     await w.stop();
     catalog.close();
   }, 20_000);
+});
+
+describe('capabilities (spec 2026-10-30-ptz-capabilities-design §4)', () => {
+  const e1Ability = () => JSON.parse(readFileSync(join(__dirname, 'fixtures', 'abilities', 'e1-outdoor-pro.json'), 'utf8')) as unknown;
+
+  it('capabilities: null before the first read, {schema:1, ptz:null} once online (RLC-1224A sim)', async () => {
+    const { w, catalog } = worker();
+    expect(w.capabilities()).toBeNull();
+    await w.start();
+    await until(() => w.capabilities() !== null);
+    expect(w.capabilities()).toEqual({ schema: 1, ptz: null });
+    await w.stopRecordings();
+    await w.stop();
+    catalog.close();
+  });
+
+  it('a changed capability appends one camera message with capabilities; an unchanged read appends nothing', async () => {
+    const { w, catalog } = worker();
+    const log = (w as unknown as { d: { log: import('../src/stream/log').StreamLog } }).d.log;
+    await w.start();
+    await until(() => w.capabilities() !== null);
+    const before = log.latest('cam1', 'camera')?.id ?? 0;
+    await w.refreshCapabilities();
+    expect(log.latest('cam1', 'camera')?.id ?? 0).toBe(before);
+    const real = w.client.command.bind(w.client);
+    vi.spyOn(w.client, 'command').mockImplementation(((cmd: string, param?: object) => (cmd === 'GetAbility' ? Promise.resolve(e1Ability()) : real(cmd, param))) as typeof w.client.command);
+    await w.refreshCapabilities();
+    const msg = log.latest('cam1', 'camera');
+    expect(msg!.id).toBeGreaterThan(before);
+    expect(msg!.data.capabilities).toEqual({ schema: 1, ptz: { move: true, zoom: true, focus: true, speed: true, positions: { max: 20 } } });
+    expect(msg!.data.address).toBe(sim.camera.host);
+    const id = msg!.id;
+    await w.refreshCapabilities();
+    expect(log.latest('cam1', 'camera')!.id).toBe(id);
+    vi.restoreAllMocks();
+    await w.stopRecordings();
+    await w.stop();
+    catalog.close();
+  });
+
+  it('a read that ends after stop() writes nothing (the catalog may be closed by then)', async () => {
+    const { w, catalog } = worker();
+    let answer!: (v: unknown) => void;
+    vi.spyOn(w.client, 'command').mockImplementation((() => new Promise<unknown>((r) => (answer = r))) as typeof w.client.command);
+    const reading = w.refreshCapabilities();
+    await w.stopRecordings();
+    await w.stop();
+    catalog.close();
+    answer(e1Ability());
+    await expect(reading).resolves.toBeUndefined();
+    expect(w.capabilities()).toBeNull();
+    vi.restoreAllMocks();
+  });
+
+  it('a failed read keeps the previous value', async () => {
+    const { w, catalog } = worker();
+    await w.start();
+    await until(() => w.capabilities() !== null);
+    vi.spyOn(w.client, 'command').mockRejectedValue(new Error('boom'));
+    await w.refreshCapabilities();
+    expect(w.capabilities()).toEqual({ schema: 1, ptz: null });
+    vi.restoreAllMocks();
+    await w.stopRecordings();
+    await w.stop();
+    catalog.close();
+  });
+});
+
+describe('PTZ side (spec 2026-10-30-ptz-capabilities-design §5.1)', () => {
+  it('stopParts sends Stop while a move is leased', async () => {
+    const { w, catalog } = worker();
+    await w.start();
+    await until(() => w.status.state().online);
+    const real = w.client.command.bind(w.client);
+    const sent: unknown[] = [];
+    vi.spyOn(w.client, 'command').mockImplementation(((cmd: string, param?: object) => (sent.push([cmd, param]), real(cmd, param))) as typeof w.client.command);
+    await w.ptz.lease.move(async () => undefined, 2000);
+    await w.stopRecordings();
+    await w.stop();
+    // The RLC-1224A sim refuses PtzCtrl; halt swallows that.
+    expect(sent).toContainEqual(['PtzCtrl', { channel: 0, op: 'Stop' }]);
+    expect(w.ptz.lease.active()).toBe(false);
+    vi.restoreAllMocks();
+    catalog.close();
+  });
+
+  it('coming online drops the cached preset read', async () => {
+    const { w, catalog } = worker();
+    const inv = vi.spyOn(w.ptz.positions, 'invalidate');
+    await w.start();
+    await until(() => w.status.state().online);
+    await until(() => inv.mock.calls.length > 0);
+    vi.restoreAllMocks();
+    await w.stopRecordings();
+    await w.stop();
+    catalog.close();
+  });
 });

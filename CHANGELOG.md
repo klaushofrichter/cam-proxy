@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- New: pan, tilt and zoom. Each camera in the camera list now says what it can do (`capabilities`; for now whether and how it can move), and the proxy offers a PTZ API under `/api/cameras/{cam}/ptz`: moves that stop by themselves (a closed browser tab leaves the camera stopped within 2 s), zoom, focus, and up to 20 saved positions per camera with a Home position, kept on the proxy and on the camera. Works with the Reolink E1 Outdoor Pro; presets saved with the camera's own app are left alone, and a position the camera lost shows as missing until saved again. Position changes are audited (`ptz-position`) and sent to stream clients (`ptz-positions`). `scripts/ptz-real-check.sh` checks a real PTZ camera through a proxy (the camera moves while it runs).
+- Camera moves: a camera's saved PTZ positions now move with it, when the other proxy runs this version too (needs the cams-admin release that knows them); otherwise the move says they stay behind, and they stay saved on the camera. At the end the proxy the camera left also deletes its positions and removes the camera's password line from its `.env` and that file's backups (on the Pi). What it can't remove itself (a `config.json` entry, a password in compose's environment) is listed under "Left over from camera moves" on the Status page, with what to do, and shown in cams-admin.
+
+## v2026.10.27.1
+
 - Proxy profile: with FTP on, `profile.cameras` now goes up to 64, as it already did with FTP off. It was capped at 10 because `ftp.passive` could span at most 100 ports; it now spans up to 640 (10 per camera). The derived range grows with it (for 20 cameras `30000-30199`); open those ports on the host's firewall when you raise the count. The firewall lines in the profile report stay at most 64, so they cover the first 32 cameras with FTP.
 - Cluster proxy (`deploy/cluster/config.json`): HTTPS on 8443 with the site CA's proxy certificate (`proxy.cluster.internal`). The cluster cams reached it over plain http, and cams refuses a CA pin over http, so after the pin was set cams refused the proxy entry and cam2 showed a certificate error.
 

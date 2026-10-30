@@ -14,7 +14,7 @@ async function setup(password = 'p') {
   await new Promise((r) => server!.once('listening', r));
   const host = `127.0.0.1:${(server.address() as AddressInfo).port}`;
   const client = new ReolinkClient({ id: 'cam1', host, protocol: 'http', user: 'u', password });
-  return { state: sim.state as SimState, poller: new StatusPoller(client, 0.05) };
+  return { state: sim.state as SimState, sim: sim.sim, poller: new StatusPoller(client, 0.05) };
 }
 
 describe('StatusPoller', () => {
@@ -57,5 +57,19 @@ describe('StatusPoller', () => {
     expect(s.online).toBe(false);
     expect(s.error).toBeTruthy();
     expect(JSON.stringify(s)).not.toContain('wrong-secret-pw');
+  });
+
+  it("'device' fires when the firmware changes, not on the first read", async () => {
+    const { poller, sim } = await setup();
+    const seen: unknown[] = [];
+    poller.on('device', (d) => seen.push(d));
+    await poller.checkNow();
+    await poller.checkNow();
+    expect(seen).toEqual([]);
+    (sim.engine.config as { firmVer: string }).firmVer = 'v9.9.9.1_test';
+    await poller.checkNow();
+    expect(seen).toEqual([{ model: 'RLC-1224A', firmware: 'v9.9.9.1_test' }]);
+    await poller.checkNow();
+    expect(seen).toHaveLength(1);
   });
 });

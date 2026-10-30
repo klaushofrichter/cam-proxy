@@ -3,7 +3,7 @@
 // them against the vendored strict schemas on the fixtures.
 import { NEVER_REMOTE_ACTIONS, REMOTE_ACTIONS } from './policy';
 import { CAMERA_NAME_PATTERN } from './remote-settable';
-import { MOVE_KINDS, type MoveBounds, type MoveCopied, type MovePlan, type MoveRole, type MoveSummary, type Settings, type SettingsMap, type Space, type MoveReason } from '../moves/types';
+import { FILE_KINDS, MOVE_KINDS, type MoveKind, type MoveBounds, type MoveCopied, type MovePlan, type MoveRole, type MoveSummary, type Settings, type SettingsMap, type Space, type MoveReason } from '../moves/types';
 import type { ManagedToken, TokensApplyArgs } from './token-store';
 
 export type ArgsVerdict<T> = { ok: true; args: T } | { ok: false; code: 'unsupported_version' | 'invalid_args'; detail: string };
@@ -93,7 +93,7 @@ export const validateCameraName = (a: unknown) => v1<CameraNameArgs>(a, ['camera
 export interface MoveTargetsArgs { v: 1; requestId: string; targets: { proxyId: string; name: string; site: string | null }[] }
 export interface MoveOpenArgs { v: 1; moveId: string; requestId: string; camera: string; tokenHash: string; targetIp: string }
 export interface MoveOfferArgs { v: 1; moveId: string; token: string; source: { proxyId: string; name: string; url: string; caFingerprints: string[]; tlsServername: string }; camera: { camsId: string; proxyCameraId: string; name: string; host: string; protocol: 'https' | 'http'; user: string; onvifPort: number; rtspPort: number; baichuanPort: number }; summary: MoveSummary; settings: Settings }
-export interface MoveAnswerArgs { v: 1; moveId: string; requestId: string; target: { proxyId: string; name: string }; accept: boolean; reason?: MoveReason; detail?: string; space?: Space; estimateS?: number }
+export interface MoveAnswerArgs { v: 1; moveId: string; requestId: string; target: { proxyId: string; name: string }; accept: boolean; reason?: MoveReason; detail?: string; space?: Space; estimateS?: number; kinds?: MoveKind[] }
 export interface MoveStartArgs { v: 1; moveId: string; plan: MovePlan; settings: Settings; done: string[] }
 export interface MoveGoArgs { v: 1; moveId: string; plan: MovePlan; targetPublicKey: string; expectedLeaf: string }
 export interface MoveBeginArgs { v: 1; camera: string; target: string; bounds: MoveBounds | null }
@@ -112,7 +112,7 @@ const SITE = /^[a-z0-9][a-z0-9-]{0,30}$/;
 const FINGERPRINT = /^SHA256:[0-9A-F]{64}$/;
 // An X25519 public key as SPKI DER base64: the 12-byte prefix (MCowBQYDK2VuAyEA) and 32 bytes, 60 characters.
 export const X25519_SPKI = /^MCowBQYDK2VuAyEA[A-Za-z0-9+/]{43}=$/;
-const CHUNK_ID = /^(stills|clips|events|checks|archive):[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
+const CHUNK_ID = /^(stills|clips|events|checks|archive|ptz):[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
 const TOKEN_HASH = HASH;
 // Loose on purpose (the contract's pattern): never IP validation, the move code compares addresses itself.
 const TARGET_IP = /^[0-9A-Fa-f:.]{2,45}$/;
@@ -150,8 +150,8 @@ export function settingsProblem(s: unknown): string | null {
 }
 
 export function summaryProblem(s: unknown): string | null {
-  if (!closed(s, [...MOVE_KINDS])) return 'summary';
-  for (const k of MOVE_KINDS) {
+  if (!closed(s, [...FILE_KINDS])) return 'summary';
+  for (const k of FILE_KINDS) {
     const x = s[k];
     if (!closed(x, ['files', 'bytes', 'rows', 'oldest', 'newest']) || !nat(x.files) || !nat(x.bytes) || !nat(x.rows) || !natOrNull(x.oldest) || !natOrNull(x.newest)) return `summary.${k}`;
   }
@@ -161,13 +161,13 @@ export function summaryProblem(s: unknown): string | null {
 export const spaceProblem = (s: unknown): string | null => {
   if (!closed(s, ['needed', 'available', 'fits', 'perKind', 'retentionProposal'])) return 'space';
   if (!nat(s.needed) || !nat(s.available) || !bool(s.fits)) return 'space';
-  if (!closed(s.perKind, [...MOVE_KINDS]) || !Object.values(s.perKind).every(nat)) return 'space.perKind';
+  if (!closed(s.perKind, [...FILE_KINDS]) || !Object.values(s.perKind).every(nat)) return 'space.perKind';
   return settingsMap(s.retentionProposal) ? null : 'space.retentionProposal';
 };
 
 export const planProblem = (p: unknown): string | null => {
   if (!closed(p, ['transfer', 'kinds', 'space', 'targetSettings', 'budgetS', 'estimateS']) || !bool(p.transfer)) return 'plan';
-  if (!Array.isArray(p.kinds) || p.kinds.length > 5 || new Set(p.kinds).size !== p.kinds.length || p.kinds.some((k) => !(MOVE_KINDS as readonly unknown[]).includes(k))) return 'plan.kinds';
+  if (!Array.isArray(p.kinds) || p.kinds.length > MOVE_KINDS.length || new Set(p.kinds).size !== p.kinds.length || p.kinds.some((k) => !(MOVE_KINDS as readonly unknown[]).includes(k))) return 'plan.kinds';
   if (typeof p.space !== 'string' || !SPACE_PLANS.includes(p.space)) return 'plan.space';
   if (!settingsMap(p.targetSettings)) return 'plan.targetSettings';
   return nat(p.budgetS) && nat(p.estimateS) ? null : 'plan.budget';
@@ -206,7 +206,9 @@ export const validateMoveOffer = (a: unknown) => v1<MoveOfferArgs>(a, ['moveId',
 });
 // A refusal's detail (contract: a string of 1 to 300 characters, counted in code points).
 const detailOk = (x: unknown) => typeof x === 'string' && x.length > 0 && [...x].length <= 300;
-export const validateMoveAnswer = (a: unknown) => v1<MoveAnswerArgs>(a, ['moveId', 'requestId', 'target', 'accept', 'reason', 'detail', 'space', 'estimateS'], (o) => {
+// The kinds a target takes (plan D): unique, each a move kind.
+const kindsOk = (k: unknown) => Array.isArray(k) && k.length <= MOVE_KINDS.length && new Set(k).size === k.length && k.every((x) => (MOVE_KINDS as readonly unknown[]).includes(x));
+export const validateMoveAnswer = (a: unknown) => v1<MoveAnswerArgs>(a, ['moveId', 'requestId', 'target', 'accept', 'reason', 'detail', 'space', 'estimateS', 'kinds'], (o) => {
   const bad = moveId(o);
   if (bad) return bad;
   if (typeof o.requestId !== 'string' || !REQ_ID.test(o.requestId)) return 'requestId';
@@ -219,7 +221,8 @@ export const validateMoveAnswer = (a: unknown) => v1<MoveAnswerArgs>(a, ['moveId
     const p = spaceProblem(o.space);
     if (p) return p;
   }
-  return optional(o, 'estimateS', nat) ? null : 'estimateS';
+  if (!optional(o, 'estimateS', nat)) return 'estimateS';
+  return optional(o, 'kinds', kindsOk) ? null : 'kinds';
 });
 export const validateMoveStart = (a: unknown) => v1<MoveStartArgs>(a, ['moveId', 'plan', 'settings', 'done'], (o) =>
   moveId(o) ?? planProblem(o.plan) ?? settingsProblem(o.settings) ?? (!Array.isArray(o.done) || o.done.length > 512 || o.done.some((c) => typeof c !== 'string' || !CHUNK_ID.test(c)) ? 'done' : null));
@@ -229,7 +232,7 @@ export const validateMoveGo = (a: unknown) => v1<MoveGoArgs>(a, ['moveId', 'plan
 export const boundsProblem = (b: unknown): string | null => {
   if (b === null) return null;
   if (!closed(b, ['transfer', 'kinds', 'space', 'maxBudgetS']) || !bool(b.transfer)) return 'bounds';
-  if (!Array.isArray(b.kinds) || b.kinds.length > 5 || new Set(b.kinds).size !== b.kinds.length || b.kinds.some((k) => !(MOVE_KINDS as readonly unknown[]).includes(k))) return 'bounds';
+  if (!Array.isArray(b.kinds) || b.kinds.length > MOVE_KINDS.length || new Set(b.kinds).size !== b.kinds.length || b.kinds.some((k) => !(MOVE_KINDS as readonly unknown[]).includes(k))) return 'bounds';
   if (typeof b.space !== 'string' || !SPACE_PLANS.includes(b.space)) return 'bounds';
   return Number.isSafeInteger(b.maxBudgetS) && (b.maxBudgetS as number) >= 60 && (b.maxBudgetS as number) <= 604800 ? null : 'bounds';
 };

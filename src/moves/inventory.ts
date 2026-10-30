@@ -5,8 +5,10 @@ import { join, relative, resolve, sep } from 'path';
 import { CAM_ID } from '../archive/paths';
 import type { Catalog } from '../catalog/db';
 import type { KindSummary, MoveKind, MoveSummary } from './types';
-import { MOVE_KINDS } from './types';
+import { FILE_KINDS } from './types';
 import { DAY } from '../time-units';
+import { PTZ_TABLE, ptzWireRows } from './ptz';
+import type { PtzPositionRow } from '../catalog/ptz-positions';
 
 // What one camera has to move, as chunks of one kind and one UTC day (plan P6,
 // chunk id `<kind>:<YYYY-MM-DD>`), their file manifests and their catalog rows.
@@ -36,7 +38,7 @@ export interface TableRows { table: string; rows: object[] }
 // previews) by its dataDir-relative posix path.
 export interface ItemFilter { row(table: string, row: Record<string, unknown>): boolean; file(rel: string): boolean }
 
-const FOLDERS: Record<MoveKind, string[]> = { stills: ['stills', 'previews'], clips: ['clips'], events: ['analytics'], checks: ['still-checks'], archive: ['archive'] };
+const FOLDERS: Record<MoveKind, string[]> = { stills: ['stills', 'previews'], clips: ['clips'], events: ['analytics'], checks: ['still-checks'], archive: ['archive'], ptz: [] };
 export const KIND_FOLDERS: Readonly<Record<MoveKind, readonly string[]>> = FOLDERS;
 export const chunkDay = (ts: number): string => dayOf(ts);
 // A copier's temporary file (<final>.move-<id>.part, Task 9): never content.
@@ -44,8 +46,8 @@ export const MOVE_PART = /\.move-[A-Za-z0-9_-]{1,64}\.part$/;
 // Every folder a camera's moved content lies in (<dataDir>/<folder>/<cam>/...).
 export const CONTENT_FOLDERS: readonly string[] = Object.values(FOLDERS).flat();
 // Within a day: small and most-opened first (P11). Archive is sorted before this.
-const ORDER: MoveKind[] = ['clips', 'events', 'checks', 'archive', 'stills'];
-const CHUNK_ID = /^(stills|clips|events|checks|archive):(\d{4})-(\d{2})-(\d{2})$/;
+const ORDER: MoveKind[] = ['ptz', 'clips', 'events', 'checks', 'archive', 'stills'];
+const CHUNK_ID = /^(stills|clips|events|checks|archive|ptz):(\d{4})-(\d{2})-(\d{2})$/;
 
 const dayOf = (ts: number) => new Date(ts).toISOString().slice(0, 10);
 
@@ -132,7 +134,14 @@ function items(c: Cam, kind: MoveKind, range?: { from: number; to: number }, fil
   const hi = range?.to ?? Infinity;
   const { dataDir } = c.d;
   const out: { ts: number; files: string[]; rows: { table: string; row: Record<string, unknown> }[] }[] = [];
-  if (kind === 'stills') {
+  if (kind === 'ptz') {
+    // The camera's PTZ positions: one item, no files, dated by the newest
+    // change. A chunk's day is not a filter here: whatever the day, the chunk
+    // serves all of them (a position renamed after the listing must not
+    // make the target replace its positions with none).
+    const rows = c.rows<PtzPositionRow>('SELECT * FROM ptz_positions WHERE cam = ? ORDER BY sort_order, created_at', c.cam);
+    if (rows.length) out.push({ ts: Math.max(...rows.map((r) => r.updated_at)), files: [], rows: ptzWireRows(rows).map((row) => ({ table: PTZ_TABLE, row: row as unknown as Record<string, unknown> })) });
+  } else if (kind === 'stills') {
     for (const folder of FOLDERS.stills) {
       const base = join(dataDir, folder, c.cam);
       for (const f of c.walk(base)) {
@@ -191,7 +200,7 @@ function existing(c: Cam, files: string[]): { abs: string; size: number }[] {
 export function summarize(d: InventoryDeps, cam: string): MoveSummary {
   const c = new Cam(d, cam);
   const out = {} as MoveSummary;
-  for (const kind of MOVE_KINDS) {
+  for (const kind of FILE_KINDS) {
     const s: KindSummary = { files: 0, bytes: 0, rows: 0, oldest: null, newest: null };
     const seen = new Set<string>();
     for (const it of items(c, kind)) {
@@ -210,9 +219,12 @@ export function summarize(d: InventoryDeps, cam: string): MoveSummary {
   return out;
 }
 
-// Archive chunks first, newest day first (they exist nowhere else); then the
-// rest newest day first, within a day clips, events, checks, stills (P11).
+// The PTZ positions first (one small chunk), then Archive chunks, newest day
+// first (they exist nowhere else); then the rest newest day first, within a
+// day clips, events, checks, stills (P11).
 export function chunkOrder(a: Pick<ChunkMeta, 'kind' | 'day'>, b: Pick<ChunkMeta, 'kind' | 'day'>): number {
+  const ap = a.kind === 'ptz';
+  if (ap !== (b.kind === 'ptz')) return ap ? -1 : 1;
   const aa = a.kind === 'archive';
   if (aa !== (b.kind === 'archive')) return aa ? -1 : 1;
   if (a.day !== b.day) return a.day < b.day ? 1 : -1;
@@ -293,5 +305,5 @@ export function chunkRows(d: InventoryDeps, cam: string, chunkId: string, filter
   const tables = new Map<string, object[]>();
   for (const it of items(c, kind, { from, to }, filter)) for (const r of it.rows) tables.set(r.table, [...(tables.get(r.table) ?? []), r.row]);
   // events first, then analyses (rows of one table keep their order).
-  return ['events', 'analyses', 'clips', 'still_checks', 'archive'].flatMap((t) => (tables.has(t) ? [{ table: t, rows: tables.get(t)! }] : []));
+  return ['events', 'analyses', 'clips', 'still_checks', 'archive', PTZ_TABLE].flatMap((t) => (tables.has(t) ? [{ table: t, rows: tables.get(t)! }] : []));
 }

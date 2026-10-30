@@ -7,7 +7,7 @@ import { estimateText, type AutoWaitReason } from '../../../src/moves/plan';
 export { KINDS, budgetDefault, type AutoWaitReason, estimateText, hasContent, kindsWithContent, planFrom, spaceOptions, type MoveForm } from '../../../src/moves/plan';
 
 export type { MoveKind, MovePlan, MoveReason, MoveSummary, Space };
-export const KIND_LABEL: Record<MoveKind, string> = { stills: 'Stills', clips: 'Clips', events: 'Events', checks: 'Still checks', archive: 'Archive' };
+export const KIND_LABEL: Record<MoveKind, string> = { stills: 'Stills', clips: 'Clips', events: 'Events', checks: 'Still checks', archive: 'Archive', ptz: 'PTZ positions' };
 
 // One move as GET /control/moves lists it (src/moves/source.ts MoveView).
 export interface MoveItem {
@@ -26,6 +26,16 @@ export interface MoveItem {
   progress?: { bytesDone: number; bytesTotal: number; rateBps: number; etaS: number };
   budgetExceeded: boolean;
   failure?: string;
+  // The camera's PTZ positions and whether they go with it (null before an accepted answer).
+  positions?: { count: number; travel: 'carried' | 'not_taken' | 'none' } | null;
+}
+
+// The panel's line about the camera's PTZ positions ('' when there are none).
+export function positionsText(v: MoveItem['positions']): string {
+  if (!v || v.travel === 'none' || v.count === 0) return '';
+  const n = v.count === 1 ? '1 PTZ position' : `${v.count} PTZ positions`;
+  if (v.travel === 'carried') return `${n} ${v.count === 1 ? 'goes' : 'go'} with the camera.`;
+  return `${n} stay${v.count === 1 ? 's' : ''} behind: the target's cam-proxy is older. They stay saved on the camera.`;
 }
 
 const GB = 1024 ** 3;

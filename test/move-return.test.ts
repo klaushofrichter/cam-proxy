@@ -834,3 +834,9 @@ describe('the copy back of the still minutes around the cancel (localstack scena
     for (const p of [OWN_STILL, ...WHOLE]) expect(has(f, p), p).toBe(true);
   });
 });
+
+describe('the copy back and the ptz kind', () => {
+  it('RETURN_PLAN carries the five file kinds only', () => {
+    expect(RETURN_PLAN.kinds).toEqual(['stills', 'clips', 'events', 'checks', 'archive']);
+  });
+});

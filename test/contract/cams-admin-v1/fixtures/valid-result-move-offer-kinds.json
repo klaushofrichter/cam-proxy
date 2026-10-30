@@ -1,0 +1,43 @@
+{
+  "$note": "the target accepts and lists the move kinds it takes (optional; absent = the five file kinds)",
+  "$command": "move.offer",
+  "schema": "result",
+  "message": {
+    "v": 1,
+    "type": "result",
+    "id": "01K60000000000000000000005",
+    "seq": 5,
+    "ts": 1791273600005,
+    "re": "01K60000000000000000000003",
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "phase": "done",
+      "status": "ok",
+      "result": {
+        "accept": true,
+        "space": {
+          "needed": 52428800,
+          "available": 10737418240,
+          "fits": true,
+          "perKind": {
+            "clips": 50000000,
+            "events": 2428800
+          },
+          "retentionProposal": null
+        },
+        "probeBps": 12500000,
+        "kinds": [
+          "stills",
+          "clips",
+          "events",
+          "checks",
+          "archive",
+          "ptz"
+        ]
+      }
+    },
+    "sig": "rnfp+8V6zshm64ax+KXD0gvYRHSJSarpJ7C1Pr3FT3yFHBvTwNtYgd3ZnZAFbQzaNO8XcJcLm+lKIuHvE6U6DA=="
+  }
+}

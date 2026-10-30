@@ -2,7 +2,7 @@
   import { api, ApiError } from '../lib/api';
   import { loadMoves } from '../lib/move-state';
   import { localDate } from '../lib/format';
-  import { autoWaitText, budgetDefault, estimateText, KIND_LABEL, kindsWithContent, limitText, planFrom, sizeText, spaceOptions, type MoveItem, type MoveKind } from '../lib/moves';
+  import { autoWaitText, positionsText, budgetDefault, estimateText, KIND_LABEL, kindsWithContent, limitText, planFrom, sizeText, spaceOptions, type MoveItem, type MoveKind } from '../lib/moves';
 
   // The one confirmation panel (camera-move spec §7): what moves, what does
   // not fit and how to cope, the time, and the end. Approving is the only approval.
@@ -96,6 +96,7 @@
       <input type="number" min={minBudget} step="1" value={budgetMin} oninput={(e) => (budgetEdited = e.currentTarget.valueAsNumber)} data-testid="move-budget" />
     </label>
   {/if}
+  {#if positionsText(move.positions)}<p class="small" data-testid="move-positions">{positionsText(move.positions)}</p>{/if}
   <p class="muted small">When the move ends, this proxy deletes all of this camera's content, copied or not. Audit records stay.</p>
   {#if built.error}<p class="bad small" data-testid="move-plan-problem">{built.error}</p>{/if}
   {#if error}<p class="bad small" data-testid="move-error">{error}</p>{/if}

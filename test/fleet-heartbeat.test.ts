@@ -115,3 +115,25 @@ describe('the change key (an early heartbeat)', () => {
     expect(changeKeyOf(c)).not.toBe(changeKeyOf(a));
   });
 });
+
+describe('moveLeftovers in the heartbeat (plan D)', () => {
+  const MV = 'mv_0123456789ABCDEFGHJK';
+  it('only when non-empty, kept when truncated, clamped to 16 x 4 and 80 characters', () => {
+    const none = buildHeartbeat(buildHealth(input()), PI_INFO, undefined, null, []);
+    expect(none.body).not.toHaveProperty('moveLeftovers');
+    const one = [{ camera: 'cam4', moveId: MV, items: ['config.json entry', 'env CAMPROXY_CAMERA_PASSWORD_CAM4'] }];
+    const hb = buildHeartbeat(buildHealth(input()), PI_INFO, undefined, null, one);
+    expect(hb.body.moveLeftovers).toEqual(one);
+    expect(valid(hb.body).ok, valid(hb.body).why).toBe(true);
+    const many = Array.from({ length: 20 }, (_, i) => ({ camera: `cam${i}`, moveId: MV, items: ['a'.repeat(100), 'b', 'c', 'd', 'e'] }));
+    const big = buildHeartbeat(buildHealth(input()), PI_INFO, undefined, null, many);
+    const ml = big.body.moveLeftovers as { items: string[] }[];
+    expect(ml).toHaveLength(16);
+    expect(ml[0].items).toHaveLength(4);
+    expect(ml[0].items[0]).toHaveLength(80);
+    expect(valid(big.body).ok, valid(big.body).why).toBe(true);
+    const short = buildHeartbeat(fourCams(), SITE_INFO, 2000, null, one);
+    expect(short.truncated).toBe(true);
+    expect(short.body.moveLeftovers).toEqual(one);
+  });
+});

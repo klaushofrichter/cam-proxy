@@ -1,4 +1,6 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
+import { deleteCameraPositions } from './catalog/ptz-positions';
+import { MoveLeftovers, removePasswordLine } from './moves/leftovers';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
 import http from 'http';
 import https from 'https';
@@ -53,6 +55,7 @@ import { StreamLog, type StreamMessage } from './stream/log';
 import { AnalyticsService, CHECK_USAGE } from './analytics/service';
 import { sseHandler } from './stream/sse';
 import { clientIp, refuseTokenInUrl, requireAccess, type AccessDeps } from './api/auth';
+import { ptzApi } from './api/ptz-api';
 import { clientApi } from './api/client-api';
 import { stillChecksApi } from './api/still-checks-api';
 import { auditApi, controlApi, sessionRoutes, type ControlDeps } from './api/control-api';
@@ -916,6 +919,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     }
     return { commands: status, tokens: tokenStore.counts(), configRevision: configRevision(loaded) };
   };
+  // What a camera that moved away left here that this proxy can't remove (plan D).
+  const moveLeftovers = new MoveLeftovers(running.server.dataDir);
   const camsAdmin = new CamsAdmin({
     settings: () => running.camsAdmin,
     dataDir: () => running.server.dataDir,
@@ -923,6 +928,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     cameraIds: () => cams.ids(),
     health: healthNow,
     profile: profileNow,
+    moveLeftovers: () => moveLeftovers.current(loaded),
     proxyInfo: () => ({
       startedAt,
       uptimeS: startedAt ? Math.round((Date.now() - startedAt) / 1000) : null,
@@ -1010,6 +1016,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   const moveEnd = {
     deletePassword: (cam: string) => movePasswords.delete(cam),
     forgetLeaf: (cam: string) => certs?.forget(cam, { user: 'cams-admin' }),
+    // The camera's PTZ positions (plan D): gone with the camera.
+    deletePositions: (cam: string) => deleteCameraPositions(catalog, cam),
   };
   const ftpHere = async (cam: string): Promise<'skipped' | { verified: boolean; mismatch: string[] }> => {
     const w = cams.get(cam);
@@ -1051,6 +1059,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       },
       ftp: ftpHere,
       settled: () => reconciling,
+      envCleanup: (cam) => removePasswordLine(loaded, cam),
+      leftovers: moveLeftovers,
     },
   });
   // The target side from move.start on (camera-move plan Task 8): the
@@ -1105,6 +1115,16 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     setPhase: (r, phase, o) => moveTarget.setPhase(r, phase, o),
     // A return waiting for room (step 4 Task 10): move.phase copying no_space.
     notePaused: (r, paused) => moveTarget.notePaused(r, paused),
+    // A moved camera's PTZ positions (plan D): imported under the camera's
+    // positions lock when it runs here (no save races the import), then its
+    // slots are read again and the positions' stream message goes out.
+    ptzLocked: async (cam, fn) => {
+      const w = cams.get(cam);
+      if (w) return w.ptz.positions.locked(fn);
+      const r = fn();
+      log.append(cam, 'ptz-positions', {});
+      return r;
+    },
     proxyId: proxyIdNow,
   });
   // The copy back after a cancel after the switch-over (step 4 Task 9): the
@@ -1140,6 +1160,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   app.use('/api', requireAccess('client', access), composeApi({ config: () => running, catalog, composer, cameras: cams, paused: () => storage.paused(), font, audit }));
   app.use('/api', requireAccess('client', access), stillChecksApi({ config: () => running, catalog, cameras: cams, analytics, audit }));
   app.use('/api', requireAccess('client', access), archiveApi({ config: () => running, catalog, archive, composer, cameras: cams }));
+  // Pan/tilt/zoom and positions (spec 2026-10-30-ptz-capabilities-design §5).
+  app.use('/api', requireAccess('client', access), ptzApi({ cameras: cams, audit }));
   app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, cameras: cams, sse, tls: (id) => certs?.state(id) }));
   // The audit log: admins and the audit token, GET (and HEAD) only. The access check is
   // on the route inside the router; other /control paths pass on untouched
@@ -1159,6 +1181,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     },
     loaded: () => loaded,
     profile: profileNow,
+    moveLeftovers: () => moveLeftovers.current(loaded),
     setLoaded,
     running: () => running,
     catalog,

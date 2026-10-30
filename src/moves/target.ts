@@ -85,6 +85,8 @@ export interface TargetDeps {
     captured?: (cam: string, now: number) => NonNullable<MoveRecord['captured']>;
     deletePassword: (cam: string) => void;
     forgetLeaf: (cam: string) => void;
+    // The camera's PTZ positions (plan D): a cancel that drops the camera here drops them too.
+    deletePositions?: (cam: string) => number;
   };
   now?: () => number;
 }
@@ -444,6 +446,7 @@ export class MoveTarget {
       }
       entry = this.d.loaded().config.cameras[cam] ? 'hidden' : 'removed';
       end.forgetLeaf(cam);
+      end.deletePositions?.(cam);
       if (fresh.passwordWritten) end.deletePassword(cam);
       if (copied === 'delete' && !fresh.switchedOver) {
         // Only what the move brought; the camera no longer runs here. The

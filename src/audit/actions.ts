@@ -6,7 +6,7 @@ export const AUDIT_ACTIONS = [
   'camera-reboot', 'camera-powercycle', 'camera-poe-on', 'camera-check', 'camera-name', 'camera-address', 'camera-cert-push', 'camera-trust', 'camera-ntp',
   'login', 'logout', 'login-link-issued', 'auth-refused', 'ftp-login-refused',
   'control-action', 'config-change', 'secret-override',
-  'still-check', 'event-analysis', 'composition',
+  'still-check', 'event-analysis', 'composition', 'ptz-position',
   'archive-add', 'archive-update', 'archive-delete', 'archive-clear', 'archive-expire',
   'storage-daily', 'storage-paused', 'storage-resumed', 'activity-daily',
   'inventory', 'inventory-repair', 'admin-enroll', 'admin-unenroll', 'admin-command', 'admin-policy', 'admin-token', 'audit-throttled',
