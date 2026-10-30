@@ -243,7 +243,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // What the CA doesn't cover of the proxy's own names (Review Focus 2): named, never a silent bad leaf.
   const tlsProblems = (): string[] => [
     ...(caProblem ? [caProblem] : []),
-    ...(!running.tls.site && certs ? ['tls.site is not set: the cameras keep their site-CA trust (camera-trust-clear drops it)'] : []),
+    // Only for site-CA trust kept from one (a pin made without a site CA is no problem).
+    ...(!running.tls.site && certs && cams.ids().some((id) => certs!.state(id).mode === 'site-ca') ? ['tls.site is not set: the cameras keep their site-CA trust (camera-trust-clear drops it)'] : []),
     ...(certs ? certs.problems() : []),
     ...(ca ? [...proxyAddresses().filter((a) => !ca!.covers(a)), ...(ca.coversName(proxyName()) ? [] : [proxyName()])].map(outside) : []),
     // A camera's own (an address outside the CA, a failed push), named.
@@ -379,6 +380,16 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       if (certs?.expecting()) void certs.checkExpected().catch((err: Error) => logger.warn({ err: err.message }, 'camera_expected_leaf_check_failed'));
     }, 5000);
     expectedTimer.unref();
+  };
+  // The camera certificates on first use without a site CA (spec
+  // 2026-10-30-camera-onboarding-design §4.4: an admin's pin): trust only, no
+  // scheduler, no pushes (as startSiteCa does for trust kept from a site CA).
+  const ensureCerts = (): CameraCerts => {
+    if (!certs) {
+      certs = makeCerts();
+      for (const w of cams.list()) w.applyTrust();
+    }
+    return certs;
   };
   // tls-ca-rotate (Ruling P5-3): the old files kept as *.old-<time>, a new CA,
   // a new proxy leaf, every camera pushed again (from the next tick on).
@@ -1186,6 +1197,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     certState: (cam) => certs?.state(cam) ?? null,
     audit,
     attempts: new PasswordAttempts(),
+    served: servedOf,
+    pinServed: (cam, sv, who) => ensureCerts().pinServed(cam, sv, who),
   });
   const controlDeps: ControlDeps = {
     onboarding,

@@ -154,7 +154,7 @@ export interface ControlDeps {
   cameraStatus: (id?: string) => CameraStatusBlock[];
   cameraCount: () => number;
   // Camera onboarding (spec 2026-10-30-camera-onboarding-design §4): the probe and the trust pin go through performAction.
-  onboarding: Pick<OnboardingService, 'probe'>;
+  onboarding: Pick<OnboardingService, 'probe' | 'pin'>;
   // The overrides a cams-admin command set (plan P3 R3-14): GET /control/config's `by`.
   changeMarks?: () => ChangeMarks;
 }
@@ -268,7 +268,7 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
 // The camera actions (spec 2026-10-05-multi-camera-host-design §6.3): their
 // control-action record names the camera; on a proxy with several cameras
 // they need a camera (the routes of phase 2). The host actions work as before.
-export const CAMERA_ACTIONS = new Set(['camera-test', 'onvif-resubscribe', 'camera-ftp-setup', 'camera-ftp-test', 'camera-ftp-off', 'restart', 'camera-reboot', 'camera-powercycle', 'camera-poe-on', 'poe-switch-read', 'inventory', 'inventory-repair', 'inventory-cancel', 'camera-cert-push', 'camera-ntp-set', 'camera-trust-clear']);
+export const CAMERA_ACTIONS = new Set(['camera-test', 'onvif-resubscribe', 'camera-ftp-setup', 'camera-ftp-test', 'camera-ftp-off', 'restart', 'camera-reboot', 'camera-powercycle', 'camera-poe-on', 'poe-switch-read', 'inventory', 'inventory-repair', 'inventory-cancel', 'camera-cert-push', 'camera-ntp-set', 'camera-trust-clear', 'camera-trust-pin']);
 
 // What a camera action answers on a proxy with several cameras (spec §6.3; the camera routes are phase 2).
 const cameraRequired = (path: string) => `several cameras: name the camera, ${path} (or ?cam=<id>); GET /control/cameras lists them`;
@@ -277,7 +277,7 @@ const cameraRequired = (path: string) => `several cameras: name the camera, ${pa
 // Find camera, Use this address and camera-probe together, per client and
 // minute: a probe is 3 s of multicast (or a camera's ports), a write a backup.
 export const FIND_CAMERA_PER_MINUTE = 6;
-// tls-ca-rotate, tls-ca-drop-previous and camera-trust-clear together, per client and minute.
+// tls-ca-rotate, tls-ca-drop-previous, camera-trust-clear and camera-trust-pin together, per client and minute.
 export const TRUST_ACTIONS_PER_MINUTE = 6;
 
 // Whether "Use this address" can write the .env file, and why not.
@@ -508,7 +508,7 @@ export function controlApi(d: ControlDeps): express.Router {
   const findLimit = perMinute(FIND_CAMERA_PER_MINUTE);
   // The site CA's trust actions (rotate, drop the previous CA, clear a camera): their own limit.
   const trustLimit = perMinute(TRUST_ACTIONS_PER_MINUTE);
-  const TRUST = new Set(['tls-ca-rotate', 'tls-ca-drop-previous', 'camera-trust-clear']);
+  const TRUST = new Set(['tls-ca-rotate', 'tls-ca-drop-previous', 'camera-trust-clear', 'camera-trust-pin']);
   const actionLimit: express.RequestHandler = (req, res, next) =>
     req.params.name === 'find-camera' || req.params.name === 'camera-address' || req.params.name === 'camera-probe' ? findLimit(req, res, next) : TRUST.has(String(req.params.name)) ? trustLimit(req, res, next) : next();
 

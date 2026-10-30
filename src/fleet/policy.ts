@@ -8,7 +8,7 @@ import { PrivateFileInvalid, PrivateFileUnsafe, readPrivateJson, writePrivateJso
 // camera-ftp-off is never remote (coordinator ruling after the P3 security
 // review, M5): it stops clip intake, like ftp.enabled (I4, local only).
 export const REMOTE_ACTIONS = ['camera-test', 'onvif-resubscribe', 'camera-ftp-test', 'poe-switch-read', 'inventory', 'inventory-cancel', 'retention-run', 'restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push'] as const;
-export const NEVER_REMOTE_ACTIONS = ['find-camera', 'camera-address', 'camera-trust-clear', 'tls-ca-rotate', 'tls-ca-drop-previous', 'archive-clear', 'inventory-repair', 'camera-poe-on', 'restart-proxy', 'camera-ftp-off', 'camera-probe'] as const;
+export const NEVER_REMOTE_ACTIONS = ['find-camera', 'camera-address', 'camera-trust-clear', 'tls-ca-rotate', 'tls-ca-drop-previous', 'archive-clear', 'inventory-repair', 'camera-poe-on', 'restart-proxy', 'camera-ftp-off', 'camera-probe', 'camera-trust-pin'] as const;
 // Entries an earlier version accepted that this one no longer knows: dropped
 // on read (policy.json, config.json), never an error (a stored policy must not
 // pause everything after an upgrade).

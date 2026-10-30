@@ -23,7 +23,7 @@ export type ActionOutcome =
 export type ActionDeps = Pick<ControlDeps, 'onboarding' | 'cameras' | 'cameraCount' | 'cameraId' | 'running' | 'resubscribe' | 'checkCamera' | 'storage' | 'cameraFtp' | 'restart' | 'restartCamera' | 'cameraReboot' | 'cameraPowerCycle' | 'poeSwitch' | 'findCamera' | 'envFile' | 'restartProcess' | 'inventory' | 'archive' | 'tls' | 'cameraNtp' | 'audit'>;
 
 // Actions with their own audit records (the route writes no control-action record for them).
-export const OWN_AUDIT: ReadonlySet<string> = new Set(['camera-reboot', 'camera-powercycle', 'camera-poe-on', 'restart-proxy', 'inventory', 'inventory-repair', 'camera-address', 'archive-clear', 'tls-ca-rotate', 'camera-trust-clear', 'tls-ca-drop-previous', 'camera-probe']);
+export const OWN_AUDIT: ReadonlySet<string> = new Set(['camera-reboot', 'camera-powercycle', 'camera-poe-on', 'restart-proxy', 'inventory', 'inventory-repair', 'camera-address', 'archive-clear', 'tls-ca-rotate', 'camera-trust-clear', 'tls-ca-drop-previous', 'camera-probe', 'camera-trust-pin']);
 
 const fail = (status: number, error: string, detail?: string, extra?: Record<string, unknown>): ActionOutcome => ({ status, error, ...(detail ? { detail } : {}), ...(extra && Object.keys(extra).length ? { extra } : {}) });
 // A command's cmdId and actor in a record's details.
@@ -160,6 +160,9 @@ export async function performAction(d: ActionDeps, name: string, cam: string | n
     // Probe a camera before adding it (spec 2026-10-30-camera-onboarding-design §4.2): local only, read-only; its own camera-probe record.
     case 'camera-probe':
       return d.onboarding.probe(body, who);
+    // The admin's pin of the certificate the camera serves (spec §4.4), also without a site CA; its own camera-trust record.
+    case 'camera-trust-pin':
+      return d.onboarding.pin(camera(), body.fingerprint, who);
     // Use this address (pi-config spec §4): CAMERA_HOST into the .env file
     // (backup, atomic), audited; the UI restarts the proxy next.
     case 'camera-address': {

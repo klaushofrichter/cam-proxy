@@ -369,3 +369,27 @@ describe('the cluster proxy (deploy/cluster/config.json, camera cam2)', () => {
     expect(c.stills.stream).toBe('sub');
   });
 });
+
+// Spec 2026-10-30-camera-onboarding-design §4.4: an https camera pinned on a proxy without tls.site.
+describe('the Pi: a pinned https camera', () => {
+  it('a pin on a proxy without tls.site never leads to a certificate push', async () => {
+    const s = await startSim();
+    const p = await startProxy(s, { settings: { camera: { host: `127.0.0.1:${s.ports.https}`, protocol: 'https', user: 'proxy', onvifPort: s.ports.onvif, rtspPort: s.ports.rtsp || 554, baichuanPort: s.camera.baichuanPort, statusPollS: 5 } } });
+    try {
+      const fp = (await servedFingerprint('127.0.0.1', s.ports.https))!;
+      const r = await request(p.base).post('/control/cameras/cam1/actions/camera-trust-pin').set(auth(ADMIN_TOKEN)).send({ fingerprint: fp });
+      expect([r.status, r.body.mode]).toEqual([200, 'pinned']);
+      expect(p.proxy.certs).toBeDefined();
+      await p.proxy.certs!.tick();
+      await new Promise((ok) => setTimeout(ok, 1500));
+      expect(s.sim.engine.counters.setCalls.filter((c) => /Certificate/.test(c))).toEqual([]);
+      expect(p.proxy.audit.list({ actions: ['camera-cert-push'], limit: 10 }).records).toHaveLength(0);
+      expect((await request(p.base).get('/tls/ca.pem')).status).toBe(404);
+      // No health problem about a site CA (only the pin is kept).
+      expect(JSON.stringify((await request(p.base).get('/control/tls').set(auth(ADMIN_TOKEN))).body.problems)).not.toContain('site-CA trust');
+    } finally {
+      await p.proxy.stop();
+      await s.close();
+    }
+  }, 30_000);
+});

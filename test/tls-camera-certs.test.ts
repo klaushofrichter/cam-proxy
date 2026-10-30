@@ -7,6 +7,7 @@ import { CameraCerts, type CameraCertsDeps, type CertCamera } from '../src/tls/c
 import { issueLeaf, type Leaf } from '../src/tls/leaf';
 import type { PushResult } from '../src/tls/push';
 import type { Served } from '../src/tls/served';
+import { otherCertificate } from './helpers/certs';
 
 let ca: SiteCa;
 let other: SiteCa;
@@ -532,5 +533,32 @@ describe('camera certificates (spec §10.1.3)', () => {
       await b.certs.tick();
       expect(b.pushes).toEqual(['cam3', 'cam4']); // cam4 is a first use, not blocked
     }, 60_000);
+  });
+});
+
+describe('a pin without a site CA (spec 2026-10-30-camera-onboarding-design §4.4)', () => {
+  it('pinServed pins what was served, audits op pin, and survives a reload', async () => {
+    const c = await otherCertificate('CERTIFICATE');
+    const served = { fingerprint: c.fingerprint, pem: c.pem };
+    const a = setup({ deps: { site: () => undefined, ca: () => null } });
+    const st = a.certs.pinServed('cam3', served, { user: 'admin', requestedBy: 'token' });
+    expect([st.mode, st.fingerprint]).toEqual(['pinned', c.fingerprint]);
+    expect(a.certs.pin('cam3')).toEqual(served);
+    expect(a.trust).toEqual(['cam3:pinned']);
+    expect(a.audits.at(-1)).toMatchObject({ action: 'camera-trust', outcome: 'success', user: 'admin', details: { op: 'pin', from: 'none', fingerprint: c.fingerprint, requestedBy: 'token' } });
+    const b = setup({ dir: a.dir, deps: { site: () => undefined, ca: () => null } });
+    expect(b.certs.pin('cam3')?.fingerprint).toBe(c.fingerprint);
+    expect(b.certs.state('cam3').mode).toBe('pinned');
+  });
+
+  it('forget says why: a move, or the camera was removed', async () => {
+    const c = await otherCertificate();
+    const a = setup({ deps: { site: () => undefined, ca: () => null } });
+    a.certs.pinServed('cam3', { fingerprint: c.fingerprint, pem: c.pem }, { user: 'admin' });
+    a.certs.forget('cam3', { user: 'admin' }, 'removed');
+    expect(a.audits.at(-1)!.message).toContain('the camera was removed');
+    a.certs.pinServed('cam3', { fingerprint: c.fingerprint, pem: c.pem }, { user: 'admin' });
+    a.certs.forget('cam3');
+    expect(a.audits.at(-1)!.message).toContain('the camera moved away');
   });
 });

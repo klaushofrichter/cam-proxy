@@ -16,12 +16,13 @@ import { withoutEnv, type Loaded } from '../config/load';
 import { cameraPasswordEnv } from '../config/password-env';
 import type { CameraRegistry } from '../cameras/registry';
 import { removePasswordLine } from '../moves/leftovers';
-import type { CertState } from '../tls/camera-certs';
+import type { CertState, Requester } from '../tls/camera-certs';
+import type { Served } from '../tls/served';
 import { attemptKey, PASSWORD_WINDOW_MS, type PasswordAttempts } from './attempts';
 import { passwordSource, type Credentials } from './credentials';
 import { checkLogin } from './login-check';
 import { PASSWORD_RULE, validPassword } from './password-rule';
-import { probeCamera, probeInput } from './probe';
+import { FINGERPRINT, probeCamera, probeInput } from './probe';
 import type { ActionOutcome } from '../api/actions';
 
 export type Who = ActionWho;
@@ -37,6 +38,10 @@ export interface OnboardingDeps {
   certState: (cam: string) => CertState | null;
   audit: Pick<AuditLog, 'write'>;
   attempts: PasswordAttempts;
+  // The certificate the camera serves now (null: nothing answered), and the
+  // admin's pin of it (CameraCerts.pinServed; made on first use without a site CA).
+  served: (cam: string) => Promise<Served | null>;
+  pinServed: (cam: string, s: Served, who: Requester) => CertState;
   now?: () => number;
 }
 
@@ -137,5 +142,26 @@ export class OnboardingService {
     }
     rec(r.login === 'refused' || r.login === 'offline' ? 'failure' : 'success', { login: r.login, model: r.device?.model ?? null, ports: r.ports, ...(r.certificate ? { fingerprint: r.certificate.fingerprint } : {}) }, r.login === 'refused' ? 'camera_refused' : r.login === 'offline' ? 'camera_offline' : undefined);
     return { status: 200, json: r };
+  }
+
+  // POST /control/cameras/:cam/actions/camera-trust-pin (§4.4): pins the
+  // certificate the camera serves now, only when it is the one the caller
+  // confirmed. From none, or pinned again after the camera's certificate changed.
+  async pin(cam: string, fingerprint: unknown, who: Who): Promise<ActionOutcome> {
+    if (typeof fingerprint !== 'string' || !FINGERPRINT.test(fingerprint)) return { status: 400, error: 'invalid', detail: 'fingerprint: SHA256: and 64 upper-case hex digits (the one the camera serves)' };
+    const c = cameraConfig(this.d.running(), cam);
+    if (!c) return { status: 404, error: 'not_found' };
+    if (c.protocol !== 'https') return { status: 409, error: 'not_available', detail: 'plain http: the camera has no certificate to pin' };
+    if (c.tlsName) return { status: 409, error: 'not_available', detail: `the camera is verified by its public name (tlsName ${c.tlsName})` };
+    const mode = this.d.certState(cam)?.mode ?? 'none';
+    if (mode === 'site-ca' || mode === 'public') return { status: 409, error: 'not_available', detail: `the camera's trust is ${mode}: clear the trust first (camera-trust-clear)` };
+    const served = await this.d.served(cam);
+    if (!served) return { status: 503, error: 'camera_offline', detail: 'the camera did not answer on HTTPS' };
+    const requester: Requester = { user: who.user, requestedBy: who.requestedBy, ...(who.ip ? { ip: who.ip } : {}), ...(who.userAgent ? { userAgent: who.userAgent } : {}), ...cmdOf(who) };
+    if (served.fingerprint !== fingerprint) {
+      this.d.audit.write({ action: 'camera-trust', category: ['configuration'], type: ['change'], outcome: 'failure', error: 'fingerprint_mismatch', ...whoRecord(who), camera: cam, message: `Camera trust ${cam}: pin refused, the camera serves ${served.fingerprint}, not ${fingerprint}`, details: { op: 'pin', fingerprint, served: served.fingerprint, requestedBy: who.requestedBy, ...cmdOf(who) } });
+      return { status: 409, error: 'fingerprint_mismatch', detail: 'the camera serves another certificate than the one confirmed', extra: { served: served.fingerprint } };
+    }
+    return { status: 200, json: this.d.pinServed(cam, served, requester) };
   }
 }
