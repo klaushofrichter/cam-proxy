@@ -321,5 +321,10 @@ names.
    on the LAN. Not a cams-admin command.
 3. **Live video:** MSE over WebSocket on the proxy's existing HTTPS address, no
    new ports, no WebRTC/UDP; sub stream by default, main on demand. Cleared
-   with kube-setup before the cluster path is used.
+   with kube-setup (Cluster session, 2026-10-30): the cams → proxy WebSocket
+   needs no cluster change (cams has no egress policy; outbound sockets aren't
+   cut by Knative's 600 s). The **browser → cams leg stays chunked HTTP/fMP4 on
+   cams's existing live routes** — cams.skylar.technology is a Knative
+   DomainMapping, which breaks WebSocket upgrades — so cams relays the proxy's
+   stream to the browser as today (600 s cut, reconnect).
 4. **Ops scopes:** `offboard` yes; `enroll` no (stays signed-in).
