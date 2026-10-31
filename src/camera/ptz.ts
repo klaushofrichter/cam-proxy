@@ -26,17 +26,18 @@ export function cameraSpeed(speed: number): number {
   return Math.round(1 + ((speed - 1) * 63) / 9);
 }
 
-// At most 31 UTF-8 bytes, cut between characters (code points).
+// At most 31 UTF-8 bytes, cut between characters (code points); no leading,
+// trailing or double spaces (the E1 ignores such a name, measured 2026-10-31).
 export function presetName(name: string): string {
   let out = '';
   let bytes = 0;
-  for (const ch of name) {
+  for (const ch of name.trim().replace(/\s+/g, ' ')) {
     const n = Buffer.byteLength(ch);
     if (bytes + n > PRESET_NAME_BYTES) break;
     out += ch;
     bytes += n;
   }
-  return out;
+  return out.trimEnd();
 }
 
 export interface PresetSlot {
@@ -63,7 +64,7 @@ export class ReolinkPtz {
     await this.ctrl(d === 'in' ? 'ZoomInc' : 'ZoomDec', {}, FIXED_SPEED);
   }
 
-  // Not measured which way is which: far → FocusInc, near → FocusDec.
+  // FocusInc raises the focus position toward its far end (measured on the E1, #282).
   async focus(d: FocusDirection): Promise<void> {
     await this.ctrl(d === 'far' ? 'FocusInc' : 'FocusDec', {}, FIXED_SPEED);
   }
