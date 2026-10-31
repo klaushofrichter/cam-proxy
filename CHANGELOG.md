@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- PTZ: a position name with a leading or trailing space or two spaces in a row now saves; the camera gets its name without them. The E1 silently ignores such a name, so saving failed with "the camera did not keep the preset" (measured, #282).
+
+## v2026.10.31.1
+
 - Admin page: confirmation dialogs wrap long text (a certificate fingerprint); the fingerprint pushed the text and the buttons past the dialog's edge.
 
 ## v2026.10.30.5
