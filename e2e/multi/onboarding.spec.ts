@@ -17,6 +17,13 @@ test('trust a camera certificate from the onboarding card; a wrong password is r
     await card.getByTestId('onboarding-trust').click();
     const dialog = page.getByTestId('confirm-dialog');
     await expect(dialog.getByTestId('confirm-message')).toContainText('Trust the certificate SHA256:');
+    // The fingerprint has no break points: it wraps inside the dialog, and the
+    // buttons stay in it (it once pushed them past the dialog's edge).
+    const box = (await dialog.boundingBox())!;
+    for (const id of ['confirm-message', 'confirm-ok']) {
+      const b = (await dialog.getByTestId(id).boundingBox())!;
+      expect(b.x + b.width, id).toBeLessThanOrEqual(box.x + box.width);
+    }
     await dialog.getByTestId('confirm-ok').click();
     await expect(card.getByTestId('onboarding-message')).toHaveText('Certificate of Gate trusted.');
     await expect(card.getByTestId('onboarding-step-trust')).toHaveAttribute('data-ok', 'true', { timeout: 15_000 });

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Admin page: confirmation dialogs wrap long text (a certificate fingerprint); the fingerprint pushed the text and the buttons past the dialog's edge.
+
 ## v2026.10.30.5
 
 - Proxy profile: the firewall lines are now one per camera with FTP (the FTP port and the passive range in one rule: a ufw port list, an nft set), so all 64 cameras fit; before, cameras beyond the first 32 had none.
