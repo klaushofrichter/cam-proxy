@@ -42,7 +42,7 @@ describe('the profile report', () => {
       storage: { budgetBytes: 600e9, usedBytes: 41e9, diskBytes: 1e12, freeBytes: 880e9 },
       hardware: { pi: null, cpuCores: 4, cpuModel: 'Intel N100', memoryBytes: 16e9, load5: 0.7, cpuTempC: 48.5 },
       warnings: [],
-      firewall: { tool: 'ufw', lines: ['sudo ufw allow from 192.0.2.85 to any port 2121 proto tcp', 'sudo ufw allow from 192.0.2.85 to any port 30000:30029 proto tcp'] },
+      firewall: { tool: 'ufw', lines: ['sudo ufw allow from 192.0.2.85 to any port 2121,30000:30029 proto tcp'] },
       tls: { site: null, cameraSubnet: null },
     });
     const hb = buildHeartbeat(buildHealth(input()), PI_INFO, undefined, p);

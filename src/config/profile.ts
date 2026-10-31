@@ -59,8 +59,10 @@ export function profileWarnings(c: Config): ProfileWarning[] {
   return out;
 }
 
-// The lines each camera with FTP needs on its host's firewall: the FTP port
-// and the passive range from the camera's address. Plain text for a person to
+// The lines each camera with FTP needs on its host's firewall: one per camera,
+// the FTP port and the passive range from the camera's address (ufw's port
+// list, an nft anonymous set), so profile.cameras' 64 fit the contract's 64
+// lines (#277). Plain text for a person to
 // run; nothing here runs them. A camera without an IPv4 address gets none.
 // They hold camera addresses: never logged. nft: the table and chain the
 // multi-camera host's rendered ruleset has (`table inet filter`, `chain
@@ -77,9 +79,9 @@ export function firewallLines(c: Config): string[] {
     const ip = splitHost(cam.host).hostname;
     if (isIP(ip) !== 4) continue;
     if (c.profile.firewall === 'nft') {
-      lines.push(`sudo nft add rule inet filter input ip saddr ${ip} tcp dport ${port} accept`, `sudo nft add rule inet filter input ip saddr ${ip} tcp dport ${from}-${to} accept`);
+      lines.push(`sudo nft add rule inet filter input ip saddr ${ip} tcp dport { ${port}, ${from}-${to} } accept`);
     } else {
-      lines.push(`sudo ufw allow from ${ip} to any port ${port} proto tcp`, `sudo ufw allow from ${ip} to any port ${from}:${to} proto tcp`);
+      lines.push(`sudo ufw allow from ${ip} to any port ${port},${from}:${to} proto tcp`);
     }
   }
   return lines.slice(0, FIREWALL_LINES_MAX);
