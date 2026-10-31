@@ -28,6 +28,31 @@ import { DAY } from '../time-units';
 import { bad, IMMUTABLE, intParam, leftSignal, notFound, sendFileOr } from './respond';
 import { parseStored, parseStoredList } from '../catalog/json';
 
+// A camera's TLS as clients see it: the interface cams consumes (the cams P5
+// plan): mode, servername, the trusted leaf's SHA256: fingerprint, notAfter,
+// lastPush; and (spec 2026-10-30-camera-onboarding-design §4.8, §6.2) the
+// fingerprint the proxy measured the camera serving (`served`) and what is
+// wrong: `untrusted` (https, nothing trusted yet), `changed` (pinned, and it
+// serves another certificate now). Never a key.
+export interface CameraTlsView {
+  mode: CertState['mode'];
+  servername: string | null;
+  fingerprint: string | null;
+  notAfter: number | null;
+  lastPush: { at: number; outcome: NonNullable<CertState['lastPush']>['outcome'] } | null;
+  served: string | null;
+  problem: 'untrusted' | 'changed' | null;
+}
+export function cameraTls(w: CameraWorker, state: CertState | undefined, served: string | null): CameraTlsView {
+  const c = w.cam();
+  const pub = c.protocol === 'https' && !!c.tlsName;
+  const base = state
+    ? { mode: state.mode, servername: state.servername, fingerprint: state.fingerprint, notAfter: state.notAfter, lastPush: state.lastPush ? { at: state.lastPush.at, outcome: state.lastPush.outcome } : null }
+    : { mode: pub ? ('public' as const) : ('none' as const), servername: pub ? c.tlsName! : null, fingerprint: null, notAfter: null, lastPush: null };
+  const problem = c.protocol === 'https' && base.mode === 'none' ? 'untrusted' : base.mode === 'pinned' && served !== null && served !== base.fingerprint ? 'changed' : null;
+  return { ...base, served, problem };
+}
+
 export interface StillsSide { go2rtc: Go2rtc; grabber: FrameGrabber; store: MinuteStore }
 
 // A calendar date, YYYY-MM-DD (2026-02-30 is not one), in the years 2000 to
@@ -55,7 +80,7 @@ const analysisSummary = (a: AnalysisRow | undefined) =>
 // `tls`: a camera's certificate state from the site CA (spec 2026-10-05-multi-camera-host-design
 // §10.4); undefined without one (then mode public for a tlsName camera, none otherwise).
 // `credentials`: where a camera's password comes from and whether it works (spec 2026-10-30-camera-onboarding-design §4.1; never a value).
-export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: CameraRegistry; sse: SseHandler; tls?: (id: string) => CertState | undefined; credentials: (id: string) => Credentials }): express.Router {
+export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: CameraRegistry; sse: SseHandler; tls?: (id: string) => CertState | undefined; served?: (id: string) => string | null; credentials: (id: string) => Credentials }): express.Router {
   const r = express.Router();
   // Every /cameras/:cam route: the camera's worker, 404 or 503 (spec 2026-10-05-multi-camera-host-design §6.1).
   r.param('cam', cameraParam(d.cameras));
@@ -74,15 +99,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: 
     const latestStill = f ? { ts: f.ts, ...latestUrls(w.id) } : null;
     return { id: w.id, name: w.name(), online: w.status.state().online, lastEventTs: lastLiveEventTs(d.catalog, w.id), stream, publicUrl: d.config().server.publicUrl ?? null, address: w.cam().host, error: w.error(), features: [...FEATURES], capabilities: w.capabilities(), latestStill, tls: tlsOf(w), credentials: d.credentials(w.id) };
   };
-  // The interface cams consumes (the cams P5 plan): mode, servername, the served
-  // leaf's SHA256: fingerprint, notAfter, lastPush. Never a key.
-  const tlsOf = (w: CameraWorker) => {
-    const st = d.tls?.(w.id);
-    if (st) return { mode: st.mode, servername: st.servername, fingerprint: st.fingerprint, notAfter: st.notAfter, lastPush: st.lastPush ? { at: st.lastPush.at, outcome: st.lastPush.outcome } : null };
-    const c = w.cam();
-    const pub = c.protocol === 'https' && !!c.tlsName;
-    return { mode: pub ? ('public' as const) : ('none' as const), servername: pub ? c.tlsName! : null, fingerprint: null, notAfter: null, lastPush: null };
-  };
+  const tlsOf = (w: CameraWorker) => cameraTls(w, d.tls?.(w.id), d.served?.(w.id) ?? null);
   r.get('/cameras', (_req, res) => void res.json(d.cameras.list().map(info)));
   r.get('/cameras/:cam', (_req, res) => void res.json(info(workerOf(res))));
 

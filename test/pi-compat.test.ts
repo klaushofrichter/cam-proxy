@@ -244,7 +244,7 @@ describe('the Pi: no site CA', () => {
     expect(proxy.running.ntp).toEqual({});
     expect(sim.sim.engine.counters.setCalls).not.toContain('SetNtp'); // its camera's NTP is left alone
     expect(existsSync(join(dir, 'data', 'tls'))).toBe(false);
-    expect((await request(base).get('/api/cameras').set(auth())).body[0].tls).toEqual({ mode: 'none', servername: null, fingerprint: null, notAfter: null, lastPush: null });
+    expect((await request(base).get('/api/cameras').set(auth())).body[0].tls).toEqual({ mode: 'none', servername: null, fingerprint: null, notAfter: null, lastPush: null, served: null, problem: null });
     const h = (await request(base).get('/api/local/health')).body;
     expect(h.items.find((i: { id: string }) => i.id === 'certificates')).toBeUndefined();
     expect((await request(base).post('/control/cameras/cam1/actions/camera-cert-push').set(auth(ADMIN_TOKEN))).body).toMatchObject({ outcome: 'failed', detail: 'no site CA: tls.site is not set' });

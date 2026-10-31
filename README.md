@@ -66,6 +66,7 @@ A Mac runs it for development on `localhost:8480`.
 - [Quick start (Mac, against cam-sim)](#quick-start-mac-against-cam-sim)
 - [Configuration](#configuration)
 - [Client API](#client-api)
+- [Camera calls (for cams)](#camera-calls-for-cams)
 - [PTZ (pan, tilt, zoom)](#ptz-pan-tilt-zoom)
 - [Stills and previews](#stills-and-previews)
 - [Clips (FTP)](#clips-ftp)
@@ -362,9 +363,10 @@ while one not yet cached counts as a normal request); more answer 429
 ```sh
 api() { curl -s -H "Authorization: Bearer $CAMPROXY_TOKEN" "http://localhost:8480/api$1"; }
 api /cameras
-# [{"id":"cam1","name":"Backyard Left","online":true,"lastEventTs":1790000000000,"stream":{"up":true,"lastFrameTs":1790000000000},"publicUrl":null,"address":"192.168.1.20","error":null,"features":["sse-cam-list","ptz"],"capabilities":{"schema":1,"ptz":null}}]
+# [{"id":"cam1","name":"Backyard Left","online":true,"lastEventTs":1790000000000,"stream":{"up":true,"lastFrameTs":1790000000000},"publicUrl":null,"address":"192.168.1.20","error":null,"features":["sse-cam-list","ptz","camera-calls"],"capabilities":{"schema":1,"ptz":null}}]
 # address: the camera's host as the proxy runs it (cams reaches the camera there)
-# every camera of this proxy, config order; error: null when fine; features: what this proxy supports (sse-cam-list: ?cam=a,b; ptz: the PTZ API)
+# every camera of this proxy, config order; error: null when fine; features: what this proxy supports (sse-cam-list: ?cam=a,b; ptz: the PTZ API;
+# camera-calls: status, snapshot, live, settings, light, reboot for cams)
 # capabilities: what this camera can do (see PTZ below); null until the camera was first read
 api /cameras/cam1   # the same entry for one camera (404 for another id)
 api '/cameras/cam1/events?kind=person&limit=10'
@@ -397,6 +399,134 @@ api '/cameras/cam1/events?kind=person&limit=10'
 - `GET|HEAD /api/cameras/{cam}/recordings/{id}`: one recording as MP4, with
   `Range`; `HEAD` never downloads from the camera.
 - `GET /health`: the process is up (no auth).
+
+## Camera calls (for cams)
+
+What cams asks a camera, the proxy answers for it (spec
+2026-10-30-camera-onboarding-design §4.8), so cams never calls a camera and
+holds no camera password. Answers are in the proxy's own terms: no camera
+command, code or message reaches a client; a camera that is offline answers
+503 `{"error":"camera_offline"}`, any other camera failure 502
+`{"error":"camera_error"}`. Reads take a client token; the calls that change
+the camera (settings, light, reboot) need an admin token, and a cams-admin
+managed admin token may make exactly these (a client token answers 403
+`{"error":"admin_only"}`).
+
+### Camera status
+
+`GET /api/cameras/{cam}/status` (client token):
+
+```json
+{ "id": "cam1", "online": true, "since": 1790000000000, "checkedAt": 1790000005000, "error": null,
+  "model": "RLC-1224A", "firmware": "v3.2.0.6011_2607012059", "hardware": "IPC_NT18NA612MP", "name": "Backyard", "simulator": null,
+  "streams": { "main": { "codec": "h265", "width": 4512, "height": 2512, "fps": 20 }, "sub": { "codec": "h264", "width": 896, "height": 512, "fps": 10 } },
+  "sd": { "present": true, "mounted": true, "capacityMB": 61047, "freeMB": 12000, "checkedAt": 1790000000000 },
+  "time": { "clockOffsetMs": 120, "stdOffsetMinutes": -360, "dstOffsetMinutes": 60, "dstRule": { "...": "..." } },
+  "certificate": { "subject": "cam1.site.internal", "issuer": "Site CA", "validTo": "2027-10-30T00:00:00.000Z" },
+  "credentials": { "source": "store", "authOk": true, "checkedAt": 1790000005000 },
+  "tls": { "mode": "pinned", "servername": null, "fingerprint": "SHA256:…", "notAfter": null, "lastPush": null, "served": "SHA256:…", "problem": null } }
+```
+
+- Every key is always there. `online`, `since`, `error` come from the
+  camera's status check, never from a wait on the camera: an offline camera
+  answers at once, with `streams` both `null`.
+- `streams`: from the camera's encoder settings, read at most every 10
+  minutes (30 s after a failure; `null` per stream when unknown). Changing
+  them is not offered.
+- `sd`: the SD card as last read (every 5 minutes), `null` until the first
+  read. `time`: the camera's zone and its clock against the proxy's (for
+  compositions), `null` until known. `certificate`: what an https camera
+  presents, when verified (pinned or the site CA), read at most hourly.
+- `tls` is the camera view's `tls` (also in `GET /api/cameras`) plus `served`,
+  the fingerprint the proxy last measured the camera serving (an https camera;
+  measured at most once a minute), and `problem`: `untrusted` (https, nothing
+  trusted yet: pin it), `changed` (pinned, and it serves another certificate
+  now), else `null`.
+- `simulator`: cam-sim's version when the camera is one, else `null`.
+
+### Snapshot
+
+`GET /api/cameras/{cam}/snapshot.jpg?stream=main|sub` (client token;
+`main` by default): a JPEG taken now, `Cache-Control: no-store`. `main` is the
+camera's own picture at full size; `sub` a frame of the sub stream from the
+proxy's go2rtc, which only a camera with stills on has (else 404
+`{"error":"stream_unavailable"}`). Another `stream` answers 400.
+
+### Camera settings
+
+The two sections cams's Settings page edits (cams's settings model, moved
+into the proxy): `detection` (recording, motion recording and sensitivity, AI
+person/vehicle/pet recording and sensitivity) and `image` (day/night, IR
+lights, spotlight mode and brightness, flip, on-screen text). The camera's
+encoding is read-only (`streams` in the status).
+
+- `GET /api/cameras/{cam}/settings` (client token): `{detection, image}`.
+- `GET /api/cameras/{cam}/settings/{section}` (client token): one section.
+- Reads of one camera share one camera request and are answered again for up
+  to 5 s (a change drops them), so a looping client can't crowd out the
+  proxy's own status checks; a camera that doesn't answer within 5 s is 504
+  `{"error":"camera_timeout"}` (the light's read too). Main snapshots of one
+  camera: one at a time, callers in the meantime share it.
+- `PUT /api/cameras/{cam}/settings/{section}` (admin; a managed admin token
+  may): a patch of the section, e.g. `{"flip":{"vertical":true}}`. Every
+  camera object it touches is read and written whole with only those keys
+  changed, then read again; one write at a time per camera, and the camera
+  session is closed afterwards. 200 `{fields, settings}` when every field
+  was saved; 207 when one was not: `fields.<name>` is `{ok:false,
+  error:"not_applied"}` (the camera answered but did not keep it) or
+  `"camera_rejected"`. 400 `{"error":"invalid","details":[…]}` before the
+  camera is asked anything; 404 for another section. Every request is
+  audited, refusals included (`camera-settings`, [docs/audit-log.md](docs/audit-log.md)).
+
+### Light
+
+- `GET /api/cameras/{cam}/light` (client token): `{"on": false}`.
+- `PUT /api/cameras/{cam}/light` (admin; a managed admin token may), body
+  exactly `{"on": true}` or `{"on": false}` (else 400): the camera's light
+  object is written whole with only its state changed (nothing is sent when it
+  already is so), then read again for up to 5 s, because the camera reports a
+  switch late (about 1 s on, 3 s off). 200 `{on}`; 502
+  `{"error":"not_applied","on":…}` when it never showed. "Auto" is the
+  spotlight mode in the `image` settings. Every request is audited, refusals
+  and the no-op included (`camera-light`).
+
+### Reboot
+
+`POST /api/cameras/{cam}/reboot` (admin; a managed admin token may), body
+exactly `{"confirm":"reboot"}` (else 400): the `camera-reboot` action. 202
+`{"confirmed":true}` (`false`: the camera dropped the connection after
+receiving it); 429 `{"error":"too_soon"}` with `Retry-After` within two
+minutes of a reboot or power-cycle; 503 or 502 when the request did not reach
+the camera. Audited (`camera-reboot`).
+
+### Live video
+
+`GET /api/cameras/{cam}/live?stream=sub|main&codecs=…` as a WebSocket
+upgrade on the proxy's own HTTP/HTTPS address (no new port, no WebRTC or
+UDP), relayed from the proxy's go2rtc (the one that makes stills, so only for
+a camera with stills on). `sub` by default, `main` on request (H.265 on most
+cameras). `Authorization: Bearer <client token>` only: no session cookie, and
+a token in the URL answers 400.
+
+The protocol (MSE):
+
+1. One text message `{"type":"mse","value":"video/mp4; codecs=\"avc1.640029\""}`
+   for `MediaSource.addSourceBuffer`.
+2. Binary messages: the fMP4 init segment, then fragments, to append in order.
+
+Refused before the upgrade (plain HTTP with a JSON body): 400 `token_in_url`
+or `invalid` (stream, codecs), 401, 404, 429 (more than 60 upgrades a minute
+from one address). The camera's state comes over the socket as
+`{"type":"error","value":…}` and close 1013: `camera_restarting`,
+`stream_unavailable` (no go2rtc stream for the camera), `camera_offline`,
+`too_many_streams` (8 per camera, 32 per proxy). A stream that fails or
+doesn't start within 10 s: `stream_unavailable` and close 1011; a client more
+than 8 MiB behind is closed with 4008 `slow_consumer` (reconnect). Nothing
+else go2rtc says reaches the client.
+
+cams opens this socket per viewer and relays it to the browser as chunked
+HTTP/fMP4 on its own live routes (its public address can't carry WebSocket
+upgrades).
 
 ## PTZ (pan, tilt, zoom)
 
@@ -1250,6 +1380,13 @@ the proxy first (the camera only when the proxy has none), and Live falls
 back to the proxy's stills when live video isn't playing. See the
 [cams README](https://github.com/klaushofrichter/cams#readme) for the
 `proxy` setting and the rest of its camera configuration.
+
+When a proxy's camera list carries the `camera-calls` feature, cams calls the
+camera only through these routes ([Camera calls (for cams)](#camera-calls-for-cams)):
+status, snapshot, live video (a WebSocket it relays to the browser), settings,
+light and reboot, and for its managed admin token the camera password and the
+certificate pin. cams then holds no camera password and never reaches a camera
+itself.
 
 ## cams-admin (optional)
 

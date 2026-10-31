@@ -33,6 +33,8 @@ function registered(app: any): string[] {
     }
   };
   walk(app.router.stack, '');
+  // The live video is a WebSocket upgrade on the servers, not an Express route (src/api/live-upgrade.ts).
+  out.push('GET /api/cameras/{cam}/live');
   // Only the API; the admin UI's files (favicon, page fallback) aren't in openapi.yaml.
   return [...new Set(out)].filter((r) => / \/(api|control|tls)\/| \/(health|metrics)$/.test(r)).sort();
 }

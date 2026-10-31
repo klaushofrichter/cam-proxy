@@ -229,7 +229,7 @@ paths:
     get:
       summary: The camera and its state
       responses:
-        '200': { description: '[{ id, name, online, lastEventTs (the newest live (non-recovered) event''s start, or null), stream: { up, lastFrameTs } | null, publicUrl, address }] (address: the camera''s camera.host as it runs, host and optional port, for clients that reach the camera directly; name: the camera''s own name as read from it, the configured camera.name until the camera was first read; stream is null when stills are off; publicUrl is server.publicUrl or null). Every configured camera in config order; each item also has error (the camera worker''s or its last check''s error, null when fine) and features (string[], the same on every item: what this proxy supports beyond the pre-multi-camera API, e.g. sse-cam-list for /api/stream?cam=a,b, ptz for the PTZ API; clients test for a name), capabilities (Capabilities: what this camera can do, null until first read; a change is sent as a camera stream message) and latestStill ({ts, url, tileUrl} of the newest still in memory, or null: GET /api/cameras/{cam}/stills/latest.jpg), credentials (Credentials: where the password comes from and whether it works; never a value)' }
+        '200': { description: '[{ id, name, online, lastEventTs (the newest live (non-recovered) event''s start, or null), stream: { up, lastFrameTs } | null, publicUrl, address }] (address: the camera''s camera.host as it runs, host and optional port, for clients that reach the camera directly; name: the camera''s own name as read from it, the configured camera.name until the camera was first read; stream is null when stills are off; publicUrl is server.publicUrl or null). Every configured camera in config order; each item also has error (the camera worker''s or its last check''s error, null when fine) and features (string[], the same on every item: what this proxy supports beyond the pre-multi-camera API, e.g. sse-cam-list for /api/stream?cam=a,b, ptz for the PTZ API; clients test for a name), capabilities (Capabilities: what this camera can do, null until first read; a change is sent as a camera stream message) and latestStill ({ts, url, tileUrl} of the newest still in memory, or null: GET /api/cameras/{cam}/stills/latest.jpg), credentials (Credentials: where the password comes from and whether it works; never a value), tls ({ mode (site-ca, pinned, public, none), servername, fingerprint, notAfter, lastPush, served (the fingerprint an https camera served when the proxy last measured it, or null), problem (untrusted: https and nothing trusted; changed: pinned and it serves another certificate; else null) })' }
         '401': { description: missing or wrong token }
   /api/cameras/{cam}:
     get:
@@ -241,6 +241,138 @@ paths:
         '401': { description: missing or wrong token }
         '404': { description: unknown camera }
         '503': { description: camera_restarting (Retry-After) while the camera restarts }
+  /api/cameras/{cam}/status:
+    get:
+      summary: The camera's status for cams (spec 2026-10-30-camera-onboarding-design §4.8)
+      description: 'Every key always present. online, since, checkedAt, error from the status check (never a wait on an offline camera); model, firmware, hardware, name, simulator (cam-sim''s version, else null); streams { main, sub } each { codec (h264, h265), width, height, fps } or null (GetEnc, read at most every 10 minutes); sd { present, mounted, capacityMB, freeMB, checkedAt } or null until first read; time { clockOffsetMs, stdOffsetMinutes, dstOffsetMinutes, dstRule } or null; certificate { subject, issuer, validTo } (a verified https camera) or null; credentials (Credentials); tls (as in GET /api/cameras, with served and problem). Reads of the camera are bounded by 5 s each (null when longer).'
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 'the status' }
+        '401': { description: missing or wrong token (the audit token too) }
+        '404': { description: '{ error: not_found }: unknown camera' }
+        '503': { description: camera_restarting (Retry-After) while the camera restarts }
+  /api/cameras/{cam}/snapshot.jpg:
+    get:
+      summary: An on-demand snapshot (spec 2026-10-30-camera-onboarding-design §4.8)
+      description: 'stream main (the default): the camera''s own picture, full size; sub: a frame of the sub stream from the host''s go2rtc (a camera with stills on). Never cached (Cache-Control: no-store).'
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: stream, in: query, required: false, schema: { type: string, enum: [main, sub] } }
+      responses:
+        '200': { description: the picture, content: { image/jpeg: { schema: { type: string, format: binary } } } }
+        '400': { description: '{ error: invalid, detail }: stream is neither main nor sub' }
+        '401': { description: missing or wrong token }
+        '404': { description: '{ error: not_found } (unknown camera), { error: stream_unavailable } (sub for a camera without a go2rtc stream: stills off)' }
+        '502': { description: '{ error: camera_error }' }
+        '503': { description: '{ error: camera_offline }, or camera_restarting (Retry-After)' }
+  /api/cameras/{cam}/settings:
+    get:
+      summary: The camera's settings, both sections (spec 2026-10-30-camera-onboarding-design §4.8)
+      description: '{ detection: DetectionSettings, image: ImageSettings } (cams''s settings model: recording, motion and AI detection; day/night, IR, spotlight, flip, on-screen text), read from the camera (a read up to 5 s old is answered again; reads of one camera share one request; a change drops it).'
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: '{ detection, image }' }
+        '401': { description: missing or wrong token }
+        '404': { description: '{ error: not_found }: unknown camera' }
+        '502': { description: '{ error: camera_error }' }
+        '503': { description: '{ error: camera_offline }, or camera_restarting (Retry-After)' }
+        '504': { description: '{ error: camera_timeout }: the camera did not answer within 5 s' }
+  /api/cameras/{cam}/settings/{section}:
+    get:
+      summary: One settings section (detection or image)
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: section, in: path, required: true, schema: { type: string, enum: [detection, image] } }
+      responses:
+        '200': { description: 'the section''s settings' }
+        '401': { description: missing or wrong token }
+        '404': { description: '{ error: not_found }: unknown camera or section' }
+        '502': { description: '{ error: camera_error }' }
+        '503': { description: '{ error: camera_offline }, or camera_restarting (Retry-After)' }
+        '504': { description: '{ error: camera_timeout }: the camera did not answer within 5 s' }
+    put:
+      summary: Change fields of one settings section (admin; a managed admin token may)
+      description: 'The body is a patch of the section (cams''s DetectionPatch or ImagePatch; the on-screen name only through the camera name). Each camera object it touches is read and Set whole with only the asked keys changed, then the section is read again: a field is ok only when the re-read shows it. One write at a time per camera; the camera session ends afterwards. Audited (camera-settings).'
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: section, in: path, required: true, schema: { type: string, enum: [detection, image] } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: '{ fields: { <field>: { ok: true } }, settings }' }
+        '207': { description: '{ fields: { <field>: { ok, error: not_applied (the camera did not keep it) or camera_rejected } }, settings (as re-read) }' }
+        '400': { description: '{ error: invalid, details: [text] }; nothing sent to the camera' }
+        '401': { description: missing or wrong token }
+        '403': { description: '{ error: admin_only } (a client token), { error: csrf }' }
+        '404': { description: '{ error: not_found }: unknown camera or section' }
+        '502': { description: '{ error: camera_error }' }
+        '503': { description: '{ error: camera_offline }, or camera_restarting (Retry-After)' }
+  /api/cameras/{cam}/light:
+    get:
+      summary: Whether the camera's light is on (spec 2026-10-30-camera-onboarding-design §4.8)
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: '{ on: boolean }' }
+        '401': { description: missing or wrong token }
+        '404': { description: '{ error: not_found }: unknown camera' }
+        '502': { description: '{ error: camera_error }' }
+        '503': { description: '{ error: camera_offline }, or camera_restarting (Retry-After)' }
+        '504': { description: '{ error: camera_timeout }: the camera did not answer within 5 s' }
+    put:
+      summary: Switch the camera's light on or off (admin; a managed admin token may)
+      description: 'The camera''s light object is read and Set whole with only the state changed (nothing is sent when it already is so), then read again every 250 ms for up to 5 s (the camera reports the switch late). The camera session ends afterwards. Audited (camera-light) when it switched. "Auto" is the spotlight mode in the image settings.'
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [on], additionalProperties: false, properties: { on: { type: boolean } } }
+      responses:
+        '200': { description: '{ on }' }
+        '400': { description: '{ error: invalid, detail }: the body is not exactly { on: boolean }' }
+        '401': { description: missing or wrong token }
+        '403': { description: '{ error: admin_only } (a client token), { error: csrf }' }
+        '404': { description: '{ error: not_found }: unknown camera' }
+        '502': { description: '{ error: not_applied, on } (the camera did not report the switch within 5 s), { error: camera_error }' }
+        '503': { description: '{ error: camera_offline }, or camera_restarting (Retry-After)' }
+  /api/cameras/{cam}/reboot:
+    post:
+      summary: Reboot the camera (admin; a managed admin token may; spec 2026-10-30-camera-onboarding-design §4.8)
+      description: 'The camera-reboot action for cams. Shares its 2-minute cooldown with the reboot and power-cycle actions. Audited (camera-reboot).'
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [confirm], additionalProperties: false, properties: { confirm: { type: string, enum: [reboot] } } }
+      responses:
+        '202': { description: '{ confirmed } (false: the camera dropped the connection after receiving it)' }
+        '400': { description: '{ error: invalid, detail }: the body is not exactly { confirm: reboot }' }
+        '401': { description: missing or wrong token }
+        '403': { description: '{ error: admin_only } (a client token), { error: csrf }' }
+        '404': { description: '{ error: not_found }: unknown camera' }
+        '429': { description: '{ error: too_soon, detail } with Retry-After: within the cooldown, or one in progress' }
+        '502': { description: '{ error: camera_error, detail }: the request did not reach the camera' }
+        '503': { description: '{ error: camera_offline, detail }, or camera_restarting (Retry-After)' }
+  /api/cameras/{cam}/live:
+    get:
+      summary: Live video as MSE over a WebSocket (spec 2026-10-30-camera-onboarding-design §4.8, §10.3)
+      description: 'A WebSocket upgrade on the proxy''s HTTP and HTTPS address (no other port). Authorization: Bearer <client or admin token> only (no session cookie, never a token in the URL). After the upgrade the proxy sends one text message {"type":"mse","value":"video/mp4; codecs=\"…\""}, then binary messages: the fMP4 init segment, then fragments, for a MediaSource SourceBuffer. A failure is a text {"type":"error","value":"stream_unavailable"} and close 1011 (also when no mse message came within 10 s); the camera''s state is answered over the socket as {"type":"error","value":camera_restarting | stream_unavailable (no go2rtc stream for the camera: stills off, go2rtc down) | camera_offline | too_many_streams (8 per camera, 32 per proxy)} and close 1013; a client more than 8 MiB behind is closed with 4008 slow_consumer. The client sends nothing. Not audited.'
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: stream, in: query, required: false, schema: { type: string, enum: [sub, main], default: sub } }
+        - { name: codecs, in: query, required: false, description: 'the codecs the client''s MediaSource plays, comma-separated (letters, digits, dots); default avc1 and hvc1 profiles with AAC', schema: { type: string } }
+      responses:
+        '101': { description: switching to the WebSocket protocol }
+        '400': { description: '{ error: token_in_url } (a token in the URL), { error: invalid } (stream or codecs)' }
+        '401': { description: '{ error: unauthorized }: no bearer token, a wrong one, the audit token, or only a session cookie' }
+        '404': { description: '{ error: not_found }: unknown camera (or another upgrade path)' }
+        '429': { description: '{ error: rate_limited }: more than 60 upgrades a minute from one address' }
   /api/cameras/{cam}/ptz/move:
     post:
       summary: Pan and tilt for a moment (spec 2026-10-30-ptz-capabilities-design §5.1)

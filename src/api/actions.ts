@@ -50,6 +50,11 @@ function envFileState(path: string | undefined): { writable: boolean; reason?: s
   }
 }
 
+// The 429 detail of a reboot or power-cycle within the cooldown (also POST /api/cameras/:cam/reboot).
+export const tooSoonDetail = (a: TooSoon): string => (a.inFlight
+  ? `a camera reboot or power-cycle is in progress; try again in ${a.retryAfterS} s`
+  : `the camera was rebooted or power-cycled less than 2 minutes ago; try again in ${a.retryAfterS} s`);
+
 // `cam`: the camera (null only for host actions). `body`: the request body.
 export async function performAction(d: ActionDeps, name: string, cam: string | null, body: Record<string, unknown>, who: ActionWho): Promise<ActionOutcome> {
   const requester = { user: who.user, requestedBy: who.requestedBy, ...(who.ip ? { ip: who.ip } : {}), ...(who.userAgent ? { userAgent: who.userAgent } : {}), ...cmdOf(who) };
@@ -58,12 +63,7 @@ export async function performAction(d: ActionDeps, name: string, cam: string | n
     return cam;
   };
   // The reboot and the power-cycle share a cooldown (#83, #85).
-  const tooSoon = (a: TooSoon): ActionOutcome => ({
-    ...fail(429, 'too_soon', a.inFlight
-      ? `a camera reboot or power-cycle is in progress; try again in ${a.retryAfterS} s`
-      : `the camera was rebooted or power-cycled less than 2 minutes ago; try again in ${a.retryAfterS} s`),
-    retryAfterS: a.retryAfterS,
-  });
+  const tooSoon = (a: TooSoon): ActionOutcome => ({ ...fail(429, 'too_soon', tooSoonDetail(a)), retryAfterS: a.retryAfterS });
   // The power-cycle, PoE-on and switch read need a configured switch: 409 otherwise.
   const noSwitch = (): ActionOutcome | null => {
     const why = d.poeSwitch.notConfigured(camera());

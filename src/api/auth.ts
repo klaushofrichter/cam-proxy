@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from 'crypto';
+import type { IncomingMessage } from 'http';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { logger, maskPath, withoutQuery } from '../log';
 import { readCookie, SESSION_COOKIE } from './session';
@@ -14,8 +15,8 @@ export function tokenMatches(given: string, tokens: string[]): boolean {
   return ok;
 }
 
-function bearerOf(req: Request): string | undefined {
-  const m = /^Bearer ([^\s]{1,512})$/.exec(req.get('authorization') ?? '');
+function bearerOf(authorization: string | undefined): string | undefined {
+  const m = /^Bearer ([^\s]{1,512})$/.exec(authorization ?? '');
   return m?.[1];
 }
 
@@ -75,7 +76,10 @@ export function clientIp(req: Request): string {
 // Order (M §10.2): local admin, managed admin, local client, managed client,
 // audit. The bearer is hashed for the managed tokens once per request.
 function accessOf(req: Request, d: AccessDeps): AccessInfo {
-  const t = bearerOf(req);
+  return accessFrom((name) => req.get(name), d);
+}
+function accessFrom(header: (name: 'authorization' | 'cookie') => string | undefined, d: AccessDeps): AccessInfo {
+  const t = bearerOf(header('authorization'));
   if (t !== undefined) {
     if (tokenMatches(t, [d.adminToken()])) return { access: 'admin', viaCookie: false, tokenKind: 'admin', origin: 'local' };
     const m = d.managed?.(t) ?? null;
@@ -86,7 +90,7 @@ function accessOf(req: Request, d: AccessDeps): AccessInfo {
     if (a && tokenMatches(t, [a])) return { access: 'audit', viaCookie: false, tokenKind: 'audit', origin: 'local' };
     return { access: null, viaCookie: false, tokenKind: 'invalid', origin: null };
   }
-  const s = d.sessionValid(readCookie(req.get('cookie'), SESSION_COOKIE));
+  const s = d.sessionValid(readCookie(header('cookie'), SESSION_COOKIE));
   if (s?.origin === 'local') return { access: 'admin', viaCookie: true, tokenKind: 'session', origin: 'local' };
   if (s?.origin === 'managed') {
     // Ends with its token: blocked, removed or retired → no session.
@@ -95,6 +99,25 @@ function accessOf(req: Request, d: AccessDeps): AccessInfo {
     return { access: null, viaCookie: false, tokenKind: 'invalid', origin: null };
   }
   return { access: null, viaCookie: false, tokenKind: 'none', origin: null };
+}
+
+// Who opens a WebSocket (the live video, spec 2026-10-30-camera-onboarding-design
+// §10.3): accessOf over the raw upgrade request, bearer only (a session
+// cookie counts as none: a page in a browser can't open it cross-site). A
+// refusal (no rights, or the audit token) is reported as requireAccess does.
+export function upgradeAccess(req: IncomingMessage, d: AccessDeps): AccessInfo {
+  const header = (name: string): string | undefined => {
+    const v = req.headers[name];
+    return Array.isArray(v) ? v[0] : v;
+  };
+  const a = accessFrom((name) => (name === 'cookie' ? undefined : header(name)), d);
+  if (!a.access || a.access === 'audit') {
+    // The parts of a Request onRefused reads.
+    const shim = { ip: req.socket.remoteAddress ?? '', originalUrl: req.url ?? '', method: req.method ?? 'GET', get: (n: string) => header(n.toLowerCase()) } as unknown as Request;
+    logger.warn({ path: maskPath(withoutQuery(req.url ?? '')) }, 'unauthorized');
+    d.onRefused?.(shim, { status: 401, reason: a.tokenKind === 'none' ? 'no-token' : 'wrong-token', tokenKind: a.tokenKind, ...(a.origin === 'managed' ? { user: actorOf(a) } : {}) });
+  }
+  return a;
 }
 
 // After requireAccess('admin'): 403 local_admin_only unless the rights are
@@ -129,6 +152,10 @@ export const MANAGED_ALLOWED: readonly (readonly [string, RegExp])[] = [
   ['PUT', /^\/control\/cameras\/[^/]+\/password$/],
   // §10.2: pin the certificate the camera serves, confirmed by its fingerprint (never a cams-admin command).
   ['POST', /^\/control\/cameras\/[^/]+\/actions\/camera-trust-pin$/],
+  // §4.8: the camera calls cams makes that change the camera (whole-object writes, audited).
+  ['PUT', /^\/api\/cameras\/[^/]+\/settings\/(detection|image)$/],
+  ['PUT', /^\/api\/cameras\/[^/]+\/light$/],
+  ['POST', /^\/api\/cameras\/[^/]+\/reboot$/],
 ];
 const managedMay = (method: string, path: string) => !WRITE.has(method) || MANAGED_ALLOWED.some(([m, re]) => m === method && re.test(path));
 
