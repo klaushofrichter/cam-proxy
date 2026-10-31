@@ -38,7 +38,7 @@ describe('client API', () => {
   // name: the camera's own (cam-sim's "Cam"), not the configured "Den" (camera-name design).
   it('lists the camera with its state', async () => {
     const r = await request(p.base).get('/api/cameras').set(auth());
-    expect(r.body).toEqual([{ id: 'cam1', name: 'Cam', online: true, lastEventTs: 3000, stream: process.env.CAMPROXY_TEST_GO2RTC ? expect.objectContaining({ up: expect.any(Boolean) }) : null, publicUrl: null, address: sim.camera.host, error: null, features: ['sse-cam-list', 'ptz'], capabilities: { schema: 1, ptz: null }, latestStill: r.body[0].latestStill === null ? null : expect.objectContaining({ url: '/api/cameras/cam1/stills/latest.jpg' }), tls: { mode: 'none', servername: null, fingerprint: null, notAfter: null, lastPush: null, served: null, problem: null }, credentials: { source: 'env', envName: 'CAMPROXY_CAMERA_PASSWORD', authOk: true, checkedAt: expect.any(Number) } }]);
+    expect(r.body).toEqual([{ id: 'cam1', name: 'Cam', online: true, lastEventTs: 3000, stream: process.env.CAMPROXY_TEST_GO2RTC ? expect.objectContaining({ up: expect.any(Boolean) }) : null, publicUrl: null, address: sim.camera.host, error: null, features: ['sse-cam-list', 'ptz', 'camera-calls'], capabilities: { schema: 1, ptz: null }, latestStill: r.body[0].latestStill === null ? null : expect.objectContaining({ url: '/api/cameras/cam1/stills/latest.jpg' }), tls: { mode: 'none', servername: null, fingerprint: null, notAfter: null, lastPush: null, served: null, problem: null }, credentials: { source: 'env', envName: 'CAMPROXY_CAMERA_PASSWORD', authOk: true, checkedAt: expect.any(Number) } }]);
   });
 
   it('GET /api/cameras: one camera, today\'s fields plus error (spec §6.1)', async () => {
@@ -53,7 +53,7 @@ describe('client API', () => {
   it('every camera item advertises the cam-list filter (spec §6.1)', async () => {
     const r = await request(p.base).get('/api/cameras').set(auth());
     expect(r.body.every((c: { features?: string[] }) => c.features?.includes('sse-cam-list'))).toBe(true);
-    expect((await request(p.base).get('/api/cameras/cam1').set(auth())).body.features).toEqual(['sse-cam-list', 'ptz']);
+    expect((await request(p.base).get('/api/cameras/cam1').set(auth())).body.features).toEqual(['sse-cam-list', 'ptz', 'camera-calls']);
   });
 
   // #75: a recovered event (from the SD card) is no fresh activity.

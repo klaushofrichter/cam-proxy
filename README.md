@@ -363,9 +363,10 @@ while one not yet cached counts as a normal request); more answer 429
 ```sh
 api() { curl -s -H "Authorization: Bearer $CAMPROXY_TOKEN" "http://localhost:8480/api$1"; }
 api /cameras
-# [{"id":"cam1","name":"Backyard Left","online":true,"lastEventTs":1790000000000,"stream":{"up":true,"lastFrameTs":1790000000000},"publicUrl":null,"address":"192.168.1.20","error":null,"features":["sse-cam-list","ptz"],"capabilities":{"schema":1,"ptz":null}}]
+# [{"id":"cam1","name":"Backyard Left","online":true,"lastEventTs":1790000000000,"stream":{"up":true,"lastFrameTs":1790000000000},"publicUrl":null,"address":"192.168.1.20","error":null,"features":["sse-cam-list","ptz","camera-calls"],"capabilities":{"schema":1,"ptz":null}}]
 # address: the camera's host as the proxy runs it (cams reaches the camera there)
-# every camera of this proxy, config order; error: null when fine; features: what this proxy supports (sse-cam-list: ?cam=a,b; ptz: the PTZ API)
+# every camera of this proxy, config order; error: null when fine; features: what this proxy supports (sse-cam-list: ?cam=a,b; ptz: the PTZ API;
+# camera-calls: status, snapshot, live, settings, light, reboot for cams)
 # capabilities: what this camera can do (see PTZ below); null until the camera was first read
 api /cameras/cam1   # the same entry for one camera (404 for another id)
 api '/cameras/cam1/events?kind=person&limit=10'
@@ -1373,6 +1374,13 @@ the proxy first (the camera only when the proxy has none), and Live falls
 back to the proxy's stills when live video isn't playing. See the
 [cams README](https://github.com/klaushofrichter/cams#readme) for the
 `proxy` setting and the rest of its camera configuration.
+
+When a proxy's camera list carries the `camera-calls` feature, cams calls the
+camera only through these routes ([Camera calls (for cams)](#camera-calls-for-cams)):
+status, snapshot, live video (a WebSocket it relays to the browser), settings,
+light and reboot, and for its managed admin token the camera password and the
+certificate pin. cams then holds no camera password and never reaches a camera
+itself.
 
 ## cams-admin (optional)
 
