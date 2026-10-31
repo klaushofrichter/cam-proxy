@@ -174,16 +174,27 @@ export function ptzApi(d: { cameras: CameraRegistry; audit: Pick<AuditLog, 'writ
     if (b.name === undefined && b.home === undefined) return bad(res, 'name or home is required');
     if (b.home !== undefined && b.home !== true) return bad(res, 'home is only ever set to true');
     const pos = g.w.ptz.positions;
-    let out: PtzPositionJson | undefined;
-    if (b.name !== undefined) {
-      out = await change(req, res, g.w, 'rename', () => ({ id, from: pos.name(id) }), () => pos.rename(id, b.name), named);
-      if (!out) return;
+    if (b.name === undefined || b.home === undefined) {
+      const out = b.name !== undefined
+        ? await change(req, res, g.w, 'rename', () => ({ id, from: pos.name(id) }), () => pos.rename(id, b.name), named)
+        : await change(req, res, g.w, 'home', () => ({ id, name: pos.name(id) }), () => pos.makeHome(id), named);
+      if (out) res.json(out);
+      return;
     }
-    if (b.home === true) {
-      out = await change(req, res, g.w, 'home', () => ({ id, name: pos.name(id) }), () => pos.makeHome(id), named);
-      if (!out) return;
+    // Both: one change, all or nothing (#282), audited as the rename and the Home.
+    const from = pos.name(id);
+    try {
+      const out = await pos.edit(id, { name: b.name, home: true });
+      audit(req, res, g.w, 'rename', 'success', { id, from, name: out.name });
+      audit(req, res, g.w, 'home', 'success', { id, name: out.name });
+      res.json(out);
+    } catch (err) {
+      if (cameraFailed(err)) {
+        audit(req, res, g.w, 'rename', 'failure', { id, from });
+        audit(req, res, g.w, 'home', 'failure', { id, name: from });
+      }
+      fail(res, err);
     }
-    res.json(out);
   });
 
   r.post('/cameras/:cam/ptz/positions/:id/save', async (req: Request, res: Response) => {

@@ -13,7 +13,7 @@ test('trust a camera certificate from the onboarding card; a wrong password is r
     await expect(page.getByTestId('camera-picker').locator('option')).toHaveCount(4, { timeout: 15_000 });
     await page.getByTestId('camera-picker').selectOption('cam8');
     const card = page.getByTestId('card-onboarding');
-    await expect(card.getByTestId('onboarding-step-trust')).toHaveText('Certificate: certificate not trusted', { timeout: 15_000 });
+    await expect(card.getByTestId('onboarding-step-trust')).toHaveText('Certificate: certificate not trusted: use "Trust this camera\'s certificate"', { timeout: 15_000 });
     await card.getByTestId('onboarding-trust').click();
     const dialog = page.getByTestId('confirm-dialog');
     await expect(dialog.getByTestId('confirm-message')).toContainText('Trust the certificate SHA256:');

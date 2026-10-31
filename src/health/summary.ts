@@ -47,6 +47,10 @@ export interface HealthInput {
   others?: CameraHealthInput[];
   // The site CA (spec §10.5): absent or null without tls.site (the Pi: no item).
   certificates?: { proxy: { notAfter: number } | null; cameras: { id: string; state: CertState }[]; problems: string[] } | null;
+  // The https cameras whose certificate nothing verifies (#290, decided
+  // 2026-10-30): they keep working, and are a problem of the Certificates
+  // item (shown for them also without a site CA, as on the Pi).
+  untrusted?: string[];
   // No camera runs here (all moved away): camera, stream, intake and ftp above are a placeholder; the
 // items show one non-problem "Camera" item instead of theirs, and `cameras` is empty.
   noCamera?: boolean;
@@ -226,6 +230,9 @@ export function buildHealth(i: HealthInput): HealthSummary {
   // The site CA's certificates (spec §10.5, Ruling P5-9): a problem within 14
   // days of the first expiry, after a failed or refused push, or with a CA problem.
   const ce = i.certificates;
+  const untrusted = i.untrusted ?? [];
+  const untrustedText = untrusted.length === 0 ? null : `${untrusted.length === 1 ? untrusted[0] : `${untrusted.length} cameras`}: certificate not trusted`;
+  if (!ce && untrustedText) add('certificates', 'Certificates', null, untrustedText, true);
   if (ce) {
     const days = (t: number) => Math.floor((t - i.now) / 86400_000);
     const bad = ce.cameras.find((c) => c.state.lastPush && (c.state.lastPush.outcome === 'failed' || c.state.lastPush.outcome === 'refused'));
@@ -235,8 +242,8 @@ export function buildHealth(i: HealthInput): HealthSummary {
     ].sort((a, b) => a.at - b.at);
     const first = expiries[0];
     const soon = first !== undefined && days(first.at) < 14;
-    const text = ce.problems[0] ?? (bad ? `${bad.id}: push ${bad.state.lastPush!.outcome}${bad.state.mode === 'pinned' ? ' (pinned)' : ''}` : soon ? `${first.who} expires in ${days(first.at)} days` : first ? `valid ${days(first.at)} more days` : 'no certificates yet');
-    add('certificates', 'Certificates', first ? days(first.at) : null, text, ce.problems.length > 0 || !!bad || soon);
+    const text = ce.problems[0] ?? untrustedText ?? (bad ? `${bad.id}: push ${bad.state.lastPush!.outcome}${bad.state.mode === 'pinned' ? ' (pinned)' : ''}` : soon ? `${first.who} expires in ${days(first.at)} days` : first ? `valid ${days(first.at)} more days` : 'no certificates yet');
+    add('certificates', 'Certificates', first ? days(first.at) : null, text, ce.problems.length > 0 || !!untrustedText || !!bad || soon);
   }
 
   const host = i.reading.host;

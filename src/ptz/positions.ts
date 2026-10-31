@@ -198,22 +198,31 @@ export class PtzPositions {
   // slots are read first: offline with no read at all → 503, nothing changed
   // (a state is never guessed).
   rename(id: string, raw: unknown): Promise<PtzPositionJson> {
-    return this.lock(async () => {
-      this.row(id);
-      const name = checkName(raw);
-      if (this.nameTaken(name, id)) throw new PtzError(409, 'name_taken');
-      const slots = await this.slots(false);
-      updatePosition(this.d.catalog, this.d.cam, id, { name, updated_at: this.now() });
-      this.d.changed();
-      return this.json(this.row(id), slots);
-    });
+    return this.edit(id, { name: raw });
   }
 
   makeHome(id: string): Promise<PtzPositionJson> {
+    return this.edit(id, { home: true });
+  }
+
+  // A new name, Home, or both, all or nothing (#282): everything is checked
+  // and the slots read before the first write; a Home that fails after the
+  // rename puts the old name back.
+  edit(id: string, ch: { name?: unknown; home?: true }): Promise<PtzPositionJson> {
     return this.lock(async () => {
-      this.row(id);
+      const prev = this.row(id);
+      const name = ch.name === undefined ? undefined : checkName(ch.name);
+      if (name !== undefined && this.nameTaken(name, id)) throw new PtzError(409, 'name_taken');
       const slots = await this.slots(false);
-      setHomePosition(this.d.catalog, this.d.cam, id, this.now());
+      if (name !== undefined) updatePosition(this.d.catalog, this.d.cam, id, { name, updated_at: this.now() });
+      if (ch.home) {
+        try {
+          setHomePosition(this.d.catalog, this.d.cam, id, this.now());
+        } catch (err) {
+          if (name !== undefined) updatePosition(this.d.catalog, this.d.cam, id, { name: prev.name, updated_at: prev.updated_at });
+          throw err;
+        }
+      }
       this.d.changed();
       return this.json(this.row(id), slots);
     });

@@ -22,6 +22,50 @@ describe('zone rules', () => {
     expect(dstBounds(2027, r.dst, r.stdOffsetMinutes, r.dst.offsetHours * 60)).toEqual([Date.UTC(2027, 2, 28, 1), Date.UTC(2027, 9, 31, 1)]);
   });
 
+  // #290: a rule found in one year (week 5 = the month's last weekday) gives
+  // the zone's real changes in every later year; north (start before end) and
+  // south (start after end) of the equator.
+  const changesOf = (zone: string, year: number): number[] => {
+    const fmt = new Intl.DateTimeFormat('en-US', { timeZone: zone, timeZoneName: 'longOffset' });
+    const off = (t: number) => fmt.formatToParts(new Date(t)).find((p) => p.type === 'timeZoneName')!.value;
+    const out: number[] = [];
+    for (let t = Date.UTC(year, 0, 1); t < Date.UTC(year + 1, 0, 1); t += 3600_000) {
+      if (off(t) === off(t + 3600_000)) continue;
+      let m = t;
+      while (off(m) === off(t)) m += 60_000;
+      out.push(m);
+    }
+    return out;
+  };
+  it.each([
+    ['Europe/Berlin', 'north'], ['Europe/London', 'north'], ['America/Chicago', 'north'], ['America/New_York', 'north'], ['America/Havana', 'north'],
+    ['Australia/Sydney', 'south'], ['Australia/Adelaide', 'south'], ['Pacific/Auckland', 'south'],
+  ])('%s (%s): the 2026 rule holds 2026-2035', (zone, side) => {
+    const r = zoneRule(zone, 2026);
+    if (r === 'unsupported' || !r.dst) throw new Error(`${zone}: expected a DST rule`);
+    expect(r.dst.startMon < r.dst.endMon).toBe(side === 'north');
+    for (let year = 2026; year <= 2035; year++) {
+      const [start, end] = dstBounds(year, r.dst, r.stdOffsetMinutes, r.dst.offsetHours * 60);
+      expect([start, end].sort((a, b) => a - b), `${zone} ${year}`).toEqual(changesOf(zone, year));
+      expect(zoneRule(zone, year), `${zone} ${year}`).toEqual(r);
+    }
+  });
+  // A change "the day after the last Thursday" (Cairo) or "after the first
+  // Saturday" (Santiago) is no nth weekday every year: each year's rule gives
+  // that year's changes, and it differs in some years (the onboarding time
+  // step compares with this year's rule and asks for camera-time-set again).
+  it.each([['Africa/Cairo', 2030], ['America/Santiago', 2029]] as const)('%s: each year\'s own rule is right; %i needs another', (zone, other) => {
+    const rules = new Set<string>();
+    for (let year = 2026; year <= 2035; year++) {
+      const r = zoneRule(zone, year);
+      if (r === 'unsupported' || !r.dst) throw new Error(`${zone} ${year}: expected a DST rule`);
+      expect(dstBounds(year, r.dst, r.stdOffsetMinutes, r.dst.offsetHours * 60).sort((a, b) => a - b), `${zone} ${year}`).toEqual(changesOf(zone, year));
+      rules.add(JSON.stringify(r));
+    }
+    expect(rules.size).toBeGreaterThan(1);
+    expect(zoneRule(zone, other)).not.toEqual(zoneRule(zone, 2026));
+  });
+
   it('a half-hour DST shift or an unknown zone is unsupported', () => {
     expect(zoneRule('Australia/Lord_Howe', 2026)).toBe('unsupported');
     expect(zoneRule('Mars/Olympus', 2026)).toBe('unsupported');

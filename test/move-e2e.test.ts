@@ -118,7 +118,10 @@ function world(title: string, tests: () => void): void {
       [fakeS, fakeT] = await Promise.all([startFakeAdmin(), startFakeAdmin()]);
       fakeS.welcomeHeartbeatS = 1;
       fakeT.welcomeHeartbeatS = 1;
-      const timing = { camsAdmin: { timing: { minIntervalS: 0.2, jitterS: 0, backoffCapMs: 300, closeGraceMs: 200 } }, tlsPush: { clearWaitMs: 50, verifyMs: 5000, pollMs: 100 } };
+      // cpuBusy (#282): the copy halves its rate while the host's load is above its core count, so
+      // under a full test suite the few kB took longer than the waits below (move-copier.test.ts
+      // covers the halving); these proxies never see the host's load.
+      const timing = { camsAdmin: { timing: { minIntervalS: 0.2, jitterS: 0, backoffCapMs: 300, closeGraceMs: 200 } }, tlsPush: { clearWaitMs: 50, verifyMs: 5000, pollMs: 100 }, cpuBusy: () => false };
       const ftp = async (port: number) => {
         const passive = await freePort();
         return { enabled: true, port, passive: `${passive}-${passive + 19}`, publicHost: '127.0.0.1', tls: true, stream: 'sub' };
@@ -204,9 +207,26 @@ world('a camera move end to end (two proxies, one cam-sim)', () => {
     const estimateS = Math.max(1, Math.ceil(bytes / offer.probeBps));
     await run(fakeS, 'move.answer', { v: 1, moveId, requestId, target: { proxyId: targetId, name: 'Mini PC' }, accept: true, space: offer.space as Space, estimateS, kinds: offer.kinds });
 
+    // The source grabs until the release, but a grabber that just came up has no still yet: go
+    // only once it has one of the current minute, or that minute has a still nowhere. Waited for
+    // before the approval (#282): the budget counts from it, and this wait (up to a minute under
+    // load) once used it up before the copy began (move-budget-exceeded, or a copy held to its
+    // last rate past the 180 s wait for copied).
+    let goAt = Date.now();
+    if (go2rtc) {
+      const grabber = S.proxy.cameras.get('cam3')!.stills!.grabber;
+      await until(() => {
+        goAt = Date.now();
+        const ts = grabber.lastFrameTs();
+        return ts !== null && Math.floor(ts / 60_000) === Math.floor(goAt / 60_000);
+      }, 60_000);
+    }
+
     // 4. The admin approves on the source's page: the move.approve event carries the plan. The copy
-    // fills its budget (S §8.3): 20 s for these few kB.
-    const plan: MovePlan = { transfer: true, kinds: [...kinds], space: 'all', targetSettings: null, budgetS: Math.max(estimateS, 20), estimateS };
+    // fills its budget (S §8.3), which counts from the approval and so holds the switch-over too:
+    // 60 s for these few kB (the copy ends at 80 % of it, while the stills check below waits for
+    // the minute after the release anyway).
+    const plan: MovePlan = { transfer: true, kinds: [...kinds], space: 'all', targetSettings: null, budgetS: Math.max(estimateS, 60), estimateS };
     await request(S.base).post(`/control/moves/${moveId}/approve`).set(admin).send({ plan }).expect(202);
     await until(() => events(fakeS, 'move.approve').some((e) => e.moveId === moveId), 10_000);
     const approved = events(fakeS, 'move.approve').find((e) => e.moveId === moveId)!.plan as MovePlan;
@@ -223,17 +243,6 @@ world('a camera move end to end (two proxies, one cam-sim)', () => {
         await new Promise((r) => setTimeout(r, 100));
       }
     })();
-    let goAt = Date.now();
-    if (go2rtc) {
-      // The source grabs until the release, but a grabber that just came up has no still yet: go
-      // only once it has one of the current minute, or that minute has a still nowhere.
-      const grabber = S.proxy.cameras.get('cam3')!.stills!.grabber;
-      await until(() => {
-        goAt = Date.now();
-        const ts = grabber.lastFrameTs();
-        return ts !== null && Math.floor(ts / 60_000) === Math.floor(goAt / 60_000);
-      }, 60_000);
-    }
     await run(fakeS, 'move.go', { v: 1, moveId, plan: approved, targetPublicKey: started.publicKey, expectedLeaf: started.leafFingerprint });
 
     // 6. switched on the target → move.release to the source (the target already copies, P12).

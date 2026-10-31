@@ -362,7 +362,7 @@ paths:
   /api/cameras/{cam}/live:
     get:
       summary: Live video as MSE over a WebSocket (spec 2026-10-30-camera-onboarding-design §4.8, §10.3)
-      description: 'A WebSocket upgrade on the proxy''s HTTP and HTTPS address (no other port). Authorization: Bearer <client or admin token> only (no session cookie, never a token in the URL). After the upgrade the proxy sends one text message {"type":"mse","value":"video/mp4; codecs=\"…\""}, then binary messages: the fMP4 init segment, then fragments, for a MediaSource SourceBuffer. A failure is a text {"type":"error","value":"stream_unavailable"} and close 1011 (also when no mse message came within 10 s); the camera''s state is answered over the socket as {"type":"error","value":camera_restarting | stream_unavailable (no go2rtc stream for the camera: stills off, go2rtc down) | camera_offline | too_many_streams (8 per camera, 32 per proxy)} and close 1013; a client more than 8 MiB behind is closed with 4008 slow_consumer. The client sends nothing. Not audited.'
+      description: 'A WebSocket upgrade on the proxy''s HTTP and HTTPS address (no other port). Authorization: Bearer <client or admin token> only (no session cookie, never a token in the URL). After the upgrade the proxy sends one text message {"type":"mse","value":"video/mp4; codecs=\"…\""}, then binary messages: the fMP4 init segment, then fragments, for a MediaSource SourceBuffer. A failure is a text {"type":"error","value":"stream_unavailable"} and close 1011 (also when no mse message came within 10 s); the camera''s state is answered over the socket as {"type":"error","value":camera_restarting | stream_unavailable (no go2rtc stream for the camera: go2rtc down; with stills off it is started for live clients) | camera_offline | too_many_streams (8 per camera, 32 per proxy)} and close 1013; a client more than 8 MiB behind is closed with 4008 slow_consumer. The client sends nothing. Not audited.'
       parameters:
         - { name: cam, in: path, required: true, schema: { type: string } }
         - { name: stream, in: query, required: false, schema: { type: string, enum: [sub, main], default: sub } }
@@ -482,7 +482,7 @@ paths:
   /api/cameras/{cam}/ptz/positions/{id}:
     patch:
       summary: Rename a position, or make it Home
-      description: 'Rename changes the proxy''s name only. home true moves the Home mark here; there is no home false.'
+      description: 'Rename changes the proxy''s name only. home true moves the Home mark here; there is no home false. name and home together change both or neither.'
       parameters:
         - { name: cam, in: path, required: true, schema: { type: string } }
         - { name: id, in: path, required: true, schema: { type: string } }

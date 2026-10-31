@@ -34,7 +34,7 @@ describe('the onboarding status', () => {
 
   it('ready needs every required step; trust none is not ok and names the fix', () => {
     const s = onboardingStatus(input({ cert: { ...cert, mode: 'none' } }));
-    expect([s.ready, s.steps.trust]).toEqual([false, { ok: false, detail: 'certificate not trusted', action: 'camera-trust-pin' }]);
+    expect([s.ready, s.steps.trust]).toEqual([false, { ok: false, detail: 'certificate not trusted: use "Trust this camera\'s certificate"', action: 'camera-trust-pin' }]);
     expect(compactOf(s)).toEqual({ ready: false, missing: ['trust'] });
     const ok = onboardingStatus(input());
     expect(ok.ready).toBe(true);

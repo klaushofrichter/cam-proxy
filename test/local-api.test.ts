@@ -8,7 +8,7 @@ import { isLoopback, localApi } from '../src/api/local-api';
 import type { HealthSummary } from '../src/health/summary';
 import type { StatFs } from '../src/health/host';
 import { startSim } from './helpers/sim';
-import { startProxy, auth, ADMIN_TOKEN, CLIENT_TOKEN } from './helpers/proxy';
+import { startProxy, auth, until, ADMIN_TOKEN, CLIENT_TOKEN } from './helpers/proxy';
 
 // Spec 2026-10-03-health-summary-design A4: GET /api/local/health, no key,
 // answered only to the socket's loopback address.
@@ -218,4 +218,22 @@ describe('the fall-through on the proxy', () => {
       await sim.close();
     }
   }, 30_000);
+});
+
+// #290 (decided 2026-10-30): an https camera whose certificate nothing
+// verifies keeps working, but the health shows it as a problem.
+describe('an https camera in trust mode none', () => {
+  it('stays online; the Certificates item is a problem naming it', async () => {
+    const sim = await startSim();
+    const p = await startProxy(sim, { settings: { camera: { host: `127.0.0.1:${sim.ports.https}`, protocol: 'https', user: 'proxy', onvifPort: sim.ports.onvif, rtspPort: sim.ports.rtsp, baichuanPort: sim.camera.baichuanPort, statusPollS: 5 } } });
+    try {
+      await until(async () => (await request(p.base).get('/api/cameras/cam1').set(auth())).body.online === true, 20_000);
+      const h = (await request(p.base).get('/api/local/health')).body as HealthSummary;
+      expect(h.items.find((i) => i.id === 'certificates')).toEqual({ id: 'certificates', label: 'Certificates', value: null, text: 'cam1: certificate not trusted', problem: true });
+      expect(h.items.find((i) => i.id === 'camera')?.problem).toBe(false);
+    } finally {
+      await p.proxy.stop();
+      await sim.close();
+    }
+  }, 40_000);
 });

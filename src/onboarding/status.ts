@@ -56,7 +56,7 @@ function trustStep(i: OnboardingInput, mode: CertMode): Step {
     if (i.served !== null && i.served !== i.cert?.fingerprint) return step(false, 'serves another certificate: pin again', 'camera-trust-pin');
     return step(true, `pinned ${i.cert?.fingerprint ?? ''}`.trim());
   }
-  return step(false, 'certificate not trusted', 'camera-trust-pin');
+  return step(false, 'certificate not trusted: use "Trust this camera\'s certificate"', 'camera-trust-pin');
 }
 
 function timeStep(i: OnboardingInput): Step {
