@@ -334,6 +334,29 @@ the new form:
   Over plain http the password crosses the network unencrypted: the answers
   say `plaintext: true` and the admin page warns; prefer https with a pinned
   certificate.
+- **Onboarding scripts:** `scripts/onboard-camera.sh` runs those steps in
+  order (probe, the certificate you confirmed, the password from stdin, add,
+  optionally time and FTP), waits until the proxy reports the camera ready,
+  and, with `CAMS_ADMIN_URL`, until cams-admin has it registered (adopting it
+  with an ops token that has `onboard`) and ready. `scripts/offboard-camera.sh`
+  removes a camera from its cams-admin account and then from the proxy, and
+  checks both. One `ok`/`FAIL` line per step; tokens and the password reach
+  curl only through mode-600 files and are never printed. Needs bash, curl
+  and python3 (the Pi and the mini PC have them):
+
+  ```sh
+  export CAMPROXY_URL=http://<proxy>:8480 CAMPROXY_ADMIN_TOKEN_FILE=<file holding the admin token>
+  scripts/onboard-camera.sh --find
+  scripts/onboard-camera.sh --host 192.0.2.40 --id cam2 --name Garden --time
+  #   shows the certificate; type yes once it matches the camera's own page, then the camera password
+  # with cams-admin: CAMS_ADMIN_URL, CAMS_ADMIN_DIAG_TOKEN_FILE, CAMS_ADMIN_OPS_TOKEN_FILE and --cams-admin-proxy prx_…
+  scripts/offboard-camera.sh --id cam2
+  ```
+
+  Without a terminal (automation) the confirmed certificate comes as
+  `--fingerprint SHA256:…`, the password as stdin's first line, and offboard
+  needs `--yes`. A single-camera proxy (the Pi) keeps its config.json camera
+  idle after an offboard and takes it again with the same id.
 - **Latest stills:** `GET /api/cameras/<id>/stills/latest.jpg` and
   `…/previews/latest.jpg` serve the newest still and tile from memory, with
   `ETag: "<id>-<ts>"`, `X-Still-Ts` and `Cache-Control: no-cache`; a poll with
