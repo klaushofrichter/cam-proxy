@@ -118,3 +118,61 @@ describe.skipIf(!binary)('live video over a WebSocket', () => {
     }
   }, 30_000);
 });
+
+// #296: live video with stills off: the camera's go2rtc stream starts with the
+// first live client and goes after the last; stills stay off.
+describe.skipIf(!binary)('live video with stills off', () => {
+  let s2: Awaited<ReturnType<typeof startSim>>;
+  let q: Awaited<ReturnType<typeof startProxy>>;
+  beforeAll(async () => {
+    s2 = await startSim();
+    q = await startProxy(s2, { settings: { stills: { enabled: false } } });
+    await until(() => q.proxy.cameras.get('cam1')!.status.state().online, 20_000);
+  }, 40_000);
+  afterAll(async () => {
+    await q?.proxy.stop();
+    await s2?.close();
+  });
+  const liveOn = (port: number, query = '') => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/cameras/cam1/live${query}`, { headers: { Authorization: `Bearer ${CLIENT_TOKEN}` } });
+    const text: string[] = [];
+    const bins: Buffer[] = [];
+    ws.on('message', (d: Buffer, isBinary) => (isBinary ? bins.push(d) : text.push(d.toString())));
+    const closed = new Promise<void>((r) => ws.on('close', () => r()));
+    ws.on('error', () => undefined);
+    return { ws, text, bins, closed };
+  };
+
+  it('relays fMP4 on demand; go2rtc stops after the last client; no stills', async () => {
+    const w = q.proxy.cameras.get('cam1')!;
+    expect(q.proxy.go2rtcPid()).toBeUndefined();
+    const a = liveOn(q.port);
+    const b = liveOn(q.port, '?stream=main');
+    try {
+      await until(() => a.bins.length >= 2 && b.text.length >= 1, 20_000);
+      expect(JSON.parse(a.text[0]).value).toMatch(/^video\/mp4; codecs="avc1\./);
+      expect(boxAt(a.bins[0])).toBe('ftyp');
+      expect(q.proxy.go2rtcPid()).toBeDefined();
+      expect(q.proxy.liveSources.users('cam1')).toBe(2);
+      a.ws.close();
+      await a.closed;
+      await until(() => q.proxy.liveSources.users('cam1') === 1, 5_000);
+      expect(q.proxy.go2rtcPid()).toBeDefined();
+    } finally {
+      a.ws.close();
+      b.ws.close();
+    }
+    await b.closed;
+    await until(() => q.proxy.liveSources.users() === 0 && q.proxy.go2rtcPid() === undefined, 10_000);
+    expect(w.stills).toBeUndefined();
+    expect(w.streamStatus()).toMatchObject({ enabled: false, up: false });
+    // Again: a new go2rtc for the next client.
+    const c = liveOn(q.port);
+    try {
+      await until(() => c.bins.length >= 1, 20_000);
+    } finally {
+      c.ws.close();
+    }
+    await until(() => q.proxy.go2rtcPid() === undefined, 10_000);
+  }, 90_000);
+});

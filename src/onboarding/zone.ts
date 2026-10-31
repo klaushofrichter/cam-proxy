@@ -29,7 +29,9 @@ function offsetAt(fmt: Intl.DateTimeFormat, t: number): number {
   return (m[1] === '-' ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3] ?? 0));
 }
 
-// The local wall time of `t` at offset `off` as a DST rule's part.
+// The local wall time of `t` at offset `off` as a DST rule's part. Week 5:
+// the month's last such weekday (on days 25-31), which nthWeekday reads as the
+// last one in every year (#290; test/onboarding-zone.test.ts, 2026-2035).
 function rulePart(t: number, off: number): { mon: number; week: number; weekday: number; hour: number; min: number } {
   const d = new Date(t + off * MIN);
   const day = d.getUTCDate();

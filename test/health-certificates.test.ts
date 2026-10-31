@@ -35,6 +35,15 @@ describe('the certificates item (spec §10.5)', () => {
   it('the proxy certificate within 14 days', () => {
     expect(item(buildHealth(input({ certificates: { proxy: { notAfter: NOW + 5 * DAY }, cameras: [], problems: [] } })))).toMatchObject({ text: 'the proxy expires in 5 days', problem: true });
   });
+  // #290: an https camera whose certificate nothing verifies keeps working, but is a problem.
+  it('an untrusted https camera: a problem, also without a site CA (the Pi)', () => {
+    expect(item(buildHealth(input({ untrusted: ['cam1'] })))).toEqual({ id: 'certificates', label: 'Certificates', value: null, text: 'cam1: certificate not trusted', problem: true });
+    expect(item(buildHealth(input({ untrusted: ['cam1', 'cam3'] })))).toMatchObject({ text: '2 cameras: certificate not trusted', problem: true });
+    expect(item(buildHealth(input({ untrusted: [] })))).toBeUndefined();
+    const h = buildHealth(input({ untrusted: ['cam3'], certificates: { proxy: { notAfter: NOW + 300 * DAY }, cameras: [{ id: 'cam1', state: ok }], problems: [] } }));
+    expect(item(h)).toMatchObject({ value: 200, text: 'cam3: certificate not trusted', problem: true });
+    expect(h.ok).toBe(false);
+  });
   it('no certificates yet: not a problem', () => {
     expect(item(buildHealth(input({ certificates: { proxy: null, cameras: [], problems: [] } })))).toMatchObject({ value: null, text: 'no certificates yet', problem: false });
   });

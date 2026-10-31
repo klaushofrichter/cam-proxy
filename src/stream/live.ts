@@ -51,7 +51,8 @@ export class LiveRelay {
   }
 
   // Relays go2rtc's MSE stream at `upstreamUrl` (127.0.0.1) to `client`.
-  relay(client: WebSocket, upstreamUrl: string, codecs: string, info: { cam: string; stream: LiveStream }): void {
+  // `onEnd`: called once when the relay ends, however (the stream it took is given back, #296).
+  relay(client: WebSocket, upstreamUrl: string, codecs: string, info: { cam: string; stream: LiveStream; onEnd?: () => void }): void {
     const t0 = this.now();
     let bytes = 0;
     let started = false;
@@ -84,6 +85,7 @@ export class LiveRelay {
         setTimeout(() => client.terminate(), 1_000).unref();
       }
       logger.debug({ cameraId: info.cam, stream: info.stream, ms: this.now() - t0, bytes, why }, 'live_close');
+      info.onEnd?.();
     };
     const entry: Relayed = { client, end };
     set.add(entry);

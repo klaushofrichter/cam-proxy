@@ -68,7 +68,7 @@ export interface OnboardingDeps {
   cameraFtp: { pointsHere: (cam: string) => Promise<boolean>; off: (cam: string) => Promise<void> };
   removeLeftovers: RemoveLeftovers;
   // camera-time-set (§4.7): the camera's running client, and its NTP sync (null without ntp.server).
-  cameraClient: (cam: string) => (Pick<ReolinkClient, 'command' | 'logout' | 'forgetTime'>) | null;
+  cameraClient: (cam: string) => (Pick<ReolinkClient, 'ownSession' | 'forgetTime'>) | null;
   cameraNtp: (cam: string) => Promise<NtpOutcome | null>;
   now?: () => number;
 }
@@ -574,7 +574,8 @@ export class OnboardingService {
     const base = { action: 'camera-time', category: ['configuration'], type: ['change'], ...whoRecord(who), camera: cam };
     let r: Awaited<ReturnType<typeof setCameraZone>>;
     try {
-      r = await setCameraZone(client, rule, zone, () => this.now());
+      // A session of its own: setCameraZone logs out, the worker's session stays (#290).
+      r = await setCameraZone(client.ownSession(), rule, zone, () => this.now());
     } catch (err) {
       const code = (err as { code?: string }).code ?? 'camera_error';
       this.d.audit.write({ ...base, outcome: 'failure', error: code, message: `Camera time zone ${zone} not set on ${cam}: ${code}`, details: { zone, requestedBy: who.requestedBy, ...cmdOf(who) } });

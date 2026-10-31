@@ -76,9 +76,12 @@ describe('camera requests verified against the site CA (spec §10.4)', () => {
       const client = new ReolinkClient({ id: 'cam3', host, protocol: 'https', user: 'u', password: 'p' });
       client.setTrust({ ca: b.certPem, fingerprint: b.fingerprint });
       expect(await client.cameraCertificate()).toBeNull();
+      // A session of its own (#290) keeps the pin.
+      expect(await client.ownSession().cameraCertificate()).toBeNull();
       client.setTrust({ ca: a.certPem, fingerprint: a.fingerprint });
       expect(await client.cameraCertificate()).not.toBeNull();
       expect(client.trusted()).toBe(true);
+      expect(client.ownSession().trusted()).toBe(true);
       client.setTrust(undefined);
       expect(client.trusted()).toBe(false);
     } finally {
@@ -97,6 +100,7 @@ describe('camera requests verified against the site CA (spec §10.4)', () => {
       await expect(client.command('GetDevInfo')).rejects.toThrow('no trusted certificate for this camera: no CA and no stored leaf');
       expect(await client.cameraCertificate()).toBeNull();
       expect(client.trusted()).toBe(true);
+      await expect(client.ownSession().command('GetDevInfo')).rejects.toThrow('no trusted certificate for this camera');
       expect(requests).toBe(0);
     } finally {
       server.close();

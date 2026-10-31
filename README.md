@@ -318,7 +318,10 @@ the new form:
   `docs/superpowers/specs/2026-10-30-camera-onboarding-design.md`), API only,
   no file edits, no restart, also on the Pi:
   `POST /control/actions/camera-probe` (ports and the certificate it serves;
-  read-only), `POST /control/cameras` (add it with its password and that
+  read-only. A LAN probe by design: it connects to any host and port it is
+  given, so it is for the proxy's own admin only (never a cams-admin command
+  or sign-in) and limited to 6 a minute together with Find camera; it sends
+  nothing but a login, and that only with a password), `POST /control/cameras` (add it with its password and that
   certificate; local admin only; refused at `profile.cameras`),
   `PUT /control/cameras/<id>/password` (write-only, checked with the camera),
   `POST /control/cameras/<id>/actions/camera-trust-pin` (trust its certificate
@@ -503,8 +506,10 @@ the camera. Audited (`camera-reboot`).
 
 `GET /api/cameras/{cam}/live?stream=sub|main&codecs=…` as a WebSocket
 upgrade on the proxy's own HTTP/HTTPS address (no new port, no WebRTC or
-UDP), relayed from the proxy's go2rtc (the one that makes stills, so only for
-a camera with stills on). `sub` by default, `main` on request (H.265 on most
+UDP), relayed from the proxy's go2rtc. A camera with stills off gets its
+go2rtc stream with its first live client and loses it after the last; with
+stills off on every camera, go2rtc itself runs only while someone watches
+(`go2rtc.binary` must be installed). `sub` by default, `main` on request (H.265 on most
 cameras). `Authorization: Bearer <client token>` only: no session cookie, and
 a token in the URL answers 400.
 
@@ -518,7 +523,7 @@ Refused before the upgrade (plain HTTP with a JSON body): 400 `token_in_url`
 or `invalid` (stream, codecs), 401, 404, 429 (more than 60 upgrades a minute
 from one address). The camera's state comes over the socket as
 `{"type":"error","value":…}` and close 1013: `camera_restarting`,
-`stream_unavailable` (no go2rtc stream for the camera), `camera_offline`,
+`stream_unavailable` (no go2rtc stream for the camera: go2rtc did not come up within 10 s), `camera_offline`,
 `too_many_streams` (8 per camera, 32 per proxy). A stream that fails or
 doesn't start within 10 s: `stream_unavailable` and close 1011; a client more
 than 8 MiB behind is closed with 4008 `slow_consumer` (reconnect). Nothing
@@ -1257,7 +1262,10 @@ certificate through the cluster's `cam1-cert-push`.
   proxy's certificate, per camera its state and "Push now",
   `POST /control/cameras/<cam>/actions/camera-cert-push`), and the health
   item `certificates` (a problem within 14 days of an expiry, after a failed
-  or refused push, or when an address is outside the CA).
+  or refused push, when an address is outside the CA, or while an https
+  camera's certificate is verified by nothing: "certificate not trusted".
+  Such a camera keeps working; pin its certificate with "Trust this camera's
+  certificate". That item shows on the Pi too, without a site CA).
 - **`tls-ca-rotate`** (`{"confirm":"rotate"}`): a new CA; the old files are
   kept as `*.old-<time>`; a camera still serving a leaf of the previous CA
   keeps trusting it (only that camera) until it serves a new leaf (pushed

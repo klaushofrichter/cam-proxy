@@ -362,6 +362,16 @@ export class ReolinkClient {
     this.token = null;
   }
 
+  // A client on a session of its own to the same camera, with this one's
+  // trust (a one-off change that logs out afterwards, #290): its logout and
+  // login backoff never touch this client's session.
+  ownSession(): ReolinkClient {
+    const c = new ReolinkClient(this.cam, { ...this.opts, quiet: true });
+    if (this.refusal !== undefined) c.setTrust({ refuse: this.refusal });
+    else if (this.trust) c.setTrust(this.trust);
+    return c;
+  }
+
   // Ends the camera session (the camera allows only a few), best effort.
   async logout(): Promise<void> {
     const t = this.token;

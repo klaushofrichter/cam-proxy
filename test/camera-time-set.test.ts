@@ -50,6 +50,16 @@ describe('camera-time-set', () => {
     expect(audits(p.dir, 'control-action').filter((x) => x.cam_proxy?.action === 'camera-time-set')).toHaveLength(0);
   }, 40_000);
 
+  // #290: the set runs on a session of its own; the worker's stays logged in.
+  it("the worker's shared session is not logged out", async () => {
+    const { s, post } = await setup({ zone: 'Europe/Berlin' });
+    const ids = () => s.sim.engine.sessions.online().filter((x) => x.userName === 'proxy').map((x) => x.sessionId);
+    const worker = ids();
+    expect(worker).toHaveLength(1);
+    expect((await post()).body.outcome).toBe('set');
+    expect(ids()).toEqual(worker);
+  }, 40_000);
+
   it('no zone known: 409 zone_unknown, nothing written', async () => {
     const { s, post } = await setup();
     const r = await post();

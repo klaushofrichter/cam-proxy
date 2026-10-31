@@ -57,6 +57,7 @@ function fakeWorker(): CameraWorker {
         resave: call('resave', pos()),
         rename: call('rename', pos({ name: 'Front' })),
         makeHome: call('makeHome', pos()),
+        edit: call('edit', pos({ name: 'Front' })),
         reorder: call('reorder', [pos()]),
         remove: call('remove', undefined),
         goTo: call('goTo', undefined),
@@ -208,14 +209,21 @@ describe('PTZ API', () => {
     expect(calls).toEqual([`reorder [["${id}"]]`, `resave ["${id}"]`, `goTo ["${id}"]`, `remove ["${id}"]`, `makeHome ["${id}"]`]);
   });
 
-  it('PATCH home:false → 400; {} → 400; name and home both: rename, then Home', async () => {
+  it('PATCH home:false → 400; {} → 400; name and home both: one all-or-nothing edit (#282), audited as both', async () => {
     const id = 'pos_0123456789abcdef';
     expect((await request(app).patch(`${base}/positions/${id}`).send({ home: false })).body).toEqual({ error: 'invalid', detail: 'home is only ever set to true' });
     expect((await request(app).patch(`${base}/positions/${id}`).send({})).status).toBe(400);
     expect(calls).toEqual([]);
     const r = await request(app).patch(`${base}/positions/${id}`).send({ name: 'Front', home: true });
-    expect(r.status).toBe(200);
-    expect(calls).toEqual([`rename ["${id}","Front"]`, `makeHome ["${id}"]`]);
+    expect([r.status, r.body]).toEqual([200, pos({ name: 'Front' })]);
+    expect(calls).toEqual([`edit ["${id}",{"name":"Front","home":true}]`]);
+    expect(audits.map((a) => [a.details?.op, a.outcome, a.details?.from, a.details?.name])).toEqual([['rename', 'success', 'Gate', 'Front'], ['home', 'success', undefined, 'Front']]);
+    posError = new CameraError('camera_error', 'x');
+    expect((await request(app).patch(`${base}/positions/${id}`).send({ name: 'Front', home: true })).body).toEqual({ error: 'camera_error' });
+    expect(audits.slice(2).map((a) => [a.details?.op, a.outcome])).toEqual([['rename', 'failure'], ['home', 'failure']]);
+    posError = new PtzError(409, 'name_taken');
+    expect((await request(app).patch(`${base}/positions/${id}`).send({ name: 'Front', home: true })).status).toBe(409);
+    expect(audits).toHaveLength(4);
   });
 
   it('PUT order is not taken as an :id', async () => {

@@ -218,22 +218,27 @@ describe('profile.storageGB: the size budget', () => {
 });
 
 describe('firewall lines for each camera with FTP', () => {
-  it('ufw (default): the FTP port and the passive range from the camera address', () => {
+  it('ufw (default): one line per camera, the FTP port and the passive range from its address', () => {
     write('config.json', { cameras: [...cams(2, true), { id: 'cam9', host: '192.0.2.9' }], profile: { cameras: 3 }, ftp: { enabled: false } });
     expect(firewallLines(load().config)).toEqual([
-      'sudo ufw allow from 192.0.2.3 to any port 2121 proto tcp',
-      'sudo ufw allow from 192.0.2.3 to any port 30000:30029 proto tcp',
-      'sudo ufw allow from 192.0.2.4 to any port 2121 proto tcp',
-      'sudo ufw allow from 192.0.2.4 to any port 30000:30029 proto tcp',
+      'sudo ufw allow from 192.0.2.3 to any port 2121,30000:30029 proto tcp',
+      'sudo ufw allow from 192.0.2.4 to any port 2121,30000:30029 proto tcp',
     ]);
   });
   it('nft; a camera without an IPv4 address, hidden or without FTP gets none', () => {
     write('config.json', { cameras: [{ id: 'cam3', host: '192.0.2.3:443', ftp: { enabled: true } }, { id: 'cam4', host: 'cam4.example.net', ftp: { enabled: true, user: 'c4' } }, { id: 'cam5', host: '192.0.2.5', ftp: { enabled: true, user: 'c5' }, moved: 'mv_0123456789ABCDEFGHJK' }], profile: { firewall: 'nft' }, ftp: { port: 2100, passive: '30000-30029' } });
-    expect(firewallLines(load().config)).toEqual([
-      'sudo nft add rule inet filter input ip saddr 192.0.2.3 tcp dport 2100 accept',
-      'sudo nft add rule inet filter input ip saddr 192.0.2.3 tcp dport 30000-30029 accept',
-    ]);
+    expect(firewallLines(load().config)).toEqual(['sudo nft add rule inet filter input ip saddr 192.0.2.3 tcp dport { 2100, 30000-30029 } accept']);
   });
+  // #277: profile.cameras goes up to 64 with FTP on; the contract allows 64 lines.
+  for (const firewall of ['ufw', 'nft'] as const) {
+    it(`${firewall}: 64 FTP cameras get all their lines, within the contract's 64 x 200`, () => {
+      write('config.json', { cameras: cams(64, true), profile: { cameras: 64, firewall }, ftp: { passive: '30000-30639' } });
+      const lines = firewallLines(load().config);
+      expect(lines).toHaveLength(64);
+      expect(lines[63]).toContain('192.0.2.66 ');
+      expect(Math.max(...lines.map((l) => l.length))).toBeLessThanOrEqual(200);
+    });
+  }
 });
 
 // The production shapes (2026-10-25) load unchanged. Addresses are documentation ones.

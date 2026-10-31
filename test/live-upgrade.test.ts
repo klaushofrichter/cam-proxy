@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import { DEFAULT_CODECS, LIVE, validCodecs } from '../src/stream/live';
 import { lastAudit } from './helpers/onboarding';
-import { ADMIN_TOKEN, CLIENT_TOKEN, startProxy, until } from './helpers/proxy';
+import { ADMIN_TOKEN, CLIENT_TOKEN, freePort, startProxy, until } from './helpers/proxy';
 import { startSim } from './helpers/sim';
 
 // The live video upgrade (spec 2026-10-30-camera-onboarding-design §4.8, §10.3)
@@ -13,7 +13,8 @@ let s: Awaited<ReturnType<typeof startSim>>;
 let p: Awaited<ReturnType<typeof startProxy>>;
 beforeAll(async () => {
   s = await startSim();
-  p = await startProxy(s, { env: { CAMPROXY_AUDIT_TOKEN: AUDIT_TOKEN }, settings: { stills: { enabled: false } } });
+  // No go2rtc that could start (#296: one would start on demand for live): every attempt is stream_unavailable.
+  p = await startProxy(s, { env: { CAMPROXY_AUDIT_TOKEN: AUDIT_TOKEN }, settings: { stills: { enabled: false }, go2rtc: { binary: '/nonexistent/go2rtc', rtspPort: await freePort(), apiPort: await freePort() } }, proxy: { liveReadyMs: 300 } });
   await until(() => p.proxy.cameras.get('cam1')!.status.state().online, 10_000);
 }, 30_000);
 afterAll(async () => {
@@ -73,9 +74,11 @@ describe('the live upgrade: refused before the upgrade', () => {
 describe('the live upgrade: the camera\'s state, over the socket', () => {
   const refused = (value: string) => ({ messages: [JSON.stringify({ type: 'error', value })], code: 1013, reason: value });
 
-  it('a camera without a go2rtc stream (stills off) is stream_unavailable', async () => {
+  it('no go2rtc stream to be had (stills off, go2rtc does not start) is stream_unavailable; nothing held, no go2rtc left', async () => {
     expect(await open(LIVE_PATH)).toEqual(refused('stream_unavailable'));
     expect(await open(`${LIVE_PATH}?stream=main`, { Authorization: `Bearer ${ADMIN_TOKEN}` })).toEqual(refused('stream_unavailable'));
+    expect(p.proxy.liveSources.users()).toBe(0);
+    expect(p.proxy.go2rtcPid()).toBeUndefined();
   });
 
   it('a restarting camera is camera_restarting', async () => {
@@ -91,8 +94,8 @@ describe('the live upgrade: the camera\'s state, over the socket', () => {
   it('with a go2rtc stream: an offline camera is camera_offline, a full proxy too_many_streams', async () => {
     const w = p.proxy.cameras.get('cam1')!;
     const fake = { up: () => true, wsUrl: () => 'ws://127.0.0.1:1/api/ws' };
-    const stills = w.stills;
-    w.stills = { go2rtc: fake } as unknown as typeof w.stills;
+    const acquire = vi.spyOn(p.proxy.liveSources, 'acquire').mockResolvedValue(fake as never);
+    const release = vi.spyOn(p.proxy.liveSources, 'release').mockResolvedValue();
     const st = vi.spyOn(w.status, 'state');
     try {
       st.mockReturnValue({ online: false, since: 0 });
@@ -104,12 +107,16 @@ describe('the live upgrade: the camera\'s state, over the socket', () => {
       expect(await open(LIVE_PATH)).toEqual(refused('too_many_streams'));
       count.mockRestore();
       // go2rtc not reachable: the relay fails at once with stream_unavailable (1011).
+      expect(acquire).not.toHaveBeenCalled(); // refused before any stream is taken
       const r = await open(LIVE_PATH);
       expect(r).toEqual({ messages: [JSON.stringify({ type: 'error', value: 'stream_unavailable' })], code: 1011, reason: 'stream_unavailable' });
       await until(() => p.proxy.live.count() === 0, 2000);
+      // The stream taken for the relay is given back when it ends.
+      expect([acquire.mock.calls, release.mock.calls]).toEqual([[['cam1']], [['cam1']]]);
     } finally {
       st.mockRestore();
-      w.stills = stills;
+      acquire.mockRestore();
+      release.mockRestore();
     }
   });
 });
