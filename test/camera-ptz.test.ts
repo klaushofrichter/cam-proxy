@@ -24,6 +24,17 @@ describe('Reolink PTZ mapping', () => {
   it('presetName: ASCII cut to 31', () => expect(presetName('x'.repeat(40))).toBe('x'.repeat(31)));
   it('presetName: short names unchanged', () => expect(presetName('Gate')).toBe('Gate'));
 
+  // The E1 ignores a name with a leading or trailing space or two spaces in a
+  // row (measured 2026-10-31, #282): the camera gets it without them.
+  it('presetName: no leading, trailing or double spaces', () => {
+    expect(presetName('Gate ')).toBe('Gate');
+    expect(presetName(' Gate')).toBe('Gate');
+    expect(presetName('Front  gate')).toBe('Front gate');
+    expect(presetName('Front \u00a0 gate')).toBe('Front gate');
+    expect(presetName('Größe Tür')).toBe('Größe Tür');
+  });
+  it('presetName: a cut never ends in a space', () => expect(presetName('x'.repeat(30) + ' yz')).toBe('x'.repeat(30)));
+
   it('presetName: never splits a character', () => {
     const full = 'Einfahrt Süd – Tor 🌳🌳🌳🌳🌳';
     const n = presetName(full);
