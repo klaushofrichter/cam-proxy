@@ -4,8 +4,10 @@
 // caller; the camera-changing routes add admin access per route (a managed
 // admin token passes through MANAGED_ALLOWED for exactly these). Nothing here
 // names a Reolink command; a camera's own message never reaches a client.
-import express, { type Response } from 'express';
+import express, { type Request, type Response } from 'express';
 import type { AuditLog } from '../audit/audit-log';
+import { withCamera } from '../audit/audit-log';
+import { isSection, readSection, writeSection, type SettingsSection } from '../camera/settings/io';
 import { CameraError } from '../camera/client';
 import type { CameraRegistry } from '../cameras/registry';
 import type { CameraWorker } from '../cameras/worker';
@@ -13,7 +15,7 @@ import type { Credentials } from '../onboarding/credentials';
 import type { CertState } from '../tls/camera-certs';
 import { TIMED_OUT, within } from '../async';
 import { errorMessage, logger } from '../log';
-import type { AccessDeps } from './auth';
+import { actorOf, clientIp, requireAccess, type AccessDeps, type AccessInfo } from './auth';
 import { cameraParam, workerOf } from './camera-param';
 import { bad } from './respond';
 import { cameraTls } from './client-api';
@@ -104,6 +106,86 @@ export function cameraCallsApi(d: CameraCallsDeps): express.Router {
     }
     res.type('image/jpeg').setHeader('Cache-Control', 'no-store');
     res.send(jpeg);
+  });
+
+  // --- settings (§4.8): cams's two sections ----------------------------------
+  const command = (w: CameraWorker) => <T>(cmd: string, param?: object) => w.client.command<T>(cmd, param);
+  // The section of the path, or undefined once answered (404).
+  const sectionOf = (req: Request, res: Response): SettingsSection | undefined => {
+    const s = req.params.section;
+    if (isSection(s)) return s;
+    res.status(404).json({ error: 'not_found' });
+    return undefined;
+  };
+  const offline = (res: Response) => void res.status(503).json({ error: 'camera_offline' });
+
+  r.get('/cameras/:cam/settings', async (_req, res) => {
+    const w = workerOf(res);
+    if (!w.status.state().online) return offline(res);
+    try {
+      const detection = (await readSection(command(w), 'detection')).settings;
+      const image = (await readSection(command(w), 'image')).settings;
+      res.json({ detection, image });
+    } catch (err) {
+      cameraFailed(res, err, 'settings_read_failed');
+    }
+  });
+
+  r.get('/cameras/:cam/settings/:section', async (req, res) => {
+    const section = sectionOf(req, res);
+    if (!section) return;
+    const w = workerOf(res);
+    if (!w.status.state().online) return offline(res);
+    try {
+      res.json((await readSection(command(w), section)).settings);
+    } catch (err) {
+      cameraFailed(res, err, 'settings_read_failed');
+    }
+  });
+
+  const requestedBy = (res: Response) => ((res.locals.access as AccessInfo | undefined)?.viaCookie ? 'session' : 'token');
+  const who = (req: Request, res: Response) => ({ user: actorOf(res.locals.access as AccessInfo | undefined), ip: clientIp(req), userAgent: req.get('user-agent') });
+
+  // Admin-kind (a managed admin token through MANAGED_ALLOWED). One write at a
+  // time per camera; the camera session ends afterwards. Audited unless it
+  // was refused before anything was written (400, offline).
+  r.put('/cameras/:cam/settings/:section', requireAccess('admin', d.access), async (req, res) => {
+    const section = sectionOf(req, res);
+    if (!section) return;
+    const w = workerOf(res);
+    if (!w.status.state().online) return offline(res);
+    const sent: string[] = [];
+    try {
+      const out = await w.writeLock.run(async () => {
+        try {
+          return await writeSection(command(w), section, req.body, { sent: (c) => sent.push(c) });
+        } finally {
+          await w.client.logout();
+        }
+      });
+      if (out.status === 400) return void res.status(400).json({ error: 'invalid', details: out.details });
+      if (out.unexpected.length) logger.warn({ cameraId: w.id, section, keys: out.unexpected.slice(0, 20) }, 'camera_setting_side_effect');
+      const failed = Object.values(out.fields).find((f) => !f.ok)?.error;
+      const fields = Object.fromEntries(Object.entries(out.fields).map(([k, f]) => [k, f.ok ? 'ok' : f.error]));
+      withCamera(d.audit, w.id).write({
+        action: 'camera-settings', category: ['configuration'], type: ['change'], outcome: failed ? 'failure' : 'success', ...who(req, res),
+        message: `Camera settings (${section}) ${failed ? `partly not saved (${failed})` : 'saved'}: ${Object.keys(out.fields).join(', ') || 'nothing to change'}`,
+        ...(failed ? { error: failed } : {}),
+        details: { section, patch: out.patch, fields, unexpected: out.unexpected.slice(0, 20), requestedBy: requestedBy(res) },
+      });
+      res.status(out.status).json({ fields: out.fields, settings: out.settings });
+    } catch (err) {
+      // Offline or refused mid-write: a change may have reached the camera.
+      if (sent.length) {
+        const code = err instanceof CameraError ? err.code : 'camera_error';
+        withCamera(d.audit, w.id).write({
+          action: 'camera-settings', category: ['configuration'], type: ['change'], outcome: 'failure', ...who(req, res),
+          message: `Camera settings (${section}) failed (${code})`, error: code,
+          details: { section, patch: req.body as unknown, fields: {}, unexpected: [], requestedBy: requestedBy(res) },
+        });
+      }
+      cameraFailed(res, err, 'settings_write_failed');
+    }
   });
 
   return r;

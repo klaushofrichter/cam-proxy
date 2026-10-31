@@ -13,6 +13,7 @@ import { CameraReboot } from '../camera/reboot';
 import type { PoeSwitch, PortHandle } from '../camera/poe-switch';
 import { StatusPoller, type CameraState } from '../camera/status';
 import { StreamsReader } from '../camera/streams';
+import { Semaphore } from '../camera/semaphore';
 import { readCameraSd, SdWatch } from '../camera/sd-card';
 import type { TimeInfo } from '../camera/time';
 import { refreshingTimeInfo } from '../analytics/time-info';
@@ -100,6 +101,9 @@ export class CameraWorker extends EventEmitter {
   readonly ptz: CameraPtz;
   // The camera's streams (codec, size, fps) for clients (spec 2026-10-30-camera-onboarding-design §4.8).
   readonly streams: StreamsReader;
+  // One camera-changing write at a time (settings, light): whole-object writes
+  // interleaved would lose one change (spec 2026-10-30-camera-onboarding-design §4.8).
+  readonly writeLock = new Semaphore(1);
   private cert: { at: number; value: { subject: string; issuer: string; validTo: string } | null } | undefined;
   private phaseNow: WorkerPhase = 'idle';
   private errorNow: string | null = null;

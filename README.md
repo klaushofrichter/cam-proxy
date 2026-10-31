@@ -451,6 +451,27 @@ camera's own picture at full size; `sub` a frame of the sub stream from the
 proxy's go2rtc, which only a camera with stills on has (else 404
 `{"error":"stream_unavailable"}`). Another `stream` answers 400.
 
+### Camera settings
+
+The two sections cams's Settings page edits (cams's settings model, moved
+into the proxy): `detection` (recording, motion recording and sensitivity, AI
+person/vehicle/pet recording and sensitivity) and `image` (day/night, IR
+lights, spotlight mode and brightness, flip, on-screen text). The camera's
+encoding is read-only (`streams` in the status).
+
+- `GET /api/cameras/{cam}/settings` (client token): `{detection, image}`.
+- `GET /api/cameras/{cam}/settings/{section}` (client token): one section.
+- `PUT /api/cameras/{cam}/settings/{section}` (admin; a managed admin token
+  may): a patch of the section, e.g. `{"flip":{"vertical":true}}`. Every
+  camera object it touches is read and written whole with only those keys
+  changed, then read again; one write at a time per camera, and the camera
+  session is closed afterwards. 200 `{fields, settings}` when every field
+  was saved; 207 when one was not: `fields.<name>` is `{ok:false,
+  error:"not_applied"}` (the camera answered but did not keep it) or
+  `"camera_rejected"`. 400 `{"error":"invalid","details":[…]}` before the
+  camera is asked anything; 404 for another section. Audited
+  (`camera-settings`, [docs/audit-log.md](docs/audit-log.md)).
+
 ## PTZ (pan, tilt, zoom)
 
 Each camera item of `GET /api/cameras` carries `capabilities`, what that

@@ -129,6 +129,8 @@ export const MANAGED_ALLOWED: readonly (readonly [string, RegExp])[] = [
   ['PUT', /^\/control\/cameras\/[^/]+\/password$/],
   // §10.2: pin the certificate the camera serves, confirmed by its fingerprint (never a cams-admin command).
   ['POST', /^\/control\/cameras\/[^/]+\/actions\/camera-trust-pin$/],
+  // §4.8: the camera calls cams makes that change the camera (whole-object writes, audited).
+  ['PUT', /^\/api\/cameras\/[^/]+\/settings\/(detection|image)$/],
 ];
 const managedMay = (method: string, path: string) => !WRITE.has(method) || MANAGED_ALLOWED.some(([m, re]) => m === method && re.test(path));
 

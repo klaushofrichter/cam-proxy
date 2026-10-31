@@ -266,6 +266,49 @@ paths:
         '404': { description: '{ error: not_found } (unknown camera), { error: stream_unavailable } (sub for a camera without a go2rtc stream: stills off)' }
         '502': { description: '{ error: camera_error }' }
         '503': { description: '{ error: camera_offline }, or camera_restarting (Retry-After)' }
+  /api/cameras/{cam}/settings:
+    get:
+      summary: The camera's settings, both sections (spec 2026-10-30-camera-onboarding-design §4.8)
+      description: '{ detection: DetectionSettings, image: ImageSettings } (cams''s settings model: recording, motion and AI detection; day/night, IR, spotlight, flip, on-screen text), read from the camera now.'
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: '{ detection, image }' }
+        '401': { description: missing or wrong token }
+        '404': { description: '{ error: not_found }: unknown camera' }
+        '502': { description: '{ error: camera_error }' }
+        '503': { description: '{ error: camera_offline }, or camera_restarting (Retry-After)' }
+  /api/cameras/{cam}/settings/{section}:
+    get:
+      summary: One settings section (detection or image)
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: section, in: path, required: true, schema: { type: string, enum: [detection, image] } }
+      responses:
+        '200': { description: 'the section''s settings' }
+        '401': { description: missing or wrong token }
+        '404': { description: '{ error: not_found }: unknown camera or section' }
+        '502': { description: '{ error: camera_error }' }
+        '503': { description: '{ error: camera_offline }, or camera_restarting (Retry-After)' }
+    put:
+      summary: Change fields of one settings section (admin; a managed admin token may)
+      description: 'The body is a patch of the section (cams''s DetectionPatch or ImagePatch; the on-screen name only through the camera name). Each camera object it touches is read and Set whole with only the asked keys changed, then the section is read again: a field is ok only when the re-read shows it. One write at a time per camera; the camera session ends afterwards. Audited (camera-settings).'
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: section, in: path, required: true, schema: { type: string, enum: [detection, image] } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: '{ fields: { <field>: { ok: true } }, settings }' }
+        '207': { description: '{ fields: { <field>: { ok, error: not_applied (the camera did not keep it) or camera_rejected } }, settings (as re-read) }' }
+        '400': { description: '{ error: invalid, details: [text] }; nothing sent to the camera' }
+        '401': { description: missing or wrong token }
+        '403': { description: '{ error: admin_only } (a client token), { error: csrf }' }
+        '404': { description: '{ error: not_found }: unknown camera or section' }
+        '502': { description: '{ error: camera_error }' }
+        '503': { description: '{ error: camera_offline }, or camera_restarting (Retry-After)' }
   /api/cameras/{cam}/ptz/move:
     post:
       summary: Pan and tilt for a moment (spec 2026-10-30-ptz-capabilities-design §5.1)
