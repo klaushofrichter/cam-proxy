@@ -92,6 +92,11 @@ export class Go2rtc extends EventEmitter {
     return `rtsp://127.0.0.1:${this.o.rtspPort}/${cam}_${stream}`;
   }
 
+  // go2rtc's MSE WebSocket for a camera's stream (127.0.0.1 only; the live relay, src/stream/live.ts).
+  wsUrl(cam: string, stream: 'sub' | 'main'): string {
+    return `ws://127.0.0.1:${this.o.apiPort}/api/ws?src=${encodeURIComponent(`${cam}_${stream}`)}`;
+  }
+
   up(): boolean {
     return this.isReady;
   }
@@ -200,6 +205,36 @@ export class Go2rtc extends EventEmitter {
       });
       req.on('timeout', () => req.destroy(new Error('timeout')));
       req.on('error', reject);
+    });
+  }
+
+  // One JPEG frame of a camera's stream (spec 2026-10-30-camera-onboarding-design
+  // §4.8: the sub snapshot), from the 127.0.0.1 API. Rejects on a non-200 or a
+  // body that is not a JPEG; go2rtc's own text never goes into the error (it
+  // can carry the RTSP URL with the camera password).
+  frame(cam: string, stream: 'sub' | 'main'): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const req = http.get({ host: '127.0.0.1', port: this.o.apiPort, path: `/api/frame.jpeg?src=${encodeURIComponent(`${cam}_${stream}`)}`, timeout: 10_000 }, (res) => {
+        if (res.statusCode !== 200) {
+          res.resume();
+          return reject(new Error(`go2rtc frame: HTTP ${res.statusCode}`));
+        }
+        const chunks: Buffer[] = [];
+        let size = 0;
+        res.on('data', (c: Buffer) => {
+          size += c.length;
+          if (size > 16 * 1024 * 1024) return req.destroy(new Error('go2rtc frame: too large'));
+          chunks.push(c);
+        });
+        res.on('end', () => {
+          const b = Buffer.concat(chunks);
+          if (b.length < 2 || b[0] !== 0xff || b[1] !== 0xd8) return reject(new Error('go2rtc frame: not a JPEG'));
+          resolve(b);
+        });
+        res.on('error', () => reject(new Error('go2rtc frame: connection lost')));
+      });
+      req.on('timeout', () => req.destroy(new Error('go2rtc frame: timeout')));
+      req.on('error', (err) => reject(new Error(err.message.startsWith('go2rtc frame') ? err.message : 'go2rtc frame: not reachable')));
     });
   }
 

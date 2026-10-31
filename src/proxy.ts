@@ -56,6 +56,9 @@ import { AnalyticsService, CHECK_USAGE } from './analytics/service';
 import { sseHandler } from './stream/sse';
 import { clientIp, refuseTokenInUrl, requireAccess, type AccessDeps } from './api/auth';
 import { ptzApi } from './api/ptz-api';
+import { cameraCallsApi } from './api/camera-calls-api';
+import { liveUpgrade } from './api/live-upgrade';
+import { LiveRelay } from './stream/live';
 import { clientApi } from './api/client-api';
 import { stillChecksApi } from './api/still-checks-api';
 import { auditApi, controlApi, sessionRoutes, type ControlDeps } from './api/control-api';
@@ -147,6 +150,8 @@ export interface Proxy {
   readonly archive: Archive;
   // Camera onboarding (spec 2026-10-30-camera-onboarding-design §4).
   readonly onboarding: OnboardingService;
+  // Live video relayed to clients (spec 2026-10-30-camera-onboarding-design §10.3).
+  readonly live: LiveRelay;
   // The camera certificates of the site CA (spec §10.1.3); undefined without tls.site (the Pi). Test seam: tick().
   readonly certs: CameraCerts | undefined;
   // cams-admin (spec 2026-10-06-cams-admin-phase1-design §9): off unless camsAdmin.url is set.
@@ -1189,7 +1194,12 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   app.use('/api', requireAccess('client', access), archiveApi({ config: () => running, catalog, archive, composer, cameras: cams }));
   // Pan/tilt/zoom and positions (spec 2026-10-30-ptz-capabilities-design §5).
   app.use('/api', requireAccess('client', access), ptzApi({ cameras: cams, audit }));
-  app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, cameras: cams, sse, tls: (id) => certs?.state(id), credentials: (id) => credentialsOf(passwordSource(loaded, id), cams.get(id)?.status.state() ?? { online: false, since: 0 }) }));
+  const cameraCredentials = (id: string) => credentialsOf(passwordSource(loaded, id), cams.get(id)?.status.state() ?? { online: false, since: 0 });
+  // The camera calls cams makes (spec 2026-10-30-camera-onboarding-design §4.8);
+  // `onboarding` is made below, read at request time.
+  const servedNow = (id: string) => onboarding.servedNow(id);
+  app.use('/api', requireAccess('client', access), cameraCallsApi({ cameras: cams, audit, tls: (id) => certs?.state(id), served: servedNow, credentials: cameraCredentials, access }));
+  app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, cameras: cams, sse, tls: (id) => certs?.state(id), served: servedNow, credentials: cameraCredentials }));
   // The audit log: admins and the audit token, GET (and HEAD) only. The access check is
   // on the route inside the router; other /control paths pass on untouched
   // to the admin-only routes below.
@@ -1483,6 +1493,9 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   };
 
   let server: http.Server | undefined;
+  // Live video: a WebSocket upgrade on both servers (no new port).
+  const live = new LiveRelay();
+  const onUpgrade = liveUpgrade({ access, cameras: cams, relay: live });
   let processRestart: Promise<unknown> | undefined;
   let restarting: Promise<void> | undefined;
   let stopPromise: Promise<void> | undefined;
@@ -1524,9 +1537,11 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     onboarding,
     // Test seam: the host go2rtc's process id (adding a camera never restarts it).
     go2rtcPid: () => go2rtc?.pid(),
+    live,
     async start(opts = {}) {
       await startSiteCa();
       server = http.createServer(app);
+      server.on('upgrade', onUpgrade);
       const s = server;
       const port = await new Promise<number>((resolve, reject) => {
         s.once('error', reject);
@@ -1535,6 +1550,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       // HTTPS with the proxy's leaf (spec §10.4); the HTTP listener stays.
       if (running.server.tls.port && proxyLeaf) {
         const hs = https.createServer({ cert: proxyLeaf.certPem, key: proxyLeaf.keyPem, minVersion: 'TLSv1.2' }, app);
+        hs.on('upgrade', onUpgrade);
         httpsServer = hs;
         await new Promise<void>((resolve, reject) => {
           hs.once('error', reject);
@@ -1653,6 +1669,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       certs?.stop();
       clearInterval(proxyLeafTimer);
       clearInterval(expectedTimer);
+      // Upgraded sockets are no longer the servers': closed here.
+      live.closeAll();
       const s = server;
       if (s) {
         s.closeAllConnections();

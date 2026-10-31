@@ -7,7 +7,11 @@ interface SseStats { messages: Record<string, number>; replayed: number; dropped
 // What this proxy supports beyond the pre-multi-camera API, listed on every
 // GET /api/cameras item (spec 2026-10-05-multi-camera-host-design §6.1).
 // Clients test for a name, never a version; names are only ever appended.
-export const FEATURES: readonly string[] = ['sse-cam-list', 'ptz'];
+// camera-calls (spec 2026-10-30-camera-onboarding-design §4.8): status,
+// snapshot, live, settings, light and reboot for cams, the camera password and
+// certificate pin for managed admin tokens, tls.served/problem in the camera
+// view; cams calls a camera only through its proxy once it sees this entry.
+export const FEATURES: readonly string[] = ['sse-cam-list', 'ptz', 'camera-calls'];
 
 const PAGE = 500;
 const BLOCKED_MS = 5000; // a client whose socket stays full this long is dropped

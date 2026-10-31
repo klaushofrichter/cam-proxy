@@ -241,6 +241,22 @@ export class OnboardingService {
     this.servedCache.set(id, { at: this.now(), fingerprint: s?.fingerprint ?? null });
   }
 
+  // The fingerprint an https camera served when last measured, from the cache
+  // (a client read: §4.8 status, the camera view); a measure older than
+  // SERVED_CACHE_MS starts one in the background. null for an http camera or
+  // before the first measure.
+  servedNow(cam: string): string | null {
+    const c = cameraConfig(this.d.running(), cam);
+    if (!c || c.protocol !== 'https') return null;
+    const hit = this.servedCache.get(cam);
+    if ((!hit || this.now() - hit.at >= SERVED_CACHE_MS) && !this.measuring.has(cam)) {
+      this.measuring.add(cam);
+      void this.measureServed(cam).catch(() => undefined).finally(() => this.measuring.delete(cam));
+    }
+    return hit?.fingerprint ?? null;
+  }
+  private readonly measuring = new Set<string>();
+
   // A pin changes what the status compares with: measured again at the next read.
   forgetServed(id: string): void {
     this.servedCache.delete(id);
