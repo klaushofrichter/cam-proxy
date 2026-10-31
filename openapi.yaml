@@ -337,6 +337,25 @@ paths:
         '404': { description: '{ error: not_found }: unknown camera' }
         '502': { description: '{ error: not_applied, on } (the camera did not report the switch within 5 s), { error: camera_error }' }
         '503': { description: '{ error: camera_offline }, or camera_restarting (Retry-After)' }
+  /api/cameras/{cam}/reboot:
+    post:
+      summary: Reboot the camera (admin; a managed admin token may; spec 2026-10-30-camera-onboarding-design §4.8)
+      description: 'The camera-reboot action for cams. Shares its 2-minute cooldown with the reboot and power-cycle actions. Audited (camera-reboot).'
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [confirm], additionalProperties: false, properties: { confirm: { type: string, enum: [reboot] } } }
+      responses:
+        '202': { description: '{ confirmed } (false: the camera dropped the connection after receiving it)' }
+        '400': { description: '{ error: invalid, detail }: the body is not exactly { confirm: reboot }' }
+        '401': { description: missing or wrong token }
+        '403': { description: '{ error: admin_only } (a client token), { error: csrf }' }
+        '404': { description: '{ error: not_found }: unknown camera' }
+        '429': { description: '{ error: too_soon, detail } with Retry-After: within the cooldown, or one in progress' }
+        '502': { description: '{ error: camera_error, detail }: the request did not reach the camera' }
+        '503': { description: '{ error: camera_offline, detail }, or camera_restarting (Retry-After)' }
   /api/cameras/{cam}/ptz/move:
     post:
       summary: Pan and tilt for a moment (spec 2026-10-30-ptz-capabilities-design §5.1)

@@ -483,6 +483,15 @@ encoding is read-only (`streams` in the status).
   `{"error":"not_applied","on":…}` when it never showed. "Auto" is the
   spotlight mode in the `image` settings. Audited (`camera-light`).
 
+### Reboot
+
+`POST /api/cameras/{cam}/reboot` (admin; a managed admin token may), body
+exactly `{"confirm":"reboot"}` (else 400): the `camera-reboot` action. 202
+`{"confirmed":true}` (`false`: the camera dropped the connection after
+receiving it); 429 `{"error":"too_soon"}` with `Retry-After` within two
+minutes of a reboot or power-cycle; 503 or 502 when the request did not reach
+the camera. Audited (`camera-reboot`).
+
 ## PTZ (pan, tilt, zoom)
 
 Each camera item of `GET /api/cameras` carries `capabilities`, what that

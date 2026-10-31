@@ -18,6 +18,8 @@ import { errorMessage, logger } from '../log';
 import { actorOf, clientIp, requireAccess, type AccessDeps, type AccessInfo } from './auth';
 import { cameraParam, workerOf } from './camera-param';
 import { bad } from './respond';
+import { tooSoonDetail } from './actions';
+import { whoOf } from './onboarding-api';
 import { cameraTls } from './client-api';
 
 export interface CameraCallsDeps {
@@ -245,6 +247,23 @@ export function cameraCallsApi(d: CameraCallsDeps): express.Router {
     } catch (err) {
       cameraFailed(res, err, 'light_write_failed');
     }
+  });
+
+  // --- reboot (§4.8): the camera-reboot action, for cams's managed admin token --
+  // Only the exact confirmation body reboots. Audited by CameraReboot itself
+  // (camera-reboot). A refusal names no camera command or code.
+  r.post('/cameras/:cam/reboot', requireAccess('admin', d.access), async (req, res) => {
+    const b = req.body as unknown;
+    if (typeof b !== 'object' || b === null || Array.isArray(b) || Object.keys(b).length !== 1 || (b as { confirm?: unknown }).confirm !== 'reboot') return bad(res, 'the body is exactly {"confirm": "reboot"}');
+    const w = workerOf(res);
+    const a = await w.reboot.request(whoOf(req, res));
+    if (a.status === 202) return void res.status(202).json({ confirmed: a.confirmed });
+    if (a.status === 429) {
+      res.setHeader('Retry-After', String(a.retryAfterS));
+      return void res.status(429).json({ error: 'too_soon', detail: tooSoonDetail(a) });
+    }
+    const offline = a.error === 'camera_offline';
+    res.status(offline ? 503 : 502).json({ error: offline ? 'camera_offline' : 'camera_error', detail: 'the reboot request did not reach the camera' });
   });
 
   return r;

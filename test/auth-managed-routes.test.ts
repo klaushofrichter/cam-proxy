@@ -54,7 +54,7 @@ const send = (method: string, path: string, h: Record<string, string>, body: obj
 
 describe('a managed admin token on the admin API', () => {
   it('the allow-list is short: sign-in links, camera rename, pause, narrowing the allow-list, block, a camera password, a camera certificate pin', () => {
-    expect(MANAGED_ALLOWED.map(([m, re]) => `${m} ${re.source}`)).toHaveLength(10);
+    expect(MANAGED_ALLOWED.map(([m, re]) => `${m} ${re.source}`)).toHaveLength(11);
     expect(MANAGED_ALLOWED.some(([m, re]) => m === 'POST' && re.test('/control/cameras/cam1/actions/camera-trust-pin'))).toBe(true);
     expect(MANAGED_ALLOWED.some(([, re]) => re.test('/control/cameras/cam1/actions/camera-trust-clear'))).toBe(false);
     // A camera password (spec 2026-10-30-camera-onboarding-design §10.1): write-only, checked with the camera.
@@ -65,6 +65,9 @@ describe('a managed admin token on the admin API', () => {
     expect(allowed('PUT', '/api/cameras/cam1/light')).toBe(true);
     expect(allowed('POST', '/api/cameras/cam1/light')).toBe(false);
     expect(allowed('PUT', '/api/cameras/cam1/light/x')).toBe(false);
+    expect(allowed('POST', '/api/cameras/cam1/reboot')).toBe(true);
+    expect(allowed('PUT', '/api/cameras/cam1/reboot')).toBe(false);
+    expect(allowed('POST', '/api/cameras/cam1/powercycle')).toBe(false);
     for (const [m, path] of [['PUT', '/api/cameras/cam1/settings/encoding'], ['PUT', '/api/cameras/cam1/settings'], ['POST', '/api/cameras/cam1/settings/image'], ['PUT', '/api/cameras/cam1/settings/image/x']]) expect(allowed(m, path), `${m} ${path}`).toBe(false);
   });
   it('every other mutating admin route: 403 local_admin_only (the probes: archive-clear, camsAdmin.url, enroll, camera-address, secret-override, …)', async () => {
