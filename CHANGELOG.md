@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.10.30.3
+
 - New: camera onboarding from the admin page or the API, no file edits and no restart:
   - `POST /control/actions/camera-probe` shows which of a camera's ports answer and the certificate it serves; with the camera's password, its model and what it can do. It only reads from the camera.
   - `POST /control/cameras` adds a camera with its password and certificate in one call, also on the Pi (it writes `CAMERA_HOST` into `.env` as "Use this address" does). The proxy logs in first, over exactly the certificate you confirmed; nothing is stored when the camera refuses. A proxy at its `profile.cameras` count refuses the addition (a proxy already over it keeps running). Only the proxy's own admin token or sign-in may add a camera.
