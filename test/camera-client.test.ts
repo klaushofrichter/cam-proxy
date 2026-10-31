@@ -34,7 +34,7 @@ describe('ReolinkClient', () => {
   it('logs in once and reuses the token', async () => {
     const client = new ReolinkClient(cam);
     // name: GetDevInfo's name (the sim helper's camera is "Den").
-    expect(await client.status()).toEqual({ model: 'RLC-1224A', firmware: 'v3.2.0.6011_2607012059', serial: expect.any(String), name: 'Den' });
+    expect(await client.status()).toEqual({ model: 'RLC-1224A', firmware: 'v3.2.0.6011_2607012059', serial: expect.any(String), name: 'Den', hardware: 'IPC_NT18NA612MP', simulator: expect.stringMatching(/^cam-sim /) });
     await client.status();
     await client.status();
     expect(state.logins).toBe(1);

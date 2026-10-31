@@ -56,6 +56,7 @@ import { AnalyticsService, CHECK_USAGE } from './analytics/service';
 import { sseHandler } from './stream/sse';
 import { clientIp, refuseTokenInUrl, requireAccess, type AccessDeps } from './api/auth';
 import { ptzApi } from './api/ptz-api';
+import { cameraCallsApi } from './api/camera-calls-api';
 import { clientApi } from './api/client-api';
 import { stillChecksApi } from './api/still-checks-api';
 import { auditApi, controlApi, sessionRoutes, type ControlDeps } from './api/control-api';
@@ -1189,7 +1190,12 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   app.use('/api', requireAccess('client', access), archiveApi({ config: () => running, catalog, archive, composer, cameras: cams }));
   // Pan/tilt/zoom and positions (spec 2026-10-30-ptz-capabilities-design §5).
   app.use('/api', requireAccess('client', access), ptzApi({ cameras: cams, audit }));
-  app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, cameras: cams, sse, tls: (id) => certs?.state(id), credentials: (id) => credentialsOf(passwordSource(loaded, id), cams.get(id)?.status.state() ?? { online: false, since: 0 }) }));
+  const cameraCredentials = (id: string) => credentialsOf(passwordSource(loaded, id), cams.get(id)?.status.state() ?? { online: false, since: 0 });
+  // The camera calls cams makes (spec 2026-10-30-camera-onboarding-design §4.8);
+  // `onboarding` is made below, read at request time.
+  const servedNow = (id: string) => onboarding.servedNow(id);
+  app.use('/api', requireAccess('client', access), cameraCallsApi({ cameras: cams, audit, tls: (id) => certs?.state(id), served: servedNow, credentials: cameraCredentials, access }));
+  app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, cameras: cams, sse, tls: (id) => certs?.state(id), served: servedNow, credentials: cameraCredentials }));
   // The audit log: admins and the audit token, GET (and HEAD) only. The access check is
   // on the route inside the router; other /control paths pass on untouched
   // to the admin-only routes below.

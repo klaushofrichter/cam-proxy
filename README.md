@@ -66,6 +66,7 @@ A Mac runs it for development on `localhost:8480`.
 - [Quick start (Mac, against cam-sim)](#quick-start-mac-against-cam-sim)
 - [Configuration](#configuration)
 - [Client API](#client-api)
+- [Camera calls (for cams)](#camera-calls-for-cams)
 - [PTZ (pan, tilt, zoom)](#ptz-pan-tilt-zoom)
 - [Stills and previews](#stills-and-previews)
 - [Clips (FTP)](#clips-ftp)
@@ -397,6 +398,50 @@ api '/cameras/cam1/events?kind=person&limit=10'
 - `GET|HEAD /api/cameras/{cam}/recordings/{id}`: one recording as MP4, with
   `Range`; `HEAD` never downloads from the camera.
 - `GET /health`: the process is up (no auth).
+
+## Camera calls (for cams)
+
+What cams asks a camera, the proxy answers for it (spec
+2026-10-30-camera-onboarding-design §4.8), so cams never calls a camera and
+holds no camera password. Answers are in the proxy's own terms: no camera
+command, code or message reaches a client; a camera that is offline answers
+503 `{"error":"camera_offline"}`, any other camera failure 502
+`{"error":"camera_error"}`. Reads take a client token; the calls that change
+the camera (settings, light, reboot) need an admin token, and a cams-admin
+managed admin token may make exactly these (a client token answers 403
+`{"error":"admin_only"}`).
+
+### Camera status
+
+`GET /api/cameras/{cam}/status` (client token):
+
+```json
+{ "id": "cam1", "online": true, "since": 1790000000000, "checkedAt": 1790000005000, "error": null,
+  "model": "RLC-1224A", "firmware": "v3.2.0.6011_2607012059", "hardware": "IPC_NT18NA612MP", "name": "Backyard", "simulator": null,
+  "streams": { "main": { "codec": "h265", "width": 4512, "height": 2512, "fps": 20 }, "sub": { "codec": "h264", "width": 896, "height": 512, "fps": 10 } },
+  "sd": { "present": true, "mounted": true, "capacityMB": 61047, "freeMB": 12000, "checkedAt": 1790000000000 },
+  "time": { "clockOffsetMs": 120, "stdOffsetMinutes": -360, "dstOffsetMinutes": 60, "dstRule": { "...": "..." } },
+  "certificate": { "subject": "cam1.site.internal", "issuer": "Site CA", "validTo": "2027-10-30T00:00:00.000Z" },
+  "credentials": { "source": "store", "authOk": true, "checkedAt": 1790000005000 },
+  "tls": { "mode": "pinned", "servername": null, "fingerprint": "SHA256:…", "notAfter": null, "lastPush": null, "served": "SHA256:…", "problem": null } }
+```
+
+- Every key is always there. `online`, `since`, `error` come from the
+  camera's status check, never from a wait on the camera: an offline camera
+  answers at once, with `streams` both `null`.
+- `streams`: from the camera's encoder settings, read at most every 10
+  minutes (30 s after a failure; `null` per stream when unknown). Changing
+  them is not offered.
+- `sd`: the SD card as last read (every 5 minutes), `null` until the first
+  read. `time`: the camera's zone and its clock against the proxy's (for
+  compositions), `null` until known. `certificate`: what an https camera
+  presents, when verified (pinned or the site CA), read at most hourly.
+- `tls` is the camera view's `tls` (also in `GET /api/cameras`) plus `served`,
+  the fingerprint the proxy last measured the camera serving (an https camera;
+  measured at most once a minute), and `problem`: `untrusted` (https, nothing
+  trusted yet: pin it), `changed` (pinned, and it serves another certificate
+  now), else `null`.
+- `simulator`: cam-sim's version when the camera is one, else `null`.
 
 ## PTZ (pan, tilt, zoom)
 

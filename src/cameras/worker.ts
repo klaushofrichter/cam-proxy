@@ -12,6 +12,7 @@ import { CameraNameAnnouncer, writeCameraName } from '../camera/name';
 import { CameraReboot } from '../camera/reboot';
 import type { PoeSwitch, PortHandle } from '../camera/poe-switch';
 import { StatusPoller, type CameraState } from '../camera/status';
+import { StreamsReader } from '../camera/streams';
 import { readCameraSd, SdWatch } from '../camera/sd-card';
 import type { TimeInfo } from '../camera/time';
 import { refreshingTimeInfo } from '../analytics/time-info';
@@ -97,6 +98,9 @@ export class CameraWorker extends EventEmitter {
   readonly timeInfo: () => TimeInfo | undefined;
   // Pan/tilt/zoom and saved positions (spec 2026-10-30-ptz-capabilities-design §5).
   readonly ptz: CameraPtz;
+  // The camera's streams (codec, size, fps) for clients (spec 2026-10-30-camera-onboarding-design §4.8).
+  readonly streams: StreamsReader;
+  private cert: { at: number; value: { subject: string; issuer: string; validTo: string } | null } | undefined;
   private phaseNow: WorkerPhase = 'idle';
   private errorNow: string | null = null;
   // The camera's name as last read (camera-name design); the configured name
@@ -168,6 +172,8 @@ export class CameraWorker extends EventEmitter {
       catalog: d.catalog,
       log: d.log,
     });
+    // The client is read at use (restart builds it anew).
+    this.streams = new StreamsReader((cmd, param) => this.client.command(cmd, param));
     this.build();
     this.registered = this.source();
     // Recordings on the SD card over Baichuan (spec 2026-10-02-baichuan-recordings-design).
@@ -254,6 +260,15 @@ export class CameraWorker extends EventEmitter {
 
   capabilities(): Capabilities | null {
     return this.caps;
+  }
+
+  // The certificate the camera presents (subject, issuer, expiry), read at most
+  // once an hour (also when there is none); null for an http camera.
+  async certificate(): Promise<{ subject: string; issuer: string; validTo: string } | null> {
+    if (this.cert && Date.now() - this.cert.at < 3600_000) return this.cert.value;
+    const value = await this.client.cameraCertificate();
+    this.cert = { at: Date.now(), value };
+    return value;
   }
 
   // Reads the camera's abilities (when it comes online, or its model or
@@ -361,6 +376,7 @@ export class CameraWorker extends EventEmitter {
   // The camera's trust changed (it serves its site-CA leaf now, or stopped):
   // the client verifies accordingly from its next request on.
   applyTrust(): void {
+    this.cert = undefined;
     if (this.cam().tlsName) return;
     this.client.setTrust(this.d.tls?.(this.id));
   }
@@ -371,6 +387,7 @@ export class CameraWorker extends EventEmitter {
     const c = this.cam();
     this.announceAddress();
     const t = c.tlsName ? undefined : d.tls?.(this.id);
+    this.cert = undefined;
     this.client = new ReolinkClient({ id: c.id, host: c.host, protocol: c.protocol, tlsServername: c.tlsName, user: c.user, password: d.password() });
     if (t) this.client.setTrust(t);
     this.status = new StatusPoller(this.client, c.statusPollS);

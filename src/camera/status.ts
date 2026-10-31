@@ -6,6 +6,8 @@ export interface CameraState {
   since: number; // when `online` last changed (ms)
   model?: string;
   firmware?: string;
+  hardware?: string; // the camera's hardware version (GetDevInfo.hardVer)
+  simulator?: string; // cam-sim's version, when the camera is one
   serial?: string; // the camera's serial number; a new one means it rebooted
   name?: string; // the camera's name as last read (GetDevInfo.name); kept while offline
   clockOffsetMs?: number; // camera clock minus proxy clock
@@ -89,7 +91,7 @@ export class StatusPoller extends EventEmitter {
       const status = await this.client.status();
       const time = await this.client.command<GetTime>('GetTime');
       this.failures = 0;
-      this.set({ online: true, model: status.model, firmware: status.firmware, serial: status.serial, name: epoch === this.nameEpoch ? (status.name ?? this.current.name) : this.current.name, clockOffsetMs: clockOffset(time, this.now()), error: undefined, checkedAt: this.now() });
+      this.set({ online: true, model: status.model, firmware: status.firmware, hardware: status.hardware, simulator: status.simulator, serial: status.serial, name: epoch === this.nameEpoch ? (status.name ?? this.current.name) : this.current.name, clockOffsetMs: clockOffset(time, this.now()), error: undefined, checkedAt: this.now() });
       this.emit('check', { ok: true, ms: this.now() - t0 });
     } catch (err) {
       this.failures++;
