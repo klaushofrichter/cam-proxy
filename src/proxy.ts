@@ -178,6 +178,7 @@ export interface ProxyOptions {
   restartTimeoutMs?: number; // how long a restart waits for stop() (15 s)
   cameraFtpCheckMs?: number; // how often the camera's FTP settings are read (#93; 5 min)
   liveReadyMs?: number; // test seam: how long a live client waits for go2rtc (10 s)
+  cpuBusy?: () => boolean; // test seam: the host's load above its core count (a move's copy halves its rate)
   cameraSdCheckMs?: number; // how often the camera's SD card and recording settings are read (#199; 5 min)
   // The host figures (spec 2026-10-03-health-summary-design): where /proc and
   // /sys are ('/'; tests and e2e point at a fixture tree), the data volume's
@@ -938,7 +939,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // move weighs, and the push answer while the site CA can't push.
   const proxyIdNow = () => camsAdmin.keyInfo()?.proxyId ?? '';
   const emitToAdmin = (e: MoveEvent) => camsAdmin.emitEvent(e);
-  const cpuBusy = () => loadavg()[0] > availableParallelism();
+  const cpuBusy = opts.cpuBusy ?? (() => loadavg()[0] > availableParallelism());
   const moveUsage = () => {
     const u = storage.usage();
     return { stills: u.stills.bytes, previews: u.previews.bytes, clips: u.clips.bytes, used: u.used, budget: u.budget };

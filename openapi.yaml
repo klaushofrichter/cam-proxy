@@ -482,7 +482,7 @@ paths:
   /api/cameras/{cam}/ptz/positions/{id}:
     patch:
       summary: Rename a position, or make it Home
-      description: 'Rename changes the proxy''s name only. home true moves the Home mark here; there is no home false.'
+      description: 'Rename changes the proxy''s name only. home true moves the Home mark here; there is no home false. name and home together change both or neither.'
       parameters:
         - { name: cam, in: path, required: true, schema: { type: string } }
         - { name: id, in: path, required: true, schema: { type: string } }

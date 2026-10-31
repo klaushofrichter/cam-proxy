@@ -247,6 +247,35 @@ describe('PtzPositions', () => {
     expect(r.map((p) => [p.id, p.order])).toEqual([[c.id, 0], [a.id, 1], [b.id, 2]]);
   });
 
+  // #282: a PATCH with name and home is all or nothing.
+  it('edit with name and home: both or neither', async () => {
+    const a = await svc.save('Gate');
+    const b = await svc.save('Tree');
+    const homeOf = () => listPositions(catalog, 'e1').map((r) => [r.name, r.home]);
+    expect(homeOf()).toEqual([['Gate', 1], ['Tree', 0]]);
+    // Validation first: a taken or bad name, an unknown id → nothing changed.
+    await rejects(svc.edit(b.id, { name: 'gate', home: true }), 409, 'name_taken');
+    await rejects(svc.edit(b.id, { name: '', home: true }), 400, 'invalid');
+    await rejects(svc.edit('pos_x', { name: 'Door', home: true }), 404, 'not_found');
+    online = false;
+    svc.invalidate();
+    await rejects(svc.edit(b.id, { name: 'Door', home: true }), 503, 'camera_offline');
+    online = true;
+    expect(homeOf()).toEqual([['Gate', 1], ['Tree', 0]]);
+    // The Home step fails after the rename: the rename is reverted.
+    catalog.db.exec("CREATE TRIGGER no_home BEFORE UPDATE OF home ON ptz_positions WHEN NEW.home = 1 BEGIN SELECT RAISE(ABORT, 'home refused'); END");
+    await expect(svc.edit(b.id, { name: 'Door', home: true })).rejects.toThrow('home refused');
+    expect(homeOf()).toEqual([['Gate', 1], ['Tree', 0]]);
+    catalog.db.exec('DROP TRIGGER no_home');
+    const before = changes;
+    const r = await svc.edit(b.id, { name: 'Door', home: true });
+    expect([r.name, r.home, r.state]).toEqual(['Door', true, 'ok']);
+    expect(homeOf()).toEqual([['Gate', 0], ['Door', 1]]);
+    expect(changes).toBe(before + 1);
+    expect((await svc.edit(a.id, { name: 'Gate 2' })).name).toBe('Gate 2');
+    expect((await svc.edit(a.id, { home: true })).home).toBe(true);
+  });
+
   it('rename/Home/order offline: the last read; with none → 503 and nothing changed', async () => {
     const a = await svc.save('Gate');
     online = false;
