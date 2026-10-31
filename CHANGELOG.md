@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.10.31.3
+
 - New: `scripts/onboard-camera.sh` and `scripts/offboard-camera.sh` run camera onboarding and offboarding from a shell: probe, the confirmed certificate, the password from stdin, add, time and FTP, ready on the proxy, then registered (adopted) and ready in cams-admin; offboarding the reverse, checked. Tokens and the password are never on a command line or printed. Needs bash, curl and python3.
 
 ## v2026.10.31.2
