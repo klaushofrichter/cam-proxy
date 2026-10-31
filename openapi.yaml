@@ -269,7 +269,7 @@ paths:
   /api/cameras/{cam}/settings:
     get:
       summary: The camera's settings, both sections (spec 2026-10-30-camera-onboarding-design §4.8)
-      description: '{ detection: DetectionSettings, image: ImageSettings } (cams''s settings model: recording, motion and AI detection; day/night, IR, spotlight, flip, on-screen text), read from the camera now.'
+      description: '{ detection: DetectionSettings, image: ImageSettings } (cams''s settings model: recording, motion and AI detection; day/night, IR, spotlight, flip, on-screen text), read from the camera (a read up to 5 s old is answered again; reads of one camera share one request; a change drops it).'
       parameters:
         - { name: cam, in: path, required: true, schema: { type: string } }
       responses:
@@ -278,6 +278,7 @@ paths:
         '404': { description: '{ error: not_found }: unknown camera' }
         '502': { description: '{ error: camera_error }' }
         '503': { description: '{ error: camera_offline }, or camera_restarting (Retry-After)' }
+        '504': { description: '{ error: camera_timeout }: the camera did not answer within 5 s' }
   /api/cameras/{cam}/settings/{section}:
     get:
       summary: One settings section (detection or image)
@@ -290,6 +291,7 @@ paths:
         '404': { description: '{ error: not_found }: unknown camera or section' }
         '502': { description: '{ error: camera_error }' }
         '503': { description: '{ error: camera_offline }, or camera_restarting (Retry-After)' }
+        '504': { description: '{ error: camera_timeout }: the camera did not answer within 5 s' }
     put:
       summary: Change fields of one settings section (admin; a managed admin token may)
       description: 'The body is a patch of the section (cams''s DetectionPatch or ImagePatch; the on-screen name only through the camera name). Each camera object it touches is read and Set whole with only the asked keys changed, then the section is read again: a field is ok only when the re-read shows it. One write at a time per camera; the camera session ends afterwards. Audited (camera-settings).'
@@ -320,6 +322,7 @@ paths:
         '404': { description: '{ error: not_found }: unknown camera' }
         '502': { description: '{ error: camera_error }' }
         '503': { description: '{ error: camera_offline }, or camera_restarting (Retry-After)' }
+        '504': { description: '{ error: camera_timeout }: the camera did not answer within 5 s' }
     put:
       summary: Switch the camera's light on or off (admin; a managed admin token may)
       description: 'The camera''s light object is read and Set whole with only the state changed (nothing is sent when it already is so), then read again every 250 ms for up to 5 s (the camera reports the switch late). The camera session ends afterwards. Audited (camera-light) when it switched. "Auto" is the spotlight mode in the image settings.'

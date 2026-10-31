@@ -142,7 +142,9 @@ describe('camera settings for clients', () => {
     expect(r.status).toBe(400);
     expect(r.body).toMatchObject({ error: 'invalid', details: expect.any(Array) });
     expect(setCalls().length).toBe(n);
-    expect(auditText(x.p.dir).split('"camera-settings"').length).toBe(audits);
+    // The refusal is audited (section and field names only), nothing was written.
+    expect(auditText(x.p.dir).split('"camera-settings"').length).toBe(audits + 1);
+    expect(lastAudit(x.p.dir, 'camera-settings')).toMatchObject({ event: { outcome: 'failure' }, error: { message: 'invalid' }, cam_proxy: { section, sent: false } });
   });
 
   it('answers 404 for an unknown section and an unknown camera', async () => {
@@ -180,7 +182,7 @@ describe('a camera that does not keep a write', () => {
     }
   }, 30_000);
 
-  it('maps an offline camera to 503 and writes no audit record', async () => {
+  it('maps an offline camera to 503 and audits the refusal', async () => {
     const y = await setup();
     try {
       await y.s.close();
@@ -190,7 +192,7 @@ describe('a camera that does not keep a write', () => {
       expect([(await request(y.p.base).get('/api/cameras/cam1/settings').set(auth())).status]).toEqual([503]);
       const r = await put('image', { dayNight: 'color' }, ADMIN_TOKEN, y.p.base);
       expect([r.status, r.body.error]).toEqual([503, 'camera_offline']);
-      expect(lastAudit(y.p.dir, 'camera-settings')).toBeUndefined();
+      expect(lastAudit(y.p.dir, 'camera-settings')).toMatchObject({ event: { outcome: 'failure' }, error: { message: 'camera_offline' }, cam_proxy: { section: 'image', sent: false } });
     } finally {
       await y.p.proxy.stop();
     }

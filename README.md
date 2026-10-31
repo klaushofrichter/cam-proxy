@@ -462,6 +462,11 @@ encoding is read-only (`streams` in the status).
 
 - `GET /api/cameras/{cam}/settings` (client token): `{detection, image}`.
 - `GET /api/cameras/{cam}/settings/{section}` (client token): one section.
+- Reads of one camera share one camera request and are answered again for up
+  to 5 s (a change drops them), so a looping client can't crowd out the
+  proxy's own status checks; a camera that doesn't answer within 5 s is 504
+  `{"error":"camera_timeout"}` (the light's read too). Main snapshots of one
+  camera: one at a time, callers in the meantime share it.
 - `PUT /api/cameras/{cam}/settings/{section}` (admin; a managed admin token
   may): a patch of the section, e.g. `{"flip":{"vertical":true}}`. Every
   camera object it touches is read and written whole with only those keys
@@ -470,8 +475,8 @@ encoding is read-only (`streams` in the status).
   was saved; 207 when one was not: `fields.<name>` is `{ok:false,
   error:"not_applied"}` (the camera answered but did not keep it) or
   `"camera_rejected"`. 400 `{"error":"invalid","details":[…]}` before the
-  camera is asked anything; 404 for another section. Audited
-  (`camera-settings`, [docs/audit-log.md](docs/audit-log.md)).
+  camera is asked anything; 404 for another section. Every request is
+  audited, refusals included (`camera-settings`, [docs/audit-log.md](docs/audit-log.md)).
 
 ### Light
 
@@ -482,7 +487,8 @@ encoding is read-only (`streams` in the status).
   already is so), then read again for up to 5 s, because the camera reports a
   switch late (about 1 s on, 3 s off). 200 `{on}`; 502
   `{"error":"not_applied","on":…}` when it never showed. "Auto" is the
-  spotlight mode in the `image` settings. Audited (`camera-light`).
+  spotlight mode in the `image` settings. Every request is audited, refusals
+  and the no-op included (`camera-light`).
 
 ### Reboot
 

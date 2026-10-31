@@ -66,13 +66,14 @@ describe('the camera light for clients', () => {
     expect(auditText(x.p.dir)).not.toContain(x.s.password);
   });
 
-  it('does not write (nor audit) when the light is already as asked', async () => {
+  it('does not write when the light is already as asked (audited as a no-op)', async () => {
     const n = setCalls().length;
     const a = audits(x.p.dir, 'camera-light').length;
     const r = await put({ on: false });
     expect([r.status, r.body]).toEqual([200, { on: false }]);
     expect(setCalls().length).toBe(n);
-    expect(audits(x.p.dir, 'camera-light').length).toBe(a);
+    expect(audits(x.p.dir, 'camera-light').length).toBe(a + 1);
+    expect(lastAudit(x.p.dir, 'camera-light')).toMatchObject({ event: { outcome: 'success' }, cam_proxy: { changed: false, sent: false } });
   });
 
   it('logs out after a write', async () => {
