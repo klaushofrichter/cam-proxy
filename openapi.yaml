@@ -252,6 +252,20 @@ paths:
         '401': { description: missing or wrong token (the audit token too) }
         '404': { description: '{ error: not_found }: unknown camera' }
         '503': { description: camera_restarting (Retry-After) while the camera restarts }
+  /api/cameras/{cam}/snapshot.jpg:
+    get:
+      summary: An on-demand snapshot (spec 2026-10-30-camera-onboarding-design §4.8)
+      description: 'stream main (the default): the camera''s own picture, full size; sub: a frame of the sub stream from the host''s go2rtc (a camera with stills on). Never cached (Cache-Control: no-store).'
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: stream, in: query, required: false, schema: { type: string, enum: [main, sub] } }
+      responses:
+        '200': { description: the picture, content: { image/jpeg: { schema: { type: string, format: binary } } } }
+        '400': { description: '{ error: invalid, detail }: stream is neither main nor sub' }
+        '401': { description: missing or wrong token }
+        '404': { description: '{ error: not_found } (unknown camera), { error: stream_unavailable } (sub for a camera without a go2rtc stream: stills off)' }
+        '502': { description: '{ error: camera_error }' }
+        '503': { description: '{ error: camera_offline }, or camera_restarting (Retry-After)' }
   /api/cameras/{cam}/ptz/move:
     post:
       summary: Pan and tilt for a moment (spec 2026-10-30-ptz-capabilities-design §5.1)

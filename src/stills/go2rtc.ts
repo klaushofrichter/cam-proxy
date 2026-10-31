@@ -203,6 +203,36 @@ export class Go2rtc extends EventEmitter {
     });
   }
 
+  // One JPEG frame of a camera's stream (spec 2026-10-30-camera-onboarding-design
+  // §4.8: the sub snapshot), from the 127.0.0.1 API. Rejects on a non-200 or a
+  // body that is not a JPEG; go2rtc's own text never goes into the error (it
+  // can carry the RTSP URL with the camera password).
+  frame(cam: string, stream: 'sub' | 'main'): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const req = http.get({ host: '127.0.0.1', port: this.o.apiPort, path: `/api/frame.jpeg?src=${encodeURIComponent(`${cam}_${stream}`)}`, timeout: 10_000 }, (res) => {
+        if (res.statusCode !== 200) {
+          res.resume();
+          return reject(new Error(`go2rtc frame: HTTP ${res.statusCode}`));
+        }
+        const chunks: Buffer[] = [];
+        let size = 0;
+        res.on('data', (c: Buffer) => {
+          size += c.length;
+          if (size > 16 * 1024 * 1024) return req.destroy(new Error('go2rtc frame: too large'));
+          chunks.push(c);
+        });
+        res.on('end', () => {
+          const b = Buffer.concat(chunks);
+          if (b.length < 2 || b[0] !== 0xff || b[1] !== 0xd8) return reject(new Error('go2rtc frame: not a JPEG'));
+          resolve(b);
+        });
+        res.on('error', () => reject(new Error('go2rtc frame: connection lost')));
+      });
+      req.on('timeout', () => req.destroy(new Error('go2rtc frame: timeout')));
+      req.on('error', (err) => reject(new Error(err.message.startsWith('go2rtc frame') ? err.message : 'go2rtc frame: not reachable')));
+    });
+  }
+
   // go2rtc's view of its streams (producers = camera connections).
   async streams(): Promise<Record<string, StreamInfo>> {
     const raw = JSON.parse(await this.get('/api/streams')) as Record<string, Partial<StreamInfo> | null>;

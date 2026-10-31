@@ -15,6 +15,7 @@ import { TIMED_OUT, within } from '../async';
 import { errorMessage, logger } from '../log';
 import type { AccessDeps } from './auth';
 import { cameraParam, workerOf } from './camera-param';
+import { bad } from './respond';
 import { cameraTls } from './client-api';
 
 export interface CameraCallsDeps {
@@ -79,6 +80,30 @@ export function cameraCallsApi(d: CameraCallsDeps): express.Router {
       credentials: d.credentials(w.id),
       tls: cameraTls(w, d.tls(w.id), d.served(w.id)),
     });
+  });
+
+  // An on-demand snapshot (§4.8): main is the camera's own picture (full
+  // size); sub a frame of the sub stream from the host's go2rtc (only for a
+  // camera that has a go2rtc stream, i.e. stills on). Never cached.
+  r.get('/cameras/:cam/snapshot.jpg', async (req, res) => {
+    const stream = req.query.stream ?? 'main';
+    if (stream !== 'main' && stream !== 'sub') return bad(res, 'stream is main or sub');
+    const w = workerOf(res);
+    const go2rtc = w.stills?.go2rtc;
+    if (stream === 'sub' && !go2rtc) return void res.status(404).json({ error: 'stream_unavailable' });
+    if (!w.status.state().online) return void res.status(503).json({ error: 'camera_offline' });
+    let jpeg: Buffer;
+    try {
+      jpeg = stream === 'main' ? await w.client.snapshot() : await go2rtc!.frame(w.id, 'sub');
+    } catch (err) {
+      if (stream === 'sub') {
+        logger.warn({ cameraId: w.id, err: errorMessage(err) }, 'snapshot_frame_failed');
+        return void res.status(502).json({ error: 'camera_error' });
+      }
+      return cameraFailed(res, err, 'snapshot_failed');
+    }
+    res.type('image/jpeg').setHeader('Cache-Control', 'no-store');
+    res.send(jpeg);
   });
 
   return r;

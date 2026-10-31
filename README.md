@@ -443,6 +443,14 @@ managed admin token may make exactly these (a client token answers 403
   now), else `null`.
 - `simulator`: cam-sim's version when the camera is one, else `null`.
 
+### Snapshot
+
+`GET /api/cameras/{cam}/snapshot.jpg?stream=main|sub` (client token;
+`main` by default): a JPEG taken now, `Cache-Control: no-store`. `main` is the
+camera's own picture at full size; `sub` a frame of the sub stream from the
+proxy's go2rtc, which only a camera with stills on has (else 404
+`{"error":"stream_unavailable"}`). Another `stream` answers 400.
+
 ## PTZ (pan, tilt, zoom)
 
 Each camera item of `GET /api/cameras` carries `capabilities`, what that
