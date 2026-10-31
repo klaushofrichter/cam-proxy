@@ -472,6 +472,17 @@ encoding is read-only (`streams` in the status).
   camera is asked anything; 404 for another section. Audited
   (`camera-settings`, [docs/audit-log.md](docs/audit-log.md)).
 
+### Light
+
+- `GET /api/cameras/{cam}/light` (client token): `{"on": false}`.
+- `PUT /api/cameras/{cam}/light` (admin; a managed admin token may), body
+  exactly `{"on": true}` or `{"on": false}` (else 400): the camera's light
+  object is written whole with only its state changed (nothing is sent when it
+  already is so), then read again for up to 5 s, because the camera reports a
+  switch late (about 1 s on, 3 s off). 200 `{on}`; 502
+  `{"error":"not_applied","on":…}` when it never showed. "Auto" is the
+  spotlight mode in the `image` settings. Audited (`camera-light`).
+
 ## PTZ (pan, tilt, zoom)
 
 Each camera item of `GET /api/cameras` carries `capabilities`, what that

@@ -131,6 +131,7 @@ export const MANAGED_ALLOWED: readonly (readonly [string, RegExp])[] = [
   ['POST', /^\/control\/cameras\/[^/]+\/actions\/camera-trust-pin$/],
   // §4.8: the camera calls cams makes that change the camera (whole-object writes, audited).
   ['PUT', /^\/api\/cameras\/[^/]+\/settings\/(detection|image)$/],
+  ['PUT', /^\/api\/cameras\/[^/]+\/light$/],
 ];
 const managedMay = (method: string, path: string) => !WRITE.has(method) || MANAGED_ALLOWED.some(([m, re]) => m === method && re.test(path));
 

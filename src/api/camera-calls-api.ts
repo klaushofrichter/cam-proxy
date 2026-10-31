@@ -13,7 +13,7 @@ import type { CameraRegistry } from '../cameras/registry';
 import type { CameraWorker } from '../cameras/worker';
 import type { Credentials } from '../onboarding/credentials';
 import type { CertState } from '../tls/camera-certs';
-import { TIMED_OUT, within } from '../async';
+import { sleep, TIMED_OUT, within } from '../async';
 import { errorMessage, logger } from '../log';
 import { actorOf, clientIp, requireAccess, type AccessDeps, type AccessInfo } from './auth';
 import { cameraParam, workerOf } from './camera-param';
@@ -28,6 +28,9 @@ export interface CameraCallsDeps {
   credentials: (id: string) => Credentials;
   access: AccessDeps;
 }
+
+// The light's re-read after a switch (cams server/routes/settings.ts, measured lag).
+const LIGHT = { waitMs: 5_000, pollMs: 250 };
 
 // What a status read waits for the camera at most (GetEnc, the certificate, the time).
 const READ_MS = 5_000;
@@ -185,6 +188,62 @@ export function cameraCallsApi(d: CameraCallsDeps): express.Router {
         });
       }
       cameraFailed(res, err, 'settings_write_failed');
+    }
+  });
+
+  // --- light (§4.8): the camera's manual light, WhiteLed.state 1 on, 0 off --
+  // It stays on until switched off (measured on cam1 2026-09-29). The camera
+  // reports the new state late, about 1 s after switching on and 3 s after
+  // switching off (measured 2026-09-30), so the re-read is repeated for up to
+  // 5 s before the switch counts as not applied.
+  const readWhiteLed = async (w: CameraWorker): Promise<Record<string, unknown>> => (await w.client.command<{ WhiteLed?: Record<string, unknown> }>('GetWhiteLed', { channel: 0 })).WhiteLed ?? {};
+
+  r.get('/cameras/:cam/light', async (_req, res) => {
+    const w = workerOf(res);
+    if (!w.status.state().online) return offline(res);
+    try {
+      res.json({ on: (await readWhiteLed(w)).state === 1 });
+    } catch (err) {
+      cameraFailed(res, err, 'light_read_failed');
+    }
+  });
+
+  r.put('/cameras/:cam/light', requireAccess('admin', d.access), async (req, res) => {
+    const body = req.body as unknown;
+    if (typeof body !== 'object' || body === null || Array.isArray(body) || Object.keys(body).length !== 1 || typeof (body as { on?: unknown }).on !== 'boolean') return bad(res, 'the body is exactly {"on": true|false}');
+    const want = (body as { on: boolean }).on;
+    const w = workerOf(res);
+    if (!w.status.state().online) return offline(res);
+    try {
+      const out = await w.writeLock.run(async () => {
+        try {
+          const before = await readWhiteLed(w);
+          const was = before.state === 1;
+          if (was === want) return { changed: false as const, on: want };
+          await w.client.command('SetWhiteLed', { WhiteLed: { ...before, channel: 0, state: want ? 1 : 0 } });
+          const until = Date.now() + LIGHT.waitMs;
+          let on = (await readWhiteLed(w)).state === 1;
+          while (on !== want && Date.now() < until) {
+            await sleep(LIGHT.pollMs);
+            on = (await readWhiteLed(w)).state === 1;
+          }
+          return { changed: true as const, was, on };
+        } finally {
+          await w.client.logout();
+        }
+      });
+      if (!out.changed) return void res.json({ on: want });
+      const ok = out.on === want;
+      withCamera(d.audit, w.id).write({
+        action: 'camera-light', category: ['configuration'], type: ['change'], outcome: ok ? 'success' : 'failure', ...who(req, res),
+        message: `Camera light switched ${want ? 'on' : 'off'}${ok ? '' : ': not applied (the camera did not report it)'}`,
+        ...(ok ? {} : { error: 'not_applied' }),
+        details: { from: out.was, to: want, requestedBy: requestedBy(res) },
+      });
+      if (!ok) return void res.status(502).json({ error: 'not_applied', on: out.on });
+      res.json({ on: want });
+    } catch (err) {
+      cameraFailed(res, err, 'light_write_failed');
     }
   });
 

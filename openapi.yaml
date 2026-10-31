@@ -309,6 +309,34 @@ paths:
         '404': { description: '{ error: not_found }: unknown camera or section' }
         '502': { description: '{ error: camera_error }' }
         '503': { description: '{ error: camera_offline }, or camera_restarting (Retry-After)' }
+  /api/cameras/{cam}/light:
+    get:
+      summary: Whether the camera's light is on (spec 2026-10-30-camera-onboarding-design §4.8)
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: '{ on: boolean }' }
+        '401': { description: missing or wrong token }
+        '404': { description: '{ error: not_found }: unknown camera' }
+        '502': { description: '{ error: camera_error }' }
+        '503': { description: '{ error: camera_offline }, or camera_restarting (Retry-After)' }
+    put:
+      summary: Switch the camera's light on or off (admin; a managed admin token may)
+      description: 'The camera''s light object is read and Set whole with only the state changed (nothing is sent when it already is so), then read again every 250 ms for up to 5 s (the camera reports the switch late). The camera session ends afterwards. Audited (camera-light) when it switched. "Auto" is the spotlight mode in the image settings.'
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [on], additionalProperties: false, properties: { on: { type: boolean } } }
+      responses:
+        '200': { description: '{ on }' }
+        '400': { description: '{ error: invalid, detail }: the body is not exactly { on: boolean }' }
+        '401': { description: missing or wrong token }
+        '403': { description: '{ error: admin_only } (a client token), { error: csrf }' }
+        '404': { description: '{ error: not_found }: unknown camera' }
+        '502': { description: '{ error: not_applied, on } (the camera did not report the switch within 5 s), { error: camera_error }' }
+        '503': { description: '{ error: camera_offline }, or camera_restarting (Retry-After)' }
   /api/cameras/{cam}/ptz/move:
     post:
       summary: Pan and tilt for a moment (spec 2026-10-30-ptz-capabilities-design §5.1)
