@@ -506,8 +506,10 @@ the camera. Audited (`camera-reboot`).
 
 `GET /api/cameras/{cam}/live?stream=sub|main&codecs=…` as a WebSocket
 upgrade on the proxy's own HTTP/HTTPS address (no new port, no WebRTC or
-UDP), relayed from the proxy's go2rtc (the one that makes stills, so only for
-a camera with stills on). `sub` by default, `main` on request (H.265 on most
+UDP), relayed from the proxy's go2rtc. A camera with stills off gets its
+go2rtc stream with its first live client and loses it after the last; with
+stills off on every camera, go2rtc itself runs only while someone watches
+(`go2rtc.binary` must be installed). `sub` by default, `main` on request (H.265 on most
 cameras). `Authorization: Bearer <client token>` only: no session cookie, and
 a token in the URL answers 400.
 
@@ -521,7 +523,7 @@ Refused before the upgrade (plain HTTP with a JSON body): 400 `token_in_url`
 or `invalid` (stream, codecs), 401, 404, 429 (more than 60 upgrades a minute
 from one address). The camera's state comes over the socket as
 `{"type":"error","value":…}` and close 1013: `camera_restarting`,
-`stream_unavailable` (no go2rtc stream for the camera), `camera_offline`,
+`stream_unavailable` (no go2rtc stream for the camera: go2rtc did not come up within 10 s), `camera_offline`,
 `too_many_streams` (8 per camera, 32 per proxy). A stream that fails or
 doesn't start within 10 s: `stream_unavailable` and close 1011; a client more
 than 8 MiB behind is closed with 4008 `slow_consumer` (reconnect). Nothing

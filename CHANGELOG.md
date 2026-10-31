@@ -4,6 +4,7 @@
 
 - New: cams can reach a camera only through its proxy: camera status, snapshot, live video (WebSocket), settings, light and reboot for cams (`camera-calls`). Reads take a client token; settings, light and reboot need an admin token, and cams's cams-admin admin token may make exactly these. Live video runs on the proxy's own address (no new port), sub stream by default. Settings and light changes are audited (`camera-settings`, `camera-light`). The camera list's `tls` gains `served` and `problem` (a pinned camera now serving another certificate shows as `changed`).
 - Proxy profile: the firewall lines are now one per camera with FTP (the FTP port and the passive range in one rule: a ufw port list, an nft set), so all 64 cameras fit; before, cameras beyond the first 32 had none.
+- Live video works for a camera with stills off: its go2rtc stream starts with the first live viewer and stops after the last (go2rtc itself too while no camera has stills). Before, such a camera answered `stream_unavailable`. Stills stay as configured.
 - An https camera whose certificate nothing verifies (no site CA, no pin, no public name) keeps working, but the health now shows it as a problem ("Certificates: cam1: certificate not trusted", also on the Pi and its display), and its onboarding step says to use "Trust this camera's certificate".
 - Camera time: "Set camera time" runs on a camera session of its own; it logged out the session the proxy shares for everything else with that camera.
 

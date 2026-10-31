@@ -41,15 +41,16 @@ const headers = (who: Who): Record<string, string> => (who === 'none' ? {} : aut
 const live = (who: Who) => new Promise<number | string>((resolve) => {
   const ws = new WebSocket(`ws://127.0.0.1:${p.port}/api/cameras/cam1/live`, { headers: headers(who) });
   ws.on('unexpected-response', (_q, r) => resolve(r.statusCode ?? 0));
-  ws.on('message', (d) => resolve(String(d)));
+  ws.on('message', (d) => (resolve(String(d)), ws.close()));
   ws.on('error', () => undefined);
 });
 
 describe('the camera calls by token kind', () => {
   it.each(['client', 'managed'] as const)('reads answer a %s token', async (who) => {
     for (const path of READS) expect((await request(p.base).get(path).set(headers(who))).status, path).toBe(200);
-    // The live socket opens (stills are off here: the stream is unavailable, told over the socket).
-    expect(await live(who)).toBe(JSON.stringify({ type: 'error', value: 'stream_unavailable' }));
+    // The live socket opens: stills are off here, so go2rtc starts for it (#296); without one, the stream is unavailable, told over the socket.
+    const first = JSON.parse(String(await live(who))) as { type: string; value: string };
+    expect(first).toEqual(process.env.CAMPROXY_TEST_GO2RTC ? { type: 'mse', value: expect.stringMatching(/^video\/mp4/) } : { type: 'error', value: 'stream_unavailable' });
   });
 
   it('writes answer a client token 403 admin_only', async () => {

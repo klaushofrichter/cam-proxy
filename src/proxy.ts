@@ -59,6 +59,7 @@ import { ptzApi } from './api/ptz-api';
 import { cameraCallsApi } from './api/camera-calls-api';
 import { liveUpgrade } from './api/live-upgrade';
 import { LiveRelay } from './stream/live';
+import { LiveSources } from './stream/live-sources';
 import { clientApi } from './api/client-api';
 import { stillChecksApi } from './api/still-checks-api';
 import { auditApi, controlApi, sessionRoutes, type ControlDeps } from './api/control-api';
@@ -152,6 +153,8 @@ export interface Proxy {
   readonly onboarding: OnboardingService;
   // Live video relayed to clients (spec 2026-10-30-camera-onboarding-design §10.3).
   readonly live: LiveRelay;
+  // The go2rtc streams live clients hold (#296).
+  readonly liveSources: LiveSources;
   // The camera certificates of the site CA (spec §10.1.3); undefined without tls.site (the Pi). Test seam: tick().
   readonly certs: CameraCerts | undefined;
   // cams-admin (spec 2026-10-06-cams-admin-phase1-design §9): off unless camsAdmin.url is set.
@@ -174,6 +177,7 @@ export interface ProxyOptions {
   sessionSecret?: Buffer;
   restartTimeoutMs?: number; // how long a restart waits for stop() (15 s)
   cameraFtpCheckMs?: number; // how often the camera's FTP settings are read (#93; 5 min)
+  liveReadyMs?: number; // test seam: how long a live client waits for go2rtc (10 s)
   cameraSdCheckMs?: number; // how often the camera's SD card and recording settings are read (#199; 5 min)
   // The host figures (spec 2026-10-03-health-summary-design): where /proc and
   // /sys are ('/'; tests and e2e point at a fixture tree), the data volume's
@@ -465,10 +469,26 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // One go2rtc for every camera with stills (spec 2026-10-05-multi-camera-host-design
   // §8.5), none while stills are off everywhere. Made anew on a restart that
   // changed its settings (go2rtc.*) or turned stills on for the first camera.
+  // Live clients count too (#296): a camera without stills has its streams
+  // while it has live clients, and a go2rtc runs for them (src/stream/live-sources.ts).
   const go2rtcSettings = () => JSON.stringify({ binary: running.go2rtc.binary, rtspPort: running.go2rtc.rtspPort, apiPort: running.go2rtc.apiPort });
+  const anyStills = () => activeCameraIds(running).some((id) => cameraConfig(running, id)!.stills.enabled);
+  const liveSources = new LiveSources({
+    go2rtc: () => go2rtc,
+    start: () => (renewGo2rtc(), go2rtc),
+    stop: async () => {
+      const g = go2rtc;
+      go2rtc = undefined;
+      await g?.stop();
+    },
+    stillsOn: (cam) => cams.get(cam)?.cam().stills.enabled === true,
+    anyStills,
+    source: (cam) => cams.get(cam)!.source(),
+    readyMs: opts.liveReadyMs,
+  });
   const makeGo2rtc = () =>
-    activeCameraIds(running).some((id) => cameraConfig(running, id)!.stills.enabled)
-      ? new Go2rtc({ binary: running.go2rtc.binary, rtspPort: running.go2rtc.rtspPort, apiPort: running.go2rtc.apiPort, sources: () => cams.list().filter((w) => w.cam().stills.enabled).map((w) => w.source()) })
+    anyStills() || liveSources.users() > 0
+      ? new Go2rtc({ binary: running.go2rtc.binary, rtspPort: running.go2rtc.rtspPort, apiPort: running.go2rtc.apiPort, sources: () => cams.list().filter((w) => w.cam().stills.enabled || liveSources.users(w.id) > 0).map((w) => w.source()) })
       : undefined;
   let go2rtc = makeGo2rtc();
   let go2rtcMadeWith = go2rtcSettings();
@@ -1497,7 +1517,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   let server: http.Server | undefined;
   // Live video: a WebSocket upgrade on both servers (no new port).
   const live = new LiveRelay();
-  const onUpgrade = liveUpgrade({ access, cameras: cams, relay: live });
+  const onUpgrade = liveUpgrade({ access, cameras: cams, relay: live, sources: liveSources });
   let processRestart: Promise<unknown> | undefined;
   let restarting: Promise<void> | undefined;
   let stopPromise: Promise<void> | undefined;
@@ -1540,6 +1560,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     // Test seam: the host go2rtc's process id (adding a camera never restarts it).
     go2rtcPid: () => go2rtc?.pid(),
     live,
+    liveSources,
     async start(opts = {}) {
       await startSiteCa();
       server = http.createServer(app);
