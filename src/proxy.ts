@@ -896,6 +896,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       archive: archive.health(),
       // The site CA (spec §10.5): only with tls.site (the Pi has no item).
       certificates: tlsInPlay() ? { proxy: proxyLeaf ? { notAfter: proxyLeaf.notAfter } : null, cameras: cams.ids().map((id) => ({ id, state: certStateOf(id) })), problems: tlsProblems() } : null,
+      // https cameras nothing verifies (#290): they keep working, as a problem.
+      untrusted: cams.list().filter((w) => w.cam().protocol === 'https' && !w.client.trusted()).map((w) => w.id),
     });
   };
 

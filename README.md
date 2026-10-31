@@ -318,7 +318,10 @@ the new form:
   `docs/superpowers/specs/2026-10-30-camera-onboarding-design.md`), API only,
   no file edits, no restart, also on the Pi:
   `POST /control/actions/camera-probe` (ports and the certificate it serves;
-  read-only), `POST /control/cameras` (add it with its password and that
+  read-only. A LAN probe by design: it connects to any host and port it is
+  given, so it is for the proxy's own admin only (never a cams-admin command
+  or sign-in) and limited to 6 a minute together with Find camera; it sends
+  nothing but a login, and that only with a password), `POST /control/cameras` (add it with its password and that
   certificate; local admin only; refused at `profile.cameras`),
   `PUT /control/cameras/<id>/password` (write-only, checked with the camera),
   `POST /control/cameras/<id>/actions/camera-trust-pin` (trust its certificate
@@ -1257,7 +1260,10 @@ certificate through the cluster's `cam1-cert-push`.
   proxy's certificate, per camera its state and "Push now",
   `POST /control/cameras/<cam>/actions/camera-cert-push`), and the health
   item `certificates` (a problem within 14 days of an expiry, after a failed
-  or refused push, or when an address is outside the CA).
+  or refused push, when an address is outside the CA, or while an https
+  camera's certificate is verified by nothing: "certificate not trusted".
+  Such a camera keeps working; pin its certificate with "Trust this camera's
+  certificate". That item shows on the Pi too, without a site CA).
 - **`tls-ca-rotate`** (`{"confirm":"rotate"}`): a new CA; the old files are
   kept as `*.old-<time>`; a camera still serving a leaf of the previous CA
   keeps trusting it (only that camera) until it serves a new leaf (pushed
