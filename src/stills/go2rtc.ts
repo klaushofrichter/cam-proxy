@@ -92,6 +92,11 @@ export class Go2rtc extends EventEmitter {
     return `rtsp://127.0.0.1:${this.o.rtspPort}/${cam}_${stream}`;
   }
 
+  // go2rtc's MSE WebSocket for a camera's stream (127.0.0.1 only; the live relay, src/stream/live.ts).
+  wsUrl(cam: string, stream: 'sub' | 'main'): string {
+    return `ws://127.0.0.1:${this.o.apiPort}/api/ws?src=${encodeURIComponent(`${cam}_${stream}`)}`;
+  }
+
   up(): boolean {
     return this.isReady;
   }

@@ -492,6 +492,35 @@ receiving it); 429 `{"error":"too_soon"}` with `Retry-After` within two
 minutes of a reboot or power-cycle; 503 or 502 when the request did not reach
 the camera. Audited (`camera-reboot`).
 
+### Live video
+
+`GET /api/cameras/{cam}/live?stream=sub|main&codecs=…` as a WebSocket
+upgrade on the proxy's own HTTP/HTTPS address (no new port, no WebRTC or
+UDP), relayed from the proxy's go2rtc (the one that makes stills, so only for
+a camera with stills on). `sub` by default, `main` on request (H.265 on most
+cameras). `Authorization: Bearer <client token>` only: no session cookie, and
+a token in the URL answers 400.
+
+The protocol (MSE):
+
+1. One text message `{"type":"mse","value":"video/mp4; codecs=\"avc1.640029\""}`
+   for `MediaSource.addSourceBuffer`.
+2. Binary messages: the fMP4 init segment, then fragments, to append in order.
+
+Refused before the upgrade (plain HTTP with a JSON body): 400 `token_in_url`
+or `invalid` (stream, codecs), 401, 404, 429 (more than 60 upgrades a minute
+from one address). The camera's state comes over the socket as
+`{"type":"error","value":…}` and close 1013: `camera_restarting`,
+`stream_unavailable` (no go2rtc stream for the camera), `camera_offline`,
+`too_many_streams` (8 per camera, 32 per proxy). A stream that fails or
+doesn't start within 10 s: `stream_unavailable` and close 1011; a client more
+than 8 MiB behind is closed with 4008 `slow_consumer` (reconnect). Nothing
+else go2rtc says reaches the client.
+
+cams opens this socket per viewer and relays it to the browser as chunked
+HTTP/fMP4 on its own live routes (its public address can't carry WebSocket
+upgrades).
+
 ## PTZ (pan, tilt, zoom)
 
 Each camera item of `GET /api/cameras` carries `capabilities`, what that
