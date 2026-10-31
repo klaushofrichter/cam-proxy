@@ -57,9 +57,9 @@
 
 <style>
   .backdrop { position: fixed; inset: 0; background: rgb(0 0 0 / 0.5); display: grid; place-items: center; z-index: 50; padding: 16px; }
-  .modal { background: var(--surface); border: 1px solid var(--danger); border-radius: var(--radius); width: min(480px, 100%); padding: 18px; display: grid; gap: 12px; }
+  .modal { background: var(--surface); border: 1px solid var(--danger); border-radius: var(--radius); width: min(480px, 100%); padding: 18px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
   h3 { margin: 0; font-size: 16px; }
-  p { margin: 0; line-height: 1.5; }
+  p { margin: 0; line-height: 1.5; overflow-wrap: anywhere; }
   .buttons { display: flex; justify-content: flex-end; gap: 8px; }
   button { padding: 7px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); cursor: pointer; }
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
