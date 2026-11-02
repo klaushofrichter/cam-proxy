@@ -229,6 +229,70 @@ describe('storage: clips', () => {
   });
 });
 
+// The clips repair asks before each fetch (spec 2026-10-02-inventory-design,
+// amendment 2026-11-02): would a clip of this time and size survive the next
+// storage run, and what would it cost? 'fits': nothing else goes; 'prunes':
+// only older files go (as an FTP clip would make room); 'full': the clip
+// itself, or a file newer than it, would go.
+describe('storage: room for a repaired clip', () => {
+  const putClip = (x: ReturnType<typeof setup>, ts: number, bytes = 1000) => {
+    const d = new Date(ts);
+    const p2 = (n: number) => String(n).padStart(2, '0');
+    const folder = join(x.dir, 'clips', 'cam1', String(d.getUTCFullYear()), p2(d.getUTCMonth() + 1), p2(d.getUTCDate()));
+    mkdirSync(folder, { recursive: true });
+    const path = join(folder, `${p2(d.getUTCHours())}${p2(d.getUTCMinutes())}-${ts}.mp4`);
+    writeFileSync(path, Buffer.alloc(bytes));
+    return insertClip(x.catalog, { cam: 'cam1', start_ts: ts, end_ts: ts + 20_000, path, stream: 'sub', size: bytes, received_at: ts, snapshot: null });
+  };
+
+  it('fits while no limit is reached', () => {
+    const x = setup();
+    putClip(x, NOW - 30 * HOUR);
+    const space = x.storage.clipSpace('cam1');
+    expect(space.fit(NOW - 20 * HOUR, 1000)).toBe('fits');
+  });
+
+  it('under ftp.maxGB: a newer clip makes room by pruning older ones, an older one does not fit; what was added counts', () => {
+    const x = setup((c) => {
+      c.storage.keepHours = { stills: 0, clips: 0, previews: 0 };
+      c.ftp.maxGB = 3000 / 2 ** 30; // room for three 1000-byte clips
+    });
+    const old = putClip(x, NOW - 30 * HOUR);
+    putClip(x, NOW - 29 * HOUR);
+    const space = x.storage.clipSpace('cam1');
+    expect(space.fit(NOW - 10 * HOUR, 1000)).toBe('fits'); // three of three
+    space.add(NOW - 10 * HOUR, 1000);
+    expect(space.fit(NOW - 20 * HOUR, 1000)).toBe('prunes'); // the 30 h one would go
+    space.add(NOW - 20 * HOUR, 1000);
+    expect(space.fit(NOW - 35 * HOUR, 1000)).toBe('full'); // older than all: it would go itself
+    expect(space.fit(NOW - 29.5 * HOUR, 1000)).toBe('full'); // it would push out the 29 h one, newer than it
+    // Only a model: nothing was deleted.
+    expect(clipById(x.catalog, old.id)).toBeDefined();
+  });
+
+  it('over the budget: a clip older than the stills the budget would delete for it does not fit (never newer for older)', () => {
+    const x = setup((c) => (c.storage.keepHours = { stills: 0, clips: 0, previews: 0 }));
+    x.put('stills', NOW - 5 * HOUR, 1000);
+    putClip(x, NOW - 6 * HOUR, 1000);
+    x.storage.recount();
+    delete x.config.storage.maxPercent;
+    x.config.storage.maxBytes = x.catalog.sizeBytes() + 2000; // exactly full
+    const space = x.storage.clipSpace('cam1');
+    // Stills go first: for a clip of 1 h ago the 5 h old stills go (older): it makes room.
+    expect(space.fit(NOW - 1 * HOUR, 1000)).toBe('prunes');
+    // For a clip of 10 h ago the same stills would go: they are newer than it.
+    expect(space.fit(NOW - 10 * HOUR, 1000)).toBe('full');
+  });
+
+  it('a clip older than the clips retention does not fit', () => {
+    const x = setup((c) => (c.retention.clipsDays = 2));
+    const space = x.storage.clipSpace('cam1');
+    const cutoff = Math.floor((NOW - 2 * DAY) / DAY) * DAY;
+    expect(space.fit(cutoff, 1000)).toBe('fits');
+    expect(space.fit(cutoff - 60_000, 1000)).toBe('full');
+  });
+});
+
 describe('storage: audit', () => {
   // #106: a pause explains still gaps only when it leaves a record.
   it('writes storage-paused and storage-resumed records when the floor check flips', () => {

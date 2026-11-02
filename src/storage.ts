@@ -25,6 +25,9 @@ const KINDS: FileKind[] = [...MINUTE_KINDS, 'recordings'];
 const BUDGET_ORDER: MinuteKind[] = ['stills', 'clips', 'previews'];
 
 interface KindUsage { bytes: number; files: number; oldest: number | null; newest: number | null; growthPerDay: number }
+// A repaired clip and the storage rules (Storage.clipSpace).
+export type ClipFit = 'fits' | 'prunes' | 'full';
+export interface ClipSpace { fit: (ts: number, bytes: number) => ClipFit; add: (ts: number, bytes: number) => void }
 interface StorageRun { dryRun: boolean; at: number; deleted: Record<string, number>; freedBytes: number; reason: string[] }
 
 // One stored minute of a kind of one camera: its files (a pack; a sprite and
@@ -283,15 +286,6 @@ export class Storage extends EventEmitter {
       }
     };
 
-    // 1. Age, per kind (whole UTC days).
-    const days: Record<MinuteKind, number> = { stills: cfg.retention.stillsDays, previews: cfg.retention.previewsDays, clips: cfg.retention.clipsDays };
-    for (const kind of MINUTE_KINDS) {
-      const cutoff = dayStart(now - days[kind] * DAY);
-      while (sim[kind].length && sim[kind][0].ts < cutoff) {
-        drop(kind, sim[kind].shift()!);
-        if (!reason.includes('age')) reason.push('age');
-      }
-    }
     // Rows.
     const eventsBefore = now - cfg.retention.eventsDays * DAY;
     const logBefore = now - cfg.retention.streamLogDays * DAY;
@@ -326,8 +320,41 @@ export class Storage extends EventEmitter {
     // The audit log keeps whole UTC days; only retention removes them, never the budget.
     if (this.d.audit) deleted.audit = this.d.audit.deleteBefore(new Date(dayStart(now - cfg.retention.auditDays * DAY)).toISOString().slice(0, 10), dry);
 
-    // 2. Per-kind caps, then the budget: the oldest hour of the next kind in
-    // order, never touching the newest keepHours of a kind.
+    // The files: age, the caps and the budget (plan()).
+    const fixed = this.d.catalog.sizeBytes() + (this.d.audit?.usage().bytes ?? 0); // audit bytes count, are never dropped
+    this.plan(sim, { now, cfg, budget: this.budget(), fixed }, drop, reason);
+
+    if (!dry) {
+      removeStaleUploads(join(cfg.server.dataDir, 'ftp', '.incoming'), now - DAY);
+      this.units.stills = sim.stills;
+      this.units.previews = sim.previews;
+      this.units.clips = sim.clips;
+      this.units.recordings = sim.recordings;
+      this.last = now;
+      for (const [k, n] of Object.entries(deleted)) this.total[k] = (this.total[k] ?? 0) + n;
+      this.check();
+    }
+    const run: StorageRun = { dryRun: dry, at: now, deleted, freedBytes: freed, reason };
+    if (!dry) this.emit('run', run);
+    return run;
+  }
+
+  // What a storage run deletes, worked out on `sim` (the units per kind,
+  // oldest first; changed in place), each unit handed to `drop`:
+  // 1. age, per kind (whole UTC days); 2. per-kind caps, then the budget: the
+  // oldest hour of the next kind in order, never touching the newest
+  // keepHours of a kind. `fixed`: the bytes that count but are never
+  // dropped (the catalog, the audit log). run() and clipSpace() share it.
+  private plan(sim: Record<FileKind, Unit[]>, o: { now: number; cfg: Config; budget: number; fixed: number }, drop: (kind: FileKind, u: Unit) => void, reason: string[]): void {
+    const { now, cfg, budget, fixed } = o;
+    const days: Record<MinuteKind, number> = { stills: cfg.retention.stillsDays, previews: cfg.retention.previewsDays, clips: cfg.retention.clipsDays };
+    for (const kind of MINUTE_KINDS) {
+      const cutoff = dayStart(now - days[kind] * DAY);
+      while (sim[kind].length && sim[kind][0].ts < cutoff) {
+        drop(kind, sim[kind].shift()!);
+        if (!reason.includes('age')) reason.push('age');
+      }
+    }
     const bytesOf = (kind: FileKind) => sim[kind].reduce((n, u) => n + unitBytes(u), 0);
     const dropOldestHour = (kind: MinuteKind): boolean => {
       const keepFrom = now - cfg.storage.keepHours[kind] * HOUR;
@@ -353,9 +380,7 @@ export class Storage extends EventEmitter {
     };
     const recCap = cfg.recordings.cacheMB * 2 ** 20;
     while (bytesOf('recordings') > recCap && dropRecording()) if (!reason.includes('cap')) reason.push('cap');
-    const budget = this.budget();
-    const catalog = this.d.catalog.sizeBytes() + (this.d.audit?.usage().bytes ?? 0); // audit bytes count, are never dropped
-    const used = () => KINDS.reduce((n, k) => n + bytesOf(k), 0) + catalog;
+    const used = () => KINDS.reduce((n, k) => n + bytesOf(k), 0) + fixed;
     // With shares (spec §8.1): the camera most above its share loses its
     // oldest hour first; without: the oldest hour across all cameras.
     const shared = activeCameraIds(cfg).some((id) => cameraConfig(cfg, id)!.storage.sharePercent !== undefined);
@@ -388,20 +413,51 @@ export class Storage extends EventEmitter {
       }
       if (!reason.includes('budget')) reason.push('budget');
     }
+  }
 
-    if (!dry) {
-      removeStaleUploads(join(cfg.server.dataDir, 'ftp', '.incoming'), now - DAY);
-      this.units.stills = sim.stills;
-      this.units.previews = sim.previews;
-      this.units.clips = sim.clips;
-      this.units.recordings = sim.recordings;
-      this.last = now;
-      for (const [k, n] of Object.entries(deleted)) this.total[k] = (this.total[k] ?? 0) + n;
-      this.check();
-    }
-    const run: StorageRun = { dryRun: dry, at: now, deleted, freedBytes: freed, reason };
-    if (!dry) this.emit('run', run);
-    return run;
+  // Whether a clip of camera `cam` stored now would survive the next storage
+  // run, by the same rules (plan()), and what it would cost (the clips
+  // repair, spec 2026-10-02-inventory-design, amendment 2026-11-02): 'fits'
+  // when nothing more goes, 'prunes' when only files older than the clip go
+  // (as an FTP clip makes room), 'full' when the clip itself or any newer
+  // file would go. The disk is counted once, here; `add` puts a stored clip
+  // into the model. The recordings cache doesn't count as a cost: it is a
+  // cache, and goes first anyway.
+  clipSpace(cam: string): ClipSpace {
+    this.recount();
+    const now = this.now();
+    const cfg = this.d.config();
+    const o = { now, cfg, budget: this.budget(), fixed: this.d.catalog.sizeBytes() + (this.d.audit?.usage().bytes ?? 0) };
+    const base: Record<FileKind, Unit[]> = { stills: [...this.units.stills], previews: [...this.units.previews], clips: [...this.units.clips], recordings: [...this.units.recordings] };
+    const unit = (ts: number, bytes: number): Unit => ({ ts: Math.floor(ts / 60_000) * 60_000, cam, files: [{ path: '', bytes }] });
+    const insert = (list: Unit[], u: Unit) => {
+      const at = list.findIndex((x) => x.ts > u.ts);
+      if (at < 0) list.push(u);
+      else list.splice(at, 0, u);
+    };
+    const dropped = (extra?: Unit): Set<Unit> => {
+      const sim: Record<FileKind, Unit[]> = { stills: [...base.stills], previews: [...base.previews], clips: [...base.clips], recordings: [...base.recordings] };
+      if (extra) insert(sim.clips, extra);
+      const out = new Set<Unit>();
+      this.plan(sim, o, (kind, u) => void (kind !== 'recordings' && out.add(u)), []);
+      return out;
+    };
+    let before: Set<Unit> | null = null; // what goes without the next clip (null: count again)
+    return {
+      fit: (ts, bytes) => {
+        const u = unit(ts, bytes);
+        before ??= dropped();
+        const after = dropped(u);
+        if (after.has(u)) return 'full';
+        const cost = [...after].filter((x) => !before!.has(x));
+        if (cost.some((x) => x.ts >= u.ts)) return 'full';
+        return cost.length ? 'prunes' : 'fits';
+      },
+      add: (ts, bytes) => {
+        insert(base.clips, unit(ts, bytes));
+        before = null;
+      },
+    };
   }
 
   // Every retention.intervalMin (a failed run is logged and retried), and a

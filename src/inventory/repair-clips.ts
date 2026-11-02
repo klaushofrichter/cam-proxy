@@ -17,14 +17,16 @@ import { mb, type ClipItem } from './clips';
 import { START_SLACK_MS } from './match';
 import type { InventoryReport, RepairEntry, RepairResult } from './runner';
 import { DAY, dayStart } from '../time-units';
+import type { ClipSpace } from '../storage';
 
 // The clips repair (#74 part 3, spec 2026-10-02-inventory-design §4): fetch
 // the recordings a recent camera compare found missing locally, over Baichuan
 // at `low` priority (a viewer's fetch, queued or running, goes first; a
-// running repair fetch is not pre-empted), on ftp.stream, the OLDEST first
-// (the SD card overwrites them first; ruling (a)). Each one is checked again
-// first (storage not paused, inside the clips retention, same stream, no
-// local clip within 5 s, still listed on the SD card), then fetched into the
+// running repair fetch is not pre-empted), on ftp.stream, the NEWEST first
+// (the most recent missing clips matter most; amendment 2026-11-02, which
+// replaced ruling (a), oldest first). Each one is checked again first
+// (storage not paused, inside the clips retention, same stream, no local clip
+// within 5 s, room by the storage rules, still listed on the SD card), then fetched into the
 // recordings cache, pinned only while it is copied into clips/ and indexed
 // with origin 'camera' (ClipIndexer.addRecording). A file the cache can't keep
 // (disk paused, over the cache cap, no room beside the pinned files) is
@@ -32,7 +34,11 @@ import { DAY, dayStart } from '../time-units';
 // viewer has it and the clip is skipped (`viewer`). Caps per run: 50 clips (skipped ones
 // count); 200 MB: a recording larger than that alone is skipped (`too-big`),
 // one that would pass it after others is skipped (`byte-cap`) and the scan
-// goes on for smaller ones; ftp.maxGB stops the run. A busy Search in the
+// goes on for smaller ones. Room follows the storage rules (Storage.clipSpace:
+// ftp.maxGB, the budget, a camera's share): a clip may make room by pruning
+// older files, as an FTP clip would (the normal storage run does it once
+// after the run), never by pruning newer ones: then the run stops
+// (`retention-full`; every later candidate is older still). A busy Search in the
 // still-listed check is tried 3 times 1 s apart, then the clip is skipped
 // (`busy`, not a failure: a viewer browsing never stops the repair). 1 s
 // between downloads; it stops after 3 failures
@@ -45,11 +51,11 @@ export const REPAIR_MAX_BYTES = 200 * 2 ** 20;
 export const REPAIR_GAP_MS = 1000;
 export const REPAIR_MAX_FAILURES = 3;
 
-type RepairStop = 'clip-cap' | 'byte-cap' | 'max-gb' | 'paused' | 'failures' | 'refused' | 'camera_offline';
+type RepairStop = 'clip-cap' | 'byte-cap' | 'retention-full' | 'paused' | 'failures' | 'refused' | 'camera_offline';
 const STOP_TEXT: Record<RepairStop, string> = {
   'clip-cap': `the ${REPAIR_MAX_CLIPS}-clip cap`,
   'byte-cap': `the ${REPAIR_MAX_BYTES / 2 ** 20} MB cap`,
-  'max-gb': 'ftp.maxGB would be exceeded',
+  'retention-full': 'storage is full: the next recording is older than the clips storage keeps',
   paused: 'storage is paused (disk full)',
   failures: `${REPAIR_MAX_FAILURES} failures in a row`,
   refused: 'the camera refused a download',
@@ -63,7 +69,7 @@ type SkipReason = 'outside-retention' | 'already-local' | 'gone-from-camera' | '
 // `streamed`: the cache couldn't keep the file; it went through a temp file.
 export interface RepairItem { id: string; start: number; result: 'ok' | 'skipped' | 'failed'; reason?: SkipReason; error?: string; clipId?: number; bytes?: number; streamed?: true }
 
-export interface ClipsRepairSettings { cam: string; stream: Stream; clipsDays: number; maxGB?: number }
+export interface ClipsRepairSettings { cam: string; stream: Stream; clipsDays: number }
 export interface ClipsRepairDeps {
   catalog: Catalog;
   // Each for the run's camera (spec 2026-10-05-multi-camera-host-design §3.1).
@@ -76,7 +82,11 @@ export interface ClipsRepairDeps {
   // of leftover .part files when a run starts (runs hold the inventory lock).
   tempDir: () => string;
   paused: () => boolean;
-  clipsBytes: () => number; // the clips' bytes on disk now (storage usage)
+  // The storage rules for the run's camera, counted once when a run starts
+  // (Storage.clipSpace), and the normal storage run, after a run whose clips
+  // made room (it prunes the older files they displace).
+  space: (cam: string) => ClipSpace;
+  prune?: () => void;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   limits?: { clips?: number; bytes?: number }; // tests
   openTemp?: (path: string) => Writable; // tests; opens synchronously (throws when it can't)
@@ -140,8 +150,8 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
     const maxBytes = d.limits?.bytes ?? REPAIR_MAX_BYTES;
     const sleep = d.sleep ?? defaultSleep;
     const retentionFrom = dayStart(ctx.now - s.clipsDays * DAY);
-    // Oldest first, whatever order the report lists them in (ruling (a)).
-    const all = missingItems(ctx.source).sort((a, b) => a.start - b.start);
+    // Newest first, whatever order the report lists them in (amendment 2026-11-02).
+    const all = missingItems(ctx.source).sort((a, b) => b.start - a.start);
     const list = all.slice(0, maxClips);
     const counts = { candidates: all.length, requested: list.length, done: 0, failed: 0, skipped: 0, bytes: 0 };
     const items: RepairItem[] = [];
@@ -150,6 +160,8 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
     let inARow = 0;
     let downloads = 0;
     let overCap = false;
+    let space: ClipSpace | null = null; // counted at the first clip that gets that far
+    let makesRoom = false;
     const tempDir = d.tempDir();
     try {
       mkdirSync(tempDir, { recursive: true });
@@ -267,7 +279,7 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
         continue;
       }
       if (c.size > maxBytes) {
-        skip(c, 'too-big'); // it would block every run (oldest first)
+        skip(c, 'too-big'); // it would block every run
         continue;
       }
       if (counts.bytes + c.size > maxBytes) {
@@ -275,8 +287,10 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
         overCap = true;
         continue;
       }
-      if (s.maxGB !== undefined && d.clipsBytes() + c.size > s.maxGB * 2 ** 30) {
-        stopped = 'max-gb';
+      space ??= d.space(ctx.cam);
+      const fit = space.fit(c.start, c.size);
+      if (fit === 'full') {
+        stopped = 'retention-full'; // the older ones after it would not be kept either
         break;
       }
       // This clip's own signal, linked to the run's and unlinked after the
@@ -309,6 +323,8 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
           const row = await rec.indexer().addRecording(src.file, { start: entry.start, stream: s.stream });
           counts.done++;
           counts.bytes += row.size;
+          space.add(c.start, row.size);
+          if (fit === 'prunes') makesRoom = true;
           inARow = 0;
           items.push({ id: c.id, start: c.start, result: 'ok', clipId: row.id, bytes: row.size, ...(src.streamed ? { streamed: true as const } : {}) });
         } finally {
@@ -333,6 +349,8 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
         ctx.signal.removeEventListener('abort', link);
       }
     }
+    // The room the stored clips need, made now by the normal rules (not at the next hourly run).
+    if (makesRoom && d.prune) quietly('repair_prune_failed', d.prune);
     if (!stopped && !ctx.signal.aborted && overCap) stopped = 'byte-cap';
     if (!stopped && !ctx.signal.aborted && all.length > list.length) stopped = 'clip-cap';
     ctx.progress({ phase: 'repair', done: items.length, total: list.length });

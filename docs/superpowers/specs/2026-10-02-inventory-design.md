@@ -286,9 +286,11 @@ rulings.)
 - Before each clip it checks again that the recording is still on the SD, is
   still missing locally, and storage is not paused.
 - The oldest candidates first (the SD card overwrites them first).
+  Superseded: newest first (amendment 2026-11-02).
 - Caps: 50 clips or 200 MB per run, 1 s between downloads; it stops after 3
   failures in a row, and at once on `refused` or `camera_offline`. Only
-  recordings inside the clips retention, and never past `ftp.maxGB`. A
+  recordings inside the clips retention, and never past `ftp.maxGB`
+  (superseded by the storage rules, amendment 2026-11-02). A
   recording larger than 200 MB alone is skipped (`too-big`), one that would
   pass the 200 MB after others is skipped (`byte-cap`) and the scan goes on.
 - No `clip` stream-log message, so no SSE (decision 3). One
@@ -435,7 +437,8 @@ rulings.)
 PR 2 (clips, #74):
 
 - The repair takes the oldest missing recordings first (the SD card
-  overwrites them first; the plan said newest first). Skipped ones count
+  overwrites them first; the plan said newest first). Superseded by the
+  amendment 2026-11-02 (newest first). Skipped ones count
   toward the 50-clip cap. The compare's items list the missing ones oldest
   first too, so the item cut keeps the ones the repair takes first.
 - The repair button asks through the Maintenance page's shared confirm
@@ -519,6 +522,56 @@ Deferred review findings (#106, #111, #114):
 - `oldestSdDay` also reads the month before the window (for that day only);
   if that overview fails, the oldest day is unknown.
 - The events message gives the window start as the camera-local date.
+
+## Amendment 2026-11-02: the clips repair after an outage
+
+After a power and network outage the clips of the last days were missing
+here; the camera's SD card still had them, and further back than the
+retention. Klaus decided:
+
+1. **Window = the clips retention.** The compare (`camera: true`) and the
+   repair span exactly `dayStart(now − retention.clipsDays)` (UTC) to now:
+   the cutoff storage ages clips out by (`Storage.run`, step 1), so a
+   recording older than that is neither offered nor fetched (it would be
+   deleted at once), and nothing inside it is left out. Measured on main
+   before this change: the window already was exactly that, also for a
+   camera in another time zone (the camera-local days are listed from the
+   one holding the UTC start; recordings before it are not judged) and with
+   an SD card that reaches further back. Pinned by tests (UTC−6, UTC, UTC+9;
+   a minute before the start out, the start in; storage keeps the one and
+   deletes the other). Retention is per proxy (`retention.clipsDays`), not
+   per camera; a camera's share (`storage.sharePercent`) is a size, handled
+   by rule 3.
+2. **Newest first.** The repair sorts its candidates newest → oldest (the
+   most recent missing clips matter most), and the compare lists the
+   `missing-locally` items newest first, so the 500-item cut keeps the
+   ones the repair takes first; the admin page's offer counts them the same
+   way. The caps stay: 50 clips (skipped ones count) and 200 MB per run,
+   `too-big` above 200 MB.
+3. **A full store follows the storage rules: newer clips are kept first.**
+   Before each fetch the repair asks storage (`Storage.clipSpace(cam)`,
+   counted once per run; each stored clip is added to it) whether the clip
+   would survive the next storage run, worked out by the same code as the
+   run itself (`plan()`: age, `ftp.maxGB` and the other caps, the
+   recordings cache, the budget with the cameras' shares, `keepHours`):
+   - `fits`: nothing else would go: fetch it.
+   - `prunes`: only files older than the clip would go (as an FTP clip
+     makes room): fetch it; after the run a normal storage run makes the
+     room at once.
+   - `full`: the clip itself would go, or any file newer than it (also a
+     newer still, which the budget deletes before clips): stop with
+     `stopped: "retention-full"`. Every later candidate is older still, so
+     none would be kept either.
+   `max-gb` is gone (old reports and audit records keep it). A paused store
+   stops the run as before (`paused`). The recordings cache is not a cost
+   (a cache, first in line anyway).
+
+Tests: unit tests for the order, the retention bound, the storage model
+(`fits`, `prunes`, `full` under `ftp.maxGB` and under the budget) and the
+stop; and the whole check → repair flow against cam-sim
+(`test/inventory-repair-flow.test.ts`): an outage gap, an SD card older
+than the retention (camera at UTC+9), the per-run cap over several runs, a
+full store, and the events check and repair afterwards.
 
 ## References
 

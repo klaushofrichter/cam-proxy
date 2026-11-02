@@ -142,13 +142,13 @@ export function clipsLines(r: ClipsReport, fmt: (ms: number) => string = local):
 // The repair the newest clips report allows: a finished compare with the
 // camera, less than an hour old, with recordings missing here. `count` and
 // `bytes` are what one run fetches at most, picked as the server picks:
-// the oldest 50 candidates, a recording larger than 200 MB skipped
+// the newest 50 candidates, a recording larger than 200 MB skipped
 // (`tooBig`), one that would pass the 200 MB after the others skipped too.
 export function repairOffer(r: ClipsReport | null, now: number, repair: { source?: string } | null = null): { count: number; bytes: number; tooBig: number } | null {
   if (!r || repair?.source === r.runId || r.outcome !== 'ok' || !r.options?.camera || now - r.startedAt >= REPAIR_MAX_AGE_MS || !r.counts.missingLocally) return null;
   const first = r.items
     .filter((x) => x.type === 'missing-locally')
-    .sort((a, b) => (a.start ?? 0) - (b.start ?? 0))
+    .sort((a, b) => (b.start ?? 0) - (a.start ?? 0))
     .slice(0, REPAIR_MAX_CLIPS);
   const offer = { count: 0, bytes: 0, tooBig: 0 };
   for (const x of first) {
@@ -198,7 +198,8 @@ const SKIPS: Record<string, string> = {
 const STOPS: Record<string, string> = {
   'clip-cap': 'the 50-clip cap',
   'byte-cap': 'the 200 MB cap',
-  'max-gb': 'ftp.maxGB would be exceeded',
+  'retention-full': 'storage is full: the next recording is older than the clips storage keeps',
+  'max-gb': 'ftp.maxGB would be exceeded', // reports from before 2026-11-02
   paused: 'storage is paused (disk full)',
   failures: '3 failures in a row',
   refused: 'the camera refused a download',
