@@ -435,3 +435,59 @@ describe('clips inventory against cam-sim', () => {
     }
   }, 20_000);
 });
+
+// The E1 Outdoor Pro's SD names (measured 2026-11-02: version 03, no
+// animal-type field, 7 hex flags), listed through RecordingList and a Search
+// that answers like the camera. Before the fix every one was timer-only and
+// the inventory found 0 recordings.
+describe('clips inventory with E1 Outdoor Pro names', () => {
+  const e1 = (date: string, start: string, end: string, flags = '2B14808', size = 'C6A1C') =>
+    `/mnt/sda/Mp4Record/${date}/RecS03_${date.replaceAll('-', '')}_${start}_${end}_${flags}_${size}.mp4`;
+  function e1Camera(files: Record<string, string[]>): CameraListDeps {
+    const timeInfo = async () => ({ stdOffsetMinutes: 0, dstOffsetMinutes: 0 });
+    const list = new RecordingList({
+      search: async (param) => {
+        const p = (param as { Search: { onlyStatus: number; streamType: string; StartTime: { year: number; mon: number; day: number } } }).Search;
+        const month = `${p.StartTime.year}-${pad(p.StartTime.mon)}`;
+        if (p.onlyStatus === 1) {
+          const days = new Set(Object.keys(files).filter((d) => d.startsWith(month)).map((d) => Number(d.slice(8, 10))));
+          return { SearchResult: { Status: [{ year: p.StartTime.year, mon: p.StartTime.mon, table: Array.from({ length: 31 }, (_, i) => (days.has(i + 1) ? '1' : '0')).join('') }] } };
+        }
+        const date = `${month}-${pad(p.StartTime.day)}`;
+        return { SearchResult: { File: p.streamType === 'sub' ? (files[date] ?? []).map((name) => ({ name })) : [] } };
+      },
+      timeInfo,
+      now: () => NOW,
+    });
+    return { list, timeInfo, sleep: async () => undefined };
+  }
+
+  it('counts, pairs and finds missing E1 recordings', async () => {
+    const here = clip(T('2026-10-01T08:00:02'));
+    const cam = e1Camera({
+      '2026-09-30': [e1('2026-09-30', '070556', '070624')], // missing locally
+      '2026-10-01': [e1('2026-10-01', '080000', '080030', '2B14808', 'BEDCF'), e1('2026-10-01', '134721', '134751', '2B14808', 'CA0DB')], // here; missing
+    });
+    const r = await clipsCheck(deps(cam))(ctx({ options: { camera: true } }));
+    expect(r.counts).toMatchObject({ recordings: 3, timerOnly: 0, paired: 1, missingLocally: 2, missingLocallyBytes: 0xc6a1c + 0xca0db });
+    const missing = r.items.filter((x) => (x as { type: string }).type === 'missing-locally') as { id: string; kinds: string[] }[];
+    expect(missing.map((x) => [x.id, x.kinds])).toEqual([
+      ['RecS03_20261001_134721_134751_2B14808_CA0DB.mp4', ['motion']],
+      ['RecS03_20260930_070556_070624_2B14808_C6A1C.mp4', ['motion']],
+    ]);
+    expect(r.items).not.toContainEqual(expect.objectContaining({ type: 'gone-from-camera', clipId: here.id }));
+  });
+
+  it('a recording whose flags have an unknown layout still counts and is offered to the repair, not dropped as timer-only', async () => {
+    const cam = e1Camera({ '2026-10-01': [e1('2026-10-01', '090000', '090030', '2B148080'), e1('2026-10-01', '100000', '100030', '2B14818')] }); // 8 digits (unknown); timer and motion (known)
+    const r = await clipsCheck(deps(cam))(ctx({ options: { camera: true } }));
+    expect(r.counts).toMatchObject({ recordings: 2, timerOnly: 0, missingLocally: 2, unknownKinds: 1 });
+    expect(r.items).toContainEqual(expect.objectContaining({ type: 'missing-locally', id: 'RecS03_20261001_090000_090030_2B148080_C6A1C.mp4', kinds: [] }));
+  });
+
+  it('a timer-only recording (timer bit, no trigger) is still timer-only in the short form', async () => {
+    const cam = e1Camera({ '2026-10-01': [e1('2026-10-01', '090000', '090030', '2B14810')] });
+    const r = await clipsCheck(deps(cam))(ctx({ options: { camera: true } }));
+    expect(r.counts).toMatchObject({ recordings: 0, timerOnly: 1, missingLocally: 0, unknownKinds: 0 });
+  });
+});

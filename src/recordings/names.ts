@@ -3,26 +3,36 @@
 // server/recordings/clipNames.ts): RecS0A_DST20261001_211129_211207_0_5514C080000000_108CE9.mp4 =
 // stream, name version, DST flag, camera-local date, start, end, an optional
 // animal-type field, trigger flags (hex), size in bytes (hex).
+// The E1 Outdoor Pro (name version 03, measured 2026-11-02) has no
+// animal-type field and 7 hex flags: RecS03_20261101_070556_070624_2B14808_C6A1C.mp4.
 import type { TimeInfo } from '../camera/time';
 import { localDay } from '../analytics/local-day';
 import { addDays, DAY } from '../time-units';
 
 export type Stream = 'main' | 'sub';
 export type Kind = 'person' | 'vehicle' | 'pet' | 'motion';
-interface SdName { id: string; stream: Stream; dst: boolean; date: string; start: string; end: string; size: number; kinds: Kind[] }
+// unknownKinds: the flags have a layout we don't know (only then present):
+// kinds is empty, but the recording is not timer-only.
+interface SdName { id: string; stream: Stream; dst: boolean; date: string; start: string; end: string; size: number; kinds: Kind[]; unknownKinds?: true }
 
 const SD_ID = /^Rec[MS][0-9A-Za-z]{2}_(DST)?\d{8}_\d{6}_\d{6}_[0-9A-Za-z_]+\.mp4$/;
 const NAME = /^Rec([MS])[0-9A-Za-z]{2}_(DST)?(\d{8})_(\d{6})_(\d{6})_(?:\d+_)?([0-9A-Fa-f]+)_([0-9A-Fa-f]+)\.mp4$/;
 const HMS = /^([01]\d|2[0-3])[0-5]\d[0-5]\d$/;
-// Name versions 9 and 10 (14 hex digits): bit 55 − position (reolink_aio's layout, as in cams).
+// Positions counted from the field's top bit (reolink_aio's layout, as in
+// cams): 14 hex digits (versions 9 and 10) test bit 55 − position, 7 digits
+// (the E1's version 03) bit 27 − position. The 7-digit field is the 14-digit
+// one without its 7 trailing zeros (measured: CX820 sub 2B148080000000, E1
+// sub 2B14808), and its framerate bits (8-14) read the streams' GetEnc fps.
 const POSITIONS: [Kind, number][] = [['person', 17], ['vehicle', 19], ['pet', 20], ['motion', 24]];
 
 export const validId = (id: string): boolean => id.length <= 128 && SD_ID.test(id);
 
-export function decodeKinds(flagsHex: string): Kind[] {
-  if (!/^[0-9A-Fa-f]{14}$/.test(flagsHex)) return [];
+// The kinds, or null when the flags have a layout we don't know.
+export function decodeKinds(flagsHex: string): Kind[] | null {
+  if (!/^(?:[0-9A-Fa-f]{7}){1,2}$/.test(flagsHex)) return null;
   const v = BigInt(`0x${flagsHex}`);
-  return POSITIONS.filter(([, pos]) => ((v >> BigInt(55 - pos)) & 1n) === 1n).map(([k]) => k);
+  const top = flagsHex.length * 4 - 1;
+  return POSITIONS.filter(([, pos]) => ((v >> BigInt(top - pos)) & 1n) === 1n).map(([k]) => k);
 }
 
 export function parseSdName(nameOrPath: string): SdName | null {
@@ -36,11 +46,15 @@ export function parseSdName(nameOrPath: string): SdName | null {
   if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== date || !HMS.test(start) || !HMS.test(end)) return null;
   const bytes = parseInt(size, 16);
   if (!Number.isSafeInteger(bytes)) return null;
-  return { id, stream: s === 'M' ? 'main' : 'sub', dst: Boolean(dst), date, start, end, size: bytes, kinds: decodeKinds(flags) };
+  const kinds = decodeKinds(flags);
+  return { id, stream: s === 'M' ? 'main' : 'sub', dst: Boolean(dst), date, start, end, size: bytes, kinds: kinds ?? [], ...(kinds ? {} : { unknownKinds: true as const }) };
 }
 
 // A recording still being written is listed with end 000000; only one that
 // starts in the last minutes before midnight really ends then (cams).
+// A recording with a trigger, or one whose kinds are unknown (not timer-only).
+export const triggered = (r: { kinds: readonly string[]; unknownKinds?: true }): boolean => r.kinds.length > 0 || r.unknownKinds === true;
+
 export const stillRecording = (n: SdName): boolean => n.end === '000000' && n.start < '235500';
 
 const wall = (date: string, hms: string) =>

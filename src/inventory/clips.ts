@@ -3,7 +3,7 @@ import { basename, dirname, join } from 'path';
 import { setImmediate as yieldToLoop } from 'timers/promises';
 import type { AuditLog } from '../audit/audit-log';
 import type { Catalog } from '../catalog/db';
-import { localDate, settlesAt, type Kind, type Stream } from '../recordings/names';
+import { localDate, settlesAt, triggered, type Kind, type Stream } from '../recordings/names';
 import type { RecordingEntry } from '../recordings/list';
 import { listCamera, type CameraListDeps } from './camera-list';
 import { coverage, pairByStart, START_SLACK_MS } from './match';
@@ -231,7 +231,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
         return typeof v === 'number' && v < oldestHere - HOUR;
       });
     const prunedHereFrom = pruning ? oldestHere! : -Infinity;
-    const alone = other.recsAlone.filter((r) => judgedRec(r) && r.kinds.length > 0);
+    const alone = other.recsAlone.filter((r) => judgedRec(r) && triggered(r));
     const prunedHere = alone.filter((r) => r.start < prunedHereFrom).length;
     const missing = alone.filter((r) => r.start >= prunedHereFrom).sort((a, b) => b.start - a.start);
     const otherStream = rows.filter((r) => r.stream !== s.stream).length;
@@ -260,10 +260,12 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     const camera = {
       cameraDays: listing.days.length,
       unknownDays: unknown.length,
-      recordings: recs.filter((r) => r.kinds.length > 0).length,
-      timerOnly: recs.filter((r) => r.kinds.length === 0).length,
-      paired: pairing.pairs.filter((p) => judgedRec(p.rec) && p.rec.kinds.length > 0).length,
-      pairedOtherStream: other.pairs.filter((p) => judgedRec(p.rec) && p.rec.kinds.length > 0).length,
+      // A recording whose flags have an unknown layout counts (unknownKinds): never dropped as timer-only.
+      recordings: recs.filter(triggered).length,
+      timerOnly: recs.filter((r) => !triggered(r)).length,
+      unknownKinds: recs.filter((r) => r.unknownKinds).length,
+      paired: pairing.pairs.filter((p) => judgedRec(p.rec) && triggered(p.rec)).length,
+      pairedOtherStream: other.pairs.filter((p) => judgedRec(p.rec) && triggered(p.rec)).length,
       missingLocally: missing.length,
       missingLocallyBytes: missing.reduce((n, r) => n + r.size, 0),
       prunedHere,
@@ -277,7 +279,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
       ...gone.map((c): ClipItem => ({ type: 'gone-from-camera', clipId: c.id, start: c.start })),
       ...local,
     ];
-    const perDay = new Map<string, CameraDayRow>(listing.days.map((x) => [x.date, { date: x.date, state: x.state, recordings: x.recordings.filter((r) => judgedRec(r) && r.kinds.length > 0).length, missingLocally: 0, goneFromCamera: 0 }]));
+    const perDay = new Map<string, CameraDayRow>(listing.days.map((x) => [x.date, { date: x.date, state: x.state, recordings: x.recordings.filter((r) => judgedRec(r) && triggered(r)).length, missingLocally: 0, goneFromCamera: 0 }]));
     for (const r of missing) perDay.get(dayOf.get(r.id)!)!.missingLocally++;
     for (const c of gone) {
       const row = perDay.get(localDate(c.start, t));

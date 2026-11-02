@@ -16,7 +16,8 @@ import { SAFE_PATH } from '../camera/baichuan/vod';
 import { localDate, localDays, parseSdName, recordingTimes, stillRecording, type Kind, type Stream } from './names';
 import { addDays } from '../time-units';
 
-export interface RecordingEntry { id: string; path: string; start: number; end: number; stream: Stream; size: number; kinds: Kind[] }
+// unknownKinds: the name's flags have an unknown layout (names.ts).
+export interface RecordingEntry { id: string; path: string; start: number; end: number; stream: Stream; size: number; kinds: Kind[]; unknownKinds?: true }
 
 export class SearchError extends Error {
   constructor(
@@ -185,7 +186,7 @@ export class RecordingList {
           open = true;
           continue;
         }
-        out.push({ id: n.id, path: f.name, ...recordingTimes(n, t), stream, size: n.size, kinds: n.kinds });
+        out.push({ id: n.id, path: f.name, ...recordingTimes(n, t), stream, size: n.size, kinds: n.kinds, ...(n.unknownKinds ? { unknownKinds: true as const } : {}) });
       }
       out.sort((a, b) => a.start - b.start);
       if (epoch === this.epoch) {
