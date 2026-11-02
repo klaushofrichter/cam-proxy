@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- New health item "Move check" (`moveSync`): the check of a moved camera against its SD card (#311) now shows in the health summary, so on the Status page, the Pi display and the proxy's status in cams-admin. Running or waiting for the camera: a warning. Clips or events still missing, failed or gave up: a problem, with the count and the reason, for 7 days. Done with nothing missing: shown for 24 h.
 - Test fix: a still-checks test picked a time that was a whole second about once in 1000 runs.
 
 ## v2026.11.02.6

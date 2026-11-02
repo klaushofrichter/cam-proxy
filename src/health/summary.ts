@@ -6,6 +6,8 @@ import type { IntakeState } from '../events/intake';
 import type { DataVolume, HostReading, HostStats } from './host';
 import type { RebootState } from '../camera/reboot';
 import type { SdView } from '../camera/sd-card';
+import type { MoveSyncView } from '../moves/sync';
+import { moveSyncItem } from './move-sync';
 
 // The health summary (spec 2026-10-03-health-summary-design A2): the one
 // place with the problem rules. The Status page's Health and Pi cards, its red
@@ -17,7 +19,7 @@ import type { SdView } from '../camera/sd-card';
 // No secrets: no tokens, passwords, FTP settings, the PoE switch's host or
 // the camera serial.
 
-type ItemId = 'camera' | 'stream' | 'events' | 'ftp' | 'sd' | 'storage' | 'disk' | 'archive' | 'certificates' | 'cpuTemp' | 'underVoltage' | 'inventory' | 'version';
+type ItemId = 'camera' | 'stream' | 'events' | 'ftp' | 'sd' | 'storage' | 'disk' | 'archive' | 'certificates' | 'cpuTemp' | 'underVoltage' | 'inventory' | 'moveSync' | 'version';
 // warning (#199): present (true) on an item that needs a look but is no problem; it never counts in problemCount.
 export interface HealthItem { id: ItemId; label: string; value: boolean | number | string | null; text: string; problem: boolean; warning?: true }
 // archiveWarnPercent: while the Archive is on (spec 2026-10-05-archive-design §6).
@@ -48,6 +50,8 @@ export interface HealthInput {
   recordingsCache: { bytes: number; files: number; capBytes: number };
   sseClients: number;
   lastInventory: LastInventory | null;
+  // The post-move checks (#311), newest first (MoveSync.list()); absent or empty: no item.
+  moveSyncs?: readonly MoveSyncView[];
   reading: HostReading;
   // The Archive (spec 2026-10-05-archive-design §6): null or absent while it is off.
   archive?: { count: number; bytes: number; percentOfDisk: number; warning: boolean } | null;
@@ -263,6 +267,9 @@ export function buildHealth(i: HealthInput): HealthSummary {
   // they hide recordings (the E1's names, 2026-11-02).
   const unreadable = inv?.unreadableNames ?? 0;
   add('inventory', 'Last inventory', inv?.outcome ?? null, inv ? `${inv.kind}${inv.op === 'repair' ? ' repair' : ''}: ${inv.outcome}${unreadable ? `, ${unreadable} unreadable SD names` : ''}` : 'none yet', inv?.outcome === 'failed' || unreadable > 0);
+
+  const moved = moveSyncItem(i.moveSyncs ?? [], i.now);
+  if (moved) items.push(moved);
 
   add('version', 'Version', i.version, i.version, false);
 
