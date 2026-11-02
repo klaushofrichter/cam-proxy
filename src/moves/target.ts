@@ -1,3 +1,4 @@
+import type { MoveSync } from './sync';
 import { generateKeyPairSync } from 'crypto';
 import type { AuditLog } from '../audit/audit-log';
 import { bareHost, splitHost } from '../camera/http';
@@ -61,6 +62,8 @@ export interface TargetDeps {
   stopCopy?: (moveId: string) => Promise<void>;
   // This proxy's id at cams-admin (audit records name source and target).
   proxyId?: () => string;
+  // The post-move sync (issue #311): asked for once the move finished here.
+  sync?: Pick<MoveSync, 'finished'>;
   // A camera event is open: the certificate push waits for its end (it never pushes during one).
   eventOpen?: (cam: string) => boolean;
   // GET /api/moves/<id>/secrets at the source (overridable for tests).
@@ -333,6 +336,8 @@ export class MoveTarget {
     this.d.journal.bury?.({ moveId: fresh.id, role: 'target', phase: 'finished', deleted: zeros() });
     this.d.journal.remove?.(fresh.id);
     this.copying.delete(fresh.id);
+    // The camera is this proxy's now: compare with its SD card, fetch what neither proxy has.
+    this.d.sync?.finished(fresh.id, fresh.camera);
     return ok({ deleted: zeros() });
   }
 

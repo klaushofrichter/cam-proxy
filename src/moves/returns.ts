@@ -1,3 +1,4 @@
+import type { MoveSync } from './sync';
 import { lstatSync } from 'fs';
 import { join } from 'path';
 import type { AuditLog } from '../audit/audit-log';
@@ -50,6 +51,8 @@ export interface ReturnDeps {
   inventory: InventoryDeps;
   // This proxy's id at cams-admin (audit details).
   proxyId?: () => string;
+  // The post-move sync (issue #311): the cancelled move's, due once its copy back finished here.
+  sync?: Pick<MoveSync, 'returned'>;
   now?: () => number;
   // The original's side (Task 10): the copier, and the target's phase change (MoveTarget.setPhase).
   copy?: Pick<CopyRunner, 'start' | 'stop'>;
@@ -297,7 +300,10 @@ export class MoveReturns {
     removeChunkParts(dataDir, fresh.id);
     this.d.journal.bury?.({ moveId: fresh.id, role: 'target', phase: 'finished', deleted: zeros() });
     const stone: MoveTombstone | null = this.d.journal.ended?.(fresh.returnOf!, 'source') ?? null;
-    if (stone && stone.phase === 'cancelled') this.d.journal.bury?.({ moveId: stone.moveId, role: 'source', phase: 'cancelled', ...(stone.camera ? { camera: stone.camera } : {}), returned: true });
+    if (stone && stone.phase === 'cancelled') {
+      this.d.journal.bury?.({ moveId: stone.moveId, role: 'source', phase: 'cancelled', ...(stone.camera ? { camera: stone.camera } : {}), returned: true });
+      this.d.sync?.returned(stone.moveId);
+    }
     this.d.journal.remove?.(fresh.id);
     return ok({ deleted: zeros() });
   }
