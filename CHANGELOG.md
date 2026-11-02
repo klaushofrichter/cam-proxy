@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- New camera settings section `encoding` (`GET`/`PUT /api/cameras/{cam}/settings/encoding`): each stream's codec, size, frame rate, bit rate, GOP and profile, plus the combinations the camera offers. A change is checked against those options first (400 `not_allowed` with the allowed values), written as the camera's whole encoder object and read back. When a stream's size, codec or frame rate changes, the status's `streams` update at once, stills and live video switch to the new stream (live viewers reconnect). Changing it needs the proxy's own admin token; a cams-admin managed token is refused. Audited with the old and new values.
+
+## v2026.11.02.3
+
 - SD recordings from a camera that refuses the Baichuan download (the E1 Outdoor Pro answers 400) now come over HTTP Download instead, for viewers and for retrieving missing clips. The proxy remembers per camera which way works and tries Baichuan again every 6 hours, at a restart and after a camera reboot. The Status page's Recordings card and `/control/status` show the path in use and the camera's Baichuan refusal; a log line names the path when it changes. If both ways are refused, the error says so for each.
 - A Baichuan refusal now includes whatever the camera sent with it ("the download answered 400, no body" when it sent nothing).
 

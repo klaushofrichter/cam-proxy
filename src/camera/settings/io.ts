@@ -5,24 +5,37 @@
 // current object with only the asked keys changed, then reads the section
 // again: a field counts as saved only when the re-read shows it.
 import { CameraError } from '../client';
-import type { CameraCommand } from '../streams';
+import type { CameraCommand, RangeCommand } from '../streams';
+import { encodingCommands, encodingFrom, outOfRange, validateEncodingPatch, type EncodingPatch, type EncodingSettings, type RawEncoding } from './encoding';
 import {
   AI_KINDS, AI_TYPE, changedKeys, detectionCommands, detectionFrom, imageCommands, imageFrom, patchApplied, validateDetectionPatch, validateImagePatch,
   type AiKind, type DetectionPatch, type DetectionSettings, type ImagePatch, type ImageSettings, type RawDetection, type RawImage, type SettingsCommand,
 } from './model';
 
-export type SettingsSection = 'detection' | 'image';
-export const SECTIONS: readonly SettingsSection[] = ['detection', 'image'];
+export type SettingsSection = 'detection' | 'image' | 'encoding';
+export const SECTIONS: readonly SettingsSection[] = ['detection', 'image', 'encoding'];
+// What GET /settings answers (cams's two sections); encoding only on its own route.
+export const OVERVIEW_SECTIONS = ['detection', 'image'] as const;
+
+type Settings = DetectionSettings | ImageSettings | EncodingSettings;
+type Patch = DetectionPatch | ImagePatch | EncodingPatch;
+type Raw = RawDetection | RawImage | RawEncoding;
+// The camera's calls: `withRange` (a Get with action 1) is needed for encoding.
+export interface SectionIo { command: CameraCommand; withRange?: RangeCommand }
 export const isSection = (v: unknown): v is SettingsSection => (SECTIONS as readonly unknown[]).includes(v);
 
 export type FieldError = 'camera_rejected' | 'not_applied';
 export type WriteResult =
-  | { status: 400; details: string[] }
+  // invalid: the body (before the camera is asked); not_allowed: outside the
+  // camera's own range (encoding, after it was read), with what it offers.
+  | { status: 400; error?: 'not_allowed'; details: string[]; allowed?: unknown }
   | {
       status: 200 | 207;
       fields: Record<string, { ok: boolean; error?: FieldError }>;
-      settings: DetectionSettings | ImageSettings;
-      patch: DetectionPatch | ImagePatch;
+      settings: Settings;
+      // The section as read before the write.
+      previous: Settings;
+      patch: Patch;
       // Keys (dotted, names only) the camera changed that no write asked for.
       unexpected: string[];
     };
@@ -46,8 +59,17 @@ async function readImage(command: CameraCommand): Promise<{ raw: RawImage; setti
   return { raw, settings: imageFrom(raw) };
 }
 
-export function readSection(command: CameraCommand, section: SettingsSection): Promise<{ raw: RawDetection | RawImage; settings: DetectionSettings | ImageSettings }> {
-  return section === 'detection' ? readDetection(command) : readImage(command);
+// GetEnc with action 1: the streams and the options the camera offers.
+async function readEncoding(withRange: RangeCommand | undefined): Promise<{ raw: RawEncoding; settings: EncodingSettings }> {
+  if (!withRange) throw new Error('encoding needs a Get with action 1');
+  const r = await withRange('GetEnc', { channel: 0 });
+  const raw = { enc: r.value, range: r.range };
+  return { raw, settings: encodingFrom(raw) };
+}
+
+export function readSection(io: SectionIo, section: SettingsSection): Promise<{ raw: Raw; settings: Settings }> {
+  if (section === 'encoding') return readEncoding(io.withRange);
+  return section === 'detection' ? readDetection(io.command) : readImage(io.command);
 }
 
 // A changed key is expected only if the camera now holds exactly the value
@@ -95,13 +117,21 @@ async function apply(command: CameraCommand, commands: SettingsCommand[], sent?:
 // reads again and judges every field against the re-read. 400 before the
 // camera is asked anything. `o.sent`: told each command just before it goes
 // (the caller's audit knows whether anything was written before a failure).
-export async function writeSection(command: CameraCommand, section: SettingsSection, body: unknown, o: { sent?: (cmd: string) => void } = {}): Promise<WriteResult> {
-  const v = section === 'detection' ? validateDetectionPatch(body) : validateImagePatch(body);
+const VALIDATE = { detection: validateDetectionPatch, image: validateImagePatch, encoding: validateEncodingPatch } as const;
+
+export async function writeSection(io: SectionIo, section: SettingsSection, body: unknown, o: { sent?: (cmd: string) => void } = {}): Promise<WriteResult> {
+  const v: { ok: true; patch: Patch } | { ok: false; details: string[] } = VALIDATE[section](body);
   if (!v.ok) return { status: 400, details: v.details };
-  const before = await readSection(command, section);
-  const commands = section === 'detection' ? detectionCommands(v.patch as DetectionPatch, before.raw as RawDetection) : imageCommands(v.patch as ImagePatch, before.raw as RawImage);
-  const fields = await apply(command, commands, o.sent);
-  const after = await readSection(command, section);
+  const before = await readSection(io, section);
+  if (section === 'encoding') {
+    const details = outOfRange(v.patch as EncodingPatch, before.raw as RawEncoding);
+    if (details.length) return { status: 400, error: 'not_allowed', details, allowed: (before.settings as EncodingSettings).options };
+  }
+  const commands = section === 'detection' ? detectionCommands(v.patch as DetectionPatch, before.raw as RawDetection)
+    : section === 'image' ? imageCommands(v.patch as ImagePatch, before.raw as RawImage)
+      : encodingCommands(v.patch as EncodingPatch, before.raw as RawEncoding);
+  const fields = await apply(io.command, commands, o.sent);
+  const after = await readSection(io, section);
   for (const [field, r] of Object.entries(fields)) {
     if (r.ok && !patchApplied(field, v.patch, after.settings)) fields[field] = { ok: false, error: 'not_applied' };
   }
@@ -109,5 +139,5 @@ export async function writeSection(command: CameraCommand, section: SettingsSect
   // equal exactly what was sent. Anything else moved on its own.
   const unexpected = changedKeys(before.raw, after.raw).filter((key) => !expectedChange(key, commands, after.raw));
   const allOk = Object.values(fields).every((f) => f.ok);
-  return { status: allOk ? 200 : 207, fields, settings: after.settings, patch: v.patch, unexpected };
+  return { status: allOk ? 200 : 207, fields, settings: after.settings, previous: before.settings, patch: v.patch, unexpected };
 }

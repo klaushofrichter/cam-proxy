@@ -98,7 +98,8 @@ export async function createSimCamera(opts: SimCameraOptions): Promise<{ app: Ca
 // `ignoreImport`: the camera refuses a certificate import (cam-sim's cert.ignoreImport).
 // `model`: cam-sim's camera model (default RLC-1224A); `faults`: cam-sim faults from the start.
 export const E1_MODEL = 'E1-Outdoor-Pro' as const;
-export async function startSim(opts: { rebootMs?: number; ignoreImport?: boolean; model?: Model; faults?: FaultSpec[] } = {}) {
+// `encRange`: GetEnc's range in place of the model's (small sizes encode quickly).
+export async function startSim(opts: { rebootMs?: number; ignoreImport?: boolean; model?: Model; faults?: FaultSpec[]; encRange?: Array<Record<string, any>> } = {}) {
   const password = 'proxy-pw';
   const sim = await createCamSim({
     users: [
@@ -109,6 +110,7 @@ export async function startSim(opts: { rebootMs?: number; ignoreImport?: boolean
     reboot: { ms: opts.rebootMs ?? 200, dropsConnection: true },
     faults: [...(opts.ignoreImport ? [{ name: 'cert.ignoreImport' } as FaultSpec] : []), ...(opts.faults ?? [])],
     ...(opts.model ? { model: opts.model } : {}),
+    ...(opts.encRange ? { encRange: opts.encRange } : {}),
   });
   const ports = await sim.listen({ http: 0, https: 0, control: 0, rtsp: 0, onvif: 0, baichuan: 0 }, '127.0.0.1');
   // Always set when listening in process (the type makes it optional).

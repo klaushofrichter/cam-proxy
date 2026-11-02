@@ -76,8 +76,8 @@ describe('settings PUT: refusals are audited too', () => {
   });
 
   it('404 unknown section', async () => {
-    expect((await putSettings('encoding', { x: 1 })).status).toBe(404);
-    expect(last('camera-settings')).toMatchObject({ event: { outcome: 'failure' }, error: { message: 'not_found' }, cam_proxy: { section: 'encoding' } });
+    expect((await putSettings('audio', { x: 1 })).status).toBe(404);
+    expect(last('camera-settings')).toMatchObject({ event: { outcome: 'failure' }, error: { message: 'not_found' }, cam_proxy: { section: 'audio' } });
   });
 
   it('503 offline', async () => {
