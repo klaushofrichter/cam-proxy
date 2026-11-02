@@ -9,7 +9,7 @@
 import type { Writable } from 'stream';
 import { abortError } from '../../async';
 import { BaichuanError } from './errors';
-import { OK_STATUS, type BaichuanSession, type Subscription } from './session';
+import { OK_STATUS, type BaichuanSession, type Message, type Subscription } from './session';
 
 export const SAFE_PATH = /^[A-Za-z0-9_./-]+\.mp4$/;
 
@@ -28,6 +28,28 @@ export interface DownloadOptions {
 const INFO_RECORD_BYTES = 32; // measured on the RLC-1224A
 
 const noop = () => undefined;
+
+// What a camera sent with a refusal, for the message and the log (the E1
+// Outdoor Pro answers cmd 8 with 400, measured 2026-11-02): ", no body", or ": " and the text
+// (AES like every reply after the login), whitespace folded, at most
+// REFUSAL_TEXT_MAX characters. A body that isn't text shows as its length.
+// The request carried no secret, so neither can the answer.
+const REFUSAL_TEXT_MAX = 300;
+function answerText(session: BaichuanSession, m: Message): string {
+  if (!m.payload.length && !m.ext) return ', no body';
+  let body = '';
+  if (m.payload.length) {
+    try {
+      body = session.chunk(m, m.payload.length).toString('utf8');
+    } catch {
+      body = '';
+    }
+    if (!body || /[\x00-\x08\x0e-\x1f\ufffd]/.test(body)) body = `(${m.payload.length} bytes, not text)`;
+  }
+  const text = [m.ext, body].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+  return `: ${text.length > REFUSAL_TEXT_MAX ? `${text.slice(0, REFUSAL_TEXT_MAX)}…` : text}`;
+}
+
 // Writables that already carry our one lasting error listener (#99: a writable
 // reused for several downloads must not collect one per download).
 const guarded = new WeakSet<Writable>();
@@ -114,7 +136,7 @@ export async function download(session: BaichuanSession, path: string, size: num
         onError: (e) => fail(e),
         onMessage: (m) => {
           if (stopped) return;
-          if (!OK_STATUS.has(m.status)) return fail(new BaichuanError(m.status === 400 ? 'refused' : 'protocol', `the download answered ${m.status}`, m.status));
+          if (!OK_STATUS.has(m.status)) return fail(new BaichuanError(m.status === 400 ? 'refused' : 'protocol', `the download answered ${m.status}${answerText(session, m)}`, m.status));
           if (first) {
             first = false; // the 32-byte info record, not file data
             if (m.payload.length !== INFO_RECORD_BYTES) return fail(new BaichuanError('protocol', `the download's first reply is not the info record (${m.payload.length} bytes)`));

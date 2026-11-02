@@ -81,22 +81,42 @@ const okWhole = async (f: SimFile) => {
 };
 
 describe('Baichuan faults through the proxy', () => {
-  it('baichuan.refuse: 502 refused (the camera still lists it); the status and the counter say so', async () => {
+  // A camera that refuses both ways (the HTTP fallback, download-path.ts).
+  it('baichuan.refuse and downloads.refuse: 502 refused (the camera still lists it), naming both; the status and the counter say so', async () => {
     const f = fresh();
     const before = await refusedCount();
     faults().set({ name: 'baichuan.refuse' });
+    faults().set({ name: 'downloads.refuse' });
     try {
       const r = await request(p.base).get(fileUrl(f)).set(auth());
       expect(r.status).toBe(502);
-      expect(r.body).toMatchObject({ error: 'recordings_unavailable', reason: 'refused' });
+      expect(r.body).toMatchObject({ error: 'recordings_unavailable', reason: 'refused', detail: 'Baichuan: the download answered 400, no body; HTTP: HTTP Download: the camera closed the connection' });
       expect(r.body.detail).not.toContain('/mnt/');
       expect(await lastResult()).toBe('refused');
       expect(await refusedCount()).toBe(before + 1);
       noTrace(f);
     } finally {
       faults().clear('baichuan.refuse');
+      faults().clear('downloads.refuse');
     }
     await okWhole(f);
+    expect(p.proxy.recordings.status().download.path).toBe('baichuan');
+  });
+
+  it('baichuan.refuse alone: HTTP Download serves it, and stays the path', async () => {
+    const f = fresh();
+    faults().set({ name: 'baichuan.refuse' });
+    try {
+      const r = await okWhole(f);
+      expect(r.complete).toBe(true);
+      expect([counters().downloads, counters().baichuanDownloads]).toEqual([1, 0]);
+      expect(await lastResult()).toBe('ok');
+      expect(p.proxy.recordings.status().download).toMatchObject({ path: 'http', baichuanRefusal: { status: 400 } });
+    } finally {
+      faults().clear('baichuan.refuse');
+    }
+    await okWhole(fresh());
+    expect(counters().downloads).toBe(2); // still HTTP (Baichuan again in 6 h)
   });
 
   it('baichuan.dropMidway: 200 then the body ends short, nothing stays in the cache; the next request works', async () => {

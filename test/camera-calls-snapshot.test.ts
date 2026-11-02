@@ -5,8 +5,9 @@ import { startSim } from './helpers/sim';
 
 // GET /api/cameras/:cam/snapshot.jpg (spec 2026-10-30-camera-onboarding-design §4.8).
 const go2rtc = process.env.CAMPROXY_TEST_GO2RTC;
-// cam-sim's RLC-1224A sub stream (its GetEnc).
+// cam-sim's RLC-1224A streams (its GetEnc).
 const SUB = { width: 896, height: 512 };
+const MAIN = { width: 4512, height: 2512 };
 
 // A JPEG's size from its first SOF marker.
 function jpegSize(b: Buffer): { width: number; height: number } {
@@ -48,11 +49,10 @@ describe('on-demand snapshot', () => {
     expect(r.status).toBe(200);
     expect(r.headers['content-type']).toBe('image/jpeg');
     expect(r.headers['cache-control']).toBe('no-store');
-    // The camera's own Snap, unchanged. cam-sim's Snap serves its fixture
-    // picture at the sub size (a real RLC-1224A answers MAIN): the size check
-    // waits for a cam-sim that serves the main size.
-    expect((r.body as Buffer).equals(await s.sim.engine.snapshot())).toBe(true);
-    expect(jpegSize(r.body as Buffer)).toEqual(expect.objectContaining({ width: expect.any(Number) }));
+    // The camera's own Snap, unchanged: at the main stream's size, as a real
+    // RLC-1224A answers (cam-sim #127).
+    expect((r.body as Buffer).equals(await s.sim.engine.snapMain())).toBe(true);
+    expect(jpegSize(r.body as Buffer)).toEqual(MAIN);
     expect((await snap(p.base, '?stream=main')).status).toBe(200);
   });
 

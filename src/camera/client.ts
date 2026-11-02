@@ -43,6 +43,28 @@ export class CameraError extends Error {
   }
 }
 
+// HTTP Download's failures that are the camera's answer, not reachability
+// (openDownload): it closed the connection once it had the request (the
+// RLC-1224A's refusal since 2026-10-01; cam-sim's for an unknown file), or
+// answered something other than the file. `httpStatus`: its status, if any.
+export class DownloadRefused extends CameraError {
+  constructor(message: string, readonly httpStatus?: number) {
+    super('camera_error', message, true);
+    this.name = 'DownloadRefused';
+  }
+}
+// No answer (headers) within the download's first-byte time.
+export class DownloadTimeout extends CameraError {
+  constructor(requestSent: boolean) {
+    super('camera_offline', 'no answer in time', requestSent);
+    this.name = 'DownloadTimeout';
+  }
+}
+
+// A recording path as the camera's own Search lists it: checked, never
+// encoded (the camera drops a percent-encoded source, cams docs/reolink-api.md).
+const SAFE_RECORDING_PATH = /^[A-Za-z0-9_./-]+\.mp4$/;
+
 interface CameraStatus {
   model: string;
   firmware: string;
@@ -354,6 +376,66 @@ export class ReolinkClient {
       throw new CameraError('camera_auth_failed', 'token rejected after re-login');
     }
     throw new CameraError('camera_auth_failed', 'token rejected after re-login');
+  }
+
+  // HTTP Download of an SD recording (cmd=Download&source=<path>&output=<file>):
+  // the response once the camera answers 200 with the file, its body unread
+  // (the caller streams it and must consume or destroy it). Inside the gate
+  // only until the headers: a download takes minutes and must not hold an
+  // API slot. A bad token (401/403, or a -6 body) logs in again once.
+  // `timeoutMs`: until the headers. Never logs the URL (it has the token).
+  async openDownload(source: string, o: { timeoutMs?: number } = {}): Promise<IncomingMessage> {
+    if (!SAFE_RECORDING_PATH.test(source) || source.includes('..')) throw new CameraError('camera_error', 'unexpected recording path');
+    if (this.refusal) throw new CameraError('camera_error', `no trusted certificate for this camera: ${this.refusal}`);
+    this.warnUnverified();
+    const output = source.slice(source.lastIndexOf('/') + 1);
+    const timeoutMs = o.timeoutMs ?? this.timeoutMs;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const token = await this.tokenForRequest();
+      const outcome = await this.gate.run(async (): Promise<{ res: IncomingMessage } | null> => {
+        const path = `/cgi-bin/api.cgi?cmd=Download&source=${source}&output=${output}&token=${encodeURIComponent(token)}`;
+        let res: IncomingMessage;
+        try {
+          res = await openRequest(this.target, path, { timeoutMs, fresh: true }); // a reset is the camera's answer
+        } catch (err) {
+          const sent = requestWasWritten(err);
+          if ((err as Error).name === 'TimeoutError') throw new DownloadTimeout(sent);
+          const code = (err as { code?: string }).code;
+          if (sent && (code === 'ECONNRESET' || code === 'EPIPE')) throw new DownloadRefused('the camera closed the connection');
+          throw classifyNetworkError(err, sent);
+        }
+        const type = String(res.headers['content-type'] ?? '');
+        if (res.statusCode === 200 && !/^(text\/|application\/json)/i.test(type)) return { res };
+        if (res.statusCode === 503) {
+          res.resume();
+          throw new CameraError('camera_offline', 'Download: camera unavailable (HTTP 503)');
+        }
+        if (res.statusCode === 401 || res.statusCode === 403) {
+          res.resume();
+          return null;
+        }
+        if (res.statusCode !== 200) {
+          res.resume();
+          throw new DownloadRefused(`HTTP ${res.statusCode}`, res.statusCode);
+        }
+        // 200 with text: the camera's JSON error instead of the file.
+        let reply: ReolinkReply | undefined;
+        try {
+          const parsed: unknown = JSON.parse((await readBody(res, 64 * 1024)).toString('utf8'));
+          reply = Array.isArray(parsed) ? (parsed[0] as ReolinkReply | undefined) : undefined;
+        } catch {
+          res.destroy();
+          throw new DownloadRefused(`HTTP 200 ${type.split(';')[0] || 'without a type'}, not the file`, 200);
+        }
+        const rsp = reply?.error?.rspCode;
+        if (AUTH_RSP_CODES.has(rsp ?? 0)) return null;
+        const detail = typeof reply?.error?.detail === 'string' ? ` "${reply.error.detail.slice(0, 100)}"` : '';
+        throw new DownloadRefused(`rspCode ${rsp ?? 'unknown'}${detail}`, 200);
+      });
+      if (outcome) return outcome.res;
+      this.clearTokenIfCurrent(token);
+    }
+    throw new CameraError('camera_auth_failed', 'Download: token rejected after re-login');
   }
 
   // Drops the cached token without a Logout: after a camera reboot every

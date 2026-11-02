@@ -75,7 +75,20 @@ describe('download', () => {
     const out = sink();
     const e = (await run(s, out.w).catch((x) => x)) as BaichuanError;
     expect([e.code, e.status]).toEqual(['refused', 400]);
+    expect(e.message).toBe('the download answered 400, no body');
     expect(out.bytes().length).toBe(0);
+  });
+
+  it('a 400 that carries a body: the message has it (whitespace folded, at most 300 characters)', async () => {
+    const body = `<?xml version="1.0" encoding="UTF-8" ?>\n<body>\n<Reason>  not\tsupported </Reason>\n</body>\n`;
+    const { s } = await setup({ files: {}, refusalBody: body });
+    const e = (await run(s, sink().w).catch((x) => x)) as BaichuanError;
+    expect([e.code, e.status]).toEqual(['refused', 400]);
+    expect(e.message).toBe('the download answered 400: <?xml version="1.0" encoding="UTF-8" ?> <body> <Reason> not supported </Reason> </body>');
+    const long = await setup({ files: {}, refusalBody: `<body>${'x'.repeat(1000)}</body>` });
+    const e2 = (await run(long.s, sink().w).catch((x) => x)) as BaichuanError;
+    expect(e2.message.length).toBeLessThanOrEqual('the download answered 400: '.length + 301);
+    expect(e2.message.endsWith('…')).toBe(true);
   });
 
   it('honours backpressure: a slow writer pauses the socket, and the file still comes out whole', async () => {

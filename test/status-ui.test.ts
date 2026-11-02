@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { agoText, daysUntilFullText, MB, mbText } from '../web/src/lib/format';
 import { alertsLevel, cameraFtpClass, cameraFtpText, ftpAlerts, type FtpHealth } from '../web/src/lib/ftp';
-import { cacheFillText, recordingsClass, recordingsLastText } from '../web/src/lib/recordings';
+import { cacheFillText, downloadPathText, recordingsClass, recordingsLastText } from '../web/src/lib/recordings';
 
 describe('Status page: days until full (#78)', () => {
   it('rounds, says "more than a year" past 365 days, and — when not filling', () => {
@@ -107,6 +107,16 @@ describe('Status page: recordings (SD card)', () => {
     for (const r of ['timeout', 'offline']) expect(recordingsClass({ at: NOW, result: r, stream: 'sub', bytes: 1, ms: 1 })).toBe('warn');
     for (const r of ['auth', 'refused', 'protocol']) expect(recordingsClass({ at: NOW, result: r, stream: 'sub', bytes: 1, ms: 1 })).toBe('bad');
     expect(recordingsClass({ at: NOW, result: 'not_found', stream: 'sub', bytes: 0, ms: 1 })).toBe('');
+  });
+  it('the download path: Baichuan, or HTTP with the camera\'s refusal (the title)', () => {
+    expect(downloadPathText(undefined, NOW)).toEqual({ text: '—', title: undefined });
+    expect(downloadPathText({ path: 'baichuan', since: null, baichuanRefusal: null, retryBaichuanAt: null }, NOW)).toEqual({ text: 'Baichuan', title: undefined });
+    expect(downloadPathText({ path: 'http', since: NOW - 3600_000, baichuanRefusal: { at: NOW - 3600_000, status: 400, detail: 'the download answered 400, no body' }, retryBaichuanAt: NOW + 5 * 3600_000 }, NOW)).toEqual({
+      text: 'HTTP (the camera refuses Baichuan)',
+      title: 'Baichuan refused: the download answered 400, no body; tried again in 5 h',
+    });
+    // Back on Baichuan after a refusal: the refusal is history.
+    expect(downloadPathText({ path: 'baichuan', since: NOW, baichuanRefusal: { at: NOW - 7 * 3600_000, status: 400, detail: 'x' }, retryBaichuanAt: null }, NOW)).toEqual({ text: 'Baichuan', title: 'last refused 7 h ago: x' });
   });
   it('the cache fill, in MB', () => {
     expect(cacheFillText({ bytes: 312 * MB + 1000, files: 9, capBytes: 2048 * MB })).toBe('312 MB of 2048 MB');

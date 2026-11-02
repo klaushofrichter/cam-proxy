@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- SD recordings from a camera that refuses the Baichuan download (the E1 Outdoor Pro answers 400) now come over HTTP Download instead, for viewers and for retrieving missing clips. The proxy remembers per camera which way works and tries Baichuan again every 6 hours, at a restart and after a camera reboot. The Status page's Recordings card and `/control/status` show the path in use and the camera's Baichuan refusal; a log line names the path when it changes. If both ways are refused, the error says so for each.
+- A Baichuan refusal now includes whatever the camera sent with it ("the download answered 400, no body" when it sent nothing).
+
 ## v2026.11.02.2
 
 - Fixed: the clips check with the camera found 0 recordings on the E1 Outdoor Pro, whose recording names are shorter (no animal-type field, 7-digit trigger flags). Its recordings now count, pair with their clips, and missing ones can be retrieved. A recording whose trigger flags have a layout the proxy doesn't know is counted (`unknownKinds`) and offered for retrieval instead of being ignored as timer-only.

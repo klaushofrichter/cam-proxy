@@ -167,6 +167,52 @@ describe('RecordingFetcher', () => {
     }
   });
 
+  // The HTTP path (download-path.ts): the download learns whether the file is
+  // gone through the context, and announces the body's real length, which
+  // the Fetch then carries (the client's Content-Length, the repair's check).
+  it('the download gets a context: gone() asks the list; length() sets fetch.length before the first byte', async () => {
+    for (const listed of [true, false]) {
+      const x = setup({ listed });
+      const e = x.add(1, 50_000);
+      let gone: boolean | undefined;
+      let atStart: number | null | undefined;
+      const fetcher = new RecordingFetcher({
+        cache: x.cache,
+        download: async (path, _size, out, ctx) => {
+          gone = await ctx!.gone!();
+          ctx!.length!(49_000);
+          out.write(x.files.get(path)!.subarray(0, 49_000));
+          return 49_000;
+        },
+        stillListed: async () => listed,
+        paused: () => false,
+        noteWritten: (b) => x.written.push(b),
+        onDone: () => undefined,
+      });
+      const { fetch } = fetcher.get(e, { priority: 'high' });
+      expect(fetch.length).toBeUndefined();
+      expect(fetch.expectedBytes()).toBe(50_000);
+      fetch.attach(collector().w, () => (atStart = fetch.length));
+      await fetch.done;
+      expect(gone).toBe(!listed);
+      expect([atStart, fetch.length, fetch.expectedBytes()]).toEqual([49_000, 49_000, 49_000]);
+      expect(x.written).toEqual([49_000]); // the bytes kept, not the name's size
+    }
+  });
+
+  it('a length the download could not tell (null): expectedBytes is null', async () => {
+    const x = setup();
+    const e = x.add(1, 1000);
+    const fetcher = new RecordingFetcher({
+      cache: x.cache,
+      download: async (_p, _s, out, ctx) => (ctx!.length!(null), out.write(Buffer.alloc(10)), 10),
+      stillListed: async () => true, paused: () => false, noteWritten: () => undefined, onDone: () => undefined,
+    });
+    const { fetch } = fetcher.get(e, { priority: 'high' });
+    await fetch.done;
+    expect([fetch.length, fetch.expectedBytes()]).toEqual([null, null]);
+  });
+
   // Review Focus 2.
   it('a waiter gets the whole file after the first client left mid-stream', async () => {
     const x = setup({ delayMs: 3 });

@@ -828,7 +828,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       intake: { onvif: 'down' as const, since, source: 'none' as const, resubscribes: 0 },
       stream: { enabled: false, up: false, go2rtcUp: false, lastFrameTs: null },
       ftp: { enabled: false, listening: false, port: running.ftp.port, tls: running.ftp.tls, publicHost: running.ftp.publicHost ?? null, passwordSet: !!loaded.secrets.ftpPassword, lastUpload: null, lastClip: null, clips: countAllClips(catalog), failures: 0, camera: null, stalled: null },
-      recordings: { last: null, cache: cachePool.usage(), camera: { bytes: 0, files: 0 } },
+      recordings: { last: null, cache: cachePool.usage(), camera: { bytes: 0, files: 0 }, download: { path: 'baichuan' as const, since: null, baichuanRefusal: null, retryBaichuanAt: null } },
     };
   };
   const firstCam = (): CameraWorker | undefined => cams.list()[0];
