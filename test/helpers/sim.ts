@@ -99,7 +99,8 @@ export async function createSimCamera(opts: SimCameraOptions): Promise<{ app: Ca
 // `model`: cam-sim's camera model (default RLC-1224A); `faults`: cam-sim faults from the start.
 export const E1_MODEL = 'E1-Outdoor-Pro' as const;
 // `encRange`: GetEnc's range in place of the model's (small sizes encode quickly).
-export async function startSim(opts: { rebootMs?: number; ignoreImport?: boolean; model?: Model; faults?: FaultSpec[]; encRange?: Array<Record<string, any>> } = {}) {
+// encRestartMs: cam-sim's restart after a SetEnc that changed the streams (its default: 1 s).
+export async function startSim(opts: { rebootMs?: number; ignoreImport?: boolean; model?: Model; faults?: FaultSpec[]; encRange?: Array<Record<string, any>>; encRestartMs?: number } = {}) {
   const password = 'proxy-pw';
   const sim = await createCamSim({
     users: [
@@ -111,6 +112,7 @@ export async function startSim(opts: { rebootMs?: number; ignoreImport?: boolean
     faults: [...(opts.ignoreImport ? [{ name: 'cert.ignoreImport' } as FaultSpec] : []), ...(opts.faults ?? [])],
     ...(opts.model ? { model: opts.model } : {}),
     ...(opts.encRange ? { encRange: opts.encRange } : {}),
+    ...(opts.encRestartMs !== undefined ? { encRestartMs: opts.encRestartMs } : {}),
   });
   const ports = await sim.listen({ http: 0, https: 0, control: 0, rtsp: 0, onvif: 0, baichuan: 0 }, '127.0.0.1');
   // Always set when listening in process (the type makes it optional).

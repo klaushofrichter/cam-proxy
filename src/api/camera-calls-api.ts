@@ -37,6 +37,17 @@ export interface CameraCallsDeps {
 // The light's re-read after a switch (cams server/routes/settings.ts, measured lag).
 const LIGHT = { waitMs: 5_000, pollMs: 250 };
 
+// A camera restarts after a SetEnc that changed its streams (all three
+// models, measured 2026-11-02: offline, back 40–75 s later with the change
+// applied): the encoding write's re-read waits for it, asking every `pollMs`
+// for at most `maxMs`. Until the camera is back (at most `expectMs`) its being
+// offline is that restart (worker.expectRestart), also after the PUT gave up.
+// Exported for tests (shorter waits).
+export const ENC_RESTART = { maxMs: 180_000, pollMs: 2_000, expectMs: 600_000 };
+
+// The camera did not come back from that restart in time: the change was sent.
+class RestartTimeout extends Error {}
+
 // What a status read waits for the camera at most (GetEnc, the certificate, the time).
 const READ_MS = 5_000;
 // How old a settings or light read may be when answered again.
@@ -238,11 +249,36 @@ export function cameraCallsApi(d: CameraCallsDeps): express.Router {
     if (!isSection(section)) return refuse(404, 'not_found', segment(section));
     if (!w.status.state().online) return refuse(503, 'camera_offline', section);
     const sent: string[] = [];
+    // The encoding re-read: a camera that stops answering after the SetEnc is
+    // restarting; it is asked again until it is back (ENC_RESTART).
+    let restart: { ms: number } | undefined;
+    const reread = async <T>(read: () => Promise<T>): Promise<T> => {
+      const t0 = Date.now();
+      try {
+        return await read();
+      } catch (err) {
+        if (!(err instanceof CameraError) || !sent.length) throw err;
+        w.expectRestart(ENC_RESTART.expectMs);
+        w.streams.forget();
+        logger.info({ cameraId: w.id, code: err.code }, 'camera_restarting_after_encoding');
+      }
+      for (;;) {
+        await sleep(ENC_RESTART.pollMs);
+        try {
+          const v = await read();
+          restart = { ms: Date.now() - t0 };
+          return v;
+        } catch (err) {
+          if (!(err instanceof CameraError)) throw err;
+          if (Date.now() - t0 >= ENC_RESTART.maxMs) throw new RestartTimeout();
+        }
+      }
+    };
     forget(w);
     try {
       const out = await w.writeLock.run(async () => {
         try {
-          return await writeSection(io(w), section, req.body, { sent: (c) => sent.push(c) });
+          return await writeSection(io(w), section, req.body, { sent: (c) => sent.push(c), ...(section === 'encoding' ? { reread } : {}) });
         } finally {
           forget(w);
           await w.client.logout();
@@ -255,14 +291,27 @@ export function cameraCallsApi(d: CameraCallsDeps): express.Router {
       if (out.unexpected.length) logger.warn({ cameraId: w.id, section, keys: out.unexpected.slice(0, 20) }, 'camera_setting_side_effect');
       const failed = Object.values(out.fields).find((f) => !f.ok)?.error;
       const fields = Object.fromEntries(Object.entries(out.fields).map(([k, f]) => [k, f.ok ? 'ok' : f.error]));
+      const restarted = restart ? ` (the camera restarted, back after ${Math.round(restart.ms / 1000)} s)` : '';
       withCamera(d.audit, w.id).write({
         action: 'camera-settings', category: ['configuration'], type: ['change'], outcome: failed ? 'failure' : 'success', ...who(req, res),
-        message: `Camera settings (${section}) ${failed ? `partly not saved (${failed})` : 'saved'}: ${Object.keys(out.fields).join(', ') || 'nothing to change'}`,
+        message: `Camera settings (${section}) ${failed ? `partly not saved (${failed})` : 'saved'}: ${Object.keys(out.fields).join(', ') || 'nothing to change'}${restarted}`,
         ...(failed ? { error: failed } : {}),
-        details: { section, patch: out.patch, fields, unexpected: out.unexpected.slice(0, 20), ...enc, sent: sent.length > 0, requestedBy: requestedBy(res) },
+        details: { section, patch: out.patch, fields, unexpected: out.unexpected.slice(0, 20), ...enc, ...(restart ? { restarted: { ms: restart.ms } } : {}), sent: sent.length > 0, requestedBy: requestedBy(res) },
       });
-      res.status(out.status).json({ fields: out.fields, settings: out.settings });
+      res.status(out.status).json({ fields: out.fields, settings: out.settings, ...(restart ? { restarted: { ms: restart.ms } } : {}) });
     } catch (err) {
+      w.streams.forget();
+      if (err instanceof RestartTimeout) {
+        // Sent, and the camera went away to restart: the change is very likely
+        // applied (11 of 11 measured), but not read back. 504, not a failure.
+        const s = Math.round(ENC_RESTART.maxMs / 1000);
+        withCamera(d.audit, w.id).write({
+          action: 'camera-settings', category: ['configuration'], type: ['change'], outcome: 'unknown', ...who(req, res),
+          message: `Camera settings (${section}) sent; the camera is restarting and was not back within ${s} s, so the change is not confirmed`, error: 'camera_restarting',
+          details: { section, fieldNames: fieldNames(req.body), sent: true, restarted: { waitedMs: ENC_RESTART.maxMs, back: false }, requestedBy: requestedBy(res) },
+        });
+        return void res.status(504).json({ error: 'camera_restarting', sent: true, detail: `The change was sent and the camera is restarting; it was not back within ${s} s. Read the settings again once it is online.` });
+      }
       // Offline or refused before or during the write: when a Set was sent, a change may have reached the camera.
       const code = codeOf(err);
       withCamera(d.audit, w.id).write({

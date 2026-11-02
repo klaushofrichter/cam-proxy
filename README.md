@@ -557,6 +557,15 @@ lights, spotlight mode and brightness, flip, on-screen text). A third,
   camera's streams anew, the stills grabber reconnects and live clients of
   that camera are closed with `camera_restarting` (they reconnect to the new
   stream). Audited like the other sections, with `from` and `to` per stream.
+  **The camera restarts** after such a change (the RLC-1224A, CX820 and E1
+  Outdoor Pro all do: offline, back 40–75 s later with the change applied).
+  When the read after the write fails, the proxy asks again every 2 s for up
+  to 180 s and then answers as usual, with `"restarted":{"ms":…}` (also in the
+  audit record). Not back by then: 504 `{"error":"camera_restarting",
+  "sent":true,"detail":…}`, audited with outcome `unknown`: the change was
+  sent and most likely applied, but not read back. Meanwhile the camera's
+  `error` is `camera_restarting`, not a failure. The status's `streams` are
+  read again after any camera restart (a missed status check or a reconnect).
 
 ### Light
 
@@ -595,6 +604,16 @@ The protocol (MSE):
 1. One text message `{"type":"mse","value":"video/mp4; codecs=\"avc1.640029\""}`
    for `MediaSource.addSourceBuffer`.
 2. Binary messages: the fMP4 init segment, then fragments, to append in order.
+
+The mse message and the init segment wait for the first video fragment (at
+most 10 s; go2rtc sends it at the next keyframe). For a camera whose RTSP
+SDP has no parameter sets (the E1 Outdoor Pro and RLC-1224A; the CX820 has
+them), go2rtc 1.9.14 builds the init from a placeholder (H.264 128×96,
+`avc1.640029`; H.265 2560×1440), and browsers then show the picture at its
+aspect ratio (the E1's 640×360 sub as 640×480). The proxy replaces it with
+the stream's own parameter sets from that keyframe: the `avcC`/`hvcC`, the
+width and height in the sample entry and `tkhd`, and the codec in the mse
+message. An init that already matches goes out as it came.
 
 Refused before the upgrade (plain HTTP with a JSON body): 400 `token_in_url`
 or `invalid` (stream, codecs), 401, 404, 429 (more than 60 upgrades a minute
