@@ -30,7 +30,7 @@ function parseBoxes(b: Buffer, depth = 0): Box[] | null {
     if (size < 8 || off + size > b.length) return null;
     const type = b.toString('latin1', off + 4, off + 8);
     const body = b.subarray(off + 8, off + size);
-    const pre = CONTAINERS.has(type) ? 0 : PREFIX[type];
+    const pre = CONTAINERS.has(type) ? 0 : Object.hasOwn(PREFIX, type) ? PREFIX[type] : undefined;
     if (pre === undefined) out.push({ type, head: Buffer.alloc(0), body });
     else {
       if (body.length < pre) return null;
