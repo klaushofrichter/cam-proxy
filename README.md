@@ -516,8 +516,9 @@ proxy's go2rtc, which only a camera with stills on has (else 404
 The two sections cams's Settings page edits (cams's settings model, moved
 into the proxy): `detection` (recording, motion recording and sensitivity, AI
 person/vehicle/pet recording and sensitivity) and `image` (day/night, IR
-lights, spotlight mode and brightness, flip, on-screen text). The camera's
-encoding is read-only (`streams` in the status).
+lights, spotlight mode and brightness, flip, on-screen text). A third,
+`encoding`, is the camera's video streams (local admin only to change; not in
+`GET /settings`).
 
 - `GET /api/cameras/{cam}/settings` (client token): `{detection, image}`.
 - `GET /api/cameras/{cam}/settings/{section}` (client token): one section.
@@ -536,6 +537,26 @@ encoding is read-only (`streams` in the status).
   `"camera_rejected"`. 400 `{"error":"invalid","details":[…]}` before the
   camera is asked anything; 404 for another section. Every request is
   audited, refusals included (`camera-settings`, [docs/audit-log.md](docs/audit-log.md)).
+- `GET /api/cameras/{cam}/settings/encoding` (client token): per stream
+  (`main`, `sub`, and `ext` on a camera that has one) `{codec, width, height,
+  fps, bitRate, gop, profile}` (bit rate in kbps, GOP in seconds as the camera
+  counts it), and `options`: the combinations the camera offers, each a main
+  size with the sub size it pairs with and per stream the allowed `codecs`,
+  `fps`, `bitRates`, `profiles` and `gop` `{min, max}` (the camera's own
+  range). Example: `{"main":{"codec":"h265","width":3840,"height":2160,"fps":20,"bitRate":4096,"gop":2,"profile":"High"},"sub":{…},"options":[{"main":{"width":3840,"height":2160,"codecs":["h264","h265"],"fps":[20,18,…],"bitRates":[2048,3072,4096,5120],"profiles":["Base","Main","High"],"gop":{"min":1,"max":2}},"sub":{…}},…]}`.
+- `PUT /api/cameras/{cam}/settings/encoding` (local admin only: a managed
+  admin token is refused), body per stream with the fields to change, e.g.
+  `{"main":{"width":2560,"height":1440,"fps":25,"bitRate":3072}}` (`width`
+  and `height` together). The proxy reads the camera's streams and options,
+  refuses a change outside them with 400 `{"error":"not_allowed","details":[…],
+  "allowed":[…options]}` (nothing sent), else sends the camera's whole
+  encoder object with only those values changed, reads it again and answers
+  like the other sections (200, or 207 with `not_applied` /
+  `camera_rejected`). When a stream's codec, size or frame rate changed, the
+  status's `streams` are read again at once, the host's go2rtc gets the
+  camera's streams anew, the stills grabber reconnects and live clients of
+  that camera are closed with `camera_restarting` (they reconnect to the new
+  stream). Audited like the other sections, with `from` and `to` per stream.
 
 ### Light
 

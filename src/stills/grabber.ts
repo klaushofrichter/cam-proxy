@@ -177,6 +177,14 @@ export class FrameGrabber extends EventEmitter {
     });
   }
 
+  // A new ffmpeg on the same input soon (after the stream changed): the
+  // running one ends, and the exit path starts the next after a second.
+  reconnect(): void {
+    if (!this.running) return;
+    this.backoff = 1000;
+    this.proc?.kill('SIGTERM');
+  }
+
   async stop(): Promise<void> {
     this.running = false;
     clearTimeout(this.restartTimer);

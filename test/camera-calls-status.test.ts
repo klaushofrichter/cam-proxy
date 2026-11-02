@@ -97,6 +97,27 @@ describe('StreamsReader', () => {
     expect((await r.read()).main?.codec).toBe('h265');
     expect(calls).toBe(3);
   });
+
+  it('forget(): the next read asks again; a read in flight then is not kept', async () => {
+    let width = 640;
+    let release: (() => void) | undefined;
+    let calls = 0;
+    const r = new StreamsReader(async () => {
+      calls++;
+      const w = width;
+      if (release === undefined) await new Promise<void>((res) => (release = res));
+      return { Enc: { subStream: { vType: 'h264', width: w, height: 360, frameRate: 10 } } } as never;
+    });
+    const stale = r.read();
+    r.forget();
+    width = 320;
+    release!();
+    expect((await stale).sub?.width).toBe(640);
+    expect((await r.read()).sub?.width).toBe(320);
+    expect(calls).toBe(2);
+    expect((await r.read()).sub?.width).toBe(320);
+    expect(calls).toBe(2);
+  });
 });
 
 describe('a camera that is offline', () => {

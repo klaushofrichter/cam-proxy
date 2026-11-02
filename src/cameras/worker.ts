@@ -559,6 +559,21 @@ export class CameraWorker extends EventEmitter {
     this.phaseNow = running || this.errorNow !== 'no_address' ? 'ready' : 'idle';
   }
 
+  // The camera's picture changed (its encoding: a stream's size, codec or
+  // frame rate). The status asks for the streams again; with stills on, the
+  // host's go2rtc gets this camera's streams anew (a fresh camera session for
+  // the next reader) and the grabber reconnects to it. Cheaper than restart():
+  // client, poller and events stay as they are.
+  async refreshVideo(): Promise<void> {
+    this.streams.forget();
+    const s = this.stills;
+    if (!s) return;
+    const src = this.source();
+    await this.d.go2rtc()?.setStream(src).catch((err: Error) => logger.warn({ cameraId: this.id, err: err.message }, 'go2rtc_set_stream_failed'));
+    this.registered = src;
+    if (this.stills === s) s.grabber.reconnect();
+  }
+
   // One at a time: a second call while one runs joins it.
   restart(): Promise<void> {
     this.restarting ??= cameraContext.run(this.id, async () => {

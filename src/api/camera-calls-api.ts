@@ -7,7 +7,8 @@
 import express, { type Request, type Response } from 'express';
 import type { AuditLog } from '../audit/audit-log';
 import { withCamera } from '../audit/audit-log';
-import { isSection, readSection, writeSection, type SettingsSection } from '../camera/settings/io';
+import { isSection, OVERVIEW_SECTIONS, readSection, writeSection, type SectionIo, type SettingsSection } from '../camera/settings/io';
+import { ENC_STREAMS, videoChanged, type EncodingSettings } from '../camera/settings/encoding';
 import { CameraError } from '../camera/client';
 import type { CameraRegistry } from '../cameras/registry';
 import type { CameraWorker } from '../cameras/worker';
@@ -29,6 +30,8 @@ export interface CameraCallsDeps {
   served: (id: string) => string | null;
   credentials: (id: string) => Credentials;
   access: AccessDeps;
+  // The live relay: a camera's live clients are closed (they reconnect) when its picture changes.
+  live?: () => { closeCamera(cam: string): void } | undefined;
 }
 
 // The light's re-read after a switch (cams server/routes/settings.ts, measured lag).
@@ -163,17 +166,42 @@ export function cameraCallsApi(d: CameraCallsDeps): express.Router {
     }
   };
 
-  // --- settings (§4.8): cams's two sections ----------------------------------
-  const command = (w: CameraWorker) => <T>(cmd: string, param?: object) => w.client.command<T>(cmd, param);
+  // --- settings (§4.8): cams's two sections, and encoding --------------------
+  const io = (w: CameraWorker): SectionIo => ({
+    command: <T>(cmd: string, param?: object) => w.client.command<T>(cmd, param),
+    withRange: <T>(cmd: string, param?: object) => w.client.commandWithRange<T>(cmd, param),
+  });
   const offline = (res: Response) => void res.status(503).json({ error: 'camera_offline' });
-  const readSettings = (w: CameraWorker, section: SettingsSection) => shared(w, `settings:${section}`, async () => (await readSection(command(w), section)).settings, READ_CACHE_MS);
+  const readSettings = (w: CameraWorker, section: SettingsSection) => shared(w, `settings:${section}`, async () => (await readSection(io(w), section)).settings, READ_CACHE_MS);
 
   r.get('/cameras/:cam/settings', async (_req, res) => {
     const w = workerOf(res);
     if (!w.status.state().online) return offline(res);
-    const v = await timedRead(res, Promise.all([readSettings(w, 'detection'), readSettings(w, 'image')]), 'settings_read_failed');
-    if (v) res.json({ detection: v[0], image: v[1] });
+    const v = await timedRead(res, Promise.all(OVERVIEW_SECTIONS.map((s) => readSettings(w, s))), 'settings_read_failed');
+    if (v) res.json(Object.fromEntries(OVERVIEW_SECTIONS.map((s, i) => [s, v[i]])));
   });
+
+  // A changed encoding: the status's streams are asked again; when a
+  // stream's codec, size or frame rate changed, the camera's go2rtc stream
+  // is set again, the stills grabber reconnects and live clients are closed
+  // (they reconnect to the new stream). Never throws.
+  const followEncoding = async (w: CameraWorker, before: EncodingSettings, after: EncodingSettings): Promise<string[]> => {
+    w.streams.forget();
+    const changed = videoChanged(before, after);
+    if (!changed.length) return changed;
+    try {
+      await w.refreshVideo();
+      d.live?.()?.closeCamera(w.id);
+    } catch (err) {
+      logger.warn({ cameraId: w.id, err: errorMessage(err) }, 'encoding_refresh_failed');
+    }
+    return changed;
+  };
+  // An encoding write's old -> new, for the streams it asked to change.
+  const encodingChange = (before: EncodingSettings, after: EncodingSettings, patch: object) => {
+    const names = ENC_STREAMS.filter((n) => n in patch);
+    return { from: Object.fromEntries(names.map((n) => [n, before[n] ?? null])), to: Object.fromEntries(names.map((n) => [n, after[n] ?? null])) };
+  };
 
   r.get('/cameras/:cam/settings/:section', async (req, res) => {
     const section = req.params.section;
@@ -214,13 +242,16 @@ export function cameraCallsApi(d: CameraCallsDeps): express.Router {
     try {
       const out = await w.writeLock.run(async () => {
         try {
-          return await writeSection(command(w), section, req.body, { sent: (c) => sent.push(c) });
+          return await writeSection(io(w), section, req.body, { sent: (c) => sent.push(c) });
         } finally {
           forget(w);
           await w.client.logout();
         }
       });
-      if (out.status === 400) return refuse(400, 'invalid', section, { details: out.details });
+      if (out.status === 400) return refuse(400, out.error ?? 'invalid', section, { details: out.details, ...(out.allowed !== undefined ? { allowed: out.allowed } : {}) });
+      const enc = section === 'encoding'
+        ? { ...encodingChange(out.previous as EncodingSettings, out.settings as EncodingSettings, out.patch), refreshed: sent.length ? await followEncoding(w, out.previous as EncodingSettings, out.settings as EncodingSettings) : [] }
+        : {};
       if (out.unexpected.length) logger.warn({ cameraId: w.id, section, keys: out.unexpected.slice(0, 20) }, 'camera_setting_side_effect');
       const failed = Object.values(out.fields).find((f) => !f.ok)?.error;
       const fields = Object.fromEntries(Object.entries(out.fields).map(([k, f]) => [k, f.ok ? 'ok' : f.error]));
@@ -228,7 +259,7 @@ export function cameraCallsApi(d: CameraCallsDeps): express.Router {
         action: 'camera-settings', category: ['configuration'], type: ['change'], outcome: failed ? 'failure' : 'success', ...who(req, res),
         message: `Camera settings (${section}) ${failed ? `partly not saved (${failed})` : 'saved'}: ${Object.keys(out.fields).join(', ') || 'nothing to change'}`,
         ...(failed ? { error: failed } : {}),
-        details: { section, patch: out.patch, fields, unexpected: out.unexpected.slice(0, 20), sent: sent.length > 0, requestedBy: requestedBy(res) },
+        details: { section, patch: out.patch, fields, unexpected: out.unexpected.slice(0, 20), ...enc, sent: sent.length > 0, requestedBy: requestedBy(res) },
       });
       res.status(out.status).json({ fields: out.fields, settings: out.settings });
     } catch (err) {

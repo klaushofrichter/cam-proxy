@@ -317,7 +317,7 @@ export function changedKeys(before: unknown, after: unknown, prefix = ''): strin
 
 // A field counts as saved only if the re-read camera state shows the value
 // asked for: the firmware answers rspCode 200 even for writes it ignores.
-export function patchApplied(field: string, patch: DetectionPatch | ImagePatch, reread: DetectionSettings | ImageSettings): boolean {
+export function patchApplied(field: string, patch: object, reread: object): boolean {
   const want = field.split('.').reduce<unknown>((o, k) => obj(o)[k], patch);
   const got = field.split('.').reduce<unknown>((o, k) => obj(o)[k], reread);
   if (isObj(want)) return Object.entries(want as Obj).every(([k, v]) => obj(got)[k] === v);
