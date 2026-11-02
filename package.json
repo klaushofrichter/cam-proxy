@@ -22,13 +22,12 @@
     "test:e2e:multi": "playwright test -c playwright.multi.config.ts"
   },
   "dependencies": {
-    "@peculiar/x509": "^2.2.0",
+    "@peculiar/x509": "^3.1.0",
     "express": "^5.3.0",
     "express-rate-limit": "^8.7.2",
     "pino": "^10.4.0",
     "prom-client": "^15.1.3",
     "reflect-metadata": "^0.2.2",
-    "selfsigned": "^5.5.0",
     "sharp": "^0.35.5",
     "ws": "^8.22.0"
   },
@@ -48,5 +47,10 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
     "vitest": "^5.0.5"
+  },
+  "overrides": {
+    "selfsigned": {
+      "@peculiar/x509": "$@peculiar/x509"
+    }
   }
 }

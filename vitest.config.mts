@@ -15,6 +15,7 @@ export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
     testTimeout: 15_000,
+    setupFiles: ['test/setup-reflect.ts'],
     env,
   },
 });

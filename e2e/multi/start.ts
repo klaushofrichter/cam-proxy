@@ -1,5 +1,6 @@
 // The multi-camera e2e servers: three cam-sims and one cam-proxy over them
 // (one go2rtc, one FTP server for all three).
+import 'reflect-metadata'; // before cam-sim: its selfsigned runs on our @peculiar/x509 3 (package.json overrides)
 import { existsSync, mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
