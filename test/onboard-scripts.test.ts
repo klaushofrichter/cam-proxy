@@ -202,3 +202,136 @@ describe('the Pi: offboard its one camera, onboard it again', () => {
     expect(on.out).not.toContain(sim.password);
   }, 120_000);
 });
+
+// scripts/readdress-camera.sh: a configured camera's new address (PUT /control/cameras/<id>/host).
+const READDRESS = join(__dirname, '..', 'scripts', 'readdress-camera.sh');
+
+describe('readdress-camera.sh', () => {
+  it('says where it runs, and needs --id with --host or --find', async () => {
+    const help = await run(READDRESS, ['--help'], {});
+    expect(help.code).toBe(2);
+    expect(help.out).toContain('run on your workstation, not on the proxy host');
+    expect((await run(READDRESS, ['--id', 'cam1'], { CAMPROXY_URL: 'http://127.0.0.1:1', CAMPROXY_ADMIN_TOKEN_FILE: ADMIN_FILE })).code).toBe(2);
+    expect((await run(READDRESS, ['--host', '192.0.2.10'], { CAMPROXY_URL: 'http://127.0.0.1:1', CAMPROXY_ADMIN_TOKEN_FILE: ADMIN_FILE })).code).toBe(2);
+  });
+
+  it('moves the Pi camera to its new address; the same again is unchanged; another model fails', async () => {
+    const [s0, s1, e1] = await Promise.all([startSim(), startSim(), startSim({ model: 'E1-Outdoor-Pro' })]);
+    stops.push(() => Promise.all([s0.close(), s1.close(), e1.close()]));
+    const d = mkdtempSync(join(tmpdir(), 'readdress-pi-'));
+    mkdirSync(join(d, 'data'));
+    writeFileSync(join(d, 'config.json'), JSON.stringify({ camera: { id: 'cam1', protocol: 'http', user: 'proxy', onvifPort: s0.ports.onvif, rtspPort: s0.ports.rtsp || 554, baichuanPort: s0.camera.baichuanPort, statusPollS: 5 }, server: { logLevel: 'silent' }, stills: { enabled: false }, go2rtc: { binary: 'go2rtc', rtspPort: await freePort(), apiPort: await freePort() } }));
+    const envPath = join(d, '.env');
+    writeFileSync(envPath, `CAMERA_HOST=${s0.camera.host}\n`, { mode: 0o600 });
+    const proxy = createProxy(loadConfig({ CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: s0.password, CAMPROXY_ENV_FILE: envPath }, { cwd: d }));
+    stops.push(() => proxy.stop());
+    const base = `http://127.0.0.1:${(await proxy.start({ port: 0, host: '127.0.0.1' })).port}`;
+    await until(async () => (await request(base).get('/api/cameras/cam1').set(auth())).body.online === true, 20_000);
+    const env = { CAMPROXY_URL: base, CAMPROXY_ADMIN_TOKEN_FILE: ADMIN_FILE };
+
+    const bad = await run(READDRESS, ['--id', 'cam1', '--host', e1.camera.host], env);
+    expect(bad.code).toBe(1);
+    expect(bad.out).toContain('FAIL readdress cam1 (HTTP 409 different_camera:');
+    expect(readEnvValue(readFileSync(envPath, 'utf8'), 'CAMERA_HOST')).toBe(s0.camera.host);
+
+    const r = await run(READDRESS, ['--id', 'cam1', '--host', s1.camera.host, '--wait', '30'], env);
+    expect(r.out.split('\n').filter((l) => l.startsWith('ok ') || l.startsWith('FAIL'))).toEqual([
+      `ok cam1: ${s0.camera.host} -> ${s1.camera.host} (env; same model RLC-1224A; http: the login crossed the network unencrypted)`,
+      'ok cam1 online',
+    ]);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('-- cams-admin: not updated (CAMS_ADMIN_URL not set)');
+    expect(readEnvValue(readFileSync(envPath, 'utf8'), 'CAMERA_HOST')).toBe(s1.camera.host);
+    const again = await run(READDRESS, ['--id', 'cam1', '--host', s1.camera.host], env);
+    expect(again.out).toContain(`ok cam1: already at ${s1.camera.host}`);
+    expect(again.code).toBe(0);
+    for (const out of [bad.out, r.out, again.out]) for (const secret of [ADMIN_TOKEN, s0.password]) expect(out).not.toContain(secret);
+  }, 120_000);
+
+  it('updates the host in cams-admin too; from-proxy stays; a cams-admin refusal is a FAIL, the proxy keeps the address', async () => {
+    const [s0, s1, s2] = await Promise.all([startSim(), startSim(), startSim()]);
+    stops.push(() => Promise.all([s0.close(), s1.close(), s2.close()]));
+    const d = mkdtempSync(join(tmpdir(), 'readdress-ca-'));
+    mkdirSync(join(d, 'data'));
+    writeFileSync(join(d, 'config.json'), JSON.stringify({ camera: { id: 'cam1', protocol: 'http', user: 'proxy', onvifPort: s0.ports.onvif, rtspPort: s0.ports.rtsp || 554, baichuanPort: s0.camera.baichuanPort, statusPollS: 5 }, server: { logLevel: 'silent' }, stills: { enabled: false }, go2rtc: { binary: 'go2rtc', rtspPort: await freePort(), apiPort: await freePort() } }));
+    const envPath = join(d, '.env');
+    writeFileSync(envPath, `CAMERA_HOST=${s0.camera.host}\n`, { mode: 0o600 });
+    const proxy = createProxy(loadConfig({ CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: s0.password, CAMPROXY_ENV_FILE: envPath }, { cwd: d }));
+    stops.push(() => proxy.stop());
+    const base = `http://127.0.0.1:${(await proxy.start({ port: 0, host: '127.0.0.1' })).port}`;
+    // cams-admin's diag camera list and the camera PATCH (scope registry; version = rowVersion), as far as the script uses them.
+    const cam = { id: 'cam_1', accountId: 'acc_1', camsId: 'den', proxyId: PRX, proxyCameraId: 'cam1', host: s0.camera.host, rowVersion: 3 };
+    const patches: object[] = [];
+    let refuse = false;
+    const app = express();
+    app.use(express.json());
+    app.get('/api/v1/diag/cameras', (req, res) => void (req.get('authorization') === `Bearer ${DIAG}` ? res.json({ items: [{ ...cam, proxyCameraId: 'other' }, cam] }) : res.status(401).json({ error: 'unauthorized' })));
+    app.patch('/api/v1/accounts/:a/cameras/:c', (req, res) => {
+      if (req.get('authorization') !== `Bearer ${OPS}`) return void res.status(403).json({ error: 'scope' });
+      patches.push({ path: req.path, body: req.body });
+      if (refuse || req.body.version !== cam.rowVersion) return void res.status(409).json({ error: 'version_conflict' });
+      Object.assign(cam, { host: req.body.host, rowVersion: cam.rowVersion + 1 });
+      res.json(cam);
+    });
+    const srv: Server = app.listen(0, '127.0.0.1');
+    stops.push(() => new Promise((r) => srv.close(r)));
+    await new Promise((r) => srv.once('listening', r));
+    const env = { CAMPROXY_URL: base, CAMPROXY_ADMIN_TOKEN_FILE: ADMIN_FILE, CAMS_ADMIN_URL: `http://127.0.0.1:${(srv.address() as AddressInfo).port}`, CAMS_ADMIN_DIAG_TOKEN_FILE: tokenFile('diag3', DIAG), CAMS_ADMIN_OPS_TOKEN_FILE: tokenFile('ops3', OPS) };
+    const lines = (out: string) => out.split('\n').filter((l) => l.startsWith('ok ') || l.startsWith('FAIL'));
+    await until(async () => (await request(base).get('/api/cameras/cam1').set(auth())).body.online === true, 20_000);
+
+    // Without --cams-admin-proxy: a usage error, nothing changed.
+    expect((await run(READDRESS, ['--id', 'cam1', '--host', s1.camera.host], env)).code).toBe(2);
+    const r = await run(READDRESS, ['--id', 'cam1', '--host', s1.camera.host, '--cams-admin-proxy', PRX, '--wait', '30'], env);
+    expect(lines(r.out)).toEqual([expect.stringMatching(/^ok cam1: .* -> /), `ok cams-admin: den host ${s0.camera.host} -> ${s1.camera.host}`, 'ok cam1 online']);
+    expect(r.code).toBe(0);
+    expect(patches).toEqual([{ path: '/api/v1/accounts/acc_1/cameras/cam_1', body: { host: s1.camera.host, version: 3 } }]);
+
+    // cams-admin refuses: FAIL, exit 1, the proxy has the new address anyway; a rerun (unchanged on the proxy) fixes cams-admin.
+    refuse = true;
+    const bad = await run(READDRESS, ['--id', 'cam1', '--host', s2.camera.host, '--cams-admin-proxy', PRX, '--wait', '30'], env);
+    expect(lines(bad.out)).toEqual([expect.stringMatching(/^ok cam1: .* -> /), `FAIL cams-admin: update den (HTTP 409 version_conflict); the proxy keeps ${s2.camera.host}`, 'ok cam1 online']);
+    expect(bad.code).toBe(1);
+    expect(readEnvValue(readFileSync(envPath, 'utf8'), 'CAMERA_HOST')).toBe(s2.camera.host);
+    refuse = false;
+    const retry = await run(READDRESS, ['--id', 'cam1', '--host', s2.camera.host, '--cams-admin-proxy', PRX], env);
+    expect(lines(retry.out)).toEqual([`ok cam1: already at ${s2.camera.host}`, `ok cams-admin: den host ${s1.camera.host} -> ${s2.camera.host}`]);
+    expect(retry.code).toBe(0);
+
+    // from-proxy: the viewers reach the camera through the proxy; nothing to patch.
+    cam.host = 'from-proxy';
+    const n = patches.length;
+    const fp = await run(READDRESS, ['--id', 'cam1', '--host', s2.camera.host, '--cams-admin-proxy', PRX], env);
+    expect(fp.out).toContain('ok cams-admin: den reaches the camera through the proxy (host from-proxy), nothing to change');
+    expect(patches).toHaveLength(n);
+    for (const out of [r.out, bad.out, retry.out, fp.out]) for (const secret of [ADMIN_TOKEN, DIAG, OPS, s0.password]) expect(out).not.toContain(secret);
+  }, 120_000);
+
+  it('--find lists what answers and suggests the one camera of the same model not configured here', async () => {
+    let devices: object[] = [];
+    const app = express();
+    app.use(express.json());
+    app.use((req, res, next) => (req.get('authorization') === `Bearer ${ADMIN_TOKEN}` ? next() : void res.status(401).json({ error: 'unauthorized' })));
+    app.post('/control/actions/find-camera', (_req, res) => void res.json({ devices, tookMs: 3000 }));
+    app.get('/control/cameras/cam1/status', (_req, res) => void res.json({ id: 'cam1', camera: { online: false, model: 'RLC-1224A' } }));
+    const srv: Server = app.listen(0, '127.0.0.1');
+    stops.push(() => new Promise((r) => srv.close(r)));
+    await new Promise((r) => srv.once('listening', r));
+    const env = { CAMPROXY_URL: `http://127.0.0.1:${(srv.address() as AddressInfo).port}`, CAMPROXY_ADMIN_TOKEN_FILE: ADMIN_FILE };
+    const dev = (useAddress: string, model: string, current = false) => ({ useAddress, address: useAddress, model, name: model, current });
+
+    devices = [dev('192.0.2.20', 'RLC-1224A', true), dev('192.0.2.21', 'RLC-1224A'), dev('192.0.2.22', 'E1 Outdoor Pro')];
+    const one = await run(READDRESS, ['--id', 'cam1', '--find'], env);
+    expect(one.code).toBe(0);
+    expect(one.out).toContain('192.0.2.22 E1 Outdoor Pro');
+    expect(one.out).toContain('ok find-camera: 3 found');
+    expect(one.out).toContain('ok suggestion: --id cam1 --host 192.0.2.21 (the one RLC-1224A not configured here)');
+
+    devices = [dev('192.0.2.21', 'RLC-1224A'), dev('192.0.2.23', 'RLC-1224A')];
+    const two = await run(READDRESS, ['--id', 'cam1', '--find'], env);
+    expect(two.code).toBe(0);
+    expect(two.out).toContain('no suggestion: 2 cameras of model RLC-1224A not configured here');
+    expect(two.out).not.toContain('ok suggestion');
+    expect(one.out + two.out).not.toContain(ADMIN_TOKEN);
+  }, 60_000);
+});

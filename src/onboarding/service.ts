@@ -25,10 +25,13 @@ import { PASSWORD_WINDOW_MS, resolveAttemptKey, type PasswordAttempts } from './
 import { passwordSource, type Credentials } from './credentials';
 import { checkLogin } from './login-check';
 import { PASSWORD_RULE, validPassword } from './password-rule';
-import { FINGERPRINT, probeCamera, probeInput, probeServed, withPort, DEFAULT_PORTS, type ProbeInput } from './probe';
+import { canonicalHost, FINGERPRINT, probeCamera, probeInput, probeServed, withPort, DEFAULT_PORTS, type ProbeInput } from './probe';
 import { applyOverrides, ConfigError, planOverrides, removeOverride, withCameraHost } from '../config/load';
 import { removeEnvKey } from '../config/env-file';
-import { CAMERA_HOST_NAMES } from '../config/env';
+import { CAMERA_HOST_NAMES, validCameraHost } from '../config/env';
+import { cameraPassword } from '../config/secrets';
+import { bareHost, splitHost } from '../camera/http';
+import { servedCertificate } from '../tls/served';
 import { configChanges } from '../config/changes';
 import { atCameraLimit } from '../config/profile';
 import { cameraIds } from '../config/cameras';
@@ -70,7 +73,22 @@ export interface OnboardingDeps {
   // camera-time-set (§4.7): the camera's running client, and its NTP sync (null without ntp.server).
   cameraClient: (cam: string) => (Pick<ReolinkClient, 'ownSession' | 'forgetTime'>) | null;
   cameraNtp: (cam: string) => Promise<NtpOutcome | null>;
+  // A camera's model as it last reported it here (null: not known since the start).
+  identity?: (cam: string) => { model: string } | null;
   now?: () => number;
+}
+
+// PUT /control/cameras/:id/host's answer. identity.checked: 'model' (the
+// model it last reported here matched), 'login' (none known: the trust and
+// the login with its password were the check).
+export interface HostChange {
+  outcome: 'changed' | 'unchanged';
+  camera: string;
+  from: string;
+  to: string;
+  stored?: 'env' | 'overrides';
+  identity?: { checked: 'model'; model: string } | { checked: 'login'; model: string | null; detail: string };
+  plaintext?: true;
 }
 
 export interface AddBody { id?: string; name?: string; host: string; protocol?: 'https' | 'http'; user?: string; password: string; trust?: { fingerprint: string }; ports?: Partial<ProbeInput['ports']>; ftp?: boolean }
@@ -448,6 +466,121 @@ export class OnboardingService {
     this.auditAdd(who, id, 'success', `Camera ${id} added (${host}, ${p.model ?? 'unknown model'})${p.served ? `, certificate pinned (${p.served.fingerprint})` : ''}`, { host, model: p.model, pinned: p.served?.fingerprint ?? null });
     const [onboarding] = await this.status(id);
     return { status: 201, onboarding: onboarding ?? this.placeholder(id) };
+  }
+
+  // PUT /control/cameras/:id/host, PUT /control/camera/host (local admin
+  // only): a configured camera's new address (the DHCP router handed out
+  // another one). Only the same camera: over https its trust (the pinned
+  // certificate, measured first, no password sent to another one; a site-CA
+  // or public name verified on the login), a login with the password this
+  // proxy already has for it (never one from the request), and the model it
+  // last reported, when one is known. Written where this proxy keeps the
+  // address: CAMERA_HOST in the env file when the environment sets it (backup,
+  // atomic), else overrides.json; then the camera's side restarts. Its saved
+  // PTZ positions, password and trust stay. One camera-host-change record per call.
+  async changeHost(cam: string | undefined, body: unknown, who: Who): Promise<{ status: 200; json: HostChange } | Refusal> {
+    return this.serial(() => this.changeHostNow(cam, body, who));
+  }
+
+  private async changeHostNow(cam0: string | undefined, body: unknown, who: Who): Promise<{ status: 200; json: HostChange } | Refusal> {
+    const l = this.d.loaded();
+    const ids = cameraIds(l.config);
+    if (cam0 === undefined && ids.length !== 1) return { status: 400, error: 'camera_required', detail: 'several cameras here: PUT /control/cameras/<id>/host' };
+    const cam = cam0 ?? ids[0];
+    if (!new RegExp(CAMERA_ID).test(cam)) return { status: 400, error: 'invalid', detail: 'not a camera id' };
+    const b = (typeof body === 'object' && body !== null && !Array.isArray(body) ? body : {}) as Record<string, unknown>;
+    const to: unknown = b.host;
+    const c = cameraConfig(l.config, cam);
+    if (!c) return { status: 404, error: 'not_found' };
+    const from = c.host || null;
+    const fail = (r: Refusal, extra: Record<string, unknown> = {}): Refusal => {
+      this.d.audit.write({ action: 'camera-host-change', category: ['configuration'], type: ['change'], outcome: 'failure', error: r.error, ...whoRecord(who), camera: cam, message: `Camera ${cam} address not changed (${from ?? 'none'} → ${typeof to === 'string' ? to.slice(0, 64) : 'invalid'}): ${r.error}`, details: { from, to: typeof to === 'string' ? to.slice(0, 260) : null, ...extra, requestedBy: who.requestedBy, ...cmdOf(who) } });
+      return r;
+    };
+    if (!validCameraHost(to) || !canonicalHost(splitHost(to).hostname)) return fail({ status: 400, error: 'invalid', detail: 'host: an IPv4 address as four decimal numbers (no leading zeros), or a name with a letter; optional :port' });
+    const moved = l.config.cameras[cam]?.moved;
+    if (moved && (this.d.moveOpen?.(moved) ?? true)) return fail({ status: 409, error: 'move_open', detail: `camera move ${moved} is not over here; cancel or finish it from cams-admin` });
+    if (moved) return fail({ status: 409, error: 'camera_moved', detail: `${cam} moved away from this proxy: add it again (POST /control/cameras)` });
+    if (!from) return fail({ status: 409, error: 'no_address', detail: `${cam} has no address: onboard it (POST /control/cameras)` });
+    if (to.toLowerCase() === from.toLowerCase()) {
+      this.auditHost(who, cam, 'success', `Camera ${cam} address unchanged (${from})`, { from, to, outcome: 'unchanged' });
+      return { status: 200, json: { outcome: 'unchanged', camera: cam, from, to: from } };
+    }
+    // Where the address lives here, checked before the camera is asked.
+    const envName = l.envNames[`cameras.${cam}.host`];
+    let envPath: string | undefined;
+    const patch = { cameras: { [cam]: { host: to } } };
+    if (envName) {
+      const line = `${envName}=${to}`;
+      if (!envFileSets(l, envName)) return fail({ status: 409, error: 'env_host', detail: `${envName} is set outside the env file this proxy manages (compose's environment): change it there (${line})`, extra: { line } });
+      try {
+        envPath = checkEnvPath(this.d.envFile());
+      } catch (err) {
+        if (!(err instanceof EnvFileError)) throw err;
+        return fail({ status: 409, error: 'not_available', detail: `${err.message}: set ${line} in the .env file by hand`, extra: { line } });
+      }
+    } else {
+      try {
+        planOverrides(l, patch);
+      } catch (err) {
+        if (err instanceof ConfigError) return fail({ status: 400, error: 'invalid', detail: err.message });
+        throw err;
+      }
+    }
+    const password = cameraPassword(l.secrets, cam);
+    if (!password) return fail({ status: 409, error: 'no_password', detail: `no password for ${cam} here: save it first (PUT /control/cameras/${cam}/password)` });
+    // Over https: only to this camera's trust. A pin is compared before any password is sent.
+    const cert = this.d.certState(cam);
+    if (c.protocol === 'https' && !c.tlsName) {
+      if ((cert?.mode ?? 'none') === 'none') return fail({ status: 409, error: 'not_trusted', detail: "the camera's certificate is not trusted, nothing to recognise it by: pin it first (camera-trust-pin)" });
+      if (cert?.mode === 'pinned') {
+        const { hostname, port } = splitHost(to);
+        const served = await servedCertificate(bareHost(hostname), port ?? DEFAULT_PORTS.https);
+        if (!served) return fail({ status: 503, error: 'camera_offline', detail: `nothing answered on HTTPS at ${to}` });
+        if (served.fingerprint !== cert.fingerprint) return fail({ status: 409, error: 'fingerprint_mismatch', detail: `the camera at ${to} serves another certificate than ${cam}'s pinned one: not the same camera`, extra: { served: served.fingerprint } }, { served: served.fingerprint });
+      }
+    }
+    const limited = await this.attempt(to, (r, suppressed) => void fail(r, suppressed ? { suppressed } : {}));
+    if (limited) return limited;
+    const login = await checkLogin({ id: cam, host: to, protocol: c.protocol, user: c.user, password, trust: this.d.trustFor(cam), ...(c.tlsName ? { tlsName: c.tlsName } : {}) });
+    if (login.outcome === 'refused') return fail({ status: 422, error: 'camera_refused', detail: `the camera at ${to} refused ${cam}'s password: another camera, or its password changed` });
+    if (login.outcome === 'offline') return fail({ status: 503, error: 'camera_offline', detail: `the camera at ${to} did not answer the login` });
+    if (login.outcome !== 'ok') return fail({ status: 502, error: 'camera_error', detail: `the login at ${to} failed (a certificate ${cam}'s trust does not accept, or another error)` });
+    // The model it last reported here (kept while offline; unknown after a start with the camera away).
+    const known = this.d.identity?.(cam) ?? null;
+    const found = login.device?.model ?? null;
+    if (known && found !== known.model) return fail({ status: 409, error: 'different_camera', detail: `the camera at ${to} is a ${found ?? 'camera of unknown model'}, ${cam} is a ${known.model}`, extra: { expected: { model: known.model }, found: { model: found } } }, { expected: known.model, found });
+    const trustNote = c.protocol === 'http' ? 'the login with its password' : c.tlsName ? `its public name ${c.tlsName} and the login with its password` : `its ${cert?.mode === 'pinned' ? 'pinned certificate' : 'site-CA certificate'} and the login with its password`;
+    const identity: HostChange['identity'] = known ? { checked: 'model', model: known.model } : { checked: 'login', model: found, detail: `no model known to compare (${cam} has not answered since this proxy started): ${trustNote} are the check` };
+    // The write.
+    const before = l;
+    let next: Loaded;
+    let written: Record<string, unknown>;
+    try {
+      if (envPath) {
+        const w = writeEnvKey(envPath, [envName!], to);
+        next = withCameraHost(before, { value: to, name: w.key });
+        written = { envName: w.key, backup: w.backup };
+      } else {
+        next = applyOverrides(before, patch);
+        written = {};
+      }
+    } catch (err) {
+      if (err instanceof EnvFileError) return fail({ status: 409, error: 'not_available', detail: `${err.message}: set ${envName}=${to} in the .env file by hand`, extra: { line: `${envName}=${to}` } });
+      if (err instanceof ConfigError) return fail({ status: 400, error: 'invalid', detail: err.message });
+      throw err;
+    }
+    this.d.setLoaded(next);
+    this.auditConfig(who, before, next);
+    this.servedCache.delete(cam);
+    if (this.d.cameras.get(cam)) await this.d.restartCamera(cam);
+    const stored = envPath ? ('env' as const) : ('overrides' as const);
+    this.auditHost(who, cam, 'success', `Camera ${cam} address changed: ${from} → ${to} (${stored === 'env' ? `${String(written.envName)} in .env` : 'overrides.json'}; ${known ? `same model ${known.model}` : 'checked by its trust and login'})`, { from, to, outcome: 'changed', stored, model: found, identity: identity.checked, ...written });
+    return { status: 200, json: { outcome: 'changed', camera: cam, from, to, stored, identity, ...(c.protocol === 'http' ? { plaintext: true as const } : {}) } };
+  }
+
+  private auditHost(who: Who, cam: string, outcome: 'success' | 'failure', message: string, details: Record<string, unknown>): void {
+    this.d.audit.write({ action: 'camera-host-change', category: ['configuration'], type: ['change'], outcome, ...whoRecord(who), camera: cam, message, details: { ...details, requestedBy: who.requestedBy, ...cmdOf(who) } });
   }
 
   protected requester(who: Who): Requester {
