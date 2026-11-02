@@ -357,6 +357,39 @@ the new form:
   `--fingerprint SHA256:…`, the password as stdin's first line, and offboard
   needs `--yes`. A single-camera proxy (the Pi) keeps its config.json camera
   idle after an offboard and takes it again with the same id.
+- **A camera's new address:** after the DHCP router hands a camera another
+  address (a power outage), `PUT /control/cameras/<id>/host` (or
+  `PUT /control/camera/host` with one camera) with `{"host": "<address[:port]>"}`
+  moves it there without an offboard: its password, certificate trust and
+  PTZ positions stay. Local admin only. Only the same camera: a pinned
+  certificate must be the one served at the new address (checked before any
+  password is sent; a site-CA or public name is verified on the login), the
+  proxy logs in there with the password it already has (the request carries
+  none; the same 5 tries per address and 10 minutes), and the model the
+  camera last reported must match (`409 different_camera`); when no model is
+  known since the start, the trust and the login are the check and the answer
+  says `identity.checked: "login"`. The address goes where this proxy keeps
+  it: `CAMERA_HOST` in the env file (a backup first) when the environment
+  sets it (the Pi), else `cameras.<id>.host` in overrides.json (config.json is
+  never changed; on the mini PC update `host.json` too); then the camera's
+  side restarts. Refused while a camera move is open. The same address again
+  answers `outcome: "unchanged"` and writes nothing. One `camera-host-change`
+  audit record per call. `scripts/readdress-camera.sh` does it from a shell
+  (run on your workstation, not on the proxy host); `--find` lists what
+  answers the ONVIF probe and suggests the one camera of the same model not
+  configured here. With `CAMS_ADMIN_URL` it also sets the camera's host in
+  cams-admin (diag and ops tokens as for onboarding, the ops token with scope
+  `registry`, and `--cams-admin-proxy prx_…`), unless that host is
+  `from-proxy`; a cams-admin failure is a `FAIL` line, the proxy keeps the
+  new address, and running the script again finishes it:
+
+  ```sh
+  export CAMPROXY_URL=http://<proxy>:8480 CAMPROXY_ADMIN_TOKEN_FILE=<file holding the admin token>
+  scripts/readdress-camera.sh --id cam2 --find
+  scripts/readdress-camera.sh --id cam2 --host 192.0.2.41
+  # with cams-admin: CAMS_ADMIN_URL, CAMS_ADMIN_DIAG_TOKEN_FILE, CAMS_ADMIN_OPS_TOKEN_FILE and --cams-admin-proxy prx_…
+  ```
+
 - **Latest stills:** `GET /api/cameras/<id>/stills/latest.jpg` and
   `…/previews/latest.jpg` serve the newest still and tile from memory, with
   `ETag: "<id>-<ts>"`, `X-Still-Ts` and `Cache-Control: no-cache`; a poll with
