@@ -6,6 +6,9 @@
 - Changing a camera's encoding now waits for the camera's restart. All three camera models restart about 40–75 s after an encoding change; the change used to answer 502 although it was applied. Now the proxy waits up to 180 s and answers with the new settings (the audit notes the restart and how long it took), or 504 `camera_restarting` saying the change was sent. While it restarts, the camera's error reads `camera_restarting`.
 - The status's stream sizes are read again after any camera restart or missed check, not only after a change through the API (they showed the old main size for minutes).
 
+## v2026.11.02.4
+
+
 - New camera settings section `encoding` (`GET`/`PUT /api/cameras/{cam}/settings/encoding`): each stream's codec, size, frame rate, bit rate, GOP and profile, plus the combinations the camera offers. A change is checked against those options first (400 `not_allowed` with the allowed values), written as the camera's whole encoder object and read back. When a stream's size, codec or frame rate changes, the status's `streams` update at once, stills and live video switch to the new stream (live viewers reconnect). Changing it needs the proxy's own admin token; a cams-admin managed token is refused. Audited with the old and new values.
 
 ## v2026.11.02.3
