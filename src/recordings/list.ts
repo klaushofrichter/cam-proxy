@@ -19,6 +19,10 @@ import { addDays } from '../time-units';
 // unknownKinds: the name's flags have an unknown layout (names.ts).
 export interface RecordingEntry { id: string; path: string; start: number; end: number; stream: Stream; size: number; kinds: Kind[]; unknownKinds?: true }
 
+// The names of a day's Search that are no SD recording name (dropped): how
+// many, and the first one that is a safe path (null when none is).
+export interface Unreadable { count: number; example: string | null }
+
 export class SearchError extends Error {
   constructor(
     readonly code: 'camera_offline' | 'search_failed' | 'busy',
@@ -60,7 +64,7 @@ const toSearchError = (err: unknown, fallback: string): SearchError =>
 
 export class RecordingList {
   private readonly gate = new Semaphore(1);
-  private readonly days = new Map<string, { at: number; entries: RecordingEntry[] }>();
+  private readonly days = new Map<string, { at: number; entries: RecordingEntry[]; unreadable: Unreadable }>();
   private readonly dayRuns = new Map<string, Run<RecordingEntry[]>>();
   private readonly months = new Map<string, { at: number; days: number[] }>();
   private readonly monthRuns = new Map<string, Run<number[]>>();
@@ -178,20 +182,26 @@ export class RecordingList {
       const t = await this.time();
       const out: RecordingEntry[] = [];
       let open = false; // a recording of this day is still being written
+      const unreadable: Unreadable = { count: 0, example: null };
       for (const f of v?.SearchResult?.File ?? []) {
-        if (typeof f?.name !== 'string' || !SAFE_PATH.test(f.name)) continue;
-        const n = parseSdName(f.name);
-        if (!n || n.date !== date || n.stream !== stream) continue;
+        const name = typeof f?.name === 'string' && SAFE_PATH.test(f.name) ? f.name : null;
+        const n = name === null ? null : parseSdName(name);
+        if (!n || name === null) {
+          unreadable.count++;
+          if (name !== null && unreadable.example === null) unreadable.example = name.slice(name.lastIndexOf('/') + 1);
+          continue;
+        }
+        if (n.date !== date || n.stream !== stream) continue;
         if (stillRecording(n)) {
           open = true;
           continue;
         }
-        out.push({ id: n.id, path: f.name, ...recordingTimes(n, t), stream, size: n.size, kinds: n.kinds, ...(n.unknownKinds ? { unknownKinds: true as const } : {}) });
+        out.push({ id: n.id, path: name, ...recordingTimes(n, t), stream, size: n.size, kinds: n.kinds, ...(n.unknownKinds ? { unknownKinds: true as const } : {}) });
       }
       out.sort((a, b) => a.start - b.start);
       if (epoch === this.epoch) {
         const at = this.now();
-        this.days.set(key, { at, entries: out });
+        this.days.set(key, { at, entries: out, unreadable });
         this.prune(this.days, DAY_TTL);
         if (!open && localDate(at - FINAL_AFTER_MS, t) > date) {
           this.tails.set(key, { at, entries: out.filter(crossesMidnight) });
@@ -201,6 +211,13 @@ export class RecordingList {
       return out;
     });
     return this.join(this.dayRuns, key, run, signal);
+  }
+
+  // The unreadable names of the day's last Search (kept as long as its list);
+  // null when the day was not searched or its list expired.
+  unreadable(date: string, stream: Stream): Unreadable | null {
+    const hit = this.days.get(`${date}|${stream}`);
+    return hit ? { ...hit.unreadable } : null;
   }
 
   // The recordings of `date` that run past its midnight: kept 15 minutes once

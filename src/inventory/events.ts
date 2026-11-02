@@ -3,7 +3,7 @@ import type { TimeInfo } from '../camera/time';
 import type { Catalog } from '../catalog/db';
 import { localDate, settlesAt, type Kind, type Stream } from '../recordings/names';
 import type { RecordingEntry } from '../recordings/list';
-import { listCamera, type CameraListDeps } from './camera-list';
+import { listCamera, UNREADABLE_NOTE, unreadableNames, type CameraListDeps } from './camera-list';
 import { RECORDING_KINDS, SETTLE_MS } from './clips';
 import { coverage, spansByKind } from './match';
 import { MAX_TOP, type Check, type CheckContext, type CheckResult, type InventoryWindow } from './runner';
@@ -168,6 +168,8 @@ export async function compareEvents(d: EventsInventoryDeps, ctx: Pick<CheckConte
   // Flags of an unknown layout: no kind to match an event against.
   const unknownKinds = pool.filter((r) => r.unknownKinds && judged(r));
   if (unknownKinds.length) notes.push(UNKNOWN_KINDS_NOTE(unknownKinds.length));
+  const unreadable = unreadableNames(listing.days);
+  if (unreadable.count) notes.push(UNREADABLE_NOTE(unreadable.count, unreadable.example));
   const counts: Record<string, number> = {
     eventsDays: s.eventsDays,
     cameraDays: listing.days.length,
@@ -175,6 +177,7 @@ export async function compareEvents(d: EventsInventoryDeps, ctx: Pick<CheckConte
     recordings: triggered.filter(judged).length,
     timerOnly: pool.filter((r) => r.kinds.length === 0 && !r.unknownKinds && judged(r)).length,
     unknownKinds: unknownKinds.length,
+    unreadableNames: unreadable.count,
     spans: spans.length,
     matched: spans.length - missing.length,
     missingEvents: missing.length,
@@ -207,7 +210,8 @@ export function eventsCheck(d: EventsInventoryDeps): Check {
     const message = w.from === null
       ? `no recordings on the SD card (${r.stream}) in the last ${c.eventsDays} days`
       : `${c.missingEvents} of ${c.spans} recording spans without an event (${byKindText(c, 'missing')}) since ${since} (${w.reason === 'sd-card' ? "the SD card's reach" : `the ${c.eventsDays}-day retention`}), ` +
-        `${c.eventsWithoutRecording} of ${c.events} events without a recording, ${c.unknownDays} days unknown`;
+        `${c.eventsWithoutRecording} of ${c.events} events without a recording, ${c.unknownDays} days unknown` +
+        (c.unreadableNames ? `, ${c.unreadableNames} SD names unreadable` : '');
     return { window: w, counts: c, top: r.top, items: [...r.missing, ...r.withoutRecording], message };
   };
 }

@@ -13,14 +13,15 @@ import type { TimeInfo } from '../camera/time';
 import { pad2 } from '../time-units';
 import { errorMessage } from '../log';
 
-interface CameraDay { date: string; state: 'listed' | 'unknown'; recordings: RecordingEntry[]; error?: string }
+// unreadable: names in the day's Search that are no SD recording name (dropped).
+export interface CameraDay { date: string; state: 'listed' | 'unknown'; recordings: RecordingEntry[]; error?: string; unreadable?: number; unreadableExample?: string }
 interface CameraListing {
   days: CameraDay[]; // camera-local dates of the window, oldest first (fewer when cancelled)
   oldestSdDay: string | null; // the oldest day with recordings in the window's months and the month before
   time: TimeInfo;
 }
 export interface CameraListDeps {
-  list: Pick<RecordingList, 'monthDays' | 'day'>;
+  list: Pick<RecordingList, 'monthDays' | 'day'> & Partial<Pick<RecordingList, 'unreadable'>>;
   timeInfo: () => Promise<TimeInfo>;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
@@ -55,6 +56,21 @@ const monthBefore = (date: string): string => {
   const m = Number(date.slice(5, 7));
   return m === 1 ? `${y - 1}-12` : `${y}-${pad2(m - 1)}`;
 };
+
+const NOTHING_READ = 'the month overview has recordings on this day, but its Search gave none that could be read';
+
+// The unreadable SD names of a listing: how many, and one example.
+export function unreadableNames(days: readonly CameraDay[]): { count: number; example: string | null } {
+  let count = 0;
+  let example: string | null = null;
+  for (const x of days) {
+    count += x.unreadable ?? 0;
+    example ??= x.unreadableExample ?? null;
+  }
+  return { count, example };
+}
+export const UNREADABLE_NOTE = (n: number, example: string | null) =>
+  `${n} SD recording names could not be read${example ? ` (for example ${example})` : ''}: those recordings are not counted. A camera firmware with another name format?`;
 
 export async function listCamera(
   d: CameraListDeps,
@@ -100,8 +116,14 @@ export async function listCamera(
     if (set && !set.has(Number(date.slice(8, 10)))) {
       days.push({ date, state: 'listed', recordings: [] }); // no recordings that day: no Search
     } else {
-      const day = await searchDay(d, date, o.stream, o.signal, sleep);
-      if (!day) break; // cancelled
+      const found = await searchDay(d, date, o.stream, o.signal, sleep);
+      if (!found) break; // cancelled
+      let day = found;
+      const u = day.state === 'listed' ? d.list.unreadable?.(date, o.stream) : null;
+      if (u?.count) day = { ...day, unreadable: u.count, ...(u.example ? { unreadableExample: u.example } : {}) };
+      // The overview has recordings this day, the Search none that read
+      // (names of another format): unknown, never an empty day.
+      if (set && day.state === 'listed' && day.recordings.length === 0) day = { ...day, state: 'unknown', error: NOTHING_READ };
       days.push(day);
     }
     o.progress?.(i + 1, dates.length, date);

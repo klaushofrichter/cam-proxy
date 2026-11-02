@@ -483,6 +483,19 @@ describe('clips inventory with E1 Outdoor Pro names', () => {
     const r = await clipsCheck(deps(cam))(ctx({ options: { camera: true } }));
     expect(r.counts).toMatchObject({ recordings: 2, timerOnly: 0, missingLocally: 2, unknownKinds: 1 });
     expect(r.items).toContainEqual(expect.objectContaining({ type: 'missing-locally', id: 'RecS03_20261001_090000_090030_2B148080_C6A1C.mp4', kinds: [] }));
+    expect(r.window.notes).toContain('1 recordings have trigger flags of an unknown layout (for example RecS03_20261001_090000_090030_2B148080_C6A1C.mp4): counted and offered for retrieval, their kinds unknown');
+  });
+
+  it('SD names that cannot be read are counted, noted with an example, and their day is unknown when nothing else reads', async () => {
+    const cam = e1Camera({
+      '2026-09-30': ['/mnt/sda/Mp4Record/2026-09-30/RecS03_20260930_070556_070624_2B14808.mp4'], // no size field
+      '2026-10-01': [e1('2026-10-01', '090000', '090030'), '/mnt/sda/Mp4Record/2026-10-01/RecS03_20261001_1000_2B14808_C6A1C.mp4'],
+    });
+    const r = await clipsCheck(deps(cam))(ctx({ options: { camera: true } }));
+    expect(r.counts).toMatchObject({ unreadableNames: 2, recordings: 1, unknownDays: 1 });
+    expect(r.window).toMatchObject({ camera: { unknownDays: ['2026-09-30'] } });
+    expect(r.window.notes).toContain('2 SD recording names could not be read (for example RecS03_20260930_070556_070624_2B14808.mp4): those recordings are not counted. A camera firmware with another name format?');
+    expect(r.message).toContain('2 SD names unreadable');
   });
 
   it('a timer-only recording (timer bit, no trigger) is still timer-only in the short form', async () => {
