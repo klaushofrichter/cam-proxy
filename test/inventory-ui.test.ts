@@ -143,15 +143,15 @@ describe('Inventory box helpers, clips', () => {
     expect(repairOffer(clipsReport, T, { source: 'clips-0-other' })).not.toBeNull();
   });
 
-  it('offers what the server fetches: oldest first, the 50-clip cap, the 200 MB cap skipping too-big ones (#74 final review)', () => {
+  it('offers what the server fetches: newest first, the 50-clip cap, the 200 MB cap skipping too-big ones (#74 final review)', () => {
     const MB = 2 ** 20;
     const item = (start: number, size: number) => ({ type: 'missing-locally', start, size });
-    // Listed newest first: the offer goes oldest first like the repair.
-    const r = { ...clipsReport, counts: { ...clipsReport.counts, missingLocally: 5 }, items: [item(5, 30 * MB), item(4, 40 * MB), item(3, 80 * MB), item(2, 150 * MB), item(1, 250 * MB)] };
+    // Listed oldest first here: the offer goes newest first like the repair (amendment 2026-11-02).
+    const r = { ...clipsReport, counts: { ...clipsReport.counts, missingLocally: 5 }, items: [item(1, 30 * MB), item(2, 40 * MB), item(3, 80 * MB), item(4, 150 * MB), item(5, 250 * MB)] };
     // 250 too big (skipped); 150 + 80 = 230 > 200: 80 skipped; 150 + 40 = 190; + 30 = 220: skipped.
     expect(repairOffer(r, T)).toEqual({ count: 2, bytes: 190 * MB, tooBig: 1 });
-    // The 50-clip cap counts the skipped ones too (the server's first 50, oldest first).
-    const many = { ...clipsReport, counts: { ...clipsReport.counts, missingLocally: 52 }, items: [item(0, 300 * MB), ...Array.from({ length: 51 }, (_, i) => item(i + 1, MB))] };
+    // The 50-clip cap counts the skipped ones too (the server's first 50, newest first).
+    const many = { ...clipsReport, counts: { ...clipsReport.counts, missingLocally: 52 }, items: [item(100, 300 * MB), ...Array.from({ length: 51 }, (_, i) => item(i + 1, MB))] };
     expect(repairOffer(many, T)).toEqual({ count: 49, bytes: 49 * MB, tooBig: 1 });
   });
 
@@ -176,7 +176,8 @@ describe('Inventory box helpers, clips', () => {
       items: [{ id: 'a', start: T, result: 'skipped', reason: 'viewer' }, { id: 'b', start: T, result: 'skipped', reason: 'viewer' }, { id: 'c', start: T, result: 'skipped', reason: 'already-local' }, { id: 'd', start: T, result: 'ok' }],
     };
     expect(repairLines(rep)).toEqual(['Fetched: 5 of 9 (5.0 MB); failed: 1; skipped: 3', 'Skipped, a viewer was downloading it: 2', 'Skipped, already here: 1', 'Stopped: the 200 MB cap']);
-    expect(repairLines({ ...rep, stopped: 'max-gb' }).at(-1)).toBe('Stopped: ftp.maxGB would be exceeded');
+    expect(repairLines({ ...rep, stopped: 'retention-full' }).at(-1)).toBe('Stopped: storage is full: the next recording is older than the clips storage keeps');
+    expect(repairLines({ ...rep, stopped: 'max-gb' }).at(-1)).toBe('Stopped: ftp.maxGB would be exceeded'); // a report from before 2026-11-02
     expect(repairLines({ ...rep, outcome: 'failed', error: 'camera_offline: x' })).toEqual(['Failed: camera_offline: x']);
   });
 

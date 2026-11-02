@@ -21,6 +21,7 @@ import { StreamLog } from '../src/stream/log';
 import { clipsCheck, mb, type ClipItem } from '../src/inventory/clips';
 import { clipsRepair, REPAIR_GAP_MS, REPAIR_MAX_BYTES, REPAIR_MAX_CLIPS, REPAIR_MAX_FAILURES, type ClipsRepairDeps, type ClipsRepairSettings, type RepairItem } from '../src/inventory/repair-clips';
 import type { InventoryReport, RepairContext } from '../src/inventory/runner';
+import type { ClipFit } from '../src/storage';
 
 const run = promisify(execFile);
 const NOW = Date.UTC(2026, 9, 2, 12, 0);
@@ -34,11 +35,14 @@ beforeAll(async () => {
   videoFile = file;
 }, 30_000);
 
-// The SD recording i of 2026-10-01 (10:<i>:00 UTC), as the list and the report know it.
+// The SD recording i of 2026-10-01 (10:<59 − i>:00 UTC), as the list and the
+// report know it: the higher i, the older, so i is the order the repair takes
+// them in (the newest first).
 const recording = (i: number, o: Partial<RecordingEntry> = {}): RecordingEntry => {
   const size = o.size ?? video.length;
-  const id = `RecS0A_20261001_10${pad(i)}00_10${pad(i)}30_0_55148000000000_${size.toString(16).toUpperCase()}.mp4`;
-  const start = Date.UTC(2026, 9, 1, 10, i);
+  const m = 59 - i;
+  const id = `RecS0A_20261001_10${pad(m)}00_10${pad(m)}30_0_55148000000000_${size.toString(16).toUpperCase()}.mp4`;
+  const start = Date.UTC(2026, 9, 1, 10, m);
   return { id, path: `/mnt/sda/Mp4Record/2026-10-01/${id}`, start, end: start + 30_000, stream: 'sub', size, kinds: ['motion'], ...o };
 };
 const missing = (e: RecordingEntry): ClipItem => ({ type: 'missing-locally', id: e.id, date: '2026-10-01', start: e.start, end: e.end, size: e.size, stream: e.stream, kinds: e.kinds });
@@ -49,7 +53,7 @@ const report = (items: ClipItem[], o: Partial<InventoryReport> = {}): InventoryR
 
 // A real fetcher, cache and indexer; the camera is a fake list and download.
 // A gated download waits for its gate, or ends as an abort when the tee goes.
-function setup(o: { settings?: Partial<ClipsRepairSettings>; fail?: (path: string) => Error | undefined; gated?: string[]; listed?: boolean; paused?: boolean; clipsBytes?: number; limits?: ClipsRepairDeps['limits']; cap?: number; tempDir?: string; openTemp?: ClipsRepairDeps['openTemp'] } = {}) {
+function setup(o: { settings?: Partial<ClipsRepairSettings>; fail?: (path: string) => Error | undefined; gated?: string[]; listed?: boolean; paused?: boolean; fit?: (ts: number, bytes: number) => ClipFit; limits?: ClipsRepairDeps['limits']; cap?: number; tempDir?: string; openTemp?: ClipsRepairDeps['openTemp'] } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'camproxy-repair-'));
   const catalog = openCatalog(join(dir, 'catalog.sqlite'));
   const cache = new RecordingCache({ dir: () => join(dir, 'recordings', 'cam1'), capBytes: () => o.cap ?? 50 * 2 ** 20 });
@@ -78,6 +82,8 @@ function setup(o: { settings?: Partial<ClipsRepairSettings>; fail?: (path: strin
   });
   const known = new Map<string, RecordingEntry>();
   const sleeps: number[] = [];
+  const added: [number, number][] = [];
+  const prunes: number[] = [];
   const config = structuredClone(DEFAULTS);
   config.server.dataDir = dir;
   const indexer = new ClipIndexer({ catalog, log: new StreamLog(catalog), config: () => config, timeInfo: async () => ({ stdOffsetMinutes: 0, dstOffsetMinutes: 0 }), dataDir: dir, cam: 'cam1' });
@@ -91,13 +97,14 @@ function setup(o: { settings?: Partial<ClipsRepairSettings>; fail?: (path: strin
     indexer: () => indexer,
     tempDir: () => tempDir,
     paused: () => o.paused ?? false,
-    clipsBytes: () => o.clipsBytes ?? 0,
+    space: () => ({ fit: (ts, bytes) => o.fit?.(ts, bytes) ?? 'fits', add: (ts, bytes) => void added.push([ts, bytes]) }),
+    prune: () => void prunes.push(1),
     sleep: async (ms) => void sleeps.push(ms),
     limits: o.limits,
     ...(o.openTemp ? { openTemp: o.openTemp } : {}),
   };
   const onCamera = (...es: RecordingEntry[]) => es.forEach((e) => known.set(e.id, e));
-  return { dir, catalog, cache, fetcher, deps, calls, gates, sleeps, onCamera, tempDir };
+  return { dir, catalog, cache, fetcher, deps, calls, gates, sleeps, onCamera, tempDir, added, prunes };
 }
 // An item's skip reason, or its result.
 const outcome = (x: unknown) => (x as RepairItem).reason ?? (x as RepairItem).result;
@@ -145,11 +152,11 @@ describe('clips repair', () => {
     expect(r.counts).toEqual({ candidates: 2, requested: 2, done: 2, failed: 0, skipped: 0, bytes: 2 * video.length });
     expect(r.message).toBe(`2 of 2 fetched (${mb(2 * video.length)}), 0 failed, 0 skipped`);
     expect(progress).toEqual(['0/2', '1/2', '2/2']);
-    const rows = listClips(s.catalog, 'cam1', a.start, b.end);
-    expect(rows.map((x) => [x.start_ts, x.origin, x.stream])).toEqual([[a.start, 'camera', 'sub'], [b.start, 'camera', 'sub']]);
+    const rows = listClips(s.catalog, 'cam1', b.start, a.end); // oldest first: b, a
+    expect(rows.map((x) => [x.start_ts, x.origin, x.stream])).toEqual([[b.start, 'camera', 'sub'], [a.start, 'camera', 'sub']]);
     expect(r.items).toEqual([
-      { id: a.id, start: a.start, result: 'ok', clipId: rows[0].id, bytes: video.length },
-      { id: b.id, start: b.start, result: 'ok', clipId: rows[1].id, bytes: video.length },
+      { id: a.id, start: a.start, result: 'ok', clipId: rows[1].id, bytes: video.length },
+      { id: b.id, start: b.start, result: 'ok', clipId: rows[0].id, bytes: video.length },
     ]);
     expect(readFileSync(rows[0].path).equals(video)).toBe(true);
     // The cached copy stays for viewers, unpinned once copied.
@@ -158,20 +165,58 @@ describe('clips repair', () => {
     expect(s.cache.busy(s.cache.path(b.id))).toBe(false);
   });
 
-  it('takes the oldest first (the SD card overwrites them first); skipped ones count toward the clip cap', async () => {
-    const s = setup({ limits: { clips: 2 } });
-    const [a, b, c] = [recording(1), recording(2), recording(3)];
-    s.onCamera(a, b, c);
-    // The compare lists newest first for display; the oldest (a) is outside the retention.
-    const r = await clipsRepair(s.deps).run(ctx(report([c, b, { ...a, start: NOW - 8 * 86_400_000 }].map(missing))));
-    expect(r.items.map((x) => (x as { id: string }).id)).toEqual([a.id, b.id]);
-    expect(r.counts).toMatchObject({ candidates: 3, requested: 2, done: 1, skipped: 1 });
-    expect(s.calls).toEqual([b.path]);
-    expect(r.stopped).toBe('clip-cap');
+  // Amendment 2026-11-02 (Klaus): the most recent missing clips matter most.
+  it('takes the newest first, whatever order the report lists them in; skipped ones count toward the clip cap', async () => {
+    const s = setup({ limits: { clips: 3 } });
+    const [a, b, c, d] = [recording(1), recording(2), recording(3), recording(4)];
+    s.onCamera(a, b, c, d);
+    // a is the newest, d the oldest; the report lists them mixed.
+    const r = await clipsRepair(s.deps).run(ctx(report([c, a, d, { ...b, size: REPAIR_MAX_BYTES + 1 }].map(missing))));
+    expect(r.items.map((x) => (x as { id: string }).id)).toEqual([a.id, b.id, c.id]);
+    expect(r.items.map((x) => (x as RepairItem).start)).toEqual([a.start, b.start, c.start].sort((x, y) => y - x));
+    expect(r.items.map(outcome)).toEqual(['ok', 'too-big', 'ok']);
+    expect(r.counts).toMatchObject({ candidates: 4, requested: 3, done: 2, skipped: 1 });
+    expect(s.calls).toEqual([a.path, c.path]);
+    expect(r.stopped).toBe('clip-cap'); // d, the oldest, is left for the next run
+  });
+
+  it('never fetches a recording older than the clips retention: the UTC day storage ages clips out by', async () => {
+    const s = setup({ settings: { clipsDays: 7 } });
+    const cutoff = Math.floor((NOW - 7 * 86_400_000) / 86_400_000) * 86_400_000;
+    const atCutoff = recording(1, { start: cutoff });
+    const before = recording(2, { start: cutoff - 1 });
+    s.onCamera(atCutoff, before);
+    const r = await clipsRepair(s.deps).run(ctx(report([before, atCutoff].map(missing))));
+    expect(r.items.map((x) => [(x as RepairItem).id, outcome(x)])).toEqual([[atCutoff.id, 'ok'], [before.id, 'outside-retention']]);
+    expect(s.calls).toEqual([atCutoff.path]);
+  });
+
+  // Amendment 2026-11-02: a full store follows the storage rules (newer clips are kept first).
+  it('a full store: newer clips that make room by pruning older ones are fetched; it stops at the first one older than what would be kept', async () => {
+    const es = [1, 2, 3, 4, 5].map((i) => recording(i));
+    // The model: es[0] fits, es[1] fits by pruning older clips, es[2] would push out newer ones.
+    const answers = new Map<number, ClipFit>([[es[0].start, 'fits'], [es[1].start, 'prunes'], [es[2].start, 'full'], [es[3].start, 'prunes'], [es[4].start, 'prunes']]);
+    const s = setup({ fit: (ts) => answers.get(ts)! });
+    s.onCamera(...es);
+    const r = await clipsRepair(s.deps).run(ctx(report([...es].reverse().map(missing))));
+    expect(s.calls).toEqual([es[0].path, es[1].path]);
+    expect(r.items.map(outcome)).toEqual(['ok', 'ok']);
+    expect(r.stopped).toBe('retention-full');
+    expect(r.message).toMatch(/; stopped: storage is full: the next recording is older than the clips storage keeps$/);
+    // Each stored clip goes into the model; the normal storage run makes the room once, at the end.
+    expect(s.added).toEqual([[es[0].start, video.length], [es[1].start, video.length]]);
+    expect(s.prunes).toEqual([1]);
+  });
+
+  it('runs no storage pass when nothing it stored needed room', async () => {
+    const s = setup();
+    s.onCamera(recording(1));
+    const r = await clipsRepair(s.deps).run(ctx(report([missing(recording(1))])));
+    expect([r.counts.done, r.stopped, s.prunes.length]).toEqual([1, null, 0]);
   });
 
   it('checks each one again: outside the retention, another stream, already local, gone from the card', async () => {
-    const s = setup({ listed: false, fail: (p) => (p.includes('_1005') ? new BaichuanError('refused', 'refused', 400) : undefined) });
+    const s = setup({ listed: false, fail: (p) => (p.includes('_1054') ? new BaichuanError('refused', 'refused', 400) : undefined) });
     const old = recording(1, { start: NOW - 8 * 86_400_000 });
     const main = recording(2, { stream: 'main' });
     const local = recording(3);
@@ -180,7 +225,7 @@ describe('clips repair', () => {
     s.onCamera(old, main, local, vanished);
     insertClip(s.catalog, { cam: 'cam1', start_ts: local.start + 4000, end_ts: local.end, path: '/x.mp4', stream: 'sub', size: 1, received_at: NOW, snapshot: null, origin: 'camera' });
     const r = await clipsRepair(s.deps).run(ctx(report([old, main, local, unlisted, vanished].map(missing))));
-    expect(r.items.map((x) => (x as { reason?: string }).reason)).toEqual(['outside-retention', 'other-stream', 'already-local', 'gone-from-camera', 'gone-from-camera']);
+    expect(r.items.map((x) => (x as { reason?: string }).reason)).toEqual(['other-stream', 'already-local', 'gone-from-camera', 'gone-from-camera', 'outside-retention']); // the old one last (newest first)
     expect(r.counts).toMatchObject({ done: 0, failed: 0, skipped: 5 });
     expect(r.stopped).toBeNull();
   });
@@ -243,7 +288,7 @@ describe('clips repair', () => {
     expect([q.stopped, q.counts.failed, t.calls.length]).toEqual(['camera_offline', 1, 1]);
   });
 
-  it('keeps to the caps: clips per run, bytes per run, ftp.maxGB, and a paused disk', async () => {
+  it('keeps to the caps: clips per run, bytes per run, a full store, and a paused disk', async () => {
     const es = [1, 2, 3].map((i) => recording(i));
     const clipCap = setup({ limits: { clips: 2 } });
     clipCap.onCamera(...es);
@@ -253,10 +298,10 @@ describe('clips repair', () => {
     byteCap.onCamera(...es);
     const b = await clipsRepair(byteCap.deps).run(ctx(report(es.map(missing))));
     expect([b.stopped, b.counts.done]).toEqual(['byte-cap', 1]);
-    const full = setup({ settings: { maxGB: 1 }, clipsBytes: 2 ** 30 - 10 });
+    const full = setup({ fit: () => 'full' });
     full.onCamera(...es);
     const c = await clipsRepair(full.deps).run(ctx(report(es.map(missing))));
-    expect([c.stopped, c.counts.done, full.calls.length]).toEqual(['max-gb', 0, 0]);
+    expect([c.stopped, c.counts.done, full.calls.length, full.prunes.length]).toEqual(['retention-full', 0, 0, 0]);
     const paused = setup({ paused: true });
     paused.onCamera(...es);
     const d = await clipsRepair(paused.deps).run(ctx(report(es.map(missing))));
@@ -535,7 +580,7 @@ describe('clips repair against cam-sim', () => {
       const indexer = new ClipIndexer({ catalog, log: new StreamLog(catalog), config: () => config, timeInfo: () => client.timeInfo(), dataDir: dir, cam: 'cam1' });
       const r = await clipsRepair({
         catalog, settings: () => settings, list: () => list, fetcher: () => side.fetcher, cache: () => side.cache, indexer: () => indexer, tempDir: () => join(dir, 'inventory', 'tmp'),
-        paused: () => false, clipsBytes: () => 0, sleep: async () => undefined,
+        paused: () => false, space: () => ({ fit: () => 'fits', add: () => undefined }), sleep: async () => undefined,
       }).run(ctx(source));
       expect(r.stopped).toBeNull();
       expect(r.counts).toMatchObject({ candidates: 2, requested: 2, done: 2, failed: 0, skipped: 0 });

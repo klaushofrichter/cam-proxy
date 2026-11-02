@@ -3,7 +3,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { openCatalog, type Catalog } from '../src/catalog/db';
-import { insertClip, type ClipOrigin } from '../src/catalog/clips';
+import { clipById, insertClip, type ClipOrigin } from '../src/catalog/clips';
+import { DEFAULTS } from '../src/config/defaults';
+import { Storage } from '../src/storage';
+import { StreamLog } from '../src/stream/log';
 import { closeEvent, insertEvent } from '../src/catalog/events';
 import { clipsCheck, SETTLE_MS, type ClipsInventoryDeps, type ClipsSettings } from '../src/inventory/clips';
 import type { CameraListDeps } from '../src/inventory/camera-list';
@@ -232,14 +235,44 @@ describe('clips inventory: the edges (review of task 4)', () => {
     expect(r.window.notes).toEqual(["1 local clips not on the camera were not judged: the SD card's oldest day is unknown, or the clip is at the window start or next to a day the camera did not list"]);
   });
 
-  it('the missing recordings come oldest first, so the item cut keeps the ones the SD overwrites next', async () => {
+  // Amendment 2026-11-02: the repair takes the newest first, so the item cut keeps the newest.
+  it('the missing recordings come newest first, so the item cut keeps the ones the repair takes first', async () => {
     const recs = Array.from({ length: 700 }, (_, i) => rec(T('2026-10-01T00:00:00') + i * 60_000));
     const cam = camera({ months: { '2026-10': [1] }, recs: { '2026-10-01': recs } });
     const r = await clipsCheck(deps(cam.deps))(ctx({ options: { camera: true } }));
     expect(r.counts.missingLocally).toBe(700);
     expect(r.counts.missingLocallyBytes).toBe(700 * 0x100000);
-    expect((r.items.slice(0, MAX_ITEMS) as Item[]).map((x) => x.start)).toEqual(recs.slice(0, MAX_ITEMS).map((x) => x.start));
+    expect((r.items.slice(0, MAX_ITEMS) as Item[]).map((x) => x.start)).toEqual([...recs].reverse().slice(0, MAX_ITEMS).map((x) => x.start));
   });
+
+  // Amendment 2026-11-02: the compare spans exactly the clips retention, the
+  // UTC day storage ages clips out by, whatever the camera's time zone and
+  // however far back its SD card reaches.
+  for (const offset of [-360, 0, 540]) {
+    it(`compares exactly the clips retention (the storage age cutoff), camera at UTC${offset >= 0 ? '+' : ''}${offset / 60}`, async () => {
+      const from = T('2026-09-30T00:00:00'); // clipsDays 2
+      const starts = [T('2026-09-25T12:00:00'), from - 60_000, from, from + 60_000, T('2026-10-01T23:59:00')];
+      const recs = starts.map((t) => rec(t));
+      const byLocalDay: Record<string, RecordingEntry[]> = {};
+      for (const r of recs) (byLocalDay[new Date(r.start + offset * 60_000).toISOString().slice(0, 10)] ??= []).push(r);
+      const days = (m: string) => Object.keys(byLocalDay).filter((d) => d.startsWith(m)).map((d) => Number(d.slice(8)));
+      const cam = camera({ months: { '2026-09': days('2026-09'), '2026-10': days('2026-10') }, recs: byLocalDay });
+      cam.deps.timeInfo = async () => ({ stdOffsetMinutes: offset, dstOffsetMinutes: 0 });
+      const r = await clipsCheck(deps(cam.deps))(ctx({ options: { camera: true } }));
+      expect(r.window).toMatchObject({ from, to: NOW, reason: 'retention' });
+      // Nothing before the retention start, everything from it on, the newest first.
+      expect(ofType(r.items, 'missing-locally').map((x) => x.start)).toEqual([T('2026-10-01T23:59:00'), from + 60_000, from]);
+      // The same cutoff storage ages clips out by: a clip at the window start stays, one a minute earlier goes.
+      const kept = clip(from);
+      const gone = clip(from - 60_000);
+      const config = structuredClone(DEFAULTS);
+      config.server.dataDir = dir;
+      config.retention.clipsDays = 2;
+      new Storage({ catalog, log: new StreamLog(catalog, () => NOW), config: () => config, now: () => NOW, statfs: () => ({ free: 2 ** 40, size: 2 ** 41 }) }).run({});
+      expect(clipById(catalog, kept.id)).toBeDefined();
+      expect(clipById(catalog, gone.id)).toBeUndefined();
+    });
+  }
 
   // #74 final review: a repair would fetch them, and the next prune delete them again.
   it('while the storage budget prunes clips, recordings older than the oldest clip here are prunedHere, not missing', async () => {
@@ -389,8 +422,8 @@ describe('clips inventory against cam-sim', () => {
       expect(r.counts).toMatchObject({ clips: 3, fromCamera: 1, cameraDays: 3, unknownDays: 0, recordings: 4, timerOnly: 0, paired: 2, missingLocally: 2, goneFromCamera: 1, olderThanSd: 0, otherStream: 0 });
       const missing = r.items.filter((x) => (x as { type: string }).type === 'missing-locally') as { id: string; date: string; start: number; size: number; stream: string; kinds: string[] }[];
       expect(missing.map((x) => [x.date, x.start, x.stream, x.kinds])).toEqual([
+        ['2026-10-01', T('2026-10-01T09:00:00'), 'sub', ['motion']], // the newest first
         ['2026-09-30', T('2026-09-30T07:00:00'), 'sub', ['motion']],
-        ['2026-10-01', T('2026-10-01T09:00:00'), 'sub', ['motion']],
       ]);
       for (const x of missing) expect(x.id).toMatch(/^RecS0A_\d{8}_\d{6}_\d{6}_/);
       expect(r.counts.missingLocallyBytes).toBe(missing.reduce((n, x) => n + x.size, 0));

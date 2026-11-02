@@ -632,14 +632,15 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         }),
         repair: clipsRepair({
           catalog,
-          settings: (cam) => ({ cam, stream: camSettings(cam).ftp.stream, clipsDays: running.retention.clipsDays, maxGB: running.ftp.maxGB }),
+          settings: (cam) => ({ cam, stream: camSettings(cam).ftp.stream, clipsDays: running.retention.clipsDays }),
           list: (cam) => worker(cam).recordings.list,
           fetcher: (cam) => worker(cam).recordings.fetcher,
           cache: (cam) => worker(cam).recordings.cache,
           indexer: (cam) => worker(cam).makeIndexer(false),
           tempDir: () => repairTmp,
           paused: () => storage.paused(),
-          clipsBytes: () => storage.usage().clips.bytes,
+          space: (cam) => storage.clipSpace(cam),
+          prune: () => void storage.run({}),
         }),
       },
       // #75: always against the camera (no local-only part); its repair adds

@@ -18,8 +18,11 @@ import { listDir } from '../fs-util';
 // with `camera: true`: the SD recordings of the window on `ftp.stream`
 // (camera-list.ts) paired with the local clips of that stream (match.ts).
 // Recordings on the camera but not here are the repair's candidates (the
-// first items, oldest first). A day whose Search failed is `unknown`: its
-// recordings never count as missing, its clips never as gone.
+// first items, newest first). A day whose Search failed is `unknown`: its
+// recordings never count as missing, its clips never as gone. The window is
+// exactly the clips retention (`dayStart(now − clipsDays)`, the UTC day
+// storage ages clips out by), whatever the camera's time zone and however far
+// back its SD card reaches: a recording before it would be deleted at once.
 
 // What may still be on its way is not judged: an event or recording that
 // ended less than this long ago (the FTP upload follows the recording's end).
@@ -212,8 +215,8 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     // never missing, so the repair never fetches a duplicate.
     const other = pairByStart(pairing.recsAlone, near.filter((c) => c.stream !== s.stream).map((c) => ({ ...c, stream: s.stream })));
     const recs = pool.filter(judgedRec);
-    // Oldest first (#74 review): the item cut keeps the recordings the SD card
-    // overwrites next, the ones the repair takes first.
+    // Newest first (amendment 2026-11-02): the item cut keeps the recordings
+    // the repair takes first.
     // While the storage budget (or ftp.maxGB) prunes clips, a recording
     // older than the oldest clip here was most likely deleted for space: a
     // repair would fetch it and the next prune delete it again. Such ones
@@ -230,7 +233,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     const prunedHereFrom = pruning ? oldestHere! : -Infinity;
     const alone = other.recsAlone.filter((r) => judgedRec(r) && r.kinds.length > 0);
     const prunedHere = alone.filter((r) => r.start < prunedHereFrom).length;
-    const missing = alone.filter((r) => r.start >= prunedHereFrom).sort((a, b) => a.start - b.start);
+    const missing = alone.filter((r) => r.start >= prunedHereFrom).sort((a, b) => b.start - a.start);
     const otherStream = rows.filter((r) => r.stream !== s.stream).length;
     // A clip left over on a day the SD card covers is gone from the camera;
     // one before the card's oldest day is older than the SD. The card
