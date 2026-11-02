@@ -117,10 +117,14 @@ async function apply(command: CameraCommand, commands: SettingsCommand[], sent?:
 // reads again and judges every field against the re-read. 400 before the
 // camera is asked anything. `o.sent`: told each command just before it goes
 // (the caller's audit knows whether anything was written before a failure).
-const VALIDATE = { detection: validateDetectionPatch, image: validateImagePatch, encoding: validateEncodingPatch } as const;
+// An explicit choice, not a lookup by the request's section name (CodeQL js/unvalidated-dynamic-method-call).
+const validatorOf = (section: SettingsSection) =>
+  section === 'detection' ? validateDetectionPatch : section === 'image' ? validateImagePatch : section === 'encoding' ? validateEncodingPatch : null;
 
 export async function writeSection(io: SectionIo, section: SettingsSection, body: unknown, o: { sent?: (cmd: string) => void } = {}): Promise<WriteResult> {
-  const v: { ok: true; patch: Patch } | { ok: false; details: string[] } = VALIDATE[section](body);
+  const validate = validatorOf(section);
+  if (!validate) return { status: 400, details: [`unknown section ${String(section).slice(0, 40)}`] };
+  const v: { ok: true; patch: Patch } | { ok: false; details: string[] } = validate(body);
   if (!v.ok) return { status: 400, details: v.details };
   const before = await readSection(io, section);
   if (section === 'encoding') {
