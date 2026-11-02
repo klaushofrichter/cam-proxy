@@ -1,10 +1,12 @@
+import { randomBytes, webcrypto } from 'crypto';
 import { readFileSync, rmSync } from 'fs';
 import { join } from 'path';
-import { generate } from 'selfsigned';
 import { bareHost, splitHost } from '../camera/http';
 import { activeCameraIds, cameraConfig } from '../config/cameras';
 import type { Config } from '../config/defaults';
 import { logger } from '../log';
+import { pemOfPkcs8 } from '../tls/ca';
+import { x509 } from '../tls/x509';
 import { FtpServer, type Upload } from './ftp-server';
 import type { ClipIndexer } from './indexer';
 
@@ -36,6 +38,22 @@ export function ftpUsers(c: Config): FtpUsers {
 
 let generated: Promise<{ cert: string; key: string }> | undefined;
 
+// A self-signed P-256 certificate for this process, valid for a year.
+async function selfSigned(): Promise<{ cert: string; key: string }> {
+  const alg = { name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256' };
+  const keys = await webcrypto.subtle.generateKey(alg, true, ['sign', 'verify']);
+  const now = Date.now();
+  const cert = await x509.X509CertificateGenerator.createSelfSigned({
+    serialNumber: `01${randomBytes(15).toString('hex')}`, // positive, 128 bits
+    name: 'CN=cam-proxy',
+    notBefore: new Date(now - 3600_000),
+    notAfter: new Date(now + 365 * 24 * 3600_000),
+    keys,
+    signingAlgorithm: alg,
+  });
+  return { cert: cert.toString('pem'), key: pemOfPkcs8(await webcrypto.subtle.exportKey('pkcs8', keys.privateKey)) };
+}
+
 // The FTPS certificate: ftp.certFile/keyFile, or one made for this process
 // (the camera doesn't verify it).
 // With a site CA, the proxy's own leaf (spec 2026-10-05-multi-camera-host-design §10.4).
@@ -44,7 +62,7 @@ async function ftpTls(cfg: Config['ftp'], leaf?: () => { cert: string; key: stri
   const own = leaf?.();
   if (own) return own;
   if (cfg.certFile && cfg.keyFile) return { cert: readFileSync(cfg.certFile, 'utf8'), key: readFileSync(cfg.keyFile, 'utf8') };
-  generated ??= generate([{ name: 'commonName', value: 'cam-proxy' }], { keyType: 'ec' }).then((p) => ({ cert: p.cert, key: p.private }));
+  generated ??= selfSigned();
   return generated;
 }
 
