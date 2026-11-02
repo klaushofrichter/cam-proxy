@@ -106,7 +106,7 @@ import { composeApi, hasAudio } from './api/compose-api';
 import { createComposer, ffmpegRunner } from './compose/jobs';
 import { clockText, defaultFont } from './compose/ffmpeg';
 import { HostMonitor, type StatFs } from './health/host';
-import { buildHealth, NO_CAMERA_TEXT, type CameraHealthInput, type HealthSummary, type LastInventory } from './health/summary';
+import { buildHealth, lastInventoryOf, NO_CAMERA_TEXT, type CameraHealthInput, type HealthSummary, type LastInventory } from './health/summary';
 import { localApi } from './api/local-api';
 import { archiveApi } from './api/archive-api';
 import { Archive } from './archive/service';
@@ -879,7 +879,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     const [checks, repairs] = await Promise.all([inventory.list(), inventory.listRepairs()]);
     for (const [op, runs] of [['check', checks], ['repair', repairs]] as const) {
       for (const r of Object.values(runs).flat()) {
-        if (!last || r.startedAt > last.startedAt) last = { kind: r.kind, op, outcome: r.outcome, startedAt: r.startedAt, message: r.message };
+        if (!last || r.startedAt > last.startedAt) last = lastInventoryOf(r, op);
       }
     }
     return last;

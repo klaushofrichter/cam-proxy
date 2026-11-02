@@ -37,16 +37,27 @@ describe('listCamera', () => {
     const f = fake({ months: { '2026-09': [20, 29, 30], '2026-10': [1] }, recs: { '2026-09-29': [entry('2026-09-29', '0815')], '2026-10-01': [entry('2026-10-01', '0930')] } });
     const progress: string[] = [];
     const l = await listCamera(f.deps, { from: at('2026-09-28', '0000'), to: at('2026-10-01', '2300'), stream: 'sub', signal: signal(), progress: (d, t, date) => progress.push(`${d}/${t} ${date}`) });
-    expect(l.days.map((x) => [x.date, x.state, x.recordings.length])).toEqual([['2026-09-28', 'listed', 0], ['2026-09-29', 'listed', 1], ['2026-09-30', 'listed', 0], ['2026-10-01', 'listed', 1]]);
+    // 09-30: the overview has recordings, its Search none: unknown, not an empty day.
+    expect(l.days.map((x) => [x.date, x.state, x.recordings.length])).toEqual([['2026-09-28', 'listed', 0], ['2026-09-29', 'listed', 1], ['2026-09-30', 'unknown', 0], ['2026-10-01', 'listed', 1]]);
     expect(f.searched).toEqual(['2026-09-29', '2026-09-30', '2026-10-01']);
     expect(l.oldestSdDay).toBe('2026-09-20');
     expect(progress).toEqual(['1/4 2026-09-28', '2/4 2026-09-29', '3/4 2026-09-30', '4/4 2026-10-01']);
   });
 
-  it('marks a day whose Search fails unknown, and goes on', async () => {
-    const f = fake({ months: { '2026-09': [29, 30] }, fail: { '2026-09-29': [new SearchError('search_failed', 'rspCode -17')] } });
+  it('a day the overview has but whose Search gives no usable recording is unknown, with the unreadable names', async () => {
+    const f = fake({ months: { '2026-09': [29, 30] }, recs: { '2026-09-30': [entry('2026-09-30', '0815')] } });
+    f.deps.list.unreadable = (date) => (date === '2026-09-29' ? { count: 2, example: 'RecS09_x.mp4' } : date === '2026-09-30' ? { count: 1, example: 'RecS09_y.mp4' } : null);
     const l = await listCamera(f.deps, { from: at('2026-09-29', '0000'), to: at('2026-09-30', '2300'), stream: 'sub', signal: signal() });
-    expect(l.days).toEqual([{ date: '2026-09-29', state: 'unknown', recordings: [], error: 'rspCode -17' }, { date: '2026-09-30', state: 'listed', recordings: [] }]);
+    expect(l.days).toEqual([
+      { date: '2026-09-29', state: 'unknown', recordings: [], error: 'the month overview has recordings on this day, but its Search gave none that could be read', unreadable: 2, unreadableExample: 'RecS09_x.mp4' },
+      { date: '2026-09-30', state: 'listed', recordings: [entry('2026-09-30', '0815')], unreadable: 1, unreadableExample: 'RecS09_y.mp4' },
+    ]);
+  });
+
+  it('marks a day whose Search fails unknown, and goes on', async () => {
+    const f = fake({ months: { '2026-09': [29, 30] }, recs: { '2026-09-30': [entry('2026-09-30', '0815')] }, fail: { '2026-09-29': [new SearchError('search_failed', 'rspCode -17')] } });
+    const l = await listCamera(f.deps, { from: at('2026-09-29', '0000'), to: at('2026-09-30', '2300'), stream: 'sub', signal: signal() });
+    expect(l.days).toEqual([{ date: '2026-09-29', state: 'unknown', recordings: [], error: 'rspCode -17' }, { date: '2026-09-30', state: 'listed', recordings: [entry('2026-09-30', '0815')] }]);
   });
 
   it('searches every day of a month whose overview failed', async () => {
@@ -58,7 +69,7 @@ describe('listCamera', () => {
 
   it('tries a busy Search again, and gives up after BUSY_TRIES as unknown', async () => {
     const busy = () => new SearchError('busy', 'too many recording Searches waiting');
-    const f = fake({ months: { '2026-09': [29, 30] }, fail: { '2026-09-29': [busy()], '2026-09-30': Array.from({ length: BUSY_TRIES }, busy) } });
+    const f = fake({ months: { '2026-09': [29, 30] }, recs: { '2026-09-29': [entry('2026-09-29', '0815')] }, fail: { '2026-09-29': [busy()], '2026-09-30': Array.from({ length: BUSY_TRIES }, busy) } });
     const l = await listCamera(f.deps, { from: at('2026-09-29', '0000'), to: at('2026-09-30', '2300'), stream: 'sub', signal: signal() });
     expect(l.days.map((x) => x.state)).toEqual(['listed', 'unknown']);
     expect(f.searched).toEqual(['2026-09-29', '2026-09-29', ...Array.from({ length: BUSY_TRIES }, () => '2026-09-30')]);
@@ -104,7 +115,7 @@ describe('listCamera', () => {
     expect(l.days.map((x) => x.date)).toEqual(['2026-10-01', '2026-10-02']); // no day of that month searched
     expect(f.searched).toEqual(['2026-10-01', '2026-10-02']);
     // Its overview failed: the card may reach further back, so the oldest day is unknown.
-    const g = fake({ months: { '2026-09': new SearchError('search_failed', 'x'), '2026-10': [1, 2] } });
+    const g = fake({ months: { '2026-09': new SearchError('search_failed', 'x'), '2026-10': [1, 2] }, recs: { '2026-10-01': [entry('2026-10-01', '0930')], '2026-10-02': [entry('2026-10-02', '0930')] } });
     const m = await listCamera(g.deps, { from: at('2026-10-01', '0000'), to: at('2026-10-02', '2300'), stream: 'sub', signal: signal() });
     expect(m.oldestSdDay).toBeNull();
     expect(m.days.map((x) => x.state)).toEqual(['listed', 'listed']);

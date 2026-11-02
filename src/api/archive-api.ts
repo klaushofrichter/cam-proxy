@@ -110,7 +110,7 @@ export function archiveApi(d: ArchiveApiDeps): express.Router {
     if (n && ti && side.cache.has(id) && !stillRecording(n)) {
       const t = recordingTimes(n, ti);
       const size = sizeOf(side.cache.path(id));
-      if (size !== null) return { id, path: '', start: t.start, end: t.end, stream: n.stream, size, kinds: n.kinds };
+      if (size !== null) return { id, path: '', start: t.start, end: t.end, stream: n.stream, size, kinds: n.kinds, ...(n.unknownKinds ? { unknownKinds: true as const } : {}) };
       // evicted since has(): ask the camera's list as for one not cached
     }
     if (!cw.status.state().online) return void res.status(503).json({ error: 'camera_offline' }), undefined;

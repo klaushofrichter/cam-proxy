@@ -22,7 +22,15 @@ type ItemId = 'camera' | 'stream' | 'events' | 'ftp' | 'sd' | 'storage' | 'disk'
 export interface HealthItem { id: ItemId; label: string; value: boolean | number | string | null; text: string; problem: boolean; warning?: true }
 // archiveWarnPercent: while the Archive is on (spec 2026-10-05-archive-design §6).
 interface Thresholds { diskPercent: number; tempC: number; ftpStalledHours: number; archiveWarnPercent?: number }
-export interface LastInventory { kind: string; op: 'check' | 'repair'; outcome: 'ok' | 'cancelled' | 'failed'; startedAt: number; message: string }
+// unreadableNames: SD names the run could not read, or whose trigger flags
+// have an unknown layout (counts unreadableNames + unknownKinds); only when > 0.
+export interface LastInventory { kind: string; op: 'check' | 'repair'; outcome: 'ok' | 'cancelled' | 'failed'; startedAt: number; message: string; unreadableNames?: number }
+
+// A finished run as the health summary's last inventory.
+export function lastInventoryOf(r: { kind: string; outcome: LastInventory['outcome']; startedAt: number; message: string; counts?: Record<string, number> }, op: LastInventory['op']): LastInventory {
+  const unreadable = (r.counts?.unreadableNames ?? 0) + (r.counts?.unknownKinds ?? 0);
+  return { kind: r.kind, op, outcome: r.outcome, startedAt: r.startedAt, message: r.message, ...(unreadable > 0 ? { unreadableNames: unreadable } : {}) };
+}
 type RebootPhase = RebootState['phase'];
 
 export interface HealthInput {
@@ -251,7 +259,10 @@ export function buildHealth(i: HealthInput): HealthSummary {
   if (host?.underVoltage != null) add('underVoltage', 'Under-voltage', host.underVoltage, host.underVoltage ? 'detected' : 'no', host.underVoltage);
 
   const inv = i.lastInventory;
-  add('inventory', 'Last inventory', inv?.outcome ?? null, inv ? `${inv.kind}${inv.op === 'repair' ? ' repair' : ''}: ${inv.outcome}` : 'none yet', inv?.outcome === 'failed');
+  // SD names the run could not read are a problem even when it finished ok:
+  // they hide recordings (the E1's names, 2026-11-02).
+  const unreadable = inv?.unreadableNames ?? 0;
+  add('inventory', 'Last inventory', inv?.outcome ?? null, inv ? `${inv.kind}${inv.op === 'repair' ? ' repair' : ''}: ${inv.outcome}${unreadable ? `, ${unreadable} unreadable SD names` : ''}` : 'none yet', inv?.outcome === 'failed' || unreadable > 0);
 
   add('version', 'Version', i.version, i.version, false);
 

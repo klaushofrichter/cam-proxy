@@ -3,9 +3,9 @@ import { basename, dirname, join } from 'path';
 import { setImmediate as yieldToLoop } from 'timers/promises';
 import type { AuditLog } from '../audit/audit-log';
 import type { Catalog } from '../catalog/db';
-import { localDate, settlesAt, type Kind, type Stream } from '../recordings/names';
+import { localDate, settlesAt, triggered, type Kind, type Stream } from '../recordings/names';
 import type { RecordingEntry } from '../recordings/list';
-import { listCamera, type CameraListDeps } from './camera-list';
+import { listCamera, UNREADABLE_NOTE, unreadableNames, type CameraListDeps } from './camera-list';
 import { coverage, pairByStart, START_SLACK_MS } from './match';
 import { MAX_ITEMS, MAX_TOP, type Check, type CheckResult } from './runner';
 import { records } from './stills';
@@ -30,6 +30,7 @@ export const SETTLE_MS = 5 * 60_000;
 // The event kinds the camera records for (a clip is expected for each).
 export const RECORDING_KINDS = ['motion', 'person', 'vehicle', 'pet'] as const;
 const FTP_OFF_NOTE = 'FTP is off in the proxy: no clips arrive, so every event is without a clip';
+const UNKNOWN_KINDS_NOTE = (n: number, example: string) => `${n} recordings have trigger flags of an unknown layout (for example ${example}): counted and offered for retrieval, their kinds unknown`;
 const UNJUDGED_NOTE = (n: number) => `${n} local clips not on the camera were not judged: the SD card's oldest day is unknown, or the clip is at the window start or next to a day the camera did not list`;
 const PRUNED_NOTE = (n: number, day: string) => `${n} recordings older than the oldest clip here (${day}) are not offered: the storage budget or ftp.maxGB deleted clips that old, and would delete them again`;
 const OTHER_STREAM_NOTE = (n: number, stream: string) => `${n} local clips of another stream than ${stream} (ftp.stream) only keep their recordings from counting as missing`;
@@ -231,7 +232,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
         return typeof v === 'number' && v < oldestHere - HOUR;
       });
     const prunedHereFrom = pruning ? oldestHere! : -Infinity;
-    const alone = other.recsAlone.filter((r) => judgedRec(r) && r.kinds.length > 0);
+    const alone = other.recsAlone.filter((r) => judgedRec(r) && triggered(r));
     const prunedHere = alone.filter((r) => r.start < prunedHereFrom).length;
     const missing = alone.filter((r) => r.start >= prunedHereFrom).sort((a, b) => b.start - a.start);
     const otherStream = rows.filter((r) => r.stream !== s.stream).length;
@@ -257,13 +258,18 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     }
     // Not judged either way (no logic, on purpose): a row whose file is gone
     // still pairs, so its recording is not offered again (conservative).
+    const unreadable = unreadableNames(listing.days);
+    const oddFlags = recs.find((r) => r.unknownKinds);
     const camera = {
       cameraDays: listing.days.length,
       unknownDays: unknown.length,
-      recordings: recs.filter((r) => r.kinds.length > 0).length,
-      timerOnly: recs.filter((r) => r.kinds.length === 0).length,
-      paired: pairing.pairs.filter((p) => judgedRec(p.rec) && p.rec.kinds.length > 0).length,
-      pairedOtherStream: other.pairs.filter((p) => judgedRec(p.rec) && p.rec.kinds.length > 0).length,
+      // A recording whose flags have an unknown layout counts (unknownKinds): never dropped as timer-only.
+      recordings: recs.filter(triggered).length,
+      timerOnly: recs.filter((r) => !triggered(r)).length,
+      unknownKinds: recs.filter((r) => r.unknownKinds).length,
+      unreadableNames: unreadable.count,
+      paired: pairing.pairs.filter((p) => judgedRec(p.rec) && triggered(p.rec)).length,
+      pairedOtherStream: other.pairs.filter((p) => judgedRec(p.rec) && triggered(p.rec)).length,
       missingLocally: missing.length,
       missingLocallyBytes: missing.reduce((n, r) => n + r.size, 0),
       prunedHere,
@@ -277,7 +283,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
       ...gone.map((c): ClipItem => ({ type: 'gone-from-camera', clipId: c.id, start: c.start })),
       ...local,
     ];
-    const perDay = new Map<string, CameraDayRow>(listing.days.map((x) => [x.date, { date: x.date, state: x.state, recordings: x.recordings.filter((r) => judgedRec(r) && r.kinds.length > 0).length, missingLocally: 0, goneFromCamera: 0 }]));
+    const perDay = new Map<string, CameraDayRow>(listing.days.map((x) => [x.date, { date: x.date, state: x.state, recordings: x.recordings.filter((r) => judgedRec(r) && triggered(r)).length, missingLocally: 0, goneFromCamera: 0 }]));
     for (const r of missing) perDay.get(dayOf.get(r.id)!)!.missingLocally++;
     for (const c of gone) {
       const row = perDay.get(localDate(c.start, t));
@@ -289,10 +295,13 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
       .slice(0, MAX_TOP);
     if (otherStream) notes.push(OTHER_STREAM_NOTE(otherStream, s.stream));
     if (unjudged) notes.push(UNJUDGED_NOTE(unjudged));
+    if (unreadable.count) notes.push(UNREADABLE_NOTE(unreadable.count, unreadable.example));
+    if (oddFlags) notes.push(UNKNOWN_KINDS_NOTE(camera.unknownKinds, oddFlags.id));
     if (prunedHere) notes.push(PRUNED_NOTE(prunedHere, new Date(oldestHere!).toISOString().slice(0, 10)));
     message +=
       `; camera (${s.stream}): ${camera.recordings} recordings, ${camera.missingLocally} missing locally (${mb(camera.missingLocallyBytes)}), ` +
-      `${camera.goneFromCamera} local clips gone from the camera, ${camera.unknownDays} days unknown`;
+      `${camera.goneFromCamera} local clips gone from the camera, ${camera.unknownDays} days unknown` +
+      (unreadable.count ? `, ${unreadable.count} SD names unreadable` : '');
     return {
       window: { ...window, camera: { stream: s.stream, to: cameraTo, oldestSdDay: sdFrom, unknownDays: unknown } },
       counts, top, items, message,
