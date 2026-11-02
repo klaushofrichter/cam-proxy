@@ -3,7 +3,7 @@
   import { pausedText, usageLine, usageRows } from '../lib/analytics';
   import { agoText, daysUntilFullText, mbText } from '../lib/format';
   import { cameraStateText, poeLine } from '../lib/maintenance';
-  import { cacheFillText, recordingsClass, recordingsLastText } from '../lib/recordings';
+  import { cacheFillText, downloadPathText, recordingsClass, recordingsLastText } from '../lib/recordings';
   import { cameraFtpText, clipTime, ftpAlerts } from '../lib/ftp';
   import { api, ApiError } from '../lib/api';
   import { refresh } from '../lib/state';
@@ -179,6 +179,10 @@
           <h3>Recordings (SD card)</h3>
           <dl>
             <dt>Last download</dt><dd class={recordingsClass(cs.recordings.last)} data-testid="recordings-last" title={cs.recordings.last ? `${cs.recordings.last.result}, ${clipTime(cs.recordings.last.at)}` : undefined}>{recordingsLastText(cs.recordings.last)}</dd>
+            {#if cs.recordings.download}
+              {@const dp = downloadPathText(cs.recordings.download)}
+              <dt>Download path</dt><dd data-testid="recordings-path" title={dp.title}>{dp.text}</dd>
+            {/if}
             <dt>Cache</dt><dd data-testid="recordings-cache">{cacheFillText(cs.recordings.cache)}</dd>
             <dt>Files cached</dt><dd>{cs.recordings.cache.files}</dd>
           </dl>

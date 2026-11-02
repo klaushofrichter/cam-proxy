@@ -17,6 +17,7 @@ import type { RecordingCache } from './cache';
 import type { RecordingEntry } from './list';
 import { logger } from '../log';
 import { validId, type Stream } from './names';
+import type { DownloadHooks } from './download-path';
 
 export type Priority = 'high' | 'low';
 type FetchResult = 'ok' | BaichuanErrorCode;
@@ -25,8 +26,11 @@ type FetchResult = 'ok' | BaichuanErrorCode;
 export interface FetchOutcome { id: string; at: number; result: FetchResult; stream: Stream; bytes: number; ms: number; priority: Priority }
 interface FetcherDeps {
   cache: RecordingCache;
-  // Never ends `out` (vod.ts); the fetcher does, through the tee.
-  download: (path: string, size: number, out: Writable) => Promise<number>;
+  // Never ends `out` (vod.ts); the fetcher does, through the tee. `ctx.gone`:
+  // whether the camera no longer lists the file (for the HTTP fallback,
+  // download-path.ts); `ctx.length`: the body's real length, before its first
+  // byte, when it differs from the name's (HTTP Download).
+  download: (path: string, size: number, out: Writable, ctx?: DownloadHooks & { gone?: () => Promise<boolean> }) => Promise<number>;
   stillListed: (e: RecordingEntry) => Promise<boolean>;
   paused: () => boolean; // the disk is below its floor: stream without keeping
   noteWritten: (bytes: number) => void; // called after the rename to the final name
@@ -183,6 +187,9 @@ export class Fetch {
   readonly done: Promise<void>;
   state: 'queued' | 'running' | 'done' = 'queued';
   kept = false; // the file is in the cache (else it was only streamed)
+  // The body's length as the download announced it (HTTP Download: its
+  // Content-Length; null: not announced). Undefined: the name's size (Baichuan).
+  length: number | null | undefined = undefined;
   private live: { res: Writable; onStart: () => void } | null = null;
   // A background client (attachWhenRunning): it gets the slot at begin() only if it is still free.
   private spare: { res: Writable; onStart: () => void } | null = null;
@@ -236,6 +243,12 @@ export class Fetch {
       return;
     }
     if (this.state === 'queued') this.spare = { res, onStart };
+  }
+
+  // The bytes the whole file has: the announced length, else the name's
+  // size; null when the download couldn't tell.
+  expectedBytes(): number | null {
+    return this.length === undefined ? this.entry.size : this.length;
   }
 
   // Whether `res` is (or was) the client the file streamed to.
@@ -404,7 +417,12 @@ export class RecordingFetcher {
     f.begin(tee);
     let bytes = 0;
     try {
-      bytes = await this.d.download(entry.path, entry.size, tee);
+      bytes = await this.d.download(entry.path, entry.size, tee, {
+        gone: async () => !(await this.d.stillListed(entry)),
+        length: (n) => {
+          f.length = n;
+        },
+      });
       tee.end();
       await finished(tee);
       if (file) {
@@ -417,7 +435,7 @@ export class RecordingFetcher {
           } catch {
             cache.discard(entry.id);
           }
-          if (f.kept) this.d.noteWritten(entry.size);
+          if (f.kept) this.d.noteWritten(bytes);
         }
       }
       this.byId.delete(entry.id);

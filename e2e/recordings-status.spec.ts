@@ -8,6 +8,7 @@ test('Status shows the Recordings card, grey before the first download', async (
   await expect(card).toBeVisible({ timeout: 15000 });
   await expect(page.getByTestId('recordings-last')).toHaveText('—');
   await expect(page.getByTestId('recordings-last')).not.toHaveClass(/bad|ok/);
+  await expect(page.getByTestId('recordings-path')).toHaveText('Baichuan');
   await expect(page.getByTestId('recordings-cache')).toHaveText(/^\d+ MB of \d+ MB$/);
   if (process.env.SHOT_DIR) await card.screenshot({ path: `${process.env.SHOT_DIR}/recordings-card.png` });
 });

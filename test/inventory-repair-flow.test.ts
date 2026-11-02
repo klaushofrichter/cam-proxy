@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
-import { createCamSim, type CamSim, type SeedClip } from 'cam-sim';
+import { createCamSim, type CamSim, type Model, type SeedClip } from 'cam-sim';
 import { ReolinkClient } from '../src/camera/client';
 import { openCatalog, type Catalog } from '../src/catalog/db';
 import { clipById, insertClip, listClips } from '../src/catalog/clips';
@@ -14,7 +14,8 @@ import { eventsCheck } from '../src/inventory/events';
 import { clipsRepair, type RepairItem } from '../src/inventory/repair-clips';
 import { eventsRepair } from '../src/inventory/repair-events';
 import { InventoryRunner, type InventoryReport } from '../src/inventory/runner';
-import { createRecordingsSide } from '../src/recordings/side';
+import { createRecordingsSide, type RecordingsSide } from '../src/recordings/side';
+import { httpDownload } from '../src/recordings/http-download';
 import { Storage } from '../src/storage';
 import { StreamLog } from '../src/stream/log';
 import { DAY, dayStart, utcDayParts, utcHhmm } from '../src/time-units';
@@ -42,6 +43,7 @@ interface World {
   repairEvents: (source: InventoryReport) => Promise<InventoryReport>;
   local: (start: number, bytes: number) => number; // an FTP clip here: its id
   size: number; // every seeded recording's size on sub
+  side: RecordingsSide;
   close: () => Promise<void>;
 }
 
@@ -50,8 +52,8 @@ afterEach(async () => {
   while (open.length) await open.pop()!.close();
 });
 
-async function world(o: { seed: SeedClip[]; tz?: string; tweak?: (c: Config) => void; limits?: { clips?: number; bytes?: number } }): Promise<World> {
-  const sim = await createCamSim({ users: [{ name: 'proxy', level: 'admin', password: 'proxy-pw' }], seedClips: o.seed, tz: o.tz ?? 'UTC', clock: { now: () => new Date(NOW) } });
+async function world(o: { seed: SeedClip[]; tz?: string; model?: Model; tweak?: (c: Config) => void; limits?: { clips?: number; bytes?: number }; capBytes?: number }): Promise<World> {
+  const sim = await createCamSim({ users: [{ name: 'proxy', level: 'admin', password: 'proxy-pw' }], seedClips: o.seed, tz: o.tz ?? 'UTC', clock: { now: () => new Date(NOW) }, ...(o.model ? { model: o.model } : {}) });
   const ports = await sim.listen({ http: 0, https: 0, control: 0, rtsp: 0, onvif: 0, baichuan: 0 }, '127.0.0.1');
   const dir = mkdtempSync(join(tmpdir(), 'camproxy-repairflow-'));
   const catalog = openCatalog(join(dir, 'catalog.sqlite'));
@@ -64,11 +66,12 @@ async function world(o: { seed: SeedClip[]; tz?: string; tweak?: (c: Config) => 
     dataDir: dir,
     cam: () => 'cam1',
     target: () => ({ host: '127.0.0.1', port: ports.baichuan!, user: 'proxy', password: 'proxy-pw' }),
-    capBytes: () => 512 * 2 ** 20,
+    capBytes: () => o.capBytes ?? 512 * 2 ** 20,
     search: (param) => client.command('Search', param),
     timeInfo: () => client.timeInfo(),
     paused: () => false,
     noteWritten: () => undefined,
+    httpDownload: (path, size, out, hooks) => httpDownload(() => client, path, size, out, hooks), // as the worker wires it
   });
   const storage = new Storage({ catalog, log: new StreamLog(catalog, () => NOW), config: () => config, now: () => NOW, statfs: () => ({ free: 2 ** 40, size: 2 ** 41 }) });
   const indexer = new ClipIndexer({ catalog, log: new StreamLog(catalog), config: () => config, timeInfo: () => client.timeInfo(), dataDir: dir, cam: 'cam1' });
@@ -110,7 +113,7 @@ async function world(o: { seed: SeedClip[]; tz?: string; tweak?: (c: Config) => 
   const sizes = new Set(sim.engine.sd.all().map((r) => r.files.sub.size));
   expect(sizes.size).toBe(1);
   const w: World = {
-    sim, catalog, config, storage, runner, dir, local, size: [...sizes][0],
+    sim, catalog, config, storage, runner, dir, local, size: [...sizes][0], side,
     check: async () => {
       side.list.clear(); // the day list is cached 30 s
       return runner.start('clips', WHO, { cam: 'cam1', camera: true }).done;
@@ -159,6 +162,52 @@ describe('clips check → repair against cam-sim', () => {
     expect(rows.map((r) => [r.start_ts, r.origin])).toEqual(lost.map((t) => [t, 'camera']));
     const again = await w.check();
     expect(again.counts).toMatchObject({ missingLocally: 0, paired: 8, fromCamera: 4 });
+  }, 60_000);
+
+  // The E1 Outdoor Pro's names (cam-sim as measured 2026-11-02: RecS03_…,
+  // no animal-type field, 7-digit flags). Before #318 its check found none.
+  it('the E1 Outdoor Pro: its short names are listed, missing ones found and fetched, and nothing is unreadable', async () => {
+    const seed: SeedClip[] = [
+      { daysAgo: 1, start: '070556', end: '070624', triggers: ['motion'] },
+      { daysAgo: 1, start: '134721', end: '134751', triggers: ['motion'] },
+      { daysAgo: 0, start: '065854', end: '065924', triggers: ['motion'] },
+    ];
+    const w = await world({ seed, model: 'E1-Outdoor-Pro' });
+    expect(w.sim.engine.sd.all().map((r) => r.files.sub.name.slice(r.files.sub.name.lastIndexOf('/') + 1))).toEqual(
+      ['RecS03_20261001_070556_070624_2B14808', 'RecS03_20261001_134721_134751_2B14808', 'RecS03_20261002_065854_065924_2B14808'].map((p) => `${p}_${w.size.toString(16).toUpperCase()}.mp4`),
+    );
+    w.local(T('2026-10-01T07:05:56'), 1000); // arrived over FTP
+    const lost = [T('2026-10-02T06:58:54'), T('2026-10-01T13:47:21')];
+    const check = await w.check();
+    expect(check.outcome).toBe('ok');
+    expect(check.counts).toMatchObject({ recordings: 3, timerOnly: 0, unknownKinds: 0, unreadableNames: 0, paired: 1, missingLocally: 2, unknownDays: 0 });
+    expect(missingStarts(check)).toEqual(lost);
+    const repair = await w.repair(check);
+    expect(repair).toMatchObject({ outcome: 'ok', stopped: null, counts: { candidates: 2, requested: 2, done: 2, failed: 0 } });
+    expect(fromCamera(w)).toEqual([...lost].reverse());
+    expect((await w.check()).counts).toMatchObject({ missingLocally: 0, paired: 3, fromCamera: 2 });
+    // The E1 refuses the Baichuan download (cam-sim as measured 2026-11-02):
+    // once, then HTTP Download for both.
+    const c = w.sim.engine.counters;
+    expect([c.baichuanDownloads, c.downloads]).toEqual([0, 2]);
+    expect(w.sim.engine.requests.recent(500).filter((x) => x.port === 'baichuan' && x.cmd === '8').map((x) => x.status)).toEqual([400]);
+    expect(w.side.status().download).toMatchObject({ path: 'http', baichuanRefusal: { status: 400 } });
+  }, 60_000);
+
+  // Streamed to a temp file (the cache can't keep it): the file is whole
+  // when it has the HTTP body's length, which may differ from the name's
+  // (the camera's remux; here cam-sim's stored size made 1000 bytes smaller,
+  // a test-only poke at its SD index).
+  it('the E1 into a temp file: an HTTP body longer than the name\'s size is still whole', async () => {
+    const w = await world({ seed: [{ daysAgo: 0, start: '065854', end: '065924', triggers: ['motion'] }], model: 'E1-Outdoor-Pro', capBytes: 1 });
+    const stored = (w.sim.engine.sd as unknown as { recs: { sizes: { sub: number } }[] }).recs;
+    stored[0].sizes = { ...stored[0].sizes, sub: w.size - 1000 };
+    const check = await w.check();
+    expect(check.counts).toMatchObject({ missingLocally: 1 });
+    const repair = await w.repair(check);
+    expect(repair).toMatchObject({ outcome: 'ok', counts: { done: 1, failed: 0 } });
+    expect(repair.items).toMatchObject([{ result: 'ok', streamed: true, bytes: w.size }]);
+    expect(w.sim.engine.counters.downloads).toBe(1);
   }, 60_000);
 
   it('the retention window: an SD card that reaches further back offers and fetches nothing older than the clips retention (camera at UTC+9)', async () => {

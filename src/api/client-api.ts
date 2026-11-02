@@ -259,10 +259,12 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: 
   // The file never changes: its ETag is its id and size, the same when it is
   // streamed and from the cache (not the mtime, which every read touches).
   const etagOf = (id: string, size: number) => `"${id}-${size.toString(16)}"`;
-  const fileHeaders = (res: Response, id: string, size: number) => {
-    res.setHeader('ETag', etagOf(id, size));
+  // size null: the length is not known (an HTTP Download that announced
+  // none): no Content-Length, and the ETag of the name's size.
+  const fileHeaders = (res: Response, id: string, size: number | null, nameSize = size ?? 0) => {
+    res.setHeader('ETag', etagOf(id, size ?? nameSize));
     res.setHeader('Content-Type', 'video/mp4');
-    res.setHeader('Content-Length', String(size));
+    if (size !== null) res.setHeader('Content-Length', String(size));
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Cache-Control', IMMUTABLE);
   };
@@ -376,7 +378,9 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: 
       if (gone(res)) return;
       const { fetch, created } = side.fetcher.get(entry, { priority: 'high', signal: ac.signal });
       const streamIt = !req.headers.range || req.headers.range === 'bytes=0-' || !side.fetcher.canKeep(size) || attempt > 0;
-      const live = streamIt && fetch.attach(res, () => (res.status(200), fileHeaders(res, id, size)));
+      // The fetch's own length: an HTTP Download's body may differ from the
+      // name's size (the camera's remux); it is known before the first byte.
+      const live = streamIt && fetch.attach(res, () => (res.status(200), fileHeaders(res, id, fetch.expectedBytes(), size)));
       try {
         await fetch.done;
       } catch (err) {

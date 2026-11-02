@@ -232,7 +232,10 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
         if (!tmp) return null;
         if (!fetch.holds(tmp.w)) return fetch.kept ? null : 'viewer';
         const t = tmp;
-        const whole = await finished(t.w).then(() => statSync(t.path).size === entry.size, () => false);
+        // Whole: the length the download announced (an HTTP Download's may
+        // differ from the name's size), else the name's; unknown: as it came.
+        const want = fetch.expectedBytes();
+        const whole = await finished(t.w).then(() => want === null || statSync(t.path).size === want, () => false);
         const late = diskError();
         if (late) throw late;
         if (!whole) return null;

@@ -5,7 +5,16 @@ import { agoText, MB, mbText } from './format';
 
 // priority low: an inventory repair's download, not a viewer's (#111).
 export interface RecordingsLast { at: number; result: string; stream: 'main' | 'sub'; bytes: number; ms: number; priority?: 'high' | 'low' }
-export interface RecordingsStatus { last: RecordingsLast | null; cache: { bytes: number; files: number; capBytes: number } }
+// Which way downloads go (src/recordings/download-path.ts): Baichuan, or HTTP
+// Download for a camera that refuses Baichuan (the E1 Outdoor Pro).
+export interface DownloadPathStatus {
+  path: 'baichuan' | 'http';
+  since: number | null;
+  baichuanRefusal: { at: number; status: number | null; detail: string } | null;
+  retryBaichuanAt: number | null;
+}
+// download: absent from a proxy older than the HTTP fallback.
+export interface RecordingsStatus { last: RecordingsLast | null; cache: { bytes: number; files: number; capBytes: number }; download?: DownloadPathStatus }
 
 const WORDS: Record<string, string> = { offline: 'offline', auth: 'login rejected', refused: 'refused', not_found: 'not found', timeout: 'timed out', protocol: 'protocol error' };
 export const resultWord = (r: string): string => WORDS[r] ?? r;
@@ -31,4 +40,14 @@ export function recordingsClass(last: RecordingsLast | null): '' | 'ok' | 'warn'
 export function cacheFillText(c: RecordingsStatus['cache']): string {
   const used = c.files > 0 && c.bytes < MB ? '<1' : String(Math.round(c.bytes / MB));
   return `${used} MB of ${Math.round(c.capBytes / MB)} MB`;
+}
+
+// The "Download path" row: the path, and in the title the camera's Baichuan
+// refusal (on HTTP: and when Baichuan is tried again).
+export function downloadPathText(d: DownloadPathStatus | undefined, now = Date.now()): { text: string; title: string | undefined } {
+  if (!d) return { text: '—', title: undefined };
+  const r = d.baichuanRefusal;
+  if (d.path === 'baichuan') return { text: 'Baichuan', title: r ? `last refused ${agoText(r.at, now)}: ${r.detail}` : undefined };
+  const retry = d.retryBaichuanAt === null ? '' : `; tried again in ${Math.max(0, Math.round((d.retryBaichuanAt - now) / 3600_000))} h`;
+  return { text: 'HTTP (the camera refuses Baichuan)', title: r ? `Baichuan refused: ${r.detail}${retry}` : undefined };
 }

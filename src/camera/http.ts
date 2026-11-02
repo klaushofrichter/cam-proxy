@@ -31,6 +31,9 @@ interface OpenOptions {
   body?: string;
   signal?: AbortSignal;
   timeoutMs: number;
+  // A connection of its own, closed afterwards (no keep-alive pool): a reset
+  // then is this request's answer, never a pooled socket the camera had closed.
+  fresh?: boolean;
 }
 
 class TimeoutError extends Error {
@@ -86,6 +89,7 @@ export function openRequest(target: CameraTarget, path: string, opts: OpenOption
         path,
         method: opts.method ?? 'GET',
         signal: opts.signal,
+        ...(opts.fresh ? { agent: false } : {}),
         headers: opts.body ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(opts.body) } : {},
         ...tls,
       },

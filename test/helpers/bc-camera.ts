@@ -32,6 +32,7 @@ export interface FakeOptions {
   infoRecord?: Buffer; // instead of INFO_RECORD in cmd 8's first reply
   infoDelayMs?: number; // before cmd 8's first reply (the info record)
   nonces?: string[]; // per connection (the first, the second, ...), else NONCE
+  refusalBody?: string; // a 400 to cmd 8 carries this (AES), as a camera might explain itself
 }
 
 export interface FakeCamera {
@@ -103,7 +104,7 @@ export async function fakeCamera(o: FakeOptions = {}): Promise<FakeCamera> {
       if (cmd !== 8) return void send(cmd, msgId, 405, Buffer.alloc(0), Buffer.alloc(0));
       const id = /<Id>([^<]*)<\/Id>/.exec(xml)?.[1] ?? '';
       const file = o.files?.[id];
-      if (!file) return void send(8, msgId, 400, Buffer.alloc(0), Buffer.alloc(0));
+      if (!file) return void send(8, msgId, 400, Buffer.alloc(0), o.refusalBody ? aesEncrypt(key, Buffer.from(o.refusalBody)) : Buffer.alloc(0));
       cam.downloads++;
       transfer = msgId;
       if (o.infoDelayMs) await sleep(o.infoDelayMs);
