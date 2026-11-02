@@ -121,7 +121,8 @@ function world(title: string, tests: () => void): void {
       // cpuBusy (#282): the copy halves its rate while the host's load is above its core count, so
       // under a full test suite the few kB took longer than the waits below (move-copier.test.ts
       // covers the halving); these proxies never see the host's load.
-      const timing = { camsAdmin: { timing: { minIntervalS: 0.2, jitterS: 0, backoffCapMs: 300, closeGraceMs: 200 } }, tlsPush: { clearWaitMs: 50, verifyMs: 5000, pollMs: 100 }, cpuBusy: () => false };
+      // The post-move sync (issue #311) would fetch cam-sim's demo SD card into the counts below: off here (test/move-sync-flow.test.ts).
+      const timing = { moveSync: { enabled: false }, camsAdmin: { timing: { minIntervalS: 0.2, jitterS: 0, backoffCapMs: 300, closeGraceMs: 200 } }, tlsPush: { clearWaitMs: 50, verifyMs: 5000, pollMs: 100 }, cpuBusy: () => false };
       const ftp = async (port: number) => {
         const passive = await freePort();
         return { enabled: true, port, passive: `${passive}-${passive + 19}`, publicHost: '127.0.0.1', tls: true, stream: 'sub' };

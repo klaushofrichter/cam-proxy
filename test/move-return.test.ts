@@ -331,11 +331,14 @@ function original(f: ReturnType<typeof fixture>, o: { free?: number; tombstone?:
   };
   const runner = new CopyRunner(copyDeps);
   const copy = o.runner ?? runner;
+  // The post-move sync (issue #311): the moves whose copy back finished here.
+  const synced: string[] = [];
   const returns = new MoveReturns({
     journal, audit, emit, inventory: { catalog, dataDir }, proxyId: () => ORIGINAL, now: () => CANCEL_AT + 30 * MIN,
     copy, setPhase: (r, phase, p) => target.setPhase(r, phase, p), retention: () => RETENTION,
+    sync: { returned: (id) => void synced.push(id) },
   });
-  return { dataDir, catalog, journal, events, audits, state, runner, returns, rec: () => journal.load(RETURN)! };
+  return { dataDir, catalog, journal, events, audits, state, runner, returns, synced, rec: () => journal.load(RETURN)! };
 }
 
 const until = async (cond: () => boolean, ms = 5000) => {
@@ -565,6 +568,8 @@ describe('the return\'s finish (step 4 Task 11)', () => {
     expect(o.journal.ended(RETURN, 'target')).toMatchObject({ phase: 'finished' });
     // The cancelled move's tombstone records the copy back as done: no second return of it.
     expect(o.journal.ended(CANCELLED, 'source')).toMatchObject({ phase: 'cancelled', camera: 'cam1', returned: true });
+    // The cancelled move's post-move sync is due now (issue #311).
+    expect(o.synced).toEqual([CANCELLED]);
     const m = o.events.length;
     expect(await o.returns.finish(finishArgs('target'))).toEqual(t);
     expect(o.events.length).toBe(m + 1);

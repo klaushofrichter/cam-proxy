@@ -215,6 +215,32 @@ describe('move.finish on the target (A5/B45)', () => {
     expect(u.journal.currentPhase()).toBeNull();
   }, 60_000);
 
+  it('asks for the post-move sync of the camera once the move finished (issue #311); not again on a repeat', async () => {
+    const u = targetUnit();
+    const asked: string[] = [];
+    u.deps.sync = { finished: (id, cam) => void asked.push(`${id} ${cam} ${u.journal.ended(id, 'target')?.phase}`) };
+    const target = new MoveTarget(u.deps);
+    u.journal.save(offered());
+    expect((await target.start(startArgs())).status).toBe('ok');
+    await target.idle(MOVE);
+    target.setPhase(u.journal.load(MOVE)!, 'copied', {});
+    expect(asked).toEqual([]);
+    expect((await target.finish(finishArgs('target'))).status).toBe('ok');
+    // After the tombstone is written (the sync lives in it).
+    expect(asked).toEqual([`${MOVE} cam9 finished`]);
+    expect((await target.finish(finishArgs('target'))).status).toBe('ok');
+    expect(asked).toHaveLength(1);
+  }, 60_000);
+
+  it('a cancel on the target asks for no sync (the camera goes back)', async () => {
+    const u = targetUnit();
+    const asked: string[] = [];
+    u.deps.sync = { finished: (id) => void asked.push(id) };
+    await copied(u);
+    expect((await new MoveTarget(u.deps).cancel(cancelT('age-out'))).status).toBe('ok');
+    expect(asked).toEqual([]);
+  }, 60_000);
+
   it('finish twice is a no-op with the same answer', async () => {
     const u = targetUnit();
     await copied(u);
@@ -898,6 +924,22 @@ describe('move.cancel on the source', () => {
     expect(u.audits('move-cancel')[0].cam_proxy).toMatchObject({ phase: 'released', switchedBack: true, push: 'pushed', ftp: 'ok' });
     // The tombstone names the camera back here: the copy back (step 4 Task 10) copies into it.
     expect(u.journal.ended(MOVE, 'source')).toMatchObject({ phase: 'cancelled', camera: 'cam3' });
+  });
+
+  it('asks for the post-move sync only after a cancel past the switch-over, once the camera runs here again (issue #311)', async () => {
+    const after = sourceUnit();
+    const asked: string[] = [];
+    after.deps.sync = { cancelled: (id, cam) => void asked.push(`${id} ${cam} ${after.journal.ended(id, 'source')?.camera}`) };
+    after.journal.save(sourceRecord());
+    expect(await new MoveSource(after.deps).cancel({ v: 1, moveId: MOVE, role: 'source', expectedLeaf: TARGET_LEAF })).toEqual({ status: 'ok', result: {} });
+    expect(asked).toEqual([`${MOVE} cam3 cam3`]);
+    // Before the switch-over the camera never left: no sync.
+    const before = sourceUnit({ released: false });
+    const none: string[] = [];
+    before.deps.sync = { cancelled: (id) => void none.push(id) };
+    before.journal.save(sourceRecord({ phase: 'opened', expectedLeaf: undefined, manifest: undefined }));
+    expect((await new MoveSource(before.deps).cancel({ v: 1, moveId: MOVE, role: 'source' })).status).toBe('ok');
+    expect(none).toEqual([]);
   });
 
   it('a failed give-back step: the camera is the source\'s at once; audited, busy, retried by itself until done', async () => {

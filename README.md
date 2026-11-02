@@ -1546,6 +1546,9 @@ contract tests: [docs/cams-admin.md](docs/cams-admin.md).
 another (both with a site CA, on the same LAN), a camera moves from one to
 the other with its settings, password, certificate and content, started and
 approved on the source's Settings page: [docs/camera-move.md](docs/camera-move.md).
+After the move (or a cancel past the switch-over) the proxy that has the
+camera checks it against the camera's SD card and fetches what neither proxy
+has (`move-sync`, `GET /control/moves/syncs`).
 
 ## Operating the cluster
 

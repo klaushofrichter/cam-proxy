@@ -1,5 +1,6 @@
 import express from 'express';
 import type { MoveSource, Asker } from '../moves/source';
+import type { MoveSync } from '../moves/sync';
 import { isMoveId } from '../moves/journal';
 import { clientIp, type AccessInfo } from './auth';
 
@@ -27,7 +28,7 @@ export function askerOf(req: express.Request): Asker {
   };
 }
 
-export function movesControlApi(source: MoveSource): express.Router {
+export function movesControlApi(source: MoveSource, sync?: Pick<MoveSync, 'list'>): express.Router {
   const r = express.Router();
   const refuse = (res: express.Response, cam: string): boolean => {
     const why = source.refusal(cam);
@@ -42,6 +43,8 @@ export function movesControlApi(source: MoveSource): express.Router {
   };
 
   r.get('/moves', (_req, res) => void res.json({ items: source.list() }));
+  // The post-move syncs (issue #311) of the moves that ended here, newest first.
+  r.get('/moves/syncs', (_req, res) => void res.json({ items: sync?.list() ?? [] }));
 
   r.post('/moves/targets', (req, res) => {
     const cam = cameraOf(req, res);
