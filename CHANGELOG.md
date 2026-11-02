@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Retrieving missing clips from the camera now takes the newest ones first (the most recent matter most), and a check lists them newest first. When storage is full, the usual rules apply: a retrieved clip may push out older clips, never newer ones; the run stops at the first recording older than what storage keeps (`stopped: retention-full`, replacing `max-gb`). Both the check and the retrieval span exactly the clips retention.
+
+## v2026.11.01.1
+
 - New: a configured camera's new address without offboarding it (after the DHCP router handed out another one): `PUT /control/cameras/<id>/host` (local admin only) and `scripts/readdress-camera.sh` (`--find` suggests the address). The proxy checks it is the same camera first (its pinned certificate, a login with the password it already has, its model), keeps its password, trust and PTZ positions, and writes the address where it keeps it (`CAMERA_HOST` in the .env file on the Pi, else overrides.json). Audited as `camera-host-change`. With `CAMS_ADMIN_URL` the script also updates the camera's host in cams-admin (unless it is `from-proxy`).
 
 ## v2026.10.31.3
