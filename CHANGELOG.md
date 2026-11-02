@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.11.02.5
+
 - Live video now shows the camera's real picture size. For cameras whose stream announcement leaves out the picture parameters (the E1 Outdoor Pro and RLC-1224A), go2rtc started the browser on a 128×96 placeholder, so the E1's 16:9 sub stream could show squeezed as 640×480. The proxy now takes the parameters from the first keyframe and fixes the stream header (H.264 and H.265).
 - Changing a camera's encoding now waits for the camera's restart. All three camera models restart about 40–75 s after an encoding change; the change used to answer 502 although it was applied. Now the proxy waits up to 180 s and answers with the new settings (the audit notes the restart and how long it took), or 504 `camera_restarting` saying the change was sent. While it restarts, the camera's error reads `camera_restarting`.
 - The status's stream sizes are read again after any camera restart or missed check, not only after a change through the API (they showed the old main size for minutes).
