@@ -44,7 +44,7 @@ export interface RepairEntry { run: Repair; ready: (source: InventoryReport) => 
 // `camera` says it takes the `camera` option.
 export interface InventoryKind { label: string; run: Check; camera?: boolean; repair?: RepairEntry }
 type RunOutcome = 'ok' | 'cancelled' | 'failed';
-interface Requester { user?: string; requestedBy: 'session' | 'token' | 'cams-admin'; ip?: string; userAgent?: string; cmdId?: string; actor?: string }
+interface Requester { user?: string; requestedBy: 'session' | 'token' | 'cams-admin' | 'system'; ip?: string; userAgent?: string; cmdId?: string; actor?: string }
 export interface InventoryReport {
   runId: string;
   kind: string;

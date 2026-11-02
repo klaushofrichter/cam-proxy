@@ -3,6 +3,7 @@ import { join, resolve, sep } from 'path';
 import { PrivateFileInvalid, readPrivateJson, writePrivateJson } from '../fleet/private-file';
 import type { AutoWaitReason } from './plan';
 import type { Purged } from './purge';
+import type { MoveSyncRecord } from './sync-types';
 import type { ChunkState, KeepList, MoveActor, MoveCheck, MoveAnswer, MoveBounds, MoveCameraConnection, MoveCopied, MoveKind, MovePhaseName, MovePlan, MoveRole, MoveSummary, Settings, Space } from './types';
 import { DAY } from '../time-units';
 
@@ -171,6 +172,11 @@ export interface MoveTombstone {
   // until the return's finish marks it `returned`, then 7 days from then.
   camera?: string;
   returned?: boolean;
+  // The post-move sync (issue #311, sync.ts): the receiving proxy's (a
+  // finished target) or the original proxy's (a cancel after the switch-over)
+  // check against the camera's SD card, kept with the move's end: pending
+  // across a restart, its outcome after.
+  sync?: MoveSyncRecord;
   endedAt: number;
 }
 export const TOMBSTONE_KEEP_MS = 7 * DAY;
@@ -211,10 +217,12 @@ export class MoveJournal {
   }
 
   // The tombstone of an ended move (written before its record is removed); old ones swept.
+  // A tombstone written again (a cancel marked `returned`) keeps its sync.
   bury(t: Omit<MoveTombstone, 'v' | 'endedAt'> & { endedAt?: number }): void {
+    const sync = t.sync ?? this.ended(t.moveId, t.role)?.sync;
     const stone: MoveTombstone = {
       v: 1, moveId: t.moveId, role: t.role, phase: t.phase, ...(t.code ? { code: t.code } : {}), ...(t.deleted ? { deleted: t.deleted } : {}), ...(t.kept ? { kept: t.kept } : {}),
-      ...(t.camera ? { camera: t.camera } : {}), ...(t.returned ? { returned: true } : {}), endedAt: t.endedAt ?? this.now(),
+      ...(t.camera ? { camera: t.camera } : {}), ...(t.returned ? { returned: true } : {}), ...(sync ? { sync } : {}), endedAt: t.endedAt ?? this.now(),
     };
     writePrivateJson(this.stonePath(t.moveId, t.role), stone, false);
     try {
@@ -236,6 +244,32 @@ export class MoveJournal {
     const t = raw as Partial<MoveTombstone> | null;
     if (!t || t.v !== 1 || t.moveId !== id || t.role !== role || typeof t.endedAt !== 'number' || !TERMINAL.includes(t.phase as MovePhaseName)) return null;
     return this.now() - t.endedAt > keepMs(t) ? null : (t as MoveTombstone);
+  }
+
+  // The post-move sync of an ended move, written into its tombstone (false: no such tombstone).
+  setSync(id: string, role: MoveRole, sync: MoveSyncRecord): boolean {
+    const t = this.ended(id, role);
+    if (!t) return false;
+    writePrivateJson(this.stonePath(id, role), { ...t, sync }, false);
+    return true;
+  }
+
+  // Every tombstone within its keep that carries a sync (the restart resumes the open ones).
+  syncs(): { moveId: string; role: MoveRole; sync: MoveSyncRecord; endedAt: number }[] {
+    let names: string[];
+    try {
+      names = readdirSync(this.dir);
+    } catch {
+      return [];
+    }
+    const out: { moveId: string; role: MoveRole; sync: MoveSyncRecord; endedAt: number }[] = [];
+    for (const n of names.sort()) {
+      const m = /^(.+)\.(source|target)\.ended\.json$/.exec(n);
+      if (!m || !ID.test(m[1])) continue;
+      const t = this.ended(m[1], m[2] as MoveRole);
+      if (t?.sync) out.push({ moveId: t.moveId, role: t.role, sync: t.sync, endedAt: t.endedAt });
+    }
+    return out;
   }
 
   // Tombstones older than their keep (7 days; RETURN_WAIT_MS), and chunk part folders (<id>.chunks/) of no record.

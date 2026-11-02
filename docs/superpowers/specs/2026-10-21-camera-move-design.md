@@ -513,3 +513,54 @@ still needs a site CA that covers the camera (`no_site_ca`,
   `caFingerprints`; the target fetches from it unpinned over http (the move
   token still guards every request). An `https` URL without a fingerprint is
   never trusted.
+
+## 19. Amendment 2026-11-02: the check against the camera's SD card after a move (issue #311)
+
+**Klaus**, 2026-11-02: after a move finishes, the receiving proxy confirms
+against the camera's own SD card that it has everything, and fetches what is
+missing; the same on the original proxy when a move is cancelled after the
+switch-over (clips recorded while the camera pointed at the other proxy may
+be on neither). §10.5's completeness check compares the two proxies only.
+
+- **Trigger.** The target after `move.finish {role: target}` (the tombstone
+  is written first); the source after a cancel past the switch-over closed
+  (the camera runs here again), once the copy back finished here
+  (`move.finish {return: true}` on the original), or 30 minutes after the
+  cancel when no copy back runs here by then. A cancel before the switch-over
+  never asks for one (the camera never left).
+- **The loop** (`src/moves/sync.ts`), with the inventory runner in process:
+  the clips check with the camera; while recordings are missing a clips
+  repair, then the check again; it ends when nothing is missing, a repair
+  fetches nothing (`nothing-fetched`), a repair stops (`retention-full`,
+  `paused`, `failures`, `refused`; a run's caps `clip-cap` / `byte-cap` go on
+  to the next round) or after 20 checks (`round-cap`). Then the events check
+  and one events repair when events are missing. The repair's rules hold
+  (newest first, within retention, 50 clips / 200 MB per run, Baichuan at low
+  priority). One sync at a time; another inventory running: it waits 30 s
+  and tries again (no attempt counted).
+- **Retries.** The camera offline or not running yet, a run failing, a
+  repair stopped by an offline camera: tried again after 1 min, doubling, at
+  most every 30 min (a retry goes on from its step: the events once the
+  clips are done); gave-up 24 h after it became due. The camera no longer
+  this proxy's (removed, moved on), or a person cancelling one of its runs:
+  `failed`, not retried.
+- **Where it lives.** In the move's tombstone (`<id>.<role>.ended.json`,
+  `sync`), which already outlives the move (7 days; a cancel's waits for its
+  copy back): a restart resumes a pending sync (one left `running` by a
+  crash runs again). `GET /control/moves/syncs` lists them. Shape:
+  `{state: pending|running|done|failed|gave-up, trigger: finished|cancelled,
+  camera, requestedAt, dueAt, waitReturn?, since?, attempts, startedAt?,
+  finishedAt?, step?, clips?: {missingBefore, fetched, missingAfter, rounds,
+  stopped}, events?: {missing, added}, error?}`.
+- **Audit.** `move-sync`: its start, its end, a give-up; the retries only in
+  the log. The runs it starts are the usual `inventory` / `inventory-repair`
+  records (`requestedBy` `system`).
+- **cams-admin.** Not reported yet: the move has ended there before the sync
+  runs, and the contract has no event for it. Showing it with the move needs
+  a contract event first (e.g. `move.sync {moveId, role, sync}`, sent at the
+  end and re-sent after a welcome while the tombstone lasts), stored on the
+  cams-admin move row and shown in its detail view.
+- **Known cost.** A copy back that starts more than 30 minutes after the
+  cancel (the other proxy offline) may bring a clip the sync fetched from the
+  camera already, under a start a few seconds apart: the clip is kept twice.
+

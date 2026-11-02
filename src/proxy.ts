@@ -82,6 +82,7 @@ import { movesControlApi } from './api/moves-control-api';
 import { ManifestCache } from './moves/manifest-cache';
 import { MoveSource } from './moves/source';
 import { MoveTarget } from './moves/target';
+import { MoveSync, type MoveSyncDeps } from './moves/sync';
 import { CopyRunner } from './moves/copier';
 import { capturedMark } from './moves/captured';
 import { purgeExcept, removeImported } from './moves/purge';
@@ -194,6 +195,8 @@ export interface ProxyOptions {
   camsAdmin?: { timing?: Partial<Timing>; replaySlackMs?: number; recheckMs?: number };
   // A camera move's switch-over retries on the target (tests shorten them).
   moves?: { attempts?: number; retryMs?: number; retryCapMs?: number; notReadyMs?: number };
+  // The post-move sync (issue #311): its waits (tests shorten them); `enabled: false` turns it off (tests only).
+  moveSync?: MoveSyncDeps['timing'] & { enabled?: boolean };
   // The host's zone as the proxy reads it: TZ and what Intl reports (tests pin both: a UTC host has no known zone).
   hostZone?: { tz?: string; intl: () => string };
 }
@@ -1084,6 +1087,21 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     w.ftpWatch.note(f);
     return verifyFtp('camera-ftp-setup', { ftp: f }, { server: t.server, port: t.port, tls: t.tls, stream: t.stream });
   };
+  // The post-move sync (issue #311): after a move finished here, or a cancel
+  // gave a camera back, its clips and events against the camera's SD card.
+  const moveSync = new MoveSync({
+    journal: moveJournal,
+    runner: inventory,
+    audit,
+    proxyId: proxyIdNow,
+    timing: opts.moveSync,
+    ready: (cam) => {
+      const node = loaded.config.cameras[cam];
+      if (!node || node.moved !== undefined) return 'gone';
+      return cams.get(cam)?.status.state().online === true ? 'ok' : 'offline';
+    },
+  });
+  const syncOn = opts.moveSync?.enabled !== false;
   // The source side of a camera move (camera-move plan Task 7).
   const moveSource = new MoveSource({
     journal: moveJournal,
@@ -1099,6 +1117,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     certs: () => certs,
     refreshManifest: (id) => void refreshManifest({ journal: moveJournal, inventory: moveInventory }, id, manifestCache),
     proxyId: proxyIdNow,
+    ...(syncOn ? { sync: moveSync } : {}),
     end: {
       ...moveEnd,
       dropManifests: (id) => manifestCache.forget(id),
@@ -1143,6 +1162,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     startCopy: (id) => moveCopier.start(id),
     stopCopy: (id) => moveCopier.stop(id),
     proxyId: proxyIdNow,
+    ...(syncOn ? { sync: moveSync } : {}),
     timing: opts.moves,
     end: { ...moveEnd, dataDir: running.server.dataDir, removeImported: (r) => removeImported({ catalog, dataDir: running.server.dataDir, storage }, r), captured: (cam, now) => capturedMark(catalog, cam, now) },
   });
@@ -1197,6 +1217,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     // The finish (Task 11): storage recounted after the delete, keepDays on finished.
     storage,
     retention: () => running.retention,
+    ...(syncOn ? { sync: moveSync } : {}),
   });
   // After every welcome: the open move's phase again (B2), and an approval not acted on yet (B7).
   camsAdmin.onWelcome(() => {
@@ -1400,7 +1421,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     },
   };
   app.use('/control', requireAccess('admin', access), onboardingApi(onboarding));
-  app.use('/control', requireAccess('admin', access), movesControlApi(moveSource));
+  app.use('/control', requireAccess('admin', access), movesControlApi(moveSource, moveSync));
   app.use('/control', requireAccess('admin', access), controlApi(controlDeps));
   // cams-admin's P3 commands (plan P3 Task 10): each off unless allowed locally.
   Object.assign(
@@ -1616,6 +1637,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       moveSource.resume();
       // A copy back this proxy receives (step 4 Task 10).
       moveReturns.resume();
+      // A post-move sync not done yet (the camera offline, a restart in the middle).
+      if (syncOn) moveSync.resume();
       // Offers never approved close on their own on both sides (final review 5); old tombstones go.
       const expireOffers = () => {
         try {
@@ -1676,6 +1699,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       // A switch-over step in flight ends first; the journal keeps the step (resumed at the next start).
       clearInterval(moveExpiry);
       moveSource.stop();
+      // No new post-move sync try; one running ends with the inventory below (it stays pending).
+      const syncStopped = moveSync.stop();
       await moveTarget.stopAll();
       // The copiers of returns too (MoveTarget did not start them), waited for at most 3 s.
       await moveCopier.stopAll();
@@ -1690,6 +1715,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       // An archive job in flight is cancelled (its staged folder removed) before the catalog closes.
       // cams-admin: bye and close within 1 s, before the HTTP server (spec §9.1).
       await Promise.all([composer.stop(), analytics.stop(), archive.stop(), ...cams.list().map((w) => w.stopRecordings()), inventory.stop(), camsAdmin.stop(opts.reason === 'restart-requested' ? 'restart' : 'shutdown')]);
+      // Its state saved (pending) before the process ends.
+      await syncStopped;
       try {
         replayGuard.flush();
       } catch (err) {

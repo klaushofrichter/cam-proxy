@@ -100,14 +100,16 @@ export async function createSimCamera(opts: SimCameraOptions): Promise<{ app: Ca
 export const E1_MODEL = 'E1-Outdoor-Pro' as const;
 // `encRange`: GetEnc's range in place of the model's (small sizes encode quickly).
 // encRestartMs: cam-sim's restart after a SetEnc that changed the streams (its default: 1 s).
-export async function startSim(opts: { rebootMs?: number; ignoreImport?: boolean; model?: Model; faults?: FaultSpec[]; encRange?: Array<Record<string, any>>; encRestartMs?: number } = {}) {
+// `seedClips`: the SD card's recordings (default: cam-sim's demo set); `tz`: the camera's zone.
+export async function startSim(opts: { rebootMs?: number; ignoreImport?: boolean; model?: Model; faults?: FaultSpec[]; encRange?: Array<Record<string, any>>; encRestartMs?: number; seedClips?: SeedClip[]; tz?: string } = {}) {
   const password = 'proxy-pw';
   const sim = await createCamSim({
     users: [
       { name: 'admin', level: 'admin', password: 'admin-pw' },
       { name: 'proxy', level: 'admin', password },
     ],
-    seedClips: 'demo',
+    seedClips: opts.seedClips ?? 'demo',
+    ...(opts.tz ? { tz: opts.tz } : {}),
     reboot: { ms: opts.rebootMs ?? 200, dropsConnection: true },
     faults: [...(opts.ignoreImport ? [{ name: 'cert.ignoreImport' } as FaultSpec] : []), ...(opts.faults ?? [])],
     ...(opts.model ? { model: opts.model } : {}),

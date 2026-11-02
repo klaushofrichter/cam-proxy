@@ -1,3 +1,4 @@
+import type { MoveSync } from './sync';
 import type { AuditLog } from '../audit/audit-log';
 import { activeCameraIds } from '../config/cameras';
 import type { CameraNode, Config } from '../config/defaults';
@@ -50,6 +51,8 @@ export interface SourceDeps {
   refreshManifest: (moveId: string) => void;
   // This proxy's id at cams-admin (audit records name source and target); '' before enrollment.
   proxyId?: () => string;
+  // The post-move sync (issue #311): a cancel past the switch-over, the camera back here.
+  sync?: Pick<MoveSync, 'cancelled'>;
   now?: () => number;
   // Task 10, the end of a move (move.finish, move.cancel): the camera's
   // content purged, its stored password deleted, its leaf files and trust
@@ -678,6 +681,8 @@ export class MoveSource {
     });
     this.d.journal.bury({ moveId: r.id, role: 'source', phase: 'cancelled', ...(r.switchedOver ? { camera: r.camera } : {}) });
     this.d.journal.remove(r.id);
+    // The camera pointed at the other proxy for a while: compare with its SD card (after the copy back).
+    if (r.switchedOver) this.d.sync?.cancelled(r.id, r.camera);
   }
 
   // A move ended here before (its tombstone): the terminal phase sent again

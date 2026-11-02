@@ -203,6 +203,27 @@ approved by the source itself.
    how long the rest ages out (`keepDays`: the longest of the retention
    settings, at least 7 days) when a move finishes or is cancelled.
 
+5. **The check against the camera's SD card** (since 2026-11-02, issue
+   #311). The check in step 3 compares the two proxies only: a clip that
+   reached neither (recorded while the camera switched over, an FTP gap
+   around the move) would go unnoticed. So once the move finished, the
+   target compares the camera's clips and events with the camera's own SD
+   card and fetches what is missing, as an admin would by hand on the
+   Inventory card: the clips check with the camera, then the clips repair
+   while recordings are missing, again, until nothing is missing, a repair
+   fetches nothing, it stops (`retention-full`, `paused`, `failures`,
+   `refused`) or 20 checks ran; then the events check and one events repair.
+   The repair's usual rules hold: newest first, only within the clips
+   retention, never pushing out newer files, at most 50 clips or 200 MB per
+   run, over Baichuan at low priority (viewers first). It waits while
+   another inventory runs. With the camera offline, or a run failing, it
+   tries again later (after 1 minute, doubling up to every 30 minutes) and
+   gives up 24 hours after it became due; a restart resumes it. The outcome
+   is kept with the move's end note (see Leftovers), listed by
+   `GET /control/moves/syncs`, and audited `move-sync` (its start, its end,
+   a give-up), next to the `inventory` and `inventory-repair` records of the
+   runs it started (`requestedBy` `system`).
+
 The Status page shows a move in progress: phase, copied of total, time left,
 an over-budget note, or the reason a move failed.
 
@@ -275,6 +296,11 @@ stuck needs a cancel.
   - retries on its own after a failure or a restart;
   - sends its own report of what the original verified; what failed stays on
     the new proxy and ages out with its retention.
+- **The check against the camera's SD card** runs on the original too, as
+  after a finished move (step 5 of *What happens*): clips recorded while the
+  camera pointed at the new proxy may be on neither. It starts once the copy
+  back finished here (it brings what the new proxy has), or 30 minutes after
+  the cancel when no copy back runs here by then.
 - **Give up** (cams-admin) on a copy back deletes nothing on either proxy:
   what was copied back stays, the rest ages out where it is.
 - Before the switch-over, a cancel changes nothing on the source; the move
@@ -329,10 +355,12 @@ and `role`; never the password, the token or a key. The actions, each in
 
 | side | actions |
 |---|---|
-| source | `move-request` (started on its page, or by cams-admin with `move.begin`), `move-approve` (a person, or the auto-approval, named in its label), `move-auto-approve` (the offer waits for a person, with the reason), `move-switch` (`go`), `move-phase` (`opened`, `switching`, `released`, `finished`, `cancelled`, `failed`), `move-cleanup`, `move-done`, `move-cancel`, `move-outcome-refused` (the report of what to keep did not arrive), `move-return` (the copy back: `open`, `finish`), `move-token-refused` (a refused request to its move endpoints) |
-| target | `move-offer` (its answer), `move-switch` (`start`, `secrets`, `camera`, `cert`, `ftp`), `move-phase` (`switching`, `switched`, `copying`, `copied`, `finished`, `cancelled`, `failed`), `move-progress` (every 10 %), `move-check` (the completeness check), `move-budget-exceeded`, `move-paused` (a copy back waits for room), `move-return` (`start`, `finish`), `move-file-failed`, `move-source-unreachable`, `move-done`, `move-cancel` |
+| source | `move-request` (started on its page, or by cams-admin with `move.begin`), `move-approve` (a person, or the auto-approval, named in its label), `move-auto-approve` (the offer waits for a person, with the reason), `move-switch` (`go`), `move-phase` (`opened`, `switching`, `released`, `finished`, `cancelled`, `failed`), `move-cleanup`, `move-done`, `move-cancel`, `move-outcome-refused` (the report of what to keep did not arrive), `move-return` (the copy back: `open`, `finish`), `move-token-refused` (a refused request to its move endpoints), `move-sync` (after a cancel past the switch-over: the check against the camera's SD card) |
+| target | `move-offer` (its answer), `move-switch` (`start`, `secrets`, `camera`, `cert`, `ftp`), `move-phase` (`switching`, `switched`, `copying`, `copied`, `finished`, `cancelled`, `failed`), `move-progress` (every 10 %), `move-check` (the completeness check), `move-budget-exceeded`, `move-paused` (a copy back waits for room), `move-return` (`start`, `finish`), `move-file-failed`, `move-source-unreachable`, `move-done`, `move-cancel`, `move-sync` (after the finish: the check against the camera's SD card) |
 
 A normal move shows, in this order: `move-request` and `move-approve` on the
 source (no `move-auto-approve`: that record means the offer is waiting), `move-offer` and the `move-switch` steps on the target, `released` on
 the source, `move-progress` up to `copied` on the target, then `move-cleanup`
-and `move-done` on the source and `move-done` on the target.
+and `move-done` on the source and `move-done` on the target, then `move-sync`
+(`start`), the `inventory` / `inventory-repair` records of its runs and
+`move-sync` (`end`) on the target.
