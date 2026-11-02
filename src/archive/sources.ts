@@ -95,7 +95,9 @@ export function recordingSource(d: { entry: RecordingEntry; cache: Pick<Recordin
         if (fetch.holds(pt)) {
           await finished(file).catch(() => undefined);
           if (fileErr) throw errorOf(fileErr);
-          if (bytes !== entry.size || statSync(part).size !== entry.size) throw new ArchiveJobError('fetch_failed', 'the download ended short');
+          // The announced length (HTTP Download's may differ from the name's size).
+          const want = fetch.expectedBytes() ?? bytes;
+          if (bytes !== want || statSync(part).size !== want) throw new ArchiveJobError('fetch_failed', 'the download ended short');
           return { path: part, release: () => rmSync(part, { force: true }), crc32: crc };
         }
         drop();

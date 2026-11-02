@@ -85,13 +85,16 @@ describe('clips inventory API', () => {
     p.proxy.recordings.list.clear(); // the day list is cached 30 s
     const cmp = await run('inventory', { kind: 'clips', camera: true });
     expect(cmp.counts.missingLocally).toBe(1);
+    // Refused both ways (Baichuan, and the HTTP Download fallback).
     sim.sim.engine.faults.set({ name: 'baichuan.refuse' });
+    sim.sim.engine.faults.set({ name: 'downloads.refuse' });
     try {
       const rep = await run('inventory-repair', { kind: 'clips', runId: cmp.runId });
       expect(rep).toMatchObject({ outcome: 'ok', stopped: 'refused', counts: { done: 0, failed: 1 } });
       expect(rep.message).toMatch(/stopped: the camera refused a download$/);
     } finally {
       sim.sim.engine.faults.clear('baichuan.refuse');
+      sim.sim.engine.faults.clear('downloads.refuse');
     }
   });
 

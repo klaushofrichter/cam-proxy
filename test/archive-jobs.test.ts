@@ -169,6 +169,25 @@ describe('recordingSource', () => {
     expect(existsSync(join(off.jobDir, 'fetch.part'))).toBe(false);
   });
 
+  // HTTP Download (download-path.ts): the body's length is announced and may
+  // differ from the name's size; that length is what makes it whole.
+  it('an announced length other than the name\'s size: whole at that length, short of it fails', async () => {
+    for (const [sent, ok] of [[1500, true], [1400, false]] as const) {
+      const s = side(100, async () => 0);
+      const fetcher = new RecordingFetcher({
+        cache: s.cache,
+        download: async (_p, _size, out, ctx) => {
+          ctx!.length!(1500);
+          return send(Buffer.alloc(sent, 3))(out);
+        },
+        stillListed: async () => true, paused: () => false, noteWritten: () => undefined, onDone: () => undefined,
+      });
+      const run = recordingSource({ entry: entry(1000), cache: s.cache, fetcher })({ dir: s.jobDir, signal: new AbortController().signal, progress: () => undefined });
+      if (ok) expect(readFileSync((await run).path).length).toBe(1500);
+      else await expect(run).rejects.toMatchObject({ code: 'fetch_failed' });
+    }
+  });
+
   it('a short download fails', async () => {
     const s = side(1e6, send(Buffer.alloc(100, 1)));
     await expect(recordingSource({ entry: entry(200), cache: s.cache, fetcher: s.fetcher })({ dir: s.jobDir, signal: new AbortController().signal, progress: () => undefined })).rejects.toBeInstanceOf(ArchiveJobError);

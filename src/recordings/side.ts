@@ -1,7 +1,9 @@
 // src/recordings/side.ts
 // The recordings side (spec 2026-10-02-baichuan-recordings-design): the
 // list (HTTP Search), the cache, the fetcher and the Baichuan session, plus
-// the status line and one info log line per download. One per camera: the
+// the status line and one info log line per download. Downloads go over
+// Baichuan, or HTTP Download for a camera that refuses Baichuan
+// (download-path.ts; the path is part of the status). One per camera: the
 // list's Search semaphore and the fetcher's one-download rule are per instance.
 import { join } from 'path';
 import type { Writable } from 'stream';
@@ -13,6 +15,7 @@ import { logger } from '../log';
 import { RecordingCache } from './cache';
 import type { CachePool } from './pool';
 import { RecordingFetcher, type FetchOutcome, type Priority } from './fetcher';
+import { DownloadRouter, type DownloadPathStatus, type PathDownload } from './download-path';
 import { RecordingList } from './list';
 import type { Stream } from './names';
 
@@ -20,6 +23,7 @@ export interface RecordingsStatus {
   last: { at: number; result: string; stream: Stream; bytes: number; ms: number; priority: Priority } | null;
   cache: { bytes: number; files: number; capBytes: number }; // the host's cache with a pool
   camera: { bytes: number; files: number }; // this camera's part
+  download: DownloadPathStatus; // Baichuan or HTTP Download, and why
 }
 
 export interface RecordingsSide {
@@ -46,6 +50,10 @@ interface RecordingsDeps {
   onDownload?: (o: FetchOutcome) => void;
   session?: SessionOptions;
   vod?: DownloadOptions;
+  // HTTP Download through the camera client (http-download.ts): the fallback
+  // for a camera that refuses Baichuan. Absent: Baichuan only.
+  httpDownload?: PathDownload;
+  baichuanRetryMs?: number; // while on HTTP, Baichuan first again after this (6 h)
   stopWaitMs?: number; // how long stop() waits for a running download to end (2 s)
 }
 
@@ -57,9 +65,15 @@ export function createRecordingsSide(d: RecordingsDeps): RecordingsSide {
   let readyDir = dirOf();
   const list = new RecordingList({ search: d.search, timeInfo: d.timeInfo });
   let last: RecordingsStatus['last'] = null;
+  const router = new DownloadRouter({
+    cam: d.cam,
+    baichuan: (path: string, size: number, out: Writable) => download(session, path, size, out, d.vod),
+    http: d.httpDownload,
+    retryMs: d.baichuanRetryMs,
+  });
   const fetcher = new RecordingFetcher({
     cache,
-    download: (path: string, size: number, out: Writable) => download(session, path, size, out, d.vod),
+    download: (path, size, out, ctx) => router.download(path, size, out, ctx),
     stillListed: (e) => list.stillListed(e),
     paused: d.paused,
     noteWritten: d.noteWritten,
@@ -75,10 +89,11 @@ export function createRecordingsSide(d: RecordingsDeps): RecordingsSide {
     fetcher,
     session,
     paused: d.paused,
-    status: () => ({ last, cache: d.pool ? d.pool.usage() : { ...cache.usage(), capBytes: d.capBytes() }, camera: cache.usage() }),
+    status: () => ({ last, cache: d.pool ? d.pool.usage() : { ...cache.usage(), capBytes: d.capBytes() }, camera: cache.usage(), download: router.status() }),
     reset: () => {
       session.close();
       list.clear();
+      router.reset(); // Baichuan first again (a reboot or a new address may change it)
       // A new camera.id is a new folder: made ready like the first at start
       // (#99). The same folder is left alone: a download may be writing a .part.
       if (dirOf() !== readyDir) {

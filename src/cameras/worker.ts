@@ -27,6 +27,7 @@ import { EventIntake } from '../events/intake';
 import { EventTracker } from '../events/tracker';
 import { cameraContext, logger } from '../log';
 import { createRecordingsSide, type RecordingsSide } from '../recordings/side';
+import { httpDownload } from '../recordings/http-download';
 import type { CachePool } from '../recordings/pool';
 import type { Go2rtc, StreamSource } from '../stills/go2rtc';
 import { FrameGrabber, type Frame } from '../stills/grabber';
@@ -196,6 +197,8 @@ export class CameraWorker extends EventEmitter {
       paused: () => d.storage.paused(),
       noteWritten: (bytes) => d.storage.noteWritten('recordings', bytes, 1, { cam: this.id }),
       onDownload: (o) => d.hooks.onRecordingDownload({ stream: o.stream, result: o.result, priority: o.priority }),
+      // The fallback for a camera that refuses Baichuan (the E1 Outdoor Pro).
+      httpDownload: (path, size, out, hooks) => httpDownload(() => this.client, path, size, out, hooks),
     });
     d.cachePool.add(this.recordings.cache);
     // A reboot (#83): the client and poller are read on use (restart builds
