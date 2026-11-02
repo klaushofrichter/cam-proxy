@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.11.02.1
+
 - Retrieving missing clips from the camera now takes the newest ones first (the most recent matter most), and a check lists them newest first. When storage is full, the usual rules apply: a retrieved clip may push out older clips, never newer ones; the run stops at the first recording older than what storage keeps (`stopped: retention-full`, replacing `max-gb`). Both the check and the retrieval span exactly the clips retention.
 
 ## v2026.11.01.1
