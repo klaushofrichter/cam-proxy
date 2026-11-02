@@ -24,6 +24,11 @@ export function sendOutcome(res: Response, o: { status: number } & Record<string
   res.status(status).json(body);
 }
 
+const hostOutcome = async (p: ReturnType<OnboardingService['changeHost']>): Promise<{ status: number } & Record<string, unknown>> => {
+  const o = await p;
+  return 'json' in o ? { status: o.status, ...o.json } : o;
+};
+
 export function onboardingApi(s: OnboardingService): express.Router {
   const r = express.Router();
   r.param('cam', cameraParam(s.d.cameras, 'admin'));
@@ -39,6 +44,11 @@ export function onboardingApi(s: OnboardingService): express.Router {
   r.post('/cameras', requireLocalAdmin(), async (req, res) => sendOutcome(res, await s.add(req.body, whoOf(req, res))));
   // Remove (offboard) a camera by id (§4.3): local admin only; not :cam (it may run no more).
   r.delete('/cameras/:id', requireLocalAdmin(), async (req, res) => sendOutcome(res, await s.remove(String(req.params.id), whoOf(req, res))));
+  // A configured camera's new address (the same camera, checked with its own
+  // password and trust): local admin only; by id (also a camera whose worker
+  // does not run), or the only camera.
+  r.put('/cameras/:id/host', requireLocalAdmin(), async (req, res) => sendOutcome(res, await hostOutcome(s.changeHost(String(req.params.id), req.body, whoOf(req, res)))));
+  r.put('/camera/host', requireLocalAdmin(), async (req, res) => sendOutcome(res, await hostOutcome(s.changeHost(undefined, req.body, whoOf(req, res)))));
   r.put('/cameras/:cam/password', async (req, res) => sendOutcome(res, await s.savePassword(String(req.params.cam), req.body?.password, whoOf(req, res))));
   return r;
 }

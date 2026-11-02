@@ -1193,6 +1193,62 @@ paths:
         '403': { description: admin_only, local_admin_only }
         '404': { description: not_found (nothing known about that id) }
         '409': { description: config_json (a config.json camera on a several-camera proxy: remove it there, restart, call again) }
+  /control/cameras/{id}/host:
+    put:
+      summary: A configured camera's new address, checked to be the same camera (local admin only)
+      description: >
+        For a camera the DHCP router gave another address (after a power
+        outage), without offboarding it: its password, certificate trust and
+        PTZ positions stay. Only the same camera: over https with a pinned
+        certificate the new address must serve that certificate (measured
+        before any password is sent; a site-CA or public name is verified on
+        the login); the proxy logs in there with the password it already has
+        for the camera (never one from the request; at most 5 attempts per
+        address in 10 minutes, shared with the other password checks); and the
+        model the camera last reported here must match (when one is known
+        since the start; else the trust and the login are the check, and
+        identity.checked says login). Written where this proxy keeps the
+        address: CAMERA_HOST in the env file it manages when the environment
+        sets it (a backup first, atomic), else cameras.<id>.host in
+        overrides.json (config.json is never changed); then the camera's side
+        restarts. One camera-host-change audit record per call (a
+        rate-limited one once per window). A managed token or sign-in answers
+        403 local_admin_only.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [host], properties: { host: { type: string, description: 'the new address or name, optional :port' } } }
+      responses:
+        '200': { description: "{ outcome: changed|unchanged, camera, from, to, stored: env|overrides, identity: { checked: model, model } | { checked: login, model, detail }, plaintext: true for an http camera }; unchanged (the same address) writes nothing" }
+        '400': { description: invalid (the address, or not a camera id), camera_required (PUT /control/camera/host with several cameras) }
+        '401': { description: not signed in }
+        '403': { description: admin_only, local_admin_only }
+        '404': { description: not_found }
+        '409': { description: 'different_camera (expected, found), fingerprint_mismatch (served), not_trusted, move_open, camera_moved, no_address, no_password, env_host or not_available (line: the env line to set by hand)' }
+        '422': { description: camera_refused (the camera at the new address refused this camera's password) }
+        '429': { description: too_many_attempts (Retry-After) }
+        '502': { description: camera_error (the login failed otherwise, e.g. a certificate the camera's trust does not accept) }
+        '503': { description: camera_offline (nothing answered at the new address) }
+  /control/camera/host:
+    put:
+      summary: The only camera's new address (local admin only); as PUT /control/cameras/{id}/host
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [host], properties: { host: { type: string, description: 'the new address or name, optional :port' } } }
+      responses:
+        '200': { description: "{ outcome: changed|unchanged, camera, from, to, stored: env|overrides, identity: { checked: model, model } | { checked: login, model, detail }, plaintext: true for an http camera }; unchanged (the same address) writes nothing" }
+        '400': { description: invalid (the address, or not a camera id), camera_required (PUT /control/camera/host with several cameras) }
+        '401': { description: not signed in }
+        '403': { description: admin_only, local_admin_only }
+        '404': { description: not_found }
+        '409': { description: 'different_camera (expected, found), fingerprint_mismatch (served), not_trusted, move_open, camera_moved, no_address, no_password, env_host or not_available (line: the env line to set by hand)' }
+        '422': { description: camera_refused (the camera at the new address refused this camera's password) }
+        '429': { description: too_many_attempts (Retry-After) }
+        '502': { description: camera_error (the login failed otherwise, e.g. a certificate the camera's trust does not accept) }
+        '503': { description: camera_offline (nothing answered at the new address) }
   /control/cameras/{cam}/onboarding:
     get:
       summary: One camera's onboarding status (admin) (spec 2026-10-30-camera-onboarding-design §4.5)

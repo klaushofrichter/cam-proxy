@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- New: a configured camera's new address without offboarding it (after the DHCP router handed out another one): `PUT /control/cameras/<id>/host` (local admin only) and `scripts/readdress-camera.sh` (`--find` suggests the address). The proxy checks it is the same camera first (its pinned certificate, a login with the password it already has, its model), keeps its password, trust and PTZ positions, and writes the address where it keeps it (`CAMERA_HOST` in the .env file on the Pi, else overrides.json). Audited as `camera-host-change`. With `CAMS_ADMIN_URL` the script also updates the camera's host in cams-admin (unless it is `from-proxy`).
+
+## v2026.10.31.3
+
 - New: `scripts/onboard-camera.sh` and `scripts/offboard-camera.sh` run camera onboarding and offboarding from a shell: probe, the confirmed certificate, the password from stdin, add, time and FTP, ready on the proxy, then registered (adopted) and ready in cams-admin; offboarding the reverse, checked. Tokens and the password are never on a command line or printed. Needs bash, curl and python3.
 
 ## v2026.10.31.2
