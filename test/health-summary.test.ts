@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildHealth, type HealthInput } from '../src/health/summary';
+import { buildHealth, lastInventoryOf, type HealthInput } from '../src/health/summary';
 import { H, input, NOW } from './helpers/health-input';
 
 const item = (h: ReturnType<typeof buildHealth>, id: string) => h.items.find((i) => i.id === id);
@@ -117,6 +117,14 @@ describe('the health summary', () => {
     expect(inv('failed', 'repair')?.text).toBe('events repair: failed');
     expect(inv('cancelled')?.problem).toBe(false);
     expect(item(buildHealth(input({ lastInventory: null })), 'inventory')).toMatchObject({ value: null, text: 'none yet', problem: false });
+  });
+
+  it('inventory: a run that met unreadable SD names is a problem, even when ok', () => {
+    const h = buildHealth(input({ lastInventory: { kind: 'clips', op: 'check', outcome: 'ok', startedAt: NOW, message: 'm', unreadableNames: 3 } }));
+    expect(item(h, 'inventory')).toMatchObject({ value: 'ok', text: 'clips: ok, 3 unreadable SD names', problem: true });
+    expect(item(buildHealth(input({ lastInventory: { kind: 'clips', op: 'check', outcome: 'ok', startedAt: NOW, message: 'm', unreadableNames: 0 } })), 'inventory')).toMatchObject({ text: 'clips: ok', problem: false });
+    expect(lastInventoryOf({ kind: 'clips', startedAt: NOW, outcome: 'ok', message: 'm', counts: { unreadableNames: 1, unknownKinds: 2 } }, 'check')).toEqual({ kind: 'clips', op: 'check', outcome: 'ok', startedAt: NOW, message: 'm', unreadableNames: 3 });
+    expect(lastInventoryOf({ kind: 'stills', startedAt: NOW, outcome: 'ok', message: 'm', counts: {} }, 'repair')).toEqual({ kind: 'stills', op: 'repair', outcome: 'ok', startedAt: NOW, message: 'm' });
   });
 
   it('a figure that is null is left out and never a problem', () => {

@@ -99,7 +99,7 @@ describe('events inventory', () => {
       camera: { stream: 'sub', to: NOW - 300_000, oldestSdDay: '2026-09-30', unknownDays: [] },
     });
     expect(res.counts).toEqual({
-      eventsDays: 30, cameraDays: 31, unknownDays: 0, recordings: 6, timerOnly: 1, spans: 6, matched: 3, missingEvents: 3,
+      eventsDays: 30, cameraDays: 31, unknownDays: 0, recordings: 6, timerOnly: 1, unknownKinds: 0, unreadableNames: 0, spans: 6, matched: 3, missingEvents: 3,
       missingPerson: 1, missingVehicle: 0, missingPet: 1, missingMotion: 1, events: 5, eventsWithoutRecording: 2,
     });
     expect(res.items).toEqual([
@@ -112,6 +112,24 @@ describe('events inventory', () => {
     ]);
     expect(res.top).toEqual([{ date: '2026-10-01', state: 'listed', spans: 5, missing: 3 }]);
     expect(res.message).toBe("3 of 6 recording spans without an event (person 1, pet 1, motion 1) since 2026-09-30 (the SD card's reach), 2 of 5 events without a recording, 0 days unknown");
+  });
+
+  it('a recording whose flags have an unknown layout is neither timer-only nor a span: counted and noted', async () => {
+    const f = fixture();
+    const odd = { ...rec(T('2026-10-01T16:00:00'), []), unknownKinds: true as const };
+    f.recs['2026-10-01'].push(odd);
+    const res = await eventsCheck(deps(camera({ months: MONTHS, recs: f.recs }).deps))(ctx());
+    expect(res.counts).toMatchObject({ recordings: 6, timerOnly: 1, unknownKinds: 1, spans: 6 });
+    expect(res.window.notes).toContain('1 recordings have trigger flags of an unknown layout: their kinds are unknown, so no event is judged for them');
+  });
+
+  it('counts the SD names the camera listing could not read, with a note', async () => {
+    const f = fixture();
+    const cam = camera({ months: MONTHS, recs: f.recs });
+    cam.deps.list.unreadable = (date) => (date === '2026-10-01' ? { count: 1, example: 'RecS09_x.mp4' } : null);
+    const res = await eventsCheck(deps(cam.deps))(ctx());
+    expect(res.counts).toMatchObject({ unreadableNames: 1 });
+    expect(res.window.notes).toContain('1 SD recording names could not be read (for example RecS09_x.mp4): those recordings are not counted. A camera firmware with another name format?');
   });
 
   it('an open event covers a span up to events.maxOpenMin after its start', async () => {

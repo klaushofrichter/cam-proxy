@@ -30,8 +30,47 @@ describe('SD names', () => {
   it('decodes the trigger flags (bit 55 − position)', () => {
     expect(decodeKinds('5514C080000000')).toEqual(['person', 'motion']);
     expect(decodeKinds('55148080000000')).toEqual(['motion']);
-    expect(decodeKinds('nothex')).toEqual([]);
-    expect(decodeKinds('5514C08000000')).toEqual([]); // 13 digits: an unknown name version
+    expect(decodeKinds('nothex')).toBeNull();
+    expect(decodeKinds('5514C08000000')).toBeNull(); // 13 digits: an unknown name version
+  });
+
+  // Measured 2026-11-01/02 on the real cameras (read-only SD listings).
+  // The E1 Outdoor Pro (name version 03): no animal-type field, 7 hex flags.
+  it('E1 Outdoor Pro names: version 03, no animal-type field, 7 hex flags, with and without DST', () => {
+    expect(parseSdName('/mnt/sda/Mp4Record/2026-11-01/RecM03_20261101_070558_070624_6728828_83CE31.mp4')).toEqual({ id: 'RecM03_20261101_070558_070624_6728828_83CE31.mp4', stream: 'main', dst: false, date: '2026-11-01', start: '070558', end: '070624', size: 0x83ce31, kinds: ['motion'] });
+    expect(parseSdName('RecS03_20261101_134721_134751_2B14808_BEDCF.mp4')).toEqual({ id: 'RecS03_20261101_134721_134751_2B14808_BEDCF.mp4', stream: 'sub', dst: false, date: '2026-11-01', start: '134721', end: '134751', size: 0xbedcf, kinds: ['motion'] });
+    expect(parseSdName('RecM03_20261101_134721_134751_6728828_102F507.mp4')).toMatchObject({ stream: 'main', size: 0x102f507, kinds: ['motion'] });
+    expect(parseSdName('RecS03_DST20261030_080922_080959_2B14808_C7076.mp4')).toMatchObject({ stream: 'sub', dst: true, date: '2026-10-30', kinds: ['motion'] });
+    expect(parseSdName('RecM03_DST20261030_080923_080959_6728828_5009AE.mp4')).toMatchObject({ stream: 'main', dst: true, kinds: ['motion'] });
+  });
+
+  it('the 7-digit flags are the 14-digit ones without their 7 trailing zeros (CX820 sub vs E1 sub)', () => {
+    expect(decodeKinds('2B14808')).toEqual(decodeKinds('2B148080000000'));
+    expect(decodeKinds('2B14808')).toEqual(['motion']);
+    expect(decodeKinds('6728828')).toEqual(['motion']);
+    // Same positions from the top: person (17), vehicle (19), pet (20), motion (24).
+    expect(decodeKinds('2B14C08')).toEqual(['person', 'motion']);
+    expect(decodeKinds('2B14908')).toEqual(['vehicle', 'motion']);
+    expect(decodeKinds('2B14888')).toEqual(['pet', 'motion']);
+  });
+
+  it('the other models keep their 14-digit names (measured 2026-10-30 and 11-02)', () => {
+    // RLC-1224A: a pet recording on both streams, then motion.
+    expect(parseSdName('RecM0A_DST20261030_011218_011244_0_7B288A00000000_1C0CE49.mp4')).toMatchObject({ stream: 'main', dst: true, kinds: ['pet'] });
+    expect(parseSdName('RecS0A_DST20261030_011218_011244_0_55148800000000_16F02E.mp4')).toMatchObject({ stream: 'sub', dst: true, kinds: ['pet'] });
+    expect(parseSdName('RecS0A_20261102_061036_061057_0_55148080000000_147E03.mp4')).toMatchObject({ dst: false, kinds: ['motion'] });
+    // CX820: motion; a timer-and-motion recording is motion (timer is no kind).
+    expect(parseSdName('RecM0A_20261102_065949_070025_0_67328280000000_1241655.mp4')).toMatchObject({ stream: 'main', kinds: ['motion'] });
+    expect(parseSdName('RecS0A_DST20261025_235552_235631_0_2B148180000000_996AA.mp4')).toMatchObject({ stream: 'sub', kinds: ['motion'] });
+  });
+
+  it('flags of an unknown length: kinds unknown (unknownKinds), not timer-only', () => {
+    expect(decodeKinds('5514C08000000')).toBeNull(); // 13 digits
+    expect(decodeKinds('5514C08')).toEqual(['person', 'motion']);
+    const n = parseSdName('RecS0B_20261101_070556_070624_2B148080_C6A1C.mp4')!; // 8 digits
+    expect(n).toMatchObject({ stream: 'sub', kinds: [], unknownKinds: true });
+    // Known layouts carry no unknownKinds key at all.
+    expect('unknownKinds' in parseSdName('RecS03_20261101_070556_070624_2B14808_C6A1C.mp4')!).toBe(false);
   });
 
   it('rejects names that are not SD recordings', () => {

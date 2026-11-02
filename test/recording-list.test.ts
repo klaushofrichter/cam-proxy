@@ -42,6 +42,24 @@ function fake(files: Record<string, string[]>, o: { fail?: unknown[]; time?: () 
   return { list, calls, clock, slept, maxRunning: () => maxRunning };
 }
 
+describe('RecordingList.unreadable', () => {
+  it('counts the names of a day\'s Search that are no SD recording name, with one example (flags of an unknown layout still read)', async () => {
+    const odd = '/mnt/sda/Mp4Record/2026-10-01/RecS0B_DST20261001_090000_090030_2B148080_3E8.mp4'; // 8-digit flags: unknownKinds
+    const x = fake({ '2026-10-01|sub': [file('2026-10-01', '080000', '080030'), '/mnt/sda/Mp4Record/2026-10-01/RecS0A_DST20261001_x.mp4', odd] });
+    expect(x.list.unreadable('2026-10-01', 'sub')).toBeNull(); // not searched yet
+    const r = await x.list.day('2026-10-01', 'sub');
+    expect(r.map((e) => e.id)).toEqual(['RecS0A_DST20261001_080000_080030_0_5514C080000000_3E8.mp4', 'RecS0B_DST20261001_090000_090030_2B148080_3E8.mp4']);
+    expect(x.list.unreadable('2026-10-01', 'sub')).toEqual({ count: 1, example: 'RecS0A_DST20261001_x.mp4' });
+    expect(x.list.unreadable('2026-10-01', 'main')).toBeNull();
+  });
+
+  it('a day whose names all read has none', async () => {
+    const x = fake({ '2026-10-01|sub': [file('2026-10-01', '080000', '080030')] });
+    await x.list.day('2026-10-01', 'sub');
+    expect(x.list.unreadable('2026-10-01', 'sub')).toEqual({ count: 0, example: null });
+  });
+});
+
 describe('RecordingList.range', () => {
   it('one Search per camera-local day, merged, sorted, filtered to the window, without recordings still being written', async () => {
     const x = fake({
