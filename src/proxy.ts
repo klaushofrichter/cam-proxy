@@ -917,6 +917,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       recordingsCache,
       sseClients: sse.clients(),
       lastInventory: await lastInventory(),
+      // The post-move checks (#311): the Move check item. moveSync is set up below; health is only asked once the proxy runs.
+      moveSyncs: syncOn ? moveSync.list() : [],
       reading: hostMonitor.reading(),
       archive: archive.health(),
       // The site CA (spec §10.5): only with tls.site (the Pi has no item).
