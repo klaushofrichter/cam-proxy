@@ -3,13 +3,22 @@
 // the client's WebSocket on the proxy's own address. The client gets one text
 // message {"type":"mse","value":"video/mp4; codecs=\"…\""} (go2rtc's own,
 // forwarded only when the MIME type is valid), then binary fMP4 as go2rtc
-// sends it. Nothing else go2rtc says reaches the client: its errors can carry
-// the RTSP URL with the camera password. A failure is
-// {"type":"error","value":"stream_unavailable"} and close 1011.
+// sends it, except that the mse message and the init segment wait for the
+// first video fragment: when its parameter sets differ from the init's
+// (go2rtc's placeholder for a camera whose SDP has none), the init and the
+// codec are rewritten for them (src/stream/mse-init.ts). Nothing else go2rtc
+// says reaches the client: its errors can carry the RTSP URL with the camera
+// password. A failure is {"type":"error","value":"stream_unavailable"} and
+// close 1011.
 import WebSocket from 'ws';
 import { logger } from '../log';
+import { InitHold, type Out } from './mse-init';
 
-export const LIVE = { maxPerCamera: 8, maxTotal: 32, maxBufferedBytes: 8 * 1024 * 1024, startMs: 10_000 } as const;
+// initHoldMs: how long the start waits for the first video fragment. go2rtc
+// sends the init at once and the first fragment at the next keyframe (seconds
+// later; a player can show nothing before it anyway). A stream without one
+// in time gets the original.
+export const LIVE = { maxPerCamera: 8, maxTotal: 32, maxBufferedBytes: 8 * 1024 * 1024, startMs: 10_000, initHoldMs: 10_000 } as const;
 export const DEFAULT_CODECS = 'avc1.640029,avc1.64002A,avc1.640033,hvc1.1.6.L153.B0,mp4a.40.2,mp4a.40.5';
 export const MSE_MIME = /^video\/mp4; codecs="[A-Za-z0-9.,]{1,512}"$/;
 // How long a closed upstream may take to finish its close handshake before it is dropped.
@@ -36,6 +45,8 @@ interface Relayed { client: WebSocket; end: (why: EndWhy) => void }
 
 export class LiveRelay {
   private readonly active = new Map<string, Set<Relayed>>();
+  // Cameras whose init could not be checked (logged once each).
+  private readonly unfixedLogged = new Set<string>();
   private readonly now: () => number;
 
   constructor(o: { now?: () => number } = {}) {
@@ -75,6 +86,7 @@ export class LiveRelay {
       if (ended) return;
       ended = true;
       clearTimeout(startTimer);
+      clearTimeout(holdTimer);
       set.delete(entry);
       if (set.size === 0 && this.active.get(info.cam) === set) this.active.delete(info.cam);
       closeUpstream();
@@ -94,6 +106,32 @@ export class LiveRelay {
 
     const startTimer = setTimeout(() => end('error'), LIVE.startMs);
     startTimer.unref();
+    const hold = new InitHold(LIVE.maxBufferedBytes);
+    let holdTimer: NodeJS.Timeout | undefined;
+    // What the hold lets out, in order; false once the relay ended (a slow client).
+    const deliver = (out: Out[]): boolean => {
+      for (const o of out) {
+        if (ended) return false;
+        if ('text' in o) {
+          if (!MSE_MIME.test(o.text)) return end('error'), false;
+          client.send(JSON.stringify({ type: 'mse', value: o.text }));
+          continue;
+        }
+        if (client.bufferedAmount + o.bin.length > LIVE.maxBufferedBytes) return end('slow'), false;
+        bytes += o.bin.length;
+        client.send(o.bin, { binary: true });
+      }
+      return true;
+    };
+    const settled = () => {
+      clearTimeout(holdTimer);
+      const why = hold.done;
+      if (why === 'fixed') logger.debug({ cameraId: info.cam, stream: info.stream, width: hold.fixed!.width, height: hold.fixed!.height, codec: hold.fixed!.codec }, 'live_init_fixed');
+      else if (why !== 'same' && why !== 'no_video' && !this.unfixedLogged.has(info.cam)) {
+        this.unfixedLogged.add(info.cam);
+        logger.warn({ cameraId: info.cam, stream: info.stream, why }, 'live_init_unchecked');
+      }
+    };
 
     up.on('open', () => up.send(JSON.stringify({ type: 'mse', value: codecs })));
     up.on('message', (data: Buffer, isBinary: boolean) => {
@@ -109,14 +147,23 @@ export class LiveRelay {
         if (!started && m?.type === 'mse' && typeof m.value === 'string' && MSE_MIME.test(m.value)) {
           started = true;
           clearTimeout(startTimer);
-          return void client.send(JSON.stringify({ type: 'mse', value: m.value }));
+          return void deliver(hold.text(m.value));
         }
         return end('error');
       }
       if (!started) return; // media before the MIME type: never sent on
-      if (client.bufferedAmount + data.length > LIVE.maxBufferedBytes) return end('slow');
-      bytes += data.length;
-      client.send(data, { binary: true });
+      const wasDone = hold.done !== null;
+      const out = hold.binary(data);
+      if (hold.holding && !holdTimer) {
+        holdTimer = setTimeout(() => {
+          const late = hold.expire();
+          settled();
+          deliver(late);
+        }, LIVE.initHoldMs);
+        holdTimer.unref();
+      }
+      if (!wasDone && hold.done !== null) settled();
+      deliver(out);
     });
     up.on('close', () => end('error'));
     up.on('error', () => end('error'));

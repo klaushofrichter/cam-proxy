@@ -41,7 +41,7 @@
     "@types/ws": "^8.18.2",
     "ajv": "^8.20.0",
     "basic-ftp": "^6.2.3",
-    "cam-sim": "https://github.com/klaushofrichter/cam-sim/releases/download/v2026.11.02.3/cam-sim-v2026.11.02.3.tgz",
+    "cam-sim": "https://github.com/klaushofrichter/cam-sim/releases/download/v2026.11.02.4/cam-sim-v2026.11.02.4.tgz",
     "supertest": "^7.3.1",
     "svelte": "^5.57.2",
     "tsx": "^4.23.15",
