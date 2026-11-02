@@ -66,7 +66,7 @@ describe('POST still-checks: the request', () => {
     [1.5, 'at is a whole number (unix ms)'],
     [-1000, 'at is a whole number (unix ms)'],
     [Number.MAX_SAFE_INTEGER + 1, 'at is a whole number (unix ms)'],
-    [Date.now() - 60_000 + 1, 'at is a whole second'],
+    [Math.floor(Date.now() / 1000) * 1000 - 60_000 + 1, 'at is a whole second'], // never a whole second
   ])('400 invalid for at %j', async (at, detail) => {
     const before = records().length;
     const r = await post(at);

@@ -104,6 +104,7 @@
               "cpuTemp",
               "underVoltage",
               "inventory",
+              "moveSync",
               "version"
             ]
           },
@@ -1238,6 +1239,7 @@
                     "cpuTemp",
                     "underVoltage",
                     "inventory",
+                    "moveSync",
                     "version"
                   ]
                 },

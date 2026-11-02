@@ -2,7 +2,15 @@
 
 ## Unreleased
 
+- New health item "Move check" (`moveSync`): the check of a moved camera against its SD card (#311) now shows in the health summary, so on the Status page, the Pi display and the proxy's status in cams-admin. Running or waiting for the camera: a warning. Clips or events still missing, failed or gave up: a problem, with the count and the reason, for 7 days. Done with nothing missing: shown for 24 h.
+- Test fix: a still-checks test picked a time that was a whole second about once in 1000 runs.
+
+## v2026.11.02.6
+
 - After a camera move, the proxy that has the camera now checks it against the camera's own SD card and fetches what neither proxy has (a clip recorded while the camera switched over, an FTP gap around the move): the clips check with the camera and the clips repair in a loop until nothing is missing (newest first, within retention, the usual space rules), then the events check and repair. On the receiving proxy it runs when the move finishes; on the original proxy after a cancel past the switch-over, once the copy back is done. With the camera offline it tries again later (up to 24 hours), also after a restart. The outcome (missing, fetched, still missing, why it stopped) is kept with the move (`GET /control/moves/syncs`) and audited as `move-sync` (start, end, give-up).
+
+## v2026.11.02.5
+
 - Live video now shows the camera's real picture size. For cameras whose stream announcement leaves out the picture parameters (the E1 Outdoor Pro and RLC-1224A), go2rtc started the browser on a 128×96 placeholder, so the E1's 16:9 sub stream could show squeezed as 640×480. The proxy now takes the parameters from the first keyframe and fixes the stream header (H.264 and H.265).
 - Changing a camera's encoding now waits for the camera's restart. All three camera models restart about 40–75 s after an encoding change; the change used to answer 502 although it was applied. Now the proxy waits up to 180 s and answers with the new settings (the audit notes the restart and how long it took), or 504 `camera_restarting` saying the change was sent. While it restarts, the camera's error reads `camera_restarting`.
 - The status's stream sizes are read again after any camera restart or missed check, not only after a change through the API (they showed the old main size for minutes).
