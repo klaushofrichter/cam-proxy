@@ -130,6 +130,7 @@ export class CameraWorker extends EventEmitter {
   private readonly backoff = new Backoff();
   private cancelRetry: (() => void) | undefined;
   private onlineSince: number | null = null;
+  private restartUntil = 0;
   // Every record this camera's code writes names the camera (spec §5.2).
   private readonly audit: Pick<AuditLog, 'write'>;
   // What the camera can do (spec 2026-10-30-ptz-capabilities-design §4); null until first read.
@@ -244,9 +245,23 @@ export class CameraWorker extends EventEmitter {
     return this.phaseNow;
   }
 
-  // The worker's own error (Task 6: supervision), else the camera's last check error.
+  // The worker's own error (Task 6: supervision), else the camera's last check
+  // error; camera_restarting while it is offline in a restart the proxy
+  // started (expectRestart).
   error(): string | null {
+    if (!this.errorNow && this.restartExpected()) return 'camera_restarting';
     return this.errorNow ?? this.status.state().error ?? null;
+  }
+
+  // The camera restarts on its own after a change the proxy sent (SetEnc,
+  // measured 2026-11-02): for up to `ms` its being offline is that restart,
+  // not a failure. Ends when it is back online.
+  expectRestart(ms: number): void {
+    this.restartUntil = Date.now() + ms;
+  }
+
+  private restartExpected(): boolean {
+    return this.restartUntil > Date.now() && !this.status.state().online;
   }
 
   name(): string {
@@ -398,8 +413,14 @@ export class CameraWorker extends EventEmitter {
     this.client = new ReolinkClient({ id: c.id, host: c.host, protocol: c.protocol, tlsServername: c.tlsName, user: c.user, password: d.password() });
     if (t) this.client.setTrust(t);
     this.status = new StatusPoller(this.client, c.statusPollS);
-    this.status.on('change', (s: CameraState) => d.log.append(c.id, 'camera-status', { online: s.online, reason: s.error ?? null, clockOffsetMs: s.clockOffsetMs ?? null }));
+    this.status.on('change', (s: CameraState) => d.log.append(c.id, 'camera-status', { online: s.online, reason: !s.online && this.restartUntil > Date.now() ? 'camera_restarting' : (s.error ?? null), clockOffsetMs: s.clockOffsetMs ?? null }));
     this.status.on('check', (x: { ok: boolean; ms: number; error?: string }) => d.hooks.onCameraCheck(x));
+    // The streams (GetEnc) are asked again after a missed check or a
+    // reconnect: a camera that restarted may stream something else now (a
+    // SetEnc applies with the restart; measured 2026-11-02).
+    this.status.on('check', (x: { ok: boolean }) => {
+      if (!x.ok) this.streams.forget();
+    });
     // Another model or firmware may do other things (spec 2026-10-30-ptz-capabilities-design §4).
     this.status.on('device', () => void this.refreshCapabilities());
     this.status.on('name', (name: string) => {
@@ -413,6 +434,8 @@ export class CameraWorker extends EventEmitter {
       // The camera's NTP server on the host (spec §14.2, Ruling P5-7): at most once an hour.
       if (s.online) this.ptz.positions.invalidate();
       if (s.online) void this.refreshCapabilities();
+      if (s.online) this.streams.forget();
+      if (s.online) this.restartUntil = 0;
       if (s.online) void this.syncNtp().catch((err: Error) => logger.warn({ cameraId: this.id, err: err.message }, 'camera_ntp_failed'));
       // Online for 10 minutes: the next failure starts the backoff at 5 s again.
       this.onlineSince = s.online ? (this.onlineSince ?? Date.now()) : null;
