@@ -31,7 +31,7 @@ export function refuseLive(client: WebSocket, code: LiveError, closeCode: 1011 |
   client.close(closeCode, code);
 }
 
-type EndWhy = 'error' | 'slow' | 'shutdown' | 'client';
+type EndWhy = 'error' | 'slow' | 'shutdown' | 'client' | 'restarting';
 interface Relayed { client: WebSocket; end: (why: EndWhy) => void }
 
 export class LiveRelay {
@@ -80,6 +80,7 @@ export class LiveRelay {
       closeUpstream();
       if (why === 'error') refuseLive(client, 'stream_unavailable', 1011);
       else if (why === 'slow') client.close(4008, 'slow_consumer');
+      else if (why === 'restarting') refuseLive(client, 'camera_restarting', 1013);
       else if (why === 'shutdown') {
         client.close(1001, 'shutdown');
         setTimeout(() => client.terminate(), 1_000).unref();
@@ -123,6 +124,12 @@ export class LiveRelay {
     client.on('error', () => end('client'));
     // A client sends nothing; whatever it sends is dropped.
     client.on('message', () => undefined);
+  }
+
+  // A camera's picture changed (its encoding): its clients are told
+  // camera_restarting (1013, try again) and reconnect to the new stream.
+  closeCamera(cam: string): void {
+    for (const r of [...(this.active.get(cam) ?? [])]) r.end('restarting');
   }
 
   // Shutdown: every relayed socket is closed (an upgraded socket is no longer the HTTP server's).

@@ -6,6 +6,8 @@ export interface StreamInfo { codec: 'h264' | 'h265'; width: number; height: num
 export interface Streams { main: StreamInfo | null; sub: StreamInfo | null }
 
 export type CameraCommand = <T>(cmd: string, param?: object) => Promise<T>;
+// A Get with action 1: its value with the camera's initial and range.
+export type RangeCommand = <T>(cmd: string, param?: object) => Promise<{ value: T; initial?: unknown; range?: unknown }>;
 
 interface RawStream { vType?: string; width?: number; height?: number; frameRate?: number }
 
@@ -22,22 +24,34 @@ const FAILED_MS = 30_000;
 export class StreamsReader {
   private enc: { at: number; ok: boolean; streams: Streams } | undefined;
   private asking: Promise<Streams> | undefined;
+  private gen = 0;
 
   constructor(
     private readonly command: CameraCommand,
     private readonly now: () => number = Date.now,
   ) {}
 
+  // The next read asks the camera (after a change of its encoding).
+  // A read in flight then is not kept, and not shared with later reads.
+  forget(): void {
+    this.enc = undefined;
+    this.asking = undefined;
+    this.gen++;
+  }
+
   read(): Promise<Streams> {
     const e = this.enc;
     if (e && this.now() - e.at < (e.ok ? OK_MS : FAILED_MS)) return Promise.resolve(e.streams);
-    this.asking ??= this.ask().finally(() => {
-      this.asking = undefined;
+    if (this.asking) return this.asking;
+    const p = this.ask().finally(() => {
+      if (this.asking === p) this.asking = undefined;
     });
-    return this.asking;
+    this.asking = p;
+    return p;
   }
 
   private async ask(): Promise<Streams> {
+    const gen = this.gen;
     let ok = false;
     let streams: Streams = { main: null, sub: null };
     try {
@@ -47,7 +61,7 @@ export class StreamsReader {
     } catch {
       // extra information: the status stands without it
     }
-    this.enc = { at: this.now(), ok, streams };
+    if (gen === this.gen) this.enc = { at: this.now(), ok, streams };
     return streams;
   }
 }

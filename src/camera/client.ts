@@ -77,6 +77,9 @@ interface CameraStatus {
 interface ReolinkReply {
   code: number;
   value?: Record<string, unknown>;
+  // With action 1: the factory value and the allowed values, next to value.
+  initial?: unknown;
+  range?: unknown;
   error?: { rspCode?: number; detail?: string };
 }
 
@@ -162,9 +165,9 @@ export class ReolinkClient {
     return (this.opts.now ?? Date.now)();
   }
 
-  private async post(cmd: string, param: object, token?: string): Promise<ReolinkReply> {
+  private async post(cmd: string, param: object, token?: string, action: 0 | 1 = 0): Promise<ReolinkReply> {
     const path = `/cgi-bin/api.cgi?cmd=${encodeURIComponent(cmd)}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
-    const body = JSON.stringify([{ cmd, action: 0, param }]);
+    const body = JSON.stringify([{ cmd, action, param }]);
     if (this.refusal) throw new CameraError('camera_error', `no trusted certificate for this camera: ${this.refusal}`);
     this.warnUnverified();
     return this.gate.run(async () => {
@@ -240,10 +243,20 @@ export class ReolinkClient {
   }
 
   async command<T>(cmd: string, param: object = {}): Promise<T> {
+    return (await this.reply(cmd, param, 0)).value as T;
+  }
+
+  // A Get with action 1: the value plus the camera's `initial` and `range`.
+  async commandWithRange<T>(cmd: string, param: object = {}): Promise<{ value: T; initial?: unknown; range?: unknown }> {
+    const r = await this.reply(cmd, param, 1);
+    return { value: r.value as T, initial: r.initial, range: r.range };
+  }
+
+  private async reply(cmd: string, param: object, action: 0 | 1): Promise<ReolinkReply> {
     for (let attempt = 0; attempt < 2; attempt++) {
       const token = await this.tokenForRequest();
-      const reply = await this.post(cmd, param, token);
-      if (reply.code === 0) return reply.value as T;
+      const reply = await this.post(cmd, param, token, action);
+      if (reply.code === 0) return reply;
       if (attempt === 0 && AUTH_RSP_CODES.has(reply.error?.rspCode ?? 0)) {
         this.clearTokenIfCurrent(token);
         continue;

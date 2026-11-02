@@ -148,8 +148,8 @@ describe('camera settings for clients', () => {
   });
 
   it('answers 404 for an unknown section and an unknown camera', async () => {
-    expect([(await put('encoding', {})).status, (await put('encoding', {})).body.error]).toEqual([404, 'not_found']);
-    expect((await get('/encoding')).status).toBe(404);
+    expect([(await put('audio', {})).status, (await put('audio', {})).body.error]).toEqual([404, 'not_found']);
+    expect((await get('/audio')).status).toBe(404);
     expect((await request(x.p.base).get('/api/cameras/nope/settings').set(auth())).status).toBe(404);
   });
 });
