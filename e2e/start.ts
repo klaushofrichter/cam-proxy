@@ -1,4 +1,5 @@
 // The e2e servers: a cam-sim and a cam-proxy pointed at it, in one process.
+import 'reflect-metadata'; // before cam-sim: its selfsigned runs on our @peculiar/x509 3 (package.json overrides)
 import dgram from 'dgram';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
