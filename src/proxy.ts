@@ -59,6 +59,7 @@ import { ptzApi } from './api/ptz-api';
 import { cameraCallsApi } from './api/camera-calls-api';
 import { liveUpgrade } from './api/live-upgrade';
 import { LiveRelay } from './stream/live';
+import { ExtFeed } from './stream/ext-feed';
 import { LiveSources } from './stream/live-sources';
 import { clientApi } from './api/client-api';
 import { stillChecksApi } from './api/still-checks-api';
@@ -154,6 +155,8 @@ export interface Proxy {
   readonly onboarding: OnboardingService;
   // Live video relayed to clients (spec 2026-10-30-camera-onboarding-design §10.3).
   readonly live: LiveRelay;
+  // The ext stream's loopback FLV feed for go2rtc (src/stream/ext-feed.ts).
+  readonly extFeed: ExtFeed;
   // The go2rtc streams live clients hold (#296).
   readonly liveSources: LiveSources;
   // The camera certificates of the site CA (spec §10.1.3); undefined without tls.site (the Pi). Test seam: tick().
@@ -1546,7 +1549,14 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   let server: http.Server | undefined;
   // Live video: a WebSocket upgrade on both servers (no new port).
   const live = new LiveRelay();
-  const onUpgrade = liveUpgrade({ access, cameras: cams, relay: live, sources: liveSources });
+  // ext only for a camera whose capabilities list it, from its own client (its token).
+  const extFeed = new ExtFeed({
+    open: (cam) => {
+      const w = cams.get(cam);
+      return w && w.capabilities()?.live?.includes('ext') ? w.client.openLiveFlv() : null;
+    },
+  });
+  const onUpgrade = liveUpgrade({ access, cameras: cams, relay: live, sources: liveSources, extUrl: (cam) => extFeed.url(cam) });
   let processRestart: Promise<unknown> | undefined;
   let restarting: Promise<void> | undefined;
   let stopPromise: Promise<void> | undefined;
@@ -1556,6 +1566,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     },
     running,
     app,
+    extFeed,
     catalog,
     log,
     get status() {
@@ -1614,6 +1625,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       }
       // go2rtc an earlier process left behind (killed hard) would hold the ports.
       if (cams.list().some((w) => w.cam().stills.enabled)) await reapOrphanGo2rtc();
+      await extFeed.listen();
       startGo2rtc();
       await Promise.all(cams.list().map((w) => w.start()));
       await startClips();
@@ -1729,6 +1741,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       clearInterval(expectedTimer);
       // Upgraded sockets are no longer the servers': closed here.
       live.closeAll();
+      await extFeed.close();
       const s = server;
       if (s) {
         s.closeAllConnections();

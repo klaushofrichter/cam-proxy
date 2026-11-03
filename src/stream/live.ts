@@ -30,8 +30,9 @@ export function validCodecs(v: unknown): string | null {
   return typeof v === 'string' && /^[A-Za-z0-9.,]{1,512}$/.test(v) ? v : null;
 }
 
-export type LiveStream = 'sub' | 'main';
-export type LiveError = 'stream_unavailable' | 'camera_restarting' | 'camera_offline' | 'too_many_streams';
+// ext: the third stream (the app's Balanced), on a camera whose capabilities list it.
+export type LiveStream = 'sub' | 'main' | 'ext';
+export type LiveError = 'stream_unavailable' | 'stream_not_offered' | 'camera_restarting' | 'camera_offline' | 'too_many_streams';
 
 // Tells the client why and closes (1011 for a failure of the stream, 1013 "try again later" for a state).
 export function refuseLive(client: WebSocket, code: LiveError, closeCode: 1011 | 1013): void {

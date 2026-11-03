@@ -81,6 +81,30 @@ describe('the live upgrade: the camera\'s state, over the socket', () => {
     expect(p.proxy.go2rtcPid()).toBeUndefined();
   });
 
+  it('ext of a camera without it (the RLC-1224A: live ver 2), or capabilities not read yet, is stream_not_offered (1011); nothing held', async () => {
+    const w = p.proxy.cameras.get('cam1')!;
+    expect(w.capabilities()?.live).toEqual(['main', 'sub']);
+    const acquire = vi.spyOn(p.proxy.liveSources, 'acquire');
+    const caps = vi.spyOn(w, 'capabilities');
+    try {
+      const notOffered = { messages: [JSON.stringify({ type: 'error', value: 'stream_not_offered' })], code: 1011, reason: 'stream_not_offered' };
+      expect(await open(`${LIVE_PATH}?stream=ext`)).toEqual(notOffered);
+      caps.mockReturnValue(null);
+      expect(await open(`${LIVE_PATH}?stream=ext`)).toEqual(notOffered);
+      // An older client copy without live: main and sub only.
+      caps.mockReturnValue({ schema: 1, ptz: null });
+      expect(await open(`${LIVE_PATH}?stream=ext`)).toEqual(notOffered);
+      expect(acquire).not.toHaveBeenCalled();
+      // A camera with ext gets past the check (here: no go2rtc to be had).
+      caps.mockReturnValue({ schema: 1, ptz: null, live: ['main', 'ext', 'sub'] });
+      expect(await open(`${LIVE_PATH}?stream=ext`)).toEqual(refused('stream_unavailable'));
+      expect(acquire).toHaveBeenCalledTimes(1);
+    } finally {
+      caps.mockRestore();
+      acquire.mockRestore();
+    }
+  });
+
   it('a restarting camera is camera_restarting', async () => {
     const w = p.proxy.cameras.get('cam1')!;
     const spy = vi.spyOn(w, 'phase').mockReturnValue('restarting');

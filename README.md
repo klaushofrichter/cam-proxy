@@ -422,7 +422,7 @@ while one not yet cached counts as a normal request); more answer 429
 ```sh
 api() { curl -s -H "Authorization: Bearer $CAMPROXY_TOKEN" "http://localhost:8480/api$1"; }
 api /cameras
-# [{"id":"cam1","name":"Backyard Left","online":true,"lastEventTs":1790000000000,"stream":{"up":true,"lastFrameTs":1790000000000},"publicUrl":null,"address":"192.168.1.20","error":null,"features":["sse-cam-list","ptz","camera-calls"],"capabilities":{"schema":1,"ptz":null}}]
+# [{"id":"cam1","name":"Backyard Left","online":true,"lastEventTs":1790000000000,"stream":{"up":true,"lastFrameTs":1790000000000},"publicUrl":null,"address":"192.168.1.20","error":null,"features":["sse-cam-list","ptz","camera-calls"],"capabilities":{"schema":1,"ptz":null,"live":["main","sub"]}}]
 # address: the camera's host as the proxy runs it (cams reaches the camera there)
 # every camera of this proxy, config order; error: null when fine; features: what this proxy supports (sse-cam-list: ?cam=a,b; ptz: the PTZ API;
 # camera-calls: status, snapshot, live, settings, light, reboot for cams)
@@ -590,13 +590,27 @@ the camera. Audited (`camera-reboot`).
 
 ### Live video
 
-`GET /api/cameras/{cam}/live?stream=sub|main&codecs=…` as a WebSocket
+`GET /api/cameras/{cam}/live?stream=sub|main|ext&codecs=…` as a WebSocket
 upgrade on the proxy's own HTTP/HTTPS address (no new port, no WebRTC or
 UDP), relayed from the proxy's go2rtc. A camera with stills off gets its
 go2rtc stream with its first live client and loses it after the last; with
 stills off on every camera, go2rtc itself runs only while someone watches
 (`go2rtc.binary` must be installed). `sub` by default, `main` on request (H.265 on most
-cameras). `Authorization: Bearer <client token>` only: no session cookie, and
+cameras). `ext`, the third stream (the Reolink app's *Balanced*; H.264
+896×512 on the CX820), only for a camera whose `capabilities.live` lists it:
+those whose GetAbility `live` ver is 1 (main + ext + sub: the CX820 and the
+E1 Outdoor Pro; the RLC-1224A's ver 2 has no ext). The camera has ext on
+HTTP-FLV only (CX820, measured 2026-11-03: every RTSP ext path answers 404;
+`/flv?…stream=channel0_ext.bcs&token=…` works, also with RTMP off), and that
+URL needs a login token. The token never goes to go2rtc: go2rtc's
+`<cam>_ext` (added through its API with the first ext client) reads the
+proxy's own feed on `127.0.0.1` (`src/stream/ext-feed.ts`, a random port and
+a random key of the process), and the feed opens the camera's FLV with the
+camera client's token (renewed before its lease ends; a refused token logs
+in again once). go2rtc's output is masked for the key. ext of another camera, or
+before its capabilities were read, is `{"type":"error","value":"stream_not_offered"}`
+and close 1011; an ext that doesn't start is `stream_unavailable` as for the
+others. `Authorization: Bearer <client token>` only: no session cookie, and
 a token in the URL answers 400.
 
 The protocol (MSE):
@@ -635,8 +649,12 @@ Each camera item of `GET /api/cameras` carries `capabilities`, what that
 camera can do, in the proxy's own terms (no camera maker's commands):
 
 ```json
-"capabilities": { "schema": 1, "ptz": { "move": true, "zoom": true, "focus": true, "speed": true, "positions": { "max": 20 } } }
+"capabilities": { "schema": 1, "ptz": { "move": true, "zoom": true, "focus": true, "speed": true, "positions": { "max": 20 } }, "live": ["main", "ext", "sub"] }
 ```
+
+`live` lists the [live streams](#live-video) the camera offers, best first:
+`["main", "ext", "sub"]` when it has the third stream (ext, *Balanced*), else
+`["main", "sub"]`.
 
 `ptz` is `null` for a camera that can't move; `positions` is there when the
 camera can store positions; `capabilities` is `null` until the camera was

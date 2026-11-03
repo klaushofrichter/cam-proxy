@@ -3,7 +3,8 @@
 // new port, bearer token only. Refusals before the upgrade are plain HTTP
 // answers with a JSON body; the camera's state after it is told over the
 // socket (a client such as cams's WebSocket can't read a refused upgrade's
-// status), as {"type":"error","value":<code>} and close 1013.
+// status), as {"type":"error","value":<code>} and close 1013 (1011 for
+// stream_not_offered: ext asked of a camera without it).
 import type { IncomingMessage } from 'http';
 import type { Duplex } from 'stream';
 import { STATUS_CODES } from 'http';
@@ -44,7 +45,8 @@ function perMinuteCounter(limit: number, now: () => number) {
 }
 
 // `sources`: the go2rtc stream for a camera, also with stills off (#296).
-export function liveUpgrade(d: { access: AccessDeps; cameras: CameraRegistry; relay: LiveRelay; sources: Pick<LiveSources, 'acquire' | 'release'>; now?: () => number }): (req: IncomingMessage, socket: Duplex, head: Buffer) => void {
+// `extUrl`: the ext stream's loopback feed for go2rtc (src/stream/ext-feed.ts), undefined when it doesn't run.
+export function liveUpgrade(d: { access: AccessDeps; cameras: CameraRegistry; relay: LiveRelay; sources: Pick<LiveSources, 'acquire' | 'release'>; extUrl?: (cam: string) => string | undefined; now?: () => number }): (req: IncomingMessage, socket: Duplex, head: Buffer) => void {
   const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: 64 * 1024 });
   const allow = perMinuteCounter(LIVE_UPGRADES_PER_MINUTE, d.now ?? Date.now);
   return (req, socket, head) => {
@@ -72,12 +74,16 @@ export function liveUpgrade(d: { access: AccessDeps; cameras: CameraRegistry; re
     if (!w) return answer(socket, 404, { error: 'not_found' });
     const stream = url.searchParams.get('stream') ?? 'sub';
     const codecs = validCodecs(url.searchParams.get('codecs') ?? undefined);
-    if ((stream !== 'sub' && stream !== 'main') || url.searchParams.getAll('stream').length > 1 || codecs === null) return answer(socket, 400, { error: 'invalid' });
+    if ((stream !== 'sub' && stream !== 'main' && stream !== 'ext') || url.searchParams.getAll('stream').length > 1 || codecs === null) return answer(socket, 400, { error: 'invalid' });
     const full = () => d.relay.count(w.id) >= LIVE.maxPerCamera || d.relay.count() >= LIVE.maxTotal;
     wss.handleUpgrade(req, socket, head, (client) => {
       if (w.phase() === 'restarting') return refuseLive(client, 'camera_restarting', 1013);
       if (!w.status.state().online) return refuseLive(client, 'camera_offline', 1013);
       if (full()) return refuseLive(client, 'too_many_streams', 1013);
+      // ext only on a camera whose capabilities list it (GetAbility live ver
+      // 1); not read yet counts as not offered. Told over the socket, as a
+      // state of the camera, so a client can fall back to sub.
+      if (stream === 'ext' && !w.capabilities()?.live?.includes('ext')) return refuseLive(client, 'stream_not_offered', 1011);
       // The camera's go2rtc stream: the stills one, or one started for live clients.
       void d.sources.acquire(w.id).then((go2rtc) => {
         if (!go2rtc) return refuseLive(client, 'stream_unavailable', 1013);
@@ -85,7 +91,14 @@ export function liveUpgrade(d: { access: AccessDeps; cameras: CameraRegistry; re
         if (client.readyState !== WebSocket.OPEN) return giveBack();
         // Others may have come in while it started.
         if (full()) return (giveBack(), refuseLive(client, 'too_many_streams', 1013));
-        d.relay.relay(client, go2rtc.wsUrl(w.id, stream), codecs, { cam: w.id, stream, onEnd: giveBack });
+        if (stream !== 'ext') return d.relay.relay(client, go2rtc.wsUrl(w.id, stream), codecs, { cam: w.id, stream, onEnd: giveBack });
+        // ext: go2rtc's <cam>_ext reads the proxy's feed (the camera's FLV with the proxy's token).
+        const url = d.extUrl?.(w.id);
+        if (!url) return (giveBack(), refuseLive(client, 'stream_unavailable', 1011));
+        void go2rtc.ensureExt(w.id, url).then(
+          () => (client.readyState === WebSocket.OPEN ? d.relay.relay(client, go2rtc.wsUrl(w.id, 'ext'), codecs, { cam: w.id, stream, onEnd: giveBack }) : giveBack()),
+          () => (giveBack(), refuseLive(client, 'stream_unavailable', 1011)),
+        );
       });
     });
   };

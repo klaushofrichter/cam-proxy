@@ -451,6 +451,43 @@ export class ReolinkClient {
     throw new CameraError('camera_auth_failed', 'Download: token rejected after re-login');
   }
 
+  // The camera's live FLV of the ext stream (the app's Balanced): its only
+  // source, as the camera has no RTSP ext (CX820, measured 2026-11-03:
+  // `/flv?port=1935&app=bcs&stream=channel0_ext.bcs&token=…` answers 200,
+  // H.264 896x512 + AAC, also with RTMP off). The response once it is 200
+  // video/x-flv, its body unread and endless (the caller destroys it). In the
+  // gate only until the headers. The token is this client's (renewed before
+  // its lease ends); a camera refuses a bad one by closing the connection, so
+  // a close before the headers logs in again once. Never logs the URL, and no
+  // error carries it.
+  async openLiveFlv(o: { timeoutMs?: number } = {}): Promise<IncomingMessage> {
+    if (this.refusal) throw new CameraError('camera_error', `no trusted certificate for this camera: ${this.refusal}`);
+    this.warnUnverified();
+    const timeoutMs = o.timeoutMs ?? this.timeoutMs;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const token = await this.tokenForRequest();
+      const res = await this.gate.run(async (): Promise<IncomingMessage | null> => {
+        const path = `/flv?port=1935&app=bcs&stream=channel0_ext.bcs&token=${encodeURIComponent(token)}`;
+        let r: IncomingMessage;
+        try {
+          r = await openRequest(this.target, path, { timeoutMs, fresh: true });
+        } catch (err) {
+          const code = (err as { code?: string }).code;
+          if (code === 'ECONNRESET' || code === 'EPIPE' || code === 'ECONNABORTED' || (err as Error).message === 'socket hang up') return null; // a bad token, or the camera busy
+          throw classifyNetworkError(err);
+        }
+        if (r.statusCode === 200 && /^video\/x-flv/i.test(String(r.headers['content-type'] ?? ''))) return r;
+        r.resume();
+        if (r.statusCode === 503) throw new CameraError('camera_offline', 'FLV: camera unavailable (HTTP 503)');
+        if (r.statusCode === 401 || r.statusCode === 403) return null;
+        throw new CameraError('camera_error', `FLV: HTTP ${r.statusCode}`);
+      });
+      if (res) return res;
+      this.clearTokenIfCurrent(token);
+    }
+    throw new CameraError('camera_error', 'FLV: the camera closed the connection (after a new login too)');
+  }
+
   // Drops the cached token without a Logout: after a camera reboot every
   // token is invalid, so the next command logs in again.
   forgetToken(): void {
