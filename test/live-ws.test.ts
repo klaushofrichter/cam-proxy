@@ -176,3 +176,46 @@ describe.skipIf(!binary)('live video with stills off', () => {
     await until(() => q.proxy.go2rtcPid() === undefined, 10_000);
   }, 90_000);
 });
+
+// The third stream, ext (the app's Balanced): a CX820 (GetAbility live ver 1)
+// offers it; the proxy relays it from go2rtc's <cam>_ext. Needs a cam-sim
+// that serves ext (its profile's media.ext); an older tarball skips the relay.
+describe.skipIf(!binary)('live video: the ext stream (CX820)', () => {
+  let s3: Awaited<ReturnType<typeof startSim>>;
+  let r: Awaited<ReturnType<typeof startProxy>>;
+  beforeAll(async () => {
+    s3 = await startSim({ model: 'CX820' });
+    r = await startProxy(s3, { settings: { stills: { enabled: false } } });
+    await until(() => r.proxy.cameras.get('cam1')!.status.state().online && !!r.proxy.cameras.get('cam1')!.capabilities(), 20_000);
+  }, 40_000);
+  afterAll(async () => {
+    await r?.proxy.stop();
+    await s3?.close();
+  });
+
+  it('the capabilities list ext', () => {
+    expect(r.proxy.cameras.get('cam1')!.capabilities()!.live).toEqual(['main', 'ext', 'sub']);
+  });
+
+  it('relays ext as H.264 MSE at 896x512', async (ctx) => {
+    const ext = (s3.sim.engine.profile.media as { ext?: { size: string } }).ext;
+    if (!ext) return ctx.skip(); // this cam-sim has no ext stream yet
+    const ws = new WebSocket(`ws://127.0.0.1:${r.port}/api/cameras/cam1/live?stream=ext`, { headers: { Authorization: `Bearer ${CLIENT_TOKEN}` } });
+    const text: string[] = [];
+    const bins: Buffer[] = [];
+    ws.on('message', (d: Buffer, isBinary) => (isBinary ? bins.push(d) : text.push(d.toString())));
+    ws.on('error', () => undefined);
+    try {
+      await until(() => bins.length >= 2, 20_000);
+      expect(JSON.parse(text[0]).value).toMatch(/^video\/mp4; codecs="avc1\./);
+      expect(boxAt(bins[0])).toBe('ftyp');
+      // The init segment's avc1 sample entry: width and height at offsets 24 and 26 of the box.
+      const init = bins[0];
+      const at = init.indexOf(Buffer.from('avc1'));
+      expect(at).toBeGreaterThan(0);
+      expect([init.readUInt16BE(at + 4 + 24), init.readUInt16BE(at + 4 + 26)]).toEqual([896, 512]);
+    } finally {
+      ws.close();
+    }
+  }, 40_000);
+});

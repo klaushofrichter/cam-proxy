@@ -6,12 +6,12 @@
 // starts one and it stops again after the last live client of any camera.
 // One change at a time, in arrival order.
 import { within } from '../async';
-import type { StreamSource } from '../stills/go2rtc';
+import type { Go2rtcStream, StreamSource } from '../stills/go2rtc';
 
 export interface LiveGo2rtc {
   up(): boolean;
   ready(): Promise<void>;
-  wsUrl(cam: string, stream: 'sub' | 'main'): string;
+  wsUrl(cam: string, stream: Go2rtcStream): string;
   setStream(s: StreamSource): Promise<void>;
   removeStream(cam: string): Promise<void>;
 }

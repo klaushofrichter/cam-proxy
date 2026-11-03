@@ -134,7 +134,8 @@ describe('the Pi: one legacy camera, legacy overrides, a version 8 catalog', () 
 });
 
 // P2 (spec §8.5): one go2rtc for the host; on the Pi it serves the one camera
-// on go2rtc.rtspPort/apiPort as before (cam1_sub, cam1_main), with the password
+// on go2rtc.rtspPort/apiPort as before (cam1_sub, cam1_main; and cam1_ext, which
+// go2rtc opens only for a live client of a camera with ext), with the password
 // only in its environment.
 describe.skipIf(!process.env.CAMPROXY_TEST_GO2RTC)('the Pi: stills through the host go2rtc', () => {
   it('cam1_sub and cam1_main on the configured ports; frames arrive', async () => {
@@ -146,7 +147,7 @@ describe.skipIf(!process.env.CAMPROXY_TEST_GO2RTC)('the Pi: stills through the h
         res.on('end', () => resolve(JSON.parse(body)));
       }).on('error', reject));
     });
-    expect(Object.keys(streams).sort()).toEqual(['cam1_main', 'cam1_sub']);
+    expect(Object.keys(streams).sort()).toEqual(['cam1_ext', 'cam1_main', 'cam1_sub']);
     expect(proxy.stills!.go2rtc.streamUrl('cam1', 'sub')).toBe(`rtsp://127.0.0.1:${go2rtcPorts.rtspPort}/cam1_sub`);
     // P2 (spec §6.4): the newest still from memory.
     await until(() => proxy.cameras.first().latestFrame() !== undefined, 15_000);

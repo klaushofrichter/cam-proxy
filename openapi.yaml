@@ -39,6 +39,10 @@ components:
       required: [schema, ptz]
       properties:
         schema: { const: 1 }
+        live:
+          description: 'the live streams the camera offers, best first (GET /api/cameras/{cam}/live?stream=…): [main, ext, sub] when its GetAbility live ver is 1 (CX820, E1 Outdoor Pro: ext is the Reolink app''s Balanced, 896x512 H.264 on the CX820), else [main, sub]. Missing from an older proxy: main and sub.'
+          type: array
+          items: { type: string, enum: [main, ext, sub] }
         ptz:
           description: 'pan/tilt control (/api/cameras/{cam}/ptz/...); null for a camera that can''t move'
           type: [object, 'null']
@@ -363,10 +367,10 @@ paths:
   /api/cameras/{cam}/live:
     get:
       summary: Live video as MSE over a WebSocket (spec 2026-10-30-camera-onboarding-design §4.8, §10.3)
-      description: 'A WebSocket upgrade on the proxy''s HTTP and HTTPS address (no other port). Authorization: Bearer <client or admin token> only (no session cookie, never a token in the URL). After the upgrade the proxy sends one text message {"type":"mse","value":"video/mp4; codecs=\"…\""}, then binary messages: the fMP4 init segment, then fragments, for a MediaSource SourceBuffer. A failure is a text {"type":"error","value":"stream_unavailable"} and close 1011 (also when no mse message came within 10 s); the camera''s state is answered over the socket as {"type":"error","value":camera_restarting | stream_unavailable (no go2rtc stream for the camera: go2rtc down; with stills off it is started for live clients) | camera_offline | too_many_streams (8 per camera, 32 per proxy)} and close 1013; a client more than 8 MiB behind is closed with 4008 slow_consumer. The client sends nothing. Not audited.'
+      description: 'A WebSocket upgrade on the proxy''s HTTP and HTTPS address (no other port). Authorization: Bearer <client or admin token> only (no session cookie, never a token in the URL). After the upgrade the proxy sends one text message {"type":"mse","value":"video/mp4; codecs=\"…\""}, then binary messages: the fMP4 init segment, then fragments, for a MediaSource SourceBuffer. A failure is a text {"type":"error","value":"stream_unavailable"} and close 1011 (also when no mse message came within 10 s); the camera''s state is answered over the socket as {"type":"error","value":camera_restarting | stream_unavailable (no go2rtc stream for the camera: go2rtc down; with stills off it is started for live clients) | camera_offline | too_many_streams (8 per camera, 32 per proxy)} and close 1013; stream=ext of a camera whose capabilities.live doesn''t list ext (or not read yet) is {"type":"error","value":"stream_not_offered"} and close 1011; a client more than 8 MiB behind is closed with 4008 slow_consumer. The client sends nothing. Not audited.'
       parameters:
         - { name: cam, in: path, required: true, schema: { type: string } }
-        - { name: stream, in: query, required: false, schema: { type: string, enum: [sub, main], default: sub } }
+        - { name: stream, in: query, required: false, description: 'sub (the app''s Fluent), main (Clear), or ext (Balanced: the third stream, only for a camera whose capabilities.live lists it)', schema: { type: string, enum: [sub, main, ext], default: sub } }
         - { name: codecs, in: query, required: false, description: 'the codecs the client''s MediaSource plays, comma-separated (letters, digits, dots); default avc1 and hvc1 profiles with AAC', schema: { type: string } }
       responses:
         '101': { description: switching to the WebSocket protocol }

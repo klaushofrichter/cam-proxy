@@ -3,7 +3,8 @@
 // new port, bearer token only. Refusals before the upgrade are plain HTTP
 // answers with a JSON body; the camera's state after it is told over the
 // socket (a client such as cams's WebSocket can't read a refused upgrade's
-// status), as {"type":"error","value":<code>} and close 1013.
+// status), as {"type":"error","value":<code>} and close 1013 (1011 for
+// stream_not_offered: ext asked of a camera without it).
 import type { IncomingMessage } from 'http';
 import type { Duplex } from 'stream';
 import { STATUS_CODES } from 'http';
@@ -72,12 +73,16 @@ export function liveUpgrade(d: { access: AccessDeps; cameras: CameraRegistry; re
     if (!w) return answer(socket, 404, { error: 'not_found' });
     const stream = url.searchParams.get('stream') ?? 'sub';
     const codecs = validCodecs(url.searchParams.get('codecs') ?? undefined);
-    if ((stream !== 'sub' && stream !== 'main') || url.searchParams.getAll('stream').length > 1 || codecs === null) return answer(socket, 400, { error: 'invalid' });
+    if ((stream !== 'sub' && stream !== 'main' && stream !== 'ext') || url.searchParams.getAll('stream').length > 1 || codecs === null) return answer(socket, 400, { error: 'invalid' });
     const full = () => d.relay.count(w.id) >= LIVE.maxPerCamera || d.relay.count() >= LIVE.maxTotal;
     wss.handleUpgrade(req, socket, head, (client) => {
       if (w.phase() === 'restarting') return refuseLive(client, 'camera_restarting', 1013);
       if (!w.status.state().online) return refuseLive(client, 'camera_offline', 1013);
       if (full()) return refuseLive(client, 'too_many_streams', 1013);
+      // ext only on a camera whose capabilities list it (GetAbility live ver
+      // 1); not read yet counts as not offered. Told over the socket, as a
+      // state of the camera, so a client can fall back to sub.
+      if (stream === 'ext' && !w.capabilities()?.live?.includes('ext')) return refuseLive(client, 'stream_not_offered', 1011);
       // The camera's go2rtc stream: the stills one, or one started for live clients.
       void d.sources.acquire(w.id).then((go2rtc) => {
         if (!go2rtc) return refuseLive(client, 'stream_unavailable', 1013);

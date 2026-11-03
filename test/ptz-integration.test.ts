@@ -44,10 +44,10 @@ afterAll(async () => {
 describe('PTZ against cam-sim E1-Outdoor-Pro', () => {
   it('GET /api/cameras/cam1 has the E1 capabilities; the fixed camera has none', async () => {
     const r = await request(p.base).get('/api/cameras/cam1').set(auth());
-    expect(r.body.capabilities).toEqual({ schema: 1, ptz: { move: true, zoom: true, focus: true, speed: true, positions: { max: 20 } } });
+    expect(r.body.capabilities).toEqual({ schema: 1, ptz: { move: true, zoom: true, focus: true, speed: true, positions: { max: 20 } }, live: ['main', 'ext', 'sub'] });
     expect(r.body.features).toContain('ptz');
     const f = await request(pf.base).get('/api/cameras/cam1').set(auth());
-    expect(f.body.capabilities).toEqual({ schema: 1, ptz: null });
+    expect(f.body.capabilities).toEqual({ schema: 1, ptz: null, live: ['main', 'sub'] });
     const m = await request(pf.base).post(ptz('/move')).set(auth()).send({ direction: 'left' });
     expect([m.status, m.body]).toEqual([404, { error: 'not_supported' }]);
   });

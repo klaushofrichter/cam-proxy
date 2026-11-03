@@ -9,14 +9,28 @@ const fx = (n: string) => JSON.parse(raw(n)) as { Ability: { abilityChn: Record<
 
 describe('deriveCapabilities', () => {
   it('E1 Outdoor Pro: move, zoom, focus, speed and 20 positions', () => {
-    expect(deriveCapabilities(fx('e1-outdoor-pro'))).toEqual({ schema: 1, ptz: { move: true, zoom: true, focus: true, speed: true, positions: { max: 20 } } });
+    expect(deriveCapabilities(fx('e1-outdoor-pro'))).toEqual({ schema: 1, ptz: { move: true, zoom: true, focus: true, speed: true, positions: { max: 20 } }, live: ['main', 'ext', 'sub'] });
     expect(POSITIONS_MAX).toBe(20);
   });
 
   it.each(['rlc-1224a', 'cx820'])('%s: no ptz, although supportZoom/supportFocus are set', (n) => {
     const a = fx(n);
     expect(a.Ability.abilityChn[0].supportZoom?.permit ?? a.Ability.abilityChn[0].supportFocus?.permit).toBeGreaterThan(0);
-    expect(deriveCapabilities(a)).toEqual({ schema: 1, ptz: null });
+    expect(deriveCapabilities(a)).toMatchObject({ schema: 1, ptz: null });
+  });
+
+  // Reolink's abilityChn.live: ver 1 = main + ext + sub, ver 2 = main + sub (measured 2026-11-03).
+  it.each([['cx820', ['main', 'ext', 'sub']], ['e1-outdoor-pro', ['main', 'ext', 'sub']], ['rlc-1224a', ['main', 'sub']]] as const)('%s: live streams %j', (n, live) => {
+    expect(deriveCapabilities(fx(n)).live).toEqual(live);
+  });
+
+  it('live: only ver 1 offers ext; missing, 0 or unknown is main + sub', () => {
+    for (const v of [undefined, { permit: 4 }, { permit: 4, ver: 0 }, { permit: 4, ver: 2 }, { permit: 4, ver: '1' }, { permit: 4, ver: 3 }]) {
+      const a = fx('cx820');
+      if (v === undefined) delete a.Ability.abilityChn[0].live;
+      else a.Ability.abilityChn[0].live = v as { permit: number };
+      expect(deriveCapabilities(a).live).toEqual(['main', 'sub']);
+    }
   });
 
   it('ptzCtrl without ptzPreset: no positions key', () => {
@@ -34,7 +48,7 @@ describe('deriveCapabilities', () => {
   });
 
   it('garbage → ptz null', () => {
-    for (const v of [null, undefined, 7, 'x', {}, { Ability: {} }, { Ability: { abilityChn: [] } }, { Ability: { abilityChn: [null] } }]) expect(deriveCapabilities(v)).toEqual({ schema: 1, ptz: null });
+    for (const v of [null, undefined, 7, 'x', {}, { Ability: {} }, { Ability: { abilityChn: [] } }, { Ability: { abilityChn: [null] } }]) expect(deriveCapabilities(v)).toEqual({ schema: 1, ptz: null, live: ['main', 'sub'] });
   });
 
   it('readCapabilities sends GetAbility with the user', async () => {

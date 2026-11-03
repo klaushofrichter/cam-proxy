@@ -202,12 +202,12 @@ describe('supervision (spec §3.3)', () => {
 describe('capabilities (spec 2026-10-30-ptz-capabilities-design §4)', () => {
   const e1Ability = () => JSON.parse(readFileSync(join(__dirname, 'fixtures', 'abilities', 'e1-outdoor-pro.json'), 'utf8')) as unknown;
 
-  it('capabilities: null before the first read, {schema:1, ptz:null} once online (RLC-1224A sim)', async () => {
+  it('capabilities: null before the first read, {schema:1, ptz:null, live:[main, sub]} once online (RLC-1224A sim)', async () => {
     const { w, catalog } = worker();
     expect(w.capabilities()).toBeNull();
     await w.start();
     await until(() => w.capabilities() !== null);
-    expect(w.capabilities()).toEqual({ schema: 1, ptz: null });
+    expect(w.capabilities()).toEqual({ schema: 1, ptz: null, live: ['main', 'sub'] });
     await w.stopRecordings();
     await w.stop();
     catalog.close();
@@ -226,7 +226,7 @@ describe('capabilities (spec 2026-10-30-ptz-capabilities-design §4)', () => {
     await w.refreshCapabilities();
     const msg = log.latest('cam1', 'camera');
     expect(msg!.id).toBeGreaterThan(before);
-    expect(msg!.data.capabilities).toEqual({ schema: 1, ptz: { move: true, zoom: true, focus: true, speed: true, positions: { max: 20 } } });
+    expect(msg!.data.capabilities).toEqual({ schema: 1, ptz: { move: true, zoom: true, focus: true, speed: true, positions: { max: 20 } }, live: ['main', 'ext', 'sub'] });
     expect(msg!.data.address).toBe(sim.camera.host);
     const id = msg!.id;
     await w.refreshCapabilities();
@@ -257,7 +257,7 @@ describe('capabilities (spec 2026-10-30-ptz-capabilities-design §4)', () => {
     await until(() => w.capabilities() !== null);
     vi.spyOn(w.client, 'command').mockRejectedValue(new Error('boom'));
     await w.refreshCapabilities();
-    expect(w.capabilities()).toEqual({ schema: 1, ptz: null });
+    expect(w.capabilities()).toEqual({ schema: 1, ptz: null, live: ['main', 'sub'] });
     vi.restoreAllMocks();
     await w.stopRecordings();
     await w.stop();
