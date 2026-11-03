@@ -27,6 +27,8 @@ import type { MinuteStore } from '../stills/store';
 import { DAY } from '../time-units';
 import { bad, IMMUTABLE, intParam, leftSignal, notFound, sendFileOr } from './respond';
 import { parseStored, parseStoredList } from '../catalog/json';
+import type { AuditLog } from '../audit/audit-log';
+import { outagesFor } from '../inventory/gap-causes';
 
 // A camera's TLS as clients see it: the interface cams consumes (the cams P5
 // plan): mode, servername, the trusted leaf's SHA256: fingerprint, notAfter,
@@ -80,7 +82,7 @@ const analysisSummary = (a: AnalysisRow | undefined) =>
 // `tls`: a camera's certificate state from the site CA (spec 2026-10-05-multi-camera-host-design
 // §10.4); undefined without one (then mode public for a tlsName camera, none otherwise).
 // `credentials`: where a camera's password comes from and whether it works (spec 2026-10-30-camera-onboarding-design §4.1; never a value).
-export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: CameraRegistry; sse: SseHandler; tls?: (id: string) => CertState | undefined; served?: (id: string) => string | null; credentials: (id: string) => Credentials }): express.Router {
+export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: CameraRegistry; sse: SseHandler; tls?: (id: string) => CertState | undefined; served?: (id: string) => string | null; credentials: (id: string) => Credentials; audit?: Pick<AuditLog, 'list'>; now?: () => number }): express.Router {
   const r = express.Router();
   // Every /cameras/:cam route: the camera's worker, 404 or 503 (spec 2026-10-05-multi-camera-host-design §6.1).
   r.param('cam', cameraParam(d.cameras));
@@ -170,6 +172,24 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: 
     const w = workerOf(res);
     const s = w.stills?.store;
     res.json({ clips: oldestClip(d.catalog, w.id), stills: s?.oldest('stills') ?? null, previews: s?.oldest('previews') ?? null });
+  });
+
+  // Why there may be no stills (cams' blank thumbnails, 2026-11-03): proxy
+  // stops and crashes, camera reboots and power-cycles, storage pauses, the
+  // camera offline and address changes overlapping [from, to] (at most two
+  // days), oldest first: {outages: [{cause, from, to}]}, `to` null while it
+  // lasts. The same sources as the stills inventory's explained gaps.
+  r.get('/cameras/:cam/outages', async (req, res) => {
+    const rg = range(req, res, 2 * DAY, 'at most two days per request');
+    if (!rg) return;
+    const cam = workerOf(res).id;
+    if (!d.audit) return void res.json({ outages: [] });
+    try {
+      res.json({ outages: await outagesFor({ audit: d.audit, catalog: d.catalog, cam, now: (d.now ?? Date.now)() }, rg[0], rg[1]) });
+    } catch (err) {
+      logger.warn({ cameraId: cam, err: (err as Error).message }, 'outages_failed');
+      if (!res.headersSent) res.status(500).json({ error: 'outages_failed' });
+    }
   });
 
   r.get('/cameras/:cam/stills', (req, res) => {

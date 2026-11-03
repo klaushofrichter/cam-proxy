@@ -723,6 +723,7 @@ when the proxy comes back.
 |---|---|
 | `GET /api/cameras/{cam}/extent` | how far back content goes: `{clips, stills, previews}`, the oldest of each (unix ms, or null) |
 | `GET /api/cameras/{cam}/stills?from&to` | timestamps with a still (at most a day) |
+| `GET /api/cameras/{cam}/outages?from&to` | why stills may be missing (at most two days): `{outages: [{cause, from, to}]}`, cause `stop`, `crash`, `reboot`, `powercycle`, `paused`, `offline` or `address`, from the audit and stream logs (the stills inventory's sources) |
 | `GET /api/cameras/{cam}/stills/{ts}.jpg` | one still; `immutable` caching once its minute is complete |
 | `GET /api/cameras/{cam}/previews?from&to` | `[{minute, cols, rows, tileW, tileH, intervalS, present, url}]` |
 | `GET /api/cameras/{cam}/previews/{minute}.jpg` | one minute's sprite sheet |

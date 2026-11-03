@@ -1246,7 +1246,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // `onboarding` is made below, read at request time.
   const servedNow = (id: string) => onboarding.servedNow(id);
   app.use('/api', requireAccess('client', access), cameraCallsApi({ cameras: cams, audit, tls: (id) => certs?.state(id), served: servedNow, credentials: cameraCredentials, access, live: () => live }));
-  app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, cameras: cams, sse, tls: (id) => certs?.state(id), served: servedNow, credentials: cameraCredentials }));
+  app.use('/api', requireAccess('client', access), clientApi({ config: () => running, catalog, cameras: cams, sse, tls: (id) => certs?.state(id), served: servedNow, credentials: cameraCredentials, audit }));
   // The audit log: admins and the audit token, GET (and HEAD) only. The access check is
   // on the route inside the router; other /control paths pass on untouched
   // to the admin-only routes below.
