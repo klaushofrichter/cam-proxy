@@ -15,16 +15,33 @@ afterEach(async () => {
 });
 
 describe('go2rtc config (spec §8.5)', () => {
-  it('three streams per camera (sub, main, ext); each password only as its env variable', () => {
+  it('two streams per camera; each password only as its env variable', () => {
     const text = go2rtcConfig({ rtspPort: 1, apiPort: 2 }, [src('cam3', 's3cr3t!'), src('cam-4', 'x')]);
     const cfg = JSON.parse(text);
-    expect(Object.keys(cfg.streams)).toEqual(['cam3_sub', 'cam3_main', 'cam3_ext', 'cam-4_sub', 'cam-4_main', 'cam-4_ext']);
-    expect(cfg.streams.cam3_ext).toBe('rtsp://proxy:${CAM_CAM3_PASSWORD}@127.0.0.1:9/h264Preview_01_ext');
+    expect(Object.keys(cfg.streams)).toEqual(['cam3_sub', 'cam3_main', 'cam-4_sub', 'cam-4_main']);
     expect(cfg.streams.cam3_sub).toBe('rtsp://proxy:${CAM_CAM3_PASSWORD}@127.0.0.1:9/h264Preview_01_sub');
     expect(cfg.streams['cam-4_main']).toBe('rtsp://proxy:${CAM_CAM_4_PASSWORD}@127.0.0.1:9/h264Preview_01_main');
     expect(text).not.toContain('s3cr3t');
     expect(passwordEnv('cam-4')).toBe('CAM_CAM_4_PASSWORD');
   });
+});
+
+describe.skipIf(!binary)('the ext stream from the proxy feed', () => {
+  it('ensureExt adds <cam>_ext with the feed URL once; refuses any other URL; removeStream drops it', async () => {
+    const g = new Go2rtc({ binary, rtspPort: await freePort(), apiPort: await freePort(), sources: () => [src('cam3')] });
+    cleanup.push(() => g.stop());
+    await g.start();
+    expect(Object.keys(await g.streams()).sort()).toEqual(['cam3_main', 'cam3_sub']); // no ext until asked
+    const url = `http://127.0.0.1:9/ext/cam3/${'a1'.repeat(24)}`;
+    await g.ensureExt('cam3', url);
+    await g.ensureExt('cam3', url);
+    expect(Object.keys(await g.streams()).sort()).toEqual(['cam3_ext', 'cam3_main', 'cam3_sub']);
+    for (const bad of ['rtsp://u:p@127.0.0.1:9/x', 'http://192.0.2.1:9/ext/cam3/' + 'a1'.repeat(24), `http://127.0.0.1:9/ext/cam4/${'a1'.repeat(24)}`, 'http://127.0.0.1:9/flv?token=x']) {
+      await expect(g.ensureExt('cam3', bad)).rejects.toThrow(/unsafe ext feed URL/);
+    }
+    await g.removeStream('cam3');
+    expect(Object.keys(await g.streams())).toEqual([]);
+  }, 30_000);
 });
 
 describe.skipIf(!binary)('one go2rtc, many cameras', () => {
@@ -34,11 +51,11 @@ describe.skipIf(!binary)('one go2rtc, many cameras', () => {
     cleanup.push(() => g.stop());
     await g.start();
     const pid = g.pid();
-    expect(Object.keys(await g.streams()).sort()).toEqual(['cam3_ext', 'cam3_main', 'cam3_sub', 'cam4_ext', 'cam4_main', 'cam4_sub']);
+    expect(Object.keys(await g.streams()).sort()).toEqual(['cam3_main', 'cam3_sub', 'cam4_main', 'cam4_sub']);
     sources = [...sources, src('cam5')];
     await g.setStream(src('cam5'));
     await g.removeStream('cam4');
-    expect(Object.keys(await g.streams()).sort()).toEqual(['cam3_ext', 'cam3_main', 'cam3_sub', 'cam5_ext', 'cam5_main', 'cam5_sub']);
+    expect(Object.keys(await g.streams()).sort()).toEqual(['cam3_main', 'cam3_sub', 'cam5_main', 'cam5_sub']);
     expect(g.pid()).toBe(pid);
     const { stdout } = await run('ps', ['-o', 'args=', '-p', String(pid)]);
     expect(stdout).not.toContain('pw-cam3');

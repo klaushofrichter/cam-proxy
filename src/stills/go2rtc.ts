@@ -41,19 +41,23 @@ const rtsp = (s: StreamSource, pass: string, path: string) => {
   checkSource(s);
   return `rtsp://${encodeURIComponent(s.user)}:${pass}@${s.host}:${s.port}/${path}`;
 };
-// ext: the third stream (the app's Balanced), live only. Every camera gets
-// the entry; go2rtc connects only when a client asks, and the live API
-// offers ext only to a camera that has one. The path follows main/sub's
-// pattern (the FLV channel0_ext was measured on the CX820; this RTSP path not).
-const PATHS = { sub: 'h264Preview_01_sub', main: 'h264Preview_01_main', ext: 'h264Preview_01_ext' } as const;
-export const GO2RTC_STREAMS = ['sub', 'main', 'ext'] as const;
-export type Go2rtcStream = (typeof GO2RTC_STREAMS)[number];
+const PATHS = { sub: 'h264Preview_01_sub', main: 'h264Preview_01_main' } as const;
+// A camera's stream in go2rtc: sub and main from its RTSP; ext (the third
+// stream, the app's Balanced) from the proxy's own loopback FLV feed
+// (src/stream/ext-feed.ts), added on demand with ensureExt: the camera has no
+// RTSP ext (measured 2026-11-03), and its FLV needs a login token, which
+// never goes to go2rtc.
+export type Go2rtcStream = 'sub' | 'main' | 'ext';
+// The feed's URL: loopback, the camera id and the feed's key (not a camera secret).
+export const EXT_FEED_URL = /^http:\/\/127\.0\.0\.1:\d{1,5}\/ext\/[a-z0-9][a-z0-9-]{0,31}\/[a-f0-9]{48}$/;
+const EXT_KEY_IN_TEXT = /(\/ext\/[a-z0-9-]+\/)[a-f0-9]{48}/g;
 
-// The config file: three streams per camera, no password in it.
+// The config file: two streams per camera, no password in it.
 export function go2rtcConfig(o: { rtspPort: number; apiPort: number }, sources: StreamSource[]): string {
   const streams: Record<string, string> = {};
   for (const s of sources) {
-    for (const kind of GO2RTC_STREAMS) streams[`${s.cam}_${kind}`] = rtsp(s, `\${${passwordEnv(s.cam)}}`, PATHS[kind]);
+    streams[`${s.cam}_sub`] = rtsp(s, `\${${passwordEnv(s.cam)}}`, PATHS.sub);
+    streams[`${s.cam}_main`] = rtsp(s, `\${${passwordEnv(s.cam)}}`, PATHS.main);
   }
   return JSON.stringify({
     api: { listen: `127.0.0.1:${o.apiPort}` },
@@ -80,6 +84,7 @@ export class Go2rtc extends EventEmitter {
   private restartTimer: NodeJS.Timeout | undefined;
   private readonly backoff: Backoff;
   private readonly sent = new Set<string>(); // passwords sent through the API (masked in its output)
+  private readonly exts = new Set<string>(); // cameras whose <cam>_ext this go2rtc has (since its last spawn)
   private readyWait: { promise: Promise<void>; resolve: () => void } = Go2rtc.pending();
 
   constructor(private readonly o: Go2rtcOptions) {
@@ -134,6 +139,7 @@ export class Go2rtc extends EventEmitter {
         return false;
       }
     });
+    this.exts.clear(); // a new go2rtc has only its config's streams
     const file = join(this.cwd!, 'go2rtc.json');
     writeFileSync(file, go2rtcConfig(this.o, sources), { mode: 0o600 });
     const p = spawn(binary, ['-c', file], {
@@ -147,7 +153,7 @@ export class Go2rtc extends EventEmitter {
     // added after the spawn too) and every one sent through the API, plain and encoded.
     const clean = (d: Buffer) => {
       const secrets = [...this.o.sources().map((x) => x.password), ...this.sent].flatMap((pw) => [pw, encodeURIComponent(pw)]).filter((x) => x.length >= 3);
-      return secrets.reduce((t, x) => t.replaceAll(x, '***'), String(d).trim());
+      return secrets.reduce((t, x) => t.replaceAll(x, '***'), String(d).trim()).replace(EXT_KEY_IN_TEXT, '$1***');
     };
     p.stdout?.on('data', (d: Buffer) => logger.debug({ go2rtc: clean(d) }, 'go2rtc'));
     p.stderr?.on('data', (d: Buffer) => logger.debug({ go2rtc: clean(d) }, 'go2rtc'));
@@ -269,14 +275,14 @@ export class Go2rtc extends EventEmitter {
     return this.isReady;
   }
 
-  // Adds (or replaces) a camera's streams through the API: no restart
+  // Adds (or replaces) a camera's two streams through the API: no restart
   // (Ruling P2-1: the password travels in the loopback API call, never
   // logged; at the next spawn it is in the environment instead).
   async setStream(s: StreamSource): Promise<void> {
     checkSource(s);
     this.sent.add(s.password);
     if (!(await this.reachable())) return;
-    for (const kind of GO2RTC_STREAMS) {
+    for (const kind of ['sub', 'main'] as const) {
       const name = `${s.cam}_${kind}`;
       await this.call('DELETE', `src=${encodeURIComponent(name)}`).catch(() => undefined); // absent: fine
       await this.call('PUT', `name=${encodeURIComponent(name)}&src=${encodeURIComponent(rtsp(s, encodeURIComponent(s.password), PATHS[kind]))}`);
@@ -285,7 +291,18 @@ export class Go2rtc extends EventEmitter {
 
   async removeStream(cam: string): Promise<void> {
     if (!(await this.reachable())) return;
-    for (const kind of GO2RTC_STREAMS) await this.call('DELETE', `src=${encodeURIComponent(`${cam}_${kind}`)}`).catch(() => undefined);
+    for (const kind of ['sub', 'main'] as const) await this.call('DELETE', `src=${encodeURIComponent(`${cam}_${kind}`)}`).catch(() => undefined);
+    if (this.exts.delete(cam)) await this.call('DELETE', `src=${encodeURIComponent(`${cam}_ext`)}`).catch(() => undefined);
+  }
+
+  // Adds <cam>_ext from the proxy's FLV feed at `url` (EXT_FEED_URL), once
+  // per spawn: go2rtc connects to it only while a client watches.
+  async ensureExt(cam: string, url: string): Promise<void> {
+    if (!SAFE_CAM.test(cam) || !EXT_FEED_URL.test(url) || !url.includes(`/ext/${cam}/`)) throw new Error(`${cam}: unsafe ext feed URL`);
+    if (!(await this.reachable())) throw new Error('go2rtc not up');
+    if (this.exts.has(cam)) return;
+    await this.call('PUT', `name=${encodeURIComponent(`${cam}_ext`)}&src=${encodeURIComponent(url)}`);
+    this.exts.add(cam);
   }
 
   async stop(): Promise<void> {

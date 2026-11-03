@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
+import http from 'http';
+import { EXT_FEED_URL } from '../src/stills/go2rtc';
 import { logBuffer } from '../src/log';
 import { LIVE } from '../src/stream/live';
 import { CLIENT_TOKEN, startProxy, until } from './helpers/proxy';
@@ -178,8 +180,10 @@ describe.skipIf(!binary)('live video with stills off', () => {
 });
 
 // The third stream, ext (the app's Balanced): a CX820 (GetAbility live ver 1)
-// offers it; the proxy relays it from go2rtc's <cam>_ext. Needs a cam-sim
-// that serves ext (its profile's media.ext); an older tarball skips the relay.
+// offers it. The camera has it on FLV only (no RTSP ext, measured
+// 2026-11-03): go2rtc's <cam>_ext reads the proxy's loopback feed, which opens
+// the camera's FLV with the proxy's token. Needs a cam-sim that serves ext
+// (its profile's media.ext); an older tarball skips the relay.
 describe.skipIf(!binary)('live video: the ext stream (CX820)', () => {
   let s3: Awaited<ReturnType<typeof startSim>>;
   let r: Awaited<ReturnType<typeof startProxy>>;
@@ -214,6 +218,20 @@ describe.skipIf(!binary)('live video: the ext stream (CX820)', () => {
       const at = init.indexOf(Buffer.from('avc1'));
       expect(at).toBeGreaterThan(0);
       expect([init.readUInt16BE(at + 4 + 24), init.readUInt16BE(at + 4 + 26)]).toEqual([896, 512]);
+      // go2rtc reads ext from the proxy's loopback feed: no token, no password, no camera address in its source.
+      const streams = await new Promise<Record<string, { producers?: { url?: string }[] }>>((resolve, reject) =>
+        http.get({ host: '127.0.0.1', port: r.proxy.running.go2rtc.apiPort, path: '/api/streams' }, (res) => {
+          let b = '';
+          res.on('data', (c) => (b += c));
+          res.on('end', () => resolve(JSON.parse(b)));
+        }).on('error', reject));
+      const src = streams.cam1_ext?.producers?.[0]?.url ?? '';
+      expect(src).toMatch(EXT_FEED_URL);
+      expect(src).not.toContain(s3.camera.host);
+      expect(r.proxy.extFeed.count('cam1')).toBe(1);
+      const logged = JSON.stringify(logBuffer.recent(5000));
+      expect(logged).not.toMatch(/token=|channel0_ext/);
+      expect(logged).not.toContain(s3.password);
     } finally {
       ws.close();
     }

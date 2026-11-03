@@ -12,6 +12,7 @@ export interface LiveGo2rtc {
   up(): boolean;
   ready(): Promise<void>;
   wsUrl(cam: string, stream: Go2rtcStream): string;
+  ensureExt(cam: string, url: string): Promise<void>;
   setStream(s: StreamSource): Promise<void>;
   removeStream(cam: string): Promise<void>;
 }

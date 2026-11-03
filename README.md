@@ -599,9 +599,15 @@ stills off on every camera, go2rtc itself runs only while someone watches
 cameras). `ext`, the third stream (the Reolink app's *Balanced*; H.264
 896×512 on the CX820), only for a camera whose `capabilities.live` lists it:
 those whose GetAbility `live` ver is 1 (main + ext + sub: the CX820 and the
-E1 Outdoor Pro; the RLC-1224A's ver 2 has no ext). go2rtc reads it from RTSP
-`h264Preview_01_ext` (the FLV `channel0_ext` was measured on the CX820; the
-RTSP path follows main/sub's and is not measured). ext of another camera, or
+E1 Outdoor Pro; the RLC-1224A's ver 2 has no ext). The camera has ext on
+HTTP-FLV only (CX820, measured 2026-11-03: every RTSP ext path answers 404;
+`/flv?…stream=channel0_ext.bcs&token=…` works, also with RTMP off), and that
+URL needs a login token. The token never goes to go2rtc: go2rtc's
+`<cam>_ext` (added through its API with the first ext client) reads the
+proxy's own feed on `127.0.0.1` (`src/stream/ext-feed.ts`, a random port and
+a random key of the process), and the feed opens the camera's FLV with the
+camera client's token (renewed before its lease ends; a refused token logs
+in again once). go2rtc's output is masked for the key. ext of another camera, or
 before its capabilities were read, is `{"type":"error","value":"stream_not_offered"}`
 and close 1011; an ext that doesn't start is `stream_unavailable` as for the
 others. `Authorization: Bearer <client token>` only: no session cookie, and

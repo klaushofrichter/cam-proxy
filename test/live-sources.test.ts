@@ -11,9 +11,10 @@ class FakeGo2rtc implements LiveGo2rtc {
   isUp = true;
   up = () => this.isUp;
   ready = () => (this.isUp ? Promise.resolve() : new Promise<void>(() => undefined));
-  wsUrl = (cam: string, stream: 'sub' | 'main') => `ws://go2rtc/${cam}_${stream}`;
+  wsUrl = (cam: string, stream: 'sub' | 'main' | 'ext') => `ws://go2rtc/${cam}_${stream}`;
   setStream = async (s: StreamSource) => void this.calls.push(`set ${s.cam}`);
   removeStream = async (cam: string) => void this.calls.push(`remove ${cam}`);
+  ensureExt = async (cam: string) => void this.calls.push(`ext ${cam}`);
 }
 
 let host: FakeGo2rtc | undefined;

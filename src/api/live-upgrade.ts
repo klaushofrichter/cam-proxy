@@ -45,7 +45,8 @@ function perMinuteCounter(limit: number, now: () => number) {
 }
 
 // `sources`: the go2rtc stream for a camera, also with stills off (#296).
-export function liveUpgrade(d: { access: AccessDeps; cameras: CameraRegistry; relay: LiveRelay; sources: Pick<LiveSources, 'acquire' | 'release'>; now?: () => number }): (req: IncomingMessage, socket: Duplex, head: Buffer) => void {
+// `extUrl`: the ext stream's loopback feed for go2rtc (src/stream/ext-feed.ts), undefined when it doesn't run.
+export function liveUpgrade(d: { access: AccessDeps; cameras: CameraRegistry; relay: LiveRelay; sources: Pick<LiveSources, 'acquire' | 'release'>; extUrl?: (cam: string) => string | undefined; now?: () => number }): (req: IncomingMessage, socket: Duplex, head: Buffer) => void {
   const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: 64 * 1024 });
   const allow = perMinuteCounter(LIVE_UPGRADES_PER_MINUTE, d.now ?? Date.now);
   return (req, socket, head) => {
@@ -90,7 +91,14 @@ export function liveUpgrade(d: { access: AccessDeps; cameras: CameraRegistry; re
         if (client.readyState !== WebSocket.OPEN) return giveBack();
         // Others may have come in while it started.
         if (full()) return (giveBack(), refuseLive(client, 'too_many_streams', 1013));
-        d.relay.relay(client, go2rtc.wsUrl(w.id, stream), codecs, { cam: w.id, stream, onEnd: giveBack });
+        if (stream !== 'ext') return d.relay.relay(client, go2rtc.wsUrl(w.id, stream), codecs, { cam: w.id, stream, onEnd: giveBack });
+        // ext: go2rtc's <cam>_ext reads the proxy's feed (the camera's FLV with the proxy's token).
+        const url = d.extUrl?.(w.id);
+        if (!url) return (giveBack(), refuseLive(client, 'stream_unavailable', 1011));
+        void go2rtc.ensureExt(w.id, url).then(
+          () => (client.readyState === WebSocket.OPEN ? d.relay.relay(client, go2rtc.wsUrl(w.id, 'ext'), codecs, { cam: w.id, stream, onEnd: giveBack }) : giveBack()),
+          () => (giveBack(), refuseLive(client, 'stream_unavailable', 1011)),
+        );
       });
     });
   };
