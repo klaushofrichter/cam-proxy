@@ -6,6 +6,7 @@ import sharp from 'sharp';
 import { AuditLog } from '../src/audit/audit-log';
 import { openCatalog, type Catalog } from '../src/catalog/db';
 import { insertClip } from '../src/catalog/clips';
+import { StreamLog } from '../src/stream/log';
 import { MinuteStore, minutePath, readPackFooter } from '../src/stills/store';
 import { records, stillsCheck, STARTUP_MS, OUTAGE_MS, type StillsInventoryDeps, type StillsSettings } from '../src/inventory/stills';
 import type { CheckContext, Progress } from '../src/inventory/runner';
@@ -133,7 +134,7 @@ describe('stills inventory', () => {
       { type: 'unreadable-pack', minute: at(5) },
       { type: 'sprite-without-pack', minute: at(7) },
     ]);
-    expect(r.message).toBe('3 min 40 s of 10 min missing (36.67%) since 2026-09-27 00:10 UTC, 4 gaps (longest 1 min 30 s), 2 min 30 s explained by proxy stops, camera reboots or storage pauses, 20 s covered by local clips (camera clock, not restored), 3 file problems');
+    expect(r.message).toBe('3 min 40 s of 10 min missing (36.67%) since 2026-09-27 00:10 UTC, 4 gaps (longest 1 min 30 s), 2 min 30 s explained by proxy stops, camera reboots, the camera offline or storage pauses, 20 s covered by local clips (camera clock, not restored), 3 file problems');
     expect(r.window.notes).toEqual([expect.stringMatching(/^Seconds covered by local clips .*camera's clock.*not aligned/)]);
   });
 
@@ -325,7 +326,7 @@ describe('stills inventory: camera reboots and power-cycles', () => {
       { from: at(5), to: at(6), seconds: 60, explained: 'paused', explainedSeconds: 30 },
       { from: at(1, 10), to: at(1, 20), seconds: 10, explained: null, explainedSeconds: 0 },
     ]);
-    expect(r.message).toContain('1 min explained by proxy stops, camera reboots or storage pauses');
+    expect(r.message).toContain('1 min explained by proxy stops, camera reboots, the camera offline or storage pauses');
   });
 
   it('a pause open at a proxy start ends there (the new process checks the disk again)', async () => {
@@ -362,6 +363,33 @@ describe('stills inventory: camera reboots and power-cycles', () => {
       { from: at(1, 10), to: at(1, 20), seconds: 10, explained: null, explainedSeconds: 0 },
     ]);
     expect(r.counts).toMatchObject({ explainedSeconds: 135, unexplainedSeconds: 85 });
+  });
+  // cams' blank thumbnails (2026-11-03): the camera offline and an address change explain too (gap-causes.ts).
+  it('the camera offline (stream log) and an address change explain the gaps they overlap', async () => {
+    const a = log('audit-offline', (a, set) => {
+      set(at(1, 12));
+      a.write({ action: 'camera-host-change', category: ['configuration'], type: ['change'], outcome: 'success', user: 'admin', message: 'moved', details: { from: '10.0.0.1', to: '10.0.0.2', outcome: 'changed' }, camera: 'cam1' });
+      set(at(2));
+      a.write({ action: 'camera-host-change', category: ['configuration'], type: ['change'], outcome: 'failure', user: 'admin', message: 'refused', details: { to: '10.0.0.3' }, camera: 'cam1' });
+    });
+    const c = openCatalog(join(dir, 'catalog-offline.sqlite'));
+    let t = 0;
+    const sl = new StreamLog(c, () => t);
+    t = at(5, 10);
+    sl.append('cam1', 'camera-status', { online: false, reason: 'timeout', clockOffsetMs: null });
+    sl.append('cam1', 'camera-status', { online: false, stream: 'down', reason: 'no_frames', clockOffsetMs: null }); // the stream's own row: not a status flip
+    t = at(5, 30);
+    sl.append('cam2', 'camera-status', { online: true, reason: null, clockOffsetMs: null }); // another camera
+    t = at(5, 40) - STARTUP_MS;
+    sl.append('cam1', 'camera-status', { online: true, reason: null, clockOffsetMs: null });
+    const r = await stillsCheck(deps({ audit: a, catalog: c }))(ctx());
+    expect(r.top).toEqual([
+      { from: at(7), to: at(8, 30), seconds: 90, explained: null, explainedSeconds: 0 },
+      { from: at(3), to: at(4), seconds: 60, explained: 'address', explainedSeconds: 12 }, // 1:12 + 120 s
+      { from: at(5), to: at(6), seconds: 60, explained: 'offline', explainedSeconds: 30 }, // offline 5:10, online again + 120 s = 5:40
+      { from: at(1, 10), to: at(1, 20), seconds: 10, explained: 'address', explainedSeconds: 8 },
+    ]);
+    c.close();
   });
 });
 

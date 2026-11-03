@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- New client API route `GET /api/cameras/{cam}/outages?from&to` (at most two days): why stills may be missing in a stretch of time, as `{outages: [{cause, from, to}]}`. The causes are what the proxy already records: the proxy stopped or restarted after a crash, a camera reboot or PoE power-cycle, storage full, the camera offline (its status checks) and a camera address change. cams uses it to explain blank thumbnails.
+- The stills inventory now also explains gaps by the camera being offline (`offline`) and by a camera address change (`address`), from the same sources.
+
+## v2026.11.02.8
+
 - Dependencies: @peculiar/x509 3.1.0 (was 2.2.0). The FTPS certificate the proxy makes for itself (without a site CA or ftp.certFile) now comes from @peculiar/x509 too; the selfsigned package is gone from the proxy's dependencies.
 
 ## v2026.11.02.7

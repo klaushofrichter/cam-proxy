@@ -56,6 +56,21 @@ describe('client API', () => {
     expect((await request(p.base).get('/api/cameras/cam1').set(auth())).body.features).toEqual(['sse-cam-list', 'ptz', 'camera-calls']);
   });
 
+  // cams' blank thumbnails (2026-11-03): why stills may be missing, from the audit and stream logs.
+  it('GET /api/cameras/:cam/outages: the causes in a window, at most two days', async () => {
+    const T = Date.UTC(2026, 0, 5, 12);
+    const row = p.proxy.catalog.db.prepare('INSERT INTO stream_log (ts, cam, type, data) VALUES (?, ?, ?, ?)');
+    row.run(T + 60_000, 'cam1', 'camera-status', JSON.stringify({ online: false, reason: 'timeout', clockOffsetMs: null }));
+    row.run(T + 180_000, 'cam1', 'camera-status', JSON.stringify({ online: true, reason: null, clockOffsetMs: 0 }));
+    const r = await request(p.base).get(`/api/cameras/cam1/outages?from=${T}&to=${T + 3_600_000}`).set(auth());
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ outages: [{ cause: 'offline', from: T + 60_000, to: T + 180_000 }] });
+    expect((await request(p.base).get(`/api/cameras/cam1/outages?from=${T}&to=${T + 3 * 86_400_000}`).set(auth())).status).toBe(400);
+    expect((await request(p.base).get('/api/cameras/cam1/outages').set(auth())).status).toBe(400);
+    expect((await request(p.base).get(`/api/cameras/cam9/outages?from=${T}&to=${T + 1}`).set(auth())).status).toBe(404);
+    expect((await request(p.base).get(`/api/cameras/cam1/outages?from=${T}&to=${T + 1}`)).status).toBe(401);
+  });
+
   // #75: a recovered event (from the SD card) is no fresh activity.
   it('lastEventTs ignores recovered events', async () => {
     const c = p.proxy.catalog;
