@@ -547,6 +547,18 @@ paths:
         '200': { description: '{ clips, stills, previews }: the oldest clip start, still minute and preview minute kept (unix ms), each null when none' }
         '404': { description: unknown camera }
         '503': { description: camera_restarting (Retry-After) while the camera restarts }
+  /api/cameras/{cam}/outages:
+    get:
+      summary: 'Why there may be no stills: what the proxy recorded in a range of at most two days (proxy stops and crashes, camera reboots and power-cycles, storage pauses, the camera offline, address changes)'
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+        - { name: from, in: query, required: true, schema: { type: integer } }
+        - { name: to, in: query, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: '{ outages: [{ cause, from, to }] } overlapping [from, to], oldest first. cause: stop (the proxy was stopped: from its stop to its start), crash (the proxy started after a crash: from = to = the start), reboot, powercycle (from the PoE cut), paused (storage full), offline (the status checks saw the camera offline), address (the camera''s address changed: a moment). Unix ms; to null while it lasts' }
+        '400': { description: 'missing range, to before from, or more than two days' }
+        '404': { description: unknown camera }
+        '503': { description: camera_restarting (Retry-After) while the camera restarts }
   /api/cameras/{cam}/stills:
     get:
       summary: Timestamps that have a still, in a range of at most one day

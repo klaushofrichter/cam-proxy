@@ -6,7 +6,7 @@ export interface Progress { phase: string; done: number; total: number; note?: s
 export interface RunningView { runId: string; kind: string; op?: 'check' | 'repair'; startedAt: number; outcome: 'running'; progress: Progress }
 export interface RunSummary { runId: string; kind: string; startedAt: number; tookMs: number; outcome: 'ok' | 'cancelled' | 'failed'; counts: Record<string, number>; message: string }
 export interface InventoryState { running: RunningView | null; runs: Record<string, RunSummary[]>; repairs?: Record<string, RunSummary[]> }
-export type GapCause = 'stop' | 'crash' | 'reboot' | 'powercycle' | 'paused';
+export type GapCause = 'stop' | 'crash' | 'reboot' | 'powercycle' | 'paused' | 'offline' | 'address';
 export interface Gap { from: number; to: number; seconds: number; explained: GapCause | null; explainedSeconds: number }
 export interface StillsReport extends RunSummary {
   window: { from: number | null; to: number; reason: string; notes?: string[] } | null;
@@ -22,7 +22,7 @@ const REASONS: Record<string, string> = {
   'store-younger': 'shorter: the store is younger than the retention',
   empty: 'no stills stored',
 };
-const CAUSES: Record<GapCause, string> = { stop: 'proxy stopped', crash: 'proxy crashed', reboot: 'camera reboot', powercycle: 'power cycle', paused: 'storage paused (disk full)' };
+const CAUSES: Record<GapCause, string> = { stop: 'proxy stopped', crash: 'proxy crashed', reboot: 'camera reboot', powercycle: 'power cycle', paused: 'storage paused (disk full)', offline: 'camera offline', address: 'camera address changed' };
 const local = (ms: number) => new Date(ms).toLocaleString();
 // When a run started and how long it took (the card's line under each result).
 export const ranText = (r: { startedAt: number; tookMs: number }): string => `${local(r.startedAt)}, took ${(r.tookMs / 1000).toFixed(1)} s`;
