@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Docs: a step-by-step runbook for moving a camera to another proxy, including a camera that also changes network ([docs/camera-move-runbook.md](docs/camera-move-runbook.md)).
+
+## v2026.11.03.2
+
 - Live video offers the cameras' third stream, `ext` (the Reolink app's *Balanced*; 896×512 on the CX820): `GET /api/cameras/{cam}/live?stream=ext`, for cameras whose ability lists main + ext + sub (the CX820 and the E1 Outdoor Pro; the RLC-1224A has none). A camera's `capabilities` now carry `live`, the streams it offers (`["main", "ext", "sub"]` or `["main", "sub"]`), so clients know when to offer it; ext asked of a camera without it closes with `stream_not_offered`. The camera has ext on HTTP-FLV only (the CX820 answers 404 for every RTSP ext path, measured 2026-11-03), and the FLV needs a login token: go2rtc's `<cam>_ext` reads a feed of the proxy on 127.0.0.1, which opens the camera's FLV with the proxy's own camera session, so the token never reaches go2rtc, its config, API or logs. It runs only while someone watches. Recordings, FTP clips and stills don't change.
 
 ## v2026.11.03.1
