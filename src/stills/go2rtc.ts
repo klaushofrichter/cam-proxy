@@ -42,6 +42,15 @@ const rtsp = (s: StreamSource, pass: string, path: string) => {
   return `rtsp://${encodeURIComponent(s.user)}:${pass}@${s.host}:${s.port}/${path}`;
 };
 const PATHS = { sub: 'h264Preview_01_sub', main: 'h264Preview_01_main' } as const;
+// A camera's stream in go2rtc: sub and main from its RTSP; ext (the third
+// stream, the app's Balanced) from the proxy's own loopback FLV feed
+// (src/stream/ext-feed.ts), added on demand with ensureExt: the camera has no
+// RTSP ext (measured 2026-11-03), and its FLV needs a login token, which
+// never goes to go2rtc.
+export type Go2rtcStream = 'sub' | 'main' | 'ext';
+// The feed's URL: loopback, the camera id and the feed's key (not a camera secret).
+export const EXT_FEED_URL = /^http:\/\/127\.0\.0\.1:\d{1,5}\/ext\/[a-z0-9][a-z0-9-]{0,31}\/[a-f0-9]{48}$/;
+const EXT_KEY_IN_TEXT = /(\/ext\/[a-z0-9-]+\/)[a-f0-9]{48}/g;
 
 // The config file: two streams per camera, no password in it.
 export function go2rtcConfig(o: { rtspPort: number; apiPort: number }, sources: StreamSource[]): string {
@@ -75,6 +84,7 @@ export class Go2rtc extends EventEmitter {
   private restartTimer: NodeJS.Timeout | undefined;
   private readonly backoff: Backoff;
   private readonly sent = new Set<string>(); // passwords sent through the API (masked in its output)
+  private readonly exts = new Set<string>(); // cameras whose <cam>_ext this go2rtc has (since its last spawn)
   private readyWait: { promise: Promise<void>; resolve: () => void } = Go2rtc.pending();
 
   constructor(private readonly o: Go2rtcOptions) {
@@ -88,12 +98,12 @@ export class Go2rtc extends EventEmitter {
     return { promise, resolve };
   }
 
-  streamUrl(cam: string, stream: 'sub' | 'main'): string {
+  streamUrl(cam: string, stream: Go2rtcStream): string {
     return `rtsp://127.0.0.1:${this.o.rtspPort}/${cam}_${stream}`;
   }
 
   // go2rtc's MSE WebSocket for a camera's stream (127.0.0.1 only; the live relay, src/stream/live.ts).
-  wsUrl(cam: string, stream: 'sub' | 'main'): string {
+  wsUrl(cam: string, stream: Go2rtcStream): string {
     return `ws://127.0.0.1:${this.o.apiPort}/api/ws?src=${encodeURIComponent(`${cam}_${stream}`)}`;
   }
 
@@ -129,6 +139,7 @@ export class Go2rtc extends EventEmitter {
         return false;
       }
     });
+    this.exts.clear(); // a new go2rtc has only its config's streams
     const file = join(this.cwd!, 'go2rtc.json');
     writeFileSync(file, go2rtcConfig(this.o, sources), { mode: 0o600 });
     const p = spawn(binary, ['-c', file], {
@@ -142,7 +153,7 @@ export class Go2rtc extends EventEmitter {
     // added after the spawn too) and every one sent through the API, plain and encoded.
     const clean = (d: Buffer) => {
       const secrets = [...this.o.sources().map((x) => x.password), ...this.sent].flatMap((pw) => [pw, encodeURIComponent(pw)]).filter((x) => x.length >= 3);
-      return secrets.reduce((t, x) => t.replaceAll(x, '***'), String(d).trim());
+      return secrets.reduce((t, x) => t.replaceAll(x, '***'), String(d).trim()).replace(EXT_KEY_IN_TEXT, '$1***');
     };
     p.stdout?.on('data', (d: Buffer) => logger.debug({ go2rtc: clean(d) }, 'go2rtc'));
     p.stderr?.on('data', (d: Buffer) => logger.debug({ go2rtc: clean(d) }, 'go2rtc'));
@@ -281,6 +292,17 @@ export class Go2rtc extends EventEmitter {
   async removeStream(cam: string): Promise<void> {
     if (!(await this.reachable())) return;
     for (const kind of ['sub', 'main'] as const) await this.call('DELETE', `src=${encodeURIComponent(`${cam}_${kind}`)}`).catch(() => undefined);
+    if (this.exts.delete(cam)) await this.call('DELETE', `src=${encodeURIComponent(`${cam}_ext`)}`).catch(() => undefined);
+  }
+
+  // Adds <cam>_ext from the proxy's FLV feed at `url` (EXT_FEED_URL), once
+  // per spawn: go2rtc connects to it only while a client watches.
+  async ensureExt(cam: string, url: string): Promise<void> {
+    if (!SAFE_CAM.test(cam) || !EXT_FEED_URL.test(url) || !url.includes(`/ext/${cam}/`)) throw new Error(`${cam}: unsafe ext feed URL`);
+    if (!(await this.reachable())) throw new Error('go2rtc not up');
+    if (this.exts.has(cam)) return;
+    await this.call('PUT', `name=${encodeURIComponent(`${cam}_ext`)}&src=${encodeURIComponent(url)}`);
+    this.exts.add(cam);
   }
 
   async stop(): Promise<void> {

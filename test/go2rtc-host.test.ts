@@ -26,6 +26,24 @@ describe('go2rtc config (spec §8.5)', () => {
   });
 });
 
+describe.skipIf(!binary)('the ext stream from the proxy feed', () => {
+  it('ensureExt adds <cam>_ext with the feed URL once; refuses any other URL; removeStream drops it', async () => {
+    const g = new Go2rtc({ binary, rtspPort: await freePort(), apiPort: await freePort(), sources: () => [src('cam3')] });
+    cleanup.push(() => g.stop());
+    await g.start();
+    expect(Object.keys(await g.streams()).sort()).toEqual(['cam3_main', 'cam3_sub']); // no ext until asked
+    const url = `http://127.0.0.1:9/ext/cam3/${'a1'.repeat(24)}`;
+    await g.ensureExt('cam3', url);
+    await g.ensureExt('cam3', url);
+    expect(Object.keys(await g.streams()).sort()).toEqual(['cam3_ext', 'cam3_main', 'cam3_sub']);
+    for (const bad of ['rtsp://u:p@127.0.0.1:9/x', 'http://192.0.2.1:9/ext/cam3/' + 'a1'.repeat(24), `http://127.0.0.1:9/ext/cam4/${'a1'.repeat(24)}`, 'http://127.0.0.1:9/flv?token=x']) {
+      await expect(g.ensureExt('cam3', bad)).rejects.toThrow(/unsafe ext feed URL/);
+    }
+    await g.removeStream('cam3');
+    expect(Object.keys(await g.streams())).toEqual([]);
+  }, 30_000);
+});
+
 describe.skipIf(!binary)('one go2rtc, many cameras', () => {
   it('starts with every camera, adds and removes one without a restart', async () => {
     let sources = [src('cam3'), src('cam4')];
