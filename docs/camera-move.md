@@ -8,6 +8,9 @@ source deletes what the target verified when the move ends. cams-admin runs the
 steps; both proxies record each one in their audit log. The design:
 [the spec](superpowers/specs/2026-10-21-camera-move-design.md).
 
+Step by step, including a camera that also changes network: the
+[runbook](camera-move-runbook.md).
+
 ## Before a move
 
 - **The target needs a site CA** (`tls.site`, [TLS: the site
