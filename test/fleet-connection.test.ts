@@ -98,7 +98,8 @@ describe('the connection for the health item', () => {
     fake.mode = 'normal';
     fake.destroyAll();
     await until(() => s.connection()?.connected === true, 5000);
-    // Connected once: the old time is gone.
+    // Connected once: the old time is gone. Silent first: a quick reconnect could slip between two polls.
+    fake.mode = 'silent';
     fake.closeAll(1001);
     await until(() => !s.connection()?.connected);
     expect((s.connection() as { downSince: number }).downSince).toBeGreaterThan(first.downSince);
