@@ -931,6 +931,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       lastInventory: await lastInventory(),
       // The post-move checks (#311): the Move check item. moveSync is set up below; health is only asked once the proxy runs.
       moveSyncs: syncOn ? moveSync.list() : [],
+      // The connection to cams-admin: no item while it isn't configured (camsAdmin is set up below, likewise).
+      camsAdmin: camsAdmin.connection(),
       reading: hostMonitor.reading(),
       archive: archive.health(),
       // The site CA (spec §10.5): only with tls.site (the Pi has no item).

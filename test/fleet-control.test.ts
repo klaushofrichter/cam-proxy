@@ -132,6 +132,31 @@ describe('enroll, reconnect, unenroll', () => {
 
 // The command policy and managed tokens on the card (migration P2, Task 7):
 // any admin narrows; only local admin rights widen (R2-3).
+describe('the health item', () => {
+  const item = async () => {
+    const r = await request(p.base).get('/api/local/health').expect(200);
+    return (r.body.items as { id: string; value: unknown }[]).find((i) => i.id === 'camsAdmin');
+  };
+  it('not enrolled: none; enrolled and connected: ok on /api/local/health and in the heartbeat; lost: reconnecting', async () => {
+    expect(p.proxy.camsAdmin.view().state).toBe('off');
+    expect(await item()).toBeUndefined();
+    fake.codes.add(CODE);
+    await p.proxy.camsAdmin.enroll(fake.url, CODE);
+    await until(() => p.proxy.camsAdmin.view().state === 'connected');
+    expect(await item()).toEqual({ id: 'camsAdmin', label: 'cams-admin', value: 'connected', text: 'connected', problem: false });
+    await until(() => fake.heartbeats().some((h) => JSON.stringify(h.msg.body).includes('"camsAdmin"')));
+    const hb = fake.heartbeats().filter((h) => JSON.stringify(h.msg.body).includes('"camsAdmin"')).at(-1)!;
+    expect(JSON.stringify(hb.msg.body)).toContain('"text":"connected"');
+    fake.refuseUpgrade = true;
+    fake.closeAll(1001);
+    await until(async () => (await item())?.value !== 'connected');
+    expect(await item()).toEqual({ id: 'camsAdmin', label: 'cams-admin', value: 'reconnecting', text: 'reconnecting', problem: false, warning: true });
+    fake.refuseUpgrade = false;
+    await p.proxy.camsAdmin.unenroll();
+    expect(await item()).toBeUndefined();
+  });
+});
+
 describe('allowed commands, pause and managed tokens', () => {
   const tok = () => randomBytes(32).toString('base64url');
   const hashOf = (t: string) => `sha256:${createHash('sha256').update(t).digest('hex')}`;

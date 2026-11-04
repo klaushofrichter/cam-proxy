@@ -8,6 +8,7 @@ import type { RebootState } from '../camera/reboot';
 import type { SdView } from '../camera/sd-card';
 import type { MoveSyncView } from '../moves/sync';
 import { moveSyncItem } from './move-sync';
+import { camsAdminItem, type AdminConnection } from './cams-admin';
 
 // The health summary (spec 2026-10-03-health-summary-design A2): the one
 // place with the problem rules. The Status page's Health and Pi cards, its red
@@ -19,7 +20,7 @@ import { moveSyncItem } from './move-sync';
 // No secrets: no tokens, passwords, FTP settings, the PoE switch's host or
 // the camera serial.
 
-type ItemId = 'camera' | 'stream' | 'events' | 'ftp' | 'sd' | 'storage' | 'disk' | 'archive' | 'certificates' | 'cpuTemp' | 'underVoltage' | 'inventory' | 'moveSync' | 'version';
+type ItemId = 'camera' | 'stream' | 'events' | 'ftp' | 'sd' | 'storage' | 'disk' | 'archive' | 'certificates' | 'cpuTemp' | 'underVoltage' | 'inventory' | 'moveSync' | 'camsAdmin' | 'version';
 // warning (#199): present (true) on an item that needs a look but is no problem; it never counts in problemCount.
 export interface HealthItem { id: ItemId; label: string; value: boolean | number | string | null; text: string; problem: boolean; warning?: true }
 // archiveWarnPercent: while the Archive is on (spec 2026-10-05-archive-design §6).
@@ -52,6 +53,8 @@ export interface HealthInput {
   lastInventory: LastInventory | null;
   // The post-move checks (#311), newest first (MoveSync.list()); absent or empty: no item.
   moveSyncs?: readonly MoveSyncView[];
+  // The connection to cams-admin: null or absent when not configured (no item).
+  camsAdmin?: AdminConnection | null;
   reading: HostReading;
   // The Archive (spec 2026-10-05-archive-design §6): null or absent while it is off.
   archive?: { count: number; bytes: number; percentOfDisk: number; warning: boolean } | null;
@@ -270,6 +273,9 @@ export function buildHealth(i: HealthInput): HealthSummary {
 
   const moved = moveSyncItem(i.moveSyncs ?? [], i.now);
   if (moved) items.push(moved);
+
+  const admin = camsAdminItem(i.camsAdmin, i.now);
+  if (admin) items.push(admin);
 
   add('version', 'Version', i.version, i.version, false);
 

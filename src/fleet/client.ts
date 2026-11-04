@@ -10,6 +10,7 @@ import type { ReplayGuard } from './replay';
 import { EventOutbox } from './outbox';
 import type { MoveEvent } from '../moves/types';
 import { TIMED_OUT, within } from '../async';
+import type { AdminConnection } from '../health/cams-admin';
 
 // The outbound client to cams-admin (spec 2026-10-06-cams-admin-phase1-design
 // §8.3-§8.8, §9.1): one WebSocket (Node's global), one timer for the next
@@ -38,13 +39,14 @@ export interface Timing {
   maxInboundBytes: number; // a larger message is refused (256 KiB, the server's own frame cap)
   maxLingering: number; // closed sockets the server never let go: no new connection beyond this many (4)
   localRetryMs: number; // a local problem (replay files unusable or not writable): retried within this (30 s)
+  connectFailedLogMs: number; // admin_connect_failed at most this often (60 s)
 }
 
 export const DEFAULT_TIMING: Timing = {
   connectTimeoutMs: 10_000, helloTimeoutMs: 10_000, closeGraceMs: 2000, backoffCapMs: 300_000, resetAfterMs: 60_000,
   replacedWaitMs: 30_000, rejectedRetryMs: 15 * 60_000, incompatibleRetryMs: 6 * 3600_000, rateLimitedDefaultS: 60,
   minIntervalS: 10, jitterS: 2, byeWaitMs: 1000, changeCheckMs: 5000, healthTimeoutMs: 10_000, maxBufferedBytes: 512 * 1024, maxInboundBytes: 256 * 1024, maxLingering: 4,
-  localRetryMs: 30_000,
+  localRetryMs: 30_000, connectFailedLogMs: 60_000,
 };
 
 export interface ClientLog {
@@ -112,6 +114,26 @@ export function backoffDelay(attempt: number, capMs: number, random: () => numbe
   return Math.floor(random() * Math.min(capMs, 1000 * 2 ** Math.min(attempt, 30)));
 }
 
+// The short reason of a failed connection, from the error of the probe in
+// incompatible() (Node's WebSocket event carries no cause; measured, Node 26).
+// Fixed words only: an error's message can name the host or more, so none is used.
+const FAILURE_CODES: Record<string, string> = {
+  EAI_AGAIN: 'name lookup failed', ENOTFOUND: 'name lookup failed', EAI_FAIL: 'name lookup failed', EAI_NODATA: 'name lookup failed', EAI_NONAME: 'name lookup failed',
+  ECONNREFUSED: 'refused',
+  ETIMEDOUT: 'timeout', UND_ERR_CONNECT_TIMEOUT: 'timeout',
+  EHOSTUNREACH: 'unreachable', ENETUNREACH: 'unreachable', ENETDOWN: 'unreachable',
+  ECONNRESET: 'connection reset', UND_ERR_SOCKET: 'connection reset',
+  CERT_HAS_EXPIRED: 'certificate problem', DEPTH_ZERO_SELF_SIGNED_CERT: 'certificate problem', SELF_SIGNED_CERT_IN_CHAIN: 'certificate problem', UNABLE_TO_VERIFY_LEAF_SIGNATURE: 'certificate problem', ERR_TLS_CERT_ALTNAME_INVALID: 'certificate problem',
+};
+export function connectFailureReason(err: unknown): string | null {
+  const e = err as { name?: unknown; code?: unknown; cause?: { code?: unknown; errors?: { code?: unknown }[] } } | null;
+  if (e?.name === 'TimeoutError') return 'timeout';
+  for (const code of [e?.cause?.code, e?.cause?.errors?.[0]?.code, e?.code]) {
+    if (typeof code === 'string' && Object.hasOwn(FAILURE_CODES, code)) return FAILURE_CODES[code];
+  }
+  return null;
+}
+
 export class AdminClient {
   private readonly t: Timing;
   private readonly key: AdminKeyFile;
@@ -155,6 +177,11 @@ export class AdminClient {
   // This connection's command context (P2): set from the verified challenge.
   private conn: ConnCtx | null = null;
   private readonly outbox: EventOutbox;
+  // For the health item: since when not connected (the start, or the lost connection) and the last short reason.
+  private downSince = Date.now();
+  private attemptFailure: string | null = null; // this attempt's, once known
+  private failure: string | null = null; // the last ended attempt's
+  private lastFailLogAt: number | null = null;
 
   constructor(private readonly d: ClientDeps) {
     this.t = { ...DEFAULT_TIMING, ...d.timing };
@@ -210,9 +237,14 @@ export class AdminClient {
     };
   }
 
+  connection(): AdminConnection {
+    return this.state === 'connected' ? { connected: true } : { connected: false, downSince: this.downSince, reason: this.failure };
+  }
+
   start(): void {
     if (!this.stopping) return;
     this.stopping = false;
+    this.downSince = Date.now();
     if (this.d.changeKey) {
       this.changeTimer = setInterval(() => this.guard('change', () => this.checkChange()), this.t.changeCheckMs);
       this.changeTimer.unref();
@@ -331,6 +363,7 @@ export class AdminClient {
     this.noReset = false;
     this.local = false;
     this.conn = null;
+    this.attemptFailure = null;
     this.d.log.debug({ url: this.key.connectUrl, attempt: this.attempt }, 'admin_connecting');
     let ws: WebSocket;
     try {
@@ -345,6 +378,7 @@ export class AdminClient {
     this.handshakeTimer = setTimeout(() => {
       if (this.ws === ws && this.state === 'connecting') {
         this.reason = this.opened ? 'no welcome from cams-admin in time' : 'cams-admin did not answer in time';
+        this.attemptFailure = 'timeout';
         this.closeSocket();
       }
     }, this.t.connectTimeoutMs);
@@ -357,6 +391,7 @@ export class AdminClient {
       this.handshakeTimer = setTimeout(() => {
         if (this.ws === ws && this.state === 'connecting') {
           this.reason = 'no welcome from cams-admin in time';
+          this.attemptFailure = 'timeout';
           this.closeSocket();
         }
       }, this.t.helloTimeoutMs);
@@ -508,6 +543,7 @@ export class AdminClient {
         if (this.handshakeTimer) clearTimeout(this.handshakeTimer);
         this.state = 'connected';
         this.connectedAt = Date.now();
+        this.failure = null;
         this.lastOutcome = 'connected';
         this.nextInS = interval(b.heartbeatS, 30);
         this.d.log.info({ url: this.key.url, proxyId: this.key.proxyId }, 'admin_connected');
@@ -561,7 +597,10 @@ export class AdminClient {
       this.state = 'stopped';
       return;
     }
-    if (wasConnected) this.d.log.info({ code }, 'admin_disconnected');
+    if (wasConnected) {
+      this.d.log.info({ code }, 'admin_disconnected');
+      this.downSince = Date.now();
+    }
     if (wasConnected && !this.noReset && Date.now() - this.connectedAt >= this.t.resetAfterMs) this.attempt = 0;
     const random = this.d.random ?? Math.random;
     const normal = () => backoffDelay(this.attempt++, this.t.backoffCapMs, random);
@@ -570,21 +609,25 @@ export class AdminClient {
       // Ours to fix (a chmod, a removed file): checked again soon, whatever the backoff says.
       this.fail(this.reason ?? 'a local problem');
       this.lastOutcome = 'backoff';
+      this.attemptEnded('local problem', wasConnected);
       return this.retry('backoff', Math.min(normal(), this.t.localRetryMs));
     }
     if (this.untrusted || code === 4401 || code === 4403) {
       this.fail(this.untrusted ? this.reason! : `rejected by cams-admin (${code}): re-enroll`);
       if (this.lastOutcome !== 'rejected') this.d.log.info({ code }, 'admin_rejected');
       this.lastOutcome = 'rejected';
+      this.attemptEnded('rejected', wasConnected);
       return this.retry('rejected', this.t.rejectedRetryMs);
     }
     if (code === 4409) {
       this.fail('replaced by another connection with the same key (4409)');
       this.d.log.info({}, 'admin_replaced');
+      this.attemptEnded('replaced', wasConnected);
       return this.retry('backoff', this.t.replacedWaitMs + normal());
     }
     if (code === 4429) {
       this.fail('rate limited by cams-admin (4429)');
+      this.attemptEnded('rate limited', wasConnected);
       return this.retry('backoff', (this.retryAfterS ?? this.t.rateLimitedDefaultS) * 1000 + normal());
     }
     if (!opened && (await this.incompatible())) {
@@ -592,12 +635,25 @@ export class AdminClient {
       this.fail('cams-admin does not speak cams-admin.v1: update the proxy or cams-admin');
       if (this.lastOutcome !== 'incompatible') this.d.log.info({}, 'admin_incompatible');
       this.lastOutcome = 'incompatible';
+      this.attemptEnded('incompatible', wasConnected);
       return this.retry('incompatible', this.t.incompatibleRetryMs);
     }
     if (this.stopping) return;
     this.fail(this.reason ?? (!opened ? 'cams-admin could not be reached' : !wasConnected ? `closed during the handshake (${code})` : `connection closed (${code})`));
     this.lastOutcome = 'backoff';
+    this.attemptEnded(this.attemptFailure, wasConnected);
     this.retry('backoff', normal());
+  }
+
+  // Why this attempt ended, for the health item; a failed attempt also warns,
+  // at most once per connectFailedLogMs (no address: reason and attempt only).
+  private attemptEnded(reason: string | null, wasConnected: boolean): void {
+    this.failure = reason;
+    if (wasConnected) return;
+    const now = Date.now();
+    if (this.lastFailLogAt !== null && now - this.lastFailLogAt < this.t.connectFailedLogMs) return;
+    this.lastFailLogAt = now;
+    this.d.log.warn({ reason: reason ?? 'unknown', attempt: this.attempt }, 'admin_connect_failed');
   }
 
   private retry(state: ClientState, ms: number): void {
@@ -615,6 +671,7 @@ export class AdminClient {
       u.protocol = u.protocol === 'wss:' ? 'https:' : 'http:';
       const r = await (this.d.fetchImpl ?? fetch)(u, { signal: AbortSignal.timeout(5000), redirect: 'error' });
       if (r.status !== 426) {
+        this.attemptFailure ??= `HTTP ${r.status}`;
         await r.body?.cancel().catch(() => undefined);
         return false;
       }
@@ -623,7 +680,8 @@ export class AdminClient {
       if (text === null) return false;
       const b = JSON.parse(text) as { supported?: unknown };
       return Array.isArray(b.supported) && !b.supported.includes(PROTOCOL);
-    } catch {
+    } catch (err) {
+      this.attemptFailure = connectFailureReason(err) ?? this.attemptFailure;
       return false;
     }
   }
