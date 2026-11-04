@@ -63,7 +63,7 @@
     },
     'inventory-duplicates': {
       title: 'Remove duplicate clips',
-      message: `Remove ${duplicates.count} clips (${mbText(duplicates.bytes)}) fetched from the camera? Each is a recording the proxy also has as an FTP clip: the FTP copy stays, which starts a few seconds later. A pair is left alone unless the FTP copy is a readable video that reaches the recording's end. This can't be undone, except by retrieving the recording again while the SD card still has it.`,
+      message: `Remove ${duplicates.count} clips (${mbText(duplicates.bytes)}) fetched from the camera? Each is a recording the proxy also has as an FTP clip: the FTP copy stays, which starts a few seconds later, so those first seconds go with the fetched clip. A pair is left alone unless the FTP copy is a readable video that reaches the recording's end. This can't be undone: the inventory won't offer the recording again, because the FTP copy holds it.`,
       confirmLabel: 'Remove clips',
     },
     'inventory-recover': {
