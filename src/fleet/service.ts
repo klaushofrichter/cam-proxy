@@ -11,6 +11,7 @@ import { deleteKeyFile, KeyFileInvalid, KeyFileUnsafe, readKeyFile, type AdminKe
 import { fingerprint, trimSlashes } from './protocol';
 import { EventOutbox } from './outbox';
 import type { MoveEvent } from '../moves/types';
+import type { AdminConnection } from '../health/cams-admin';
 
 // cams-admin for the proxy (spec 2026-10-06-cams-admin-phase1-design §9):
 // follows camsAdmin.* and the key file, holds at most one client, and gives
@@ -65,6 +66,9 @@ export interface CamsAdminDeps {
 // While the key file is unsafe, invalid or missing: read again this often.
 export const DEFAULT_RECHECK_MS = 30_000;
 
+// What keeps a configured proxy from having a client, for the health item.
+const OWN_REASON: Partial<Record<CamsAdminState, string>> = { 'not-enrolled': 'not enrolled', 'key-unsafe': 'key file unsafe', 'key-invalid': 'key file invalid' };
+
 const EMPTY = { account: null, proxyId: null, fingerprint: null, enrolledAt: null, connectedSince: null, lastHeartbeatAt: null, lastAckAt: null, retryInMs: null, truncated: false, lingering: 0 };
 
 export class CamsAdmin {
@@ -77,6 +81,8 @@ export class CamsAdmin {
   private warned: string | null = null;
   private enrolling = false;
   private recheck: NodeJS.Timeout | null = null;
+  // Since when a configured proxy has had no usable key; ended by a welcome or by no longer being configured.
+  private ownDownSince: number | null = null;
   // Move events that wait for a connection (the newest 256), and what runs after each welcome.
   private readonly outbox: EventOutbox;
   private readonly welcomeHooks: (() => void)[] = [];
@@ -119,6 +125,16 @@ export class CamsAdmin {
     }
     const k = this.key;
     return { ...EMPTY, ...(k ? { account: k.account, proxyId: k.proxyId, fingerprint: fingerprint(k.publicKey), enrolledAt: k.enrolledAt } : {}), state: this.own.state, url, lastError: this.own.lastError, lastErrorAt: this.own.lastErrorAt };
+  }
+
+  // For the health item: null when not configured (no URL, or camsAdmin.enabled off).
+  connection(): AdminConnection | null {
+    if (this.client) {
+      const c = this.client.connection();
+      return c.connected || this.ownDownSince === null ? c : { ...c, downSince: Math.min(c.downSince, this.ownDownSince) };
+    }
+    const reason = OWN_REASON[this.own.state];
+    return reason && this.ownDownSince !== null ? { connected: false, downSince: this.ownDownSince, reason } : null;
   }
 
   // Follows the settings and the key file now; one apply at a time.
@@ -177,6 +193,7 @@ export class CamsAdmin {
 
   private setOwn(state: CamsAdminState, lastError: string | null): void {
     this.own = { state, lastError, lastErrorAt: lastError ? Date.now() : null };
+    this.ownDownSince = OWN_REASON[state] ? (this.ownDownSince ?? Date.now()) : null;
   }
 
   private clearRecheck(): void {
@@ -242,7 +259,10 @@ export class CamsAdmin {
     if (this.client && this.running === want) return;
     await this.stopClient(this.client ? 'restart' : 'shutdown');
     if (this.stopped) return;
-    this.client = new AdminClient({ keyFile: key, health: this.d.health, proxyInfo: this.d.proxyInfo, profile: this.d.profile, moveLeftovers: this.d.moveLeftovers, onboardingNow: this.d.onboardingNow, version: this.d.version, log: this.d.log, changeKey: this.d.changeKey, timing: this.d.timing, commands: this.d.commands?.() ?? undefined, replay: this.d.replay, outbox: this.outbox, onWelcome: () => this.welcomeHooks.forEach((h) => h()) });
+    this.client = new AdminClient({ keyFile: key, health: this.d.health, proxyInfo: this.d.proxyInfo, profile: this.d.profile, moveLeftovers: this.d.moveLeftovers, onboardingNow: this.d.onboardingNow, version: this.d.version, log: this.d.log, changeKey: this.d.changeKey, timing: this.d.timing, commands: this.d.commands?.() ?? undefined, replay: this.d.replay, outbox: this.outbox, onWelcome: () => {
+      this.ownDownSince = null;
+      this.welcomeHooks.forEach((h) => h());
+    } });
     this.running = want;
     this.client.start();
   }

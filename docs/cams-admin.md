@@ -136,7 +136,38 @@ Close codes: 4409 (another connection with the same key) waits 30 s first;
 normally. Three heartbeats without an `ack` (a half-open link) close and
 reconnect. Logs: `admin_connected`, `admin_disconnected`, `admin_rejected`,
 `admin_incompatible` at info once per change; `admin_client_error` and
-`admin_server_untrusted` at warn; the rest at debug.
+`admin_server_untrusted` at warn; `admin_connect_failed` at warn at most once
+a minute while connecting fails (its short reason and the attempt, no address);
+the rest at debug.
+
+### The health item
+
+The health summary has an item `camsAdmin`, "cams-admin", so a lost connection
+shows on the proxy itself: the Status page and `GET /api/local/health` (the Pi's
+display). Everything else on a proxy works without cams-admin, so nothing else
+would show it.
+
+| connection | item |
+|---|---|
+| no `camsAdmin.url`, or `camsAdmin.enabled` false | no item: a standalone proxy isn't a problem |
+| connected | ok, "connected" |
+| down, under 2 minutes | warning, "reconnecting": a cams-admin deploy restarts it, and reconnects were measured at up to about 2 minutes |
+| down for 2 minutes or more | problem, "not connected for N min (reason)" |
+
+A proxy that never connected counts from its start, with the same texts. The
+reason, when known, is one of a fixed list, never an error's message: name
+lookup failed, refused, timeout, unreachable, connection reset, certificate
+problem, HTTP *status*, rejected, incompatible, replaced, rate limited, local
+problem; without a client: not enrolled, key file unsafe, key file invalid.
+
+**cams-admin never sees this item fail.** While the connection is down it
+receives nothing, and while it is up the item says ok. cams-admin's own view of
+a silent proxy is its offline state.
+
+The client keeps retrying through a DNS failure (`test/fleet-client.test.ts`
+runs Node's WebSocket with a failing, then working, `dns.lookup`). A container
+whose `/etc/resolv.conf` is empty can't recover by itself, because the file was
+fixed when the container started: restart it. This item is how that gets noticed.
 
 ## Never in the way
 

@@ -43,6 +43,7 @@
               "underVoltage",
               "inventory",
               "moveSync",
+              "camsAdmin",
               "version"
             ]
           },
@@ -332,6 +333,7 @@
                     "underVoltage",
                     "inventory",
                     "moveSync",
+                    "camsAdmin",
                     "version"
                   ]
                 },
