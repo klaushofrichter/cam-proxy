@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.11.04.2
+
 - New health item "cams-admin" (`camsAdmin`): the proxy's own connection to cams-admin now shows on the Status page and the Pi display. Connected: ok. Down under 2 minutes (a cams-admin deploy): a warning, "reconnecting". Longer, or never connected since the start: a problem, "not connected for N min", with a short reason such as "name lookup failed". No item on a proxy not set up for cams-admin. cams-admin itself only ever sees it as ok, since it hears nothing while the connection is down.
 - A failing connection to cams-admin is now logged: `admin_connect_failed` at warn, at most once a minute. Until now those retries only showed at debug.
 
