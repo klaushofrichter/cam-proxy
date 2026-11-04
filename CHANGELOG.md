@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.11.04.1
+
 - Clips inventory, an E1 Outdoor Pro's FTP clips (#342): such a clip starts about 8 s after the SD recording of the same event, so the recording counted as missing, and a repair or a move's check fetched a second copy. An FTP clip that starts up to 10 s after a recording, before the recording ended, now counts as that recording (a clip within 5 s still comes first; each clip pairs with one recording). The repair and the check after a move stop fetching these, and a recording's `clipId` in `GET /api/cameras/{cam}/recordings` finds them too. Other cameras pair as before: an RLC-1224A's clips at +13 s and later stay separate recordings.
 - Duplicate clips can now be found and removed. A clips compare with the camera reports a recording held twice (a clip fetched from the camera and its FTP copy) as `duplicate-clip` items and the counts `duplicates` and `duplicatesBytes`; such an FTP copy no longer counts as gone from the camera. The new repair `{"kind":"duplicates","runId":"clips-…"}` (Maintenance, Inventory: "Remove N duplicate clips") removes the fetched copy and its file and keeps the FTP copy, only when the FTP copy is a readable video that reaches the recording's end, so never the only copy. Audited as `inventory-repair`. It never runs by itself.
 - Docs: a step-by-step runbook for moving a camera to another proxy, including a camera that also changes network ([docs/camera-move-runbook.md](docs/camera-move-runbook.md)).
