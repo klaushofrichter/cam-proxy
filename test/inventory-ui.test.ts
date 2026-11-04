@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addNothing, autoStep, clipsLines, duration, LOAD_ERROR, loadMessage, problemRows, eventsLines, eventsOffer, eventsRepairLines, gapRows, recoverText, kindsText, progressText, RECOVER_MAX, repairLines, repairOffer, repairRows, retrieveNothing, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type RepairReport, type StillsReport } from '../web/src/lib/inventory';
+import { addNothing, autoStep, clipsLines, duplicatesOffer, duplicatesRepairLines, duration, LOAD_ERROR, loadMessage, problemRows, eventsLines, eventsOffer, eventsRepairLines, gapRows, recoverText, kindsText, progressText, RECOVER_MAX, repairLines, repairOffer, repairRows, retrieveNothing, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type RepairReport, type StillsReport } from '../web/src/lib/inventory';
 import { mbText } from '../web/src/lib/format';
 
 const fmt = (ms: number) => new Date(ms).toISOString().slice(11, 19);
@@ -130,6 +130,33 @@ describe('Inventory box helpers, clips', () => {
     const local = { ...clipsReport, options: undefined, window: { from: T, to: T + 600_000, reason: 'retention' } };
     expect(clipsLines(local, fmt)).toHaveLength(3);
     expect(clipsLines({ ...clipsReport, outcome: 'failed', error: 'camera_offline: the camera does not answer' }, fmt)).toEqual(['Failed: camera_offline: the camera does not answer']);
+  });
+
+  // #342
+  it('shows and offers duplicate clips only under a recent, finished compare that lists them', () => {
+    const MB = 2 ** 20;
+    const r = { ...clipsReport, counts: { ...clipsReport.counts, duplicates: 2, duplicatesBytes: 3 * MB }, items: [{ type: 'duplicate-clip', start: T, size: MB }, { type: 'duplicate-clip', start: T, size: 2 * MB }, { type: 'gone-from-camera', start: T }] };
+    expect(clipsLines(r, fmt)).toContain('2 recordings are here twice: a clip fetched from the camera and its FTP copy (3.0 MB to free)');
+    expect(clipsLines(clipsReport, fmt).join()).not.toContain('twice');
+    expect(duplicatesOffer(r, T + 60_000)).toEqual({ count: 2, bytes: 3 * MB });
+    expect(duplicatesOffer(r, T + 3_600_000)).toBeNull();
+    expect(duplicatesOffer({ ...r, options: undefined }, T)).toBeNull();
+    expect(duplicatesOffer({ ...r, outcome: 'cancelled' }, T)).toBeNull();
+    expect(duplicatesOffer(clipsReport, T)).toBeNull();
+    expect(duplicatesOffer(r, T, { source: 'clips-1-abcdef' })).toBeNull();
+    expect(duplicatesOffer(null, T)).toBeNull();
+  });
+
+  it('words the removal: removed, left alone and why, stops', () => {
+    const base = { runId: 'duplicatesrepair-1-abcdef', kind: 'duplicates', startedAt: T, tookMs: 1, outcome: 'ok' as const, message: '', top: [], counts: { requested: 3, done: 1, failed: 0, skipped: 2, bytes: 2 ** 20 } };
+    const items = [{ id: 'a', start: T, result: 'skipped' as const, reason: 'keep-short' }, { id: 'b', start: T, result: 'skipped' as const, reason: 'keep-short' }, { id: 'c', start: T, result: 'ok' as const }];
+    expect(duplicatesRepairLines({ ...base, items, stopped: 'item-cap' })).toEqual([
+      'Removed: 1 of 3 fetched copies (1.0 MB); failed: 0; left alone: 2',
+      'Left alone, the FTP copy stops before the recording ends: 2',
+      'Stopped: the report listed only some; search again for the rest',
+    ]);
+    expect(duplicatesRepairLines({ ...base, outcome: 'failed', error: 'x' })).toEqual(['Failed: x']);
+    expect(duplicatesRepairLines({ ...base, outcome: 'cancelled' })[0]).toBe('Cancelled: the clips removed so far stay removed');
   });
 
   it('offers a repair only under a recent, finished compare with something missing; at most 50 clips', () => {

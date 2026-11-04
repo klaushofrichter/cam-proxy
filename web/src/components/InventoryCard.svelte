@@ -6,7 +6,7 @@
   import { mbText } from '../lib/format';
   import { lockedWhy, rights } from '../lib/rights';
   import LockedNote from './LockedNote.svelte';
-  import { addNothing, autoStep, clipsLines, LOAD_ERROR, loadMessage, eventsLines, eventsOffer, eventsRepairLines, gapRows, problemRows, progressText, ranText, recoverText, repairLines, repairOffer, repairRows, retrieveNothing, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type InventoryState, type RepairReport, type StillsReport } from '../lib/inventory';
+  import { addNothing, autoStep, clipsLines, duplicatesOffer, duplicatesRepairLines, LOAD_ERROR, loadMessage, eventsLines, eventsOffer, eventsRepairLines, gapRows, problemRows, progressText, ranText, recoverText, repairLines, repairOffer, repairRows, retrieveNothing, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type InventoryState, type RepairReport, type StillsReport } from '../lib/inventory';
 
   // The inventories (spec 2026-10-02-inventory-design): start one, follow its
   // progress (polled every second while it runs), cancel it, and show the
@@ -21,13 +21,15 @@
   // add missing events" (the check) open that dialog by themselves when the
   // run their click started ends with something to take (`auto` true);
   // Cancel leaves the follow-up button.
-  let { onrepair, onrecover }: { onrepair: (offer: { count: number; bytes: number }, auto?: boolean) => void; onrecover: (offer: { count: number; text: string }, auto?: boolean) => void } = $props();
+  // Removing duplicates (#342) asks through the same dialog (onremove), never by itself.
+  let { onrepair, onrecover, onremove }: { onrepair: (offer: { count: number; bytes: number }, auto?: boolean) => void; onrecover: (offer: { count: number; text: string }, auto?: boolean) => void; onremove: (offer: { count: number; bytes: number }) => void } = $props();
   // Issue #227: inventory runs are the local admin's.
   const locked = $derived(lockedWhy($rights, 'local'));
   let inv = $state<InventoryState | null>(null);
   let stills = $state<StillsReport | null>(null);
   let clips = $state<ClipsReport | null>(null);
   let repair = $state<RepairReport | null>(null);
+  let removal = $state<RepairReport | null>(null);
   let events = $state<EventsReport | null>(null);
   let recover = $state<RepairReport | null>(null);
   let message = $state('');
@@ -37,6 +39,7 @@
   const busy = $derived(!!inv?.running);
   const offer = $derived(repairOffer(clips, now, repair));
   const recoverOffer = $derived(eventsOffer(events, now, recover));
+  const removeOffer = $derived(duplicatesOffer(clips, now, removal));
   const clipsNothing = $derived(retrieveNothing(clips));
   const eventsNothing = $derived(addNothing(events));
   // The run this page's search click started, until its report is in.
@@ -55,6 +58,8 @@
     if (cl && cl.runId !== clips?.runId) clips = await fetchReport<ClipsReport>(cl.runId);
     const rp = s.repairs?.clips?.[0];
     if (rp && rp.runId !== repair?.runId) repair = await fetchReport<RepairReport>(rp.runId);
+    const rm = s.repairs?.duplicates?.[0];
+    if (rm && rm.runId !== removal?.runId) removal = await fetchReport<RepairReport>(rm.runId);
     const ev = s.runs.events?.[0];
     if (ev && ev.runId !== events?.runId) events = await fetchReport<EventsReport>(ev.runId);
     const rc = s.repairs?.events?.[0];
@@ -108,6 +113,7 @@
   const searchClips = () => start('clips', true, (id) => (pendingClips = id));
   const searchEvents = () => start('events', false, (id) => (pendingEvents = id));
   export const fetchLost = () => clips && post(actionPath($status, $selectedCamera, 'inventory-repair'), { kind: 'clips', runId: clips.runId }, 'Repair');
+  export const removeDuplicates = () => clips && post(actionPath($status, $selectedCamera, 'inventory-repair'), { kind: 'duplicates', runId: clips.runId }, 'Repair');
   export const addMissing = () => events && post(actionPath($status, $selectedCamera, 'inventory-repair'), { kind: 'events', runId: events.runId }, 'Repair');
   async function cancel() {
     cancelling = true;
@@ -188,6 +194,21 @@
         <p class="small">Fetches them from the camera's SD card over Baichuan, one at a time, after any viewer's download; at most 50 clips or 200 MB per run.</p>
         {#if offer.tooBig}<p class="small" data-testid="inventory-repair-too-big">{offer.tooBig} recordings are larger than one run's 200 MB and are skipped.</p>{/if}
       {/if}
+      {#if removeOffer}
+        <div class="buttons">
+          <button onclick={() => onremove(removeOffer)} disabled={starting || busy || !!locked} data-testid="inventory-remove-duplicates">Remove {removeOffer.count} duplicate clips ({mbText(removeOffer.bytes)})</button>
+        </div>
+        <p class="small">Removes the clip fetched from the camera and keeps its FTP copy, only when the FTP copy is a readable video that reaches the recording's end.</p>
+      {/if}
+    </div>
+  {/if}
+  {#if removal}
+    <div class="result" data-testid="inventory-duplicates-result" data-run={removal.runId}>
+      <p class="line">{removal.message}</p>
+      <p class="small">{ranText(removal)}</p>
+      <ul>
+        {#each duplicatesRepairLines(removal) as l, i (i)}<li>{l}</li>{/each}
+      </ul>
     </div>
   {/if}
   {#if repair}

@@ -45,22 +45,33 @@ export function clipByPath(c: Catalog, path: string): ClipRow | undefined {
   return c.db.prepare('SELECT * FROM clips WHERE path = ?').get(path) as unknown as ClipRow | undefined;
 }
 
-// The FTP copy of an SD recording: same camera and stream, the closest start
-// within `slackMs` (cams' 5 s), or undefined.
+// A clip of an SD recording by its start: same camera and stream, the closest
+// start within `slackMs` (5 s), or undefined.
 export function clipNear(c: Catalog, cam: string, stream: string, ts: number, slackMs: number): ClipRow | undefined {
   return c.db
     .prepare('SELECT * FROM clips WHERE cam = ? AND stream = ? AND start_ts BETWEEN ? AND ? ORDER BY ABS(start_ts - ?), id LIMIT 1')
     .get(cam, stream, ts - slackMs, ts + slackMs, ts) as unknown as ClipRow | undefined;
 }
 
+// An FTP clip that starts late in an SD recording (inventory/match.ts, #342):
+// after `slackMs`, at most `lateMs` after its start and before its end; the
+// earliest. `since`: only one received from then on.
+export function lateFtpClip(c: Catalog, cam: string, stream: string, rec: { start: number; end: number }, slackMs: number, lateMs: number, since: number): ClipRow | undefined {
+  return c.db
+    .prepare("SELECT * FROM clips WHERE cam = ? AND stream = ? AND origin = 'ftp' AND start_ts > ? AND start_ts <= ? AND start_ts < ? AND received_at >= ? ORDER BY start_ts, id LIMIT 1")
+    .get(cam, stream, rec.start + slackMs, rec.start + lateMs, rec.end, since) as unknown as ClipRow | undefined;
+}
+
 // clipNear for many starts at once (one query, not one per start): for each
-// [stream, ts], the same clip clipNear would answer, or undefined.
-export function clipsNear(c: Catalog, cam: string, wanted: { stream: string; ts: number }[], slackMs: number): (ClipRow | undefined)[] {
+// [stream, ts], the same clip clipNear would answer, or undefined. With
+// `lateMs` a start that has none, and whose `end` is known, then gets the first
+// FTP clip that starts late in it (lateFtpClip) and no other start got.
+export function clipsNear(c: Catalog, cam: string, wanted: { stream: string; ts: number; end?: number }[], slackMs: number, lateMs = 0): (ClipRow | undefined)[] {
   if (!wanted.length) return [];
   const lo = Math.min(...wanted.map((w) => w.ts)) - slackMs;
-  const hi = Math.max(...wanted.map((w) => w.ts)) + slackMs;
+  const hi = Math.max(...wanted.map((w) => w.ts)) + Math.max(slackMs, lateMs);
   const rows = c.db.prepare('SELECT * FROM clips WHERE cam = ? AND start_ts BETWEEN ? AND ? ORDER BY start_ts, id').all(cam, lo, hi) as unknown as ClipRow[];
-  return wanted.map(({ stream, ts }) => {
+  const near = wanted.map(({ stream, ts }) => {
     let best: ClipRow | undefined;
     for (const r of rows) {
       if (r.stream !== stream || r.start_ts < ts - slackMs || r.start_ts > ts + slackMs) continue;
@@ -68,6 +79,15 @@ export function clipsNear(c: Catalog, cam: string, wanted: { stream: string; ts:
       if (!best || d < bd! || (d === bd && r.id < best.id)) best = r;
     }
     return best;
+  });
+  if (!lateMs) return near;
+  const taken = new Set(near.flatMap((r) => (r ? [r.id] : [])));
+  return near.map((r, i) => {
+    const { stream, ts, end } = wanted[i];
+    if (r || end === undefined) return r;
+    const late = rows.find((x) => !taken.has(x.id) && x.stream === stream && x.origin === 'ftp' && x.start_ts > ts + slackMs && x.start_ts <= ts + lateMs && x.start_ts < end);
+    if (late) taken.add(late.id);
+    return late;
   });
 }
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { createCamSim, type CamSim, type Model, type SeedClip } from 'cam-sim';
@@ -12,6 +12,7 @@ import { DEFAULTS, type Config } from '../src/config/defaults';
 import { clipsCheck } from '../src/inventory/clips';
 import { eventsCheck } from '../src/inventory/events';
 import { clipsRepair, type RepairItem } from '../src/inventory/repair-clips';
+import { duplicatesRepair, type DuplicateRepairItem } from '../src/inventory/repair-duplicates';
 import { eventsRepair } from '../src/inventory/repair-events';
 import { InventoryRunner, type InventoryReport } from '../src/inventory/runner';
 import { createRecordingsSide, type RecordingsSide } from '../src/recordings/side';
@@ -103,6 +104,7 @@ async function world(o: { seed: SeedClip[]; tz?: string; model?: Model; tweak?: 
       },
       events: { label: 'Events', run: eventsCheck(eventsDeps), repair: eventsRepair(eventsDeps) },
     },
+    repairs: { duplicates: { label: 'Duplicate clips', source: 'clips', repair: duplicatesRepair({ catalog, dataDir: dir, prune: () => void storage.run({}) }) } },
   });
   const local = (start: number, bytes: number) => {
     const path = join(dir, 'clips', 'cam1', ...utcDayParts(start), `${utcHhmm(start)}-${start}.mp4`);
@@ -162,6 +164,44 @@ describe('clips check → repair against cam-sim', () => {
     expect(rows.map((r) => [r.start_ts, r.origin])).toEqual(lost.map((t) => [t, 'camera']));
     const again = await w.check();
     expect(again.counts).toMatchObject({ missingLocally: 0, paired: 8, fromCamera: 4 });
+  }, 60_000);
+
+  // #342: measured on an E1 Outdoor Pro: the FTP clip starts 8 s after the SD recording.
+  const ftpFrom = (w: World, file: string, start: number, end: number) => {
+    const path = join(w.dir, 'clips', 'cam1', ...utcDayParts(start), `${utcHhmm(start)}-${start}.mp4`);
+    mkdirSync(dirname(path), { recursive: true });
+    copyFileSync(file, path);
+    return insertClip(w.catalog, { cam: 'cam1', start_ts: start, end_ts: end, path, stream: 'sub', size: 1000, received_at: NOW, snapshot: null });
+  };
+
+  it('E1 Outdoor Pro: an FTP clip at +8 s holds its recording, so the check finds nothing to fetch', async () => {
+    const w = await world({ seed: [{ daysAgo: 1, start: '021328', end: '021414', triggers: ['motion'] }], model: 'E1-Outdoor-Pro' });
+    w.local(T('2026-10-01T02:13:36'), 1000);
+    const check = await w.check();
+    expect(check.counts).toMatchObject({ recordings: 1, paired: 1, missingLocally: 0, goneFromCamera: 0, duplicates: 0 });
+    await expect(w.repair(check)).rejects.toMatchObject({ code: 'not_repairable' }); // so a move's sync has nothing to fetch either
+    await expect(w.runner.repair('duplicates', WHO, check.runId)).rejects.toMatchObject({ code: 'not_repairable', message: 'no recording is held twice' });
+  }, 60_000);
+
+  it('a duplicate made before the fix: reported, and removed down to the FTP copy; then nothing is missing and nothing is reported', async () => {
+    const start = T('2026-10-01T02:13:28');
+    const w = await world({ seed: [{ daysAgo: 1, start: '021328', end: '021414', triggers: ['motion'] }] });
+    const first = await w.check();
+    expect(first.counts.missingLocally).toBe(1);
+    await w.repair(first);
+    const fetched = listClips(w.catalog, 'cam1', 0, NOW + DAY)[0];
+    expect(fetched).toMatchObject({ origin: 'camera', start_ts: start });
+    const ftp = ftpFrom(w, fetched.path, start + 8000, start + 49_000);
+    const check = await w.check();
+    expect(check.counts).toMatchObject({ paired: 1, missingLocally: 0, goneFromCamera: 0, duplicates: 1, duplicatesBytes: fetched.size });
+    const rep = await (await w.runner.repair('duplicates', WHO, check.runId)).done;
+    expect(rep).toMatchObject({ kind: 'duplicates', op: 'repair', outcome: 'ok', source: check.runId, stopped: null, counts: { done: 1, skipped: 0, failed: 0 } });
+    expect((rep.items as DuplicateRepairItem[]).map((x) => [x.result, x.clipId, x.keptClipId])).toEqual([['ok', fetched.id, ftp.id]]);
+    expect(listClips(w.catalog, 'cam1', 0, NOW + DAY).map((c) => c.id)).toEqual([ftp.id]);
+    expect(existsSync(fetched.path)).toBe(false);
+    expect(existsSync(ftp.path)).toBe(true);
+    const after = await w.check();
+    expect(after.counts).toMatchObject({ paired: 1, missingLocally: 0, goneFromCamera: 0, duplicates: 0, fromCamera: 0 });
   }, 60_000);
 
   // The E1 Outdoor Pro's names (cam-sim as measured 2026-11-02: RecS03_…,

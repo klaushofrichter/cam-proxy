@@ -573,6 +573,28 @@ stop; and the whole check → repair flow against cam-sim
 than the retention (camera at UTC+9), the per-run cap over several runs, a
 full store, and the events check and repair afterwards.
 
+## Amendment 2026-11-04: late FTP clips and duplicates (#342)
+
+Measured 2026-11-03/04: an E1 Outdoor Pro's FTP clip (sub stream) starts about
+8 s after the SD recording and ends 2-3 s later, so decision 7's ±5 s reported
+those recordings as missing, and the repair and the post-move sync fetched a
+second copy. An RLC-1224A's fetched and FTP clips overlapping at +13 s to +33 s
+stay separate recordings. Klaus's decisions:
+
+- Pairing: besides ±5 s, an FTP clip that starts more than 5 s and at most 10 s
+  after the recording, before the recording ended, is the same recording. Closest
+  first stays, so a clip within 5 s wins. Only an `ftp` clip: a fetched clip
+  starts exactly where its recording does.
+- The repair's guard follows: an FTP clip in that window holds the recording only
+  if it came since the check. One that was there at the check was paired with
+  another recording (the check left this one alone), so this one is still fetched.
+- A local clip is judged "gone" only when the day up to 10 s before it is listed.
+- Duplicates: a pair whose clip was fetched (or came by FTP) with a left-over clip
+  of the other origin that is the same recording: `duplicate-clip` items, counts
+  `duplicates`, `duplicatesBytes`, and neither copy is "gone". Repair kind
+  `duplicates` (no check of its own, from a clips compare): removes the fetched
+  copy, keeps the FTP copy, and checks each pair again (README). Manual only.
+
 ## References
 
 - Issues #72, #73, #74, #75.

@@ -118,6 +118,51 @@ const until = async (ok: () => boolean, ms = 5000) => {
 };
 
 describe('clips repair', () => {
+  // #342: the guard follows the pairing rule, for what came after the check.
+  describe('a late FTP clip', () => {
+    const ftpClip = (s: ReturnType<typeof setup>, start: number, received = NOW - 1000, origin: 'ftp' | 'camera' = 'ftp') =>
+      insertClip(s.catalog, { cam: 'cam1', start_ts: start, end_ts: start + 30_000, path: join(s.dir, `ftp-${start}.mp4`), stream: 'sub', size: 1, received_at: received, snapshot: null, origin });
+
+    it('that came since the check holds the recording: E1, +8 s, not fetched', async () => {
+      const s = setup();
+      const e = recording(0);
+      s.onCamera(e);
+      ftpClip(s, e.start + 8000);
+      const r = await clipsRepair(s.deps).run(ctx(report([missing(e)])));
+      expect(r.items.map(outcome)).toEqual(['already-local']);
+      expect(s.calls).toEqual([]);
+    });
+
+    it('that was there at the check is another recording\'s: two recordings 8 s apart, the other is still fetched', async () => {
+      const s = setup();
+      const e = recording(0);
+      s.onCamera(e);
+      ftpClip(s, e.start + 8000, NOW - 120_000); // the check paired it with the recording that starts there
+      const r = await clipsRepair(s.deps).run(ctx(report([missing(e)])));
+      expect(r.items.map(outcome)).toEqual(['ok']);
+    });
+
+    it.each([[13], [14], [25], [33]])('RLC-1224A: an overlapping clip at +%i s does not hold it', async (seconds) => {
+      const s = setup();
+      const e = recording(0);
+      s.onCamera(e);
+      ftpClip(s, e.start + seconds * 1000);
+      const r = await clipsRepair(s.deps).run(ctx(report([missing(e)])));
+      expect(r.items.map(outcome)).toEqual(['ok']);
+    });
+
+    it('a clip after the recording ended does not hold it, nor a fetched clip at +8 s', async () => {
+      const s = setup();
+      const shortRec = recording(0, { end: recording(0).start + 6000 });
+      const other = recording(1);
+      s.onCamera(shortRec, other);
+      ftpClip(s, shortRec.start + 8000);
+      ftpClip(s, other.start + 8000, NOW - 1000, 'camera');
+      const r = await clipsRepair(s.deps).run(ctx(report([missing(shortRec), missing(other)])));
+      expect(r.items.map(outcome)).toEqual(['ok', 'ok']);
+    });
+  });
+
   // #117 review: never fetch a late-night recording that may still be written (truncated).
   it('skips a late-night recording listed with end 000000 until 01:00 the next day', async () => {
     const s = setup();

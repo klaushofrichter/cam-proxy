@@ -400,6 +400,98 @@ describe('clips inventory: the edges (review of task 4)', () => {
 
 // The real cam-sim: seeded SD recordings (camera time UTC, its clock at NOW),
 // listed through RecordingList and the HTTP Search like the proxy does.
+// #342, the real data: E1 Outdoor Pro FTP clips start about 8 s after the SD
+// recording; RLC-1224A clips at +13 s and later are other recordings.
+describe('clips inventory: a late FTP clip (#342)', () => {
+  const S = T('2026-10-01T02:13:28');
+  const sd = (start: number, seconds = 46): RecordingEntry => ({ ...rec(start), end: start + seconds * 1000 });
+  const compare = async (recs: RecordingEntry[]) => {
+    const cam = camera({ months: { '2026-09': [29, 30], '2026-10': [1, 2] }, recs: { '2026-10-01': recs } });
+    return clipsCheck(deps(cam.deps))(ctx({ options: { camera: true } }));
+  };
+
+  it('E1: the FTP clip at +8 s holds its recording: paired, not missing, not gone', async () => {
+    clip(S + 8000);
+    const r = await compare([sd(S)]);
+    expect(r.counts).toMatchObject({ recordings: 1, paired: 1, missingLocally: 0, goneFromCamera: 0, duplicates: 0 });
+    expect(ofType(r.items, 'missing-locally')).toEqual([]);
+  });
+
+  it('E1: the same on another stream after an ftp.stream change: never missing', async () => {
+    clip(S + 8000, { stream: 'main' });
+    const r = await compare([sd(S)]);
+    expect(r.counts).toMatchObject({ paired: 0, pairedOtherStream: 1, missingLocally: 0 });
+  });
+
+  it('E1: a clip fetched earlier and the FTP clip are one duplicate: not missing, the FTP clip not gone', async () => {
+    const fetched = clip(S, { origin: 'camera' });
+    const ftp = clip(S + 8000);
+    const r = await compare([sd(S)]);
+    expect(r.counts).toMatchObject({ paired: 1, missingLocally: 0, goneFromCamera: 0, duplicates: 1, duplicatesBytes: 1 });
+    expect(ofType(r.items, 'gone-from-camera')).toEqual([]);
+    const id = rec(S).id;
+    expect(ofType(r.items, 'duplicate-clip')).toEqual([{ type: 'duplicate-clip', id, start: S, end: S + 46_000, stream: 'sub', fetchedClipId: fetched.id, ftpClipId: ftp.id, ftpStart: S + 8000, size: 1 }]);
+    expect(r.message).toContain('1 recordings held twice (0.0 MB fetched)');
+  });
+
+  it('the duplicates come after the recordings the repair fetches, newest first', async () => {
+    const older = S - 3_600_000;
+    clip(older, { origin: 'camera' });
+    clip(older + 8000);
+    clip(S, { origin: 'camera' });
+    clip(S + 8000);
+    const r = await compare([sd(older), sd(S), sd(S + 600_000)]);
+    expect((r.items as Item[]).slice(0, 3).map((x) => [x.type, x.start])).toEqual([['missing-locally', S + 600_000], ['duplicate-clip', S], ['duplicate-clip', older]]);
+  });
+
+  it.each([13, 14, 25, 33])('RLC-1224A: a fetched clip and an overlapping FTP clip at +%i s stay separate recordings', async (s) => {
+    clip(S, { origin: 'camera' });
+    clip(S + s * 1000);
+    // Their own recordings on the card: each pairs with its own.
+    const both = await compare([sd(S, 60), sd(S + s * 1000, 30)]);
+    expect(both.counts).toMatchObject({ recordings: 2, paired: 2, missingLocally: 0, goneFromCamera: 0, duplicates: 0 });
+    // The FTP clip's recording is no longer on the card: gone, as ever; still no duplicate.
+    const alone = await compare([sd(S, 60)]);
+    expect(alone.counts).toMatchObject({ paired: 1, goneFromCamera: 1, duplicates: 0 });
+  });
+
+  it('a recording that ended before the FTP clip starts stays missing, even within 10 s', async () => {
+    clip(S + 8000);
+    const r = await compare([sd(S, 6)]);
+    expect(r.counts).toMatchObject({ paired: 0, missingLocally: 1, goneFromCamera: 1, duplicates: 0 });
+  });
+
+  it('two recordings 8 s apart with one FTP clip: it pairs with one, the other stays missing', async () => {
+    clip(S + 8000);
+    const r = await compare([sd(S), sd(S + 8000)]);
+    expect(r.counts).toMatchObject({ recordings: 2, paired: 1, missingLocally: 1, goneFromCamera: 0, duplicates: 0 });
+    expect(ofType(r.items, 'missing-locally').map((x) => x.start)).toEqual([S]);
+  });
+
+  it('a recording with no clip at all stays missing', async () => {
+    const r = await compare([sd(S)]);
+    expect(r.counts).toMatchObject({ paired: 0, missingLocally: 1, duplicates: 0 });
+  });
+
+  it('a clip whose recording may have started up to 10 s earlier, on a day not listed, is not judged', async () => {
+    const start = T('2026-10-02T00:00:08'); // its recording starts on 2026-10-01 23:59:59, a day whose Search failed
+    clip(start);
+    const cam = camera({ months: { '2026-09': [], '2026-10': [1, 2] }, recs: { '2026-10-02': [rec(T('2026-10-02T08:00:00'))] }, failing: ['2026-10-01'] });
+    const r = await clipsCheck(deps(cam.deps))(ctx({ options: { camera: true } }));
+    expect(r.counts).toMatchObject({ goneFromCamera: 0, duplicates: 0 });
+    expect(r.window.notes).toEqual([NOT_JUDGED]);
+  });
+
+  it('a fetched clip and an FTP clip next to a day not listed are not called duplicates', async () => {
+    const start = T('2026-10-01T23:59:58');
+    clip(start, { origin: 'camera' });
+    clip(start + 8000); // on 2026-10-02, whose Search failed: it may be a recording of its own there
+    const cam = camera({ months: { '2026-09': [], '2026-10': [1, 2] }, recs: { '2026-10-01': [sd(start)] }, failing: ['2026-10-02'] });
+    const r = await clipsCheck(deps(cam.deps))(ctx({ options: { camera: true } }));
+    expect(r.counts).toMatchObject({ paired: 1, duplicates: 0, goneFromCamera: 0 });
+  });
+});
+
 describe('clips inventory against cam-sim', () => {
   it('finds the recordings missing locally and the local clip gone from the SD card', async () => {
     const seed: SeedClip[] = [
