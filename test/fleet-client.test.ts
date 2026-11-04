@@ -1,5 +1,8 @@
+import dns from 'node:dns';
+import net from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { AdminClient, backoffDelay, type ClientDeps, type ClientLog, type Timing } from '../src/fleet/client';
+import { AdminClient, backoffDelay, connectFailureReason, type ClientDeps, type ClientLog, type Timing } from '../src/fleet/client';
+import type { AdminConnection } from '../src/health/cams-admin';
 import { buildHealth } from '../src/health/summary';
 import type { HealthSummary } from '../src/health/summary';
 import { input } from './helpers/health-input';
@@ -410,4 +413,137 @@ describe('stop', () => {
     expect(fake.connections).toBe(n);
     client = undefined;
   });
+});
+
+describe('why the connection is down (the health item, the log)', () => {
+  const closedPort = async () => {
+    const s = net.createServer();
+    await new Promise<void>((r) => s.listen(0, '127.0.0.1', () => r()));
+    const { port } = s.address() as net.AddressInfo;
+    await new Promise((r) => s.close(r));
+    return port;
+  };
+  const clientAt = (over: Partial<ReturnType<FakeAdmin['keyFile']>>, timing: Partial<Timing> = {}) => {
+    client = new AdminClient({ keyFile: fake.keyFile(over), health: async () => summary, proxyInfo: () => ({ startedAt: 1, uptimeS: 2, configSchema: 1, tls: null, publicUrl: null }), version: 'v1', log, timing: { ...FAST, ...timing }, random: () => 0.9 });
+    return client;
+  };
+  const down = (c: AdminClient) => c.connection() as Extract<AdminConnection, { connected: false }>;
+
+  it('the failure codes map to short reasons; anything else has none', () => {
+    const coded = (code: string) => Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error(`x ${code} secret-host.example`), { code }) });
+    for (const c of ['EAI_AGAIN', 'ENOTFOUND']) expect(connectFailureReason(coded(c))).toBe('name lookup failed');
+    expect(connectFailureReason(coded('ECONNREFUSED'))).toBe('refused');
+    for (const c of ['ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT']) expect(connectFailureReason(coded(c))).toBe('timeout');
+    expect(connectFailureReason(Object.assign(new Error('t'), { name: 'TimeoutError' }))).toBe('timeout');
+    expect(connectFailureReason(coded('EHOSTUNREACH'))).toBe('unreachable');
+    expect(connectFailureReason(coded('CERT_HAS_EXPIRED'))).toBe('certificate problem');
+    expect(connectFailureReason(coded('EWHATEVER'))).toBeNull();
+    expect(connectFailureReason(new Error('https://user:pw@secret-host.example/'))).toBeNull();
+    // Several addresses tried: Node's AggregateError carries each one's code.
+    expect(connectFailureReason({ cause: Object.assign(new AggregateError([Object.assign(new Error('a'), { code: 'ECONNREFUSED' })])) })).toBe('refused');
+  });
+
+  it('from the start until the first welcome: down since the start; then connected; a lost connection: down from then', async () => {
+    const before = Date.now();
+    const c = make();
+    c.start();
+    expect(down(c).downSince).toBeGreaterThanOrEqual(before);
+    await until(() => c.view().state === 'connected');
+    expect(c.connection()).toEqual({ connected: true });
+    const lost = Date.now();
+    fake.closeAll(1001);
+    await until(() => !c.connection().connected);
+    expect(down(c).downSince).toBeGreaterThanOrEqual(lost);
+    await until(() => c.connection().connected, 3000);
+  });
+
+  it('a refused connection says refused, in the log too (once for many tries, no address), and goes when connected', async () => {
+    const port = await closedPort();
+    const url = `ws://127.0.0.1:${port}/x`;
+    const c = clientAt({ connectUrl: url });
+    c.start();
+    await until(() => down(c).reason === 'refused', 3000);
+    // More tries: the first warning stays alone within its minute.
+    await new Promise((r) => setTimeout(r, 700));
+    const warned = named('admin_connect_failed');
+    expect(warned).toHaveLength(1);
+    expect(warned[0].level).toBe('warn');
+    expect(warned[0].o).toMatchObject({ reason: 'refused' });
+    expect(JSON.stringify(warned[0].o)).not.toContain(String(port));
+  });
+
+  it('the warning comes again after its interval', async () => {
+    const c = clientAt({ connectUrl: `ws://127.0.0.1:${await closedPort()}/x` }, { connectFailedLogMs: 100 });
+    c.start();
+    await until(() => named('admin_connect_failed').length >= 2, 4000);
+  });
+
+  it('a handshake that times out says timeout', async () => {
+    fake.mode = 'silent';
+    const c = make({ timing: { helloTimeoutMs: 100 } });
+    c.start();
+    await until(() => down(c).reason === 'timeout', 3000);
+  });
+
+  it('a rejected key says rejected; a server that is not compatible says so', async () => {
+    fake.mode = 'reject';
+    const c = make();
+    c.start();
+    await until(() => down(c).reason === 'rejected', 3000);
+    await c.stop('shutdown');
+    fake.mode = 'normal';
+    fake.refuseUpgrade = true;
+    fake.supported = ['cams-admin.v2'];
+    const d = make();
+    d.start();
+    await until(() => down(d).reason === 'incompatible', 3000);
+  });
+
+  it('an ordinary disconnect from a connected state logs no connect failure', async () => {
+    const c = make();
+    c.start();
+    await until(() => c.view().state === 'connected');
+    fake.closeAll(1001);
+    await until(() => named('admin_disconnected').length === 1);
+    await until(() => c.view().state === 'connected', 3000);
+    expect(named('admin_connect_failed')).toHaveLength(0);
+    expect(c.connection()).toEqual({ connected: true });
+  });
+});
+
+// The real thing, for what happened on 2026-11-04: Node's WebSocket and fetch
+// with getaddrinfo failing (a container started before its resolv.conf was
+// written), then working: only dns.lookup is replaced.
+describe('a DNS failure', () => {
+  const realLookup = dns.lookup;
+  afterEach(() => {
+    dns.lookup = realLookup;
+  });
+  for (const code of ['EAI_AGAIN', 'ENOTFOUND']) {
+    it(`${code}: said in the item's reason and the log, and the client keeps retrying and connects once DNS works`, async () => {
+      let broken = true;
+      let lookups = 0;
+      dns.lookup = ((host: string, opts: unknown, cb: unknown) => {
+        const callback = (typeof opts === 'function' ? opts : cb) as (e: Error | null, a?: unknown, f?: number) => void;
+        if (host !== 'cams-admin.test') return (realLookup as (...a: unknown[]) => unknown)(host, opts, cb);
+        lookups++;
+        if (broken) return void process.nextTick(() => callback(Object.assign(new Error(`getaddrinfo ${code} ${host}`), { code, syscall: 'getaddrinfo', hostname: host })));
+        const all = typeof opts === 'object' && (opts as { all?: boolean }).all;
+        process.nextTick(() => (all ? callback(null, [{ address: '127.0.0.1', family: 4 }]) : callback(null, '127.0.0.1', 4)));
+      }) as typeof dns.lookup;
+      const connectUrl = fake.connectUrl.replace('127.0.0.1', 'cams-admin.test');
+      const c = new AdminClient({ keyFile: fake.keyFile({ connectUrl }), health: async () => summary, proxyInfo: () => ({ startedAt: 1, uptimeS: 2, configSchema: 1, tls: null, publicUrl: null }), version: 'v1', log, timing: FAST, random: () => 0.9 });
+      client = c;
+      c.start();
+      await until(() => (c.connection() as { reason?: string }).reason === 'name lookup failed', 3000);
+      expect(named('admin_connect_failed')[0].o).toMatchObject({ reason: 'name lookup failed' });
+      const seen = lookups;
+      await until(() => lookups >= seen + 4, 5000); // it goes on trying
+      expect(c.view().state).not.toBe('connected');
+      broken = false;
+      await until(() => c.view().state === 'connected', 5000);
+      expect(c.connection()).toEqual({ connected: true });
+      await until(() => fake.heartbeats().length >= 1);
+    });
+  }
 });
