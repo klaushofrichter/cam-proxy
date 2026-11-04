@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Clips inventory, an E1 Outdoor Pro's FTP clips (#342): such a clip starts about 8 s after the SD recording of the same event, so the recording counted as missing, and a repair or a move's check fetched a second copy. An FTP clip that starts up to 10 s after a recording, before the recording ended, now counts as that recording (a clip within 5 s still comes first; each clip pairs with one recording). The repair and the check after a move stop fetching these, and a recording's `clipId` in `GET /api/cameras/{cam}/recordings` finds them too. Other cameras pair as before: an RLC-1224A's clips at +13 s and later stay separate recordings.
+- Duplicate clips can now be found and removed. A clips compare with the camera reports a recording held twice (a clip fetched from the camera and its FTP copy) as `duplicate-clip` items and the counts `duplicates` and `duplicatesBytes`; such an FTP copy no longer counts as gone from the camera. The new repair `{"kind":"duplicates","runId":"clips-…"}` (Maintenance, Inventory: "Remove N duplicate clips") removes the fetched copy and its file and keeps the FTP copy, only when the FTP copy is a readable video that reaches the recording's end, so never the only copy. Audited as `inventory-repair`. It never runs by itself.
+- Docs: a step-by-step runbook for moving a camera to another proxy, including a camera that also changes network ([docs/camera-move-runbook.md](docs/camera-move-runbook.md)).
+
+## v2026.11.03.2
+
 - Live video offers the cameras' third stream, `ext` (the Reolink app's *Balanced*; 896×512 on the CX820): `GET /api/cameras/{cam}/live?stream=ext`, for cameras whose ability lists main + ext + sub (the CX820 and the E1 Outdoor Pro; the RLC-1224A has none). A camera's `capabilities` now carry `live`, the streams it offers (`["main", "ext", "sub"]` or `["main", "sub"]`), so clients know when to offer it; ext asked of a camera without it closes with `stream_not_offered`. The camera has ext on HTTP-FLV only (the CX820 answers 404 for every RTSP ext path, measured 2026-11-03), and the FLV needs a login token: go2rtc's `<cam>_ext` reads a feed of the proxy on 127.0.0.1, which opens the camera's FLV with the proxy's own camera session, so the token never reaches go2rtc, its config, API or logs. It runs only while someone watches. Recordings, FTP clips and stills don't change.
 
 ## v2026.11.03.1

@@ -3,7 +3,7 @@ import { join, resolve, sep } from 'path';
 import type { Writable } from 'stream';
 import { finished } from 'stream/promises';
 import { BaichuanError } from '../camera/baichuan/errors';
-import { clipNear } from '../catalog/clips';
+import { clipNear, lateFtpClip } from '../catalog/clips';
 import type { Catalog } from '../catalog/db';
 import { ClipExistsError, type ClipIndexer } from '../clips/indexer';
 import type { RecordingCache } from '../recordings/cache';
@@ -14,7 +14,7 @@ import { SearchError, type RecordingEntry, type RecordingList } from '../recordi
 import { settlesAt, type Stream } from '../recordings/names';
 import { withBusyRetry } from './camera-list';
 import { mb, type ClipItem } from './clips';
-import { START_SLACK_MS } from './match';
+import { LATE_START_MS, START_SLACK_MS } from './match';
 import type { InventoryReport, RepairEntry, RepairResult } from './runner';
 import { DAY, dayStart } from '../time-units';
 import type { ClipSpace } from '../storage';
@@ -26,7 +26,8 @@ import type { ClipSpace } from '../storage';
 // (the most recent missing clips matter most; amendment 2026-11-02, which
 // replaced ruling (a), oldest first). Each one is checked again first
 // (storage not paused, inside the clips retention, same stream, no local clip
-// within 5 s, room by the storage rules, still listed on the SD card), then fetched into the
+// within 5 s and no FTP clip that came since the check and starts late in it
+// (#342), room by the storage rules, still listed on the SD card), then fetched into the
 // recordings cache, pinned only while it is copied into clips/ and indexed
 // with origin 'camera' (ClipIndexer.addRecording). A file the cache can't keep
 // (disk paused, over the cache cap, no room beside the pinned files) is
@@ -277,7 +278,10 @@ export function clipsRepair(d: ClipsRepairDeps): RepairEntry {
         skip(c, 'other-stream'); // ftp.stream changed since the compare
         continue;
       }
-      if (clipNear(d.catalog, s.cam, s.stream, c.start, START_SLACK_MS)) {
+      // The compare's pairing is one to one: a late FTP clip that was there
+      // already is another recording's (the check left this one alone), so only
+      // one received since the check holds this recording (#342).
+      if (clipNear(d.catalog, s.cam, s.stream, c.start, START_SLACK_MS) || lateFtpClip(d.catalog, s.cam, s.stream, c, START_SLACK_MS, LATE_START_MS, ctx.source.startedAt)) {
         skip(c, 'already-local');
         continue;
       }

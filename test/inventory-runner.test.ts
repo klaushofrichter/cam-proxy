@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -212,6 +212,32 @@ describe('InventoryRunner: options and repairs', () => {
     const plain = await runner.start('clips', who, { cam: 'cam1' }).done;
     expect(plain).not.toHaveProperty('options');
     expect(plain.counts.camera).toBe(0);
+  });
+
+  // #342: duplicates has no check: it works from a clips compare.
+  it('a separate repair works from another kind\'s report: its own folder, run ids and records', async () => {
+    const { dir } = setup({});
+    const auditLog = { write: vi.fn() };
+    let seen: string | undefined;
+    const runner = new InventoryRunner({
+      dir: join(dir, 'separate'), audit: auditLog, checks: { clips: clipsKind(), stills: { label: 'Stills', run: async () => result(1) } },
+      repairs: { duplicates: { label: 'Duplicate clips', source: 'clips', repair: { run: async (ctx) => ((seen = ctx.source.runId), repaired(1)), ready: () => null } } },
+    });
+    expect(runner.kinds()).toEqual(['clips', 'stills']); // no check of its own
+    expect(runner.repairKinds()).toEqual(['clips', 'duplicates']);
+    expect(() => runner.start('duplicates', who, { cam: 'cam1' })).toThrow('no inventory of kind duplicates');
+    const check = await runner.start('clips', who, { camera: true, cam: 'cam1' }).done;
+    const { runId, done } = await runner.repair('duplicates', who, check.runId);
+    expect(runId).toMatch(/^duplicatesrepair-\d+-[0-9a-f]{6}$/);
+    const r = await done;
+    expect(seen).toBe(check.runId);
+    expect(r).toMatchObject({ kind: 'duplicates', op: 'repair', source: check.runId, message: 'Duplicate clips repair: 1 fetched' });
+    expect(await runner.get(runId)).toEqual(r);
+    expect((await runner.listRepairs()).duplicates.map((x) => x.runId)).toEqual([runId]);
+    expect((await runner.list()).duplicates).toBeUndefined();
+    expect(auditLog.write).toHaveBeenLastCalledWith(expect.objectContaining({ action: 'inventory-repair', details: expect.objectContaining({ runId, kind: 'duplicates', source: check.runId }) }));
+    const stills = await runner.start('stills', who, { cam: 'cam1' }).done;
+    await expect(runner.repair('duplicates', who, stills.runId)).rejects.toMatchObject({ code: 'not_found' });
   });
 
   it('runs a repair from a recent check report: saved apart, audited as inventory-repair', async () => {

@@ -6,7 +6,7 @@ import type { Catalog } from '../catalog/db';
 import { localDate, settlesAt, triggered, type Kind, type Stream } from '../recordings/names';
 import type { RecordingEntry } from '../recordings/list';
 import { listCamera, UNREADABLE_NOTE, unreadableNames, type CameraListDeps } from './camera-list';
-import { coverage, pairByStart, START_SLACK_MS } from './match';
+import { coverage, duplicatesAmong, LATE_START_MS, pairByStart, START_SLACK_MS } from './match';
 import { MAX_ITEMS, MAX_TOP, type Check, type CheckResult } from './runner';
 import { records } from './stills';
 import { DAY, dayStart, HOUR, utcDayParts } from '../time-units';
@@ -49,6 +49,9 @@ export interface ClipsInventoryDeps {
 export type ClipItem =
   // A repair candidate: `date` is the camera-local day the recording is listed under.
   | { type: 'missing-locally'; id: string; date: string; start: number; end: number; size: number; stream: Stream; kinds: Kind[] }
+  // One recording held twice (#342): a clip fetched from the camera and its FTP
+  // copy. `start`, `end`: the recording's; `size`: the fetched clip's, what removing it frees.
+  | { type: 'duplicate-clip'; id: string; start: number; end: number; stream: Stream; fetchedClipId: number; ftpClipId: number; ftpStart: number; size: number }
   | { type: 'gone-from-camera'; clipId: number; start: number }
   | { type: 'row-without-file'; clipId: number; start: number; file: string }
   | { type: 'file-without-row'; file: string }
@@ -59,7 +62,7 @@ export type ClipItem =
 // The camera days with problems, the most missing first (the report's `top`).
 export interface CameraDayRow { date: string; state: 'listed' | 'unknown'; recordings: number; missingLocally: number; goneFromCamera: number }
 
-interface Row { id: number; start_ts: number; end_ts: number | null; path: string; snapshot: string | null; stream: string; origin: string }
+interface Row { id: number; start_ts: number; end_ts: number | null; path: string; snapshot: string | null; stream: string; origin: string; size: number }
 
 export const mb = (bytes: number) => `${(bytes / 2 ** 20).toFixed(1)} MB`;
 
@@ -93,7 +96,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     const notes: string[] = s.ftpEnabled ? [] : [FTP_OFF_NOTE];
 
     // Part 1: rows and files, one UTC day folder at a time.
-    const rowsOf = db.prepare('SELECT id, start_ts, end_ts, path, snapshot, stream, origin FROM clips WHERE cam = ? AND start_ts >= ? AND start_ts < ? ORDER BY start_ts, id');
+    const rowsOf = db.prepare('SELECT id, start_ts, end_ts, path, snapshot, stream, origin, size FROM clips WHERE cam = ? AND start_ts >= ? AND start_ts < ? ORDER BY start_ts, id');
     const byPath = db.prepare('SELECT 1 AS x FROM clips WHERE path = ? LIMIT 1');
     const bySnapshot = db.prepare('SELECT 1 AS x FROM clips WHERE snapshot = ? LIMIT 1');
     const days: number[] = [];
@@ -201,20 +204,26 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     // with the strict bounds: inside the window, ended by cameraTo, on a
     // listed day.
     const pool = listing.days.flatMap((x) => x.recordings);
-    const edge = db.prepare('SELECT id, start_ts, end_ts, stream FROM clips WHERE cam = ? AND start_ts >= ? AND start_ts < ?').all(s.cam, from - START_SLACK_MS, from) as unknown as Pick<Row, 'id' | 'start_ts' | 'end_ts' | 'stream'>[];
-    const near = [...edge, ...rows].map((r) => ({ id: r.id, start: r.start_ts, end: r.end_ts ?? r.start_ts, stream: r.stream }));
+    const edge = db.prepare('SELECT id, start_ts, end_ts, stream, origin, size FROM clips WHERE cam = ? AND start_ts >= ? AND start_ts < ?').all(s.cam, from - START_SLACK_MS, from) as unknown as Pick<Row, 'id' | 'start_ts' | 'end_ts' | 'stream' | 'origin' | 'size'>[];
+    const near = [...edge, ...rows].map((r) => ({ id: r.id, start: r.start_ts, end: r.end_ts ?? r.start_ts, stream: r.stream, origin: r.origin, size: r.size }));
     const judgedRec = (r: RecordingEntry) => r.start >= from && settlesAt(r) <= cameraTo;
     const judgedClip = (c: { start: number; end: number }) => c.start >= from && c.end <= cameraTo && listed.has(localDate(c.start, t));
     // A clip whose recording may have started outside what was listed (before
     // the window, or on an unknown or unlisted neighbour day) can't be called
     // gone: it is not judged (#74 review).
+    // A recording starts at most 10 s before its clip (a late FTP clip), at most 5 s after it.
     const clearOfEdges = (c: { start: number }) =>
-      c.start >= from + START_SLACK_MS && listed.has(localDate(c.start - START_SLACK_MS, t)) && listed.has(localDate(c.start + START_SLACK_MS, t));
+      c.start >= from + LATE_START_MS && listed.has(localDate(c.start - LATE_START_MS, t)) && listed.has(localDate(c.start + START_SLACK_MS, t));
     const pairing = pairByStart(pool, near.filter((c) => c.stream === s.stream));
     // After an ftp.stream change the clips of the old stream still hold their
-    // recordings: the recordings left over pair with them (same ±5 s) and are
-    // never missing, so the repair never fetches a duplicate.
+    // recordings: the recordings left over pair with them (the same rules) and
+    // are never missing, so the repair never fetches a duplicate.
     const other = pairByStart(pairing.recsAlone, near.filter((c) => c.stream !== s.stream).map((c) => ({ ...c, stream: s.stream })));
+    // One recording held twice (#342): a clip fetched from the camera and its
+    // FTP copy. Only when every part is judged: an FTP clip next to a day not
+    // listed may be a recording of its own there. Its FTP copy is not "gone".
+    const held = duplicatesAmong(pairing.pairs, pairing.clipsAlone).filter((x) => judgedRec(x.rec) && judgedClip(x.fetched) && judgedClip(x.ftp) && clearOfEdges(x.fetched) && clearOfEdges(x.ftp));
+    const twice = new Set(held.flatMap((x) => [x.fetched.id, x.ftp.id]));
     const recs = pool.filter(judgedRec);
     // Newest first (amendment 2026-11-02): the item cut keeps the recordings
     // the repair takes first.
@@ -249,7 +258,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     const gone: typeof near = [];
     let olderThanSd = 0;
     let unjudged = 0;
-    for (const c of pairing.clipsAlone.filter(judgedClip)) {
+    for (const c of pairing.clipsAlone.filter((x) => judgedClip(x) && !twice.has(x.id))) {
       const day = localDate(c.start, t);
       if (!clearOfEdges(c)) unjudged++;
       else if (bound !== null && (day > bound || (day === bound && c.start >= firstOnBound))) gone.push(c);
@@ -276,10 +285,13 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
       goneFromCamera: gone.length,
       olderThanSd,
       otherStream,
+      duplicates: held.length,
+      duplicatesBytes: held.reduce((n, x) => n + x.fetched.size, 0),
     };
     Object.assign(counts, camera);
     const items: ClipItem[] = [
       ...missing.map((r): ClipItem => ({ type: 'missing-locally', id: r.id, date: dayOf.get(r.id)!, start: r.start, end: r.end, size: r.size, stream: r.stream, kinds: r.kinds })),
+      ...held.map((x): ClipItem => ({ type: 'duplicate-clip', id: x.rec.id, start: x.rec.start, end: x.rec.end, stream: x.rec.stream, fetchedClipId: x.fetched.id, ftpClipId: x.ftp.id, ftpStart: x.ftp.start, size: x.fetched.size })),
       ...gone.map((c): ClipItem => ({ type: 'gone-from-camera', clipId: c.id, start: c.start })),
       ...local,
     ];
@@ -301,6 +313,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     message +=
       `; camera (${s.stream}): ${camera.recordings} recordings, ${camera.missingLocally} missing locally (${mb(camera.missingLocallyBytes)}), ` +
       `${camera.goneFromCamera} local clips gone from the camera, ${camera.unknownDays} days unknown` +
+      (camera.duplicates ? `, ${camera.duplicates} recordings held twice (${mb(camera.duplicatesBytes)} fetched)` : '') +
       (unreadable.count ? `, ${unreadable.count} SD names unreadable` : '');
     return {
       window: { ...window, camera: { stream: s.stream, to: cameraTo, oldestSdDay: sdFrom, unknownDays: unknown } },

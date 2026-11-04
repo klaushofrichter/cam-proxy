@@ -7,6 +7,7 @@ import { analysesFor, analysesInRange, analysisFor, type AnalysisRow } from '../
 import { summarize } from '../analytics/classes';
 import type { Found } from '../analytics/providers';
 import { clipById, clipsNear, listClips, oldestClip, overlappingEventsOf, type ClipRow } from '../catalog/clips';
+import { LATE_START_MS, START_SLACK_MS } from '../inventory/match';
 import type { Catalog } from '../catalog/db';
 import { eventById, lastLiveEventTs, listEvents, type EventRow } from '../catalog/events';
 import type { Config } from '../config/defaults';
@@ -334,7 +335,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: 
     try {
       const w = workerOf(res);
       const list = day !== undefined ? await w.recordings.list.date(day, stream, signal) : await w.recordings.list.range(from!, to!, stream, signal);
-      const near = clipsNear(d.catalog, w.id, list.map((e) => ({ stream: e.stream, ts: e.start })), 5000);
+      const near = clipsNear(d.catalog, w.id, list.map((e) => ({ stream: e.stream, ts: e.start, end: e.end })), START_SLACK_MS, LATE_START_MS);
       res.json(list.map((e, i) => ({ id: e.id, start: e.start, end: e.end, stream: e.stream, size: e.size, kinds: e.kinds, clipId: near[i]?.id ?? null })));
     } catch (err) {
       recordingError(res, err);
