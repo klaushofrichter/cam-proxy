@@ -61,6 +61,11 @@
       message: `Retrieve ${offer.count} clips (${mbText(offer.bytes)}) from the camera? They are fetched from its SD card over Baichuan one at a time, after any viewer's download, and added to the Clips page marked "from camera". At most ${REPAIR_MAX_CLIPS} clips or ${REPAIR_MAX_BYTES / MB} MB per run.`,
       confirmLabel: 'Retrieve clips',
     },
+    'inventory-duplicates': {
+      title: 'Remove duplicate clips',
+      message: `Remove ${duplicates.count} clips (${mbText(duplicates.bytes)}) fetched from the camera? Each is a recording the proxy also has as an FTP clip: the FTP copy stays, which starts a few seconds later. A pair is left alone unless the FTP copy is a readable video that reaches the recording's end. This can't be undone, except by retrieving the recording again while the SD card still has it.`,
+      confirmLabel: 'Remove clips',
+    },
     'inventory-recover': {
       title: 'Add missing events',
       message: `Add ${recoverText} from the camera's SD recordings? Each one gets the kind, start and end of its recordings (pre- and post-record included) and is marked "recovered" on the Events page and the Timeline; cams sees it marked too. No SSE message is sent and it is never analysed. At most 1000 per run; existing events are not changed.`,
@@ -77,7 +82,7 @@
       confirmLabel: 'Restart proxy',
     },
   });
-  let asking = $state<'camera-reboot' | 'camera-powercycle' | 'restart-proxy' | 'inventory-repair' | 'inventory-recover' | 'archive-clear' | null>(null);
+  let asking = $state<'camera-reboot' | 'camera-powercycle' | 'restart-proxy' | 'inventory-repair' | 'inventory-duplicates' | 'inventory-recover' | 'archive-clear' | null>(null);
   // Clear the Archive (spec 2026-10-05-archive-design §6, ruling 14): the
   // count when the dialog opened goes into the message and must be typed;
   // the proxy refuses it when the Archive changed meanwhile.
@@ -94,8 +99,9 @@
   }
   // The Inventory box's repair (#74): its dry-run numbers go into the message.
   // A search that ends asks by itself (auto), but never over another open dialog.
-  let inventory = $state<{ fetchLost: () => void; addMissing: () => void } | undefined>();
+  let inventory = $state<{ fetchLost: () => void; addMissing: () => void; removeDuplicates: () => void } | undefined>();
   let offer = $state({ count: 0, bytes: 0 });
+  let duplicates = $state({ count: 0, bytes: 0 });
   // The events repair (#75): the check's count goes into the message.
   let recoverText = $state('');
 
@@ -114,6 +120,10 @@
   function fetchLost() {
     asking = null;
     inventory?.fetchLost();
+  }
+  function removeDuplicates() {
+    asking = null;
+    inventory?.removeDuplicates();
   }
   // One camera action at a time: `send` returns the result line, `failed`
   // the line for an error; then the status and the log are read again.
@@ -234,7 +244,7 @@
       <p class="bad" data-testid="restart-state">The proxy did not come back. Is it running under a supervisor (compose, the cluster)?</p>
     {/if}
   </div>
-  <InventoryCard bind:this={inventory} onrepair={(o, auto) => { if (auto && asking) return; offer = o; asking = 'inventory-repair'; }} onrecover={(o, auto) => { if (auto && asking) return; recoverText = o.text; asking = 'inventory-recover'; }} />
+  <InventoryCard bind:this={inventory} onrepair={(o, auto) => { if (auto && asking) return; offer = o; asking = 'inventory-repair'; }} onrecover={(o, auto) => { if (auto && asking) return; recoverText = o.text; asking = 'inventory-recover'; }} onremove={(o) => { duplicates = o; asking = 'inventory-duplicates'; }} />
   <div class="card">
     <div class="loghead"><h3>Log</h3><span class="small">updates every 10 s</span></div>
     <div class="log">
@@ -251,7 +261,7 @@
 
 {#if asking}
   {@const dlg = DIALOGS[asking]}
-  <ConfirmDialog title={dlg.title} message={dlg.message} confirmLabel={dlg.confirmLabel} typed={asking === 'archive-clear' ? { label: 'Number of clips', matches: (v) => clearMatches(v, archiveNow.count) } : undefined} oncancel={() => (asking = null)} onconfirm={() => void (asking === 'archive-clear' ? clearArchive() : asking === 'inventory-repair' ? fetchLost() : asking === 'inventory-recover' ? addMissing() : asking === 'camera-reboot' ? rebootCamera() : asking === 'camera-powercycle' ? powerCycleCamera() : restartProxy())} />
+  <ConfirmDialog title={dlg.title} message={dlg.message} confirmLabel={dlg.confirmLabel} typed={asking === 'archive-clear' ? { label: 'Number of clips', matches: (v) => clearMatches(v, archiveNow.count) } : undefined} oncancel={() => (asking = null)} onconfirm={() => void (asking === 'archive-clear' ? clearArchive() : asking === 'inventory-repair' ? fetchLost() : asking === 'inventory-duplicates' ? removeDuplicates() : asking === 'inventory-recover' ? addMissing() : asking === 'camera-reboot' ? rebootCamera() : asking === 'camera-powercycle' ? powerCycleCamera() : restartProxy())} />
 {/if}
 
 <style>

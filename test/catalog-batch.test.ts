@@ -31,6 +31,29 @@ describe('clipsNear', () => {
   });
 });
 
+describe('clipsNear with a late window (#342)', () => {
+  it('finds the FTP clip at +8 s for a recording it overlaps; a clip within 5 s and another start keep priority', () => {
+    const { c, done } = catalog();
+    const base = { cam: 'cam1', stream: 'sub', end_ts: null, path: '/x.mp4', size: 1, received_at: T, snapshot: null };
+    const late = insertClip(c, { ...base, start_ts: T + 8000 }).id;
+    insertClip(c, { ...base, start_ts: T + 100_000, origin: 'camera' }); // fetched: no late window
+    const near = insertClip(c, { ...base, start_ts: T + 200_002 }).id;
+    insertClip(c, { ...base, start_ts: T + 200_008 }); // +8 s, but the recording has its clip at +2 s
+    const wanted = [
+      { stream: 'sub', ts: T, end: T + 46_000 },
+      { stream: 'sub', ts: T - 100, end: T + 46_000 }, // the clip is taken by the start before it in the list
+      { stream: 'sub', ts: T + 92_000, end: T + 130_000 }, // +8 s, but a fetched clip
+      { stream: 'sub', ts: T + 200_000, end: T + 240_000 },
+      { stream: 'main', ts: T, end: T + 46_000 },
+    ];
+    expect(clipsNear(c, 'cam1', wanted, 5000, 10_000).map((r) => r?.id)).toEqual([late, undefined, undefined, near, undefined]);
+    expect(clipsNear(c, 'cam1', [{ stream: 'sub', ts: T, end: T + 6000 }], 5000, 10_000)[0]).toBeUndefined(); // it ended before the clip starts
+    expect(clipsNear(c, 'cam1', [{ stream: 'sub', ts: T }], 5000, 10_000)[0]).toBeUndefined(); // no end known
+    expect(clipsNear(c, 'cam1', [{ stream: 'sub', ts: T - 5000, end: T + 46_000 }], 5000, 10_000)[0]?.id).toBeUndefined(); // +13 s
+    done();
+  });
+});
+
 describe('overlappingEventsOf', () => {
   it('matches overlappingEvents for every span, open events included', () => {
     const { c, done } = catalog();

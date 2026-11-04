@@ -318,7 +318,7 @@ export class ClipIndexer {
   }
 }
 
-async function probeVideo(file: string): Promise<{ durationS: number; codec: string } | null> {
+export async function probeVideo(file: string): Promise<{ durationS: number; codec: string } | null> {
   try {
     const { stdout } = await run('ffprobe', ['-v', 'error', '-show_entries', 'format=duration:stream=codec_type,codec_name', '-of', 'json', file], { timeout: 30_000 });
     const j = JSON.parse(stdout) as { format?: { duration?: string }; streams?: { codec_type?: string; codec_name?: string }[] };

@@ -60,6 +60,18 @@ describe('GET /recordings (the list)', () => {
     expect(main.body.map((x: { id: string }) => x.id)).toContain(basename(rec.files.main.name));
   });
 
+  it('#342: the FTP clip of an E1 Outdoor Pro, 8 s after the recording, is its copy; one 13 s after is not', async () => {
+    const rec = recs[recs.length - 1];
+    const { from, to } = windowOf(rec.date);
+    const list = async () => (await request(p.base).get(`/api/cameras/cam1/recordings?from=${from}&to=${to}&stream=sub`).set(auth())).body as { id: string; start: number; end: number; clipId: number | null }[];
+    const item = (await list()).find((x) => x.id === basename(rec.files.sub.name))!;
+    const add = (offset: number, path: string) => insertClip(p.proxy.catalog, { cam: 'cam1', start_ts: item.start + offset, end_ts: item.end + 3000, path, stream: 'sub', size: 1, received_at: item.end, snapshot: null });
+    add(13_000, '/late13.mp4');
+    expect((await list()).find((x) => x.id === item.id)!.clipId).toBeNull();
+    const late = add(8000, '/late8.mp4');
+    expect((await list()).find((x) => x.id === item.id)!.clipId).toBe(late.id);
+  });
+
   it('checks the query: from/to required and ordered, at most 48 hours, stream sub or main; unknown camera 404', async () => {
     const get = (q: string, cam = 'cam1') => request(p.base).get(`/api/cameras/${cam}/recordings${q}`).set(auth());
     const T = Date.now();

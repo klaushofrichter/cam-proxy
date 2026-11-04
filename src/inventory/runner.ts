@@ -43,6 +43,8 @@ export interface RepairEntry { run: Repair; ready: (source: InventoryReport) => 
 // A kind in the check table: `label` names it in messages ("Stills inventory: …");
 // `camera` says it takes the `camera` option.
 export interface InventoryKind { label: string; run: Check; camera?: boolean; repair?: RepairEntry }
+// A repair with no check of its own: it works from a report of kind `source`.
+export interface SeparateRepair { label: string; source: string; repair: RepairEntry }
 type RunOutcome = 'ok' | 'cancelled' | 'failed';
 interface Requester { user?: string; requestedBy: 'session' | 'token' | 'cams-admin' | 'system'; ip?: string; userAgent?: string; cmdId?: string; actor?: string }
 export interface InventoryReport {
@@ -111,7 +113,7 @@ export class InventoryRunner {
   // Bumped by each save: a list() that read the disk before a save doesn't cache.
   private readonly generation = new Map<string, number>();
 
-  constructor(private readonly d: { dir: string; audit: Pick<AuditLog, 'write'>; checks: Partial<Record<string, InventoryKind>>; now?: () => number; keep?: number }) {
+  constructor(private readonly d: { dir: string; audit: Pick<AuditLog, 'write'>; checks: Partial<Record<string, InventoryKind>>; repairs?: Partial<Record<string, SeparateRepair>>; now?: () => number; keep?: number }) {
     this.checks = { ...d.checks };
     this.now = d.now ?? Date.now;
   }
@@ -120,9 +122,13 @@ export class InventoryRunner {
     return Object.keys(this.checks).filter((k) => this.checks[k]);
   }
 
-  // The kinds with a repair.
+  // The kinds with a repair, and the repairs without a check of their own.
   repairKinds(): string[] {
-    return this.kinds().filter((k) => this.checks[k]!.repair);
+    return [...this.kinds().filter((k) => this.checks[k]!.repair), ...Object.keys(this.d.repairs ?? {})];
+  }
+
+  private separate(kind: string): SeparateRepair | undefined {
+    return this.d.repairs && Object.hasOwn(this.d.repairs, kind) ? this.d.repairs[kind] : undefined;
   }
 
   private entry(kind: string): InventoryKind | undefined {
@@ -147,16 +153,19 @@ export class InventoryRunner {
     });
   }
 
-  // Starts a repair from a finished check report of the same kind, less than
-  // an hour old, that the kind's `ready` accepts. Throws like start(), and
-  // RepairRefusedError when the report can't be used.
+  // Starts a repair from a finished check report of the same kind (a separate
+  // repair: of its `source` kind), less than an hour old, that the repair's
+  // `ready` accepts. Throws like start(), and RepairRefusedError when the
+  // report can't be used.
   async repair(kind: string, who: Requester, sourceId: string): Promise<{ runId: string; done: Promise<InventoryReport> }> {
     this.free();
-    const entry = this.entry(kind);
+    const separate = this.separate(kind);
+    const entry = separate ?? this.entry(kind);
     if (!entry?.repair) throw new Error(`no repair of kind ${kind}`);
     const repair = entry.repair;
-    const source = RUN_ID.exec(sourceId)?.[1] === kind ? await this.read(kind, sourceId) : undefined;
-    if (!source) throw new RepairRefusedError('not_found', `no ${kind} inventory ${sourceId}`);
+    const sourceKind = separate?.source ?? kind;
+    const source = RUN_ID.exec(sourceId)?.[1] === sourceKind ? await this.read(sourceKind, sourceId) : undefined;
+    if (!source) throw new RepairRefusedError('not_found', `no ${sourceKind} inventory ${sourceId}`);
     if (source.outcome !== 'ok') throw new RepairRefusedError('not_repairable', 'that inventory did not finish');
     if (this.now() - source.startedAt >= REPAIR_MAX_AGE_MS) throw new RepairRefusedError('report_stale', 'that inventory is an hour old or more: run it again');
     const why = repair.ready(source);

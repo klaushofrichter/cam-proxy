@@ -131,6 +131,7 @@ export function clipsLines(r: ClipsReport, fmt: (ms: number) => string = local):
       ? [
           `Camera (${cam.stream}): ${c.recordings} recordings, ${c.paired} here, ${c.missingLocally} missing here (${mbText(c.missingLocallyBytes)}), ${c.timerOnly} timer-only (ignored)`,
           ...(c.pairedOtherStream ? [`${c.pairedOtherStream} recordings are here as clips of the other stream (not counted as missing)`] : []),
+          ...(c.duplicates ? [`${c.duplicates} recordings are here twice: a clip fetched from the camera and its FTP copy (${mbText(c.duplicatesBytes ?? 0)} to free)`] : []),
           ...(c.prunedHere ? [`${c.prunedHere} recordings are older than the oldest clip here, deleted for space (not offered: they would be deleted again)`] : []),
           `Gone from the camera: ${c.goneFromCamera} local clips; ${c.olderThanSd} older than the SD card's oldest day (${cam.oldestSdDay ?? 'none'})`,
           ...(cam.unknownDays.length ? [`Not listed (the Search failed, nothing counted as missing): ${cam.unknownDays.join(', ')}`] : []),
@@ -160,6 +161,36 @@ export function repairOffer(r: ClipsReport | null, now: number, repair: { source
     }
   }
   return offer;
+}
+
+// Removing duplicates (#342), offered like the repair: under a recent, finished
+// compare with the camera that lists some and no removal has used yet.
+export function duplicatesOffer(r: ClipsReport | null, now: number, repair: { source?: string } | null = null): { count: number; bytes: number } | null {
+  if (!r || repair?.source === r.runId || r.outcome !== 'ok' || !r.options?.camera || now - r.startedAt >= REPAIR_MAX_AGE_MS) return null;
+  const listed = r.items.filter((x) => x.type === 'duplicate-clip');
+  return listed.length ? { count: listed.length, bytes: listed.reduce((n, x) => n + (x.size ?? 0), 0) } : null;
+}
+
+const DUPLICATE_SKIPS: Record<string, string> = {
+  'fetched-changed': 'the fetched clip is gone or changed',
+  'keep-gone': 'the FTP copy is gone or changed',
+  'not-same-recording': 'not the same recording',
+  'keep-short': 'the FTP copy stops before the recording ends',
+  'keep-used': 'the FTP copy answers for another clip',
+  'keep-unreadable': 'the FTP copy is not a readable video',
+  'fetched-file-gone': "the fetched clip's file is gone",
+};
+export function duplicatesRepairLines(r: RepairReport): string[] {
+  if (r.outcome === 'failed') return [`Failed: ${r.error ?? 'unknown error'}`];
+  const c = r.counts;
+  const skips = new Map<string, number>();
+  for (const i of r.items ?? []) if (i.result === 'skipped') skips.set(i.reason ?? 'other', (skips.get(i.reason ?? 'other') ?? 0) + 1);
+  return [
+    ...(r.outcome === 'cancelled' ? ['Cancelled: the clips removed so far stay removed'] : []),
+    `Removed: ${c.done ?? 0} of ${c.requested ?? 0} fetched copies (${mbText(c.bytes ?? 0)}); failed: ${c.failed ?? 0}; left alone: ${c.skipped ?? 0}`,
+    ...[...skips].map(([k, n]) => `Left alone, ${DUPLICATE_SKIPS[k] ?? k}: ${n}`),
+    ...(r.stopped === 'failures' ? ['Stopped: 3 failures in a row'] : r.stopped === 'item-cap' ? ['Stopped: the report listed only some; search again for the rest'] : []),
+  ];
 }
 
 // The line under a finished compare with the camera that found nothing to

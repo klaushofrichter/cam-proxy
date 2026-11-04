@@ -100,7 +100,7 @@ describe('clips inventory API', () => {
 
   it('refuses a repair from a bad, unknown, local-only or other-kind run', async () => {
     const post = (body: object) => request(p.base).post('/control/actions/inventory-repair').set(admin()).send(body);
-    expect((await post({ kind: 'stills', runId: 'stills-1-abcdef' })).body).toEqual({ error: 'invalid', detail: 'kind is one of: clips, events' });
+    expect((await post({ kind: 'stills', runId: 'stills-1-abcdef' })).body).toEqual({ error: 'invalid', detail: 'kind is one of: clips, events, duplicates' });
     expect((await post({ kind: 'clips', runId: '../x' })).body).toEqual({ error: 'invalid', detail: 'runId is the id of a check run' });
     const unknown = await post({ kind: 'clips', runId: 'clips-1-abcdef' });
     expect([unknown.status, unknown.body.error]).toEqual([404, 'not_found']);
@@ -108,6 +108,11 @@ describe('clips inventory API', () => {
     const r = await post({ kind: 'clips', runId: local.runId });
     expect(r.status).toBe(409);
     expect(r.body).toEqual({ error: 'not_repairable', detail: 'compare the clips with the camera first' });
+    // The duplicates repair (#342) works from the same clips runs, under the same refusals.
+    const dup = await post({ kind: 'duplicates', runId: local.runId });
+    expect([dup.status, dup.body]).toEqual([409, { error: 'not_repairable', detail: 'compare the clips with the camera first' }]);
+    const dupUnknown = await post({ kind: 'duplicates', runId: 'duplicates-1-abcdef' });
+    expect([dupUnknown.status, dupUnknown.body.error]).toEqual([404, 'not_found']);
     const audit = lines((await request(p.base).get('/control/audit?action=inventory-repair,control-action').set(admin())).text);
     expect(audit.some((x) => x.cam_proxy?.action === 'inventory-repair')).toBe(false); // refused starts write nothing
   });

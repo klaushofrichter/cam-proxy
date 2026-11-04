@@ -49,6 +49,7 @@ import { stillsCheck } from './inventory/stills';
 import { clipsCheck } from './inventory/clips';
 import { clipsRepair } from './inventory/repair-clips';
 import { eventsCheck } from './inventory/events';
+import { duplicatesRepair } from './inventory/repair-duplicates';
 import { eventsRepair } from './inventory/repair-events';
 import type { StillsSide } from './api/client-api';
 import { StreamLog, type StreamMessage } from './stream/log';
@@ -655,6 +656,14 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         label: 'Events',
         run: eventsCheck(eventsDeps),
         repair: eventsRepair(eventsDeps),
+      },
+    },
+    // #342: a recording held twice, from a clips compare: removes the fetched copy.
+    repairs: {
+      duplicates: {
+        label: 'Duplicate clips',
+        source: 'clips',
+        repair: duplicatesRepair({ catalog, dataDir: running.server.dataDir, prune: () => void storage.run({}) }),
       },
     },
   });
