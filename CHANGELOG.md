@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.11.06.1
+
 - A camera renamed at the camera itself (in the Reolink app or its web page) is now audited: the next status poll writes a `camera-name` record, user `camera`, "Camera name changed at the camera: "A" → "B"". The first read after a start sets the baseline without a record.
 - The `name` in a camera's configuration is now documented and labelled as the initial name: it names the camera only until the camera's own name is read, and the proxy never rewrites it. On the Settings page the camera name row says so and shows "initial name" while the camera has not been read. The Status page's camera card says "(initial name)" too.
 - The health summary (and so the heartbeat to cams-admin) now tells for each camera where its name came from: `nameSource` `camera` once read from the camera, `config` before (the initial name). cams-admin follows only a name read from the camera, so it needs this release to keep its camera names in step; release together with cams-admin's camera name sync.
