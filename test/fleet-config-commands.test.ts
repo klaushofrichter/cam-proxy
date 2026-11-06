@@ -69,7 +69,9 @@ describe('config.get (R3-6)', () => {
     expect(paths['sse.pingS']).toEqual({ v: DEFAULTS.sse.pingS, s: 'default' });
     expect(paths['stills.quality']).toEqual({ v: DEFAULTS.stills.quality, s: 'default', r: 'restart' });
     expect(paths['cameras.cam1.host']).toEqual({ v: '192.0.2.11', s: 'file', r: 'restart' });
-    expect((r.result!.settable as Record<string, unknown>)['cameras.*.name']).toBeDefined();
+    // The camera holds its name; cameras.*.name is the initial name, set locally only.
+    expect((r.result!.settable as Record<string, unknown>)['cameras.*.name']).toBeUndefined();
+    expect((r.result!.settable as Record<string, unknown>)['cameras.*.statusPollS']).toBeDefined();
     expect(JSON.stringify(r.result)).not.toMatch(/password|CAMPROXY_|token|cam-pw/i);
   });
   it('an override cams-admin set is marked `by`; pending restart values are p/n', async () => {
@@ -226,11 +228,6 @@ describe('config.set', () => {
     expect(r).toMatchObject({ status: 'failed', code: 'invalid_value', result: { paths: [{ path: 'previews.grid', code: 'invalid_value', detail: expect.stringMatching(/^previews\.grid: /) }] } });
     expect((await run('config.set', { v: 1, dryRun: true, baseRevision: rev(), set: { 'sse.pingS': 100000 } })).code).toBe('invalid_value');
     expect((await run('config.set', { v: 1, dryRun: true, baseRevision: rev(), set: { 'sse.pingS': 'x' } })).code).toBe('invalid_value');
-    // A camera name from cams-admin follows CAMERA_NAME_PATTERN (no bidi, zero-width, separators).
-    expect(await run('config.set', { v: 1, dryRun: true, baseRevision: rev(), set: { 'cameras.cam1.name': 'Gate\u202eevil' } })).toMatchObject({ status: 'failed', code: 'invalid_value', result: { paths: [{ path: 'cameras.cam1.name', code: 'invalid_value' }] } });
-    expect((await run('config.set', { v: 1, dryRun: true, baseRevision: rev(), set: { 'cameras.cam1.name': 'Garten Süd' } })).status).toBe('ok');
-    // M3: Arabic letter mark, tag characters, a lone surrogate, soft hyphen, Mongolian vowel separator.
-    for (const bad of ['a\u061Cb', 'a\u{E0041}\u{E0042}', 'a\uD800b', 'a\u00ADb', 'a\u180Eb']) expect((await run('config.set', { v: 1, dryRun: true, baseRevision: rev(), set: { 'cameras.cam1.name': bad } })).code, JSON.stringify(bad)).toBe('invalid_value');
   });
   it('a store error (overrides.json not writable) fails store_error and leaves the running config unchanged', async () => {
     const adminDir = join(holder.loaded.config.server.dataDir);
@@ -244,6 +241,22 @@ describe('config.set', () => {
     }
     expect(setLoaded).not.toHaveBeenCalled();
     expect(getPath(holder.loaded.config, 'sse.pingS')).toBe(DEFAULTS.sse.pingS);
+  });
+});
+
+describe('cameras.<id>.name is the initial name: local only (contract)', () => {
+  it('config.set and config.unset of it from cams-admin are refused not_remote_settable, even a valid name', async () => {
+    for (const dryRun of [true, false]) {
+      expect(await run('config.set', { v: 1, dryRun, baseRevision: rev(), set: { 'cameras.cam1.name': 'Garten Süd' } })).toMatchObject({ status: 'failed', code: 'not_remote_settable', result: { paths: [{ path: 'cameras.cam1.name', code: 'not_remote_settable' }] } });
+      expect(await run('config.unset', { v: 1, dryRun, baseRevision: rev(), paths: ['cameras.cam1.name'] })).toMatchObject({ status: 'failed', code: 'not_remote_settable' });
+    }
+    expect(fileText()).toBeNull();
+  });
+  it('a local edit still works and config.get shows it', async () => {
+    localEdit({ cameras: { cam1: { name: 'Garten Süd' } } });
+    expect(holder.loaded.config.cameras.cam1.name).toBe('Garten Süd');
+    const r = await run('config.get', { v: 1 });
+    expect((r.result!.paths as Record<string, Record<string, unknown>>)['cameras.cam1.name']).toMatchObject({ v: 'Garten Süd' });
   });
 });
 
