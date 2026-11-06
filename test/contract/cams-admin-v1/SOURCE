@@ -1,1 +1,1 @@
-klaushofrichter/cams-admin 97dffa5 (contract/v1, branch feat/camera-name-sync: health summary camera.nameSource)
+klaushofrichter/cams-admin cf5be59 (contract/v1: health summary camera.nameSource; cameras.*.name not remote-settable)
