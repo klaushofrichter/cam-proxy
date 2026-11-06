@@ -183,4 +183,50 @@ describe('StatusPoller: the camera name', () => {
     expect(poller.state().name).toBe('Backyard Left');
     expect(seen).toEqual(['Backyard Left']);
   });
+
+  // Audit of renames made at the camera: the event's second argument says where the name came from.
+  it("emits the source: 'first' on the first read, 'camera' for a changed name, 'write' from noteName", async () => {
+    const poller = new StatusPoller(client(['Den', 'Den', 'Garage', 'Garage', 'Garage']), 60);
+    const seen: [string, string][] = [];
+    poller.on('name', (n: string, source: string) => seen.push([n, source]));
+    await poller.checkNow();
+    await poller.checkNow();
+    await poller.checkNow();
+    poller.noteName('Porch');
+    await poller.checkNow(); // reads "Garage" after the write: the epoch moved on only for polls started before
+    expect(seen.slice(0, 3)).toEqual([['Den', 'first'], ['Garage', 'camera'], ['Porch', 'write']]);
+  });
+
+  it('a poll reading the name the proxy just wrote emits nothing', async () => {
+    const poller = new StatusPoller(client(['Den', 'Porch', 'Porch']), 60);
+    await poller.checkNow();
+    const seen: [string, string][] = [];
+    poller.on('name', (n: string, source: string) => seen.push([n, source]));
+    poller.noteName('Porch');
+    await poller.checkNow();
+    await poller.checkNow();
+    expect(seen).toEqual([['Porch', 'write']]);
+  });
+
+  it('a poll that started before a write reports no rename at the camera', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let calls = 0;
+    const slow = {
+      status: async () => {
+        if (++calls === 2) await gate;
+        return { model: 'RLC-1224A', firmware: 'v3', name: 'Den' };
+      },
+      command: async () => ({ Time: { year: 2026, mon: 10, day: 3, hour: 12, min: 0, sec: 0, timeZone: 0 } }),
+    } as unknown as ReolinkClient;
+    const poller = new StatusPoller(slow, 60);
+    await poller.checkNow();
+    const seen: [string, string][] = [];
+    poller.on('name', (n: string, source: string) => seen.push([n, source]));
+    const stale = poller.checkNow();
+    poller.noteName('Porch');
+    release();
+    await stale;
+    expect(seen).toEqual([['Porch', 'write']]);
+  });
 });
