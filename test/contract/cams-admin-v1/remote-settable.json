@@ -29,6 +29,7 @@
     "recordings.cacheMB",
     "ftp.stream",
     "ftp.maxGB",
+    "analytics.googleVision.enabled",
     "analytics.googleVision.monthlyLimit",
     "analytics.googleVision.dailyCap",
     "analytics.googleVision.checksPerDay",
@@ -40,7 +41,8 @@
     "cameras.*.ftp.stream"
   ],
   "narrow": {
-    "analytics.googleVision.monthlyLimit": "less",
+    "analytics.googleVision.enabled": "ceilingGated",
+    "analytics.googleVision.monthlyLimit": "ceiling",
     "analytics.googleVision.dailyCap": "less",
     "analytics.googleVision.checksPerDay": "less",
     "analytics.googleVision.perCameraDailyCap": "less",
@@ -53,6 +55,10 @@
     "stills.maxGB": "more",
     "previews.maxGB": "more",
     "ftp.maxGB": "more"
+  },
+  "ceilings": {
+    "analytics.googleVision.enabled": "analytics.googleVision.remoteMaxMonthly",
+    "analytics.googleVision.monthlyLimit": "analytics.googleVision.remoteMaxMonthly"
   },
   "denied": [
     "server",
@@ -94,7 +100,6 @@
     "analytics.kinds.person",
     "analytics.kinds.vehicle",
     "analytics.kinds.pet",
-    "analytics.googleVision.enabled",
     "cameras.*.stills.enabled",
     "cameras.*.ftp.enabled",
     "cameras.*.events.poll.enabled",
@@ -104,6 +109,7 @@
     "cameras.*.moved",
     "moves",
     "profile",
-    "time.zone"
+    "time.zone",
+    "analytics.googleVision.remoteMaxMonthly"
   ]
 }

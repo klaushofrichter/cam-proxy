@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/commands/analytics.usage.get.result.schema.json",
+  "title": "analytics.usage.get result v1",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "at": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "providers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "key": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "monthlyLimit": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000000
+          },
+          "remoteMaxMonthly": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000000
+          },
+          "dailyCap": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000000
+          },
+          "month": {
+            "type": "object",
+            "properties": {
+              "calls": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100000000
+              }
+            },
+            "required": [
+              "calls"
+            ]
+          },
+          "today": {
+            "type": "object",
+            "properties": {
+              "calls": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100000000
+              }
+            },
+            "required": [
+              "calls"
+            ]
+          },
+          "paused": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 1
+                  },
+                  "until": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "reason",
+                  "until"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastError": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "at": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "message": {
+                    "type": "string",
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "at",
+                  "message"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cameras": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+                },
+                "today": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100000000
+                },
+                "month": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100000000
+                }
+              },
+              "required": [
+                "id",
+                "today",
+                "month"
+              ]
+            },
+            "maxItems": 64
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "enabled",
+          "key",
+          "monthlyLimit",
+          "remoteMaxMonthly",
+          "dailyCap",
+          "month",
+          "today",
+          "paused",
+          "lastError",
+          "cameras"
+        ]
+      },
+      "maxItems": 8
+    }
+  },
+  "required": [
+    "v",
+    "at",
+    "providers"
+  ]
+}

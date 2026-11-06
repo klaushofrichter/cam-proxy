@@ -1,0 +1,43 @@
+{
+  "$note": "args are {v} only (strict args refuse)",
+  "schema": "command",
+  "$context": {
+    "now": 1791273600010,
+    "proxyId": "prx_0123456789ABCDEFGHJK",
+    "connId": "con_0123456789ABCDEFGHJK",
+    "serverKeys": [
+      "MCowBQYDK2VwAyEAgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q="
+    ],
+    "allow": [
+      "analytics.usage.get"
+    ],
+    "paused": false,
+    "seen": [],
+    "feature": "vision"
+  },
+  "$expect": {
+    "runtime": "invalid_args",
+    "strict": "valid",
+    "receiver": "proxy"
+  },
+  "message": {
+    "v": 1,
+    "type": "command",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "exp": 1791273660003,
+      "actor": "admin@example.org",
+      "command": "analytics.usage.get",
+      "args": {
+        "v": 1,
+        "provider": "google-vision"
+      }
+    },
+    "sig": "f4HnQbka4hLXHE35JbWPGsakIUbSkcTaaF8nUB4ORbgJxTKKVH9CToy4h28BcHWElTX2i1LK9PR10/WNV7N9Cw=="
+  }
+}

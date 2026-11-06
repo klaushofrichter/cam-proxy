@@ -239,6 +239,8 @@ export const SETTINGS: Node = {
       dailyCap: unset(int(0, 10000, 'Google Vision calls per day at most; 0 = no daily cap'), 'no daily cap (the monthly limit still applies)', 0),
       checksPerDay: unset(int(0, 1000, 'still checks (a second picked by hand in cams) per camera day at most, within the monthly limit and the daily cap; 0 = no checks'), 'no still checks', 0),
       perCameraDailyCap: unset(int(0, 10000, 'Google Vision calls per camera and day at most (automatic analyses and still checks together); 0 = no per-camera cap'), 'no per-camera cap', 0),
+      // Vision management (cams-admin design 2026-11-05): local only, the bound of cams-admin's changes.
+      remoteMaxMonthly: unset(int(0, 100000, 'the most monthly calls cams-admin may allow (monthlyLimit) and whether it may switch Google Vision on; 0 = cams-admin can only lower the limit or switch it off. Lowering it leaves the current limit'), "cams-admin can't switch Vision on or raise its limit", 0),
     },
   },
   // The site CA (spec 2026-10-05-multi-camera-host-design §10): unset site = off (the Pi).

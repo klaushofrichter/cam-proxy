@@ -162,8 +162,8 @@ first), `GET …/still-checks/{id}` (with the raw answer) and
 - **Timeline:** a purple mark on minutes with a relevant finding, and ✦ on
   the analysed second.
 - **Status:** usage this month and today, and the unmapped objects.
-- **Settings:** the switches, the limits, and a cost estimate for the monthly
-  limit.
+- **Settings:** the switches, the limits, a cost estimate for the monthly
+  limit, and the ceiling for cams-admin ([below](#from-cams-admin)).
 
 **cams** (cams.skylar.technology):
 - **Event cards (History and Live):** a badge next to the camera's label.
@@ -185,11 +185,40 @@ first), `GET …/still-checks/{id}` (with the raw answer) and
 | Unmapped objects | `GET` / `DELETE /control/analytics/unmapped`, and the top 20 as `analyticsUnmapped` in `/control/status` |
 | Still checks | `POST /api/cameras/{cam}/still-checks` `{at}`; `GET …/still-checks?from&to`, `…/still-checks/{id}`, `…/still-checks/{id}.jpg`; the `still-check` stream message: `{ id, stillTs, provider, summary, objects, events, imageUrl, requestedAt, tookMs }` (see [Still checks](#still-checks)) |
 | The budget, for clients | `GET /api/cameras/{cam}/analytics`: `{ enabled, paused, month, today, checks }`, no key |
+| For cams-admin | the command `analytics.usage.get` ([below](#from-cams-admin)) |
 
 The stream keeps 7 days of messages, so a client resuming after the upgrade
 can replay older `analysis` messages without kind, start, still time or
 summary. Treat a missing `summary` as unknown, not as "nothing found". The
 full contract is in [openapi.yaml](../openapi.yaml).
+
+## From cams-admin
+
+cams-admin's Vision tab (on the Account page) shows each proxy's Google Vision
+state and sets its monthly limit (cams-admin design
+2026-11-05-vision-management-design). Two parts on the proxy:
+
+- **Reading** with the command `analytics.usage.get` (`{v: 1}`, on by default,
+  10 a minute; [cams-admin.md](cams-admin.md#allowed-commands)). It answers per
+  provider what `GET /control/analytics` shows: on/off, `key` (where the key
+  comes from: `env`, `manual` or `none`; never the key or its mask),
+  `monthlyLimit`, `remoteMaxMonthly`, `dailyCap`, the calls this month and
+  today, `paused` (`{reason, until}`), `lastError` (`{at, message}`) and the
+  calls per camera (at most 64).
+- **Changing** with `config.set`: cams-admin sends `enabled` and
+  `monthlyLimit` together (on = a limit above 0). It may always lower the
+  limit and switch Vision off. It may raise the limit, and switch Vision on,
+  only up to the ceiling set here: `analytics.googleVision.remoteMaxMonthly`,
+  on the Settings page's Google Vision card ("cams-admin may allow up to N
+  calls a month; 0 = cams-admin can't switch Vision on"), default **0**. Above
+  it the change is refused `above_local_ceiling`, and nothing changes. The
+  ceiling itself is set only here (local admin token). Lowering it leaves the
+  current limit as it is (the card says so when the limit is above it); it
+  only bounds cams-admin's next change. A cams-admin sign-in (`ui.config`)
+  follows the same rules.
+
+The key never travels through cams-admin: it stays in this proxy's
+environment, or is set on this Settings page.
 
 ## Privacy and cost
 

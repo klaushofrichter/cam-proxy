@@ -69,7 +69,8 @@
             "move.cancel",
             "move.return.open",
             "move.return.start",
-            "camera.onboarding.get"
+            "camera.onboarding.get",
+            "analytics.usage.get"
           ]
         },
         "args": {

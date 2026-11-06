@@ -2,7 +2,7 @@ import { get } from 'svelte/store';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api, ApiError, errorText, refreshRights } from '../web/src/lib/api';
 import { powerCycleFailText } from '../web/src/lib/maintenance';
-import { ALL_RIGHTS, LOCKED_TEXT, lockedWhy, MOVE_TEXT, NARROW_TEXT, narrowWhy, REFUSED_TEXT, resetKeeps, rights, rightsOf, settingLockedWhy, settingsNote, SOME_SETTINGS_TEXT } from '../web/src/lib/rights';
+import { ALL_RIGHTS, CEILING_TEXT, LOCKED_TEXT, lockedWhy, MOVE_TEXT, NARROW_TEXT, NO_CEILING_TEXT, narrowWhy, REFUSED_TEXT, resetKeeps, rights, rightsOf, settingLockedWhy, settingsNote, SOME_SETTINGS_TEXT } from '../web/src/lib/rights';
 import { restartToApply } from '../web/src/lib/camera-settings';
 
 // Issue #227: a session from a cams-admin sign-in link (managed-admin) sees
@@ -126,7 +126,7 @@ describe('the rights follow the proxy', () => {
 // narrowSettings); storage limits and Google Vision on/off stay locked.
 describe('the direction rules of a cams-admin sign-in', () => {
   const narrow = { 'retention.clipsDays': { dir: 'more' as const }, 'stills.maxGB': { dir: 'more' as const, unlimited: 'unset' as const }, 'analytics.googleVision.monthlyLimit': { dir: 'less' as const }, 'analytics.googleVision.dailyCap': { dir: 'less' as const, unlimited: 0 as const } };
-  const r = { localAdmin: false, config: true, restart: false, move: false, localSettings: ['storage', 'cameras.*.storage', 'analytics.googleVision.enabled'], narrow };
+  const r = { localAdmin: false, config: true, restart: false, move: false, localSettings: ['storage', 'cameras.*.storage', 'analytics.googleVision.remoteMaxMonthly'], narrow };
   it('rightsOf reads narrowSettings, dropping what is not a rule', () => {
     expect(rightsOf({ rights: { localAdmin: false, config: true, restart: false, move: false, localSettings: [], narrowSettings: { ...narrow, x: { dir: 'up' }, y: 3 } } }).narrow).toEqual(narrow);
     expect(rightsOf({ rights: { localAdmin: true, config: true, restart: true, narrowSettings: narrow } }).narrow).toEqual({});
@@ -147,11 +147,27 @@ describe('the direction rules of a cams-admin sign-in', () => {
     expect(NARROW_TEXT.more).toMatch(/cams-admin sign-in.*longer/);
     expect(NARROW_TEXT.less).toMatch(/cams-admin sign-in.*spending/);
   });
-  it('storage and Google Vision on/off are locked rows', () => {
-    for (const p of ['storage.maxPercent', 'storage.keepHours.clips', 'cameras.cam1.storage.sharePercent', 'analytics.googleVision.enabled']) expect(settingLockedWhy(r, p), p).toBe(LOCKED_TEXT);
+  it('storage and the Google Vision ceiling are locked rows', () => {
+    for (const p of ['storage.maxPercent', 'storage.keepHours.clips', 'cameras.cam1.storage.sharePercent', 'analytics.googleVision.remoteMaxMonthly']) expect(settingLockedWhy(r, p), p).toBe(LOCKED_TEXT);
     expect(settingLockedWhy(r, 'analytics.googleVision.monthlyLimit')).toBeNull();
+    expect(settingLockedWhy(r, 'analytics.googleVision.enabled')).toBeNull();
     expect(settingsNote(r)).toBe(SOME_SETTINGS_TEXT);
     expect(SOME_SETTINGS_TEXT).toMatch(/storage limits.*Google Vision/);
+  });
+  // Vision management (2026-11-05): the monthly limit and Vision on/off within the proxy's ceiling.
+  it('the ceiling kinds: lower or off always; up or on only within the ceiling; an unknown ceiling is the proxy\'s to judge', () => {
+    const CEIL = 'analytics.googleVision.remoteMaxMonthly';
+    const vision = { 'analytics.googleVision.monthlyLimit': { dir: 'ceiling' as const, ceiling: CEIL }, 'analytics.googleVision.enabled': { dir: 'ceilingGated' as const, ceiling: CEIL } };
+    expect(rightsOf({ rights: { localAdmin: false, config: true, restart: false, localSettings: [], narrowSettings: vision } }).narrow).toEqual(vision);
+    const v = { ...r, narrow: vision };
+    expect(narrowWhy(v, 'analytics.googleVision.monthlyLimit', 5000, 3000, 1000)).toBeNull();
+    expect(narrowWhy(v, 'analytics.googleVision.monthlyLimit', 0, 1000, 1000)).toBeNull();
+    expect(narrowWhy(v, 'analytics.googleVision.monthlyLimit', 0, 1001, 1000)).toBe(CEILING_TEXT(1000));
+    expect(narrowWhy(v, 'analytics.googleVision.monthlyLimit', 0, 1001)).toBeNull();
+    expect(narrowWhy(v, 'analytics.googleVision.enabled', false, true, 0)).toBe(NO_CEILING_TEXT);
+    expect(narrowWhy(v, 'analytics.googleVision.enabled', false, true, 1)).toBeNull();
+    expect(narrowWhy(v, 'analytics.googleVision.enabled', true, false, 0)).toBeNull();
+    expect(CEILING_TEXT(1000)).toMatch(/up to 1,000 calls a month/);
   });
   it('Reset to defaults keeps an override whose reset would go the other way', () => {
     const view = { 'retention.clipsDays': { value: 60, resetTo: { value: 7, source: 'default' as const } }, 'retention.eventsDays': { value: 5, resetTo: { value: 30, source: 'default' as const } }, 'analytics.googleVision.monthlyLimit': { value: 100, resetTo: { value: 0, source: 'default' as const } }, 'storage.maxPercent': { value: 50, resetTo: { value: 85, source: 'default' as const } }, 'sse.pingS': { value: 9, resetTo: { value: 15, source: 'default' as const } } };

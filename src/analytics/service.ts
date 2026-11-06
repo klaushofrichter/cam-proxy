@@ -58,6 +58,7 @@ export interface ProviderState {
   paused: { reason: string; until: number | null } | null;
   lastCall: { at: number; tookMs: number; status: string } | null;
   lastError: string | null;
+  lastErrorAt: number | null; // when lastError happened
   checks: { today: number; cap: number };
   cameras: { id: string; today: number; month: number }[]; // this key's calls per camera
 }
@@ -100,6 +101,7 @@ export class AnalyticsService {
   private paused: { reason: string; until: number | null } | null = null;
   private lastCall: ProviderState['lastCall'] = null;
   private lastError: string | null = null;
+  private lastErrorAt: number | null = null;
   // A key set at runtime (issue #70): in memory only, gone with the process.
   private manualKey: string | undefined;
   // The still check in flight (one at a time) and how to abort it (stop()).
@@ -135,7 +137,10 @@ export class AnalyticsService {
     this.manualKey = key;
     if (this.paused?.reason === 'bad_key') {
       this.paused = null;
-      if (this.lastError === 'bad_key') this.lastError = null;
+      if (this.lastError === 'bad_key') {
+        this.lastError = null;
+        this.lastErrorAt = null;
+      }
     }
     return replaced;
   }
@@ -265,6 +270,7 @@ export class AnalyticsService {
         paused: this.pause(),
         lastCall: this.lastCall,
         lastError: this.lastError,
+        lastErrorAt: this.lastErrorAt,
         checks: this.checksAll(day),
         // This key's calls per camera (spec §8.2).
         cameras: this.d.cams().map((id) => ({ id, today: this.dayUsage('google-vision', day, id), month: this.monthUsage(day, id) })),
@@ -422,7 +428,10 @@ export class AnalyticsService {
     // A bad_key answer to a call made with a key replaced meanwhile
     // (setManualKey) says nothing about the new key: no pause, no error.
     const staleKey = e.pause === 'bad_key' && this.key() !== key;
-    if (!staleKey) this.lastError = e.reason;
+    if (!staleKey) {
+      this.lastError = e.reason;
+      this.lastErrorAt = this.now();
+    }
     if (e.pause === 'bad_key' && !staleKey) this.paused = { reason: 'bad_key', until: null };
     if (e.pause === 'quota') this.paused = { reason: 'quota', until: this.now() + QUOTA_PAUSE_MS };
   }

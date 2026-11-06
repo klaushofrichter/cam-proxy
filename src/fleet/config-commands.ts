@@ -9,7 +9,7 @@ import type { OverridesBackups, Backup, PathState } from './backups';
 import type { CommandBody } from './command-check';
 import type { ConfigRollbackArgs, ConfigSetArgs, ConfigUnsetArgs } from './command-args';
 import type { Done, Handler } from './commands';
-import { CAMERA_NAME_PATTERN, classify, denyReason, NARROW, NARROW_REASON, narrowingOk, SECRET_KEY_PATTERN, settableView } from './remote-settable';
+import { CAMERA_NAME_PATTERN, classify, denyReason, directionFailures, SECRET_KEY_PATTERN, settableView } from './remote-settable';
 
 // cams-admin's settings commands (migration spec M §8, plan P3 Task 7):
 // config.get, config.set / config.unset (dry run, revision conflict) and
@@ -108,8 +108,9 @@ function write(d: ConfigCommandDeps, cmd: CommandBody, args: { dryRun: boolean; 
     throw err;
   }
   const changes = configChanges(l, p.next);
-  const widening = changes.filter((c) => !narrowingOk(c.path, c.from, c.to));
-  if (widening.length) return failed('widening_local_only', widening.map((c) => ({ path: c.path, code: 'widening_local_only', detail: NARROW_REASON[NARROW[c.path]] })));
+  // The direction rules, then the local ceilings (the contract's order); the ceiling as it is now.
+  const against = directionFailures(changes, l.config);
+  if (against) return failed(against.code, against.paths);
   const unchanged = paths.filter((x) => !changes.some((c) => c.path === x));
   if (args.dryRun) return { status: 'ok', result: { dryRun: true, baseRevision: revision, revision, changes, unchanged } };
   // Nothing changes: nothing written, no backup (review I1: no-op writes
@@ -140,8 +141,8 @@ type Undoer = { by: 'cams-admin'; cmd: CommandBody } | { by: 'local'; who: { use
 
 // config.rollback and the card's Undo (R3-5): each path the command named
 // back to its override state before, when it still holds the state the
-// command left. A remote rollback passes config.set's direction check on the
-// current effective values (review I2: a rollback, or a rollback of a
+// command left. A remote rollback passes config.set's direction and ceiling
+// checks on the current effective values (review I2: a rollback, or a rollback of a
 // rollback, never lowers retention or raises spending); the local Undo is the
 // person's own decision and is not checked.
 function rollback(d: ConfigCommandDeps, of: string, dryRun: boolean, u: Undoer): Done {
@@ -165,8 +166,9 @@ function rollback(d: ConfigCommandDeps, of: string, dryRun: boolean, u: Undoer):
   }
   const changes = configChanges(l, next);
   if (u.by === 'cams-admin') {
-    const widening = changes.filter((c) => !narrowingOk(c.path, c.from, c.to));
-    if (widening.length) return failed('widening_local_only', widening.map((c) => ({ path: c.path, code: 'widening_local_only', detail: NARROW_REASON[NARROW[c.path]] })));
+    // A rollback above the local ceiling fails the same way (Vision management).
+    const against = directionFailures(changes, l.config);
+    if (against) return failed(against.code, against.paths);
   }
   const unchanged = paths.filter((x) => !changes.some((c) => c.path === x));
   if (dryRun) return { status: 'ok', result: { dryRun: true, baseRevision: revision, revision, changes, unchanged, of } };
