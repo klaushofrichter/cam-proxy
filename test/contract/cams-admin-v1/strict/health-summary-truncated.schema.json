@@ -295,6 +295,13 @@
                     "type": "null"
                   }
                 ]
+              },
+              "nameSource": {
+                "type": "string",
+                "enum": [
+                  "camera",
+                  "config"
+                ]
               }
             },
             "required": [

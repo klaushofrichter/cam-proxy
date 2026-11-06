@@ -3,6 +3,7 @@ import request from 'supertest';
 import { startSim } from './helpers/sim';
 import { startProxy, auth, until, ADMIN_TOKEN, CLIENT_TOKEN } from './helpers/proxy';
 import { sseConnect } from './helpers/sse';
+import { strict, why } from './helpers/contract';
 
 // Camera name design: the camera stores the name; the proxy reads it with
 // the routine poll, writes it through PUT /control/camera/name and tells
@@ -48,6 +49,32 @@ describe('reading the name', () => {
     expect(st.body.camera).toMatchObject({ name: 'Den', nameSource: 'camera' });
     expect(st.body.health.camera.name).toBe('Den');
     expect((await request(p.base).get('/api/local/health')).body.camera.name).toBe('Den');
+  });
+
+  // Camera name sync (2026-11-06): the summary the heartbeat sends (GET /api/local/health serves the same) says
+  // where the name came from; cams-admin follows only 'camera'.
+  it("the health summary carries nameSource: 'config' before the first read, 'camera' after", async () => {
+    const v = strict('health-summary');
+    const health = async (q: Awaited<ReturnType<typeof startProxy>>) => (await request(q.base).get('/api/local/health').expect(200)).body;
+    const h = await health(p);
+    expect([h.camera.nameSource, h.cameras[0].camera.nameSource]).toEqual(['camera', 'camera']);
+    expect(v(h), why(v)).toBe(true);
+    // A second proxy whose camera is offline from the start: the configured (initial) name, never read.
+    sim.sim.engine.faults.set({ name: 'offline' });
+    const q = await startProxy(sim, { settings: { camera: { name: 'Initial', host: sim.camera.host, protocol: 'http', user: 'proxy', onvifPort: sim.ports.onvif, rtspPort: sim.ports.rtsp || 554, baichuanPort: sim.camera.baichuanPort, statusPollS: 3600 } } });
+    try {
+      const before = await health(q);
+      expect([before.camera.name, before.camera.nameSource, before.cameras[0].camera.nameSource]).toEqual(['Initial', 'config', 'config']);
+      expect(v(before), why(v)).toBe(true);
+      sim.sim.engine.faults.clear('offline');
+      await q.proxy.status.checkNow();
+      await until(() => q.proxy.status.state().name === 'Den');
+      const after = await health(q);
+      expect([after.camera.name, after.camera.nameSource]).toEqual(['Den', 'camera']);
+      expect(v(after), why(v)).toBe(true);
+    } finally {
+      await q.proxy.stop();
+    }
   });
 
   it('no stream message while the name stays the same (the configured fallback was never announced)', async () => {

@@ -95,7 +95,8 @@
               "poeSwitch": {
                 "model": "sscpoe-web",
                 "port": 8
-              }
+              },
+              "nameSource": "camera"
             },
             "items": [
               {
@@ -140,7 +141,8 @@
               "clockOffsetMs": 121,
               "error": null,
               "reboot": null,
-              "poeSwitch": null
+              "poeSwitch": null,
+              "nameSource": "camera"
             },
             "items": [
               {
@@ -185,7 +187,8 @@
               "clockOffsetMs": 122,
               "error": "connect ETIMEDOUT",
               "reboot": null,
-              "poeSwitch": null
+              "poeSwitch": null,
+              "nameSource": "config"
             },
             "items": [
               {
@@ -230,7 +233,8 @@
               "clockOffsetMs": 123,
               "error": null,
               "reboot": null,
-              "poeSwitch": null
+              "poeSwitch": null,
+              "nameSource": "camera"
             },
             "items": [
               {

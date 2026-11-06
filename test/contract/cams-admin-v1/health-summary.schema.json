@@ -306,6 +306,10 @@
               "type": "null"
             }
           ]
+        },
+        "nameSource": {
+          "type": "string",
+          "maxLength": 64
         }
       },
       "required": [
@@ -797,6 +801,10 @@
                     "type": "null"
                   }
                 ]
+              },
+              "nameSource": {
+                "type": "string",
+                "maxLength": 64
               }
             },
             "required": [

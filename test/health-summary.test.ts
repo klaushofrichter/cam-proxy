@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildHealth, lastInventoryOf, type HealthInput } from '../src/health/summary';
 import { H, input, NOW } from './helpers/health-input';
+import { strict, why } from './helpers/contract';
 
 const item = (h: ReturnType<typeof buildHealth>, id: string) => h.items.find((i) => i.id === id);
 
@@ -27,6 +28,16 @@ describe('the health summary', () => {
     expect(item(h, 'camera')?.label).toBe('Camera');
     expect(h.platform).toEqual({ pi: true, model: 'Raspberry Pi 4 Model B Rev 1.5', hostStats: true });
     expect(h.thresholds).toEqual({ diskPercent: 90, tempC: 75, ftpStalledHours: 6 });
+  });
+
+  // Camera name sync (2026-11-06): cams-admin follows only a name read from the camera, so the heartbeat says where it came from.
+  it('nameSource of every camera, in the strict contract', () => {
+    const other = { ...input(), camera: { ...input().camera, id: 'cam2', nameSource: 'config' as const } };
+    const h = buildHealth(input({ camera: { ...input().camera, nameSource: 'camera' }, others: [other] }));
+    expect(h.camera.nameSource).toBe('camera');
+    expect(h.cameras.map((c) => [c.camera.id, c.camera.nameSource])).toEqual([['cam1', 'camera'], ['cam2', 'config']]);
+    const v = strict('health-summary');
+    expect(v(h), why(v)).toBe(true);
   });
 
   it('the details: camera address without its port, the switch without its host, no serial', () => {
