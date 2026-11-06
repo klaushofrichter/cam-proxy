@@ -268,13 +268,17 @@ describe('a hostile cams-admin with every P3 entry allowed', () => {
     expect(p.proxy.running.cameraOrder).toEqual(['cam1']);
     expect(failures()).toBe(f0 + 2);
   });
-  it('(e) spending raised, any retention period or size cap lowered: widening_local_only; storage: not_remote_settable; nothing deleted, nothing written', async () => {
+  it('(e) spending raised, any retention period or size cap lowered: widening_local_only; Vision above its ceiling: above_local_ceiling; storage: not_remote_settable; nothing deleted, nothing written', async () => {
     const before = overrides();
     const clips = listClips(p.proxy.catalog, 'cam1', 0, Date.now() + 86_400_000).length;
-    const lower = { 'retention.stillsDays': 1, 'retention.previewsDays': 1, 'retention.clipsDays': 1, 'retention.eventsDays': 1, 'retention.auditDays': 1, 'retention.streamLogDays': 1, 'stills.maxGB': 1, 'previews.maxGB': 1, 'ftp.maxGB': 1, 'analytics.googleVision.monthlyLimit': 100000 };
+    const lower = { 'retention.stillsDays': 1, 'retention.previewsDays': 1, 'retention.clipsDays': 1, 'retention.eventsDays': 1, 'retention.auditDays': 1, 'retention.streamLogDays': 1, 'stills.maxGB': 1, 'previews.maxGB': 1, 'ftp.maxGB': 1, 'analytics.googleVision.checksPerDay': 1000 };
     const r = await done('config.set', { v: 1, dryRun: false, baseRevision: rev(), set: lower });
     expect(r).toMatchObject({ status: 'failed', code: 'widening_local_only' });
     expect((r.result.paths as { path: string }[]).map((x) => x.path).sort()).toEqual(Object.keys(lower).sort());
+    // Vision management: Google Vision on or a higher monthly limit only within the local ceiling (0 here).
+    const vision = await done('config.set', { v: 1, dryRun: false, baseRevision: rev(), set: { 'analytics.googleVision.enabled': true, 'analytics.googleVision.monthlyLimit': 100000 } });
+    expect(vision).toMatchObject({ status: 'failed', code: 'above_local_ceiling' });
+    expect((vision.result.paths as { path: string }[]).map((x) => x.path).sort()).toEqual(['analytics.googleVision.enabled', 'analytics.googleVision.monthlyLimit']);
     const storage = Object.fromEntries(leafPaths(SETTINGS, '', ['cam1']).filter((x) => /^storage\.|^cameras\.cam1\.storage\./.test(x)).map((x) => [x, 1]));
     expect(await done('config.set', { v: 1, dryRun: false, baseRevision: rev(), set: storage })).toMatchObject({ status: 'failed', code: 'not_remote_settable' });
     p.proxy.storage.run({ dryRun: false });

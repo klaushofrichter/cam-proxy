@@ -1,0 +1,56 @@
+{
+  "$note": "Google Vision on, key from the environment, ceiling 1000, two cameras",
+  "$command": "analytics.usage.get",
+  "schema": "result",
+  "message": {
+    "v": 1,
+    "type": "result",
+    "id": "01K60000000000000000000005",
+    "seq": 5,
+    "ts": 1791273600005,
+    "re": "01K60000000000000000000003",
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "phase": "done",
+      "status": "ok",
+      "result": {
+        "v": 1,
+        "at": 1791273600000,
+        "providers": [
+          {
+            "id": "google-vision",
+            "name": "Google Vision",
+            "enabled": true,
+            "key": "env",
+            "monthlyLimit": 1000,
+            "remoteMaxMonthly": 1000,
+            "dailyCap": 0,
+            "month": {
+              "calls": 84
+            },
+            "today": {
+              "calls": 9
+            },
+            "paused": null,
+            "lastError": null,
+            "cameras": [
+              {
+                "id": "cam1",
+                "today": 3,
+                "month": 40
+              },
+              {
+                "id": "cam2",
+                "today": 6,
+                "month": 44
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "sig": "O2MWuEMT1vM/g8UCQl/uxmNUsU68OMVrkNb9cMpNONudwdn+oumgOwn/5eFqug86+i4NQ4bj9+laMM1dJDReDw=="
+  }
+}

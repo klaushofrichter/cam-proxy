@@ -199,7 +199,7 @@ proxy checks it in this order; the first refusal wins (contract "Check order"):
 | 6b | the `cmdId` was seen before (another connection, before a restart) and is not in the journal | `replayed` |
 | 7 | `CAMPROXY_ADMIN_COMMANDS` is on and commands are not paused | `paused` |
 | 8 | this version runs the command and it is allowed here (`camera.action`: any `camera.action:*` entry; its own entry is step 11's) | `not_allowed` |
-| 9 | 30 commands a minute, 300 a day, `tokens.apply` 6 an hour; `config.set`, `config.unset` and `config.rollback` together 6 a minute (dry runs count), `camera.action` 12 a minute, `camera.name.set` 6 a minute, every `move.*` command together 60 a minute | `rate_limited` (with `retryAfterS`) |
+| 9 | 30 commands a minute, 300 a day, `tokens.apply` 6 an hour; `config.set`, `config.unset` and `config.rollback` together 6 a minute (dry runs count), `camera.action` 12 a minute, `camera.name.set` 6 a minute, `camera.onboarding.get` 12 a minute, `analytics.usage.get` 10 a minute, every `move.*` command together 60 a minute | `rate_limited` (with `retryAfterS`) |
 | 10 | `args.v` is 1 and the args pass the command's strict check (at most 16384 bytes) | `unsupported_version`, `invalid_args` |
 | 11 | a token set with an admin token also needs `tokens.apply.admin`; `move.finish` and `move.cancel` need the entry of the side `args.role` names (`move.send` for `source`, `move.receive` for `target`); a camera action needs its own `camera.action:<action>` entry and is never one of the never-remote actions; `proxy.restart` at most 2 an hour and the disruptive camera actions at most 6 an hour, counted from the journal (a restart doesn't reset it) | `not_allowed`, `rate_limited` |
 | 12 | no other command runs | `busy` |
@@ -214,9 +214,9 @@ unsigned or malformed commands is closed.
 ### Allowed commands
 
 Nothing is allowed until someone allows it **here**, except
-`camera.onboarding.get` (a read without secrets, on by default; switching it
-off here is kept in `policy.json` as `off`, and only the local admin turns it
-on again). Allowing happens on the Status page's
+`camera.onboarding.get` and `analytics.usage.get` (reads without secrets, on
+by default; switching one off here is kept in `policy.json` as `off`, and only
+the local admin turns it on again). Allowing happens on the Status page's
 cams-admin card (**Commands from cams-admin**), with
 `cam-proxy admin-commands allow <entry…>`, or in `config.json`
 (`camsAdmin.allowCommands`). The entries:
@@ -226,6 +226,7 @@ cams-admin card (**Commands from cams-admin**), with
 | `tokens.apply` | add, rotate and revoke managed **client** tokens for cams (`CAMPROXY_TOKENS` keeps working) |
 | `tokens.apply.admin` | also manage **admin** tokens (sign-in links, camera rename); the local admin token is never affected |
 | `config.get` | read this proxy's settings: values, sources, restart needs (no secrets) |
+| `analytics.usage.get` (**on by default**) | read Google Vision's settings and use (`{v: 1}` → `{v, at, providers: [{id, name, enabled, key, monthlyLimit, remoteMaxMonthly, dailyCap, month: {calls}, today: {calls}, paused, lastError, cameras}]}`, the state of `GET /control/analytics`); `key` says where the key comes from (`env`, `manual`, `none`), never the key or its mask; at most 10 a minute; only the `admin-command` record. A `policy.json` saved by an earlier version has it on too; untick it here to switch it off |
 | `camera.onboarding.get` (**on by default**) | read each camera's onboarding status (`{v: 1, camera: <id> or null}` → `{cameras: {<id>: status}}`, as `GET /control/cameras/{cam}/onboarding`; `clamped: true` with no cameras over 16 KiB); at most 12 a minute; only the `admin-command` record |
 | `config.set`, `config.unset` | change or reset the **remote-settable** settings (below); local edits win |
 | `config.rollback` | undo its own settings change |
@@ -278,7 +279,7 @@ them, like any entry (the cams-admin page's group **cams-admin sign-in**, or
 
 | entry | lets a cams-admin sign-in |
 |---|---|
-| `ui.config` | change settings on the Settings page (`PUT /control/config`) and reset them to config.json's value or the default (`DELETE /control/config/{path}`, Reset to defaults `DELETE /control/config`). Never, neither set nor reset, the settings cams-admin can never set: addresses, ports, files, trust, users and cams-admin itself (`server`, `go2rtc`, `tls`, `poeSwitch`, `camsAdmin`, the FTP ports, files and public host, `ntp.server`, a camera's address, user, ports and certificate name, `moved` and the proxy profile `profile.*` with its old name `moves.maxCameras`); a changed address would send a camera's or the switch's password elsewhere, a reset `camsAdmin.url` would undo the enrollment. Never adding or removing a camera. Never the storage limits (`storage.*`, a camera's `storage.sharePercent`: a lower limit deletes stills and clips) or Google Vision on/off (`analytics.googleVision.enabled`). The settings cams-admin's `config.set` may change one way only follow the same direction rules (`NARROW`, [Remote configuration](#remote-configuration-p3)): retention (`retention.*Days`) and the size caps (`stills.maxGB`, `previews.maxGB`, `ftp.maxGB`) only up, keeping data longer; Google Vision's spending caps (`monthlyLimit`, `dailyCap`, `checksPerDay`, `perCameraDailyCap`) only down. That goes for a reset too: a reset that would shorten retention or raise a cap is refused. Reset to defaults keeps the overrides of all those settings, and those whose reset would go the wrong way (the dialog names them); the local admin's Reset to defaults still removes them. Such a refusal answers 403 `local_admin_only` (with a `detail` for a direction rule, shown at the row) and is recorded as `auth-refused` with reason `local-setting`. The capture and feature switches (except Google Vision) and the health thresholds stay open to it |
+| `ui.config` | change settings on the Settings page (`PUT /control/config`) and reset them to config.json's value or the default (`DELETE /control/config/{path}`, Reset to defaults `DELETE /control/config`). Never, neither set nor reset, the settings cams-admin can never set: addresses, ports, files, trust, users and cams-admin itself (`server`, `go2rtc`, `tls`, `poeSwitch`, `camsAdmin`, the FTP ports, files and public host, `ntp.server`, a camera's address, user, ports and certificate name, `moved` and the proxy profile `profile.*` with its old name `moves.maxCameras`); a changed address would send a camera's or the switch's password elsewhere, a reset `camsAdmin.url` would undo the enrollment. Never adding or removing a camera. Never the storage limits (`storage.*`, a camera's `storage.sharePercent`: a lower limit deletes stills and clips) or Google Vision's ceiling for cams-admin (`analytics.googleVision.remoteMaxMonthly`). The settings cams-admin's `config.set` may change one way only follow the same direction rules (`NARROW`, [Remote configuration](#remote-configuration-p3)): retention (`retention.*Days`) and the size caps (`stills.maxGB`, `previews.maxGB`, `ftp.maxGB`) only up, keeping data longer; Google Vision's spending caps (`dailyCap`, `checksPerDay`, `perCameraDailyCap`) only down; its monthly limit down, or up to the ceiling; Google Vision off always, on only while the ceiling is above 0 (`above_local_ceiling` for cams-admin, with the same `detail`). That goes for a reset too: a reset that would shorten retention or raise a cap is refused. Reset to defaults keeps the overrides of all those settings, and those whose reset would go the wrong way (the dialog names them); the local admin's Reset to defaults still removes them. Such a refusal answers 403 `local_admin_only` (with a `detail` for a direction rule, shown at the row) and is recorded as `auth-refused` with reason `local-setting`. The capture and feature switches and the health thresholds stay open to it |
 | `ui.restart` | restart the proxy (`restart-proxy`) and its camera side (`restart`, also one camera's): **disruptive**. No rate limit (Klaus, 2026-10-21): a person is at the page, and these restarts don't count against cams-admin's `proxy.restart` budget |
 
 They are no commands: cams-admin never sends them, the heartbeat never
@@ -311,8 +312,9 @@ What cams-admin may set is compiled in, `src/fleet/remote-settable.ts`
   `previews.tileSize`, `.grid`, `.quality`, `.maxGB`; `events.onvif.*`,
   `events.poll.intervalS`, `.afterOnvifDownS`, `events.maxOpenMin`;
   `retention.*`; `composition.concurrent`; `sse.*`; `recordings.cacheMB`;
-  `ftp.stream`, `ftp.maxGB`; the Google Vision limits (`monthlyLimit`,
-  `dailyCap`, `checksPerDay`, `perCameraDailyCap`); per camera `name`,
+  `ftp.stream`, `ftp.maxGB`; Google Vision on/off and its limits
+  (`enabled`, `monthlyLimit`, `dailyCap`, `checksPerDay`,
+  `perCameraDailyCap`); per camera `name`,
   `statusPollS`, `stills.stream`, `stills.intervalS`, `ftp.stream`.
 - **Never** (`DENIED`, deny wins): `camsAdmin`, `server`, `go2rtc`, `tls`,
   `poeSwitch`, the FTP port, passive range, TLS, public host and files,
@@ -322,8 +324,9 @@ What cams-admin may set is compiled in, `src/fleet/remote-settable.ts`
   **local only**, `storage.*` and every camera's storage share (a lower
   budget would delete stills and clips), the capture and feature switches
   (`stills.enabled`, `ftp.enabled`, `archive.enabled`, `events.poll.enabled`,
-  the analytics kinds, `analytics.googleVision.enabled`, their per-camera
-  forms) and the health thresholds (`health.*`, `host.stats`,
+  the analytics kinds, their per-camera forms; Google Vision's on/off
+  follows its ceiling instead, below), Google Vision's ceiling for cams-admin
+  (`analytics.googleVision.remoteMaxMonthly`) and the health thresholds (`health.*`, `host.stats`,
   `ftp.stalledHours`, `archive.warnPercent`): a compromised cams-admin must
   not blind a proxy or open its FTP port. A refusal names the reason.
 - **One way only** (`widening_local_only`): every retention period and size
@@ -332,6 +335,20 @@ What cams-admin may set is compiled in, `src/fleet/remote-settable.ts`
   cap). A remote `config.rollback` passes the same check against the current
 values (it never lowers retention or raises spending, also as a rollback of a
 rollback); the cams-admin page's **Undo** here is not checked.
+- **Up to a ceiling set here** (`above_local_ceiling`; cams-admin's Vision
+  management, 2026-11-05): `analytics.googleVision.monthlyLimit` (kind
+  `ceiling`) may always go down, and up only to
+  `analytics.googleVision.remoteMaxMonthly` (0–100,000, default 0, set on the
+  Settings page's Google Vision card or in `config.json`). A limit of 5,000
+  with a ceiling of 1,000 can go to 3,000 or 0, not to 6,000.
+  `analytics.googleVision.enabled` (kind `ceilingGated`) may always be
+  switched off, and on only while the ceiling is above 0. So with the default
+  ceiling of 0, cams-admin can lower the limit and switch Vision off, nothing
+  more. The refused path's `detail` names the ceiling. `widening_local_only` is
+  checked first; a remote `config.rollback` above the ceiling fails the same
+  way. Lowering the ceiling never changes the current limit; it only bounds
+  cams-admin's next change. `config.get` reports the kind in `settable[…].dir`
+  and the ceiling's value in `paths`.
 - A path the environment sets (`.env`) is refused `held_by_env`. A new
   setting is denied until someone classifies it here; making it
   remote-settable needs the cams-admin contract first.

@@ -60,6 +60,8 @@ const v1 = <T>(a: unknown, keys: string[], rest: (o: Record<string, unknown>) =>
 };
 export const validateConfigGet = (a: unknown) => v1<{ v: 1 }>(a, [], () => null);
 export const validateProxyRestart = validateConfigGet;
+// analytics.usage.get (cams-admin Vision management design 2026-11-05): {v: 1} only.
+export const validateAnalyticsUsageGet = validateConfigGet;
 export const validateConfigSet = (a: unknown) => v1<ConfigSetArgs>(a, ['dryRun', 'baseRevision', 'set'], (o) => {
   if (typeof o.dryRun !== 'boolean') return 'dryRun';
   if (typeof o.baseRevision !== 'string' || !REV.test(o.baseRevision)) return 'baseRevision';
@@ -256,6 +258,7 @@ export const ARGS_VALIDATORS: Record<string, (a: unknown) => ArgsVerdict<unknown
   'camera.action': validateCameraAction,
   'camera.name.set': validateCameraName,
   'camera.onboarding.get': validateOnboardingGet,
+  'analytics.usage.get': validateAnalyticsUsageGet,
   'proxy.restart': validateProxyRestart,
   'move.targets': validateMoveTargets,
   'move.open': validateMoveOpen,

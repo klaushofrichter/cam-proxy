@@ -20,6 +20,7 @@
       "move.send",
       "move.receive",
       "camera.onboarding.get",
+      "analytics.usage.get",
       "camera.action:camera-test",
       "camera.action:onvif-resubscribe",
       "camera.action:camera-ftp-test",

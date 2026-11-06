@@ -31,7 +31,8 @@ export const UI_ENTRIES = ['ui.config', 'ui.restart'] as const;
 // Camera moves (cams-admin contract "Camera moves"): the source side and the target side, each its own entry, local, off by default.
 export const MOVE_ENTRIES = ['move.send', 'move.receive'] as const;
 // Spec 2026-10-30-camera-onboarding-design §4.6: entries on unless the local admin switches them off (policy.json `off`); a read without secrets.
-export const DEFAULT_ON: readonly string[] = ['camera.onboarding.get'];
+// analytics.usage.get (cams-admin Vision management design 2026-11-05): the Google Vision settings and use, never the key.
+export const DEFAULT_ON: readonly string[] = ['camera.onboarding.get', 'analytics.usage.get'];
 export const ALLOW_ENTRIES: readonly string[] = ['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`), ...MOVE_ENTRIES, ...UI_ENTRIES, ...DEFAULT_ON];
 // The move commands by the entry they need; move.finish and move.cancel by their args.role (entryFor).
 const MOVE_SEND = ['move.targets', 'move.open', 'move.answer', 'move.go', 'move.release', 'move.begin', 'move.summary', 'move.return.start'];
@@ -78,9 +79,10 @@ export const ENTRY_TEXT: Record<string, string> = {
   'proxy.restart': 'DISRUPTIVE: cams-admin may restart this proxy (at most 2 an hour)',
   'move.send': 'cams-admin may move a camera from this proxy to another proxy of the account, after you approve the move here or in a cams-admin sign-in',
   'move.receive': 'cams-admin may hand this proxy a camera from another proxy of the account: it adds the camera, its password and certificate, and copies its content',
-  'ui.config': "a cams-admin sign-in (one-time link) may change this proxy's settings on the Settings page and reset them to config.json's value; never addresses, ports, files, trust, users, cams-admin itself, storage limits or Google Vision on/off, and retention only longer, spending caps only lower",
+  'ui.config': "a cams-admin sign-in (one-time link) may change this proxy's settings on the Settings page and reset them to config.json's value; never addresses, ports, files, trust, users, cams-admin itself, storage limits or Google Vision's ceiling for cams-admin; retention only longer, spending caps only lower, Google Vision on and its monthly limit higher only within that ceiling",
   'ui.restart': 'DISRUPTIVE: a cams-admin sign-in (one-time link) may restart this proxy and its camera side',
   'camera.onboarding.get': "cams-admin may read each camera's onboarding status (no secrets)",
+  'analytics.usage.get': "cams-admin may read this proxy's Google Vision settings and use: on/off, limits, calls, pause, last error, per camera (never the key)",
   ...Object.fromEntries(REMOTE_ACTIONS.map((a) => [`camera.action:${a}`, actionText(a)])),
 };
 

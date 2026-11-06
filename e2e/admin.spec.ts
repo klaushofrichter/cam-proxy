@@ -173,6 +173,29 @@ test('typing in the analytics limits survives a refresh and a save of the other 
   await expect.poll(() => dailyCap(page)).toBe(original);
 });
 
+// Vision management (cams-admin design 2026-11-05): the ceiling for cams-admin is
+// set here; lowering it below the current limit leaves the limit, and says so.
+test("the Google Vision ceiling for cams-admin: saved here, a lower one leaves the limit", async ({ page, request }) => {
+  const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+  const cfg = async () => (await (await request.get('/control/config', { headers: auth })).json()) as Record<string, { value: unknown }>;
+  const before = await cfg();
+  expect((await request.put('/control/config', { headers: auth, data: { analytics: { googleVision: { monthlyLimit: 500 } } } })).ok()).toBe(true);
+  await signIn(page);
+  await page.getByTestId('nav-settings').click();
+  await expect(page.getByTestId('analytics-remote-max-text')).toContainText("cams-admin may allow up to 0 calls a month; 0 = cams-admin can't switch Vision on");
+  await page.getByTestId('analytics-remote-max').fill('1000');
+  await page.getByTestId('analytics-remote-max-save').click();
+  await expect(page.getByTestId('analytics-message')).toContainText('cams-admin ceiling saved');
+  await expect(page.getByTestId('analytics-remote-max-text')).toContainText('up to 1,000 calls a month');
+  await expect(page.getByTestId('analytics-remote-max-below')).toHaveCount(0);
+  await page.getByTestId('analytics-remote-max').fill('100');
+  await page.getByTestId('analytics-remote-max-save').click();
+  await expect(page.getByTestId('analytics-remote-max-below')).toContainText('The monthly limit (500) is above this ceiling and stays as it is');
+  expect((await cfg())['analytics.googleVision.monthlyLimit'].value).toBe(500);
+  const restore = { monthlyLimit: before['analytics.googleVision.monthlyLimit'].value, remoteMaxMonthly: before['analytics.googleVision.remoteMaxMonthly'].value };
+  expect((await request.put('/control/config', { headers: auth, data: { analytics: { googleVision: restore } } })).ok()).toBe(true);
+});
+
 // Klaus 2026-10-05 (the Pi's PoE rows): a whole-group save keeps only what
 // differs; a Reset to none / not set says what that means; an override
 // equal to the default (an older proxy's) has no Reset, and Reset to

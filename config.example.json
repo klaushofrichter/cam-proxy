@@ -110,7 +110,8 @@
       "monthlyLimit": 0,
       "dailyCap": 0,
       "checksPerDay": 10,
-      "perCameraDailyCap": 0
+      "perCameraDailyCap": 0,
+      "remoteMaxMonthly": 0
     }
   },
   "tls": {

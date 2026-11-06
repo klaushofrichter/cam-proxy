@@ -12,10 +12,16 @@
   // Issue #227: settings need ui.config for a cams-admin sign-in; the key is the local admin's.
   const locked = $derived(lockedWhy($rights, 'config'));
   const keyLocked = $derived(lockedWhy($rights, 'local'));
-  // With ui.config, Google Vision on/off stays the local admin's, and its caps only go down (Klaus, 2026-10-21).
+  // With ui.config, the caps only go down (Klaus, 2026-10-21); Google Vision on
+  // and a higher monthly limit only within the ceiling set here (Vision
+  // management, 2026-11-05), which stays the local admin's.
   const enabledLocked = $derived(settingLockedWhy($rights, 'analytics.googleVision.enabled'));
-  const capWhy = (leaf: string, v: number | null) => (v === null ? null : narrowWhy($rights, `analytics.googleVision.${leaf}`, val<number>(`analytics.googleVision.${leaf}`), v));
+  const ceilingLocked = $derived(settingLockedWhy($rights, 'analytics.googleVision.remoteMaxMonthly'));
   const val = <T,>(p: string) => view[p]?.value as T;
+  const savedCeiling = $derived(val<number>('analytics.googleVision.remoteMaxMonthly') ?? 0);
+  const capWhy = (leaf: string, v: number | null) => (v === null ? null : narrowWhy($rights, `analytics.googleVision.${leaf}`, val<number>(`analytics.googleVision.${leaf}`), v, savedCeiling));
+  // Switching on from a cams-admin sign-in needs a ceiling above 0.
+  const enableWhy = $derived(narrowWhy($rights, 'analytics.googleVision.enabled', val<boolean>('analytics.googleVision.enabled'), true, savedCeiling));
   const provider = $derived((($status?.analytics ?? []) as UiProviderState[]).find((p) => p.id === 'google-vision') ?? null);
   // A draft stays undefined until the user types, so a reload of the settings
   // (Refresh, another save) never overwrites what is being typed; the field
@@ -41,6 +47,11 @@
   const dailyWhy = $derived(capWhy('dailyCap', dailyValue));
   const checksWhy = $derived(capWhy('checksPerDay', checksValue));
   const perCameraWhy = $derived(capWhy('perCameraDailyCap', perCameraValue));
+  // cams-admin's ceiling (remoteMaxMonthly): local only.
+  let ceilingDraft = $state<string | undefined>(undefined);
+  const ceiling = $derived(ceilingDraft ?? String(savedCeiling));
+  const ceilingValue = $derived(parseLimit(ceiling, 100000));
+  const ceilingBelowLimit = $derived(savedCeiling < (val<number>('analytics.googleVision.monthlyLimit') ?? 0));
 
   // The message is cleared first, so a new "saved" is never the old one. A
   // refused change puts a checkbox back (`box`).
@@ -98,11 +109,12 @@
     <h4>Google Vision</h4>
     <label class="switch">
       <!-- Disabled only once the status says there is no key (no flash while it loads). -->
-      <input type="checkbox" data-testid="analytics-enabled" disabled={(provider !== null && !provider.keyMasked) || !!locked || !!enabledLocked} title={enabledLocked ?? undefined} aria-describedby="analytics-key-text" checked={val<boolean>('analytics.googleVision.enabled')}
+      <input type="checkbox" data-testid="analytics-enabled" disabled={(provider !== null && !provider.keyMasked) || !!locked || !!enabledLocked || (!val<boolean>('analytics.googleVision.enabled') && !!enableWhy)} title={enabledLocked ?? enableWhy ?? undefined} aria-describedby="analytics-key-text" checked={val<boolean>('analytics.googleVision.enabled')}
         onchange={(e) => toggle(e, (on) => ({ googleVision: { enabled: on } }), 'Google Vision')} />
       enabled
     </label>
     {#if !locked}<LockedNote why={enabledLocked} testid="analytics-enabled-locked" />{/if}
+    {#if !locked && !enabledLocked && enableWhy && !val<boolean>('analytics.googleVision.enabled')}<p class="hint small" data-testid="analytics-enabled-dir">{enableWhy}</p>{/if}
     <p class="small" id="analytics-key-text" data-testid="analytics-key">
       Key: {#if provider?.keyMasked}<span class="mono">{provider.keyMasked}</span>{:else}not set: add <span class="mono">CAMPROXY_GOOGLE_VISION_KEY</span> to the environment and restart, or set one below{/if}
     </p>
@@ -132,6 +144,12 @@
     {#if perCameraValue === null}<p class="hint small" data-testid="analytics-per-camera-hint">a whole number from 0 to 10,000</p>{/if}
     {#if perCameraWhy}<p class="hint small" data-testid="analytics-per-camera-dir">{perCameraWhy}</p>{/if}
     <p class="muted small">Still checks are made by hand in cams, on any second; they count toward the limits above.</p>
+    <!-- Vision management (cams-admin design 2026-11-05): the bound of cams-admin's changes; local only. -->
+    <div class="row"><label>cams-admin may allow up to <input type="number" min="0" max="100000" step="1" value={ceiling} disabled={!!ceilingLocked} title={ceilingLocked ?? undefined} oninput={(e) => (ceilingDraft = e.currentTarget.value)} data-testid="analytics-remote-max" /> calls a month</label>
+      <button disabled={ceilingValue === null || !!locked || !!ceilingLocked} data-testid="analytics-remote-max-save" aria-label="Save the most calls a month cams-admin may allow" onclick={() => ceilingValue !== null && void put({ googleVision: { remoteMaxMonthly: ceilingValue } }, 'cams-admin ceiling', () => (ceilingDraft = undefined))}>Save</button></div>
+    {#if ceilingValue === null}<p class="hint small" data-testid="analytics-remote-max-hint">a whole number from 0 to 100,000</p>{/if}
+    <p class="muted small" data-testid="analytics-remote-max-text">cams-admin may allow up to {savedCeiling.toLocaleString('en-US')} calls a month; 0 = cams-admin can't switch Vision on. It can always lower the limit or switch Vision off.</p>
+    {#if ceilingBelowLimit}<p class="small" data-testid="analytics-remote-max-below">The monthly limit ({(val<number>('analytics.googleVision.monthlyLimit') ?? 0).toLocaleString('en-US')}) is above this ceiling and stays as it is: the ceiling only bounds cams-admin's next change.</p>{/if}
     <p class="small" data-testid="analytics-estimate">{estimateFor(monthly, Number(savedMonthly))}</p>
     <p class="muted small">The limits count this key's calls by every camera of this proxy; a new key starts a fresh count. Each proxy counts only its own calls. Proxies that share a key share its budget: keep the sum of their monthly limits within it.</p>
   </div>

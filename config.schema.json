@@ -808,6 +808,12 @@
               "minimum": 0,
               "maximum": 10000,
               "description": "Google Vision calls per camera and day at most (automatic analyses and still checks together); 0 = no per-camera cap"
+            },
+            "remoteMaxMonthly": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000,
+              "description": "the most monthly calls cams-admin may allow (monthlyLimit) and whether it may switch Google Vision on; 0 = cams-admin can only lower the limit or switch it off. Lowering it leaves the current limit"
             }
           }
         }
@@ -911,7 +917,8 @@
               "move.receive",
               "ui.config",
               "ui.restart",
-              "camera.onboarding.get"
+              "camera.onboarding.get",
+              "analytics.usage.get"
             ]
           },
           "description": "commands cams-admin may send this proxy (default none); data/admin/policy.json (the Status card, admin-commands) replaces this list. config.json only"

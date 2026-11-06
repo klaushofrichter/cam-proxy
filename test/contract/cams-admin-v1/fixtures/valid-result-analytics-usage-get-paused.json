@@ -1,0 +1,51 @@
+{
+  "$note": "paused (invalid key, no end), the last error, no ceiling, no camera counts yet",
+  "$command": "analytics.usage.get",
+  "schema": "result",
+  "message": {
+    "v": 1,
+    "type": "result",
+    "id": "01K60000000000000000000005",
+    "seq": 5,
+    "ts": 1791273600005,
+    "re": "01K60000000000000000000003",
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "phase": "done",
+      "status": "ok",
+      "result": {
+        "v": 1,
+        "at": 1791273600000,
+        "providers": [
+          {
+            "id": "google-vision",
+            "name": "Google Vision",
+            "enabled": true,
+            "key": "manual",
+            "monthlyLimit": 1000,
+            "remoteMaxMonthly": 0,
+            "dailyCap": 50,
+            "month": {
+              "calls": 84
+            },
+            "today": {
+              "calls": 9
+            },
+            "paused": {
+              "reason": "invalid_key",
+              "until": null
+            },
+            "lastError": {
+              "at": 1791270000000,
+              "message": "API key not valid. Please pass a valid API key."
+            },
+            "cameras": []
+          }
+        ]
+      }
+    },
+    "sig": "+IFx/P2fFT2p9O+0cDhU0bGkbtGHfdFdTuS/EgjyoAS3iTFHCDfhvz7sG/CjmzGI1FXEXyqjK2TZSGj1jZkwCA=="
+  }
+}

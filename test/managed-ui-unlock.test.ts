@@ -246,23 +246,26 @@ describe('ui.config: storage, Google Vision and the direction rules', () => {
   const local = (body: object) => request(p.base).put('/control/config').set(auth(ADMIN_TOKEN)).send(body).expect(200);
   const refusals = (path: string) => p.proxy.audit.list({ actions: ['auth-refused'] }).records.filter((r) => String(r.message).includes(path));
 
-  it('the session names them: storage and Google Vision on/off as local settings, the direction rules as narrowSettings', async () => {
+  it('the session names them: storage and the Google Vision ceiling as local settings, the direction rules as narrowSettings', async () => {
     const m = await session();
     const r = (await request(p.base).get('/control/session').set('Cookie', m)).body.rights;
-    expect(r.localSettings).toEqual(expect.arrayContaining(['storage', 'cameras.*.storage', 'analytics.googleVision.enabled']));
+    expect(r.localSettings).toEqual(expect.arrayContaining(['storage', 'cameras.*.storage', 'analytics.googleVision.remoteMaxMonthly']));
+    expect(r.localSettings).not.toContain('analytics.googleVision.enabled');
     expect(r.narrowSettings).toMatchObject({
       'retention.clipsDays': { dir: 'more' }, 'retention.auditDays': { dir: 'more' },
       'stills.maxGB': { dir: 'more', unlimited: 'unset' },
-      'analytics.googleVision.monthlyLimit': { dir: 'less' }, 'analytics.googleVision.dailyCap': { dir: 'less', unlimited: 0 },
+      'analytics.googleVision.monthlyLimit': { dir: 'ceiling', ceiling: 'analytics.googleVision.remoteMaxMonthly' },
+      'analytics.googleVision.enabled': { dir: 'ceilingGated', ceiling: 'analytics.googleVision.remoteMaxMonthly' },
+      'analytics.googleVision.dailyCap': { dir: 'less', unlimited: 0 },
     });
     expect(r.narrowSettings['retention.intervalMin']).toBeUndefined();
     // The local admin's session has none of it.
     expect((await request(p.base).get('/control/session').set('Cookie', m)).body.rights.localAdmin).toBe(false);
   });
 
-  it('a PUT never touches storage limits or switches Google Vision, either way', async () => {
+  it('a PUT never touches storage limits or the Google Vision ceiling, either way', async () => {
     const m = await session();
-    for (const body of [{ storage: { maxPercent: 50 } }, { storage: { keepHours: { clips: 1 } } }, { 'storage.minFreeBytes': 1 }, { cameras: { cam1: { storage: { sharePercent: 10 } } } }, { camera: { storage: { sharePercent: 10 } } }, { analytics: { googleVision: { enabled: true } } }, { analytics: { googleVision: { enabled: false } } }]) {
+    for (const body of [{ storage: { maxPercent: 50 } }, { storage: { keepHours: { clips: 1 } } }, { 'storage.minFreeBytes': 1 }, { cameras: { cam1: { storage: { sharePercent: 10 } } } }, { camera: { storage: { sharePercent: 10 } } }, { analytics: { googleVision: { remoteMaxMonthly: 1000 } } }, { analytics: { googleVision: { remoteMaxMonthly: 0 } } }]) {
       const r = await request(p.base).put('/control/config').set(ui(m)).send(body);
       expect([r.status, r.body.error], JSON.stringify(body)).toEqual([403, 'local_admin_only']);
     }
@@ -278,7 +281,7 @@ describe('ui.config: storage, Google Vision and the direction rules', () => {
     for (const body of [{ retention: { clipsDays: 20 } }, { retention: { auditDays: 1 } }, { stills: { maxGB: 10 } }, { analytics: { googleVision: { monthlyLimit: 200 } } }, { analytics: { googleVision: { dailyCap: 0 } } }, { retention: { clipsDays: 40, eventsDays: 1 } }]) {
       const r = await request(p.base).put('/control/config').set(ui(m)).send(body);
       expect([r.status, r.body.error], JSON.stringify(body)).toEqual([403, 'local_admin_only']);
-      expect(r.body.detail, JSON.stringify(body)).toMatch(/cams-admin sign-in/);
+      expect(r.body.detail, JSON.stringify(body)).toMatch(/cams-admin sign-in|cams-admin may allow up to 0 calls a month/);
     }
     expect(p.proxy.running.retention.clipsDays).toBe(30);
     for (const body of [{ retention: { clipsDays: 40 } }, { stills: { maxGB: 30 } }, { analytics: { googleVision: { monthlyLimit: 50, dailyCap: 5 } } }]) {
@@ -292,7 +295,7 @@ describe('ui.config: storage, Google Vision and the direction rules', () => {
   it('a single reset that would shorten retention, raise a cap or touch storage is refused; one the other way is fine', async () => {
     await local({ retention: { clipsDays: 60, eventsDays: 5 }, analytics: { googleVision: { monthlyLimit: 100 } }, storage: { keepHours: { clips: 48 } } });
     const m = await session();
-    for (const path of ['retention.clipsDays', 'storage.keepHours.clips', 'analytics.googleVision.enabled']) {
+    for (const path of ['retention.clipsDays', 'storage.keepHours.clips', 'analytics.googleVision.remoteMaxMonthly']) {
       const r = await request(p.base).delete(`/control/config/${path}`).set(ui(m));
       expect([r.status, r.body.error], path).toEqual([403, 'local_admin_only']);
     }
@@ -305,13 +308,14 @@ describe('ui.config: storage, Google Vision and the direction rules', () => {
   });
 
   it('Reset to defaults keeps the overrides whose reset would shorten retention or raise spending, and storage', async () => {
-    await local({ retention: { clipsDays: 60, eventsDays: 5 }, analytics: { googleVision: { monthlyLimit: 100, enabled: true } }, storage: { keepHours: { clips: 48 } }, sse: { pingS: 13 } });
+    await local({ retention: { clipsDays: 60, eventsDays: 5 }, analytics: { googleVision: { monthlyLimit: 100, enabled: true, remoteMaxMonthly: 500 } }, storage: { keepHours: { clips: 48 } }, sse: { pingS: 13 } });
     const m = await session();
     const view = (await request(p.base).delete('/control/config').set(ui(m)).expect(200)).body;
     expect(view['retention.clipsDays']).toMatchObject({ value: 60, source: 'override' });
     expect(view['storage.keepHours.clips']).toMatchObject({ value: 48, source: 'override' });
-    expect(view['analytics.googleVision.enabled']).toMatchObject({ value: true, source: 'override' });
-    for (const k of ['retention.eventsDays', 'analytics.googleVision.monthlyLimit', 'sse.pingS']) expect(view[k].source, k).not.toBe('override');
+    expect(view['analytics.googleVision.remoteMaxMonthly']).toMatchObject({ value: 500, source: 'override' });
+    // Switching Google Vision off is always allowed (Vision management, 2026-11-05).
+    for (const k of ['retention.eventsDays', 'analytics.googleVision.monthlyLimit', 'analytics.googleVision.enabled', 'sse.pingS']) expect(view[k].source, k).not.toBe('override');
     // The local admin's reset still takes everything.
     const all = (await request(p.base).delete('/control/config').set(auth(ADMIN_TOKEN)).expect(200)).body;
     expect(all['retention.clipsDays'].source).not.toBe('override');
@@ -330,6 +334,25 @@ describe('ui.config: storage, Google Vision and the direction rules', () => {
     await local({ stills: { maxGB: 20 } });
     expect((await request(p.base).delete('/control/config/stills.maxGB').set(ui(m))).status).toBe(200);
     expect(p.proxy.running.stills.maxGB).toBeUndefined();
+  });
+
+  // Vision management (cams-admin design 2026-11-05): the same ceiling as cams-admin's config.set.
+  it('Google Vision: off always; on and a higher limit only within the local ceiling', async () => {
+    await local({ analytics: { googleVision: { enabled: false, monthlyLimit: 0, remoteMaxMonthly: 0 } } });
+    const m = await session();
+    const on = await request(p.base).put('/control/config').set(ui(m)).send({ analytics: { googleVision: { enabled: true } } });
+    expect([on.status, on.body.error]).toEqual([403, 'local_admin_only']);
+    expect(on.body.detail).toBe('analytics.googleVision.enabled: cams-admin may not switch it on: no ceiling at the proxy (analytics.googleVision.remoteMaxMonthly is 0)');
+    await local({ analytics: { googleVision: { remoteMaxMonthly: 1000 } } });
+    const above = await request(p.base).put('/control/config').set(ui(m)).send({ analytics: { googleVision: { enabled: true, monthlyLimit: 1001 } } });
+    expect([above.status, above.body.detail]).toEqual([403, 'analytics.googleVision.monthlyLimit: cams-admin may allow up to 1000 calls a month (analytics.googleVision.remoteMaxMonthly)']);
+    expect((await request(p.base).put('/control/config').set(ui(m)).send({ analytics: { googleVision: { enabled: true, monthlyLimit: 1000 } } })).status).toBe(200);
+    expect(p.proxy.running.analytics.googleVision).toMatchObject({ enabled: true, monthlyLimit: 1000 });
+    // Lowering the ceiling leaves the limit; switching off still works.
+    await local({ analytics: { googleVision: { remoteMaxMonthly: 0 } } });
+    expect(p.proxy.running.analytics.googleVision.monthlyLimit).toBe(1000);
+    expect((await request(p.base).put('/control/config').set(ui(m)).send({ analytics: { googleVision: { enabled: false, monthlyLimit: 0 } } })).status).toBe(200);
+    await local({ analytics: { googleVision: { enabled: false, monthlyLimit: 0, remoteMaxMonthly: 0 } } });
   });
 
   it('dailyCap 0 is no cap: 0 to 5 lowers spending', async () => {

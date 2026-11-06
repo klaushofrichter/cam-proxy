@@ -622,6 +622,81 @@
       },
       "text": "{\"body\":{\"bytesDone\":10485760,\"bytesTotal\":52428800,\"chunks\":[{\"id\":\"clips:2026-10-20\",\"state\":\"verified\"},{\"id\":\"events:2026-10-20\",\"state\":\"failed\"}],\"connId\":\"con_0123456789ABCDEFGHJK\",\"etaS\":40,\"kind\":\"move.progress\",\"moveId\":\"mv_0123456789ABCDEFGHJK\",\"proxyId\":\"prx_0123456789ABCDEFGHJK\",\"rateBps\":1048576},\"id\":\"01K60000000000000000000016\",\"seq\":16,\"ts\":1791273600016,\"type\":\"event\",\"v\":1}",
       "sig": "pwRoBQlPYoQdpg6s4OrQuGwCOHICb9Fzh3Xyew/sWMz2/AZgqItoAzljF8NPXFCKSStTuUy+k42euG8//UTtCw=="
+    },
+    {
+      "kind": "command",
+      "key": "server",
+      "envelope": {
+        "v": 1,
+        "type": "command",
+        "id": "01K60000000000000000000017",
+        "seq": 17,
+        "ts": 1791273600017,
+        "body": {
+          "proxyId": "prx_0123456789ABCDEFGHJK",
+          "connId": "con_0123456789ABCDEFGHJK",
+          "cmdId": "cmd_A123456789ABCDEFGHJK",
+          "exp": 1791273660017,
+          "actor": "admin@example.org",
+          "command": "analytics.usage.get",
+          "args": {
+            "v": 1
+          }
+        }
+      },
+      "text": "{\"body\":{\"actor\":\"admin@example.org\",\"args\":{\"v\":1},\"cmdId\":\"cmd_A123456789ABCDEFGHJK\",\"command\":\"analytics.usage.get\",\"connId\":\"con_0123456789ABCDEFGHJK\",\"exp\":1791273660017,\"proxyId\":\"prx_0123456789ABCDEFGHJK\"},\"id\":\"01K60000000000000000000017\",\"seq\":17,\"ts\":1791273600017,\"type\":\"command\",\"v\":1}",
+      "sig": "kdKtYIQKyOK0sSHYfDFe3HVNUagGsf0J7uxemjROSbDoR5DHFFVnvSbN0QkKO81paIOHUNlJUyg8+kmVxgo7AQ=="
+    },
+    {
+      "kind": "result",
+      "key": "proxy",
+      "envelope": {
+        "v": 1,
+        "type": "result",
+        "id": "01K60000000000000000000018",
+        "seq": 18,
+        "ts": 1791273600018,
+        "re": "01K60000000000000000000017",
+        "body": {
+          "proxyId": "prx_0123456789ABCDEFGHJK",
+          "connId": "con_0123456789ABCDEFGHJK",
+          "cmdId": "cmd_A123456789ABCDEFGHJK",
+          "phase": "done",
+          "status": "ok",
+          "result": {
+            "v": 1,
+            "at": 1791273600000,
+            "providers": [
+              {
+                "id": "google-vision",
+                "name": "Google Vision",
+                "enabled": true,
+                "key": "env",
+                "monthlyLimit": 1000,
+                "remoteMaxMonthly": 1000,
+                "dailyCap": 0,
+                "month": {
+                  "calls": 84
+                },
+                "today": {
+                  "calls": 9
+                },
+                "paused": null,
+                "lastError": null,
+                "cameras": [
+                  {
+                    "id": "cam1",
+                    "today": 3,
+                    "month": 40
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "text": "{\"body\":{\"cmdId\":\"cmd_A123456789ABCDEFGHJK\",\"connId\":\"con_0123456789ABCDEFGHJK\",\"phase\":\"done\",\"proxyId\":\"prx_0123456789ABCDEFGHJK\",\"result\":{\"at\":1791273600000,\"providers\":[{\"cameras\":[{\"id\":\"cam1\",\"month\":40,\"today\":3}],\"dailyCap\":0,\"enabled\":true,\"id\":\"google-vision\",\"key\":\"env\",\"lastError\":null,\"month\":{\"calls\":84},\"monthlyLimit\":1000,\"name\":\"Google Vision\",\"paused\":null,\"remoteMaxMonthly\":1000,\"today\":{\"calls\":9}}],\"v\":1},\"status\":\"ok\"},\"id\":\"01K60000000000000000000018\",\"re\":\"01K60000000000000000000017\",\"seq\":18,\"ts\":1791273600018,\"type\":\"result\",\"v\":1}",
+      "sig": "jbHvS7jUUCKX3g9urN932ACirSL1Z2IE79/D4QHnf2lbH3NAbo6zR8CdzLRwe2SoIKcWcgJ8/HZtbSD5pHSZAQ=="
     }
   ]
 }

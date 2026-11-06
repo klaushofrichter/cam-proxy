@@ -75,6 +75,7 @@ import { uiConfigAgainst } from './api/ui-config';
 import { Journal } from './fleet/journal';
 import { OverridesBackups } from './fleet/backups';
 import { configHandlers, type ConfigCommandDeps } from './fleet/config-commands';
+import { analyticsHandlers } from './fleet/analytics-commands';
 import { cameraHandlers } from './fleet/camera-commands';
 import { moveHandlers } from './moves/commands';
 import { MoveReturns } from './moves/returns';
@@ -1443,6 +1444,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   Object.assign(
     commandHandlers,
     configHandlers(configCommandDeps),
+    // Vision management (cams-admin design 2026-11-05): the Google Vision settings and use.
+    analyticsHandlers({ state: () => analytics.state(), config: () => running }),
     cameraHandlers({ actions: controlDeps, cameraIds: () => cams.ids(), cameraName: controlDeps.cameraName, audit, restartProcess: () => controlDeps.restartProcess(), onboarding: (cam) => onboarding.status(cam) }),
     // Camera moves (plan 2026-10-21-camera-move-cam-proxy): stubs until each task fills its handler in.
     moveHandlers({
