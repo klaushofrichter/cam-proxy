@@ -9,7 +9,7 @@ import type { OverridesBackups, Backup, PathState } from './backups';
 import type { CommandBody } from './command-check';
 import type { ConfigRollbackArgs, ConfigSetArgs, ConfigUnsetArgs } from './command-args';
 import type { Done, Handler } from './commands';
-import { CAMERA_NAME_PATTERN, classify, denyReason, directionFailures, SECRET_KEY_PATTERN, settableView } from './remote-settable';
+import { classify, denyReason, directionFailures, SECRET_KEY_PATTERN, settableView } from './remote-settable';
 
 // cams-admin's settings commands (migration spec M §8, plan P3 Task 7):
 // config.get, config.set / config.unset (dry run, revision conflict) and
@@ -223,8 +223,6 @@ export function configHandlers(d: ConfigCommandDeps): Record<'config.get' | 'con
       const entries = Object.entries(a.set).map(([p, v]) => [translate(l, p), v] as const);
       const paths = entries.map(([p]) => p);
       return write(d, cmd, a, paths, (cur) => {
-        // A camera name from cams-admin: the contract's CAMERA_NAME_PATTERN (an invalid_value, as the proxy's own rules).
-        for (const [p, v] of entries) if (/^cameras\.[^.]+\.name$/.test(p) && (typeof v !== 'string' || !CAMERA_NAME_PATTERN.test(v))) throw new ConfigError(`${p}: 1 to 64 characters, no control, bidi, separator or zero-width characters`);
         const patch: Obj = {};
         for (const [p, v] of entries) setPath(patch, p, v);
         return planOverrides(cur, patch);

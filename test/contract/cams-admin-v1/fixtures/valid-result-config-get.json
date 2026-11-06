@@ -97,14 +97,10 @@
             "max": 10000,
             "optional": true,
             "dir": "more"
-          },
-          "cameras.*.name": {
-            "type": "string",
-            "pattern": "^[^\\u0000-\\u001f]{1,64}$"
           }
         }
       }
     },
-    "sig": "bSYMBLOi4AaSoezMdsGEf+ETyuEDymCDY3srHY1tryBE9DIAimqCvohg07PveW+UJL1qN6qEJfig/VGOlQl3Bw=="
+    "sig": "m2luTZw9f3mAQcahxl0kWHpWLl6WEGZAwUw8asvrpfG0wh2XzbBnRMg6P35SsfI6WsGHGiLVtqR5kzJNvTHxCw=="
   }
 }

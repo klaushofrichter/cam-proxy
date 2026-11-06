@@ -98,7 +98,7 @@
       <div class="card" data-testid="card-camera">
         <h3>Camera</h3>
         <dl>
-          <dt>Name</dt><dd data-testid="camera-name" title={cs.camera.nameSource === 'config' ? 'not read from the camera yet: the configured name' : 'stored on the camera'}>{cs.camera.name ?? '—'}{#if cs.camera.nameSource === 'config'} <span class="muted">(configured)</span>{/if}</dd>
+          <dt>Name</dt><dd data-testid="camera-name" title={cs.camera.nameSource === 'config' ? 'not read from the camera yet: the initial name' : 'stored on the camera'}>{cs.camera.name ?? '—'}{#if cs.camera.nameSource === 'config'} <span class="muted">(initial name)</span>{/if}</dd>
           <dt>State</dt><dd class={cs.camera.reboot?.phase === 'rebooting' || cs.camera.reboot?.phase === 'power-cycling' ? 'warn' : (health ? bad('camera') : !cs.camera.online) ? 'bad' : 'ok'} data-testid="camera-state">{cameraStateText(cs.camera)}</dd>
           <dt>Since</dt><dd>{ago(cs.camera.since)}</dd>
           <dt>Model</dt><dd>{#if cs.camera.model && cs.camera.webUiUrl}<a href={cs.camera.webUiUrl} target="_blank" rel="noopener noreferrer" title="The camera's own web page">{cs.camera.model}</a>{:else}{cs.camera.model ?? '—'}{/if}</dd>

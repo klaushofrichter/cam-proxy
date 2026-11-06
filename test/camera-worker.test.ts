@@ -83,6 +83,36 @@ describe('CameraWorker (spec §3.1)', () => {
   });
 });
 
+describe('camera name audit', () => {
+  const setup = () => {
+    const { w, catalog } = worker();
+    const written: Record<string, unknown>[] = [];
+    (w as unknown as { audit: unknown }).audit = { write: (r: Record<string, unknown>) => void written.push(r) };
+    return { w, catalog, written };
+  };
+
+  it("writes one camera-name record for a rename made at the camera, none for 'first' or 'write'", async () => {
+    const { w, catalog, written } = setup();
+    await w.start();
+    await until(() => w.status.state().online);
+    await w.status.checkNow();
+    written.length = 0;
+    w.status.emit('name', 'Den', 'first');
+    w.status.emit('name', 'Porch', 'write');
+    expect(written).toEqual([]);
+    w.status.emit('name', 'Garage', 'camera');
+    expect(written).toHaveLength(1);
+    expect(written[0]).toMatchObject({
+      action: 'camera-name', category: ['configuration'], type: ['change'], outcome: 'success', user: 'camera',
+      message: 'Camera name changed at the camera: "Porch" \u2192 "Garage"', details: { from: 'Porch', to: 'Garage', source: 'camera' },
+    });
+    expect(w.nameSource()).toBe('camera');
+    await w.stopRecordings();
+    await w.stop();
+    catalog.close();
+  });
+});
+
 describe('storage per camera (spec §8.1)', () => {
   it("the worker's stills and clips writes name its camera", async () => {
     const fake = { ready: () => new Promise<void>(() => undefined), up: () => false, streamUrl: () => 'rtsp://127.0.0.1:1/x', setStream: async () => undefined };

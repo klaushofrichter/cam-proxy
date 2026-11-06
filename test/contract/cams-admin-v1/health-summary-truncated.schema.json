@@ -259,6 +259,10 @@
                     "type": "null"
                   }
                 ]
+              },
+              "nameSource": {
+                "type": "string",
+                "maxLength": 64
               }
             },
             "required": [
