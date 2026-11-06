@@ -18,7 +18,7 @@ function setup(key: { v: string }) {
   const c = openCatalog(join(dir, 'catalog.sqlite'));
   let now = T0 + 3000;
   const config = structuredClone(DEFAULTS);
-  config.analytics.googleVision = { enabled: true, monthlyLimit: 3, dailyCap: 0, checksPerDay: 10, perCameraDailyCap: 0 };
+  config.analytics.googleVision = { enabled: true, monthlyLimit: 3, dailyCap: 0, checksPerDay: 10, perCameraDailyCap: 0, remoteMaxMonthly: 0 };
   const calls: string[] = [];
   const s = new AnalyticsService({
     catalog: c, log: new StreamLog(c, () => now), dataDir: dir, cams: () => ['cam3', 'cam4'], config: () => config,

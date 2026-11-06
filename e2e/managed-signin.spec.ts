@@ -47,7 +47,7 @@ test('ui.config unlocks the Settings page except addresses; a refusal shows at t
   expect((await allow(request, ['ui.config'])).status()).toBe(200);
   const page = await managedPage(browser, request);
   await page.goto('/#/settings');
-  await expect(page.getByTestId('settings-locked')).toHaveText(/Addresses, ports, files, trust, users, storage limits and Google Vision on\/off need the local admin token/, { timeout: 15000 });
+  await expect(page.getByTestId('settings-locked')).toHaveText(/Addresses, ports, files, trust, users, storage limits and Google Vision's ceiling for cams-admin need the local admin token/, { timeout: 15000 });
   await expect(page.getByTestId('input-ftp.publicHost')).toBeDisabled();
   const input = page.getByTestId('input-sse.pingS');
   await expect(input).toBeEnabled();
@@ -69,17 +69,19 @@ test('ui.config unlocks the Settings page except addresses; a refusal shows at t
   await page.context().close();
 });
 
-// Klaus (2026-10-21): with ui.config, storage limits and Google Vision on/off
-// stay locked, and retention only gets longer (a shorter value, or a Reset to
-// one, is the local admin's).
+// Klaus (2026-10-21): with ui.config, storage limits stay locked, and retention
+// only gets longer (a shorter value, or a Reset to one, is the local admin's).
+// Vision management (2026-11-05): Google Vision on only within the ceiling set
+// at the proxy, which stays locked.
 test('ui.config: storage locked, retention only longer, with the reason at the row', async ({ browser, request }) => {
   expect((await allow(request, ['ui.config'])).status()).toBe(200);
-  expect((await request.put('/control/config', { headers: admin, data: { retention: { clipsDays: 30 } } })).status()).toBe(200);
+  expect((await request.put('/control/config', { headers: admin, data: { retention: { clipsDays: 30 }, analytics: { googleVision: { enabled: false, remoteMaxMonthly: 0 } } } })).status()).toBe(200);
   const page = await managedPage(browser, request);
   await page.goto('/#/settings');
   await expect(page.getByTestId('input-storage.maxPercent')).toBeDisabled({ timeout: 15000 });
   await expect(page.getByTestId('analytics-enabled')).toBeDisabled();
-  await expect(page.getByTestId('analytics-enabled-locked')).toHaveText(LOCKED);
+  await expect(page.getByTestId('analytics-enabled-dir')).toContainText("Google Vision can't be switched on: the proxy has no ceiling for cams-admin");
+  await expect(page.getByTestId('analytics-remote-max')).toBeDisabled();
   // Its Reset would go back to 7 days: off, and the row says why.
   await expect(page.getByTestId('reset-retention.clipsDays')).toBeDisabled();
   await expect(page.getByTestId('dir-note-retention.clipsDays')).toContainText('may only keep data longer');

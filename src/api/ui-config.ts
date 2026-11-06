@@ -1,17 +1,20 @@
 import { configChanges } from '../config/changes';
 import { planOverrides, planRemoveAll, withoutOverride, type Loaded } from '../config/load';
-import { NARROW, narrowingOk } from '../fleet/remote-settable';
+import { directionFailures } from '../fleet/remote-settable';
 import { isLocalSetting } from './auth';
 
 // Issue #227 follow-up (Klaus, 2026-10-21): a cams-admin sign-in's ui.config
 // follows cams-admin's own direction rules (NARROW, src/fleet/remote-settable.ts):
 // retention and size caps only up (keep data longer), Google Vision's
-// spending caps only down. A change the other way is the local admin's.
+// spending caps only down; Google Vision on and its monthly limit up only
+// within the local ceiling (remoteMaxMonthly, Vision management 2026-11-05).
+// A change the other way is the local admin's.
 export const UI_NARROW_REASON = { less: 'a cams-admin sign-in may only lower spending', more: 'a cams-admin sign-in may only keep data longer' } as const;
 
-// The leaf settings a change moves against NARROW's direction.
-export function againstDirection(before: Loaded, after: Loaded): string[] {
-  return configChanges(before, after).filter((c) => !narrowingOk(c.path, c.from, c.to)).map((c) => c.path);
+// The leaf settings a change moves against NARROW's direction or above the
+// local ceiling (as it is before the change), each with why.
+export function againstDirection(before: Loaded, after: Loaded): { path: string; detail: string }[] {
+  return configChanges(before, after).flatMap((c) => directionFailures([c], before.config, UI_NARROW_REASON)?.paths.map((f) => ({ path: f.path, detail: f.detail })) ?? []);
 }
 
 // PUT /control/config (the patch) or DELETE /control/config/<path> (the
@@ -25,7 +28,7 @@ export function uiConfigAgainst(loaded: Loaded, req: { method: 'PUT'; body: unkn
     return null;
   }
   const bad = againstDirection(loaded, after);
-  return bad.length ? bad.map((p) => `${p}: ${UI_NARROW_REASON[NARROW[p]]}`).join('; ') : null;
+  return bad.length ? bad.map((b) => `${b.path}: ${b.detail}`).join('; ') : null;
 }
 
 // Reset to defaults under ui.config: the overrides that stay. The settings
@@ -34,7 +37,7 @@ export function uiConfigAgainst(loaded: Loaded, req: { method: 'PUT'; body: unkn
 export function uiConfigResetKeep(loaded: Loaded): (path: string) => boolean {
   let bad = new Set<string>();
   try {
-    bad = new Set(againstDirection(loaded, planRemoveAll(loaded, isLocalSetting).next));
+    bad = new Set(againstDirection(loaded, planRemoveAll(loaded, isLocalSetting).next).map((b) => b.path));
   } catch {
     // Invalid without them: the reset itself answers 400.
   }

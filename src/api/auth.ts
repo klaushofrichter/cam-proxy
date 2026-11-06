@@ -182,11 +182,13 @@ export const UI_UNLOCKS: readonly (readonly [string, string, RegExp])[] = [
 // Settings ui.config never sets (src/fleet/remote-settable.ts): addresses,
 // ports, files, trust, users and the cams-admin connection; a new camera
 // (it has an address) neither. Klaus (2026-10-21): nor storage limits (a
-// lower one deletes stills and clips) or Google Vision on/off. Retention and
-// the spending caps follow the direction rules instead (src/api/ui-config.ts).
+// lower one deletes stills and clips). Nor the Google Vision ceiling
+// (remoteMaxMonthly; Vision management 2026-11-05: Google Vision on/off follows
+// it now). Retention, the spending caps and Vision on/off follow the direction
+// and ceiling rules instead (src/api/ui-config.ts).
 // Nor the proxy profile (cams-admin spec 2026-10-25-proxy-profile-design §0:
 // it holds the camera limit and the storage budget; local admin token only).
-export const UI_CONFIG_LOCAL: readonly string[] = [...NEVER_FROM_CAMS_ADMIN, 'storage', 'cameras.*.storage', 'analytics.googleVision.enabled', 'profile'];
+export const UI_CONFIG_LOCAL: readonly string[] = [...NEVER_FROM_CAMS_ADMIN, 'storage', 'cameras.*.storage', 'analytics.googleVision.remoteMaxMonthly', 'profile'];
 
 // Every leaf path in a settings patch; dotted keys count as their parts.
 function patchPaths(o: unknown, prefix = ''): string[] {

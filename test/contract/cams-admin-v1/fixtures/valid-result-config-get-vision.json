@@ -1,0 +1,55 @@
+{
+  "$note": "the Vision paths: the ceiling (local only) in paths, enabled ceilingGated and monthlyLimit ceiling in settable",
+  "$command": "config.get",
+  "schema": "result",
+  "message": {
+    "v": 1,
+    "type": "result",
+    "id": "01K60000000000000000000005",
+    "seq": 5,
+    "ts": 1791273600005,
+    "re": "01K60000000000000000000003",
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "phase": "done",
+      "status": "ok",
+      "result": {
+        "revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "schema": 1,
+        "cameras": [
+          "cam1"
+        ],
+        "omittedCameras": [],
+        "paths": {
+          "analytics.googleVision.enabled": {
+            "v": true,
+            "s": "file"
+          },
+          "analytics.googleVision.monthlyLimit": {
+            "v": 500,
+            "s": "file"
+          },
+          "analytics.googleVision.remoteMaxMonthly": {
+            "v": 1000,
+            "s": "file"
+          }
+        },
+        "settable": {
+          "analytics.googleVision.enabled": {
+            "type": "boolean",
+            "dir": "ceilingGated"
+          },
+          "analytics.googleVision.monthlyLimit": {
+            "type": "integer",
+            "min": 0,
+            "max": 100000,
+            "dir": "ceiling"
+          }
+        }
+      }
+    },
+    "sig": "daqo6aEcpvQdK/fRc4zXEGk0tq28B1oYGrjjtYHfibuMCQeYndCdNUehA+TKap8eK3QyjL3dMqDMz9KwkCOnBQ=="
+  }
+}

@@ -13,6 +13,7 @@ import type { Done, Handler } from '../src/fleet/commands';
 import { DENIED } from '../src/fleet/remote-settable';
 import type { AuditInput } from '../src/audit/audit-log';
 import { jcs } from '../src/fleet/jcs';
+import { strict, why } from './helpers/contract';
 
 // config.get / config.set / config.unset / config.rollback (plan P3 Task 7;
 // Review Focus 1-4): a real loadConfig in a temp folder, cams-admin's commands
@@ -195,7 +196,7 @@ describe('config.set', () => {
     expect(backups.list()).toHaveLength(0);
     expect((await run('config.set', { v: 1, dryRun: true, baseRevision: base, set: { 'sse.pingS': 7 } }, 3)).status).toBe('conflict');
   });
-  it('R3-2: lowering a retention period or size cap, or raising a Vision limit, fails widening_local_only with the reason; storage fails not_remote_settable; nothing written', async () => {
+  it('R3-2: lowering a retention period or size cap, fails widening_local_only with the reason, raising the Vision limit above the ceiling above_local_ceiling; storage fails not_remote_settable; nothing written', async () => {
     localEdit({ ftp: { maxGB: 50 } });
     const before = fileText();
     const cases: [Record<string, unknown>, string, string | undefined][] = [
@@ -204,7 +205,7 @@ describe('config.set', () => {
       [{ 'retention.auditDays': 1 }, 'widening_local_only', 'a remote change may only keep data longer'],
       [{ 'ftp.maxGB': 1 }, 'widening_local_only', 'a remote change may only keep data longer'],
       [{ 'stills.maxGB': 1 }, 'widening_local_only', 'a remote change may only keep data longer'], // unset = no cap
-      [{ 'analytics.googleVision.monthlyLimit': 99999 }, 'widening_local_only', 'a remote change may only lower spending'],
+      [{ 'analytics.googleVision.monthlyLimit': 99999 }, 'above_local_ceiling', 'cams-admin may allow up to 0 calls a month (analytics.googleVision.remoteMaxMonthly)'],
       [{ 'storage.maxPercent': 10 }, 'not_remote_settable', undefined], [{ 'storage.maxBytes': 1 }, 'not_remote_settable', undefined],
       [{ 'storage.keepHours.clips': 0 }, 'not_remote_settable', undefined], [{ 'cameras.cam1.storage.sharePercent': 1 }, 'not_remote_settable', undefined],
     ];
@@ -347,5 +348,77 @@ describe('config.rollback (R3-5)', () => {
     expect(backups.get(CMD(2))!.rolledBack).toMatchObject({ by: 'local', user: 'admin' });
     expect(audit.records.at(-1)).toMatchObject({ action: 'config-change', user: 'admin', ip: '127.0.0.1', details: { undoOf: CMD(2) } });
     expect(undoLocal(deps, CMD(2), { user: 'admin' })).toMatchObject({ status: 'failed', code: 'already_rolled_back' });
+  });
+});
+
+// Vision management (cams-admin design 2026-11-05): cams-admin may raise the
+// monthly limit and switch Google Vision on only within the ceiling set here.
+describe('the Google Vision ceiling', () => {
+  const ML = 'analytics.googleVision.monthlyLimit';
+  const EN = 'analytics.googleVision.enabled';
+  const CEIL = 'analytics.googleVision.remoteMaxMonthly';
+  const set = (s: Record<string, unknown>, n = 1, dryRun = false) => run('config.set', { v: 1, dryRun, baseRevision: rev(), set: s }, n);
+  it('the ceiling defaults to 0: cams-admin can neither raise the limit nor switch Vision on', async () => {
+    expect(getPath(holder.loaded.config, CEIL)).toBe(0);
+    expect(await set({ [ML]: 1 })).toMatchObject({ status: 'failed', code: 'above_local_ceiling', result: { paths: [{ path: ML, code: 'above_local_ceiling', detail: 'cams-admin may allow up to 0 calls a month (analytics.googleVision.remoteMaxMonthly)' }] } });
+    const r = await set({ [EN]: true, [ML]: 0 });
+    expect(r).toMatchObject({ status: 'failed', code: 'above_local_ceiling', result: { paths: [{ path: EN, code: 'above_local_ceiling', detail: 'cams-admin may not switch it on: no ceiling at the proxy (analytics.googleVision.remoteMaxMonthly is 0)' }] } });
+    const v = strict('commands/config.set.result');
+    expect(v(r.result), why(v)).toBe(true);
+    expect(getPath(holder.loaded.config, EN)).toBe(false);
+  });
+  it('with a ceiling: on and up to the ceiling is accepted, above it refused; nothing written on a refusal', async () => {
+    localEdit({ analytics: { googleVision: { remoteMaxMonthly: 1000 } } });
+    const before = fileText();
+    expect(await set({ [EN]: true, [ML]: 1001 })).toMatchObject({ status: 'failed', code: 'above_local_ceiling', result: { paths: [{ path: ML }] } });
+    expect(fileText()).toBe(before);
+    expect(await set({ [EN]: true, [ML]: 1000 }, 2)).toMatchObject({ status: 'ok', changed: [EN, ML] });
+    expect(getPath(holder.loaded.config, ML)).toBe(1000);
+    expect(audit.records.at(-1)).toMatchObject({ action: 'config-change', details: { changes: [{ key: EN, from: false, to: true }, { key: ML, from: 0, to: 1000 }] } });
+  });
+  it('lowering is always allowed, also above the ceiling; switching off at any ceiling', async () => {
+    localEdit({ analytics: { googleVision: { enabled: true, monthlyLimit: 5000, remoteMaxMonthly: 1000 } } });
+    expect((await set({ [ML]: 6000 }, 1, true)).code).toBe('above_local_ceiling');
+    expect((await set({ [ML]: 3000 }, 2)).status).toBe('ok');
+    localEdit({ analytics: { googleVision: { remoteMaxMonthly: 0 } } });
+    expect(await set({ [EN]: false, [ML]: 0 }, 3)).toMatchObject({ status: 'ok' });
+    expect(getPath(holder.loaded.config, EN)).toBe(false);
+  });
+  it('widening_local_only is checked before above_local_ceiling', async () => {
+    localEdit({ retention: { clipsDays: 30 } });
+    expect(await set({ [ML]: 50, 'retention.clipsDays': 1 })).toMatchObject({ status: 'failed', code: 'widening_local_only', result: { paths: [{ path: 'retention.clipsDays' }] } });
+  });
+  it('the ceiling itself is local only', async () => {
+    expect(await set({ [CEIL]: 100000 })).toMatchObject({ status: 'failed', code: 'not_remote_settable', result: { paths: [{ path: CEIL, code: 'not_remote_settable' }] } });
+    expect(await run('config.unset', { v: 1, dryRun: true, baseRevision: rev(), paths: [CEIL] })).toMatchObject({ status: 'failed', code: 'not_remote_settable' });
+  });
+  it('lowering the ceiling leaves the limit; it only bounds the next remote change', async () => {
+    localEdit({ analytics: { googleVision: { remoteMaxMonthly: 1000 } } });
+    expect((await set({ [EN]: true, [ML]: 800 }, 1)).status).toBe('ok');
+    localEdit({ analytics: { googleVision: { remoteMaxMonthly: 100 } } });
+    expect(getPath(holder.loaded.config, ML)).toBe(800);
+    expect(getPath(holder.loaded.config, EN)).toBe(true);
+    expect((await set({ [ML]: 900 }, 2)).code).toBe('above_local_ceiling');
+    expect((await set({ [ML]: 500 }, 3)).status).toBe('ok');
+  });
+  it('a rollback that would restore a limit above the ceiling fails above_local_ceiling', async () => {
+    localEdit({ analytics: { googleVision: { enabled: true, monthlyLimit: 5000 } } });
+    expect((await set({ [ML]: 100 }, 1)).status).toBe('ok');
+    const before = fileText();
+    expect(await run('config.rollback', { v: 1, dryRun: false, cmdId: CMD(1) }, 2)).toMatchObject({ status: 'failed', code: 'above_local_ceiling', result: { paths: [{ path: ML, code: 'above_local_ceiling' }] } });
+    expect(fileText()).toBe(before);
+    // The local Undo is the person's own decision.
+    expect(undoLocal(deps, CMD(1), { user: 'admin' }).status).toBe('ok');
+    expect(getPath(holder.loaded.config, ML)).toBe(5000);
+  });
+  it('config.get: the ceiling in paths, the kinds in settable (strict schema)', async () => {
+    localEdit({ analytics: { googleVision: { remoteMaxMonthly: 1000 } } });
+    const r = await run('config.get', { v: 1 });
+    expect((r.result!.paths as Record<string, unknown>)[CEIL]).toEqual({ v: 1000, s: 'override' });
+    expect((r.result!.settable as Record<string, unknown>)[ML]).toMatchObject({ dir: 'ceiling' });
+    expect((r.result!.settable as Record<string, unknown>)[EN]).toEqual({ type: 'boolean', dir: 'ceilingGated' });
+    expect((r.result!.settable as Record<string, unknown>)[CEIL]).toBeUndefined();
+    const v = strict('commands/config.get.result');
+    expect(v(r.result), why(v)).toBe(true);
   });
 });

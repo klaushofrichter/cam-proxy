@@ -1352,7 +1352,7 @@ paths:
     get:
       summary: External analytics providers - state, usage and limits (admin)
       responses:
-        '200': { description: '[{ id, name, enabled, keyMasked (first4…last4, never the key), keySource (env, manual or none), month: {calls, limit}, today: {calls, cap}, paused: null | {reason, until}, lastCall, lastError, checks: {today, cap} (still checks today, checksPerDay) }]' }
+        '200': { description: '[{ id, name, enabled, keyMasked (first4…last4, never the key), keySource (env, manual or none), month: {calls, limit}, today: {calls, cap}, paused: null | {reason, until}, lastCall, lastError, lastErrorAt (ms or null), checks: {today, cap} (still checks today, checksPerDay), cameras: [{id, today, month}] }]' }
         '401': { description: not signed in }
         '403': { description: admin_only }
   /control/analytics/unmapped:

@@ -67,7 +67,7 @@ export interface Config {
   analytics: {
     kinds: { person: boolean; vehicle: boolean; pet: boolean };
     // checksPerDay: still checks by hand per camera day (cams #179); 0 = none.
-    googleVision: { enabled: boolean; monthlyLimit: number; dailyCap: number; checksPerDay: number; perCameraDailyCap: number };
+    googleVision: { enabled: boolean; monthlyLimit: number; dailyCap: number; checksPerDay: number; perCameraDailyCap: number; remoteMaxMonthly: number };
   };
   // The site CA (spec 2026-10-05-multi-camera-host-design §10.4); no site = off.
   tls: { site?: string; cameraCerts: boolean; cameraSubnet?: string; proxyAddresses?: string };
@@ -103,7 +103,7 @@ export const DEFAULTS: Config = {
   archive: { enabled: true, warnPercent: 50 },
   analytics: {
     kinds: { person: true, vehicle: false, pet: false },
-    googleVision: { enabled: false, monthlyLimit: 0, dailyCap: 0, checksPerDay: 10, perCameraDailyCap: 0 },
+    googleVision: { enabled: false, monthlyLimit: 0, dailyCap: 0, checksPerDay: 10, perCameraDailyCap: 0, remoteMaxMonthly: 0 },
   },
   tls: { cameraCerts: true },
   ntp: {},

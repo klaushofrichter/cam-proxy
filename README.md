@@ -988,7 +988,10 @@ privacy and cost): [docs/analytics.md](docs/analytics.md).
   `analytics.kinds.person` (default on), `.vehicle` and `.pet` (off);
   `analytics.googleVision.enabled` (off), `.monthlyLimit` (0 = no calls,
   max 100000), `.dailyCap` (0 = no daily cap, max 10000) and
-  `.checksPerDay` (default 10, 0 = no still checks, max 1000).
+  `.checksPerDay` (default 10, 0 = no still checks, max 1000);
+  `.remoteMaxMonthly` (default 0, max 100000): the most calls a month
+  cams-admin may allow, and whether it may switch Vision on (0: it can only
+  lower the limit or switch Vision off; [docs/analytics.md](docs/analytics.md#from-cams-admin)).
 - **Key and URL:** `CAMPROXY_GOOGLE_VISION_KEY` in the environment (a secret,
   never in config.json or the UI; the UI shows it masked) and optionally
   `CAMPROXY_GOOGLE_VISION_URL` (default `https://vision.googleapis.com`;

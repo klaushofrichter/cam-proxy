@@ -166,7 +166,9 @@
             "type": "string",
             "enum": [
               "less",
-              "more"
+              "more",
+              "ceiling",
+              "ceilingGated"
             ]
           }
         },
