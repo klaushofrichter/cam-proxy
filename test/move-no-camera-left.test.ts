@@ -49,7 +49,7 @@ describe('no camera left on the proxy', () => {
     expect(strict('heartbeat')(hb.msg), why(strict('heartbeat'))).toBe(true);
     const summary = (hb.msg.body as { summary: { cameras: unknown[]; camera: { online: boolean; error: string } } }).summary;
     expect(summary.cameras).toEqual([]);
-    expect(summary.camera).toMatchObject({ online: false, error: 'no camera runs on this proxy' });
+    expect(summary.camera).toMatchObject({ online: false, error: 'no camera runs on this proxy', nameSource: 'config' });
   });
 
   it('the archive cleanup tick does not throw', () => {

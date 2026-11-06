@@ -41,7 +41,8 @@ export interface HealthInput {
   version: string;
   startedAt: number | null;
   thresholds: Thresholds;
-  camera: { id: string; name: string; host: string; state: CameraState; reboot: RebootPhase | null; poeSwitch: { model: string; port: number | null } | null };
+  // nameSource (camera name sync, 2026-11-06): 'camera' once the name was read from the camera, 'config' before (the initial name).
+  camera: { id: string; name: string; nameSource?: 'camera' | 'config'; host: string; state: CameraState; reboot: RebootPhase | null; poeSwitch: { model: string; port: number | null } | null };
   stream: { enabled: boolean; up: boolean; lastFrameTs: number | null };
   intake: IntakeState;
   ftp: { enabled: boolean; listening: boolean; camera: CameraFtpView | null; stalled: ClipsStall | null; lastClip: number | null; clips: number; failures: number };
@@ -89,7 +90,7 @@ export interface HealthSummary {
   thresholds: Thresholds;
   platform: { pi: boolean; model: string | null; hostStats: boolean };
   items: HealthItem[];
-  camera: { id: string; name: string; address: string; online: boolean; since: number; model: string | null; firmware: string | null; clockOffsetMs: number | null; error: string | null; reboot: RebootPhase | null; poeSwitch: { model: string; port: number | null } | null; sd?: SdHealth | null };
+  camera: { id: string; name: string; nameSource?: 'camera' | 'config'; address: string; online: boolean; since: number; model: string | null; firmware: string | null; clockOffsetMs: number | null; error: string | null; reboot: RebootPhase | null; poeSwitch: { model: string; port: number | null } | null; sd?: SdHealth | null };
   stream: { enabled: boolean; up: boolean; lastFrameAt: number | null };
   events: { onvif: IntakeState['onvif']; source: IntakeState['source']; since: number; resubscribes: number };
   ftp: { enabled: boolean; listening: boolean; cameraUpload: CameraFtpView['state'] | null; checkedAt: number | null; lastClipAt: number | null; clipsStored: number; failures: number; stalled: boolean; eventsWithoutClip: number };
@@ -163,6 +164,8 @@ function cameraHealth(c: CameraHealthInput): CameraHealth {
     camera: {
       id: c.camera.id,
       name: c.camera.name,
+      // Only with a nameSource input (schema 1, additive): cams-admin follows only a name read from the camera.
+      ...(c.camera.nameSource === undefined ? {} : { nameSource: c.camera.nameSource }),
       address: splitHost(c.camera.host).hostname,
       online: cam.online,
       since: cam.since,

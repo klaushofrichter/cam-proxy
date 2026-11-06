@@ -169,7 +169,7 @@
   }
   // The camera's name is stored on the camera (camera-name design): the
   // camera.name row edits it there; the configured value is only the
-  // fallback until the camera was read, set in config.json.
+  // initial name until the camera was read, set in config.json.
   let nameDraft = $state<string | undefined>(undefined);
   let nameSaving = $state(false);
   let nameError = $state('');
@@ -251,8 +251,9 @@
                 <input id="camera-name" value={nameDraft ?? block?.camera.name ?? ''} maxlength={CAMERA_NAME_MAX + 8} oninput={(e) => ((nameDraft = e.currentTarget.value), (nameError = ''))} onkeydown={(e) => e.key === 'Enter' && void saveName()} aria-invalid={!!nameProblem} data-testid="input-camera-name" />
                 {#if nameProblem}<div class="field-error" data-testid="camera-name-problem">{nameProblem}</div>{/if}
                 {#if nameError}<div class="field-error" data-testid="camera-name-error">{nameError}</div>{/if}
+                <div class="muted small" data-testid="camera-name-help">The camera's own name. The name in config.json (<span class="mono">cameras.&lt;id&gt;.name</span>) is the initial name: used until the camera's own name is read, never rewritten. Rename the camera here, in cams or in cams-admin.</div>
               </td>
-              <td>{#if block?.camera.nameSource === 'config'}<span class="badge" title="the camera was not read yet: the name from config.json">not read yet</span>{/if}</td>
+              <td>{#if block?.camera.nameSource === 'config'}<span class="badge" title="the camera was not read yet: showing the initial name from config.json">initial name</span>{/if}</td>
               <td class="actions">
                 {#if nameDraft !== undefined}<button onclick={() => void saveName()} disabled={!!nameProblem || nameSaving} data-testid="save-camera-name">Save</button>{/if}
               </td>

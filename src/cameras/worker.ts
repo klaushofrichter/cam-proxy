@@ -423,8 +423,12 @@ export class CameraWorker extends EventEmitter {
     });
     // Another model or firmware may do other things (spec 2026-10-30-ptz-capabilities-design §4).
     this.status.on('device', () => void this.refreshCapabilities());
-    this.status.on('name', (name: string) => {
+    // `source`: 'first' (first read), 'camera' (a poll read another name: renamed at
+    // the camera, audited here) or 'write' (the proxy's own rename, audited by the writer).
+    this.status.on('name', (name: string, source: 'first' | 'camera' | 'write') => {
+      const from = this.nameRead;
       this.nameRead = name;
+      if (source === 'camera') this.audit.write({ action: 'camera-name', category: ['configuration'], type: ['change'], outcome: 'success', user: 'camera', message: `Camera name changed at the camera: "${from ?? this.cam().name}" \u2192 "${name}"`, details: { from: from ?? this.cam().name, to: name, source: 'camera' } });
       this.announcer.seen(name);
     });
     // The camera's FTP settings as soon as it answers (#93), then every few minutes.

@@ -12,7 +12,7 @@ export const REMOTE: readonly string[] = [
   'composition.concurrent', 'sse.maxClients', 'sse.queuePerClient', 'sse.pingS', 'recordings.cacheMB',
   'ftp.stream', 'ftp.maxGB',
   'analytics.googleVision.enabled', 'analytics.googleVision.monthlyLimit', 'analytics.googleVision.dailyCap', 'analytics.googleVision.checksPerDay', 'analytics.googleVision.perCameraDailyCap',
-  'cameras.*.name', 'cameras.*.statusPollS', 'cameras.*.stills.stream', 'cameras.*.stills.intervalS',
+  'cameras.*.statusPollS', 'cameras.*.stills.stream', 'cameras.*.stills.intervalS',
   'cameras.*.ftp.stream',
 ];
 // Local only (coordinator rulings 2026-10-07: storage; I4, contract LOCAL_ONLY:
@@ -52,6 +52,9 @@ export const NEVER_FROM_CAMS_ADMIN: readonly string[] = [
   // Camera moves: hiding a camera and the camera limit are local (src/moves;
   // moves is only the old name of profile.cameras now, src/config/legacy.ts).
   'cameras.*.moved', 'moves',
+  // The camera holds its name; cameras.*.name is only the initial name (set
+  // at the proxy). A rename from cams-admin is camera.name.set (contract 3dffb81).
+  'cameras.*.name',
 ];
 export const DENIED: readonly string[] = [...new Set([
   ...NEVER_FROM_CAMS_ADMIN, 'storage',

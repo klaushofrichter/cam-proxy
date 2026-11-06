@@ -905,7 +905,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     const ps = w.cam().poeSwitch;
     const sd = w.sdWatch.view();
     return {
-      camera: { id: w.id, name: w.name(), host: w.cam().host, state: w.status.state(), reboot: w.reboot.state()?.phase ?? null, poeSwitch: ps.model === 'none' ? null : { model: ps.model, port: ps.port ?? null } },
+      camera: { id: w.id, name: w.name(), nameSource: w.nameSource(), host: w.cam().host, state: w.status.state(), reboot: w.reboot.state()?.phase ?? null, poeSwitch: ps.model === 'none' ? null : { model: ps.model, port: ps.port ?? null } },
       stream: w.streamStatus(),
       intake: w.intake.state(),
       ftp: ftpStatusOf(w),
@@ -923,7 +923,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       version: VERSION,
       startedAt,
       thresholds: { diskPercent: running.health.diskPercent, tempC: running.health.tempC, ftpStalledHours: running.ftp.stalledHours, ...(running.archive.enabled ? { archiveWarnPercent: running.archive.warnPercent } : {}) },
-      ...(first ?? { camera: { id: '', name: '', host: '', state: none!.camera, reboot: null, poeSwitch: null }, stream: none!.stream, intake: none!.intake, ftp: none!.ftp }),
+      ...(first ?? { camera: { id: '', name: '', nameSource: 'config', host: '', state: none!.camera, reboot: null, poeSwitch: null }, stream: none!.stream, intake: none!.intake, ftp: none!.ftp }),
       others,
       ...(first ? {} : { noCamera: true }),
       storage: { paused: storage.paused(), lastRun: storage.lastRun() },

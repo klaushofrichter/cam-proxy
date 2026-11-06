@@ -189,7 +189,7 @@ come only from the environment.
 | Group | Settings (defaults) |
 |---|---|
 | `server` | `port` (8480), `dataDir` (`data`, relative to the config file), `logLevel` (`info`), `publicUrl` (where people reach this proxy; reported in `/api/cameras` as `publicUrl`, so cams can link to it), `trustProxy` (0: none; behind the cluster ingress 1, so rate limits count clients by X-Forwarded-For) |
-| `camera` | one camera (or `cameras`, a list: [Several cameras](#several-cameras)): `id` (`cam1`), `name` (`Den`; only the fallback until the camera's own name is read, see [Camera name](#camera-name)), `host` (without it the camera waits idle), `protocol` (`https`), `tlsName`, `webUiUrl` (the camera's own web page, linked from the admin UI; default `https://<host>/`, `none` for no link), `user` (`proxy`), `onvifPort` (8000), `rtspPort` (554), `baichuanPort` (9000, recordings over TCP; applies at the next connection), `statusPollS` (30); `poeSwitch`: the camera's PoE switch for a power-cycle, `model` (`none`; `sscpoe-web` for the STEAMEMO GPS-208 and kin), `host` (its address, optional `:port`), `port` (the switch port the camera is on, 1–48), `ports` (8: the switch's PoE port count), `offSeconds` (10, 5–60). The `poeSwitch` settings apply at once; see [docs/poe-switch.md](docs/poe-switch.md) |
+| `camera` | one camera (or `cameras`, a list: [Several cameras](#several-cameras)): `id` (`cam1`), `name` (`Den`; only the initial name, used until the camera's own name is read and never rewritten, see [Camera name](#camera-name)), `host` (without it the camera waits idle), `protocol` (`https`), `tlsName`, `webUiUrl` (the camera's own web page, linked from the admin UI; default `https://<host>/`, `none` for no link), `user` (`proxy`), `onvifPort` (8000), `rtspPort` (554), `baichuanPort` (9000, recordings over TCP; applies at the next connection), `statusPollS` (30); `poeSwitch`: the camera's PoE switch for a power-cycle, `model` (`none`; `sscpoe-web` for the STEAMEMO GPS-208 and kin), `host` (its address, optional `:port`), `port` (the switch port the camera is on, 1–48), `ports` (8: the switch's PoE port count), `offSeconds` (10, 5–60). The `poeSwitch` settings apply at once; see [docs/poe-switch.md](docs/poe-switch.md) |
 | `events` | `onvif.subscribeMin` (10), `onvif.pullTimeoutS` (30), `poll.enabled` (true), `poll.intervalS` (2), `poll.afterOnvifDownS` (60), `maxOpenMin` (10) |
 | `retention` | `stillsDays` (7), `previewsDays` (14), `clipsDays` (7), `eventsDays` (30), `auditDays` (90), `streamLogDays` (7), `intervalMin` (60) |
 | `storage` | `maxPercent` (85) or `maxBytes`, `minFreeBytes` (2 GB), `keepHours` (per kind: `stills` 24, `clips` 24, `previews` 72). `profile.storageGB` replaces `maxBytes`: in the same file both is a config error; set in overrides.json (the Settings page, `PUT /control/profile`) over a config.json `maxBytes`, the profile wins and `maxBytes` is shown as ignored |
@@ -1171,8 +1171,18 @@ The camera stores its name (camera-name design): `GetDevName`, `GetDevInfo`'s
 `GET /api/cameras` and `/api/cameras/:cam`, `camera.name` in
 `GET /control/status` and `camera.name` in `GET /api/local/health` (the field
 was there before; it is the camera-reported name now). The configured
-`camera.name` is only the fallback while the camera has not been read since
-the proxy started.
+`camera.name` (`cameras.<id>.name`) is only the initial name: it names the
+camera until the first successful read after the proxy starts, and the proxy
+never rewrites it, so a rename does not change the configuration or its
+revision. Everywhere the proxy shows a camera's name it shows the live name
+(`nameSource` says `camera` or `config`).
+
+A rename made at the camera (the Reolink app, its web page) is noticed by the
+next status poll and audited as `camera-name` (user `camera`, message
+`Camera name changed at the camera: "A" → "B"`, details `{from, to, source:
+"camera"}`). The first read after a start only sets the baseline (a restart is
+not a rename), and a poll that reads the same name writes nothing. Renames
+through the proxy (`PUT /control/camera/name`) are audited as before.
 
 `PUT /control/camera/name` renames it: the proxy checks the camera's rules,
 writes `SetDevName` (the whole `DevName` object), reads `GetDevName` back and

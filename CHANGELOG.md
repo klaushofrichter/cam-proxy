@@ -2,8 +2,15 @@
 
 ## Unreleased
 
+- A camera renamed at the camera itself (in the Reolink app or its web page) is now audited: the next status poll writes a `camera-name` record, user `camera`, "Camera name changed at the camera: "A" → "B"". The first read after a start sets the baseline without a record.
+- The `name` in a camera's configuration is now documented and labelled as the initial name: it names the camera only until the camera's own name is read, and the proxy never rewrites it. On the Settings page the camera name row says so and shows "initial name" while the camera has not been read. The Status page's camera card says "(initial name)" too.
+- The health summary (and so the heartbeat to cams-admin) now tells for each camera where its name came from: `nameSource` `camera` once read from the camera, `config` before (the initial name). cams-admin follows only a name read from the camera, so it needs this release to keep its camera names in step; release together with cams-admin's camera name sync.
+
+## v2026.11.05.1
+
 - Google Vision can now be managed from cams-admin, within a limit set at the proxy. A new setting on the Settings page's Google Vision card, "cams-admin may allow up to N calls a month" (`analytics.googleVision.remoteMaxMonthly`, default 0), is the most cams-admin may set the monthly limit to. cams-admin may always lower the limit or switch Vision off; it may raise the limit or switch Vision on only up to that number, so with the default 0 nothing changes until someone at the proxy sets one. A change above it is refused (`above_local_ceiling`). Lowering the number leaves the current limit as it is. A cams-admin sign-in follows the same rules. The number itself can only be set at the proxy.
 - cams-admin can read each proxy's Google Vision state and use with the new command `analytics.usage.get`: on or off, where the key comes from (never the key itself), the limits, this month's and today's calls, a pause, the last error and the calls per camera. It is allowed by default (a read without secrets, at most 10 a minute) and can be switched off on the cams-admin card.
+
 ## v2026.11.04.2
 
 - New health item "cams-admin" (`camsAdmin`): the proxy's own connection to cams-admin now shows on the Status page and the Pi display. Connected: ok. Down under 2 minutes (a cams-admin deploy): a warning, "reconnecting". Longer, or never connected since the start: a problem, "not connected for N min", with a short reason such as "name lookup failed". No item on a proxy not set up for cams-admin. cams-admin itself only ever sees it as ok, since it hears nothing while the connection is down.

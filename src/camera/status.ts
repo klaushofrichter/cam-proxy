@@ -108,17 +108,18 @@ export class StatusPoller extends EventEmitter {
     const renamed = name !== this.current.name;
     this.nameEpoch++;
     this.current = { ...this.current, name };
-    if (renamed) this.emit('name', name);
+    if (renamed) this.emit('name', name, 'write');
   }
 
   private set(next: Omit<CameraState, 'since'>): void {
     const flipped = next.online !== this.current.online;
     const renamed = next.name !== undefined && next.name !== this.current.name;
+    const firstName = this.current.name === undefined;
     const since = flipped ? this.now() : this.current.since;
     const device = next.online && this.current.model !== undefined && (next.model !== this.current.model || next.firmware !== this.current.firmware);
     this.current = { ...next, since };
     if (flipped) this.emit('change', this.state());
-    if (renamed) this.emit('name', next.name);
+    if (renamed) this.emit('name', next.name, firstName ? 'first' : 'camera');
     if (device) this.emit('device', { model: next.model ?? '', firmware: next.firmware ?? '' });
   }
 }
