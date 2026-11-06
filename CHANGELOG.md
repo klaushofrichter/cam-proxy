@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- A camera renamed at the camera itself (in the Reolink app or its web page) is now audited: the next status poll writes a `camera-name` record, user `camera`, "Camera name changed at the camera: "A" → "B"". The first read after a start sets the baseline without a record.
+- The `name` in a camera's configuration is now documented and labelled as the initial name: it names the camera only until the camera's own name is read, and the proxy never rewrites it. On the Settings page the camera name row says so and shows "initial name" while the camera has not been read.
+
 ## v2026.11.05.1
 
 - Google Vision can now be managed from cams-admin, within a limit set at the proxy. A new setting on the Settings page's Google Vision card, "cams-admin may allow up to N calls a month" (`analytics.googleVision.remoteMaxMonthly`, default 0), is the most cams-admin may set the monthly limit to. cams-admin may always lower the limit or switch Vision off; it may raise the limit or switch Vision on only up to that number, so with the default 0 nothing changes until someone at the proxy sets one. A change above it is refused (`above_local_ceiling`). Lowering the number leaves the current limit as it is. A cams-admin sign-in follows the same rules. The number itself can only be set at the proxy.
