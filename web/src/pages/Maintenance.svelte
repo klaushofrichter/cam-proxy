@@ -12,6 +12,7 @@
   import { lockedWhy, rights } from '../lib/rights';
   import LockedNote from '../components/LockedNote.svelte';
   // The actions that act on a camera: the picked one when there are several.
+  const camName = $derived(blockOf($status, $selectedCamera)?.camera.name ?? blockOf($status, $selectedCamera)?.id ?? '');
   const CAMERA_ACTIONS = ['camera-test', 'onvif-resubscribe', 'camera-ftp-setup', 'camera-ftp-test', 'camera-ftp-off', 'restart'];
 
   let result = $state('');
@@ -206,29 +207,27 @@
 
 <section>
   <h2>Maintenance</h2>
+  <LockedNote why={locked && restartLocked ? locked : locked ? `${locked} Only the restarts are allowed here.` : null} testid="maintenance-locked" />
+  {#if alert}<p class="bad" data-testid="poe-alert">{alert}</p>{/if}
+  {#if result}<p class="msg mono" data-testid="action-result">{result}</p>{/if}
+  <!-- The camera picked in the top bar (Klaus 2026-11-06: say which actions are the camera's). -->
+  <h3 class="section" data-testid="maintenance-camera-section">Camera: {camName}</h3>
   <div class="card">
     <div class="buttons">
       <button onclick={() => void run('Camera test', 'camera-test')} disabled={!!locked} data-testid="action-camera-test">Test the camera</button>
       <button onclick={() => void run('ONVIF', 'onvif-resubscribe')} disabled={!!locked} data-testid="action-resubscribe">Re-subscribe ONVIF</button>
-      <button onclick={() => void run('Retention preview', 'retention-run', { dryRun: true })} disabled={!!locked} data-testid="action-retention-dry">Preview retention</button>
-      <button onclick={() => void run('Retention', 'retention-run', {})} disabled={!!locked} data-testid="action-retention">Run retention now</button>
       <button onclick={() => void run('Restart', 'restart')} disabled={!!restartLocked} data-testid="action-restart">Restart camera side</button>
       <button class="danger" onclick={() => (asking = 'camera-reboot')} disabled={cameraBusy || !!locked} data-testid="action-camera-reboot">Reboot camera</button>
       {#if poe?.configured}
         <button class="danger" onclick={() => (asking = 'camera-powercycle')} disabled={cameraBusy || !!locked} data-testid="action-camera-powercycle">Power-cycle camera</button>
         <button onclick={() => void poeOn()} disabled={sending || cycling || !!locked} data-testid="action-camera-poe-on" title="Turns the camera's PoE on if it is off (no power check)">Turn camera PoE on</button>
       {/if}
-      <button class="danger" onclick={() => (asking = 'restart-proxy')} disabled={restarting === 'waiting' || !!restartLocked} data-testid="action-restart-proxy">Restart proxy</button>
-      <button class="danger" onclick={askClear} disabled={!archive?.count || !!locked} data-testid="action-archive-clear" title="Deletes every clip in the Archive (asks for the number of clips)">Clear the Archive…</button>
     </div>
     <div class="buttons">
       <button onclick={() => void run('Camera FTP setup', 'camera-ftp-setup')} disabled={!!locked} data-testid="action-ftp-setup">Point the camera's FTP here</button>
       <button onclick={() => void run('Camera FTP test', 'camera-ftp-test')} disabled={!!locked} data-testid="action-ftp-test">Test the camera's FTP</button>
       <button onclick={() => void run('Camera FTP off', 'camera-ftp-off')} disabled={!!locked} data-testid="action-ftp-off">Turn the camera's FTP off</button>
     </div>
-    <LockedNote why={locked && restartLocked ? locked : locked ? `${locked} Only the restarts are allowed here.` : null} testid="maintenance-locked" />
-    {#if alert}<p class="bad" data-testid="poe-alert">{alert}</p>{/if}
-    {#if result}<p class="msg mono" data-testid="action-result">{result}</p>{/if}
     {#if cycling || reboot?.phase === 'power-cycling'}
       <p class="busy" data-testid="reboot-state">Power-cycling… the camera's PoE is off on {poe?.host} port {poe?.port}; it comes back on after {poe?.offSeconds} s.</p>
     {:else if reboot?.phase === 'rebooting'}
@@ -238,13 +237,22 @@
     {:else if rebootAsked && reboot?.phase === 'not-back'}
       <p class="bad" data-testid="reboot-state">The camera did not answer within 5 minutes of the {reboot.kind === 'powercycle' ? 'power-cycle' : 'reboot'}.</p>
     {/if}
+  </div>
+  <InventoryCard bind:this={inventory} onrepair={(o, auto) => { if (auto && asking) return; offer = o; asking = 'inventory-repair'; }} onrecover={(o, auto) => { if (auto && asking) return; recoverText = o.text; asking = 'inventory-recover'; }} onremove={(o) => { duplicates = o; asking = 'inventory-duplicates'; }} />
+  <h3 class="section" data-testid="maintenance-proxy-section">Proxy</h3>
+  <div class="card">
+    <div class="buttons">
+      <button onclick={() => void run('Retention preview', 'retention-run', { dryRun: true })} disabled={!!locked} data-testid="action-retention-dry">Preview retention</button>
+      <button onclick={() => void run('Retention', 'retention-run', {})} disabled={!!locked} data-testid="action-retention">Run retention now</button>
+      <button class="danger" onclick={() => (asking = 'restart-proxy')} disabled={restarting === 'waiting' || !!restartLocked} data-testid="action-restart-proxy">Restart proxy</button>
+      <button class="danger" onclick={askClear} disabled={!archive?.count || !!locked} data-testid="action-archive-clear" title="Deletes every clip in the Archive (asks for the number of clips)">Clear the Archive…</button>
+    </div>
     {#if restarting === 'waiting'}
       <p class="busy" data-testid="restart-state">Restarting… the page reloads when the proxy is back.</p>
     {:else if restarting === 'gone'}
       <p class="bad" data-testid="restart-state">The proxy did not come back. Is it running under a supervisor (compose, the cluster)?</p>
     {/if}
   </div>
-  <InventoryCard bind:this={inventory} onrepair={(o, auto) => { if (auto && asking) return; offer = o; asking = 'inventory-repair'; }} onrecover={(o, auto) => { if (auto && asking) return; recoverText = o.text; asking = 'inventory-recover'; }} onremove={(o) => { duplicates = o; asking = 'inventory-duplicates'; }} />
   <div class="card">
     <div class="loghead"><h3>Log</h3><span class="small">updates every 10 s</span></div>
     <div class="log">
@@ -267,6 +275,7 @@
 <style>
   section { display: grid; gap: 12px; }
   h2 { margin: 0; font-size: 20px; }
+  h3.section { margin: 8px 0 0; font-size: 17px; }
   h3 { margin: 0; font-size: 16px; }
   .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; display: grid; gap: 8px; }
   .buttons { display: flex; flex-wrap: wrap; gap: 8px; }

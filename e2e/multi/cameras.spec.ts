@@ -13,8 +13,9 @@ test('the picker lists the three cameras and switches the Status cards', async (
 });
 
 test('per-camera settings and actions follow the picker', async ({ page }) => {
-  await page.goto('/#/settings');
+  await page.goto('/#/camera-settings');
   await page.getByTestId('camera-picker').selectOption('cam4');
+  await expect(page.getByTestId('page-title')).toContainText('Camera settings: ');
   await expect(page.getByTestId('input-cameras.cam4.statusPollS')).toBeVisible();
   await expect(page.getByTestId('input-cameras.cam3.statusPollS')).toHaveCount(0);
   await page.goto('/#/maintenance');
@@ -42,6 +43,7 @@ test('a camera added in the Settings page starts, and can be removed again', asy
   await expect(page.getByTestId('add-camera-password')).toHaveValue('');
   await expect(page.getByTestId('camera-picker').locator('option')).toHaveCount(4, { timeout: 15_000 });
   await page.getByTestId('camera-picker').selectOption('cam9');
+  await page.getByTestId('nav-camera-settings').click();
   await page.getByTestId('remove-camera').click();
   await page.getByRole('button', { name: 'Remove camera' }).last().click();
   await expect(page.getByTestId('settings-message')).toContainText('Camera cam9 removed');

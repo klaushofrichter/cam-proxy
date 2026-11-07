@@ -280,10 +280,12 @@ test('the Google Vision settings show the current key beside the custom key, and
     await expect(tip).toContainText(text);
     await page.mouse.move(0, 0);
   }
-  // The Camera time card names the camera by its name, not its id.
+  // The Camera time card (Camera settings) names the camera by its name, not its id.
+  await page.getByTestId('nav-camera-settings').click();
   const headers = { Authorization: `Bearer ${CLIENT_TOKEN}` };
   const [cam] = (await (await page.request.get('/api/cameras', { headers })).json()) as { id: string; name: string }[];
   if (cam.name !== cam.id) await expect(page.getByTestId('camera-time-text')).toContainText(`Sets ${cam.name}'s time zone`);
+  await page.getByTestId('nav-settings').click();
   // A click keeps it open (touch screens have no hover).
   await page.getByTestId('analytics-checks-help').click();
   await page.mouse.move(0, 0);

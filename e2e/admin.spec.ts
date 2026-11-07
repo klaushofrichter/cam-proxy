@@ -213,7 +213,10 @@ test('Reset only where it changes something, and says what none / not set means'
     await expect(page.getByTestId(`source-${row('ports')}`)).toHaveText('default');
     await expect(page.getByTestId(`reset-${row('model')}`)).toHaveText('Reset – none (no PoE switch: power-cycle off)');
     await expect(page.getByTestId(`reset-${row('host')}`)).toHaveText('Reset – not set (PoE switch control off: no switch address)');
+    // The port is the camera's: on Camera settings.
+    await page.getByTestId('nav-camera-settings').click();
     await expect(page.getByTestId(`reset-${row('port')}`)).toHaveText('Reset – not set (PoE switch control off for this camera: no port)');
+    await page.getByTestId('nav-settings').click();
     await expect(page.getByTestId(`reset-${row('offSeconds')}`)).toHaveText('Reset – 10 s');
 
     // An older proxy stored ports = 8 (the default) as an override: the answer

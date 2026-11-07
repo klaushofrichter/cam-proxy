@@ -40,7 +40,7 @@ const cameraId = async (request: import('@playwright/test').APIRequestContext) =
 
 test('without move.send the Move button is not there', async ({ page }) => {
   await mockSession(page, false);
-  await page.goto('/#/settings');
+  await page.goto('/#/camera-settings');
   await expect(page.getByTestId('input-camera-name')).toBeVisible({ timeout: 15000 });
   await expect(page.getByTestId('move-open')).toHaveCount(0);
 });
@@ -49,7 +49,7 @@ test('move dialog → rejected reason shown', async ({ page, request }) => {
   const cam = await cameraId(request);
   const mock: Mock = { list: [], posted: [] };
   await mockMoves(page, mock);
-  await page.goto('/#/settings');
+  await page.goto('/#/camera-settings');
   await page.getByTestId('move-open').click();
   await expect(page.getByTestId('move-target')).toBeVisible({ timeout: 15000 });
   mock.list = [{ requestId: REQ, camera: cam, target: { proxyId: TARGET.proxyId, name: 'Shed' }, phase: 'rejected', answer: { accept: false, reason: 'camera_limit' }, settings: {}, summary, plan: null, budgetExceeded: false }];
@@ -67,7 +67,7 @@ test('move dialog → panel → approve emits move.approve', async ({ page, requ
   };
   const mock: Mock = { list: [], posted: [] };
   await mockMoves(page, mock);
-  await page.goto('/#/settings');
+  await page.goto('/#/camera-settings');
   await page.getByTestId('move-open').click();
   await expect(page.getByTestId('move-target')).toBeVisible({ timeout: 15000 });
   mock.list = [{ ...offer, phase: 'requested', answer: undefined }];
