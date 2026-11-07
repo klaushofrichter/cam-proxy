@@ -160,14 +160,12 @@ describe('POST /control/actions/camera-powercycle', () => {
     await pending;
   }, 20000);
 
-  it('the old camera switch actions: camera-poe-on is gone, poe-switch-read answers 409 not_configured; nothing reaches the switch', async () => {
+  it('the old camera switch actions camera-poe-on and poe-switch-read are gone (404); nothing reaches the switch', async () => {
     const p = await startProxy(sim);
     try {
       const calls = sw.calls.length;
       expect((await request(p.base).post('/control/actions/camera-poe-on').set(admin())).status).toBe(404);
-      const r = await request(p.base).post('/control/actions/poe-switch-read').set(admin());
-      expect([r.status, r.body.error]).toEqual([409, 'not_configured']);
-      expect(r.body.detail).toMatch(/cams-admin/);
+      expect((await request(p.base).post('/control/actions/poe-switch-read').set(admin())).status).toBe(404);
       expect(sw.calls.length).toBe(calls);
     } finally {
       await p.proxy.stop();

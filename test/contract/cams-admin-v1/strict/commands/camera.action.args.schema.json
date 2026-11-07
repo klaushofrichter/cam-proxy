@@ -24,7 +24,6 @@
         "camera-test",
         "onvif-resubscribe",
         "camera-ftp-test",
-        "poe-switch-read",
         "inventory",
         "inventory-cancel",
         "retention-run",

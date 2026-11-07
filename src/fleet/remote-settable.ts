@@ -47,15 +47,11 @@ const LOCAL_ONLY: Readonly<Record<string, string>> = {
 // src/api/auth.ts): a changed address would send the camera's or the
 // switch's password elsewhere.
 export const NEVER_FROM_CAMS_ADMIN: readonly string[] = [
-  'server', 'go2rtc', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.publicHost', 'ftp.sourceSubnet', 'ftp.certFile', 'ftp.keyFile', 'tls', 'composition.font', 'ntp.server', 'poeSwitch', 'camsAdmin',
-  'cameras.*.id', 'cameras.*.host', 'cameras.*.protocol', 'cameras.*.tlsName', 'cameras.*.user', 'cameras.*.onvifPort', 'cameras.*.rtspPort', 'cameras.*.baichuanPort', 'cameras.*.poeSwitch', 'cameras.*.ftp.user', 'cameras.*.webUiUrl',
+  'server', 'go2rtc', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.publicHost', 'ftp.sourceSubnet', 'ftp.certFile', 'ftp.keyFile', 'tls', 'composition.font', 'ntp.server', 'camsAdmin',
+  'cameras.*.id', 'cameras.*.host', 'cameras.*.protocol', 'cameras.*.tlsName', 'cameras.*.user', 'cameras.*.onvifPort', 'cameras.*.rtspPort', 'cameras.*.baichuanPort', 'cameras.*.ftp.user', 'cameras.*.webUiUrl',
   // Camera moves: hiding a camera and the camera limit are local (src/moves;
   // moves is only the old name of profile.cameras now, src/config/legacy.ts).
   'cameras.*.moved', 'moves',
-  // poeSwitch and cameras.*.poeSwitch are retired settings (the switches are
-  // cams-admin's, spec 2026-11-07-poe-switches-design): no leaf is left, so a
-  // command naming them fails not_remote_settable as before. Listed while the
-  // contract's remote-settable.json `denied` still names them (a test).
   // The camera holds its name; cameras.*.name is only the initial name (set
   // at the proxy). A rename from cams-admin is camera.name.set (contract 3dffb81).
   'cameras.*.name',

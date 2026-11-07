@@ -8,12 +8,14 @@ import { PrivateFileInvalid, PrivateFileUnsafe, readPrivateJson, writePrivateJso
 // someone at the hardware. Compiled in: no setting widens them.
 // camera-ftp-off is never remote (coordinator ruling after the P3 security
 // review, M5): it stops clip intake, like ftp.enabled (I4, local only).
-export const REMOTE_ACTIONS = ['camera-test', 'onvif-resubscribe', 'camera-ftp-test', 'poe-switch-read', 'inventory', 'inventory-cancel', 'retention-run', 'restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push', 'camera-time-set'] as const;
+export const REMOTE_ACTIONS = ['camera-test', 'onvif-resubscribe', 'camera-ftp-test', 'inventory', 'inventory-cancel', 'retention-run', 'restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push', 'camera-time-set'] as const;
 export const NEVER_REMOTE_ACTIONS = ['find-camera', 'camera-address', 'camera-trust-clear', 'tls-ca-rotate', 'tls-ca-drop-previous', 'archive-clear', 'inventory-repair', 'restart-proxy', 'camera-ftp-off', 'camera-probe', 'camera-trust-pin'] as const;
 // Entries an earlier version accepted that this one no longer knows: dropped
 // on read (policy.json, config.json), never an error (a stored policy must not
 // pause everything after an upgrade).
-export const RETIRED_ENTRIES: ReadonlySet<string> = new Set(['camera.action:camera-ftp-off']);
+// camera.action:poe-switch-read: the read of the retired single-switch settings
+// (cams-admin contract, 2026-11-07).
+export const RETIRED_ENTRIES: ReadonlySet<string> = new Set(['camera.action:camera-ftp-off', 'camera.action:poe-switch-read']);
 // The remote actions that disrupt service (Klaus's decision 3): each its own
 // allow entry, off by default; with proxy.restart, under the journal budget.
 export const DISRUPTIVE_ACTIONS = ['restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push', 'camera-time-set'] as const;

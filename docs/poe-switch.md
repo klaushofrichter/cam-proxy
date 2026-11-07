@@ -124,8 +124,8 @@ config: host `poeSwitch.model`, `host`, `ports`, `offSeconds`, each camera's
   `legacy_poe_switch_password_ignored` once. Set the password per switch
   instead (above). `scripts/sync-secrets.sh` no longer sends it.
 - `POST /control/actions/camera-poe-on` is gone ("Turn PoE on" is per switch
-  port now); `POST /control/actions/poe-switch-read` answers 409
-  `not_configured` (cams-admin's contract still names it).
+  port now), and so is `POST /control/actions/poe-switch-read` (404); a
+  stored allow entry `camera.action:poe-switch-read` is dropped on start.
 - `/control/status` no longer has `camera.poeSwitch`; the health summary's
   `camera.poeSwitch` is always `null`.
 

@@ -116,6 +116,15 @@ describe('CommandPolicy', () => {
     expect(validateAllowList(['tokens.apply', 'camera.action:camera-ftp-off'], 'x', true)).toEqual(['tokens.apply']);
     expect(() => validateAllowList(['camera.action:camera-ftp-off'], 'x')).toThrow();
   });
+
+  it('a stored camera.action:poe-switch-read (the retired single-switch read) is dropped, never makes the file unusable', () => {
+    const d = dir();
+    writePrivateJson(join(d, 'admin', 'policy.json'), { v: 1, allow: ['tokens.apply', 'camera.action:poe-switch-read'], changedAt: 1, changedBy: 'local', consent: 3 });
+    expect(make(d).effective()).toMatchObject({ paused: false, unconfirmed: [] });
+    expect(make(d).effective().allow).not.toContain('camera.action:poe-switch-read');
+    expect(validateAllowList(['tokens.apply', 'camera.action:poe-switch-read'], 'x', true)).toEqual(['tokens.apply']);
+    expect(() => validateAllowList(['camera.action:poe-switch-read'], 'x')).toThrow();
+  });
 });
 
 

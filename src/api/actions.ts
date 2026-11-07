@@ -49,9 +49,6 @@ function envFileState(path: string | undefined): { writable: boolean; reason?: s
   }
 }
 
-// poe-switch-read's answer (the old poeSwitch settings are retired).
-export const RETIRED_SWITCH_READ = "this proxy has no camera switch settings: the camera's PoE switch and port are kept in cams-admin (PoE switches); a switch this proxy operates is under Proxy settings, PoE switches";
-
 // The 429 detail of a reboot or power-cycle within the cooldown (also POST /api/cameras/:cam/reboot).
 export const tooSoonDetail = (a: TooSoon): string => (a.inFlight
   ? `a camera reboot or power-cycle is in progress; try again in ${a.retryAfterS} s`
@@ -116,12 +113,6 @@ export async function performAction(d: ActionDeps, name: string, cam: string | n
       if (a.status === 429) return 'error' in a ? { ...fail(429, a.error, a.detail), retryAfterS: a.retryAfterS } : tooSoon(a);
       return fail(409, a.error, a.detail);
     }
-    // The camera's port on the switch from the old poeSwitch settings: those
-    // are retired (the switches are cams-admin's, spec
-    // 2026-11-07-poe-switches-design), so there is nothing to read here. The
-    // action stays known (cams-admin's contract still lists it): 409.
-    case 'poe-switch-read':
-      return fail(409, 'not_configured', RETIRED_SWITCH_READ);
     // Find camera (pi-config spec §3): the devices that answer an ONVIF
     // probe, the current camera marked, and whether the .env file can be written.
     case 'find-camera': {
