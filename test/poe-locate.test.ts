@@ -104,8 +104,45 @@ describe('PoeSwitch.locate, survey and the verified cycle (on the mock)', () => 
   it('locate: index 5 rises → port 3, with its watts; one session, logged out', async () => {
     const { m, p, slept } = await setup({ cam3: 5 });
     expect(await p.locate('cam3')).toEqual({ found: true, port: 3, poe: true, watts: 4.5, link: true, ratio: 40, sn: 'GPS208MOCK0001' });
-    expect(slept).toContain(2500);
+    expect(slept).toContain(700);
     expect(m.calls.map((c) => c.cmd)).toEqual([123, 101, 101, 126]);
+    expect(m.activeSession()).toBe(false);
+  });
+
+  // Measured on the GPS-208 (2026-11-07): the rates refresh every ~2.5–3.5 s and
+  // lag the traffic, so the burst can show only in a later read.
+  it('locate: reads during the burst until a port shows; a late rise is still found', async () => {
+    const m = await startPoeSwitchMock({ password: PASSWORD, powered: { 5: 4.5 } });
+    mocks.push(m);
+    let pauses = 0;
+    const sleep = async () => {
+      pauses += 1;
+      if (pauses === 3) m.tx[5] = 40; // shows in the third read during the burst
+    };
+    const p = new PoeSwitch({ ref: () => ref(m), password: () => PASSWORD, sleep, timeoutMs: 1000, pingBurst: () => ((m.tx.fill(1)), { done: Promise.resolve({ answered: true }) }) });
+    expect(await p.locate('cam3')).toMatchObject({ found: true, port: 3 });
+    expect(m.calls.map((c) => c.cmd)).toEqual([123, 101, 101, 101, 101, 126]);
+  });
+
+  it('locate: a previous burst still showing on another port does not block the camera', async () => {
+    const m = await startPoeSwitchMock({ password: PASSWORD, powered: { 5: 4.5, 7: 3.3 } });
+    mocks.push(m);
+    let pauses = 0;
+    const sleep = async () => {
+      pauses += 1;
+      if (pauses === 1) m.tx[5] = 40; // the camera's port rises…
+      if (pauses === 2) m.tx[7] = 1; // …while port 1 (index 7) falls back from the last burst
+    };
+    const p = new PoeSwitch({ ref: () => ref(m), password: () => PASSWORD, sleep, timeoutMs: 1000, pingBurst: () => ((m.tx.fill(1)), (m.tx[7] = 30), { done: Promise.resolve({ answered: true }) }) });
+    expect(await p.locate('cam3')).toMatchObject({ found: true, port: 3 });
+  });
+
+  it('locate: nothing shows in any read → no_traffic after a bounded number of reads', async () => {
+    const { m, p } = await setup({});
+    expect(await p.locate('cam9')).toMatchObject({ found: false, reason: 'no_traffic' });
+    const reads = m.calls.filter((c) => c.cmd === 101).length;
+    expect(reads).toBeGreaterThan(2);
+    expect(reads).toBeLessThanOrEqual(12);
     expect(m.activeSession()).toBe(false);
   });
 
