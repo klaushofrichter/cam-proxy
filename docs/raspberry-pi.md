@@ -136,7 +136,6 @@ CAMPROXY_FTP_PASSWORD=
 # optional
 CAMPROXY_GOOGLE_VISION_KEY=
 CAMPROXY_AUDIT_TOKEN=
-CAMPROXY_POE_SWITCH_PASSWORD=
 # cams on the Pi (cams docs/pi-demo.md)
 CAMS_LOGIN_TOKEN=
 COOKIE_SECRET=
@@ -162,17 +161,17 @@ COOKIE_SECRET=
 - `CAMPROXY_AUDIT_TOKEN` (optional): a read-only token for `GET
   /control/audit` (docs/audit-log.md). Leave it unset until a poller exists;
   the admin token reads the audit log too.
-- `CAMPROXY_POE_SWITCH_PASSWORD` (optional): the PoE switch's web password,
-  for "Power-cycle camera" ([poe-switch.md](poe-switch.md)). Set it together
-  with `camera.poeSwitch` in `config.json` (cam1: `sscpoe-web`,
-  `192.168.1.217`, port 8), then recreate the container. Without it the
-  power-cycle answers 409 `not_configured`.
+- `CAMPROXY_POE_SWITCH_PASSWORD` is retired: a PoE switch is cams-admin's,
+  and its password is set on the proxy that operates it
+  ([poe-switch.md](poe-switch.md)). A line left in `.env` is ignored (one
+  warning at start), and a `camera.poeSwitch` left in `config.json` or
+  overrides.json is dropped on load (one info line).
 
 Copy the secrets without printing them. For example, pipe just those lines of
 a local `.env` over SSH (then add `CAMERA_HOST` and `PI_ADDRESS` on the Pi):
 
 ```sh
-grep -E '^CAMPROXY_(TOKENS|ADMIN_TOKEN|CAMERA_PASSWORD|FTP_PASSWORD|GOOGLE_VISION_KEY|AUDIT_TOKEN|POE_SWITCH_PASSWORD)=' .env \
+grep -E '^CAMPROXY_(TOKENS|ADMIN_TOKEN|CAMERA_PASSWORD|FTP_PASSWORD|GOOGLE_VISION_KEY|AUDIT_TOKEN)=' .env \
   | ssh <user>@<pi> 'umask 077; cat > /srv/cam-proxy/config/.env'
 ```
 
@@ -348,8 +347,8 @@ certificate still checks offline as long as it hasn't expired.
   updates only the cluster, so pull on the Pi after a release.
 - **Several cameras (from the multi-camera release on):** config.json may
   keep its `camera` object and overrides.json its paths; nothing on the Pi
-  changes (the Settings page shows the paths as `cameras.cam1.*` and
-  `poeSwitch.*`, and saves new overrides that way).
+  changes (the Settings page shows the paths as `cameras.cam1.*`, and saves
+  new overrides that way; the old `poeSwitch` settings are dropped).
   **No way back without a backup:** after this update the previous release
   won't start on the new `overrides.json` (`cameras.*` paths, written at the
   next save) or work on the catalog (schema 9, migrated at the first start).

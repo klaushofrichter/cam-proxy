@@ -83,7 +83,7 @@ describe('a refusal shown in words', () => {
   });
   it('Restart to apply and the power-cycle show it too', async () => {
     expect(await restartToApply(async () => { throw new ApiError(403, { error: 'local_admin_only' }); })).toBe(`Restart failed: ${REFUSED_TEXT}`);
-    expect(powerCycleFailText({ error: 'local_admin_only' }, 8)).toBe(`Camera power-cycle: ${REFUSED_TEXT}`);
+    expect(powerCycleFailText({ error: 'local_admin_only' })).toBe(`Camera power-cycle: ${REFUSED_TEXT}`);
   });
 });
 

@@ -2,7 +2,7 @@
 // §14): render.ts makes every host file from it, so the firewall, DHCP and
 // cam-proxy can't disagree. No secrets in here.
 export class HostConfigError extends Error {}
-export interface Lease { name: string; mac: string; ip: string; role?: 'switch'; camera?: { id: string; poeSwitchPort?: number } }
+export interface Lease { name: string; mac: string; ip: string; role?: 'switch'; camera?: { id: string } }
 export interface HostDescription {
   hostname: string;
   // address: the PC's LAN address (the router keeps it per MAC): the proxy certificate's IP name.

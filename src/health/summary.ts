@@ -42,7 +42,7 @@ export interface HealthInput {
   startedAt: number | null;
   thresholds: Thresholds;
   // nameSource (camera name sync, 2026-11-06): 'camera' once the name was read from the camera, 'config' before (the initial name).
-  camera: { id: string; name: string; nameSource?: 'camera' | 'config'; host: string; state: CameraState; reboot: RebootPhase | null; poeSwitch: { model: string; port: number | null } | null };
+  camera: { id: string; name: string; nameSource?: 'camera' | 'config'; host: string; state: CameraState; reboot: RebootPhase | null };
   stream: { enabled: boolean; up: boolean; lastFrameTs: number | null };
   intake: IntakeState;
   ftp: { enabled: boolean; listening: boolean; camera: CameraFtpView | null; stalled: ClipsStall | null; lastClip: number | null; clips: number; failures: number };
@@ -174,7 +174,8 @@ function cameraHealth(c: CameraHealthInput): CameraHealth {
       clockOffsetMs: cam.clockOffsetMs ?? null,
       error: cam.error ?? null,
       reboot: c.camera.reboot,
-      poeSwitch: c.camera.poeSwitch ? { model: c.camera.poeSwitch.model, port: c.camera.poeSwitch.port } : null,
+      // Always null: the old poeSwitch settings are retired (the camera's switch is cams-admin's); kept for the contract and the e-paper display.
+      poeSwitch: null,
       // Only with an sd input (schema 1, additive): null until the first read.
       ...(c.sd === undefined ? {} : { sd: c.sd && sd ? { mounted: c.sd.mounted, formatted: c.sd.formatted, capacityMB: c.sd.capacityMB, freeMB: c.sd.freeMB, overwrite: c.sd.overwrite, recordingEnabled: c.sd.recordingEnabled, checkedAt: c.sd.checkedAt, lastRecordingAt: c.sd.lastRecordingAt, stalled: sd.stalled } : null }),
     },

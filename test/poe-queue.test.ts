@@ -42,18 +42,15 @@ describe('one PoE controller per host (spec 2026-10-05-multi-camera-host-design 
     expect(sw.log.filter((l) => l === 'login')).toHaveLength(2);
   });
 
-  it('per-port state; the port handle is a camera view', async () => {
+  it('per-port state', async () => {
     const sw = fakeSwitch();
     const p = new PoeSwitch({ ref: () => host, password: () => 'pw', driver: () => sw.driver, sleep: async () => undefined });
     sw.poe[5] = false;
     await p.read(6, { fresh: true });
-    expect(p.status(6).poeMaybeOff).toBe(true);
-    expect(p.status(3).poeMaybeOff).toBe(false);
-    const h = p.forPort(() => 6);
-    expect((await h.poeOn()).wasOn).toBe(false);
-    expect(p.status(6).poeMaybeOff).toBe(false);
-    expect(p.forPort(() => undefined).notConfigured()).toBe("the camera's poeSwitch.port is not set");
-    expect(p.forPort(() => undefined).status()).toMatchObject({ port: null, configured: false, poeMaybeOff: false });
+    expect(p.portsMaybeOff()).toEqual([6]);
+    expect((await p.poeOn(6)).wasOn).toBe(false);
+    expect(p.portsMaybeOff()).toEqual([]);
+    expect(p.notConfigured(null)).toBe('no switch port');
   });
 
   it('stop: every port left dark is named', async () => {

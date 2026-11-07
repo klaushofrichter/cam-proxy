@@ -257,8 +257,9 @@ describe('a hostile cams-admin with every P3 entry allowed', () => {
     const f0 = failures();
     const leaves = leafPaths(SETTINGS, '', ['cam1']);
     const set = Object.fromEntries(DENIED.map((d) => d.replace('cameras.*.', 'cameras.cam1.')).map((d) => [leaves.find((l) => l === d || l.startsWith(`${d}.`))!, 1]).filter(([l]) => l));
-    // `moves` has no setting of its own any more (moves.maxCameras is read as profile.cameras).
-    expect(Object.keys(set).length).toBe(DENIED.length - 1);
+    // `moves` has no setting of its own any more (moves.maxCameras is read as profile.cameras);
+    // poeSwitch and cameras.*.poeSwitch are retired (no leaf left).
+    expect(Object.keys(set).length).toBe(DENIED.length - 3);
     expect(Object.keys(set).some((k) => k.startsWith('profile.'))).toBe(true);
     const r = await done('config.set', { v: 1, dryRun: false, baseRevision: rev(), set });
     expect(r).toMatchObject({ status: 'failed', code: 'not_remote_settable' });
@@ -287,7 +288,7 @@ describe('a hostile cams-admin with every P3 entry allowed', () => {
   });
   it('(f) every never-remote action: not_allowed whatever the allow-list; none of their functions called', async () => {
     const a = p.proxy.actions;
-    const spies = [vi.spyOn(a, 'findCamera'), vi.spyOn(a, 'restartProcess'), vi.spyOn(a, 'restart'), vi.spyOn(a.tls, 'rotate'), vi.spyOn(a.tls, 'clearTrust'), vi.spyOn(a.tls, 'dropPrevious'), vi.spyOn(a.archive, 'clear'), vi.spyOn(a.inventory, 'repair'), vi.spyOn(a.poeSwitch, 'poeOn')];
+    const spies = [vi.spyOn(a, 'findCamera'), vi.spyOn(a, 'restartProcess'), vi.spyOn(a, 'restart'), vi.spyOn(a.tls, 'rotate'), vi.spyOn(a.tls, 'clearTrust'), vi.spyOn(a.tls, 'dropPrevious'), vi.spyOn(a.archive, 'clear'), vi.spyOn(a.inventory, 'repair')];
     try {
       for (const action of NEVER_REMOTE_ACTIONS) expect(await done('camera.action', { v: 1, camera: 'cam1', action }), action).toMatchObject({ status: 'refused', code: 'not_allowed' });
       for (const s of spies) expect(s).not.toHaveBeenCalled();

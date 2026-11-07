@@ -22,7 +22,7 @@ describe('the closed lists', () => {
   });
   it('the deny list covers camsAdmin.*, every address, port, file path and trust setting (M5)', () => {
     const ids = ['cam1'];
-    for (const p of ['camsAdmin.url', 'camsAdmin.keyFile', 'server.port', 'tls.site', 'go2rtc.url', 'ftp.port', 'ftp.certFile', 'ntp.server', 'poeSwitch.host', 'composition.font', 'cameras.cam1.host', 'cameras.cam1.user', 'cameras.cam1.tlsName', 'cameras.cam1.poeSwitch.port']) expect(classify(p, ids), p).toBe('denied');
+    for (const p of ['camsAdmin.url', 'camsAdmin.keyFile', 'server.port', 'tls.site', 'go2rtc.url', 'ftp.port', 'ftp.certFile', 'ntp.server', 'composition.font', 'cameras.cam1.host', 'cameras.cam1.user', 'cameras.cam1.tlsName']) expect(classify(p, ids), p).toBe('denied');
     for (const p of ['stills.intervalS', 'retention.stillsDays']) expect(classify(p, ids), p).toBe('remote');
     expect(classify('cameras.cam1.name', ids)).toBe('denied');
     // Every real setting under a denied prefix is denied (no prefix typo hides one).

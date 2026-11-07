@@ -1,7 +1,8 @@
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { logger } from '../src/log';
 import { applyOverrides, ConfigError, loadConfig, needsRestart, removeAllOverrides, removeOverride } from '../src/config/load';
 import { cameraConfig, cameraIds } from '../src/config/cameras';
 
@@ -29,18 +30,15 @@ const err = (f: () => unknown) => {
 const PI_FILE = { camera: { id: 'cam1', host: '192.168.1.103', protocol: 'https', tlsName: 'cam1.skylar.technology', statusPollS: 30, poeSwitch: { model: 'sscpoe-web', host: '192.168.1.217', port: 8, ports: 8, offSeconds: 10 } }, ftp: { enabled: true, user: 'camera', publicHost: '192.168.1.220' } };
 
 describe('legacy camera (spec §4.2)', () => {
-  it('reads camera as a list of one; switch keys go to the host; ftp.user to the camera', () => {
+  it('reads camera as a list of one; ftp.user goes to the camera', () => {
     write('config.json', PI_FILE);
     const l = load({ CAMPROXY_FTP_PASSWORD: 'f' });
     expect(cameraIds(l.config)).toEqual(['cam1']);
     const c = cameraConfig(l.config, 'cam1')!;
     expect(c).toMatchObject({ id: 'cam1', name: 'Den', host: '192.168.1.103', tlsName: 'cam1.skylar.technology' });
-    expect(c.poeSwitch).toEqual({ model: 'sscpoe-web', host: '192.168.1.217', port: 8, ports: 8, offSeconds: 10 });
     expect(c.ftp).toEqual({ user: 'camera', enabled: true, stream: 'main' });
-    expect(l.config.poeSwitch).toEqual({ model: 'sscpoe-web', host: '192.168.1.217', ports: 8, offSeconds: 10 });
     expect(l.legacyCamera).toBe(true);
     expect(l.sources['cameras.cam1.host']).toBe('file');
-    expect(l.sources['poeSwitch.host']).toBe('file');
   });
 
   it("a legacy camera without ftp.user keeps today's default user 'camera' (Ruling P1-11)", () => {
@@ -50,13 +48,12 @@ describe('legacy camera (spec §4.2)', () => {
 
   it('legacy overrides survive a save: read translated, written back in the new form', () => {
     write('config.json', { camera: { host: 'h' } });
-    write('data/overrides.json', { camera: { statusPollS: 60, poeSwitch: { host: '192.0.2.9', port: 3 } }, ftp: { user: 'cam' } });
+    write('data/overrides.json', { camera: { statusPollS: 60 }, ftp: { user: 'cam' } });
     const l = load();
-    expect(cameraConfig(l.config, 'cam1')).toMatchObject({ statusPollS: 60, poeSwitch: { host: '192.0.2.9', port: 3 }, ftp: { user: 'cam' } });
+    expect(cameraConfig(l.config, 'cam1')).toMatchObject({ statusPollS: 60, ftp: { user: 'cam' } });
     applyOverrides(l, { sse: { pingS: 20 } });
     expect(JSON.parse(readFileSync(join(dir, 'data', 'overrides.json'), 'utf8'))).toEqual({
-      cameras: { cam1: { statusPollS: 60, poeSwitch: { port: 3 }, ftp: { user: 'cam' } } },
-      poeSwitch: { host: '192.0.2.9' },
+      cameras: { cam1: { statusPollS: 60, ftp: { user: 'cam' } } },
       sse: { pingS: 20 },
     });
   });
@@ -77,14 +74,14 @@ describe('legacy camera (spec §4.2)', () => {
 });
 
 describe('cameras (spec §4.1)', () => {
-  const two = { cameras: [{ id: 'cam3', host: '192.168.60.13' }, { id: 'cam4', host: '192.168.60.14', stills: { intervalS: 2 }, poeSwitch: { port: 2 } }], poeSwitch: { model: 'sscpoe-web', host: '192.168.60.2' } };
+  const two = { cameras: [{ id: 'cam3', host: '192.168.60.13' }, { id: 'cam4', host: '192.168.60.14', stills: { intervalS: 2 } }] };
 
   it('the array in config order; defaults per camera; host overrides resolved', () => {
     write('config.json', two);
     const l = load();
     expect(cameraIds(l.config)).toEqual(['cam3', 'cam4']);
     expect(cameraConfig(l.config, 'cam3')).toMatchObject({ name: 'cam3', user: 'proxy', ftp: { user: 'cam3' }, stills: { intervalS: 1 } });
-    expect(cameraConfig(l.config, 'cam4')).toMatchObject({ stills: { intervalS: 2 }, poeSwitch: { model: 'sscpoe-web', host: '192.168.60.2', port: 2 } });
+    expect(cameraConfig(l.config, 'cam4')).toMatchObject({ stills: { intervalS: 2 } });
     expect(l.legacyCamera).toBe(false);
     expect(l.sources['cameras.cam4.stills.intervalS']).toBe('file');
     expect(l.sources['cameras.cam3.stills.intervalS']).toBe('default');
@@ -210,9 +207,77 @@ describe('cameras (spec §4.1)', () => {
   it('per-camera restart and live rules', async () => {
 
     expect(needsRestart('cameras.cam3.host')).toBe(true);
-    expect(needsRestart('cameras.cam3.poeSwitch.port')).toBe(false);
     expect(needsRestart('cameras.cam3.baichuanPort')).toBe(false);
     expect(needsRestart('cameras.cam3.analytics.kinds.person')).toBe(false);
-    expect(needsRestart('poeSwitch.host')).toBe(false);
+  });
+});
+
+// The PoE switch settings are gone (switches come from cams-admin, spec
+// cams-admin 2026-11-07-poe-switches-design "Migration"). A file that still
+// has them (the Pi's config.json and overrides.json) loads: the keys are
+// dropped with one info line, never a refusal to start.
+describe('retired poeSwitch settings: dropped on load', () => {
+  const dropped = (info: { mock: { calls: unknown[][] } }) => info.mock.calls.filter((c) => c[1] === 'legacy_poe_switch_dropped');
+
+  it("the Pi's legacy camera.poeSwitch in config.json and overrides.json: loads, keys dropped, one info line", () => {
+    write('config.json', PI_FILE);
+    write('data/overrides.json', { camera: { statusPollS: 60, poeSwitch: { host: '192.0.2.9', port: 3 } }, poeSwitch: { offSeconds: 20 }, ftp: { user: 'cam' } });
+    const info = vi.spyOn(logger, 'info');
+    try {
+      const l = load({ CAMPROXY_FTP_PASSWORD: 'f' });
+      const c = cameraConfig(l.config, 'cam1')! as unknown as Record<string, unknown>;
+      expect(c.poeSwitch).toBeUndefined();
+      expect(c).toMatchObject({ statusPollS: 60, host: '192.168.1.103', ftp: { user: 'cam' } });
+      expect((l.config as unknown as Record<string, unknown>).poeSwitch).toBeUndefined();
+      expect(Object.keys(l.sources).filter((p) => p.includes('poeSwitch'))).toEqual([]);
+      const lines = dropped(info);
+      expect(lines).toHaveLength(1);
+      expect(lines[0][0]).toEqual({
+        'config.json': ['camera.poeSwitch.host', 'camera.poeSwitch.model', 'camera.poeSwitch.offSeconds', 'camera.poeSwitch.port', 'camera.poeSwitch.ports'],
+        'overrides.json': ['camera.poeSwitch.host', 'camera.poeSwitch.port', 'poeSwitch.offSeconds'],
+      });
+      // The next save writes overrides.json without them.
+      applyOverrides(l, { sse: { pingS: 20 } });
+      expect(JSON.parse(readFileSync(join(dir, 'data', 'overrides.json'), 'utf8'))).toEqual({ cameras: { cam1: { statusPollS: 60, ftp: { user: 'cam' } } }, sse: { pingS: 20 } });
+    } finally {
+      info.mockRestore();
+    }
+  });
+
+  it('several cameras: the host poeSwitch and each cameras[].poeSwitch (config.json) and cameras.<id>.poeSwitch (overrides.json) are dropped', () => {
+    write('config.json', { poeSwitch: { model: 'sscpoe-web', host: '192.0.2.2', ports: 8, offSeconds: 10 }, cameras: [{ id: 'cam3', host: '192.0.2.13', poeSwitch: { port: 1 } }, { id: 'cam4', host: '192.0.2.14', poeSwitch: { port: 2 }, stills: { intervalS: 2 } }] });
+    write('data/overrides.json', { cameras: { cam3: { poeSwitch: { port: 3 } } }, poeSwitch: { host: '192.0.2.9' } });
+    const info = vi.spyOn(logger, 'info');
+    try {
+      const l = load();
+      expect(cameraIds(l.config)).toEqual(['cam3', 'cam4']);
+      for (const id of ['cam3', 'cam4']) expect((cameraConfig(l.config, id) as unknown as Record<string, unknown>).poeSwitch).toBeUndefined();
+      expect(cameraConfig(l.config, 'cam4')!.stills.intervalS).toBe(2);
+      expect(dropped(info)[0][0]).toEqual({
+        'config.json': ['cameras[cam3].poeSwitch.port', 'cameras[cam4].poeSwitch.port', 'poeSwitch.host', 'poeSwitch.model', 'poeSwitch.offSeconds', 'poeSwitch.ports'],
+        'overrides.json': ['cameras.cam3.poeSwitch.port', 'poeSwitch.host'],
+      });
+    } finally {
+      info.mockRestore();
+    }
+  });
+
+  it('a file without them logs nothing; CAMPROXY_POE_SWITCH_PASSWORD is no longer read and does not stop the start', () => {
+    write('config.json', { camera: { host: 'h' } });
+    const info = vi.spyOn(logger, 'info');
+    try {
+      const l = load({ CAMPROXY_POE_SWITCH_PASSWORD: 'sw-pw' });
+      expect(dropped(info)).toEqual([]);
+      expect((l.secrets as unknown as Record<string, unknown>).poeSwitchPassword).toBeUndefined();
+    } finally {
+      info.mockRestore();
+    }
+  });
+
+  it('a settings change (PUT body) naming poeSwitch is refused as an unknown setting: only files are forgiven', () => {
+    write('config.json', { camera: { host: 'h' } });
+    const l = load();
+    expect(err(() => applyOverrides(l, { poeSwitch: { host: '192.0.2.9' } }))).toMatch(/poeSwitch/);
+    expect(err(() => applyOverrides(l, { cameras: { cam1: { poeSwitch: { port: 2 } } } }))).toMatch(/poeSwitch/);
   });
 });

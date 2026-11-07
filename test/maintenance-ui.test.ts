@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cameraStateText, isNewStart, powerWhyText, poeAlert, poeLine, poeOnText, powerCycleMessage, powerCycleDisabled, powerCycleFailText, powerLine, powerResultText, rebootEndText, readHealth, restartWatch, waitForNewProxy, RESTART_GIVE_UP_MS } from '../web/src/lib/maintenance';
+import { cameraStateText, isNewStart, powerWhyText, powerCycleMessage, powerCycleDisabled, powerCycleFailText, powerLine, powerResultText, rebootEndText, readHealth, restartWatch, waitForNewProxy, RESTART_GIVE_UP_MS } from '../web/src/lib/maintenance';
 
 describe('Maintenance page helpers (#71, #83)', () => {
   it('tells a new proxy start by its version or start time', () => {
@@ -71,16 +71,6 @@ describe('Maintenance page helpers (#71, #83)', () => {
     expect(rebootEndText({ kind: 'powercycle', phase: 'not-back', requestedAt: 1, message: 'PoE may still be OFF on Switch 2 port 3' })).toBe('The power-cycle failed: PoE may still be OFF on Switch 2 port 3');
   });
 
-  it('describes the switch and its last reading', () => {
-    const sw = { model: 'sscpoe-web', host: '192.168.1.217', port: 8, ports: 8, offSeconds: 10, passwordSet: true, configured: true, busy: false, poeMaybeOff: false, last: null };
-    expect(poeLine(sw)).toBe('192.168.1.217 port 8 · not read yet');
-    const at = new Date(2026, 9, 1, 19, 18).getTime();
-    expect(poeLine({ ...sw, last: { at, port: 8, index: 0, poe: true, watts: 6.8, link: true, sn: 'GPS208', firmware: null } })).toBe('192.168.1.217 port 8 · PoE on, 6.8 W (read 19:18)');
-    expect(poeLine({ ...sw, last: { at, port: 8, index: 0, poe: false, watts: 0, link: false, sn: 'GPS208', firmware: null } })).toBe('192.168.1.217 port 8 · PoE off, 0 W (read 19:18)');
-    expect(poeLine({ ...sw, model: 'none', configured: false })).toBe('none');
-    expect(poeLine({ ...sw, passwordSet: false, configured: false })).toBe('192.168.1.217 port 8 · not configured: CAMPROXY_POE_SWITCH_PASSWORD is not set');
-  });
-
   // #78 review item 2: a failed first /health read must not reload the page on the old process.
   it('reloads only for a start time that differs from one actually read', () => {
     const old = { version: 'v1', startedAt: 1000 };
@@ -97,24 +87,10 @@ describe('Maintenance page helpers (#71, #83)', () => {
     expect(v(fresh)).toBe(true);
   });
 
-  // #85 review: the failure states of a power-cycle, and the recovery.
-  it('warns while the camera\'s PoE may be off', () => {
-    const sw = { model: 'sscpoe-web', host: '192.168.1.217', port: 8, ports: 8, offSeconds: 10, passwordSet: true, configured: true, busy: false, poeMaybeOff: false, last: null };
-    expect(poeAlert(sw)).toBeNull();
-    expect(poeAlert(null)).toBeNull();
-    expect(poeAlert({ ...sw, poeMaybeOff: true })).toBe("The camera's PoE may be OFF: use 'Turn camera PoE on', or the switch's web UI (port 8).");
-  });
-
-  it('says what a failed power-cycle left behind', () => {
-    expect(powerCycleFailText({ error: 'switch_error', detail: 'x', poeOff: true, turnedOn: true }, 8)).toBe('Camera power-cycle failed after the PoE-off request: PoE may have been cut, and it is on again (x)');
-    expect(powerCycleFailText({ error: 'switch_error', detail: 'y', poeOff: true, turnedOn: false }, 8)).toBe("Camera power-cycle failed: the camera's PoE may be OFF: use 'Turn camera PoE on', or the switch's web UI (port 8). (y)");
-    expect(powerCycleFailText({ error: 'switch_busy', detail: 'z' }, 8)).toBe('Camera power-cycle: z');
-    expect(powerCycleFailText({ error: 'power_cycle_needs_cams_admin', detail: 'cams-admin is not connected' }, null)).toBe('Camera power-cycle: cams-admin is not connected');
-  });
-
-  it('describes the PoE-on answer', () => {
-    expect(poeOnText({ port: 8, wasOn: true, watts: 6.8 })).toBe('Camera PoE: port 8 was on already (6.8 W)');
-    expect(poeOnText({ port: 8, wasOn: false, watts: 0 })).toBe('Camera PoE: turned on on port 8; the camera boots in about a minute');
+  it("says why cams-admin's power-cycle could not be asked for", () => {
+    expect(powerCycleFailText({ error: 'in_flight', detail: 'z' })).toBe('Camera power-cycle: z');
+    expect(powerCycleFailText({ error: 'power_cycle_needs_cams_admin', detail: 'cams-admin is not connected' })).toBe('Camera power-cycle: cams-admin is not connected');
+    expect(powerCycleFailText({ error: 'too_soon' })).toBe('Camera power-cycle: too_soon');
   });
 
   // #85 review: the first /health read after the POST may already be the new process.

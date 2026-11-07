@@ -1,6 +1,4 @@
 import type { TooSoon } from '../camera/reboot';
-import { PoeSwitchError } from '../camera/poe-switch';
-import { poeHttpStatus } from '../camera/switch/errors';
 import { splitHost } from '../camera/http';
 import { activeCameraIds, cameraConfig } from '../config/cameras';
 import { CAMERA_HOST_NAMES, validCameraHost } from '../config/env';
@@ -21,10 +19,10 @@ export interface ActionWho { user: string; requestedBy: 'session' | 'token' | 'c
 export type ActionOutcome =
   | { status: number; json?: unknown; retryAfterS?: number }
   | { status: number; error: string; detail?: string; extra?: Record<string, unknown>; retryAfterS?: number };
-export type ActionDeps = Pick<ControlDeps, 'onboarding' | 'cameras' | 'cameraCount' | 'cameraId' | 'running' | 'resubscribe' | 'checkCamera' | 'storage' | 'cameraFtp' | 'restart' | 'restartCamera' | 'cameraReboot' | 'cameraPower' | 'poeSwitch' | 'findCamera' | 'envFile' | 'restartProcess' | 'inventory' | 'archive' | 'tls' | 'cameraNtp' | 'audit'>;
+export type ActionDeps = Pick<ControlDeps, 'onboarding' | 'cameras' | 'cameraCount' | 'cameraId' | 'running' | 'resubscribe' | 'checkCamera' | 'storage' | 'cameraFtp' | 'restart' | 'restartCamera' | 'cameraReboot' | 'cameraPower' | 'findCamera' | 'envFile' | 'restartProcess' | 'inventory' | 'archive' | 'tls' | 'cameraNtp' | 'audit'>;
 
 // Actions with their own audit records (the route writes no control-action record for them).
-export const OWN_AUDIT: ReadonlySet<string> = new Set(['camera-reboot', 'camera-powercycle', 'camera-poe-on', 'restart-proxy', 'inventory', 'inventory-repair', 'camera-address', 'archive-clear', 'tls-ca-rotate', 'camera-trust-clear', 'tls-ca-drop-previous', 'camera-probe', 'camera-trust-pin', 'camera-time-set']);
+export const OWN_AUDIT: ReadonlySet<string> = new Set(['camera-reboot', 'camera-powercycle', 'restart-proxy', 'inventory', 'inventory-repair', 'camera-address', 'archive-clear', 'tls-ca-rotate', 'camera-trust-clear', 'tls-ca-drop-previous', 'camera-probe', 'camera-trust-pin', 'camera-time-set']);
 
 const fail = (status: number, error: string, detail?: string, extra?: Record<string, unknown>): ActionOutcome => ({ status, error, ...(detail ? { detail } : {}), ...(extra && Object.keys(extra).length ? { extra } : {}) });
 // A command's cmdId and actor in a record's details.
@@ -51,6 +49,9 @@ function envFileState(path: string | undefined): { writable: boolean; reason?: s
   }
 }
 
+// poe-switch-read's answer (the old poeSwitch settings are retired).
+export const RETIRED_SWITCH_READ = "this proxy has no camera switch settings: the camera's PoE switch and port are kept in cams-admin (PoE switches); a switch this proxy operates is under Proxy settings, PoE switches";
+
 // The 429 detail of a reboot or power-cycle within the cooldown (also POST /api/cameras/:cam/reboot).
 export const tooSoonDetail = (a: TooSoon): string => (a.inFlight
   ? `a camera reboot or power-cycle is in progress; try again in ${a.retryAfterS} s`
@@ -65,19 +66,10 @@ export async function performAction(d: ActionDeps, name: string, cam: string | n
   };
   // The reboot and the power-cycle share a cooldown (#83, #85).
   const tooSoon = (a: TooSoon): ActionOutcome => ({ ...fail(429, 'too_soon', tooSoonDetail(a)), retryAfterS: a.retryAfterS });
-  // PoE-on and the switch read need a configured switch (the old settings): 409 otherwise.
-  const noSwitch = (): ActionOutcome | null => {
-    const why = d.poeSwitch.notConfigured(camera());
-    return why ? fail(409, 'not_configured', why) : null;
-  };
   const inventoryRefused = (err: unknown): ActionOutcome | null => {
     if (err instanceof InventoryStoppingError) return fail(503, 'stopping', err.message);
     if (err instanceof InventoryBusyError) return fail(409, 'inventory_busy', err.message, { runId: err.runId });
     return null;
-  };
-  const switchFail = (err: unknown): ActionOutcome => {
-    if (!(err instanceof PoeSwitchError)) throw err;
-    return fail(poeHttpStatus(err.code), err.code, err.message, err.poeOff ? { poeOff: true, turnedOn: err.turnedOn === true } : {});
   };
   switch (name) {
     case 'onvif-resubscribe':
@@ -124,34 +116,12 @@ export async function performAction(d: ActionDeps, name: string, cam: string | n
       if (a.status === 429) return 'error' in a ? { ...fail(429, a.error, a.detail), retryAfterS: a.retryAfterS } : tooSoon(a);
       return fail(409, a.error, a.detail);
     }
-    // Recovery (#85): PoE on for the camera's port if it is off; no power
-    // check and no cooldown. The same switch session lock as the rest.
-    case 'camera-poe-on': {
-      const no = noSwitch();
-      if (no) return no;
-      const c = camera();
-      const sw = d.poeSwitch.info(c);
-      const where = `${sw.host} port ${sw.port}`;
-      const base = { action: 'camera-poe-on', category: ['host'], type: ['change'], ...whoRecord(who), camera: c };
-      try {
-        const r = await d.poeSwitch.poeOn(c);
-        d.audit.write({ ...base, outcome: 'success', message: r.wasOn ? `Camera PoE on (${where}): it was on already` : `Camera PoE turned on (${where})`, details: { switch: sw, wasOn: r.wasOn, requestedBy: who.requestedBy, ...cmdOf(who) } });
-        return { status: 200, json: r };
-      } catch (err) {
-        if (err instanceof PoeSwitchError) d.audit.write({ ...base, outcome: 'failure', error: err.code, message: `Camera PoE on (${where}) failed: ${err.message}`, details: { switch: sw, requestedBy: who.requestedBy, ...cmdOf(who), ...(err.poeOff ? { poeStillOff: true } : {}) } });
-        return switchFail(err);
-      }
-    }
-    // The camera's port on the switch now (log in, read, log out); never polled.
-    case 'poe-switch-read': {
-      const no = noSwitch();
-      if (no) return no;
-      try {
-        return { status: 200, json: await d.poeSwitch.read(camera()) };
-      } catch (err) {
-        return switchFail(err);
-      }
-    }
+    // The camera's port on the switch from the old poeSwitch settings: those
+    // are retired (the switches are cams-admin's, spec
+    // 2026-11-07-poe-switches-design), so there is nothing to read here. The
+    // action stays known (cams-admin's contract still lists it): 409.
+    case 'poe-switch-read':
+      return fail(409, 'not_configured', RETIRED_SWITCH_READ);
     // Find camera (pi-config spec §3): the devices that answer an ONVIF
     // probe, the current camera marked, and whether the .env file can be written.
     case 'find-camera': {

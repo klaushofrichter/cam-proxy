@@ -241,7 +241,7 @@ cams-admin card (**Commands from cams-admin**), with
 Camera actions that change trust, delete data or need someone at the
 hardware (`find-camera`, `camera-address`, `camera-trust-clear`,
 `tls-ca-rotate`, `tls-ca-drop-previous`, `archive-clear`, `inventory-repair`,
-`camera-poe-on`, `camera-ftp-off` (it stops clip intake, like `ftp.enabled`),
+`camera-ftp-off` (it stops clip intake, like `ftp.enabled`),
 and the process restart `restart-proxy` by any name but `proxy.restart`) can
 never be allowed. An older `policy.json` or `config.json` that lists
 `camera.action:camera-ftp-off` is read without it.
@@ -279,7 +279,7 @@ them, like any entry (the cams-admin page's group **cams-admin sign-in**, or
 
 | entry | lets a cams-admin sign-in |
 |---|---|
-| `ui.config` | change settings on the Settings page (`PUT /control/config`) and reset them to config.json's value or the default (`DELETE /control/config/{path}`, Reset to defaults `DELETE /control/config`). Never, neither set nor reset, the settings cams-admin can never set: addresses, ports, files, trust, users and cams-admin itself (`server`, `go2rtc`, `tls`, `poeSwitch`, `camsAdmin`, the FTP ports, files and public host, `ntp.server`, a camera's address, user, ports and certificate name, `moved` and the proxy profile `profile.*` with its old name `moves.maxCameras`); a changed address would send a camera's or the switch's password elsewhere, a reset `camsAdmin.url` would undo the enrollment. Never adding or removing a camera. Never the storage limits (`storage.*`, a camera's `storage.sharePercent`: a lower limit deletes stills and clips) or Google Vision's ceiling for cams-admin (`analytics.googleVision.remoteMaxMonthly`). The settings cams-admin's `config.set` may change one way only follow the same direction rules (`NARROW`, [Remote configuration](#remote-configuration-p3)): retention (`retention.*Days`) and the size caps (`stills.maxGB`, `previews.maxGB`, `ftp.maxGB`) only up, keeping data longer; Google Vision's spending caps (`dailyCap`, `checksPerDay`, `perCameraDailyCap`) only down; its monthly limit down, or up to the ceiling; Google Vision off always, on only while the ceiling is above 0 (`above_local_ceiling` for cams-admin, with the same `detail`). That goes for a reset too: a reset that would shorten retention or raise a cap is refused. Reset to defaults keeps the overrides of all those settings, and those whose reset would go the wrong way (the dialog names them); the local admin's Reset to defaults still removes them. Such a refusal answers 403 `local_admin_only` (with a `detail` for a direction rule, shown at the row) and is recorded as `auth-refused` with reason `local-setting`. The capture and feature switches and the health thresholds stay open to it |
+| `ui.config` | change settings on the Settings page (`PUT /control/config`) and reset them to config.json's value or the default (`DELETE /control/config/{path}`, Reset to defaults `DELETE /control/config`). Never, neither set nor reset, the settings cams-admin can never set: addresses, ports, files, trust, users and cams-admin itself (`server`, `go2rtc`, `tls`, `camsAdmin`, the FTP ports, files and public host, `ntp.server`, a camera's address, user, ports and certificate name, `moved` and the proxy profile `profile.*` with its old name `moves.maxCameras`); a changed address would send a camera's or the switch's password elsewhere, a reset `camsAdmin.url` would undo the enrollment. Never adding or removing a camera. Never the storage limits (`storage.*`, a camera's `storage.sharePercent`: a lower limit deletes stills and clips) or Google Vision's ceiling for cams-admin (`analytics.googleVision.remoteMaxMonthly`). The settings cams-admin's `config.set` may change one way only follow the same direction rules (`NARROW`, [Remote configuration](#remote-configuration-p3)): retention (`retention.*Days`) and the size caps (`stills.maxGB`, `previews.maxGB`, `ftp.maxGB`) only up, keeping data longer; Google Vision's spending caps (`dailyCap`, `checksPerDay`, `perCameraDailyCap`) only down; its monthly limit down, or up to the ceiling; Google Vision off always, on only while the ceiling is above 0 (`above_local_ceiling` for cams-admin, with the same `detail`). That goes for a reset too: a reset that would shorten retention or raise a cap is refused. Reset to defaults keeps the overrides of all those settings, and those whose reset would go the wrong way (the dialog names them); the local admin's Reset to defaults still removes them. Such a refusal answers 403 `local_admin_only` (with a `detail` for a direction rule, shown at the row) and is recorded as `auth-refused` with reason `local-setting`. The capture and feature switches and the health thresholds stay open to it |
 | `ui.restart` | restart the proxy (`restart-proxy`) and its camera side (`restart`, also one camera's): **disruptive**. No rate limit (Klaus, 2026-10-21): a person is at the page, and these restarts don't count against cams-admin's `proxy.restart` budget |
 
 They are no commands: cams-admin never sends them, the heartbeat never
@@ -317,9 +317,10 @@ What cams-admin may set is compiled in, `src/fleet/remote-settable.ts`
   `perCameraDailyCap`); per camera `name`,
   `statusPollS`, `stills.stream`, `stills.intervalS`, `ftp.stream`.
 - **Never** (`DENIED`, deny wins): `camsAdmin`, `server`, `go2rtc`, `tls`,
-  `poeSwitch`, the FTP port, passive range, TLS, public host and files,
+  `poeSwitch` (retired: no such setting any more, still listed while the
+  contract names it), the FTP port, passive range, TLS, public host and files,
   `ntp.server`, `composition.font`, each camera's id, address, protocol, TLS
-  name, user, ports, PoE port, FTP user and web page; a camera that doesn't
+  name, user, ports, FTP user and web page; a camera that doesn't
   exist (`unknown_camera`: no camera is added or removed remotely); and,
   **local only**, `storage.*` and every camera's storage share (a lower
   budget would delete stills and clips), the capture and feature switches

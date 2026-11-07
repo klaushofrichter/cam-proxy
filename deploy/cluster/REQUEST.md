@@ -128,10 +128,11 @@ questions".
 - The cluster Secret may get an optional `CAMPROXY_AUDIT_TOKEN` later, for
   a poller that reads the audit log (docs/audit-log.md). No action is needed
   now.
-- The same for an optional `CAMPROXY_POE_SWITCH_PASSWORD` (the camera
-  power-cycle through a PoE switch, docs/poe-switch.md). cam2 is simulated and
-  has no switch, so the cluster leaves it unset; `scripts/sync-secrets.sh`
-  adds it only when it is set. No action is needed.
+- `CAMPROXY_POE_SWITCH_PASSWORD` is retired (2026-11-07: a switch's password
+  is set on the proxy that operates it, docs/poe-switch.md); cam-proxy no
+  longer reads it and `scripts/sync-secrets.sh` no longer sends it. If the
+  manifest still names it (optional), that reference can go; no action is
+  needed.
 - On cam2, a camera user `proxy` (admin level): **done** 2026-09-27. It was
   added to `CAMSIM_USERS`, `cam-sim-secrets` synced, and cam2 restarted
   (rollout restart); login as `proxy` verified.

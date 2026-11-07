@@ -10,7 +10,6 @@ import { CameraPtz } from '../ptz/camera-ptz';
 import { bareHost, splitHost } from '../camera/http';
 import { CameraNameAnnouncer, writeCameraName } from '../camera/name';
 import { CameraReboot } from '../camera/reboot';
-import type { PoeSwitch, PortHandle } from '../camera/poe-switch';
 import { StatusPoller, type CameraState } from '../camera/status';
 import { StreamsReader } from '../camera/streams';
 import { Semaphore } from '../camera/semaphore';
@@ -51,7 +50,6 @@ export interface WorkerDeps {
   id: string;
   running: () => Config;
   password: () => string;
-  poe: PoeSwitch; // the host's PoE controller (spec 2026-10-05-multi-camera-host-design §8.4)
   ftpTarget: () => FtpTarget;
   ftpPassword?: () => string | undefined; // the host's FTP password: no indexer for uploads without it
   cachePool: CachePool; // the host's recordings cache (spec §8.3)
@@ -94,7 +92,6 @@ export class CameraWorker extends EventEmitter {
   stills: StillsSide | undefined;
   readonly recordings: RecordingsSide;
   readonly reboot: CameraReboot;
-  readonly poeSwitch: PortHandle;
   readonly ftpWatch: CameraFtpWatch;
   readonly sdWatch: SdWatch;
   readonly timeInfo: () => TimeInfo | undefined;
@@ -218,7 +215,6 @@ export class CameraWorker extends EventEmitter {
       audit: this.audit,
     });
     // This camera's port on the host's switch (one controller per host, spec §8.4).
-    this.poeSwitch = d.poe.forPort(() => this.cam().poeSwitch.port);
     this.timeInfo = refreshingTimeInfo(() => this.client.timeInfo());
   }
 
@@ -356,12 +352,6 @@ export class CameraWorker extends EventEmitter {
 
   clipsHealth(): ClipsStall | null {
     return this.cam().ftp.enabled ? clipsStalled(this.d.catalog, this.id, Date.now(), this.d.running().ftp.stalledHours, { notSetUp: this.ftpNotSetUp() }) : null;
-  }
-
-  // What audit records name about the switch: never the password.
-  poeSwitchInfo(): { model: string; host: string; port: number } {
-    const c = this.cam().poeSwitch;
-    return { model: c.model, host: c.host ?? '', port: c.port ?? 0 };
   }
 
   // Live settings changed (the proxy's setLoaded): a new Baichuan port is used

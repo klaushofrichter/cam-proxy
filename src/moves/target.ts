@@ -772,8 +772,8 @@ export class MoveTarget {
   // config.json gives it that the move does not set is set to what "absent"
   // means (the host value, the default). Refused: a camera of this id added
   // here since the offer (id_taken; not this step's own earlier write), or a
-  // leftover whose config.json keeps what a move can't replace (tlsName, a PoE
-  // switch port, a share, `moved` itself), or a per-camera password in the
+  // leftover whose config.json keeps what a move can't replace (tlsName, a
+  // share, `moved` itself), or a per-camera password in the
   // environment (it would win over the moved one): stale_leftover.
   // passwordPending (the secrets step's check before it stores the password):
   // the camera's own password is not required yet; the plan is a check only.
@@ -792,7 +792,7 @@ export class MoveTarget {
     const file = base.config.cameras[id];
     const node: Record<string, unknown> = { name: c.name, host: c.host, protocol: c.protocol, user: c.user, onvifPort: c.onvifPort, rtspPort: c.rtspPort, baichuanPort: c.baichuanPort, ...structuredClone(r.settings ?? {}) };
     if (file) {
-      if (file.tlsName !== undefined || file.poeSwitch?.port !== undefined || file.moved !== undefined) return { problem: 'stale_leftover' };
+      if (file.tlsName !== undefined || file.moved !== undefined) return { problem: 'stale_leftover' };
       const unset = (p: string) => getPath(node, p) === undefined;
       const dflt = cameraDefaults(id);
       if (unset('statusPollS') && file.statusPollS !== dflt.statusPollS) node.statusPollS = dflt.statusPollS;

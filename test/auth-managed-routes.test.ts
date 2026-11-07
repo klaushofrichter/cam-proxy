@@ -79,7 +79,7 @@ describe('a managed admin token on the admin API', () => {
       if (allowed(method, url)) expect(r.body?.error, `${method} ${url}`).not.toBe('local_admin_only');
       else expect([r.status, r.body?.error], `${method} ${url}`).toEqual([403, 'local_admin_only']);
     }
-    for (const a of ['archive-clear', 'camera-address', 'camera-trust-clear', 'tls-ca-rotate', 'camera-poe-on', 'restart-proxy']) {
+    for (const a of ['archive-clear', 'camera-address', 'camera-trust-clear', 'tls-ca-rotate', 'restart-proxy']) {
       expect((await send('POST', `/control/actions/${a}`, auth(MANAGED_ADMIN), { count: 0 })).status, a).toBe(403);
     }
     expect(p.proxy.running.camsAdmin.url).toBeUndefined();

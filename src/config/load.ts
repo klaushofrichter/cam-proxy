@@ -5,7 +5,8 @@ import { cameraDefaults, DEFAULTS, type Config, type Secrets } from './defaults'
 import { checkPartial, leafAt, leafPaths, SETTINGS, SettingError } from './schema';
 import { cameraConfig } from './cameras';
 import { derivedPassive, ftpOn, MAX_FTP_CAMERAS, PASSIVE_MAX, PORTS_PER_CAMERA } from './profile';
-import { normalizeFile, normalizeOverrides, translatePath } from './legacy';
+import { dropRetiredPoeSwitch, normalizeFile, normalizeOverrides, translatePath } from './legacy';
+import { logger } from '../log';
 import { ipv4Int } from '../util/cidr';
 import { loadSecrets } from './secrets';
 import { EnvSettingError, readEnvLayer, type EnvLayer, type EnvValue } from './env';
@@ -56,9 +57,9 @@ const PROCESS = ['server.port', 'server.dataDir', 'server.trustProxy', 'composit
 export function needsProcessRestart(path: string): boolean {
   return PROCESS.includes(path);
 }
-// Live although under a restart prefix: the PoE switch is read on every use,
-// the Baichuan port at the next connection, analytics kinds on every event.
-const LIVE = [/^poeSwitch\./, /^cameras\.[^.]+\.poeSwitch\./, /^cameras\.[^.]+\.baichuanPort$/, /^cameras\.[^.]+\.analytics\./];
+// Live although under a restart prefix: the Baichuan port at the next
+// connection, analytics kinds on every event.
+const LIVE = [/^cameras\.[^.]+\.baichuanPort$/, /^cameras\.[^.]+\.analytics\./];
 export function needsRestart(path: string): boolean {
   if (LIVE.some((re) => re.test(path))) return false;
   return RESTART.some((r) => (r.endsWith('.') ? path.startsWith(r) : path === r));
@@ -303,8 +304,11 @@ function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSetti
 export function loadConfig(env: NodeJS.ProcessEnv, opts: { cwd?: string; tokensOptional?: boolean } = {}): Loaded {
   const cwd = opts.cwd ?? process.cwd();
   const file = env.CAMPROXY_CONFIG ? resolve(cwd, env.CAMPROXY_CONFIG) : existsSync(join(cwd, 'config.json')) ? join(cwd, 'config.json') : undefined;
+  // The retired poeSwitch settings are dropped from both files (one info
+  // line); overrides.json is written without them on the next save.
+  const fromFile = dropRetiredPoeSwitch(file ? readJson(file) : {});
   // A legacy `camera` is read as a list of one (spec §4.2); nothing is rewritten.
-  const norm = normalizeFile(file ? readJson(file) : {});
+  const norm = normalizeFile(fromFile.value);
   const fileSettings = norm.settings;
   const policyBase = takeCommandPolicy(fileSettings, 'config.json');
   asConfigError(() => checkPartial(fileSettings));
@@ -312,7 +316,11 @@ export function loadConfig(env: NodeJS.ProcessEnv, opts: { cwd?: string; tokensO
   // Overrides live in the data folder, which the file (not an override) sets.
   const fileDataDir = (getPath(fileSettings, 'server.dataDir') as string | undefined) ?? DEFAULTS.server.dataDir;
   const overridesFile = join(isAbsolute(fileDataDir) ? fileDataDir : resolve(baseDir, fileDataDir), 'overrides.json');
-  const overrides = normalizeOverrides(existsSync(overridesFile) ? readJson(overridesFile) : {}, norm.order);
+  const fromOverrides = dropRetiredPoeSwitch(existsSync(overridesFile) ? readJson(overridesFile) : {});
+  if (fromFile.dropped.length || fromOverrides.dropped.length) {
+    logger.info({ ...(fromFile.dropped.length ? { 'config.json': fromFile.dropped } : {}), ...(fromOverrides.dropped.length ? { 'overrides.json': fromOverrides.dropped } : {}) }, 'legacy_poe_switch_dropped');
+  }
+  const overrides = normalizeOverrides(fromOverrides.value, norm.order);
   takeCommandPolicy(overrides, 'overrides.json');
   asConfigError(() => checkPartial(overrides));
   if (getPath(overrides, 'server.dataDir') !== undefined) throw new ConfigError('server.dataDir: can only be set in config.json');

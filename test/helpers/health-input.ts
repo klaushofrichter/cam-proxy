@@ -14,7 +14,6 @@ export function input(over: Partial<HealthInput> = {}): HealthInput {
       id: 'cam1', name: 'Den', host: '192.168.1.103:443',
       state: { online: true, since: NOW - H, model: 'RLC-1224A', firmware: 'v3.1', serial: 'SERIAL-123', clockOffsetMs: -412 },
       reboot: null,
-      poeSwitch: { model: 'sscpoe-web', port: 8 },
     },
     stream: { enabled: true, up: true, lastFrameTs: NOW - 1000 },
     intake: { onvif: 'subscribed', since: NOW - H, source: 'onvif', resubscribes: 3 },

@@ -14,7 +14,10 @@ describe('the e-paper display keeps working (spec §6.5, decision 5)', () => {
       const fixture = JSON.parse(readFileSync(join(__dirname, 'fixtures', 'display', name), 'utf8'));
       const h = buildHealth(input());
       const have = new Set(keys(h));
-      expect(keys(fixture).filter((k) => !have.has(k))).toEqual([]);
+      // camera.poeSwitch is always null now (the old switch settings are retired); the display skips its row then.
+      const RETIRED = new Set(['camera.poeSwitch.model', 'camera.poeSwitch.port']);
+      expect(keys(fixture).filter((k) => !have.has(k) && !RETIRED.has(k))).toEqual([]);
+      expect(h.camera.poeSwitch).toBeNull();
       expect(h.schema).toBe(1);
     });
   }
