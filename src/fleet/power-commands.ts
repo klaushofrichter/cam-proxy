@@ -25,6 +25,10 @@ export interface PowerView { power: CameraPower | null; setAt: number | null; as
 
 // <dataDir>/camera-power.json: the display records (no secrets).
 export const POWER_FILE = 'camera-power.json';
+// An open request without cams-admin's answer ends after this long: a search
+// over several switches, the off time and the PoE-on retries fit in it.
+export const ASK_TIMEOUT_MS = 5 * 60_000;
+export const ASK_TIMEOUT_REASON = 'no answer from cams-admin within 5 minutes';
 
 export class CameraPowerStore {
   private readonly records = new Map<string, { power: CameraPower; setAt: number }>();
@@ -56,7 +60,19 @@ export class CameraPowerStore {
     if (this.asked.get(camera)?.requestId === r.requestId) this.asked.delete(camera);
   }
 
+  // Open requests end (no answer will come any more): unenrolled, or cams-admin switched off.
+  clearAsked(): void {
+    this.asked.clear();
+  }
+
   view(camera: string): PowerView {
+    // Unanswered for ASK_TIMEOUT_MS: the result says so (a late answer still replaces it).
+    const open = this.asked.get(camera);
+    if (open && this.now() - open.at >= ASK_TIMEOUT_MS) {
+      this.asked.delete(camera);
+      this.results.set(camera, { requestId: open.requestId, ok: false, reason: ASK_TIMEOUT_REASON, at: open.at + ASK_TIMEOUT_MS });
+      logger.warn({ camera, requestId: open.requestId }, 'camera_powercycle_no_answer');
+    }
     const r = this.records.get(camera);
     return { power: r ? { ...r.power } : null, setAt: r?.setAt ?? null, asked: this.asked.get(camera) ?? null, result: this.results.get(camera) ?? null };
   }
@@ -141,6 +157,15 @@ export interface PowerRequestDeps {
   reboot: (camera: string) => Pick<CameraReboot, 'cooldown'>;
   audit: Pick<AuditLog, 'write'>;
   now?: () => number;
+}
+
+// GET /control/cameras/:cam/power: the view, and whether a power-cycle can be
+// asked for now. Without cams-admin (unenrolled, switched off) no answer can
+// come: open requests end.
+export function powerView(d: Pick<PowerRequestDeps, 'store' | 'connected'> & { configured: () => boolean }, camera: string): PowerView & { canRequest: boolean; why: string | null } {
+  if (!d.configured()) d.store.clearAsked();
+  const why = powerRequestRefusal(d, camera);
+  return { ...d.store.view(camera), canRequest: why === null, why };
 }
 
 // Why this proxy can't ask cams-admin for a power-cycle now, or null.

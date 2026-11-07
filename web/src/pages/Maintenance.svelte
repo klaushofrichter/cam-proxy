@@ -5,7 +5,7 @@
   import { api, ApiError } from '../lib/api';
   import { MB, mbText } from '../lib/format';
   import { REPAIR_MAX_BYTES, REPAIR_MAX_CLIPS } from '../lib/inventory';
-  import { poeAlert, poeOnText, powerCycleFailText, powerCycleMessage, powerResultText, readHealth, rebootEndText, waitForNewProxy, type PowerView } from '../lib/maintenance';
+  import { poeAlert, poeOnText, powerCycleDisabled, powerCycleFailText, powerCycleMessage, powerResultText, readHealth, rebootEndText, waitForNewProxy, type PowerView } from '../lib/maintenance';
   import { refresh, refreshTick, status } from '../lib/state';
   import { clearMatches, clearMessage } from '../lib/archive';
   import { actionPath, blockOf, powerPath, selectedCamera } from '../lib/cameras';
@@ -185,8 +185,11 @@
   // cams-admin's answer to this page's request.
   $effect(() => {
     const r = power?.result;
+    // The answer, or the proxy's "no answer within 5 minutes"; without cams-admin the request just ends.
     if (askedId && r && r.requestId === askedId) {
       result = powerResultText(r);
+      askedId = null;
+    } else if (askedId && power && !power.asked && !power.canRequest) {
       askedId = null;
     }
   });
@@ -245,7 +248,7 @@
       <button onclick={() => void run('ONVIF', 'onvif-resubscribe')} disabled={!!locked} data-testid="action-resubscribe">Re-subscribe ONVIF</button>
       <button onclick={() => void run('Restart', 'restart')} disabled={!!restartLocked} data-testid="action-restart">Restart camera side</button>
       <button class="danger" onclick={() => (asking = 'camera-reboot')} disabled={cameraBusy || !!locked} data-testid="action-camera-reboot">Reboot camera</button>
-      <button class="danger" onclick={() => (asking = 'camera-powercycle')} disabled={cameraBusy || waiting || !power?.canRequest || !!locked} title={power?.why ?? undefined} data-testid="action-camera-powercycle">Power-cycle (through cams-admin)</button>
+      <button class="danger" onclick={() => (asking = 'camera-powercycle')} disabled={powerCycleDisabled(power, cameraBusy || !!locked)} title={power?.why ?? undefined} data-testid="action-camera-powercycle">Power-cycle (through cams-admin)</button>
       {#if poe?.configured}
         <button onclick={() => void poeOn()} disabled={sending || !!locked} data-testid="action-camera-poe-on" title="Turns the camera's PoE on if it is off (no power check)">Turn camera PoE on</button>
       {/if}

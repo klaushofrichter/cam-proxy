@@ -15,7 +15,7 @@ then "rebooting" until the camera answers, with the shared 2-minute cooldown.
 The Maintenance page's "Power-cycle (through cams-admin)" asks cams-admin
 (`POST /control/cameras/<id>/actions/camera-powercycle`: 202 `{requestId}`,
 the signed event `camera.power.cycle.request`) and shows "Asked cams-admin…"
-until its answer (`camera.power.cycle.result`). Without cams-admin (not
+until its answer (`camera.power.cycle.result`). A request without an answer ends after 5 minutes (the result then says "no answer from cams-admin within 5 minutes"; a later answer still replaces it), and at once when the proxy is unenrolled or cams-admin is switched off. Without cams-admin (not
 connected, or it has not sent the camera's power yet) it is refused: 409
 `power_cycle_needs_cams_admin`. A proxy never forces a cycle. `GET
 /control/cameras/<id>/power` returns the camera's power as cams-admin sent it

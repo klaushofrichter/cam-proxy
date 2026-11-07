@@ -79,7 +79,7 @@ import { analyticsHandlers } from './fleet/analytics-commands';
 import { cameraHandlers } from './fleet/camera-commands';
 import { moveHandlers } from './moves/commands';
 import { switchHandlers } from './fleet/switch-commands';
-import { CameraPowerStore, powerHandlers, powerRequestRefusal, requestPowerCycle, type PowerRequestDeps } from './fleet/power-commands';
+import { CameraPowerStore, powerHandlers, powerView, requestPowerCycle, type PowerRequestDeps } from './fleet/power-commands';
 import type { AdminEvent } from './fleet/outbox';
 import { MoveReturns } from './moves/returns';
 import { MoveJournal } from './moves/journal';
@@ -1403,10 +1403,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     poeSwitch: { notConfigured: (cam) => worker(cam).poeSwitch.notConfigured(), read: (cam) => worker(cam).poeSwitch.read(), poeOn: (cam) => worker(cam).poeSwitch.poeOn(), info: (cam) => worker(cam).poeSwitchInfo() },
     cameraPower: {
       request: (who, cam) => requestPowerCycle(powerRequest, cam, who),
-      view: (cam) => {
-        const why = powerRequestRefusal(powerRequest, cam);
-        return { ...cameraPower.view(cam), canRequest: why === null, why };
-      },
+      view: (cam) => powerView({ ...powerRequest, configured: () => camsAdmin.active() && camsAdmin.keyInfo() !== null }, cam),
     },
     restartProcess: () => {
       processRestart ??= restartProcess({

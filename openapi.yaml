@@ -1160,7 +1160,7 @@ paths:
         power is cams-admin's display record (camera.power.set: kind poe, data-only, adapter or unknown;
         switchName, port, watts, verifiedAt, notSeen), kept in <dataDir>/camera-power.json (no secrets), or null;
         setAt when it arrived. asked is the open request of POST .../actions/camera-powercycle ({requestId, at}),
-        result cams-admin's last answer (camera.power.cycle.result: {requestId, ok, reason?, at}). canRequest says
+        result cams-admin's last answer (camera.power.cycle.result: {requestId, ok, reason?, at}); a request unanswered for 5 minutes ends with ok false, reason "no answer from cams-admin within 5 minutes" (a later answer replaces it), and unenrolling or switching cams-admin off ends it. canRequest says
         whether a power-cycle can be asked for now (cams-admin connected and a power record from it); why, when not.
       parameters:
         - { name: cam, in: path, required: true, schema: { type: string } }

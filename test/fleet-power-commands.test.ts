@@ -6,7 +6,7 @@ import { ARGS_VALIDATORS } from '../src/fleet/command-args';
 import type { CommandBody } from '../src/fleet/command-check';
 import type { Done } from '../src/fleet/commands';
 import { ALLOW_ENTRIES, DEFAULT_ON, DISRUPTIVE_ENTRIES, ENTRY_TEXT, IMPLEMENTED, entryFor } from '../src/fleet/policy';
-import { CameraPowerStore, POWER_FILE, powerHandlers, requestPowerCycle } from '../src/fleet/power-commands';
+import { ASK_TIMEOUT_MS, CameraPowerStore, POWER_FILE, powerHandlers, powerView, requestPowerCycle } from '../src/fleet/power-commands';
 import type { AdminEvent } from '../src/fleet/outbox';
 import { CameraReboot, type RebootDeps } from '../src/camera/reboot';
 import { poeHttpStatus } from '../src/camera/switch/errors';
@@ -226,5 +226,34 @@ describe('camera.power.cycle.result and the request', () => {
     expect(requestPowerCycle(deps(true), 'cam1', who)).toMatchObject({ status: 429, retryAfterS: 120 });
     expect(events).toEqual([]);
     s.reboot.stop();
+  });
+
+  it('an unanswered request ends after 5 minutes: a failed result says so, a late answer still replaces it', async () => {
+    const s = setup();
+    s.store.set('cam1', { kind: 'poe' });
+    const events: AdminEvent[] = [];
+    const a = requestPowerCycle({ ...connected(events), store: s.store, reboot: () => s.reboot, audit: { write: () => undefined } as any, now: () => s.t.now }, 'cam1', { user: 'admin', requestedBy: 'token' });
+    const requestId = (a as { requestId: string }).requestId;
+    const asked = s.t.now;
+    expect(ASK_TIMEOUT_MS).toBe(300_000);
+    s.t.now += ASK_TIMEOUT_MS - 1;
+    expect(s.store.view('cam1')).toMatchObject({ asked: { requestId }, result: null });
+    s.t.now += 1;
+    expect(s.store.view('cam1')).toMatchObject({ asked: null, result: { requestId, ok: false, reason: 'no answer from cams-admin within 5 minutes', at: asked + ASK_TIMEOUT_MS } });
+    // The button can ask again.
+    expect(powerView({ ...connected(events), store: s.store, configured: () => true }, 'cam1')).toMatchObject({ asked: null, canRequest: true });
+    s.t.now += 60_000;
+    await s.run('camera.power.cycle.result', { camera: 'cam1', requestId, ok: true });
+    expect(s.store.view('cam1')).toMatchObject({ asked: null, result: { requestId, ok: true, at: s.t.now } });
+    expect(s.store.view('cam1').result!.reason).toBeUndefined();
+  });
+
+  it('unenrolled or cams-admin switched off: the open request ends (no answer can come)', () => {
+    const s = setup();
+    s.store.set('cam1', { kind: 'poe' });
+    s.store.ask('cam1', 'pc_A');
+    const events: AdminEvent[] = [];
+    expect(powerView({ ...connected(events, false), store: s.store, configured: () => true }, 'cam1').asked).toMatchObject({ requestId: 'pc_A' });
+    expect(powerView({ ...connected(events, false), store: s.store, configured: () => false }, 'cam1')).toMatchObject({ asked: null, canRequest: false });
   });
 });

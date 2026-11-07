@@ -128,6 +128,13 @@ export function powerCycleMessage(p: CameraPower | null): string {
   return `Ask cams-admin to power-cycle the camera${where}? cams-admin first checks that the camera is on that port, then cuts its PoE for a few seconds. The camera is offline for about a minute.`;
 }
 
+// The power-cycle button is off while a request is open (the proxy ends one
+// unanswered after 5 minutes), while the camera is busy, or when cams-admin
+// can't be asked (not connected, no power record from it).
+export function powerCycleDisabled(v: PowerView | null, busy: boolean): boolean {
+  return busy || !v || !!v.asked || !v.canRequest;
+}
+
 // cams-admin's answer (camera.power.cycle.result).
 export function powerResultText(r: PowerCycleOutcome): string {
   if (r.ok) return 'Camera power-cycle: done by cams-admin';

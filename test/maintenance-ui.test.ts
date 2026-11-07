@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cameraStateText, isNewStart, poeAlert, poeLine, poeOnText, powerCycleMessage, powerCycleFailText, powerLine, powerResultText, rebootEndText, readHealth, restartWatch, waitForNewProxy, RESTART_GIVE_UP_MS } from '../web/src/lib/maintenance';
+import { cameraStateText, isNewStart, poeAlert, poeLine, poeOnText, powerCycleMessage, powerCycleDisabled, powerCycleFailText, powerLine, powerResultText, rebootEndText, readHealth, restartWatch, waitForNewProxy, RESTART_GIVE_UP_MS } from '../web/src/lib/maintenance';
 
 describe('Maintenance page helpers (#71, #83)', () => {
   it('tells a new proxy start by its version or start time', () => {
@@ -54,6 +54,15 @@ describe('Maintenance page helpers (#71, #83)', () => {
     expect(powerResultText({ requestId: 'pc_1', ok: true, at: 1 })).toBe('Camera power-cycle: done by cams-admin');
     expect(powerResultText({ requestId: 'pc_1', ok: false, reason: 'not PoE powered', at: 1 })).toBe('Camera power-cycle refused by cams-admin: not PoE powered');
     expect(powerResultText({ requestId: 'pc_1', ok: false, at: 1 })).toBe('Camera power-cycle refused by cams-admin');
+  });
+
+  it('the power-cycle button: off while asked or not allowed, on again once the request ended (answered or timed out)', () => {
+    const view = { power: { kind: 'poe' as const }, setAt: 1, asked: { requestId: 'pc_1', at: 1 }, result: null, canRequest: true, why: null };
+    expect(powerCycleDisabled(view, false)).toBe(true);
+    expect(powerCycleDisabled({ ...view, asked: null, result: { requestId: 'pc_1', ok: false, reason: 'no answer from cams-admin within 5 minutes', at: 2 } }, false)).toBe(false);
+    expect(powerCycleDisabled({ ...view, asked: null }, true)).toBe(true);
+    expect(powerCycleDisabled({ ...view, asked: null, canRequest: false, why: 'x' }, false)).toBe(true);
+    expect(powerCycleDisabled(null, false)).toBe(true);
   });
 
   it('the end of a reboot or power-cycle that did not bring the camera back', () => {
