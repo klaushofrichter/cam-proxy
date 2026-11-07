@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- PoE switches: finding a camera's port is now reliable. The switch updates its traffic figures only every few seconds and a little late, so the single look 2.5 s into the ping burst missed the camera about half the time ("no traffic"). The proxy now looks every 0.7 s during the burst (up to 10 times) and stops at the first look that shows the camera's port.
+
 ## v2026.11.07.1
 
 - PoE switches: the proxy can now tell which switch port a camera is on, by sending the camera a short burst of pings and watching which port's traffic jumps (it reads each port's traffic counters for this). A power-cycle can check this first and then cuts nothing unless the camera really is on that port.

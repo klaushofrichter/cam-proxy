@@ -12,7 +12,13 @@ const NO_PASSWORD = 'CAMPROXY_POE_SWITCH_PASSWORD is not set';
 const ON_RETRY_MS = 60_000; // how long a failed PoE-on is retried (backoff 1, 2, 4, 8, 10, 10… s)
 const STOP_RECOVERY_MS = 6_000; // on shutdown: the PoE-on retries end after this
 const STOP_WAIT_MS = 8_000; // on shutdown: the longest wait for the switch (compose's stop grace is 20 s)
-const LOCATE_READ_MS = 2_500; // into the ~5 s ping burst: the second read
+// Reads during the ~5 s ping burst. The GPS-208's rates refresh every
+// ~2.5–3.5 s and lag the traffic (measured 2026-11-07: the burst showed 3–4 s
+// after the ping started and stayed ~3 s after it ended), so one read at a
+// fixed time missed it about half the time. Read every 0.7 s, up to 10 reads
+// (~7 s plus the reads), and stop at the first read that shows a port.
+const LOCATE_POLL_MS = 700;
+const LOCATE_READS = 10;
 
 // The camera's PoE switch (issue #85): power-cycle the camera by cutting its
 // port's PoE. A driver per switch model (src/camera/switch/driver.ts); one so
@@ -334,17 +340,25 @@ export class PoeSwitch {
   private async locateIn(s: SwitchSession, c: PoeSwitchConfig, driver: SwitchDriver, host: string): Promise<Located> {
     const base = await s.detail();
     const burst = (this.d.pingBurst ?? pingBurst)(pingHost(host));
-    let during: SwitchDetail;
+    let ended: { answered: boolean } | null = null;
+    void burst.done.then((r) => (ended = r));
+    let during: SwitchDetail = base;
+    let picked: LocateResult = { found: false, reason: 'no_traffic' };
     try {
-      await this.pause(LOCATE_READ_MS);
-      during = await s.detail();
+      for (let i = 0; i < LOCATE_READS && !picked.found; i++) {
+        await this.pause(LOCATE_POLL_MS);
+        if (ended && !(ended as { answered: boolean }).answered) break; // no reply: nothing to find
+        during = await s.detail();
+        const sn = during.sn ?? '';
+        picked = pickPort(c.ports, base, during, (p) => driver.portIndex(p, c.ports, sn));
+      }
     } catch (err) {
       await burst.done; // the burst ends by itself (~5 s): the session stays until then
       throw err;
     }
     const { answered } = await burst.done;
     if (!answered) return { found: false, reason: 'not_reachable', sn: base.sn };
-    return { ...pickPort(c.ports, base, during, (p) => driver.portIndex(p, c.ports, during.sn ?? '')), sn: during.sn };
+    return { ...picked, sn: during.sn };
   }
 
   // "Turn camera PoE on" (recovery): PoE on for the camera's port if it is
