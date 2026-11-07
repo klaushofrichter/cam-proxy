@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- PoE switches: finding a camera's port is now reliable. The switch updates its traffic figures only every few seconds and a little late, so the single look 2.5 s into the ping burst missed the camera about half the time ("no traffic"). The proxy now looks every 0.7 s during the burst (up to 10 times) and stops at the first look that shows the camera's port.
+
+## v2026.11.07.1
+
 - PoE switches: the proxy can now tell which switch port a camera is on, by sending the camera a short burst of pings and watching which port's traffic jumps (it reads each port's traffic counters for this). A power-cycle can check this first and then cuts nothing unless the camera really is on that port.
 - PoE switches by id: the proxy keeps each switch cams-admin names separately, each with its own queue (one switch session at a time) and its own password. **Proxy settings → PoE switches** lists them, sets or changes a switch's password (stored here, never shown or sent to cams-admin), and turns PoE on again at a port that may be left off ("Turn PoE on"), also without cams-admin. The old `poeSwitch` settings and `CAMPROXY_POE_SWITCH_PASSWORD` keep working for the switch they name.
 - cams-admin can drive this proxy's PoE switches, each an allow entry on the cams-admin page, off by default: read the ports, find a camera's port, survey several cameras, power-cycle a port (checked first unless a person forces it), turn PoE on, and forget a switch with its password. Power-cycling a port is disruptive: it counts toward the same limit of 6 disruptive commands an hour as a camera reboot. Every switch action is audited. The allow list now takes up to 64 entries (was 32).
