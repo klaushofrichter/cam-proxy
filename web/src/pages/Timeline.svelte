@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { pickCamera, selectedCamera } from '../lib/cameras';
+  import { pickCamera, cameraTitle, selectedCamera } from '../lib/cameras';
   import { localDate, pad2 } from '../lib/format';
   import { api } from '../lib/api';
   import { analysedSeconds, analysedStills, eventLabel, eventsInMinute, isRecovered, marksByMinute, primaryEvent, RECOVERED_NOTE, secondKinds, secondRecovered, stepMinute } from '../lib/timeline';
   import AnalysisModal from '../components/AnalysisModal.svelte';
-  import { refreshTick } from '../lib/state';
+  import { refreshTick, status } from '../lib/state';
 
   interface Minute { minute: number; cols: number; rows: number; tileW: number; tileH: number; intervalS: number; present: boolean[]; url: string }
   interface Ev { id: number; kind: string; source?: string; start: number; end: number | null; analysis?: { status: string; stillTs?: number } | null }
@@ -114,7 +114,7 @@
 
 <section>
   <div class="head">
-    <h2>Timeline</h2>
+    <h2 data-testid="page-title">Timeline{$status?.cameras?.length ? `: ${cameraTitle($status, $selectedCamera)}` : ''}</h2>
     <input type="date" bind:value={day} max={localDate()} data-testid="timeline-day" />
     <button onclick={() => void load()}>Refresh</button>
   </div>

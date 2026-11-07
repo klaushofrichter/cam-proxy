@@ -35,6 +35,7 @@ test('a cams-admin sign-in: settings, restarts and actions are off, with the rea
   await expect(page.getByTestId('settings-locked')).toHaveText(LOCKED, { timeout: 15000 });
   await expect(page.getByTestId('input-sse.pingS')).toBeDisabled();
   // Renaming the camera stays open to it.
+  await page.goto('/#/camera-settings');
   await expect(page.getByTestId('input-camera-name')).toBeEnabled();
   await page.goto('/#/maintenance');
   await expect(page.getByTestId('maintenance-locked')).toHaveText(LOCKED);

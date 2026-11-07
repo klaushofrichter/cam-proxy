@@ -27,6 +27,10 @@
   // `env`: the variable that sets it (source env: read-only here).
   // `legacy`: read from a legacy `camera` object in config.json.
   interface Setting { value: unknown; source: 'default' | 'file' | 'override' | 'env'; env?: string; restart: boolean; restartScope?: 'camera' | 'host'; pending: boolean; next?: unknown; type?: SettingType; resetTo?: ResetTo; legacy?: true; by?: { cmdId: string; actor: string; at: number }; ignored?: string }
+  // Two pages (Klaus 2026-11-06): the proxy's settings, and the settings of
+  // the camera picked in the top bar.
+  let { scope = 'proxy' }: { scope?: 'proxy' | 'camera' } = $props();
+  const proxyPage = $derived(scope === 'proxy');
   let view = $state<Record<string, Setting>>({});
   // Find camera's "Add this camera": the address for Add a camera.
   let addHost = $state('');
@@ -209,20 +213,24 @@
 
 <section>
   <div class="head">
-    <h2>Settings</h2>
+    <h2 data-testid="page-title">{proxyPage ? 'Proxy settings' : `Camera settings${cam ? `: ${camName(cam)}` : ''}`}</h2>
     <div class="head-buttons">
-      {#if overrides}<button onclick={askResetAll} disabled={!!configLocked} title={configLocked ?? undefined} data-testid="reset-all">Reset to defaults</button>{/if}
+      {#if proxyPage && overrides}<button onclick={askResetAll} disabled={!!configLocked} title={configLocked ?? undefined} data-testid="reset-all">Reset to defaults</button>{/if}
       {#if Object.values(view).some((s) => s.pending)}<button onclick={() => void restart()} disabled={!!restartLocked} title={restartLocked ?? undefined} data-testid="restart">Restart to apply</button>{/if}
     </div>
   </div>
   <LockedNote why={settingsNote($rights) ?? (Object.values(view).some((s) => s.pending) ? restartLocked : null)} testid="settings-locked" />
   <p class="muted small">From config.json, with changes made here kept as overrides in the data folder. Settings marked "set in .env" come from the environment (CAMERA_HOST, PI_ADDRESS) and win over both; change them in the .env file. Secrets are never shown or set here.</p>
   {#if message}<p class="msg" data-testid="settings-message">{message}</p>{/if}
-  {#if offer}<MovePanel move={offer} name={camName(offer.camera)} onclose={() => void loadMoves()} />{/if}
+  {#if !proxyPage && !cam}<p class="muted" data-testid="no-camera">No camera yet: add one in Proxy settings.</p>{/if}
+  {#if !proxyPage && offer}<MovePanel move={offer} name={camName(offer.camera)} onclose={() => void loadMoves()} />{/if}
+  {#if proxyPage}
   {#each leftovers as l (l.id)}<p class="muted small" data-testid="moved-{l.id}">{l.id}: {movedText($moves.find((m) => m.id === l.moveId)?.target.name ?? 'another proxy', l.moveId)}</p>{/each}
   <ProfileCard />
   <AnalyticsSettings {view} onsaved={(v) => (view = v as Record<string, Setting>)} />
-  {#if cam}
+  <FindCameraCard onadd={(h) => { addHost = h; document.querySelector('[data-testid="add-camera"]')?.scrollIntoView({ behavior: 'smooth' }); }} />
+  {/if}
+  {#if !proxyPage && cam}
     <div class="card" data-testid="camera-time-card">
       <h3>Camera time</h3>
       <p class="muted small" data-testid="camera-time-text">Sets {camName(cam)}'s time zone and DST rule from <span class="mono">time.zone</span> (else the host's zone when known), its clock to now, and its NTP server when <span class="mono">ntp.server</span> is set.</p>
@@ -230,9 +238,8 @@
       {#if timeMessage}<p class="msg" role="status" data-testid="camera-time-message">{timeMessage}</p>{/if}
     </div>
   {/if}
-  <FindCameraCard onadd={(h) => { addHost = h; document.querySelector('[data-testid="add-camera"]')?.scrollIntoView({ behavior: 'smooth' }); }} />
-  <PoeSwitchCard />
-  {#each cards as card (card.key)}
+  {#if !proxyPage}<PoeSwitchCard />{/if}
+  {#each cards.filter((c) => c.camera !== proxyPage) as card (card.key)}
     <div class="card" data-testid="settings-card-{card.key}">
       <div class="card-head"><h3 class:camera={card.camera}>{card.title}</h3>{#if card.camera && movable}<button onclick={() => (moving = true)} data-testid="move-open">Move to another proxy…</button>{/if}{#if card.camera && block?.source === 'added'}<button class="danger" onclick={() => (removing = cam)} disabled={!!undoLocked} title={undoLocked ?? undefined} data-testid="remove-camera">Remove camera</button>{/if}</div>
       <table>
@@ -280,7 +287,7 @@
       </table>
     </div>
   {/each}
-  <AddCameraCard existing={cameraIds($status)} prefill={addHost} onadded={() => void load().then(() => refresh())} />
+  {#if proxyPage}<AddCameraCard existing={cameraIds($status)} prefill={addHost} onadded={() => void load().then(() => refresh())} />{/if}
 </section>
 {#if moving && cam}
   <MoveCameraDialog camera={cam} name={camName(cam)} address={block?.camera.webUiUrl ? hostOf(block.camera.webUiUrl) : ''} onclose={() => ((moving = false), void loadMoves())} />

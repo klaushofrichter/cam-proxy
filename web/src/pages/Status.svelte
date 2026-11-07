@@ -94,6 +94,10 @@
       <ProfileCard home />
       {#each activeMoves as m (m.id)}<MoveStatusCard move={m} name={$status.cameras?.find((c) => c.id === m.camera)?.camera.name ?? m.camera} />{/each}
       {#if $status.moveLeftovers?.length || $status.removeLeftovers?.length}<MoveLeftoversCard leftovers={$status.moveLeftovers ?? []} removed={$status.removeLeftovers ?? []} />{/if}
+    </div>
+    <!-- The camera picked in the top bar (Klaus 2026-11-06: say which cards are the camera's). -->
+    <h3 class="section" data-testid="status-camera-section">Camera: {cs.camera.name ?? cs.id}</h3>
+    <div class="grid">
       {#if cs.id}<OnboardingCard cam={cs.id} name={cs.camera.name ?? cs.id} refreshKey={$status} />{/if}
       <div class="card" data-testid="card-camera">
         <h3>Camera</h3>
@@ -119,27 +123,6 @@
           {#each Object.entries(cs.id && $stats.events.byCamera ? ($stats.events.byCamera[cs.id] ?? {}) : $stats.events.stored) as [kind, n] (kind)}<dt>{kind} events</dt><dd>{n}</dd>{/each}
         </dl>
       </div>
-      {#each ($status.analytics ?? []).filter((a) => a.enabled) as a (a.id)}
-        <div class="card" data-testid={`card-analytics-${a.id}`}>
-          <h3>Analytics · {a.name}</h3>
-          <dl>
-            {#each usageRows(a) as r (r.key)}<dt>{r.label}</dt><dd data-testid={`analytics-usage-${r.key}`}>{r.text}</dd>{:else}<dt>Usage</dt><dd data-testid="analytics-usage">{usageLine(a)}</dd>{/each}
-            {#if a.paused}<dt>Paused</dt><dd class="bad">{pausedText(a.paused)}</dd>{/if}
-            {#if a.lastError}<dt>Last error</dt><dd class="bad">{a.lastError}</dd>{/if}
-          </dl>
-        </div>
-      {:else}
-        {#if $status.analytics}<div class="card" data-testid="card-analytics"><h3>Analytics</h3><p class="muted">not enabled</p></div>{/if}
-      {/each}
-      {#if $status.analyticsUnmapped?.length}
-        <div class="card" data-testid="card-analytics-unmapped">
-          <h3>Analytics · objects seen, not mapped</h3>
-          <p class="muted small">Candidates for the class table (<a href="https://github.com/klaushofrichter/cam-proxy/blob/main/docs/analytics-classes.md" target="_blank" rel="noopener">docs/analytics-classes.md</a>).</p>
-          <dl>
-            {#each $status.analyticsUnmapped as u (u.mid || `name:${u.name.toLowerCase()}`)}<dt>{u.name}{u.mid ? ` · ${u.mid}` : ''}</dt><dd>{u.count}</dd>{/each}
-          </dl>
-        </div>
-      {/if}
       <div class="card" data-testid="card-stream">
         <h3>Stills</h3>
         <dl>
@@ -185,6 +168,30 @@
             {/if}
             <dt>Cache</dt><dd data-testid="recordings-cache">{cacheFillText(cs.recordings.cache)}</dd>
             <dt>Files cached</dt><dd>{cs.recordings.cache.files}</dd>
+          </dl>
+        </div>
+      {/if}
+    </div>
+    <h3 class="section" data-testid="status-proxy-section">Proxy</h3>
+    <div class="grid">
+      {#each ($status.analytics ?? []).filter((a) => a.enabled) as a (a.id)}
+        <div class="card" data-testid={`card-analytics-${a.id}`}>
+          <h3>Analytics · {a.name}</h3>
+          <dl>
+            {#each usageRows(a) as r (r.key)}<dt>{r.label}</dt><dd data-testid={`analytics-usage-${r.key}`}>{r.text}</dd>{:else}<dt>Usage</dt><dd data-testid="analytics-usage">{usageLine(a)}</dd>{/each}
+            {#if a.paused}<dt>Paused</dt><dd class="bad">{pausedText(a.paused)}</dd>{/if}
+            {#if a.lastError}<dt>Last error</dt><dd class="bad">{a.lastError}</dd>{/if}
+          </dl>
+        </div>
+      {:else}
+        {#if $status.analytics}<div class="card" data-testid="card-analytics"><h3>Analytics</h3><p class="muted">not enabled</p></div>{/if}
+      {/each}
+      {#if $status.analyticsUnmapped?.length}
+        <div class="card" data-testid="card-analytics-unmapped">
+          <h3>Analytics · objects seen, not mapped</h3>
+          <p class="muted small">Candidates for the class table (<a href="https://github.com/klaushofrichter/cam-proxy/blob/main/docs/analytics-classes.md" target="_blank" rel="noopener">docs/analytics-classes.md</a>).</p>
+          <dl>
+            {#each $status.analyticsUnmapped as u (u.mid || `name:${u.name.toLowerCase()}`)}<dt>{u.name}{u.mid ? ` · ${u.mid}` : ''}</dt><dd>{u.count}</dd>{/each}
           </dl>
         </div>
       {/if}
@@ -251,6 +258,7 @@
   section { display: grid; gap: 12px; }
   h2 { margin: 0; font-size: 20px; }
   h3 { margin: 0 0 8px; font-size: 16px; }
+  h3.section { margin: 8px 0 0; font-size: 17px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 16px; }
   .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; align-content: start; min-width: 0; }
   dl { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; margin: 0; font-size: 14px; }

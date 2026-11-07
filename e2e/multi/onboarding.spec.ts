@@ -44,7 +44,7 @@ test('trust a camera certificate from the onboarding card; a wrong password is r
 test('Settings: "Set camera time" sets the zone of time.zone on the selected camera', async ({ page }) => {
   expect((await page.request.put('/control/config', { headers: UI, data: { time: { zone: 'Europe/Berlin' } } })).status()).toBe(200);
   try {
-    await page.goto('/#/settings');
+    await page.goto('/#/camera-settings');
     await page.getByTestId('camera-picker').selectOption('cam4');
     const card = page.getByTestId('camera-time-card');
     await card.getByTestId('camera-time-set').click();

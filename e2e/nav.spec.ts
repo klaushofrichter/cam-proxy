@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { ADMIN_TOKEN } from './env';
+import { ADMIN_TOKEN, CLIENT_TOKEN } from './env';
 
 // Page navigation like cams: a collapsible sidebar on desktop, a hamburger
 // drawer on phones (767 px and narrower).
@@ -163,4 +163,39 @@ test.describe('phone', () => {
     await expect(page.getByTestId('hamburger')).toHaveAttribute('aria-expanded', 'false');
     expect(await page.evaluate(() => document.body.style.overflow)).toBe('');
   });
+});
+
+// Klaus 2026-11-06: the camera pages name the camera in their title; Settings
+// is split into Proxy settings and Camera settings; Status and Maintenance
+// have a "Camera: <name>" section and a "Proxy" section.
+test('camera pages name the camera; settings are split into proxy and camera', async ({ page }) => {
+  await open(page);
+  const [cam] = (await (await page.request.get('/api/cameras', { headers: { Authorization: `Bearer ${CLIENT_TOKEN}` } })).json()) as { id: string; name: string }[];
+  const name = cam.name ?? cam.id;
+  for (const [id, title] of [['events', 'Events'], ['timeline', 'Timeline'], ['clips', 'Clips'], ['camera-settings', 'Camera settings']] as const) {
+    await page.getByTestId(`nav-${id}`).click();
+    await expect(page.getByTestId('page-title')).toHaveText(`${title}: ${name}`);
+  }
+  // Camera settings: the camera's rows and cards, nothing of the proxy's.
+  await expect(page.getByTestId('camera-time-card')).toBeVisible();
+  await expect(page.getByTestId(`input-cameras.${cam.id}.host`)).toBeVisible();
+  await expect(page.getByTestId('analytics-settings')).toHaveCount(0);
+  await expect(page.getByTestId('input-sse.pingS')).toHaveCount(0);
+  await page.getByTestId('nav-settings').click();
+  await expect(page.getByTestId('page-title')).toHaveText('Proxy settings');
+  await expect(page.getByTestId('nav-settings')).toContainText('Proxy settings');
+  await expect(page.getByTestId('analytics-settings')).toBeVisible();
+  await expect(page.getByTestId('input-sse.pingS')).toBeVisible();
+  await expect(page.getByTestId('camera-time-card')).toHaveCount(0);
+  await expect(page.getByTestId(`input-cameras.${cam.id}.host`)).toHaveCount(0);
+  for (const p of ['status', 'maintenance']) {
+    await page.getByTestId(`nav-${p}`).click();
+    await expect(page.getByTestId(`${p}-camera-section`)).toHaveText(`Camera: ${name}`);
+    await expect(page.getByTestId(`${p}-proxy-section`)).toHaveText('Proxy');
+  }
+  // The camera's cards and actions sit under its heading.
+  const below = async (a: string, b: string) => (await page.getByTestId(a).boundingBox())!.y < (await page.getByTestId(b).boundingBox())!.y;
+  expect(await below('maintenance-camera-section', 'action-camera-test')).toBe(true);
+  expect(await below('action-camera-test', 'maintenance-proxy-section')).toBe(true);
+  expect(await below('maintenance-proxy-section', 'action-restart-proxy')).toBe(true);
 });

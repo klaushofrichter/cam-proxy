@@ -27,6 +27,13 @@ export const cameraIds = (s: Status | null): string[] => s?.cameras?.map((c) => 
 export const multiCamera = (s: Status | null): boolean => cameraIds(s).length > 1;
 export const pickCamera = (ids: string[], selected: string | null): string | null => (selected && ids.includes(selected) ? selected : (ids[0] ?? null));
 
+// The picked camera's name for a page title ("Clips: Backyard Right"), else
+// its id; '' before the status is known (Klaus 2026-11-06).
+export function cameraTitle(s: Status | null, id: string | null): string {
+  const b = s?.cameras?.length ? blockOf(s, id) : null;
+  return b ? (b.camera.name ?? b.id) : '';
+}
+
 export function blockOf(s: Status | null, id: string | null): CameraBlock | null {
   if (!s) return null;
   const found = s.cameras?.find((c) => c.id === pickCamera(cameraIds(s), id));

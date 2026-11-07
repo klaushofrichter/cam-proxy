@@ -43,6 +43,7 @@ test('a setting from PI_ADDRESS is read-only on the Settings page', async ({ pag
   await expect(page.getByTestId('input-ftp.publicHost')).toHaveValue('127.0.0.1');
   // server.port (8480 by default) makes the URL; the e2e harness listens elsewhere.
   await expect(page.getByTestId('input-server.publicUrl')).toHaveValue('http://127.0.0.1:8480');
-  // camera.host still comes from config.json: editable.
+  // camera.host still comes from config.json: editable (on the camera's page).
+  await page.goto('/#/camera-settings');
   await expect(page.getByTestId('input-cameras.cam1.host')).toBeEnabled();
 });

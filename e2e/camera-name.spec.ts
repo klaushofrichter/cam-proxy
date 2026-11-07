@@ -30,7 +30,7 @@ test("the Status card shows the camera's name, and follows a rename made elsewhe
 });
 
 test('the Settings field validates as you type and saves on the camera', async ({ page }) => {
-  await page.goto('/#/settings');
+  await page.goto('/#/camera-settings');
   const row = page.getByTestId('setting-camera-name');
   await expect(row).toContainText('Camera name (stored on the camera)');
   const input = page.getByTestId('input-camera-name');
@@ -54,7 +54,7 @@ test('the Settings field validates as you type and saves on the camera', async (
 });
 
 test("a camera refusal shows the 400's reason under the field", async ({ page, request }) => {
-  await page.goto('/#/settings');
+  await page.goto('/#/camera-settings');
   const input = page.getByTestId('input-camera-name');
   await expect(input).toHaveValue('Front Door (1)', { timeout: 15000 });
   // The next SetDevName fails with -54, once.
