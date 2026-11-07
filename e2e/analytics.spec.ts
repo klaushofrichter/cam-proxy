@@ -252,6 +252,44 @@ test('an answer with nothing relevant: the tag and the modal say so; show all li
   await expect(modal).toHaveCount(0);
 });
 
+// Settings layout (Klaus 2026-11-06): the switch beside the heading, the current
+// and the custom key on one line, and a help tip on each limit that says what it counts.
+test('the Google Vision settings show the current key beside the custom key, and help on each limit', async ({ page }) => {
+  await signIn(page);
+  await page.getByTestId('nav-settings').click();
+  const key = page.getByTestId('analytics-key');
+  await expect(key).toContainText('Current key: e2e-…cret');
+  const input = page.getByTestId('analytics-key-input');
+  // One line: the current key and the custom key field share a row.
+  const [k, i] = [await key.boundingBox(), await input.boundingBox()];
+  expect(Math.abs(k!.y + k!.height / 2 - (i!.y + i!.height / 2))).toBeLessThan(12);
+  await expect(page.getByText('Custom Google Vision key')).toBeVisible();
+  const [h, s] = [await page.getByRole('heading', { name: 'Google Vision' }).boundingBox(), await page.getByTestId('analytics-enabled').boundingBox()];
+  expect(Math.abs(h!.y + h!.height / 2 - (s!.y + s!.height / 2))).toBeLessThan(12);
+  const help = {
+    monthly: 'every camera of this proxy together',
+    daily: 'every camera together',
+    checks: 'per camera, not for all cameras together',
+    'per-camera': 'one camera may make in a day: its automatic analyses and its still checks together',
+  };
+  for (const [id, text] of Object.entries(help)) {
+    const tip = page.getByTestId(`analytics-${id}-help-text`);
+    await expect(tip).toBeHidden();
+    await page.getByTestId(`analytics-${id}-help`).hover();
+    await expect(tip).toBeVisible();
+    await expect(tip).toContainText(text);
+    await page.mouse.move(0, 0);
+  }
+  // The Camera time card names the camera by its name, not its id.
+  const headers = { Authorization: `Bearer ${CLIENT_TOKEN}` };
+  const [cam] = (await (await page.request.get('/api/cameras', { headers })).json()) as { id: string; name: string }[];
+  if (cam.name !== cam.id) await expect(page.getByTestId('camera-time-text')).toContainText(`Sets ${cam.name}'s time zone`);
+  // A click keeps it open (touch screens have no hover).
+  await page.getByTestId('analytics-checks-help').click();
+  await page.mouse.move(0, 0);
+  await expect(page.getByTestId('analytics-checks-help-text')).toBeVisible();
+});
+
 // Issue #70: a key set on the Settings page is in use at once, with a notice
 // that it is not saved. The same key as the environment's, so the specs after
 // this one see no difference.
