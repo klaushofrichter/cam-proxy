@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/strict/commands/switch.forget.result.schema.json",
+  "title": "switch.forget result v1",
+  "type": "object",
+  "properties": {
+    "forgot": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "forgot"
+  ],
+  "additionalProperties": false
+}

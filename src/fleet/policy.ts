@@ -1,5 +1,6 @@
 import { ConfigError } from '../config/load-error';
 import type { EnvLayer } from '../config/env';
+import { ALLOW_MAX } from './heartbeat';
 import { PrivateFileInvalid, PrivateFileUnsafe, readPrivateJson, writePrivateJson } from './private-file';
 
 // M §8.6: camera actions cams-admin may ask for (each its own allow entry),
@@ -19,7 +20,7 @@ export const DISRUPTIVE_ACTIONS = ['restart', 'camera-reboot', 'camera-powercycl
 // What the journal budget counts: the disruptive actions, and camera-ftp-off
 // (disruptive in the contract; journaled by a version that ran it).
 export const BUDGETED_ACTIONS: ReadonlySet<string> = new Set([...DISRUPTIVE_ACTIONS, 'camera-ftp-off']);
-export const DISRUPTIVE_ENTRIES: ReadonlySet<string> = new Set(['proxy.restart', ...DISRUPTIVE_ACTIONS.map((a) => `camera.action:${a}`)]);
+export const DISRUPTIVE_ENTRIES: ReadonlySet<string> = new Set(['proxy.restart', 'switch.cycle', ...DISRUPTIVE_ACTIONS.map((a) => `camera.action:${a}`)]);
 // Issue #227 (Klaus, 2026-10-21): what an admin UI session from a cams-admin
 // sign-in link (managed-admin) may also do on this proxy, unlocked here by the
 // local admin like a command (src/api/auth.ts enforces them). No command:
@@ -32,8 +33,12 @@ export const UI_ENTRIES = ['ui.config', 'ui.restart'] as const;
 export const MOVE_ENTRIES = ['move.send', 'move.receive'] as const;
 // Spec 2026-10-30-camera-onboarding-design §4.6: entries on unless the local admin switches them off (policy.json `off`); a read without secrets.
 // analytics.usage.get (cams-admin Vision management design 2026-11-05): the Google Vision settings and use, never the key.
-export const DEFAULT_ON: readonly string[] = ['camera.onboarding.get', 'analytics.usage.get'];
-export const ALLOW_ENTRIES: readonly string[] = ['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`), ...MOVE_ENTRIES, ...UI_ENTRIES, ...DEFAULT_ON];
+// camera.power.* (spec 2026-11-07-poe-switches-design): cams-admin's notices about a camera's power and its power-cycles; they cut nothing.
+export const POWER_ENTRIES = ['camera.power.set', 'camera.power.cycling', 'camera.power.cycled', 'camera.power.cycle.result'] as const;
+export const DEFAULT_ON: readonly string[] = ['camera.onboarding.get', 'analytics.usage.get', ...POWER_ENTRIES];
+// PoE switches (spec 2026-11-07-poe-switches-design): each command its own entry, local, off by default; switch.cycle cuts a camera's power.
+export const SWITCH_ENTRIES = ['switch.read', 'switch.locate', 'switch.survey', 'switch.cycle', 'switch.poeOn', 'switch.forget'] as const;
+export const ALLOW_ENTRIES: readonly string[] = ['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`), ...MOVE_ENTRIES, ...SWITCH_ENTRIES, ...UI_ENTRIES, ...DEFAULT_ON];
 // The move commands by the entry they need; move.finish and move.cancel by their args.role (entryFor).
 const MOVE_SEND = ['move.targets', 'move.open', 'move.answer', 'move.go', 'move.release', 'move.begin', 'move.summary', 'move.return.start'];
 const MOVE_RECEIVE = ['move.offer', 'move.start', 'move.return.open'];
@@ -41,7 +46,7 @@ export const MOVE_COMMANDS: readonly string[] = [...MOVE_SEND, ...MOVE_RECEIVE, 
 export const isMoveCommand = (command: string): boolean => MOVE_COMMANDS.includes(command);
 // What this version runs (P2, P3): command names and allow entries. The
 // heartbeat reports allow ∩ IMPLEMENTED.
-export const IMPLEMENTED: ReadonlySet<string> = new Set(['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`), ...MOVE_COMMANDS, ...MOVE_ENTRIES, ...DEFAULT_ON]);
+export const IMPLEMENTED: ReadonlySet<string> = new Set(['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`), ...MOVE_COMMANDS, ...MOVE_ENTRIES, ...SWITCH_ENTRIES, ...DEFAULT_ON]);
 // The allow entry a command needs, from its (validated) args: the command's own name,
 // camera.action:<action>, and for the moves the side it acts on (contract step 11:
 // move.finish and move.cancel by args.role, the rest by command). An unreadable role
@@ -79,6 +84,16 @@ export const ENTRY_TEXT: Record<string, string> = {
   'proxy.restart': 'DISRUPTIVE: cams-admin may restart this proxy (at most 2 an hour)',
   'move.send': 'cams-admin may move a camera from this proxy to another proxy of the account, after you approve the move here or in a cams-admin sign-in',
   'move.receive': 'cams-admin may hand this proxy a camera from another proxy of the account: it adds the camera, its password and certificate, and copies its content',
+  'switch.read': "cams-admin may read the ports of a PoE switch this proxy operates (PoE, watts, link, rates; the switch's password stays here)",
+  'switch.locate': 'cams-admin may find which switch port a camera is on (a short ping burst to the camera; read only)',
+  'switch.survey': 'cams-admin may find the switch ports of several cameras, one after another (read only)',
+  'switch.cycle': "DISRUPTIVE: cams-admin may cut a camera's PoE power at the switch for a few seconds and turn it on again (checked first that the camera is on that port, unless a person forces it)",
+  'switch.poeOn': 'cams-admin may turn PoE on at a switch port (recovery)',
+  'switch.forget': "cams-admin may make this proxy forget a PoE switch and its stored password",
+  'camera.power.set': "cams-admin may tell this proxy how a camera is powered (its switch and port, for display; no secrets)",
+  'camera.power.cycling': "cams-admin may tell this proxy that a camera's PoE was cut (the camera shows as power-cycling, its token is dropped and the reboot cooldown starts)",
+  'camera.power.cycled': "cams-admin may tell this proxy that a camera's PoE is on again, or that the power-cycle failed",
+  'camera.power.cycle.result': "cams-admin may answer a power-cycle asked for on this proxy's Maintenance page",
   'ui.config': "a cams-admin sign-in (one-time link) may change this proxy's settings on the Settings page and reset them to config.json's value; never addresses, ports, files, trust, users, cams-admin itself, storage limits or Google Vision's ceiling for cams-admin; retention only longer, spending caps only lower, Google Vision on and its monthly limit higher only within that ceiling",
   'ui.restart': 'DISRUPTIVE: a cams-admin sign-in (one-time link) may restart this proxy and its camera side',
   'camera.onboarding.get': "cams-admin may read each camera's onboarding status (no secrets)",
@@ -101,7 +116,7 @@ export function sessionUnlocked(p: EffectivePolicy): string[] {
 
 // `stored`: a list an earlier version wrote (policy.json, config.json): retired entries are dropped.
 export function validateAllowList(list: unknown, where: string, stored = false): string[] {
-  if (!Array.isArray(list) || list.length > 32) throw new ConfigError(`${where}: a list of at most 32 command names`);
+  if (!Array.isArray(list) || list.length > ALLOW_MAX) throw new ConfigError(`${where}: a list of at most ${ALLOW_MAX} command names`);
   const kept = stored ? list.filter((e) => !(typeof e === 'string' && RETIRED_ENTRIES.has(e))) : list;
   for (const e of kept) if (typeof e !== 'string' || !ALLOW_ENTRIES.includes(e)) throw new ConfigError(`${where}: ${typeof e === 'string' ? e.slice(0, 64) : typeof e} is not a command cams-admin may be allowed`);
   return [...new Set(kept as string[])];

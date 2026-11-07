@@ -2,15 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { PoeSwitch } from '../src/camera/poe-switch';
 import { fakeSwitch } from './helpers/fake-switch';
 
-const host = { model: 'sscpoe-web' as const, host: 'fake', ports: 8, offSeconds: 5 };
+const host = { id: 'sw_test', model: 'sscpoe-web' as const, host: 'fake', ports: 8, offSeconds: 5 };
 
 describe('one PoE controller per host (spec 2026-10-05-multi-camera-host-design §8.4)', () => {
   it('queue: the second waits; beyond the bound switch_busy', async () => {
     const sw = fakeSwitch();
     let releaseOff!: () => void;
     // The off time of the first cycle holds the switch until released.
-    const p = new PoeSwitch({ config: () => host, password: () => 'pw', driver: () => sw.driver, sleep: (ms) => (ms >= 5000 ? new Promise<void>((r) => (releaseOff = r)) : Promise.resolve()), queueWaitMs: () => 200 });
-    const first = p.cycle(3, () => undefined);
+    const p = new PoeSwitch({ ref: () => host, password: () => 'pw', driver: () => sw.driver, sleep: (ms) => (ms >= 5000 ? new Promise<void>((r) => (releaseOff = r)) : Promise.resolve()), queueWaitMs: () => 200 });
+    const first = p.cycle(3, () => undefined, { verifyHost: null });
     await new Promise((r) => setTimeout(r, 20));
     const second = p.read(4, { fresh: true });
     const late = new Promise((r) => setTimeout(r, 300)).then(() => p.read(5, { fresh: true }));
@@ -23,8 +23,8 @@ describe('one PoE controller per host (spec 2026-10-05-multi-camera-host-design 
 
   it('a waiting request runs after the first, in order', async () => {
     const sw = fakeSwitch();
-    const p = new PoeSwitch({ config: () => host, password: () => 'pw', driver: () => sw.driver, sleep: async () => undefined });
-    const [a, b] = await Promise.all([p.cycle(3, () => undefined), p.read(4, { fresh: true })]);
+    const p = new PoeSwitch({ ref: () => host, password: () => 'pw', driver: () => sw.driver, sleep: async () => undefined });
+    const [a, b] = await Promise.all([p.cycle(3, () => undefined, { verifyHost: null }), p.read(4, { fresh: true })]);
     expect(a.watts).toBeGreaterThan(0);
     expect(b.port).toBe(4);
     expect(sw.log.indexOf('poe 2 on')).toBeLessThan(sw.log.lastIndexOf('login'));
@@ -33,7 +33,7 @@ describe('one PoE controller per host (spec 2026-10-05-multi-camera-host-design 
   it('one read serves every port for 10 s (Ruling P2-7)', async () => {
     let t = 0;
     const sw = fakeSwitch();
-    const p = new PoeSwitch({ config: () => host, password: () => 'pw', driver: () => sw.driver, now: () => t, sleep: async () => undefined });
+    const p = new PoeSwitch({ ref: () => host, password: () => 'pw', driver: () => sw.driver, now: () => t, sleep: async () => undefined });
     await p.read(3);
     await p.read(4);
     expect(sw.log.filter((l) => l === 'login')).toHaveLength(1);
@@ -44,7 +44,7 @@ describe('one PoE controller per host (spec 2026-10-05-multi-camera-host-design 
 
   it('per-port state; the port handle is a camera view', async () => {
     const sw = fakeSwitch();
-    const p = new PoeSwitch({ config: () => host, password: () => 'pw', driver: () => sw.driver, sleep: async () => undefined });
+    const p = new PoeSwitch({ ref: () => host, password: () => 'pw', driver: () => sw.driver, sleep: async () => undefined });
     sw.poe[5] = false;
     await p.read(6, { fresh: true });
     expect(p.status(6).poeMaybeOff).toBe(true);
@@ -58,7 +58,7 @@ describe('one PoE controller per host (spec 2026-10-05-multi-camera-host-design 
 
   it('stop: every port left dark is named', async () => {
     const sw = fakeSwitch();
-    const p = new PoeSwitch({ config: () => host, password: () => 'pw', driver: () => sw.driver, sleep: async () => undefined });
+    const p = new PoeSwitch({ ref: () => host, password: () => 'pw', driver: () => sw.driver, sleep: async () => undefined });
     sw.poe[2] = false;
     sw.poe[4] = false;
     await p.read(3, { fresh: true });
@@ -69,8 +69,8 @@ describe('one PoE controller per host (spec 2026-10-05-multi-camera-host-design 
   it('stop waits for the session that runs, also when a later request gave up waiting', async () => {
     const sw = fakeSwitch();
     let releaseOff!: () => void;
-    const p = new PoeSwitch({ config: () => host, password: () => 'pw', driver: () => sw.driver, sleep: (ms) => (ms >= 5000 ? new Promise<void>((r) => (releaseOff = r)) : Promise.resolve()), queueWaitMs: () => 50, stopWaitMs: 2000 });
-    const first = p.cycle(3, () => undefined);
+    const p = new PoeSwitch({ ref: () => host, password: () => 'pw', driver: () => sw.driver, sleep: (ms) => (ms >= 5000 ? new Promise<void>((r) => (releaseOff = r)) : Promise.resolve()), queueWaitMs: () => 50, stopWaitMs: 2000 });
+    const first = p.cycle(3, () => undefined, { verifyHost: null });
     await new Promise((r) => setTimeout(r, 20));
     await expect(p.read(4, { fresh: true })).rejects.toMatchObject({ code: 'switch_busy' });
     void releaseOff;

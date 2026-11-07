@@ -10,6 +10,7 @@
   import PoeSwitchCard from '../components/PoeSwitchCard.svelte';
   import ProfileCard from '../components/ProfileCard.svelte';
   import FindCameraCard from '../components/FindCameraCard.svelte';
+  import PoeSwitchesCard from '../components/PoeSwitchesCard.svelte';
   import { timeSetText } from '../lib/onboarding';
   import { envNote, isEnvSet } from '../lib/find-camera';
   import { lockedWhy, narrowWhy, resetKeeps, rights, settingLockedWhy, settingsNote } from '../lib/rights';
@@ -227,6 +228,7 @@
   {#if proxyPage}
   {#each leftovers as l (l.id)}<p class="muted small" data-testid="moved-{l.id}">{l.id}: {movedText($moves.find((m) => m.id === l.moveId)?.target.name ?? 'another proxy', l.moveId)}</p>{/each}
   <ProfileCard />
+  <PoeSwitchesCard />
   <AnalyticsSettings {view} onsaved={(v) => (view = v as Record<string, Setting>)} />
   <FindCameraCard onadd={(h) => { addHost = h; document.querySelector('[data-testid="add-camera"]')?.scrollIntoView({ behavior: 'smooth' }); }} />
   {/if}

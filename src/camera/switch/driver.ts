@@ -5,8 +5,25 @@ export { SwitchRefusal } from './errors';
 // §8.4): log in, read the ports, set one port's PoE, log out, and whether the
 // switch takes only one web session at a time. A new model is a driver here.
 
-// The ports by the switch's internal index.
-export interface SwitchDetail { poe: boolean[]; watts: number[]; link: (boolean | null)[]; sn: string | null; firmware: string | null }
+// The ports by the switch's internal index. tx/rx: the current rates (not
+// counters), one per index, also past the PoE ports (sscpoe-web: index 9 is
+// the uplink); 0 when the switch sent none.
+export interface SwitchDetail { poe: boolean[]; watts: number[]; link: (boolean | null)[]; tx: number[]; rx: number[]; sn: string | null; firmware: string | null }
+
+// A switch as cams-admin sends it (contract switchRef; vendored in a later
+// step, spec 2026-11-07-poe-switches-design).
+export interface SwitchRef { id: string; model: 'sscpoe-web'; host: string; ports: number; offSeconds: number }
+
+// Where a camera's traffic showed up (contract switch.locate result).
+export interface LocateResult {
+  found: boolean;
+  port?: number;
+  poe?: boolean;
+  watts?: number;
+  link?: boolean | null;
+  reason?: 'not_reachable' | 'ambiguous' | 'no_traffic';
+  ratio?: number;
+}
 
 export interface SwitchSession {
   login(password: string): Promise<void>;

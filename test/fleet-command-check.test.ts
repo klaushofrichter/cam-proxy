@@ -288,6 +288,18 @@ describe('P3: entries, args and budgets', () => {
     expect(kind('proxy.restart', { v: 1 }, c3(['proxy.restart'], { journalBudget: journalBudgetOf(countOf(journal.slice(1)), NOW) }))).toBe('run');
     expect(kind('proxy.restart', { v: 1 }, c3(['proxy.restart'], { journalBudget: journalBudgetOf(countOf(journal), NOW + 51 * 60_000) }))).toBe('run');
   });
+  it('step 11: switch.cycle counts in the same pool: the 7th disruptive command in an hour is rate_limited like a 7th camera action', () => {
+    const sw = { v: 1, switch: { id: 'sw_abcdefghijABCDEFGHIJ', model: 'sscpoe-web', host: '192.0.2.217', ports: 8, offSeconds: 10 }, port: 8, host: null, force: true, camera: 'cam_0123456789ABCDEFGHJK' };
+    const six = Array.from({ length: 6 }, (_, i) => ({ command: 'switch.cycle', at: NOW - (i + 1) * 60_000 }));
+    const b = journalBudgetOf(countOf(six), NOW);
+    const d = checkCommand(p3('switch.cycle', sw), c3(allowAll, { journalBudget: b }));
+    expect(d).toMatchObject({ kind: 'nack', code: 'rate_limited', retryAfterS: expect.any(Number) });
+    expect(checkCommand(p3('camera.action', { v: 1, camera: 'cam2', action: 'camera-powercycle' }), c3(allowAll, { journalBudget: b }))).toMatchObject({ kind: 'nack', code: 'rate_limited', retryAfterS: (d as { retryAfterS: number }).retryAfterS });
+    expect(kind('switch.cycle', sw, c3(allowAll, { journalBudget: journalBudgetOf(countOf(six.slice(1)), NOW) }))).toBe('run');
+    const mixed = [...six.slice(0, 3), ...Array.from({ length: 3 }, (_, i) => ({ command: 'camera.action', action: 'camera-reboot', at: NOW - (i + 10) * 60_000 }))];
+    expect(kind('switch.cycle', sw, c3(allowAll, { journalBudget: journalBudgetOf(countOf(mixed), NOW) }))).toBe('rate_limited');
+    expect(kind('switch.read', { v: 1, switch: sw.switch }, c3(allowAll, { journalBudget: b }))).toBe('run');
+  });
   it('step 11: six disruptive camera actions an hour per proxy, any camera; non-disruptive ones are not counted', () => {
     const six = Array.from({ length: 6 }, (_, i) => ({ command: 'camera.action', action: i % 2 ? 'camera-reboot' : 'camera-ntp-set', at: NOW - (i + 1) * 60_000 }));
     const b = journalBudgetOf(countOf(six), NOW);

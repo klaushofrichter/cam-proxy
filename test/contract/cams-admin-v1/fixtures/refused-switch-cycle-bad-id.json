@@ -1,0 +1,53 @@
+{
+  "$note": "a switch id is sw_ and 20 letters or digits (strict args refuse)",
+  "schema": "command",
+  "$context": {
+    "now": 1791273600010,
+    "proxyId": "prx_0123456789ABCDEFGHJK",
+    "connId": "con_0123456789ABCDEFGHJK",
+    "serverKeys": [
+      "MCowBQYDK2VwAyEAgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q="
+    ],
+    "allow": [
+      "switch.cycle"
+    ],
+    "paused": false,
+    "seen": [],
+    "feature": "poe"
+  },
+  "$expect": {
+    "runtime": "invalid_args",
+    "strict": "valid",
+    "receiver": "proxy"
+  },
+  "message": {
+    "v": 1,
+    "type": "command",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "exp": 1791273660003,
+      "actor": "admin@example.org",
+      "command": "switch.cycle",
+      "args": {
+        "v": 1,
+        "switch": {
+          "id": "sw_x",
+          "model": "sscpoe-web",
+          "host": "192.0.2.217",
+          "ports": 8,
+          "offSeconds": 10
+        },
+        "port": 8,
+        "host": null,
+        "force": false,
+        "camera": "cam_0123456789ABCDEFGHJK"
+      }
+    },
+    "sig": "uY44JoWVd4AIR/6tWGwO6UGQgbmllvwV3gmR6r3rq16wZlsYspdUUj0RJLVx4vZbBp9CLQc3jk7CvAYFcp35AQ=="
+  }
+}

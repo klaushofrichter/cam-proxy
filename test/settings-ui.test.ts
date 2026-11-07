@@ -1,4 +1,7 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { describe, expect, it } from 'vitest';
+import { poeOnLabel, poeOnText, switchLine } from '../web/src/lib/switches';
 import { parseSetting, resetCounts, resetLabel, resetPlan, sameBadge, settingText } from '../web/src/lib/settings';
 
 // The Settings page turns its text fields into the setting's type (#85: an
@@ -92,5 +95,27 @@ describe('Settings page: honest Reset', () => {
     ]);
     expect(resetCounts(view)).toEqual({ changes: 2, same: 2 });
     expect(resetPlan({ 'sse.pingS': view['camera.poeSwitch.ports'] })).toEqual(['1 override equal to the default is removed too, no change in effect: sse.pingS']);
+  });
+});
+
+// The PoE switches card (spec 2026-11-07-poe-switches-design): the password is only ever set, never shown.
+describe('Settings page: PoE switches card', () => {
+  const sw = { id: 'sw_a', model: 'sscpoe-web', host: '192.168.1.217', ports: 8, offSeconds: 10, busy: false, poeMaybeOff: [5] };
+  it('says whether the password is set', () => {
+    expect(switchLine({ ...sw, passwordSet: true })).toBe('192.168.1.217 · 8 ports · password set');
+    expect(switchLine({ ...sw, passwordSet: false })).toBe('192.168.1.217 · 8 ports · no password yet');
+  });
+  it('words the per-port PoE on', () => {
+    expect(poeOnLabel(5)).toBe('Turn PoE on (port 5)');
+    expect(poeOnText(5, false)).toBe('PoE turned on at port 5.');
+    expect(poeOnText(5, true)).toBe('Port 5 had PoE on already.');
+  });
+});
+
+describe('PoE switches card: the password field', () => {
+  it('is a new password to the browser (never filled with the saved proxy login)', () => {
+    const src = readFileSync(join(__dirname, '..', 'web', 'src', 'components', 'PoeSwitchesCard.svelte'), 'utf8');
+    const input = /<input[^>]*data-testid="switch-password-input"[^>]*>/.exec(src)?.[0] ?? '';
+    expect(input).toContain('autocomplete="new-password"');
   });
 });

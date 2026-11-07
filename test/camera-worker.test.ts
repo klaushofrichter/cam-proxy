@@ -12,7 +12,7 @@ import { AuditLog } from '../src/audit/audit-log';
 import { CameraWorker, type WorkerDeps } from '../src/cameras/worker';
 import { CameraRegistry } from '../src/cameras/registry';
 import { CachePool } from '../src/recordings/pool';
-import { PoeSwitch } from '../src/camera/poe-switch';
+import { legacyRef, PoeSwitch } from '../src/camera/poe-switch';
 import { ADMIN_TOKEN, CLIENT_TOKEN, freePort, until } from './helpers/proxy';
 import { logBuffer } from '../src/log';
 import type { Go2rtc, StreamSource } from '../src/stills/go2rtc';
@@ -43,7 +43,7 @@ function worker(o: { host?: string; over?: Partial<WorkerDeps>; stills?: boolean
   const audit = new AuditLog({ dir: join(running.server.dataDir, 'audit'), version: 'test' });
   const storage = new Storage({ catalog, log, config: () => running, audit });
   const w = new CameraWorker({
-    id: 'cam1', running: () => running, password: () => sim.password, poe: new PoeSwitch({ config: () => running.poeSwitch, password: () => undefined }),
+    id: 'cam1', running: () => running, password: () => sim.password, poe: new PoeSwitch({ ref: () => legacyRef(running.poeSwitch), password: () => undefined }),
     ftpTarget: () => ({ server: '', port: 2121, user: 'camera', password: '', tls: true, stream: 'main' }),
     go2rtc: () => undefined,
     cachePool: new CachePool(() => running.recordings.cacheMB * 2 ** 20),

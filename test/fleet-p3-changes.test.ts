@@ -73,7 +73,7 @@ describe('cams-admin changes on the proxy', () => {
     expect(r.groups.signin).toEqual(['ui.config', 'ui.restart']);
     expect(r.implemented).toEqual(expect.arrayContaining(['ui.config', 'ui.restart']));
     for (const e of r.groups.disruptive) expect(r.known.find((k: { entry: string }) => k.entry === e).text, e).toMatch(/^DISRUPTIVE: /);
-    expect(r.allow).toEqual(['tokens.apply', 'camera.onboarding.get', 'analytics.usage.get']);
+    expect(r.allow).toEqual(['tokens.apply', 'camera.onboarding.get', 'analytics.usage.get', 'camera.power.set', 'camera.power.cycling', 'camera.power.cycled', 'camera.power.cycle.result']);
     // I3: the P3 entries a P2 version stored wait for a fresh local tick.
     expect(r.unconfirmed).toEqual(['config.set', 'proxy.restart']);
   });

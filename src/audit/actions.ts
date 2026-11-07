@@ -4,6 +4,7 @@
 export const AUDIT_ACTIONS = [
   'proxy-start', 'proxy-stop', 'proxy-restart',
   'camera-reboot', 'camera-powercycle', 'camera-poe-on', 'camera-check', 'camera-name', 'camera-address', 'camera-cert-push', 'camera-trust', 'camera-ntp', 'camera-password', 'camera-probe', 'camera-add', 'camera-remove', 'camera-host-change', 'camera-time',
+  'switch-password', 'switch-port-poe-on', 'switch-port-cycled', 'switch-forgotten',
   'login', 'logout', 'login-link-issued', 'auth-refused', 'ftp-login-refused',
   'control-action', 'config-change', 'secret-override',
   'still-check', 'event-analysis', 'composition', 'ptz-position', 'camera-settings', 'camera-light',

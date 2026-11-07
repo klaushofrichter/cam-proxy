@@ -7,6 +7,8 @@ import type { SwitchDriver, SwitchSession } from '../../src/camera/switch/driver
 export function fakeSwitch(o: { ports?: number; watts?: number } = {}) {
   const n = o.ports ?? 8;
   const poe = Array.from({ length: n }, () => true);
+  const tx = Array.from({ length: n }, () => 1); // the current rates, settable
+  const rx = Array.from({ length: n }, () => 1);
   let open = 0;
   const log: string[] = [];
   const driver: SwitchDriver = {
@@ -25,7 +27,7 @@ export function fakeSwitch(o: { ports?: number; watts?: number } = {}) {
         async relogin() {},
         async detail() {
           log.push('detail');
-          return { poe: [...poe], watts: poe.map((on) => (on ? (o.watts ?? 4.5) : 0)), link: poe.map(() => true), sn: 'FAKE', firmware: '1' };
+          return { poe: [...poe], watts: poe.map((on) => (on ? (o.watts ?? 4.5) : 0)), link: poe.map(() => true), tx: [...tx], rx: [...rx], sn: 'FAKE', firmware: '1' };
         },
         async setPoe(index, on) {
           log.push(`poe ${index} ${on ? 'on' : 'off'}`);
@@ -39,5 +41,5 @@ export function fakeSwitch(o: { ports?: number; watts?: number } = {}) {
       };
     },
   };
-  return { driver, poe, sessions: () => open, log };
+  return { driver, poe, tx, rx, sessions: () => open, log };
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildHealth, type CameraHealthInput } from '../src/health/summary';
-import { buildHeartbeat, changeKeyOf, HEARTBEAT_MAX_BYTES, type HeartbeatProxyInfo } from '../src/fleet/heartbeat';
+import { ALLOW_ENTRIES } from '../src/fleet/policy';
+import { ALLOW_MAX, buildHeartbeat, changeKeyOf, HEARTBEAT_MAX_BYTES, type HeartbeatProxyInfo } from '../src/fleet/heartbeat';
 import { buildEnvelope } from '../src/fleet/protocol';
 import { input, NOW } from './helpers/health-input';
 import { strict, why } from './helpers/contract';
@@ -34,6 +35,14 @@ describe('the heartbeat body on the strict contract', () => {
     expect(hb.body).toMatchObject({ truncated: false, proxy: PI_INFO });
     const r = valid(hb.body);
     expect(r.ok, r.why).toBe(true);
+  });
+
+  it('a 38-entry allow list is reported whole (the contract caps it at 64)', () => {
+    const allow = [...ALLOW_ENTRIES];
+    expect(allow).toHaveLength(38);
+    const hb = buildHeartbeat(buildHealth(input()), { ...PI_INFO, commands: { enabled: true, paused: false, pauseReason: null, allow: [...allow], seenWindow: 1000 } });
+    expect((hb.body.proxy as { commands: { allow: string[] } }).commands.allow).toEqual(allow);
+    expect(ALLOW_MAX).toBe(64);
   });
 
   // #199: the camera's SD card (camera.sd, the sd item, a warning item and a problem one, several cameras).
@@ -92,10 +101,10 @@ describe('the P2 proxy fields', () => {
     expect(Object.keys(hb.body.proxy as object).sort()).toEqual(['configSchema', 'publicUrl', 'startedAt', 'tls', 'uptimeS']);
   });
   it('present: clamped to the contract bounds, on the strict schema', () => {
-    const allow = Array.from({ length: 40 }, () => 'tokens.apply');
+    const allow = Array.from({ length: 70 }, () => 'tokens.apply');
     const hb = buildHeartbeat(buildHealth(input()), { ...PI_INFO, commands: { enabled: true, paused: true, pauseReason: 'r'.repeat(300), allow, seenWindow: 1000 }, tokens: { revision: 3, client: 1, admin: 0, blocked: Array.from({ length: 70 }, (_, i) => `tok_${String(i).padStart(20, '0')}`) }, configRevision: `sha256:${'a'.repeat(64)}` });
     const p = hb.body.proxy as { commands: { allow: string[]; pauseReason: string }; tokens: { blocked: string[] }; configRevision: string };
-    expect(p.commands.allow).toHaveLength(32);
+    expect(p.commands.allow).toHaveLength(ALLOW_MAX);
     expect(p.commands.pauseReason).toHaveLength(200);
     expect(p.tokens.blocked).toHaveLength(64);
     const v = strict('heartbeat');

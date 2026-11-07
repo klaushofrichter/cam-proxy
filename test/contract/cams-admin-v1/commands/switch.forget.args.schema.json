@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/commands/switch.forget.args.schema.json",
+  "title": "switch.forget args v1",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "switchId": {
+      "type": "string",
+      "pattern": "^sw_[A-Za-z0-9]{20}$"
+    }
+  },
+  "required": [
+    "v",
+    "switchId"
+  ]
+}

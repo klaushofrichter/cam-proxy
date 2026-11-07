@@ -94,6 +94,39 @@
               "pattern": "^con_[0-9A-HJKMNP-TV-Z]{20}$"
             },
             "kind": {
+              "const": "camera.power.cycle.request"
+            },
+            "camera": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+            },
+            "requestId": {
+              "type": "string",
+              "maxLength": 64,
+              "minLength": 1
+            }
+          },
+          "required": [
+            "proxyId",
+            "connId",
+            "kind",
+            "camera",
+            "requestId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "proxyId": {
+              "type": "string",
+              "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+            },
+            "connId": {
+              "type": "string",
+              "pattern": "^con_[0-9A-HJKMNP-TV-Z]{20}$"
+            },
+            "kind": {
               "const": "move.targets"
             },
             "requestId": {

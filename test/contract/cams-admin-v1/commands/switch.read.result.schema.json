@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/commands/switch.read.result.schema.json",
+  "title": "switch.read result v1",
+  "type": "object",
+  "properties": {
+    "sn": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 64
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "firmware": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 64
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ports": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 64
+          },
+          "poe": {
+            "type": "boolean"
+          },
+          "watts": {
+            "type": "number"
+          },
+          "link": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tx": {
+            "type": "number"
+          },
+          "rx": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "port",
+          "poe",
+          "watts",
+          "link",
+          "tx",
+          "rx"
+        ]
+      },
+      "maxItems": 64
+    }
+  },
+  "required": [
+    "sn",
+    "firmware",
+    "ports"
+  ]
+}

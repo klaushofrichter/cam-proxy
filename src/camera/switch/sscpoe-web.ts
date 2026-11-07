@@ -7,7 +7,7 @@ import { PoeSwitchError, SwitchRefusal } from './errors';
 // use it, measured on the real switch (~/Development/reolink/poe-switch-gps208.md):
 //   POST http://<switch>/<callcmd>  {"data":{"callcmd":N,"calldata":{…}}}
 //   123 log in {password} → data.calldata.login "success" and the session
-//       cookie; 101 port detail (poec, pw, link by internal index; sn, V);
+//       cookie; 101 port detail (poec, pw, link, tx/rx rates by internal index; sn, V);
 //   103 set one port's PoE {opcode: on<<9 | index<<4 | 2}; 126 log out.
 // The switch has one web session at a time: while someone is logged in to
 // its web UI, every other client's POST is dropped with no answer.
@@ -103,7 +103,7 @@ export class Session {
     // sscpoe: errcode 10002 is multiple_login.
     if (r.errcode === 10002) throw new PoeSwitchError('switch_busy', "the switch refused the login: someone is logged in to the switch's web UI");
     if (r.data?.calldata?.login === 'success') throw new PoeSwitchError('switch_error', 'the switch accepted the login but set no session cookie');
-    throw new PoeSwitchError('switch_auth', 'the switch refused the password (CAMPROXY_POE_SWITCH_PASSWORD)');
+    throw new PoeSwitchError('switch_auth', 'the switch refused the password');
   }
 
   // A new session after a lost one. The cookie goes only after the switch
@@ -156,6 +156,12 @@ export const sscpoeWeb: SwitchDriver = {
         const arr = (k: string) => (Array.isArray(d[k]) ? (d[k] as unknown[]) : []);
         const poec = arr('poec');
         const links = arr('link').length ? arr('link') : arr('lnk');
+        // tx/rx: current rates as strings, one per index (8 ports + uplinks).
+        const rates = (k: string) => Array.from({ length: Math.max(poec.length, arr(k).length) }, (_, i) => {
+          const v = arr(k)[i];
+          const r = typeof v === 'string' || typeof v === 'number' ? Number(v) : NaN;
+          return Number.isFinite(r) && r >= 0 ? r : 0;
+        });
         return {
           poe: poec.map((x) => Number(x) === 1),
           watts: poec.map((_, i) => {
@@ -163,6 +169,8 @@ export const sscpoeWeb: SwitchDriver = {
             return Number.isFinite(w) ? w : 0;
           }),
           link: poec.map((_, i) => (links[i] === undefined ? null : Number(links[i]) > 0)),
+          tx: rates('tx'),
+          rx: rates('rx'),
           sn: typeof d.sn === 'string' && d.sn ? d.sn : null,
           firmware: typeof d.V === 'string' ? d.V : null,
         };
