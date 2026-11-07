@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { PoeSwitch, PoeSwitchError } from '../src/camera/poe-switch';
 import type { SwitchDetail } from '../src/camera/switch/driver';
-import { pickPort, pingBurst, type Runner } from '../src/camera/switch/locate';
+import { pickPort, pingBurst, pingHost, type Runner } from '../src/camera/switch/locate';
 import { startPoeSwitchMock, type PoeSwitchMock } from './helpers/poe-switch-mock';
 
 const PASSWORD = 'mock-switch-pw-4711';
@@ -107,6 +107,27 @@ describe('PoeSwitch.locate, survey and the verified cycle (on the mock)', () => 
     expect(slept).toContain(2500);
     expect(m.calls.map((c) => c.cmd)).toEqual([123, 101, 101, 126]);
     expect(m.activeSession()).toBe(false);
+  });
+
+  it('a camera host with :port: only the host part is pinged (locate, survey, verified cycle)', async () => {
+    const { p } = await setup({ '192.0.2.10': 5 });
+    const pinged: string[] = [];
+    const inner = (p as unknown as { d: { pingBurst: (h: string) => { done: Promise<{ answered: boolean }> } } }).d;
+    const burst = inner.pingBurst;
+    inner.pingBurst = (h) => (pinged.push(h), burst(h));
+    expect(await p.locate('192.0.2.10:443')).toMatchObject({ found: true, port: 3 });
+    expect(await p.survey([{ camera: 'cam_3', host: 'cam3.lan:8443' }])).toMatchObject({ results: [{ camera: 'cam_3' }] });
+    await expect(p.cycle(3, () => undefined, { verifyHost: '192.0.2.10:443' })).resolves.toMatchObject({ verified: true });
+    expect(pinged).toEqual(['192.0.2.10', 'cam3.lan', '192.0.2.10']);
+  });
+
+  it('pingHost: the host part of host[:port], IPv6 brackets dropped', () => {
+    expect(pingHost('192.0.2.10')).toBe('192.0.2.10');
+    expect(pingHost('192.0.2.10:443')).toBe('192.0.2.10');
+    expect(pingHost('cam.lan:80')).toBe('cam.lan');
+    expect(pingHost('[fe80::1]:443')).toBe('fe80::1');
+    expect(pingHost('[fe80::1]')).toBe('fe80::1');
+    expect(pingHost('fe80::1')).toBe('fe80::1');
   });
 
   it('locate: a burst with no reply is not_reachable, and the session is logged out', async () => {

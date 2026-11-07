@@ -262,13 +262,24 @@ const SWITCH_ID = /^sw_[A-Za-z0-9]{20}$/;
 const CAMS_ID = /^cam_[0-9A-HJKMNP-TV-Z]{20}$/;
 const camsId = (x: unknown): x is string => typeof x === 'string' && CAMS_ID.test(x);
 const hostStr = (x: unknown): x is string => typeof x === 'string' && x.length >= 1 && x.length <= 253;
+// A switch address: a name (its last label with a letter) or an IPv4 address
+// as four decimal numbers; no port, scheme, path or user part. It goes into
+// the switch's URL (http://<host>/…) with the switch password.
+const HOST_LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
+export const validSwitchHost = (x: unknown): x is string => {
+  if (typeof x !== 'string' || x.length < 1 || x.length > 253) return false;
+  const labels = x.split('.');
+  if (!labels.every((l) => HOST_LABEL.test(l))) return false;
+  if (labels.every((l) => /^[0-9]+$/.test(l))) return labels.length === 4 && labels.every((l) => /^(0|[1-9][0-9]{0,2})$/.test(l) && Number(l) <= 255);
+  return /[A-Za-z]/.test(labels[labels.length - 1]);
+};
 const int = (x: unknown, lo: number, hi: number): x is number => Number.isInteger(x) && (x as number) >= lo && (x as number) <= hi;
 // The only switch model this version drives is sscpoe-web (the registry keeps no other).
 const switchRefProblem = (s: unknown): string | null => {
   if (!isObj(s) || !only(s, ['id', 'model', 'host', 'ports', 'offSeconds'])) return 'switch';
   if (typeof s.id !== 'string' || !SWITCH_ID.test(s.id)) return 'switch.id';
   if (s.model !== 'sscpoe-web') return 'switch.model';
-  if (!hostStr(s.host)) return 'switch.host';
+  if (!validSwitchHost(s.host)) return 'switch.host';
   if (!int(s.ports, 1, 64)) return 'switch.ports';
   if (!int(s.offSeconds, 1, 120)) return 'switch.offSeconds';
   return null;

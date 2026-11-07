@@ -5,7 +5,7 @@
   import { api, ApiError } from '../lib/api';
   import { MB, mbText } from '../lib/format';
   import { REPAIR_MAX_BYTES, REPAIR_MAX_CLIPS } from '../lib/inventory';
-  import { poeAlert, poeOnText, powerCycleDisabled, powerCycleFailText, powerCycleMessage, powerResultText, readHealth, rebootEndText, waitForNewProxy, type PowerView } from '../lib/maintenance';
+  import { poeAlert, poeOnText, powerCycleDisabled, powerCycleFailText, powerWhyText, powerCycleMessage, powerResultText, readHealth, rebootEndText, waitForNewProxy, type PowerView } from '../lib/maintenance';
   import { refresh, refreshTick, status } from '../lib/state';
   import { clearMatches, clearMessage } from '../lib/archive';
   import { actionPath, blockOf, powerPath, selectedCamera } from '../lib/cameras';
@@ -258,7 +258,7 @@
       <button onclick={() => void run('Camera FTP test', 'camera-ftp-test')} disabled={!!locked} data-testid="action-ftp-test">Test the camera's FTP</button>
       <button onclick={() => void run('Camera FTP off', 'camera-ftp-off')} disabled={!!locked} data-testid="action-ftp-off">Turn the camera's FTP off</button>
     </div>
-    {#if power?.why && !locked}<p class="small" data-testid="powercycle-why">Power-cycle: {power.why}.</p>{/if}
+    {#if power?.why && !locked}<p class="small" data-testid="powercycle-why">{powerWhyText(power.why)}</p>{/if}
     {#if waiting && reboot?.phase !== 'power-cycling' && reboot?.phase !== 'rebooting'}
       <p class="busy" data-testid="reboot-state">Asked cams-admin… it checks the camera's switch port first.</p>
     {:else if reboot?.phase === 'power-cycling'}

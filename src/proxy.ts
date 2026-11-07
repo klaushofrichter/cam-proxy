@@ -1737,9 +1737,14 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       // record per camera the proxy may leave dark (spec §8.4).
       const stops = await switches.stop();
       const { portsLeftOff, sessionMaybeOpen } = stops.find((x) => x.id === 'legacy')!;
+      // A switch by id: one record, built like the legacy one below.
       for (const o of stops.filter((x) => x.id !== 'legacy' && (x.portsLeftOff.length || x.sessionMaybeOpen))) {
-        const ref = switches.known().find((k) => k.id === o.id);
-        audit.write({ action: 'camera-powercycle', category: ['host'], type: ['end'], outcome: 'failure', user: 'system', message: `cam-proxy stopping: PoE switch ${o.id} (${ref?.host ?? ''}): ${o.portsLeftOff.length ? `PoE may be left OFF on port ${o.portsLeftOff.join(', ')}` : ''}${o.sessionMaybeOpen ? ' its web session may still be open' : ''}`, details: { phase: 'stop', poeLeftOff: o.portsLeftOff.length > 0, sessionMaybeOpen: o.sessionMaybeOpen, switch: { id: o.id, host: ref?.host ?? '', ports: o.portsLeftOff } } });
+        const host = switches.known().find((k) => k.id === o.id)?.host ?? '';
+        const parts = [
+          ...(o.portsLeftOff.length ? [`PoE may be left OFF on PoE switch ${o.id} (${host}) port ${o.portsLeftOff.join(', ')}; turn it on in the switch's web UI, or with "Turn PoE on" under Proxy settings once the proxy is back`] : []),
+          ...(o.sessionMaybeOpen ? [`the proxy's web session on PoE switch ${o.id} (${host}) may still be open: the switch's web UI may refuse logins until the switch ends it`] : []),
+        ];
+        audit.write({ action: 'camera-powercycle', category: ['host'], type: ['end'], outcome: 'failure', user: 'system', message: `cam-proxy stopping: ${parts.join('; ')}`, details: { phase: 'stop', poeLeftOff: o.portsLeftOff.length > 0, sessionMaybeOpen: o.sessionMaybeOpen, switch: { id: o.id, host }, ...(o.portsLeftOff.length ? { portsLeftOff: o.portsLeftOff } : {}) } });
       }
       const swInfo = { model: running.poeSwitch.model, host: running.poeSwitch.host ?? '' };
       for (const port of portsLeftOff) {

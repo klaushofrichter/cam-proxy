@@ -2,7 +2,7 @@ import { sleep, TIMED_OUT, within } from '../async';
 import { logger } from '../log';
 import { driverFor, type LocateResult, type SwitchDetail, type SwitchDriver, type SwitchRef, type SwitchSession } from './switch/driver';
 import { PoeSwitchError, SwitchRefusal } from './switch/errors';
-import { pickPort, pingBurst } from './switch/locate';
+import { pickPort, pingBurst, pingHost } from './switch/locate';
 
 export { PoeSwitchError, type PoeSwitchErrorCode } from './switch/errors';
 export { poeOpcode, portIndex, reverseOrder, Session } from './switch/sscpoe-web';
@@ -81,7 +81,7 @@ export interface PoeSwitchDeps {
   ref: () => ControllerRef;
   password: () => string | undefined;
   lane?: () => SessionLane; // the switch's session queue, shared by every controller of one host (default: its own)
-  passwordHint?: string; // what the 'not set' reason names (default: the host config's environment variable)
+  passwordHint?: string | (() => string); // what the 'not set' reason names (default: the host config's environment variable)
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   timeoutMs?: number; // per call (5 s)
@@ -125,6 +125,11 @@ export class PoeSwitch {
     this.sleep = d.sleep ?? sleep;
   }
 
+  private hint(): string {
+    const h = this.d.passwordHint;
+    return typeof h === 'function' ? h() : (h ?? NO_PASSWORD);
+  }
+
   // Why the switch can't be used, naming the setting; null when it can.
   // With a port (null: the camera has none): also the camera's port.
   notConfigured(port?: number | null): string | null {
@@ -133,7 +138,7 @@ export class PoeSwitch {
     if (!c.host) return 'poeSwitch.host is not set';
     if (port !== undefined && !port) return "the camera's poeSwitch.port is not set";
     if (port && port > c.ports) return "the camera's poeSwitch.port is above poeSwitch.ports";
-    if (!this.d.password()) return this.d.passwordHint ?? NO_PASSWORD;
+    if (!this.d.password()) return this.hint();
     return null;
   }
 
@@ -328,7 +333,7 @@ export class PoeSwitch {
 
   private async locateIn(s: SwitchSession, c: PoeSwitchConfig, driver: SwitchDriver, host: string): Promise<Located> {
     const base = await s.detail();
-    const burst = (this.d.pingBurst ?? pingBurst)(host);
+    const burst = (this.d.pingBurst ?? pingBurst)(pingHost(host));
     let during: SwitchDetail;
     try {
       await this.pause(LOCATE_READ_MS);
@@ -423,7 +428,7 @@ export class PoeSwitch {
   private session<T>(port: number | undefined, f: (s: SwitchSession, c: PoeSwitchConfig, driver: SwitchDriver) => Promise<T>): Promise<T> {
     if (this.stopped) return Promise.reject(new PoeSwitchError('switch_error', 'the proxy is stopping'));
     const why = this.notConfigured(port);
-    if (why) return Promise.reject(new PoeSwitchError(!this.d.password() && why === (this.d.passwordHint ?? NO_PASSWORD) ? 'password_unset' : 'switch_error', why));
+    if (why) return Promise.reject(new PoeSwitchError(!this.d.password() && why === this.hint() ? 'password_unset' : 'switch_error', why));
     const lane = this.lane;
     const before = lane.tail;
     let release!: () => void;

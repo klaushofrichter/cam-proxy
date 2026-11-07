@@ -60,7 +60,7 @@
         <p class="line">{switchLine(s)}</p>
         {#if editing === s.id}
           <form onsubmit={(e) => { e.preventDefault(); void save(s.id); }}>
-            <input type="password" autocomplete="off" bind:value={password} aria-label="Switch password" data-testid="switch-password-input" />
+            <input type="password" autocomplete="new-password" bind:value={password} aria-label="Switch password" data-testid="switch-password-input" />
             <button type="submit" disabled={busy || !password} data-testid="switch-password-save">Save</button>
             <button type="button" onclick={() => { editing = null; password = ''; }}>Cancel</button>
           </form>

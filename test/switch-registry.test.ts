@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import request from 'supertest';
@@ -7,7 +7,7 @@ import { PoeSwitchError } from '../src/camera/poe-switch';
 import { SwitchRegistry } from '../src/camera/switch/registry';
 import { switchPasswordStore } from '../src/config/switch-passwords';
 import { startPoeSwitchMock, type PoeSwitchMock } from './helpers/poe-switch-mock';
-import { startProxy, auth, ADMIN_TOKEN } from './helpers/proxy';
+import { startProxy, auth, ADMIN_TOKEN, until } from './helpers/proxy';
 import { auditText, audits } from './helpers/onboarding';
 import { startSim } from './helpers/sim';
 
@@ -32,7 +32,7 @@ describe('SwitchRegistry', () => {
     const m = await mock();
     const a = reg(d);
     a.get(refOf(m));
-    switchPasswordStore(d).set('sw_a', PASSWORD);
+    switchPasswordStore(d).set('sw_a', PASSWORD, m.host);
     expect(a.known()).toEqual([refOf(m)]);
     const text = readFileSync(join(d, 'switches.json'), 'utf8');
     expect(text).not.toContain(PASSWORD);
@@ -66,7 +66,7 @@ describe('SwitchRegistry', () => {
     const m = await mock();
     const a = reg(d);
     a.get(refOf(m));
-    switchPasswordStore(d).set('sw_a', PASSWORD);
+    switchPasswordStore(d).set('sw_a', PASSWORD, m.host);
     expect(a.forget('sw_a')).toBe(true);
     expect(a.forget('sw_a')).toBe(false);
     expect(a.known()).toEqual([]);
@@ -82,7 +82,7 @@ describe('SwitchRegistry', () => {
     const c = a.get(refOf(m));
     await expect(c.read(3)).rejects.toMatchObject({ code: 'password_unset' });
     await expect(c.read(3)).rejects.toBeInstanceOf(PoeSwitchError);
-    switchPasswordStore(d).set('sw_a', PASSWORD);
+    switchPasswordStore(d).set('sw_a', PASSWORD, m.host);
     await expect(c.read(3, { fresh: true })).resolves.toMatchObject({ port: 3 });
     await a.stop();
   });
@@ -99,9 +99,70 @@ describe('SwitchRegistry', () => {
     await expect(same.read(3)).resolves.toMatchObject({ port: 3 });
     await expect(diff.read(3)).rejects.toMatchObject({ code: 'password_unset' });
     // A stored password wins over the env one.
-    switchPasswordStore(d).set('sw_same', 'wrong-pw');
+    switchPasswordStore(d).set('sw_same', 'wrong-pw', m.host);
     await expect(same.read(3, { fresh: true })).rejects.toMatchObject({ code: 'switch_auth' });
     await a.stop();
+  });
+
+  it('a stored password is bound to the address it was set for: another host answers password_unset and never gets it', async () => {
+    const d = tmp();
+    const m = await mock();
+    const other = await mock();
+    const a = reg(d);
+    const c = a.get(refOf(m));
+    switchPasswordStore(d).set('sw_a', PASSWORD, m.host.toUpperCase());
+    expect(switchPasswordStore(d).get('sw_a')).toEqual({ password: PASSWORD, host: m.host.toLowerCase() });
+    await expect(c.read(3, { fresh: true })).resolves.toMatchObject({ port: 3 });
+    // cams-admin names another address for the same id: the password is not sent there.
+    expect(a.get(refOf(other))).toBe(c);
+    expect(a.passwordSet('sw_a')).toBe(false);
+    const err = await c.read(3, { fresh: true }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PoeSwitchError);
+    expect(err).toMatchObject({ code: 'password_unset', message: `the switch password was set for another address: set it again for ${other.host}` });
+    expect(other.calls).toEqual([]);
+    // Set again for the new address: used there.
+    switchPasswordStore(d).set('sw_a', PASSWORD, other.host);
+    await expect(c.read(3, { fresh: true })).resolves.toMatchObject({ port: 3 });
+    expect(other.calls.map((x) => x.cmd)).toContain(123);
+    await a.stop();
+  });
+
+  it('a password stored without an address (before binding) is bound to the switch host on first load', async () => {
+    const d = tmp();
+    const m = await mock();
+    const other = await mock();
+    reg(d).get(refOf(m));
+    mkdirSync(join(d, 'admin'), { recursive: true });
+    writeFileSync(join(d, 'admin', 'switch-passwords.json'), JSON.stringify({ v: 1, switches: { sw_a: { password: PASSWORD } } }), { mode: 0o600 });
+    const a = reg(d);
+    expect(a.passwordSet('sw_a')).toBe(true);
+    expect(switchPasswordStore(d).get('sw_a')).toEqual({ password: PASSWORD, host: m.host.toLowerCase() });
+    a.get(refOf(other));
+    await expect(a.get(refOf(other)).read(3)).rejects.toMatchObject({ code: 'password_unset' });
+    expect(other.calls).toEqual([]);
+    await a.stop();
+  });
+
+  it('the legacy env fallback keeps its host rule when the stored password is for another address', async () => {
+    const d = tmp();
+    const m = await mock();
+    const a = reg(d, { host: m.host, password: PASSWORD });
+    a.get(refOf(m));
+    switchPasswordStore(d).set('sw_a', 'old-pw', '192.0.2.99');
+    expect(a.passwordSet('sw_a')).toBe(true);
+    await expect(a.get(refOf(m)).read(3)).resolves.toMatchObject({ port: 3 });
+    await a.stop();
+  });
+
+  it('after stop(), get() refuses: switch_error "the proxy is stopping", nothing is kept', async () => {
+    const d = tmp();
+    const m = await mock();
+    const a = reg(d);
+    const stopping = a.stop();
+    expect(() => a.get(refOf(m))).toThrow(PoeSwitchError);
+    expect(() => a.get(refOf(m))).toThrow('the proxy is stopping');
+    await stopping;
+    expect(a.known()).toEqual([]);
   });
 
   it('no legacy fallback when the host config says model none', async () => {
@@ -141,8 +202,8 @@ describe('one session queue per switch host', () => {
     const d = tmp();
     const m = await mock();
     const a = reg(d);
-    switchPasswordStore(d).set('sw_a', PASSWORD);
-    switchPasswordStore(d).set('sw_b', PASSWORD);
+    switchPasswordStore(d).set('sw_a', PASSWORD, m.host);
+    switchPasswordStore(d).set('sw_b', PASSWORD, m.host);
     const r = await Promise.all([a.get(refOf(m, 'sw_a')).read(3, { fresh: true }), a.get(refOf(m, 'sw_b')).read(4, { fresh: true })]);
     expect(r.map((x) => x.port)).toEqual([3, 4]);
     oneSessionAtATime(m);
@@ -175,6 +236,8 @@ describe('switch routes', () => {
       expect(put.status).toBe(200);
       expect(JSON.stringify(put.body)).not.toContain(PASSWORD);
       expect(statSync(join(p.dir, 'data', 'admin', 'switch-passwords.json')).mode & 0o777).toBe(0o600);
+      // Bound to the switch's current address.
+      expect(switchPasswordStore(join(p.dir, 'data')).get('sw_a')).toEqual({ password: PASSWORD, host: m.host.toLowerCase() });
       const after = await request(p.base).get('/control/switches').set(auth(ADMIN_TOKEN));
       expect(after.body.switches[0].passwordSet).toBe(true);
       expect(JSON.stringify(after.body)).not.toContain(PASSWORD);
@@ -195,6 +258,29 @@ describe('switch routes', () => {
       const audit = auditText(p.dir);
       expect(audit).not.toContain(PASSWORD);
     } finally {
+      await p.proxy.stop();
+      await sim.close();
+    }
+  }, 30000);
+
+  it('a proxy stop that cannot turn a registry switch\'s PoE on again: one record naming the switch, its ports left off and a readable message', async () => {
+    const sim = await startSim();
+    const m = await mock();
+    const p = await startProxy(sim);
+    try {
+      p.proxy.switches.get({ ...refOf(m), offSeconds: 60 });
+      switchPasswordStore(join(p.dir, 'data')).set('sw_a', PASSWORD, m.host);
+      void p.proxy.switches.get({ ...refOf(m), offSeconds: 60 }).cycle(3, () => undefined, { verifyHost: null }).catch(() => {});
+      await until(() => m.poec[5] === 0, 5000);
+      m.failSet = 1000;
+      await p.proxy.stop({ reason: 'test' });
+      const recs = p.proxy.audit.list({ actions: ['camera-powercycle'] }).records.filter((x) => (x.cam_proxy as { phase?: string }).phase === 'stop');
+      expect(recs).toHaveLength(1);
+      expect(recs[0]).toMatchObject({ event: { outcome: 'failure' }, cam_proxy: { phase: 'stop', poeLeftOff: true, sessionMaybeOpen: false, switch: { id: 'sw_a', host: m.host }, portsLeftOff: [3] } });
+      expect((recs[0].cam_proxy as { switch: Record<string, unknown> }).switch.ports).toBeUndefined();
+      expect(recs[0].message).toBe(`cam-proxy stopping: PoE may be left OFF on PoE switch sw_a (${m.host}) port 3; turn it on in the switch's web UI, or with "Turn PoE on" under Proxy settings once the proxy is back`);
+    } finally {
+      m.failSet = 0;
       await p.proxy.stop();
       await sim.close();
     }

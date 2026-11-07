@@ -57,7 +57,8 @@ export function switchHandlers(d: SwitchCommandDeps): Record<string, Handler> {
         return { verified: r.verified, offAt: r.offAt, onAt: r.onAt, watts: r.watts };
       });
       if (out.status === 'ok') {
-        d.audit.write({ ...base, outcome: 'success', message: `PoE cycled by cams-admin (on behalf of ${cmd.actor}) at ${x.switch.host} port ${x.port}${x.force ? ' (forced, not verified)' : ' (verified)'}`, details: { switch: where, forced: x.force, ...by } });
+        const r = out.result as { verified: boolean; watts: number };
+        d.audit.write({ ...base, outcome: 'success', message: `PoE cycled by cams-admin (on behalf of ${cmd.actor}) at ${x.switch.host} port ${x.port}${x.force ? ' (forced, not verified)' : ' (verified)'}`, details: { switch: where, forced: x.force, verified: r.verified, watts: r.watts, ...by } });
       } else {
         d.audit.write({ ...base, outcome: 'failure', error: out.code, message: `PoE cycle by cams-admin (on behalf of ${cmd.actor}) at ${x.switch.host} port ${x.port} failed: ${out.code}`, details: { switch: where, forced: x.force, ...by } });
       }

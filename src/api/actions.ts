@@ -116,11 +116,12 @@ export async function performAction(d: ActionDeps, name: string, cam: string | n
     // from a proxy"): cams-admin verifies the port and runs the cycle through
     // the switch's operating proxy; this asks it (one event) and answers 202
     // {requestId} at once. 409 power_cycle_needs_cams_admin without
-    // cams-admin (not connected, or no power record from it); 429 as the reboot.
+    // cams-admin (not connected, or no power record from it); 429 in_flight
+    // while a request for the camera is open; 429 too_soon as the reboot.
     case 'camera-powercycle': {
       const a = d.cameraPower.request({ user: who.user, requestedBy: who.requestedBy, ...(who.ip ? { ip: who.ip } : {}), ...(who.userAgent ? { userAgent: who.userAgent } : {}) }, camera());
       if (a.status === 202) return { status: 202, json: { requestId: a.requestId } };
-      if (a.status === 429) return tooSoon(a);
+      if (a.status === 429) return 'error' in a ? { ...fail(429, a.error, a.detail), retryAfterS: a.retryAfterS } : tooSoon(a);
       return fail(409, a.error, a.detail);
     }
     // Recovery (#85): PoE on for the camera's port if it is off; no power

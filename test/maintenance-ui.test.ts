@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cameraStateText, isNewStart, poeAlert, poeLine, poeOnText, powerCycleMessage, powerCycleDisabled, powerCycleFailText, powerLine, powerResultText, rebootEndText, readHealth, restartWatch, waitForNewProxy, RESTART_GIVE_UP_MS } from '../web/src/lib/maintenance';
+import { cameraStateText, isNewStart, powerWhyText, poeAlert, poeLine, poeOnText, powerCycleMessage, powerCycleDisabled, powerCycleFailText, powerLine, powerResultText, rebootEndText, readHealth, restartWatch, waitForNewProxy, RESTART_GIVE_UP_MS } from '../web/src/lib/maintenance';
 
 describe('Maintenance page helpers (#71, #83)', () => {
   it('tells a new proxy start by its version or start time', () => {
@@ -176,5 +176,12 @@ describe('the restart wait (Maintenance, Find camera)', () => {
     stop();
     await vi.advanceTimersByTimeAsync(RESTART_GIVE_UP_MS + 2000);
     expect(gone2).not.toHaveBeenCalled();
+  });
+});
+
+describe('the power-cycle "why" line', () => {
+  it('says it once, as a sentence', () => {
+    expect(powerWhyText('a power-cycle needs cams-admin: this proxy is not connected to cams-admin')).toBe('A power-cycle needs cams-admin: this proxy is not connected to cams-admin.');
+    expect(powerWhyText('a power-cycle needs cams-admin: x')).not.toMatch(/power-cycle.*power-cycle/i);
   });
 });

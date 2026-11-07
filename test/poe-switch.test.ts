@@ -196,6 +196,8 @@ describe('PoeSwitch against the mock', () => {
     const wrong = 'wrong-switch-pw-0815';
     const e = await sw(m, { password: wrong }).s.cycle(() => {}).catch((x: unknown) => x as PoeSwitchError);
     expect((e as PoeSwitchError).code).toBe('switch_auth');
+    // Neutral: a switch by id has its own password, not the environment's.
+    expect((e as PoeSwitchError).message).toBe('the switch refused the password');
     expect(JSON.stringify(e) + String(e) + (e as Error).stack).not.toContain(wrong);
     expect(m.opcodes).toEqual([]);
     // Never logged in: nothing to log out of.

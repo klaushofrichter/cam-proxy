@@ -228,6 +228,25 @@ describe('camera.power.cycle.result and the request', () => {
     s.reboot.stop();
   });
 
+  it('a second request while one is open: 429 in_flight, no second event; after the answer or the 5 minutes it can ask again', async () => {
+    const s = setup();
+    s.store.set('cam1', { kind: 'poe' });
+    const events: AdminEvent[] = [];
+    const deps = { ...connected(events), store: s.store, reboot: () => s.reboot, audit: { write: (r: any) => void s.records.push(r) } as any, now: () => s.t.now };
+    const who = { user: 'admin', requestedBy: 'token' as const };
+    const a = requestPowerCycle(deps, 'cam1', who) as { requestId: string };
+    s.t.now += 60_000;
+    expect(requestPowerCycle(deps, 'cam1', who)).toEqual({ status: 429, error: 'in_flight', detail: 'a power-cycle of this camera was asked of cams-admin and is not answered yet', retryAfterS: 240 });
+    expect(events).toHaveLength(1);
+    expect(s.records).toHaveLength(1);
+    await s.run('camera.power.cycle.result', { camera: 'cam1', requestId: a.requestId, ok: false, reason: 'not verified' });
+    expect(requestPowerCycle(deps, 'cam1', who)).toMatchObject({ status: 202 });
+    expect(events).toHaveLength(2);
+    s.t.now += ASK_TIMEOUT_MS;
+    expect(requestPowerCycle(deps, 'cam1', who)).toMatchObject({ status: 202 });
+    expect(events).toHaveLength(3);
+  });
+
   it('an unanswered request ends after 5 minutes: a failed result says so, a late answer still replaces it', async () => {
     const s = setup();
     s.store.set('cam1', { kind: 'poe' });

@@ -149,6 +149,7 @@ export interface PowerRequester { user: string; requestedBy: 'session' | 'token'
 export type PowerRequestAnswer =
   | { status: 202; requestId: string }
   | TooSoon
+  | { status: 429; error: 'in_flight'; detail: string; retryAfterS: number }
   | { status: 409; error: 'power_cycle_needs_cams_admin'; detail: string };
 export interface PowerRequestDeps {
   store: CameraPowerStore;
@@ -180,6 +181,14 @@ export function powerRequestRefusal(d: Pick<PowerRequestDeps, 'store' | 'connect
 export function requestPowerCycle(d: PowerRequestDeps, camera: string, who: PowerRequester): PowerRequestAnswer {
   const why = powerRequestRefusal(d, camera);
   if (why) return { status: 409, error: 'power_cycle_needs_cams_admin', detail: why };
+  // One open request per camera: a second tab, a token call or a retry
+  // would make cams-admin cut the camera's PoE twice. Open until answered,
+  // or ASK_TIMEOUT_MS (view() ends it then).
+  const open = d.store.view(camera).asked;
+  if (open) {
+    const left = open.at + ASK_TIMEOUT_MS - (d.now ?? Date.now)();
+    return { status: 429, error: 'in_flight', detail: 'a power-cycle of this camera was asked of cams-admin and is not answered yet', retryAfterS: Math.max(1, Math.ceil(left / 1000)) };
+  }
   const soon = d.reboot(camera).cooldown();
   if (soon) return soon;
   const requestId = `pc_${ulid((d.now ?? Date.now)())}`;

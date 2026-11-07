@@ -32,7 +32,8 @@ export function switchesApi(d: { registry: SwitchRegistry; dataDir: string; audi
     if (!e) return void res.status(404).json({ error: 'not_found' });
     const base = { ...record(who, 'configuration'), action: 'switch-password', message: '' };
     try {
-      switchPasswordStore(d.dataDir).set(id, password);
+      // Bound to the switch's address as this proxy knows it now: used for no other.
+      switchPasswordStore(d.dataDir).set(id, password, e.ref.host);
     } catch {
       d.audit.write({ ...base, outcome: 'failure', error: 'not_saved', message: `PoE switch password for ${id} not saved`, details: { switch: { id, host: e.ref.host }, requestedBy: who.requestedBy } });
       return void res.status(500).json({ error: 'not_saved' });

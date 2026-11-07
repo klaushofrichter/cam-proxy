@@ -2,7 +2,7 @@ import { readFileSync, renameSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { logger } from '../../log';
 import { switchPasswordStore } from '../../config/switch-passwords';
-import { legacyRef, PoeSwitch, type HostSwitchConfig, type PoeSwitchDeps, type SessionLane } from '../poe-switch';
+import { legacyRef, PoeSwitch, PoeSwitchError, type HostSwitchConfig, type PoeSwitchDeps, type SessionLane } from '../poe-switch';
 import type { SwitchRef } from './driver';
 
 // The PoE switches this proxy operates, by cams-admin's switch id (spec
@@ -10,8 +10,11 @@ import type { SwitchRef } from './driver';
 // has one session at a time whoever asks. The descriptors (no secrets) are
 // kept in <dataDir>/switches.json so "Turn PoE on" works without cams-admin;
 // the passwords are in <dataDir>/admin/switch-passwords.json.
+// A stored password is bound to the switch address it was set for: a ref
+// naming another host (cams-admin changed it) gets no password until it is set
+// again here, so the password never goes to an address cams-admin chooses.
 // The host config's switch (poeSwitch.*, retired later) is the `legacy`
-// controller; a ref on the same host with no stored password uses its
+// controller; a ref on the same host with no usable stored password uses its
 // environment password (CAMPROXY_POE_SWITCH_PASSWORD).
 export interface RegistryDeps extends Partial<Pick<PoeSwitchDeps, 'sleep' | 'now' | 'timeoutMs' | 'onRetryMs' | 'stopRecoveryMs' | 'stopWaitMs' | 'driver' | 'readCacheMs' | 'pingBurst'>> {
   dataDir: string;
@@ -36,12 +39,26 @@ export class SwitchRegistry {
   private readonly lanes = new Map<string, SessionLane>();
   private readonly file: string;
   private readonly passwords;
+  private stopped = false;
 
   constructor(private readonly d: RegistryDeps) {
     this.file = join(d.dataDir, 'switches.json');
     this.passwords = switchPasswordStore(d.dataDir);
     this.legacy = new PoeSwitch({ ...this.common(), ref: () => legacyRef(d.legacy()), password: d.legacyPassword, lane: () => this.laneFor(d.legacy().host ?? '') });
-    for (const r of this.load()) this.entries.set(r.id, { ref: r, sw: this.make(r.id) });
+    for (const r of this.load()) {
+      this.entries.set(r.id, { ref: r, sw: this.make(r.id) });
+      this.bindUnbound(r);
+    }
+  }
+
+  // A password stored before the binding (no host) is bound to the switch's
+  // host as this proxy knows it (on load, or when the id first appears).
+  private bindUnbound(r: SwitchRef): void {
+    try {
+      if (this.passwords.bind(r.id, r.host)) logger.info({ id: r.id }, 'switch_password_bound_to_host');
+    } catch (err) {
+      logger.error({ err: (err as Error).message }, 'switch_passwords_unreadable');
+    }
   }
 
   private common(): Partial<PoeSwitchDeps> {
@@ -63,24 +80,37 @@ export class SwitchRegistry {
       ref: () => this.entries.get(id)!.ref,
       lane: () => this.laneFor(this.entries.get(id)!.ref.host),
       password: () => this.password(id),
-      passwordHint: `no password is stored for switch ${id}`,
+      passwordHint: () => this.passwordHint(id),
     });
   }
 
-  // The stored password; else, for the host config's own switch (same host,
-  // model not none), the environment password.
-  private password(id: string): string | undefined {
-    let stored: string | undefined;
+  private stored(id: string) {
     try {
-      stored = this.passwords.get(id);
+      return this.passwords.get(id);
     } catch (err) {
       logger.error({ err: (err as Error).message }, 'switch_passwords_unreadable');
+      return undefined;
     }
-    if (stored) return stored;
+  }
+
+  // The stored password when it was set for the switch's current host; else,
+  // for the host config's own switch (same host, model not none), the
+  // environment password.
+  private password(id: string): string | undefined {
+    const stored = this.stored(id);
     const e = this.entries.get(id);
+    if (stored && (!stored.host || !e || stored.host === e.ref.host.toLowerCase())) return stored.password;
     const l = this.d.legacy();
     if (e && l.model !== 'none' && l.host && l.host.toLowerCase() === e.ref.host.toLowerCase()) return this.d.legacyPassword();
     return undefined;
+  }
+
+  // Why there is no password (the password_unset message).
+  private passwordHint(id: string): string {
+    const stored = this.stored(id);
+    const e = this.entries.get(id);
+    if (stored?.host && e && stored.host !== e.ref.host.toLowerCase()) return `the switch password was set for another address: set it again for ${e.ref.host}`;
+    return `no password is stored for switch ${id}`;
   }
 
   passwordSet(id: string): boolean {
@@ -105,7 +135,10 @@ export class SwitchRegistry {
   }
 
   // The controller for this switch; a new or changed descriptor is kept.
+  // After stop() (the proxy is stopping) none: a controller made then would
+  // escape the stop and could cut PoE with nothing to turn it on again.
   get(ref: SwitchRef): PoeSwitch {
+    if (this.stopped) throw new PoeSwitchError('switch_error', 'the proxy is stopping');
     const r: SwitchRef = { id: ref.id, model: ref.model, host: ref.host, ports: ref.ports, offSeconds: ref.offSeconds };
     const e = this.entries.get(r.id);
     if (e) {
@@ -117,6 +150,7 @@ export class SwitchRegistry {
     }
     this.entries.set(r.id, { ref: r, sw: this.make(r.id) });
     this.save();
+    this.bindUnbound(r);
     return this.entries.get(r.id)!.sw;
   }
 
@@ -145,6 +179,7 @@ export class SwitchRegistry {
 
   // On shutdown: every controller (PoE back on where a cycle is in its off time).
   async stop(): Promise<StopResult[]> {
+    this.stopped = true;
     const all: Array<[string, PoeSwitch]> = [['legacy', this.legacy], ...[...this.entries].map(([id, e]): [string, PoeSwitch] => [id, e.sw])];
     return Promise.all(all.map(async ([id, sw]) => ({ id, ...(await sw.stop()) })));
   }

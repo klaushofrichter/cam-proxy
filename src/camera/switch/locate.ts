@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
 import { trackChild } from '../../children';
+import { splitHost } from '../http';
 import type { LocateResult, SwitchDetail } from './driver';
 
 // Finding a camera's switch port (spec 2026-11-07-poe-switches-design,
@@ -60,6 +61,16 @@ const spawnRunner: Runner = (cmd, args) =>
       resolve({ code, stdout });
     });
   });
+
+// What to ping for a camera host: cams-admin's camera hosts may carry :port
+// (as camera.host does), which ping takes as part of the name. The host part
+// only; an IPv6 address without its URL brackets.
+export function pingHost(host: string): string {
+  const v6 = /^\[([^\]]*)\](?::\d+)?$/.exec(host);
+  if (v6) return v6[1];
+  if (host.indexOf(':') !== host.lastIndexOf(':')) return host; // a bare IPv6 address
+  return splitHost(host).hostname;
+}
 
 // A ~5 s ping burst to `host` (measured unprivileged with BusyBox ping in the
 // proxy's alpine container). answered: the summary line

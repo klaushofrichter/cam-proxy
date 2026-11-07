@@ -103,7 +103,7 @@ export class Session {
     // sscpoe: errcode 10002 is multiple_login.
     if (r.errcode === 10002) throw new PoeSwitchError('switch_busy', "the switch refused the login: someone is logged in to the switch's web UI");
     if (r.data?.calldata?.login === 'success') throw new PoeSwitchError('switch_error', 'the switch accepted the login but set no session cookie');
-    throw new PoeSwitchError('switch_auth', 'the switch refused the password (CAMPROXY_POE_SWITCH_PASSWORD)');
+    throw new PoeSwitchError('switch_auth', 'the switch refused the password');
   }
 
   // A new session after a lost one. The cookie goes only after the switch

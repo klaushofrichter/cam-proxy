@@ -102,6 +102,10 @@ describe('POST /control/actions/camera-powercycle', () => {
       expect(r.status).toBe(202);
       expect(r.body).toEqual({ requestId: expect.stringMatching(/^pc_/) });
       const requestId = r.body.requestId as string;
+      // A second press while it is open: refused, no second event.
+      const again = await post(p.base);
+      expect([again.status, again.body.error]).toEqual([429, 'in_flight']);
+      expect(again.headers['retry-after']).toBeDefined();
       await until(() => fake.events().length >= 1, 5000);
       await new Promise((x) => setTimeout(x, 200));
       const events = fake.events().filter((e) => bodyOf(e).kind === 'camera.power.cycle.request');

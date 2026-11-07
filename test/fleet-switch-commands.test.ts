@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'fs';
+import { mkdtempSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -32,7 +32,7 @@ async function setup(o: { password?: boolean; at?: Record<string, number>; answe
   const m = await startPoeSwitchMock({ password: PASSWORD, powered: { 0: 6.8, 5: 4.5, 6: 3.2 } });
   mocks.push(m);
   const dataDir = mkdtempSync(join(tmpdir(), 'swcmd-'));
-  if (o.password !== false) switchPasswordStore(dataDir).set(SW, PASSWORD);
+  if (o.password !== false) switchPasswordStore(dataDir).set(SW, PASSWORD, m.host);
   const at = o.at ?? {};
   const registry = new SwitchRegistry({
     dataDir, legacy: () => ({ model: 'none', ports: 8, offSeconds: 10 }), legacyPassword: () => undefined,
@@ -81,6 +81,22 @@ describe('policy and validators', () => {
     expect(ARGS_VALIDATORS['switch.survey']({ v: 1, switch: sw, cameras: [{ camera: CAM, host: 'h' }] }).ok).toBe(true);
     expect(ARGS_VALIDATORS['switch.forget']({ v: 1, switchId: SW }).ok).toBe(true);
     expect(ARGS_VALIDATORS['switch.forget']({ v: 1, switchId: 'nope' }).ok).toBe(false);
+  });
+
+  it('switch.host is a name or an IPv4 address: no port, scheme, path or user part (invalid_args)', () => {
+    const sw = { id: SW, model: 'sscpoe-web', host: '192.0.2.217', ports: 8, offSeconds: 10 };
+    for (const host of ['192.0.2.217', 'switch-2.lan', 'GPS208', 'sw2.example.org']) {
+      expect(ARGS_VALIDATORS['switch.read']({ v: 1, switch: { ...sw, host } }).ok, host).toBe(true);
+    }
+    for (const host of ['192.0.2.217:80', 'http://192.0.2.217', '192.0.2.217/x', 'a@192.0.2.217', 'a b', '-x', '.x', '[::1]', '192.0.2.217#', '3232235781', '192.168.001.005', 'sw.']) {
+      const r = ARGS_VALIDATORS['switch.read']({ v: 1, switch: { ...sw, host } });
+      expect(r, host).toMatchObject({ ok: false, code: 'invalid_args', detail: 'switch.host' });
+    }
+    // Every switch command checks the descriptor the same way.
+    expect(ARGS_VALIDATORS['switch.cycle']({ v: 1, switch: { ...sw, host: 'x/y' }, port: 3, host: null, force: true, camera: CAM }).ok).toBe(false);
+    expect(ARGS_VALIDATORS['switch.poeOn']({ v: 1, switch: { ...sw, host: 'x:1' }, port: 3 }).ok).toBe(false);
+    // The camera host of locate and survey may carry a port.
+    expect(ARGS_VALIDATORS['switch.locate']({ v: 1, switch: sw, host: '192.0.2.10:443' }).ok).toBe(true);
   });
 });
 
@@ -221,6 +237,32 @@ describe('switch commands on the mock switch', () => {
     expect(await t.run('switch.cycle', { switch: t.sw, port: 3, host: null, force: true, camera: CAM })).toMatchObject({ status: 'failed', code: 'password_unset' });
     expect(t.m.calls).toEqual([]);
     expect(t.m.opcodes).toEqual([]);
+  });
+});
+
+describe('while the proxy stops', () => {
+  it('a switch.cycle for a switch new to the registry after stop() began never cuts PoE: failed switch_error', async () => {
+    const t = await setup();
+    const stopping = t.registry.stop();
+    const d = await t.run('switch.cycle', { switch: t.sw, port: 3, host: null, force: true, camera: CAM });
+    expect(d).toMatchObject({ status: 'failed', code: 'switch_error' });
+    expect(() => t.registry.get(t.sw as any)).toThrow(/the proxy is stopping/);
+    await stopping;
+    expect(await t.run('switch.read', { switch: t.sw })).toMatchObject({ status: 'failed', code: 'switch_error' });
+    expect(t.m.calls).toEqual([]);
+    expect(t.m.opcodes).toEqual([]);
+    expect(t.records[0]).toMatchObject({ action: 'switch-port-cycled', outcome: 'failure', error: 'switch_error' });
+  });
+});
+
+describe('the switch-port-cycled record and docs/audit-log.md', () => {
+  it('the doc names every details key the code writes', async () => {
+    const t = await setup();
+    t.okResult('switch.cycle', await t.run('switch.cycle', { switch: t.sw, port: 3, host: null, force: true, camera: CAM }));
+    expect(t.records[0].details).toMatchObject({ switch: { id: SW, host: t.sw.host, port: 3 }, forced: true, verified: false, watts: 4.5, cmdId: CMD, actor: 'admin@example.org', requestedBy: 'cams-admin' });
+    const row = readFileSync(join(__dirname, '..', 'docs', 'audit-log.md'), 'utf8').split('\n').find((l) => l.startsWith('| `switch-port-cycled`'))!;
+    for (const k of Object.keys(t.records[0].details)) expect(row, k).toContain(`\`${k}\``);
+    expect(row).not.toContain('`offSeconds`');
   });
 });
 

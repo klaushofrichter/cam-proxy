@@ -1,3 +1,5 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { describe, expect, it } from 'vitest';
 import { poeOnLabel, poeOnText, switchLine } from '../web/src/lib/switches';
 import { parseSetting, resetCounts, resetLabel, resetPlan, sameBadge, settingText } from '../web/src/lib/settings';
@@ -107,5 +109,13 @@ describe('Settings page: PoE switches card', () => {
     expect(poeOnLabel(5)).toBe('Turn PoE on (port 5)');
     expect(poeOnText(5, false)).toBe('PoE turned on at port 5.');
     expect(poeOnText(5, true)).toBe('Port 5 had PoE on already.');
+  });
+});
+
+describe('PoE switches card: the password field', () => {
+  it('is a new password to the browser (never filled with the saved proxy login)', () => {
+    const src = readFileSync(join(__dirname, '..', 'web', 'src', 'components', 'PoeSwitchesCard.svelte'), 'utf8');
+    const input = /<input[^>]*data-testid="switch-password-input"[^>]*>/.exec(src)?.[0] ?? '';
+    expect(input).toContain('autocomplete="new-password"');
   });
 });

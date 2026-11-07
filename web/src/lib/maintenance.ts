@@ -131,6 +131,13 @@ export function powerCycleMessage(p: CameraPower | null): string {
 // The power-cycle button is off while a request is open (the proxy ends one
 // unanswered after 5 minutes), while the camera is busy, or when cams-admin
 // can't be asked (not connected, no power record from it).
+// Why the power-cycle button is off, as a sentence: the reason already
+// says "a power-cycle needs cams-admin: …".
+export function powerWhyText(why: string): string {
+  const t = why.charAt(0).toUpperCase() + why.slice(1);
+  return /[.!?]$/.test(t) ? t : `${t}.`;
+}
+
 export function powerCycleDisabled(v: PowerView | null, busy: boolean): boolean {
   return busy || !v || !!v.asked || !v.canRequest;
 }
