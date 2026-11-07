@@ -225,7 +225,7 @@
   {#if cam}
     <div class="card" data-testid="camera-time-card">
       <h3>Camera time</h3>
-      <p class="muted small">Sets {cam}'s time zone and DST rule from <span class="mono">time.zone</span> (else the host's zone when known), its clock to now, and its NTP server when <span class="mono">ntp.server</span> is set.</p>
+      <p class="muted small" data-testid="camera-time-text">Sets {camName(cam)}'s time zone and DST rule from <span class="mono">time.zone</span> (else the host's zone when known), its clock to now, and its NTP server when <span class="mono">ntp.server</span> is set.</p>
       <div><button onclick={() => void setTime()} disabled={timeBusy || !!lockedWhy($rights, 'local')} title={lockedWhy($rights, 'local') ?? undefined} data-testid="camera-time-set">Set camera time</button></div>
       {#if timeMessage}<p class="msg" role="status" data-testid="camera-time-message">{timeMessage}</p>{/if}
     </div>
