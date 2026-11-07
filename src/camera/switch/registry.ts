@@ -2,7 +2,7 @@ import { readFileSync, renameSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { logger } from '../../log';
 import { switchPasswordStore } from '../../config/switch-passwords';
-import { legacyRef, PoeSwitch, type HostSwitchConfig, type PoeSwitchDeps } from '../poe-switch';
+import { legacyRef, PoeSwitch, type HostSwitchConfig, type PoeSwitchDeps, type SessionLane } from '../poe-switch';
 import type { SwitchRef } from './driver';
 
 // The PoE switches this proxy operates, by cams-admin's switch id (spec
@@ -17,6 +17,8 @@ export interface RegistryDeps extends Partial<Pick<PoeSwitchDeps, 'sleep' | 'now
   dataDir: string;
   legacy: () => HostSwitchConfig;
   legacyPassword: () => string | undefined;
+  // forget() stops the controller; this gets what it reports (a port may be left off).
+  onForgotten?: (r: { id: string; ref: SwitchRef } & Awaited<ReturnType<PoeSwitch['stop']>>) => void;
 }
 export interface StopResult { id: string; portsLeftOff: number[]; sessionMaybeOpen: boolean }
 
@@ -31,13 +33,14 @@ const validRef = (r: unknown): r is SwitchRef => {
 export class SwitchRegistry {
   readonly legacy: PoeSwitch;
   private readonly entries = new Map<string, Entry>();
+  private readonly lanes = new Map<string, SessionLane>();
   private readonly file: string;
   private readonly passwords;
 
   constructor(private readonly d: RegistryDeps) {
     this.file = join(d.dataDir, 'switches.json');
     this.passwords = switchPasswordStore(d.dataDir);
-    this.legacy = new PoeSwitch({ ...this.common(), ref: () => legacyRef(d.legacy()), password: d.legacyPassword });
+    this.legacy = new PoeSwitch({ ...this.common(), ref: () => legacyRef(d.legacy()), password: d.legacyPassword, lane: () => this.laneFor(d.legacy().host ?? '') });
     for (const r of this.load()) this.entries.set(r.id, { ref: r, sw: this.make(r.id) });
   }
 
@@ -46,10 +49,19 @@ export class SwitchRegistry {
     return { sleep, now, timeoutMs, onRetryMs, stopRecoveryMs, stopWaitMs, driver, readCacheMs, pingBurst };
   }
 
+  // One queue per switch host (case-insensitive): the legacy controller and every id on it share it.
+  private laneFor(host: string): SessionLane {
+    const k = host.toLowerCase();
+    let l = this.lanes.get(k);
+    if (!l) this.lanes.set(k, (l = { tail: Promise.resolve() }));
+    return l;
+  }
+
   private make(id: string): PoeSwitch {
     return new PoeSwitch({
       ...this.common(),
       ref: () => this.entries.get(id)!.ref,
+      lane: () => this.laneFor(this.entries.get(id)!.ref.host),
       password: () => this.password(id),
       passwordHint: `no password is stored for switch ${id}`,
     });
@@ -123,7 +135,11 @@ export class SwitchRegistry {
     this.entries.delete(id);
     this.save();
     this.passwords.delete(id);
-    void e.sw.stop();
+    const ref = { ...e.ref };
+    void e.sw.stop().then((r) => {
+      if (r.portsLeftOff.length || r.sessionMaybeOpen) logger.error({ id, ...r }, 'switch_forgotten_with_poe_or_session_left');
+      this.d.onForgotten?.({ id, ref, ...r });
+    });
     return true;
   }
 

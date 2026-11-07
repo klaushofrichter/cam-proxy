@@ -509,7 +509,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // one switch session at a time, in arrival order; each camera has its port.
   // The host config's switch as a ref (until switches come from cams-admin).
   // The registry holds every switch by id (spec 2026-11-07-poe-switches-design), the host config's as `legacy`.
-  const switches = new SwitchRegistry({ dataDir: running.server.dataDir, legacy: () => running.poeSwitch, legacyPassword: () => loaded.secrets.poeSwitchPassword });
+  const switches = new SwitchRegistry({ dataDir: running.server.dataDir, legacy: () => running.poeSwitch, legacyPassword: () => loaded.secrets.poeSwitchPassword,
+    onForgotten: (r) => audit.write({ action: 'switch-forgotten', category: ['configuration'], type: ['change'], outcome: r.portsLeftOff.length || r.sessionMaybeOpen ? 'failure' : 'success', user: 'system', message: `PoE switch ${r.id} (${r.ref.host}) forgotten${r.portsLeftOff.length ? `; PoE may be left OFF on port ${r.portsLeftOff.join(', ')}` : ''}${r.sessionMaybeOpen ? '; its web session may still be open' : ''}`, details: { switch: { id: r.id, host: r.ref.host }, ...(r.portsLeftOff.length ? { portsLeftOff: r.portsLeftOff } : {}), ...(r.sessionMaybeOpen ? { sessionMaybeOpen: true } : {}) } }) });
   const poe = switches.legacy;
   // One recordings cache for every camera (spec §8.3): one LRU, capped by recordings.cacheMB.
   const cachePool = new CachePool(() => running.recordings.cacheMB * 2 ** 20);

@@ -11,7 +11,7 @@ import { whoOf } from './onboarding-api';
 // write-only: never in an answer, a log line or an audit record.
 export function switchesApi(d: { registry: SwitchRegistry; dataDir: string; audit: AuditLog }): express.Router {
   const r = express.Router();
-  const record = (who: ReturnType<typeof whoOf>) => ({ category: ['host'], type: ['change'], user: who.user, ...(who.ip ? { ip: who.ip } : {}), ...(who.userAgent ? { userAgent: who.userAgent } : {}) });
+  const record = (who: ReturnType<typeof whoOf>, category: string) => ({ category: [category], type: ['change'], user: who.user, ...(who.ip ? { ip: who.ip } : {}), ...(who.userAgent ? { userAgent: who.userAgent } : {}) });
 
   r.get('/switches', (_req, res) => {
     res.json({
@@ -29,7 +29,7 @@ export function switchesApi(d: { registry: SwitchRegistry; dataDir: string; audi
     if (!validPassword(password)) return void res.status(400).json({ error: 'invalid', detail: PASSWORD_RULE });
     const e = d.registry.find(id);
     if (!e) return void res.status(404).json({ error: 'not_found' });
-    const base = { ...record(who), action: 'switch-password', message: '' };
+    const base = { ...record(who, 'configuration'), action: 'switch-password', message: '' };
     try {
       switchPasswordStore(d.dataDir).set(id, password);
     } catch {
@@ -47,7 +47,7 @@ export function switchesApi(d: { registry: SwitchRegistry; dataDir: string; audi
     if (!e) return void res.status(404).json({ error: 'not_found' });
     const port = Number(req.params.port);
     if (!Number.isInteger(port) || port < 1 || port > e.ref.ports) return void res.status(400).json({ error: 'invalid', detail: `port: 1 to ${e.ref.ports}` });
-    const base = { ...record(who), action: 'switch-port-poe-on' };
+    const base = { ...record(who, 'host'), action: 'switch-port-poe-on' };
     const sw = { id, host: e.ref.host, port };
     try {
       const out = await e.sw.poeOn(port);

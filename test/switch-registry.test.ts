@@ -114,6 +114,54 @@ describe('SwitchRegistry', () => {
   });
 });
 
+// The mock's calls never show two logins (123) without a logout (126) between.
+const oneSessionAtATime = (m: PoeSwitchMock) => {
+  let open = 0;
+  for (const c of m.calls) {
+    if (c.cmd === 123) open++;
+    if (c.cmd === 126) open--;
+    expect(open).toBeLessThanOrEqual(1);
+  }
+  expect(m.calls.filter((c) => c.cmd === 123).length).toBeGreaterThanOrEqual(2);
+};
+
+describe('one session queue per switch host', () => {
+  it('the legacy controller and a registry ref on its host never overlap', async () => {
+    const d = tmp();
+    const m = await mock();
+    const a = reg(d, { host: m.host.toUpperCase(), password: PASSWORD });
+    const c = a.get(refOf(m));
+    const r = await Promise.all([a.legacy.read(3, { fresh: true }), c.read(4, { fresh: true })]);
+    expect(r.map((x) => x.port)).toEqual([3, 4]);
+    oneSessionAtATime(m);
+    await a.stop();
+  });
+
+  it('two ids on one host never overlap', async () => {
+    const d = tmp();
+    const m = await mock();
+    const a = reg(d);
+    switchPasswordStore(d).set('sw_a', PASSWORD);
+    switchPasswordStore(d).set('sw_b', PASSWORD);
+    const r = await Promise.all([a.get(refOf(m, 'sw_a')).read(3, { fresh: true }), a.get(refOf(m, 'sw_b')).read(4, { fresh: true })]);
+    expect(r.map((x) => x.port)).toEqual([3, 4]);
+    oneSessionAtATime(m);
+    await a.stop();
+  });
+
+  it('forget reports a stopped controller to onForgotten', async () => {
+    const d = tmp();
+    const m = await mock();
+    const seen: unknown[] = [];
+    const a = new SwitchRegistry({ dataDir: d, legacy: () => ({ model: 'none', ports: 8, offSeconds: 10 }), legacyPassword: () => undefined, onForgotten: (r) => seen.push(r) });
+    a.get(refOf(m));
+    a.forget('sw_a');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(seen).toEqual([{ id: 'sw_a', ref: refOf(m), portsLeftOff: [], sessionMaybeOpen: false }]);
+    await a.stop();
+  });
+});
+
 describe('switch routes', () => {
   it('lists switches without passwords; sets a password (600 file, audited, never echoed); turns a port PoE on (audited)', async () => {
     const sim = await startSim();
@@ -142,6 +190,7 @@ describe('switch routes', () => {
       expect((await request(p.base).post('/control/switches/nope/ports/1/poe-on').set(auth(ADMIN_TOKEN))).status).toBe(404);
 
       expect(audits(p.dir, 'switch-password')).toHaveLength(1);
+      expect(audits(p.dir, 'switch-password')[0].event.category).toEqual(['configuration']);
       expect(audits(p.dir, 'switch-port-poe-on').map((r) => r.event.outcome)).toContain('success');
       const audit = auditText(p.dir);
       expect(audit).not.toContain(PASSWORD);

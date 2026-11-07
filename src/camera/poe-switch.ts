@@ -77,6 +77,7 @@ export interface PortHandle {
 export interface PoeSwitchDeps {
   ref: () => ControllerRef;
   password: () => string | undefined;
+  lane?: () => SessionLane; // the switch's session queue, shared by every controller of one host (default: its own)
   passwordHint?: string; // what the 'not set' reason names (default: the host config's environment variable)
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
@@ -90,12 +91,19 @@ export interface PoeSwitchDeps {
   pingBurst?: (host: string) => { done: Promise<{ answered: boolean }> }; // default: ping (tests: a fake)
 }
 
+// The queue of one physical switch: its web UI takes one session at a time, so
+// every controller working that host shares one lane.
+export interface SessionLane { tail: Promise<unknown> }
+
 // One switch's PoE controller (spec 2026-10-05-multi-camera-host-design §8.4,
 // 2026-11-07-poe-switches-design): one switch session at a time for every
 // use, in arrival order; state per port.
 export class PoeSwitch {
   private busy = false;
-  private tail: Promise<unknown> = Promise.resolve();
+  private readonly ownLane: SessionLane = { tail: Promise.resolve() };
+  private get lane(): SessionLane {
+    return this.d.lane?.() ?? this.ownLane;
+  }
   private stopped = false;
   private pending = 0; // sessions queued or running
   private wake: (() => void) | null = null; // ends a wait early (stop)
@@ -168,7 +176,7 @@ export class PoeSwitch {
     let finished = true;
     // Every session queued so far (a waiting one ends at once: stopped).
     if (this.pending > 0) {
-      finished = (await within(this.tail.then(() => true, () => true), this.d.stopWaitMs ?? STOP_WAIT_MS)) !== TIMED_OUT;
+      finished = (await within(this.lane.tail.then(() => true, () => true), this.d.stopWaitMs ?? STOP_WAIT_MS)) !== TIMED_OUT;
     }
     const portsLeftOff = [...new Set([...this.offPorts, ...(finished ? [] : this.cutting)])].sort((x, y) => x - y);
     const sessionMaybeOpen = this.sessionMaybeOpen || !finished;
@@ -400,10 +408,11 @@ export class PoeSwitch {
     if (this.stopped) return Promise.reject(new PoeSwitchError('switch_error', 'the proxy is stopping'));
     const why = this.notConfigured(port);
     if (why) return Promise.reject(new PoeSwitchError(!this.d.password() && why === (this.d.passwordHint ?? NO_PASSWORD) ? 'password_unset' : 'switch_error', why));
-    const before = this.tail;
+    const lane = this.lane;
+    const before = lane.tail;
     let release!: () => void;
     const mine = new Promise<void>((r) => (release = r));
-    this.tail = before.then(() => mine);
+    lane.tail = before.then(() => mine);
     const maxWait = this.d.queueWaitMs?.() ?? (this.d.ref().offSeconds + 60) * 1000;
     const run = (async () => {
       let opened = false;
