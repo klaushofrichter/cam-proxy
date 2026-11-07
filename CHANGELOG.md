@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Settings, Analytics: the Google Vision switch sits beside its heading, and the current key ("Current key") and the field for a custom key ("Custom Google Vision key") share one line. Each limit has a help tip (i) that says what it counts: calls per month and at most per day count every camera together; still checks per day are per camera; per camera and day counts a camera's automatic analyses and still checks together.
+- Settings, Camera time: the text names the camera by its name ("Sets Backyard Right's time zone…"), not its id.
+
 ## v2026.11.06.1
 
 - A camera renamed at the camera itself (in the Reolink app or its web page) is now audited: the next status poll writes a `camera-name` record, user `camera`, "Camera name changed at the camera: "A" → "B"". The first read after a start sets the baseline without a record.

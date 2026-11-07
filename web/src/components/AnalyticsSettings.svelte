@@ -4,6 +4,7 @@
   import { estimateFor, keyNotice, parseLimit, validKey, type UiProviderState } from '../lib/analytics';
   import { lockedWhy, narrowWhy, rights, settingLockedWhy } from '../lib/rights';
   import LockedNote from './LockedNote.svelte';
+  import HelpTip from './HelpTip.svelte';
 
   // The Analytics card (spec 2026-09-30-analytics-design): event kinds, and per
   // provider its switch, masked key, limits, estimate and the shared-key note.
@@ -89,6 +90,14 @@
       keyMessage = e instanceof ApiError ? e.message : 'not set';
     }
   }
+  // What each limit counts (src/analytics/service.ts limitReached, still checks
+  // per camera): Google Vision calls with the current key, by camera-local day.
+  const HELP = {
+    monthly: 'All Google Vision calls in a calendar month, by every camera of this proxy together: automatic analyses and still checks. 0 = no calls at all.',
+    daily: 'All Google Vision calls in one day, by every camera together: automatic analyses and still checks. 0 = no daily cap; the monthly limit still applies.',
+    checks: 'Still checks each camera may have in a day: a moment picked by hand in cams (Timeline or Video page) and sent to Google Vision. The number is per camera, not for all cameras together, and the checks count toward the other limits. 0 = still checks off.',
+    perCamera: 'All Google Vision calls one camera may make in a day: its automatic analyses and its still checks together. 0 = no per-camera cap.',
+  } as const;
   const kinds = ['person', 'vehicle', 'pet'] as const;
   const noKinds = $derived(kinds.every((k) => !val<boolean>(`analytics.kinds.${k}`)));
 </script>
@@ -106,6 +115,7 @@
   </fieldset>
 
   <div class="provider" data-testid="analytics-provider-google-vision">
+    <div class="row head">
     <h4>Google Vision</h4>
     <label class="switch">
       <!-- Disabled only once the status says there is no key (no flash while it loads). -->
@@ -113,33 +123,38 @@
         onchange={(e) => toggle(e, (on) => ({ googleVision: { enabled: on } }), 'Google Vision')} />
       enabled
     </label>
+    </div>
     {#if !locked}<LockedNote why={enabledLocked} testid="analytics-enabled-locked" />{/if}
     {#if !locked && !enabledLocked && enableWhy && !val<boolean>('analytics.googleVision.enabled')}<p class="hint small" data-testid="analytics-enabled-dir">{enableWhy}</p>{/if}
-    <p class="small" id="analytics-key-text" data-testid="analytics-key">
-      Key: {#if provider?.keyMasked}<span class="mono">{provider.keyMasked}</span>{:else}not set: add <span class="mono">CAMPROXY_GOOGLE_VISION_KEY</span> to the environment and restart, or set one below{/if}
-    </p>
-    {#if notice}<p class="notice small" data-testid="analytics-key-notice">{notice}</p>{/if}
-    <form class="row" onsubmit={(e) => { e.preventDefault(); void setKey(); }}>
-      <label>Google Vision key <input type="password" autocomplete="off" spellcheck="false" bind:value={keyDraft} placeholder="AIza…" data-testid="analytics-key-input" /></label>
+    <form class="row key" onsubmit={(e) => { e.preventDefault(); void setKey(); }}>
+      <span class="small" id="analytics-key-text" data-testid="analytics-key">
+        Current key: {#if provider?.keyMasked}<span class="mono">{provider.keyMasked}</span>{:else}not set: add <span class="mono">CAMPROXY_GOOGLE_VISION_KEY</span> to the environment and restart, or set one here{/if}
+      </span>
+      <label>Custom Google Vision key <input type="password" autocomplete="off" spellcheck="false" bind:value={keyDraft} placeholder="AIza…" data-testid="analytics-key-input" /></label>
       <button type="submit" disabled={!keyOk || !!keyLocked} title={keyLocked ?? undefined} data-testid="analytics-key-set" aria-label="Set the Google Vision key">Set</button>
       {#if keyMessage}<span class="msg small" role="status" data-testid="analytics-key-message">{keyMessage}</span>{/if}
     </form>
+    {#if notice}<p class="notice small" data-testid="analytics-key-notice">{notice}</p>{/if}
     {#if keyDraft && !keyOk}<p class="hint small" data-testid="analytics-key-hint">20 to 200 characters: letters, digits and symbols, no spaces</p>{/if}
     <p class="muted small">A key set here replaces the configured one at once. It is kept in memory only, not saved: a restart restores the configured key (or none).</p>
     <div class="row"><label>Calls per month <input type="number" min="0" max="100000" step="1" value={monthly} oninput={(e) => (monthlyDraft = e.currentTarget.value)} data-testid="analytics-monthly" /></label>
+      <HelpTip label="calls per month" testid="analytics-monthly-help" text={HELP.monthly} />
       <button disabled={monthlyValue === null || !!locked || !!monthlyWhy} data-testid="analytics-monthly-save" aria-label="Save calls per month" onclick={() => monthlyValue !== null && void put({ googleVision: { monthlyLimit: monthlyValue } }, 'Monthly limit', () => (monthlyDraft = undefined))}>Save</button></div>
     {#if monthlyValue === null}<p class="hint small" data-testid="analytics-monthly-hint">a whole number from 0 to 100,000</p>{/if}
     {#if monthlyWhy}<p class="hint small" data-testid="analytics-monthly-dir">{monthlyWhy}</p>{/if}
     <div class="row"><label>At most per day (0 = no cap) <input type="number" min="0" max="10000" step="1" value={daily} oninput={(e) => (dailyDraft = e.currentTarget.value)} data-testid="analytics-daily" /></label>
+      <HelpTip label="at most per day" testid="analytics-daily-help" text={HELP.daily} />
       <button disabled={dailyValue === null || !!locked || !!dailyWhy} data-testid="analytics-daily-save" aria-label="Save the daily cap" onclick={() => dailyValue !== null && void put({ googleVision: { dailyCap: dailyValue } }, 'Daily cap', () => (dailyDraft = undefined))}>Save</button></div>
     {#if dailyValue === null}<p class="hint small" data-testid="analytics-daily-hint">a whole number from 0 to 10,000</p>{/if}
     {#if dailyWhy}<p class="hint small" data-testid="analytics-daily-dir">{dailyWhy}</p>{/if}
     <!-- Still checks (cams #179): a second picked by hand in cams, within the limits above. -->
     <div class="row"><label>Still checks per day (0 = off) <input type="number" min="0" max="1000" step="1" value={checks} oninput={(e) => (checksDraft = e.currentTarget.value)} data-testid="analytics-checks" /></label>
+      <HelpTip label="still checks per day" testid="analytics-checks-help" text={HELP.checks} />
       <button disabled={checksValue === null || !!locked || !!checksWhy} data-testid="analytics-checks-save" aria-label="Save still checks per day" onclick={() => checksValue !== null && void put({ googleVision: { checksPerDay: checksValue } }, 'Still checks per day', () => (checksDraft = undefined))}>Save</button></div>
     {#if checksValue === null}<p class="hint small" data-testid="analytics-checks-hint">a whole number from 0 to 1,000</p>{/if}
     {#if checksWhy}<p class="hint small" data-testid="analytics-checks-dir">{checksWhy}</p>{/if}
     <div class="row"><label>Per camera and day (0 = no cap) <input type="number" min="0" max="10000" step="1" value={perCamera} oninput={(e) => (perCameraDraft = e.currentTarget.value)} data-testid="analytics-per-camera" /></label>
+      <HelpTip label="per camera and day" testid="analytics-per-camera-help" text={HELP.perCamera} />
       <button disabled={perCameraValue === null || !!locked || !!perCameraWhy} data-testid="analytics-per-camera-save" aria-label="Save the per-camera daily cap" onclick={() => perCameraValue !== null && void put({ googleVision: { perCameraDailyCap: perCameraValue } }, 'Per-camera cap', () => (perCameraDraft = undefined))}>Save</button></div>
     {#if perCameraValue === null}<p class="hint small" data-testid="analytics-per-camera-hint">a whole number from 0 to 10,000</p>{/if}
     {#if perCameraWhy}<p class="hint small" data-testid="analytics-per-camera-dir">{perCameraWhy}</p>{/if}
@@ -165,6 +180,9 @@
   legend { font-size: 13px; color: var(--muted); padding: 0; margin-bottom: 4px; }
   .provider { display: grid; gap: 6px; padding-top: 6px; border-top: 1px solid var(--border); }
   .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .row.head { gap: 16px; }
+  .row.head h4 { margin: 0; }
+  .row.key { gap: 6px 16px; }
   input[type='password'] { margin-left: 4px; width: 260px; max-width: 100%; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; }
   .notice { margin: 0; padding: 6px 8px; border-radius: 6px; border: 1px solid #a855f7; background: var(--surface-2); }
   input[type='number'] { width: 90px; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; }
