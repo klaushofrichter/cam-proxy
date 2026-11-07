@@ -8,7 +8,7 @@ import type { LocateResult, SwitchDetail } from './driver';
 // raises that port's tx clearly above every other port (measured 2026-11-05:
 // 10–30×). Only tx counts: a camera's own stream keeps its port's rx high.
 
-export const LOCATE_RATIO = 5; // the top port's tx at least 5× the next linked port's
+export const LOCATE_RATIO = 5; // the top port's tx at least 5× the next linked port's, and 5× its own baseline
 // The top port's tx must rise at least this much over its own baseline, and
 // the next port's tx counts as at least this much in the ratio (rates of 0).
 // A guess: the rates' unit isn't documented; the measured ratios were 10–30×.
@@ -29,6 +29,9 @@ export function pickPort(ports: number, base: SwitchDetail, burst: SwitchDetail,
   seen.sort((a, b) => b.tx - a.tx);
   const [top, next] = seen;
   if (!top || top.rise < LOCATE_FLOOR) return { found: false, reason: 'no_traffic' };
+  // The burst must also show against the port's own baseline: a port with
+  // steady high tx is not the camera's just because it is the busiest.
+  if (top.tx < LOCATE_RATIO * Math.max(base.tx[top.index] ?? 0, LOCATE_FLOOR)) return { found: false, reason: 'no_traffic' };
   const ratio = Math.round((top.tx / Math.max(next?.tx ?? 0, LOCATE_FLOOR)) * 10) / 10;
   if (ratio < LOCATE_RATIO) return { found: false, reason: 'ambiguous', ratio };
   return { found: true, port: top.port, poe: burst.poe[top.index], watts: burst.watts[top.index] ?? 0, link: burst.link[top.index] ?? null, ratio };

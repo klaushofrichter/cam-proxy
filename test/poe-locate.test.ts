@@ -45,6 +45,11 @@ describe('pickPort: the port whose tx rose clearly above every other port', () =
     expect(pickPort(8, detail(ones()), detail(withAt({ 9: 40 })), reversed)).toEqual({ found: false, reason: 'no_traffic' });
   });
 
+  it('a port with steady high tx is not picked: the burst must be 5× its own baseline', () => {
+    const base = detail(withAt({ [reversed(3)]: 20 }));
+    expect(pickPort(8, base, detail(withAt({ [reversed(3)]: 40 })), reversed)).toMatchObject({ found: false });
+  });
+
   it('an unlinked port is ignored', () => {
     const link = Array.from({ length: 10 }, (_, i) => i !== reversed(5));
     // Port 5 has no link (a stale counter): port 3 wins alone.
@@ -111,7 +116,7 @@ describe('PoeSwitch.locate, survey and the verified cycle (on the mock)', () => 
     expect(m.activeSession()).toBe(false);
   });
 
-  it('survey: each camera in turn, in one session', async () => {
+  it('survey: each camera in turn, each in its own session', async () => {
     const { m, p } = await setup({ cam3: 5, cam2: 6 });
     expect(await p.survey([{ camera: 'cam_3', host: 'cam3' }, { camera: 'cam_2', host: 'cam2' }, { camera: 'cam_x', host: 'nowhere' }])).toEqual({
       sn: 'GPS208MOCK0001',
@@ -121,8 +126,22 @@ describe('PoeSwitch.locate, survey and the verified cycle (on the mock)', () => 
         { camera: 'cam_x', found: false, reason: 'no_traffic' },
       ],
     });
-    expect(m.calls.filter((c) => c.cmd === 123)).toHaveLength(1);
+    expect(m.calls.filter((c) => c.cmd === 123)).toHaveLength(3);
+    expect(m.calls.filter((c) => c.cmd === 126)).toHaveLength(3);
     expect(m.activeSession()).toBe(false);
+  });
+
+  it('survey: a read queued during it goes between cameras, before the last one', async () => {
+    const m = await startPoeSwitchMock({ password: PASSWORD, powered: { 0: 6.8, 5: 4.5, 6: 3.2 } });
+    mocks.push(m);
+    const order: string[] = [];
+    const burst = burstOn(m, { cam3: 5, cam2: 6 });
+    const p = new PoeSwitch({ ref: () => ref(m), password: () => PASSWORD, sleep: async () => undefined, timeoutMs: 1000, pingBurst: (h) => (order.push(`burst ${h}`), burst(h)) });
+    const survey = p.survey([{ camera: 'cam_3', host: 'cam3' }, { camera: 'cam_2', host: 'cam2' }, { camera: 'cam_x', host: 'nowhere' }]);
+    const read = p.read(8, { fresh: true }).then((r) => (order.push('read'), r));
+    expect((await read).watts).toBe(6.8);
+    expect((await survey).results).toHaveLength(3);
+    expect(order).toEqual(['burst cam3', 'read', 'burst cam2', 'burst nowhere']);
   });
 
   it('cycle with verifyHost: the camera is on another port → not_verified, PoE never switched', async () => {

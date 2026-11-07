@@ -281,19 +281,18 @@ export class PoeSwitch {
     return this.session(undefined, (s, c, driver) => this.locateIn(s, c, driver, host));
   }
 
-  // locate for each camera, one after another, in one session.
-  survey(cameras: Array<{ camera: string; host: string }>): Promise<SurveyResult> {
-    return this.session(undefined, async (s, c, driver) => {
-      let sn: string | null = null;
-      const results: SurveyResult['results'] = [];
-      for (const cam of cameras) {
-        if (this.stopped) throw new PoeSwitchError('switch_error', 'the proxy is stopping');
-        const { sn: got, ...l } = await this.locateIn(s, c, driver, cam.host);
-        sn = got;
-        results.push({ camera: cam.camera, ...l });
-      }
-      return { sn, results };
-    });
+  // locate for each camera, one after another, each in its own queued
+  // session: the switch is released between cameras, so a read or a cycle
+  // queued during a survey goes next instead of waiting for all of it.
+  async survey(cameras: Array<{ camera: string; host: string }>): Promise<SurveyResult> {
+    let sn: string | null = null;
+    const results: SurveyResult['results'] = [];
+    for (const cam of cameras) {
+      const { sn: got, ...l } = await this.locate(cam.host);
+      sn = got;
+      results.push({ camera: cam.camera, ...l });
+    }
+    return { sn, results };
   }
 
   private async locateIn(s: SwitchSession, c: PoeSwitchConfig, driver: SwitchDriver, host: string): Promise<Located> {
