@@ -16,7 +16,7 @@ export class PrivateFileInvalid extends Error {}
 export type Stat = (fd: number) => { mode: number; uid: number };
 
 // The files tightenAdminFiles() sweeps at startup.
-export const ADMIN_FILES = ['key.json', 'tokens.json', 'commands.json', 'policy.json', 'replay.json', 'replay-mark.json', 'camera-passwords.json'] as const;
+export const ADMIN_FILES = ['key.json', 'tokens.json', 'commands.json', 'policy.json', 'replay.json', 'replay-mark.json', 'camera-passwords.json', 'switch-passwords.json'] as const;
 
 // Tests: another owner (fstat), a chmod that does not take (fchmod).
 // onTightened: the proxy logs it (the path and the old mode, never content).

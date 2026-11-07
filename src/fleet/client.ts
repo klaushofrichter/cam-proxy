@@ -7,8 +7,7 @@ import { buildEnvelope, fingerprint, parseEnvelope, readCapped, sign, signedText
 import { SeenIds } from './command-check';
 import type { CommandRunner, ConnCtx } from './commands';
 import type { ReplayGuard } from './replay';
-import { EventOutbox } from './outbox';
-import type { MoveEvent } from '../moves/types';
+import { EventOutbox, type AdminEvent } from './outbox';
 import { TIMED_OUT, within } from '../async';
 import type { AdminConnection } from '../health/cams-admin';
 
@@ -449,9 +448,9 @@ export class AdminClient {
     return m.id;
   }
 
-  // A signed event that answers no command (camera moves): sent at once while
+  // A signed event that answers no command (camera moves, power-cycle requests): sent at once while
   // connected, else kept (the newest 256) and sent in order after the next welcome.
-  emitEvent(body: MoveEvent): void {
+  emitEvent(body: AdminEvent): void {
     this.outbox.push(body);
     this.flushEvents();
   }

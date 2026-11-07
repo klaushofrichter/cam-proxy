@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/strict/commands/camera.power.set.args.schema.json",
+  "title": "camera.power.set args v1",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "camera": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+    },
+    "power": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "poe",
+            "data-only",
+            "adapter",
+            "unknown"
+          ]
+        },
+        "switchName": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "watts": {
+          "type": "number"
+        },
+        "verifiedAt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "notSeen": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "camera",
+    "power"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,22 @@
+{
+  "$note": "the camera's proxy asks cams-admin to power-cycle the camera through its switch (no force from a proxy)",
+  "schema": "event",
+  "message": {
+    "v": 1,
+    "type": "event",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "kind": "camera.power.cycle.request",
+      "camera": "cam1",
+      "requestId": "req-0123456789"
+    },
+    "sig": "5e8fE92Y3kqQb7Z2ZsRJ0S3HIUa5/okXBplNXIdvT4krFYtjirSPUuBSV3F7KJwqVvlxGXznCLNIHBeovUraBQ=="
+  },
+  "$context": {
+    "feature": "poe"
+  }
+}

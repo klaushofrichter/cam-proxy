@@ -11,6 +11,8 @@ export const HEARTBEAT_MAX_BYTES = 192 * 1024;
 const TEXT_MAX = 200;
 const VERSION_MAX = 64;
 const URL_MAX = 300;
+// commands.allow: at most this many entries (contract heartbeat schema).
+export const ALLOW_MAX = 64;
 
 export interface HeartbeatProxyInfo {
   startedAt: number | null;
@@ -41,7 +43,7 @@ function info(i: HeartbeatProxyInfo): HeartbeatProxyInfo {
     tls: i.tls ? { site: i.tls.site.slice(0, 63), caFingerprint: i.tls.caFingerprint.slice(0, 2) } : null,
     // A URL cut short would be wrong: none instead.
     publicUrl: i.publicUrl && i.publicUrl.length <= URL_MAX ? i.publicUrl : null,
-    ...(i.commands ? { commands: { enabled: i.commands.enabled, paused: i.commands.paused, pauseReason: i.commands.pauseReason === null ? null : i.commands.pauseReason.slice(0, TEXT_MAX), allow: i.commands.allow.filter((a) => a.length <= 64).slice(0, 32), seenWindow: i.commands.seenWindow } } : {}),
+    ...(i.commands ? { commands: { enabled: i.commands.enabled, paused: i.commands.paused, pauseReason: i.commands.pauseReason === null ? null : i.commands.pauseReason.slice(0, TEXT_MAX), allow: i.commands.allow.filter((a) => a.length <= 64).slice(0, ALLOW_MAX), seenWindow: i.commands.seenWindow } } : {}),
     ...(i.tokens ? { tokens: { revision: i.tokens.revision, client: i.tokens.client, admin: i.tokens.admin, blocked: i.tokens.blocked.slice(0, 64) } } : {}),
     ...(i.configRevision !== undefined ? { configRevision: i.configRevision } : {}),
   };

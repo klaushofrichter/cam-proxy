@@ -17,7 +17,7 @@ const make = (d: string, base = { allow: [] as string[], paused: false }, env: N
 describe('the closed lists', () => {
   it('allow entries: known names only; never-remote actions and unknown names are refused', () => {
     expect(validateAllowList(['tokens.apply', 'camera.action:camera-reboot'], 'x')).toEqual(['tokens.apply', 'camera.action:camera-reboot']);
-    for (const bad of [['frobnicate'], ['camera.action:find-camera'], ['camera.action:camera-trust-clear'], 'tokens.apply', [1], Array(33).fill('tokens.apply')]) expect(() => validateAllowList(bad, 'x'), JSON.stringify(bad)).toThrow();
+    for (const bad of [['frobnicate'], ['camera.action:find-camera'], ['camera.action:camera-trust-clear'], 'tokens.apply', [1], Array(65).fill('tokens.apply')]) expect(() => validateAllowList(bad, 'x'), JSON.stringify(bad)).toThrow();
     for (const a of NEVER_REMOTE_ACTIONS) expect(ALLOW_ENTRIES).not.toContain(`camera.action:${a}`);
   });
   it('the deny list covers camsAdmin.*, every address, port, file path and trust setting (M5)', () => {
@@ -43,13 +43,13 @@ describe('entry texts', () => {
 describe('CommandPolicy', () => {
   it('defaults: enabled, not paused, only the default-on read allowed; no file written by reading', () => {
     const d = dir();
-    expect(make(d).effective()).toEqual({ enabled: true, paused: false, pauseReason: null, allow: ['camera.onboarding.get', 'analytics.usage.get'], unconfirmed: [], envName: null });
+    expect(make(d).effective()).toEqual({ enabled: true, paused: false, pauseReason: null, allow: ['camera.onboarding.get', 'analytics.usage.get', 'camera.power.set', 'camera.power.cycling', 'camera.power.cycled', 'camera.power.cycle.result'], unconfirmed: [], envName: null });
     expect(() => statSync(join(d, 'admin'))).toThrow();
   });
   it('policy.json wins over config.json for allow; paused if either says so', () => {
     const d = dir();
     const p = make(d, { allow: ['tokens.apply'], paused: true });
-    expect(p.effective()).toMatchObject({ allow: ['tokens.apply', 'camera.onboarding.get', 'analytics.usage.get'], paused: true });
+    expect(p.effective()).toMatchObject({ allow: ['tokens.apply', 'camera.onboarding.get', 'analytics.usage.get', 'camera.power.set', 'camera.power.cycling', 'camera.power.cycled', 'camera.power.cycle.result'], paused: true });
     p.setAllow(['tokens.apply', 'tokens.apply.admin'], 'local');
     expect(p.effective().allow).toEqual(['tokens.apply', 'tokens.apply.admin']);
     expect(statSync(join(d, 'admin', 'policy.json')).mode & 0o777).toBe(0o600);
@@ -96,9 +96,9 @@ describe('CommandPolicy', () => {
     const d = dir();
     writePrivateJson(join(d, 'admin', 'policy.json'), { v: 1, allow: ['tokens.apply', 'config.set', 'camera.action:camera-reboot'], changedAt: 1, changedBy: 'local' });
     const p = make(d);
-    expect(p.effective()).toMatchObject({ allow: ['tokens.apply', 'camera.onboarding.get', 'analytics.usage.get'], unconfirmed: ['config.set', 'camera.action:camera-reboot'] });
+    expect(p.effective()).toMatchObject({ allow: ['tokens.apply', 'camera.onboarding.get', 'analytics.usage.get', 'camera.power.set', 'camera.power.cycling', 'camera.power.cycled', 'camera.power.cycle.result'], unconfirmed: ['config.set', 'camera.action:camera-reboot'] });
     // config.json's base the same way (a P2 deployment may list them).
-    expect(make(dir(), { allow: ['tokens.apply.admin', 'proxy.restart'], paused: false }).effective()).toMatchObject({ allow: ['tokens.apply.admin', 'camera.onboarding.get', 'analytics.usage.get'], unconfirmed: ['proxy.restart'] });
+    expect(make(dir(), { allow: ['tokens.apply.admin', 'proxy.restart'], paused: false }).effective()).toMatchObject({ allow: ['tokens.apply.admin', 'camera.onboarding.get', 'analytics.usage.get', 'camera.power.set', 'camera.power.cycling', 'camera.power.cycled', 'camera.power.cycle.result'], unconfirmed: ['proxy.restart'] });
     // A managed admin can't confirm (that widens); the local admin can.
     expect(() => p.setAllow(['tokens.apply', 'config.set'], 'managed')).toThrow(WideningRefused);
     p.setAllow(['tokens.apply', 'config.set'], 'local');
@@ -112,7 +112,7 @@ describe('CommandPolicy', () => {
   it('M5: a stored camera.action:camera-ftp-off (allowed before) is dropped, never makes the file unusable', () => {
     const d = dir();
     writePrivateJson(join(d, 'admin', 'policy.json'), { v: 1, allow: ['tokens.apply', 'camera.action:camera-ftp-off'], changedAt: 1, changedBy: 'local' });
-    expect(make(d).effective()).toMatchObject({ paused: false, allow: ['tokens.apply', 'camera.onboarding.get', 'analytics.usage.get'], unconfirmed: [] });
+    expect(make(d).effective()).toMatchObject({ paused: false, allow: ['tokens.apply', 'camera.onboarding.get', 'analytics.usage.get', 'camera.power.set', 'camera.power.cycling', 'camera.power.cycled', 'camera.power.cycle.result'], unconfirmed: [] });
     expect(validateAllowList(['tokens.apply', 'camera.action:camera-ftp-off'], 'x', true)).toEqual(['tokens.apply']);
     expect(() => validateAllowList(['camera.action:camera-ftp-off'], 'x')).toThrow();
   });
@@ -123,18 +123,18 @@ describe('the onboarding entries (spec 2026-10-30-camera-onboarding-design §4.6
   it('camera.onboarding.get is allowed by default and can be switched off locally; managed rights only narrow', () => {
     const d = dir();
     const p = make(d);
-    expect(DEFAULT_ON).toEqual(['camera.onboarding.get', 'analytics.usage.get']);
+    expect(DEFAULT_ON).toEqual(['camera.onboarding.get', 'analytics.usage.get', 'camera.power.set', 'camera.power.cycling', 'camera.power.cycled', 'camera.power.cycle.result']);
     expect(p.effective().allow).toContain('camera.onboarding.get');
     expect(IMPLEMENTED.has('camera.onboarding.get')).toBe(true);
     expect(ENTRY_TEXT['camera.onboarding.get']).toBe("cams-admin may read each camera's onboarding status (no secrets)");
     p.setAllow([], 'managed');
     expect(p.effective().allow).not.toContain('camera.onboarding.get');
-    expect((JSON.parse(readFileSync(join(d, 'admin', 'policy.json'), 'utf8')) as { off: string[] }).off).toEqual(['camera.onboarding.get', 'analytics.usage.get']);
+    expect((JSON.parse(readFileSync(join(d, 'admin', 'policy.json'), 'utf8')) as { off: string[] }).off).toEqual(['camera.onboarding.get', 'analytics.usage.get', 'camera.power.set', 'camera.power.cycling', 'camera.power.cycled', 'camera.power.cycle.result']);
     expect(() => p.setAllow(['camera.onboarding.get', 'analytics.usage.get'], 'managed')).toThrow(WideningRefused);
     p.setAllow(['camera.onboarding.get', 'config.get'], 'local');
     expect(p.effective().allow).toEqual(expect.arrayContaining(['camera.onboarding.get', 'config.get']));
     const f = JSON.parse(readFileSync(join(d, 'admin', 'policy.json'), 'utf8')) as { allow: string[]; off: string[] };
-    expect([f.allow, f.off]).toEqual([['config.get'], ['analytics.usage.get']]);
+    expect([f.allow, f.off]).toEqual([['config.get'], ['analytics.usage.get', 'camera.power.set', 'camera.power.cycling', 'camera.power.cycled', 'camera.power.cycle.result']]);
   });
 
   // Vision management (cams-admin design 2026-11-05): a read without secrets, on by default
@@ -142,7 +142,7 @@ describe('the onboarding entries (spec 2026-10-30-camera-onboarding-design §4.6
   it('analytics.usage.get is on by default, also with a policy saved by an earlier version', () => {
     const d = dir();
     writePrivateJson(join(d, 'admin', 'policy.json'), { v: 1, allow: ['config.get'], off: ['camera.onboarding.get'], consent: 3, changedAt: 1, changedBy: 'local' });
-    expect(make(d).effective().allow).toEqual(['config.get', 'analytics.usage.get']);
+    expect(make(d).effective().allow).toEqual(['config.get', 'analytics.usage.get', 'camera.power.set', 'camera.power.cycling', 'camera.power.cycled', 'camera.power.cycle.result']);
     make(d).setAllow(['config.get'], 'local');
     expect(make(d).effective().allow).toEqual(['config.get']);
   });

@@ -1,10 +1,33 @@
 # Camera power-cycle through the PoE switch
 
 When the camera's own API stops helping (a reboot doesn't clear a fault, or the
-camera doesn't answer at all), the proxy can cut the camera's power on its PoE
-switch and turn it on again (issue #85). It does this only when a switch is
-configured, only for the configured port, and only while that port is
-powering something.
+camera doesn't answer at all), the camera's power can be cut on its PoE
+switch and turned on again (issue #85). It happens only for the camera's
+port, and only while that port is powering something.
+
+**Power-cycles go through cams-admin** (spec
+2026-11-07-poe-switches-design). cams-admin holds each camera's power (switch
+and port), checks that the camera is on that port, and runs the cycle on the
+proxy that operates the switch (`switch.cycle`). The camera's own proxy keeps
+its state: cams-admin tells it when the PoE went off (`camera.power.cycling`)
+and when it is on again (`camera.power.cycled`), and it shows "power-cycling",
+then "rebooting" until the camera answers, with the shared 2-minute cooldown.
+The Maintenance page's "Power-cycle (through cams-admin)" asks cams-admin
+(`POST /control/cameras/<id>/actions/camera-powercycle`: 202 `{requestId}`,
+the signed event `camera.power.cycle.request`) and shows "Asked cams-admin…"
+until its answer (`camera.power.cycle.result`). A request without an answer ends after 5 minutes (the result then says "no answer from cams-admin within 5 minutes"; a later answer still replaces it), and at once when the proxy is unenrolled or cams-admin is switched off. Without cams-admin (not
+connected, or it has not sent the camera's power yet) it is refused: 409
+`power_cycle_needs_cams_admin`. A proxy never forces a cycle. `GET
+/control/cameras/<id>/power` returns the camera's power as cams-admin sent it
+(`camera.power.set`, kept in `<dataDir>/camera-power.json`, no secrets), the
+open request and cams-admin's last answer. Camera settings shows it: "PoE:
+Switch 2, port 3, verified 2 h ago", "Data only: power adapter", "Power
+adapter" or "Unknown".
+
+What follows describes the switch, the cycle itself (the same code runs for
+cams-admin's `switch.cycle`), the recovery and the stop. The camera's
+`poeSwitch` settings still drive "Turn camera PoE on" and the switch read
+until they are removed after the migration; they no longer power-cycle.
 
 ## The switch
 
@@ -105,8 +128,8 @@ cam1's Pi, for example:
 
 ## What a power-cycle does
 
-`POST /control/actions/camera-powercycle` (admin only; an admin session also
-needs the `X-CamProxy-UI` header):
+The cycle on the operating proxy (cams-admin's `switch.cycle`; before
+cams-admin, `POST /control/actions/camera-powercycle` ran these steps):
 
 1. **Checks:** 409 `not_configured` when `model` is `none`, `host` or `port` is
    missing, `port` is above `ports`, or the password is not set. 429
@@ -187,22 +210,35 @@ its own.
 
 ## Admin UI
 
-- **Maintenance:** "Power-cycle camera", only when a switch is configured. It
-  asks first, in the same dialog as "Reboot camera": "Cut the camera's PoE
-  power on <host> port <n> for 10 s? The camera is offline for about a
-  minute. Only works while nobody is logged in to the switch's web UI." Then
-  "Power-cycling…" while the PoE is off, "Rebooting…" until the camera
-  answers, and how long it was away. "Turn camera PoE on" next to it
+- **Maintenance:** "Power-cycle (through cams-admin)", enabled while
+  cams-admin is connected and has sent the camera's power (else a line says
+  why). It asks first, in the same dialog as "Reboot camera": "Ask cams-admin
+  to power-cycle the camera (PoE: Switch 2, port 3)? cams-admin first checks
+  that the camera is on that port, then cuts its PoE for a few seconds. The
+  camera is offline for about a minute." Then "Asked cams-admin…" until
+  cams-admin cuts the PoE or answers, "Power-cycling…" while the PoE is off,
+  "Rebooting…" until the camera answers, and how long it was away; a refusal
+  or a failed cycle shows cams-admin's reason. "Turn camera PoE on" next to it
   (recovery, no dialog). While the camera's PoE may be off, a red line says
   so; a failed power-cycle's result line says whether PoE is on again.
 - **Status:** the camera's state shows "power-cycling", then "rebooting"; the
   PoE switch line shows the switch, the port and the last reading.
-- **Settings:** the `camera.poeSwitch` settings in the camera group, and a PoE
-  switch card with the last reading and "Read the switch now".
+- **Camera settings:** a Power card with the camera's power from cams-admin
+  (no settings); with the old `poeSwitch` settings, the switch's last reading
+  and "Read the switch now".
 
 ## Audit
 
-`camera-powercycle` (host / change, user `admin`) with `switch: {model, host,
+Through cams-admin, `camera-powercycle` records carry `via: cams-admin` and a
+`phase`: `asked` (the Maintenance request, user `admin`, `requestId`),
+`requested` (cams-admin cut the PoE, user `cams-admin`, `offAt`;
+`duringReboot` when a reboot or power-cycle was already under way),
+`cycled` (PoE on again), `failed` (host / end: the cycle failed, cams-admin's
+message), `result` (cams-admin's answer to a request, `requestId`, `reason`),
+then `back` or `not-back` as below. The switch side is the operator's
+`switch-port-cycled` record.
+
+Before cams-admin: `camera-powercycle` (host / change, user `admin`) with `switch: {model, host,
 port}`, `offSeconds`, `requestedBy` and, on success, `watts`, `offAt` and
 `onAt`. Then a second record (host / end, user `system`) when the camera
 answers again (`downSec`, from the cut), or a failure after 5 minutes. A

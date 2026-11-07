@@ -31,7 +31,7 @@ import { reapOrphanGo2rtc } from './stills/orphans';
 import { Go2rtc } from './stills/go2rtc';
 import { latestApi } from './api/latest-api';
 import { CachePool } from './recordings/pool';
-import { PoeSwitch } from './camera/poe-switch';
+import { SwitchRegistry } from './camera/switch/registry';
 import { restartProcess } from './process-restart';
 import type { Config } from './config/defaults';
 import { applyOverrides, configRevision, getPath, needsProcessRestart, needsRestart, removeOverride, setPath, settingPaths, type Loaded } from './config/load';
@@ -78,6 +78,9 @@ import { configHandlers, type ConfigCommandDeps } from './fleet/config-commands'
 import { analyticsHandlers } from './fleet/analytics-commands';
 import { cameraHandlers } from './fleet/camera-commands';
 import { moveHandlers } from './moves/commands';
+import { switchHandlers } from './fleet/switch-commands';
+import { CameraPowerStore, powerHandlers, powerView, requestPowerCycle, type PowerRequestDeps } from './fleet/power-commands';
+import type { AdminEvent } from './fleet/outbox';
 import { MoveReturns } from './moves/returns';
 import { MoveJournal } from './moves/journal';
 import { movesSourceApi, refreshManifest } from './api/moves-api';
@@ -89,12 +92,12 @@ import { MoveSync, type MoveSyncDeps } from './moves/sync';
 import { CopyRunner } from './moves/copier';
 import { capturedMark } from './moves/captured';
 import { purgeExcept, removeImported } from './moves/purge';
-import type { MoveEvent } from './moves/types';
 import { cameraPasswordStore } from './config/camera-passwords';
 import { credentialsOf, passwordSource } from './onboarding/credentials';
 import { OnboardingService } from './onboarding/service';
 import { PasswordAttempts } from './onboarding/attempts';
 import { onboardingApi } from './api/onboarding-api';
+import { switchesApi } from './api/switches-api';
 import { proxyZone } from './onboarding/zone';
 import { compactOf } from './onboarding/status';
 import { RemoveLeftovers } from './onboarding/remove-leftovers';
@@ -139,6 +142,7 @@ export interface Proxy {
   readonly loaded: Loaded;
   readonly running: Config;
   app: Express;
+  readonly switches: SwitchRegistry; // the PoE switches this proxy operates, by id
   catalog: Catalog;
   log: StreamLog;
   readonly status: StatusPoller;
@@ -503,9 +507,13 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   let go2rtcMadeWith = go2rtcSettings();
   // Started in the background: each camera's grabber waits until it is up.
   const startGo2rtc = () => void go2rtc?.start().catch((err: Error) => logger.error({ err: err.message }, 'go2rtc_start_failed'));
-  // One PoE controller for the host (spec 2026-10-05-multi-camera-host-design §8.4):
+  // One PoE controller for the host's switch (spec 2026-10-05-multi-camera-host-design §8.4):
   // one switch session at a time, in arrival order; each camera has its port.
-  const poe = new PoeSwitch({ config: () => running.poeSwitch, password: () => loaded.secrets.poeSwitchPassword });
+  // The host config's switch as a ref (until switches come from cams-admin).
+  // The registry holds every switch by id (spec 2026-11-07-poe-switches-design), the host config's as `legacy`.
+  const switches = new SwitchRegistry({ dataDir: running.server.dataDir, legacy: () => running.poeSwitch, legacyPassword: () => loaded.secrets.poeSwitchPassword,
+    onForgotten: (r) => audit.write({ action: 'switch-forgotten', category: ['configuration'], type: ['change'], outcome: r.portsLeftOff.length || r.sessionMaybeOpen ? 'failure' : 'success', user: 'system', message: `PoE switch ${r.id} (${r.ref.host}) forgotten${r.portsLeftOff.length ? `; PoE may be left OFF on port ${r.portsLeftOff.join(', ')}` : ''}${r.sessionMaybeOpen ? '; its web session may still be open' : ''}`, details: { switch: { id: r.id, host: r.ref.host }, ...(r.portsLeftOff.length ? { portsLeftOff: r.portsLeftOff } : {}), ...(r.sessionMaybeOpen ? { sessionMaybeOpen: true } : {}) } }) });
+  const poe = switches.legacy;
   // One recordings cache for every camera (spec §8.3): one LRU, capped by recordings.cacheMB.
   const cachePool = new CachePool(() => running.recordings.cacheMB * 2 ** 20);
   const makeWorker = (id: string) =>
@@ -959,7 +967,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // an event to cams-admin, the CPU over its core count, the storage figures a
   // move weighs, and the push answer while the site CA can't push.
   const proxyIdNow = () => camsAdmin.keyInfo()?.proxyId ?? '';
-  const emitToAdmin = (e: MoveEvent) => camsAdmin.emitEvent(e);
+  const emitToAdmin = (e: AdminEvent) => camsAdmin.emitEvent(e);
   const cpuBusy = opts.cpuBusy ?? (() => loadavg()[0] > availableParallelism());
   const moveUsage = () => {
     const u = storage.usage();
@@ -1337,6 +1345,17 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       };
     },
   });
+  // Power-cycles through cams-admin (spec 2026-11-07-poe-switches-design): the
+  // camera's power as cams-admin sent it (data/camera-power.json, no secrets),
+  // and asking for a cycle (the event), which needs cams-admin connected.
+  const cameraPower = new CameraPowerStore(running.server.dataDir);
+  const powerRequest: PowerRequestDeps = {
+    store: cameraPower,
+    connected: () => camsAdmin.connection()?.connected === true,
+    emit: emitToAdmin,
+    reboot: (cam) => worker(cam).reboot,
+    audit,
+  };
   const controlDeps: ControlDeps = {
     onboarding,
     changeMarks: () => overridesBackups.byPath(),
@@ -1382,9 +1401,9 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     },
     cameraReboot: (who, cam) => worker(cam).reboot.request(who),
     poeSwitch: { notConfigured: (cam) => worker(cam).poeSwitch.notConfigured(), read: (cam) => worker(cam).poeSwitch.read(), poeOn: (cam) => worker(cam).poeSwitch.poeOn(), info: (cam) => worker(cam).poeSwitchInfo() },
-    cameraPowerCycle: (who, cam) => {
-      const w = worker(cam);
-      return w.reboot.powerCycle(who, { switch: w.poeSwitchInfo(), offSeconds: w.cam().poeSwitch.offSeconds }, (onOff) => w.poeSwitch.cycle(onOff));
+    cameraPower: {
+      request: (who, cam) => requestPowerCycle(powerRequest, cam, who),
+      view: (cam) => powerView({ ...powerRequest, configured: () => camsAdmin.active() && camsAdmin.keyInfo() !== null }, cam),
     },
     restartProcess: () => {
       processRestart ??= restartProcess({
@@ -1438,6 +1457,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     },
   };
   app.use('/control', requireAccess('admin', access), onboardingApi(onboarding));
+  app.use('/control', requireAccess('admin', access), switchesApi({ registry: switches, dataDir: running.server.dataDir, audit }));
   app.use('/control', requireAccess('admin', access), movesControlApi(moveSource, moveSync));
   app.use('/control', requireAccess('admin', access), controlApi(controlDeps));
   // cams-admin's P3 commands (plan P3 Task 10): each off unless allowed locally.
@@ -1447,6 +1467,10 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     // Vision management (cams-admin design 2026-11-05): the Google Vision settings and use.
     analyticsHandlers({ state: () => analytics.state(), config: () => running }),
     cameraHandlers({ actions: controlDeps, cameraIds: () => cams.ids(), cameraName: controlDeps.cameraName, audit, restartProcess: () => controlDeps.restartProcess(), onboarding: (cam) => onboarding.status(cam) }),
+    // PoE switches (spec 2026-11-07-poe-switches-design): by cams-admin's switch id, the proxy's own passwords.
+    switchHandlers({ registry: switches, audit }),
+    // The camera's power and cams-admin's power-cycles of it (default on: notices, they cut nothing).
+    powerHandlers({ store: cameraPower, cameraIds: () => cams.ids(), reboot: (cam) => worker(cam).reboot, audit }),
     // Camera moves (plan 2026-10-21-camera-move-cam-proxy): stubs until each task fills its handler in.
     moveHandlers({
       emit: emitToAdmin,
@@ -1580,6 +1604,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     },
     running,
     app,
+    switches,
     extFeed,
     catalog,
     log,
@@ -1710,7 +1735,17 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       audit.write({ action: 'proxy-stop', category: ['process'], type: ['end'], outcome: 'success', user: 'system', message: `cam-proxy stopping${opts.reason ? ` (${opts.reason})` : ''}`, details: { reason: opts.reason ?? 'stop' } });
       // Each camera's PoE back on if a power-cycle is in its off time; one
       // record per camera the proxy may leave dark (spec §8.4).
-      const { portsLeftOff, sessionMaybeOpen } = await poe.stop();
+      const stops = await switches.stop();
+      const { portsLeftOff, sessionMaybeOpen } = stops.find((x) => x.id === 'legacy')!;
+      // A switch by id: one record, built like the legacy one below.
+      for (const o of stops.filter((x) => x.id !== 'legacy' && (x.portsLeftOff.length || x.sessionMaybeOpen))) {
+        const host = switches.known().find((k) => k.id === o.id)?.host ?? '';
+        const parts = [
+          ...(o.portsLeftOff.length ? [`PoE may be left OFF on PoE switch ${o.id} (${host}) port ${o.portsLeftOff.join(', ')}; turn it on in the switch's web UI, or with "Turn PoE on" under Proxy settings once the proxy is back`] : []),
+          ...(o.sessionMaybeOpen ? [`the proxy's web session on PoE switch ${o.id} (${host}) may still be open: the switch's web UI may refuse logins until the switch ends it`] : []),
+        ];
+        audit.write({ action: 'camera-powercycle', category: ['host'], type: ['end'], outcome: 'failure', user: 'system', message: `cam-proxy stopping: ${parts.join('; ')}`, details: { phase: 'stop', poeLeftOff: o.portsLeftOff.length > 0, sessionMaybeOpen: o.sessionMaybeOpen, switch: { id: o.id, host }, ...(o.portsLeftOff.length ? { portsLeftOff: o.portsLeftOff } : {}) } });
+      }
       const swInfo = { model: running.poeSwitch.model, host: running.poeSwitch.host ?? '' };
       for (const port of portsLeftOff) {
         const w = cams.list().find((x) => x.cam().poeSwitch.port === port);

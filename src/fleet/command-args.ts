@@ -249,6 +249,89 @@ export const validateMoveFinish = (a: unknown) => v1<MoveFinishArgs>(a, ['moveId
 // copied is required only for the target (a source cancel carries expectedLeaf instead, optional).
 export const validateMoveCancel = (a: unknown) => v1<MoveCancelArgs>(a, ['moveId', 'role', 'copied', 'expectedLeaf'], (o) =>
   moveId(o) ?? role(o) ?? (o.role === 'target' && o.copied === undefined ? 'copied' : !optional(o, 'copied', oneOf('delete', 'age-out')) ? 'copied' : !optional(o, 'expectedLeaf', (x) => typeof x === 'string' && FINGERPRINT.test(x)) ? 'expectedLeaf' : null));
+// ---- PoE switches (contract commands/switch.*.args, strict) ----
+export interface SwitchRefArgs { id: string; model: 'sscpoe-web'; host: string; ports: number; offSeconds: number }
+export interface SwitchReadArgs { v: 1; switch: SwitchRefArgs }
+export interface SwitchLocateArgs { v: 1; switch: SwitchRefArgs; host: string }
+export interface SwitchSurveyArgs { v: 1; switch: SwitchRefArgs; cameras: { camera: string; host: string }[] }
+export interface SwitchCycleArgs { v: 1; switch: SwitchRefArgs; port: number; host: string | null; force: boolean; camera: string }
+export interface SwitchPoeOnArgs { v: 1; switch: SwitchRefArgs; port: number }
+export interface SwitchForgetArgs { v: 1; switchId: string }
+const SWITCH_ID = /^sw_[A-Za-z0-9]{20}$/;
+// cams-admin's camera id (the cams id), not this proxy's camera id.
+const CAMS_ID = /^cam_[0-9A-HJKMNP-TV-Z]{20}$/;
+const camsId = (x: unknown): x is string => typeof x === 'string' && CAMS_ID.test(x);
+const hostStr = (x: unknown): x is string => typeof x === 'string' && x.length >= 1 && x.length <= 253;
+// A switch address: a name (its last label with a letter) or an IPv4 address
+// as four decimal numbers; no port, scheme, path or user part. It goes into
+// the switch's URL (http://<host>/…) with the switch password.
+const HOST_LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
+export const validSwitchHost = (x: unknown): x is string => {
+  if (typeof x !== 'string' || x.length < 1 || x.length > 253) return false;
+  const labels = x.split('.');
+  if (!labels.every((l) => HOST_LABEL.test(l))) return false;
+  if (labels.every((l) => /^[0-9]+$/.test(l))) return labels.length === 4 && labels.every((l) => /^(0|[1-9][0-9]{0,2})$/.test(l) && Number(l) <= 255);
+  return /[A-Za-z]/.test(labels[labels.length - 1]);
+};
+const int = (x: unknown, lo: number, hi: number): x is number => Number.isInteger(x) && (x as number) >= lo && (x as number) <= hi;
+// The only switch model this version drives is sscpoe-web (the registry keeps no other).
+const switchRefProblem = (s: unknown): string | null => {
+  if (!isObj(s) || !only(s, ['id', 'model', 'host', 'ports', 'offSeconds'])) return 'switch';
+  if (typeof s.id !== 'string' || !SWITCH_ID.test(s.id)) return 'switch.id';
+  if (s.model !== 'sscpoe-web') return 'switch.model';
+  if (!validSwitchHost(s.host)) return 'switch.host';
+  if (!int(s.ports, 1, 64)) return 'switch.ports';
+  if (!int(s.offSeconds, 1, 120)) return 'switch.offSeconds';
+  return null;
+};
+export const validateSwitchRead = (a: unknown) => v1<SwitchReadArgs>(a, ['switch'], (o) => switchRefProblem(o.switch));
+export const validateSwitchLocate = (a: unknown) => v1<SwitchLocateArgs>(a, ['switch', 'host'], (o) => switchRefProblem(o.switch) ?? (hostStr(o.host) ? null : 'host'));
+export const validateSwitchSurvey = (a: unknown) => v1<SwitchSurveyArgs>(a, ['switch', 'cameras'], (o) => {
+  const p = switchRefProblem(o.switch);
+  if (p) return p;
+  if (!Array.isArray(o.cameras) || o.cameras.length < 1 || o.cameras.length > 16) return 'cameras: 1 to 16';
+  for (const c of o.cameras) if (!isObj(c) || !only(c, ['camera', 'host']) || !camsId(c.camera) || !hostStr(c.host)) return 'cameras';
+  return null;
+});
+export const validateSwitchCycle = (a: unknown) => v1<SwitchCycleArgs>(a, ['switch', 'port', 'host', 'force', 'camera'], (o) => {
+  const p = switchRefProblem(o.switch);
+  if (p) return p;
+  if (!int(o.port, 1, 64)) return 'port';
+  if (!('host' in o) || (o.host !== null && !hostStr(o.host))) return 'host';
+  if (typeof o.force !== 'boolean') return 'force';
+  return camsId(o.camera) ? null : 'camera';
+});
+export const validateSwitchPoeOn = (a: unknown) => v1<SwitchPoeOnArgs>(a, ['switch', 'port'], (o) => switchRefProblem(o.switch) ?? (int(o.port, 1, 64) ? null : 'port'));
+export const validateSwitchForget = (a: unknown) => v1<SwitchForgetArgs>(a, ['switchId'], (o) => (typeof o.switchId === 'string' && SWITCH_ID.test(o.switchId) ? null : 'switchId'));
+
+// ---- Camera power (contract commands/camera.power.*.args, strict): this proxy's camera id ----
+export interface CameraPowerSetArgs { v: 1; camera: string; power: { kind: 'poe' | 'data-only' | 'adapter' | 'unknown'; switchName?: string; port?: number; watts?: number; verifiedAt?: number; notSeen?: boolean } }
+export interface CameraPowerCyclingArgs { v: 1; camera: string; at: number }
+export interface CameraPowerCycledArgs { v: 1; camera: string; ok: boolean; message: string }
+export interface CameraPowerCycleResultArgs { v: 1; camera: string; requestId: string; ok: boolean; reason?: string }
+const POWER_KINDS = ['poe', 'data-only', 'adapter', 'unknown'];
+const powerProblem = (p: unknown): string | null => {
+  if (!isObj(p) || !only(p, ['kind', 'switchName', 'port', 'watts', 'verifiedAt', 'notSeen'])) return 'power';
+  if (typeof p.kind !== 'string' || !POWER_KINDS.includes(p.kind)) return 'power.kind';
+  if (p.switchName !== undefined && !(typeof p.switchName === 'string' && p.switchName.length <= 64)) return 'power.switchName';
+  if (p.port !== undefined && !int(p.port, 1, 64)) return 'power.port';
+  if (p.watts !== undefined && !(typeof p.watts === 'number' && Number.isFinite(p.watts))) return 'power.watts';
+  if (p.verifiedAt !== undefined && !(Number.isSafeInteger(p.verifiedAt) && (p.verifiedAt as number) >= 0)) return 'power.verifiedAt';
+  if (p.notSeen !== undefined && typeof p.notSeen !== 'boolean') return 'power.notSeen';
+  return null;
+};
+const camOf = (o: Record<string, unknown>): string | null => (typeof o.camera === 'string' && CAM.test(o.camera) ? null : 'camera');
+export const validateCameraPowerSet = (a: unknown) => v1<CameraPowerSetArgs>(a, ['camera', 'power'], (o) => camOf(o) ?? powerProblem(o.power));
+export const validateCameraPowerCycling = (a: unknown) => v1<CameraPowerCyclingArgs>(a, ['camera', 'at'], (o) => camOf(o) ?? (Number.isSafeInteger(o.at) && (o.at as number) >= 0 ? null : 'at'));
+export const validateCameraPowerCycled = (a: unknown) => v1<CameraPowerCycledArgs>(a, ['camera', 'ok', 'message'], (o) =>
+  camOf(o) ?? (typeof o.ok !== 'boolean' ? 'ok' : typeof o.message === 'string' && o.message.length <= 200 ? null : 'message'));
+export const validateCameraPowerCycleResult = (a: unknown) => v1<CameraPowerCycleResultArgs>(a, ['camera', 'requestId', 'ok', 'reason'], (o) => {
+  if (camOf(o)) return 'camera';
+  if (typeof o.requestId !== 'string' || o.requestId.length < 1 || o.requestId.length > 64) return 'requestId';
+  if (typeof o.ok !== 'boolean') return 'ok';
+  return o.reason === undefined || (typeof o.reason === 'string' && o.reason.length <= 200) ? null : 'reason';
+});
+
 export const ARGS_VALIDATORS: Record<string, (a: unknown) => ArgsVerdict<unknown>> = {
   'tokens.apply': validateTokensApply,
   'config.get': validateConfigGet,
@@ -273,4 +356,14 @@ export const ARGS_VALIDATORS: Record<string, (a: unknown) => ArgsVerdict<unknown
   'move.cancel': validateMoveCancel,
   'move.begin': validateMoveBegin,
   'move.summary': validateMoveSummary,
+  'switch.read': validateSwitchRead,
+  'switch.locate': validateSwitchLocate,
+  'switch.survey': validateSwitchSurvey,
+  'switch.cycle': validateSwitchCycle,
+  'switch.poeOn': validateSwitchPoeOn,
+  'switch.forget': validateSwitchForget,
+  'camera.power.set': validateCameraPowerSet,
+  'camera.power.cycling': validateCameraPowerCycling,
+  'camera.power.cycled': validateCameraPowerCycled,
+  'camera.power.cycle.result': validateCameraPowerCycleResult,
 };

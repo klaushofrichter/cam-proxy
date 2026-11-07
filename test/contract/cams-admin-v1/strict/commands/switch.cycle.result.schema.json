@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/strict/commands/switch.cycle.result.schema.json",
+  "title": "switch.cycle result v1",
+  "type": "object",
+  "properties": {
+    "verified": {
+      "type": "boolean"
+    },
+    "offAt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "onAt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "watts": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "verified",
+    "offAt",
+    "onAt",
+    "watts"
+  ],
+  "additionalProperties": false
+}

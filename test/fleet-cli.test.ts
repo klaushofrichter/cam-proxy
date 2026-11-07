@@ -174,7 +174,7 @@ describe('admin-commands and admin-tokens, proxy stopped', () => {
     r = await run(['admin-commands', 'pause', 'maintenance', 'window'], { cwd: dir });
     expect(r.code, r.err).toBe(0);
     r = await run(['admin-commands', 'status'], { cwd: dir });
-    expect(r.out).toMatch(/allowed: tokens\.apply, camera\.onboarding\.get, analytics\.usage\.get\n/);
+    expect(r.out).toMatch(/allowed: tokens\.apply, camera\.onboarding\.get, analytics\.usage\.get, camera\.power\.set, camera\.power\.cycling, camera\.power\.cycled, camera\.power\.cycle\.result\n/);
     expect(r.out).toMatch(/paused: maintenance window/);
     r = await run(['admin-commands', 'resume'], { cwd: dir });
     expect(r.code, r.err).toBe(0);

@@ -886,7 +886,7 @@
         },
         "allowCommands": {
           "type": "array",
-          "maxItems": 32,
+          "maxItems": 64,
           "uniqueItems": true,
           "items": {
             "type": "string",
@@ -915,10 +915,20 @@
               "camera.action:camera-time-set",
               "move.send",
               "move.receive",
+              "switch.read",
+              "switch.locate",
+              "switch.survey",
+              "switch.cycle",
+              "switch.poeOn",
+              "switch.forget",
               "ui.config",
               "ui.restart",
               "camera.onboarding.get",
-              "analytics.usage.get"
+              "analytics.usage.get",
+              "camera.power.set",
+              "camera.power.cycling",
+              "camera.power.cycled",
+              "camera.power.cycle.result"
             ]
           },
           "description": "commands cams-admin may send this proxy (default none); data/admin/policy.json (the Status card, admin-commands) replaces this list. config.json only"

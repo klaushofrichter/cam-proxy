@@ -9,8 +9,7 @@ import type { ProfileReport } from '../health/profile';
 import type { MoveLeftover } from '../moves/leftovers';
 import { deleteKeyFile, KeyFileInvalid, KeyFileUnsafe, readKeyFile, type AdminKeyFile } from './keyfile';
 import { fingerprint, trimSlashes } from './protocol';
-import { EventOutbox } from './outbox';
-import type { MoveEvent } from '../moves/types';
+import { EventOutbox, type AdminEvent } from './outbox';
 import type { AdminConnection } from '../health/cams-admin';
 
 // cams-admin for the proxy (spec 2026-10-06-cams-admin-phase1-design §9):
@@ -91,9 +90,9 @@ export class CamsAdmin {
     this.outbox = new EventOutbox(d.log);
   }
 
-  // A signed event of a camera move (contract "Camera moves"): sent now when
+  // A signed event (a camera move, a power-cycle request): sent now when
   // connected, else after the next welcome, in order.
-  emitEvent(body: MoveEvent): void {
+  emitEvent(body: AdminEvent): void {
     this.outbox.push(body);
     this.client?.flushEvents();
   }
