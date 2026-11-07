@@ -7,7 +7,7 @@ import type { AddressInfo } from 'net';
 // (~/Development/reolink/poe-switch-gps208.md) and in slydiman/sscpoe:
 //   POST /<callcmd> {"data":{"callcmd":N,"calldata":{…}}}
 //   123 log in {password}: the session is a cookie; 101 port detail (poec,
-//   pw, link by internal index, sn); 103 set PoE {opcode: on<<9|index<<4|2};
+//   pw, link, tx, rx by internal index, sn); 103 set PoE {opcode: on<<9|index<<4|2};
 //   126 log out.
 // One web session at a time: while one is active, a POST without its cookie
 // is dropped with no answer (the connection closes).
@@ -27,6 +27,11 @@ export interface PoeSwitchMock {
   calls: Array<{ cmd: number; session: boolean; dropped?: boolean; expired?: boolean }>;
   poec: number[];
   pw: number[];
+  // The current rates by internal index (callcmd 101 tx/rx, sent as strings), settable; default 1.
+  tx: number[];
+  rx: number[];
+  // Sent as the raw tx/rx lists instead (broken or short lists); null: off.
+  rawRates: { tx?: unknown[]; rx?: unknown[] } | null;
   opcodes: number[];
   // A browser logged in to the web UI: other clients' POSTs are dropped.
   browserLogin(): void;
@@ -68,6 +73,9 @@ export async function startPoeSwitchMock(o: PoeSwitchMockOptions): Promise<PoeSw
     calls: [],
     poec,
     pw,
+    tx: Array.from({ length: n }, () => 1),
+    rx: Array.from({ length: n }, () => 1),
+    rawRates: null,
     opcodes: [],
     failSet: 0,
     dropLogout: 0,
@@ -145,7 +153,7 @@ export async function startPoeSwitchMock(o: PoeSwitchMockOptions): Promise<PoeSw
       return void res.end(JSON.stringify({ errcode: 1, data: { callcmd: cmd } }));
     }
     if (cmd === 101) {
-      return answer(res, cmd, { sn: o.sn ?? 'GPS208MOCK0001', V: 'mock-1.0', poec: [...poec], pw: pw.map((w, i) => (poec[i] ? String(w) : '0')), link: poec.map((p, i) => (p && pw[i] > 0 ? 1 : 0)) });
+      return answer(res, cmd, { sn: o.sn ?? 'GPS208MOCK0001', V: 'mock-1.0', poec: [...poec], pw: pw.map((w, i) => (poec[i] ? String(w) : '0')), link: poec.map((p, i) => (p && pw[i] > 0 ? 1 : 0)), tx: mock.rawRates?.tx ?? mock.tx.map(String), rx: mock.rawRates?.rx ?? mock.rx.map(String) });
     }
     if (cmd === 103) {
       const op = Number(cd.opcode);

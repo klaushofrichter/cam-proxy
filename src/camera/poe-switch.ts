@@ -1,14 +1,17 @@
 import { sleep, TIMED_OUT, within } from '../async';
 import { logger } from '../log';
-import { driverFor, type SwitchDetail, type SwitchDriver, type SwitchSession } from './switch/driver';
+import { driverFor, type LocateResult, type SwitchDetail, type SwitchDriver, type SwitchRef, type SwitchSession } from './switch/driver';
 import { PoeSwitchError, SwitchRefusal } from './switch/errors';
+import { pickPort, pingBurst } from './switch/locate';
 
 export { PoeSwitchError, type PoeSwitchErrorCode } from './switch/errors';
 export { poeOpcode, portIndex, reverseOrder, Session } from './switch/sscpoe-web';
+export type { LocateResult, SwitchRef } from './switch/driver';
 
 const ON_RETRY_MS = 60_000; // how long a failed PoE-on is retried (backoff 1, 2, 4, 8, 10, 10… s)
 const STOP_RECOVERY_MS = 6_000; // on shutdown: the PoE-on retries end after this
 const STOP_WAIT_MS = 8_000; // on shutdown: the longest wait for the switch (compose's stop grace is 20 s)
+const LOCATE_READ_MS = 2_500; // into the ~5 s ping burst: the second read
 
 // The camera's PoE switch (issue #85): power-cycle the camera by cutting its
 // port's PoE. A driver per switch model (src/camera/switch/driver.ts); one so
@@ -23,7 +26,14 @@ type PoeSwitchModel = 'none' | 'sscpoe-web';
 // The host's switch (spec 2026-10-05-multi-camera-host-design §8.4): one per
 // host; each camera names its port.
 export interface HostSwitchConfig { model: PoeSwitchModel; host?: string; ports: number; offSeconds: number }
-type PoeSwitchConfig = HostSwitchConfig & { port: number };
+// The switch a controller works: a SwitchRef from cams-admin (spec
+// 2026-11-07-poe-switches-design), or the host config's switch (legacyRef),
+// which may be unset (model none, no host) until that config goes away.
+export type ControllerRef = Omit<SwitchRef, 'model' | 'host'> & { model: SwitchRef['model'] | 'none'; host?: string };
+export const legacyRef = (c: HostSwitchConfig): ControllerRef => ({ id: 'legacy', model: c.model, host: c.host, ports: c.ports, offSeconds: c.offSeconds });
+type PoeSwitchConfig = ControllerRef & { port: number };
+export type Located = LocateResult & { sn: string | null };
+export interface SurveyResult { sn: string | null; results: Array<LocateResult & { camera: string }> }
 
 // What the switch said about a camera's port, from its port detail.
 export interface PortReading {
@@ -37,6 +47,7 @@ export interface PortReading {
   firmware: string | null;
 }
 export interface CycleResult { offAt: number; onAt: number; watts: number }
+export type VerifiedCycleResult = CycleResult & { verified: boolean };
 export interface PoeSwitchStatus {
   model: PoeSwitchModel;
   host: string | null;
@@ -63,7 +74,7 @@ export interface PortHandle {
 }
 
 interface PoeSwitchDeps {
-  config: () => HostSwitchConfig;
+  ref: () => ControllerRef;
   password: () => string | undefined;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
@@ -74,10 +85,12 @@ interface PoeSwitchDeps {
   driver?: (model: string) => SwitchDriver | undefined; // default: driverFor (tests: a fake)
   readCacheMs?: number; // how long one read serves every port (10 s, Ruling P2-7)
   queueWaitMs?: () => number; // how long a request waits for the one before it (offSeconds + 60 s)
+  pingBurst?: (host: string) => { done: Promise<{ answered: boolean }> }; // default: ping (tests: a fake)
 }
 
-// The host's PoE controller (spec 2026-10-05-multi-camera-host-design §8.4):
-// one switch session at a time for every camera, in arrival order; state per port.
+// One switch's PoE controller (spec 2026-10-05-multi-camera-host-design §8.4,
+// 2026-11-07-poe-switches-design): one switch session at a time for every
+// use, in arrival order; state per port.
 export class PoeSwitch {
   private busy = false;
   private tail: Promise<unknown> = Promise.resolve();
@@ -102,7 +115,7 @@ export class PoeSwitch {
   // Why the switch can't be used, naming the setting; null when it can.
   // With a port (null: the camera has none): also the camera's port.
   notConfigured(port?: number | null): string | null {
-    const c = this.d.config();
+    const c = this.d.ref();
     if (c.model === 'none') return 'poeSwitch.model is none';
     if (!c.host) return 'poeSwitch.host is not set';
     if (port !== undefined && !port) return "the camera's poeSwitch.port is not set";
@@ -113,7 +126,7 @@ export class PoeSwitch {
 
   // The host's switch, and with a port (null: a camera without one) that port's last reading.
   status(port?: number | null): PoeSwitchStatus {
-    const c = this.d.config();
+    const c = this.d.ref();
     const last = port ? this.last.get(port) : undefined;
     return {
       model: c.model, host: c.host ?? null, port: port ?? null, ports: c.ports, offSeconds: c.offSeconds,
@@ -129,7 +142,8 @@ export class PoeSwitch {
       notConfigured: () => this.notConfigured(port() ?? null),
       status: () => this.status(port() ?? null),
       read: () => this.read(p()),
-      cycle: (onOff) => this.cycle(p(), onOff),
+      // Unverified, as before (the host-config path; power-cycles move to cams-admin).
+      cycle: (onOff) => this.cycle(p(), onOff, { verifyHost: null }).then(({ offAt, onAt, watts }) => ({ offAt, onAt, watts })),
       poeOn: () => this.poeOn(p()),
     };
   }
@@ -181,7 +195,7 @@ export class PoeSwitch {
   // for readCacheMs (10 s, Ruling P2-7) unless `fresh`.
   read(port: number, o: { fresh?: boolean } = {}): Promise<PortReading> {
     const cached = this.cache;
-    const c = this.d.config();
+    const c = this.d.ref();
     const driver = (this.d.driver ?? driverFor)(c.model);
     if (!o.fresh && cached && driver && this.now() - cached.at <= (this.d.readCacheMs ?? 10_000) && this.notConfigured(port) === null) {
       try {
@@ -203,9 +217,18 @@ export class PoeSwitch {
   // Once the PoE-off request is sent, every failure (a lost or refused
   // answer, a timeout, onOff throwing) still turns PoE on again, and the
   // error says so (poeOff: true, turnedOn).
-  cycle(port: number, onOff: (at: number) => void): Promise<CycleResult> {
+  // verifyHost: first, in the same session, `locate` that host: unless its
+  // traffic shows on this port, nothing is switched (not_verified). null: a
+  // forced cycle, unverified.
+  cycle(port: number, onOff: (at: number) => void, o: { verifyHost: string | null }): Promise<VerifiedCycleResult> {
     return this.session(port, async (s, c, driver) => {
       this.cache = null; // the read cache: never across a change
+      let verified = false;
+      if (o.verifyHost !== null) {
+        const l = await this.locateIn(s, c, driver, o.verifyHost);
+        if (!l.found || l.port !== c.port) throw new PoeSwitchError('not_verified', `port ${c.port} not verified: ${l.found ? `the camera's traffic showed on port ${l.port}` : l.reason === 'not_reachable' ? `the camera at ${o.verifyHost} did not answer the ping burst` : `the camera's traffic showed on no single port (${l.reason})`}: not switching`);
+        verified = true;
+      }
       const r = this.reading(await s.detail(), c, driver);
       if (!r.poe || !(r.watts > 0)) throw new PoeSwitchError('no_power', `port ${r.port} (index ${r.index}) has PoE ${r.poe ? 'on' : 'off'} and draws ${r.watts} W: not switching`);
       if (this.stopped) throw new PoeSwitchError('switch_error', 'the proxy is stopping: not switching');
@@ -247,8 +270,46 @@ export class PoeSwitch {
       if (failure) throw new PoeSwitchError('switch_error', `PoE may have been cut on port ${r.port}; it is on again (${failure.message})`, true, true);
       const onAt = this.now();
       logger.info({ port: r.port, index: r.index, offMs: onAt - offAt! }, 'poe_switch_port_on');
-      return { offAt: offAt!, onAt, watts: r.watts };
+      return { offAt: offAt!, onAt, watts: r.watts, verified };
     });
+  }
+
+  // Which port a camera's traffic shows on (spec 2026-11-07-poe-switches-design,
+  // "Finding a camera"): in one session, a read, a ping burst to `host`, a
+  // second read during it; logged out after the burst ended.
+  locate(host: string): Promise<Located> {
+    return this.session(undefined, (s, c, driver) => this.locateIn(s, c, driver, host));
+  }
+
+  // locate for each camera, one after another, in one session.
+  survey(cameras: Array<{ camera: string; host: string }>): Promise<SurveyResult> {
+    return this.session(undefined, async (s, c, driver) => {
+      let sn: string | null = null;
+      const results: SurveyResult['results'] = [];
+      for (const cam of cameras) {
+        if (this.stopped) throw new PoeSwitchError('switch_error', 'the proxy is stopping');
+        const { sn: got, ...l } = await this.locateIn(s, c, driver, cam.host);
+        sn = got;
+        results.push({ camera: cam.camera, ...l });
+      }
+      return { sn, results };
+    });
+  }
+
+  private async locateIn(s: SwitchSession, c: PoeSwitchConfig, driver: SwitchDriver, host: string): Promise<Located> {
+    const base = await s.detail();
+    const burst = (this.d.pingBurst ?? pingBurst)(host);
+    let during: SwitchDetail;
+    try {
+      await this.pause(LOCATE_READ_MS);
+      during = await s.detail();
+    } catch (err) {
+      await burst.done; // the burst ends by itself (~5 s): the session stays until then
+      throw err;
+    }
+    const { answered } = await burst.done;
+    if (!answered) return { found: false, reason: 'not_reachable', sn: base.sn };
+    return { ...pickPort(c.ports, base, during, (p) => driver.portIndex(p, c.ports, during.sn ?? '')), sn: during.sn };
   }
 
   // "Turn camera PoE on" (recovery): PoE on for the camera's port if it is
@@ -324,11 +385,12 @@ export class PoeSwitch {
     else this.offPorts.delete(port);
   }
 
-  // One switch session at a time for the whole host, in arrival order (spec
+  // One session at a time on this switch, in arrival order (spec
   // §8.4), logged out on every path. A request waits at most offSeconds + 60 s
   // for the one before it; beyond that it fails switch_busy without touching
   // the switch (HTTP 409, Ruling P2-3).
-  private session<T>(port: number, f: (s: SwitchSession, c: PoeSwitchConfig, driver: SwitchDriver) => Promise<T>): Promise<T> {
+  // port undefined: switch-wide work (no camera port).
+  private session<T>(port: number | undefined, f: (s: SwitchSession, c: PoeSwitchConfig, driver: SwitchDriver) => Promise<T>): Promise<T> {
     if (this.stopped) return Promise.reject(new PoeSwitchError('switch_error', 'the proxy is stopping'));
     const why = this.notConfigured(port);
     if (why) return Promise.reject(new PoeSwitchError('switch_error', why));
@@ -336,7 +398,7 @@ export class PoeSwitch {
     let release!: () => void;
     const mine = new Promise<void>((r) => (release = r));
     this.tail = before.then(() => mine);
-    const maxWait = this.d.queueWaitMs?.() ?? (this.d.config().offSeconds + 60) * 1000;
+    const maxWait = this.d.queueWaitMs?.() ?? (this.d.ref().offSeconds + 60) * 1000;
     const run = (async () => {
       let opened = false;
       try {
@@ -356,8 +418,8 @@ export class PoeSwitch {
     return run;
   }
 
-  private async open<T>(port: number, f: (s: SwitchSession, c: PoeSwitchConfig, driver: SwitchDriver) => Promise<T>): Promise<T> {
-    const c: PoeSwitchConfig = { ...this.d.config(), port };
+  private async open<T>(port: number | undefined, f: (s: SwitchSession, c: PoeSwitchConfig, driver: SwitchDriver) => Promise<T>): Promise<T> {
+    const c: PoeSwitchConfig = { ...this.d.ref(), port: port ?? 0 };
     let final = false;
     const driver = (this.d.driver ?? driverFor)(c.model);
     if (!driver) throw new PoeSwitchError('switch_error', `no driver for the switch model ${c.model}`);

@@ -1,5 +1,5 @@
 // The PoE switch errors (issue #85), shared by the controller and the drivers.
-export type PoeSwitchErrorCode = 'switch_busy' | 'switch_auth' | 'switch_unreachable' | 'switch_error' | 'no_power';
+export type PoeSwitchErrorCode = 'switch_busy' | 'switch_auth' | 'switch_unreachable' | 'switch_error' | 'no_power' | 'not_verified';
 
 // poeOff: the PoE-off request was sent, so the port may have been cut;
 // turnedOn then says whether the proxy got it on again (null: not applicable).

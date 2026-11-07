@@ -1,7 +1,7 @@
 // Issue #85: the PoE switch's local web protocol (STEAMEMO/SSCPOE GPS-208
 // and kin), against the mock in test/helpers; the real switch is never used.
 import { afterEach, describe, expect, it } from 'vitest';
-import { PoeSwitch, PoeSwitchError, Session, poeOpcode, portIndex, reverseOrder } from '../src/camera/poe-switch';
+import { legacyRef, PoeSwitch, PoeSwitchError, Session, poeOpcode, portIndex, reverseOrder } from '../src/camera/poe-switch';
 import { startPoeSwitchMock, type PoeSwitchMock } from './helpers/poe-switch-mock';
 
 const PASSWORD = 'mock-switch-pw-4711';
@@ -19,7 +19,7 @@ async function mock(o: Partial<Parameters<typeof startPoeSwitchMock>[0]> = {}) {
 // tested in poe-queue.test.ts), stop() for this port.
 const view = (c: PoeSwitch, port = 8) => ({
   read: () => c.read(port, { fresh: true }),
-  cycle: (f: (at: number) => void) => c.cycle(port, f),
+  cycle: (f: (at: number) => void) => c.cycle(port, f, { verifyHost: null }),
   poeOn: () => c.poeOn(port),
   status: () => c.status(port),
   stop: async () => {
@@ -30,7 +30,7 @@ const view = (c: PoeSwitch, port = 8) => ({
 const sw = (m: PoeSwitchMock, over: { password?: string; port?: number; ports?: number; offSeconds?: number } = {}) => {
   const slept: number[] = [];
   const s = view(new PoeSwitch({
-    config: () => ({ model: 'sscpoe-web', host: m.host, ports: over.ports ?? 8, offSeconds: over.offSeconds ?? 10 }),
+    ref: () => ({ id: 'sw_test', model: 'sscpoe-web', host: m.host, ports: over.ports ?? 8, offSeconds: over.offSeconds ?? 10 }),
     password: () => over.password ?? PASSWORD,
     sleep: async (ms) => void slept.push(ms),
     timeoutMs: 1000,
@@ -42,7 +42,7 @@ const clocked = (m: PoeSwitchMock, over: { offSeconds?: number; timeoutMs?: numb
   const clock = { t: 1_000_000 };
   const slept: number[] = [];
   const s = view(new PoeSwitch({
-    config: () => ({ model: 'sscpoe-web', host: m.host, ports: 8, offSeconds: over.offSeconds ?? 10 }),
+    ref: () => ({ id: 'sw_test', model: 'sscpoe-web', host: m.host, ports: 8, offSeconds: over.offSeconds ?? 10 }),
     password: () => PASSWORD,
     now: () => clock.t,
     // realOffSleep: the off time waits for real (stop() cuts it short).
@@ -207,7 +207,7 @@ describe('PoeSwitch against the mock', () => {
     const host = m.host;
     await m.close();
     mocks.splice(0);
-    const s = view(new PoeSwitch({ config: () => ({ model: 'sscpoe-web', host, ports: 8, offSeconds: 5 }), password: () => PASSWORD, sleep: async () => {}, timeoutMs: 500 }));
+    const s = view(new PoeSwitch({ ref: () => ({ id: 'sw_test', model: 'sscpoe-web', host, ports: 8, offSeconds: 5 }), password: () => PASSWORD, sleep: async () => {}, timeoutMs: 500 }));
     expect(await codeOf(s.read())).toBe('switch_unreachable');
   });
 
@@ -339,7 +339,7 @@ describe('PoeSwitch against the mock', () => {
   it('a login that times out is switch_busy (busy or unreachable); a refused connection stays unreachable', async () => {
     const m = await mock();
     m.hang = true;
-    const s = view(new PoeSwitch({ config: () => ({ model: 'sscpoe-web', host: m.host, ports: 8, offSeconds: 5 }), password: () => PASSWORD, timeoutMs: 300 }));
+    const s = view(new PoeSwitch({ ref: () => ({ id: 'sw_test', model: 'sscpoe-web', host: m.host, ports: 8, offSeconds: 5 }), password: () => PASSWORD, timeoutMs: 300 }));
     const e = await s.read().catch((x: unknown) => x as PoeSwitchError);
     expect(e).toMatchObject({ code: 'switch_busy' });
     expect((e as Error).message).toMatch(/busy or unreachable: is someone logged in to the switch's web UI\?/);
@@ -363,7 +363,7 @@ describe('PoeSwitch against the mock', () => {
   it('stop() with a switch that stops answering: every call is bounded by the stop budget, the final logout is tried, and it says the session may be open', async () => {
     const m = await mock();
     const s = view(new PoeSwitch({
-      config: () => ({ model: 'sscpoe-web', host: m.host, ports: 8, offSeconds: 60 }),
+      ref: () => ({ id: 'sw_test', model: 'sscpoe-web', host: m.host, ports: 8, offSeconds: 60 }),
       password: () => PASSWORD,
       sleep: (ms) => (ms >= 60000 ? new Promise<void>(() => {}) : new Promise<void>((r) => setTimeout(r, ms))),
       timeoutMs: 5000,
@@ -397,7 +397,7 @@ describe('PoeSwitch against the mock', () => {
   it('one switch session at a time: a read during a cycle waits for it (the queue, spec §8.4)', async () => {
     const m = await mock();
     let release!: () => void;
-    const s = view(new PoeSwitch({ config: () => ({ model: 'sscpoe-web', host: m.host, ports: 8, offSeconds: 5 }), password: () => PASSWORD, sleep: () => new Promise<void>((r) => (release = r)), timeoutMs: 1000 }));
+    const s = view(new PoeSwitch({ ref: () => ({ id: 'sw_test', model: 'sscpoe-web', host: m.host, ports: 8, offSeconds: 5 }), password: () => PASSWORD, sleep: () => new Promise<void>((r) => (release = r)), timeoutMs: 1000 }));
     const cycling = s.cycle(() => {});
     await new Promise((r) => setTimeout(r, 100));
     const calls = m.calls.length;
@@ -413,7 +413,7 @@ describe('PoeSwitch against the mock', () => {
   it('a request that waited longer than the bound gets switch_busy without touching the switch', async () => {
     const m = await mock();
     let release!: () => void;
-    const s = view(new PoeSwitch({ config: () => ({ model: 'sscpoe-web', host: m.host, ports: 8, offSeconds: 5 }), password: () => PASSWORD, sleep: () => new Promise<void>((r) => (release = r)), timeoutMs: 1000, queueWaitMs: () => 50 }));
+    const s = view(new PoeSwitch({ ref: () => ({ id: 'sw_test', model: 'sscpoe-web', host: m.host, ports: 8, offSeconds: 5 }), password: () => PASSWORD, sleep: () => new Promise<void>((r) => (release = r)), timeoutMs: 1000, queueWaitMs: () => 50 }));
     const cycling = s.cycle(() => {});
     await new Promise((r) => setTimeout(r, 100));
     const calls = m.calls.length;
@@ -425,7 +425,7 @@ describe('PoeSwitch against the mock', () => {
 
   it('a stop during the off time turns PoE on at once and logs out, then refuses new sessions', async () => {
     const m = await mock();
-    const s = view(new PoeSwitch({ config: () => ({ model: 'sscpoe-web', host: m.host, ports: 8, offSeconds: 60 }), password: () => PASSWORD, sleep: () => new Promise<void>(() => {}), timeoutMs: 1000 }));
+    const s = view(new PoeSwitch({ ref: () => ({ id: 'sw_test', model: 'sscpoe-web', host: m.host, ports: 8, offSeconds: 60 }), password: () => PASSWORD, sleep: () => new Promise<void>(() => {}), timeoutMs: 1000 }));
     let off = false;
     const cycling = s.cycle(() => void (off = true));
     await new Promise((r) => setTimeout(r, 100));
@@ -442,14 +442,14 @@ describe('PoeSwitch against the mock', () => {
 
   it('names what is missing when not configured', () => {
     const base = { model: 'sscpoe-web' as const, host: '192.0.2.7', ports: 8, offSeconds: 10 };
-    const nc = (c: object, port: number | null = 8, pw: string | null = PASSWORD) => new PoeSwitch({ config: () => ({ ...base, ...c }), password: () => pw ?? undefined }).forPort(() => port ?? undefined).notConfigured();
+    const nc = (c: object, port: number | null = 8, pw: string | null = PASSWORD) => new PoeSwitch({ ref: () => legacyRef({ ...base, ...c }), password: () => pw ?? undefined }).forPort(() => port ?? undefined).notConfigured();
     expect(nc({})).toBeNull();
     expect(nc({ model: 'none' })).toMatch(/^poeSwitch.model is none/);
     expect(nc({ host: undefined })).toMatch(/^poeSwitch.host/);
     expect(nc({}, null)).toMatch(/camera.s poeSwitch.port/);
     expect(nc({}, 9)).toMatch(/poeSwitch.port is above poeSwitch.ports/);
     expect(nc({}, 8, null)).toMatch(/CAMPROXY_POE_SWITCH_PASSWORD is not set/);
-    const st = new PoeSwitch({ config: () => base, password: () => PASSWORD }).status(8);
+    const st = new PoeSwitch({ ref: () => legacyRef(base), password: () => PASSWORD }).status(8);
     expect(st).toEqual({ model: 'sscpoe-web', host: '192.0.2.7', port: 8, ports: 8, offSeconds: 10, passwordSet: true, configured: true, busy: false, poeMaybeOff: false, last: null });
     expect(JSON.stringify(st)).not.toContain(PASSWORD);
   });

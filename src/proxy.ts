@@ -31,7 +31,7 @@ import { reapOrphanGo2rtc } from './stills/orphans';
 import { Go2rtc } from './stills/go2rtc';
 import { latestApi } from './api/latest-api';
 import { CachePool } from './recordings/pool';
-import { PoeSwitch } from './camera/poe-switch';
+import { legacyRef, PoeSwitch } from './camera/poe-switch';
 import { restartProcess } from './process-restart';
 import type { Config } from './config/defaults';
 import { applyOverrides, configRevision, getPath, needsProcessRestart, needsRestart, removeOverride, setPath, settingPaths, type Loaded } from './config/load';
@@ -503,9 +503,10 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   let go2rtcMadeWith = go2rtcSettings();
   // Started in the background: each camera's grabber waits until it is up.
   const startGo2rtc = () => void go2rtc?.start().catch((err: Error) => logger.error({ err: err.message }, 'go2rtc_start_failed'));
-  // One PoE controller for the host (spec 2026-10-05-multi-camera-host-design §8.4):
+  // One PoE controller for the host's switch (spec 2026-10-05-multi-camera-host-design §8.4):
   // one switch session at a time, in arrival order; each camera has its port.
-  const poe = new PoeSwitch({ config: () => running.poeSwitch, password: () => loaded.secrets.poeSwitchPassword });
+  // The host config's switch as a ref (until switches come from cams-admin).
+  const poe = new PoeSwitch({ ref: () => legacyRef(running.poeSwitch), password: () => loaded.secrets.poeSwitchPassword });
   // One recordings cache for every camera (spec §8.3): one LRU, capped by recordings.cacheMB.
   const cachePool = new CachePool(() => running.recordings.cacheMB * 2 ** 20);
   const makeWorker = (id: string) =>
