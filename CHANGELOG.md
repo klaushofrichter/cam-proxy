@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.11.06.3
+
 - The admin pages say which settings and actions are the proxy's and which the camera's (picked in the top bar): Settings is now two pages, **Proxy settings** (profile, Analytics, the host's settings, the PoE switch's model and address, Find and Add camera) and **Camera settings: <name>** (the camera's settings with Move and Remove, Camera time, its PoE port). Events, Timeline and Clips name the camera in their title ("Clips: Backyard Right"). Status and Maintenance have a "Camera: <name>" section and a "Proxy" section.
 
 ## v2026.11.06.2
