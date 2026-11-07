@@ -169,6 +169,8 @@ describe('switch commands on the mock switch', () => {
     const d = await t.run('switch.poeOn', { switch: t.sw, port: 3 });
     t.okResult('switch.poeOn', d);
     expect(d.result).toMatchObject({ port: 3, poe: true, wasOn: true });
+    expect(t.records).toHaveLength(1);
+    expect(t.records[0]).toMatchObject({ action: 'switch-port-poe-on', outcome: 'success', details: { switch: { id: SW, port: 3 }, wasOn: true, actor: 'admin@example.org', cmdId: CMD } });
   });
 
   it('switch.poeOn: turns a port on that was off', async () => {
@@ -177,6 +179,12 @@ describe('switch commands on the mock switch', () => {
     const d = await t.run('switch.poeOn', { switch: t.sw, port: 3 });
     t.okResult('switch.poeOn', d);
     expect(d.result).toMatchObject({ port: 3, poe: true, wasOn: false });
+  });
+
+  it('switch.poeOn failure is audited as a failure', async () => {
+    const t = await setup({ password: false });
+    expect(await t.run('switch.poeOn', { switch: t.sw, port: 3 })).toMatchObject({ status: 'failed', code: 'password_unset' });
+    expect(t.records[0]).toMatchObject({ action: 'switch-port-poe-on', outcome: 'failure', error: 'password_unset' });
   });
 
   it('no password: every switch command fails password_unset, the mock is never called', async () => {

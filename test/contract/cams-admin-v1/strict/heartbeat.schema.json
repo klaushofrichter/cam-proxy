@@ -166,7 +166,7 @@
                       "camera.action:camera-time-set"
                     ]
                   },
-                  "maxItems": 32
+                  "maxItems": 64
                 },
                 "seenWindow": {
                   "type": "integer",

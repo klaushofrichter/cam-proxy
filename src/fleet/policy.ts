@@ -1,5 +1,6 @@
 import { ConfigError } from '../config/load-error';
 import type { EnvLayer } from '../config/env';
+import { ALLOW_MAX } from './heartbeat';
 import { PrivateFileInvalid, PrivateFileUnsafe, readPrivateJson, writePrivateJson } from './private-file';
 
 // M §8.6: camera actions cams-admin may ask for (each its own allow entry),
@@ -109,7 +110,7 @@ export function sessionUnlocked(p: EffectivePolicy): string[] {
 
 // `stored`: a list an earlier version wrote (policy.json, config.json): retired entries are dropped.
 export function validateAllowList(list: unknown, where: string, stored = false): string[] {
-  if (!Array.isArray(list) || list.length > 64) throw new ConfigError(`${where}: a list of at most 64 command names`);
+  if (!Array.isArray(list) || list.length > ALLOW_MAX) throw new ConfigError(`${where}: a list of at most ${ALLOW_MAX} command names`);
   const kept = stored ? list.filter((e) => !(typeof e === 'string' && RETIRED_ENTRIES.has(e))) : list;
   for (const e of kept) if (typeof e !== 'string' || !ALLOW_ENTRIES.includes(e)) throw new ConfigError(`${where}: ${typeof e === 'string' ? e.slice(0, 64) : typeof e} is not a command cams-admin may be allowed`);
   return [...new Set(kept as string[])];

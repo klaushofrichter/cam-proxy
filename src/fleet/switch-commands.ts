@@ -63,11 +63,30 @@ export function switchHandlers(d: SwitchCommandDeps): Record<string, Handler> {
       }
       return out;
     },
-    'switch.poeOn': (a) => guard(async () => {
+    'switch.poeOn': async (a, cmd: CommandBody) => {
       const x = a as SwitchPoeOnArgs;
-      const r = await sw(x.switch).poeOn(x.port);
-      return { port: r.port, poe: r.poe, watts: r.watts, link: r.link, tx: r.tx, rx: r.rx, wasOn: r.wasOn };
-    }),
+      const base = { action: 'switch-port-poe-on', category: ['host'], type: ['change'], user: 'cams-admin' };
+      const where = { id: x.switch.id, host: x.switch.host, port: x.port };
+      const by = { cmdId: cmd.cmdId, actor: cmd.actor, requestedBy: 'cams-admin' };
+      let wasOn: boolean | undefined;
+      let poeStillOff = false;
+      const out = await guard(async () => {
+        try {
+          const r = await sw(x.switch).poeOn(x.port);
+          wasOn = r.wasOn;
+          return { port: r.port, poe: r.poe, watts: r.watts, link: r.link, tx: r.tx, rx: r.rx, wasOn: r.wasOn };
+        } catch (err) {
+          if (err instanceof PoeSwitchError && err.poeOff) poeStillOff = true;
+          throw err;
+        }
+      });
+      if (out.status === 'ok') {
+        d.audit.write({ ...base, outcome: 'success', message: wasOn ? `PoE on ${x.switch.host} port ${x.port}: it was on already (cams-admin, on behalf of ${cmd.actor})` : `PoE turned on at ${x.switch.host} port ${x.port} by cams-admin (on behalf of ${cmd.actor})`, details: { switch: where, wasOn, ...by } });
+      } else {
+        d.audit.write({ ...base, outcome: 'failure', error: out.code, message: `PoE on ${x.switch.host} port ${x.port} by cams-admin (on behalf of ${cmd.actor}) failed: ${out.code}`, details: { switch: where, ...by, ...(poeStillOff ? { poeStillOff: true } : {}) } });
+      }
+      return out;
+    },
     'switch.forget': (a): Done => ({ status: 'ok', result: { forgot: d.registry.forget((a as SwitchForgetArgs).switchId) } }),
   };
 }

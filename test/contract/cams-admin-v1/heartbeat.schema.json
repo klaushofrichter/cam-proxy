@@ -128,7 +128,7 @@
                     "type": "string",
                     "maxLength": 64
                   },
-                  "maxItems": 32
+                  "maxItems": 64
                 },
                 "seenWindow": {
                   "type": "integer",

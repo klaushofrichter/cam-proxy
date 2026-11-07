@@ -1,6 +1,7 @@
 // The description of every setting: one place that drives validation and the
 // generated config.schema.json, so the two can't drift apart.
 import { ALLOW_ENTRIES } from '../fleet/policy';
+import { ALLOW_MAX } from '../fleet/heartbeat';
 
 // `unset`: what the setting's unset state does (not set, none, empty, off,
 // or 0 = none; `value` is that state, undefined for not set). The Settings
@@ -377,7 +378,7 @@ export function configJsonSchema(): object {
   const js = jsonSchema(SETTINGS, { camera: { ...jsonSchemaOf(LEGACY_CAMERA), description: 'legacy: one camera (read as cameras: [camera]); use cameras' } }) as { properties: Record<string, { properties: Record<string, object> }> };
   js.properties.ftp.properties.user = { ...(jsonSchemaOf({ user: LEGACY_FTP_USER }) as { properties: { user: object } }).properties.user, description: 'legacy (with camera): the FTP user the camera logs in as; use cameras[].ftp.user' };
   // The command policy's base (migration P2, R2-1): config.json only, not a setting.
-  js.properties.camsAdmin.properties.allowCommands = { type: 'array', maxItems: 64, uniqueItems: true, items: { type: 'string', enum: [...ALLOW_ENTRIES] }, description: 'commands cams-admin may send this proxy (default none); data/admin/policy.json (the Status card, admin-commands) replaces this list. config.json only' };
+  js.properties.camsAdmin.properties.allowCommands = { type: 'array', maxItems: ALLOW_MAX, uniqueItems: true, items: { type: 'string', enum: [...ALLOW_ENTRIES] }, description: 'commands cams-admin may send this proxy (default none); data/admin/policy.json (the Status card, admin-commands) replaces this list. config.json only' };
   // The old name of profile.cameras (read for one release, src/config/legacy.ts).
   (js.properties as Record<string, object>).moves = { type: 'object', additionalProperties: false, description: 'deprecated: use profile', properties: { maxCameras: { type: 'integer', minimum: 1, maximum: 64, description: 'deprecated: the old name of profile.cameras (both set must be equal)' } } };
   js.properties.camsAdmin.properties.commandsPaused = { type: 'boolean', description: 'refuse every cams-admin command (paused); config.json only' };
