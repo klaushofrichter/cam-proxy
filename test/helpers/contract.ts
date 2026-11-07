@@ -59,10 +59,11 @@ const COMMANDS: string[] = (() => {
 // scripts/contract/cam-proxy-commands.ts): a command of a group is pending only
 // while the proxy implements no command of its group at all; once it has one,
 // the rest of the group must pass (a forgotten IMPLEMENTED entry is a failure,
-// not pending). Groups: the P3 configuration and camera commands, the camera moves.
+// not pending). Groups: the P3 configuration and camera commands, the camera moves, the PoE switches.
 const P3_GROUP = ['config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart'];
 const MOVE_GROUP = ['move.targets', 'move.open', 'move.offer', 'move.answer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel'];
-const groupOf = (command: string): string[] => (MOVE_GROUP.includes(command) ? MOVE_GROUP : P3_GROUP.includes(command) ? P3_GROUP : [command]);
+const SWITCH_GROUP = ['switch.read', 'switch.locate', 'switch.survey', 'switch.cycle', 'switch.poeOn', 'switch.forget'];
+const groupOf = (command: string): string[] => (MOVE_GROUP.includes(command) ? MOVE_GROUP : SWITCH_GROUP.includes(command) ? SWITCH_GROUP : P3_GROUP.includes(command) ? P3_GROUP : [command]);
 export const pending = (f: Fixture, implemented: ReadonlySet<string>): boolean => {
   const b = (f.message as { body?: { command?: unknown } })?.body;
   if (f.schema !== 'command' || typeof b?.command !== 'string' || !COMMANDS.includes(b.command) || implemented.has(b.command)) return false;

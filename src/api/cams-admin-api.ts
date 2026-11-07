@@ -6,7 +6,7 @@ import type { CamsAdmin } from '../fleet/service';
 import { actorOf, clientIp, requireLocalAdmin, type AccessInfo } from './auth';
 import { ConfigError } from '../config/load-error';
 import type { CommandRunner } from '../fleet/commands';
-import { ALLOW_ENTRIES, DISRUPTIVE_ENTRIES, ENTRY_TEXT, IMPLEMENTED, MOVE_ENTRIES, UI_ENTRIES, WideningRefused, type CommandPolicy } from '../fleet/policy';
+import { ALLOW_ENTRIES, DISRUPTIVE_ENTRIES, ENTRY_TEXT, IMPLEMENTED, MOVE_ENTRIES, SWITCH_ENTRIES, UI_ENTRIES, WideningRefused, type CommandPolicy } from '../fleet/policy';
 import { undoLocal, type ConfigCommandDeps } from '../fleet/config-commands';
 import { TooManyBlocks, type TokenStore } from '../fleet/token-store';
 
@@ -31,6 +31,8 @@ const GROUPS = {
   camera: ALLOW_ENTRIES.filter((e) => (e.startsWith('camera.action:') || e === 'camera.name.set') && !DISRUPTIVE_ENTRIES.has(e)),
   // Camera moves: the source side and the target side.
   moves: [...MOVE_ENTRIES],
+  // PoE switches (switch.cycle is also under disruptive).
+  switches: SWITCH_ENTRIES.filter((e) => !DISRUPTIVE_ENTRIES.has(e)),
   disruptive: ALLOW_ENTRIES.filter((e) => DISRUPTIVE_ENTRIES.has(e)),
   // Issue #227: what a cams-admin sign-in (one-time link) may also do here.
   signin: [...UI_ENTRIES],

@@ -78,6 +78,7 @@ import { configHandlers, type ConfigCommandDeps } from './fleet/config-commands'
 import { analyticsHandlers } from './fleet/analytics-commands';
 import { cameraHandlers } from './fleet/camera-commands';
 import { moveHandlers } from './moves/commands';
+import { switchHandlers } from './fleet/switch-commands';
 import { MoveReturns } from './moves/returns';
 import { MoveJournal } from './moves/journal';
 import { movesSourceApi, refreshManifest } from './api/moves-api';
@@ -1454,6 +1455,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     // Vision management (cams-admin design 2026-11-05): the Google Vision settings and use.
     analyticsHandlers({ state: () => analytics.state(), config: () => running }),
     cameraHandlers({ actions: controlDeps, cameraIds: () => cams.ids(), cameraName: controlDeps.cameraName, audit, restartProcess: () => controlDeps.restartProcess(), onboarding: (cam) => onboarding.status(cam) }),
+    // PoE switches (spec 2026-11-07-poe-switches-design): by cams-admin's switch id, the proxy's own passwords.
+    switchHandlers({ registry: switches, audit }),
     // Camera moves (plan 2026-10-21-camera-move-cam-proxy): stubs until each task fills its handler in.
     moveHandlers({
       emit: emitToAdmin,

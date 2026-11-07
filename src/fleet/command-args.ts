@@ -249,6 +249,50 @@ export const validateMoveFinish = (a: unknown) => v1<MoveFinishArgs>(a, ['moveId
 // copied is required only for the target (a source cancel carries expectedLeaf instead, optional).
 export const validateMoveCancel = (a: unknown) => v1<MoveCancelArgs>(a, ['moveId', 'role', 'copied', 'expectedLeaf'], (o) =>
   moveId(o) ?? role(o) ?? (o.role === 'target' && o.copied === undefined ? 'copied' : !optional(o, 'copied', oneOf('delete', 'age-out')) ? 'copied' : !optional(o, 'expectedLeaf', (x) => typeof x === 'string' && FINGERPRINT.test(x)) ? 'expectedLeaf' : null));
+// ---- PoE switches (contract commands/switch.*.args, strict) ----
+export interface SwitchRefArgs { id: string; model: 'sscpoe-web'; host: string; ports: number; offSeconds: number }
+export interface SwitchReadArgs { v: 1; switch: SwitchRefArgs }
+export interface SwitchLocateArgs { v: 1; switch: SwitchRefArgs; host: string }
+export interface SwitchSurveyArgs { v: 1; switch: SwitchRefArgs; cameras: { camera: string; host: string }[] }
+export interface SwitchCycleArgs { v: 1; switch: SwitchRefArgs; port: number; host: string | null; force: boolean; camera: string }
+export interface SwitchPoeOnArgs { v: 1; switch: SwitchRefArgs; port: number }
+export interface SwitchForgetArgs { v: 1; switchId: string }
+const SWITCH_ID = /^sw_[A-Za-z0-9]{20}$/;
+// cams-admin's camera id (the cams id), not this proxy's camera id.
+const CAMS_ID = /^cam_[0-9A-HJKMNP-TV-Z]{20}$/;
+const camsId = (x: unknown): x is string => typeof x === 'string' && CAMS_ID.test(x);
+const hostStr = (x: unknown): x is string => typeof x === 'string' && x.length >= 1 && x.length <= 253;
+const int = (x: unknown, lo: number, hi: number): x is number => Number.isInteger(x) && (x as number) >= lo && (x as number) <= hi;
+// The only switch model this version drives is sscpoe-web (the registry keeps no other).
+const switchRefProblem = (s: unknown): string | null => {
+  if (!isObj(s) || !only(s, ['id', 'model', 'host', 'ports', 'offSeconds'])) return 'switch';
+  if (typeof s.id !== 'string' || !SWITCH_ID.test(s.id)) return 'switch.id';
+  if (s.model !== 'sscpoe-web') return 'switch.model';
+  if (!hostStr(s.host)) return 'switch.host';
+  if (!int(s.ports, 1, 64)) return 'switch.ports';
+  if (!int(s.offSeconds, 1, 120)) return 'switch.offSeconds';
+  return null;
+};
+export const validateSwitchRead = (a: unknown) => v1<SwitchReadArgs>(a, ['switch'], (o) => switchRefProblem(o.switch));
+export const validateSwitchLocate = (a: unknown) => v1<SwitchLocateArgs>(a, ['switch', 'host'], (o) => switchRefProblem(o.switch) ?? (hostStr(o.host) ? null : 'host'));
+export const validateSwitchSurvey = (a: unknown) => v1<SwitchSurveyArgs>(a, ['switch', 'cameras'], (o) => {
+  const p = switchRefProblem(o.switch);
+  if (p) return p;
+  if (!Array.isArray(o.cameras) || o.cameras.length < 1 || o.cameras.length > 16) return 'cameras: 1 to 16';
+  for (const c of o.cameras) if (!isObj(c) || !only(c, ['camera', 'host']) || !camsId(c.camera) || !hostStr(c.host)) return 'cameras';
+  return null;
+});
+export const validateSwitchCycle = (a: unknown) => v1<SwitchCycleArgs>(a, ['switch', 'port', 'host', 'force', 'camera'], (o) => {
+  const p = switchRefProblem(o.switch);
+  if (p) return p;
+  if (!int(o.port, 1, 64)) return 'port';
+  if (!('host' in o) || (o.host !== null && !hostStr(o.host))) return 'host';
+  if (typeof o.force !== 'boolean') return 'force';
+  return camsId(o.camera) ? null : 'camera';
+});
+export const validateSwitchPoeOn = (a: unknown) => v1<SwitchPoeOnArgs>(a, ['switch', 'port'], (o) => switchRefProblem(o.switch) ?? (int(o.port, 1, 64) ? null : 'port'));
+export const validateSwitchForget = (a: unknown) => v1<SwitchForgetArgs>(a, ['switchId'], (o) => (typeof o.switchId === 'string' && SWITCH_ID.test(o.switchId) ? null : 'switchId'));
+
 export const ARGS_VALIDATORS: Record<string, (a: unknown) => ArgsVerdict<unknown>> = {
   'tokens.apply': validateTokensApply,
   'config.get': validateConfigGet,
@@ -273,4 +317,10 @@ export const ARGS_VALIDATORS: Record<string, (a: unknown) => ArgsVerdict<unknown
   'move.cancel': validateMoveCancel,
   'move.begin': validateMoveBegin,
   'move.summary': validateMoveSummary,
+  'switch.read': validateSwitchRead,
+  'switch.locate': validateSwitchLocate,
+  'switch.survey': validateSwitchSurvey,
+  'switch.cycle': validateSwitchCycle,
+  'switch.poeOn': validateSwitchPoeOn,
+  'switch.forget': validateSwitchForget,
 };

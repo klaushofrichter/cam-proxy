@@ -1,0 +1,48 @@
+{
+  "$note": "power-cycle one port with force (a person confirmed, disruptive)",
+  "schema": "command",
+  "$context": {
+    "now": 1791273600010,
+    "proxyId": "prx_0123456789ABCDEFGHJK",
+    "connId": "con_0123456789ABCDEFGHJK",
+    "serverKeys": [
+      "MCowBQYDK2VwAyEAgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q="
+    ],
+    "allow": [
+      "switch.cycle"
+    ],
+    "paused": false,
+    "seen": [],
+    "feature": "poe"
+  },
+  "message": {
+    "v": 1,
+    "type": "command",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "exp": 1791273660003,
+      "actor": "admin@example.org",
+      "command": "switch.cycle",
+      "args": {
+        "v": 1,
+        "switch": {
+          "id": "sw_0123456789abcdefghij",
+          "model": "sscpoe-web",
+          "host": "192.0.2.217",
+          "ports": 8,
+          "offSeconds": 10
+        },
+        "port": 8,
+        "host": "192.0.2.10",
+        "force": true,
+        "camera": "cam_0123456789ABCDEFGHJK"
+      }
+    },
+    "sig": "+j0bcyQaikgngKsnoOXB1Ces3gfmTBtNOvySXKDnUzocn9JzFeMdn6PCvcN/N5GjVFDS7CwtswDLA5jQ91GCDQ=="
+  }
+}

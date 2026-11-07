@@ -44,6 +44,8 @@ export interface PortReading {
   poe: boolean;
   watts: number;
   link: boolean | null;
+  tx: number;
+  rx: number;
   sn: string | null;
   firmware: string | null;
 }
@@ -63,6 +65,7 @@ export interface PoeSwitchStatus {
   poeMaybeOff: boolean;
   last: PortReading | null; // the port's last reading (a read or a cycle); never polled
 }
+export interface SwitchReading { sn: string | null; firmware: string | null; ports: Array<{ port: number; poe: boolean; watts: number; link: boolean | null; tx: number; rx: number }> }
 export type PoeOnResult = PortReading & { wasOn: boolean };
 
 // One camera's view of the host's switch: its port, read on every use.
@@ -223,6 +226,21 @@ export class PoeSwitch {
       const d = await s.detail();
       this.cache = { at: this.now(), detail: d };
       return this.reading(d, cfg, drv);
+    });
+  }
+
+  // Every PoE port of the switch in one session (switch.read): the ports by
+  // their UI numbers, with the current rates. No port of ours; nothing is remembered.
+  readAll(): Promise<SwitchReading> {
+    return this.session(undefined, async (s, c, driver) => {
+      const d = await s.detail();
+      const ports: SwitchReading['ports'] = [];
+      for (let port = 1; port <= c.ports; port++) {
+        const i = driver.portIndex(port, c.ports, d.sn ?? '');
+        if (i < 0 || i >= d.poe.length) throw new PoeSwitchError('switch_error', `port ${port} maps to index ${i}, outside the switch's ${d.poe.length} ports`);
+        ports.push({ port, poe: d.poe[i], watts: d.watts[i] ?? 0, link: d.link[i] ?? null, tx: d.tx[i] ?? 0, rx: d.rx[i] ?? 0 });
+      }
+      return { sn: d.sn, firmware: d.firmware, ports };
     });
   }
 
@@ -388,7 +406,7 @@ export class PoeSwitch {
   private reading(d: SwitchDetail, c: PoeSwitchConfig, driver: SwitchDriver): PortReading {
     const index = driver.portIndex(c.port, c.ports, d.sn ?? '');
     if (index < 0 || index >= d.poe.length) throw new PoeSwitchError('switch_error', `port ${c.port} maps to index ${index}, outside the switch's ${d.poe.length} ports`);
-    const r: PortReading = { at: this.now(), port: c.port, index, poe: d.poe[index], watts: d.watts[index] ?? 0, link: d.link[index] ?? null, sn: d.sn, firmware: d.firmware };
+    const r: PortReading = { at: this.now(), port: c.port, index, poe: d.poe[index], watts: d.watts[index] ?? 0, link: d.link[index] ?? null, tx: d.tx[index] ?? 0, rx: d.rx[index] ?? 0, sn: d.sn, firmware: d.firmware };
     this.last.set(c.port, r);
     this.markOff(c.port, !r.poe);
     return { ...r };

@@ -886,7 +886,7 @@
         },
         "allowCommands": {
           "type": "array",
-          "maxItems": 32,
+          "maxItems": 64,
           "uniqueItems": true,
           "items": {
             "type": "string",
@@ -915,6 +915,12 @@
               "camera.action:camera-time-set",
               "move.send",
               "move.receive",
+              "switch.read",
+              "switch.locate",
+              "switch.survey",
+              "switch.cycle",
+              "switch.poeOn",
+              "switch.forget",
               "ui.config",
               "ui.restart",
               "camera.onboarding.get",

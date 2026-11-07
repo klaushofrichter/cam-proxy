@@ -58,7 +58,7 @@ describe('camsAdmin settings', () => {
   });
   it('config.schema.json knows the command policy keys (editors validate config.json)', () => {
     const ca = (configJsonSchema() as { properties: { camsAdmin: { properties: Record<string, { type: string; items?: { enum: string[] }; maxItems?: number }> } } }).properties.camsAdmin.properties;
-    expect(ca.allowCommands).toMatchObject({ type: 'array', maxItems: 32, items: { enum: [...ALLOW_ENTRIES] } });
+    expect(ca.allowCommands).toMatchObject({ type: 'array', maxItems: 64, items: { enum: [...ALLOW_ENTRIES] } });
     expect(ca.commandsPaused).toMatchObject({ type: 'boolean' });
   });
   it('the command policy is never in overrides.json: a load error there, not_a_setting in a PUT', () => {

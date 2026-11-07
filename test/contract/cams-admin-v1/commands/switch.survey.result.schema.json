@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/commands/switch.survey.result.schema.json",
+  "title": "switch.survey result v1",
+  "type": "object",
+  "properties": {
+    "sn": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 64
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "camera": {
+            "type": "string",
+            "pattern": "^cam_[0-9A-HJKMNP-TV-Z]{20}$"
+          },
+          "found": {
+            "type": "boolean"
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 64
+          },
+          "poe": {
+            "type": "boolean"
+          },
+          "watts": {
+            "type": "number"
+          },
+          "link": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "ratio": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "camera",
+          "found"
+        ]
+      },
+      "maxItems": 16
+    }
+  },
+  "required": [
+    "sn",
+    "results"
+  ]
+}

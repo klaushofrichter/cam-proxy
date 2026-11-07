@@ -70,7 +70,17 @@
             "move.return.open",
             "move.return.start",
             "camera.onboarding.get",
-            "analytics.usage.get"
+            "analytics.usage.get",
+            "switch.read",
+            "switch.locate",
+            "switch.survey",
+            "switch.cycle",
+            "switch.poeOn",
+            "switch.forget",
+            "camera.power.set",
+            "camera.power.cycling",
+            "camera.power.cycled",
+            "camera.power.cycle.result"
           ]
         },
         "args": {

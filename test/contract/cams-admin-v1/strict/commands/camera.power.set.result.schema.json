@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/strict/commands/camera.power.set.result.schema.json",
+  "title": "camera.power.set result v1",
+  "type": "object",
+  "properties": {},
+  "required": [],
+  "additionalProperties": false
+}
