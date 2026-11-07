@@ -9,7 +9,8 @@ import type { OnboardingService } from '../onboarding/service';
 import { CameraError } from '../camera/client';
 import { CameraNameRefused } from '../camera/name';
 import { cameraNameProblem } from '../camera/name-rules';
-import type { PowerCycleAnswer, RebootAnswer, RebootRequester, RebootState, TooSoon } from '../camera/reboot';
+import type { RebootAnswer, RebootRequester, RebootState, TooSoon } from '../camera/reboot';
+import type { PowerRequestAnswer, PowerRequester, PowerView } from '../fleet/power-commands';
 import { PoeSwitchError, type PoeOnResult, type PoeSwitchStatus, type PortReading } from '../camera/poe-switch';
 import type { Config } from '../config/defaults';
 import { configChanges } from '../config/changes';
@@ -108,9 +109,11 @@ export interface ControlDeps {
   restart: () => Promise<void>; // every camera side, with the pending restart settings
   restartCamera: (cam: string) => Promise<void>; // one camera's side (its client, poller, events, stills)
   cameraReboot: (who: RebootRequester, cam: string) => Promise<RebootAnswer>;
-  // The camera's PoE switch (#85): why it can't be used (or null), a read, a power-cycle.
+  // The camera's PoE switch from the old settings (#85): why it can't be used (or null), a read, PoE on.
   poeSwitch: { notConfigured: (cam: string) => string | null; read: (cam: string) => Promise<PortReading>; poeOn: (cam: string) => Promise<PoeOnResult>; info: (cam: string) => { model: string; host: string; port: number } };
-  cameraPowerCycle: (who: RebootRequester, cam: string) => Promise<PowerCycleAnswer>;
+  // Power-cycles through cams-admin (spec 2026-11-07-poe-switches-design): the
+  // request (an event to cams-admin), and the camera's power as cams-admin sent it.
+  cameraPower: { request: (who: PowerRequester, cam: string) => PowerRequestAnswer; view: (cam: string) => PowerView & { canRequest: boolean; why: string | null } };
   restartProcess: () => void; // stop, then exit 0 (the supervisor starts it again)
   ftp: () => FtpStatus;
   health: () => Promise<HealthSummary>; // spec 2026-10-03-health-summary-design: the Health and Pi cards
@@ -344,6 +347,10 @@ export function controlApi(d: ControlDeps): express.Router {
       removeLeftovers: removedNow(),
     });
   });
+
+  // The camera's power as cams-admin sent it (camera.power.set), the open
+  // power-cycle request and cams-admin's last answer; whether one can be asked for now.
+  r.get('/cameras/:cam/power', (req, res) => void res.set('Cache-Control', 'no-store').json(d.cameraPower.view(String(req.params.cam))));
 
   // Every camera's status block (spec §6.3); one camera's.
   r.get('/cameras', (_req, res) => void res.json(d.cameraStatus()));

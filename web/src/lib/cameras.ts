@@ -40,6 +40,12 @@ export function blockOf(s: Status | null, id: string | null): CameraBlock | null
   return found ?? { id: s.cameras?.[0]?.id ?? '', camera: s.camera, intake: s.intake, stream: s.stream, ftp: s.ftp, recordings: s.recordings };
 }
 
+// The picked camera's power as cams-admin sent it (spec 2026-11-07-poe-switches-design); null before the status is known.
+export function powerPath(s: Status | null, selected: string | null): string | null {
+  const cam = pickCamera(cameraIds(s), selected);
+  return cam ? `/control/cameras/${encodeURIComponent(cam)}/power` : null;
+}
+
 // Where a camera action goes: the old route on a one-camera proxy (or an
 // older one), the picked camera's route with several (spec
 // 2026-10-05-multi-camera-host-design §6.3).

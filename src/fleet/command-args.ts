@@ -293,6 +293,34 @@ export const validateSwitchCycle = (a: unknown) => v1<SwitchCycleArgs>(a, ['swit
 export const validateSwitchPoeOn = (a: unknown) => v1<SwitchPoeOnArgs>(a, ['switch', 'port'], (o) => switchRefProblem(o.switch) ?? (int(o.port, 1, 64) ? null : 'port'));
 export const validateSwitchForget = (a: unknown) => v1<SwitchForgetArgs>(a, ['switchId'], (o) => (typeof o.switchId === 'string' && SWITCH_ID.test(o.switchId) ? null : 'switchId'));
 
+// ---- Camera power (contract commands/camera.power.*.args, strict): this proxy's camera id ----
+export interface CameraPowerSetArgs { v: 1; camera: string; power: { kind: 'poe' | 'data-only' | 'adapter' | 'unknown'; switchName?: string; port?: number; watts?: number; verifiedAt?: number; notSeen?: boolean } }
+export interface CameraPowerCyclingArgs { v: 1; camera: string; at: number }
+export interface CameraPowerCycledArgs { v: 1; camera: string; ok: boolean; message: string }
+export interface CameraPowerCycleResultArgs { v: 1; camera: string; requestId: string; ok: boolean; reason?: string }
+const POWER_KINDS = ['poe', 'data-only', 'adapter', 'unknown'];
+const powerProblem = (p: unknown): string | null => {
+  if (!isObj(p) || !only(p, ['kind', 'switchName', 'port', 'watts', 'verifiedAt', 'notSeen'])) return 'power';
+  if (typeof p.kind !== 'string' || !POWER_KINDS.includes(p.kind)) return 'power.kind';
+  if (p.switchName !== undefined && !(typeof p.switchName === 'string' && p.switchName.length <= 64)) return 'power.switchName';
+  if (p.port !== undefined && !int(p.port, 1, 64)) return 'power.port';
+  if (p.watts !== undefined && !(typeof p.watts === 'number' && Number.isFinite(p.watts))) return 'power.watts';
+  if (p.verifiedAt !== undefined && !(Number.isSafeInteger(p.verifiedAt) && (p.verifiedAt as number) >= 0)) return 'power.verifiedAt';
+  if (p.notSeen !== undefined && typeof p.notSeen !== 'boolean') return 'power.notSeen';
+  return null;
+};
+const camOf = (o: Record<string, unknown>): string | null => (typeof o.camera === 'string' && CAM.test(o.camera) ? null : 'camera');
+export const validateCameraPowerSet = (a: unknown) => v1<CameraPowerSetArgs>(a, ['camera', 'power'], (o) => camOf(o) ?? powerProblem(o.power));
+export const validateCameraPowerCycling = (a: unknown) => v1<CameraPowerCyclingArgs>(a, ['camera', 'at'], (o) => camOf(o) ?? (Number.isSafeInteger(o.at) && (o.at as number) >= 0 ? null : 'at'));
+export const validateCameraPowerCycled = (a: unknown) => v1<CameraPowerCycledArgs>(a, ['camera', 'ok', 'message'], (o) =>
+  camOf(o) ?? (typeof o.ok !== 'boolean' ? 'ok' : typeof o.message === 'string' && o.message.length <= 200 ? null : 'message'));
+export const validateCameraPowerCycleResult = (a: unknown) => v1<CameraPowerCycleResultArgs>(a, ['camera', 'requestId', 'ok', 'reason'], (o) => {
+  if (camOf(o)) return 'camera';
+  if (typeof o.requestId !== 'string' || o.requestId.length < 1 || o.requestId.length > 64) return 'requestId';
+  if (typeof o.ok !== 'boolean') return 'ok';
+  return o.reason === undefined || (typeof o.reason === 'string' && o.reason.length <= 200) ? null : 'reason';
+});
+
 export const ARGS_VALIDATORS: Record<string, (a: unknown) => ArgsVerdict<unknown>> = {
   'tokens.apply': validateTokensApply,
   'config.get': validateConfigGet,
@@ -323,4 +351,8 @@ export const ARGS_VALIDATORS: Record<string, (a: unknown) => ArgsVerdict<unknown
   'switch.cycle': validateSwitchCycle,
   'switch.poeOn': validateSwitchPoeOn,
   'switch.forget': validateSwitchForget,
+  'camera.power.set': validateCameraPowerSet,
+  'camera.power.cycling': validateCameraPowerCycling,
+  'camera.power.cycled': validateCameraPowerCycled,
+  'camera.power.cycle.result': validateCameraPowerCycleResult,
 };

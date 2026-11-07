@@ -33,7 +33,9 @@ export const UI_ENTRIES = ['ui.config', 'ui.restart'] as const;
 export const MOVE_ENTRIES = ['move.send', 'move.receive'] as const;
 // Spec 2026-10-30-camera-onboarding-design §4.6: entries on unless the local admin switches them off (policy.json `off`); a read without secrets.
 // analytics.usage.get (cams-admin Vision management design 2026-11-05): the Google Vision settings and use, never the key.
-export const DEFAULT_ON: readonly string[] = ['camera.onboarding.get', 'analytics.usage.get'];
+// camera.power.* (spec 2026-11-07-poe-switches-design): cams-admin's notices about a camera's power and its power-cycles; they cut nothing.
+export const POWER_ENTRIES = ['camera.power.set', 'camera.power.cycling', 'camera.power.cycled', 'camera.power.cycle.result'] as const;
+export const DEFAULT_ON: readonly string[] = ['camera.onboarding.get', 'analytics.usage.get', ...POWER_ENTRIES];
 // PoE switches (spec 2026-11-07-poe-switches-design): each command its own entry, local, off by default; switch.cycle cuts a camera's power.
 export const SWITCH_ENTRIES = ['switch.read', 'switch.locate', 'switch.survey', 'switch.cycle', 'switch.poeOn', 'switch.forget'] as const;
 export const ALLOW_ENTRIES: readonly string[] = ['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`), ...MOVE_ENTRIES, ...SWITCH_ENTRIES, ...UI_ENTRIES, ...DEFAULT_ON];
@@ -88,6 +90,10 @@ export const ENTRY_TEXT: Record<string, string> = {
   'switch.cycle': "DISRUPTIVE: cams-admin may cut a camera's PoE power at the switch for a few seconds and turn it on again (checked first that the camera is on that port, unless a person forces it)",
   'switch.poeOn': 'cams-admin may turn PoE on at a switch port (recovery)',
   'switch.forget': "cams-admin may make this proxy forget a PoE switch and its stored password",
+  'camera.power.set': "cams-admin may tell this proxy how a camera is powered (its switch and port, for display; no secrets)",
+  'camera.power.cycling': "cams-admin may tell this proxy that a camera's PoE was cut (the camera shows as power-cycling, its token is dropped and the reboot cooldown starts)",
+  'camera.power.cycled': "cams-admin may tell this proxy that a camera's PoE is on again, or that the power-cycle failed",
+  'camera.power.cycle.result': "cams-admin may answer a power-cycle asked for on this proxy's Maintenance page",
   'ui.config': "a cams-admin sign-in (one-time link) may change this proxy's settings on the Settings page and reset them to config.json's value; never addresses, ports, files, trust, users, cams-admin itself, storage limits or Google Vision's ceiling for cams-admin; retention only longer, spending caps only lower, Google Vision on and its monthly limit higher only within that ceiling",
   'ui.restart': 'DISRUPTIVE: a cams-admin sign-in (one-time link) may restart this proxy and its camera side',
   'camera.onboarding.get': "cams-admin may read each camera's onboarding status (no secrets)",

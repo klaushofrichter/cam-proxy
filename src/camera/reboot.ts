@@ -1,7 +1,6 @@
 import type { AuditLog } from '../audit/audit-log';
 import { logger } from '../log';
 import { CameraError, type CameraErrorCode } from './client';
-import { PoeSwitchError, type CycleResult, type PoeSwitchErrorCode } from './poe-switch';
 
 // A camera reboot requested through the control API (issue #83). The camera
 // is offline about a minute, may drop the connection before answering, and
@@ -10,7 +9,10 @@ import { PoeSwitchError, type CycleResult, type PoeSwitchErrorCode } from './poe
 // re-subscribes, stills and FTP carry on once the camera is back.
 // A power-cycle through the camera's PoE switch (issue #85) is the same to
 // the proxy, after a "power-cycling" phase while the PoE is off: one state,
-// one cooldown and one watch for both.
+// one cooldown and one watch for both. cams-admin runs the cycle on the
+// switch's operating proxy (spec 2026-11-07-poe-switches-design, "Who does
+// what") and tells this proxy when the PoE went off (camera.power.cycling)
+// and when it is on again (camera.power.cycled).
 
 const REBOOT_COOLDOWN_MS = 120_000; // the same as cams
 export const REBOOT_WAIT_MS = 5 * 60_000; // "rebooting" until back, or this long
@@ -25,6 +27,7 @@ export interface RebootState {
   offAt: number | null; // a power-cycle: when the PoE went off
   endedAt: number | null;
   downSec: number | null; // request (a power-cycle: the cut) to the first answer after it
+  message?: string; // a power-cycle that failed: cams-admin's words
 }
 // 429: within the cooldown, or `inFlight` while a reboot or power-cycle is being sent.
 export type TooSoon = { status: 429; retryAfterS: number; inFlight: boolean };
@@ -32,12 +35,6 @@ export type RebootAnswer =
   | { status: 202; confirmed: boolean }
   | TooSoon
   | { status: 502; error: CameraErrorCode; detail: string };
-export type PowerCycleAnswer =
-  | ({ status: 202 } & CycleResult)
-  | TooSoon
-  | { status: 409 | 502; error: PoeSwitchErrorCode; detail: string; poeOff?: true; turnedOn?: boolean };
-// What the audit records name: never the password.
-interface PowerCycleInfo { switch: { model: string; host: string; port: number }; offSeconds: number }
 // Who asked (R3-13): the admin (a session or the token), or cams-admin
 // (a command: its cmdId and actor go into the record's details).
 export interface RebootRequester { user?: string; requestedBy: 'session' | 'token' | 'cams-admin'; ip?: string; userAgent?: string; cmdId?: string; actor?: string }
@@ -119,72 +116,52 @@ export class CameraReboot {
     return { status: 202, confirmed };
   }
 
-  // Power-cycle through the PoE switch: `run` logs in to the switch, cuts the
-  // port, waits and turns it on again (PoeSwitch.cycle). The answer comes once
-  // PoE is back on. A refusal before the cut (busy, no power, a wrong
-  // password, unreachable) changes nothing and starts no cooldown.
-  async powerCycle(who: RebootRequester, info: PowerCycleInfo, run: (onOff: (at: number) => void) => Promise<CycleResult>): Promise<PowerCycleAnswer> {
-    const refused = this.tooSoon();
-    if (refused) return refused;
-    this.sending = true;
-    const serialBefore = this.d.serial();
-    const requestedAt = this.now();
-    const previous = this.current;
-    let offAt: number | null = null;
-    const base = { action: 'camera-powercycle', category: ['host'], type: ['change'], ...requesterRecord(who) };
-    const where = `${info.switch.host} port ${info.switch.port}`;
-    const details = { switch: { ...info.switch }, offSeconds: info.offSeconds, ...requesterDetails(who), phase: 'requested' };
-    // The cut, on this class's clock (the cooldown and downSec count from it).
-    const cut = () => {
-      const at = this.now();
-      offAt = at;
-      this.lastSent = at;
-      this.d.forgetToken(); // the camera loses every token
-      this.current = { kind: 'powercycle', requestedAt, confirmed: true, phase: 'power-cycling', offAt: at, endedAt: null, downSec: null };
-    };
-    // The camera may be dark now: watch for it to answer again.
-    const startWatch = () => {
-      this.current = { ...this.current!, phase: 'rebooting' };
-      this.watch(serialBefore);
-    };
-    try {
-      const r = await run(cut);
-      this.d.audit.write({
-        ...base, outcome: 'success',
-        message: `Camera power-cycled through the PoE switch (${where}): ${r.watts} W before, PoE off for ${info.offSeconds} s`,
-        details: { ...details, watts: r.watts, offAt: r.offAt, onAt: r.onAt },
-      });
-      logger.info({ watts: r.watts, offMs: r.onAt - r.offAt }, 'camera_powercycle_done');
-      startWatch();
-      return { status: 202, ...r };
-    } catch (err) {
-      const e = err instanceof PoeSwitchError ? err : new PoeSwitchError('switch_error', (err as Error).message, offAt !== null, null);
-      // The switch says whether the PoE-off request went out (also when its
-      // answer was lost and onOff never ran): then the port may have been cut.
-      const poeOff = e.poeOff;
-      const turnedOn = e.turnedOn === true;
-      // The port may have been cut: from now on (if the cut wasn't seen), and
-      // the record says when (#106: the stills inventory counts from the cut).
-      if (poeOff && offAt === null) cut();
-      const cutAt = offAt as number | null;
-      this.d.audit.write({
-        ...base, outcome: 'failure', error: e.code,
-        message: poeOff
-          ? `Camera power-cycle through the PoE switch (${where}) failed: PoE may have been cut; turned back on: ${turnedOn ? 'yes' : 'no'} (${e.message})`
-          : `Camera power-cycle through the PoE switch (${where}) refused: ${e.message}`,
-        details: { ...details, poeOff, ...(poeOff ? { turnedOn, offAt: cutAt } : {}) },
-      });
-      (poeOff && !turnedOn ? logger.error : logger.warn).call(logger, { code: e.code, poeOff, turnedOn }, 'camera_powercycle_failed');
-      if (poeOff) {
-        // The cooldown holds and the watch tells when (or whether) it is back.
-        startWatch();
-        return { status: 502, error: e.code, detail: e.message, poeOff: true, turnedOn };
-      }
-      this.current = previous;
-      return { status: e.code === 'switch_busy' || e.code === 'no_power' ? 409 : 502, error: e.code, detail: e.message };
-    } finally {
-      this.sending = false;
+  // Whether a reboot or power-cycle would be refused now (the shared cooldown), or null.
+  cooldown(): TooSoon | null {
+    return this.tooSoon();
+  }
+
+  // cams-admin's power-cycle (camera.power.cycling): the operating proxy cut
+  // the camera's PoE at `at` (its clock; never later than ours). From the cut
+  // as a power-cycle here: the cooldown, the token dropped, "power-cycling",
+  // and the watch until the camera answers again. During a reboot or another
+  // power-cycle (the operator already cut the power) the state says so and
+  // the running watch goes on: never a second one.
+  externalPowerCycle(at: number): void {
+    const now = this.now();
+    const offAt = Math.min(at, now);
+    const c = this.current;
+    const watching = c !== null && (c.phase === 'power-cycling' || c.phase === 'rebooting');
+    this.lastSent = now;
+    this.d.forgetToken(); // the camera loses every token
+    this.current = { kind: 'powercycle', requestedAt: watching ? c.requestedAt : offAt, confirmed: true, phase: 'power-cycling', offAt, endedAt: null, downSec: null };
+    this.d.audit.write({
+      action: 'camera-powercycle', category: ['host'], type: ['change'], outcome: 'success', user: 'cams-admin',
+      message: `Camera power-cycle by cams-admin: PoE off at the camera's switch port${watching ? ` (during a ${c.kind === 'reboot' ? 'reboot' : 'power-cycle'})` : ''}`,
+      details: { phase: 'requested', via: 'cams-admin', requestedBy: 'cams-admin', offAt, ...(watching ? { duringReboot: true } : {}) },
+    });
+    logger.info({ offAt, duringReboot: watching }, 'camera_powercycle_external');
+    if (!watching) this.watch(this.d.serial());
+  }
+
+  // camera.power.cycled: PoE is on again (ok), or the cycle failed (the
+  // message says how; the camera's PoE may still be off): that ends it.
+  externalPowerCycleDone(ok: boolean, message: string): void {
+    const c = this.current;
+    const open = c !== null && c.kind === 'powercycle' && (c.phase === 'power-cycling' || c.phase === 'rebooting');
+    const base = { action: 'camera-powercycle', category: ['host'], user: 'cams-admin' };
+    if (ok) {
+      if (open && c.phase === 'power-cycling') this.current = { ...c, phase: 'rebooting' };
+      this.d.audit.write({ ...base, type: ['change'], outcome: 'success', message: `Camera power-cycle by cams-admin: PoE on again${message ? ` (${message})` : ''}`, details: { phase: 'cycled', via: 'cams-admin', requestedBy: 'cams-admin' } });
+      logger.info({ open }, 'camera_powercycle_external_on');
+      return;
     }
+    if (open) {
+      this.stop();
+      this.current = { ...c, phase: 'not-back', endedAt: this.now(), downSec: null, message };
+    }
+    this.d.audit.write({ ...base, type: ['end'], outcome: 'failure', message: `Camera power-cycle by cams-admin failed${message ? `: ${message}` : ''}`, details: { phase: 'failed', via: 'cams-admin', requestedBy: 'cams-admin' } });
+    logger.warn({ open, message }, 'camera_powercycle_external_failed');
   }
 
   stop(): void {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cameraStateText, isNewStart, poeAlert, poeLine, poeOnText, powerCycleMessage, powerCycleFailText, readHealth, restartWatch, waitForNewProxy, RESTART_GIVE_UP_MS } from '../web/src/lib/maintenance';
+import { cameraStateText, isNewStart, poeAlert, poeLine, poeOnText, powerCycleMessage, powerCycleFailText, powerLine, powerResultText, rebootEndText, readHealth, restartWatch, waitForNewProxy, RESTART_GIVE_UP_MS } from '../web/src/lib/maintenance';
 
 describe('Maintenance page helpers (#71, #83)', () => {
   it('tells a new proxy start by its version or start time', () => {
@@ -29,10 +29,37 @@ describe('Maintenance page helpers (#71, #83)', () => {
     expect(cameraStateText({ online: true, reboot: { kind: 'powercycle', phase: 'back', requestedAt: at } })).toBe('online');
   });
 
-  it('asks before a power-cycle with the switch, the port and the off time', () => {
-    expect(powerCycleMessage({ host: '192.168.1.217', port: 8, offSeconds: 10 })).toBe(
-      "Cut the camera's PoE power on 192.168.1.217 port 8 for 10 s? The camera is offline for about a minute. Only works while nobody is logged in to the switch's web UI.",
+  it('asks before a power-cycle through cams-admin, naming the switch and port it knows', () => {
+    expect(powerCycleMessage({ kind: 'poe', switchName: 'Switch 2', port: 3 })).toBe(
+      'Ask cams-admin to power-cycle the camera (PoE: Switch 2, port 3)? cams-admin first checks that the camera is on that port, then cuts its PoE for a few seconds. The camera is offline for about a minute.',
     );
+    expect(powerCycleMessage(null)).toBe(
+      'Ask cams-admin to power-cycle the camera? cams-admin first checks that the camera is on that port, then cuts its PoE for a few seconds. The camera is offline for about a minute.',
+    );
+  });
+
+  // Camera settings and the Maintenance page: the camera's power as cams-admin sent it (camera.power.set).
+  it("describes the camera's power from cams-admin", () => {
+    const now = new Date(2026, 10, 7, 12, 0).getTime();
+    expect(powerLine({ kind: 'poe', switchName: 'Switch 2', port: 3, watts: 4.5, verifiedAt: now - 2 * 3600_000 }, now)).toBe('PoE: Switch 2, port 3, verified 2 h ago');
+    expect(powerLine({ kind: 'poe', switchName: 'Switch 2', port: 3 }, now)).toBe('PoE: Switch 2, port 3, not verified');
+    expect(powerLine({ kind: 'poe', switchName: 'Switch 2', port: 3, verifiedAt: now - 60_000, notSeen: true }, now)).toBe('PoE: Switch 2, port 3, verified 1 min ago; not seen there at the last check');
+    expect(powerLine({ kind: 'data-only', switchName: 'Switch 2', port: 5 }, now)).toBe('Data only: power adapter');
+    expect(powerLine({ kind: 'adapter' }, now)).toBe('Power adapter');
+    expect(powerLine({ kind: 'unknown' }, now)).toBe('Unknown');
+    expect(powerLine(null, now)).toBe('Unknown');
+  });
+
+  it("says cams-admin's answer to a power-cycle request", () => {
+    expect(powerResultText({ requestId: 'pc_1', ok: true, at: 1 })).toBe('Camera power-cycle: done by cams-admin');
+    expect(powerResultText({ requestId: 'pc_1', ok: false, reason: 'not PoE powered', at: 1 })).toBe('Camera power-cycle refused by cams-admin: not PoE powered');
+    expect(powerResultText({ requestId: 'pc_1', ok: false, at: 1 })).toBe('Camera power-cycle refused by cams-admin');
+  });
+
+  it('the end of a reboot or power-cycle that did not bring the camera back', () => {
+    expect(rebootEndText({ kind: 'powercycle', phase: 'not-back', requestedAt: 1 })).toBe('The camera did not answer within 5 minutes of the power-cycle.');
+    expect(rebootEndText({ kind: 'reboot', phase: 'not-back', requestedAt: 1 })).toBe('The camera did not answer within 5 minutes of the reboot.');
+    expect(rebootEndText({ kind: 'powercycle', phase: 'not-back', requestedAt: 1, message: 'PoE may still be OFF on Switch 2 port 3' })).toBe('The power-cycle failed: PoE may still be OFF on Switch 2 port 3');
   });
 
   it('describes the switch and its last reading', () => {
@@ -73,6 +100,7 @@ describe('Maintenance page helpers (#71, #83)', () => {
     expect(powerCycleFailText({ error: 'switch_error', detail: 'x', poeOff: true, turnedOn: true }, 8)).toBe('Camera power-cycle failed after the PoE-off request: PoE may have been cut, and it is on again (x)');
     expect(powerCycleFailText({ error: 'switch_error', detail: 'y', poeOff: true, turnedOn: false }, 8)).toBe("Camera power-cycle failed: the camera's PoE may be OFF: use 'Turn camera PoE on', or the switch's web UI (port 8). (y)");
     expect(powerCycleFailText({ error: 'switch_busy', detail: 'z' }, 8)).toBe('Camera power-cycle: z');
+    expect(powerCycleFailText({ error: 'power_cycle_needs_cams_admin', detail: 'cams-admin is not connected' }, null)).toBe('Camera power-cycle: cams-admin is not connected');
   });
 
   it('describes the PoE-on answer', () => {

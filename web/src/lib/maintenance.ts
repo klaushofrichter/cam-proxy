@@ -1,6 +1,6 @@
 // The Maintenance page's restart, reboot and power-cycle helpers (#71, #83, #85).
 
-import { localHhmm } from './format';
+import { agoText, localHhmm } from './format';
 import { REFUSED_TEXT } from './rights';
 
 // After this long without a new proxy, the page says it did not come back.
@@ -62,7 +62,14 @@ export function waitForNewProxy(before: Health | null, postedAt: number, back: (
   return () => clearInterval(timer);
 }
 
-export interface CameraReboot { kind?: 'reboot' | 'powercycle'; phase: 'power-cycling' | 'rebooting' | 'back' | 'not-back'; requestedAt: number; offAt?: number | null; downSec?: number | null }
+export interface CameraReboot { kind?: 'reboot' | 'powercycle'; phase: 'power-cycling' | 'rebooting' | 'back' | 'not-back'; requestedAt: number; offAt?: number | null; downSec?: number | null; message?: string }
+
+// The line for a reboot or power-cycle that ended without the camera back:
+// a power-cycle that failed says what cams-admin said.
+export function rebootEndText(r: CameraReboot): string {
+  if (r.kind === 'powercycle' && r.message) return `The power-cycle failed: ${r.message}`;
+  return `The camera did not answer within 5 minutes of the ${r.kind === 'powercycle' ? 'power-cycle' : 'reboot'}.`;
+}
 
 // The camera's state line: "power-cycling" while its PoE is off (#85), then
 // "rebooting (requested HH:MM)" until it answers, instead of a plain "offline".
@@ -98,8 +105,33 @@ export function poeOnText(r: { port: number; wasOn: boolean; watts: number }): s
   return r.wasOn ? `Camera PoE: port ${r.port} was on already (${r.watts} W)` : `Camera PoE: turned on on port ${r.port}; the camera boots in about a minute`;
 }
 
-export function powerCycleMessage(s: { host: string | null; port: number | null; offSeconds: number }): string {
-  return `Cut the camera's PoE power on ${s.host} port ${s.port} for ${s.offSeconds} s? The camera is offline for about a minute. Only works while nobody is logged in to the switch's web UI.`;
+// The camera's power as cams-admin sent it (GET /control/cameras/:cam/power;
+// spec 2026-11-07-poe-switches-design, "Camera power").
+export interface CameraPower { kind: 'poe' | 'data-only' | 'adapter' | 'unknown'; switchName?: string; port?: number; watts?: number; verifiedAt?: number; notSeen?: boolean }
+export interface PowerCycleOutcome { requestId: string; ok: boolean; reason?: string; at: number }
+export interface PowerView { power: CameraPower | null; setAt: number | null; asked: { requestId: string; at: number } | null; result: PowerCycleOutcome | null; canRequest: boolean; why: string | null }
+
+const switchPort = (p: CameraPower) => `${p.switchName ?? 'a switch'}, port ${p.port ?? '?'}`;
+
+// "PoE: Switch 2, port 3, verified 2 h ago" / "Data only: power adapter" / "Power adapter" / "Unknown".
+export function powerLine(p: CameraPower | null, now = Date.now()): string {
+  if (!p || p.kind === 'unknown') return 'Unknown';
+  if (p.kind === 'adapter') return 'Power adapter';
+  if (p.kind === 'data-only') return 'Data only: power adapter';
+  const verified = p.verifiedAt ? `verified ${agoText(p.verifiedAt, now)}` : 'not verified';
+  return `PoE: ${switchPort(p)}, ${verified}${p.notSeen ? '; not seen there at the last check' : ''}`;
+}
+
+// The confirmation before asking cams-admin (no force from a proxy).
+export function powerCycleMessage(p: CameraPower | null): string {
+  const where = p?.kind === 'poe' ? ` (PoE: ${switchPort(p)})` : '';
+  return `Ask cams-admin to power-cycle the camera${where}? cams-admin first checks that the camera is on that port, then cuts its PoE for a few seconds. The camera is offline for about a minute.`;
+}
+
+// cams-admin's answer (camera.power.cycle.result).
+export function powerResultText(r: PowerCycleOutcome): string {
+  if (r.ok) return 'Camera power-cycle: done by cams-admin';
+  return `Camera power-cycle refused by cams-admin${r.reason ? `: ${r.reason}` : ''}`;
 }
 
 // Why the switch can't be used (as the proxy says it), or null.

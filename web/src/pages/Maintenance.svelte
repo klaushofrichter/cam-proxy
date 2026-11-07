@@ -5,10 +5,10 @@
   import { api, ApiError } from '../lib/api';
   import { MB, mbText } from '../lib/format';
   import { REPAIR_MAX_BYTES, REPAIR_MAX_CLIPS } from '../lib/inventory';
-  import { poeAlert, poeOnText, powerCycleFailText, powerCycleMessage, readHealth, waitForNewProxy } from '../lib/maintenance';
+  import { poeAlert, poeOnText, powerCycleFailText, powerCycleMessage, powerResultText, readHealth, rebootEndText, waitForNewProxy, type PowerView } from '../lib/maintenance';
   import { refresh, refreshTick, status } from '../lib/state';
   import { clearMatches, clearMessage } from '../lib/archive';
-  import { actionPath, blockOf, selectedCamera } from '../lib/cameras';
+  import { actionPath, blockOf, powerPath, selectedCamera } from '../lib/cameras';
   import { lockedWhy, rights } from '../lib/rights';
   import LockedNote from '../components/LockedNote.svelte';
   // The actions that act on a camera: the picked one when there are several.
@@ -45,7 +45,25 @@
 
   // The camera reboot (#83), the power-cycle (#85) and the proxy restart
   // (#71) ask first, in one shared dialog; Cancel or Esc sends nothing.
+  // `poe`: the switch from the old settings (Turn camera PoE on, the PoE-off warning).
   const poe = $derived(blockOf($status, $selectedCamera)?.camera.poeSwitch ?? null);
+  // The camera's power as cams-admin sent it, the open request and cams-admin's
+  // last answer (spec 2026-11-07-poe-switches-design, "Asking from a proxy").
+  let power = $state<PowerView | null>(null);
+  const powerAt = $derived(powerPath($status, $selectedCamera));
+  const loadPower = async () => {
+    const path = powerAt;
+    if (!path) return;
+    try {
+      power = await api<PowerView>('GET', path);
+    } catch {
+      power = null;
+    }
+  };
+  // Read when the camera changes and with the top bar's Refresh.
+  $effect(() => {
+    if (powerAt && $refreshTick >= 0) void loadPower();
+  });
   const DIALOGS = $derived({
     'camera-reboot': {
       title: 'Reboot the camera',
@@ -54,8 +72,8 @@
     },
     'camera-powercycle': {
       title: 'Power-cycle the camera',
-      message: poe ? powerCycleMessage(poe) : '',
-      confirmLabel: 'Power-cycle camera',
+      message: powerCycleMessage(power?.power ?? null),
+      confirmLabel: 'Ask cams-admin',
     },
     'inventory-repair': {
       title: 'Retrieve missing clips',
@@ -150,23 +168,29 @@
     }, failedText('Camera reboot'));
   }
 
-  // The power-cycle (#85): the answer comes once the PoE is back on (after
-  // offSeconds); meanwhile "Power-cycling…", then the reboot's states.
-  let cycling = $state(false);
+  // The power-cycle through cams-admin: the request is answered at once
+  // (202 {requestId}); "asked cams-admin…" until cams-admin's result arrives,
+  // then the reboot's states as cams-admin cuts and restores the PoE.
+  let askedId = $state<string | null>(null);
   async function powerCycleCamera() {
     asking = null;
     await cameraAction(async () => {
-      cycling = true;
-      void refresh();
-      try {
-        const r = await api<{ offAt: number; onAt: number; watts: number }>('POST', actionPath($status, $selectedCamera, 'camera-powercycle'));
-        rebootAsked = true;
-        return `Camera power-cycle: PoE back on after ${Math.round((r.onAt - r.offAt) / 1000)} s (the camera drew ${r.watts} W)`;
-      } finally {
-        cycling = false;
-      }
+      const r = await api<{ requestId: string }>('POST', actionPath($status, $selectedCamera, 'camera-powercycle'));
+      askedId = r.requestId;
+      rebootAsked = true;
+      void loadPower();
+      return 'Camera power-cycle: asked cams-admin…';
     }, (e) => (e instanceof ApiError && e.body && typeof e.body === 'object' ? powerCycleFailText(e.body as { error: string }, poe?.port ?? null) : 'Camera power-cycle: failed'));
   }
+  // cams-admin's answer to this page's request.
+  $effect(() => {
+    const r = power?.result;
+    if (askedId && r && r.requestId === askedId) {
+      result = powerResultText(r);
+      askedId = null;
+    }
+  });
+  const waiting = $derived(!!power?.asked);
   // Recovery (#85 review): turn the camera's PoE on if it is off. Shown
   // whenever a switch is configured; it only ever turns PoE on, so no dialog.
   async function poeOn() {
@@ -174,10 +198,13 @@
   }
   const alert = $derived(poeAlert(poe));
 
-  // Faster status updates while the camera reboots or is power-cycled.
+  // Faster status updates while the camera reboots or is power-cycled, or cams-admin has not answered yet.
   $effect(() => {
-    if (reboot?.phase !== 'rebooting' && reboot?.phase !== 'power-cycling' && !cycling) return;
-    const t = setInterval(() => void refresh(), 2000);
+    if (reboot?.phase !== 'rebooting' && reboot?.phase !== 'power-cycling' && !waiting && !askedId) return;
+    const t = setInterval(() => {
+      void refresh();
+      void loadPower();
+    }, 2000);
     return () => clearInterval(t);
   });
 
@@ -218,9 +245,9 @@
       <button onclick={() => void run('ONVIF', 'onvif-resubscribe')} disabled={!!locked} data-testid="action-resubscribe">Re-subscribe ONVIF</button>
       <button onclick={() => void run('Restart', 'restart')} disabled={!!restartLocked} data-testid="action-restart">Restart camera side</button>
       <button class="danger" onclick={() => (asking = 'camera-reboot')} disabled={cameraBusy || !!locked} data-testid="action-camera-reboot">Reboot camera</button>
+      <button class="danger" onclick={() => (asking = 'camera-powercycle')} disabled={cameraBusy || waiting || !power?.canRequest || !!locked} title={power?.why ?? undefined} data-testid="action-camera-powercycle">Power-cycle (through cams-admin)</button>
       {#if poe?.configured}
-        <button class="danger" onclick={() => (asking = 'camera-powercycle')} disabled={cameraBusy || !!locked} data-testid="action-camera-powercycle">Power-cycle camera</button>
-        <button onclick={() => void poeOn()} disabled={sending || cycling || !!locked} data-testid="action-camera-poe-on" title="Turns the camera's PoE on if it is off (no power check)">Turn camera PoE on</button>
+        <button onclick={() => void poeOn()} disabled={sending || !!locked} data-testid="action-camera-poe-on" title="Turns the camera's PoE on if it is off (no power check)">Turn camera PoE on</button>
       {/if}
     </div>
     <div class="buttons">
@@ -228,14 +255,17 @@
       <button onclick={() => void run('Camera FTP test', 'camera-ftp-test')} disabled={!!locked} data-testid="action-ftp-test">Test the camera's FTP</button>
       <button onclick={() => void run('Camera FTP off', 'camera-ftp-off')} disabled={!!locked} data-testid="action-ftp-off">Turn the camera's FTP off</button>
     </div>
-    {#if cycling || reboot?.phase === 'power-cycling'}
-      <p class="busy" data-testid="reboot-state">Power-cycling… the camera's PoE is off on {poe?.host} port {poe?.port}; it comes back on after {poe?.offSeconds} s.</p>
+    {#if power?.why && !locked}<p class="small" data-testid="powercycle-why">Power-cycle: {power.why}.</p>{/if}
+    {#if waiting && reboot?.phase !== 'power-cycling' && reboot?.phase !== 'rebooting'}
+      <p class="busy" data-testid="reboot-state">Asked cams-admin… it checks the camera's switch port first.</p>
+    {:else if reboot?.phase === 'power-cycling'}
+      <p class="busy" data-testid="reboot-state">Power-cycling… cams-admin cut the camera's PoE; it comes back on in a few seconds.</p>
     {:else if reboot?.phase === 'rebooting'}
       <p class="busy" data-testid="reboot-state">Rebooting… the camera is {blockOf($status, $selectedCamera)?.camera.online ? 'still answering' : 'offline'}{blockOf($status, $selectedCamera)?.camera.error ? ` (${blockOf($status, $selectedCamera)?.camera.error})` : ''}.</p>
     {:else if rebootAsked && reboot?.phase === 'back'}
       <p class="msg" data-testid="reboot-state">The camera is back after {reboot.downSec} s.</p>
     {:else if rebootAsked && reboot?.phase === 'not-back'}
-      <p class="bad" data-testid="reboot-state">The camera did not answer within 5 minutes of the {reboot.kind === 'powercycle' ? 'power-cycle' : 'reboot'}.</p>
+      <p class="bad" data-testid="reboot-state">{rebootEndText(reboot)}</p>
     {/if}
   </div>
   <InventoryCard bind:this={inventory} onrepair={(o, auto) => { if (auto && asking) return; offer = o; asking = 'inventory-repair'; }} onrecover={(o, auto) => { if (auto && asking) return; recoverText = o.text; asking = 'inventory-recover'; }} onremove={(o) => { duplicates = o; asking = 'inventory-duplicates'; }} />

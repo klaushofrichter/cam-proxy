@@ -1,5 +1,6 @@
 import type { TooSoon } from '../camera/reboot';
 import { PoeSwitchError } from '../camera/poe-switch';
+import { poeHttpStatus } from '../camera/switch/errors';
 import { splitHost } from '../camera/http';
 import { activeCameraIds, cameraConfig } from '../config/cameras';
 import { CAMERA_HOST_NAMES, validCameraHost } from '../config/env';
@@ -20,7 +21,7 @@ export interface ActionWho { user: string; requestedBy: 'session' | 'token' | 'c
 export type ActionOutcome =
   | { status: number; json?: unknown; retryAfterS?: number }
   | { status: number; error: string; detail?: string; extra?: Record<string, unknown>; retryAfterS?: number };
-export type ActionDeps = Pick<ControlDeps, 'onboarding' | 'cameras' | 'cameraCount' | 'cameraId' | 'running' | 'resubscribe' | 'checkCamera' | 'storage' | 'cameraFtp' | 'restart' | 'restartCamera' | 'cameraReboot' | 'cameraPowerCycle' | 'poeSwitch' | 'findCamera' | 'envFile' | 'restartProcess' | 'inventory' | 'archive' | 'tls' | 'cameraNtp' | 'audit'>;
+export type ActionDeps = Pick<ControlDeps, 'onboarding' | 'cameras' | 'cameraCount' | 'cameraId' | 'running' | 'resubscribe' | 'checkCamera' | 'storage' | 'cameraFtp' | 'restart' | 'restartCamera' | 'cameraReboot' | 'cameraPower' | 'poeSwitch' | 'findCamera' | 'envFile' | 'restartProcess' | 'inventory' | 'archive' | 'tls' | 'cameraNtp' | 'audit'>;
 
 // Actions with their own audit records (the route writes no control-action record for them).
 export const OWN_AUDIT: ReadonlySet<string> = new Set(['camera-reboot', 'camera-powercycle', 'camera-poe-on', 'restart-proxy', 'inventory', 'inventory-repair', 'camera-address', 'archive-clear', 'tls-ca-rotate', 'camera-trust-clear', 'tls-ca-drop-previous', 'camera-probe', 'camera-trust-pin', 'camera-time-set']);
@@ -64,7 +65,7 @@ export async function performAction(d: ActionDeps, name: string, cam: string | n
   };
   // The reboot and the power-cycle share a cooldown (#83, #85).
   const tooSoon = (a: TooSoon): ActionOutcome => ({ ...fail(429, 'too_soon', tooSoonDetail(a)), retryAfterS: a.retryAfterS });
-  // The power-cycle, PoE-on and switch read need a configured switch: 409 otherwise.
+  // PoE-on and the switch read need a configured switch (the old settings): 409 otherwise.
   const noSwitch = (): ActionOutcome | null => {
     const why = d.poeSwitch.notConfigured(camera());
     return why ? fail(409, 'not_configured', why) : null;
@@ -76,7 +77,7 @@ export async function performAction(d: ActionDeps, name: string, cam: string | n
   };
   const switchFail = (err: unknown): ActionOutcome => {
     if (!(err instanceof PoeSwitchError)) throw err;
-    return fail(err.code === 'switch_busy' || err.code === 'no_power' || err.code === 'password_unset' ? 409 : 502, err.code, err.message, err.poeOff ? { poeOff: true, turnedOn: err.turnedOn === true } : {});
+    return fail(poeHttpStatus(err.code), err.code, err.message, err.poeOff ? { poeOff: true, turnedOn: err.turnedOn === true } : {});
   };
   switch (name) {
     case 'onvif-resubscribe':
@@ -111,16 +112,16 @@ export async function performAction(d: ActionDeps, name: string, cam: string | n
       if (a.status === 429) return tooSoon(a);
       return fail(502, a.error, a.detail);
     }
-    // Power-cycle the camera through its PoE switch (#85): 202 {offAt, onAt,
-    // watts} once PoE is back on; 409 not_configured, switch_busy, no_power;
-    // 502 switch_auth, switch_unreachable, switch_error; 429 as the reboot.
+    // Power-cycle the camera (spec 2026-11-07-poe-switches-design, "Asking
+    // from a proxy"): cams-admin verifies the port and runs the cycle through
+    // the switch's operating proxy; this asks it (one event) and answers 202
+    // {requestId} at once. 409 power_cycle_needs_cams_admin without
+    // cams-admin (not connected, or no power record from it); 429 as the reboot.
     case 'camera-powercycle': {
-      const no = noSwitch();
-      if (no) return no;
-      const a = await d.cameraPowerCycle(requester, camera());
-      if (a.status === 202) return { status: 202, json: { offAt: a.offAt, onAt: a.onAt, watts: a.watts } };
+      const a = d.cameraPower.request({ user: who.user, requestedBy: who.requestedBy, ...(who.ip ? { ip: who.ip } : {}), ...(who.userAgent ? { userAgent: who.userAgent } : {}) }, camera());
+      if (a.status === 202) return { status: 202, json: { requestId: a.requestId } };
       if (a.status === 429) return tooSoon(a);
-      return fail(a.status, a.error, a.detail, a.poeOff ? { poeOff: true, turnedOn: a.turnedOn } : {});
+      return fail(409, a.error, a.detail);
     }
     // Recovery (#85): PoE on for the camera's port if it is off; no power
     // check and no cooldown. The same switch session lock as the rest.

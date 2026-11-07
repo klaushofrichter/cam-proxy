@@ -68,12 +68,12 @@ export interface PoeSwitchStatus {
 export interface SwitchReading { sn: string | null; firmware: string | null; ports: Array<{ port: number; poe: boolean; watts: number; link: boolean | null; tx: number; rx: number }> }
 export type PoeOnResult = PortReading & { wasOn: boolean };
 
-// One camera's view of the host's switch: its port, read on every use.
+// One camera's view of the host's switch: its port, read on every use. No
+// power-cycle: those run through cams-admin, verified (spec 2026-11-07-poe-switches-design).
 export interface PortHandle {
   notConfigured(): string | null;
   status(): PoeSwitchStatus;
   read(): Promise<PortReading>;
-  cycle(onOff: (at: number) => void): Promise<CycleResult>;
   poeOn(): Promise<PoeOnResult>;
 }
 
@@ -160,8 +160,6 @@ export class PoeSwitch {
       notConfigured: () => this.notConfigured(port() ?? null),
       status: () => this.status(port() ?? null),
       read: () => this.read(p()),
-      // Unverified, as before (the host-config path; power-cycles move to cams-admin).
-      cycle: (onOff) => this.cycle(p(), onOff, { verifyHost: null }).then(({ offAt, onAt, watts }) => ({ offAt, onAt, watts })),
       poeOn: () => this.poeOn(p()),
     };
   }

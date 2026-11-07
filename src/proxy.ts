@@ -79,6 +79,8 @@ import { analyticsHandlers } from './fleet/analytics-commands';
 import { cameraHandlers } from './fleet/camera-commands';
 import { moveHandlers } from './moves/commands';
 import { switchHandlers } from './fleet/switch-commands';
+import { CameraPowerStore, powerHandlers, powerRequestRefusal, requestPowerCycle, type PowerRequestDeps } from './fleet/power-commands';
+import type { AdminEvent } from './fleet/outbox';
 import { MoveReturns } from './moves/returns';
 import { MoveJournal } from './moves/journal';
 import { movesSourceApi, refreshManifest } from './api/moves-api';
@@ -90,7 +92,6 @@ import { MoveSync, type MoveSyncDeps } from './moves/sync';
 import { CopyRunner } from './moves/copier';
 import { capturedMark } from './moves/captured';
 import { purgeExcept, removeImported } from './moves/purge';
-import type { MoveEvent } from './moves/types';
 import { cameraPasswordStore } from './config/camera-passwords';
 import { credentialsOf, passwordSource } from './onboarding/credentials';
 import { OnboardingService } from './onboarding/service';
@@ -966,7 +967,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // an event to cams-admin, the CPU over its core count, the storage figures a
   // move weighs, and the push answer while the site CA can't push.
   const proxyIdNow = () => camsAdmin.keyInfo()?.proxyId ?? '';
-  const emitToAdmin = (e: MoveEvent) => camsAdmin.emitEvent(e);
+  const emitToAdmin = (e: AdminEvent) => camsAdmin.emitEvent(e);
   const cpuBusy = opts.cpuBusy ?? (() => loadavg()[0] > availableParallelism());
   const moveUsage = () => {
     const u = storage.usage();
@@ -1344,6 +1345,17 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       };
     },
   });
+  // Power-cycles through cams-admin (spec 2026-11-07-poe-switches-design): the
+  // camera's power as cams-admin sent it (data/camera-power.json, no secrets),
+  // and asking for a cycle (the event), which needs cams-admin connected.
+  const cameraPower = new CameraPowerStore(running.server.dataDir);
+  const powerRequest: PowerRequestDeps = {
+    store: cameraPower,
+    connected: () => camsAdmin.connection()?.connected === true,
+    emit: emitToAdmin,
+    reboot: (cam) => worker(cam).reboot,
+    audit,
+  };
   const controlDeps: ControlDeps = {
     onboarding,
     changeMarks: () => overridesBackups.byPath(),
@@ -1389,9 +1401,12 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     },
     cameraReboot: (who, cam) => worker(cam).reboot.request(who),
     poeSwitch: { notConfigured: (cam) => worker(cam).poeSwitch.notConfigured(), read: (cam) => worker(cam).poeSwitch.read(), poeOn: (cam) => worker(cam).poeSwitch.poeOn(), info: (cam) => worker(cam).poeSwitchInfo() },
-    cameraPowerCycle: (who, cam) => {
-      const w = worker(cam);
-      return w.reboot.powerCycle(who, { switch: w.poeSwitchInfo(), offSeconds: w.cam().poeSwitch.offSeconds }, (onOff) => w.poeSwitch.cycle(onOff));
+    cameraPower: {
+      request: (who, cam) => requestPowerCycle(powerRequest, cam, who),
+      view: (cam) => {
+        const why = powerRequestRefusal(powerRequest, cam);
+        return { ...cameraPower.view(cam), canRequest: why === null, why };
+      },
     },
     restartProcess: () => {
       processRestart ??= restartProcess({
@@ -1457,6 +1472,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     cameraHandlers({ actions: controlDeps, cameraIds: () => cams.ids(), cameraName: controlDeps.cameraName, audit, restartProcess: () => controlDeps.restartProcess(), onboarding: (cam) => onboarding.status(cam) }),
     // PoE switches (spec 2026-11-07-poe-switches-design): by cams-admin's switch id, the proxy's own passwords.
     switchHandlers({ registry: switches, audit }),
+    // The camera's power and cams-admin's power-cycles of it (default on: notices, they cut nothing).
+    powerHandlers({ store: cameraPower, cameraIds: () => cams.ids(), reboot: (cam) => worker(cam).reboot, audit }),
     // Camera moves (plan 2026-10-21-camera-move-cam-proxy): stubs until each task fills its handler in.
     moveHandlers({
       emit: emitToAdmin,

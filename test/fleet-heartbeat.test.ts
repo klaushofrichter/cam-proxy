@@ -38,8 +38,7 @@ describe('the heartbeat body on the strict contract', () => {
   });
 
   it('a 38-entry allow list is reported whole (the contract caps it at 64)', () => {
-    // the proxy's entries plus the camera.power.* names of the contract (Task 5 adds them)
-    const allow = [...ALLOW_ENTRIES, 'camera.power.set', 'camera.power.cycling', 'camera.power.cycled', 'camera.power.cycle.result'];
+    const allow = [...ALLOW_ENTRIES];
     expect(allow).toHaveLength(38);
     const hb = buildHeartbeat(buildHealth(input()), { ...PI_INFO, commands: { enabled: true, paused: false, pauseReason: null, allow: [...allow], seenWindow: 1000 } });
     expect((hb.body.proxy as { commands: { allow: string[] } }).commands.allow).toEqual(allow);

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Power-cycles now go through cams-admin: Maintenance's "Power-cycle (through cams-admin)" asks cams-admin, which checks that the camera is on its switch port and then cuts and restores its PoE through the proxy that operates the switch; the page shows "Asked cams-admin…" until cams-admin answers. Without cams-admin the button is off and the request is refused (409 `power_cycle_needs_cams_admin`). The camera's state (power-cycling, rebooting, back) and the 2-minute cooldown follow cams-admin's messages. Camera settings shows the camera's power as cams-admin knows it ("PoE: Switch 2, port 3, verified 2 h ago", "Data only: power adapter", "Power adapter", "Unknown"). The new cams-admin messages (`camera.power.set`, `camera.power.cycling`, `camera.power.cycled`, `camera.power.cycle.result`) are allowed by default: they cut nothing. "Turn camera PoE on" stays local.
+
 ## v2026.11.06.3
 
 - The admin pages say which settings and actions are the proxy's and which the camera's (picked in the top bar): Settings is now two pages, **Proxy settings** (profile, Analytics, the host's settings, the PoE switch's model and address, Find and Add camera) and **Camera settings: <name>** (the camera's settings with Move and Remove, Camera time, its PoE port). Events, Timeline and Clips name the camera in their title ("Clips: Backyard Right"). Status and Maintenance have a "Camera: <name>" section and a "Proxy" section.

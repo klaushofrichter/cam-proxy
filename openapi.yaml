@@ -1153,6 +1153,22 @@ paths:
         '401': { description: not signed in }
         '404': { description: not_found }
         '503': { description: camera_restarting (Retry-After) }
+  /control/cameras/{cam}/power:
+    get:
+      summary: The camera's power as cams-admin sent it, and power-cycles asked for here (spec 2026-11-07-poe-switches-design) (admin)
+      description: >
+        power is cams-admin's display record (camera.power.set: kind poe, data-only, adapter or unknown;
+        switchName, port, watts, verifiedAt, notSeen), kept in <dataDir>/camera-power.json (no secrets), or null;
+        setAt when it arrived. asked is the open request of POST .../actions/camera-powercycle ({requestId, at}),
+        result cams-admin's last answer (camera.power.cycle.result: {requestId, ok, reason?, at}). canRequest says
+        whether a power-cycle can be asked for now (cams-admin connected and a power record from it); why, when not.
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: '{ power, setAt, asked, result, canRequest, why }' }
+        '401': { description: not signed in }
+        '403': { description: admin_only }
+        '404': { description: not_found }
   /control/cameras/{cam}/actions/{name}:
     post:
       summary: A camera action on one camera (spec 2026-10-05-multi-camera-host-design §6.3) (admin)
@@ -1768,11 +1784,14 @@ paths:
         400 invalid without the confirm, 409 not_available without tls.site, 409 busy while another rotation runs;
         a config-change audit record.
         camera-reboot reboots the camera (about a minute offline; every camera token becomes invalid).
-        camera-powercycle cuts the camera's PoE on its switch (camera.poeSwitch, CAMPROXY_POE_SWITCH_PASSWORD)
-        for offSeconds and turns it on again; it answers once PoE is back on. It shares the 120 s cooldown
-        with camera-reboot. Once its PoE-off request is sent, any failure turns PoE on again and answers 502
-        with poeOff: true and turnedOn. camera-poe-on turns the camera's port on if it is off (recovery; no
-        power check, no cooldown). poe-switch-read reads the camera's port on the switch (never polled).
+        camera-powercycle asks cams-admin to power-cycle the camera (the signed event camera.power.cycle.request;
+        spec 2026-11-07-poe-switches-design): cams-admin verifies the camera's switch port and runs the cycle
+        through the switch's operating proxy, then answers with camera.power.cycle.result (GET
+        /control/cameras/{cam}/power); camera.power.cycling and camera.power.cycled drive the camera's state
+        (power-cycling, rebooting, back). It answers 202 { requestId } at once, shares the 120 s cooldown with
+        camera-reboot, and needs cams-admin (409 power_cycle_needs_cams_admin otherwise). Never forced from here.
+        camera-poe-on turns the camera's port on if it is off (the switch from the old poeSwitch settings;
+        recovery; no power check, no cooldown). poe-switch-read reads the camera's port on the switch (never polled).
         restart-proxy answers 202, then stops gracefully (as on SIGTERM) and exits 0; a supervisor
         (compose, the cluster) starts it again. Both are admin only (sessions need X-CamProxy-UI) and audited.
         inventory starts an inventory ({"kind":"stills"}, {"kind":"clips"}, {"kind":"clips","camera":true} to
@@ -1794,13 +1813,13 @@ paths:
         - { name: name, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: 'camera-test and retention-run results; camera-ftp-setup/-off: {ftp} (the camera''s settings, no password); camera-ftp-test: {ok, rspCode}; poe-switch-read: {at, port, index, poe, watts, link, sn, firmware}; camera-poe-on: the same plus wasOn; inventory-cancel: { cancelled, runId }; find-camera: { devices: [{endpoint, address (XAddr host), sender (UDP source), mismatch, useAddress (sender on a mismatch), xaddrs, name, hardware, model, current}], tookMs, envFile: {writable, path?, reason?} }; camera-address: { host, previous, key, backup, restart: true }; archive-clear: { cleared, bytes }' }
-        '202': { description: 'started (onvif-resubscribe, restart, restart-proxy); camera-reboot: { confirmed } (false: the camera dropped the connection after receiving the request); camera-powercycle: { offAt, onAt, watts } once PoE is back on; inventory, inventory-repair: { runId }' }
+        '202': { description: 'started (onvif-resubscribe, restart, restart-proxy); camera-reboot: { confirmed } (false: the camera dropped the connection after receiving the request); camera-powercycle: { requestId } (cams-admin was asked); inventory, inventory-repair: { runId }' }
         '400': { description: 'archive-clear: invalid (no count); camera-address: invalid (not an address or name with an optional :port); inventory: invalid (an unknown or missing kind, camera not a boolean, or camera for a kind without a camera compare); inventory-repair: invalid (a kind without a repair, or runId not a run id); a camera action (camera-test, onvif-resubscribe, camera-ftp-*, restart, camera-reboot, camera-powercycle, camera-poe-on, poe-switch-read, inventory*) on a proxy with several cameras without ?cam=<id>: camera_required (or POST /control/cameras/{cam}/actions/{name})' }
         '404': { description: 'unknown action; inventory-repair: not_found (no such check run of the kind)' }
-        '409': { description: 'archive-clear: count_mismatch { count } (count is not the number of clips in the Archive now); camera-address: not_available { detail, line } (CAMPROXY_ENV_FILE not set, the file fails the path guard, or its directory is not writable; line is what to add by hand); not_configured (camera-ftp-setup/-test: ftp.publicHost or the FTP password is not set; camera-powercycle, poe-switch-read: no switch or no CAMPROXY_POE_SWITCH_PASSWORD); camera-powercycle, poe-switch-read: switch_busy (someone is logged in to the switch''s web UI), no_power (the port has PoE off or draws 0 W; nothing switched); inventory, inventory-repair: inventory_busy { runId } (one runs already); inventory-repair: report_stale (the check run is an hour old or more), not_repairable (it did not finish, did not compare with the camera, or found nothing missing locally; duplicates: no recording held twice)' }
+        '409': { description: 'archive-clear: count_mismatch { count } (count is not the number of clips in the Archive now); camera-address: not_available { detail, line } (CAMPROXY_ENV_FILE not set, the file fails the path guard, or its directory is not writable; line is what to add by hand); not_configured (camera-ftp-setup/-test: ftp.publicHost or the FTP password is not set; camera-poe-on, poe-switch-read: no switch or no CAMPROXY_POE_SWITCH_PASSWORD); camera-powercycle: power_cycle_needs_cams_admin { detail } (not connected to cams-admin, or no power record from it); camera-poe-on, poe-switch-read: switch_busy (someone is logged in to the switch''s web UI), no_power; inventory, inventory-repair: inventory_busy { runId } (one runs already); inventory-repair: report_stale (the check run is an hour old or more), not_repairable (it did not finish, did not compare with the camera, or found nothing missing locally; duplicates: no recording held twice)' }
         '503': { description: 'stopping (inventory, inventory-repair: the proxy is stopping and starts no run)' }
         '429': { description: 'find-camera, camera-address: rate_limited (more than 6 per minute, together); camera-reboot, camera-powercycle: too_soon, within 120 s of the last reboot or power-cycle, or while one is being sent (Retry-After)' }
-        '502': { description: 'the camera refused or failed the call; camera-reboot: the request never reached the camera (camera_offline, camera_auth_failed, camera_error); camera-powercycle, camera-poe-on, poe-switch-read: switch_auth, switch_unreachable, switch_error (camera-powercycle, camera-poe-on: poeOff, turnedOn when PoE may have been cut)' }
+        '502': { description: 'the camera refused or failed the call; camera-reboot: the request never reached the camera (camera_offline, camera_auth_failed, camera_error); camera-poe-on, poe-switch-read: switch_auth, switch_unreachable, switch_error (camera-poe-on: poeOff, turnedOn when PoE may still be off)' }
   /control/log:
     get:
       summary: Recent log lines (info and above), redacted

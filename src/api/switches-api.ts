@@ -1,6 +1,7 @@
 import express from 'express';
 import type { AuditLog } from '../audit/audit-log';
 import { PoeSwitchError } from '../camera/poe-switch';
+import { poeHttpStatus } from '../camera/switch/errors';
 import type { SwitchRegistry } from '../camera/switch/registry';
 import { switchPasswordStore } from '../config/switch-passwords';
 import { PASSWORD_RULE, validPassword } from '../onboarding/password-rule';
@@ -57,7 +58,7 @@ export function switchesApi(d: { registry: SwitchRegistry; dataDir: string; audi
       if (!(err instanceof PoeSwitchError)) throw err;
       d.audit.write({ ...base, outcome: 'failure', error: err.code, message: `PoE on ${e.ref.host} port ${port} failed: ${err.message}`, details: { switch: sw, requestedBy: who.requestedBy, ...(err.poeOff ? { poeStillOff: true } : {}) } });
       res.locals.errorCode = err.code;
-      res.status(err.code === 'switch_busy' || err.code === 'password_unset' ? 409 : 502).json({ error: err.code, detail: err.message, ...(err.poeOff ? { poeOff: true } : {}) });
+      res.status(poeHttpStatus(err.code)).json({ error: err.code, detail: err.message, ...(err.poeOff ? { poeOff: true } : {}) });
     }
   });
   return r;

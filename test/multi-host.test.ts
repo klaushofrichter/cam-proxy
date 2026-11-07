@@ -49,13 +49,10 @@ describe('one host, four cameras (spec §15)', () => {
     expect(listClips(p.proxy.catalog, 'cam5', t0 - 60_000, Date.now() + 60_000)).toEqual([]);
   }, 60_000);
 
+  // The cycle itself is cams-admin's now (switch.cycle on the operator); the switch's one session holds for both.
   it('two power-cycles at once: the second waits for the first', async () => {
-    const [a, b] = await Promise.all([
-      request(p.base).post('/control/cameras/cam5/actions/camera-powercycle').set(admin()),
-      request(p.base).post('/control/cameras/cam6/actions/camera-powercycle').set(admin()),
-    ]);
-    expect([a.status, b.status]).toEqual([202, 202]);
-    expect(Math.abs(a.body.offAt - b.body.offAt)).toBeGreaterThanOrEqual(5000); // one after the other
+    const [a, b] = await Promise.all([3, 4].map((port) => p.proxy.switches.legacy.cycle(port, () => undefined, { verifyHost: null })));
+    expect(Math.abs(a.offAt - b.offAt)).toBeGreaterThanOrEqual(5000); // one after the other
     expect(sw.activeSession()).toBe(false);
   }, 60_000);
 
