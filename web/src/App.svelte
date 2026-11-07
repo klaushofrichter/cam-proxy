@@ -82,7 +82,8 @@
         {:else if $page === 'timeline'}<Timeline />
         {:else if $page === 'clips'}<Clips />
         {:else if $page === 'audit'}<Audit />
-        {:else if $page === 'settings'}<Settings />
+        {:else if $page === 'settings'}<Settings scope="proxy" />
+        {:else if $page === 'camera-settings'}<Settings scope="camera" />
         {:else if $page === 'cams-admin'}<CamsAdmin />
         {:else if $page === 'certificates'}<Certificates />
         {:else}<Maintenance />{/if}

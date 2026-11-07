@@ -5,7 +5,7 @@
   import AnalysisModal from '../components/AnalysisModal.svelte';
   import { tagText, type UiAnalysis } from '../lib/analytics';
   import { isRecovered, RECOVERED_NOTE } from '../lib/timeline';
-  import { pickCamera, selectedCamera } from '../lib/cameras';
+  import { pickCamera, cameraTitle, selectedCamera } from '../lib/cameras';
 
   interface Ev { id: number; kind: string; source: string; start: number; end: number | null; endReason: string | null; analysis: UiAnalysis | null }
   let events = $state<Ev[]>([]);
@@ -36,7 +36,7 @@
 </script>
 
 <section>
-  <h2>Events</h2>
+  <h2 data-testid="page-title">Events{$status?.cameras?.length ? `: ${cameraTitle($status, $selectedCamera)}` : ''}</h2>
   <div class="card">
     <h3>Live stream</h3>
     <p class="muted small">Camera events and status changes as they arrive (SSE, resumes after a drop). {$status ? `ONVIF: ${$status.intake.onvif}` : ''}</p>

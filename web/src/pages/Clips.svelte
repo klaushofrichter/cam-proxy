@@ -2,8 +2,8 @@
   import { localDate } from '../lib/format';
   import { clipChips } from '../lib/chips';
   import { api } from '../lib/api';
-  import { feed, refreshTick } from '../lib/state';
-  import { pickCamera, selectedCamera } from '../lib/cameras';
+  import { feed, refreshTick, status } from '../lib/state';
+  import { pickCamera, cameraTitle, selectedCamera } from '../lib/cameras';
 
   interface Clip { id: number; start: number; end: number | null; stream: string; size: number; origin?: string; events: number[]; url: string; snapshotUrl: string | null }
   interface Ev { id: number; kind: string }
@@ -60,7 +60,7 @@
 </script>
 
 <section>
-  <h2>Clips</h2>
+  <h2 data-testid="page-title">Clips{$status?.cameras?.length ? `: ${cameraTitle($status, $selectedCamera)}` : ''}</h2>
   <div class="card">
     <div class="head">
       <input type="date" bind:value={day} max={localDate()} data-testid="clips-day" />

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The admin pages say which settings and actions are the proxy's and which the camera's (picked in the top bar): Settings is now two pages, **Proxy settings** (profile, Analytics, the host's settings, the PoE switch's model and address, Find and Add camera) and **Camera settings: <name>** (the camera's settings with Move and Remove, Camera time, its PoE port). Events, Timeline and Clips name the camera in their title ("Clips: Backyard Right"). Status and Maintenance have a "Camera: <name>" section and a "Proxy" section.
+
+## v2026.11.06.2
+
 - Settings, Analytics: the Google Vision switch sits beside its heading, and the current key ("Current key") and the field for a custom key ("Custom Google Vision key") share one line. Each limit has a help tip (i) that says what it counts: calls per month and at most per day count every camera together; still checks per day are per camera; per camera and day counts a camera's automatic analyses and still checks together.
 - Settings, Camera time: the text names the camera by its name ("Sets Backyard Right's time zone…"), not its id.
 
