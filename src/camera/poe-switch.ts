@@ -8,6 +8,7 @@ export { PoeSwitchError, type PoeSwitchErrorCode } from './switch/errors';
 export { poeOpcode, portIndex, reverseOrder, Session } from './switch/sscpoe-web';
 export type { LocateResult, SwitchRef } from './switch/driver';
 
+const NO_PASSWORD = 'CAMPROXY_POE_SWITCH_PASSWORD is not set';
 const ON_RETRY_MS = 60_000; // how long a failed PoE-on is retried (backoff 1, 2, 4, 8, 10, 10… s)
 const STOP_RECOVERY_MS = 6_000; // on shutdown: the PoE-on retries end after this
 const STOP_WAIT_MS = 8_000; // on shutdown: the longest wait for the switch (compose's stop grace is 20 s)
@@ -73,9 +74,10 @@ export interface PortHandle {
   poeOn(): Promise<PoeOnResult>;
 }
 
-interface PoeSwitchDeps {
+export interface PoeSwitchDeps {
   ref: () => ControllerRef;
   password: () => string | undefined;
+  passwordHint?: string; // what the 'not set' reason names (default: the host config's environment variable)
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   timeoutMs?: number; // per call (5 s)
@@ -120,7 +122,7 @@ export class PoeSwitch {
     if (!c.host) return 'poeSwitch.host is not set';
     if (port !== undefined && !port) return "the camera's poeSwitch.port is not set";
     if (port && port > c.ports) return "the camera's poeSwitch.port is above poeSwitch.ports";
-    if (!this.d.password()) return 'CAMPROXY_POE_SWITCH_PASSWORD is not set';
+    if (!this.d.password()) return this.d.passwordHint ?? NO_PASSWORD;
     return null;
   }
 
@@ -133,6 +135,11 @@ export class PoeSwitch {
       passwordSet: !!this.d.password(), configured: this.notConfigured(port) === null, busy: this.busy,
       poeMaybeOff: port === undefined ? this.offPorts.size > 0 : !!port && this.offPorts.has(port), last: last ? { ...last } : null,
     };
+  }
+
+  // The ports whose PoE may be off (a cycle's PoE-on failed, or a read said so).
+  portsMaybeOff(): number[] {
+    return [...this.offPorts].sort((a, b) => a - b);
   }
 
   // One camera's view of the switch (its port read on every use).
@@ -392,7 +399,7 @@ export class PoeSwitch {
   private session<T>(port: number | undefined, f: (s: SwitchSession, c: PoeSwitchConfig, driver: SwitchDriver) => Promise<T>): Promise<T> {
     if (this.stopped) return Promise.reject(new PoeSwitchError('switch_error', 'the proxy is stopping'));
     const why = this.notConfigured(port);
-    if (why) return Promise.reject(new PoeSwitchError('switch_error', why));
+    if (why) return Promise.reject(new PoeSwitchError(!this.d.password() && why === (this.d.passwordHint ?? NO_PASSWORD) ? 'password_unset' : 'switch_error', why));
     const before = this.tail;
     let release!: () => void;
     const mine = new Promise<void>((r) => (release = r));

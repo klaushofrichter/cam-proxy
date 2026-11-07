@@ -31,7 +31,7 @@ import { reapOrphanGo2rtc } from './stills/orphans';
 import { Go2rtc } from './stills/go2rtc';
 import { latestApi } from './api/latest-api';
 import { CachePool } from './recordings/pool';
-import { legacyRef, PoeSwitch } from './camera/poe-switch';
+import { SwitchRegistry } from './camera/switch/registry';
 import { restartProcess } from './process-restart';
 import type { Config } from './config/defaults';
 import { applyOverrides, configRevision, getPath, needsProcessRestart, needsRestart, removeOverride, setPath, settingPaths, type Loaded } from './config/load';
@@ -95,6 +95,7 @@ import { credentialsOf, passwordSource } from './onboarding/credentials';
 import { OnboardingService } from './onboarding/service';
 import { PasswordAttempts } from './onboarding/attempts';
 import { onboardingApi } from './api/onboarding-api';
+import { switchesApi } from './api/switches-api';
 import { proxyZone } from './onboarding/zone';
 import { compactOf } from './onboarding/status';
 import { RemoveLeftovers } from './onboarding/remove-leftovers';
@@ -139,6 +140,7 @@ export interface Proxy {
   readonly loaded: Loaded;
   readonly running: Config;
   app: Express;
+  readonly switches: SwitchRegistry; // the PoE switches this proxy operates, by id
   catalog: Catalog;
   log: StreamLog;
   readonly status: StatusPoller;
@@ -506,7 +508,9 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // One PoE controller for the host's switch (spec 2026-10-05-multi-camera-host-design §8.4):
   // one switch session at a time, in arrival order; each camera has its port.
   // The host config's switch as a ref (until switches come from cams-admin).
-  const poe = new PoeSwitch({ ref: () => legacyRef(running.poeSwitch), password: () => loaded.secrets.poeSwitchPassword });
+  // The registry holds every switch by id (spec 2026-11-07-poe-switches-design), the host config's as `legacy`.
+  const switches = new SwitchRegistry({ dataDir: running.server.dataDir, legacy: () => running.poeSwitch, legacyPassword: () => loaded.secrets.poeSwitchPassword });
+  const poe = switches.legacy;
   // One recordings cache for every camera (spec §8.3): one LRU, capped by recordings.cacheMB.
   const cachePool = new CachePool(() => running.recordings.cacheMB * 2 ** 20);
   const makeWorker = (id: string) =>
@@ -1439,6 +1443,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     },
   };
   app.use('/control', requireAccess('admin', access), onboardingApi(onboarding));
+  app.use('/control', requireAccess('admin', access), switchesApi({ registry: switches, dataDir: running.server.dataDir, audit }));
   app.use('/control', requireAccess('admin', access), movesControlApi(moveSource, moveSync));
   app.use('/control', requireAccess('admin', access), controlApi(controlDeps));
   // cams-admin's P3 commands (plan P3 Task 10): each off unless allowed locally.
@@ -1581,6 +1586,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     },
     running,
     app,
+    switches,
     extFeed,
     catalog,
     log,
@@ -1711,7 +1717,12 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       audit.write({ action: 'proxy-stop', category: ['process'], type: ['end'], outcome: 'success', user: 'system', message: `cam-proxy stopping${opts.reason ? ` (${opts.reason})` : ''}`, details: { reason: opts.reason ?? 'stop' } });
       // Each camera's PoE back on if a power-cycle is in its off time; one
       // record per camera the proxy may leave dark (spec §8.4).
-      const { portsLeftOff, sessionMaybeOpen } = await poe.stop();
+      const stops = await switches.stop();
+      const { portsLeftOff, sessionMaybeOpen } = stops.find((x) => x.id === 'legacy')!;
+      for (const o of stops.filter((x) => x.id !== 'legacy' && (x.portsLeftOff.length || x.sessionMaybeOpen))) {
+        const ref = switches.known().find((k) => k.id === o.id);
+        audit.write({ action: 'camera-powercycle', category: ['host'], type: ['end'], outcome: 'failure', user: 'system', message: `cam-proxy stopping: PoE switch ${o.id} (${ref?.host ?? ''}): ${o.portsLeftOff.length ? `PoE may be left OFF on port ${o.portsLeftOff.join(', ')}` : ''}${o.sessionMaybeOpen ? ' its web session may still be open' : ''}`, details: { phase: 'stop', poeLeftOff: o.portsLeftOff.length > 0, sessionMaybeOpen: o.sessionMaybeOpen, switch: { id: o.id, host: ref?.host ?? '', ports: o.portsLeftOff } } });
+      }
       const swInfo = { model: running.poeSwitch.model, host: running.poeSwitch.host ?? '' };
       for (const port of portsLeftOff) {
         const w = cams.list().find((x) => x.cam().poeSwitch.port === port);

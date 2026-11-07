@@ -76,7 +76,7 @@ export async function performAction(d: ActionDeps, name: string, cam: string | n
   };
   const switchFail = (err: unknown): ActionOutcome => {
     if (!(err instanceof PoeSwitchError)) throw err;
-    return fail(err.code === 'switch_busy' || err.code === 'no_power' ? 409 : 502, err.code, err.message, err.poeOff ? { poeOff: true, turnedOn: err.turnedOn === true } : {});
+    return fail(err.code === 'switch_busy' || err.code === 'no_power' || err.code === 'password_unset' ? 409 : 502, err.code, err.message, err.poeOff ? { poeOff: true, turnedOn: err.turnedOn === true } : {});
   };
   switch (name) {
     case 'onvif-resubscribe':

@@ -1640,6 +1640,53 @@ paths:
       responses:
         '200': { description: the new view (as GET) }
         '400': { description: '{ error: invalid, detail } when the file and default values alone are not a valid configuration' }
+  /control/switches:
+    get:
+      summary: The PoE switches this proxy operates (admin) (spec 2026-11-07-poe-switches-design)
+      description: >
+        Each switch's descriptor from cams-admin, whether a password is stored
+        for it (passwordSet), whether a switch session is open now (busy) and
+        the ports whose PoE may be off (poeMaybeOff, UI port numbers). Never a password.
+      responses:
+        '200': { description: '{ switches: [{ id, model, host, ports, offSeconds, passwordSet, busy, poeMaybeOff: [integer] }] }' }
+        '401': { description: not signed in }
+        '403': { description: admin_only }
+  /control/switches/{id}/password:
+    put:
+      summary: Save a switch's web password on this proxy (admin)
+      description: >
+        Write-only: stored in data/admin/switch-passwords.json (mode 600); never
+        returned, logged or audited. One switch-password audit record per attempt past the shape check.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [password], properties: { password: { type: string, minLength: 1, maxLength: 64, description: no control characters } } }
+      responses:
+        '200': { description: '{ id, passwordSet: true }' }
+        '400': { description: invalid }
+        '401': { description: not signed in }
+        '403': { description: admin_only }
+        '404': { description: not_found (this proxy does not operate that switch) }
+        '500': { description: not_saved }
+  /control/switches/{id}/ports/{port}/poe-on:
+    post:
+      summary: Turn PoE on for one port of a switch (recovery) (admin)
+      description: >
+        Logs in to the switch with the stored password, turns the port's PoE on if
+        it is off, logs out. One switch-port-poe-on audit record.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: port, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      responses:
+        '200': { description: 'the port''s reading { port, index, poe, watts, link, sn, firmware, wasOn }' }
+        '400': { description: invalid (the port is outside 1 to the switch's ports) }
+        '401': { description: not signed in }
+        '403': { description: admin_only }
+        '404': { description: not_found }
+        '409': { description: switch_busy, or password_unset (no password stored for the switch) }
+        '502': { description: switch_auth, switch_unreachable or switch_error (poeOff true when the port may still be off) }
   /control/profile:
     get:
       summary: "The proxy profile (what this proxy holds): the cameras it may hold and holds, its storage budget against the disk, the hardware as cam-proxy sees it, the warnings and the firewall lines for its cameras with FTP; the heartbeat's profile, plus perCameraBytes"
