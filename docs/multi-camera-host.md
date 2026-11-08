@@ -108,7 +108,8 @@ is `https://download.docker.com/linux/ubuntu`).
   example's value.
 - `proxy.passive`: the FTP passive range, at least 10 ports per camera.
 - `leases`: one entry per device: the switch (`"role": "switch"`) and each
-  camera (`"camera": { "id": "cam3", "poeSwitchPort": 1 }`). The MAC is on
+  camera (`"camera": { "id": "cam3" }`; an older `poeSwitchPort` is
+  ignored: the switch and its ports are cams-admin's). The MAC is on
   the device's label; the switch's is also in callcmd 101's `mac`
   ([poe-switch.md](poe-switch.md)).
 
@@ -244,9 +245,10 @@ Then from the PC: `curl -s -o /dev/null -w '%{http_code}\n' http://192.168.60.2/
 answers `200`. From the LAN, its web UI is `http://192.168.60.2/` over the
 route, like the cameras' pages.
 
-- Its password goes into `config/.env` as `CAMPROXY_POE_SWITCH_PASSWORD`
-  (§8); `config.json`'s `poeSwitch` (`sscpoe-web`, `192.168.60.2`, 8 ports)
-  and each camera's `poeSwitch.port` come from `host.json`.
+- The switch is added in cams-admin (Switches tab, this proxy as its
+  operator, address `192.168.60.2`); its password is set on this proxy's
+  Proxy settings, PoE switches ([poe-switch.md](poe-switch.md)). config.json
+  has no switch settings.
 - **Log out of its web UI after use.** The switch allows one session at a
   time: a browser left logged in blocks the proxy's power-cycle
   (`409 switch_busy`), and for about 3 minutes after the tab is closed.
@@ -387,7 +389,6 @@ CAMPROXY_ADMIN_TOKEN=
 CAMPROXY_CAMERA_PASSWORD=
 # CAMPROXY_CAMERA_PASSWORD_CAM3=
 CAMPROXY_FTP_PASSWORD=
-CAMPROXY_POE_SWITCH_PASSWORD=
 # optional
 CAMPROXY_GOOGLE_VISION_KEY=
 CAMPROXY_AUDIT_TOKEN=

@@ -5,7 +5,7 @@
   import { api, ApiError } from '../lib/api';
   import { MB, mbText } from '../lib/format';
   import { REPAIR_MAX_BYTES, REPAIR_MAX_CLIPS } from '../lib/inventory';
-  import { poeAlert, poeOnText, powerCycleDisabled, powerCycleFailText, powerWhyText, powerCycleMessage, powerResultText, readHealth, rebootEndText, waitForNewProxy, type PowerView } from '../lib/maintenance';
+  import { powerCycleDisabled, powerCycleFailText, powerWhyText, powerCycleMessage, powerResultText, readHealth, rebootEndText, waitForNewProxy, type PowerView } from '../lib/maintenance';
   import { refresh, refreshTick, status } from '../lib/state';
   import { clearMatches, clearMessage } from '../lib/archive';
   import { actionPath, blockOf, powerPath, selectedCamera } from '../lib/cameras';
@@ -45,8 +45,6 @@
 
   // The camera reboot (#83), the power-cycle (#85) and the proxy restart
   // (#71) ask first, in one shared dialog; Cancel or Esc sends nothing.
-  // `poe`: the switch from the old settings (Turn camera PoE on, the PoE-off warning).
-  const poe = $derived(blockOf($status, $selectedCamera)?.camera.poeSwitch ?? null);
   // The camera's power as cams-admin sent it, the open request and cams-admin's
   // last answer (spec 2026-11-07-poe-switches-design, "Asking from a proxy").
   let power = $state<PowerView | null>(null);
@@ -180,7 +178,7 @@
       rebootAsked = true;
       void loadPower();
       return 'Camera power-cycle: asked cams-admin…';
-    }, (e) => (e instanceof ApiError && e.body && typeof e.body === 'object' ? powerCycleFailText(e.body as { error: string }, poe?.port ?? null) : 'Camera power-cycle: failed'));
+    }, (e) => (e instanceof ApiError && e.body && typeof e.body === 'object' ? powerCycleFailText(e.body as { error: string }) : 'Camera power-cycle: failed'));
   }
   // cams-admin's answer to this page's request.
   $effect(() => {
@@ -194,12 +192,6 @@
     }
   });
   const waiting = $derived(!!power?.asked);
-  // Recovery (#85 review): turn the camera's PoE on if it is off. Shown
-  // whenever a switch is configured; it only ever turns PoE on, so no dialog.
-  async function poeOn() {
-    await cameraAction(async () => poeOnText(await api<{ port: number; wasOn: boolean; watts: number }>('POST', actionPath($status, $selectedCamera, 'camera-poe-on'))), failedText('Camera PoE on'));
-  }
-  const alert = $derived(poeAlert(poe));
 
   // Faster status updates while the camera reboots or is power-cycled, or cams-admin has not answered yet.
   $effect(() => {
@@ -238,7 +230,6 @@
 <section>
   <h2>Maintenance</h2>
   <LockedNote why={locked && restartLocked ? locked : locked ? `${locked} Only the restarts are allowed here.` : null} testid="maintenance-locked" />
-  {#if alert}<p class="bad" data-testid="poe-alert">{alert}</p>{/if}
   {#if result}<p class="msg mono" data-testid="action-result">{result}</p>{/if}
   <!-- The camera picked in the top bar (Klaus 2026-11-06: say which actions are the camera's). -->
   <h3 class="section" data-testid="maintenance-camera-section">Camera: {camName}</h3>
@@ -249,9 +240,6 @@
       <button onclick={() => void run('Restart', 'restart')} disabled={!!restartLocked} data-testid="action-restart">Restart camera side</button>
       <button class="danger" onclick={() => (asking = 'camera-reboot')} disabled={cameraBusy || !!locked} data-testid="action-camera-reboot">Reboot camera</button>
       <button class="danger" onclick={() => (asking = 'camera-powercycle')} disabled={powerCycleDisabled(power, cameraBusy || !!locked)} title={power?.why ?? undefined} data-testid="action-camera-powercycle">Power-cycle (through cams-admin)</button>
-      {#if poe?.configured}
-        <button onclick={() => void poeOn()} disabled={sending || !!locked} data-testid="action-camera-poe-on" title="Turns the camera's PoE on if it is off (no power check)">Turn camera PoE on</button>
-      {/if}
     </div>
     <div class="buttons">
       <button onclick={() => void run('Camera FTP setup', 'camera-ftp-setup')} disabled={!!locked} data-testid="action-ftp-setup">Point the camera's FTP here</button>

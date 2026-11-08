@@ -42,7 +42,7 @@ describe('the health summary', () => {
 
   it('the details: camera address without its port, the switch without its host, no serial', () => {
     const h = buildHealth(input());
-    expect(h.camera).toEqual({ id: 'cam1', name: 'Den', address: '192.168.1.103', online: true, since: NOW - H, model: 'RLC-1224A', firmware: 'v3.1', clockOffsetMs: -412, error: null, reboot: null, poeSwitch: { model: 'sscpoe-web', port: 8 } });
+    expect(h.camera).toEqual({ id: 'cam1', name: 'Den', address: '192.168.1.103', online: true, since: NOW - H, model: 'RLC-1224A', firmware: 'v3.1', clockOffsetMs: -412, error: null, reboot: null, poeSwitch: null });
     expect(JSON.stringify(h)).not.toContain('SERIAL-123');
     expect(h.stream).toEqual({ enabled: true, up: true, lastFrameAt: NOW - 1000 });
     expect(h.events).toEqual({ onvif: 'subscribed', source: 'onvif', since: NOW - H, resubscribes: 3 });
@@ -146,7 +146,7 @@ describe('the health summary', () => {
   });
 
   it('off a Pi (the cluster): no host figures, no Pi lines, the disk still checked', () => {
-    const h = buildHealth(input({ camera: { ...input().camera, host: 'cam2.cam-sim.svc.cluster.local:443', poeSwitch: null }, reading: { platform: { pi: false, model: null, hostStats: false }, disk: { sizeBytes: 1, freeBytes: 0, usedBytes: 1, usedPercent: 95 }, host: null } }));
+    const h = buildHealth(input({ camera: { ...input().camera, host: 'cam2.cam-sim.svc.cluster.local:443' }, reading: { platform: { pi: false, model: null, hostStats: false }, disk: { sizeBytes: 1, freeBytes: 0, usedBytes: 1, usedPercent: 95 }, host: null } }));
     expect(h.items.map((i) => i.id)).toEqual(['camera', 'stream', 'events', 'ftp', 'storage', 'disk', 'inventory', 'version']);
     expect(h.host).toBeNull();
     expect(h.platform).toEqual({ pi: false, model: null, hostStats: false });

@@ -287,7 +287,7 @@ describe('a hostile cams-admin with every P3 entry allowed', () => {
   });
   it('(f) every never-remote action: not_allowed whatever the allow-list; none of their functions called', async () => {
     const a = p.proxy.actions;
-    const spies = [vi.spyOn(a, 'findCamera'), vi.spyOn(a, 'restartProcess'), vi.spyOn(a, 'restart'), vi.spyOn(a.tls, 'rotate'), vi.spyOn(a.tls, 'clearTrust'), vi.spyOn(a.tls, 'dropPrevious'), vi.spyOn(a.archive, 'clear'), vi.spyOn(a.inventory, 'repair'), vi.spyOn(a.poeSwitch, 'poeOn')];
+    const spies = [vi.spyOn(a, 'findCamera'), vi.spyOn(a, 'restartProcess'), vi.spyOn(a, 'restart'), vi.spyOn(a.tls, 'rotate'), vi.spyOn(a.tls, 'clearTrust'), vi.spyOn(a.tls, 'dropPrevious'), vi.spyOn(a.archive, 'clear'), vi.spyOn(a.inventory, 'repair')];
     try {
       for (const action of NEVER_REMOTE_ACTIONS) expect(await done('camera.action', { v: 1, camera: 'cam1', action }), action).toMatchObject({ status: 'refused', code: 'not_allowed' });
       for (const s of spies) expect(s).not.toHaveBeenCalled();

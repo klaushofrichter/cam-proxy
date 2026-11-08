@@ -134,7 +134,6 @@ describe('the wired client (four cameras, every secret set)', () => {
         server: { logLevel: 'silent', publicUrl: 'https://proxy.example' },
         ftp: { enabled: true, port: ftpPort, passive: `${passive}-${passive + 40}`, publicHost: '127.0.0.1' },
         analytics: { googleVision: { enabled: true, monthlyLimit: 10 } },
-        poeSwitch: { model: 'sscpoe-web', host: '127.0.0.1:9', ports: 8, offSeconds: 10 },
         // A site CA, so the heartbeat's tls block (site, CA fingerprint) is sent too.
         tls: { site: 'garage', cameraSubnet: '127.0.0.0/16', proxyAddresses: '127.0.0.1', cameraCerts: false },
       },

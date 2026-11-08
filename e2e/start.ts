@@ -52,7 +52,7 @@ async function main() {
   const vision = await startVisionMock({ key: VISION_KEY, port: VISION_MOCK_PORT });
   // A stand-in for the camera's PoE switch (#85; the real one is never used):
   // port 8 (index 0) powers cam-sim, so a power-cycle really takes it away.
-  // No switch is configured at start; maintenance.spec sets camera.poeSwitch.
+  // The proxy operates no switch: cams-admin's operator cuts it in maintenance.spec (the mock's /mock/poe).
   const poeSwitch = await startPoeSwitchMock({
     password: POE_SWITCH_PASSWORD,
     port: POE_SWITCH_PORT,
@@ -77,7 +77,7 @@ async function main() {
   // PI_ADDRESS (pi-config spec §1): ftp.publicHost and server.publicUrl come
   // from the environment, read-only on the Settings page. No CAMPROXY_ENV_FILE:
   // "Use this address" shows the line to add by hand.
-  const env = { PI_ADDRESS: '127.0.0.1', CAMPROXY_POE_SWITCH_PASSWORD: POE_SWITCH_PASSWORD, CAMPROXY_GOOGLE_VISION_KEY: VISION_KEY, CAMPROXY_GOOGLE_VISION_URL: vision.url, CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: 'e2e-proxy-pw', CAMPROXY_FTP_PASSWORD: FTP_PASSWORD };
+  const env = { PI_ADDRESS: '127.0.0.1', CAMPROXY_GOOGLE_VISION_KEY: VISION_KEY, CAMPROXY_GOOGLE_VISION_URL: vision.url, CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: 'e2e-proxy-pw', CAMPROXY_FTP_PASSWORD: FTP_PASSWORD };
   // The restart-proxy action (#71) ends with exit(0), and a supervisor starts
   // the process again. Here the exit is stubbed: a new proxy starts in this
   // process on the same port and data folder, so the server stays up. A fixed

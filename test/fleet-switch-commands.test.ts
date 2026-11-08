@@ -35,7 +35,7 @@ async function setup(o: { password?: boolean; at?: Record<string, number>; answe
   if (o.password !== false) switchPasswordStore(dataDir).set(SW, PASSWORD, m.host);
   const at = o.at ?? {};
   const registry = new SwitchRegistry({
-    dataDir, legacy: () => ({ model: 'none', ports: 8, offSeconds: 10 }), legacyPassword: () => undefined,
+    dataDir,
     sleep: async () => undefined, timeoutMs: 1000,
     pingBurst: (host: string) => {
       m.tx.fill(1);

@@ -25,9 +25,10 @@ Switch 2, port 3, verified 2 h ago", "Data only: power adapter", "Power
 adapter" or "Unknown".
 
 What follows describes the switch, the cycle itself (the same code runs for
-cams-admin's `switch.cycle`), the recovery and the stop. The camera's
-`poeSwitch` settings still drive "Turn camera PoE on" and the switch read
-until they are removed after the migration; they no longer power-cycle.
+cams-admin's `switch.cycle`), the recovery and the stop. The old switch
+settings (`poeSwitch.*`, each camera's `poeSwitch.port`) and
+`CAMPROXY_POE_SWITCH_PASSWORD` are retired: see [Retired
+settings](#retired-settings).
 
 ## The switch
 
@@ -54,8 +55,8 @@ POST http://<switch>/<callcmd>
   from the switch's `sn`. GPS1xx, GPS2xx, GFS2xx, GPS4xx and GS1xx count their
   ports backwards, so the index is `ports - port`: the GPS-208's port 8 is
   index 0, and its opcodes are `0x002` (off) and `0x202` (on). Other models
-  use `port - 1`. "Read the switch now" (below) shows the index the proxy
-  uses, before the first power-cycle.
+  use `port - 1`. cams-admin's `switch.read` answers the ports by their
+  number, before the first power-cycle.
 - **One web session at a time:** while someone is logged in to the switch's
   web UI, the switch drops every other client's POST without an answer
   (measured: "Remote end closed connection without response"; an earlier
@@ -67,74 +68,75 @@ POST http://<switch>/<callcmd>
 - **The other protocols** (UDP multicast for older firmware, and a cloud API)
   are not used.
 
-## Several cameras: one controller per host
+## One controller per switch
 
-With several cameras (spec 2026-10-05-multi-camera-host-design §8.4) the
-switch settings (`poeSwitch.model`, `host`, `ports`, `offSeconds`) are the
-host's; each camera names its `cameras[].poeSwitch.port`. One controller in
-the proxy serves every camera:
+A proxy operates the switches cams-admin names by their id (`sw_…`; spec
+2026-11-07-poe-switches-design). cams-admin sends the switch's descriptor
+(model, address as seen from this proxy, port count, `offSeconds`) with each
+switch command; the proxy keeps the descriptors, no secrets, in
+`<dataDir>/switches.json`, so "Turn PoE on" works without cams-admin. One
+controller per switch serves every port:
 
 - **One session at a time, in arrival order.** The GPS-208 takes one web
-  session, so a second camera's request (a power-cycle, a read, PoE on)
-  waits for the first. A request still waiting after `offSeconds` + 60 s
-  fails with 409 `switch_busy` without touching the switch.
-- **One read serves every port for 10 s:** "Read the switch now" for another
-  camera within 10 s answers from that read; a power-cycle and PoE on always
-  read afresh inside their own session.
-- **State per port:** "PoE may be off" belongs to the port that was cut. The
-  2-minute reboot/power-cycle cooldown stays per camera.
+  session, so a second request (a cycle, a read, PoE on) waits for the
+  first; two ids on the same address share that queue. A request still
+  waiting after `offSeconds` + 60 s fails with 409 `switch_busy` without
+  touching the switch.
+- **One read serves every port for 10 s;** a cycle and PoE on always read
+  afresh inside their own session.
+- **State per port:** "PoE may be off" belongs to the port that was cut
+  (`poeMaybeOff` in `GET /control/switches`). The 2-minute reboot/power-cycle
+  cooldown stays per camera, on the camera's own proxy.
 - **Stopping** turns on every port the proxy may have left off and writes one
-  `camera-powercycle` record per camera left dark.
+  `camera-powercycle` record per switch that may be left dark.
 - **A driver per model:** `src/camera/switch/driver.ts` defines the
   interface (log in, read the ports, set one port's PoE, log out, and whether
   the switch takes one session at a time); `sscpoe-web.ts` is the GPS-208's.
-  A new model is a new driver registered there and an enum value of
-  `poeSwitch.model`. Tests use `test/helpers/fake-switch.ts` or the GPS-208
-  mock, never a real switch.
+  A new model is a new driver registered there. Tests use
+  `test/helpers/fake-switch.ts` or the GPS-208 mock, never a real switch.
+
+**The password** of a switch is set on the proxy that operates it, never
+through cams-admin: Proxy settings, PoE switches (`PUT
+/control/switches/<id>/password`, local admin). It is kept in
+`<dataDir>/admin/switch-passwords.json` (mode 600), bound to the switch's
+address as this proxy knew it: when cams-admin names another address for the
+id, the password is not sent there until it is set again. It is sent in the
+switch's login only and never appears in a log line, an API answer, an error
+message or an audit record; the page only says whether it is set.
 
 Log out of the switch's web UI after using it: while a browser is logged in,
 the proxy's requests are refused (`switch_busy`).
 
-## Settings
+## Retired settings
 
-All in `camera.poeSwitch` (config.json, or the Settings page). They apply at
-once: the proxy reads them on every use.
-Only values that differ from config.json or the default become overrides
-(saving `ports` 8 or `offSeconds` 10 stores nothing). On the Settings page,
-Reset of `model` reads "Reset – none (no PoE switch: power-cycle off)", and of
-`host` or `port` "Reset – not set (PoE switch control off: …)".
+Before switches came from cams-admin, the proxy had one switch in its own
+config: host `poeSwitch.model`, `host`, `ports`, `offSeconds`, each camera's
+`poeSwitch.port` (a legacy `camera.poeSwitch` on the Pi), and the password
+`CAMPROXY_POE_SWITCH_PASSWORD` (or its `_FILE`). They are gone:
 
-| Setting | Default | |
-|---|---|---|
-| `model` | `none` | `none`, or `sscpoe-web` |
-| `host` | — | the switch's address or name, optional `:port` (plain http) |
-| `port` | — | the switch port the camera is on, as numbered on the switch (1–48) |
-| `ports` | 8 | the switch's PoE port count, for the index mapping (1–48) |
-| `offSeconds` | 10 | how long the PoE stays off (5–60) |
-
-The password is a secret, `CAMPROXY_POE_SWITCH_PASSWORD` (or
-`CAMPROXY_POE_SWITCH_PASSWORD_FILE`), optional like the other optional
-secrets: in `.env` on the Pi (`compose.yaml` passes it on), and
-`scripts/sync-secrets.sh` adds it to the cluster Secret when it is set. It is
-sent in the switch's login only. It never appears in a log line, an API
-answer, an error message or an audit record, and the Settings page only says
-whether it is set.
-
-cam1's Pi, for example:
-
-```json
-"camera": { "poeSwitch": { "model": "sscpoe-web", "host": "192.168.1.217", "port": 8 } }
-```
+- A config.json or overrides.json that still has them **loads without
+  them**, with one info line `legacy_poe_switch_dropped` naming the dropped
+  paths (never a refusal to start); overrides.json is written without them
+  on the next save. A settings change (`PUT /control/config`) that names
+  them is refused as an unknown setting, and a cams-admin command as
+  `not_remote_settable`, as before.
+- `CAMPROXY_POE_SWITCH_PASSWORD` is not read; when it is set the proxy logs
+  `legacy_poe_switch_password_ignored` once. Set the password per switch
+  instead (above). `scripts/sync-secrets.sh` no longer sends it.
+- `POST /control/actions/camera-poe-on` is gone ("Turn PoE on" is per switch
+  port now), and so is `POST /control/actions/poe-switch-read` (404); a
+  stored allow entry `camera.action:poe-switch-read` is dropped on start.
+- `/control/status` no longer has `camera.poeSwitch`; the health summary's
+  `camera.poeSwitch` is always `null`.
 
 ## What a power-cycle does
 
-The cycle on the operating proxy (cams-admin's `switch.cycle`; before
-cams-admin, `POST /control/actions/camera-powercycle` ran these steps):
+The cycle on the operating proxy (cams-admin's `switch.cycle`):
 
-1. **Checks:** 409 `not_configured` when `model` is `none`, `host` or `port` is
-   missing, `port` is above `ports`, or the password is not set. 429
-   `too_soon` within 120 s of the last camera reboot or power-cycle (they
-   share the cooldown), or while one is in progress.
+1. **Checks:** `password_unset` when no password is stored for the switch
+   (or it was set for another address), and the port must be within the
+   switch's port count. The camera's own proxy keeps the 120 s cooldown
+   shared with the camera reboot.
 2. Logs in to the switch (123). A dropped or unanswered login is 409
    `switch_busy`; a refused password is 502 `switch_auth`; a refused
    connection is 502 `switch_unreachable`.
@@ -166,16 +168,16 @@ still has PoE on and draws power, the off was refused and nothing was cut (502
 | `turnedOn` | Meaning | Then |
 |---|---|---|
 | `true` | PoE may have been cut, and it is on again | the camera may reboot; the state is "rebooting", the cooldown runs |
-| `false` | the camera's PoE may be **OFF** | Maintenance warns: "The camera's PoE may be OFF: use 'Turn camera PoE on', or the switch's web UI (port N)." `camera.poeSwitch.poeMaybeOff` is `true` |
+| `false` | the camera's PoE may be **OFF** | the port is listed in the switch's `poeMaybeOff` (Proxy settings, PoE switches); cams-admin's result says "PoE may still be OFF on … port N" |
 
-**Recovery:** `POST /control/actions/camera-poe-on` (admin only) logs in,
-reads the port and, if its PoE is off, turns it on (with the same retries),
-then logs out. It skips the power check (an unpowered port is the point) and
-the cooldown, and waits its turn in the same queue as a power-cycle (see
-[Several cameras](#several-cameras-one-controller-per-host)). Answer: the reading plus `wasOn`. Audited as `camera-poe-on`.
-The Maintenance page's "Turn camera PoE on" button sends it. The button shows
-whenever a switch is configured, so it also works after a proxy restart has
-lost the failure state. It only ever turns PoE on, so it doesn't ask first.
+**Recovery:** "Turn PoE on" for a port under Proxy settings, PoE switches
+(`POST /control/switches/<id>/ports/<port>/poe-on`, local admin), or
+cams-admin's `switch.poeOn`, logs in, reads the port and, if its PoE is off,
+turns it on (with the same retries), then logs out. It skips the power check
+(an unpowered port is the point) and the cooldown, waits its turn in the
+switch's queue, and works without cams-admin. Answer: the reading plus
+`wasOn`. Audited as `switch-port-poe-on`. It only ever turns PoE on, so it
+doesn't ask first.
 
 **A stopping proxy** (SIGTERM, a container stop, `restart-proxy`) during the
 off time turns the PoE on at once. The retries end after 6 s, and every call
@@ -188,25 +190,21 @@ stop budget is spent. That stays within compose's 20 s
 `stop_grace_period`. If PoE may still be off, or the logout went unanswered
 (the switch's web UI may then refuse logins until the switch ends that
 session), it logs an error and writes a `camera-powercycle` failure record
-(`phase: stop`, `poeLeftOff`, `sessionMaybeOpen`). After the restart, use "Turn camera PoE
-on" or the switch's web UI.
+(`phase: stop`, `poeLeftOff`, `sessionMaybeOpen`, `switch: {id, host}`,
+`portsLeftOff`). After the restart, use "Turn PoE on" under Proxy settings,
+PoE switches, or the switch's web UI.
 
-The answer, 202 `{offAt, onAt, watts}`, comes once PoE is back on, so the
-request takes `offSeconds` and a little more. Then the camera's state is
+The cycle's answer, `{offAt, onAt, watts}`, comes once PoE is back on, so
+it takes `offSeconds` and a little more. Then the camera's state is
 "rebooting" until it answers again, the same as after a camera-API reboot
 (#83): ONVIF re-subscribes on its own, and stills and FTP carry on.
 `/control/status` has `camera.reboot` (`kind: powercycle`, `phase`,
-`offAt`, `downSec`) and `camera.poeSwitch` (the settings, `passwordSet`,
-`configured`, `busy`, `poeMaybeOff`, and the `last` reading).
+`offAt`, `downSec`).
 
 Measured on the real switch (2026-10-01): with PoE off for 10 s, the camera
 answered its API again 46 s after the cut.
 
-`POST /control/actions/poe-switch-read` reads the port without switching
-anything: log in, 101, log out. The answer is `{at, port, index, poe, watts,
-link, sn, firmware}`. It shows on the Status page and in the Settings page's
-PoE switch card ("Read the switch now"). The proxy never reads the switch on
-its own.
+The proxy never reads the switch on its own.
 
 ## Admin UI
 
@@ -218,14 +216,13 @@ its own.
   camera is offline for about a minute." Then "Asked cams-admin…" until
   cams-admin cuts the PoE or answers, "Power-cycling…" while the PoE is off,
   "Rebooting…" until the camera answers, and how long it was away; a refusal
-  or a failed cycle shows cams-admin's reason. "Turn camera PoE on" next to it
-  (recovery, no dialog). While the camera's PoE may be off, a red line says
-  so; a failed power-cycle's result line says whether PoE is on again.
-- **Status:** the camera's state shows "power-cycling", then "rebooting"; the
-  PoE switch line shows the switch, the port and the last reading.
+  or a failed cycle shows cams-admin's reason.
+- **Status:** the camera's state shows "power-cycling", then "rebooting".
 - **Camera settings:** a Power card with the camera's power from cams-admin
-  (no settings); with the old `poeSwitch` settings, the switch's last reading
-  and "Read the switch now".
+  (no settings).
+- **Proxy settings, PoE switches:** the switches this proxy operates, whether
+  each has its password, a port whose PoE may be off, and "Turn PoE on" per
+  port.
 
 ## Audit
 
@@ -238,7 +235,7 @@ message), `result` (cams-admin's answer to a request, `requestId`, `reason`),
 then `back` or `not-back` as below. The switch side is the operator's
 `switch-port-cycled` record.
 
-Before cams-admin: `camera-powercycle` (host / change, user `admin`) with `switch: {model, host,
+Older versions (the proxy's own switch settings) wrote `camera-powercycle` (host / change, user `admin`) with `switch: {model, host,
 port}`, `offSeconds`, `requestedBy` and, on success, `watts`, `offAt` and
 `onAt`. Then a second record (host / end, user `system`) when the camera
 answers again (`downSec`, from the cut), or a failure after 5 minutes. A
@@ -246,8 +243,8 @@ refusal from the switch (busy, no power, a wrong password) is a failure record
 with the code. A failure after the PoE-off request says so: "PoE may have been
 cut; turned back on: yes/no" (`poeOff: true`, `turnedOn`). A stopping proxy
 that may leave PoE off writes `phase: stop`, `poeLeftOff: true`.
-`camera-poe-on` (host / change) records the recovery, with `switch`, `wasOn`
-and `requestedBy`, or a failure. Details in [audit-log.md](audit-log.md). The cooldown and the
+`camera-poe-on` (host / change; older versions) recorded "Turn camera PoE on";
+the recovery is `switch-port-poe-on` now. Details in [audit-log.md](audit-log.md). The cooldown and the
 "rebooting" watch are in memory: a proxy restart resets them.
 
 ## Tests

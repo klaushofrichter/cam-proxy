@@ -36,9 +36,11 @@ describe('the classification (R3-1)', () => {
     for (const c of Object.values(CEILINGS)) expect(classify(c, IDS), c).toBe('denied');
   });
   it('M5: the deny list holds every trust, address, port, file and camsAdmin path', () => {
-    for (const p of ['camsAdmin.url', 'camsAdmin.enabled', 'camsAdmin.keyFile', 'server.port', 'server.publicUrl', 'go2rtc.binary', 'ftp.port', 'ftp.publicHost', 'ftp.certFile', 'tls.site', 'tls.cameraSubnet', 'composition.font', 'ntp.server', 'poeSwitch.host', 'poeSwitch.model',
-      'cameras.cam1.host', 'cameras.cam1.protocol', 'cameras.cam1.tlsName', 'cameras.cam1.user', 'cameras.cam1.onvifPort', 'cameras.cam1.rtspPort', 'cameras.cam1.baichuanPort', 'cameras.cam1.poeSwitch.port', 'cameras.cam1.ftp.user', 'cameras.cam1.webUiUrl', 'cameras.cam1.id'])
+    for (const p of ['camsAdmin.url', 'camsAdmin.enabled', 'camsAdmin.keyFile', 'server.port', 'server.publicUrl', 'go2rtc.binary', 'ftp.port', 'ftp.publicHost', 'ftp.certFile', 'tls.site', 'tls.cameraSubnet', 'composition.font', 'ntp.server',
+      'cameras.cam1.host', 'cameras.cam1.protocol', 'cameras.cam1.tlsName', 'cameras.cam1.user', 'cameras.cam1.onvifPort', 'cameras.cam1.rtspPort', 'cameras.cam1.baichuanPort', 'cameras.cam1.ftp.user', 'cameras.cam1.webUiUrl', 'cameras.cam1.id'])
       expect(classify(p, IDS), p).toBe('denied');
+    // The retired PoE switch settings: no setting at all (a command fails not_remote_settable as before).
+    for (const p of ['poeSwitch.host', 'poeSwitch.model', 'cameras.cam1.poeSwitch.port']) expect(classify(p, IDS), p).toBe('not_a_setting');
   });
   it('a camera path for a camera that does not exist is unknown_camera (never adds one); a whole camera is not a setting', () => {
     expect(classify('cameras.evil.name', IDS)).toBe('unknown_camera');

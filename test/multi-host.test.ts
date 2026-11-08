@@ -1,7 +1,12 @@
 // One host, four cameras (spec 2026-10-05-multi-camera-host-design §15): the
 // host-wide services serve every camera — one FTP server, one switch
-// controller with its queue, one go2rtc and the latest stills.
+// controller with its queue (a switch this proxy operates, by cams-admin's
+// id), one go2rtc and the latest stills.
 import request from 'supertest';
+import { mkdtempSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { switchPasswordStore } from '../src/config/switch-passwords';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { listClips } from '../src/catalog/clips';
 import { ADMIN_TOKEN, auth, freePort, until } from './helpers/proxy';
@@ -13,22 +18,22 @@ let sims: Sim[];
 let sw: PoeSwitchMock;
 let p: Awaited<ReturnType<typeof startMultiProxy>>;
 const admin = () => auth(ADMIN_TOKEN);
+const SW = { id: 'sw_test', model: 'sscpoe-web' as const, host: '', ports: 8, offSeconds: 5 };
 
 beforeAll(async () => {
   sims = await startSims(4);
   // Ports 1..4 of a GPS-208 power cam3..cam6 (it counts its ports backwards: port 1 is index 7).
   sw = await startPoeSwitchMock({ password: 'sw-pw', powered: { 7: 4.5, 6: 4.5, 5: 4.5, 4: 4.5 } });
   const passive = await freePort();
+  const dir = mkdtempSync(join(tmpdir(), 'camproxy-multi-'));
+  switchPasswordStore(join(dir, 'data')).set(SW.id, 'sw-pw', sw.host);
   p = await startMultiProxy(sims, {
+    dir,
     settings: {
       ftp: { enabled: true, port: await freePort(), passive: `${passive}-${passive + 39}`, publicHost: '127.0.0.1', tls: true, stream: 'sub' },
-      poeSwitch: { model: 'sscpoe-web', host: sw.host, ports: 8, offSeconds: 5 },
     },
-    env: { CAMPROXY_FTP_PASSWORD: FTP_PW, CAMPROXY_POE_SWITCH_PASSWORD: 'sw-pw' },
+    env: { CAMPROXY_FTP_PASSWORD: FTP_PW },
   });
-  // The camera nodes of startMultiProxy have no switch ports: add them as overrides.
-  const r = await request(p.base).put('/control/config').set(admin()).send({ cameras: Object.fromEntries(['cam3', 'cam4', 'cam5', 'cam6'].map((id, i) => [id, { poeSwitch: { port: i + 1 } }])) });
-  expect(r.status).toBe(200);
   for (const s of sims) s.sim.engine.settings.running.Rec.postRec = '1 Seconds';
   await until(() => p.proxy.cameras.list().every((w) => w.status.state().online), 30_000);
 }, 90_000);
@@ -51,7 +56,7 @@ describe('one host, four cameras (spec §15)', () => {
 
   // The cycle itself is cams-admin's now (switch.cycle on the operator); the switch's one session holds for both.
   it('two power-cycles at once: the second waits for the first', async () => {
-    const [a, b] = await Promise.all([3, 4].map((port) => p.proxy.switches.legacy.cycle(port, () => undefined, { verifyHost: null })));
+    const [a, b] = await Promise.all([3, 4].map((port) => p.proxy.switches.get({ ...SW, host: sw.host }).cycle(port, () => undefined, { verifyHost: null })));
     expect(Math.abs(a.offAt - b.offAt)).toBeGreaterThanOrEqual(5000); // one after the other
     expect(sw.activeSession()).toBe(false);
   }, 60_000);

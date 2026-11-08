@@ -23,7 +23,7 @@ export interface PoeSwitchMockOptions {
 
 export interface PoeSwitchMock {
   url: string;
-  host: string; // 127.0.0.1:<port>, for camera.poeSwitch.host
+  host: string; // 127.0.0.1:<port>, a switch ref's host
   calls: Array<{ cmd: number; session: boolean; dropped?: boolean; expired?: boolean }>;
   poec: number[];
   pw: number[];

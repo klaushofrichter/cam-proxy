@@ -507,13 +507,15 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   let go2rtcMadeWith = go2rtcSettings();
   // Started in the background: each camera's grabber waits until it is up.
   const startGo2rtc = () => void go2rtc?.start().catch((err: Error) => logger.error({ err: err.message }, 'go2rtc_start_failed'));
-  // One PoE controller for the host's switch (spec 2026-10-05-multi-camera-host-design §8.4):
-  // one switch session at a time, in arrival order; each camera has its port.
-  // The host config's switch as a ref (until switches come from cams-admin).
-  // The registry holds every switch by id (spec 2026-11-07-poe-switches-design), the host config's as `legacy`.
-  const switches = new SwitchRegistry({ dataDir: running.server.dataDir, legacy: () => running.poeSwitch, legacyPassword: () => loaded.secrets.poeSwitchPassword,
+  // The PoE switches this proxy operates, by cams-admin's switch id (spec
+  // 2026-11-07-poe-switches-design): one switch session at a time each. The
+  // host config's poeSwitch.* and CAMPROXY_POE_SWITCH_PASSWORD are retired;
+  // a password left in the environment is not read (one warning).
+  if (['CAMPROXY_POE_SWITCH_PASSWORD', 'CAMPROXY_POE_SWITCH_PASSWORD_FILE'].some((k) => (loaded.env[k] ?? '') !== '')) {
+    logger.warn('legacy_poe_switch_password_ignored: CAMPROXY_POE_SWITCH_PASSWORD is no longer read; set the password per switch under Proxy settings, PoE switches');
+  }
+  const switches = new SwitchRegistry({ dataDir: running.server.dataDir,
     onForgotten: (r) => audit.write({ action: 'switch-forgotten', category: ['configuration'], type: ['change'], outcome: r.portsLeftOff.length || r.sessionMaybeOpen ? 'failure' : 'success', user: 'system', message: `PoE switch ${r.id} (${r.ref.host}) forgotten${r.portsLeftOff.length ? `; PoE may be left OFF on port ${r.portsLeftOff.join(', ')}` : ''}${r.sessionMaybeOpen ? '; its web session may still be open' : ''}`, details: { switch: { id: r.id, host: r.ref.host }, ...(r.portsLeftOff.length ? { portsLeftOff: r.portsLeftOff } : {}), ...(r.sessionMaybeOpen ? { sessionMaybeOpen: true } : {}) } }) });
-  const poe = switches.legacy;
   // One recordings cache for every camera (spec §8.3): one LRU, capped by recordings.cacheMB.
   const cachePool = new CachePool(() => running.recordings.cacheMB * 2 ** 20);
   const makeWorker = (id: string) =>
@@ -523,7 +525,6 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         go2rtc: () => go2rtc,
         cachePool,
         password: () => cameraPassword(loaded.secrets, id),
-        poe,
         ftpTarget: ftpTargetFor(id),
         ftpPassword: () => loaded.secrets.ftpPassword,
         catalog,
@@ -848,7 +849,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   const noCamera = () => {
     const since = startedAt ?? Date.now();
     return {
-      camera: { online: false, since, error: NO_CAMERA, name: '', nameSource: 'config' as const, webUiUrl: null, reboot: null, poeSwitch: null },
+      camera: { online: false, since, error: NO_CAMERA, name: '', nameSource: 'config' as const, webUiUrl: null, reboot: null },
       intake: { onvif: 'down' as const, since, source: 'none' as const, resubscribes: 0 },
       stream: { enabled: false, up: false, go2rtcUp: false, lastFrameTs: null },
       ftp: { enabled: false, listening: false, port: running.ftp.port, tls: running.ftp.tls, publicHost: running.ftp.publicHost ?? null, passwordSet: !!loaded.secrets.ftpPassword, lastUpload: null, lastClip: null, clips: countAllClips(catalog), failures: 0, camera: null, stalled: null },
@@ -864,7 +865,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // One camera's block for the control API (spec 2026-10-05-multi-camera-host-design §6.3).
   const cameraStatusBlock = (w: CameraWorker) => ({
     id: w.id,
-    camera: { ...w.status.state(), name: w.name(), nameSource: w.nameSource(), webUiUrl: cameraWebUi(w.cam()), reboot: w.reboot.state(), poeSwitch: w.poeSwitch.status() },
+    camera: { ...w.status.state(), name: w.name(), nameSource: w.nameSource(), webUiUrl: cameraWebUi(w.cam()), reboot: w.reboot.state() },
     intake: w.intake.state(),
     stream: w.streamStatus(),
     ftp: ftpStatusOf(w),
@@ -910,10 +911,9 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   };
   // One camera's part of the health summary (spec 2026-10-05-multi-camera-host-design §6.5).
   const cameraHealthInput = (w: CameraWorker): CameraHealthInput => {
-    const ps = w.cam().poeSwitch;
     const sd = w.sdWatch.view();
     return {
-      camera: { id: w.id, name: w.name(), nameSource: w.nameSource(), host: w.cam().host, state: w.status.state(), reboot: w.reboot.state()?.phase ?? null, poeSwitch: ps.model === 'none' ? null : { model: ps.model, port: ps.port ?? null } },
+      camera: { id: w.id, name: w.name(), nameSource: w.nameSource(), host: w.cam().host, state: w.status.state(), reboot: w.reboot.state()?.phase ?? null },
       stream: w.streamStatus(),
       intake: w.intake.state(),
       ftp: ftpStatusOf(w),
@@ -931,7 +931,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       version: VERSION,
       startedAt,
       thresholds: { diskPercent: running.health.diskPercent, tempC: running.health.tempC, ftpStalledHours: running.ftp.stalledHours, ...(running.archive.enabled ? { archiveWarnPercent: running.archive.warnPercent } : {}) },
-      ...(first ?? { camera: { id: '', name: '', nameSource: 'config', host: '', state: none!.camera, reboot: null, poeSwitch: null }, stream: none!.stream, intake: none!.intake, ftp: none!.ftp }),
+      ...(first ?? { camera: { id: '', name: '', nameSource: 'config', host: '', state: none!.camera, reboot: null }, stream: none!.stream, intake: none!.intake, ftp: none!.ftp }),
       others,
       ...(first ? {} : { noCamera: true }),
       storage: { paused: storage.paused(), lastRun: storage.lastRun() },
@@ -1340,7 +1340,8 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         ftp: { enabled: c.ftp.enabled, view: ftp.camera, lastUpload: ftp.lastUpload },
         timeInfo: w.timeInfo(),
         name: { name: w.name(), nameSource: w.nameSource() },
-        poePort: w.poeSwitch.notConfigured() === null && c.poeSwitch.port ? c.poeSwitch.port : null,
+        // The camera's switch port as cams-admin sent it (camera.power.set).
+        poePort: ((p) => (p?.kind === 'poe' && p.port ? p.port : null))(cameraPower.view(cam).power),
         profile: profileWarnings(running),
       };
     },
@@ -1400,7 +1401,6 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       return worker(cam).restart();
     },
     cameraReboot: (who, cam) => worker(cam).reboot.request(who),
-    poeSwitch: { notConfigured: (cam) => worker(cam).poeSwitch.notConfigured(), read: (cam) => worker(cam).poeSwitch.read(), poeOn: (cam) => worker(cam).poeSwitch.poeOn(), info: (cam) => worker(cam).poeSwitchInfo() },
     cameraPower: {
       request: (who, cam) => requestPowerCycle(powerRequest, cam, who),
       view: (cam) => powerView({ ...powerRequest, configured: () => camsAdmin.active() && camsAdmin.keyInfo() !== null }, cam),
@@ -1736,27 +1736,14 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       // Each camera's PoE back on if a power-cycle is in its off time; one
       // record per camera the proxy may leave dark (spec §8.4).
       const stops = await switches.stop();
-      const { portsLeftOff, sessionMaybeOpen } = stops.find((x) => x.id === 'legacy')!;
-      // A switch by id: one record, built like the legacy one below.
-      for (const o of stops.filter((x) => x.id !== 'legacy' && (x.portsLeftOff.length || x.sessionMaybeOpen))) {
+      // Each switch that may leave a port dark or its session open: one record.
+      for (const o of stops.filter((x) => x.portsLeftOff.length || x.sessionMaybeOpen)) {
         const host = switches.known().find((k) => k.id === o.id)?.host ?? '';
         const parts = [
           ...(o.portsLeftOff.length ? [`PoE may be left OFF on PoE switch ${o.id} (${host}) port ${o.portsLeftOff.join(', ')}; turn it on in the switch's web UI, or with "Turn PoE on" under Proxy settings once the proxy is back`] : []),
           ...(o.sessionMaybeOpen ? [`the proxy's web session on PoE switch ${o.id} (${host}) may still be open: the switch's web UI may refuse logins until the switch ends it`] : []),
         ];
         audit.write({ action: 'camera-powercycle', category: ['host'], type: ['end'], outcome: 'failure', user: 'system', message: `cam-proxy stopping: ${parts.join('; ')}`, details: { phase: 'stop', poeLeftOff: o.portsLeftOff.length > 0, sessionMaybeOpen: o.sessionMaybeOpen, switch: { id: o.id, host }, ...(o.portsLeftOff.length ? { portsLeftOff: o.portsLeftOff } : {}) } });
-      }
-      const swInfo = { model: running.poeSwitch.model, host: running.poeSwitch.host ?? '' };
-      for (const port of portsLeftOff) {
-        const w = cams.list().find((x) => x.cam().poeSwitch.port === port);
-        const parts = [
-          `the camera's PoE may be left OFF on ${swInfo.host} port ${port}; turn it on in the switch's web UI, or with "Turn camera PoE on" once the proxy is back`,
-          ...(sessionMaybeOpen ? ["the proxy's web session on the switch may still be open: the switch's web UI may refuse logins until the switch ends it"] : []),
-        ];
-        audit.write({ action: 'camera-powercycle', category: ['host'], type: ['end'], outcome: 'failure', user: 'system', ...(w ? { camera: w.id } : {}), message: `cam-proxy stopping: ${parts.join('; ')}`, details: { phase: 'stop', poeLeftOff: true, sessionMaybeOpen, switch: { ...swInfo, port } } });
-      }
-      if (sessionMaybeOpen && !portsLeftOff.length) {
-        audit.write({ action: 'camera-powercycle', category: ['host'], type: ['end'], outcome: 'failure', user: 'system', message: "cam-proxy stopping: the proxy's web session on the switch may still be open: the switch's web UI may refuse logins until the switch ends it", details: { phase: 'stop', poeLeftOff: false, sessionMaybeOpen, switch: swInfo } });
       }
       await restarting;
       // A switch-over step in flight ends first; the journal keeps the step (resumed at the next start).

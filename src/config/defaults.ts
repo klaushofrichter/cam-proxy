@@ -1,13 +1,10 @@
 // Every setting that isn't a secret, with its default (spec §14). The file
 // config.json only needs what differs; secrets come from the environment.
-import type { HostPoeSwitch } from './cameras';
-
 // One camera of `cameras` (spec 2026-10-05-multi-camera-host-design §4.1).
 // The optional groups override a host default; absent = the host value.
 export interface CameraNode {
   id: string; name: string; host: string; protocol: 'https' | 'http'; tlsName?: string; webUiUrl?: string;
   user: string; onvifPort: number; rtspPort: number; baichuanPort: number; statusPollS: number;
-  poeSwitch: { port?: number };
   ftp: { user?: string; enabled?: boolean; stream?: 'main' | 'sub' };
   stills: { enabled?: boolean; stream?: 'sub' | 'main'; intervalS?: number };
   storage: { sharePercent?: number };
@@ -20,7 +17,7 @@ export interface CameraNode {
 // A new camera's defaults: its name is its id (Ruling P1-11; a legacy camera
 // keeps the name Den, src/config/legacy.ts).
 export function cameraDefaults(id: string): CameraNode {
-  return { id, name: id, host: '', protocol: 'https', user: 'proxy', onvifPort: 8000, rtspPort: 554, baichuanPort: 9000, statusPollS: 30, poeSwitch: {}, ftp: {}, stills: {}, storage: {}, analytics: { kinds: {} }, events: { poll: {} } };
+  return { id, name: id, host: '', protocol: 'https', user: 'proxy', onvifPort: 8000, rtspPort: 554, baichuanPort: 9000, statusPollS: 30, ftp: {}, stills: {}, storage: {}, analytics: { kinds: {} }, events: { poll: {} } };
 }
 
 export interface Config {
@@ -28,8 +25,6 @@ export interface Config {
   // The cameras by id, and their order (config order: display order).
   cameras: Record<string, CameraNode>;
   cameraOrder: string[];
-  // The cameras' PoE switch, one per host (issue #85); `none` for no switch.
-  poeSwitch: HostPoeSwitch;
   // The proxy profile (cams-admin spec 2026-10-25-proxy-profile-design §1):
   // what this proxy holds. cameras unset = the cameras held (at least 1);
   // storageGB unset = the storage.* budget. moves.maxCameras is the old name
@@ -82,7 +77,6 @@ export const DEFAULTS: Config = {
   server: { port: 8480, dataDir: 'data', logLevel: 'info', tls: {} },
   cameras: {},
   cameraOrder: [],
-  poeSwitch: { model: 'none', ports: 8, offSeconds: 10 },
   profile: { firewall: 'ufw' },
   go2rtc: { binary: 'go2rtc', rtspPort: 18554, apiPort: 11984 },
   stills: { enabled: true, stream: 'sub', intervalS: 1, size: '896x512', quality: 5 },
@@ -119,6 +113,5 @@ export interface Secrets {
   ftpPassword?: string;
   auditToken?: string; // CAMPROXY_AUDIT_TOKEN: reads GET /control/audit only
   googleVisionKey?: string;
-  poeSwitchPassword?: string; // CAMPROXY_POE_SWITCH_PASSWORD: the PoE switch's web login
   googleVisionUrl: string; // not a secret; read with them (default Google's)
 }

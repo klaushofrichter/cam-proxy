@@ -153,7 +153,6 @@
                       "camera.action:camera-test",
                       "camera.action:onvif-resubscribe",
                       "camera.action:camera-ftp-test",
-                      "camera.action:poe-switch-read",
                       "camera.action:inventory",
                       "camera.action:inventory-cancel",
                       "camera.action:retention-run",

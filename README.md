@@ -157,11 +157,11 @@ come only from the environment.
   default, then file, then override, then the environment (below). A value
   equal to what the setting has without an override (config.json's, else the
   default) is not stored: saving it removes the override, also when a whole
-  group is sent (`{"camera":{"poeSwitch":{…, "ports": 8}}}` stores no
-  `ports`). An override's **Reset** button names what it goes back to ("Reset
+  group is sent (`{"retention":{"auditDays": 90, "eventsDays": 4}}` stores no
+  `auditDays`). An override's **Reset** button names what it goes back to ("Reset
   – 90 days"; "(config.json)" when the file sets it), and for an unset state
-  what that means ("Reset – none (no PoE switch: power-cycle off)", "Reset –
-  not set (PoE switch control off: no switch address)"; the texts are the
+  what that means ("Reset – not set (no size cap for stills (the storage
+  budget still applies))"; the texts are the
   `unset` entries in `src/config/schema.ts`). An override equal to that value
   (kept by an older version) has no Reset button: its badge reads "override =
   default" (or "= config.json"), with a tooltip that Reset would change
@@ -189,7 +189,7 @@ come only from the environment.
 | Group | Settings (defaults) |
 |---|---|
 | `server` | `port` (8480), `dataDir` (`data`, relative to the config file), `logLevel` (`info`), `publicUrl` (where people reach this proxy; reported in `/api/cameras` as `publicUrl`, so cams can link to it), `trustProxy` (0: none; behind the cluster ingress 1, so rate limits count clients by X-Forwarded-For) |
-| `camera` | one camera (or `cameras`, a list: [Several cameras](#several-cameras)): `id` (`cam1`), `name` (`Den`; only the initial name, used until the camera's own name is read and never rewritten, see [Camera name](#camera-name)), `host` (without it the camera waits idle), `protocol` (`https`), `tlsName`, `webUiUrl` (the camera's own web page, linked from the admin UI; default `https://<host>/`, `none` for no link), `user` (`proxy`), `onvifPort` (8000), `rtspPort` (554), `baichuanPort` (9000, recordings over TCP; applies at the next connection), `statusPollS` (30); `poeSwitch`: the camera's PoE switch for a power-cycle, `model` (`none`; `sscpoe-web` for the STEAMEMO GPS-208 and kin), `host` (its address, optional `:port`), `port` (the switch port the camera is on, 1–48), `ports` (8: the switch's PoE port count), `offSeconds` (10, 5–60). The `poeSwitch` settings apply at once; see [docs/poe-switch.md](docs/poe-switch.md) |
+| `camera` | one camera (or `cameras`, a list: [Several cameras](#several-cameras)): `id` (`cam1`), `name` (`Den`; only the initial name, used until the camera's own name is read and never rewritten, see [Camera name](#camera-name)), `host` (without it the camera waits idle), `protocol` (`https`), `tlsName`, `webUiUrl` (the camera's own web page, linked from the admin UI; default `https://<host>/`, `none` for no link), `user` (`proxy`), `onvifPort` (8000), `rtspPort` (554), `baichuanPort` (9000, recordings over TCP; applies at the next connection), `statusPollS` (30); no PoE switch settings: the switches are cams-admin's, see [docs/poe-switch.md](docs/poe-switch.md) |
 | `events` | `onvif.subscribeMin` (10), `onvif.pullTimeoutS` (30), `poll.enabled` (true), `poll.intervalS` (2), `poll.afterOnvifDownS` (60), `maxOpenMin` (10) |
 | `retention` | `stillsDays` (7), `previewsDays` (14), `clipsDays` (7), `eventsDays` (30), `auditDays` (90), `streamLogDays` (7), `intervalMin` (60) |
 | `storage` | `maxPercent` (85) or `maxBytes`, `minFreeBytes` (2 GB), `keepHours` (per kind: `stills` 24, `clips` 24, `previews` 72). `profile.storageGB` replaces `maxBytes`: in the same file both is a config error; set in overrides.json (the Settings page, `PUT /control/profile`) over a config.json `maxBytes`, the profile wins and `maxBytes` is shown as ignored |
@@ -214,7 +214,6 @@ come only from the environment.
 | `CAMPROXY_CAMERA_PASSWORD_<ID>` | optional: one camera's own password (the id upper-cased, `-` → `_`, e.g. `CAMPROXY_CAMERA_PASSWORD_CAM_3`); without a default, every camera needs one |
 | `CAMPROXY_FTP_PASSWORD` | the cameras' FTP login to the proxy (each camera with its own user); required when `ftp.enabled` |
 | `CAMPROXY_AUDIT_TOKEN` | optional: a read-only token for `GET /control/audit`; 32+ characters, different from the other tokens |
-| `CAMPROXY_POE_SWITCH_PASSWORD` | optional: the PoE switch's web password, for the camera power-cycle (`camera.poeSwitch`); never logged, returned or audited |
 
 `scripts/sync-secrets.sh` generates the tokens and the FTP password into
 `.env` (mode 600), `--rotate <KEY>` replaces one, and it prints names only.
@@ -242,14 +241,17 @@ the new form:
   are an error. A new camera's `name` and `ftp.user` default to its id.
 - **Per camera:** `id`, `name`, `host` (a name or IPv4 address, optional `:port`), `protocol`, `tlsName`, `webUiUrl`,
   `user`, `onvifPort`, `rtspPort`, `baichuanPort`, `statusPollS`,
-  `poeSwitch.port`, `ftp.user`, and these overrides of a host default (absent:
+  `ftp.user`, and these overrides of a host default (absent:
   the host value): `stills.enabled`, `stills.stream`, `stills.intervalS`,
   `ftp.enabled`, `ftp.stream`, `analytics.kinds.*`, `events.poll.enabled`.
   Everything else is host-wide.
-- **`poeSwitch`** (host-wide): `model`, `host`, `ports`, `offSeconds`; each
-  camera names its `poeSwitch.port`. A legacy `camera.poeSwitch` is read
-  that way; overrides with legacy paths (`camera.statusPollS`,
-  `camera.poeSwitch.host`, `ftp.user`) are read translated and written back
+- **No `poeSwitch`:** the PoE switch settings (host `poeSwitch.*`, camera
+  `poeSwitch.port`, `CAMPROXY_POE_SWITCH_PASSWORD`) are retired: the
+  switches are cams-admin's ([docs/poe-switch.md](docs/poe-switch.md)). A
+  config.json or overrides.json that still has them loads without them (one
+  info line, `legacy_poe_switch_dropped`); overrides.json is written without
+  them on the next save. Overrides with legacy paths (`camera.statusPollS`,
+  `ftp.user`) are read translated and written back
   in the new form on the next save. `GET /control/config` shows the new
   paths (a legacy file's values are marked "config.json (legacy camera)").
 - **Supervision:** each camera runs on its own; a camera that fails to start
@@ -300,10 +302,10 @@ the new form:
     Google's free tier is per project: keep the limits within it.
     `analytics.googleVision.perCameraDailyCap` (0 = none) caps one camera's
     calls per day.
-  - **PoE switch:** one controller per host. Requests from several cameras
-    wait their turn (a power-cycle of one camera, then the next) up to
-    `offSeconds` + 60 s, then `409 switch_busy`; one read serves every
-    camera's port for 10 s. See [docs/poe-switch.md](docs/poe-switch.md).
+  - **PoE switches:** one controller per switch this proxy operates (by
+    cams-admin's switch id). Requests for several ports wait their turn up
+    to `offSeconds` + 60 s, then `409 switch_busy`; one read serves every
+    port for 10 s. See [docs/poe-switch.md](docs/poe-switch.md).
   - **Compositions:** `composition.concurrent` (1–4, default 1) encodes at once.
   - **Recordings cache:** one least-recently-used cache for every camera,
     capped by `recordings.cacheMB`.
@@ -1202,7 +1204,7 @@ in the Reolink app, reaches stream clients once as a `camera` message.
 
 | Route | |
 |---|---|
-| `GET /control/status` | `{version, camera (incl. name (the camera's name; the configured `camera.name` until the camera was read), nameSource: camera\|config, webUiUrl, serial, reboot: {kind: reboot\|powercycle, requestedAt, confirmed, phase: power-cycling\|rebooting\|back\|not-back, offAt, endedAt, downSec} or null, and poeSwitch: {model, host, port, ports, offSeconds, passwordSet, configured, busy, last}), intake, sse, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state: on\|off\|elsewhere\|unknown, checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result, stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null (the last recording download), cache: {bytes, files, capBytes}, download: {path: baichuan\|http (what the next download tries first), since (when it last changed, or null), baichuanRefusal: {at, status, detail} or null (the camera's last Baichuan refusal), retryBaichuanAt (on HTTP: when Baichuan is tried first again, or null)}}, analytics: [{…, keyMasked, keySource}], analyticsUnmapped, health, archive (as `GET /api/archive/status`), moveLeftovers: [{camera, moveId, items}] (what cameras that moved away left here that the proxy can't remove; `[]` when none)}` |
+| `GET /control/status` | `{version, camera (incl. name (the camera's name; the configured `camera.name` until the camera was read), nameSource: camera\|config, webUiUrl, serial, reboot: {kind: reboot\|powercycle, requestedAt, confirmed, phase: power-cycling\|rebooting\|back\|not-back, offAt, endedAt, downSec} or null), intake, sse, stream: {enabled, up, go2rtcUp, lastFrameTs}, retention, storage: {paused}, ftp: {enabled, listening, port, tls, publicHost, passwordSet, lastUpload, lastClip, clips, failures, camera: {state: on\|off\|elsewhere\|unknown, checkedAt, enable, server, port, user, mismatch, error} or null, stalled: {stalled, hours, lastClip, events} or null}, recordings: {last: {at, result, stream, bytes, ms, priority (high: a viewer, low: an inventory repair)} or null (the last recording download), cache: {bytes, files, capBytes}, download: {path: baichuan\|http (what the next download tries first), since (when it last changed, or null), baichuanRefusal: {at, status, detail} or null (the camera's last Baichuan refusal), retryBaichuanAt (on HTTP: when Baichuan is tried first again, or null)}}, analytics: [{…, keyMasked, keySource}], analyticsUnmapped, health, archive (as `GET /api/archive/status`), moveLeftovers: [{camera, moveId, items}] (what cameras that moved away left here that the proxy can't remove; `[]` when none)}` |
 | `PUT /control/camera/name` | `{"name":"Backyard Left"}`: renames the camera on the camera itself ([Camera name](#camera-name)). 200 `{name}` (the name read back from the camera); 400 `{"error":"invalid_name","reason":…}` by the camera's rules (the camera is not asked) or refused by the camera (rspCode -54, -56); 503 `{"error":"camera_offline"}`; 502 `camera_error`. Admin token, or an admin session with `X-CamProxy-UI: 1`. Audited as `camera-name` |
 | `GET /control/stats` | `{disk: {catalog, audit, stills, previews, clips, recordings}` (each `{bytes, files, oldest, newest, growthPerDay}`), `events, stream, sse, storage}` |
 | `GET /control/config` | every setting: `{value, source, env?, restart, pending, next?, type, resetTo?}` (`source`: `default`, `file`, `override` or `env`; `env`: the variable that sets it; `type`: `integer`, `boolean` or `string`; `resetTo`, on an override: `{value, source: file\|default, same?, means?}`, what removing it goes back to; `same: true` when that is the override's own value, `means` what an unset target (not set, none, off, 0 = none) does); secrets never appear |
@@ -1214,8 +1216,6 @@ in the Reolink app, reaches stream clients once as a `camera` message.
 | `POST /control/actions/camera-reboot` | reboots the camera (offline about a minute; every camera token becomes invalid). 202 `{confirmed}`: `false` when the camera dropped the connection after receiving the request; 429 `too_soon` (with `Retry-After`) within 120 s of the last reboot or power-cycle, or while one is being sent; 502 with the camera error code (`camera_offline`, `camera_auth_failed` or `camera_error`) when the request never reached the camera. The proxy rides it out: it drops its camera token, ONVIF re-subscribes on its own, and `/control/status` shows `camera.reboot` until the camera answers again or 5 minutes pass. Audited as `camera-reboot` |
 | `POST /control/actions/camera-powercycle` | asks cams-admin to power-cycle the camera (spec 2026-11-07-poe-switches-design): one signed `camera.power.cycle.request` event; cams-admin verifies the camera's switch port and runs the cycle through the switch's operating proxy, then answers with `camera.power.cycle.result`. 202 `{requestId}` at once; 409 `power_cycle_needs_cams_admin` when this proxy is not connected to cams-admin or cams-admin has not sent the camera's power; 429 as `camera-reboot` (the 120 s cooldown is shared). `/control/status` shows `camera.reboot` with `kind: powercycle`, `power-cycling` once cams-admin cut the PoE, then `rebooting` until the camera answers. Audited as `camera-powercycle`. See [docs/poe-switch.md](docs/poe-switch.md) |
 | `GET /control/cameras/{cam}/power` | the camera's power as cams-admin sent it (`camera.power.set`: `{kind: poe\|data-only\|adapter\|unknown, switchName, port, watts, verifiedAt, notSeen}`, kept in `<dataDir>/camera-power.json`) or null, `setAt`, the open request `asked: {requestId, at}`, cams-admin's last answer `result: {requestId, ok, reason, at}`, and `canRequest`/`why` |
-| `POST /control/actions/camera-poe-on` | recovery: turns the camera's port on if its PoE is off (the switch of the `camera.poeSwitch` settings; no power check, no cooldown; the switch lock applies). 200 the reading plus `wasOn`; 409 `not_configured` (no switch, or no `CAMPROXY_POE_SWITCH_PASSWORD`) or `switch_busy`; 502 `switch_auth`, `switch_unreachable` or `switch_error`. Audited as `camera-poe-on` |
-| `POST /control/actions/poe-switch-read` | reads the camera's port on the switch now (log in, read, log out; never polled): `{at, port, index, poe, watts, link, sn, firmware}`; 409 and 502 as `camera-poe-on`. Audited as `control-action` |
 | `POST /control/actions/find-camera` | Settings → Find camera: one ONVIF WS-Discovery Probe (NetworkVideoTransmitter, sent twice) to `239.255.255.250:3702`, answers collected for 3 s; no login. 200 `{devices: [{endpoint, address (the first XAddr's host, without the ONVIF port), sender (the address the answer came from), mismatch (they differ), useAddress (what "Use this address" writes: the sender on a mismatch), xaddrs, name, hardware, model (from the scopes), current (the address is `camera.host`'s)}], tookMs, envFile: {writable, path?, reason?}}`; at most 64 devices; 6 a minute per client together with `camera-address` (429 `rate_limited`). On the Pi (host network) it probes the LAN; in a pod network nothing answers. Audited as `control-action` |
 | `POST /control/actions/camera-address` | `{"host":"192.168.1.20"}` (address or name, optional `:port`; else 400 `invalid`): writes `CAMERA_HOST=<host>` into the file `CAMPROXY_ENV_FILE` names (absolute, named `.env` or `.env.<word>`, a regular file, under 64 KB). Only that line changes (the last `CAMERA_HOST`, or `CAMPROXY_CAMERA_HOST` when the file sets that; appended when neither), every other byte stays; a backup `.env.bak-<YYYYMMDD-HHMMSS>` (UTC) goes next to it (the newest 5 are kept), then a temp file and a rename, the file's mode kept; shares find-camera's 6 a minute. 200 `{host, previous, key, backup, restart: true}`: the address applies after `restart-proxy` (the Settings page runs it). 409 `not_available` `{detail, line}` without `CAMPROXY_ENV_FILE`, for a path the guard refuses, or a directory it can't write (mount the directory, not the file). Audited as `camera-address` (old → new, the backup; never another line) |
 | `POST /control/actions/restart-proxy` | restarts the proxy process: 202, then the normal graceful stop (the same as SIGTERM; `proxy-stop` reason `restart-requested`) and exit 0, also after 15 s if the stop hangs. Compose (`restart: unless-stopped`) or the cluster starts it again; run directly (`npm start`), the process just ends. Admin sessions end with the process. Audited as `proxy-restart` |
@@ -1266,14 +1266,14 @@ the phone top bar leaves out (the camera's model, firmware and version, and
 - **Settings:** every setting with its source; changes become overrides, and
   can be reset. "Camera name (stored on the camera)" is the camera's own
   name: checked against the camera's rules as you type and saved on the
-  camera through `PUT /control/camera/name`. A PoE switch card shows the configured switch and its last
-  reading, with "Read the switch now".
+  camera through `PUT /control/camera/name`. A Power card shows the
+  camera's power as cams-admin sent it (switch and port, verified when).
 - **Maintenance:** the actions, including the camera FTP buttons; the log
   updates every 10 s. "Reboot camera", "Power-cycle (through cams-admin)"
   (enabled while cams-admin is connected and has sent the camera's power; it
   shows "Asked cams-admin…" until cams-admin answers) and "Restart proxy" ask first, in a dialog on the page
-  (Cancel or Esc sends nothing). "Turn camera PoE on" (with a switch) turns
-  the camera's PoE on if it is off, and a red line warns while it may be off.
+  (Cancel or Esc sends nothing). A switch port's PoE is turned on again
+  under Proxy settings, PoE switches ("Turn PoE on").
   After a reboot the page shows "Rebooting…"
   and the camera's state until it answers again (a power-cycle shows
   "Power-cycling…" while the PoE is off first); after a

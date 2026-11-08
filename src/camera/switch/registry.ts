@@ -2,7 +2,7 @@ import { readFileSync, renameSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { logger } from '../../log';
 import { switchPasswordStore } from '../../config/switch-passwords';
-import { legacyRef, PoeSwitch, PoeSwitchError, type HostSwitchConfig, type PoeSwitchDeps, type SessionLane } from '../poe-switch';
+import { PoeSwitch, PoeSwitchError, type PoeSwitchDeps, type SessionLane } from '../poe-switch';
 import type { SwitchRef } from './driver';
 
 // The PoE switches this proxy operates, by cams-admin's switch id (spec
@@ -13,13 +13,10 @@ import type { SwitchRef } from './driver';
 // A stored password is bound to the switch address it was set for: a ref
 // naming another host (cams-admin changed it) gets no password until it is set
 // again here, so the password never goes to an address cams-admin chooses.
-// The host config's switch (poeSwitch.*, retired later) is the `legacy`
-// controller; a ref on the same host with no usable stored password uses its
-// environment password (CAMPROXY_POE_SWITCH_PASSWORD).
+// There is no other switch: the host config's poeSwitch.* and its
+// CAMPROXY_POE_SWITCH_PASSWORD are retired.
 export interface RegistryDeps extends Partial<Pick<PoeSwitchDeps, 'sleep' | 'now' | 'timeoutMs' | 'onRetryMs' | 'stopRecoveryMs' | 'stopWaitMs' | 'driver' | 'readCacheMs' | 'pingBurst'>> {
   dataDir: string;
-  legacy: () => HostSwitchConfig;
-  legacyPassword: () => string | undefined;
   // forget() stops the controller; this gets what it reports (a port may be left off).
   onForgotten?: (r: { id: string; ref: SwitchRef } & Awaited<ReturnType<PoeSwitch['stop']>>) => void;
 }
@@ -34,7 +31,6 @@ const validRef = (r: unknown): r is SwitchRef => {
 };
 
 export class SwitchRegistry {
-  readonly legacy: PoeSwitch;
   private readonly entries = new Map<string, Entry>();
   private readonly lanes = new Map<string, SessionLane>();
   private readonly file: string;
@@ -44,7 +40,6 @@ export class SwitchRegistry {
   constructor(private readonly d: RegistryDeps) {
     this.file = join(d.dataDir, 'switches.json');
     this.passwords = switchPasswordStore(d.dataDir);
-    this.legacy = new PoeSwitch({ ...this.common(), ref: () => legacyRef(d.legacy()), password: d.legacyPassword, lane: () => this.laneFor(d.legacy().host ?? '') });
     for (const r of this.load()) {
       this.entries.set(r.id, { ref: r, sw: this.make(r.id) });
       this.bindUnbound(r);
@@ -66,7 +61,7 @@ export class SwitchRegistry {
     return { sleep, now, timeoutMs, onRetryMs, stopRecoveryMs, stopWaitMs, driver, readCacheMs, pingBurst };
   }
 
-  // One queue per switch host (case-insensitive): the legacy controller and every id on it share it.
+  // One queue per switch host (case-insensitive): every id on it shares it.
   private laneFor(host: string): SessionLane {
     const k = host.toLowerCase();
     let l = this.lanes.get(k);
@@ -93,15 +88,11 @@ export class SwitchRegistry {
     }
   }
 
-  // The stored password when it was set for the switch's current host; else,
-  // for the host config's own switch (same host, model not none), the
-  // environment password.
+  // The stored password when it was set for the switch's current host.
   private password(id: string): string | undefined {
     const stored = this.stored(id);
     const e = this.entries.get(id);
     if (stored && (!stored.host || !e || stored.host === e.ref.host.toLowerCase())) return stored.password;
-    const l = this.d.legacy();
-    if (e && l.model !== 'none' && l.host && l.host.toLowerCase() === e.ref.host.toLowerCase()) return this.d.legacyPassword();
     return undefined;
   }
 
@@ -180,7 +171,6 @@ export class SwitchRegistry {
   // On shutdown: every controller (PoE back on where a cycle is in its off time).
   async stop(): Promise<StopResult[]> {
     this.stopped = true;
-    const all: Array<[string, PoeSwitch]> = [['legacy', this.legacy], ...[...this.entries].map(([id, e]): [string, PoeSwitch] => [id, e.sw])];
-    return Promise.all(all.map(async ([id, sw]) => ({ id, ...(await sw.stop()) })));
+    return Promise.all([...this.entries].map(async ([id, e]) => ({ id, ...(await e.sw.stop()) })));
   }
 }

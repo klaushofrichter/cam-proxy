@@ -174,30 +174,3 @@ test('camera power-cycle through cams-admin: confirm, "Asked cams-admin…", "Po
     await fake.close();
   }
 });
-
-// Recovery (#85 review): with the old switch settings, the port is off (as if
-// a power-cycle could not turn it on again); a read says so, the page warns,
-// "Turn camera PoE on" turns it on, and the camera comes back.
-test('Turn camera PoE on: the warning, the recovery, the camera is back', async ({ page, request }) => {
-  test.setTimeout(150_000);
-  const url = `http://127.0.0.1:${PROXY_PORT}`;
-  const put = await request.put(`${url}/control/config`, { headers: auth, data: { camera: { poeSwitch: { model: 'sscpoe-web', host: `127.0.0.1:${POE_SWITCH_PORT}`, port: 8, offSeconds: 5 } } } });
-  expect(put.ok()).toBe(true);
-  try {
-    await openMaintenance(page);
-    const t1 = Date.now();
-    await request.post(`http://127.0.0.1:${POE_SWITCH_PORT}/mock/poe`, { data: { index: 0, on: false } });
-    expect((await request.post(`${url}/control/actions/poe-switch-read`, { headers: auth })).ok()).toBe(true);
-    await expect(page.getByTestId('poe-alert')).toHaveText("The camera's PoE may be OFF: use 'Turn camera PoE on', or the switch's web UI (port 8).", { timeout: 15000 });
-    await page.getByTestId('action-camera-poe-on').click();
-    await expect(page.getByTestId('action-result')).toHaveText('Camera PoE: turned on on port 8; the camera boots in about a minute');
-    await expect(page.getByTestId('poe-alert')).toHaveCount(0, { timeout: 15000 });
-    await page.getByTestId('action-camera-poe-on').click();
-    await expect(page.getByTestId('action-result')).toContainText('Camera PoE: port 8 was on already');
-    // The old switch settings no longer power-cycle: still through cams-admin only.
-    await expect(page.getByTestId('action-camera-powercycle')).toBeDisabled();
-    await settled(request, t1);
-  } finally {
-    for (const k of ['model', 'host', 'port', 'offSeconds']) await request.delete(`${url}/control/config/camera.poeSwitch.${k}`, { headers: auth });
-  }
-});

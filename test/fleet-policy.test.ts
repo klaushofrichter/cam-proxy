@@ -22,7 +22,7 @@ describe('the closed lists', () => {
   });
   it('the deny list covers camsAdmin.*, every address, port, file path and trust setting (M5)', () => {
     const ids = ['cam1'];
-    for (const p of ['camsAdmin.url', 'camsAdmin.keyFile', 'server.port', 'tls.site', 'go2rtc.url', 'ftp.port', 'ftp.certFile', 'ntp.server', 'poeSwitch.host', 'composition.font', 'cameras.cam1.host', 'cameras.cam1.user', 'cameras.cam1.tlsName', 'cameras.cam1.poeSwitch.port']) expect(classify(p, ids), p).toBe('denied');
+    for (const p of ['camsAdmin.url', 'camsAdmin.keyFile', 'server.port', 'tls.site', 'go2rtc.url', 'ftp.port', 'ftp.certFile', 'ntp.server', 'composition.font', 'cameras.cam1.host', 'cameras.cam1.user', 'cameras.cam1.tlsName']) expect(classify(p, ids), p).toBe('denied');
     for (const p of ['stills.intervalS', 'retention.stillsDays']) expect(classify(p, ids), p).toBe('remote');
     expect(classify('cameras.cam1.name', ids)).toBe('denied');
     // Every real setting under a denied prefix is denied (no prefix typo hides one).
@@ -115,6 +115,15 @@ describe('CommandPolicy', () => {
     expect(make(d).effective()).toMatchObject({ paused: false, allow: ['tokens.apply', 'camera.onboarding.get', 'analytics.usage.get', 'camera.power.set', 'camera.power.cycling', 'camera.power.cycled', 'camera.power.cycle.result'], unconfirmed: [] });
     expect(validateAllowList(['tokens.apply', 'camera.action:camera-ftp-off'], 'x', true)).toEqual(['tokens.apply']);
     expect(() => validateAllowList(['camera.action:camera-ftp-off'], 'x')).toThrow();
+  });
+
+  it('a stored camera.action:poe-switch-read (the retired single-switch read) is dropped, never makes the file unusable', () => {
+    const d = dir();
+    writePrivateJson(join(d, 'admin', 'policy.json'), { v: 1, allow: ['tokens.apply', 'camera.action:poe-switch-read'], changedAt: 1, changedBy: 'local', consent: 3 });
+    expect(make(d).effective()).toMatchObject({ paused: false, unconfirmed: [] });
+    expect(make(d).effective().allow).not.toContain('camera.action:poe-switch-read');
+    expect(validateAllowList(['tokens.apply', 'camera.action:poe-switch-read'], 'x', true)).toEqual(['tokens.apply']);
+    expect(() => validateAllowList(['camera.action:poe-switch-read'], 'x')).toThrow();
   });
 });
 

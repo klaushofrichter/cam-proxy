@@ -93,8 +93,6 @@ describe('GET /api/local/health on the proxy', () => {
       env: { CAMPROXY_FTP_PASSWORD: FTP_PASSWORD },
       proxy: { host: { root: join(__dirname, 'fixtures', 'host', 'pi'), statfs } },
     });
-    // A PoE switch (live setting): its port is in the answer, its host is not.
-    await request(p.base).put('/control/config').set(auth(ADMIN_TOKEN)).send({ camera: { poeSwitch: { model: 'sscpoe-web', host: '192.0.2.99', port: 8 } } });
   }, 30_000);
   afterAll(async () => {
     await p.proxy.stop();
@@ -113,12 +111,15 @@ describe('GET /api/local/health on the proxy', () => {
     expect(h.items.find((i) => i.id === 'disk')).toMatchObject({ value: 73.7, problem: false });
     expect(h.items.find((i) => i.id === 'cpuTemp')).toMatchObject({ value: 53.6, problem: false });
     expect(h.thresholds).toEqual({ diskPercent: 90, tempC: 75, ftpStalledHours: 6, archiveWarnPercent: 50 });
-    expect(h.camera.poeSwitch).toEqual({ model: 'sscpoe-web', port: 8 });
+    // The old switch settings are retired: always null (kept for the display and the contract).
+    expect(h.camera.poeSwitch).toBeNull();
     expect(h.version).toBe('dev');
     expect(typeof h.startedAt).toBe('number');
   });
 
   it('is the same summary as /control/status health', async () => {
+    // After the SD card's first read (#199), so its item can't appear between the two reads.
+    await until(async () => (await request(p.base).get('/api/local/health')).body.camera.sd != null);
     const a = (await request(p.base).get('/api/local/health')).body as HealthSummary;
     const b = (await request(p.base).get('/control/status').set(auth(ADMIN_TOKEN))).body.health as HealthSummary;
     // Built by the same function from the same state (times may move on in between).

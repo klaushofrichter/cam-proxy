@@ -1,7 +1,7 @@
 // The /control/status answer's type, apart from state.ts (which needs a
 // browser) so that node-side code and tests can import it.
 import type { UiProviderState } from './analytics';
-import type { CameraReboot, PoeSwitchStatus } from './maintenance';
+import type { CameraReboot } from './maintenance';
 import type { RecordingsStatus } from './recordings';
 import type { CameraFtp, ClipsStall } from './ftp';
 import type { UiHealth } from './health';
@@ -11,7 +11,7 @@ import type { MoveLeftover, RemoveLeftover } from './move-leftovers';
 
 export interface Status {
   version: string;
-  camera: { name?: string; nameSource?: 'camera' | 'config'; online: boolean; since: number; model?: string; firmware?: string; clockOffsetMs?: number; error?: string; webUiUrl?: string | null; reboot?: CameraReboot | null; poeSwitch?: PoeSwitchStatus };
+  camera: { name?: string; nameSource?: 'camera' | 'config'; online: boolean; since: number; model?: string; firmware?: string; clockOffsetMs?: number; error?: string; webUiUrl?: string | null; reboot?: CameraReboot | null };
   intake: { onvif: string; since: number; source: string; lastError?: string; resubscribes: number };
   sse: { clients: number };
   stream: { enabled: boolean; up: boolean; go2rtcUp: boolean; lastFrameTs: number | null };

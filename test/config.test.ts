@@ -125,19 +125,19 @@ describe('overrides', () => {
 });
 
 // Klaus 2026-10-05 (the Pi's Settings page): overrides equal to the default
-// (camera.poeSwitch.ports 8, offSeconds 10) offered a Reset that changed
+// (then the PoE switch's ports 8, offSeconds 10) offered a Reset that changed
 // nothing. The cause: every leaf of a PUT body was stored, whatever its value
-// (a whole poeSwitch group, or a Save of the unchanged default).
+// (a whole group, or a Save of the unchanged default).
 describe('an override equal to what Reset restores', () => {
   beforeEach(() => write('config.json', { camera: { host: 'h' }, sse: { pingS: 20 } }));
   const stored = () => JSON.parse(readFileSync(join(dir, 'data', 'overrides.json'), 'utf8'));
 
   it('is not stored when a group is saved whole: only what differs becomes an override', () => {
-    const l = applyOverrides(load(), { camera: { poeSwitch: { model: 'sscpoe-web', host: '192.168.1.217', port: 8, ports: 8, offSeconds: 10 } } });
-    expect(stored()).toEqual({ cameras: { cam1: { poeSwitch: { port: 8 } } }, poeSwitch: { model: 'sscpoe-web', host: '192.168.1.217' } });
-    expect(l.sources['poeSwitch.ports']).toBe('default');
-    expect(l.sources['poeSwitch.offSeconds']).toBe('default');
-    expect(cameraConfig(l.config, 'cam1')!.poeSwitch).toEqual({ model: 'sscpoe-web', host: '192.168.1.217', port: 8, ports: 8, offSeconds: 10 });
+    const l = applyOverrides(load(), { camera: { onvifPort: 8000, rtspPort: 554, statusPollS: 45 } });
+    expect(stored()).toEqual({ cameras: { cam1: { statusPollS: 45 } } });
+    expect(l.sources['cameras.cam1.onvifPort']).toBe('default');
+    expect(l.sources['cameras.cam1.rtspPort']).toBe('default');
+    expect(cameraConfig(l.config, 'cam1')).toMatchObject({ onvifPort: 8000, rtspPort: 554, statusPollS: 45 });
   });
 
   it("is not stored when the value is config.json's", () => {
@@ -162,16 +162,14 @@ describe('an override equal to what Reset restores', () => {
 
   it('one already stored (an older proxy) is marked: Reset would change nothing', () => {
     mkdirSync(join(dir, 'data'), { recursive: true });
-    write('data/overrides.json', { camera: { poeSwitch: { model: 'sscpoe-web', host: '192.168.1.217', port: 8, ports: 8, offSeconds: 10 } }, sse: { pingS: 20 } });
+    write('data/overrides.json', { camera: { onvifPort: 8000, rtspPort: 554, tlsName: 'cam.example' }, sse: { pingS: 20 } });
     const l = load();
-    expect(l.sources['poeSwitch.ports']).toBe('override');
-    expect(resetTarget(l, 'camera.poeSwitch.ports')).toEqual({ value: 8, source: 'default', same: true });
-    expect(resetTarget(l, 'camera.poeSwitch.offSeconds')).toEqual({ value: 10, source: 'default', same: true });
+    expect(l.sources['cameras.cam1.onvifPort']).toBe('override');
+    expect(resetTarget(l, 'camera.onvifPort')).toEqual({ value: 8000, source: 'default', same: true });
+    expect(resetTarget(l, 'camera.rtspPort')).toEqual({ value: 554, source: 'default', same: true });
     expect(resetTarget(l, 'sse.pingS')).toEqual({ value: 20, source: 'file', same: true });
     // A real change says what the unset state means.
-    expect(resetTarget(l, 'camera.poeSwitch.model')).toEqual({ value: 'none', source: 'default', means: 'no PoE switch: power-cycle off' });
-    expect(resetTarget(l, 'camera.poeSwitch.host')).toEqual({ source: 'default', means: expect.stringMatching(/^PoE switch control off/) });
-    expect(resetTarget(l, 'camera.poeSwitch.port')).toEqual({ source: 'default', means: expect.stringMatching(/^PoE switch control off/) });
+    expect(resetTarget(l, 'camera.tlsName')).toEqual({ source: 'default', means: "the camera's certificate is not verified" });
   });
 });
 
@@ -233,23 +231,22 @@ describe('shipped files', () => {
     const example = JSON.parse(readFileSync(join(root, 'config.example.json'), 'utf8'));
     write('config.json', example);
     const l = load();
-    // The one-camera (legacy) form: the defaults of camera cam1 and the host switch in `camera`, ftp.user (spec 2026-10-05-multi-camera-host-design §4.2).
-    const { cameras: _c, cameraOrder: _o, poeSwitch, ...defaults } = JSON.parse(JSON.stringify(DEFAULTS));
-    const { ftp: _f, stills: _s, storage: _st, analytics: _a, events: _e, poeSwitch: _p, ...cam } = cameraDefaults('cam1');
-    defaults.camera = { ...cam, name: 'Den', host: example.camera.host, poeSwitch };
+    // The one-camera (legacy) form: the defaults of camera cam1 in `camera`, ftp.user (spec 2026-10-05-multi-camera-host-design §4.2).
+    const { cameras: _c, cameraOrder: _o, ...defaults } = JSON.parse(JSON.stringify(DEFAULTS));
+    const { ftp: _f, stills: _s, storage: _st, analytics: _a, events: _e, ...cam } = cameraDefaults('cam1');
+    defaults.camera = { ...cam, name: 'Den', host: example.camera.host };
     defaults.ftp = { ...defaults.ftp, user: 'camera' };
     defaults.server.dataDir = example.server.dataDir;
     expect(example).toEqual(defaults);
     expect(cameraConfig(l.config, 'cam1')!.host).toBe(example.camera.host);
   });
 
-  it('config.cameras.example.json loads: two cameras, the host switch', () => {
+  it('config.cameras.example.json loads: two cameras', () => {
     write('config.json', readFileSync(join(__dirname, '..', 'config.cameras.example.json'), 'utf8'));
     const l = load({ CAMPROXY_FTP_PASSWORD: 'f'.repeat(24) });
     expect(cameraIds(l.config)).toEqual(['cam3', 'cam4']);
     expect(cameraConfig(l.config, 'cam4')!.storage).toEqual({ sharePercent: 20 });
     expect(l.config.composition.concurrent).toBe(2);
-    expect(cameraConfig(l.config, 'cam4')!.poeSwitch).toMatchObject({ host: '192.168.60.2', port: 2 });
   });
 });
 
@@ -315,38 +312,20 @@ describe('audit settings', () => {
   });
 });
 
-// The camera's PoE switch (issue #85): settings, live; the password is a secret.
-describe('camera.poeSwitch', () => {
+// The PoE switch settings are retired (the switches are cams-admin's, spec
+// cams-admin 2026-11-07-poe-switches-design): a change naming them is an
+// unknown setting; the password variable is no longer read (files that
+// still have the settings: test/config-legacy.test.ts).
+describe('poeSwitch (retired)', () => {
   beforeEach(() => write('config.json', { camera: { host: '192.0.2.10' } }));
-  it('defaults to no switch, 8 ports and 10 s off', () => {
-    expect(cameraConfig(load().config, 'cam1')!.poeSwitch).toEqual({ model: 'none', ports: 8, offSeconds: 10 });
+  it('is an unknown setting in a change, host or camera level', () => {
+    expect(err(() => applyOverrides(load(), { camera: { poeSwitch: { model: 'sscpoe-web' } } }))).toBe('camera.poeSwitch: unknown setting');
+    expect(err(() => applyOverrides(load(), { poeSwitch: { host: '192.0.2.2' } }))).toBe('poeSwitch: unknown setting');
   });
 
-  it('takes a model, a host (optional :port), the camera port 1-48, the port count and offSeconds 5-60', () => {
-    const l = applyOverrides(load(), { camera: { poeSwitch: { model: 'sscpoe-web', host: '192.168.1.217', port: 8, ports: 8, offSeconds: 15 } } });
-    expect(cameraConfig(l.config, 'cam1')!.poeSwitch).toEqual({ model: 'sscpoe-web', host: '192.168.1.217', port: 8, ports: 8, offSeconds: 15 });
-    expect(applyOverrides(load(), { camera: { poeSwitch: { host: 'switch.lan:8080' } } }).config.poeSwitch.host).toBe('switch.lan:8080');
-    for (const [k, v] of [['model', 'gps208'], ['host', 'http://x'], ['host', 'a b'], ['port', 0], ['port', 49], ['ports', 0], ['ports', 49], ['offSeconds', 4], ['offSeconds', 61]] as const) {
-      expect(() => applyOverrides(load(), { camera: { poeSwitch: { [k]: v } } }), `${k}=${v}`).toThrow(new RegExp(`camera.poeSwitch.${k}`));
-    }
-  });
-
-  it('applies at once: no restart for the switch settings (read on every use)', () => {
-    for (const k of ['model', 'host', 'port', 'ports', 'offSeconds']) expect(needsRestart(`camera.poeSwitch.${k}`), k).toBe(false);
-    expect(needsRestart('cameras.cam1.host')).toBe(true);
-  });
-
-  it('reads an optional CAMPROXY_POE_SWITCH_PASSWORD (or its _FILE)', () => {
-    expect(load().secrets.poeSwitchPassword).toBeUndefined();
-    expect(load({ CAMPROXY_POE_SWITCH_PASSWORD: 'sw-pw' }).secrets.poeSwitchPassword).toBe('sw-pw');
-    const f = join(dir, 'switch.txt');
-    writeFileSync(f, 'sw-file-pw\n');
-    expect(load({ CAMPROXY_POE_SWITCH_PASSWORD: 'sw-pw', CAMPROXY_POE_SWITCH_PASSWORD_FILE: f }).secrets.poeSwitchPassword).toBe('sw-file-pw');
-    expect(err(() => load({ CAMPROXY_POE_SWITCH_PASSWORD_FILE: join(dir, 'missing') }))).toBe('CAMPROXY_POE_SWITCH_PASSWORD_FILE: cannot read the file');
-  });
-
-  it('refuses the password as a setting like any unknown key', () => {
-    expect(() => applyOverrides(load(), { camera: { poeSwitch: { password: 'x' } } })).toThrow(/camera.poeSwitch.password: unknown setting/);
+  it('CAMPROXY_POE_SWITCH_PASSWORD (or a _FILE that is gone) does not stop the start', () => {
+    expect(() => load({ CAMPROXY_POE_SWITCH_PASSWORD: 'sw-pw' })).not.toThrow();
+    expect(() => load({ CAMPROXY_POE_SWITCH_PASSWORD_FILE: join(dir, 'missing') })).not.toThrow();
   });
 });
 
