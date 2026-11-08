@@ -39,6 +39,7 @@ import { CAMERA_ID } from '../config/schema';
 import { onboardingStatus, type OnboardingInput, type OnboardingStatus } from './status';
 import { removeLeftoverItems, type RemoveLeftovers } from './remove-leftovers';
 import type { ActionOutcome } from '../api/actions';
+import type { SetupAction, SetupStep } from './setup';
 
 export type Who = ActionWho;
 
@@ -75,8 +76,14 @@ export interface OnboardingDeps {
   cameraNtp: (cam: string) => Promise<NtpOutcome | null>;
   // A camera's model as it last reported it here (null: not known since the start).
   identity?: (cam: string) => { model: string } | null;
+  // After an add (finding 15): the camera-ftp-setup and camera-cert-push
+  // actions' own code (src/onboarding/setup.ts), and whether the site CA covers the camera.
+  setup?: { run: (action: SetupAction, cam: string, who: Who) => Promise<SetupStep>; siteCaCovers: (cam: string) => boolean };
   now?: () => number;
 }
+
+// What an add set up on the camera after it started; a failed step leaves the camera added.
+export interface AddSetup { ftp?: SetupStep; certificate?: SetupStep }
 
 // PUT /control/cameras/:id/host's answer. identity.checked: 'model' (the
 // model it last reported here matched), 'login' (none known: the trust and
@@ -290,7 +297,7 @@ export class OnboardingService {
   // certificate pinned (before the camera's worker logs in), the camera added
   // in overrides.json (live, no restart). The profile's camera count refuses
   // an addition beyond it.
-  async add(body: unknown, who: Who): Promise<{ status: 201; onboarding: OnboardingStatus; plaintext?: true } | Refusal> {
+  async add(body: unknown, who: Who): Promise<{ status: 201; onboarding: OnboardingStatus; setup?: AddSetup; plaintext?: true } | Refusal> {
     const b = (typeof body === 'object' && body !== null && !Array.isArray(body) ? body : {}) as Record<string, unknown>;
     const bad = (detail: string): Refusal => ({ status: 400, error: 'invalid', detail });
     if (b.id !== undefined && (typeof b.id !== 'string' || !new RegExp(CAMERA_ID).test(b.id))) return bad('id: a camera id (a-z, 0-9, -; at most 32)');
@@ -430,7 +437,7 @@ export class OnboardingService {
   }
 
   // `ftp`: clip uploads on for the camera; off unless asked for (the passive range needs 10 ports per camera with FTP).
-  private async addCamera(id: string, name: string | undefined, i: ProbeInput, who: Who, ftp = false): Promise<{ status: 201; onboarding: OnboardingStatus } | Refusal> {
+  private async addCamera(id: string, name: string | undefined, i: ProbeInput, who: Who, ftp = false): Promise<{ status: 201; onboarding: OnboardingStatus; setup?: AddSetup } | Refusal> {
     const host = OnboardingService.hostOf(i);
     const fail = (r: Refusal, extra: Record<string, unknown> = {}): Refusal => {
       this.auditAdd(who, id, 'failure', `Camera ${id} (${host}) not added: ${r.error}`, { host, ...extra }, r.error);
@@ -471,9 +478,35 @@ export class OnboardingService {
     this.d.setLoaded(next);
     this.auditConfig(who, before, next);
     await this.waitForWorker(id);
-    this.auditAdd(who, id, 'success', `Camera ${id} added (${host}, ${p.model ?? 'unknown model'})${p.served ? `, certificate pinned (${p.served.fingerprint})` : ''}`, { host, model: p.model, pinned: p.served?.fingerprint ?? null });
-    const [onboarding] = await this.status(id);
-    return { status: 201, onboarding: onboarding ?? this.placeholder(id) };
+    const setup = await this.setupAfterAdd(id, ftp, who);
+    const steps = Object.values(setup).map((s) => `; ${s.action === 'camera-ftp-setup' ? 'FTP setup' : 'certificate push'} ${s.ok ? 'done' : `failed: ${s.detail}`}`).join('');
+    this.auditAdd(who, id, 'success', `Camera ${id} added (${host}, ${p.model ?? 'unknown model'})${p.served ? `, certificate pinned (${p.served.fingerprint})` : ''}${steps}`, { host, model: p.model, pinned: p.served?.fingerprint ?? null, ...(Object.keys(setup).length ? { setup } : {}) });
+    const [status] = await this.status(id);
+    const onboarding = status ?? this.placeholder(id);
+    // A failed step in the answer's steps too (the status reads the camera's state; this says why).
+    if (setup.ftp && !setup.ftp.ok) onboarding.steps.ftp = { ok: false, detail: `FTP setup failed: ${setup.ftp.detail}`, action: setup.ftp.action };
+    if (setup.certificate && !setup.certificate.ok) onboarding.steps.trust = { ...onboarding.steps.trust, detail: `${onboarding.steps.trust.detail}; site-CA certificate push failed: ${setup.certificate.detail}`.slice(0, 200), action: setup.certificate.action };
+    return { status: 201, onboarding, ...(Object.keys(setup).length ? { setup } : {}) };
+  }
+
+  // Finding 15: with FTP asked for, the camera's FTP upload pointed here
+  // (camera-ftp-setup); with a site CA that covers the camera, its site-CA
+  // leaf (camera-cert-push, its own audit record). In this order (the push
+  // swaps the camera's certificate last). One attempt each; a failure is
+  // reported, never a failed add.
+  private async setupAfterAdd(id: string, ftp: boolean, who: Who): Promise<AddSetup> {
+    const s = this.d.setup;
+    if (!s) return {};
+    const out: AddSetup = {};
+    if (ftp) out.ftp = await s.run('camera-ftp-setup', id, who);
+    let covers = false;
+    try {
+      covers = s.siteCaCovers(id);
+    } catch {
+      covers = false;
+    }
+    if (covers) out.certificate = await s.run('camera-cert-push', id, who);
+    return out;
   }
 
   // PUT /control/cameras/:id/host, PUT /control/camera/host (local admin

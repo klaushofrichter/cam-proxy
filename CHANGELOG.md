@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add camera with FTP on (several-camera proxy) now points the camera's FTP upload at the proxy, the same as the camera's "Set up FTP" action; before, the camera was added but its upload stayed elsewhere ("user differ") until someone ran that action. With a site CA that covers the camera's name, Add camera also gives the camera its site-CA certificate (the same as "Push now"), instead of leaving it pinned. Each runs once; if one fails, the camera is still added and the answer, its onboarding steps, the Add camera card and the `camera-add` audit record say what failed and which action fixes it.
+- `admin-enroll` (the CLI on the host) now also allows `tokens.apply` and `tokens.apply.admin` and prints that it did, so cams-admin can send the proxy's tokens right after enrolling; before, after a decommission had reset the allowed commands, every viewer reported `token_not_allowed_on_proxy` until the entries were added by hand. Already allowed: nothing changes. `--no-tokens` skips it. They are still not on by default, and the Status card's Enroll doesn't change them.
+
 ## v2026.11.08.1
 
 - cams-admin can remove a camera from this proxy and decommission the proxy, each an allow entry on the cams-admin page: `camera.remove.preview` (on by default, a read) says what the proxy holds for a camera (clips, stills, archived clips, size); `camera.remove` (disruptive, off by default) runs the proxy's own remove and, if asked, deletes the camera's clips and stills now, its archived clips only when asked too; it counts toward the 6 disruptive commands an hour. `proxy.unenroll` (disruptive, off by default) is refused while the proxy has a camera; otherwise the proxy unenrolls itself like `admin-unenroll` and also clears its cams-admin tokens and resets the allowed commands, so a later enrollment starts clean (a pause stays; without `CAMPROXY_TOKENS` the tokens stay, the proxy needs them to start).

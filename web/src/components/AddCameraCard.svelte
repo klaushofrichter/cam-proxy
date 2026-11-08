@@ -65,8 +65,10 @@
     const body = addCameraBody({ id, name, host, protocol, user, password, fingerprint, ftp });
     password = '';
     try {
-      const r = await api<{ onboarding: { camera: string; ready: boolean } }>('POST', '/control/cameras', body);
-      message = `Camera ${r.onboarding.camera} added; it starts now.`;
+      const r = await api<{ onboarding: { camera: string; ready: boolean }; setup?: Record<string, { action: string; ok: boolean; detail: string }> }>('POST', '/control/cameras', body);
+      // The FTP setup and certificate push after the add: a failure is said here, the camera stays added.
+      const failed = Object.values(r.setup ?? {}).filter((s) => !s.ok).map((s) => ` ${s.action === 'camera-ftp-setup' ? 'FTP setup' : 'Certificate push'} failed: ${s.detail} (run ${s.action} from the camera's page).`);
+      message = `Camera ${r.onboarding.camera} added; it starts now.${failed.join('')}`;
       id = name = host = '';
       probed = null;
       fingerprint = null;

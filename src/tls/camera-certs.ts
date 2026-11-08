@@ -544,6 +544,17 @@ export class CameraCerts {
     });
   }
 
+  // Whether a push could give the camera a site-CA leaf: https, not verified by
+  // a public name, tls.site set, camera certificates on, a usable CA that
+  // covers its address and its TLS name (an Add camera pushes then; finding 15).
+  siteCaCovers(id: string): boolean {
+    const cam = this.d.cameras().find((c) => c.id === id);
+    const ca = this.d.ca();
+    const site = this.d.site();
+    if (!cam || cam.protocol !== 'https' || cam.tlsName || !site || !ca || !this.d.enabled()) return false;
+    return ca.covers(cam.address) && ca.coversName(`${cam.id}.${site}.internal`);
+  }
+
   private async one(cam: CertCamera, manual: boolean, who?: Requester): Promise<PushResult | null> {
     // Why nothing was pushed: for "Push now", an answer and an audit record.
     const skip = (detail: string, served: string | null = null): PushResult | null => {

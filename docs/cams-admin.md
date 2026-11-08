@@ -38,6 +38,15 @@ enrolled (`test/pi-compat.test.ts`).
      from the environment), so it connects at once. With the proxy stopped,
      the CLI writes the key file and the override itself; the next start
      connects.
+
+     The CLI also allows `tokens.apply` and `tokens.apply.admin` (through
+     the running proxy's `PUT /control/admin/commands`, or `policy.json` and
+     an `admin-policy` record when it is stopped) and prints that it did:
+     whoever runs it on the host is the local admin, and without them every
+     viewer reports `token_not_allowed_on_proxy` (a `proxy.unenroll` resets
+     the allowed commands to the defaults, which lack them). Already allowed:
+     nothing changes. `--no-tokens` skips it. The Status card's Enroll does
+     not change the allowed commands.
 3. The proxy generates an Ed25519 key pair, redeems the code
    (`POST <url>/proxy/v1/enroll` with a proof of the key), pins cams-admin's
    public key from the answer, writes `data/admin/key.json` and sets
@@ -460,7 +469,7 @@ by id and label, never by hash. Camera moves add the `move-*` records
 
 1. On this proxy's card, signed in with its **own** admin token, allow
    `tokens.apply` (and `tokens.apply.admin` if cams should get a managed
-   admin token).
+   admin token). `admin-enroll` on the host allows both unless `--no-tokens`.
 2. cams-admin issues the tokens; Klaus (through the kube-setup session) puts
    them into cams's configuration; check cams.
 3. Rollback at any step: remove the managed token from cams (its
