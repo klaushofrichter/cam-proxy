@@ -4,8 +4,8 @@ import { cameraPassword, loadSecrets } from '../src/config/secrets';
 
 describe('per-camera settings (spec 2026-10-05-multi-camera-host-design §6.3)', () => {
   it('host groups apart from the selected camera', () => {
-    const g = settingGroups(['sse.pingS', 'poeSwitch.host', 'cameras.cam3.host', 'cameras.cam4.host', 'cameras.cam4.stills.intervalS'], 'cam4');
-    expect(g.host).toEqual({ sse: ['sse.pingS'], poeSwitch: ['poeSwitch.host'] });
+    const g = settingGroups(['sse.pingS', 'ntp.server', 'cameras.cam3.host', 'cameras.cam4.host', 'cameras.cam4.stills.intervalS'], 'cam4');
+    expect(g.host).toEqual({ sse: ['sse.pingS'], ntp: ['ntp.server'] });
     expect(g.camera).toEqual(['cameras.cam4.host', 'cameras.cam4.stills.intervalS']);
   });
   it('the action path: the camera route with several cameras, the old one with one', () => {

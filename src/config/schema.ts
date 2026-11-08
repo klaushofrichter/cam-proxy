@@ -48,15 +48,6 @@ export const LEGACY_CAMERA: Node = {
   rtspPort: port('camera RTSP port'),
   baichuanPort: port("camera Baichuan port (recordings over TCP); the host is camera.host's"),
   statusPollS: int(5, 3600, 'seconds between status checks'),
-  // The PoE switch the camera hangs on (issue #85): power-cycle the camera
-  // through it. Applies at once; the password is CAMPROXY_POE_SWITCH_PASSWORD.
-  poeSwitch: {
-    model: unset({ type: 'string', enum: ['none', 'sscpoe-web'], doc: "the camera's PoE switch: none, or sscpoe-web (the STEAMEMO/SSCPOE local web protocol: GPS-208 and kin)" }, 'no PoE switch: power-cycle off', 'none'),
-    host: unset({ type: 'string', pattern: '^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$', optional: true, doc: "the switch's address or name, optional :port (http)" }, 'PoE switch control off: no switch address'),
-    port: unset(int(1, 48, 'the switch port the camera is on, as numbered on the switch', true), "PoE switch control off: no camera port"),
-    ports: int(1, 48, "the switch's PoE port count (maps the port to its internal index)"),
-    offSeconds: int(5, 60, 'seconds the PoE stays off in a power-cycle'),
-  },
 };
 // Today's top-level ftp.user (legacy files).
 export const LEGACY_FTP_USER: Leaf = { type: 'string', pattern: '^[^\\s:]{1,31}$', doc: 'FTP user the camera logs in as' };
@@ -76,9 +67,6 @@ export const CAMERA_NODE: Node = {
   rtspPort: port('camera RTSP port'),
   baichuanPort: port("camera Baichuan port (recordings over TCP); the host is the camera's host"),
   statusPollS: int(5, 3600, 'seconds between status checks'),
-  poeSwitch: {
-    port: unset(int(1, 48, "the port of the host's PoE switch this camera is on, as numbered on the switch", true), 'PoE switch control off for this camera: no port'),
-  },
   ftp: {
     user: unset({ type: 'string', pattern: '^[^\\s:]{1,31}$', optional: true, doc: 'FTP user this camera logs in as' }, 'the camera id'),
     enabled: unset({ type: 'boolean', doc: 'accept clip uploads from this camera' }, hostValue('ftp.enabled')),
@@ -106,12 +94,6 @@ export const CAMERA_NODE: Node = {
   },
   moved: unset({ type: 'string', pattern: '^mv_[0-9A-HJKMNP-TV-Z]{20}$', optional: true, doc: 'set while this camera is being or has been moved to another proxy (the id of the move): the camera is hidden, its worker stopped, its FTP user refused; its settings and files stay. Local only' }, 'the camera is active'),
 };
-export const HOST_POE_SWITCH: Node = {
-  model: unset({ type: 'string', enum: ['none', 'sscpoe-web'], doc: "the cameras' PoE switch: none, or sscpoe-web (the STEAMEMO/SSCPOE local web protocol: GPS-208 and kin)" }, 'no PoE switch: power-cycle off', 'none'),
-  host: unset({ type: 'string', pattern: '^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$', optional: true, doc: "the switch's address or name, optional :port (http)" }, 'PoE switch control off: no switch address'),
-  ports: int(1, 48, "the switch's PoE port count (maps a port to its internal index)"),
-  offSeconds: int(5, 60, 'seconds the PoE stays off in a power-cycle'),
-};
 
 export const SETTINGS: Node = {
   server: {
@@ -125,9 +107,9 @@ export const SETTINGS: Node = {
     },
   },
   cameras: collection(CAMERA_NODE, 'the cameras of this proxy, in display order (config.json: a list; overrides: by id)'),
-  // The PoE switch the cameras hang on (issue #85; one per host, spec §4.1).
-  // Applies at once; the password is CAMPROXY_POE_SWITCH_PASSWORD.
-  poeSwitch: HOST_POE_SWITCH,
+  // No poeSwitch: the PoE switches come from cams-admin (cams-admin spec
+  // 2026-11-07-poe-switches-design); a file that still has the old settings
+  // is read without them (src/config/legacy.ts dropRetiredPoeSwitch).
   // The proxy profile (cams-admin spec 2026-10-25-proxy-profile-design §1):
   // local only, never from cams-admin. moves.maxCameras is read as
   // profile.cameras (its old name, src/config/legacy.ts).

@@ -1,7 +1,7 @@
 // Issue #85: the PoE switch's local web protocol (STEAMEMO/SSCPOE GPS-208
 // and kin), against the mock in test/helpers; the real switch is never used.
 import { afterEach, describe, expect, it } from 'vitest';
-import { legacyRef, PoeSwitch, PoeSwitchError, Session, poeOpcode, portIndex, reverseOrder } from '../src/camera/poe-switch';
+import { PoeSwitch, PoeSwitchError, Session, poeOpcode, portIndex, reverseOrder } from '../src/camera/poe-switch';
 import { startPoeSwitchMock, type PoeSwitchMock } from './helpers/poe-switch-mock';
 
 const PASSWORD = 'mock-switch-pw-4711';
@@ -21,7 +21,7 @@ const view = (c: PoeSwitch, port = 8) => ({
   read: () => c.read(port, { fresh: true }),
   cycle: (f: (at: number) => void) => c.cycle(port, f, { verifyHost: null }),
   poeOn: () => c.poeOn(port),
-  status: () => c.status(port),
+  status: () => ({ poeMaybeOff: c.portsMaybeOff().includes(port) }),
   stop: async () => {
     const r = await c.stop();
     return { poeLeftOff: r.portsLeftOff.includes(port), sessionMaybeOpen: r.sessionMaybeOpen };
@@ -142,7 +142,6 @@ describe('PoeSwitch against the mock', () => {
     expect(r).toMatchObject({ port: 8, index: 0, poe: true, watts: 6.8, link: true, sn: 'GPS208MOCK0001', firmware: 'mock-1.0' });
     expect(m.calls.map((c) => c.cmd)).toEqual([123, 101, 126]);
     expect(m.activeSession()).toBe(false);
-    expect(s.status().last).toMatchObject({ watts: 6.8 });
   });
 
   it('power-cycles: off with 0x2, waits offSeconds, on with 0x202, logs out; answers offAt, onAt, watts', async () => {
@@ -443,16 +442,16 @@ describe('PoeSwitch against the mock', () => {
   });
 
   it('names what is missing when not configured', () => {
-    const base = { model: 'sscpoe-web' as const, host: '192.0.2.7', ports: 8, offSeconds: 10 };
-    const nc = (c: object, port: number | null = 8, pw: string | null = PASSWORD) => new PoeSwitch({ ref: () => legacyRef({ ...base, ...c }), password: () => pw ?? undefined }).forPort(() => port ?? undefined).notConfigured();
+    const base = { id: 'sw_test', model: 'sscpoe-web' as const, host: '192.0.2.7', ports: 8, offSeconds: 10 };
+    const nc = (c: object, port: number | null = 8, pw: string | null = PASSWORD) => new PoeSwitch({ ref: () => ({ ...base, ...c }), password: () => pw ?? undefined }).notConfigured(port);
     expect(nc({})).toBeNull();
-    expect(nc({ model: 'none' })).toMatch(/^poeSwitch.model is none/);
-    expect(nc({ host: undefined })).toMatch(/^poeSwitch.host/);
-    expect(nc({}, null)).toMatch(/camera.s poeSwitch.port/);
-    expect(nc({}, 9)).toMatch(/poeSwitch.port is above poeSwitch.ports/);
-    expect(nc({}, 8, null)).toMatch(/CAMPROXY_POE_SWITCH_PASSWORD is not set/);
-    const st = new PoeSwitch({ ref: () => legacyRef(base), password: () => PASSWORD }).status(8);
-    expect(st).toEqual({ model: 'sscpoe-web', host: '192.0.2.7', port: 8, ports: 8, offSeconds: 10, passwordSet: true, configured: true, busy: false, poeMaybeOff: false, last: null });
-    expect(JSON.stringify(st)).not.toContain(PASSWORD);
+    expect(nc({ model: 'none' })).toBe('the switch has no model');
+    expect(nc({ host: undefined })).toBe('the switch has no address');
+    expect(nc({}, null)).toBe('no switch port');
+    expect(nc({}, 9)).toBe("port 9 is above the switch's 8 ports");
+    expect(nc({}, 8, null)).toBe('no password is set for the switch');
+    const sw = new PoeSwitch({ ref: () => base, password: () => PASSWORD });
+    expect(sw.isBusy()).toBe(false);
+    expect(sw.portsMaybeOff()).toEqual([]);
   });
 });

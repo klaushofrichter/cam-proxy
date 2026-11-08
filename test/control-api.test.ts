@@ -96,7 +96,7 @@ describe('control API: status, stats, config', () => {
     expect(r.body['cameras.cam1.host']).toEqual({ value: sim.camera.host, source: 'file', restart: true, restartScope: 'camera', pending: false, type: 'string', legacy: true });
     expect(r.body['retention.stillsDays']).toEqual({ value: 7, source: 'default', restart: false, pending: false, type: 'integer' });
     // The type, so the Settings page can save a number for an optional setting with no value yet (#85).
-    expect(r.body['cameras.cam1.poeSwitch.port']).toEqual({ source: 'default', restart: false, pending: false, type: 'integer' });
+    expect(r.body['stills.maxGB']).toEqual({ source: 'default', restart: false, pending: false, type: 'integer' });
     expect(r.body['stills.enabled']).toMatchObject({ type: 'boolean' });
     const text = JSON.stringify(r.body);
     for (const s of [CLIENT_TOKEN, ADMIN_TOKEN, sim.password]) expect(text).not.toContain(s);
@@ -141,20 +141,19 @@ describe('control API: back to the defaults', () => {
   // Klaus 2026-10-05: no override that only repeats the default; Reset says
   // what an unset state means.
   it('PUT of a whole group stores only what differs, and Reset to none / not set says what that means', async () => {
-    const r = await request(p.base).put('/control/config').set(admin()).send({ camera: { poeSwitch: { model: 'sscpoe-web', host: '192.0.2.98', port: 8, ports: 8, offSeconds: 10 } } });
+    const r = await request(p.base).put('/control/config').set(admin()).send({ retention: { auditDays: 90, eventsDays: 4 }, stills: { maxGB: 5 } });
     try {
       expect(r.status).toBe(200);
-      expect(r.body['poeSwitch.ports']).toMatchObject({ value: 8, source: 'default' });
-      expect(r.body['poeSwitch.offSeconds']).toMatchObject({ value: 10, source: 'default' });
-      expect(r.body['poeSwitch.model']).toMatchObject({ source: 'override', resetTo: { value: 'none', source: 'default', means: 'no PoE switch: power-cycle off' } });
-      expect(r.body['poeSwitch.host']).toMatchObject({ source: 'override', resetTo: { source: 'default', means: 'PoE switch control off: no switch address' } });
+      expect(r.body['retention.auditDays']).toMatchObject({ value: 90, source: 'default' });
+      expect(r.body['retention.eventsDays']).toMatchObject({ value: 4, source: 'override', resetTo: { value: 30, source: 'default' } });
+      expect(r.body['stills.maxGB']).toMatchObject({ source: 'override', resetTo: { source: 'default', means: 'no size cap for stills (the storage budget still applies)' } });
       const stored = JSON.parse(readFileSync(join(p.dir, 'data', 'overrides.json'), 'utf8'));
-      expect([stored.poeSwitch, stored.cameras.cam1.poeSwitch]).toEqual([{ model: 'sscpoe-web', host: '192.0.2.98' }, { port: 8 }]);
+      expect([stored.retention, stored.stills]).toEqual([{ eventsDays: 4 }, { maxGB: 5 }]);
       // Saving the default over an override removes it.
-      const back = await request(p.base).put('/control/config').set(admin()).send({ camera: { poeSwitch: { model: 'none' } } });
-      expect(back.body['poeSwitch.model']).toMatchObject({ value: 'none', source: 'default' });
+      const back = await request(p.base).put('/control/config').set(admin()).send({ retention: { eventsDays: 30 } });
+      expect(back.body['retention.eventsDays']).toMatchObject({ value: 30, source: 'default' });
     } finally {
-      for (const k of ['model', 'host', 'port']) await request(p.base).delete(`/control/config/camera.poeSwitch.${k}`).set(admin());
+      for (const k of ['retention.eventsDays', 'stills.maxGB']) await request(p.base).delete(`/control/config/${k}`).set(admin());
     }
   });
 

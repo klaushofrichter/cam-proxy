@@ -198,10 +198,9 @@ function patchPaths(o: unknown, prefix = ''): string[] {
   return out.length || !prefix ? out : [prefix];
 }
 // A path as a pattern of UI_CONFIG_LOCAL: cameras.<id>.x and the legacy
-// camera.x / ftp.user as cameras.*.x, camera.poeSwitch.x as poeSwitch.x.
+// camera.x / ftp.user as cameras.*.x.
 function localPattern(p: string): string {
   if (p === 'ftp.user') return 'cameras.*.ftp.user';
-  if (p.startsWith('camera.poeSwitch.')) return `poeSwitch.${p.slice('camera.poeSwitch.'.length)}`;
   if (p.startsWith('camera.')) return `cameras.*.${p.slice('camera.'.length)}`;
   return p.replace(/^cameras\.[^.]+(?=\.)/, 'cameras.*');
 }

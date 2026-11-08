@@ -468,7 +468,6 @@ describe('fix round 1', () => {
 
     for (const [what, extra, env] of [
       ['a tlsName', { tlsName: 'cam9.example.org' }, {}],
-      ['a PoE switch port', { poeSwitch: { port: 3 } }, {}],
       ['a per-camera env password', {}, { CAMPROXY_CAMERA_PASSWORD_CAM9: 'env-pw' }],
     ] as const) {
       it(`refused (camera_failed, stale_leftover) when the leftover has ${what}; no password stored`, async () => {

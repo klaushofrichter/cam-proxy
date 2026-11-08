@@ -8,7 +8,7 @@ export { PoeSwitchError, type PoeSwitchErrorCode } from './switch/errors';
 export { poeOpcode, portIndex, reverseOrder, Session } from './switch/sscpoe-web';
 export type { LocateResult, SwitchRef } from './switch/driver';
 
-const NO_PASSWORD = 'CAMPROXY_POE_SWITCH_PASSWORD is not set';
+const NO_PASSWORD = 'no password is set for the switch';
 const ON_RETRY_MS = 60_000; // how long a failed PoE-on is retried (backoff 1, 2, 4, 8, 10, 10… s)
 const STOP_RECOVERY_MS = 6_000; // on shutdown: the PoE-on retries end after this
 const STOP_WAIT_MS = 8_000; // on shutdown: the longest wait for the switch (compose's stop grace is 20 s)
@@ -29,15 +29,9 @@ const LOCATE_READS = 10;
 // The password is sent in the login body only: never logged, returned, put
 // in an error message or an audit record.
 
-type PoeSwitchModel = 'none' | 'sscpoe-web';
-// The host's switch (spec 2026-10-05-multi-camera-host-design §8.4): one per
-// host; each camera names its port.
-export interface HostSwitchConfig { model: PoeSwitchModel; host?: string; ports: number; offSeconds: number }
 // The switch a controller works: a SwitchRef from cams-admin (spec
-// 2026-11-07-poe-switches-design), or the host config's switch (legacyRef),
-// which may be unset (model none, no host) until that config goes away.
+// 2026-11-07-poe-switches-design). Model none or no host: not usable.
 export type ControllerRef = Omit<SwitchRef, 'model' | 'host'> & { model: SwitchRef['model'] | 'none'; host?: string };
-export const legacyRef = (c: HostSwitchConfig): ControllerRef => ({ id: 'legacy', model: c.model, host: c.host, ports: c.ports, offSeconds: c.offSeconds });
 type PoeSwitchConfig = ControllerRef & { port: number };
 export type Located = LocateResult & { sn: string | null };
 export interface SurveyResult { sn: string | null; results: Array<LocateResult & { camera: string }> }
@@ -57,37 +51,14 @@ export interface PortReading {
 }
 export interface CycleResult { offAt: number; onAt: number; watts: number }
 export type VerifiedCycleResult = CycleResult & { verified: boolean };
-export interface PoeSwitchStatus {
-  model: PoeSwitchModel;
-  host: string | null;
-  port: number | null;
-  ports: number;
-  offSeconds: number;
-  passwordSet: boolean;
-  configured: boolean;
-  busy: boolean; // a switch session is open now
-  // The camera's PoE may be OFF: the last reading said so, or turning it on
-  // again failed. "Turn camera PoE on" (or a read showing it on) clears it.
-  poeMaybeOff: boolean;
-  last: PortReading | null; // the port's last reading (a read or a cycle); never polled
-}
 export interface SwitchReading { sn: string | null; firmware: string | null; ports: Array<{ port: number; poe: boolean; watts: number; link: boolean | null; tx: number; rx: number }> }
 export type PoeOnResult = PortReading & { wasOn: boolean };
-
-// One camera's view of the host's switch: its port, read on every use. No
-// power-cycle: those run through cams-admin, verified (spec 2026-11-07-poe-switches-design).
-export interface PortHandle {
-  notConfigured(): string | null;
-  status(): PoeSwitchStatus;
-  read(): Promise<PortReading>;
-  poeOn(): Promise<PoeOnResult>;
-}
 
 export interface PoeSwitchDeps {
   ref: () => ControllerRef;
   password: () => string | undefined;
   lane?: () => SessionLane; // the switch's session queue, shared by every controller of one host (default: its own)
-  passwordHint?: string | (() => string); // what the 'not set' reason names (default: the host config's environment variable)
+  passwordHint?: string | (() => string); // what the 'not set' reason says (default: no password is set)
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   timeoutMs?: number; // per call (5 s)
@@ -121,7 +92,6 @@ export class PoeSwitch {
   private sessionMaybeOpen = false; // the last logout was not answered
   private readonly cutting = new Set<number>(); // ports between the PoE-off request and PoE on again
   private readonly offPorts = new Set<number>(); // ports whose PoE may be off
-  private readonly last = new Map<number, PortReading>();
   private cache: { at: number; detail: SwitchDetail } | null = null; // the last read's detail
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
@@ -136,43 +106,26 @@ export class PoeSwitch {
     return typeof h === 'function' ? h() : (h ?? NO_PASSWORD);
   }
 
-  // Why the switch can't be used, naming the setting; null when it can.
-  // With a port (null: the camera has none): also the camera's port.
+  // Why the switch can't be used; null when it can. With a port (null:
+  // none): also that port.
   notConfigured(port?: number | null): string | null {
     const c = this.d.ref();
-    if (c.model === 'none') return 'poeSwitch.model is none';
-    if (!c.host) return 'poeSwitch.host is not set';
-    if (port !== undefined && !port) return "the camera's poeSwitch.port is not set";
-    if (port && port > c.ports) return "the camera's poeSwitch.port is above poeSwitch.ports";
+    if (c.model === 'none') return 'the switch has no model';
+    if (!c.host) return 'the switch has no address';
+    if (port !== undefined && !port) return 'no switch port';
+    if (port && port > c.ports) return `port ${port} is above the switch's ${c.ports} ports`;
     if (!this.d.password()) return this.hint();
     return null;
   }
 
-  // The host's switch, and with a port (null: a camera without one) that port's last reading.
-  status(port?: number | null): PoeSwitchStatus {
-    const c = this.d.ref();
-    const last = port ? this.last.get(port) : undefined;
-    return {
-      model: c.model, host: c.host ?? null, port: port ?? null, ports: c.ports, offSeconds: c.offSeconds,
-      passwordSet: !!this.d.password(), configured: this.notConfigured(port) === null, busy: this.busy,
-      poeMaybeOff: port === undefined ? this.offPorts.size > 0 : !!port && this.offPorts.has(port), last: last ? { ...last } : null,
-    };
+  // Whether a switch session is open now.
+  isBusy(): boolean {
+    return this.busy;
   }
 
   // The ports whose PoE may be off (a cycle's PoE-on failed, or a read said so).
   portsMaybeOff(): number[] {
     return [...this.offPorts].sort((a, b) => a - b);
-  }
-
-  // One camera's view of the switch (its port read on every use).
-  forPort(port: () => number | undefined): PortHandle {
-    const p = () => port() ?? 0;
-    return {
-      notConfigured: () => this.notConfigured(port() ?? null),
-      status: () => this.status(port() ?? null),
-      read: () => this.read(p()),
-      poeOn: () => this.poeOn(p()),
-    };
   }
 
   // On shutdown: a power-cycle in its off time turns PoE on at once (never
@@ -424,7 +377,6 @@ export class PoeSwitch {
     const index = driver.portIndex(c.port, c.ports, d.sn ?? '');
     if (index < 0 || index >= d.poe.length) throw new PoeSwitchError('switch_error', `port ${c.port} maps to index ${index}, outside the switch's ${d.poe.length} ports`);
     const r: PortReading = { at: this.now(), port: c.port, index, poe: d.poe[index], watts: d.watts[index] ?? 0, link: d.link[index] ?? null, tx: d.tx[index] ?? 0, rx: d.rx[index] ?? 0, sn: d.sn, firmware: d.firmware };
-    this.last.set(c.port, r);
     this.markOff(c.port, !r.poe);
     return { ...r };
   }

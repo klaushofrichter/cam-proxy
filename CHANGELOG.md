@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- PoE switches: the proxy's own single-switch settings are gone; switches come only from cams-admin now (by switch id, each with its password set under **Proxy settings → PoE switches**). Removed: the `poeSwitch` settings (the switch's model, address, port count and off time on Proxy settings, and the camera's PoE port on Camera settings), `CAMPROXY_POE_SWITCH_PASSWORD`, Maintenance's "Turn camera PoE on" with its "PoE may be OFF" warning (use "Turn PoE on" for the port under Proxy settings → PoE switches), the switch line on Status and "Read the switch now" on Camera settings. A config.json or overrides.json that still has the old settings (the Pi has them) starts as before: they are dropped with one log line (`legacy_poe_switch_dropped`) and overrides.json is saved without them next time; a leftover `CAMPROXY_POE_SWITCH_PASSWORD` is ignored with a warning. **Before updating a proxy that used the old switch settings, set that switch's password under Proxy settings → PoE switches**: the old password is no longer used as a fallback. The health summary's `camera.poeSwitch` is always empty now (the e-paper display skips its PoE row), and the camera action `poe-switch-read` is gone (404); a stored cams-admin allow entry `camera.action:poe-switch-read` is dropped on start, never an error (cams-admin's contract dropped it in v2026.11.07.3).
+
+## v2026.11.07.2
+
 - PoE switches: finding a camera's port is now reliable. The switch updates its traffic figures only every few seconds and a little late, so the single look 2.5 s into the ping burst missed the camera about half the time ("no traffic"). The proxy now looks every 0.7 s during the burst (up to 10 times) and stops at the first look that shows the camera's port.
 
 ## v2026.11.07.1

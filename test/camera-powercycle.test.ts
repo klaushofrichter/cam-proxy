@@ -11,6 +11,7 @@ import { mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { writeKeyFile } from '../src/fleet/keyfile';
+import { switchPasswordStore } from '../src/config/switch-passwords';
 import type { Envelope } from '../src/fleet/protocol';
 import { startSim } from './helpers/sim';
 import { ADMIN_TOKEN, auth, CLIENT_TOKEN, startProxy, until } from './helpers/proxy';
@@ -36,13 +37,19 @@ describe('POST /control/actions/camera-powercycle', () => {
     await sim.close();
   });
   const admin = () => auth(ADMIN_TOKEN);
-  const configure = (base: string, over: object = {}) => request(base).put('/control/config').set(admin()).send({ camera: { poeSwitch: { model: 'sscpoe-web', host: sw.host, port: 8, offSeconds: 5, ...over } } });
+  // A switch this proxy operates (by cams-admin's id), its password stored here.
+  const SW = 'sw_test';
+  const operated = async (offSeconds = 60) => {
+    const dir = mkdtempSync(join(tmpdir(), 'camproxy-powercycle-'));
+    switchPasswordStore(join(dir, 'data')).set(SW, PASSWORD, sw.host);
+    const p = await startProxy(sim, { dir });
+    return { p, ctl: p.proxy.switches.get({ id: SW, model: 'sscpoe-web', host: sw.host, ports: 8, offSeconds }) };
+  };
   const post = (base: string) => request(base).post('/control/actions/camera-powercycle').set(admin());
 
-  it('409 power_cycle_needs_cams_admin without cams-admin, also with the old switch settings; nothing reaches the switch', async () => {
-    const p = await startProxy(sim, { env: { CAMPROXY_POE_SWITCH_PASSWORD: PASSWORD } });
+  it('409 power_cycle_needs_cams_admin without cams-admin; nothing reaches the switch', async () => {
+    const p = await startProxy(sim);
     try {
-      await configure(p.base);
       const calls = sw.calls.length;
       const r = await post(p.base);
       expect(r.status).toBe(409);
@@ -61,9 +68,8 @@ describe('POST /control/actions/camera-powercycle', () => {
   });
 
   it('refuses the client and the audit token (403), and a session without the CSRF header', async () => {
-    const p = await startProxy(sim, { env: { CAMPROXY_POE_SWITCH_PASSWORD: PASSWORD, CAMPROXY_AUDIT_TOKEN: AUDIT_TOKEN } });
+    const p = await startProxy(sim, { env: { CAMPROXY_AUDIT_TOKEN: AUDIT_TOKEN } });
     try {
-      await configure(p.base);
       const calls = sw.calls.length;
       expect((await request(p.base).post('/control/actions/camera-powercycle').set(auth(CLIENT_TOKEN))).status).toBe(403);
       expect((await request(p.base).post('/control/actions/camera-powercycle').set(auth(AUDIT_TOKEN))).status).toBe(403);
@@ -81,7 +87,7 @@ describe('POST /control/actions/camera-powercycle', () => {
     fake.welcomeHeartbeatS = 1;
     const dir = mkdtempSync(join(tmpdir(), 'camproxy-powercycle-'));
     writeKeyFile(join(dir, 'data', 'admin', 'key.json'), fake.keyFile());
-    const p = await startProxy(sim, { dir, env: { CAMPROXY_POE_SWITCH_PASSWORD: PASSWORD }, settings: { camsAdmin: { url: fake.url } }, proxy: { camsAdmin: { timing: { minIntervalS: 0.2, jitterS: 0, backoffCapMs: 300, closeGraceMs: 200 } } } });
+    const p = await startProxy(sim, { dir, settings: { camsAdmin: { url: fake.url } }, proxy: { camsAdmin: { timing: { minIntervalS: 0.2, jitterS: 0, backoffCapMs: 300, closeGraceMs: 200 } } } });
     const bodyOf = (r: { msg: Envelope }) => r.msg.body as Record<string, any>;
     const done = async (command: string, args: Record<string, unknown>) => {
       const { cmdId } = fake.sendCommand(command, { v: 1, ...args }, { actor: 'admin@example.org' });
@@ -140,11 +146,10 @@ describe('POST /control/actions/camera-powercycle', () => {
   }, 60_000);
 
   it('a proxy stop during the off time turns the PoE on again before the process ends', async () => {
-    const p = await startProxy(sim, { env: { CAMPROXY_POE_SWITCH_PASSWORD: PASSWORD } });
-    await configure(p.base, { offSeconds: 60 });
+    const { p, ctl } = await operated();
     const before = sw.opcodes.length;
     // A cycle in its off time (switch.cycle from cams-admin runs the same switch code).
-    const pending = p.proxy.switches.legacy.cycle(8, () => undefined, { verifyHost: null }).then(() => 'done', () => 'closed');
+    const pending = ctl.cycle(8, () => undefined, { verifyHost: null }).then(() => 'done', () => 'closed');
     await until(() => sw.poec[0] === 0, 5000);
     const t0 = Date.now();
     await p.proxy.stop({ reason: 'test' });
@@ -155,43 +160,22 @@ describe('POST /control/actions/camera-powercycle', () => {
     await pending;
   }, 20000);
 
-  it('POST camera-poe-on: admin only; turns the port on when it is off (no power check), audited as camera-poe-on', async () => {
-    const p = await startProxy(sim, { env: { CAMPROXY_POE_SWITCH_PASSWORD: PASSWORD, CAMPROXY_AUDIT_TOKEN: AUDIT_TOKEN } });
-    const on = (t = ADMIN_TOKEN) => request(p.base).post('/control/actions/camera-poe-on').set(auth(t));
+  it('the old camera switch actions camera-poe-on and poe-switch-read are gone (404); nothing reaches the switch', async () => {
+    const p = await startProxy(sim);
     try {
-      expect((await on()).body).toEqual({ error: 'not_configured', detail: 'poeSwitch.model is none' });
-      await configure(p.base);
-      expect((await on(CLIENT_TOKEN)).status).toBe(403);
-      expect((await on(AUDIT_TOKEN)).status).toBe(403);
-      const before = sw.opcodes.length;
-      sw.poec[0] = 0; // off, as after a failed power-cycle (cam-sim keeps running: only the switch state matters here)
-      const r = await on();
-      expect(r.status).toBe(200);
-      expect(r.body).toMatchObject({ port: 8, index: 0, wasOn: false, poe: true });
-      expect(sw.opcodes.slice(before)).toEqual([0x202]);
-      expect((await on()).body).toMatchObject({ wasOn: true, poe: true });
-      expect(sw.opcodes.slice(before)).toEqual([0x202]);
-      sw.browserLogin();
-      const busy = await on();
-      sw.browserLogout();
-      expect([busy.status, busy.body.error]).toEqual([409, 'switch_busy']);
-      const recs = p.proxy.audit.list({ actions: ['camera-poe-on'] }).records.reverse();
-      expect(recs.map((x) => x.event.outcome)).toEqual(['success', 'success', 'failure']);
-      expect(recs[0]).toMatchObject({ event: { category: ['host'], type: ['change'] }, user: { name: 'admin' }, cam_proxy: { switch: { model: 'sscpoe-web', host: sw.host, port: 8 }, wasOn: false, requestedBy: 'token' } });
-      expect(recs[1].cam_proxy).toMatchObject({ wasOn: true });
-      expect(p.proxy.audit.list({ actions: ['control-action'] }).records).toHaveLength(0);
-      expect(JSON.stringify(recs)).not.toContain(PASSWORD);
+      const calls = sw.calls.length;
+      expect((await request(p.base).post('/control/actions/camera-poe-on').set(admin())).status).toBe(404);
+      expect((await request(p.base).post('/control/actions/poe-switch-read').set(admin())).status).toBe(404);
+      expect(sw.calls.length).toBe(calls);
     } finally {
-      sw.browserLogout();
       await p.proxy.stop();
     }
   });
 
   it('a proxy stop that cannot turn the PoE on again says so loudly: an audit failure record', async () => {
-    const p = await startProxy(sim, { env: { CAMPROXY_POE_SWITCH_PASSWORD: PASSWORD } });
+    const { p, ctl } = await operated();
     try {
-      await configure(p.base, { offSeconds: 60 });
-      void p.proxy.switches.legacy.cycle(8, () => undefined, { verifyHost: null }).catch(() => {});
+      void ctl.cycle(8, () => undefined, { verifyHost: null }).catch(() => {});
       await until(() => sw.poec[0] === 0, 5000);
       sw.failSet = 1000;
       const t0 = Date.now();
@@ -199,7 +183,7 @@ describe('POST /control/actions/camera-powercycle', () => {
       expect(Date.now() - t0).toBeLessThan(12000);
       const recs = p.proxy.audit.list({ actions: ['camera-powercycle'] }).records;
       const left = recs.find((x) => /left OFF/.test(String(x.message)));
-      expect(left).toMatchObject({ event: { outcome: 'failure' }, cam_proxy: { phase: 'stop', poeLeftOff: true, sessionMaybeOpen: false } });
+      expect(left).toMatchObject({ event: { outcome: 'failure' }, cam_proxy: { phase: 'stop', poeLeftOff: true, sessionMaybeOpen: false, switch: { id: SW, host: sw.host }, portsLeftOff: [8] } });
     } finally {
       sw.failSet = 0;
       sw.poec[0] = 1;
@@ -208,10 +192,9 @@ describe('POST /control/actions/camera-powercycle', () => {
   }, 30000);
 
   it('a proxy stop while the switch stops answering: bounded, and the audit says PoE may be off and the switch session may be open', async () => {
-    const p = await startProxy(sim, { env: { CAMPROXY_POE_SWITCH_PASSWORD: PASSWORD } });
+    const { p, ctl } = await operated();
     try {
-      await configure(p.base, { offSeconds: 60 });
-      void p.proxy.switches.legacy.cycle(8, () => undefined, { verifyHost: null }).catch(() => {});
+      void ctl.cycle(8, () => undefined, { verifyHost: null }).catch(() => {});
       await until(() => sw.poec[0] === 0, 5000);
       sw.hang = true;
       const t0 = Date.now();
@@ -219,7 +202,7 @@ describe('POST /control/actions/camera-powercycle', () => {
       expect(Date.now() - t0).toBeLessThan(10000);
       const rec = p.proxy.audit.list({ actions: ['camera-powercycle'] }).records.find((x) => (x.cam_proxy as { phase?: string } | undefined)?.phase === 'stop');
       expect(rec).toMatchObject({ event: { outcome: 'failure' }, cam_proxy: { poeLeftOff: true, sessionMaybeOpen: true } });
-      expect(rec?.message).toMatch(/web session on the switch may still be open/);
+      expect(rec?.message).toMatch(/web session on PoE switch sw_test .* may still be open/);
     } finally {
       sw.hang = false;
       sw.expireSession();

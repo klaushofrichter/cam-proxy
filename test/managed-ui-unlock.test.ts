@@ -137,7 +137,7 @@ describe('a managed-admin UI session and the ui.* entries', () => {
       { camsAdmin: { url: 'https://evil.example' } }, { camsAdmin: { enabled: false } }, { 'camsAdmin.enabled': false }, { camsAdmin: {} },
       { go2rtc: { binary: '/bin/sh' } }, { tls: { site: 'x' } }, { composition: { font: '/etc/passwd' } }, { ftp: { certFile: '/tmp/c.pem' } }, { server: { trustProxy: 1 } },
       // An address would send the camera's or the switch's password elsewhere; a new camera has one.
-      { cameras: { cam1: { host: '203.0.113.9' } } }, { camera: { host: '203.0.113.9' } }, { ftp: { user: 'x' } }, { poeSwitch: { host: '203.0.113.9' } }, { camera: { poeSwitch: { host: '203.0.113.9' } } },
+      { cameras: { cam1: { host: '203.0.113.9' } } }, { camera: { host: '203.0.113.9' } }, { ftp: { user: 'x' } },
       { cameras: { cam6: { host: '203.0.113.9', protocol: 'http', user: 'proxy' } } }, { cameras: { cam6: {} } },
       { sse: { pingS: 13 }, camsAdmin: { enabled: false } },
     ];
@@ -158,7 +158,7 @@ describe('a managed-admin UI session and the ui.* entries', () => {
     const m = await session(MANAGED_ADMIN);
     // The local admin's own overrides on protected settings, and a camera it added.
     await request(p.base).put('/control/config').set(auth(ADMIN_TOKEN)).send({ ntp: { server: 'ntp.example' }, cameras: { cam6: { host: '127.0.0.1:1', protocol: 'http', user: 'proxy6' } } }).expect(200);
-    for (const path of ['camsAdmin.url', 'cameras.cam1.host', 'cameras.cam1.user', 'ftp.publicHost', 'poeSwitch.host', 'tls.site', 'server.trustProxy', 'ntp.server', 'camsAdmin%2Eurl', 'cameras.cam6', 'cameras', '%E0%A4%A']) {
+    for (const path of ['camsAdmin.url', 'cameras.cam1.host', 'cameras.cam1.user', 'ftp.publicHost', 'tls.site', 'server.trustProxy', 'ntp.server', 'camsAdmin%2Eurl', 'cameras.cam6', 'cameras', '%E0%A4%A']) {
       const r = await request(p.base).delete(`/control/config/${path}`).set(ui(m));
       expect([r.status, r.body.error], path).toEqual([403, 'local_admin_only']);
     }

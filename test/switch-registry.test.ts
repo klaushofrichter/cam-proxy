@@ -23,8 +23,7 @@ const mock = async () => {
 };
 const refOf = (m: PoeSwitchMock, id = 'sw_a') => ({ id, model: 'sscpoe-web' as const, host: m.host, ports: 8, offSeconds: 10 });
 const tmp = () => mkdtempSync(join(tmpdir(), 'swreg-'));
-const reg = (dataDir: string, legacy: { host?: string; password?: string } = {}) =>
-  new SwitchRegistry({ dataDir, legacy: () => ({ model: legacy.host ? 'sscpoe-web' : 'none', host: legacy.host, ports: 8, offSeconds: 10 }), legacyPassword: () => legacy.password, sleep: async () => undefined, timeoutMs: 1000 });
+const reg = (dataDir: string) => new SwitchRegistry({ dataDir, sleep: async () => undefined, timeoutMs: 1000 });
 
 describe('SwitchRegistry', () => {
   it('persists refs (no secrets) and restores them in a new instance', async () => {
@@ -87,20 +86,16 @@ describe('SwitchRegistry', () => {
     await a.stop();
   });
 
-  it('legacy fallback (the env password) only when the hosts match and no password is stored', async () => {
+  it('only a stored password: a switch without one has none (the old CAMPROXY_POE_SWITCH_PASSWORD fallback is gone)', async () => {
     const d = tmp();
     const m = await mock();
-    const other = await mock();
-    const a = reg(d, { host: m.host, password: PASSWORD });
-    const same = a.get(refOf(m, 'sw_same'));
-    const diff = a.get(refOf(other, 'sw_diff'));
-    expect(a.passwordSet('sw_same')).toBe(true);
-    expect(a.passwordSet('sw_diff')).toBe(false);
-    await expect(same.read(3)).resolves.toMatchObject({ port: 3 });
-    await expect(diff.read(3)).rejects.toMatchObject({ code: 'password_unset' });
-    // A stored password wins over the env one.
-    switchPasswordStore(d).set('sw_same', 'wrong-pw', m.host);
-    await expect(same.read(3, { fresh: true })).rejects.toMatchObject({ code: 'switch_auth' });
+    const a = reg(d);
+    const c = a.get(refOf(m));
+    expect(a.passwordSet('sw_a')).toBe(false);
+    await expect(c.read(3)).rejects.toMatchObject({ code: 'password_unset', message: 'no password is stored for switch sw_a' });
+    expect(m.calls).toEqual([]);
+    switchPasswordStore(d).set('sw_a', PASSWORD, m.host);
+    await expect(c.read(3, { fresh: true })).resolves.toMatchObject({ port: 3 });
     await a.stop();
   });
 
@@ -143,17 +138,6 @@ describe('SwitchRegistry', () => {
     await a.stop();
   });
 
-  it('the legacy env fallback keeps its host rule when the stored password is for another address', async () => {
-    const d = tmp();
-    const m = await mock();
-    const a = reg(d, { host: m.host, password: PASSWORD });
-    a.get(refOf(m));
-    switchPasswordStore(d).set('sw_a', 'old-pw', '192.0.2.99');
-    expect(a.passwordSet('sw_a')).toBe(true);
-    await expect(a.get(refOf(m)).read(3)).resolves.toMatchObject({ port: 3 });
-    await a.stop();
-  });
-
   it('after stop(), get() refuses: switch_error "the proxy is stopping", nothing is kept', async () => {
     const d = tmp();
     const m = await mock();
@@ -163,15 +147,6 @@ describe('SwitchRegistry', () => {
     expect(() => a.get(refOf(m))).toThrow('the proxy is stopping');
     await stopping;
     expect(a.known()).toEqual([]);
-  });
-
-  it('no legacy fallback when the host config says model none', async () => {
-    const d = tmp();
-    const m = await mock();
-    const a = new SwitchRegistry({ dataDir: d, legacy: () => ({ model: 'none', host: m.host, ports: 8, offSeconds: 10 }), legacyPassword: () => PASSWORD });
-    a.get(refOf(m));
-    expect(a.passwordSet('sw_a')).toBe(false);
-    await a.stop();
   });
 });
 
@@ -187,17 +162,6 @@ const oneSessionAtATime = (m: PoeSwitchMock) => {
 };
 
 describe('one session queue per switch host', () => {
-  it('the legacy controller and a registry ref on its host never overlap', async () => {
-    const d = tmp();
-    const m = await mock();
-    const a = reg(d, { host: m.host.toUpperCase(), password: PASSWORD });
-    const c = a.get(refOf(m));
-    const r = await Promise.all([a.legacy.read(3, { fresh: true }), c.read(4, { fresh: true })]);
-    expect(r.map((x) => x.port)).toEqual([3, 4]);
-    oneSessionAtATime(m);
-    await a.stop();
-  });
-
   it('two ids on one host never overlap', async () => {
     const d = tmp();
     const m = await mock();
@@ -214,7 +178,7 @@ describe('one session queue per switch host', () => {
     const d = tmp();
     const m = await mock();
     const seen: unknown[] = [];
-    const a = new SwitchRegistry({ dataDir: d, legacy: () => ({ model: 'none', ports: 8, offSeconds: 10 }), legacyPassword: () => undefined, onForgotten: (r) => seen.push(r) });
+    const a = new SwitchRegistry({ dataDir: d, onForgotten: (r) => seen.push(r) });
     a.get(refOf(m));
     a.forget('sw_a');
     await new Promise((r) => setTimeout(r, 20));

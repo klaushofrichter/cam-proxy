@@ -11,7 +11,6 @@ import { CameraNameRefused } from '../camera/name';
 import { cameraNameProblem } from '../camera/name-rules';
 import type { RebootAnswer, RebootRequester, RebootState, TooSoon } from '../camera/reboot';
 import type { PowerRequestAnswer, PowerRequester, PowerView } from '../fleet/power-commands';
-import { PoeSwitchError, type PoeOnResult, type PoeSwitchStatus, type PortReading } from '../camera/poe-switch';
 import type { Config } from '../config/defaults';
 import { configChanges } from '../config/changes';
 import { configView, type ChangeMarks } from '../config/view';
@@ -99,7 +98,7 @@ export interface ControlDeps {
   catalog: Catalog;
   log: StreamLog;
   // `name`: the camera's name (configured camera.name until first read, nameSource 'config').
-  camera: () => CameraState & { name: string; nameSource: 'camera' | 'config'; webUiUrl: string | null; reboot: RebootState | null; poeSwitch: PoeSwitchStatus | null };
+  camera: () => CameraState & { name: string; nameSource: 'camera' | 'config'; webUiUrl: string | null; reboot: RebootState | null };
   // The camera's name (camera-name design): `write` validates, writes, reads back.
   // Camera functions take the camera they act on (spec 2026-10-05-multi-camera-host-design §6.3).
   cameraName: { current: (cam: string) => string; write: (cam: string, name: string) => Promise<string> };
@@ -109,8 +108,6 @@ export interface ControlDeps {
   restart: () => Promise<void>; // every camera side, with the pending restart settings
   restartCamera: (cam: string) => Promise<void>; // one camera's side (its client, poller, events, stills)
   cameraReboot: (who: RebootRequester, cam: string) => Promise<RebootAnswer>;
-  // The camera's PoE switch from the old settings (#85): why it can't be used (or null), a read, PoE on.
-  poeSwitch: { notConfigured: (cam: string) => string | null; read: (cam: string) => Promise<PortReading>; poeOn: (cam: string) => Promise<PoeOnResult>; info: (cam: string) => { model: string; host: string; port: number } };
   // Power-cycles through cams-admin (spec 2026-11-07-poe-switches-design): the
   // request (an event to cams-admin), and the camera's power as cams-admin sent it.
   cameraPower: { request: (who: PowerRequester, cam: string) => PowerRequestAnswer; view: (cam: string) => PowerView & { canRequest: boolean; why: string | null } };
@@ -274,7 +271,7 @@ export function sessionRoutes(d: { adminToken: () => string; sessions: ReturnTyp
 // The camera actions (spec 2026-10-05-multi-camera-host-design §6.3): their
 // control-action record names the camera; on a proxy with several cameras
 // they need a camera (the routes of phase 2). The host actions work as before.
-export const CAMERA_ACTIONS = new Set(['camera-test', 'onvif-resubscribe', 'camera-ftp-setup', 'camera-ftp-test', 'camera-ftp-off', 'restart', 'camera-reboot', 'camera-powercycle', 'camera-poe-on', 'poe-switch-read', 'inventory', 'inventory-repair', 'inventory-cancel', 'camera-cert-push', 'camera-ntp-set', 'camera-trust-clear', 'camera-trust-pin', 'camera-time-set']);
+export const CAMERA_ACTIONS = new Set(['camera-test', 'onvif-resubscribe', 'camera-ftp-setup', 'camera-ftp-test', 'camera-ftp-off', 'restart', 'camera-reboot', 'camera-powercycle', 'inventory', 'inventory-repair', 'inventory-cancel', 'camera-cert-push', 'camera-ntp-set', 'camera-trust-clear', 'camera-trust-pin', 'camera-time-set']);
 
 // What a camera action answers on a proxy with several cameras (spec §6.3; the camera routes are phase 2).
 const cameraRequired = (path: string) => `several cameras: name the camera, ${path} (or ?cam=<id>); GET /control/cameras lists them`;
@@ -553,7 +550,7 @@ export function controlApi(d: ControlDeps): express.Router {
     // records, camera-reboot and proxy-restart; an inventory writes `inventory`
     // when it ends, a repair `inventory-repair`) or a retention preview
     // (dryRun changes nothing). The power-cycle has its own records too
-    // (camera-powercycle); a read of the switch is a control-action.
+    // (camera-powercycle).
     if (!OWN_AUDIT.has(name) && !(name === 'retention-run' && req.body?.dryRun === true)) {
       res.on('close', () => {
         const done = res.writableFinished;

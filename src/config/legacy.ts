@@ -7,7 +7,6 @@ import { checkPartial, checkValue, LEGACY_CAMERA, LEGACY_FTP_USER, SettingError 
 // form on the next save.
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
-const SWITCH_HOST_KEYS = ['model', 'host', 'ports', 'offSeconds'];
 
 const settingError = <T>(f: () => T): T => {
   try {
@@ -38,17 +37,34 @@ function aliasMaxCameras(o: Obj): void {
   else delete o.moves;
 }
 
-// A legacy camera object → [id, the camera node, the host switch keys].
-function fromLegacyCamera(cam: Obj, ftpUser: unknown): [string, Obj, Obj] {
-  const { poeSwitch, ...rest } = cam;
-  const sw = isObj(poeSwitch) ? poeSwitch : {};
-  const host: Obj = {};
-  for (const k of SWITCH_HOST_KEYS) if (sw[k] !== undefined) host[k] = sw[k];
-  const id = typeof rest.id === 'string' ? rest.id : 'cam1';
+// The retired PoE switch settings (the host's poeSwitch.* and each camera's
+// poeSwitch.port; switches come from cams-admin now, cams-admin spec
+// 2026-11-07-poe-switches-design "Migration"): a file that still has them
+// (config.json, overrides.json) is read without them. Never a refusal to
+// start (the Pi has them); the caller logs what was dropped, once. Not for a
+// PUT body or a command: there they are unknown settings.
+export function dropRetiredPoeSwitch(raw: unknown): { value: unknown; dropped: string[] } {
+  if (!isObj(raw)) return { value: raw, dropped: [] };
+  const dropped: string[] = [];
+  const leaves = (v: unknown, prefix: string): string[] => (isObj(v) && Object.keys(v).length ? Object.entries(v).flatMap(([k, x]) => leaves(x, `${prefix}.${k}`)) : [prefix]);
+  const take = (o: Obj, prefix: string): Obj => {
+    if (!Object.hasOwn(o, 'poeSwitch')) return o;
+    const { poeSwitch, ...rest } = o;
+    dropped.push(...leaves(poeSwitch, `${prefix}poeSwitch`));
+    return rest;
+  };
+  let out = take(raw, '');
+  if (isObj(out.camera)) out = { ...out, camera: take(out.camera, 'camera.') };
+  if (Array.isArray(out.cameras)) out = { ...out, cameras: out.cameras.map((c, i) => (isObj(c) ? take(c, `cameras[${typeof c.id === 'string' ? c.id : i}].`) : c)) };
+  else if (isObj(out.cameras)) out = { ...out, cameras: Object.fromEntries(Object.entries(out.cameras).map(([id, c]) => [id, isObj(c) ? take(c, `cameras.${id}.`) : c])) };
+  return { value: out, dropped: dropped.sort() };
+}
+
+// A legacy camera object → [id, the camera node].
+function fromLegacyCamera(cam: Obj, ftpUser: unknown): [string, Obj] {
+  const id = typeof cam.id === 'string' ? cam.id : 'cam1';
   // Today's defaults for the one camera (Ruling P1-11): the Pi keeps them.
-  const node: Obj = { ...rest, id, name: rest.name ?? 'Den', ftp: { user: ftpUser ?? 'camera' } };
-  if (sw.port !== undefined) node.poeSwitch = { port: sw.port };
-  return [id, node, host];
+  return [id, { ...cam, id, name: cam.name ?? 'Den', ftp: { user: ftpUser ?? 'camera' } }];
 }
 
 export function normalizeFile(file: unknown): { settings: Obj; order: string[]; legacy: boolean } {
@@ -64,9 +80,8 @@ export function normalizeFile(file: unknown): { settings: Obj; order: string[]; 
     // Legacy: `camera`, or nothing at all (one default camera, Ruling P1-10).
     if (camera !== undefined) settingError(() => checkPartial(camera, LEGACY_CAMERA, 'camera'));
     if (ftpUser !== undefined) settingError(() => checkValue('ftp.user', LEGACY_FTP_USER, ftpUser));
-    const [id, node, host] = fromLegacyCamera(isObj(camera) ? camera : {}, ftpUser);
+    const [id, node] = fromLegacyCamera(isObj(camera) ? camera : {}, ftpUser);
     settings.cameras = { [id]: node };
-    if (Object.keys(host).length) settings.poeSwitch = { ...(isObj(settings.poeSwitch) ? settings.poeSwitch : {}), ...host };
     return { settings, order: [id], legacy: true };
   }
   if (ftpUser !== undefined) throw new ConfigError('ftp.user: set cameras[].ftp.user instead');
@@ -85,10 +100,9 @@ export function normalizeFile(file: unknown): { settings: Obj; order: string[]; 
   return { settings, order, legacy: false };
 }
 
-// One legacy path → the new one (Ruling P1-8): camera.poeSwitch.{model,host,
-// ports,offSeconds} → poeSwitch.*, camera.X → cameras.<id>.X, ftp.user →
-// cameras.<id>.ftp.user; moves.maxCameras → profile.cameras. Other paths
-// stay. Several cameras: an error.
+// One legacy path → the new one (Ruling P1-8): camera.X → cameras.<id>.X,
+// ftp.user → cameras.<id>.ftp.user; moves.maxCameras → profile.cameras.
+// Other paths stay. Several cameras: an error.
 export function translatePath(path: string, ids: string[]): string {
   if (path === 'moves.maxCameras') return 'profile.cameras';
   const legacy = path === 'ftp.user' || path.startsWith('camera.');
@@ -99,8 +113,6 @@ export function translatePath(path: string, ids: string[]): string {
   }
   const id = ids[0];
   if (path === 'ftp.user') return `cameras.${id}.ftp.user`;
-  const m = /^camera\.poeSwitch\.(model|host|ports|offSeconds)$/.exec(path);
-  if (m) return `poeSwitch.${m[1]}`;
   return `cameras.${id}.${path.slice('camera.'.length)}`;
 }
 

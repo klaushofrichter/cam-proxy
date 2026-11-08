@@ -79,30 +79,10 @@ export function cameraStateText(c: { online: boolean; reboot?: CameraReboot | nu
   return c.online ? 'online' : 'offline';
 }
 
-// The camera's PoE switch (#85), as /control/status reports it.
-export interface PortReading { at: number; port: number; index: number; poe: boolean; watts: number; link: boolean | null; sn: string | null; firmware: string | null }
-export interface PoeSwitchStatus { model: string; host: string | null; port: number | null; ports: number; offSeconds: number; passwordSet: boolean; configured: boolean; busy: boolean; poeMaybeOff?: boolean; last: PortReading | null }
-
-const offWarning = (port: number | null) => `The camera's PoE may be OFF: use 'Turn camera PoE on', or the switch's web UI (port ${port ?? '?'}).`;
-
-// The Maintenance page's warning while the camera's PoE may be off (a
-// power-cycle that could not turn it on again, or a reading that says off).
-export function poeAlert(s: PoeSwitchStatus | null): string | null {
-  return s?.poeMaybeOff ? offWarning(s.port) : null;
-}
-
-// A failed power-cycle's line, from the 409/502 body.
-export function powerCycleFailText(body: { error: string; detail?: string; poeOff?: boolean; turnedOn?: boolean }, port: number | null): string {
+// A refused power-cycle request's line, from the 409/429 body.
+export function powerCycleFailText(body: { error: string; detail?: string }): string {
   if (body.error === 'local_admin_only') return `Camera power-cycle: ${REFUSED_TEXT}`;
-  const detail = body.detail ?? body.error;
-  if (body.poeOff && body.turnedOn) return `Camera power-cycle failed after the PoE-off request: PoE may have been cut, and it is on again (${detail})`;
-  if (body.poeOff) return `Camera power-cycle failed: the camera's PoE may be OFF: use 'Turn camera PoE on', or the switch's web UI (port ${port ?? '?'}). (${detail})`;
-  return `Camera power-cycle: ${detail}`;
-}
-
-// "Turn camera PoE on"'s answer.
-export function poeOnText(r: { port: number; wasOn: boolean; watts: number }): string {
-  return r.wasOn ? `Camera PoE: port ${r.port} was on already (${r.watts} W)` : `Camera PoE: turned on on port ${r.port}; the camera boots in about a minute`;
+  return `Camera power-cycle: ${body.detail ?? body.error}`;
 }
 
 // The camera's power as cams-admin sent it (GET /control/cameras/:cam/power;
@@ -148,21 +128,3 @@ export function powerResultText(r: PowerCycleOutcome): string {
   return `Camera power-cycle refused by cams-admin${r.reason ? `: ${r.reason}` : ''}`;
 }
 
-// Why the switch can't be used (as the proxy says it), or null.
-function notConfigured(s: PoeSwitchStatus): string | null {
-  if (!s.host) return 'poeSwitch.host is not set';
-  if (!s.port) return "the camera's poeSwitch.port is not set";
-  if (s.port > s.ports) return "the camera's poeSwitch.port is above poeSwitch.ports";
-  if (!s.passwordSet) return 'CAMPROXY_POE_SWITCH_PASSWORD is not set';
-  return null;
-}
-
-// One line for the Status and Settings pages: the switch, the port and the
-// last reading (read when asked, never polled).
-export function poeLine(s: PoeSwitchStatus): string {
-  if (s.model === 'none') return 'none';
-  const where = `${s.host ?? '—'} port ${s.port ?? '—'}`;
-  if (!s.configured) return `${where} · not configured: ${notConfigured(s) ?? 'unknown'}`;
-  if (!s.last) return `${where} · not read yet`;
-  return `${where} · PoE ${s.last.poe ? 'on' : 'off'}, ${s.last.watts} W (read ${localHhmm(s.last.at)})`;
-}

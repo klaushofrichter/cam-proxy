@@ -1,7 +1,7 @@
 import { writable } from 'svelte/store';
 import { api, refreshRights } from './api';
 import type { UiProviderState } from './analytics';
-import type { CameraReboot, PoeSwitchStatus } from './maintenance';
+import type { CameraReboot } from './maintenance';
 import type { RecordingsStatus } from './recordings';
 import type { CameraFtp, ClipsStall } from './ftp';
 import type { UiHealth } from './health';

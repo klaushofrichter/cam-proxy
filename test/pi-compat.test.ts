@@ -1,7 +1,7 @@
 // The Pi's one-camera setup keeps working through the multi-camera change
 // (spec 2026-10-05-multi-camera-host-design §4.2, §11): its config.json (a
-// legacy `camera` object with a PoE switch), overrides.json written by the
-// Settings page with legacy paths, CAMERA_HOST / PI_ADDRESS, and a catalog
+// legacy `camera` object with a PoE switch, whose settings are retired and
+// dropped on load), overrides.json written by the Settings page with legacy paths, CAMERA_HOST / PI_ADDRESS, and a catalog
 // as release 8 left it (events, Vision usage).
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs';
@@ -85,7 +85,8 @@ describe('the Pi: one legacy camera, legacy overrides, a version 8 catalog', () 
   it('runs its camera with the file, the overrides and the environment', async () => {
     const c = cameraConfig(proxy.running, 'cam1')!;
     expect(c).toMatchObject({ id: 'cam1', host: sim.camera.host, statusPollS: 7 });
-    expect(c.poeSwitch).toEqual({ model: 'sscpoe-web', host: '127.0.0.1:9', port: 8, ports: 8, offSeconds: 12 });
+    // The old poeSwitch settings (config.json and overrides.json) are dropped on load, never a refusal.
+    expect((c as unknown as Record<string, unknown>).poeSwitch).toBeUndefined();
     expect(c.ftp).toEqual({ user: 'picam', enabled: true, stream: 'sub' });
     expect(proxy.running.ftp.publicHost).toBe('127.0.0.1');
     await until(() => proxy.status.state().online);
@@ -126,7 +127,7 @@ describe('the Pi: one legacy camera, legacy overrides, a version 8 catalog', () 
     const reloaded = loadConfig({ CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: sim.password, CAMPROXY_FTP_PASSWORD: 'x'.repeat(24), CAMERA_HOST: sim.camera.host }, { cwd: dir });
     const c = cameraConfig(reloaded.config, 'cam1')!;
     expect(c.statusPollS).toBe(7);
-    expect(c.poeSwitch.offSeconds).toBe(12);
+    expect(JSON.stringify(saved)).not.toContain('poeSwitch');
     expect(c.ftp.user).toBe('picam');
     expect(reloaded.config.retention.eventsDays).toBe(40);
     expect(saved.retention.eventsDays).toBe(40);
@@ -201,12 +202,13 @@ describe('the Pi: the Vision budget', () => {
   });
 });
 
-// P2 (spec §8.4): one PoE controller per host; the Pi's camera is its port 8.
-describe('the Pi: the switch controller', () => {
-  it("the camera's view is port 8 of the host's GPS-208 settings", () => {
-    const h = proxy.cameras.first().poeSwitch;
-    expect(h.status()).toMatchObject({ model: 'sscpoe-web', host: '127.0.0.1:9', port: 8, ports: 8, offSeconds: 12, passwordSet: false, configured: false, poeMaybeOff: false });
-    expect(h.notConfigured()).toBe('CAMPROXY_POE_SWITCH_PASSWORD is not set');
+// The PoE switches are cams-admin's (spec cams-admin 2026-11-07-poe-switches-design):
+// the Pi's old switch settings make no switch; the health says none.
+describe('the Pi: no switch from the old settings', () => {
+  it('operates no switch; the health and the status name none', async () => {
+    expect(proxy.switches.known()).toEqual([]);
+    expect((await request(base).get('/api/local/health')).body.camera.poeSwitch).toBeNull();
+    expect((await request(base).get('/control/status').set(auth(ADMIN_TOKEN))).body.camera).not.toHaveProperty('poeSwitch');
   });
 });
 

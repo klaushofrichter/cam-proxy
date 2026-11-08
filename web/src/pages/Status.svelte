@@ -2,7 +2,7 @@
   import { status, stats } from '../lib/state';
   import { pausedText, usageLine, usageRows } from '../lib/analytics';
   import { agoText, daysUntilFullText, mbText } from '../lib/format';
-  import { cameraStateText, poeLine } from '../lib/maintenance';
+  import { cameraStateText } from '../lib/maintenance';
   import { cacheFillText, downloadPathText, recordingsClass, recordingsLastText } from '../lib/recordings';
   import { cameraFtpText, clipTime, ftpAlerts } from '../lib/ftp';
   import { api, ApiError } from '../lib/api';
@@ -109,7 +109,6 @@
           <dt>Firmware</dt><dd>{cs.camera.firmware ?? '—'}</dd>
           <dt>Clock offset</dt><dd>{cs.camera.clockOffsetMs === undefined ? '—' : `${(cs.camera.clockOffsetMs / 1000).toFixed(1)} s`}</dd>
           {#if camHealth && camHealth.camera.sd !== undefined}<dt>SD card</dt><dd class={sdClass(camHealth)} data-testid="camera-sd" title={camHealth.items.find((i) => i.id === 'sd')?.text}>{sdText(camHealth.camera.sd)}</dd>{/if}
-          {#if cs.camera.poeSwitch && cs.camera.poeSwitch.model !== 'none'}<dt>PoE switch</dt><dd data-testid="camera-poe">{poeLine(cs.camera.poeSwitch)}</dd>{/if}
           {#if cs.camera.error}<dt>Last error</dt><dd class="bad">{cs.camera.error}</dd>{/if}
         </dl>
       </div>

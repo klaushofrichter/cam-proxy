@@ -75,11 +75,16 @@ describe('host files (spec §14.2)', () => {
   });
 
   it('one passive range everywhere: firewall, proxy config', () => {
-    const r = renderHost(h());
+    // An older host.json's camera poeSwitchPort is ignored.
+    const json = JSON.parse(readFileSync(join(__dirname, '..', 'deploy', 'host', 'host.example.json'), 'utf8'));
+    json.leases = json.leases.map((l: { camera?: object }) => (l.camera ? { ...l, camera: { ...l.camera, poeSwitchPort: 1 } } : l));
+    const r = renderHost(parseHost(json));
     const cfg = JSON.parse(r['srv/cam-proxy/data/config.json'].text);
     expect(cfg.ftp).toMatchObject({ enabled: true, port: 2121, passive: '50000-50039', publicHost: '192.168.60.1' });
-    expect(cfg.poeSwitch).toMatchObject({ model: 'sscpoe-web', host: '192.168.60.2' });
-    expect(cfg.cameras.map((c: { id: string; host: string; poeSwitch: { port: number } }) => [c.id, c.host, c.poeSwitch.port])).toEqual([['cam3', '192.168.60.13', 1], ['cam4', '192.168.60.14', 2], ['cam5', '192.168.60.15', 3], ['cam6', '192.168.60.16', 4]]);
+    // No PoE switch settings (the switches are cams-admin's), whatever host.json says.
+    expect(cfg).not.toHaveProperty('poeSwitch');
+    expect(cfg.cameras.map((c: { id: string; host: string }) => [c.id, c.host])).toEqual([['cam3', '192.168.60.13'], ['cam4', '192.168.60.14'], ['cam5', '192.168.60.15'], ['cam6', '192.168.60.16']]);
+    expect(JSON.stringify(cfg.cameras)).not.toContain('poeSwitch');
     expect(cfg).toMatchObject({ composition: { concurrent: 2 }, recordings: { cacheMB: 8192 }, host: { stats: 'on' } });
     expect(r['srv/cam-proxy/compose.yaml'].text).toContain('network_mode: host');
   });
