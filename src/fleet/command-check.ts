@@ -87,14 +87,14 @@ export interface CheckContext {
 
 const isDisruptive = (a: string | undefined) => (DISRUPTIVE_ACTIONS as readonly string[]).includes(a ?? '');
 // The journal budget (contract step 11, R3-9): proxy.restart at most 2 an
-// hour, disruptive camera actions and switch.cycle (one pool) at most 6 an hour per proxy, whatever their
+// hour, disruptive camera actions, switch.cycle and camera.remove (one pool) at most 6 an hour per proxy, whatever their
 // status. On the proxy's own clock (the journal's `at`).
 export function journalBudgetOf(count: Journal['countSince'], now: number) {
   return (command: string, _action?: string): { ok: true } | { ok: false; retryAfterS: number } => {
     const hour = now - 3_600_000;
     const r = command === 'proxy.restart'
       ? { ...count((e) => e.command === 'proxy.restart', hour), cap: 2 }
-      : { ...count((e) => e.command === 'switch.cycle' || (e.command === 'camera.action' && BUDGETED_ACTIONS.has(e.action ?? '')), hour), cap: 6 };
+      : { ...count((e) => e.command === 'switch.cycle' || e.command === 'camera.remove' || (e.command === 'camera.action' && BUDGETED_ACTIONS.has(e.action ?? '')), hour), cap: 6 };
     return r.n < r.cap ? { ok: true } : { ok: false, retryAfterS: Math.max(1, Math.ceil((r.oldest! + 3_600_000 - now) / 1000)) };
   };
 }
@@ -141,7 +141,7 @@ export function checkCommand(m: Envelope, c: CheckContext): Decision {
   if (action !== undefined && ((NEVER_REMOTE_ACTIONS as readonly string[]).includes(action) || !c.policy.allow.includes(`camera.action:${action}`))) return nack('not_allowed');
   // Moves: the entry of the side the args name (move.finish, move.cancel: args.role), after the args check like tokens.apply.admin.
   if (isMoveCommand(command) && !c.policy.allow.includes(entryFor(command, v.args))) return nack('not_allowed');
-  if (command === 'proxy.restart' || command === 'switch.cycle' || isDisruptive(action)) {
+  if (command === 'proxy.restart' || command === 'switch.cycle' || command === 'camera.remove' || isDisruptive(action)) {
     const budget = c.journalBudget?.(command, action) ?? { ok: true };
     if (!budget.ok) return nack('rate_limited', budget.retryAfterS);
   }

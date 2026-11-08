@@ -1,0 +1,38 @@
+{
+  "$note": "what the proxy holds for a camera before its removal (read only)",
+  "schema": "command",
+  "$context": {
+    "now": 1791273600010,
+    "proxyId": "prx_0123456789ABCDEFGHJK",
+    "connId": "con_0123456789ABCDEFGHJK",
+    "serverKeys": [
+      "MCowBQYDK2VwAyEAgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q="
+    ],
+    "allow": [
+      "camera.remove.preview"
+    ],
+    "paused": false,
+    "seen": [],
+    "feature": "decommission"
+  },
+  "message": {
+    "v": 1,
+    "type": "command",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "exp": 1791273660003,
+      "actor": "admin@example.org",
+      "command": "camera.remove.preview",
+      "args": {
+        "v": 1,
+        "camera": "cam2"
+      }
+    },
+    "sig": "YJSOYBn0QTNXF8cNXbjXySH4/KUKjqARykwAq/DBRgkIFmK6up7tNmVsB3dAXkTCHBHOiXNygpUZTws8Ul2zCA=="
+  }
+}

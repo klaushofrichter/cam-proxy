@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/commands/camera.remove.preview.result.schema.json",
+  "title": "camera.remove.preview result v1",
+  "type": "object",
+  "properties": {
+    "camera": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+    },
+    "clips": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100000000
+    },
+    "stills": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100000000
+    },
+    "archivedClips": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100000000
+    },
+    "bytes": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "camera",
+    "clips",
+    "stills",
+    "archivedClips",
+    "bytes"
+  ]
+}
