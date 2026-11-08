@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.11.08.3
+
 - Add camera on a proxy with a site CA no longer needs the camera's certificate fingerprint when the camera already serves this proxy's own site-CA certificate for its name (`<id>.<site>.internal`), for example when a camera is added again after a remove. Since every Add camera gives the camera a fresh certificate, a fingerprint noted earlier was always out of date, and the add was refused with `fingerprint_mismatch`. Now the proxy checks the certificate itself (issued by its own current site CA, valid now, for exactly that name) and trusts the camera by the site CA; the audit log says so ("trust site-ca: served certificate issued by this proxy's site CA for …"). Ask for it with `"trust": {"siteCa": true}` (refused with `site_ca_untrusted` and the reason otherwise), or leave `trust` out: then it is used when the certificate qualifies, and otherwise the add is refused as before (the fingerprint is required). A fingerprint, when given, is still used exactly as before, and a camera with a factory, foreign or other camera's certificate still needs it. The Add camera card on a proxy with a site CA lets you add without "Check camera" first and says when the camera needs the check after all.
 
 ## v2026.11.08.2
