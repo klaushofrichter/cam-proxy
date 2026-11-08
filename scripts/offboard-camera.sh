@@ -104,8 +104,9 @@ else
   [ -z "$left" ] || fail "proxy: left over (remove by hand): $left"
 fi
 
-# 3. Checked: the proxy no longer knows the camera, or (a single-camera
-# proxy, whose config.json is never changed) keeps it idle without an address.
+# 3. Checked: the proxy no longer knows the camera (a one-camera proxy is an
+# empty host now), or (its config.json could not be rewritten) keeps it idle
+# without an address.
 call "$TMP/proxy" GET "$URL/api/cameras/$ID"
 if [ "$STATUS" = 404 ]; then
   ok "proxy: $ID gone"

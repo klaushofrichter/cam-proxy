@@ -26,7 +26,7 @@ import { passwordSource, type Credentials } from './credentials';
 import { checkLogin } from './login-check';
 import { PASSWORD_RULE, validPassword } from './password-rule';
 import { canonicalHost, FINGERPRINT, probeCamera, probeInput, probeServed, withPort, DEFAULT_PORTS, type ProbeInput } from './probe';
-import { applyOverrides, ConfigError, planOverrides, removeOverride, withCameraHost } from '../config/load';
+import { applyEmptyHost, applyOverrides, ConfigError, planEmptyHost, planOverrides, removeOverride, withCameraHost, withEnvReread } from '../config/load';
 import { removeEnvKey } from '../config/env-file';
 import { CAMERA_HOST_NAMES, validCameraHost } from '../config/env';
 import { cameraPassword } from '../config/secrets';
@@ -105,6 +105,10 @@ export type Refusal = { status: number; error: string; detail?: string; retryAft
 
 const whoRecord = (who: Who) => ({ user: who.user, ...(who.ip ? { ip: who.ip } : {}), ...(who.userAgent ? { userAgent: who.userAgent } : {}) });
 const cmdOf = (who: Who) => ({ ...(who.cmdId ? { cmdId: who.cmdId } : {}), ...(who.actor ? { actor: who.actor } : {}) });
+
+const SHARED_PASSWORD = 'CAMPROXY_CAMERA_PASSWORD';
+// Whether a camera configured here logs in with the shared password (it has none of its own).
+const needsSharedPassword = (l: Loaded): boolean => cameraIds(l.config).some((id) => !l.config.cameras[id]?.moved && l.secrets.cameraPasswords[id] === undefined);
 
 // Whether the env file this proxy manages (read at start) sets `key`.
 function envFileSets(l: Loaded, key: string): boolean {
@@ -303,6 +307,10 @@ export class OnboardingService {
     // One add or remove at a time (security review 3): the checks and the writes see each other.
     const r = await this.serial(() => (this.d.loaded().legacyCamera ? this.addLegacy(b, i, who) : this.addCamera(b.id as string, b.name as string | undefined, i, who, b.ftp === true)));
     return 'onboarding' in r && i.protocol === 'http' ? { ...r, plaintext: true as const } : r;
+  }
+
+  private envFileSetsShared(l: Loaded): boolean {
+    return envFileSets(l, SHARED_PASSWORD);
   }
 
   private lock: Promise<unknown> = Promise.resolve();
@@ -625,8 +633,11 @@ export class OnboardingService {
     const configured = l.addedCameras.includes(id) || (legacy && !!l.envLayer.cameraHost);
     const known = configured || legacy || this.d.passwords.get(id) !== undefined || envFileSets(l, own) || this.d.trust.known(id) || this.d.positions.count(id) > 0 || removeLeftoverItems(l, id).length > 0;
     if (!known) return { status: 404, error: 'not_found' };
+    const moved = l.config.cameras[id]?.moved;
+    if (moved && (this.d.moveOpen?.(moved) ?? true)) return { status: 409, error: 'move_open', detail: `camera move ${moved} is not over here; cancel or finish it from cams-admin` };
     const removed: string[] = [];
     const leftovers: string[] = [];
+    let convertError: string | undefined;
     // The camera's FTP upload, while it still runs here.
     if (this.d.cameras.get(id)) {
       try {
@@ -638,32 +649,62 @@ export class OnboardingService {
         leftovers.push('camera FTP upload not checked or not turned off (the camera did not answer)');
       }
     }
-    // The configuration: an added camera's node; on the Pi, CAMERA_HOST.
+    // The configuration: an added camera's node. The legacy one-camera
+    // proxy's camera (the Pi): config.json turned into an empty host
+    // (decommission spec C1), CAMERA_HOST and the legacy password line gone;
+    // config.json that can't be written keeps the camera, idle, as a leftover.
     let next = l;
     const before = l;
+    let converted = false;
     if (l.addedCameras.includes(id)) {
       next = removeOverride(next, `cameras.${id}`);
       removed.push('configuration');
-    } else if (legacy && l.envLayer.cameraHost) {
-      const key = l.envLayer.cameraHost.name;
-      let gone = false;
+    } else if (legacy) {
       try {
-        const path = checkEnvPath(this.d.envFile());
-        gone = removeEnvKey(path, key) !== null;
-      } catch {
-        gone = false;
+        const plan = planEmptyHost(next, id);
+        const { backup } = applyEmptyHost(plan, next.files.overrides, new Date(this.now()));
+        next = plan.next;
+        converted = true;
+        removed.push(`config.json camera (now cameras: []; backup ${backup})`);
+        if (l.config.cameras[id]?.moved) removed.push('moved marker');
+      } catch (err) {
+        if (!(err instanceof ConfigError)) throw err;
+        convertError = err.message;
       }
-      if (gone) {
-        next = withCameraHost(next, undefined);
-        removed.push(key);
-      } else leftovers.push(`env ${key}`);
+      if (l.envLayer.cameraHost) {
+        const key = l.envLayer.cameraHost.name;
+        let gone = false;
+        try {
+          gone = removeEnvKey(checkEnvPath(this.d.envFile()), key) !== null;
+        } catch {
+          gone = false;
+        }
+        if (gone) {
+          // An empty host reads the environment again: a CAMERA_HOST the
+          // container's environment still has stays a leftover (finding 2).
+          next = converted ? withEnvReread(next) : withCameraHost(next, undefined);
+          removed.push(key);
+        }
+      }
+      // The legacy password line, once no camera here needs it.
+      if (converted && this.envFileSetsShared(next) && !needsSharedPassword(next)) {
+        let gone = false;
+        try {
+          gone = removeEnvKey(checkEnvPath(this.d.envFile()), SHARED_PASSWORD) !== null;
+        } catch {
+          gone = false;
+        }
+        // Not taken out of the process environment: no camera uses it, and a
+        // container that still has it (env_file) is named as a leftover.
+        if (gone) removed.push(`env ${SHARED_PASSWORD} line`);
+      }
     }
     if (next !== l) {
       this.d.setLoaded(next);
       this.auditConfig(who, before, next);
-      if (legacy && this.d.cameras.get(id)) await this.d.restartCamera(id);
+      if (legacy && !converted && this.d.cameras.get(id)) await this.d.restartCamera(id);
       // An added camera's worker is gone before the answer: an add of the same id right after starts a new one (with the new password).
-      else if (!legacy) await this.waitForWorkerGone(id);
+      else if (!legacy || converted) await this.waitForWorkerGone(id);
     }
     // The password: the store, the managed env line.
     if (this.d.passwords.get(id) !== undefined) {
@@ -686,9 +727,10 @@ export class OnboardingService {
     this.servedCache.delete(id);
     const n = this.d.positions.remove(id);
     if (n > 0) removed.push(`PTZ positions (${n})`);
-    // What only a person can remove: kept and shown until it is gone.
-    const left = removeLeftoverItems(this.d.loaded(), id);
-    leftovers.push(...left);
+    // What stays, as seen now (finding 2: never [] while something stays);
+    // what only a person can remove is kept and shown until it is gone.
+    const left = removeLeftoverItems(this.d.loaded(), id, { legacy });
+    leftovers.push(...left.map((i) => (i === 'config.json camera' && convertError ? `${i} (${convertError})` : i)));
     if (left.length) this.d.removeLeftovers.add({ camera: id, at: this.now(), items: left });
     this.d.audit.write({ action: 'camera-remove', category: ['configuration'], type: ['deletion'], outcome: 'success', ...whoRecord(who), camera: id, message: `Camera ${id} removed: ${removed.join(', ') || 'nothing to remove'}${leftovers.length ? `; left: ${leftovers.join(', ')}` : ''}`, details: { removed, leftovers, requestedBy: who.requestedBy, ...cmdOf(who) } });
     return { status: 200, removed, leftovers };

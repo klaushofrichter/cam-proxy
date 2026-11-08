@@ -67,7 +67,10 @@ function fromLegacyCamera(cam: Obj, ftpUser: unknown): [string, Obj] {
   return [id, { ...cam, id, name: cam.name ?? 'Den', ftp: { user: ftpUser ?? 'camera' } }];
 }
 
-export function normalizeFile(file: unknown): { settings: Obj; order: string[]; legacy: boolean } {
+// `implicit`: neither `camera` nor `cameras` (the legacy default camera,
+// Ruling P1-10); the caller decides whether it applies (loadConfig: only with
+// CAMERA_HOST or a password for it, else an empty host).
+export function normalizeFile(file: unknown): { settings: Obj; order: string[]; legacy: boolean; implicit?: true } {
   if (!isObj(file)) return { settings: file as Obj, order: [], legacy: false };
   const { camera, cameras, ...rest } = file;
   if (camera !== undefined && cameras !== undefined) throw new ConfigError('camera: use either camera (one camera) or cameras, not both');
@@ -82,11 +85,11 @@ export function normalizeFile(file: unknown): { settings: Obj; order: string[]; 
     if (ftpUser !== undefined) settingError(() => checkValue('ftp.user', LEGACY_FTP_USER, ftpUser));
     const [id, node] = fromLegacyCamera(isObj(camera) ? camera : {}, ftpUser);
     settings.cameras = { [id]: node };
-    return { settings, order: [id], legacy: true };
+    return { settings, order: [id], legacy: true, ...(camera === undefined && ftpUser === undefined ? { implicit: true as const } : {}) };
   }
   if (ftpUser !== undefined) throw new ConfigError('ftp.user: set cameras[].ftp.user instead');
   if (!Array.isArray(cameras)) throw new ConfigError('cameras: must be a list of cameras');
-  if (!cameras.length) throw new ConfigError('cameras: at least one camera');
+  // An empty list is a host with no camera yet (decommission spec C1): cameras are added in overrides.json.
   const map: Obj = {};
   const order: string[] = [];
   cameras.forEach((c, i) => {
@@ -108,6 +111,8 @@ export function translatePath(path: string, ids: string[]): string {
   const legacy = path === 'ftp.user' || path.startsWith('camera.');
   if (!legacy) return path;
   if (ids.length !== 1) {
+    const rest0 = path === 'ftp.user' ? 'ftp.user' : path.slice('camera.'.length);
+    if (!ids.length) throw new ConfigError(`${path}: a legacy camera override, but this proxy has no camera in config.json; use cameras.<id>.${rest0}`);
     const rest = path === 'ftp.user' ? 'ftp.user' : path.slice('camera.'.length);
     throw new ConfigError(`${path}: a legacy camera override can't be assigned with several cameras; use cameras.<id>.${rest}`);
   }

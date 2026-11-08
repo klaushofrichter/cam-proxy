@@ -8,18 +8,34 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { getPath, type Loaded } from '../config/load';
+import { cameraIds } from '../config/cameras';
 import { cameraPasswordEnv } from '../config/password-env';
 import { writePrivateJson } from '../fleet/private-file';
 import { LEFTOVERS_MAX } from '../moves/leftovers';
 
 export interface RemoveLeftover { camera: string; at: number; items: string[] }
 
-export function removeLeftoverItems(l: Loaded, cam: string): string[] {
+// `legacy`: the camera was the legacy one-camera proxy's (the Pi's); then also
+// what that setup keeps besides the camera: its `camera` node in config.json
+// (not turned into an empty host), and on an empty host the shared
+// CAMPROXY_CAMERA_PASSWORD and CAMERA_HOST still in the process environment
+// (compose's environment, or env_file until the container is recreated).
+export function removeLeftoverItems(l: Loaded, cam: string, o: { legacy?: boolean } = {}): string[] {
   const name = cameraPasswordEnv(cam);
   const items: string[] = [];
   if ((l.env[name] ?? '').trim() !== '') items.push(`env ${name}`);
   if (l.env[`${name}_FILE`] !== undefined) items.push(`env ${name}_FILE`);
-  if (l.legacyCamera && l.order[0] === cam && typeof getPath(l.fileSettings, `cameras.${cam}.host`) === 'string' && getPath(l.fileSettings, `cameras.${cam}.host`) !== '') items.push('config.json camera.host');
+  if (l.legacyCamera && l.order[0] === cam) {
+    if (o.legacy) items.push('config.json camera');
+    else if (typeof getPath(l.fileSettings, `cameras.${cam}.host`) === 'string' && getPath(l.fileSettings, `cameras.${cam}.host`) !== '') items.push('config.json camera.host');
+  }
+  if (o.legacy && !l.legacyCamera) {
+    const shared = 'CAMPROXY_CAMERA_PASSWORD';
+    const needed = cameraIds(l.config).some((id) => !l.config.cameras[id]?.moved && l.secrets.cameraPasswords[id] === undefined);
+    if (!needed && (l.env[shared] ?? '').trim() !== '') items.push(`env ${shared}`);
+    if (!needed && l.env[`${shared}_FILE`] !== undefined) items.push(`env ${shared}_FILE`);
+    if (l.envLayer.cameraHost && l.order.length === 0) items.push(`env ${l.envLayer.cameraHost.name}`);
+  }
   return items;
 }
 
@@ -56,7 +72,7 @@ export class RemoveLeftovers {
   current(l: Loaded): RemoveLeftover[] {
     return this.read()
       .filter((e) => !configuredAgain(l, e.camera))
-      .map((e) => ({ ...e, items: removeLeftoverItems(l, e.camera).filter((i) => e.items.includes(i)) }))
+      .map((e) => ({ ...e, items: removeLeftoverItems(l, e.camera, { legacy: true }).filter((i) => e.items.some((x) => x === i || x.startsWith(`${i} (`))) }))
       .filter((e) => e.items.length > 0);
   }
 }
