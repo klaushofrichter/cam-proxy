@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.11.08.2
+
 - Add camera with FTP on (several-camera proxy) now points the camera's FTP upload at the proxy, the same as the camera's "Set up FTP" action; before, the camera was added but its upload stayed elsewhere ("user differ") until someone ran that action. With a site CA that covers the camera's name, Add camera also gives the camera its site-CA certificate (the same as "Push now"), instead of leaving it pinned. Each runs once; if one fails, the camera is still added and the answer, its onboarding steps, the Add camera card and the `camera-add` audit record say what failed and which action fixes it.
 - `admin-enroll` (the CLI on the host) now also allows `tokens.apply` and `tokens.apply.admin` and prints that it did, so cams-admin can send the proxy's tokens right after enrolling; before, after a decommission had reset the allowed commands, every viewer reported `token_not_allowed_on_proxy` until the entries were added by hand. Already allowed: nothing changes. `--no-tokens` skips it. They are still not on by default, and the Status card's Enroll doesn't change them.
 
