@@ -27,7 +27,7 @@ export interface CliIo {
   proxyUrl?: string; // default http://127.0.0.1:<server.port>
 }
 
-const USAGE = 'usage: cam-proxy admin-enroll --url <cams-admin URL>   (the code is read from stdin)\n       cam-proxy admin-unenroll\n       cam-proxy admin-commands [status | allow <entry…> | deny <entry…> | pause [reason] | resume | changes | undo <cmdId>]\n       cam-proxy admin-tokens [list | block <id> | unblock <id>]\n';
+const USAGE = 'usage: cam-proxy admin-enroll --url <cams-admin URL> [--no-tokens]   (the code is read from stdin; allows tokens.apply and tokens.apply.admin unless --no-tokens)\n       cam-proxy admin-unenroll\n       cam-proxy admin-commands [status | allow <entry…> | deny <entry…> | pause [reason] | resume | changes | undo <cmdId>]\n       cam-proxy admin-tokens [list | block <id> | unblock <id>]\n';
 
 async function readCode(io: CliIo): Promise<string> {
   if (io.stdin.isTTY) {
@@ -73,9 +73,11 @@ export async function runAdminCli(argv: string[], io: CliIo): Promise<number> {
     return 2;
   }
   let url: string | undefined;
+  let tokens = true;
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (a === '--url') url = rest[++i];
+    else if (a === '--no-tokens' && cmd === 'admin-enroll') tokens = false;
     else if (a.startsWith('--url=')) url = a.slice(6);
     else {
       io.err(`cam-proxy ${cmd}: unexpected argument; the enrollment code is read from stdin, never given as an argument\n${USAGE}`);
@@ -137,7 +139,7 @@ export async function runAdminCli(argv: string[], io: CliIo): Promise<number> {
       return r.status === 400 && (b.error === 'bad_url' || b.error === 'not_a_code') ? 2 : 1;
     }
     printView(io, b);
-    return 0;
+    return tokens ? allowTokens(io, { live: true, base, headers }, loaded) : 0;
   }
   const keyPath = join(loaded.config.server.dataDir, loaded.config.camsAdmin.keyFile);
   const audit = new AuditLog({ dir: join(loaded.config.server.dataDir, 'audit'), version: 'cli' });
@@ -148,13 +150,63 @@ export async function runAdminCli(argv: string[], io: CliIo): Promise<number> {
     audit.write({ action: 'admin-enroll', category: ['configuration'], type: ['creation'], outcome: 'success', user: 'admin', userAgent: 'cam-proxy-cli', message: `Enrolled with cams-admin ${key.url} as ${key.proxyId} (account ${key.account}; CLI, proxy not running)`, details: { url: key.url, proxyId: key.proxyId, account: key.account, fingerprint: fp } });
     printView(io, { url: key.url, proxyId: key.proxyId, account: key.account, fingerprint: fp });
     io.out('the proxy connects when it starts\n');
-    return 0;
+    return tokens ? allowTokens(io, { live: false }, loaded) : 0;
   } catch (err) {
     const e = err instanceof EnrollError ? err : null;
     audit.write({ action: 'admin-enroll', category: ['configuration'], type: ['creation'], outcome: 'failure', user: 'admin', userAgent: 'cam-proxy-cli', message: `Enrollment with cams-admin ${url} failed: ${e?.code ?? 'error'}`, error: e?.code ?? 'error', details: { url, reason: e?.code ?? 'error' } });
     io.err(`cam-proxy admin-enroll: ${e ? e.message : (err as Error).message}\n`);
     return e && (e.code === 'not_a_code' || e.code === 'bad_url') ? 2 : 1;
   }
+}
+
+// Finding 16 (account-move test, 2026-11-08): a proxy.unenroll resets the
+// allow list to the defaults, which lack the token commands, so after a new
+// enrollment cams-admin could not send the token set. The local admin who
+// enrolls on the host allows them here (never by default: the allow list is
+// the local admin's); --no-tokens skips it, already allowed is a no-op.
+const TOKEN_ENTRIES = ['tokens.apply', 'tokens.apply.admin'];
+async function allowTokens(io: CliIo, via: { live: true; base: string; headers: Record<string, string> } | { live: false }, loaded: Loaded): Promise<number> {
+  const said = () => io.out(`allowed cams-admin commands: ${TOKEN_ENTRIES.join(', ')} (cams-admin sends this proxy's managed tokens; enroll with --no-tokens to skip, admin-commands deny to undo)\n`);
+  const already = () => io.out(`${TOKEN_ENTRIES.join(' and ')} are allowed already\n`);
+  const failed = (why: string) => (io.err(`cam-proxy admin-enroll: enrolled, but ${TOKEN_ENTRIES.join(' and ')} were not allowed: ${why}; run cam-proxy admin-commands allow ${TOKEN_ENTRIES.join(' ')}\n`), 1);
+  if (via.live) {
+    const call = async (method: string, body?: unknown) => {
+      const r = await fetch(`${via.base}/control/admin/commands`, { method, headers: via.headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(15_000), redirect: 'error' });
+      const text = await readCapped(r, 1024 * 1024);
+      let b: Record<string, unknown> = {};
+      try {
+        b = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+      } catch {
+        /* not JSON */
+      }
+      return { ok: r.ok, status: r.status, b };
+    };
+    try {
+      const cur = await call('GET');
+      if (!cur.ok || !Array.isArray(cur.b.allow)) return failed(String(cur.b.message ?? cur.b.detail ?? cur.b.error ?? `the proxy answered ${cur.status}`));
+      const now = cur.b.allow as string[];
+      if (TOKEN_ENTRIES.every((e) => now.includes(e))) return (already(), 0);
+      const r = await call('PUT', { allow: [...new Set([...now, ...TOKEN_ENTRIES])] });
+      if (!r.ok) return failed(String(r.b.message ?? r.b.detail ?? r.b.error ?? `the proxy answered ${r.status}`));
+    } catch (err) {
+      return failed((err as Error).message);
+    }
+    said();
+    return 0;
+  }
+  const dataDir = loaded.config.server.dataDir;
+  const policy = new CommandPolicy({ base: () => loaded.commandPolicyBase, file: join(dataDir, 'admin', 'policy.json'), env: () => loaded.envLayer, log: { warn() {} } });
+  try {
+    const before = policy.effective();
+    if (TOKEN_ENTRIES.every((e) => before.allow.includes(e))) return (already(), 0);
+    policy.setAllow([...new Set([...before.allow, ...TOKEN_ENTRIES])], 'local');
+    const after = policy.effective();
+    new AuditLog({ dir: join(dataDir, 'audit'), version: 'cli' }).write({ action: 'admin-policy', category: ['configuration'], type: ['change'], outcome: 'success', user: 'admin', userAgent: 'cam-proxy-cli', message: `Allowed cams-admin commands: ${after.allow.join(', ') || 'none'} (admin-enroll; CLI, proxy not running)`, details: { from: { allow: before.allow, paused: before.paused, pauseReason: before.pauseReason }, to: { allow: after.allow, paused: after.paused, pauseReason: after.pauseReason }, requestedBy: 'cli' } });
+  } catch (err) {
+    return failed((err as Error).message);
+  }
+  said();
+  return 0;
 }
 
 // `admin-commands` and `admin-tokens` (migration P2): local admin rights (the

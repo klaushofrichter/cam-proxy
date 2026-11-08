@@ -91,6 +91,78 @@ describe('admin-enroll', () => {
   });
 });
 
+// Finding 16: after a proxy.unenroll the allow list is back to the defaults,
+// without the token commands; admin-enroll (the local admin on the host)
+// allows them as part of enrolling, unless --no-tokens.
+describe('admin-enroll allows the token commands', () => {
+  const policyOf = (dir: string) => JSON.parse(readFileSync(join(dir, 'data', 'admin', 'policy.json'), 'utf8')) as { allow: string[] };
+  const auditOf = (dir: string) => readdirSync(join(dir, 'data', 'audit')).map((f) => readFileSync(join(dir, 'data', 'audit', f), 'utf8')).join('');
+
+  it('proxy not running: tokens.apply and tokens.apply.admin allowed, said so, audited', async () => {
+    const dir = workDir();
+    fake.codes.add(CODE);
+    const r = await run(['admin-enroll', '--url', fake.url], { cwd: dir, input: CODE });
+    expect(r.code, r.err).toBe(0);
+    expect(policyOf(dir).allow).toEqual(expect.arrayContaining(['tokens.apply', 'tokens.apply.admin']));
+    expect(r.out).toMatch(/allowed cams-admin commands: tokens\.apply, tokens\.apply\.admin/);
+    expect(r.out).toMatch(/--no-tokens/);
+    expect(auditOf(dir).match(/"action":"admin-policy"/g)).toHaveLength(1);
+    expect((await run(['admin-commands', 'status'], { cwd: dir })).out).toMatch(/allowed: tokens\.apply, tokens\.apply\.admin, /);
+  });
+
+  it('--no-tokens: the allow list stays as it was', async () => {
+    const dir = workDir();
+    fake.codes.add(CODE);
+    const r = await run(['admin-enroll', '--no-tokens', '--url', fake.url], { cwd: dir, input: CODE });
+    expect(r.code, r.err).toBe(0);
+    expect(existsSync(join(dir, 'data', 'admin', 'policy.json'))).toBe(false);
+    expect(r.out).not.toMatch(/tokens\.apply/);
+    expect(existsSync(join(dir, 'data', 'admin', 'key.json'))).toBe(true);
+  });
+
+  it('already allowed: nothing written, said so', async () => {
+    const dir = workDir();
+    expect((await run(['admin-commands', 'allow', 'tokens.apply', 'tokens.apply.admin', 'config.get'], { cwd: dir })).code).toBe(0);
+    const before = readFileSync(join(dir, 'data', 'admin', 'policy.json'), 'utf8');
+    fake.codes.add(CODE);
+    const r = await run(['admin-enroll', '--url', fake.url], { cwd: dir, input: CODE });
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toMatch(/tokens\.apply and tokens\.apply\.admin are allowed already/);
+    expect(readFileSync(join(dir, 'data', 'admin', 'policy.json'), 'utf8')).toBe(before);
+    expect(auditOf(dir).match(/"action":"admin-policy"/g)).toHaveLength(1); // the admin-commands allow only
+  });
+
+  it('a refused enrollment allows nothing', async () => {
+    const dir = workDir();
+    const r = await run(['admin-enroll', '--url', fake.url], { cwd: dir, input: CODE });
+    expect(r.code).toBe(1);
+    expect(existsSync(join(dir, 'data', 'admin', 'policy.json'))).toBe(false);
+  });
+
+  it('proxy running: allowed through its route (audited there), the token never printed', async () => {
+    const sim = await startSim();
+    const p = await startProxy(sim, { proxy: { camsAdmin: { timing: { minIntervalS: 0.2, jitterS: 0 } } } });
+    try {
+      fake.codes.add(CODE);
+      mkdirSync(join(p.dir, 'data'), { recursive: true });
+      const r = await run(['admin-enroll', '--url', fake.url], { cwd: p.dir, input: CODE, proxyUrl: p.base });
+      expect(r.code, r.err).toBe(0);
+      expect(r.out).toMatch(/allowed cams-admin commands: tokens\.apply, tokens\.apply\.admin/);
+      expect(r.out + r.err).not.toContain(ADMIN_TOKEN);
+      expect((await run(['admin-commands', 'status'], { cwd: p.dir, proxyUrl: p.base })).out).toMatch(/allowed: tokens\.apply, tokens\.apply\.admin, /);
+      expect(p.proxy.audit.list({ actions: ['admin-policy'], limit: 5 }).records).toHaveLength(1);
+      // Again: a no-op.
+      fake.codes.add(CODE);
+      const again = await run(['admin-enroll', '--url', fake.url], { cwd: p.dir, input: CODE, proxyUrl: p.base });
+      expect(again.out).toMatch(/allowed already/);
+      expect(p.proxy.audit.list({ actions: ['admin-policy'], limit: 5 }).records).toHaveLength(1);
+    } finally {
+      await p.proxy.stop();
+      await sim.close();
+    }
+  }, 30_000);
+});
+
 describe('admin-enroll: something else on the proxy port', () => {
   const serve = (handler: (res: import('http').ServerResponse) => void) =>
     new Promise<{ url: string; hits: string[]; close: () => void }>((resolve) => {

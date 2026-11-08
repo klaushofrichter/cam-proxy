@@ -324,7 +324,12 @@ the new form:
   given, so it is for the proxy's own admin only (never a cams-admin command
   or sign-in) and limited to 6 a minute together with Find camera; it sends
   nothing but a login, and that only with a password), `POST /control/cameras` (add it with its password and that
-  certificate; local admin only; refused at `profile.cameras`),
+  certificate; local admin only; refused at `profile.cameras`; on a
+  several-camera proxy `"ftp": true` also points the camera's FTP upload here,
+  and a site CA that covers the camera's TLS name gets it its site-CA
+  certificate, the same code as `camera-ftp-setup` and `camera-cert-push`;
+  a failure of either is reported in the answer's `setup` and `steps` and the
+  `camera-add` record, never a failed add),
   `PUT /control/cameras/<id>/password` (write-only, checked with the camera),
   `POST /control/cameras/<id>/actions/camera-trust-pin` (trust its certificate
   without a site CA), `POST /control/cameras/<id>/actions/camera-time-set`
@@ -1561,6 +1566,11 @@ unless `camsAdmin.url` is set**: no connection, no timer, no `data/admin/`.
 docker compose exec cam-proxy node dist/src/cli.js admin-enroll --url https://cams-admin.skylar.technology
 docker compose exec cam-proxy node dist/src/cli.js admin-unenroll
 ```
+
+`admin-enroll` also allows `tokens.apply` and `tokens.apply.admin` (it says
+so; already allowed: nothing changes), so cams-admin can send the proxy's
+managed tokens right away, also after a decommission reset the allowed
+commands; `--no-tokens` leaves the allowed commands as they are.
 
 or the **cams-admin** card on the Status page (Enroll, Reconnect, Unenroll;
 `GET /control/admin`, `POST /control/admin/enroll|reconnect|unenroll`, admin

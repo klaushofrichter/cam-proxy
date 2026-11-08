@@ -6,7 +6,8 @@ import { runAdminCli } from './fleet/cli';
 import { checkClientTokens } from './fleet/token-store';
 
 // Starts cam-proxy from config.json and the environment (spec §14).
-// `admin-enroll --url U` / `admin-unenroll`: cams-admin enrollment; `admin-commands`,
+// `admin-enroll --url U [--no-tokens]` (also allows tokens.apply and tokens.apply.admin) /
+// `admin-unenroll`: cams-admin enrollment; `admin-commands`,
 // `admin-tokens`: the command policy and managed tokens (src/fleet/cli.ts).
 async function main(): Promise<void> {
   const cmd = process.argv[2];
