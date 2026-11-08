@@ -332,6 +332,19 @@ export const validateCameraPowerCycleResult = (a: unknown) => v1<CameraPowerCycl
   return o.reason === undefined || (typeof o.reason === 'string' && o.reason.length <= 200) ? null : 'reason';
 });
 
+// ---- Remove a camera, decommission (contract commands/camera.remove*.args, proxy.unenroll.args, strict) ----
+export interface CameraRemovePreviewArgs { v: 1; camera: string }
+export interface CameraRemoveArgs { v: 1; camera: string; content: 'keep' | 'delete'; archive: boolean }
+export const validateCameraRemovePreview = (a: unknown) => v1<CameraRemovePreviewArgs>(a, ['camera'], (o) => camOf(o));
+export const validateCameraRemove = (a: unknown) => v1<CameraRemoveArgs>(a, ['camera', 'content', 'archive'], (o) => {
+  if (camOf(o)) return 'camera';
+  if (o.content !== 'keep' && o.content !== 'delete') return 'content';
+  if (typeof o.archive !== 'boolean') return 'archive';
+  // archive: true only with delete (the strict schema's if/then).
+  return o.archive && o.content !== 'delete' ? 'archive' : null;
+});
+export const validateProxyUnenroll = validateConfigGet;
+
 export const ARGS_VALIDATORS: Record<string, (a: unknown) => ArgsVerdict<unknown>> = {
   'tokens.apply': validateTokensApply,
   'config.get': validateConfigGet,
@@ -366,4 +379,7 @@ export const ARGS_VALIDATORS: Record<string, (a: unknown) => ArgsVerdict<unknown
   'camera.power.cycling': validateCameraPowerCycling,
   'camera.power.cycled': validateCameraPowerCycled,
   'camera.power.cycle.result': validateCameraPowerCycleResult,
+  'camera.remove.preview': validateCameraRemovePreview,
+  'camera.remove': validateCameraRemove,
+  'proxy.unenroll': validateProxyUnenroll,
 };

@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/v1/commands/camera.remove.result.schema.json",
+  "title": "camera.remove result v1",
+  "type": "object",
+  "properties": {
+    "camera": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+    },
+    "removed": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 80,
+        "minLength": 1
+      },
+      "maxItems": 16
+    },
+    "leftovers": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 80,
+        "minLength": 1
+      },
+      "maxItems": 16
+    },
+    "deleted": {
+      "type": "object",
+      "properties": {
+        "clips": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000000
+        },
+        "stills": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000000
+        },
+        "archivedClips": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000000
+        }
+      },
+      "required": [
+        "clips",
+        "stills",
+        "archivedClips"
+      ]
+    }
+  },
+  "required": [
+    "camera",
+    "removed",
+    "leftovers",
+    "deleted"
+  ]
+}

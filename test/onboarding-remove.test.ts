@@ -106,7 +106,7 @@ describe('removing a camera', () => {
 
 describe('removing the Pi camera', () => {
   let proxy: Proxy;
-  it('on the Pi: CAMERA_HOST removed, the camera idle, config.json untouched', async () => {
+  it('on the Pi: CAMERA_HOST removed, config.json turned into an empty host (onboarding-empty-host.test.ts has the rest)', async () => {
     const sim = await startSim();
     stops.push(() => sim.close());
     const dir = mkdtempSync(join(tmpdir(), 'onb-rm-pi-'));
@@ -121,11 +121,12 @@ describe('removing the Pi camera', () => {
     await until(async () => (await request(base).get('/api/cameras/cam1').set(auth())).body.online === true, 20_000);
     const r = await request(base).delete('/control/cameras/cam1').set(admin());
     expect([r.status, r.body.removed]).toEqual([200, expect.arrayContaining(['CAMERA_HOST'])]);
+    // The shared password is in compose's environment, not in the file: a leftover.
+    expect(r.body.leftovers).toEqual(['env CAMPROXY_CAMERA_PASSWORD']);
     expect(readEnvValue(readFileSync(envPath, 'utf8'), 'CAMERA_HOST')).toBeUndefined();
     expect(readEnvValue(readFileSync(envPath, 'utf8'), 'PI_ADDRESS')).toBe('127.0.0.1');
-    expect(readFileSync(join(dir, 'config.json'), 'utf8')).toBe(cfg);
-    await until(async () => (await request(base).get('/api/cameras/cam1').set(auth())).body.online === false, 20_000);
-    expect((await request(base).get('/api/cameras/cam1').set(auth())).body.address).toBe('');
+    expect(JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'))).toEqual({ ...JSON.parse(cfg), camera: undefined, cameras: [] });
+    await until(async () => (await request(base).get('/api/cameras/cam1').set(auth())).status === 404, 20_000);
   }, 60_000);
 
   it('removeLeftoverItems: the own variable, its _FILE, a config.json camera.host on the Pi', () => {
@@ -133,5 +134,7 @@ describe('removing the Pi camera', () => {
     writeFileSync(join(dir, 'config.json'), JSON.stringify({ camera: { id: 'cam1', host: '192.0.2.10' }, server: { logLevel: 'silent' } }));
     const l = loadConfig({ CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: 'x' }, { cwd: dir });
     expect(removeLeftoverItems({ ...l, env: { CAMPROXY_CAMERA_PASSWORD_CAM1: 'x', CAMPROXY_CAMERA_PASSWORD_CAM1_FILE: '/run/secrets/x' } }, 'cam1')).toEqual(['env CAMPROXY_CAMERA_PASSWORD_CAM1', 'env CAMPROXY_CAMERA_PASSWORD_CAM1_FILE', 'config.json camera.host']);
+    // The legacy camera's remove: its whole config.json node while it stays.
+    expect(removeLeftoverItems(l, 'cam1', { legacy: true })).toEqual(['config.json camera']);
   });
 });

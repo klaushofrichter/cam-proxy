@@ -73,8 +73,12 @@ export interface PurgeExcept {
   keep: KeepList | null;
   // The chunk ids the source listed for the move (its manifest).
   listed: Set<string>;
-  // For the "Kept here" note of a kept Archive item.
-  note: { moveId: string; to: { proxyId: string; name: string }; at: number };
+  // For the "Kept here" note of a kept Archive item (a move's purge).
+  note?: { moveId: string; to: { proxyId: string; name: string }; at: number };
+  // Not a move (camera.remove, decommission spec A2): every Archive item
+  // stays ('keep') or goes ('delete'), without a note; keep/listed/copied
+  // then concern the other kinds only.
+  archive?: 'keep' | 'delete';
   // Archive paths the receiver found still missing (reason `missing`).
   missing?: Iterable<string>;
   // The Archive chunks the receiver copied, as listed then: an Archive item
@@ -111,14 +115,15 @@ export function purgeExcept(d: PurgeDeps, cam: string, o: PurgeExcept): { delete
       const id = `${kind}:${chunkDay(it.ts)}`;
       const entry = o.keep?.[id];
       let stays: boolean;
-      if (kind === 'archive') {
+      if (kind === 'archive' && o.archive) stays = o.archive === 'keep';
+      else if (kind === 'archive') {
         const c = now.get(id);
         const was = o.copied?.[id];
         const copied = !!c && !!was && was.files === c.files && was.bytes === c.bytes && was.rows === c.rows;
         const named = entry === 'all' || (Array.isArray(entry) && it.files.some((f) => keepFiles.has(f)));
         stays = o.keep === null || !o.listed.has(id) || !copied || named;
         const rowId = Number((it.rows[0]?.row as { id?: unknown } | undefined)?.id);
-        if (stays && Number.isSafeInteger(rowId)) notes.push({ id: rowId, reason: it.files.some((f) => missing.has(f)) ? 'missing' : copied && named ? 'failed' : 'not_copied' });
+        if (stays && o.note && Number.isSafeInteger(rowId)) notes.push({ id: rowId, reason: it.files.some((f) => missing.has(f)) ? 'missing' : copied && named ? 'failed' : 'not_copied' });
       } else stays = entry === 'all' || (Array.isArray(entry) && it.files.some((f) => keepFiles.has(f)));
       if (!stays) continue;
       for (const f of it.files) keepFiles.add(f);
@@ -141,7 +146,8 @@ export function purgeExcept(d: PurgeDeps, cam: string, o: PurgeExcept): { delete
     for (const n of notes) {
       const row = archiveById(d.catalog, n.id);
       if (!row || row.cam !== cam) continue;
-      db.prepare('UPDATE archive SET metadata = ? WHERE id = ? AND cam = ?').run(withMoveNote(row.metadata, { moveId: o.note.moveId, to: { ...o.note.to }, at: o.note.at, kept: true, reason: n.reason }), n.id, cam);
+      const note = o.note!;
+      db.prepare('UPDATE archive SET metadata = ? WHERE id = ? AND cam = ?').run(withMoveNote(row.metadata, { moveId: note.moveId, to: { ...note.to }, at: note.at, kept: true, reason: n.reason }), n.id, cam);
     }
     db.exec('COMMIT');
   } catch (err) {

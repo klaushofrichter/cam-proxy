@@ -37,9 +37,9 @@ describe('the heartbeat body on the strict contract', () => {
     expect(r.ok, r.why).toBe(true);
   });
 
-  it('a 37-entry allow list is reported whole (the contract caps it at 64)', () => {
+  it('a 40-entry allow list is reported whole (the contract caps it at 64)', () => {
     const allow = [...ALLOW_ENTRIES];
-    expect(allow).toHaveLength(37);
+    expect(allow).toHaveLength(40);
     const hb = buildHeartbeat(buildHealth(input()), { ...PI_INFO, commands: { enabled: true, paused: false, pauseReason: null, allow: [...allow], seenWindow: 1000 } });
     expect((hb.body.proxy as { commands: { allow: string[] } }).commands.allow).toEqual(allow);
     expect(ALLOW_MAX).toBe(64);

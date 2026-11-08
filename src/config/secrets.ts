@@ -66,8 +66,9 @@ export function loadSecrets(env: NodeJS.ProcessEnv, ftpEnabled: boolean, cameraI
   }
   const cameraPassword = read(env, 'CAMPROXY_CAMERA_PASSWORD') ?? '';
   const without = cameraIds.find((id) => !cameraPasswords[id] && !o.passwordFromMove?.includes(id) && !o.moved?.includes(id));
-  if (!cameraPassword && (without !== undefined || !cameraIds.length)) {
-    throw new SettingError(without !== undefined ? `CAMPROXY_CAMERA_PASSWORD: required (${without} has no ${cameraPasswordEnv(without)})` : 'CAMPROXY_CAMERA_PASSWORD: required');
+  // No camera (an empty host, decommission spec C1): no password needed.
+  if (!cameraPassword && without !== undefined) {
+    throw new SettingError(`CAMPROXY_CAMERA_PASSWORD: required (${without} has no ${cameraPasswordEnv(without)})`);
   }
   const ftpPassword = read(env, 'CAMPROXY_FTP_PASSWORD');
   if (ftpEnabled && !ftpPassword) throw new SettingError('CAMPROXY_FTP_PASSWORD: required when ftp.enabled');
