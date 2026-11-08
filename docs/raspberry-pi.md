@@ -245,6 +245,31 @@ move 409 `move_open`. Without a writable `.env` (`CAMPROXY_ENV_FILE`) it is
 A wrong password is 422 `camera_refused` (at most 5 tries per camera in 10
 minutes). `config.json` is never changed.
 
+## Remove the camera: an empty host
+
+`DELETE /control/cameras/<id>` (Camera settings → Remove, local admin) on
+the Pi's one camera turns the Pi into an empty several-camera host
+(decommission spec C1): `config.json` gets `"cameras": []` instead of the
+`camera` object (and loses the legacy `ftp.user`; a backup
+`config.json.bak-YYYYMMDD-HHMMSS` is kept next to it), the camera's node in
+`overrides.json` goes (its `moved` marker of a finished move too),
+`CAMERA_HOST` and `CAMPROXY_CAMERA_PASSWORD` are removed from `config/.env`
+(the password line only when no camera here needs it). Cameras are added
+afterwards like on any several-camera host: `POST /control/cameras` with an
+`id` (any id; `ftp: true` turns its clip upload on). The answer's `leftovers`
+names what is still there: `env CAMPROXY_CAMERA_PASSWORD` and `env
+CAMERA_HOST` while the container's environment still has them (compose's
+`env_file` sets them at the container's creation: `docker compose up -d`
+recreates it), or `config.json camera (why)` when `config.json` can't be
+written (the camera then stays, idle). While a move of the camera is still
+open here the remove is 409 `move_open`. A Pi that still has its camera
+works as before.
+
+A `config.json` with neither `camera` nor `cameras` is also an empty host,
+unless `CAMERA_HOST` or a camera password (`CAMPROXY_CAMERA_PASSWORD`,
+`CAMPROXY_CAMERA_PASSWORD_CAM1`) is set: then it is the legacy default camera
+`cam1` as before.
+
 ## 5. Point the camera and cams at the Pi
 
 - **Camera FTP:** the Maintenance page's "Point the camera's FTP here" sets the

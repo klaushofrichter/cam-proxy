@@ -123,5 +123,6 @@ describe('leftoverAdvice', () => {
     expect(leftoverAdvice('cam4', 'env CAMPROXY_CAMERA_PASSWORD_CAM4')).toBe("Remove CAMPROXY_CAMERA_PASSWORD_CAM4 from the proxy's environment (compose file or .env), then recreate the container (docker compose up -d). If this proxy already removed it from its .env (see the audit log), recreating is enough.");
     expect(leftoverAdvice('cam4', 'env CAMPROXY_CAMERA_PASSWORD_CAM4_FILE')).toBe('Remove CAMPROXY_CAMERA_PASSWORD_CAM4_FILE and its secret from the compose file, then recreate the container (docker compose up -d).');
     expect(leftoverAdvice('cam4', 'something else')).toBe('something else');
+    expect(leftoverAdvice('e1', 'config.json camera')).toMatch(/^config\.json could not be rewritten: replace its "camera" object with "cameras": \[\]/);
   });
 });

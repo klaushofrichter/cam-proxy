@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'crypto';
-import { closeSync, existsSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'fs';
+import { chmodSync, closeSync, constants, copyFileSync, existsSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeSync } from 'fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'path';
 import { cameraDefaults, DEFAULTS, type Config, type Secrets } from './defaults';
 import { checkPartial, leafAt, leafPaths, SETTINGS, SettingError } from './schema';
@@ -9,6 +9,8 @@ import { dropRetiredPoeSwitch, normalizeFile, normalizeOverrides, translatePath 
 import { logger } from '../log';
 import { ipv4Int } from '../util/cidr';
 import { loadSecrets } from './secrets';
+import { cameraPasswordsNow } from './camera-passwords';
+import { cameraPasswordEnv } from './password-env';
 import { EnvSettingError, readEnvLayer, type EnvLayer, type EnvValue } from './env';
 import { adminUrlProblem } from '../fleet/protocol';
 import { jcs } from '../fleet/jcs';
@@ -276,7 +278,10 @@ function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSetti
   // The environment last: it wins over the overrides and the file. CAMERA_HOST
   // means the one camera's address (spec §4.2).
   const envNames: Record<string, string> = {};
-  if (layer.cameraHost) {
+  // An empty host ignores a CAMERA_HOST left in the environment (a legacy
+  // proxy converted by removing its camera, whose container still has it until
+  // it is recreated): never a refusal to start. The remove reports it as a leftover.
+  if (layer.cameraHost && !(norm.order.length === 0 && !norm.legacy)) {
     if (norm.order.length !== 1) throw new ConfigError(`${layer.cameraHost.name}: set cameras[].host instead (several cameras)`);
     const id = norm.order[0];
     config.cameras[id].host = layer.cameraHost.value;
@@ -299,6 +304,18 @@ function build(env: NodeJS.ProcessEnv, configFile: string | undefined, fileSetti
   return { config, secrets, sources, ignored: budget.ignored, files: { config: configFile, overrides: join(dataDir, 'overrides.json') }, env, fileSettings, overrides, envLayer: layer, envNames, ...(layer.file ? { envFile: layer.file } : {}), order: norm.order, addedCameras: added, legacyCamera: norm.legacy, commandPolicyBase: norm.policy, tokensOptional: norm.tokensOptional };
 }
 
+// Whether a config.json without `camera` and `cameras` gets the legacy default
+// camera: CAMERA_HOST, or a password for cam1 (the environment's, or the store's).
+function wantsDefaultCamera(env: NodeJS.ProcessEnv, layer: EnvLayer, dataDir: string): boolean {
+  if (layer.cameraHost) return true;
+  for (const n of ['CAMPROXY_CAMERA_PASSWORD', cameraPasswordEnv('cam1')]) if (env[n] || env[`${n}_FILE`]) return true;
+  try {
+    return cameraPasswordsNow(dataDir)('cam1') !== undefined;
+  } catch {
+    return true; // an unreadable store: as before (the start says why)
+  }
+}
+
 // Defaults, then config.json (CAMPROXY_CONFIG or ./config.json), then
 // <dataDir>/overrides.json; secrets from the environment.
 export function loadConfig(env: NodeJS.ProcessEnv, opts: { cwd?: string; tokensOptional?: boolean } = {}): Loaded {
@@ -310,6 +327,13 @@ export function loadConfig(env: NodeJS.ProcessEnv, opts: { cwd?: string; tokensO
   // A legacy `camera` is read as a list of one (spec §4.2); nothing is rewritten.
   const norm = normalizeFile(fromFile.value);
   const fileSettings = norm.settings;
+  let layer: EnvLayer;
+  try {
+    layer = readEnvLayer(env);
+  } catch (e) {
+    if (e instanceof EnvSettingError) throw new ConfigError(e.message);
+    throw e;
+  }
   const policyBase = takeCommandPolicy(fileSettings, 'config.json');
   asConfigError(() => checkPartial(fileSettings));
   const baseDir = file ? dirname(file) : cwd;
@@ -320,17 +344,18 @@ export function loadConfig(env: NodeJS.ProcessEnv, opts: { cwd?: string; tokensO
   if (fromFile.dropped.length || fromOverrides.dropped.length) {
     logger.info({ ...(fromFile.dropped.length ? { 'config.json': fromFile.dropped } : {}), ...(fromOverrides.dropped.length ? { 'overrides.json': fromOverrides.dropped } : {}) }, 'legacy_poe_switch_dropped');
   }
+  // Neither `camera` nor `cameras` (decommission spec C1): the legacy default
+  // cam1 only where it could start before (CAMERA_HOST or a password for it);
+  // else an empty host, which before crash-looped on CAMPROXY_CAMERA_PASSWORD.
+  if (norm.implicit && !wantsDefaultCamera(env, layer, isAbsolute(fileDataDir) ? fileDataDir : resolve(baseDir, fileDataDir))) {
+    fileSettings.cameras = {};
+    norm.order = [];
+    norm.legacy = false;
+  }
   const overrides = normalizeOverrides(fromOverrides.value, norm.order);
   takeCommandPolicy(overrides, 'overrides.json');
   asConfigError(() => checkPartial(overrides));
   if (getPath(overrides, 'server.dataDir') !== undefined) throw new ConfigError('server.dataDir: can only be set in config.json');
-  let layer: EnvLayer;
-  try {
-    layer = readEnvLayer(env);
-  } catch (e) {
-    if (e instanceof EnvSettingError) throw new ConfigError(e.message);
-    throw e;
-  }
   return build(env, file, fileSettings as Obj, overrides as Obj, baseDir, layer, { order: norm.order, legacy: norm.legacy, policy: policyBase, tokensOptional: !!opts.tokensOptional });
 }
 
@@ -493,6 +518,20 @@ export function withCameraHost(l: Loaded, v: EnvValue | undefined): Loaded {
   return build(l.env, l.files.config, l.fileSettings as Obj, l.overrides as Obj, baseDirOf(l), layer, normOf(l));
 }
 
+// The configuration rebuilt with the environment layer read again (the env
+// file and the process environment): after a line was removed from the file,
+// what a restart without recreating the container would see.
+export function withEnvReread(l: Loaded): Loaded {
+  let layer: EnvLayer;
+  try {
+    layer = readEnvLayer(l.env);
+  } catch (e) {
+    if (e instanceof EnvSettingError) throw new ConfigError(e.message);
+    throw e;
+  }
+  return build(l.env, l.files.config, l.fileSettings as Obj, l.overrides as Obj, baseDirOf(l), layer, normOf(l));
+}
+
 // Adds overrides (validated like the file); nothing is written if the result
 // is invalid (see planOverrides).
 export function applyOverrides(loaded: Loaded, given: object): Loaded {
@@ -613,4 +652,88 @@ export function envSummary(loaded: Loaded): Record<string, unknown> {
   for (const p of Object.keys(loaded.envNames)) out[p] = getPath(loaded.config, p);
   out.envFile = loaded.envFile?.read === true;
   return out;
+}
+
+// A legacy one-camera proxy (config.json `camera`, the Pi) turned into an
+// empty several-camera host when its camera is removed (decommission spec C1,
+// findings 3 and 12a): config.json without `camera` (and the legacy
+// `ftp.user`, which belonged to it), with `cameras: []`; overrides.json
+// without that camera's node (its `moved` marker and the legacy settings);
+// CAMERA_HOST no longer applied. Computed and validated, not written.
+export interface EmptyHostPlan { next: Loaded; file: string; content: Obj; overrides: Obj }
+export function planEmptyHost(l: Loaded, id: string): EmptyHostPlan {
+  if (!l.legacyCamera || l.order[0] !== id) throw new ConfigError(`${id}: not this proxy's one config.json camera`);
+  const file = l.files.config;
+  if (!file) throw new ConfigError('no config.json: the default camera comes from the environment');
+  const raw = readJson(file);
+  if (!isObj(raw)) throw new ConfigError(`${basename(file)}: not an object`);
+  const content: Obj = { ...raw };
+  delete content.camera;
+  if (isObj(content.ftp) && Object.hasOwn(content.ftp, 'user')) {
+    const ftp = { ...(content.ftp as Obj) };
+    delete ftp.user;
+    if (Object.keys(ftp).length) content.ftp = ftp;
+    else delete content.ftp;
+  }
+  content.cameras = [];
+  const norm = normalizeFile(dropRetiredPoeSwitch(content).value);
+  const settings = norm.settings;
+  const policy = takeCommandPolicy(settings, 'config.json');
+  asConfigError(() => checkPartial(settings));
+  const overrides = withoutCamera(l.overrides, id);
+  // CAMERA_HOST stays in the layer (an empty host ignores it) until the caller removes it.
+  const next = build(l.env, file, settings, overrides, baseDirOf(l), l.envLayer, { order: [], legacy: false, policy, tokensOptional: l.tokensOptional });
+  return { next, file, content, overrides };
+}
+
+// Writes an EmptyHostPlan: a backup of config.json first
+// (config.json.bak-YYYYMMDD-HHMMSS, its mode), config.json atomically, then
+// overrides.json; a failed overrides write puts config.json back (a camera
+// node left in overrides.json without config.json's would not load).
+// Answers the backup's file name. Throws ConfigError when a file can't be written.
+export function applyEmptyHost(p: EmptyHostPlan, overridesFile: string, now = new Date()): { backup: string } {
+  const dir = dirname(p.file);
+  const mode = statSync(p.file).mode & 0o777;
+  const stampOf = now.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+  let backup = `${basename(p.file)}.bak-${stampOf}`;
+  for (let n = 2; existsSync(join(dir, backup)); n++) backup = `${basename(p.file)}.bak-${stampOf}-${n}`;
+  const text = `${JSON.stringify(p.content, null, 2)}\n`;
+  try {
+    copyFileSync(p.file, join(dir, backup), constants.COPYFILE_EXCL);
+    chmodSync(join(dir, backup), mode);
+    writeFileAtomic(p.file, text, mode);
+  } catch (err) {
+    throw new ConfigError(`${basename(p.file)}: could not be written (${(err as NodeJS.ErrnoException).code ?? 'error'})`);
+  }
+  try {
+    writeOverrides(overridesFile, p.overrides);
+  } catch (err) {
+    try {
+      copyFileSync(join(dir, backup), p.file);
+    } catch {
+      // the backup is still there
+    }
+    throw new ConfigError(`overrides.json: could not be written (${(err as NodeJS.ErrnoException).code ?? 'error'}); config.json put back`);
+  }
+  return { backup };
+}
+
+function writeFileAtomic(file: string, text: string, mode: number): void {
+  const tmp = `${file}.tmp-${process.pid}-${randomBytes(6).toString('hex')}`;
+  const fd = openSync(tmp, 'wx', mode);
+  try {
+    writeSync(fd, text);
+    fsyncSync(fd);
+  } catch (err) {
+    closeSync(fd);
+    rmSync(tmp, { force: true });
+    throw err;
+  }
+  closeSync(fd);
+  try {
+    renameSync(tmp, file);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
 }

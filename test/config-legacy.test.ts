@@ -73,6 +73,48 @@ describe('legacy camera (spec §4.2)', () => {
   });
 });
 
+// An empty host (decommission spec C1, findings 3 and 12a): a proxy with no
+// camera starts, without the legacy default cam1 and without
+// CAMPROXY_CAMERA_PASSWORD.
+describe('an empty host', () => {
+  const NO_PW = { CAMPROXY_TOKENS: SECRETS.CAMPROXY_TOKENS, CAMPROXY_ADMIN_TOKEN: SECRETS.CAMPROXY_ADMIN_TOKEN };
+  const loadNoPw = (env: Record<string, string> = {}) => loadConfig({ ...NO_PW, ...env }, { cwd: dir });
+
+  it('cameras: [] is a host with no camera; no camera password needed', () => {
+    write('config.json', { cameras: [], ftp: { enabled: true } });
+    const l = loadNoPw();
+    expect(cameraIds(l.config)).toEqual([]);
+    expect(l.legacyCamera).toBe(false);
+    expect(l.order).toEqual([]);
+    expect(l.secrets.cameraPassword).toBe('');
+  });
+
+  it('no camera node and no camera password or CAMERA_HOST: empty (it crash-looped before); with one of them: the default cam1 as before', () => {
+    write('config.json', { server: { logLevel: 'silent' } });
+    const l = loadNoPw();
+    expect(cameraIds(l.config)).toEqual([]);
+    expect(l.legacyCamera).toBe(false);
+    expect(cameraIds(loadNoPw({ CAMPROXY_CAMERA_PASSWORD: 'pw' }).config)).toEqual(['cam1']);
+    expect(cameraIds(loadNoPw({ CAMPROXY_CAMERA_PASSWORD_CAM1: 'pw' }).config)).toEqual(['cam1']);
+    expect(err(() => loadNoPw({ CAMERA_HOST: '192.0.2.10' }))).toMatch(/^CAMPROXY_CAMERA_PASSWORD: required/);
+  });
+
+  it('CAMERA_HOST left in the environment of an empty host is not applied and does not stop the start', () => {
+    write('config.json', { cameras: [] });
+    const l = loadNoPw({ CAMERA_HOST: '192.0.2.10' });
+    expect(cameraIds(l.config)).toEqual([]);
+    expect(l.envNames).toEqual({});
+  });
+
+  it('a camera added in overrides.json runs on an empty host', () => {
+    write('config.json', { cameras: [] });
+    write('data/overrides.json', { cameras: { e1: { host: '192.0.2.20', ftp: { enabled: false } } } });
+    const l = loadNoPw({ CAMPROXY_CAMERA_PASSWORD_E1: 'pw' });
+    expect(cameraIds(l.config)).toEqual(['e1']);
+    expect(l.addedCameras).toEqual(['e1']);
+  });
+});
+
 describe('cameras (spec §4.1)', () => {
   const two = { cameras: [{ id: 'cam3', host: '192.168.60.13' }, { id: 'cam4', host: '192.168.60.14', stills: { intervalS: 2 } }] };
 
@@ -102,13 +144,11 @@ describe('cameras (spec §4.1)', () => {
     expect(cameraIds(load().config)).toEqual(['2', '10', '1']);
   });
 
-  it('refuses camera with cameras, duplicate ids, an empty list, a bad id', () => {
+  it('refuses camera with cameras, duplicate ids, a bad id', () => {
     write('config.json', { camera: { host: 'h' }, cameras: [{ id: 'cam3' }] });
     expect(err(() => load())).toBe('camera: use either camera (one camera) or cameras, not both');
     write('config.json', { cameras: [{ id: 'cam3' }, { id: 'cam3' }] });
     expect(err(() => load())).toBe('cameras: duplicate id cam3');
-    write('config.json', { cameras: [] });
-    expect(err(() => load())).toBe('cameras: at least one camera');
     write('config.json', { cameras: [{ id: 'Cam3' }] });
     expect(err(() => load())).toBe('cameras.Cam3: not a camera id');
     write('config.json', { cameras: [{ host: 'x' }] });

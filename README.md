@@ -330,7 +330,7 @@ the new form:
   without a site CA), `POST /control/cameras/<id>/actions/camera-time-set`
   (its zone and DST rule from `time.zone`), `GET /control/onboarding` and
   `GET /control/cameras/<id>/onboarding` (each step, why, and the fix), and
-  `DELETE /control/cameras/<id>` (offboard, with what is left over). At most 5
+  `DELETE /control/cameras/<id>` (offboard, with what is left over; the one camera of a one-camera proxy leaves an empty host, `"cameras": []`, see docs/raspberry-pi.md). At most 5
   password tries per camera address in 10 minutes (every spelling of one address
   counts together); a camera password is never logged, audited or returned.
   Over plain http the password crosses the network unencrypted: the answers

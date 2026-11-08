@@ -172,7 +172,7 @@ describe('onboard-camera.sh and offboard-camera.sh on a several-camera proxy', (
 });
 
 describe('the Pi: offboard its one camera, onboard it again', () => {
-  it('CAMERA_HOST removed and written again; the camera back online', async () => {
+  it('offboard turns it into an empty host (CAMERA_HOST removed); onboard adds the camera by id; the camera back online', async () => {
     const sim = await startSim();
     stops.push(() => sim.close());
     const d = mkdtempSync(join(tmpdir(), 'onboard-pi-'));
@@ -187,9 +187,12 @@ describe('the Pi: offboard its one camera, onboard it again', () => {
     const env = { CAMPROXY_URL: base, CAMPROXY_ADMIN_TOKEN_FILE: ADMIN_FILE };
 
     const off = await run(OFFBOARD, ['--id', 'cam1', '--yes'], env);
-    expect(off.out).toContain('ok proxy: cam1 idle, without an address');
-    expect(off.code).toBe(0);
+    // The legacy password stays in the process environment (as compose's env_file sets it): named, not hidden.
+    expect(off.out).toContain('FAIL proxy: left over (remove by hand): env CAMPROXY_CAMERA_PASSWORD');
+    expect(off.code).toBe(1);
     expect(readEnvValue(readFileSync(envPath, 'utf8'), 'CAMERA_HOST')).toBeUndefined();
+    expect(JSON.parse(readFileSync(join(d, 'config.json'), 'utf8')).cameras).toEqual([]);
+    expect((await request(base).get('/api/cameras/cam1').set(auth())).status).toBe(404);
 
     // Back in over https, its certificate pinned (http never counts as trusted).
     const host = `127.0.0.1:${sim.ports.https}`;
@@ -197,7 +200,9 @@ describe('the Pi: offboard its one camera, onboard it again', () => {
     const on = await run(ONBOARD, ['--host', host, '--id', 'cam1', '--user', 'proxy', '--fingerprint', fingerprint, '--port-https', String(sim.ports.https), '--port-onvif', String(sim.ports.onvif), '--port-rtsp', String(sim.ports.rtsp), '--port-baichuan', String(sim.ports.baichuan), '--wait', '60'], env, `${sim.password}\n`);
     expect(on.out).toContain('ok cam1 ready on the proxy');
     expect(on.code).toBe(0);
-    expect(readEnvValue(readFileSync(envPath, 'utf8'), 'CAMERA_HOST')).toBe(host);
+    // An empty host keeps the address in overrides.json, not CAMERA_HOST.
+    expect(readEnvValue(readFileSync(envPath, 'utf8'), 'CAMERA_HOST')).toBeUndefined();
+    expect(proxy.loaded.config.cameras.cam1.host).toBe(host);
     expect((await request(base).get('/api/cameras/cam1').set(auth())).body.online).toBe(true);
     expect(on.out).not.toContain(sim.password);
   }, 120_000);

@@ -6,6 +6,7 @@ export interface RemoveLeftover { camera: string; at: number; items: string[] }
 
 export function leftoverAdvice(cam: string, item: string): string {
   if (item === 'config.json entry') return `Delete cameras.${cam} from config.json, then restart the proxy.`;
+  if (item === 'config.json camera') return 'config.json could not be rewritten: replace its "camera" object with "cameras": [] (and drop ftp.user), then restart the proxy; or make config.json writable and remove the camera again.';
   if (item === 'config.json camera.host') return 'Delete camera.host from config.json (the camera was removed), then restart the proxy.';
   const m = /^env (\S+)$/.exec(item);
   if (!m) return item;
