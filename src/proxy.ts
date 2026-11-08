@@ -36,6 +36,7 @@ import { restartProcess } from './process-restart';
 import type { Config } from './config/defaults';
 import { applyOverrides, configRevision, getPath, needsProcessRestart, needsRestart, removeOverride, setPath, settingPaths, type Loaded } from './config/load';
 import { cameraFtpOff, setupCameraFtp, testCameraFtp, type FtpTarget } from './clips/camera-ftp';
+import { runSetupAction } from './onboarding/setup';
 import { createClipsSide, ftpUsers, type ClipsSide } from './clips/side';
 import type { RecordingsSide } from './recordings/side';
 import { validId } from './recordings/names';
@@ -1320,6 +1321,11 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     removeLeftovers,
     cameraClient: (cam) => cams.get(cam)?.client ?? null,
     cameraNtp: (cam) => worker(cam).syncNtp(true),
+    // Add camera's setup (finding 15): the actions' own code, through controlDeps.
+    setup: {
+      run: (action, cam, who) => runSetupAction(controlDeps, action, cam, who),
+      siteCaCovers: (cam) => !!certs && !!running.tls.site && certs.siteCaCovers(cam),
+    },
     identity: (cam) => {
       const model = cams.get(cam)?.status.state().model;
       return model && model !== 'unknown' ? { model } : null;

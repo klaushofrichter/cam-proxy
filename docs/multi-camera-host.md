@@ -480,7 +480,14 @@ the expected answer:
      sign-in is refused): the proxy logs in over exactly that certificate,
      then stores the password (`data/admin/camera-passwords.json`), pins the
      certificate and adds the camera to `overrides.json`. 201 with its
-     onboarding status; 409 `camera_limit` at `profile.cameras`, 422
+     onboarding status. With `"ftp": true` it then points the camera's FTP
+     upload here (`camera-ftp-setup`'s code), and with a site CA that covers
+     the camera's TLS name (`<id>.<site>.internal`) it pushes the camera's
+     site-CA certificate (`camera-cert-push`'s code); each runs once, and a
+     failure leaves the camera added: the answer's `setup.ftp` /
+     `setup.certificate` (`{action, ok, detail}`) and its `steps` say what
+     failed and which action fixes it, and the `camera-add` record has the
+     same. 409 `camera_limit` at `profile.cameras`, 422
      `camera_refused` for a wrong password (nothing stored), at most 5
      password tries per camera in 10 minutes.
   3. `GET /control/cameras/cam6/onboarding` until `ready`.
