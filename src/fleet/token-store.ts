@@ -137,6 +137,15 @@ export class TokenStore {
     this.set(next);
   }
 
+  // proxy.unenroll (decommission spec A3): no managed token, revision 0, so a
+  // later enrollment starts clean (finding 8); the blocks (local decisions) stay.
+  clear(): void {
+    const next: FileShape = { v: 1, revision: 0, tokens: [], blocked: this.err ? [] : this.state.blocked };
+    writePrivateJson(this.d.file, next);
+    this.set(next);
+    this.err = null;
+  }
+
   list(): { id: string; kind: 'client' | 'admin'; label: string; retireAt: number | null; blocked: boolean; live: boolean; hashPrefix: string }[] {
     return this.state.tokens.map((t) => ({ id: t.id, kind: t.kind, label: t.label, retireAt: t.retireAt, blocked: this.isBlocked(t), live: this.live(t), hashPrefix: t.hash.slice(0, 15) }));
   }

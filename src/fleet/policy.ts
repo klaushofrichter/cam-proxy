@@ -22,7 +22,11 @@ export const DISRUPTIVE_ACTIONS = ['restart', 'camera-reboot', 'camera-powercycl
 // What the journal budget counts: the disruptive actions, and camera-ftp-off
 // (disruptive in the contract; journaled by a version that ran it).
 export const BUDGETED_ACTIONS: ReadonlySet<string> = new Set([...DISRUPTIVE_ACTIONS, 'camera-ftp-off']);
-export const DISRUPTIVE_ENTRIES: ReadonlySet<string> = new Set(['proxy.restart', 'switch.cycle', ...DISRUPTIVE_ACTIONS.map((a) => `camera.action:${a}`)]);
+// Remove a camera, decommission this proxy (decommission spec A1-A3; cams-admin
+// contract "Remove a camera, decommission a proxy"): camera.remove.preview is a
+// read (on by default), the other two are disruptive, each its own entry.
+export const DECOMMISSION_ENTRIES = ['camera.remove', 'proxy.unenroll'] as const;
+export const DISRUPTIVE_ENTRIES: ReadonlySet<string> = new Set(['proxy.restart', 'switch.cycle', ...DECOMMISSION_ENTRIES, ...DISRUPTIVE_ACTIONS.map((a) => `camera.action:${a}`)]);
 // Issue #227 (Klaus, 2026-10-21): what an admin UI session from a cams-admin
 // sign-in link (managed-admin) may also do on this proxy, unlocked here by the
 // local admin like a command (src/api/auth.ts enforces them). No command:
@@ -37,10 +41,10 @@ export const MOVE_ENTRIES = ['move.send', 'move.receive'] as const;
 // analytics.usage.get (cams-admin Vision management design 2026-11-05): the Google Vision settings and use, never the key.
 // camera.power.* (spec 2026-11-07-poe-switches-design): cams-admin's notices about a camera's power and its power-cycles; they cut nothing.
 export const POWER_ENTRIES = ['camera.power.set', 'camera.power.cycling', 'camera.power.cycled', 'camera.power.cycle.result'] as const;
-export const DEFAULT_ON: readonly string[] = ['camera.onboarding.get', 'analytics.usage.get', ...POWER_ENTRIES];
+export const DEFAULT_ON: readonly string[] = ['camera.onboarding.get', 'analytics.usage.get', 'camera.remove.preview', ...POWER_ENTRIES];
 // PoE switches (spec 2026-11-07-poe-switches-design): each command its own entry, local, off by default; switch.cycle cuts a camera's power.
 export const SWITCH_ENTRIES = ['switch.read', 'switch.locate', 'switch.survey', 'switch.cycle', 'switch.poeOn', 'switch.forget'] as const;
-export const ALLOW_ENTRIES: readonly string[] = ['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`), ...MOVE_ENTRIES, ...SWITCH_ENTRIES, ...UI_ENTRIES, ...DEFAULT_ON];
+export const ALLOW_ENTRIES: readonly string[] = ['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.name.set', 'proxy.restart', ...DECOMMISSION_ENTRIES, ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`), ...MOVE_ENTRIES, ...SWITCH_ENTRIES, ...UI_ENTRIES, ...DEFAULT_ON];
 // The move commands by the entry they need; move.finish and move.cancel by their args.role (entryFor).
 const MOVE_SEND = ['move.targets', 'move.open', 'move.answer', 'move.go', 'move.release', 'move.begin', 'move.summary', 'move.return.start'];
 const MOVE_RECEIVE = ['move.offer', 'move.start', 'move.return.open'];
@@ -48,7 +52,7 @@ export const MOVE_COMMANDS: readonly string[] = [...MOVE_SEND, ...MOVE_RECEIVE, 
 export const isMoveCommand = (command: string): boolean => MOVE_COMMANDS.includes(command);
 // What this version runs (P2, P3): command names and allow entries. The
 // heartbeat reports allow ∩ IMPLEMENTED.
-export const IMPLEMENTED: ReadonlySet<string> = new Set(['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart', ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`), ...MOVE_COMMANDS, ...MOVE_ENTRIES, ...SWITCH_ENTRIES, ...DEFAULT_ON]);
+export const IMPLEMENTED: ReadonlySet<string> = new Set(['tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart', ...DECOMMISSION_ENTRIES, ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`), ...MOVE_COMMANDS, ...MOVE_ENTRIES, ...SWITCH_ENTRIES, ...DEFAULT_ON]);
 // The allow entry a command needs, from its (validated) args: the command's own name,
 // camera.action:<action>, and for the moves the side it acts on (contract step 11:
 // move.finish and move.cancel by args.role, the rest by command). An unreadable role
@@ -84,6 +88,9 @@ export const ENTRY_TEXT: Record<string, string> = {
   'config.rollback': 'cams-admin may undo its own setting changes',
   'camera.name.set': "cams-admin may rename a camera (the camera's own name)",
   'proxy.restart': 'DISRUPTIVE: cams-admin may restart this proxy (at most 2 an hour)',
+  'camera.remove.preview': 'cams-admin may read what this proxy holds for a camera before removing it (counts of clips, stills, archived clips and their size)',
+  'camera.remove': "DISRUPTIVE: cams-admin may remove a camera from this proxy (its FTP upload off, configuration, stored password, certificate trust, PTZ positions) and, if asked, delete its clips and stills now (archived clips only when asked too); counts toward the 6 disruptive commands an hour",
+  'proxy.unenroll': "DISRUPTIVE: cams-admin may decommission this proxy once it has no camera: it unenrolls (key deleted, cams-admin address cleared) and clears its managed tokens and these allowed commands",
   'move.send': 'cams-admin may move a camera from this proxy to another proxy of the account, after you approve the move here or in a cams-admin sign-in',
   'move.receive': 'cams-admin may hand this proxy a camera from another proxy of the account: it adds the camera, its password and certificate, and copies its content',
   'switch.read': "cams-admin may read the ports of a PoE switch this proxy operates (PoE, watts, link, rates; the switch's password stays here)",
@@ -189,6 +196,13 @@ export class CommandPolicy {
     if (by !== 'local' && next.some((e) => !now.includes(e))) throw new WideningRefused('adding an allowed command needs the local admin token');
     // A default-on entry is stored as on (absent from `off`), the others in `allow`.
     this.write({ allow: next.filter((e) => !DEFAULT_ON.includes(e)), off: DEFAULT_ON.filter((e) => !next.includes(e)), consent: CONSENT_VERSION }, by);
+  }
+
+  // proxy.unenroll (decommission spec A3): the allow list back to the
+  // defaults (nothing allowed but the default-on reads; config.json's base
+  // too), so a later enrollment starts clean; a pause stays. Only narrows.
+  clearAllow(): void {
+    this.write({ allow: [], off: [], consent: CONSENT_VERSION }, 'managed');
   }
 
   pause(reason: string | null, by: 'local' | 'managed'): void {

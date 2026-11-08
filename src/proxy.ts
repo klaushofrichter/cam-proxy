@@ -77,6 +77,8 @@ import { OverridesBackups } from './fleet/backups';
 import { configHandlers, type ConfigCommandDeps } from './fleet/config-commands';
 import { analyticsHandlers } from './fleet/analytics-commands';
 import { cameraHandlers } from './fleet/camera-commands';
+import { decommissionHandlers } from './fleet/decommission-commands';
+import { cameraContent, deleteCameraContent } from './onboarding/content';
 import { moveHandlers } from './moves/commands';
 import { switchHandlers } from './fleet/switch-commands';
 import { CameraPowerStore, powerHandlers, powerView, requestPowerCycle, type PowerRequestDeps } from './fleet/power-commands';
@@ -1471,6 +1473,28 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     switchHandlers({ registry: switches, audit }),
     // The camera's power and cams-admin's power-cycles of it (default on: notices, they cut nothing).
     powerHandlers({ store: cameraPower, cameraIds: () => cams.ids(), reboot: (cam) => worker(cam).reboot, audit }),
+    // Remove a camera, decommission this proxy (decommission spec A1-A3).
+    decommissionHandlers({
+      known: (cam) => cameraIds(loaded.config).includes(cam) || Object.values(cameraContent({ catalog, dataDir: running.server.dataDir }, cam)).some((n) => n > 0),
+      content: (cam) => cameraContent({ catalog, dataDir: running.server.dataDir }, cam),
+      remove: (cam, who) => onboarding.remove(cam, who),
+      deleteContent: (cam, withArchive) => deleteCameraContent({ catalog, dataDir: running.server.dataDir, storage, archive }, cam, withArchive),
+      activeCameras: () => activeCameraIds(loaded.config),
+      unenroll: async (cmd) => {
+        const before = camsAdmin.view();
+        try {
+          const { wasEnrolled } = await camsAdmin.unenroll();
+          // Without CAMPROXY_TOKENS the managed client tokens are what lets the proxy start (checkClientTokens): kept then.
+          const tokens = loaded.secrets.tokens.length ? (tokenStore.clear(), 'cleared') : 'kept (no CAMPROXY_TOKENS: the proxy needs them to start)';
+          commandPolicy.clearAllow();
+          audit.write({ action: 'admin-unenroll', category: ['configuration'], type: ['deletion'], outcome: 'success', user: 'cams-admin', message: `Unenrolled by cams-admin (on behalf of ${cmd.actor}) from ${before.url ?? ''} (${before.proxyId ?? 'no key'}); managed tokens ${tokens}, allowed commands reset`, details: { url: before.url, proxyId: before.proxyId, fingerprint: before.fingerprint, wasEnrolled, managedSet: tokens, policy: 'reset', requestedBy: 'cams-admin', cmdId: cmd.cmdId, actor: cmd.actor } });
+        } catch (err) {
+          logger.warn({ err: String((err as Error)?.message ?? err).slice(0, 200) }, 'admin_unenroll_failed');
+          audit.write({ action: 'admin-unenroll', category: ['configuration'], type: ['deletion'], outcome: 'failure', user: 'cams-admin', error: 'internal', message: `Unenroll by cams-admin (on behalf of ${cmd.actor}) failed`, details: { requestedBy: 'cams-admin', cmdId: cmd.cmdId, actor: cmd.actor } });
+        }
+      },
+      audit,
+    }),
     // Camera moves (plan 2026-10-21-camera-move-cam-proxy): stubs until each task fills its handler in.
     moveHandlers({
       emit: emitToAdmin,
