@@ -479,7 +479,20 @@ the expected answer:
      "SHA256:…"}}` with the proxy's own admin token (a cams-admin token or
      sign-in is refused): the proxy logs in over exactly that certificate,
      then stores the password (`data/admin/camera-passwords.json`), pins the
-     certificate and adds the camera to `overrides.json`. 201 with its
+     certificate and adds the camera to `overrides.json`. A camera that
+     already serves this proxy's site-CA certificate for its name
+     (`cam6.<site>.internal`, e.g. re-added after a remove: every Add camera
+     pushes a fresh one, so a fingerprint noted earlier is stale) needs no
+     fingerprint and no step 1: `"trust": {"siteCa": true}`, or `trust` left
+     out. The proxy checks the served certificate (issued by its own current
+     site CA, valid now, for exactly that name, not a CA), logs in verifying
+     it against the CA by that name, and trusts the camera by the site CA
+     (a `camera-trust` record "trust site-ca: served certificate issued by
+     this proxy's site CA for cam6.<site>.internal"). Any other certificate
+     (factory, another CA, another camera's name, expired): `siteCa: true` is
+     409 `site_ca_untrusted` with why and `served`, `trust` left out is the
+     400 `trust.fingerprint` refusal; then use steps 1 and 2 with the
+     fingerprint. A fingerprint, when given, is always used as given. 201 with its
      onboarding status. With `"ftp": true` it then points the camera's FTP
      upload here (`camera-ftp-setup`'s code), and with a site CA that covers
      the camera's TLS name (`<id>.<site>.internal`) it pushes the camera's

@@ -91,6 +91,37 @@ const pemOf = (fingerprint: string, pem: unknown): string | null => {
     return null;
   }
 };
+// Finding 21: whether a served certificate is a camera leaf of this CA for
+// `name`, valid now: signed by the CA (and named as its issuer), not a CA
+// itself, inside its own and the CA's validity, the name in its DNS SANs (its
+// CN only without any; no wildcards). The reason when not; never key material.
+export function siteCaLeafCheck(pem: string, caPem: string, name: string, now: number): { ok: true; notAfter: number } | { ok: false; reason: string } {
+  let x: X509Certificate;
+  let c: X509Certificate;
+  try {
+    x = new X509Certificate(pem);
+    c = new X509Certificate(caPem);
+  } catch {
+    return { ok: false, reason: 'the certificate could not be read' };
+  }
+  if (x.ca) return { ok: false, reason: 'a CA certificate, not a camera certificate' };
+  let signed = false;
+  try {
+    signed = x.checkIssued(c) && x.verify(c.publicKey);
+  } catch {
+    signed = false;
+  }
+  if (!signed) return { ok: false, reason: "not issued by this proxy's site CA" };
+  const from = Date.parse(x.validFrom);
+  const notAfter = Date.parse(x.validTo);
+  if (!(now >= from)) return { ok: false, reason: `not valid yet (from ${new Date(from).toISOString()})` };
+  if (!(now < notAfter)) return { ok: false, reason: `expired (${new Date(notAfter).toISOString()})` };
+  if (!(now >= Date.parse(c.validFrom) && now < Date.parse(c.validTo))) return { ok: false, reason: "this proxy's site CA is not valid now" };
+  if (x.checkHost(name, { wildcards: false, partialWildcards: false }) === undefined) return { ok: false, reason: `not issued for ${name}` };
+  return { ok: true, notAfter };
+}
+export type SiteCaVerdict = { ok: true; servername: string; ca: string; notAfter: number } | { ok: false; reason: string };
+
 const BLOCKED = { unreadable: (id: string) => `${id}: no automatic push since the certificate state was unreadable: check the camera, then Push now`, cleared: (id: string) => `${id}: its trust was cleared: Push now to push its first certificate` };
 
 // Each camera's certificate from the site CA (spec 2026-10-05-multi-camera-host-design
@@ -412,6 +443,38 @@ export class CameraCerts {
     this.settleCorrupt();
     this.save();
     this.audit(id, 'success', `Camera trust ${id}: ${prev.mode} → pinned (${served.fingerprint}), confirmed by the admin`, who, { op: 'pin', from: prev.mode, fingerprint: served.fingerprint });
+    this.d.onTrust?.(id);
+    return this.state(id);
+  }
+
+  // Add camera's site-CA trust (finding 21): whether the certificate the
+  // camera serves is a leaf of this proxy's current site CA (never the
+  // previous one after a rotation) for <id>.<site>.internal, valid now.
+  siteCaVerdict(id: string, served: Served): SiteCaVerdict {
+    const site = this.d.site();
+    if (!site) return { ok: false, reason: 'this proxy has no site CA (tls.site is not set)' };
+    const ca = this.currentCaPem();
+    if (!ca) return { ok: false, reason: 'the site CA is not available' };
+    if (!FINGERPRINT.test(served.fingerprint) || pemOf(served.fingerprint, served.pem) === null) return { ok: false, reason: 'the certificate does not match its fingerprint' };
+    const servername = `${id}.${site}.internal`;
+    const v = siteCaLeafCheck(served.pem, ca, servername, this.now());
+    return v.ok ? { ok: true, servername, ca, notAfter: v.notAfter } : v;
+  }
+
+  // The Add camera's trust decision when the camera serves our leaf (checked
+  // again here; throws when it doesn't): mode site-ca by its .internal name,
+  // the camera counted as one that served our leaf (never pushed over
+  // automatically when it serves something else), saved, audited (op site-ca).
+  adoptSiteCa(id: string, served: Served, who: Requester): CertState {
+    const v = this.siteCaVerdict(id, served);
+    if (!v.ok) throw new Error(`site-CA trust refused: ${v.reason}`);
+    const prev = this.state(id);
+    const e = this.extra(id);
+    Object.assign(e, { everSiteCa: true, pin: null, onPrevious: false, blocked: null });
+    this.states.set(id, { ...this.blank(), mode: 'site-ca', servername: v.servername, fingerprint: served.fingerprint, notAfter: v.notAfter, lastPush: prev.lastPush });
+    this.settleCorrupt();
+    this.save();
+    this.audit(id, 'success', `Camera trust ${id}: ${prev.mode} → site-ca, trust site-ca: served certificate issued by this proxy's site CA for ${v.servername}`, who, { op: 'site-ca', from: prev.mode, fingerprint: served.fingerprint, servername: v.servername, notAfter: v.notAfter });
     this.d.onTrust?.(id);
     return this.state(id);
   }
