@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.11.08.1
+
 - cams-admin can remove a camera from this proxy and decommission the proxy, each an allow entry on the cams-admin page: `camera.remove.preview` (on by default, a read) says what the proxy holds for a camera (clips, stills, archived clips, size); `camera.remove` (disruptive, off by default) runs the proxy's own remove and, if asked, deletes the camera's clips and stills now, its archived clips only when asked too; it counts toward the 6 disruptive commands an hour. `proxy.unenroll` (disruptive, off by default) is refused while the proxy has a camera; otherwise the proxy unenrolls itself like `admin-unenroll` and also clears its cams-admin tokens and resets the allowed commands, so a later enrollment starts clean (a pause stays; without `CAMPROXY_TOKENS` the tokens stay, the proxy needs them to start).
 
 - A proxy can have no camera: `"cameras": []` in config.json is an empty host that starts without `CAMPROXY_CAMERA_PASSWORD`, and so is a config.json with neither `camera` nor `cameras` when no `CAMERA_HOST` or camera password is set (before, it crash-looped asking for `CAMPROXY_CAMERA_PASSWORD`; with one of them it is still the default camera `cam1`). Cameras are then added with Add camera, by any id.
