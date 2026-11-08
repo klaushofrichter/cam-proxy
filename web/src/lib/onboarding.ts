@@ -78,6 +78,17 @@ export function addCameraBody(f: AddForm): Record<string, unknown> {
   };
 }
 
+// Finding 21: whether Add needs a confirmed certificate first. Not over http,
+// and not on a proxy with a site CA: a camera serving this proxy's site-CA
+// certificate for its id is trusted without one (the body has no trust then;
+// the proxy refuses any other camera, addTrustError).
+export const addNeedsCheck = (f: { protocol: 'https' | 'http'; fingerprint: string | null; siteCa: boolean }): boolean => f.protocol === 'https' && !f.fingerprint && !f.siteCa;
+// The proxy's refusal of an add without a confirmed certificate, in words (null: another refusal).
+export function addTrustError(b: { error?: string; detail?: string } | null, id: string): string | null {
+  const untrusted = b?.error === 'site_ca_untrusted' || (b?.error === 'invalid' && !!b.detail?.startsWith('trust.fingerprint:'));
+  return untrusted ? `${id.trim() || 'The camera'} doesn't serve this proxy's site-CA certificate for its id: check the camera and confirm its certificate.` : null;
+}
+
 // camera-time-set's answer (spec §4.7) in words.
 export function timeSetText(a: { outcome: string; zone: string; ntp: string | null; detail?: string }): string {
   if (a.outcome === 'set') return `Camera time zone set to ${a.zone}.`;

@@ -1326,6 +1326,12 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       run: (action, cam, who) => runSetupAction(controlDeps, action, cam, who),
       siteCaCovers: (cam) => !!certs && !!running.tls.site && certs.siteCaCovers(cam),
     },
+    // Add camera's site-CA trust (finding 21): only with tls.site and this proxy's own CA.
+    siteCa: {
+      available: () => !!running.tls.site && !!certs,
+      check: (cam, sv) => (running.tls.site && certs ? certs.siteCaVerdict(cam, sv) : { ok: false, reason: 'this proxy has no site CA (tls.site is not set)' }),
+      adopt: (cam, sv, who) => certs!.adoptSiteCa(cam, sv, who),
+    },
     identity: (cam) => {
       const model = cams.get(cam)?.status.state().model;
       return model && model !== 'unknown' ? { model } : null;
