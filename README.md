@@ -324,7 +324,9 @@ the new form:
   given, so it is for the proxy's own admin only (never a cams-admin command
   or sign-in) and limited to 6 a minute together with Find camera; it sends
   nothing but a login, and that only with a password), `POST /control/cameras` (add it with its password and that
-  certificate; local admin only; refused at `profile.cameras`; on a
+  certificate; with a site CA, a camera that already serves this proxy's
+  site-CA certificate for `<id>.<site>.internal` needs no fingerprint:
+  `"trust": {"siteCa": true}`, or `trust` left out; local admin only; refused at `profile.cameras`; on a
   several-camera proxy `"ftp": true` also points the camera's FTP upload here,
   and a site CA that covers the camera's TLS name gets it its site-CA
   certificate, the same code as `camera-ftp-setup` and `camera-cert-push`;

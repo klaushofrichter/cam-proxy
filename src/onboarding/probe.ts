@@ -103,7 +103,10 @@ export async function probeCamera(i: ProbeInput, o: { connectTimeoutMs?: number;
 }
 
 // The probe, and the certificate it logged in to (the add pins exactly that one).
-export async function probeServed(i: ProbeInput, o: { connectTimeoutMs?: number; tlsTimeoutMs?: number } = {}): Promise<{ result: ProbeResult; served: Served | null } | { error: 'fingerprint_mismatch'; served: string | null }> {
+// `siteCa`: the login verifies the camera against this proxy's site CA by
+// its .internal name as well (Add camera's site-CA trust, finding 21); the
+// served certificate must still be the confirmed one.
+export async function probeServed(i: ProbeInput, o: { connectTimeoutMs?: number; tlsTimeoutMs?: number; siteCa?: { ca: string; servername: string } } = {}): Promise<{ result: ProbeResult; served: Served | null } | { error: 'fingerprint_mismatch'; served: string | null }> {
   const t0 = Date.now();
   const bare = bareHost(i.host);
   const open = await Promise.all(PORT_NAMES.map((n) => portOpen(bare, i.ports[n], o.connectTimeoutMs ?? 1500)));
@@ -113,7 +116,7 @@ export async function probeServed(i: ProbeInput, o: { connectTimeoutMs?: number;
   const result: ProbeResult = { host: i.host, ports, certificate, login: 'not_tried', device: null, capabilities: null, tookMs: 0, ...(i.protocol === 'http' ? { plaintext: true as const } : {}) };
   if (i.password !== undefined) {
     if (i.protocol === 'https' && (!served || served.fingerprint !== i.fingerprint)) return { error: 'fingerprint_mismatch', served: served?.fingerprint ?? null };
-    const r = await checkLogin({ id: 'probe', host: withPort(i.host, i.ports[i.protocol]), protocol: i.protocol, user: i.user, password: i.password, ...(served ? { trust: { ca: served.pem, fingerprint: served.fingerprint } } : {}) });
+    const r = await checkLogin({ id: 'probe', host: withPort(i.host, i.ports[i.protocol]), protocol: i.protocol, user: i.user, password: i.password, ...(served ? { trust: o.siteCa ? { ca: o.siteCa.ca, servername: o.siteCa.servername, fingerprint: served.fingerprint } : { ca: served.pem, fingerprint: served.fingerprint } } : {}) });
     result.login = r.outcome === 'ok' ? 'ok' : r.outcome === 'refused' ? 'refused' : 'offline';
     if (r.outcome === 'ok') {
       result.device = r.device ?? null;

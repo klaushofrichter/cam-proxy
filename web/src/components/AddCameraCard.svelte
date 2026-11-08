@@ -1,7 +1,8 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { api, ApiError } from '../lib/api';
   import { newCameraProblem } from '../lib/camera-settings';
-  import { addCameraBody, passwordError, PLAINTEXT_WARNING, retryMinutes, trustConfirmText } from '../lib/onboarding';
+  import { addCameraBody, addNeedsCheck, addTrustError, passwordError, PLAINTEXT_WARNING, retryMinutes, trustConfirmText } from '../lib/onboarding';
   import { lockedWhy, rights } from '../lib/rights';
   import ConfirmDialog from './ConfirmDialog.svelte';
   import LockedNote from './LockedNote.svelte';
@@ -12,7 +13,10 @@
   // /control/cameras): the proxy logs in over exactly that certificate before
   // anything is stored. Also on a single-camera proxy (it writes CAMERA_HOST;
   // no restart). The local admin's only (issue #227). The password field is
-  // cleared after every answer and never kept anywhere else.
+  // cleared after every answer and never kept anywhere else. With a site CA
+  // (finding 21) a camera that serves this proxy's site-CA certificate for its
+  // id needs no check: Add sends no certificate, and the proxy trusts the
+  // camera by the site CA or refuses it (then check and confirm as before).
   let { existing, prefill = '', onadded }: { existing: string[]; prefill?: string; onadded: (view: Record<string, unknown>) => void } = $props();
   let id = $state('');
   let name = $state('');
@@ -28,6 +32,9 @@
   let busy = $state(false);
   let message = $state('');
   let touched = $state(false);
+  // Whether this proxy has a site CA (tls.site), from GET /control/tls.
+  let siteCa = $state(false);
+  onMount(() => void api<{ site: string | null }>('GET', '/control/tls').then((t) => (siteCa = !!t.site)).catch(() => undefined));
   $effect(() => {
     if (prefill) {
       host = prefill;
@@ -37,7 +44,7 @@
   });
   const problem = $derived(id.trim() ? newCameraProblem({ id: id.trim(), host }, existing) : newCameraProblem({ id: 'x', host }, []));
   const locked = $derived(lockedWhy($rights, 'local'));
-  const needsTrust = $derived(protocol === 'https' && !fingerprint);
+  const needsTrust = $derived(addNeedsCheck({ protocol, fingerprint, siteCa }));
 
   async function check() {
     touched = true;
@@ -77,7 +84,8 @@
     } catch (e) {
       const b = e instanceof ApiError ? (e.body as { error?: string; detail?: string; line?: string } | null) : null;
       const known = ['camera_refused', 'camera_offline', 'too_many_attempts', 'fingerprint_mismatch'];
-      message = b?.error && known.includes(b.error) ? passwordError(b.error, { retryAfterS: retryMinutes(b.detail) }) : `Not added: ${e instanceof ApiError ? e.message : 'failed'}${b?.line ? ` (add ${b.line} by hand)` : ''}`;
+      const untrusted = !fingerprint ? addTrustError(b, id) : null;
+      message = untrusted ?? (b?.error && known.includes(b.error) ? passwordError(b.error, { retryAfterS: retryMinutes(b.detail) }) : `Not added: ${e instanceof ApiError ? e.message : 'failed'}${b?.line ? ` (add ${b.line} by hand)` : ''}`);
       if (b?.error === 'fingerprint_mismatch') fingerprint = null;
     }
     busy = false;
@@ -86,7 +94,7 @@
 
 <div class="card" data-testid="add-camera">
   <h3>Add a camera</h3>
-  <p class="muted small">Check the camera first: its certificate is confirmed here, then the proxy logs in with the password you enter (it keeps it only on this proxy, never shown again) and starts the camera at once.</p>
+  <p class="muted small">Check the camera first: its certificate is confirmed here, then the proxy logs in with the password you enter (it keeps it only on this proxy, never shown again) and starts the camera at once.{#if siteCa} A camera that already serves this proxy's site-CA certificate for its id needs no check.{/if}</p>
   <form class="grid" onsubmit={(e) => { e.preventDefault(); void add(); }}>
     <label>Id <input bind:value={id} placeholder="cam6" autocomplete="off" data-testid="add-camera-id" /></label>
     <label>Name <input bind:value={name} placeholder="(the camera's)" autocomplete="off" data-testid="add-camera-name" /></label>

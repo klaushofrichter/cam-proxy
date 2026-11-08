@@ -19,7 +19,7 @@ import { withoutEnv, type Loaded } from '../config/load';
 import { cameraPasswordEnv } from '../config/password-env';
 import type { CameraRegistry } from '../cameras/registry';
 import { removePasswordLine } from '../moves/leftovers';
-import type { CertState, Requester } from '../tls/camera-certs';
+import type { CertState, Requester, SiteCaVerdict } from '../tls/camera-certs';
 import type { Served } from '../tls/served';
 import { PASSWORD_WINDOW_MS, resolveAttemptKey, type PasswordAttempts } from './attempts';
 import { passwordSource, type Credentials } from './credentials';
@@ -79,6 +79,10 @@ export interface OnboardingDeps {
   // After an add (finding 15): the camera-ftp-setup and camera-cert-push
   // actions' own code (src/onboarding/setup.ts), and whether the site CA covers the camera.
   setup?: { run: (action: SetupAction, cam: string, who: Who) => Promise<SetupStep>; siteCaCovers: (cam: string) => boolean };
+  // Add camera's site-CA trust (finding 21): whether this proxy has a site CA
+  // at all, whether a served certificate is its leaf for the camera's
+  // .internal name now (CameraCerts.siteCaVerdict), and the trust made so.
+  siteCa?: { available: () => boolean; check: (cam: string, s: Served) => SiteCaVerdict; adopt: (cam: string, s: Served, who: Requester) => CertState };
   now?: () => number;
 }
 
@@ -98,11 +102,15 @@ export interface HostChange {
   plaintext?: true;
 }
 
-export interface AddBody { id?: string; name?: string; host: string; protocol?: 'https' | 'http'; user?: string; password: string; trust?: { fingerprint: string }; ports?: Partial<ProbeInput['ports']>; ftp?: boolean }
+export interface AddBody { id?: string; name?: string; host: string; protocol?: 'https' | 'http'; user?: string; password: string; trust?: { fingerprint: string } | { siteCa: true }; ports?: Partial<ProbeInput['ports']>; ftp?: boolean }
 // How long an added camera's worker may take to start.
 const WORKER_WAIT_MS = 10_000;
 // eslint-disable-next-line no-control-regex
 const validName = (v: unknown): v is string => typeof v === 'string' && v.length >= 1 && v.length <= 64 && !/[\u0000-\u001f\u007f]/.test(v);
+
+// Site-CA trust for an add: the CA and the name the login verifies, and the served certificate's fingerprint.
+interface AddSiteCa { ca: string; servername: string }
+const NO_FINGERPRINT = 'trust.fingerprint: required for an https camera (the certificate it serves, from camera-probe)';
 
 // The served certificate is measured at most this often per camera (the heartbeat only reads the cache).
 export const SERVED_CACHE_MS = 60_000;
@@ -304,16 +312,57 @@ export class OnboardingService {
     if (b.name !== undefined && !validName(b.name)) return bad('name: 1 to 64 characters, no control characters');
     if (b.ftp !== undefined && typeof b.ftp !== 'boolean') return bad('ftp: true or false');
     if (!validPassword(b.password)) return bad(PASSWORD_RULE);
-    const trust = b.trust as { fingerprint?: unknown } | undefined;
-    if (trust !== undefined && (typeof trust !== 'object' || trust === null)) return bad('trust: {fingerprint}');
+    const trust = b.trust as { fingerprint?: unknown; siteCa?: unknown } | undefined;
+    if (trust !== undefined && (typeof trust !== 'object' || trust === null || Array.isArray(trust))) return bad('trust: {fingerprint} or {siteCa: true}');
+    if (trust?.siteCa !== undefined && trust.siteCa !== true) return bad('trust.siteCa: true, or leave it out');
+    if (trust?.siteCa === true && trust.fingerprint !== undefined) return bad('trust: fingerprint or siteCa: true, not both');
     const i = probeInput({ host: b.host, ...(b.protocol !== undefined ? { protocol: b.protocol } : {}), ...(b.user !== undefined ? { user: b.user } : {}), password: b.password, ...(trust?.fingerprint !== undefined ? { fingerprint: trust.fingerprint } : {}), ...(b.ports !== undefined ? { ports: b.ports } : {}) });
     if (typeof i === 'string') return bad(i);
-    if (i.protocol === 'https' && i.fingerprint === undefined) return bad("trust.fingerprint: required for an https camera (the certificate it serves, from camera-probe)");
+    if (trust?.siteCa === true && i.protocol !== 'https') return bad('trust.siteCa: only for an https camera');
+    // Finding 21: without a fingerprint, an https camera is trusted by the
+    // site CA when it serves this proxy's leaf for its name (asked for with
+    // siteCa: true, or tried when trust is left out on a proxy with a site CA;
+    // otherwise left out is refused as before, the camera not asked).
+    const siteCaMode = trust?.siteCa === true ? 'asked' : i.protocol === 'https' && i.fingerprint === undefined ? 'tried' : null;
+    if (siteCaMode === 'tried' && !this.d.siteCa?.available()) return bad(NO_FINGERPRINT);
     const l = this.d.loaded();
     if (!l.legacyCamera && b.id === undefined) return bad('id: required on a proxy with several cameras');
     // One add or remove at a time (security review 3): the checks and the writes see each other.
-    const r = await this.serial(() => (this.d.loaded().legacyCamera ? this.addLegacy(b, i, who) : this.addCamera(b.id as string, b.name as string | undefined, i, who, b.ftp === true)));
+    const r = await this.serial(async () => {
+      const now = this.d.loaded();
+      let input = i;
+      let sc: AddSiteCa | undefined;
+      if (siteCaMode) {
+        // The camera's id as the add will use it (a single-camera proxy: its one camera's).
+        const cam = now.legacyCamera ? now.order[0] : (b.id as string);
+        const v = await this.siteCaFor(cam, i, siteCaMode, who);
+        if ('error' in v) return v;
+        input = { ...i, fingerprint: v.fingerprint };
+        sc = { ca: v.ca, servername: v.servername };
+      }
+      return now.legacyCamera ? this.addLegacy(b, input, who, sc) : this.addCamera(b.id as string, b.name as string | undefined, input, who, b.ftp === true, sc);
+    });
     return 'onboarding' in r && i.protocol === 'http' ? { ...r, plaintext: true as const } : r;
+  }
+
+  // Finding 21: the certificate the camera serves now, when it is this
+  // proxy's site-CA leaf for <cam>.<site>.internal (valid now). Nothing but a
+  // TLS handshake reaches the camera (no password). Not so: left out → the
+  // 400 of before (no record); siteCa: true → 409 site_ca_untrusted (503
+  // camera_offline without an answer), a camera-add failure record.
+  private async siteCaFor(cam: string, i: ProbeInput, mode: 'asked' | 'tried', who: Who): Promise<{ fingerprint: string; ca: string; servername: string } | Refusal> {
+    const host = OnboardingService.hostOf(i);
+    const refuse = (r: Refusal, extra: Record<string, unknown> = {}): Refusal => {
+      if (mode === 'tried') return { status: 400, error: 'invalid', detail: NO_FINGERPRINT };
+      this.auditAdd(who, cam, 'failure', `Camera ${cam} (${host}) not added: ${r.error}`, { host, trust: 'site-ca', ...extra }, r.error);
+      return r;
+    };
+    if (!this.d.siteCa?.available()) return refuse({ status: 409, error: 'site_ca_untrusted', detail: 'trust.siteCa: this proxy has no site CA (tls.site): confirm the certificate instead (camera-probe, trust.fingerprint)' });
+    const served = await servedCertificate(bareHost(i.host), i.ports.https, 3000);
+    if (!served) return refuse({ status: 503, error: 'camera_offline', detail: 'the camera did not answer on HTTPS' });
+    const v = this.d.siteCa.check(cam, served);
+    if (!v.ok) return refuse({ status: 409, error: 'site_ca_untrusted', detail: `trust.siteCa: the camera's certificate is ${v.reason}: confirm it instead (camera-probe, trust.fingerprint)`, extra: { served: served.fingerprint } }, { served: served.fingerprint, reason: v.reason });
+    return { fingerprint: served.fingerprint, ca: v.ca, servername: v.servername };
   }
 
   private envFileSetsShared(l: Loaded): boolean {
@@ -356,7 +405,7 @@ export class OnboardingService {
   // new camera takes the configured camera's id and replaces it only when it
   // has no address or moved away; CAMERA_HOST goes into the env file (backup,
   // atomic), the rest into overrides.json; the camera's side restarts with it.
-  private async addLegacy(b: Record<string, unknown>, i: ProbeInput, who: Who): Promise<{ status: 201; onboarding: OnboardingStatus } | Refusal> {
+  private async addLegacy(b: Record<string, unknown>, i: ProbeInput, who: Who, sc?: AddSiteCa): Promise<{ status: 201; onboarding: OnboardingStatus } | Refusal> {
     const l = this.d.loaded();
     const cam = l.order[0];
     const host = OnboardingService.hostOf(i);
@@ -379,7 +428,7 @@ export class OnboardingService {
       if (!(err instanceof EnvFileError)) throw err;
       return fail({ status: 409, error: 'not_available', detail: `${err.message}: add ${line} to the .env file by hand`, extra: { line } });
     }
-    const p = await this.probeForAdd(i, fail);
+    const p = await this.probeForAdd(cam, i, fail, sc);
     if ('error' in p) return p;
     const given = (b.ports ?? {}) as Record<string, unknown>;
     const patch = { cameras: { [cam]: { protocol: i.protocol, user: i.user, ...(typeof b.name === 'string' ? { name: b.name } : {}), ...(given.onvif !== undefined ? { onvifPort: i.ports.onvif } : {}), ...(given.rtsp !== undefined ? { rtspPort: i.ports.rtsp } : {}), ...(given.baichuan !== undefined ? { baichuanPort: i.ports.baichuan } : {}) } } };
@@ -396,7 +445,7 @@ export class OnboardingService {
       if (err instanceof EnvFileError) return fail({ status: 409, error: 'not_available', detail: `${err.message}: add ${line} to the .env file by hand`, extra: { line } });
       throw err;
     }
-    if (p.served) this.d.pinServed(cam, p.served, this.requester(who));
+    if (p.served) this.trustServed(cam, p.served, who, sc);
     let next = applyOverrides(before, patch);
     if (moved) next = removeOverride(next, `cameras.${cam}.moved`);
     next = withCameraHost(next, { value: host, name: w.key });
@@ -410,7 +459,7 @@ export class OnboardingService {
     this.auditConfig(who, before, next);
     if (wasRunning) await this.d.restartCamera(cam);
     else await this.waitForWorker(cam);
-    this.auditAdd(who, cam, 'success', `Camera ${cam} added (${host}, ${p.model ?? 'unknown model'}): ${w.key} written to .env${p.served ? `, certificate pinned (${p.served.fingerprint})` : ''}`, { host, model: p.model, pinned: p.served?.fingerprint ?? null, envName: w.key, from: w.previous, backup: w.backup });
+    this.auditAdd(who, cam, 'success', `Camera ${cam} added (${host}, ${p.model ?? 'unknown model'}): ${w.key} written to .env${OnboardingService.trustText(p.served, sc)}`, { host, model: p.model, ...OnboardingService.trustDetails(p.served, sc), envName: w.key, from: w.previous, backup: w.backup });
     const [onboarding] = await this.status(cam);
     return { status: 201, onboarding: onboarding ?? this.placeholder(cam) };
   }
@@ -426,18 +475,39 @@ export class OnboardingService {
   }
 
   // Probe with the password (rate-limited); a refusal names the error. Audited by the caller.
-  private async probeForAdd(i: ProbeInput, fail: (r: Refusal, extra?: Record<string, unknown>) => Refusal): Promise<{ model: string | null; served: Served | null } | Refusal> {
+  // With site-CA trust the login verifies the CA and the name too, and the
+  // certificate it logged in to is checked once more (it is the one trusted).
+  private async probeForAdd(cam: string, i: ProbeInput, fail: (r: Refusal, extra?: Record<string, unknown>) => Refusal, sc?: AddSiteCa): Promise<{ model: string | null; served: Served | null } | Refusal> {
     const limited = await this.attempt(i.host, (r, suppressed) => void fail(r, suppressed ? { suppressed } : {}));
     if (limited) return limited;
-    const p = await probeServed(i);
+    const p = await probeServed(i, sc ? { siteCa: sc } : {});
     if ('error' in p) return fail({ status: 409, error: 'fingerprint_mismatch', detail: 'the camera serves another certificate than the one confirmed', extra: { served: p.served } }, { served: p.served });
     if (p.result.login === 'refused') return fail({ status: 422, error: 'camera_refused', detail: 'the camera refused this password' });
     if (p.result.login !== 'ok') return fail({ status: 503, error: 'camera_offline', detail: 'the camera did not answer the login' });
+    if (sc && p.served) {
+      const v = this.d.siteCa?.check(cam, p.served) ?? { ok: false as const, reason: 'not checked' };
+      if (!v.ok) return fail({ status: 409, error: 'site_ca_untrusted', detail: `trust.siteCa: the camera's certificate is ${v.reason}`, extra: { served: p.served.fingerprint } }, { served: p.served.fingerprint, reason: v.reason });
+    }
     return { model: p.result.device?.model ?? null, served: p.served };
   }
 
+  // The trust an add makes for the certificate it logged in to: site-CA
+  // trust (finding 21; CameraCerts.adoptSiteCa, its own camera-trust record),
+  // else the confirmed certificate pinned.
+  private trustServed(cam: string, served: Served, who: Who, sc?: AddSiteCa): void {
+    if (sc) this.d.siteCa!.adopt(cam, served, this.requester(who));
+    else this.d.pinServed(cam, served, this.requester(who));
+  }
+  private static trustText(served: Served | null, sc?: AddSiteCa): string {
+    if (!served) return '';
+    return sc ? `, trust site-ca (${sc.servername})` : `, certificate pinned (${served.fingerprint})`;
+  }
+  private static trustDetails(served: Served | null, sc?: AddSiteCa): Record<string, unknown> {
+    return { pinned: served && !sc ? served.fingerprint : null, ...(served && sc ? { siteCa: sc.servername, fingerprint: served.fingerprint } : {}) };
+  }
+
   // `ftp`: clip uploads on for the camera; off unless asked for (the passive range needs 10 ports per camera with FTP).
-  private async addCamera(id: string, name: string | undefined, i: ProbeInput, who: Who, ftp = false): Promise<{ status: 201; onboarding: OnboardingStatus; setup?: AddSetup } | Refusal> {
+  private async addCamera(id: string, name: string | undefined, i: ProbeInput, who: Who, ftp = false, sc?: AddSiteCa): Promise<{ status: 201; onboarding: OnboardingStatus; setup?: AddSetup } | Refusal> {
     const host = OnboardingService.hostOf(i);
     const fail = (r: Refusal, extra: Record<string, unknown> = {}): Refusal => {
       this.auditAdd(who, id, 'failure', `Camera ${id} (${host}) not added: ${r.error}`, { host, ...extra }, r.error);
@@ -449,7 +519,7 @@ export class OnboardingService {
     if (atCameraLimit(running)) return fail({ status: 409, error: 'camera_limit', detail: `profile.cameras is ${running.profile.cameras}` });
     const env = this.envRule(l, id);
     if ('error' in env) return fail(env);
-    const p = await this.probeForAdd(i, fail);
+    const p = await this.probeForAdd(id, i, fail, sc);
     if ('error' in p) return p;
     // Again after the probe (security review 3; the lock makes this a guard).
     const now = this.d.loaded();
@@ -466,7 +536,7 @@ export class OnboardingService {
         const refused = this.removeLineAfterLogin(this.d.loaded(), id, restore, fail);
         if (refused) return refused;
       }
-      if (p.served) this.d.pinServed(id, p.served, this.requester(who));
+      if (p.served) this.trustServed(id, p.served, who, sc);
       next = applyOverrides(this.d.loaded(), patch);
       if (env.removeLine) next = withoutEnv(next, [cameraPasswordEnv(id)]);
     } catch (err) {
@@ -480,7 +550,7 @@ export class OnboardingService {
     await this.waitForWorker(id);
     const setup = await this.setupAfterAdd(id, ftp, who);
     const steps = Object.values(setup).map((s) => `; ${s.action === 'camera-ftp-setup' ? 'FTP setup' : 'certificate push'} ${s.ok ? 'done' : `failed: ${s.detail}`}`).join('');
-    this.auditAdd(who, id, 'success', `Camera ${id} added (${host}, ${p.model ?? 'unknown model'})${p.served ? `, certificate pinned (${p.served.fingerprint})` : ''}${steps}`, { host, model: p.model, pinned: p.served?.fingerprint ?? null, ...(Object.keys(setup).length ? { setup } : {}) });
+    this.auditAdd(who, id, 'success', `Camera ${id} added (${host}, ${p.model ?? 'unknown model'})${OnboardingService.trustText(p.served, sc)}${steps}`, { host, model: p.model, ...OnboardingService.trustDetails(p.served, sc), ...(Object.keys(setup).length ? { setup } : {}) });
     const [status] = await this.status(id);
     const onboarding = status ?? this.placeholder(id);
     // A failed step in the answer's steps too (the status reads the camera's state; this says why).

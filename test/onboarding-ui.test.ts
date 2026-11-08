@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isPlaintext, PLAINTEXT_WARNING, timeSetText, addCameraBody, passwordConfirmText, passwordError, retryMinutes, stepLine, trustConfirmText, trustNeeded, STEP_LABELS } from '../web/src/lib/onboarding';
+import { isPlaintext, PLAINTEXT_WARNING, timeSetText, addCameraBody, addNeedsCheck, addTrustError, passwordConfirmText, passwordError, retryMinutes, stepLine, trustConfirmText, trustNeeded, STEP_LABELS } from '../web/src/lib/onboarding';
 
 // The admin UI's onboarding texts (spec 2026-10-30-camera-onboarding-design §4.1, §4.4, §4.5).
 const FP = `SHA256:${'A'.repeat(64)}`;
@@ -47,5 +47,16 @@ describe('the onboarding dialogs and card', () => {
     expect(addCameraBody({ id: ' cam6 ', name: '', host: ' 192.0.2.16 ', protocol: 'https', user: '', password: 'pw', fingerprint: FP })).toEqual({ id: 'cam6', host: '192.0.2.16', protocol: 'https', user: 'admin', password: 'pw', trust: { fingerprint: FP } });
     expect(addCameraBody({ id: '', name: 'Gate', host: '192.0.2.16', protocol: 'http', user: 'proxy', password: 'pw', fingerprint: null })).toEqual({ name: 'Gate', host: '192.0.2.16', protocol: 'http', user: 'proxy', password: 'pw' });
     expect(addCameraBody({ id: 'cam6', name: '', host: '192.0.2.16', protocol: 'http', user: 'proxy', password: 'pw', fingerprint: null, ftp: true }).ftp).toBe(true);
+  });
+  it('with a site CA, Add needs no confirmed certificate (finding 21): no trust sent, the proxy decides', () => {
+    expect(addNeedsCheck({ protocol: 'https', fingerprint: null, siteCa: false })).toBe(true);
+    expect(addNeedsCheck({ protocol: 'https', fingerprint: FP, siteCa: false })).toBe(false);
+    expect(addNeedsCheck({ protocol: 'https', fingerprint: null, siteCa: true })).toBe(false);
+    expect(addNeedsCheck({ protocol: 'http', fingerprint: null, siteCa: false })).toBe(false);
+    expect(addCameraBody({ id: 'cam6', name: '', host: '192.0.2.16', protocol: 'https', user: '', password: 'pw', fingerprint: null }).trust).toBeUndefined();
+    expect(addTrustError({ error: 'invalid', detail: 'trust.fingerprint: required for an https camera (the certificate it serves, from camera-probe)' }, 'cam6')).toBe("cam6 doesn't serve this proxy's site-CA certificate for its id: check the camera and confirm its certificate.");
+    expect(addTrustError({ error: 'site_ca_untrusted', detail: 'x' }, '')).toBe("The camera doesn't serve this proxy's site-CA certificate for its id: check the camera and confirm its certificate.");
+    expect(addTrustError({ error: 'invalid', detail: 'id: required' }, 'cam6')).toBeNull();
+    expect(addTrustError(null, 'cam6')).toBeNull();
   });
 });
