@@ -110,7 +110,9 @@ describe('Baichuan faults through the proxy', () => {
       const r = await okWhole(f);
       expect(r.complete).toBe(true);
       expect([counters().downloads, counters().baichuanDownloads]).toEqual([1, 0]);
-      expect(await lastResult()).toBe('ok');
+      // #328: the outcome is recorded after the response has ended (once the
+      // cache file is closed and committed), so the client can be first: wait for it.
+      await until(async () => (await lastResult()) === 'ok', 5000);
       expect(p.proxy.recordings.status().download).toMatchObject({ path: 'http', baichuanRefusal: { status: 400 } });
     } finally {
       faults().clear('baichuan.refuse');
