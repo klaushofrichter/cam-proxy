@@ -45,11 +45,15 @@ const translate = (l: Loaded, p: string): string => {
   }
 };
 
+// This proxy's cameras for cams-admin's config view: not one hidden after a
+// move (its `moved` marker), which runs on the other proxy now (#235 T3).
+const ownCameras = (l: Loaded): string[] => l.config.cameraOrder.filter((id) => !l.config.cameras[id]?.moved);
+
 // The contract's path checks 1-3, in its order: unknown_camera, not_remote_settable, held_by_env.
 function checkPaths(l: Loaded, paths: string[]): Done | null {
   const fails: Failure[] = [];
   for (const p of paths) {
-    const c = classify(p, l.config.cameraOrder);
+    const c = classify(p, ownCameras(l));
     if (c === 'unknown_camera') fails.push({ path: p, code: 'unknown_camera' });
     else if (c !== 'remote') {
       const why = denyReason(p);
@@ -193,14 +197,14 @@ function rollback(d: ConfigCommandDeps, of: string, dryRun: boolean, u: Undoer):
 
 // The config.get result (R3-6): one compact object per path, at most 24 cameras.
 export function compactView(l: Loaded, running: Config, marks: ReturnType<OverridesBackups['byPath']>, maxCameras = MAX_CAMERAS): Record<string, unknown> {
-  const all = l.config.cameraOrder;
+  const all = ownCameras(l);
   const cameras = all.slice(0, maxCameras);
   const omitted = all.slice(maxCameras);
   const view = configView(l, running, marks) as Record<string, { value?: unknown; source: string; pending?: boolean; next?: unknown; by?: { cmdId: string; actor: string; at: number } }>;
   const paths: Record<string, unknown> = {};
   for (const [p, e] of Object.entries(view)) {
     const m = /^cameras\.([^.]+)\./.exec(p);
-    if ((m && !cameras.includes(m[1])) || SECRET_PATH.test(p)) continue;
+    if ((m && !cameras.includes(m[1])) || SECRET_PATH.test(p)) continue; // also a moved camera's
     const by = e.by;
     const r = needsProcessRestart(p) ? 'process' : needsRestart(p) ? 'restart' : null;
     paths[p] = { ...(e.value !== undefined ? { v: e.value } : {}), s: e.source, ...(r ? { r } : {}), ...(e.pending ? { p: true, ...(e.next !== undefined ? { n: e.next } : {}) } : {}), ...(by ? { by } : {}) };

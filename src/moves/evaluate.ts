@@ -7,7 +7,7 @@ import { pinCheck, splitHost } from '../camera/http';
 import { ConfigError, planOverrides, type Loaded } from '../config/load';
 import { cameraConfig } from '../config/cameras';
 import { PROFILE_GB } from '../storage';
-import { heldCameras, passivePorts, PORTS_PER_CAMERA, profileCameras, profileSet } from '../config/profile';
+import { heldCameras, passiveNeed, passivePorts, passiveRange, PORTS_PER_CAMERA, profileCameras, profileSet } from '../config/profile';
 import type { MoveOfferArgs } from '../fleet/command-args';
 import { fingerprintOf, type SiteCa } from '../tls/ca';
 import { issuedBy } from '../tls/leaf';
@@ -165,7 +165,14 @@ export async function evaluate(deps: EvaluateDeps, args: MoveOfferArgs): Promise
   const ports = passivePorts(cfg.ftp.passive);
   const incomingFtp = args.settings.ftp?.enabled ?? cfg.ftp.enabled;
   const withFtp = cfg.cameraOrder.filter((c) => c !== id && cameraConfig(cfg, c)!.ftp.enabled).length + (incomingFtp ? 1 : 0);
-  if (withFtp > 1 && ports < PORTS_PER_CAMERA * withFtp) return no('incompatible', `ftp.passive: ${ports} ports (${cfg.ftp.passive}) for ${withFtp} cameras with FTP; at least ${PORTS_PER_CAMERA} per camera (profile_ftp_ports)`);
+  if (withFtp > 1 && ports < PORTS_PER_CAMERA * withFtp) {
+    // What to set instead (#240): the range from the same start, as wide as the
+    // profile needs (and the move), or none (then derived from the profile).
+    const { from } = passiveRange(cfg.ftp.passive);
+    const wide = Math.max(passiveNeed(cfg), PORTS_PER_CAMERA * withFtp);
+    const fix = from + wide - 1 <= 65535 ? `set it to ${from}-${from + wide - 1}, or remove it to use the profile's range, and open those ports in the host firewall` : "remove it to use the profile's range, and open those ports in the host firewall";
+    return no('incompatible', `ftp.passive: ${ports} ports (${cfg.ftp.passive}) for ${withFtp} cameras with FTP; at least ${PORTS_PER_CAMERA} per camera (profile_ftp_ports): ${fix}`);
+  }
   try {
     // The camera's password comes with the move (the secrets step): not needed here yet.
     planOverrides(loaded, { cameras: { [id]: cameraNode(args) } }, { passwordFromMove: [id] });

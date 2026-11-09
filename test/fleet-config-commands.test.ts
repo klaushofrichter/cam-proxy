@@ -180,6 +180,17 @@ describe('config.set', () => {
     for (const dryRun of [true, false]) expect(await run('config.set', { v: 1, dryRun, baseRevision: rev(), set: { 'sse.pingS': 7 } })).toMatchObject({ status: 'failed', code: 'held_by_env', result: { paths: [{ path: 'sse.pingS', code: 'held_by_env' }] } });
     expect(await run('config.unset', { v: 1, dryRun: true, baseRevision: rev(), paths: ['sse.pingS'] })).toMatchObject({ code: 'held_by_env' });
   });
+  // #235 T3: a camera moved to another proxy (hidden here by its `moved` marker) is
+  // not this proxy's: cams-admin's config view lists it under the new proxy only.
+  it('a moved camera: not in config.get, and config.set of its settings is unknown_camera', async () => {
+    localEdit({ cameras: { cam2: { moved: 'mv_0S0123456789ABCDEFGH' } } });
+    const r = await run('config.get', { v: 1 });
+    expect(r.result).toMatchObject({ cameras: ['cam1'], omittedCameras: [] });
+    expect(Object.keys(r.result!.paths as object).filter((p) => p.startsWith('cameras.cam2.'))).toEqual([]);
+    const set = await run('config.set', { v: 1, dryRun: true, baseRevision: rev(), set: { 'cameras.cam2.statusPollS': 45 } });
+    expect(set).toMatchObject({ status: 'failed', code: 'unknown_camera', result: { paths: [{ path: 'cameras.cam2.statusPollS', code: 'unknown_camera' }] } });
+    expect((await run('config.set', { v: 1, dryRun: true, baseRevision: rev(), set: { 'cameras.cam1.statusPollS': 45 } })).status).toBe('ok');
+  });
   it('the contract order: unknown_camera before not_remote_settable before held_by_env before conflict', async () => {
     expect((await run('config.set', { v: 1, dryRun: true, baseRevision: `sha256:${'0'.repeat(64)}`, set: { 'tls.site': 'x', 'cameras.evil.name': 'x' } })).code).toBe('unknown_camera');
     expect((await run('config.set', { v: 1, dryRun: true, baseRevision: `sha256:${'0'.repeat(64)}`, set: { 'tls.site': 'x' } })).code).toBe('not_remote_settable');

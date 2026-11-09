@@ -1,5 +1,5 @@
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync } from 'fs';
-import { dirname, join, resolve, sep } from 'path';
+import { dirname, join, relative, resolve, sep } from 'path';
 import { metadataJson, withMoveNote } from '../archive/json';
 import type { ArchiveMoveNote } from '../archive/metadata';
 import type { Archive } from '../archive/service';
@@ -360,7 +360,11 @@ export function removeImported(d: { catalog: Pick<Catalog, 'db'>; dataDir: strin
 // an analysis the return did not list (asked for after the cancel: the cascade
 // would take it). Rows go by id and camera in one transaction, then the files;
 // storage recounted. Idempotent (a deleted item is no longer listed).
-export function removeReturned(d: { catalog: Pick<Catalog, 'db'>; dataDir: string; storage: Pick<Storage, 'recount'> }, r: MoveRecord, filter: ItemFilter): { deleted: Purged; kept: Purged } {
+// `served` (#250): whether the return's served manifest lists a file (its path
+// relative to the data folder). An item with a file it does not list stays:
+// written after the listing, the original never had it (a clock that stepped
+// back after the cancel can give such a file a minute the filter still takes).
+export function removeReturned(d: { catalog: Pick<Catalog, 'db'>; dataDir: string; storage: Pick<Storage, 'recount'> }, r: MoveRecord, filter: ItemFilter, served?: (rel: string) => boolean): { deleted: Purged; kept: Purged } {
   const cam = r.camera;
   if (!CAM_ID.test(cam)) throw new Error('removeReturned: not a camera id');
   const deleted = zeros();
@@ -372,7 +376,7 @@ export function removeReturned(d: { catalog: Pick<Catalog, 'db'>; dataDir: strin
   const listed = new Set((r.manifest ?? []).map((c) => c.id));
   // Only chunks the original fetched (review M1): a report (or a forged one)
   // never deletes items of a chunk the original did not even list.
-  const served = new Set(r.served ?? []);
+  const servedChunks = new Set(r.served ?? []);
   const nowArchive = new Map(listChunks(d, cam, ['archive'], filter).map((c) => [c.id, c]));
   const copiedSame = (id: string) => {
     const c = nowArchive.get(id);
@@ -398,7 +402,8 @@ export function removeReturned(d: { catalog: Pick<Catalog, 'db'>; dataDir: strin
     for (const it of cameraItems(d, cam, kind, filter)) {
       const id = `${kind}:${chunkDay(it.ts)}`;
       const entry = r.keep?.[id];
-      let stays = !r.keep || !listed.has(id) || !served.has(id) || entry === 'all' || (Array.isArray(entry) && it.files.some((f) => keepFiles.has(f)));
+      let stays = !r.keep || !listed.has(id) || !servedChunks.has(id) || entry === 'all' || (Array.isArray(entry) && it.files.some((f) => keepFiles.has(f)));
+      if (!stays && served) stays = it.files.some((f) => !served(relative(root, f).split(sep).join('/')));
       if (!stays && kind === 'archive') stays = !copiedSame(id);
       if (!stays && kind === 'events') {
         const evId = Number((it.rows[0]?.row as { id?: unknown }).id);

@@ -23,6 +23,7 @@ import { MoveSource, type SourceDeps } from '../src/moves/source';
 import { hashMoveToken } from '../src/moves/token';
 import type { MoveEvent } from '../src/moves/types';
 import { strict, why } from './helpers/contract';
+import { ManifestCache } from '../src/moves/manifest-cache';
 
 const CANCELLED = 'mv_0123456789ABCDEFGHJK';
 const RETURN = 'mv_1123456789ABCDEFGHJK';
@@ -591,6 +592,24 @@ describe('the return\'s finish (step 4 Task 11)', () => {
     expect(has(f, LATE_STILL)).toBe(true);
     expect(count(f.db, 'SELECT COUNT(*) AS n FROM clips WHERE id = ?', lateId)).toBe(1);
     expect(has(f, OWN_CLIP)).toBe(false);
+  });
+
+  // #250: a still the new proxy wrote after it listed the return (its clock stepped back
+  // after the cancel: a minute before the mark, which the filter still takes) was never
+  // served to the original: it stays. The return's cached manifests go at its end.
+  it('the finish deletes only files the served manifest lists; the return\'s cached manifests go', async () => {
+    const f = fixture();
+    const cache = new ManifestCache(f.dataDir);
+    Object.assign(f.deps, { manifests: cache });
+    await copiedBack(f);
+    const STEPPED_BACK = 'stills/cam1/2026/10/21/0930.pack';
+    f.put(STEPPED_BACK, 'written-after-the-listing', CANCEL_AT - 30 * MIN);
+    expect(existsSync(join(f.dataDir, 'admin', 'moves', `${RETURN}.manifests`))).toBe(true);
+    expect((await f.returns.finish(finishArgs('source'))).status).toBe('ok');
+    expect(has(f, STEPPED_BACK)).toBe(true);
+    expect(has(f, OWN_STILL)).toBe(false);
+    expect(f.journal.ended(RETURN, 'source')!.kept!.stills.files).toBeGreaterThanOrEqual(1);
+    expect(existsSync(join(f.dataDir, 'admin', 'moves', `${RETURN}.manifests`))).toBe(false);
   });
 
   it('an abandoned return finish deletes nothing on either side', async () => {

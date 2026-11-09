@@ -3,6 +3,11 @@
 ## Unreleased
 
 - cams-admin may now only make capture denser, never thin it out: `stills.intervalS`, `events.poll.intervalS` and a camera's `stills.intervalS` can only be shortened from cams-admin (`config.set`, `config.unset`, `config.rollback`) and from a cams-admin sign-in on the Settings page; a longer interval is refused ("a remote change may only shorten the interval; a longer one is a local change") and stays a change at the proxy (cams-admin contract, cams-admin #20). A camera without its own interval counts as having the host's, so its first interval may be anything up to the host's, and resetting it is refused when the host's is longer. The one-way rules now also apply to per-camera settings (they were looked up by the exact path before).
+- cams-admin's settings view no longer lists a camera that moved to another proxy (it showed under both proxies), and a settings change for it is refused as an unknown camera.
+- Camera moves: a move to a proxy where a per-camera password for that camera id is set by hand in the environment (`CAMPROXY_CAMERA_PASSWORD_<ID>`) now goes on and uses that password (the environment wins, as for every camera); only a camera that was on this proxy before (its hidden entry) still has it refused as stale.
+- Camera moves: when the target refuses because its FTP passive range is too small, it now says what to set (for example "set it to 30000-30029, or remove it to use the profile's range, and open those ports in the host firewall").
+- Camera moves: the move panel names the limits a target proposes in words ("Size cap for stills: 90 GB (stills.maxGB)" instead of "stills.maxGB: 90 GB").
+- Copy back after a cancelled move: the new proxy deletes only the files it actually listed for the original proxy (a still written after that, for example with a clock that went back after the cancel, now stays), and drops its cached listings once the copy back ends.
 
 ## v2026.11.09.1
 

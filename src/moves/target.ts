@@ -773,8 +773,8 @@ export class MoveTarget {
   // means (the host value, the default). Refused: a camera of this id added
   // here since the offer (id_taken; not this step's own earlier write), or a
   // leftover whose config.json keeps what a move can't replace (tlsName, a
-  // share, `moved` itself), or a per-camera password in the
-  // environment (it would win over the moved one): stale_leftover.
+  // share, `moved` itself), or a per-camera password in the environment for
+  // the leftover (it would win over the moved one): stale_leftover.
   // passwordPending (the secrets step's check before it stores the password):
   // the camera's own password is not required yet; the plan is a check only.
   // The camera step plans without it: it needs the stored password.
@@ -785,9 +785,11 @@ export class MoveTarget {
     const id = r.camera;
     const existing = loaded.config.cameras[id];
     if (existing && existing.moved === undefined && !r.cameraWritten) return { problem: 'id_taken' };
-    if ((loaded.env[cameraPasswordEnv(id)] ?? '').trim() !== '') return { problem: 'stale_leftover' };
     // The configuration without this camera's overrides: what config.json alone gives it.
     const leftover = existing?.moved !== undefined;
+    // The environment wins over the moved password (spec §9.3): one set by hand
+    // for a new id is used; a leftover's is the camera's old one, stale.
+    if (leftover && (loaded.env[cameraPasswordEnv(id)] ?? '').trim() !== '') return { problem: 'stale_leftover' };
     const base = rebuildWith(loaded, withoutCamera(loaded.overrides, id));
     const file = base.config.cameras[id];
     const node: Record<string, unknown> = { name: c.name, host: c.host, protocol: c.protocol, user: c.user, onvifPort: c.onvifPort, rtspPort: c.rtspPort, baichuanPort: c.baichuanPort, ...structuredClone(r.settings ?? {}) };

@@ -78,8 +78,13 @@ describe('texts', () => {
     expect(autoWaitText('plan')).toBe('Started from cams-admin; not approved automatically: the plan did not fit the answer. Approve it here or cancel.');
   });
   it('limits show their unit', () => {
-    expect(limitText('stills.maxGB', 90)).toBe('stills.maxGB: 90 GB');
-    expect(limitText('storage.maxBytes', 200 * 1024 ** 3)).toBe('storage.maxBytes: 200.0 GB');
+    // #235 T11: what the limit is in words, the setting after it.
+    expect(limitText('stills.maxGB', 90)).toBe('Size cap for stills: 90 GB (stills.maxGB)');
+    expect(limitText('storage.maxBytes', 200 * 1024 ** 3)).toBe('Storage budget: 200.0 GB (storage.maxBytes)');
+    expect(limitText('profile.storageGB', 500)).toBe('Storage budget: 500 GB (profile.storageGB)');
+    expect(limitText('ftp.maxGB', 40)).toBe('Size cap for clips: 40 GB (ftp.maxGB)');
+    expect(limitText('previews.maxGB', 5)).toBe('Size cap for previews: 5 GB (previews.maxGB)');
+    expect(limitText('other.maxGB', 1)).toBe('other.maxGB: 1 GB');
   });
   it('this proxy refusing to start, and a moved leftover', () => {
     expect(refusalText('no_site_ca')).toBe("This proxy has no site certificate authority, so its cameras can't be moved.");
