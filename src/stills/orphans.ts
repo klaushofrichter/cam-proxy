@@ -18,7 +18,8 @@ const STALE_MS = 60_000;
 
 export interface Proc { pid: number; ppid: number; args: string[] }
 
-function processes(): Proc[] {
+// Every process with its parent and arguments (/proc on Linux, ps elsewhere).
+export function processes(): Proc[] {
   if (existsSync('/proc/self/stat')) {
     const out: Proc[] = [];
     for (const d of readdirSync('/proc')) {
@@ -76,14 +77,13 @@ export async function reapOrphanGo2rtc(o: ReapOptions = {}): Promise<{ killed: n
     return { killed, removed };
   }
   const byPid = new Map(procs.map((p) => [p.pid, p]));
-  const isNode = (p: Proc | undefined) => !!p && basename(p.args[0] ?? '').startsWith('node');
   const inUse = new Set<string>();
   for (const p of procs) {
     const file = configOf(p);
     if (!file || p.pid === self) continue;
     const parent = byPid.get(p.ppid);
     // Ours and running (our child, or tracked) first; then: its parent is gone (pid 1, or a reaper that isn't node).
-    const orphan = p.ppid !== self && !tracked.has(p.pid) && (p.ppid === 1 || !isNode(parent));
+    const orphan = p.ppid !== self && !tracked.has(p.pid) && parentGone(p, parent);
     if (!orphan) {
       inUse.add(dirname(file));
       continue;
@@ -112,6 +112,11 @@ export async function reapOrphanGo2rtc(o: ReapOptions = {}): Promise<{ killed: n
     }
   }
   return { killed, removed };
+}
+
+// Its parent is gone: pid 1 (init, launchd), or a reaper that isn't node.
+export function parentGone(p: Proc, parent: Proc | undefined): boolean {
+  return p.ppid === 1 || !parent || !basename(parent.args[0] ?? '').startsWith('node');
 }
 
 function alive(pid: number): boolean {
