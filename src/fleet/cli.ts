@@ -1,6 +1,6 @@
 import { join } from 'path';
 import { createInterface } from 'readline';
-import type { Readable } from 'stream';
+import { Writable, type Readable } from 'stream';
 import { AuditLog } from '../audit/audit-log';
 import { activeCameraIds } from '../config/cameras';
 import { applyOverrides, ConfigError, loadConfig, removeOverride } from '../config/load';
@@ -29,11 +29,23 @@ export interface CliIo {
 
 const USAGE = 'usage: cam-proxy admin-enroll --url <cams-admin URL> [--no-tokens]   (the code is read from stdin; allows tokens.apply and tokens.apply.admin unless --no-tokens)\n       cam-proxy admin-unenroll\n       cam-proxy admin-commands [status | allow <entry…> | deny <entry…> | pause [reason] | resume | changes | undo <cmdId>]\n       cam-proxy admin-tokens [list | block <id> | unblock <id>]\n';
 
-async function readCode(io: CliIo): Promise<string> {
+// On a terminal the prompt is shown and the code typed is not (#182), like a password prompt.
+export async function readCode(io: CliIo): Promise<string> {
   if (io.stdin.isTTY) {
-    const rl = createInterface({ input: io.stdin, output: process.stderr, terminal: true });
+    let muted = false;
+    const output = new Writable({
+      write(chunk: Buffer | string, _enc, done) {
+        if (!muted) io.err(String(chunk));
+        done();
+      },
+    });
+    const rl = createInterface({ input: io.stdin, output, terminal: true });
     try {
-      return await new Promise<string>((r) => rl.question('Enrollment code from cams-admin: ', r));
+      const answer = new Promise<string>((r) => rl.question('Enrollment code from cams-admin: ', r));
+      muted = true;
+      const code = await answer;
+      io.err('\n');
+      return code.trim();
     } finally {
       rl.close();
     }

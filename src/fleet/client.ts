@@ -162,6 +162,7 @@ export class AdminClient {
   private lastErrorAt: number | null = null;
   private reason: string | null = null; // why this connection ends, if known
   private unsupported = 0; // unsupported messages on this connection
+  private replacingKey = false; // a re-enrollment runs (replacing())
   private noReset = false; // this connection ended for an oversize message: no backoff reset
   private local = false; // this connection ended for a local problem (files under data/admin): retried soon
   private lastOutcome: ClientState | null = null;
@@ -249,6 +250,11 @@ export class AdminClient {
       this.changeTimer.unref();
     }
     this.connect();
+  }
+
+  // While a re-enrollment runs (#182): a rejection is the old key's, expected, not logged as admin_rejected.
+  replacing(on: boolean): void {
+    this.replacingKey = on;
   }
 
   // Now, whatever the state: a socket open is closed first.
@@ -613,8 +619,12 @@ export class AdminClient {
     }
     if (this.untrusted || code === 4401 || code === 4403) {
       this.fail(this.untrusted ? this.reason! : `rejected by cams-admin (${code}): re-enroll`);
-      if (this.lastOutcome !== 'rejected') this.d.log.info({ code }, 'admin_rejected');
-      this.lastOutcome = 'rejected';
+      // A re-enrollment running (#182): cams-admin closes the old key's connection; not worth an info line.
+      if (this.replacingKey) this.d.log.debug({ code }, 'admin_rejected_old_key');
+      else {
+        if (this.lastOutcome !== 'rejected') this.d.log.info({ code }, 'admin_rejected');
+        this.lastOutcome = 'rejected';
+      }
       this.attemptEnded('rejected', wasConnected);
       return this.retry('rejected', this.t.rejectedRetryMs);
     }
