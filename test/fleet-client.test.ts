@@ -182,6 +182,22 @@ describe('close codes (spec §8.8)', () => {
     expect(c.view().lastError).toMatch(/re-enroll/);
   });
 
+  // #182: a re-enrollment while connected: cams-admin closes the old key's
+  // connection with 4401 just before the client with the new key starts.
+  it('4401 while a re-enrollment runs: rejected, but not logged as admin_rejected', async () => {
+    const c = make();
+    c.start();
+    await until(() => c.view().state === 'connected');
+    c.replacing(true);
+    fake.mode = 'reject';
+    fake.closeAll(4401);
+    await until(() => c.view().state === 'rejected');
+    expect(named('admin_rejected')).toHaveLength(0);
+    c.replacing(false);
+    await until(() => fake.connections >= 3, 3000);
+    await until(() => named('admin_rejected').length === 1);
+  });
+
   it('4403 while connected (revoked): disconnected, then rejected', async () => {
     const c = make();
     c.start();
