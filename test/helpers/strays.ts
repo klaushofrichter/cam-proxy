@@ -10,11 +10,32 @@ const KINDS = [
   { program: 'go2rtc', folder: 'camproxy-go2rtc-' },
 ];
 
-const ours = (p: Proc) => KINDS.some((k) => p.args.some((a) => basename(a) === k.program) && p.args.some((a) => basename(dirname(a)).startsWith(k.folder)));
+// The temp folder of one of ours, after its prefix ('' for none), if it is ours.
+const folderOf = (p: Proc) => {
+  for (const k of KINDS) {
+    if (!p.args.some((a) => basename(a) === k.program)) continue;
+    const dir = p.args.map((a) => basename(dirname(a))).find((d) => d.startsWith(k.folder));
+    if (dir) return dir.slice(k.folder.length);
+  }
+  return undefined;
+};
+
+// A test that orphans one on purpose (test/go2rtc-orphans.test.ts) names its
+// folder with its own pid (`camproxy-go2rtc-run<pid>-…`, runFolderPrefix): no
+// sweep of another run, started side by side, touches it while that test's
+// process lives.
+export const runFolderPrefix = (folder: string, pid = process.pid) => `${folder}run${pid}-`;
+const RUN_MARK = /^run(\d+)-/;
 
 export function strayPids(procs: Proc[], self: number): number[] {
   const byPid = new Map(procs.map((p) => [p.pid, p]));
-  return procs.filter((p) => p.pid !== self && ours(p) && parentGone(p, byPid.get(p.ppid))).map((p) => p.pid);
+  return procs.filter((p) => {
+    if (p.pid === self) return false;
+    const dir = folderOf(p);
+    if (dir === undefined || !parentGone(p, byPid.get(p.ppid))) return false;
+    const owner = RUN_MARK.exec(dir);
+    return !(owner && byPid.has(Number(owner[1])));
+  }).map((p) => p.pid);
 }
 
 // Kills the strays (SIGKILL); never throws: a test run goes on without it.

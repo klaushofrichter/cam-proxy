@@ -70,9 +70,11 @@ export class StatusPoller extends EventEmitter {
     this.timer = setTimeout(tick, 0);
   }
 
-  stop(): void {
+  // No further checks; resolves once a check already under way has ended.
+  stop(): Promise<void> {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
+    return this.running ? this.running.then(() => undefined) : Promise.resolve();
   }
 
   // One check; concurrent callers share it.

@@ -76,6 +76,11 @@ export class FakeAdmin {
   open(): number {
     return [...this.sockets].filter((s) => s.readyState === s.OPEN).length;
   }
+  // The open connections past the hello (welcomed): the ones sendCommand reaches.
+  // open() counts a connection from its upgrade on, before the proxy said hello.
+  welcomed(): number {
+    return [...this.chan].filter(([ws, c]) => ws.readyState === ws.OPEN && c.proxyId !== null).length;
+  }
   heartbeats(): Received[] {
     return this.received.filter((r) => r.msg.type === 'heartbeat');
   }
@@ -106,6 +111,8 @@ export class FakeAdmin {
       if (!o.unsigned) m.sig = signEnvelope(o.key ?? this.server.privateKey, m as never);
       ws.send(JSON.stringify(m));
     }
+    // Sent to nobody (no welcomed connection yet): a test waiting for its result would only time out.
+    if (!id) throw new Error(`sendCommand ${command}: no welcomed connection (wait for welcomed(), not open())`);
     return { id, cmdId };
   }
   // A result or event signed by the proxy key registered for its proxyId.

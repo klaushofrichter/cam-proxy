@@ -61,7 +61,7 @@ describe('remove a camera, decommission the proxy (cams-admin commands)', () => 
     writeKeyFile(join(dir, 'data', 'admin', 'key.json'), fake.keyFile());
     p = await startMultiProxy(sims, { dir, settings: { camsAdmin: { url: fake.url } }, proxy: { camsAdmin: { timing: { minIntervalS: 0.2, jitterS: 0, backoffCapMs: 300, closeGraceMs: 200, changeCheckMs: 100 } } } });
     data = join(dir, 'data');
-    await until(() => fake.open() === 1 && fake.heartbeats().length >= 1, 10_000);
+    await until(() => fake.welcomed() === 1 && fake.heartbeats().length >= 1, 10_000);
   }, 60_000);
   afterAll(async () => {
     await p?.proxy.stop();
@@ -163,7 +163,7 @@ describe('proxy.unenroll on an empty host', () => {
     // Enrolled as admin-enroll leaves it: camsAdmin.url in overrides.json.
     writeFileSync(join(data, 'overrides.json'), JSON.stringify({ camsAdmin: { url: fake.url } }));
     p = await startMultiProxy([], { dir, proxy: { camsAdmin: { timing: { minIntervalS: 0.2, jitterS: 0, backoffCapMs: 300, closeGraceMs: 200, changeCheckMs: 100 } } } });
-    await until(() => fake.open() === 1 && fake.heartbeats().length >= 1, 10_000);
+    await until(() => fake.welcomed() === 1 && fake.heartbeats().length >= 1, 10_000);
   }, 60_000);
   afterAll(async () => {
     await p?.proxy.stop();

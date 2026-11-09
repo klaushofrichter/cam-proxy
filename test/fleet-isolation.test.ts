@@ -4,7 +4,6 @@ import { mkdtempSync, readFileSync, statSync } from 'fs';
 import net from 'net';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { monitorEventLoopDelay } from 'perf_hooks';
 import { Readable } from 'stream';
 import { promisify } from 'util';
 import request from 'supertest';
@@ -18,6 +17,7 @@ import { listEvents } from '../src/catalog/events';
 import { writeKeyFile } from '../src/fleet/keyfile';
 import { writePrivateJson } from '../src/fleet/private-file';
 import { startFakeAdmin, type FakeAdmin, type Mode } from './helpers/fake-admin';
+import { loopLag, type LoopLag } from './helpers/loop-lag';
 import { auth, freePort, startProxy, until } from './helpers/proxy';
 import { startSim } from './helpers/sim';
 
@@ -27,7 +27,10 @@ import { startSim } from './helpers/sim';
 // and the client API carry on and the event loop stays responsive.
 const run = promisify(execFile);
 const FTP_PW = 'ftp-secret-'.padEnd(24, 'z');
-const LAG_P99_MS = 100; // the budget: far above a healthy loop, far below a stall
+// The budget: far above a healthy loop, far below a stall. Measured as this
+// thread's CPU time between two ticks (test/helpers/loop-lag.ts): a busy
+// machine (CI, other test files) stretches the wall time only, a stall both.
+const LAG_P99_MS = 100;
 
 // A TCP relay in front of the fake cams-admin that can blackhole the link (a network drop).
 function relay(target: number) {
@@ -62,7 +65,12 @@ let adminDir = '';
 let clip: Buffer;
 let clipN = 0;
 const KINDS = ['person', 'vehicle', 'pet', 'motion'] as const;
-const lag = monitorEventLoopDelay({ resolution: 10 });
+let lag: LoopLag;
+// The loop held (p99) since the last reset: its CPU time within the budget (the wall time in the message).
+const expectResponsive = () => {
+  const r = lag.p99();
+  expect(r.cpu, `p99 held ${r.cpu.toFixed(0)} ms CPU, ${r.wall.toFixed(0)} ms wall`).toBeLessThan(LAG_P99_MS);
+};
 
 beforeAll(async () => {
   const tmp = mkdtempSync(join(tmpdir(), 'camproxy-iso-'));
@@ -94,10 +102,10 @@ beforeAll(async () => {
   });
   await until(() => p.proxy.camsAdmin.view().state === 'connected', 10_000);
   await until(() => p.proxy.intake.state().onvif === 'subscribed', 15_000);
-  lag.enable();
+  lag = loopLag();
 }, 60_000);
 afterAll(async () => {
-  lag.disable();
+  lag?.close();
   await p?.proxy.stop();
   link?.close();
   await fake?.close();
@@ -143,7 +151,7 @@ describe('a hostile cams-admin', () => {
     // At least 3 s with it, so the client went through its reconnects.
     await new Promise((r) => setTimeout(r, Math.max(0, 3000 - (Date.now() - t0))));
     await proxyCarriesOn();
-    expect(lag.percentile(99) / 1e6).toBeLessThan(LAG_P99_MS);
+    expectResponsive();
     expect(p.proxy.camsAdmin.view().state).not.toBe('stopped');
     // Node's WebSocket can't drop a socket the server never lets go: a few linger, no more.
     expect(p.proxy.camsAdmin.view().lingering).toBeLessThanOrEqual(4);
@@ -174,7 +182,7 @@ describe('a hostile cams-admin', () => {
     await proxyCarriesOn();
     await new Promise((r) => setTimeout(r, Math.max(0, 3000 - (Date.now() - t0))));
     await proxyCarriesOn();
-    expect(lag.percentile(99) / 1e6).toBeLessThan(LAG_P99_MS);
+    expectResponsive();
     expect(snapshot()).toBe(files);
     const sent = fake.received.slice(before).map((r) => r.msg);
     const results = sent.filter((m) => m.type === 'result').map((m) => m.body as { phase: string; status?: string; code?: string });
@@ -219,7 +227,7 @@ describe('a hostile cams-admin', () => {
       link.blackhole(false);
     }
     await until(() => fake.connections > before && p.proxy.camsAdmin.view().state === 'connected', 15_000);
-    expect(lag.percentile(99) / 1e6).toBeLessThan(LAG_P99_MS);
+    expectResponsive();
   }, 60_000);
 
   it('cams-admin restarted: the proxy reconnects', async () => {
@@ -312,6 +320,6 @@ describe('a hostile cams-admin with every P3 entry allowed', () => {
     // The rest refused: rate_limited, or busy while one ran (one command at a time).
     expect(outcome.filter((b) => b.code === 'rate_limited' || b.code === 'busy').length).toBe(20 - ran.length);
     expect(outcome.filter((b) => b.code === 'rate_limited').length).toBeGreaterThanOrEqual(12);
-    expect(lag.percentile(99) / 1e6).toBeLessThan(LAG_P99_MS);
+    expectResponsive();
   }, 60_000);
 });

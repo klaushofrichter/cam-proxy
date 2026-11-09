@@ -32,7 +32,7 @@ beforeAll(async () => {
   writeKeyFile(join(dir, 'data', 'admin', 'key.json'), fake.keyFile());
   writePrivateJson(join(dir, 'data', 'admin', 'policy.json'), { v: 1, allow: ['tokens.apply'], changedAt: 1, changedBy: 'local' });
   p = await startProxy(sim, { dir, settings: { camsAdmin: { url: fake.url } }, proxy: { camsAdmin: { timing: { minIntervalS: 0.2, jitterS: 0 } } } });
-  await until(() => fake.open() === 1 && p.proxy.camsAdmin.view().state === 'connected', 10_000);
+  await until(() => fake.welcomed() === 1 && p.proxy.camsAdmin.view().state === 'connected', 10_000);
 }, 60_000);
 afterAll(async () => {
   await p?.proxy.stop();

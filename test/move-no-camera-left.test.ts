@@ -28,7 +28,7 @@ beforeAll(async () => {
   const dir = mkdtempSync(join(tmpdir(), 'camproxy-nocam-'));
   writeKeyFile(join(dir, 'data', 'admin', 'key.json'), fake.keyFile());
   p = await startMultiProxy(sims, { dir, proxy: { camsAdmin: { timing: { minIntervalS: 0.2, jitterS: 0, backoffCapMs: 300, closeGraceMs: 200 } } }, settings: { camsAdmin: { url: fake.url } } });
-  await until(() => fake.open() === 1, 20_000);
+  await until(() => fake.welcomed() === 1, 20_000);
   // The move hides the camera (move.release does the same through overrides).
   await request(p.base).put('/control/config').set(auth(ADMIN_TOKEN)).send({ cameras: { cam3: { moved: MOVE } } }).expect(200);
   await until(() => !p.proxy.cameras.get('cam3') && p.proxy.cameras.list().length === 0, 10_000);

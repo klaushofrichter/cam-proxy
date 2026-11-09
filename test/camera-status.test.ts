@@ -4,6 +4,7 @@ import type { Server } from 'http';
 import { createSimCamera, type SimState } from './helpers/sim';
 import { ReolinkClient } from '../src/camera/client';
 import { StatusPoller, type CameraState } from '../src/camera/status';
+import { until } from './helpers/proxy';
 
 let server: Server | undefined;
 afterEach(() => server?.close());
@@ -42,10 +43,11 @@ describe('StatusPoller', () => {
     const { poller, state } = await setup();
     const before = state.devInfoCalls;
     poller.start();
-    await new Promise((r) => setTimeout(r, 300));
-    poller.stop();
+    // Not a fixed wait: under load two checks may take longer than a few intervals.
+    await until(() => state.devInfoCalls - before >= 2, 10_000);
+    // A check under way at stop() still ends (and reads the camera): stop() resolves after it.
+    await poller.stop();
     const after = state.devInfoCalls;
-    expect(after - before).toBeGreaterThanOrEqual(2);
     await new Promise((r) => setTimeout(r, 200));
     expect(state.devInfoCalls).toBe(after);
   });

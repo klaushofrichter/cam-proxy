@@ -551,7 +551,7 @@ export class CameraWorker extends EventEmitter {
 
   private async stopParts(): Promise<void> {
     await this.intake.stop();
-    this.status.stop();
+    void this.status.stop();
     await this.stopStills();
     // A leased move is stopped before the session ends (spec §5.1).
     await this.ptz.halt();

@@ -9,6 +9,7 @@ import { StreamLog } from '../src/stream/log';
 import { Storage } from '../src/storage';
 import { DEFAULTS, type Config } from '../src/config/defaults';
 import { minutePath, MinuteStore } from '../src/stills/store';
+import { until } from './helpers/proxy';
 import { AuditLog } from '../src/audit/audit-log';
 import { saveAnalysis } from '../src/catalog/analyses';
 import { checkById, insertCheck, setCheckImage } from '../src/catalog/still-checks';
@@ -169,7 +170,8 @@ describe('storage: floor and accounting', () => {
     storage.on('failed', (m: string) => failures.push(m));
     catalog.close();
     storage.start({ firstMs: 0, everyMs: 20 });
-    await new Promise((r) => setTimeout(r, 120));
+    // Not a fixed wait: under load two runs may take longer than a few intervals.
+    await until(() => failures.length >= 2, 10_000);
     storage.stop();
     expect(failures.length).toBeGreaterThanOrEqual(2);
   });
