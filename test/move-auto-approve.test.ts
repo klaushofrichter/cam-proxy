@@ -62,7 +62,7 @@ beforeAll(async () => {
     settings: { tls: TLS, camsAdmin: { url: fake.url } },
   });
   journal = new MoveJournal(join(dir, 'data', 'admin', 'moves'));
-  await until(() => fake.open() === 1 && p.proxy.cameras.get('cam3')!.status.state().online, 30_000);
+  await until(() => fake.welcomed() === 1 && p.proxy.cameras.get('cam3')!.status.state().online, 30_000);
   targetKey = generateKeyPairSync('x25519').publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
 }, 180_000);
 afterAll(async () => {
@@ -125,7 +125,7 @@ describe('auto-approval within bounds (R2)', () => {
     const n = approvals().length;
     fake.destroyAll();
     await until(() => approvals().length > n, 15_000);
-    await until(() => fake.open() === 1, 15_000);
+    await until(() => fake.welcomed() === 1, 15_000);
     for (const e of approvals()) expect(e.plan).toEqual(journal.load(id)!.plan);
     expect(approveAudits()).toHaveLength(1);
   }, 20_000);

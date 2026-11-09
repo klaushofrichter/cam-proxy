@@ -278,7 +278,7 @@ describe('the client with commands', () => {
     await until(() => fake.results(cmdId).length === 2);
     const old = fake.connIds()[0];
     fake.destroyAll();
-    await until(() => fake.open() === 1 && client!.view().state === 'connected' && fake.connIds().length === 2, 5000);
+    await until(() => fake.welcomed() === 1 && client!.view().state === 'connected' && fake.connIds().length === 2, 5000);
     const replay = fake.sendCommand('tokens.apply', argsOf(1), { connId: old });
     await until(() => fake.results(replay.cmdId).length === 1);
     expect(bodyOf(fake.results(replay.cmdId)[0])).toMatchObject({ phase: 'done', status: 'refused', code: 'wrong_target' });
@@ -357,7 +357,7 @@ describe('tokens.apply through the proxy', () => {
     key = fake.keyFile();
     writeKeyFile(join(dir, 'data', 'admin', 'key.json'), key);
     p = await startProxy(sim, { dir, settings: { camsAdmin: { url: fake.url } }, env: MARKERS, proxy: { camsAdmin: { timing: { minIntervalS: 0.2, jitterS: 0, backoffCapMs: 300, closeGraceMs: 200 } } } });
-    await until(() => fake.open() === 1 && fake.heartbeats().length >= 1, 10_000);
+    await until(() => fake.welcomed() === 1 && fake.heartbeats().length >= 1, 10_000);
   }, 60_000);
   afterAll(async () => {
     await p?.proxy.stop();

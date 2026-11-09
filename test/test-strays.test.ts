@@ -22,6 +22,13 @@ describe('stray media children of earlier test runs', () => {
     const other = { pid: 14, ppid: 1, args: ['/bin/cat', join(tmpdir(), 'camsim-rtsp-abc', 'mediamtx.yml')] };
     expect(strayPids([mtx(10, 1, 'elsewhere'), g2r(11, 1, 'mine'), other], 500)).toEqual([]);
   });
+  it("never one a live test process orphaned on purpose (its folder names that pid); once that process is gone, it is a stray", () => {
+    const marked = (pid: number, owner: number) => g2r(pid, 1, `camproxy-go2rtc-run${owner}-abc`);
+    expect(strayPids([node(500), node(600), marked(10, 600), mtx(11, 1, 'camsim-rtsp-run600-x')], 500)).toEqual([]);
+    expect(strayPids([node(500), marked(10, 600), mtx(11, 1, 'camsim-rtsp-run600-x')], 500)).toEqual([10, 11]);
+    // Only the folder's own marker counts, not one further on.
+    expect(strayPids([node(500), node(600), g2r(12, 1, 'camproxy-go2rtc-x-run600-')], 500)).toEqual([12]);
+  });
   it('never this process', () => {
     expect(strayPids([{ ...mtx(500, 1) }], 500)).toEqual([]);
   });

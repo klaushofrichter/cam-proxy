@@ -65,7 +65,7 @@ async function world(o: { moved?: boolean }) {
     },
     settings: { camsAdmin: { url: fake.url }, ftp: { enabled: false, stream: 'sub' } },
   });
-  await until(() => fake.open() === 1, 30_000);
+  await until(() => fake.welcomed() === 1, 30_000);
   // The clips the proxy has: the first two recordings (as FTP brought them).
   for (const h of [8, 10]) {
     const ts = yesterday(h);
