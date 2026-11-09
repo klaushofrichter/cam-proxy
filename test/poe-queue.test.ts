@@ -77,4 +77,26 @@ describe('one PoE controller per host (spec 2026-10-05-multi-camera-host-design 
     expect((await first).watts).toBeGreaterThan(0);
     expect(sw.poe[2]).toBe(true);
   });
+
+  // #364 (Task 3): two controllers of one switch share its lane. Stopping one
+  // waits for its own sessions only, not for the other's long cycle: its queued
+  // request ends at once, and no session or dark port is reported for it.
+  it("stop of one controller on a shared lane: its queued request ends at once; the other's long session is not its own", async () => {
+    const sw = fakeSwitch();
+    const lane = { tail: Promise.resolve() as Promise<unknown> };
+    let releaseOff!: () => void;
+    const b = new PoeSwitch({ ref: () => host, password: () => 'pw', driver: () => sw.driver, lane: () => lane, sleep: (ms) => (ms >= 5000 ? new Promise<void>((r) => (releaseOff = r)) : Promise.resolve()) });
+    const a = new PoeSwitch({ ref: () => host, password: () => 'pw', driver: () => sw.driver, lane: () => lane, sleep: async () => undefined, stopWaitMs: 300 });
+    const long = b.cycle(3, () => undefined, { verifyHost: null });
+    await new Promise((r) => setTimeout(r, 20));
+    const queued = a.read(4, { fresh: true });
+    const t0 = Date.now();
+    expect(await a.stop()).toEqual({ portsLeftOff: [], sessionMaybeOpen: false });
+    expect(Date.now() - t0).toBeLessThan(250);
+    await expect(queued).rejects.toMatchObject({ code: 'switch_error' });
+    // The other controller's cycle carries on and ends normally.
+    releaseOff();
+    expect((await long).watts).toBeGreaterThan(0);
+    expect(sw.sessions()).toBe(0);
+  });
 });

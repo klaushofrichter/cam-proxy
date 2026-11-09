@@ -6,6 +6,7 @@ import { ARGS_VALIDATORS } from '../src/fleet/command-args';
 import type { CommandBody } from '../src/fleet/command-check';
 import type { Done } from '../src/fleet/commands';
 import { ALLOW_ENTRIES, DEFAULT_ON, DISRUPTIVE_ENTRIES, ENTRY_TEXT, IMPLEMENTED, entryFor } from '../src/fleet/policy';
+import { EventOutbox } from '../src/fleet/outbox';
 import { ASK_TIMEOUT_MS, CameraPowerStore, POWER_FILE, powerHandlers, powerView, requestPowerCycle } from '../src/fleet/power-commands';
 import type { AdminEvent } from '../src/fleet/outbox';
 import { CameraReboot, type RebootDeps } from '../src/camera/reboot';
@@ -265,6 +266,27 @@ describe('camera.power.cycle.result and the request', () => {
     await s.run('camera.power.cycle.result', { camera: 'cam1', requestId, ok: true });
     expect(s.store.view('cam1')).toMatchObject({ asked: null, result: { requestId, ok: true, at: s.t.now } });
     expect(s.store.view('cam1').result!.reason).toBeUndefined();
+  });
+
+  // #364 m5: a request that went into the outbox (a reconnect race) goes out after the next
+  // welcome only while it is still open: not after the page said "no answer within 5 minutes".
+  it('a buffered request is sent after a reconnect while open; dropped once its 5 minutes are over', async () => {
+    for (const late of [false, true]) {
+      const s = setup();
+      s.store.set('cam1', { kind: 'poe' });
+      const warned: string[] = [];
+      const outbox = new EventOutbox({ warn: (_o, m) => void warned.push(m) });
+      const deps = { emit: (e: AdminEvent, valid?: () => boolean) => outbox.push(e, valid), connected: () => true, store: s.store, reboot: () => s.reboot, audit: { write: () => undefined } as any, now: () => s.t.now };
+      const a = requestPowerCycle(deps, 'cam1', { user: 'admin', requestedBy: 'token' }) as { requestId: string };
+      // Another camera's event (a move's) waits too, and always goes.
+      outbox.push({ kind: 'move.phase', moveId: `mv_${'1'.repeat(20)}`, role: 'source', phase: 'opened', ok: true });
+      s.t.now += late ? ASK_TIMEOUT_MS : ASK_TIMEOUT_MS - 1;
+      const sent: AdminEvent[] = [];
+      outbox.flush((e) => (sent.push(e), true));
+      expect(sent.map((e) => e.kind), String(late)).toEqual(late ? ['move.phase'] : ['camera.power.cycle.request', 'move.phase']);
+      expect(warned.includes('admin_event_expired')).toBe(late);
+      if (late) expect(s.store.view('cam1').result).toMatchObject({ requestId: a.requestId, ok: false });
+    }
   });
 
   it('unenrolled or cams-admin switched off: the open request ends (no answer can come)', () => {

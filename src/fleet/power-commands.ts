@@ -154,7 +154,7 @@ export type PowerRequestAnswer =
 export interface PowerRequestDeps {
   store: CameraPowerStore;
   connected: () => boolean; // cams-admin enabled and connected now
-  emit: (e: PowerCycleRequestEvent) => void;
+  emit: (e: PowerCycleRequestEvent, valid?: () => boolean) => void;
   reboot: (camera: string) => Pick<CameraReboot, 'cooldown'>;
   audit: Pick<AuditLog, 'write'>;
   now?: () => number;
@@ -193,7 +193,9 @@ export function requestPowerCycle(d: PowerRequestDeps, camera: string, who: Powe
   if (soon) return soon;
   const requestId = `pc_${ulid((d.now ?? Date.now)())}`;
   d.store.ask(camera, requestId);
-  d.emit({ kind: 'camera.power.cycle.request', camera, requestId });
+  // Sent now, or after a reconnect only while this request is still open (#364 m5):
+  // once the page said "no answer within 5 minutes", a late send would cut the PoE late.
+  d.emit({ kind: 'camera.power.cycle.request', camera, requestId }, () => d.store.view(camera).asked?.requestId === requestId);
   d.audit.write({
     action: 'camera-powercycle', category: ['host'], type: ['change'], outcome: 'success', user: who.user, camera,
     ...(who.ip ? { ip: who.ip } : {}), ...(who.userAgent ? { userAgent: who.userAgent } : {}),

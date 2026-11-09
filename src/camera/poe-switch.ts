@@ -87,6 +87,9 @@ export class PoeSwitch {
   private stopped = false;
   private forgotten = false; // stopped by the registry's forget() (#364): its sessions answer switch_unknown
   private pending = 0; // sessions queued or running
+  private own: Promise<unknown> = Promise.resolve(); // settles when this controller's sessions so far have (not the shared lane's)
+  private stopSignal: () => void = () => undefined;
+  private readonly stopping = new Promise<'stopped'>((r) => (this.stopSignal = () => r('stopped'))); // a queued session stops waiting
   private wake: (() => void) | null = null; // ends a wait early (stop)
   private stopDeadline: number | null = null; // on shutdown: no PoE-on retry after this
   private stopEnd: number | null = null; // on shutdown (wall clock): stop() waits until here at most
@@ -141,10 +144,13 @@ export class PoeSwitch {
     this.stopDeadline = this.now() + (this.d.stopRecoveryMs ?? STOP_RECOVERY_MS);
     this.stopEnd = Date.now() + (this.d.stopWaitMs ?? STOP_WAIT_MS);
     this.wake?.();
+    this.stopSignal();
     let finished = true;
-    // Every session queued so far (a waiting one ends at once: stopped).
+    // This controller's own sessions (a queued one ends at once: stopped). Not
+    // the shared lane: another controller's work on the same switch is not ours
+    // to wait for, nor a session we may have left open (#364).
     if (this.pending > 0) {
-      finished = (await within(this.lane.tail.then(() => true, () => true), this.d.stopWaitMs ?? STOP_WAIT_MS)) !== TIMED_OUT;
+      finished = (await within(this.own.then(() => true, () => true), this.d.stopWaitMs ?? STOP_WAIT_MS)) !== TIMED_OUT;
     }
     const portsLeftOff = [...new Set([...this.offPorts, ...(finished ? [] : this.cutting)])].sort((x, y) => x - y);
     const sessionMaybeOpen = this.sessionMaybeOpen || !finished;
@@ -412,7 +418,10 @@ export class PoeSwitch {
     const run = (async () => {
       let opened = false;
       try {
-        if ((await within(before.then(() => true, () => true), maxWait)) === TIMED_OUT) {
+        // The one before (any controller's on this lane), or stop(): a queued
+        // session never opens after a stop, so it need not wait any longer.
+        const waited = await within(Promise.race([before.then(() => true, () => true), this.stopping]), maxWait);
+        if (waited === TIMED_OUT) {
           throw new PoeSwitchError('switch_busy', `another camera's switch work took longer than ${Math.round(maxWait / 1000)} s`);
         }
         if (this.stopped) throw this.stoppedError();
@@ -424,7 +433,8 @@ export class PoeSwitch {
       }
     })();
     this.pending++;
-    void run.then(() => undefined, () => undefined).finally(() => this.pending--);
+    const settled = run.then(() => undefined, () => undefined).finally(() => this.pending--);
+    this.own = Promise.all([this.own, settled]);
     return run;
   }
 

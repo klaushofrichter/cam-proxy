@@ -456,8 +456,8 @@ export class AdminClient {
 
   // A signed event that answers no command (camera moves, power-cycle requests): sent at once while
   // connected, else kept (the newest 256) and sent in order after the next welcome.
-  emitEvent(body: AdminEvent): void {
-    this.outbox.push(body);
+  emitEvent(body: AdminEvent, valid?: () => boolean): void {
+    this.outbox.push(body, valid);
     this.flushEvents();
   }
 

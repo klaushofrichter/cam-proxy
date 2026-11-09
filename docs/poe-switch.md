@@ -15,7 +15,7 @@ then "rebooting" until the camera answers, with the shared 2-minute cooldown.
 The Maintenance page's "Power-cycle (through cams-admin)" asks cams-admin
 (`POST /control/cameras/<id>/actions/camera-powercycle`: 202 `{requestId}`,
 the signed event `camera.power.cycle.request`) and shows "Asked cams-admin…"
-until its answer (`camera.power.cycle.result`). A request without an answer ends after 5 minutes (the result then says "no answer from cams-admin within 5 minutes"; a later answer still replaces it), and at once when the proxy is unenrolled or cams-admin is switched off. Without cams-admin (not
+until its answer (`camera.power.cycle.result`). A request without an answer ends after 5 minutes (the result then says "no answer from cams-admin within 5 minutes"; a later answer still replaces it), and at once when the proxy is unenrolled or cams-admin is switched off. A request asked while the connection to cams-admin was down goes out after the reconnect only while it is still open; once its 5 minutes are over it is dropped (`admin_event_expired` in the log), so cams-admin never cuts the camera's PoE after the page gave up. Without cams-admin (not
 connected, or it has not sent the camera's power yet) it is refused: 409
 `power_cycle_needs_cams_admin`. A proxy never forces a cycle. `GET
 /control/cameras/<id>/power` returns the camera's power as cams-admin sent it
@@ -203,6 +203,12 @@ session), it logs an error and writes a `camera-powercycle` failure record
 (`phase: stop`, `poeLeftOff`, `sessionMaybeOpen`, `switch: {id, host}`,
 `portsLeftOff`). After the restart, use "Turn PoE on" under Proxy settings,
 PoE switches, or the switch's web UI.
+
+Each switch has one queue for all its work (one session at a time). A
+controller that stops (the proxy stopping, or cams-admin forgetting the
+switch) waits for its own session only: its requests still queued behind
+other work on the same switch end at once, and the other work is not
+reported as a session it may have left open.
 
 The cycle's answer, `{offAt, onAt, watts}`, comes once PoE is back on, so
 it takes `offSeconds` and a little more. Then the camera's state is
