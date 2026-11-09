@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.11.09.2
+
 - cams-admin may now only make capture denser, never thin it out: `stills.intervalS`, `events.poll.intervalS` and a camera's `stills.intervalS` can only be shortened from cams-admin (`config.set`, `config.unset`, `config.rollback`) and from a cams-admin sign-in on the Settings page; a longer interval is refused ("a remote change may only shorten the interval; a longer one is a local change") and stays a change at the proxy (cams-admin contract, cams-admin #20). A camera without its own interval counts as having the host's, so its first interval may be anything up to the host's, and resetting it is refused when the host's is longer. The one-way rules now also apply to per-camera settings (they were looked up by the exact path before).
 - cams-admin's settings view no longer lists a camera that moved to another proxy (it showed under both proxies), and a settings change for it is refused as an unknown camera.
 - Camera moves: a move to a proxy where a per-camera password for that camera id is set by hand in the environment (`CAMPROXY_CAMERA_PASSWORD_<ID>`) now goes on and uses that password (the environment wins, as for every camera); only a camera that was on this proxy before (its hidden entry) still has it refused as stale.
