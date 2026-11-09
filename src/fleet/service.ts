@@ -264,7 +264,14 @@ export class CamsAdmin {
     if (this.stopped) return;
     this.client = new AdminClient({ keyFile: key, health: this.d.health, proxyInfo: this.d.proxyInfo, profile: this.d.profile, moveLeftovers: this.d.moveLeftovers, onboardingNow: this.d.onboardingNow, version: this.d.version, log: this.d.log, changeKey: this.d.changeKey, timing: this.d.timing, commands: this.d.commands?.() ?? undefined, replay: this.d.replay, outbox: this.outbox, onWelcome: () => {
       this.ownDownSince = null;
-      this.welcomeHooks.forEach((h) => h());
+      // Each on its own (#235): a hook that throws never skips the ones after it.
+      for (const h of this.welcomeHooks) {
+        try {
+          h();
+        } catch (err) {
+          this.d.log.warn({ err: (err as Error).message }, 'admin_welcome_hook_failed');
+        }
+      }
     } });
     this.running = want;
     this.client.start();

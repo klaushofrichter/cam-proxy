@@ -180,7 +180,7 @@ export const planProblem = (p: unknown): string | null => {
 
 const moveId = (o: Record<string, unknown>) => (typeof o.moveId === 'string' && MOVE_ID.test(o.moveId) ? null : 'moveId');
 const role = (o: Record<string, unknown>) => (o.role === 'source' || o.role === 'target' ? null : 'role');
-const port = (x: unknown) => Number.isSafeInteger(x) && (x as number) >= 1;
+const port = (x: unknown) => Number.isSafeInteger(x) && (x as number) >= 1 && (x as number) <= 65535;
 
 export const validateMoveTargets = (a: unknown) => v1<MoveTargetsArgs>(a, ['requestId', 'targets'], (o) => {
   if (typeof o.requestId !== 'string' || !REQ_ID.test(o.requestId)) return 'requestId';

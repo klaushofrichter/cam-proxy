@@ -62,6 +62,20 @@ describe('move journal', () => {
     expect(seen.join()).not.toContain('not json');
   });
 
+  // #235 T2: an unknown phase is not a move record (it would stay active forever); problems() is a copy.
+  it('a record with an unknown phase is set aside; problems() hands out a copy', () => {
+    const d = dir();
+    const j = new MoveJournal(d);
+    j.save(rec('m1'));
+    writeFileSync(join(d, 'm1.json'), JSON.stringify({ ...rec('m1'), phase: 'teleporting' }), { mode: 0o600 });
+    expect(j.load('m1')).toBeNull();
+    expect(j.active()).toEqual([]);
+    const p = j.problems() as string[];
+    expect(p).toHaveLength(1);
+    p.length = 0;
+    expect(j.problems()).toHaveLength(1);
+  });
+
   it('holds a source record with a token hash and compares tokens in constant time', () => {
     const d = dir();
     const j = new MoveJournal(d);

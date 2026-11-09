@@ -199,6 +199,12 @@ describe('the move commands against the vendored contract', () => {
     expect(ARGS_VALIDATORS['move.start']({ ...start, done: ['stills:today'] })).toMatchObject({ ok: false });
     const offer = argsOfFixture('valid-command-move-offer');
     expect(ARGS_VALIDATORS['move.offer']({ ...offer, token: 'short' })).toMatchObject({ ok: false });
+    // #235 T1: a port is at most 65535.
+    const cam = (offer as { camera: Record<string, unknown> }).camera;
+    for (const k of ['onvifPort', 'rtspPort', 'baichuanPort']) {
+      expect(ARGS_VALIDATORS['move.offer']({ ...offer, camera: { ...cam, [k]: 65536 } }), k).toMatchObject({ ok: false, detail: 'camera' });
+      expect(ARGS_VALIDATORS['move.offer']({ ...offer, camera: { ...cam, [k]: 65535 } }), k).toMatchObject({ ok: true });
+    }
     // A camera whose certificate the source has managed elsewhere (tlsName) moves
     // without it: the target never takes a tlsName and issues its own leaf (2026-10-26).
     const o = offer as { camera: object; settings: object };
