@@ -253,7 +253,8 @@ export function listChunks(d: InventoryDeps, cam: string, kinds: MoveKind[], fil
 // it through the hash. The size is the number of bytes hashed, so the two
 // always describe the same bytes even if the file is replaced meanwhile.
 export async function hashFile(path: string): Promise<{ size: number; sha256: string }> {
-  const fh = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  // O_NONBLOCK: a FIFO put in place of a file never ties up a pool thread in open() (#235 T4).
+  const fh = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     if (!(await fh.stat()).isFile()) throw new Error('not a regular file');
     const h = createHash('sha256');

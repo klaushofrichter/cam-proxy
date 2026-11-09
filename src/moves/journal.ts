@@ -188,6 +188,8 @@ export const RETURN_WAIT_MS = 365 * DAY;
 const keepMs = (t: Partial<MoveTombstone>): number => (t.camera && t.returned !== true ? RETURN_WAIT_MS : TOMBSTONE_KEEP_MS);
 
 const TERMINAL: readonly MovePhaseName[] = ['finished', 'cancelled', 'failed'];
+// Every phase a record can be in (#235: an unknown one is not a move record); a Record, so a new phase can't be missed.
+const PHASES: Record<MovePhaseName, true> = { opened: true, switching: true, switched: true, released: true, copying: true, copied: true, finished: true, cancelled: true, failed: true };
 export const moveEnded = (phase: MovePhaseName): boolean => TERMINAL.includes(phase);
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
 export const isMoveId = (id: string): boolean => ID.test(id);
@@ -304,7 +306,7 @@ export class MoveJournal {
 
   // Problems met so far (a corrupt file set aside); messages name files only.
   problems(): readonly string[] {
-    return this.bad;
+    return [...this.bad];
   }
 
   private problem(message: string): void {
@@ -325,7 +327,7 @@ export class MoveJournal {
       throw err;
     }
     const r = raw as Partial<MoveRecord> | null;
-    if (!r || r.v !== 1 || r.id !== id || (r.role !== 'source' && r.role !== 'target') || typeof r.phase !== 'string' || !r.chunks || typeof r.chunks !== 'object') {
+    if (!r || r.v !== 1 || r.id !== id || (r.role !== 'source' && r.role !== 'target') || typeof r.phase !== 'string' || !Object.hasOwn(PHASES, r.phase) || !r.chunks || typeof r.chunks !== 'object') {
       return this.setAside(path, `${path} is not a move record`);
     }
     return r as MoveRecord;

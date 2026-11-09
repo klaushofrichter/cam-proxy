@@ -518,7 +518,7 @@ describe('fix round 1', () => {
     u.journal.save(offered());
     const save = u.journal.save.bind(u.journal);
     let thrown = false;
-    u.deps.journal = { load: (id) => u.journal.load(id), active: () => u.journal.active(), save: (r) => {
+    u.deps.journal = { load: (id) => u.journal.load(id), active: () => u.journal.active(), remove: (id) => u.journal.remove(id), save: (r) => {
       if (!thrown && r.step === 'cert') { thrown = true; throw new Error('ENOSPC'); }
       save(r);
     } };
