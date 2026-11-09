@@ -85,6 +85,7 @@ export class PoeSwitch {
     return this.d.lane?.() ?? this.ownLane;
   }
   private stopped = false;
+  private forgotten = false; // stopped by the registry's forget() (#364): its sessions answer switch_unknown
   private pending = 0; // sessions queued or running
   private wake: (() => void) | null = null; // ends a wait early (stop)
   private stopDeadline: number | null = null; // on shutdown: no PoE-on retry after this
@@ -133,8 +134,10 @@ export class PoeSwitch {
   // window, then logs out. The wait is bounded (compose's stop grace is
   // 20 s); refuses new sessions afterwards. poeLeftOff: the camera's PoE may
   // be off now (the caller logs and audits it).
-  async stop(): Promise<{ portsLeftOff: number[]; sessionMaybeOpen: boolean }> {
+  // reason 'forgotten': the registry dropped the switch (forget()), not a proxy stop.
+  async stop(reason: 'stopping' | 'forgotten' = 'stopping'): Promise<{ portsLeftOff: number[]; sessionMaybeOpen: boolean }> {
     this.stopped = true;
+    if (reason === 'forgotten') this.forgotten = true;
     this.stopDeadline = this.now() + (this.d.stopRecoveryMs ?? STOP_RECOVERY_MS);
     this.stopEnd = Date.now() + (this.d.stopWaitMs ?? STOP_WAIT_MS);
     this.wake?.();
@@ -226,7 +229,7 @@ export class PoeSwitch {
       }
       const r = this.reading(await s.detail(), c, driver);
       if (!r.poe || !(r.watts > 0)) throw new PoeSwitchError('no_power', `port ${r.port} (index ${r.index}) has PoE ${r.poe ? 'on' : 'off'} and draws ${r.watts} W: not switching`);
-      if (this.stopped) throw new PoeSwitchError('switch_error', 'the proxy is stopping: not switching');
+      if (this.stopped) throw this.stoppedError(': not switching');
       let failure: Error | null = null;
       let offAt: number | null = null;
       this.cutting.add(c.port);
@@ -381,6 +384,11 @@ export class PoeSwitch {
     return { ...r };
   }
 
+  // Why a session is refused after stop(): the proxy stopping, or the switch forgotten (#364).
+  private stoppedError(suffix = ''): PoeSwitchError {
+    return this.forgotten ? new PoeSwitchError('switch_unknown', `the switch was forgotten${suffix}`) : new PoeSwitchError('switch_error', `the proxy is stopping${suffix}`);
+  }
+
   private markOff(port: number, off: boolean): void {
     if (off) this.offPorts.add(port);
     else this.offPorts.delete(port);
@@ -392,7 +400,7 @@ export class PoeSwitch {
   // the switch (HTTP 409, Ruling P2-3).
   // port undefined: switch-wide work (no camera port).
   private session<T>(port: number | undefined, f: (s: SwitchSession, c: PoeSwitchConfig, driver: SwitchDriver) => Promise<T>): Promise<T> {
-    if (this.stopped) return Promise.reject(new PoeSwitchError('switch_error', 'the proxy is stopping'));
+    if (this.stopped) return Promise.reject(this.stoppedError());
     const why = this.notConfigured(port);
     if (why) return Promise.reject(new PoeSwitchError(!this.d.password() && why === this.hint() ? 'password_unset' : 'switch_error', why));
     const lane = this.lane;
@@ -407,7 +415,7 @@ export class PoeSwitch {
         if ((await within(before.then(() => true, () => true), maxWait)) === TIMED_OUT) {
           throw new PoeSwitchError('switch_busy', `another camera's switch work took longer than ${Math.round(maxWait / 1000)} s`);
         }
-        if (this.stopped) throw new PoeSwitchError('switch_error', 'the proxy is stopping');
+        if (this.stopped) throw this.stoppedError();
         this.busy = opened = true;
         return await this.open(port, f);
       } finally {

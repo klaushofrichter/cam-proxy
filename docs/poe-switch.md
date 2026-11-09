@@ -79,9 +79,19 @@ controller per switch serves every port:
 
 - **One session at a time, in arrival order.** The GPS-208 takes one web
   session, so a second request (a cycle, a read, PoE on) waits for the
-  first; two ids on the same address share that queue. A request still
+  first; two ids on the same address share that queue. The address is
+  compared as written (case-insensitive): the same switch named once by a
+  DNS name and once by its IP gets two queues, and the switch then refuses
+  one of two overlapping logins (`switch_busy`, nothing switched). Name a
+  switch the same way everywhere. A request still
   waiting after `offSeconds` + 60 s fails with 409 `switch_busy` without
   touching the switch.
+- **A forgotten switch** (`switch.forget`): a request still queued on it, or
+  sent to its controller afterwards, fails `switch_unknown` ("the switch was
+  forgotten"; 404 on the proxy's own routes), not "the proxy is stopping".
+  The Proxy settings card says "password set for another address" when a
+  password is stored for the switch's old address (`passwordElsewhere` in
+  `GET /control/switches`).
 - **One read serves every port for 10 s;** a cycle and PoE on always read
   afresh inside their own session.
 - **State per port:** "PoE may be off" belongs to the port that was cut

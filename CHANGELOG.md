@@ -6,6 +6,7 @@
 - `admin-enroll` on a terminal no longer shows the enrollment code as it is typed (like a password prompt; a pipe works as before).
 - Re-enrolling a proxy that is connected to cams-admin no longer logs `admin_rejected` for the old key's connection, which cams-admin closes once the new code is redeemed.
 - A proxy stop during a camera add (which can wait up to 10 s for go2rtc) turns a PoE port cut by a power-cycle back on first, instead of after the add, so it stays within the container's stop grace.
+- PoE switches: a request still queued on a switch that cams-admin forgot (or sent to it afterwards) now fails `switch_unknown` ("the switch was forgotten"), not `switch_error` "the proxy is stopping"; forgetting a switch always stops its controller first (PoE back on if a cycle is in its off time), also when its password file can't be written. The Proxy settings card says "password set for another address: set it again" instead of "no password yet" when the stored password belongs to the switch's old address (`passwordElsewhere` in `GET /control/switches`).
 
 ## v2026.11.08.3
 
