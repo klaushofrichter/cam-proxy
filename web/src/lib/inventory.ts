@@ -1,6 +1,7 @@
 // The Maintenance page's Inventory box (spec 2026-10-02-inventory-design).
 
 import { mbText } from './format';
+import { REPAIR_MAX_AGE_MS, REPAIR_MAX_BYTES, REPAIR_MAX_CLIPS, REPAIR_MAX_FAILURES, REPAIR_MAX_MB } from '../../../src/inventory/repair-caps';
 
 export interface Progress { phase: string; done: number; total: number; note?: string }
 export interface RunningView { runId: string; kind: string; op?: 'check' | 'repair'; startedAt: number; outcome: 'running'; progress: Progress }
@@ -95,9 +96,8 @@ export const LOAD_ERROR = 'Could not load the inventory.';
 export const loadMessage = (current: string, ok: boolean): string => (!ok ? LOAD_ERROR : current === LOAD_ERROR ? '' : current);
 
 // The clips inventory (#74) and its repair.
-export const REPAIR_MAX_CLIPS = 50; // the server's caps per run (src/inventory/repair-clips.ts)
-export const REPAIR_MAX_BYTES = 200 * 2 ** 20;
-export const REPAIR_MAX_AGE_MS = 3_600_000; // a repair needs a compare less than an hour old
+// The server's caps per run, from the one shared file (#134).
+export { REPAIR_MAX_AGE_MS, REPAIR_MAX_BYTES, REPAIR_MAX_CLIPS, REPAIR_MAX_MB };
 export interface CameraDayRow { date: string; state: 'listed' | 'unknown'; recordings: number; missingLocally: number; goneFromCamera: number }
 export interface ClipsReport extends RunSummary {
   window: { from: number | null; to: number; reason: string; notes?: string[]; camera?: { stream: string; to: number; oldestSdDay: string | null; unknownDays: string[] } } | null;
@@ -143,8 +143,8 @@ export function clipsLines(r: ClipsReport, fmt: (ms: number) => string = local):
 // The repair the newest clips report allows: a finished compare with the
 // camera, less than an hour old, with recordings missing here. `count` and
 // `bytes` are what one run fetches at most, picked as the server picks:
-// the newest 50 candidates, a recording larger than 200 MB skipped
-// (`tooBig`), one that would pass the 200 MB after the others skipped too.
+// the newest REPAIR_MAX_CLIPS candidates, a recording larger than the byte cap skipped
+// (`tooBig`), one that would pass the byte cap after the others skipped too.
 export function repairOffer(r: ClipsReport | null, now: number, repair: { source?: string } | null = null): { count: number; bytes: number; tooBig: number } | null {
   if (!r || repair?.source === r.runId || r.outcome !== 'ok' || !r.options?.camera || now - r.startedAt >= REPAIR_MAX_AGE_MS || !r.counts.missingLocally) return null;
   const first = r.items
@@ -221,18 +221,18 @@ const SKIPS: Record<string, string> = {
   'other-stream': 'of the other stream',
   viewer: 'a viewer was downloading it',
   invalid: 'unusable file name',
-  'too-big': "larger than one run's 200 MB",
-  'byte-cap': "would pass this run's 200 MB",
+  'too-big': `larger than one run's ${REPAIR_MAX_MB} MB`,
+  'byte-cap': `would pass this run's ${REPAIR_MAX_MB} MB`,
   busy: "the camera's Search stayed busy",
   'still-recording': 'may still be recording (late night)',
 };
 const STOPS: Record<string, string> = {
-  'clip-cap': 'the 50-clip cap',
-  'byte-cap': 'the 200 MB cap',
+  'clip-cap': `the ${REPAIR_MAX_CLIPS}-clip cap`,
+  'byte-cap': `the ${REPAIR_MAX_MB} MB cap`,
   'retention-full': 'storage is full: the next recording is older than the clips storage keeps',
   'max-gb': 'ftp.maxGB would be exceeded', // reports from before 2026-11-02
   paused: 'storage is paused (disk full)',
-  failures: '3 failures in a row',
+  failures: `${REPAIR_MAX_FAILURES} failures in a row`,
   refused: 'the camera refused a download',
   camera_offline: 'the camera is offline',
 };

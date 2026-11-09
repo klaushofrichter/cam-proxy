@@ -4,6 +4,7 @@ import { join, resolve, sep } from 'path';
 import type { AuditLog } from '../audit/audit-log';
 import { errorMessage, logger } from '../log';
 import { writeFileAtomic } from '../fs-util';
+import { REPAIR_MAX_AGE_MS } from './repair-caps';
 
 // The inventories (spec 2026-10-02-inventory-design): one run at a time per
 // proxy, cancellable, with progress. Each finished run (also a cancelled or
@@ -17,8 +18,8 @@ const KEEP_RUNS = 10;
 export const MAX_TOP = 10;
 export const MAX_ITEMS = 500;
 export const RUN_ID = /^([a-z]{1,16})-(\d{1,15})-([0-9a-f]{6})$/;
-// A repair works from a check report younger than this (spec decision 10).
-export const REPAIR_MAX_AGE_MS = 3_600_000;
+// A repair works from a check report younger than this (spec decision 10; repair-caps.ts).
+export { REPAIR_MAX_AGE_MS } from './repair-caps';
 // The folder (and run-id prefix) of a kind's repairs.
 const repairFolder = (kind: string): string => `${kind}repair`;
 
