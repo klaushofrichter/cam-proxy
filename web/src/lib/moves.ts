@@ -48,8 +48,16 @@ export function sizeText(bytes: number): string {
   return `${Math.round(bytes)} B`;
 }
 
-// A proposed host limit with its unit: *.maxGB are GB, storage.maxBytes is bytes.
-export const limitText = (key: string, value: number): string => `${key}: ${key.endsWith('Bytes') ? sizeText(value) : `${value} GB`}`;
+// A proposed host limit in words with its unit (*.maxGB and profile.storageGB
+// are GB, storage.maxBytes is bytes), the setting after it.
+const LIMIT: Record<string, string> = {
+  'profile.storageGB': 'Storage budget', 'storage.maxBytes': 'Storage budget',
+  'ftp.maxGB': 'Size cap for clips', 'stills.maxGB': 'Size cap for stills', 'previews.maxGB': 'Size cap for previews',
+};
+export const limitText = (key: string, value: number): string => {
+  const size = key.endsWith('Bytes') ? sizeText(value) : `${value} GB`;
+  return LIMIT[key] ? `${LIMIT[key]}: ${size} (${key})` : `${key}: ${size}`;
+};
 
 const REASON: Record<MoveReason, string> = {
   moves_not_allowed: "it doesn't accept camera moves (its local admin can allow them on its Cams-Admin page)",

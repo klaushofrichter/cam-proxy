@@ -486,6 +486,20 @@ describe('fix round 1', () => {
     }
   });
 
+  // #235 final review: the environment wins over a moved password (spec §9.3). For a
+  // brand-new id a password set there by hand is used; only a leftover's is stale.
+  it('a brand-new id whose per-camera env password is set by hand: the move goes on, the env password wins', async () => {
+    const env = { ...SECRETS, CAMPROXY_CAMERA_PASSWORD_CAM9: 'hand-set-pw' };
+    const u = unit({ env });
+    u.journal.save(offered());
+    await u.target.start(startArgs());
+    await u.target.idle(MOVE);
+    expect(u.calls).toEqual(STEPS);
+    expect(phases(u)).toEqual(['switching', 'switched', 'copying']);
+    expect(u.loaded.config.cameras.cam9).toMatchObject({ host: '192.0.2.9' });
+    expect(u.loaded.secrets.cameraPasswords.cam9).toBe('hand-set-pw');
+  }, 60_000);
+
   it('no shared camera password on the target: the secrets step stores the moved password, the camera step loads it', async () => {
     // Only cam1's own password, no CAMPROXY_CAMERA_PASSWORD: cam9's comes with the move.
     const env = { CAMPROXY_TOKENS: SECRETS.CAMPROXY_TOKENS, CAMPROXY_ADMIN_TOKEN: SECRETS.CAMPROXY_ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD_CAM1: 'own' };

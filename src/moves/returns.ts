@@ -61,6 +61,9 @@ export interface ReturnDeps {
   // retention in effect for keepDays on finished (left out: none).
   storage?: Pick<Storage, 'recount'>;
   retention?: () => Pick<Config['retention'], 'stillsDays' | 'previewsDays' | 'clipsDays' | 'eventsDays'>;
+  // The new proxy's cached chunk manifests (what it served the original): the
+  // finish deletes only files they list, and drops them once the return ends (#250).
+  manifests?: { lists: (moveId: string, rel: string) => boolean; forget: (moveId: string) => void };
 }
 
 // A return's plan (ruling 8): everything, all space; nothing to estimate or
@@ -255,7 +258,8 @@ export class MoveReturns {
     if (!abandoned && c?.captured) {
       const purge = { catalog: this.d.inventory.catalog, dataDir, storage };
       // The filter reads the import log: built before anything of it goes.
-      const back = removeReturned(purge, r, capturedFilter(dataDir, c));
+      const m = this.d.manifests;
+      const back = removeReturned(purge, r, capturedFilter(dataDir, c), m ? (rel) => m.lists(r.id, rel) : undefined);
       const imported = removeImported(purge, c);
       deleted = add(back.deleted, imported.deleted);
       kept = add(add(back.kept, imported.kept), cancelMinute(dataDir, c));
@@ -277,6 +281,8 @@ export class MoveReturns {
     this.finishAudit(r, 'source', abandoned, deleted, kept);
     this.d.journal.bury?.({ moveId: r.id, role: 'source', phase: 'finished', deleted, kept });
     this.d.journal.remove?.(r.id);
+    // Nothing is served for it any more: its cached manifests go (#250).
+    this.d.manifests?.forget(r.id);
     // The contract's answer is the counts deleted; what stayed is in the audit record and the tombstone.
     return ok({ deleted });
   }

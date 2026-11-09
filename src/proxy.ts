@@ -1247,6 +1247,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     // The finish (Task 11): storage recounted after the delete, keepDays on finished.
     storage,
     retention: () => running.retention,
+    manifests: manifestCache,
     ...(syncOn ? { sync: moveSync } : {}),
   });
   // After every welcome: the open move's phase again (B2), and an approval not acted on yet (B7).

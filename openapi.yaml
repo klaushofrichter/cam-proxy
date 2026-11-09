@@ -53,6 +53,53 @@ components:
             focus: { type: boolean }
             speed: { type: boolean, description: 'the camera takes a move speed' }
             positions: { type: object, description: 'present when the camera can store positions', properties: { max: { type: integer, description: 'at most this many positions (20)' } } }
+    ArchiveItem:
+      description: 'A clip in the Archive (docs/archive.md §1).'
+      type: object
+      required: [id, cam, cameraName, name, labels, retentionDays, createdAt, expiresAt, recordedFrom, recordedTo, durationS, quality, original, bytes, source, eventKinds, found, thumbnail, createdBy, move, urls]
+      properties:
+        id: { type: integer }
+        cam: { type: string }
+        cameraName: { type: [string, 'null'], description: 'the camera''s name when archived' }
+        name: { type: string, description: '1 to 120 characters' }
+        labels: { type: array, items: { type: string } }
+        retentionDays: { type: [integer, 'null'], description: 'null: kept forever' }
+        createdAt: { type: integer }
+        expiresAt: { type: [integer, 'null'], description: 'createdAt + retentionDays days; null: never' }
+        recordedFrom: { type: integer }
+        recordedTo: { type: integer }
+        durationS: { type: number, description: 'the file''s duration, 0.1 s precision' }
+        quality: { type: string, enum: [sd, 360p, 720p, 1080p, 4k] }
+        original: { type: boolean, description: 'true: the camera''s own file, as it is' }
+        bytes: { type: integer, description: 'the size of clip.mp4' }
+        source: { type: object, description: 'what it was made from: { type: composition | clip | recording, … } (docs/archive.md §1)' }
+        eventKinds: { type: array, items: { type: string }, description: 'the kinds of the events in its window' }
+        found: { type: array, items: { type: string }, description: 'the categories Vision found (analyses and still checks)' }
+        thumbnail:
+          type: object
+          required: [from, at]
+          properties:
+            from: { type: string, enum: [analysis, check, still, frame, none] }
+            at: { type: [integer, 'null'] }
+        createdBy: { type: string, enum: [client, admin] }
+        move:
+          description: 'null: made here. After a camera move, why the item is here: brought by a move (from), or kept here because the move could not copy it (kept, to, reason)'
+          type: [object, 'null']
+          required: [moveId, at]
+          properties:
+            moveId: { type: string }
+            from: { type: object, required: [proxyId, name], properties: { proxyId: { type: string }, name: { type: string } } }
+            to: { type: object, required: [proxyId, name], properties: { proxyId: { type: string }, name: { type: string } } }
+            at: { type: integer }
+            kept: { const: true }
+            reason: { type: string, enum: [failed, missing, not_copied] }
+        urls:
+          type: object
+          required: [video, thumbnail, metadata]
+          properties:
+            video: { type: string }
+            thumbnail: { type: string }
+            metadata: { type: string }
     PtzPosition:
       description: 'A saved position (spec 2026-10-30-ptz-capabilities-design §5.2). state missing: the camera no longer holds it (reset, replaced, or changed in the camera''s own app); save it again to fix it.'
       type: object
@@ -904,7 +951,18 @@ paths:
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
         - { name: offset, in: query, schema: { type: integer, minimum: 0 } }
       responses:
-        '200': { description: '{ total, offset, limit, items: [ArchiveItem] } (docs/archive.md §1; an item has move: the note of the camera move that brought or kept it, or null)' }
+        '200':
+          description: '{ total, offset, limit, items: [ArchiveItem] } (docs/archive.md §1; an item has move: the note of the camera move that brought or kept it, or null)'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [total, offset, limit, items]
+                properties:
+                  total: { type: integer }
+                  offset: { type: integer }
+                  limit: { type: integer }
+                  items: { type: array, items: { $ref: '#/components/schemas/ArchiveItem' } }
         '400': { description: '{error: invalid, detail}' }
         '401': { description: not signed in }
   /api/archive/status:
@@ -959,7 +1017,7 @@ paths:
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
-        '200': { description: ArchiveItem }
+        '200': { description: ArchiveItem, content: { application/json: { schema: { $ref: '#/components/schemas/ArchiveItem' } } } }
         '400': { description: not a whole number }
         '401': { description: not signed in }
         '404': { description: unknown id }
@@ -973,7 +1031,7 @@ paths:
           application/json:
             schema: { type: object, properties: { name: { type: string }, labels: { type: array, items: { type: string } }, retentionDays: { type: [integer, 'null'] } } }
       responses:
-        '200': { description: ArchiveItem }
+        '200': { description: ArchiveItem, content: { application/json: { schema: { $ref: '#/components/schemas/ArchiveItem' } } } }
         '400': { description: '{error: invalid, detail}' }
         '401': { description: not signed in }
         '404': { description: unknown id }

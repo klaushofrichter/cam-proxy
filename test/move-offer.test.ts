@@ -122,7 +122,7 @@ describe('refusals, in the plan order', () => {
     const cams = [{ id: 'cam3', host: '192.0.2.3', ftp: { enabled: true } }];
     const withFtp = offer({ settings: { statusPollS: 30, ftp: { enabled: true } } });
     // een on 2026-10-25: room for 3 cameras, 10 ports set by hand.
-    expect(await evaluate(fixture({ env, config: { cameras: cams, profile: { cameras: 3 }, ftp: { passive: '30000-30009' } } }).deps, withFtp)).toEqual({ accept: false, reason: 'incompatible', detail: 'ftp.passive: 10 ports (30000-30009) for 2 cameras with FTP; at least 10 per camera (profile_ftp_ports)' });
+    expect(await evaluate(fixture({ env, config: { cameras: cams, profile: { cameras: 3 }, ftp: { passive: '30000-30009' } } }).deps, withFtp)).toEqual({ accept: false, reason: 'incompatible', detail: "ftp.passive: 10 ports (30000-30009) for 2 cameras with FTP; at least 10 per camera (profile_ftp_ports): set it to 30000-30029, or remove it to use the profile's range, and open those ports in the host firewall" });
     expect((await evaluate(fixture({ env, config: { cameras: cams, profile: { cameras: 3 }, ftp: { passive: '30000-30019' } } }).deps, withFtp)).accept).toBe(true);
     // The incoming camera without FTP needs no ports.
     expect((await evaluate(fixture({ env, config: { cameras: cams, profile: { cameras: 3 }, ftp: { passive: '30000-30009' } } }).deps, offer())).accept).toBe(true);
