@@ -8,6 +8,8 @@
 - Camera moves: when the target refuses because its FTP passive range is too small, it now says what to set (for example "set it to 30000-30029, or remove it to use the profile's range, and open those ports in the host firewall").
 - Camera moves: the move panel names the limits a target proposes in words ("Size cap for stills: 90 GB (stills.maxGB)" instead of "stills.maxGB: 90 GB").
 - Copy back after a cancelled move: the new proxy deletes only the files it actually listed for the original proxy (a still written after that, for example with a clock that went back after the cancel, now stays), and drops its cached listings once the copy back ends.
+- PoE switches: stopping one switch controller (a proxy stop, or cams-admin forgetting a switch) no longer waits for another controller's work on the same switch; its own queued requests end at once, and the other work is no longer logged and audited as a switch session that may have been left open.
+- A power-cycle asked from the Maintenance page while the connection to cams-admin was down is sent after the reconnect only while the request is still open: once the page said "no answer from cams-admin within 5 minutes", it is dropped, so the camera's PoE is never cut that late.
 
 ## v2026.11.09.1
 
