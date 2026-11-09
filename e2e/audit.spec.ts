@@ -38,6 +38,9 @@ test('a refused sign-in, a sign-in and a sign-out made here appear on the Audit 
 
   await openAudit(page);
   const rows = page.getByTestId('audit-row');
+  // The sign-in page can make a refused request after the sign-out (auth-refused,
+  // recorded when its per-path throttle allows): newest first among our own actions.
+  await showActions(page, ['logout', 'login']);
   await expect(rows.first()).toHaveAttribute('data-action', 'logout');
   await expect(rows.first()).toContainText('admin');
   await showActions(page, ['login']);

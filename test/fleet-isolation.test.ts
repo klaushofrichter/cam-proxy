@@ -194,20 +194,26 @@ describe('a hostile cams-admin', () => {
     expect(p.proxy.audit.list({ actions: ['admin-command'], limit: 500 }).records.length - audits).toBeLessThanOrEqual(2);
   }, 60_000);
 
+  // #226: right after destroyAll the proxy still reports the closing junk
+  // connection as connected (it hears of the close a moment later, with that
+  // connection's reason): only a newer connection is cams-admin fine again.
   it('cams-admin fine again: connected again on its own', async () => {
+    const before = fake.connections;
     fake.mode = 'normal';
     fake.destroyAll();
-    await until(() => p.proxy.camsAdmin.view().state === 'connected', 10_000);
+    await until(() => fake.connections > before && p.proxy.camsAdmin.view().state === 'connected', 10_000);
   }, 20_000);
 
   it('a network drop (a blackholed link): noticed by the missing acks, reconnected once the link is back', async () => {
     await until(() => p.proxy.camsAdmin.view().state === 'connected', 10_000);
     const before = fake.connections;
+    const errorAt = p.proxy.camsAdmin.view().lastErrorAt;
     link.blackhole(true);
     try {
       lag.reset();
       await proxyCarriesOn();
-      await until(() => p.proxy.camsAdmin.view().state !== 'connected', 15_000);
+      // This drop's own reason, not one an earlier connection left (#226).
+      await until(() => p.proxy.camsAdmin.view().state !== 'connected' && p.proxy.camsAdmin.view().lastErrorAt !== errorAt, 15_000);
       expect(p.proxy.camsAdmin.view().lastError).toMatch(/ack|answer|welcome|closed/);
     } finally {
       link.blackhole(false);
