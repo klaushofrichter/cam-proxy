@@ -18,14 +18,17 @@ export interface SwitchCommandDeps {
 
 // A PoeSwitchError as the command's failure code: "PoE may still be off" is poe_may_be_off.
 const codeOf = (err: PoeSwitchError): string => (err.poeOff && err.turnedOn === false ? 'poe_may_be_off' : err.code);
+// switch.cycle only: PoE was cut and is on again, but the cycle failed (e.g. its check afterwards) — the camera is
+// rebooting (contract `cut_on_again`; cams-admin then answers a proxy's own request with poeCut: true).
+const cycleCodeOf = (err: PoeSwitchError): string => (err.poeOff && err.turnedOn === true ? 'cut_on_again' : codeOf(err));
 
 export function switchHandlers(d: SwitchCommandDeps): Record<string, Handler> {
   // Runs f; a switch error is a failed result with its code (anything else is the runner's internal error).
-  const guard = async (f: () => Promise<Record<string, unknown>>): Promise<Done> => {
+  const guard = async (f: () => Promise<Record<string, unknown>>, code: (err: PoeSwitchError) => string = codeOf): Promise<Done> => {
     try {
       return { status: 'ok', result: await f() };
     } catch (err) {
-      if (err instanceof PoeSwitchError) return { status: 'failed', code: codeOf(err) };
+      if (err instanceof PoeSwitchError) return { status: 'failed', code: code(err) };
       throw err;
     }
   };
@@ -55,7 +58,7 @@ export function switchHandlers(d: SwitchCommandDeps): Record<string, Handler> {
       const out: Done = !x.force && x.host === null ? { status: 'failed', code: 'not_verified' } : await guard(async () => {
         const r = await sw(x.switch).cycle(x.port, () => undefined, { verifyHost });
         return { verified: r.verified, offAt: r.offAt, onAt: r.onAt, watts: r.watts };
-      });
+      }, cycleCodeOf);
       if (out.status === 'ok') {
         const r = out.result as { verified: boolean; watts: number };
         d.audit.write({ ...base, outcome: 'success', message: `PoE cycled by cams-admin (on behalf of ${cmd.actor}) at ${x.switch.host} port ${x.port}${x.force ? ' (forced, not verified)' : ' (verified)'}`, details: { switch: where, forced: x.force, verified: r.verified, watts: r.watts, ...by } });

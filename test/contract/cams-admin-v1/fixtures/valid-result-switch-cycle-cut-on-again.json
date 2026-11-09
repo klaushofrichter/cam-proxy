@@ -1,0 +1,25 @@
+{
+  "$note": "PoE was cut and is on again, but the cycle failed (cut_on_again): the camera is rebooting; cams-admin sends poeCut on camera.power.cycled",
+  "$command": "switch.cycle",
+  "schema": "result",
+  "message": {
+    "v": 1,
+    "type": "result",
+    "id": "01K60000000000000000000005",
+    "seq": 5,
+    "ts": 1791273600005,
+    "re": "01K60000000000000000000003",
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "phase": "done",
+      "status": "failed",
+      "code": "cut_on_again"
+    },
+    "sig": "0S8wmGRJKHZtwvqHOsdjVpI+9gbb12SY++f75q32yYP8W1SDRfIaZjKGaRR7R27nw1LDQjsL5MXtIBmVuGn4AA=="
+  },
+  "$context": {
+    "feature": "cycle-cut-on-again"
+  }
+}
