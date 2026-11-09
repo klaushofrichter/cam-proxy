@@ -12,6 +12,9 @@ test('trust a camera certificate from the onboarding card; a wrong password is r
     await page.goto('/#/status');
     await expect(page.getByTestId('camera-picker').locator('option')).toHaveCount(4, { timeout: 15_000 });
     await page.getByTestId('camera-picker').selectOption('cam8');
+    // The proxy reads the camera's own name (Gate) a moment after the add; the
+    // trust message uses it, so wait for it first.
+    await expect(page.getByTestId('camera-picker').locator('option[value="cam8"]')).toHaveText(/^Gate/, { timeout: 15_000 });
     const card = page.getByTestId('card-onboarding');
     await expect(card.getByTestId('onboarding-step-trust')).toHaveText('Certificate: certificate not trusted: use "Trust this camera\'s certificate"', { timeout: 15_000 });
     await card.getByTestId('onboarding-trust').click();
