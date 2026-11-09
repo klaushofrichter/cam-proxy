@@ -16,6 +16,8 @@ export default defineConfig({
     include: ['test/**/*.test.ts'],
     testTimeout: 15_000,
     setupFiles: ['test/setup-reflect.ts'],
+    // Reaps MediaMTX/go2rtc left by an aborted run (#119).
+    globalSetup: ['test/global-setup.ts'],
     env,
   },
 });
