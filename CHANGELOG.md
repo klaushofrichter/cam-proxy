@@ -5,6 +5,7 @@
 - SD card: a new or just formatted card (free space equal to its size) no longer shows "The camera hasn't recorded to its SD card for more than 48 h" right away because of an FTP clip from before the card was in. Until its first recording it shows "no recordings yet" (no problem); it is a problem only once a clip arrives after the card was first seen and no recording follows within the hour, and the hours named are counted from when the proxy first saw the card. The hours in that text are no longer rounded up.
 - `admin-enroll` on a terminal no longer shows the enrollment code as it is typed (like a password prompt; a pipe works as before).
 - Re-enrolling a proxy that is connected to cams-admin no longer logs `admin_rejected` for the old key's connection, which cams-admin closes once the new code is redeemed.
+- A proxy stop during a camera add (which can wait up to 10 s for go2rtc) turns a PoE port cut by a power-cycle back on first, instead of after the add, so it stays within the container's stop grace.
 
 ## v2026.11.08.3
 
