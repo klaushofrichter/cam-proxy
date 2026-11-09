@@ -2,7 +2,7 @@ import { createHash } from 'crypto';
 import { constants, existsSync, lstatSync, readdirSync } from 'fs';
 import { open } from 'fs/promises';
 import { join, relative, resolve, sep } from 'path';
-import { CAM_ID } from '../archive/paths';
+import { ARCHIVE_FILES, CAM_ID } from '../archive/paths';
 import type { Catalog } from '../catalog/db';
 import type { KindSummary, MoveKind, MoveSummary } from './types';
 import { FILE_KINDS } from './types';
@@ -126,6 +126,9 @@ export class Cam {
 }
 
 
+// A stills or previews file: a minute's pack, sprite or sidecar (HHMM.ext).
+const STILL_FILE = /^(\d{2})(\d{2})\.(pack|jpg|json)$/;
+
 // One kind of one camera as items: stills days are folders; the others are rows
 // with their files. `range` limits the rows (by their day timestamp) for a chunk;
 // `filter` leaves items out (see ItemFilter).
@@ -146,7 +149,8 @@ function items(c: Cam, kind: MoveKind, range?: { from: number; to: number }, fil
       const base = join(dataDir, folder, c.cam);
       for (const f of c.walk(base)) {
         const m = /^(\d{4})\/(\d{2})\/(\d{2})\//.exec(c.rel(f).slice(`${folder}/${c.cam}/`.length));
-        const hm = /^(\d{2})(\d{2})/.exec(f.slice(f.lastIndexOf(sep) + 1));
+        // A minute's own files only, never an atomic write's leftover (<file>.tmp-<pid>, #235).
+        const hm = STILL_FILE.exec(f.slice(f.lastIndexOf(sep) + 1));
         if (!m || !hm) continue;
         const ts = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(hm[1]), Number(hm[2]));
         if (Number.isNaN(ts) || ts < lo || ts >= hi) continue;
@@ -177,7 +181,8 @@ function items(c: Cam, kind: MoveKind, range?: { from: number; to: number }, fil
   } else {
     for (const r of c.rows<Record<string, unknown> & { id: number; created_at: number }>('SELECT * FROM archive WHERE cam = ? AND created_at >= ? AND created_at < ? ORDER BY created_at, id', c.cam, Math.max(lo, -1e18), Math.min(hi, 1e18))) {
       if (filter && !filter.row('archive', r)) continue;
-      out.push({ ts: r.created_at, files: c.walk(join(dataDir, 'archive', c.cam, String(r.id))), rows: [{ table: 'archive', row: r }] });
+      const files = c.walk(join(dataDir, 'archive', c.cam, String(r.id))).filter((f) => (ARCHIVE_FILES as readonly string[]).includes(f.slice(f.lastIndexOf(sep) + 1)));
+      out.push({ ts: r.created_at, files, rows: [{ table: 'archive', row: r }] });
     }
   }
   return out;
