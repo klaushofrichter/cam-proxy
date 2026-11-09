@@ -20,6 +20,12 @@ describe('the sd item', () => {
     expect(item(h)).toEqual({ id: 'sd', label: 'SD card', value: 'ok', text: '19.5 of 29.7 GB free, overwrite on', problem: false });
     expect(h.ok).toBe(true);
   });
+  // #204: a new card (free = capacity) without any recording yet is no problem.
+  it('an empty card: no recordings yet, no problem', () => {
+    const h = health({ capacityMB: 61047, freeMB: 61047 });
+    expect(item(h)).toEqual({ id: 'sd', label: 'SD card', value: 'ok', text: '59.6 of 59.6 GB free, overwrite on, no recordings yet', problem: false });
+    expect(h.ok).toBe(true);
+  });
   it('comes right after the camera items (camera, stream, events, ftp, sd, then the host)', () => {
     expect(health().items.map((i) => i.id).slice(0, 6)).toEqual(['camera', 'stream', 'events', 'ftp', 'sd', 'storage']);
   });
@@ -56,7 +62,10 @@ describe('the sd item', () => {
     expect(item(h)?.text).toBe("The camera hasn't recorded to its SD card since 2026-10-03 09:00 UTC");
   });
   it('none found in the 48 h searched', () => {
-    expect(item(health({ lastClipAt: NOW, lastRecordingAt: null, recordingsFrom: NOW - 48 * H }))).toMatchObject({ value: 'stalled', text: "The camera hasn't recorded to its SD card for more than 48 h", problem: true });
+    // The search starts 48 h before the check (checkedAt).
+    expect(item(health({ lastClipAt: NOW, lastRecordingAt: null, recordingsFrom: NOW - 60_000 - 48 * H }))).toMatchObject({ value: 'stalled', text: "The camera hasn't recorded to its SD card for more than 48 h", problem: true });
+    // #204: from real data only: the hours searched, never rounded up.
+    expect(item(health({ lastClipAt: NOW, lastRecordingAt: null, recordingsFrom: NOW - 60_000 - 1.6 * H }))).toMatchObject({ value: 'stalled', text: "The camera hasn't recorded to its SD card for more than 1 h" });
   });
   it('within the hour, not compared, or the camera offline: not stalled', () => {
     expect(item(health({ lastClipAt: NOW, lastRecordingAt: NOW - H + 1000, recordingsFrom: NOW - H }))).toMatchObject({ value: 'ok' });

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- SD card: a new or just formatted card (free space equal to its size) no longer shows "The camera hasn't recorded to its SD card for more than 48 h" right away because of an FTP clip from before the card was in. Until its first recording it shows "no recordings yet" (no problem); it is a problem only once a clip arrives after the card was first seen and no recording follows within the hour, and the hours named are counted from when the proxy first saw the card. The hours in that text are no longer rounded up.
+
 ## v2026.11.08.3
 
 - Add camera on a proxy with a site CA no longer needs the camera's certificate fingerprint when the camera already serves this proxy's own site-CA certificate for its name (`<id>.<site>.internal`), for example when a camera is added again after a remove. Since every Add camera gives the camera a fresh certificate, a fingerprint noted earlier was always out of date, and the add was refused with `fingerprint_mismatch`. Now the proxy checks the certificate itself (issued by its own current site CA, valid now, for exactly that name) and trusts the camera by the site CA; the audit log says so ("trust site-ca: served certificate issued by this proxy's site CA for …"). Ask for it with `"trust": {"siteCa": true}` (refused with `site_ca_untrusted` and the reason otherwise), or leave `trust` out: then it is used when the certificate qualifies, and otherwise the add is refused as before (the fingerprint is required). A fingerprint, when given, is still used exactly as before, and a camera with a factory, foreign or other camera's certificate still needs it. The Add camera card on a proxy with a site CA lets you add without "Check camera" first and says when the camera needs the check after all.
