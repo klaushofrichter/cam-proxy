@@ -345,8 +345,26 @@ export class Storage extends EventEmitter {
   // oldest hour of the next kind in order, never touching the newest
   // keepHours of a kind. `fixed`: the bytes that count but are never
   // dropped (the catalog, the audit log). run() and clipSpace() share it.
-  private plan(sim: Record<FileKind, Unit[]>, o: { now: number; cfg: Config; budget: number; fixed: number }, drop: (kind: FileKind, u: Unit) => void, reason: string[]): void {
+  private plan(sim: Record<FileKind, Unit[]>, o: { now: number; cfg: Config; budget: number; fixed: number }, dropUnit: (kind: FileKind, u: Unit) => void, reason: string[]): void {
     const { now, cfg, budget, fixed } = o;
+    // The bytes per kind and per camera, counted once and kept up to date by
+    // every drop (#174: the budget loop summed every unit again per dropped hour).
+    const kindBytes = {} as Record<FileKind, number>;
+    const camBytes = new Map<string, number>();
+    for (const kind of KINDS) {
+      kindBytes[kind] = 0;
+      for (const u of sim[kind]) {
+        const b = unitBytes(u);
+        kindBytes[kind] += b;
+        camBytes.set(u.cam, (camBytes.get(u.cam) ?? 0) + b);
+      }
+    }
+    const drop = (kind: FileKind, u: Unit) => {
+      const b = unitBytes(u);
+      kindBytes[kind] -= b;
+      camBytes.set(u.cam, (camBytes.get(u.cam) ?? 0) - b);
+      dropUnit(kind, u);
+    };
     const days: Record<MinuteKind, number> = { stills: cfg.retention.stillsDays, previews: cfg.retention.previewsDays, clips: cfg.retention.clipsDays };
     for (const kind of MINUTE_KINDS) {
       const cutoff = dayStart(now - days[kind] * DAY);
@@ -355,7 +373,7 @@ export class Storage extends EventEmitter {
         if (!reason.includes('age')) reason.push('age');
       }
     }
-    const bytesOf = (kind: FileKind) => sim[kind].reduce((n, u) => n + unitBytes(u), 0);
+    const bytesOf = (kind: FileKind) => kindBytes[kind];
     const dropOldestHour = (kind: MinuteKind): boolean => {
       const keepFrom = now - cfg.storage.keepHours[kind] * HOUR;
       const first = sim[kind][0];
@@ -384,7 +402,7 @@ export class Storage extends EventEmitter {
     // With shares (spec §8.1): the camera most above its share loses its
     // oldest hour first; without: the oldest hour across all cameras.
     const shared = activeCameraIds(cfg).some((id) => cameraConfig(cfg, id)!.storage.sharePercent !== undefined);
-    const usedBy = (cam: string) => KINDS.reduce((n, k) => n + sim[k].filter((u) => u.cam === cam).reduce((m, u) => m + unitBytes(u), 0), 0);
+    const usedBy = (cam: string) => camBytes.get(cam) ?? 0;
     // The oldest hour of one camera's kind, never its newest keepHours.
     const dropOldestHourOf = (kind: MinuteKind, cam: string): boolean => {
       const keepFrom = now - cfg.storage.keepHours[kind] * HOUR;
