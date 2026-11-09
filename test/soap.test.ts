@@ -12,9 +12,15 @@ describe('ONVIF reply parsing', () => {
   it('stays fast on a hostile reply (long attribute text without =)', () => {
     const junk = 'a'.repeat(200_000);
     const xml = `<wsnt:NotificationMessage><wsnt:Topic>tns1:X</wsnt:Topic><tt:Message ${junk}><tt:Data><tt:SimpleItem ${junk} /></tt:Data></tt:Message></wsnt:NotificationMessage>`;
-    const t0 = Date.now();
+    // This thread's CPU time, not the wall time: a busy machine is not a slow parser
+    // (a backtracking regex on 200 kB takes seconds of CPU).
+    const cpu = () => {
+      const u = process.threadCpuUsage();
+      return (u.user + u.system) / 1000;
+    };
+    const t0 = cpu();
     notifications(xml);
     attr(` ${junk}`, 'Value');
-    expect(Date.now() - t0).toBeLessThan(200);
+    expect(cpu() - t0).toBeLessThan(200);
   });
 });

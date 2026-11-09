@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, it } from 'vitest';
 import { reapOrphanGo2rtc } from '../src/stills/orphans';
+import { runFolderPrefix } from './helpers/strays';
 
 const alive = (pid: number) => {
   try {
@@ -32,7 +33,8 @@ describe('orphaned go2rtc', () => {
     const fake = join(bin, 'go2rtc');
     writeFileSync(fake, `#!${process.execPath}\nsetTimeout(() => undefined, 60000);\n`);
     chmodSync(fake, 0o755);
-    const orphanDir = mkdtempSync(join(tmpdir(), 'camproxy-go2rtc-'));
+    // Marked with this run's pid: the stray sweep of another test run started meanwhile leaves it (#383).
+    const orphanDir = mkdtempSync(join(tmpdir(), runFolderPrefix('camproxy-go2rtc-')));
     writeFileSync(join(orphanDir, 'go2rtc.json'), '{}');
     const liveDir = mkdtempSync(join(tmpdir(), 'camproxy-go2rtc-'));
     writeFileSync(join(liveDir, 'go2rtc.json'), '{}');

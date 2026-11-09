@@ -1136,7 +1136,7 @@ describe('cancel after switch-over (integration)', () => {
       proxy: { ...timing, moves: { retryMs: 200, retryCapMs: 1000 } },
       settings: { tls: TLS('u'), camsAdmin: { url: fakeT.url }, profile: { cameras: 2 }, ftp: await ftp(targetFtp) },
     });
-    await until(() => fakeS.open() === 1 && fakeT.open() === 1 && S.proxy.cameras.get('cam3')!.status.state().online, 30_000);
+    await until(() => fakeS.welcomed() === 1 && fakeT.welcomed() === 1 && S.proxy.cameras.get('cam3')!.status.state().online, 30_000);
     await S.proxy.certs!.tick();
     expect(S.proxy.certs!.state('cam3').mode).toBe('site-ca');
     ownLeaf = S.proxy.certs!.state('cam3').fingerprint!;

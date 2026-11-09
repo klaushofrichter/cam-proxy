@@ -18,6 +18,7 @@ import { LATE_START_MS, START_SLACK_MS } from './match';
 import type { InventoryReport, RepairEntry, RepairResult } from './runner';
 import { DAY, dayStart } from '../time-units';
 import type { ClipSpace } from '../storage';
+import { REPAIR_GAP_MS, REPAIR_MAX_BYTES, REPAIR_MAX_CLIPS, REPAIR_MAX_FAILURES, REPAIR_MAX_MB } from './repair-caps';
 
 // The clips repair (#74 part 3, spec 2026-10-02-inventory-design §4): fetch
 // the recordings a recent camera compare found missing locally, over Baichuan
@@ -47,15 +48,13 @@ import type { ClipSpace } from '../storage';
 // ends it between clips and aborts its own running download (one a viewer
 // joined runs on). The report's age (< 1 h) is checked by the runner.
 
-export const REPAIR_MAX_CLIPS = 50;
-export const REPAIR_MAX_BYTES = 200 * 2 ** 20;
-export const REPAIR_GAP_MS = 1000;
-export const REPAIR_MAX_FAILURES = 3;
+// The caps live in repair-caps.ts (shared with the admin UI).
+export { REPAIR_GAP_MS, REPAIR_MAX_BYTES, REPAIR_MAX_CLIPS, REPAIR_MAX_FAILURES };
 
 type RepairStop = 'clip-cap' | 'byte-cap' | 'retention-full' | 'paused' | 'failures' | 'refused' | 'camera_offline';
 const STOP_TEXT: Record<RepairStop, string> = {
   'clip-cap': `the ${REPAIR_MAX_CLIPS}-clip cap`,
-  'byte-cap': `the ${REPAIR_MAX_BYTES / 2 ** 20} MB cap`,
+  'byte-cap': `the ${REPAIR_MAX_MB} MB cap`,
   'retention-full': 'storage is full: the next recording is older than the clips storage keeps',
   paused: 'storage is paused (disk full)',
   failures: `${REPAIR_MAX_FAILURES} failures in a row`,

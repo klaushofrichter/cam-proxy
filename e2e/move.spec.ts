@@ -80,8 +80,8 @@ test('move dialog → panel → approve emits move.approve', async ({ page, requ
   await expect(page.getByTestId('move-short')).toHaveText('Not everything fits on Shed (6.0 GB needed, 3.0 GB free).');
   await expect(page.getByTestId('move-kind-events')).toHaveCount(0);
   await page.getByTestId('move-option-retention').check();
-  await expect(page.getByTestId('move-limits')).toContainText('stills.maxGB: 90 GB');
-  await expect(page.getByTestId('move-limits')).toContainText('storage.maxBytes: 200.0 GB');
+  await expect(page.getByTestId('move-limits')).toContainText('Size cap for stills: 90 GB (stills.maxGB)');
+  await expect(page.getByTestId('move-limits')).toContainText('Storage budget: 200.0 GB (storage.maxBytes)');
   await expect(page.getByTestId('move-estimate')).toHaveText('Estimated time: 9 min');
   // A budget below the estimate is refused before it is sent.
   await page.getByTestId('move-budget').fill('5');

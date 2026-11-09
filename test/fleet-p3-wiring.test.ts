@@ -38,7 +38,7 @@ describe('P3 through the proxy', () => {
     const dir = mkdtempSync(join(tmpdir(), 'camproxy-p3-'));
     writeKeyFile(join(dir, 'data', 'admin', 'key.json'), fake.keyFile());
     p = await startProxy(sim, { dir, settings: { camsAdmin: { url: fake.url } }, proxy: { exit, restartTimeoutMs: 2000, camsAdmin: { timing: { minIntervalS: 0.2, jitterS: 0, backoffCapMs: 300, closeGraceMs: 200, changeCheckMs: 100 } } } });
-    await until(() => fake.open() === 1 && fake.heartbeats().length >= 1, 10_000);
+    await until(() => fake.welcomed() === 1 && fake.heartbeats().length >= 1, 10_000);
   }, 60_000);
   afterAll(async () => {
     await p?.proxy.stop();

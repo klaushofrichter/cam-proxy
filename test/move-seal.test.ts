@@ -30,6 +30,11 @@ describe('seal', () => {
     expect(seal(k.publicSpki, SECRET)).not.toBe(sealed);
   });
 
+  it('unseal with a private key that does not parse: a fixed message, not the crypto library\'s (#235 T5)', () => {
+    const k = pair();
+    const sealed = seal(k.publicSpki, SECRET);
+    expect(() => unseal(Buffer.from('not a key').toString('base64'), sealed)).toThrow(/^not an X25519 private key$/);
+  });
   it('unseal with another key fails', () => {
     const k = pair();
     const other = pair();

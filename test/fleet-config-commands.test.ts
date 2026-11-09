@@ -180,6 +180,17 @@ describe('config.set', () => {
     for (const dryRun of [true, false]) expect(await run('config.set', { v: 1, dryRun, baseRevision: rev(), set: { 'sse.pingS': 7 } })).toMatchObject({ status: 'failed', code: 'held_by_env', result: { paths: [{ path: 'sse.pingS', code: 'held_by_env' }] } });
     expect(await run('config.unset', { v: 1, dryRun: true, baseRevision: rev(), paths: ['sse.pingS'] })).toMatchObject({ code: 'held_by_env' });
   });
+  // #235 T3: a camera moved to another proxy (hidden here by its `moved` marker) is
+  // not this proxy's: cams-admin's config view lists it under the new proxy only.
+  it('a moved camera: not in config.get, and config.set of its settings is unknown_camera', async () => {
+    localEdit({ cameras: { cam2: { moved: 'mv_0S0123456789ABCDEFGH' } } });
+    const r = await run('config.get', { v: 1 });
+    expect(r.result).toMatchObject({ cameras: ['cam1'], omittedCameras: [] });
+    expect(Object.keys(r.result!.paths as object).filter((p) => p.startsWith('cameras.cam2.'))).toEqual([]);
+    const set = await run('config.set', { v: 1, dryRun: true, baseRevision: rev(), set: { 'cameras.cam2.statusPollS': 45 } });
+    expect(set).toMatchObject({ status: 'failed', code: 'unknown_camera', result: { paths: [{ path: 'cameras.cam2.statusPollS', code: 'unknown_camera' }] } });
+    expect((await run('config.set', { v: 1, dryRun: true, baseRevision: rev(), set: { 'cameras.cam1.statusPollS': 45 } })).status).toBe('ok');
+  });
   it('the contract order: unknown_camera before not_remote_settable before held_by_env before conflict', async () => {
     expect((await run('config.set', { v: 1, dryRun: true, baseRevision: `sha256:${'0'.repeat(64)}`, set: { 'tls.site': 'x', 'cameras.evil.name': 'x' } })).code).toBe('unknown_camera');
     expect((await run('config.set', { v: 1, dryRun: true, baseRevision: `sha256:${'0'.repeat(64)}`, set: { 'tls.site': 'x' } })).code).toBe('not_remote_settable');
@@ -222,6 +233,22 @@ describe('config.set', () => {
     // of a retention period above the default it is refused.
     localEdit({ retention: { clipsDays: 30 } });
     expect(await run('config.unset', { v: 1, dryRun: true, baseRevision: rev(), paths: ['retention.clipsDays'] })).toMatchObject({ status: 'failed', code: 'widening_local_only' });
+  });
+  it("cams-admin #20: the capture intervals only get shorter; a camera's unset interval is the host's", async () => {
+    const SHORTER = 'a remote change may only shorten the interval; a longer one is a local change';
+    localEdit({ stills: { intervalS: 10 }, events: { poll: { intervalS: 5 } } });
+    const before = fileText();
+    for (const set of [{ 'stills.intervalS': 12 }, { 'events.poll.intervalS': 6 }, { 'cameras.cam1.stills.intervalS': 12 }]) {
+      const r = await run('config.set', { v: 1, dryRun: false, baseRevision: rev(), set });
+      expect(r, JSON.stringify(set)).toMatchObject({ status: 'failed', code: 'widening_local_only', result: { paths: [{ path: Object.keys(set)[0], code: 'widening_local_only', detail: SHORTER }] } });
+    }
+    expect(fileText()).toBe(before);
+    // The first value of a camera's interval: compared with the host's 10, not with 0.
+    expect(await run('config.set', { v: 1, dryRun: false, baseRevision: rev(), set: { 'cameras.cam1.stills.intervalS': 5 } }, 2)).toMatchObject({ status: 'ok', result: { changes: [{ path: 'cameras.cam1.stills.intervalS', to: 5 }] } });
+    expect((await run('config.set', { v: 1, dryRun: true, baseRevision: rev(), set: { 'stills.intervalS': 5, 'events.poll.intervalS': 1 } }, 3)).status).toBe('ok');
+    // Its unset goes back to the host's 10: longer, refused; the rollback of the set too.
+    expect(await run('config.unset', { v: 1, dryRun: true, baseRevision: rev(), paths: ['cameras.cam1.stills.intervalS'] }, 4)).toMatchObject({ status: 'failed', code: 'widening_local_only', result: { paths: [{ path: 'cameras.cam1.stills.intervalS', detail: SHORTER }] } });
+    expect(await run('config.rollback', { v: 1, dryRun: true, cmdId: CMD(2) }, 5)).toMatchObject({ status: 'failed', code: 'widening_local_only' });
   });
   it("invalid_value: the proxy's own rules (previews.grid too small for stills.intervalS), the message as detail", async () => {
     const r = await run('config.set', { v: 1, dryRun: true, baseRevision: rev(), set: { 'previews.grid': '2x2' } });

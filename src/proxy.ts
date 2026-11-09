@@ -972,7 +972,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // an event to cams-admin, the CPU over its core count, the storage figures a
   // move weighs, and the push answer while the site CA can't push.
   const proxyIdNow = () => camsAdmin.keyInfo()?.proxyId ?? '';
-  const emitToAdmin = (e: AdminEvent) => camsAdmin.emitEvent(e);
+  const emitToAdmin = (e: AdminEvent, valid?: () => boolean) => camsAdmin.emitEvent(e, valid);
   const cpuBusy = opts.cpuBusy ?? (() => loadavg()[0] > availableParallelism());
   const moveUsage = () => {
     const u = storage.usage();
@@ -1247,6 +1247,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     // The finish (Task 11): storage recounted after the delete, keepDays on finished.
     storage,
     retention: () => running.retention,
+    manifests: manifestCache,
     ...(syncOn ? { sync: moveSync } : {}),
   });
   // After every welcome: the open move's phase again (B2), and an approval not acted on yet (B7).

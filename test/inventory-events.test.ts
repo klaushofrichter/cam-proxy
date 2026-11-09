@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { loopLag } from './helpers/loop-lag';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -268,23 +269,18 @@ describe('events inventory at scale', () => {
       months[m] = [...new Set([...(months[m] ?? []), Number(date.slice(8))])];
     }
     const cam = camera({ months, recs });
-    let last = performance.now();
-    let worst = 0;
-    const timer = setInterval(() => {
-      const t = performance.now();
-      worst = Math.max(worst, t - last);
-      last = t;
-    }, 1);
+    // The loop held, as this thread's CPU time: a busy machine stretches only the wall time (test/helpers/loop-lag.ts).
+    const lag = loopLag();
     try {
       const r = await eventsCheck(deps(cam.deps))(ctx());
-      worst = Math.max(worst, performance.now() - last);
       expect(r.counts.recordings).toBeGreaterThan(2_200);
       expect(r.counts.spans).toBeGreaterThan(2_500);
       expect(r.counts.events).toBeGreaterThan(19_000);
     } finally {
-      clearInterval(timer);
+      lag.close();
     }
-    expect(worst).toBeLessThan(250);
+    const held = lag.max();
+    expect(held.cpu, `held ${held.cpu.toFixed(0)} ms CPU, ${held.wall.toFixed(0)} ms wall`).toBeLessThan(250);
   }, 30_000);
 });
 

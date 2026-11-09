@@ -45,8 +45,9 @@ const put = (path: string, bytes: number) => {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, randomBytes(bytes));
 };
-// The seeded days: yesterday and the day before (UTC noon), far from the switch-over day.
-const SEED_DAYS = [1, 2].map((n) => Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()) - n * DAY + 12 * 3600_000);
+// The seeded days: two and three days ago (UTC noon), far from the switch-over day and from
+// the target's own capture in the cancel test (20 minutes ago: today or yesterday).
+const SEED_DAYS = [2, 3].map((n) => Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()) - n * DAY + 12 * 3600_000);
 // One day's content of cam3 on the source: two still minutes, a clip with its snapshot and row, an event row.
 function seed(p: P, ts: number): void {
   const dataDir = dataOf(p);
@@ -149,7 +150,7 @@ function world(title: string, tests: () => void): void {
         proxy: { ...timing, moves: { retryMs: 200, retryCapMs: 1000 } },
         settings: { tls: TLS('u'), camsAdmin: { url: fakeT.url }, profile: { cameras: 2 }, ftp: await ftp(targetFtp) },
       });
-      await until(() => fakeS.open() === 1 && fakeT.open() === 1 && S.proxy.cameras.get('cam3')!.status.state().online, 30_000);
+      await until(() => fakeS.welcomed() === 1 && fakeT.welcomed() === 1 && S.proxy.cameras.get('cam3')!.status.state().online, 30_000);
       await S.proxy.certs!.tick();
       expect(S.proxy.certs!.state('cam3').mode).toBe('site-ca');
       for (const ts of SEED_DAYS) seed(S, ts);
@@ -447,8 +448,10 @@ world('a cancel after the switch-over copies the target\'s capture back', () => 
     expect(seeded(T)).toEqual(before);
 
     // 2. The target's own capture while it had the camera: two still minutes and an Archive item.
-    // Today (UTC): never one of the seeded days, whatever the time of day.
-    const minute = Math.floor(Date.now() / DAY) * DAY;
+    // Two finished minutes from before this world started: never one of the seeded days, and never
+    // a minute the target's live capture writes too (CI 2026-11-08 at 00:00 UTC: "today 00:00" was the
+    // live minute; the target's capture changed the file after the copy back, so it was not deleted).
+    const minute = Math.floor(Date.now() / 60_000) * 60_000 - 20 * 60_000;
     const ownStills = [minute, minute + 60_000].map((m) => `${minutePath(dataOf(T), 'stills', 'cam3', m)}.pack`);
     for (const p of ownStills) put(p, 1500);
     // A finished minute of live capture is its pack plus the preview sprite and its sidecar (src/stills/store.ts).

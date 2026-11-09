@@ -92,8 +92,9 @@ export class CamsAdmin {
 
   // A signed event (a camera move, a power-cycle request): sent now when
   // connected, else after the next welcome, in order.
-  emitEvent(body: AdminEvent): void {
-    this.outbox.push(body);
+  // valid: still worth sending when the connection is back (EventOutbox.push).
+  emitEvent(body: AdminEvent, valid?: () => boolean): void {
+    this.outbox.push(body, valid);
     this.client?.flushEvents();
   }
 

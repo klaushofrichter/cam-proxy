@@ -27,6 +27,8 @@ test.afterEach(async ({ request }) => {
   await request.delete('/control/config/sse.pingS', { headers: admin });
   await request.delete('/control/config/ntp.server', { headers: admin });
   await request.delete('/control/config/retention.clipsDays', { headers: admin });
+  await request.delete('/control/config/cameras.cam1.stills.intervalS', { headers: admin });
+  await request.delete('/control/config/stills.intervalS', { headers: admin });
 });
 
 test('a cams-admin sign-in: settings, restarts and actions are off, with the reason', async ({ browser, request }) => {
@@ -95,5 +97,26 @@ test('ui.config: storage locked, retention only longer, with the reason at the r
   await page.getByTestId('reset-all').click();
   await expect(page.getByTestId('confirm-dialog')).toContainText('These stay as they are (only the local admin token resets them): retention.clipsDays.');
   await page.getByTestId('confirm-cancel').click();
+  await page.context().close();
+});
+
+// cams-admin #20: from a cams-admin sign-in a capture interval only gets
+// shorter; a camera without its own interval has the host's.
+test("ui.config: a camera's stills interval only shorter than the host's, with the reason at the row", async ({ browser, request }) => {
+  expect((await allow(request, ['ui.config'])).status()).toBe(200);
+  expect((await request.put('/control/config', { headers: admin, data: { stills: { intervalS: 10 } } })).status()).toBe(200);
+  const page = await managedPage(browser, request);
+  await page.goto('/#/camera-settings');
+  const P = 'cameras.cam1.stills.intervalS';
+  const input = page.getByTestId(`input-${P}`);
+  await input.fill('12', { timeout: 15000 });
+  await expect(page.getByTestId(`save-${P}`)).toBeDisabled();
+  await expect(page.getByTestId(`dir-note-${P}`)).toContainText('interval may only get shorter');
+  await input.fill('5');
+  await page.getByTestId(`save-${P}`).click();
+  await expect(page.getByTestId('settings-message')).toContainText(`${P} saved`);
+  // Its Reset goes back to the host's 10 s: longer, off.
+  await expect(page.getByTestId(`reset-${P}`)).toBeDisabled();
+  await expect(page.getByTestId(`dir-note-${P}`)).toContainText('interval may only get shorter');
   await page.context().close();
 });

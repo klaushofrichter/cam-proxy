@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'fs';
+import { mkdtempSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, it, vi } from 'vitest';
@@ -61,5 +61,28 @@ describe('the journal budget across restarts', () => {
     expect(reboot).toHaveBeenCalledTimes(6);
     // A non-disruptive action is not under the budget.
     expect(await b.send('camera.action', { v: 1, camera: 'cam1', action: 'camera-test' })).toMatchObject({ status: 'ok' });
+  });
+
+  // #364 (Task 4): switch.cycle is budgeted by its journal name; the runner
+  // journals it under that name, in the one pool with the disruptive camera actions.
+  it('(e) switch.cycle through the runner: journaled as switch.cycle; with four reboots, the third cycle in the hour is rate_limited', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'budget-'));
+    const cycle = vi.fn();
+    const handlers: Record<string, Handler> = {
+      'camera.action': (args) => ({ status: 'ok', action: (args as { action: string }).action, result: {} }),
+      'switch.cycle': () => (cycle(), { status: 'ok', result: {} }),
+    };
+    const sw = { id: `sw_${'a'.repeat(20)}`, model: 'sscpoe-web', host: '192.0.2.217', ports: 8, offSeconds: 10 };
+    const args = { v: 1, switch: sw, port: 3, host: null, force: true, camera: `cam_${'0'.repeat(20)}` };
+    const allow = ['camera.action:camera-reboot', 'switch.cycle'];
+    const a = proxyRun(dir, allow, handlers);
+    for (let i = 0; i < 4; i++) expect(await a.send('camera.action', { v: 1, camera: 'cam1', action: 'camera-reboot' })).toMatchObject({ status: 'ok' });
+    for (let i = 0; i < 2; i++) expect(await a.send('switch.cycle', args)).toMatchObject({ status: 'ok' });
+    const journal = JSON.parse(readFileSync(join(dir, 'admin', 'commands.json'), 'utf8')) as { entries: { command: string }[] };
+    expect(journal.entries.filter((e) => e.command === 'switch.cycle')).toHaveLength(2);
+    // A restart: a new runner on the same journal.
+    const b = proxyRun(dir, allow, handlers);
+    expect(await b.send('switch.cycle', args)).toMatchObject({ status: 'refused', code: 'rate_limited', retryAfterS: expect.any(Number) });
+    expect(cycle).toHaveBeenCalledTimes(2);
   });
 });

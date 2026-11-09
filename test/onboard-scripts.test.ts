@@ -163,10 +163,12 @@ describe('onboard-camera.sh and offboard-camera.sh on a several-camera proxy', (
     stops.push(() => new Promise((r) => srv.close(r)));
     await new Promise((r) => srv.once('listening', r));
     ca.st.reported.push('cam7');
-    const r = await run(ONBOARD, ['--host', host, '--id', 'cam7', '--user', 'proxy', '--fingerprint', fingerprint, '--cams-admin-proxy', PRX, '--wait', '5', ...ports],
+    // --wait bounds the proxy's ready step too: 5 s was too short for it under load (the
+    // run then failed "cam7 not ready on the proxy", not at the cams-admin step this checks).
+    const r = await run(ONBOARD, ['--host', host, '--id', 'cam7', '--user', 'proxy', '--fingerprint', fingerprint, '--cams-admin-proxy', PRX, '--wait', '20', ...ports],
       { ...env(), CAMS_ADMIN_URL: `http://127.0.0.1:${(srv.address() as AddressInfo).port}`, CAMS_ADMIN_DIAG_TOKEN_FILE: tokenFile('diag2', DIAG) }, `${password}\n`);
     expect(r.code).toBe(1);
-    expect(r.out).toContain('FAIL cams-admin: cam7 not registered after 5s (no CAMS_ADMIN_OPS_TOKEN_FILE to adopt it');
+    expect(r.out).toContain('FAIL cams-admin: cam7 not registered after 20s (no CAMS_ADMIN_OPS_TOKEN_FILE to adopt it');
     expect((await run(OFFBOARD, ['--id', 'cam7', '--yes'], env())).code).toBe(0);
   }, 120_000);
 });

@@ -52,7 +52,13 @@ export function unseal(privatePkcs8B64: string, sealed: string): Buffer {
   const iv = Buffer.from(parts[2], 'base64');
   const body = Buffer.from(parts[3], 'base64');
   if (iv.length !== IV || body.length < TAG) throw new Error('sealed blob is not valid');
-  const privateKey = createPrivateKey({ key: Buffer.from(privatePkcs8B64, 'base64'), format: 'der', type: 'pkcs8' });
+  // A key that doesn't parse says so in our words, not OpenSSL's (#235 T5).
+  let privateKey: KeyObject;
+  try {
+    privateKey = createPrivateKey({ key: Buffer.from(privatePkcs8B64, 'base64'), format: 'der', type: 'pkcs8' });
+  } catch {
+    throw new Error('not an X25519 private key');
+  }
   if (privateKey.asymmetricKeyType !== 'x25519') throw new Error('not an X25519 private key');
   const key = derive(privateKey, ephemeral, spki(ephemeral), spki(createPublicKey(privateKey)));
   try {

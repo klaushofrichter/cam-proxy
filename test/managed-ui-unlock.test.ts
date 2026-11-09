@@ -257,6 +257,7 @@ describe('ui.config: storage, Google Vision and the direction rules', () => {
       'analytics.googleVision.monthlyLimit': { dir: 'ceiling', ceiling: 'analytics.googleVision.remoteMaxMonthly' },
       'analytics.googleVision.enabled': { dir: 'ceilingGated', ceiling: 'analytics.googleVision.remoteMaxMonthly' },
       'analytics.googleVision.dailyCap': { dir: 'less', unlimited: 0 },
+      'stills.intervalS': { dir: 'less', interval: true }, 'cameras.*.stills.intervalS': { dir: 'less', interval: true, inherits: 'stills.intervalS' },
     });
     expect(r.narrowSettings['retention.intervalMin']).toBeUndefined();
     // The local admin's session has none of it.
@@ -360,6 +361,23 @@ describe('ui.config: storage, Google Vision and the direction rules', () => {
     const m = await session();
     expect((await request(p.base).put('/control/config').set(ui(m)).send({ analytics: { googleVision: { dailyCap: 5 } } })).status).toBe(200);
     expect(p.proxy.running.analytics.googleVision.dailyCap).toBe(5);
+  });
+
+  // cams-admin #20: the capture intervals only get shorter; a camera's unset interval is the host's.
+  it('the capture intervals: a PUT or a reset may shorten them, never lengthen them', async () => {
+    const SHORTER = 'a cams-admin sign-in may only shorten the interval; a longer one needs the local admin token';
+    await local({ stills: { intervalS: 10 }, events: { poll: { intervalS: 5 } } });
+    const m = await session();
+    for (const [body, path] of [[{ stills: { intervalS: 12 } }, 'stills.intervalS'], [{ events: { poll: { intervalS: 6 } } }, 'events.poll.intervalS'], [{ cameras: { cam1: { stills: { intervalS: 12 } } } }, 'cameras.cam1.stills.intervalS']] as const) {
+      const r = await request(p.base).put('/control/config').set(ui(m)).send(body);
+      expect([r.status, r.body.error, r.body.detail], path).toEqual([403, 'local_admin_only', `${path}: ${SHORTER}`]);
+    }
+    // A camera's first interval: shorter than the host's 10 (not "more than 0").
+    expect((await request(p.base).put('/control/config').set(ui(m)).send({ cameras: { cam1: { stills: { intervalS: 5 } } }, events: { poll: { intervalS: 1 } } })).status).toBe(200);
+    // Its reset goes back to the host's 10: longer.
+    const reset = await request(p.base).delete('/control/config/cameras.cam1.stills.intervalS').set(ui(m));
+    expect([reset.status, reset.body.detail]).toEqual([403, `cameras.cam1.stills.intervalS: ${SHORTER}`]);
+    await request(p.base).delete('/control/config').set(auth(ADMIN_TOKEN)).expect(200);
   });
 
   it('Reset to defaults keeps a size cap whose reset would lower it, and resets one whose reset means no cap', async () => {

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { loopLag } from './helpers/loop-lag';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -379,22 +380,17 @@ describe('clips inventory: the edges (review of task 4)', () => {
       cl.run(t, t + 30_000, join(dir, 'x', `${t}.mp4`), t);
     }
     db.exec('COMMIT');
-    let last = performance.now();
-    let worst = 0;
-    const timer = setInterval(() => {
-      const t = performance.now();
-      worst = Math.max(worst, t - last);
-      last = t;
-    }, 1);
+    // The loop held, as this thread's CPU time: a busy machine stretches only the wall time (test/helpers/loop-lag.ts).
+    const lag = loopLag();
     try {
       const r = await clipsCheck(deps(camera({ months: {}, recs: {} }).deps, { settings: () => settings({ clipsDays: days }) }))(ctx());
-      worst = Math.max(worst, performance.now() - last);
       expect(r.counts.clips).toBe(2400);
       expect(r.counts.events).toBeGreaterThan(19_990); // the last few are still settling
     } finally {
-      clearInterval(timer);
+      lag.close();
     }
-    expect(worst).toBeLessThan(250);
+    const held = lag.max();
+    expect(held.cpu, `held ${held.cpu.toFixed(0)} ms CPU, ${held.wall.toFixed(0)} ms wall`).toBeLessThan(250);
   }, 30_000);
 });
 

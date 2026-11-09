@@ -96,7 +96,7 @@ describe('POST /control/actions/camera-powercycle', () => {
     };
     const power = async () => (await request(p.base).get('/control/cameras/cam1/power').set(admin())).body;
     try {
-      await until(() => fake.open() === 1 && p.proxy.cameras.first().status.state().online, 20_000);
+      await until(() => fake.welcomed() === 1 && p.proxy.cameras.first().status.state().online, 20_000);
       const calls = sw.calls.length;
       // Connected, but no power record from cams-admin yet.
       expect((await post(p.base)).body.error).toBe('power_cycle_needs_cams_admin');

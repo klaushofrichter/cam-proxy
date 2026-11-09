@@ -44,6 +44,18 @@ describe('each refusal', () => {
     const d = checkCommand(cmd(), ctx());
     expect(d).toMatchObject({ kind: 'run', cmd: { command: 'tokens.apply', actor: 'ops@example.com', proxyId: PRX, connId: CON }, args: TOKENS });
   });
+  // #235 T1: a source-side cancel needs move.send; move.receive alone does not run it (and the reverse).
+  it('move.cancel role source with only move.receive allowed: not_allowed; with move.send it runs', () => {
+    const cancel = (role: 'source' | 'target') => cmd((b) => {
+      b.command = 'move.cancel';
+      b.args = { v: 1, moveId: 'mv_0S0123456789ABCDEFGH', role, ...(role === 'target' ? { copied: 'delete' } : {}) };
+    });
+    const allow = (a: string[]) => ctx({ policy: { enabled: true, paused: false, allow: a } });
+    expect(code(cancel('source'), allow(['move.receive']))).toBe('not_allowed');
+    expect(checkCommand(cancel('source'), allow(['move.send'])).kind).toBe('run');
+    expect(code(cancel('target'), allow(['move.send']))).toBe('not_allowed');
+    expect(checkCommand(cancel('target'), allow(['move.receive'])).kind).toBe('run');
+  });
   it('bad_signature: another key, no sig, a changed field', () => {
     expect(code(cmd(undefined, OTHER.privateKey), ctx())).toBe('bad_signature');
     const { sig: _s, ...unsignedCmd } = cmd();

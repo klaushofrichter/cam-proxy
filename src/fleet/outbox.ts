@@ -14,12 +14,15 @@ export type AdminEvent = MoveEvent | PowerCycleRequestEvent;
 export const OUTBOX_MAX = 256;
 
 export class EventOutbox {
-  private q: AdminEvent[] = [];
+  private q: { e: AdminEvent; valid?: () => boolean }[] = [];
   private dropped = 0;
   constructor(private readonly log: { warn(o: object, m: string): void } = { warn() {} }, private readonly max = OUTBOX_MAX) {}
 
-  push(e: AdminEvent): void {
-    this.q.push(e);
+  // valid: whether the event still means something when it can go out; one
+  // that no longer does is dropped at the flush (a power-cycle request the
+  // page already gave up on after 5 minutes must not cut a camera's PoE late, #364).
+  push(e: AdminEvent, valid?: () => boolean): void {
+    this.q.push(valid ? { e, valid } : { e });
     if (this.q.length > this.max) {
       this.q.shift();
       // One line per burst, not one per event: the count so far.
@@ -33,7 +36,16 @@ export class EventOutbox {
       this.log.warn({ dropped: this.dropped }, 'admin_event_dropped');
       this.dropped = 0;
     }
-    while (this.q.length && send(this.q[0])) this.q.shift();
+    while (this.q.length) {
+      const { e, valid } = this.q[0];
+      if (valid && !valid()) {
+        this.q.shift();
+        this.log.warn({ kind: e.kind }, 'admin_event_expired');
+        continue;
+      }
+      if (!send(e)) break;
+      this.q.shift();
+    }
   }
 
   size(): number {

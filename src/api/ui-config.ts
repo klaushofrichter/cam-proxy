@@ -7,14 +7,15 @@ import { isLocalSetting } from './auth';
 // follows cams-admin's own direction rules (NARROW, src/fleet/remote-settable.ts):
 // retention and size caps only up (keep data longer), Google Vision's
 // spending caps only down; Google Vision on and its monthly limit up only
-// within the local ceiling (remoteMaxMonthly, Vision management 2026-11-05).
+// within the local ceiling (remoteMaxMonthly, Vision management 2026-11-05),
+// the capture intervals only shorter (cams-admin #20).
 // A change the other way is the local admin's.
-export const UI_NARROW_REASON = { less: 'a cams-admin sign-in may only lower spending', more: 'a cams-admin sign-in may only keep data longer' } as const;
+export const UI_NARROW_REASON = { less: 'a cams-admin sign-in may only lower spending', more: 'a cams-admin sign-in may only keep data longer', interval: 'a cams-admin sign-in may only shorten the interval; a longer one needs the local admin token' } as const;
 
 // The leaf settings a change moves against NARROW's direction or above the
 // local ceiling (as it is before the change), each with why.
 export function againstDirection(before: Loaded, after: Loaded): { path: string; detail: string }[] {
-  return configChanges(before, after).flatMap((c) => directionFailures([c], before.config, UI_NARROW_REASON)?.paths.map((f) => ({ path: f.path, detail: f.detail })) ?? []);
+  return configChanges(before, after).flatMap((c) => directionFailures([c], before.config, UI_NARROW_REASON, after.config)?.paths.map((f) => ({ path: f.path, detail: f.detail })) ?? []);
 }
 
 // PUT /control/config (the patch) or DELETE /control/config/<path> (the

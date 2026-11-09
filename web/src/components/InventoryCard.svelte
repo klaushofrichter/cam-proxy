@@ -6,7 +6,7 @@
   import { mbText } from '../lib/format';
   import { lockedWhy, rights } from '../lib/rights';
   import LockedNote from './LockedNote.svelte';
-  import { addNothing, autoStep, clipsLines, duplicatesOffer, duplicatesRepairLines, LOAD_ERROR, loadMessage, eventsLines, eventsOffer, eventsRepairLines, gapRows, problemRows, progressText, ranText, recoverText, repairLines, repairOffer, repairRows, retrieveNothing, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type InventoryState, type RepairReport, type StillsReport } from '../lib/inventory';
+  import { addNothing, autoStep, clipsLines, duplicatesOffer, duplicatesRepairLines, LOAD_ERROR, loadMessage, eventsLines, eventsOffer, eventsRepairLines, gapRows, problemRows, progressText, ranText, recoverText, repairLines, repairOffer, repairRows, REPAIR_MAX_CLIPS, REPAIR_MAX_MB, retrieveNothing, stillsLines, stillsNotes, type ClipsReport, type EventsReport, type InventoryState, type RepairReport, type StillsReport } from '../lib/inventory';
 
   // The inventories (spec 2026-10-02-inventory-design): start one, follow its
   // progress (polled every second while it runs), cancel it, and show the
@@ -191,8 +191,8 @@
         <div class="buttons">
           <button onclick={() => onrepair(offer)} disabled={starting || busy || !offer.count || !!locked} data-testid="inventory-repair">Retrieve {offer.count} missing clips ({mbText(offer.bytes)})</button>
         </div>
-        <p class="small">Fetches them from the camera's SD card over Baichuan, one at a time, after any viewer's download; at most 50 clips or 200 MB per run.</p>
-        {#if offer.tooBig}<p class="small" data-testid="inventory-repair-too-big">{offer.tooBig} recordings are larger than one run's 200 MB and are skipped.</p>{/if}
+        <p class="small">Fetches them from the camera's SD card over Baichuan, one at a time, after any viewer's download; at most {REPAIR_MAX_CLIPS} clips or {REPAIR_MAX_MB} MB per run.</p>
+        {#if offer.tooBig}<p class="small" data-testid="inventory-repair-too-big">{offer.tooBig} recordings are larger than one run's {REPAIR_MAX_MB} MB and are skipped.</p>{/if}
       {/if}
       {#if removeOffer}
         <div class="buttons">

@@ -73,7 +73,7 @@ beforeAll(async () => {
     settings: { tls: TLS, camsAdmin: { url: fake.url } },
   });
   journal = new MoveJournal(join(dir, 'data', 'admin', 'moves'));
-  await until(() => fake.open() === 1 && p.proxy.cameras.get('cam3')!.status.state().online, 30_000);
+  await until(() => fake.welcomed() === 1 && p.proxy.cameras.get('cam3')!.status.state().online, 30_000);
   await p.proxy.certs!.tick();
   expect(p.proxy.certs!.state('cam3').mode).toBe('site-ca');
   // The target's own site CA and the leaf it will push to cam3.
