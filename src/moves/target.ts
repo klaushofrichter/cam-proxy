@@ -40,7 +40,7 @@ import { sleep, within } from '../async';
 // an audit record.
 
 export interface TargetDeps {
-  journal: Pick<MoveJournal, 'load' | 'save' | 'active'> & Partial<Pick<MoveJournal, 'remove' | 'all' | 'bury' | 'ended'>>;
+  journal: Pick<MoveJournal, 'load' | 'save' | 'active' | 'remove'> & Partial<Pick<MoveJournal, 'all' | 'bury' | 'ended'>>;
   audit: Pick<AuditLog, 'write'>;
   emit: (e: MoveEvent) => void;
   // The retention in effect: finished and cancelled phases carry what ages out (keepDays); left out, they carry none.
@@ -334,7 +334,7 @@ export class MoveTarget {
     removeLanded(end.dataDir, fresh.id);
     removeChunkParts(end.dataDir, fresh.id);
     this.d.journal.bury?.({ moveId: fresh.id, role: 'target', phase: 'finished', deleted: zeros() });
-    this.d.journal.remove?.(fresh.id);
+    this.d.journal.remove(fresh.id);
     this.copying.delete(fresh.id);
     // The camera is this proxy's now: compare with its SD card, fetch what neither proxy has.
     this.d.sync?.finished(fresh.id, fresh.camera);
@@ -499,7 +499,7 @@ export class MoveTarget {
       removeLanded(this.d.end.dataDir, r.id);
       removeChunkParts(this.d.end.dataDir, r.id);
     }
-    this.d.journal.remove?.(r.id);
+    this.d.journal.remove(r.id);
   }
 
   // A move ended here before (its tombstone): the terminal phase sent again;
@@ -510,7 +510,7 @@ export class MoveTarget {
     if (!t) return null;
     this.terminalEvent(id, t.phase, t.code);
     const r = this.target(id);
-    if (r && moveEnded(r.phase) && !r.returnPending) this.d.journal.remove?.(id);
+    if (r && moveEnded(r.phase) && !r.returnPending) this.d.journal.remove(id);
     return t;
   }
 

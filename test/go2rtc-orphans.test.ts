@@ -13,6 +13,11 @@ const alive = (pid: number) => {
     return false;
   }
 };
+// The process runs the fake go2rtc with that folder's config (ps: its arguments).
+const runs = (pid: number, dir: string) => {
+  const r = spawnSync('ps', ['-o', 'args=', '-p', String(pid)], { encoding: 'utf8' });
+  return r.stdout.includes(`go2rtc -c ${join(dir, 'go2rtc.json')}`);
+};
 const waitGone = async (pid: number) => {
   for (let i = 0; i < 50 && alive(pid); i++) await new Promise((r) => setTimeout(r, 100));
   return !alive(pid);
@@ -42,7 +47,13 @@ describe('orphaned go2rtc', () => {
     // A running proxy's go2rtc: its parent (this node) is alive.
     const running = spawn(fake, ['-c', join(liveDir, 'go2rtc.json')], { stdio: 'ignore' });
     try {
-      await new Promise((x) => setTimeout(x, 300));
+      // #328: not a fixed wait. Under load the orphan may still be the shell's
+      // fork (not yet running the fake, so not a go2rtc to the reaper), and the
+      // running one may not have started yet: wait until both run the fake
+      // (the orphan may be gone already: another test's proxy start reaped it).
+      const ready = () => (!alive(orphan) || runs(orphan, orphanDir)) && runs(running.pid!, liveDir);
+      for (let i = 0; i < 200 && !ready(); i++) await new Promise((x) => setTimeout(x, 50));
+      expect(ready()).toBe(true);
       // Another test's proxy start may reap it first (tests run side by side): either way it goes.
       await reapOrphanGo2rtc();
       expect(await waitGone(orphan)).toBe(true);

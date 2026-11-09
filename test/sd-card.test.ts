@@ -47,7 +47,7 @@ type Rec = { start: number; end: number };
 function watch(o: { hdd?: unknown; rec?: unknown; online?: boolean; lastClip?: number | null; recordings?: Rec[]; fail?: Error; searchFails?: boolean } = {}) {
   let now = NOW;
   const searches: [number, number][] = [];
-  const st = { online: o.online ?? true, reads: 0, fail: o.fail, hdd: o.hdd ?? HDD_FULL, rec: o.rec ?? rec() };
+  const st = { online: o.online ?? true, reads: 0, fail: o.fail, hdd: o.hdd ?? HDD_FULL, rec: o.rec ?? rec(), lastClip: o.lastClip === undefined ? null : o.lastClip };
   const w = new SdWatch({
     read: async () => {
       st.reads++;
@@ -55,7 +55,7 @@ function watch(o: { hdd?: unknown; rec?: unknown; online?: boolean; lastClip?: n
       return parseSd(st.hdd, st.rec);
     },
     active: () => st.online,
-    lastClip: () => (o.lastClip === undefined ? null : o.lastClip),
+    lastClip: () => st.lastClip,
     recordings: async (from, to) => {
       searches.push([from, to]);
       if (o.searchFails) throw new Error('search_failed');
@@ -142,6 +142,58 @@ describe('SdWatch', () => {
         expect(searches).toEqual([]);
         expect(w.view()).toMatchObject({ lastClipAt: null, lastRecordingAt: null, recordingsFrom: null });
       }
+    });
+    // #204 (cam3, 2026-10-08): a freshly formatted 64 GB card showed "hasn't
+    // recorded for more than 48 h" at once, against a clip from before the card.
+    describe('a new, empty card (free = capacity)', () => {
+      const EMPTY = { HddInfo: [{ capacity: 61047, format: 1, mount: 1, number: 0, size: 61047, storageType: 2 }] };
+      it('a clip from before the card was seen: not compared (no recordings yet)', async () => {
+        const { w } = watch({ hdd: EMPTY, lastClip: NOW - 5 * 60_000 });
+        await w.checkNow();
+        expect(w.view()).toMatchObject({ freeMB: 61047, lastClipAt: null, lastRecordingAt: null, recordingsFrom: null });
+      });
+      it('a clip after the card was seen, within the hour: still not compared', async () => {
+        const { w, st, tick } = watch({ hdd: EMPTY, lastClip: NOW - 5 * 60_000 });
+        await w.checkNow();
+        tick(30 * 60_000);
+        st.lastClip = NOW + 20 * 60_000;
+        await w.checkNow();
+        expect(w.view()).toMatchObject({ lastClipAt: null, recordingsFrom: null });
+      });
+      it('a clip after the card was seen and still no recording an hour later: compared from when the card was seen', async () => {
+        const { w, st, tick } = watch({ hdd: EMPTY, lastClip: NOW - 5 * 60_000 });
+        await w.checkNow();
+        tick(10 * 60_000);
+        st.lastClip = NOW + 10 * 60_000;
+        tick(65 * 60_000);
+        await w.checkNow();
+        expect(w.view()).toMatchObject({ lastClipAt: NOW + 10 * 60_000, lastRecordingAt: null, recordingsFrom: NOW });
+      });
+      it('clips coming for more than an hour after the card was seen, none recorded: compared', async () => {
+        const { w, st, tick } = watch({ hdd: EMPTY, lastClip: null });
+        await w.checkNow();
+        tick(2 * H);
+        st.lastClip = NOW + 2 * H - 60_000;
+        await w.checkNow();
+        expect(w.view()).toMatchObject({ lastClipAt: NOW + 2 * H - 60_000, lastRecordingAt: null, recordingsFrom: NOW });
+      });
+      it('a card that is not empty is compared as before (a restart with a stalled card is seen at once)', async () => {
+        const { w } = watch({ lastClip: NOW - 5 * 60_000 });
+        await w.checkNow();
+        expect(w.view()).toMatchObject({ lastRecordingAt: null, recordingsFrom: NOW - 48 * H });
+      });
+      it('the card taken out and an empty one put in: seen anew', async () => {
+        const { w, st, tick } = watch({ hdd: EMPTY, lastClip: null });
+        await w.checkNow();
+        tick(3 * H);
+        st.hdd = { HddInfo: [] };
+        await w.checkNow();
+        tick(5 * 60_000);
+        st.hdd = EMPTY;
+        st.lastClip = NOW + 3 * H + 2 * 60_000;
+        await w.checkNow();
+        expect(w.view()).toMatchObject({ lastClipAt: null, recordingsFrom: null });
+      });
     });
     it('a failed search compares nothing (no false alarm)', async () => {
       const { w } = watch({ lastClip: NOW - H, searchFails: true });

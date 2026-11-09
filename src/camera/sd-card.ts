@@ -70,6 +70,9 @@ export class SdWatch {
   private running: Promise<SdView | null> | undefined;
   private timer: NodeJS.Timeout | undefined;
   private stopped = false; // a read still running at stop() changes nothing and asks nothing more
+  // #204: when this watch first saw the card empty (free = capacity: new or
+  // just formatted); null while it isn't. Clips from before don't count.
+  private emptySince: number | null = null;
   private readonly now: () => number;
 
   constructor(
@@ -129,6 +132,8 @@ export class SdWatch {
     if (this.stopped) return this.view();
     const at = this.now();
     const before = this.current;
+    const empty = r.present && r.mounted && r.formatted && r.capacityMB !== null && r.freeMB === r.capacityMB;
+    this.emptySince = empty ? (this.emptySince ?? at) : null;
     const newest = await this.newest(r, at);
     if (this.stopped) return this.view();
     this.current = { ...r, checkedAt: at, error: null, ...newest };
@@ -138,6 +143,8 @@ export class SdWatch {
 
   // The newest SD recording near the newest clip, else within SD_STALL_LOOKBACK_MS.
   // Only while the card can record and a clip came within that time; a failed search compares nothing.
+  // An empty card without any recording (#204) is compared only once a clip came after it was
+  // first seen and no recording followed within the hour, and from when it was seen.
   private async newest(r: SdReading, now: number): Promise<Pick<SdView, 'lastClipAt' | 'lastRecordingAt' | 'recordingsFrom'>> {
     const none = { lastClipAt: null, lastRecordingAt: null, recordingsFrom: null };
     if (!r.present || !r.mounted || !r.formatted || r.recordingEnabled === false) return none;
@@ -149,7 +156,11 @@ export class SdWatch {
       const recent = newestEnd(await this.d.recordings(near, now));
       if (recent !== null) return { lastClipAt: clip, lastRecordingAt: recent, recordingsFrom: near };
       const from = now - SD_STALL_LOOKBACK_MS;
-      return { lastClipAt: clip, lastRecordingAt: newestEnd(await this.d.recordings(from, near)), recordingsFrom: from };
+      const older = newestEnd(await this.d.recordings(from, near));
+      const since = this.emptySince;
+      if (older !== null || since === null) return { lastClipAt: clip, lastRecordingAt: older, recordingsFrom: from };
+      if (clip > since && Math.max(clip - since, now - clip) > NEAR_CLIP_MS) return { lastClipAt: clip, lastRecordingAt: null, recordingsFrom: Math.max(from, since) };
+      return none;
     } catch (err) {
       logger.warn({ err: (err as Error).message }, 'camera_sd_search_failed');
       return none;

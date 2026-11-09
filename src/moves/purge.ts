@@ -164,20 +164,24 @@ export function purgeExcept(d: PurgeDeps, cam: string, o: PurgeExcept): { delete
       logger.warn({ err: (err as Error).message, id: n.id }, 'archive_meta_write_failed');
     }
   }
-  for (const kind of FILE_KINDS) {
-    for (const folder of FOLDERS[kind]) {
-      const dir = join(root, folder, cam);
-      for (const f of filesIn(dir)) {
-        const tally = keepFiles.has(f.path) ? kept : deleted;
-        tally[kind].files++;
-        tally[kind].bytes += f.bytes;
-        if (tally === deleted) rmSync(f.path, { force: true });
+  // The storage counts follow what is gone, also when a delete throws (#235 T3).
+  try {
+    for (const kind of FILE_KINDS) {
+      for (const folder of FOLDERS[kind]) {
+        const dir = join(root, folder, cam);
+        for (const f of filesIn(dir)) {
+          const tally = keepFiles.has(f.path) ? kept : deleted;
+          tally[kind].files++;
+          tally[kind].bytes += f.bytes;
+          if (tally === deleted) rmSync(f.path, { force: true });
+        }
+        pruneEmpty(dir);
       }
-      pruneEmpty(dir);
     }
+    for (const folder of UNCOUNTED_FOLDERS) rmSync(join(d.dataDir, folder, cam), { recursive: true, force: true });
+  } finally {
+    d.storage.recount();
   }
-  for (const folder of UNCOUNTED_FOLDERS) rmSync(join(d.dataDir, folder, cam), { recursive: true, force: true });
-  d.storage.recount();
   return { deleted, kept };
 }
 
@@ -327,13 +331,16 @@ export function removeImported(d: { catalog: Pick<Catalog, 'db'>; dataDir: strin
       /* gone already */
     }
   }
-  for (const f of folders) {
-    const m = filesIn(f);
-    rmSync(f, { recursive: true, force: true });
-    deleted.archive.files += m.length;
-    deleted.archive.bytes += m.reduce((n, x) => n + x.bytes, 0);
+  try {
+    for (const f of folders) {
+      const m = filesIn(f);
+      rmSync(f, { recursive: true, force: true });
+      deleted.archive.files += m.length;
+      deleted.archive.bytes += m.reduce((n, x) => n + x.bytes, 0);
+    }
+  } finally {
+    d.storage.recount();
   }
-  d.storage.recount();
   return { deleted, kept };
 }
 
@@ -427,9 +434,12 @@ export function removeReturned(d: { catalog: Pick<Catalog, 'db'>; dataDir: strin
     db.exec('ROLLBACK');
     throw err;
   }
-  for (const f of files) if (tally(deleted, f.kind, f.path)) rmSync(f.path, { force: true });
-  for (const f of folders) rmSync(f, { recursive: true, force: true });
-  for (const folder of CONTENT_FOLDERS) pruneEmpty(join(root, folder, cam));
-  d.storage.recount();
+  try {
+    for (const f of files) if (tally(deleted, f.kind, f.path)) rmSync(f.path, { force: true });
+    for (const f of folders) rmSync(f, { recursive: true, force: true });
+    for (const folder of CONTENT_FOLDERS) pruneEmpty(join(root, folder, cam));
+  } finally {
+    d.storage.recount();
+  }
   return { deleted, kept };
 }

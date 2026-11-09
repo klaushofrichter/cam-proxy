@@ -3,6 +3,8 @@ import { PROXY_PORT, STATE_FILE } from './e2e/multi/env';
 
 export default defineConfig({
   testDir: 'e2e/multi',
+  // Reaps MediaMTX/go2rtc left by an aborted run (#119).
+  globalSetup: './test/global-setup.ts',
   fullyParallel: false,
   workers: 1,
   reporter: 'list',

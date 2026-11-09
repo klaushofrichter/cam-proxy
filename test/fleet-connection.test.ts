@@ -115,3 +115,22 @@ describe('the connection for the health item', () => {
     expect(s.connection()).toBeNull();
   });
 });
+
+// #235 T1: every welcome hook runs, also when one before it throws.
+describe('the welcome hooks', () => {
+  it('a throwing hook does not skip the ones after it', async () => {
+    settings = { ...settings, url: fake.url };
+    writeKey();
+    const s = make();
+    const ran: string[] = [];
+    s.onWelcome(() => {
+      ran.push('a');
+      throw new Error('boom');
+    });
+    s.onWelcome(() => void ran.push('b'));
+    await s.apply();
+    await until(() => s.view().state === 'connected');
+    await until(() => ran.includes('b'), 2000);
+    expect(ran.slice(0, 2)).toEqual(['a', 'b']);
+  });
+});

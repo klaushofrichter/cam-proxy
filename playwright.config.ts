@@ -3,6 +3,8 @@ import { PROXY_PORT, STATE_FILE } from './e2e/env';
 
 export default defineConfig({
   testDir: 'e2e',
+  // Reaps MediaMTX/go2rtc left by an aborted run (#119).
+  globalSetup: './test/global-setup.ts',
   // The multi-camera run has its own config (playwright.multi.config.ts);
   // a project's testIgnore replaces this one, so the projects repeat it.
   testIgnore: ['multi/**'],

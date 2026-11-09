@@ -54,11 +54,12 @@ async function fixtures(page: Page) {
   await page.route('**/control/admin/changes', (r) => r.fulfill({ json: CHANGES }));
   // The real entries and groups, with fixture recent commands and ticks.
   await page.route('**/control/admin/commands', async (r) => {
-    // A read still in flight when the test ends is dropped (the page moved on).
+    // A read still in flight when the test ends or the page moves on is dropped: its
+    // response is disposed then ("Response has been disposed", seen twice on 2026-11-09).
     const res = await r.fetch().catch(() => null);
-    if (!res) return;
-    const real = await res.json();
-    await r.fulfill({ json: { ...real, allow: ['tokens.apply', 'config.get'], unconfirmed: ['config.set'], recent: RECENT } });
+    const real = await res?.json().catch(() => null);
+    if (!real) return;
+    await r.fulfill({ json: { ...real, allow: ['tokens.apply', 'config.get'], unconfirmed: ['config.set'], recent: RECENT } }).catch(() => undefined);
   });
   await page.route('**/control/tls', (r) => r.fulfill({ json: TLS }));
 }

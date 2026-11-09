@@ -10,12 +10,18 @@ import { insertEvent } from '../src/catalog/events';
 
 let sim: Awaited<ReturnType<typeof startSim>>;
 let p: Awaited<ReturnType<typeof startProxy>>;
-const T = Date.UTC(2026, 8, 27, 19, 3, 1);
+// Two days ago at 19:03:01 UTC: within retention.clipsDays (7). A fixed date
+// (it was 2026-09-27) aged past it, and the proxy's first retention run, 5 s
+// after its start, then deleted the clips mid-test on a slow run.
+const DAY = new Date(Date.now() - 2 * 86_400_000);
+const T = Date.UTC(DAY.getUTCFullYear(), DAY.getUTCMonth(), DAY.getUTCDate(), 19, 3, 1);
+const pad = (n: number) => String(n).padStart(2, '0');
 const body = randomBytes(10_000);
 const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 9, 9, 0xff, 0xd9]);
 let withSnap: ClipRow;
 let noSnap: ClipRow;
 let eventId = 0;
+let t0 = 0;
 
 const binary = (r: request.Test) =>
   r.buffer(true).parse((res, cb) => {
@@ -25,9 +31,10 @@ const binary = (r: request.Test) =>
   });
 
 beforeAll(async () => {
+  t0 = Date.now();
   sim = await startSim();
   p = await startProxy(sim);
-  const folder = join(p.dir, 'data', 'clips', 'cam1', '2026', '09', '27');
+  const folder = join(p.dir, 'data', 'clips', 'cam1', String(DAY.getUTCFullYear()), pad(DAY.getUTCMonth() + 1), pad(DAY.getUTCDate()));
   mkdirSync(folder, { recursive: true });
   const mp4 = join(folder, `1903-${T}.mp4`);
   writeFileSync(mp4, body);
@@ -115,8 +122,11 @@ describe('clips API', () => {
   it('says how far back it has content: the oldest clip, still and preview', async () => {
     const r = await request(p.base).get('/api/cameras/cam1/extent').set(auth());
     expect(r.status).toBe(200);
-    expect(r.body).toEqual({ clips: expect.any(Number), stills: null, previews: null });
+    expect(Object.keys(r.body).sort()).toEqual(['clips', 'previews', 'stills']);
     expect(r.body.clips).toBeLessThanOrEqual(T);
+    // Stills and previews only from this run's live capture (with go2rtc, a slow run
+    // may have finished a minute by now): none, or not before the proxy started.
+    for (const k of ['stills', 'previews']) expect(r.body[k] === null || r.body[k] >= Math.floor(t0 / 60_000) * 60_000, `${k} ${r.body[k]}`).toBe(true);
     expect((await request(p.base).get('/api/cameras/nope/extent').set(auth())).status).toBe(404);
   });
 });

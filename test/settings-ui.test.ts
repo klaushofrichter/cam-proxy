@@ -100,10 +100,14 @@ describe('Settings page: honest Reset', () => {
 
 // The PoE switches card (spec 2026-11-07-poe-switches-design): the password is only ever set, never shown.
 describe('Settings page: PoE switches card', () => {
-  const sw = { id: 'sw_a', model: 'sscpoe-web', host: '192.168.1.217', ports: 8, offSeconds: 10, busy: false, poeMaybeOff: [5] };
+  const sw = { id: 'sw_a', model: 'sscpoe-web', host: '203.0.113.17', ports: 8, offSeconds: 10, busy: false, poeMaybeOff: [5], passwordElsewhere: false };
   it('says whether the password is set', () => {
-    expect(switchLine({ ...sw, passwordSet: true })).toBe('192.168.1.217 · 8 ports · password set');
-    expect(switchLine({ ...sw, passwordSet: false })).toBe('192.168.1.217 · 8 ports · no password yet');
+    expect(switchLine({ ...sw, passwordSet: true })).toBe('203.0.113.17 · 8 ports · password set');
+    expect(switchLine({ ...sw, passwordSet: false })).toBe('203.0.113.17 · 8 ports · no password yet');
+  });
+  // #364: a password stored for the switch's old address is not "no password yet".
+  it('a password set for another address says so', () => {
+    expect(switchLine({ ...sw, passwordSet: false, passwordElsewhere: true })).toBe('203.0.113.17 · 8 ports · password set for another address: set it again');
   });
   it('words the per-port PoE on', () => {
     expect(poeOnLabel(5)).toBe('Turn PoE on (port 5)');

@@ -18,7 +18,7 @@ export function switchesApi(d: { registry: SwitchRegistry; dataDir: string; audi
     res.json({
       switches: d.registry.known().map((ref) => {
         const sw = d.registry.find(ref.id)!.sw;
-        return { ...ref, passwordSet: d.registry.passwordSet(ref.id), busy: sw.isBusy(), poeMaybeOff: sw.portsMaybeOff() };
+        return { ...ref, passwordSet: d.registry.passwordSet(ref.id), passwordElsewhere: d.registry.passwordElsewhere(ref.id), busy: sw.isBusy(), poeMaybeOff: sw.portsMaybeOff() };
       }),
     });
   });

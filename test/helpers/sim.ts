@@ -101,7 +101,28 @@ export const E1_MODEL = 'E1-Outdoor-Pro' as const;
 // `encRange`: GetEnc's range in place of the model's (small sizes encode quickly).
 // encRestartMs: cam-sim's restart after a SetEnc that changed the streams (its default: 1 s).
 // `seedClips`: the SD card's recordings (default: cam-sim's demo set); `tz`: the camera's zone.
+// cam-sim picks MediaMTX's RTSP port as a free port and starts MediaMTX on it
+// a moment later; under load another listener (a parallel test's) can take
+// the port meanwhile, and MediaMTX exits ("MediaMTX exited during start",
+// release run 41931287468, three sims started at once). The cause is outside
+// these tests (cam-sim's port choice), so such a start is tried again with a
+// new sim, at most `attempts` times; any other error is thrown at once.
+export const MEDIAMTX_START_FAILED = /^MediaMTX (exited during start|did not start)/;
+export async function retryMediaStart<T>(start: () => Promise<T>, attempts = 3): Promise<T> {
+  for (let i = 1; ; i++) {
+    try {
+      return await start();
+    } catch (err) {
+      if (i >= attempts || !MEDIAMTX_START_FAILED.test((err as Error).message)) throw err;
+    }
+  }
+}
+
 export async function startSim(opts: { rebootMs?: number; ignoreImport?: boolean; model?: Model; faults?: FaultSpec[]; encRange?: Array<Record<string, any>>; encRestartMs?: number; seedClips?: SeedClip[]; tz?: string } = {}) {
+  return retryMediaStart(() => startSimOnce(opts));
+}
+
+async function startSimOnce(opts: Parameters<typeof startSim>[0] = {}) {
   const password = 'proxy-pw';
   const sim = await createCamSim({
     users: [

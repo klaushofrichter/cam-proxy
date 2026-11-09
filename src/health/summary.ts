@@ -128,11 +128,13 @@ function sdState(sd: SdHealthInput, online: boolean): { value: string; text: str
   if (!sd.formatted) return bad('not_formatted', "The SD card isn't formatted: the camera can't record to it");
   if (sd.recordingEnabled === false) return bad('recording_off', "Recording is off: the camera doesn't record to its SD card");
   if (nearlyFull && sd.overwrite === false) return bad('almost_full', 'SD card almost full and overwrite is off: recording to the SD card will stop');
-  if (stalled) return bad('stalled', sd.lastRecordingAt === null ? `The camera hasn't recorded to its SD card for more than ${Math.round((sd.checkedAt - sd.recordingsFrom!) / 3600_000)} h` : `The camera hasn't recorded to its SD card since ${camTime(sd.lastRecordingAt, sd.offsetMinutes)}`);
+  if (stalled) return bad('stalled', sd.lastRecordingAt === null ? `The camera hasn't recorded to its SD card for more than ${Math.floor((sd.checkedAt - sd.recordingsFrom!) / 3600_000)} h` : `The camera hasn't recorded to its SD card since ${camTime(sd.lastRecordingAt, sd.offsetMinutes)}`);
   if (sd.overwrite === false) return { value: 'overwrite_off', text: 'Overwrite is off: the camera stops recording to its SD card when it is full', problem: false, warning: true, stalled };
   const gb = (m: number) => (m / 1024).toFixed(1);
   const space = sd.capacityMB !== null && sd.freeMB !== null ? `${gb(sd.freeMB)} of ${gb(sd.capacityMB)} GB free` : 'mounted';
-  return { value: 'ok', text: `${space}${sd.overwrite ? ', overwrite on' : ''}`, problem: false, warning: false, stalled };
+  // #204: a new or just formatted card (free = capacity) before its first recording.
+  const fresh = sd.capacityMB !== null && sd.freeMB === sd.capacityMB && sd.lastRecordingAt === null;
+  return { value: 'ok', text: `${space}${sd.overwrite ? ', overwrite on' : ''}${fresh ? ', no recordings yet' : ''}`, problem: false, warning: false, stalled };
 }
 
 // One camera's items and blocks (the rules of A2, unchanged).

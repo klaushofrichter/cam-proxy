@@ -165,6 +165,9 @@ export class CamsAdmin {
   async enroll(url: string, code: string): Promise<AdminKeyFile> {
     if (this.enrolling) throw new EnrollError('busy');
     this.enrolling = true;
+    // cams-admin closes the old key's connection with 4401 once the code is redeemed (#182).
+    const old = this.client;
+    old?.replacing(true);
     try {
       const key = await enrollWithCode({ url, code, keyPath: this.keyPath(), version: this.d.version, cameraIds: this.d.cameraIds() });
       this.running = null;
@@ -172,6 +175,7 @@ export class CamsAdmin {
       await this.apply();
       return key;
     } finally {
+      old?.replacing(false);
       this.enrolling = false;
     }
   }
@@ -260,7 +264,14 @@ export class CamsAdmin {
     if (this.stopped) return;
     this.client = new AdminClient({ keyFile: key, health: this.d.health, proxyInfo: this.d.proxyInfo, profile: this.d.profile, moveLeftovers: this.d.moveLeftovers, onboardingNow: this.d.onboardingNow, version: this.d.version, log: this.d.log, changeKey: this.d.changeKey, timing: this.d.timing, commands: this.d.commands?.() ?? undefined, replay: this.d.replay, outbox: this.outbox, onWelcome: () => {
       this.ownDownSince = null;
-      this.welcomeHooks.forEach((h) => h());
+      // Each on its own (#235): a hook that throws never skips the ones after it.
+      for (const h of this.welcomeHooks) {
+        try {
+          h();
+        } catch (err) {
+          this.d.log.warn({ err: (err as Error).message }, 'admin_welcome_hook_failed');
+        }
+      }
     } });
     this.running = want;
     this.client.start();

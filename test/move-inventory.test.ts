@@ -112,6 +112,19 @@ describe('move inventory', () => {
     expect(c.files.map((x) => x.path)).toEqual(['clips/cam3/2026/10/01/1200-1.jpg', 'clips/cam3/2026/10/01/1200-1.mp4']);
   });
 
+  // #235 T4: an atomic write's leftover (<file>.tmp-<pid>) is never moved.
+  it('leaves atomic-write leftovers out of the stills and Archive manifests', async () => {
+    const f = fixture();
+    writeFileSync(join(f.dataDir, 'stills', 'cam3', '2026', '10', '01', '1200.pack.tmp-4242'), 'half');
+    writeFileSync(join(f.dataDir, 'previews', 'cam3', '2026', '10', '01', '1200.json.tmp-4242'), '{');
+    const ar = (f.catalog.db.prepare("SELECT id FROM archive WHERE cam = 'cam3'").get() as { id: number }).id;
+    writeFileSync(join(f.dataDir, 'archive', 'cam3', String(ar), 'meta.json.tmp-4242'), '{');
+    const m = await chunkManifest(f.deps, 'cam3', 'stills:2026-10-01');
+    expect(m.files.map((x) => x.path)).toEqual(['previews/cam3/2026/10/01/1200.jpg', 'previews/cam3/2026/10/01/1200.json', 'stills/cam3/2026/10/01/1200.pack']);
+    const a = await chunkManifest(f.deps, 'cam3', listChunks(f.deps, 'cam3', ['archive'])[0].id);
+    expect(a.files.map((x) => x.path).sort()).toEqual([`archive/cam3/${ar}/clip.mp4`, `archive/cam3/${ar}/meta.json`]);
+  });
+
   it("manifest never lists a path outside the camera's folders", async () => {
     const f = fixture();
     mkdirSync(join(f.dataDir, 'secret'), { recursive: true });

@@ -1,11 +1,11 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { Readable } from 'stream';
+import { PassThrough, Readable } from 'stream';
 import http from 'http';
 import type { AddressInfo } from 'net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { runAdminCli } from '../src/fleet/cli';
+import { readCode, runAdminCli } from '../src/fleet/cli';
 import { writePrivateJson } from '../src/fleet/private-file';
 import { startFakeAdmin, type FakeAdmin } from './helpers/fake-admin';
 import { ADMIN_TOKEN, CLIENT_TOKEN, freePort, startProxy, until } from './helpers/proxy';
@@ -36,6 +36,19 @@ const workDir = () => {
   writeFileSync(join(dir, 'config.json'), JSON.stringify({ camera: { host: '127.0.0.1' }, server: { logLevel: 'silent' } }));
   return dir;
 };
+
+// #182: on a terminal the code typed is not echoed (the prompt is).
+describe('the code prompt on a terminal', () => {
+  it('shows the prompt, never the code typed', async () => {
+    const input = Object.assign(new PassThrough(), { isTTY: true });
+    const err: string[] = [];
+    const p = readCode({ env: {}, cwd: '.', stdin: input, out: () => undefined, err: (s) => err.push(s) });
+    input.write(`${CODE}\r`);
+    expect(await p).toBe(CODE);
+    expect(err.join('')).toContain('Enrollment code from cams-admin: ');
+    expect(err.join('')).not.toContain('7Q2M');
+  });
+});
 
 describe('admin-enroll', () => {
   it('refuses a code given as an argument', async () => {

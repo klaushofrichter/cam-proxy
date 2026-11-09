@@ -502,8 +502,10 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     source: (cam) => cams.get(cam)!.source(),
     readyMs: opts.liveReadyMs,
   });
+  // Whether the host needs a go2rtc: stills on for a camera, or a live viewer on go2rtc.
+  const go2rtcWanted = () => anyStills() || liveSources.users() > 0;
   const makeGo2rtc = () =>
-    anyStills() || liveSources.users() > 0
+    go2rtcWanted()
       ? new Go2rtc({ binary: running.go2rtc.binary, rtspPort: running.go2rtc.rtspPort, apiPort: running.go2rtc.apiPort, sources: () => cams.list().filter((w) => w.cam().stills.enabled || liveSources.users(w.id) > 0).map((w) => w.source()) })
       : undefined;
   let go2rtc = makeGo2rtc();
@@ -1608,7 +1610,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
     const added = activeCameraIds(running).flatMap((id) => (cams.get(id) ? [] : [makeWorker(id)]));
     for (const w of added) cams.add(w);
     // go2rtc's own settings changed, or stills went on or off everywhere: a new one.
-    if (go2rtcSettings() !== go2rtcMadeWith || !go2rtc !== !makeGo2rtc()) {
+    if (go2rtcSettings() !== go2rtcMadeWith || !go2rtc === go2rtcWanted()) {
       await go2rtc?.stop();
       renewGo2rtc();
     } else {
@@ -1766,7 +1768,6 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   async function doStop(opts: { reason?: string }): Promise<void> {
       daily.stop();
       hostMonitor.stop();
-      await reconciling;
       // First, while everything is still open.
       audit.write({ action: 'proxy-stop', category: ['process'], type: ['end'], outcome: 'success', user: 'system', message: `cam-proxy stopping${opts.reason ? ` (${opts.reason})` : ''}`, details: { reason: opts.reason ?? 'stop' } });
       // Each camera's PoE back on if a power-cycle is in its off time; one
@@ -1781,6 +1782,9 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
         ];
         audit.write({ action: 'camera-powercycle', category: ['host'], type: ['end'], outcome: 'failure', user: 'system', message: `cam-proxy stopping: ${parts.join('; ')}`, details: { phase: 'stop', poeLeftOff: o.portsLeftOff.length > 0, sessionMaybeOpen: o.sessionMaybeOpen, switch: { id: o.id, host }, ...(o.portsLeftOff.length ? { portsLeftOff: o.portsLeftOff } : {}) } });
       }
+      // A camera change still running (an add waits up to 10 s for go2rtc) is waited for only
+      // after the PoE switches (#174): a cut port is back on within the container's stop grace.
+      await reconciling;
       await restarting;
       // A switch-over step in flight ends first; the journal keeps the step (resumed at the next start).
       clearInterval(moveExpiry);
