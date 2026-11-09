@@ -13,7 +13,7 @@
   import PoeSwitchesCard from '../components/PoeSwitchesCard.svelte';
   import { timeSetText } from '../lib/onboarding';
   import { envNote, isEnvSet } from '../lib/find-camera';
-  import { lockedWhy, narrowWhy, resetKeeps, rights, settingLockedWhy, settingsNote } from '../lib/rights';
+  import { inheritedValue, lockedWhy, narrowWhy, resetKeeps, rights, savedValue, settingLockedWhy, settingsNote } from '../lib/rights';
   import LockedNote from '../components/LockedNote.svelte';
 
   import ConfirmDialog from '../components/ConfirmDialog.svelte';
@@ -250,9 +250,9 @@
             {@const s = view[p]}
             {@const same = s.source === 'override' ? sameBadge(p, s.resetTo) : null}
             {@const locked = settingLockedWhy($rights, p)}
-            <!-- A cams-admin sign-in: retention and size caps only up (the proxy refuses the rest). -->
-            {@const dirWhy = drafts[p] !== undefined ? narrowWhy($rights, p, s.value, parse(p, drafts[p])) : null}
-            {@const resetDirWhy = s.source === 'override' && !same ? narrowWhy($rights, p, s.value, s.resetTo?.value) : null}
+            <!-- A cams-admin sign-in: retention and size caps only up, capture intervals only shorter (the proxy refuses the rest); a camera's unset interval is the host's. -->
+            {@const dirWhy = drafts[p] !== undefined ? narrowWhy($rights, p, savedValue(s), parse(p, drafts[p]), undefined, inheritedValue($rights, p, view)) : null}
+            {@const resetDirWhy = s.source === 'override' && !same ? narrowWhy($rights, p, savedValue(s), s.resetTo?.value, undefined, inheritedValue($rights, p, view)) : null}
             {#if /^cameras\.[^.]+\.name$/.test(p)}
             <tr data-testid="setting-camera-name">
               <td><label for="camera-name">Camera name (stored on the camera)</label></td>

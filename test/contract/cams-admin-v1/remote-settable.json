@@ -53,7 +53,10 @@
     "retention.streamLogDays": "more",
     "stills.maxGB": "more",
     "previews.maxGB": "more",
-    "ftp.maxGB": "more"
+    "ftp.maxGB": "more",
+    "stills.intervalS": "less",
+    "events.poll.intervalS": "less",
+    "cameras.*.stills.intervalS": "less"
   },
   "ceilings": {
     "analytics.googleVision.enabled": "analytics.googleVision.remoteMaxMonthly",
