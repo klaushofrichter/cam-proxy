@@ -260,7 +260,7 @@ describe('the client with commands', () => {
     const f = runnerFixture();
     make(f, { now: () => Date.now() + 3 * 365 * 86_400_000 });
     await until(() => client!.view().state === 'connected');
-    expect(fake.received.find((r) => r.msg.type === 'hello')!.msg.body).toMatchObject({ capabilities: ['status', 'commands', 'move-ptz'] });
+    expect(fake.received.find((r) => r.msg.type === 'hello')!.msg.body).toMatchObject({ capabilities: ['status', 'commands', 'move-ptz', 'power-poe-cut', 'move-settings'] });
     const { cmdId } = fake.sendCommand('tokens.apply', argsOf(1));
     await until(() => fake.results(cmdId).length === 2);
     expect(fake.results(cmdId).map(bodyOf).map((b) => b.phase)).toEqual(['received', 'done']);
@@ -451,7 +451,7 @@ describe('CAMPROXY_ADMIN_COMMANDS=off', () => {
     await sim?.close();
   });
   it('the hello does not announce commands (cams-admin sends none)', () => {
-    expect(fake.received.find((r) => r.msg.type === 'hello')!.msg.body).toMatchObject({ capabilities: ['status', 'move-ptz'] });
+    expect(fake.received.find((r) => r.msg.type === 'hello')!.msg.body).toMatchObject({ capabilities: ['status', 'move-ptz', 'power-poe-cut', 'move-settings'] });
   });
   it('enabled false in the heartbeat; every command paused', async () => {
     expect((fake.heartbeats()[0].msg.body as Record<string, any>).proxy.commands).toMatchObject({ enabled: false, allow: ['tokens.apply', 'camera.onboarding.get', 'analytics.usage.get', 'camera.remove.preview', 'camera.power.set', 'camera.power.cycling', 'camera.power.cycled', 'camera.power.cycle.result'] });

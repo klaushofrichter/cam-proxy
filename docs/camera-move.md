@@ -89,10 +89,25 @@ detail: what failed, in one line. For example:
 | `no_site_ca` | `tls.site is not set`, or `the site CA is missing` |
 | `id_taken` | `camera id cam3 is in use here` |
 | `camera_limit` | `3 of 3 cameras (profile.cameras)`, or `1 of 1 cameras (no profile set: set this proxy's profile)` |
-| `incompatible` | too few FTP passive ports for one more camera with FTP, `ftp.passive: 10 ports (30000-30009) for 2 cameras with FTP; at least 10 per camera (profile_ftp_ports)`, or the configuration error the camera would cause, e.g. `cameras: cam3 and cam9 both use the FTP user cam9` |
+| `incompatible` | too few FTP passive ports for one more camera with FTP and no wider range from the same start possible (past 65535), `ftp.passive: 10 ports (65520-65529) for 2 cameras with FTP; at least 10 per camera (profile_ftp_ports): remove it …`, or the configuration error the camera would cause, e.g. `cameras: cam3 and cam9 both use the FTP user cam9` |
 | `ca_does_not_cover_camera` | `the site CA does not cover the address 192.0.2.10`, or `… the name cam3.garage.internal` |
 | `camera_unreachable` | `192.0.2.10:443 not reachable within 3 s` |
 
+
+A range that can grow from its start is no refusal (#240): the target accepts
+with a settings proposal, `settingsProposal: {settings: {"ftp.passive":
+"30000-30029"}, firewall: "open TCP 2121 and 30000-30029 for every camera with
+FTP here … in the host firewall"}`. The source's move panel shows the settings
+and the firewall note, waits for a person (an automatic approval waits with
+reason `settings`), and the approved plan carries them in
+`plan.targetSettings` whatever the space choice. The target checks at
+`move.start` that the plan has exactly them and writes them with the camera
+(`ftp.passive` takes effect at its next restart; open the firewall first).
+A cams-admin that doesn't relay proposals yet (contract phase A) turns the
+accept into the target's refusal with the proposal in words; the target's
+unapproved offer then closes when the camera is offered again (`move-cancel`,
+reason `superseded`) or after 35 minutes. Needs cams-admin with contract
+phase A or later: an older one fails such a move (`target_failed`).
 The detail names settings, variables, ids and addresses, never a token, a
 password or another secret's value. The target's `move-offer` audit record
 and the source's `move-phase` `rejected` record carry it too.

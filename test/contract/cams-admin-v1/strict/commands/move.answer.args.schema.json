@@ -164,6 +164,44 @@
       },
       "maxItems": 6,
       "uniqueItems": true
+    },
+    "settingsProposal": {
+      "type": "object",
+      "properties": {
+        "settings": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[a-z][A-Za-z0-9]{0,31}(\\.[a-z0-9][A-Za-z0-9-]{0,31}){0,5}$"
+          },
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "string",
+                "maxLength": 512
+              }
+            ]
+          },
+          "minProperties": 1,
+          "maxProperties": 8
+        },
+        "firewall": {
+          "type": "string",
+          "maxLength": 300,
+          "minLength": 1
+        }
+      },
+      "required": [
+        "settings"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [

@@ -1,0 +1,44 @@
+{
+  "$note": "one camera found, one whose switch read failed (switch_error, detail in words): the survey goes on",
+  "$command": "switch.survey",
+  "schema": "result",
+  "message": {
+    "v": 1,
+    "type": "result",
+    "id": "01K60000000000000000000005",
+    "seq": 5,
+    "ts": 1791273600005,
+    "re": "01K60000000000000000000003",
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "phase": "done",
+      "status": "ok",
+      "result": {
+        "sn": "SN-EXAMPLE",
+        "results": [
+          {
+            "camera": "cam_0123456789ABCDEFGHJK",
+            "found": true,
+            "port": 8,
+            "poe": true,
+            "watts": 4.2,
+            "link": true,
+            "ratio": 12.5
+          },
+          {
+            "camera": "cam_1123456789ABCDEFGHJK",
+            "found": false,
+            "reason": "switch_error",
+            "detail": "the switch answered HTTP 500"
+          }
+        ]
+      }
+    },
+    "sig": "oN99zm1Q0bMbJkGABskWsNscF8fp6OBSS0427fkmCYbP0p6P5wo0/MR5iP8+8kMN2MhryqgIhN+hJRyErP1NCg=="
+  },
+  "$context": {
+    "feature": "poe"
+  }
+}

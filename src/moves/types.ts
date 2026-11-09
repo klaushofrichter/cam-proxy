@@ -23,6 +23,11 @@ export type MoveReason = 'moves_not_allowed' | 'camera_unreachable' | 'camera_li
 // A flat map of settings paths to leaf values (targetSettings, retentionProposal).
 export type SettingsMap = Record<string, boolean | number | string>;
 
+// A target's settings proposal (#240): host settings it needs to take the
+// camera (an approved plan carries them in targetSettings), and what its host
+// firewall must allow for them, in words.
+export interface SettingsProposal { settings: SettingsMap; firewall?: string }
+
 // The camera node of the proxy's config: every leaf optional, closed objects.
 export interface Settings {
   name?: string;
@@ -70,7 +75,8 @@ export interface MoveActor { origin: 'local' | 'managed'; label: string }
 // The target's answer as cams-admin relays it (move.answer).
 // `detail`: what failed, one line (a refusal's, moveDetail).
 // `kinds`: what the target takes (absent: the five file kinds).
-export interface MoveAnswer { accept: boolean; reason?: MoveReason; detail?: string; space?: Space; estimateS?: number; kinds?: MoveKind[] }
+// `settingsProposal`: the target accepts only with these host settings (#240).
+export interface MoveAnswer { accept: boolean; reason?: MoveReason; detail?: string; space?: Space; estimateS?: number; kinds?: MoveKind[]; settingsProposal?: SettingsProposal }
 
 export interface ChunkProgress { id: string; state: ChunkState }
 

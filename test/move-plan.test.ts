@@ -43,6 +43,21 @@ describe('autoPlan', () => {
   it('no transfer: no kinds, budget the estimate', () =>
     expect(autoPlan({ transfer: false, kinds: [], space: 'all', maxBudgetS: 3600 }, summary, fitsA))
       .toEqual({ plan: { transfer: false, kinds: [], space: 'all', targetSettings: null, budgetS: 540, estimateS: 540 } }));
+  it('a settings proposal (#240) waits for a person: the host firewall may need a change', () =>
+    expect(autoPlan({ transfer: true, kinds: all5, space: 'fit', maxBudgetS: 3600 }, summary, { ...fitsA, settingsProposal: { settings: { 'ftp.passive': '30000-30029' } } })).toEqual({ reason: 'settings' }));
+  it('planFrom carries the settings proposal in targetSettings for every option (#240)', () => {
+    const sp = { settings: { 'ftp.passive': '30000-30029' } };
+    const f = { transfer: true, leaveOut: ['stills'] as ('stills')[], budgetMin: 9, estimateS: 540, summary, settingsProposal: sp };
+    expect(planFrom({ ...f, option: 'fit', space: fitsA.space }).plan!.targetSettings).toEqual({ 'ftp.passive': '30000-30029' });
+    expect(planFrom({ ...f, transfer: false, option: 'fit', space: fitsA.space }).plan!.targetSettings).toEqual({ 'ftp.passive': '30000-30029' });
+    expect(planFrom({ ...f, option: 'omit', leaveOut: ['stills'], space: tight }).plan!.targetSettings).toEqual({ 'ftp.passive': '30000-30029' });
+    expect(planFrom({ ...f, option: 'fit', space: tight }).plan!.targetSettings).toEqual({ 'ftp.passive': '30000-30029' });
+    expect(planFrom({ ...f, option: 'retention', space: tight }).plan!.targetSettings).toEqual({ 'stills.maxGB': 90, 'storage.maxBytes': 200 * 1024 ** 3, 'ftp.passive': '30000-30029' });
+    for (const option of ['fit', 'omit', 'retention'] as const) {
+      const p = planFrom({ ...f, option, space: tight }).plan!;
+      expect(approveProblem(p, summary, { ...tightA, settingsProposal: sp }), option).toBeNull();
+    }
+  });
   it('no estimate waits', () =>
     expect(autoPlan({ transfer: true, kinds: all5, space: 'fit', maxBudgetS: 3600 }, summary, { accept: true, space: fitsA.space })).toEqual({ reason: 'no_estimate' }));
   it('every plan autoPlan returns passes approveProblem', () => {

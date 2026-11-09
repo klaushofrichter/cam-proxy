@@ -116,7 +116,7 @@ describe('POST /control/actions/camera-powercycle', () => {
       await new Promise((x) => setTimeout(x, 200));
       const events = fake.events().filter((e) => bodyOf(e).kind === 'camera.power.cycle.request');
       expect(events).toHaveLength(1);
-      expect(bodyOf(events[0])).toMatchObject({ kind: 'camera.power.cycle.request', camera: 'cam1', requestId });
+      expect(bodyOf(events[0])).toMatchObject({ kind: 'camera.power.cycle.request', camera: 'cam1', requestId, askedAt: expect.any(Number) });
       expect(fake.verifyFromProxy(events[0].msg)).toBe(true);
       const v = strict('event');
       expect(v(events[0].msg), why(v)).toBe(true);

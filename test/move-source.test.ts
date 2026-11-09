@@ -643,3 +643,28 @@ describe('approveProblem (the panel rules, S §7)', () => {
     expect(approveProblem({ ...base, transfer: false, kinds: [], space: 'retention', targetSettings: { 'stills.maxGB': 4 } }, summary, answer)).toBe('plan.targetSettings');
   });
 });
+describe('approveProblem with a settings proposal (#240): targetSettings carries it for any space choice', () => {
+  const kind = (bytes: number) => ({ files: bytes ? 1 : 0, bytes, rows: 0, oldest: bytes ? 1 : null, newest: bytes ? 2 : null });
+  const summary: MoveSummary = { stills: kind(100), clips: kind(200), events: kind(0), checks: kind(0), archive: kind(50) };
+  const fits: Space = { needed: 350, available: 9000, fits: true, perKind: {}, retentionProposal: null };
+  const short: Space = { needed: 350, available: 250, fits: false, perKind: {}, retentionProposal: { 'storage.maxBytes': 5000 } };
+  const sp = { settings: { 'ftp.passive': '30000-30029' }, firewall: 'open TCP 2121 and 30000-30029 in the host firewall' };
+  const base: MovePlan = { transfer: true, kinds: ['stills', 'clips', 'archive'], space: 'all', targetSettings: { 'ftp.passive': '30000-30029' }, budgetS: 100, estimateS: 100 };
+  it('the proposal exactly, nothing else (but retention limits with retention)', () => {
+    const a = { accept: true, space: fits, estimateS: 100, settingsProposal: sp };
+    expect(approveProblem(base, summary, a)).toBeNull();
+    expect(approveProblem({ ...base, targetSettings: null }, summary, a)).toBe('plan.targetSettings');
+    expect(approveProblem({ ...base, targetSettings: { 'ftp.passive': '30000-30039' } }, summary, a)).toBe('plan.targetSettings');
+    expect(approveProblem({ ...base, targetSettings: { 'ftp.passive': '30000-30029', 'ftp.port': 21 } }, summary, a)).toBe('plan.targetSettings');
+    expect(approveProblem({ ...base, transfer: false, kinds: [] }, summary, a)).toBeNull();
+    expect(approveProblem({ ...base, transfer: false, kinds: [], targetSettings: null }, summary, a)).toBe('plan.targetSettings');
+    const s = { accept: true, space: short, estimateS: 100, settingsProposal: sp };
+    expect(approveProblem({ ...base, space: 'fit' }, summary, s)).toBeNull();
+    expect(approveProblem({ ...base, space: 'omit', kinds: ['clips', 'archive'] }, summary, s)).toBeNull();
+    expect(approveProblem({ ...base, space: 'retention', targetSettings: { 'ftp.passive': '30000-30029', 'storage.maxBytes': 5000 } }, summary, s)).toBeNull();
+    expect(approveProblem({ ...base, space: 'retention' }, summary, s)).toBe('plan.targetSettings');
+    expect(approveProblem({ ...base, space: 'retention', targetSettings: { 'storage.maxBytes': 5000 } }, summary, s)).toBe('plan.targetSettings');
+    // Without a proposal: as before.
+    expect(approveProblem(base, summary, { accept: true, space: fits, estimateS: 100 })).toBe('plan.targetSettings');
+  });
+});

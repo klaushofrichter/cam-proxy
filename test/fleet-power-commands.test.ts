@@ -84,6 +84,9 @@ describe('policy and validators', () => {
     ok('camera.power.cycled', { v: 1, camera: 'cam1', ok: true, message: '' });
     bad('camera.power.cycled', { v: 1, camera: 'cam1', ok: true, message: 'x'.repeat(201) });
     bad('camera.power.cycled', { v: 1, camera: 'cam1', ok: 'yes', message: '' });
+    ok('camera.power.cycled', { v: 1, camera: 'cam1', ok: false, message: 'x', poeCut: true });
+    ok('camera.power.cycled', { v: 1, camera: 'cam1', ok: false, message: 'x', poeCut: false });
+    bad('camera.power.cycled', { v: 1, camera: 'cam1', ok: false, message: 'x', poeCut: 'yes' });
     ok('camera.power.cycle.result', { v: 1, camera: 'cam1', requestId: 'pc_1', ok: false, reason: 'not PoE powered' });
     ok('camera.power.cycle.result', { v: 1, camera: 'cam1', requestId: 'pc_1', ok: true });
     bad('camera.power.cycle.result', { v: 1, camera: 'cam1', requestId: '', ok: true });
@@ -154,6 +157,35 @@ describe('camera.power.cycling and camera.power.cycled', () => {
     expect(s.reboot.state()!.phase).toBe('not-back');
   });
 
+  it('cycled ok:false with poeCut: the camera is rebooting, the watch goes on until it answers (#364 m6)', async () => {
+    const s = setup();
+    await s.run('camera.power.cycling', { camera: 'cam1', at: s.t.now });
+    s.ok('camera.power.cycled', await s.run('camera.power.cycled', { camera: 'cam1', ok: false, message: 'the port did not report PoE on in time', poeCut: true }));
+    expect(s.reboot.state()).toMatchObject({ kind: 'powercycle', phase: 'rebooting', endedAt: null });
+    const last = s.records.at(-1)!;
+    expect(last).toMatchObject({ action: 'camera-powercycle', type: ['change'], outcome: 'failure', details: { phase: 'failed', via: 'cams-admin', poeCut: true } });
+    expect(last.message).toContain('the port did not report PoE on in time');
+    expect(last.message).toContain('rebooting');
+    s.checks.push({ ok: false }, { ok: true, serial: 'S2' });
+    await until(() => s.reboot.state()?.phase === 'back', 2000);
+    expect(s.records.at(-1)).toMatchObject({ action: 'camera-powercycle', type: ['end'], outcome: 'success', details: { phase: 'back' } });
+    s.reboot.stop();
+  });
+
+  it('cycled ok:false with poeCut false ends it like without the flag', async () => {
+    const s = setup();
+    await s.run('camera.power.cycling', { camera: 'cam1', at: s.t.now });
+    s.ok('camera.power.cycled', await s.run('camera.power.cycled', { camera: 'cam1', ok: false, message: 'PoE may still be OFF', poeCut: false }));
+    expect(s.reboot.state()).toMatchObject({ phase: 'not-back', message: 'PoE may still be OFF' });
+  });
+
+  it('the cycling audit says the power-cycle is starting (cams-admin may still refuse it; cams-admin #166)', async () => {
+    const s = setup();
+    await s.run('camera.power.cycling', { camera: 'cam1', at: s.t.now });
+    expect(s.records[0].message).toMatch(/power-cycle by cams-admin starting/);
+    expect(s.records[0].message).not.toMatch(/PoE off at/);
+  });
+
   it('cycling while a reboot is under way: ok, logged, the state switches to power-cycling with the new offAt; no second watch', async () => {
     const s = setup();
     expect((await s.reboot.request({ requestedBy: 'token' })).status).toBe(202);
@@ -190,7 +222,8 @@ describe('camera.power.cycle.result and the request', () => {
     const a = requestPowerCycle({ ...connected(events), store: s.store, reboot: () => s.reboot, audit: { write: (r: any) => void s.records.push(r) } as any, now: () => s.t.now }, 'cam1', { user: 'admin', requestedBy: 'session', ip: '10.0.0.5' });
     expect(a).toEqual({ status: 202, requestId: expect.stringMatching(/^pc_[0-9A-HJKMNP-TV-Z]{26}$/) });
     const requestId = (a as { requestId: string }).requestId;
-    expect(events).toEqual([{ kind: 'camera.power.cycle.request', camera: 'cam1', requestId }]);
+    // askedAt (#364 m5): when it was asked, so cams-admin ignores one asked over 5 minutes ago.
+    expect(events).toEqual([{ kind: 'camera.power.cycle.request', camera: 'cam1', requestId, askedAt: s.t.now }]);
     const v = strict('event');
     const env = { v: 1, type: 'event', id: '01K60000000000000000000017', seq: 1, ts: 1, sig: 'A'.repeat(86) + '==', body: { ...events[0], proxyId: `prx_${'1'.repeat(20)}`, connId: `con_${'2'.repeat(20)}` } };
     expect(v(env), why(v)).toBe(true);

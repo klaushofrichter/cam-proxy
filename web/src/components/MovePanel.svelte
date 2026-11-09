@@ -22,7 +22,8 @@
   let busy = $state(false);
   let error = $state('');
   // No transfer needs no time: the budget is the estimate.
-  const built = $derived(planFrom({ transfer, leaveOut, option, budgetMin: transfer ? budgetMin : estimateS / 60, estimateS, summary, space }));
+  const settingsProposal = $derived(move.answer?.settingsProposal);
+  const built = $derived(planFrom({ transfer, leaveOut, option, budgetMin: transfer ? budgetMin : estimateS / 60, estimateS, summary, space, settingsProposal }));
   const flat = $derived(Object.entries(move.settings ?? {}).flatMap(([k, v]) => (v !== null && typeof v === 'object' ? Object.entries(v).flatMap(([k2, v2]) => (v2 !== null && typeof v2 === 'object' ? Object.entries(v2).map(([k3, v3]) => [`${k}.${k2}.${k3}`, v3] as const) : [[`${k}.${k2}`, v2] as const])) : [[k, v] as const])));
   const proposal = $derived(Object.entries(space?.retentionProposal ?? {}));
   const toggle = (k: MoveKind) => (leaveOut = leaveOut.includes(k) ? leaveOut.filter((x) => x !== k) : [...leaveOut, k]);
@@ -59,6 +60,14 @@
   <dl data-testid="move-settings">
     {#each flat as [k, v] (k)}<dt>{k}</dt><dd>{String(v)}</dd>{/each}
   </dl>
+  {#if settingsProposal}
+    <!-- #240: the target takes the camera only with these settings; approving sets them there. -->
+    <h4>Settings {target} changes to take the camera</h4>
+    <dl data-testid="move-target-settings">
+      {#each Object.entries(settingsProposal.settings) as [k, v] (k)}<dt>{k}</dt><dd>{String(v)}</dd>{/each}
+    </dl>
+    {#if settingsProposal.firewall}<p class="warn small" data-testid="move-target-firewall">Firewall on {target}: {settingsProposal.firewall}</p>{/if}
+  {/if}
   <fieldset class="row">
     <legend>Transfer content</legend>
     <label><input type="radio" name="move-transfer" checked={transfer} onchange={() => (transfer = true)} data-testid="move-transfer-yes" /> Yes</label>

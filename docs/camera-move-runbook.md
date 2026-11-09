@@ -14,7 +14,10 @@ a host).
 2. **FTP ports.** With FTP on, the passive range needs 10 ports per camera
    (`cameras` 4 → `30000-30039`). If `ftp.passive` was set by hand, widen it
    (`PUT /control/config` `{"ftp":{"passive":"30000-30039"}}`), then restart
-   the proxy: the change waits for a restart.
+   the proxy: the change waits for a restart. A target with a narrower range
+   set by hand proposes the wider one itself (#240): the move panel shows it
+   with the firewall note, and approving sets it with the camera (still
+   effective at the next restart, so do step 3 first).
 3. **Firewall.** Open the wider range for every camera that uploads to the
    target, in the same change. The profile lists the lines
    (`profile.firewall`, also in cams-admin's move dialog). Run the line for the

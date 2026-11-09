@@ -4,7 +4,7 @@ import { PrivateFileInvalid, readPrivateJson, writePrivateJson } from '../fleet/
 import type { AutoWaitReason } from './plan';
 import type { Purged } from './purge';
 import type { MoveSyncRecord } from './sync-types';
-import type { ChunkState, KeepList, MoveActor, MoveCheck, MoveAnswer, MoveBounds, MoveCameraConnection, MoveCopied, MoveKind, MovePhaseName, MovePlan, MoveRole, MoveSummary, Settings, Space } from './types';
+import type { ChunkState, KeepList, MoveActor, MoveCheck, MoveAnswer, MoveBounds, MoveCameraConnection, MoveCopied, MoveKind, MovePhaseName, MovePlan, MoveRole, MoveSummary, Settings, SettingsProposal, Space } from './types';
 import { DAY } from '../time-units';
 
 // The durable record of one move on this proxy: <dataDir>/admin/moves/<id>.json,
@@ -90,6 +90,8 @@ export interface MoveRecord {
   failure?: string;
   // target: its own space answer at accept (Task 6); move.start's targetSettings must stay within its proposal.
   space?: Space | null;
+  // target: the host settings it proposed at accept (#240); move.start's targetSettings must carry them exactly.
+  settingsProposal?: SettingsProposal;
   // target: the camera step wrote the camera node (a resumed step is not id_taken by its own write).
   cameraWritten?: boolean;
   // target: the secrets step stored the camera's password (a cancel deletes only that one).

@@ -3,7 +3,7 @@
 // them against the vendored strict schemas on the fixtures.
 import { NEVER_REMOTE_ACTIONS, REMOTE_ACTIONS } from './policy';
 import { CAMERA_NAME_PATTERN } from './remote-settable';
-import { FILE_KINDS, MOVE_KINDS, type MoveKind, type MoveBounds, type MoveCopied, type MovePlan, type MoveRole, type MoveSummary, type Settings, type SettingsMap, type Space, type MoveReason } from '../moves/types';
+import { FILE_KINDS, MOVE_KINDS, type MoveKind, type MoveBounds, type MoveCopied, type MovePlan, type MoveRole, type MoveSummary, type Settings, type SettingsMap, type SettingsProposal, type Space, type MoveReason } from '../moves/types';
 import type { ManagedToken, TokensApplyArgs } from './token-store';
 
 export type ArgsVerdict<T> = { ok: true; args: T } | { ok: false; code: 'unsupported_version' | 'invalid_args'; detail: string };
@@ -98,7 +98,7 @@ export const validateCameraName = (a: unknown) => v1<CameraNameArgs>(a, ['camera
 export interface MoveTargetsArgs { v: 1; requestId: string; targets: { proxyId: string; name: string; site: string | null }[] }
 export interface MoveOpenArgs { v: 1; moveId: string; requestId: string; camera: string; tokenHash: string; targetIp: string }
 export interface MoveOfferArgs { v: 1; moveId: string; token: string; source: { proxyId: string; name: string; url: string; caFingerprints: string[]; tlsServername: string }; camera: { camsId: string; proxyCameraId: string; name: string; host: string; protocol: 'https' | 'http'; user: string; onvifPort: number; rtspPort: number; baichuanPort: number }; summary: MoveSummary; settings: Settings }
-export interface MoveAnswerArgs { v: 1; moveId: string; requestId: string; target: { proxyId: string; name: string }; accept: boolean; reason?: MoveReason; detail?: string; space?: Space; estimateS?: number; kinds?: MoveKind[] }
+export interface MoveAnswerArgs { v: 1; moveId: string; requestId: string; target: { proxyId: string; name: string }; accept: boolean; reason?: MoveReason; detail?: string; space?: Space; estimateS?: number; kinds?: MoveKind[]; settingsProposal?: SettingsProposal }
 export interface MoveStartArgs { v: 1; moveId: string; plan: MovePlan; settings: Settings; done: string[] }
 export interface MoveGoArgs { v: 1; moveId: string; plan: MovePlan; targetPublicKey: string; expectedLeaf: string }
 export interface MoveBeginArgs { v: 1; camera: string; target: string; bounds: MoveBounds | null }
@@ -137,6 +137,10 @@ export const settingsMap = (x: unknown): x is SettingsMap | null => {
   return e.length <= 64 && e.every(([p, v]) => PATH_RE.test(p) && leafValue(v));
 };
 const closed = (x: unknown, keys: string[]): x is Record<string, unknown> => isObj(x) && only(x, keys);
+// A target's settings proposal (#240, contract settingsProposal): 1 to 8 settings, an optional firewall note (1 to 300 characters).
+export const settingsProposalOk = (x: unknown): x is SettingsProposal =>
+  closed(x, ['settings', 'firewall']) && isObj(x.settings) && Object.keys(x.settings).length >= 1 && Object.keys(x.settings).length <= 8 && settingsMap(x.settings)
+  && (x.firewall === undefined || (typeof x.firewall === 'string' && x.firewall.length >= 1 && x.firewall.length <= 300));
 const optional = (o: Record<string, unknown>, k: string, ok: (x: unknown) => boolean) => o[k] === undefined || ok(o[k]);
 const bool = (x: unknown) => typeof x === 'boolean';
 const oneOf = (...l: string[]) => (x: unknown) => typeof x === 'string' && l.includes(x);
@@ -213,7 +217,7 @@ export const validateMoveOffer = (a: unknown) => v1<MoveOfferArgs>(a, ['moveId',
 const detailOk = (x: unknown) => typeof x === 'string' && x.length > 0 && [...x].length <= 300;
 // The kinds a target takes (plan D): unique, each a move kind.
 const kindsOk = (k: unknown) => Array.isArray(k) && k.length <= MOVE_KINDS.length && new Set(k).size === k.length && k.every((x) => (MOVE_KINDS as readonly unknown[]).includes(x));
-export const validateMoveAnswer = (a: unknown) => v1<MoveAnswerArgs>(a, ['moveId', 'requestId', 'target', 'accept', 'reason', 'detail', 'space', 'estimateS', 'kinds'], (o) => {
+export const validateMoveAnswer = (a: unknown) => v1<MoveAnswerArgs>(a, ['moveId', 'requestId', 'target', 'accept', 'reason', 'detail', 'space', 'estimateS', 'kinds', 'settingsProposal'], (o) => {
   const bad = moveId(o);
   if (bad) return bad;
   if (typeof o.requestId !== 'string' || !REQ_ID.test(o.requestId)) return 'requestId';
@@ -227,7 +231,8 @@ export const validateMoveAnswer = (a: unknown) => v1<MoveAnswerArgs>(a, ['moveId
     if (p) return p;
   }
   if (!optional(o, 'estimateS', nat)) return 'estimateS';
-  return optional(o, 'kinds', kindsOk) ? null : 'kinds';
+  if (!optional(o, 'kinds', kindsOk)) return 'kinds';
+  return optional(o, 'settingsProposal', settingsProposalOk) ? null : 'settingsProposal';
 });
 export const validateMoveStart = (a: unknown) => v1<MoveStartArgs>(a, ['moveId', 'plan', 'settings', 'done'], (o) =>
   moveId(o) ?? planProblem(o.plan) ?? settingsProblem(o.settings) ?? (!Array.isArray(o.done) || o.done.length > 512 || o.done.some((c) => typeof c !== 'string' || !CHUNK_ID.test(c)) ? 'done' : null));
@@ -307,7 +312,8 @@ export const validateSwitchForget = (a: unknown) => v1<SwitchForgetArgs>(a, ['sw
 // ---- Camera power (contract commands/camera.power.*.args, strict): this proxy's camera id ----
 export interface CameraPowerSetArgs { v: 1; camera: string; power: { kind: 'poe' | 'data-only' | 'adapter' | 'unknown'; switchName?: string; port?: number; watts?: number; verifiedAt?: number; notSeen?: boolean } }
 export interface CameraPowerCyclingArgs { v: 1; camera: string; at: number }
-export interface CameraPowerCycledArgs { v: 1; camera: string; ok: boolean; message: string }
+// poeCut (#364 m6, with ok false): PoE was cut and is on again although the cycle failed: the camera is rebooting.
+export interface CameraPowerCycledArgs { v: 1; camera: string; ok: boolean; message: string; poeCut?: boolean }
 export interface CameraPowerCycleResultArgs { v: 1; camera: string; requestId: string; ok: boolean; reason?: string }
 const POWER_KINDS = ['poe', 'data-only', 'adapter', 'unknown'];
 const powerProblem = (p: unknown): string | null => {
@@ -323,8 +329,8 @@ const powerProblem = (p: unknown): string | null => {
 const camOf = (o: Record<string, unknown>): string | null => (typeof o.camera === 'string' && CAM.test(o.camera) ? null : 'camera');
 export const validateCameraPowerSet = (a: unknown) => v1<CameraPowerSetArgs>(a, ['camera', 'power'], (o) => camOf(o) ?? powerProblem(o.power));
 export const validateCameraPowerCycling = (a: unknown) => v1<CameraPowerCyclingArgs>(a, ['camera', 'at'], (o) => camOf(o) ?? (Number.isSafeInteger(o.at) && (o.at as number) >= 0 ? null : 'at'));
-export const validateCameraPowerCycled = (a: unknown) => v1<CameraPowerCycledArgs>(a, ['camera', 'ok', 'message'], (o) =>
-  camOf(o) ?? (typeof o.ok !== 'boolean' ? 'ok' : typeof o.message === 'string' && o.message.length <= 200 ? null : 'message'));
+export const validateCameraPowerCycled = (a: unknown) => v1<CameraPowerCycledArgs>(a, ['camera', 'ok', 'message', 'poeCut'], (o) =>
+  camOf(o) ?? (typeof o.ok !== 'boolean' ? 'ok' : !(typeof o.message === 'string' && o.message.length <= 200) ? 'message' : optional(o, 'poeCut', bool) ? null : 'poeCut'));
 export const validateCameraPowerCycleResult = (a: unknown) => v1<CameraPowerCycleResultArgs>(a, ['camera', 'requestId', 'ok', 'reason'], (o) => {
   if (camOf(o)) return 'camera';
   if (typeof o.requestId !== 'string' || o.requestId.length < 1 || o.requestId.length > 64) return 'requestId';
