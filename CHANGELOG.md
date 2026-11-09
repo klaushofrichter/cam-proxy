@@ -3,6 +3,7 @@
 ## Unreleased
 
 - PoE switches: a `switch.cycle` from cams-admin that cut PoE and turned it on again but then failed (its check afterwards) now answers `cut_on_again` instead of a plain `switch_error`, so cams-admin knows the camera is rebooting and lets the proxy's reboot watch go on (cams-admin contract, #364 m6).
+## v2026.11.09.3
 
 Needs cams-admin with contract phase A (cams-admin #204) or later: an older cams-admin refuses the power-cycle request's new `askedAt` field and fails a move whose target proposes settings.
 
