@@ -46,6 +46,8 @@ export function moveHandlers(deps: MoveDeps): Record<string, Handler> {
     handlers['move.offer'] = async (args) => {
       const a = args as MoveOfferArgs;
       try {
+        // An unapproved offer of this camera that proposed settings is over (#240, MoveTarget.supersede).
+        deps.target?.supersede(a.camera.proxyCameraId, a.moveId);
         const answer = await evaluate(ev, a);
         offerAudit(deps, a, answer);
         return { status: 'ok', result: { ...answer } };
@@ -90,10 +92,10 @@ function offerAudit(deps: MoveDeps, a: MoveOfferArgs, e: Evaluation): void {
   deps.audit.write({
     action: 'move-offer', category: ['configuration'], type: ['change'], outcome: e.accept ? 'success' : 'failure',
     user: 'cams-admin', camera: cam,
-    message: `Camera move ${a.moveId} offered: ${cam} from ${a.source.name}: ${e.accept ? `accepted (${e.space.fits ? 'fits' : 'does not fit'})` : `rejected (${e.reason}${e.detail ? `: ${e.detail}` : ''})`}`,
+    message: `Camera move ${a.moveId} offered: ${cam} from ${a.source.name}: ${e.accept ? `accepted (${e.space.fits ? 'fits' : 'does not fit'})${e.settingsProposal ? ` if ${Object.entries(e.settingsProposal.settings).map(([k, v]) => `${k} is set to ${String(v)}`).join(', ')}` : ''}` : `rejected (${e.reason}${e.detail ? `: ${e.detail}` : ''})`}`,
     details: {
       moveId: a.moveId, camera: cam, source: a.source.proxyId, sourceName: a.source.name, target: deps.proxyId?.() || null, role: 'target', accept: e.accept,
-      ...(e.accept ? { space: e.space, probeBps: e.probeBps } : { reason: e.reason, ...(e.detail ? { detail: e.detail } : {}) }),
+      ...(e.accept ? { space: e.space, probeBps: e.probeBps, ...(e.settingsProposal ? { settingsProposal: e.settingsProposal } : {}) } : { reason: e.reason, ...(e.detail ? { detail: e.detail } : {}) }),
       bytes: Object.values(a.summary).reduce((n, k) => n + k.bytes, 0),
     },
   });

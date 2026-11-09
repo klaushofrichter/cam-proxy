@@ -54,6 +54,11 @@
           },
           "ratio": {
             "type": "number"
+          },
+          "detail": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1
           }
         },
         "required": [

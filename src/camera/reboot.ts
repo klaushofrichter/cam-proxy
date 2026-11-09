@@ -137,7 +137,8 @@ export class CameraReboot {
     this.current = { kind: 'powercycle', requestedAt: watching ? c.requestedAt : offAt, confirmed: true, phase: 'power-cycling', offAt, endedAt: null, downSec: null };
     this.d.audit.write({
       action: 'camera-powercycle', category: ['host'], type: ['change'], outcome: 'success', user: 'cams-admin',
-      message: `Camera power-cycle by cams-admin: PoE off at the camera's switch port${watching ? ` (during a ${c.kind === 'reboot' ? 'reboot' : 'power-cycle'})` : ''}`,
+      // "starting": cams-admin sends this before the cut, and the switch may still refuse the cycle (cams-admin #166).
+      message: `Camera power-cycle by cams-admin starting: PoE goes off at the camera's switch port${watching ? ` (during a ${c.kind === 'reboot' ? 'reboot' : 'power-cycle'})` : ''}`,
       details: { phase: 'requested', via: 'cams-admin', requestedBy: 'cams-admin', offAt, ...(watching ? { duringReboot: true } : {}) },
     });
     logger.info({ offAt, duringReboot: watching }, 'camera_powercycle_external');
@@ -146,7 +147,9 @@ export class CameraReboot {
 
   // camera.power.cycled: PoE is on again (ok), or the cycle failed (the
   // message says how; the camera's PoE may still be off): that ends it.
-  externalPowerCycleDone(ok: boolean, message: string): void {
+  // A failure with `poeCut` (#364 m6): PoE was cut and is on again, so the
+  // camera is rebooting: the watch goes on, as after an ok.
+  externalPowerCycleDone(ok: boolean, message: string, poeCut = false): void {
     const c = this.current;
     const open = c !== null && c.kind === 'powercycle' && (c.phase === 'power-cycling' || c.phase === 'rebooting');
     const base = { action: 'camera-powercycle', category: ['host'], user: 'cams-admin' };
@@ -154,6 +157,12 @@ export class CameraReboot {
       if (open && c.phase === 'power-cycling') this.current = { ...c, phase: 'rebooting' };
       this.d.audit.write({ ...base, type: ['change'], outcome: 'success', message: `Camera power-cycle by cams-admin: PoE on again${message ? ` (${message})` : ''}`, details: { phase: 'cycled', via: 'cams-admin', requestedBy: 'cams-admin' } });
       logger.info({ open }, 'camera_powercycle_external_on');
+      return;
+    }
+    if (poeCut) {
+      if (open && c.phase === 'power-cycling') this.current = { ...c, phase: 'rebooting' };
+      this.d.audit.write({ ...base, type: ['change'], outcome: 'failure', message: `Camera power-cycle by cams-admin failed${message ? `: ${message}` : ''}; PoE is on again, the camera is rebooting`, details: { phase: 'failed', via: 'cams-admin', requestedBy: 'cams-admin', poeCut: true } });
+      logger.warn({ open, message }, 'camera_powercycle_external_failed_poe_on');
       return;
     }
     if (open) {

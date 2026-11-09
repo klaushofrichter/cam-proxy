@@ -9,12 +9,22 @@ port, and only while that port is powering something.
 2026-11-07-poe-switches-design). cams-admin holds each camera's power (switch
 and port), checks that the camera is on that port, and runs the cycle on the
 proxy that operates the switch (`switch.cycle`). The camera's own proxy keeps
-its state: cams-admin tells it when the PoE went off (`camera.power.cycling`)
-and when it is on again (`camera.power.cycled`), and it shows "power-cycling",
-then "rebooting" until the camera answers, with the shared 2-minute cooldown.
+its state: cams-admin tells it when the cycle starts (`camera.power.cycling`,
+sent just before the cut; audited as "starting", since the switch may still
+refuse it) and when the PoE is on again (`camera.power.cycled`), and it shows
+"power-cycling", then "rebooting" until the camera answers, with the shared
+2-minute cooldown. A failed cycle (`ok: false`) ends the watch ("not back"),
+unless cams-admin adds `poeCut: true` (PoE was cut and is on again, the
+camera is rebooting): then the watch goes on. The hello announces
+`power-poe-cut` so cams-admin knows the proxy takes that flag.
+cams-admin's survey (`switch.survey`, which port each camera is on) goes on
+when the switch fails for one camera (busy, a timeout): that camera's result is
+`{found: false, reason: "switch_error", detail}` (the error in words, at most
+200 characters). It fails as a whole only when every camera failed, or for an
+error of the whole switch (no or a wrong password, the switch forgotten).
 The Maintenance page's "Power-cycle (through cams-admin)" asks cams-admin
 (`POST /control/cameras/<id>/actions/camera-powercycle`: 202 `{requestId}`,
-the signed event `camera.power.cycle.request`) and shows "Asked cams-admin…"
+the signed event `camera.power.cycle.request` with `requestId` and `askedAt`, the ask time in ms, so cams-admin ignores a request asked over 5 minutes ago) and shows "Asked cams-admin…"
 until its answer (`camera.power.cycle.result`). A request without an answer ends after 5 minutes (the result then says "no answer from cams-admin within 5 minutes"; a later answer still replaces it), and at once when the proxy is unenrolled or cams-admin is switched off. A request asked while the connection to cams-admin was down goes out after the reconnect only while it is still open; once its 5 minutes are over it is dropped (`admin_event_expired` in the log), so cams-admin never cuts the camera's PoE after the page gave up. Without cams-admin (not
 connected, or it has not sent the camera's power yet) it is refused: 409
 `power_cycle_needs_cams_admin`. A proxy never forces a cycle. `GET

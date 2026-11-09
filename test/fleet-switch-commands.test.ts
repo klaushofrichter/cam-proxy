@@ -28,7 +28,7 @@ afterEach(async () => {
   for (const m of mocks.splice(0)) await m.close();
 });
 
-async function setup(o: { password?: boolean; at?: Record<string, number>; answered?: boolean } = {}) {
+async function setup(o: { password?: boolean; at?: Record<string, number>; answered?: boolean; fail?: string } = {}) {
   const m = await startPoeSwitchMock({ password: PASSWORD, powered: { 0: 6.8, 5: 4.5, 6: 3.2 } });
   mocks.push(m);
   const dataDir = mkdtempSync(join(tmpdir(), 'swcmd-'));
@@ -38,6 +38,7 @@ async function setup(o: { password?: boolean; at?: Record<string, number>; answe
     dataDir,
     sleep: async () => undefined, timeoutMs: 1000,
     pingBurst: (host: string) => {
+      if (host === o.fail) throw new PoeSwitchError('switch_busy', 'the switch is busy: another session is open');
       m.tx.fill(1);
       if (at[host] !== undefined) m.tx[at[host]] = 40;
       return { done: Promise.resolve({ answered: o.answered ?? true }) };
@@ -131,6 +132,13 @@ describe('switch commands on the mock switch', () => {
     const d = await t.run('switch.survey', { switch: t.sw, cameras: [{ camera: CAM, host: 'cam3' }, { camera: CAM2, host: 'cam2' }] });
     t.okResult('switch.survey', d);
     expect((d.result as any).results.map((x: any) => [x.camera, x.port])).toEqual([[CAM, 3], [CAM2, 2]]);
+  });
+
+  it('switch.survey: a switch error on one camera is its result, the strict schema takes it (#364 m3)', async () => {
+    const t = await setup({ at: { cam3: 5 }, fail: 'cam2' });
+    const d = await t.run('switch.survey', { switch: t.sw, cameras: [{ camera: CAM, host: 'cam3' }, { camera: CAM2, host: 'cam2' }] });
+    t.okResult('switch.survey', d);
+    expect((d.result as any).results[1]).toEqual({ camera: CAM2, found: false, reason: 'switch_error', detail: 'switch_busy: the switch is busy: another session is open' });
   });
 
   it('switch.cycle forced: ok, audited switch-port-cycled with forced true', async () => {

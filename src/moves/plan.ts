@@ -1,7 +1,7 @@
 // The camera-move plan rules, shared by the admin UI (web/src/lib/moves.ts
 // re-exports them) and the proxy's auto-approval. No Node imports: the web
 // bundle imports this file.
-import type { FileKind, MoveAnswer, MoveBounds, MoveKind, MovePlan, MoveSummary, Space } from './types';
+import type { FileKind, MoveAnswer, MoveBounds, MoveKind, MovePlan, MoveSummary, SettingsMap, SettingsProposal, Space } from './types';
 
 // The kinds the panel and the bounds offer: the file kinds (ptz is never a choice).
 export const KINDS: readonly FileKind[] = ['stills', 'clips', 'events', 'checks', 'archive'];
@@ -35,10 +35,19 @@ export interface MoveForm {
   estimateS: number;
   summary: MoveSummary;
   space?: Space;
+  // The target's settings proposal (#240): carried in targetSettings whatever the option.
+  settingsProposal?: SettingsProposal;
 }
 
 // The plan the form means, or why not (a budget below the estimate is refused here, as by the proxy).
 export function planFrom(f: MoveForm): { plan: MovePlan | null; error: string | null } {
+  const r = planOf(f);
+  const proposed = f.settingsProposal?.settings;
+  if (!r.plan || !proposed || !Object.keys(proposed).length) return r;
+  return { plan: { ...r.plan, targetSettings: { ...(r.plan.targetSettings ?? {}), ...proposed } }, error: null };
+}
+
+function planOf(f: MoveForm): { plan: MovePlan | null; error: string | null } {
   const budgetS = Math.round(f.budgetMin * 60);
   if (!Number.isFinite(budgetS) || budgetS < f.estimateS) return { plan: null, error: `The time budget can't be below the estimate (${estimateText(f.estimateS)}).` };
   const common = { budgetS, estimateS: f.estimateS };
@@ -52,19 +61,21 @@ export function planFrom(f: MoveForm): { plan: MovePlan | null; error: string | 
   }
   if (f.option === 'retention') {
     if (!f.space.retentionProposal) return { plan: null, error: 'The target proposed no limits.' };
-    return { plan: { transfer: true, kinds: all, space: 'retention', targetSettings: f.space.retentionProposal, ...common }, error: null };
+    return { plan: { transfer: true, kinds: all, space: 'retention', targetSettings: { ...f.space.retentionProposal } as SettingsMap, ...common }, error: null };
   }
   return { plan: { transfer: true, kinds: all, space: 'fit', targetSettings: null, ...common }, error: null };
 }
 
 // Why an offer is left for a person instead of being approved by the source.
-export type AutoWaitReason = 'over_budget' | 'space' | 'no_estimate' | 'not_allowed' | 'plan';
+export type AutoWaitReason = 'over_budget' | 'space' | 'no_estimate' | 'not_allowed' | 'plan' | 'settings';
 
 // The plan the panel would build for the bounds and the target's accepted
 // answer (the caller checks accept), or why a person has to decide.
 export function autoPlan(b: MoveBounds, summary: MoveSummary, answer: MoveAnswer): { plan: MovePlan } | { reason: AutoWaitReason } {
   const estimateS = answer.estimateS;
   if (estimateS === undefined) return { reason: 'no_estimate' };
+  // A settings proposal (#240) changes the target's host settings and may need its firewall opened: a person decides.
+  if (answer.settingsProposal) return { reason: 'settings' };
   if (estimateS > b.maxBudgetS) return { reason: 'over_budget' };
   const fits = !answer.space || answer.space.fits;
   // A choice the panel would not offer for this answer (all when it doesn't fit, retention without a proposal).

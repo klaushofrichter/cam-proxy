@@ -44,11 +44,17 @@
       "enum": [
         "not_reachable",
         "ambiguous",
-        "no_traffic"
+        "no_traffic",
+        "switch_error"
       ]
     },
     "ratio": {
       "type": "number"
+    },
+    "detail": {
+      "type": "string",
+      "maxLength": 200,
+      "minLength": 1
     }
   },
   "required": [

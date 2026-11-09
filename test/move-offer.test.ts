@@ -117,17 +117,27 @@ describe('refusals, in the plan order', () => {
     const empty = { profile: undefined, cameras: [{ id: 'cam3', host: '192.0.2.3', moved: 'mv_AAAAAAAAAAAAAAAAAAAA' }] };
     expect((await evaluate(fixture({ config: empty }).deps, offer())).accept).toBe(true);
   });
-  it('the FTP passive ports: 10 per camera with FTP after the move (as the load check counts them), else refused', async () => {
+  it('the FTP passive ports: 10 per camera with FTP after the move (as the load check counts them), else a settings proposal (#240)', async () => {
     const env = { ...SECRETS, CAMPROXY_FTP_PASSWORD: 'f' };
     const cams = [{ id: 'cam3', host: '192.0.2.3', ftp: { enabled: true } }];
     const withFtp = offer({ settings: { statusPollS: 30, ftp: { enabled: true } } });
-    // een on 2026-10-25: room for 3 cameras, 10 ports set by hand.
-    expect(await evaluate(fixture({ env, config: { cameras: cams, profile: { cameras: 3 }, ftp: { passive: '30000-30009' } } }).deps, withFtp)).toEqual({ accept: false, reason: 'incompatible', detail: "ftp.passive: 10 ports (30000-30009) for 2 cameras with FTP; at least 10 per camera (profile_ftp_ports): set it to 30000-30029, or remove it to use the profile's range, and open those ports in the host firewall" });
-    expect((await evaluate(fixture({ env, config: { cameras: cams, profile: { cameras: 3 }, ftp: { passive: '30000-30019' } } }).deps, withFtp)).accept).toBe(true);
+    // een on 2026-10-25: room for 3 cameras, 10 ports set by hand: accepted if the plan widens the range.
+    const f = fixture({ env, config: { cameras: cams, profile: { cameras: 3 }, ftp: { passive: '30000-30009' } } });
+    const proposal = { settings: { 'ftp.passive': '30000-30029' }, firewall: 'open TCP 2121 and 30000-30029 for every camera with FTP here (the moved camera 192.0.2.9 too) in the host firewall' };
+    expect(await evaluate(f.deps, withFtp)).toMatchObject({ accept: true, settingsProposal: proposal });
+    expect(f.journal.load(MOVE)).toMatchObject({ role: 'target', phase: 'opened', settingsProposal: proposal });
+    const v = strict('commands/move.offer.result');
+    const res = await evaluate(fixture({ env, config: { cameras: cams, profile: { cameras: 3 }, ftp: { passive: '30000-30009' } } }).deps, withFtp);
+    expect(v(res), why(v)).toBe(true);
+    // A range that can't grow from its start (past 65535): refused with how.
+    expect(await evaluate(fixture({ env, config: { cameras: cams, profile: { cameras: 3 }, ftp: { passive: '65520-65529' } } }).deps, withFtp)).toEqual({ accept: false, reason: 'incompatible', detail: "ftp.passive: 10 ports (65520-65529) for 2 cameras with FTP; at least 10 per camera (profile_ftp_ports): remove it to use the profile's range, and open those ports in the host firewall" });
+    const wide = await evaluate(fixture({ env, config: { cameras: cams, profile: { cameras: 3 }, ftp: { passive: '30000-30019' } } }).deps, withFtp);
+    expect(wide.accept).toBe(true);
+    expect(wide).not.toHaveProperty('settingsProposal');
     // The incoming camera without FTP needs no ports.
     expect((await evaluate(fixture({ env, config: { cameras: cams, profile: { cameras: 3 }, ftp: { passive: '30000-30009' } } }).deps, offer())).accept).toBe(true);
     // FTP on for the host: the incoming camera takes it (the host value) and counts.
-    expect(await evaluate(fixture({ env, config: { profile: { cameras: 3 }, ftp: { enabled: true, passive: '30000-30009' } } }).deps, offer())).toMatchObject({ accept: false, reason: 'incompatible' });
+    expect(await evaluate(fixture({ env, config: { profile: { cameras: 3 }, ftp: { enabled: true, passive: '30000-30009' } } }).deps, offer())).toMatchObject({ accept: true, settingsProposal: { settings: { 'ftp.passive': '30000-30029' } } });
     // Derived from the profile: always room.
     expect((await evaluate(fixture({ env, config: { cameras: cams, profile: { cameras: 2 } } }).deps, withFtp)).accept).toBe(true);
     // A hidden leftover of the same camera is replaced, not counted twice.
@@ -272,6 +282,30 @@ describe('accepting writes the target record (B4, B32)', () => {
     const bad = moveHandlers({ emit: () => undefined, audit: { write: () => undefined } as never, evaluate: { ...fixture().deps, loaded: () => { throw new Error(`boom ${TOKEN}`); } } })['move.offer'];
     const failed = await bad(offer(), {} as never);
     expect(failed).toEqual({ status: 'failed', code: 'internal' });
+  });
+  it('a new offer first ends an unapproved offer of the same camera that proposed settings (#240), then evaluates', async () => {
+    const f = fixture();
+    const order: string[] = [];
+    f.journal.save({ v: 1, id: 'mv_OLDOLDOLDOLDOLDOLDOL', role: 'target', camera: 'cam9', phase: 'opened', plan: null, peer: { proxyId: 'p', name: 'n' }, chunks: {}, bytesDone: 0, startedAt: 1, settingsProposal: { settings: { 'ftp.passive': '30000-30029' } } });
+    const target = { handlers: () => ({}), supersede: (cam: string, id: string) => {
+      order.push(`supersede ${cam} ${id}`);
+      f.journal.remove('mv_OLDOLDOLDOLDOLDOLDOL');
+      return ['mv_OLDOLDOLDOLDOLDOLDOL'];
+    } };
+    const audits: { message: string }[] = [];
+    const h = moveHandlers({ emit: () => undefined, audit: { write: (r: never) => void audits.push(r) } as never, evaluate: f.deps, target: target as never })['move.offer'];
+    const done = await h(offer(), {} as never);
+    expect(order).toEqual([`supersede cam9 ${MOVE}`]);
+    expect(done.result).toMatchObject({ accept: true });
+  });
+  it('the offer result with a settings proposal is audited with it', async () => {
+    const env = { ...SECRETS, CAMPROXY_FTP_PASSWORD: 'f' };
+    const audits: { message: string; details: Record<string, unknown> }[] = [];
+    const f = fixture({ env, config: { cameras: [{ id: 'cam3', host: '192.0.2.3', ftp: { enabled: true } }], profile: { cameras: 3 }, ftp: { passive: '30000-30009' } } });
+    const h = moveHandlers({ emit: () => undefined, audit: { write: (r: never) => void audits.push(r) } as never, evaluate: f.deps })['move.offer'];
+    await h(offer({ settings: { statusPollS: 30, ftp: { enabled: true } } }), {} as never);
+    expect(audits[0].message).toContain('if ftp.passive is set to 30000-30029');
+    expect(audits[0].details).toMatchObject({ accept: true, settingsProposal: { settings: { 'ftp.passive': '30000-30029' } } });
   });
   it('a refusal answers its reason and detail (strict contract) and audits both', async () => {
     const audits: { message: string; details: Record<string, unknown> }[] = [];

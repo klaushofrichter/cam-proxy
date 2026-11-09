@@ -21,8 +21,10 @@ export interface LocateResult {
   poe?: boolean;
   watts?: number;
   link?: boolean | null;
-  reason?: 'not_reachable' | 'ambiguous' | 'no_traffic';
+  // switch_error (#364 m3, a survey only): the switch failed for this camera; detail says how (1 to 200 characters).
+  reason?: 'not_reachable' | 'ambiguous' | 'no_traffic' | 'switch_error';
   ratio?: number;
+  detail?: string;
 }
 
 export interface SwitchSession {

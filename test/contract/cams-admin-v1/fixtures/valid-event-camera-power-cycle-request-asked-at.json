@@ -1,0 +1,23 @@
+{
+  "$note": "a request with askedAt (optional): when the page asked; cams-admin ignores one asked over 5 minutes ago",
+  "schema": "event",
+  "message": {
+    "v": 1,
+    "type": "event",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "kind": "camera.power.cycle.request",
+      "camera": "cam1",
+      "requestId": "pc_01K6000000000000000000000A",
+      "askedAt": 1791273599000
+    },
+    "sig": "Ybe0cN0oRiMjeepTiHtXXbRtWvITVIh9AQ3YjHZc6eXiQl/xj/0GTLibPZNphoAShEbtSB48kKw3GD2flZXhAQ=="
+  },
+  "$context": {
+    "feature": "poe"
+  }
+}

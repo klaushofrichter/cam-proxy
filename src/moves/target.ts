@@ -5,7 +5,7 @@ import { bareHost, splitHost } from '../camera/http';
 import { activeCameraIds } from '../config/cameras';
 import type { CameraPasswordStore } from '../config/camera-passwords';
 import { cameraDefaults } from '../config/defaults';
-import { applyOverrides, getPath, planOverrides, rebuildWith, removeOverride, writeOverridesFile, setPath, withoutCamera, type Loaded } from '../config/load';
+import { applyOverrides, getPath, needsRestart, planOverrides, rebuildWith, removeOverride, writeOverridesFile, setPath, withoutCamera, type Loaded } from '../config/load';
 import { cameraPasswordEnv } from '../config/password-env';
 import type { MoveCancelArgs, MoveFinishArgs, MoveOfferArgs, MoveStartArgs } from '../fleet/command-args';
 import type { Done, Handler } from '../fleet/commands';
@@ -25,7 +25,7 @@ import { keepDaysOf } from './retention';
 import { removeLanded, type Purged } from './purge';
 import { unseal } from './seal';
 import { logger } from '../log';
-import type { MoveCheck, MoveCopied, MoveEvent, MovePhaseName, MovePlan, Space } from './types';
+import type { MoveCheck, MoveCopied, MoveEvent, MovePhaseName, MovePlan, SettingsMap, SettingsProposal, Space } from './types';
 import { sleep, within } from '../async';
 
 // The target side of a camera move from move.start on (camera-move plan Task 8,
@@ -127,16 +127,31 @@ class Refused extends Error {
 const HOST_LEAVES = ['ftp.enabled', 'ftp.stream', 'stills.enabled', 'stills.stream', 'stills.intervalS', 'analytics.kinds.person', 'analytics.kinds.vehicle', 'analytics.kinds.pet', 'events.poll.enabled'];
 type CameraPlan = { problem: string } | { next: Loaded; overrides: object; leftover: boolean; host: Record<string, unknown> };
 
-// Target settings within the target's own proposal (a forged plan never reaches overrides.json).
-export function targetSettingsProblem(ts: MovePlan['targetSettings'], space: Space | null | undefined): string | null {
-  if (!ts || !Object.keys(ts).length) return null;
-  const proposal = space?.retentionProposal;
-  if (!proposal) return 'plan.targetSettings';
-  for (const [k, v] of Object.entries(ts)) {
-    const want = proposal[k];
+// Target settings within the target's own proposals (a forged plan never
+// reaches overrides.json): its settings proposal (#240) exactly, every key of
+// it, for any space choice; the rest only retention limits, each at most the
+// space answer's retentionProposal.
+export function targetSettingsProblem(ts: MovePlan['targetSettings'], space: Space | null | undefined, proposal?: SettingsProposal | null): string | null {
+  const wanted = proposal?.settings ?? {};
+  const given = ts ?? {};
+  for (const [k, v] of Object.entries(wanted)) if (given[k] !== v) return 'plan.targetSettings';
+  const rest = Object.entries(given).filter(([k]) => !Object.hasOwn(wanted, k));
+  if (!rest.length) return null;
+  const limits = space?.retentionProposal;
+  if (!limits) return 'plan.targetSettings';
+  for (const [k, v] of rest) {
+    const want = limits[k];
     if (!TARGET_SETTINGS.includes(k) || typeof want !== 'number' || typeof v !== 'number' || !Number.isFinite(v) || v > want) return 'plan.targetSettings';
   }
   return null;
+}
+
+// The host settings the camera step writes: the settings proposal's, and the
+// retention limits when the plan chose retention (checked at move.start).
+export function hostSettings(r: Pick<MoveRecord, 'plan' | 'settingsProposal'>): SettingsMap {
+  const ts = r.plan?.targetSettings ?? {};
+  const wanted = r.settingsProposal?.settings ?? {};
+  return Object.fromEntries(Object.entries(ts).filter(([k]) => Object.hasOwn(wanted, k) || r.plan?.space === 'retention'));
 }
 
 interface Run {
@@ -257,7 +272,7 @@ export class MoveTarget {
       return ok({ publicKey: r.x25519.publicSpki, leafFingerprint: r.leaf.fingerprint });
     }
     if (r.phase !== 'opened') return failed('wrong_phase');
-    if (targetSettingsProblem(a.plan.targetSettings, r.space)) return failed('invalid_args');
+    if (targetSettingsProblem(a.plan.targetSettings, r.space, r.settingsProposal)) return failed('invalid_args');
     const ca = this.d.ca();
     const site = this.d.site();
     if (!ca || !site || !r.cameraConnection) return failed('no_site_ca');
@@ -474,7 +489,7 @@ export class MoveTarget {
   // record removed. After the switch-over (Task 8) the record, its chunk
   // parts and landed log stay for the copy back (returnPending, on the event
   // too); the tombstone is written either way.
-  private closeCancelled(r: MoveRecord, copied: MoveCopied, entry: 'removed' | 'hidden' | 'untouched', deleted: Purged | null, reason?: 'offer_expired'): void {
+  private closeCancelled(r: MoveRecord, copied: MoveCopied, entry: 'removed' | 'hidden' | 'untouched', deleted: Purged | null, reason?: 'offer_expired' | 'superseded'): void {
     const from = r.cancelledFrom ?? r.phase;
     const keep = r.switchedOver === true && !reason;
     this.dropKeys(r);
@@ -489,7 +504,7 @@ export class MoveTarget {
     this.d.audit.write({
       action: 'move-cancel', category: ['configuration'], type: ['change'], outcome: 'success',
       user: reason ? 'system' : 'cams-admin', camera: r.camera,
-      message: `Camera move ${r.id} (${r.camera} from ${peer}) ${reason ? 'expired: not approved within 30 minutes' : `cancelled in ${from}`}: the camera ${entry === 'untouched' ? 'was not here' : entry === 'removed' ? 'removed here' : 'hidden here'}${content}`,
+      message: `Camera move ${r.id} (${r.camera} from ${peer}) ${reason === 'superseded' ? 'replaced by a new offer of the camera (its settings proposal was not taken)' : reason ? 'expired: not approved within 30 minutes' : `cancelled in ${from}`}: the camera ${entry === 'untouched' ? 'was not here' : entry === 'removed' ? 'removed here' : 'hidden here'}${content}`,
       details: this.details(r, { phase: from, ...(keep ? { returnPending: true } : { copied }), cameraEntry: entry, deleted, ...(reason ? { reason } : {}) }),
     });
     this.d.journal.bury?.({ moveId: r.id, role: 'target', phase: 'cancelled' });
@@ -530,6 +545,22 @@ export class MoveTarget {
   // Offers never approved (final review 5): an opened move with no move.start
   // OFFER_EXPIRY_MS after the offer closes here (nothing was taken over),
   // audited move-cancel (reason offer_expired), `cancelled` reported.
+  // A new offer of the camera (#240) ends an unapproved one here that
+  // proposed settings: cams-admin before relaying proposals refuses such an
+  // accept without cancelling it here, and the camera is offered again once
+  // the setting is fixed. cams-admin holds one move per camera, so the old
+  // one is over. Audited move-cancel (reason superseded); the ids it closed.
+  supersede(camera: string, moveId: string): string[] {
+    let open: MoveRecord[];
+    try {
+      open = this.d.journal.active().filter((r) => r.role === 'target' && r.phase === 'opened' && !r.plan && r.camera === camera && r.id !== moveId && !!r.settingsProposal);
+    } catch {
+      return [];
+    }
+    for (const r of open) this.closeCancelled(r, r.copied ?? 'age-out', 'untouched', null, 'superseded');
+    return open.map((r) => r.id);
+  }
+
   expireOffers(): void {
     let open: MoveRecord[];
     try {
@@ -809,7 +840,7 @@ export class MoveTarget {
       }
     }
     const patch: Record<string, unknown> = { cameras: { [id]: node } };
-    const host = r.plan?.space === 'retention' && r.plan.targetSettings ? r.plan.targetSettings : {};
+    const host = hostSettings(r);
     for (const [path, v] of Object.entries(host)) setPath(patch, path, v);
     const plan = planOverrides(base, patch, o.passwordPending ? { passwordFromMove: [id] } : {});
     return { next: plan.next, overrides: plan.overrides, leftover, host };
@@ -825,7 +856,9 @@ export class MoveTarget {
     this.d.journal.save(r);
     writeOverridesFile(loaded.files.overrides, plan.overrides);
     await this.d.setLoaded(plan.next);
-    return { message: `${r.camera} added${leftover ? ' (its hidden entry replaced)' : ''}${Object.keys(host).length ? `; target settings ${Object.keys(host).join(', ')}` : ''}`, details: { leftover, targetSettings: Object.keys(host).length ? host : null } };
+    // A host setting that waits for a restart (ftp.passive, #240) says so: the running FTP server keeps its range until then.
+    const later = Object.keys(host).filter(needsRestart);
+    return { message: `${r.camera} added${leftover ? ' (its hidden entry replaced)' : ''}${Object.keys(host).length ? `; target settings ${Object.keys(host).join(', ')}` : ''}${later.length ? ` (${later.join(', ')} at the next restart)` : ''}`, details: { leftover, targetSettings: Object.keys(host).length ? host : null, ...(later.length ? { restartPending: later } : {}) } };
   }
 
   private async cert(r: MoveRecord): Promise<{ message: string; details: Record<string, unknown> }> {

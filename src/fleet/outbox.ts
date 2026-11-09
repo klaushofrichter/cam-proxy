@@ -3,7 +3,8 @@ import type { MoveEvent } from '../moves/types';
 // A camera's power-cycle asked for from this proxy's Maintenance page (spec
 // 2026-11-07-poe-switches-design, "Asking from a proxy"): cams-admin answers
 // with camera.power.cycle.result. Never a force from a proxy.
-export interface PowerCycleRequestEvent { kind: 'camera.power.cycle.request'; camera: string; requestId: string }
+// askedAt (ms, #364 m5): when it was asked (cams-admin ignores one asked over 5 minutes ago).
+export interface PowerCycleRequestEvent { kind: 'camera.power.cycle.request'; camera: string; requestId: string; askedAt: number }
 // The event bodies this proxy sends, without proxyId and connId.
 export type AdminEvent = MoveEvent | PowerCycleRequestEvent;
 

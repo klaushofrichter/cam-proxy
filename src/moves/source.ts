@@ -181,7 +181,8 @@ export function connectionOf(n: CameraNode): MoveCameraConnection {
 // is the answer's, the budget at least that; kinds only with content; the
 // space option the answer allows: all when it fits; else omit (the kinds left
 // must fit), fit, or retention (the target's proposed limits, each at least the
-// proposal; storage.maxBytes included). Target settings only with retention.
+// proposal; storage.maxBytes included). Other target settings only with retention,
+// besides the target's settings proposal (#240), which any plan carries exactly.
 export function approveProblem(plan: unknown, summary: MoveSummary, answer: MoveAnswer | undefined): string | null {
   const bad = planProblem(plan);
   if (bad) return bad === 'plan.budget' ? 'plan.budgetS' : bad;
@@ -190,19 +191,24 @@ export function approveProblem(plan: unknown, summary: MoveSummary, answer: Move
   if (answer.estimateS !== undefined && p.estimateS !== answer.estimateS) return 'plan.estimateS';
   if (p.budgetS < p.estimateS) return 'plan.budgetS';
   if (p.kinds.some((k) => !has(summary, k))) return 'plan.kinds';
-  if (!p.transfer) return p.targetSettings === null ? null : 'plan.targetSettings';
+  // The target's settings proposal (#240): every one of its settings, exactly, whatever the space choice; the rest is checked below.
+  const proposed = answer.settingsProposal?.settings ?? {};
+  const given = p.targetSettings ?? {};
+  for (const [k, v] of Object.entries(proposed)) if (given[k] !== v) return 'plan.targetSettings';
+  const restEntries = Object.entries(given).filter(([k]) => !Object.hasOwn(proposed, k));
+  const ts = restEntries.length ? Object.fromEntries(restEntries) : null;
+  if (!p.transfer) return ts === null ? null : 'plan.targetSettings';
   const space = answer.space;
   if (!space || space.fits) {
     if (p.space !== 'all') return 'plan.space';
-    return p.targetSettings === null ? null : 'plan.targetSettings';
+    return ts === null ? null : 'plan.targetSettings';
   }
   if (p.space === 'all') return 'plan.space';
   if (p.space === 'omit' && p.kinds.reduce((n, k) => n + (k === 'ptz' ? 0 : summary[k].bytes), 0) > space.available) return 'plan.kinds';
-  if (p.space !== 'retention') return p.targetSettings === null ? null : 'plan.targetSettings';
+  if (p.space !== 'retention') return ts === null ? null : 'plan.targetSettings';
   const proposal = space.retentionProposal;
   if (!proposal) return 'plan.space';
-  const ts = p.targetSettings;
-  if (!ts || !Object.keys(ts).length) return 'plan.targetSettings';
+  if (!ts) return 'plan.targetSettings';
   for (const [k, v] of Object.entries(ts)) {
     const want = proposal[k];
     if (typeof want !== 'number' || typeof v !== 'number' || v < want) return 'plan.targetSettings';
@@ -846,7 +852,7 @@ export class MoveSource {
   private answer(a: MoveAnswerArgs): Done {
     // The detail is kept as one line (moveDetail): the page and the audit show it next to the reason.
     const detail = a.detail !== undefined ? moveDetail(a.detail) : undefined;
-    const answer: MoveAnswer = { accept: a.accept, ...(a.reason !== undefined ? { reason: a.reason } : {}), ...(detail ? { detail } : {}), ...(a.space !== undefined ? { space: a.space } : {}), ...(a.estimateS !== undefined ? { estimateS: a.estimateS } : {}), ...(a.kinds !== undefined ? { kinds: [...a.kinds] } : {}) };
+    const answer: MoveAnswer = { accept: a.accept, ...(a.reason !== undefined ? { reason: a.reason } : {}), ...(detail ? { detail } : {}), ...(a.space !== undefined ? { space: a.space } : {}), ...(a.estimateS !== undefined ? { estimateS: a.estimateS } : {}), ...(a.kinds !== undefined ? { kinds: [...a.kinds] } : {}), ...(a.settingsProposal !== undefined ? { settingsProposal: structuredClone(a.settingsProposal) } : {}) };
     const same = (x?: MoveAnswer) => JSON.stringify(x) === JSON.stringify(answer);
     const r = this.d.journal.load(a.moveId);
     if (r) {
