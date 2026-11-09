@@ -73,6 +73,7 @@ describe('texts', () => {
   it('an offer cams-admin started and the source left for a person says why', () => {
     expect(autoWaitText('over_budget')).toBe('Started from cams-admin; not approved automatically: the estimate is over the time budget cams-admin allowed. Approve it here or cancel.');
     expect(autoWaitText('space')).toBe("Started from cams-admin; not approved automatically: the content doesn't fit the way cams-admin allowed. Approve it here or cancel.");
+    expect(autoWaitText('settings')).toBe('Started from cams-admin; not approved automatically: the target asks for settings changes (and maybe its firewall) first. Approve it here or cancel.');
     expect(autoWaitText('no_estimate')).toBe('Started from cams-admin; not approved automatically: the target gave no estimate. Approve it here or cancel.');
     expect(autoWaitText('not_allowed')).toBe("Started from cams-admin; not approved automatically: sending cameras away isn't allowed here right now. Approve it here or cancel.");
     expect(autoWaitText('plan')).toBe('Started from cams-admin; not approved automatically: the plan did not fit the answer. Approve it here or cancel.');

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+Needs cams-admin with contract phase A (cams-admin #204) or later: an older cams-admin refuses the power-cycle request's new `askedAt` field and fails a move whose target proposes settings.
+
+- Camera moves: a target whose FTP passive range is too small for one more camera no longer refuses the move; it accepts if the plan widens the range (`settingsProposal`, #240). The source's move panel shows the settings and what to open in the target's firewall, a move started from cams-admin waits for a person, and approving sets the range on the target with the camera (it takes effect at the target's next restart). Until cams-admin passes the proposal on, it shows the target's refusal with the proposal in words; offering the camera again then replaces the target's unapproved offer instead of waiting 35 minutes for it to expire. A range that can't grow from its start (past 65535) is still refused.
+- Power-cycles through cams-admin: when cams-admin reports a failed cycle in which the PoE was cut and turned on again (`poeCut`), the proxy keeps watching the camera reboot instead of ending with "not back". The audit record for cams-admin's start of a cycle now says "starting" (cams-admin sends it before the cut, and the switch may still refuse), not "PoE off". The Maintenance page's request now carries its ask time (`askedAt`), so cams-admin ignores one asked over 5 minutes ago.
+- PoE switches: cams-admin's survey of a switch no longer fails as a whole when the switch errs on one camera (busy, a timeout): that camera's result says `switch_error` with the error in words and the other cameras are still surveyed.
+- The hello to cams-admin announces `power-poe-cut` and `move-settings`.
+
 ## v2026.11.09.2
 
 - cams-admin may now only make capture denser, never thin it out: `stills.intervalS`, `events.poll.intervalS` and a camera's `stills.intervalS` can only be shortened from cams-admin (`config.set`, `config.unset`, `config.rollback`) and from a cams-admin sign-in on the Settings page; a longer interval is refused ("a remote change may only shorten the interval; a longer one is a local change") and stays a change at the proxy (cams-admin contract, cams-admin #20). A camera without its own interval counts as having the host's, so its first interval may be anything up to the host's, and resetting it is refused when the host's is longer. The one-way rules now also apply to per-camera settings (they were looked up by the exact path before).

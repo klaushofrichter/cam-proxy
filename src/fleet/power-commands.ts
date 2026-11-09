@@ -126,7 +126,7 @@ export function powerHandlers(d: PowerCommandDeps): Record<string, Handler> {
       const x = a as CameraPowerCycledArgs;
       const no = known(x.camera);
       if (no) return no;
-      d.reboot(x.camera).externalPowerCycleDone(x.ok, x.message);
+      d.reboot(x.camera).externalPowerCycleDone(x.ok, x.message, x.poeCut === true);
       return ok;
     },
     'camera.power.cycle.result': (a) => {
@@ -191,11 +191,12 @@ export function requestPowerCycle(d: PowerRequestDeps, camera: string, who: Powe
   }
   const soon = d.reboot(camera).cooldown();
   if (soon) return soon;
-  const requestId = `pc_${ulid((d.now ?? Date.now)())}`;
+  const askedAt = (d.now ?? Date.now)();
+  const requestId = `pc_${ulid(askedAt)}`;
   d.store.ask(camera, requestId);
   // Sent now, or after a reconnect only while this request is still open (#364 m5):
   // once the page said "no answer within 5 minutes", a late send would cut the PoE late.
-  d.emit({ kind: 'camera.power.cycle.request', camera, requestId }, () => d.store.view(camera).asked?.requestId === requestId);
+  d.emit({ kind: 'camera.power.cycle.request', camera, requestId, askedAt }, () => d.store.view(camera).asked?.requestId === requestId);
   d.audit.write({
     action: 'camera-powercycle', category: ['host'], type: ['change'], outcome: 'success', user: who.user, camera,
     ...(who.ip ? { ip: who.ip } : {}), ...(who.userAgent ? { userAgent: who.userAgent } : {}),

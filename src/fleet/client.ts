@@ -11,6 +11,13 @@ import { EventOutbox, type AdminEvent } from './outbox';
 import { TIMED_OUT, within } from '../async';
 import type { AdminConnection } from '../health/cams-admin';
 
+// What this proxy takes beyond the first contract (the hello's capabilities;
+// cams-admin sends a newer optional field only to a proxy announcing it):
+// move-ptz the target's accepted kinds in move.answer, power-poe-cut
+// camera.power.cycled's poeCut (#364 m6), move-settings a target's
+// settingsProposal in move.answer (#240).
+export const FEATURES = ['move-ptz', 'power-poe-cut', 'move-settings'] as const;
+
 // The outbound client to cams-admin (spec 2026-10-06-cams-admin-phase1-design
 // §8.3-§8.8, §9.1): one WebSocket (Node's global), one timer for the next
 // heartbeat or retry, one heartbeat in flight, nothing queued. Every handler
@@ -540,7 +547,7 @@ export class AdminClient {
         const mono = this.d.monotonic ?? (() => performance.now());
         const at = mono();
         this.conn = { connId, serverNow: () => serverTime + (mono() - at), seen: new SeenIds() };
-        this.trySend(ws, 'hello', { proxyId: k.proxyId, keyId: k.keyId, connId, nonce, ts, version: this.d.version.slice(0, 64), capabilities: this.d.commands && this.d.commands.status().enabled ? ['status', 'commands', 'move-ptz'] : ['status', 'move-ptz'] }, { sig: sign(k.privateKey, signedText.hello(connId, nonce, k.proxyId, k.keyId, ts)) });
+        this.trySend(ws, 'hello', { proxyId: k.proxyId, keyId: k.keyId, connId, nonce, ts, version: this.d.version.slice(0, 64), capabilities: this.d.commands && this.d.commands.status().enabled ? ['status', 'commands', ...FEATURES] : ['status', ...FEATURES] }, { sig: sign(k.privateKey, signedText.hello(connId, nonce, k.proxyId, k.keyId, ts)) });
         return;
       }
       case 'welcome': {

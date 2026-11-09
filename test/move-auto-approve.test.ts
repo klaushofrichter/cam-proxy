@@ -167,6 +167,29 @@ describe('auto-approval within bounds (R2)', () => {
     }
   });
 
+  it('an answer with a settings proposal (#240) waits for a person; the approved plan carries the settings (strict move.approve)', async () => {
+    use('mv_9123456789ABCDEFGHJK');
+    try {
+      const rid = await begin(within);
+      expect((await open(rid)).status).toBe('ok');
+      const sp = { settings: { 'ftp.passive': '30000-30029' }, firewall: 'open TCP 2121 and 30000-30029 in the host firewall' };
+      expect((await answer(rid, { ...accepted, settingsProposal: sp })).status).toBe('ok');
+      expect(approvals()).toEqual([]);
+      expect(journal.load(id)).toMatchObject({ plan: null, answer: { settingsProposal: sp }, autoApproval: { state: 'waiting', reason: 'settings' } });
+      expect(await view()).toMatchObject({ phase: 'awaiting-approval', answer: { settingsProposal: sp } });
+      const without: MovePlan = { transfer: true, kinds: kindsWithContent(journal.load(id)!.summary!), space: 'all', targetSettings: null, budgetS: 600, estimateS: 540 };
+      expect((await request(p.base).post(`/control/moves/${id}/approve`).set(admin()).send({ plan: without })).status).toBe(400);
+      const manual: MovePlan = { ...without, targetSettings: { 'ftp.passive': '30000-30029' } };
+      expect((await request(p.base).post(`/control/moves/${id}/approve`).set(admin()).send({ plan: manual })).status).toBe(202);
+      expect(approvals()).toHaveLength(1);
+      expect(approvals()[0].plan).toEqual(manual);
+      const env = fake.events().find((e) => bodyOf(e).kind === 'move.approve' && bodyOf(e).moveId === id)!;
+      expect(strict('event')(env.msg), why(strict('event'))).toBe(true);
+    } finally {
+      journal.remove(id);
+    }
+  });
+
   it('answer before open is approved at open', async () => {
     use('mv_5123456789ABCDEFGHJK');
     try {

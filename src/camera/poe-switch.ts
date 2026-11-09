@@ -34,6 +34,13 @@ const LOCATE_READS = 10;
 export type ControllerRef = Omit<SwitchRef, 'model' | 'host'> & { model: SwitchRef['model'] | 'none'; host?: string };
 type PoeSwitchConfig = ControllerRef & { port: number };
 export type Located = LocateResult & { sn: string | null };
+// Survey failures that concern the whole switch: nothing else would work either.
+const WHOLE_SWITCH: readonly string[] = ['password_unset', 'switch_auth', 'switch_unknown'];
+// A survey's switch_error detail: the code and the error in words, at most 200 characters.
+const surveyDetail = (err: PoeSwitchError): string => {
+  const t = [...`${err.code}: ${err.message}`.replace(/\s+/g, ' ').trim()];
+  return t.length > 200 ? t.slice(0, 199).join('') + '…' : t.join('');
+};
 export interface SurveyResult { sn: string | null; results: Array<LocateResult & { camera: string }> }
 
 // What the switch said about a camera's port, from its port detail.
@@ -288,14 +295,27 @@ export class PoeSwitch {
   // locate for each camera, one after another, each in its own queued
   // session: the switch is released between cameras, so a read or a cycle
   // queued during a survey goes next instead of waiting for all of it.
+  // A switch failure on one camera (busy, a timeout: #364 m3) is that
+  // camera's result (switch_error, the error in words) and the survey goes
+  // on; one that concerns the whole switch (no or a wrong password, the
+  // switch forgotten), or every camera failing, fails the survey.
   async survey(cameras: Array<{ camera: string; host: string }>): Promise<SurveyResult> {
     let sn: string | null = null;
+    let first: PoeSwitchError | null = null;
     const results: SurveyResult['results'] = [];
     for (const cam of cameras) {
-      const { sn: got, ...l } = await this.locate(cam.host);
-      sn = got;
-      results.push({ camera: cam.camera, ...l });
+      try {
+        const { sn: got, ...l } = await this.locate(cam.host);
+        sn = got;
+        results.push({ camera: cam.camera, ...l });
+      } catch (err) {
+        if (!(err instanceof PoeSwitchError) || WHOLE_SWITCH.includes(err.code)) throw err;
+        first ??= err;
+        logger.warn({ camera: cam.camera, code: err.code, err: err.message }, 'poe_switch_survey_camera_failed');
+        results.push({ camera: cam.camera, found: false, reason: 'switch_error', detail: surveyDetail(err) });
+      }
     }
+    if (first && results.every((r) => r.reason === 'switch_error')) throw first;
     return { sn, results };
   }
 

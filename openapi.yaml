@@ -1609,7 +1609,8 @@ paths:
         The requests not opened yet (phase requested, offered or rejected; kept 30 minutes in memory)
         and the source moves of the journal. phase: requested, offered (opened, no answer), rejected,
         awaiting-approval (the target accepted), approved, then the journal's (switching, released, ...).
-        answer: { accept, reason?, space?, estimateS? } as the target gave it. bounds: { transfer, kinds,
+        answer: { accept, reason?, space?, estimateS?, settingsProposal? } as the target gave it
+        (settingsProposal: { settings, firewall? }, host settings the target needs set to take the camera). bounds: { transfer, kinds,
         space, maxBudgetS } when cams-admin started the move (move.begin) and lets this proxy approve
         within them, else null. autoApproval: { state: approved | waiting, reason? } once the answer
         reached a bounded move. Never a password, token or key.
@@ -1679,6 +1680,8 @@ paths:
         kinds only those with content; space all when it fits, else omit (the kinds left must fit),
         fit, or retention (targetSettings: keys of the answer's retentionProposal, among them
         storage.maxBytes in bytes, each at least the proposed value); targetSettings null otherwise.
+        An answer with a settingsProposal (#240): targetSettings carries its settings exactly, for
+        any space choice (with retention, next to the limits).
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, pattern: '^mv_[0-9A-HJKMNP-TV-Z]{20}$' } }
       requestBody:

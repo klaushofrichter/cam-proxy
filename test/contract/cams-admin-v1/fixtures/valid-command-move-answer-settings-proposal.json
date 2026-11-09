@@ -1,0 +1,61 @@
+{
+  "$note": "the target's settings proposal, relayed only to a source whose hello announced move-settings",
+  "schema": "command",
+  "$context": {
+    "now": 1791273600010,
+    "proxyId": "prx_0123456789ABCDEFGHJK",
+    "connId": "con_0123456789ABCDEFGHJK",
+    "serverKeys": [
+      "MCowBQYDK2VwAyEAgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q="
+    ],
+    "allow": [
+      "move.send"
+    ],
+    "paused": false,
+    "seen": [],
+    "feature": "move-settings"
+  },
+  "message": {
+    "v": 1,
+    "type": "command",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "exp": 1791273660003,
+      "actor": "admin@example.org",
+      "command": "move.answer",
+      "args": {
+        "v": 1,
+        "moveId": "mv_0123456789ABCDEFGHJK",
+        "requestId": "rq_0123456789ABCDEFGHJK",
+        "target": {
+          "proxyId": "prx_1123456789ABCDEFGHJK",
+          "name": "Pi"
+        },
+        "accept": true,
+        "space": {
+          "needed": 52428800,
+          "available": 10737418240,
+          "fits": true,
+          "perKind": {
+            "clips": 50000000,
+            "events": 2428800
+          },
+          "retentionProposal": null
+        },
+        "estimateS": 1800,
+        "settingsProposal": {
+          "settings": {
+            "ftp.passive": "30000-30029"
+          },
+          "firewall": "open TCP 2121 and 30000-30029 for 192.0.2.10 in the host firewall"
+        }
+      }
+    },
+    "sig": "CUyfs150x+zLtXEQZ4P21JsuX1PZKyFyRptScmoDxs6WQJ7G8b81qI2bOPqKGgSjDTDqnV1rFDZ8U3KMj6bGAA=="
+  }
+}

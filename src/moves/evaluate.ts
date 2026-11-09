@@ -4,7 +4,7 @@ import { X509Certificate } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { connect, isIP } from 'node:net';
 import { pinCheck, splitHost } from '../camera/http';
-import { ConfigError, planOverrides, type Loaded } from '../config/load';
+import { ConfigError, planOverrides, setPath, type Loaded } from '../config/load';
 import { cameraConfig } from '../config/cameras';
 import { PROFILE_GB } from '../storage';
 import { heldCameras, passiveNeed, passivePorts, passiveRange, PORTS_PER_CAMERA, profileCameras, profileSet } from '../config/profile';
@@ -14,7 +14,7 @@ import { issuedBy } from '../tls/leaf';
 import { servedCertificate, type Served } from '../tls/served';
 import { moveDetail } from './detail';
 import type { MoveJournal, MoveRecord } from './journal';
-import type { FileKind, MoveKind, MoveReason, Space } from './types';
+import type { FileKind, MoveKind, MoveReason, SettingsMap, SettingsProposal, Space } from './types';
 import { FILE_KINDS, MOVE_KINDS } from './types';
 
 // The target's evaluation of an offered move (camera-move plan Task 6, S §6, §7,
@@ -27,7 +27,8 @@ const CONNECT_MS = 3000;
 const GB = 1024 ** 3;
 
 // `kinds`: what this proxy takes in a move (plan D: the file kinds and ptz).
-export type Evaluation = { accept: true; space: Space; probeBps: number; kinds: MoveKind[] } | { accept: false; reason: MoveReason; detail?: string };
+// `settingsProposal` (#240): the host settings this proxy needs to take the camera (approved in plan.targetSettings).
+export type Evaluation = { accept: true; space: Space; probeBps: number; kinds: MoveKind[]; settingsProposal?: SettingsProposal } | { accept: false; reason: MoveReason; detail?: string };
 
 export interface EvaluateDeps {
   // The allow entry `move.receive` is in effect.
@@ -165,17 +166,26 @@ export async function evaluate(deps: EvaluateDeps, args: MoveOfferArgs): Promise
   const ports = passivePorts(cfg.ftp.passive);
   const incomingFtp = args.settings.ftp?.enabled ?? cfg.ftp.enabled;
   const withFtp = cfg.cameraOrder.filter((c) => c !== id && cameraConfig(cfg, c)!.ftp.enabled).length + (incomingFtp ? 1 : 0);
+  // Host settings this proxy proposes (#240): set with the camera once the plan approves them.
+  const proposed: SettingsMap = {};
+  let firewall: string | undefined;
   if (withFtp > 1 && ports < PORTS_PER_CAMERA * withFtp) {
     // What to set instead (#240): the range from the same start, as wide as the
-    // profile needs (and the move), or none (then derived from the profile).
+    // profile needs (and the move). It fits: proposed, with what the host
+    // firewall must allow; else (or set by hand beyond 65535) refused with how.
     const { from } = passiveRange(cfg.ftp.passive);
     const wide = Math.max(passiveNeed(cfg), PORTS_PER_CAMERA * withFtp);
-    const fix = from + wide - 1 <= 65535 ? `set it to ${from}-${from + wide - 1}, or remove it to use the profile's range, and open those ports in the host firewall` : "remove it to use the profile's range, and open those ports in the host firewall";
-    return no('incompatible', `ftp.passive: ${ports} ports (${cfg.ftp.passive}) for ${withFtp} cameras with FTP; at least ${PORTS_PER_CAMERA} per camera (profile_ftp_ports): ${fix}`);
+    const fits = from + wide - 1 <= 65535;
+    if (!fits) return no('incompatible', `ftp.passive: ${ports} ports (${cfg.ftp.passive}) for ${withFtp} cameras with FTP; at least ${PORTS_PER_CAMERA} per camera (profile_ftp_ports): remove it to use the profile's range, and open those ports in the host firewall`);
+    const range = `${from}-${from + wide - 1}`;
+    proposed['ftp.passive'] = range;
+    firewall = passiveFirewall(cfg.ftp.port, range, args.camera.host);
   }
   try {
     // The camera's password comes with the move (the secrets step): not needed here yet.
-    planOverrides(loaded, { cameras: { [id]: cameraNode(args) } }, { passwordFromMove: [id] });
+    const given: Record<string, unknown> = { cameras: { [id]: cameraNode(args) } };
+    for (const [p, v] of Object.entries(proposed)) setPath(given, p, v);
+    planOverrides(loaded, given, { passwordFromMove: [id] });
   } catch (err) {
     // ConfigError messages name settings and variables, never a secret's value.
     if (err instanceof ConfigError) return no('incompatible', err.message);
@@ -197,9 +207,21 @@ export async function evaluate(deps: EvaluateDeps, args: MoveOfferArgs): Promise
     v: 1, id: args.moveId, role: 'target', camera: id, phase: 'opened', plan: null,
     peer: { proxyId: args.source.proxyId, name: args.source.name, url: args.source.url, caFingerprints: args.source.caFingerprints, tlsServername: args.source.tlsServername, ...(ip ? { ip } : {}) },
     token: args.token, cameraConnection: connection, summary: args.summary, settings: args.settings, space, probeBps,
+    ...(Object.keys(proposed).length ? { settingsProposal: proposal(proposed, firewall) } : {}),
     chunks: {}, bytesDone: 0, startedAt: (deps.now ?? Date.now)(),
   });
-  return { accept: true, space, probeBps, kinds: [...MOVE_KINDS] };
+  return { accept: true, space, probeBps, kinds: [...MOVE_KINDS], ...(Object.keys(proposed).length ? { settingsProposal: proposal(proposed, firewall) } : {}) };
+}
+
+const proposal = (settings: SettingsMap, firewall: string | undefined): SettingsProposal => ({ settings: { ...settings }, ...(firewall ? { firewall } : {}) });
+
+// What the host firewall must allow for a wider passive range, in words (at
+// most 300 characters): the FTP port and the range for every camera with FTP
+// here, the moved camera too. Names the camera's address (no secret).
+export function passiveFirewall(ftpPort: number, range: string, cameraHost: string): string {
+  const ip = splitHost(cameraHost).hostname;
+  const long = `open TCP ${ftpPort} and ${range} for every camera with FTP here (the moved camera ${ip} too) in the host firewall`;
+  return [...long].length <= 300 ? long : `open TCP ${ftpPort} and ${range} for every camera with FTP here in the host firewall`;
 }
 
 interface Fetched { status: number; received: number; ms: number; body: Buffer | null }

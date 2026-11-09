@@ -22,7 +22,7 @@ import { MoveJournal, type MoveRecord } from '../src/moves/journal';
 import { seal } from '../src/moves/seal';
 import { fetchSecrets, MoveTarget, type TargetDeps } from '../src/moves/target';
 import { hashMoveToken } from '../src/moves/token';
-import type { MoveEvent, MovePlan, MoveSummary } from '../src/moves/types';
+import type { MoveEvent, MovePlan, MoveSummary, SettingsMap } from '../src/moves/types';
 import { fingerprintOf, siteCa, type SiteCa } from '../src/tls/ca';
 import { issueLeaf, type Leaf } from '../src/tls/leaf';
 import type { PushResult } from '../src/tls/push';
@@ -270,6 +270,56 @@ describe('the switch-over runner (unit)', () => {
     const v = unit({ overrides: { profile: { cameras: 2, storageGB: 50 } } });
     v.journal.save(offered({ space: { needed: 10, available: 5, fits: false, perKind: {}, retentionProposal: proposal } }));
     expect(await v.target.start(startArgs({ plan: { ...PLAN, space: 'retention', targetSettings: { 'profile.storageGB': 104 } } }))).toMatchObject({ status: 'failed', code: 'invalid_args' });
+  }, 60_000);
+
+  // #240: the target's settings proposal (a wider FTP passive range), approved in plan.targetSettings for any space choice.
+  it('camera: the approved settings proposal is written with the camera (any space choice, retention too); without it move.start is refused', async () => {
+    const sp = { settings: { 'ftp.passive': '30000-30029' }, firewall: 'open TCP 2121 and 30000-30029 for every camera with FTP here in the host firewall' };
+    const config = { cameras: [{ id: 'cam1', host: '' }], ftp: { passive: '30000-30009' } };
+    const u = unit({ config });
+    u.journal.save(offered({ settingsProposal: sp }));
+    expect((await u.target.start(startArgs({ plan: { ...PLAN, targetSettings: { 'ftp.passive': '30000-30029' } } }))).status).toBe('ok');
+    await u.target.idle(MOVE);
+    expect(u.loaded.config.ftp.passive).toBe('30000-30029');
+    expect(u.loaded.config.cameras.cam9.host).toBe('192.0.2.9');
+    expect(JSON.parse(readFileSync(u.loaded.files.overrides, 'utf8')).ftp).toEqual({ passive: '30000-30029' });
+    expect(u.audits.find((a) => a.action === 'move-switch' && a.details?.step === 'camera')).toMatchObject({ message: expect.stringContaining('target settings ftp.passive (ftp.passive at the next restart)'), details: expect.objectContaining({ restartPending: ['ftp.passive'] }) });
+    // Not approved, another value, or extra settings: refused, nothing written.
+    for (const ts of [null, { 'ftp.passive': '30000-30039' }, { 'ftp.passive': '30000-30029', 'ftp.port': 21 }, { 'ftp.passive': '30000-30029', 'storage.maxBytes': 1 }] as (SettingsMap | null)[]) {
+      const v = unit({ config });
+      v.journal.save(offered({ settingsProposal: sp }));
+      expect(await v.target.start(startArgs({ plan: { ...PLAN, targetSettings: ts } })), JSON.stringify(ts)).toMatchObject({ status: 'failed', code: 'invalid_args' });
+      expect(v.calls).toEqual([]);
+    }
+    // Without a proposal ftp.passive is never taken.
+    const n = unit({ config });
+    n.journal.save(offered());
+    expect(await n.target.start(startArgs({ plan: { ...PLAN, targetSettings: { 'ftp.passive': '30000-30029' } } }))).toMatchObject({ status: 'failed', code: 'invalid_args' });
+    // With retention: both, each by its own rule.
+    const retentionProposal = { 'storage.maxBytes': 50 * 1024 ** 3 };
+    const r = unit({ config });
+    r.journal.save(offered({ settingsProposal: sp, space: { needed: 10, available: 5, fits: false, perKind: {}, retentionProposal } }));
+    expect((await r.target.start(startArgs({ plan: { ...PLAN, space: 'retention', targetSettings: { ...retentionProposal, 'ftp.passive': '30000-30029' } } }))).status).toBe('ok');
+    await r.target.idle(MOVE);
+    expect(r.loaded.config.ftp.passive).toBe('30000-30029');
+    expect(r.loaded.config.storage.maxBytes).toBe(50 * 1024 ** 3);
+  }, 60_000);
+
+  it('a new offer of the same camera replaces an unapproved one that proposed settings (cams-admin refused it: no cancel comes)', async () => {
+    const u = unit();
+    const sp = { settings: { 'ftp.passive': '30000-30029' } };
+    u.journal.save(offered({ settingsProposal: sp }));
+    expect(u.target.supersede('cam9', 'mv_NEWNEWNEWNEWNEWNEWNE')).toEqual([MOVE]);
+    expect(u.journal.load(MOVE)).toBeNull();
+    expect(u.audits.at(-1)).toMatchObject({ action: 'move-cancel', details: expect.objectContaining({ reason: 'superseded' }) });
+    expect(u.events.at(-1)).toMatchObject({ kind: 'move.phase', moveId: MOVE, role: 'target', phase: 'cancelled' });
+    // Not without a proposal, not another camera, not an approved one, not the same move.
+    for (const [rec, cam, id] of [[offered(), 'cam9', 'mv_NEWNEWNEWNEWNEWNEWNE'], [offered({ settingsProposal: sp }), 'cam8', 'mv_NEWNEWNEWNEWNEWNEWNE'], [offered({ settingsProposal: sp, plan: PLAN }), 'cam9', 'mv_NEWNEWNEWNEWNEWNEWNE'], [offered({ settingsProposal: sp }), 'cam9', MOVE]] as const) {
+      const v = unit();
+      v.journal.save(rec);
+      expect(v.target.supersede(cam, id)).toEqual([]);
+      expect(v.journal.load(MOVE)).not.toBeNull();
+    }
   }, 60_000);
 
   it('a target restart during switch-over resumes at the failed step', async () => {

@@ -189,6 +189,45 @@ describe('PoeSwitch.locate, survey and the verified cycle (on the mock)', () => 
     expect(m.activeSession()).toBe(false);
   });
 
+  // #364 m3: one camera's switch failure is that camera's result; the survey goes on.
+  it('survey: a switch error on one camera is its result (switch_error, detail), the others still surveyed', async () => {
+    const m = await startPoeSwitchMock({ password: PASSWORD, powered: { 0: 6.8, 5: 4.5, 6: 3.2 } });
+    mocks.push(m);
+    const burst = burstOn(m, { cam3: 5, cam2: 6 });
+    const p = new PoeSwitch({ ref: () => ref(m), password: () => PASSWORD, sleep: async () => undefined, timeoutMs: 1000, pingBurst: (h) => {
+      if (h === 'cam2') throw new PoeSwitchError('switch_busy', `the switch is busy ${'x'.repeat(300)}`);
+      return burst(h);
+    } });
+    const r = await p.survey([{ camera: 'cam_3', host: 'cam3' }, { camera: 'cam_2', host: 'cam2' }, { camera: 'cam_x', host: 'nowhere' }]);
+    expect(r.sn).toBe('GPS208MOCK0001');
+    expect(r.results.map((x) => [x.camera, x.found, x.reason])).toEqual([['cam_3', true, undefined], ['cam_2', false, 'switch_error'], ['cam_x', false, 'no_traffic']]);
+    const failed = r.results[1] as { detail?: string };
+    expect(failed.detail).toMatch(/^switch_busy: the switch is busy x+/);
+    expect([...failed.detail!].length).toBeLessThanOrEqual(200);
+    expect(m.activeSession()).toBe(false);
+  });
+
+  it('survey: every camera failing, or a failure of the whole switch (no password, wrong password, forgotten), still fails it', async () => {
+    const m = await startPoeSwitchMock({ password: PASSWORD, powered: { 5: 4.5 } });
+    mocks.push(m);
+    const all = new PoeSwitch({ ref: () => ref(m), password: () => PASSWORD, sleep: async () => undefined, timeoutMs: 1000, pingBurst: () => {
+      throw new PoeSwitchError('switch_unreachable', 'no answer');
+    } });
+    await expect(all.survey([{ camera: 'cam_3', host: 'cam3' }, { camera: 'cam_2', host: 'cam2' }])).rejects.toMatchObject({ code: 'switch_unreachable' });
+    for (const code of ['switch_auth', 'password_unset', 'switch_unknown'] as const) {
+      let n = 0;
+      const p = new PoeSwitch({ ref: () => ref(m), password: () => PASSWORD, sleep: async () => undefined, timeoutMs: 1000, pingBurst: burstOn(m, { cam3: 5 }) });
+      const inner = (p as unknown as { d: { pingBurst: (h: string) => { done: Promise<{ answered: boolean }> } } }).d;
+      const b = inner.pingBurst;
+      inner.pingBurst = (h) => {
+        n += 1;
+        if (n === 2) throw new PoeSwitchError(code, 'whole switch');
+        return b(h);
+      };
+      await expect(p.survey([{ camera: 'cam_3', host: 'cam3' }, { camera: 'cam_2', host: 'cam2' }, { camera: 'cam_x', host: 'nowhere' }])).rejects.toMatchObject({ code });
+    }
+  });
+
   it('survey: a read queued during it goes between cameras, before the last one', async () => {
     const m = await startPoeSwitchMock({ password: PASSWORD, powered: { 0: 6.8, 5: 4.5, 6: 3.2 } });
     mocks.push(m);

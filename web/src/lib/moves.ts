@@ -1,6 +1,6 @@
 // The camera-move UI's logic apart from the components (camera-move plan
 // Task 11, spec S §7): what the panel offers, the plan it sends, the texts.
-import type { MoveBounds, MoveKind, MovePlan, MoveReason, MoveSummary, Settings, Space } from '../../../src/moves/types';
+import type { MoveBounds, MoveKind, MovePlan, MoveReason, MoveSummary, Settings, SettingsProposal, Space } from '../../../src/moves/types';
 import { estimateText, type AutoWaitReason } from '../../../src/moves/plan';
 
 // The plan rules live once, in src/moves/plan.ts (the proxy's auto-approval shares them).
@@ -16,7 +16,7 @@ export interface MoveItem {
   camera: string;
   target: { proxyId: string; name: string };
   phase: string;
-  answer?: { accept: boolean; reason?: MoveReason; detail?: string; space?: Space; estimateS?: number };
+  answer?: { accept: boolean; reason?: MoveReason; detail?: string; space?: Space; estimateS?: number; settingsProposal?: SettingsProposal };
   summary?: MoveSummary;
   settings?: Settings;
   plan?: MovePlan | null;
@@ -120,6 +120,7 @@ const AUTO_WAIT: Record<AutoWaitReason, string> = {
   no_estimate: 'the target gave no estimate',
   not_allowed: "sending cameras away isn't allowed here right now",
   plan: 'the plan did not fit the answer',
+  settings: 'the target asks for settings changes (and maybe its firewall) first',
 };
 export const autoWaitText = (reason: AutoWaitReason): string => `Started from cams-admin; not approved automatically: ${AUTO_WAIT[reason]}. Approve it here or cancel.`;
 

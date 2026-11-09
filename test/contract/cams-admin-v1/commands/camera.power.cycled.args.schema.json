@@ -17,6 +17,9 @@
     "message": {
       "type": "string",
       "maxLength": 200
+    },
+    "poeCut": {
+      "type": "boolean"
     }
   },
   "required": [

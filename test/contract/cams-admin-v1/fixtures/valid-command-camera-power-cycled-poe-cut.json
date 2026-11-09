@@ -1,0 +1,41 @@
+{
+  "$note": "the power-cycle failed after PoE was cut and turned on again (poeCut, optional): the camera is rebooting, the proxy keeps watching",
+  "schema": "command",
+  "$context": {
+    "now": 1791273600010,
+    "proxyId": "prx_0123456789ABCDEFGHJK",
+    "connId": "con_0123456789ABCDEFGHJK",
+    "serverKeys": [
+      "MCowBQYDK2VwAyEAgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q="
+    ],
+    "allow": [
+      "camera.power.cycled"
+    ],
+    "paused": false,
+    "seen": [],
+    "feature": "power-poe-cut"
+  },
+  "message": {
+    "v": 1,
+    "type": "command",
+    "id": "01K60000000000000000000003",
+    "seq": 3,
+    "ts": 1791273600003,
+    "body": {
+      "proxyId": "prx_0123456789ABCDEFGHJK",
+      "connId": "con_0123456789ABCDEFGHJK",
+      "cmdId": "cmd_0123456789ABCDEFGHJK",
+      "exp": 1791273660003,
+      "actor": "admin@example.org",
+      "command": "camera.power.cycled",
+      "args": {
+        "v": 1,
+        "camera": "cam1",
+        "ok": false,
+        "message": "PoE may still be off on the port: check the switch",
+        "poeCut": true
+      }
+    },
+    "sig": "a3Wbit9x6gIQuUrALLFrF3sbJOmXSVlCcYPByc4XT2ASsxKKP4IQa5AJw8YsaZccEyXSnJJrqxnrmzVmhuChBQ=="
+  }
+}
