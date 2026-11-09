@@ -1667,10 +1667,12 @@ paths:
       summary: The PoE switches this proxy operates (admin) (spec 2026-11-07-poe-switches-design)
       description: >
         Each switch's descriptor from cams-admin, whether a password is stored
-        for it (passwordSet), whether a switch session is open now (busy) and
+        for it (passwordSet; passwordElsewhere: one is stored, but for another
+        address than the switch's now, so it is not used until set again),
+        whether a switch session is open now (busy) and
         the ports whose PoE may be off (poeMaybeOff, UI port numbers). Never a password.
       responses:
-        '200': { description: '{ switches: [{ id, model, host, ports, offSeconds, passwordSet, busy, poeMaybeOff: [integer] }] }' }
+        '200': { description: '{ switches: [{ id, model, host, ports, offSeconds, passwordSet, passwordElsewhere, busy, poeMaybeOff: [integer] }] }' }
         '401': { description: not signed in }
         '403': { description: admin_only }
   /control/switches/{id}/password:

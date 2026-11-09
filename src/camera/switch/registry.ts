@@ -41,7 +41,7 @@ export class SwitchRegistry {
     this.file = join(d.dataDir, 'switches.json');
     this.passwords = switchPasswordStore(d.dataDir);
     for (const r of this.load()) {
-      this.entries.set(r.id, { ref: r, sw: this.make(r.id) });
+      this.add(r);
       this.bindUnbound(r);
     }
   }
@@ -69,14 +69,19 @@ export class SwitchRegistry {
     return l;
   }
 
-  private make(id: string): PoeSwitch {
-    return new PoeSwitch({
+  // The controller reads its own entry (its ref follows get()'s changes), also
+  // after forget() removed it: a session still running finishes on that ref.
+  private add(r: SwitchRef): Entry {
+    const e = { ref: r } as Entry;
+    e.sw = new PoeSwitch({
       ...this.common(),
-      ref: () => this.entries.get(id)!.ref,
-      lane: () => this.laneFor(this.entries.get(id)!.ref.host),
-      password: () => this.password(id),
-      passwordHint: () => this.passwordHint(id),
+      ref: () => e.ref,
+      lane: () => this.laneFor(e.ref.host),
+      password: () => this.password(r.id),
+      passwordHint: () => this.passwordHint(r.id),
     });
+    this.entries.set(r.id, e);
+    return e;
   }
 
   private stored(id: string) {
@@ -98,14 +103,20 @@ export class SwitchRegistry {
 
   // Why there is no password (the password_unset message).
   private passwordHint(id: string): string {
-    const stored = this.stored(id);
     const e = this.entries.get(id);
-    if (stored?.host && e && stored.host !== e.ref.host.toLowerCase()) return `the switch password was set for another address: set it again for ${e.ref.host}`;
+    if (this.passwordElsewhere(id) && e) return `the switch password was set for another address: set it again for ${e.ref.host}`;
     return `no password is stored for switch ${id}`;
   }
 
   passwordSet(id: string): boolean {
     return !!this.password(id);
+  }
+
+  // A password is stored, but for another address than the switch's now (#364): not used until set again.
+  passwordElsewhere(id: string): boolean {
+    const stored = this.stored(id);
+    const e = this.entries.get(id);
+    return !!stored?.host && !!e && stored.host !== e.ref.host.toLowerCase();
   }
 
   private load(): SwitchRef[] {
@@ -139,10 +150,10 @@ export class SwitchRegistry {
       }
       return e.sw;
     }
-    this.entries.set(r.id, { ref: r, sw: this.make(r.id) });
+    const added = this.add(r);
     this.save();
     this.bindUnbound(r);
-    return this.entries.get(r.id)!.sw;
+    return added.sw;
   }
 
   find(id: string): { ref: SwitchRef; sw: PoeSwitch } | undefined {
@@ -158,13 +169,14 @@ export class SwitchRegistry {
     const e = this.entries.get(id);
     if (!e) return false;
     this.entries.delete(id);
-    this.save();
-    this.passwords.delete(id);
+    // Stopped first (#364): a store that throws below never leaves the controller running.
     const ref = { ...e.ref };
-    void e.sw.stop().then((r) => {
+    void e.sw.stop('forgotten').then((r) => {
       if (r.portsLeftOff.length || r.sessionMaybeOpen) logger.error({ id, ...r }, 'switch_forgotten_with_poe_or_session_left');
       this.d.onForgotten?.({ id, ref, ...r });
     });
+    this.save();
+    this.passwords.delete(id);
     return true;
   }
 

@@ -174,6 +174,59 @@ describe('one session queue per switch host', () => {
     await a.stop();
   });
 
+  // #364 m1: a forgotten switch is unknown, not a stopping proxy.
+  it('a session queued on a forgotten switch, and any after it: switch_unknown "the switch was forgotten"', async () => {
+    const d = tmp();
+    const m = await mock();
+    const a = reg(d);
+    switchPasswordStore(d).set('sw_a', PASSWORD, m.host);
+    const sw = a.get(refOf(m));
+    const first = sw.read(3, { fresh: true });
+    const queued = sw.read(4, { fresh: true });
+    a.forget('sw_a');
+    await first.catch(() => undefined);
+    await expect(queued).rejects.toMatchObject({ code: 'switch_unknown', message: 'the switch was forgotten' });
+    await expect(sw.read(5, { fresh: true })).rejects.toMatchObject({ code: 'switch_unknown' });
+    await a.stop();
+  });
+
+  // #364 m2: an unreadable password file never leaves the controller running.
+  it('forget with a password store that throws: the controller is stopped all the same', async () => {
+    const d = tmp();
+    const m = await mock();
+    const seen: unknown[] = [];
+    const a = new SwitchRegistry({ dataDir: d, onForgotten: (r) => seen.push(r) });
+    const sw = a.get(refOf(m));
+    (a as unknown as { passwords: { delete: () => void } }).passwords.delete = () => {
+      throw new Error('EACCES');
+    };
+    expect(() => a.forget('sw_a')).toThrow('EACCES');
+    await until(() => seen.length === 1, 2000);
+    await expect(sw.read(3)).rejects.toMatchObject({ code: 'switch_unknown' });
+    await a.stop();
+  });
+
+  // #364 m7: forget() during a cycle's off time turns the PoE on again; when it can't, it says so.
+  it('forget mid-cycle: PoE on again at once, nothing left off; a switch refusing it: the port reported left off', async () => {
+    for (const refuses of [false, true]) {
+      const d = tmp();
+      const m = await mock();
+      const seen: { portsLeftOff: number[] }[] = [];
+      const a = new SwitchRegistry({ dataDir: d, onForgotten: (r) => seen.push(r), timeoutMs: 1000, stopRecoveryMs: 300, stopWaitMs: 3000 });
+      switchPasswordStore(d).set('sw_a', PASSWORD, m.host);
+      const cycle = a.get({ ...refOf(m), offSeconds: 60 }).cycle(3, () => undefined, { verifyHost: null }).catch((err: unknown) => err);
+      await until(() => m.poec[5] === 0, 5000);
+      if (refuses) m.failSet = 1000;
+      a.forget('sw_a');
+      await until(() => seen.length === 1, 8000);
+      expect(seen[0].portsLeftOff, `refuses ${refuses}`).toEqual(refuses ? [3] : []);
+      if (!refuses) expect(m.poec[5]).toBe(1);
+      m.failSet = 0;
+      await cycle;
+      await a.stop();
+    }
+  }, 30_000);
+
   it('forget reports a stopped controller to onForgotten', async () => {
     const d = tmp();
     const m = await mock();
@@ -195,7 +248,7 @@ describe('switch routes', () => {
     try {
       p.proxy.switches.get(refOf(m));
       const list = async () => (await request(p.base).get('/control/switches').set(auth(ADMIN_TOKEN))).body;
-      expect(await list()).toEqual({ switches: [{ ...refOf(m), passwordSet: false, busy: false, poeMaybeOff: [] }] });
+      expect(await list()).toEqual({ switches: [{ ...refOf(m), passwordSet: false, passwordElsewhere: false, busy: false, poeMaybeOff: [] }] });
       const put = await request(p.base).put('/control/switches/sw_a/password').set(auth(ADMIN_TOKEN)).send({ password: PASSWORD });
       expect(put.status).toBe(200);
       expect(JSON.stringify(put.body)).not.toContain(PASSWORD);
@@ -216,6 +269,10 @@ describe('switch routes', () => {
       expect((await request(p.base).post('/control/switches/sw_a/ports/9/poe-on').set(auth(ADMIN_TOKEN))).status).toBe(400);
       expect((await request(p.base).post('/control/switches/nope/ports/1/poe-on').set(auth(ADMIN_TOKEN))).status).toBe(404);
 
+      // #364: cams-admin moved the switch to another address: the password is not used there, and the list says why.
+      p.proxy.switches.get({ ...refOf(m), host: '127.0.0.2' });
+      expect((await list()).switches[0]).toMatchObject({ passwordSet: false, passwordElsewhere: true });
+      p.proxy.switches.get(refOf(m));
       expect(audits(p.dir, 'switch-password')).toHaveLength(1);
       expect(audits(p.dir, 'switch-password')[0].event.category).toEqual(['configuration']);
       expect(audits(p.dir, 'switch-port-poe-on').map((r) => r.event.outcome)).toContain('success');
