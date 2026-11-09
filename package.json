@@ -32,21 +32,21 @@
     "ws": "^8.22.1"
   },
   "devDependencies": {
-    "@playwright/test": "^1.64.1",
+    "@playwright/test": "^1.65.0",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@types/express": "^5.0.6",
     "@types/node": "^26.6.6",
     "@types/supertest": "^7.2.1",
     "@types/ws": "^8.18.2",
     "ajv": "^8.20.0",
-    "basic-ftp": "^6.2.4",
+    "basic-ftp": "^6.2.6",
     "cam-sim": "https://github.com/klaushofrichter/cam-sim/releases/download/v2026.11.03.1/cam-sim-v2026.11.03.1.tgz",
     "supertest": "^7.3.1",
     "svelte": "^5.57.3",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vite": "^8.3.5",
-    "vitest": "^5.0.5"
+    "vite": "^8.3.6",
+    "vitest": "^5.1.0"
   },
   "overrides": {
     "selfsigned": {
