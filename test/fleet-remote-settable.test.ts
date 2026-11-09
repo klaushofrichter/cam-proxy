@@ -108,6 +108,45 @@ describe('narrow paths (R3-2)', () => {
   });
 });
 
+// cams-admin #20 (contract 54170ba): the capture intervals only get shorter
+// from cams-admin; a longer one thins out capture and is a local change. A
+// camera's unset interval is the host's (stills.intervalS), never 0.
+describe('capture intervals (cams-admin #20)', () => {
+  const SHORTER = 'a remote change may only shorten the interval; a longer one is a local change';
+  const cfg = { stills: { intervalS: 10 }, events: { poll: { intervalS: 2 } } };
+  it('stills.intervalS, events.poll.intervalS and a camera\'s stills.intervalS only get shorter', () => {
+    for (const p of ['stills.intervalS', 'events.poll.intervalS', 'cameras.cam1.stills.intervalS']) {
+      expect(narrowingOk(p, 10, 5), p).toBe(true);
+      expect(narrowingOk(p, 10, 10), p).toBe(true);
+      expect(narrowingOk(p, 5, 10), p).toBe(false);
+    }
+  });
+  it('a camera path is looked up by its pattern', () => {
+    expect(directionFailures([{ path: 'cameras.cam-2.stills.intervalS', from: 5, to: 10 }], cfg)).toEqual({ code: 'widening_local_only', paths: [{ path: 'cameras.cam-2.stills.intervalS', code: 'widening_local_only', detail: SHORTER }] });
+  });
+  it('the detail says what it means', () => {
+    expect(directionFailures([{ path: 'stills.intervalS', from: 10, to: 20 }], cfg)?.paths[0].detail).toBe(SHORTER);
+    expect(directionFailures([{ path: 'events.poll.intervalS', from: 2, to: 3 }], cfg)?.paths[0].detail).toBe(SHORTER);
+  });
+  it("a camera's unset interval is the host's: a first value below it passes, above it is refused", () => {
+    const P = 'cameras.cam1.stills.intervalS';
+    expect(directionFailures([{ path: P, to: 5 }], cfg)).toBeNull();
+    expect(directionFailures([{ path: P, to: 10 }], cfg)).toBeNull();
+    expect(directionFailures([{ path: P, to: 20 }], cfg)?.code).toBe('widening_local_only');
+    // An unset (Reset) goes back to the host's value: refused when that is longer.
+    expect(directionFailures([{ path: P, from: 5 }], cfg)?.paths[0]).toMatchObject({ path: P, detail: SHORTER });
+    expect(directionFailures([{ path: P, from: 20 }], cfg)).toBeNull();
+    // The host value after the change counts for `to` (one change list).
+    expect(directionFailures([{ path: P, from: 5 }, { path: 'stills.intervalS', from: 10, to: 2 }], cfg, undefined, { stills: { intervalS: 2 } })).toBeNull();
+    expect(directionFailures([{ path: P, from: 5 }, { path: 'stills.intervalS', from: 10, to: 6 }], cfg, undefined, { stills: { intervalS: 6 } })?.paths.map((f) => f.path)).toEqual([P]);
+  });
+  it('narrowRules marks them as intervals and names what a camera inherits', () => {
+    expect(narrowRules()['stills.intervalS']).toEqual({ dir: 'less', interval: true });
+    expect(narrowRules()['events.poll.intervalS']).toEqual({ dir: 'less', interval: true });
+    expect(narrowRules()['cameras.*.stills.intervalS']).toEqual({ dir: 'less', interval: true, inherits: 'stills.intervalS' });
+  });
+});
+
 // Vision management (cams-admin design 2026-11-05): the monthly limit and the
 // switch are bounded by a ceiling set at the proxy.
 describe('ceiling paths', () => {

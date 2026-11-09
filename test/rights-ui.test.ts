@@ -169,6 +169,28 @@ describe('the direction rules of a cams-admin sign-in', () => {
     expect(narrowWhy(v, 'analytics.googleVision.enabled', true, false, 0)).toBeNull();
     expect(CEILING_TEXT(1000)).toMatch(/up to 1,000 calls a month/);
   });
+  // cams-admin #20: the capture intervals only get shorter; a camera's unset interval is the host's.
+  it('the capture intervals: only shorter, a camera by its pattern, an unset camera value as the host\'s', () => {
+    const iv = { 'stills.intervalS': { dir: 'less' as const, interval: true as const }, 'cameras.*.stills.intervalS': { dir: 'less' as const, interval: true as const, inherits: 'stills.intervalS' } };
+    expect(rightsOf({ rights: { localAdmin: false, config: true, restart: false, localSettings: [], narrowSettings: iv } }).narrow).toEqual(iv);
+    const v = { ...r, narrow: iv };
+    expect(narrowWhy(v, 'stills.intervalS', 10, 12)).toBe(NARROW_TEXT.interval);
+    expect(narrowWhy(v, 'stills.intervalS', 10, 5)).toBeNull();
+    expect(narrowWhy(v, 'cameras.cam1.stills.intervalS', 5, 12)).toBe(NARROW_TEXT.interval);
+    expect(narrowWhy(v, 'cameras.cam1.stills.intervalS', undefined, 5, undefined, 10)).toBeNull();
+    expect(narrowWhy(v, 'cameras.cam1.stills.intervalS', undefined, 12, undefined, 10)).toBe(NARROW_TEXT.interval);
+    // A reset goes back to the host's value.
+    expect(narrowWhy(v, 'cameras.cam1.stills.intervalS', 5, undefined, undefined, 10)).toBe(NARROW_TEXT.interval);
+    expect(narrowWhy(v, 'cameras.cam1.stills.intervalS', 20, undefined, undefined, 10)).toBeNull();
+    // The host's value unknown: the proxy judges.
+    expect(narrowWhy(v, 'cameras.cam1.stills.intervalS', undefined, 12)).toBeNull();
+    expect(NARROW_TEXT.interval).toMatch(/cams-admin sign-in.*shorter/);
+    const view = { 'stills.intervalS': { value: 10 }, 'cameras.cam1.stills.intervalS': { value: 5, resetTo: {} }, 'cameras.cam2.stills.intervalS': { value: 20, resetTo: {} } };
+    expect(resetKeeps(v, ['cameras.cam1.stills.intervalS', 'cameras.cam2.stills.intervalS'], view)).toEqual(['cameras.cam1.stills.intervalS']);
+    // Waiting for a restart: the saved value (`next`) counts, as at the proxy.
+    const pending = { 'stills.intervalS': { value: 1, pending: true, next: 10 }, 'cameras.cam1.stills.intervalS': { value: undefined, pending: true, next: 5, resetTo: {} } };
+    expect(resetKeeps(v, ['cameras.cam1.stills.intervalS'], pending)).toEqual(['cameras.cam1.stills.intervalS']);
+  });
   it('Reset to defaults keeps an override whose reset would go the other way', () => {
     const view = { 'retention.clipsDays': { value: 60, resetTo: { value: 7, source: 'default' as const } }, 'retention.eventsDays': { value: 5, resetTo: { value: 30, source: 'default' as const } }, 'analytics.googleVision.monthlyLimit': { value: 100, resetTo: { value: 0, source: 'default' as const } }, 'storage.maxPercent': { value: 50, resetTo: { value: 85, source: 'default' as const } }, 'sse.pingS': { value: 9, resetTo: { value: 15, source: 'default' as const } } };
     expect(resetKeeps(r, Object.keys(view), view)).toEqual(['retention.clipsDays', 'storage.maxPercent']);

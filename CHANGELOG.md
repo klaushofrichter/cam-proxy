@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- cams-admin may now only make capture denser, never thin it out: `stills.intervalS`, `events.poll.intervalS` and a camera's `stills.intervalS` can only be shortened from cams-admin (`config.set`, `config.unset`, `config.rollback`) and from a cams-admin sign-in on the Settings page; a longer interval is refused ("a remote change may only shorten the interval; a longer one is a local change") and stays a change at the proxy (cams-admin contract, cams-admin #20). A camera without its own interval counts as having the host's, so its first interval may be anything up to the host's, and resetting it is refused when the host's is longer. The one-way rules now also apply to per-camera settings (they were looked up by the exact path before).
+
 ## v2026.11.09.1
 
 - SD card: a new or just formatted card (free space equal to its size) no longer shows "The camera hasn't recorded to its SD card for more than 48 h" right away because of an FTP clip from before the card was in. Until its first recording it shows "no recordings yet" (no problem); it is a problem only once a clip arrives after the card was first seen and no recording follows within the hour, and the hours named are counted from when the proxy first saw the card. The hours in that text are no longer rounded up.

@@ -109,7 +109,7 @@ function write(d: ConfigCommandDeps, cmd: CommandBody, args: { dryRun: boolean; 
   }
   const changes = configChanges(l, p.next);
   // The direction rules, then the local ceilings (the contract's order); the ceiling as it is now.
-  const against = directionFailures(changes, l.config);
+  const against = directionFailures(changes, l.config, undefined, p.next.config);
   if (against) return failed(against.code, against.paths);
   const unchanged = paths.filter((x) => !changes.some((c) => c.path === x));
   if (args.dryRun) return { status: 'ok', result: { dryRun: true, baseRevision: revision, revision, changes, unchanged } };
@@ -167,7 +167,7 @@ function rollback(d: ConfigCommandDeps, of: string, dryRun: boolean, u: Undoer):
   const changes = configChanges(l, next);
   if (u.by === 'cams-admin') {
     // A rollback above the local ceiling fails the same way (Vision management).
-    const against = directionFailures(changes, l.config);
+    const against = directionFailures(changes, l.config, undefined, next.config);
     if (against) return failed(against.code, against.paths);
   }
   const unchanged = paths.filter((x) => !changes.some((c) => c.path === x));
