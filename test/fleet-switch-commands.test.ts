@@ -181,6 +181,15 @@ describe('switch commands on the mock switch', () => {
     expect(d).toMatchObject({ status: 'failed', code: 'poe_may_be_off' });
   });
 
+  it('switch.cycle when PoE was cut and is on again but the cycle failed: failed cut_on_again', async () => {
+    const t = await setup();
+    const reg = t.registry.get(t.sw as any);
+    reg.cycle = () => Promise.reject(new PoeSwitchError('switch_error', 'verification read failed after the cycle', true, true));
+    const d = await t.run('switch.cycle', { switch: t.sw, port: 3, host: null, force: true, camera: CAM });
+    expect(d).toMatchObject({ status: 'failed', code: 'cut_on_again' });
+    expect(t.records.at(-1)).toMatchObject({ action: 'switch-port-cycled', outcome: 'failure', error: 'cut_on_again' });
+  });
+
   it('switch.cycle: a busy switch answers switch_busy', async () => {
     const t = await setup();
     const reg = t.registry.get(t.sw as any);
