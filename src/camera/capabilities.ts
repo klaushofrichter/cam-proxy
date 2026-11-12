@@ -8,6 +8,9 @@ export interface PtzCapability {
   move: true;
   zoom: boolean;
   focus: boolean;
+  // A one-shot autofocus (POST .../ptz/autofocus): the camera has autofocus
+  // and zoom (the autofocus is started by a zoom). Absent from an older proxy.
+  autofocus?: boolean;
   speed: boolean;
   positions?: { max: number }; // present when the camera can store positions
 }
@@ -53,7 +56,8 @@ export function deriveCapabilities(ability: unknown): Capabilities {
   };
   const live = liveStreams(ch0 as Record<string, unknown>);
   if (!set('ptzCtrl')) return { schema: 1, ptz: null, live };
-  const ptz: PtzCapability = { move: true, zoom: set('supportZoom'), focus: set('supportFocus'), speed: set('supportPtzSpeed') };
+  const zoom = set('supportZoom');
+  const ptz: PtzCapability = { move: true, zoom, focus: set('supportFocus'), autofocus: zoom && set('disableAutoFocus'), speed: set('supportPtzSpeed') };
   if (set('ptzPreset')) ptz.positions = { max: POSITIONS_MAX };
   return { schema: 1, ptz, live };
 }

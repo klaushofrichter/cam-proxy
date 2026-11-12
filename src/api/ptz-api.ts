@@ -16,7 +16,7 @@ import { actorOf, clientIp, type AccessInfo } from './auth';
 import { cameraParam, workerOf } from './camera-param';
 import { bad } from './respond';
 
-type Need = 'move' | 'zoom' | 'focus' | 'positions';
+type Need = 'move' | 'zoom' | 'focus' | 'autofocus' | 'positions';
 type Op = 'save' | 'resave' | 'rename' | 'home' | 'order' | 'delete';
 
 const SPEED = { min: 1, max: 10, default: 5 };
@@ -42,7 +42,7 @@ export function ptzApi(d: { cameras: CameraRegistry; audit: Pick<AuditLog, 'writ
     const caps = w.capabilities();
     if (!caps) return void res.status(503).json({ error: 'camera_offline' });
     const ptz = caps.ptz;
-    if (!ptz || (need === 'zoom' && !ptz.zoom) || (need === 'focus' && !ptz.focus) || (need === 'positions' && !ptz.positions)) return void res.status(404).json({ error: 'not_supported' });
+    if (!ptz || (need === 'zoom' && !ptz.zoom) || (need === 'focus' && !ptz.focus) || (need === 'autofocus' && !ptz.autofocus) || (need === 'positions' && !ptz.positions)) return void res.status(404).json({ error: 'not_supported' });
     if (need !== 'positions' && !w.status.state().online) return void res.status(503).json({ error: 'camera_offline' });
     return { w, ptz };
   };
@@ -95,6 +95,19 @@ export function ptzApi(d: { cameras: CameraRegistry; audit: Pick<AuditLog, 'writ
   };
   r.post('/cameras/:cam/ptz/zoom', lensMove('zoom', ['in', 'out'], (w, dir) => w.ptz.camera.zoom(dir as ZoomDirection)));
   r.post('/cameras/:cam/ptz/focus', lensMove('focus', ['near', 'far'], (w, dir) => w.ptz.camera.focus(dir as FocusDirection)));
+
+  // One autofocus: after a running move is stopped, with no Stop after it
+  // (that would cut the focus sweep short).
+  r.post('/cameras/:cam/ptz/autofocus', async (_req: Request, res: Response) => {
+    const g = gate(res, 'autofocus');
+    if (!g) return;
+    try {
+      await g.w.ptz.lease.then(() => g.w.ptz.camera.autofocus());
+      res.status(204).end();
+    } catch (err) {
+      fail(res, err);
+    }
+  });
 
   r.post('/cameras/:cam/ptz/stop', async (_req: Request, res: Response) => {
     const g = gate(res, 'move');

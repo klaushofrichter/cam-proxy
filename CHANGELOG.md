@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- PTZ: a one-shot autofocus, `POST /api/cameras/{cam}/ptz/autofocus`, and `capabilities.ptz.autofocus` for cameras that have it (the E1 Outdoor Pro). The E1 has no autofocus command; a zoom to the zoom it is at makes it focus by itself (measured: the focus settles within about 4 s, the zoom stays). `scripts/ptz-real-check.sh` autofocuses after its focus steps, so the camera ends in focus.
+
+## v2026.11.09.4
+
 - PoE switches: a `switch.cycle` from cams-admin that cut PoE and turned it on again but then failed (its check afterwards) now answers `cut_on_again` instead of a plain `switch_error`, so cams-admin knows the camera is rebooting and lets the proxy's reboot watch go on (cams-admin contract, #364 m6).
 ## v2026.11.09.3
 

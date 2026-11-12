@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Checks a pan/tilt/zoom camera through a cam-proxy's PTZ API (spec
 # docs/superpowers/specs/2026-10-30-ptz-capabilities-design.md §8.3): moves
-# each direction briefly, zooms, focuses, saves a test position, moves away,
+# each direction briefly, zooms, focuses (and autofocuses back), saves a test position, moves away,
 # goes back, renames, deletes, and checks a position can be saved again.
 # THE CAMERA MOVES while this runs. It touches only positions it created and
 # puts the camera back where it was (its start position, zoom included).
@@ -123,6 +123,7 @@ api GET ''
 [ "$(js 'j.capabilities.ptz.positions ? "yes" : "no"')" = yes ] || cannot "camera $CAM: can't store positions"
 FOCUS=$(js 'j.capabilities.ptz.focus === true ? "yes" : "no"')
 ZOOM=$(js 'j.capabilities.ptz.zoom === true ? "yes" : "no"')
+AUTOFOCUS=$(js 'j.capabilities.ptz.autofocus === true ? "yes" : "no"')
 ok "camera $CAM has PTZ and is online"
 
 # 2. Room for two positions of our own.
@@ -158,6 +159,12 @@ if [ "$FOCUS" = yes ]; then
 fi
 api POST /ptz/stop
 expect 204 "stop"
+# The focus steps left the picture out of focus: the camera focuses again.
+if [ "$AUTOFOCUS" = yes ]; then
+  api POST /ptz/autofocus
+  expect 204 "autofocus"
+  sleep "$SETTLE"
+fi
 
 # 5. Save, move away, go back, rename, delete, save again.
 api POST /ptz/positions "$(body "name=ptz-check test $RUN")"
