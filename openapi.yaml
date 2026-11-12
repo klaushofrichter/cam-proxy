@@ -51,6 +51,7 @@ components:
             move: { const: true }
             zoom: { type: boolean }
             focus: { type: boolean }
+            autofocus: { type: boolean, description: 'POST .../ptz/autofocus works (the camera has autofocus and zoom); missing from an older proxy: no autofocus' }
             speed: { type: boolean, description: 'the camera takes a move speed' }
             positions: { type: object, description: 'present when the camera can store positions', properties: { max: { type: integer, description: 'at most this many positions (20)' } } }
     ArchiveItem:
@@ -477,6 +478,18 @@ paths:
       responses:
         '204': { description: the focus change started }
         '400': { description: '{ error: invalid, detail }' }
+        '502': { description: '{ error: camera_error }' }
+        '401': { description: missing or wrong token }
+        '404': { description: 'unknown camera; { error: not_supported } for a camera without this capability' }
+        '503': { description: '{ error: camera_offline } (capabilities not read yet, or the camera is offline), or camera_restarting (Retry-After)' }
+  /api/cameras/{cam}/ptz/autofocus:
+    post:
+      summary: Focus automatically once (capabilities.ptz.autofocus)
+      description: 'Stops a running move, then has the camera focus by itself; the focus settles within about 4 s and the zoom stays. Not audited.'
+      parameters:
+        - { name: cam, in: path, required: true, schema: { type: string } }
+      responses:
+        '204': { description: the autofocus started }
         '502': { description: '{ error: camera_error }' }
         '401': { description: missing or wrong token }
         '404': { description: 'unknown camera; { error: not_supported } for a camera without this capability' }

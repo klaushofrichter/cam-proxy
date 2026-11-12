@@ -109,4 +109,21 @@ describe('Reolink PTZ mapping', () => {
     }, () => true);
     await expect(p.move('left', 5)).rejects.toThrow('param error');
   });
+
+  // The E1 has no autofocus command; a zoom to the zoom it is at runs one
+  // (measured 2026-11-12: focus swept and settled in about 4 s, zoom kept).
+  it('autofocus: reads the zoom, then asks for that same zoom', async () => {
+    const { p, sent } = stub((cmd) => (cmd === 'GetZoomFocus' ? { ZoomFocus: { channel: 0, zoom: { pos: 7 }, focus: { pos: 40 } } } : { rspCode: 200 }));
+    await p.autofocus();
+    expect(sent).toEqual([
+      ['GetZoomFocus', { channel: 0 }],
+      ['StartZoomFocus', { ZoomFocus: { channel: 0, op: 'ZoomPos', pos: 7 } }],
+    ]);
+  });
+
+  it('autofocus: no zoom in the answer → an error, nothing sent', async () => {
+    const { p, sent } = stub((cmd) => (cmd === 'GetZoomFocus' ? { ZoomFocus: { channel: 0 } } : { rspCode: 200 }));
+    await expect(p.autofocus()).rejects.toThrow();
+    expect(sent.map(([c]) => c)).toEqual(['GetZoomFocus']);
+  });
 });

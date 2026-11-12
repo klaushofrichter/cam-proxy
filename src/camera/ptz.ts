@@ -2,6 +2,7 @@
 // 2026-10-30-ptz-capabilities-design §3, §6). The only module that knows
 // PtzCtrl, its op names and slot ids; nothing of it reaches clients.
 import type { CameraCommand } from './capabilities';
+import { CameraError } from './client';
 
 export const PTZ_DIRECTIONS = ['left', 'right', 'up', 'down', 'left-up', 'left-down', 'right-up', 'right-down'] as const;
 export type PtzDirection = (typeof PTZ_DIRECTIONS)[number];
@@ -67,6 +68,16 @@ export class ReolinkPtz {
   // FocusInc raises the focus position toward its far end (measured on the E1, #282).
   async focus(d: FocusDirection): Promise<void> {
     await this.ctrl(d === 'far' ? 'FocusInc' : 'FocusDec', {}, FIXED_SPEED);
+  }
+
+  // The E1 has no autofocus command, but a zoom to the zoom it is at runs one:
+  // the focus sweeps and settles in about 4 s, the picture keeps its zoom
+  // (measured 2026-11-12; the same as after any zoom with autofocus on).
+  async autofocus(): Promise<void> {
+    const r = (await this.command('GetZoomFocus', { channel: 0 })) as { ZoomFocus?: { zoom?: { pos?: unknown } } } | undefined;
+    const pos = r?.ZoomFocus?.zoom?.pos;
+    if (typeof pos !== 'number' || !Number.isInteger(pos)) throw new CameraError('camera_error', 'GetZoomFocus gave no zoom position', true);
+    await this.command('StartZoomFocus', { ZoomFocus: { channel: 0, op: 'ZoomPos', pos } });
   }
 
   async goTo(slot: number): Promise<void> {
