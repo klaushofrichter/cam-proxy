@@ -44,7 +44,7 @@ afterAll(async () => {
 describe('PTZ against cam-sim E1-Outdoor-Pro', () => {
   it('GET /api/cameras/cam1 has the E1 capabilities; the fixed camera has none', async () => {
     const r = await request(p.base).get('/api/cameras/cam1').set(auth());
-    expect(r.body.capabilities).toEqual({ schema: 1, ptz: { move: true, zoom: true, focus: true, speed: true, positions: { max: 20 } }, live: ['main', 'ext', 'sub'] });
+    expect(r.body.capabilities).toEqual({ schema: 1, ptz: { move: true, zoom: true, focus: true, autofocus: true, speed: true, positions: { max: 20 } }, live: ['main', 'ext', 'sub'] });
     expect(r.body.features).toContain('ptz');
     const f = await request(pf.base).get('/api/cameras/cam1').set(auth());
     expect(f.body.capabilities).toEqual({ schema: 1, ptz: null, live: ['main', 'sub'] });
@@ -76,6 +76,18 @@ describe('PTZ against cam-sim E1-Outdoor-Pro', () => {
     expect((await request(p.base).post(ptz('/zoom')).set(auth()).send({ direction: 'in', durationMs: 600 })).status).toBe(204);
     await until(() => view().moving === null, 1500);
     expect(view().zoom).toBeGreaterThan(z);
+  });
+
+  // Focus off by hand, then autofocus: the camera focuses for its zoom again
+  // and keeps the zoom (cam-sim's focusTrack, like the E1 measured 2026-11-12).
+  it('autofocus after a manual focus: back in focus, same zoom', async () => {
+    const before = view();
+    expect((await request(p.base).post(ptz('/focus')).set(auth()).send({ direction: 'near', durationMs: 600 })).status).toBe(204);
+    await until(() => view().moving === null, 1500);
+    expect(view().focus).toBeLessThan(before.focus);
+    expect((await request(p.base).post(ptz('/autofocus')).set(auth()).send({})).status).toBe(204);
+    expect(view().zoom).toBe(before.zoom);
+    expect(view().focus).toBe(before.focus);
   });
 
   it('a preset the camera refuses or ignores → 502 camera_error, no position stored', async () => {

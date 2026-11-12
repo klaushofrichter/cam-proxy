@@ -22,7 +22,7 @@ import { E1_MODEL, startSim } from './helpers/sim';
 // camera of 64 preset slots in memory, and through a real proxy against
 // cam-sim's E1 Outdoor Pro.
 const SCRIPT = join(__dirname, '..', 'scripts', 'ptz-real-check.sh');
-const E1: Capabilities = { schema: 1, ptz: { move: true, zoom: true, focus: true, speed: true, positions: { max: 20 } } };
+const E1: Capabilities = { schema: 1, ptz: { move: true, zoom: true, focus: true, autofocus: true, speed: true, positions: { max: 20 } } };
 
 let server: Server;
 let base: string;
@@ -40,6 +40,8 @@ function fakeWorker(id: string, caps: Capabilities): CameraWorker {
       slots[x.id] = { channel: 0, id: x.id, enable: x.enable, name: x.name };
     }
     if (cmd === 'PtzCtrl') ops.push(String(p.op));
+    if (cmd === 'GetZoomFocus') return { ZoomFocus: { channel: 0, zoom: { pos: 0 }, focus: { pos: 14 } } };
+    if (cmd === 'StartZoomFocus') ops.push(String((p as { ZoomFocus: { op: string } }).ZoomFocus.op));
     return { rspCode: 200 };
   };
   const log = new StreamLog(catalog);
@@ -127,7 +129,7 @@ describe('scripts/ptz-real-check.sh', () => {
     expect(r.code, r.out).toBe(0);
     expect(lines.length).toBeGreaterThan(15);
     expect(await positions()).toEqual(before);
-    for (const op of ['Left', 'Right', 'Up', 'Down', 'LeftUp', 'LeftDown', 'RightUp', 'RightDown', 'ZoomInc', 'ZoomDec', 'FocusInc', 'FocusDec', 'ToPos', 'Stop']) expect(ops, op).toContain(op);
+    for (const op of ['Left', 'Right', 'Up', 'Down', 'LeftUp', 'LeftDown', 'RightUp', 'RightDown', 'ZoomInc', 'ZoomDec', 'FocusInc', 'FocusDec', 'ZoomPos', 'ToPos', 'Stop']) expect(ops, op).toContain(op);
   }, 60_000);
 
   it('a camera with no positions: the start position is Home and still goes last', async () => {

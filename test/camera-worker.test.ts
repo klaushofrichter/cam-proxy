@@ -255,7 +255,7 @@ describe('capabilities (spec 2026-10-30-ptz-capabilities-design §4)', () => {
     await w.refreshCapabilities();
     const msg = log.latest('cam1', 'camera');
     expect(msg!.id).toBeGreaterThan(before);
-    expect(msg!.data.capabilities).toEqual({ schema: 1, ptz: { move: true, zoom: true, focus: true, speed: true, positions: { max: 20 } }, live: ['main', 'ext', 'sub'] });
+    expect(msg!.data.capabilities).toEqual({ schema: 1, ptz: { move: true, zoom: true, focus: true, autofocus: true, speed: true, positions: { max: 20 } }, live: ['main', 'ext', 'sub'] });
     expect(msg!.data.address).toBe(sim.camera.host);
     const id = msg!.id;
     await w.refreshCapabilities();

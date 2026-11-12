@@ -10,13 +10,14 @@ import { ReolinkPtz } from '../src/camera/ptz';
 import { PtzError, type PtzPositionJson } from '../src/ptz/positions';
 import type { AuditInput } from '../src/audit/audit-log';
 
-const E1: Capabilities = { schema: 1, ptz: { move: true, zoom: true, focus: true, speed: true, positions: { max: 20 } } };
+const E1: Capabilities = { schema: 1, ptz: { move: true, zoom: true, focus: true, autofocus: true, speed: true, positions: { max: 20 } } };
 const FIXED: Capabilities = { schema: 1, ptz: null };
 
 let caps: Capabilities | null;
 let online: boolean;
 let sent: [string, unknown][];
 let leased: number[];
+let thens: number;
 let stops: number;
 let camFails: CameraError | undefined;
 let calls: string[];
@@ -31,6 +32,7 @@ function fakeWorker(): CameraWorker {
   const camera = new ReolinkPtz(async (cmd, param) => {
     sent.push([cmd, param]);
     if (camFails) throw camFails;
+    if (cmd === 'GetZoomFocus') return { ZoomFocus: { channel: 0, zoom: { pos: 3 }, focus: { pos: 36 } } };
     return { rspCode: 200 };
   }, () => true);
   const call = <T>(name: string, v: T) => async (...args: unknown[]): Promise<T> => {
@@ -48,6 +50,7 @@ function fakeWorker(): CameraWorker {
       lease: {
         move: async (start: () => Promise<void>, ms: number) => (leased.push(ms), start()),
         stop: async () => (stops++, camera.stop()),
+        then: async (cmd: () => Promise<void>) => (thens++, cmd()),
         active: () => false,
       },
       positions: {
@@ -71,6 +74,7 @@ beforeEach(() => {
   online = true;
   sent = [];
   leased = [];
+  thens = 0;
   stops = 0;
   camFails = undefined;
   calls = [];
@@ -151,6 +155,25 @@ describe('PTZ API', () => {
     expect(sent.map(([, p]) => (p as { op: string }).op)).toEqual(['ZoomDec', 'FocusDec']);
     expect((await request(app).post(`${base}/zoom`).send({ direction: 'left' })).status).toBe(400);
     expect((await request(app).post(`${base}/focus`).send({ direction: 'in' })).status).toBe(400);
+  });
+
+  it('autofocus → 204: one command after the lease, no Stop after it', async () => {
+    expect((await request(app).post(`${base}/autofocus`)).status).toBe(204);
+    expect(thens).toBe(1);
+    expect(leased).toEqual([]);
+    expect(sent).toEqual([['GetZoomFocus', { channel: 0 }], ['StartZoomFocus', { ZoomFocus: { channel: 0, op: 'ZoomPos', pos: 3 } }]]);
+  });
+
+  it('autofocus on a camera without it → 404 not_supported; offline → 503; refused → 502', async () => {
+    caps = { schema: 1, ptz: { move: true, zoom: true, focus: true, speed: true } };
+    expect((await request(app).post(`${base}/autofocus`)).body).toEqual({ error: 'not_supported' });
+    caps = E1;
+    online = false;
+    expect((await request(app).post(`${base}/autofocus`)).status).toBe(503);
+    online = true;
+    camFails = new CameraError('camera_error', 'param error', true, -4);
+    expect((await request(app).post(`${base}/autofocus`)).body).toEqual({ error: 'camera_error' });
+    expect(sent.map(([c]) => c)).toEqual(['GetZoomFocus']);
   });
 
   it('stop → 204 through the lease', async () => {

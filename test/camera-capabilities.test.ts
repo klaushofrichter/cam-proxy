@@ -8,8 +8,8 @@ const raw = (n: string) => readFileSync(join(__dirname, 'fixtures', 'abilities',
 const fx = (n: string) => JSON.parse(raw(n)) as { Ability: { abilityChn: Record<string, { permit: number }>[] } };
 
 describe('deriveCapabilities', () => {
-  it('E1 Outdoor Pro: move, zoom, focus, speed and 20 positions', () => {
-    expect(deriveCapabilities(fx('e1-outdoor-pro'))).toEqual({ schema: 1, ptz: { move: true, zoom: true, focus: true, speed: true, positions: { max: 20 } }, live: ['main', 'ext', 'sub'] });
+  it('E1 Outdoor Pro: move, zoom, focus, autofocus, speed and 20 positions', () => {
+    expect(deriveCapabilities(fx('e1-outdoor-pro'))).toEqual({ schema: 1, ptz: { move: true, zoom: true, focus: true, autofocus: true, speed: true, positions: { max: 20 } }, live: ['main', 'ext', 'sub'] });
     expect(POSITIONS_MAX).toBe(20);
   });
 
@@ -45,6 +45,17 @@ describe('deriveCapabilities', () => {
     const a = fx('e1-outdoor-pro');
     a.Ability.abilityChn[0].supportPtzSpeed = { permit: 0 };
     expect(deriveCapabilities(a).ptz).toMatchObject({ speed: false, zoom: true, focus: true });
+  });
+
+  // Autofocus is started by a zoom to the current zoom (measured on the E1,
+  // 2026-11-12): it needs zoom and a camera that has autofocus at all.
+  it('autofocus needs disableAutoFocus and zoom', () => {
+    const noAf = fx('e1-outdoor-pro');
+    noAf.Ability.abilityChn[0].disableAutoFocus = { permit: 0 };
+    expect(deriveCapabilities(noAf).ptz?.autofocus).toBe(false);
+    const noZoom = fx('e1-outdoor-pro');
+    noZoom.Ability.abilityChn[0].supportZoom = { permit: 0 };
+    expect(deriveCapabilities(noZoom).ptz?.autofocus).toBe(false);
   });
 
   it('garbage → ptz null', () => {
