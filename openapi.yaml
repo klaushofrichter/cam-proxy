@@ -924,7 +924,7 @@ paths:
         SD card's file, fetched over Baichuan unless cached). Optional name (1-120
         characters, no control characters; default "<YYYY-MM-DD HH:MM:SS> <camera
         name>" of the recording's start, camera time), labels (at most 16 words of
-        letters and digits, case-insensitive; Pet, Person, Vehicle, SD, 4K keep
+        letters and digits, case-insensitive; Pet, Person, Vehicle, SD, Hi keep
         their spelling), retentionDays (1-36500, null = forever; default 365),
         thumbnailAt (a still second). Starts an archive job and waits up to 3 s.
         Client token or admin; a session needs X-CamProxy-UI; X-On-Behalf-Of (the

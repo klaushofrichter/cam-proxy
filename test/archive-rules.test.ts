@@ -18,8 +18,12 @@ describe('names', () => {
 
 describe('labels', () => {
   it('letters and digits, case-insensitive set, first spelling wins, predefined spelling', () => {
-    expect(checkLabels(['pet', 'Garden', 'garden', '4k', 'sd', 'PERSON', 'vehicle'])).toEqual(['Pet', 'Garden', '4K', 'SD', 'Person', 'Vehicle']);
+    expect(checkLabels(['pet', 'Garden', 'garden', 'hi', 'sd', 'PERSON', 'vehicle'])).toEqual(['Pet', 'Garden', 'Hi', 'SD', 'Person', 'Vehicle']);
     expect(checkLabels([])).toEqual([]);
+  });
+  it('"4K", predefined before 2026-11-13, is an ordinary label now: kept as typed', () => {
+    expect(checkLabels(['4K', 'hi'])).toEqual(['4K', 'Hi']);
+    expect(checkLabels(['4k'])).toEqual(['4k']);
   });
   it.each([['not a list'], [['two words']], [['dash-ed']], [['']], [['x'.repeat(25)]], [[1]], [Array.from({ length: 17 }, (_, i) => `L${i}`)]])('refuses %j', (v) => {
     expect(() => checkLabels(v)).toThrow(RuleError);

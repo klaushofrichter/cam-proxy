@@ -129,8 +129,8 @@ copy back marks items the same way. Also in the item of `/metadata`.
   was never read).
 - `labels`: at most 16, each 1 to 24 letters or digits (`^[A-Za-z0-9]+$`).
   Case-insensitive: duplicates are dropped (the first spelling wins), and
-  the predefined labels get their own spelling (`pet` → `Pet`, `4k` → `4K`).
-  Predefined: `Pet`, `Person`, `Vehicle`, `SD`, `4K`. The proxy adds no
+  the predefined labels get their own spelling (`pet` → `Pet`, `hi` → `Hi`).
+  Predefined: `Pet`, `Person`, `Vehicle`, `SD`, `Hi` (the main stream; `4K` until 2026-11-13, which clips archived earlier keep as a custom label). The proxy adds no
   label by itself; cams preselects.
 - `retentionDays`: whole days 1 to 36500, or `null` (forever). Default 365.
 
@@ -307,7 +307,7 @@ current number of clips; 400 without a count.
   POST `source.type=recording` with the SD file id (what Save would
   download), or `clip` when only the proxy's FTP copy is offered. Name field
   (prefilled with the default, editable), retention (days, default 365, or
-  forever), labels (Pet, Person, Vehicle, SD, 4K + custom), `thumbnailAt`
+  forever), labels (Pet, Person, Vehicle, SD, Hi + custom), `thumbnailAt`
   from the card's #157 choice. Show `insufficient_space` with sizes.
 - An Archive page listing all proxies' archives (merge by `createdAt`),
   filters (labels, camera, text, dates), edit name/labels/retention, delete

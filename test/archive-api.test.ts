@@ -99,13 +99,13 @@ describe('POST /api/cameras/{cam}/archive: the request', () => {
 
 describe('POST /api/cameras/{cam}/archive: the sources', () => {
   it("a clip: 201 with the item, the files, the metadata, an audit record and a stream message", async () => {
-    const r = await post({ source: { type: 'clip', clipId }, labels: ['person', 'Garden', '4k'], retentionDays: 30 }, { 'X-On-Behalf-Of': 'klaus@example.com' });
+    const r = await post({ source: { type: 'clip', clipId }, labels: ['person', 'Garden', 'hi'], retentionDays: 30 }, { 'X-On-Behalf-Of': 'klaus@example.com' });
     expect(r.status).toBe(201);
     expect(r.body).toMatchObject({ state: 'done', progress: 1, archiveId: expect.any(Number) });
     const item = r.body.item;
     expect(item).toMatchObject({
       cam: 'cam1', cameraName: expect.any(String), name: expect.stringMatching(/^2026-10-0[45] \d\d:03:22 \S/),
-      labels: ['Person', 'Garden', '4K'], retentionDays: 30, recordedFrom: T, recordedTo: T + 6000, quality: '4k', original: true,
+      labels: ['Person', 'Garden', 'Hi'], retentionDays: 30, recordedFrom: T, recordedTo: T + 6000, quality: '4k', original: true,
       bytes: statSync(clipFile).size, source: { type: 'clip', clipId, stream: 'main' }, eventKinds: ['person'], createdBy: 'client',
     });
     expect(item.durationS).toBeCloseTo(6, 0);
@@ -118,7 +118,7 @@ describe('POST /api/cameras/{cam}/archive: the sources', () => {
     expect(JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))).toMatchObject({ schema: 1, item: { id: item.id }, events: [{ kind: 'person' }] });
     const row = p.proxy.catalog.db.prepare('SELECT files FROM archive WHERE id = ?').get(item.id) as { files: string };
     expect(JSON.parse(row.files).clip).toEqual({ bytes: archived.length, crc32: crc32(archived) });
-    expect(records('archive-add')[0]).toMatchObject({ event: { outcome: 'success' }, user: { name: 'client' }, cam_proxy: { id: item.id, onBehalfOf: 'klaus@example.com', labels: ['Person', 'Garden', '4K'], retentionDays: 30 } });
+    expect(records('archive-add')[0]).toMatchObject({ event: { outcome: 'success' }, user: { name: 'client' }, cam_proxy: { id: item.id, onBehalfOf: 'klaus@example.com', labels: ['Person', 'Garden', 'Hi'], retentionDays: 30 } });
     const msg = stream().at(-1)!;
     expect(msg).toMatchObject({ type: 'archive', cam: 'cam1', data: { action: 'add', ids: [item.id], items: [{ id: item.id, name: item.name }] } });
   });
