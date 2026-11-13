@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.11.13.1
+
 - Archive: the predefined label for the main stream is now `Hi` instead of `4K` (not every camera's main stream is 4K). Clips archived earlier keep `4K` as an ordinary label.
 
 ## v2026.11.12.1
