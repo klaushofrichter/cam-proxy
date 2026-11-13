@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Archive: the predefined label for the main stream is now `Hi` instead of `4K` (not every camera's main stream is 4K). Clips archived earlier keep `4K` as an ordinary label.
+
 ## v2026.11.12.1
 
 - PTZ: a one-shot autofocus, `POST /api/cameras/{cam}/ptz/autofocus`, and `capabilities.ptz.autofocus` for cameras that have it (the E1 Outdoor Pro). The E1 has no autofocus command; a zoom to the zoom it is at makes it focus by itself (measured: the focus settles within about 4 s, the zoom stays). `scripts/ptz-real-check.sh` autofocuses after its focus steps, so the camera ends in focus.

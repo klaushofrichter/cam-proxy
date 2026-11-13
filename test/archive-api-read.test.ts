@@ -179,8 +179,9 @@ describe('status, health and the Status page', () => {
     expect(s.bytes).toBe(3 * statSync(clipFile).size);
     expect(s.disk.size).toBeGreaterThan(0);
     expect(s.nextCleanupAt).toBeGreaterThan(Date.now() - 120_000);
-    expect(s.labels.slice(0, 5)).toEqual([{ label: 'Pet', count: 2 }, { label: 'Person', count: 0 }, { label: 'Vehicle', count: 1 }, { label: 'SD', count: 0 }, { label: '4K', count: 1 }]);
-    expect(s.labels.slice(5)).toEqual([{ label: 'Dawn', count: 1 }]);
+    expect(s.labels.slice(0, 5)).toEqual([{ label: 'Pet', count: 2 }, { label: 'Person', count: 0 }, { label: 'Vehicle', count: 1 }, { label: 'SD', count: 0 }, { label: 'Hi', count: 0 }]);
+    // A clip archived with the old predefined "4K" keeps it, as a custom label (2026-11-13).
+    expect(s.labels.slice(5)).toEqual([{ label: '4K', count: 1 }, { label: 'Dawn', count: 1 }]);
     const c = (await request(p.base).get('/control/status').set(auth(ADMIN_TOKEN))).body;
     expect(c.archive).toMatchObject({ count: 3 });
   });

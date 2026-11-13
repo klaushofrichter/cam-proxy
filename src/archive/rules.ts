@@ -11,8 +11,10 @@ export const LABELS_MAX = 16;
 export const LABEL_MAX = 24;
 export const RETENTION_MAX_DAYS = 36500;
 export const RETENTION_DEFAULT_DAYS = 365;
-// Klaus, 2026-10-05: these five, plus any custom ones.
-export const PREDEFINED_LABELS = ['Pet', 'Person', 'Vehicle', 'SD', '4K'] as const;
+// Klaus, 2026-10-05: these five, plus any custom ones. 2026-11-13: "Hi" for the
+// main stream instead of "4K" (not every camera's main is 4K); clips archived
+// earlier keep "4K", now an ordinary custom label.
+export const PREDEFINED_LABELS = ['Pet', 'Person', 'Vehicle', 'SD', 'Hi'] as const;
 const PREDEFINED = new Map(PREDEFINED_LABELS.map((l) => [l.toLowerCase(), l]));
 
 // Any text but control characters (newlines, tabs, NUL), 1 to 120 after trimming.
