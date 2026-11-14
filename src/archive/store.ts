@@ -1,7 +1,7 @@
 import { randomBytes } from 'crypto';
 import { existsSync, lstatSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import type { Catalog } from '../catalog/db';
+import { inTransaction, type Catalog } from '../catalog/db';
 import { allArchive, archiveById, deleteArchive, insertArchive, type ArchiveInput, type ArchiveRow } from '../catalog/archive';
 import { logger } from '../log';
 import { archivePath, archiveRoot, CAM_ID, inside, type ArchiveFile } from './paths';
@@ -39,19 +39,18 @@ export class ArchiveStore {
     const from = inside(this.d.dataDir, staged);
     const db = this.d.catalog.db;
     let moved: string | null = null;
-    db.exec('BEGIN');
     try {
-      const row = insertArchive(this.d.catalog, input);
-      const to = archivePath(this.d.dataDir, row.cam, row.id);
-      mkdirSync(join(to, '..'), { recursive: true });
-      rmSync(to, { recursive: true, force: true }); // a leftover of an id rolled back before
-      renameSync(from, to);
-      moved = to;
-      writeFileSync(this.file(row, 'meta.json'), meta(row));
-      db.exec('COMMIT');
-      return row;
+      return inTransaction(db, () => {
+        const row = insertArchive(this.d.catalog, input);
+        const to = archivePath(this.d.dataDir, row.cam, row.id);
+        mkdirSync(join(to, '..'), { recursive: true });
+        rmSync(to, { recursive: true, force: true }); // a leftover of an id rolled back before
+        renameSync(from, to);
+        moved = to;
+        writeFileSync(this.file(row, 'meta.json'), meta(row));
+        return row;
+      });
     } catch (err) {
-      db.exec('ROLLBACK');
       rmSync(moved ?? from, { recursive: true, force: true });
       throw err;
     }
