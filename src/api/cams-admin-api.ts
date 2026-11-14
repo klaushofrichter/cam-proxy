@@ -9,6 +9,7 @@ import type { CommandRunner } from '../fleet/commands';
 import { ALLOW_ENTRIES, DISRUPTIVE_ENTRIES, ENTRY_TEXT, IMPLEMENTED, MOVE_ENTRIES, POWER_ENTRIES, SWITCH_ENTRIES, UI_ENTRIES, WideningRefused, type CommandPolicy } from '../fleet/policy';
 import { undoLocal, type ConfigCommandDeps } from '../fleet/config-commands';
 import { TooManyBlocks, type TokenStore } from '../fleet/token-store';
+import { bad } from './respond';
 
 // The Status page's cams-admin card (spec 2026-10-06-cams-admin-phase1-design
 // §9.2): mounted behind requireAccess('admin') (the admin session with the
@@ -92,7 +93,7 @@ export function camsAdminApi(d: { camsAdmin: CamsAdmin; audit: AuditLog; command
       d.audit.write({ action: 'admin-policy', category: ['configuration'], type: ['change'], outcome: 'success', ...who(req), message, details: { from: before, to: policyOf(), requestedBy: req.res?.locals.access?.viaCookie ? 'session' : 'token' } });
     const failed = (res: express.Response, err: unknown) => {
       if (err instanceof WideningRefused) return void res.status(403).json({ error: 'local_admin_only', message: err.message });
-      if (err instanceof ConfigError) return void res.status(400).json({ error: 'invalid', detail: err.message });
+      if (err instanceof ConfigError) return bad(res, err.message);
       throw err;
     };
 
@@ -133,7 +134,7 @@ export function camsAdminApi(d: { camsAdmin: CamsAdmin; audit: AuditLog; command
     const tokensView = () => ({ revision: c.tokens.revision(), problem: c.tokens.problem(), items: c.tokens.list() });
     const tokenOp = (op: 'block' | 'unblock') => (req: express.Request, res: express.Response) => {
       const id = String(req.params.id);
-      if (!TOK_ID.test(id)) return void res.status(400).json({ error: 'invalid', detail: 'not a token id' });
+      if (!TOK_ID.test(id)) return bad(res, 'not a token id');
       const t = c.tokens.list().find((x) => x.id === id);
       // Managed rights block only tokens that exist (they can't fill the list).
       if (!t && origin(res) !== 'local') return void res.status(404).json({ error: 'unknown_token' });
@@ -155,7 +156,7 @@ export function camsAdminApi(d: { camsAdmin: CamsAdmin; audit: AuditLog; command
       r.get('/admin/changes', (_req, res) => void res.json({ items: cfg.backups.list().map((b) => ({ cmdId: b.cmdId, command: b.command, actor: b.actor, at: b.at, paths: b.paths.map((x) => ({ path: x.path, ...val(x.before, 'from'), ...val(x.after, 'to') })), rolledBack: b.rolledBack ?? null })) }));
       r.post('/admin/changes/:cmdId/undo', requireLocalAdmin(), (req, res) => {
         const id = String(req.params.cmdId);
-        if (!CMD_ID.test(id)) return void res.status(400).json({ error: 'invalid', detail: 'not a command id' });
+        if (!CMD_ID.test(id)) return bad(res, 'not a command id');
         const w = who(req);
         const done = undoLocal(cfg, id, { user: w.user, ip: w.ip, ...(w.userAgent ? { userAgent: w.userAgent } : {}) });
         if (done.status === 'ok') return void res.json({ changes: done.result?.changes ?? [] });

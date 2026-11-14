@@ -382,8 +382,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: 
       fileHeaders(res, id, size);
       return void res.status(200).end();
     }
-    const ac = new AbortController();
-    res.on('close', () => ac.abort());
+    const signal = leftSignal(res);
     // A plain GET streams the file through the fetch's tee while it arrives
     // (when it is the fetch's first client and no byte has gone through yet).
     // So does `Range: bytes=0-` (every <video> opens with it): the whole file
@@ -397,7 +396,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: 
     // for this client before an error is final.
     for (let attempt = 0; attempt < 2; attempt++) {
       if (gone(res)) return;
-      const { fetch, created } = side.fetcher.get(entry, { priority: 'high', signal: ac.signal });
+      const { fetch, created } = side.fetcher.get(entry, { priority: 'high', signal });
       const streamIt = !req.headers.range || req.headers.range === 'bytes=0-' || !side.fetcher.canKeep(size) || attempt > 0;
       // The fetch's own length: an HTTP Download's body may differ from the
       // name's size (the camera's remux); it is known before the first byte.

@@ -3,6 +3,7 @@ import type { MoveSource, Asker } from '../moves/source';
 import type { MoveSync } from '../moves/sync';
 import { isMoveId } from '../moves/journal';
 import { clientIp, type AccessInfo } from './auth';
+import { bad } from './respond';
 
 // The source proxy's camera-move routes (camera-move plan Task 7, S §4, §7):
 // mounted under /control behind requireAccess('admin') (sessions need the
@@ -38,7 +39,7 @@ export function movesControlApi(source: MoveSource, sync?: Pick<MoveSync, 'list'
   };
   const cameraOf = (req: express.Request, res: express.Response): string | null => {
     const cam = (req.body ?? {}).camera;
-    if (typeof cam !== 'string' || !CAMERA.test(cam)) return void res.status(400).json({ error: 'invalid', detail: 'camera' }), null;
+    if (typeof cam !== 'string' || !CAMERA.test(cam)) return bad(res, 'camera'), null;
     return cam;
   };
 
@@ -62,7 +63,7 @@ export function movesControlApi(source: MoveSource, sync?: Pick<MoveSync, 'list'
     const cam = cameraOf(req, res);
     if (cam === null) return;
     const target = (req.body ?? {}).target;
-    if (typeof target !== 'string' || !PROXY_ID.test(target)) return void res.status(400).json({ error: 'invalid', detail: 'target' });
+    if (typeof target !== 'string' || !PROXY_ID.test(target)) return bad(res, 'target');
     if (refuse(res, cam)) return;
     res.status(202).json(source.request(cam, target, askerOf(req)));
   });
@@ -78,7 +79,7 @@ export function movesControlApi(source: MoveSource, sync?: Pick<MoveSync, 'list'
 
   r.post('/moves/:id/cancel', (req, res) => {
     const copied = (req.body ?? {}).copied;
-    if (copied !== 'delete' && copied !== 'age-out') return void res.status(400).json({ error: 'invalid', detail: 'copied' });
+    if (copied !== 'delete' && copied !== 'age-out') return bad(res, 'copied');
     if (!isMoveId(req.params.id)) return void res.status(404).json({ error: 'unknown_move' });
     const out = source.requestCancel(req.params.id, copied);
     res.status(out.status).json(out.body);
