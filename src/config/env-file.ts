@@ -144,6 +144,13 @@ export function writeEnvKey(path: string, keys: string | string[], value: string
   return { key, previous, backup: replaceEnvFile(path, next, now) };
 }
 
+// Puts the file back as `backup` (a name writeEnvKey answered) holds it: a
+// failed step after the write undoes it (onboarding's add).
+export function restoreEnvBackup(path: string, backup: string): void {
+  checkEnvPath(path);
+  writeAtomic(path, readFileSync(join(dirname(path), backup), 'utf8'));
+}
+
 // The text without `key`'s assignment lines (each with its line end); every
 // other byte stays, comments that mention the key too.
 export function withoutEnvKey(text: string, key: string): string {

@@ -10,7 +10,7 @@ import { createProxy, type Proxy } from '../src/proxy';
 import { servedCertificate } from '../src/tls/served';
 import { ADMIN_TOKEN, CLIENT_TOKEN, auth, freePort, until } from './helpers/proxy';
 import { startSim } from './helpers/sim';
-import { lastAudit } from './helpers/onboarding';
+import { audits, lastAudit } from './helpers/onboarding';
 import { OnboardingService } from '../src/onboarding/service';
 import { PasswordAttempts } from '../src/onboarding/attempts';
 import { RemoveLeftovers } from '../src/onboarding/remove-leftovers';
@@ -24,7 +24,7 @@ afterAll(async () => {
 }, 60_000);
 
 const MOVE = `mv_${'1'.repeat(20)}`;
-async function pi(o: { envFile?: boolean; cameraHost?: boolean; moved?: boolean } = {}) {
+async function pi(o: { envFile?: boolean; cameraHost?: boolean; moved?: boolean; ownPassword?: string } = {}) {
   const sim = await startSim();
   const dir = mkdtempSync(join(tmpdir(), 'onb-pi-'));
   mkdirSync(join(dir, 'data'));
@@ -37,8 +37,9 @@ async function pi(o: { envFile?: boolean; cameraHost?: boolean; moved?: boolean 
   }));
   if (o.moved) writeFileSync(join(dir, 'data', 'overrides.json'), JSON.stringify({ cameras: { cam1: { moved: MOVE } } }));
   const envPath = join(dir, '.env');
-  if (o.envFile !== false) writeFileSync(envPath, o.cameraHost ? `CAMERA_HOST=${sim.camera.host}\n` : '# the Pi\n', { mode: 0o600 });
-  const loaded = loadConfig({ CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: 'not-the-password', ...(o.envFile !== false ? { CAMPROXY_ENV_FILE: envPath } : {}) }, { cwd: dir });
+  const own = o.ownPassword !== undefined ? `CAMPROXY_CAMERA_PASSWORD_CAM1=${o.ownPassword}\n` : '';
+  if (o.envFile !== false) writeFileSync(envPath, (o.cameraHost ? `CAMERA_HOST=${sim.camera.host}\n` : '# the Pi\n') + own, { mode: 0o600 });
+  const loaded = loadConfig({ CAMPROXY_TOKENS: CLIENT_TOKEN, CAMPROXY_ADMIN_TOKEN: ADMIN_TOKEN, CAMPROXY_CAMERA_PASSWORD: 'not-the-password', ...(o.ownPassword !== undefined ? { CAMPROXY_CAMERA_PASSWORD_CAM1: o.ownPassword } : {}), ...(o.envFile !== false ? { CAMPROXY_ENV_FILE: envPath } : {}) }, { cwd: dir });
   const proxy = createProxy(loaded);
   const { port } = await proxy.start({ port: 0, host: '127.0.0.1' });
   open.push({ proxy, sim });
@@ -114,6 +115,25 @@ describe('a failed add on the Pi (review 6)', () => {
       chmodSync(join(t.dir), 0o700);
     }
     expect(t.stored().cam1.password).toBe('earlier-pw');
+  }, 30_000);
+
+  it("the camera's password line can't be removed: .env, the stored password and the trust stay as they were", async () => {
+    const t = await pi({ ownPassword: 'old-pw' });
+    const before = readFileSync(t.envPath, 'utf8');
+    // An older backup that can't be read: the line's removal fails after CAMERA_HOST was written.
+    const stale = join(t.dir, '.env.bak-20260101-000000');
+    writeFileSync(stale, before, { mode: 0o600 });
+    chmodSync(stale, 0o000);
+    try {
+      const r = await t.add();
+      expect([r.status, r.body.error]).toEqual([409, 'env_password']);
+    } finally {
+      chmodSync(stale, 0o600);
+    }
+    expect(readFileSync(t.envPath, 'utf8')).toBe(before);
+    expect(t.stored()).toEqual({});
+    expect(audits(t.dir, 'camera-trust')).toEqual([]);
+    expect(t.proxy.running.cameras.cam1.host).toBeFalsy();
   }, 30_000);
 });
 
