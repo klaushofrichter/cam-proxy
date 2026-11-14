@@ -370,7 +370,6 @@ function writeOverrides(file: string, overrides: Obj): void {
 }
 
 // The leaf paths an object sets ('sse.pingS'), e.g. a PUT body.
-export const leafPathsOf = (o: object): string[] => setPaths(o as Obj);
 function setPaths(o: Obj, prefix = ''): string[] {
   return Object.entries(o).flatMap(([k, v]) => {
     const p = prefix ? `${prefix}.${k}` : k;

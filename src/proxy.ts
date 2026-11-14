@@ -829,16 +829,15 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // One camera's FTP status: the server's figures for this camera's user;
   // the clip count of every camera while there is one (the Pi's number as
   // before), else this camera's.
+  // The FTP server's own figures, the same for every camera.
+  const ftpServerStatus = () => ({ port: running.ftp.port, tls: running.ftp.tls, publicHost: running.ftp.publicHost ?? null, passwordSet: !!loaded.secrets.ftpPassword });
   const ftpStatusOf = (w: CameraWorker) => {
     const mine = clips !== undefined && w.cam().ftp.enabled;
     const ix = w.ftpIndexer();
     return {
       enabled: w.cam().ftp.enabled,
       listening: mine ? clips!.side.listening() : false,
-      port: running.ftp.port,
-      tls: running.ftp.tls,
-      publicHost: running.ftp.publicHost ?? null,
-      passwordSet: !!loaded.secrets.ftpPassword,
+      ...ftpServerStatus(),
       lastUpload: mine ? clips!.side.lastUpload(w.id) : null,
       lastClip: mine ? (ix?.lastIndexed() ?? null) : null,
       clips: cams.size === 1 ? countAllClips(catalog) : countAllClips(catalog, w.id),
@@ -849,14 +848,13 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   };
   // No camera runs here (every camera moved away, camera-move plan Task 12):
   // the status and the health show this placeholder, offline, instead of failing.
-  const NO_CAMERA = NO_CAMERA_TEXT;
   const noCamera = () => {
     const since = startedAt ?? Date.now();
     return {
-      camera: { online: false, since, error: NO_CAMERA, name: '', nameSource: 'config' as const, webUiUrl: null, reboot: null },
+      camera: { online: false, since, error: NO_CAMERA_TEXT, name: '', nameSource: 'config' as const, webUiUrl: null, reboot: null },
       intake: { onvif: 'down' as const, since, source: 'none' as const, resubscribes: 0 },
       stream: { enabled: false, up: false, go2rtcUp: false, lastFrameTs: null },
-      ftp: { enabled: false, listening: false, port: running.ftp.port, tls: running.ftp.tls, publicHost: running.ftp.publicHost ?? null, passwordSet: !!loaded.secrets.ftpPassword, lastUpload: null, lastClip: null, clips: countAllClips(catalog), failures: 0, camera: null, stalled: null },
+      ftp: { enabled: false, listening: false, ...ftpServerStatus(), lastUpload: null, lastClip: null, clips: countAllClips(catalog), failures: 0, camera: null, stalled: null },
       recordings: { last: null, cache: cachePool.usage(), camera: { bytes: 0, files: 0 }, download: { path: 'baichuan' as const, since: null, baichuanRefusal: null, retryBaichuanAt: null } },
     };
   };
