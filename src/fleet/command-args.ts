@@ -5,9 +5,9 @@ import { NEVER_REMOTE_ACTIONS, REMOTE_ACTIONS } from './policy';
 import { CAMERA_NAME_PATTERN } from './remote-settable';
 import { FILE_KINDS, MOVE_KINDS, type MoveKind, type MoveBounds, type MoveCopied, type MovePlan, type MoveRole, type MoveSummary, type Settings, type SettingsMap, type SettingsProposal, type Space, type MoveReason } from '../moves/types';
 import type { ManagedToken, TokensApplyArgs } from './token-store';
+import { isObj } from '../util/obj';
 
 export type ArgsVerdict<T> = { ok: true; args: T } | { ok: false; code: 'unsupported_version' | 'invalid_args'; detail: string };
-const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 const only = (o: Record<string, unknown>, keys: string[]) => Object.keys(o).every((k) => keys.includes(k));
 const TOK_ID = /^tok_[0-9A-HJKMNP-TV-Z]{20}$/;
 const HASH = /^sha256:[0-9a-f]{64}$/;
@@ -36,7 +36,6 @@ export function validateTokensApply(a: unknown): ArgsVerdict<TokensApplyArgs> {
   }
   return { ok: true, args: { v: 1, revision: a.revision as number, tokens: out } };
 }
-
 
 // P3 (contract "Args v1"): closed objects, args.v 1.
 export interface ConfigSetArgs { v: 1; dryRun: boolean; baseRevision: string; set: Record<string, boolean | number | string> }

@@ -1,12 +1,11 @@
 import { ConfigError } from './load-error';
 import { checkPartial, checkValue, LEGACY_CAMERA, LEGACY_FTP_USER, SettingError } from './schema';
+import { isObj, type Obj } from '../util/obj';
 
 // Today's one-camera files read as several-camera ones (spec
 // 2026-10-05-multi-camera-host-design §4.2). Nothing is written here: the
 // translation happens at every load; overrides are written back in the new
 // form on the next save.
-type Obj = Record<string, unknown>;
-const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 const settingError = <T>(f: () => T): T => {
   try {

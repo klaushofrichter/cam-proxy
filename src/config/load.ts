@@ -19,6 +19,7 @@ import { knownZone } from '../onboarding/zone';
 
 export { ConfigError } from './load-error';
 import { ConfigError } from './load-error';
+import { isObj, jsonEqual as same, type Obj } from '../util/obj';
 export type Source = 'default' | 'file' | 'override' | 'env';
 
 export interface Loaded {
@@ -66,9 +67,6 @@ export function needsRestart(path: string): boolean {
   if (LIVE.some((re) => re.test(path))) return false;
   return RESTART.some((r) => (r.endsWith('.') ? path.startsWith(r) : path === r));
 }
-
-type Obj = Record<string, unknown>;
-const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 function merge(base: Obj, over: Obj): Obj {
   const out: Obj = { ...base };
@@ -226,7 +224,6 @@ function takeCommandPolicy(o: unknown, where: 'config.json' | 'overrides.json' |
 // The overrides' revision, reported to cams-admin (migration P2): sha256 of
 // their canonical JSON ({} when there are none).
 export const configRevision = (l: Loaded): string => `sha256:${createHash('sha256').update(jcs(l.overrides)).digest('hex')}`;
-
 
 // An IPv4 network a.b.c.d/n, /16 or narrower.
 function checkSubnet(key: string, v: string): void {
@@ -437,8 +434,6 @@ export function withoutCamera(overrides: object, id: string): Obj {
   else delete out.cameras;
   return out;
 }
-
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 // A change to overrides.json computed but not written (plan P3 Task 4): the
 // configuration it makes, the overrides to write, and the (translated) leaf

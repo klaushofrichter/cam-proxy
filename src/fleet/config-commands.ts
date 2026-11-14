@@ -10,6 +10,7 @@ import type { CommandBody } from './command-check';
 import type { ConfigRollbackArgs, ConfigSetArgs, ConfigUnsetArgs } from './command-args';
 import type { Done, Handler } from './commands';
 import { classify, denyReason, directionFailures, SECRET_KEY_PATTERN, settableView } from './remote-settable';
+import { jsonEqual as same } from '../util/obj';
 
 // cams-admin's settings commands (migration spec M §8, plan P3 Task 7):
 // config.get, config.set / config.unset (dry run, revision conflict) and
@@ -28,7 +29,6 @@ export interface ConfigCommandDeps {
 
 type Failure = { path: string; code: string; detail?: string };
 type Obj = Record<string, unknown>;
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const failed = (code: string, paths: Failure[]): Done => ({ status: 'failed', code, result: { paths } });
 const MAX_CAMERAS = 24;
 // Settings never hold a secret; a path that looks like one (the contract's

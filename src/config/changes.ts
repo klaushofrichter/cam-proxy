@@ -1,11 +1,10 @@
 import { getPath, needsProcessRestart, needsRestart, settingPaths, type Loaded, type Source } from './load';
+import { jsonEqual as same } from '../util/obj';
 
 // One changed leaf setting between two configurations: the Settings page's
 // `config-change` record and cams-admin's config.set/unset/rollback diff (plan
 // P3 Task 4). `restart`: the change waits for a restart, or for a new process.
 export interface Change { path: string; from?: unknown; to?: unknown; sourceFrom: Source; sourceTo: Source; restart?: 'restart' | 'process' }
-
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 export function configChanges(before: Loaded, after: Loaded): Change[] {
   const paths = [...new Set([...settingPaths(before.config), ...settingPaths(after.config)])].sort();

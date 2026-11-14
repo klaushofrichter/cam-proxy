@@ -1,6 +1,7 @@
 // Typed cams settings <-> Reolink commands. Shapes measured on RLC-1224A
 // firmware v3.2.0.6011 (see docs/reolink-api.md and the Plan 4 camera facts).
 // Pure: no I/O, so every mapping is unit-tested against real replies.
+import { isObj, objOr as obj, type Obj } from '../../util/obj';
 
 export type Schedule = 'on' | 'off' | 'custom';
 export type AiKind = 'person' | 'vehicle' | 'pet';
@@ -75,8 +76,6 @@ const DAYNIGHT: Record<ImageSettings['dayNight'], string> = { auto: 'Auto', colo
 const IR: Record<ImageSettings['irLights'], string> = { auto: 'Auto', off: 'Off' };
 const HOURS = 168;
 
-type Obj = Record<string, unknown>;
-const obj = (v: unknown): Obj => (typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Obj) : {});
 const num = (v: unknown, fallback = 0): number => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
 
 function scheduleOf(table: string | undefined): Schedule {
@@ -132,7 +131,6 @@ function onlyKeys(o: Obj, allowed: string[], path: string, details: string[]): v
   for (const k of Object.keys(o)) if (!allowed.includes(k)) details.push(`${path}${k}: unknown field`);
 }
 const isInt = (v: unknown, min: number, max: number) => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
-const isObj = (v: unknown) => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 export function validateDetectionPatch(body: unknown): { ok: true; patch: DetectionPatch } | { ok: false; details: string[] } {
   if (!isObj(body)) return { ok: false, details: ['body must be an object'] };
