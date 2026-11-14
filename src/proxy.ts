@@ -6,7 +6,6 @@ import http from 'http';
 import https from 'https';
 import type { AddressInfo } from 'net';
 import { join } from 'path';
-import { createHash } from 'crypto';
 import { openCatalog, type Catalog } from './catalog/db';
 import { adoptLegacyUsage, usageByCamera, clearUnmapped, countAnalysesByStatus, listUnmapped, usageBetween } from './catalog/analyses';
 import { countAllClips, countClips } from './catalog/clips';
@@ -70,7 +69,7 @@ import type { ActionDeps } from './api/actions';
 import { createMetrics } from './api/metrics';
 import { createSessionSigner } from './api/session';
 import { createLoginLinks } from './api/login-links';
-import { TokenStore } from './fleet/token-store';
+import { localTokenDigests, TokenStore } from './fleet/token-store';
 import { CommandPolicy, sessionUnlocked } from './fleet/policy';
 import { uiConfigAgainst } from './api/ui-config';
 import { Journal } from './fleet/journal';
@@ -805,7 +804,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // data/admin/tokens.json exists (R2-7); nothing is created when it doesn't.
   const tokenStore = new TokenStore({
     file: join(loaded.config.server.dataDir, 'admin', 'tokens.json'),
-    localDigests: () => [loaded.secrets.adminToken, ...loaded.secrets.tokens, ...(loaded.secrets.auditToken ? [loaded.secrets.auditToken] : [])].map((x) => createHash('sha256').update(x).digest()),
+    localDigests: () => localTokenDigests(loaded.secrets),
   });
   const access: AccessDeps = {
     managed: (b) => tokenStore.match(b),
