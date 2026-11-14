@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Internal cleanup (/simplify): shared helpers replace duplicated code; no change in behavior or API. Slightly less work on the Pi: the event-image reads no longer block the server, the status and stats pages ask the disk and the catalog less often, and the still splitter rescans less.
+
 ## v2026.11.13.1
 
 - Archive: the predefined label for the main stream is now `Hi` instead of `4K` (not every camera's main stream is 4K). Clips archived earlier keep `4K` as an ordinary label.
