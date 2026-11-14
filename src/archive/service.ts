@@ -3,6 +3,7 @@ import type { TimeInfo } from '../camera/time';
 import { allArchive, archiveById, archiveLabelCounts, archiveTotals, countExpiringBy, expiredArchive, updateArchive, type ArchiveRow } from '../catalog/archive';
 import type { Catalog } from '../catalog/db';
 import type { Config } from '../config/defaults';
+import { cameraStillsIntervalS } from '../config/cameras';
 import { logger } from '../log';
 import type { StreamLog } from '../stream/log';
 import { readFile } from 'fs/promises';
@@ -126,7 +127,7 @@ export class Archive {
     const dataDir = resolve(this.d.dataDir);
     // Only image copies the analytics wrote (analytics/, still-checks/).
     const allowed = [resolve(dataDir, 'analytics'), resolve(dataDir, 'still-checks')];
-    const intervalMs = this.d.config().stills.intervalS * 1000;
+    const intervalMs = cameraStillsIntervalS(this.d.config(), cam) * 1000;
     return {
       stillNear: async (ts) => {
         for (const t of this.d.stillsIn(cam, ts, ts + Math.max(3000, 2 * intervalMs)).sort((a, b) => a - b)) {

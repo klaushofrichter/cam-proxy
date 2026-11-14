@@ -7,7 +7,7 @@ import { join } from 'path';
 import { openCatalog } from '../src/catalog/db';
 import { StreamLog } from '../src/stream/log';
 import { AuditLog } from '../src/audit/audit-log';
-import { DEFAULTS } from '../src/config/defaults';
+import { DEFAULTS, cameraDefaults } from '../src/config/defaults';
 import { Archive } from '../src/archive/service';
 import { ArchiveJobError, fileSource, type Obtain } from '../src/archive/sources';
 import { SPARE_BYTES, type ArchiveRequest, type JobView } from '../src/archive/jobs';
@@ -69,5 +69,27 @@ describe('Archive.checkSpace with jobs in flight', () => {
     expect(await archive.jobs.wait(second.id, 2000)).toMatchObject({ state: 'failed', error: 'insufficient_space' });
     release();
     await archive.jobs.wait(first.id, 2000);
+  });
+});
+
+describe('Archive thumbnails from stills', () => {
+  // A camera with its own stills interval: the search for a still after a
+  // second spans two of the camera's intervals, not the host's.
+  it('looks for a still near a second within the camera\'s own interval', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'camproxy-asvc-'));
+    const catalog = openCatalog(join(dir, 'catalog.sqlite'));
+    const config = structuredClone(DEFAULTS);
+    config.server.dataDir = dir;
+    config.cameras.cam1 = { ...cameraDefaults('cam1'), stills: { intervalS: 5 } }; // the host keeps 1 s
+    config.cameraOrder = ['cam1'];
+    const asked: [number, number][] = [];
+    const archive = new Archive({
+      dataDir: dir, catalog, log: new StreamLog(catalog), audit: new AuditLog({ dir: join(dir, 'audit'), version: 't' }), config: () => config,
+      disk: () => ({ free: 10_000 * MB, size: 10_000 * MB }), timeInfo: () => undefined, cameraName: () => 'Den', cameraModel: () => null, version: 't',
+      stillsIn: (_cam, from, to) => (asked.push([from, to]), []), readStill: async () => undefined, media: { duration: async () => 1, frame: async () => undefined },
+    });
+    const deps = (archive as unknown as { thumbDeps: (cam: string, clip: string, frame: () => Promise<undefined>) => { stillNear: (ts: number) => Promise<unknown> } }).thumbDeps('cam1', 'x.mp4', async () => undefined);
+    await deps.stillNear(100_000);
+    expect(asked).toEqual([[100_000, 110_000]]);
   });
 });

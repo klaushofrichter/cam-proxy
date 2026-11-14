@@ -4,7 +4,7 @@ import { promisify } from 'util';
 import { clipById, listClips } from '../catalog/clips';
 import type { Catalog } from '../catalog/db';
 import type { Config } from '../config/defaults';
-import { cameraConfig } from '../config/cameras';
+import { cameraStillsIntervalS } from '../config/cameras';
 import { compositionWindow, composeMaxS, planComposition, planSeconds, type ClipSpan, type Window } from '../compose/plan';
 import { SIZES, validTimeZone, type ComposeSize } from '../compose/ffmpeg';
 import type { createComposer } from '../compose/jobs';
@@ -99,7 +99,7 @@ export function composeApi(d: {
     // The still that shows at second t: the latest one within the stills
     // interval (stills every 2 s hold for 2 s instead of flickering to cards),
     // the camera's own interval where it overrides the host's.
-    const holdMs = (cameraConfig(d.config(), cam(res))?.stills.intervalS ?? d.config().stills.intervalS) * 1000;
+    const holdMs = cameraStillsIntervalS(d.config(), cam(res)) * 1000;
     const stills = workerOf(res).listStills(w.start - holdMs, w.end).sort((x, y) => x - y);
     const stillAt = (t: number): number | null => {
       let lo = 0;
