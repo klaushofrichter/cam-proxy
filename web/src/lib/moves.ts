@@ -2,6 +2,7 @@
 // Task 11, spec S §7): what the panel offers, the plan it sends, the texts.
 import type { MoveBounds, MoveKind, MovePlan, MoveReason, MoveSummary, Settings, SettingsProposal, Space } from '../../../src/moves/types';
 import { estimateText, type AutoWaitReason } from '../../../src/moves/plan';
+import { sizeText } from './format';
 
 // The plan rules live once, in src/moves/plan.ts (the proxy's auto-approval shares them).
 export { KINDS, budgetDefault, type AutoWaitReason, estimateText, hasContent, kindsWithContent, planFrom, spaceOptions, type MoveForm } from '../../../src/moves/plan';
@@ -38,15 +39,7 @@ export function positionsText(v: MoveItem['positions']): string {
   return `${n} stay${v.count === 1 ? 's' : ''} behind: the target's cam-proxy is older. They stay saved on the camera.`;
 }
 
-const GB = 1024 ** 3;
-const MB = 1024 ** 2;
-
-export function sizeText(bytes: number): string {
-  if (bytes >= GB) return `${(bytes / GB).toFixed(1)} GB`;
-  if (bytes >= MB) return `${(bytes / MB).toFixed(1)} MB`;
-  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} kB`;
-  return `${Math.round(bytes)} B`;
-}
+export { sizeText };
 
 // A proposed host limit in words with its unit (*.maxGB and profile.storageGB
 // are GB, storage.maxBytes is bytes), the setting after it.

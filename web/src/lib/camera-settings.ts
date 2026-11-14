@@ -1,4 +1,5 @@
 import { cameraPasswordEnv } from '../../../src/config/password-env';
+import { sizeText } from './format';
 // Per-camera settings and actions in the admin UI (spec
 // 2026-10-05-multi-camera-host-design §6.3). Pure: tested in
 // test/camera-settings-ui.test.ts.
@@ -37,7 +38,6 @@ export function newCameraProblem(c: { id: string; host: string }, existing: stri
 }
 
 type Usage = Record<string, { bytes: number; files: number }>;
-const size = (b: number) => (b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(1)} GB` : b >= 1024 ** 2 ? `${(b / 1024 ** 2).toFixed(1)} MB` : b >= 1024 ? `${(b / 1024).toFixed(1)} kB` : `${b} B`);
 
 // The Storage card's lines per camera (/control/stats `cameras`), with several cameras only.
 export function storageRows(by: Record<string, Usage> | undefined, ids: string[]): { id: string; text: string }[] {
@@ -45,7 +45,7 @@ export function storageRows(by: Record<string, Usage> | undefined, ids: string[]
   return ids.map((id) => {
     const u = by?.[id];
     if (!u || !Object.values(u).some((k) => k.bytes > 0)) return { id, text: 'nothing stored' };
-    return { id, text: (['stills', 'previews', 'clips', 'recordings'] as const).map((k) => `${k} ${size(u[k]?.bytes ?? 0)}`).join(' · ') };
+    return { id, text: (['stills', 'previews', 'clips', 'recordings'] as const).map((k) => `${k} ${sizeText(u[k]?.bytes ?? 0)}`).join(' · ') };
   });
 }
 
