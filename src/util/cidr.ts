@@ -5,6 +5,9 @@ export const ipv4Int = (ip: string): number | null => {
   return parts.length === 4 && parts.every((x) => Number.isInteger(x) && x >= 0 && x <= 255) ? parts.reduce((n, x) => n * 256 + x, 0) : null;
 };
 
+// A socket's address without the IPv4-mapped prefix (::ffff:10.0.0.1 -> 10.0.0.1).
+export const plainIp = (a: string | undefined): string => (a ?? '').replace(/^::ffff:/, '');
+
 // Whether ip (dotted, or IPv4-mapped IPv6 as sockets report it) lies in cidr (a.b.c.d/n).
 export function inCidr(ip: string, cidr: string): boolean {
   const [net, bits] = cidr.split('/');

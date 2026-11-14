@@ -4,6 +4,7 @@ import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { logger, maskPath, withoutQuery } from '../log';
 import { readCookie, SESSION_COOKIE } from './session';
 import { NEVER_FROM_CAMS_ADMIN } from '../fleet/remote-settable';
+import { plainIp } from '../util/cidr';
 
 const digest = (s: string) => createHash('sha256').update(s).digest();
 
@@ -66,7 +67,7 @@ export interface AccessDeps {
 
 // The client's address, without the IPv4-mapped prefix (::ffff:10.0.0.1).
 export function clientIp(req: Request): string {
-  return (req.ip ?? '').replace(/^::ffff:/, '');
+  return plainIp(req.ip);
 }
 
 // Who is asking: the admin token or an admin UI session is 'admin', a client
