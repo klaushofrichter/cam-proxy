@@ -6,7 +6,7 @@ import { ARCHIVE_FILES, CAM_ID } from '../archive/paths';
 import type { Catalog } from '../catalog/db';
 import type { KindSummary, MoveKind, MoveSummary } from './types';
 import { FILE_KINDS } from './types';
-import { DAY } from '../time-units';
+import { DAY, utcDay as dayOf } from '../time-units';
 import { PTZ_TABLE, ptzWireRows } from './ptz';
 import type { PtzPositionRow } from '../catalog/ptz-positions';
 
@@ -49,7 +49,6 @@ export const CONTENT_FOLDERS: readonly string[] = Object.values(FOLDERS).flat();
 const ORDER: MoveKind[] = ['ptz', 'clips', 'events', 'checks', 'archive', 'stills'];
 const CHUNK_ID = /^(stills|clips|events|checks|archive|ptz):(\d{4})-(\d{2})-(\d{2})$/;
 
-const dayOf = (ts: number) => new Date(ts).toISOString().slice(0, 10);
 
 function camCheck(cam: string): void {
   if (!CAM_ID.test(cam)) throw new Error('not a camera id');

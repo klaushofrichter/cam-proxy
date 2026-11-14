@@ -33,7 +33,7 @@ import { cameraParam, resolveCamera } from './camera-param';
 import type { CameraRegistry } from '../cameras/registry';
 import { RefusalThrottle } from '../audit/throttle';
 import { isAuditAction } from '../audit/actions';
-import { DAY, dayStart } from '../time-units';
+import { DAY, dayStart, utcDay } from '../time-units';
 import { eventsStored, eventsStoredByCamera } from './metrics';
 import { readCookie, SESSION_COOKIE, SESSION_MS, type createSessionSigner, type SessionInfo, type SessionOrigin } from './session';
 import type { createLoginLinks } from './login-links';
@@ -606,7 +606,7 @@ export function auditApi(d: { audit: AuditLog; guard: express.RequestHandler; re
   // from the retention run's cutoff day on, the same rule it deletes by.
   r.get('/audit/summary', d.guard, (_req, res) => {
     const days = d.retentionDays();
-    const from = new Date(dayStart((d.now ?? Date.now)() - days * DAY)).toISOString().slice(0, 10);
+    const from = utcDay(dayStart((d.now ?? Date.now)() - days * DAY));
     res.set('Cache-Control', 'no-store').json({ retentionDays: days, records: d.audit.count(from) });
   });
   r.get('/audit', d.guard, (req, res) => {

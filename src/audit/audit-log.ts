@@ -2,7 +2,7 @@ import { appendFileSync, closeSync, mkdirSync, openSync, readdirSync, readFileSy
 import { hostname } from 'os';
 import { join } from 'path';
 import { logger, maskPath } from '../log';
-import { addDays, DAY, dayStart } from '../time-units';
+import { addDays, DAY, dayStart, utcDay } from '../time-units';
 import { fileSize } from '../fs-util';
 export { maskPath };
 
@@ -89,7 +89,7 @@ export class AuditLog {
 
   write(i: AuditInput): AuditRecord | null {
     const ts = this.now();
-    const day = new Date(ts).toISOString().slice(0, 10);
+    const day = utcDay(ts);
     const file = join(this.d.dir, `${day}.jsonl`);
     try {
       // Refused tokens and failed sign-ins are what a flood writes: those stop at the size limit.

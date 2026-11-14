@@ -21,7 +21,10 @@ export const utcHhmm = (ts: number): string => {
   return `${pad2(d.getUTCHours())}${pad2(d.getUTCMinutes())}`;
 };
 
+// The UTC YYYY-MM-DD of `ts`.
+export const utcDay = (ts: number): string => new Date(ts).toISOString().slice(0, 10);
+
 // A YYYY-MM-DD date `n` days later (earlier for a negative n).
 export function addDays(day: string, n: number): string {
-  return new Date(Date.parse(`${day}T00:00:00Z`) + n * DAY).toISOString().slice(0, 10);
+  return utcDay(Date.parse(`${day}T00:00:00Z`) + n * DAY);
 }

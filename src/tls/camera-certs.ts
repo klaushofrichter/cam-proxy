@@ -7,7 +7,7 @@ import { X509Certificate } from 'crypto';
 import { issuedBy, issueLeaf, leafOf, renewalDue, type Leaf } from './leaf';
 import type { PushOutcome, PushResult } from './push';
 import type { Served } from './served';
-import { DAY, HOUR } from '../time-units';
+import { DAY, HOUR, utcDay } from '../time-units';
 
 export type CertMode = 'site-ca' | 'pinned' | 'public' | 'none';
 export interface CertState {
@@ -268,7 +268,7 @@ export class CameraCerts {
   }
   // Host-level problems for the health item: an unreadable state, cameras on the previous CA.
   problems(): string[] {
-    const until = new Date(this.previousSince + PREVIOUS_CA_DAYS * DAY).toISOString().slice(0, 10);
+    const until = utcDay(this.previousSince + PREVIOUS_CA_DAYS * DAY);
     const lagging = this.previousCa ? [...this.states].filter(([id, st]) => st.mode === 'site-ca' && this.extras.get(id)?.onPrevious).map(([id]) => `${id} still serves a leaf of the previous CA (trusted until ${until})`) : [];
     return [...(this.corrupt ? [CORRUPT] : []), ...lagging];
   }

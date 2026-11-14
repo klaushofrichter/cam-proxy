@@ -5,6 +5,7 @@
 // data/admin/camera-passwords.json, and only after the camera accepted it.
 import { readFileSync } from 'fs';
 import type { ActionWho } from '../api/actions';
+import { sleep } from '../async';
 import type { AuditLog } from '../audit/audit-log';
 import { RefusalThrottle } from '../audit/throttle';
 import type { CameraTrust, ReolinkClient } from '../camera/client';
@@ -706,12 +707,12 @@ export class OnboardingService {
 
   protected async waitForWorkerGone(id: string): Promise<void> {
     const t0 = this.now();
-    while (this.d.cameras.get(id) && this.now() - t0 < WORKER_WAIT_MS) await new Promise((r) => setTimeout(r, 50));
+    while (this.d.cameras.get(id) && this.now() - t0 < WORKER_WAIT_MS) await sleep(50);
   }
 
   protected async waitForWorker(id: string): Promise<void> {
     const t0 = this.now();
-    while (!this.d.cameras.get(id) && this.now() - t0 < WORKER_WAIT_MS) await new Promise((r) => setTimeout(r, 50));
+    while (!this.d.cameras.get(id) && this.now() - t0 < WORKER_WAIT_MS) await sleep(50);
   }
 
   // A camera whose worker did not start in time: nothing known yet.
