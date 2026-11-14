@@ -70,8 +70,7 @@ const summaryOf = (a: Pick<AnalysisRow, 'status' | 'objects' | 'summary'>): unkn
   try {
     if (a.summary !== null && a.summary !== undefined) return parseStoredList(a.summary);
     if (a.status !== 'ok' || a.objects === null) return [];
-    const objects: unknown = JSON.parse(a.objects);
-    return Array.isArray(objects) ? summarize(objects as Found[]).summary : [];
+    return summarize(parseStoredList(a.objects) as Found[]).summary;
   } catch {
     return [];
   }
