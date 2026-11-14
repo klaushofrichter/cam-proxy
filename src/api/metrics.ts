@@ -43,6 +43,14 @@ export function eventsStoredByCamera(c: Catalog): Record<string, Record<string, 
   return out;
 }
 
+// eventsStored from eventsStoredByCamera's answer (one scan for both): the
+// counts summed over the cameras, kinds in order.
+export function eventsTotals(byCamera: Record<string, Record<string, number>>): Record<string, number> {
+  const sum: Record<string, number> = {};
+  for (const kinds of Object.values(byCamera)) for (const [kind, n] of Object.entries(kinds)) sum[kind] = (sum[kind] ?? 0) + n;
+  return Object.fromEntries(Object.entries(sum).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+}
+
 // The phase 1 metrics (spec §13). Counts only, never event content.
 export function createMetrics(s: MetricsSources) {
   const registry = new Registry();

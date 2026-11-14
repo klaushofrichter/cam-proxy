@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, existsSync, readdirSync, mkdirSync, unlinkSync, utimesSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -553,5 +553,22 @@ describe('storage: images of every camera (spec §5.2)', () => {
       expect(existsSync(join(dir, 'analytics', cam, '1.jpg'))).toBe(false);
       expect(existsSync(join(dir, 'still-checks', cam, 'check-1.jpg'))).toBe(false);
     }
+  });
+});
+
+describe('storage: usage', () => {
+  it('asks the volume once and computes the budget from that answer', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'camproxy-storage-'));
+    const catalog = openCatalog(join(dir, 'catalog.sqlite'));
+    const config = structuredClone(DEFAULTS);
+    config.server.dataDir = dir;
+    const statfs = vi.fn(() => ({ free: 100 * 2 ** 30, size: 200 * 2 ** 30 }));
+    const storage = new Storage({ catalog, log: new StreamLog(catalog, () => NOW), config: () => config, now: () => NOW, statfs });
+    storage.recount();
+    statfs.mockClear();
+    const u = storage.usage();
+    expect(statfs).toHaveBeenCalledTimes(1);
+    expect(u.budget).toBe(storage.budget());
+    expect(u).toMatchObject({ free: 100 * 2 ** 30, size: 200 * 2 ** 30 });
   });
 });

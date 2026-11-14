@@ -1,18 +1,19 @@
 import express from 'express';
-import type { AuditLog } from '../audit/audit-log';
+import { whoFields, type AuditLog } from '../audit/audit-log';
 import { PoeSwitchError } from '../camera/poe-switch';
 import { poeHttpStatus } from '../camera/switch/errors';
 import type { SwitchRegistry } from '../camera/switch/registry';
 import { switchPasswordStore } from '../config/switch-passwords';
 import { PASSWORD_RULE, validPassword } from '../onboarding/password-rule';
 import { whoOf } from './onboarding-api';
+import { bad, notFound } from './respond';
 
 // The PoE switches this proxy operates (spec 2026-11-07-poe-switches-design),
 // mounted on /control behind requireAccess('admin'). The switch password is
 // write-only: never in an answer, a log line or an audit record.
 export function switchesApi(d: { registry: SwitchRegistry; dataDir: string; audit: AuditLog }): express.Router {
   const r = express.Router();
-  const record = (who: ReturnType<typeof whoOf>, category: string) => ({ category: [category], type: ['change'], user: who.user, ...(who.ip ? { ip: who.ip } : {}), ...(who.userAgent ? { userAgent: who.userAgent } : {}) });
+  const record = (who: ReturnType<typeof whoOf>, category: string) => ({ category: [category], type: ['change'], user: who.user, ...whoFields(who) });
 
   r.get('/switches', (_req, res) => {
     res.json({
@@ -27,9 +28,9 @@ export function switchesApi(d: { registry: SwitchRegistry; dataDir: string; audi
     const who = whoOf(req, res);
     const id = String(req.params.id);
     const password: unknown = req.body?.password;
-    if (!validPassword(password)) return void res.status(400).json({ error: 'invalid', detail: PASSWORD_RULE });
+    if (!validPassword(password)) return bad(res, PASSWORD_RULE);
     const e = d.registry.find(id);
-    if (!e) return void res.status(404).json({ error: 'not_found' });
+    if (!e) return notFound(res);
     const base = { ...record(who, 'configuration'), action: 'switch-password', message: '' };
     try {
       // Bound to the switch's address as this proxy knows it now: used for no other.
@@ -46,7 +47,7 @@ export function switchesApi(d: { registry: SwitchRegistry; dataDir: string; audi
     const who = whoOf(req, res);
     const id = String(req.params.id);
     const e = d.registry.find(id);
-    if (!e) return void res.status(404).json({ error: 'not_found' });
+    if (!e) return notFound(res);
     const port = Number(req.params.port);
     if (!Number.isInteger(port) || port < 1 || port > e.ref.ports) return void res.status(400).json({ error: 'invalid', detail: `port: 1 to ${e.ref.ports}` });
     const base = { ...record(who, 'host'), action: 'switch-port-poe-on' };

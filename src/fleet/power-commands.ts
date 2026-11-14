@@ -1,12 +1,13 @@
-import { readFileSync, renameSync, writeFileSync } from 'fs';
+import { readFileSync } from 'fs';
 import { join } from 'path';
-import type { AuditLog } from '../audit/audit-log';
+import { whoFields, type AuditLog } from '../audit/audit-log';
 import type { CameraReboot, TooSoon } from '../camera/reboot';
 import { logger } from '../log';
 import type { CameraPowerCycledArgs, CameraPowerCycleResultArgs, CameraPowerCyclingArgs, CameraPowerSetArgs } from './command-args';
 import type { Done, Handler } from './commands';
 import type { PowerCycleRequestEvent } from './outbox';
 import { ulid } from './protocol';
+import { writeFileAtomicSync } from '../fs-util';
 
 // The camera's power as cams-admin knows it (spec 2026-11-07-poe-switches-design,
 // "Camera power", "Who does what", "Asking from a proxy"). cams-admin holds the
@@ -90,9 +91,7 @@ export class CameraPowerStore {
   }
 
   private save(): void {
-    const tmp = `${this.file}.tmp`;
-    writeFileSync(tmp, JSON.stringify({ v: 1, cameras: Object.fromEntries(this.records) }, null, 2));
-    renameSync(tmp, this.file);
+    writeFileAtomicSync(this.file, JSON.stringify({ v: 1, cameras: Object.fromEntries(this.records) }, null, 2));
   }
 }
 
@@ -199,7 +198,7 @@ export function requestPowerCycle(d: PowerRequestDeps, camera: string, who: Powe
   d.emit({ kind: 'camera.power.cycle.request', camera, requestId, askedAt }, () => d.store.view(camera).asked?.requestId === requestId);
   d.audit.write({
     action: 'camera-powercycle', category: ['host'], type: ['change'], outcome: 'success', user: who.user, camera,
-    ...(who.ip ? { ip: who.ip } : {}), ...(who.userAgent ? { userAgent: who.userAgent } : {}),
+    ...whoFields(who),
     message: 'Camera power-cycle asked of cams-admin',
     details: { phase: 'asked', requestId, requestedBy: who.requestedBy, via: 'cams-admin' },
   });

@@ -1,4 +1,4 @@
-import type { AuditLog } from '../audit/audit-log';
+import { whoFields, type AuditLog } from '../audit/audit-log';
 import { configChanges, overrideState, type Change } from '../config/changes';
 import type { Config } from '../config/defaults';
 import { translatePath } from '../config/legacy';
@@ -10,6 +10,7 @@ import type { CommandBody } from './command-check';
 import type { ConfigRollbackArgs, ConfigSetArgs, ConfigUnsetArgs } from './command-args';
 import type { Done, Handler } from './commands';
 import { classify, denyReason, directionFailures, SECRET_KEY_PATTERN, settableView } from './remote-settable';
+import { jsonEqual as same } from '../util/obj';
 
 // cams-admin's settings commands (migration spec M §8, plan P3 Task 7):
 // config.get, config.set / config.unset (dry run, revision conflict) and
@@ -28,7 +29,6 @@ export interface ConfigCommandDeps {
 
 type Failure = { path: string; code: string; detail?: string };
 type Obj = Record<string, unknown>;
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const failed = (code: string, paths: Failure[]): Done => ({ status: 'failed', code, result: { paths } });
 const MAX_CAMERAS = 24;
 // Settings never hold a secret; a path that looks like one (the contract's
@@ -190,7 +190,7 @@ function rollback(d: ConfigCommandDeps, of: string, dryRun: boolean, u: Undoer):
   if (changes.length) {
     d.audit.write(u.by === 'cams-admin'
       ? { action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', user: 'cams-admin', message: `Settings rolled back by cams-admin (on behalf of ${u.cmd.actor}, ${of}): ${changes.map((c) => c.path).join(', ')}`, details: { cmdId: u.cmd.cmdId, actor: u.cmd.actor, rollbackOf: of, changes: changeRecord(changes) } }
-      : { action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', user: u.who.user, ...(u.who.ip ? { ip: u.who.ip } : {}), ...(u.who.userAgent ? { userAgent: u.who.userAgent } : {}), message: `cams-admin's change ${of} undone: ${changes.map((c) => c.path).join(', ')}`, details: { undoOf: of, changes: changeRecord(changes) } });
+      : { action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', user: u.who.user, ...whoFields(u.who), message: `cams-admin's change ${of} undone: ${changes.map((c) => c.path).join(', ')}`, details: { undoOf: of, changes: changeRecord(changes) } });
   }
   return { status: 'ok', result: { dryRun: false, baseRevision: revision, revision: configRevision(next), changes, unchanged, of }, changed: changes.map((c) => c.path) };
 }

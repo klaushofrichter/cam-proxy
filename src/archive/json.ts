@@ -1,6 +1,7 @@
 import type { ArchiveRow } from '../catalog/archive';
 import type { ArchiveMoveNote, Snapshot } from './metadata';
 import { parseStored } from '../catalog/json';
+import { strings } from '../util/obj';
 
 // The API's shapes of a row (docs/archive.md §1, §4): the item, and the
 // metadata (the item without urls plus the snapshot taken when archived).
@@ -30,7 +31,6 @@ export interface ArchiveItem {
   urls: { video: string; thumbnail: string; metadata: string };
 }
 
-const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
 export const snapshotOf = (row: ArchiveRow): Partial<Snapshot> => {
   const v = parseStored(row.metadata);
   return v && typeof v === 'object' ? (v as Partial<Snapshot>) : {};

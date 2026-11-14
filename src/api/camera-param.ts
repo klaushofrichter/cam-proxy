@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { can, type AccessInfo, type AccessNeed } from './auth';
 import type { CameraRegistry } from '../cameras/registry';
 import type { CameraWorker } from '../cameras/worker';
+import { notFound } from './respond';
 
 // How long a client waits before asking a restarting camera again.
 export const RESTART_RETRY_S = 5;
@@ -12,7 +13,7 @@ export const RESTART_RETRY_S = 5;
 // (never a hang).
 export function resolveCamera(cams: CameraRegistry, id: string, res: Response, need: AccessNeed | null): CameraWorker | undefined {
   const w = cams.get(id);
-  if (!w) return void res.status(404).json({ error: 'not_found' });
+  if (!w) return notFound(res);
   const a = res.locals.access as AccessInfo | undefined;
   if (need !== null && a && !can(a, need, w.id)) return void res.status(403).json({ error: 'admin_only' });
   if (w.phase() === 'restarting') {

@@ -1,7 +1,8 @@
 import type { CertState } from '../tls/camera-certs';
 import type { Credentials } from '../onboarding/credentials';
 import express, { type Request, type Response } from 'express';
-import { readFileSync, statSync } from 'fs';
+import { statSync } from 'fs';
+import { readFile } from 'fs/promises';
 import { resolve } from 'path';
 import { analysesFor, analysesInRange, analysisFor, type AnalysisRow } from '../catalog/analyses';
 import { summarize } from '../analytics/classes';
@@ -70,8 +71,7 @@ const summaryOf = (a: Pick<AnalysisRow, 'status' | 'objects' | 'summary'>): unkn
   try {
     if (a.summary !== null && a.summary !== undefined) return parseStoredList(a.summary);
     if (a.status !== 'ok' || a.objects === null) return [];
-    const objects: unknown = JSON.parse(a.objects);
-    return Array.isArray(objects) ? summarize(objects as Found[]).summary : [];
+    return summarize(parseStoredList(a.objects) as Found[]).summary;
   } catch {
     return [];
   }
@@ -149,14 +149,10 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: 
       stillTs: a.still_ts, summary: summaryOf(a),
     })));
   });
-  r.get('/cameras/:cam/events/:id/analysis.jpg', (req, res) => {
+  // Read without blocking the event loop (cams loads a day of these at once).
+  r.get('/cameras/:cam/events/:id/analysis.jpg', async (req, res) => {
     const a = analysisOf(req, res);
-    let jpeg: Buffer | undefined;
-    try {
-      jpeg = a?.image ? readFileSync(a.image) : undefined;
-    } catch {
-      jpeg = undefined;
-    }
+    const jpeg = a?.image ? await readFile(a.image).catch(() => undefined) : undefined;
     sendJpeg(res, jpeg, true);
   });
 
@@ -382,8 +378,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: 
       fileHeaders(res, id, size);
       return void res.status(200).end();
     }
-    const ac = new AbortController();
-    res.on('close', () => ac.abort());
+    const signal = leftSignal(res);
     // A plain GET streams the file through the fetch's tee while it arrives
     // (when it is the fetch's first client and no byte has gone through yet).
     // So does `Range: bytes=0-` (every <video> opens with it): the whole file
@@ -397,7 +392,7 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: 
     // for this client before an error is final.
     for (let attempt = 0; attempt < 2; attempt++) {
       if (gone(res)) return;
-      const { fetch, created } = side.fetcher.get(entry, { priority: 'high', signal: ac.signal });
+      const { fetch, created } = side.fetcher.get(entry, { priority: 'high', signal });
       const streamIt = !req.headers.range || req.headers.range === 'bytes=0-' || !side.fetcher.canKeep(size) || attempt > 0;
       // The fetch's own length: an HTTP Download's body may differ from the
       // name's size (the camera's remux); it is known before the first byte.

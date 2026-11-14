@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync, rmSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, dirname, join } from 'path';
 import { logger } from '../log';
+import { sleep } from '../async';
 import { trackedPids } from '../children';
 import { listDirSync } from '../fs-util';
 
@@ -98,7 +99,7 @@ export async function reapOrphanGo2rtc(o: ReapOptions = {}): Promise<{ killed: n
   }
   // Give the killed ones a moment to let go of their ports.
   if (o.sweep === false) return { killed, removed };
-  for (let i = 0; i < 20 && killed.some((pid) => alive(pid)); i++) await new Promise((r) => setTimeout(r, 50));
+  for (let i = 0; i < 20 && killed.some((pid) => alive(pid)); i++) await sleep(50);
   for (const name of listDirSync(tmpdir())) {
     if (!name.startsWith(PREFIX)) continue;
     const dir = join(tmpdir(), name);

@@ -1,5 +1,6 @@
-import { closeSync, constants, copyFileSync, fsyncSync, lstatSync, openSync, readdirSync, readFileSync, renameSync, chmodSync, unlinkSync, writeSync } from 'fs';
+import { constants, copyFileSync, lstatSync, readdirSync, readFileSync, chmodSync, unlinkSync } from 'fs';
 import { basename, dirname, isAbsolute, join, normalize } from 'path';
+import { writeFileAtomicSync } from '../fs-util';
 
 // The Pi's one .env file (spec 2026-10-04-pi-config-design): cam-proxy reads
 // CAMERA_HOST and PI_ADDRESS from it at start, and "Use this address" writes
@@ -221,23 +222,9 @@ function replaceEnvFile(path: string, next: string, now: Date): string {
 function writeAtomic(path: string, next: string): void {
   const dir = dirname(path);
   const mode = lstatSync(path).mode & 0o777;
-  const tmp = join(dir, `${basename(path)}.tmp-${process.pid}`);
   try {
-    const fd = openSync(tmp, 'wx', mode);
-    try {
-      writeSync(fd, next);
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-    chmodSync(tmp, mode);
-    renameSync(tmp, path);
+    writeFileAtomicSync(join(dir, basename(path)), next, { mode, chmod: true });
   } catch (err) {
-    try {
-      unlinkSync(tmp);
-    } catch {
-      // not created
-    }
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'EBUSY' || code === 'EXDEV') throw new EnvFileError('is_a_mount', 'the env file is mounted on its own; mount its directory instead');
     if (code === 'EACCES' || code === 'EROFS' || code === 'EPERM') throw new EnvFileError('not_writable', `the env file's directory is not writable (${code}); mount the directory, not the file`);

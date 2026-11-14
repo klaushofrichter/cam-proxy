@@ -13,6 +13,7 @@ import { seal } from '../moves/seal';
 import { moveTokenGuard } from '../moves/token-guard';
 import type { MovePhaseName } from '../moves/types';
 import { bad, intParam, notFound, perMinute, sendFileOr } from './respond';
+import { utcDay as dayOf } from '../time-units';
 
 // The source's side of a camera move (camera-move plan Task 5, S §8.1, §9.3):
 // the target pulls the camera's content and its sealed password from
@@ -46,7 +47,6 @@ const PROBE_MAX = 67_108_864;
 // approval day on are listed once more.
 const AFTER_RELEASE: readonly MovePhaseName[] = ['released', 'copying', 'copied'];
 const SEGMENT = /^[^\x00-\x1f\x7f\\/]{1,255}$/;
-const dayOf = (ts: number) => new Date(ts).toISOString().slice(0, 10);
 const recordOf = (res: Response): MoveRecord => res.locals.move as MoveRecord;
 const notReady = (res: Response) => void res.status(409).json({ error: 'not_ready' });
 

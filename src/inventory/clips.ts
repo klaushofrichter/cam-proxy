@@ -9,7 +9,7 @@ import { listCamera, UNREADABLE_NOTE, unreadableNames, type CameraListDeps } fro
 import { coverage, duplicatesAmong, LATE_START_MS, pairByStart, START_SLACK_MS } from './match';
 import { MAX_ITEMS, MAX_TOP, type Check, type CheckResult } from './runner';
 import { records } from './stills';
-import { DAY, dayStart, HOUR, utcDayParts } from '../time-units';
+import { DAY, dayStart, HOUR, utcDay, utcDayParts } from '../time-units';
 import { listDir } from '../fs-util';
 
 // The clips inventory (#74, spec 2026-10-02-inventory-design §4). Part 1,
@@ -137,7 +137,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
           add({ type: 'snapshot-without-clip', file: rel(path) });
         }
       }
-      ctx.progress({ phase: 'clips', done: i + 1, total: days.length, note: new Date(day).toISOString().slice(0, 10) });
+      ctx.progress({ phase: 'clips', done: i + 1, total: days.length, note: utcDay(day) });
       await yieldToLoop();
     }
 
@@ -176,7 +176,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     }
 
     let message =
-      `${counts.clips} clips in the last ${s.clipsDays} days (since ${new Date(from).toISOString().slice(0, 10)} UTC): ${counts.rowsWithoutFile} rows without file, ${counts.filesWithoutRow} files without row, ${counts.snapshotsWithoutClip} snapshots without a clip, ` +
+      `${counts.clips} clips in the last ${s.clipsDays} days (since ${utcDay(from)} UTC): ${counts.rowsWithoutFile} rows without file, ${counts.filesWithoutRow} files without row, ${counts.snapshotsWithoutClip} snapshots without a clip, ` +
       `${counts.eventsWithoutClip} of ${counts.events} events without clip, ${counts.clipsWithoutEvent} clips without event`;
     const window: CheckResult['window'] = { from, to, reason: 'retention', notes };
     if (!ctx.options?.camera || cancelled || ctx.signal.aborted) return { window, counts, top: [], items: local, message };
@@ -309,7 +309,7 @@ export function clipsCheck(d: ClipsInventoryDeps): Check {
     if (unjudged) notes.push(UNJUDGED_NOTE(unjudged));
     if (unreadable.count) notes.push(UNREADABLE_NOTE(unreadable.count, unreadable.example));
     if (oddFlags) notes.push(UNKNOWN_KINDS_NOTE(camera.unknownKinds, oddFlags.id));
-    if (prunedHere) notes.push(PRUNED_NOTE(prunedHere, new Date(oldestHere!).toISOString().slice(0, 10)));
+    if (prunedHere) notes.push(PRUNED_NOTE(prunedHere, utcDay(oldestHere!)));
     message +=
       `; camera (${s.stream}): ${camera.recordings} recordings, ${camera.missingLocally} missing locally (${mb(camera.missingLocallyBytes)}), ` +
       `${camera.goneFromCamera} local clips gone from the camera, ${camera.unknownDays} days unknown` +

@@ -11,30 +11,42 @@ export interface Frame {
 }
 
 const MAX_JPEG = 4 * 1024 * 1024;
+const SOI = Buffer.from([0xff, 0xd8]);
+const EOI = Buffer.from([0xff, 0xd9]);
 
 // Splits a stream of concatenated JPEGs (ffmpeg image2pipe) into one JPEG per
 // chunk, from SOI (FF D8) to EOI (FF D9). Inside JPEG data FF is always
 // followed by 00 or a marker, so FF D9 only ends an image.
 export function splitJpegs(): Transform {
   let buf: Buffer = Buffer.alloc(0);
+  // How much of buf (an image's start, SOI at 0) was searched for EOI already:
+  // the next chunk's search resumes there (one byte back, for a split marker)
+  // instead of rescanning the whole image on every chunk.
+  let scanned = 0;
   return new Transform({
     readableObjectMode: true,
     transform(chunk: Buffer, _enc, cb) {
       buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;
       for (;;) {
-        const start = buf.indexOf(Buffer.from([0xff, 0xd8]));
+        const start = buf.indexOf(SOI);
         if (start < 0) {
           buf = buf.subarray(buf.length - 1); // keep a possible FF
+          scanned = 0;
           break;
         }
-        const end = buf.indexOf(Buffer.from([0xff, 0xd9]), start + 2);
+        const end = buf.indexOf(EOI, Math.max(start + 2, start === 0 ? scanned - 1 : 0));
         if (end < 0) {
           buf = buf.subarray(start);
-          if (buf.length > MAX_JPEG) buf = Buffer.alloc(0); // not a JPEG stream: drop
+          scanned = buf.length;
+          if (buf.length > MAX_JPEG) {
+            buf = Buffer.alloc(0); // not a JPEG stream: drop
+            scanned = 0;
+          }
           break;
         }
         this.push(Buffer.from(buf.subarray(start, end + 2)));
         buf = buf.subarray(end + 2);
+        scanned = 0;
       }
       cb();
     },

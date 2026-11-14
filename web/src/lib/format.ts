@@ -19,6 +19,15 @@ export function agoText(ts: number | null | undefined, now = Date.now()): string
 
 export const mbText = (bytes: number): string => `${(bytes / MB).toFixed(1)} MB`;
 
+export const GB = 1024 ** 3;
+// A size in the largest fitting unit: "1.5 GB", "12.0 MB", "3.2 kB", "512 B".
+export function sizeText(bytes: number): string {
+  if (bytes >= GB) return `${(bytes / GB).toFixed(1)} GB`;
+  if (bytes >= MB) return `${(bytes / MB).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} kB`;
+  return `${Math.round(bytes)} B`;
+}
+
 export const pad2 = (n: number): string => String(n).padStart(2, '0');
 // The browser's local date, YYYY-MM-DD (today by default), and time, HH:MM.
 export const localDate = (ts = Date.now()): string => {

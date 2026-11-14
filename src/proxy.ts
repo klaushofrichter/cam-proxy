@@ -6,7 +6,6 @@ import http from 'http';
 import https from 'https';
 import type { AddressInfo } from 'net';
 import { join } from 'path';
-import { createHash } from 'crypto';
 import { openCatalog, type Catalog } from './catalog/db';
 import { adoptLegacyUsage, usageByCamera, clearUnmapped, countAnalysesByStatus, listUnmapped, usageBetween } from './catalog/analyses';
 import { countAllClips, countClips } from './catalog/clips';
@@ -70,7 +69,7 @@ import type { ActionDeps } from './api/actions';
 import { createMetrics } from './api/metrics';
 import { createSessionSigner } from './api/session';
 import { createLoginLinks } from './api/login-links';
-import { TokenStore } from './fleet/token-store';
+import { localTokenDigests, TokenStore } from './fleet/token-store';
 import { CommandPolicy, sessionUnlocked } from './fleet/policy';
 import { uiConfigAgainst } from './api/ui-config';
 import { Journal } from './fleet/journal';
@@ -126,7 +125,7 @@ import { camsAdminApi } from './api/cams-admin-api';
 import type { Timing } from './fleet/client';
 import { CONFIG_SCHEMA } from './config/schema';
 import { profileReport, type ProfileFacts, type ProfileReport } from './health/profile';
-import { notFound, perMinute } from './api/respond';
+import { bad, notFound, perMinute } from './api/respond';
 
 export const VERSION = process.env.CAMPROXY_VERSION ?? 'dev';
 
@@ -805,7 +804,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // data/admin/tokens.json exists (R2-7); nothing is created when it doesn't.
   const tokenStore = new TokenStore({
     file: join(loaded.config.server.dataDir, 'admin', 'tokens.json'),
-    localDigests: () => [loaded.secrets.adminToken, ...loaded.secrets.tokens, ...(loaded.secrets.auditToken ? [loaded.secrets.auditToken] : [])].map((x) => createHash('sha256').update(x).digest()),
+    localDigests: () => localTokenDigests(loaded.secrets),
   });
   const access: AccessDeps = {
     managed: (b) => tokenStore.match(b),
@@ -830,16 +829,15 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   // One camera's FTP status: the server's figures for this camera's user;
   // the clip count of every camera while there is one (the Pi's number as
   // before), else this camera's.
+  // The FTP server's own figures, the same for every camera.
+  const ftpServerStatus = () => ({ port: running.ftp.port, tls: running.ftp.tls, publicHost: running.ftp.publicHost ?? null, passwordSet: !!loaded.secrets.ftpPassword });
   const ftpStatusOf = (w: CameraWorker) => {
     const mine = clips !== undefined && w.cam().ftp.enabled;
     const ix = w.ftpIndexer();
     return {
       enabled: w.cam().ftp.enabled,
       listening: mine ? clips!.side.listening() : false,
-      port: running.ftp.port,
-      tls: running.ftp.tls,
-      publicHost: running.ftp.publicHost ?? null,
-      passwordSet: !!loaded.secrets.ftpPassword,
+      ...ftpServerStatus(),
       lastUpload: mine ? clips!.side.lastUpload(w.id) : null,
       lastClip: mine ? (ix?.lastIndexed() ?? null) : null,
       clips: cams.size === 1 ? countAllClips(catalog) : countAllClips(catalog, w.id),
@@ -850,14 +848,13 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   };
   // No camera runs here (every camera moved away, camera-move plan Task 12):
   // the status and the health show this placeholder, offline, instead of failing.
-  const NO_CAMERA = NO_CAMERA_TEXT;
   const noCamera = () => {
     const since = startedAt ?? Date.now();
     return {
-      camera: { online: false, since, error: NO_CAMERA, name: '', nameSource: 'config' as const, webUiUrl: null, reboot: null },
+      camera: { online: false, since, error: NO_CAMERA_TEXT, name: '', nameSource: 'config' as const, webUiUrl: null, reboot: null },
       intake: { onvif: 'down' as const, since, source: 'none' as const, resubscribes: 0 },
       stream: { enabled: false, up: false, go2rtcUp: false, lastFrameTs: null },
-      ftp: { enabled: false, listening: false, port: running.ftp.port, tls: running.ftp.tls, publicHost: running.ftp.publicHost ?? null, passwordSet: !!loaded.secrets.ftpPassword, lastUpload: null, lastClip: null, clips: countAllClips(catalog), failures: 0, camera: null, stalled: null },
+      ftp: { enabled: false, listening: false, ...ftpServerStatus(), lastUpload: null, lastClip: null, clips: countAllClips(catalog), failures: 0, camera: null, stalled: null },
       recordings: { last: null, cache: cachePool.usage(), camera: { bytes: 0, files: 0 }, download: { path: 'baichuan' as const, since: null, baichuanRefusal: null, retryBaichuanAt: null } },
     };
   };
@@ -1547,7 +1544,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   app.use((_req, res) => notFound(res));
   app.use((err: Error & { status?: number; type?: string }, _req: Request, res: Response, _next: NextFunction) => {
     if (err.status === 404) return notFound(res);
-    if (err.type === 'entity.parse.failed') return void res.status(400).json({ error: 'invalid', detail: 'body is not JSON' });
+    if (err.type === 'entity.parse.failed') return bad(res, 'body is not JSON');
     if (err.status && err.status < 500) return void res.status(err.status).json({ error: err.type === 'entity.too.large' ? 'too_large' : 'bad_request' });
     logger.error({ err: err.message }, 'request_failed');
     res.status(500).json({ error: 'internal' });

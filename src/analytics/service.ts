@@ -6,6 +6,7 @@ import { addUsage, analysisFor, countUnmapped, okAnalysisAt, releaseUsage, saveA
 import { keyId } from './key-id';
 import { checkAt, insertCheck, setCheckImage, type StillCheckRow } from '../catalog/still-checks';
 import { eventById } from '../catalog/events';
+import { parseStoredList } from '../catalog/json';
 import type { Config } from '../config/defaults';
 import type { TimeInfo } from '../camera/time';
 import { logger } from '../log';
@@ -500,13 +501,7 @@ export class AnalyticsService {
   backfillSummaries(): number {
     let n = 0;
     for (const a of withoutSummary(this.d.catalog)) {
-      let objects: Found[] = [];
-      try {
-        const parsed: unknown = a.objects ? JSON.parse(a.objects) : [];
-        objects = Array.isArray(parsed) ? (parsed as Found[]) : [];
-      } catch {
-        objects = [];
-      }
+      const objects = parseStoredList(a.objects) as Found[];
       setSummary(this.d.catalog, a.id, JSON.stringify(summarize(objects).summary));
       n++;
     }

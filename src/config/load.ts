@@ -1,5 +1,5 @@
-import { createHash, randomBytes } from 'crypto';
-import { chmodSync, closeSync, constants, copyFileSync, existsSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeSync } from 'fs';
+import { createHash } from 'crypto';
+import { chmodSync, constants, copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'path';
 import { cameraDefaults, DEFAULTS, type Config, type Secrets } from './defaults';
 import { checkPartial, leafAt, leafPaths, SETTINGS, SettingError } from './schema';
@@ -19,6 +19,8 @@ import { knownZone } from '../onboarding/zone';
 
 export { ConfigError } from './load-error';
 import { ConfigError } from './load-error';
+import { isObj, jsonEqual as same, type Obj } from '../util/obj';
+import { writeFileAtomicSync } from '../fs-util';
 export type Source = 'default' | 'file' | 'override' | 'env';
 
 export interface Loaded {
@@ -66,9 +68,6 @@ export function needsRestart(path: string): boolean {
   if (LIVE.some((re) => re.test(path))) return false;
   return RESTART.some((r) => (r.endsWith('.') ? path.startsWith(r) : path === r));
 }
-
-type Obj = Record<string, unknown>;
-const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 function merge(base: Obj, over: Obj): Obj {
   const out: Obj = { ...base };
@@ -224,9 +223,15 @@ function takeCommandPolicy(o: unknown, where: 'config.json' | 'overrides.json' |
 }
 
 // The overrides' revision, reported to cams-admin (migration P2): sha256 of
-// their canonical JSON ({} when there are none).
-export const configRevision = (l: Loaded): string => `sha256:${createHash('sha256').update(jcs(l.overrides)).digest('hex')}`;
-
+// their canonical JSON ({} when there are none). Kept per overrides object: a
+// settings change makes a new Loaded with new overrides, never edits them in
+// place, and cams-admin's status asks every 5 s.
+const revisions = new WeakMap<object, string>();
+export const configRevision = (l: Loaded): string => {
+  let r = revisions.get(l.overrides);
+  if (r === undefined) revisions.set(l.overrides, (r = `sha256:${createHash('sha256').update(jcs(l.overrides)).digest('hex')}`));
+  return r;
+};
 
 // An IPv4 network a.b.c.d/n, /16 or narrower.
 function checkSubnet(key: string, v: string): void {
@@ -367,40 +372,11 @@ function writeOverrides(file: string, overrides: Obj): void {
   // Atomic and durable (review M4: P3 makes this write remote): a fresh temp
   // file (wx, mode 600), fsync, rename, fsync of the folder. A torn write
   // would keep the proxy from starting.
-  const dir = dirname(file);
-  mkdirSync(dir, { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}-${randomBytes(6).toString('hex')}`;
-  const fd = openSync(tmp, 'wx', 0o600);
-  try {
-    fchmodSync(fd, 0o600);
-    writeSync(fd, `${JSON.stringify(overrides, null, 2)}\n`);
-    fsyncSync(fd);
-  } catch (err) {
-    closeSync(fd);
-    rmSync(tmp, { force: true });
-    throw err;
-  }
-  closeSync(fd);
-  try {
-    renameSync(tmp, file);
-  } catch (err) {
-    rmSync(tmp, { force: true });
-    throw err;
-  }
-  try {
-    const d = openSync(dir, 'r');
-    try {
-      fsyncSync(d);
-    } finally {
-      closeSync(d);
-    }
-  } catch {
-    // Not every platform syncs a folder; the rename is done.
-  }
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileAtomicSync(file, `${JSON.stringify(overrides, null, 2)}\n`, { mode: 0o600, chmod: true, dirFsync: true });
 }
 
 // The leaf paths an object sets ('sse.pingS'), e.g. a PUT body.
-export const leafPathsOf = (o: object): string[] => setPaths(o as Obj);
 function setPaths(o: Obj, prefix = ''): string[] {
   return Object.entries(o).flatMap(([k, v]) => {
     const p = prefix ? `${prefix}.${k}` : k;
@@ -437,8 +413,6 @@ export function withoutCamera(overrides: object, id: string): Obj {
   else delete out.cameras;
   return out;
 }
-
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 // A change to overrides.json computed but not written (plan P3 Task 4): the
 // configuration it makes, the overrides to write, and the (translated) leaf
@@ -701,7 +675,7 @@ export function applyEmptyHost(p: EmptyHostPlan, overridesFile: string, now = ne
   try {
     copyFileSync(p.file, join(dir, backup), constants.COPYFILE_EXCL);
     chmodSync(join(dir, backup), mode);
-    writeFileAtomic(p.file, text, mode);
+    writeFileAtomicSync(p.file, text, { mode });
   } catch (err) {
     throw new ConfigError(`${basename(p.file)}: could not be written (${(err as NodeJS.ErrnoException).code ?? 'error'})`);
   }
@@ -718,22 +692,4 @@ export function applyEmptyHost(p: EmptyHostPlan, overridesFile: string, now = ne
   return { backup };
 }
 
-function writeFileAtomic(file: string, text: string, mode: number): void {
-  const tmp = `${file}.tmp-${process.pid}-${randomBytes(6).toString('hex')}`;
-  const fd = openSync(tmp, 'wx', mode);
-  try {
-    writeSync(fd, text);
-    fsyncSync(fd);
-  } catch (err) {
-    closeSync(fd);
-    rmSync(tmp, { force: true });
-    throw err;
-  }
-  closeSync(fd);
-  try {
-    renameSync(tmp, file);
-  } catch (err) {
-    rmSync(tmp, { force: true });
-    throw err;
-  }
-}
+

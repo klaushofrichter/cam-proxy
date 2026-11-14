@@ -4,7 +4,6 @@ import { join } from 'path';
 import type { AuditLog } from '../audit/audit-log';
 import type { MoveFinishArgs, MoveReturnOpenArgs, MoveReturnStartArgs } from '../fleet/command-args';
 import type { Done, Handler } from '../fleet/commands';
-import type { Config } from '../config/defaults';
 import type { Storage } from '../storage';
 import { cancelMinuteFiles, capturedFilter } from './captured';
 import { removeChunkParts } from './chunk-parts';
@@ -15,6 +14,7 @@ import { moveEnded, type ChunkMeta, type MoveJournal, type MoveRecord, type Move
 import { removeImported, removeLanded, removeReturned, type Purged } from './purge';
 import { keepDaysOf } from './retention';
 import { FILE_KINDS, type MoveEvent, type MovePhaseName, type MovePlan } from './types';
+import type { MoveRetention } from './source';
 
 // The copy back after a cancel after the switch-over (step 4, spec §1,
 // rulings 1, 2, 7, 20): a return move linked to the cancelled one
@@ -60,7 +60,7 @@ export interface ReturnDeps {
   // The finish (Task 11): storage recounted after the new proxy's delete; the
   // retention in effect for keepDays on finished (left out: none).
   storage?: Pick<Storage, 'recount'>;
-  retention?: () => Pick<Config['retention'], 'stillsDays' | 'previewsDays' | 'clipsDays' | 'eventsDays'>;
+  retention?: () => MoveRetention;
   // The new proxy's cached chunk manifests (what it served the original): the
   // finish deletes only files they list, and drops them once the return ends (#250).
   manifests?: { lists: (moveId: string, rel: string) => boolean; forget: (moveId: string) => void };

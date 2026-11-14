@@ -1,4 +1,4 @@
-import type { Catalog } from './db';
+import { inTransaction, type Catalog } from './db';
 
 // Saved PTZ positions (spec 2026-10-30-ptz-capabilities-design §6, migration
 // 10). Per camera: sort_order is 0..n-1 without gaps, and exactly one row is
@@ -15,17 +15,7 @@ export interface PtzPositionRow {
   updated_at: number;
 }
 
-// One transaction; ROLLBACK on a throw.
-function tx(c: Pick<Catalog, 'db'>, fn: () => void): void {
-  c.db.exec('BEGIN');
-  try {
-    fn();
-    c.db.exec('COMMIT');
-  } catch (err) {
-    c.db.exec('ROLLBACK');
-    throw err;
-  }
-}
+const tx = (c: Pick<Catalog, 'db'>, fn: () => void): void => inTransaction(c.db, fn);
 
 export function listPositions(c: Pick<Catalog, 'db'>, cam: string): PtzPositionRow[] {
   return c.db.prepare('SELECT * FROM ptz_positions WHERE cam = ? ORDER BY sort_order, created_at').all(cam) as unknown as PtzPositionRow[];

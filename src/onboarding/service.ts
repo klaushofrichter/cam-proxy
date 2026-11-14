@@ -5,7 +5,8 @@
 // data/admin/camera-passwords.json, and only after the camera accepted it.
 import { readFileSync } from 'fs';
 import type { ActionWho } from '../api/actions';
-import type { AuditLog } from '../audit/audit-log';
+import { sleep } from '../async';
+import { cmdFields, whoFields, type AuditLog } from '../audit/audit-log';
 import { RefusalThrottle } from '../audit/throttle';
 import type { CameraTrust, ReolinkClient } from '../camera/client';
 import type { NtpOutcome } from '../cameras/ntp';
@@ -118,8 +119,7 @@ export const SERVED_CACHE_MS = 60_000;
 export type Refusal = { status: number; error: string; detail?: string; retryAfterS?: number; extra?: Record<string, unknown> };
 
 
-const whoRecord = (who: Who) => ({ user: who.user, ...(who.ip ? { ip: who.ip } : {}), ...(who.userAgent ? { userAgent: who.userAgent } : {}) });
-const cmdOf = (who: Who) => ({ ...(who.cmdId ? { cmdId: who.cmdId } : {}), ...(who.actor ? { actor: who.actor } : {}) });
+const whoRecord = (who: Who) => ({ user: who.user, ...whoFields(who) });
 
 const SHARED_PASSWORD = 'CAMPROXY_CAMERA_PASSWORD';
 // Whether a camera configured here logs in with the shared password (it has none of its own).
@@ -168,7 +168,7 @@ export class OnboardingService {
     if (!c) return { status: 404, error: 'not_found' };
     const base = { action: 'camera-password', category: ['configuration'], type: ['change'], ...whoRecord(who), camera: cam };
     const fail = (r: Refusal, extra: Record<string, unknown> = {}): Refusal => {
-      this.d.audit.write({ ...base, outcome: 'failure', error: r.error, message: `Camera password for ${cam} not saved: ${r.error}`, details: { requestedBy: who.requestedBy, ...cmdOf(who), ...extra } });
+      this.d.audit.write({ ...base, outcome: 'failure', error: r.error, message: `Camera password for ${cam} not saved: ${r.error}`, details: { requestedBy: who.requestedBy, ...cmdFields(who), ...extra } });
       return r;
     };
     const own = cameraPasswordEnv(cam);
@@ -202,7 +202,7 @@ export class OnboardingService {
     }
     this.d.setLoaded(withoutEnv(l, removeLine ? [own] : []));
     await this.d.restartCamera(cam);
-    this.d.audit.write({ ...base, outcome: 'success', message: `Camera password for ${cam} saved on this proxy (checked with the camera)${removeLine ? `; ${own} removed from the env file` : ''}`, details: { ...(removeLine ? { envLine: 'removed' } : {}), requestedBy: who.requestedBy, ...cmdOf(who) } });
+    this.d.audit.write({ ...base, outcome: 'success', message: `Camera password for ${cam} saved on this proxy (checked with the camera)${removeLine ? `; ${own} removed from the env file` : ''}`, details: { ...(removeLine ? { envLine: 'removed' } : {}), requestedBy: who.requestedBy, ...cmdFields(who) } });
     return { status: 200, credentials: { source: 'store', authOk: true, checkedAt: this.now() }, ...(c.protocol === 'http' ? { plaintext: true as const } : {}) };
   }
 
@@ -214,7 +214,7 @@ export class OnboardingService {
     if (i.password !== undefined && i.protocol === 'https' && i.fingerprint === undefined) return { status: 400, error: 'invalid', detail: 'fingerprint: required with a password over https' };
     const base = { action: 'camera-probe', category: ['configuration'], type: ['access'], ...whoRecord(who) };
     const rec = (outcome: 'success' | 'failure', details: Record<string, unknown>, error?: string) =>
-      this.d.audit.write({ ...base, outcome, ...(error ? { error } : {}), message: `Camera probe of ${i.host}: ${error ?? (details.login === 'ok' ? `model ${String(details.model)}` : `login ${String(details.login)}`)}`, details: { host: i.host, ...details, requestedBy: who.requestedBy, ...cmdOf(who) } });
+      this.d.audit.write({ ...base, outcome, ...(error ? { error } : {}), message: `Camera probe of ${i.host}: ${error ?? (details.login === 'ok' ? `model ${String(details.model)}` : `login ${String(details.login)}`)}`, details: { host: i.host, ...details, requestedBy: who.requestedBy, ...cmdFields(who) } });
     if (i.password !== undefined) {
       const limited = await this.attempt(i.host, (r, suppressed) => rec('failure', { login: 'not_tried', ...(suppressed ? { suppressed } : {}) }, r.error));
       if (limited) return limited;
@@ -243,7 +243,7 @@ export class OnboardingService {
     if (!served) return { status: 503, error: 'camera_offline', detail: 'the camera did not answer on HTTPS' };
     const requester = this.requester(who);
     if (served.fingerprint !== fingerprint) {
-      this.d.audit.write({ action: 'camera-trust', category: ['configuration'], type: ['change'], outcome: 'failure', error: 'fingerprint_mismatch', ...whoRecord(who), camera: cam, message: `Camera trust ${cam}: pin refused, the camera serves ${served.fingerprint}, not ${fingerprint}`, details: { op: 'pin', fingerprint, served: served.fingerprint, requestedBy: who.requestedBy, ...cmdOf(who) } });
+      this.d.audit.write({ action: 'camera-trust', category: ['configuration'], type: ['change'], outcome: 'failure', error: 'fingerprint_mismatch', ...whoRecord(who), camera: cam, message: `Camera trust ${cam}: pin refused, the camera serves ${served.fingerprint}, not ${fingerprint}`, details: { op: 'pin', fingerprint, served: served.fingerprint, requestedBy: who.requestedBy, ...cmdFields(who) } });
       return { status: 409, error: 'fingerprint_mismatch', detail: 'the camera serves another certificate than the one confirmed', extra: { served: served.fingerprint } };
     }
     this.servedCache.set(cam, { at: this.now(), fingerprint: served.fingerprint });
@@ -465,7 +465,7 @@ export class OnboardingService {
   }
 
   private auditAdd(who: Who, cam: string, outcome: 'success' | 'failure', message: string, details: Record<string, unknown>, error?: string): void {
-    this.d.audit.write({ action: 'camera-add', category: ['configuration'], type: ['creation'], outcome, ...(error ? { error } : {}), ...whoRecord(who), camera: cam, message, details: { ...details, requestedBy: who.requestedBy, ...cmdOf(who) } });
+    this.d.audit.write({ action: 'camera-add', category: ['configuration'], type: ['creation'], outcome, ...(error ? { error } : {}), ...whoRecord(who), camera: cam, message, details: { ...details, requestedBy: who.requestedBy, ...cmdFields(who) } });
   }
 
   // The camera's host as configured: the address, with the API port when it is not the protocol's default.
@@ -605,7 +605,7 @@ export class OnboardingService {
     if (!c) return { status: 404, error: 'not_found' };
     const from = c.host || null;
     const fail = (r: Refusal, extra: Record<string, unknown> = {}): Refusal => {
-      this.d.audit.write({ action: 'camera-host-change', category: ['configuration'], type: ['change'], outcome: 'failure', error: r.error, ...whoRecord(who), camera: cam, message: `Camera ${cam} address not changed (${from ?? 'none'} → ${typeof to === 'string' ? to.slice(0, 64) : 'invalid'}): ${r.error}`, details: { from, to: typeof to === 'string' ? to.slice(0, 260) : null, ...extra, requestedBy: who.requestedBy, ...cmdOf(who) } });
+      this.d.audit.write({ action: 'camera-host-change', category: ['configuration'], type: ['change'], outcome: 'failure', error: r.error, ...whoRecord(who), camera: cam, message: `Camera ${cam} address not changed (${from ?? 'none'} → ${typeof to === 'string' ? to.slice(0, 64) : 'invalid'}): ${r.error}`, details: { from, to: typeof to === 'string' ? to.slice(0, 260) : null, ...extra, requestedBy: who.requestedBy, ...cmdFields(who) } });
       return r;
     };
     if (!validCameraHost(to) || !canonicalHost(splitHost(to).hostname)) return fail({ status: 400, error: 'invalid', detail: 'host: an IPv4 address as four decimal numbers (no leading zeros), or a name with a letter; optional :port' });
@@ -691,11 +691,11 @@ export class OnboardingService {
   }
 
   private auditHost(who: Who, cam: string, outcome: 'success' | 'failure', message: string, details: Record<string, unknown>): void {
-    this.d.audit.write({ action: 'camera-host-change', category: ['configuration'], type: ['change'], outcome, ...whoRecord(who), camera: cam, message, details: { ...details, requestedBy: who.requestedBy, ...cmdOf(who) } });
+    this.d.audit.write({ action: 'camera-host-change', category: ['configuration'], type: ['change'], outcome, ...whoRecord(who), camera: cam, message, details: { ...details, requestedBy: who.requestedBy, ...cmdFields(who) } });
   }
 
   protected requester(who: Who): Requester {
-    return { user: who.user, requestedBy: who.requestedBy, ...(who.ip ? { ip: who.ip } : {}), ...(who.userAgent ? { userAgent: who.userAgent } : {}), ...cmdOf(who) };
+    return { user: who.user, requestedBy: who.requestedBy, ...whoFields(who), ...cmdFields(who) };
   }
 
   // The config-change record of an override write, as PUT /control/config writes it.
@@ -706,12 +706,12 @@ export class OnboardingService {
 
   protected async waitForWorkerGone(id: string): Promise<void> {
     const t0 = this.now();
-    while (this.d.cameras.get(id) && this.now() - t0 < WORKER_WAIT_MS) await new Promise((r) => setTimeout(r, 50));
+    while (this.d.cameras.get(id) && this.now() - t0 < WORKER_WAIT_MS) await sleep(50);
   }
 
   protected async waitForWorker(id: string): Promise<void> {
     const t0 = this.now();
-    while (!this.d.cameras.get(id) && this.now() - t0 < WORKER_WAIT_MS) await new Promise((r) => setTimeout(r, 50));
+    while (!this.d.cameras.get(id) && this.now() - t0 < WORKER_WAIT_MS) await sleep(50);
   }
 
   // A camera whose worker did not start in time: nothing known yet.
@@ -835,7 +835,7 @@ export class OnboardingService {
     const left = removeLeftoverItems(this.d.loaded(), id, { legacy });
     leftovers.push(...left.map((i) => (i === 'config.json camera' && convertError ? `${i} (${convertError})` : i)));
     if (left.length) this.d.removeLeftovers.add({ camera: id, at: this.now(), items: left });
-    this.d.audit.write({ action: 'camera-remove', category: ['configuration'], type: ['deletion'], outcome: 'success', ...whoRecord(who), camera: id, message: `Camera ${id} removed: ${removed.join(', ') || 'nothing to remove'}${leftovers.length ? `; left: ${leftovers.join(', ')}` : ''}`, details: { removed, leftovers, requestedBy: who.requestedBy, ...cmdOf(who) } });
+    this.d.audit.write({ action: 'camera-remove', category: ['configuration'], type: ['deletion'], outcome: 'success', ...whoRecord(who), camera: id, message: `Camera ${id} removed: ${removed.join(', ') || 'nothing to remove'}${leftovers.length ? `; left: ${leftovers.join(', ')}` : ''}`, details: { removed, leftovers, requestedBy: who.requestedBy, ...cmdFields(who) } });
     return { status: 200, removed, leftovers };
   }
 
@@ -856,7 +856,7 @@ export class OnboardingService {
       r = await setCameraZone(client.ownSession(), rule, zone, () => this.now());
     } catch (err) {
       const code = (err as { code?: string }).code ?? 'camera_error';
-      this.d.audit.write({ ...base, outcome: 'failure', error: code, message: `Camera time zone ${zone} not set on ${cam}: ${code}`, details: { zone, requestedBy: who.requestedBy, ...cmdOf(who) } });
+      this.d.audit.write({ ...base, outcome: 'failure', error: code, message: `Camera time zone ${zone} not set on ${cam}: ${code}`, details: { zone, requestedBy: who.requestedBy, ...cmdFields(who) } });
       return { status: code === 'camera_offline' ? 503 : 502, error: code };
     }
     client.forgetTime();
@@ -871,7 +871,7 @@ export class OnboardingService {
       return x ? { stdOffsetMinutes: x.timeZone === null ? null : -Number(x.timeZone) / 60, dst: x.dst } : null;
     };
     const ok = r.outcome === 'set' || r.outcome === 'already';
-    this.d.audit.write({ ...base, outcome: ok ? 'success' : 'failure', ...(ok ? {} : { error: r.outcome }), message: `Camera time zone ${zone} on ${cam}: ${r.outcome}${r.detail ? ` (${r.detail})` : ''}`, details: { zone, outcome: r.outcome, before: view(r.before), after: view(r.after), ntp, requestedBy: who.requestedBy, ...cmdOf(who) } });
+    this.d.audit.write({ ...base, outcome: ok ? 'success' : 'failure', ...(ok ? {} : { error: r.outcome }), message: `Camera time zone ${zone} on ${cam}: ${r.outcome}${r.detail ? ` (${r.detail})` : ''}`, details: { zone, outcome: r.outcome, before: view(r.before), after: view(r.after), ntp, requestedBy: who.requestedBy, ...cmdFields(who) } });
     return { status: 200, json: { outcome: r.outcome, zone, ntp, ...(r.detail ? { detail: r.detail } : {}) } };
   }
 }

@@ -5,6 +5,7 @@ import type { ManagedToken, TokensApplyArgs } from './token-store';
 import { ARGS_VALIDATORS, type CameraActionArgs } from './command-args';
 import type { Journal, JournalEntry } from './journal';
 import { BUDGETED_ACTIONS, DISRUPTIVE_ACTIONS, entryFor, isMoveCommand, MOVE_COMMANDS, MOVE_ENTRIES, NEVER_REMOTE_ACTIONS } from './policy';
+import { isObj } from '../util/obj';
 
 export type Nack = 'bad_signature' | 'wrong_target' | 'expired' | 'replayed' | 'not_allowed' | 'paused' | 'rate_limited' | 'invalid_args' | 'unsupported_version' | 'busy' | 'not_revocation_only';
 export interface CommandBody { proxyId: string; connId: string; cmdId: string; exp: number; actor: string; command: string; args: Record<string, unknown> }
@@ -27,7 +28,6 @@ const argsBytes = (a: unknown): number => {
     return Infinity;
   }
 };
-const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 
 // The actor is a cams-admin string shown in the audit log, the card and the
 // CLI: control, bidi and format characters (and lone surrogates) become

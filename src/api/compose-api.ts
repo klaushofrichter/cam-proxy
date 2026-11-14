@@ -12,14 +12,13 @@ import { DAY, dayStart } from '../time-units';
 import { clientIp } from './auth';
 import { cameraParam, workerOf } from './camera-param';
 import type { CameraRegistry } from '../cameras/registry';
-import { notFound, perMinute } from './respond';
+import { bad, notFound, perMinute } from './respond';
 
 const run = promisify(execFile);
 export const COMPOSITIONS_PER_MINUTE = 10;
 type Body = { clipId?: unknown; at?: unknown; span?: unknown; preS?: unknown; postS?: unknown; size?: unknown; badge?: unknown; timeZone?: unknown; dryRun?: unknown };
 type Checked = { b: Body & { preS: number; postS: number }; clip?: ClipSpan; span?: { start: number; end: number }; maxS: number; w: Extract<Window, { ok: true }> };
 type Outcome = 'started' | 'busy' | 'nothing_to_compose' | 'storage_paused' | 'no_font';
-const bad = (res: Response, detail: string) => void res.status(400).json({ error: 'invalid', detail });
 const toSpan = (c: { id: number; start_ts: number; end_ts: number | null; path: string }): ClipSpan => ({ id: c.id, start: c.start_ts, end: c.end_ts ?? c.start_ts, path: c.path });
 
 // Composed clips (spec 2026-09-28): start, poll, fetch, cancel. The planner

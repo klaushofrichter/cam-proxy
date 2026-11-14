@@ -9,8 +9,7 @@ import { enrollWithCode, EnrollError } from './enroll';
 import { deleteKeyFile } from './keyfile';
 import { fingerprint, readCapped } from './protocol';
 import { ALLOW_ENTRIES, CommandPolicy } from './policy';
-import { TokenStore } from './token-store';
-import { createHash } from 'crypto';
+import { localTokenDigests, TokenStore } from './token-store';
 
 // `cam-proxy admin-enroll --url U` and `admin-unenroll` (spec
 // 2026-10-06-cams-admin-phase1-design §9.2). The code comes from stdin (a
@@ -118,7 +117,7 @@ export async function runAdminCli(argv: string[], io: CliIo): Promise<number> {
     return 1;
   }
   const live = state === 'running';
-  const headers = { Authorization: `Bearer ${loaded.secrets.adminToken}`, 'Content-Type': 'application/json', 'User-Agent': 'cam-proxy-cli' };
+  const headers = adminHeaders(loaded);
 
   if (cmd === 'admin-unenroll') {
     if (live) {
@@ -177,22 +176,28 @@ export async function runAdminCli(argv: string[], io: CliIo): Promise<number> {
 // enrolls on the host allows them here (never by default: the allow list is
 // the local admin's); --no-tokens skips it, already allowed is a no-op.
 const TOKEN_ENTRIES = ['tokens.apply', 'tokens.apply.admin'];
+
+// The CLI's calls to the running proxy: local admin rights.
+const adminHeaders = (loaded: { secrets: { adminToken: string } }) => ({ Authorization: `Bearer ${loaded.secrets.adminToken}`, 'Content-Type': 'application/json', 'User-Agent': 'cam-proxy-cli' });
+// One call: its status and the JSON body ({} when none or not JSON, at most 1 MiB).
+const proxyCaller = (base: string, headers: Record<string, string>) => async (method: string, path: string, body?: unknown): Promise<{ ok: boolean; status: number; b: Record<string, unknown> }> => {
+  const r = await fetch(`${base}${path}`, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(15_000), redirect: 'error' });
+  const text = await readCapped(r, 1024 * 1024);
+  let b: Record<string, unknown> = {};
+  try {
+    b = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+  } catch {
+    /* not JSON */
+  }
+  return { ok: r.ok, status: r.status, b };
+};
 async function allowTokens(io: CliIo, via: { live: true; base: string; headers: Record<string, string> } | { live: false }, loaded: Loaded): Promise<number> {
   const said = () => io.out(`allowed cams-admin commands: ${TOKEN_ENTRIES.join(', ')} (cams-admin sends this proxy's managed tokens; enroll with --no-tokens to skip, admin-commands deny to undo)\n`);
   const already = () => io.out(`${TOKEN_ENTRIES.join(' and ')} are allowed already\n`);
   const failed = (why: string) => (io.err(`cam-proxy admin-enroll: enrolled, but ${TOKEN_ENTRIES.join(' and ')} were not allowed: ${why}; run cam-proxy admin-commands allow ${TOKEN_ENTRIES.join(' ')}\n`), 1);
   if (via.live) {
-    const call = async (method: string, body?: unknown) => {
-      const r = await fetch(`${via.base}/control/admin/commands`, { method, headers: via.headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(15_000), redirect: 'error' });
-      const text = await readCapped(r, 1024 * 1024);
-      let b: Record<string, unknown> = {};
-      try {
-        b = text ? (JSON.parse(text) as Record<string, unknown>) : {};
-      } catch {
-        /* not JSON */
-      }
-      return { ok: r.ok, status: r.status, b };
-    };
+    const proxy = proxyCaller(via.base, via.headers);
+    const call = (method: string, body?: unknown) => proxy(method, '/control/admin/commands', body);
     try {
       const cur = await call('GET');
       if (!cur.ok || !Array.isArray(cur.b.allow)) return failed(String(cur.b.message ?? cur.b.detail ?? cur.b.error ?? `the proxy answered ${cur.status}`));
@@ -292,18 +297,7 @@ async function runPolicyCli(cmd: 'admin-commands' | 'admin-tokens', rest: string
 }
 
 async function policyLive(cmd: string, op: string, args: string[], io: CliIo, base: string, loaded: Loaded): Promise<number> {
-  const headers = { Authorization: `Bearer ${loaded.secrets.adminToken}`, 'Content-Type': 'application/json', 'User-Agent': 'cam-proxy-cli' };
-  const call = async (method: string, path: string, body?: unknown): Promise<{ ok: boolean; status: number; b: Record<string, unknown> }> => {
-    const r = await fetch(`${base}${path}`, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(15_000), redirect: 'error' });
-    const text = await readCapped(r, 1024 * 1024);
-    let b: Record<string, unknown> = {};
-    try {
-      b = text ? (JSON.parse(text) as Record<string, unknown>) : {};
-    } catch {
-      /* not JSON */
-    }
-    return { ok: r.ok, status: r.status, b };
-  };
+  const call = proxyCaller(base, adminHeaders(loaded));
   const fail = (r: { status: number; b: Record<string, unknown> }) => (io.err(`cam-proxy ${cmd}: ${String(r.b.message ?? r.b.detail ?? r.b.error ?? `the proxy answered ${r.status}`)}\n`), r.status === 400 ? 2 : 1);
   if (cmd === 'admin-commands' && op === 'changes') {
     const r = await call('GET', '/control/admin/changes');
@@ -359,8 +353,7 @@ function policyFiles(cmd: string, op: string, args: string[], io: CliIo, loaded:
     printPolicy(io, policy.effective());
     return 0;
   }
-  const s = loaded.secrets;
-  const tokens = new TokenStore({ file: join(dataDir, 'admin', 'tokens.json'), localDigests: () => [s.adminToken, ...s.tokens, ...(s.auditToken ? [s.auditToken] : [])].map((x) => createHash('sha256').update(x).digest()) });
+  const tokens = new TokenStore({ file: join(dataDir, 'admin', 'tokens.json'), localDigests: () => localTokenDigests(loaded.secrets) });
   if (op !== 'list') {
     const t = tokens.list().find((x) => x.id === args[0]);
     try {

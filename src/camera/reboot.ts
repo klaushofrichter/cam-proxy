@@ -1,4 +1,4 @@
-import type { AuditLog } from '../audit/audit-log';
+import { cmdFields, whoFields, type AuditLog } from '../audit/audit-log';
 import { logger } from '../log';
 import { CameraError, type CameraErrorCode } from './client';
 
@@ -38,8 +38,8 @@ export type RebootAnswer =
 // Who asked (R3-13): the admin (a session or the token), or cams-admin
 // (a command: its cmdId and actor go into the record's details).
 export interface RebootRequester { user?: string; requestedBy: 'session' | 'token' | 'cams-admin'; ip?: string; userAgent?: string; cmdId?: string; actor?: string }
-const requesterRecord = (who: RebootRequester) => ({ user: who.user ?? 'admin', ...(who.ip ? { ip: who.ip } : {}), ...(who.userAgent ? { userAgent: who.userAgent } : {}) });
-const requesterDetails = (who: RebootRequester) => ({ requestedBy: who.requestedBy, ...(who.cmdId ? { cmdId: who.cmdId } : {}), ...(who.actor ? { actor: who.actor } : {}) });
+const requesterRecord = (who: RebootRequester) => ({ user: who.user ?? 'admin', ...whoFields(who) });
+const requesterDetails = (who: RebootRequester) => ({ requestedBy: who.requestedBy, ...cmdFields(who) });
 
 export interface RebootDeps {
   send: () => Promise<unknown>; // the camera's Reboot command

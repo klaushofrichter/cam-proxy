@@ -33,8 +33,8 @@ import { cameraParam, resolveCamera } from './camera-param';
 import type { CameraRegistry } from '../cameras/registry';
 import { RefusalThrottle } from '../audit/throttle';
 import { isAuditAction } from '../audit/actions';
-import { DAY, dayStart } from '../time-units';
-import { eventsStored, eventsStoredByCamera } from './metrics';
+import { DAY, dayStart, utcDay } from '../time-units';
+import { eventsStoredByCamera, eventsTotals } from './metrics';
 import { readCookie, SESSION_COOKIE, SESSION_MS, type createSessionSigner, type SessionInfo, type SessionOrigin } from './session';
 import type { createLoginLinks } from './login-links';
 import type { RecordingsStatus } from '../recordings/side';
@@ -49,7 +49,7 @@ import { RotateBusyError, type CertState, type Requester, type TlsView } from '.
 import type { PushResult } from '../tls/push';
 import { OWN_AUDIT, performAction, type ActionOutcome } from './actions';
 import type { NtpOutcome } from '../cameras/ntp';
-import { intParam, notFound, perMinute } from './respond';
+import { bad, intParam, notFound, perMinute } from './respond';
 
 interface FtpStatus {
   enabled: boolean;
@@ -292,7 +292,7 @@ export function controlApi(d: ControlDeps): express.Router {
   let restartRequested = false; // a restart-proxy request was recorded (the stop follows)
   const invalid = (res: Response, err: unknown) => {
     if (err instanceof ConfigError && err.message.startsWith('not_a_setting:')) return void res.status(400).json({ error: 'not_a_setting', detail: err.message.slice('not_a_setting:'.length).trim() });
-    if (err instanceof ConfigError) return void res.status(400).json({ error: 'invalid', detail: err.message });
+    if (err instanceof ConfigError) return bad(res, err.message);
     throw err;
   };
 
@@ -422,7 +422,7 @@ export function controlApi(d: ControlDeps): express.Router {
   // refused key (400) writes nothing and is never echoed.
   r.put('/secrets/google-vision-key', (req, res) => {
     const key: unknown = req.body?.key;
-    if (typeof key !== 'string' || !/^[\x21-\x7e]{20,200}$/.test(key)) return void res.status(400).json({ error: 'invalid', detail: 'key: 20 to 200 printable ASCII characters, no spaces' });
+    if (typeof key !== 'string' || !/^[\x21-\x7e]{20,200}$/.test(key)) return bad(res, 'key: 20 to 200 printable ASCII characters, no spaces');
     const replaced = d.setVisionKey(key);
     const masked = maskKey(key)!;
     d.audit.write({
@@ -435,9 +435,10 @@ export function controlApi(d: ControlDeps): express.Router {
 
   r.get('/stats', (_req, res) => {
     const u = d.storage.usage();
+    const byCamera = eventsStoredByCamera(d.catalog);
     res.json({
       disk: { catalog: u.catalog, audit: u.audit, stills: u.stills, previews: u.previews, clips: u.clips, recordings: u.recordings, free: u.free, size: u.size },
-      events: { stored: eventsStored(d.catalog), byCamera: eventsStoredByCamera(d.catalog) },
+      events: { stored: eventsTotals(byCamera), byCamera },
       stream: { rows: d.log.count(), lastId: d.log.lastId() },
       sse: { clients: d.sseClients() },
       storage: { budget: u.budget, used: u.used, daysUntilFull: u.daysUntilFull, paused: d.storage.paused() },
@@ -449,7 +450,7 @@ export function controlApi(d: ControlDeps): express.Router {
   // Inventories (spec 2026-10-02-inventory-design): the running one and the last runs; one report.
   r.get('/inventory', async (_req, res) => void res.json({ running: d.inventory.running(), runs: await d.inventory.list(), repairs: await d.inventory.listRepairs() }));
   r.get('/inventory/runs/:id', async (req, res) => {
-    if (!RUN_ID.test(req.params.id)) return void res.status(400).json({ error: 'invalid', detail: 'not a run id' });
+    if (!RUN_ID.test(req.params.id)) return bad(res, 'not a run id');
     const run = await d.inventory.get(req.params.id);
     if (!run) return notFound(res);
     res.json(run);
@@ -606,15 +607,15 @@ export function auditApi(d: { audit: AuditLog; guard: express.RequestHandler; re
   // from the retention run's cutoff day on, the same rule it deletes by.
   r.get('/audit/summary', d.guard, (_req, res) => {
     const days = d.retentionDays();
-    const from = new Date(dayStart((d.now ?? Date.now)() - days * DAY)).toISOString().slice(0, 10);
+    const from = utcDay(dayStart((d.now ?? Date.now)() - days * DAY));
     res.set('Cache-Control', 'no-store').json({ retentionDays: days, records: d.audit.count(from) });
   });
   r.get('/audit', d.guard, (req, res) => {
     const q = req.query;
     const outcome = q.outcome === undefined ? undefined : String(q.outcome);
-    if (outcome !== undefined && !['success', 'failure', 'unknown'].includes(outcome)) return void res.status(400).json({ error: 'invalid', detail: 'outcome is success, failure or unknown' });
+    if (outcome !== undefined && !['success', 'failure', 'unknown'].includes(outcome)) return bad(res, 'outcome is success, failure or unknown');
     const from = intParam(q.from), to = intParam(q.to), limit = intParam(q.limit);
-    if (from === null || to === null || limit === null) return void res.status(400).json({ error: 'invalid', detail: 'from, to and limit are numbers' });
+    if (from === null || to === null || limit === null) return bad(res, 'from, to and limit are numbers');
     const actions = q.action === undefined ? undefined : String(q.action).split(',').map((s) => s.trim()).filter(Boolean);
     const unknown = actions?.find((a) => !isAuditAction(a));
     if (unknown !== undefined) return void res.status(400).json({ error: 'invalid', detail: `unknown action: ${unknown.slice(0, 40)}` });
@@ -629,7 +630,7 @@ export function auditApi(d: { audit: AuditLog; guard: express.RequestHandler; re
       if (out.next) res.set('X-Next-Cursor', out.next);
       res.send(out.records.map((x) => JSON.stringify(x)).join('\n') + (out.records.length ? '\n' : ''));
     } catch (err) {
-      if (err instanceof AuditQueryError) return void res.status(400).json({ error: 'invalid', detail: err.message });
+      if (err instanceof AuditQueryError) return bad(res, err.message);
       throw err;
     }
   });

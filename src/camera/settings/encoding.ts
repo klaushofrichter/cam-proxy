@@ -6,6 +6,7 @@
 // (and ext, on a camera that has one), with the lists allowed for each.
 // Pure: no I/O.
 import type { SettingsCommand } from './model';
+import { isObj, numbers as nums, objOr as obj, strings as strs, type Obj } from '../../util/obj';
 
 export const ENC_STREAMS = ['main', 'sub', 'ext'] as const;
 export type EncStreamName = (typeof ENC_STREAMS)[number];
@@ -20,12 +21,6 @@ export type EncodingPatch = Partial<Record<EncStreamName, Partial<EncStreamSetti
 
 // GetEnc with action 1: `enc` its value ({Enc}), `range` its range ({Enc: [...]}).
 export interface RawEncoding { enc: unknown; range: unknown }
-
-type Obj = Record<string, unknown>;
-const obj = (v: unknown): Obj => (typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Obj) : {});
-const isObj = (v: unknown) => typeof v === 'object' && v !== null && !Array.isArray(v);
-const nums = (v: unknown): number[] => (Array.isArray(v) ? v.filter((x): x is number => typeof x === 'number') : []);
-const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
 
 function streamFrom(s: Obj): EncStreamSettings | undefined {
   if (typeof s.width !== 'number' || typeof s.height !== 'number') return undefined;

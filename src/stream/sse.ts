@@ -1,5 +1,6 @@
 import type { Request, RequestHandler, Response } from 'express';
 import { STREAM_TYPES, matches, type Filter, type StreamLog, type StreamMessage, type StreamType } from './log';
+import { bad } from '../api/respond';
 
 interface SseOptions { maxClients: number; queuePerClient: number; pingS: number }
 interface SseStats { messages: Record<string, number>; replayed: number; dropped: number }
@@ -55,7 +56,7 @@ export function sseHandler(log: StreamLog, opts: SseOptions): SseHandler {
 
   const handler = ((req: Request, res: Response) => {
     const filter = filterFrom(req);
-    if (typeof filter === 'string') return void res.status(400).json({ error: 'invalid', detail: filter });
+    if (typeof filter === 'string') return bad(res, filter);
     if (open.size >= o.maxClients) return void res.status(503).json({ error: 'too_many_clients' });
 
     res.status(200).set({ 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', Connection: 'keep-alive' });

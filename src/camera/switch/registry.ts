@@ -1,9 +1,10 @@
-import { readFileSync, renameSync, writeFileSync } from 'fs';
+import { readFileSync } from 'fs';
 import { join } from 'path';
 import { logger } from '../../log';
 import { switchPasswordStore } from '../../config/switch-passwords';
 import { PoeSwitch, PoeSwitchError, type PoeSwitchDeps, type SessionLane } from '../poe-switch';
 import type { SwitchRef } from './driver';
+import { writeFileAtomicSync } from '../../fs-util';
 
 // The PoE switches this proxy operates, by cams-admin's switch id (spec
 // 2026-11-07-poe-switches-design): one PoeSwitch controller each, so a switch
@@ -131,9 +132,7 @@ export class SwitchRegistry {
   }
 
   private save(): void {
-    const tmp = `${this.file}.tmp`;
-    writeFileSync(tmp, JSON.stringify({ v: 1, switches: this.known() }, null, 2));
-    renameSync(tmp, this.file);
+    writeFileAtomicSync(this.file, JSON.stringify({ v: 1, switches: this.known() }, null, 2));
   }
 
   // The controller for this switch; a new or changed descriptor is kept.

@@ -2,7 +2,7 @@ import { appendFileSync, closeSync, mkdirSync, openSync, readdirSync, readFileSy
 import { hostname } from 'os';
 import { join } from 'path';
 import { logger, maskPath } from '../log';
-import { addDays, DAY, dayStart } from '../time-units';
+import { addDays, DAY, dayStart, utcDay } from '../time-units';
 import { fileSize } from '../fs-util';
 export { maskPath };
 
@@ -89,7 +89,7 @@ export class AuditLog {
 
   write(i: AuditInput): AuditRecord | null {
     const ts = this.now();
-    const day = new Date(ts).toISOString().slice(0, 10);
+    const day = utcDay(ts);
     const file = join(this.d.dir, `${day}.jsonl`);
     try {
       // Refused tokens and failed sign-ins are what a flood writes: those stop at the size limit.
@@ -293,3 +293,8 @@ function parse(line: string | undefined): AuditRecord | null {
 export function withCamera(audit: Pick<AuditLog, 'write'>, cam: string): Pick<AuditLog, 'write'> {
   return { write: (i: AuditInput) => audit.write({ ...i, camera: cam }) };
 }
+
+// A requester's ip and userAgent for a record, each only when known.
+export const whoFields = (who?: { ip?: string; userAgent?: string }) => ({ ...(who?.ip ? { ip: who.ip } : {}), ...(who?.userAgent ? { userAgent: who.userAgent } : {}) });
+// A cams-admin command's cmdId and actor for a record's details, each only when known.
+export const cmdFields = (who?: { cmdId?: string; actor?: string }) => ({ ...(who?.cmdId ? { cmdId: who.cmdId } : {}), ...(who?.actor ? { actor: who.actor } : {}) });
