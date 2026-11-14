@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { localDate } from '../lib/format';
+  import { localDate, mbText } from '../lib/format';
   import { clipChips } from '../lib/chips';
   import { api } from '../lib/api';
   import { feed, refreshTick, status } from '../lib/state';
@@ -16,7 +16,6 @@
 
   const time = (ts: number) => new Date(ts).toLocaleTimeString();
   const secs = (c: Clip) => (c.end === null ? '…' : `${Math.round((c.end - c.start) / 1000)} s`);
-  const mb = (b: number) => `${(b / 1e6).toFixed(1)} MB`;
 
   // Only the newest request may fill the page (a quick day switch).
   let seq = 0;
@@ -78,7 +77,7 @@
       {#each clips as c (c.id)}
         <button class="clip" class:active={playing?.id === c.id} onclick={() => (playing = c)} data-testid="clip">
           {#if c.snapshotUrl}<img src={c.snapshotUrl} alt="" loading="lazy" />{:else}<div class="noimg">no snapshot</div>{/if}
-          <span class="meta"><b>{time(c.start)}</b> {secs(c)} · {mb(c.size)}</span>
+          <span class="meta"><b>{time(c.start)}</b> {secs(c)} · {mbText(c.size)}</span>
           <span class="chips">{#if c.origin === 'camera'}<span class="chip origin" data-testid="clip-origin">from camera</span>{/if}{#each clipChips(c.events, kinds) as chip (chip)}<span class="chip">{chip}</span>{/each}</span>
         </button>
       {/each}
