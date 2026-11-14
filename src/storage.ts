@@ -210,7 +210,7 @@ export class Storage extends EventEmitter {
     used += out.audit.bytes;
     growth += out.audit.growthPerDay;
     const disk = this.disk();
-    const budget = this.budget();
+    const budget = budgetOf(this.d.config(), disk.size); // budget(), with the statfs just made
     return { ...out, free: disk.free, size: disk.size, budget, used, daysUntilFull: growth > 0 ? Math.max(0, (budget - used) / growth) : null };
   }
 

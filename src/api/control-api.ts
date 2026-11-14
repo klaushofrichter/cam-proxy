@@ -34,7 +34,7 @@ import type { CameraRegistry } from '../cameras/registry';
 import { RefusalThrottle } from '../audit/throttle';
 import { isAuditAction } from '../audit/actions';
 import { DAY, dayStart, utcDay } from '../time-units';
-import { eventsStored, eventsStoredByCamera } from './metrics';
+import { eventsStoredByCamera, eventsTotals } from './metrics';
 import { readCookie, SESSION_COOKIE, SESSION_MS, type createSessionSigner, type SessionInfo, type SessionOrigin } from './session';
 import type { createLoginLinks } from './login-links';
 import type { RecordingsStatus } from '../recordings/side';
@@ -435,9 +435,10 @@ export function controlApi(d: ControlDeps): express.Router {
 
   r.get('/stats', (_req, res) => {
     const u = d.storage.usage();
+    const byCamera = eventsStoredByCamera(d.catalog);
     res.json({
       disk: { catalog: u.catalog, audit: u.audit, stills: u.stills, previews: u.previews, clips: u.clips, recordings: u.recordings, free: u.free, size: u.size },
-      events: { stored: eventsStored(d.catalog), byCamera: eventsStoredByCamera(d.catalog) },
+      events: { stored: eventsTotals(byCamera), byCamera },
       stream: { rows: d.log.count(), lastId: d.log.lastId() },
       sse: { clients: d.sseClients() },
       storage: { budget: u.budget, used: u.used, daysUntilFull: u.daysUntilFull, paused: d.storage.paused() },

@@ -6,7 +6,7 @@ import { openCatalog, type Catalog } from '../src/catalog/db';
 import { addRecoveredEvents, closeAllOpen, closeEvent, countEventsByKind, countEventsOfKinds, countRecoveredEvents, insertEvent, listEvents, type RecoveredEvent } from '../src/catalog/events';
 import { unanalysed } from '../src/catalog/analyses';
 import { clipsStalled } from '../src/clips/ftp-health';
-import { eventsStored } from '../src/api/metrics';
+import { eventsStored, eventsStoredByCamera, eventsTotals } from '../src/api/metrics';
 
 // Recovered events (#75, spec 2026-10-02-inventory-design §5): added from
 // the SD recordings by the events repair, marked, closed at once, and kept
@@ -112,6 +112,15 @@ describe('recovered events are kept apart', () => {
     live('person', 1000, 2000);
     addRecoveredEvents(c, 'cam1', [rec('person', 30_000, 40_000), rec('motion', 30_000, 40_000)], TOL);
     expect(eventsStored(c)).toEqual({ person: 1 });
+    expect(eventsTotals(eventsStoredByCamera(c))).toEqual(eventsStored(c));
+  });
+
+  it('eventsTotals sums the per-camera counts, kinds in order, as eventsStored does', () => {
+    for (const [cam, kind, at] of [['cam1', 'vehicle', 1], ['cam2', 'person', 2], ['cam2', 'motion', 3], ['cam1', 'person', 4]] as const) insertEvent(c, { cam, source: 'onvif', kind, start_ts: at * 100_000, raw: null });
+    const totals = eventsTotals(eventsStoredByCamera(c));
+    expect(totals).toEqual(eventsStored(c));
+    expect(Object.keys(totals)).toEqual(Object.keys(eventsStored(c)));
+    expect(eventsTotals({})).toEqual({});
   });
 
   it('a restart closes no recovered event (they are closed already)', () => {
