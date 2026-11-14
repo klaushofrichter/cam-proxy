@@ -551,6 +551,23 @@ describe('a pin without a site CA (spec 2026-10-30-camera-onboarding-design §4.
     expect(b.certs.state('cam3').mode).toBe('pinned');
   });
 
+  // Like every other record (audit-log.ts cmdFields): cmdId and actor, each when known.
+  it("the trust and push records carry the requester's cmdId and actor, each when known", async () => {
+    const c = await otherCertificate();
+    const a = setup({ deps: { site: () => undefined, ca: () => null } });
+    a.certs.pinServed('cam3', { fingerprint: c.fingerprint, pem: c.pem }, { user: 'admin', actor: 'token:ops' });
+    expect(a.audits.at(-1)!.details).toMatchObject({ actor: 'token:ops' });
+    const b = setup();
+    b.open.add('cam3');
+    await b.certs.pushNow('cam3', { user: 'admin', actor: 'token:ops' }); // skipped: an event is open
+    expect(b.audits.at(-1)).toMatchObject({ action: 'camera-cert-push', details: { actor: 'token:ops' } });
+    await b.certs.pushNow('cam3', { user: 'cams-admin', cmdId: 'cmd_1' });
+    expect(b.audits.at(-1)!.details).toEqual({ detail: 'an event is open: try again when it has ended', cmdId: 'cmd_1' });
+    b.open.delete('cam3');
+    await b.certs.pushNow('cam3', { user: 'admin', actor: 'token:ops' });
+    expect(b.audits.at(-1)).toMatchObject({ action: 'camera-cert-push', outcome: 'success', details: { actor: 'token:ops' } });
+  }, 60_000);
+
   it('forget says why: a move, or the camera was removed', async () => {
     const c = await otherCertificate();
     const a = setup({ deps: { site: () => undefined, ca: () => null } });

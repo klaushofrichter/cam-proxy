@@ -24,7 +24,7 @@ import type { StatusPoller } from './camera/status';
 import type { EventIntake } from './events/intake';
 import { CameraRegistry } from './cameras/registry';
 import { CameraWorker, cameraWebUi } from './cameras/worker';
-import { activeCameraIds, cameraConfig, cameraIds } from './config/cameras';
+import { activeCameraIds, cameraConfig, cameraIds, cameraStillsIntervalS } from './config/cameras';
 import { cameraPassword } from './config/secrets';
 import { reapOrphanGo2rtc } from './stills/orphans';
 import { Go2rtc } from './stills/go2rtc';
@@ -252,7 +252,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
   const composer = createComposer({
     dir: join(running.server.dataDir, 'compositions'),
     concurrent: () => running.composition.concurrent,
-    runner: ffmpegRunner({ font: font ?? '', clock: clockText, readStill: stillAt, hasAudio, paused: () => storage.paused(), stillsIntervalS: (cam) => cameraConfig(running, cam)?.stills.intervalS ?? running.stills.intervalS }),
+    runner: ffmpegRunner({ font: font ?? '', clock: clockText, readStill: stillAt, hasAudio, paused: () => storage.paused(), stillsIntervalS: (cam) => cameraStillsIntervalS(running, cam) }),
   });
   const sweeper = setInterval(() => composer.sweep(), 5000);
   sweeper.unref();

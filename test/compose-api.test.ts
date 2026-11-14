@@ -181,6 +181,19 @@ describe('compositions around a second: the request', () => {
     const gap = await post({ at: M + 52_000, preS: 3, postS: 3, size: 'sd', badge: true, dryRun: true });
     expect(gap.body).toMatchObject({ durationS: 7, seconds: { clip: 0, still: 1, card: 6 } });
   });
+
+  it.skipIf(!go2rtc)('holds a still for the camera\'s own stills interval, not the host\'s', async () => {
+    const node = p.proxy.running.cameras[cam()];
+    const before = node.stills;
+    node.stills = { ...before, intervalS: 5 }; // the host keeps 1 s
+    try {
+      // The last still at :49 holds 5 s: :49 … :53 are stills, :54 and :55 cards.
+      const r = await post({ at: M + 52_000, preS: 3, postS: 3, size: 'sd', badge: true, dryRun: true });
+      expect(r.body).toMatchObject({ durationS: 7, seconds: { clip: 0, still: 5, card: 2 } });
+    } finally {
+      node.stills = before;
+    }
+  });
 });
 
 describe('compositions around a second: the result', () => {

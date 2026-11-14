@@ -4,6 +4,7 @@ import type { AuditLog } from '../audit/audit-log';
 import { logger } from '../log';
 import { isMoveId, moveEnded, type MoveJournal, type MoveRecord } from './journal';
 import { moveTokenMatches } from './token';
+import { plainIp } from '../util/cidr';
 
 // The only guard of the source's move endpoints (/api/moves/:id/..., S §8.1):
 // they sit ahead of the client auth, so no other credential opens them.
@@ -36,8 +37,6 @@ export type MoveRefusal = 'no-token' | 'unknown-move' | 'ended' | 'wrong-token' 
 const WINDOW_MS = 10 * 60_000;
 const BEARER = /^Bearer ([\x21-\x7e]{1,512})$/;
 const UNKNOWN = '*';
-
-const plainIp = (ip: string): string => ip.trim().replace(/^::ffff:/i, '').toLowerCase();
 
 // The source record a request may use, or why not.
 function check(req: Request, r: MoveRecord | null): MoveRefusal | null {

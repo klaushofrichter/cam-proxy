@@ -7,6 +7,7 @@ import { readFileSync } from 'fs';
 import type { ActionWho } from '../api/actions';
 import { sleep } from '../async';
 import { cmdFields, whoFields, type AuditLog } from '../audit/audit-log';
+import { logger } from '../log';
 import { RefusalThrottle } from '../audit/throttle';
 import type { CameraTrust, ReolinkClient } from '../camera/client';
 import type { NtpOutcome } from '../cameras/ntp';
@@ -15,7 +16,7 @@ import { zoneRule } from './zone';
 import type { CameraPasswordStore } from '../config/camera-passwords';
 import { cameraConfig } from '../config/cameras';
 import type { Config } from '../config/defaults';
-import { checkEnvPath, EnvFileError, readEnvValue, writeEnvKey } from '../config/env-file';
+import { checkEnvPath, EnvFileError, readEnvValue, restoreEnvBackup, writeEnvKey } from '../config/env-file';
 import { withoutEnv, type Loaded } from '../config/load';
 import { cameraPasswordEnv } from '../config/password-env';
 import type { CameraRegistry } from '../cameras/registry';
@@ -401,6 +402,15 @@ export class OnboardingService {
     return fail({ status: 409, error: 'env_password', detail: `${cameraPasswordEnv(id)} is set in ${l.envFile?.path ?? 'the env file'}, which could not be written (${e.code}): remove the line there first` });
   }
 
+  // The env file back from the backup an add's write made; a failure is logged (the add is refused anyway).
+  private restoreEnv(path: string, backup: string): void {
+    try {
+      restoreEnvBackup(path, backup);
+    } catch (err) {
+      logger.warn({ code: err instanceof EnvFileError ? err.code : 'error', backup }, 'onboarding_env_restore_failed');
+    }
+  }
+
   // A single-camera proxy (config.json `camera` + CAMERA_HOST, the Pi): the
   // new camera takes the configured camera's id and replaces it only when it
   // has no address or moved away; CAMERA_HOST goes into the env file (backup,
@@ -445,15 +455,16 @@ export class OnboardingService {
       if (err instanceof EnvFileError) return fail({ status: 409, error: 'not_available', detail: `${err.message}: add ${line} to the .env file by hand`, extra: { line } });
       throw err;
     }
-    if (p.served) this.trustServed(cam, p.served, who, sc);
     let next = applyOverrides(before, patch);
     if (moved) next = removeOverride(next, `cameras.${cam}.moved`);
     next = withCameraHost(next, { value: host, name: w.key });
     if (env.removeLine) {
-      const refused = this.removeLineAfterLogin(before, cam, restore, fail);
+      // A failure puts .env back as it was (CAMERA_HOST and the line); the trust comes after.
+      const refused = this.removeLineAfterLogin(before, cam, () => (restore(), this.restoreEnv(envPath, w.backup)), fail);
       if (refused) return refused;
       next = withoutEnv(next, [cameraPasswordEnv(cam)]);
     }
+    if (p.served) this.trustServed(cam, p.served, who, sc);
     const wasRunning = !!this.d.cameras.get(cam);
     this.d.setLoaded(next);
     this.auditConfig(who, before, next);

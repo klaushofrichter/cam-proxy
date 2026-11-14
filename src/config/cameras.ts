@@ -40,6 +40,12 @@ export function cameraEvents(c: Config, id: string): Config['events'] {
   return p === undefined ? c.events : { ...structuredClone(c.events), poll: { ...structuredClone(c.events.poll), enabled: p } };
 }
 
+// A camera's stills interval: its own where it overrides the host's (an
+// unknown camera: the host's).
+export function cameraStillsIntervalS(c: Config, id: string): number {
+  return (Object.hasOwn(c.cameras, id) ? c.cameras[id].stills?.intervalS : undefined) ?? c.stills.intervalS;
+}
+
 export function cameraConfig(c: Config, id: string): ResolvedCamera | undefined {
   const n = Object.hasOwn(c.cameras, id) ? c.cameras[id] : undefined;
   if (!n) return undefined;
