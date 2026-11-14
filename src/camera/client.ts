@@ -129,9 +129,16 @@ export class ReolinkClient {
   ) {
     this.gate = new Semaphore(opts.maxConcurrent ?? 2);
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.target = { protocol: cam.protocol, host: cam.host, tlsServername: cam.tlsServername, ...(cam.tlsCa ? { ca: cam.tlsCa } : {}) };
-    if (cam.tlsCa && cam.tlsServername) this.trust = { ca: cam.tlsCa, servername: cam.tlsServername };
+    this.target = this.useConfigured();
     this.warned = opts.quiet === true;
+  }
+
+  // The trust as configured (the camera's tlsCa and tlsServername): the
+  // constructor's, and setTrust(undefined)'s.
+  private useConfigured(): CameraTarget {
+    const c = this.cam;
+    this.trust = c.tlsCa && c.tlsServername ? { ca: c.tlsCa, servername: c.tlsServername } : undefined;
+    return { protocol: c.protocol, host: c.host, tlsServername: c.tlsServername, ...(c.tlsCa ? { ca: c.tlsCa } : {}) };
   }
 
   // The "not verified" warning: once, at the first request that goes out
@@ -150,10 +157,9 @@ export class ReolinkClient {
   setTrust(t0: CameraTrust | undefined): void {
     this.refusal = t0?.refuse;
     const t = t0 && t0.refuse === undefined ? t0 : undefined;
+    if (!t) return void (this.target = this.useConfigured());
     this.trust = t;
-    this.target = t
-      ? { protocol: this.cam.protocol, host: this.cam.host, tlsServername: t.servername, ca: t.ca, ...(t.fingerprint ? { pin: t.fingerprint } : {}) }
-      : { protocol: this.cam.protocol, host: this.cam.host, tlsServername: this.cam.tlsServername };
+    this.target = { protocol: this.cam.protocol, host: this.cam.host, tlsServername: t.servername, ca: t.ca, ...(t.fingerprint ? { pin: t.fingerprint } : {}) };
   }
 
   // Whether requests verify the camera (a CA or a pin set, or a public-CA name).
