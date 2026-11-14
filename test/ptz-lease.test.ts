@@ -243,6 +243,43 @@ describe('MoveLease', () => {
     expect(log).toEqual(['ZoomInc', 'Left', 'ZoomInc', 'Stop', 'ZoomInc', 'Stop', 'ZoomInc', 'Stop', 'ToPos', 'ZoomInc']);
   });
 
+  it('runIf runs in the queue while the mark is current, keeps the mark and sends no Stop', async () => {
+    const m = lease.mark();
+    expect(await lease.runIf(m, cmd('Read'))).toBe(true);
+    expect(lease.current(m)).toBe(true);
+    expect(log).toEqual(['Read']);
+  });
+
+  it('runIf after a move, stop or then: skipped, nothing sent', async () => {
+    for (const act of [() => lease.move(cmd('Left'), 400), () => lease.stop(), () => lease.then(cmd('ToPos'))]) {
+      const m = lease.mark();
+      await act();
+      expect(lease.current(m)).toBe(false);
+      log = [];
+      expect(await lease.runIf(m, cmd('Read'))).toBe(false);
+      expect(log).toEqual([]);
+    }
+  });
+
+  it('runIf queued behind a command, superseded before its turn: skipped', async () => {
+    const slow = deferred();
+    const a = lease.then(async () => {
+      log.push('ToPos');
+      await slow.promise;
+    });
+    const m = lease.mark();
+    const r = lease.runIf(m, cmd('Read'));
+    const b = lease.move(cmd('Left'), 400);
+    slow.resolve();
+    await Promise.all([a, b]);
+    expect(await r).toBe(false);
+    expect(log).toEqual(['ToPos', 'Left']);
+  });
+
+  it('runIf passes a command failure on', async () => {
+    await expect(lease.runIf(lease.mark(), cmd('Read', true))).rejects.toThrow('Read failed');
+  });
+
   it('the default scheduler stops by itself', async () => {
     const l: string[] = [];
     const real = new MoveLease({ stop: async () => void l.push('Stop') });

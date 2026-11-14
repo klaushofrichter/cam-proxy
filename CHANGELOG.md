@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Going to a saved position now ends in focus, without a click on Focus, on cameras that can focus by themselves (the E1). The camera refocuses on its own when the position has another zoom, but not when the zoom stays the same, so a bad focus used to stay bad. The proxy now waits until the camera stands still after the go (it reads the position about every 300 ms, up to 20 s) and, when the zoom is unchanged, focuses once. The go answers as before, without waiting. Any other pan, tilt, zoom, focus, stop or go on that camera cancels the pending focus, so it never fights the person at the controls. For every client (cams, MCP); no API change.
 - Fixes from a code review (2026-11-14):
   - Composed clips and Archive thumbnails use a camera's own stills interval where it has one (they used the host's), so stills every few seconds hold until the next one instead of turning into "No recording" cards.
   - Adding a camera on the Pi: when the camera's password line can't be removed from `.env`, the add now puts `.env` back as it was and trusts no certificate (it left `CAMERA_HOST` written and the certificate pinned).

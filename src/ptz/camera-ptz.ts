@@ -6,6 +6,7 @@ import { ReolinkPtz } from '../camera/ptz';
 import type { Catalog } from '../catalog/db';
 import { errorMessage, logger } from '../log';
 import type { StreamLog } from '../stream/log';
+import { FocusAfterGo } from './focus-after-go';
 import { MoveLease } from './lease';
 import { PtzPositions } from './positions';
 
@@ -33,6 +34,7 @@ export class CameraPtz {
       lease: this.lease,
       online: d.online,
       changed: () => void d.log.append(d.cam, 'ptz-positions', {}),
+      focus: new FocusAfterGo({ cam: d.cam, lease: this.lease, ptz: this.camera, enabled: () => d.capabilities()?.ptz?.autofocus === true }),
     });
   }
 

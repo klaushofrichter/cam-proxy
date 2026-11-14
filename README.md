@@ -679,6 +679,7 @@ All under `/api/cameras/{cam}/ptz`, with a client or admin token:
 | `POST …/move` | `{direction, speed?, durationMs?}`: `left right up down left-up left-down right-up right-down`, speed 1–10 (5), 100–2000 ms (400) | 204 |
 | `POST …/zoom` | `{direction: in\|out, durationMs?}` (with `ptz.zoom`) | 204 |
 | `POST …/focus` | `{direction: near\|far, durationMs?}` (with `ptz.focus`) | 204 |
+| `POST …/autofocus` | —: focus once (with `ptz.autofocus`) | 204 |
 | `POST …/stop` | — | 204 |
 | `GET …/positions` | — | `{max, positions: [{id, name, order, home, state}]}` |
 | `POST …/positions` | `{name}`: save where the camera points now | 201 position |
@@ -705,6 +706,13 @@ All under `/api/cameras/{cam}/ptz`, with a client or admin token:
   `position_missing` and `…/save` fixes it. Presets someone saved on the camera
   with the camera's own app are never touched. Changes are audited
   (`ptz-position`) and sent as a `ptz-positions` stream message.
+- **A go ends in focus** on a camera with `ptz.autofocus`. The camera
+  refocuses by itself when the position has another zoom, but not when the
+  zoom stays, so the proxy watches the camera after a go (two reads about
+  every 300 ms, up to 20 s) and, once it stands still at the zoom it had
+  before, focuses once; about 4 to 6 s after the go. The go answers at once
+  and does not wait. Any other PTZ request on that camera (move, zoom, focus,
+  stop, another go, autofocus) cancels the pending focus.
 - **Errors:** 404 `not_supported` (the camera can't do it) or `not_found`;
   400 `invalid` (with `detail`); 409 `limit_reached`, `no_free_slot` (the
   camera has no room the proxy may use), `name_taken`, `position_missing`,
