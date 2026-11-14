@@ -85,6 +85,24 @@ describe('splitJpegs', () => {
       expect(Buffer.compare(out[1], b)).toBe(0);
     }
   });
+
+  it('skips bytes between images and splits an EOI marker across chunks, byte-identical', async () => {
+    const a = await sharp({ create: { width: 64, height: 48, channels: 3, background: '#0f0' } }).jpeg().toBuffer();
+    const b = await sharp({ create: { width: 32, height: 32, channels: 3, background: '#ff0' } }).jpeg().toBuffer();
+    const junk = Buffer.from([0x00, 0xff, 0x00, 0x12]);
+    const all = Buffer.concat([junk, a, junk, b, a]);
+    const eoiOfA = junk.length + a.length - 2; // the FF of a's EOI
+    // Cut exactly inside a's EOI, and in several uneven sizes.
+    const cuts = [[eoiOfA + 1], [5, 17, eoiOfA, eoiOfA + 1, eoiOfA + 2, all.length - 3]];
+    for (const cut of cuts) {
+      const chunks: Buffer[] = [];
+      let from = 0;
+      for (const c of [...cut, all.length]) (chunks.push(all.subarray(from, c)), (from = c));
+      const out: Buffer[] = [];
+      await new Promise<void>((resolve) => Readable.from(chunks.filter((c) => c.length)).pipe(splitJpegs()).on('data', (j: Buffer) => out.push(j)).on('end', resolve));
+      expect(out.map((x) => x.toString('hex'))).toEqual([a, b, a].map((x) => x.toString('hex')));
+    }
+  });
 });
 
 describe.skipIf(!binary)('FrameGrabber against go2rtc and cam-sim', () => {
