@@ -9,6 +9,7 @@ import { CameraError } from '../camera/client';
 import { presetName, PRESET_SLOTS, type PresetSlot, type ReolinkPtz } from '../camera/ptz';
 import type { Catalog } from '../catalog/db';
 import { deletePosition, insertPosition, listPositions, positionById, setHomePosition, setPositionOrder, updatePosition, type PtzPositionRow } from '../catalog/ptz-positions';
+import type { FocusAfterGo } from './focus-after-go';
 import type { MoveLease } from './lease';
 
 export type PositionState = 'ok' | 'missing';
@@ -60,6 +61,7 @@ export interface PositionsDeps {
   lease: MoveLease;
   online: () => boolean;
   changed: () => void; // append the ptz-positions stream message
+  focus?: FocusAfterGo; // a go ends in focus (cameras with autofocus)
   now?: () => number;
   cacheMs?: number; // default 30_000
 }
@@ -259,13 +261,24 @@ export class PtzPositions {
 
   // Under the lock and against a fresh read: never a travel to a slot that was
   // just cleared or taken over. Through the lease: a running move is stopped
-  // first, and no Stop cuts the travel short.
+  // first, and no Stop cuts the travel short. With autofocus, the zoom is
+  // read before the ToPos and the focus follows in the background
+  // (focus-after-go.ts); the go answers without waiting for it.
   goTo(id: string): Promise<void> {
     return this.lock(async () => {
       const row = this.row(id);
       if (!this.d.online()) throw OFFLINE();
       if (positionState(row, await this.slots(true)) === 'missing') throw new PtzError(409, 'position_missing');
-      await this.d.lease.then(() => this.d.ptz.goTo(row.slot));
+      const focus = this.d.focus?.enabled() ? this.d.focus : undefined;
+      let before: number | undefined;
+      const go = this.d.lease.then(async () => {
+        if (focus) before = await focus.zoomBefore();
+        await this.d.ptz.goTo(row.slot);
+      });
+      // The go's own mark: any later PTZ action changes it.
+      const mark = this.d.lease.mark();
+      await go;
+      if (focus && before !== undefined) void focus.start(before, mark);
     });
   }
 }

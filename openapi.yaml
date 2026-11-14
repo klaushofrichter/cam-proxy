@@ -51,7 +51,7 @@ components:
             move: { const: true }
             zoom: { type: boolean }
             focus: { type: boolean }
-            autofocus: { type: boolean, description: 'POST .../ptz/autofocus works (the camera has autofocus and zoom); missing from an older proxy: no autofocus' }
+            autofocus: { type: boolean, description: 'POST .../ptz/autofocus works (the camera has autofocus and zoom), and a go to a position ends in focus; missing from an older proxy: no autofocus' }
             speed: { type: boolean, description: 'the camera takes a move speed' }
             positions: { type: object, description: 'present when the camera can store positions', properties: { max: { type: integer, description: 'at most this many positions (20)' } } }
     ArchiveItem:
@@ -596,7 +596,7 @@ paths:
   /api/cameras/{cam}/ptz/positions/{id}/go:
     post:
       summary: Move the camera to a position
-      description: 'A running move is stopped first. Not audited.'
+      description: 'A running move is stopped first. On a camera with capabilities.ptz.autofocus the go ends in focus: the proxy waits (in the background, the answer does not wait) until the camera stands still, up to 20 s, and when the zoom is the one from before it focuses once (another zoom: the camera refocuses by itself); about 4 to 6 s after the go. Any other PTZ request on that camera (move, zoom, focus, stop, another go, autofocus) cancels this pending focus. Not audited.'
       parameters:
         - { name: cam, in: path, required: true, schema: { type: string } }
         - { name: id, in: path, required: true, schema: { type: string } }

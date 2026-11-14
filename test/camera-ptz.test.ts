@@ -126,4 +126,26 @@ describe('Reolink PTZ mapping', () => {
     await expect(p.autofocus()).rejects.toThrow();
     expect(sent.map(([c]) => c)).toEqual(['GetZoomFocus']);
   });
+
+  // Measured on the E1 2026-11-14: {PtzCurPos: {channel}} works, a plain {channel} → -1.
+  it('position: GetPtzCurPos with {PtzCurPos: {channel: 0}} → Ppos/Tpos', async () => {
+    const { p, sent } = stub(() => ({ PtzCurPos: { Fpos: 511, Ppos: 1128, Tpos: 0, Zpos: 500, channel: 0 } }));
+    expect(await p.position()).toEqual({ pan: 1128, tilt: 0 });
+    expect(sent).toEqual([['GetPtzCurPos', { PtzCurPos: { channel: 0 } }]]);
+  });
+
+  it('position: no Ppos/Tpos in the answer → an error', async () => {
+    const { p } = stub(() => ({ PtzCurPos: { channel: 0 } }));
+    await expect(p.position()).rejects.toThrow();
+  });
+
+  it('zoomPos reads GetZoomFocus; focusAt sends ZoomPos to that zoom', async () => {
+    const { p, sent } = stub((cmd) => (cmd === 'GetZoomFocus' ? { ZoomFocus: { channel: 0, zoom: { pos: 20 }, focus: { pos: 77 } } } : { rspCode: 200 }));
+    expect(await p.zoomPos()).toBe(20);
+    await p.focusAt(20);
+    expect(sent).toEqual([
+      ['GetZoomFocus', { channel: 0 }],
+      ['StartZoomFocus', { ZoomFocus: { channel: 0, op: 'ZoomPos', pos: 20 } }],
+    ]);
+  });
 });
