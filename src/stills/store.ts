@@ -248,11 +248,18 @@ export class MinuteStore extends EventEmitter {
     const slot = (ts - minute) / (f.intervalS * 1000);
     if (!Number.isInteger(slot) || !f.slots[slot]?.[1]) return undefined;
     const [off, len] = f.slots[slot];
-    const fh = await open(file, 'r');
+    // Pruned since the footer was read, or shorter than it says: no still.
+    let fh: FileHandle;
+    try {
+      fh = await open(file, 'r');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw err;
+    }
     try {
       const buf = Buffer.alloc(len);
-      await fh.read(buf, 0, len, off);
-      return buf;
+      const { bytesRead } = await fh.read(buf, 0, len, off);
+      return bytesRead === len ? buf : undefined;
     } finally {
       await fh.close();
     }
