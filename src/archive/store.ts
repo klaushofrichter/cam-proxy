@@ -5,6 +5,7 @@ import { inTransaction, type Catalog } from '../catalog/db';
 import { allArchive, archiveById, deleteArchive, insertArchive, type ArchiveInput, type ArchiveRow } from '../catalog/archive';
 import { logger } from '../log';
 import { archivePath, archiveRoot, CAM_ID, inside, type ArchiveFile } from './paths';
+import { writeFileAtomicSync } from '../fs-util';
 
 // The Archive's folders (spec 2026-10-05-archive-design §1.2–1.4). A new
 // clip is assembled in archive/.incoming/<random>/ and becomes
@@ -57,10 +58,7 @@ export class ArchiveStore {
   }
 
   writeMeta(row: ArchiveRow, json: string): void {
-    const path = this.file(row, 'meta.json');
-    const tmp = `${path}.tmp`;
-    writeFileSync(tmp, json);
-    renameSync(tmp, path);
+    writeFileAtomicSync(this.file(row, 'meta.json'), json);
   }
 
   // The row first, then the folder (a folder left behind is swept at the

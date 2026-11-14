@@ -1,5 +1,5 @@
-import { createHash, randomBytes } from 'crypto';
-import { chmodSync, closeSync, constants, copyFileSync, existsSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeSync } from 'fs';
+import { createHash } from 'crypto';
+import { chmodSync, constants, copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'path';
 import { cameraDefaults, DEFAULTS, type Config, type Secrets } from './defaults';
 import { checkPartial, leafAt, leafPaths, SETTINGS, SettingError } from './schema';
@@ -20,6 +20,7 @@ import { knownZone } from '../onboarding/zone';
 export { ConfigError } from './load-error';
 import { ConfigError } from './load-error';
 import { isObj, jsonEqual as same, type Obj } from '../util/obj';
+import { writeFileAtomicSync } from '../fs-util';
 export type Source = 'default' | 'file' | 'override' | 'env';
 
 export interface Loaded {
@@ -364,36 +365,8 @@ function writeOverrides(file: string, overrides: Obj): void {
   // Atomic and durable (review M4: P3 makes this write remote): a fresh temp
   // file (wx, mode 600), fsync, rename, fsync of the folder. A torn write
   // would keep the proxy from starting.
-  const dir = dirname(file);
-  mkdirSync(dir, { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}-${randomBytes(6).toString('hex')}`;
-  const fd = openSync(tmp, 'wx', 0o600);
-  try {
-    fchmodSync(fd, 0o600);
-    writeSync(fd, `${JSON.stringify(overrides, null, 2)}\n`);
-    fsyncSync(fd);
-  } catch (err) {
-    closeSync(fd);
-    rmSync(tmp, { force: true });
-    throw err;
-  }
-  closeSync(fd);
-  try {
-    renameSync(tmp, file);
-  } catch (err) {
-    rmSync(tmp, { force: true });
-    throw err;
-  }
-  try {
-    const d = openSync(dir, 'r');
-    try {
-      fsyncSync(d);
-    } finally {
-      closeSync(d);
-    }
-  } catch {
-    // Not every platform syncs a folder; the rename is done.
-  }
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileAtomicSync(file, `${JSON.stringify(overrides, null, 2)}\n`, { mode: 0o600, chmod: true, dirFsync: true });
 }
 
 // The leaf paths an object sets ('sse.pingS'), e.g. a PUT body.
@@ -696,7 +669,7 @@ export function applyEmptyHost(p: EmptyHostPlan, overridesFile: string, now = ne
   try {
     copyFileSync(p.file, join(dir, backup), constants.COPYFILE_EXCL);
     chmodSync(join(dir, backup), mode);
-    writeFileAtomic(p.file, text, mode);
+    writeFileAtomicSync(p.file, text, { mode });
   } catch (err) {
     throw new ConfigError(`${basename(p.file)}: could not be written (${(err as NodeJS.ErrnoException).code ?? 'error'})`);
   }
@@ -713,22 +686,4 @@ export function applyEmptyHost(p: EmptyHostPlan, overridesFile: string, now = ne
   return { backup };
 }
 
-function writeFileAtomic(file: string, text: string, mode: number): void {
-  const tmp = `${file}.tmp-${process.pid}-${randomBytes(6).toString('hex')}`;
-  const fd = openSync(tmp, 'wx', mode);
-  try {
-    writeSync(fd, text);
-    fsyncSync(fd);
-  } catch (err) {
-    closeSync(fd);
-    rmSync(tmp, { force: true });
-    throw err;
-  }
-  closeSync(fd);
-  try {
-    renameSync(tmp, file);
-  } catch (err) {
-    rmSync(tmp, { force: true });
-    throw err;
-  }
-}
+

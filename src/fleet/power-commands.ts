@@ -1,4 +1,4 @@
-import { readFileSync, renameSync, writeFileSync } from 'fs';
+import { readFileSync } from 'fs';
 import { join } from 'path';
 import { whoFields, type AuditLog } from '../audit/audit-log';
 import type { CameraReboot, TooSoon } from '../camera/reboot';
@@ -7,6 +7,7 @@ import type { CameraPowerCycledArgs, CameraPowerCycleResultArgs, CameraPowerCycl
 import type { Done, Handler } from './commands';
 import type { PowerCycleRequestEvent } from './outbox';
 import { ulid } from './protocol';
+import { writeFileAtomicSync } from '../fs-util';
 
 // The camera's power as cams-admin knows it (spec 2026-11-07-poe-switches-design,
 // "Camera power", "Who does what", "Asking from a proxy"). cams-admin holds the
@@ -90,9 +91,7 @@ export class CameraPowerStore {
   }
 
   private save(): void {
-    const tmp = `${this.file}.tmp`;
-    writeFileSync(tmp, JSON.stringify({ v: 1, cameras: Object.fromEntries(this.records) }, null, 2));
-    renameSync(tmp, this.file);
+    writeFileAtomicSync(this.file, JSON.stringify({ v: 1, cameras: Object.fromEntries(this.records) }, null, 2));
   }
 }
 

@@ -1,4 +1,4 @@
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { whoFields, type AuditLog } from '../audit/audit-log';
 import { logger } from '../log';
@@ -8,6 +8,7 @@ import { issuedBy, issueLeaf, leafOf, renewalDue, type Leaf } from './leaf';
 import type { PushOutcome, PushResult } from './push';
 import type { Served } from './served';
 import { DAY, HOUR, utcDay } from '../time-units';
+import { writeFileAtomicSync } from '../fs-util';
 
 export type CertMode = 'site-ca' | 'pinned' | 'public' | 'none';
 export interface CertState {
@@ -334,15 +335,7 @@ export class CameraCerts {
       }),
     );
     const file = join(this.camDir(), 'state.json');
-    const tmp = `${file}.tmp`;
-    const fd = openSync(tmp, 'w', 0o600);
-    try {
-      writeSync(fd, JSON.stringify({ cameras, previousCa: this.previousCa, previousSince: this.previousCa ? this.previousSince : null }));
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-    renameSync(tmp, file);
+    writeFileAtomicSync(file, JSON.stringify({ cameras, previousCa: this.previousCa, previousSince: this.previousCa ? this.previousSince : null }), { mode: 0o600 });
   }
 
   state(id: string): CertState {
