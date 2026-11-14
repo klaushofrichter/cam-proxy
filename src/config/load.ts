@@ -7,7 +7,7 @@ import { cameraConfig } from './cameras';
 import { derivedPassive, ftpOn, MAX_FTP_CAMERAS, PASSIVE_MAX, PORTS_PER_CAMERA } from './profile';
 import { dropRetiredPoeSwitch, normalizeFile, normalizeOverrides, translatePath } from './legacy';
 import { logger } from '../log';
-import { ipv4Int } from '../util/cidr';
+import { ipv4Int, parseCidr } from '../util/cidr';
 import { loadSecrets } from './secrets';
 import { cameraPasswordsNow } from './camera-passwords';
 import { cameraPasswordEnv } from './password-env';
@@ -234,12 +234,10 @@ export const configRevision = (l: Loaded): string => {
 };
 
 // An IPv4 network a.b.c.d/n, /16 or narrower.
-function checkSubnet(key: string, v: string): void {
-  const [ip, bits] = v.split('/');
-  const n = ipv4Int(ip);
-  const prefix = Number(bits);
-  if (n === null || prefix > 32 || (prefix < 32 && (n & (2 ** (32 - prefix) - 1)) !== 0)) throw new ConfigError(`${key}: ${v} is not an IPv4 network`);
-  if (prefix < 16) throw new ConfigError(`${key}: ${v} is wider than /16`);
+export function checkSubnet(key: string, v: string): void {
+  const c = parseCidr(v);
+  if (!c || c.net % 2 ** (32 - c.prefix) !== 0) throw new ConfigError(`${key}: ${v} is not an IPv4 network`);
+  if (c.prefix < 16) throw new ConfigError(`${key}: ${v} is wider than /16`);
 }
 
 type Norm = { order: string[]; legacy: boolean; policy: CommandPolicyBase; tokensOptional: boolean };

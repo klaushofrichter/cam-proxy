@@ -3,7 +3,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, it } from 'vitest';
 import { ftpUsers } from '../src/clips/side';
-import { ConfigError, loadConfig } from '../src/config/load';
+import { checkSubnet, ConfigError, loadConfig } from '../src/config/load';
 import { NEVER_FROM_CAMS_ADMIN } from '../src/fleet/remote-settable';
 import { inCidr } from '../src/util/cidr';
 
@@ -33,6 +33,10 @@ describe('ftp.sourceSubnet', () => {
     expect(err({ ...CAM, ftp: { sourceSubnet: '10.42.0.0' } })).toBe('ftp.sourceSubnet: has the wrong format');
     expect(err({ ...CAM, ftp: { sourceSubnet: '10.42.0.5/16' } })).toBe('ftp.sourceSubnet: 10.42.0.5/16 is not an IPv4 network');
     expect(err({ ...CAM, ftp: { sourceSubnet: '10.0.0.0/8' } })).toBe('ftp.sourceSubnet: 10.0.0.0/8 is wider than /16');
+  });
+  it('the check itself needs the prefix and plain decimal octets (also where the schema does not look)', () => {
+    for (const v of ['10.42.0.0', '10.42.0.0/16.5', '010.42.0.0/16', '0xa.42.0.0/16']) expect(() => checkSubnet('ftp.sourceSubnet', v)).toThrow(`ftp.sourceSubnet: ${v} is not an IPv4 network`);
+    expect(() => checkSubnet('ftp.sourceSubnet', '10.42.0.0/16')).not.toThrow();
   });
   it('is never set from cams-admin: it widens who may log in', () => {
     expect(NEVER_FROM_CAMS_ADMIN).toContain('ftp.sourceSubnet');
