@@ -77,6 +77,12 @@ describe('camsAdmin settings', () => {
     const m = applyOverrides(l, { sse: { pingS: 7 }, retention: { clipsDays: 3 } });
     expect(configRevision(m)).toBe(`sha256:${createHash('sha256').update(jcs(m.overrides)).digest('hex')}`);
     expect(jcs(m.overrides)).toMatch(/^\{"retention":.*"sse":/);
+    // Kept per overrides object: asked again it is the same; a further change gives a new one.
+    expect(configRevision(m)).toBe(configRevision(m));
+    expect(configRevision(l)).toBe(`sha256:${createHash('sha256').update('{}').digest('hex')}`);
+    const n = applyOverrides(m, { sse: { pingS: 8 } });
+    expect(configRevision(n)).not.toBe(configRevision(m));
+    expect(configRevision(n)).toBe(`sha256:${createHash('sha256').update(jcs(n.overrides)).digest('hex')}`);
   });
   it('the key file is admin/<name>.json: never the data folder itself, overrides.json or anything outside', () => {
     for (const k of ['/etc/key.json', '../key.json', 'key.json', 'overrides.json', 'admin/../overrides.json', 'admin/sub/key.json', 'admin/.json', 'admin/key.txt']) expect(refused({ camsAdmin: { keyFile: k } }), k).toMatch(/^camsAdmin\.keyFile/);

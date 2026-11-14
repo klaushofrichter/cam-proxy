@@ -223,8 +223,15 @@ function takeCommandPolicy(o: unknown, where: 'config.json' | 'overrides.json' |
 }
 
 // The overrides' revision, reported to cams-admin (migration P2): sha256 of
-// their canonical JSON ({} when there are none).
-export const configRevision = (l: Loaded): string => `sha256:${createHash('sha256').update(jcs(l.overrides)).digest('hex')}`;
+// their canonical JSON ({} when there are none). Kept per overrides object: a
+// settings change makes a new Loaded with new overrides, never edits them in
+// place, and cams-admin's status asks every 5 s.
+const revisions = new WeakMap<object, string>();
+export const configRevision = (l: Loaded): string => {
+  let r = revisions.get(l.overrides);
+  if (r === undefined) revisions.set(l.overrides, (r = `sha256:${createHash('sha256').update(jcs(l.overrides)).digest('hex')}`));
+  return r;
+};
 
 // An IPv4 network a.b.c.d/n, /16 or narrower.
 function checkSubnet(key: string, v: string): void {
