@@ -1,7 +1,8 @@
 import type { CertState } from '../tls/camera-certs';
 import type { Credentials } from '../onboarding/credentials';
 import express, { type Request, type Response } from 'express';
-import { readFileSync, statSync } from 'fs';
+import { statSync } from 'fs';
+import { readFile } from 'fs/promises';
 import { resolve } from 'path';
 import { analysesFor, analysesInRange, analysisFor, type AnalysisRow } from '../catalog/analyses';
 import { summarize } from '../analytics/classes';
@@ -148,14 +149,10 @@ export function clientApi(d: { config: () => Config; catalog: Catalog; cameras: 
       stillTs: a.still_ts, summary: summaryOf(a),
     })));
   });
-  r.get('/cameras/:cam/events/:id/analysis.jpg', (req, res) => {
+  // Read without blocking the event loop (cams loads a day of these at once).
+  r.get('/cameras/:cam/events/:id/analysis.jpg', async (req, res) => {
     const a = analysisOf(req, res);
-    let jpeg: Buffer | undefined;
-    try {
-      jpeg = a?.image ? readFileSync(a.image) : undefined;
-    } catch {
-      jpeg = undefined;
-    }
+    const jpeg = a?.image ? await readFile(a.image).catch(() => undefined) : undefined;
     sendJpeg(res, jpeg, true);
   });
 
