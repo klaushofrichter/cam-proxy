@@ -293,3 +293,8 @@ function parse(line: string | undefined): AuditRecord | null {
 export function withCamera(audit: Pick<AuditLog, 'write'>, cam: string): Pick<AuditLog, 'write'> {
   return { write: (i: AuditInput) => audit.write({ ...i, camera: cam }) };
 }
+
+// A requester's ip and userAgent for a record, each only when known.
+export const whoFields = (who?: { ip?: string; userAgent?: string }) => ({ ...(who?.ip ? { ip: who.ip } : {}), ...(who?.userAgent ? { userAgent: who.userAgent } : {}) });
+// A cams-admin command's cmdId and actor for a record's details, each only when known.
+export const cmdFields = (who?: { cmdId?: string; actor?: string }) => ({ ...(who?.cmdId ? { cmdId: who.cmdId } : {}), ...(who?.actor ? { actor: who.actor } : {}) });

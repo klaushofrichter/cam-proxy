@@ -9,6 +9,7 @@ import { logger } from '../log';
 import { RotateBusyError } from '../tls/camera-certs';
 import { projectPush } from '../tls/push';
 import type { ControlDeps } from './control-api';
+import { cmdFields, whoFields } from '../audit/audit-log';
 
 // The control actions without Express (plan P3 R3-7): POST
 // /control/(cameras/:cam/)actions/:name maps an outcome to its answer, and
@@ -26,8 +27,7 @@ export const OWN_AUDIT: ReadonlySet<string> = new Set(['camera-reboot', 'camera-
 
 const fail = (status: number, error: string, detail?: string, extra?: Record<string, unknown>): ActionOutcome => ({ status, error, ...(detail ? { detail } : {}), ...(extra && Object.keys(extra).length ? { extra } : {}) });
 // A command's cmdId and actor in a record's details.
-const cmdOf = (who: ActionWho) => ({ ...(who.cmdId ? { cmdId: who.cmdId } : {}), ...(who.actor ? { actor: who.actor } : {}) });
-const whoRecord = (who: ActionWho) => ({ user: who.user, ...(who.ip ? { ip: who.ip } : {}), ...(who.userAgent ? { userAgent: who.userAgent } : {}) });
+const whoRecord = (who: ActionWho) => ({ user: who.user, ...whoFields(who) });
 
 // A camera call from an action: its answer, or 502 with the camera's error.
 async function cameraCall(f: () => Promise<unknown>): Promise<ActionOutcome> {
@@ -56,7 +56,7 @@ export const tooSoonDetail = (a: TooSoon): string => (a.inFlight
 
 // `cam`: the camera (null only for host actions). `body`: the request body.
 export async function performAction(d: ActionDeps, name: string, cam: string | null, body: Record<string, unknown>, who: ActionWho): Promise<ActionOutcome> {
-  const requester = { user: who.user, requestedBy: who.requestedBy, ...(who.ip ? { ip: who.ip } : {}), ...(who.userAgent ? { userAgent: who.userAgent } : {}), ...cmdOf(who) };
+  const requester = { user: who.user, requestedBy: who.requestedBy, ...whoFields(who), ...cmdFields(who) };
   const camera = (): string => {
     if (cam === null) throw new Error(`${name}: no camera`);
     return cam;
@@ -108,7 +108,7 @@ export async function performAction(d: ActionDeps, name: string, cam: string | n
     // cams-admin (not connected, or no power record from it); 429 in_flight
     // while a request for the camera is open; 429 too_soon as the reboot.
     case 'camera-powercycle': {
-      const a = d.cameraPower.request({ user: who.user, requestedBy: who.requestedBy, ...(who.ip ? { ip: who.ip } : {}), ...(who.userAgent ? { userAgent: who.userAgent } : {}) }, camera());
+      const a = d.cameraPower.request({ user: who.user, requestedBy: who.requestedBy, ...whoFields(who) }, camera());
       if (a.status === 202) return { status: 202, json: { requestId: a.requestId } };
       if (a.status === 429) return 'error' in a ? { ...fail(429, a.error, a.detail), retryAfterS: a.retryAfterS } : tooSoon(a);
       return fail(409, a.error, a.detail);

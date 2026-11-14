@@ -1,5 +1,5 @@
 import express from 'express';
-import type { AuditLog } from '../audit/audit-log';
+import { whoFields, type AuditLog } from '../audit/audit-log';
 import { PoeSwitchError } from '../camera/poe-switch';
 import { poeHttpStatus } from '../camera/switch/errors';
 import type { SwitchRegistry } from '../camera/switch/registry';
@@ -13,7 +13,7 @@ import { bad, notFound } from './respond';
 // write-only: never in an answer, a log line or an audit record.
 export function switchesApi(d: { registry: SwitchRegistry; dataDir: string; audit: AuditLog }): express.Router {
   const r = express.Router();
-  const record = (who: ReturnType<typeof whoOf>, category: string) => ({ category: [category], type: ['change'], user: who.user, ...(who.ip ? { ip: who.ip } : {}), ...(who.userAgent ? { userAgent: who.userAgent } : {}) });
+  const record = (who: ReturnType<typeof whoOf>, category: string) => ({ category: [category], type: ['change'], user: who.user, ...whoFields(who) });
 
   r.get('/switches', (_req, res) => {
     res.json({

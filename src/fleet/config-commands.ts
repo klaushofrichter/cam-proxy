@@ -1,4 +1,4 @@
-import type { AuditLog } from '../audit/audit-log';
+import { whoFields, type AuditLog } from '../audit/audit-log';
 import { configChanges, overrideState, type Change } from '../config/changes';
 import type { Config } from '../config/defaults';
 import { translatePath } from '../config/legacy';
@@ -190,7 +190,7 @@ function rollback(d: ConfigCommandDeps, of: string, dryRun: boolean, u: Undoer):
   if (changes.length) {
     d.audit.write(u.by === 'cams-admin'
       ? { action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', user: 'cams-admin', message: `Settings rolled back by cams-admin (on behalf of ${u.cmd.actor}, ${of}): ${changes.map((c) => c.path).join(', ')}`, details: { cmdId: u.cmd.cmdId, actor: u.cmd.actor, rollbackOf: of, changes: changeRecord(changes) } }
-      : { action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', user: u.who.user, ...(u.who.ip ? { ip: u.who.ip } : {}), ...(u.who.userAgent ? { userAgent: u.who.userAgent } : {}), message: `cams-admin's change ${of} undone: ${changes.map((c) => c.path).join(', ')}`, details: { undoOf: of, changes: changeRecord(changes) } });
+      : { action: 'config-change', category: ['configuration'], type: ['change'], outcome: 'success', user: u.who.user, ...whoFields(u.who), message: `cams-admin's change ${of} undone: ${changes.map((c) => c.path).join(', ')}`, details: { undoOf: of, changes: changeRecord(changes) } });
   }
   return { status: 'ok', result: { dryRun: false, baseRevision: revision, revision: configRevision(next), changes, unchanged, of }, changed: changes.map((c) => c.path) };
 }

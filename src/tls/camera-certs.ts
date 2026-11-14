@@ -1,6 +1,6 @@
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from 'fs';
 import { join } from 'path';
-import type { AuditLog } from '../audit/audit-log';
+import { whoFields, type AuditLog } from '../audit/audit-log';
 import { logger } from '../log';
 import { fingerprintOf, writeSecret, type SiteCa } from './ca';
 import { X509Certificate } from 'crypto';
@@ -359,8 +359,7 @@ export class CameraCerts {
       type: ['change'],
       outcome,
       user: who?.user ?? 'system',
-      ...(who?.ip ? { ip: who.ip } : {}),
-      ...(who?.userAgent ? { userAgent: who.userAgent } : {}),
+      ...whoFields(who),
       ...(id ? { camera: id } : {}),
       message,
       details: { ...details, ...(who?.requestedBy ? { requestedBy: who.requestedBy } : {}), ...(who?.cmdId ? { cmdId: who.cmdId, actor: who.actor } : {}) },
@@ -622,7 +621,7 @@ export class CameraCerts {
     // Why nothing was pushed: for "Push now", an answer and an audit record.
     const skip = (detail: string, served: string | null = null): PushResult | null => {
       if (!manual) return null;
-      this.d.audit?.write({ action: 'camera-cert-push', category: ['configuration'], type: ['change'], outcome: 'failure', user: who?.user ?? 'admin', ...(who?.ip ? { ip: who.ip } : {}), ...(who?.userAgent ? { userAgent: who.userAgent } : {}), camera: cam.id, message: `Camera certificate push not done (${cam.id}): ${detail}`, details: { detail, ...(who?.requestedBy ? { requestedBy: who.requestedBy } : {}), ...(who?.cmdId ? { cmdId: who.cmdId, actor: who.actor } : {}) } });
+      this.d.audit?.write({ action: 'camera-cert-push', category: ['configuration'], type: ['change'], outcome: 'failure', user: who?.user ?? 'admin', ...whoFields(who), camera: cam.id, message: `Camera certificate push not done (${cam.id}): ${detail}`, details: { detail, ...(who?.requestedBy ? { requestedBy: who.requestedBy } : {}), ...(who?.cmdId ? { cmdId: who.cmdId, actor: who.actor } : {}) } });
       return { outcome: 'failed', served, detail, tookMs: 0 };
     };
     const known = (): boolean => ['site-ca', 'pinned'].includes(this.states.get(cam.id)?.mode ?? 'none');
@@ -741,8 +740,7 @@ export class CameraCerts {
       type: ['change'],
       outcome: r.outcome === 'pushed' || r.outcome === 'current' ? 'success' : 'failure',
       user: manual ? (who?.user ?? 'admin') : 'system',
-      ...(who?.ip ? { ip: who.ip } : {}),
-      ...(who?.userAgent ? { userAgent: who.userAgent } : {}),
+      ...whoFields(who),
       camera: cam.id,
       message: `Camera certificate ${r.outcome} (${cam.id}, ${Math.round(r.tookMs / 1000)} s)${this.states.get(cam.id)?.mode === 'pinned' && r.outcome === 'refused' ? `: pinned to ${r.served}` : ''}`,
       details: { served: r.served, ...(r.leaf ? { leaf: r.leaf.fingerprint, notAfter: r.leaf.notAfter } : {}), ...(r.detail ? { detail: r.detail } : {}), ...(who?.requestedBy ? { requestedBy: who.requestedBy } : {}), ...(who?.cmdId ? { cmdId: who.cmdId, actor: who.actor } : {}) },
